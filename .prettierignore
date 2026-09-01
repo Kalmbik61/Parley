@@ -1,0 +1,9 @@
+dist/
+claude-export/
+pnpm-lock.yaml
+
+# Не наши файлы: инфраструктура Ralph, исходный контекст, прототип для портирования
+.ralph/
+docs/
+RUN.md
+tools/claude-export.mjs

@@ -8,7 +8,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 
 - [x] Run `node tools/claude-export.mjs --full` against the real `~/.claude/projects` (no `--limit` — summary stitching needs all files); copy the resulting `schema-report.json` and `index.json` into `docs/schema/`, scrubbing any sensitive strings from samples. Touch nothing else under `~/.claude`
 - [x] Reconcile the observed schema with the assumptions in specs/data-layer.md (`isSidechain`, `parentUuid`, `leafUuid`, `message.model`, `type:"summary"` records); update specs/data-layer.md with confirmed findings BEFORE writing parser code
-- [ ] Initialize pnpm workspaces monorepo: `packages/core`, `packages/tui`; TypeScript 5 strict, vitest, eslint + prettier, build via tsc; root scripts `build`, `test`, `dev`
+- [x] Initialize pnpm workspaces monorepo: `packages/core`, `packages/tui`; TypeScript 5 strict, vitest, eslint + prettier, build via tsc; root scripts `build`, `test`, `dev`
 - [ ] packages/core: streaming .jsonl reader tolerant of malformed/truncated lines (port the logic of tools/claude-export.mjs into typed modules; a truncated last line of a live session is normal, never an error)
 - [ ] packages/core: versioned schema adapter (`adapter-v1` for the observed schema) mapping raw records to typed SessionRecord per specs/data-layer.md; unknown fields preserved, nothing assumed mandatory
 - [ ] packages/core: session indexer — meta (sessionId, cwd, gitBranch, version), duration from first/last timestamps, model/tool/role counters, primaryModel per specs/data-layer.md
