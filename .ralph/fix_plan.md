@@ -15,7 +15,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [x] packages/core: session title — last `custom-title` / `ai-title` record wins, fallback `last-prompt` → first user text; `titleSource` in the index (per specs/data-layer.md; глобальная сшивка по leafUuid отменена находками)
 - [x] packages/core: subsessions from disk layout — enumerate `<session-id>/subagents/**/agent-*.jsonl`, read the sibling `.meta.json` (agentType/name/description/toolUseId), task = `description` or first text for workflow agents, model badges from message.model; `journal.jsonl` is not a subsession (per specs/data-layer.md)
 - [x] packages/core: vitest suite on fixtures — 2-3 real anonymized session files plus synthetic edge cases (truncated last line, summary in a neighbor file, orphan sidechain, missing timestamps)
-- [ ] packages/core: fs watcher over `~/.claude/projects` with debounce; incremental re-parse of only the changed file; emits typed change events
+- [x] packages/core: fs watcher over `~/.claude/projects` with debounce; incremental re-parse of only the changed file; emits typed change events
 - [ ] packages/core: CLI entry — `harnas-core index --json` and `harnas-core session <id> --json`, JSON to stdout only (this IS the core/UI contract)
 - [ ] packages/tui: Ink app skeleton with the three-pane layout per specs/ui.md (sessions top-left, subsessions bottom-left, right pane placeholder)
 - [ ] packages/tui: sessions list — summary/name, relative time + duration, primaryModel badge, sorted by recency, per specs/ui.md
@@ -48,7 +48,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [ ] Final pass: lint clean, tests green, manual smoke checklist from specs/ui.md walked through
 
 ## Discovered
-- [ ] packages/core: watcher invalidation — изменение `agent-*.jsonl` должно
+- [x] packages/core: watcher invalidation — изменение `agent-*.jsonl` должно
       инвалидировать и родительскую сессию (подсессии живут в отдельных файлах)
 - [ ] packages/core: `observe()` схлопывает мапы с динамическими ключами
       (`snapshot.trackedFileBackups.<путь>`), иначе отчёт раздувается и тащит пути

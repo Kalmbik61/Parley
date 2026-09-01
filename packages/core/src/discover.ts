@@ -83,16 +83,50 @@ export async function discoverSessions(root: string = defaultRoot()): Promise<Di
 
     for (const entry of await readDirSafe(projectDir)) {
       if (!entry.isFile() || !entry.name.endsWith(JSONL)) continue;
-
-      const id = entry.name.slice(0, -JSONL.length);
-      sessions.push({
-        file: path.join(projectDir, entry.name),
-        id,
-        project: project.name,
-        subagents: await collectSubagents(path.join(projectDir, id, 'subagents'), null),
-      });
+      sessions.push(await discoverSession(path.join(projectDir, entry.name), root));
     }
   }
 
   return sessions;
+}
+
+/** То же самое для одного файла сессии — нужно watcher'у при инкрементальном ре-парсе. */
+export async function discoverSession(
+  file: string,
+  root: string = defaultRoot(),
+): Promise<DiscoveredSession> {
+  const projectDir = path.dirname(file);
+  const id = path.basename(file, JSONL);
+  return {
+    file,
+    id,
+    project: path.relative(root, projectDir) || path.basename(projectDir),
+    subagents: await collectSubagents(path.join(projectDir, id, 'subagents'), null),
+  };
+}
+
+/**
+ * Какой сессии принадлежит изменившийся путь. Файл субагента относится к своей
+ * родительской сессии: подсессии живут в отдельных файлах, и их изменение обязано
+ * обновлять родителя.
+ *
+ * Возвращает null, если путь к сессиям отношения не имеет (MEMORY.md, wf_*.json,
+ * sessions-index.json и прочее).
+ */
+export function sessionFileForPath(changedPath: string, root: string): string | null {
+  const relative = path.relative(root, changedPath);
+  if (relative === '' || relative.startsWith('..')) return null;
+
+  const segments = relative.split(path.sep);
+  const [project, second] = segments;
+  if (project === undefined || second === undefined) return null;
+
+  // <project>/<id>.jsonl — сама сессия.
+  if (segments.length === 2) {
+    return second.endsWith(JSONL) ? path.join(root, project, second) : null;
+  }
+
+  // <project>/<id>/subagents/... — подсессия, отвечает родительский файл.
+  if (segments[2] !== 'subagents') return null;
+  return path.join(root, project, `${second}${JSONL}`);
 }
