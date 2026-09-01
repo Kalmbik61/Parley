@@ -1,0 +1,4932 @@
+{
+  "bridge-session": {
+    "count": 2399,
+    "fields": {
+      "type": {
+        "seen": 2399,
+        "kinds": {
+          "string": 2399
+        },
+        "sample": "bridge-session"
+      },
+      "sessionId": {
+        "seen": 2399,
+        "kinds": {
+          "string": 2399
+        },
+        "sample": "<uuid>"
+      },
+      "bridgeSessionId": {
+        "seen": 2399,
+        "kinds": {
+          "string": 2399
+        },
+        "sample": "cse_01MWmSn5cgwAFJ14M3bfTPuM"
+      },
+      "lastSequenceNum": {
+        "seen": 2399,
+        "kinds": {
+          "number": 2399
+        },
+        "sample": 0
+      },
+      "ownerAccountUuid": {
+        "seen": 2399,
+        "kinds": {
+          "string": 2399
+        },
+        "sample": "<redacted>"
+      },
+      "ownerOrganizationUuid": {
+        "seen": 2399,
+        "kinds": {
+          "string": 2399
+        },
+        "sample": "<redacted>"
+      }
+    }
+  },
+  "queue-operation": {
+    "count": 1296,
+    "fields": {
+      "type": {
+        "seen": 1296,
+        "kinds": {
+          "string": 1296
+        },
+        "sample": "queue-operation"
+      },
+      "operation": {
+        "seen": 1296,
+        "kinds": {
+          "string": 1296
+        },
+        "sample": "enqueue"
+      },
+      "timestamp": {
+        "seen": 1296,
+        "kinds": {
+          "string": 1296
+        },
+        "sample": "2026-09-01T14:58:23.097Z"
+      },
+      "sessionId": {
+        "seen": 1296,
+        "kinds": {
+          "string": 1296
+        },
+        "sample": "<uuid>"
+      },
+      "content": {
+        "seen": 795,
+        "kinds": {
+          "string": 795
+        },
+        "sample": "<redacted>"
+      },
+      "reason": {
+        "seen": 21,
+        "kinds": {
+          "string": 21
+        },
+        "sample": "absorbed_mid_turn"
+      }
+    }
+  },
+  "attachment": {
+    "count": 48751,
+    "fields": {
+      "parentUuid": {
+        "seen": 48751,
+        "kinds": {
+          "null": 47,
+          "string": 48704
+        },
+        "sample": "<uuid>"
+      },
+      "isSidechain": {
+        "seen": 48751,
+        "kinds": {
+          "boolean": 48751
+        },
+        "sample": false
+      },
+      "attachment": {
+        "seen": 48751,
+        "kinds": {
+          "object": 48751
+        },
+        "sample": null
+      },
+      "attachment.type": {
+        "seen": 48751,
+        "kinds": {
+          "string": 48751
+        },
+        "sample": "hook_success"
+      },
+      "attachment.hookName": {
+        "seen": 40358,
+        "kinds": {
+          "string": 40358
+        },
+        "sample": "SessionStart:startup"
+      },
+      "attachment.toolUseID": {
+        "seen": 40371,
+        "kinds": {
+          "string": 40371
+        },
+        "sample": "<uuid>"
+      },
+      "attachment.hookEvent": {
+        "seen": 40358,
+        "kinds": {
+          "string": 40358
+        },
+        "sample": "SessionStart"
+      },
+      "attachment.content": {
+        "seen": 41071,
+        "kinds": {
+          "string": 30738,
+          "array": 10301,
+          "object": 32
+        },
+        "sample": "<redacted>"
+      },
+      "attachment.stdout": {
+        "seen": 30417,
+        "kinds": {
+          "string": 30417
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "attachment.stderr": {
+        "seen": 30417,
+        "kinds": {
+          "string": 30417
+        },
+        "sample": ""
+      },
+      "attachment.exitCode": {
+        "seen": 30417,
+        "kinds": {
+          "number": 30417
+        },
+        "sample": 0
+      },
+      "attachment.command": {
+        "seen": 30417,
+        "kinds": {
+          "string": 30417
+        },
+        "sample": "<redacted:string len=56>"
+      },
+      "attachment.durationMs": {
+        "seen": 30417,
+        "kinds": {
+          "number": 30417
+        },
+        "sample": 145
+      },
+      "type": {
+        "seen": 48751,
+        "kinds": {
+          "string": 48751
+        },
+        "sample": "attachment"
+      },
+      "uuid": {
+        "seen": 48751,
+        "kinds": {
+          "string": 48751
+        },
+        "sample": "<uuid>"
+      },
+      "timestamp": {
+        "seen": 48751,
+        "kinds": {
+          "string": 48751
+        },
+        "sample": "2026-09-01T14:58:21.846Z"
+      },
+      "userType": {
+        "seen": 48751,
+        "kinds": {
+          "string": 48751
+        },
+        "sample": "external"
+      },
+      "entrypoint": {
+        "seen": 48751,
+        "kinds": {
+          "string": 48751
+        },
+        "sample": "claude-desktop"
+      },
+      "cwd": {
+        "seen": 48751,
+        "kinds": {
+          "string": 48751
+        },
+        "sample": "/Users/<user>/Desktop/MY/my_harnas"
+      },
+      "sessionId": {
+        "seen": 48751,
+        "kinds": {
+          "string": 48751
+        },
+        "sample": "<uuid>"
+      },
+      "version": {
+        "seen": 48751,
+        "kinds": {
+          "string": 48751
+        },
+        "sample": "2.1.247"
+      },
+      "gitBranch": {
+        "seen": 48751,
+        "kinds": {
+          "string": 48751
+        },
+        "sample": "HEAD"
+      },
+      "attachment.addedNames": {
+        "seen": 544,
+        "kinds": {
+          "array": 544
+        },
+        "sample": null
+      },
+      "attachment.addedLines": {
+        "seen": 468,
+        "kinds": {
+          "array": 468
+        },
+        "sample": null
+      },
+      "attachment.removedNames": {
+        "seen": 544,
+        "kinds": {
+          "array": 544
+        },
+        "sample": null
+      },
+      "attachment.readdedNames": {
+        "seen": 416,
+        "kinds": {
+          "array": 416
+        },
+        "sample": null
+      },
+      "attachment.pendingMcpServers": {
+        "seen": 166,
+        "kinds": {
+          "array": 166
+        },
+        "sample": null
+      },
+      "attachment.needsAuthMcpServers": {
+        "seen": 153,
+        "kinds": {
+          "array": 153
+        },
+        "sample": null
+      },
+      "attachment.failedMcpServers": {
+        "seen": 36,
+        "kinds": {
+          "array": 36
+        },
+        "sample": null
+      },
+      "attachment.addedTypes": {
+        "seen": 52,
+        "kinds": {
+          "array": 52
+        },
+        "sample": null
+      },
+      "attachment.removedTypes": {
+        "seen": 52,
+        "kinds": {
+          "array": 52
+        },
+        "sample": null
+      },
+      "attachment.isInitial": {
+        "seen": 369,
+        "kinds": {
+          "boolean": 369
+        },
+        "sample": true
+      },
+      "attachment.showConcurrencyNote": {
+        "seen": 52,
+        "kinds": {
+          "boolean": 52
+        },
+        "sample": true
+      },
+      "attachment.addedBlocks": {
+        "seen": 128,
+        "kinds": {
+          "array": 128
+        },
+        "sample": null
+      },
+      "attachment.skillCount": {
+        "seen": 317,
+        "kinds": {
+          "number": 317
+        },
+        "sample": 250
+      },
+      "attachment.names": {
+        "seen": 317,
+        "kinds": {
+          "array": 317
+        },
+        "sample": null
+      },
+      "attachment.autoModeConsentFlow": {
+        "seen": 43,
+        "kinds": {
+          "boolean": 43
+        },
+        "sample": false
+      },
+      "attachment.bashFirst": {
+        "seen": 48,
+        "kinds": {
+          "boolean": 48
+        },
+        "sample": true
+      },
+      "attachment.steerOnly": {
+        "seen": 48,
+        "kinds": {
+          "boolean": 48
+        },
+        "sample": true
+      },
+      "attachment.bypass": {
+        "seen": 43,
+        "kinds": {
+          "boolean": 43
+        },
+        "sample": false
+      },
+      "attachment.text": {
+        "seen": 6489,
+        "kinds": {
+          "string": 6489
+        },
+        "sample": "<redacted>"
+      },
+      "attachment.allowedTools": {
+        "seen": 26,
+        "kinds": {
+          "array": 26
+        },
+        "sample": null
+      },
+      "attachment.newDate": {
+        "seen": 32,
+        "kinds": {
+          "string": 32
+        },
+        "sample": "2026-09-01"
+      },
+      "attachment.prompt": {
+        "seen": 196,
+        "kinds": {
+          "string": 189,
+          "array": 7
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "attachment.commandMode": {
+        "seen": 196,
+        "kinds": {
+          "string": 196
+        },
+        "sample": "task-notification"
+      },
+      "attachment.timestamp": {
+        "seen": 196,
+        "kinds": {
+          "string": 196
+        },
+        "sample": "2026-09-01T13:13:48.744Z"
+      },
+      "attachment.source_uuid": {
+        "seen": 58,
+        "kinds": {
+          "string": 58
+        },
+        "sample": "<uuid>"
+      },
+      "attachment.origin": {
+        "seen": 62,
+        "kinds": {
+          "object": 62
+        },
+        "sample": null
+      },
+      "attachment.origin.kind": {
+        "seen": 62,
+        "kinds": {
+          "string": 62
+        },
+        "sample": "human"
+      },
+      "attachment.filename": {
+        "seen": 300,
+        "kinds": {
+          "string": 300
+        },
+        "sample": "<redacted:string len=75>"
+      },
+      "attachment.snippet": {
+        "seen": 268,
+        "kinds": {
+          "string": 268
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "attachment.content.type": {
+        "seen": 32,
+        "kinds": {
+          "string": 32
+        },
+        "sample": "text"
+      },
+      "attachment.content.file": {
+        "seen": 21,
+        "kinds": {
+          "object": 21
+        },
+        "sample": null
+      },
+      "attachment.displayPath": {
+        "seen": 43,
+        "kinds": {
+          "string": 43
+        },
+        "sample": "<redacted:string len=84>"
+      },
+      "slug": {
+        "seen": 7489,
+        "kinds": {
+          "string": 7489
+        },
+        "sample": "temporal-growing-lemon"
+      },
+      "agentId": {
+        "seen": 1033,
+        "kinds": {
+          "string": 1033
+        },
+        "sample": "ad5fa450f88423375"
+      },
+      "attachment.model": {
+        "seen": 167,
+        "kinds": {
+          "string": 167
+        },
+        "sample": "claude-fable-5"
+      },
+      "attachment.itemCount": {
+        "seen": 361,
+        "kinds": {
+          "number": 361
+        },
+        "sample": 0
+      },
+      "attachment.banner": {
+        "seen": 13,
+        "kinds": {
+          "string": 13
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "attachment.path": {
+        "seen": 12,
+        "kinds": {
+          "string": 12
+        },
+        "sample": "<redacted:string len=53>"
+      },
+      "attachment.content.path": {
+        "seen": 11,
+        "kinds": {
+          "string": 11
+        },
+        "sample": "<redacted:string len=53>"
+      },
+      "attachment.content.content": {
+        "seen": 11,
+        "kinds": {
+          "string": 11
+        },
+        "sample": "<redacted>"
+      },
+      "attachment.content.contentDiffersFromDisk": {
+        "seen": 11,
+        "kinds": {
+          "boolean": 11
+        },
+        "sample": false
+      },
+      "session_id": {
+        "seen": 4442,
+        "kinds": {
+          "string": 4442
+        },
+        "sample": "<uuid>"
+      },
+      "attachment.ideName": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "Cursor"
+      },
+      "attachment.lineStart": {
+        "seen": 2,
+        "kinds": {
+          "number": 2
+        },
+        "sample": 1
+      },
+      "attachment.lineEnd": {
+        "seen": 2,
+        "kinds": {
+          "number": 2
+        },
+        "sample": 78
+      },
+      "attachment.planFilePath": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "<redacted:string len=56>"
+      },
+      "attachment.planExists": {
+        "seen": 2,
+        "kinds": {
+          "boolean": 2
+        },
+        "sample": false
+      },
+      "attachment.imagePasteIds": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      }
+    }
+  },
+  "user": {
+    "count": 17559,
+    "fields": {
+      "parentUuid": {
+        "seen": 17559,
+        "kinds": {
+          "string": 17306,
+          "null": 253
+        },
+        "sample": "<uuid>"
+      },
+      "isSidechain": {
+        "seen": 17559,
+        "kinds": {
+          "boolean": 17559
+        },
+        "sample": false
+      },
+      "promptId": {
+        "seen": 17454,
+        "kinds": {
+          "string": 17454
+        },
+        "sample": "<uuid>"
+      },
+      "type": {
+        "seen": 17559,
+        "kinds": {
+          "string": 17559
+        },
+        "sample": "user"
+      },
+      "message": {
+        "seen": 17559,
+        "kinds": {
+          "object": 17559
+        },
+        "sample": null
+      },
+      "message.role": {
+        "seen": 17559,
+        "kinds": {
+          "string": 17559
+        },
+        "sample": "user"
+      },
+      "message.content": {
+        "seen": 17559,
+        "kinds": {
+          "string": 805,
+          "array": 16754
+        },
+        "sample": "<redacted>"
+      },
+      "uuid": {
+        "seen": 17559,
+        "kinds": {
+          "string": 17559
+        },
+        "sample": "<uuid>"
+      },
+      "timestamp": {
+        "seen": 17559,
+        "kinds": {
+          "string": 17559
+        },
+        "sample": "2026-09-01T14:58:25.150Z"
+      },
+      "permissionMode": {
+        "seen": 505,
+        "kinds": {
+          "string": 505
+        },
+        "sample": "auto"
+      },
+      "origin": {
+        "seen": 519,
+        "kinds": {
+          "object": 519
+        },
+        "sample": null
+      },
+      "origin.kind": {
+        "seen": 519,
+        "kinds": {
+          "string": 519
+        },
+        "sample": "human"
+      },
+      "promptSource": {
+        "seen": 505,
+        "kinds": {
+          "string": 505
+        },
+        "sample": "sdk"
+      },
+      "userType": {
+        "seen": 17559,
+        "kinds": {
+          "string": 17559
+        },
+        "sample": "external"
+      },
+      "entrypoint": {
+        "seen": 17559,
+        "kinds": {
+          "string": 17559
+        },
+        "sample": "claude-desktop"
+      },
+      "cwd": {
+        "seen": 17559,
+        "kinds": {
+          "string": 17559
+        },
+        "sample": "/Users/<user>/Desktop/MY/my_harnas"
+      },
+      "sessionId": {
+        "seen": 17559,
+        "kinds": {
+          "string": 17559
+        },
+        "sample": "<uuid>"
+      },
+      "version": {
+        "seen": 17559,
+        "kinds": {
+          "string": 17559
+        },
+        "sample": "2.1.247"
+      },
+      "gitBranch": {
+        "seen": 17559,
+        "kinds": {
+          "string": 17559
+        },
+        "sample": "HEAD"
+      },
+      "toolUseResult": {
+        "seen": 9891,
+        "kinds": {
+          "object": 7167,
+          "string": 485,
+          "array": 2239
+        },
+        "sample": "<redacted:string len=81>"
+      },
+      "toolUseResult.success": {
+        "seen": 53,
+        "kinds": {
+          "boolean": 53
+        },
+        "sample": true
+      },
+      "toolUseResult.commandName": {
+        "seen": 25,
+        "kinds": {
+          "string": 25
+        },
+        "sample": "oh-my-claudecode:ralph"
+      },
+      "sourceToolAssistantUUID": {
+        "seen": 16664,
+        "kinds": {
+          "string": 16664
+        },
+        "sample": "<uuid>"
+      },
+      "isMeta": {
+        "seen": 99,
+        "kinds": {
+          "boolean": 99
+        },
+        "sample": true
+      },
+      "turnCompanion": {
+        "seen": 59,
+        "kinds": {
+          "boolean": 59
+        },
+        "sample": true
+      },
+      "sourceToolUseID": {
+        "seen": 26,
+        "kinds": {
+          "string": 26
+        },
+        "sample": "toolu_016mPvEXhw9A2HQixMMFToP7"
+      },
+      "toolUseResult.stdout": {
+        "seen": 5240,
+        "kinds": {
+          "string": 5240
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "toolUseResult.stderr": {
+        "seen": 5240,
+        "kinds": {
+          "string": 5240
+        },
+        "sample": ""
+      },
+      "toolUseResult.interrupted": {
+        "seen": 5240,
+        "kinds": {
+          "boolean": 5240
+        },
+        "sample": false
+      },
+      "toolUseResult.isImage": {
+        "seen": 5240,
+        "kinds": {
+          "boolean": 5240
+        },
+        "sample": false
+      },
+      "toolUseResult.noOutputExpected": {
+        "seen": 5240,
+        "kinds": {
+          "boolean": 5240
+        },
+        "sample": false
+      },
+      "toolUseResult.matches": {
+        "seen": 105,
+        "kinds": {
+          "array": 105
+        },
+        "sample": null
+      },
+      "toolUseResult.query": {
+        "seen": 108,
+        "kinds": {
+          "string": 108
+        },
+        "sample": "select:WebFetch,WebSearch"
+      },
+      "toolUseResult.total_deferred_tools": {
+        "seen": 105,
+        "kinds": {
+          "number": 105
+        },
+        "sample": 344
+      },
+      "toolUseResult.bytes": {
+        "seen": 17,
+        "kinds": {
+          "number": 17
+        },
+        "sample": 369176
+      },
+      "toolUseResult.code": {
+        "seen": 17,
+        "kinds": {
+          "number": 17
+        },
+        "sample": 200
+      },
+      "toolUseResult.codeText": {
+        "seen": 17,
+        "kinds": {
+          "string": 17
+        },
+        "sample": "OK"
+      },
+      "toolUseResult.result": {
+        "seen": 17,
+        "kinds": {
+          "string": 17
+        },
+        "sample": "<redacted>"
+      },
+      "toolUseResult.durationMs": {
+        "seen": 17,
+        "kinds": {
+          "number": 17
+        },
+        "sample": 7610
+      },
+      "toolUseResult.url": {
+        "seen": 19,
+        "kinds": {
+          "string": 19
+        },
+        "sample": "<redacted:string len=74>"
+      },
+      "classifierMetaLines": {
+        "seen": 61,
+        "kinds": {
+          "string": 61
+        },
+        "sample": "<redacted>"
+      },
+      "toolUseResult.caption": {
+        "seen": 19,
+        "kinds": {
+          "string": 19
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "toolUseResult.attachments": {
+        "seen": 19,
+        "kinds": {
+          "array": 19
+        },
+        "sample": null
+      },
+      "toolUseResult.rendered_locally": {
+        "seen": 19,
+        "kinds": {
+          "boolean": 19
+        },
+        "sample": true
+      },
+      "toolUseResult.backgroundTaskId": {
+        "seen": 169,
+        "kinds": {
+          "string": 169
+        },
+        "sample": "bwq4l147t"
+      },
+      "toolUseResult.backgroundCwdHint": {
+        "seen": 80,
+        "kinds": {
+          "string": 80
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "toolUseResult.type": {
+        "seen": 842,
+        "kinds": {
+          "string": 842
+        },
+        "sample": "create"
+      },
+      "toolUseResult.filePath": {
+        "seen": 1016,
+        "kinds": {
+          "string": 1016
+        },
+        "sample": "<redacted:string len=66>"
+      },
+      "toolUseResult.content": {
+        "seen": 355,
+        "kinds": {
+          "string": 354,
+          "array": 1
+        },
+        "sample": "<redacted>"
+      },
+      "toolUseResult.structuredPatch": {
+        "seen": 1016,
+        "kinds": {
+          "array": 1016
+        },
+        "sample": null
+      },
+      "toolUseResult.originalFile": {
+        "seen": 1016,
+        "kinds": {
+          "null": 474,
+          "string": 542
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "toolUseResult.userModified": {
+        "seen": 1016,
+        "kinds": {
+          "boolean": 1016
+        },
+        "sample": false
+      },
+      "queueSkipAttachments": {
+        "seen": 7,
+        "kinds": {
+          "boolean": 7
+        },
+        "sample": true
+      },
+      "toolUseResult.oldString": {
+        "seen": 679,
+        "kinds": {
+          "string": 679
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "toolUseResult.newString": {
+        "seen": 679,
+        "kinds": {
+          "string": 679
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "toolUseResult.replaceAll": {
+        "seen": 679,
+        "kinds": {
+          "boolean": 679
+        },
+        "sample": false
+      },
+      "toolUseResult.timedOutAfterMs": {
+        "seen": 4,
+        "kinds": {
+          "number": 4
+        },
+        "sample": 120000
+      },
+      "toolUseResult.memdirStamped": {
+        "seen": 55,
+        "kinds": {
+          "boolean": 55
+        },
+        "sample": true
+      },
+      "toolDenialKind": {
+        "seen": 53,
+        "kinds": {
+          "string": 53
+        },
+        "sample": "automode-blocked"
+      },
+      "toolUseResult.persistedOutputPath": {
+        "seen": 20,
+        "kinds": {
+          "string": 20
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "toolUseResult.persistedOutputSize": {
+        "seen": 20,
+        "kinds": {
+          "number": 20
+        },
+        "sample": 2077448
+      },
+      "toolUseResult.file": {
+        "seen": 503,
+        "kinds": {
+          "object": 503
+        },
+        "sample": null
+      },
+      "toolUseResult.file.filePath": {
+        "seen": 304,
+        "kinds": {
+          "string": 304
+        },
+        "sample": "<redacted:string len=94>"
+      },
+      "toolUseResult.file.content": {
+        "seen": 304,
+        "kinds": {
+          "string": 304
+        },
+        "sample": "<redacted>"
+      },
+      "toolUseResult.file.numLines": {
+        "seen": 304,
+        "kinds": {
+          "number": 304
+        },
+        "sample": 20
+      },
+      "toolUseResult.file.startLine": {
+        "seen": 304,
+        "kinds": {
+          "number": 304
+        },
+        "sample": 19
+      },
+      "toolUseResult.file.totalLines": {
+        "seen": 304,
+        "kinds": {
+          "number": 304
+        },
+        "sample": 270
+      },
+      "toolUseResult.file.base64": {
+        "seen": 199,
+        "kinds": {
+          "string": 199
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "toolUseResult.file.type": {
+        "seen": 199,
+        "kinds": {
+          "string": 199
+        },
+        "sample": "image/jpeg"
+      },
+      "toolUseResult.file.originalSize": {
+        "seen": 199,
+        "kinds": {
+          "number": 199
+        },
+        "sample": 2650597
+      },
+      "toolUseResult.file.dimensions": {
+        "seen": 199,
+        "kinds": {
+          "object": 199
+        },
+        "sample": null
+      },
+      "toolUseResult.questions": {
+        "seen": 68,
+        "kinds": {
+          "array": 68
+        },
+        "sample": null
+      },
+      "toolUseResult.answers": {
+        "seen": 68,
+        "kinds": {
+          "object": 68
+        },
+        "sample": null
+      },
+      "toolUseResult.answers.<key>.": {
+        "seen": 6,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=34>"
+      },
+      "toolUseResult.answers.Какой номер задачи ставить в сообщение коммита? По правилам проекта формат — `[НОМЕР]: что сделали`, а номера для этого фикса у меня нет.": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=10>"
+      },
+      "toolUseResult.gitOperation": {
+        "seen": 130,
+        "kinds": {
+          "object": 130
+        },
+        "sample": null
+      },
+      "toolUseResult.gitOperation.commit": {
+        "seen": 40,
+        "kinds": {
+          "object": 40
+        },
+        "sample": null
+      },
+      "toolUseResult.gitOperation.push": {
+        "seen": 77,
+        "kinds": {
+          "object": 77
+        },
+        "sample": null
+      },
+      "mcpMeta": {
+        "seen": 189,
+        "kinds": {
+          "object": 189
+        },
+        "sample": null
+      },
+      "mcpMeta._meta": {
+        "seen": 189,
+        "kinds": {
+          "object": 189
+        },
+        "sample": null
+      },
+      "mcpMeta._meta.io.<key>": {
+        "seen": 188,
+        "kinds": {
+          "object": 188
+        },
+        "sample": null
+      },
+      "mcpMeta._meta.mcpRequestId": {
+        "seen": 186,
+        "kinds": {
+          "string": 186
+        },
+        "sample": "<uuid>"
+      },
+      "toolUseResult.answers.По какому URL размещаем страницу?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=34>"
+      },
+      "toolUseResult.answers.Откуда берём контент страницы?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=27>"
+      },
+      "toolUseResult.answers.Выносить ли общие ui-примитивы (note-card, item-list, case-card, badge, typography) из worktime в shared?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=29>"
+      },
+      "toolUseResult.answers.В макете таб назван «Корупционные риски» — с одной «р», во всех четырёх фреймах. Как пишем в коде?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=41>"
+      },
+      "toolUseResult.answers.<key>. Что делаем?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "Нормализовать"
+      },
+      "toolUseResult.staleRecovered": {
+        "seen": 9,
+        "kinds": {
+          "boolean": 9
+        },
+        "sample": true
+      },
+      "toolUseResult.staleReadFileStateHint": {
+        "seen": 36,
+        "kinds": {
+          "string": 36
+        },
+        "sample": "<redacted:string len=89>"
+      },
+      "toolUseResult.answers.Есть ли макеты мобильной и планшетной версий этих страниц?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=28>"
+      },
+      "toolUseResult.answers.Что такое «Первая страничка» из списка?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=19>"
+      },
+      "toolUseResult.answers.Стили этих страниц лежат в шаблонах компонентов, которые правила проекта запрещают править. Как поступаем?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=36>"
+      },
+      "toolUseResult.answers.Принимаем 13 нормализаций расхождений макета (углы градиентов к одному значению, тени к токену `table`, ширина карточек 702, вес H3 = SemiBold на обоих ярусах, исправление опечатки, отказ от жёстких переносов строк)?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=27>"
+      },
+      "toolUseResult.answers.Куда кладём страницу (роут и id острова)?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=40>"
+      },
+      "toolUseResult.returnCodeInterpretation": {
+        "seen": 44,
+        "kinds": {
+          "string": 44
+        },
+        "sample": "<redacted:string len=16>"
+      },
+      "toolUseResult.gitOperation.branch": {
+        "seen": 23,
+        "kinds": {
+          "object": 23
+        },
+        "sample": null
+      },
+      "toolUseResult.answers.Порты 3000 и 3002 заняты — 3000 держит vite-фронт Scanum, 3002 — hyperframes preview. Что делаем?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=18>"
+      },
+      "toolUseResult.status": {
+        "seen": 58,
+        "kinds": {
+          "string": 58
+        },
+        "sample": "async_launched"
+      },
+      "toolUseResult.taskId": {
+        "seen": 63,
+        "kinds": {
+          "string": 63
+        },
+        "sample": "wxukppljm"
+      },
+      "toolUseResult.taskType": {
+        "seen": 45,
+        "kinds": {
+          "string": 45
+        },
+        "sample": "local_workflow"
+      },
+      "toolUseResult.workflowName": {
+        "seen": 45,
+        "kinds": {
+          "string": 45
+        },
+        "sample": "harness-to-dimodel-integration"
+      },
+      "toolUseResult.runId": {
+        "seen": 45,
+        "kinds": {
+          "string": 45
+        },
+        "sample": "wf_b28765fb-b11"
+      },
+      "toolUseResult.summary": {
+        "seen": 45,
+        "kinds": {
+          "string": 45
+        },
+        "sample": "<redacted>"
+      },
+      "toolUseResult.transcriptDir": {
+        "seen": 45,
+        "kinds": {
+          "string": 45
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "toolUseResult.scriptPath": {
+        "seen": 45,
+        "kinds": {
+          "string": 45
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "toolUseResult.path": {
+        "seen": 19,
+        "kinds": {
+          "string": 19
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "toolUseResult.artifact_id": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "<uuid>"
+      },
+      "toolUseResult.title": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "<redacted:string len=26>"
+      },
+      "toolUseResult.updated": {
+        "seen": 2,
+        "kinds": {
+          "boolean": 2
+        },
+        "sample": false
+      },
+      "toolUseResult.version": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "1788251381-e2e0"
+      },
+      "toolUseResult.liveSubscription": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "arming"
+      },
+      "toolUseResult.answers.Каким администраторам открыть раздел «Бизнес-метрики»? Сейчас он есть только у роли administrator (регистратура).": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "toolUseResult.answers.Новая метрика «пациенты с email»: по какой базе считать?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=39>"
+      },
+      "toolUseResult.answers.Какие из найденных дефектов чинить в этой же задаче?": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "toolUseResult.answers.Кто в задаче «куратор» — какая роль в приложении?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=34>"
+      },
+      "toolUseResult.answers.Что показывать куратору при report_status = 'none' (нет ни анкеты, ни чата — бэкенд на запрос отчёта отдаёт 404)?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=52>"
+      },
+      "toolUseResult.answers.MR 77 идёт в main и тянет 100+ коммитов. Что с ним сделать?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=49>"
+      },
+      "toolUseResult.method": {
+        "seen": 28,
+        "kinds": {
+          "string": 28
+        },
+        "sample": "get_project"
+      },
+      "toolUseResult.projectId": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "<uuid>"
+      },
+      "toolUseResult.name": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "<redacted:string len=25>"
+      },
+      "toolUseResult.canEdit": {
+        "seen": 2,
+        "kinds": {
+          "boolean": 2
+        },
+        "sample": true
+      },
+      "toolUseResult.paths": {
+        "seen": 7,
+        "kinds": {
+          "array": 7
+        },
+        "sample": null
+      },
+      "toolUseResult.contentType": {
+        "seen": 17,
+        "kinds": {
+          "string": 17
+        },
+        "sample": "text/html"
+      },
+      "toolUseResult.isBase64": {
+        "seen": 17,
+        "kinds": {
+          "boolean": 17
+        },
+        "sample": false
+      },
+      "toolUseResult.truncated": {
+        "seen": 17,
+        "kinds": {
+          "boolean": 17
+        },
+        "sample": false
+      },
+      "toolUseResult.answers.Запись может быть не привязана к аккаунту (user_id = null, гость по SMS-ссылке). Как открывать карточку такого пациента?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=57>"
+      },
+      "toolUseResult.answers.Иконки в строке записи (05): что оставляем?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=29>"
+      },
+      "toolUseResult.answers.Кому доступна карточка пациента и отчёт из неё?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=32>"
+      },
+      "toolUseResult.answers.<key>. Что с ними?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=31>"
+      },
+      "toolUseResult.answers.Анкета: правка потеряна. Что именно оптимизируем?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "toolUseResult.answers.«Нужно уметь смотреть даты пациентов» — какие даты на экране «Пациенты»?": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "toolUseResult.answers.Куда ведёт кнопка деталки пациента с экрана «Пациенты»?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=42>"
+      },
+      "toolUseResult.answers.Убираем «Список анкет» у админа. А что с остальным старым контуром?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=50>"
+      },
+      "toolUseResult.answers.Каким путём идём с пациентами без аккаунта?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "toolUseResult.answers.Если вариант A — по чему считать, что две записи относятся к одному человеку?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=33>"
+      },
+      "toolUseResult.answers.Ограничиваем ли «Связаться» пациентами с предстоящим визитом?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=45>"
+      },
+      "toolUseResult.answers.Набор проблем — подтверждаешь предложенный?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=38>"
+      },
+      "isVisibleInTranscriptOnly": {
+        "seen": 5,
+        "kinds": {
+          "boolean": 5
+        },
+        "sample": true
+      },
+      "isCompactSummary": {
+        "seen": 5,
+        "kinds": {
+          "boolean": 5
+        },
+        "sample": true
+      },
+      "slug": {
+        "seen": 4729,
+        "kinds": {
+          "string": 4729
+        },
+        "sample": "temporal-growing-lemon"
+      },
+      "toolUseResult.answers.Три учётки под удаление не подпадают ни под корпоративный домен, ни под artemhockey. Что с ними?\n\n• id=33 user@example.com — явно тестовая\n• id=44 sis2060@yandex.ru\n• id=53 vashchenkolev@gmail.com — похоже на живого человека": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=34>"
+      },
+      "toolUseResult.answers.Что делать с учётками в Keycloak у тех, кого удаляем из Mongo?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=20>"
+      },
+      "toolUseResult.answers.Метрики закрыты ролью `administrator`, которой на стенде ни у кого нет. Что делаем?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=60>"
+      },
+      "toolUseResult.answers.Что делать с иконкой 1.7 МБ перед коммитом?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=27>"
+      },
+      "toolUseResult.answers.<key>": {
+        "seen": 3,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=36>"
+      },
+      "toolUseResult.answers.Где скилл должен складывать карту реализации дизайна?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=37>"
+      },
+      "toolUseResult.answers.Останавливаться ли перед реализацией на утверждение карты?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=40>"
+      },
+      "toolUseResult.answers.Как скилл должен проверять результат после реализации?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=106>"
+      },
+      "agentId": {
+        "seen": 7164,
+        "kinds": {
+          "string": 7164
+        },
+        "sample": "ad5fa450f88423375"
+      },
+      "toolEndsTurn": {
+        "seen": 169,
+        "kinds": {
+          "boolean": 169
+        },
+        "sample": true
+      },
+      "toolUseResult.answers.Как проходит занятие с точки зрения экрана? Это определяет, нужен ли один вид (только для вас) или два (ваш приватный сценарий + «чистый» экран демонстрации для учеников).": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=17>"
+      },
+      "toolUseResult.answers.<key>. Что из этого должна показывать сама платформа?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=25>"
+      },
+      "toolUseResult.answers.Как управлять демо-экраном во время занятия? Вы шарите окно с демо-слайдами, а сценарий держите в другом окне. Вопрос — кто листает демо-окно.": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=34>"
+      },
+      "toolUseResult.answers.Какой подход берём?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=35>"
+      },
+      "toolUseResult.planId": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "plan_7fc9fdb32c3047cd_9d17702e5563"
+      },
+      "toolUseResult.writes": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "toolUseResult.deletes": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "toolUseResult.written": {
+        "seen": 1,
+        "kinds": {
+          "number": 1
+        },
+        "sample": 1
+      },
+      "toolUseResult.retrieval_status": {
+        "seen": 32,
+        "kinds": {
+          "string": 32
+        },
+        "sample": "success"
+      },
+      "toolUseResult.task": {
+        "seen": 43,
+        "kinds": {
+          "object": 43
+        },
+        "sample": null
+      },
+      "toolUseResult.task.task_id": {
+        "seen": 32,
+        "kinds": {
+          "string": 32
+        },
+        "sample": "bu61420er"
+      },
+      "toolUseResult.task.task_type": {
+        "seen": 32,
+        "kinds": {
+          "string": 32
+        },
+        "sample": "local_bash"
+      },
+      "toolUseResult.task.status": {
+        "seen": 32,
+        "kinds": {
+          "string": 32
+        },
+        "sample": "failed"
+      },
+      "toolUseResult.task.description": {
+        "seen": 32,
+        "kinds": {
+          "string": 32
+        },
+        "sample": "<redacted>"
+      },
+      "toolUseResult.task.output": {
+        "seen": 32,
+        "kinds": {
+          "string": 32
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "toolUseResult.task.exitCode": {
+        "seen": 32,
+        "kinds": {
+          "number": 32
+        },
+        "sample": 1
+      },
+      "toolUseResult.answers.Какой формат интерактивного демо делаем?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=19>"
+      },
+      "toolUseResult.answers.Кто и где авторит примеры?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=25>"
+      },
+      "toolUseResult.answers.Запускать реализацию по этому плану?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=12>"
+      },
+      "toolUseResult.answers.Как встроить «язык работы с агентом» в сетку Pro (22 урока фиксированы)?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=34>"
+      },
+      "toolUseResult.answers.Делаем ли сдачу промптов как тип домашки?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=15>"
+      },
+      "toolUseResult.answers.Фиксируем это в плане курса (course-v2-core-and-pro.md)?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=16>"
+      },
+      "toolUseResult.answers.Какой возраст детей вы планируете учить в первую очередь?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=9>"
+      },
+      "toolUseResult.answers.Что запускаем сейчас? Можно несколько.": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "toolUseResult.answers.Как делаем живое редактирование React-кода на демо-экране?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=28>"
+      },
+      "toolUseResult.listing": {
+        "seen": 4,
+        "kinds": {
+          "string": 4
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "toolUseResult.answers.С чего начинаем? (порядок реализации)": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=27>"
+      },
+      "toolUseResult.answers.Глубина для урока 13 (TypeScript)?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=34>"
+      },
+      "toolUseResult.answers.Как разделить фронт и бэкенд в структуре проекта?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=33>"
+      },
+      "toolUseResult.dangerouslyDisableSandbox": {
+        "seen": 1,
+        "kinds": {
+          "boolean": 1
+        },
+        "sample": false
+      },
+      "toolUseResult.file.truncatedByTokenCap": {
+        "seen": 1,
+        "kinds": {
+          "boolean": 1
+        },
+        "sample": true
+      },
+      "toolUseResult.prompt": {
+        "seen": 13,
+        "kinds": {
+          "string": 13
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "toolUseResult.agentId": {
+        "seen": 13,
+        "kinds": {
+          "string": 13
+        },
+        "sample": "a3fa2caafd815cab8"
+      },
+      "toolUseResult.agentType": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "devops"
+      },
+      "toolUseResult.resolvedModel": {
+        "seen": 13,
+        "kinds": {
+          "string": 13
+        },
+        "sample": "claude-opus-5"
+      },
+      "toolUseResult.totalDurationMs": {
+        "seen": 1,
+        "kinds": {
+          "number": 1
+        },
+        "sample": 794449
+      },
+      "toolUseResult.totalTokens": {
+        "seen": 1,
+        "kinds": {
+          "number": 1
+        },
+        "sample": 150635
+      },
+      "toolUseResult.totalToolUseCount": {
+        "seen": 1,
+        "kinds": {
+          "number": 1
+        },
+        "sample": 39
+      },
+      "toolUseResult.usage": {
+        "seen": 1,
+        "kinds": {
+          "object": 1
+        },
+        "sample": null
+      },
+      "toolUseResult.usage.input_tokens": {
+        "seen": 1,
+        "kinds": {
+          "number": 1
+        },
+        "sample": 2
+      },
+      "toolUseResult.usage.cache_creation_input_tokens": {
+        "seen": 1,
+        "kinds": {
+          "number": 1
+        },
+        "sample": 57
+      },
+      "toolUseResult.usage.cache_read_input_tokens": {
+        "seen": 1,
+        "kinds": {
+          "number": 1
+        },
+        "sample": 150563
+      },
+      "toolUseResult.usage.output_tokens": {
+        "seen": 1,
+        "kinds": {
+          "number": 1
+        },
+        "sample": 13
+      },
+      "toolUseResult.usage.output_tokens_details": {
+        "seen": 1,
+        "kinds": {
+          "object": 1
+        },
+        "sample": null
+      },
+      "toolUseResult.usage.server_tool_use": {
+        "seen": 1,
+        "kinds": {
+          "object": 1
+        },
+        "sample": null
+      },
+      "toolUseResult.usage.service_tier": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "standard"
+      },
+      "toolUseResult.usage.cache_creation": {
+        "seen": 1,
+        "kinds": {
+          "object": 1
+        },
+        "sample": null
+      },
+      "toolUseResult.usage.inference_geo": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "not_available"
+      },
+      "toolUseResult.usage.iterations": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "toolUseResult.usage.speed": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "standard"
+      },
+      "toolUseResult.toolStats": {
+        "seen": 1,
+        "kinds": {
+          "object": 1
+        },
+        "sample": null
+      },
+      "toolUseResult.toolStats.readCount": {
+        "seen": 1,
+        "kinds": {
+          "number": 1
+        },
+        "sample": 0
+      },
+      "toolUseResult.toolStats.searchCount": {
+        "seen": 1,
+        "kinds": {
+          "number": 1
+        },
+        "sample": 0
+      },
+      "toolUseResult.toolStats.bashCount": {
+        "seen": 1,
+        "kinds": {
+          "number": 1
+        },
+        "sample": 39
+      },
+      "toolUseResult.toolStats.editFileCount": {
+        "seen": 1,
+        "kinds": {
+          "number": 1
+        },
+        "sample": 0
+      },
+      "toolUseResult.toolStats.linesAdded": {
+        "seen": 1,
+        "kinds": {
+          "number": 1
+        },
+        "sample": 0
+      },
+      "toolUseResult.toolStats.linesRemoved": {
+        "seen": 1,
+        "kinds": {
+          "number": 1
+        },
+        "sample": 0
+      },
+      "toolUseResult.toolStats.otherToolCount": {
+        "seen": 1,
+        "kinds": {
+          "number": 1
+        },
+        "sample": 0
+      },
+      "toolUseResult.message": {
+        "seen": 14,
+        "kinds": {
+          "string": 14
+        },
+        "sample": "<redacted:string len=29>"
+      },
+      "toolUseResult.resumedAgentId": {
+        "seen": 11,
+        "kinds": {
+          "string": 11
+        },
+        "sample": "a3fa2caafd815cab8"
+      },
+      "toolUseResult.pin": {
+        "seen": 12,
+        "kinds": {
+          "object": 12
+        },
+        "sample": null
+      },
+      "toolUseResult.pin.id": {
+        "seen": 12,
+        "kinds": {
+          "string": 12
+        },
+        "sample": "a3fa2caafd815cab8"
+      },
+      "toolUseResult.pin.name": {
+        "seen": 12,
+        "kinds": {
+          "string": 12
+        },
+        "sample": "speechkit-diag"
+      },
+      "toolUseResult.pin.ref": {
+        "seen": 12,
+        "kinds": {
+          "string": 12
+        },
+        "sample": "f4708b"
+      },
+      "toolUseResult.answers.Звук во втором ролике? Локальный TTS (Kokoro) сейчас не установлен.": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=53>"
+      },
+      "toolUseResult.answers.Какая длительность второго ролика (браузер + DNS)? Промо жёстко 10 с, как просили.": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=23>"
+      },
+      "toolUseResult.answers.Куда пойдут ролики — от этого зависит соотношение сторон и вёрстка кадра?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=38>"
+      },
+      "toolUseResult.answers.Показать раскадровку до сборки или сразу собрать готовые ролики?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=47>"
+      },
+      "toolUseResult.display": {
+        "seen": 15,
+        "kinds": {
+          "string": 15
+        },
+        "sample": "render"
+      },
+      "toolUseResult.answers.Музыка: вы выбирали «текст + музыка», но библиотека HeyGen требует входа, а локальный MusicGen не установлен. Что делаем?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=33>"
+      },
+      "toolUseResult.answers.Рендерить в MP4 прямо сейчас или сначала открыть живой превью в Studio?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=23>"
+      },
+      "toolUseResult.answers.Русского голоса нет ни в HeyGen, ни в Kokoro. Чем озвучиваем урок?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=30>"
+      },
+      "toolUseResult.answers.Если добавляем голос — что делаем с крупными надписями в кадре?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=30>"
+      },
+      "toolUseResult.answers.Темп речи и длина ролика?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=35>"
+      },
+      "toolUseResult.answers.Как читать аббревиатуры — судя по второй пробе?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=25>"
+      },
+      "toolUseResult.answers.Куда реально попадает выпускник Pro в ближайшие 12–18 месяцев — какой сценарий ты считаешь основным, по которому будешь мерить успех курса?": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "<redacted:string len=41>"
+      },
+      "toolUseResult.answers.Что ты САМ делаешь руками в агентной разработке регулярно — на уровне «могу провести двухчасовой урок с живым демо и ответить на неудобный вопрос»?": {
+        "seen": 2,
+        "kinds": {
+          "array": 2
+        },
+        "sample": null
+      },
+      "toolUseResult.answers.Если выпускник Pro сможет убедительно показать ТОЛЬКО ОДНО — что должно быть этим одним? Это и есть ядро ценности курса.": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "<redacted:string len=34>"
+      },
+      "toolUseResult.answers.Сколько уроков Pro ты готов переписывать КАЖДЫЙ ГОД? Агентный инструментарий (скиллы, MCP, хуки, конфиги конкретных CLI) устаревает за 6–12 месяцев — это прямая цена варианта В.": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "<redacted:string len=16>"
+      },
+      "toolUseResult.timeoutMs": {
+        "seen": 2,
+        "kinds": {
+          "number": 2
+        },
+        "sample": 3600000
+      },
+      "toolUseResult.persistent": {
+        "seen": 2,
+        "kinds": {
+          "boolean": 2
+        },
+        "sample": false
+      },
+      "toolUseResult.isAsync": {
+        "seen": 12,
+        "kinds": {
+          "boolean": 12
+        },
+        "sample": true
+      },
+      "toolUseResult.description": {
+        "seen": 12,
+        "kinds": {
+          "string": 12
+        },
+        "sample": "<redacted>"
+      },
+      "toolUseResult.outputFile": {
+        "seen": 12,
+        "kinds": {
+          "string": 12
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "toolUseResult.canReadOutputFile": {
+        "seen": 12,
+        "kinds": {
+          "boolean": 12
+        },
+        "sample": true
+      },
+      "toolUseResult.answers.Личный урок 1-на-1 — как его хранить? В БД сейчас есть только два вида занятий: live (поток) и consultation (один на один).": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=31>"
+      },
+      "toolUseResult.answers.Сколько человек можно позвать на личное занятие из мини-формы?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=27>"
+      },
+      "toolUseResult.task.id": {
+        "seen": 11,
+        "kinds": {
+          "string": 11
+        },
+        "sample": "1"
+      },
+      "toolUseResult.task.subject": {
+        "seen": 11,
+        "kinds": {
+          "string": 11
+        },
+        "sample": "<redacted:string len=49>"
+      },
+      "toolUseResult.updatedFields": {
+        "seen": 16,
+        "kinds": {
+          "array": 16
+        },
+        "sample": null
+      },
+      "toolUseResult.statusChange": {
+        "seen": 16,
+        "kinds": {
+          "object": 16
+        },
+        "sample": null
+      },
+      "toolUseResult.statusChange.from": {
+        "seen": 16,
+        "kinds": {
+          "string": 16
+        },
+        "sample": "pending"
+      },
+      "toolUseResult.statusChange.to": {
+        "seen": 16,
+        "kinds": {
+          "string": 16
+        },
+        "sample": "completed"
+      },
+      "toolUseResult.results": {
+        "seen": 5,
+        "kinds": {
+          "array": 5
+        },
+        "sample": null
+      },
+      "toolUseResult.trigger": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "user_asked"
+      },
+      "toolUseResult.durationSeconds": {
+        "seen": 3,
+        "kinds": {
+          "number": 3
+        },
+        "sample": 7.830873707979918
+      },
+      "toolUseResult.searchCount": {
+        "seen": 3,
+        "kinds": {
+          "number": 3
+        },
+        "sample": 1
+      },
+      "toolUseResult.answers.Какую концепцию берём для hero-ролика на главной?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=26>"
+      },
+      "toolUseResult.answers.Какую концепцию берём для explainer про процесс и AI-системы?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=32>"
+      },
+      "toolUseResult.answers.Нужна ли озвучка? (Музыка спокойным фоном будет в обоих в любом случае)": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=42>"
+      },
+      "toolUseResult.answers.Какие форматы рендерить?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=30>"
+      },
+      "toolUseResult.answers.Показывать ли сториборд на согласование перед рендером?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=30>"
+      },
+      "toolUseResult.answers.В каком режиме собираем?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=32>"
+      },
+      "toolUseResult.task_id": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "b6rqm9kei"
+      },
+      "toolUseResult.task_type": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "local_bash"
+      },
+      "toolUseResult.command": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "<redacted:string len=82>"
+      },
+      "toolUseResult.answers.Утверждаем планы кадров?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=16>"
+      },
+      "toolUseResult.answers.Показать вайрфрейм-эскизы кадров перед полной сборкой?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=27>"
+      },
+      "toolUseResult.answers.Что делаем с озвучкой explainer? Русского нейроголоса в доступном каталоге нет": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=19>"
+      },
+      "toolUseResult.answers.Раскладки кадров утверждаем?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=23>"
+      },
+      "toolUseResult.answers.Как поступаем с озвучкой, пока роль на TTS не выдана?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=91>"
+      },
+      "toolUseResult.answers.Какой голос SpeechKit берём, когда синтез заработает?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=33>"
+      },
+      "toolUseResult.answers.Рендерим hero-ролик в MP4?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=27>"
+      },
+      "toolUseResult.answers.Куда ставим hero-ролик на главной?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=35>"
+      },
+      "toolUseResult.answers.Рендерим в MP4?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=45>"
+      },
+      "mcpMeta._meta.frontLoadedTabGroupId": {
+        "seen": 1,
+        "kinds": {
+          "number": 1
+        },
+        "sample": 883674958
+      },
+      "toolUseResult.answers.Что делаем с explainer, пока облако недоступно?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=35>"
+      },
+      "toolUseResult.answers.Делаем страницу резюме?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=30>"
+      },
+      "toolUseResult.answers.Что делаем со строкой «Открыт к предложениям» в первом экране?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=23>"
+      },
+      "toolUseResult.answers.Что такое Cloudy Academy — чтобы я написал точно?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=22>"
+      },
+      "toolUseResult.answers.Куда коммитить? Деплой срабатывает только на push в main": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=21>"
+      },
+      "toolUseResult.answers.Как поступить с веткой LZRT-10464, раз она уже есть на origin с незамерженным WAF-коммитом?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=30>"
+      },
+      "toolUseResult.answers.Схема di_model требует lifestyle и current_health_status (llm.py:235-236). Если бэкенд перестанет их слать — 422, и сработает тихий фолбэк «повторить запрос вообще без анкеты», то есть ИИ потеряет весь анамнез. Что делаем?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=28>"
+      },
+      "toolUseResult.answers.Тикет назван «Back-end», но две секции живут и во фронте (sections.ts, mapping.ts, labels.ts, buildReadableMedicalForm, вьюхи админки и отчёта). Параллельно со мной работает другой агент. Что беру я?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=17>"
+      },
+      "toolUseResult.answers.В Mongo уже лежат заполненные анкеты с этими блоками. Что с ними?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=25>"
+      },
+      "toolUseResult.answers.Как изолировать мою работу от параллельных агентов? Во фронте сейчас есть незакоммиченные чужие правки (AdministratorMedicalReports), переключение ветки их заденет.": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=28>"
+      },
+      "toolUseResult.answers.<key>. Сейчас анкета уходит одним POST — «начатых» опросов в данных нет. Как определяем начало?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=42>"
+      },
+      "toolUseResult.answers.<key>. Данных нет вообще. Какой объём делаем?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=40>"
+      },
+      "toolUseResult.answers.Кому показывать раздел «Бизнес-метрики» в панели?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=26>"
+      },
+      "toolUseResult.answers.Для проверки админки нужна учётка в новом Keycloak. Как поступаем?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=39>"
+      },
+      "toolUseResult.answers.Коммит [SDS-SOZ-216] лежит в локальном dev.<key>": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=25>"
+      },
+      "toolUseResult.answers.Номер задачи в сообщении коммита — SDS-SOZ-216 (по коммитам редизайна справочника и дней рождения). Верно?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=17>"
+      },
+      "toolUseResult.answers.Как связать моки новой вкладки «Сотрудники» с существующей вкладкой «Проектные команды» (она уже на реальном API)?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=31>"
+      },
+      "toolUseResult.answers.Что должно происходить при удалении и добавлении сотрудника (всё на моках)?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=28>"
+      },
+      "toolUseResult.answers.Кого показывать в выпадающем списке «Добавить сотрудников»?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=37>"
+      },
+      "toolUseResult.answers.Работать прямо в dev или завести отдельную ветку?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=35>"
+      },
+      "toolUseResult.contents": {
+        "seen": 2,
+        "kinds": {
+          "array": 2
+        },
+        "sample": null
+      },
+      "toolUseResult.answers.В блоке «Нормы рабочего времени» подпись вкладки и заголовок карточки под ней — один и тот же текст. Что меняем на «Сокращённый рабочий день»?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=35>"
+      },
+      "session_id": {
+        "seen": 1030,
+        "kinds": {
+          "string": 1030
+        },
+        "sample": "<uuid>"
+      },
+      "toolUseResult.answers.Дизайн 03D переносит рекомендации в чат.<key>": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=27>"
+      },
+      "toolUseResult.answers.В пузыре есть день, время и CTA. Где подтверждать запись — там нужен текст согласия на обработку ПДн из МИС и чекбокс?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=48>"
+      },
+      "toolUseResult.answers.Какие раскладки делаем сейчас? В дизайне обновлены и десктоп 1440, и мобильный 03.": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=25>"
+      },
+      "toolUseResult.annotations": {
+        "seen": 3,
+        "kinds": {
+          "object": 3
+        },
+        "sample": null
+      },
+      "toolUseResult.answers.С чего начинаем работу?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=30>"
+      },
+      "toolUseResult.answers.Наследственные синдромы (~60 позиций) — что с ними делать?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=49>"
+      },
+      "toolUseResult.answers.Профиль клиники — от него зависит содержание справочника аллергенов и болезней": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=23>"
+      },
+      "toolUseResult.answers.Свободный ввод «Другое — впишите» в списках анкеты": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=21>"
+      },
+      "interruptedMessageId": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "msg_011CeFUDFN8QAaMWKyEENYFg"
+      },
+      "imagePasteIds": {
+        "seen": 5,
+        "kinds": {
+          "array": 5
+        },
+        "sample": null
+      },
+      "toolUseResult.answers.Файлы .<key>. Что удаляем?": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=31>"
+      }
+    }
+  },
+  "last-prompt": {
+    "count": 3517,
+    "fields": {
+      "type": {
+        "seen": 3517,
+        "kinds": {
+          "string": 3517
+        },
+        "sample": "last-prompt"
+      },
+      "lastPrompt": {
+        "seen": 3516,
+        "kinds": {
+          "string": 3516
+        },
+        "sample": "<redacted>"
+      },
+      "leafUuid": {
+        "seen": 3517,
+        "kinds": {
+          "string": 3517
+        },
+        "sample": "<uuid>"
+      },
+      "sessionId": {
+        "seen": 3517,
+        "kinds": {
+          "string": 3517
+        },
+        "sample": "<uuid>"
+      }
+    }
+  },
+  "custom-title": {
+    "count": 2887,
+    "fields": {
+      "type": {
+        "seen": 2887,
+        "kinds": {
+          "string": 2887
+        },
+        "sample": "custom-title"
+      },
+      "customTitle": {
+        "seen": 2887,
+        "kinds": {
+          "string": 2887
+        },
+        "sample": "<redacted>"
+      },
+      "sessionId": {
+        "seen": 2887,
+        "kinds": {
+          "string": 2887
+        },
+        "sample": "<uuid>"
+      }
+    }
+  },
+  "atis-latch": {
+    "count": 2181,
+    "fields": {
+      "type": {
+        "seen": 2181,
+        "kinds": {
+          "string": 2181
+        },
+        "sample": "atis-latch"
+      },
+      "atis": {
+        "seen": 2181,
+        "kinds": {
+          "string": 2181
+        },
+        "sample": ""
+      },
+      "sessionId": {
+        "seen": 2181,
+        "kinds": {
+          "string": 2181
+        },
+        "sample": "<uuid>"
+      }
+    }
+  },
+  "assistant": {
+    "count": 29759,
+    "fields": {
+      "parentUuid": {
+        "seen": 29759,
+        "kinds": {
+          "string": 29759
+        },
+        "sample": "<uuid>"
+      },
+      "isSidechain": {
+        "seen": 29759,
+        "kinds": {
+          "boolean": 29759
+        },
+        "sample": false
+      },
+      "message": {
+        "seen": 29759,
+        "kinds": {
+          "object": 29759
+        },
+        "sample": null
+      },
+      "message.model": {
+        "seen": 29759,
+        "kinds": {
+          "string": 29759
+        },
+        "sample": "claude-opus-5"
+      },
+      "message.id": {
+        "seen": 29759,
+        "kinds": {
+          "string": 29759
+        },
+        "sample": "msg_011Cecv8M5tZ1vVhFw5TMahb"
+      },
+      "message.type": {
+        "seen": 29759,
+        "kinds": {
+          "string": 29759
+        },
+        "sample": "message"
+      },
+      "message.role": {
+        "seen": 29759,
+        "kinds": {
+          "string": 29759
+        },
+        "sample": "assistant"
+      },
+      "message.content": {
+        "seen": 29759,
+        "kinds": {
+          "array": 29759
+        },
+        "sample": null
+      },
+      "message.stop_reason": {
+        "seen": 29759,
+        "kinds": {
+          "string": 23534,
+          "null": 6225
+        },
+        "sample": "tool_use"
+      },
+      "message.stop_sequence": {
+        "seen": 29759,
+        "kinds": {
+          "null": 29705,
+          "string": 54
+        },
+        "sample": ""
+      },
+      "message.stop_details": {
+        "seen": 29759,
+        "kinds": {
+          "null": 29759
+        },
+        "sample": null
+      },
+      "message.usage": {
+        "seen": 29759,
+        "kinds": {
+          "object": 29759
+        },
+        "sample": null
+      },
+      "message.usage.input_tokens": {
+        "seen": 29759,
+        "kinds": {
+          "number": 29759
+        },
+        "sample": 2
+      },
+      "message.usage.cache_creation_input_tokens": {
+        "seen": 29759,
+        "kinds": {
+          "number": 29759
+        },
+        "sample": 48061
+      },
+      "message.usage.cache_read_input_tokens": {
+        "seen": 29759,
+        "kinds": {
+          "number": 29759
+        },
+        "sample": 38011
+      },
+      "message.usage.output_tokens": {
+        "seen": 29759,
+        "kinds": {
+          "number": 29759
+        },
+        "sample": 87
+      },
+      "message.usage.output_tokens_details": {
+        "seen": 20173,
+        "kinds": {
+          "object": 20126,
+          "null": 47
+        },
+        "sample": null
+      },
+      "message.usage.server_tool_use": {
+        "seen": 23534,
+        "kinds": {
+          "object": 23534
+        },
+        "sample": null
+      },
+      "message.usage.service_tier": {
+        "seen": 29759,
+        "kinds": {
+          "string": 29705,
+          "null": 54
+        },
+        "sample": "standard"
+      },
+      "message.usage.cache_creation": {
+        "seen": 29759,
+        "kinds": {
+          "object": 29759
+        },
+        "sample": null
+      },
+      "message.usage.inference_geo": {
+        "seen": 29759,
+        "kinds": {
+          "string": 29705,
+          "null": 54
+        },
+        "sample": "not_available"
+      },
+      "message.usage.iterations": {
+        "seen": 23534,
+        "kinds": {
+          "array": 23480,
+          "null": 54
+        },
+        "sample": null
+      },
+      "message.usage.speed": {
+        "seen": 23534,
+        "kinds": {
+          "string": 23480,
+          "null": 54
+        },
+        "sample": "standard"
+      },
+      "message.diagnostics": {
+        "seen": 29752,
+        "kinds": {
+          "null": 29268,
+          "object": 484
+        },
+        "sample": null
+      },
+      "requestId": {
+        "seen": 29754,
+        "kinds": {
+          "string": 29754
+        },
+        "sample": "req_011Cecv8LFHeLKBUofanRkA4"
+      },
+      "type": {
+        "seen": 29759,
+        "kinds": {
+          "string": 29759
+        },
+        "sample": "assistant"
+      },
+      "uuid": {
+        "seen": 29759,
+        "kinds": {
+          "string": 29759
+        },
+        "sample": "<uuid>"
+      },
+      "timestamp": {
+        "seen": 29759,
+        "kinds": {
+          "string": 29759
+        },
+        "sample": "2026-09-01T14:58:28.073Z"
+      },
+      "effort": {
+        "seen": 29705,
+        "kinds": {
+          "string": 29705
+        },
+        "sample": "xhigh"
+      },
+      "userType": {
+        "seen": 29759,
+        "kinds": {
+          "string": 29759
+        },
+        "sample": "external"
+      },
+      "entrypoint": {
+        "seen": 29759,
+        "kinds": {
+          "string": 29759
+        },
+        "sample": "claude-desktop"
+      },
+      "cwd": {
+        "seen": 29759,
+        "kinds": {
+          "string": 29759
+        },
+        "sample": "/Users/<user>/Desktop/MY/my_harnas"
+      },
+      "sessionId": {
+        "seen": 29759,
+        "kinds": {
+          "string": 29759
+        },
+        "sample": "<uuid>"
+      },
+      "version": {
+        "seen": 29759,
+        "kinds": {
+          "string": 29759
+        },
+        "sample": "2.1.247"
+      },
+      "gitBranch": {
+        "seen": 29759,
+        "kinds": {
+          "string": 29759
+        },
+        "sample": "HEAD"
+      },
+      "attributionSkill": {
+        "seen": 2821,
+        "kinds": {
+          "string": 2821
+        },
+        "sample": "oh-my-claudecode:ralph"
+      },
+      "attributionPlugin": {
+        "seen": 1647,
+        "kinds": {
+          "string": 1647
+        },
+        "sample": "oh-my-claudecode"
+      },
+      "message.diagnostics.cache_miss_reason": {
+        "seen": 484,
+        "kinds": {
+          "object": 484
+        },
+        "sample": null
+      },
+      "attributionMcpServer": {
+        "seen": 4208,
+        "kinds": {
+          "string": 4208
+        },
+        "sample": "chrome-devtools"
+      },
+      "attributionMcpTool": {
+        "seen": 4208,
+        "kinds": {
+          "string": 4208
+        },
+        "sample": "list_pages"
+      },
+      "message.container": {
+        "seen": 54,
+        "kinds": {
+          "null": 54
+        },
+        "sample": null
+      },
+      "message.context_management": {
+        "seen": 59,
+        "kinds": {
+          "null": 54,
+          "object": 5
+        },
+        "sample": null
+      },
+      "error": {
+        "seen": 52,
+        "kinds": {
+          "string": 52
+        },
+        "sample": "authentication_failed"
+      },
+      "isApiErrorMessage": {
+        "seen": 54,
+        "kinds": {
+          "boolean": 54
+        },
+        "sample": true
+      },
+      "apiErrorStatus": {
+        "seen": 50,
+        "kinds": {
+          "number": 50
+        },
+        "sample": 403
+      },
+      "slug": {
+        "seen": 7727,
+        "kinds": {
+          "string": 7727
+        },
+        "sample": "temporal-growing-lemon"
+      },
+      "agentId": {
+        "seen": 11705,
+        "kinds": {
+          "string": 11705
+        },
+        "sample": "ad5fa450f88423375"
+      },
+      "attributionAgent": {
+        "seen": 11660,
+        "kinds": {
+          "string": 11660
+        },
+        "sample": "workflow-subagent"
+      },
+      "message.context_management.applied_edits": {
+        "seen": 5,
+        "kinds": {
+          "array": 5
+        },
+        "sample": null
+      },
+      "session_id": {
+        "seen": 1752,
+        "kinds": {
+          "string": 1752
+        },
+        "sample": "<uuid>"
+      }
+    }
+  },
+  "system": {
+    "count": 509,
+    "fields": {
+      "parentUuid": {
+        "seen": 509,
+        "kinds": {
+          "string": 504,
+          "null": 5
+        },
+        "sample": "<uuid>"
+      },
+      "isSidechain": {
+        "seen": 509,
+        "kinds": {
+          "boolean": 509
+        },
+        "sample": false
+      },
+      "type": {
+        "seen": 509,
+        "kinds": {
+          "string": 509
+        },
+        "sample": "system"
+      },
+      "subtype": {
+        "seen": 509,
+        "kinds": {
+          "string": 509
+        },
+        "sample": "stop_hook_summary"
+      },
+      "hookCount": {
+        "seen": 406,
+        "kinds": {
+          "number": 406
+        },
+        "sample": 6
+      },
+      "hookInfos": {
+        "seen": 406,
+        "kinds": {
+          "array": 406
+        },
+        "sample": null
+      },
+      "hookErrors": {
+        "seen": 406,
+        "kinds": {
+          "array": 406
+        },
+        "sample": null
+      },
+      "hookAdditionalContext": {
+        "seen": 406,
+        "kinds": {
+          "array": 406
+        },
+        "sample": null
+      },
+      "preventedContinuation": {
+        "seen": 406,
+        "kinds": {
+          "boolean": 406
+        },
+        "sample": false
+      },
+      "stopReason": {
+        "seen": 406,
+        "kinds": {
+          "string": 406
+        },
+        "sample": ""
+      },
+      "hasOutput": {
+        "seen": 406,
+        "kinds": {
+          "boolean": 406
+        },
+        "sample": true
+      },
+      "level": {
+        "seen": 455,
+        "kinds": {
+          "string": 455
+        },
+        "sample": "suggestion"
+      },
+      "timestamp": {
+        "seen": 509,
+        "kinds": {
+          "string": 509
+        },
+        "sample": "2026-08-31T10:57:00.182Z"
+      },
+      "uuid": {
+        "seen": 509,
+        "kinds": {
+          "string": 509
+        },
+        "sample": "<uuid>"
+      },
+      "toolUseID": {
+        "seen": 406,
+        "kinds": {
+          "string": 406
+        },
+        "sample": "<uuid>"
+      },
+      "userType": {
+        "seen": 509,
+        "kinds": {
+          "string": 509
+        },
+        "sample": "external"
+      },
+      "entrypoint": {
+        "seen": 509,
+        "kinds": {
+          "string": 509
+        },
+        "sample": "claude-desktop"
+      },
+      "cwd": {
+        "seen": 509,
+        "kinds": {
+          "string": 509
+        },
+        "sample": "/Users/<user>/Desktop/MY/course-platform"
+      },
+      "sessionId": {
+        "seen": 509,
+        "kinds": {
+          "string": 509
+        },
+        "sample": "<uuid>"
+      },
+      "version": {
+        "seen": 509,
+        "kinds": {
+          "string": 509
+        },
+        "sample": "2.1.247"
+      },
+      "gitBranch": {
+        "seen": 509,
+        "kinds": {
+          "string": 509
+        },
+        "sample": "fix/telegram-warn-on-failure"
+      },
+      "error": {
+        "seen": 34,
+        "kinds": {
+          "object": 34
+        },
+        "sample": null
+      },
+      "error.message": {
+        "seen": 34,
+        "kinds": {
+          "string": 34
+        },
+        "sample": "<redacted:string len=17>"
+      },
+      "error.formatted": {
+        "seen": 34,
+        "kinds": {
+          "string": 34
+        },
+        "sample": "<redacted:string len=31>"
+      },
+      "error.connection": {
+        "seen": 34,
+        "kinds": {
+          "object": 11,
+          "null": 23
+        },
+        "sample": null
+      },
+      "error.connection.code": {
+        "seen": 11,
+        "kinds": {
+          "string": 11
+        },
+        "sample": "ECONNRESET"
+      },
+      "error.connection.message": {
+        "seen": 11,
+        "kinds": {
+          "string": 11
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "error.connection.isSSLError": {
+        "seen": 11,
+        "kinds": {
+          "boolean": 11
+        },
+        "sample": false
+      },
+      "error.isNetworkDown": {
+        "seen": 34,
+        "kinds": {
+          "boolean": 34
+        },
+        "sample": false
+      },
+      "error.rateLimits": {
+        "seen": 34,
+        "kinds": {
+          "null": 34
+        },
+        "sample": null
+      },
+      "retryInMs": {
+        "seen": 34,
+        "kinds": {
+          "number": 34
+        },
+        "sample": 500
+      },
+      "retryAttempt": {
+        "seen": 34,
+        "kinds": {
+          "number": 34
+        },
+        "sample": 1
+      },
+      "maxRetries": {
+        "seen": 34,
+        "kinds": {
+          "number": 34
+        },
+        "sample": 10
+      },
+      "source": {
+        "seen": 34,
+        "kinds": {
+          "string": 34
+        },
+        "sample": "request_retry"
+      },
+      "logicalParentUuid": {
+        "seen": 5,
+        "kinds": {
+          "string": 5
+        },
+        "sample": "<uuid>"
+      },
+      "content": {
+        "seen": 34,
+        "kinds": {
+          "string": 34
+        },
+        "sample": "<redacted>"
+      },
+      "isMeta": {
+        "seen": 67,
+        "kinds": {
+          "boolean": 67
+        },
+        "sample": false
+      },
+      "compactMetadata": {
+        "seen": 5,
+        "kinds": {
+          "object": 5
+        },
+        "sample": null
+      },
+      "compactMetadata.trigger": {
+        "seen": 5,
+        "kinds": {
+          "string": 5
+        },
+        "sample": "manual"
+      },
+      "compactMetadata.preTokens": {
+        "seen": 5,
+        "kinds": {
+          "number": 5
+        },
+        "sample": 900284
+      },
+      "compactMetadata.durationMs": {
+        "seen": 5,
+        "kinds": {
+          "number": 5
+        },
+        "sample": 160107
+      },
+      "compactMetadata.preCompactDiscoveredTools": {
+        "seen": 5,
+        "kinds": {
+          "array": 5
+        },
+        "sample": null
+      },
+      "compactMetadata.preservedSegment": {
+        "seen": 5,
+        "kinds": {
+          "object": 5
+        },
+        "sample": null
+      },
+      "compactMetadata.preservedSegment.headUuid": {
+        "seen": 5,
+        "kinds": {
+          "string": 5
+        },
+        "sample": "<uuid>"
+      },
+      "compactMetadata.preservedSegment.anchorUuid": {
+        "seen": 5,
+        "kinds": {
+          "string": 5
+        },
+        "sample": "<uuid>"
+      },
+      "compactMetadata.preservedSegment.tailUuid": {
+        "seen": 5,
+        "kinds": {
+          "string": 5
+        },
+        "sample": "<uuid>"
+      },
+      "compactMetadata.preservedMessages": {
+        "seen": 5,
+        "kinds": {
+          "object": 5
+        },
+        "sample": null
+      },
+      "compactMetadata.preservedMessages.anchorUuid": {
+        "seen": 5,
+        "kinds": {
+          "string": 5
+        },
+        "sample": "<uuid>"
+      },
+      "compactMetadata.preservedMessages.uuids": {
+        "seen": 5,
+        "kinds": {
+          "array": 5
+        },
+        "sample": null
+      },
+      "compactMetadata.preservedMessages.allUuids": {
+        "seen": 5,
+        "kinds": {
+          "array": 5
+        },
+        "sample": null
+      },
+      "compactMetadata.postTokens": {
+        "seen": 5,
+        "kinds": {
+          "number": 5
+        },
+        "sample": 27430
+      },
+      "compactMetadata.cumulativeDroppedTokens": {
+        "seen": 5,
+        "kinds": {
+          "number": 5
+        },
+        "sample": 872854
+      },
+      "slug": {
+        "seen": 111,
+        "kinds": {
+          "string": 111
+        },
+        "sample": "temporal-growing-lemon"
+      },
+      "direction": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "retry"
+      },
+      "scope": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "session"
+      },
+      "trigger": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "refusal"
+      },
+      "originalModel": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "claude-fable-5"
+      },
+      "fallbackModel": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "claude-opus-4-8"
+      },
+      "requestId": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "req_011CeRPsnwSJf7yUcAnBh9Gn"
+      },
+      "apiRefusalCategory": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "cyber"
+      },
+      "apiRefusalExplanation": {
+        "seen": 1,
+        "kinds": {
+          "null": 1
+        },
+        "sample": null
+      },
+      "retractedMessageUuids": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "refusedUserMessageUuid": {
+        "seen": 1,
+        "kinds": {
+          "null": 1
+        },
+        "sample": null
+      },
+      "error.status": {
+        "seen": 23,
+        "kinds": {
+          "number": 23
+        },
+        "sample": 529
+      },
+      "error.requestId": {
+        "seen": 23,
+        "kinds": {
+          "string": 23
+        },
+        "sample": "req_011CeM1W8UVrJ6opYbx2h13M"
+      },
+      "session_id": {
+        "seen": 33,
+        "kinds": {
+          "string": 33
+        },
+        "sample": "<uuid>"
+      },
+      "durationMs": {
+        "seen": 35,
+        "kinds": {
+          "number": 35
+        },
+        "sample": 168196
+      },
+      "messageCount": {
+        "seen": 35,
+        "kinds": {
+          "number": 35
+        },
+        "sample": 111
+      },
+      "pendingWorkflowCount": {
+        "seen": 2,
+        "kinds": {
+          "number": 2
+        },
+        "sample": 1
+      }
+    }
+  },
+  "mode": {
+    "count": 1195,
+    "fields": {
+      "type": {
+        "seen": 1195,
+        "kinds": {
+          "string": 1195
+        },
+        "sample": "mode"
+      },
+      "mode": {
+        "seen": 1195,
+        "kinds": {
+          "string": 1195
+        },
+        "sample": "normal"
+      },
+      "sessionId": {
+        "seen": 1195,
+        "kinds": {
+          "string": 1195
+        },
+        "sample": "<uuid>"
+      }
+    }
+  },
+  "frame-link": {
+    "count": 4,
+    "fields": {
+      "type": {
+        "seen": 4,
+        "kinds": {
+          "string": 4
+        },
+        "sample": "frame-link"
+      },
+      "sessionId": {
+        "seen": 4,
+        "kinds": {
+          "string": 4
+        },
+        "sample": "<uuid>"
+      },
+      "path": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "frameUrl": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "https://claude.ai/code/artifact/<uuid>"
+      },
+      "title": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "<redacted:string len=26>"
+      },
+      "artifactCount": {
+        "seen": 4,
+        "kinds": {
+          "number": 4
+        },
+        "sample": 1
+      },
+      "timestamp": {
+        "seen": 4,
+        "kinds": {
+          "string": 4
+        },
+        "sample": "2026-09-01T08:29:40.971Z"
+      }
+    }
+  },
+  "artifact-comment-monitor": {
+    "count": 4,
+    "fields": {
+      "type": {
+        "seen": 4,
+        "kinds": {
+          "string": 4
+        },
+        "sample": "artifact-comment-monitor"
+      },
+      "v": {
+        "seen": 4,
+        "kinds": {
+          "number": 4
+        },
+        "sample": 1
+      },
+      "sessionId": {
+        "seen": 4,
+        "kinds": {
+          "string": 4
+        },
+        "sample": "<uuid>"
+      },
+      "artifacts": {
+        "seen": 4,
+        "kinds": {
+          "object": 4
+        },
+        "sample": null
+      },
+      "artifacts.6cdc792c-92b8-4206-9c2a-ed1a1c5bcb3a": {
+        "seen": 2,
+        "kinds": {
+          "object": 2
+        },
+        "sample": null
+      },
+      "artifacts.6cdc792c-92b8-4206-9c2a-ed1a1c5bcb3a.state": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "armed"
+      },
+      "artifacts.6cdc792c-92b8-4206-9c2a-ed1a1c5bcb3a.writtenAtMs": {
+        "seen": 2,
+        "kinds": {
+          "number": 2
+        },
+        "sample": 1788251382224
+      },
+      "artifacts.6cdc792c-92b8-4206-9c2a-ed1a1c5bcb3a.title": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "<redacted:string len=26>"
+      },
+      "artifacts.c0571fd7-91de-4839-bbe5-4e7696a45052": {
+        "seen": 2,
+        "kinds": {
+          "object": 2
+        },
+        "sample": null
+      },
+      "artifacts.c0571fd7-91de-4839-bbe5-4e7696a45052.state": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "armed"
+      },
+      "artifacts.c0571fd7-91de-4839-bbe5-4e7696a45052.writtenAtMs": {
+        "seen": 2,
+        "kinds": {
+          "number": 2
+        },
+        "sample": 1788243401468
+      },
+      "artifacts.c0571fd7-91de-4839-bbe5-4e7696a45052.title": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "<redacted:string len=21>"
+      }
+    }
+  },
+  "artifact-autoreact-ledger": {
+    "count": 6,
+    "fields": {
+      "type": {
+        "seen": 6,
+        "kinds": {
+          "string": 6
+        },
+        "sample": "artifact-autoreact-ledger"
+      },
+      "v": {
+        "seen": 6,
+        "kinds": {
+          "number": 6
+        },
+        "sample": 1
+      },
+      "sessionId": {
+        "seen": 6,
+        "kinds": {
+          "string": 6
+        },
+        "sample": "<uuid>"
+      },
+      "accountUuid": {
+        "seen": 6,
+        "kinds": {
+          "string": 6
+        },
+        "sample": "<uuid>"
+      },
+      "artifacts": {
+        "seen": 6,
+        "kinds": {
+          "object": 6
+        },
+        "sample": null
+      },
+      "artifacts.6cdc792c-92b8-4206-9c2a-ed1a1c5bcb3a": {
+        "seen": 2,
+        "kinds": {
+          "object": 2
+        },
+        "sample": null
+      },
+      "artifacts.6cdc792c-92b8-4206-9c2a-ed1a1c5bcb3a.savedAt": {
+        "seen": 2,
+        "kinds": {
+          "number": 2
+        },
+        "sample": 1788251389006
+      },
+      "artifacts.6cdc792c-92b8-4206-9c2a-ed1a1c5bcb3a.stampHighWater": {
+        "seen": 2,
+        "kinds": {
+          "null": 2
+        },
+        "sample": null
+      },
+      "artifacts.6cdc792c-92b8-4206-9c2a-ed1a1c5bcb3a.everBaselined": {
+        "seen": 2,
+        "kinds": {
+          "boolean": 2
+        },
+        "sample": true
+      },
+      "artifacts.6cdc792c-92b8-4206-9c2a-ed1a1c5bcb3a.everHadThreads": {
+        "seen": 2,
+        "kinds": {
+          "boolean": 2
+        },
+        "sample": false
+      },
+      "artifacts.6cdc792c-92b8-4206-9c2a-ed1a1c5bcb3a.turnTimestamps": {
+        "seen": 2,
+        "kinds": {
+          "array": 2
+        },
+        "sample": null
+      },
+      "artifacts.6cdc792c-92b8-4206-9c2a-ed1a1c5bcb3a.threads": {
+        "seen": 2,
+        "kinds": {
+          "array": 2
+        },
+        "sample": null
+      },
+      "artifacts.c0571fd7-91de-4839-bbe5-4e7696a45052": {
+        "seen": 4,
+        "kinds": {
+          "object": 4
+        },
+        "sample": null
+      },
+      "artifacts.c0571fd7-91de-4839-bbe5-4e7696a45052.savedAt": {
+        "seen": 4,
+        "kinds": {
+          "number": 4
+        },
+        "sample": 1788243408127
+      },
+      "artifacts.c0571fd7-91de-4839-bbe5-4e7696a45052.stampHighWater": {
+        "seen": 4,
+        "kinds": {
+          "null": 4
+        },
+        "sample": null
+      },
+      "artifacts.c0571fd7-91de-4839-bbe5-4e7696a45052.everBaselined": {
+        "seen": 4,
+        "kinds": {
+          "boolean": 4
+        },
+        "sample": true
+      },
+      "artifacts.c0571fd7-91de-4839-bbe5-4e7696a45052.everHadThreads": {
+        "seen": 4,
+        "kinds": {
+          "boolean": 4
+        },
+        "sample": false
+      },
+      "artifacts.c0571fd7-91de-4839-bbe5-4e7696a45052.turnTimestamps": {
+        "seen": 4,
+        "kinds": {
+          "array": 4
+        },
+        "sample": null
+      },
+      "artifacts.c0571fd7-91de-4839-bbe5-4e7696a45052.threads": {
+        "seen": 4,
+        "kinds": {
+          "array": 4
+        },
+        "sample": null
+      }
+    }
+  },
+  "pr-link": {
+    "count": 61,
+    "fields": {
+      "type": {
+        "seen": 61,
+        "kinds": {
+          "string": 61
+        },
+        "sample": "pr-link"
+      },
+      "sessionId": {
+        "seen": 61,
+        "kinds": {
+          "string": 61
+        },
+        "sample": "<uuid>"
+      },
+      "prNumber": {
+        "seen": 61,
+        "kinds": {
+          "number": 61
+        },
+        "sample": 75
+      },
+      "prUrl": {
+        "seen": 61,
+        "kinds": {
+          "string": 61
+        },
+        "sample": "<redacted:string len=70>"
+      },
+      "prRepository": {
+        "seen": 61,
+        "kinds": {
+          "string": 61
+        },
+        "sample": "develop/scanumbackend"
+      },
+      "timestamp": {
+        "seen": 61,
+        "kinds": {
+          "string": 61
+        },
+        "sample": "2026-08-31T06:44:15.634Z"
+      }
+    }
+  },
+  "started": {
+    "count": 240,
+    "fields": {
+      "type": {
+        "seen": 240,
+        "kinds": {
+          "string": 240
+        },
+        "sample": "started"
+      },
+      "key": {
+        "seen": 240,
+        "kinds": {
+          "string": 240
+        },
+        "sample": "<redacted:string len=67>"
+      },
+      "agentId": {
+        "seen": 240,
+        "kinds": {
+          "string": 240
+        },
+        "sample": "a60b3089f8bce72ae"
+      }
+    }
+  },
+  "result": {
+    "count": 191,
+    "fields": {
+      "type": {
+        "seen": 191,
+        "kinds": {
+          "string": 191
+        },
+        "sample": "result"
+      },
+      "key": {
+        "seen": 191,
+        "kinds": {
+          "string": 191
+        },
+        "sample": "<redacted:string len=67>"
+      },
+      "agentId": {
+        "seen": 191,
+        "kinds": {
+          "string": 191
+        },
+        "sample": "a391c3a946a560052"
+      },
+      "result": {
+        "seen": 191,
+        "kinds": {
+          "object": 169,
+          "string": 22
+        },
+        "sample": "<redacted>"
+      },
+      "result.area": {
+        "seen": 12,
+        "kinds": {
+          "string": 12
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.facts": {
+        "seen": 5,
+        "kinds": {
+          "array": 5
+        },
+        "sample": null
+      },
+      "result.reusable": {
+        "seen": 5,
+        "kinds": {
+          "array": 5
+        },
+        "sample": null
+      },
+      "result.blockers": {
+        "seen": 5,
+        "kinds": {
+          "array": 5
+        },
+        "sample": null
+      },
+      "result.open_questions": {
+        "seen": 5,
+        "kinds": {
+          "array": 5
+        },
+        "sample": null
+      },
+      "result.name": {
+        "seen": 3,
+        "kinds": {
+          "string": 3
+        },
+        "sample": "<redacted:string len=110>"
+      },
+      "result.summary": {
+        "seen": 44,
+        "kinds": {
+          "string": 44
+        },
+        "sample": "<redacted>"
+      },
+      "result.how_it_works": {
+        "seen": 3,
+        "kinds": {
+          "string": 3
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.reused_as_is": {
+        "seen": 3,
+        "kinds": {
+          "array": 3
+        },
+        "sample": null
+      },
+      "result.to_build": {
+        "seen": 3,
+        "kinds": {
+          "array": 3
+        },
+        "sample": null
+      },
+      "result.effort_weeks": {
+        "seen": 3,
+        "kinds": {
+          "string": 3
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.risks": {
+        "seen": 7,
+        "kinds": {
+          "array": 7
+        },
+        "sample": null
+      },
+      "result.fit_for_module": {
+        "seen": 3,
+        "kinds": {
+          "string": 3
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.kills_it": {
+        "seen": 3,
+        "kinds": {
+          "string": 3
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.recommendation": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.module_contract": {
+        "seen": 1,
+        "kinds": {
+          "object": 1
+        },
+        "sample": null
+      },
+      "result.module_contract.entry_points": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "result.module_contract.tool_registration": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.module_contract.state_and_confirmations": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.module_contract.auth_and_scope": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.module_contract.pii_path": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.gp_tools": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "result.phases": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "result.reuse_ledger": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "result.why_not_others": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.holes": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "result.overclaims": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "result.missing_from_phase1": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "result.verdict": {
+        "seen": 6,
+        "kinds": {
+          "string": 6
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.files": {
+        "seen": 92,
+        "kinds": {
+          "array": 92
+        },
+        "sample": null
+      },
+      "result.notes": {
+        "seen": 29,
+        "kinds": {
+          "array": 29
+        },
+        "sample": null
+      },
+      "result.convert": {
+        "seen": 9,
+        "kinds": {
+          "object": 9
+        },
+        "sample": null
+      },
+      "result.convert.ok": {
+        "seen": 9,
+        "kinds": {
+          "boolean": 9
+        },
+        "sample": true
+      },
+      "result.convert.lesson13": {
+        "seen": 1,
+        "kinds": {
+          "object": 1
+        },
+        "sample": null
+      },
+      "result.checklist": {
+        "seen": 9,
+        "kinds": {
+          "array": 9
+        },
+        "sample": null
+      },
+      "result.remaining": {
+        "seen": 9,
+        "kinds": {
+          "array": 9
+        },
+        "sample": null
+      },
+      "result.convert.byLesson": {
+        "seen": 5,
+        "kinds": {
+          "object": 5
+        },
+        "sample": null
+      },
+      "result.convert.lesson16": {
+        "seen": 1,
+        "kinds": {
+          "object": 1
+        },
+        "sample": null
+      },
+      "result.convert.scripts": {
+        "seen": 1,
+        "kinds": {
+          "object": 1
+        },
+        "sample": null
+      },
+      "result.convert.gitTouched": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "result.convert.gitNote": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.cards": {
+        "seen": 11,
+        "kinds": {
+          "array": 11
+        },
+        "sample": null
+      },
+      "result.pairNote": {
+        "seen": 11,
+        "kinds": {
+          "string": 11
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.convert.lesson8": {
+        "seen": 2,
+        "kinds": {
+          "object": 2
+        },
+        "sample": null
+      },
+      "result.convert.lesson7": {
+        "seen": 1,
+        "kinds": {
+          "object": 1
+        },
+        "sample": null
+      },
+      "result.items": {
+        "seen": 3,
+        "kinds": {
+          "array": 3
+        },
+        "sample": null
+      },
+      "result.allergens": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "result.family": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "result.areas": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "result.first": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "result.second": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "result.problems": {
+        "seen": 3,
+        "kinds": {
+          "array": 3
+        },
+        "sample": null
+      },
+      "result.removals": {
+        "seen": 3,
+        "kinds": {
+          "array": 3
+        },
+        "sample": null
+      },
+      "result.additions": {
+        "seen": 3,
+        "kinds": {
+          "array": 3
+        },
+        "sample": null
+      },
+      "result.findings": {
+        "seen": 12,
+        "kinds": {
+          "array": 12
+        },
+        "sample": null
+      },
+      "result.proposal": {
+        "seen": 3,
+        "kinds": {
+          "object": 3
+        },
+        "sample": null
+      },
+      "result.proposal.shape": {
+        "seen": 3,
+        "kinds": {
+          "string": 3
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.proposal.size": {
+        "seen": 3,
+        "kinds": {
+          "string": 3
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.proposal.rationale": {
+        "seen": 3,
+        "kinds": {
+          "string": 3
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.sources": {
+        "seen": 3,
+        "kinds": {
+          "array": 3
+        },
+        "sample": null
+      },
+      "result.openQuestions": {
+        "seen": 4,
+        "kinds": {
+          "array": 4
+        },
+        "sample": null
+      },
+      "result.moduleFrontend": {
+        "seen": 1,
+        "kinds": {
+          "object": 1
+        },
+        "sample": null
+      },
+      "result.moduleFrontend.path": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.moduleFrontend.structure": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.moduleFrontend.movedFiles": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "result.moduleFrontend.publicApi": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.moduleBackend": {
+        "seen": 1,
+        "kinds": {
+          "object": 1
+        },
+        "sample": null
+      },
+      "result.moduleBackend.path": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.moduleBackend.structure": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.moduleBackend.movedFiles": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "result.moduleBackend.publicApi": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=121>"
+      },
+      "result.dictionaries": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "result.migration": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "result.decisions": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "result.ok": {
+        "seen": 1,
+        "kinds": {
+          "boolean": 1
+        },
+        "sample": true
+      },
+      "result.typecheck": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=65>"
+      },
+      "result.lint": {
+        "seen": 1,
+        "kinds": {
+          "string": 1
+        },
+        "sample": "<redacted:string len=49>"
+      },
+      "result.issues": {
+        "seen": 1,
+        "kinds": {
+          "array": 1
+        },
+        "sample": null
+      },
+      "result.done": {
+        "seen": 64,
+        "kinds": {
+          "array": 64
+        },
+        "sample": null
+      },
+      "result.skipped": {
+        "seen": 64,
+        "kinds": {
+          "array": 64
+        },
+        "sample": null
+      },
+      "result.mockupAvailable": {
+        "seen": 7,
+        "kinds": {
+          "boolean": 7
+        },
+        "sample": true
+      },
+      "result.lessons": {
+        "seen": 25,
+        "kinds": {
+          "array": 25
+        },
+        "sample": null
+      }
+    }
+  },
+  "agent-name": {
+    "count": 34,
+    "fields": {
+      "type": {
+        "seen": 34,
+        "kinds": {
+          "string": 34
+        },
+        "sample": "agent-name"
+      },
+      "agentName": {
+        "seen": 34,
+        "kinds": {
+          "string": 34
+        },
+        "sample": "Видео-промо"
+      },
+      "sessionId": {
+        "seen": 34,
+        "kinds": {
+          "string": 34
+        },
+        "sample": "<uuid>"
+      }
+    }
+  },
+  "file-history-snapshot": {
+    "count": 42,
+    "fields": {
+      "type": {
+        "seen": 42,
+        "kinds": {
+          "string": 42
+        },
+        "sample": "file-history-snapshot"
+      },
+      "messageId": {
+        "seen": 42,
+        "kinds": {
+          "string": 42
+        },
+        "sample": "<uuid>"
+      },
+      "snapshot": {
+        "seen": 42,
+        "kinds": {
+          "object": 42
+        },
+        "sample": null
+      },
+      "snapshot.messageId": {
+        "seen": 42,
+        "kinds": {
+          "string": 42
+        },
+        "sample": "<uuid>"
+      },
+      "snapshot.trackedFileBackups": {
+        "seen": 42,
+        "kinds": {
+          "object": 42
+        },
+        "sample": null
+      },
+      "snapshot.timestamp": {
+        "seen": 42,
+        "kinds": {
+          "string": 42
+        },
+        "sample": "2026-08-18T12:43:43.159Z"
+      },
+      "isSnapshotUpdate": {
+        "seen": 42,
+        "kinds": {
+          "boolean": 42
+        },
+        "sample": false
+      },
+      "snapshot.trackedFileBackups..<key>.md": {
+        "seen": 31,
+        "kinds": {
+          "object": 17
+        },
+        "sample": null
+      },
+      "snapshot.trackedFileBackups.<key>.tsx": {
+        "seen": 122,
+        "kinds": {
+          "object": 16
+        },
+        "sample": null
+      },
+      "snapshot.trackedFileBackups.<key>.test.tsx": {
+        "seen": 132,
+        "kinds": {
+          "object": 16
+        },
+        "sample": null
+      },
+      "snapshot.trackedFileBackups.<key>.test.ts": {
+        "seen": 42,
+        "kinds": {
+          "object": 16
+        },
+        "sample": null
+      },
+      "snapshot.trackedFileBackups.<key>.ts": {
+        "seen": 238,
+        "kinds": {
+          "object": 16
+        },
+        "sample": null
+      },
+      "snapshot.trackedFileBackups.<key>.styles.ts": {
+        "seen": 49,
+        "kinds": {
+          "object": 16
+        },
+        "sample": null
+      },
+      "snapshot.trackedFileBackups.<key>.py": {
+        "seen": 149,
+        "kinds": {
+          "object": 14
+        },
+        "sample": null
+      },
+      "snapshot.trackedFileBackups.<key>.json": {
+        "seen": 13,
+        "kinds": {
+          "object": 13
+        },
+        "sample": null
+      },
+      "snapshot.trackedFileBackups.<key>.html": {
+        "seen": 1,
+        "kinds": {
+          "object": 1
+        },
+        "sample": null
+      },
+      "snapshot.trackedFileBackups.<key>.mjs": {
+        "seen": 1,
+        "kinds": {
+          "object": 1
+        },
+        "sample": null
+      },
+      "snapshot.trackedFileBackups.<key>.<key>.md": {
+        "seen": 2,
+        "kinds": {
+          "object": 2
+        },
+        "sample": null
+      },
+      "snapshot.trackedFileBackups.<key>.js": {
+        "seen": 2,
+        "kinds": {
+          "object": 1
+        },
+        "sample": null
+      },
+      "snapshot.trackedFileBackups.<key>.basket.<key>.js": {
+        "seen": 1,
+        "kinds": {
+          "object": 1
+        },
+        "sample": null
+      }
+    }
+  },
+  "ai-title": {
+    "count": 320,
+    "fields": {
+      "type": {
+        "seen": 320,
+        "kinds": {
+          "string": 320
+        },
+        "sample": "ai-title"
+      },
+      "aiTitle": {
+        "seen": 320,
+        "kinds": {
+          "string": 320
+        },
+        "sample": "<redacted>"
+      },
+      "sessionId": {
+        "seen": 320,
+        "kinds": {
+          "string": 320
+        },
+        "sample": "<uuid>"
+      }
+    }
+  },
+  "file-history-delta": {
+    "count": 62,
+    "fields": {
+      "type": {
+        "seen": 62,
+        "kinds": {
+          "string": 62
+        },
+        "sample": "file-history-delta"
+      },
+      "messageId": {
+        "seen": 62,
+        "kinds": {
+          "string": 62
+        },
+        "sample": "<uuid>"
+      },
+      "snapshotMessageId": {
+        "seen": 62,
+        "kinds": {
+          "string": 62
+        },
+        "sample": "<uuid>"
+      },
+      "trackingPath": {
+        "seen": 62,
+        "kinds": {
+          "string": 62
+        },
+        "sample": "<redacted:string len=50>"
+      },
+      "backup": {
+        "seen": 62,
+        "kinds": {
+          "object": 62
+        },
+        "sample": null
+      },
+      "backup.backupFileName": {
+        "seen": 62,
+        "kinds": {
+          "null": 37,
+          "string": 25
+        },
+        "sample": "0eddb9527552f937@v1"
+      },
+      "backup.version": {
+        "seen": 62,
+        "kinds": {
+          "number": 62
+        },
+        "sample": 1
+      },
+      "backup.backupTime": {
+        "seen": 62,
+        "kinds": {
+          "string": 62
+        },
+        "sample": "2026-08-18T13:15:41.484Z"
+      },
+      "backup.realParentDir": {
+        "seen": 62,
+        "kinds": {
+          "string": 62
+        },
+        "sample": "/Users/<user>/Desktop/scanum/.omc/docs"
+      },
+      "timestamp": {
+        "seen": 62,
+        "kinds": {
+          "string": 62
+        },
+        "sample": "2026-08-18T13:15:41.485Z"
+      }
+    }
+  },
+  "permission-mode": {
+    "count": 179,
+    "fields": {
+      "type": {
+        "seen": 179,
+        "kinds": {
+          "string": 179
+        },
+        "sample": "permission-mode"
+      },
+      "permissionMode": {
+        "seen": 179,
+        "kinds": {
+          "string": 179
+        },
+        "sample": "auto"
+      },
+      "sessionId": {
+        "seen": 179,
+        "kinds": {
+          "string": 179
+        },
+        "sample": "<uuid>"
+      }
+    }
+  }
+}
