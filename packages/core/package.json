@@ -12,5 +12,8 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest"
+  },
+  "bin": {
+    "harnas-core": "./dist/cli.js"
   }
 }
