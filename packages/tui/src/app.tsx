@@ -1,37 +1,36 @@
 import { defaultRoot, type SessionIndex } from '@harnas/core';
 import { Box, Text } from 'ink';
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import { Pane } from './components/pane.js';
 import { SessionList } from './components/session-list.js';
 import { SubsessionList } from './components/subsession-list.js';
+import { useNavigation } from './use-navigation.js';
 import { useSubsessions } from './use-subsessions.js';
 import { useTerminalSize } from './use-terminal-size.js';
 
-export type PaneId = 'sessions' | 'subsessions' | 'terminal';
-
 export interface AppProps {
   sessions: SessionIndex[];
-  /** Какая панель в фокусе. Навигация появится отдельной задачей. */
-  focus?: PaneId;
-  /** Выбранная сессия. Пока задаётся снаружи — клавиатура появится отдельной задачей. */
-  selected?: number;
-  selectedSubsession?: number;
   root?: string;
+  onRescan?: () => void;
 }
 
 /** Левая колонка — 38% ширины, но не уже 30 колонок (specs/ui.md). */
 const LEFT_WIDTH = '38%';
 const LEFT_MIN_WIDTH = 30;
 
-export function App({
-  sessions,
-  focus = 'sessions',
-  selected = 0,
-  selectedSubsession = 0,
-  root = defaultRoot(),
-}: AppProps): ReactNode {
+export function App({ sessions, root = defaultRoot(), onRescan }: AppProps): ReactNode {
   const { rows, columns } = useTerminalSize();
-  const { subsessions, loading } = useSubsessions(sessions[selected], root);
+
+  // Число подсессий известно только после загрузки дерева, а навигация нужна раньше —
+  // отдаём его через ref, который читается в момент нажатия клавиши.
+  const subsessionCount = useRef(0);
+  const { focus, selectedSession, selectedSubsession } = useNavigation({
+    sessionCount: sessions.length,
+    getSubsessionCount: () => subsessionCount.current,
+    ...(onRescan === undefined ? {} : { onRescan }),
+  });
+  const { subsessions, loading } = useSubsessions(sessions[selectedSession], root);
+  subsessionCount.current = subsessions.length;
 
   // Ширина левой колонки в символах и высота списков без рамки и заголовка.
   const leftWidth = Math.max(LEFT_MIN_WIDTH, Math.floor(columns * 0.38));
@@ -44,7 +43,7 @@ export function App({
         <Pane title={`SESSIONS (${sessions.length})`} active={focus === 'sessions'} flexGrow={2}>
           <SessionList
             sessions={sessions}
-            selected={selected}
+            selected={selectedSession}
             height={sessionsHeight}
             width={leftWidth - 4}
           />
@@ -66,6 +65,8 @@ export function App({
 
       <Pane title="TERMINAL" active={focus === 'terminal'} flexGrow={1}>
         <Text dimColor>v0: только просмотр. Встроенный терминал появится в v1.</Text>
+        <Text dimColor> </Text>
+        <Text dimColor>↑↓ / j k — список · Tab — панель · r — ре-скан · q — выход</Text>
       </Pane>
     </Box>
   );
