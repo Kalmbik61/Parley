@@ -14,7 +14,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [x] packages/core: session indexer — meta (sessionId, cwd, gitBranch, version), duration from first/last timestamps, model/tool/role counters, primaryModel per specs/data-layer.md
 - [x] packages/core: session title — last `custom-title` / `ai-title` record wins, fallback `last-prompt` → first user text; `titleSource` in the index (per specs/data-layer.md; глобальная сшивка по leafUuid отменена находками)
 - [x] packages/core: subsessions from disk layout — enumerate `<session-id>/subagents/**/agent-*.jsonl`, read the sibling `.meta.json` (agentType/name/description/toolUseId), task = `description` or first text for workflow agents, model badges from message.model; `journal.jsonl` is not a subsession (per specs/data-layer.md)
-- [ ] packages/core: vitest suite on fixtures — 2-3 real anonymized session files plus synthetic edge cases (truncated last line, summary in a neighbor file, orphan sidechain, missing timestamps)
+- [x] packages/core: vitest suite on fixtures — 2-3 real anonymized session files plus synthetic edge cases (truncated last line, summary in a neighbor file, orphan sidechain, missing timestamps)
 - [ ] packages/core: fs watcher over `~/.claude/projects` with debounce; incremental re-parse of only the changed file; emits typed change events
 - [ ] packages/core: CLI entry — `harnas-core index --json` and `harnas-core session <id> --json`, JSON to stdout only (this IS the core/UI contract)
 - [ ] packages/tui: Ink app skeleton with the three-pane layout per specs/ui.md (sessions top-left, subsessions bottom-left, right pane placeholder)

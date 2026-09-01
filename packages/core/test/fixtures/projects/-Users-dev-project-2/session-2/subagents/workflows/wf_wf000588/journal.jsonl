@@ -1,0 +1,8 @@
+{"type":"started","key":"k001179","agentId":"a000888"}
+{"type":"result","key":"k001179","agentId":"a000888","result":"текст 9074"}
+{"type":"started","key":"k001180","agentId":"a000789"}
+{"type":"started","key":"k001181","agentId":"a000698"}
+{"type":"result","key":"k001181","agentId":"a000698","result":"текст 9075"}
+{"type":"result","key":"k001180","agentId":"a000789","result":"текст 9076"}
+{"type":"started","key":"k001182","agentId":"a001036"}
+{"type":"result","key":"k001182","agentId":"a001036","result":{"ok":true,"typecheck":"текст 9077","lint":"текст 9078","summary":"текст 9079","issues":[{"file":"текст 9080","problem":"текст 9081","fix":"текст 9082","foreign":true},{"file":"текст 9083","problem":"текст 9084","fix":"текст 9085","foreign":false},{"file":"текст 9086","problem":"текст 9087","fix":"текст 9088","foreign":false},{"file":"текст 9089","problem":"текст 9090","fix":"текст 9091","foreign":false}]}}
