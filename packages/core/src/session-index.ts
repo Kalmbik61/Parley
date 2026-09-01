@@ -35,6 +35,8 @@ export interface SessionIndex {
   recordTypes: Record<string, number>;
   /** Самая частая модель, кроме служебной `<synthetic>`. */
   primaryModel: string | null;
+  /** Число подсессий: считается по раскладке каталогов, а не по содержимому файла. */
+  subsessionCount: number;
   provider: Provider;
 }
 
@@ -81,6 +83,12 @@ export function projectSlug(file: string, root: string): string {
   return first && first !== '..' ? first : path.basename(path.dirname(file));
 }
 
+export interface IndexSessionOptions {
+  adapter?: SchemaAdapter;
+  /** Известно только вызывающему, который обошёл <session-id>/subagents/. */
+  subsessionCount?: number;
+}
+
 /**
  * Индексирует ОДИН файл сессии: мета, заголовок, длительность, счётчики моделей,
  * инструментов, ролей и типов записей. Подсессии добавляются отдельно — они лежат
@@ -89,7 +97,7 @@ export function projectSlug(file: string, root: string): string {
 export async function indexSessionFile(
   file: string,
   root: string,
-  adapter: SchemaAdapter = adapterV1,
+  { adapter = adapterV1, subsessionCount = 0 }: IndexSessionOptions = {},
 ): Promise<SessionIndex> {
   const models = new Counter();
   const tools = new Counter();
@@ -174,6 +182,7 @@ export async function indexSessionFile(
     roles: roles.toObject(),
     recordTypes: recordTypes.toObject(),
     primaryModel: models.top(new Set([SYNTHETIC_MODEL])),
+    subsessionCount,
     provider: 'claude',
   };
 }
