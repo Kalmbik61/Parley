@@ -11,7 +11,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [x] Initialize pnpm workspaces monorepo: `packages/core`, `packages/tui`; TypeScript 5 strict, vitest, eslint + prettier, build via tsc; root scripts `build`, `test`, `dev`
 - [x] packages/core: streaming .jsonl reader tolerant of malformed/truncated lines (port the logic of tools/claude-export.mjs into typed modules; a truncated last line of a live session is normal, never an error)
 - [x] packages/core: versioned schema adapter (`adapter-v1` for the observed schema) mapping raw records to typed SessionRecord per specs/data-layer.md; unknown fields preserved, nothing assumed mandatory
-- [ ] packages/core: session indexer — meta (sessionId, cwd, gitBranch, version), duration from first/last timestamps, model/tool/role counters, primaryModel per specs/data-layer.md
+- [x] packages/core: session indexer — meta (sessionId, cwd, gitBranch, version), duration from first/last timestamps, model/tool/role counters, primaryModel per specs/data-layer.md
 - [ ] packages/core: session title — last `custom-title` / `ai-title` record wins, fallback `last-prompt` → first user text; `titleSource` in the index (per specs/data-layer.md; глобальная сшивка по leafUuid отменена находками)
 - [ ] packages/core: subsessions from disk layout — enumerate `<session-id>/subagents/**/agent-*.jsonl`, read the sibling `.meta.json` (agentType/name/description/toolUseId), task = `description` or first text for workflow agents, model badges from message.model; `journal.jsonl` is not a subsession (per specs/data-layer.md)
 - [ ] packages/core: vitest suite on fixtures — 2-3 real anonymized session files plus synthetic edge cases (truncated last line, summary in a neighbor file, orphan sidechain, missing timestamps)
@@ -52,7 +52,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
       инвалидировать и родительскую сессию (подсессии живут в отдельных файлах)
 - [ ] packages/core: `observe()` схлопывает мапы с динамическими ключами
       (`snapshot.trackedFileBackups.<путь>`), иначе отчёт раздувается и тащит пути
-- [ ] packages/core: исключить `<synthetic>` из подсчёта `primaryModel`
+- [x] packages/core: исключить `<synthetic>` из подсчёта `primaryModel`
 - [ ] specs/runners.md: дополнить таблицу бейджей — в реальных данных есть
       `claude-fable-5` и `claude-opus-4-8`, текущая таблица их не покрывает
 - [ ] packages/tui: показывать `workflowName`/`status` из `<sid>/workflows/wf_<id>.json`

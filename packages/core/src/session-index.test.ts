@@ -1,0 +1,123 @@
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { indexSessionFile } from './session-index.js';
+
+let root: string;
+
+const line = (record: unknown) => `${JSON.stringify(record)}\n`;
+
+/** Кладёт файл сессии в <root>/<slug>/<id>.jsonl, как это делает Claude Code. */
+async function writeSession(slug: string, id: string, lines: string): Promise<string> {
+  await mkdir(path.join(root, slug), { recursive: true });
+  const file = path.join(root, slug, `${id}.jsonl`);
+  await writeFile(file, lines);
+  return file;
+}
+
+beforeAll(async () => {
+  root = await mkdtemp(path.join(tmpdir(), 'harnas-index-'));
+});
+afterAll(async () => {
+  await rm(root, { recursive: true, force: true });
+});
+
+describe('indexSessionFile', () => {
+  it('собирает мету, длительность и счётчики', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      's1',
+      line({
+        type: 'user',
+        sessionId: 's1',
+        cwd: '/Users/me/proj',
+        gitBranch: 'main',
+        version: '2.1.247',
+        timestamp: '2026-09-01T10:00:00.000Z',
+        message: { role: 'user', content: 'сделай' },
+      }) +
+        line({
+          type: 'assistant',
+          timestamp: '2026-09-01T10:02:30.000Z',
+          message: {
+            role: 'assistant',
+            model: 'claude-opus-5',
+            content: [{ type: 'tool_use', name: 'Bash' }],
+          },
+        }) +
+        line({ type: 'custom-title', customTitle: 'заголовок', sessionId: 's1' }),
+    );
+
+    const index = await indexSessionFile(file, root);
+
+    expect(index.id).toBe('s1');
+    expect(index.project).toBe('-Users-me-proj');
+    expect(index.projectPath).toBe('/Users/me/proj');
+    expect(index.gitBranch).toBe('main');
+    expect(index.version).toBe('2.1.247');
+    expect(index.startedAt).toBe('2026-09-01T10:00:00.000Z');
+    expect(index.endedAt).toBe('2026-09-01T10:02:30.000Z');
+    expect(index.durationMs).toBe(150_000);
+    expect(index.records).toBe(3);
+    expect(index.models).toEqual({ 'claude-opus-5': 1 });
+    expect(index.tools).toEqual({ Bash: 1 });
+    expect(index.roles).toEqual({ user: 1, assistant: 1 });
+    expect(index.recordTypes).toEqual({ user: 1, assistant: 1, 'custom-title': 1 });
+    expect(index.provider).toBe('claude');
+  });
+
+  it('primaryModel — самая частая модель, <synthetic> не в счёт', async () => {
+    const assistant = (model: string) =>
+      line({ type: 'assistant', message: { role: 'assistant', model } });
+    const file = await writeSession(
+      '-Users-me-proj',
+      's2',
+      assistant('<synthetic>') +
+        assistant('<synthetic>') +
+        assistant('<synthetic>') +
+        assistant('claude-sonnet-5') +
+        assistant('claude-opus-5') +
+        assistant('claude-opus-5'),
+    );
+
+    const index = await indexSessionFile(file, root);
+    expect(index.primaryModel).toBe('claude-opus-5');
+    expect(index.models['<synthetic>']).toBe(3);
+  });
+
+  it('без моделей primaryModel = null', async () => {
+    const file = await writeSession('-Users-me-proj', 's3', line({ type: 'user' }));
+    const index = await indexSessionFile(file, root);
+    expect(index.primaryModel).toBeNull();
+  });
+
+  it('без таймстемпов длительность = null, id падает на имя файла', async () => {
+    const file = await writeSession('-Users-me-proj', 's4', line({ type: 'custom-title' }));
+    const index = await indexSessionFile(file, root);
+    expect(index.id).toBe('s4');
+    expect(index.startedAt).toBeNull();
+    expect(index.durationMs).toBeNull();
+  });
+
+  it('оборванная последняя строка учитывается, но не мешает индексу', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      's5',
+      line({ type: 'user', sessionId: 's5', timestamp: '2026-09-01T10:00:00.000Z' }) +
+        '{"type":"ass',
+    );
+    const index = await indexSessionFile(file, root);
+    expect(index.id).toBe('s5');
+    expect(index.records).toBe(1);
+    expect(index.malformedLines).toBe(1);
+  });
+
+  it('пустой файл даёт валидный индекс', async () => {
+    const file = await writeSession('-Users-me-proj', 's6', '');
+    const index = await indexSessionFile(file, root);
+    expect(index.records).toBe(0);
+    expect(index.models).toEqual({});
+    expect(index.durationMs).toBeNull();
+  });
+});
