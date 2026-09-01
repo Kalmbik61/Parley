@@ -50,11 +50,14 @@ describe('watchSessions', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  /** Ждём событие с таймаутом: fs.watch по природе асинхронен. */
+  /**
+   * Ждём событие: fs.watch по природе асинхронен, а под нагрузкой (оба пакета
+   * гоняют тесты параллельно) FSEvents отвечает не мгновенно — отсюда щедрый запас.
+   */
   function nextChange(
     changes: SessionChange[],
     predicate: (c: SessionChange) => boolean,
-    timeoutMs = 4000,
+    timeoutMs = 15_000,
   ): Promise<SessionChange> {
     const started = Date.now();
     return new Promise((resolve, reject) => {
@@ -89,7 +92,7 @@ describe('watchSessions', () => {
     } finally {
       watcher.close();
     }
-  });
+  }, 20_000);
 
   it('новый файл субагента обновляет родительскую сессию', async () => {
     const project = path.join(dir, '-proj');
@@ -115,7 +118,7 @@ describe('watchSessions', () => {
     } finally {
       watcher.close();
     }
-  });
+  }, 20_000);
 
   it('несуществующий корень не роняет вызов, а отдаётся в onError', () => {
     const errors: unknown[] = [];
