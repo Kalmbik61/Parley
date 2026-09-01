@@ -1,0 +1,30 @@
+# .ralphrc - Ralph project configuration
+
+# Project
+PROJECT_NAME="${PROJECT_NAME:-my-harnas}"
+PROJECT_TYPE="${PROJECT_TYPE:-typescript}"
+
+# Loop settings
+MAX_CALLS_PER_HOUR=100
+CLAUDE_TIMEOUT_MINUTES=15
+CLAUDE_OUTPUT_FORMAT="json"
+
+# Tool permissions
+ALLOWED_TOOLS="Write,Read,Edit,Bash(git add *),Bash(git commit *),Bash(git diff *),Bash(git log *),Bash(git status),Bash(pnpm *),Bash(npx *),Bash(node *)"
+
+# Session
+SESSION_CONTINUITY=true
+SESSION_EXPIRY_HOURS=24
+
+# Task sources: local, beads, github
+TASK_SOURCES="local"
+
+# Circuit breaker
+CB_NO_PROGRESS_THRESHOLD=3
+CB_SAME_ERROR_THRESHOLD=5
+CB_OUTPUT_DECLINE_THRESHOLD=70
+CB_COOLDOWN_MINUTES=30
+CB_AUTO_RESET=false
+
+# Advanced
+RALPH_VERBOSE=false

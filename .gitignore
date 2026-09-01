@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.tsbuildinfo
+claude-export/
+.omc/state/
+.omc/sessions/
+.DS_Store
+files.zip
