@@ -6,14 +6,14 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 
 ## High Priority
 
-- [ ] Run `node tools/claude-export.mjs --full` against the real `~/.claude/projects` (no `--limit` — summary stitching needs all files); copy the resulting `schema-report.json` and `index.json` into `docs/schema/`, scrubbing any sensitive strings from samples. Touch nothing else under `~/.claude`
-- [ ] Reconcile the observed schema with the assumptions in specs/data-layer.md (`isSidechain`, `parentUuid`, `leafUuid`, `message.model`, `type:"summary"` records); update specs/data-layer.md with confirmed findings BEFORE writing parser code
+- [x] Run `node tools/claude-export.mjs --full` against the real `~/.claude/projects` (no `--limit` — summary stitching needs all files); copy the resulting `schema-report.json` and `index.json` into `docs/schema/`, scrubbing any sensitive strings from samples. Touch nothing else under `~/.claude`
+- [x] Reconcile the observed schema with the assumptions in specs/data-layer.md (`isSidechain`, `parentUuid`, `leafUuid`, `message.model`, `type:"summary"` records); update specs/data-layer.md with confirmed findings BEFORE writing parser code
 - [ ] Initialize pnpm workspaces monorepo: `packages/core`, `packages/tui`; TypeScript 5 strict, vitest, eslint + prettier, build via tsc; root scripts `build`, `test`, `dev`
 - [ ] packages/core: streaming .jsonl reader tolerant of malformed/truncated lines (port the logic of tools/claude-export.mjs into typed modules; a truncated last line of a live session is normal, never an error)
 - [ ] packages/core: versioned schema adapter (`adapter-v1` for the observed schema) mapping raw records to typed SessionRecord per specs/data-layer.md; unknown fields preserved, nothing assumed mandatory
 - [ ] packages/core: session indexer — meta (sessionId, cwd, gitBranch, version), duration from first/last timestamps, model/tool/role counters, primaryModel per specs/data-layer.md
-- [ ] packages/core: global summary stitching by leafUuid across ALL files (two-pass, per specs/data-layer.md)
-- [ ] packages/core: sidechain grouping into subsessions — walk parentUuid up to the first non-sidechain ancestor as anchor; subsession task = first text content, model badges from message.model
+- [ ] packages/core: session title — last `custom-title` / `ai-title` record wins, fallback `last-prompt` → first user text; `titleSource` in the index (per specs/data-layer.md; глобальная сшивка по leafUuid отменена находками)
+- [ ] packages/core: subsessions from disk layout — enumerate `<session-id>/subagents/**/agent-*.jsonl`, read the sibling `.meta.json` (agentType/name/description/toolUseId), task = `description` or first text for workflow agents, model badges from message.model; `journal.jsonl` is not a subsession (per specs/data-layer.md)
 - [ ] packages/core: vitest suite on fixtures — 2-3 real anonymized session files plus synthetic edge cases (truncated last line, summary in a neighbor file, orphan sidechain, missing timestamps)
 - [ ] packages/core: fs watcher over `~/.claude/projects` with debounce; incremental re-parse of only the changed file; emits typed change events
 - [ ] packages/core: CLI entry — `harnas-core index --json` and `harnas-core session <id> --json`, JSON to stdout only (this IS the core/UI contract)
@@ -48,12 +48,41 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [ ] Final pass: lint clean, tests green, manual smoke checklist from specs/ui.md walked through
 
 ## Discovered
-<!-- Ralph will add discovered tasks here -->
+- [ ] packages/core: watcher invalidation — изменение `agent-*.jsonl` должно
+      инвалидировать и родительскую сессию (подсессии живут в отдельных файлах)
+- [ ] packages/core: `observe()` схлопывает мапы с динамическими ключами
+      (`snapshot.trackedFileBackups.<путь>`), иначе отчёт раздувается и тащит пути
+- [ ] packages/core: исключить `<synthetic>` из подсчёта `primaryModel`
+- [ ] specs/runners.md: дополнить таблицу бейджей — в реальных данных есть
+      `claude-fable-5` и `claude-opus-4-8`, текущая таблица их не покрывает
+- [ ] packages/tui: показывать `workflowName`/`status` из `<sid>/workflows/wf_<id>.json`
+      как группировку подсессий (опционально, данные есть)
+- [ ] Решить, что делать со старым кэшем `sessions-index.json` (3 шт., формат v1,
+      данные января) — сейчас предполагается игнорировать
 
 ## Completed
 - [x] Project documentation prepared (.ralph structure, specs, handoff imported)
 
 ## Notes
+
+### Сверка схемы 2026-09-01 (Claude Code 2.1.247, 335 файлов / 111 196 записей)
+Снимок: `docs/schema/` (+ `tools/scrub-export.mjs` для очистки перед коммитом).
+Полный разбор — в specs/data-layer.md, раздел «Что разошлось с прежними гипотезами».
+Кратко, что сломало исходную модель данных:
+- записей `type:"summary"` НЕТ вовсе; заголовок сессии — `custom-title` / `ai-title`,
+  покрытие 47/47, сшивка по чужим файлам не нужна;
+- `leafUuid` существует, но у записей `last-prompt` (последняя реплика), не у заголовка;
+- подсессии — ОТДЕЛЬНЫЕ файлы `<session-id>/subagents/**/agent-<agentId>.jsonl`;
+  `isSidechain:true` встречается только в них (100%) и никогда в главном файле;
+- `sessionId` не уникален: 335 файлов = 47 сессий + 253 субагента + 35 журналов
+  workflow; файлы субагентов несут `sessionId` родителя;
+- задача подсессии берётся из соседнего `.meta.json`, но у 240 workflow-агентов там
+  только `{agentType, spawnDepth}` — им нужен fallback на первую реплику;
+- прототип `tools/claude-export.mjs` считает каждый файл сессией, поэтому его
+  `index.json` даёт 335 «сессий» — это артефакт, а не данные;
+- по итогам сверки переписаны две задачи High Priority (заголовок вместо сшивки
+  summary; обход каталога вместо подъёма по parentUuid).
+
 - Порядок в High Priority важен: сверка схемы (первые 2 задачи) идёт ДО кода парсера —
   модель данных фиксируется только по schema-report с реальных файлов.
 - v3 (оркестрация нескольких провайдеров) — ВНЕ объёма этого плана. Не реализовывать.
