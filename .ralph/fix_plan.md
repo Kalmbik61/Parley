@@ -19,7 +19,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [x] packages/core: CLI entry — `harnas-core index --json` and `harnas-core session <id> --json`, JSON to stdout only (this IS the core/UI contract)
 - [x] packages/tui: Ink app skeleton with the three-pane layout per specs/ui.md (sessions top-left, subsessions bottom-left, right pane placeholder)
 - [x] packages/tui: sessions list — summary/name, relative time + duration, primaryModel badge, sorted by recency, per specs/ui.md
-- [ ] packages/tui: subsessions panel for the selected session — task, model badge, duration
+- [x] packages/tui: subsessions panel for the selected session — task, model badge, duration
 - [ ] packages/tui: keyboard navigation (arrows + j/k, Tab between panes) and selection state per specs/ui.md
 - [ ] packages/tui: live refresh — re-render lists on core watcher events (event-driven redraw, no polling loops)
 - [ ] v0 perf sanity check on the largest real session file; if startup is slow, switch to lazy parse (index meta at startup, full tree on selection) per specs/ui.md

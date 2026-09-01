@@ -1,8 +1,10 @@
-import type { SessionIndex } from '@harnas/core';
+import { defaultRoot, type SessionIndex } from '@harnas/core';
 import { Box, Text } from 'ink';
 import type { ReactNode } from 'react';
 import { Pane } from './components/pane.js';
 import { SessionList } from './components/session-list.js';
+import { SubsessionList } from './components/subsession-list.js';
+import { useSubsessions } from './use-subsessions.js';
 import { useTerminalSize } from './use-terminal-size.js';
 
 export type PaneId = 'sessions' | 'subsessions' | 'terminal';
@@ -13,18 +15,28 @@ export interface AppProps {
   focus?: PaneId;
   /** Выбранная сессия. Пока задаётся снаружи — клавиатура появится отдельной задачей. */
   selected?: number;
+  selectedSubsession?: number;
+  root?: string;
 }
 
 /** Левая колонка — 38% ширины, но не уже 30 колонок (specs/ui.md). */
 const LEFT_WIDTH = '38%';
 const LEFT_MIN_WIDTH = 30;
 
-export function App({ sessions, focus = 'sessions', selected = 0 }: AppProps): ReactNode {
+export function App({
+  sessions,
+  focus = 'sessions',
+  selected = 0,
+  selectedSubsession = 0,
+  root = defaultRoot(),
+}: AppProps): ReactNode {
   const { rows, columns } = useTerminalSize();
+  const { subsessions, loading } = useSubsessions(sessions[selected], root);
 
-  // Ширина левой колонки в символах и высота списка без рамки и заголовка.
+  // Ширина левой колонки в символах и высота списков без рамки и заголовка.
   const leftWidth = Math.max(LEFT_MIN_WIDTH, Math.floor(columns * 0.38));
   const sessionsHeight = Math.max(1, Math.floor(((rows - 2) * 2) / 3) - 3);
+  const subsessionsHeight = Math.max(1, Math.floor((rows - 2) / 3) - 3);
 
   return (
     <Box flexDirection="row" height={rows}>
@@ -37,8 +49,18 @@ export function App({ sessions, focus = 'sessions', selected = 0 }: AppProps): R
             width={leftWidth - 4}
           />
         </Pane>
-        <Pane title="SUBSESSIONS" active={focus === 'subsessions'} flexGrow={1}>
-          <Text dimColor>подсессии выбранной сессии</Text>
+        <Pane
+          title={`SUBSESSIONS (${subsessions.length})`}
+          active={focus === 'subsessions'}
+          flexGrow={1}
+        >
+          <SubsessionList
+            subsessions={subsessions}
+            selected={selectedSubsession}
+            height={subsessionsHeight}
+            width={leftWidth - 4}
+            loading={loading}
+          />
         </Pane>
       </Box>
 

@@ -8,7 +8,7 @@ export { indexSessionFile, projectSlug } from './session-index.js';
 export type { IndexSessionOptions, Provider, SessionIndex, TitleSource } from './session-index.js';
 export { indexSubsession, readSubagentMeta } from './subsession.js';
 export type { SubagentMeta, Subsession } from './subsession.js';
-export { buildIndex, buildSessionTree } from './session-tree.js';
+export { buildIndex, buildSessionTree, loadSessionTree } from './session-tree.js';
 export type { SessionTree } from './session-tree.js';
 export { watchSessions } from './watch.js';
 export type { SessionChange, SessionWatcher, WatchOptions } from './watch.js';

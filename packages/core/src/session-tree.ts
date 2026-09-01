@@ -1,5 +1,10 @@
 import { adapterV1, type SchemaAdapter } from './adapter-v1.js';
-import { defaultRoot, discoverSessions, type DiscoveredSession } from './discover.js';
+import {
+  defaultRoot,
+  discoverSession,
+  discoverSessions,
+  type DiscoveredSession,
+} from './discover.js';
 import { indexSessionFile, type SessionIndex } from './session-index.js';
 import { indexSubsession, type Subsession } from './subsession.js';
 
@@ -24,6 +29,18 @@ export async function buildSessionTree(
 
   subsessions.sort((a, b) => String(a.startedAt ?? '').localeCompare(String(b.startedAt ?? '')));
   return { session, subsessions };
+}
+
+/**
+ * Дерево по пути файла сессии: UI загружает подсессии лениво, при выборе строки
+ * (specs/ui.md — при старте только индекс, полное дерево по выбору).
+ */
+export async function loadSessionTree(
+  file: string,
+  root: string = defaultRoot(),
+  adapter: SchemaAdapter = adapterV1,
+): Promise<SessionTree> {
+  return buildSessionTree(await discoverSession(file, root), root, adapter);
 }
 
 /** Индекс всех сессий, свежие первыми — то, что показывает левая колонка. */
