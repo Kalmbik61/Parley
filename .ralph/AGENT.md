@@ -25,7 +25,19 @@ node tools/claude-export.mjs --full   # standalone-экспортёр (прот�
 ```
 
 ## Key Learnings
-- [Ralph заполняет по мере обнаружения]
+- Реальная схема .jsonl (Claude Code 2.1.247) сильно расходится с исходными
+  гипотезами — разбор в specs/data-layer.md, снимок в docs/schema/.
+  Записей `type:"summary"` нет; подсессии — отдельные файлы в
+  `<session-id>/subagents/`, а не `isSidechain`-записи внутри файла сессии.
+- Перф v0: `buildIndex` по 47 реальным сессиям (315 МБ) — 753 мс, heap 51 МБ;
+  самый большой файл 52.4 МБ читается за 91 мс. Ленивый разбор дерева обязателен
+  и уже сделан; кэш по mtime не нужен.
+- `exactOptionalPropertyTypes` в tsconfig не даёт передавать `undefined` в пропсы
+  Ink — вместо `color={x ? 'cyan' : undefined}` нужен условный спред.
+- `useStdout()` в не-TTY (пайп, тесты) отдаёт `rows: undefined` — без фолбэка
+  весь макет схлопывается. Проверено тестом.
+- Прогонять `pnpm exec prettier --write packages` перед коммитом: prettier
+  намеренно не трогает `.ralph/`, `docs/` и прототип `tools/claude-export.mjs`.
 
 ## Feature Development Quality Standards
 

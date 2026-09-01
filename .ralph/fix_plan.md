@@ -22,7 +22,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [x] packages/tui: subsessions panel for the selected session — task, model badge, duration
 - [x] packages/tui: keyboard navigation (arrows + j/k, Tab between panes) and selection state per specs/ui.md
 - [x] packages/tui: live refresh — re-render lists on core watcher events (event-driven redraw, no polling loops)
-- [ ] v0 perf sanity check on the largest real session file; if startup is slow, switch to lazy parse (index meta at startup, full tree on selection) per specs/ui.md
+- [x] v0 perf sanity check on the largest real session file; if startup is slow, switch to lazy parse (index meta at startup, full tree on selection) per specs/ui.md
 
 ## Medium Priority
 
@@ -67,6 +67,20 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [x] Project documentation prepared (.ralph structure, specs, handoff imported)
 
 ## Notes
+
+### Перф v0, замер 2026-09-01 (M-серия, 47 сессий / 315 МБ)
+| что | сколько |
+|---|---|
+| обход каталогов | 20 мс (47 сессий, 253 подсессии) |
+| `buildIndex` — старт TUI | 753 мс, heap 51 МБ |
+| индексация самого большого файла (52.4 МБ) | 91 мс |
+| дерево сессии со 147 подсессиями | 324 мс |
+| heap после работы | 22 МБ |
+
+Вывод: ленивый разбор УЖЕ такой, как предписывает specs/ui.md — при старте только
+индекс, дерево по выбору строки. Стриминговое чтение держит heap в десятках МБ
+даже на 52-мегабайтном файле. Кэш распарсенного по mtime не нужен: перечитывание
+одного файла стоит ~100 мс и происходит только по событию watcher.
 
 ### Сверка схемы 2026-09-01 (Claude Code 2.1.247, 335 файлов / 111 196 записей)
 Снимок: `docs/schema/` (+ `tools/scrub-export.mjs` для очистки перед коммитом).
