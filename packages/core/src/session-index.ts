@@ -4,6 +4,12 @@ import { adapterV1, type SchemaAdapter, type SessionRecord } from './adapter-v1.
 
 export type Provider = 'claude' | 'codex' | 'glm';
 
+/**
+ * Откуда взят заголовок: заданный пользователем, сгенерированный моделью,
+ * последняя реплика или первая реплика пользователя.
+ */
+export type TitleSource = 'custom' | 'ai' | 'last-prompt' | 'first-text';
+
 export interface SessionIndex {
   /** sessionId из записей; если его нет — имя файла. */
   id: string;
@@ -15,6 +21,9 @@ export interface SessionIndex {
   gitBranch: string | null;
   version: string | null;
   file: string;
+  /** Имя сессии для списка. null только у файла совсем без пригодных записей. */
+  title: string | null;
+  titleSource: TitleSource | null;
   startedAt: string | null;
   endedAt: string | null;
   durationMs: number | null;
@@ -59,6 +68,12 @@ class Counter {
   }
 }
 
+/** Реплика в одну строку — заголовок в списке всё равно однострочный. */
+function oneLine(text: string, limit = 200): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > limit ? `${flat.slice(0, limit)}…` : flat;
+}
+
 /** Слаг проекта = первый сегмент пути относительно корня ~/.claude/projects. */
 export function projectSlug(file: string, root: string): string {
   const relative = path.relative(root, file);
@@ -67,9 +82,9 @@ export function projectSlug(file: string, root: string): string {
 }
 
 /**
- * Индексирует ОДИН файл сессии: мета, длительность, счётчики моделей, инструментов,
- * ролей и типов записей. Заголовок и подсессии добавляются отдельно — они требуют
- * данных, которых в самом файле нет (см. specs/data-layer.md).
+ * Индексирует ОДИН файл сессии: мета, заголовок, длительность, счётчики моделей,
+ * инструментов, ролей и типов записей. Подсессии добавляются отдельно — они лежат
+ * в соседних файлах, а не в этом (см. specs/data-layer.md).
  */
 export async function indexSessionFile(
   file: string,
@@ -88,6 +103,12 @@ export async function indexSessionFile(
   let startedAt: string | null = null;
   let endedAt: string | null = null;
 
+  // Заголовки дописываются в файл снова и снова — побеждает последний.
+  let title: string | null = null;
+  let titleSource: TitleSource | null = null;
+  let lastPrompt: string | null = null;
+  let firstText: string | null = null;
+
   const stats = await forEachJsonlRecord(file, (raw) => {
     const record: SessionRecord = adapter.toSessionRecord(raw);
 
@@ -100,6 +121,15 @@ export async function indexSessionFile(
     cwd ??= record.cwd;
     gitBranch ??= record.gitBranch;
     version ??= record.version;
+
+    if (record.title !== null && (record.type === 'custom-title' || record.type === 'ai-title')) {
+      title = record.title;
+      titleSource = record.type === 'custom-title' ? 'custom' : 'ai';
+    }
+    if (record.lastPrompt !== null) lastPrompt = record.lastPrompt;
+    if (firstText === null && record.role === 'user' && record.text !== null) {
+      firstText = record.text;
+    }
 
     // Записи заголовков и служебные идут без timestamp — по ним время не считаем.
     const at = record.timestamp;
@@ -114,6 +144,16 @@ export async function indexSessionFile(
       ? Math.max(0, Date.parse(endedAt) - Date.parse(startedAt))
       : null;
 
+  // Заголовка нет — показываем реплику: сначала последнюю, потом первую.
+  if (title === null && lastPrompt !== null) {
+    title = oneLine(lastPrompt);
+    titleSource = 'last-prompt';
+  }
+  if (title === null && firstText !== null) {
+    title = oneLine(firstText);
+    titleSource = 'first-text';
+  }
+
   return {
     id: sessionId ?? path.basename(file, '.jsonl'),
     project: projectSlug(file, root),
@@ -122,6 +162,8 @@ export async function indexSessionFile(
     gitBranch,
     version,
     file,
+    title,
+    titleSource,
     startedAt,
     endedAt,
     durationMs,

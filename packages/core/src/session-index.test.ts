@@ -121,3 +121,72 @@ describe('indexSessionFile', () => {
     expect(index.durationMs).toBeNull();
   });
 });
+
+describe('заголовок сессии', () => {
+  it('побеждает последняя запись custom-title', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      't1',
+      line({ type: 'custom-title', customTitle: 'старый' }) +
+        line({ type: 'ai-title', aiTitle: 'сгенерённый' }) +
+        line({ type: 'custom-title', customTitle: 'новый' }),
+    );
+    const index = await indexSessionFile(file, root);
+    expect(index.title).toBe('новый');
+    expect(index.titleSource).toBe('custom');
+  });
+
+  it('ai-title используется, когда своего заголовка нет', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      't2',
+      line({ type: 'ai-title', aiTitle: 'от модели' }),
+    );
+    const index = await indexSessionFile(file, root);
+    expect(index.title).toBe('от модели');
+    expect(index.titleSource).toBe('ai');
+  });
+
+  it('без заголовка берётся last-prompt, схлопнутый в строку', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      't3',
+      line({ type: 'user', message: { role: 'user', content: 'первая реплика' } }) +
+        line({ type: 'last-prompt', leafUuid: 'u1', lastPrompt: '  почини\n\n  парсер  ' }),
+    );
+    const index = await indexSessionFile(file, root);
+    expect(index.title).toBe('почини парсер');
+    expect(index.titleSource).toBe('last-prompt');
+  });
+
+  it('последний fallback — первая реплика пользователя', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      't4',
+      line({ type: 'user', message: { role: 'user', content: 'первая реплика' } }) +
+        line({ type: 'user', message: { role: 'user', content: 'вторая' } }),
+    );
+    const index = await indexSessionFile(file, root);
+    expect(index.title).toBe('первая реплика');
+    expect(index.titleSource).toBe('first-text');
+  });
+
+  it('длинная реплика обрезается', async () => {
+    const long = 'я'.repeat(300);
+    const file = await writeSession(
+      '-Users-me-proj',
+      't5',
+      line({ type: 'user', message: { role: 'user', content: long } }),
+    );
+    const index = await indexSessionFile(file, root);
+    expect(index.title).toHaveLength(201);
+    expect(index.title?.endsWith('…')).toBe(true);
+  });
+
+  it('совсем пустой файл — заголовка нет', async () => {
+    const file = await writeSession('-Users-me-proj', 't6', '');
+    const index = await indexSessionFile(file, root);
+    expect(index.title).toBeNull();
+    expect(index.titleSource).toBeNull();
+  });
+});
