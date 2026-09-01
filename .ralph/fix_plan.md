@@ -18,7 +18,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [x] packages/core: fs watcher over `~/.claude/projects` with debounce; incremental re-parse of only the changed file; emits typed change events
 - [x] packages/core: CLI entry — `harnas-core index --json` and `harnas-core session <id> --json`, JSON to stdout only (this IS the core/UI contract)
 - [x] packages/tui: Ink app skeleton with the three-pane layout per specs/ui.md (sessions top-left, subsessions bottom-left, right pane placeholder)
-- [ ] packages/tui: sessions list — summary/name, relative time + duration, primaryModel badge, sorted by recency, per specs/ui.md
+- [x] packages/tui: sessions list — summary/name, relative time + duration, primaryModel badge, sorted by recency, per specs/ui.md
 - [ ] packages/tui: subsessions panel for the selected session — task, model badge, duration
 - [ ] packages/tui: keyboard navigation (arrows + j/k, Tab between panes) and selection state per specs/ui.md
 - [ ] packages/tui: live refresh — re-render lists on core watcher events (event-driven redraw, no polling loops)
