@@ -32,7 +32,8 @@ export interface Artifact {
 /** Метрики сессии: фиксируются в карте при завершении, пока сессия жива — `null`. */
 export interface SessionMetrics {
   durationMs: number;
-  tokens: TokenTotals;
+  /** `null` — в логе нет ни одной записи с usage: «не знаем» и «ноль» — разные вещи. */
+  tokens: TokenTotals | null;
   toolCalls: Record<string, number>;
 }
 

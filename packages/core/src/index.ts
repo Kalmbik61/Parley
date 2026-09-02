@@ -67,6 +67,24 @@ export {
 export type { NewWork, WorkPaths, WriteOptions } from './work/store.js';
 export { buildBrief, writeBrief } from './work/brief.js';
 export {
+  IDLE_THRESHOLD_MS,
+  LINK_TOLERANCE_MS,
+  deriveStatus,
+  finishSession,
+  linkProviderSession,
+  readSessionMetrics,
+  silenceMs,
+} from './work/metrics.js';
+export type {
+  FinalStatus,
+  FinishOptions,
+  IdleOptions,
+  LinkOptions,
+  LinkQuery,
+  LiveSessionMetrics,
+  MetricsRoots,
+} from './work/metrics.js';
+export {
   MCP_SERVER_BIN,
   MCP_SERVER_NAME,
   codexMcpOverride,
