@@ -25,3 +25,38 @@ export type { ProviderInfo, RunnerConfig } from './providers.js';
 export { modelBadge, providerBadge, providerMark } from './model-badge.js';
 export { buildSchemaReport, observeRecord } from './schema-report.js';
 export type { FieldReport, SchemaReport, SchemaReportResult, TypeReport } from './schema-report.js';
+export {
+  addMessage,
+  addSession,
+  canTransition,
+  nextMessageId,
+  nextSessionId,
+  nextWorkId,
+  parseMap,
+  transitionSession,
+} from './work/map.js';
+export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';
+export {
+  createWork,
+  harnasHome,
+  readMap,
+  readWorksIndex,
+  updateMap,
+  workPaths,
+  worksIndexPath,
+} from './work/store.js';
+export type { NewWork, WorkPaths, WriteOptions } from './work/store.js';
+export type {
+  Artifact,
+  HistoryEntry,
+  Message,
+  SessionMetrics,
+  SessionStatus,
+  SummarySource,
+  Work,
+  WorkIndexEntry,
+  WorkMap,
+  WorkSession,
+  WorkStatus,
+  WorksIndex,
+} from './work/types.js';
