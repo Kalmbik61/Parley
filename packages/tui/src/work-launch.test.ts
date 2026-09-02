@@ -1,5 +1,5 @@
 import { createWork, readMap, transitionSession, updateMap, workPaths } from '@harnas/core';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createPendingSession,
   finishExited,
+  linkSession,
   planLaunch,
   planResume,
   providerOptions,
@@ -267,5 +268,66 @@ describe('провайдеры для диалога новой сессии', (
     expect(byId.get('claude')?.available).toBe(true);
     expect(byId.get('claude')?.label).toBe('Claude');
     expect(byId.get('glm')?.available).toBe(false);
+    expect(byId.get('glm')?.note).toBe('нет в PATH');
+  });
+
+  it('провайдер без шаблона аргументов не выбирается: бриф и MCP до него не доедут', async () => {
+    // glm стоит в PATH, но в реестре у него ни args, ни mcpConfig: такой процесс
+    // не получил бы ни брифа, ни harnas-MCP (спецификация, раздел 5).
+    process.env['HARNAS_GLM_BIN'] = STUB;
+    const glm = (await providerOptions()).find((item) => item.id === 'glm');
+
+    expect(glm?.available).toBe(false);
+    expect(glm?.note).toBe('без брифа');
+  });
+});
+
+describe('привязка к логу провайдера без внешнего id', () => {
+  /** Rollout-лог Codex: тот же формат, что читает адаптер core. */
+  const writeRollout = async (id: string, cwd: string, at: string): Promise<void> => {
+    const dir = path.join(logs, '2026', '09', '02');
+    await mkdir(dir, { recursive: true });
+    const lines = [
+      { timestamp: at, type: 'session_meta', payload: { id, timestamp: at, cwd } },
+      { timestamp: at, type: 'turn_context', payload: { type: 'turn_context', cwd } },
+    ]
+      .map((record) => `${JSON.stringify(record)}\n`)
+      .join('');
+    await writeFile(path.join(dir, `rollout-2026-09-02T10-00-00-${id}.jsonl`), lines);
+  };
+
+  it('codex-сессия получает providerSessionId по cwd и времени запуска', async () => {
+    const { workId, sessionId } = await pending('codex');
+    await startSession(project, workId, sessionId, null);
+    const started = (await sessionOf(workId, sessionId)).startedAt as string;
+
+    await writeRollout('чужая', '/другой/проект', started);
+    await writeRollout('наша', project, new Date(Date.parse(started) + 1000).toISOString());
+
+    const found = await linkSession(project, workId, await sessionOf(workId, sessionId), {
+      codexRoot: logs,
+    });
+
+    expect(found).toBe('наша');
+    expect((await sessionOf(workId, sessionId)).providerSessionId).toBe('наша');
+  });
+
+  it('лога ещё нет — карта не трогается, попробуем на следующем событии', async () => {
+    const { workId, sessionId } = await pending('codex');
+    await startSession(project, workId, sessionId, null);
+
+    expect(
+      await linkSession(project, workId, await sessionOf(workId, sessionId), { codexRoot: logs }),
+    ).toBeNull();
+    expect((await sessionOf(workId, sessionId)).providerSessionId).toBeNull();
+  });
+
+  it('claude привязку по времени не ищет: его id харнесс знает заранее', async () => {
+    const { workId, sessionId } = await pending('claude');
+    await startSession(project, workId, sessionId, null);
+
+    expect(
+      await linkSession(project, workId, await sessionOf(workId, sessionId), { claudeRoot: logs }),
+    ).toBeNull();
   });
 });

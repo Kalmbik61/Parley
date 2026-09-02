@@ -39,6 +39,11 @@ export interface WorkTarget {
   args: string[];
   cwd: string;
   env: Record<string, string>;
+  /**
+   * Id, выданный провайдеру, который принимает его снаружи; `null` — связь с
+   * логом ищется после запуска по cwd и времени (спецификация, раздел 5).
+   */
+  providerSessionId: string | null;
 }
 
 /** Провайдер цели: его марка нужна и заголовку панели, и строке статуса. */
@@ -85,6 +90,8 @@ export interface AgentPtyState {
    * харнесса нет: сессию запустили вне TUI, и подключаться не к чему (решение №5).
    */
   attach(key: string): boolean;
+  /** Жив ли процесс панели с таким ключом: завершившийся и незнакомый — нет. */
+  alive(key: string): boolean;
   /** Перезапустить агента активной панели после его завершения. */
   restart(size: PtySize): void;
   close(): void;
@@ -103,22 +110,34 @@ export interface AgentPtyState {
  */
 export interface AgentPtyOptions {
   /**
+   * Процесс цели запущен. Только по этому событию слой координации переводит
+   * сессию работы в `active`: статус «процесс идёт» ставится, когда он идёт
+   * на самом деле (спецификация, раздел 5).
+   */
+  onStart?: (target: AgentTarget) => void;
+  /**
    * Процесс цели завершился. Слой координации переводит по этому событию
    * сессию работы в `exited` и фиксирует её метрики (спецификация, раздел 6).
    */
   onExit?: (target: AgentTarget, exit: PtyExit) => void;
+  /** Запустить не удалось: бинаря нет в PATH или spawn отказал (раздел 8). */
+  onFail?: (target: AgentTarget, reason: string) => void;
 }
 
-export function useAgentPty({ onExit }: AgentPtyOptions = {}): AgentPtyState {
+export function useAgentPty({ onStart, onExit, onFail }: AgentPtyOptions = {}): AgentPtyState {
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [activeKey, setActiveKey] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
 
   // Живые процессы нужны в cleanup, где состояние React уже недоступно.
   const live = useRef(new Map<string, PtySession>());
-  // Колбэк выхода — через ref: его новая ссылка не должна пересоздавать запуск.
+  // Колбэки — через ref: их новая ссылка не должна пересоздавать запуск.
+  const started = useRef(onStart);
+  started.current = onStart;
   const exited = useRef(onExit);
   exited.current = onExit;
+  const failed = useRef(onFail);
+  failed.current = onFail;
   // Путь к бинарю ищется один раз на команду и переиспользуется.
   const binaries = useRef(new Map<string, string>());
 
@@ -159,8 +178,11 @@ export function useAgentPty({ onExit }: AgentPtyOptions = {}): AgentPtyState {
         { target, title: targetTitle(target), session, exit: undefined },
       ]);
       setActiveKey(key);
+      started.current?.(target);
     } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      const message = reason instanceof Error ? reason.message : String(reason);
+      setError(message);
+      failed.current?.(target, message);
     }
   }, []);
 
@@ -188,7 +210,9 @@ export function useAgentPty({ onExit }: AgentPtyOptions = {}): AgentPtyState {
           start(file, args, target, size);
         })
         .catch((reason: unknown) => {
-          setError(reason instanceof Error ? reason.message : String(reason));
+          const message = reason instanceof Error ? reason.message : String(reason);
+          setError(message);
+          failed.current?.(target, message);
         });
     },
     [start],
@@ -218,8 +242,12 @@ export function useAgentPty({ onExit }: AgentPtyOptions = {}): AgentPtyState {
 
   const restart = useCallback<AgentPtyState['restart']>(
     (size) => {
-      const target = runs.find((run) => targetKey(run.target) === activeKey)?.target;
-      if (target !== undefined) launch(target, size);
+      const run = runs.find((item) => targetKey(item.target) === activeKey);
+      // Перезапускается только завершившийся агент (дизайн 8). Живого гасить
+      // нельзя: его выход перевёл бы сессию работы в `exited`, хотя на её месте
+      // уже работал бы новый процесс.
+      if (run === undefined || run.exit === undefined) return;
+      launch(run.target, size);
     },
     [runs, activeKey, launch],
   );
@@ -251,6 +279,7 @@ export function useAgentPty({ onExit }: AgentPtyOptions = {}): AgentPtyState {
     error,
     open,
     attach,
+    alive: (key) => runs.some((run) => targetKey(run.target) === key && run.exit === undefined),
     restart,
     close,
   };

@@ -37,8 +37,17 @@ const metrics = (lastRecordAt: string | null): LiveMetrics => ({
   lastRecordAt,
 });
 
-function Probe({ works, last }: { works: WorkEntry[]; last: string | null }): ReactNode {
-  useLifecycle({ works, live: () => metrics(last) });
+function Probe({
+  works,
+  last,
+  alive = true,
+}: {
+  works: WorkEntry[];
+  last: string | null;
+  /** Живой процесс сессии у харнесса: без него active в idle не уходит. */
+  alive?: boolean;
+}): ReactNode {
+  useLifecycle({ works, live: () => metrics(last), alive: () => alive });
   return <Text>проба</Text>;
 }
 
@@ -89,6 +98,19 @@ describe('useLifecycle', () => {
     const app = render(<Probe works={[entry]} last={new Date().toISOString()} />);
     try {
       await waitFor(async () => (await readMap(project, workId)).sessions[0]?.status === 'active');
+    } finally {
+      app.unmount();
+    }
+  }, 20_000);
+
+  it('сессия без своего PTY в idle не уезжает: процесс проверить нечем', async () => {
+    const { workId, entry } = await active();
+    const silent = new Date(Date.now() - 30 * 60_000).toISOString();
+
+    const app = render(<Probe works={[entry]} last={silent} alive={false} />);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect((await readMap(project, workId)).sessions[0]?.status).toBe('active');
     } finally {
       app.unmount();
     }

@@ -1,5 +1,6 @@
 import {
   createWork,
+  defaultCodexRoot,
   defaultRoot,
   modelBadge,
   providerBadge,
@@ -33,6 +34,7 @@ import { usePtyTerminal } from './pty/use-pty-terminal.js';
 import { useLifecycle } from './use-lifecycle.js';
 import { useNavigation, type PaneId } from './use-navigation.js';
 import { useProviderFilter } from './use-provider-filter.js';
+import { useSessionLink } from './use-session-link.js';
 import { useStatus, type StatusSource } from './use-status.js';
 import { useSubsessions } from './use-subsessions.js';
 import { useTerminalSize } from './use-terminal-size.js';
@@ -67,6 +69,8 @@ import {
 export interface AppProps {
   sessions: SessionIndex[];
   root?: string;
+  /** Корень истории Codex: из него читаются метрики и привязка codex-сессий. */
+  codexRoot?: string;
   /** Проект, в котором запущен харнесс: его работы читаются с диска. */
   projectPath?: string;
   onRescan?: () => void;
@@ -75,6 +79,15 @@ export interface AppProps {
 /** Левая колонка — 38% ширины, но не уже 30 колонок (specs/ui.md). */
 const LEFT_WIDTH = '38%';
 const LEFT_MIN_WIDTH = 30;
+const LEFT_PERCENT = 38;
+
+/**
+ * Ширина тела диалога по размеру окна: рамка и отступы панели съедают четыре
+ * колонки — 26 знаков на 80×24 и 41 на 120×40, как в макетах раздела 4. По ней
+ * выбирается только форма строк; рисует диалог по своей измеренной ширине.
+ */
+const dialogWidth = (columns: number): number =>
+  Math.max(LEFT_MIN_WIDTH, Math.floor((columns * LEFT_PERCENT) / 100)) - 4;
 
 /** Режим левой колонки; переключается `w` и живёт до конца процесса (дизайн 1). */
 type LeftMode = 'sessions' | 'works';
@@ -93,10 +106,15 @@ interface OpenDialog {
 export function App({
   sessions,
   root = defaultRoot(),
+  codexRoot = defaultCodexRoot(),
   projectPath = process.cwd(),
   onRescan,
 }: AppProps): ReactNode {
   const { columns, rows } = useTerminalSize();
+
+  // Корни истории провайдеров: по ним читаются метрики и ищется привязка сессии
+  // к логу. Оба задаются снаружи — в тестах это временные каталоги.
+  const roots = useMemo(() => ({ claudeRoot: root, codexRoot }), [root, codexRoot]);
 
   // Размеры панелей приходят из замера (см. Pane), а не из формул по размеру окна.
   const [terminalSize, setTerminalSize] = useState<PaneSize>({ width: 80, height: 24 });
@@ -153,6 +171,9 @@ export function App({
 
   const [dialog, setDialog] = useState<OpenDialog | null>(null);
   const dialogId = useRef(0);
+  // Ширина, по которой диалог выбирает форму строк (полный путь брифа или
+  // короткий, полное имя провайдера или марка) — макеты раздела 4.
+  const specWidth = dialogWidth(columns);
   // Правая панель, когда подключаться не к чему: сессию запустили вне харнесса.
   const [note, setNote] = useState<string | null>(null);
 
@@ -171,19 +192,53 @@ export function App({
   );
   const closeDialog = useCallback(() => setDialog(null), []);
 
+  // Процесс запущен — только теперь сессия переходит в `active` с id у
+  // провайдера (спецификация, раздел 5): статус «идёт» ставится тому, что идёт.
+  const onAgentStart = useCallback(
+    (target: AgentTarget) => {
+      if (target.kind !== 'work') return;
+      void startSession(
+        target.projectPath,
+        target.workId,
+        target.sessionId,
+        target.providerSessionId,
+      ).catch(fail);
+    },
+    [fail],
+  );
+
   // Процесс сессии работы завершился: `active`/`idle` → `exited` с кодом выхода
   // и фиксацией метрик (спецификация, раздел 6). Отчитавшуюся сессию не трогаем.
   const onAgentExit = useCallback(
     (target: AgentTarget, exit: PtyExit) => {
       if (target.kind !== 'work') return;
-      void finishExited(target.projectPath, target.workId, target.sessionId, exit, {
-        claudeRoot: root,
-      }).catch(fail);
+      void finishExited(target.projectPath, target.workId, target.sessionId, exit, roots).catch(
+        fail,
+      );
     },
-    [root, fail],
+    [roots, fail],
   );
 
-  const agent = useAgentPty({ onExit: onAgentExit });
+  // Процесс не запустился: сессия остаётся как была, а причина уходит в строку
+  // статуса — единственный канал уведомлений (дизайн 5, спецификация 8).
+  const onAgentFail = useCallback(
+    (target: AgentTarget, reason: string) => {
+      if (target.kind !== 'work') return;
+      push([
+        {
+          text: `${providerMarkOf(target.provider)}: «${target.title}» не запустилась — ${firstLine(reason)}`,
+          source: {
+            projectPath: target.projectPath,
+            workId: target.workId,
+            sessionId: target.sessionId,
+          },
+        },
+      ]);
+    },
+    [push],
+  );
+
+  const agent = useAgentPty({ onStart: onAgentStart, onExit: onAgentExit, onFail: onAgentFail });
   const snapshot = usePtyTerminal(agent.active?.session, {
     cols: terminalCols,
     rows: terminalRows,
@@ -243,8 +298,9 @@ export function App({
         : planLaunch(project, workId, session);
 
       void plan
-        .then(async (ready) => {
+        .then((ready) => {
           setNote(null);
+          // В `active` сессию переводит onAgentStart — когда процесс поднялся.
           agent.open(
             {
               kind: 'work',
@@ -257,10 +313,10 @@ export function App({
               args: ready.args,
               cwd: ready.cwd,
               env: ready.env,
+              providerSessionId: ready.providerSessionId,
             },
             { cols: terminalCols, rows: terminalRows },
           );
-          await startSession(project, workId, session.id, ready.providerSessionId);
         })
         .catch(fail);
 
@@ -296,7 +352,7 @@ export function App({
         // Бриф перечитывается с диска: его могли поправить после создания.
         void readBrief(row.projectPath, row.workId, row.session.id)
           .then((brief) =>
-            openDialog(launchDialog(row, brief, glyphs()), () => launchWork(row, false)),
+            openDialog(launchDialog(row, brief, glyphs(), specWidth), () => launchWork(row, false)),
           )
           .catch(fail);
         return;
@@ -309,13 +365,14 @@ export function App({
               row,
               resumePreview(ready.command, ready.args, row.session.providerSessionId),
               glyphs(),
+              specWidth,
             ),
             () => launchWork(row, true),
           ),
         )
         .catch(fail);
     },
-    [attachWork, launchWork, openDialog, fail],
+    [attachWork, launchWork, openDialog, fail, specWidth],
   );
 
   const openSelected = useCallback(
@@ -460,7 +517,16 @@ export function App({
   }, [liveSameProvider, activeProvider, push]);
 
   // Статусы, которые ведёт харнесс: `active ↔ idle` по молчанию лога (раздел 6).
-  useLifecycle({ works, live });
+  // `idle` — «жив, но молчит», поэтому его получают только сессии со своим PTY.
+  useLifecycle({
+    works,
+    live,
+    alive: (project, workId, sessionId) => agent.alive(workRunKey(project, workId, sessionId)),
+  });
+
+  // Сессии провайдеров без внешнего id (codex) привязываются к своему логу по
+  // cwd и времени запуска: без этого нет ни метрик, ни возобновления (раздел 5).
+  useSessionLink({ works, sessions, roots });
 
   const backToLists = useCallback(() => setFocus('sessions'), [setFocus]);
   usePtyInput(agent.active?.session, focus === 'terminal' && agentAlive, {
@@ -652,6 +718,9 @@ function sourceOf(row: WorkRow | undefined): StatusSource | null {
     sessionId: row.kind === 'work' ? null : row.session.id,
   };
 }
+
+/** В строку статуса помещается одна строка: у ошибки запуска это её суть. */
+const firstLine = (text: string): string => text.split('\n')[0] ?? text;
 
 const countWorks = (rows: readonly WorkRow[]): number =>
   rows.filter((row) => row.kind === 'work').length;

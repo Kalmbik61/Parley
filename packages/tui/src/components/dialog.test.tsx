@@ -12,6 +12,7 @@ const RIGHT = '\u001B[C';
 const LEFT = '\u001B[D';
 const BACKSPACE = '\u007F';
 const DOWN = '\u001B[B';
+const UP = '\u001B[A';
 
 const waitFor = async (check: () => boolean, timeoutMs = 4000): Promise<void> => {
   const started = Date.now();
@@ -120,22 +121,35 @@ describe('Dialog', () => {
     app.unmount();
   }, 15_000);
 
-  it('селектор ходит ‹ › по вариантам и перешагивает недоступные', async () => {
+  it('селектор ходит ‹ › по всем вариантам, недоступный показан с пометкой', async () => {
     const fields: DialogField[] = [
       {
         key: 'provider',
         label: 'Провайдер',
         options: [
           { id: 'claude', label: 'Claude' },
-          { id: 'glm', label: 'GLM', disabled: true },
+          { id: 'glm', label: 'GLM', disabled: true, note: 'нет в PATH' },
           { id: 'codex', label: 'Codex' },
         ],
       },
     ];
     const { app, onSubmit } = setup({ fields });
+    // Начальный вариант — первый доступный: недоступный сам не подставляется.
     expect(app.lastFrame()).toContain('‹ Claude ›');
+
+    // Недоступный не пропускается молча: пользователь видит, где в кольце пропуск.
+    await press(app, RIGHT);
+    await waitFor(() => (app.lastFrame() ?? '').includes('‹ GLM ›'));
+    expect(app.lastFrame()).toContain('нет в PATH');
+
+    // Подтвердить его нельзя — Enter оставляет диалог на месте.
+    await press(app, ENTER);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(onSubmit).not.toHaveBeenCalled();
+
     await press(app, RIGHT);
     await waitFor(() => (app.lastFrame() ?? '').includes('‹ Codex ›'));
+    await press(app, LEFT);
     await press(app, LEFT);
     await waitFor(() => (app.lastFrame() ?? '').includes('‹ Claude ›'));
 
@@ -143,7 +157,7 @@ describe('Dialog', () => {
     await waitFor(() => onSubmit.mock.calls.length > 0);
     expect(onSubmit).toHaveBeenCalledWith({ provider: 'claude' });
     app.unmount();
-  }, 15_000);
+  }, 25_000);
 
   it('без полей — только подтверждение, тело листается ↑↓', async () => {
     const quote = Array.from({ length: 12 }, (_, at) => `строка брифа ${at}`);
@@ -167,4 +181,23 @@ describe('Dialog', () => {
     expect(onSubmit).toHaveBeenCalledWith({});
     app.unmount();
   }, 15_000);
+
+  it('прокрутка тела не убегает за конец: ↑ сразу возвращает строку', async () => {
+    const quote = Array.from({ length: 12 }, (_, at) => `строка брифа ${at}`);
+    const { app } = setup({
+      fields: [],
+      info: ['бриф: briefs/s-04.md'],
+      quote,
+      footer: 'Enter — запустить · Esc — позже',
+      height: 6,
+    });
+
+    // Тело давно на конце: дальше листать некуда, счётчик расти не должен.
+    for (let step = 0; step < 10; step += 1) await press(app, DOWN);
+    await waitFor(() => (app.lastFrame() ?? '').includes('строка брифа 11'));
+
+    await press(app, UP);
+    await waitFor(() => (app.lastFrame() ?? '').includes('строка брифа 7'));
+    app.unmount();
+  }, 25_000);
 });

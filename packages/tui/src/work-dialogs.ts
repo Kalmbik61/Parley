@@ -5,12 +5,13 @@
  * проверяются тестами без запуска чего бы то ни было.
  */
 
-import type { WorkSession } from '@harnas/core';
+import { workPaths, type WorkSession } from '@harnas/core';
+import path from 'node:path';
 import type { DialogField } from './components/dialog.js';
-import { formatClock, truncate, withHome } from './format.js';
+import { formatClock, truncate, truncateLeft, withHome } from './format.js';
 import { statusGlyph, type Glyphs } from './glyphs.js';
 import type { ProviderOption } from './work-launch.js';
-import { providerLabel, type WorkRowSession } from './work-rows.js';
+import { providerLabel, providerMarkOf, type WorkRowSession } from './work-rows.js';
 
 export interface DialogSpec {
   /** Заголовок нижней левой панели на время диалога. */
@@ -24,6 +25,12 @@ export interface DialogSpec {
 
 /** Сколько знаков резюме показывается в диалоге возобновления. */
 const SUMMARY = 40;
+
+/**
+ * С этой ширины в заголовок помещается полное имя провайдера; уже — двухсимвольная
+ * марка или ничего (макеты 4.3 и 4.4: 26 знаков на 80×24, 41 на 120×40).
+ */
+const WIDE = 30;
 
 /** 4.1. Проект не выбирается: работа всегда создаётся в cwd харнесса (решение №9). */
 export function newWorkDialog(projectPath: string): DialogSpec {
@@ -39,9 +46,12 @@ export function newWorkDialog(projectPath: string): DialogSpec {
   };
 }
 
-/** 4.2. Провайдер — селектор по реестру; недоступные в PATH не выбираются. */
+/**
+ * 4.2. Провайдер — селектор по реестру. Недоступный виден в самом кольце
+ * вариантов с пометкой, почему он не выбирается: отдельной строкой не понять,
+ * где в кольце пропуск.
+ */
 export function newSessionDialog(workTitle: string, providers: ProviderOption[]): DialogSpec {
-  const missing = providers.filter((item) => !item.available).map((item) => item.label);
   return {
     title: `НОВАЯ СЕССИЯ · ${workTitle}`,
     fields: [
@@ -51,28 +61,50 @@ export function newSessionDialog(workTitle: string, providers: ProviderOption[])
         options: providers.map((item) => ({
           id: item.id,
           label: item.label,
-          ...(item.available ? {} : { disabled: true }),
+          ...(item.available
+            ? {}
+            : { disabled: true, ...(item.note === undefined ? {} : { note: item.note }) }),
         })),
       },
       { key: 'label', label: 'Роль' },
       { key: 'task', label: 'Задача', multiline: true },
     ],
-    info: missing.length === 0 ? [] : [`нет в PATH: ${missing.join(', ')}`],
+    info: [],
     quote: [],
     footer: 'Enter — создать (pending) · Esc',
   };
 }
 
 /**
+ * Путь брифа: от корня проекта, пока помещается в строку, иначе короткая форма
+ * `briefs/<id>.md` (макеты 4.3, усечение путей слева — 6.4).
+ */
+function briefLine(row: WorkRowSession, width: number, g: Glyphs): string {
+  const head = 'бриф: ';
+  const dir = path.relative(row.projectPath, workPaths(row.projectPath, row.workId).briefs);
+  const full = path.join(dir, `${row.session.id}.md`);
+  const room = Math.max(0, width - head.length);
+  const short = path.join(path.basename(dir), `${row.session.id}.md`);
+  return `${head}${full.length <= room ? full : truncateLeft(short, room, g.ellipsis)}`;
+}
+
+/**
  * 4.3. Тело — первые строки брифа. Править бриф из TUI нельзя: диалог
  * показывает путь, файл правится своим редактором и перечитывается при `Enter`.
  */
-export function launchDialog(row: WorkRowSession, brief: string, g: Glyphs): DialogSpec {
+export function launchDialog(
+  row: WorkRowSession,
+  brief: string,
+  g: Glyphs,
+  width: number,
+): DialogSpec {
   const { session } = row;
+  const provider =
+    width >= WIDE ? providerLabel(session.provider) : providerMarkOf(session.provider);
   return {
-    title: `ЗАПУСК ${g.pending} ${session.label} (${providerLabel(session.provider)})`,
+    title: `ЗАПУСК ${g.pending} ${session.label} (${provider})`,
     fields: [],
-    info: [`бриф: briefs/${session.id}.md`],
+    info: [briefLine(row, width, g)],
     quote: brief.split('\n'),
     footer: 'Enter — запустить · Esc — позже',
   };
@@ -110,12 +142,18 @@ function summaryLine(session: WorkSession, g: Glyphs): string {
 }
 
 /** 4.4. Тот же диалог для `○ exited` и для завершённых `✓` / `✗`. */
-export function resumeDialog(row: WorkRowSession, command: string, g: Glyphs): DialogSpec {
+export function resumeDialog(
+  row: WorkRowSession,
+  command: string,
+  g: Glyphs,
+  width: number,
+): DialogSpec {
   const { session } = row;
+  // На узкой колонке провайдера в заголовке нет вовсе: место занимает роль,
+  // а провайдер и так виден в команде возобновления строкой ниже (макет 4.4).
+  const provider = width >= WIDE ? ` (${providerLabel(session.provider)})` : '';
   return {
-    title: `ВОЗОБНОВИТЬ ${statusGlyph(session.status, g)} ${session.label} (${providerLabel(
-      session.provider,
-    )})`,
+    title: `ВОЗОБНОВИТЬ ${statusGlyph(session.status, g)} ${session.label}${provider}`,
     fields: [],
     info: [command, exitLine(session), summaryLine(session, g)],
     quote: [],

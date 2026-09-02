@@ -18,5 +18,12 @@ export function Root({ root, codexRoot }: RootProps): ReactNode {
   });
 
   if (loading) return <Text dimColor>читаю историю сессий…</Text>;
-  return <App sessions={sessions} onRescan={rescan} {...(root === undefined ? {} : { root })} />;
+  return (
+    <App
+      sessions={sessions}
+      onRescan={rescan}
+      {...(root === undefined ? {} : { root })}
+      {...(codexRoot === undefined ? {} : { codexRoot })}
+    />
+  );
 }

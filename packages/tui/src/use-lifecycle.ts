@@ -7,6 +7,8 @@ export interface LifecycleOptions {
   works: readonly WorkEntry[];
   /** Метрики живой сессии из индекса логов: от них считается молчание. */
   live: (session: WorkSession) => LiveMetrics;
+  /** Жив ли процесс сессии у харнесса: без него `active → idle` не ставится. */
+  alive: (projectPath: string, workId: string, sessionId: string) => boolean;
   /** Порог молчания; по умолчанию порог core. */
   idleMs?: number;
   now?: number;
@@ -20,12 +22,17 @@ export interface LifecycleOptions {
  * цикла опроса в UI нет (specs/ui.md). Поэтому `active → idle` записывается на
  * ближайшем событии после того, как порог пройден.
  */
-export function useLifecycle({ works, live, idleMs, now }: LifecycleOptions): void {
+export function useLifecycle({ works, live, alive, idleMs, now }: LifecycleOptions): void {
   // Запись асинхронна: пока она идёт, тот же переход не отправляется второй раз.
   const inFlight = useRef(new Set<string>());
+  // Живые процессы — через ref: их набор меняется на каждый рендер панели, а
+  // пересчитывать переходы надо только по событиям watcher.
+  const running = useRef(alive);
+  running.current = alive;
 
   useEffect(() => {
     const wanted = idleTransitions(works, live, {
+      alive: (projectPath, workId, sessionId) => running.current(projectPath, workId, sessionId),
       ...(idleMs === undefined ? {} : { idleMs }),
       ...(now === undefined ? {} : { now }),
     });

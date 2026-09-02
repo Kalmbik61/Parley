@@ -223,8 +223,10 @@ describe('диалоги, запуск и жизненный цикл', () => {
   const ENTER = '\r';
   const ESC = '\u001B';
 
+  // Оба корня истории — во временном каталоге: настоящие ~/.claude и ~/.codex
+  // тесты не читают даже на выходе процесса, когда фиксируются метрики.
   const open = (): ReturnType<typeof render> =>
-    render(<App sessions={[]} root={logs} projectPath={project} />);
+    render(<App sessions={[]} root={logs} codexRoot={logs} projectPath={project} />);
 
   const works = async (app: ReturnType<typeof render>): Promise<void> => {
     await press(app, 'w');
@@ -349,6 +351,39 @@ describe('диалоги, запуск и жизненный цикл', () => {
       await waitMap(workId, (status) => status === 'active');
       const session = (await readMap(project, workId)).sessions[0];
       expect(session?.providerSessionId).toMatch(/^[0-9a-f]{8}-/);
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('процесс не запустился — сессия остаётся pending, а не залипает в active', async () => {
+    // Бинаря провайдера в PATH нет: спавна не будет вовсе (спецификация, раздел 8).
+    process.env.HARNAS_CLAUDE_BIN = path.join(logs, 'нет-такого-бинаря');
+    const created = await createWork(project, { title: 'Авторизация' });
+    const workId = created.work.id;
+    await createPendingSession(project, workId, {
+      provider: 'claude',
+      label: 'тесты',
+      task: 'прогнать e2e',
+    });
+
+    const app = open();
+    try {
+      await works(app);
+      await press(app, 'j');
+      await waitFor(() => (app.lastFrame() ?? '').includes('ДЕТАЛИ — тесты'));
+      await press(app, ENTER);
+      await waitFor(() => (app.lastFrame() ?? '').includes('ЗАПУСК'));
+      await press(app, ENTER);
+
+      await waitFor(() => (app.lastFrame() ?? '').includes('не найден в PATH'));
+      // Ждём заведомо дольше, чем идёт запись карты после удачного запуска.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+
+      const session = (await readMap(project, workId)).sessions[0];
+      expect(session?.status).toBe('pending');
+      expect(session?.providerSessionId).toBeNull();
+      expect(session?.history.map((entry) => entry.status)).toEqual(['pending']);
     } finally {
       app.unmount();
     }

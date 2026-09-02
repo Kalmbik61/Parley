@@ -1,5 +1,5 @@
 import { Box, Text, useInput } from 'ink';
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { truncate, truncateLeft, wrapText } from '../format.js';
 import { glyphs } from '../glyphs.js';
 
@@ -8,6 +8,8 @@ export interface DialogOption {
   id: string;
   label: string;
   disabled?: boolean;
+  /** Почему недоступен: `нет в PATH` рядом с самим вариантом. */
+  note?: string;
 }
 
 export interface DialogField {
@@ -74,6 +76,7 @@ export function Dialog({
   const [values, setValues] = useState<Record<string, string>>(() => initialValues(fields));
   const [at, setAt] = useState(0);
   const [scroll, setScroll] = useState(0);
+  const maxScroll = useRef(0);
 
   const active = fields[clamp(at, fields.length)];
   const cursor = g.ascii ? '_' : '▌';
@@ -82,18 +85,26 @@ export function Dialog({
     setValues((current) => ({ ...current, [field.key]: next(current[field.key] ?? '') }));
   };
 
+  // Кольцо проходит и по недоступным: иначе не видно, где в нём пропуск
+  // (дизайн 4.2). Подтвердить такой вариант всё равно нельзя — см. submit.
   const cycle = (field: DialogField, step: number): void => {
-    const enabled = (field.options ?? []).filter((option) => option.disabled !== true);
-    if (enabled.length === 0) return;
-    const current = enabled.findIndex((option) => option.id === values[field.key]);
-    const next = enabled[(current + step + enabled.length) % enabled.length];
+    const options = field.options ?? [];
+    if (options.length === 0) return;
+    const current = options.findIndex((option) => option.id === values[field.key]);
+    const next = options[(current + step + options.length) % options.length];
     if (next !== undefined) type(field, () => next.id);
   };
 
+  const chosen = (field: DialogField): DialogOption | undefined =>
+    field.options?.find((option) => option.id === values[field.key]);
+
   const submit = (): void => {
-    // Пустое обязательное поле — не отказ молчанием: выбор переезжает на него.
+    // Пустое обязательное поле и недоступный вариант — не отказ молчанием:
+    // выбор переезжает на них.
     const gap = fields.findIndex(
-      (field) => field.optional !== true && (values[field.key] ?? '') === '',
+      (field) =>
+        (field.optional !== true && (values[field.key] ?? '') === '') ||
+        chosen(field)?.disabled === true,
     );
     if (gap !== -1) {
       setAt(gap);
@@ -120,7 +131,9 @@ export function Dialog({
       const step = key.downArrow ? 1 : -1;
       // Поля есть — `↑↓` ходят по ним; иначе листают тело (дизайн 4.3).
       if (fields.length > 1) setAt(clamp(at + step, fields.length));
-      else setScroll((current) => Math.max(0, current + step));
+      // Счётчик прокрутки держим в границах тела: убежав за конец, он съедал бы
+      // первые нажатия `↑` — картинка стояла бы на месте.
+      else setScroll((current) => Math.min(Math.max(0, current + step), maxScroll.current));
       return;
     }
     if (key.leftArrow || key.rightArrow) {
@@ -156,9 +169,16 @@ export function Dialog({
 
     if (field.options !== undefined) {
       const option = field.options.find((item) => item.id === value);
+      const off = option?.disabled === true;
+      const note = off && option.note !== undefined ? ` · ${option.note}` : '';
       lines.push(
-        <Text key={field.key} wrap="truncate" {...(selected ? { bold: true } : {})}>
-          {truncate(`${label}‹ ${option?.label ?? '—'} ›`, width, g.ellipsis)}
+        <Text
+          key={field.key}
+          wrap="truncate"
+          {...(off ? { dimColor: true } : {})}
+          {...(selected ? { bold: true } : {})}
+        >
+          {truncate(`${label}‹ ${option?.label ?? '—'} ›${note}`, width, g.ellipsis)}
         </Text>,
       );
       continue;
@@ -185,7 +205,10 @@ export function Dialog({
 
   // Тело-цитата занимает то, что осталось от полей и подсказки.
   const room = Math.max(0, height - lines.length - 1);
-  const start = Math.min(scroll, Math.max(0, quote.length - room));
+  // Предел прокрутки известен только здесь: он зависит от того, сколько строк
+  // заняли поля. Обработчик клавиш читает его через ref.
+  maxScroll.current = Math.max(0, quote.length - room);
+  const start = Math.min(scroll, maxScroll.current);
   for (const [index, text] of quote.slice(start, start + room).entries()) {
     lines.push(
       <Text key={`quote-${start + index}`} wrap="truncate">

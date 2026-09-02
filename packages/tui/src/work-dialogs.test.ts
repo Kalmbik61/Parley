@@ -64,31 +64,44 @@ describe('диалог новой работы (4.1)', () => {
 describe('диалог новой сессии (4.2)', () => {
   const providers = [
     { id: 'claude', label: 'Claude', available: true },
-    { id: 'glm', label: 'GLM', available: false },
+    { id: 'glm', label: 'GLM', available: false, note: 'нет в PATH' },
   ];
 
-  it('провайдер — селектор по реестру, недоступный не выбирается', () => {
+  it('провайдер — селектор по реестру, недоступный помечен прямо в кольце', () => {
     const spec = newSessionDialog('Авторизация', providers);
     expect(spec.title).toContain('Авторизация');
     expect(spec.fields.map((field) => field.key)).toEqual(['provider', 'label', 'task']);
+    // Пометка едет с самим вариантом: отдельной строкой не видно, где в кольце
+    // пропуск (дизайн 4.2).
     expect(spec.fields[0]?.options).toEqual([
       { id: 'claude', label: 'Claude' },
-      { id: 'glm', label: 'GLM', disabled: true },
+      { id: 'glm', label: 'GLM', disabled: true, note: 'нет в PATH' },
     ]);
-    expect(spec.info.join(' ')).toContain('нет в PATH: GLM');
-  });
-
-  it('без недоступных провайдеров пометки нет', () => {
-    const spec = newSessionDialog('Авторизация', [providers[0] as (typeof providers)[number]]);
     expect(spec.info).toEqual([]);
   });
 });
 
+/** 26 знаков — левая колонка на 80×24, 41 — на 120×40 (макеты 4.3 и 4.4). */
+const NARROW = 26;
+const WIDE = 41;
+
 describe('диалог запуска (4.3)', () => {
-  it('показывает путь брифа и его первые строки', () => {
-    const spec = launchDialog(row({ status: 'pending' }), '# Работа\n\nЗадача: шаги 1–3\n', g);
+  it('на широкой колонке путь брифа виден от корня проекта', () => {
+    const spec = launchDialog(row({ status: 'pending' }), '# Работа\n', g, WIDE);
+    expect(spec.info).toEqual(['бриф: .harnas/works/w-0042/briefs/s-04.md']);
+    expect(spec.title).toContain('(Codex)');
+  });
+
+  it('на узкой остаётся короткая форма и двухсимвольная марка', () => {
+    const spec = launchDialog(
+      row({ status: 'pending' }),
+      '# Работа\n\nЗадача: шаги 1–3\n',
+      g,
+      NARROW,
+    );
     expect(spec.title).toContain('ЗАПУСК');
     expect(spec.title).toContain('бэкенд');
+    expect(spec.title).toContain('(Cx)');
     expect(spec.info).toEqual(['бриф: briefs/s-04.md']);
     expect(spec.quote[0]).toBe('# Работа');
     // Полей нет: бриф правится своим редактором, а не в TUI (решение №1).
@@ -98,8 +111,13 @@ describe('диалог запуска (4.3)', () => {
 
 describe('диалог возобновления (4.4)', () => {
   it('для exited показывает время выхода, код и отсутствие отчёта', () => {
-    const spec = resumeDialog(row(), 'codex resume 7fa0e1ee-cc7b', g);
+    const spec = resumeDialog(row(), 'codex resume 7fa0e1ee-cc7b', g, WIDE);
     expect(spec.title).toContain('ВОЗОБНОВИТЬ');
+    expect(spec.title).toContain('(Codex)');
+    // На узкой колонке провайдера в заголовке нет: место занимает роль (макет 4.4).
+    expect(resumeDialog(row(), 'codex resume 7fa0e1ee-cc7b', g, NARROW).title).not.toContain(
+      'Codex',
+    );
     expect(spec.info[0]).toBe('codex resume 7fa0e1ee-cc7b');
     expect(spec.info[1]).toContain('вышел');
     expect(spec.info[1]).toContain('код 0');
@@ -113,6 +131,7 @@ describe('диалог возобновления (4.4)', () => {
       }),
       'codex resume 7fa0e1ee-cc7b',
       g,
+      WIDE,
     );
     expect(spec.info[1]).toContain('сигнал 9');
   });
@@ -122,6 +141,7 @@ describe('диалог возобновления (4.4)', () => {
       row({ status: 'done', summary: 'План готов: 5 шагов', summarySource: 'agent' }),
       'codex resume 7fa0e1ee-cc7b',
       g,
+      WIDE,
     );
     expect(spec.title).toContain(g.done);
     expect(spec.info[2]).toContain('План готов');

@@ -11,6 +11,7 @@ import {
   addSession,
   commandInPath,
   finishSession,
+  linkProviderSession,
   loadProviders,
   mcpConfigValue,
   readMap,
@@ -49,8 +50,10 @@ export interface LaunchPlan {
 export interface ProviderOption {
   id: string;
   label: string;
-  /** Нет в PATH — показывается, но не выбирается. */
+  /** Недоступный показывается в кольце вариантов, но не выбирается. */
   available: boolean;
+  /** Почему не выбирается: пометка едет рядом с вариантом (дизайн 4.2). */
+  note?: string;
 }
 
 async function entryOf(provider: string): Promise<ProviderEntry> {
@@ -68,11 +71,21 @@ async function entryOf(provider: string): Promise<ProviderEntry> {
 export async function providerOptions(): Promise<ProviderOption[]> {
   const registry = await loadProviders();
   return Promise.all(
-    Object.values(registry).map(async (entry) => ({
-      id: entry.id,
-      label: entry.label,
-      available: await commandInPath(entry.runner.command),
-    })),
+    Object.values(registry).map(async (entry) => {
+      // Без шаблона аргументов бриф и MCP-конфиг до процесса не доедут: агент не
+      // узнает ни задачи, ни про `get_map` с `report` (спецификация, раздел 5).
+      const note = (await commandInPath(entry.runner.command))
+        ? (entry.runner.args ?? []).length === 0
+          ? 'без брифа'
+          : null
+        : 'нет в PATH';
+      return {
+        id: entry.id,
+        label: entry.label,
+        available: note === null,
+        ...(note === null ? {} : { note }),
+      };
+    }),
   );
 }
 
@@ -194,6 +207,40 @@ export async function startSession(
     const session = transitionSession(map, sessionId, 'active');
     if (providerSessionId !== null) session.providerSessionId = providerSessionId;
   });
+}
+
+/**
+ * Привязка сессии к логу провайдера, который не принимает id снаружи: сессия
+ * ищется по cwd и времени запуска (спецификация, раздел 5). Найденный id
+ * пишется в карту — без него нет ни метрик, ни `idle`, ни возобновления.
+ *
+ * `null` — привязывать нечего или лог ещё не появился: следующее событие
+ * watcher попробует снова.
+ */
+export async function linkSession(
+  projectPath: string,
+  workId: string,
+  session: WorkSession,
+  roots: MetricsRoots = {},
+): Promise<string | null> {
+  if (session.providerSessionId !== null || session.startedAt === null) return null;
+
+  const entry = await entryOf(session.provider);
+  const found = await linkProviderSession(
+    entry,
+    { cwd: projectPath, startedAt: session.startedAt },
+    roots,
+  );
+  if (found === null) return null;
+
+  await updateMap(projectPath, workId, (map) => {
+    const target = map.sessions.find((candidate) => candidate.id === session.id);
+    // Пока шёл поиск, сессию могли привязать: чужой id не затираем.
+    if (target !== undefined && target.providerSessionId === null) {
+      target.providerSessionId = found;
+    }
+  });
+  return found;
 }
 
 /**
