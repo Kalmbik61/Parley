@@ -17,5 +17,8 @@
   "bin": {
     "harnas-core": "./dist/cli.js",
     "harnas-mcp": "./dist/mcp/server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
   }
 }

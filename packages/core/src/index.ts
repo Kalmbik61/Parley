@@ -94,6 +94,9 @@ export {
   writeMcpConfig,
 } from './work/mcp-config.js';
 export type { McpConfigFile, McpConfigParams, McpStdioServer } from './work/mcp-config.js';
+export { contextFromEnv } from './mcp/context.js';
+export type { McpContext } from './mcp/context.js';
+export { DEFAULT_TIMEOUT_SEC, MAX_TIMEOUT_SEC, createHarnasServer } from './mcp/tools.js';
 export type {
   Artifact,
   HistoryEntry,
