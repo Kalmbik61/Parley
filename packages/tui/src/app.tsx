@@ -5,10 +5,10 @@ import { Pane } from './components/pane.js';
 import { SessionList } from './components/session-list.js';
 import { SubsessionList } from './components/subsession-list.js';
 import { TerminalView } from './components/terminal-view.js';
-import { useAgentPty } from './pty/use-agent-pty.js';
+import { useAgentPty, type AgentPtyState } from './pty/use-agent-pty.js';
+import { useHostTerminalModes } from './pty/use-host-modes.js';
 import { ctrlByte, DEFAULT_ESCAPE_BYTE, usePtyInput } from './pty/use-pty-input.js';
 import { usePtyResize } from './pty/use-pty-resize.js';
-import { useHostTerminalModes } from './pty/use-host-modes.js';
 import { usePtyTerminal } from './pty/use-pty-terminal.js';
 import { useNavigation } from './use-navigation.js';
 import { useSubsessions } from './use-subsessions.js';
@@ -36,8 +36,11 @@ export function App({ sessions, root = defaultRoot(), onRescan }: AppProps): Rea
   const terminalRows = Math.max(2, rows - 3);
 
   const agent = useAgentPty();
-  const snapshot = usePtyTerminal(agent.session, { cols: terminalCols, rows: terminalRows });
-  usePtyResize(agent.session, terminalCols, terminalRows);
+  const snapshot = usePtyTerminal(agent.active?.session, {
+    cols: terminalCols,
+    rows: terminalRows,
+  });
+  usePtyResize(agent.active?.session, terminalCols, terminalRows);
 
   // Число подсессий известно только после загрузки дерева, а навигация нужна раньше —
   // отдаём его через ref, который читается в момент нажатия клавиши.
@@ -51,20 +54,25 @@ export function App({ sessions, root = defaultRoot(), onRescan }: AppProps): Rea
     [sessions, agent, terminalCols, terminalRows],
   );
 
+  const restartAgent = useCallback(() => {
+    agent.restart({ cols: terminalCols, rows: terminalRows });
+  }, [agent, terminalCols, terminalRows]);
+
   // Ввод перехватывает только живой процесс: после его завершения панель снова
   // обычная, иначе из неё было бы не выйти.
-  const agentAlive = agent.session !== undefined && agent.exit === undefined;
+  const agentAlive = agent.active !== undefined && agent.active.exit === undefined;
 
   const { focus, selectedSession, selectedSubsession, setFocus } = useNavigation({
     sessionCount: sessions.length,
     getSubsessionCount: () => subsessionCount.current,
     onOpen: openSelected,
+    onRestart: restartAgent,
     terminalCaptures: agentAlive,
     ...(onRescan === undefined ? {} : { onRescan }),
   });
 
   const backToLists = useCallback(() => setFocus('sessions'), [setFocus]);
-  usePtyInput(agent.session, focus === 'terminal' && agentAlive, {
+  usePtyInput(agent.active?.session, focus === 'terminal' && agentAlive, {
     escapeByte: escapeByteFromEnv(),
     onEscape: backToLists,
   });
@@ -74,6 +82,7 @@ export function App({ sessions, root = defaultRoot(), onRescan }: AppProps): Rea
     snapshot?.mouseTracking ?? 'none',
     snapshot?.bracketedPaste ?? false,
   );
+
   const { subsessions, loading } = useSubsessions(sessions[selectedSession], root);
   subsessionCount.current = subsessions.length;
 
@@ -106,14 +115,31 @@ export function App({ sessions, root = defaultRoot(), onRescan }: AppProps): Rea
       <Pane title={terminalTitle(agent)} active={focus === 'terminal'} flexGrow={1}>
         {agent.error !== undefined ? (
           <Text color="red">{agent.error}</Text>
-        ) : snapshot === undefined ? (
-          <>
-            <Text dimColor>Enter на сессии — открыть её здесь через claude --resume.</Text>
-            <Text dimColor> </Text>
-            <Text dimColor>↑↓ / j k — список · Tab — панель · r — ре-скан · q — выход</Text>
-          </>
         ) : (
-          <TerminalView snapshot={snapshot} height={terminalRows} />
+          <>
+            {agent.liveCount > 1 && (
+              <Text color="yellow">
+                Параллельно работает агентов: {agent.liveCount}. Это расходует лимиты подписки.
+              </Text>
+            )}
+            {agent.active?.exit !== undefined && (
+              <Text color="yellow">
+                {exitLine(agent.active.exit)} · R — перезапустить · Tab — к спискам
+              </Text>
+            )}
+            {snapshot === undefined ? (
+              <>
+                <Text dimColor>Enter на сессии — открыть её здесь через claude --resume.</Text>
+                <Text dimColor> </Text>
+                <Text dimColor>↑↓ / j k — список · Tab — панель · r — ре-скан · q — выход</Text>
+                <Text dimColor>
+                  Внутри терминала весь ввод идёт агенту; Ctrl+Q — назад к спискам.
+                </Text>
+              </>
+            ) : (
+              <TerminalView snapshot={snapshot} height={terminalRows} />
+            )}
+          </>
         )}
       </Pane>
     </Box>
@@ -126,9 +152,18 @@ function escapeByteFromEnv(): number {
   return (letter === undefined ? undefined : ctrlByte(letter)) ?? DEFAULT_ESCAPE_BYTE;
 }
 
-function terminalTitle(agent: ReturnType<typeof useAgentPty>): string {
-  if (agent.openedFor === undefined) return 'TERMINAL';
-  const name = agent.openedFor.title ?? agent.openedFor.id;
-  if (agent.exit !== undefined) return `TERMINAL — ${name} (код ${agent.exit.exitCode})`;
-  return `TERMINAL — ${name}`;
+/** Сигнал важнее кода: снятый по сигналу процесс — это не «штатный выход». */
+function exitLine(exit: { exitCode: number; signal: number | undefined }): string {
+  if (exit.signal !== undefined && exit.signal !== 0) {
+    return `Агент завершился по сигналу ${exit.signal}`;
+  }
+  return exit.exitCode === 0
+    ? 'Агент завершился штатно'
+    : `Агент завершился с кодом ${exit.exitCode}`;
+}
+
+function terminalTitle(agent: AgentPtyState): string {
+  if (agent.active === undefined) return 'TERMINAL';
+  const name = agent.active.target.title ?? agent.active.target.id;
+  return agent.active.exit === undefined ? `TERMINAL — ${name}` : `TERMINAL — ${name} (завершён)`;
 }

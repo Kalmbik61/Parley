@@ -24,6 +24,8 @@ export interface NavigationOptions {
   onRescan?: () => void;
   /** Enter на списке сессий — открыть выбранную в правой панели. */
   onOpen?: (index: number) => void;
+  /** `R` — перезапустить завершившегося агента. */
+  onRestart?: () => void;
   /**
    * В правой панели работает живой процесс, и весь ввод принадлежит ему.
    * Пока там плейсхолдер или процесс уже завершился, панель обычная: Tab и q
@@ -45,6 +47,7 @@ export function useNavigation({
   getSubsessionCount,
   onRescan,
   onOpen,
+  onRestart,
   terminalCaptures = false,
 }: NavigationOptions): NavigationState {
   const { exit } = useApp();
@@ -72,8 +75,14 @@ export function useNavigation({
       return;
     }
 
+    // Регистр различает действия: r — ре-скан списка, R — перезапуск агента.
     if (input === 'r') {
       onRescan?.();
+      return;
+    }
+
+    if (input === 'R') {
+      onRestart?.();
       return;
     }
 

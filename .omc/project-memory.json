@@ -92,15 +92,21 @@
   },
   "hotPaths": [
     {
-      "path": "scripts/fix-node-pty-perms.mjs",
-      "accessCount": 2,
-      "lastAccessed": 1788334313782,
+      "path": "packages/tui/src/pty/use-agent-pty.ts",
+      "accessCount": 3,
+      "lastAccessed": 1788335731124,
       "type": "file"
     },
     {
-      "path": "packages/tui/src/pty/use-agent-pty.ts",
+      "path": "packages/tui/src/app.tsx",
+      "accessCount": 3,
+      "lastAccessed": 1788335799406,
+      "type": "file"
+    },
+    {
+      "path": "scripts/fix-node-pty-perms.mjs",
       "accessCount": 2,
-      "lastAccessed": 1788334944982,
+      "lastAccessed": 1788334313782,
       "type": "file"
     },
     {
@@ -158,12 +164,6 @@
       "type": "file"
     },
     {
-      "path": "packages/tui/src/app.tsx",
-      "accessCount": 1,
-      "lastAccessed": 1788334853938,
-      "type": "file"
-    },
-    {
       "path": "packages/tui/src/pty/use-agent-pty.test.tsx",
       "accessCount": 1,
       "lastAccessed": 1788334881398,
@@ -197,6 +197,12 @@
       "path": "packages/tui/src/pty/use-host-modes.test.tsx",
       "accessCount": 1,
       "lastAccessed": 1788335630367,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/pty/lifecycle.test.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1788335850130,
       "type": "file"
     }
   ],

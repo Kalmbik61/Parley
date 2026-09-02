@@ -8,46 +8,50 @@ export interface PtySize {
   rows: number;
 }
 
-export interface AgentPtyState {
-  /** Живой или уже завершившийся процесс; undefined — ничего не запускали. */
-  session: PtySession | undefined;
-  /** Что показывать вместо терминала: нет бинаря, не удалось запустить. */
-  error: string | undefined;
-  /** Как завершился процесс — для строки состояния в панели. */
+/** Один запущенный агент. На сессию их не больше одного (specs/pty.md). */
+export interface AgentRun {
+  target: SessionIndex;
+  session: PtySession;
+  /** Заполняется, когда процесс завершился — сам или аварийно. */
   exit: PtyExit | undefined;
-  /** Сессия, для которой запущен процесс. */
-  openedFor: SessionIndex | undefined;
+}
+
+export interface AgentPtyState {
+  /** Что показывает правая панель. */
+  active: AgentRun | undefined;
+  /** Сколько агентов работает прямо сейчас. */
+  liveCount: number;
+  /** Нет бинаря или не удалось запустить. */
+  error: string | undefined;
   open(target: SessionIndex, size: PtySize): void;
+  /** Перезапустить агента активной панели после его завершения. */
+  restart(size: PtySize): void;
   close(): void;
 }
 
 /**
- * Запускает `claude --resume <sessionId>` в PTY для выбранной сессии.
+ * Управляет агентами в правой панели.
  *
- * Бинарь ищется один раз при старте: если его нет, панель сразу объясняет проблему,
- * а не падает в момент нажатия Enter. Спавнится только немодифицированный `claude`
- * из PATH под логином пользователя — юридическая граница проекта (specs/pty.md).
+ * Спавнится только немодифицированный `claude` из PATH под логином пользователя —
+ * юридическая граница проекта. Бинарь ищется один раз при старте: если его нет,
+ * панель объясняет причину, а не падает в момент нажатия Enter (specs/pty.md).
  */
 export function useAgentPty(): AgentPtyState {
   const [binary, setBinary] = useState<string | undefined>();
-  const [session, setSession] = useState<PtySession | undefined>();
-  const [openedFor, setOpenedFor] = useState<SessionIndex | undefined>();
+  const [runs, setRuns] = useState<AgentRun[]>([]);
+  const [activeId, setActiveId] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
-  const [exit, setExit] = useState<PtyExit | undefined>();
 
-  // Текущий процесс держим в ref: он нужен в cleanup и при замене, а не при рендере.
-  const current = useRef<PtySession | undefined>(undefined);
+  // Живые процессы нужны в cleanup, где состояние React уже недоступно.
+  const live = useRef(new Map<string, PtySession>());
   // Enter могли нажать раньше, чем нашёлся бинарь — нажатие не теряем.
   const pending = useRef<{ target: SessionIndex; size: PtySize } | undefined>(undefined);
 
   const start = useCallback((file: string, target: SessionIndex, size: PtySize) => {
-    // Один активный процесс: прежний гасим перед запуском нового.
-    current.current?.kill();
-    setExit(undefined);
     setError(undefined);
 
     try {
-      const started = spawnPtySession({
+      const session = spawnPtySession({
         file,
         args: ['--resume', target.id],
         cols: size.cols,
@@ -56,10 +60,22 @@ export function useAgentPty(): AgentPtyState {
         ...(target.cwd === null ? {} : { cwd: target.cwd }),
       });
 
-      started.onExit((finished) => setExit(finished));
-      current.current = started;
-      setSession(started);
-      setOpenedFor(target);
+      session.onExit((exit) => {
+        live.current.delete(target.id);
+        setRuns((prev) =>
+          prev.map((run) => (run.target.id === target.id ? { ...run, exit } : run)),
+        );
+      });
+
+      // Прежний процесс той же сессии гасим: один активный PTY на сессию.
+      live.current.get(target.id)?.kill();
+      live.current.set(target.id, session);
+
+      setRuns((prev) => [
+        ...prev.filter((run) => run.target.id !== target.id),
+        { target, session, exit: undefined },
+      ]);
+      setActiveId(target.id);
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : String(reason));
     }
@@ -88,22 +104,13 @@ export function useAgentPty(): AgentPtyState {
     };
   }, [start]);
 
-  // Выходим из TUI — гасим процесс аккуратно, как при закрытии терминала.
-  useEffect(
-    () => () => {
-      current.current?.kill();
-      current.current = undefined;
-    },
-    [],
-  );
-
-  const close = useCallback(() => {
-    current.current?.kill();
-    current.current = undefined;
-    pending.current = undefined;
-    setSession(undefined);
-    setOpenedFor(undefined);
-    setExit(undefined);
+  // Выходим из TUI — гасим всех аккуратно, как при закрытии терминала.
+  useEffect(() => {
+    const running = live.current;
+    return () => {
+      for (const session of running.values()) session.kill();
+      running.clear();
+    };
   }, []);
 
   const open = useCallback<AgentPtyState['open']>(
@@ -113,10 +120,43 @@ export function useAgentPty(): AgentPtyState {
         pending.current = { target, size };
         return;
       }
+
+      // У сессии уже есть живой агент — показываем его, а не плодим второго.
+      if (live.current.has(target.id)) {
+        setActiveId(target.id);
+        return;
+      }
+
       start(binary, target, size);
     },
     [binary, start],
   );
 
-  return { session, error, exit, openedFor, open, close };
+  const restart = useCallback<AgentPtyState['restart']>(
+    (size) => {
+      const target = runs.find((run) => run.target.id === activeId)?.target;
+      if (binary === undefined || target === undefined) return;
+      start(binary, target, size);
+    },
+    [binary, runs, activeId, start],
+  );
+
+  const close = useCallback(() => {
+    if (activeId === undefined) return;
+    live.current.get(activeId)?.kill();
+    live.current.delete(activeId);
+    setRuns((prev) => prev.filter((run) => run.target.id !== activeId));
+    setActiveId(undefined);
+  }, [activeId]);
+
+  const active = runs.find((run) => run.target.id === activeId);
+
+  return {
+    ...(active === undefined ? { active: undefined } : { active }),
+    liveCount: runs.filter((run) => run.exit === undefined).length,
+    error,
+    open,
+    restart,
+    close,
+  };
 }
