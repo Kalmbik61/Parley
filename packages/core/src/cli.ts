@@ -2,13 +2,17 @@
 // Контракт ядра с любым фронтендом: команды печатают в stdout ТОЛЬКО JSON.
 // Диагностика идёт в stderr, код возврата ненулевой при ошибке.
 
+import { defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
 import { defaultRoot, discoverSessions } from './discover.js';
+import { buildSchemaReport } from './schema-report.js';
 import { buildIndex, buildSessionTree } from './session-tree.js';
 
 const USAGE = `harnas-core — индекс сессий Claude Code в JSON
 
   harnas-core index [--root <путь>]         список сессий, свежие первыми
   harnas-core session <id> [--root <путь>]  сессия с подсессиями
+  harnas-core schema [--provider claude|codex] [--root <путь>]
+                                            отчёт по реальной схеме .jsonl
 
   --json   формат по умолчанию и единственный, принимается для совместимости
   --root   корень истории (по умолчанию ~/.claude/projects, только чтение)`;
@@ -33,6 +37,29 @@ async function main(argv: string[]): Promise<number> {
 
   if (command === 'index') {
     print(await buildIndex(root));
+    return 0;
+  }
+
+  if (command === 'schema') {
+    const provider = optionValue(argv, '--provider') ?? 'claude';
+    if (provider !== 'claude' && provider !== 'codex') {
+      process.stderr.write(`Неизвестный провайдер: ${provider}\n`);
+      return 1;
+    }
+
+    // Файлы берём у того же обходчика, что и индекс: отчёт должен смотреть
+    // ровно на то, что читает парсер.
+    const files =
+      provider === 'codex'
+        ? (await discoverCodexSessions(optionValue(argv, '--root') ?? defaultCodexRoot())).map(
+            (session) => session.file,
+          )
+        : (await discoverSessions(root)).flatMap((session) => [
+            session.file,
+            ...session.subagents.map((agent) => agent.file),
+          ]);
+
+    print(await buildSchemaReport(files));
     return 0;
   }
 

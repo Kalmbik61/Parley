@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
+import type { SchemaReportResult } from './schema-report.js';
 
 const run = promisify(execFile);
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -54,5 +55,27 @@ describe('harnas-core CLI', () => {
     const { stdout, code } = await cli('чепуха');
     expect(code).toBe(1);
     expect(stdout).toBe('');
+  }, 60_000);
+});
+
+describe('harnas-core schema', () => {
+  it('отчёт по схеме печатается в stdout как JSON', async () => {
+    const { stdout, code } = await cli('schema', '--root', FIXTURES);
+    expect(code).toBe(0);
+
+    const result = JSON.parse(stdout) as SchemaReportResult;
+    expect(result.files).toBeGreaterThan(3);
+    expect(result.records).toBeGreaterThan(100);
+    expect(result.report['user']?.count).toBeGreaterThan(0);
+    // Мапы с путями схлопнуты: в именах полей путей быть не должно.
+    const names = Object.values(result.report).flatMap((type) => Object.keys(type.fields));
+    expect(names.some((name) => name.includes('/'))).toBe(false);
+  }, 60_000);
+
+  it('неизвестный провайдер отвергается', async () => {
+    const { stdout, stderr, code } = await cli('schema', '--provider', 'выдумка');
+    expect(code).toBe(1);
+    expect(stdout).toBe('');
+    expect(stderr).toContain('Неизвестный провайдер');
   }, 60_000);
 });

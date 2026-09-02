@@ -288,6 +288,18 @@
       "accessCount": 1,
       "lastAccessed": 1788342544660,
       "type": "file"
+    },
+    {
+      "path": "packages/core/src/schema-report.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788347562303,
+      "type": "file"
+    },
+    {
+      "path": "packages/core/src/schema-report.test.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788347627825,
+      "type": "file"
     }
   ],
   "userDirectives": []

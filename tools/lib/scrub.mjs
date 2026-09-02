@@ -1,4 +1,5 @@
 // Очистка отчётов по схеме перед коммитом в docs/schema/.
+// Сам сбор отчёта живёт в @harnas/core (schema-report.ts) — здесь только вычистка.
 // Структура (какие поля, каких типов, как часто) сохраняется полностью,
 // содержимое — нет. Используется и scrub-export.mjs, и observe-schema.mjs.
 
@@ -74,28 +75,3 @@ export function scrubReport(report) {
   return report;
 }
 
-/**
- * Считает, какие поля реально встречаются у каждого типа записи.
- * Это то, по чему сверяется парсер, когда провайдер меняет формат.
- */
-export function observe(schema, record, prefix = '', type = null) {
-  const kind = type ?? record?.type ?? 'unknown';
-  schema[kind] ??= { count: 0, fields: {} };
-  if (!prefix) schema[kind].count++;
-
-  for (const [key, value] of Object.entries(record ?? {})) {
-    const name = prefix + key;
-    const valueKind = Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value;
-    const field = (schema[kind].fields[name] ??= { seen: 0, kinds: {}, sample: null });
-
-    field.seen++;
-    field.kinds[valueKind] = (field.kinds[valueKind] ?? 0) + 1;
-    if (field.sample === null && ['string', 'number', 'boolean'].includes(valueKind)) {
-      field.sample =
-        valueKind === 'string' && value.length > 120 ? `${value.slice(0, 120)}…` : value;
-    }
-    if (valueKind === 'object' && prefix.split('.').length < 4) {
-      observe(schema, value, `${name}.`, kind);
-    }
-  }
-}

@@ -50,7 +50,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 ## Discovered
 - [x] packages/core: watcher invalidation — изменение `agent-*.jsonl` должно
       инвалидировать и родительскую сессию (подсессии живут в отдельных файлах)
-- [ ] packages/core: `observe()` схлопывает мапы с динамическими ключами
+- [x] packages/core: `observe()` схлопывает мапы с динамическими ключами
       (`snapshot.trackedFileBackups.<путь>`), иначе отчёт раздувается и тащит пути
 - [x] packages/core: исключить `<synthetic>` из подсчёта `primaryModel`
 - [x] specs/runners.md: дополнить таблицу бейджей — в реальных данных есть

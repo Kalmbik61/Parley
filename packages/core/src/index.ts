@@ -20,3 +20,5 @@ export { buildCodexIndex, indexCodexSession } from './codex/index-session.js';
 export { PROVIDERS, providersWithHistory, runnerCommand } from './providers.js';
 export type { ProviderInfo, RunnerConfig } from './providers.js';
 export { modelBadge, providerBadge, providerMark } from './model-badge.js';
+export { buildSchemaReport, observeRecord } from './schema-report.js';
+export type { FieldReport, SchemaReport, SchemaReportResult, TypeReport } from './schema-report.js';
