@@ -15,10 +15,24 @@
 
 - `schema-report.json` — какие поля какого типа встречаются у каждого типа записи, с частотой.
 - `index.json` — сырой вывод прототипа-экспортёра, по строке на **файл** (не на сессию — см. ниже).
+- `codex-schema-report.json` — то же для Codex (см. ниже).
+
+## Снимок Codex
+
+| | |
+|---|---|
+| Дата прогона | 2026-09-02 |
+| Источник | `~/.codex/sessions` (только чтение) |
+| Команда | `node tools/observe-schema.mjs --root ~/.codex/sessions --out docs/schema/codex-schema-report.json` |
+| Объём | 97 rollout-логов, 127 МБ, 77 897 записей, 5 типов |
+| Битых строк | 0 |
+
+Разбор формата — в `.ralph/specs/runners.md`. Соседний `~/.codex/auth.json`
+не читается никогда, как и `~/.claude/.credentials.json`.
 
 ## Что вычищено
 
-Прогон `node tools/scrub-export.mjs claude-export docs/schema`:
+Общая логика очистки живёт в `tools/lib/scrub.mjs` и применяется обоими инструментами:
 
 - `/Users/<имя>` и слаг `-Users-<имя>-…` → `<user>`;
 - сэмплы полей со свободным текстом (`lastPrompt`, `result`, `customTitle`, `aiTitle`,

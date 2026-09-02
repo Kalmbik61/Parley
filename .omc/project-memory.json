@@ -216,6 +216,24 @@
       "accessCount": 1,
       "lastAccessed": 1788335969415,
       "type": "file"
+    },
+    {
+      "path": "tools/lib/scrub.mjs",
+      "accessCount": 1,
+      "lastAccessed": 1788340813514,
+      "type": "file"
+    },
+    {
+      "path": "tools/observe-schema.mjs",
+      "accessCount": 1,
+      "lastAccessed": 1788340826334,
+      "type": "file"
+    },
+    {
+      "path": ".ralph/specs/runners.md",
+      "accessCount": 1,
+      "lastAccessed": 1788340909121,
+      "type": "file"
     }
   ],
   "userDirectives": []

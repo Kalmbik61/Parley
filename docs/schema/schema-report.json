@@ -181,7 +181,7 @@
         "kinds": {
           "string": 30417
         },
-        "sample": "<redacted:string len=56>"
+        "sample": "<redacted>"
       },
       "attachment.durationMs": {
         "seen": 30417,
@@ -230,7 +230,7 @@
         "kinds": {
           "string": 48751
         },
-        "sample": "/Users/<user>/Desktop/MY/my_harnas"
+        "sample": "<redacted>"
       },
       "sessionId": {
         "seen": 48751,
@@ -707,7 +707,7 @@
         "kinds": {
           "string": 17559
         },
-        "sample": "/Users/<user>/Desktop/MY/my_harnas"
+        "sample": "<redacted>"
       },
       "sessionId": {
         "seen": 17559,
@@ -1754,7 +1754,7 @@
         "kinds": {
           "string": 32
         },
-        "sample": "<redacted:string len=121>"
+        "sample": "<redacted>"
       },
       "toolUseResult.task.exitCode": {
         "seen": 32,
@@ -2062,7 +2062,7 @@
         "kinds": {
           "string": 14
         },
-        "sample": "<redacted:string len=29>"
+        "sample": "<redacted>"
       },
       "toolUseResult.resumedAgentId": {
         "seen": 11,
@@ -2391,7 +2391,7 @@
         "kinds": {
           "string": 2
         },
-        "sample": "<redacted:string len=82>"
+        "sample": "<redacted>"
       },
       "toolUseResult.answers.Утверждаем планы кадров?": {
         "seen": 1,
@@ -3021,7 +3021,7 @@
         "kinds": {
           "string": 29759
         },
-        "sample": "/Users/<user>/Desktop/MY/my_harnas"
+        "sample": "<redacted>"
       },
       "sessionId": {
         "seen": 29759,
@@ -3280,7 +3280,7 @@
         "kinds": {
           "string": 509
         },
-        "sample": "/Users/<user>/Desktop/MY/course-platform"
+        "sample": "<redacted>"
       },
       "sessionId": {
         "seen": 509,
@@ -3315,7 +3315,7 @@
         "kinds": {
           "string": 34
         },
-        "sample": "<redacted:string len=17>"
+        "sample": "<redacted>"
       },
       "error.formatted": {
         "seen": 34,
@@ -3344,7 +3344,7 @@
         "kinds": {
           "string": 11
         },
-        "sample": "<redacted:string len=121>"
+        "sample": "<redacted>"
       },
       "error.connection.isSSLError": {
         "seen": 11,

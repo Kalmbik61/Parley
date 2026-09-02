@@ -1,0 +1,760 @@
+{
+  "session_meta": {
+    "count": 97,
+    "fields": {
+      "timestamp": {
+        "seen": 97,
+        "kinds": {
+          "string": 97
+        },
+        "sample": "2025-12-16T09:41:58.915Z"
+      },
+      "type": {
+        "seen": 97,
+        "kinds": {
+          "string": 97
+        },
+        "sample": "session_meta"
+      },
+      "payload": {
+        "seen": 97,
+        "kinds": {
+          "object": 97
+        },
+        "sample": null
+      },
+      "payload.id": {
+        "seen": 97,
+        "kinds": {
+          "string": 97
+        },
+        "sample": "<uuid>"
+      },
+      "payload.timestamp": {
+        "seen": 97,
+        "kinds": {
+          "string": 97
+        },
+        "sample": "2025-12-16T09:41:58.887Z"
+      },
+      "payload.cwd": {
+        "seen": 97,
+        "kinds": {
+          "string": 97
+        },
+        "sample": "<redacted>"
+      },
+      "payload.originator": {
+        "seen": 97,
+        "kinds": {
+          "string": 97
+        },
+        "sample": "codex_cli_rs"
+      },
+      "payload.cli_version": {
+        "seen": 97,
+        "kinds": {
+          "string": 97
+        },
+        "sample": "0.73.0"
+      },
+      "payload.instructions": {
+        "seen": 95,
+        "kinds": {
+          "string": 95
+        },
+        "sample": "<redacted>"
+      },
+      "payload.source": {
+        "seen": 97,
+        "kinds": {
+          "string": 97
+        },
+        "sample": "cli"
+      },
+      "payload.model_provider": {
+        "seen": 97,
+        "kinds": {
+          "string": 97
+        },
+        "sample": "openai"
+      },
+      "payload.git": {
+        "seen": 95,
+        "kinds": {
+          "object": 95
+        },
+        "sample": null
+      },
+      "payload.git.commit_hash": {
+        "seen": 95,
+        "kinds": {
+          "string": 95
+        },
+        "sample": "f83b20e56b363bff518481e449145ec2428791f1"
+      },
+      "payload.git.branch": {
+        "seen": 95,
+        "kinds": {
+          "string": 95
+        },
+        "sample": "main"
+      },
+      "payload.git.repository_url": {
+        "seen": 95,
+        "kinds": {
+          "string": 95
+        },
+        "sample": "<redacted>"
+      },
+      "payload.base_instructions": {
+        "seen": 2,
+        "kinds": {
+          "object": 2
+        },
+        "sample": null
+      },
+      "payload.base_instructions.text": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "<redacted>"
+      }
+    }
+  },
+  "response_item": {
+    "count": 33424,
+    "fields": {
+      "timestamp": {
+        "seen": 33424,
+        "kinds": {
+          "string": 33424
+        },
+        "sample": "2025-12-16T09:41:58.916Z"
+      },
+      "type": {
+        "seen": 33424,
+        "kinds": {
+          "string": 33424
+        },
+        "sample": "response_item"
+      },
+      "payload": {
+        "seen": 33424,
+        "kinds": {
+          "object": 33424
+        },
+        "sample": null
+      },
+      "payload.type": {
+        "seen": 33424,
+        "kinds": {
+          "string": 33424
+        },
+        "sample": "message"
+      },
+      "payload.role": {
+        "seen": 1506,
+        "kinds": {
+          "string": 1506
+        },
+        "sample": "user"
+      },
+      "payload.content": {
+        "seen": 11174,
+        "kinds": {
+          "array": 1506,
+          "null": 9668
+        },
+        "sample": null
+      },
+      "payload.ghost_commit": {
+        "seen": 674,
+        "kinds": {
+          "object": 674
+        },
+        "sample": null
+      },
+      "payload.ghost_commit.id": {
+        "seen": 674,
+        "kinds": {
+          "string": 674
+        },
+        "sample": "7ce393b0593a1d15a2d4042397abac73fdf07371"
+      },
+      "payload.ghost_commit.parent": {
+        "seen": 674,
+        "kinds": {
+          "string": 674
+        },
+        "sample": "f83b20e56b363bff518481e449145ec2428791f1"
+      },
+      "payload.ghost_commit.preexisting_untracked_files": {
+        "seen": 674,
+        "kinds": {
+          "array": 674
+        },
+        "sample": null
+      },
+      "payload.ghost_commit.preexisting_untracked_dirs": {
+        "seen": 674,
+        "kinds": {
+          "array": 674
+        },
+        "sample": null
+      },
+      "payload.summary": {
+        "seen": 9668,
+        "kinds": {
+          "array": 9668
+        },
+        "sample": null
+      },
+      "payload.encrypted_content": {
+        "seen": 9668,
+        "kinds": {
+          "string": 9668
+        },
+        "sample": "<redacted>"
+      },
+      "payload.name": {
+        "seen": 10788,
+        "kinds": {
+          "string": 10788
+        },
+        "sample": "list_mcp_resources"
+      },
+      "payload.arguments": {
+        "seen": 9477,
+        "kinds": {
+          "string": 9477
+        },
+        "sample": "<redacted>"
+      },
+      "payload.call_id": {
+        "seen": 21576,
+        "kinds": {
+          "string": 21576
+        },
+        "sample": "call_sAMaII44VgpzxRyhALIrRlIN"
+      },
+      "payload.output": {
+        "seen": 10788,
+        "kinds": {
+          "string": 10770,
+          "array": 18
+        },
+        "sample": "<redacted>"
+      },
+      "payload.status": {
+        "seen": 1311,
+        "kinds": {
+          "string": 1311
+        },
+        "sample": "completed"
+      },
+      "payload.input": {
+        "seen": 1311,
+        "kinds": {
+          "string": 1311
+        },
+        "sample": "<redacted>"
+      }
+    }
+  },
+  "event_msg": {
+    "count": 33450,
+    "fields": {
+      "timestamp": {
+        "seen": 33450,
+        "kinds": {
+          "string": 33450
+        },
+        "sample": "2025-12-16T09:45:43.617Z"
+      },
+      "type": {
+        "seen": 33450,
+        "kinds": {
+          "string": 33450
+        },
+        "sample": "event_msg"
+      },
+      "payload": {
+        "seen": 33450,
+        "kinds": {
+          "object": 33450
+        },
+        "sample": null
+      },
+      "payload.type": {
+        "seen": 33450,
+        "kinds": {
+          "string": 33450
+        },
+        "sample": "user_message"
+      },
+      "payload.message": {
+        "seen": 1293,
+        "kinds": {
+          "string": 1293
+        },
+        "sample": "<redacted>"
+      },
+      "payload.images": {
+        "seen": 685,
+        "kinds": {
+          "array": 685
+        },
+        "sample": null
+      },
+      "payload.info": {
+        "seen": 21569,
+        "kinds": {
+          "null": 88,
+          "object": 21481
+        },
+        "sample": null
+      },
+      "payload.rate_limits": {
+        "seen": 21569,
+        "kinds": {
+          "object": 21568,
+          "null": 1
+        },
+        "sample": null
+      },
+      "payload.rate_limits.primary": {
+        "seen": 21568,
+        "kinds": {
+          "object": 21568
+        },
+        "sample": null
+      },
+      "payload.rate_limits.primary.used_percent": {
+        "seen": 21568,
+        "kinds": {
+          "number": 21568
+        },
+        "sample": 0
+      },
+      "payload.rate_limits.primary.window_minutes": {
+        "seen": 21568,
+        "kinds": {
+          "number": 21568
+        },
+        "sample": 300
+      },
+      "payload.rate_limits.primary.resets_at": {
+        "seen": 21568,
+        "kinds": {
+          "number": 21568
+        },
+        "sample": 1765909783
+      },
+      "payload.rate_limits.secondary": {
+        "seen": 21568,
+        "kinds": {
+          "object": 21566,
+          "null": 2
+        },
+        "sample": null
+      },
+      "payload.rate_limits.secondary.used_percent": {
+        "seen": 21566,
+        "kinds": {
+          "number": 21566
+        },
+        "sample": 0
+      },
+      "payload.rate_limits.secondary.window_minutes": {
+        "seen": 21566,
+        "kinds": {
+          "number": 21566
+        },
+        "sample": 10080
+      },
+      "payload.rate_limits.secondary.resets_at": {
+        "seen": 21566,
+        "kinds": {
+          "number": 21566
+        },
+        "sample": 1766496583
+      },
+      "payload.rate_limits.credits": {
+        "seen": 21568,
+        "kinds": {
+          "object": 21568
+        },
+        "sample": null
+      },
+      "payload.rate_limits.credits.has_credits": {
+        "seen": 21568,
+        "kinds": {
+          "boolean": 21568
+        },
+        "sample": false
+      },
+      "payload.rate_limits.credits.unlimited": {
+        "seen": 21568,
+        "kinds": {
+          "boolean": 21568
+        },
+        "sample": false
+      },
+      "payload.rate_limits.credits.balance": {
+        "seen": 21568,
+        "kinds": {
+          "null": 21568
+        },
+        "sample": null
+      },
+      "payload.rate_limits.plan_type": {
+        "seen": 21568,
+        "kinds": {
+          "null": 21568
+        },
+        "sample": null
+      },
+      "payload.text": {
+        "seen": 10482,
+        "kinds": {
+          "string": 10482
+        },
+        "sample": "<redacted>"
+      },
+      "payload.info.total_token_usage": {
+        "seen": 21481,
+        "kinds": {
+          "object": 21481
+        },
+        "sample": null
+      },
+      "payload.info.total_token_usage.input_tokens": {
+        "seen": 21481,
+        "kinds": {
+          "number": 21481
+        },
+        "sample": 3769
+      },
+      "payload.info.total_token_usage.cached_input_tokens": {
+        "seen": 21481,
+        "kinds": {
+          "number": 21481
+        },
+        "sample": 3328
+      },
+      "payload.info.total_token_usage.output_tokens": {
+        "seen": 21481,
+        "kinds": {
+          "number": 21481
+        },
+        "sample": 82
+      },
+      "payload.info.total_token_usage.reasoning_output_tokens": {
+        "seen": 21481,
+        "kinds": {
+          "number": 21481
+        },
+        "sample": 64
+      },
+      "payload.info.total_token_usage.total_tokens": {
+        "seen": 21481,
+        "kinds": {
+          "number": 21481
+        },
+        "sample": 3851
+      },
+      "payload.info.last_token_usage": {
+        "seen": 21481,
+        "kinds": {
+          "object": 21481
+        },
+        "sample": null
+      },
+      "payload.info.last_token_usage.input_tokens": {
+        "seen": 21481,
+        "kinds": {
+          "number": 21481
+        },
+        "sample": 3769
+      },
+      "payload.info.last_token_usage.cached_input_tokens": {
+        "seen": 21481,
+        "kinds": {
+          "number": 21481
+        },
+        "sample": 3328
+      },
+      "payload.info.last_token_usage.output_tokens": {
+        "seen": 21481,
+        "kinds": {
+          "number": 21481
+        },
+        "sample": 82
+      },
+      "payload.info.last_token_usage.reasoning_output_tokens": {
+        "seen": 21481,
+        "kinds": {
+          "number": 21481
+        },
+        "sample": 64
+      },
+      "payload.info.last_token_usage.total_tokens": {
+        "seen": 21481,
+        "kinds": {
+          "number": 21481
+        },
+        "sample": 3851
+      },
+      "payload.info.model_context_window": {
+        "seen": 21481,
+        "kinds": {
+          "number": 21481
+        },
+        "sample": 258400
+      },
+      "payload.reason": {
+        "seen": 66,
+        "kinds": {
+          "string": 66
+        },
+        "sample": "interrupted"
+      },
+      "payload.local_images": {
+        "seen": 2,
+        "kinds": {
+          "array": 2
+        },
+        "sample": null
+      },
+      "payload.text_elements": {
+        "seen": 2,
+        "kinds": {
+          "array": 2
+        },
+        "sample": null
+      }
+    }
+  },
+  "turn_context": {
+    "count": 10886,
+    "fields": {
+      "timestamp": {
+        "seen": 10886,
+        "kinds": {
+          "string": 10886
+        },
+        "sample": "2025-12-16T09:45:43.617Z"
+      },
+      "type": {
+        "seen": 10886,
+        "kinds": {
+          "string": 10886
+        },
+        "sample": "turn_context"
+      },
+      "payload": {
+        "seen": 10886,
+        "kinds": {
+          "object": 10886
+        },
+        "sample": null
+      },
+      "payload.cwd": {
+        "seen": 10886,
+        "kinds": {
+          "string": 10886
+        },
+        "sample": "<redacted>"
+      },
+      "payload.approval_policy": {
+        "seen": 10886,
+        "kinds": {
+          "string": 10886
+        },
+        "sample": "on-request"
+      },
+      "payload.sandbox_policy": {
+        "seen": 10886,
+        "kinds": {
+          "object": 10886
+        },
+        "sample": null
+      },
+      "payload.sandbox_policy.type": {
+        "seen": 10886,
+        "kinds": {
+          "string": 10886
+        },
+        "sample": "workspace-write"
+      },
+      "payload.sandbox_policy.network_access": {
+        "seen": 10880,
+        "kinds": {
+          "boolean": 10880
+        },
+        "sample": false
+      },
+      "payload.sandbox_policy.exclude_tmpdir_env_var": {
+        "seen": 10880,
+        "kinds": {
+          "boolean": 10880
+        },
+        "sample": false
+      },
+      "payload.sandbox_policy.exclude_slash_tmp": {
+        "seen": 10880,
+        "kinds": {
+          "boolean": 10880
+        },
+        "sample": false
+      },
+      "payload.model": {
+        "seen": 10886,
+        "kinds": {
+          "string": 10886
+        },
+        "sample": "gpt-5.1-codex-max"
+      },
+      "payload.summary": {
+        "seen": 10886,
+        "kinds": {
+          "string": 10886
+        },
+        "sample": "<redacted>"
+      },
+      "payload.effort": {
+        "seen": 10872,
+        "kinds": {
+          "string": 10872
+        },
+        "sample": "xhigh"
+      },
+      "payload.sandbox_policy.writable_roots": {
+        "seen": 116,
+        "kinds": {
+          "array": 116
+        },
+        "sample": null
+      },
+      "payload.user_instructions": {
+        "seen": 88,
+        "kinds": {
+          "string": 88
+        },
+        "sample": "<redacted>"
+      },
+      "payload.truncation_policy": {
+        "seen": 88,
+        "kinds": {
+          "object": 88
+        },
+        "sample": null
+      },
+      "payload.truncation_policy.mode": {
+        "seen": 88,
+        "kinds": {
+          "string": 88
+        },
+        "sample": "tokens"
+      },
+      "payload.truncation_policy.limit": {
+        "seen": 88,
+        "kinds": {
+          "number": 88
+        },
+        "sample": 10000
+      },
+      "payload.personality": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "pragmatic"
+      },
+      "payload.collaboration_mode": {
+        "seen": 2,
+        "kinds": {
+          "object": 2
+        },
+        "sample": null
+      },
+      "payload.collaboration_mode.mode": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "default"
+      },
+      "payload.collaboration_mode.settings": {
+        "seen": 2,
+        "kinds": {
+          "object": 2
+        },
+        "sample": null
+      },
+      "payload.collaboration_mode.settings.model": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "gpt-5.1-codex-mini"
+      },
+      "payload.collaboration_mode.settings.reasoning_effort": {
+        "seen": 2,
+        "kinds": {
+          "string": 2
+        },
+        "sample": "low"
+      },
+      "payload.collaboration_mode.settings.developer_instructions": {
+        "seen": 2,
+        "kinds": {
+          "null": 2
+        },
+        "sample": null
+      }
+    }
+  },
+  "compacted": {
+    "count": 40,
+    "fields": {
+      "timestamp": {
+        "seen": 40,
+        "kinds": {
+          "string": 40
+        },
+        "sample": "2025-12-17T15:15:41.082Z"
+      },
+      "type": {
+        "seen": 40,
+        "kinds": {
+          "string": 40
+        },
+        "sample": "compacted"
+      },
+      "payload": {
+        "seen": 40,
+        "kinds": {
+          "object": 40
+        },
+        "sample": null
+      },
+      "payload.message": {
+        "seen": 40,
+        "kinds": {
+          "string": 40
+        },
+        "sample": "<redacted>"
+      },
+      "payload.replacement_history": {
+        "seen": 40,
+        "kinds": {
+          "array": 40
+        },
+        "sample": null
+      }
+    }
+  }
+}
