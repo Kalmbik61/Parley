@@ -28,6 +28,8 @@ export interface NavigationOptions {
   onRestart?: () => void;
   /** `p` — переключить фильтр по провайдеру. */
   onCycleProvider?: () => void;
+  /** `n` — запустить нового агента без истории. */
+  onNewSession?: () => void;
   /**
    * В правой панели работает живой процесс, и весь ввод принадлежит ему.
    * Пока там плейсхолдер или процесс уже завершился, панель обычная: Tab и q
@@ -51,6 +53,7 @@ export function useNavigation({
   onOpen,
   onRestart,
   onCycleProvider,
+  onNewSession,
   terminalCaptures = false,
 }: NavigationOptions): NavigationState {
   const { exit } = useApp();
@@ -91,6 +94,12 @@ export function useNavigation({
 
     if (input === 'p') {
       onCycleProvider?.();
+      return;
+    }
+
+    if (input === 'n') {
+      onNewSession?.();
+      setFocus('terminal');
       return;
     }
 

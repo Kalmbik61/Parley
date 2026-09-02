@@ -1,4 +1,4 @@
-import { runnerCommand, type SessionIndex } from '@harnas/core';
+import { PROVIDERS, runnerCommand, type Provider, type SessionIndex } from '@harnas/core';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { findRunnerBinary } from './find-binary.js';
 import { spawnPtySession, type PtyExit, type PtySession } from './pty-session.js';
@@ -8,9 +8,32 @@ export interface PtySize {
   rows: number;
 }
 
-/** Один запущенный агент. На сессию их не больше одного (specs/pty.md). */
+/**
+ * Что открыто в панели: существующая сессия или новый запуск агента.
+ *
+ * Новый запуск нужен провайдерам без истории (GLM) и просто чтобы начать работу
+ * с чистого листа — у такой цели нет ни id сессии, ни её каталога.
+ */
+export type AgentTarget =
+  { kind: 'session'; session: SessionIndex } | { kind: 'new'; provider: Provider };
+
+const targetProvider = (target: AgentTarget): Provider =>
+  target.kind === 'session' ? target.session.provider : target.provider;
+
+/** Ключ, по которому агент считается «тем же»: одна сессия — один процесс. */
+const targetKey = (target: AgentTarget): string =>
+  target.kind === 'session' ? `session:${target.session.id}` : `new:${target.provider}`;
+
+const targetTitle = (target: AgentTarget): string =>
+  target.kind === 'session'
+    ? (target.session.title ?? target.session.id)
+    : `новая сессия ${PROVIDERS[target.provider].label}`;
+
+/** Один запущенный агент. На цель их не больше одного (specs/pty.md). */
 export interface AgentRun {
-  target: SessionIndex;
+  target: AgentTarget;
+  /** Подпись для заголовка панели. */
+  title: string;
   session: PtySession;
   /** Заполняется, когда процесс завершился — сам или аварийно. */
   exit: PtyExit | undefined;
@@ -23,7 +46,7 @@ export interface AgentPtyState {
   liveCount: number;
   /** Нет бинаря или не удалось запустить. */
   error: string | undefined;
-  open(target: SessionIndex, size: PtySize): void;
+  open(target: AgentTarget, size: PtySize): void;
   /** Перезапустить агента активной панели после его завершения. */
   restart(size: PtySize): void;
   close(): void;
@@ -33,15 +56,16 @@ export interface AgentPtyState {
  * Управляет агентами в правой панели.
  *
  * Команда и аргументы берутся из реестра провайдеров (specs/runners.md): для
- * Claude Code это `claude --resume <id>`, для Codex — `codex resume <id>`.
- * Отдельной терминальной логики на провайдера нет — PTY-менеджер один.
+ * Claude Code это `claude --resume <id>`, для Codex — `codex resume <id>`,
+ * для нового запуска — команда без аргументов. Отдельной терминальной логики
+ * на провайдера нет: PTY-менеджер один.
  *
  * Спавнится только немодифицированный бинарь из PATH под логином пользователя —
  * юридическая граница проекта.
  */
 export function useAgentPty(): AgentPtyState {
   const [runs, setRuns] = useState<AgentRun[]>([]);
-  const [activeId, setActiveId] = useState<string | undefined>();
+  const [activeKey, setActiveKey] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
 
   // Живые процессы нужны в cleanup, где состояние React уже недоступно.
@@ -49,8 +73,11 @@ export function useAgentPty(): AgentPtyState {
   // Путь к бинарю ищется один раз на команду и переиспользуется.
   const binaries = useRef(new Map<string, string>());
 
-  const start = useCallback((file: string, args: string[], target: SessionIndex, size: PtySize) => {
+  const start = useCallback((file: string, args: string[], target: AgentTarget, size: PtySize) => {
     setError(undefined);
+    const key = targetKey(target);
+    // cwd есть только у существующей сессии: агент должен видеть тот же проект.
+    const cwd = target.kind === 'session' ? target.session.cwd : null;
 
     try {
       const session = spawnPtySession({
@@ -58,26 +85,25 @@ export function useAgentPty(): AgentPtyState {
         args,
         cols: size.cols,
         rows: size.rows,
-        // cwd сессии: агент должен видеть тот же проект.
-        ...(target.cwd === null ? {} : { cwd: target.cwd }),
+        ...(cwd === null ? {} : { cwd }),
       });
 
       session.onExit((exit) => {
-        live.current.delete(target.id);
+        live.current.delete(key);
         setRuns((prev) =>
-          prev.map((run) => (run.target.id === target.id ? { ...run, exit } : run)),
+          prev.map((run) => (targetKey(run.target) === key ? { ...run, exit } : run)),
         );
       });
 
-      // Прежний процесс той же сессии гасим: один активный PTY на сессию.
-      live.current.get(target.id)?.kill();
-      live.current.set(target.id, session);
+      // Прежний процесс той же цели гасим: один активный PTY на сессию.
+      live.current.get(key)?.kill();
+      live.current.set(key, session);
 
       setRuns((prev) => [
-        ...prev.filter((run) => run.target.id !== target.id),
-        { target, session, exit: undefined },
+        ...prev.filter((run) => targetKey(run.target) !== key),
+        { target, title: targetTitle(target), session, exit: undefined },
       ]);
-      setActiveId(target.id);
+      setActiveKey(key);
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : String(reason));
     }
@@ -85,8 +111,11 @@ export function useAgentPty(): AgentPtyState {
 
   /** Ищет бинарь провайдера и запускает его. Бинаря нет — объясняем, а не падаем. */
   const launch = useCallback(
-    (target: SessionIndex, size: PtySize) => {
-      const { command, args } = runnerCommand(target.provider, target.id);
+    (target: AgentTarget, size: PtySize) => {
+      const { command, args } = runnerCommand(
+        targetProvider(target),
+        target.kind === 'session' ? target.session.id : undefined,
+      );
       const known = binaries.current.get(command);
 
       if (known !== undefined) {
@@ -117,9 +146,10 @@ export function useAgentPty(): AgentPtyState {
 
   const open = useCallback<AgentPtyState['open']>(
     (target, size) => {
-      // У сессии уже есть живой агент — показываем его, а не плодим второго.
-      if (live.current.has(target.id)) {
-        setActiveId(target.id);
+      const key = targetKey(target);
+      // У цели уже есть живой агент — показываем его, а не плодим второго.
+      if (live.current.has(key)) {
+        setActiveKey(key);
         return;
       }
       launch(target, size);
@@ -129,21 +159,21 @@ export function useAgentPty(): AgentPtyState {
 
   const restart = useCallback<AgentPtyState['restart']>(
     (size) => {
-      const target = runs.find((run) => run.target.id === activeId)?.target;
+      const target = runs.find((run) => targetKey(run.target) === activeKey)?.target;
       if (target !== undefined) launch(target, size);
     },
-    [runs, activeId, launch],
+    [runs, activeKey, launch],
   );
 
   const close = useCallback(() => {
-    if (activeId === undefined) return;
-    live.current.get(activeId)?.kill();
-    live.current.delete(activeId);
-    setRuns((prev) => prev.filter((run) => run.target.id !== activeId));
-    setActiveId(undefined);
-  }, [activeId]);
+    if (activeKey === undefined) return;
+    live.current.get(activeKey)?.kill();
+    live.current.delete(activeKey);
+    setRuns((prev) => prev.filter((run) => targetKey(run.target) !== activeKey));
+    setActiveKey(undefined);
+  }, [activeKey]);
 
-  const active = runs.find((run) => run.target.id === activeId);
+  const active = runs.find((run) => targetKey(run.target) === activeKey);
 
   return {
     ...(active === undefined ? { active: undefined } : { active }),

@@ -196,3 +196,88 @@ describe('раннеры разных провайдеров', () => {
     }
   }, 25_000);
 });
+
+describe('новая сессия без истории', () => {
+  let root: string;
+  const original = {
+    claude: process.env['HARNAS_CLAUDE_BIN'],
+    codex: process.env['HARNAS_CODEX_BIN'],
+    glm: process.env['HARNAS_GLM_BIN'],
+  };
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), 'harnas-new-'));
+    process.env['HARNAS_CLAUDE_BIN'] = STUB;
+    process.env['HARNAS_CODEX_BIN'] = STUB;
+    process.env['HARNAS_GLM_BIN'] = STUB;
+  });
+
+  afterEach(async () => {
+    for (const [key, value] of Object.entries(original)) {
+      const name = `HARNAS_${key.toUpperCase()}_BIN`;
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('n запускает агента без --resume', async () => {
+    const { stdin, lastFrame, unmount } = render(
+      <App sessions={[session({ cwd: null })]} root={root} />,
+    );
+    try {
+      await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
+      await mounted();
+      stdin.write('n');
+
+      await waitFor(() => (lastFrame() ?? '').includes('stub готов'));
+      const frame = lastFrame() ?? '';
+      // Новый запуск идёт без аргументов: возобновлять нечего.
+      expect(frame).toContain('args=[]');
+      expect(frame).toContain('новая сессия');
+    } finally {
+      unmount();
+    }
+  }, 25_000);
+
+  it('провайдер новой сессии берётся из активного фильтра', async () => {
+    // Codex попадает в выбор, только когда его сессии есть в списке.
+    const sessions = [
+      session({ id: 'c', cwd: null }),
+      session({ id: 'x', cwd: null, provider: 'codex', title: 'кодекс' }),
+    ];
+    const { stdin, lastFrame, unmount } = render(<App sessions={sessions} root={root} />);
+    try {
+      await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
+      await mounted();
+
+      // Фильтр: все → Claude → Codex.
+      stdin.write('p');
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      stdin.write('p');
+      await waitFor(() => (lastFrame() ?? '').includes('· Codex'));
+
+      stdin.write('n');
+      await waitFor(() => (lastFrame() ?? '').includes('новая сессия Codex'));
+    } finally {
+      unmount();
+    }
+  }, 25_000);
+
+  it('до раннера без истории можно дотянуться через фильтр', async () => {
+    const { stdin, lastFrame, unmount } = render(<App sessions={[]} root={root} />);
+    try {
+      await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
+      await mounted();
+
+      // Сессий нет вовсе — в выборе остаётся только GLM.
+      stdin.write('p');
+      await waitFor(() => (lastFrame() ?? '').includes('· GLM'));
+
+      stdin.write('n');
+      await waitFor(() => (lastFrame() ?? '').includes('новая сессия GLM'));
+    } finally {
+      unmount();
+    }
+  }, 25_000);
+});

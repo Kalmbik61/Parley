@@ -1,4 +1,4 @@
-import { defaultRoot, providerBadge, type SessionIndex } from '@harnas/core';
+import { defaultRoot, providerBadge, type Provider, type SessionIndex } from '@harnas/core';
 import { Box, Text } from 'ink';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Pane, type PaneSize } from './components/pane.js';
@@ -34,7 +34,11 @@ export function App({ sessions, root = defaultRoot(), onRescan }: AppProps): Rea
   const terminalRows = Math.max(2, terminalSize.height);
 
   // Фильтр по провайдеру: списком дальше живут уже отфильтрованные сессии.
+  // Значение дублируется в ref: между нажатиями «p» и «n» состояние ещё не
+  // успеет доехать до замыкания, и новая сессия ушла бы не тому провайдеру.
   const { filter, visible, present, cycle } = useProviderFilter(sessions);
+  const activeFilter = useRef<Provider | null>(filter);
+  activeFilter.current = filter;
 
   const agent = useAgentPty();
   const snapshot = usePtyTerminal(agent.active?.session, {
@@ -44,16 +48,28 @@ export function App({ sessions, root = defaultRoot(), onRescan }: AppProps): Rea
   usePtyResize(agent.active?.session, terminalCols, terminalRows);
 
   // Число подсессий известно только после загрузки дерева, а навигация нужна раньше —
-  // отдаём его через ref, который читается в момент нажатия клавиши.
+  // отдаём его через ref, который читается в момент нажатия клавиши. По той же
+  // причине через ref читается и текущая строка списка.
   const subsessionCount = useRef(0);
+  const selectedRow = useRef(0);
 
   const openSelected = useCallback(
     (at: number) => {
-      const target = visible[at];
-      if (target !== undefined) agent.open(target, { cols: terminalCols, rows: terminalRows });
+      const session = visible[at];
+      if (session !== undefined) {
+        agent.open({ kind: 'session', session }, { cols: terminalCols, rows: terminalRows });
+      }
     },
     [visible, agent, terminalCols, terminalRows],
   );
+
+  // Новая сессия: провайдера берём из активного фильтра, иначе из выбранной
+  // строки. Только так дотягиваемся до раннеров без истории — GLM в списке нет.
+  const openNew = useCallback(() => {
+    const provider: Provider =
+      activeFilter.current ?? visible[selectedRow.current]?.provider ?? 'claude';
+    agent.open({ kind: 'new', provider }, { cols: terminalCols, rows: terminalRows });
+  }, [visible, agent, terminalCols, terminalRows]);
 
   const restartAgent = useCallback(() => {
     agent.restart({ cols: terminalCols, rows: terminalRows });
@@ -69,9 +85,12 @@ export function App({ sessions, root = defaultRoot(), onRescan }: AppProps): Rea
     onOpen: openSelected,
     onRestart: restartAgent,
     onCycleProvider: cycle,
+    onNewSession: openNew,
     terminalCaptures: agentAlive,
     ...(onRescan === undefined ? {} : { onRescan }),
   });
+
+  selectedRow.current = selectedSession;
 
   const backToLists = useCallback(() => setFocus('sessions'), [setFocus]);
   usePtyInput(agent.active?.session, focus === 'terminal' && agentAlive, {
@@ -166,7 +185,7 @@ function TerminalPane({ size, agent, snapshot, onSize }: TerminalPaneProps): Rea
               <Text dimColor>Enter на сессии — открыть её здесь.</Text>
               <Text dimColor> </Text>
               <Text dimColor>↑↓ / j k — список · Tab — панель · Enter — открыть</Text>
-              <Text dimColor>p — провайдер · r — ре-скан · q — выход</Text>
+              <Text dimColor>n — новая сессия · p — провайдер · r — ре-скан · q — выход</Text>
               <Text dimColor> </Text>
               <Text dimColor>В терминале весь ввод идёт агенту, Ctrl+Q — назад.</Text>
             </>
@@ -202,6 +221,6 @@ function exitLine(exit: { exitCode: number; signal: number | undefined }): strin
 
 function terminalTitle(agent: AgentPtyState): string {
   if (agent.active === undefined) return 'TERMINAL';
-  const name = agent.active.target.title ?? agent.active.target.id;
-  return agent.active.exit === undefined ? `TERMINAL — ${name}` : `TERMINAL — ${name} (завершён)`;
+  const { title, exit } = agent.active;
+  return exit === undefined ? `TERMINAL — ${title}` : `TERMINAL — ${title} (завершён)`;
 }
