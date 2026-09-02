@@ -269,7 +269,10 @@ export function rowLines(row: WorkRow): number {
 export interface RowLayout {
   start: number;
   end: number;
-  /** Сколько рядов осталось выше и ниже окна — строки «… N выше / ниже». */
+  /**
+   * Сколько рядов не видно выше и ниже окна — строки «… N выше / ниже».
+   * Липкий заголовок работы в `above` не входит: он нарисован над окном.
+   */
   above: number;
   below: number;
   /** Ряд работы, чей заголовок нужно прилепить над окном. */
@@ -344,7 +347,10 @@ function decorate(rows: readonly WorkRow[], window: { start: number; end: number
     }
   }
 
-  return { start, end, above: start, below: rows.length - end, stickyWork, stickyProject };
+  // Ряд работы, вынесенный в липкий заголовок, из счётчика скрытых вычитается:
+  // он нарисован над окном, и считать его «скрытым» — врать на единицу (6.6).
+  const above = start - (stickyWork === null ? 0 : 1);
+  return { start, end, above, below: rows.length - end, stickyWork, stickyProject };
 }
 
 const overheadOf = (layout: RowLayout): number =>

@@ -54,8 +54,9 @@ function partProps(part: string, g: Glyphs): Record<string, unknown> {
  */
 function sessionMeta(live: LiveMetrics, width: number): string {
   if (live.durationMs === null && live.tokens === null) return '—';
-  const parts = width >= WIDE_WIDTH ? [formatTokenPair(live.tokens)] : [];
-  parts.push(formatDuration(live.durationMs));
+  // Порядок частей — по макетам 2.1, 2.2 и 6.6: сначала длительность, потом токены.
+  const parts = [formatDuration(live.durationMs)];
+  if (width >= WIDE_WIDTH) parts.push(formatTokenPair(live.tokens));
   return parts.join(' ');
 }
 
@@ -82,15 +83,19 @@ function WorkLine({
   selected,
   width,
   g,
+  sticky = false,
 }: {
   row: WorkRowWork;
   selected: boolean;
   width: number;
   g: Glyphs;
+  /** Ряд нарисован липким заголовком над окном (6.6). */
+  sticky?: boolean;
 }): ReactNode {
   const head = `${row.expanded ? g.expanded : g.collapsed} `;
-  // Число сессий важно у свёрнутой работы: только по нему видно, что там внутри.
-  const count = row.expanded || row.total === 0 ? '' : ` (${row.total})`;
+  // Число сессий важно там, где их самих не видно: у свёрнутой работы и у липкого
+  // заголовка развёрнутой — макет 6.6 показывает `(24)` именно на нём.
+  const count = (row.expanded && !sticky) || row.total === 0 ? '' : ` (${row.total})`;
   const tail = workTail(row.counters, g, Math.max(2, width - head.length - MIN_LABEL - 1));
   const title = truncate(
     row.work.title,
@@ -199,7 +204,9 @@ export function WorkList({ rows, selected, height, width }: WorkListProps): Reac
       {layout.stickyProject !== null && (
         <ProjectHeader projectPath={layout.stickyProject} width={width} g={g} />
       )}
-      {sticky?.kind === 'work' && <WorkLine row={sticky} selected={false} width={width} g={g} />}
+      {sticky?.kind === 'work' && (
+        <WorkLine row={sticky} selected={false} width={width} g={g} sticky />
+      )}
       {layout.above > 0 && <Text dimColor>{`  ${g.ellipsis} ${layout.above} выше`}</Text>}
 
       {rows.slice(layout.start, layout.end).map((row, offset) => {

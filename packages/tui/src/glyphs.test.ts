@@ -34,6 +34,19 @@ describe('glyphs', () => {
   it('пустое значение переменной ASCII-режим не включает', () => {
     expect(glyphs({ HARNAS_ASCII: '' }).active).toBe('●');
   });
+
+  it('терминал без Unicode тоже даёт запасной набор (6.1)', () => {
+    expect(glyphs({ LANG: 'C' }).active).toBe('*');
+    expect(glyphs({ LC_ALL: 'POSIX', LANG: 'ru_RU.UTF-8' }).active).toBe('*');
+    expect(glyphs({ LC_CTYPE: 'ru_RU.ISO8859-5' }).active).toBe('*');
+  });
+
+  it('UTF-8 в локали оставляет Unicode', () => {
+    expect(glyphs({ LANG: 'ru_RU.UTF-8' }).active).toBe('●');
+    expect(glyphs({ LC_ALL: 'en_US.utf8' }).active).toBe('●');
+    // Локаль не задана вовсе — Unicode: терминалы без неё сегодня скорее юникодные.
+    expect(glyphs({ LANG: '' }).active).toBe('●');
+  });
 });
 
 describe('statusGlyph', () => {

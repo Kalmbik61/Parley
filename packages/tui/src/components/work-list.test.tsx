@@ -116,6 +116,16 @@ describe('WorkList', () => {
     expect(narrow).toContain('32м');
   });
 
+  it('в строке 1 длительность стоит перед токенами (макеты 2.1, 2.2, 6.6)', () => {
+    const rows = buildRows([entry([session()])], { live });
+    const line = lineWith(
+      frameOf(<WorkList rows={rows} selected={0} height={12} width={60} />),
+      'бэкенд',
+    );
+
+    expect(line.indexOf('32м')).toBeLessThan(line.indexOf('1.2к/845'));
+  });
+
   it('непрочитанные не отбрасываются даже в узкой колонке', () => {
     const rows = buildRows(
       [
@@ -182,6 +192,10 @@ describe('WorkList', () => {
     expect(frame).toContain('выше');
     expect(frame).toContain('шаг 20');
     expect(frame.split('\n').length).toBeLessThanOrEqual(9);
+    // У липкого заголовка развёрнутой работы число сессий остаётся: сами они
+    // не видны, и только по нему понятно, сколько их всего (макет 6.6).
+    expect(lineWith(frame, 'Миграция БД')).toContain('(24)');
+    for (const line of frame.split('\n')) expect(line.length).toBeLessThanOrEqual(40);
   });
 
   it('пустая работа и работа, опустевшая от фильтра, объясняют себя (раздел 7)', () => {

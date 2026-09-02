@@ -20,6 +20,8 @@ interface ProbeProps {
   onExpand?: () => void;
   onKey?: () => void;
   onOpen?: (index: number) => void;
+  onNewSession?: () => void;
+  newSessionEnabled?: boolean;
   focusTerminalOnOpen?: boolean;
 }
 
@@ -32,6 +34,8 @@ function Probe({
   onExpand,
   onKey,
   onOpen,
+  onNewSession,
+  newSessionEnabled,
   focusTerminalOnOpen,
 }: ProbeProps): ReactNode {
   const nav = useNavigation({
@@ -43,6 +47,8 @@ function Probe({
     ...(onExpand === undefined ? {} : { onExpand }),
     ...(onKey === undefined ? {} : { onKey }),
     ...(onOpen === undefined ? {} : { onOpen }),
+    ...(onNewSession === undefined ? {} : { onNewSession }),
+    ...(newSessionEnabled === undefined ? {} : { newSessionEnabled }),
     ...(focusTerminalOnOpen === undefined ? {} : { focusTerminalOnOpen }),
   });
   return <Text>{`${nav.focus}|${nav.selectedSession}|${nav.selectedSubsession}`}</Text>;
@@ -154,6 +160,30 @@ describe('useNavigation', () => {
     stdin.write('w');
     await settle();
     expect(onToggleMode).toHaveBeenCalledTimes(1);
+    expect(lastFrame()).toBe('sessions|0|0');
+  });
+
+  it('n запускает новую сессию и уводит фокус в терминал', async () => {
+    const onNewSession = vi.fn();
+    const { stdin, lastFrame } = render(<Probe onNewSession={onNewSession} />);
+    await settle();
+
+    stdin.write('n');
+    await settle();
+    expect(onNewSession).toHaveBeenCalledTimes(1);
+    expect(lastFrame()).toBe('terminal|0|0');
+  });
+
+  it('с newSessionEnabled=false n молчит и фокус остаётся на списках (дизайн 4.2)', async () => {
+    const onNewSession = vi.fn();
+    const { stdin, lastFrame } = render(
+      <Probe onNewSession={onNewSession} newSessionEnabled={false} />,
+    );
+    await settle();
+
+    stdin.write('n');
+    await settle();
+    expect(onNewSession).not.toHaveBeenCalled();
     expect(lastFrame()).toBe('sessions|0|0');
   });
 

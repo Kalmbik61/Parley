@@ -3,8 +3,20 @@ import { render } from 'ink-testing-library';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { App } from './app.js';
+
+/** Настоящий агент в тестах не запускается никогда (specs/pty.md). */
+const STUB = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'test',
+  'stub-agent.mjs',
+);
+
+const lineWith = (frame: string, text: string): string =>
+  frame.split('\n').find((line) => line.includes(text)) ?? '';
 
 let home = '';
 let project = '';
@@ -123,5 +135,58 @@ describe('режим работ', () => {
     await press(app, 'l');
     await waitFor(() => (app.lastFrame() ?? '').includes('бэкенд'));
     app.unmount();
+  }, 20_000);
+
+  it('клавиши дерева работ ничего не делают в режиме «все сессии» (дизайн 8)', async () => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    await updateMap(project, created.work.id, (map) => {
+      addSession(map, { provider: 'codex', label: 'бэкенд', task: 'шаги 1–3' });
+    });
+
+    const app = render(<App sessions={[]} projectPath={project} />);
+    // Сначала убеждаемся, что работа прочитана и развёрнута.
+    await press(app, 'w');
+    await waitFor(() => (app.lastFrame() ?? '').includes('бэкенд'));
+    await press(app, 'w');
+    await waitFor(() => (app.lastFrame() ?? '').includes('SESSIONS (0)'));
+
+    // В чужом режиме h и l трогать дерево не должны: выбранная строка — индекс
+    // списка сессий, по нему свернулась бы посторонняя работа.
+    await press(app, 'h');
+    await press(app, 'l');
+    await press(app, 'h');
+
+    await press(app, 'w');
+    await waitFor(() => (app.lastFrame() ?? '').includes('РАБОТЫ (1)'));
+    expect(app.lastFrame()).toContain('бэкенд');
+    expect(lineWith(app.lastFrame() ?? '', 'Авторизация')).toContain('▾');
+    app.unmount();
+  }, 20_000);
+
+  it('n в режиме работ не запускает агента (диалог 4.2 — отдельная задача)', async () => {
+    const previousBin = process.env.HARNAS_CLAUDE_BIN;
+    // Даже если бы клавиша сработала, запустился бы stub, а не настоящий агент.
+    process.env.HARNAS_CLAUDE_BIN = STUB;
+    const created = await createWork(project, { title: 'Авторизация' });
+    await updateMap(project, created.work.id, (map) => {
+      addSession(map, { provider: 'codex', label: 'бэкенд', task: 'шаги 1–3' });
+    });
+
+    const app = render(<App sessions={[]} projectPath={project} />);
+    try {
+      await press(app, 'w');
+      await waitFor(() => (app.lastFrame() ?? '').includes('РАБОТЫ (1)'));
+
+      await press(app, 'n');
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      expect(app.lastFrame()).not.toContain('stub готов');
+      // Правая панель по-прежнему с подсказкой, фокус остался на списках.
+      expect(app.lastFrame()).toContain('Enter на сессии');
+    } finally {
+      if (previousBin === undefined) delete process.env.HARNAS_CLAUDE_BIN;
+      else process.env.HARNAS_CLAUDE_BIN = previousBin;
+      app.unmount();
+    }
   }, 20_000);
 });

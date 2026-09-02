@@ -17,7 +17,8 @@ export interface PtySize {
 export type AgentTarget =
   { kind: 'session'; session: SessionIndex } | { kind: 'new'; provider: Provider };
 
-const targetProvider = (target: AgentTarget): Provider =>
+/** Провайдер цели: его марка нужна и заголовку панели, и строке статуса. */
+export const targetProvider = (target: AgentTarget): Provider =>
   target.kind === 'session' ? target.session.provider : target.provider;
 
 /** Ключ, по которому агент считается «тем же»: одна сессия — один процесс. */

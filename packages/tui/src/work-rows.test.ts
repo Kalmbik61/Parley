@@ -294,6 +294,14 @@ describe('rowLines и layoutRows', () => {
     expect(layout.stickyProject).toBe('/dev/shop');
   });
 
+  it('липкий заголовок работы не считается скрытым рядом (6.6)', () => {
+    const rows = many(20);
+    const layout = layoutRows(rows, 15, 9);
+    // Ряд работы нарисован над окном: «… N выше» считает только спрятанные сессии.
+    expect(layout.stickyWork).toBe(0);
+    expect(layout.above).toBe(layout.start - 1);
+  });
+
   it('начало списка липких заголовков не требует', () => {
     const layout = layoutRows(many(20), 0, 9);
     expect(layout.start).toBe(0);

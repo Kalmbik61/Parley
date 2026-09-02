@@ -60,6 +60,36 @@ const waitFor = async (check: () => boolean, timeoutMs = 8000): Promise<void> =>
  */
 const mounted = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 120));
 
+/**
+ * Домашняя папка харнесса и проект — во временных каталогах: App читает работы,
+ * и настоящие ~/.harnas и <cwd>/.harnas тесты не касаются.
+ */
+let home = '';
+let project = '';
+
+beforeEach(async () => {
+  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
+  process.env['HARNAS_HOME'] = home;
+});
+
+afterEach(async () => {
+  delete process.env['HARNAS_HOME'];
+  await Promise.all([home, project].map((dir) => rm(dir, { recursive: true, force: true })));
+});
+
+/** Заголовок правой панели: он рисуется в той же строке кадра, что и SESSIONS. */
+const rightHeader = (frame: string, offset = 0): string => {
+  const lines = frame.split('\n');
+  const at = lines.findIndex((item) => item.includes('SESSIONS'));
+  return (
+    (lines[at + offset] ?? '')
+      .split('│')
+      .filter((cell) => cell.trim() !== '')
+      .at(-1) ?? ''
+  );
+};
+
 describe('Enter открывает сессию в правой панели', () => {
   let root: string;
   let workdir: string;
@@ -81,7 +111,7 @@ describe('Enter открывает сессию в правой панели', (
 
   it('передаёт --resume с id сессии и её cwd', async () => {
     const { stdin, lastFrame, unmount } = render(
-      <App sessions={[session({ cwd: workdir })]} root={root} />,
+      <App sessions={[session({ cwd: workdir })]} root={root} projectPath={project} />,
     );
     try {
       await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
@@ -98,20 +128,27 @@ describe('Enter открывает сессию в правой панели', (
     }
   }, 25_000);
 
-  it('заголовок панели показывает открытую сессию', async () => {
-    const { stdin, lastFrame, unmount } = render(<App sessions={[session()]} root={root} />);
+  it('заголовок панели — имя сессии, под ним провайдер и модель (дизайн 2.1)', async () => {
+    const { stdin, lastFrame, unmount } = render(
+      <App sessions={[session()]} root={root} projectPath={project} />,
+    );
     try {
       await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
       await mounted();
       stdin.write(ENTER);
-      await waitFor(() => (lastFrame() ?? '').includes('TERMINAL — моя сессия'));
+      await waitFor(() => rightHeader(lastFrame() ?? '').includes('моя сессия'));
+      // Прежнего «TERMINAL — …» больше нет: пара строк, как в списке и в ДЕТАЛЯХ.
+      expect(lastFrame()).not.toContain('TERMINAL —');
+      expect(rightHeader(lastFrame() ?? '', 1)).toContain('Claude Opus');
     } finally {
       unmount();
     }
   }, 25_000);
 
   it('без сессий Enter ничего не запускает', async () => {
-    const { stdin, lastFrame, unmount } = render(<App sessions={[]} root={root} />);
+    const { stdin, lastFrame, unmount } = render(
+      <App sessions={[]} root={root} projectPath={project} />,
+    );
     try {
       await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
       await mounted();
@@ -125,7 +162,9 @@ describe('Enter открывает сессию в правой панели', (
 
   it('без бинаря панель объясняет проблему вместо падения', async () => {
     process.env['HARNAS_CLAUDE_BIN'] = path.join(root, 'нет-такого-бинаря');
-    const { stdin, lastFrame, unmount } = render(<App sessions={[session()]} root={root} />);
+    const { stdin, lastFrame, unmount } = render(
+      <App sessions={[session()]} root={root} projectPath={project} />,
+    );
     try {
       await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
       await mounted();
@@ -144,7 +183,7 @@ describe('Enter открывает сессию в правой панели', (
     await writeFile(path.join(root, '-proj', 'x.jsonl'), '');
 
     const { stdin, lastFrame, unmount } = render(
-      <App sessions={[session({ cwd: null })]} root={root} />,
+      <App sessions={[session({ cwd: null })]} root={root} projectPath={project} />,
     );
     try {
       await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
@@ -182,7 +221,9 @@ describe('раннеры разных провайдеров', () => {
       title: 'сессия codex',
       cwd: null,
     });
-    const { stdin, lastFrame, unmount } = render(<App sessions={[codexSession]} root={root} />);
+    const { stdin, lastFrame, unmount } = render(
+      <App sessions={[codexSession]} root={root} projectPath={project} />,
+    );
     try {
       await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
       await mounted();
@@ -224,7 +265,7 @@ describe('новая сессия без истории', () => {
 
   it('n запускает агента без --resume', async () => {
     const { stdin, lastFrame, unmount } = render(
-      <App sessions={[session({ cwd: null })]} root={root} />,
+      <App sessions={[session({ cwd: null })]} root={root} projectPath={project} />,
     );
     try {
       await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
@@ -247,7 +288,9 @@ describe('новая сессия без истории', () => {
       session({ id: 'c', cwd: null }),
       session({ id: 'x', cwd: null, provider: 'codex', title: 'кодекс' }),
     ];
-    const { stdin, lastFrame, unmount } = render(<App sessions={sessions} root={root} />);
+    const { stdin, lastFrame, unmount } = render(
+      <App sessions={sessions} root={root} projectPath={project} />,
+    );
     try {
       await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
       await mounted();
@@ -266,7 +309,9 @@ describe('новая сессия без истории', () => {
   }, 25_000);
 
   it('до раннера без истории можно дотянуться через фильтр', async () => {
-    const { stdin, lastFrame, unmount } = render(<App sessions={[]} root={root} />);
+    const { stdin, lastFrame, unmount } = render(
+      <App sessions={[]} root={root} projectPath={project} />,
+    );
     try {
       await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
       await mounted();

@@ -58,6 +58,35 @@ const waitFor = async (check: () => boolean, timeoutMs = 8000): Promise<void> =>
 /** Ink подписывается на stdin в эффекте — ждём подписку перед первым нажатием. */
 const mounted = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 120));
 
+/**
+ * Домашняя папка харнесса и проект — во временных каталогах: App читает работы,
+ * и настоящие ~/.harnas и <cwd>/.harnas тесты не касаются.
+ */
+let home = '';
+let project = '';
+
+beforeEach(async () => {
+  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
+  process.env['HARNAS_HOME'] = home;
+});
+
+afterEach(async () => {
+  delete process.env['HARNAS_HOME'];
+  await Promise.all([home, project].map((dir) => rm(dir, { recursive: true, force: true })));
+});
+
+/** Заголовок правой панели: он рисуется в той же строке кадра, что и SESSIONS. */
+const rightHeader = (frame: string): string => {
+  const line = frame.split('\n').find((item) => item.includes('SESSIONS')) ?? '';
+  return (
+    line
+      .split('│')
+      .filter((cell) => cell.trim() !== '')
+      .at(-1) ?? ''
+  );
+};
+
 describe('жизненный цикл агента', () => {
   let root: string;
   const original = process.env['HARNAS_CLAUDE_BIN'];
@@ -74,7 +103,7 @@ describe('жизненный цикл агента', () => {
   });
 
   const open = async (sessions: SessionIndex[]): Promise<ReturnType<typeof render>> => {
-    const app = render(<App sessions={sessions} root={root} />);
+    const app = render(<App sessions={sessions} root={root} projectPath={project} />);
     await waitFor(() => (app.lastFrame() ?? '').includes('Enter на сессии'));
     await mounted();
     app.stdin.write(ENTER);
@@ -126,7 +155,7 @@ describe('жизненный цикл агента', () => {
       app.stdin.write(ENTER);
       await new Promise((resolve) => setTimeout(resolve, 400));
 
-      expect(app.lastFrame()).not.toContain('параллельно работает агентов');
+      expect(app.lastFrame()).not.toContain('уже есть активная сессия');
     } finally {
       app.unmount();
     }
@@ -146,9 +175,11 @@ describe('жизненный цикл агента', () => {
       app.stdin.write(ENTER);
 
       // Предупреждение живёт в строке статуса, а не поверх правой панели (дизайн 5).
-      await waitFor(() => (app.lastFrame() ?? '').includes('параллельно работает агентов: 2'));
+      await waitFor(() =>
+        (app.lastFrame() ?? '').includes('Cl: уже есть активная сессия — лимиты подписки общие'),
+      );
       // Второй агент всё равно запустился — предупреждение не блокирует.
-      expect(app.lastFrame()).toContain('TERMINAL — вторая');
+      expect(rightHeader(app.lastFrame() ?? '')).toContain('вторая');
     } finally {
       app.unmount();
     }
@@ -170,7 +201,7 @@ describe('жизненный цикл агента', () => {
       app.stdin.write('j');
       await new Promise((resolve) => setTimeout(resolve, 150));
       app.stdin.write(ENTER);
-      await waitFor(() => (app.lastFrame() ?? '').includes('TERMINAL — вторая'));
+      await waitFor(() => rightHeader(app.lastFrame() ?? '').includes('вторая'));
     } finally {
       app.unmount();
     }

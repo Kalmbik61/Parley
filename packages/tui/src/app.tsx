@@ -1,5 +1,6 @@
 import {
   defaultRoot,
+  modelBadge,
   providerBadge,
   type Provider,
   type SessionIndex,
@@ -14,7 +15,7 @@ import { StatusBar } from './components/status-bar.js';
 import { SubsessionList } from './components/subsession-list.js';
 import { TerminalView } from './components/terminal-view.js';
 import { WorkList } from './components/work-list.js';
-import { useAgentPty, type AgentPtyState } from './pty/use-agent-pty.js';
+import { targetProvider, useAgentPty, type AgentPtyState } from './pty/use-agent-pty.js';
 import { useHostTerminalModes } from './pty/use-host-modes.js';
 import { ctrlByte, DEFAULT_ESCAPE_BYTE, usePtyInput } from './pty/use-pty-input.js';
 import { usePtyResize } from './pty/use-pty-resize.js';
@@ -25,7 +26,14 @@ import { useStatus, type StatusSource } from './use-status.js';
 import { useSubsessions } from './use-subsessions.js';
 import { useTerminalSize } from './use-terminal-size.js';
 import { useWorks } from './use-works.js';
-import { buildRows, workKey, type LiveMetrics, type WorkRow } from './work-rows.js';
+import {
+  buildRows,
+  providerLabel,
+  providerMarkOf,
+  workKey,
+  type LiveMetrics,
+  type WorkRow,
+} from './work-rows.js';
 
 export interface AppProps {
   sessions: SessionIndex[];
@@ -127,6 +135,16 @@ export function App({
     setExpandedWorks((current) => new Map(current).set(key, open));
   }, []);
 
+  // ←→ и h l принадлежат только режиму работ (дизайн 8): в «все сессии» выбранная
+  // строка — индекс чужого списка, и по нему свернулась бы посторонняя работа.
+  const setSelectedExpanded = useCallback(
+    (open: boolean) => {
+      if (currentMode.current !== 'works') return;
+      setWorkExpanded(selectedRow.current, open);
+    },
+    [setWorkExpanded],
+  );
+
   const openSelected = useCallback(
     (at: number) => {
       // В режиме работ Enter на работе сворачивает и разворачивает её (раздел 8).
@@ -178,10 +196,13 @@ export function App({
     onCycleProvider: cycle,
     onNewSession: openNew,
     onToggleMode: toggleMode,
-    onCollapse: () => setWorkExpanded(selectedRow.current, false),
-    onExpand: () => setWorkExpanded(selectedRow.current, true),
+    onCollapse: () => setSelectedExpanded(false),
+    onExpand: () => setSelectedExpanded(true),
     onKey: status.keyPressed,
     focusTerminalOnOpen: mode === 'sessions',
+    // `n` в режиме работ — диалог 4.2, которого ещё нет: до него клавиша молчит,
+    // иначе она запускала бы агента по индексу из списка сессий (дизайн 8).
+    newSessionEnabled: mode === 'sessions',
     terminalCaptures: agentAlive,
     onRescan: rescan,
   });
@@ -201,12 +222,17 @@ export function App({
   // правой панели: канал уведомлений один на оба режима (дизайн 5, решение №8).
   const push = status.push;
   const wasLive = useRef(0);
+  const activeProvider = agent.active === undefined ? null : targetProvider(agent.active.target);
   useEffect(() => {
-    if (agent.liveCount > 1 && wasLive.current <= 1) {
-      push([{ text: `параллельно работает агентов: ${agent.liveCount} — лимиты общие` }]);
+    if (agent.liveCount > 1 && wasLive.current <= 1 && activeProvider !== null) {
+      push([
+        {
+          text: `${providerMarkOf(activeProvider)}: уже есть активная сессия — лимиты подписки общие`,
+        },
+      ]);
     }
     wasLive.current = agent.liveCount;
-  }, [agent.liveCount, push]);
+  }, [agent.liveCount, activeProvider, push]);
 
   const backToLists = useCallback(() => setFocus('sessions'), [setFocus]);
   usePtyInput(agent.active?.session, focus === 'terminal' && agentAlive, {
@@ -285,7 +311,12 @@ export function App({
           </Pane>
         </Box>
 
-        <Pane title={terminalTitle(agent)} active={focus === 'terminal'} flexGrow={1}>
+        <Pane
+          title={terminalTitle(agent)}
+          subtitle={terminalSubtitle(agent)}
+          active={focus === 'terminal'}
+          flexGrow={1}
+        >
           {(size) => (
             <TerminalPane size={size} agent={agent} snapshot={snapshot} onSize={setTerminalSize} />
           )}
@@ -378,8 +409,22 @@ function exitLine(exit: { exitCode: number; signal: number | undefined }): strin
     : `Агент завершился с кодом ${exit.exitCode}`;
 }
 
+/** Заголовок правой панели — имя сессии (дизайн 2.1); пока пусто — общее TERMINAL. */
 function terminalTitle(agent: AgentPtyState): string {
   if (agent.active === undefined) return 'TERMINAL';
   const { title, exit } = agent.active;
-  return exit === undefined ? `TERMINAL — ${title}` : `TERMINAL — ${title} (завершён)`;
+  return exit === undefined ? title : `${title} (завершён)`;
+}
+
+/**
+ * Вторая строка заголовка правой панели: провайдер и модель серым — та же пара
+ * строк, что в списке и в ДЕТАЛЯХ (дизайн 2.1 и 3). У нового запуска модели ещё
+ * нет: остаётся один провайдер.
+ */
+function terminalSubtitle(agent: AgentPtyState): string | undefined {
+  const target = agent.active?.target;
+  if (target === undefined) return undefined;
+  const provider = providerLabel(targetProvider(target));
+  const model = target.kind === 'session' ? modelBadge(target.session.primaryModel) : '—';
+  return model === '—' || model === provider ? provider : `${provider} ${model}`;
 }

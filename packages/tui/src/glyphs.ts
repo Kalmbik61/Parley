@@ -59,10 +59,22 @@ const ASCII: Glyphs = {
   rule: '-',
 };
 
-/** Набор глифов: `HARNAS_ASCII=1` переключает на запасной. */
+/**
+ * Терминал без Unicode: локаль задана и она не UTF-8 (`LC_ALL`, `LC_CTYPE`, `LANG`).
+ * Когда о локали не сказано ничего, считаем терминал юникодным — иначе запасной
+ * набор включался бы там, где Unicode прекрасно работает.
+ */
+function unicodeLocale(env: NodeJS.ProcessEnv): boolean {
+  const locale = env['LC_ALL'] ?? env['LC_CTYPE'] ?? env['LANG'];
+  if (locale === undefined || locale === '') return true;
+  return /utf-?8/i.test(locale);
+}
+
+/** Набор глифов: запасной включает `HARNAS_ASCII=1` или терминал без Unicode (6.1). */
 export function glyphs(env: NodeJS.ProcessEnv = process.env): Glyphs {
   const ascii = env['HARNAS_ASCII'];
-  return ascii !== undefined && ascii !== '' && ascii !== '0' ? ASCII : UNICODE;
+  if (ascii !== undefined && ascii !== '' && ascii !== '0') return ASCII;
+  return unicodeLocale(env) ? UNICODE : ASCII;
 }
 
 export function statusGlyph(status: SessionStatus, g: Glyphs): string {

@@ -39,6 +39,12 @@ export interface NavigationOptions {
   /** `→` / `l` — развернуть выбранную работу (режим работ). */
   onExpand?: () => void;
   /**
+   * Действует ли `n`. В режиме работ она открывает диалог «новая сессия в работе»
+   * (дизайн 4.2), которого ещё нет: до него клавиша молчит и фокус остаётся на
+   * списках — запускать агента по индексу чужого списка нельзя.
+   */
+  newSessionEnabled?: boolean;
+  /**
    * Открывать ли правую панель по Enter. В режиме работ Enter на работе только
    * сворачивает её — фокус при этом остаётся на списках (дизайн TUI, раздел 8).
    */
@@ -73,6 +79,7 @@ export function useNavigation({
   onCollapse,
   onExpand,
   onKey,
+  newSessionEnabled = true,
   focusTerminalOnOpen = true,
   terminalCaptures = false,
 }: NavigationOptions): NavigationState {
@@ -136,6 +143,7 @@ export function useNavigation({
     }
 
     if (input === 'n') {
+      if (!newSessionEnabled) return;
       onNewSession?.();
       setFocus('terminal');
       return;

@@ -8,6 +8,8 @@ export interface PaneSize {
 
 export interface PaneProps {
   title: string;
+  /** Вторая строка заголовка серым: провайдер и модель правой панели (дизайн 2.1). */
+  subtitle?: string | undefined;
   active: boolean;
   /**
    * Содержимое получает фактический размер своей области.
@@ -25,7 +27,15 @@ export interface PaneProps {
 const SAME = (a: PaneSize, b: PaneSize): boolean => a.width === b.width && a.height === b.height;
 
 /** Рамка с заголовком. Активная панель подсвечена — так требует specs/ui.md. */
-export function Pane({ title, active, children, flexGrow, width, minWidth }: PaneProps): ReactNode {
+export function Pane({
+  title,
+  subtitle,
+  active,
+  children,
+  flexGrow,
+  width,
+  minWidth,
+}: PaneProps): ReactNode {
   const inner = useRef<DOMElement>(null);
   const [size, setSize] = useState<PaneSize>({ width: 0, height: 0 });
 
@@ -50,6 +60,11 @@ export function Pane({ title, active, children, flexGrow, width, minWidth }: Pan
       <Text bold color={active ? 'cyan' : 'gray'}>
         {title}
       </Text>
+      {subtitle !== undefined && (
+        <Text color="blackBright" bold wrap="truncate">
+          {subtitle}
+        </Text>
+      )}
       <Box ref={inner} flexGrow={1} flexDirection="column" overflow="hidden">
         {children(size)}
       </Box>
