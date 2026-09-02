@@ -44,7 +44,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [x] packages/tui: runner abstraction — spawn `codex` (and the GLM CLI) in the right pane through the same PTY manager per specs/runners.md
 - [x] Unified model badges: normalization map (claude-* → Opus/Sonnet/Haiku, gpt-*/codex → Codex, glm-* → GLM) per specs/runners.md; provider badge in the sessions list
 - [x] Multi-provider merge: one recency-sorted session list across providers with a provider filter
-- [ ] README.md: install, run, keybindings, the legal note (unmodified binary only, ~/.claude read-only)
+- [x] README.md: install, run, keybindings, the legal note (unmodified binary only, ~/.claude read-only)
 - [ ] Final pass: lint clean, tests green, manual smoke checklist from specs/ui.md walked through
 
 ## Discovered
@@ -63,7 +63,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [ ] Ручная проверка встроенного `claude`: меню, прокрутка, мышь и alt-screen внутри
       правой панели. Автотестами не покрывается принципиально (реальный бинарь в
       тестах не запускаем), поэтому идёт в финальный smoke-чеклист v2
-- [ ] Мышь: поддерживается только SGR-кодирование (?1006). Древние X10 (?1005) и
+- [x] Мышь: поддерживается только SGR-кодирование (?1006). Древние X10 (?1005) и
       urxvt (?1015) не пробрасываются — записать ограничение в README
 - [ ] UI-точка входа для запуска раннера без истории: GLM и «новая сессия» сейчас
       запускаются только программно (runnerCommand), клавиши в TUI для них нет
