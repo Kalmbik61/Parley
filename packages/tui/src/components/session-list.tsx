@@ -23,36 +23,35 @@ export interface SessionListProps {
   showProvider?: boolean;
 }
 
-/** С этой ширины в строку помещаются токены (дизайн координации TUI, 6.3). */
-const TOKENS_MIN_WIDTH = 36;
+/**
+ * Заголовку гарантируется не меньше этой доли ширины строки: хвост подстраивается
+ * под заголовок, а не наоборот (дизайн координации TUI, 2.3 и 6.4).
+ */
+const TITLE_SHARE = 0.5;
 
 /**
  * Хвост строки: относительное время, токены, длительность и бейдж модели.
  *
  * В узкой колонке всё это не помещается, а заголовок важнее меты — поэтому части
- * отбрасываются по приоритету, пока хвост не влезет в отведённую долю ширины.
+ * отбрасываются по приоритету, пока хвост не влезет в бюджет, оставшийся после
+ * гарантированной доли заголовка.
  */
 function meta(session: SessionIndex, width: number): string {
   const when = formatRelative(session.endedAt);
-  // Уже ниже TOKENS_MIN_WIDTH токенов нет совсем — там их место в деталях сессии.
-  const tokens = width >= TOKENS_MIN_WIDTH ? formatTokenPair(session.tokens) : '';
   const parts = [
     when,
-    tokens,
+    formatTokenPair(session.tokens),
     formatDuration(session.durationMs),
     modelBadge(session.primaryModel),
   ];
-  const limit = Math.max(when.length, Math.floor(width * 0.45));
   const join = (list: readonly string[]) => list.filter((part) => part !== '').join(' · ');
-  // Бюджет считается по хвосту без токенов: с TOKENS_MIN_WIDTH они обязательная
-  // часть строки (дизайн 6.3), поэтому не отбрасываются и не съедают сами себя.
-  const budgeted = () => join(parts.filter((_, at) => at !== 1));
+  // Бюджет хвоста: ширина минус доля заголовка и зазор. Время остаётся всегда.
+  const limit = Math.max(when.length, width - Math.ceil(width * TITLE_SHARE) - 1);
 
-  // Порядок отбрасывания (дизайн координации TUI, 2.3): токены уже отброшены
-  // шириной ниже порога, дальше идут длительность и бейдж модели; время
-  // остаётся всегда.
-  for (const drop of [2, 3]) {
-    if (budgeted().length <= limit) break;
+  // Порядок отбрасывания (дизайн координации TUI, 2.3): токены → длительность →
+  // бейдж модели. Токены уходят первыми: их полная форма всегда есть в деталях.
+  for (const drop of [1, 2, 3]) {
+    if (join(parts).length <= limit) break;
     parts[drop] = '';
   }
 

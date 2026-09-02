@@ -99,7 +99,7 @@ describe('токены в строке', () => {
     expect(frame).not.toContain('500к');
   });
 
-  it('ниже дизайнового порога токены уходят первыми, а заголовок остаётся', () => {
+  it('в узкой колонке токены уходят первыми, а заголовок остаётся', () => {
     const { lastFrame } = render(
       <SessionList sessions={[session()]} selected={0} height={10} width={30} />,
     );
@@ -108,14 +108,32 @@ describe('токены в строке', () => {
     expect(frame).toContain('заголовок');
   });
 
-  it('с дизайновой ширины 36 токены есть на любой ширине (дизайн 6.3)', () => {
-    for (const width of [36, 40, 45, 50, 55, 60]) {
-      const { lastFrame } = render(
+  it('токены появляются только там, где заголовку остаётся половина ширины (2.3, 6.4)', () => {
+    for (const width of [36, 45, 55]) {
+      const frame = render(
         <SessionList sessions={[session()]} selected={0} height={10} width={width} />,
-      );
-      const frame = lastFrame() ?? '';
+      ).lastFrame();
+      expect(frame, `ширина ${width}`).not.toContain('1.2к/845');
+      expect(frame, `ширина ${width}`).toContain('заголовок');
+    }
+    for (const width of [64, 80, 100]) {
+      const frame = render(
+        <SessionList sessions={[session()]} selected={0} height={10} width={width} />,
+      ).lastFrame();
       expect(frame, `ширина ${width}`).toContain('1.2к/845');
       expect(frame, `ширина ${width}`).toContain('заголовок');
+    }
+  });
+
+  it('длинный заголовок получает не меньше половины ширины, хвост ужимается', () => {
+    const title = 'очень длинный заголовок сессии для проверки бюджета';
+    for (const width of [36, 40, 60]) {
+      const frame = render(
+        <SessionList sessions={[session({ title })]} selected={0} height={10} width={width} />,
+      ).lastFrame();
+      // Половина ширины минус знак усечения — столько символов заголовка видно точно.
+      const guaranteed = title.slice(0, Math.ceil(width / 2) - 1);
+      expect(frame, `ширина ${width}`).toContain(guaranteed);
     }
   });
 
@@ -123,7 +141,7 @@ describe('токены в строке', () => {
     const ago = (ms: number): string => new Date(Date.now() - ms).toISOString();
     for (const endedAt of [ago(0), ago(60_000), ago(12 * 60_000), ago(3 * 24 * 60 * 60_000)]) {
       const { lastFrame } = render(
-        <SessionList sessions={[session({ endedAt })]} selected={0} height={10} width={36} />,
+        <SessionList sessions={[session({ endedAt })]} selected={0} height={10} width={80} />,
       );
       expect(lastFrame() ?? '', endedAt).toContain('1.2к/845');
     }
