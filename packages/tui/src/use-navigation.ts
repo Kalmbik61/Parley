@@ -10,6 +10,7 @@ export interface NavigationState {
   focus: PaneId;
   selectedSession: number;
   selectedSubsession: number;
+  setFocus: (pane: PaneId) => void;
 }
 
 export interface NavigationOptions {
@@ -21,6 +22,8 @@ export interface NavigationOptions {
   getSubsessionCount: () => number;
   /** `r` — принудительный ре-скан. */
   onRescan?: () => void;
+  /** Enter на списке сессий — открыть выбранную в правой панели. */
+  onOpen?: (index: number) => void;
 }
 
 const clamp = (value: number, count: number): number =>
@@ -35,6 +38,7 @@ export function useNavigation({
   sessionCount,
   getSubsessionCount,
   onRescan,
+  onOpen,
 }: NavigationOptions): NavigationState {
   const { exit } = useApp();
   const [focus, setFocus] = useState<PaneId>('sessions');
@@ -62,6 +66,14 @@ export function useNavigation({
       return;
     }
 
+    if (key.return) {
+      if (focus === 'sessions' && sessionCount > 0) {
+        onOpen?.(selectedSession);
+        setFocus('terminal');
+      }
+      return;
+    }
+
     const step = key.downArrow || input === 'j' ? 1 : key.upArrow || input === 'k' ? -1 : 0;
     if (step === 0) return;
 
@@ -72,5 +84,5 @@ export function useNavigation({
     }
   });
 
-  return { focus, selectedSession, selectedSubsession };
+  return { focus, selectedSession, selectedSubsession, setFocus };
 }

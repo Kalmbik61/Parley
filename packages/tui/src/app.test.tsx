@@ -11,8 +11,10 @@ describe('App', () => {
     expect(frame).toContain('TERMINAL');
   });
 
-  it('в v0 правая панель — плейсхолдер', () => {
+  it('пока ничего не открыто — правая панель подсказывает, что делать', () => {
     const { lastFrame } = render(<App sessions={[]} />);
-    expect(lastFrame()).toContain('v1');
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Enter на сессии');
+    expect(frame).toContain('claude --resume');
   });
 });

@@ -28,7 +28,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 
 - [x] packages/tui: PTY manager — spawn the unmodified `claude` from PATH via node-pty per specs/pty.md; verify binary presence at startup with a clear error if missing
 - [x] packages/tui: @xterm/headless as the VT state machine; render its buffer into the right pane on each PTY data batch per specs/pty.md
-- [ ] Enter on a session opens `claude --resume <sessionId>` in the right pane, with cwd set to the session's cwd
+- [x] Enter on a session opens `claude --resume <sessionId>` in the right pane, with cwd set to the session's cwd
 - [ ] Focus routing: when the right pane is focused, forward ALL input to the PTY; a dedicated escape hatch (default Ctrl+Q, configurable) returns focus to the lists and must not collide with Claude Code keybindings, per specs/pty.md
 - [ ] PTY resize: on terminal resize recompute right-pane cols/rows and propagate to both node-pty and the xterm buffer
 - [ ] Alt-screen and mouse: pass mouse-reporting sequences through when the PTY requests them; verify claude's own UI (menus, scrolling) works embedded, per specs/pty.md

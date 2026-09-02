@@ -98,6 +98,18 @@
       "type": "file"
     },
     {
+      "path": "packages/tui/src/pty/use-agent-pty.ts",
+      "accessCount": 2,
+      "lastAccessed": 1788334944982,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/pty/__debug.test.tsx",
+      "accessCount": 2,
+      "lastAccessed": 1788335020606,
+      "type": "file"
+    },
+    {
       "path": "packages/tui/src/pty/find-binary.ts",
       "accessCount": 1,
       "lastAccessed": 1788334347067,
@@ -143,6 +155,18 @@
       "path": "packages/tui/src/pty/use-pty-terminal.test.tsx",
       "accessCount": 1,
       "lastAccessed": 1788334728018,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/app.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1788334853938,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/pty/use-agent-pty.test.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1788334881398,
       "type": "file"
     }
   ],
