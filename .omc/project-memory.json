@@ -312,6 +312,12 @@
       "accessCount": 1,
       "lastAccessed": 1788348062051,
       "type": "file"
+    },
+    {
+      "path": "packages/tui/src/__manual-check.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1788348564203,
+      "type": "file"
     }
   ],
   "userDirectives": []
