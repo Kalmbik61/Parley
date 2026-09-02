@@ -61,7 +61,10 @@ export function visibleWindow(
 
 /** Число с единицей: один знак после запятой, пока значение меньше десяти. */
 function withUnit(value: number, unit: string): string {
-  return value < 10 ? `${value.toFixed(1)}${unit}` : `${Math.round(value)}${unit}`;
+  // Сравниваем уже округлённое: 9.999 показалось бы как «10.0к» — десятичная
+  // с десяти и выше не нужна, а знак в узкой колонке дорог.
+  const rounded = Math.round(value * 10) / 10;
+  return rounded < 10 ? `${rounded.toFixed(1)}${unit}` : `${Math.round(value)}${unit}`;
 }
 
 /** Токены: 0–999 как есть, дальше к и М (дизайн координации TUI, 6.3). */

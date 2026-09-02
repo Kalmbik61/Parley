@@ -82,6 +82,11 @@ describe('formatTokens', () => {
   it('на границе тысячи «к» не превращается в 1000к', () => {
     expect(formatTokens(999_600)).toBe('1.0М');
   });
+
+  it('десятичная только до десяти — округление до 10 отдаёт целое', () => {
+    expect(formatTokens(9_999)).toBe('10к');
+    expect(formatTokens(9_999_999)).toBe('10М');
+  });
 });
 
 describe('formatTokenPair', () => {

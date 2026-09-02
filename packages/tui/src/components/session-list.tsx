@@ -42,16 +42,20 @@ function meta(session: SessionIndex, width: number): string {
     modelBadge(session.primaryModel),
   ];
   const limit = Math.max(when.length, Math.floor(width * 0.45));
-  const tail = () => parts.filter((part) => part !== '').join(' · ');
+  const join = (list: readonly string[]) => list.filter((part) => part !== '').join(' · ');
+  // Бюджет считается по хвосту без токенов: с TOKENS_MIN_WIDTH они обязательная
+  // часть строки (дизайн 6.3), поэтому не отбрасываются и не съедают сами себя.
+  const budgeted = () => join(parts.filter((_, at) => at !== 1));
 
-  // Порядок отбрасывания (дизайн координации TUI, 2.3): сначала токены, потом
-  // длительность, потом бейдж модели; время остаётся всегда.
-  for (const drop of [1, 2, 3]) {
-    if (tail().length <= limit) break;
+  // Порядок отбрасывания (дизайн координации TUI, 2.3): токены уже отброшены
+  // шириной ниже порога, дальше идут длительность и бейдж модели; время
+  // остаётся всегда.
+  for (const drop of [2, 3]) {
+    if (budgeted().length <= limit) break;
     parts[drop] = '';
   }
 
-  return tail();
+  return join(parts);
 }
 
 export function SessionList({

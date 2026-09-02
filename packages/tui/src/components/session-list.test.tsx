@@ -108,20 +108,34 @@ describe('токены в строке', () => {
     expect(frame).not.toContain('500к');
   });
 
-  it('на узкой колонке токенов нет — они уходят в детали', () => {
+  it('ниже дизайнового порога токены уходят первыми, а заголовок остаётся', () => {
     const { lastFrame } = render(
       <SessionList sessions={[session()]} selected={0} height={10} width={30} />,
     );
-    expect(lastFrame()).not.toContain('1.2к');
+    const frame = lastFrame() ?? '';
+    expect(frame).not.toContain('1.2к');
+    expect(frame).toContain('заголовок');
   });
 
-  it('когда хвост не влезает, токены уходят первыми, а заголовок остаётся', () => {
-    const { lastFrame } = render(
-      <SessionList sessions={[session()]} selected={0} height={10} width={36} />,
-    );
-    const frame = lastFrame() ?? '';
-    expect(frame).not.toContain('1.2к/845');
-    expect(frame).toContain('заголовок');
+  it('с дизайновой ширины 36 токены есть на любой ширине (дизайн 6.3)', () => {
+    for (const width of [36, 40, 45, 50, 55, 60]) {
+      const { lastFrame } = render(
+        <SessionList sessions={[session()]} selected={0} height={10} width={width} />,
+      );
+      const frame = lastFrame() ?? '';
+      expect(frame, `ширина ${width}`).toContain('1.2к/845');
+      expect(frame, `ширина ${width}`).toContain('заголовок');
+    }
+  });
+
+  it('видимость токенов не зависит от возраста сессии', () => {
+    const ago = (ms: number): string => new Date(Date.now() - ms).toISOString();
+    for (const endedAt of [ago(0), ago(60_000), ago(12 * 60_000), ago(3 * 24 * 60 * 60_000)]) {
+      const { lastFrame } = render(
+        <SessionList sessions={[session({ endedAt })]} selected={0} height={10} width={36} />,
+      );
+      expect(lastFrame() ?? '', endedAt).toContain('1.2к/845');
+    }
   });
 
   it('сессия без токенов показывает прочерк на их месте', () => {
