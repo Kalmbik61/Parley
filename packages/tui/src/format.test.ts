@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatDuration, formatRelative, modelBadge, truncate, visibleWindow } from './format.js';
+import { formatDuration, formatRelative, truncate, visibleWindow } from './format.js';
 
 describe('formatDuration', () => {
   it('масштабирует единицы', () => {
@@ -31,22 +31,6 @@ describe('formatRelative', () => {
   it('мусор и пустота дают прочерк', () => {
     expect(formatRelative(null, now)).toBe('—');
     expect(formatRelative('не дата', now)).toBe('—');
-  });
-});
-
-describe('modelBadge', () => {
-  it('семейства Claude сокращаются', () => {
-    expect(modelBadge('claude-opus-5')).toBe('Opus');
-    expect(modelBadge('claude-sonnet-5')).toBe('Sonnet');
-    expect(modelBadge('claude-haiku-4-5-20251001')).toBe('Haiku');
-    expect(modelBadge('claude-fable-5')).toBe('Fable');
-    expect(modelBadge('claude-opus-4-8')).toBe('Opus');
-  });
-
-  it('незнакомое показывается как есть, длинное режется', () => {
-    expect(modelBadge('gpt-5')).toBe('gpt-5');
-    expect(modelBadge('какая-то-очень-длинная-модель')).toBe('какая-то-оче…');
-    expect(modelBadge(null)).toBe('—');
   });
 });
 

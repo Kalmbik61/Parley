@@ -36,20 +36,6 @@ export function formatRelative(timestamp: string | null, now: number = Date.now(
   return `${Math.floor(ago / DAY)}д`;
 }
 
-/**
- * Бейдж модели для списка. Пока только семейства Claude: раскладка для Codex и GLM
- * приедет вместе с их адаптерами (v2, specs/runners.md).
- */
-export function modelBadge(model: string | null): string {
-  if (model === null) return '—';
-  const match = /^claude-(opus|sonnet|haiku|fable)\b/.exec(model);
-  if (match?.[1] !== undefined) {
-    const family = match[1];
-    return family.charAt(0).toUpperCase() + family.slice(1);
-  }
-  return model.length > 12 ? `${model.slice(0, 12)}…` : model;
-}
-
 /** Обрезка по ширине колонки — Ink сам не переносит однострочный Text. */
 export function truncate(text: string, width: number): string {
   if (width <= 0) return '';

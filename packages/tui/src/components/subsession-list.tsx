@@ -1,7 +1,7 @@
-import type { Subsession } from '@harnas/core';
+import { modelBadge, type Subsession } from '@harnas/core';
 import { Box, Text } from 'ink';
 import type { ReactNode } from 'react';
-import { formatDuration, modelBadge, truncate, visibleWindow } from '../format.js';
+import { formatDuration, truncate, visibleWindow } from '../format.js';
 
 export interface SubsessionListProps {
   subsessions: Subsession[];

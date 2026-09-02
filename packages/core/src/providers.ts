@@ -17,6 +17,8 @@ export interface ProviderInfo {
   id: Provider;
   /** Короткая подпись для бейджа провайдера в списке. */
   label: string;
+  /** Двухсимвольный маркер для узкой колонки: первой буквы не хватает — Claude и Codex совпали бы. */
+  mark: string;
   /** Умеем ли читать историю сессий этого провайдера. */
   hasHistory: boolean;
   runner: RunnerConfig;
@@ -33,6 +35,7 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
   claude: {
     id: 'claude',
     label: 'Claude',
+    mark: 'Cl',
     hasHistory: true,
     runner: {
       command: 'claude',
@@ -42,6 +45,7 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
   codex: {
     id: 'codex',
     label: 'Codex',
+    mark: 'Cx',
     hasHistory: true,
     runner: {
       // `codex resume <SESSION_ID>` — id или имя сессии, см. CLI самого Codex.
@@ -52,6 +56,7 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
   glm: {
     id: 'glm',
     label: 'GLM',
+    mark: 'GL',
     hasHistory: false,
     runner: { command: 'glm' },
   },

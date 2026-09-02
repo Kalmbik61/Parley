@@ -86,6 +86,9 @@ export function App({ sessions, root = defaultRoot(), onRescan }: AppProps): Rea
   const { subsessions, loading } = useSubsessions(sessions[selectedSession], root);
   subsessionCount.current = subsessions.length;
 
+  // Маркер провайдера нужен, только когда список смешанный.
+  const providersInList = new Set(sessions.map((session) => session.provider)).size;
+
   return (
     <Box flexDirection="row" height={rows}>
       <Box flexDirection="column" width={LEFT_WIDTH} minWidth={LEFT_MIN_WIDTH}>
@@ -95,6 +98,7 @@ export function App({ sessions, root = defaultRoot(), onRescan }: AppProps): Rea
             selected={selectedSession}
             height={sessionsHeight}
             width={leftWidth - 4}
+            showProvider={providersInList > 1}
           />
         </Pane>
         <Pane

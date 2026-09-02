@@ -96,3 +96,35 @@ describe('SessionList', () => {
     expect(lastFrame()).toContain('без-имени');
   });
 });
+
+describe('маркер провайдера', () => {
+  const mixed = [
+    session({ id: 'a', title: 'клод', provider: 'claude', primaryModel: 'claude-opus-5' }),
+    session({ id: 'b', title: 'кодекс', provider: 'codex', primaryModel: 'gpt-5.2-codex' }),
+  ];
+
+  it('в смешанном списке видно, чья сессия', () => {
+    const { lastFrame } = render(
+      <SessionList sessions={mixed} selected={0} height={10} width={70} showProvider />,
+    );
+    const lines = (lastFrame() ?? '').split('\n');
+    expect(lines.find((l) => l.includes('клод'))).toContain('Cl');
+    expect(lines.find((l) => l.includes('кодекс'))).toContain('Cx');
+  });
+
+  it('с одним провайдером маркер не занимает место', () => {
+    const { lastFrame } = render(
+      <SessionList sessions={[mixed[0]!]} selected={0} height={10} width={70} />,
+    );
+    expect(lastFrame()).not.toContain('Cl ');
+  });
+
+  it('бейдж модели единый для обоих провайдеров', () => {
+    const { lastFrame } = render(
+      <SessionList sessions={mixed} selected={0} height={10} width={70} showProvider />,
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Opus');
+    expect(frame).toContain('Codex');
+  });
+});

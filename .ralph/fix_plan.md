@@ -42,7 +42,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [x] Research: locate GLM harness session logs and document the format in specs/runners.md; if none exist, record the decision that GLM is runner-only (no history) — see specs/runners.md
 - [x] packages/core: GLM session adapter, or runner-only stub per the research outcome
 - [x] packages/tui: runner abstraction — spawn `codex` (and the GLM CLI) in the right pane through the same PTY manager per specs/runners.md
-- [ ] Unified model badges: normalization map (claude-* → Opus/Sonnet/Haiku, gpt-*/codex → Codex, glm-* → GLM) per specs/runners.md; provider badge in the sessions list
+- [x] Unified model badges: normalization map (claude-* → Opus/Sonnet/Haiku, gpt-*/codex → Codex, glm-* → GLM) per specs/runners.md; provider badge in the sessions list
 - [ ] Multi-provider merge: one recency-sorted session list across providers with a provider filter
 - [ ] README.md: install, run, keybindings, the legal note (unmodified binary only, ~/.claude read-only)
 - [ ] Final pass: lint clean, tests green, manual smoke checklist from specs/ui.md walked through
@@ -53,7 +53,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [ ] packages/core: `observe()` схлопывает мапы с динамическими ключами
       (`snapshot.trackedFileBackups.<путь>`), иначе отчёт раздувается и тащит пути
 - [x] packages/core: исключить `<synthetic>` из подсчёта `primaryModel`
-- [ ] specs/runners.md: дополнить таблицу бейджей — в реальных данных есть
+- [x] specs/runners.md: дополнить таблицу бейджей — в реальных данных есть
       `claude-fable-5` и `claude-opus-4-8`, текущая таблица их не покрывает
 - [ ] packages/tui: показывать `workflowName`/`status` из `<sid>/workflows/wf_<id>.json`
       как группировку подсессий (опционально, данные есть)

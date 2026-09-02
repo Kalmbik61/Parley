@@ -258,6 +258,12 @@
       "accessCount": 1,
       "lastAccessed": 1788341337719,
       "type": "file"
+    },
+    {
+      "path": "packages/core/src/model-badge.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788341772605,
+      "type": "file"
     }
   ],
   "userDirectives": []
