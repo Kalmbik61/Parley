@@ -16,6 +16,11 @@
 
 process.stdout.write(`stub готов args=${JSON.stringify(process.argv.slice(2))}\r\n`);
 process.stdout.write(`cwd=${process.cwd()}\r\n`);
+// Окружение сессии работы: по нему тест видит, что до процесса доехали
+// HARNAS_WORK_DIR и HARNAS_SESSION_ID. Печатаем коротко — панель узкая.
+process.stdout.write(
+  `harnas=${process.env.HARNAS_SESSION_ID ?? '-'}@${(process.env.HARNAS_WORK_DIR ?? '-').split('/').pop()}\r\n`,
+);
 
 process.on('SIGHUP', () => process.exit(129));
 process.stdout.on('resize', () => {

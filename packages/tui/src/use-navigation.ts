@@ -30,8 +30,10 @@ export interface NavigationOptions {
   onRestart?: () => void;
   /** `p` — переключить фильтр по провайдеру. */
   onCycleProvider?: () => void;
-  /** `n` — запустить нового агента без истории. */
+  /** `n` — запустить нового агента без истории или открыть диалог 4.2. */
   onNewSession?: () => void;
+  /** `N` — диалог новой работы (дизайн 4.1); действует только из фокуса списков. */
+  onNewWork?: () => void;
   /** `w` — переключить режим левой колонки: все сессии ↔ работы. */
   onToggleMode?: () => void;
   /** `←` / `h` — свернуть выбранную работу (режим работ). */
@@ -39,11 +41,16 @@ export interface NavigationOptions {
   /** `→` / `l` — развернуть выбранную работу (режим работ). */
   onExpand?: () => void;
   /**
-   * Действует ли `n`. В режиме работ она открывает диалог «новая сессия в работе»
-   * (дизайн 4.2), которого ещё нет: до него клавиша молчит и фокус остаётся на
-   * списках — запускать агента по индексу чужого списка нельзя.
+   * Уводит ли `n` фокус в терминал. В режиме «все сессии» она сразу запускает
+   * агента, поэтому да; в режиме работ она открывает диалог 4.2, который живёт
+   * в левой колонке, и фокус остаётся на списках.
    */
-  newSessionEnabled?: boolean;
+  newSessionOpensTerminal?: boolean;
+  /**
+   * Диалог открыт: он модален для левой колонки, и весь ввод принадлежит ему
+   * (дизайн 4). Глобальные клавиши списков на это время молчат.
+   */
+  suspended?: boolean;
   /**
    * Открывать ли правую панель по Enter. В режиме работ Enter на работе только
    * сворачивает её — фокус при этом остаётся на списках (дизайн TUI, раздел 8).
@@ -75,11 +82,13 @@ export function useNavigation({
   onRestart,
   onCycleProvider,
   onNewSession,
+  onNewWork,
   onToggleMode,
   onCollapse,
   onExpand,
   onKey,
-  newSessionEnabled = true,
+  newSessionOpensTerminal = true,
+  suspended = false,
   focusTerminalOnOpen = true,
   terminalCaptures = false,
 }: NavigationOptions): NavigationState {
@@ -94,6 +103,8 @@ export function useNavigation({
   useEffect(() => setSelectedSubsession(0), [selectedSession]);
 
   useInput((input, key) => {
+    // Открытый диалог модален для левой колонки: клавиши списков молчат.
+    if (suspended) return;
     // Живой агент забирает весь ввод, включая q и Ctrl+C; вернуть фокус можно
     // только escape-клавишей, и делает это usePtyInput.
     if (focus === 'terminal' && terminalCaptures) return;
@@ -145,9 +156,19 @@ export function useNavigation({
     }
 
     if (input === 'n') {
-      if (!newSessionEnabled) return;
+      // Диалоги открываются только из фокуса списков: пока пользователь смотрит
+      // в терминал, из левой колонки ничто не выпрыгивает (дизайн 4).
+      if (!newSessionOpensTerminal) {
+        if (focus !== 'terminal') onNewSession?.();
+        return;
+      }
       onNewSession?.();
       setFocus('terminal');
+      return;
+    }
+
+    if (input === 'N') {
+      if (focus !== 'terminal') onNewWork?.();
       return;
     }
 

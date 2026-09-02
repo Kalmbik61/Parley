@@ -1,4 +1,10 @@
-import { PROVIDERS, runnerCommand, type Provider, type SessionIndex } from '@harnas/core';
+import {
+  PROVIDERS,
+  runnerCommand,
+  type Provider,
+  type SessionIndex,
+  type WorkProvider,
+} from '@harnas/core';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { findRunnerBinary } from './find-binary.js';
 import { spawnPtySession, type PtyExit, type PtySession } from './pty-session.js';
@@ -15,20 +21,46 @@ export interface PtySize {
  * с чистого листа — у такой цели нет ни id сессии, ни её каталога.
  */
 export type AgentTarget =
-  { kind: 'session'; session: SessionIndex } | { kind: 'new'; provider: Provider };
+  { kind: 'session'; session: SessionIndex } | { kind: 'new'; provider: Provider } | WorkTarget;
+
+/**
+ * Сессия работы: команду, аргументы, cwd и окружение считает слой координации
+ * (`work-launch.ts`) по реестру провайдеров — здесь они уже готовы.
+ */
+export interface WorkTarget {
+  kind: 'work';
+  projectPath: string;
+  workId: string;
+  sessionId: string;
+  provider: WorkProvider;
+  /** Роль сессии: она же заголовок правой панели. */
+  title: string;
+  command: string;
+  args: string[];
+  cwd: string;
+  env: Record<string, string>;
+}
 
 /** Провайдер цели: его марка нужна и заголовку панели, и строке статуса. */
-export const targetProvider = (target: AgentTarget): Provider =>
+export const targetProvider = (target: AgentTarget): WorkProvider =>
   target.kind === 'session' ? target.session.provider : target.provider;
 
-/** Ключ, по которому агент считается «тем же»: одна сессия — один процесс. */
-const targetKey = (target: AgentTarget): string =>
-  target.kind === 'session' ? `session:${target.session.id}` : `new:${target.provider}`;
+/** Ключ живой панели сессии работы: по нему же идёт attach (дизайн 8). */
+export const workRunKey = (projectPath: string, workId: string, sessionId: string): string =>
+  `work:${projectPath} ${workId} ${sessionId}`;
 
-const targetTitle = (target: AgentTarget): string =>
-  target.kind === 'session'
-    ? (target.session.title ?? target.session.id)
-    : `новая сессия ${PROVIDERS[target.provider].label}`;
+/** Ключ, по которому агент считается «тем же»: одна сессия — один процесс. */
+const targetKey = (target: AgentTarget): string => {
+  if (target.kind === 'session') return `session:${target.session.id}`;
+  if (target.kind === 'new') return `new:${target.provider}`;
+  return workRunKey(target.projectPath, target.workId, target.sessionId);
+};
+
+const targetTitle = (target: AgentTarget): string => {
+  if (target.kind === 'session') return target.session.title ?? target.session.id;
+  if (target.kind === 'new') return `новая сессия ${PROVIDERS[target.provider].label}`;
+  return target.title;
+};
 
 /** Один запущенный агент. На цель их не больше одного (specs/pty.md). */
 export interface AgentRun {
@@ -44,10 +76,15 @@ export interface AgentPtyState {
   /** Что показывает правая панель. */
   active: AgentRun | undefined;
   /** Сколько агентов провайдера работает прямо сейчас: лимиты подписки у них общие. */
-  liveOf(provider: Provider): number;
+  liveOf(provider: WorkProvider): number;
   /** Нет бинаря или не удалось запустить. */
   error: string | undefined;
   open(target: AgentTarget, size: PtySize): void;
+  /**
+   * Показать уже запущенную панель по её ключу. `false` — такой панели у
+   * харнесса нет: сессию запустили вне TUI, и подключаться не к чему (решение №5).
+   */
+  attach(key: string): boolean;
   /** Перезапустить агента активной панели после его завершения. */
   restart(size: PtySize): void;
   close(): void;
@@ -64,21 +101,36 @@ export interface AgentPtyState {
  * Спавнится только немодифицированный бинарь из PATH под логином пользователя —
  * юридическая граница проекта.
  */
-export function useAgentPty(): AgentPtyState {
+export interface AgentPtyOptions {
+  /**
+   * Процесс цели завершился. Слой координации переводит по этому событию
+   * сессию работы в `exited` и фиксирует её метрики (спецификация, раздел 6).
+   */
+  onExit?: (target: AgentTarget, exit: PtyExit) => void;
+}
+
+export function useAgentPty({ onExit }: AgentPtyOptions = {}): AgentPtyState {
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [activeKey, setActiveKey] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
 
   // Живые процессы нужны в cleanup, где состояние React уже недоступно.
   const live = useRef(new Map<string, PtySession>());
+  // Колбэк выхода — через ref: его новая ссылка не должна пересоздавать запуск.
+  const exited = useRef(onExit);
+  exited.current = onExit;
   // Путь к бинарю ищется один раз на команду и переиспользуется.
   const binaries = useRef(new Map<string, string>());
 
   const start = useCallback((file: string, args: string[], target: AgentTarget, size: PtySize) => {
     setError(undefined);
     const key = targetKey(target);
-    // cwd есть только у существующей сессии: агент должен видеть тот же проект.
-    const cwd = target.kind === 'session' ? target.session.cwd : null;
+    // cwd есть у существующей сессии и у сессии работы: агент должен видеть
+    // тот же проект — у чужой работы это не cwd харнесса (решение №9).
+    const cwd =
+      target.kind === 'session' ? target.session.cwd : target.kind === 'work' ? target.cwd : null;
+    // Окружение сессии работы: по нему MCP-сервер узнаёт, кто звонит.
+    const env = target.kind === 'work' ? { ...process.env, ...target.env } : undefined;
 
     try {
       const session = spawnPtySession({
@@ -87,6 +139,7 @@ export function useAgentPty(): AgentPtyState {
         cols: size.cols,
         rows: size.rows,
         ...(cwd === null ? {} : { cwd }),
+        ...(env === undefined ? {} : { env }),
       });
 
       session.onExit((exit) => {
@@ -94,6 +147,7 @@ export function useAgentPty(): AgentPtyState {
         setRuns((prev) =>
           prev.map((run) => (targetKey(run.target) === key ? { ...run, exit } : run)),
         );
+        exited.current?.(target, exit);
       });
 
       // Прежний процесс той же цели гасим: один активный PTY на сессию.
@@ -113,10 +167,14 @@ export function useAgentPty(): AgentPtyState {
   /** Ищет бинарь провайдера и запускает его. Бинаря нет — объясняем, а не падаем. */
   const launch = useCallback(
     (target: AgentTarget, size: PtySize) => {
-      const { command, args } = runnerCommand(
-        targetProvider(target),
-        target.kind === 'session' ? target.session.id : undefined,
-      );
+      // У сессии работы команда уже посчитана слоем координации по реестру.
+      const { command, args } =
+        target.kind === 'work'
+          ? { command: target.command, args: target.args }
+          : runnerCommand(
+              target.kind === 'session' ? target.session.provider : target.provider,
+              target.kind === 'session' ? target.session.id : undefined,
+            );
       const known = binaries.current.get(command);
 
       if (known !== undefined) {
@@ -166,6 +224,15 @@ export function useAgentPty(): AgentPtyState {
     [runs, activeKey, launch],
   );
 
+  const attach = useCallback<AgentPtyState['attach']>(
+    (key) => {
+      if (!runs.some((run) => targetKey(run.target) === key)) return false;
+      setActiveKey(key);
+      return true;
+    },
+    [runs],
+  );
+
   const close = useCallback(() => {
     if (activeKey === undefined) return;
     live.current.get(activeKey)?.kill();
@@ -183,6 +250,7 @@ export function useAgentPty(): AgentPtyState {
         .length,
     error,
     open,
+    attach,
     restart,
     close,
   };

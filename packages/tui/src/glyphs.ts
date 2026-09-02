@@ -35,6 +35,8 @@ export interface Glyphs {
    * взят по тому же правилу, что и у остальных глифов.
    */
   arrow: string;
+  /** Цитата в диалоге запуска: первые строки брифа (макет 4.3). */
+  quote: string;
   /** Запасной набор: подсветка выбора в нём — reverse video (6.1). */
   ascii: boolean;
 }
@@ -57,6 +59,7 @@ const UNICODE: Glyphs = {
   down: '↓',
   cache: '⇄',
   arrow: '→',
+  quote: '▏',
   ascii: false,
 };
 
@@ -78,6 +81,7 @@ const ASCII: Glyphs = {
   down: 'o',
   cache: 'c',
   arrow: '->',
+  quote: '|',
   ascii: true,
 };
 

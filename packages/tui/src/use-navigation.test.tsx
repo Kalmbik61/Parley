@@ -21,7 +21,9 @@ interface ProbeProps {
   onKey?: () => void;
   onOpen?: (index: number) => void;
   onNewSession?: () => void;
-  newSessionEnabled?: boolean;
+  onNewWork?: () => void;
+  newSessionOpensTerminal?: boolean;
+  suspended?: boolean;
   focusTerminalOnOpen?: boolean;
 }
 
@@ -35,7 +37,9 @@ function Probe({
   onKey,
   onOpen,
   onNewSession,
-  newSessionEnabled,
+  onNewWork,
+  newSessionOpensTerminal,
+  suspended,
   focusTerminalOnOpen,
 }: ProbeProps): ReactNode {
   const nav = useNavigation({
@@ -48,7 +52,9 @@ function Probe({
     ...(onKey === undefined ? {} : { onKey }),
     ...(onOpen === undefined ? {} : { onOpen }),
     ...(onNewSession === undefined ? {} : { onNewSession }),
-    ...(newSessionEnabled === undefined ? {} : { newSessionEnabled }),
+    ...(onNewWork === undefined ? {} : { onNewWork }),
+    ...(newSessionOpensTerminal === undefined ? {} : { newSessionOpensTerminal }),
+    ...(suspended === undefined ? {} : { suspended }),
     ...(focusTerminalOnOpen === undefined ? {} : { focusTerminalOnOpen }),
   });
   return <Text>{`${nav.focus}|${nav.selectedSession}|${nav.selectedSubsession}`}</Text>;
@@ -174,16 +180,71 @@ describe('useNavigation', () => {
     expect(lastFrame()).toBe('terminal|0|0');
   });
 
-  it('с newSessionEnabled=false n молчит и фокус остаётся на списках (дизайн 4.2)', async () => {
+  it('в режиме работ n открывает диалог и не уводит фокус (дизайн 4.2)', async () => {
     const onNewSession = vi.fn();
     const { stdin, lastFrame } = render(
-      <Probe onNewSession={onNewSession} newSessionEnabled={false} />,
+      <Probe onNewSession={onNewSession} newSessionOpensTerminal={false} />,
     );
     await settle();
 
     stdin.write('n');
     await settle();
+    expect(onNewSession).toHaveBeenCalledTimes(1);
+    expect(lastFrame()).toBe('sessions|0|0');
+  });
+
+  it('из терминала диалоги не открываются: n и N молчат (дизайн 4)', async () => {
+    const onNewSession = vi.fn();
+    const onNewWork = vi.fn();
+    const { stdin, lastFrame } = render(
+      <Probe onNewSession={onNewSession} onNewWork={onNewWork} newSessionOpensTerminal={false} />,
+    );
+    await settle();
+
+    stdin.write(TAB);
+    stdin.write(TAB);
+    await settle();
+    expect(lastFrame()).toBe('terminal|0|0');
+
+    stdin.write('n');
+    await settle();
+    stdin.write('N');
+    await settle();
     expect(onNewSession).not.toHaveBeenCalled();
+    expect(onNewWork).not.toHaveBeenCalled();
+  });
+
+  it('N открывает диалог новой работы из фокуса списков (дизайн 4.1)', async () => {
+    const onNewWork = vi.fn();
+    const { stdin, lastFrame } = render(<Probe onNewWork={onNewWork} />);
+    await settle();
+
+    stdin.write('N');
+    await settle();
+    expect(onNewWork).toHaveBeenCalledTimes(1);
+    // Диалог живёт в левой колонке: фокус остаётся на списках.
+    expect(lastFrame()).toBe('sessions|0|0');
+  });
+
+  it('открытый диалог модален: клавиши списков молчат (дизайн 4)', async () => {
+    const onRescan = vi.fn();
+    const onToggleMode = vi.fn();
+    const onNewWork = vi.fn();
+    const { stdin, lastFrame } = render(
+      <Probe onRescan={onRescan} onToggleMode={onToggleMode} onNewWork={onNewWork} suspended />,
+    );
+    await settle();
+
+    stdin.write('r');
+    stdin.write('w');
+    stdin.write('N');
+    stdin.write(ARROW_DOWN);
+    stdin.write(TAB);
+    await settle();
+
+    expect(onRescan).not.toHaveBeenCalled();
+    expect(onToggleMode).not.toHaveBeenCalled();
+    expect(onNewWork).not.toHaveBeenCalled();
     expect(lastFrame()).toBe('sessions|0|0');
   });
 

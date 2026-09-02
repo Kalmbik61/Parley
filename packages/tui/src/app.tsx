@@ -1,4 +1,5 @@
 import {
+  createWork,
   defaultRoot,
   modelBadge,
   providerBadge,
@@ -9,23 +10,50 @@ import {
 import { Box, Text } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { DetailsPane } from './components/details-pane.js';
+import { Dialog } from './components/dialog.js';
 import { Pane, type PaneSize } from './components/pane.js';
 import { SessionList } from './components/session-list.js';
 import { StatusBar } from './components/status-bar.js';
 import { SubsessionList } from './components/subsession-list.js';
 import { TerminalView } from './components/terminal-view.js';
 import { WorkList } from './components/work-list.js';
-import { targetProvider, useAgentPty, type AgentPtyState } from './pty/use-agent-pty.js';
+import { glyphs } from './glyphs.js';
+import type { PtyExit } from './pty/pty-session.js';
+import {
+  targetProvider,
+  useAgentPty,
+  workRunKey,
+  type AgentPtyState,
+  type AgentTarget,
+} from './pty/use-agent-pty.js';
 import { useHostTerminalModes } from './pty/use-host-modes.js';
 import { ctrlByte, DEFAULT_ESCAPE_BYTE, usePtyInput } from './pty/use-pty-input.js';
 import { usePtyResize } from './pty/use-pty-resize.js';
 import { usePtyTerminal } from './pty/use-pty-terminal.js';
-import { useNavigation } from './use-navigation.js';
+import { useLifecycle } from './use-lifecycle.js';
+import { useNavigation, type PaneId } from './use-navigation.js';
 import { useProviderFilter } from './use-provider-filter.js';
 import { useStatus, type StatusSource } from './use-status.js';
 import { useSubsessions } from './use-subsessions.js';
 import { useTerminalSize } from './use-terminal-size.js';
 import { useWorks } from './use-works.js';
+import {
+  launchDialog,
+  newSessionDialog,
+  newWorkDialog,
+  resumeDialog,
+  resumePreview,
+  type DialogSpec,
+} from './work-dialogs.js';
+import {
+  createPendingSession,
+  finishExited,
+  planLaunch,
+  planResume,
+  providerOptions,
+  readBrief,
+  startSession,
+} from './work-launch.js';
 import {
   buildRows,
   providerLabel,
@@ -33,6 +61,7 @@ import {
   workKey,
   type LiveMetrics,
   type WorkRow,
+  type WorkRowSession,
 } from './work-rows.js';
 
 export interface AppProps {
@@ -49,6 +78,17 @@ const LEFT_MIN_WIDTH = 30;
 
 /** Режим левой колонки; переключается `w` и живёт до конца процесса (дизайн 1). */
 type LeftMode = 'sessions' | 'works';
+
+/**
+ * Открытый диалог: его содержимое (дизайн 4) и что делать по `Enter`.
+ * `id` нужен, чтобы React пересоздавал поля при смене диалога, а не подсовывал
+ * новому диалогу значения прошлого.
+ */
+interface OpenDialog {
+  id: number;
+  spec: DialogSpec;
+  submit: (values: Record<string, string>) => void;
+}
 
 export function App({
   sessions,
@@ -111,7 +151,39 @@ export function App({
     [works, expandedWorks, filter, live],
   );
 
-  const agent = useAgentPty();
+  const [dialog, setDialog] = useState<OpenDialog | null>(null);
+  const dialogId = useRef(0);
+  // Правая панель, когда подключаться не к чему: сессию запустили вне харнесса.
+  const [note, setNote] = useState<string | null>(null);
+
+  const push = status.push;
+  const fail = useCallback(
+    (reason: unknown) => {
+      push([{ text: reason instanceof Error ? reason.message : String(reason) }]);
+    },
+    [push],
+  );
+
+  const openDialog = useCallback(
+    (spec: DialogSpec, submit: OpenDialog['submit']) =>
+      setDialog({ id: dialogId.current++, spec, submit }),
+    [],
+  );
+  const closeDialog = useCallback(() => setDialog(null), []);
+
+  // Процесс сессии работы завершился: `active`/`idle` → `exited` с кодом выхода
+  // и фиксацией метрик (спецификация, раздел 6). Отчитавшуюся сессию не трогаем.
+  const onAgentExit = useCallback(
+    (target: AgentTarget, exit: PtyExit) => {
+      if (target.kind !== 'work') return;
+      void finishExited(target.projectPath, target.workId, target.sessionId, exit, {
+        claudeRoot: root,
+      }).catch(fail);
+    },
+    [root, fail],
+  );
+
+  const agent = useAgentPty({ onExit: onAgentExit });
   const snapshot = usePtyTerminal(agent.active?.session, {
     cols: terminalCols,
     rows: terminalRows,
@@ -131,6 +203,8 @@ export function App({
   const currentRows = useRef<WorkRow[]>(workRows);
   currentRows.current = workRows;
   const selectRow = useRef<(at: number) => void>(() => {});
+  // Фокус переводится из колбэков, которые объявлены до useNavigation.
+  const focusPane = useRef<(pane: PaneId) => void>(() => {});
 
   const setWorkExpanded = useCallback((at: number, open: boolean) => {
     const row = currentRows.current[at];
@@ -157,29 +231,157 @@ export function App({
     [setWorkExpanded],
   );
 
+  /**
+   * Запуск или возобновление сессии работы: команда и аргументы из реестра с
+   * подстановками, cwd проекта работы, переход в `active` (спецификация, 5 и 6).
+   */
+  const launchWork = useCallback(
+    (row: WorkRowSession, resume: boolean) => {
+      const { projectPath: project, workId, session } = row;
+      const plan = resume
+        ? planResume(project, workId, session)
+        : planLaunch(project, workId, session);
+
+      void plan
+        .then(async (ready) => {
+          setNote(null);
+          agent.open(
+            {
+              kind: 'work',
+              projectPath: project,
+              workId,
+              sessionId: session.id,
+              provider: session.provider,
+              title: session.label,
+              command: ready.command,
+              args: ready.args,
+              cwd: ready.cwd,
+              env: ready.env,
+            },
+            { cols: terminalCols, rows: terminalRows },
+          );
+          await startSession(project, workId, session.id, ready.providerSessionId);
+        })
+        .catch(fail);
+
+      closeDialog();
+      focusPane.current('terminal');
+    },
+    [agent, terminalCols, terminalRows, fail, closeDialog],
+  );
+
+  /** Живая сессия: подключаемся к её панели, если PTY у харнесса (решение №5). */
+  const attachWork = useCallback(
+    (row: WorkRowSession) => {
+      if (agent.attach(workRunKey(row.projectPath, row.workId, row.session.id))) {
+        setNote(null);
+        focusPane.current('terminal');
+        return;
+      }
+      setNote(`Сессия «${row.session.label}» запущена вне харнесса — подключиться нельзя.`);
+    },
+    [agent],
+  );
+
+  /** Enter на строке сессии: ветка по статусу (дизайн 8 и схема переходов 9). */
+  const openSessionRow = useCallback(
+    (row: WorkRowSession) => {
+      const { status: state } = row.session;
+      if (state === 'active' || state === 'idle') {
+        attachWork(row);
+        return;
+      }
+
+      if (state === 'pending') {
+        // Бриф перечитывается с диска: его могли поправить после создания.
+        void readBrief(row.projectPath, row.workId, row.session.id)
+          .then((brief) =>
+            openDialog(launchDialog(row, brief, glyphs()), () => launchWork(row, false)),
+          )
+          .catch(fail);
+        return;
+      }
+
+      void planResume(row.projectPath, row.workId, row.session)
+        .then((ready) =>
+          openDialog(
+            resumeDialog(
+              row,
+              resumePreview(ready.command, ready.args, row.session.providerSessionId),
+              glyphs(),
+            ),
+            () => launchWork(row, true),
+          ),
+        )
+        .catch(fail);
+    },
+    [attachWork, launchWork, openDialog, fail],
+  );
+
   const openSelected = useCallback(
     (at: number) => {
-      // В режиме работ Enter на работе сворачивает и разворачивает её (раздел 8).
+      // В режиме работ Enter на работе сворачивает и разворачивает её (раздел 8),
+      // а на сессии открывает диалог по её статусу.
       if (currentMode.current === 'works') {
         const row = currentRows.current[at];
-        if (row?.kind === 'work') setWorkExpanded(at, !row.expanded);
+        if (row === undefined) return;
+        if (row.kind === 'work') setWorkExpanded(at, !row.expanded);
+        else openSessionRow(row);
         return;
       }
       const session = visible[at];
       if (session !== undefined) {
+        setNote(null);
         agent.open({ kind: 'session', session }, { cols: terminalCols, rows: terminalRows });
       }
     },
-    [visible, agent, terminalCols, terminalRows, setWorkExpanded],
+    [visible, agent, terminalCols, terminalRows, setWorkExpanded, openSessionRow],
   );
 
   // Новая сессия: провайдера берём из активного фильтра, иначе из выбранной
   // строки. Только так дотягиваемся до раннеров без истории — GLM в списке нет.
   const openNew = useCallback(() => {
+    // В режиме работ `n` — диалог новой сессии в выбранной работе (дизайн 4.2).
+    if (currentMode.current === 'works') {
+      const row = currentRows.current[selectedRow.current];
+      if (row === undefined) return;
+      const workId = row.kind === 'work' ? row.work.id : row.workId;
+      const key = workKey(row.projectPath, workId);
+      const work = currentRows.current.find((item) => item.kind === 'work' && item.key === key);
+      const title = work?.kind === 'work' ? work.work.title : workId;
+
+      void providerOptions()
+        .then((providers) =>
+          openDialog(newSessionDialog(title, providers), (values) => {
+            closeDialog();
+            void createPendingSession(row.projectPath, workId, {
+              provider: values['provider'] ?? '',
+              label: values['label'] ?? '',
+              task: values['task'] ?? '',
+            }).catch(fail);
+          }),
+        )
+        .catch(fail);
+      return;
+    }
+
     const provider: Provider =
       activeFilter.current ?? visible[selectedRow.current]?.provider ?? 'claude';
+    setNote(null);
     agent.open({ kind: 'new', provider }, { cols: terminalCols, rows: terminalRows });
-  }, [visible, agent, terminalCols, terminalRows]);
+  }, [visible, agent, terminalCols, terminalRows, openDialog, closeDialog, fail]);
+
+  /** `N` — новая работа; проект всегда cwd харнесса (дизайн 4.1, решение №9). */
+  const openNewWork = useCallback(() => {
+    if (currentMode.current !== 'works') return;
+    openDialog(newWorkDialog(projectPath), (values) => {
+      closeDialog();
+      void createWork(projectPath, {
+        title: values['title'] ?? '',
+        goal: values['goal'] ?? '',
+      }).catch(fail);
+    });
+  }, [projectPath, openDialog, closeDialog, fail]);
 
   const countDetailLines = useCallback((count: number) => {
     detailLineCount.current = count;
@@ -212,20 +414,24 @@ export function App({
     onRestart: restartAgent,
     onCycleProvider: cycle,
     onNewSession: openNew,
+    onNewWork: openNewWork,
     onToggleMode: toggleMode,
     onCollapse: () => setSelectedExpanded(false),
     onExpand: () => setSelectedExpanded(true),
     onKey: status.keyPressed,
     focusTerminalOnOpen: mode === 'sessions',
-    // `n` в режиме работ — диалог 4.2, которого ещё нет: до него клавиша молчит,
-    // иначе она запускала бы агента по индексу из списка сессий (дизайн 8).
-    newSessionEnabled: mode === 'sessions',
+    // В режиме «все сессии» `n` сразу запускает агента справа; в режиме работ
+    // она открывает диалог в левой колонке, и фокус остаётся на списках.
+    newSessionOpensTerminal: mode === 'sessions',
+    // Диалог модален для левой колонки: клавиши списков на это время молчат.
+    suspended: dialog !== null,
     terminalCaptures: agentAlive,
     onRescan: rescan,
   });
 
   selectedRow.current = selectedSession;
   selectRow.current = select;
+  focusPane.current = setFocus;
 
   const selectedWorkRow = mode === 'works' ? workRows[selectedSession] : undefined;
 
@@ -239,7 +445,6 @@ export function App({
   // правой панели: канал уведомлений один на оба режима (дизайн 5, решение №8).
   // Считаются живые сессии того же провайдера: лимиты подписки общие у него, а
   // не у соседнего — иначе про Claude утверждалось бы неверное (дизайн 5).
-  const push = status.push;
   const wasLive = useRef(0);
   const activeProvider = agent.active === undefined ? null : targetProvider(agent.active.target);
   const liveSameProvider = activeProvider === null ? 0 : agent.liveOf(activeProvider);
@@ -253,6 +458,9 @@ export function App({
     }
     wasLive.current = liveSameProvider;
   }, [liveSameProvider, activeProvider, push]);
+
+  // Статусы, которые ведёт харнесс: `active ↔ idle` по молчанию лога (раздел 6).
+  useLifecycle({ works, live });
 
   const backToLists = useCallback(() => setFocus('sessions'), [setFocus]);
   usePtyInput(agent.active?.session, focus === 'terminal' && agentAlive, {
@@ -307,16 +515,31 @@ export function App({
             }
           </Pane>
           <Pane
+            // Диалог занимает место нижней панели; правая колонка не трогается.
             title={
-              mode === 'works'
-                ? detailsTitle(selectedWorkRow)
-                : `SUBSESSIONS (${subsessions.length})`
+              dialog !== null
+                ? dialog.spec.title
+                : mode === 'works'
+                  ? detailsTitle(selectedWorkRow)
+                  : `SUBSESSIONS (${subsessions.length})`
             }
-            active={focus === 'subsessions'}
+            active={dialog !== null || focus === 'subsessions'}
             flexGrow={1}
           >
             {(size) =>
-              mode === 'works' ? (
+              dialog !== null ? (
+                <Dialog
+                  key={dialog.id}
+                  fields={dialog.spec.fields}
+                  info={dialog.spec.info}
+                  quote={dialog.spec.quote}
+                  footer={dialog.spec.footer}
+                  width={size.width}
+                  height={size.height}
+                  onSubmit={dialog.submit}
+                  onCancel={closeDialog}
+                />
+              ) : mode === 'works' ? (
                 <DetailsPane
                   row={selectedWorkRow}
                   width={size.width}
@@ -346,7 +569,13 @@ export function App({
           flexGrow={1}
         >
           {(size) => (
-            <TerminalPane size={size} agent={agent} snapshot={snapshot} onSize={setTerminalSize} />
+            <TerminalPane
+              size={size}
+              agent={agent}
+              snapshot={snapshot}
+              note={note}
+              onSize={setTerminalSize}
+            />
           )}
         </Pane>
       </Box>
@@ -360,17 +589,24 @@ interface TerminalPaneProps {
   size: PaneSize;
   agent: AgentPtyState;
   snapshot: ReturnType<typeof usePtyTerminal>;
+  /** Подключаться не к чему: сессия запущена вне харнесса (решение №5). */
+  note: string | null;
   onSize: (size: PaneSize) => void;
 }
 
 /** Содержимое правой панели: статус агента и его экран. */
-function TerminalPane({ size, agent, snapshot, onSize }: TerminalPaneProps): ReactNode {
+function TerminalPane({ size, agent, snapshot, note, onSize }: TerminalPaneProps): ReactNode {
   // Сообщаем размер наверх: от него зависят и PTY, и буфер VT.
   useEffect(() => onSize(size), [size, onSize]);
 
   return (
     <>
-      {agent.error !== undefined ? (
+      {note !== null ? (
+        <>
+          <Text color="yellow">{note}</Text>
+          <Text dimColor>Детали сессии — в левой колонке.</Text>
+        </>
+      ) : agent.error !== undefined ? (
         <Text color="red">{agent.error}</Text>
       ) : (
         <>
