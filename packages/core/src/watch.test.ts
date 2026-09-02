@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sessionFileForPath } from './discover.js';
-import { watchSessions, type SessionChange } from './watch.js';
+import { claudeSource, codexSource, watchSessions, type SessionChange } from './watch.js';
 
 const root = '/root';
 const p = (...parts: string[]) => path.join(root, ...parts);
@@ -51,27 +51,31 @@ describe('watchSessions', () => {
   });
 
   /**
-   * Ждём событие: fs.watch по природе асинхронен, а под нагрузкой (оба пакета
-   * гоняют тесты параллельно) FSEvents отвечает не мгновенно — отсюда щедрый запас.
+   * Ждём событие, периодически повторяя действие.
+   *
+   * Рекурсивный fs.watch на macOS прогревается не мгновенно: запись, сделанная
+   * сразу после подписки, может не породить события вовсе — увеличение таймаута
+   * тут не спасает, спасает повтор.
    */
-  function nextChange(
+  async function expectChange(
     changes: SessionChange[],
+    poke: () => Promise<void>,
     predicate: (c: SessionChange) => boolean,
     timeoutMs = 15_000,
   ): Promise<SessionChange> {
     const started = Date.now();
-    return new Promise((resolve, reject) => {
-      const tick = setInterval(() => {
+    for (;;) {
+      await poke();
+
+      const deadline = Date.now() + 400;
+      while (Date.now() < deadline) {
         const found = changes.find(predicate);
-        if (found) {
-          clearInterval(tick);
-          resolve(found);
-        } else if (Date.now() - started > timeoutMs) {
-          clearInterval(tick);
-          reject(new Error('события не дождались'));
-        }
-      }, 25);
-    });
+        if (found) return found;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+
+      if (Date.now() - started > timeoutMs) throw new Error('события не дождались');
+    }
   }
 
   it('дописанная сессия перечитывается и приезжает в событии', async () => {
@@ -81,13 +85,19 @@ describe('watchSessions', () => {
     await writeFile(file, `${JSON.stringify({ type: 'user', sessionId: 's1' })}\n`);
 
     const changes: SessionChange[] = [];
-    const watcher = watchSessions((c) => changes.push(c), { root: dir, debounceMs: 30 });
+    const watcher = watchSessions((c) => changes.push(c), [claudeSource(dir)], {
+      debounceMs: 30,
+    });
     try {
-      await appendFile(
-        file,
-        `${JSON.stringify({ type: 'custom-title', customTitle: 'дописано', sessionId: 's1' })}\n`,
+      const change = await expectChange(
+        changes,
+        () =>
+          appendFile(
+            file,
+            `${JSON.stringify({ type: 'custom-title', customTitle: 'дописано', sessionId: 's1' })}\n`,
+          ),
+        (c) => c.kind === 'updated' && c.file === file,
       );
-      const change = await nextChange(changes, (c) => c.kind === 'updated' && c.file === file);
       expect(change.kind === 'updated' && change.session.title).toBe('дописано');
     } finally {
       watcher.close();
@@ -101,17 +111,20 @@ describe('watchSessions', () => {
     await writeFile(file, `${JSON.stringify({ type: 'user', sessionId: 's1' })}\n`);
 
     const changes: SessionChange[] = [];
-    const watcher = watchSessions((c) => changes.push(c), { root: dir, debounceMs: 30 });
+    const watcher = watchSessions((c) => changes.push(c), [claudeSource(dir)], {
+      debounceMs: 30,
+    });
     try {
       const subagents = path.join(project, 's1', 'subagents');
       await mkdir(subagents, { recursive: true });
-      await writeFile(
-        path.join(subagents, 'agent-a1.jsonl'),
-        `${JSON.stringify({ type: 'user', isSidechain: true })}\n`,
-      );
 
-      const change = await nextChange(
+      const change = await expectChange(
         changes,
+        () =>
+          writeFile(
+            path.join(subagents, 'agent-a1.jsonl'),
+            `${JSON.stringify({ type: 'user', isSidechain: true })}\n`,
+          ),
         (c) => c.kind === 'updated' && c.session.subsessionCount === 1,
       );
       expect(change.file).toBe(file);
@@ -122,11 +135,43 @@ describe('watchSessions', () => {
 
   it('несуществующий корень не роняет вызов, а отдаётся в onError', () => {
     const errors: unknown[] = [];
-    const watcher = watchSessions(() => {}, {
-      root: path.join(dir, 'нет-такого'),
+    const watcher = watchSessions(() => {}, [claudeSource(path.join(dir, 'нет-такого'))], {
       onError: (error) => errors.push(error),
     });
     watcher.close();
     expect(errors).toHaveLength(1);
   });
+
+  it('несколько источников работают одновременно', async () => {
+    const claudeRoot = path.join(dir, 'claude');
+    const codexRoot = path.join(dir, 'codex');
+    await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
+    await mkdir(path.join(codexRoot, '2026', '03', '12'), { recursive: true });
+
+    const changes: SessionChange[] = [];
+    const watcher = watchSessions(
+      (c) => changes.push(c),
+      [claudeSource(claudeRoot), codexSource(codexRoot)],
+      { debounceMs: 30 },
+    );
+
+    try {
+      const change = await expectChange(
+        changes,
+        () =>
+          writeFile(
+            path.join(codexRoot, '2026', '03', '12', 'rollout-2026-03-12T10-00-00-uuid.jsonl'),
+            `${JSON.stringify({
+              timestamp: '2026-03-12T10:00:00.000Z',
+              type: 'session_meta',
+              payload: { id: 'codex-1', cwd: '/tmp/x', cli_version: '0.77.0' },
+            })}\n`,
+          ),
+        (c) => c.kind === 'updated' && c.session.provider === 'codex',
+      );
+      expect(change.kind === 'updated' && change.session.id).toBe('codex-1');
+    } finally {
+      watcher.close();
+    }
+  }, 20_000);
 });

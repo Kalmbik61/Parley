@@ -81,7 +81,7 @@ describe('SessionList', () => {
 
   it('пустой список объясняет, что смотреть', () => {
     const { lastFrame } = render(<SessionList sessions={[]} selected={0} height={10} width={60} />);
-    expect(lastFrame()).toContain('~/.claude/projects');
+    expect(lastFrame()).toContain('Сессий не найдено');
   });
 
   it('без заголовка показывается id', () => {

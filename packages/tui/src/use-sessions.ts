@@ -1,5 +1,17 @@
-import { buildIndex, watchSessions, type SessionChange, type SessionIndex } from '@harnas/core';
+import {
+  buildAllSessions,
+  claudeSource,
+  codexSource,
+  watchSessions,
+  type SessionChange,
+  type SessionIndex,
+} from '@harnas/core';
 import { useCallback, useEffect, useState } from 'react';
+
+export interface SessionsRoots {
+  claudeRoot?: string;
+  codexRoot?: string;
+}
 
 export interface SessionsState {
   sessions: SessionIndex[];
@@ -25,10 +37,10 @@ export function applyChange(sessions: SessionIndex[], change: SessionChange): Se
 }
 
 /**
- * Список сессий, живущий по событиям файлового watcher: перерисовка происходит
- * на изменение файла, без опроса по таймеру (specs/ui.md).
+ * Список сессий всех провайдеров, живущий по событиям файловых watcher'ов:
+ * перерисовка происходит на изменение файла, без опроса по таймеру (specs/ui.md).
  */
-export function useSessions(root?: string): SessionsState {
+export function useSessions({ claudeRoot, codexRoot }: SessionsRoots = {}): SessionsState {
   const [sessions, setSessions] = useState<SessionIndex[]>([]);
   const [loading, setLoading] = useState(true);
   const [generation, setGeneration] = useState(0);
@@ -39,7 +51,10 @@ export function useSessions(root?: string): SessionsState {
     let cancelled = false;
     setLoading(true);
 
-    buildIndex(root)
+    buildAllSessions({
+      ...(claudeRoot === undefined ? {} : { claudeRoot }),
+      ...(codexRoot === undefined ? {} : { codexRoot }),
+    })
       .then((index) => {
         if (!cancelled) {
           setSessions(index);
@@ -53,15 +68,15 @@ export function useSessions(root?: string): SessionsState {
     return () => {
       cancelled = true;
     };
-  }, [root, generation]);
+  }, [claudeRoot, codexRoot, generation]);
 
   useEffect(() => {
     const watcher = watchSessions(
       (change) => setSessions((current) => applyChange(current, change)),
-      root === undefined ? {} : { root },
+      [claudeSource(claudeRoot), codexSource(codexRoot)],
     );
     return () => watcher.close();
-  }, [root]);
+  }, [claudeRoot, codexRoot]);
 
   return { sessions, loading, rescan };
 }

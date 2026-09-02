@@ -43,7 +43,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [x] packages/core: GLM session adapter, or runner-only stub per the research outcome
 - [x] packages/tui: runner abstraction — spawn `codex` (and the GLM CLI) in the right pane through the same PTY manager per specs/runners.md
 - [x] Unified model badges: normalization map (claude-* → Opus/Sonnet/Haiku, gpt-*/codex → Codex, glm-* → GLM) per specs/runners.md; provider badge in the sessions list
-- [ ] Multi-provider merge: one recency-sorted session list across providers with a provider filter
+- [x] Multi-provider merge: one recency-sorted session list across providers with a provider filter
 - [ ] README.md: install, run, keybindings, the legal note (unmodified binary only, ~/.claude read-only)
 - [ ] Final pass: lint clean, tests green, manual smoke checklist from specs/ui.md walked through
 

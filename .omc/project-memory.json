@@ -92,15 +92,15 @@
   },
   "hotPaths": [
     {
-      "path": "packages/tui/src/pty/use-agent-pty.ts",
-      "accessCount": 4,
-      "lastAccessed": 1788341433113,
+      "path": "packages/tui/src/app.tsx",
+      "accessCount": 5,
+      "lastAccessed": 1788342422699,
       "type": "file"
     },
     {
-      "path": "packages/tui/src/app.tsx",
-      "accessCount": 3,
-      "lastAccessed": 1788335799406,
+      "path": "packages/tui/src/pty/use-agent-pty.ts",
+      "accessCount": 4,
+      "lastAccessed": 1788341433113,
       "type": "file"
     },
     {
@@ -119,6 +119,12 @@
       "path": "packages/tui/src/pty/use-host-modes.ts",
       "accessCount": 2,
       "lastAccessed": 1788341593739,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/__smoke.tsx",
+      "accessCount": 2,
+      "lastAccessed": 1788342269910,
       "type": "file"
     },
     {
@@ -212,12 +218,6 @@
       "type": "file"
     },
     {
-      "path": "packages/tui/src/__smoke.tsx",
-      "accessCount": 1,
-      "lastAccessed": 1788335969415,
-      "type": "file"
-    },
-    {
       "path": "tools/lib/scrub.mjs",
       "accessCount": 1,
       "lastAccessed": 1788340813514,
@@ -263,6 +263,24 @@
       "path": "packages/core/src/model-badge.ts",
       "accessCount": 1,
       "lastAccessed": 1788341772605,
+      "type": "file"
+    },
+    {
+      "path": "packages/core/src/watch.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788341912332,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/use-sessions.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788341939650,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/components/pane.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1788342386615,
       "type": "file"
     }
   ],

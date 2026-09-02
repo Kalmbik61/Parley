@@ -76,12 +76,16 @@ describe('applyChange', () => {
 
 describe('живое обновление', () => {
   let root: string;
+  // Второй корень тоже временный: иначе тест увидел бы реальные сессии Codex.
+  let codexRoot: string;
 
   beforeEach(async () => {
     root = await mkdtemp(path.join(tmpdir(), 'harnas-live-'));
+    codexRoot = await mkdtemp(path.join(tmpdir(), 'harnas-live-codex-'));
   });
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
+    await rm(codexRoot, { recursive: true, force: true });
   });
 
   const waitFor = async (check: () => boolean, timeoutMs = 5000): Promise<void> => {
@@ -101,7 +105,7 @@ describe('живое обновление', () => {
       `${JSON.stringify({ type: 'custom-title', customTitle: 'старое имя', sessionId: 's1' })}\n`,
     );
 
-    const { lastFrame, unmount } = render(<Root root={root} />);
+    const { lastFrame, unmount } = render(<Root root={root} codexRoot={codexRoot} />);
     try {
       await waitFor(() => (lastFrame() ?? '').includes('старое имя'));
 
@@ -118,10 +122,10 @@ describe('живое обновление', () => {
   }, 20_000);
 
   it('пустой корень показывает внятное пустое состояние', async () => {
-    const { lastFrame, unmount } = render(<Root root={root} />);
+    const { lastFrame, unmount } = render(<Root root={root} codexRoot={codexRoot} />);
     try {
       await waitFor(() => (lastFrame() ?? '').includes('SESSIONS (0)'));
-      expect(lastFrame()).toContain('~/.claude/projects');
+      expect(lastFrame()).toContain('Сессий не найдено');
     } finally {
       unmount();
     }

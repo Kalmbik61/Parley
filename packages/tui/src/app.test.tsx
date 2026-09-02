@@ -15,6 +15,6 @@ describe('App', () => {
     const { lastFrame } = render(<App sessions={[]} />);
     const frame = lastFrame() ?? '';
     expect(frame).toContain('Enter на сессии');
-    expect(frame).toContain('claude --resume');
+    expect(frame).toContain('Ctrl+Q');
   });
 });
