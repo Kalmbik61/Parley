@@ -1,5 +1,4 @@
 import type { TokenTotals } from '../counters.js';
-import type { Provider } from '../session-index.js';
 
 /** Статус работы. `archived` в списке не показывается (дизайн TUI, раздел 8). */
 export type WorkStatus = 'active' | 'done' | 'archived';
@@ -10,11 +9,15 @@ export type WorkStatus = 'active' | 'done' | 'archived';
  */
 export type SessionStatus = 'pending' | 'active' | 'idle' | 'exited' | 'done' | 'failed';
 
-/** Одна ступень жизненного цикла; код выхода есть только у перехода в `exited`. */
+/**
+ * Одна ступень жизненного цикла. Код выхода и сигнал есть только у перехода
+ * в `exited`; ДЕТАЛИ показывают их как «код 0» или «сигнал 9» (дизайн TUI, раздел 3).
+ */
 export interface HistoryEntry {
   status: SessionStatus;
   at: string;
   exitCode?: number;
+  signal?: number;
 }
 
 /** Резюме написал сам агент через `report` или его дозаказали через `claude -p`. */
@@ -33,9 +36,15 @@ export interface SessionMetrics {
   toolCalls: Record<string, number>;
 }
 
+/**
+ * Id записи реестра провайдеров. Набор открыт: `~/.harnas/providers.json`
+ * дополняет встроенный реестр своими CLI (спецификация, раздел 5).
+ */
+export type WorkProvider = string;
+
 export interface WorkSession {
   id: string;
-  provider: Provider;
+  provider: WorkProvider;
   /** Роль сессии внутри работы: «план», «бэкенд», «ревью». */
   label: string;
   task: string;

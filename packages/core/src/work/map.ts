@@ -1,5 +1,12 @@
-import type { Provider } from '../session-index.js';
-import type { Message, SessionStatus, WorkMap, WorkSession, WorksIndex } from './types.js';
+import type {
+  HistoryEntry,
+  Message,
+  SessionStatus,
+  WorkMap,
+  WorkProvider,
+  WorkSession,
+  WorksIndex,
+} from './types.js';
 
 /**
  * Таблица переходов из спецификации, раздел 6. `done` и `failed` разрешены из
@@ -57,8 +64,13 @@ export function nextWorkId(index: WorksIndex): string {
   );
 }
 
+/** Номер следом за данным: `w-0001` → `w-0002`. Нужен, чтобы пропускать занятые id. */
+export function bumpWorkId(id: string): string {
+  return nextId([id], 'w-', 4);
+}
+
 export interface NewSession {
-  provider: Provider;
+  provider: WorkProvider;
   label: string;
   task: string;
   parent?: string | null;
@@ -109,6 +121,8 @@ export interface TransitionOptions {
   at?: string;
   /** Код выхода процесса: пишется в запись history перехода в `exited`. */
   exitCode?: number;
+  /** Сигнал, которым убит процесс, — там же, рядом с кодом выхода. */
+  signal?: number;
 }
 
 /**
@@ -119,7 +133,7 @@ export function transitionSession(
   map: WorkMap,
   sessionId: string,
   to: SessionStatus,
-  { at = new Date().toISOString(), exitCode }: TransitionOptions = {},
+  { at = new Date().toISOString(), exitCode, signal }: TransitionOptions = {},
 ): WorkSession {
   const session = map.sessions.find((candidate) => candidate.id === sessionId);
   if (session === undefined) throw new Error(`сессии ${sessionId} нет в карте`);
@@ -128,7 +142,10 @@ export function transitionSession(
   }
 
   session.status = to;
-  session.history.push(exitCode === undefined ? { status: to, at } : { status: to, at, exitCode });
+  const entry: HistoryEntry = { status: to, at };
+  if (exitCode !== undefined) entry.exitCode = exitCode;
+  if (signal !== undefined) entry.signal = signal;
+  session.history.push(entry);
   if (to === 'active' && session.startedAt === null) session.startedAt = at;
   // Возобновлённая сессия снова жива, завершённая — фиксирует время выхода.
   session.endedAt = to === 'active' || to === 'idle' ? null : at;

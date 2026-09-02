@@ -1,7 +1,16 @@
-import { mkdir, open, readFile, rename, rm, writeFile, type FileHandle } from 'node:fs/promises';
+import {
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+  type FileHandle,
+} from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { nextWorkId, parseMap } from './map.js';
+import { bumpWorkId, nextWorkId, parseMap } from './map.js';
 import type { WorkIndexEntry, WorkMap, WorksIndex } from './types.js';
 
 /** Домашняя папка харнесса. Переопределяется через окружение — этим живут тесты. */
@@ -83,6 +92,16 @@ async function withLock<T>(
 
 const serialize = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`;
 
+const exists = async (file: string): Promise<boolean> => {
+  try {
+    await stat(file);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+};
+
 /** Временный файл + rename: читатель видит либо старую карту, либо новую. */
 async function writeAtomic(file: string, text: string): Promise<void> {
   const tmp = `${file}.tmp`;
@@ -121,12 +140,15 @@ export async function readWorksIndex(): Promise<WorksIndex> {
 }
 
 /** Читает индекс, даёт его изменить и записывает — всё под своей блокировкой. */
-async function withWorksIndex<T>(timeoutMs: number, mutate: (index: WorksIndex) => T): Promise<T> {
+async function withWorksIndex<T>(
+  timeoutMs: number,
+  mutate: (index: WorksIndex) => T | Promise<T>,
+): Promise<T> {
   const file = worksIndexPath();
   await mkdir(path.dirname(file), { recursive: true });
   return withLock(path.join(path.dirname(file), 'works-index.lock'), timeoutMs, async () => {
     const index = await readWorksIndex();
-    const result = mutate(index);
+    const result = await mutate(index);
     await writeAtomic(file, serialize(index));
     return result;
   });
@@ -156,6 +178,10 @@ export interface NewWork {
 /**
  * Создаёт работу: резервирует id в глобальном индексе (под его блокировкой,
  * поэтому два процесса не получат один номер), раскладывает каталоги и пишет карту.
+ * Индекс — не единственный источник занятых номеров: он глобальный и может быть
+ * пустым, когда карты в проекте уже лежат (clone проекта с закоммиченным `.harnas/`,
+ * перенос `HARNAS_HOME`, копия проекта). Поэтому занятые на диске id пропускаются,
+ * а сама запись идёт эксклюзивным `wx` — чужую карту не затираем никогда.
  */
 export async function createWork(
   projectPath: string,
@@ -177,16 +203,27 @@ export async function createWork(
     messages: [],
   };
 
-  map.work.id = await withWorksIndex(lockTimeoutMs, (index) => {
-    map.work.id = nextWorkId(index);
+  await withWorksIndex(lockTimeoutMs, async (index) => {
+    let id = nextWorkId(index);
+    while (await exists(workPaths(projectPath, id).map)) id = bumpWorkId(id);
+    map.work.id = id;
     index.works.push(entryOf(projectPath, map));
-    return map.work.id;
   });
 
   const paths = workPaths(projectPath, map.work.id);
   await mkdir(paths.briefs, { recursive: true });
   await mkdir(paths.artifacts, { recursive: true });
-  await withLock(paths.lock, lockTimeoutMs, () => writeAtomic(paths.map, serialize(map)));
+  const text = serialize(map);
+  await withLock(paths.lock, lockTimeoutMs, async () => {
+    try {
+      await writeFile(paths.map, text, { encoding: 'utf8', flag: 'wx' });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      throw new Error(`карта ${paths.map} уже существует — работа не создана`);
+    }
+    // `.bak` с первой же записи: раздел 8 обещает предыдущую версию для любой карты.
+    await writeFile(paths.bak, text, 'utf8');
+  });
   return map;
 }
 
@@ -211,9 +248,11 @@ export async function updateMap(
 
     await writeFile(paths.bak, raw, 'utf8');
     await writeAtomic(paths.map, serialize(current));
+    // Индекс обновляем, не отпуская `map.lock`: иначе порядок записей в индексе
+    // разойдётся с порядком записей карты и в нём осядет более старый updatedAt.
+    await withWorksIndex(lockTimeoutMs, (index) => upsert(index, entryOf(projectPath, current)));
     return current;
   });
 
-  await withWorksIndex(lockTimeoutMs, (index) => upsert(index, entryOf(projectPath, map)));
   return map;
 }

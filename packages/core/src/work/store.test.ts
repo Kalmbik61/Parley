@@ -74,6 +74,36 @@ describe('createWork', () => {
     expect(second.work.id).toBe('w-0002');
     expect((await readWorksIndex()).works.map((work) => work.id)).toEqual(['w-0001', 'w-0002']);
   });
+
+  it('кладёт map.json.bak сразу: восстанавливать карту есть чем с первой записи', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, 'w-0001');
+
+    expect((await readdir(paths.dir)).sort()).toEqual([
+      'artifacts',
+      'briefs',
+      'map.json',
+      'map.json.bak',
+    ]);
+    expect(await readFile(paths.bak, 'utf8')).toBe(await readFile(paths.map, 'utf8'));
+  });
+
+  it('не затирает карту, которая уже лежит на диске: занятый id пропускается', async () => {
+    await createWork(project, { title: 'Первая' });
+    await updateMap(project, 'w-0001', (map) => {
+      addSession(map, { provider: 'claude', label: 'план', task: 't' });
+    });
+    // Индекс глобальный и может быть пуст: clone проекта с закоммиченным .harnas,
+    // перенос HARNAS_HOME, копия проекта. Карта w-0001 при этом на диске есть.
+    await rm(worksIndexPath());
+
+    const second = await createWork(project, { title: 'Вторая' });
+
+    expect(second.work.id).toBe('w-0002');
+    const first = await readMap(project, 'w-0001');
+    expect(first.work.title).toBe('Первая');
+    expect(first.sessions).toHaveLength(1);
+  });
 });
 
 describe('updateMap', () => {
@@ -116,9 +146,10 @@ describe('updateMap', () => {
     ]);
   });
 
-  it('битую карту не переписываем', async () => {
+  it('битую карту не переписываем, а .bak хранит прежнюю версию', async () => {
     await createWork(project, { title: 'Авторизация' });
     const paths = workPaths(project, 'w-0001');
+    const before = await readFile(paths.map, 'utf8');
     await writeFile(paths.map, '{ сломано', 'utf8');
 
     await expect(
@@ -128,7 +159,7 @@ describe('updateMap', () => {
     ).rejects.toThrow(/не парсится/);
 
     expect(await readFile(paths.map, 'utf8')).toBe('{ сломано');
-    expect((await readdir(paths.dir)).includes('map.json.bak')).toBe(false);
+    expect(await readFile(paths.bak, 'utf8')).toBe(before);
   });
 
   it('занятая блокировка — ошибка, а не ожидание', async () => {

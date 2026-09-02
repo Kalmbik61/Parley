@@ -50,6 +50,14 @@ describe('addSession', () => {
 
     expect(addSession(map, { provider: 'claude', label: 'c', task: 't' }).id).toBe('s-03');
   });
+
+  it('провайдер не ограничен встроенным реестром: providers.json его дополняет', () => {
+    const map = emptyMap();
+
+    expect(addSession(map, { provider: 'my-cli', label: 'своя', task: 't' }).provider).toBe(
+      'my-cli',
+    );
+  });
 });
 
 describe('addMessage', () => {
@@ -126,6 +134,22 @@ describe('transitionSession', () => {
       exitCode: 1,
     });
     expect(session.endedAt).toBe('2026-09-02T11:00:00.000Z');
+  });
+
+  it('сигнал завершения пишется рядом с кодом выхода', () => {
+    const map = withStatus('active');
+    const session = transitionSession(map, 's-01', 'exited', {
+      at: '2026-09-02T11:00:00.000Z',
+      exitCode: 137,
+      signal: 9,
+    });
+
+    expect(session.history.at(-1)).toEqual({
+      status: 'exited',
+      at: '2026-09-02T11:00:00.000Z',
+      exitCode: 137,
+      signal: 9,
+    });
   });
 
   it('startedAt ставится при первом переходе в active, endedAt снимается при возобновлении', () => {

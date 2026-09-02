@@ -28,6 +28,7 @@ export type { FieldReport, SchemaReport, SchemaReportResult, TypeReport } from '
 export {
   addMessage,
   addSession,
+  bumpWorkId,
   canTransition,
   nextMessageId,
   nextSessionId,
@@ -56,6 +57,7 @@ export type {
   Work,
   WorkIndexEntry,
   WorkMap,
+  WorkProvider,
   WorkSession,
   WorkStatus,
   WorksIndex,
