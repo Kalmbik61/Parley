@@ -38,6 +38,18 @@ node tools/claude-export.mjs --full   # standalone-экспортёр (прот�
   весь макет схлопывается. Проверено тестом.
 - Прогонять `pnpm exec prettier --write packages` перед коммитом: prettier
   намеренно не трогает `.ralph/`, `docs/` и прототип `tools/claude-export.mjs`.
+- node-pty под pnpm на macOS: `prebuilds/*/spawn-helper` распаковывается без бита
+  исполнения, spawn падает с `posix_spawnp failed`. Чинит корневой `postinstall`
+  (`scripts/fix-node-pty-perms.mjs`).
+- `@xterm/headless` — CommonJS: в ESM только `import xterm from '@xterm/headless'`.
+  Парсер асинхронный, у `write` есть колбэк завершения — снимок без него ловит гонку.
+- В тестах Ink подписывается на stdin в эффекте, а тестовый stdin — обычный
+  EventEmitter: запись до подписки теряется молча. Перед первым нажатием нужна
+  пауза (~120 мс).
+- Управляющие последовательности в исходниках писать только как `\u001B`, никогда
+  сырым байтом: иначе в коде появляются невидимые символы.
+- Тесты PTY гоняются против `packages/tui/test/stub-agent.mjs`; настоящий `claude`
+  не запускается никогда. Подмена бинаря — через `HARNAS_CLAUDE_BIN`.
 
 ## Feature Development Quality Standards
 

@@ -204,6 +204,18 @@
       "accessCount": 1,
       "lastAccessed": 1788335850130,
       "type": "file"
+    },
+    {
+      "path": "packages/tui/src/pty/integration.test.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788335913265,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/__smoke.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1788335969415,
+      "type": "file"
     }
   ],
   "userDirectives": []

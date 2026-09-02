@@ -33,7 +33,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [x] PTY resize: on terminal resize recompute right-pane cols/rows and propagate to both node-pty and the xterm buffer
 - [x] Alt-screen and mouse: pass mouse-reporting sequences through when the PTY requests them; verify claude's own UI (menus, scrolling) works embedded, per specs/pty.md
 - [x] PTY lifecycle hardening: process exit/crash detection, restart action, one active PTY per session; warn (do not block) when several sessions run in parallel — subscription limits, per specs/pty.md
-- [ ] v1 integration test: scripted PTY session against a stub binary (NOT real claude) validating spawn / write / resize / teardown
+- [x] v1 integration test: scripted PTY session against a stub binary (NOT real claude) validating spawn / write / resize / teardown
 
 ## Low Priority
 
