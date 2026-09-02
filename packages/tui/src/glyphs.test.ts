@@ -12,6 +12,10 @@ describe('glyphs', () => {
     expect(g.child).toBe('└');
     expect(g.flag).toBe('⚑');
     expect(g.ellipsis).toBe('…');
+    expect(g.up).toBe('↑');
+    expect(g.down).toBe('↓');
+    expect(g.cache).toBe('⇄');
+    expect(g.arrow).toBe('→');
   });
 
   it('HARNAS_ASCII=1 даёт запасной набор', () => {
@@ -29,6 +33,10 @@ describe('glyphs', () => {
     expect(g.flag).toBe('!');
     expect(g.ellipsis).toBe('~');
     expect(g.rule).toBe('-');
+    expect(g.up).toBe('i');
+    expect(g.down).toBe('o');
+    expect(g.cache).toBe('c');
+    expect(g.arrow).toBe('->');
   });
 
   it('пустое значение переменной ASCII-режим не включает', () => {

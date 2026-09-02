@@ -25,6 +25,16 @@ export interface Glyphs {
   ellipsis: string;
   /** Линейка в заголовке проекта. */
   rule: string;
+  /** Токены: вход и выход в панели ДЕТАЛИ (6.1). */
+  up: string;
+  down: string;
+  /** Кэш чтения и записи там же. */
+  cache: string;
+  /**
+   * Стрелка цепочки ИСТОРИЯ (макет 2.2). В таблице 6.1 её нет — запасной вид
+   * взят по тому же правилу, что и у остальных глифов.
+   */
+  arrow: string;
   /** Запасной набор: подсветка выбора в нём — reverse video (6.1). */
   ascii: boolean;
 }
@@ -43,6 +53,10 @@ const UNICODE: Glyphs = {
   flag: '⚑',
   ellipsis: '…',
   rule: '─',
+  up: '↑',
+  down: '↓',
+  cache: '⇄',
+  arrow: '→',
   ascii: false,
 };
 
@@ -60,6 +74,10 @@ const ASCII: Glyphs = {
   flag: '!',
   ellipsis: '~',
   rule: '-',
+  up: 'i',
+  down: 'o',
+  cache: 'c',
+  arrow: '->',
   ascii: true,
 };
 

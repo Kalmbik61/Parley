@@ -98,6 +98,8 @@ export function App({
         durationMs: found?.durationMs ?? null,
         tokens: found?.tokens ?? null,
         model: found?.primaryModel ?? null,
+        // Последняя запись лога — от неё ДЕТАЛИ считают «молчит Nм» (дизайн 3).
+        lastRecordAt: found?.endedAt ?? null,
       };
     },
     [byProviderId],
@@ -120,6 +122,9 @@ export function App({
   // отдаём его через ref, который читается в момент нажатия клавиши. По той же
   // причине через ref читается и текущая строка списка.
   const subsessionCount = useRef(0);
+  // Число строк панели ДЕТАЛИ: их считает сама панель, а навигации оно нужно,
+  // чтобы `↑↓` не уходили за конец содержимого (дизайн 3).
+  const detailLineCount = useRef(0);
   const selectedRow = useRef(0);
   const currentMode = useRef<LeftMode>(mode);
   currentMode.current = mode;
@@ -176,6 +181,10 @@ export function App({
     agent.open({ kind: 'new', provider }, { cols: terminalCols, rows: terminalRows });
   }, [visible, agent, terminalCols, terminalRows]);
 
+  const countDetailLines = useCallback((count: number) => {
+    detailLineCount.current = count;
+  }, []);
+
   const restartAgent = useCallback(() => {
     agent.restart({ cols: terminalCols, rows: terminalRows });
   }, [agent, terminalCols, terminalRows]);
@@ -197,7 +206,8 @@ export function App({
 
   const { focus, selectedSession, selectedSubsession, setFocus, select } = useNavigation({
     sessionCount: mode === 'works' ? workRows.length : visible.length,
-    getSubsessionCount: () => subsessionCount.current,
+    getSubsessionCount: () =>
+      currentMode.current === 'works' ? detailLineCount.current : subsessionCount.current,
     onOpen: openSelected,
     onRestart: restartAgent,
     onCycleProvider: cycle,
@@ -256,9 +266,10 @@ export function App({
     snapshot?.bracketedPaste ?? false,
   );
 
-  // В режиме работ подсессии не показываются: строка выбрана в другом списке.
+  // В режиме работ подсессии — секция СУБАГЕНТЫ панели ДЕТАЛИ: сессия работы
+  // ищется в индексе логов по providerSessionId (дизайн 3).
   const { subsessions, workflows, loading } = useSubsessions(
-    mode === 'works' ? undefined : visible[selectedSession],
+    mode === 'works' ? sessionOf(selectedWorkRow, byProviderId) : visible[selectedSession],
     root,
   );
   subsessionCount.current = subsessions.length;
@@ -306,7 +317,14 @@ export function App({
           >
             {(size) =>
               mode === 'works' ? (
-                <DetailsPane row={selectedWorkRow} width={size.width} />
+                <DetailsPane
+                  row={selectedWorkRow}
+                  width={size.width}
+                  height={size.height}
+                  selected={selectedSubsession}
+                  subsessions={subsessions}
+                  onLines={countDetailLines}
+                />
               ) : (
                 <SubsessionList
                   subsessions={subsessions}
@@ -378,6 +396,15 @@ function TerminalPane({ size, agent, snapshot, onSize }: TerminalPaneProps): Rea
       )}
     </>
   );
+}
+
+/** Сессия работы в индексе логов: по ней читаются подсессии для ДЕТАЛЕЙ. */
+function sessionOf(
+  row: WorkRow | undefined,
+  byProviderId: ReadonlyMap<string, SessionIndex>,
+): SessionIndex | undefined {
+  if (row?.kind !== 'session' || row.session.providerSessionId === null) return undefined;
+  return byProviderId.get(row.session.providerSessionId);
 }
 
 /** Строка-источник события: по ней оно гаснет, когда на ней побывал фокус. */

@@ -114,6 +114,32 @@ describe('режим работ', () => {
     app.unmount();
   }, 20_000);
 
+  it('ДЕТАЛИ показывают выбранную сессию, а не работу (дизайн 3)', async () => {
+    const created = await createWork(project, { title: 'Авторизация', goal: 'логин по e-mail' });
+    await updateMap(project, created.work.id, (map) => {
+      addSession(map, { provider: 'codex', label: 'бэкенд', task: 'реализовать шаги 1–3' });
+    });
+
+    const app = render(<App sessions={[]} projectPath={project} />);
+    await press(app, 'w');
+    await waitFor(() => (app.lastFrame() ?? '').includes('бэкенд'));
+    // Выбрана работа — в панели её сводка.
+    expect(app.lastFrame()).toContain('логин по e-mail');
+
+    await press(app, 'j');
+    // Панель меряет свою высоту эффектом, поэтому секции появляются не первым
+    // кадром: ждём последнюю из них, а не первую.
+    await waitFor(() => (app.lastFrame() ?? '').includes('ист:'));
+    const frame = app.lastFrame() ?? '';
+    expect(frame).toContain('реализовать шаги');
+    expect(frame).toContain('ДЕТАЛИ — бэкенд');
+    // Задача, статус, отсутствие отчёта и история — секции панели (дизайн 3).
+    expect(lineWith(frame, 'pending')).toContain('◌');
+    expect(frame).toContain('(отчёта нет)');
+    expect(frame).toContain('ист: ◌');
+    app.unmount();
+  }, 20_000);
+
   it('Enter на работе сворачивает и разворачивает её', async () => {
     const created = await createWork(project, { title: 'Авторизация' });
     await updateMap(project, created.work.id, (map) => {

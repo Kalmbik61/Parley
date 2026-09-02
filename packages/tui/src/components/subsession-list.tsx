@@ -15,7 +15,7 @@ export interface SubsessionListProps {
 }
 
 /** Бейджи всех моделей агента: их может быть несколько за одну подсессию. */
-function badges(subsession: Subsession): string {
+export function badges(subsession: Subsession): string {
   if (subsession.models.length === 0) return '—';
   return [...new Set(subsession.models.map(modelBadge))].join('/');
 }

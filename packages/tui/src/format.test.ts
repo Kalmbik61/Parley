@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatClock,
   formatDuration,
   formatRelative,
   formatTokenPair,
@@ -7,6 +8,7 @@ import {
   truncate,
   truncateLeft,
   visibleWindow,
+  wrapText,
 } from './format.js';
 
 describe('formatDuration', () => {
@@ -112,5 +114,40 @@ describe('formatTokenPair', () => {
 
   it('токенов нет — прочерк', () => {
     expect(formatTokenPair(null)).toBe('—');
+  });
+});
+
+describe('wrapText', () => {
+  it('переносит по словам и не выходит за ширину', () => {
+    expect(wrapText('Реализовать шаги 1–3 плана', 12, 3)).toEqual([
+      'Реализовать',
+      'шаги 1–3',
+      'плана',
+    ]);
+  });
+
+  it('лишнее не рисуется: последняя строка обрезается многоточием', () => {
+    expect(wrapText('один два три четыре пять', 9, 2)).toEqual(['один два', 'три четы…']);
+  });
+
+  it('слово длиннее строки рвётся, а не выпадает', () => {
+    expect(wrapText('противоестественность', 8, 3)).toEqual(['противое', 'стествен', 'ность']);
+  });
+
+  it('пустой текст и нулевая ширина не дают строк', () => {
+    expect(wrapText('', 10, 2)).toEqual([]);
+    expect(wrapText('текст', 0, 2)).toEqual([]);
+  });
+});
+
+describe('formatClock', () => {
+  it('часы и минуты по местному времени', () => {
+    const iso = '2026-09-02T14:02:00.000Z';
+    expect(formatClock(iso)).toBe(new Date(iso).toTimeString().slice(0, 5));
+  });
+
+  it('времени нет или оно не парсится — прочерк', () => {
+    expect(formatClock(null)).toBe('—');
+    expect(formatClock('не дата')).toBe('—');
   });
 });

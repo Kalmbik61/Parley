@@ -57,6 +57,54 @@ export function truncateLeft(text: string, width: number, ellipsis = '…'): str
 }
 
 /**
+ * Многострочное поле панели ДЕТАЛИ: перенос по словам и не больше `maxLines`
+ * строк, дальше `…` (дизайн координации TUI, 6.4). Слово длиннее строки рвётся —
+ * иначе путь или длинный идентификатор выпал бы из вывода целиком.
+ */
+export function wrapText(text: string, width: number, maxLines: number, ellipsis = '…'): string[] {
+  if (width <= 0 || maxLines <= 0 || text === '') return [];
+
+  const words = text.split(/\s+/).filter((word) => word !== '');
+  const lines: string[] = [];
+  let current = '';
+
+  const push = (): void => {
+    if (current !== '') lines.push(current);
+    current = '';
+  };
+
+  for (const word of words) {
+    let rest = word;
+    while (rest.length > width) {
+      push();
+      lines.push(rest.slice(0, width));
+      rest = rest.slice(width);
+    }
+    if (current === '') current = rest;
+    else if (current.length + 1 + rest.length <= width) current = `${current} ${rest}`;
+    else {
+      push();
+      current = rest;
+    }
+  }
+  push();
+
+  if (lines.length <= maxLines) return lines;
+  // Последняя видимая строка набивается остатком и обрезается: многоточие в её
+  // конце — единственный знак, что текст продолжается (полностью — прокруткой).
+  const visible = lines.slice(0, maxLines - 1);
+  visible.push(truncate(lines.slice(maxLines - 1).join(' '), width, ellipsis));
+  return visible;
+}
+
+/** Часы и минуты по местному времени: `14:02` (дизайн 3 — время выхода, история). */
+export function formatClock(timestamp: string | null): string {
+  if (timestamp === null) return '—';
+  const at = new Date(timestamp);
+  return Number.isNaN(at.getTime()) ? '—' : at.toTimeString().slice(0, 5);
+}
+
+/**
  * Домашняя директория в пути — тильдой: в узкой колонке `~/dev/shop` читается,
  * а хвост `…s/имя/dev/shop` — нет (дизайн 2.1, 6.4).
  */

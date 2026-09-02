@@ -7,6 +7,7 @@
 
 import {
   PROVIDERS,
+  type Message,
   type Provider,
   type ProviderInfo,
   type SessionStatus,
@@ -25,9 +26,19 @@ export interface LiveMetrics {
   durationMs: number | null;
   tokens: TokenTotals | null;
   model: string | null;
+  /**
+   * Время последней записи в логе провайдера: от него ДЕТАЛИ считают «молчит Nм»
+   * у `idle` (дизайн 3). В карте его нет — только в индексе логов.
+   */
+  lastRecordAt: string | null;
 }
 
-const NO_METRICS: LiveMetrics = { durationMs: null, tokens: null, model: null };
+const NO_METRICS: LiveMetrics = {
+  durationMs: null,
+  tokens: null,
+  model: null,
+  lastRecordAt: null,
+};
 
 /** Сколько сессий работы в каком статусе плюс её непрочитанные сообщения. */
 export interface WorkCounters {
@@ -50,6 +61,16 @@ export interface WorkRowWork {
   note: string | null;
 }
 
+/** Входящее сообщение сессии: отправитель уже подписан ролью (дизайн 3). */
+export interface InboxMessage {
+  id: string;
+  /** Роль отправителя; у неизвестной сессии — её id. */
+  from: string;
+  at: string;
+  text: string;
+  read: boolean;
+}
+
 export interface WorkRowSession {
   kind: 'session';
   key: string;
@@ -60,6 +81,8 @@ export interface WorkRowSession {
   /** 0 — сессия открыта в работе, дальше — кого породил агент. */
   depth: number;
   unread: number;
+  /** Только входящие: непрочитанные первыми, внутри — по времени убыв. (6.5). */
+  inbox: InboxMessage[];
   live: LiveMetrics;
 }
 
@@ -127,6 +150,24 @@ function treeOrder(
   return out;
 }
 
+/** Входящие сессии: исходящие не показываются вовсе (решение №10). */
+function inboxOf(
+  messages: readonly Message[],
+  sessionId: string,
+  labels: ReadonlyMap<string, string>,
+): InboxMessage[] {
+  return messages
+    .filter((message) => message.to === sessionId)
+    .map((message) => ({
+      id: message.id,
+      from: labels.get(message.from) ?? message.from,
+      at: message.at,
+      text: message.text,
+      read: message.readAt !== null,
+    }))
+    .sort((a, b) => Number(a.read) - Number(b.read) || desc(a.at, b.at));
+}
+
 function countersOf(entry: WorkEntry): WorkCounters {
   const statuses: Partial<Record<SessionStatus, number>> = {};
   for (const session of entry.map.sessions) {
@@ -146,6 +187,7 @@ function metricsOf(session: WorkSession, live: LiveMetrics): LiveMetrics {
     durationMs: session.metrics.durationMs,
     tokens: session.metrics.tokens,
     model: live.model,
+    lastRecordAt: live.lastRecordAt,
   };
 }
 
@@ -205,6 +247,7 @@ export function buildRows(
       first = false;
 
       if (!open) continue;
+      const labels = new Map(sessions.map((item) => [item.id, item.label]));
       for (const { session, depth } of visible) {
         rows.push({
           kind: 'session',
@@ -216,6 +259,7 @@ export function buildRows(
           depth,
           unread: messages.filter((message) => message.to === session.id && message.readAt === null)
             .length,
+          inbox: inboxOf(messages, session.id, labels),
           live: metricsOf(session, live(session)),
         });
       }
