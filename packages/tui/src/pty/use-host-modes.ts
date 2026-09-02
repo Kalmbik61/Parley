@@ -1,4 +1,3 @@
-import { useStdout } from 'ink';
 import { useEffect } from 'react';
 import type { MouseTracking } from './terminal-buffer.js';
 
@@ -21,6 +20,26 @@ const MOUSE_MODES: Record<MouseTracking, string[]> = {
 
 const ALL_MOUSE_MODES = ['?9', '?1000', '?1002', '?1003', '?1006'];
 
+/** Последовательности включения запрошенных режимов. */
+export function enableSequence(mouseTracking: MouseTracking, bracketedPaste: boolean): string {
+  const modes = [...MOUSE_MODES[mouseTracking], ...(bracketedPaste ? ['?2004'] : [])];
+  return modes.map((mode) => `${CSI}${mode}h`).join('');
+}
+
+/** Последовательности выключения всего, что мы могли включить. */
+export function disableSequence(): string {
+  return [...ALL_MOUSE_MODES, '?2004'].map((mode) => `${CSI}${mode}l`).join('');
+}
+
+/**
+ * Пишем режимы прямо в терминал, минуя Ink: это не содержимое экрана, а состояние
+ * устройства. Не-TTY (пайп, тесты) пропускаем — там отслеживать мышь некому, а
+ * лишняя запись только мешала бы Ink считать свои кадры.
+ */
+function writeToTerminal(sequence: string): void {
+  if (sequence !== '' && process.stdout.isTTY === true) process.stdout.write(sequence);
+}
+
 /**
  * Зеркалит режимы гостя в хост-терминал, пока правая панель в фокусе.
  * Уходит фокус или закрывается приложение — режимы гасятся, иначе терминал
@@ -30,17 +49,12 @@ export function useHostTerminalModes(
   active: boolean,
   mouseTracking: MouseTracking,
   bracketedPaste: boolean,
+  write: (sequence: string) => void = writeToTerminal,
 ): void {
-  const { stdout } = useStdout();
-
   useEffect(() => {
-    if (!active || stdout === undefined) return;
+    if (!active) return;
 
-    const enabled = [...MOUSE_MODES[mouseTracking], ...(bracketedPaste ? ['?2004'] : [])];
-    if (enabled.length > 0) stdout.write(enabled.map((mode) => `${CSI}${mode}h`).join(''));
-
-    return () => {
-      stdout.write([...ALL_MOUSE_MODES, '?2004'].map((mode) => `${CSI}${mode}l`).join(''));
-    };
-  }, [active, mouseTracking, bracketedPaste, stdout]);
+    write(enableSequence(mouseTracking, bracketedPaste));
+    return () => write(disableSequence());
+  }, [active, mouseTracking, bracketedPaste, write]);
 }

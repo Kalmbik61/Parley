@@ -1,6 +1,6 @@
-import type { SessionIndex } from '@harnas/core';
+import { runnerCommand, type SessionIndex } from '@harnas/core';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { findClaudeBinary } from './find-binary.js';
+import { findRunnerBinary } from './find-binary.js';
 import { spawnPtySession, type PtyExit, type PtySession } from './pty-session.js';
 
 export interface PtySize {
@@ -32,31 +32,33 @@ export interface AgentPtyState {
 /**
  * Управляет агентами в правой панели.
  *
- * Спавнится только немодифицированный `claude` из PATH под логином пользователя —
- * юридическая граница проекта. Бинарь ищется один раз при старте: если его нет,
- * панель объясняет причину, а не падает в момент нажатия Enter (specs/pty.md).
+ * Команда и аргументы берутся из реестра провайдеров (specs/runners.md): для
+ * Claude Code это `claude --resume <id>`, для Codex — `codex resume <id>`.
+ * Отдельной терминальной логики на провайдера нет — PTY-менеджер один.
+ *
+ * Спавнится только немодифицированный бинарь из PATH под логином пользователя —
+ * юридическая граница проекта.
  */
 export function useAgentPty(): AgentPtyState {
-  const [binary, setBinary] = useState<string | undefined>();
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [activeId, setActiveId] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
 
   // Живые процессы нужны в cleanup, где состояние React уже недоступно.
   const live = useRef(new Map<string, PtySession>());
-  // Enter могли нажать раньше, чем нашёлся бинарь — нажатие не теряем.
-  const pending = useRef<{ target: SessionIndex; size: PtySize } | undefined>(undefined);
+  // Путь к бинарю ищется один раз на команду и переиспользуется.
+  const binaries = useRef(new Map<string, string>());
 
-  const start = useCallback((file: string, target: SessionIndex, size: PtySize) => {
+  const start = useCallback((file: string, args: string[], target: SessionIndex, size: PtySize) => {
     setError(undefined);
 
     try {
       const session = spawnPtySession({
         file,
-        args: ['--resume', target.id],
+        args,
         cols: size.cols,
         rows: size.rows,
-        // cwd сессии: `claude --resume` должен видеть тот же проект.
+        // cwd сессии: агент должен видеть тот же проект.
         ...(target.cwd === null ? {} : { cwd: target.cwd }),
       });
 
@@ -81,28 +83,28 @@ export function useAgentPty(): AgentPtyState {
     }
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
+  /** Ищет бинарь провайдера и запускает его. Бинаря нет — объясняем, а не падаем. */
+  const launch = useCallback(
+    (target: SessionIndex, size: PtySize) => {
+      const { command, args } = runnerCommand(target.provider, target.id);
+      const known = binaries.current.get(command);
 
-    findClaudeBinary()
-      .then((found) => {
-        if (cancelled) return;
-        setBinary(found);
+      if (known !== undefined) {
+        start(known, args, target, size);
+        return;
+      }
 
-        const queued = pending.current;
-        pending.current = undefined;
-        if (queued !== undefined) start(found, queued.target, queued.size);
-      })
-      .catch((reason: unknown) => {
-        if (cancelled) return;
-        pending.current = undefined;
-        setError(reason instanceof Error ? reason.message : String(reason));
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [start]);
+      void findRunnerBinary(command)
+        .then((file) => {
+          binaries.current.set(command, file);
+          start(file, args, target, size);
+        })
+        .catch((reason: unknown) => {
+          setError(reason instanceof Error ? reason.message : String(reason));
+        });
+    },
+    [start],
+  );
 
   // Выходим из TUI — гасим всех аккуратно, как при закрытии терминала.
   useEffect(() => {
@@ -115,30 +117,22 @@ export function useAgentPty(): AgentPtyState {
 
   const open = useCallback<AgentPtyState['open']>(
     (target, size) => {
-      if (binary === undefined) {
-        // Поиск бинаря ещё идёт — запустим, как только он найдётся.
-        pending.current = { target, size };
-        return;
-      }
-
       // У сессии уже есть живой агент — показываем его, а не плодим второго.
       if (live.current.has(target.id)) {
         setActiveId(target.id);
         return;
       }
-
-      start(binary, target, size);
+      launch(target, size);
     },
-    [binary, start],
+    [launch],
   );
 
   const restart = useCallback<AgentPtyState['restart']>(
     (size) => {
       const target = runs.find((run) => run.target.id === activeId)?.target;
-      if (binary === undefined || target === undefined) return;
-      start(binary, target, size);
+      if (target !== undefined) launch(target, size);
     },
-    [binary, runs, activeId, start],
+    [runs, activeId, launch],
   );
 
   const close = useCallback(() => {

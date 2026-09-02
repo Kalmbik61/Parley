@@ -3,10 +3,10 @@ import { fileURLToPath } from 'node:url';
 import { Text } from 'ink';
 import { render } from 'ink-testing-library';
 import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawnPtySession, type PtySession } from './pty-session.js';
 import { createTerminalBuffer } from './terminal-buffer.js';
-import { useHostTerminalModes } from './use-host-modes.js';
+import { disableSequence, enableSequence, useHostTerminalModes } from './use-host-modes.js';
 import { usePtyTerminal } from './use-pty-terminal.js';
 
 const ESC = '\u001B';
@@ -62,6 +62,12 @@ describe('снимок сообщает запрошенные гостем ре
 });
 
 describe('useHostTerminalModes', () => {
+  /** Записи собираем сами: писать в stdout мимо Ink нельзя — он считает там свои кадры. */
+  const written: string[] = [];
+  const write = (sequence: string): void => {
+    written.push(sequence);
+  };
+
   function Probe({
     active,
     mouse,
@@ -71,18 +77,21 @@ describe('useHostTerminalModes', () => {
     mouse: 'none' | 'vt200' | 'drag' | 'any';
     paste: boolean;
   }): ReactNode {
-    useHostTerminalModes(active, mouse, paste);
+    useHostTerminalModes(active, mouse, paste, write);
     return <Text>проба</Text>;
   }
+
+  beforeEach(() => {
+    written.length = 0;
+  });
 
   it('включает у себя то, что запросил гость', async () => {
     const app = render(<Probe active mouse="drag" paste />);
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    const written = app.frames.join('');
-    expect(written).toContain('[?1002h');
-    expect(written).toContain('[?1006h');
-    expect(written).toContain('[?2004h');
+    expect(written.join('')).toContain(`${ESC}[?1002h`);
+    expect(written.join('')).toContain(`${ESC}[?1006h`);
+    expect(written.join('')).toContain(`${ESC}[?2004h`);
     app.unmount();
   });
 
@@ -90,7 +99,7 @@ describe('useHostTerminalModes', () => {
     const app = render(<Probe active={false} mouse="any" paste />);
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    expect(app.frames.join('')).not.toContain('[?1003h');
+    expect(written.join('')).not.toContain(`${ESC}[?1003h`);
     app.unmount();
   });
 
@@ -101,10 +110,15 @@ describe('useHostTerminalModes', () => {
     app.rerender(<Probe active={false} mouse="any" paste />);
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    const written = app.frames.join('');
-    expect(written).toContain('[?1003l');
-    expect(written).toContain('[?2004l');
+    expect(written.join('')).toContain(`${ESC}[?1003l`);
+    expect(written.join('')).toContain(`${ESC}[?2004l`);
     app.unmount();
+  });
+
+  it('последовательности строятся по запрошенному режиму', () => {
+    expect(enableSequence('none', false)).toBe('');
+    expect(enableSequence('vt200', false)).toBe(`${ESC}[?1000h${ESC}[?1006h`);
+    expect(disableSequence()).toContain(`${ESC}[?1006l`);
   });
 });
 

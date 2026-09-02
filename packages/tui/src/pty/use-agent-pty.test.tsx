@@ -124,8 +124,13 @@ describe('Enter открывает сессию в правой панели', (
 
   it('без бинаря панель объясняет проблему вместо падения', async () => {
     process.env['HARNAS_CLAUDE_BIN'] = path.join(root, 'нет-такого-бинаря');
-    const { lastFrame, unmount } = render(<App sessions={[session()]} root={root} />);
+    const { stdin, lastFrame, unmount } = render(<App sessions={[session()]} root={root} />);
     try {
+      await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
+      await mounted();
+      stdin.write(ENTER);
+
+      // Бинарь ищется при попытке открыть: ошибка привязана к провайдеру сессии.
       await waitFor(() => (lastFrame() ?? '').includes('не найден в PATH'));
       expect(lastFrame()).toContain('немодифицированный');
     } finally {
@@ -145,6 +150,47 @@ describe('Enter открывает сессию в правой панели', (
       await mounted();
       stdin.write(ENTER);
       await waitFor(() => (lastFrame() ?? '').includes('stub готов'));
+    } finally {
+      unmount();
+    }
+  }, 25_000);
+});
+
+describe('раннеры разных провайдеров', () => {
+  let root: string;
+  const originalClaude = process.env['HARNAS_CLAUDE_BIN'];
+  const originalCodex = process.env['HARNAS_CODEX_BIN'];
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), 'harnas-runner-'));
+    process.env['HARNAS_CODEX_BIN'] = STUB;
+  });
+
+  afterEach(async () => {
+    if (originalClaude === undefined) delete process.env['HARNAS_CLAUDE_BIN'];
+    else process.env['HARNAS_CLAUDE_BIN'] = originalClaude;
+    if (originalCodex === undefined) delete process.env['HARNAS_CODEX_BIN'];
+    else process.env['HARNAS_CODEX_BIN'] = originalCodex;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('сессия Codex открывается командой `resume <id>`, а не флагом Claude', async () => {
+    const codexSession = session({
+      id: 'uuid-codex',
+      provider: 'codex',
+      title: 'сессия codex',
+      cwd: null,
+    });
+    const { stdin, lastFrame, unmount } = render(<App sessions={[codexSession]} root={root} />);
+    try {
+      await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
+      await mounted();
+      stdin.write(ENTER);
+
+      await waitFor(() => (lastFrame() ?? '').includes('stub готов'));
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('"resume","uuid-codex"');
+      expect(frame).not.toContain('--resume');
     } finally {
       unmount();
     }

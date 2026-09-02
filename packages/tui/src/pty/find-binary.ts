@@ -54,10 +54,19 @@ export async function findBinary(
   throw new BinaryNotFoundError(binary);
 }
 
-/** Имя бинаря Claude Code. Меняется только переменной окружения, не кодом. */
-export const CLAUDE_BINARY = 'claude';
+/** Переменная-оверрайд пути к бинарю: `claude` → `HARNAS_CLAUDE_BIN`. */
+export function overrideVariable(command: string): string {
+  return `HARNAS_${command.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_BIN`;
+}
 
-/** Путь к немодифицированному `claude`; `HARNAS_CLAUDE_BIN` — аварийный оверрайд. */
-export async function findClaudeBinary(env: NodeJS.ProcessEnv = process.env): Promise<string> {
-  return findBinary(env['HARNAS_CLAUDE_BIN'] ?? CLAUDE_BINARY, env);
+/**
+ * Путь к бинарю раннера. Запускается ровно то, что стоит у пользователя в PATH;
+ * переменная-оверрайд нужна нестандартным установкам и тестам, где вместо
+ * настоящего агента подставляется stub.
+ */
+export async function findRunnerBinary(
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
+  return findBinary(env[overrideVariable(command)] ?? command, env);
 }

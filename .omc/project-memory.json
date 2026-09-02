@@ -93,8 +93,8 @@
   "hotPaths": [
     {
       "path": "packages/tui/src/pty/use-agent-pty.ts",
-      "accessCount": 3,
-      "lastAccessed": 1788335731124,
+      "accessCount": 4,
+      "lastAccessed": 1788341433113,
       "type": "file"
     },
     {
@@ -113,6 +113,12 @@
       "path": "packages/tui/src/pty/__debug.test.tsx",
       "accessCount": 2,
       "lastAccessed": 1788335020606,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/pty/use-host-modes.ts",
+      "accessCount": 2,
+      "lastAccessed": 1788341593739,
       "type": "file"
     },
     {
@@ -185,12 +191,6 @@
       "path": "packages/tui/src/pty/use-pty-resize.test.tsx",
       "accessCount": 1,
       "lastAccessed": 1788335424203,
-      "type": "file"
-    },
-    {
-      "path": "packages/tui/src/pty/use-host-modes.ts",
-      "accessCount": 1,
-      "lastAccessed": 1788335572837,
       "type": "file"
     },
     {

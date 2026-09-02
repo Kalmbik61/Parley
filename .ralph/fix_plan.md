@@ -41,7 +41,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [x] packages/core: Codex session adapter mapping rollout logs into the same SessionIndex model per specs/runners.md
 - [x] Research: locate GLM harness session logs and document the format in specs/runners.md; if none exist, record the decision that GLM is runner-only (no history) — see specs/runners.md
 - [x] packages/core: GLM session adapter, or runner-only stub per the research outcome
-- [ ] packages/tui: runner abstraction — spawn `codex` (and the GLM CLI) in the right pane through the same PTY manager per specs/runners.md
+- [x] packages/tui: runner abstraction — spawn `codex` (and the GLM CLI) in the right pane through the same PTY manager per specs/runners.md
 - [ ] Unified model badges: normalization map (claude-* → Opus/Sonnet/Haiku, gpt-*/codex → Codex, glm-* → GLM) per specs/runners.md; provider badge in the sessions list
 - [ ] Multi-provider merge: one recency-sorted session list across providers with a provider filter
 - [ ] README.md: install, run, keybindings, the legal note (unmodified binary only, ~/.claude read-only)
@@ -65,6 +65,8 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
       тестах не запускаем), поэтому идёт в финальный smoke-чеклист v2
 - [ ] Мышь: поддерживается только SGR-кодирование (?1006). Древние X10 (?1005) и
       urxvt (?1015) не пробрасываются — записать ограничение в README
+- [ ] UI-точка входа для запуска раннера без истории: GLM и «новая сессия» сейчас
+      запускаются только программно (runnerCommand), клавиши в TUI для них нет
 - [ ] Решить, что делать со старым кэшем `sessions-index.json` (3 шт., формат v1,
       данные января) — сейчас предполагается игнорировать
 

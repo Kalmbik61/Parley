@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BinaryNotFoundError, findBinary, findClaudeBinary } from './find-binary.js';
+import {
+  BinaryNotFoundError,
+  findBinary,
+  findRunnerBinary,
+  overrideVariable,
+} from './find-binary.js';
 import { spawnPtySession, type PtySession } from './pty-session.js';
 
 const STUB = path.join(
@@ -77,12 +82,15 @@ describe('findBinary', () => {
     await expect(findBinary('claude', {})).rejects.toBeInstanceOf(BinaryNotFoundError);
   });
 
-  it('HARNAS_CLAUDE_BIN подменяет путь к бинарю', async () => {
-    const file = path.join(dir, 'свой-claude');
+  it('оверрайд бинаря задаётся переменной на команду', async () => {
+    const file = path.join(dir, 'свой-агент');
     await writeFile(file, '#!/bin/sh\nexit 0\n');
     await chmod(file, 0o755);
 
-    expect(await findClaudeBinary({ HARNAS_CLAUDE_BIN: file, PATH: '' })).toBe(file);
+    expect(overrideVariable('claude')).toBe('HARNAS_CLAUDE_BIN');
+    expect(overrideVariable('codex')).toBe('HARNAS_CODEX_BIN');
+    expect(await findRunnerBinary('claude', { HARNAS_CLAUDE_BIN: file, PATH: '' })).toBe(file);
+    expect(await findRunnerBinary('codex', { HARNAS_CODEX_BIN: file, PATH: '' })).toBe(file);
   });
 });
 
