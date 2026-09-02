@@ -74,6 +74,8 @@ export async function indexSessionFile(
   const roles = new Counter();
   const recordTypes = new Counter();
   const tokens: TokenTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  // Уже посчитанные ответы модели: один ответ приходит несколькими записями.
+  const countedMessages = new Set<string>();
   let hasUsage = false;
 
   let sessionId: string | null = null;
@@ -99,7 +101,19 @@ export async function indexSessionFile(
 
     // Токены считаются только по ответам модели: usage в реплике человека —
     // это отчёт об уже учтённом вызове инструмента, повторный счёт.
-    if (record.role === 'assistant' && record.usage !== null) {
+    //
+    // Второй источник двойного счёта крупнее: один ответ модели Claude Code
+    // пишет несколькими записями — по одной на блок content (thinking, text,
+    // tool_use), и КАЖДАЯ несёт полный usage всего ответа. Поэтому счёт идёт
+    // по message.id, а не по записям (на реальных логах разница в 2–3 раза).
+    // У записей без message.id склеивать не по чему — они считаются как есть.
+    const messageId = record.messageId;
+    if (
+      record.role === 'assistant' &&
+      record.usage !== null &&
+      (messageId === null || !countedMessages.has(messageId))
+    ) {
+      if (messageId !== null) countedMessages.add(messageId);
       hasUsage = true;
       tokens.input += record.usage.input;
       tokens.output += record.usage.output;

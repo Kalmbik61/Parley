@@ -26,28 +26,32 @@ export interface SessionListProps {
 const TOKENS_MIN_WIDTH = 36;
 
 /**
- * Хвост строки: относительное время, длительность, токены и бейдж модели.
+ * Хвост строки: относительное время, токены, длительность и бейдж модели.
  *
  * В узкой колонке всё это не помещается, а заголовок важнее меты — поэтому части
  * отбрасываются по приоритету, пока хвост не влезет в отведённую долю ширины.
  */
 function meta(session: SessionIndex, width: number): string {
   const when = formatRelative(session.endedAt);
-  const parts = [when, formatDuration(session.durationMs), modelBadge(session.primaryModel)];
+  // Уже ниже TOKENS_MIN_WIDTH токенов нет совсем — там их место в деталях сессии.
+  const tokens = width >= TOKENS_MIN_WIDTH ? formatTokenPair(session.tokens) : '';
+  const parts = [
+    when,
+    tokens,
+    formatDuration(session.durationMs),
+    modelBadge(session.primaryModel),
+  ];
   const limit = Math.max(when.length, Math.floor(width * 0.45));
+  const tail = () => parts.filter((part) => part !== '').join(' · ');
 
-  // Сначала уходит длительность, затем бейдж модели; время остаётся всегда.
-  const order = [1, 2];
-  for (const drop of order) {
-    if (parts.join(' · ').length <= limit) break;
+  // Порядок отбрасывания (дизайн координации TUI, 2.3): сначала токены, потом
+  // длительность, потом бейдж модели; время остаётся всегда.
+  for (const drop of [1, 2, 3]) {
+    if (tail().length <= limit) break;
     parts[drop] = '';
   }
 
-  // Токены живут вне этого бюджета: на узкой колонке их нет совсем (там их место
-  // в деталях сессии), на широкой они показываются всегда.
-  if (width >= TOKENS_MIN_WIDTH) parts.splice(2, 0, formatTokenPair(session.tokens));
-
-  return parts.filter((part) => part !== '').join(' · ');
+  return tail();
 }
 
 export function SessionList({

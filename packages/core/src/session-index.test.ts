@@ -144,6 +144,55 @@ describe('indexSessionFile', () => {
     });
   });
 
+  it('один ответ модели, разложенный по записям на блок, считается один раз', async () => {
+    // Claude Code пишет thinking / text / tool_use отдельными записями с ОДНИМ
+    // message.id, и каждая несёт полный usage ответа. Суммировать их нельзя.
+    const usage = {
+      input_tokens: 2,
+      output_tokens: 240,
+      cache_read_input_tokens: 34_763,
+      cache_creation_input_tokens: 51_229,
+    };
+    const block = (id: string, content: unknown) =>
+      line({
+        type: 'assistant',
+        message: { role: 'assistant', model: 'claude-opus-5', id, content, usage },
+      });
+    const file = await writeSession(
+      '-Users-me-proj',
+      'tok3',
+      block('msg_01', [{ type: 'thinking', thinking: '…' }]) +
+        block('msg_01', [{ type: 'text', text: 'делаю' }]) +
+        block('msg_01', [{ type: 'tool_use', name: 'Bash' }]) +
+        block('msg_02', [{ type: 'text', text: 'готово' }]),
+    );
+
+    const index = await indexSessionFile(file, root);
+    // Два ответа, не четыре: 2×usage, а не 4×.
+    expect(index.tokens).toEqual({
+      input: 4,
+      output: 480,
+      cacheRead: 69_526,
+      cacheWrite: 102_458,
+    });
+    // Инструменты и модели по-прежнему считаются по каждой записи.
+    expect(index.tools).toEqual({ Bash: 1 });
+  });
+
+  it('записи без message.id считаются каждая — склеивать их не по чему', async () => {
+    const usage = { input_tokens: 1, output_tokens: 10 };
+    const assistant = () =>
+      line({ type: 'assistant', message: { role: 'assistant', model: 'claude-opus-5', usage } });
+    const file = await writeSession('-Users-me-proj', 'tok4', assistant() + assistant());
+
+    expect((await indexSessionFile(file, root)).tokens).toEqual({
+      input: 2,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+
   it('без записей с usage токенов нет', async () => {
     const file = await writeSession(
       '-Users-me-proj',

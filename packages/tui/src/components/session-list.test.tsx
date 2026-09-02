@@ -101,7 +101,7 @@ describe('SessionList', () => {
 describe('токены в строке', () => {
   it('на широкой колонке видно вход/выход, кэш не выводится', () => {
     const { lastFrame } = render(
-      <SessionList sessions={[session()]} selected={0} height={10} width={60} />,
+      <SessionList sessions={[session()]} selected={0} height={10} width={80} />,
     );
     const frame = lastFrame() ?? '';
     expect(frame).toContain('1.2к/845');
@@ -115,11 +115,21 @@ describe('токены в строке', () => {
     expect(lastFrame()).not.toContain('1.2к');
   });
 
-  it('сессия без токенов показывает прочерк', () => {
+  it('когда хвост не влезает, токены уходят первыми, а заголовок остаётся', () => {
     const { lastFrame } = render(
-      <SessionList sessions={[session({ tokens: null })]} selected={0} height={10} width={60} />,
+      <SessionList sessions={[session()]} selected={0} height={10} width={36} />,
     );
-    expect(lastFrame()).toContain('—');
+    const frame = lastFrame() ?? '';
+    expect(frame).not.toContain('1.2к/845');
+    expect(frame).toContain('заголовок');
+  });
+
+  it('сессия без токенов показывает прочерк на их месте', () => {
+    const { lastFrame } = render(
+      <SessionList sessions={[session({ tokens: null })]} selected={0} height={10} width={80} />,
+    );
+    // Прочерк именно в слоте токенов: длительность рядом своя, не прочерк.
+    expect(lastFrame()).toContain('— · 12м');
   });
 });
 

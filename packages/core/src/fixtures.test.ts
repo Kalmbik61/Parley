@@ -1,10 +1,11 @@
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { discoverSessions } from './discover.js';
 import { buildIndex, buildSessionTree } from './session-tree.js';
+import type { TokenTotals } from './counters.js';
 
 /**
  * Фикстуры — реальные сессии, прогнанные через tools/make-fixtures.mjs: структура
@@ -18,6 +19,45 @@ const FIXTURES = path.join(
   'fixtures',
   'projects',
 );
+
+/**
+ * Независимый от индекса подсчёт usage по файлу: наивно (по каждой записи) и
+ * правильно (по одному разу на message.id). Нужен, чтобы тест видел разницу,
+ * а не просто «число не ноль».
+ */
+async function sumUsage(
+  file: string,
+): Promise<{ perRecord: TokenTotals; perMessage: TokenTotals }> {
+  const zero = (): TokenTotals => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  const perRecord = zero();
+  const perMessage = zero();
+  const seen = new Set<string>();
+
+  for (const raw of (await readFile(file, 'utf8')).split('\n')) {
+    if (raw.trim() === '') continue;
+    const record = JSON.parse(raw) as {
+      message?: { role?: string; id?: string; usage?: Record<string, number> };
+    };
+    const message = record.message;
+    if (message?.role !== 'assistant' || !message.usage) continue;
+
+    const usage = message.usage;
+    const add = (into: TokenTotals) => {
+      into.input += usage['input_tokens'] ?? 0;
+      into.output += usage['output_tokens'] ?? 0;
+      into.cacheRead += usage['cache_read_input_tokens'] ?? 0;
+      into.cacheWrite += usage['cache_creation_input_tokens'] ?? 0;
+    };
+
+    add(perRecord);
+    const id = message.id;
+    if (id !== undefined && seen.has(id)) continue;
+    if (id !== undefined) seen.add(id);
+    add(perMessage);
+  }
+
+  return { perRecord, perMessage };
+}
 
 describe('реальные сессии (анонимизированные фикстуры)', () => {
   it('находит ровно три сессии, журнал workflow сессией не считается', async () => {
@@ -49,6 +89,19 @@ describe('реальные сессии (анонимизированные фи
 
     const ends = index.map((s) => s.endedAt ?? '');
     expect([...ends].sort().reverse()).toEqual(ends);
+  });
+
+  it('токены считаются по ответам модели, а не по записям файла', async () => {
+    const index = await buildIndex(FIXTURES);
+
+    for (const session of index) {
+      const { perRecord, perMessage } = await sumUsage(session.file);
+      expect(session.tokens).toEqual(perMessage);
+      // В каждом настоящем логе ответ разложен на записи по блокам content
+      // с одним message.id — сумма по записям заведомо больше правильной.
+      expect(perRecord.output).toBeGreaterThan(perMessage.output);
+      expect(perRecord.cacheRead).toBeGreaterThan(perMessage.cacheRead);
+    }
   });
 
   it('сессия с обычным субагентом: задача и тип берутся из meta.json', async () => {

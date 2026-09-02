@@ -18,6 +18,11 @@ export interface SessionRecord {
   gitBranch: string | null;
   version: string | null;
   isSidechain: boolean;
+  /**
+   * message.id — идентификатор ОТВЕТА модели. Один ответ Claude Code пишет
+   * несколькими записями (по одной на блок content), и у всех он общий.
+   */
+  messageId: string | null;
   /** message.role */
   role: string | null;
   /** message.model — по нему считается бейдж модели. */
@@ -119,6 +124,7 @@ export const adapterV1: SchemaAdapter = {
       gitBranch: pickString(raw, 'gitBranch'),
       version: pickString(raw, 'version'),
       isSidechain: raw['isSidechain'] === true,
+      messageId: message ? pickString(message, 'id') : null,
       role: message ? pickString(message, 'role') : null,
       model: message ? pickString(message, 'model') : null,
       toolUses,

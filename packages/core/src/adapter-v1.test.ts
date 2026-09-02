@@ -43,6 +43,12 @@ describe('adapterV1', () => {
     expect(record.isSidechain).toBe(false);
   });
 
+  it('отдаёт message.id — по нему записи одного ответа склеиваются', () => {
+    expect(map({ message: { role: 'assistant', id: 'msg_01' } }).messageId).toBe('msg_01');
+    expect(map({ message: { role: 'assistant' } }).messageId).toBeNull();
+    expect(map({}).messageId).toBeNull();
+  });
+
   it('принимает session_id наравне с sessionId', () => {
     expect(map({ session_id: 's2' }).sessionId).toBe('s2');
     expect(map({ sessionId: 's1', session_id: 's2' }).sessionId).toBe('s1');
