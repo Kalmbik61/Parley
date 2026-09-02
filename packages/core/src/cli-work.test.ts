@@ -1,0 +1,336 @@
+import { execFile } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { workPaths } from './work/store.js';
+import type { WorkIndexEntry, WorkMap, WorksIndex } from './work/types.js';
+
+const run = promisify(execFile);
+const here = path.dirname(fileURLToPath(import.meta.url));
+const CLI = path.join(here, 'cli.ts');
+const REPO = path.join(here, '..', '..', '..');
+
+let home = '';
+let project = '';
+let binDir = '';
+let stub = '';
+
+interface Result {
+  stdout: string;
+  stderr: string;
+  code: number;
+}
+
+/**
+ * Тот же способ, что у остальных тестов CLI: исходник через tsx. Домашняя папка
+ * харнесса и проект — временные, настоящий `claude` не запускается никогда:
+ * доступность провайдеров подсунута оверрайдами на shell-заглушку.
+ */
+async function cli(...args: string[]): Promise<Result> {
+  const env = {
+    ...process.env,
+    HARNAS_HOME: home,
+    HARNAS_CLAUDE_BIN: stub,
+    HARNAS_CODEX_BIN: stub,
+    HARNAS_GLM_BIN: '',
+  };
+  try {
+    const { stdout, stderr } = await run('pnpm', ['exec', 'tsx', CLI, ...args], { cwd: REPO, env });
+    return { stdout, stderr, code: 0 };
+  } catch (error) {
+    const failure = error as { stdout?: string; stderr?: string; code?: number };
+    return { stdout: failure.stdout ?? '', stderr: failure.stderr ?? '', code: failure.code ?? 1 };
+  }
+}
+
+async function ok(...args: string[]): Promise<Record<string, unknown>> {
+  const result = await cli(...args);
+  expect(result.code, result.stderr).toBe(0);
+  return JSON.parse(result.stdout) as Record<string, unknown>;
+}
+
+const readMapFile = async (workId: string): Promise<WorkMap> =>
+  JSON.parse(await readFile(workPaths(project, workId).map, 'utf8')) as WorkMap;
+
+const readIndexFile = async (): Promise<WorksIndex> =>
+  JSON.parse(await readFile(path.join(home, 'works-index.json'), 'utf8')) as WorksIndex;
+
+const newWork = (title: string): Promise<Record<string, unknown>> =>
+  ok('work', 'new', '--title', title, '--goal', 'Цель', '--cwd', project);
+
+beforeEach(async () => {
+  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
+  binDir = await mkdtemp(path.join(tmpdir(), 'harnas-bin-'));
+  stub = path.join(binDir, 'agent-stub');
+  await writeFile(stub, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+});
+
+afterEach(async () => {
+  await rm(home, { recursive: true, force: true });
+  await rm(project, { recursive: true, force: true });
+  await rm(binDir, { recursive: true, force: true });
+});
+
+describe('harnas-core work new', () => {
+  it('создаёт работу, карту на диске и запись в глобальном индексе', async () => {
+    const created = await newWork('Авторизация');
+    const map = created['map'] as WorkMap;
+    expect(created['projectPath']).toBe(project);
+    expect(map.work.id).toBe('w-0001');
+    expect(map.work.title).toBe('Авторизация');
+    expect(map.work.goal).toBe('Цель');
+    expect(map.work.status).toBe('active');
+
+    expect((await readMapFile('w-0001')).work.id).toBe('w-0001');
+    const index = await readIndexFile();
+    expect(index.works).toEqual([
+      expect.objectContaining({ id: 'w-0001', projectPath: project, title: 'Авторизация' }),
+    ]);
+  }, 60_000);
+
+  it('без --title — ошибка в stderr, stdout пуст', async () => {
+    const result = await cli('work', 'new', '--cwd', project);
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('--title');
+  }, 60_000);
+});
+
+describe('harnas-core work list', () => {
+  it('печатает работы индекса, archived — только с --all', async () => {
+    await newWork('Авторизация');
+    await newWork('Платежи');
+
+    const index = await readIndexFile();
+    const second = index.works.find((work) => work.title === 'Платежи') as WorkIndexEntry;
+    second.status = 'archived';
+    await writeFile(path.join(home, 'works-index.json'), JSON.stringify(index, null, 2), 'utf8');
+
+    const visible = JSON.parse((await cli('work', 'list')).stdout) as WorkIndexEntry[];
+    expect(visible.map((work) => work.title)).toEqual(['Авторизация']);
+
+    const all = JSON.parse((await cli('work', 'list', '--all')).stdout) as WorkIndexEntry[];
+    expect(all.map((work) => work.title)).toEqual(['Авторизация', 'Платежи']);
+  }, 60_000);
+});
+
+describe('harnas-core work map', () => {
+  it('находит работу по глобальному индексу без --cwd', async () => {
+    await newWork('Авторизация');
+    const printed = await ok('work', 'map', '--work', 'w-0001');
+    expect(printed['projectPath']).toBe(project);
+    expect((printed['map'] as WorkMap).work.title).toBe('Авторизация');
+  }, 60_000);
+
+  it('неизвестная работа — ошибка, stdout пуст', async () => {
+    const result = await cli('work', 'map', '--work', 'w-9999');
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('w-9999');
+  }, 60_000);
+});
+
+describe('harnas-core work session new', () => {
+  it('создаёт pending, бриф, MCP-конфиг и печатает готовую команду', async () => {
+    await newWork('Авторизация');
+    const printed = await ok(
+      'work',
+      'session',
+      'new',
+      '--work',
+      'w-0001',
+      '--provider',
+      'claude',
+      '--label',
+      'план',
+      '--task',
+      'Составить план реализации',
+    );
+
+    expect(printed['workId']).toBe('w-0001');
+    expect(printed['sessionId']).toBe('s-01');
+    expect(printed['cwd']).toBe(project);
+    expect(printed['command']).toBe('claude');
+    expect(printed['env']).toEqual({
+      HARNAS_WORK_DIR: workPaths(project, 'w-0001').dir,
+      HARNAS_SESSION_ID: 's-01',
+    });
+
+    const args = printed['args'] as string[];
+    const uuid = args[args.indexOf('--session-id') + 1] as string;
+    expect(uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(args[args.indexOf('--mcp-config') + 1]).toBe(printed['mcpConfig']);
+    // Стартовый промпт — текст брифа: `claude` принимает его позиционным аргументом.
+    const brief = await readFile(printed['brief'] as string, 'utf8');
+    expect(args.at(-1)).toBe(brief);
+    expect(brief).toContain('Составить план реализации');
+
+    const map = await readMapFile('w-0001');
+    expect(map.sessions).toHaveLength(1);
+    expect(map.sessions[0]).toMatchObject({
+      id: 's-01',
+      provider: 'claude',
+      label: 'план',
+      task: 'Составить план реализации',
+      parent: null,
+      contextFrom: [],
+      status: 'pending',
+      // Id известен заранее (`--session-id`), поэтому связь с логом не теряется.
+      providerSessionId: uuid,
+    });
+
+    const config = JSON.parse(await readFile(printed['mcpConfig'] as string, 'utf8')) as {
+      mcpServers: Record<string, { command: string; env: Record<string, string> }>;
+    };
+    expect(config.mcpServers['harnas']?.env).toEqual({
+      HARNAS_WORK_DIR: workPaths(project, 'w-0001').dir,
+      HARNAS_SESSION_ID: 's-01',
+    });
+  }, 60_000);
+
+  it('провайдеру без внешнего id uuid не выдаётся, конфиг уходит в аргументы', async () => {
+    await newWork('Авторизация');
+    const printed = await ok(
+      'work',
+      'session',
+      'new',
+      '--work',
+      'w-0001',
+      '--provider',
+      'codex',
+      '--label',
+      'бэкенд',
+      '--task',
+      'Реализовать шаги 1–3',
+    );
+
+    const args = printed['args'] as string[];
+    expect(args).not.toContain('--session-id');
+    expect(printed['mcpConfig']).toBeNull();
+    expect(args[args.indexOf('-c') + 1]).toContain('mcp_servers.harnas=');
+    expect((await readMapFile('w-0001')).sessions[0]?.providerSessionId).toBeNull();
+  }, 60_000);
+
+  it('--context попадает в карту и в бриф', async () => {
+    await newWork('Авторизация');
+    await ok(
+      'work',
+      'session',
+      'new',
+      '--work',
+      'w-0001',
+      '--provider',
+      'claude',
+      '--label',
+      'план',
+      '--task',
+      'План',
+    );
+    const printed = await ok(
+      'work',
+      'session',
+      'new',
+      '--work',
+      'w-0001',
+      '--provider',
+      'claude',
+      '--label',
+      'бэкенд',
+      '--task',
+      'Код',
+      '--context',
+      's-01',
+    );
+
+    expect(printed['sessionId']).toBe('s-02');
+    expect((await readMapFile('w-0001')).sessions[1]?.contextFrom).toEqual(['s-01']);
+    expect(await readFile(printed['brief'] as string, 'utf8')).toContain('s-01');
+  }, 60_000);
+
+  it('неизвестная сессия в --context — ошибка, записи в карте нет', async () => {
+    await newWork('Авторизация');
+    const result = await cli(
+      'work',
+      'session',
+      'new',
+      '--work',
+      'w-0001',
+      '--provider',
+      'claude',
+      '--label',
+      'бэкенд',
+      '--task',
+      'Код',
+      '--context',
+      's-07',
+    );
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('s-07');
+    expect((await readMapFile('w-0001')).sessions).toHaveLength(0);
+  }, 60_000);
+
+  it('неизвестный провайдер и команда не из PATH — ошибка, записи в карте нет', async () => {
+    await newWork('Авторизация');
+    const unknown = await cli(
+      'work',
+      'session',
+      'new',
+      '--work',
+      'w-0001',
+      '--provider',
+      'выдумка',
+      '--label',
+      'роль',
+      '--task',
+      'Задача',
+    );
+    expect(unknown.code).toBe(1);
+    expect(unknown.stdout).toBe('');
+    expect(unknown.stderr).toContain('выдумка');
+
+    const missing = await cli(
+      'work',
+      'session',
+      'new',
+      '--work',
+      'w-0001',
+      '--provider',
+      'glm',
+      '--label',
+      'роль',
+      '--task',
+      'Задача',
+    );
+    expect(missing.code).toBe(1);
+    expect(missing.stdout).toBe('');
+    expect(missing.stderr).toContain('PATH');
+
+    expect((await readMapFile('w-0001')).sessions).toHaveLength(0);
+  }, 60_000);
+
+  it('без --work и с неизвестной подкомандой — ошибка, stdout пуст', async () => {
+    const noWork = await cli(
+      'work',
+      'session',
+      'new',
+      '--provider',
+      'claude',
+      '--label',
+      'роль',
+      '--task',
+      'Задача',
+    );
+    expect(noWork.code).toBe(1);
+    expect(noWork.stdout).toBe('');
+    expect(noWork.stderr).toContain('--work');
+
+    const nonsense = await cli('work', 'чепуха');
+    expect(nonsense.code).toBe(1);
+    expect(nonsense.stdout).toBe('');
+  }, 60_000);
+});

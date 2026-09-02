@@ -2,10 +2,26 @@
 // Контракт ядра с любым фронтендом: команды печатают в stdout ТОЛЬКО JSON.
 // Диагностика идёт в stderr, код возврата ненулевой при ошибке.
 
+import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
 import { defaultRoot, discoverSessions } from './discover.js';
+import { commandInPath, loadProviders, startCommand } from './providers.js';
+import type { RunnerSubstitutions } from './providers.js';
 import { buildSchemaReport } from './schema-report.js';
 import { buildIndex, buildSessionTree } from './session-tree.js';
+import { writeBrief } from './work/brief.js';
+import { addSession } from './work/map.js';
+import { mcpConfigValue, writeMcpConfig } from './work/mcp-config.js';
+import {
+  createWork,
+  readMap,
+  readWorksIndex,
+  updateMap,
+  workPaths,
+  worksIndexPath,
+} from './work/store.js';
 
 const USAGE = `harnas-core — индекс сессий Claude Code в JSON
 
@@ -14,16 +30,175 @@ const USAGE = `harnas-core — индекс сессий Claude Code в JSON
   harnas-core schema [--provider claude|codex] [--root <путь>]
                                             отчёт по реальной схеме .jsonl
 
+  harnas-core work new --title <t> [--goal <g>] [--cwd <путь>]
+                                            новая работа в проекте
+  harnas-core work list [--all]             работы глобального индекса
+  harnas-core work map --work <id> [--cwd <путь>]
+                                            карта работы
+  harnas-core work session new --work <id> --provider <p> --label <l>
+      --task <t> [--context s-01,s-02] [--cwd <путь>]
+                                            запись pending, бриф, MCP-конфиг и
+                                            готовая команда запуска
+
   --json   формат по умолчанию и единственный, принимается для совместимости
-  --root   корень истории (по умолчанию ~/.claude/projects, только чтение)`;
+  --root   корень истории (по умолчанию ~/.claude/projects, только чтение)
+  --cwd    проект с \`.harnas/\` (по умолчанию текущий каталог; для команд по
+           --work проект берётся из глобального индекса)
+  --all    показывать и archived работы`;
 
 function optionValue(argv: string[], name: string): string | undefined {
   const at = argv.indexOf(name);
   return at === -1 ? undefined : argv[at + 1];
 }
 
+function requiredOption(argv: string[], name: string): string {
+  const value = optionValue(argv, name);
+  if (value === undefined || value === '') throw new Error(`нужен ${name} <значение>`);
+  return value;
+}
+
 function print(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+/**
+ * Проект работы: явный `--cwd` или запись глобального индекса. Индекс и есть
+ * список «где какая работа лежит», поэтому по `--work` каталог знать не нужно;
+ * одинаковый id в двух проектах (копия проекта с закоммиченным `.harnas/`) —
+ * повод спросить `--cwd`, а не гадать.
+ */
+async function resolveProject(argv: string[], workId: string): Promise<string> {
+  const cwd = optionValue(argv, '--cwd');
+  if (cwd !== undefined) return path.resolve(cwd);
+
+  const found = (await readWorksIndex()).works.filter((work) => work.id === workId);
+  if (found.length === 0) {
+    throw new Error(`работы ${workId} нет в ${worksIndexPath()} — укажите --cwd`);
+  }
+  if (found.length > 1) {
+    const projects = found.map((work) => work.projectPath).join(', ');
+    throw new Error(`работа ${workId} есть в нескольких проектах (${projects}) — укажите --cwd`);
+  }
+  return (found[0] as { projectPath: string }).projectPath;
+}
+
+/**
+ * Готовит запуск сессии без TUI (спецификация, раздел 4): запись `pending`,
+ * бриф и MCP-конфиг на диске, команда запуска — в stdout. Сам процесс агента
+ * харнесс тут не поднимает: пользователь запускает его руками из своего
+ * терминала, поэтому в панель такая сессия не подключается.
+ */
+async function newWorkSession(argv: string[]): Promise<void> {
+  const workId = requiredOption(argv, '--work');
+  const provider = requiredOption(argv, '--provider');
+  const label = requiredOption(argv, '--label');
+  const task = requiredOption(argv, '--task');
+  const contextFrom = (optionValue(argv, '--context') ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => id !== '');
+  const projectPath = await resolveProject(argv, workId);
+
+  // Провайдера и бинарь проверяем до записи: запись `pending`, которую нечем
+  // запустить, — мусор в карте (спецификация, раздел 8).
+  const registry = await loadProviders();
+  const entry = registry[provider];
+  if (entry === undefined) {
+    throw new Error(
+      `неизвестный провайдер ${provider}; допустимы: ${Object.keys(registry).join(', ')}`,
+    );
+  }
+  if (!(await commandInPath(entry.runner.command))) {
+    throw new Error(
+      `команды ${entry.runner.command} нет в PATH — провайдер ${provider} недоступен`,
+    );
+  }
+
+  // Провайдеру, принимающему id снаружи, uuid выдаём сразу и кладём в карту:
+  // иначе после ручного запуска связь записи с логом провайдера потерялась бы.
+  const uuid = entry.linkBy === 'session-id' ? randomUUID() : null;
+  let created = '';
+  const map = await updateMap(projectPath, workId, (current) => {
+    for (const id of contextFrom) {
+      if (!current.sessions.some((session) => session.id === id)) {
+        throw new Error(`сессии ${id} нет в карте`);
+      }
+    }
+    const session = addSession(current, { provider, label, task, parent: null, contextFrom });
+    if (uuid !== null) session.providerSessionId = uuid;
+    created = session.id;
+  });
+
+  const paths = workPaths(projectPath, workId);
+  const brief = await writeBrief(projectPath, map, created);
+  // Бриф читаем с диска: между записью и запуском его можно править (раздел 11).
+  const prompt = await readFile(brief, 'utf8');
+  // Файл конфига нужен только тем, кто принимает путь; codex получает свой
+  // сервер значением `-c`, и лишний файл ему писать незачем.
+  const mcpFile =
+    entry.runner.mcpConfig === 'json-file'
+      ? await writeMcpConfig(projectPath, workId, created)
+      : null;
+  const mcp = mcpConfigValue(
+    entry.runner.mcpConfig,
+    { workDir: paths.dir, sessionId: created },
+    mcpFile ?? '',
+  );
+
+  const subs: RunnerSubstitutions = { prompt };
+  if (uuid !== null) subs.sessionUuid = uuid;
+  if (mcp !== undefined) subs.mcpConfig = mcp;
+  const { command, args } = startCommand(entry, subs);
+
+  print({
+    workId,
+    sessionId: created,
+    brief,
+    mcpConfig: mcpFile,
+    command,
+    args,
+    cwd: projectPath,
+    // Окружение запускаемого процесса: те же переменные, что MCP-сервер получает
+    // из конфига, — с ними он знает, кто звонит, даже унаследовав их от агента.
+    env: { HARNAS_WORK_DIR: paths.dir, HARNAS_SESSION_ID: created },
+  });
+}
+
+/** Команды слоя координации: работа, её карта и сессии (спецификация, раздел 4). */
+async function workCommand(rest: string[], argv: string[]): Promise<number> {
+  const [subcommand, ...tail] = rest;
+
+  if (subcommand === 'new') {
+    const projectPath = path.resolve(optionValue(argv, '--cwd') ?? process.cwd());
+    const title = requiredOption(argv, '--title');
+    const goal = optionValue(argv, '--goal');
+    const map = await createWork(projectPath, goal === undefined ? { title } : { title, goal });
+    print({ projectPath, map });
+    return 0;
+  }
+
+  if (subcommand === 'list') {
+    // `archived` в списке не показываются (спецификация, раздел 11).
+    const all = argv.includes('--all');
+    const { works } = await readWorksIndex();
+    print(all ? works : works.filter((work) => work.status !== 'archived'));
+    return 0;
+  }
+
+  if (subcommand === 'map') {
+    const workId = requiredOption(argv, '--work');
+    const projectPath = await resolveProject(argv, workId);
+    print({ projectPath, map: await readMap(projectPath, workId) });
+    return 0;
+  }
+
+  if (subcommand === 'session' && tail[0] === 'new') {
+    await newWorkSession(argv);
+    return 0;
+  }
+
+  process.stderr.write(`Неизвестная команда: work ${rest.join(' ')}\n${USAGE}\n`);
+  return 1;
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -33,6 +208,15 @@ async function main(argv: string[]): Promise<number> {
   if (command === undefined || command === '--help' || command === '-h') {
     process.stderr.write(`${USAGE}\n`);
     return command === undefined ? 1 : 0;
+  }
+
+  if (command === 'work') {
+    try {
+      return await workCommand(rest, argv);
+    } catch (error) {
+      process.stderr.write(`${(error as Error).message}\n`);
+      return 1;
+    }
   }
 
   if (command === 'index') {
