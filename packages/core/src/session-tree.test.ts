@@ -119,6 +119,17 @@ describe('discoverSessions', () => {
     expect(await discoverSessions(root)).toEqual([]);
   });
 
+  it('старый кэш sessions-index.json сессией не считается', async () => {
+    // Формат v1 с полем summary: описывает давно удалённые сессии, см. spec.
+    await put(
+      '-Users-me-proj/sessions-index.json',
+      JSON.stringify({ version: 1, entries: [{ sessionId: 'мёртвая', summary: 'старьё' }] }),
+    );
+    await put('-Users-me-proj/MEMORY.md', 'заметки');
+
+    expect(await discoverSessions(root)).toEqual([]);
+  });
+
   it('несуществующий корень — пустой список, не ошибка', async () => {
     expect(await discoverSessions(path.join(root, 'нет-такого'))).toEqual([]);
   });
