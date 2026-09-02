@@ -7,6 +7,7 @@ import { SubsessionList } from './components/subsession-list.js';
 import { TerminalView } from './components/terminal-view.js';
 import { useAgentPty } from './pty/use-agent-pty.js';
 import { ctrlByte, DEFAULT_ESCAPE_BYTE, usePtyInput } from './pty/use-pty-input.js';
+import { usePtyResize } from './pty/use-pty-resize.js';
 import { usePtyTerminal } from './pty/use-pty-terminal.js';
 import { useNavigation } from './use-navigation.js';
 import { useSubsessions } from './use-subsessions.js';
@@ -35,6 +36,7 @@ export function App({ sessions, root = defaultRoot(), onRescan }: AppProps): Rea
 
   const agent = useAgentPty();
   const snapshot = usePtyTerminal(agent.session, { cols: terminalCols, rows: terminalRows });
+  usePtyResize(agent.session, terminalCols, terminalRows);
 
   // Число подсессий известно только после загрузки дерева, а навигация нужна раньше —
   // отдаём его через ref, который читается в момент нажатия клавиши.

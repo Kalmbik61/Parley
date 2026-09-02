@@ -180,6 +180,12 @@
       "accessCount": 1,
       "lastAccessed": 1788335280789,
       "type": "file"
+    },
+    {
+      "path": "packages/tui/src/pty/use-pty-resize.test.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1788335424203,
+      "type": "file"
     }
   ],
   "userDirectives": []
