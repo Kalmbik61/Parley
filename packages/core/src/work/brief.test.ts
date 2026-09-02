@@ -1,0 +1,137 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { buildBrief, writeBrief } from './brief.js';
+import { addSession } from './map.js';
+import { createWork } from './store.js';
+import type { WorkMap } from './types.js';
+
+const AT = '2026-09-02T10:00:00.000Z';
+
+function mapWithSessions(): WorkMap {
+  const map: WorkMap = {
+    schemaVersion: 1,
+    work: {
+      id: 'w-0042',
+      title: 'Авторизация',
+      goal: 'логин по e-mail, сессии, миграции',
+      status: 'active',
+      createdAt: AT,
+      updatedAt: AT,
+    },
+    sessions: [],
+    messages: [],
+  };
+  const plan = addSession(map, { provider: 'claude', label: 'план', task: 'Составить план' }, AT);
+  plan.status = 'done';
+  plan.summary = 'План готов: 5 шагов, миграции отдельно.';
+  plan.summarySource = 'agent';
+  plan.artifacts = [{ kind: 'plan', path: '.harnas/works/w-0042/artifacts/plan.md' }];
+  addSession(
+    map,
+    {
+      provider: 'codex',
+      label: 'бэкенд',
+      task: 'Реализовать шаги 1–3 плана',
+      parent: 's-01',
+      contextFrom: ['s-01'],
+    },
+    AT,
+  );
+  return map;
+}
+
+describe('бриф сессии', () => {
+  it('несёт работу, роль, задачу, контекст и три правила', () => {
+    const brief = buildBrief(mapWithSessions(), 's-02');
+
+    // 1 — заголовок и цель работы.
+    expect(brief).toContain('w-0042');
+    expect(brief).toContain('Авторизация');
+    expect(brief).toContain('логин по e-mail, сессии, миграции');
+    // 2 — id и роль новой сессии.
+    expect(brief).toContain('s-02');
+    expect(brief).toContain('бэкенд');
+    // 3 — задача.
+    expect(brief).toContain('Реализовать шаги 1–3 плана');
+    // 4 — резюме и пути артефактов сессий из contextFrom.
+    expect(brief).toContain('s-01');
+    expect(brief).toContain('План готов: 5 шагов, миграции отдельно.');
+    expect(brief).toContain('.harnas/works/w-0042/artifacts/plan.md');
+    // 5 — три правила.
+    expect(brief).toContain('get_map');
+    expect(brief).toContain('send_message');
+    expect(brief).toContain('check_inbox');
+    expect(brief).toContain('report');
+  });
+
+  it('содержимое артефактов в бриф не попадает — только пути', () => {
+    const map = mapWithSessions();
+    const brief = buildBrief(map, 's-02');
+    // Бриф нарочно короткий: план агент прочитает сам, если он ему нужен.
+    expect(brief.split('\n').length).toBeLessThan(30);
+  });
+
+  it('без contextFrom раздела контекста нет', () => {
+    const map = mapWithSessions();
+    const brief = buildBrief(map, 's-01');
+    expect(brief).not.toContain('Контекст');
+    expect(brief).toContain('get_map');
+  });
+
+  it('сессия из contextFrom без резюме честно помечается', () => {
+    const map = mapWithSessions();
+    const plan = map.sessions[0];
+    if (plan === undefined) throw new Error('нет сессии');
+    plan.summary = null;
+    plan.artifacts = [];
+    const brief = buildBrief(map, 's-02');
+    expect(brief).toContain('резюме: нет');
+    expect(brief).not.toContain('Артефакты');
+  });
+
+  it('пустая цель работы не оставляет пустую строку «Цель:»', () => {
+    const map = mapWithSessions();
+    map.work.goal = '';
+    expect(buildBrief(map, 's-02')).not.toContain('Цель:');
+  });
+
+  it('неизвестная сессия — ошибка, а не пустой бриф', () => {
+    const map = mapWithSessions();
+    expect(() => buildBrief(map, 's-99')).toThrow(/s-99/);
+  });
+
+  it('битая ссылка в contextFrom — ошибка', () => {
+    const map = mapWithSessions();
+    const backend = map.sessions[1];
+    if (backend === undefined) throw new Error('нет сессии');
+    backend.contextFrom = ['s-77'];
+    expect(() => buildBrief(map, 's-02')).toThrow(/s-77/);
+  });
+});
+
+describe('writeBrief', () => {
+  let home = '';
+  let project = '';
+
+  beforeEach(async () => {
+    home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
+    project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
+    process.env.HARNAS_HOME = home;
+  });
+
+  afterEach(async () => {
+    delete process.env.HARNAS_HOME;
+    await Promise.all([home, project].map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  it('сохраняет бриф в briefs/<session-id>.md', async () => {
+    const map = await createWork(project, { title: 'Авторизация', goal: 'логин' });
+    addSession(map, { provider: 'claude', label: 'план', task: 'Составить план' }, AT);
+
+    const file = await writeBrief(project, map, 's-01');
+    expect(file).toBe(path.join(project, '.harnas', 'works', 'w-0001', 'briefs', 's-01.md'));
+    expect(await readFile(file, 'utf8')).toBe(buildBrief(map, 's-01'));
+  });
+});

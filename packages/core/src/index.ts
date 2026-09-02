@@ -20,8 +20,26 @@ export type { AllSessionsOptions } from './all-sessions.js';
 export { defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
 export type { DiscoveredCodexSession } from './codex/discover.js';
 export { buildCodexIndex, indexCodexSession } from './codex/index-session.js';
-export { PROVIDERS, providersWithHistory, runnerCommand } from './providers.js';
-export type { ProviderInfo, RunnerConfig } from './providers.js';
+export {
+  PROVIDERS,
+  commandInPath,
+  loadProviders,
+  providersFile,
+  providersWithHistory,
+  resumeCommand,
+  runnerCommand,
+  startCommand,
+  substituteArgs,
+} from './providers.js';
+export type {
+  McpConfigKind,
+  ProviderEntry,
+  ProviderInfo,
+  ProviderOverride,
+  RunnerConfig,
+  RunnerSubstitutions,
+  SessionLink,
+} from './providers.js';
 export { modelBadge, providerBadge, providerMark } from './model-badge.js';
 export { buildSchemaReport, observeRecord } from './schema-report.js';
 export type { FieldReport, SchemaReport, SchemaReportResult, TypeReport } from './schema-report.js';
@@ -47,6 +65,17 @@ export {
   worksIndexPath,
 } from './work/store.js';
 export type { NewWork, WorkPaths, WriteOptions } from './work/store.js';
+export { buildBrief, writeBrief } from './work/brief.js';
+export {
+  MCP_SERVER_BIN,
+  MCP_SERVER_NAME,
+  codexMcpOverride,
+  mcpConfig,
+  mcpConfigJson,
+  mcpConfigValue,
+  writeMcpConfig,
+} from './work/mcp-config.js';
+export type { McpConfigFile, McpConfigParams, McpStdioServer } from './work/mcp-config.js';
 export type {
   Artifact,
   HistoryEntry,

@@ -31,6 +31,8 @@ export interface WorkPaths {
   lock: string;
   briefs: string;
   artifacts: string;
+  /** Сгенерированные MCP-конфиги сессий: `mcp/<session-id>.json`. */
+  mcp: string;
 }
 
 /** Раскладка работы на диске (спецификация, раздел 2). */
@@ -43,6 +45,7 @@ export function workPaths(projectPath: string, workId: string): WorkPaths {
     lock: path.join(dir, 'map.lock'),
     briefs: path.join(dir, 'briefs'),
     artifacts: path.join(dir, 'artifacts'),
+    mcp: path.join(dir, 'mcp'),
   };
 }
 

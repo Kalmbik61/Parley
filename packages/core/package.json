@@ -15,6 +15,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "bin": {
-    "harnas-core": "./dist/cli.js"
+    "harnas-core": "./dist/cli.js",
+    "harnas-mcp": "./dist/mcp/server.js"
   }
 }
