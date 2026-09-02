@@ -234,6 +234,24 @@
       "accessCount": 1,
       "lastAccessed": 1788340909121,
       "type": "file"
+    },
+    {
+      "path": "packages/core/src/codex/discover.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788341025469,
+      "type": "file"
+    },
+    {
+      "path": "packages/core/src/codex/index-session.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788341046148,
+      "type": "file"
+    },
+    {
+      "path": "packages/core/src/codex/codex.test.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788341133840,
+      "type": "file"
     }
   ],
   "userDirectives": []

@@ -12,3 +12,6 @@ export { buildIndex, buildSessionTree, loadSessionTree } from './session-tree.js
 export type { SessionTree } from './session-tree.js';
 export { watchSessions } from './watch.js';
 export type { SessionChange, SessionWatcher, WatchOptions } from './watch.js';
+export { defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
+export type { DiscoveredCodexSession } from './codex/discover.js';
+export { buildCodexIndex, indexCodexSession } from './codex/index-session.js';

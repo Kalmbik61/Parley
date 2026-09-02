@@ -38,7 +38,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 ## Low Priority
 
 - [x] Research: run schema observation over `~/.codex/sessions` rollout logs; document the real format in specs/runners.md and commit a schema report to docs/schema/ (discovery task)
-- [ ] packages/core: Codex session adapter mapping rollout logs into the same SessionIndex model per specs/runners.md
+- [x] packages/core: Codex session adapter mapping rollout logs into the same SessionIndex model per specs/runners.md
 - [ ] Research: locate GLM harness session logs and document the format in specs/runners.md; if none exist, record the decision that GLM is runner-only (no history) — see specs/runners.md
 - [ ] packages/core: GLM session adapter, or runner-only stub per the research outcome
 - [ ] packages/tui: runner abstraction — spawn `codex` (and the GLM CLI) in the right pane through the same PTY manager per specs/runners.md
