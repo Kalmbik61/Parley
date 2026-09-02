@@ -110,3 +110,9 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
   длинных транскриптах не измерялся. Первые задачи каждого блока закрывают именно их.
 - Политика Anthropic по сторонним харнессам менялась четырежды за 2026 год — перед
   началом v1 перечитать `code.claude.com/docs/en/legal-and-compliance`.
+  **Перечитано 2026-09-02, архитектура v1 остаётся легальной.** Дословно:
+  «The Claude Code binary must not be modified»; «Nor does it prevent an end user from
+  signing in to the unmodified Claude Code binary with their own Claude subscription»;
+  «developers may not collect, store, or intermediate Claude.ai credentials or session
+  tokens». То есть спавн стокового `claude` из PATH под логином самого пользователя —
+  ровно разрешённый сценарий, а `.credentials.json` не трогаем ни при каких условиях.
