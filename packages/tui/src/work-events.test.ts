@@ -125,7 +125,7 @@ describe('worksEvents', () => {
       g,
     );
 
-    expect(events[0]?.text).toBe('✉ план → бэкенд: «жду миграции, чтобы…»');
+    expect(events[0]?.text).toBe('▤ план → бэкенд: «жду миграции, чтобы…»');
     expect(events[0]?.source?.sessionId).toBe('s-02');
   });
 

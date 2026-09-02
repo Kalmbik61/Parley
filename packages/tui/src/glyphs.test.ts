@@ -6,7 +6,7 @@ describe('glyphs', () => {
     const g = glyphs({});
     expect(g.active).toBe('●');
     expect(g.pending).toBe('◌');
-    expect(g.mail).toBe('✉');
+    expect(g.mail).toBe('▤');
     expect(g.expanded).toBe('▾');
     expect(g.collapsed).toBe('▸');
     expect(g.child).toBe('└');
@@ -76,5 +76,19 @@ describe('statusColor', () => {
     expect(statusColor('exited')).toEqual({ color: 'yellow' });
     expect(statusColor('failed')).toEqual({ color: 'red' });
     expect(statusColor('pending')).toEqual({ dimColor: true });
+  });
+});
+
+describe('ширина глифов', () => {
+  it('каждый Unicode-глиф занимает одну колонку по меркам Ink (string-width)', async () => {
+    // Ink режет строки по string-width, а бюджеты списков считают String.length:
+    // глиф шириной 2 (как был ✉) выталкивает за панель последний знак строки —
+    // ту самую цифру `▤N`, которую дизайн 6.4 запрещает отбрасывать.
+    const { default: stringWidth } = await import('string-width');
+    const g = glyphs({});
+    for (const [name, value] of Object.entries(g)) {
+      if (typeof value !== 'string' || name === 'arrow') continue;
+      expect(stringWidth(value), `глиф ${name} «${value}»`).toBe(1);
+    }
   });
 });

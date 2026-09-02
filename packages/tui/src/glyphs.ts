@@ -14,7 +14,7 @@ export interface Glyphs {
   exited: string;
   done: string;
   failed: string;
-  /** Непрочитанные сообщения: `✉N`. */
+  /** Непрочитанные сообщения: `▤N`. */
   mail: string;
   expanded: string;
   collapsed: string;
@@ -48,7 +48,7 @@ const UNICODE: Glyphs = {
   exited: '○',
   done: '✓',
   failed: '✗',
-  mail: '✉',
+  mail: '▤',
   expanded: '▾',
   collapsed: '▸',
   child: '└',

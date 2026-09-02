@@ -231,7 +231,7 @@ describe('buildRows', () => {
 
 describe('workTail', () => {
   it('агрегат статусов и непрочитанных', () => {
-    expect(workTail({ statuses: { active: 2, pending: 1 }, unread: 1 }, g, 20)).toBe('●2 ◌1 ✉1');
+    expect(workTail({ statuses: { active: 2, pending: 1 }, unread: 1 }, g, 20)).toBe('●2 ◌1 ▤1');
     expect(workTail({ statuses: { done: 4 }, unread: 0 }, g, 20)).toBe('✓4');
   });
 
@@ -239,11 +239,11 @@ describe('workTail', () => {
     expect(workTail({ statuses: {}, unread: 0 }, g, 20)).toBe('—');
   });
 
-  it('на узкой ширине сжимается до ✉N, а без сообщений — до ●N (6.4)', () => {
+  it('на узкой ширине сжимается до ▤N, а без сообщений — до ●N (6.4)', () => {
     const counters = { statuses: { active: 2, pending: 1, done: 3 }, unread: 1 };
-    expect(workTail(counters, g, 8)).toBe('●2 ◌1 ✉1');
-    expect(workTail(counters, g, 5)).toBe('●2 ✉1');
-    expect(workTail(counters, g, 2)).toBe('✉1');
+    expect(workTail(counters, g, 8)).toBe('●2 ◌1 ▤1');
+    expect(workTail(counters, g, 5)).toBe('●2 ▤1');
+    expect(workTail(counters, g, 2)).toBe('▤1');
     expect(workTail({ statuses: { active: 2, done: 3 }, unread: 0 }, g, 2)).toBe('●2');
   });
 });

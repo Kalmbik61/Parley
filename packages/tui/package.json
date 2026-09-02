@@ -21,6 +21,7 @@
   },
   "devDependencies": {
     "@types/react": "^18",
-    "ink-testing-library": "^4"
+    "ink-testing-library": "^4",
+    "string-width": "7.2.0"
   }
 }

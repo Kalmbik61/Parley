@@ -281,8 +281,8 @@ const TAIL_ORDER: readonly SessionStatus[] = [
 const DROP_ORDER: readonly SessionStatus[] = ['done', 'failed', 'exited', 'idle', 'pending'];
 
 /**
- * Хвост строки работы: `●2 ◌1 ✉1`. Не отбрасывается целиком — на самой узкой
- * ширине сжимается до `✉N`, а без сообщений до `●N` (дизайн 6.4).
+ * Хвост строки работы: `●2 ◌1 ▤1`. Не отбрасывается целиком — на самой узкой
+ * ширине сжимается до `▤N`, а без сообщений до `●N` (дизайн 6.4).
  */
 export function workTail(counters: WorkCounters, g: Glyphs, limit: number): string {
   const dropped = new Set<SessionStatus>();

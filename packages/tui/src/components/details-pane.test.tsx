@@ -297,7 +297,7 @@ describe('DetailsPane — ВХОДЯЩИЕ', () => {
     expect(frame).toContain('жду миграции');
     expect(frame).not.toContain('исходящее');
     // Непрочитанное — с конвертом и выше прочитанных, хотя оно старше их.
-    expect(lineWith(frame, 'жду миграции')).toContain('✉');
+    expect(lineWith(frame, 'жду миграции')).toContain('▤');
     expect(frame.indexOf('жду миграции')).toBeLessThan(frame.indexOf('прочитано 5'));
     // Отправитель — его роль, а не id, и время сообщения.
     expect(lineWith(frame, 'жду миграции')).toContain('план');

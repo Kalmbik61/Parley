@@ -151,7 +151,7 @@ function SessionLines({
   let meta = sessionMeta(row.live, width);
   let tail = join([meta, mail]);
   // Порядок отбрасывания (2.3): токены уже ушли по ширине, следом длительность;
-  // `✉N` и значок статуса не отбрасываются никогда.
+  // `▤N` и значок статуса не отбрасываются никогда.
   if (width - head - tail.length - 1 < MIN_LABEL) {
     meta = '';
     tail = mail;

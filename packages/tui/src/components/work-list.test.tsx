@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type { WorkEntry, WorkMap, WorkSession } from '@harnas/core';
+import { Box } from 'ink';
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
 import { pinUnicodeGlyphs } from '../../test/glyphs-env.js';
@@ -147,7 +148,37 @@ describe('WorkList', () => {
       { live },
     );
     const frame = frameOf(<WorkList rows={rows} selected={0} height={12} width={30} />);
-    expect(lineWith(frame, 'бэкенд')).toContain('✉1');
+    expect(lineWith(frame, 'бэкенд')).toContain('▤1');
+  });
+
+  it('счётчик непрочитанных не срезается рамкой панели заданной ширины', () => {
+    // Ink клипует по string-width, бюджеты строк — по String.length; глиф
+    // шириной 2 выталкивал за панель последнюю цифру. Рендерим внутри Box,
+    // как в приложении, а не голый список (дизайн 6.4).
+    const rows = buildRows(
+      [
+        entry([session(), session({ id: 's-02', label: 'план', provider: 'claude' })], {}, [
+          {
+            id: 'm-01',
+            from: 's-02',
+            to: 's-01',
+            at: '2026-09-02T09:41:00.000Z',
+            text: 'жду миграции',
+            readAt: null,
+          },
+        ]),
+      ],
+      { live },
+    );
+    for (const width of [26, 30, 44]) {
+      const frame = frameOf(
+        <Box width={width} flexDirection="column">
+          <WorkList rows={rows} selected={0} height={12} width={width} />
+        </Box>,
+      );
+      expect(lineWith(frame, 'бэкенд'), `ширина ${width}`).toMatch(/▤1(\s|$)/);
+      expect(lineWith(frame, 'Авторизация'), `ширина ${width}`).toMatch(/▤1(\s|$)/);
+    }
   });
 
   it('pending без модели — только провайдер, метрики прочерком (раздел 7)', () => {
