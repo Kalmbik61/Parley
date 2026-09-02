@@ -1,6 +1,7 @@
 dist/
 claude-export/
 pnpm-lock.yaml
+.omc/
 
 # Не наши файлы: инфраструктура Ralph, исходный контекст, прототип для портирования
 .ralph/

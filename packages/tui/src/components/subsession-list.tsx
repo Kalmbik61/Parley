@@ -34,10 +34,11 @@ export function SubsessionList({
       {subsessions.slice(start, end).map((subsession, offset) => {
         const at = start + offset;
         const active = at === selected;
-        const tail = `${formatDuration(subsession.durationMs)} · ${badges(subsession)}`;
+        // Ведущий пробел — зазор между задачей и хвостом (см. session-list).
+        const tail = ` ${formatDuration(subsession.durationMs)} · ${badges(subsession)}`;
         const task = truncate(
           subsession.task ?? subsession.agentType ?? subsession.agentId,
-          Math.max(4, width - tail.length - 4),
+          Math.max(4, width - 2 - tail.length),
         );
 
         return (

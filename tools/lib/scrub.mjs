@@ -91,7 +91,8 @@ export function observe(schema, record, prefix = '', type = null) {
     field.seen++;
     field.kinds[valueKind] = (field.kinds[valueKind] ?? 0) + 1;
     if (field.sample === null && ['string', 'number', 'boolean'].includes(valueKind)) {
-      field.sample = valueKind === 'string' && value.length > 120 ? `${value.slice(0, 120)}…` : value;
+      field.sample =
+        valueKind === 'string' && value.length > 120 ? `${value.slice(0, 120)}…` : value;
     }
     if (valueKind === 'object' && prefix.split('.').length < 4) {
       observe(schema, value, `${name}.`, kind);

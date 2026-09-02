@@ -45,7 +45,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [x] Unified model badges: normalization map (claude-* → Opus/Sonnet/Haiku, gpt-*/codex → Codex, glm-* → GLM) per specs/runners.md; provider badge in the sessions list
 - [x] Multi-provider merge: one recency-sorted session list across providers with a provider filter
 - [x] README.md: install, run, keybindings, the legal note (unmodified binary only, ~/.claude read-only)
-- [ ] Final pass: lint clean, tests green, manual smoke checklist from specs/ui.md walked through
+- [x] Final pass: lint clean, tests green, manual smoke checklist from specs/ui.md walked through
 
 ## Discovered
 - [x] packages/core: watcher invalidation — изменение `agent-*.jsonl` должно
@@ -74,6 +74,24 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [x] Project documentation prepared (.ralph structure, specs, handoff imported)
 
 ## Notes
+
+### Smoke-чеклист specs/ui.md, пройден 2026-09-02
+1. **Пустой каталог** — «Сессий не найдено. Смотрим ~/.claude/projects и ~/.codex/sessions»,
+   краша нет.
+2. **Реальные данные** — 49 сессий Claude, ровно столько же файлов `<project>/<id>.jsonl`
+   на диске. Единственное расхождение с вчерашним `claude-export/index.json` —
+   сессия, файл которой с тех пор удалён.
+3. **Новая сессия без рестарта** — появляется в списке по событию watcher.
+   Проверялось на временном корне: писать в `~/.claude` нельзя, он read-only.
+4. **Подсессии выбранной сессии** — показываются с бейджами моделей (проверено на
+   сессии с 36 подсессиями).
+5. **Разные ширины** (18/30/45/90) — за край не выходит ничего, заголовок и хвост
+   разделены зазором, мета отбрасывает части по приоритету.
+
+Не покрывается автоматикой принципиально: поведение живого `claude` внутри панели
+(меню, прокрутка, мышь) — настоящий бинарь в тестах не запускается. Осталось в
+Discovered как ручная проверка.
+
 
 ### node-pty на macOS + pnpm
 pnpm распаковывает `prebuilds/*/spawn-helper` без бита исполнения, и любой spawn

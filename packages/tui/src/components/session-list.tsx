@@ -55,10 +55,12 @@ export function SessionList({
       {sessions.slice(start, end).map((session, offset) => {
         const at = start + offset;
         const active = at === selected;
-        const tail = meta(session, width);
+        // Ведущий пробел в хвосте — гарантированный зазор: полагаться на
+        // space-between нельзя, он появляется только когда есть что распределять.
+        const tail = ` ${meta(session, width)}`;
         const mark = showProvider ? `${providerMark(session.provider)} ` : '';
-        // Ширина строки: маркер выбора (2) + маркер провайдера + заголовок + зазор + хвост.
-        const room = width - 2 - mark.length - tail.length - 1;
+        // Ширина строки: маркер выбора (2) + маркер провайдера + заголовок + хвост.
+        const room = width - 2 - mark.length - tail.length;
         const title = truncate(session.title ?? session.id, Math.max(4, room));
 
         return (
