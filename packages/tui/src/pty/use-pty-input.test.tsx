@@ -1,0 +1,185 @@
+import type { SessionIndex } from '@harnas/core';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { render } from 'ink-testing-library';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { App } from '../app.js';
+import { ctrlByte, DEFAULT_ESCAPE_BYTE } from './use-pty-input.js';
+
+const STUB = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'test',
+  'stub-agent.mjs',
+);
+
+const ENTER = '\r';
+/** Ctrl+Q — клавиша выхода из терминала по умолчанию. */
+const CTRL_Q = '\u0011';
+
+function session(over: Partial<SessionIndex> = {}): SessionIndex {
+  return {
+    id: 'сессия-1',
+    project: '-proj',
+    projectPath: '/work',
+    cwd: null,
+    gitBranch: 'main',
+    version: '2.1.247',
+    file: `/root/${over.id ?? 'сессия-1'}.jsonl`,
+    title: 'первая',
+    titleSource: 'custom',
+    startedAt: '2026-09-01T10:00:00.000Z',
+    endedAt: '2026-09-01T10:10:00.000Z',
+    durationMs: 600_000,
+    records: 5,
+    malformedLines: 0,
+    models: {},
+    tools: {},
+    roles: {},
+    recordTypes: {},
+    primaryModel: 'claude-opus-5',
+    subsessionCount: 0,
+    provider: 'claude',
+    ...over,
+  };
+}
+
+const waitFor = async (check: () => boolean, timeoutMs = 8000): Promise<void> => {
+  const started = Date.now();
+  while (!check()) {
+    if (Date.now() - started > timeoutMs) throw new Error('не дождались');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+};
+
+/** Ink подписывается на stdin в эффекте — ждём подписку перед первым нажатием. */
+const mounted = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 120));
+
+describe('ctrlByte', () => {
+  it('переводит букву в управляющий байт', () => {
+    expect(ctrlByte('q')).toBe(17);
+    expect(ctrlByte('Q')).toBe(17);
+    expect(ctrlByte('a')).toBe(1);
+    expect(DEFAULT_ESCAPE_BYTE).toBe(17);
+  });
+
+  it('не-буквы отбрасываются', () => {
+    expect(ctrlByte('1')).toBeUndefined();
+    expect(ctrlByte('')).toBeUndefined();
+    expect(ctrlByte('ц')).toBeUndefined();
+  });
+});
+
+describe('маршрутизация ввода в PTY', () => {
+  let root: string;
+  const original = process.env['HARNAS_CLAUDE_BIN'];
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), 'harnas-input-'));
+    process.env['HARNAS_CLAUDE_BIN'] = STUB;
+  });
+
+  afterEach(async () => {
+    if (original === undefined) delete process.env['HARNAS_CLAUDE_BIN'];
+    else process.env['HARNAS_CLAUDE_BIN'] = original;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const openTerminal = async (sessions: SessionIndex[]): Promise<ReturnType<typeof render>> => {
+    const app = render(<App sessions={sessions} root={root} />);
+    await waitFor(() => (app.lastFrame() ?? '').includes('Enter на сессии'));
+    await mounted();
+    app.stdin.write(ENTER);
+    await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
+    return app;
+  };
+
+  it('обычный ввод уходит агенту, а не в навигацию', async () => {
+    const app = await openTerminal([session()]);
+    try {
+      app.stdin.write('echo из-терминала\r');
+      await waitFor(() => (app.lastFrame() ?? '').includes('из-терминала'));
+    } finally {
+      app.unmount();
+    }
+  }, 25_000);
+
+  it('q внутри терминала не выходит из TUI, а идёт агенту', async () => {
+    const app = await openTerminal([session()]);
+    try {
+      app.stdin.write('echo q-внутри\r');
+      await waitFor(() => (app.lastFrame() ?? '').includes('q-внутри'));
+      // Приложение живо: списки по-прежнему рисуются.
+      expect(app.lastFrame()).toContain('SESSIONS (1)');
+    } finally {
+      app.unmount();
+    }
+  }, 25_000);
+
+  it('Ctrl+Q возвращает фокус спискам, и навигация снова работает', async () => {
+    const app = await openTerminal([
+      session({ id: 'a', title: 'первая' }),
+      session({ id: 'b', title: 'вторая' }),
+    ]);
+    try {
+      app.stdin.write(CTRL_Q);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      // j снова двигает список, а не уходит в PTY.
+      app.stdin.write('j');
+      await waitFor(() => {
+        const lines = (app.lastFrame() ?? '').split('\n');
+        return lines.some((line) => line.includes('вторая') && line.includes('❯'));
+      });
+    } finally {
+      app.unmount();
+    }
+  }, 25_000);
+
+  it('до escape-клавиши ввод доезжает, после — отбрасывается', async () => {
+    const app = await openTerminal([session()]);
+    try {
+      app.stdin.write(`echo до-выхода\r${CTRL_Q}echo после-выхода\r`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('до-выхода'));
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(app.lastFrame()).not.toContain('после-выхода');
+    } finally {
+      app.unmount();
+    }
+  }, 25_000);
+});
+
+describe('терминал без живого процесса не держит фокус', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), 'harnas-noagent-'));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('Tab проходит панель терминала насквозь, пока там плейсхолдер', async () => {
+    const app = render(<App sessions={[session()]} root={root} />);
+    try {
+      await waitFor(() => (app.lastFrame() ?? '').includes('Enter на сессии'));
+      await mounted();
+
+      // sessions → subsessions → terminal → sessions
+      app.stdin.write('\t');
+      app.stdin.write('\t');
+      app.stdin.write('\t');
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      // Фокус вернулся к спискам: j снова двигает выбор.
+      app.stdin.write('j');
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(app.lastFrame()).toContain('SESSIONS (1)');
+    } finally {
+      app.unmount();
+    }
+  }, 25_000);
+});

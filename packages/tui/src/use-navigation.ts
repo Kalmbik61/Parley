@@ -24,6 +24,12 @@ export interface NavigationOptions {
   onRescan?: () => void;
   /** Enter на списке сессий — открыть выбранную в правой панели. */
   onOpen?: (index: number) => void;
+  /**
+   * В правой панели работает живой процесс, и весь ввод принадлежит ему.
+   * Пока там плейсхолдер или процесс уже завершился, панель обычная: Tab и q
+   * работают как везде, иначе фокус оказался бы в ловушке.
+   */
+  terminalCaptures?: boolean;
 }
 
 const clamp = (value: number, count: number): number =>
@@ -39,6 +45,7 @@ export function useNavigation({
   getSubsessionCount,
   onRescan,
   onOpen,
+  terminalCaptures = false,
 }: NavigationOptions): NavigationState {
   const { exit } = useApp();
   const [focus, setFocus] = useState<PaneId>('sessions');
@@ -51,6 +58,10 @@ export function useNavigation({
   useEffect(() => setSelectedSubsession(0), [selectedSession]);
 
   useInput((input, key) => {
+    // Живой агент забирает весь ввод, включая q и Ctrl+C; вернуть фокус можно
+    // только escape-клавишей, и делает это usePtyInput.
+    if (focus === 'terminal' && terminalCaptures) return;
+
     if (input === 'q' || (key.ctrl && input === 'c')) {
       exit();
       return;

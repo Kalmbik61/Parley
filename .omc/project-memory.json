@@ -168,6 +168,18 @@
       "accessCount": 1,
       "lastAccessed": 1788334881398,
       "type": "file"
+    },
+    {
+      "path": "packages/tui/src/pty/use-pty-input.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788335207756,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/pty/use-pty-input.test.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1788335280789,
+      "type": "file"
     }
   ],
   "userDirectives": []

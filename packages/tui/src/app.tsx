@@ -6,6 +6,7 @@ import { SessionList } from './components/session-list.js';
 import { SubsessionList } from './components/subsession-list.js';
 import { TerminalView } from './components/terminal-view.js';
 import { useAgentPty } from './pty/use-agent-pty.js';
+import { ctrlByte, DEFAULT_ESCAPE_BYTE, usePtyInput } from './pty/use-pty-input.js';
 import { usePtyTerminal } from './pty/use-pty-terminal.js';
 import { useNavigation } from './use-navigation.js';
 import { useSubsessions } from './use-subsessions.js';
@@ -47,11 +48,22 @@ export function App({ sessions, root = defaultRoot(), onRescan }: AppProps): Rea
     [sessions, agent, terminalCols, terminalRows],
   );
 
-  const { focus, selectedSession, selectedSubsession } = useNavigation({
+  // Ввод перехватывает только живой процесс: после его завершения панель снова
+  // обычная, иначе из неё было бы не выйти.
+  const agentAlive = agent.session !== undefined && agent.exit === undefined;
+
+  const { focus, selectedSession, selectedSubsession, setFocus } = useNavigation({
     sessionCount: sessions.length,
     getSubsessionCount: () => subsessionCount.current,
     onOpen: openSelected,
+    terminalCaptures: agentAlive,
     ...(onRescan === undefined ? {} : { onRescan }),
+  });
+
+  const backToLists = useCallback(() => setFocus('sessions'), [setFocus]);
+  usePtyInput(agent.session, focus === 'terminal' && agentAlive, {
+    escapeByte: escapeByteFromEnv(),
+    onEscape: backToLists,
   });
   const { subsessions, loading } = useSubsessions(sessions[selectedSession], root);
   subsessionCount.current = subsessions.length;
@@ -97,6 +109,12 @@ export function App({ sessions, root = defaultRoot(), onRescan }: AppProps): Rea
       </Pane>
     </Box>
   );
+}
+
+/** Клавиша возврата фокуса настраивается: HARNAS_ESCAPE_KEY=w значит Ctrl+W. */
+function escapeByteFromEnv(): number {
+  const letter = process.env['HARNAS_ESCAPE_KEY'];
+  return (letter === undefined ? undefined : ctrlByte(letter)) ?? DEFAULT_ESCAPE_BYTE;
 }
 
 function terminalTitle(agent: ReturnType<typeof useAgentPty>): string {
