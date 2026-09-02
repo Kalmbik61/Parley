@@ -129,12 +129,12 @@ describe('маршрутизация ввода в PTY', () => {
       app.stdin.write(CTRL_Q);
       await new Promise((resolve) => setTimeout(resolve, 150));
 
-      // j снова двигает список, а не уходит в PTY.
+      // j снова двигает список, а не уходит в PTY: выбор видно по тому, какую
+      // сессию открывает Enter — стрелки у строки больше нет (дизайн 6.2).
       app.stdin.write('j');
-      await waitFor(() => {
-        const lines = (app.lastFrame() ?? '').split('\n');
-        return lines.some((line) => line.includes('вторая') && line.includes('❯'));
-      });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      app.stdin.write(ENTER);
+      await waitFor(() => (app.lastFrame() ?? '').includes('TERMINAL — вторая'));
     } finally {
       app.unmount();
     }

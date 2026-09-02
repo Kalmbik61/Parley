@@ -5,6 +5,7 @@ import {
   formatTokenPair,
   formatTokens,
   truncate,
+  truncateLeft,
   visibleWindow,
 } from './format.js';
 
@@ -46,6 +47,19 @@ describe('truncate', () => {
     expect(truncate('коротко', 20)).toBe('коротко');
     expect(truncate('это довольно длинная строка', 10)).toBe('это довол…');
     expect(truncate('что угодно', 0)).toBe('');
+  });
+
+  it('знак усечения задаётся: в ASCII-режиме это ~ (дизайн 6.1)', () => {
+    expect(truncate('это довольно длинная строка', 10, '~')).toBe('это довол~');
+  });
+});
+
+describe('truncateLeft', () => {
+  it('режет начало: важен хвост пути', () => {
+    expect(truncateLeft('/home/user/dev/shop', 10)).toBe('…/dev/shop');
+    expect(truncateLeft('/dev/shop', 20)).toBe('/dev/shop');
+    expect(truncateLeft('/home/user/dev/shop', 10, '~')).toBe('~/dev/shop');
+    expect(truncateLeft('что угодно', 0)).toBe('');
   });
 });
 

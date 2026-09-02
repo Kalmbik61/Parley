@@ -39,9 +39,20 @@ export function formatRelative(timestamp: string | null, now: number = Date.now(
 }
 
 /** Обрезка по ширине колонки — Ink сам не переносит однострочный Text. */
-export function truncate(text: string, width: number): string {
+export function truncate(text: string, width: number, ellipsis = '…'): string {
   if (width <= 0) return '';
-  return text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text;
+  return text.length > width ? `${text.slice(0, Math.max(0, width - 1))}${ellipsis}` : text;
+}
+
+/**
+ * Обрезка слева: у путей важен хвост — имя файла и последние каталоги
+ * (дизайн координации TUI, 6.4).
+ */
+export function truncateLeft(text: string, width: number, ellipsis = '…'): string {
+  if (width <= 0) return '';
+  return text.length > width
+    ? `${ellipsis}${text.slice(text.length - Math.max(0, width - 1))}`
+    : text;
 }
 
 /**
@@ -72,9 +83,7 @@ export function formatTokens(value: number): string {
   if (value < 1000) return String(Math.max(0, Math.round(value)));
   const thousands = value / 1000;
   // 999_600 округлилось бы до «1000к» — такое число уже читается как миллионы.
-  return Math.round(thousands) < 1000
-    ? withUnit(thousands, 'к')
-    : withUnit(value / 1_000_000, 'М');
+  return Math.round(thousands) < 1000 ? withUnit(thousands, 'к') : withUnit(value / 1_000_000, 'М');
 }
 
 /**

@@ -42,7 +42,7 @@ describe('SessionList', () => {
     expect(frame).toContain('Opus');
   });
 
-  it('маркер стоит у выбранной строки', () => {
+  it('стрелки выбора больше нет — выбор показывается фоном (6.2)', () => {
     const { lastFrame } = render(
       <SessionList
         sessions={[session({ id: 'a', title: 'первая' }), session({ id: 'b', title: 'вторая' })]}
@@ -51,19 +51,10 @@ describe('SessionList', () => {
         width={60}
       />,
     );
-    const lines = (lastFrame() ?? '').split('\n');
-    expect(
-      lines
-        .find((l) => l.includes('первая'))
-        ?.trimStart()
-        .startsWith('❯'),
-    ).toBe(false);
-    expect(
-      lines
-        .find((l) => l.includes('вторая'))
-        ?.trimStart()
-        .startsWith('❯'),
-    ).toBe(true);
+    const frame = lastFrame() ?? '';
+    expect(frame).not.toContain('❯');
+    // Освободившиеся две колонки достались заголовку: он начинается с края.
+    expect(frame.split('\n')[0]?.startsWith('первая')).toBe(true);
   });
 
   it('рисует только окно видимых строк', () => {

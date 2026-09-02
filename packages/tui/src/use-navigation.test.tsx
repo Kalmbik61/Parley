@@ -6,19 +6,44 @@ import { useNavigation } from './use-navigation.js';
 
 const ARROW_DOWN = '\u001B[B';
 const ARROW_UP = '\u001B[A';
+const ARROW_LEFT = '\u001B[D';
+const ARROW_RIGHT = '\u001B[C';
 const TAB = '\t';
+const ENTER = '\r';
 
 interface ProbeProps {
   sessionCount?: number;
   subsessionCount?: number;
   onRescan?: () => void;
+  onToggleMode?: () => void;
+  onCollapse?: () => void;
+  onExpand?: () => void;
+  onKey?: () => void;
+  onOpen?: (index: number) => void;
+  focusTerminalOnOpen?: boolean;
 }
 
-function Probe({ sessionCount = 5, subsessionCount = 3, onRescan }: ProbeProps): ReactNode {
+function Probe({
+  sessionCount = 5,
+  subsessionCount = 3,
+  onRescan,
+  onToggleMode,
+  onCollapse,
+  onExpand,
+  onKey,
+  onOpen,
+  focusTerminalOnOpen,
+}: ProbeProps): ReactNode {
   const nav = useNavigation({
     sessionCount,
     getSubsessionCount: () => subsessionCount,
     ...(onRescan === undefined ? {} : { onRescan }),
+    ...(onToggleMode === undefined ? {} : { onToggleMode }),
+    ...(onCollapse === undefined ? {} : { onCollapse }),
+    ...(onExpand === undefined ? {} : { onExpand }),
+    ...(onKey === undefined ? {} : { onKey }),
+    ...(onOpen === undefined ? {} : { onOpen }),
+    ...(focusTerminalOnOpen === undefined ? {} : { focusTerminalOnOpen }),
   });
   return <Text>{`${nav.focus}|${nav.selectedSession}|${nav.selectedSubsession}`}</Text>;
 }
@@ -119,6 +144,59 @@ describe('useNavigation', () => {
     await settle();
     expect(onRescan).toHaveBeenCalledTimes(1);
     expect(lastFrame()).toBe('sessions|0|0');
+  });
+
+  it('w переключает режим левой колонки', async () => {
+    const onToggleMode = vi.fn();
+    const { stdin, lastFrame } = render(<Probe onToggleMode={onToggleMode} />);
+    await settle();
+
+    stdin.write('w');
+    await settle();
+    expect(onToggleMode).toHaveBeenCalledTimes(1);
+    expect(lastFrame()).toBe('sessions|0|0');
+  });
+
+  it('←→ и h l сворачивают и разворачивают работу', async () => {
+    const onCollapse = vi.fn();
+    const onExpand = vi.fn();
+    const { stdin } = render(<Probe onCollapse={onCollapse} onExpand={onExpand} />);
+    await settle();
+
+    stdin.write(ARROW_LEFT);
+    await settle();
+    stdin.write('h');
+    await settle();
+    stdin.write(ARROW_RIGHT);
+    await settle();
+    stdin.write('l');
+    await settle();
+
+    expect(onCollapse).toHaveBeenCalledTimes(2);
+    expect(onExpand).toHaveBeenCalledTimes(2);
+  });
+
+  it('Enter в режиме работ не уводит фокус в терминал', async () => {
+    const onOpen = vi.fn();
+    const { stdin, lastFrame } = render(<Probe onOpen={onOpen} focusTerminalOnOpen={false} />);
+    await settle();
+
+    stdin.write(ENTER);
+    await settle();
+    expect(onOpen).toHaveBeenCalledWith(0);
+    expect(lastFrame()).toBe('sessions|0|0');
+  });
+
+  it('любая клавиша в списках отмечается — ею гаснут уведомления', async () => {
+    const onKey = vi.fn();
+    const { stdin } = render(<Probe onKey={onKey} />);
+    await settle();
+
+    stdin.write(ARROW_DOWN);
+    await settle();
+    stdin.write('p');
+    await settle();
+    expect(onKey).toHaveBeenCalledTimes(2);
   });
 
   it('пустой список не даёт уехать в минус', async () => {

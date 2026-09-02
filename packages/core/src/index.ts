@@ -66,6 +66,8 @@ export {
 } from './work/store.js';
 export type { NewWork, WorkPaths, WriteOptions } from './work/store.js';
 export { buildBrief, writeBrief } from './work/brief.js';
+export { readWorks, watchWorks } from './work/works.js';
+export type { WatchWorksOptions, WorkEntry, WorksWatcher } from './work/works.js';
 export {
   IDLE_THRESHOLD_MS,
   LINK_TOLERANCE_MS,

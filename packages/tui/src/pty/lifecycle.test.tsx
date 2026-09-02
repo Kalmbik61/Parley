@@ -126,7 +126,7 @@ describe('жизненный цикл агента', () => {
       app.stdin.write(ENTER);
       await new Promise((resolve) => setTimeout(resolve, 400));
 
-      expect(app.lastFrame()).not.toContain('Параллельно работает агентов');
+      expect(app.lastFrame()).not.toContain('параллельно работает агентов');
     } finally {
       app.unmount();
     }
@@ -145,7 +145,8 @@ describe('жизненный цикл агента', () => {
       await new Promise((resolve) => setTimeout(resolve, 120));
       app.stdin.write(ENTER);
 
-      await waitFor(() => (app.lastFrame() ?? '').includes('Параллельно работает агентов: 2'));
+      // Предупреждение живёт в строке статуса, а не поверх правой панели (дизайн 5).
+      await waitFor(() => (app.lastFrame() ?? '').includes('параллельно работает агентов: 2'));
       // Второй агент всё равно запустился — предупреждение не блокирует.
       expect(app.lastFrame()).toContain('TERMINAL — вторая');
     } finally {
@@ -162,14 +163,14 @@ describe('жизненный цикл агента', () => {
       app.stdin.write('exit 0\r');
       await waitFor(() => (app.lastFrame() ?? '').includes('Агент завершился штатно'));
 
-      // Tab снова работает: фокус уходит с терминала на списки.
+      // Tab снова работает: фокус уходит с терминала на списки. Выбор виден по
+      // тому, какую сессию открывает Enter — стрелки у строки больше нет (6.2).
       app.stdin.write(TAB);
       await new Promise((resolve) => setTimeout(resolve, 150));
       app.stdin.write('j');
-      await waitFor(() => {
-        const lines = (app.lastFrame() ?? '').split('\n');
-        return lines.some((line) => line.includes('вторая') && line.includes('❯'));
-      });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      app.stdin.write(ENTER);
+      await waitFor(() => (app.lastFrame() ?? '').includes('TERMINAL — вторая'));
     } finally {
       app.unmount();
     }

@@ -11,6 +11,8 @@ export interface NavigationState {
   selectedSession: number;
   selectedSubsession: number;
   setFocus: (pane: PaneId) => void;
+  /** Выбор списка задаётся снаружи: смена режима и свёртка работы двигают его. */
+  select: (at: number) => void;
 }
 
 export interface NavigationOptions {
@@ -30,6 +32,19 @@ export interface NavigationOptions {
   onCycleProvider?: () => void;
   /** `n` — запустить нового агента без истории. */
   onNewSession?: () => void;
+  /** `w` — переключить режим левой колонки: все сессии ↔ работы. */
+  onToggleMode?: () => void;
+  /** `←` / `h` — свернуть выбранную работу (режим работ). */
+  onCollapse?: () => void;
+  /** `→` / `l` — развернуть выбранную работу (режим работ). */
+  onExpand?: () => void;
+  /**
+   * Открывать ли правую панель по Enter. В режиме работ Enter на работе только
+   * сворачивает её — фокус при этом остаётся на списках (дизайн TUI, раздел 8).
+   */
+  focusTerminalOnOpen?: boolean;
+  /** Любая клавиша в списках: ею гаснут события строки статуса без источника. */
+  onKey?: () => void;
   /**
    * В правой панели работает живой процесс, и весь ввод принадлежит ему.
    * Пока там плейсхолдер или процесс уже завершился, панель обычная: Tab и q
@@ -54,6 +69,11 @@ export function useNavigation({
   onRestart,
   onCycleProvider,
   onNewSession,
+  onToggleMode,
+  onCollapse,
+  onExpand,
+  onKey,
+  focusTerminalOnOpen = true,
   terminalCaptures = false,
 }: NavigationOptions): NavigationState {
   const { exit } = useApp();
@@ -70,6 +90,7 @@ export function useNavigation({
     // Живой агент забирает весь ввод, включая q и Ctrl+C; вернуть фокус можно
     // только escape-клавишей, и делает это usePtyInput.
     if (focus === 'terminal' && terminalCaptures) return;
+    onKey?.();
 
     if (input === 'q' || (key.ctrl && input === 'c')) {
       exit();
@@ -97,6 +118,23 @@ export function useNavigation({
       return;
     }
 
+    if (input === 'w') {
+      onToggleMode?.();
+      return;
+    }
+
+    // Дерево работ: свернуть и развернуть — единственный способ пройти работу
+    // с двумя десятками сессий, не прокручивая её целиком (дизайн 6.6).
+    if (key.leftArrow || input === 'h') {
+      onCollapse?.();
+      return;
+    }
+
+    if (key.rightArrow || input === 'l') {
+      onExpand?.();
+      return;
+    }
+
     if (input === 'n') {
       onNewSession?.();
       setFocus('terminal');
@@ -106,7 +144,7 @@ export function useNavigation({
     if (key.return) {
       if (focus === 'sessions' && sessionCount > 0) {
         onOpen?.(selectedSession);
-        setFocus('terminal');
+        if (focusTerminalOnOpen) setFocus('terminal');
       }
       return;
     }
@@ -121,5 +159,5 @@ export function useNavigation({
     }
   });
 
-  return { focus, selectedSession, selectedSubsession, setFocus };
+  return { focus, selectedSession, selectedSubsession, setFocus, select: setSelectedSession };
 }

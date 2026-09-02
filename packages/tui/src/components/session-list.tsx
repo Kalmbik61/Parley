@@ -80,21 +80,25 @@ export function SessionList({
         // space-between нельзя, он появляется только когда есть что распределять.
         const tail = ` ${meta(session, width)}`;
         const mark = showProvider ? `${providerMark(session.provider)} ` : '';
-        // Ширина строки: маркер выбора (2) + маркер провайдера + заголовок + хвост.
-        const room = width - 2 - mark.length - tail.length;
+        // Ширина строки: маркер провайдера + заголовок + хвост.
+        const room = width - mark.length - tail.length;
         const title = truncate(session.title ?? session.id, Math.max(4, room));
+        // Фон тянется до края колонки, поэтому строка добивается пробелами.
+        const pad = ' '.repeat(Math.max(0, width - mark.length - title.length - tail.length));
 
         return (
-          <Box key={session.file} justifyContent="space-between">
-            <Text wrap="truncate">
-              <Text {...(active ? { color: 'cyan', bold: true } : {})}>{active ? '❯ ' : '  '}</Text>
-              {mark !== '' && <Text color="magenta">{mark}</Text>}
-              <Text {...(active ? { color: 'cyan', bold: true } : {})}>{title}</Text>
-            </Text>
-            <Text dimColor wrap="truncate">
-              {tail}
-            </Text>
-          </Box>
+          // Выбранный ряд подсвечен фоном, а не стрелкой, — правило общее для
+          // обоих режимов левой колонки (дизайн координации TUI, 6.2).
+          <Text
+            key={session.file}
+            wrap="truncate"
+            {...(active ? { backgroundColor: 'blackBright' } : {})}
+          >
+            {mark !== '' && <Text color="magenta">{mark}</Text>}
+            {title}
+            {pad}
+            <Text dimColor>{tail}</Text>
+          </Text>
         );
       })}
     </Box>
