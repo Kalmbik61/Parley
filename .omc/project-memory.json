@@ -300,6 +300,18 @@
       "accessCount": 1,
       "lastAccessed": 1788347627825,
       "type": "file"
+    },
+    {
+      "path": "packages/core/src/workflow.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788348021211,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/components/subsession-list.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1788348062051,
+      "type": "file"
     }
   ],
   "userDirectives": []

@@ -70,3 +70,73 @@ describe('SubsessionList', () => {
     ).toContain('читаю');
   });
 });
+
+describe('группировка по workflow', () => {
+  const workflows = [
+    { runId: 'wf_a', name: 'аудит-курса', status: 'completed', agentCount: 2, durationMs: 60_000 },
+    { runId: 'wf_b', name: 'правки', status: 'failed', agentCount: 1, durationMs: 30_000 },
+  ];
+  const grouped = [
+    subsession({ agentId: 'a1', workflowRunId: 'wf_a', task: 'урок 1' }),
+    subsession({ agentId: 'a2', workflowRunId: 'wf_a', task: 'урок 2' }),
+    subsession({ agentId: 'b1', workflowRunId: 'wf_b', task: 'правка' }),
+  ];
+
+  it('заголовок запуска показывает имя, статус и число агентов', () => {
+    const { lastFrame } = render(
+      <SubsessionList
+        subsessions={grouped}
+        workflows={workflows}
+        selected={0}
+        height={10}
+        width={60}
+      />,
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('аудит-курса');
+    expect(frame).toContain('completed');
+    expect(frame).toContain('2 аг.');
+    expect(frame).toContain('правки');
+    expect(frame).toContain('failed');
+  });
+
+  it('заголовок рисуется один раз на группу, перед её первым агентом', () => {
+    const { lastFrame } = render(
+      <SubsessionList
+        subsessions={grouped}
+        workflows={workflows}
+        selected={0}
+        height={10}
+        width={60}
+      />,
+    );
+    const lines = (lastFrame() ?? '').split('\n');
+    expect(lines.filter((l) => l.includes('аудит-курса'))).toHaveLength(1);
+
+    const header = lines.findIndex((l) => l.includes('аудит-курса'));
+    const first = lines.findIndex((l) => l.includes('урок 1'));
+    expect(header).toBeLessThan(first);
+  });
+
+  it('без дескрипторов список рисуется как раньше', () => {
+    const { lastFrame } = render(
+      <SubsessionList subsessions={grouped} selected={0} height={10} width={60} />,
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('урок 1');
+    expect(frame).not.toContain('▾');
+  });
+
+  it('агенты без workflow заголовка не получают', () => {
+    const { lastFrame } = render(
+      <SubsessionList
+        subsessions={[subsession({ agentId: 'x', workflowRunId: null, task: 'одиночка' })]}
+        workflows={workflows}
+        selected={0}
+        height={10}
+        width={60}
+      />,
+    );
+    expect(lastFrame()).not.toContain('▾');
+  });
+});

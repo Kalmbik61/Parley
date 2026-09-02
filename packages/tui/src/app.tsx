@@ -85,7 +85,7 @@ export function App({ sessions, root = defaultRoot(), onRescan }: AppProps): Rea
     snapshot?.bracketedPaste ?? false,
   );
 
-  const { subsessions, loading } = useSubsessions(visible[selectedSession], root);
+  const { subsessions, workflows, loading } = useSubsessions(visible[selectedSession], root);
   subsessionCount.current = subsessions.length;
 
   return (
@@ -114,6 +114,7 @@ export function App({ sessions, root = defaultRoot(), onRescan }: AppProps): Rea
           {(size) => (
             <SubsessionList
               subsessions={subsessions}
+              workflows={workflows}
               selected={selectedSubsession}
               height={size.height}
               width={size.width}

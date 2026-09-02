@@ -55,7 +55,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [x] packages/core: исключить `<synthetic>` из подсчёта `primaryModel`
 - [x] specs/runners.md: дополнить таблицу бейджей — в реальных данных есть
       `claude-fable-5` и `claude-opus-4-8`, текущая таблица их не покрывает
-- [ ] packages/tui: показывать `workflowName`/`status` из `<sid>/workflows/wf_<id>.json`
+- [x] packages/tui: показывать `workflowName`/`status` из `<sid>/workflows/wf_<id>.json`
       как группировку подсессий (опционально, данные есть)
 - [x] packages/core: у workflow-агентов первая реплика — общий префикс промпта, из-за
       чего задачи 240 подсессий выглядят одинаково («Ты — придирчивый техредактор…»).

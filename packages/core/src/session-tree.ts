@@ -8,10 +8,38 @@ import {
 import { indexSessionFile, type SessionIndex } from './session-index.js';
 import { oneLine } from './counters.js';
 import { indexSubsession, type Subsession } from './subsession.js';
+import { readSessionWorkflows, type WorkflowInfo } from './workflow.js';
 
 export interface SessionTree {
   session: SessionIndex;
   subsessions: Subsession[];
+  /** Запуски workflow этой сессии — по ним UI группирует подсессии. */
+  workflows: WorkflowInfo[];
+}
+
+/**
+ * Подсессии одного запуска должны идти подряд, иначе группировка в UI рассыпется.
+ * Сами группы упорядочены по времени старта, внутри группы — по времени агента.
+ */
+function sortByWorkflowThenTime(subsessions: Subsession[]): void {
+  const groupStart = new Map<string, string>();
+  for (const subsession of subsessions) {
+    const key = subsession.workflowRunId ?? '';
+    const at = subsession.startedAt ?? '';
+    const known = groupStart.get(key);
+    if (known === undefined || at < known) groupStart.set(key, at);
+  }
+
+  subsessions.sort((a, b) => {
+    const aKey = a.workflowRunId ?? '';
+    const bKey = b.workflowRunId ?? '';
+    if (aKey !== bKey) {
+      const byStart = (groupStart.get(aKey) ?? '').localeCompare(groupStart.get(bKey) ?? '');
+      if (byStart !== 0) return byStart;
+      return aKey.localeCompare(bKey);
+    }
+    return String(a.startedAt ?? '').localeCompare(String(b.startedAt ?? ''));
+  });
 }
 
 /** Короче этого общий префикс резать бессмысленно — задачи и так различаются. */
@@ -81,20 +109,21 @@ export async function buildSessionTree(
   root: string,
   adapter: SchemaAdapter = adapterV1,
 ): Promise<SessionTree> {
-  const [session, subsessions] = await Promise.all([
+  const [session, subsessions, workflows] = await Promise.all([
     indexSessionFile(discovered.file, root, {
       adapter,
       subsessionCount: discovered.subagents.length,
     }),
     Promise.all(discovered.subagents.map((subagent) => indexSubsession(subagent, adapter))),
+    readSessionWorkflows(discovered.file),
   ]);
 
   distinguishWorkflowTasks(subsessions);
   // taskRaw нужен был только для сравнения — наружу он не идёт.
   for (const subsession of subsessions) delete subsession.taskRaw;
 
-  subsessions.sort((a, b) => String(a.startedAt ?? '').localeCompare(String(b.startedAt ?? '')));
-  return { session, subsessions };
+  sortByWorkflowThenTime(subsessions);
+  return { session, subsessions, workflows: [...workflows.values()] };
 }
 
 /**
