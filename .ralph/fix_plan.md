@@ -31,7 +31,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [x] Enter on a session opens `claude --resume <sessionId>` in the right pane, with cwd set to the session's cwd
 - [x] Focus routing: when the right pane is focused, forward ALL input to the PTY; a dedicated escape hatch (default Ctrl+Q, configurable) returns focus to the lists and must not collide with Claude Code keybindings, per specs/pty.md
 - [x] PTY resize: on terminal resize recompute right-pane cols/rows and propagate to both node-pty and the xterm buffer
-- [ ] Alt-screen and mouse: pass mouse-reporting sequences through when the PTY requests them; verify claude's own UI (menus, scrolling) works embedded, per specs/pty.md
+- [x] Alt-screen and mouse: pass mouse-reporting sequences through when the PTY requests them; verify claude's own UI (menus, scrolling) works embedded, per specs/pty.md
 - [ ] PTY lifecycle hardening: process exit/crash detection, restart action, one active PTY per session; warn (do not block) when several sessions run in parallel — subscription limits, per specs/pty.md
 - [ ] v1 integration test: scripted PTY session against a stub binary (NOT real claude) validating spawn / write / resize / teardown
 
@@ -60,6 +60,11 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [ ] packages/core: у workflow-агентов первая реплика — общий префикс промпта, из-за
       чего задачи 240 подсессий выглядят одинаково («Ты — придирчивый техредактор…»).
       Нужен лучший ярлык: первая реплика ПОСЛЕ префикса либо `wf_<id>.json` / journal
+- [ ] Ручная проверка встроенного `claude`: меню, прокрутка, мышь и alt-screen внутри
+      правой панели. Автотестами не покрывается принципиально (реальный бинарь в
+      тестах не запускаем), поэтому идёт в финальный smoke-чеклист v2
+- [ ] Мышь: поддерживается только SGR-кодирование (?1006). Древние X10 (?1005) и
+      urxvt (?1015) не пробрасываются — записать ограничение в README
 - [ ] Решить, что делать со старым кэшем `sessions-index.json` (3 шт., формат v1,
       данные января) — сейчас предполагается игнорировать
 

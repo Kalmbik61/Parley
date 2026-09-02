@@ -14,12 +14,19 @@ export interface TerminalSegment {
   inverse?: boolean;
 }
 
+/** Режим отслеживания мыши, который запросило приложение внутри PTY. */
+export type MouseTracking = 'none' | 'x10' | 'vt200' | 'drag' | 'any';
+
 export interface TerminalSnapshot {
   lines: TerminalSegment[][];
   cols: number;
   rows: number;
   /** Полноэкранный режим: приложение внутри рисует свой экран и само скроллит. */
   altScreen: boolean;
+  /** Что гость просит слать ему по мыши — это надо включить и у себя. */
+  mouseTracking: MouseTracking;
+  /** Гость ждёт вставку в скобках ESC[200~ … ESC[201~. */
+  bracketedPaste: boolean;
 }
 
 export interface TerminalBuffer {
@@ -190,6 +197,8 @@ export function createTerminalBuffer(
         cols: terminal.cols,
         rows: terminal.rows,
         altScreen: buffer.type === 'alternate',
+        mouseTracking: terminal.modes.mouseTrackingMode,
+        bracketedPaste: terminal.modes.bracketedPasteMode,
       };
     },
 

@@ -7,6 +7,7 @@
 //   echo <текст>      — печатает текст
 //   size              — печатает текущие cols x rows
 //   alt               — уходит в alt-screen и печатает там
+//   mouse on|off      — включает/выключает отслеживание мыши (как это делает TUI)
 //   color             — печатает цветной текст
 //   exit <код>        — завершается с указанным кодом
 //
@@ -50,6 +51,14 @@ function handle(line) {
     case 'alt':
       // Переход в альтернативный экран, как это делает полноэкранный TUI.
       process.stdout.write('\u001B[?1049h\u001B[H\u001B[2Jальтернативный экран\r\n');
+      break;
+    case 'mouse':
+      process.stdout.write(
+        argument === 'on'
+          ? '\u001B[?1002h\u001B[?1006h\u001B[?2004h'
+          : '\u001B[?1002l\u001B[?1006l\u001B[?2004l',
+      );
+      process.stdout.write(`mouse ${argument}\r\n`);
       break;
     case 'color':
       process.stdout.write('\u001B[31mкрасный\u001B[0m обычный\r\n');

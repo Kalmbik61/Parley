@@ -186,6 +186,18 @@
       "accessCount": 1,
       "lastAccessed": 1788335424203,
       "type": "file"
+    },
+    {
+      "path": "packages/tui/src/pty/use-host-modes.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788335572837,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/pty/use-host-modes.test.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1788335630367,
+      "type": "file"
     }
   ],
   "userDirectives": []

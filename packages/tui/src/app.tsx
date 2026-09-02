@@ -8,6 +8,7 @@ import { TerminalView } from './components/terminal-view.js';
 import { useAgentPty } from './pty/use-agent-pty.js';
 import { ctrlByte, DEFAULT_ESCAPE_BYTE, usePtyInput } from './pty/use-pty-input.js';
 import { usePtyResize } from './pty/use-pty-resize.js';
+import { useHostTerminalModes } from './pty/use-host-modes.js';
 import { usePtyTerminal } from './pty/use-pty-terminal.js';
 import { useNavigation } from './use-navigation.js';
 import { useSubsessions } from './use-subsessions.js';
@@ -67,6 +68,12 @@ export function App({ sessions, root = defaultRoot(), onRescan }: AppProps): Rea
     escapeByte: escapeByteFromEnv(),
     onEscape: backToLists,
   });
+  // Мышь и вставка в скобках: включаем у себя ровно то, что запросил агент.
+  useHostTerminalModes(
+    focus === 'terminal' && agentAlive,
+    snapshot?.mouseTracking ?? 'none',
+    snapshot?.bracketedPaste ?? false,
+  );
   const { subsessions, loading } = useSubsessions(sessions[selectedSession], root);
   subsessionCount.current = subsessions.length;
 
