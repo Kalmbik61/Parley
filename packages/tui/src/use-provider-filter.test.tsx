@@ -28,6 +28,7 @@ function session(over: Partial<SessionIndex>): SessionIndex {
     primaryModel: null,
     subsessionCount: 0,
     provider: 'claude',
+    tokens: null,
     ...over,
   };
 }

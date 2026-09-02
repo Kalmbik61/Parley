@@ -1,3 +1,4 @@
+import { tokenCount, type TokenTotals } from './counters.js';
 import type { RawRecord } from './jsonl.js';
 
 /**
@@ -29,6 +30,8 @@ export interface SessionRecord {
   title: string | null;
   /** lastPrompt записи last-prompt. */
   lastPrompt: string | null;
+  /** message.usage — четыре счётчика токенов; null, если usage в записи нет. */
+  usage: TokenTotals | null;
   leafUuid: string | null;
   raw: RawRecord;
 }
@@ -78,6 +81,21 @@ function extractContent(message: RawRecord | null): { toolUses: string[]; text: 
 }
 
 /**
+ * message.usage записи ассистента: вход, выход и две половины кэша.
+ * Отсутствие блока — не ошибка: usage есть далеко не у каждой записи.
+ */
+function extractUsage(message: RawRecord | null): TokenTotals | null {
+  const usage = message === null ? null : asRecord(message['usage']);
+  if (usage === null) return null;
+  return {
+    input: tokenCount(usage, 'input_tokens'),
+    output: tokenCount(usage, 'output_tokens'),
+    cacheRead: tokenCount(usage, 'cache_read_input_tokens'),
+    cacheWrite: tokenCount(usage, 'cache_creation_input_tokens'),
+  };
+}
+
+/**
  * Адаптер наблюдаемой схемы Claude Code 2.1.x (см. specs/data-layer.md и docs/schema/).
  * Заголовок сессии живёт в записях custom-title / ai-title; записей type:"summary"
  * в этой версии не существует.
@@ -107,6 +125,7 @@ export const adapterV1: SchemaAdapter = {
       text,
       title: pickString(raw, 'customTitle', 'aiTitle'),
       lastPrompt: pickString(raw, 'lastPrompt'),
+      usage: extractUsage(message),
       leafUuid: pickString(raw, 'leafUuid'),
       raw,
     };

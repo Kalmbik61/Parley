@@ -1,7 +1,13 @@
 import { modelBadge, providerMark, type SessionIndex } from '@harnas/core';
 import { Box, Text } from 'ink';
 import type { ReactNode } from 'react';
-import { formatDuration, formatRelative, truncate, visibleWindow } from '../format.js';
+import {
+  formatDuration,
+  formatRelative,
+  formatTokenPair,
+  truncate,
+  visibleWindow,
+} from '../format.js';
 
 export interface SessionListProps {
   sessions: SessionIndex[];
@@ -16,8 +22,11 @@ export interface SessionListProps {
   showProvider?: boolean;
 }
 
+/** С этой ширины в строку помещаются токены (дизайн координации TUI, 6.3). */
+const TOKENS_MIN_WIDTH = 36;
+
 /**
- * Хвост строки: относительное время, длительность и бейдж модели.
+ * Хвост строки: относительное время, длительность, токены и бейдж модели.
  *
  * В узкой колонке всё это не помещается, а заголовок важнее меты — поэтому части
  * отбрасываются по приоритету, пока хвост не влезет в отведённую долю ширины.
@@ -33,6 +42,10 @@ function meta(session: SessionIndex, width: number): string {
     if (parts.join(' · ').length <= limit) break;
     parts[drop] = '';
   }
+
+  // Токены живут вне этого бюджета: на узкой колонке их нет совсем (там их место
+  // в деталях сессии), на широкой они показываются всегда.
+  if (width >= TOKENS_MIN_WIDTH) parts.splice(2, 0, formatTokenPair(session.tokens));
 
   return parts.filter((part) => part !== '').join(' · ');
 }

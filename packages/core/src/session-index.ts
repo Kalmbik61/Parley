@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { forEachJsonlRecord } from './jsonl.js';
 import { adapterV1, type SchemaAdapter, type SessionRecord } from './adapter-v1.js';
-import { Counter, oneLine, SYNTHETIC_MODEL } from './counters.js';
+import { Counter, oneLine, SYNTHETIC_MODEL, type TokenTotals } from './counters.js';
 
 export type Provider = 'claude' | 'codex' | 'glm';
 
@@ -38,6 +38,11 @@ export interface SessionIndex {
   primaryModel: string | null;
   /** Число подсессий: считается по раскладке каталогов, а не по содержимому файла. */
   subsessionCount: number;
+  /**
+   * Суммарные токены сессии по четырём счётчикам. `null`, если в логе нет ни одной
+   * записи с usage: нулями это не заменяется, «не знаем» и «ноль» — разные вещи.
+   */
+  tokens: TokenTotals | null;
   provider: Provider;
 }
 
@@ -68,6 +73,8 @@ export async function indexSessionFile(
   const tools = new Counter();
   const roles = new Counter();
   const recordTypes = new Counter();
+  const tokens: TokenTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  let hasUsage = false;
 
   let sessionId: string | null = null;
   let cwd: string | null = null;
@@ -89,6 +96,16 @@ export async function indexSessionFile(
     models.add(record.model);
     roles.add(record.role);
     for (const tool of record.toolUses) tools.add(tool);
+
+    // Токены считаются только по ответам модели: usage в реплике человека —
+    // это отчёт об уже учтённом вызове инструмента, повторный счёт.
+    if (record.role === 'assistant' && record.usage !== null) {
+      hasUsage = true;
+      tokens.input += record.usage.input;
+      tokens.output += record.usage.output;
+      tokens.cacheRead += record.usage.cacheRead;
+      tokens.cacheWrite += record.usage.cacheWrite;
+    }
 
     sessionId ??= record.sessionId;
     cwd ??= record.cwd;
@@ -148,6 +165,7 @@ export async function indexSessionFile(
     recordTypes: recordTypes.toObject(),
     primaryModel: models.top(new Set([SYNTHETIC_MODEL])),
     subsessionCount,
+    tokens: hasUsage ? tokens : null,
     provider: 'claude',
   };
 }

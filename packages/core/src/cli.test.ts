@@ -33,6 +33,7 @@ describe('harnas-core CLI', () => {
     expect(index).toHaveLength(3);
     expect(index[0]).toHaveProperty('primaryModel');
     expect(index[0]).toHaveProperty('subsessionCount');
+    expect(Object.keys(index[0].tokens)).toEqual(['input', 'output', 'cacheRead', 'cacheWrite']);
   }, 60_000);
 
   it('session отдаёт сессию с подсессиями', async () => {

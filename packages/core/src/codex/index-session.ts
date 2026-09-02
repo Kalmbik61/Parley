@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { Counter, oneLine } from '../counters.js';
+import { Counter, oneLine, tokenCount, type TokenTotals } from '../counters.js';
 import { forEachJsonlRecord, type RawRecord } from '../jsonl.js';
 import type { SessionIndex } from '../session-index.js';
 import { defaultCodexRoot, discoverCodexSessions } from './discover.js';
@@ -14,6 +14,29 @@ function str(source: RawRecord | null, key: string): string | null {
   if (source === null) return null;
   const value = source[key];
   return typeof value === 'string' && value !== '' ? value : null;
+}
+
+/**
+ * Токены из записи `token_count`: `total_token_usage` — накопительный итог сессии,
+ * поэтому берётся последняя такая запись, а не сумма.
+ *
+ * У Codex `input_tokens` включает в себя `cached_input_tokens`, поэтому кэш
+ * вычитается: иначе четыре счётчика перестают складываться в общий итог, как
+ * они складываются у Claude. Отдельного счётчика ЗАПИСИ в кэш у Codex нет —
+ * `cacheWrite` всегда 0 (docs/schema/codex-schema-report.json).
+ */
+function codexTokens(payload: RawRecord): TokenTotals | null {
+  const info = asRecord(payload['info']);
+  const total = info === null ? null : asRecord(info['total_token_usage']);
+  if (total === null) return null;
+
+  const cacheRead = tokenCount(total, 'cached_input_tokens');
+  return {
+    input: Math.max(0, tokenCount(total, 'input_tokens') - cacheRead),
+    output: tokenCount(total, 'output_tokens'),
+    cacheRead,
+    cacheWrite: 0,
+  };
 }
 
 /** Первый текстовый блок content[] — там `{type: 'input_text', text}`. */
@@ -49,6 +72,7 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
   let startedAt: string | null = null;
   let endedAt: string | null = null;
   let firstUserMessage: string | null = null;
+  let tokens: TokenTotals | null = null;
 
   const stats = await forEachJsonlRecord(file, (raw) => {
     const type = str(raw, 'type');
@@ -95,6 +119,7 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
         if (kind === 'user_message' && firstUserMessage === null) {
           firstUserMessage = str(payload, 'message') ?? firstContentText(payload);
         }
+        if (kind === 'token_count') tokens = codexTokens(payload) ?? tokens;
         break;
       }
 
@@ -133,6 +158,7 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
     primaryModel: models.top(),
     // Субагентов у Codex нет как явления.
     subsessionCount: 0,
+    tokens,
     provider: 'codex',
   };
 }

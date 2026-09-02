@@ -1,5 +1,7 @@
 /** Форматирование для списков. Ничего не знает про данные — только про их показ. */
 
+import type { TokenTotals } from '@harnas/core';
+
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
@@ -55,4 +57,28 @@ export function visibleWindow(
   const half = Math.floor(height / 2);
   const start = Math.max(0, Math.min(selected - half, total - height));
   return { start: Math.max(0, start), end: Math.min(total, Math.max(0, start) + height) };
+}
+
+/** Число с единицей: один знак после запятой, пока значение меньше десяти. */
+function withUnit(value: number, unit: string): string {
+  return value < 10 ? `${value.toFixed(1)}${unit}` : `${Math.round(value)}${unit}`;
+}
+
+/** Токены: 0–999 как есть, дальше к и М (дизайн координации TUI, 6.3). */
+export function formatTokens(value: number): string {
+  if (value < 1000) return String(Math.max(0, Math.round(value)));
+  const thousands = value / 1000;
+  // 999_600 округлилось бы до «1000к» — такое число уже читается как миллионы.
+  return Math.round(thousands) < 1000
+    ? withUnit(thousands, 'к')
+    : withUnit(value / 1_000_000, 'М');
+}
+
+/**
+ * Пара «вход/выход» для строки списка. Кэш сюда не выводится никогда: он на
+ * порядки больше и читается как шум — все четыре счётчика показывают детали.
+ */
+export function formatTokenPair(tokens: TokenTotals | null): string {
+  if (tokens === null) return '—';
+  return `${formatTokens(tokens.input)}/${formatTokens(tokens.output)}`;
 }

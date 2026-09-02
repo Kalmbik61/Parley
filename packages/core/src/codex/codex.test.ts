@@ -175,6 +175,53 @@ describe('indexCodexSession', () => {
     expect(index.tools).toEqual({ shell_command: 1, apply_patch: 1 });
   });
 
+  it('токены берутся из последней записи token_count', async () => {
+    const tokenCount = (
+      input: number,
+      cached: number,
+      output: number,
+      at: string,
+    ) =>
+      line({
+        timestamp: at,
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          info: {
+            total_token_usage: {
+              input_tokens: input,
+              cached_input_tokens: cached,
+              output_tokens: output,
+              reasoning_output_tokens: 0,
+              total_tokens: input + output,
+            },
+            model_context_window: 258_400,
+          },
+        },
+      });
+
+    const file = await writeRollout(
+      '2026-03-12',
+      '019ce3d5-584a-7be2-922e-b8185a8d7c19',
+      meta() +
+        tokenCount(1_000, 800, 50, '2026-03-12T10:01:00.000Z') +
+        // Счётчик накопительный — побеждает последняя запись, а не сумма.
+        tokenCount(5_000, 4_400, 130, '2026-03-12T10:02:00.000Z'),
+    );
+
+    const index = await indexCodexSession(file);
+    expect(index.tokens).toEqual({ input: 600, output: 130, cacheRead: 4_400, cacheWrite: 0 });
+  });
+
+  it('без token_count токенов нет', async () => {
+    const file = await writeRollout(
+      '2026-03-12',
+      '019ce3d5-584a-7be2-922e-b8185a8d7c19',
+      meta() + userMessage('вопрос'),
+    );
+    expect((await indexCodexSession(file)).tokens).toBeNull();
+  });
+
   it('пустая сессия без реплик остаётся без заголовка, но не ломается', async () => {
     const file = await writeRollout('2026-03-12', '019ce3d5-584a-7be2-922e-b8185a8d7c19', meta());
 

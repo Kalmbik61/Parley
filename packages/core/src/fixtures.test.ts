@@ -40,6 +40,11 @@ describe('реальные сессии (анонимизированные фи
       expect(session.version).toMatch(/^2\.1\./);
       expect(session.malformedLines).toBe(0);
       expect(session.provider).toBe('claude');
+      // Все четыре счётчика приходят из message.usage реальных записей.
+      expect(session.tokens).not.toBeNull();
+      expect(session.tokens!.output).toBeGreaterThan(0);
+      expect(session.tokens!.cacheRead).toBeGreaterThan(0);
+      expect(session.tokens!.cacheWrite).toBeGreaterThan(0);
     }
 
     const ends = index.map((s) => s.endedAt ?? '');

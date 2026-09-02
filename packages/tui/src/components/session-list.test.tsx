@@ -26,6 +26,7 @@ function session(over: Partial<SessionIndex> = {}): SessionIndex {
     primaryModel: 'claude-opus-5',
     subsessionCount: 0,
     provider: 'claude',
+    tokens: { input: 1_200, output: 845, cacheRead: 500_000, cacheWrite: 3_000 },
     ...over,
   };
 }
@@ -94,6 +95,31 @@ describe('SessionList', () => {
       />,
     );
     expect(lastFrame()).toContain('без-имени');
+  });
+});
+
+describe('токены в строке', () => {
+  it('на широкой колонке видно вход/выход, кэш не выводится', () => {
+    const { lastFrame } = render(
+      <SessionList sessions={[session()]} selected={0} height={10} width={60} />,
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('1.2к/845');
+    expect(frame).not.toContain('500к');
+  });
+
+  it('на узкой колонке токенов нет — они уходят в детали', () => {
+    const { lastFrame } = render(
+      <SessionList sessions={[session()]} selected={0} height={10} width={30} />,
+    );
+    expect(lastFrame()).not.toContain('1.2к');
+  });
+
+  it('сессия без токенов показывает прочерк', () => {
+    const { lastFrame } = render(
+      <SessionList sessions={[session({ tokens: null })]} selected={0} height={10} width={60} />,
+    );
+    expect(lastFrame()).toContain('—');
   });
 });
 

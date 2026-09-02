@@ -113,6 +113,46 @@ describe('indexSessionFile', () => {
     expect(index.malformedLines).toBe(1);
   });
 
+  it('токены суммируются по четырём счётчикам записей ассистента', async () => {
+    const assistant = (usage: Record<string, number>) =>
+      line({ type: 'assistant', message: { role: 'assistant', model: 'claude-opus-5', usage } });
+    const file = await writeSession(
+      '-Users-me-proj',
+      'tok1',
+      assistant({
+        input_tokens: 2,
+        output_tokens: 87,
+        cache_read_input_tokens: 38_011,
+        cache_creation_input_tokens: 48_061,
+      }) +
+        assistant({
+          input_tokens: 3,
+          output_tokens: 13,
+          cache_read_input_tokens: 1_000,
+          cache_creation_input_tokens: 57,
+        }) +
+        // Реплика человека своего usage не приносит, даже если поле есть.
+        line({ type: 'user', message: { role: 'user', usage: { input_tokens: 999 } } }),
+    );
+
+    const index = await indexSessionFile(file, root);
+    expect(index.tokens).toEqual({
+      input: 5,
+      output: 100,
+      cacheRead: 39_011,
+      cacheWrite: 48_118,
+    });
+  });
+
+  it('без записей с usage токенов нет', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      'tok2',
+      line({ type: 'assistant', message: { role: 'assistant', model: 'claude-opus-5' } }),
+    );
+    expect((await indexSessionFile(file, root)).tokens).toBeNull();
+  });
+
   it('пустой файл даёт валидный индекс', async () => {
     const file = await writeSession('-Users-me-proj', 's6', '');
     const index = await indexSessionFile(file, root);

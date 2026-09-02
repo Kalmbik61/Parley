@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { formatDuration, formatRelative, truncate, visibleWindow } from './format.js';
+import {
+  formatDuration,
+  formatRelative,
+  formatTokenPair,
+  formatTokens,
+  truncate,
+  visibleWindow,
+} from './format.js';
 
 describe('formatDuration', () => {
   it('масштабирует единицы', () => {
@@ -59,5 +66,32 @@ describe('visibleWindow', () => {
   it('пустой список и нулевая высота', () => {
     expect(visibleWindow(0, 0, 10)).toEqual({ start: 0, end: 0 });
     expect(visibleWindow(10, 0, 0)).toEqual({ start: 0, end: 0 });
+  });
+});
+
+describe('formatTokens', () => {
+  it('до тысячи — как есть, дальше к и М (дизайн 6.3)', () => {
+    expect(formatTokens(0)).toBe('0');
+    expect(formatTokens(845)).toBe('845');
+    expect(formatTokens(1_200)).toBe('1.2к');
+    expect(formatTokens(45_000)).toBe('45к');
+    expect(formatTokens(1_100_000)).toBe('1.1М');
+    expect(formatTokens(12_400_000)).toBe('12М');
+  });
+
+  it('на границе тысячи «к» не превращается в 1000к', () => {
+    expect(formatTokens(999_600)).toBe('1.0М');
+  });
+});
+
+describe('formatTokenPair', () => {
+  it('вход/выход без глифов, кэш не показывается', () => {
+    expect(
+      formatTokenPair({ input: 1_200, output: 845, cacheRead: 500_000, cacheWrite: 3_000 }),
+    ).toBe('1.2к/845');
+  });
+
+  it('токенов нет — прочерк', () => {
+    expect(formatTokenPair(null)).toBe('—');
   });
 });

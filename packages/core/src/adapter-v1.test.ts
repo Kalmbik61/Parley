@@ -69,6 +69,34 @@ describe('adapterV1', () => {
     expect(map({}).isSidechain).toBe(false);
   });
 
+  it('токены берутся из message.usage', () => {
+    const record = map({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        usage: {
+          input_tokens: 2,
+          output_tokens: 87,
+          cache_read_input_tokens: 38_011,
+          cache_creation_input_tokens: 48_061,
+        },
+      },
+    });
+
+    expect(record.usage).toEqual({ input: 2, output: 87, cacheRead: 38_011, cacheWrite: 48_061 });
+  });
+
+  it('без usage токенов у записи нет, недостающие счётчики — нули', () => {
+    expect(map({ type: 'assistant', message: { role: 'assistant' } }).usage).toBeNull();
+    expect(map({ message: { usage: 'мусор' } }).usage).toBeNull();
+    expect(map({ message: { usage: { output_tokens: 5 } } }).usage).toEqual({
+      input: 0,
+      output: 5,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+
   it('неизвестные поля сохраняются в raw', () => {
     const raw = { type: 'frame-link', неизвестное: { вложенное: 1 } };
     expect(map(raw).raw).toBe(raw);
