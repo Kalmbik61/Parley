@@ -184,4 +184,23 @@ describe('parseMap', () => {
     expect(() => parseMap('{"schemaVersion":1,"sessions":[]}', 'map.json')).toThrow(/не парсится/);
     expect(() => parseMap('[]', 'map.json')).toThrow(/не парсится/);
   });
+
+  it('чужая форма записи внутри массивов — ошибка, а не TypeError при мутации', () => {
+    const withSessions = (sessions: string): string =>
+      `{"schemaVersion":1,"work":{"id":"w-0001"},"sessions":${sessions},"messages":[]}`;
+
+    expect(() => parseMap(withSessions('[null]'), 'map.json')).toThrow(/не парсится/);
+    expect(() =>
+      parseMap(withSessions('[{"id":"s-01","status":"запущена","history":[]}]'), 'map.json'),
+    ).toThrow(/не парсится/);
+    expect(() => parseMap(withSessions('[{"id":"s-01","status":"active"}]'), 'map.json')).toThrow(
+      /не парсится/,
+    );
+    expect(() =>
+      parseMap(
+        '{"schemaVersion":1,"work":{"id":"w-0001"},"sessions":[],"messages":[null]}',
+        'map.json',
+      ),
+    ).toThrow(/не парсится/);
+  });
 });

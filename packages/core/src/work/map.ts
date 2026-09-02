@@ -155,6 +155,16 @@ export function transitionSession(
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+/** Запись сессии проверяем по полям, от которых зависят мутации: id, статус, history. */
+const isSessionShape = (value: unknown): boolean =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  typeof value.status === 'string' &&
+  Object.hasOwn(TRANSITIONS, value.status) &&
+  Array.isArray(value.history);
+
+const isMessageShape = (value: unknown): boolean => isRecord(value) && typeof value.id === 'string';
+
 /**
  * Разбирает карту. Форма undocumented-логов тут ни при чём: файл пишем мы сами,
  * поэтому чужая форма — повод отказаться, а не догадываться (раздел 8).
@@ -174,7 +184,9 @@ export function parseMap(raw: string, file: string): WorkMap {
     !isRecord(work) ||
     typeof work.id !== 'string' ||
     !Array.isArray(data.sessions) ||
-    !Array.isArray(data.messages)
+    !Array.isArray(data.messages) ||
+    !data.sessions.every(isSessionShape) ||
+    !data.messages.every(isMessageShape)
   ) {
     throw new Error(`карта ${file} не парсится: неожиданная форма`);
   }

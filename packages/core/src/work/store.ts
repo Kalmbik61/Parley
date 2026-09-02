@@ -239,20 +239,29 @@ export async function updateMap(
   { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS }: WriteOptions = {},
 ): Promise<WorkMap> {
   const paths = workPaths(projectPath, workId);
+  // Блокировка живёт в каталоге работы, поэтому про несуществующую работу первым
+  // отчитался бы ENOENT про `map.lock` — не про тот файл, которого на самом деле нет.
+  if (!(await exists(paths.map))) {
+    throw new Error(`карты ${paths.map} нет — работы ${workId} не существует`);
+  }
 
-  const map = await withLock(paths.lock, lockTimeoutMs, async () => {
+  return withLock(paths.lock, lockTimeoutMs, async () => {
     const raw = await readFile(paths.map, 'utf8');
     const current = parseMap(raw, paths.map);
+    // Карта, разошедшаяся с именем каталога, — повод отказаться: иначе в индексе
+    // осела бы запись с чужим id, которую в списке работ нечем открыть.
+    if (current.work.id !== workId) {
+      throw new Error(`карта ${paths.map} принадлежит работе ${current.work.id}, а не ${workId}`);
+    }
     mutate(current);
     current.work.updatedAt = new Date().toISOString();
 
+    // Индекс обновляем до записи карты и не отпуская `map.lock`: его отказ должен
+    // означать «карта не переписана», иначе ретрай вызывающего продублирует мутацию.
+    // Порядок записей в индексе при этом остаётся порядком записей карты.
+    await withWorksIndex(lockTimeoutMs, (index) => upsert(index, entryOf(projectPath, current)));
     await writeFile(paths.bak, raw, 'utf8');
     await writeAtomic(paths.map, serialize(current));
-    // Индекс обновляем, не отпуская `map.lock`: иначе порядок записей в индексе
-    // разойдётся с порядком записей карты и в нём осядет более старый updatedAt.
-    await withWorksIndex(lockTimeoutMs, (index) => upsert(index, entryOf(projectPath, current)));
     return current;
   });
-
-  return map;
 }

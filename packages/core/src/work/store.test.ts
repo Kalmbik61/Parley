@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { addSession } from './map.js';
+import type { WorkMap } from './types.js';
 import {
   createWork,
   readMap,
@@ -213,6 +214,53 @@ describe('updateMap', () => {
     expect(map.sessions.filter((session) => session.label.startsWith('b'))).toHaveLength(8);
   }, 60_000);
 
+  it('несуществующая работа — ошибка про карту, а не ENOENT про map.lock', async () => {
+    const error = await updateMap(project, 'w-9999', () => {}).catch((cause: Error) => cause);
+
+    expect(error.message).toContain(workPaths(project, 'w-9999').map);
+    expect(error.message).not.toMatch(/map\.lock/);
+  });
+
+  it('карта с чужим id работы не пишется и не заводит запись в индексе', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, 'w-0001');
+    const alien = JSON.parse(await readFile(paths.map, 'utf8')) as WorkMap;
+    alien.work.id = 'w-0777';
+    await writeFile(paths.map, JSON.stringify(alien), 'utf8');
+
+    await expect(
+      updateMap(project, 'w-0001', (map) => {
+        map.work.title = 'Другое';
+      }),
+    ).rejects.toThrow(/w-0777/);
+
+    expect((await readWorksIndex()).works.map((work) => work.id)).toEqual(['w-0001']);
+    expect((JSON.parse(await readFile(paths.map, 'utf8')) as WorkMap).work.title).toBe(
+      'Авторизация',
+    );
+  });
+
+  it('отказ блокировки индекса оставляет карту прежней: ретрай не двоит запись', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const indexLock = path.join(home, 'works-index.lock');
+    await writeFile(indexLock, '', { flag: 'wx' });
+    const append = (map: WorkMap): void => {
+      addSession(map, { provider: 'claude', label: 'план', task: 't' });
+    };
+
+    await expect(updateMap(project, 'w-0001', append, { lockTimeoutMs: 100 })).rejects.toThrow(
+      /блокировк/i,
+    );
+
+    expect((await readMap(project, 'w-0001')).sessions).toEqual([]);
+
+    await rm(indexLock);
+    await updateMap(project, 'w-0001', append);
+
+    expect((await readMap(project, 'w-0001')).sessions).toHaveLength(1);
+    expect((await readWorksIndex()).works).toHaveLength(1);
+  });
+
   it('два параллельных процесса создают разные работы в индексе', async () => {
     const creator = (title: string) =>
       run(
@@ -229,4 +277,20 @@ describe('updateMap', () => {
     expect(index.works.map((work) => work.id).sort()).toEqual(['w-0001', 'w-0002']);
     expect(index.works.map((work) => work.title).sort()).toEqual(['вторая', 'первая']);
   }, 60_000);
+});
+
+describe('readWorksIndex', () => {
+  it('битый json — ошибка, догадки не строим', async () => {
+    await writeFile(worksIndexPath(), '{ сломано', 'utf8');
+
+    await expect(readWorksIndex()).rejects.toThrow(/не парсится/);
+  });
+
+  it('чужая форма или другая версия схемы — ошибка', async () => {
+    await writeFile(worksIndexPath(), '{"schemaVersion":2,"works":[]}', 'utf8');
+    await expect(readWorksIndex()).rejects.toThrow(/не парсится/);
+
+    await writeFile(worksIndexPath(), '{"schemaVersion":1}', 'utf8');
+    await expect(readWorksIndex()).rejects.toThrow(/не парсится/);
+  });
 });
