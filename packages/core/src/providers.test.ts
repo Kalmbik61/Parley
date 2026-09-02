@@ -5,13 +5,16 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   PROVIDERS,
   commandInPath,
+  commandBinary,
   loadProviders,
+  printCommand,
   providersFile,
   providersWithHistory,
   resumeCommand,
   runnerCommand,
   startCommand,
   substituteArgs,
+  type ProviderEntry,
 } from './providers.js';
 
 describe('реестр провайдеров', () => {
@@ -121,6 +124,26 @@ describe('подстановка аргументов запуска', () => {
     expect(PROVIDERS.glm.runner.mcpConfig).toBeUndefined();
     expect(PROVIDERS.glm.runner.resumeArgs).toBeUndefined();
     expect(startCommand(PROVIDERS.glm, { prompt: 'бриф' })).toEqual({ command: 'glm', args: [] });
+  });
+});
+
+describe('режим одного ответа', () => {
+  it('claude отвечает одним ответом на промпт: claude -p', () => {
+    expect(printCommand(PROVIDERS.claude, { prompt: 'сожми транскрипт' })).toEqual({
+      command: 'claude',
+      args: ['-p', 'сожми транскрипт'],
+    });
+  });
+
+  it('провайдер без режима одного ответа отдаёт пустые аргументы', () => {
+    expect(printCommand(PROVIDERS.glm, { prompt: 'сожми' })).toEqual({
+      command: 'glm',
+      args: [],
+    });
+  });
+
+  it('шаблон одного ответа лежит в реестре, а не в коде вызова', () => {
+    expect(PROVIDERS.claude.runner.printArgs).toEqual(['-p', '{prompt}']);
   });
 });
 
@@ -238,10 +261,36 @@ describe('переопределения из HARNAS_HOME/providers.json', () =>
     await expect(loadProviders()).rejects.toThrow(/не парсится/);
   });
 
+  it('printArgs переопределяется как остальные аргументы', async () => {
+    await write({ claude: { printArgs: ['--print', '{prompt}'] } });
+    const registry = await loadProviders();
+    expect(printCommand(registry['claude'] as ProviderEntry, { prompt: 'сожми' })).toEqual({
+      command: 'claude',
+      args: ['--print', 'сожми'],
+    });
+  });
+
   it('чужая форма записи — ошибка', async () => {
     await write({ claude: 'просто строка' });
     await expect(loadProviders()).rejects.toThrow(/claude/);
     await write({ claude: { args: 'не массив' } });
     await expect(loadProviders()).rejects.toThrow(/claude/);
+  });
+});
+
+describe('commandBinary', () => {
+  const saved = process.env['HARNAS_CLAUDE_BIN'];
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env['HARNAS_CLAUDE_BIN'];
+    else process.env['HARNAS_CLAUDE_BIN'] = saved;
+  });
+
+  it('без оверрайда возвращает саму команду', () => {
+    expect(commandBinary('claude', {})).toBe('claude');
+  });
+
+  it('оверрайд решает, что именно запускается: в тестах это заглушка', () => {
+    expect(commandBinary('claude', { HARNAS_CLAUDE_BIN: '/tmp/stub.mjs' })).toBe('/tmp/stub.mjs');
   });
 });

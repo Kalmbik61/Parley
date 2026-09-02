@@ -8,7 +8,7 @@ import {
   workPaths,
 } from '@harnas/core';
 import { render } from 'ink-testing-library';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +23,16 @@ const STUB = path.join(
   '..',
   'test',
   'stub-agent.mjs',
+);
+
+/** Дозаказ резюме считает стоковый `claude -p`; в тестах — заглушка core. */
+const SUMMARIZER_STUB = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'core',
+  'test',
+  'stub-summarizer.mjs',
 );
 
 const lineWith = (frame: string, text: string): string =>
@@ -479,6 +489,67 @@ describe('диалоги, запуск и жизненный цикл', () => {
       expect(session?.id).toBe(sessionId);
       expect(session?.providerSessionId).toBe('7fa0e1ee-cc7b-4a1e-9d4e-000000000001');
     } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('s на вышедшей сессии дозаказывает резюме (4.5)', async () => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    const workId = created.work.id;
+    const providerSessionId = '7fa0e1ee-cc7b-4a1e-9d4e-000000000002';
+    const sessionId = await createPendingSession(project, workId, {
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'шаги 1–3',
+    });
+    await updateMap(project, workId, (map) => {
+      const session = transitionSession(map, sessionId, 'active');
+      session.providerSessionId = providerSessionId;
+      transitionSession(map, sessionId, 'exited', { exitCode: 0 });
+    });
+    // Лог сессии, по которому считается резюме: временный корень, не ~/.claude.
+    await mkdir(path.join(logs, '-tmp-проект'), { recursive: true });
+    await writeFile(
+      path.join(logs, '-tmp-проект', `${providerSessionId}.jsonl`),
+      JSON.stringify({
+        type: 'user',
+        timestamp: '2026-09-02T10:00:00.000Z',
+        message: { role: 'user', content: [{ type: 'text', text: 'почини сборку' }] },
+      }),
+      'utf8',
+    );
+    // Настоящий claude не запускается: вместо него отвечает заглушка core.
+    process.env.HARNAS_CLAUDE_BIN = SUMMARIZER_STUB;
+    process.env.HARNAS_STUB_SUMMARY = 'Сборка починена по транскрипту.';
+
+    const app = open();
+    try {
+      await works(app);
+      await press(app, 'j');
+      await waitFor(() => (app.lastFrame() ?? '').includes('ДЕТАЛИ — бэкенд'));
+
+      await press(app, 's');
+      await waitFor(() => (app.lastFrame() ?? '').includes('РЕЗЮМЕ'));
+      expect(app.lastFrame()).toContain('claude -p');
+
+      await press(app, ENTER);
+      // Пока считается, сводка так и говорит (дизайн 4.5).
+      await waitFor(() => (app.lastFrame() ?? '').includes('считается'));
+
+      const started = Date.now();
+      for (;;) {
+        const session = (await readMap(project, workId)).sessions[0];
+        if (session?.summary === 'Сборка починена по транскрипту.') {
+          expect(session.summarySource).toBe('auto');
+          // Статус дозаказом не меняется: сессия как вышла, так и осталась.
+          expect(session.status).toBe('exited');
+          break;
+        }
+        if (Date.now() - started > 8000) throw new Error('резюме не дождались');
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    } finally {
+      delete process.env.HARNAS_STUB_SUMMARY;
       app.unmount();
     }
   }, 30_000);

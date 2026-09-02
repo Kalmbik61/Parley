@@ -22,6 +22,7 @@ interface ProbeProps {
   onOpen?: (index: number) => void;
   onNewSession?: () => void;
   onNewWork?: () => void;
+  onSummary?: () => void;
   newSessionOpensTerminal?: boolean;
   suspended?: boolean;
   focusTerminalOnOpen?: boolean;
@@ -38,6 +39,7 @@ function Probe({
   onOpen,
   onNewSession,
   onNewWork,
+  onSummary,
   newSessionOpensTerminal,
   suspended,
   focusTerminalOnOpen,
@@ -53,6 +55,7 @@ function Probe({
     ...(onOpen === undefined ? {} : { onOpen }),
     ...(onNewSession === undefined ? {} : { onNewSession }),
     ...(onNewWork === undefined ? {} : { onNewWork }),
+    ...(onSummary === undefined ? {} : { onSummary }),
     ...(newSessionOpensTerminal === undefined ? {} : { newSessionOpensTerminal }),
     ...(suspended === undefined ? {} : { suspended }),
     ...(focusTerminalOnOpen === undefined ? {} : { focusTerminalOnOpen }),
@@ -224,6 +227,25 @@ describe('useNavigation', () => {
     expect(onNewWork).toHaveBeenCalledTimes(1);
     // Диалог живёт в левой колонке: фокус остаётся на списках.
     expect(lastFrame()).toBe('sessions|0|0');
+  });
+
+  it('s открывает диалог дозаказа резюме и не уводит фокус (дизайн 4.5)', async () => {
+    const onSummary = vi.fn();
+    const { stdin, lastFrame } = render(<Probe onSummary={onSummary} />);
+    await settle();
+
+    stdin.write('s');
+    await settle();
+    expect(onSummary).toHaveBeenCalledTimes(1);
+    expect(lastFrame()).toBe('sessions|0|0');
+
+    // Из терминала диалог не выпрыгивает: там ввод принадлежит агенту.
+    stdin.write(TAB);
+    stdin.write(TAB);
+    await settle();
+    stdin.write('s');
+    await settle();
+    expect(onSummary).toHaveBeenCalledTimes(1);
   });
 
   it('открытый диалог модален: клавиши списков молчат (дизайн 4)', async () => {

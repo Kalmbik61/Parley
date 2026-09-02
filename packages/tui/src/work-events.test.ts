@@ -142,4 +142,32 @@ describe('worksEvents', () => {
   it('новая работа не всплывает: она и так видна в списке', () => {
     expect(worksEvents([], [entry([session({ status: 'pending' })])], g)).toEqual([]);
   });
+
+  it('готовое авто-резюме всплывает в строке статуса (дизайн 4.5)', () => {
+    const before = session({ id: 's-02', label: 'бэкенд', status: 'exited' });
+    const after = session({
+      id: 's-02',
+      label: 'бэкенд',
+      status: 'exited',
+      summary: 'Сборка починена.',
+      summarySource: 'auto',
+    });
+
+    const events = worksEvents([entry([before])], [entry([after])], g);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.text).toContain('авто-резюме');
+    expect(events[0]?.text).toContain('бэкенд');
+    expect(events[0]?.source?.sessionId).toBe('s-02');
+  });
+
+  it('отчёт самого агента авто-резюме не считается', () => {
+    const before = session({ id: 's-02', status: 'exited' });
+    const after = session({
+      id: 's-02',
+      status: 'done',
+      summary: 'План готов',
+      summarySource: 'agent',
+    });
+    expect(worksEvents([entry([before])], [entry([after])], g)).toEqual([]);
+  });
 });

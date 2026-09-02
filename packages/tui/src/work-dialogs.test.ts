@@ -7,6 +7,7 @@ import {
   newWorkDialog,
   resumeDialog,
   resumePreview,
+  summaryDialog,
 } from './work-dialogs.js';
 import type { WorkRowSession } from './work-rows.js';
 
@@ -161,5 +162,26 @@ describe('команда возобновления в диалоге', () => {
 
   it('без id у провайдера честно говорит, что процесс будет новым', () => {
     expect(resumePreview('codex', ['-c', 'x', 'бриф'], null)).toContain('новый процесс по брифу');
+  });
+});
+
+describe('диалог дозаказа резюме (4.5)', () => {
+  it('объясняет, чем считается и как запишется, и ничего не спрашивает', () => {
+    const spec = summaryDialog(row(), g, WIDE);
+    expect(spec.title).toContain('РЕЗЮМЕ');
+    expect(spec.title).toContain('бэкенд');
+    expect(spec.title).toContain(g.exited);
+    // Полей нет: диалог только подтверждает (макет 4.5).
+    expect(spec.fields).toEqual([]);
+    expect(spec.info.join(' ')).toContain('claude -p');
+    expect(spec.info.join(' ')).toContain('авто');
+    expect(spec.footer).toContain('Enter — заказать');
+    expect(spec.footer).toContain('Esc');
+  });
+
+  it('на узкой колонке текст короче, но смысл тот же', () => {
+    const spec = summaryDialog(row(), g, NARROW);
+    for (const info of spec.info) expect(info.length).toBeLessThanOrEqual(NARROW);
+    expect(spec.info.join(' ')).toContain('claude -p');
   });
 });

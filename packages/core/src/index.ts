@@ -22,8 +22,10 @@ export type { DiscoveredCodexSession } from './codex/discover.js';
 export { buildCodexIndex, indexCodexSession } from './codex/index-session.js';
 export {
   PROVIDERS,
+  commandBinary,
   commandInPath,
   loadProviders,
+  printCommand,
   providersFile,
   providersWithHistory,
   resumeCommand,
@@ -66,6 +68,15 @@ export {
 } from './work/store.js';
 export type { NewWork, WorkPaths, WriteOptions } from './work/store.js';
 export { buildBrief, writeBrief } from './work/brief.js';
+export {
+  SUMMARIZER,
+  SUMMARY_TIMEOUT_MS,
+  TRANSCRIPT_LIMIT,
+  readTranscript,
+  requestAutoSummary,
+  summaryPrompt,
+} from './work/summary.js';
+export type { AutoSummaryOptions, TranscriptOptions } from './work/summary.js';
 export { readWorks, watchWorks } from './work/works.js';
 export type { WatchWorksOptions, WorkEntry, WorksWatcher } from './work/works.js';
 export {

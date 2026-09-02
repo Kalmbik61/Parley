@@ -39,6 +39,12 @@ export interface RunnerConfig {
    * открывать сессию по идентификатору, запускаем без аргументов.
    */
   resumeArgs?: string[];
+  /**
+   * Аргументы режима одного ответа (`claude -p`): CLI получает промпт,
+   * печатает ответ и выходит. Подстановка: `{prompt}`. Этим считается
+   * дозаказ резюме (спецификация, раздел 6); undefined — провайдер так не умеет.
+   */
+  printArgs?: string[];
   mcpConfig?: McpConfigKind;
 }
 
@@ -80,6 +86,8 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
       command: 'claude',
       args: ['--session-id', '{sessionUuid}', '--mcp-config', '{mcpConfig}', '{prompt}'],
       resumeArgs: ['--resume', '{providerSessionId}', '--mcp-config', '{mcpConfig}'],
+      // `-p <промпт>` — один ответ без интерактива: им считается дозаказ резюме.
+      printArgs: ['-p', '{prompt}'],
       mcpConfig: 'json-file',
     },
   },
@@ -184,6 +192,17 @@ export function resumeCommand(
   };
 }
 
+/** Команда и аргументы режима одного ответа: промпт на вход, ответ в stdout. */
+export function printCommand(
+  entry: ProviderEntry,
+  subs: RunnerSubstitutions = {},
+): { command: string; args: string[] } {
+  return {
+    command: entry.runner.command,
+    args: substituteArgs(entry.runner.printArgs ?? [], subs),
+  };
+}
+
 /** Команда и аргументы для запуска сессии провайдера в PTY. */
 export function runnerCommand(
   provider: Provider,
@@ -198,6 +217,15 @@ export function runnerCommand(
 /** Переменная-оверрайд пути к бинарю: `claude` → `HARNAS_CLAUDE_BIN`. */
 function overrideVariable(command: string): string {
   return `HARNAS_${command.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_BIN`;
+}
+
+/**
+ * Что именно запускается вместо команды провайдера. Оверрайд нужен
+ * нестандартным установкам и тестам, где вместо настоящего агента стоит stub;
+ * никакой подмены бинаря за спиной пользователя здесь нет.
+ */
+export function commandBinary(command: string, env: NodeJS.ProcessEnv = process.env): string {
+  return env[overrideVariable(command)] ?? command;
 }
 
 async function isExecutableFile(candidate: string): Promise<boolean> {
@@ -223,7 +251,7 @@ export async function commandInPath(
   command: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<boolean> {
-  const binary = env[overrideVariable(command)] ?? command;
+  const binary = commandBinary(command, env);
   if (binary === '') return false;
   if (binary.includes(path.sep)) return isExecutableFile(path.resolve(binary));
 
@@ -248,6 +276,7 @@ export interface ProviderOverride {
   command?: string;
   args?: string[];
   resumeArgs?: string[];
+  printArgs?: string[];
   mcpConfig?: McpConfigKind;
 }
 
@@ -268,6 +297,7 @@ function checkShape(id: string, file: string, patch: Record<string, unknown>): v
     (patch['command'] !== undefined && typeof patch['command'] !== 'string') ||
     (patch['args'] !== undefined && !isStrings(patch['args'])) ||
     (patch['resumeArgs'] !== undefined && !isStrings(patch['resumeArgs'])) ||
+    (patch['printArgs'] !== undefined && !isStrings(patch['printArgs'])) ||
     (patch['mcpConfig'] !== undefined &&
       patch['mcpConfig'] !== 'json-file' &&
       patch['mcpConfig'] !== 'codex-override');
@@ -290,9 +320,11 @@ function applyOverride(
   const runner: RunnerConfig = { command };
   const args = patch.args ?? base?.runner.args;
   const resumeArgs = patch.resumeArgs ?? base?.runner.resumeArgs;
+  const printArgs = patch.printArgs ?? base?.runner.printArgs;
   const mcpConfig = patch.mcpConfig ?? base?.runner.mcpConfig;
   if (args !== undefined) runner.args = args;
   if (resumeArgs !== undefined) runner.resumeArgs = resumeArgs;
+  if (printArgs !== undefined) runner.printArgs = printArgs;
   if (mcpConfig !== undefined) runner.mcpConfig = mcpConfig;
 
   return {

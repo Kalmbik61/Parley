@@ -107,10 +107,11 @@ interface PaneOptions {
   height?: number;
   selected?: number;
   subsessions?: Subsession[];
+  summaryPending?: boolean;
 }
 
 function paneOf(row: WorkRow | undefined, options: PaneOptions = {}): string {
-  const { width = 60, height = 40, selected = 0, subsessions = [] } = options;
+  const { width = 60, height = 40, selected = 0, subsessions = [], summaryPending } = options;
   const { lastFrame } = render(
     <DetailsPane
       row={row}
@@ -119,6 +120,7 @@ function paneOf(row: WorkRow | undefined, options: PaneOptions = {}): string {
       selected={selected}
       subsessions={subsessions}
       now={NOW}
+      {...(summaryPending === undefined ? {} : { summaryPending })}
     />,
   );
   return lastFrame() ?? '';
@@ -255,6 +257,16 @@ describe('DetailsPane — СВОДКА', () => {
     expect(
       summaryLine({ status: 'exited', summary: 'вышел на середине', summarySource: 'auto' }),
     ).toContain('авто:');
+  });
+
+  it('пока дозаказ считается, в сводке так и написано (дизайн 4.5)', () => {
+    const line = lineWith(
+      paneOf(rowsOf([session({ status: 'exited' })])[1], { summaryPending: true }),
+      'СВОДКА',
+    );
+    expect(line).toContain('авто-резюме: считается');
+    // Подсказки «s дозаказать» больше нет: заказ уже сделан.
+    expect(line).not.toContain('дозаказать');
   });
 
   it('отчёта нет: у exited добавляется подсказка про s', () => {

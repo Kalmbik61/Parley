@@ -4,6 +4,7 @@ import {
   defaultRoot,
   modelBadge,
   providerBadge,
+  requestAutoSummary,
   type Provider,
   type SessionIndex,
   type WorkSession,
@@ -45,6 +46,7 @@ import {
   newWorkDialog,
   resumeDialog,
   resumePreview,
+  summaryDialog,
   type DialogSpec,
 } from './work-dialogs.js';
 import {
@@ -176,6 +178,8 @@ export function App({
   const specWidth = dialogWidth(columns);
   // Правая панель, когда подключаться не к чему: сессию запустили вне харнесса.
   const [note, setNote] = useState<string | null>(null);
+  // Сессии, для которых дозаказ уже запущен: у них в СВОДКЕ «считается…» (4.5).
+  const [summaryPending, setSummaryPending] = useState<ReadonlySet<string>>(new Set());
 
   const push = status.push;
   const fail = useCallback(
@@ -428,6 +432,35 @@ export function App({
     agent.open({ kind: 'new', provider }, { cols: terminalCols, rows: terminalRows });
   }, [visible, agent, terminalCols, terminalRows, openDialog, closeDialog, fail]);
 
+  /**
+   * `s` — дозаказ резюме для сессии, вышедшей без отчёта (дизайн 4.5). Считается
+   * в фоне: пока идёт, в СВОДКЕ «авто-резюме: считается…», по готовности запись
+   * карты приходит через watcher и всплывает в строке статуса.
+   */
+  const openSummary = useCallback(() => {
+    if (currentMode.current !== 'works') return;
+    const row = currentRows.current[selectedRow.current];
+    // Дозаказ есть только у вышедшей без отчёта: у остальных резюме либо будет,
+    // либо уже есть (дизайн 8, таблица клавиш).
+    if (row?.kind !== 'session' || row.session.status !== 'exited') return;
+
+    const { projectPath: project, workId, session } = row;
+    openDialog(summaryDialog(row, glyphs(), specWidth), () => {
+      closeDialog();
+      const key = workRunKey(project, workId, session.id);
+      setSummaryPending((current) => new Set(current).add(key));
+      void requestAutoSummary(project, workId, session.id, roots)
+        .catch(fail)
+        .finally(() =>
+          setSummaryPending((current) => {
+            const next = new Set(current);
+            next.delete(key);
+            return next;
+          }),
+        );
+    });
+  }, [openDialog, closeDialog, specWidth, roots, fail]);
+
   /** `N` — новая работа; проект всегда cwd харнесса (дизайн 4.1, решение №9). */
   const openNewWork = useCallback(() => {
     if (currentMode.current !== 'works') return;
@@ -472,6 +505,7 @@ export function App({
     onCycleProvider: cycle,
     onNewSession: openNew,
     onNewWork: openNewWork,
+    onSummary: openSummary,
     onToggleMode: toggleMode,
     onCollapse: () => setSelectedExpanded(false),
     onExpand: () => setSelectedExpanded(true),
@@ -613,6 +647,16 @@ export function App({
                   selected={selectedSubsession}
                   subsessions={subsessions}
                   onLines={countDetailLines}
+                  summaryPending={
+                    selectedWorkRow?.kind === 'session' &&
+                    summaryPending.has(
+                      workRunKey(
+                        selectedWorkRow.projectPath,
+                        selectedWorkRow.workId,
+                        selectedWorkRow.session.id,
+                      ),
+                    )
+                  }
                 />
               ) : (
                 <SubsessionList

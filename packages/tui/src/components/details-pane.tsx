@@ -35,6 +35,8 @@ export interface DetailsPaneProps {
   now?: number;
   /** Сколько строк вышло: по этому числу навигация ограничивает прокрутку. */
   onLines?: (count: number) => void;
+  /** Дозаказ резюме уже запущен: до готовности в СВОДКЕ так и написано (4.5). */
+  summaryPending?: boolean;
 }
 
 /** Ширина колонки ярлыков в секционной раскладке (макет 2.2: `ВХОДЯЩИЕ` — 8 знаков). */
@@ -64,6 +66,7 @@ interface Layout {
   width: number;
   now: number;
   subsessions: readonly Subsession[];
+  summaryPending: boolean;
 }
 
 const line = (key: string, label: string, node: ReactNode, dim = false): DetailLine => ({
@@ -130,8 +133,10 @@ function tokensLine(row: WorkRowSession, layout: Layout): DetailLine {
 }
 
 /** СВОДКА: у отчёта виден источник, у его отсутствия — подсказка про `s` (дизайн 3). */
-function summaryText(row: WorkRowSession): string {
+function summaryText(row: WorkRowSession, pending: boolean): string {
   const { summary, summarySource, status } = row.session;
+  // Заказ уже сделан: другой индикации у дозаказа нет (дизайн 4.5).
+  if (pending) return 'авто-резюме: считается…';
   if (summary === null) {
     return status === 'exited' ? '(отчёта нет — s дозаказать)' : '(отчёта нет)';
   }
@@ -205,7 +210,7 @@ function sessionLines(row: WorkRowSession, layout: Layout): DetailLine[] {
     ...field('task', 'ЗАДАЧА', session.task, layout),
     statusLine(row, layout),
     tokensLine(row, layout),
-    ...field('summary', 'СВОДКА', summaryText(row), layout),
+    ...field('summary', 'СВОДКА', summaryText(row, layout.summaryPending), layout),
   ];
 
   lines.push(
@@ -275,12 +280,20 @@ export function DetailsPane({
   subsessions = [],
   now = Date.now(),
   onLines,
+  summaryPending = false,
 }: DetailsPaneProps): ReactNode {
   const g = glyphs();
   const wide = width >= WIDE_WIDTH;
   // Колонка ярлыков — только у секций сессии: сводка работы их не имеет.
   const labels = wide && row?.kind === 'session';
-  const layout: Layout = { g, wide, width: labels ? width - GUTTER : width, now, subsessions };
+  const layout: Layout = {
+    g,
+    wide,
+    width: labels ? width - GUTTER : width,
+    now,
+    subsessions,
+    summaryPending,
+  };
 
   const lines =
     row === undefined

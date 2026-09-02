@@ -1,5 +1,5 @@
 /**
- * Содержимое диалогов левой колонки (дизайн координации TUI, 4.1–4.4).
+ * Содержимое диалогов левой колонки (дизайн координации TUI, 4.1–4.5).
  *
  * Здесь только текст и поля: файловой системы и Ink нет, поэтому макеты
  * проверяются тестами без запуска чего бы то ни было.
@@ -158,5 +158,27 @@ export function resumeDialog(
     info: [command, exitLine(session), summaryLine(session, g)],
     quote: [],
     footer: 'Enter — возобновить · Esc',
+  };
+}
+
+/**
+ * 4.5. Дозаказ резюме для сессии, вышедшей без отчёта. Полей нет: диалог только
+ * объясняет, чем считается резюме и как оно запишется, и подтверждает заказ.
+ */
+export function summaryDialog(row: WorkRowSession, g: Glyphs, width: number): DialogSpec {
+  const { session } = row;
+  const wide = width >= WIDE;
+  return {
+    title: `${wide ? 'ДОЗАКАЗ РЕЗЮМЕ' : 'РЕЗЮМЕ ДЛЯ'} ${statusGlyph(session.status, g)} ${session.label}`,
+    fields: [],
+    info: wide
+      ? [
+          'Один вызов claude -p по транскрипту',
+          'провайдера. Результат — summary с',
+          'пометкой «авто» (summarySource=auto).',
+        ]
+      : ['claude -p по транскрипту', 'запишется как «авто»'],
+    quote: [],
+    footer: 'Enter — заказать · Esc',
   };
 }

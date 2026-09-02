@@ -34,6 +34,8 @@ export interface NavigationOptions {
   onNewSession?: () => void;
   /** `N` — диалог новой работы (дизайн 4.1); действует только из фокуса списков. */
   onNewWork?: () => void;
+  /** `s` — диалог дозаказа резюме (дизайн 4.5); тоже только из фокуса списков. */
+  onSummary?: () => void;
   /** `w` — переключить режим левой колонки: все сессии ↔ работы. */
   onToggleMode?: () => void;
   /** `←` / `h` — свернуть выбранную работу (режим работ). */
@@ -83,6 +85,7 @@ export function useNavigation({
   onCycleProvider,
   onNewSession,
   onNewWork,
+  onSummary,
   onToggleMode,
   onCollapse,
   onExpand,
@@ -169,6 +172,11 @@ export function useNavigation({
 
     if (input === 'N') {
       if (focus !== 'terminal') onNewWork?.();
+      return;
+    }
+
+    if (input === 's') {
+      if (focus !== 'terminal') onSummary?.();
       return;
     }
 

@@ -176,12 +176,7 @@ describe('indexCodexSession', () => {
   });
 
   it('токены берутся из последней записи token_count', async () => {
-    const tokenCount = (
-      input: number,
-      cached: number,
-      output: number,
-      at: string,
-    ) =>
+    const tokenCount = (input: number, cached: number, output: number, at: string) =>
       line({
         timestamp: at,
         type: 'event_msg',

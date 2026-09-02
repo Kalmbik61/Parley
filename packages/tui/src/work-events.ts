@@ -50,6 +50,15 @@ function sessionEvents(before: WorkEntry, after: WorkEntry, g: Glyphs): StatusEv
         source,
       });
     }
+
+    // Дозаказ считается в фоне, и другой индикации у него нет (дизайн 4.5):
+    // готовый результат приходит записью карты и отмечается здесь.
+    if (
+      session.summarySource === 'auto' &&
+      (previous.summary !== session.summary || previous.summarySource !== 'auto')
+    ) {
+      events.push({ text: `авто-резюме для «${session.label}» готово`, source });
+    }
   }
 
   return events;
