@@ -120,6 +120,30 @@
       "accessCount": 1,
       "lastAccessed": 1788334426765,
       "type": "file"
+    },
+    {
+      "path": "packages/tui/src/pty/terminal-buffer.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788334608329,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/pty/use-pty-terminal.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788334668599,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/pty/terminal-buffer.test.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788334691609,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/pty/use-pty-terminal.test.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1788334728018,
+      "type": "file"
     }
   ],
   "userDirectives": []
