@@ -12,7 +12,8 @@
     "test": "pnpm -r test",
     "dev": "pnpm --filter @harnas/tui dev",
     "lint": "eslint packages tools",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "postinstall": "node scripts/fix-node-pty-perms.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.13.0",

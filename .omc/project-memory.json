@@ -1,0 +1,126 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1788331409704,
+  "projectRoot": "/Users/kalmbik61/Desktop/MY/my_harnas",
+  "techStack": {
+    "languages": [
+      {
+        "name": "JavaScript/TypeScript",
+        "version": ">=20",
+        "confidence": "high",
+        "markers": [
+          "package.json"
+        ]
+      }
+    ],
+    "frameworks": [
+      {
+        "name": "vitest",
+        "version": "2.1.0",
+        "category": "testing"
+      }
+    ],
+    "packageManager": "pnpm",
+    "runtime": "Node.js 20"
+  },
+  "build": {
+    "buildCommand": "pnpm build",
+    "testCommand": "pnpm test",
+    "lintCommand": "pnpm lint",
+    "devCommand": "pnpm dev",
+    "scripts": {
+      "build": "pnpm -r build",
+      "test": "pnpm -r test",
+      "dev": "pnpm --filter @harnas/tui dev",
+      "lint": "eslint packages tools",
+      "format": "prettier --write ."
+    }
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": true,
+    "workspaces": [],
+    "mainDirectories": [
+      "docs"
+    ],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "claude-export": {
+      "path": "claude-export",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1788331409681,
+      "keyFiles": [
+        "index.json",
+        "schema-report.json"
+      ]
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 1,
+      "lastAccessed": 1788331409682,
+      "keyFiles": [
+        "harness-handoff.md"
+      ]
+    },
+    "packages": {
+      "path": "packages",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1788331409685,
+      "keyFiles": []
+    },
+    "tools": {
+      "path": "tools",
+      "purpose": null,
+      "fileCount": 3,
+      "lastAccessed": 1788331409687,
+      "keyFiles": [
+        "claude-export.mjs",
+        "make-fixtures.mjs",
+        "scrub-export.mjs"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "scripts/fix-node-pty-perms.mjs",
+      "accessCount": 2,
+      "lastAccessed": 1788334313782,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/pty/find-binary.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788334347067,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/pty/pty-session.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788334364556,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/test/stub-agent.mjs",
+      "accessCount": 1,
+      "lastAccessed": 1788334378454,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/pty/pty-session.test.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788334426765,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

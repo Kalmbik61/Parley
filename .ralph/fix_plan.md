@@ -26,7 +26,7 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 
 ## Medium Priority
 
-- [ ] packages/tui: PTY manager — spawn the unmodified `claude` from PATH via node-pty per specs/pty.md; verify binary presence at startup with a clear error if missing
+- [x] packages/tui: PTY manager — spawn the unmodified `claude` from PATH via node-pty per specs/pty.md; verify binary presence at startup with a clear error if missing
 - [ ] packages/tui: @xterm/headless as the VT state machine; render its buffer into the right pane on each PTY data batch per specs/pty.md
 - [ ] Enter on a session opens `claude --resume <sessionId>` in the right pane, with cwd set to the session's cwd
 - [ ] Focus routing: when the right pane is focused, forward ALL input to the PTY; a dedicated escape hatch (default Ctrl+Q, configurable) returns focus to the lists and must not collide with Claude Code keybindings, per specs/pty.md
@@ -67,6 +67,12 @@ EXIT_SIGNAL: true только когда отмечены ВСЕ чекбокс
 - [x] Project documentation prepared (.ralph structure, specs, handoff imported)
 
 ## Notes
+
+### node-pty на macOS + pnpm
+pnpm распаковывает `prebuilds/*/spawn-helper` без бита исполнения, и любой spawn
+падает с невнятным `posix_spawnp failed`. Чинится `scripts/fix-node-pty-perms.mjs`,
+подключённым как корневой `postinstall` (идемпотентен, переживает переустановку).
+Сам PTY в системе при этом рабочий — проверялось `pty.fork` из python.
 
 ### Перф v0, замер 2026-09-01 (M-серия, 47 сессий / 315 МБ)
 | что | сколько |
