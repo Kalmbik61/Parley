@@ -252,6 +252,12 @@
       "accessCount": 1,
       "lastAccessed": 1788341133840,
       "type": "file"
+    },
+    {
+      "path": "packages/core/src/providers.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788341337719,
+      "type": "file"
     }
   ],
   "userDirectives": []

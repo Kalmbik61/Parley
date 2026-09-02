@@ -15,3 +15,5 @@ export type { SessionChange, SessionWatcher, WatchOptions } from './watch.js';
 export { defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
 export type { DiscoveredCodexSession } from './codex/discover.js';
 export { buildCodexIndex, indexCodexSession } from './codex/index-session.js';
+export { PROVIDERS, providersWithHistory, runnerCommand } from './providers.js';
+export type { ProviderInfo, RunnerConfig } from './providers.js';
