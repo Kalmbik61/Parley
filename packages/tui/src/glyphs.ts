@@ -25,6 +25,8 @@ export interface Glyphs {
   ellipsis: string;
   /** Линейка в заголовке проекта. */
   rule: string;
+  /** Запасной набор: подсветка выбора в нём — reverse video (6.1). */
+  ascii: boolean;
 }
 
 const UNICODE: Glyphs = {
@@ -41,6 +43,7 @@ const UNICODE: Glyphs = {
   flag: '⚑',
   ellipsis: '…',
   rule: '─',
+  ascii: false,
 };
 
 const ASCII: Glyphs = {
@@ -57,6 +60,7 @@ const ASCII: Glyphs = {
   flag: '!',
   ellipsis: '~',
   rule: '-',
+  ascii: true,
 };
 
 /**
@@ -75,6 +79,18 @@ export function glyphs(env: NodeJS.ProcessEnv = process.env): Glyphs {
   const ascii = env['HARNAS_ASCII'];
   if (ascii !== undefined && ascii !== '' && ascii !== '0') return ASCII;
   return unicodeLocale(env) ? UNICODE : ASCII;
+}
+
+/**
+ * Подсветка выбранного ряда — общая для всех списков и режимов (дизайн 6.2):
+ * фон bright black, а в запасном наборе reverse video (6.1). Текст не меняется.
+ */
+export function selectionProps(
+  selected: boolean,
+  g: Glyphs,
+): { backgroundColor?: string; inverse?: boolean } {
+  if (!selected) return {};
+  return g.ascii ? { inverse: true } : { backgroundColor: 'blackBright' };
 }
 
 export function statusGlyph(status: SessionStatus, g: Glyphs): string {

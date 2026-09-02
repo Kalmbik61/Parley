@@ -39,8 +39,14 @@ const MIXED = [
   session({ id: 'c', provider: 'claude', title: 'клод-2' }),
 ];
 
-function Probe({ sessions }: { sessions: SessionIndex[] }): ReactNode {
-  const { filter, visible, present, cycle } = useProviderFilter(sessions);
+function Probe({
+  sessions,
+  extra = [],
+}: {
+  sessions: SessionIndex[];
+  extra?: string[];
+}): ReactNode {
+  const { filter, visible, present, cycle } = useProviderFilter(sessions, extra);
 
   useInput((input) => {
     if (input === 'p') cycle();
@@ -90,6 +96,25 @@ describe('useProviderFilter', () => {
     stdin.write('p');
     await settle();
     expect(lastFrame()).toBe('claude|клод-1|claude,glm');
+  });
+
+  it('провайдер сессий работ попадает в выбор без единого лога (дизайн 6.5)', async () => {
+    // Карту работы создали через CLI или MCP: истории Codex ещё нет.
+    const { stdin, lastFrame } = render(<Probe sessions={[MIXED[0]!]} extra={['codex']} />);
+    await settle();
+    expect(lastFrame()).toBe('все|клод-1|claude,codex,glm');
+
+    stdin.write('p');
+    await settle();
+    stdin.write('p');
+    await settle();
+    expect(lastFrame()).toBe('codex||claude,codex,glm');
+  });
+
+  it('чужой провайдер из providers.json в фильтр не превращается', async () => {
+    const { lastFrame } = render(<Probe sessions={[MIXED[0]!]} extra={['свой-cli']} />);
+    await settle();
+    expect(lastFrame()).toBe('все|клод-1|claude,glm');
   });
 
   it('пустой список не ломает фильтр', async () => {

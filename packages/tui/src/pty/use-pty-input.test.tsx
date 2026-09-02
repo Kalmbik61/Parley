@@ -67,8 +67,13 @@ const waitFor = async (check: () => boolean, timeoutMs = 8000): Promise<void> =>
   }
 };
 
-/** Ink подписывается на stdin в эффекте — ждём подписку перед первым нажатием. */
-const mounted = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 120));
+/**
+ * Ink подписывается на stdin в эффекте после монтирования, а stdin в тестах —
+ * заглушка: запись до подписки теряется молча. Ждём саму подписку, а не паузу.
+ */
+const mounted = async (stdin: { listenerCount: (event: string) => number }): Promise<void> => {
+  await waitFor(() => stdin.listenerCount('readable') > 0);
+};
 
 /**
  * Домашняя папка харнесса и проект — во временных каталогах: App читает работы,
@@ -121,7 +126,7 @@ describe('маршрутизация ввода в PTY', () => {
   const openTerminal = async (sessions: SessionIndex[]): Promise<ReturnType<typeof render>> => {
     const app = render(<App sessions={sessions} root={root} projectPath={project} />);
     await waitFor(() => (app.lastFrame() ?? '').includes('Enter на сессии'));
-    await mounted();
+    await mounted(app.stdin);
     app.stdin.write(ENTER);
     await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
     return app;
@@ -196,7 +201,7 @@ describe('терминал без живого процесса не держи�
     const app = render(<App sessions={[session()]} root={root} projectPath={project} />);
     try {
       await waitFor(() => (app.lastFrame() ?? '').includes('Enter на сессии'));
-      await mounted();
+      await mounted(app.stdin);
 
       // sessions → subsessions → terminal → sessions
       app.stdin.write('\t');

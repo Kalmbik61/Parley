@@ -65,15 +65,22 @@ export function App({
 
   const [mode, setMode] = useState<LeftMode>('sessions');
 
+  const status = useStatus();
+  const { works, rescan: rescanWorks } = useWorks({ projectPath, onEvents: status.push });
+
+  // Провайдеры сессий работ: у работы, созданной через CLI или MCP, логов ещё
+  // нет, и по одному индексу логов её провайдер было бы не выбрать (дизайн 6.5).
+  const workProviders = useMemo(
+    () => [...new Set(works.flatMap((entry) => entry.map.sessions.map((s) => s.provider)))],
+    [works],
+  );
+
   // Фильтр по провайдеру: списком дальше живут уже отфильтрованные сессии.
   // Значение дублируется в ref: между нажатиями «p» и «n» состояние ещё не
   // успеет доехать до замыкания, и новая сессия ушла бы не тому провайдеру.
-  const { filter, visible, present, cycle } = useProviderFilter(sessions);
+  const { filter, visible, present, cycle } = useProviderFilter(sessions, workProviders);
   const activeFilter = useRef<Provider | null>(filter);
   activeFilter.current = filter;
-
-  const status = useStatus();
-  const { works, rescan: rescanWorks } = useWorks({ projectPath, onEvents: status.push });
 
   // Метрики живой сессии берутся из уже построенного индекса логов: он живёт по
   // событиям watcher, отдельного чтения файлов режиму работ не нужно.
@@ -220,19 +227,22 @@ export function App({
 
   // Предупреждение о параллельных агентах живёт в строке статуса, а не поверх
   // правой панели: канал уведомлений один на оба режима (дизайн 5, решение №8).
+  // Считаются живые сессии того же провайдера: лимиты подписки общие у него, а
+  // не у соседнего — иначе про Claude утверждалось бы неверное (дизайн 5).
   const push = status.push;
   const wasLive = useRef(0);
   const activeProvider = agent.active === undefined ? null : targetProvider(agent.active.target);
+  const liveSameProvider = activeProvider === null ? 0 : agent.liveOf(activeProvider);
   useEffect(() => {
-    if (agent.liveCount > 1 && wasLive.current <= 1 && activeProvider !== null) {
+    if (liveSameProvider > 1 && wasLive.current <= 1 && activeProvider !== null) {
       push([
         {
           text: `${providerMarkOf(activeProvider)}: уже есть активная сессия — лимиты подписки общие`,
         },
       ]);
     }
-    wasLive.current = agent.liveCount;
-  }, [agent.liveCount, activeProvider, push]);
+    wasLive.current = liveSameProvider;
+  }, [liveSameProvider, activeProvider, push]);
 
   const backToLists = useCallback(() => setFocus('sessions'), [setFocus]);
   usePtyInput(agent.active?.session, focus === 'terminal' && agentAlive, {

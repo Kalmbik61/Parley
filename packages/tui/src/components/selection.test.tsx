@@ -6,15 +6,22 @@ vi.hoisted(() => {
   process.env['FORCE_COLOR'] = '1';
 });
 
-import type { SessionIndex, WorkEntry, WorkSession } from '@harnas/core';
+import type { SessionIndex, Subsession, WorkEntry, WorkSession } from '@harnas/core';
 import { render } from 'ink-testing-library';
+import { pinUnicodeGlyphs } from '../../test/glyphs-env.js';
 import { buildRows } from '../work-rows.js';
 import { SessionList } from './session-list.js';
+import { SubsessionList } from './subsession-list.js';
 import { WorkList } from './work-list.js';
 
 /** Фон bright black — `48;5;8` в 256-цветной палитре chalk, `100` в базовой. */
 const highlighted = (line: string): boolean =>
   line.includes('\u001B[100m') || line.includes('\u001B[48;5;8m');
+
+/** Запасной набор подсвечивает выбор reverse video (6.1). */
+const inverted = (line: string): boolean => line.includes('\u001B[7m');
+
+pinUnicodeGlyphs();
 
 function session(over: Partial<SessionIndex> = {}): SessionIndex {
   return {
@@ -40,6 +47,25 @@ function session(over: Partial<SessionIndex> = {}): SessionIndex {
     subsessionCount: 0,
     provider: 'claude',
     tokens: null,
+    ...over,
+  };
+}
+
+function subsession(over: Partial<Subsession> = {}): Subsession {
+  return {
+    agentId: 'a1',
+    file: `/root/agent-${over.agentId ?? 'a1'}.jsonl`,
+    workflowRunId: null,
+    agentType: 'general-purpose',
+    name: 'fix',
+    task: 'починить парсер',
+    taskSource: 'meta',
+    toolUseId: 'toolu_1',
+    models: ['claude-opus-5'],
+    startedAt: '2026-09-01T10:00:00.000Z',
+    endedAt: '2026-09-01T10:06:00.000Z',
+    durationMs: 6 * 60_000,
+    records: 12,
     ...over,
   };
 }
@@ -119,5 +145,35 @@ describe('подсветка выбранного ряда', () => {
     const frame =
       render(<WorkList rows={rows} selected={0} height={12} width={40} />).lastFrame() ?? '';
     expect(highlighted(lineWith(frame, 'Авторизация'))).toBe(true);
+  });
+
+  it('в списке подсессий фон вместо стрелки — правило общее для всех списков', () => {
+    const frame =
+      render(
+        <SubsessionList
+          subsessions={[
+            subsession({ agentId: 'a', task: 'первый' }),
+            subsession({ agentId: 'b', task: 'второй' }),
+          ]}
+          selected={1}
+          height={10}
+          width={60}
+        />,
+      ).lastFrame() ?? '';
+
+    expect(highlighted(lineWith(frame, 'второй'))).toBe(true);
+    expect(highlighted(lineWith(frame, 'первый'))).toBe(false);
+    // `▸` теперь значит «свёрнутая работа» — стрелки выбора в списках нет.
+    expect(frame).not.toContain('▸');
+  });
+
+  it('в ASCII-наборе выбор — reverse video (6.1, 6.2)', () => {
+    process.env.HARNAS_ASCII = '1';
+    const rows = buildRows([entry]);
+    const frame =
+      render(<WorkList rows={rows} selected={0} height={12} width={40} />).lastFrame() ?? '';
+
+    expect(inverted(lineWith(frame, 'Авторизация'))).toBe(true);
+    expect(highlighted(lineWith(frame, 'Авторизация'))).toBe(false);
   });
 });

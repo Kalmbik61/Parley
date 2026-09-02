@@ -55,8 +55,13 @@ const waitFor = async (check: () => boolean, timeoutMs = 8000): Promise<void> =>
   }
 };
 
-/** Ink подписывается на stdin в эффекте — ждём подписку перед первым нажатием. */
-const mounted = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 120));
+/**
+ * Ink подписывается на stdin в эффекте после монтирования, а stdin в тестах —
+ * заглушка: запись до подписки теряется молча. Ждём саму подписку, а не паузу.
+ */
+const mounted = async (stdin: { listenerCount: (event: string) => number }): Promise<void> => {
+  await waitFor(() => stdin.listenerCount('readable') > 0);
+};
 
 /**
  * Домашняя папка харнесса и проект — во временных каталогах: App читает работы,
@@ -105,7 +110,7 @@ describe('жизненный цикл агента', () => {
   const open = async (sessions: SessionIndex[]): Promise<ReturnType<typeof render>> => {
     const app = render(<App sessions={sessions} root={root} projectPath={project} />);
     await waitFor(() => (app.lastFrame() ?? '').includes('Enter на сессии'));
-    await mounted();
+    await mounted(app.stdin);
     app.stdin.write(ENTER);
     await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
     return app;
@@ -161,15 +166,29 @@ describe('жизненный цикл агента', () => {
     }
   }, 25_000);
 
-  it('второй агент вызывает предупреждение о лимитах, но не блокируется', async () => {
+  it('предупреждение о лимитах — на второй сессии своего провайдера (дизайн 5)', async () => {
+    const originalCodex = process.env['HARNAS_CODEX_BIN'];
+    process.env['HARNAS_CODEX_BIN'] = STUB;
     const app = await open([
-      session({ id: 'a', title: 'первая' }),
-      session({ id: 'b', title: 'вторая' }),
+      session({ id: 'a', title: 'кодекс', provider: 'codex' }),
+      session({ id: 'b', title: 'первая' }),
+      session({ id: 'c', title: 'вторая' }),
     ]);
     try {
       app.stdin.write(CTRL_Q);
       await new Promise((resolve) => setTimeout(resolve, 120));
+      app.stdin.write('j');
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      app.stdin.write(ENTER);
 
+      // Вторая живая сессия, но другого провайдера: лимиты подписки общие внутри
+      // провайдера, а не между ним и соседним.
+      await waitFor(() => rightHeader(app.lastFrame() ?? '').includes('первая'));
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(app.lastFrame()).not.toContain('уже есть активная сессия');
+
+      app.stdin.write(CTRL_Q);
+      await new Promise((resolve) => setTimeout(resolve, 120));
       app.stdin.write('j');
       await new Promise((resolve) => setTimeout(resolve, 120));
       app.stdin.write(ENTER);
@@ -181,6 +200,8 @@ describe('жизненный цикл агента', () => {
       // Второй агент всё равно запустился — предупреждение не блокирует.
       expect(rightHeader(app.lastFrame() ?? '')).toContain('вторая');
     } finally {
+      if (originalCodex === undefined) delete process.env['HARNAS_CODEX_BIN'];
+      else process.env['HARNAS_CODEX_BIN'] = originalCodex;
       app.unmount();
     }
   }, 25_000);

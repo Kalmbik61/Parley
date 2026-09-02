@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { pinUnicodeGlyphs } from '../test/glyphs-env.js';
 import { App } from './app.js';
 
 /** Настоящий агент в тестах не запускается никогда (specs/pty.md). */
@@ -17,6 +18,8 @@ const STUB = path.join(
 
 const lineWith = (frame: string, text: string): string =>
   frame.split('\n').find((line) => line.includes(text)) ?? '';
+
+pinUnicodeGlyphs();
 
 let home = '';
 let project = '';

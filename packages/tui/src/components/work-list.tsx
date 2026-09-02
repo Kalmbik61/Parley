@@ -1,8 +1,8 @@
 import { modelBadge, type SessionStatus } from '@harnas/core';
 import { Box, Text } from 'ink';
 import type { ReactNode } from 'react';
-import { formatDuration, formatTokenPair, truncate, truncateLeft } from '../format.js';
-import { glyphs, statusColor, statusGlyph, type Glyphs } from '../glyphs.js';
+import { formatDuration, formatTokenPair, truncate, truncateLeft, withHome } from '../format.js';
+import { glyphs, selectionProps, statusColor, statusGlyph, type Glyphs } from '../glyphs.js';
 import {
   layoutRows,
   providerLabel,
@@ -37,10 +37,6 @@ const STATUSES: readonly SessionStatus[] = [
 
 const padTo = (used: number, width: number): string => ' '.repeat(Math.max(0, width - used));
 
-/** Фон выбранного ряда — вместо стрелки (дизайн 6.2). Текст при этом не меняется. */
-const selectionProps = (selected: boolean): { backgroundColor?: string } =>
-  selected ? { backgroundColor: 'blackBright' } : {};
-
 /** Цвет части агрегата работы определяется её глифом — цвет тут не единственный смысл. */
 function partProps(part: string, g: Glyphs): Record<string, unknown> {
   if (part.startsWith(g.mail)) return { color: 'magenta', bold: true };
@@ -70,7 +66,7 @@ function ProjectHeader({
   width: number;
   g: Glyphs;
 }): ReactNode {
-  const tail = truncateLeft(projectPath, Math.max(0, width - 4), g.ellipsis);
+  const tail = truncateLeft(withHome(projectPath), Math.max(0, width - 4), g.ellipsis);
   return (
     <Text dimColor wrap="truncate">
       {`${tail} ${g.rule.repeat(Math.max(0, width - tail.length - 1))}`}
@@ -93,28 +89,42 @@ function WorkLine({
   sticky?: boolean;
 }): ReactNode {
   const head = `${row.expanded ? g.expanded : g.collapsed} `;
-  // Число сессий важно там, где их самих не видно: у свёрнутой работы и у липкого
-  // заголовка развёрнутой — макет 6.6 показывает `(24)` именно на нём.
-  const count = (row.expanded && !sticky) || row.total === 0 ? '' : ` (${row.total})`;
-  const tail = workTail(row.counters, g, Math.max(2, width - head.length - MIN_LABEL - 1));
+  // Число сессий важно там, где их самих не видно: у свёрнутой работы — сразу за
+  // заголовком (макеты 2.2 и 7), у липкого заголовка развёрнутой — у правого
+  // края, за агрегатом (макет 6.6).
+  const count = row.total === 0 ? '' : ` (${row.total})`;
+  const afterTitle = row.expanded ? '' : count;
+  const afterTail = row.expanded && sticky ? count : '';
+  const tail = workTail(
+    row.counters,
+    g,
+    Math.max(2, width - head.length - afterTail.length - MIN_LABEL - 1),
+  );
   const title = truncate(
     row.work.title,
-    Math.max(MIN_LABEL, width - head.length - count.length - tail.length - 1),
+    Math.max(
+      MIN_LABEL,
+      width - head.length - afterTitle.length - tail.length - afterTail.length - 1,
+    ),
     g.ellipsis,
   );
-  const pad = padTo(head.length + title.length + count.length + tail.length, width);
+  const pad = padTo(
+    head.length + title.length + afterTitle.length + tail.length + afterTail.length,
+    width,
+  );
 
   return (
-    <Text wrap="truncate" {...selectionProps(selected)}>
+    <Text wrap="truncate" {...selectionProps(selected, g)}>
       {head}
       {title}
-      <Text dimColor>{count}</Text>
+      <Text dimColor>{afterTitle}</Text>
       {pad}
       {tail.split(' ').map((part, at) => (
         <Text key={at} {...partProps(part, g)}>
           {at === 0 ? part : ` ${part}`}
         </Text>
       ))}
+      <Text dimColor>{afterTail}</Text>
     </Text>
   );
 }
@@ -131,7 +141,7 @@ function SessionLines({
   g: Glyphs;
 }): ReactNode {
   // Вариант А (2.4): вложенность — отступом, ветка `└` только на широкой колонке.
-  const indent = ' '.repeat(2 + row.depth * 3);
+  const indent = ' '.repeat(2 + row.depth * 2);
   const branch = row.depth > 0 && width >= WIDE_WIDTH ? `${g.child} ` : '';
   // Вторая строка выравнивается под label: она — тот же ряд, а не отдельная строка.
   const head = indent.length + branch.length + 2;
@@ -159,7 +169,7 @@ function SessionLines({
 
   return (
     <>
-      <Text wrap="truncate" {...selectionProps(selected)}>
+      <Text wrap="truncate" {...selectionProps(selected, g)}>
         {indent}
         <Text dimColor>{branch}</Text>
         <Text {...statusColor(row.session.status)}>{statusGlyph(row.session.status, g)}</Text>
@@ -171,7 +181,7 @@ function SessionLines({
           {mail}
         </Text>
       </Text>
-      <Text wrap="truncate" {...selectionProps(selected)}>
+      <Text wrap="truncate" {...selectionProps(selected, g)}>
         {' '.repeat(head)}
         <Text color="blackBright" bold>
           {truncate(second, Math.max(0, width - head), g.ellipsis)}
@@ -220,7 +230,7 @@ export function WorkList({ rows, selected, height, width }: WorkListProps): Reac
               <>
                 <WorkLine row={row} selected={active} width={width} g={g} />
                 {row.note !== null && (
-                  <Text dimColor wrap="truncate" {...selectionProps(active)}>
+                  <Text dimColor wrap="truncate" {...selectionProps(active, g)}>
                     {`    ${row.note}${padTo(4 + row.note.length, width)}`}
                   </Text>
                 )}

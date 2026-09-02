@@ -43,8 +43,8 @@ export interface AgentRun {
 export interface AgentPtyState {
   /** Что показывает правая панель. */
   active: AgentRun | undefined;
-  /** Сколько агентов работает прямо сейчас. */
-  liveCount: number;
+  /** Сколько агентов провайдера работает прямо сейчас: лимиты подписки у них общие. */
+  liveOf(provider: Provider): number;
   /** Нет бинаря или не удалось запустить. */
   error: string | undefined;
   open(target: AgentTarget, size: PtySize): void;
@@ -178,7 +178,9 @@ export function useAgentPty(): AgentPtyState {
 
   return {
     ...(active === undefined ? { active: undefined } : { active }),
-    liveCount: runs.filter((run) => run.exit === undefined).length,
+    liveOf: (provider) =>
+      runs.filter((run) => run.exit === undefined && targetProvider(run.target) === provider)
+        .length,
     error,
     open,
     restart,

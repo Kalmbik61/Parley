@@ -1,6 +1,9 @@
+import { homedir } from 'node:os';
+import path from 'node:path';
 import type { WorkEntry, WorkMap, WorkSession } from '@harnas/core';
 import { render } from 'ink-testing-library';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { pinUnicodeGlyphs } from '../../test/glyphs-env.js';
 import { buildRows } from '../work-rows.js';
 import { WorkList } from './work-list.js';
 
@@ -59,9 +62,7 @@ const frameOf = (node: Parameters<typeof render>[0]): string => render(node).las
 const lineWith = (frame: string, text: string): string =>
   frame.split('\n').find((line) => line.includes(text)) ?? '';
 
-afterEach(() => {
-  delete process.env.HARNAS_ASCII;
-});
+pinUnicodeGlyphs();
 
 describe('WorkList', () => {
   it('рисует проект, работу и двухэтажный ряд сессии', () => {
@@ -82,7 +83,10 @@ describe('WorkList', () => {
     const frame = frameOf(<WorkList rows={rows} selected={0} height={12} width={60} />);
 
     expect(lineWith(frame, 'Релиз')).toContain('▸');
-    expect(lineWith(frame, 'Релиз')).toContain('(1)');
+    // У свёрнутой работы `(N)` стоит сразу за заголовком (макеты 2.2 и раздел 7).
+    expect(lineWith(frame, 'Релиз').indexOf('(1)')).toBeLessThan(
+      lineWith(frame, 'Релиз').indexOf('●1'),
+    );
     expect(frame).not.toContain('бэкенд');
   });
 
@@ -194,7 +198,10 @@ describe('WorkList', () => {
     expect(frame.split('\n').length).toBeLessThanOrEqual(9);
     // У липкого заголовка развёрнутой работы число сессий остаётся: сами они
     // не видны, и только по нему понятно, сколько их всего (макет 6.6).
-    expect(lineWith(frame, 'Миграция БД')).toContain('(24)');
+    // …и стоит у правого края, за агрегатом (макет 6.6).
+    const header = lineWith(frame, 'Миграция БД');
+    expect(header).toContain('(24)');
+    expect(header.indexOf('●24')).toBeLessThan(header.indexOf('(24)'));
     for (const line of frame.split('\n')) expect(line.length).toBeLessThanOrEqual(40);
   });
 
@@ -259,6 +266,29 @@ describe('WorkList', () => {
     const frame = frameOf(<WorkList rows={rows} selected={0} height={12} width={40} />);
     expect(frame).toContain('Codex');
     expect(frame).not.toContain('Codex Codex');
+  });
+
+  it('шаг отступа дочерней сессии — 2 колонки (макеты 2.1, 2.2)', () => {
+    const rows = buildRows(
+      [entry([session(), session({ id: 's-02', label: 'ревью', parent: 's-01' })])],
+      { live },
+    );
+    // Узкая колонка: ветки `└` нет, видно чистый шаг отступа.
+    const narrow = frameOf(<WorkList rows={rows} selected={0} height={12} width={30} />);
+    const parent = lineWith(narrow, 'бэкенд').indexOf('бэкенд');
+    const child = lineWith(narrow, 'ревью').indexOf('ревью');
+
+    expect(child - parent).toBe(2);
+  });
+
+  it('домашняя директория в заголовке проекта — тильдой (2.1, 6.4)', () => {
+    const home = { ...entry([session()]), projectPath: path.join(homedir(), 'dev', 'shop') };
+    const frame = frameOf(
+      <WorkList rows={buildRows([home], { live })} selected={0} height={12} width={40} />,
+    );
+
+    expect(frame).toContain(`~${path.sep}dev${path.sep}shop`);
+    expect(frame).not.toContain(homedir());
   });
 
   it('HARNAS_ASCII=1 заменяет глифы', () => {

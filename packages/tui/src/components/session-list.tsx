@@ -8,6 +8,7 @@ import {
   truncate,
   visibleWindow,
 } from '../format.js';
+import { glyphs, selectionProps } from '../glyphs.js';
 
 export interface SessionListProps {
   sessions: SessionIndex[];
@@ -70,6 +71,7 @@ export function SessionList({
   }
 
   const { start, end } = visibleWindow(sessions.length, selected, height);
+  const g = glyphs();
 
   return (
     <Box flexDirection="column">
@@ -89,11 +91,7 @@ export function SessionList({
         return (
           // Выбранный ряд подсвечен фоном, а не стрелкой, — правило общее для
           // обоих режимов левой колонки (дизайн координации TUI, 6.2).
-          <Text
-            key={session.file}
-            wrap="truncate"
-            {...(active ? { backgroundColor: 'blackBright' } : {})}
-          >
+          <Text key={session.file} wrap="truncate" {...selectionProps(active, g)}>
             {mark !== '' && <Text color="magenta">{mark}</Text>}
             {title}
             {pad}

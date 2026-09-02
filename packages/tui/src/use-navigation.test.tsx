@@ -206,6 +206,26 @@ describe('useNavigation', () => {
     expect(onExpand).toHaveBeenCalledTimes(2);
   });
 
+  it('вне списка РАБОТЫ ←→ и h l не трогают дерево (дизайн 8)', async () => {
+    const onCollapse = vi.fn();
+    const onExpand = vi.fn();
+    const { stdin, lastFrame } = render(<Probe onCollapse={onCollapse} onExpand={onExpand} />);
+    await settle();
+
+    // Фокус на панели ДЕТАЛИ: свернулась бы работа, на которую не смотрят.
+    stdin.write(TAB);
+    await settle();
+    expect(lastFrame()).toBe('subsessions|0|0');
+
+    stdin.write(ARROW_LEFT);
+    await settle();
+    stdin.write('l');
+    await settle();
+
+    expect(onCollapse).not.toHaveBeenCalled();
+    expect(onExpand).not.toHaveBeenCalled();
+  });
+
   it('Enter в режиме работ не уводит фокус в терминал', async () => {
     const onOpen = vi.fn();
     const { stdin, lastFrame } = render(<Probe onOpen={onOpen} focusTerminalOnOpen={false} />);

@@ -98,7 +98,12 @@ export function spawnPtySession({
     resize(nextCols, nextRows) {
       if (state !== 'running') return;
       const next = clampSize(nextCols, nextRows);
-      pty.resize(next.cols, next.rows);
+      try {
+        pty.resize(next.cols, next.rows);
+      } catch {
+        // Процесс мог умереть между проверкой и вызовом (EBADF на закрытом fd) —
+        // это не ошибка: событие exit придёт следом. Падать всем TUI тут нельзя.
+      }
     },
 
     kill(signal = 'SIGHUP') {

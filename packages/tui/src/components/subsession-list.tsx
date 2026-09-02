@@ -2,6 +2,7 @@ import { modelBadge, type Subsession, type WorkflowInfo } from '@harnas/core';
 import { Box, Text } from 'ink';
 import type { ReactNode } from 'react';
 import { formatDuration, truncate, visibleWindow } from '../format.js';
+import { glyphs, selectionProps } from '../glyphs.js';
 
 export interface SubsessionListProps {
   subsessions: Subsession[];
@@ -40,6 +41,7 @@ export function SubsessionList({
 
   const { start, end } = visibleWindow(subsessions.length, selected, height);
   const byRunId = new Map(workflows.map((info) => [info.runId, info]));
+  const g = glyphs();
 
   return (
     <Box flexDirection="column">
@@ -68,15 +70,15 @@ export function SubsessionList({
                 {workflowLine(info, width)}
               </Text>
             )}
-            <Box justifyContent="space-between">
-              <Text {...(active ? { color: 'cyan', bold: true } : {})} wrap="truncate">
-                {active ? '▸ ' : '  '}
-                {task}
-              </Text>
-              <Text dimColor wrap="truncate">
-                {tail}
-              </Text>
-            </Box>
+            {/* Выбранный ряд подсвечен фоном — правило общее для всех списков
+                и режимов (дизайн 6.2); фон тянется до края, поэтому строка
+                добивается пробелами, а не собирается через space-between. */}
+            <Text wrap="truncate" {...selectionProps(active, g)}>
+              {'  '}
+              {task}
+              {' '.repeat(Math.max(0, width - 2 - task.length - tail.length))}
+              <Text dimColor>{tail}</Text>
+            </Text>
           </Box>
         );
       })}

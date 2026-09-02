@@ -55,10 +55,13 @@ const waitFor = async (check: () => boolean, timeoutMs = 8000): Promise<void> =>
 
 /**
  * Ink подписывается на stdin в эффекте после монтирования, а stdin в тестах —
- * обычный EventEmitter: запись до подписки теряется молча. Ждём подписку перед
- * первым нажатием.
+ * заглушка: запись до подписки теряется молча. Ждём саму подписку, а не
+ * фиксированную паузу: под нагрузкой (файлы с PTY идут параллельно) эффект
+ * опаздывает, и нажатие пропадало бы.
  */
-const mounted = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 120));
+const mounted = async (stdin: { listenerCount: (event: string) => number }): Promise<void> => {
+  await waitFor(() => stdin.listenerCount('readable') > 0);
+};
 
 /**
  * Домашняя папка харнесса и проект — во временных каталогах: App читает работы,
@@ -115,7 +118,7 @@ describe('Enter открывает сессию в правой панели', (
     );
     try {
       await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
-      await mounted();
+      await mounted(stdin);
       stdin.write(ENTER);
 
       await waitFor(() => (lastFrame() ?? '').includes('stub готов'));
@@ -134,7 +137,7 @@ describe('Enter открывает сессию в правой панели', (
     );
     try {
       await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
-      await mounted();
+      await mounted(stdin);
       stdin.write(ENTER);
       await waitFor(() => rightHeader(lastFrame() ?? '').includes('моя сессия'));
       // Прежнего «TERMINAL — …» больше нет: пара строк, как в списке и в ДЕТАЛЯХ.
@@ -151,7 +154,7 @@ describe('Enter открывает сессию в правой панели', (
     );
     try {
       await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
-      await mounted();
+      await mounted(stdin);
       stdin.write(ENTER);
       await new Promise((resolve) => setTimeout(resolve, 300));
       expect(lastFrame()).toContain('Enter на сессии');
@@ -167,7 +170,7 @@ describe('Enter открывает сессию в правой панели', (
     );
     try {
       await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
-      await mounted();
+      await mounted(stdin);
       stdin.write(ENTER);
 
       // Бинарь ищется при попытке открыть: ошибка привязана к провайдеру сессии.
@@ -187,7 +190,7 @@ describe('Enter открывает сессию в правой панели', (
     );
     try {
       await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
-      await mounted();
+      await mounted(stdin);
       stdin.write(ENTER);
       await waitFor(() => (lastFrame() ?? '').includes('stub готов'));
     } finally {
@@ -226,7 +229,7 @@ describe('раннеры разных провайдеров', () => {
     );
     try {
       await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
-      await mounted();
+      await mounted(stdin);
       stdin.write(ENTER);
 
       await waitFor(() => (lastFrame() ?? '').includes('stub готов'));
@@ -269,7 +272,7 @@ describe('новая сессия без истории', () => {
     );
     try {
       await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
-      await mounted();
+      await mounted(stdin);
       stdin.write('n');
 
       await waitFor(() => (lastFrame() ?? '').includes('stub готов'));
@@ -293,7 +296,7 @@ describe('новая сессия без истории', () => {
     );
     try {
       await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
-      await mounted();
+      await mounted(stdin);
 
       // Фильтр: все → Claude → Codex.
       stdin.write('p');
@@ -314,7 +317,7 @@ describe('новая сессия без истории', () => {
     );
     try {
       await waitFor(() => (lastFrame() ?? '').includes('Enter на сессии'));
-      await mounted();
+      await mounted(stdin);
 
       // Сессий нет вовсе — в выборе остаётся только GLM.
       stdin.write('p');

@@ -1,5 +1,6 @@
 /** Форматирование для списков. Ничего не знает про данные — только про их показ. */
 
+import { homedir } from 'node:os';
 import type { TokenTotals } from '@harnas/core';
 
 const MINUTE = 60_000;
@@ -53,6 +54,16 @@ export function truncateLeft(text: string, width: number, ellipsis = '…'): str
   return text.length > width
     ? `${ellipsis}${text.slice(text.length - Math.max(0, width - 1))}`
     : text;
+}
+
+/**
+ * Домашняя директория в пути — тильдой: в узкой колонке `~/dev/shop` читается,
+ * а хвост `…s/имя/dev/shop` — нет (дизайн 2.1, 6.4).
+ */
+export function withHome(path: string, home: string = homedir()): string {
+  if (home === '') return path;
+  if (path === home) return '~';
+  return path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
 }
 
 /**

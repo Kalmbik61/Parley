@@ -18,20 +18,31 @@ export interface ProviderFilterState {
  *
  * Перебираются только те провайдеры, чьи сессии реально есть: предлагать фильтр
  * по Codex, когда его сессий ни одной, — бессмысленно.
+ *
+ * `extra` — провайдеры сессий работ: у работы, созданной через CLI или MCP, логов
+ * ещё нет, и по одному индексу логов её провайдер было бы не выбрать (дизайн 6.5).
  */
-export function useProviderFilter(sessions: SessionIndex[]): ProviderFilterState {
+export function useProviderFilter(
+  sessions: SessionIndex[],
+  extra: readonly string[] = [],
+): ProviderFilterState {
   const [filter, setFilter] = useState<ProviderFilter>(null);
 
   const present = useMemo(() => {
     const seen = new Set<Provider>();
     for (const session of sessions) seen.add(session.provider);
+    // Набор провайдеров открыт (providers.json), а фильтр знает только встроенные:
+    // чужой id в него не превращается.
+    for (const provider of extra) {
+      if (provider in PROVIDERS) seen.add(provider as Provider);
+    }
     // Провайдеры без истории (GLM) не могут появиться из сессий, но выбрать их
     // нужно: только так до них дотягивается запуск новой сессии.
     for (const provider of Object.values(PROVIDERS)) {
       if (!provider.hasHistory) seen.add(provider.id);
     }
     return [...seen].sort();
-  }, [sessions]);
+  }, [sessions, extra]);
 
   const cycle = useCallback(() => {
     setFilter((current) => {

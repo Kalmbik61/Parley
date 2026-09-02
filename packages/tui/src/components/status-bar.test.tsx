@@ -1,12 +1,11 @@
 import { render } from 'ink-testing-library';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { pinUnicodeGlyphs } from '../../test/glyphs-env.js';
 import { StatusBar } from './status-bar.js';
 
 const frameOf = (node: Parameters<typeof render>[0]): string => render(node).lastFrame() ?? '';
 
-afterEach(() => {
-  delete process.env.HARNAS_ASCII;
-});
+pinUnicodeGlyphs();
 
 describe('StatusBar', () => {
   it('показывает событие, подсказку и постоянный хвост', () => {
