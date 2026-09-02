@@ -199,3 +199,93 @@ describe('buildIndex', () => {
     expect(index[0]?.subsessionCount).toBe(0);
   });
 });
+
+describe('задачи агентов одного workflow различимы', () => {
+  /** Общее задание, которое Workflow копирует каждому агенту дословно. */
+  const shared = [
+    'Ты правишь контент курса. Аудитория — новички.',
+    'Правила: не трогай чужие файлы, пиши коротко, проверяй ссылки.',
+    'Формат ответа: список правок с обоснованием каждой.',
+    'Дальше идёт твоя часть работы.',
+  ].join('\n');
+
+  async function workflowAgent(id: string, tail: string): Promise<void> {
+    const dir = `-Users-me-proj/s1/subagents/workflows/wf_один/agent-${id}`;
+    await put(
+      `${dir}.jsonl`,
+      line({
+        type: 'user',
+        isSidechain: true,
+        timestamp: '2026-09-01T10:00:00.000Z',
+        message: { role: 'user', content: [{ type: 'text', text: `${shared}\n${tail}` }] },
+      }),
+    );
+    await put(
+      `${dir}.meta.json`,
+      JSON.stringify({ agentType: 'workflow-subagent', spawnDepth: 1 }),
+    );
+  }
+
+  beforeEach(async () => {
+    await put('-Users-me-proj/s1.jsonl', line({ type: 'user', sessionId: 's1' }));
+  });
+
+  it('общий кусок отрезается, остаётся то, чем агенты отличаются', async () => {
+    await workflowAgent('a1', 'Урок 3: посмотри вступление.');
+    await workflowAgent('a2', 'Урок 7: посмотри домашку.');
+
+    const [discovered] = await discoverSessions(root);
+    const { subsessions } = await buildSessionTree(discovered!, root);
+
+    expect(subsessions.map((s) => s.task).sort()).toEqual([
+      'Урок 3: посмотри вступление.',
+      'Урок 7: посмотри домашку.',
+    ]);
+    expect(subsessions.every((s) => s.taskSource === 'workflow-tail')).toBe(true);
+  });
+
+  it('агент с другой ролью не мешает остальным', async () => {
+    await workflowAgent('a1', 'Урок 3: посмотри вступление.');
+    await workflowAgent('a2', 'Урок 7: посмотри домашку.');
+    // Сводящий агент начинается совсем иначе — раньше он обнулял общий префикс.
+    await put(
+      '-Users-me-proj/s1/subagents/workflows/wf_один/agent-a3.jsonl',
+      line({
+        type: 'user',
+        isSidechain: true,
+        message: { role: 'user', content: [{ type: 'text', text: 'Собери итоги всех агентов.' }] },
+      }),
+    );
+    await put(
+      '-Users-me-proj/s1/subagents/workflows/wf_один/agent-a3.meta.json',
+      JSON.stringify({ agentType: 'workflow-subagent', spawnDepth: 1 }),
+    );
+
+    const [discovered] = await discoverSessions(root);
+    const { subsessions } = await buildSessionTree(discovered!, root);
+    const tasks = subsessions.map((s) => s.task).sort();
+
+    expect(tasks).toContain('Урок 3: посмотри вступление.');
+    expect(tasks).toContain('Урок 7: посмотри домашку.');
+    expect(tasks).toContain('Собери итоги всех агентов.');
+  });
+
+  it('одинокий агент workflow остаётся с полной репликой', async () => {
+    await workflowAgent('a1', 'Урок 3: посмотри вступление.');
+
+    const [discovered] = await discoverSessions(root);
+    const { subsessions } = await buildSessionTree(discovered!, root);
+
+    expect(subsessions[0]?.taskSource).toBe('first-text');
+    expect(subsessions[0]?.task?.startsWith('Ты правишь контент')).toBe(true);
+  });
+
+  it('сырой текст не утекает в выдачу', async () => {
+    await workflowAgent('a1', 'Урок 3.');
+    await workflowAgent('a2', 'Урок 7.');
+
+    const [discovered] = await discoverSessions(root);
+    const { subsessions } = await buildSessionTree(discovered!, root);
+    expect(subsessions.every((s) => s.taskRaw === undefined)).toBe(true);
+  });
+});

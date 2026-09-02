@@ -21,8 +21,16 @@ export interface Subsession {
   name: string | null;
   /** Что делал агент: description из meta, иначе первая реплика. */
   task: string | null;
-  /** Откуда взята задача — meta точнее, реплика приблизительна. */
-  taskSource: 'meta' | 'first-text' | null;
+  /**
+   * Откуда взята задача. `workflow-tail` — реплика без общего для всего workflow
+   * префикса: у таких агентов первые тысячи символов совпадают дословно.
+   */
+  taskSource: 'meta' | 'first-text' | 'workflow-tail' | null;
+  /**
+   * Полная первая реплика, обрезанная до разумного предела. Нужна только чтобы
+   * сравнить агентов одного workflow между собой; дерево её убирает.
+   */
+  taskRaw?: string;
   toolUseId: string | null;
   /** Уникальные модели агента — из них собираются бейджи. */
   models: string[];
@@ -64,6 +72,13 @@ function oneLine(text: string, limit = 200): string {
 }
 
 /**
+ * Сколько текста первой реплики сохранять для сравнения. У workflow-агентов
+ * общий префикс доходит до нескольких тысяч символов — короче нельзя, различие
+ * просто не поместится.
+ */
+const RAW_TASK_LIMIT = 8000;
+
+/**
  * Индексирует файл подсессии. Задача берётся из meta.description; у workflow-агентов
  * meta содержит только {agentType, spawnDepth}, поэтому там задача — первая реплика.
  */
@@ -74,14 +89,15 @@ export async function indexSubsession(
   const meta = await readSubagentMeta(subagent.metaFile);
 
   const models = new Set<string>();
-  let firstText: string | null = null;
+  // Контейнер, а не let: TS сужает тип переменной, присвоенной только в колбэке.
+  const first: { text: string | null } = { text: null };
   let startedAt: string | null = null;
   let endedAt: string | null = null;
 
   const stats = await forEachJsonlRecord(subagent.file, (raw) => {
     const record = adapter.toSessionRecord(raw);
     if (record.model !== null) models.add(record.model);
-    if (firstText === null && record.text !== null) firstText = record.text;
+    if (first.text === null && record.text !== null) first.text = record.text;
 
     const at = record.timestamp;
     if (at !== null) {
@@ -90,10 +106,12 @@ export async function indexSubsession(
     }
   });
 
+  const firstText = first.text;
   const task = meta?.description ?? (firstText === null ? null : oneLine(firstText));
   const taskSource = meta?.description ? 'meta' : task === null ? null : 'first-text';
 
   return {
+    ...(firstText === null ? {} : { taskRaw: firstText.slice(0, RAW_TASK_LIMIT) }),
     agentId: subagent.agentId,
     file: subagent.file,
     workflowRunId: subagent.workflowRunId,
