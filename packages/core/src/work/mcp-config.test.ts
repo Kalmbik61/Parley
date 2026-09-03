@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  MCP_SERVER_BIN,
+  MCP_SERVER_ENTRY,
   MCP_SERVER_NAME,
   codexMcpOverride,
   mcpConfig,
@@ -16,13 +16,17 @@ import { createWork } from './store.js';
 const params = { workDir: '/project/.harnas/works/w-0042', sessionId: 's-02' };
 
 describe('конфиг MCP-сервера на сессию', () => {
-  it('описывает один stdio-сервер harnas-mcp с окружением сессии', () => {
+  it('описывает один stdio-сервер по абсолютному пути с окружением сессии', () => {
+    // Bin `harnas-mcp` есть в PATH только под pnpm; агент стартует откуда угодно,
+    // поэтому сервер задаётся node текущего процесса и абсолютным путём к скрипту.
+    expect(path.isAbsolute(MCP_SERVER_ENTRY)).toBe(true);
+    expect(MCP_SERVER_ENTRY.endsWith(path.join('mcp', 'server.js'))).toBe(true);
     expect(mcpConfig(params)).toEqual({
       mcpServers: {
         [MCP_SERVER_NAME]: {
           type: 'stdio',
-          command: MCP_SERVER_BIN,
-          args: [],
+          command: process.execPath,
+          args: [MCP_SERVER_ENTRY],
           env: {
             HARNAS_WORK_DIR: '/project/.harnas/works/w-0042',
             HARNAS_SESSION_ID: 's-02',
@@ -35,6 +39,7 @@ describe('конфиг MCP-сервера на сессию', () => {
   it('бинарь сервера переопределяется: установка бывает не только из PATH', () => {
     const config = mcpConfig({ ...params, command: '/opt/harnas/harnas-mcp' });
     expect(config.mcpServers[MCP_SERVER_NAME]?.command).toBe('/opt/harnas/harnas-mcp');
+    expect(config.mcpServers[MCP_SERVER_NAME]?.args).toEqual([]);
   });
 
   it('JSON разбирается обратно в тот же конфиг', () => {
@@ -43,7 +48,8 @@ describe('конфиг MCP-сервера на сессию', () => {
 
   it('codex получает тот же сервер инлайн-таблицей TOML для -c', () => {
     expect(codexMcpOverride(params)).toBe(
-      'mcp_servers.harnas={command="harnas-mcp",args=[],' +
+      `mcp_servers.harnas={command=${JSON.stringify(process.execPath)},` +
+        `args=[${JSON.stringify(MCP_SERVER_ENTRY)}],` +
         'env={HARNAS_WORK_DIR="/project/.harnas/works/w-0042",HARNAS_SESSION_ID="s-02"}}',
     );
   });

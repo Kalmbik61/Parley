@@ -1,10 +1,25 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { McpConfigKind } from '../providers.js';
 import { workPaths } from './store.js';
 
 /** Имя bin MCP-сервера в `packages/core/package.json`. */
 export const MCP_SERVER_BIN = 'harnas-mcp';
+
+/** Скрипт сервера по абсолютному пути — лежит рядом с этим модулем, в `mcp/`. */
+export const MCP_SERVER_ENTRY = fileURLToPath(new URL('../mcp/server.js', import.meta.url));
+
+/**
+ * Чем запускать сервер. Bin `harnas-mcp` есть в PATH только под pnpm-скриптами,
+ * а агент стартует из любого терминала — поэтому по умолчанию берём node текущего
+ * процесса и скрипт по абсолютному пути. Явная команда остаётся как есть.
+ */
+function serverLaunch(command?: string): { command: string; args: string[] } {
+  return command === undefined
+    ? { command: process.execPath, args: [MCP_SERVER_ENTRY] }
+    : { command, args: [] };
+}
 
 /** Имя сервера в конфиге: под ним агент видит инструменты как `mcp__harnas__*`. */
 export const MCP_SERVER_NAME = 'harnas';
@@ -14,7 +29,7 @@ export interface McpConfigParams {
   workDir: string;
   /** Id сессии в карте — переменная `HARNAS_SESSION_ID`. */
   sessionId: string;
-  /** Чем запускать сервер; по умолчанию bin из PATH. */
+  /** Чем запускать сервер; по умолчанию node и скрипт сервера по абсолютному пути. */
   command?: string;
 }
 
@@ -39,8 +54,7 @@ export function mcpConfig({ workDir, sessionId, command }: McpConfigParams): Mcp
     mcpServers: {
       [MCP_SERVER_NAME]: {
         type: 'stdio',
-        command: command ?? MCP_SERVER_BIN,
-        args: [],
+        ...serverLaunch(command),
         env: { HARNAS_WORK_DIR: workDir, HARNAS_SESSION_ID: sessionId },
       },
     },
@@ -62,7 +76,9 @@ const tomlString = (value: string): string => JSON.stringify(value);
  */
 export function codexMcpOverride({ workDir, sessionId, command }: McpConfigParams): string {
   const env = `env={HARNAS_WORK_DIR=${tomlString(workDir)},HARNAS_SESSION_ID=${tomlString(sessionId)}}`;
-  return `mcp_servers.${MCP_SERVER_NAME}={command=${tomlString(command ?? MCP_SERVER_BIN)},args=[],${env}}`;
+  const launch = serverLaunch(command);
+  const args = `[${launch.args.map(tomlString).join(',')}]`;
+  return `mcp_servers.${MCP_SERVER_NAME}={command=${tomlString(launch.command)},args=${args},${env}}`;
 }
 
 /** Значение подстановки `{mcpConfig}` для записи реестра. */
