@@ -27,6 +27,12 @@ export interface TerminalSnapshot {
   mouseTracking: MouseTracking;
   /** Гость ждёт вставку в скобках ESC[200~ … ESC[201~. */
   bracketedPaste: boolean;
+  /**
+   * Курсор гостя: колонка и строка относительно видимой области, и показывает ли
+   * он его вообще (DECTCEM, `ESC[?25h` / `ESC[?25l`). Хост-терминал свой курсор
+   * прячет — Ink рисует кадр целиком, — так что каретку в панели рисуем сами.
+   */
+  cursor: { x: number; y: number; visible: boolean };
 }
 
 export interface TerminalBuffer {
@@ -144,6 +150,19 @@ export function createTerminalBuffer(
   // Один переиспользуемый объект ячейки: на кадр их тысячи, аллокации ни к чему.
   let cellBuffer: IBufferCell | undefined;
 
+  // Видимость курсора xterm наружу не отдаёт — ловим DECTCEM сами. Обработчик
+  // возвращает false, чтобы xterm обработал последовательность как обычно.
+  let cursorVisible = true;
+  const dectcem = (params: (number | number[])[]): boolean => params.includes(25);
+  terminal.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
+    if (dectcem(params)) cursorVisible = true;
+    return false;
+  });
+  terminal.parser.registerCsiHandler({ prefix: '?', final: 'l' }, (params) => {
+    if (dectcem(params)) cursorVisible = false;
+    return false;
+  });
+
   return {
     write(chunk, done) {
       terminal.write(chunk, done);
@@ -199,6 +218,13 @@ export function createTerminalBuffer(
         altScreen: buffer.type === 'alternate',
         mouseTracking: terminal.modes.mouseTrackingMode,
         bracketedPaste: terminal.modes.bracketedPasteMode,
+        cursor: {
+          x: buffer.cursorX,
+          // cursorY считается от baseY (низ буфера), а показываем мы от viewportY:
+          // при прокрутке в скроллбэк курсор уезжает за пределы экрана.
+          y: buffer.baseY + buffer.cursorY - buffer.viewportY,
+          visible: cursorVisible,
+        },
       };
     },
 

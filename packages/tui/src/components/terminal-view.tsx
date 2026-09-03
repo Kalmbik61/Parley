@@ -1,5 +1,6 @@
 import { Box, Text } from 'ink';
 import type { ReactNode } from 'react';
+import stringWidth from 'string-width';
 import type { TerminalSegment, TerminalSnapshot } from '../pty/terminal-buffer.js';
 
 export interface TerminalViewProps {
@@ -21,20 +22,63 @@ function styleProps(segment: TerminalSegment): Record<string, unknown> {
   return props;
 }
 
+/**
+ * Строка с кареткой: ячейка в колонке `x` выделяется в свой сегмент и
+ * инвертируется (на уже инверсной — наоборот). Колонки считаются по ширине
+ * символов, как их считает и терминал: широкий символ занимает две.
+ * За концом строки каретка рисуется пробелом с отступом до своей колонки.
+ */
+export function withCursor(segments: readonly TerminalSegment[], x: number): TerminalSegment[] {
+  const result: TerminalSegment[] = [];
+  let column = 0;
+  let placed = false;
+
+  for (const segment of segments) {
+    const { text, ...style } = segment;
+    if (placed || column + stringWidth(text) <= x) {
+      result.push(segment);
+      column += stringWidth(text);
+      continue;
+    }
+    let before = '';
+    let under = '';
+    let after = '';
+    for (const char of Array.from(text)) {
+      if (under === '' && column >= x) under = char;
+      else if (under === '') before += char;
+      else after += char;
+      column += stringWidth(char);
+    }
+    if (before !== '') result.push({ ...style, text: before });
+    result.push({ ...style, inverse: style.inverse !== true, text: under });
+    if (after !== '') result.push({ ...style, text: after });
+    placed = true;
+  }
+
+  if (!placed) {
+    if (column < x) result.push({ text: ' '.repeat(x - column) });
+    result.push({ inverse: true, text: ' ' });
+  }
+  return result;
+}
+
 /** Рисует снимок экрана PTY. Всю работу с управляющими кодами уже сделал xterm. */
 export function TerminalView({ snapshot, height }: TerminalViewProps): ReactNode {
   const lines = snapshot.lines.slice(0, Math.max(0, height));
+  const { cursor } = snapshot;
 
   return (
     <Box flexDirection="column">
       {/* Ключ — номер строки экрана: у строк терминала другой идентичности нет. */}
       {lines.map((segments, y) => (
         <Text key={y} wrap="truncate">
-          {segments.map((segment, at) => (
-            <Text key={at} {...styleProps(segment)}>
-              {segment.text}
-            </Text>
-          ))}
+          {(cursor.visible && cursor.y === y ? withCursor(segments, cursor.x) : segments).map(
+            (segment, at) => (
+              <Text key={at} {...styleProps(segment)}>
+                {segment.text}
+              </Text>
+            ),
+          )}
         </Text>
       ))}
     </Box>

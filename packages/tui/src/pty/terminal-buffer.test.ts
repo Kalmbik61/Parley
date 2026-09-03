@@ -131,3 +131,32 @@ describe('createTerminalBuffer', () => {
     buffer.dispose();
   });
 });
+
+describe('курсор в снимке', () => {
+  it('позиция курсора идёт за текстом и за CUP', async () => {
+    const buffer = createTerminalBuffer(20, 4);
+    await write(buffer, 'abc');
+    expect(buffer.snapshot().cursor).toEqual({ x: 3, y: 0, visible: true });
+
+    await write(buffer, `${ESC}[2;4H`);
+    expect(buffer.snapshot().cursor).toEqual({ x: 3, y: 1, visible: true });
+    buffer.dispose();
+  });
+
+  it('DECTCEM прячет и показывает курсор', async () => {
+    const buffer = createTerminalBuffer(20, 4);
+    await write(buffer, `${ESC}[?25l`);
+    expect(buffer.snapshot().cursor.visible).toBe(false);
+    await write(buffer, `${ESC}[?25h`);
+    expect(buffer.snapshot().cursor.visible).toBe(true);
+    buffer.dispose();
+  });
+
+  it('после прокрутки экрана курсор остаётся в видимой области', async () => {
+    const buffer = createTerminalBuffer(20, 3);
+    for (let i = 0; i < 6; i++) await write(buffer, `строка ${i}\r\n`);
+    // Три строки видно, курсор в нижней — y относительно экрана, не буфера.
+    expect(buffer.snapshot().cursor).toEqual({ x: 0, y: 2, visible: true });
+    buffer.dispose();
+  });
+});
