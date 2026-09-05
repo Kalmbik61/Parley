@@ -39,6 +39,10 @@ describe('addSession', () => {
     expect(first.summary).toBeNull();
     expect(first.summarySource).toBeNull();
     expect(first.metrics).toBeNull();
+    // Процесса ещё нет: поля запуска заполняет тот, кто его поднимет.
+    expect(first.pid).toBeNull();
+    expect(first.startedAtProcess).toBeNull();
+    expect(first.launchedBy).toBeNull();
     expect(map.sessions).toHaveLength(2);
   });
 
@@ -81,15 +85,12 @@ describe('transitionSession', () => {
 
   const allowed: Array<[SessionStatus, SessionStatus]> = [
     ['pending', 'active'],
-    ['active', 'idle'],
-    ['idle', 'active'],
     ['active', 'exited'],
-    ['idle', 'exited'],
     ['exited', 'active'],
     ['done', 'active'],
     ['failed', 'active'],
     ['active', 'done'],
-    ['idle', 'failed'],
+    ['active', 'failed'],
     ['pending', 'done'],
     ['exited', 'done'],
     ['exited', 'failed'],
@@ -105,10 +106,7 @@ describe('transitionSession', () => {
 
   const forbidden: Array<[SessionStatus, SessionStatus]> = [
     ['active', 'pending'],
-    ['pending', 'idle'],
     ['pending', 'exited'],
-    ['done', 'idle'],
-    ['exited', 'idle'],
     ['active', 'active'],
     ['done', 'exited'],
   ];
@@ -171,6 +169,36 @@ describe('parseMap', () => {
   it('читает карту нужной формы', () => {
     const map = emptyMap();
     expect(parseMap(JSON.stringify(map), 'map.json')).toEqual(map);
+  });
+
+  it('карта со статусом idle читается как active — и в history тоже', () => {
+    const map = emptyMap();
+    const session = addSession(map, { provider: 'claude', label: 'план', task: 't' });
+    // Так карту писала версия до 2026-09-05: статус idle был частью цикла.
+    const legacy = JSON.parse(JSON.stringify(map)) as {
+      sessions: { status: string; history: { status: string; at: string }[] }[];
+    };
+    (legacy.sessions[0] as { status: string }).status = 'idle';
+    legacy.sessions[0]?.history.push({ status: 'idle', at: '2026-09-02T11:00:00.000Z' });
+
+    const parsed = parseMap(JSON.stringify(legacy), 'map.json');
+    expect(parsed.sessions[0]?.status).toBe('active');
+    expect(parsed.sessions[0]?.history.map((entry) => entry.status)).toEqual(['pending', 'active']);
+    expect(session.id).toBe('s-01');
+  });
+
+  it('в старой карте без полей процесса они читаются как null', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'план', task: 't' });
+    const legacy = JSON.parse(JSON.stringify(map)) as { sessions: Record<string, unknown>[] };
+    delete legacy.sessions[0]?.['pid'];
+    delete legacy.sessions[0]?.['startedAtProcess'];
+    delete legacy.sessions[0]?.['launchedBy'];
+
+    const parsed = parseMap(JSON.stringify(legacy), 'map.json');
+    expect(parsed.sessions[0]?.pid).toBeNull();
+    expect(parsed.sessions[0]?.startedAtProcess).toBeNull();
+    expect(parsed.sessions[0]?.launchedBy).toBeNull();
   });
 
   it('битый json — ошибка', () => {

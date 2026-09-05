@@ -32,7 +32,6 @@ import { useHostTerminalModes } from './pty/use-host-modes.js';
 import { ctrlByte, DEFAULT_ESCAPE_BYTE, usePtyInput } from './pty/use-pty-input.js';
 import { usePtyResize } from './pty/use-pty-resize.js';
 import { usePtyTerminal } from './pty/use-pty-terminal.js';
-import { useLifecycle } from './use-lifecycle.js';
 import { useNavigation, type PaneId } from './use-navigation.js';
 import { useProviderFilter } from './use-provider-filter.js';
 import { useSessionLink } from './use-session-link.js';
@@ -211,7 +210,7 @@ export function App({
     [fail],
   );
 
-  // Процесс сессии работы завершился: `active`/`idle` → `exited` с кодом выхода
+  // Процесс сессии работы завершился: `active` → `exited` с кодом выхода
   // и фиксацией метрик (спецификация, раздел 6). Отчитавшуюся сессию не трогаем.
   const onAgentExit = useCallback(
     (target: AgentTarget, exit: PtyExit) => {
@@ -347,7 +346,7 @@ export function App({
   const openSessionRow = useCallback(
     (row: WorkRowSession) => {
       const { status: state } = row.session;
-      if (state === 'active' || state === 'idle') {
+      if (state === 'active') {
         attachWork(row);
         return;
       }
@@ -549,14 +548,6 @@ export function App({
     }
     wasLive.current = liveSameProvider;
   }, [liveSameProvider, activeProvider, push]);
-
-  // Статусы, которые ведёт харнесс: `active ↔ idle` по молчанию лога (раздел 6).
-  // `idle` — «жив, но молчит», поэтому его получают только сессии со своим PTY.
-  useLifecycle({
-    works,
-    live,
-    alive: (project, workId, sessionId) => agent.alive(workRunKey(project, workId, sessionId)),
-  });
 
   // Сессии провайдеров без внешнего id (codex) привязываются к своему логу по
   // cwd и времени запуска: без этого нет ни метрик, ни возобновления (раздел 5).

@@ -14,6 +14,7 @@ import { buildIndex, buildSessionTree } from './session-tree.js';
 import { writeBrief } from './work/brief.js';
 import { addSession } from './work/map.js';
 import { mcpConfigValue, writeMcpConfig } from './work/mcp-config.js';
+import { writeWorkSettings } from './work/settings-file.js';
 import {
   createWork,
   readMap,
@@ -37,8 +38,9 @@ const USAGE = `harnas-core — индекс сессий Claude Code в JSON
                                             карта работы
   harnas-core work session new --work <id> --provider <p> --label <l>
       --task <t> [--context s-01,s-02] [--cwd <путь>]
-                                            запись pending, бриф, MCP-конфиг и
-                                            готовая команда запуска
+                                            запись pending, бриф, MCP-конфиг,
+                                            settings.json с хуками и готовая
+                                            команда запуска
 
   --json   формат по умолчанию и единственный, принимается для совместимости
   --root   корень истории (по умолчанию ~/.claude/projects, только чтение)
@@ -126,6 +128,9 @@ async function newWorkSession(argv: string[]): Promise<void> {
     }
     const session = addSession(current, { provider, label, task, parent: null, contextFrom });
     if (uuid !== null) session.providerSessionId = uuid;
+    // Процесс поднимет пользователь напечатанной командой: pid харнессу неизвестен,
+    // живость такой сессии видна только по логу (дизайн TUI v2, раздел 5.4).
+    session.launchedBy = 'cli';
     created = session.id;
   });
 
@@ -144,10 +149,15 @@ async function newWorkSession(argv: string[]): Promise<void> {
     { workDir: paths.dir, sessionId: created },
     mcpFile ?? '',
   );
+  // Файл настроек с хуками нужен только тем, кто его принимает (`claude --settings`).
+  const settingsFile = (entry.runner.args ?? []).includes('{settingsFile}')
+    ? await writeWorkSettings(projectPath, workId)
+    : null;
 
   const subs: RunnerSubstitutions = { prompt };
   if (uuid !== null) subs.sessionUuid = uuid;
   if (mcp !== undefined) subs.mcpConfig = mcp;
+  if (settingsFile !== null) subs.settingsFile = settingsFile;
   const { command, args } = startCommand(entry, subs);
 
   print({
@@ -155,6 +165,8 @@ async function newWorkSession(argv: string[]): Promise<void> {
     sessionId: created,
     brief,
     mcpConfig: mcpFile,
+    settings: settingsFile,
+    launchedBy: 'cli',
     command,
     args,
     cwd: projectPath,

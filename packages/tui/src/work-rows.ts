@@ -28,7 +28,7 @@ export interface LiveMetrics {
   model: string | null;
   /**
    * Время последней записи в логе провайдера: от него ДЕТАЛИ считают «молчит Nм»
-   * у `idle` (дизайн 3). В карте его нет — только в индексе логов.
+   * (дизайн 3). В карте его нет — только в индексе логов.
    */
   lastRecordAt: string | null;
 }
@@ -270,15 +270,8 @@ export function buildRows(
 }
 
 /** Порядок показа частей агрегата и порядок, в котором они отбрасываются (6.4). */
-const TAIL_ORDER: readonly SessionStatus[] = [
-  'active',
-  'pending',
-  'idle',
-  'exited',
-  'done',
-  'failed',
-];
-const DROP_ORDER: readonly SessionStatus[] = ['done', 'failed', 'exited', 'idle', 'pending'];
+const TAIL_ORDER: readonly SessionStatus[] = ['active', 'pending', 'exited', 'done', 'failed'];
+const DROP_ORDER: readonly SessionStatus[] = ['done', 'failed', 'exited', 'pending'];
 
 /**
  * Хвост строки работы: `●2 ◌1 ▤1`. Не отбрасывается целиком — на самой узкой

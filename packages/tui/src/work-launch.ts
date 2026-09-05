@@ -212,7 +212,7 @@ export async function startSession(
 /**
  * Привязка сессии к логу провайдера, который не принимает id снаружи: сессия
  * ищется по cwd и времени запуска (спецификация, раздел 5). Найденный id
- * пишется в карту — без него нет ни метрик, ни `idle`, ни возобновления.
+ * пишется в карту — без него нет ни метрик, ни возобновления.
  *
  * `null` — привязывать нечего или лог ещё не появился: следующее событие
  * watcher попробует снова.
@@ -244,7 +244,7 @@ export async function linkSession(
 }
 
 /**
- * Процесс сессии завершился: `active`/`idle` → `exited` с кодом выхода в
+ * Процесс сессии завершился: `active` → `exited` с кодом выхода в
  * `history` и фиксацией итоговых метрик. Сессия, успевшая отчитаться, остаётся
  * в своём `done`/`failed` — отчёт агента важнее выхода процесса (раздел 6).
  */
@@ -259,7 +259,7 @@ export async function finishExited(
     (candidate) => candidate.id === sessionId,
   );
   if (session === undefined) return;
-  if (session.status !== 'active' && session.status !== 'idle') return;
+  if (session.status !== 'active') return;
 
   await finishSession(projectPath, workId, sessionId, 'exited', {
     ...roots,

@@ -15,8 +15,7 @@ import type {
  */
 const TRANSITIONS: Readonly<Record<SessionStatus, readonly SessionStatus[]>> = {
   pending: ['active'],
-  active: ['idle', 'exited'],
-  idle: ['active', 'exited'],
+  active: ['exited'],
   exited: ['active'],
   done: ['active'],
   failed: ['active'],
@@ -94,6 +93,9 @@ export function addSession(
     history: [{ status: 'pending', at }],
     startedAt: null,
     endedAt: null,
+    pid: null,
+    startedAtProcess: null,
+    launchedBy: null,
     providerSessionId: null,
     metrics: null,
     summary: null,
@@ -148,19 +150,26 @@ export function transitionSession(
   session.history.push(entry);
   if (to === 'active' && session.startedAt === null) session.startedAt = at;
   // Возобновлённая сессия снова жива, завершённая — фиксирует время выхода.
-  session.endedAt = to === 'active' || to === 'idle' ? null : at;
+  session.endedAt = to === 'active' ? null : at;
   return session;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+/**
+ * Статус `idle` удалён из жизненного цикла 2026-09-05 (дизайн TUI v2, раздел 9):
+ * карты, написанные до этого, читаются как `active`. Миграция при чтении, а не
+ * отдельной командой: карту всё равно перепишет первая же мутация.
+ */
+const LEGACY_IDLE = 'idle';
+
 /** Запись сессии проверяем по полям, от которых зависят мутации: id, статус, history. */
 const isSessionShape = (value: unknown): boolean =>
   isRecord(value) &&
   typeof value.id === 'string' &&
   typeof value.status === 'string' &&
-  Object.hasOwn(TRANSITIONS, value.status) &&
+  (Object.hasOwn(TRANSITIONS, value.status) || value.status === LEGACY_IDLE) &&
   Array.isArray(value.history);
 
 const isMessageShape = (value: unknown): boolean => isRecord(value) && typeof value.id === 'string';
@@ -190,5 +199,28 @@ export function parseMap(raw: string, file: string): WorkMap {
   ) {
     throw new Error(`карта ${file} не парсится: неожиданная форма`);
   }
-  return data as unknown as WorkMap;
+
+  const map = data as unknown as WorkMap;
+  for (const session of map.sessions) {
+    migrateSession(session as unknown as Record<string, unknown>);
+  }
+  return map;
+}
+
+/**
+ * Приводит запись сессии к текущей форме: `idle` становится `active` (и в
+ * `history` тоже — иначе в архиве остался бы статус, которого больше нет), а
+ * полей процесса в старых картах просто не было.
+ */
+function migrateSession(session: Record<string, unknown>): void {
+  if (session['status'] === LEGACY_IDLE) session['status'] = 'active';
+  const history = session['history'];
+  if (Array.isArray(history)) {
+    for (const entry of history) {
+      if (isRecord(entry) && entry['status'] === LEGACY_IDLE) entry['status'] = 'active';
+    }
+  }
+  session['pid'] ??= null;
+  session['startedAtProcess'] ??= null;
+  session['launchedBy'] ??= null;
 }

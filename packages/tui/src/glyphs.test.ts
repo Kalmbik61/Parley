@@ -22,7 +22,6 @@ describe('glyphs', () => {
     const g = glyphs({ HARNAS_ASCII: '1' });
     expect(g.pending).toBe('.');
     expect(g.active).toBe('*');
-    expect(g.idle).toBe('~');
     expect(g.exited).toBe('!');
     expect(g.done).toBe('+');
     expect(g.failed).toBe('x');
@@ -60,10 +59,10 @@ describe('glyphs', () => {
 describe('statusGlyph', () => {
   it('каждому статусу свой глиф — в монохроме различимы все', () => {
     const g = glyphs({});
-    const marks = (['pending', 'active', 'idle', 'exited', 'done', 'failed'] as const).map(
-      (status) => statusGlyph(status, g),
+    const marks = (['pending', 'active', 'exited', 'done', 'failed'] as const).map((status) =>
+      statusGlyph(status, g),
     );
-    expect(marks).toEqual(['◌', '●', '◐', '○', '✓', '✗']);
+    expect(marks).toEqual(['◌', '●', '○', '✓', '✗']);
     expect(new Set(marks).size).toBe(marks.length);
   });
 });
@@ -72,7 +71,6 @@ describe('statusColor', () => {
   it('цвета по таблице 6.2', () => {
     expect(statusColor('active')).toEqual({ color: 'green' });
     expect(statusColor('done')).toEqual({ color: 'green' });
-    expect(statusColor('idle')).toEqual({ color: 'yellow' });
     expect(statusColor('exited')).toEqual({ color: 'yellow' });
     expect(statusColor('failed')).toEqual({ color: 'red' });
     expect(statusColor('pending')).toEqual({ dimColor: true });

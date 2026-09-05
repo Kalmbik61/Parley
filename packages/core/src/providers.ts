@@ -29,13 +29,14 @@ export interface RunnerConfig {
   command: string;
   /**
    * Аргументы запуска новой сессии координации. Подстановки: `{sessionUuid}` —
-   * uuid, сгенерированный харнессом, `{mcpConfig}`, `{prompt}` — стартовый бриф.
+   * uuid, сгенерированный харнессом, `{mcpConfig}`, `{settingsFile}` — файл
+   * настроек работы с хуками, `{prompt}` — стартовый бриф.
    * undefined — новая сессия запускается без аргументов.
    */
   args?: string[];
   /**
    * Аргументы для возобновления конкретной сессии. Подстановки:
-   * `{providerSessionId}`, `{mcpConfig}`. undefined — провайдер не умеет
+   * `{providerSessionId}`, `{mcpConfig}`, `{settingsFile}`. undefined — провайдер не умеет
    * открывать сессию по идентификатору, запускаем без аргументов.
    */
   resumeArgs?: string[];
@@ -84,8 +85,25 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
     linkBy: 'session-id',
     runner: {
       command: 'claude',
-      args: ['--session-id', '{sessionUuid}', '--mcp-config', '{mcpConfig}', '{prompt}'],
-      resumeArgs: ['--resume', '{providerSessionId}', '--mcp-config', '{mcpConfig}'],
+      // `--settings` — документированный флаг Claude Code: файл мержится с
+      // настройками пользователя, ничего в `~/.claude` не пишется (TUI v2, 4.2).
+      args: [
+        '--session-id',
+        '{sessionUuid}',
+        '--mcp-config',
+        '{mcpConfig}',
+        '--settings',
+        '{settingsFile}',
+        '{prompt}',
+      ],
+      resumeArgs: [
+        '--resume',
+        '{providerSessionId}',
+        '--mcp-config',
+        '{mcpConfig}',
+        '--settings',
+        '{settingsFile}',
+      ],
       // `-p <промпт>` — один ответ без интерактива: им считается дозаказ резюме.
       printArgs: ['-p', '{prompt}'],
       mcpConfig: 'json-file',
@@ -132,11 +150,13 @@ export function providersWithHistory(): ProviderInfo[] {
 export interface RunnerSubstitutions {
   sessionUuid?: string;
   mcpConfig?: string;
+  /** Путь к `settings.json` работы с хуками (дизайн TUI v2, раздел 4.2). */
+  settingsFile?: string;
   prompt?: string;
   providerSessionId?: string;
 }
 
-const PLACEHOLDER = /^\{(sessionUuid|mcpConfig|prompt|providerSessionId)\}$/;
+const PLACEHOLDER = /^\{(sessionUuid|mcpConfig|settingsFile|prompt|providerSessionId)\}$/;
 
 /**
  * Подставляет значения в шаблон аргументов.

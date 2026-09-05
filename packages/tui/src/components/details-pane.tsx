@@ -102,7 +102,9 @@ function statusLine(row: WorkRowSession, layout: Layout): DetailLine {
   const at = final && layout.wide ? ` ${formatClock(last?.at ?? session.endedAt)}` : '';
 
   const parts = [formatDuration(live.durationMs)];
-  if (session.status === 'idle') {
+  // Статуса `idle` больше нет: молчание показывается у живой сессии — это время
+  // с последнего события (дизайн TUI v2, раздел 4.3).
+  if (session.status === 'active') {
     const silence = silenceMs(live.lastRecordAt, layout.now);
     if (silence !== null) parts.push(`молчит ${formatDuration(silence)}`);
   }

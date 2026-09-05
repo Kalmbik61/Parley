@@ -4,10 +4,13 @@ import type { TokenTotals } from '../counters.js';
 export type WorkStatus = 'active' | 'done' | 'archived';
 
 /**
- * Статус сессии. Первые четыре ставит харнесс по PTY и логам, `done` и `failed`
- * приходят только из отчёта агента (спецификация, раздел 3).
+ * Статус сессии. Первые три ставит харнесс по PTY, хукам и логам, `done` и
+ * `failed` приходят только из отчёта агента (спецификация, раздел 3).
+ *
+ * `idle` удалён 2026-09-05 (ревью TUI v2): простой живого агента описывает не
+ * карта, а `activity`; старые карты с `idle` читаются как `active`.
  */
-export type SessionStatus = 'pending' | 'active' | 'idle' | 'exited' | 'done' | 'failed';
+export type SessionStatus = 'pending' | 'active' | 'exited' | 'done' | 'failed';
 
 /**
  * Одна ступень жизненного цикла. Код выхода и сигнал есть только у перехода
@@ -19,6 +22,9 @@ export interface HistoryEntry {
   exitCode?: number;
   signal?: number;
 }
+
+/** Кто запустил сессию: панель харнесса или напечатанная команда CLI. */
+export type LaunchedBy = 'tui' | 'cli';
 
 /** Резюме написал сам агент через `report` или его дозаказали через `claude -p`. */
 export type SummarySource = 'agent' | 'auto';
@@ -57,6 +63,14 @@ export interface WorkSession {
   history: HistoryEntry[];
   startedAt: string | null;
   endedAt: string | null;
+  /**
+   * Pid процесса агента. `null` — процесс поднимал не харнесс (напечатанная
+   * команда CLI), живость такой сессии видна только по молчанию лога.
+   */
+  pid: number | null;
+  /** Время старта процесса из ОС: по нему ловится переиспользованный pid. */
+  startedAtProcess: string | null;
+  launchedBy: LaunchedBy | null;
   /** Id сессии у провайдера: для Claude — uuid jsonl-файла. */
   providerSessionId: string | null;
   metrics: SessionMetrics | null;

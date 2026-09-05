@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -155,6 +155,8 @@ describe('harnas-core work session new', () => {
     expect(printed['sessionId']).toBe('s-01');
     expect(printed['cwd']).toBe(project);
     expect(printed['command']).toBe('claude');
+    // Процесс поднимает пользователь: запуск помечается как cli (дизайн TUI v2, 5.4).
+    expect(printed['launchedBy']).toBe('cli');
     expect(printed['env']).toEqual({
       HARNAS_WORK_DIR: workPaths(project, 'w-0001').dir,
       HARNAS_SESSION_ID: 's-01',
@@ -164,6 +166,7 @@ describe('harnas-core work session new', () => {
     const uuid = args[args.indexOf('--session-id') + 1] as string;
     expect(uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     expect(args[args.indexOf('--mcp-config') + 1]).toBe(printed['mcpConfig']);
+    expect(args[args.indexOf('--settings') + 1]).toBe(printed['settings']);
     // Стартовый промпт — текст брифа: `claude` принимает его позиционным аргументом.
     const brief = await readFile(printed['brief'] as string, 'utf8');
     expect(args.at(-1)).toBe(brief);
@@ -179,9 +182,32 @@ describe('harnas-core work session new', () => {
       parent: null,
       contextFrom: [],
       status: 'pending',
+      pid: null,
+      startedAtProcess: null,
+      launchedBy: 'cli',
       // Id известен заранее (`--session-id`), поэтому связь с логом не теряется.
       providerSessionId: uuid,
     });
+
+    // Файл настроек один на работу, каталог событий заведён под хук (4.2).
+    expect(printed['settings']).toBe(workPaths(project, 'w-0001').settings);
+    const settings = JSON.parse(await readFile(printed['settings'] as string, 'utf8')) as {
+      hooks: Record<string, { hooks: { command: string }[] }[]>;
+    };
+    expect(Object.keys(settings.hooks)).toEqual([
+      'UserPromptSubmit',
+      'Notification',
+      'PermissionRequest',
+      'Stop',
+      'SubagentStart',
+      'SubagentStop',
+      'SessionStart',
+      'SessionEnd',
+    ]);
+    expect(settings.hooks['Stop']?.[0]?.hooks[0]?.command).toBe(
+      'cat >> "$HARNAS_WORK_DIR/events/$HARNAS_SESSION_ID.jsonl" || true',
+    );
+    expect((await stat(workPaths(project, 'w-0001').events)).isDirectory()).toBe(true);
 
     const config = JSON.parse(await readFile(printed['mcpConfig'] as string, 'utf8')) as {
       mcpServers: Record<string, { command: string; env: Record<string, string> }>;
@@ -211,6 +237,8 @@ describe('harnas-core work session new', () => {
     const args = printed['args'] as string[];
     expect(args).not.toContain('--session-id');
     expect(printed['mcpConfig']).toBeNull();
+    // Хуки — возможность Claude Code: чужому провайдеру файл настроек не пишется.
+    expect(printed['settings']).toBeNull();
     expect(args[args.indexOf('-c') + 1]).toContain('mcp_servers.harnas=');
     expect((await readMapFile('w-0001')).sessions[0]?.providerSessionId).toBeNull();
   }, 60_000);

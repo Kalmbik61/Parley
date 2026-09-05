@@ -10,7 +10,6 @@ import type { SessionStatus } from '@harnas/core';
 export interface Glyphs {
   pending: string;
   active: string;
-  idle: string;
   exited: string;
   done: string;
   failed: string;
@@ -44,7 +43,6 @@ export interface Glyphs {
 const UNICODE: Glyphs = {
   pending: '◌',
   active: '●',
-  idle: '◐',
   exited: '○',
   done: '✓',
   failed: '✗',
@@ -66,7 +64,6 @@ const UNICODE: Glyphs = {
 const ASCII: Glyphs = {
   pending: '.',
   active: '*',
-  idle: '~',
   exited: '!',
   done: '+',
   failed: 'x',
@@ -125,7 +122,6 @@ export function statusColor(status: SessionStatus): { color?: string; dimColor?:
     case 'active':
     case 'done':
       return { color: 'green' };
-    case 'idle':
     case 'exited':
       return { color: 'yellow' };
     case 'failed':

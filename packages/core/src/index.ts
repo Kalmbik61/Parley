@@ -80,9 +80,7 @@ export type { AutoSummaryOptions, TranscriptOptions } from './work/summary.js';
 export { readWorks, watchWorks } from './work/works.js';
 export type { WatchWorksOptions, WorkEntry, WorksWatcher } from './work/works.js';
 export {
-  IDLE_THRESHOLD_MS,
   LINK_TOLERANCE_MS,
-  deriveStatus,
   finishSession,
   linkProviderSession,
   readSessionMetrics,
@@ -91,12 +89,21 @@ export {
 export type {
   FinalStatus,
   FinishOptions,
-  IdleOptions,
   LinkOptions,
   LinkQuery,
   LiveSessionMetrics,
   MetricsRoots,
 } from './work/metrics.js';
+export { DEFAULT_CONFIG, configPath, loadConfig } from './config.js';
+export type { HarnasConfig, LoadedConfig } from './config.js';
+export {
+  HOOK_COMMAND,
+  HOOK_EVENTS,
+  workSettings,
+  workSettingsJson,
+  writeWorkSettings,
+} from './work/settings-file.js';
+export type { HookCommand, HookEvent, HookMatcher, SettingsFile } from './work/settings-file.js';
 export {
   MCP_SERVER_BIN,
   MCP_SERVER_NAME,
@@ -113,6 +120,7 @@ export { DEFAULT_TIMEOUT_SEC, MAX_TIMEOUT_SEC, createHarnasServer } from './mcp/
 export type {
   Artifact,
   HistoryEntry,
+  LaunchedBy,
   Message,
   SessionMetrics,
   SessionStatus,

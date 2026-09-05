@@ -59,11 +59,12 @@ describe('реестр провайдеров', () => {
 });
 
 describe('подстановка аргументов запуска', () => {
-  it('claude получает id сессии, MCP-конфиг и бриф', () => {
+  it('claude получает id сессии, MCP-конфиг, файл настроек и бриф', () => {
     expect(
       startCommand(PROVIDERS.claude, {
         sessionUuid: 'bb2137cb-0000-4000-8000-000000000000',
         mcpConfig: '/tmp/s-02.json',
+        settingsFile: '/tmp/w-0042/settings.json',
         prompt: '# Работа w-0042',
       }),
     ).toEqual({
@@ -73,21 +74,39 @@ describe('подстановка аргументов запуска', () => {
         'bb2137cb-0000-4000-8000-000000000000',
         '--mcp-config',
         '/tmp/s-02.json',
+        '--settings',
+        '/tmp/w-0042/settings.json',
         '# Работа w-0042',
       ],
     });
   });
 
-  it('claude возобновляется с тем же MCP-конфигом', () => {
+  it('claude возобновляется с тем же MCP-конфигом и файлом настроек', () => {
     expect(
       resumeCommand(PROVIDERS.claude, {
         providerSessionId: 'bb2137cb',
         mcpConfig: '/tmp/s-02.json',
+        settingsFile: '/tmp/w-0042/settings.json',
       }),
     ).toEqual({
       command: 'claude',
-      args: ['--resume', 'bb2137cb', '--mcp-config', '/tmp/s-02.json'],
+      args: [
+        '--resume',
+        'bb2137cb',
+        '--mcp-config',
+        '/tmp/s-02.json',
+        '--settings',
+        '/tmp/w-0042/settings.json',
+      ],
     });
+  });
+
+  it('без файла настроек флаг --settings не остаётся висячим', () => {
+    expect(startCommand(PROVIDERS.claude, { sessionUuid: 'uuid-1', prompt: 'бриф' }).args).toEqual([
+      '--session-id',
+      'uuid-1',
+      'бриф',
+    ]);
   });
 
   it('незаполненная подстановка уносит с собой свой флаг', () => {

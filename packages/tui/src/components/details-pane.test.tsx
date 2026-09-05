@@ -185,9 +185,9 @@ describe('DetailsPane — секции', () => {
 });
 
 describe('DetailsPane — СТАТУС', () => {
-  it('idle показывает, сколько молчит лог (правило 3)', () => {
+  it('живая сессия показывает, сколько молчит лог (правило 3)', () => {
     const row = rowsOf(
-      [session({ status: 'idle' })],
+      [session()],
       [],
       live({ lastRecordAt: new Date(NOW - 14 * 60_000).toISOString() }),
     )[1];
@@ -195,12 +195,8 @@ describe('DetailsPane — СТАТУС', () => {
     expect(lineWith(paneOf(row), 'СТАТУС')).toContain('молчит 14м');
   });
 
-  it('active про молчание не пишет', () => {
-    const row = rowsOf(
-      [session()],
-      [],
-      live({ lastRecordAt: new Date(NOW - 14 * 60_000).toISOString() }),
-    )[1];
+  it('записей в логе нет — про молчание не пишем', () => {
+    const row = rowsOf([session()], [], live({ lastRecordAt: null }))[1];
 
     expect(paneOf(row)).not.toContain('молчит');
   });
@@ -342,7 +338,7 @@ describe('DetailsPane — ИСТОРИЯ', () => {
     history: [
       { status: 'pending', at: '2026-09-02T09:12:00.000Z' },
       { status: 'active', at: '2026-09-02T09:14:00.000Z' },
-      { status: 'idle', at: '2026-09-02T13:20:00.000Z' },
+      { status: 'exited', at: '2026-09-02T13:20:00.000Z' },
     ],
   });
 
@@ -350,7 +346,7 @@ describe('DetailsPane — ИСТОРИЯ', () => {
     const line = lineWith(paneOf(rowsOf([withHistory])[1]), 'ИСТОРИЯ');
     expect(line).toContain(`◌ ${clock('2026-09-02T09:12:00.000Z')}`);
     expect(line).toContain('→');
-    expect(line).toContain(`◐ ${clock('2026-09-02T13:20:00.000Z')}`);
+    expect(line).toContain(`○ ${clock('2026-09-02T13:20:00.000Z')}`);
   });
 
   it('на узкой ширине — только два последних перехода (раздел 3)', () => {

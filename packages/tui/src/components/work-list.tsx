@@ -26,14 +26,7 @@ const WIDE_WIDTH = 36;
 /** Короче этого label не режется — дальше отбрасывается мета (2.3). */
 const MIN_LABEL = 4;
 
-const STATUSES: readonly SessionStatus[] = [
-  'pending',
-  'active',
-  'idle',
-  'exited',
-  'done',
-  'failed',
-];
+const STATUSES: readonly SessionStatus[] = ['pending', 'active', 'exited', 'done', 'failed'];
 
 const padTo = (used: number, width: number): string => ' '.repeat(Math.max(0, width - used));
 

@@ -5,14 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PROVIDERS } from '../providers.js';
 import { addSession, transitionSession } from './map.js';
-import {
-  IDLE_THRESHOLD_MS,
-  deriveStatus,
-  finishSession,
-  linkProviderSession,
-  readSessionMetrics,
-  silenceMs,
-} from './metrics.js';
+import { finishSession, linkProviderSession, readSessionMetrics, silenceMs } from './metrics.js';
 import { createWork, readMap, updateMap } from './store.js';
 
 /** Фикстуры Claude — реальные сессии из ~/.claude/projects, обезличенные. */
@@ -274,7 +267,7 @@ describe('linkProviderSession', () => {
   });
 });
 
-describe('простой и выведение idle', () => {
+describe('молчание лога', () => {
   const NOW = Date.parse('2026-09-02T12:00:00.000Z');
 
   it('время простоя считается от последней записи лога', () => {
@@ -285,36 +278,8 @@ describe('простой и выведение idle', () => {
     expect(silenceMs(null, NOW)).toBeNull();
   });
 
-  it('порог по умолчанию — 10 минут', () => {
-    expect(IDLE_THRESHOLD_MS).toBe(10 * 60 * 1000);
-  });
-
-  it('active → idle, когда лог молчит дольше порога', () => {
-    expect(deriveStatus('active', '2026-09-02T11:46:00.000Z', { now: NOW })).toBe('idle');
-    expect(deriveStatus('active', '2026-09-02T11:51:00.000Z', { now: NOW })).toBeNull();
-  });
-
-  it('idle → active по первой новой записи', () => {
-    expect(deriveStatus('idle', '2026-09-02T11:59:00.000Z', { now: NOW })).toBe('active');
-    expect(deriveStatus('idle', '2026-09-02T11:40:00.000Z', { now: NOW })).toBeNull();
-  });
-
-  it('порог настраивается', () => {
-    const at = '2026-09-02T11:58:00.000Z';
-    expect(deriveStatus('active', at, { now: NOW })).toBeNull();
-    expect(deriveStatus('active', at, { now: NOW, idleMs: 60_000 })).toBe('idle');
-  });
-
-  it('завершённые и незапущенные статусы простоем не двигаются', () => {
-    const at = '2026-09-02T11:00:00.000Z';
-    expect(deriveStatus('pending', at, { now: NOW })).toBeNull();
-    expect(deriveStatus('exited', at, { now: NOW })).toBeNull();
-    expect(deriveStatus('done', at, { now: NOW })).toBeNull();
-    expect(deriveStatus('failed', at, { now: NOW })).toBeNull();
-  });
-
-  it('лога ещё нет — статус не меняем', () => {
-    expect(deriveStatus('active', null, { now: NOW })).toBeNull();
+  it('битая дата — тоже нечего считать', () => {
+    expect(silenceMs('позавчера', NOW)).toBeNull();
   });
 });
 

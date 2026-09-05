@@ -28,7 +28,7 @@ export function useSessionLink({ works, sessions, roots }: SessionLinkOptions): 
     for (const entry of works) {
       for (const session of entry.map.sessions) {
         if (session.providerSessionId !== null || session.startedAt === null) continue;
-        if (session.status !== 'active' && session.status !== 'idle') continue;
+        if (session.status !== 'active') continue;
 
         const key = `${entry.projectPath} ${entry.map.work.id} ${session.id}`;
         if (inFlight.current.has(key)) continue;

@@ -8,7 +8,7 @@ import { indexSessionFile, type SessionIndex } from '../session-index.js';
 import { transitionSession } from './map.js';
 import type { TransitionOptions } from './map.js';
 import { readMap, updateMap } from './store.js';
-import type { SessionMetrics, SessionStatus, WorkMap, WorkProvider } from './types.js';
+import type { SessionMetrics, WorkMap, WorkProvider } from './types.js';
 
 /** Корни истории провайдеров. Переопределяются тестами; в бою — значения по умолчанию. */
 export interface MetricsRoots {
@@ -20,8 +20,8 @@ export interface MetricsRoots {
 export interface LiveSessionMetrics {
   metrics: SessionMetrics;
   /**
-   * Время последней записи лога. От него считается простой — и порог `idle`,
-   * и строка «молчит 14м» в панели ДЕТАЛИ (дизайн TUI, раздел 3).
+   * Время последней записи лога. От него считается страховочная `activity` и
+   * время с последнего события в деталях (дизайн TUI v2, раздел 4.3).
    */
   lastRecordAt: string | null;
 }
@@ -140,38 +140,17 @@ export async function linkProviderSession(
   return best?.id ?? null;
 }
 
-/** Порог молчания лога, после которого сессия считается `idle` (спецификация, раздел 6). */
-export const IDLE_THRESHOLD_MS = 10 * 60 * 1000;
-
-/** Сколько лог молчит. `null` — записей нет, простой считать не от чего. */
+/**
+ * Сколько лог молчит. `null` — записей нет, простой считать не от чего.
+ *
+ * Статуса `idle` в карте больше нет (дизайн TUI v2, раздел 4.3): молчание лога
+ * читают страховочная `activity` и строка «молчит Nм» в деталях, а не
+ * жизненный цикл.
+ */
 export function silenceMs(lastRecordAt: string | null, now: number = Date.now()): number | null {
   if (lastRecordAt === null) return null;
   const at = Date.parse(lastRecordAt);
   return Number.isNaN(at) ? null : Math.max(0, now - at);
-}
-
-export interface IdleOptions {
-  /** Порог молчания; по умолчанию `IDLE_THRESHOLD_MS`. */
-  idleMs?: number;
-  now?: number;
-}
-
-/**
- * В какой статус переводить живую сессию по молчанию лога: `active → idle` по
- * порогу, `idle → active` по первой новой записи (спецификация, раздел 6).
- * `null` — переход не нужен. Выход процесса сюда не относится: `exited` ставит
- * PTY-слой, у него есть код выхода.
- */
-export function deriveStatus(
-  status: SessionStatus,
-  lastRecordAt: string | null,
-  { idleMs = IDLE_THRESHOLD_MS, now = Date.now() }: IdleOptions = {},
-): SessionStatus | null {
-  const silence = silenceMs(lastRecordAt, now);
-  if (silence === null) return null;
-  if (status === 'active' && silence >= idleMs) return 'idle';
-  if (status === 'idle' && silence < idleMs) return 'active';
-  return null;
 }
 
 /** Статусы, при переходе в которые метрики фиксируются в карте. */

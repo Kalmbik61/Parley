@@ -33,6 +33,10 @@ export interface WorkPaths {
   artifacts: string;
   /** Сгенерированные MCP-конфиги сессий: `mcp/<session-id>.json`. */
   mcp: string;
+  /** Журналы событий хуков: `events/<session-id>.jsonl`, пишет сам хук. */
+  events: string;
+  /** Хуки Claude Code для сессий работы (`--settings`), один файл на работу. */
+  settings: string;
 }
 
 /** Раскладка работы на диске (спецификация, раздел 2). */
@@ -46,6 +50,8 @@ export function workPaths(projectPath: string, workId: string): WorkPaths {
     briefs: path.join(dir, 'briefs'),
     artifacts: path.join(dir, 'artifacts'),
     mcp: path.join(dir, 'mcp'),
+    events: path.join(dir, 'events'),
+    settings: path.join(dir, 'settings.json'),
   };
 }
 
