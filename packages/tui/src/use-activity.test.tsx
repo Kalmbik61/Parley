@@ -48,11 +48,12 @@ function session(over: Partial<WorkSession> = {}): WorkSession {
   };
 }
 
-/** Клавиша `s` объявляет первую сессию просмотренной — как подключение к панели. */
+/** Клавиши `s` и `d` подключают панель к первой и ко второй сессии. */
 function Probe({ works }: { works: readonly ActivityWork[] }): ReactNode {
   const activity = useActivity({ works });
   useInput((input) => {
     if (input === 's') activity.markSeen('s-01');
+    if (input === 'd') activity.markSeen('s-02');
   });
   const states = works.flatMap((work) => work.sessions.map((s) => activity.stateOf(s)));
   return (
@@ -112,6 +113,40 @@ describe('useActivity', () => {
     await appendFile(path.join(events, 's-01.jsonl'), `${hook('UserPromptSubmit')}${hook('Stop')}`);
     await settle(300);
     expect(lastFrame()).toBe('unseen|unseen|false');
+  });
+
+  it('уехавшая панель не зажигает unseen заново у просмотренной сессии (4.1)', async () => {
+    const works: ActivityWork[] = [
+      {
+        key: 'w1',
+        eventsDir: events,
+        sessions: [session(), session({ id: 's-02', label: 'бэкенд' })],
+      },
+    ];
+
+    const { stdin, lastFrame } = render(<Probe works={works} />);
+    await settle();
+
+    // Ход первой сессии закончился при нас — синий.
+    await appendFile(path.join(events, 's-01.jsonl'), `${hook('UserPromptSubmit')}${hook('Stop')}`);
+    await settle(300);
+    expect(lastFrame()).toBe('unseen,idle|unseen|false');
+
+    // Подключились — погас.
+    stdin.write('s');
+    await settle();
+    expect(lastFrame()).toBe('idle,idle|idle|false');
+
+    // Панель уехала на соседнюю сессию: у первой ничего нового не случилось,
+    // значит синий обратно не зажигается.
+    stdin.write('d');
+    await settle(300);
+    expect(lastFrame()).toBe('idle,idle|idle|false');
+
+    // А НОВЫЙ законченный без нас ход — снова синий.
+    await appendFile(path.join(events, 's-01.jsonl'), `${hook('UserPromptSubmit')}${hook('Stop')}`);
+    await settle(300);
+    expect(lastFrame()).toBe('unseen,idle|unseen|false');
   });
 
   it('точка работы — максимум по её сессиям, жизненный цикл перевешивает activity', async () => {

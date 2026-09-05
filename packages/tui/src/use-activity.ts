@@ -70,14 +70,16 @@ const signatureOf = (works: readonly ActivityWork[]): string =>
 
 export function useActivity({ works, log, silenceThresholdMs }: ActivityOptions): ActivityState {
   const [journals, setJournals] = useState<Journals>(new Map());
-  // Просмотренной считается ОДНА сессия — та, к которой подключена панель:
-  // «unseen переходит в idle, когда сессия подключена к панели и панель на
-  // экране» (4.1). Уехала панель — законченный без нас ход снова `unseen`.
-  const [seen, setSeen] = useState<string | null>(null);
-  // «После перезапуска харнесса все завершившие ход сессии считаются idle»
-  // (4.1). Журнал, каким мы застали его при первом чтении, считается
-  // просмотренным: синий `unseen` зажигают только события, пришедшие при нас.
-  const base = useRef(new Map<string, number>());
+  // Сессия, к которой подключена панель: пока она подключена, её ход виден
+  // целиком — «unseen переходит в idle, когда сессия подключена к панели и
+  // панель на экране» (4.1).
+  const [attached, setAttached] = useState<string | null>(null);
+  // Водяной знак на сессию: длина журнала, которую пользователь уже видел.
+  // При первом чтении просмотренным считается весь журнал — «после перезапуска
+  // харнесса все завершившие ход сессии считаются idle» (4.1), — а пока панель
+  // подключена, знак едет за журналом. Уехала панель — синий `unseen` зажжёт
+  // только НОВЫЙ законченный ход, а не тот, что мы уже смотрели.
+  const seenAt = useRef(new Map<string, number>());
 
   const signature = signatureOf(works);
   // Работы читаются из ссылки: их массив пересоздаётся на каждом рендере, а
@@ -91,7 +93,7 @@ export function useActivity({ works, log, silenceThresholdMs }: ActivityOptions)
       if (cancelled) return;
       // Каталог `events/` мог появиться позже самой сессии, поэтому у журнала
       // без каталога отметка тоже нулевая: пришедшее потом событие её сдвинет.
-      if (!base.current.has(sessionId)) base.current.set(sessionId, events?.length ?? 0);
+      if (!seenAt.current.has(sessionId)) seenAt.current.set(sessionId, events?.length ?? 0);
       setJournals((previous) => {
         const next = new Map(previous);
         next.set(sessionId, events);
@@ -120,6 +122,14 @@ export function useActivity({ works, log, silenceThresholdMs }: ActivityOptions)
     };
   }, [signature]);
 
+  // Панель подключена — журнал этой сессии виден по мере роста, и знак едет за
+  // ним. Отключились — знак остался на том, что успели посмотреть.
+  useEffect(() => {
+    if (attached === null) return;
+    const events = journals.get(attached);
+    if (events != null) seenAt.current.set(attached, events.length);
+  }, [attached, journals]);
+
   const states = useMemo(() => {
     const now = Date.now();
     const map = new Map<string, SessionActivity>();
@@ -131,12 +141,12 @@ export function useActivity({ works, log, silenceThresholdMs }: ActivityOptions)
           activityOf({
             events,
             log: log?.(session) ?? null,
-            // Журнал не вырос с первого чтения — ход закончился без нас, но и до
-            // нас: показывать его синим незачем (4.1). Без журнала вовсе
+            // Журнал не вырос выше водяного знака — этот ход пользователь уже
+            // видел, показывать его синим незачем (4.1). Без журнала вовсе
             // (`null`) сказать нечего, и всё решает подключение к панели.
             seen:
-              seen === session.id ||
-              (events !== null && events.length === base.current.get(session.id)),
+              attached === session.id ||
+              (events !== null && events.length <= (seenAt.current.get(session.id) ?? 0)),
             now,
             ...(silenceThresholdMs === undefined ? {} : { silenceThresholdMs }),
           }),
@@ -144,7 +154,7 @@ export function useActivity({ works, log, silenceThresholdMs }: ActivityOptions)
       }
     }
     return map;
-  }, [journals, seen, log, silenceThresholdMs, signature]);
+  }, [journals, attached, log, silenceThresholdMs, signature]);
 
   const stateOf = useCallback(
     (session: WorkSession): DotState =>
@@ -160,7 +170,7 @@ export function useActivity({ works, log, silenceThresholdMs }: ActivityOptions)
     [stateOf],
   );
 
-  const markSeen = useCallback((sessionId: string) => setSeen(sessionId), []);
+  const markSeen = useCallback((sessionId: string) => setAttached(sessionId), []);
 
   return {
     activityOf: useCallback((sessionId: string) => states.get(sessionId) ?? null, [states]),
