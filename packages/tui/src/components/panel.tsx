@@ -63,9 +63,17 @@ export function cardFor(
   return { session, state, parent, brief, prefix, atHarness };
 }
 
-/** Как сессия закончилась: время и код выхода из последней ступени истории. */
+/** Последняя ступень истории в нынешнем статусе: из неё время и код выхода. */
+const lastStep = (session: WorkSession): WorkSession['history'][number] | undefined =>
+  [...session.history].reverse().find((entry) => entry.status === session.status);
+
+/** Когда сессия закончилась: время последней ступени (макеты §2). */
+const closedAt = (session: WorkSession): string =>
+  formatClock(lastStep(session)?.at ?? session.endedAt);
+
+/** Как вышел процесс: время и код выхода или сигнал — примета `exited`. */
 function exitTail(session: WorkSession): string {
-  const last = [...session.history].reverse().find((entry) => entry.status === session.status);
+  const last = lastStep(session);
   const at = formatClock(last?.at ?? session.endedAt);
   if (last?.signal !== undefined && last.signal !== 0) return `${at} · сигнал ${last.signal}`;
   return last?.exitCode === undefined ? at : `${at} · код ${last.exitCode}`;
@@ -121,8 +129,9 @@ export function cardLines(
     ];
   }
 
+  // `done` и `failed` — отчёт агента, а не выход процесса: код здесь не при чём.
   return [
-    `${head} · ${session.status} ${exitTail(session)}`,
+    `${head} · ${session.status} ${closedAt(session)}`,
     session.summary === null ? 'отчёта нет' : `«${session.summary}»`,
     ...session.artifacts.map((artifact) => `арт: ${artifact.kind}: ${artifact.path}`),
     '',

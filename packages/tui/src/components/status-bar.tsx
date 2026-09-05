@@ -67,7 +67,9 @@ export function StatusBar({
     );
   }
 
-  const room = Math.max(0, width - tail.length - 2);
+  // Строка события начинается с пробела, как в макете; хвост стоит у правого
+  // края, между ними остаётся зазор (макеты §3).
+  const room = Math.max(0, width - tail.length - 3);
   const flag = count > 1 ? `${g.flag}${count}` : g.flag;
   const head = event === null ? '' : `${flag} ${event.text}`;
   const hint = event === null || event.hint === undefined ? '' : ` · ${event.hint}`;
@@ -80,6 +82,7 @@ export function StatusBar({
           ''
         ) : (
           <>
+            {' '}
             <Text color="yellow" bold>
               {left.slice(0, flag.length)}
             </Text>

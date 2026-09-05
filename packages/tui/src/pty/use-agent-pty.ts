@@ -46,10 +46,6 @@ export interface WorkTarget {
   providerSessionId: string | null;
 }
 
-/** Провайдер цели: его марка нужна и заголовку панели, и строке статуса. */
-export const targetProvider = (target: AgentTarget): WorkProvider =>
-  target.kind === 'session' ? target.session.provider : target.provider;
-
 /** Ключ живой панели сессии работы: по нему же идёт attach (дизайн 8). */
 export const workRunKey = (projectPath: string, workId: string, sessionId: string): string =>
   `work:${projectPath} ${workId} ${sessionId}`;
@@ -80,8 +76,6 @@ export interface AgentRun {
 export interface AgentPtyState {
   /** Что показывает правая панель. */
   active: AgentRun | undefined;
-  /** Сколько агентов провайдера работает прямо сейчас: лимиты подписки у них общие. */
-  liveOf(provider: WorkProvider): number;
   /** Нет бинаря или не удалось запустить. */
   error: string | undefined;
   open(target: AgentTarget, size: PtySize): void;
@@ -103,8 +97,6 @@ export interface AgentPtyState {
    * другому агенту, которого не видно на экране, они не должны (3.1).
    */
   write(data: string): void;
-  /** Перезапустить агента активной панели после его завершения. */
-  restart(size: PtySize): void;
   /**
    * Закрыть панель по ключу (по умолчанию активную): процессу уходит SIGHUP,
    * как при закрытии терминала (дизайн TUI v2, 3.2 и макет 4.8).
@@ -264,18 +256,6 @@ export function useAgentPty({ onStart, onExit, onFail }: AgentPtyOptions = {}): 
     [launch],
   );
 
-  const restart = useCallback<AgentPtyState['restart']>(
-    (size) => {
-      const run = runs.find((item) => targetKey(item.target) === activeKey);
-      // Перезапускается только завершившийся агент (дизайн 8). Живого гасить
-      // нельзя: его выход перевёл бы сессию работы в `exited`, хотя на её месте
-      // уже работал бы новый процесс.
-      if (run === undefined || run.exit === undefined) return;
-      launch(run.target, size);
-    },
-    [runs, activeKey, launch],
-  );
-
   // Живые процессы берутся из ref, а не из `runs`: панель подключается сразу
   // после запуска, когда новый `runs` до рендера ещё не доехал.
   const attach = useCallback<AgentPtyState['attach']>((key) => {
@@ -301,9 +281,6 @@ export function useAgentPty({ onStart, onExit, onFail }: AgentPtyOptions = {}): 
 
   return {
     ...(active === undefined ? { active: undefined } : { active }),
-    liveOf: (provider) =>
-      runs.filter((run) => run.exit === undefined && targetProvider(run.target) === provider)
-        .length,
     error,
     open,
     attach,
@@ -313,7 +290,6 @@ export function useAgentPty({ onStart, onExit, onFail }: AgentPtyOptions = {}): 
       const key = attached.current;
       if (key !== undefined) live.current.get(key)?.write(data);
     },
-    restart,
     close,
   };
 }

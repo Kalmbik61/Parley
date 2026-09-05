@@ -11,6 +11,7 @@ import { useInput } from 'ink';
 import { useCallback, useRef, useState } from 'react';
 import type { SidebarWork } from './components/sidebar.js';
 import { glyphs } from './glyphs.js';
+import { workRunKey } from './pty/use-agent-pty.js';
 import type { PanelState } from './use-panel.js';
 import { usePrefixInput } from './use-prefix-input.js';
 import type { SelectionState } from './use-selection.js';
@@ -31,7 +32,7 @@ export interface ActionsOptions {
   /** Байт префикса и его имя для подсказок (`ctrl+q`). */
   prefixByte: number;
   prefixName: string;
-  /** Все работы: по ним считаются живые сессии при выходе. */
+  /** Все работы: в них ищутся сессии, чей PTY держит харнесс (выход). */
   works: readonly WorkEntry[];
   /** Работы сайдбара по порядку: `prefix 1..9` выбирает работу по номеру. */
   workRows: readonly SidebarWork[];
@@ -103,17 +104,22 @@ export function useActions(options: ActionsOptions): ActionsState {
     });
   }, [session, runKey, panel, openDialog, push]);
 
-  /** `q`: выход с подтверждением, если есть живые сессии (макет 4.9). */
+  /** `q`: выход с подтверждением, если есть живые панели (макет 4.9). */
   const quit = useCallback(() => {
+    // SIGHUP при выходе получают только PTY-дети харнесса (решение №5): сессия
+    // вне харнесса и работа чужого проекта его переживут, обещать им завершение
+    // нельзя. Отсюда живость считается по панелям, а не по статусу в карте.
     const alive = works.flatMap((entry) =>
-      entry.map.sessions.filter((item) => item.status === 'active').map((item) => item.label),
+      entry.map.sessions
+        .filter((item) => panel.alive(workRunKey(entry.projectPath, entry.map.work.id, item.id)))
+        .map((item) => item.label),
     );
     if (alive.length === 0) return exit();
     openDialog(exitDialog(alive), () => {
       setDialog(null);
       exit();
     });
-  }, [works, exit, openDialog]);
+  }, [works, panel, exit, openDialog]);
 
   const onAction = useCallback(
     (key: string) => {

@@ -46,7 +46,10 @@ afterEach(async () => {
   delete process.env['HARNAS_HOME'];
   if (previousBin === undefined) delete process.env['HARNAS_CLAUDE_BIN'];
   else process.env['HARNAS_CLAUDE_BIN'] = previousBin;
-  await Promise.all([home, project, logs].map((dir) => rm(dir, { recursive: true, force: true })));
+  // Stub мог дописывать файлы работы в момент уборки: без повторов `rm` падает
+  // с ENOTEMPTY, когда каталог пополнился между чтением и удалением.
+  const clean = { recursive: true, force: true, maxRetries: 5, retryDelay: 50 };
+  await Promise.all([home, project, logs].map((dir) => rm(dir, clean)));
 });
 
 /** Панель с живым stub: `prefix c` заводит работу и сразу подключает агента (5.1). */

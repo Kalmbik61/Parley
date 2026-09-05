@@ -114,11 +114,13 @@ describe('карточка панели (макеты §2)', () => {
       status: 'done',
       summary: 'План готов: 5 шагов',
       artifacts: [{ kind: 'plan', path: 'works/w-0042/artifacts/plan.md' }],
-      history: [{ status: 'done', at: '2026-09-05T12:40:00.000Z' }],
+      history: [{ status: 'done', at: '2026-09-05T12:40:00.000Z', exitCode: 0 }],
     });
     const frame = frameOf({ session: done, state: 'done' });
 
     expect(frame).toContain('✓ бэкенд · done');
+    // Код выхода — примета `exited`; у отчитавшейся сессии его в карточке нет.
+    expect(frame).not.toContain('код');
     expect(frame).toContain('«План готов: 5 шагов»');
     expect(frame).toContain('арт: plan:');
     expect(frame).toContain('перезапишет новый report');

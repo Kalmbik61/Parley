@@ -134,7 +134,6 @@ export function App({
   // сессии — только когда гостя нет (2.2). В режиме навигации гость остаётся на
   // экране: ходьба по сайдбару панель не трогает (макет 1.5).
   const live = panel.attached !== null;
-  const shown = runKey !== null && panel.attached === runKey;
 
   const actions = useActions({
     prefixByte: PREFIX_BYTE,
@@ -147,7 +146,11 @@ export function App({
     session: current,
     runKey,
     panel,
-    toggleSidebar: () => setHidden((value) => !value),
+    // Уже 60 колонок `b` открывает сайдбар оверлеем (2.1, решение №9), а его нет.
+    toggleSidebar: () =>
+      sidebarWidth(columns) === null
+        ? push([{ text: `${PREFIX_NAME} b — оверлей сайдбара ещё не подключён` }])
+        : setHidden((value) => !value),
     push,
     exit,
   });
@@ -175,7 +178,9 @@ export function App({
 
   // `⚑` при переходе в `blocked` у неподключённой сессии; гаснет при подключении (6).
   const activityOf = activity.activityOf;
-  const attachedId = shown ? current?.id : undefined;
+  // Подключена та сессия, чей гость на экране, а не та, что выбрана в сайдбаре:
+  // ходьба по сайдбару не делает показанную сессию «неподключённой» (макет 1.5).
+  const attachedKey = panel.attached;
   const flagged = useRef<ReadonlySet<string>>(new Set());
   useEffect(() => {
     const now = new Set<string>();
@@ -184,18 +189,16 @@ export function App({
       for (const session of entry.map.sessions) {
         if (activityOf(session.id)?.activity !== 'blocked') continue;
         now.add(session.id);
-        if (flagged.current.has(session.id) || session.id === attachedId) continue;
-        const source = {
-          projectPath: entry.projectPath,
-          workId: entry.map.work.id,
-          sessionId: session.id,
-        };
-        events.push({ text: `${session.label} ждёт ответа`, hint: 'не подключена', source });
+        const workId = entry.map.work.id;
+        if (flagged.current.has(session.id)) continue;
+        if (workRunKey(entry.projectPath, workId, session.id) === attachedKey) continue;
+        const source = { projectPath: entry.projectPath, workId, sessionId: session.id };
+        events.push({ text: `${session.label} ждёт ответа — не подключена`, source });
       }
     }
     flagged.current = now;
     push(events);
-  }, [works, activityOf, attachedId, push]);
+  }, [works, activityOf, attachedKey, push]);
 
   return (
     <Box flexDirection="column" height={rows}>

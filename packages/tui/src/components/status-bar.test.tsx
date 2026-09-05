@@ -24,6 +24,14 @@ describe('StatusBar', () => {
     expect(frame).toContain('ctrl+q ?');
   });
 
+  it('строка события начинается с пробела, как в макете (§3)', () => {
+    const frame = frameOf(
+      <StatusBar count={1} event={{ text: 'ревью ждёт ответа' }} width={60} prefix="ctrl+q" />,
+    );
+
+    expect(frame.split('\n')[0]?.startsWith(' \u2691 ревью')).toBe(true);
+  });
+
   it('счётчик появляется со второго непросмотренного события', () => {
     const single = frameOf(
       <StatusBar count={1} event={{ text: 'событие' }} width={60} prefix="ctrl+q" />,

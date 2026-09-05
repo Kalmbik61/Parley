@@ -58,7 +58,10 @@ afterEach(async () => {
   delete process.env['HARNAS_HOME'];
   if (previousBin === undefined) delete process.env['HARNAS_CLAUDE_BIN'];
   else process.env['HARNAS_CLAUDE_BIN'] = previousBin;
-  await Promise.all([home, project, logs].map((dir) => rm(dir, { recursive: true, force: true })));
+  // Stub мог дописывать файлы работы в момент уборки: без повторов `rm` падает
+  // с ENOTEMPTY, когда каталог пополнился между чтением и удалением.
+  const clean = { recursive: true, force: true, maxRetries: 5, retryDelay: 50 };
+  await Promise.all([home, project, logs].map((dir) => rm(dir, clean)));
 });
 
 const waitFor = async (check: () => boolean, timeoutMs = 8000): Promise<void> => {
@@ -279,6 +282,42 @@ describe('события и просмотр (4.1, 6)', () => {
     }
   }, 30_000);
 
+  it('29: у подключённой сессии ⚑ не поднимается, даже когда выбор уехал', async () => {
+    const { workId, id } = await outsideSession('ревью');
+
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      // Своя сессия в той же работе: панель подключается к ней (5.1).
+      app.stdin.write(`${PREFIX}c`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
+      const ours = await waitSession(workId, (item) => item.launchedBy === 'tui');
+
+      // Выбор уезжает на чужую сессию, панель остаётся у своей (макет 1.5).
+      app.stdin.write(`${PREFIX}s`);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      app.stdin.write('k');
+      await new Promise((resolve) => setTimeout(resolve, 250));
+
+      // Подключённая сессия на экране: «не подключена» про неё — неправда.
+      await appendFile(
+        path.join(workPaths(project, workId).events, `${ours.id}.jsonl`),
+        hook('Notification', { notification_type: 'permission_prompt' }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(app.lastFrame()).not.toContain('ждёт ответа');
+
+      // А неподключённая — поднимает флажок, даже будучи выбранной.
+      await appendFile(
+        path.join(workPaths(project, workId).events, `${id}.jsonl`),
+        hook('Notification', { notification_type: 'permission_prompt' }),
+      );
+      await waitFor(() => (app.lastFrame() ?? '').includes('ревью ждёт ответа'));
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
   it('в режиме навигации ходьба не подключает, а Enter подключает (3.2)', async () => {
     const { workId, id } = await outsideSession('план');
     await appendFile(path.join(workPaths(project, workId).events, `${id}.jsonl`), hook('Stop'));
@@ -396,6 +435,23 @@ describe('закрытие сессии (3.2, макет 4.8)', () => {
       app.stdin.write(ENTER);
       const session = await waitMap(workId, (item) => item.status === 'exited');
       expect(session.history.at(-1)?.status).toBe('exited');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('prefix q без панелей харнесса не обещает завершить чужие процессы (5.4)', async () => {
+    await outsideSession('ревью');
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await waitFor(() => (app.lastFrame() ?? '').includes('ревью'));
+
+      // Живая сессия есть, но её PTY не у харнесса: SIGHUP при выходе ей не
+      // уйдёт, и подтверждения быть не должно (решение №5).
+      app.stdin.write(`${PREFIX}q`);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(app.lastFrame()).not.toContain('живые сессии');
     } finally {
       app.unmount();
     }
