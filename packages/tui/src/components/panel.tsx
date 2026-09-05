@@ -78,7 +78,7 @@ function exitTail(session: WorkSession): string {
 }
 
 /** Строки карточки по состоянию сессии (макеты §2). */
-export function cardLines(
+function cardLines(
   { session, state, parent, brief, prefix, atHarness }: CardProps,
   glyph: string,
 ): string[] {

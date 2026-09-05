@@ -70,7 +70,10 @@ const signatureOf = (works: readonly ActivityWork[]): string =>
 
 export function useActivity({ works, log, silenceThresholdMs }: ActivityOptions): ActivityState {
   const [journals, setJournals] = useState<Journals>(new Map());
-  const [seen, setSeen] = useState<ReadonlySet<string>>(new Set());
+  // Просмотренной считается ОДНА сессия — та, к которой подключена панель:
+  // «unseen переходит в idle, когда сессия подключена к панели и панель на
+  // экране» (4.1). Уехала панель — законченный без нас ход снова `unseen`.
+  const [seen, setSeen] = useState<string | null>(null);
 
   const signature = signatureOf(works);
   // Работы читаются из ссылки: их массив пересоздаётся на каждом рендере, а
@@ -120,7 +123,7 @@ export function useActivity({ works, log, silenceThresholdMs }: ActivityOptions)
           activityOf({
             events: journals.get(session.id) ?? null,
             log: log?.(session) ?? null,
-            seen: seen.has(session.id),
+            seen: seen === session.id,
             now,
             ...(silenceThresholdMs === undefined ? {} : { silenceThresholdMs }),
           }),
@@ -144,12 +147,7 @@ export function useActivity({ works, log, silenceThresholdMs }: ActivityOptions)
     [stateOf],
   );
 
-  const markSeen = useCallback((sessionId: string) => {
-    setSeen((previous) => {
-      if (previous.has(sessionId)) return previous;
-      return new Set(previous).add(sessionId);
-    });
-  }, []);
+  const markSeen = useCallback((sessionId: string) => setSeen(sessionId), []);
 
   return {
     activityOf: useCallback((sessionId: string) => states.get(sessionId) ?? null, [states]),

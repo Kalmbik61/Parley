@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   createTerminalBuffer,
   type TerminalBuffer,
@@ -10,7 +10,7 @@ import type { PtySession } from './pty-session.js';
  * Пауза между перерисовками правой панели. Claude Code стримит текст, и рисовать
  * каждый чанк незачем: копим пачку и отдаём один кадр (specs/pty.md).
  */
-export const FRAME_MS = 24;
+const FRAME_MS = 24;
 
 export interface PtyTerminalOptions {
   cols: number;
@@ -19,14 +19,23 @@ export interface PtyTerminalOptions {
   scrollback?: number;
 }
 
+export interface PtyTerminal {
+  /** Пока сессии нет — undefined: панель показывает карточку. */
+  snapshot: TerminalSnapshot | undefined;
+  /**
+   * Прокрутка скроллбэка: меньше нуля — вверх, больше — вниз. Ею колесо мыши
+   * листает наш буфер, когда гость отслеживание мыши не просил (дизайн 3.3).
+   */
+  scroll: (lines: number) => void;
+}
+
 /**
  * Гоняет поток PTY через VT-парсер и отдаёт снимок экрана для рендера.
- * Пока сессии нет, снимок undefined — панель показывает подсказку.
  */
 export function usePtyTerminal(
   session: PtySession | undefined,
   { cols, rows, frameMs = FRAME_MS, scrollback }: PtyTerminalOptions,
-): TerminalSnapshot | undefined {
+): PtyTerminal {
   const [snapshot, setSnapshot] = useState<TerminalSnapshot | undefined>();
   const bufferRef = useRef<TerminalBuffer | undefined>(undefined);
 
@@ -77,5 +86,12 @@ export function usePtyTerminal(
     setSnapshot(buffer.snapshot());
   }, [cols, rows]);
 
-  return snapshot;
+  const scroll = useCallback((lines: number) => {
+    const buffer = bufferRef.current;
+    if (buffer === undefined) return;
+    buffer.scroll(lines);
+    setSnapshot(buffer.snapshot());
+  }, []);
+
+  return { snapshot, scroll };
 }

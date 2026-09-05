@@ -9,10 +9,19 @@
 //   alt               — уходит в alt-screen и печатает там
 //   mouse on|off      — включает/выключает отслеживание мыши (как это делает TUI)
 //   color             — печатает цветной текст
+//   event <json>      — дописывает строку в $HARNAS_WORK_DIR/events/$HARNAS_SESSION_ID.jsonl,
+//                       как это делает хук Claude Code (дизайн TUI v2, 4.2)
 //   exit <код>        — завершается с указанным кодом
+//
+// Пришедшие на stdin события мыши в SGR-кодировании stub не копит в буфере
+// команд, а печатает строкой `mouse-event <кнопка> <колонка> <строка>` — так
+// тест видит, что клик в панели доехал до гостя с пересчитанной колонкой (3.3).
 //
 // Аргументы командной строки печатаются при старте — так тест проверяет,
 // что до бинаря доехали `--resume <id>` и прочее.
+
+import { appendFileSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
 
 process.stdout.write(`stub готов args=${JSON.stringify(process.argv.slice(2))}\r\n`);
 // Одни только флаги: их список короткий и целиком помещается в узкую панель,
@@ -37,8 +46,16 @@ process.stdout.on('resize', () => {
 
 let buffer = '';
 
+/** `ESC [ < кнопка ; колонка ; строка M|m` — то, что шлёт харнесс при mouseCapture. */
+const ESC = String.fromCharCode(27);
+const SGR_MOUSE = new RegExp(`${ESC}\\[<(\\d+);(\\d+);(\\d+)([Mm])`, 'g');
+
 process.stdin.on('data', (chunk) => {
   buffer += chunk.toString('utf8');
+  buffer = buffer.replace(SGR_MOUSE, (_match, button, x, y, kind) => {
+    process.stdout.write(`mouse-event ${button} ${x} ${y} ${kind}\r\n`);
+    return '';
+  });
 
   let at = buffer.search(/[\r\n]/);
   while (at !== -1) {
@@ -76,10 +93,31 @@ function handle(line) {
     case 'color':
       process.stdout.write('\u001B[31mкрасный\u001B[0m обычный\r\n');
       break;
+    case 'event':
+      writeEvent(argument);
+      break;
     case 'exit':
       process.exit(Number(argument) || 0);
       break;
     default:
       process.stdout.write(`неизвестная команда: ${command}\r\n`);
   }
+}
+
+/**
+ * Хук Claude Code одной командой дописывает stdin-JSON в журнал сессии
+ * (`cat >> "$HARNAS_WORK_DIR/events/$HARNAS_SESSION_ID.jsonl"`). Настоящий
+ * бинарь в тестах не запускается, поэтому ту же строку пишет stub.
+ */
+function writeEvent(json) {
+  const dir = process.env.HARNAS_WORK_DIR;
+  const session = process.env.HARNAS_SESSION_ID;
+  if (dir === undefined || session === undefined) {
+    process.stdout.write('event: нет HARNAS_WORK_DIR или HARNAS_SESSION_ID\r\n');
+    return;
+  }
+  const events = path.join(dir, 'events');
+  mkdirSync(events, { recursive: true });
+  appendFileSync(path.join(events, `${session}.jsonl`), `${json}\n`);
+  process.stdout.write('event записан\r\n');
 }

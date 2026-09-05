@@ -25,7 +25,7 @@ function Probe({
   cols?: number;
   rows?: number;
 }): ReactNode {
-  const snapshot = usePtyTerminal(session, { cols, rows, frameMs: 5 });
+  const { snapshot } = usePtyTerminal(session, { cols, rows, frameMs: 5 });
   if (snapshot === undefined) return <Text>нет снимка</Text>;
   return <TerminalView snapshot={snapshot} height={rows} />;
 }

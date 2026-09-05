@@ -2,16 +2,15 @@
  * Композиция TUI v2: сайдбар слева, одна панель справа, строка статуса внизу
  * (дизайн `2026-09-05-tui-v2-design.md`, разделы 2, 3, 5; макеты 1–4).
  *
- * Здесь только связывание: панель со стороны процесса — `use-panel.ts`, её
- * содержимое — `components/panel.tsx`, клавиши — `use-actions.ts`, оверлеи —
- * `use-overlays.ts`, состояния сессий — `use-activity.ts`, выбор —
- * `use-selection.ts`, синхронизация карт — `use-map-sync.ts`.
+ * Здесь только связывание: панель — `use-panel.ts` и `components/panel.tsx`,
+ * клавиши и мышь — `use-actions.ts`, оверлеи — `use-overlays.ts`, состояния —
+ * `use-activity.ts`, выбор — `use-selection.ts`, карты — `use-map-sync.ts`.
  */
 
 import { defaultCodexRoot, defaultRoot, type SessionIndex, type WorkSession } from '@harnas/core';
 import { Box, useApp } from 'ink';
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
-import { overlayBox, OverlayHost } from './components/overlay.js';
+import { overlayCovers, OverlayHost } from './components/overlay.js';
 import { cardFor, Panel } from './components/panel.js';
 import {
   Sidebar,
@@ -82,7 +81,14 @@ export function App({
   const panelLeft = width === null ? 0 : width + 1;
   const panelCols = Math.max(2, columns - panelLeft);
   const panelRows = Math.max(2, rows - 1);
-  const panel = usePanel({ projectPath, roots, cols: panelCols, rows: panelRows, onFail: fail });
+  const panel = usePanel({
+    projectPath,
+    roots,
+    cols: panelCols,
+    rows: panelRows,
+    mouseCapture: config.mouseCapture,
+    onFail: fail,
+  });
 
   const workRows = sidebarWorks(works, {
     projectPath,
@@ -120,11 +126,20 @@ export function App({
     chosen === undefined || current === null
       ? null
       : workRunKey(chosen.projectPath, chosen.map.work.id, current.id);
-  // Панель показывает гостя, пока к ней подключён живой агент; карточка выбранной
-  // сессии — только когда гостя нет (2.2). В режиме навигации гость остаётся на
-  // экране: ходьба по сайдбару панель не трогает (макет 1.5).
-  const live = panel.attached !== null;
   const sessionOrder = order.get(selection.work ?? '') ?? [];
+
+  const sidebar = {
+    works: workRows,
+    sessions: sidebarSessions(chosen, {
+      state: activity.stateOf,
+      index,
+      subagents: (session: WorkSession) => activity.activityOf(session.id)?.subagents ?? 0,
+    }),
+    selectedWork: selection.work,
+    selectedSession: selection.session,
+    width: width ?? WIDE,
+    height: panelRows,
+  };
 
   const overlays = useOverlays({
     projectPath,
@@ -156,6 +171,10 @@ export function App({
     session: current,
     panel,
     overlays,
+    // Мышь: цели клика берутся из раскладки самого сайдбара (3.3).
+    sidebar: width === null ? null : sidebar,
+    panelLeft,
+    mouseCapture: config.mouseCapture,
     // Уже 60 колонок сайдбара нет вовсе: `b` открывает его оверлеем (решение №9).
     toggleSidebar: () => {
       if (sidebarWidth(columns, config.sidebarWidth) === null) return false;
@@ -176,33 +195,18 @@ export function App({
     fail,
   });
 
-  const sidebar = {
-    works: workRows,
-    sessions: sidebarSessions(chosen, {
-      state: activity.stateOf,
-      index,
-      subagents: (session: WorkSession) => activity.activityOf(session.id)?.subagents ?? 0,
-    }),
-    selectedWork: selection.work,
-    selectedSession: selection.session,
-    width: width ?? WIDE,
-    height: panelRows,
-    navigating: actions.navigating,
-  };
-  // Широкий оверлей ложится и на сайдбар: рисовать его stock Ink не умеет,
-  // поэтому на этот кадр сайдбар уступает место (§4.0).
-  const covers =
-    overlays.desired !== null &&
-    overlays.kind !== 'sidebar' &&
-    overlayBox(overlays.desired, columns, rows, panelLeft, 0).wide;
+  const view = { ...sidebar, navigating: actions.navigating };
+  // Широкий оверлей ложится и на сайдбар: на этот кадр сайдбар уступает место (§4.0).
+  const wide = overlays.kind !== 'sidebar';
+  const covers = overlayCovers(overlays.desired, wide, columns, rows, panelLeft);
 
   return (
     <Box flexDirection="column" height={rows}>
       <Box flexDirection="row" flexGrow={1}>
-        {width !== null && !covers && <Sidebar {...sidebar} />}
+        {width !== null && !covers && <Sidebar {...view} />}
         <Box flexDirection="column" flexGrow={1}>
           {overlays.kind === 'sidebar' ? (
-            <SidebarOverlay {...sidebar} height={Math.max(3, panelRows - 3)} />
+            <SidebarOverlay {...view} height={Math.max(3, panelRows - 3)} />
           ) : overlays.kind !== null ? (
             <OverlayHost
               view={overlays.view}
@@ -216,8 +220,10 @@ export function App({
               onCancel={overlays.close}
             />
           ) : (
+            // Панель показывает гостя, пока к ней подключён живой агент, и карточку
+            // выбранной сессии, когда гостя нет; ходьба по сайдбару её не трогает (2.2).
             <Panel
-              screen={live ? panel.snapshot : undefined}
+              screen={panel.attached === null ? undefined : panel.snapshot}
               card={cardFor(
                 chosen,
                 current,

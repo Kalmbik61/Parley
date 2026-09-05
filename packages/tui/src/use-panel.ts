@@ -31,6 +31,8 @@ export interface PanelOptions {
   roots: MetricsRoots;
   cols: number;
   rows: number;
+  /** Ловит ли харнесс мышь сам: тогда отслеживание держится и без гостя (3.3). */
+  mouseCapture?: boolean;
   /** Ошибка запуска или записи в карту уходит в строку статуса (раздел 6). */
   onFail: (reason: unknown) => void;
 }
@@ -62,6 +64,8 @@ export interface PanelState {
   close: (key: string) => void;
   /** Байты гостю на экране: пока панель показывает карточку, они пропадают. */
   write: (data: string) => void;
+  /** Скроллбэк панели: колесо без отслеживания мыши у гостя (3.3). */
+  scroll: (lines: number) => void;
 }
 
 /** Ключ живой панели цели; у не-работ панели с ключом нет. */
@@ -70,7 +74,14 @@ const keyOf = (target: AgentTarget | undefined): string | null =>
     ? null
     : workRunKey(target.projectPath, target.workId, target.sessionId);
 
-export function usePanel({ projectPath, roots, cols, rows, onFail }: PanelOptions): PanelState {
+export function usePanel({
+  projectPath,
+  roots,
+  cols,
+  rows,
+  mouseCapture = false,
+  onFail,
+}: PanelOptions): PanelState {
   // Процесс поднялся — только теперь сессия становится `active`, с приметами
   // процесса, по которым её узнают после перезапуска харнесса (5.1, 5.4).
   const onStart = useCallback(
@@ -109,15 +120,19 @@ export function usePanel({ projectPath, roots, cols, rows, onFail }: PanelOption
   );
 
   const agent = useAgentPty({ onStart, onExit, onFail: onFailed });
-  const snapshot = usePtyTerminal(agent.active?.session, { cols, rows });
+  const { snapshot, scroll } = usePtyTerminal(agent.active?.session, { cols, rows });
   usePtyResize(agent.active?.session, cols, rows);
 
   const attached = agent.active?.exit === undefined ? keyOf(agent.active?.target) : null;
-  // Мышь и вставка в скобках: включаем у себя ровно то, что запросил гость.
+  // Мышь и вставка в скобках: включаем у себя то, что запросил гость, а при
+  // `mouseCapture` держим клики и колесо включёнными всегда — они нужны
+  // сайдбару, даже когда живого гостя нет вовсе (3.3).
   useHostTerminalModes(
-    attached !== null,
+    attached !== null || mouseCapture,
     snapshot?.mouseTracking ?? 'none',
     snapshot?.bracketedPaste ?? false,
+    undefined,
+    mouseCapture,
   );
 
   /** Поднять процесс сессии в панели по готовому плану запуска. */
@@ -178,5 +193,6 @@ export function usePanel({ projectPath, roots, cols, rows, onFail }: PanelOption
     start,
     close: agent.close,
     write: agent.write,
+    scroll,
   };
 }

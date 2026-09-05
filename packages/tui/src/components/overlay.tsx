@@ -78,6 +78,19 @@ export function overlayBox(
   return { width, height, left, offset: left - origin, wide };
 }
 
+/**
+ * Уступает ли сайдбар место оверлею: широкая рамка не влезла в панель и ложится
+ * на весь экран (§4.0). Сайдбар-оверлей рисуется на месте самого сайдбара.
+ */
+export const overlayCovers = (
+  desired: number | null,
+  wideAllowed: boolean,
+  columns: number,
+  rows: number,
+  panelLeft: number,
+): boolean =>
+  desired !== null && wideAllowed && overlayBox(desired, columns, rows, panelLeft, 0).wide;
+
 export interface OverlayProps {
   box: OverlayBox;
   title: string;

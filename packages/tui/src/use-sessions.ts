@@ -6,7 +6,7 @@ import {
   type SessionChange,
   type SessionIndex,
 } from '@harnas/core';
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 export interface SessionsRoots {
   claudeRoot?: string;
@@ -16,8 +16,6 @@ export interface SessionsRoots {
 export interface SessionsState {
   sessions: SessionIndex[];
   loading: boolean;
-  /** Принудительный ре-скан по клавише `r`. */
-  rescan: () => void;
 }
 
 const byRecency = (a: SessionIndex, b: SessionIndex): number =>
@@ -43,9 +41,6 @@ export function applyChange(sessions: SessionIndex[], change: SessionChange): Se
 export function useSessions({ claudeRoot, codexRoot }: SessionsRoots = {}): SessionsState {
   const [sessions, setSessions] = useState<SessionIndex[]>([]);
   const [loading, setLoading] = useState(true);
-  const [generation, setGeneration] = useState(0);
-
-  const rescan = useCallback(() => setGeneration((n) => n + 1), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,7 +63,7 @@ export function useSessions({ claudeRoot, codexRoot }: SessionsRoots = {}): Sess
     return () => {
       cancelled = true;
     };
-  }, [claudeRoot, codexRoot, generation]);
+  }, [claudeRoot, codexRoot]);
 
   useEffect(() => {
     const watcher = watchSessions(
@@ -78,5 +73,5 @@ export function useSessions({ claudeRoot, codexRoot }: SessionsRoots = {}): Sess
     return () => watcher.close();
   }, [claudeRoot, codexRoot]);
 
-  return { sessions, loading, rescan };
+  return { sessions, loading };
 }

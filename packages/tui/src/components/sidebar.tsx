@@ -23,11 +23,11 @@ import { ActivityDot, dotColor, stateLetter, type DotState } from './activity-do
 
 /** Ширина сайдбара по умолчанию и узкая (раздел 2.1). */
 export const WIDE = 26;
-export const NARROW = 18;
+const NARROW = 18;
 /** Уже этого сайдбар прячется сам и доступен оверлеем по `prefix b` (2.1). */
-export const MIN_COLUMNS = 60;
+const MIN_COLUMNS = 60;
 /** С этой ширины терминала помещается полный сайдбар. */
-export const WIDE_COLUMNS = 80;
+const WIDE_COLUMNS = 80;
 /** Короче этого ярлык и заголовок не режутся (раздел 7). */
 const MIN_LABEL = 4;
 
@@ -252,7 +252,7 @@ function WorkRow({
  * Вторая строка работы: `проект · ветка`. Первой режется ветка, следом путь —
  * слева, у него важен хвост (§7).
  */
-export function projectLine(work: SidebarWork, width: number, g: Glyphs): string {
+function projectLine(work: SidebarWork, width: number, g: Glyphs): string {
   const room = width - 3;
   if (work.branch === null) return truncateLeft(work.project, room, g.ellipsis);
   const branch = truncate(work.branch, Math.max(MIN_LABEL, room - MIN_LABEL - 3), g.ellipsis);
@@ -306,7 +306,7 @@ function SessionRow({
  * Компактная строка под выбранной сессией: `↑вход ↓выход · длительность · ▤N · ⋮N`.
  * Отбрасываются токены, следом длительность; `▤N` и `⋮N` — никогда (§7).
  */
-export function compactLine(item: SidebarSession, width: number, g: Glyphs): string {
+function compactLine(item: SidebarSession, width: number, g: Glyphs): string {
   const counters = [
     item.unread > 0 ? `${g.mail}${item.unread}` : '',
     item.subagents > 0 ? `${g.subagent}${item.subagents}` : '',
@@ -341,50 +341,59 @@ function orderOf(
   });
 }
 
-export const Sidebar = memo(function Sidebar({
+/** Что стоит за строкой сайдбара: по ней же работает клик мышью (3.3). */
+export interface SidebarTarget {
+  kind: 'work' | 'session' | 'new';
+  /** Ключ работы, id сессии; у строки `new` ключа нет. */
+  key: string;
+}
+
+const NEW_TARGET: SidebarTarget = { kind: 'new', key: '' };
+
+/** Одна строка сайдбара: чем её рисовать и что делает клик по ней. */
+type SidebarRow = { key: string; target: SidebarTarget | null } & (
+  | { kind: 'work'; work: SidebarWork; selected: boolean }
+  | { kind: 'session'; item: SidebarSession; depth: number; selected: boolean }
+  | { kind: 'text'; text: string; dim: boolean; selected: boolean }
+);
+
+/**
+ * Раскладка сайдбара сверху вниз: ровно `height` строк. Чистая — из неё же
+ * берутся цели клика, поэтому картинка и мышь не расходятся (3.3).
+ */
+function layout({
   works,
   sessions,
   selectedWork,
   selectedSession,
   width,
   height,
-  navigating = false,
-}: SidebarProps): ReactNode {
+}: SidebarProps): SidebarRow[] {
   const g = glyphs();
-  const line = (key: string, text: string, dim = true, selected = false): ReactNode => (
-    <Row
-      key={key}
-      text={text}
-      width={width}
-      g={g}
-      navigating={navigating}
-      dim={dim}
-      selected={selected}
-    />
-  );
+  const line = (
+    key: string,
+    text: string,
+    dim = true,
+    selected = false,
+    target: SidebarTarget | null = null,
+  ): SidebarRow => ({ kind: 'text', key, text, dim, selected, target });
 
-  const top: ReactNode[] = [];
+  const top: SidebarRow[] = [];
   if (works.length === 0) {
     top.push(line('нет-работ', ' работ нет'));
-    top.push(line('new', ' new — первая сессия', false));
+    top.push(line('new', ' new — первая сессия', false, false, NEW_TARGET));
   } else {
     for (const work of works) {
       const selected = work.key === selectedWork;
-      top.push(
-        <WorkRow
-          key={work.key}
-          work={work}
-          selected={selected}
-          width={width}
-          g={g}
-          navigating={navigating}
-        />,
-      );
+      const target: SidebarTarget = { kind: 'work', key: work.key };
+      top.push({ kind: 'work', key: work.key, work, selected, target });
       // Вторая строка отбрасывается у `done`-работ и на узком сайдбаре (§7).
       if (work.done || width <= NARROW) continue;
-      top.push(line(`${work.key} проект`, `   ${projectLine(work, width, g)}`, true, selected));
+      top.push(
+        line(`${work.key} проект`, `   ${projectLine(work, width, g)}`, true, selected, target),
+      );
     }
-    top.push(line('new', ' new', false));
+    top.push(line('new', ' new', false, false, NEW_TARGET));
   }
 
   const selectedTitle = works.find((work) => work.key === selectedWork)?.title ?? null;
@@ -405,7 +414,7 @@ export const Sidebar = memo(function Sidebar({
     Math.max(0, room),
   );
 
-  const bottom: ReactNode[] = [];
+  const bottom: SidebarRow[] = [];
   if (selectedTitle !== null && ordered.length === 0) {
     bottom.push(line('нет-сессий', ' сессий нет'));
     bottom.push(line('подсказка', ' ctrl+q c — новая'));
@@ -413,20 +422,11 @@ export const Sidebar = memo(function Sidebar({
     if (start > 0) bottom.push(line('выше', ` ${g.ellipsis} ${start} выше`));
     for (const { item, depth } of ordered.slice(start, end)) {
       const selected = item.session.id === selectedSession;
-      bottom.push(
-        <SessionRow
-          key={item.session.id}
-          item={item}
-          depth={depth}
-          selected={selected}
-          width={width}
-          g={g}
-          navigating={navigating}
-        />,
-      );
+      const target: SidebarTarget = { kind: 'session', key: item.session.id };
+      bottom.push({ kind: 'session', key: item.session.id, item, depth, selected, target });
       if (!selected || !compact) continue;
       bottom.push(
-        line(`${item.session.id} метрики`, `   ${compactLine(item, width, g)}`, true, true),
+        line(`${item.session.id} метрики`, `   ${compactLine(item, width, g)}`, true, true, target),
       );
     }
     if (end < ordered.length) {
@@ -437,18 +437,65 @@ export const Sidebar = memo(function Sidebar({
   const visible = bottom.slice(0, capacity);
   const filler = Math.max(0, capacity - visible.length);
 
+  return [
+    ...top.slice(0, Math.max(0, height - 2)),
+    line('линейка', g.rule.repeat(width)),
+    line(
+      'заголовок',
+      selectedTitle === null
+        ? ' сессии'
+        : ` сессии · ${truncate(selectedTitle, Math.max(MIN_LABEL, width - 10), g.ellipsis)}`,
+    ),
+    ...visible,
+    ...Array.from({ length: filler }, (_, at) => line(`пусто-${at}`, '')),
+  ];
+}
+
+/**
+ * Цель каждой строки сайдбара по её номеру сверху (координата мыши `y` минус
+ * единица); `null` — по этой строке кликать не по чему.
+ */
+export const sidebarTargets = (props: SidebarProps): Array<SidebarTarget | null> =>
+  layout(props).map((row) => row.target);
+
+export const Sidebar = memo(function Sidebar(props: SidebarProps): ReactNode {
+  const { width, navigating = false } = props;
+  const g = glyphs();
+
   return (
     <Box flexDirection="column" width={width + 1}>
-      {top.slice(0, Math.max(0, height - 2))}
-      {line('линейка', g.rule.repeat(width))}
-      {line(
-        'заголовок',
-        selectedTitle === null
-          ? ' сессии'
-          : ` сессии · ${truncate(selectedTitle, Math.max(MIN_LABEL, width - 10), g.ellipsis)}`,
+      {layout(props).map((row) =>
+        row.kind === 'work' ? (
+          <WorkRow
+            key={row.key}
+            work={row.work}
+            selected={row.selected}
+            width={width}
+            g={g}
+            navigating={navigating}
+          />
+        ) : row.kind === 'session' ? (
+          <SessionRow
+            key={row.key}
+            item={row.item}
+            depth={row.depth}
+            selected={row.selected}
+            width={width}
+            g={g}
+            navigating={navigating}
+          />
+        ) : (
+          <Row
+            key={row.key}
+            text={row.text}
+            width={width}
+            g={g}
+            navigating={navigating}
+            dim={row.dim}
+            selected={row.selected}
+          />
+        ),
       )}
-      {visible}
-      {Array.from({ length: filler }, (_, at) => line(`пусто-${at}`, ''))}
     </Box>
   );
 });

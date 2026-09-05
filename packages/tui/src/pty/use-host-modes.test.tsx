@@ -131,7 +131,7 @@ describe('режимы гостя доезжают из живого PTY', () =>
   });
 
   function Probe({ target }: { target: PtySession }): ReactNode {
-    const snapshot = usePtyTerminal(target, { cols: 40, rows: 8, frameMs: 5 });
+    const { snapshot } = usePtyTerminal(target, { cols: 40, rows: 8, frameMs: 5 });
     return <Text>{`${snapshot?.mouseTracking ?? '—'}/${snapshot?.bracketedPaste ?? '—'}`}</Text>;
   }
 

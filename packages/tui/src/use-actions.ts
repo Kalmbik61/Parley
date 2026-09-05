@@ -9,10 +9,10 @@
 import type { WorkSession } from '@harnas/core';
 import { useInput } from 'ink';
 import { useCallback, useState } from 'react';
-import type { SidebarWork } from './components/sidebar.js';
+import { sidebarTargets, type SidebarProps, type SidebarWork } from './components/sidebar.js';
 import type { PanelState } from './use-panel.js';
 import type { OverlaysState } from './use-overlays.js';
-import { usePrefixInput } from './use-prefix-input.js';
+import { usePrefixInput, type MouseEvent } from './use-prefix-input.js';
 import type { SelectionState } from './use-selection.js';
 
 /** Клавиша префикса → оверлей, который она открывает (таблица 3.2). */
@@ -40,6 +40,12 @@ export interface ActionsOptions {
   session: WorkSession | null;
   panel: PanelState;
   overlays: OverlaysState;
+  /** Сайдбар, как он нарисован: из его раскладки берутся цели клика (3.3). */
+  sidebar: SidebarProps | null;
+  /** Колонок слева от панели: клик не правее — сайдбару. */
+  panelLeft: number;
+  /** `config.mouseCapture`: выключен — харнесс мышь не ловит вовсе (3.3). */
+  mouseCapture: boolean;
   /**
    * `prefix b`: сайдбар прячется и показывается. `false` — сайдбара на этой
    * ширине нет вовсе, и `b` открывает его оверлеем (2.1, решение №9).
@@ -56,7 +62,7 @@ export interface ActionsState {
 
 export function useActions(options: ActionsOptions): ActionsState {
   const { prefixByte, workRows, selection, order, panel, overlays } = options;
-  const { workId, session, toggleSidebar } = options;
+  const { workId, session, sidebar, panelLeft, mouseCapture, toggleSidebar } = options;
 
   const [navigating, setNavigating] = useState(false);
   const [awaiting, setAwaiting] = useState(false);
@@ -91,6 +97,20 @@ export function useActions(options: ActionsOptions): ActionsState {
     [panel, workId, selection, walk, workRows, overlays, toggleSidebar],
   );
 
+  /**
+   * Клик в сайдбаре: по работе — выбор, по сессии — выбор с подключением, по
+   * `new` — новая сессия (3.3). Колесо и отпускание кнопки строк не трогают.
+   * Раскладка считается на сам клик: каждый кадр она была бы напрасной работой.
+   */
+  const onMouse = (event: MouseEvent): void => {
+    if (event.kind !== 'press' || event.button !== 0 || sidebar === null) return;
+    const target = sidebarTargets(sidebar)[event.y - 1];
+    if (target === undefined || target === null) return;
+    if (target.kind === 'work') return selection.selectWork(target.key);
+    if (target.kind === 'new') return panel.create(workId, selection.attach);
+    selection.attach(target.key);
+  };
+
   // Весь ввод — гостю, кроме префикса; пока открыт оверлей или сайдбар в режиме
   // навигации, гостю не уходит ничего (3.1).
   usePrefixInput(true, {
@@ -99,6 +119,11 @@ export function useActions(options: ActionsOptions): ActionsState {
     onAwait: setAwaiting,
     toGuest: panel.write,
     capture: overlays.kind !== null || navigating,
+    mouseCapture,
+    panelLeft,
+    mouseTracking: panel.snapshot?.mouseTracking ?? 'none',
+    onMouse,
+    onScroll: panel.scroll,
   });
 
   // Режим навигации: стрелки и `j`/`k` по строкам, `Enter` подключает (3.2).

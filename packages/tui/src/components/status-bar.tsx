@@ -32,7 +32,7 @@ const ACTIONS: readonly string[] = [
 const HELP = '? все';
 
 /** Список действий по ширине: с конца, пока влезает (макеты §3). */
-export function prefixHint(prefix: string, width: number): string {
+function prefixHint(prefix: string, width: number): string {
   const head = ` ${prefix} … `;
   const room = Math.max(0, width - head.length);
   for (let count = ACTIONS.length; count > 0; count--) {

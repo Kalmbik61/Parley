@@ -16,7 +16,7 @@ import type { Glyphs } from '../glyphs.js';
 export type DotState = Activity | Exclude<SessionStatus, 'active'>;
 
 /** Полсекунды на фазу: `●` 0–500 мс, `○` 500–1000 мс (макет 1.4). */
-export const BLINK_MS = 500;
+const BLINK_MS = 500;
 
 const listeners = new Set<() => void>();
 let ticker: NodeJS.Timeout | null = null;
