@@ -19,6 +19,7 @@ import {
 } from '@harnas/core';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { dotState, maxDotState, type DotState } from './components/activity-dot.js';
+import type { StatusEventInit } from './use-status.js';
 import { workKey } from './work-rows.js';
 
 export interface ActivityWork {
@@ -38,6 +39,8 @@ export const activityWork = (entry: WorkEntry): ActivityWork => ({
 
 export interface ActivityOptions {
   works: readonly ActivityWork[];
+  /** Разовое предупреждение о пропавших хуках уходит сюда (4.3, раздел 10). */
+  onEvents?: (events: readonly StatusEventInit[]) => void;
   /**
    * Страховка: что известно про лог провайдера. Индекс логов уже живёт в
    * `use-sessions`, второй раз читать файлы незачем.
@@ -55,20 +58,37 @@ export interface ActivityState {
   workState: (key: string) => DotState | null;
   /** Панель подключилась к сессии: `unseen` гаснет (4.1). */
   markSeen: (sessionId: string) => void;
-  /** Каталога `events/` нет: нужен разовый `⚑` в строке статуса (4.3). */
+  /**
+   * У сессии, запущенной из TUI, каталога `events/` нет: `--settings` не принят
+   * бинарём, состояния ведёт одна страховка (4.3, раздел 10). О чужих сессиях
+   * харнесс не судит: их поднимали не мы и не нашими настройками.
+   */
   hooksMissing: boolean;
 }
 
 /** Журналы известных сессий: `null` — каталога `events/` нет вовсе. */
 type Journals = ReadonlyMap<string, readonly EventRecord[] | null>;
 
-/** Подписка пересоздаётся, только когда меняется набор работ и их сессий. */
+/**
+ * Подписка пересоздаётся, только когда меняется набор работ и их сессий. В
+ * приметы входит и `launchedBy`: каталог `events/` заводит запуск, и журнал
+ * своей сессии надо перечитать, когда она стала нашей (4.3).
+ */
 const signatureOf = (works: readonly ActivityWork[]): string =>
   JSON.stringify(
-    works.map((work) => [work.key, work.eventsDir, work.sessions.map((session) => session.id)]),
+    works.map((work) => [
+      work.key,
+      work.eventsDir,
+      work.sessions.map((session) => `${session.id}:${session.launchedBy ?? '—'}`),
+    ]),
   );
 
-export function useActivity({ works, log, silenceThresholdMs }: ActivityOptions): ActivityState {
+export function useActivity({
+  works,
+  log,
+  silenceThresholdMs,
+  onEvents,
+}: ActivityOptions): ActivityState {
   const [journals, setJournals] = useState<Journals>(new Map());
   // Сессия, к которой подключена панель: пока она подключена, её ход виден
   // целиком — «unseen переходит в idle, когда сессия подключена к панели и
@@ -172,12 +192,27 @@ export function useActivity({ works, log, silenceThresholdMs }: ActivityOptions)
 
   const markSeen = useCallback((sessionId: string) => setAttached(sessionId), []);
 
+  // Хуков нет у сессии, которую поднимал харнесс: сказать об этом надо один раз
+  // за запуск — событие без источника, гаснет по любой клавише (4.3, раздел 10).
+  const hooksMissing = current.current.some((work) =>
+    work.sessions.some(
+      (session) => session.launchedBy === 'tui' && journals.get(session.id) === null,
+    ),
+  );
+  const notify = useRef(onEvents);
+  notify.current = onEvents;
+  const warned = useRef(false);
+  useEffect(() => {
+    if (!hooksMissing || warned.current) return;
+    warned.current = true;
+    notify.current?.([{ text: 'хуки Claude Code не пришли — состояния по логу' }]);
+  }, [hooksMissing]);
+
   return {
     activityOf: useCallback((sessionId: string) => states.get(sessionId) ?? null, [states]),
     stateOf,
     workState,
     markSeen,
-    // Хуков нет хотя бы у одной известной сессии — предупреждение общее (4.3).
-    hooksMissing: [...journals.values()].some((events) => events === null),
+    hooksMissing,
   };
 }

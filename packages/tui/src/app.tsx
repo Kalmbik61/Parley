@@ -71,6 +71,7 @@ export function App({
     works: works.map(activityWork),
     log,
     silenceThresholdMs: config.silenceThresholdMs,
+    onEvents: push,
   });
 
   const [hidden, setHidden] = useState(false);

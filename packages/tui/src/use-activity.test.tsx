@@ -6,6 +6,7 @@ import { Text, useInput } from 'ink';
 import { render } from 'ink-testing-library';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { StatusEventInit } from './use-status.js';
 import { useActivity, type ActivityWork } from './use-activity.js';
 
 let events = '';
@@ -49,8 +50,14 @@ function session(over: Partial<WorkSession> = {}): WorkSession {
 }
 
 /** Клавиши `s` и `d` подключают панель к первой и ко второй сессии. */
-function Probe({ works }: { works: readonly ActivityWork[] }): ReactNode {
-  const activity = useActivity({ works });
+function Probe({
+  works,
+  events = [],
+}: {
+  works: readonly ActivityWork[];
+  events?: StatusEventInit[];
+}): ReactNode {
+  const activity = useActivity({ works, onEvents: (incoming) => events.push(...incoming) });
   useInput((input) => {
     if (input === 's') activity.markSeen('s-01');
     if (input === 'd') activity.markSeen('s-02');
@@ -174,11 +181,48 @@ describe('useActivity', () => {
 
   it('каталога events/ нет — работает страховка, поднят флаг предупреждения', async () => {
     const works: ActivityWork[] = [
-      { key: 'w1', eventsDir: path.join(events, 'нет'), sessions: [session()] },
+      {
+        key: 'w1',
+        eventsDir: path.join(events, 'нет'),
+        sessions: [session({ launchedBy: 'tui' })],
+      },
     ];
 
     const { lastFrame } = render(<Probe works={works} />);
     await settle();
     expect(lastFrame()).toBe('idle|idle|true');
+  });
+
+  it('пропавшие хуки своей сессии — разовое предупреждение в строке статуса (4.3)', async () => {
+    const works: ActivityWork[] = [
+      {
+        key: 'w1',
+        eventsDir: path.join(events, 'нет'),
+        sessions: [session({ launchedBy: 'tui' })],
+      },
+    ];
+    const seen: StatusEventInit[] = [];
+
+    const { rerender } = render(<Probe works={works} events={seen} />);
+    await settle(200);
+    expect(seen.map((event) => event.text)).toEqual([
+      'хуки Claude Code не пришли — состояния по логу',
+    ]);
+
+    // Второй раз о том же не напоминаем: предупреждение разовое (раздел 10).
+    rerender(<Probe works={works} events={seen} />);
+    await settle(200);
+    expect(seen).toHaveLength(1);
+  });
+
+  it('о чужой сессии без хуков харнесс не предупреждает (4.3)', async () => {
+    const works: ActivityWork[] = [
+      { key: 'w1', eventsDir: path.join(events, 'нет'), sessions: [session()] },
+    ];
+    const seen: StatusEventInit[] = [];
+
+    render(<Probe works={works} events={seen} />);
+    await settle(200);
+    expect(seen).toEqual([]);
   });
 });
