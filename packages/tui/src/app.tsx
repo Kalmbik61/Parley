@@ -187,7 +187,7 @@ export function App({
     fail,
   });
 
-  const view = { ...sidebar, navigating: actions.navigating };
+  const view = { ...sidebar, navigating: actions.navigating, cursor: actions.cursor };
   // Широкий оверлей ложится и на сайдбар: на этот кадр сайдбар уступает место (§4.0).
   const wide = overlays.kind !== 'sidebar';
   const covers = overlayCovers(overlays.desired, wide, columns, rows, panelLeft);

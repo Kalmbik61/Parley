@@ -5,8 +5,10 @@ import { pinUnicodeGlyphs } from '../../test/glyphs-env.js';
 import {
   branchOf,
   Sidebar,
+  sidebarCursorRows,
   SidebarOverlay,
   sidebarWidth,
+  stepCursor,
   type SidebarSession,
   type SidebarWork,
 } from './sidebar.js';
@@ -398,5 +400,67 @@ describe('branchOf', () => {
         () => null,
       ),
     ).toBeNull();
+  });
+});
+
+// Дефект приёмки: строка `new` и строки работ были недостижимы с клавиатуры.
+describe('sidebarCursorRows', () => {
+  const rows = (): ReturnType<typeof sidebarCursorRows> =>
+    sidebarCursorRows([work(), work({ key: 'k2', number: 2, title: 'Платежи' })], ['s-01', 's-02']);
+
+  it('курсор ходит по работам, строке new и сессиям выбранной работы (3.2)', () => {
+    expect(rows().map((row) => `${row.kind} ${row.key}`)).toEqual([
+      'work /dev/shop w-0001',
+      'work k2',
+      'new ',
+      'session s-01',
+      'session s-02',
+    ]);
+  });
+
+  it('пять j с первой работы доходят до new и до сессий и замыкают круг', () => {
+    const all = rows();
+    let cursor = all[0] ?? null;
+    const visited = [];
+    for (let step = 0; step < 5; step++) {
+      cursor = stepCursor(all, cursor, 1);
+      visited.push(cursor === null ? '—' : `${cursor.kind} ${cursor.key}`);
+    }
+
+    expect(visited).toEqual([
+      'work k2',
+      'new ',
+      'session s-01',
+      'session s-02',
+      'work /dev/shop w-0001',
+    ]);
+  });
+
+  it('k ходит в обратную сторону, а забытый курсор начинает сверху', () => {
+    const all = rows();
+    expect(stepCursor(all, all[0] ?? null, -1)).toEqual({ kind: 'session', key: 's-02' });
+    // Работа, на которой стоял курсор, закончилась — начинаем с первой строки.
+    expect(stepCursor(all, { kind: 'work', key: 'пропала' }, 1)).toEqual(all[0]);
+    expect(stepCursor([], null, 1)).toBeNull();
+  });
+});
+
+describe('Sidebar курсор навигации', () => {
+  it('строка new под курсором подсвечена, как выбранные строки (макет 1.5)', () => {
+    const all = lines(
+      <Sidebar
+        works={[work()]}
+        sessions={[item()]}
+        selectedWork="/dev/shop w-0001"
+        selectedSession="s-01"
+        cursor={{ kind: 'new', key: '' }}
+        width={26}
+        height={10}
+      />,
+    );
+
+    // Курсор виден только цветом: здесь проверяем, что раскладка от него не поехала.
+    expect(lineWith(all, 'new')).toContain(' new');
+    expect(lineWith(all, 'план')).toContain('working');
   });
 });

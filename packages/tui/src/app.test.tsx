@@ -66,6 +66,15 @@ afterEach(async () => {
   await Promise.all([home, project, logs].map((dir) => rm(dir, clean)));
 });
 
+/** Ожидание условия, за которым надо сходить на диск: карта или индекс работ. */
+const waitFor2 = async (check: () => Promise<boolean>, timeoutMs = 8000): Promise<void> => {
+  const started = Date.now();
+  while (!(await check())) {
+    if (Date.now() - started > timeoutMs) throw new Error('не дождались');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+};
+
 const waitFor = async (check: () => boolean, timeoutMs = 8000): Promise<void> => {
   const started = Date.now();
   while (!check()) {
@@ -243,6 +252,75 @@ describe('new: быстрая сессия без диалога (5.1)', () => {
   }, 30_000);
 });
 
+describe('навигация по сайдбару (3.2, макеты 1.5 и §8)', () => {
+  /** Работа с одной `pending`-сессией: процессов такой сценарий не поднимает. */
+  const workWith = async (title: string, label: string): Promise<string> => {
+    const created = await createWork(project, { title });
+    await updateMap(project, created.work.id, (map) => {
+      addSession(map, { provider: 'claude', label, task: '' });
+    });
+    return created.work.id;
+  };
+
+  it('курсор доходит до строк работ: Enter выбирает работу и открывает её сессии', async () => {
+    await workWith('Авторизация', 'план');
+    // Свежая работа стоит в сайдбаре первой и выбрана по умолчанию (2.1).
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await workWith('Платежи', 'бэкенд');
+
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await waitFor(() => (app.lastFrame() ?? '').includes('сессии · Платежи'));
+
+      // Курсор входит в сайдбар на выбранной сессии, дальше идёт по работам.
+      app.stdin.write(`${PREFIX}s`);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      app.stdin.write('j');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      app.stdin.write('j');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      app.stdin.write(ENTER);
+
+      await waitFor(() => (app.lastFrame() ?? '').includes('сессии · Авторизация'));
+      expect(lineWith(app.lastFrame() ?? '', 'план')).toContain('план');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('строка new достижима: Enter кладёт сессию в работу, prefix c заводит вторую работу (5.1)', async () => {
+    const app = open();
+    try {
+      const workId = await launch(app);
+      await waitMap(workId, (item) => item.status === 'active');
+
+      // Сессия → работа → `new`: пять строк сайдбара обходятся по кругу (3.2).
+      app.stdin.write(`${PREFIX}s`);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      app.stdin.write('j');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      app.stdin.write('j');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // `Enter` по `new` — вторая сессия в той же работе, а не вторая работа.
+      app.stdin.write(ENTER);
+      await waitFor2(async () => (await readMap(project, workId)).sessions.length === 2);
+      expect((await readWorksIndex()).works).toHaveLength(1);
+
+      // Курсор остался на `new`: теперь `prefix c` заводит работу «без названия».
+      app.stdin.write(`${PREFIX}c`);
+      await waitFor2(async () => (await readWorksIndex()).works.length === 2);
+      const { works } = await readWorksIndex();
+      expect(works.map((item) => item.title)).toEqual(['без названия', 'без названия']);
+      // Сессия легла в новую работу, а не в прежнюю: их по-прежнему две.
+      expect((await readMap(project, workId)).sessions).toHaveLength(2);
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+});
+
 describe('вторая строка работы (макет 1.1)', () => {
   const git = promisify(execFile);
 
@@ -352,10 +430,13 @@ describe('события и просмотр (4.1, 6)', () => {
 
       app.stdin.write(`${PREFIX}s`);
       await new Promise((resolve) => setTimeout(resolve, 150));
-      // Ходьба по сайдбару — это ещё не подключение: `unseen` держится.
-      app.stdin.write('j');
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      expect(lineWith(app.lastFrame() ?? '', 'план')).toContain('unseen');
+      // Круг по всем строкам сайдбара — работа, `new`, снова сессия — это ещё
+      // не подключение: `unseen` держится (3.2).
+      for (let step = 0; step < 3; step++) {
+        app.stdin.write('j');
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        expect(lineWith(app.lastFrame() ?? '', 'план')).toContain('unseen');
+      }
 
       app.stdin.write(ENTER);
       await waitFor(() => lineWith(app.lastFrame() ?? '', 'план').includes('idle'));

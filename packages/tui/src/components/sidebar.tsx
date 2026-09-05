@@ -195,6 +195,8 @@ export interface SidebarProps {
   height: number;
   /** Режим навигации `prefix s`: разделитель cyan и жирный (макет 1.5). */
   navigating?: boolean;
+  /** Курсор режима навигации: его строка подсвечена наравне с выбранными (3.2). */
+  cursor?: SidebarTarget | null;
   /** Свой разделитель справа; в оверлее его место занимает рамка (макет 1.3). */
   divider?: boolean;
 }
@@ -396,8 +398,10 @@ function layout({
   selectedSession,
   width,
   height,
+  cursor = null,
 }: SidebarProps): SidebarRow[] {
   const g = glyphs();
+  const atCursor = (target: SidebarTarget | null): boolean => sameTarget(cursor, target);
   const line = (
     key: string,
     text: string,
@@ -409,11 +413,11 @@ function layout({
   const top: SidebarRow[] = [];
   if (works.length === 0) {
     top.push(line('нет-работ', ' работ нет'));
-    top.push(line('new', ' new — первая сессия', false, false, NEW_TARGET));
+    top.push(line('new', ' new — первая сессия', false, atCursor(NEW_TARGET), NEW_TARGET));
   } else {
     for (const work of works) {
-      const selected = work.key === selectedWork;
       const target: SidebarTarget = { kind: 'work', key: work.key };
+      const selected = work.key === selectedWork || atCursor(target);
       top.push({ kind: 'work', key: work.key, work, selected, target });
       // Вторая строка отбрасывается у `done`-работ и на узком сайдбаре (§7).
       if (work.done || width <= NARROW) continue;
@@ -421,7 +425,7 @@ function layout({
         line(`${work.key} проект`, `   ${projectLine(work, width, g)}`, true, selected, target),
       );
     }
-    top.push(line('new', ' new', false, false, NEW_TARGET));
+    top.push(line('new', ' new', false, atCursor(NEW_TARGET), NEW_TARGET));
   }
 
   const selectedTitle = works.find((work) => work.key === selectedWork)?.title ?? null;
@@ -449,10 +453,12 @@ function layout({
   } else {
     if (start > 0) bottom.push(line('выше', ` ${g.ellipsis} ${start} выше`));
     for (const { item, depth } of ordered.slice(start, end)) {
-      const selected = item.session.id === selectedSession;
+      const chosenRow = item.session.id === selectedSession;
       const target: SidebarTarget = { kind: 'session', key: item.session.id };
+      const selected = chosenRow || atCursor(target);
       bottom.push({ kind: 'session', key: item.session.id, item, depth, selected, target });
-      if (!selected || !compact) continue;
+      // Компактная строка принадлежит выбранной сессии, а не курсору (решение №7).
+      if (!chosenRow || !compact) continue;
       bottom.push(
         line(`${item.session.id} метрики`, `   ${compactLine(item, width, g)}`, true, true, target),
       );
@@ -485,6 +491,39 @@ function layout({
  */
 export const sidebarTargets = (props: SidebarProps): Array<SidebarTarget | null> =>
   layout(props).map((row) => row.target);
+
+/** Одна и та же строка сайдбара: клавиша и мышь метят в одну цель. */
+export const sameTarget = (a: SidebarTarget | null, b: SidebarTarget | null): boolean =>
+  a !== null && b !== null && a.kind === b.kind && a.key === b.key;
+
+/**
+ * Строки, по которым ходит курсор режима навигации: работы сверху вниз, строка
+ * `new`, затем сессии выбранной работы (дизайн 3.2, макеты 1.5 и §8). Окно
+ * видимых сессий здесь не при чём: курсор доходит и до тех, что уехали за край.
+ */
+export const sidebarCursorRows = (
+  works: readonly SidebarWork[],
+  sessions: readonly string[],
+): SidebarTarget[] => [
+  ...works.map((work): SidebarTarget => ({ kind: 'work', key: work.key })),
+  NEW_TARGET,
+  ...sessions.map((id): SidebarTarget => ({ kind: 'session', key: id })),
+];
+
+/**
+ * Соседняя строка по кругу; курсора нет или его строка пропала — первая строка
+ * сайдбара, а не потерянный курсор.
+ */
+export function stepCursor(
+  rows: readonly SidebarTarget[],
+  cursor: SidebarTarget | null,
+  delta: number,
+): SidebarTarget | null {
+  if (rows.length === 0) return null;
+  const at = rows.findIndex((row) => sameTarget(row, cursor));
+  if (at < 0) return rows[0] ?? null;
+  return rows[(at + delta + rows.length) % rows.length] ?? null;
+}
 
 export const Sidebar = memo(function Sidebar(props: SidebarProps): ReactNode {
   const { width, navigating = false, divider = true } = props;

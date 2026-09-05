@@ -25,6 +25,7 @@ import {
   type LaunchPlan,
 } from './work-launch.js';
 import type { WorkSession } from '@harnas/core';
+import { workKey } from './work-rows.js';
 
 export interface PanelOptions {
   projectPath: string;
@@ -46,10 +47,11 @@ export interface PanelState {
   /** Подключить панель к сессии; своего PTY у неё нет — панель отпускает гостя. */
   attach: (key: string) => void;
   /**
-   * Быстрая сессия `new`: работа берётся выбранная или заводится «без
-   * названия», процесс стартует сразу (5.1). Колбэк получает id новой сессии.
+   * Быстрая сессия `new`: работа берётся выбранная, а `null` заводит «без
+   * названия», процесс стартует сразу (5.1). Колбэк получает id новой сессии и
+   * ключ её работы: работа могла родиться только что, и выбор едет за ней.
    */
-  create: (workId: string | null, created: (sessionId: string) => void) => void;
+  create: (workId: string | null, created: (sessionId: string, workKey: string) => void) => void;
   /**
    * Запуск `pending` по брифу или возобновление вышедшей через `resumeArgs`
    * (оверлеи 4.5 и 4.6). Проект берётся у работы: она может быть чужой.
@@ -163,7 +165,7 @@ export function usePanel({
       void createNewSession(projectPath, workId)
         .then(async ({ workId: id, session }) => {
           openWork(projectPath, id, session, await planNew(projectPath, id, session));
-          created(session.id);
+          created(session.id, workKey(projectPath, id));
         })
         .catch(onFail);
     },

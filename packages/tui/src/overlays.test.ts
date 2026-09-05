@@ -343,6 +343,9 @@ describe('справка (макет 4.4)', () => {
     ]) {
       expect(all, key).toContain(` ${key}`);
     }
+    // Правило строки `new` записано одной строкой справки (5.1).
+    expect(all).toContain('на строке new — новая работа');
+
     const filtered = helpView('ctrl+q', 'резюме', '/c.json', g).lines;
     expect(filtered.filter((line) => line.text.includes('дозаказать'))).toHaveLength(1);
     expect(filtered.some((line) => line.text.includes('пикер работ'))).toBe(false);
