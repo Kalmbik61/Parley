@@ -1,24 +1,23 @@
 /**
- * Содержимое диалогов левой колонки (дизайн координации TUI, 4.1–4.5).
+ * Содержимое подтверждений: запуск, возобновление, дозаказ резюме, закрытие
+ * сессии и выход (макеты TUI v2, 4.5–4.9; прежний дизайн 4.3–4.5).
  *
- * Здесь только текст и поля: файловой системы и Ink нет, поэтому макеты
- * проверяются тестами без запуска чего бы то ни было.
+ * Здесь только текст: файловой системы и Ink нет, поэтому макеты проверяются
+ * тестами без запуска чего бы то ни было. Рамку рисует `components/overlay.tsx`,
+ * тело — существующий `dialog.tsx`.
  */
 
 import { workPaths, type WorkSession } from '@harnas/core';
 import path from 'node:path';
-import type { DialogField } from './components/dialog.js';
-import { formatClock, truncate, truncateLeft, withHome } from './format.js';
+import { formatClock, truncate, truncateLeft } from './format.js';
 import { statusGlyph, type Glyphs } from './glyphs.js';
-import type { ProviderOption } from './work-launch.js';
-import { providerLabel, providerMarkOf, type WorkRowSession } from './work-rows.js';
 
 export interface DialogSpec {
-  /** Заголовок нижней левой панели на время диалога. */
+  /** Заголовок в верхней рамке оверлея. */
   title: string;
-  fields: DialogField[];
+  /** Строки над телом: путь брифа, команда возобновления, код выхода. */
   info: string[];
-  /** Тело-цитата: первые строки брифа (4.3). */
+  /** Тело-цитата: первые строки брифа, листается `↑↓` (макет 4.5). */
   quote: string[];
   footer: string;
 }
@@ -27,90 +26,45 @@ export interface DialogSpec {
 const SUMMARY = 40;
 
 /**
- * С этой ширины в заголовок помещается полное имя провайдера; уже — двухсимвольная
- * марка или ничего (макеты 4.3 и 4.4: 26 знаков на 80×24, 41 на 120×40).
- */
-const WIDE = 30;
-
-/** 4.1. Проект не выбирается: работа всегда создаётся в cwd харнесса (решение №9). */
-export function newWorkDialog(projectPath: string): DialogSpec {
-  return {
-    title: 'НОВАЯ РАБОТА',
-    fields: [
-      { key: 'title', label: 'Заголовок' },
-      { key: 'goal', label: 'Цель', optional: true, multiline: true },
-    ],
-    info: [`Проект: ${withHome(projectPath)}`],
-    quote: [],
-    footer: 'Enter — создать · Esc — отмена',
-  };
-}
-
-/**
- * 4.2. Провайдер — селектор по реестру. Недоступный виден в самом кольце
- * вариантов с пометкой, почему он не выбирается: отдельной строкой не понять,
- * где в кольце пропуск.
- */
-export function newSessionDialog(workTitle: string, providers: ProviderOption[]): DialogSpec {
-  return {
-    title: `НОВАЯ СЕССИЯ · ${workTitle}`,
-    fields: [
-      {
-        key: 'provider',
-        label: 'Провайдер',
-        options: providers.map((item) => ({
-          id: item.id,
-          label: item.label,
-          ...(item.available
-            ? {}
-            : { disabled: true, ...(item.note === undefined ? {} : { note: item.note }) }),
-        })),
-      },
-      { key: 'label', label: 'Роль' },
-      { key: 'task', label: 'Задача', multiline: true },
-    ],
-    info: [],
-    quote: [],
-    footer: 'Enter — создать (pending) · Esc',
-  };
-}
-
-/**
  * Путь брифа: от корня проекта, пока помещается в строку, иначе короткая форма
- * `briefs/<id>.md` (макеты 4.3, усечение путей слева — 6.4).
+ * `briefs/<id>.md` (макет 4.5, усечение путей слева — 6.4).
  */
-function briefLine(row: WorkRowSession, width: number, g: Glyphs): string {
+function briefLine(
+  projectPath: string,
+  workId: string,
+  sessionId: string,
+  width: number,
+  g: Glyphs,
+): string {
   const head = 'бриф: ';
-  const dir = path.relative(row.projectPath, workPaths(row.projectPath, row.workId).briefs);
-  const full = path.join(dir, `${row.session.id}.md`);
+  const dir = path.relative(projectPath, workPaths(projectPath, workId).briefs);
+  const full = path.join(dir, `${sessionId}.md`);
   const room = Math.max(0, width - head.length);
-  const short = path.join(path.basename(dir), `${row.session.id}.md`);
+  const short = path.join(path.basename(dir), `${sessionId}.md`);
   return `${head}${full.length <= room ? full : truncateLeft(short, room, g.ellipsis)}`;
 }
 
 /**
- * 4.3. Тело — первые строки брифа. Править бриф из TUI нельзя: диалог
+ * 4.5. Тело — первые строки брифа. Править бриф из TUI нельзя: оверлей
  * показывает путь, файл правится своим редактором и перечитывается при `Enter`.
  */
 export function launchDialog(
-  row: WorkRowSession,
+  projectPath: string,
+  workId: string,
+  session: WorkSession,
   brief: string,
   g: Glyphs,
   width: number,
 ): DialogSpec {
-  const { session } = row;
-  const provider =
-    width >= WIDE ? providerLabel(session.provider) : providerMarkOf(session.provider);
   return {
-    title: `ЗАПУСК ${g.pending} ${session.label} (${provider})`,
-    fields: [],
-    info: [briefLine(row, width, g)],
+    title: `запуск ${g.pending} ${session.label}`,
+    info: [briefLine(projectPath, workId, session.id, width, g)],
     quote: brief.split('\n'),
     footer: 'Enter — запустить · Esc — позже',
   };
 }
 
-/** Как выглядит команда возобновления: `codex resume 7fa0e1…` (макет 4.4). */
+/** Как выглядит команда возобновления: `claude --resume 7fa0e1…` (макет 4.6). */
 export function resumePreview(
   command: string,
   args: readonly string[],
@@ -131,30 +85,20 @@ function exitLine(session: WorkSession): string {
       : last?.exitCode === undefined
         ? null
         : `код ${last.exitCode}`;
-  const head = session.status === 'exited' ? 'вышел' : 'завершилась';
+  const head = session.status === 'exited' ? 'вышла' : 'завершилась';
   return mark === null ? `${head} ${at}` : `${head} ${at} · ${mark}`;
 }
 
 /** Прежнее резюме остаётся в карте до нового `report` — но будет перезаписано. */
 function summaryLine(session: WorkSession, g: Glyphs): string {
-  if (session.summary === null) return 'отчёта не было · резюме: нет';
+  if (session.summary === null) return 'отчёта не было · резюме: нет — R закажет авто-резюме';
   return `резюме: «${truncate(session.summary, SUMMARY, g.ellipsis)}» (будет перезаписано)`;
 }
 
-/** 4.4. Тот же диалог для `○ exited` и для завершённых `✓` / `✗`. */
-export function resumeDialog(
-  row: WorkRowSession,
-  command: string,
-  g: Glyphs,
-  width: number,
-): DialogSpec {
-  const { session } = row;
-  // На узкой колонке провайдера в заголовке нет вовсе: место занимает роль,
-  // а провайдер и так виден в команде возобновления строкой ниже (макет 4.4).
-  const provider = width >= WIDE ? ` (${providerLabel(session.provider)})` : '';
+/** 4.6. Тот же оверлей для `○ exited` и для завершённых `✓` / `✗`. */
+export function resumeDialog(session: WorkSession, command: string, g: Glyphs): DialogSpec {
   return {
-    title: `ВОЗОБНОВИТЬ ${statusGlyph(session.status, g)} ${session.label}${provider}`,
-    fields: [],
+    title: `возобновить ${statusGlyph(session.status, g)} ${session.label}`,
     info: [command, exitLine(session), summaryLine(session, g)],
     quote: [],
     footer: 'Enter — возобновить · Esc',
@@ -162,22 +106,13 @@ export function resumeDialog(
 }
 
 /**
- * 4.5. Дозаказ резюме для сессии, вышедшей без отчёта. Полей нет: диалог только
- * объясняет, чем считается резюме и как оно запишется, и подтверждает заказ.
+ * 4.7. Дозаказ резюме для сессии, вышедшей без отчёта: оверлей объясняет, чем
+ * оно считается и как запишется, и подтверждает заказ.
  */
-export function summaryDialog(row: WorkRowSession, g: Glyphs, width: number): DialogSpec {
-  const { session } = row;
-  const wide = width >= WIDE;
+export function summaryDialog(session: WorkSession, g: Glyphs): DialogSpec {
   return {
-    title: `${wide ? 'ДОЗАКАЗ РЕЗЮМЕ' : 'РЕЗЮМЕ ДЛЯ'} ${statusGlyph(session.status, g)} ${session.label}`,
-    fields: [],
-    info: wide
-      ? [
-          'Один вызов claude -p по транскрипту',
-          'провайдера. Результат — summary с',
-          'пометкой «авто» (summarySource=auto).',
-        ]
-      : ['claude -p по транскрипту', 'запишется как «авто»'],
+    title: `резюме для ${statusGlyph(session.status, g)} ${session.label}`,
+    info: ['один вызов claude -p по транскрипту', 'результат — сводка с пометкой «авто»'],
     quote: [],
     footer: 'Enter — заказать · Esc',
   };
@@ -190,7 +125,6 @@ export function summaryDialog(row: WorkRowSession, g: Glyphs, width: number): Di
 export function closeSessionDialog(session: WorkSession, g: Glyphs): DialogSpec {
   return {
     title: `закрыть ${statusGlyph(session.status, g)} ${session.label}`,
-    fields: [],
     info: [
       `процессу будет послан SIGHUP${session.pid === null ? '' : ` · pid ${session.pid}`}`,
       'транскрипт останется в ~/.claude',
@@ -204,7 +138,6 @@ export function closeSessionDialog(session: WorkSession, g: Glyphs): DialogSpec 
 export function exitDialog(live: readonly string[]): DialogSpec {
   return {
     title: 'выход',
-    fields: [],
     info: [`живые сессии: ${live.join(', ')}`, 'их процессы будут завершены'],
     quote: [],
     footer: 'Enter — выйти · Esc — остаться',

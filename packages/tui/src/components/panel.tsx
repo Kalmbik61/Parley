@@ -1,7 +1,7 @@
 /**
  * Панель: экран живого агента, а без него — карточка выбранной сессии
  * (дизайн TUI v2, 2.2; макеты §2). Это единственное место, где харнесс рисует
- * поверх области гостя, и подтверждения (макеты 4.8, 4.9) живут здесь же.
+ * поверх области гостя; оверлеи и подтверждения живут выше, в композиции.
  */
 
 import { workPaths, type WorkEntry, type WorkSession } from '@harnas/core';
@@ -11,9 +11,7 @@ import type { ReactNode } from 'react';
 import { formatClock, truncate } from '../format.js';
 import { glyphs } from '../glyphs.js';
 import type { TerminalSnapshot } from '../pty/terminal-buffer.js';
-import type { DialogSpec } from '../work-dialogs.js';
 import { dotColor, dotGlyph, type DotState } from './activity-dot.js';
-import { Dialog } from './dialog.js';
 import { TerminalView } from './terminal-view.js';
 
 /** Отступ карточки слева и запас справа (макеты §2). */
@@ -169,10 +167,6 @@ function Card({ card, width }: { card: CardProps; width: number }): ReactNode {
 }
 
 export interface PanelProps {
-  /** Открытое подтверждение: пока оно на экране, ввод принадлежит ему (2.4). */
-  dialog: { id: number; spec: DialogSpec } | null;
-  onSubmit: () => void;
-  onCancel: () => void;
   /** Экран живого агента; `undefined` — панель показывает карточку. */
   screen: TerminalSnapshot | undefined;
   card: CardProps;
@@ -180,31 +174,7 @@ export interface PanelProps {
   height: number;
 }
 
-export function Panel({
-  dialog,
-  onSubmit,
-  onCancel,
-  screen,
-  card,
-  width,
-  height,
-}: PanelProps): ReactNode {
-  if (dialog !== null) {
-    return (
-      <Box flexDirection="column">
-        <Text bold>{dialog.spec.title}</Text>
-        <Dialog
-          key={dialog.id}
-          info={dialog.spec.info}
-          footer={dialog.spec.footer}
-          width={width}
-          height={Math.max(1, height - 1)}
-          onSubmit={onSubmit}
-          onCancel={onCancel}
-        />
-      </Box>
-    );
-  }
+export function Panel({ screen, card, width, height }: PanelProps): ReactNode {
   if (screen !== undefined) return <TerminalView snapshot={screen} height={height} />;
   return <Card card={card} width={width} />;
 }

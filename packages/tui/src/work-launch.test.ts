@@ -10,7 +10,6 @@ import {
   linkSession,
   planLaunch,
   planResume,
-  providerOptions,
   readBrief,
   startSession,
 } from './work-launch.js';
@@ -257,28 +256,6 @@ describe('переходы статусов', () => {
     const session = await sessionOf(workId, sessionId);
     expect(session.status).toBe('done');
     expect(session.summary).toBe('готово');
-  });
-});
-
-describe('провайдеры для диалога новой сессии', () => {
-  it('помечают тех, кого нет в PATH', async () => {
-    const options = await providerOptions();
-    const byId = new Map(options.map((item) => [item.id, item]));
-
-    expect(byId.get('claude')?.available).toBe(true);
-    expect(byId.get('claude')?.label).toBe('Claude');
-    expect(byId.get('glm')?.available).toBe(false);
-    expect(byId.get('glm')?.note).toBe('нет в PATH');
-  });
-
-  it('провайдер без шаблона аргументов не выбирается: бриф и MCP до него не доедут', async () => {
-    // glm стоит в PATH, но в реестре у него ни args, ни mcpConfig: такой процесс
-    // не получил бы ни брифа, ни harnas-MCP (спецификация, раздел 5).
-    process.env['HARNAS_GLM_BIN'] = STUB;
-    const glm = (await providerOptions()).find((item) => item.id === 'glm');
-
-    expect(glm?.available).toBe(false);
-    expect(glm?.note).toBe('без брифа');
   });
 });
 

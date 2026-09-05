@@ -15,7 +15,16 @@ import { useAgentPty, workRunKey, type AgentTarget } from './pty/use-agent-pty.j
 import { useHostTerminalModes } from './pty/use-host-modes.js';
 import { usePtyResize } from './pty/use-pty-resize.js';
 import { usePtyTerminal } from './pty/use-pty-terminal.js';
-import { createNewSession, finishExited, planNew, startSession } from './work-launch.js';
+import {
+  createNewSession,
+  finishExited,
+  planLaunch,
+  planNew,
+  planResume,
+  startSession,
+  type LaunchPlan,
+} from './work-launch.js';
+import type { WorkSession } from '@harnas/core';
 
 export interface PanelOptions {
   projectPath: string;
@@ -39,6 +48,16 @@ export interface PanelState {
    * названия», процесс стартует сразу (5.1). Колбэк получает id новой сессии.
    */
   create: (workId: string | null, created: (sessionId: string) => void) => void;
+  /**
+   * Запуск `pending` по брифу или возобновление вышедшей через `resumeArgs`
+   * (оверлеи 4.5 и 4.6). Проект берётся у работы: она может быть чужой.
+   */
+  start: (
+    projectPath: string,
+    workId: string,
+    session: WorkSession,
+    mode: 'launch' | 'resume',
+  ) => void;
   /** SIGHUP процессу панели (макет 4.8). */
   close: (key: string) => void;
   /** Байты гостю на экране: пока панель показывает карточку, они пропадают. */
@@ -101,32 +120,49 @@ export function usePanel({ projectPath, roots, cols, rows, onFail }: PanelOption
     snapshot?.bracketedPaste ?? false,
   );
 
+  /** Поднять процесс сессии в панели по готовому плану запуска. */
+  const openWork = useCallback(
+    (project: string, workId: string, session: WorkSession, plan: LaunchPlan) => {
+      agent.open(
+        {
+          kind: 'work',
+          projectPath: project,
+          workId,
+          sessionId: session.id,
+          provider: session.provider,
+          title: session.label,
+          command: plan.command,
+          args: plan.args,
+          cwd: plan.cwd,
+          env: plan.env,
+          providerSessionId: plan.providerSessionId,
+        },
+        { cols, rows },
+      );
+    },
+    [agent, cols, rows],
+  );
+
   const create = useCallback<PanelState['create']>(
     (workId, created) => {
       void createNewSession(projectPath, workId)
-        .then(async (session) => {
-          const plan = await planNew(projectPath, session.workId, session.session);
-          agent.open(
-            {
-              kind: 'work',
-              projectPath,
-              workId: session.workId,
-              sessionId: session.session.id,
-              provider: session.session.provider,
-              title: session.session.label,
-              command: plan.command,
-              args: plan.args,
-              cwd: plan.cwd,
-              env: plan.env,
-              providerSessionId: plan.providerSessionId,
-            },
-            { cols, rows },
-          );
-          created(session.session.id);
+        .then(async ({ workId: id, session }) => {
+          openWork(projectPath, id, session, await planNew(projectPath, id, session));
+          created(session.id);
         })
         .catch(onFail);
     },
-    [projectPath, agent, cols, rows, onFail],
+    [projectPath, openWork, onFail],
+  );
+
+  const start = useCallback<PanelState['start']>(
+    (project, workId, session, mode) => {
+      const planner = mode === 'launch' ? planLaunch : planResume;
+      void planner(project, workId, session)
+        .then((plan) => openWork(project, workId, session, plan))
+        .catch(onFail);
+    },
+    [openWork, onFail],
   );
 
   return {
@@ -139,6 +175,7 @@ export function usePanel({ projectPath, roots, cols, rows, onFail }: PanelOption
       if (!agent.attach(key)) agent.detach();
     },
     create,
+    start,
     close: agent.close,
     write: agent.write,
   };

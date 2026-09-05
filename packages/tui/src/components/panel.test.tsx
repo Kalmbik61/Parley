@@ -58,17 +58,7 @@ const card = (over: Partial<CardProps> = {}): CardProps => ({
 });
 
 const frameOf = (props: Partial<CardProps>): string =>
-  render(
-    <Panel
-      dialog={null}
-      onSubmit={() => {}}
-      onCancel={() => {}}
-      screen={undefined}
-      card={card(props)}
-      width={61}
-      height={22}
-    />,
-  ).lastFrame() ?? '';
+  render(<Panel screen={undefined} card={card(props)} width={61} height={22} />).lastFrame() ?? '';
 
 describe('карточка панели (макеты §2)', () => {
   it('сессий нет — карточка объясняет, с чего начать', () => {
@@ -144,37 +134,5 @@ describe('карточка панели (макеты §2)', () => {
     expect(frame).not.toContain('вне харнесса');
     expect(frame).toContain('pid 48213 · запущена харнессом');
     expect(frame).toContain('ctrl+q s → Enter — подключить');
-  });
-});
-
-describe('подтверждение поверх панели', () => {
-  it('рисует заголовок, текст и подсказку диалога (макет 4.8)', () => {
-    const frame =
-      render(
-        <Panel
-          dialog={{
-            id: 1,
-            spec: {
-              title: 'закрыть ● бэкенд',
-              fields: [],
-              info: ['процессу будет послан SIGHUP · pid 48213'],
-              quote: [],
-              footer: 'Enter — закрыть · Esc',
-            },
-          }}
-          onSubmit={() => {}}
-          onCancel={() => {}}
-          screen={undefined}
-          card={card()}
-          width={61}
-          height={22}
-        />,
-      ).lastFrame() ?? '';
-
-    expect(frame).toContain('закрыть ● бэкенд');
-    expect(frame).toContain('SIGHUP · pid 48213');
-    expect(frame).toContain('Enter — закрыть');
-    // Карточка при этом не рисуется: панель занята подтверждением.
-    expect(frame).not.toContain('pending');
   });
 });

@@ -9,7 +9,6 @@
 
 import {
   addSession,
-  commandInPath,
   createWork,
   finishSession,
   linkProviderSession,
@@ -49,16 +48,6 @@ export interface LaunchPlan {
   providerSessionId: string | null;
 }
 
-/** Провайдер для селектора диалога новой сессии (дизайн 4.2). */
-export interface ProviderOption {
-  id: string;
-  label: string;
-  /** Недоступный показывается в кольце вариантов, но не выбирается. */
-  available: boolean;
-  /** Почему не выбирается: пометка едет рядом с вариантом (дизайн 4.2). */
-  note?: string;
-}
-
 async function entryOf(provider: string): Promise<ProviderEntry> {
   const registry = await loadProviders();
   const entry = registry[provider];
@@ -68,28 +57,6 @@ async function entryOf(provider: string): Promise<ProviderEntry> {
     );
   }
   return entry;
-}
-
-/** Провайдеры реестра с пометкой доступности — селектор диалога новой сессии. */
-export async function providerOptions(): Promise<ProviderOption[]> {
-  const registry = await loadProviders();
-  return Promise.all(
-    Object.values(registry).map(async (entry) => {
-      // Без шаблона аргументов бриф и MCP-конфиг до процесса не доедут: агент не
-      // узнает ни задачи, ни про `get_map` с `report` (спецификация, раздел 5).
-      const note = (await commandInPath(entry.runner.command))
-        ? (entry.runner.args ?? []).length === 0
-          ? 'без брифа'
-          : null
-        : 'нет в PATH';
-      return {
-        id: entry.id,
-        label: entry.label,
-        available: note === null,
-        ...(note === null ? {} : { note }),
-      };
-    }),
-  );
 }
 
 const briefFile = (projectPath: string, workId: string, sessionId: string): string =>
@@ -252,6 +219,33 @@ export async function applyAutoTitle(
   });
 }
 
+/**
+ * Возобновление из истории провайдера: сессия `~/.claude` регистрируется в
+ * текущей работе (дизайн TUI v2, 5.3). Она уже жила, поэтому заводится сразу
+ * `active`, и её история начинается с этого перехода — `pending` у неё не было.
+ * Метрики считаются по всему транскрипту: `providerSessionId` указывает на весь
+ * лог, включая часть до регистрации.
+ */
+export async function registerResumed(
+  projectPath: string,
+  workId: string,
+  providerSessionId: string,
+  label: string,
+  at: string = new Date().toISOString(),
+): Promise<WorkSession> {
+  let created: WorkSession | undefined;
+  await updateMap(projectPath, workId, (map) => {
+    const session = addSession(map, { provider: 'claude', label, task: '' }, at);
+    session.status = 'active';
+    session.history = [{ status: 'active', at }];
+    session.startedAt = at;
+    session.providerSessionId = providerSessionId;
+    created = session;
+  });
+  if (created === undefined) throw new Error(`сессия в работе ${workId} не создана`);
+  return created;
+}
+
 /** Новая сессия работы: запись `pending` и бриф по общему шаблону (раздел 5). */
 export async function createPendingSession(
   projectPath: string,
@@ -287,7 +281,12 @@ export async function startSession(
   started?: StartedProcess,
 ): Promise<void> {
   await updateMap(projectPath, workId, (map) => {
-    const session = transitionSession(map, sessionId, 'active');
+    const current = map.sessions.find((candidate) => candidate.id === sessionId);
+    // Возобновлённая из истории заведена в карте уже `active` (5.3): переход
+    // `active → active` таблицей не разрешён и здесь не нужен — остаётся
+    // записать приметы процесса.
+    const session =
+      current?.status === 'active' ? current : transitionSession(map, sessionId, 'active');
     if (providerSessionId !== null) session.providerSessionId = providerSessionId;
     if (started === undefined) return;
     session.pid = started.pid;

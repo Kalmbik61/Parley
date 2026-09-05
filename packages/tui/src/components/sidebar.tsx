@@ -79,10 +79,15 @@ export interface WorksViewOptions {
   /** Точка работы — максимум по её сессиям; `null` — сессий нет (решение №6). */
   workState: (key: string) => DotState | null;
   index: Indexer;
+  /**
+   * Работы чужих проектов, выбранные через пикер `prefix w`: они закрепляются
+   * в сайдбаре до выхода из харнесса (2.1, решение №3).
+   */
+  pinned?: ReadonlySet<string>;
 }
 
 /** Ветка работы известна из лога любой её сессии: в карте её нет. */
-function branchOf(entry: WorkEntry, index: Indexer): string | null {
+export function branchOf(entry: WorkEntry, index: Indexer): string | null {
   for (const session of entry.map.sessions) {
     const found = index(session)?.gitBranch;
     if (found != null) return found;
@@ -96,10 +101,15 @@ function branchOf(entry: WorkEntry, index: Indexer): string | null {
  */
 export function sidebarWorks(
   entries: readonly WorkEntry[],
-  { projectPath, workState, index }: WorksViewOptions,
+  { projectPath, workState, index, pinned = new Set<string>() }: WorksViewOptions,
 ): SidebarWork[] {
   return entries
-    .filter((entry) => entry.projectPath === projectPath && entry.map.work.status !== 'archived')
+    .filter(
+      (entry) =>
+        (entry.projectPath === projectPath ||
+          pinned.has(workKey(entry.projectPath, entry.map.work.id))) &&
+        entry.map.work.status !== 'archived',
+    )
     .sort(
       (a, b) =>
         workRank(a.map.work.status) - workRank(b.map.work.status) ||
@@ -442,3 +452,23 @@ export const Sidebar = memo(function Sidebar({
     </Box>
   );
 });
+
+/**
+ * Сайдбар оверлеем у левого края: терминал уже 60 колонок, и по `prefix b`
+ * он открывается рамкой поверх панели (макет 1.3, решение №9).
+ */
+export function SidebarOverlay(props: SidebarProps): ReactNode {
+  const g = glyphs();
+  return (
+    <Box
+      borderStyle={g.ascii ? 'classic' : 'single'}
+      borderColor="cyan"
+      // Своя рамка занимает место разделителя сайдбара: он уходит за обрез,
+      // и справа остаётся одна линия, как в макете.
+      width={props.width + 2}
+      marginTop={1}
+    >
+      <Sidebar {...props} />
+    </Box>
+  );
+}

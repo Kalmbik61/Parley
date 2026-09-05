@@ -104,10 +104,6 @@ export interface BuildRowsOptions {
 const registryEntry = (provider: string): ProviderInfo | undefined =>
   (PROVIDERS as Record<string, ProviderInfo | undefined>)[provider];
 
-export function providerLabel(provider: string): string {
-  return registryEntry(provider)?.label ?? provider;
-}
-
 export function providerMarkOf(provider: string): string {
   return registryEntry(provider)?.mark ?? provider;
 }
@@ -148,6 +144,19 @@ export function treeOrder(
   };
   for (const root of roots) walk(root, 0);
   return out;
+}
+
+/**
+ * Порядок сессий каждой работы: по нему ходят `j`/`k`, оверлей сайдбара и
+ * починка выбора (дизайн TUI v2, 2.1 и 3.2).
+ */
+export function sessionOrders(entries: readonly WorkEntry[]): Map<string, string[]> {
+  return new Map(
+    entries.map((entry) => [
+      workKey(entry.projectPath, entry.map.work.id),
+      treeOrder(entry.map.sessions).map((item) => item.session.id),
+    ]),
+  );
 }
 
 /** Входящие сессии: исходящие не показываются вовсе (решение №10). */
