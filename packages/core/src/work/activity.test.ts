@@ -85,7 +85,8 @@ describe('activityOf: таблица переходов 4.2', () => {
     expect(activity(blocked).turnEndedAt).toBeNull();
   });
 
-  // Пункт 5.
+  // Пункт 5, первая половина: «с отчётом статус не меняется» решает вызывающий,
+  // у свёртки входа про отчёт нет.
   it('SessionEnd поднимает флаг exited, не трогая activity', () => {
     const result = activity([event('UserPromptSubmit'), event('SessionEnd')]);
 
@@ -163,6 +164,35 @@ describe('activityOf: страховка по логу (4.3)', () => {
     expect(result.activity).toBe('unseen');
     expect(result.turnEndedAt).toBe('2026-09-05T09:59:30.000Z');
     expect(result.source).toBe('log');
+  });
+
+  it('свежее событие хука держит working, пока лог молчит дольше порога', () => {
+    const result = activityOf({
+      events: [event('UserPromptSubmit', null, '2026-09-05T10:00:09.000Z')],
+      log: { lastRecordAt: '2026-09-05T09:59:00.000Z' },
+      now: NOW,
+      silenceThresholdMs: 30_000,
+    });
+
+    expect(result.activity).toBe('working');
+    expect(result.source).toBe('hooks');
+    expect(result.turnEndedAt).toBeNull();
+  });
+
+  it('живой субагент без записей в лог — тоже working', () => {
+    const result = activityOf({
+      events: [
+        event('UserPromptSubmit', null, '2026-09-05T09:59:20.000Z'),
+        event('SubagentStart', null, '2026-09-05T10:00:09.000Z'),
+      ],
+      log: { lastRecordAt: '2026-09-05T09:59:00.000Z' },
+      now: NOW,
+      silenceThresholdMs: 30_000,
+    });
+
+    expect(result.activity).toBe('working');
+    expect(result.subagents).toBe(1);
+    expect(result.source).toBe('hooks');
   });
 
   it('страховка не снимает blocked', () => {

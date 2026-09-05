@@ -137,14 +137,19 @@ export function activityOf({
   const recordAt = lastRecordAt === null ? Number.NaN : Date.parse(lastRecordAt);
   if (phase !== 'blocked' && !Number.isNaN(recordAt)) {
     const eventAt = lastEventAt === null ? Number.NaN : Date.parse(lastEventAt);
-    if (Number.isNaN(eventAt) || recordAt > eventAt) {
+    const recordIsNewer = Number.isNaN(eventAt) || recordAt > eventAt;
+    if (recordIsNewer) {
       phase = 'working';
       turnEndedAt = null;
       source = 'log';
     }
-    if (phase === 'working' && now - recordAt > silenceThresholdMs) {
+    // Тишину считаем от последнего события любой оси, а не только лога: свежий
+    // хук значит, что агент жив, пока длинный инструмент или субагент ничего не
+    // пишут в транскрипт, и понижать выведенный хуками `working` нельзя.
+    const quietAt = recordIsNewer ? recordAt : eventAt;
+    if (phase === 'working' && now - quietAt > silenceThresholdMs) {
       phase = 'ended';
-      turnEndedAt = lastRecordAt;
+      turnEndedAt = recordIsNewer ? lastRecordAt : lastEventAt;
       source = 'log';
     }
   }
