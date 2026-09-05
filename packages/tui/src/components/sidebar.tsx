@@ -26,7 +26,7 @@ export const WIDE = 26;
 const NARROW = 18;
 /** Уже этого сайдбар прячется сам и доступен оверлеем по `prefix b` (2.1). */
 const MIN_COLUMNS = 60;
-/** С этой ширины терминала помещается полный сайдбар. */
+/** На этой ширине терминала сайдбар ещё узкий; полный — шире её (макет 1.2). */
 const WIDE_COLUMNS = 80;
 /** Короче этого ярлык и заголовок не режутся (раздел 7). */
 const MIN_LABEL = 4;
@@ -37,7 +37,7 @@ const MIN_LABEL = 4;
  */
 export function sidebarWidth(columns: number, configured: number = WIDE): number | null {
   if (columns < MIN_COLUMNS) return null;
-  return columns < WIDE_COLUMNS ? Math.min(configured, NARROW) : configured;
+  return columns <= WIDE_COLUMNS ? Math.min(configured, NARROW) : configured;
 }
 
 export interface SidebarWork {

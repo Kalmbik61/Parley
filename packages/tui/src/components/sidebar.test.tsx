@@ -72,7 +72,9 @@ describe('Sidebar', () => {
   // Чек-лист 22.
   it('ширины 26, 18 и скрытый сайдбар считаются по ширине терминала', () => {
     expect(sidebarWidth(120, 26)).toBe(26);
-    expect(sidebarWidth(80, 26)).toBe(26);
+    // Терминал ровно 80 колонок — сайдбар узкий (макет 1.2).
+    expect(sidebarWidth(81, 26)).toBe(26);
+    expect(sidebarWidth(80, 26)).toBe(18);
     expect(sidebarWidth(79, 26)).toBe(18);
     expect(sidebarWidth(60, 26)).toBe(18);
     expect(sidebarWidth(59, 26)).toBeNull();
