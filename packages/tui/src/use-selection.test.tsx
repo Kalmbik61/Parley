@@ -1,0 +1,70 @@
+import { Text, useInput } from 'ink';
+import { render } from 'ink-testing-library';
+import type { ReactNode } from 'react';
+import { describe, expect, it } from 'vitest';
+import { useSelection, type SelectionWork } from './use-selection.js';
+
+const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 20));
+
+const attached: string[] = [];
+
+/** Клавиши: 2 — выбрать вторую работу, a — подключить вторую сессию первой работы. */
+function Probe({ works }: { works: readonly SelectionWork[] }): ReactNode {
+  const selection = useSelection({ works, onAttach: (id) => attached.push(id) });
+  useInput((input) => {
+    if (input === '2') selection.selectWork('w2');
+    if (input === 'a') selection.attach('s-02');
+  });
+  return <Text>{`${selection.work ?? '—'}|${selection.session ?? '—'}`}</Text>;
+}
+
+const works: SelectionWork[] = [
+  { key: 'w1', sessions: ['s-01', 's-02'] },
+  { key: 'w2', sessions: ['s-03'] },
+];
+
+describe('useSelection', () => {
+  it('по умолчанию выбраны первая работа и её первая сессия', async () => {
+    const { lastFrame } = render(<Probe works={works} />);
+    await settle();
+    expect(lastFrame()).toBe('w1|s-01');
+  });
+
+  it('смена работы переводит выбор на её первую сессию', async () => {
+    const { stdin, lastFrame } = render(<Probe works={works} />);
+    await settle();
+
+    stdin.write('2');
+    await settle();
+    expect(lastFrame()).toBe('w2|s-03');
+  });
+
+  it('подключение к сессии гасит unseen через onAttach', async () => {
+    attached.length = 0;
+    const { stdin, lastFrame } = render(<Probe works={works} />);
+    await settle();
+
+    stdin.write('a');
+    await settle();
+    expect(lastFrame()).toBe('w1|s-02');
+    expect(attached).toEqual(['s-02']);
+  });
+
+  it('исчезнувшая работа или сессия чинит выбор сама', async () => {
+    const { stdin, lastFrame, rerender } = render(<Probe works={works} />);
+    await settle();
+    stdin.write('2');
+    await settle();
+    expect(lastFrame()).toBe('w2|s-03');
+
+    rerender(<Probe works={[{ key: 'w1', sessions: [] }]} />);
+    await settle();
+    expect(lastFrame()).toBe('w1|—');
+  });
+
+  it('работ нет — выбирать нечего', async () => {
+    const { lastFrame } = render(<Probe works={[]} />);
+    await settle();
+    expect(lastFrame()).toBe('—|—');
+  });
+});

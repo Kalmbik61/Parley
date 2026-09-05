@@ -13,6 +13,15 @@ export interface Glyphs {
   exited: string;
   done: string;
   failed: string;
+  /**
+   * Вторая фаза мигания `working` (макеты TUI v2, §6): точка чередуется с ним
+   * раз в секунду. От `exited` отличается словом справа и самим миганием.
+   */
+  blink: string;
+  /** Живые субагенты в компактной строке: `⋮N` (макеты §6). */
+  subagent: string;
+  /** Разделитель сайдбара и панели (макеты §6). */
+  divider: string;
   /** Непрочитанные сообщения: `▤N`. */
   mail: string;
   expanded: string;
@@ -46,6 +55,9 @@ const UNICODE: Glyphs = {
   exited: '○',
   done: '✓',
   failed: '✗',
+  blink: '○',
+  subagent: '⋮',
+  divider: '│',
   mail: '▤',
   expanded: '▾',
   collapsed: '▸',
@@ -67,6 +79,9 @@ const ASCII: Glyphs = {
   exited: '!',
   done: '+',
   failed: 'x',
+  blink: 'o',
+  subagent: ':',
+  divider: '|',
   mail: '@',
   expanded: 'v',
   collapsed: '>',

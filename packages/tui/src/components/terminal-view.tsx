@@ -1,5 +1,5 @@
 import { Box, Text } from 'ink';
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import stringWidth from 'string-width';
 import type { TerminalSegment, TerminalSnapshot } from '../pty/terminal-buffer.js';
 
@@ -62,8 +62,17 @@ export function withCursor(segments: readonly TerminalSegment[], x: number): Ter
   return result;
 }
 
-/** Рисует снимок экрана PTY. Всю работу с управляющими кодами уже сделал xterm. */
-export function TerminalView({ snapshot, height }: TerminalViewProps): ReactNode {
+/**
+ * Рисует снимок экрана PTY. Всю работу с управляющими кодами уже сделал xterm.
+ *
+ * Мемоизирован: мигание точек и перерисовка сайдбара не должны стоить панели
+ * ничего (дизайн TUI v2, 8.2). Снимок приходит новым объектом только тогда,
+ * когда экран гостя действительно изменился.
+ */
+export const TerminalView = memo(function TerminalView({
+  snapshot,
+  height,
+}: TerminalViewProps): ReactNode {
   const lines = snapshot.lines.slice(0, Math.max(0, height));
   const { cursor } = snapshot;
 
@@ -83,4 +92,4 @@ export function TerminalView({ snapshot, height }: TerminalViewProps): ReactNode
       ))}
     </Box>
   );
-}
+});

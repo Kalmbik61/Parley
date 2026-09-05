@@ -122,7 +122,7 @@ const rank = (status: Work['status']): number => (status === 'active' ? 0 : 1);
 const desc = (a: string, b: string): number => b.localeCompare(a);
 
 /** Сессии деревом: корни по порядку создания, дети сразу под родителем. */
-function treeOrder(
+export function treeOrder(
   sessions: readonly WorkSession[],
 ): Array<{ session: WorkSession; depth: number }> {
   const children = new Map<string, WorkSession[]>();
