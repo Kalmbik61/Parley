@@ -205,6 +205,11 @@ export function useActions(options: ActionsOptions): ActionsState {
     selection.attach(target.key);
   };
 
+  // В панели карточка, а не живой гость: клавишам некуда уходить, и `Enter`
+  // делает то, что обещает карточка — запускает или возобновляет (2.2). Судим по
+  // самой панели: карта с выбором приезжает через watcher позже, чем поднимается PTY.
+  const card = panel.attached === null || !panel.alive(panel.attached);
+
   // Весь ввод — гостю, кроме префикса; пока открыт оверлей или сайдбар в режиме
   // навигации, гостю не уходит ничего (3.1).
   usePrefixInput(true, {
@@ -212,10 +217,10 @@ export function useActions(options: ActionsOptions): ActionsState {
     onAction,
     onAwait: setAwaiting,
     toGuest: panel.write,
-    capture: overlays.kind !== null || navigating,
-    // Оверлей глух и к префиксу, а сайдбар — нет: действия харнесса слышны и в
-    // режиме навигации, не выходя из него (3.1–3.2).
-    keepPrefix: navigating && overlays.kind === null,
+    capture: overlays.kind !== null || navigating || card,
+    // Оверлей глух и к префиксу, а сайдбар и карточка — нет: действия харнесса
+    // слышны и в режиме навигации, не выходя из него (3.1–3.2).
+    keepPrefix: overlays.kind === null && (navigating || card),
     // Ввод оверлея и списков — тоже нажатия харнесса; события мыши ими не
     // считаются: они гостю не уходят, но и клавишами не являются.
     onCapture: (data) => {
@@ -258,6 +263,16 @@ export function useActions(options: ActionsOptions): ActionsState {
     // Пока ждём вторую клавишу префикса, ходьба молчит: `prefix j` — это
     // действие харнесса, а не шаг курсора.
     { isActive: navigating && overlays.kind === null && !awaiting },
+  );
+
+  // `Enter` на карточке: запуск `pending`, возобновление вышедшей или
+  // завершённой; у сессии, запущенной вне харнесса, подключать нечего (2.2).
+  useInput(
+    (_input, key) => {
+      if (!key.return || session === null || session.status === 'active') return;
+      overlays.open(session.status === 'pending' ? 'launch' : 'resume');
+    },
+    { isActive: card && !navigating && overlays.kind === null && !awaiting },
   );
 
   return { navigating, awaiting, cursor };

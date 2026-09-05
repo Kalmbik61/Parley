@@ -753,6 +753,31 @@ describe('закрытие сессии (3.2, макет 4.8)', () => {
     }
   }, 30_000);
 
+  it('Enter на карточке вышедшей сессии открывает возобновление без режима навигации (2.2)', async () => {
+    const app = open();
+    try {
+      const workId = await launch(app);
+      await waitMap(workId, (item) => item.status === 'active');
+
+      // Гость вышел сам: в панели карточка «exited» с подсказкой про Enter.
+      app.stdin.write('exit 0\r');
+      await waitMap(workId, (item) => item.status === 'exited');
+      await waitFor(() => (app.lastFrame() ?? '').includes('Enter — возобновить'));
+
+      // Клавише некуда уходить, и Enter делает то, что обещает карточка.
+      app.stdin.write(ENTER);
+      await waitFor(() => (app.lastFrame() ?? '').includes('--resume'));
+      expect(app.lastFrame()).toContain('Enter — возобновить');
+      // Префикс на карточке по-прежнему слышен: Esc закрывает, `?` открывает справку.
+      app.stdin.write(ESC);
+      await waitFor(() => !(app.lastFrame() ?? '').includes('--resume'));
+      app.stdin.write(`${PREFIX}?`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('привязки'));
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
   it('prefix q без панелей харнесса не обещает завершить чужие процессы (5.4)', async () => {
     await outsideSession('ревью');
     const app = open();
