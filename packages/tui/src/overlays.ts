@@ -91,11 +91,13 @@ function stateLine(
   if (session.status === 'active') {
     const started = session.startedAt === null ? null : now - Date.parse(session.startedAt);
     // «Молчит Nм» считается от последнего события любой оси (4.3); секунды здесь
-    // важны, поэтому берётся длительность, а не короткая форма «сейчас».
+    // важны, поэтому берётся длительность, а не короткая форма «сейчас». Событий
+    // не было вовсе — молчим: «событие — назад» не сообщает ничего.
     const event = activity?.lastEventAt ?? lastRecordAt;
-    const since = event === null ? '—' : formatDuration(now - Date.parse(event));
+    const since =
+      event === null ? '' : ` · последнее событие ${formatDuration(now - Date.parse(event))} назад`;
     const outside = atHarness ? '' : ' · вне харнесса';
-    return `${glyph} ${state}${outside} · ${formatDuration(started)} · событие ${since} назад`;
+    return `${glyph} ${state}${outside} · ${formatDuration(started)}${since}`;
   }
 
   const at = formatClock(step?.at ?? session.endedAt);
@@ -112,7 +114,9 @@ function stateLine(
 }
 
 /** СВОДКА: чей отчёт и есть ли он вообще (макет 4.1). */
-function summaryLine(session: WorkSession, prefix: string): string {
+function summaryLine(session: WorkSession, prefix: string, summarizing: boolean): string {
+  // Дозаказ уже идёт: пометка стоит здесь, а не только в строке статуса (4.1).
+  if (summarizing) return 'авто-резюме: считается…';
   if (session.summary === null) {
     return session.status === 'exited' ? `(отчёта нет) · ${prefix} R — дозаказать` : '(отчёта нет)';
   }
@@ -132,6 +136,8 @@ export interface DetailsOptions {
   atHarness: boolean;
   /** Открытая правка цели работы: строка ЦЕЛЬ становится полем (решение №8). */
   editing: string | null;
+  /** Авто-резюме для этой сессии уже заказано и ещё считается (макет 4.1). */
+  summarizing?: boolean;
   prefix: string;
   g: Glyphs;
   now?: number;
@@ -146,6 +152,7 @@ export function detailsView({
   index,
   atHarness,
   editing,
+  summarizing = false,
   prefix,
   g,
   now = Date.now(),
@@ -159,7 +166,7 @@ export function detailsView({
   add('ЗАДАЧА', session.task === '' ? '—' : session.task);
   add('СОСТ.', stateLine(session, state, activity, atHarness, index?.endedAt ?? null, now, g), 2);
   add('ТОКЕНЫ', tokensLine(session.metrics?.tokens ?? index?.tokens ?? null, g), 2);
-  add('СВОДКА', summaryLine(session, prefix));
+  add('СВОДКА', summaryLine(session, prefix, summarizing));
 
   // ВХОДЯЩИЕ: непрочитанные с `▤` первыми, затем последние прочитанные (dim).
   const labels = new Map(entry.map.sessions.map((item) => [item.id, item.label]));

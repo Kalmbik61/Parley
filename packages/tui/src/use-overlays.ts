@@ -124,6 +124,9 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
   const [at, setAt] = useState(0);
   const [scroll, setScroll] = useState(0);
   const [editing, setEditing] = useState<string | null>(null);
+  // Сессии, которым дозаказали авто-резюме: пока считается, это видно в деталях
+  // (макет 4.1), а не только в строке статуса.
+  const [summarizing, setSummarizing] = useState<ReadonlySet<string>>(new Set());
   const [confirm, setConfirm] = useState<{ id: number; spec: DialogSpec; run: () => void } | null>(
     null,
   );
@@ -277,9 +280,13 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
         askConfirm(summaryDialog(session, g), () => {
           close();
           push([{ text: `авто-резюме для «${session.label}» считается…` }]);
+          setSummarizing((now) => new Set([...now, session.id]));
           void requestAutoSummary(project, workId, session.id)
             .then(() => push([{ text: `авто-резюме для «${session.label}» готово` }]))
-            .catch(fail);
+            .catch(fail)
+            .finally(() =>
+              setSummarizing((now) => new Set([...now].filter((id) => id !== session.id))),
+            );
         });
         return;
       }
@@ -412,6 +419,7 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
         index: index(session),
         atHarness: runKey !== null && panel.alive(runKey),
         editing,
+        summarizing: summarizing.has(session.id),
         prefix: prefixName,
         g,
       });
@@ -425,6 +433,7 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
     entry,
     session,
     editing,
+    summarizing,
     prefixName,
     projectPath,
     index,

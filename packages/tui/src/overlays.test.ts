@@ -114,7 +114,15 @@ describe('детали сессии (макет 4.1)', () => {
     const line = details().find((text) => text.includes('СОСТ.')) ?? '';
     expect(line).toContain('● working');
     expect(line).toContain('46м');
-    expect(line).toContain('событие 14с назад');
+    expect(line).toContain('последнее событие 14с назад');
+  });
+
+  it('СОСТ. без событий про них молчит: «событие — назад» не значит ничего', () => {
+    const line =
+      details({ activity: null, index: undefined }).find((text) => text.includes('СОСТ.')) ?? '';
+    expect(line).toContain('● working');
+    expect(line).toContain('46м');
+    expect(line).not.toContain('событие');
   });
 
   it('СОСТ. вышедшей — время выхода и код текстом, глиф один', () => {
@@ -129,6 +137,16 @@ describe('детали сессии (макет 4.1)', () => {
       }).find((text) => text.includes('СОСТ.')) ?? '';
     expect(line).toContain('○ exited');
     expect(line).toContain('код 0');
+  });
+
+  it('СВОДКА: пока идёт дозаказ — «авто-резюме: считается…» (макет 4.1)', () => {
+    const exited = session({ status: 'exited', endedAt: '2026-09-05T09:40:00.000Z' });
+    const line =
+      details({ session: exited, state: 'exited', summarizing: true }).find((text) =>
+        text.includes('СВОДКА'),
+      ) ?? '';
+    expect(line).toContain('авто-резюме: считается…');
+    expect(line).not.toContain('дозаказать');
   });
 
   it('токены — четыре счётчика, включая кэш (в сайдбар он не выводится)', () => {
