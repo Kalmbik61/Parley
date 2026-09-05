@@ -175,6 +175,8 @@ export interface SidebarProps {
   height: number;
   /** Режим навигации `prefix s`: разделитель cyan и жирный (макет 1.5). */
   navigating?: boolean;
+  /** Свой разделитель справа; в оверлее его место занимает рамка (макет 1.3). */
+  divider?: boolean;
 }
 
 const pad = (used: number, width: number): string => ' '.repeat(Math.max(0, width - used));
@@ -196,6 +198,7 @@ function Row({
   width,
   g,
   navigating,
+  divider,
   selected = false,
   dim = true,
 }: {
@@ -203,6 +206,7 @@ function Row({
   width: number;
   g: Glyphs;
   navigating: boolean;
+  divider: boolean;
   selected?: boolean;
   dim?: boolean;
 }): ReactNode {
@@ -212,7 +216,7 @@ function Row({
         <Text dimColor={dim}>{truncate(text, width, g.ellipsis)}</Text>
         {pad(text.length, width)}
       </Text>
-      <Divider g={g} navigating={navigating} />
+      {divider && <Divider g={g} navigating={navigating} />}
     </Text>
   );
 }
@@ -224,12 +228,14 @@ function WorkRow({
   width,
   g,
   navigating,
+  divider,
 }: {
   work: SidebarWork;
   selected: boolean;
   width: number;
   g: Glyphs;
   navigating: boolean;
+  divider: boolean;
 }): ReactNode {
   const head = ` ${work.number === null ? '' : `${work.number} `}`;
   // Точка стоит на предпоследней колонке, последняя всегда пустая (макет 1.1).
@@ -243,7 +249,7 @@ function WorkRow({
         {pad(head.length + title.length + 2, width)}
         {work.state === null ? ' ' : <ActivityDot state={work.state} g={g} />}{' '}
       </Text>
-      <Divider g={g} navigating={navigating} />
+      {divider && <Divider g={g} navigating={navigating} />}
     </Text>
   );
 }
@@ -268,6 +274,7 @@ function SessionRow({
   width,
   g,
   navigating,
+  divider,
 }: {
   item: SidebarSession;
   depth: number;
@@ -275,6 +282,7 @@ function SessionRow({
   width: number;
   g: Glyphs;
   navigating: boolean;
+  divider: boolean;
 }): ReactNode {
   const indent = ' '.repeat(1 + depth * 2);
   const child = depth > 0 ? `${g.child} ` : '';
@@ -297,7 +305,7 @@ function SessionRow({
         {pad(head + label.length + tail.length + 1, width)}
         <Text {...dotColor(item.state)}>{tail}</Text>{' '}
       </Text>
-      <Divider g={g} navigating={navigating} />
+      {divider && <Divider g={g} navigating={navigating} />}
     </Text>
   );
 }
@@ -459,11 +467,11 @@ export const sidebarTargets = (props: SidebarProps): Array<SidebarTarget | null>
   layout(props).map((row) => row.target);
 
 export const Sidebar = memo(function Sidebar(props: SidebarProps): ReactNode {
-  const { width, navigating = false } = props;
+  const { width, navigating = false, divider = true } = props;
   const g = glyphs();
 
   return (
-    <Box flexDirection="column" width={width + 1}>
+    <Box flexDirection="column" width={width + (divider ? 1 : 0)}>
       {layout(props).map((row) =>
         row.kind === 'work' ? (
           <WorkRow
@@ -473,6 +481,7 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps): ReactNode {
             width={width}
             g={g}
             navigating={navigating}
+            divider={divider}
           />
         ) : row.kind === 'session' ? (
           <SessionRow
@@ -483,6 +492,7 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps): ReactNode {
             width={width}
             g={g}
             navigating={navigating}
+            divider={divider}
           />
         ) : (
           <Row
@@ -491,6 +501,7 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps): ReactNode {
             width={width}
             g={g}
             navigating={navigating}
+            divider={divider}
             dim={row.dim}
             selected={row.selected}
           />
@@ -510,12 +521,12 @@ export function SidebarOverlay(props: SidebarProps): ReactNode {
     <Box
       borderStyle={g.ascii ? 'classic' : 'single'}
       borderColor="cyan"
-      // Своя рамка занимает место разделителя сайдбара: он уходит за обрез,
-      // и справа остаётся одна линия, как в макете.
+      // Место разделителя занимает правый бок рамки: без этого строки не
+      // помещались бы в неё и кончались знаком усечения (макет 1.3).
       width={props.width + 2}
       marginTop={1}
     >
-      <Sidebar {...props} />
+      <Sidebar {...props} divider={false} />
     </Box>
   );
 }

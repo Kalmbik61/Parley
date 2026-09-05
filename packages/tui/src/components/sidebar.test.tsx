@@ -2,7 +2,13 @@ import type { WorkSession } from '@harnas/core';
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
 import { pinUnicodeGlyphs } from '../../test/glyphs-env.js';
-import { Sidebar, sidebarWidth, type SidebarSession, type SidebarWork } from './sidebar.js';
+import {
+  Sidebar,
+  SidebarOverlay,
+  sidebarWidth,
+  type SidebarSession,
+  type SidebarWork,
+} from './sidebar.js';
 
 pinUnicodeGlyphs();
 
@@ -299,6 +305,30 @@ describe('Sidebar', () => {
 
     expect(lineWith(all, 'работ нет')).toContain('работ нет');
     expect(lineWith(all, 'первая')).toContain('new — первая сессия');
+  });
+
+  // Макет 1.3: место разделителя занимает рамка оверлея, а не знак усечения.
+  it('в оверлее строки кончаются рамкой без своего разделителя и без «…»', () => {
+    const all = lines(
+      <SidebarOverlay
+        works={[work()]}
+        sessions={[item()]}
+        selectedWork="/dev/shop w-0001"
+        selectedSession="s-01"
+        width={26}
+        height={8}
+      />,
+    );
+
+    const body = all.filter((line) => line.startsWith('│'));
+    expect(body.length).toBeGreaterThan(0);
+    for (const line of body) {
+      expect(Array.from(line)).toHaveLength(28);
+      expect(line.endsWith('│')).toBe(true);
+      expect(line.slice(0, -1)).not.toContain('…');
+    }
+    // Точка работы стоит на своём месте и рамкой не съедена (макет 1.1).
+    expect(lineWith(all, 'Авторизация')).toContain('●');
   });
 
   it('длинный список сессий сворачивается в окно с липким заголовком', () => {
