@@ -96,6 +96,16 @@ export type {
 } from './work/metrics.js';
 export { DEFAULT_CONFIG, configPath, loadConfig } from './config.js';
 export type { HarnasConfig, LoadedConfig } from './config.js';
+export { activityOf } from './work/activity.js';
+export type {
+  Activity,
+  ActivityLog,
+  ActivityOptions,
+  ActivitySource,
+  SessionActivity,
+} from './work/activity.js';
+export { openEvents, watchEvents } from './work/events.js';
+export type { EventRecord, EventsLog, EventsWatcher, WatchEventsOptions } from './work/events.js';
 export {
   HOOK_COMMAND,
   HOOK_EVENTS,
