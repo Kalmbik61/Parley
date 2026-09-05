@@ -79,6 +79,8 @@ export interface WorksViewOptions {
   /** Точка работы — максимум по её сессиям; `null` — сессий нет (решение №6). */
   workState: (key: string) => DotState | null;
   index: Indexer;
+  /** Ветка проекта из `.git/HEAD`: запасной источник, когда лога ещё нет. */
+  branch?: GitBranch;
   /**
    * Работы чужих проектов, выбранные через пикер `prefix w`: они закрепляются
    * в сайдбаре до выхода из харнесса (2.1, решение №3).
@@ -86,13 +88,25 @@ export interface WorksViewOptions {
   pinned?: ReadonlySet<string>;
 }
 
-/** Ветка работы известна из лога любой её сессии: в карте её нет. */
-export function branchOf(entry: WorkEntry, index: Indexer): string | null {
+/** Ветка проекта из `.git/HEAD` (`use-git-branch.ts`). */
+type GitBranch = (projectPath: string) => string | null;
+
+const NO_BRANCH: GitBranch = () => null;
+
+/**
+ * Ветка работы: из лога любой её сессии, а у работы без логов — из `.git/HEAD`
+ * её проекта. В карте ветки нет ни в каком виде.
+ */
+export function branchOf(
+  entry: WorkEntry,
+  index: Indexer,
+  branch: GitBranch = NO_BRANCH,
+): string | null {
   for (const session of entry.map.sessions) {
     const found = index(session)?.gitBranch;
     if (found != null) return found;
   }
-  return null;
+  return branch(entry.projectPath);
 }
 
 /**
@@ -101,7 +115,13 @@ export function branchOf(entry: WorkEntry, index: Indexer): string | null {
  */
 export function sidebarWorks(
   entries: readonly WorkEntry[],
-  { projectPath, workState, index, pinned = new Set<string>() }: WorksViewOptions,
+  {
+    projectPath,
+    workState,
+    index,
+    branch = NO_BRANCH,
+    pinned = new Set<string>(),
+  }: WorksViewOptions,
 ): SidebarWork[] {
   return entries
     .filter(
@@ -122,7 +142,7 @@ export function sidebarWorks(
         number: at < NUMBERED ? at + 1 : null,
         title: entry.map.work.title,
         project: withHome(entry.projectPath),
-        branch: branchOf(entry, index),
+        branch: branchOf(entry, index, branch),
         state: workState(key),
         done: entry.map.work.status === 'done',
       };

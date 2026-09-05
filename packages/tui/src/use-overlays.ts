@@ -82,6 +82,8 @@ export interface OverlaysOptions {
   runKey: string | null;
   /** Сессии выбранной работы в порядке дерева: по ним ходит оверлей сайдбара. */
   order: readonly string[];
+  /** Ветка проекта из `.git/HEAD`: запасной источник для пикера работ (4.2). */
+  branch: (projectPath: string) => string | null;
   panel: PanelState;
   selection: SelectionState;
   /** Закрепить чужую работу в сайдбаре до выхода (2.1, решение №3). */
@@ -117,7 +119,7 @@ const byRecency = (a: SessionIndex, b: SessionIndex): number =>
 
 export function useOverlays(options: OverlaysOptions): OverlaysState {
   const { projectPath, prefixName, works, sessions, index, entry, session, runKey } = options;
-  const { order, panel, selection, pin, push, fail, exit } = options;
+  const { order, branch, panel, selection, pin, push, fail, exit } = options;
 
   const [kind, setKind] = useState<OverlayKind | null>(null);
   const [filter, setFilter] = useState('');
@@ -154,11 +156,11 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
       workItems(
         works,
         options.workState,
-        (item) => branchOf(item, index),
+        (item) => branchOf(item, index, branch),
         (item) => workKey(item.projectPath, item.map.work.id),
         g,
       ),
-    [works, options.workState, index, g],
+    [works, options.workState, index, branch, g],
   );
   const history = useMemo(
     () =>

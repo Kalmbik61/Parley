@@ -25,12 +25,13 @@ import { workRunKey } from './pty/use-agent-pty.js';
 import { useActions } from './use-actions.js';
 import { activityWork, useActivity } from './use-activity.js';
 import { useConfig } from './use-config.js';
+import { useGitBranch } from './use-git-branch.js';
 import { useLogIndex } from './use-log-index.js';
 import { useMapSync } from './use-map-sync.js';
 import { useOverlays } from './use-overlays.js';
 import { usePanel } from './use-panel.js';
 import { ctrlByte } from './use-prefix-input.js';
-import { useSelection } from './use-selection.js';
+import { useAttachSession, useSelection } from './use-selection.js';
 import { useSessionLink } from './use-session-link.js';
 import { useStatus } from './use-status.js';
 import { useTerminalSize } from './use-terminal-size.js';
@@ -90,31 +91,21 @@ export function App({
     onFail: fail,
   });
 
+  // Ветка работы: приоритетно из индекса логов, у работы без логов — из `.git/HEAD`.
+  const branch = useGitBranch(works);
   const workRows = sidebarWorks(works, {
     projectPath,
     workState: activity.workState,
     index,
+    branch,
     pinned,
   });
   const order = useMemo(() => sessionOrders(works), [works]);
 
-  const markSeen = activity.markSeen;
-  const attach = panel.attach;
-  // Подключение к панели: `unseen` гаснет, событие сессии-источника тоже (4.1, 6).
-  const onAttach = useCallback(
-    (sessionId: string) => {
-      markSeen(sessionId);
-      const entry = works.find((item) => item.map.sessions.some((s) => s.id === sessionId));
-      if (entry === undefined) return;
-      const workId = entry.map.work.id;
-      seen({ projectPath: entry.projectPath, workId, sessionId });
-      attach(workRunKey(entry.projectPath, workId, sessionId));
-    },
-    [works, markSeen, seen, attach],
-  );
   const selection = useSelection({
     works: workRows.map((work) => ({ key: work.key, sessions: order.get(work.key) ?? [] })),
-    onAttach,
+    // Подключение к панели: `unseen` гаснет, событие сессии-источника тоже (4.1, 6).
+    onAttach: useAttachSession({ works, markSeen: activity.markSeen, seen, attach: panel.attach }),
   });
 
   const chosen = works.find(
@@ -153,6 +144,7 @@ export function App({
     session: current,
     runKey,
     order: sessionOrder,
+    branch,
     panel,
     selection,
     pin: (key) => setPinned((current) => new Set([...current, key])),

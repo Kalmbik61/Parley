@@ -15,6 +15,7 @@ export { readSessionWorkflows, readWorkflowDescriptor } from './workflow.js';
 export type { WorkflowInfo } from './workflow.js';
 export { claudeSource, codexSource, watchSessions } from './watch.js';
 export type { SessionChange, SessionWatcher, WatchOptions, WatchSource } from './watch.js';
+export { gitBranch } from './git.js';
 export { buildAllSessions } from './all-sessions.js';
 export type { AllSessionsOptions } from './all-sessions.js';
 export { defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';

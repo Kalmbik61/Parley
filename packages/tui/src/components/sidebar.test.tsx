@@ -1,8 +1,9 @@
-import type { WorkSession } from '@harnas/core';
+import type { SessionIndex, WorkEntry, WorkSession } from '@harnas/core';
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
 import { pinUnicodeGlyphs } from '../../test/glyphs-env.js';
 import {
+  branchOf,
   Sidebar,
   SidebarOverlay,
   sidebarWidth,
@@ -352,5 +353,38 @@ describe('Sidebar', () => {
     expect(lineWith(all, 'сессии ·')).toContain('сессии · Авторизация');
     expect(lineWith(all, 'выше')).toMatch(/… \d+ выше/);
     expect(lineWith(all, 'шаг 19')).toContain('шаг 19');
+  });
+});
+
+describe('branchOf', () => {
+  const entry = (sessions: WorkSession[]): WorkEntry => ({
+    projectPath: '/dev/shop',
+    map: {
+      schemaVersion: 1,
+      work: {
+        id: 'w-0001',
+        title: 'Авторизация',
+        goal: '',
+        status: 'active',
+        createdAt: '2026-09-05T09:00:00.000Z',
+        updatedAt: '2026-09-05T09:00:00.000Z',
+      },
+      sessions,
+      messages: [],
+    },
+  });
+
+  const logged = (): SessionIndex => ({ gitBranch: 'feat/pay' }) as SessionIndex;
+
+  it('лог провайдера важнее `.git/HEAD`', () => {
+    expect(branchOf(entry([session()]), logged, () => 'main')).toBe('feat/pay');
+  });
+
+  it('у работы без лога ветка берётся из `.git/HEAD` проекта', () => {
+    expect(branchOf(entry([session()]), () => undefined, () => 'main')).toBe('main');
+  });
+
+  it('ни лога, ни репозитория — ветки нет', () => {
+    expect(branchOf(entry([]), () => undefined, () => null)).toBeNull();
   });
 });

@@ -18,10 +18,12 @@ import {
   type WorkSession,
 } from '@harnas/core';
 import { render } from 'ink-testing-library';
+import { execFile } from 'node:child_process';
 import { appendFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { pinUnicodeGlyphs } from '../test/glyphs-env.js';
 import { App } from './app.js';
@@ -235,6 +237,23 @@ describe('new: быстрая сессия без диалога (5.1)', () => {
       );
       await new Promise((resolve) => setTimeout(resolve, 400));
       expect((await readMap(project, workId)).sessions[0]?.label).toBe('мой ярлык');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+});
+
+describe('вторая строка работы (макет 1.1)', () => {
+  const git = promisify(execFile);
+
+  it('ветку работы без лога провайдера даёт `.git/HEAD` проекта', async () => {
+    await git('git', ['init', '-b', 'feat/pay', project]);
+    await createWork(project, { title: 'Авторизация' });
+
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await waitFor(() => (app.lastFrame() ?? '').includes('feat/pay'));
     } finally {
       app.unmount();
     }

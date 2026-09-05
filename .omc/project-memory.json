@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1788331409704,
+  "lastScanned": 1788552819080,
   "projectRoot": "/Users/kalmbik61/Desktop/MY/my_harnas",
   "techStack": {
     "languages": [
@@ -33,7 +33,8 @@
       "test": "pnpm -r test",
       "dev": "pnpm --filter @harnas/tui dev",
       "lint": "eslint packages tools",
-      "format": "prettier --write ."
+      "format": "prettier --write .",
+      "postinstall": "node scripts/fix-node-pty-perms.mjs"
     }
   },
   "conventions": {
@@ -46,7 +47,8 @@
     "isMonorepo": true,
     "workspaces": [],
     "mainDirectories": [
-      "docs"
+      "docs",
+      "scripts"
     ],
     "gitBranches": null
   },
@@ -56,7 +58,7 @@
       "path": "claude-export",
       "purpose": null,
       "fileCount": 2,
-      "lastAccessed": 1788331409681,
+      "lastAccessed": 1788552819019,
       "keyFiles": [
         "index.json",
         "schema-report.json"
@@ -66,7 +68,7 @@
       "path": "docs",
       "purpose": "Documentation",
       "fileCount": 1,
-      "lastAccessed": 1788331409682,
+      "lastAccessed": 1788552819048,
       "keyFiles": [
         "harness-handoff.md"
       ]
@@ -75,248 +77,339 @@
       "path": "packages",
       "purpose": null,
       "fileCount": 0,
-      "lastAccessed": 1788331409685,
+      "lastAccessed": 1788552819051,
       "keyFiles": []
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 1,
+      "lastAccessed": 1788552819052,
+      "keyFiles": [
+        "fix-node-pty-perms.mjs"
+      ]
     },
     "tools": {
       "path": "tools",
       "purpose": null,
-      "fileCount": 3,
-      "lastAccessed": 1788331409687,
+      "fileCount": 4,
+      "lastAccessed": 1788552819057,
       "keyFiles": [
         "claude-export.mjs",
         "make-fixtures.mjs",
+        "observe-schema.mjs",
         "scrub-export.mjs"
+      ]
+    },
+    "tools/lib": {
+      "path": "tools/lib",
+      "purpose": "Library code",
+      "fileCount": 1,
+      "lastAccessed": 1788552819071,
+      "keyFiles": [
+        "scrub.mjs"
       ]
     }
   },
   "hotPaths": [
     {
       "path": "packages/tui/src/app.tsx",
-      "accessCount": 5,
-      "lastAccessed": 1788342422699,
+      "accessCount": 15,
+      "lastAccessed": 1788616392334,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/app.test.tsx",
+      "accessCount": 12,
+      "lastAccessed": 1788611183489,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/use-activity.ts",
+      "accessCount": 12,
+      "lastAccessed": 1788612015343,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/use-prefix-input.ts",
+      "accessCount": 11,
+      "lastAccessed": 1788611446012,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/components/sidebar.tsx",
+      "accessCount": 10,
+      "lastAccessed": 1788609038901,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/components/panel.tsx",
+      "accessCount": 8,
+      "lastAccessed": 1788603226877,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/use-panel.ts",
+      "accessCount": 8,
+      "lastAccessed": 1788606363205,
       "type": "file"
     },
     {
       "path": "packages/tui/src/pty/use-agent-pty.ts",
+      "accessCount": 7,
+      "lastAccessed": 1788603196924,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/work-launch.ts",
+      "accessCount": 7,
+      "lastAccessed": 1788606341801,
+      "type": "file"
+    },
+    {
+      "path": "docs/specs/2026-09-05-tui-v2-design.md",
+      "accessCount": 7,
+      "lastAccessed": 1788608453857,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/pty/terminal-buffer.ts",
       "accessCount": 5,
-      "lastAccessed": 1788348199882,
+      "lastAccessed": 1788597930524,
       "type": "file"
     },
     {
-      "path": "scripts/fix-node-pty-perms.mjs",
-      "accessCount": 2,
-      "lastAccessed": 1788334313782,
+      "path": "packages/tui/src/components/activity-dot.test.tsx",
+      "accessCount": 4,
+      "lastAccessed": 1788599029276,
       "type": "file"
     },
     {
-      "path": "packages/tui/src/pty/__debug.test.tsx",
+      "path": "packages/tui/src/components/panel.test.tsx",
+      "accessCount": 4,
+      "lastAccessed": 1788603062801,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/use-actions.ts",
+      "accessCount": 4,
+      "lastAccessed": 1788606569345,
+      "type": "file"
+    },
+    {
+      "path": "README.md",
+      "accessCount": 4,
+      "lastAccessed": 1788611292598,
+      "type": "file"
+    },
+    {
+      "path": "packages/core/src/work/activity.ts",
+      "accessCount": 3,
+      "lastAccessed": 1788596023431,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/components/sidebar.test.tsx",
+      "accessCount": 3,
+      "lastAccessed": 1788599331023,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/use-selection.ts",
+      "accessCount": 3,
+      "lastAccessed": 1788600780633,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/use-prefix-input.test.ts",
+      "accessCount": 3,
+      "lastAccessed": 1788611055994,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/test/stub-agent.mjs",
+      "accessCount": 3,
+      "lastAccessed": 1788611216021,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/pty/use-agent-pty.test.tsx",
+      "accessCount": 3,
+      "lastAccessed": 1788611384174,
+      "type": "file"
+    },
+    {
+      "path": "packages/core/src/work/liveness.ts",
       "accessCount": 2,
-      "lastAccessed": 1788335020606,
+      "lastAccessed": 1788597131770,
       "type": "file"
     },
     {
       "path": "packages/tui/src/pty/use-host-modes.ts",
       "accessCount": 2,
-      "lastAccessed": 1788341593739,
+      "lastAccessed": 1788597906152,
       "type": "file"
     },
     {
-      "path": "packages/tui/src/__smoke.tsx",
+      "path": "packages/tui/src/components/activity-dot.tsx",
       "accessCount": 2,
-      "lastAccessed": 1788342269910,
+      "lastAccessed": 1788599153412,
       "type": "file"
     },
     {
-      "path": "packages/tui/src/pty/find-binary.ts",
-      "accessCount": 1,
-      "lastAccessed": 1788334347067,
+      "path": "packages/tui/src/use-prefix-input.app.test.tsx",
+      "accessCount": 2,
+      "lastAccessed": 1788601417279,
       "type": "file"
     },
     {
-      "path": "packages/tui/src/pty/pty-session.ts",
-      "accessCount": 1,
-      "lastAccessed": 1788334364556,
-      "type": "file"
-    },
-    {
-      "path": "packages/tui/test/stub-agent.mjs",
-      "accessCount": 1,
-      "lastAccessed": 1788334378454,
-      "type": "file"
-    },
-    {
-      "path": "packages/tui/src/pty/pty-session.test.ts",
-      "accessCount": 1,
-      "lastAccessed": 1788334426765,
-      "type": "file"
-    },
-    {
-      "path": "packages/tui/src/pty/terminal-buffer.ts",
-      "accessCount": 1,
-      "lastAccessed": 1788334608329,
-      "type": "file"
-    },
-    {
-      "path": "packages/tui/src/pty/use-pty-terminal.ts",
-      "accessCount": 1,
-      "lastAccessed": 1788334668599,
+      "path": "packages/tui/src/use-activity.test.tsx",
+      "accessCount": 2,
+      "lastAccessed": 1788611164437,
       "type": "file"
     },
     {
       "path": "packages/tui/src/pty/terminal-buffer.test.ts",
       "accessCount": 1,
-      "lastAccessed": 1788334691609,
+      "lastAccessed": 1788441793341,
       "type": "file"
     },
     {
-      "path": "packages/tui/src/pty/use-pty-terminal.test.tsx",
+      "path": "packages/tui/src/components/terminal-view.test.tsx",
       "accessCount": 1,
-      "lastAccessed": 1788334728018,
+      "lastAccessed": 1788441802803,
       "type": "file"
     },
     {
-      "path": "packages/tui/src/pty/use-agent-pty.test.tsx",
+      "path": "packages/tui/src/components/terminal-view.tsx",
       "accessCount": 1,
-      "lastAccessed": 1788334881398,
+      "lastAccessed": 1788441833843,
       "type": "file"
     },
     {
-      "path": "packages/tui/src/pty/use-pty-input.ts",
+      "path": "TODOS.md",
       "accessCount": 1,
-      "lastAccessed": 1788335207756,
+      "lastAccessed": 1788590872797,
       "type": "file"
     },
     {
-      "path": "packages/tui/src/pty/use-pty-input.test.tsx",
+      "path": "docs/specs/2026-09-05-tui-v2-design-brief.md",
       "accessCount": 1,
-      "lastAccessed": 1788335280789,
+      "lastAccessed": 1788591054646,
       "type": "file"
     },
     {
-      "path": "packages/tui/src/pty/use-pty-resize.test.tsx",
+      "path": "docs/specs/2026-09-05-tui-v2-mockups.md.md",
       "accessCount": 1,
-      "lastAccessed": 1788335424203,
+      "lastAccessed": 1788593498637,
       "type": "file"
     },
     {
-      "path": "packages/tui/src/pty/use-host-modes.test.tsx",
+      "path": "packages/core/src/config.ts",
       "accessCount": 1,
-      "lastAccessed": 1788335630367,
+      "lastAccessed": 1788594274472,
+      "type": "file"
+    },
+    {
+      "path": "packages/core/src/work/settings-file.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788594289652,
+      "type": "file"
+    },
+    {
+      "path": "packages/core/src/config.test.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788594373820,
+      "type": "file"
+    },
+    {
+      "path": "packages/core/src/work/settings-file.test.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788594389765,
+      "type": "file"
+    },
+    {
+      "path": "packages/core/src/work/activity.test.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788595121099,
+      "type": "file"
+    },
+    {
+      "path": "packages/core/src/work/events.test.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788595148473,
+      "type": "file"
+    },
+    {
+      "path": "packages/core/src/work/events.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788595177824,
+      "type": "file"
+    },
+    {
+      "path": "packages/core/src/work/liveness.test.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788597068189,
+      "type": "file"
+    },
+    {
+      "path": "packages/core/src/index.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788597122788,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/glyphs.ts",
+      "accessCount": 1,
+      "lastAccessed": 1788599113678,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/use-selection.test.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1788599398249,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/components/sidebar-selection.test.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1788599497949,
+      "type": "file"
+    },
+    {
+      "path": "docs/specs/2026-09-05-tui-v2-mockups.md",
+      "accessCount": 1,
+      "lastAccessed": 1788600192529,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/components/status-bar.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1788600706014,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/components/status-bar.test.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1788600719406,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/components/session-card.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1788600866243,
+      "type": "file"
+    },
+    {
+      "path": "packages/tui/src/use-sessions.test.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1788601660308,
       "type": "file"
     },
     {
       "path": "packages/tui/src/pty/lifecycle.test.tsx",
       "accessCount": 1,
-      "lastAccessed": 1788335850130,
-      "type": "file"
-    },
-    {
-      "path": "packages/tui/src/pty/integration.test.ts",
-      "accessCount": 1,
-      "lastAccessed": 1788335913265,
-      "type": "file"
-    },
-    {
-      "path": "tools/lib/scrub.mjs",
-      "accessCount": 1,
-      "lastAccessed": 1788340813514,
-      "type": "file"
-    },
-    {
-      "path": "tools/observe-schema.mjs",
-      "accessCount": 1,
-      "lastAccessed": 1788340826334,
-      "type": "file"
-    },
-    {
-      "path": ".ralph/specs/runners.md",
-      "accessCount": 1,
-      "lastAccessed": 1788340909121,
-      "type": "file"
-    },
-    {
-      "path": "packages/core/src/codex/discover.ts",
-      "accessCount": 1,
-      "lastAccessed": 1788341025469,
-      "type": "file"
-    },
-    {
-      "path": "packages/core/src/codex/index-session.ts",
-      "accessCount": 1,
-      "lastAccessed": 1788341046148,
-      "type": "file"
-    },
-    {
-      "path": "packages/core/src/codex/codex.test.ts",
-      "accessCount": 1,
-      "lastAccessed": 1788341133840,
-      "type": "file"
-    },
-    {
-      "path": "packages/core/src/providers.ts",
-      "accessCount": 1,
-      "lastAccessed": 1788341337719,
-      "type": "file"
-    },
-    {
-      "path": "packages/core/src/model-badge.ts",
-      "accessCount": 1,
-      "lastAccessed": 1788341772605,
-      "type": "file"
-    },
-    {
-      "path": "packages/core/src/watch.ts",
-      "accessCount": 1,
-      "lastAccessed": 1788341912332,
-      "type": "file"
-    },
-    {
-      "path": "packages/tui/src/use-sessions.ts",
-      "accessCount": 1,
-      "lastAccessed": 1788341939650,
-      "type": "file"
-    },
-    {
-      "path": "packages/tui/src/components/pane.tsx",
-      "accessCount": 1,
-      "lastAccessed": 1788342386615,
-      "type": "file"
-    },
-    {
-      "path": "README.md",
-      "accessCount": 1,
-      "lastAccessed": 1788342544660,
-      "type": "file"
-    },
-    {
-      "path": "packages/core/src/schema-report.ts",
-      "accessCount": 1,
-      "lastAccessed": 1788347562303,
-      "type": "file"
-    },
-    {
-      "path": "packages/core/src/schema-report.test.ts",
-      "accessCount": 1,
-      "lastAccessed": 1788347627825,
-      "type": "file"
-    },
-    {
-      "path": "packages/core/src/workflow.ts",
-      "accessCount": 1,
-      "lastAccessed": 1788348021211,
-      "type": "file"
-    },
-    {
-      "path": "packages/tui/src/components/subsession-list.tsx",
-      "accessCount": 1,
-      "lastAccessed": 1788348062051,
-      "type": "file"
-    },
-    {
-      "path": "packages/tui/src/__manual-check.tsx",
-      "accessCount": 1,
-      "lastAccessed": 1788348564203,
+      "lastAccessed": 1788601787058,
       "type": "file"
     }
   ],
