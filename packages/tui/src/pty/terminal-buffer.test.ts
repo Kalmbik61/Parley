@@ -159,4 +159,16 @@ describe('курсор в снимке', () => {
     expect(buffer.snapshot().cursor).toEqual({ x: 0, y: 2, visible: true });
     buffer.dispose();
   });
+  it('scroll листает скроллбэк и возвращается вниз', async () => {
+    const buffer = createTerminalBuffer(20, 3);
+    for (let i = 0; i < 8; i++) await write(buffer, `строка ${i}\r\n`);
+    expect(plain(buffer)[0]).toBe('строка 6');
+
+    buffer.scroll(-3);
+    expect(plain(buffer)[0]).toBe('строка 3');
+
+    buffer.scroll(3);
+    expect(plain(buffer)[0]).toBe('строка 6');
+    buffer.dispose();
+  });
 });

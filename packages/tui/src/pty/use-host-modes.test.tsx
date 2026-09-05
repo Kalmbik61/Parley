@@ -151,3 +151,13 @@ describe('режимы гостя доезжают из живого PTY', () =>
     }
   }, 25_000);
 });
+
+describe('своя мышь при mouseCapture (дизайн 3.3)', () => {
+  it('SGR-отслеживание включается, даже когда гость мышь не просил', () => {
+    expect(enableSequence('none', false, true)).toBe(`${ESC}[?1000h${ESC}[?1006h`);
+  });
+
+  it('режимы гостя не дублируются и не теряются', () => {
+    expect(enableSequence('drag', false, true)).toBe(`${ESC}[?1000h${ESC}[?1006h${ESC}[?1002h`);
+  });
+});

@@ -39,6 +39,8 @@ export interface TerminalBuffer {
   /** xterm парсит асинхронно: `done` зовётся, когда данные уже в буфере. */
   write(chunk: string, done?: () => void): void;
   resize(cols: number, rows: number): void;
+  /** Прокрутка видимой области по скроллбэку: меньше нуля — вверх, больше — вниз. */
+  scroll(lines: number): void;
   snapshot(): TerminalSnapshot;
   dispose(): void;
 }
@@ -170,6 +172,12 @@ export function createTerminalBuffer(
 
     resize(nextCols, nextRows) {
       terminal.resize(Math.max(2, Math.floor(nextCols)), Math.max(2, Math.floor(nextRows)));
+    },
+
+    scroll(lines) {
+      // Колесо в панели, когда гость мышь не просил (дизайн 3.3): листаем свой
+      // скроллбэк. Границы xterm держит сам, за край не уедет.
+      terminal.scrollLines(Math.trunc(lines));
     },
 
     snapshot() {

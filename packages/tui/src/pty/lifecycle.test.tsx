@@ -16,7 +16,8 @@ const STUB = path.join(
 );
 
 const ENTER = '\r';
-const CTRL_Q = '\u0011';
+/** Префикс харнесса и единственное подключённое действие: `s` — фокус в списки. */
+const TO_LISTS = `${String.fromCharCode(0x11)}s`;
 const TAB = '\t';
 
 function session(over: Partial<SessionIndex> = {}): SessionIndex {
@@ -156,7 +157,7 @@ describe('жизненный цикл агента', () => {
   it('повторный Enter по той же сессии не плодит второго агента', async () => {
     const app = await open([session()]);
     try {
-      app.stdin.write(CTRL_Q);
+      app.stdin.write(TO_LISTS);
       await new Promise((resolve) => setTimeout(resolve, 120));
       app.stdin.write(ENTER);
       await new Promise((resolve) => setTimeout(resolve, 400));
@@ -176,7 +177,7 @@ describe('жизненный цикл агента', () => {
       session({ id: 'c', title: 'вторая' }),
     ]);
     try {
-      app.stdin.write(CTRL_Q);
+      app.stdin.write(TO_LISTS);
       await new Promise((resolve) => setTimeout(resolve, 120));
       app.stdin.write('j');
       await new Promise((resolve) => setTimeout(resolve, 120));
@@ -188,7 +189,7 @@ describe('жизненный цикл агента', () => {
       await new Promise((resolve) => setTimeout(resolve, 300));
       expect(app.lastFrame()).not.toContain('уже есть активная сессия');
 
-      app.stdin.write(CTRL_Q);
+      app.stdin.write(TO_LISTS);
       await new Promise((resolve) => setTimeout(resolve, 120));
       app.stdin.write('j');
       await new Promise((resolve) => setTimeout(resolve, 120));

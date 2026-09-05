@@ -20,10 +20,24 @@ const MOUSE_MODES: Record<MouseTracking, string[]> = {
 
 const ALL_MOUSE_MODES = ['?9', '?1000', '?1002', '?1003', '?1006'];
 
+/**
+ * Что держим включённым сами, когда ловим мышь (дизайн TUI v2, 3.3): клики и
+ * колесо в SGR. Гость мог не просить мышь вовсе — сайдбару она нужна всё равно.
+ */
+const HOST_MOUSE_MODES = ['?1000', '?1006'];
+
 /** Последовательности включения запрошенных режимов. */
-export function enableSequence(mouseTracking: MouseTracking, bracketedPaste: boolean): string {
-  const modes = [...MOUSE_MODES[mouseTracking], ...(bracketedPaste ? ['?2004'] : [])];
-  return modes.map((mode) => `${CSI}${mode}h`).join('');
+export function enableSequence(
+  mouseTracking: MouseTracking,
+  bracketedPaste: boolean,
+  mouseCapture = false,
+): string {
+  const modes = new Set([
+    ...(mouseCapture ? HOST_MOUSE_MODES : []),
+    ...MOUSE_MODES[mouseTracking],
+    ...(bracketedPaste ? ['?2004'] : []),
+  ]);
+  return [...modes].map((mode) => `${CSI}${mode}h`).join('');
 }
 
 /** Последовательности выключения всего, что мы могли включить. */
@@ -50,11 +64,12 @@ export function useHostTerminalModes(
   mouseTracking: MouseTracking,
   bracketedPaste: boolean,
   write: (sequence: string) => void = writeToTerminal,
+  mouseCapture = false,
 ): void {
   useEffect(() => {
     if (!active) return;
 
-    write(enableSequence(mouseTracking, bracketedPaste));
+    write(enableSequence(mouseTracking, bracketedPaste, mouseCapture));
     return () => write(disableSequence());
-  }, [active, mouseTracking, bracketedPaste, write]);
+  }, [active, mouseTracking, bracketedPaste, write, mouseCapture]);
 }

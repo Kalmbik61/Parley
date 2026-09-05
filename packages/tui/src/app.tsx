@@ -1,5 +1,6 @@
 import {
   createWork,
+  DEFAULT_CONFIG,
   defaultCodexRoot,
   defaultRoot,
   modelBadge,
@@ -29,7 +30,7 @@ import {
   type AgentTarget,
 } from './pty/use-agent-pty.js';
 import { useHostTerminalModes } from './pty/use-host-modes.js';
-import { ctrlByte, DEFAULT_ESCAPE_BYTE, usePtyInput } from './pty/use-pty-input.js';
+import { ctrlByte, usePrefixInput } from './use-prefix-input.js';
 import { usePtyResize } from './pty/use-pty-resize.js';
 import { usePtyTerminal } from './pty/use-pty-terminal.js';
 import { useNavigation, type PaneId } from './use-navigation.js';
@@ -76,6 +77,13 @@ export interface AppProps {
   projectPath?: string;
   onRescan?: () => void;
 }
+
+/**
+ * Префикс харнесса (дизайн TUI v2, 3.1). Пока берётся из дефолтов: чтение
+ * `config.json` подключается вместе с сайдбаром, которому нужны и остальные поля.
+ */
+const PREFIX_BYTE = ctrlByte(DEFAULT_CONFIG.prefix) ?? 0x11;
+const PREFIX_NAME = `ctrl+${DEFAULT_CONFIG.prefix}`;
 
 /** Левая колонка — 38% ширины, но не уже 30 колонок (specs/ui.md). */
 const LEFT_WIDTH = '38%';
@@ -553,10 +561,25 @@ export function App({
   // cwd и времени запуска: без этого нет ни метрик, ни возобновления (раздел 5).
   useSessionLink({ works, sessions, roots });
 
-  const backToLists = useCallback(() => setFocus('sessions'), [setFocus]);
-  usePtyInput(agent.active?.session, focus === 'terminal' && agentAlive, {
-    escapeByte: escapeByteFromEnv(),
-    onEscape: backToLists,
+  // Префикс и его действия (дизайн TUI v2, 3.1-3.2). Пока из таблицы подключено
+  // одно `s` — без него из панели не выйти; остальные клавиши только называются
+  // в строке статуса, вся композиция придёт с сайдбаром и оверлеями.
+  const guest = agent.active?.session;
+  const toGuest = useCallback((data: string) => guest?.write(data), [guest]);
+  const onAction = useCallback(
+    (key: string) => {
+      if (key === 's') {
+        setFocus('sessions');
+        return;
+      }
+      push([{ text: `${PREFIX_NAME} ${key} — действие ещё не подключено` }]);
+    },
+    [setFocus, push],
+  );
+  usePrefixInput(focus === 'terminal' && agentAlive, {
+    prefixByte: PREFIX_BYTE,
+    onAction,
+    toGuest,
   });
   // Мышь и вставка в скобках: включаем у себя ровно то, что запросил агент.
   useHostTerminalModes(
@@ -724,7 +747,7 @@ function TerminalPane({ size, agent, snapshot, note, onSize }: TerminalPaneProps
               <Text dimColor>n — новая сессия · p — провайдер · r — ре-скан · q — выход</Text>
               <Text dimColor>w — режим: все сессии ↔ работы</Text>
               <Text dimColor> </Text>
-              <Text dimColor>В терминале весь ввод идёт агенту, Ctrl+Q — назад.</Text>
+              <Text dimColor>{`В терминале весь ввод идёт агенту, ${PREFIX_NAME} s — назад.`}</Text>
             </>
           ) : (
             <TerminalView snapshot={snapshot} height={size.height} />
@@ -768,12 +791,6 @@ function withFilter(title: string, count: number, filter: Provider | null): stri
 function detailsTitle(row: WorkRow | undefined): string {
   if (row === undefined) return 'ДЕТАЛИ';
   return `ДЕТАЛИ — ${row.kind === 'work' ? row.work.title : row.session.label}`;
-}
-
-/** Клавиша возврата фокуса настраивается: HARNAS_ESCAPE_KEY=w значит Ctrl+W. */
-function escapeByteFromEnv(): number {
-  const letter = process.env['HARNAS_ESCAPE_KEY'];
-  return (letter === undefined ? undefined : ctrlByte(letter)) ?? DEFAULT_ESCAPE_BYTE;
 }
 
 /** Сигнал важнее кода: снятый по сигналу процесс — это не «штатный выход». */
