@@ -58,6 +58,9 @@ describe('indexSessionFile', () => {
     expect(index.version).toBe('2.1.247');
     expect(index.startedAt).toBe('2026-09-01T10:00:00.000Z');
     expect(index.endedAt).toBe('2026-09-01T10:02:30.000Z');
+    // Ось записей пользователя отдельно от общей: последняя запись здесь —
+    // ответ модели, и страховке 4.3 она `blocked` не снимает.
+    expect(index.lastUserRecordAt).toBe('2026-09-01T10:00:00.000Z');
     expect(index.durationMs).toBe(150_000);
     expect(index.records).toBe(3);
     expect(index.models).toEqual({ 'claude-opus-5': 1 });

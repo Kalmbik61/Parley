@@ -117,6 +117,8 @@ describe('indexCodexSession', () => {
     expect(index.tools).toEqual({ shell_command: 2, update_plan: 1 });
     expect(index.roles).toEqual({ assistant: 1 });
     expect(index.durationMs).toBe(300_000);
+    // Реплика человека, а не последняя запись лога (та в 10:05:00).
+    expect(index.lastUserRecordAt).toBe('2026-03-12T10:00:10.000Z');
     expect(index.subsessionCount).toBe(0);
   });
 

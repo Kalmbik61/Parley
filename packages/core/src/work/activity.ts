@@ -18,6 +18,11 @@ export type ActivitySource = 'hooks' | 'log' | 'none';
 export interface ActivityLog {
   /** Время последней записи лога; `null` — записей нет. */
   lastRecordAt: string | null;
+  /**
+   * Время последней записи ПОЛЬЗОВАТЕЛЯ в логе; `null` — таких записей нет.
+   * Только она снимает `blocked` со стороны страховки (раздел 4.3).
+   */
+  lastUserRecordAt: string | null;
 }
 
 export interface SessionActivity {
@@ -47,6 +52,12 @@ const RESUMING = new Set(['elicitation_complete', 'elicitation_response']);
 
 /** Ход: агент работает, ждёт человека или закончил. `null` — ничего не известно. */
 type Phase = 'working' | 'blocked' | 'ended';
+
+/** Время оси в миллисекундах; `NaN` — оси нет или её время не разобрать. */
+const msOf = (value: string | null): number => (value === null ? Number.NaN : Date.parse(value));
+
+/** Ось `a` свежее оси `b`; ось без времени не свежее ничего, но её и не обгоняют. */
+const isNewer = (a: number, b: number): boolean => !Number.isNaN(a) && (Number.isNaN(b) || a > b);
 
 export interface ActivityOptions {
   /** События журнала в порядке файла; `null` — журнала нет (`hooksMissing`). */
@@ -131,13 +142,23 @@ export function activityOf({
     }
   }
 
-  // Страховка по логу. `blocked` она не снимает: вопрос пользователю виден
-  // только хукам, а лог продолжает расти и без ответа на него.
+  // Страховка по логу (4.3). Из записей лога `blocked` снимает только запись
+  // ПОЛЬЗОВАТЕЛЯ: пока агент ждёт ответа, с его стороны в транскрипт не пишется
+  // ничего, а появившаяся запись значит, что разрешение выдано и ход продолжился
+  // (хука «разрешение выдано» в наборе 4.2 нет).
   const lastRecordAt = log?.lastRecordAt ?? null;
-  const recordAt = lastRecordAt === null ? Number.NaN : Date.parse(lastRecordAt);
-  if (phase !== 'blocked' && !Number.isNaN(recordAt)) {
-    const eventAt = lastEventAt === null ? Number.NaN : Date.parse(lastEventAt);
-    const recordIsNewer = Number.isNaN(eventAt) || recordAt > eventAt;
+  const recordAt = msOf(lastRecordAt);
+  const eventAt = msOf(lastEventAt);
+  const userAt = msOf(log?.lastUserRecordAt ?? null);
+
+  if (phase === 'blocked' && isNewer(userAt, eventAt)) {
+    phase = 'working';
+    turnEndedAt = null;
+    source = 'log';
+  }
+
+  if (phase !== 'blocked') {
+    const recordIsNewer = isNewer(recordAt, eventAt);
     if (recordIsNewer) {
       phase = 'working';
       turnEndedAt = null;
@@ -145,12 +166,15 @@ export function activityOf({
     }
     // Тишину считаем от последнего события любой оси, а не только лога: свежий
     // хук значит, что агент жив, пока длинный инструмент или субагент ничего не
-    // пишут в транскрипт, и понижать выведенный хуками `working` нельзя.
+    // пишут в транскрипт, и понижать выведенный хуками `working` нельзя. Оси без
+    // записей лога это тоже касается: агент, убитый без `SessionEnd`, иначе
+    // остался бы `working` навсегда.
     const quietAt = recordIsNewer ? recordAt : eventAt;
-    if (phase === 'working' && now - quietAt > silenceThresholdMs) {
+    if (phase === 'working' && !Number.isNaN(quietAt) && now - quietAt > silenceThresholdMs) {
       phase = 'ended';
       turnEndedAt = recordIsNewer ? lastRecordAt : lastEventAt;
-      source = 'log';
+      // Источник — та ось, чьё время решило: лога может не быть вовсе.
+      source = recordIsNewer ? 'log' : source;
     }
   }
 

@@ -72,6 +72,7 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
   let startedAt: string | null = null;
   let endedAt: string | null = null;
   let firstUserMessage: string | null = null;
+  let lastUserRecordAt: string | null = null;
   let tokens: TokenTotals | null = null;
 
   const stats = await forEachJsonlRecord(file, (raw) => {
@@ -116,8 +117,13 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
       case 'event_msg': {
         // Заголовок сессии — первая РЕПЛИКА ЧЕЛОВЕКА. Сообщения из response_item
         // для этого не годятся: там же едут системные инструкции и AGENTS.md.
-        if (kind === 'user_message' && firstUserMessage === null) {
-          firstUserMessage = str(payload, 'message') ?? firstContentText(payload);
+        if (kind === 'user_message') {
+          firstUserMessage ??= str(payload, 'message') ?? firstContentText(payload);
+          // Результаты инструментов у Codex едут не сообщениями пользователя, так
+          // что отметка страховки здесь — ровно реплика человека (раздел 4.3).
+          if (at !== null && (lastUserRecordAt === null || at > lastUserRecordAt)) {
+            lastUserRecordAt = at;
+          }
         }
         if (kind === 'token_count') tokens = codexTokens(payload) ?? tokens;
         break;
@@ -148,6 +154,7 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
     titleSource: title === null ? null : 'first-text',
     startedAt,
     endedAt,
+    lastUserRecordAt,
     durationMs,
     records: stats.parsed,
     malformedLines: stats.malformed,

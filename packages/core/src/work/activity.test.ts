@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { activityOf } from './activity.js';
+import { activityOf, type ActivityLog } from './activity.js';
 import type { EventRecord } from './events.js';
 
 const AT = '2026-09-05T10:00:00.000Z';
@@ -143,7 +143,7 @@ describe('activityOf: страховка по логу (4.3)', () => {
   it('запись лога новее последнего события → working', () => {
     const result = activityOf({
       events: [event('Stop', null, '2026-09-05T10:00:01.000Z')],
-      log: { lastRecordAt: '2026-09-05T10:00:05.000Z' },
+      log: { lastRecordAt: '2026-09-05T10:00:05.000Z', lastUserRecordAt: null },
       now: NOW,
       silenceThresholdMs: 30_000,
     });
@@ -156,7 +156,7 @@ describe('activityOf: страховка по логу (4.3)', () => {
   it('тишина дольше порога заканчивает ход', () => {
     const result = activityOf({
       events: [event('UserPromptSubmit', null, '2026-09-05T09:59:00.000Z')],
-      log: { lastRecordAt: '2026-09-05T09:59:30.000Z' },
+      log: { lastRecordAt: '2026-09-05T09:59:30.000Z', lastUserRecordAt: null },
       now: NOW,
       silenceThresholdMs: 30_000,
     });
@@ -169,7 +169,7 @@ describe('activityOf: страховка по логу (4.3)', () => {
   it('свежее событие хука держит working, пока лог молчит дольше порога', () => {
     const result = activityOf({
       events: [event('UserPromptSubmit', null, '2026-09-05T10:00:09.000Z')],
-      log: { lastRecordAt: '2026-09-05T09:59:00.000Z' },
+      log: { lastRecordAt: '2026-09-05T09:59:00.000Z', lastUserRecordAt: null },
       now: NOW,
       silenceThresholdMs: 30_000,
     });
@@ -185,7 +185,7 @@ describe('activityOf: страховка по логу (4.3)', () => {
         event('UserPromptSubmit', null, '2026-09-05T09:59:20.000Z'),
         event('SubagentStart', null, '2026-09-05T10:00:09.000Z'),
       ],
-      log: { lastRecordAt: '2026-09-05T09:59:00.000Z' },
+      log: { lastRecordAt: '2026-09-05T09:59:00.000Z', lastUserRecordAt: null },
       now: NOW,
       silenceThresholdMs: 30_000,
     });
@@ -198,7 +198,7 @@ describe('activityOf: страховка по логу (4.3)', () => {
   it('страховка не снимает blocked', () => {
     const result = activityOf({
       events: [event('PermissionRequest', null, '2026-09-05T10:00:01.000Z')],
-      log: { lastRecordAt: '2026-09-05T10:00:05.000Z' },
+      log: { lastRecordAt: '2026-09-05T10:00:05.000Z', lastUserRecordAt: null },
       now: NOW,
       silenceThresholdMs: 30_000,
     });
@@ -207,11 +207,57 @@ describe('activityOf: страховка по логу (4.3)', () => {
     expect(result.source).toBe('hooks');
   });
 
+  it('новая запись пользователя снимает blocked: разрешение выдано, ход идёт дальше', () => {
+    const events = [event('PermissionRequest', null, '2026-09-05T10:00:01.000Z')];
+    const log = (lastUserRecordAt: string): ActivityLog => ({
+      lastRecordAt: '2026-09-05T10:00:05.000Z',
+      lastUserRecordAt,
+    });
+
+    // Запись пользователя старше вопроса — это та самая реплика, после которой
+    // разрешение и спросили: `blocked` держится.
+    expect(
+      activityOf({
+        events,
+        log: log('2026-09-05T10:00:00.000Z'),
+        now: NOW,
+        silenceThresholdMs: 30_000,
+      }).activity,
+    ).toBe('blocked');
+
+    const resumed = activityOf({
+      events,
+      log: log('2026-09-05T10:00:05.000Z'),
+      now: NOW,
+      silenceThresholdMs: 30_000,
+    });
+
+    expect(resumed.activity).toBe('working');
+    expect(resumed.source).toBe('log');
+    expect(resumed.turnEndedAt).toBeNull();
+  });
+
+  it('журнал замолчал, а записей лога нет вовсе — ход всё равно закончен по тишине', () => {
+    // Агента убили без `SessionEnd`, транскрипт к сессии не привязан: без этого
+    // правила точка осталась бы `working` навсегда.
+    const result = activityOf({
+      events: [event('UserPromptSubmit', null, '2026-09-05T09:59:00.000Z')],
+      log: { lastRecordAt: null, lastUserRecordAt: null },
+      now: NOW,
+      silenceThresholdMs: 30_000,
+    });
+
+    expect(result.activity).toBe('unseen');
+    expect(result.turnEndedAt).toBe('2026-09-05T09:59:00.000Z');
+    // Решило время хука, а не лога, — источник остаётся журналом.
+    expect(result.source).toBe('hooks');
+  });
+
   // Пункт 10.
   it('журнала событий нет → работает только страховка и поднят флаг предупреждения', () => {
     const result = activityOf({
       events: null,
-      log: { lastRecordAt: '2026-09-05T10:00:05.000Z' },
+      log: { lastRecordAt: '2026-09-05T10:00:05.000Z', lastUserRecordAt: null },
       now: NOW,
     });
 
@@ -221,7 +267,11 @@ describe('activityOf: страховка по логу (4.3)', () => {
   });
 
   it('лог пуст → страховке не от чего считать', () => {
-    const result = activityOf({ events: null, log: { lastRecordAt: null }, now: NOW });
+    const result = activityOf({
+      events: null,
+      log: { lastRecordAt: null, lastUserRecordAt: null },
+      now: NOW,
+    });
 
     expect(result.hooksMissing).toBe(true);
     expect(result.source).toBe('none');

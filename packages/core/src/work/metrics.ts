@@ -24,6 +24,11 @@ export interface LiveSessionMetrics {
    * время с последнего события в деталях (дизайн TUI v2, раздел 4.3).
    */
   lastRecordAt: string | null;
+  /**
+   * Время последней записи пользователя: ею страховка снимает `blocked`, когда
+   * разрешение выдано, а хук про это не приходит (дизайн TUI v2, раздел 4.3).
+   */
+  lastUserRecordAt: string | null;
 }
 
 /** Один файл лога провайдера: id, под которым его знает карта, и путь. */
@@ -87,7 +92,11 @@ export async function readSessionMetrics(
   if (log === undefined) return null;
 
   const index = await adapter.index(log.file);
-  return { metrics: metricsOf(index), lastRecordAt: index.endedAt };
+  return {
+    metrics: metricsOf(index),
+    lastRecordAt: index.endedAt,
+    lastUserRecordAt: index.lastUserRecordAt,
+  };
 }
 
 /** Чем запущен процесс: по этой паре ищется его сессия у провайдера без внешнего id. */

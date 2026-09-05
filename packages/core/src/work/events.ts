@@ -35,6 +35,9 @@ export interface EventsLog {
   /**
    * Все события сессии в порядке файла. `null` — каталога `events/` нет: хуков
    * не будет совсем, состояние ведёт одна страховка (раздел 4.3).
+   *
+   * Каждое чтение отдаёт СВОЙ массив: подписчик сравнивает его по ссылке
+   * (`useMemo`, `React.memo` — раздел 8.2), а внутренний растёт на месте.
    */
   read(sessionId: string): Promise<readonly EventRecord[] | null>;
 }
@@ -94,7 +97,7 @@ export function openEvents(eventsDir: string): EventsLog {
           journal = { offset: 0, tail: Buffer.alloc(0), events: [] };
           journals.set(sessionId, journal);
         }
-        if (info.size === journal.offset) return journal.events;
+        if (info.size === journal.offset) return journal.events.slice();
 
         const chunk = Buffer.alloc(info.size - journal.offset);
         const { bytesRead } = await handle.read(chunk, 0, chunk.length, journal.offset);
@@ -103,7 +106,7 @@ export function openEvents(eventsDir: string): EventsLog {
         const data = Buffer.concat([journal.tail, chunk.subarray(0, bytesRead)]);
         const cut = data.lastIndexOf(NEWLINE);
         journal.tail = cut === -1 ? data : data.subarray(cut + 1);
-        if (cut === -1) return journal.events;
+        if (cut === -1) return journal.events.slice();
 
         const at = info.mtime.toISOString();
         for (const line of data.subarray(0, cut).toString('utf8').split('\n')) {
@@ -111,7 +114,7 @@ export function openEvents(eventsDir: string): EventsLog {
           const event = parseEvent(line, at);
           if (event !== null) journal.events.push(event);
         }
-        return journal.events;
+        return journal.events.slice();
       } finally {
         await handle.close();
       }

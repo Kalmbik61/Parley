@@ -18,6 +18,7 @@ function session(over: Partial<SessionIndex>): SessionIndex {
     titleSource: 'custom',
     startedAt: null,
     endedAt: null,
+    lastUserRecordAt: null,
     durationMs: null,
     records: 1,
     malformedLines: 0,

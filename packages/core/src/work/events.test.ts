@@ -91,6 +91,21 @@ describe('openEvents', () => {
     ]);
   });
 
+  it('каждое чтение отдаёт свой массив: подписчик сравнивает его по ссылке', async () => {
+    await writeFile(journal(), line('UserPromptSubmit'), 'utf8');
+    const log = openEvents(dir);
+
+    const first = await log.read(SESSION);
+    await appendFile(journal(), line('Stop'), 'utf8');
+    const second = await log.read(SESSION);
+
+    // Отдай мы внутренний массив, `first` дорос бы до двух элементов вместе с
+    // `second`, и мемоизация раздела 8.2 новых событий не заметила бы.
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(2);
+    expect(second).not.toBe(first);
+  });
+
   it('переписанный с нуля журнал читается заново', async () => {
     await writeFile(journal(), line('UserPromptSubmit') + line('Stop'), 'utf8');
     const log = openEvents(dir);

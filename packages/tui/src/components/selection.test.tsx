@@ -36,6 +36,7 @@ function session(over: Partial<SessionIndex> = {}): SessionIndex {
     titleSource: 'custom',
     startedAt: '2026-09-01T10:00:00.000Z',
     endedAt: new Date().toISOString(),
+    lastUserRecordAt: null,
     durationMs: 12 * 60_000,
     records: 10,
     malformedLines: 0,

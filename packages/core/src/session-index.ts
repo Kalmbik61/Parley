@@ -27,6 +27,13 @@ export interface SessionIndex {
   titleSource: TitleSource | null;
   startedAt: string | null;
   endedAt: string | null;
+  /**
+   * Время последней записи ПОЛЬЗОВАТЕЛЯ (у Claude Code это и реплика человека, и
+   * результат инструмента). Ею страховка снимает `blocked`: пока агент ждёт
+   * ответа, в транскрипт со стороны пользователя не пишется ничего, а как только
+   * разрешение выдано — появляется запись (дизайн TUI v2, раздел 4.3).
+   */
+  lastUserRecordAt: string | null;
   durationMs: number | null;
   records: number;
   malformedLines: number;
@@ -84,6 +91,7 @@ export async function indexSessionFile(
   let version: string | null = null;
   let startedAt: string | null = null;
   let endedAt: string | null = null;
+  let lastUserRecordAt: string | null = null;
 
   // Заголовки дописываются в файл снова и снова — побеждает последний.
   let title: string | null = null;
@@ -140,6 +148,9 @@ export async function indexSessionFile(
     if (at !== null) {
       if (startedAt === null || at < startedAt) startedAt = at;
       if (endedAt === null || at > endedAt) endedAt = at;
+      if (record.role === 'user' && (lastUserRecordAt === null || at > lastUserRecordAt)) {
+        lastUserRecordAt = at;
+      }
     }
   });
 
@@ -170,6 +181,7 @@ export async function indexSessionFile(
     titleSource,
     startedAt,
     endedAt,
+    lastUserRecordAt,
     durationMs,
     records: stats.parsed,
     malformedLines: stats.malformed,
