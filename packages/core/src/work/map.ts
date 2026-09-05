@@ -121,8 +121,11 @@ export function addMessage(map: WorkMap, init: NewMessage, at = new Date().toISO
 
 export interface TransitionOptions {
   at?: string;
-  /** Код выхода процесса: пишется в запись history перехода в `exited`. */
-  exitCode?: number;
+  /**
+   * Код выхода процесса: пишется в запись history перехода в `exited`. `null` —
+   * процесс завершился без харнесса, и кода у нас нет (дизайн 5.4).
+   */
+  exitCode?: number | null;
   /** Сигнал, которым убит процесс, — там же, рядом с кодом выхода. */
   signal?: number;
 }

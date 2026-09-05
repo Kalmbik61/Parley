@@ -82,9 +82,10 @@ function exitLine(session: WorkSession): string {
   const mark =
     last?.signal !== undefined && last.signal !== 0
       ? `сигнал ${last.signal}`
-      : last?.exitCode === undefined
-        ? null
-        : `код ${last.exitCode}`;
+      : // Кода нет вовсе или он `null` — процесс завершился без харнесса (5.4).
+        typeof last?.exitCode === 'number'
+        ? `код ${last.exitCode}`
+        : null;
   const head = session.status === 'exited' ? 'вышла' : 'завершилась';
   return mark === null ? `${head} ${at}` : `${head} ${at} · ${mark}`;
 }

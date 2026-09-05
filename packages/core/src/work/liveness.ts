@@ -133,7 +133,7 @@ async function lastRecordOf(session: WorkSession, roots: MetricsRoots): Promise<
 
 /**
  * Сверяет все `active` сессии работы с состоянием ОС и переводит мёртвые в
- * `exited` (код выхода неизвестен — в записи `history` его просто нет).
+ * `exited` (харнесс процесс не ждал, и код выхода в записи `history` — `null`).
  * Возвращает id тех, кого перевела. Вызывается при старте харнесса и по
  * событию watcher, но не по таймеру (раздел 8.2).
  */
@@ -159,7 +159,7 @@ export async function reconcileMap(
 
   const at = new Date(now).toISOString();
   for (const id of dead) {
-    await finishSession(projectPath, workId, id, 'exited', { at, ...roots });
+    await finishSession(projectPath, workId, id, 'exited', { at, exitCode: null, ...roots });
   }
   return dead;
 }

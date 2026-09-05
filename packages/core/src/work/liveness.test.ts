@@ -181,8 +181,13 @@ describe('reconcileMap (чек-лист 15)', () => {
     expect(map.sessions.find((session) => session.id === aliveId)?.status).toBe('active');
     const exited = map.sessions.find((session) => session.id === deadId);
     expect(exited?.status).toBe('exited');
-    // Код выхода неизвестен: харнесс процесс не ждал, поля в записи нет.
-    expect(exited?.history.at(-1)).toEqual({ status: 'exited', at: expect.any(String) });
+    // Код выхода неизвестен: харнесс процесс не ждал — в записи стоит `null`,
+    // и это не то же самое, что «поле забыли» (чек-лист 15).
+    expect(exited?.history.at(-1)).toEqual({
+      status: 'exited',
+      at: expect.any(String),
+      exitCode: null,
+    });
     expect(exited?.endedAt).not.toBeNull();
   });
 

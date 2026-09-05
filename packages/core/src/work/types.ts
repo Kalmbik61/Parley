@@ -19,7 +19,8 @@ export type SessionStatus = 'pending' | 'active' | 'exited' | 'done' | 'failed';
 export interface HistoryEntry {
   status: SessionStatus;
   at: string;
-  exitCode?: number;
+  /** Код выхода; `null` — процесс завершился без нас и код неизвестен. */
+  exitCode?: number | null;
   signal?: number;
 }
 

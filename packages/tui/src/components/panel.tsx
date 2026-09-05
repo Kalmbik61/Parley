@@ -74,7 +74,8 @@ function exitTail(session: WorkSession): string {
   const last = lastStep(session);
   const at = formatClock(last?.at ?? session.endedAt);
   if (last?.signal !== undefined && last.signal !== 0) return `${at} · сигнал ${last.signal}`;
-  return last?.exitCode === undefined ? at : `${at} · код ${last.exitCode}`;
+  // Кода нет вовсе или он `null` (процесс завершился без харнесса) — молчим.
+  return typeof last?.exitCode === 'number' ? `${at} · код ${last.exitCode}` : at;
 }
 
 /** Строки карточки по состоянию сессии (макеты §2). */

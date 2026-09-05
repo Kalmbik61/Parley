@@ -102,9 +102,10 @@ function stateLine(
   const code =
     step?.signal !== undefined && step.signal !== 0
       ? ` · сигнал ${step.signal}`
-      : step?.exitCode === undefined
-        ? ''
-        : ` · код ${step.exitCode}`;
+      : // Кода нет вовсе или он `null` — процесс завершился без харнесса (5.4).
+        typeof step?.exitCode === 'number'
+        ? ` · код ${step.exitCode}`
+        : '';
   const duration =
     session.metrics === null ? '' : ` · ${formatDuration(session.metrics.durationMs)}`;
   return `${glyph} ${session.status} ${at}${duration}${code}`;

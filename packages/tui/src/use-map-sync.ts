@@ -1,11 +1,13 @@
 /**
- * Синхронизация карт с внешним миром: живость процессов, авто-заголовок Claude
- * Code и флажок `⚑` у неподключённой `blocked` сессии (дизайн TUI v2, 5.1, 5.4 и 6).
+ * Синхронизация карт с внешним миром: живость процессов, `SessionEnd` из журнала
+ * хуков, авто-заголовок Claude Code и флажок `⚑` у неподключённой `blocked`
+ * сессии (дизайн TUI v2, 4.2, 5.1, 5.4 и 6).
  *
  * Всё идёт по событиям watcher карт — таймера здесь нет.
  */
 
 import {
+  finishSession,
   reconcileMap,
   type MetricsRoots,
   type SessionActivity,
@@ -48,6 +50,26 @@ export function useMapSync({
       void reconcileMap(entry.projectPath, entry.map.work.id, roots).catch(() => {});
     }
   }, [works, roots]);
+
+  // `SessionEnd` в журнале: агент попрощался, а отчёта не было — сессия уходит
+  // в `exited` тем же путём, что и сверка живости (таблица 4.2). Код выхода
+  // неизвестен: этот процесс ждал не харнесс. У своей панели выход процесса
+  // приходит раньше и с настоящим кодом, а опоздавший переход просто не пройдёт —
+  // это не ошибка, ровно как и у сверки выше.
+  const ended = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    for (const entry of works) {
+      for (const session of entry.map.sessions) {
+        if (session.status !== 'active' || ended.current.has(session.id)) continue;
+        if (activityOf(session.id)?.exited !== true) continue;
+        ended.current = new Set([...ended.current, session.id]);
+        void finishSession(entry.projectPath, entry.map.work.id, session.id, 'exited', {
+          exitCode: null,
+          ...roots,
+        }).catch(() => {});
+      }
+    }
+  }, [works, activityOf, roots]);
 
   // Заголовок Claude Code доехал до индекса логов — переименование один раз (5.1).
   useEffect(() => {
