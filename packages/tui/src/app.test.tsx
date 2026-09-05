@@ -300,7 +300,7 @@ describe('навигация по сайдбару (3.2, макеты 1.5 и §8
     await new Promise((resolve) => setTimeout(resolve, 100));
   };
 
-  it('строка new достижима: Enter кладёт сессию в работу, prefix c заводит вторую работу (5.1)', async () => {
+  it('строка new заводит вторую работу: Enter по ней — работа «без названия» (5.1)', async () => {
     const app = open();
     try {
       const workId = await launch(app);
@@ -309,26 +309,18 @@ describe('навигация по сайдбару (3.2, макеты 1.5 и §8
       // Сессия → работа → `new`: пять строк сайдбара обходятся по кругу (3.2).
       await cursorToNew(app);
 
-      // `Enter` по `new` — вторая сессия в той же работе, а не вторая работа.
+      // `Enter` по строке `new` верхнего уровня — новая работа, а не вторая
+      // сессия в прежней (5.1).
       app.stdin.write(ENTER);
-      await waitFor2(async () => (await readMap(project, workId)).sessions.length === 2);
-      expect((await readWorksIndex()).works).toHaveLength(1);
-
-      // Работу «без названия» заводит `prefix c` на строке `new`, не выходя из
-      // режима навигации: префикс слышен и в нём (3.1–3.2).
-      await cursorToNew(app);
-      app.stdin.write(`${PREFIX}c`);
       await waitFor2(async () => (await readWorksIndex()).works.length === 2);
       const { works } = await readWorksIndex();
       expect(works.map((item) => item.title)).toEqual(['без названия', 'без названия']);
-      // Сессия легла в новую работу, а не в прежнюю: их по-прежнему две.
-      expect((await readMap(project, workId)).sessions).toHaveLength(2);
+      // В прежней работе сессия по-прежнему одна.
+      expect((await readMap(project, workId)).sessions).toHaveLength(1);
 
       // Панель переехала к агенту новой работы, и ввод идёт ему: у обеих работ
       // сессия называется `s-01`, и по голому id панель осталась бы у первой.
       await waitFor(() => (app.lastFrame() ?? '').includes('@w-0002'));
-      app.stdin.write(ESC);
-      await new Promise((resolve) => setTimeout(resolve, 100));
       app.stdin.write('echo ПРОБА\r');
       await waitFor(() => (app.lastFrame() ?? '').includes('ПРОБА'));
       expect(app.lastFrame()).toContain('@w-0002');
@@ -337,20 +329,17 @@ describe('навигация по сайдбару (3.2, макеты 1.5 и §8
     }
   }, 30_000);
 
-  it('курсор живёт только внутри режима: после Esc `prefix c` кладёт сессию в выбранную работу (3.2)', async () => {
+  it('prefix c кладёт сессию в выбранную работу и на строке new (3.2)', async () => {
     const app = open();
     try {
       const workId = await launch(app);
       await waitMap(workId, (item) => item.status === 'active');
 
-      // Курсор дошёл до `new` и вышел из режима вместе с ним.
+      // Курсор стоит на `new`, но `c` про курсор не спрашивает: сессия ложится
+      // в выбранную работу (3.2).
       await cursorToNew(app);
-      app.stdin.write(ESC);
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
       app.stdin.write(`${PREFIX}c`);
       await waitFor2(async () => (await readMap(project, workId)).sessions.length === 2);
-      // Работа по-прежнему одна: строка `new` больше не под курсором.
       expect((await readWorksIndex()).works).toHaveLength(1);
     } finally {
       app.unmount();

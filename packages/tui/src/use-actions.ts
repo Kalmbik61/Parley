@@ -10,7 +10,6 @@ import type { WorkSession } from '@harnas/core';
 import { useInput } from 'ink';
 import { useCallback, useMemo, useState } from 'react';
 import {
-  sameTarget,
   sidebarCursorRows,
   sidebarTargets,
   stepCursor,
@@ -71,10 +70,7 @@ export interface ActionsState {
   navigating: boolean;
   /** Ждём вторую клавишу префикса: строка статуса показывает действия (§3). */
   awaiting: boolean;
-  /**
-   * Строка сайдбара под курсором: она подсвечена, и от неё зависит `c` — на
-   * строке `new` он заводит новую работу, а не сессию в выбранной (5.1).
-   */
+  /** Строка сайдбара под курсором: она подсвечена (макет 1.5). */
   cursor: SidebarTarget | null;
 }
 
@@ -102,25 +98,24 @@ export function useActions(options: ActionsOptions): ActionsState {
   );
 
   /**
-   * Новая сессия: в выбранную работу, а на строке `new` — в новую работу «без
-   * названия» (5.1). Выбор переезжает за панелью: работа могла родиться сейчас.
+   * Новая сессия в работе `key`; `null` — в новой работе «без названия» (5.1).
+   * Выбор переезжает за панелью: работа могла родиться этим же нажатием.
    */
   const create = useCallback(
-    (target: SidebarTarget | null) => {
-      panel.create(target?.kind === 'new' ? null : workId, (sessionId, key) => {
-        selection.selectWork(key);
+    (key: string | null) => {
+      panel.create(key, (sessionId, workKey) => {
+        selection.selectWork(workKey);
         // Ключ работы передаётся явно: она могла родиться этим же нажатием, и в
         // выборе её ещё нет — без ключа панель уехала бы к чужой `s-01`.
-        selection.attach(sessionId, key);
+        selection.attach(sessionId, workKey);
       });
     },
-    [panel, workId, selection],
+    [panel, selection],
   );
 
   /**
-   * Выход из режима навигации: курсор уходит вместе с ним. Иначе строка `new`
-   * осталась бы подсвеченной, а `prefix c` заводил бы работу за работой вместо
-   * сессии в выбранной (3.2).
+   * Выход из режима навигации: курсор уходит вместе с ним, иначе строка
+   * осталась бы подсвеченной без фокуса в сайдбаре (макет 1.5).
    */
   const leave = useCallback(() => {
     setNavigating(false);
@@ -140,7 +135,9 @@ export function useActions(options: ActionsOptions): ActionsState {
   const onAction = useCallback(
     (key: string) => {
       onKey();
-      if (key === 'c') return create(cursor);
+      // `c` про курсор не спрашивает: сессия ложится в выбранную работу, а если
+      // работ нет — `panel.create(null)` заводит первую (3.2, 5.1).
+      if (key === 'c') return create(workId);
       if (key === 'j' || key === 'k') return walk(key === 'j' ? 1 : -1);
       if (key === 's') {
         // Курсор входит в сайдбар там, где стоит выбор (макет 1.5).
@@ -165,12 +162,13 @@ export function useActions(options: ActionsOptions): ActionsState {
       const overlay = OVERLAYS[key];
       if (overlay !== undefined) overlays.open(overlay);
     },
-    [create, cursor, rows, selection, walk, workRows, overlays, onKey, toggleSidebar],
+    [create, workId, rows, selection, walk, workRows, overlays, onKey, toggleSidebar],
   );
 
   /**
    * Клик в сайдбаре: по работе — выбор, по сессии — выбор с подключением, по
-   * `new` — новая сессия, а по `new` под курсором — новая работа (3.3, 5.1).
+   * `new` — сессия в новой работе, потому что выбрана строка `new` (3.3, 5.1).
+   * Курсор клик двигает только в режиме навигации: вне его подсвечивать нечего.
    * Колесо и отпускание кнопки строк не трогают. Раскладка считается на сам
    * клик: каждый кадр она была бы напрасной работой.
    */
@@ -178,10 +176,9 @@ export function useActions(options: ActionsOptions): ActionsState {
     if (event.kind !== 'press' || event.button !== 0 || sidebar === null) return;
     const target = sidebarTargets(sidebar)[event.y - 1];
     if (target === undefined || target === null) return;
-    const wasHere = sameTarget(cursor, target);
-    setCursor(target);
+    if (navigating) setCursor(target);
     if (target.kind === 'work') return selection.selectWork(target.key);
-    if (target.kind === 'new') return create(wasHere ? target : null);
+    if (target.kind === 'new') return create(null);
     selection.attach(target.key);
   };
 
@@ -193,8 +190,8 @@ export function useActions(options: ActionsOptions): ActionsState {
     onAwait: setAwaiting,
     toGuest: panel.write,
     capture: overlays.kind !== null || navigating,
-    // Оверлей глух и к префиксу, а сайдбар — нет: `prefix c` на строке `new`
-    // заводит работу, не выходя из режима навигации (3.1–3.2, 5.1).
+    // Оверлей глух и к префиксу, а сайдбар — нет: действия харнесса слышны и в
+    // режиме навигации, не выходя из него (3.1–3.2).
     keepPrefix: navigating && overlays.kind === null,
     // Ввод оверлея и списков — тоже нажатия харнесса; события мыши ими не
     // считаются: они гостю не уходят, но и клавишами не являются.
@@ -222,8 +219,8 @@ export function useActions(options: ActionsOptions): ActionsState {
       if (cursor?.kind === 'work') return selection.selectWork(cursor.key);
 
       leave();
-      // `Enter` по `new` кладёт сессию в выбранную работу; новую работу заводит
-      // `prefix c` на этой же строке (5.1).
+      // Выбрана строка `new` верхнего уровня — сессия ложится в новую работу
+      // «без названия» (5.1).
       if (cursor?.kind === 'new') return create(null);
 
       const id = cursor?.key ?? selection.session;
