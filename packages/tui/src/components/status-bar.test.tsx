@@ -1,6 +1,7 @@
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
 import { pinUnicodeGlyphs } from '../../test/glyphs-env.js';
+import { applyGlyphsConfig } from '../glyphs.js';
 import { StatusBar } from './status-bar.js';
 
 const frameOf = (node: Parameters<typeof render>[0]): string => render(node).lastFrame() ?? '';
@@ -84,8 +85,8 @@ describe('StatusBar', () => {
     expect(frame).toContain('…');
   });
 
-  it('HARNAS_ASCII=1 заменяет флажок', () => {
-    process.env.HARNAS_ASCII = '1';
+  it('ascii из настроек заменяет флажок', () => {
+    applyGlyphsConfig(true);
     const frame = frameOf(
       <StatusBar count={1} event={{ text: 'событие' }} width={60} prefix="ctrl+q" />,
     );

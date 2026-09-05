@@ -108,11 +108,20 @@ function unicodeLocale(env: NodeJS.ProcessEnv): boolean {
   return /utf-?8/i.test(locale);
 }
 
-/** Набор глифов: запасной включает `HARNAS_ASCII=1` или терминал без Unicode (6.1). */
+/**
+ * `config.ascii` из настроек: их читает один загрузчик в core, туда же сведён и
+ * `HARNAS_ASCII` (раздел 3.4). До первого чтения набор выбирает одна локаль.
+ */
+let configured = false;
+
+/** Настройки прочитаны: дальше запасной набор включают они (раздел 7). */
+export function applyGlyphsConfig(ascii: boolean): void {
+  configured = ascii;
+}
+
+/** Набор глифов: запасной включают настройки или терминал без Unicode (6.1). */
 export function glyphs(env: NodeJS.ProcessEnv = process.env): Glyphs {
-  const ascii = env['HARNAS_ASCII'];
-  if (ascii !== undefined && ascii !== '' && ascii !== '0') return ASCII;
-  return unicodeLocale(env) ? UNICODE : ASCII;
+  return configured || !unicodeLocale(env) ? ASCII : UNICODE;
 }
 
 /**

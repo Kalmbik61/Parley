@@ -3,7 +3,7 @@ import { render } from 'ink-testing-library';
 import type { ReactNode } from 'react';
 import { describe, expect, it } from 'vitest';
 import { pinUnicodeGlyphs } from '../../test/glyphs-env.js';
-import { glyphs } from '../glyphs.js';
+import { applyGlyphsConfig, glyphs } from '../glyphs.js';
 import type { TerminalSnapshot } from '../pty/terminal-buffer.js';
 import { ActivityDot, blinkTicking, dotState, maxDotState, useBlink } from './activity-dot.js';
 import { TerminalView } from './terminal-view.js';
@@ -90,7 +90,7 @@ describe('ActivityDot', () => {
   });
 
   it('в запасном наборе мигание — *↔o', async () => {
-    process.env['HARNAS_ASCII'] = '1';
+    applyGlyphsConfig(true);
     const dot = render(<ActivityDot state="working" g={glyphs()} />);
     await settle();
     expect(dot.lastFrame()).toBe('*');

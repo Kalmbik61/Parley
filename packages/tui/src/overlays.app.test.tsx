@@ -209,6 +209,20 @@ describe('битый конфиг (раздел 10, чек-лист 33)', () => 
       app.unmount();
     }
   }, 30_000);
+
+  it('ascii из настроек включает запасной набор глифов (раздел 7)', async () => {
+    await writeFile(path.join(home, 'config.json'), JSON.stringify({ ascii: true }), 'utf8');
+    const app = open();
+    try {
+      await mounted(app);
+      // Локаль здесь юникодная, а `HARNAS_ASCII` не задан: запасной набор мог
+      // прийти только из `config.ascii` — другого источника у глифов нет.
+      await waitFor(() => !(app.lastFrame() ?? '').includes('│'));
+      expect(app.lastFrame()).toContain('|');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
 });
 
 describe('детали сессии (макет 4.1)', () => {

@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { glyphs, statusColor, statusGlyph } from './glyphs.js';
+import { afterEach, describe, expect, it } from 'vitest';
+import { applyGlyphsConfig, glyphs, statusColor, statusGlyph } from './glyphs.js';
+
+// Настройки — общий для всех модуль: после каждого теста возвращаем дефолт.
+afterEach(() => applyGlyphsConfig(false));
 
 describe('glyphs', () => {
   it('по умолчанию Unicode (дизайн 6.1)', () => {
@@ -18,8 +21,9 @@ describe('glyphs', () => {
     expect(g.arrow).toBe('→');
   });
 
-  it('HARNAS_ASCII=1 даёт запасной набор', () => {
-    const g = glyphs({ HARNAS_ASCII: '1' });
+  it('ascii из настроек даёт запасной набор', () => {
+    applyGlyphsConfig(true);
+    const g = glyphs({ LANG: 'ru_RU.UTF-8' });
     expect(g.pending).toBe('.');
     expect(g.active).toBe('*');
     expect(g.exited).toBe('!');
@@ -38,8 +42,10 @@ describe('glyphs', () => {
     expect(g.arrow).toBe('->');
   });
 
-  it('пустое значение переменной ASCII-режим не включает', () => {
-    expect(glyphs({ HARNAS_ASCII: '' }).active).toBe('●');
+  it('переменную окружения сам не читает: её разбирает loadConfig (3.4)', () => {
+    // Единственный источник — `config.ascii`; `HARNAS_ASCII` перекрывает файл
+    // внутри загрузчика настроек, а не здесь.
+    expect(glyphs({ HARNAS_ASCII: '1', LANG: 'ru_RU.UTF-8' }).active).toBe('●');
   });
 
   it('терминал без Unicode тоже даёт запасной набор (6.1)', () => {

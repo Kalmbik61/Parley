@@ -9,6 +9,7 @@
 import { configPath, DEFAULT_CONFIG, loadConfig, type HarnasConfig } from '@harnas/core';
 import { useEffect, useRef, useState } from 'react';
 import { withHome } from './format.js';
+import { applyGlyphsConfig } from './glyphs.js';
 import type { StatusEventInit } from './use-status.js';
 
 export function useConfig(push: (events: readonly StatusEventInit[]) => void): HarnasConfig {
@@ -22,6 +23,9 @@ export function useConfig(push: (events: readonly StatusEventInit[]) => void): H
     void loadConfig()
       .then(({ config: loaded, warning }) => {
         if (cancelled) return;
+        // Набор глифов берётся из тех же настроек, а не из окружения напрямую:
+        // источник один (раздел 7). Ставим его до кадра, который их применит.
+        applyGlyphsConfig(loaded.ascii);
         setConfig(loaded);
         if (warning === null) return;
         notify.current([
