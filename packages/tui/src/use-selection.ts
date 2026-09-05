@@ -11,6 +11,7 @@ import { useCallback, useState } from 'react';
 import type { WorkEntry } from '@harnas/core';
 import { workRunKey } from './pty/use-agent-pty.js';
 import type { StatusSource } from './use-status.js';
+import { workKey } from './work-rows.js';
 
 export interface SelectionWork {
   key: string;
@@ -20,8 +21,12 @@ export interface SelectionWork {
 
 export interface SelectionOptions {
   works: readonly SelectionWork[];
-  /** Подключение к панели: сессия просмотрена, `unseen` гаснет (раздел 4.1). */
-  onAttach?: (sessionId: string) => void;
+  /**
+   * Подключение к панели: сессия просмотрена, `unseen` гаснет (раздел 4.1).
+   * Ключ работы обязателен — id сессий нумеруются внутри работы, и по голому
+   * `s-01` панель уехала бы к чужому агенту.
+   */
+  onAttach?: (sessionId: string, workKey: string) => void;
 }
 
 export interface SelectionState {
@@ -30,8 +35,12 @@ export interface SelectionState {
   selectWork: (key: string) => void;
   /** Выбрать сессию, не подключаясь: ходьба по сайдбару в режиме навигации (3.2). */
   selectSession: (sessionId: string) => void;
-  /** Выбрать сессию и подключить к ней панель. */
-  attach: (sessionId: string) => void;
+  /**
+   * Выбрать сессию и подключить к ней панель. Работа берётся выбранная, а
+   * явный ключ нужен там, где она родилась в этот же обработчик и в состоянии
+   * выбора ещё не отразилась (5.1).
+   */
+  attach: (sessionId: string, workKey?: string) => void;
 }
 
 export function useSelection({ works, onAttach }: SelectionOptions): SelectionState {
@@ -55,12 +64,14 @@ export function useSelection({ works, onAttach }: SelectionOptions): SelectionSt
 
   const selectSession = useCallback((sessionId: string) => setChosenSession(sessionId), []);
 
+  const owner = work?.key ?? null;
   const attach = useCallback(
-    (sessionId: string) => {
+    (sessionId: string, key?: string) => {
       setChosenSession(sessionId);
-      onAttach?.(sessionId);
+      const inWork = key ?? owner;
+      if (inWork !== null) onAttach?.(sessionId, inWork);
     },
-    [onAttach],
+    [owner, onAttach],
   );
 
   return { work: work?.key ?? null, session, selectWork, selectSession, attach };
@@ -85,11 +96,17 @@ export function useAttachSession({
   markSeen,
   seen,
   attach,
-}: AttachOptions): (sessionId: string) => void {
+}: AttachOptions): (sessionId: string, key: string) => void {
   return useCallback(
-    (sessionId: string) => {
+    (sessionId: string, key: string) => {
       markSeen(sessionId);
-      const entry = works.find((item) => item.map.sessions.some((s) => s.id === sessionId));
+      // Сессия ищется парой (работа, id): `s-01` есть у каждой работы, и поиск
+      // по голому id уводил бы панель к первой попавшейся.
+      const entry = works.find(
+        (item) =>
+          workKey(item.projectPath, item.map.work.id) === key &&
+          item.map.sessions.some((s) => s.id === sessionId),
+      );
       if (entry === undefined) return;
       const workId = entry.map.work.id;
       seen({ projectPath: entry.projectPath, workId, sessionId });

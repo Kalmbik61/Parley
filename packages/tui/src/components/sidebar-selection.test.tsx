@@ -9,7 +9,7 @@ vi.hoisted(() => {
 import type { WorkSession } from '@harnas/core';
 import { render } from 'ink-testing-library';
 import { pinUnicodeGlyphs } from '../../test/glyphs-env.js';
-import { Sidebar, type SidebarSession, type SidebarWork } from './sidebar.js';
+import { Sidebar, type SidebarSession, type SidebarTarget, type SidebarWork } from './sidebar.js';
 
 pinUnicodeGlyphs();
 
@@ -64,7 +64,7 @@ const item = (over: Partial<SidebarSession> = {}): SidebarSession => ({
   ...over,
 });
 
-const frameOf = (navigating = false): string[] =>
+const frameOf = (navigating = false, cursor: SidebarTarget | null = null): string[] =>
   (
     render(
       <Sidebar
@@ -75,6 +75,7 @@ const frameOf = (navigating = false): string[] =>
         width={26}
         height={12}
         navigating={navigating}
+        cursor={cursor}
       />,
     ).lastFrame() ?? ''
   ).split('\n');
@@ -95,6 +96,14 @@ describe('сайдбар: подсветка и режим навигации', 
     expect(highlighted(lineWith(lines, 'план'))).toBe(true);
     expect(highlighted(lineWith(lines, '1м'))).toBe(true);
     expect(highlighted(lineWith(lines, 'ревью'))).toBe(false);
+  });
+
+  it('строка под курсором подсвечена наравне с выбранными (макет 1.5)', () => {
+    const lines = frameOf(true, { kind: 'new', key: '' });
+    expect(highlighted(lineWith(lines, ' new'))).toBe(true);
+    // Курсор не отбирает подсветку у выбранной работы и её сессии.
+    expect(highlighted(lineWith(lines, 'Авторизация'))).toBe(true);
+    expect(highlighted(lineWith(lines, 'Платежи'))).toBe(false);
   });
 
   it('в режиме навигации разделитель становится cyan (макет 1.5)', () => {

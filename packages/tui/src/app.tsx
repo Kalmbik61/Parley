@@ -236,6 +236,7 @@ export function App({
         width={columns}
         prefix={prefixName}
         awaiting={actions.awaiting}
+        navigating={actions.navigating}
       />
     </Box>
   );

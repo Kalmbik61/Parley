@@ -44,10 +44,40 @@ describe('gitBranch', () => {
     expect(branch).toMatch(/^[0-9a-f]{7}$/);
   });
 
+  it('в worktree `.git` — файл `gitdir:`, ветка берётся по ссылке', async () => {
+    await run('git', ['init', '-b', 'main', dir]);
+    await run('git', [
+      '-C',
+      dir,
+      '-c',
+      'user.email=тест@harnas',
+      '-c',
+      'user.name=тест',
+      'commit',
+      '--allow-empty',
+      '-m',
+      'первый',
+    ]);
+    const tree = path.join(dir, '..', path.basename(dir) + '-wt');
+    await run('git', ['-C', dir, 'worktree', 'add', '-b', 'feat/pay', tree]);
+
+    try {
+      expect(await gitBranch(tree)).toBe('feat/pay');
+    } finally {
+      await rm(tree, { recursive: true, force: true });
+    }
+  });
+
   it('не репозиторий и пустой HEAD — ветки нет', async () => {
     expect(await gitBranch(dir)).toBeNull();
     await run('git', ['init', '-b', 'main', dir]);
     await writeFile(path.join(dir, '.git', 'HEAD'), '\n');
+    expect(await gitBranch(dir)).toBeNull();
+  });
+
+  it('тег в HEAD за ветку не выдаётся', async () => {
+    await run('git', ['init', '-b', 'main', dir]);
+    await writeFile(path.join(dir, '.git', 'HEAD'), 'ref: refs/tags/v1\n');
     expect(await gitBranch(dir)).toBeNull();
   });
 });

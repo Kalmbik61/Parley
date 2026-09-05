@@ -9,6 +9,7 @@
 import {
   addSession,
   createWork,
+  harnasHome,
   readMap,
   readWorksIndex,
   transitionSession,
@@ -289,6 +290,16 @@ describe('навигация по сайдбару (3.2, макеты 1.5 и §8
     }
   }, 30_000);
 
+  /** Курсор входит в сайдбар на выбранной сессии; два `j` доводят его до `new`. */
+  const cursorToNew = async (app: ReturnType<typeof render>): Promise<void> => {
+    app.stdin.write(`${PREFIX}s`);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    app.stdin.write('j');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    app.stdin.write('j');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  };
+
   it('строка new достижима: Enter кладёт сессию в работу, prefix c заводит вторую работу (5.1)', async () => {
     const app = open();
     try {
@@ -296,25 +307,51 @@ describe('навигация по сайдбару (3.2, макеты 1.5 и §8
       await waitMap(workId, (item) => item.status === 'active');
 
       // Сессия → работа → `new`: пять строк сайдбара обходятся по кругу (3.2).
-      app.stdin.write(`${PREFIX}s`);
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      app.stdin.write('j');
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      app.stdin.write('j');
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await cursorToNew(app);
 
       // `Enter` по `new` — вторая сессия в той же работе, а не вторая работа.
       app.stdin.write(ENTER);
       await waitFor2(async () => (await readMap(project, workId)).sessions.length === 2);
       expect((await readWorksIndex()).works).toHaveLength(1);
 
-      // Курсор остался на `new`: теперь `prefix c` заводит работу «без названия».
+      // Работу «без названия» заводит `prefix c` на строке `new`, не выходя из
+      // режима навигации: префикс слышен и в нём (3.1–3.2).
+      await cursorToNew(app);
       app.stdin.write(`${PREFIX}c`);
       await waitFor2(async () => (await readWorksIndex()).works.length === 2);
       const { works } = await readWorksIndex();
       expect(works.map((item) => item.title)).toEqual(['без названия', 'без названия']);
       // Сессия легла в новую работу, а не в прежнюю: их по-прежнему две.
       expect((await readMap(project, workId)).sessions).toHaveLength(2);
+
+      // Панель переехала к агенту новой работы, и ввод идёт ему: у обеих работ
+      // сессия называется `s-01`, и по голому id панель осталась бы у первой.
+      await waitFor(() => (app.lastFrame() ?? '').includes('@w-0002'));
+      app.stdin.write(ESC);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      app.stdin.write('echo ПРОБА\r');
+      await waitFor(() => (app.lastFrame() ?? '').includes('ПРОБА'));
+      expect(app.lastFrame()).toContain('@w-0002');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('курсор живёт только внутри режима: после Esc `prefix c` кладёт сессию в выбранную работу (3.2)', async () => {
+    const app = open();
+    try {
+      const workId = await launch(app);
+      await waitMap(workId, (item) => item.status === 'active');
+
+      // Курсор дошёл до `new` и вышел из режима вместе с ним.
+      await cursorToNew(app);
+      app.stdin.write(ESC);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      app.stdin.write(`${PREFIX}c`);
+      await waitFor2(async () => (await readMap(project, workId)).sessions.length === 2);
+      // Работа по-прежнему одна: строка `new` больше не под курсором.
+      expect((await readWorksIndex()).works).toHaveLength(1);
     } finally {
       app.unmount();
     }
@@ -406,6 +443,10 @@ describe('события и просмотр (4.1, 6)', () => {
       await new Promise((resolve) => setTimeout(resolve, 150));
       app.stdin.write('k');
       await new Promise((resolve) => setTimeout(resolve, 250));
+      // Из режима выходим: пока он идёт, строку статуса занимает он сам (1.5),
+      // а проверяем мы события. Выбор при этом остаётся на чужой сессии.
+      app.stdin.write(ESC);
+      await new Promise((resolve) => setTimeout(resolve, 150));
 
       // Подключённая сессия на экране: «не подключена» про неё — неправда.
       await appendFile(
@@ -475,6 +516,8 @@ describe('панель следует за подключённым агенто
       const frame = app.lastFrame() ?? '';
       expect(frame).toContain('stub готов');
       expect(frame).not.toContain('вне харнесса');
+      // Второй признак режима, рядом с cyan-разделителем: строка статуса (1.5).
+      expect(frame).toContain('сайдбар · ↑↓/jk — по строкам');
     } finally {
       app.unmount();
     }
@@ -654,4 +697,14 @@ describe('закрытие сессии (3.2, макет 4.8)', () => {
       app.unmount();
     }
   }, 30_000);
+});
+
+describe('песочница тестов', () => {
+  it('без HARNAS_HOME дом уходит во временный каталог, а не в настоящий ~/.harnas', () => {
+    // Жёсткое правило задания: настоящие ~/.harnas и ~/.claude тесты не трогают.
+    // Панель поднимает процессы, и их запись случается уже после `afterEach` —
+    // спасает подменённый `HOME` (см. `test/sandbox-home.ts`).
+    delete process.env['HARNAS_HOME'];
+    expect(harnasHome().startsWith(tmpdir())).toBe(true);
+  });
 });

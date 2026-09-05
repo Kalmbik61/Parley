@@ -202,7 +202,8 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
           (await createWork(projectPath, { title: UNTITLED_WORK, goal: '' })).work.id;
         const created = await registerResumed(project, workId, item.id, item.title ?? item.id);
         panel.start(project, workId, created, 'resume');
-        selection.attach(created.id);
+        // Работа могла быть заведена парой строк выше: ключ передаётся явно (5.3).
+        selection.attach(created.id, workKey(project, workId));
       })().catch(fail);
     },
     [close, entry, projectPath, panel, selection, fail],

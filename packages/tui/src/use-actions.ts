@@ -109,11 +109,23 @@ export function useActions(options: ActionsOptions): ActionsState {
     (target: SidebarTarget | null) => {
       panel.create(target?.kind === 'new' ? null : workId, (sessionId, key) => {
         selection.selectWork(key);
-        selection.attach(sessionId);
+        // Ключ работы передаётся явно: она могла родиться этим же нажатием, и в
+        // выборе её ещё нет — без ключа панель уехала бы к чужой `s-01`.
+        selection.attach(sessionId, key);
       });
     },
     [panel, workId, selection],
   );
+
+  /**
+   * Выход из режима навигации: курсор уходит вместе с ним. Иначе строка `new`
+   * осталась бы подсвеченной, а `prefix c` заводил бы работу за работой вместо
+   * сессии в выбранной (3.2).
+   */
+  const leave = useCallback(() => {
+    setNavigating(false);
+    setCursor(null);
+  }, []);
 
   /** Ходьба курсора: сессия под ним выбирается сразу, работа — только `Enter`. */
   const moveCursor = useCallback(
@@ -181,6 +193,9 @@ export function useActions(options: ActionsOptions): ActionsState {
     onAwait: setAwaiting,
     toGuest: panel.write,
     capture: overlays.kind !== null || navigating,
+    // Оверлей глух и к префиксу, а сайдбар — нет: `prefix c` на строке `new`
+    // заводит работу, не выходя из режима навигации (3.1–3.2, 5.1).
+    keepPrefix: navigating && overlays.kind === null,
     // Ввод оверлея и списков — тоже нажатия харнесса; события мыши ими не
     // считаются: они гостю не уходят, но и клавишами не являются.
     onCapture: (data) => {
@@ -197,7 +212,7 @@ export function useActions(options: ActionsOptions): ActionsState {
   // `Enter` выбирает работу, заводит сессию на `new` или подключает (3.2, §8).
   useInput(
     (input, key) => {
-      if (key.escape) return setNavigating(false);
+      if (key.escape) return leave();
       if (input === 'j' || key.downArrow) return moveCursor(1);
       if (input === 'k' || key.upArrow) return moveCursor(-1);
       if (!key.return) return;
@@ -206,7 +221,7 @@ export function useActions(options: ActionsOptions): ActionsState {
       // курсор идёт к ним дальше, не выходя из режима.
       if (cursor?.kind === 'work') return selection.selectWork(cursor.key);
 
-      setNavigating(false);
+      leave();
       // `Enter` по `new` кладёт сессию в выбранную работу; новую работу заводит
       // `prefix c` на этой же строке (5.1).
       if (cursor?.kind === 'new') return create(null);
@@ -220,7 +235,9 @@ export function useActions(options: ActionsOptions): ActionsState {
       }
       selection.attach(id);
     },
-    { isActive: navigating && overlays.kind === null },
+    // Пока ждём вторую клавишу префикса, ходьба молчит: `prefix j` — это
+    // действие харнесса, а не шаг курсора.
+    { isActive: navigating && overlays.kind === null && !awaiting },
   );
 
   return { navigating, awaiting, cursor };

@@ -39,6 +39,12 @@ export interface PrefixInputOptions {
   toGuest: (data: string) => void;
   /** Открыт оверлей или сайдбар в режиме навигации: ввод идёт им, не гостю. */
   capture?: boolean;
+  /**
+   * Захват, который всё же слышит префикс: режим навигации по сайдбару. Оверлей
+   * глух и к префиксу, а из сайдбара `prefix c` заводит работу прямо на строке
+   * `new`, не выходя из режима (дизайн 3.1–3.2, 5.1).
+   */
+  keepPrefix?: boolean;
   onCapture?: (data: string) => void;
   /** Ловит ли харнесс мышь сам (`config.mouseCapture`, раздел 3.3). */
   mouseCapture?: boolean;
@@ -133,16 +139,20 @@ export function routeInput(data: Buffer, state: PrefixState, options: PrefixInpu
     prefixByte,
     onAction,
     onAwait,
-    toGuest,
     capture = false,
+    keepPrefix = false,
     onCapture,
     mouseCapture = false,
   } = options;
 
   if (capture) {
     onCapture?.(data.toString('utf8'));
-    return;
+    if (!keepPrefix) return;
   }
+
+  // Под захватом гостю не уходит ничего, но автомат префикса продолжает читать
+  // байты: `prefix c` работает и в режиме навигации.
+  const toGuest = capture ? (): void => undefined : options.toGuest;
 
   let pending = 0;
   let at = 0;
@@ -172,7 +182,8 @@ export function routeInput(data: Buffer, state: PrefixState, options: PrefixInpu
       continue;
     }
 
-    const mouse = mouseCapture ? parseMouse(data, at) : undefined;
+    // Под захватом мышь по-прежнему пропадает целиком: слышен только префикс.
+    const mouse = mouseCapture && !capture ? parseMouse(data, at) : undefined;
     if (mouse !== undefined) {
       flush(at);
       at += mouse.length;

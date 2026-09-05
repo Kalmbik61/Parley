@@ -1,7 +1,7 @@
 import { Box, Text } from 'ink';
 import type { ReactNode } from 'react';
 import { truncate } from '../format.js';
-import { glyphs } from '../glyphs.js';
+import { glyphs, type Glyphs } from '../glyphs.js';
 import type { StatusEvent } from '../use-status.js';
 
 export interface StatusBarProps {
@@ -13,6 +13,11 @@ export interface StatusBarProps {
   prefix: string;
   /** Нажат префикс, ждём вторую клавишу: вместо события — список действий (§3). */
   awaiting?: boolean;
+  /**
+   * Фокус в сайдбаре: второй признак режима навигации рядом с cyan-разделителем
+   * (макет 1.5). Вместо события — что делают клавиши.
+   */
+  navigating?: boolean;
 }
 
 /**
@@ -43,6 +48,13 @@ function prefixHint(prefix: string, width: number): string {
 }
 
 /**
+ * Что делают клавиши в режиме навигации (макет 1.5). Стрелок в запасном наборе
+ * нет — вместо них слово: буквы `io` за стрелки не сойдут (6.1).
+ */
+const navigationHint = (g: Glyphs): string =>
+  `сайдбар · ${g.ascii ? 'стрелки' : `${g.up}${g.down}`}/jk — по строкам · Enter — подключить · Esc — в панель`;
+
+/**
  * Строка статуса — единственный канал уведомлений (дизайн координации TUI, 5).
  * Живёт вне сетки сайдбара, на всю ширину терминала. Четыре состояния макетов
  * §3: пустое, событие `⚑`, ожидание второй клавиши префикса и предупреждение
@@ -54,6 +66,7 @@ export function StatusBar({
   width,
   prefix,
   awaiting = false,
+  navigating = false,
 }: StatusBarProps): ReactNode {
   const g = glyphs();
   const tail = `${prefix} ?`;
@@ -70,6 +83,17 @@ export function StatusBar({
   // Строка события начинается с пробела, как в макете; хвост стоит у правого
   // края, между ними остаётся зазор (макеты §3).
   const room = Math.max(0, width - tail.length - 3);
+
+  // Режим навигации занимает левую часть строки вместо события (макет 1.5).
+  if (navigating) {
+    return (
+      <Box width={width} justifyContent="space-between">
+        <Text wrap="truncate">{` ${truncate(navigationHint(g), room, g.ellipsis)}`}</Text>
+        <Text dimColor>{tail}</Text>
+      </Box>
+    );
+  }
+
   const flag = count > 1 ? `${g.flag}${count}` : g.flag;
   const head = event === null ? '' : `${flag} ${event.text}`;
   const hint = event === null || event.hint === undefined ? '' : ` · ${event.hint}`;

@@ -41,6 +41,16 @@ afterEach(async () => {
 
 const isDirectory = async (dir: string): Promise<boolean> => (await stat(dir)).isDirectory();
 
+describe('песочница тестов', () => {
+  it('без HARNAS_HOME дом уходит во временный каталог, а не в настоящий ~/.harnas', () => {
+    // Жёсткое правило задания: настоящие ~/.harnas и ~/.claude тесты не трогают.
+    // Запись из недосчитанного промиса случается и после `afterEach` (см.
+    // `test/sandbox-home.ts`), поэтому проверяем сам запасной путь.
+    delete process.env.HARNAS_HOME;
+    expect(worksIndexPath().startsWith(tmpdir())).toBe(true);
+  });
+});
+
 describe('createWork', () => {
   it('создаёт раскладку на диске и запись в глобальном индексе', async () => {
     const map = await createWork(project, { title: 'Авторизация', goal: 'логин по паролю' });

@@ -85,6 +85,31 @@ describe('StatusBar', () => {
     expect(frame).toContain('…');
   });
 
+  it('режим навигации по сайдбару виден строкой статуса (макет 1.5)', () => {
+    const frame = frameOf(
+      <StatusBar
+        count={1}
+        event={{ text: 'ревью ждёт ответа' }}
+        width={80}
+        prefix="ctrl+q"
+        navigating
+      />,
+    );
+
+    expect(frame).toContain('сайдбар · ↑↓/jk — по строкам · Enter — подключить · Esc — в панель');
+    // Левая часть строки занята режимом: события рядом с ним нет (макет 1.5).
+    expect(frame).not.toContain('ревью ждёт ответа');
+    expect(frame).toContain('ctrl+q ?');
+  });
+
+  it('в режиме навигации ожидание второй клавиши всё равно показывает действия (§3)', () => {
+    const frame = frameOf(
+      <StatusBar count={0} event={null} width={120} prefix="ctrl+q" navigating awaiting />,
+    );
+    expect(frame).toContain('c новая');
+    expect(frame).not.toContain('по строкам');
+  });
+
   it('ascii из настроек заменяет флажок', () => {
     applyGlyphsConfig(true);
     const frame = frameOf(
@@ -92,5 +117,13 @@ describe('StatusBar', () => {
     );
     expect(frame).not.toContain('⚑');
     expect(frame).toContain('! событие');
+  });
+
+  it('ascii из настроек заменяет стрелки режима навигации словом', () => {
+    applyGlyphsConfig(true);
+    const frame = frameOf(
+      <StatusBar count={0} event={null} width={80} prefix="ctrl+q" navigating />,
+    );
+    expect(frame).toContain('сайдбар · стрелки/jk — по строкам');
   });
 });

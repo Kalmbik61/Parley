@@ -1,8 +1,9 @@
+import { addSession, type WorkEntry, type WorkMap } from '@harnas/core';
 import { Text, useInput } from 'ink';
 import { render } from 'ink-testing-library';
 import type { ReactNode } from 'react';
 import { describe, expect, it } from 'vitest';
-import { useSelection, type SelectionWork } from './use-selection.js';
+import { useAttachSession, useSelection, type SelectionWork } from './use-selection.js';
 
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -66,5 +67,61 @@ describe('useSelection', () => {
     const { lastFrame } = render(<Probe works={[]} />);
     await settle();
     expect(lastFrame()).toBe('—|—');
+  });
+});
+
+/** Работа с сессиями: id нумеруются внутри работы, поэтому у всех работ есть `s-01`. */
+function entry(workId: string, labels: readonly string[] = ['план']): WorkEntry {
+  const map: WorkMap = {
+    schemaVersion: 1,
+    work: {
+      id: workId,
+      title: workId,
+      goal: '',
+      status: 'active',
+      createdAt: '2026-09-05T09:00:00.000Z',
+      updatedAt: '2026-09-05T09:00:00.000Z',
+    },
+    sessions: [],
+    messages: [],
+  };
+  for (const label of labels) addSession(map, { provider: 'claude', label, task: '' });
+  return { projectPath: '/dev/shop', map };
+}
+
+describe('useAttachSession', () => {
+  const works = [entry('w-0001'), entry('w-0002')];
+
+  /** Подключение по клавише: цифра — номер работы, чью `s-01` подключаем. */
+  function Attacher({ ids }: { ids: string[] }): ReactNode {
+    const attach = useAttachSession({
+      works,
+      markSeen: () => undefined,
+      seen: () => undefined,
+      attach: (key) => ids.push(key),
+    });
+    useInput((input) => attach('s-01', `/dev/shop w-000${input}`));
+    return <Text>—</Text>;
+  }
+
+  it('одинаковые id разных работ не путаются: панель едет к сессии своей работы', async () => {
+    const ids: string[] = [];
+    const { stdin } = render(<Attacher ids={ids} />);
+    await settle();
+
+    stdin.write('2');
+    await settle();
+    expect(ids).toEqual(['work:/dev/shop w-0002 s-01']);
+  });
+
+  it('сессии, которой в этой работе нет, панель не отдают', async () => {
+    const ids: string[] = [];
+    const { stdin } = render(<Attacher ids={ids} />);
+    await settle();
+
+    // Работы `w-0003` в списке нет: подключать нечего, панель остаётся на месте.
+    stdin.write('3');
+    await settle();
+    expect(ids).toEqual([]);
   });
 });
