@@ -77,6 +77,14 @@ export function treeOrder(
  * Порядок сессий каждой работы: по нему ходят `j`/`k`, оверлей сайдбара и
  * починка выбора (дизайн TUI v2, 2.1 и 3.2).
  */
+/** Все сессии сайдбара сверху вниз по работам: по ним ходят `prefix j`/`k` (3.2). */
+export function sessionSequence(
+  workKeys: readonly string[],
+  orders: ReadonlyMap<string, readonly string[]>,
+): { work: string; session: string }[] {
+  return workKeys.flatMap((work) => (orders.get(work) ?? []).map((session) => ({ work, session })));
+}
+
 export function sessionOrders(entries: readonly WorkEntry[]): Map<string, string[]> {
   return new Map(
     entries.map((entry) => [

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  createChildSession,
   createPendingSession,
   finishExited,
   linkSession,
@@ -85,6 +86,24 @@ describe('создание pending сессии', () => {
     expect(brief).toContain('Авторизация');
     expect(brief).toContain('прогнать e2e');
     expect(brief).toContain('report');
+  });
+
+  it('дочерняя сессия руками: родитель, контекст и бриф с его резюме (prefix C)', async () => {
+    const { workId, sessionId } = await pending('claude');
+    await updateMap(project, workId, (map) => {
+      const parent = map.sessions.find((item) => item.id === sessionId);
+      if (parent !== undefined) parent.summary = 'миграции готовы';
+    });
+
+    const { session: child } = await createChildSession(project, workId, sessionId);
+    expect(child.parent).toBe(sessionId);
+    expect(child.contextFrom).toEqual([sessionId]);
+    const brief = await readFile(
+      path.join(workPaths(project, workId).briefs, `${child.id}.md`),
+      'utf8',
+    );
+    expect(brief).toContain('тесты');
+    expect(brief).toContain('миграции готовы');
   });
 
   it('пропавший бриф собирается заново — запускать сессию всё равно нужно', async () => {

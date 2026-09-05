@@ -157,7 +157,7 @@ export function App({
     prefixByte: ctrlByte(config.prefix) ?? 0x11,
     workRows,
     selection,
-    order: sessionOrder,
+    orders: order,
     workId: chosen?.map.work.id ?? null,
     session: current,
     panel,

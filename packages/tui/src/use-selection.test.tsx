@@ -9,10 +9,11 @@ const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve,
 
 const attached: string[] = [];
 
-/** Клавиши: 2 — выбрать вторую работу, a — подключить вторую сессию первой работы. */
+/** Клавиши: 1/2 — выбрать работу, a — подключить вторую сессию первой работы. */
 function Probe({ works }: { works: readonly SelectionWork[] }): ReactNode {
   const selection = useSelection({ works, onAttach: (id) => attached.push(id) });
   useInput((input) => {
+    if (input === '1') selection.selectWork('w1');
     if (input === '2') selection.selectWork('w2');
     if (input === 'a') selection.attach('s-02');
   });
@@ -31,13 +32,30 @@ describe('useSelection', () => {
     expect(lastFrame()).toBe('w1|s-01');
   });
 
-  it('смена работы переводит выбор на её первую сессию', async () => {
+  it('смена работы подключает панель к её самой свежей сессии', async () => {
+    attached.length = 0;
     const { stdin, lastFrame } = render(<Probe works={works} />);
     await settle();
 
     stdin.write('2');
     await settle();
     expect(lastFrame()).toBe('w2|s-03');
+    expect(attached).toEqual(['s-03']);
+  });
+
+  it('работа помнит последнюю подключённую сессию и возвращается к ней', async () => {
+    attached.length = 0;
+    const { stdin, lastFrame } = render(<Probe works={works} />);
+    await settle();
+
+    stdin.write('a');
+    await settle();
+    stdin.write('2');
+    await settle();
+    stdin.write('1');
+    await settle();
+    expect(lastFrame()).toBe('w1|s-02');
+    expect(attached).toEqual(['s-02', 's-03', 's-02']);
   });
 
   it('подключение к сессии гасит unseen через onAttach', async () => {

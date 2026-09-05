@@ -123,30 +123,34 @@ export function sidebarWorks(
     pinned = new Set<string>(),
   }: WorksViewOptions,
 ): SidebarWork[] {
-  return entries
-    .filter(
-      (entry) =>
-        (entry.projectPath === projectPath ||
-          pinned.has(workKey(entry.projectPath, entry.map.work.id))) &&
-        entry.map.work.status !== 'archived',
-    )
-    .sort(
-      (a, b) =>
-        workRank(a.map.work.status) - workRank(b.map.work.status) ||
-        b.map.work.updatedAt.localeCompare(a.map.work.updatedAt),
-    )
-    .map((entry, at) => {
-      const key = workKey(entry.projectPath, entry.map.work.id);
-      return {
-        key,
-        number: at < NUMBERED ? at + 1 : null,
-        title: entry.map.work.title,
-        project: withHome(entry.projectPath),
-        branch: branchOf(entry, index, branch),
-        state: workState(key),
-        done: entry.map.work.status === 'done',
-      };
-    });
+  return (
+    entries
+      .filter(
+        (entry) =>
+          (entry.projectPath === projectPath ||
+            pinned.has(workKey(entry.projectPath, entry.map.work.id))) &&
+          entry.map.work.status !== 'archived',
+      )
+      // Порядок создания, а не последнего события: номера `prefix 1..9` не должны
+      // скакать, как только в какой-то работе что-то произошло.
+      .sort(
+        (a, b) =>
+          workRank(a.map.work.status) - workRank(b.map.work.status) ||
+          a.map.work.createdAt.localeCompare(b.map.work.createdAt),
+      )
+      .map((entry, at) => {
+        const key = workKey(entry.projectPath, entry.map.work.id);
+        return {
+          key,
+          number: at < NUMBERED ? at + 1 : null,
+          title: entry.map.work.title,
+          project: withHome(entry.projectPath),
+          branch: branchOf(entry, index, branch),
+          state: workState(key),
+          done: entry.map.work.status === 'done',
+        };
+      })
+  );
 }
 
 export interface SessionsViewOptions {

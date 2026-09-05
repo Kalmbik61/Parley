@@ -325,6 +325,7 @@ export function pickerView({ title, items, filter, at, footer, g }: PickerOption
 /** Привязки справки в порядке макета 4.4. */
 const BINDINGS: ReadonlyArray<readonly [string, string]> = [
   ['c', 'новая сессия Claude в выбранной работе'],
+  ['C', 'дочерняя сессия выбранной: старт по брифу с её резюме'],
   ['w', 'пикер работ'],
   ['g', 'пикер истории (возобновление)'],
   ['i', 'детали выбранной сессии'],

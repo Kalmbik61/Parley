@@ -20,7 +20,7 @@ import {
 } from '@harnas/core';
 import { render } from 'ink-testing-library';
 import { execFile } from 'node:child_process';
-import { appendFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -265,16 +265,18 @@ describe('навигация по сайдбару (3.2, макеты 1.5 и §8
 
   it('курсор доходит до строк работ: Enter выбирает работу и открывает её сессии', async () => {
     await workWith('Авторизация', 'план');
-    // Свежая работа стоит в сайдбаре первой и выбрана по умолчанию (2.1).
+    // Работы идут в порядке создания: первая создана — первая в сайдбаре и
+    // выбрана по умолчанию (2.1).
     await new Promise((resolve) => setTimeout(resolve, 10));
     await workWith('Платежи', 'бэкенд');
 
     const app = open();
     try {
       await mounted(app.stdin);
-      await waitFor(() => (app.lastFrame() ?? '').includes('сессии · Платежи'));
+      await waitFor(() => (app.lastFrame() ?? '').includes('сессии · Авторизация'));
 
-      // Курсор входит в сайдбар на выбранной сессии, дальше идёт по работам.
+      // Курсор входит в сайдбар на выбранной сессии, по кругу идёт к работам:
+      // первый `j` — на первую работу, второй — на вторую.
       app.stdin.write(`${PREFIX}s`);
       await new Promise((resolve) => setTimeout(resolve, 150));
       app.stdin.write('j');
@@ -283,8 +285,8 @@ describe('навигация по сайдбару (3.2, макеты 1.5 и §8
       await new Promise((resolve) => setTimeout(resolve, 100));
       app.stdin.write(ENTER);
 
-      await waitFor(() => (app.lastFrame() ?? '').includes('сессии · Авторизация'));
-      expect(lineWith(app.lastFrame() ?? '', 'план')).toContain('план');
+      await waitFor(() => (app.lastFrame() ?? '').includes('сессии · Платежи'));
+      expect(lineWith(app.lastFrame() ?? '', 'бэкенд')).toContain('бэкенд');
     } finally {
       app.unmount();
     }
@@ -341,6 +343,106 @@ describe('навигация по сайдбару (3.2, макеты 1.5 и §8
       app.stdin.write(`${PREFIX}c`);
       await waitFor2(async () => (await readMap(project, workId)).sessions.length === 2);
       expect((await readWorksIndex()).works).toHaveLength(1);
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+});
+
+describe('переключение работ (2.1, 3.2)', () => {
+  /** Курсор входит в сайдбар на выбранной сессии; два `j` доводят его до `new`. */
+  const cursorToNew = async (app: ReturnType<typeof render>): Promise<void> => {
+    app.stdin.write(`${PREFIX}s`);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    app.stdin.write('j');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    app.stdin.write('j');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  };
+
+  /** Две работы с живыми stub: первая сказала «альфа», вторая — «бета». */
+  const twoWorks = async (app: ReturnType<typeof render>): Promise<string> => {
+    const workId = await launch(app);
+    await waitMap(workId, (item) => item.status === 'active');
+    app.stdin.write('echo альфа-один\r');
+    await waitFor(() => (app.lastFrame() ?? '').includes('альфа-один'));
+
+    await cursorToNew(app);
+    app.stdin.write(ENTER);
+    await waitFor(() => (app.lastFrame() ?? '').includes('@w-0002'));
+    app.stdin.write('echo бета-два\r');
+    await waitFor(() => (app.lastFrame() ?? '').includes('бета-два'));
+    // Обе работы в сайдбаре: до этого кадра `prefix 1..9` не о ком говорить.
+    await waitFor(() => (app.lastFrame() ?? '').includes('2 без названия'));
+    return workId;
+  };
+
+  it('prefix 1..9 подключает панель к сессии работы, j/k ходят через границу работ', async () => {
+    const app = open();
+    try {
+      await twoWorks(app);
+      // Порядок создания: номер 1 у w-0001, номер 2 у w-0002 (2.1).
+      app.stdin.write(`${PREFIX}1`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('альфа-один'));
+      expect(app.lastFrame()).not.toContain('бета-два');
+
+      app.stdin.write(`${PREFIX}2`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('бета-два'));
+
+      // `j` с единственной сессии работы шагает в соседнюю работу, а не стоит.
+      app.stdin.write(`${PREFIX}j`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('альфа-один'));
+      app.stdin.write(`${PREFIX}k`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('бета-два'));
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('переключение работы возвращает к последней подключённой в ней сессии', async () => {
+    const app = open();
+    try {
+      const workId = await twoWorks(app);
+      // В первой работе вторая сессия; к ней и должна вернуться панель.
+      app.stdin.write(`${PREFIX}1`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('альфа-один'));
+      app.stdin.write(`${PREFIX}c`);
+      await waitFor2(async () => (await readMap(project, workId)).sessions.length === 2);
+      await waitFor(() => (app.lastFrame() ?? '').includes('@w-0001'));
+      app.stdin.write('echo гамма-три\r');
+      await waitFor(() => (app.lastFrame() ?? '').includes('гамма-три'));
+      // Обе сессии первой работы в сайдбаре: память выбора сверяется с деревом.
+      await waitFor(() => (app.lastFrame() ?? '').split('новая сессия').length > 2);
+
+      app.stdin.write(`${PREFIX}2`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('бета-два'));
+      app.stdin.write(`${PREFIX}1`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('гамма-три'));
+      expect(app.lastFrame()).not.toContain('альфа-один');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('prefix C заводит дочернюю сессию выбранной и запускает её по брифу', async () => {
+    const app = open();
+    try {
+      const workId = await launch(app);
+      await waitMap(workId, (item) => item.status === 'active');
+      await updateMap(project, workId, (map) => {
+        const parent = map.sessions[0];
+        if (parent !== undefined) parent.summary = 'миграции готовы';
+      });
+
+      app.stdin.write(`${PREFIX}C`);
+      await waitFor2(async () => (await readMap(project, workId)).sessions.length === 2);
+      const child = (await readMap(project, workId)).sessions[1];
+      expect(child?.parent).toBe('s-01');
+      expect(child?.contextFrom).toEqual(['s-01']);
+      // Дочерняя сессия запущена сразу, а её бриф несёт резюме родителя.
+      await waitFor(() => (app.lastFrame() ?? '').includes('harnas=s-02@w-0001'));
+      const brief = await readFile(path.join(workPaths(project, workId).briefs, 's-02.md'), 'utf8');
+      expect(brief).toContain('миграции готовы');
     } finally {
       app.unmount();
     }

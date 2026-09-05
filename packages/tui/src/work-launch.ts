@@ -201,6 +201,33 @@ export async function createNewSession(
 }
 
 /**
+ * `prefix C`: дочерняя сессия выбранной, руками. Родитель и контекст — выбранная
+ * сессия, бриф собирается как у порождённых агентом (`spawn_session`): резюме и
+ * артефакты родителя плюс правила. Стартует по брифу, а не пустой, как `new`.
+ */
+export async function createChildSession(
+  projectPath: string,
+  workId: string,
+  parentId: string,
+): Promise<NewSessionResult> {
+  let created: WorkSession | undefined;
+  const map = await updateMap(projectPath, workId, (current) => {
+    const parent = current.sessions.find((item) => item.id === parentId);
+    if (parent === undefined) throw new Error(`сессии ${parentId} в работе ${workId} нет`);
+    created = addSession(current, {
+      provider: 'claude',
+      label: NEW_LABEL,
+      task: `Продолжить работу сессии «${parent.label}»; задачу уточнит пользователь`,
+      parent: parentId,
+      contextFrom: [parentId],
+    });
+  });
+  if (created === undefined) throw new Error(`сессия в работе ${workId} не создана`);
+  await writeBrief(projectPath, map, created.id);
+  return { workId, session: created };
+}
+
+/**
  * Заголовок Claude Code доехал до индекса логов: ярлык быстрой сессии и
  * заголовок работы «без названия» обновляются из него один раз (5.1).
  * Переименованную руками сессию не трогаем — она уже не `новая сессия`.

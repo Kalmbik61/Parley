@@ -7,7 +7,7 @@
  * смотрели.
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { WorkEntry } from '@harnas/core';
 import { workRunKey } from './pty/use-agent-pty.js';
 import type { StatusSource } from './use-status.js';
@@ -32,7 +32,12 @@ export interface SelectionOptions {
 export interface SelectionState {
   work: string | null;
   session: string | null;
-  selectWork: (key: string) => void;
+  /**
+   * Выбрать работу и сразу подключить панель к её сессии: к той, к которой
+   * подключались в этой работе последней, иначе к самой свежей. Явная сессия —
+   * для ходьбы `j`/`k` через границу работ. Панель следует за работой, как в herdr.
+   */
+  selectWork: (key: string, sessionId?: string) => void;
   /** Выбрать сессию, не подключаясь: ходьба по сайдбару в режиме навигации (3.2). */
   selectSession: (sessionId: string) => void;
   /**
@@ -46,6 +51,8 @@ export interface SelectionState {
 export function useSelection({ works, onAttach }: SelectionOptions): SelectionState {
   const [chosenWork, setChosenWork] = useState<string | null>(null);
   const [chosenSession, setChosenSession] = useState<string | null>(null);
+  // Последняя подключённая сессия каждой работы — память клиента на время процесса.
+  const lastAttached = useRef(new Map<string, string>());
 
   // Выбор считается на рендере, а не чинится эффектом: иначе один кадр показывал
   // бы работу, которой уже нет.
@@ -56,11 +63,21 @@ export function useSelection({ works, onAttach }: SelectionOptions): SelectionSt
       ? chosenSession
       : (sessions[0] ?? null);
 
-  const selectWork = useCallback((key: string) => {
-    setChosenWork(key);
-    // Сессия выбирается заново: у новой работы своё дерево.
-    setChosenSession(null);
-  }, []);
+  const selectWork = useCallback(
+    (key: string, sessionId?: string) => {
+      setChosenWork(key);
+      const tree = works.find((item) => item.key === key)?.sessions ?? [];
+      const remembered = lastAttached.current.get(key);
+      const target =
+        sessionId ??
+        (remembered !== undefined && tree.includes(remembered) ? remembered : tree.at(-1));
+      setChosenSession(target ?? null);
+      if (target === undefined) return;
+      lastAttached.current.set(key, target);
+      onAttach?.(target, key);
+    },
+    [works, onAttach],
+  );
 
   const selectSession = useCallback((sessionId: string) => setChosenSession(sessionId), []);
 
@@ -69,7 +86,9 @@ export function useSelection({ works, onAttach }: SelectionOptions): SelectionSt
     (sessionId: string, key?: string) => {
       setChosenSession(sessionId);
       const inWork = key ?? owner;
-      if (inWork !== null) onAttach?.(sessionId, inWork);
+      if (inWork === null) return;
+      lastAttached.current.set(inWork, sessionId);
+      onAttach?.(sessionId, inWork);
     },
     [owner, onAttach],
   );

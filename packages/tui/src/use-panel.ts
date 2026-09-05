@@ -16,6 +16,7 @@ import { useHostTerminalModes } from './pty/use-host-modes.js';
 import { usePtyResize } from './pty/use-pty-resize.js';
 import { usePtyTerminal } from './pty/use-pty-terminal.js';
 import {
+  createChildSession,
   createNewSession,
   finishExited,
   planLaunch,
@@ -52,6 +53,12 @@ export interface PanelState {
    * ключ её работы: работа могла родиться только что, и выбор едет за ней.
    */
   create: (workId: string | null, created: (sessionId: string, workKey: string) => void) => void;
+  /** `prefix C`: дочерняя сессия выбранной, запускается сразу по брифу. */
+  createChild: (
+    workId: string,
+    parentId: string,
+    created: (sessionId: string, workKey: string) => void,
+  ) => void;
   /**
    * Запуск `pending` по брифу или возобновление вышедшей через `resumeArgs`
    * (оверлеи 4.5 и 4.6). Проект берётся у работы: она может быть чужой.
@@ -172,6 +179,18 @@ export function usePanel({
     [projectPath, openWork, onFail],
   );
 
+  const createChild = useCallback<PanelState['createChild']>(
+    (workId, parentId, created) => {
+      void createChildSession(projectPath, workId, parentId)
+        .then(async ({ session }) => {
+          openWork(projectPath, workId, session, await planLaunch(projectPath, workId, session));
+          created(session.id, workKey(projectPath, workId));
+        })
+        .catch(onFail);
+    },
+    [projectPath, openWork, onFail],
+  );
+
   const start = useCallback<PanelState['start']>(
     (project, workId, session, mode) => {
       const planner = mode === 'launch' ? planLaunch : planResume;
@@ -192,6 +211,7 @@ export function usePanel({
       if (!agent.attach(key)) agent.detach();
     },
     create,
+    createChild,
     start,
     close: agent.close,
     write: agent.write,

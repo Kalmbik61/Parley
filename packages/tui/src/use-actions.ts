@@ -21,6 +21,7 @@ import type { PanelState } from './use-panel.js';
 import type { OverlaysState } from './use-overlays.js';
 import { usePrefixInput, withoutMouse, type MouseEvent } from './use-prefix-input.js';
 import type { SelectionState } from './use-selection.js';
+import { sessionSequence } from './work-rows.js';
 
 /** Клавиша префикса → оверлей, который она открывает (таблица 3.2). */
 const OVERLAYS: Readonly<Record<string, Parameters<OverlaysState['open']>[0]>> = {
@@ -40,8 +41,8 @@ export interface ActionsOptions {
   /** Работы сайдбара по порядку: `prefix 1..9` выбирает работу по номеру. */
   workRows: readonly SidebarWork[];
   selection: SelectionState;
-  /** Сессии выбранной работы в порядке дерева: по ним ходят `j` и `k`. */
-  order: readonly string[];
+  /** Сессии каждой работы в порядке дерева: курсор навигации и ходьба `j`/`k`. */
+  orders: ReadonlyMap<string, readonly string[]>;
   /** Выбранная работа: в неё ложится новая сессия (5.1). */
   workId: string | null;
   session: WorkSession | null;
@@ -75,7 +76,17 @@ export interface ActionsState {
 }
 
 export function useActions(options: ActionsOptions): ActionsState {
-  const { prefixByte, workRows, selection, order, panel, overlays } = options;
+  const { prefixByte, workRows, selection, orders, panel, overlays } = options;
+  const order = orders.get(selection.work ?? '') ?? [];
+  // Все сессии сайдбара сверху вниз: по ним `j`/`k` ходят по кругу через работы.
+  const sequence = useMemo(
+    () =>
+      sessionSequence(
+        workRows.map((work) => work.key),
+        orders,
+      ),
+    [workRows, orders],
+  );
   const { workId, session, sidebar, panelLeft, mouseCapture, onKey, toggleSidebar } = options;
 
   const [navigating, setNavigating] = useState(false);
@@ -85,16 +96,24 @@ export function useActions(options: ActionsOptions): ActionsState {
   /** Строки сайдбара сверху вниз: по ним ходит курсор режима навигации (3.2). */
   const rows = useMemo(() => sidebarCursorRows(workRows, order), [workRows, order]);
 
-  /** `prefix j`/`k`: соседняя сессия работы с подключением к панели (3.2). */
+  /**
+   * `prefix j`/`k`: соседняя сессия с подключением к панели (3.2). Ходьба идёт
+   * по всему сайдбару по кругу: с одной сессией на работу иначе некуда шагать.
+   */
   const walk = useCallback(
     (delta: number) => {
-      const at = Math.max(0, order.indexOf(selection.session ?? ''));
-      const next = order[(at + delta + order.length) % (order.length || 1)];
+      const at = Math.max(
+        0,
+        sequence.findIndex(
+          (item) => item.work === selection.work && item.session === selection.session,
+        ),
+      );
+      const next = sequence[(at + delta + sequence.length) % (sequence.length || 1)];
       if (next === undefined) return;
-      setCursor({ kind: 'session', key: next });
-      selection.attach(next);
+      setCursor({ kind: 'session', key: next.session });
+      selection.selectWork(next.work, next.session);
     },
-    [order, selection],
+    [sequence, selection],
   );
 
   /**
@@ -103,12 +122,9 @@ export function useActions(options: ActionsOptions): ActionsState {
    */
   const create = useCallback(
     (key: string | null) => {
-      panel.create(key, (sessionId, workKey) => {
-        selection.selectWork(workKey);
-        // Ключ работы передаётся явно: она могла родиться этим же нажатием, и в
-        // выборе её ещё нет — без ключа панель уехала бы к чужой `s-01`.
-        selection.attach(sessionId, workKey);
-      });
+      // Работа и сессия задаются явно: обе могли родиться этим же нажатием и в
+      // выборе их ещё нет — `selectWork` без сессии вернул бы панель к прежней.
+      panel.create(key, (sessionId, workKey) => selection.selectWork(workKey, sessionId));
     },
     [panel, selection],
   );
@@ -138,6 +154,13 @@ export function useActions(options: ActionsOptions): ActionsState {
       // `c` про курсор не спрашивает: сессия ложится в выбранную работу, а если
       // работ нет — `panel.create(null)` заводит первую (3.2, 5.1).
       if (key === 'c') return create(workId);
+      // `C` — дочерняя сессия выбранной: родитель и контекст берутся из неё (3.2).
+      if (key === 'C') {
+        if (workId === null || session === null) return;
+        return panel.createChild(workId, session.id, (sessionId, workKey) =>
+          selection.selectWork(workKey, sessionId),
+        );
+      }
       if (key === 'j' || key === 'k') return walk(key === 'j' ? 1 : -1);
       if (key === 's') {
         // Курсор входит в сайдбар там, где стоит выбор (макет 1.5).
