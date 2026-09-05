@@ -86,6 +86,22 @@ function parseMouse(data: Buffer, at: number): { event: MouseEvent; length: numb
 const sgrSequence = ({ button, x, y, kind }: MouseEvent): string =>
   `\u001B[<${button};${x};${y}${kind === 'press' ? 'M' : 'm'}`;
 
+/**
+ * То же событие, каким его отдаёт `useInput`: ведущий ESC Ink срезает сам.
+ * Собирается из кода: литеральный ESC в регулярном выражении не виден глазом.
+ */
+const SGR_MOUSE_TEXT = new RegExp(`${String.fromCharCode(ESC)}?\\[<\\d+;\\d+;\\d+[Mm]`, 'g');
+
+/**
+ * Снимает события мыши с текста, пришедшего в `useInput` (дизайн 3.1).
+ *
+ * Глушить мышь на входе харнесса мало: Ink подписан на тот же stdin параллельно
+ * и разбирает чанк сам, а неизвестную последовательность отдаёт обработчику
+ * текстом без ведущего ESC (`[<0;12;5M`). Без этой чистки клик при открытом
+ * оверлее печатался бы в поле ввода вместо того, чтобы ничего не делать.
+ */
+export const withoutMouse = (input: string): string => input.replace(SGR_MOUSE_TEXT, '');
+
 /** Колесо приходит кнопками 64 (вверх) и 65 (вниз); 0 — это не колесо. */
 function wheelLines({ button, kind }: MouseEvent): number {
   if (kind !== 'press' || (button & 64) === 0) return 0;

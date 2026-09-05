@@ -4,6 +4,7 @@ import {
   ctrlByte,
   routeInput,
   WHEEL_LINES,
+  withoutMouse,
   type MouseEvent,
   type PrefixInputOptions,
 } from './use-prefix-input.js';
@@ -198,5 +199,23 @@ describe('мышь (чек-лист 21)', () => {
 
     expect(it.guest).toEqual([`${ESC}[A`]);
     expect(it.mouse).toEqual([]);
+  });
+});
+
+/**
+ * Оверлеи слушают stdin через Ink, а не через `routeInput`: перехват на входе
+ * харнесса их не защищает (дизайн 3.1).
+ */
+describe('withoutMouse: мышь в оверлее', () => {
+  it('снимает событие, каким его отдаёт useInput — без ведущего ESC', () => {
+    expect(withoutMouse('[<0;12;5M')).toBe('');
+    expect(withoutMouse(`${ESC}[<0;12;5m`)).toBe('');
+    // Один клик настоящего терминала — нажатие и отпускание подряд.
+    expect(withoutMouse('Авт[<0;12;5M[<0;12;5m')).toBe('Авт');
+  });
+
+  it('обычный текст не трогает', () => {
+    expect(withoutMouse('Авторизация')).toBe('Авторизация');
+    expect(withoutMouse('[< это не событие')).toBe('[< это не событие');
   });
 });

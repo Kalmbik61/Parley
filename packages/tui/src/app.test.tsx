@@ -268,11 +268,14 @@ describe('события и просмотр (4.1, 6)', () => {
 
   it('30: подключение гасит unseen', async () => {
     const { workId, id } = await outsideSession('план');
-    await appendFile(path.join(workPaths(project, workId).events, `${id}.jsonl`), hook('Stop'));
 
     const app = open();
     try {
       await mounted(app.stdin);
+      // Ход заканчивается при нас: законченный до запуска харнесса считается
+      // просмотренным и синим не горит (4.1).
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'план').includes('idle'));
+      await appendFile(path.join(workPaths(project, workId).events, `${id}.jsonl`), hook('Stop'));
       await waitFor(() => lineWith(app.lastFrame() ?? '', 'план').includes('unseen'));
 
       app.stdin.write(`${PREFIX}j`);
@@ -320,11 +323,12 @@ describe('события и просмотр (4.1, 6)', () => {
 
   it('в режиме навигации ходьба не подключает, а Enter подключает (3.2)', async () => {
     const { workId, id } = await outsideSession('план');
-    await appendFile(path.join(workPaths(project, workId).events, `${id}.jsonl`), hook('Stop'));
 
     const app = open();
     try {
       await mounted(app.stdin);
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'план').includes('idle'));
+      await appendFile(path.join(workPaths(project, workId).events, `${id}.jsonl`), hook('Stop'));
       await waitFor(() => lineWith(app.lastFrame() ?? '', 'план').includes('unseen'));
 
       app.stdin.write(`${PREFIX}s`);

@@ -74,6 +74,10 @@ export function useActivity({ works, log, silenceThresholdMs }: ActivityOptions)
   // «unseen переходит в idle, когда сессия подключена к панели и панель на
   // экране» (4.1). Уехала панель — законченный без нас ход снова `unseen`.
   const [seen, setSeen] = useState<string | null>(null);
+  // «После перезапуска харнесса все завершившие ход сессии считаются idle»
+  // (4.1). Журнал, каким мы застали его при первом чтении, считается
+  // просмотренным: синий `unseen` зажигают только события, пришедшие при нас.
+  const base = useRef(new Map<string, number>());
 
   const signature = signatureOf(works);
   // Работы читаются из ссылки: их массив пересоздаётся на каждом рендере, а
@@ -85,6 +89,9 @@ export function useActivity({ works, log, silenceThresholdMs }: ActivityOptions)
     let cancelled = false;
     const remember = (sessionId: string, events: readonly EventRecord[] | null): void => {
       if (cancelled) return;
+      // Каталог `events/` мог появиться позже самой сессии, поэтому у журнала
+      // без каталога отметка тоже нулевая: пришедшее потом событие её сдвинет.
+      if (!base.current.has(sessionId)) base.current.set(sessionId, events?.length ?? 0);
       setJournals((previous) => {
         const next = new Map(previous);
         next.set(sessionId, events);
@@ -118,12 +125,18 @@ export function useActivity({ works, log, silenceThresholdMs }: ActivityOptions)
     const map = new Map<string, SessionActivity>();
     for (const work of current.current) {
       for (const session of work.sessions) {
+        const events = journals.get(session.id) ?? null;
         map.set(
           session.id,
           activityOf({
-            events: journals.get(session.id) ?? null,
+            events,
             log: log?.(session) ?? null,
-            seen: seen === session.id,
+            // Журнал не вырос с первого чтения — ход закончился без нас, но и до
+            // нас: показывать его синим незачем (4.1). Без журнала вовсе
+            // (`null`) сказать нечего, и всё решает подключение к панели.
+            seen:
+              seen === session.id ||
+              (events !== null && events.length === base.current.get(session.id)),
             now,
             ...(silenceThresholdMs === undefined ? {} : { silenceThresholdMs }),
           }),

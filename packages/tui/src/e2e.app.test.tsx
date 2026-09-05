@@ -21,7 +21,7 @@ import {
 import { render } from 'ink-testing-library';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { appendFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -90,9 +90,6 @@ const lineWith = (frame: string, text: string): string =>
 const open = (sessions: SessionIndex[] = []): ReturnType<typeof render> =>
   render(<App sessions={sessions} root={logs} codexRoot={logs} projectPath={project} />);
 
-const hook = (name: string, extra: Record<string, unknown> = {}): string =>
-  `${JSON.stringify({ hook_event_name: name, ...extra })}\n`;
-
 /** Ждём состояния карты: запись идёт после кадра с запущенным агентом. */
 const waitSession = async (
   workId: string,
@@ -160,10 +157,9 @@ describe('34: полный цикл состояний по событиям х�
       const second = await waitSession(workId, (item) => item.id !== plan.id);
       await waitFor(() => (app.lastFrame() ?? '').includes(`harnas=${second.id}@`));
 
-      await appendFile(
-        path.join(workPaths(project, workId).events, `${plan.id}.jsonl`),
-        hook('Stop'),
-      );
+      // Журнал по-прежнему пишет stub по команде со stdin, но уже второй: stdin
+      // достаётся подключённой сессии, а работа и каталог `events/` общие.
+      app.stdin.write(`event ${plan.id} ${JSON.stringify({ hook_event_name: 'Stop' })}\r`);
       await waitFor(() => lineWith(app.lastFrame() ?? '', 'план').includes('unseen'));
 
       // Подключение к панели гасит `unseen` (4.1). Экран самого гостя при

@@ -85,16 +85,33 @@ describe('useActivity', () => {
   });
 
   it('подключение к панели гасит unseen', async () => {
-    await appendFile(path.join(events, 's-01.jsonl'), `${hook('UserPromptSubmit')}${hook('Stop')}`);
     const works: ActivityWork[] = [{ key: 'w1', eventsDir: events, sessions: [session()] }];
 
     const { stdin, lastFrame } = render(<Probe works={works} />);
     await settle();
+
+    // Ход, законченный при нас: журнал вырос после первого чтения — синий.
+    await appendFile(path.join(events, 's-01.jsonl'), `${hook('UserPromptSubmit')}${hook('Stop')}`);
+    await settle(300);
     expect(lastFrame()).toBe('unseen|unseen|false');
 
     stdin.write('s');
     await settle();
     expect(lastFrame()).toBe('idle|idle|false');
+  });
+
+  it('после перезапуска харнесса законченный до нас ход считается idle (4.1)', async () => {
+    await appendFile(path.join(events, 's-01.jsonl'), `${hook('UserPromptSubmit')}${hook('Stop')}`);
+    const works: ActivityWork[] = [{ key: 'w1', eventsDir: events, sessions: [session()] }];
+
+    const { lastFrame } = render(<Probe works={works} />);
+    await settle();
+    expect(lastFrame()).toBe('idle|idle|false');
+
+    // А ход, законченный уже при нас, синий и без подключения.
+    await appendFile(path.join(events, 's-01.jsonl'), `${hook('UserPromptSubmit')}${hook('Stop')}`);
+    await settle(300);
+    expect(lastFrame()).toBe('unseen|unseen|false');
   });
 
   it('точка работы — максимум по её сессиям, жизненный цикл перевешивает activity', async () => {

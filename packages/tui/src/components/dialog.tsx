@@ -2,6 +2,7 @@ import { Box, Text, useInput } from 'ink';
 import { useRef, useState, type ReactNode } from 'react';
 import { truncate, truncateLeft, wrapText } from '../format.js';
 import { glyphs } from '../glyphs.js';
+import { withoutMouse } from '../use-prefix-input.js';
 
 /** Вариант селектора `‹ ›`. Недоступный показывается, но не выбирается (дизайн 4.2). */
 export interface DialogOption {
@@ -113,7 +114,13 @@ export function Dialog({
     onSubmit(values);
   };
 
-  useInput((input, key) => {
+  useInput((raw, key) => {
+    // Ink разбирает stdin параллельно с харнессом и отдаёт клик мышью обычным
+    // текстом: без чистки он печатался бы в поле. Пока диалог открыт, мышь не
+    // делает ничего (дизайн 3.1).
+    const input = withoutMouse(raw);
+    if (raw !== '' && input === '') return;
+
     if (key.escape) {
       onCancel();
       return;

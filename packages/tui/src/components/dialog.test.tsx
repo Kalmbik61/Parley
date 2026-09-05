@@ -200,4 +200,21 @@ describe('Dialog', () => {
     await waitFor(() => (app.lastFrame() ?? '').includes('строка брифа 7'));
     app.unmount();
   }, 25_000);
+
+  it('клик мышью в поле не попадает: пока диалог открыт, мышь ничего не делает', async () => {
+    const { app } = setup();
+    await press(app, 'Авт');
+    await waitFor(() => (app.lastFrame() ?? '').includes('Авт▌'));
+
+    // Ink подписан на тот же stdin, что и харнесс, и отдаёт неразобранное
+    // событие мыши обычным текстом. Настоящий терминал шлёт нажатие и
+    // отпускание — две порции мусора на один клик (дизайн 3.1).
+    await press(app, `${ESC}[<0;12;5M`);
+    await press(app, `${ESC}[<0;12;5m`);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(app.lastFrame()).toContain('Заголовок: Авт▌');
+    expect(app.lastFrame()).not.toContain('[<');
+    app.unmount();
+  }, 15_000);
 });

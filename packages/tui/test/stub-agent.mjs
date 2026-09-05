@@ -11,6 +11,9 @@
 //   color             — печатает цветной текст
 //   event <json>      — дописывает строку в $HARNAS_WORK_DIR/events/$HARNAS_SESSION_ID.jsonl,
 //                       как это делает хук Claude Code (дизайн TUI v2, 4.2)
+//   event <сессия> <json> — то же, но в журнал другой сессии той же работы:
+//                       stdin достаётся только подключённой сессии, а события
+//                       соседней тесту тоже нужны от живого процесса
 //   exit <код>        — завершается с указанным кодом
 //
 // Пришедшие на stdin события мыши в SGR-кодировании stub не копит в буфере
@@ -109,9 +112,12 @@ function handle(line) {
  * (`cat >> "$HARNAS_WORK_DIR/events/$HARNAS_SESSION_ID.jsonl"`). Настоящий
  * бинарь в тестах не запускается, поэтому ту же строку пишет stub.
  */
-function writeEvent(json) {
+function writeEvent(argument) {
   const dir = process.env.HARNAS_WORK_DIR;
-  const session = process.env.HARNAS_SESSION_ID;
+  // `event <сессия> <json>`: имя журнала перед самим событием.
+  const cut = argument.startsWith('{') ? -1 : argument.indexOf(' ');
+  const session = cut === -1 ? process.env.HARNAS_SESSION_ID : argument.slice(0, cut);
+  const json = cut === -1 ? argument : argument.slice(cut + 1);
   if (dir === undefined || session === undefined) {
     process.stdout.write('event: нет HARNAS_WORK_DIR или HARNAS_SESSION_ID\r\n');
     return;

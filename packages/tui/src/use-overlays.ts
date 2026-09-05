@@ -34,6 +34,7 @@ import {
 } from './overlays.js';
 import { workRunKey } from './pty/use-agent-pty.js';
 import type { PanelState } from './use-panel.js';
+import { withoutMouse } from './use-prefix-input.js';
 import type { SelectionState } from './use-selection.js';
 import type { StatusEventInit } from './use-status.js';
 import {
@@ -308,7 +309,13 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
   );
 
   useInput(
-    (input, key) => {
+    (raw, key) => {
+      // Ink разбирает stdin параллельно с харнессом и отдаёт клик мышью обычным
+      // текстом: без чистки он печатался бы в фильтр пикера или в поле цели.
+      // Пока оверлей открыт, мышь не делает ничего (дизайн 3.1).
+      const input = withoutMouse(raw);
+      if (raw !== '' && input === '') return;
+
       if (key.escape) {
         if (editing !== null) return setEditing(null);
         return close();

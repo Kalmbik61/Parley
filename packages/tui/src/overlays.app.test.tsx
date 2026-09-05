@@ -233,6 +233,14 @@ describe('детали сессии (макет 4.1)', () => {
       app.stdin.write('логин');
       await waitFor(() => (app.lastFrame() ?? '').includes('логин▌'));
       await settled();
+
+      // Клик при открытом оверлее не делает ничего и в поле не попадает (3.1):
+      // Ink слушает тот же stdin и отдал бы событие мыши текстом.
+      app.stdin.write(`${ESC}[<0;12;5M${ESC}[<0;12;5m`);
+      await settled();
+      expect(app.lastFrame()).toContain('логин▌');
+      expect(app.lastFrame()).not.toContain('[<');
+
       app.stdin.write(ENTER);
       await settled();
       await waitMap(workId, (map) => map.work.goal === 'логин');

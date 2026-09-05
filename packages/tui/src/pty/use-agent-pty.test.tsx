@@ -114,6 +114,9 @@ describe('раннеры провайдеров', () => {
     const app = render(<Probe target={{ kind: 'session', session: session({ cwd: root }) }} />);
     try {
       await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
+      // Баннер stub доезжает несколькими чанками PTY, и cwd печатается в нём
+      // последним: без ожидания кадр иногда снимается между строками.
+      await waitFor(() => (app.lastFrame() ?? '').includes(path.basename(root)));
       const frame = app.lastFrame() ?? '';
       expect(frame).toContain('--resume');
       expect(frame).toContain('сессия-1');
