@@ -107,6 +107,14 @@ export type {
 export { openEvents, watchEvents } from './work/events.js';
 export type { EventRecord, EventsLog, EventsWatcher, WatchEventsOptions } from './work/events.js';
 export {
+  START_TOLERANCE_MS,
+  checkSession,
+  isAlive,
+  processStartedAt,
+  reconcileMap,
+} from './work/liveness.js';
+export type { Liveness, LivenessOptions, ReconcileOptions } from './work/liveness.js';
+export {
   HOOK_COMMAND,
   HOOK_EVENTS,
   workSettings,
