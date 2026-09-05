@@ -55,9 +55,11 @@ const activity = (over: Partial<SessionActivity> = {}): SessionActivity => ({
 function Probe({
   works,
   state,
+  held = () => false,
 }: {
   works: readonly WorkEntry[];
   state: SessionActivity | null;
+  held?: (key: string) => boolean;
 }): ReactNode {
   useMapSync({
     works,
@@ -65,6 +67,7 @@ function Probe({
     index: () => undefined,
     activityOf: () => state,
     attached: null,
+    held,
     push: () => {},
     fail: () => {},
   });
@@ -111,6 +114,42 @@ describe('useMapSync', () => {
         at: expect.any(String),
         exitCode: null,
       });
+    } finally {
+      app.unmount();
+    }
+  }, 20_000);
+
+  it('SessionEnd у сессии, чей PTY держит харнесс, карту не трогает', async () => {
+    // Хук Claude Code срабатывает до выхода процесса: настоящий код выхода
+    // принесёт сам выход, а переход по журналу его бы затёр нулём.
+    const { entry } = await liveWork();
+
+    const app = render(
+      <Probe works={[entry]} state={activity({ exited: true })} held={() => true} />,
+    );
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await waitSession(entry.map.work.id, (status) => status === 'active');
+    } finally {
+      app.unmount();
+    }
+  }, 20_000);
+
+  it('SessionEnd у сессии с отчётом статус не меняет (чек-лист 5)', async () => {
+    const { entry, sessionId } = await liveWork();
+    const reported = await updateMap(project, entry.map.work.id, (current) => {
+      transitionSession(current, sessionId, 'done');
+    });
+
+    const app = render(
+      <Probe
+        works={[{ projectPath: project, map: reported }]}
+        state={activity({ exited: true })}
+      />,
+    );
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await waitSession(entry.map.work.id, (status) => status === 'done');
     } finally {
       app.unmount();
     }

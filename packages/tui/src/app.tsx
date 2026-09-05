@@ -183,6 +183,7 @@ export function App({
     index,
     activityOf: activity.activityOf,
     attached: panel.attached,
+    held: panel.alive,
     push,
     fail,
   });

@@ -31,6 +31,12 @@ export interface MapSyncOptions {
    * писать нельзя (макет 1.5).
    */
   attached: string | null;
+  /**
+   * Чей PTY держит сам харнесс: у такой сессии `SessionEnd` из журнала не
+   * трогает карту — настоящий код выхода принесёт выход процесса. Хук Claude Code
+   * срабатывает ДО выхода, так что без этой оговорки код терялся бы всегда.
+   */
+  held: (key: string) => boolean;
   push: (events: readonly StatusEventInit[]) => void;
   fail: (reason: unknown) => void;
 }
@@ -41,6 +47,7 @@ export function useMapSync({
   index,
   activityOf,
   attached,
+  held,
   push,
   fail,
 }: MapSyncOptions): void {
@@ -53,14 +60,14 @@ export function useMapSync({
 
   // `SessionEnd` в журнале: агент попрощался, а отчёта не было — сессия уходит
   // в `exited` тем же путём, что и сверка живости (таблица 4.2). Код выхода
-  // неизвестен: этот процесс ждал не харнесс. У своей панели выход процесса
-  // приходит раньше и с настоящим кодом, а опоздавший переход просто не пройдёт —
-  // это не ошибка, ровно как и у сверки выше.
+  // неизвестен: этот процесс ждал не харнесс. Сессию, чей PTY у нас, не трогаем:
+  // хук приходит раньше выхода процесса, а настоящий код принесёт сам выход.
   const ended = useRef<ReadonlySet<string>>(new Set());
   useEffect(() => {
     for (const entry of works) {
       for (const session of entry.map.sessions) {
         if (session.status !== 'active' || ended.current.has(session.id)) continue;
+        if (held(workRunKey(entry.projectPath, entry.map.work.id, session.id))) continue;
         if (activityOf(session.id)?.exited !== true) continue;
         ended.current = new Set([...ended.current, session.id]);
         void finishSession(entry.projectPath, entry.map.work.id, session.id, 'exited', {
@@ -69,7 +76,7 @@ export function useMapSync({
         }).catch(() => {});
       }
     }
-  }, [works, activityOf, roots]);
+  }, [works, activityOf, held, roots]);
 
   // Заголовок Claude Code доехал до индекса логов — переименование один раз (5.1).
   useEffect(() => {
