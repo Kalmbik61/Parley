@@ -53,14 +53,17 @@ const message = (over: Partial<Message> = {}): Message => ({
   ...over,
 });
 
+/** Имя префикса в подсказках: клавиши харнесса зовутся только через него (§3). */
+const PREFIX = 'ctrl+q';
+
 describe('worksEvents', () => {
   it('первое чтение событий не порождает', () => {
-    expect(worksEvents([], [entry([session({ status: 'pending' })])], g)).toEqual([]);
+    expect(worksEvents([], [entry([session({ status: 'pending' })])], g, PREFIX)).toEqual([]);
   });
 
   it('без изменений событий нет', () => {
     const before = entry([session()], [message()]);
-    expect(worksEvents([before], [entry([session()], [message()])], g)).toEqual([]);
+    expect(worksEvents([before], [entry([session()], [message()])], g, PREFIX)).toEqual([]);
   });
 
   it('новая pending-сессия зовёт запустить её', () => {
@@ -73,11 +76,12 @@ describe('worksEvents', () => {
         ]),
       ],
       g,
+      PREFIX,
     );
 
     expect(events).toHaveLength(1);
     expect(events[0]?.text).toBe('Cx: pending «тесты» в «Авторизация»');
-    expect(events[0]?.hint).toBe('Enter на ◌ — запустить');
+    expect(events[0]?.hint).toBe('ctrl+q s → Enter — запустить');
     expect(events[0]?.source).toEqual({
       projectPath: '/dev/shop',
       workId: 'w-0001',
@@ -90,6 +94,7 @@ describe('worksEvents', () => {
       [entry([session()])],
       [entry([session(), session({ id: 's-02', status: 'active' })])],
       g,
+      PREFIX,
     );
     expect(events).toEqual([]);
   });
@@ -99,10 +104,11 @@ describe('worksEvents', () => {
       [entry([session({ id: 's-02', label: 'бэкенд' })])],
       [entry([session({ id: 's-02', label: 'бэкенд', status: 'exited' })])],
       g,
+      PREFIX,
     );
 
     expect(events[0]?.text).toBe('○ бэкенд вышла без отчёта');
-    expect(events[0]?.hint).toBe('Enter — возобновить, s — резюме');
+    expect(events[0]?.hint).toBe('ctrl+q r — возобновить');
   });
 
   it('выход с отчётом молчит: смотреть не на что', () => {
@@ -110,6 +116,7 @@ describe('worksEvents', () => {
       [entry([session({ id: 's-02', label: 'бэкенд' })])],
       [entry([session({ id: 's-02', label: 'бэкенд', status: 'exited', summary: 'готово' })])],
       g,
+      PREFIX,
     );
     expect(events).toEqual([]);
   });
@@ -123,6 +130,7 @@ describe('worksEvents', () => {
       [entry(sessions)],
       [entry(sessions, [message({ text: 'жду миграции, чтобы продолжить' })])],
       g,
+      PREFIX,
     );
 
     expect(events[0]?.text).toBe('▤ план → бэкенд: «жду миграции, чтобы…»');
@@ -135,12 +143,13 @@ describe('worksEvents', () => {
       [entry(sessions)],
       [entry(sessions, [message({ readAt: '2026-09-02T09:43:00.000Z' })])],
       g,
+      PREFIX,
     );
     expect(events).toEqual([]);
   });
 
   it('новая работа не всплывает: она и так видна в списке', () => {
-    expect(worksEvents([], [entry([session({ status: 'pending' })])], g)).toEqual([]);
+    expect(worksEvents([], [entry([session({ status: 'pending' })])], g, PREFIX)).toEqual([]);
   });
 
   it('готовое авто-резюме всплывает в строке статуса (дизайн 4.5)', () => {
@@ -153,7 +162,7 @@ describe('worksEvents', () => {
       summarySource: 'auto',
     });
 
-    const events = worksEvents([entry([before])], [entry([after])], g);
+    const events = worksEvents([entry([before])], [entry([after])], g, PREFIX);
     expect(events).toHaveLength(1);
     expect(events[0]?.text).toContain('авто-резюме');
     expect(events[0]?.text).toContain('бэкенд');
@@ -168,6 +177,6 @@ describe('worksEvents', () => {
       summary: 'План готов',
       summarySource: 'agent',
     });
-    expect(worksEvents([entry([before])], [entry([after])], g)).toEqual([]);
+    expect(worksEvents([entry([before])], [entry([after])], g, PREFIX)).toEqual([]);
   });
 });

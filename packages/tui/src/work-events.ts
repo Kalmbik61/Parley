@@ -18,7 +18,12 @@ const quote = (text: string, g: Glyphs): string =>
 const labelOf = (sessions: readonly WorkSession[], id: string): string =>
   sessions.find((session) => session.id === id)?.label ?? id;
 
-function sessionEvents(before: WorkEntry, after: WorkEntry, g: Glyphs): StatusEventInit[] {
+function sessionEvents(
+  before: WorkEntry,
+  after: WorkEntry,
+  g: Glyphs,
+  prefix: string,
+): StatusEventInit[] {
   const events: StatusEventInit[] = [];
   const known = new Map(before.map.sessions.map((session) => [session.id, session]));
   const title = after.map.work.title;
@@ -36,7 +41,7 @@ function sessionEvents(before: WorkEntry, after: WorkEntry, g: Glyphs): StatusEv
       if (session.status === 'pending') {
         events.push({
           text: `${providerMarkOf(session.provider)}: pending «${session.label}» в «${title}»`,
-          hint: `Enter на ${g.pending} — запустить`,
+          hint: `${prefix} s ${g.arrow} Enter — запустить`,
           source,
         });
       }
@@ -46,7 +51,7 @@ function sessionEvents(before: WorkEntry, after: WorkEntry, g: Glyphs): StatusEv
     if (previous.status !== 'exited' && session.status === 'exited' && session.summary === null) {
       events.push({
         text: `${g.exited} ${session.label} вышла без отчёта`,
-        hint: 'Enter — возобновить, s — резюме',
+        hint: `${prefix} r — возобновить`,
         source,
       });
     }
@@ -89,6 +94,8 @@ export function worksEvents(
   previous: readonly WorkEntry[],
   next: readonly WorkEntry[],
   g: Glyphs,
+  /** Имя префикса: клавиши харнесса зовутся в подсказках только через него (§3). */
+  prefix: string,
 ): StatusEventInit[] {
   const before = new Map(
     previous.map((entry) => [workKey(entry.projectPath, entry.map.work.id), entry]),
@@ -98,7 +105,7 @@ export function worksEvents(
   for (const entry of next) {
     const was = before.get(workKey(entry.projectPath, entry.map.work.id));
     if (was === undefined) continue;
-    events.push(...sessionEvents(was, entry, g), ...messageEvents(was, entry, g));
+    events.push(...sessionEvents(was, entry, g, prefix), ...messageEvents(was, entry, g));
   }
   return events;
 }

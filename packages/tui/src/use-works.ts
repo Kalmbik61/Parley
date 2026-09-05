@@ -7,6 +7,8 @@ import { worksEvents } from './work-events.js';
 export interface WorksOptions {
   /** Проект, в котором запущен харнесс: его карты читаются с диска напрямую. */
   projectPath: string;
+  /** Имя префикса: подсказки событий зовут клавиши только через него (§3). */
+  prefix: string;
   /** События карты уходят в строку статуса — единственный канал уведомлений. */
   onEvents?: (events: readonly StatusEventInit[]) => void;
 }
@@ -22,7 +24,7 @@ export interface WorksState {
  * Живой список работ: читается один раз и дальше обновляется по событиям watcher
  * карт — без опроса по таймеру, как и список сессий (specs/ui.md).
  */
-export function useWorks({ projectPath, onEvents }: WorksOptions): WorksState {
+export function useWorks({ projectPath, prefix, onEvents }: WorksOptions): WorksState {
   const [works, setWorks] = useState<WorkEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [generation, setGeneration] = useState(0);
@@ -33,12 +35,15 @@ export function useWorks({ projectPath, onEvents }: WorksOptions): WorksState {
   const notify = useRef(onEvents);
   notify.current = onEvents;
 
-  const apply = useCallback((next: WorkEntry[]) => {
-    const events = worksEvents(previous.current, next, glyphs());
-    previous.current = next;
-    setWorks(next);
-    if (events.length > 0) notify.current?.(events);
-  }, []);
+  const apply = useCallback(
+    (next: WorkEntry[]) => {
+      const events = worksEvents(previous.current, next, glyphs(), prefix);
+      previous.current = next;
+      setWorks(next);
+      if (events.length > 0) notify.current?.(events);
+    },
+    [prefix],
+  );
 
   useEffect(() => {
     let cancelled = false;

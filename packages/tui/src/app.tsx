@@ -65,7 +65,7 @@ export function App({
   );
   const config = useConfig(push);
   const prefixName = `ctrl+${config.prefix}`;
-  const { works } = useWorks({ projectPath, onEvents: push });
+  const { works } = useWorks({ projectPath, prefix: prefixName, onEvents: push });
 
   const { index, log } = useLogIndex(sessions);
   const activity = useActivity({

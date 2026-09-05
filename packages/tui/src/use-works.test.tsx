@@ -32,6 +32,7 @@ function Probe({
 }): ReactNode {
   const { works, loading } = useWorks({
     projectPath,
+    prefix: 'ctrl+q',
     onEvents: (incoming) => events.push(...incoming),
   });
   const labels = works.flatMap((entry) => entry.map.sessions.map((session) => session.label));

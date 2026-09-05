@@ -381,10 +381,22 @@ describe('branchOf', () => {
   });
 
   it('у работы без лога ветка берётся из `.git/HEAD` проекта', () => {
-    expect(branchOf(entry([session()]), () => undefined, () => 'main')).toBe('main');
+    expect(
+      branchOf(
+        entry([session()]),
+        () => undefined,
+        () => 'main',
+      ),
+    ).toBe('main');
   });
 
   it('ни лога, ни репозитория — ветки нет', () => {
-    expect(branchOf(entry([]), () => undefined, () => null)).toBeNull();
+    expect(
+      branchOf(
+        entry([]),
+        () => undefined,
+        () => null,
+      ),
+    ).toBeNull();
   });
 });

@@ -22,6 +22,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import type { DotState } from './components/activity-dot.js';
 import type { OverlayView } from './components/overlay.js';
 import { branchOf } from './components/sidebar.js';
+import { withHome } from './format.js';
 import { glyphs } from './glyphs.js';
 import {
   detailsView,
@@ -403,7 +404,8 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
     }
     if (kind === 'history') {
       return pickerView({
-        title: `история · ${projectPath.split('/').pop() ?? projectPath}`,
+        // Заголовок — путь проекта с тильдой, а не одно его имя (макет 4.3).
+        title: `история · ${withHome(projectPath)}`,
         items: shown,
         filter,
         at,

@@ -159,6 +159,8 @@ describe('пикер истории: возобновление (5.3, чек-л�
       app.stdin.write(`${PREFIX}g`);
       await waitFor(() => (app.lastFrame() ?? '').includes('┌ история · '));
       const picker = app.lastFrame() ?? '';
+      // Заголовок — путь проекта, а не одно его имя (макет 4.3).
+      expect(picker).toContain('┌ история · /');
       expect(picker).toContain('исправить flaky-тест auth');
       // Возраст, длительность и токены — правая колонка макета 4.3.
       expect(picker).toContain('41м');
