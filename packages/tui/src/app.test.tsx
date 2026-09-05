@@ -453,6 +453,42 @@ describe('строка статуса (макеты §3)', () => {
   }, 30_000);
 });
 
+describe('гашение событий строки статуса (5, 6)', () => {
+  const hook = (name: string, extra: Record<string, unknown> = {}): string =>
+    `${JSON.stringify({ hook_event_name: name, ...extra })}\n`;
+
+  it('событие без источника гаснет по следующей клавише, событие с источником — нет', async () => {
+    const { workId, id } = await outsideSession('ревью');
+    await appendFile(
+      path.join(workPaths(project, workId).events, `${id}.jsonl`),
+      hook('Notification', { notification_type: 'permission_prompt' }),
+    );
+
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await waitFor(() => (app.lastFrame() ?? '').includes('ревью ждёт ответа'));
+
+      // Событие без источника: живой сессии резюме не дозаказывают (4.7).
+      app.stdin.write(`${PREFIX}R`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('резюме дозаказывают'));
+
+      // Любая клавиша харнесса гасит его, а событие сессии остаётся ждать
+      // подключения к своей строке.
+      app.stdin.write(`${PREFIX}z`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('ревью ждёт ответа'));
+      expect(app.lastFrame()).not.toContain('резюме дозаказывают');
+
+      // Подключение к источнику гасит и его: счётчик ⚑ не растёт без предела.
+      app.stdin.write(`${PREFIX}j`);
+      await waitFor(() => !(app.lastFrame() ?? '').includes('ждёт ответа'));
+      expect(app.lastFrame()).not.toContain('⚑');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+});
+
 describe('закрытие сессии (3.2, макет 4.8)', () => {
   it('32: prefix x спрашивает подтверждение, шлёт SIGHUP и переводит в exited', async () => {
     const app = open();

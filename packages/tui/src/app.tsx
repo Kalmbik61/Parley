@@ -57,10 +57,9 @@ export function App({
   const roots = useMemo(() => ({ claudeRoot: root, codexRoot }), [root, codexRoot]);
 
   const status = useStatus();
-  const push = status.push;
+  const { push, seen, keyPressed } = status;
   const fail = useCallback(
-    (reason: unknown) =>
-      push([{ text: reason instanceof Error ? reason.message : String(reason) }]),
+    (err: unknown) => push([{ text: err instanceof Error ? err.message : String(err) }]),
     [push],
   );
   const config = useConfig(push);
@@ -99,7 +98,6 @@ export function App({
   const order = useMemo(() => sessionOrders(works), [works]);
 
   const markSeen = activity.markSeen;
-  const seen = status.seen;
   const attach = panel.attach;
   // Подключение к панели: `unseen` гаснет, событие сессии-источника тоже (4.1, 6).
   const onAttach = useCallback(
@@ -175,6 +173,7 @@ export function App({
     sidebar: width === null ? null : sidebar,
     panelLeft,
     mouseCapture: config.mouseCapture,
+    onKey: keyPressed,
     // Уже 60 колонок сайдбара нет вовсе: `b` открывает его оверлеем (решение №9).
     toggleSidebar: () => {
       if (sidebarWidth(columns, config.sidebarWidth) === null) return false;

@@ -12,7 +12,7 @@ import { useCallback, useState } from 'react';
 import { sidebarTargets, type SidebarProps, type SidebarWork } from './components/sidebar.js';
 import type { PanelState } from './use-panel.js';
 import type { OverlaysState } from './use-overlays.js';
-import { usePrefixInput, type MouseEvent } from './use-prefix-input.js';
+import { usePrefixInput, withoutMouse, type MouseEvent } from './use-prefix-input.js';
 import type { SelectionState } from './use-selection.js';
 
 /** Клавиша префикса → оверлей, который она открывает (таблица 3.2). */
@@ -47,6 +47,11 @@ export interface ActionsOptions {
   /** `config.mouseCapture`: выключен — харнесс мышь не ловит вовсе (3.3). */
   mouseCapture: boolean;
   /**
+   * Нажатие, не ушедшее гостю: после префикса, в списках, в оверлее. По нему
+   * гаснет событие строки статуса без источника (дизайн координации, раздел 5).
+   */
+  onKey: () => void;
+  /**
    * `prefix b`: сайдбар прячется и показывается. `false` — сайдбара на этой
    * ширине нет вовсе, и `b` открывает его оверлеем (2.1, решение №9).
    */
@@ -62,7 +67,7 @@ export interface ActionsState {
 
 export function useActions(options: ActionsOptions): ActionsState {
   const { prefixByte, workRows, selection, order, panel, overlays } = options;
-  const { workId, session, sidebar, panelLeft, mouseCapture, toggleSidebar } = options;
+  const { workId, session, sidebar, panelLeft, mouseCapture, onKey, toggleSidebar } = options;
 
   const [navigating, setNavigating] = useState(false);
   const [awaiting, setAwaiting] = useState(false);
@@ -81,6 +86,7 @@ export function useActions(options: ActionsOptions): ActionsState {
 
   const onAction = useCallback(
     (key: string) => {
+      onKey();
       if (key === 'c') return panel.create(workId, selection.attach);
       if (key === 'j' || key === 'k') return walk(key === 'j' ? 1 : -1, true);
       if (key === 's') return setNavigating(true);
@@ -94,7 +100,7 @@ export function useActions(options: ActionsOptions): ActionsState {
       const overlay = OVERLAYS[key];
       if (overlay !== undefined) overlays.open(overlay);
     },
-    [panel, workId, selection, walk, workRows, overlays, toggleSidebar],
+    [panel, workId, selection, walk, workRows, overlays, onKey, toggleSidebar],
   );
 
   /**
@@ -119,6 +125,11 @@ export function useActions(options: ActionsOptions): ActionsState {
     onAwait: setAwaiting,
     toGuest: panel.write,
     capture: overlays.kind !== null || navigating,
+    // Ввод оверлея и списков — тоже нажатия харнесса; события мыши ими не
+    // считаются: они гостю не уходят, но и клавишами не являются.
+    onCapture: (data) => {
+      if (withoutMouse(data) !== '') onKey();
+    },
     mouseCapture,
     panelLeft,
     mouseTracking: panel.snapshot?.mouseTracking ?? 'none',
