@@ -372,6 +372,37 @@ describe('панель следует за подключённым агенто
     }
   }, 30_000);
 
+  it('переключение сессий возвращает прежний экран каждого гостя (2.2)', async () => {
+    const app = open();
+    try {
+      const workId = await launch(app);
+      await waitMap(workId, (item) => item.status === 'active');
+
+      // Первый гость сказал своё — этот экран должен пережить уход панели.
+      app.stdin.write('echo альфа-один\r');
+      await waitFor(() => (app.lastFrame() ?? '').includes('альфа-один'));
+
+      // Вторая сессия той же работы: у неё свой, чистый экран.
+      app.stdin.write(`${PREFIX}c`);
+      await waitFor(() => !(app.lastFrame() ?? '').includes('альфа-один'));
+      app.stdin.write('echo бета-два\r');
+      await waitFor(() => (app.lastFrame() ?? '').includes('бета-два'));
+      // Обе сессии в сайдбаре: до этого кадра `j`/`k` ходить ещё некуда.
+      await waitFor(() => (app.lastFrame() ?? '').split('новая сессия').length > 2);
+
+      // Назад к первой: её экран на месте, чужого на нём нет.
+      app.stdin.write(`${PREFIX}k`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('альфа-один'));
+      expect(app.lastFrame()).not.toContain('бета-два');
+
+      // И обратно ко второй — тем же порядком.
+      app.stdin.write(`${PREFIX}j`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('бета-два'));
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
   it('пока панель показывает карточку, ввод не уходит чужому агенту', async () => {
     const { workId } = await outsideSession('ревью');
     const app = open();

@@ -5,7 +5,7 @@ import {
   type SessionIndex,
   type WorkProvider,
 } from '@harnas/core';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { findRunnerBinary } from './find-binary.js';
 import { spawnPtySession, type PtyExit, type PtySession } from './pty-session.js';
 
@@ -76,6 +76,11 @@ export interface AgentRun {
 export interface AgentPtyState {
   /** Что показывает правая панель. */
   active: AgentRun | undefined;
+  /**
+   * Живые PTY харнесса. Экран копится у каждой, а не только у подключённой:
+   * агент, которого не видно, продолжает говорить (дизайн TUI v2, 2.2).
+   */
+  live: readonly PtySession[];
   /** Нет бинаря или не удалось запустить. */
   error: string | undefined;
   open(target: AgentTarget, size: PtySize): void;
@@ -278,9 +283,14 @@ export function useAgentPty({ onStart, onExit, onFail }: AgentPtyOptions = {}): 
   );
 
   const active = runs.find((run) => targetKey(run.target) === activeKey);
+  const running = useMemo(
+    () => runs.filter((run) => run.exit === undefined).map((run) => run.session),
+    [runs],
+  );
 
   return {
     ...(active === undefined ? { active: undefined } : { active }),
+    live: running,
     error,
     open,
     attach,

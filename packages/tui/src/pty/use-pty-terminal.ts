@@ -30,68 +30,106 @@ export interface PtyTerminal {
 }
 
 /**
- * Гоняет поток PTY через VT-парсер и отдаёт снимок экрана для рендера.
+ * Гоняет потоки PTY через VT-парсеры и отдаёт снимок экрана подключённой сессии.
+ *
+ * Буфер у каждой живой сессии свой, и подписка на её вывод держится всё время
+ * её жизни: агент, которого не видно, продолжает говорить, и его экран должен
+ * вернуться целым, когда панель к нему вернётся (дизайн TUI v2, 2.2). Снимок и
+ * ресайз — только у подключённой: остальные подгоняются под размер при
+ * подключении, до первого кадра.
  */
 export function usePtyTerminal(
-  session: PtySession | undefined,
+  sessions: readonly PtySession[],
+  active: PtySession | undefined,
   { cols, rows, frameMs = FRAME_MS, scrollback }: PtyTerminalOptions,
 ): PtyTerminal {
   const [snapshot, setSnapshot] = useState<TerminalSnapshot | undefined>();
-  const bufferRef = useRef<TerminalBuffer | undefined>(undefined);
+  const buffers = useRef(new Map<PtySession, TerminalBuffer>());
+  // Подключённая сессия и размер панели читаются из ссылок: подписка живёт
+  // дольше кадра, и решать по состоянию рендера — значит отстать на кадр.
+  const shown = useRef<PtySession | undefined>(undefined);
+  shown.current = active;
+  const size = useRef({ cols, rows });
+  size.current = { cols, rows };
+  const live = useRef(sessions);
+  live.current = sessions;
+
+  // Подписки пересоздаются, только когда меняется набор живых сессий.
+  const signature = sessions.map((session) => session.pid).join(',');
 
   useEffect(() => {
-    if (session === undefined) {
-      setSnapshot(undefined);
-      return;
+    const running = new Set(live.current);
+    // Процесс вышел — его экран больше не нужен никому.
+    for (const [session, buffer] of buffers.current) {
+      if (running.has(session)) continue;
+      buffer.dispose();
+      buffers.current.delete(session);
     }
 
-    const buffer = createTerminalBuffer(cols, rows, scrollback);
-    bufferRef.current = buffer;
-
-    let frame: NodeJS.Timeout | undefined;
     let disposed = false;
+    const frames = new Map<PtySession, NodeJS.Timeout>();
+    const unsubscribe = [...running].map((session) => {
+      const buffer =
+        buffers.current.get(session) ??
+        createTerminalBuffer(size.current.cols, size.current.rows, scrollback);
+      buffers.current.set(session, buffer);
 
-    const flush = (): void => {
-      frame = undefined;
-      if (!disposed) setSnapshot(buffer.snapshot());
-    };
-
-    const unsubscribe = session.onData((chunk) => {
-      // Ждём, пока xterm разберёт чанк, и только потом планируем кадр:
-      // парсер асинхронный, снимок сразу после write увидел бы старое состояние.
-      buffer.write(chunk, () => {
-        if (disposed || frame !== undefined) return;
-        frame = setTimeout(flush, frameMs);
+      return session.onData((chunk) => {
+        // Ждём, пока xterm разберёт чанк, и только потом планируем кадр:
+        // парсер асинхронный, снимок сразу после write увидел бы старое состояние.
+        buffer.write(chunk, () => {
+          // Кадр рисуется только за подключённую сессию: остальные просто копят.
+          if (disposed || shown.current !== session || frames.has(session)) return;
+          frames.set(
+            session,
+            setTimeout(() => {
+              frames.delete(session);
+              if (!disposed && shown.current === session) setSnapshot(buffer.snapshot());
+            }, frameMs),
+          );
+        });
       });
     });
 
-    // Первый кадр сразу: панель не должна оставаться пустой до первого байта.
-    setSnapshot(buffer.snapshot());
-
     return () => {
       disposed = true;
-      unsubscribe();
-      if (frame !== undefined) clearTimeout(frame);
-      bufferRef.current = undefined;
-      buffer.dispose();
+      for (const stop of unsubscribe) stop();
+      for (const frame of frames.values()) clearTimeout(frame);
     };
-    // cols/rows намеренно не в зависимостях: размер меняется через resize ниже,
-    // пересоздавать буфер на каждый ресайз значило бы терять экран.
-  }, [session, frameMs, scrollback]);
+  }, [signature, frameMs, scrollback]);
 
+  // Подключение и ресайз: экран на виду подгоняется под панель до кадра, иначе
+  // гость вернулся бы нарисованным под прежний размер.
   useEffect(() => {
-    const buffer = bufferRef.current;
+    if (active === undefined) {
+      setSnapshot(undefined);
+      return;
+    }
+    const buffer = buffers.current.get(active);
     if (buffer === undefined) return;
     buffer.resize(cols, rows);
     setSnapshot(buffer.snapshot());
-  }, [cols, rows]);
+  }, [active, cols, rows]);
 
-  const scroll = useCallback((lines: number) => {
-    const buffer = bufferRef.current;
-    if (buffer === undefined) return;
-    buffer.scroll(lines);
-    setSnapshot(buffer.snapshot());
-  }, []);
+  // Уходит вся панель — уходят и буферы: xterm держит своё состояние сам.
+  const held = buffers.current;
+  useEffect(
+    () => () => {
+      for (const buffer of held.values()) buffer.dispose();
+      held.clear();
+    },
+    [held],
+  );
+
+  const scroll = useCallback(
+    (lines: number) => {
+      const buffer = active === undefined ? undefined : buffers.current.get(active);
+      if (buffer === undefined) return;
+      buffer.scroll(lines);
+      setSnapshot(buffer.snapshot());
+    },
+    [active],
+  );
 
   return { snapshot, scroll };
 }

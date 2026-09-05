@@ -2,7 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Text } from 'ink';
 import { render } from 'ink-testing-library';
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawnPtySession, type PtySession } from './pty-session.js';
 import { createTerminalBuffer } from './terminal-buffer.js';
@@ -131,7 +131,8 @@ describe('режимы гостя доезжают из живого PTY', () =>
   });
 
   function Probe({ target }: { target: PtySession }): ReactNode {
-    const { snapshot } = usePtyTerminal(target, { cols: 40, rows: 8, frameMs: 5 });
+    const sessions = useMemo(() => [target], [target]);
+    const { snapshot } = usePtyTerminal(sessions, target, { cols: 40, rows: 8, frameMs: 5 });
     return <Text>{`${snapshot?.mouseTracking ?? '—'}/${snapshot?.bracketedPaste ?? '—'}`}</Text>;
   }
 

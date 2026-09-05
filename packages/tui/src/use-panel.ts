@@ -120,7 +120,7 @@ export function usePanel({
   );
 
   const agent = useAgentPty({ onStart, onExit, onFail: onFailed });
-  const { snapshot, scroll } = usePtyTerminal(agent.active?.session, { cols, rows });
+  const { snapshot, scroll } = usePtyTerminal(agent.live, agent.active?.session, { cols, rows });
   usePtyResize(agent.active?.session, cols, rows);
 
   const attached = agent.active?.exit === undefined ? keyOf(agent.active?.target) : null;
