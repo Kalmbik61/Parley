@@ -96,6 +96,34 @@ const waitMap = async (
   }
 };
 
+/** Сессия работы по признаку: в этих сценариях их в карте несколько. */
+const waitSession = async (
+  workId: string,
+  pick: (session: WorkSession) => boolean,
+  timeoutMs = 8000,
+): Promise<WorkSession> => {
+  const started = Date.now();
+  for (;;) {
+    const found = (await readMap(project, workId)).sessions.find(pick);
+    if (found !== undefined) return found;
+    if (Date.now() - started > timeoutMs) throw new Error('карта не дождалась');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+};
+
+/** Живая сессия, поднятая не харнессом: её состояние ведут хуки. */
+const outsideSession = async (label: string): Promise<{ workId: string; id: string }> => {
+  const created = await createWork(project, { title: 'Авторизация' });
+  let id = '';
+  await updateMap(project, created.work.id, (map) => {
+    const session = addSession(map, { provider: 'claude', label, task: 'шаги 1–3' });
+    transitionSession(map, session.id, 'active');
+    id = session.id;
+  });
+  await mkdir(workPaths(project, created.work.id).events, { recursive: true });
+  return { workId: created.work.id, id };
+};
+
 const firstWorkId = async (): Promise<string> => {
   const { works } = await readWorksIndex();
   const first = works[0];
@@ -137,6 +165,9 @@ const launch = async (app: ReturnType<typeof render>): Promise<string> => {
   await mounted(app.stdin);
   app.stdin.write(`${PREFIX}c`);
   await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
+  // Работа приходит из watcher: до её кадра клавишам харнесса не о чем говорить.
+  await waitFor(() => (app.lastFrame() ?? '').includes('сессии · '));
+  await new Promise((resolve) => setTimeout(resolve, 100));
   return firstWorkId();
 };
 
@@ -208,19 +239,6 @@ describe('new: быстрая сессия без диалога (5.1)', () => {
 });
 
 describe('события и просмотр (4.1, 6)', () => {
-  /** Живая сессия, поднятая не харнессом: её состояние ведут хуки. */
-  const outsideSession = async (label: string): Promise<{ workId: string; id: string }> => {
-    const created = await createWork(project, { title: 'Авторизация' });
-    let id = '';
-    await updateMap(project, created.work.id, (map) => {
-      const session = addSession(map, { provider: 'claude', label, task: 'шаги 1–3' });
-      transitionSession(map, session.id, 'active');
-      id = session.id;
-    });
-    await mkdir(workPaths(project, created.work.id).events, { recursive: true });
-    return { workId: created.work.id, id };
-  };
-
   const hook = (name: string, extra: Record<string, unknown> = {}): string =>
     `${JSON.stringify({ hook_event_name: name, ...extra })}\n`;
 
@@ -279,6 +297,63 @@ describe('события и просмотр (4.1, 6)', () => {
 
       app.stdin.write(ENTER);
       await waitFor(() => lineWith(app.lastFrame() ?? '', 'план').includes('idle'));
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+});
+
+describe('панель следует за подключённым агентом (2.2, 3.1, макет 1.5)', () => {
+  it('ходьба по сайдбару не подменяет живого гостя карточкой', async () => {
+    const app = open();
+    try {
+      const workId = await launch(app);
+      const first = await waitMap(workId, (item) => item.status === 'active');
+
+      // Вторая сессия той же работы: панель переезжает на неё.
+      app.stdin.write(`${PREFIX}c`);
+      await waitFor(() => !(app.lastFrame() ?? '').includes(`harnas=${first.id}@`));
+      await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
+
+      // Режим навигации: выбор ходит по сайдбару, панель живёт (макет 1.5).
+      app.stdin.write(`${PREFIX}s`);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      app.stdin.write('k');
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      const frame = app.lastFrame() ?? '';
+      expect(frame).toContain('stub готов');
+      expect(frame).not.toContain('вне харнесса');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('пока панель показывает карточку, ввод не уходит чужому агенту', async () => {
+    const { workId } = await outsideSession('ревью');
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      app.stdin.write(`${PREFIX}c`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
+      const ours = await waitSession(workId, (item) => item.launchedBy === 'tui');
+
+      // Уходим на живую сессию, чей PTY не у харнесса: панель отпускает гостя.
+      app.stdin.write(`${PREFIX}k`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('вне харнесса'));
+      expect(app.lastFrame()).not.toContain('stub готов');
+
+      // Команда `exit 7` завершила бы stub, будь ввод по-прежнему у него.
+      app.stdin.write('exit 7\r');
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      expect((await waitSession(workId, (item) => item.id === ours.id)).status).toBe('active');
+
+      // Обратно на нашу сессию, но без подключения: карточка про неё не врёт.
+      app.stdin.write(`${PREFIX}s`);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      app.stdin.write('j');
+      await waitFor(() => (app.lastFrame() ?? '').includes('запущена харнессом'));
+      expect(app.lastFrame()).not.toContain('вне харнесса');
     } finally {
       app.unmount();
     }

@@ -130,7 +130,11 @@ export function App({
     chosen === undefined || current === null
       ? null
       : workRunKey(chosen.projectPath, chosen.map.work.id, current.id);
-  const attached = runKey !== null && panel.attached === runKey;
+  // Панель показывает гостя, пока к ней подключён живой агент; карточка выбранной
+  // сессии — только когда гостя нет (2.2). В режиме навигации гость остаётся на
+  // экране: ходьба по сайдбару панель не трогает (макет 1.5).
+  const live = panel.attached !== null;
+  const shown = runKey !== null && panel.attached === runKey;
 
   const actions = useActions({
     prefixByte: PREFIX_BYTE,
@@ -171,7 +175,7 @@ export function App({
 
   // `⚑` при переходе в `blocked` у неподключённой сессии; гаснет при подключении (6).
   const activityOf = activity.activityOf;
-  const attachedId = attached ? current?.id : undefined;
+  const attachedId = shown ? current?.id : undefined;
   const flagged = useRef<ReadonlySet<string>>(new Set());
   useEffect(() => {
     const now = new Set<string>();
@@ -216,12 +220,13 @@ export function App({
             dialog={actions.dialog}
             onSubmit={() => actions.dialog?.submit()}
             onCancel={actions.cancel}
-            screen={attached ? panel.snapshot : undefined}
+            screen={live ? panel.snapshot : undefined}
             card={cardFor(
               chosen,
               current,
               current === null ? 'idle' : activity.stateOf(current),
               PREFIX_NAME,
+              runKey !== null && panel.alive(runKey),
             )}
             width={panelCols}
             height={panelRows}

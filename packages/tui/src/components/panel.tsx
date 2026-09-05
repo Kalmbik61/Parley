@@ -30,6 +30,11 @@ export interface CardProps {
   brief: string | null;
   /** Имя префикса в подсказках карточки. */
   prefix: string;
+  /**
+   * PTY живой сессии у харнесса: панель просто отпустили (ходьба по сайдбару),
+   * подключиться можно. Без этого карточка врала бы «запущена вне харнесса».
+   */
+  atHarness: boolean;
 }
 
 /**
@@ -41,6 +46,7 @@ export function cardFor(
   session: WorkSession | null,
   state: DotState,
   prefix: string,
+  atHarness: boolean,
 ): CardProps {
   const parent =
     entry === undefined || session?.parent == null
@@ -54,7 +60,7 @@ export function cardFor(
           path.relative(entry.projectPath, workPaths(entry.projectPath, entry.map.work.id).briefs),
           `${session.id}.md`,
         );
-  return { session, state, parent, brief, prefix };
+  return { session, state, parent, brief, prefix, atHarness };
 }
 
 /** Как сессия закончилась: время и код выхода из последней ступени истории. */
@@ -67,7 +73,7 @@ function exitTail(session: WorkSession): string {
 
 /** Строки карточки по состоянию сессии (макеты §2). */
 export function cardLines(
-  { session, state, parent, brief, prefix }: CardProps,
+  { session, state, parent, brief, prefix, atHarness }: CardProps,
   glyph: string,
 ): string[] {
   if (session === null) {
@@ -77,6 +83,16 @@ export function cardLines(
 
   // Живая сессия попадает в карточку только одна: та, чей PTY не у харнесса (5.4).
   if (session.status === 'active') {
+    // Своя же сессия, от которой панель отпустили ходьбой по сайдбару: к ней
+    // можно вернуться, и карточка зовёт это сделать, а не выдумывает чужой PTY.
+    if (atHarness) {
+      return [
+        `${head} · ${state}`,
+        `pid ${session.pid ?? '—'} · запущена харнессом`,
+        '',
+        `${prefix} s → Enter — подключить`,
+      ];
+    }
     return [
       `${head} · ${state} · запущена вне харнесса`,
       `pid ${session.pid ?? '—'} · подключение невозможно: PTY не у харнесса`,

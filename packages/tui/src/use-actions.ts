@@ -88,7 +88,11 @@ export function useActions(options: ActionsOptions): ActionsState {
 
   /** `x`: подтверждение, затем SIGHUP процессу панели (макет 4.8). */
   const closeSession = useCallback(() => {
-    if (session === null || runKey === null || session.status !== 'active') return;
+    if (session === null || runKey === null) return;
+    if (session.status !== 'active') {
+      push([{ text: `«${session.label}» не запущена — закрывать нечего` }]);
+      return;
+    }
     if (!panel.alive(runKey)) {
       push([{ text: `«${session.label}» запущена вне харнесса — закрыть её нечем` }]);
       return;
@@ -148,6 +152,13 @@ export function useActions(options: ActionsOptions): ActionsState {
       if (input === 'j' || key.downArrow) return walk(1, false);
       if (input === 'k' || key.upArrow) return walk(-1, false);
       if (key.return && selection.session !== null) {
+        // Не живую сессию `Enter` запускает или возобновляет через оверлей (4.5,
+        // 4.6); пока его нет, честнее сказать это, чем промолчать.
+        if (session !== null && session.status !== 'active') {
+          const what = session.status === 'pending' ? 'запуска' : 'возобновления';
+          push([{ text: `«${session.label}»: оверлей ${what} ещё не подключён` }]);
+          return;
+        }
         selection.attach(selection.session);
         setNavigating(false);
       }

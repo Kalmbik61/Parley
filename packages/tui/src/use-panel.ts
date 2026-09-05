@@ -32,6 +32,7 @@ export interface PanelState {
   /** Ключ живой панели (`workRunKey`); `null` — панели нет или агент вышел. */
   attached: string | null;
   alive: (key: string) => boolean;
+  /** Подключить панель к сессии; своего PTY у неё нет — панель отпускает гостя. */
   attach: (key: string) => void;
   /**
    * Быстрая сессия `new`: работа берётся выбранная или заводится «без
@@ -40,7 +41,7 @@ export interface PanelState {
   create: (workId: string | null, created: (sessionId: string) => void) => void;
   /** SIGHUP процессу панели (макет 4.8). */
   close: (key: string) => void;
-  /** Байты гостю: пока живого агента нет, они просто пропадают. */
+  /** Байты гостю на экране: пока панель показывает карточку, они пропадают. */
   write: (data: string) => void;
 }
 
@@ -132,9 +133,13 @@ export function usePanel({ projectPath, roots, cols, rows, onFail }: PanelOption
     snapshot,
     attached,
     alive: agent.alive,
-    attach: (key) => void agent.attach(key),
+    // Живого PTY с таким ключом у харнесса нет: панель отпускает гостя и
+    // показывает карточку сессии, а ввод перестаёт уходить кому бы то ни было.
+    attach: (key) => {
+      if (!agent.attach(key)) agent.detach();
+    },
     create,
     close: agent.close,
-    write: (data) => agent.active?.session.write(data),
+    write: agent.write,
   };
 }

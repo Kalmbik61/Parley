@@ -90,8 +90,19 @@ export interface AgentPtyState {
    * харнесса нет: сессию запустили вне TUI, и подключаться не к чему (решение №5).
    */
   attach(key: string): boolean;
+  /**
+   * Отпустить панель: процессы остаются жить, но экран больше не показывает
+   * никого. Нужно, когда панель переключилась на сессию без своего PTY: рисовать
+   * чужого гостя и слать ему ввод нельзя (дизайн TUI v2, 2.2 и 3.1).
+   */
+  detach(): void;
   /** Жив ли процесс панели с таким ключом: завершившийся и незнакомый — нет. */
   alive(key: string): boolean;
+  /**
+   * Байты подключённому гостю. Панель без живого агента их проглатывает: уйти
+   * другому агенту, которого не видно на экране, они не должны (3.1).
+   */
+  write(data: string): void;
   /** Перезапустить агента активной панели после его завершения. */
   restart(size: PtySize): void;
   /**
@@ -131,11 +142,19 @@ export interface AgentPtyOptions {
 
 export function useAgentPty({ onStart, onExit, onFail }: AgentPtyOptions = {}): AgentPtyState {
   const [runs, setRuns] = useState<AgentRun[]>([]);
-  const [activeKey, setActiveKey] = useState<string | undefined>();
+  const [activeKey, showActive] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
 
   // Живые процессы нужны в cleanup, где состояние React уже недоступно.
   const live = useRef(new Map<string, PtySession>());
+  // Подключённая панель дублируется в ref: байты гостю приходят между сменой
+  // панели и рендером, и решать по состоянию рендера — значит слать их прежнему
+  // агенту (дизайн TUI v2, 3.1).
+  const attached = useRef<string | undefined>(undefined);
+  const setActiveKey = useCallback((key: string | undefined): void => {
+    attached.current = key;
+    showActive(key);
+  }, []);
   // Колбэки — через ref: их новая ссылка не должна пересоздавать запуск.
   const started = useRef(onStart);
   started.current = onStart;
@@ -257,14 +276,15 @@ export function useAgentPty({ onStart, onExit, onFail }: AgentPtyOptions = {}): 
     [runs, activeKey, launch],
   );
 
-  const attach = useCallback<AgentPtyState['attach']>(
-    (key) => {
-      if (!runs.some((run) => targetKey(run.target) === key)) return false;
-      setActiveKey(key);
-      return true;
-    },
-    [runs],
-  );
+  // Живые процессы берутся из ref, а не из `runs`: панель подключается сразу
+  // после запуска, когда новый `runs` до рендера ещё не доехал.
+  const attach = useCallback<AgentPtyState['attach']>((key) => {
+    if (!live.current.has(key)) return false;
+    setActiveKey(key);
+    return true;
+  }, []);
+
+  const detach = useCallback<AgentPtyState['detach']>(() => setActiveKey(undefined), []);
 
   const close = useCallback<AgentPtyState['close']>(
     (key = activeKey) => {
@@ -272,7 +292,7 @@ export function useAgentPty({ onStart, onExit, onFail }: AgentPtyOptions = {}): 
       live.current.get(key)?.kill();
       live.current.delete(key);
       setRuns((prev) => prev.filter((run) => targetKey(run.target) !== key));
-      setActiveKey((current) => (current === key ? undefined : current));
+      if (attached.current === key) setActiveKey(undefined);
     },
     [activeKey],
   );
@@ -287,7 +307,12 @@ export function useAgentPty({ onStart, onExit, onFail }: AgentPtyOptions = {}): 
     error,
     open,
     attach,
+    detach,
     alive: (key) => runs.some((run) => targetKey(run.target) === key && run.exit === undefined),
+    write: (data) => {
+      const key = attached.current;
+      if (key !== undefined) live.current.get(key)?.write(data);
+    },
     restart,
     close,
   };

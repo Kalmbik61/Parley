@@ -53,6 +53,7 @@ const card = (over: Partial<CardProps> = {}): CardProps => ({
   parent: null,
   brief: null,
   prefix: 'ctrl+q',
+  atHarness: false,
   ...over,
 });
 
@@ -82,7 +83,7 @@ describe('карточка панели (макеты §2)', () => {
   it('pending показывает родителя и путь брифа, но не сам бриф (решение №12)', () => {
     const parent = session({ id: 's-02', label: 'бэкенд' });
     const child = session({ id: 's-04', label: 'тесты', parent: 's-02' });
-    const props = cardFor(entry([parent, child]), child, 'pending', 'ctrl+q');
+    const props = cardFor(entry([parent, child]), child, 'pending', 'ctrl+q', false);
     const frame = frameOf(props);
 
     expect(frame).toContain('◌ тесты · pending');
@@ -131,6 +132,16 @@ describe('карточка панели (макеты §2)', () => {
     expect(frame).toContain('pid 48213');
     expect(frame).toContain('подключение невозможно');
     expect(frame).toContain('ctrl+q i — детали');
+  });
+
+  it('живая сессия харнесса, отпущенная панелью, зовёт подключиться, а не врёт (2.2)', () => {
+    const ours = session({ status: 'active', pid: 48213, launchedBy: 'tui' });
+    const frame = frameOf({ session: ours, state: 'working', atHarness: true });
+
+    expect(frame).toContain('● бэкенд · working');
+    expect(frame).not.toContain('вне харнесса');
+    expect(frame).toContain('pid 48213 · запущена харнессом');
+    expect(frame).toContain('ctrl+q s → Enter — подключить');
   });
 });
 
