@@ -6,12 +6,19 @@
  * точек — из `use-activity.ts`, выбор — из `use-selection.ts`.
  */
 
-import type { WorkSession } from '@harnas/core';
+import type { SessionIndex, WorkEntry, WorkSession, WorkStatus } from '@harnas/core';
 import { Box, Text } from 'ink';
 import { memo, type ReactNode } from 'react';
-import { formatDuration, formatTokens, truncate, truncateLeft, visibleWindow } from '../format.js';
+import {
+  formatDuration,
+  formatTokens,
+  truncate,
+  truncateLeft,
+  visibleWindow,
+  withHome,
+} from '../format.js';
 import { glyphs, selectionProps, type Glyphs } from '../glyphs.js';
-import { treeOrder, type LiveMetrics } from '../work-rows.js';
+import { treeOrder, workKey, type LiveMetrics } from '../work-rows.js';
 import { ActivityDot, dotColor, stateLetter, type DotState } from './activity-dot.js';
 
 /** Ширина сайдбара по умолчанию и узкая (раздел 2.1). */
@@ -56,6 +63,94 @@ export interface SidebarSession {
   unread: number;
   /** Живые субагенты: `⋮N` в компактной строке (макет §5). */
   subagents: number;
+}
+
+/** Сколько работ получают номера `prefix 1..9`; дальше — без номера (решение №1). */
+const NUMBERED = 9;
+
+const workRank = (status: WorkStatus): number => (status === 'active' ? 0 : 1);
+
+/** Запись индекса логов провайдера: из неё берутся ветка и метрики. */
+type Indexer = (session: WorkSession) => SessionIndex | undefined;
+
+export interface WorksViewOptions {
+  /** Проект харнесса: сверху сайдбара — только его работы (решение №3). */
+  projectPath: string;
+  /** Точка работы — максимум по её сессиям; `null` — сессий нет (решение №6). */
+  workState: (key: string) => DotState | null;
+  index: Indexer;
+}
+
+/** Ветка работы известна из лога любой её сессии: в карте её нет. */
+function branchOf(entry: WorkEntry, index: Indexer): string | null {
+  for (const session of entry.map.sessions) {
+    const found = index(session)?.gitBranch;
+    if (found != null) return found;
+  }
+  return null;
+}
+
+/**
+ * Работы текущего проекта в порядке сайдбара (2.1): `active` по свежести,
+ * `done` ниже, `archived` не показываются.
+ */
+export function sidebarWorks(
+  entries: readonly WorkEntry[],
+  { projectPath, workState, index }: WorksViewOptions,
+): SidebarWork[] {
+  return entries
+    .filter((entry) => entry.projectPath === projectPath && entry.map.work.status !== 'archived')
+    .sort(
+      (a, b) =>
+        workRank(a.map.work.status) - workRank(b.map.work.status) ||
+        b.map.work.updatedAt.localeCompare(a.map.work.updatedAt),
+    )
+    .map((entry, at) => {
+      const key = workKey(entry.projectPath, entry.map.work.id);
+      return {
+        key,
+        number: at < NUMBERED ? at + 1 : null,
+        title: entry.map.work.title,
+        project: withHome(entry.projectPath),
+        branch: branchOf(entry, index),
+        state: workState(key),
+        done: entry.map.work.status === 'done',
+      };
+    });
+}
+
+export interface SessionsViewOptions {
+  state: (session: WorkSession) => DotState;
+  index: Indexer;
+  /** Живые субагенты сессии: `⋮N` в компактной строке. */
+  subagents: (session: WorkSession) => number;
+}
+
+/** Метрики завершённой сессии зафиксированы в карте, у живой — в логах. */
+function metricsOf(session: WorkSession, found: SessionIndex | undefined): LiveMetrics {
+  return {
+    durationMs: session.metrics?.durationMs ?? found?.durationMs ?? null,
+    tokens: session.metrics?.tokens ?? found?.tokens ?? null,
+    model: found?.primaryModel ?? null,
+    lastRecordAt: found?.endedAt ?? null,
+  };
+}
+
+/** Сессии выбранной работы: дерево строит сам сайдбар, порядок — из карты. */
+export function sidebarSessions(
+  entry: WorkEntry | undefined,
+  { state, index, subagents }: SessionsViewOptions,
+): SidebarSession[] {
+  if (entry === undefined) return [];
+  return entry.map.sessions.map((session) => ({
+    session,
+    state: state(session),
+    live: metricsOf(session, index(session)),
+    unread: entry.map.messages.filter(
+      (message) => message.to === session.id && message.readAt === null,
+    ).length,
+    subagents: subagents(session),
+  }));
 }
 
 export interface SidebarProps {

@@ -15,6 +15,14 @@
 // что до бинаря доехали `--resume <id>` и прочее.
 
 process.stdout.write(`stub готов args=${JSON.stringify(process.argv.slice(2))}\r\n`);
+// Одни только флаги: их список короткий и целиком помещается в узкую панель,
+// тогда как полные аргументы с путями терминал переносит на несколько строк.
+process.stdout.write(
+  `flags=${process.argv
+    .slice(2)
+    .filter((argument) => argument.startsWith('--'))
+    .join(',')}\r\n`,
+);
 process.stdout.write(`cwd=${process.cwd()}\r\n`);
 // Окружение сессии работы: по нему тест видит, что до процесса доехали
 // HARNAS_WORK_DIR и HARNAS_SESSION_ID. Печатаем коротко — панель узкая.

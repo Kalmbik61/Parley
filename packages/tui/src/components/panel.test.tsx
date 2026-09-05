@@ -1,0 +1,167 @@
+import type { WorkEntry, WorkSession } from '@harnas/core';
+import { render } from 'ink-testing-library';
+import { describe, expect, it } from 'vitest';
+import { pinUnicodeGlyphs } from '../../test/glyphs-env.js';
+import { cardFor, Panel, type CardProps } from './panel.js';
+
+pinUnicodeGlyphs();
+
+function session(over: Partial<WorkSession> = {}): WorkSession {
+  return {
+    id: 's-04',
+    provider: 'claude',
+    label: 'бэкенд',
+    task: 'шаги 1–3',
+    parent: null,
+    contextFrom: [],
+    status: 'pending',
+    history: [{ status: 'pending', at: '2026-09-05T09:12:00.000Z' }],
+    startedAt: null,
+    endedAt: null,
+    pid: null,
+    startedAtProcess: null,
+    launchedBy: null,
+    providerSessionId: null,
+    metrics: null,
+    summary: null,
+    summarySource: null,
+    artifacts: [],
+    ...over,
+  };
+}
+
+const entry = (sessions: WorkSession[]): WorkEntry => ({
+  projectPath: '/dev/shop',
+  map: {
+    schemaVersion: 1,
+    work: {
+      id: 'w-0042',
+      title: 'Авторизация',
+      goal: '',
+      status: 'active',
+      createdAt: '2026-09-05T09:00:00.000Z',
+      updatedAt: '2026-09-05T09:00:00.000Z',
+    },
+    sessions,
+    messages: [],
+  },
+});
+
+const card = (over: Partial<CardProps> = {}): CardProps => ({
+  session: session(),
+  state: 'pending',
+  parent: null,
+  brief: null,
+  prefix: 'ctrl+q',
+  ...over,
+});
+
+const frameOf = (props: Partial<CardProps>): string =>
+  render(
+    <Panel
+      dialog={null}
+      onSubmit={() => {}}
+      onCancel={() => {}}
+      screen={undefined}
+      card={card(props)}
+      width={61}
+      height={22}
+    />,
+  ).lastFrame() ?? '';
+
+describe('карточка панели (макеты §2)', () => {
+  it('сессий нет — карточка объясняет, с чего начать', () => {
+    const frame = frameOf({ session: null, state: 'idle' });
+    expect(frame).toContain('сессий нет');
+    expect(frame).toContain('ctrl+q c — новая сессия');
+    // Панель 61: подсказка о возобновлении не влезает целиком и режется (§2, §7).
+    expect(frame).toContain('ctrl+q g — возобновить');
+    expect(frame).toContain('…');
+  });
+
+  it('pending показывает родителя и путь брифа, но не сам бриф (решение №12)', () => {
+    const parent = session({ id: 's-02', label: 'бэкенд' });
+    const child = session({ id: 's-04', label: 'тесты', parent: 's-02' });
+    const props = cardFor(entry([parent, child]), child, 'pending', 'ctrl+q');
+    const frame = frameOf(props);
+
+    expect(frame).toContain('◌ тесты · pending');
+    expect(frame).toContain('создана сессией «бэкенд»');
+    expect(frame).toContain('.harnas/works/w-0042/briefs/s-04.md');
+    expect(frame).toContain('Enter — запустить');
+  });
+
+  it('exited показывает код выхода и дозаказ резюме', () => {
+    const exited = session({
+      status: 'exited',
+      history: [
+        { status: 'active', at: '2026-09-05T13:00:00.000Z' },
+        { status: 'exited', at: '2026-09-05T14:02:00.000Z', exitCode: 0 },
+      ],
+    });
+    const frame = frameOf({ session: exited, state: 'exited' });
+
+    expect(frame).toContain('○ бэкенд · exited');
+    expect(frame).toContain('код 0');
+    expect(frame).toContain('отчёта не было');
+    expect(frame).toContain('ctrl+q R — дозаказать');
+    expect(frame).toContain('Enter — возобновить');
+  });
+
+  it('done показывает резюме и артефакты', () => {
+    const done = session({
+      status: 'done',
+      summary: 'План готов: 5 шагов',
+      artifacts: [{ kind: 'plan', path: 'works/w-0042/artifacts/plan.md' }],
+      history: [{ status: 'done', at: '2026-09-05T12:40:00.000Z' }],
+    });
+    const frame = frameOf({ session: done, state: 'done' });
+
+    expect(frame).toContain('✓ бэкенд · done');
+    expect(frame).toContain('«План готов: 5 шагов»');
+    expect(frame).toContain('арт: plan:');
+    expect(frame).toContain('перезапишет новый report');
+  });
+
+  it('живая сессия в карточке — только та, чей PTY не у харнесса (5.4)', () => {
+    const outside = session({ status: 'active', pid: 48213, launchedBy: 'cli' });
+    const frame = frameOf({ session: outside, state: 'working' });
+
+    expect(frame).toContain('● бэкенд · working · запущена вне харнесса');
+    expect(frame).toContain('pid 48213');
+    expect(frame).toContain('подключение невозможно');
+    expect(frame).toContain('ctrl+q i — детали');
+  });
+});
+
+describe('подтверждение поверх панели', () => {
+  it('рисует заголовок, текст и подсказку диалога (макет 4.8)', () => {
+    const frame =
+      render(
+        <Panel
+          dialog={{
+            id: 1,
+            spec: {
+              title: 'закрыть ● бэкенд',
+              fields: [],
+              info: ['процессу будет послан SIGHUP · pid 48213'],
+              quote: [],
+              footer: 'Enter — закрыть · Esc',
+            },
+          }}
+          onSubmit={() => {}}
+          onCancel={() => {}}
+          screen={undefined}
+          card={card()}
+          width={61}
+          height={22}
+        />,
+      ).lastFrame() ?? '';
+
+    expect(frame).toContain('закрыть ● бэкенд');
+    expect(frame).toContain('SIGHUP · pid 48213');
+    expect(frame).toContain('Enter — закрыть');
+    // Карточка при этом не рисуется: панель занята подтверждением.
+    expect(frame).not.toContain('pending');
+  });
+});

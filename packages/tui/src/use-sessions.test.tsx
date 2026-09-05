@@ -2,10 +2,11 @@ import type { SessionIndex } from '@harnas/core';
 import { mkdtemp, mkdir, appendFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { Text } from 'ink';
 import { render } from 'ink-testing-library';
+import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Root } from './root.js';
-import { applyChange } from './use-sessions.js';
+import { applyChange, useSessions } from './use-sessions.js';
 
 function session(over: Partial<SessionIndex> = {}): SessionIndex {
   return {
@@ -98,6 +99,14 @@ describe('живое обновление', () => {
     }
   };
 
+  /** Индекс живёт сам по себе: сайдбар показывает работы, а не историю (TUI v2, 2.1). */
+  function Probe({ claudeRoot, codex }: { claudeRoot: string; codex: string }): ReactNode {
+    const { sessions, loading } = useSessions({ claudeRoot, codexRoot: codex });
+    return (
+      <Text>{loading ? '…' : `[${sessions.map((item) => item.title ?? '—').join(',')}]`}</Text>
+    );
+  }
+
   it('дописанный файл перерисовывает список без опроса', async () => {
     const project = path.join(root, '-proj');
     await mkdir(project, { recursive: true });
@@ -107,7 +116,7 @@ describe('живое обновление', () => {
       `${JSON.stringify({ type: 'custom-title', customTitle: 'старое имя', sessionId: 's1' })}\n`,
     );
 
-    const { lastFrame, unmount } = render(<Root root={root} codexRoot={codexRoot} />);
+    const { lastFrame, unmount } = render(<Probe claudeRoot={root} codex={codexRoot} />);
     try {
       await waitFor(() => (lastFrame() ?? '').includes('старое имя'));
 
@@ -117,17 +126,16 @@ describe('живое обновление', () => {
       );
       await waitFor(() => (lastFrame() ?? '').includes('новое имя'));
 
-      expect(lastFrame()).toContain('SESSIONS (1)');
+      expect(lastFrame()).not.toContain('старое имя');
     } finally {
       unmount();
     }
   }, 20_000);
 
-  it('пустой корень показывает внятное пустое состояние', async () => {
-    const { lastFrame, unmount } = render(<Root root={root} codexRoot={codexRoot} />);
+  it('пустой корень даёт пустой индекс, а не ошибку', async () => {
+    const { lastFrame, unmount } = render(<Probe claudeRoot={root} codex={codexRoot} />);
     try {
-      await waitFor(() => (lastFrame() ?? '').includes('SESSIONS (0)'));
-      expect(lastFrame()).toContain('Сессий не найдено');
+      await waitFor(() => (lastFrame() ?? '') === '[]');
     } finally {
       unmount();
     }

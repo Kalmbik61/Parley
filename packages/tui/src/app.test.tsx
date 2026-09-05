@@ -1,3 +1,11 @@
+/**
+ * Сценарии композиции: `new`, авто-заголовок, события и закрытие сессии
+ * (чек-лист спецификации TUI v2, пункты 27–30 и 32).
+ *
+ * Настоящий `claude` здесь не запускается никогда: вместо него stub-бинарь,
+ * а `~/.harnas`, проект и корни истории — во временных каталогах.
+ */
+
 import {
   addSession,
   createWork,
@@ -6,18 +14,18 @@ import {
   transitionSession,
   updateMap,
   workPaths,
+  type SessionIndex,
+  type WorkSession,
 } from '@harnas/core';
 import { render } from 'ink-testing-library';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { pinUnicodeGlyphs } from '../test/glyphs-env.js';
 import { App } from './app.js';
-import { createPendingSession } from './work-launch.js';
 
-/** Настоящий агент в тестах не запускается никогда (specs/pty.md). */
 const STUB = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
@@ -25,33 +33,32 @@ const STUB = path.join(
   'stub-agent.mjs',
 );
 
-/** Дозаказ резюме считает стоковый `claude -p`; в тестах — заглушка core. */
-const SUMMARIZER_STUB = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '..',
-  '..',
-  'core',
-  'test',
-  'stub-summarizer.mjs',
-);
-
-const lineWith = (frame: string, text: string): string =>
-  frame.split('\n').find((line) => line.includes(text)) ?? '';
+/** Префикс харнесса и его действия (дизайн 3.1–3.2). */
+const PREFIX = String.fromCharCode(0x11);
+const PREFIX_NAME = 'ctrl+q';
+const ENTER = '\r';
+const ESC = '\u001B';
 
 pinUnicodeGlyphs();
 
 let home = '';
 let project = '';
+let logs = '';
+const previousBin = process.env['HARNAS_CLAUDE_BIN'];
 
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
   project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
-  process.env.HARNAS_HOME = home;
+  logs = await mkdtemp(path.join(tmpdir(), 'harnas-logs-'));
+  process.env['HARNAS_HOME'] = home;
+  process.env['HARNAS_CLAUDE_BIN'] = STUB;
 });
 
 afterEach(async () => {
-  delete process.env.HARNAS_HOME;
-  await Promise.all([home, project].map((dir) => rm(dir, { recursive: true, force: true })));
+  delete process.env['HARNAS_HOME'];
+  if (previousBin === undefined) delete process.env['HARNAS_CLAUDE_BIN'];
+  else process.env['HARNAS_CLAUDE_BIN'] = previousBin;
+  await Promise.all([home, project, logs].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 const waitFor = async (check: () => boolean, timeoutMs = 8000): Promise<void> => {
@@ -62,494 +69,278 @@ const waitFor = async (check: () => boolean, timeoutMs = 8000): Promise<void> =>
   }
 };
 
-/**
- * Ink подписывается на stdin эффектом, а эффекты React выполняет уже после того,
- * как кадр отрисован: между появлением кадра и готовностью обработчика клавиш
- * есть зазор. Поэтому перед каждым нажатием ждём — иначе клавиша достаётся
- * обработчику прошлого рендера.
- */
-const press = async (app: { stdin: { write: (data: string) => void } }, key: string) => {
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  app.stdin.write(key);
+/** Ink подписывается на stdin эффектом: до подписки запись теряется молча. */
+const mounted = async (stdin: { listenerCount: (event: string) => number }): Promise<void> => {
+  await waitFor(() => stdin.listenerCount('data') > 0 || stdin.listenerCount('readable') > 0);
+  await new Promise((resolve) => setTimeout(resolve, 100));
 };
 
-describe('App', () => {
-  it('рисует три панели и число сессий', () => {
-    const { lastFrame } = render(<App sessions={[]} projectPath={project} />);
-    const frame = lastFrame() ?? '';
-    expect(frame).toContain('SESSIONS (0)');
-    expect(frame).toContain('SUBSESSIONS');
-    expect(frame).toContain('TERMINAL');
-  });
+const lineWith = (frame: string, text: string): string =>
+  frame.split('\n').find((line) => line.includes(text)) ?? '';
 
-  it('пока ничего не открыто — правая панель подсказывает, что делать', () => {
-    const { lastFrame } = render(<App sessions={[]} projectPath={project} />);
-    const frame = lastFrame() ?? '';
-    expect(frame).toContain('Enter на сессии');
-    expect(frame).toContain('Ctrl+Q');
-  });
+const open = (sessions: SessionIndex[] = []): ReturnType<typeof render> =>
+  render(<App sessions={sessions} root={logs} codexRoot={logs} projectPath={project} />);
 
-  it('строка статуса со шпаргалкой стоит внизу в обоих режимах', async () => {
-    const app = render(<App sessions={[]} projectPath={project} />);
+/** Ждём состояния карты: запись идёт после кадра с запущенным агентом. */
+const waitMap = async (
+  workId: string,
+  check: (session: WorkSession) => boolean,
+  timeoutMs = 8000,
+): Promise<WorkSession> => {
+  const started = Date.now();
+  for (;;) {
+    const session = (await readMap(project, workId)).sessions[0];
+    if (session !== undefined && check(session)) return session;
+    if (Date.now() - started > timeoutMs) throw new Error('карта не дождалась');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+};
 
-    const bottom = (): string => (app.lastFrame() ?? '').split('\n').at(-1) ?? '';
-    expect(bottom()).toContain('w · Ctrl+Q');
+const firstWorkId = async (): Promise<string> => {
+  const { works } = await readWorksIndex();
+  const first = works[0];
+  if (first === undefined) throw new Error('работ нет');
+  return first.id;
+};
 
-    await press(app, 'w');
-    await waitFor(() => (app.lastFrame() ?? '').includes('РАБОТЫ'));
-    expect(bottom()).toContain('w · Ctrl+Q');
-    app.unmount();
-  }, 20_000);
-});
-
-describe('режим работ', () => {
-  it('w переключает левую колонку на работы и обратно', async () => {
-    const created = await createWork(project, { title: 'Авторизация' });
-    await updateMap(project, created.work.id, (map) => {
-      addSession(map, { provider: 'codex', label: 'бэкенд', task: 'шаги 1–3' });
-    });
-
-    const app = render(<App sessions={[]} projectPath={project} />);
-    await press(app, 'w');
-    await waitFor(() => (app.lastFrame() ?? '').includes('РАБОТЫ (1)'));
-    const frame = app.lastFrame() ?? '';
-    expect(frame).toContain('Авторизация');
-    expect(frame).toContain('бэкенд');
-    // Нижняя панель в этом режиме — ДЕТАЛИ, а не подсессии (дизайн 1).
-    expect(frame).toContain('ДЕТАЛИ');
-    expect(frame).not.toContain('SUBSESSIONS');
-
-    await press(app, 'w');
-    await waitFor(() => (app.lastFrame() ?? '').includes('SESSIONS (0)'));
-    expect(app.lastFrame()).toContain('SUBSESSIONS');
-    app.unmount();
-  }, 20_000);
-
-  it('без единой работы режим объясняет, что делать', async () => {
-    const app = render(<App sessions={[]} projectPath={project} />);
-    await press(app, 'w');
-    await waitFor(() => (app.lastFrame() ?? '').includes('РАБОТЫ (0)'));
-    expect(app.lastFrame()).toContain('Работ нет.');
-    app.unmount();
-  }, 20_000);
-
-  it('ДЕТАЛИ показывают выбранную сессию, а не работу (дизайн 3)', async () => {
-    const created = await createWork(project, { title: 'Авторизация', goal: 'логин по e-mail' });
-    await updateMap(project, created.work.id, (map) => {
-      addSession(map, { provider: 'codex', label: 'бэкенд', task: 'реализовать шаги 1–3' });
-    });
-
-    const app = render(<App sessions={[]} projectPath={project} />);
-    await press(app, 'w');
-    await waitFor(() => (app.lastFrame() ?? '').includes('бэкенд'));
-    // Выбрана работа — в панели её сводка.
-    expect(app.lastFrame()).toContain('логин по e-mail');
-
-    await press(app, 'j');
-    // Панель меряет свою высоту эффектом, поэтому секции появляются не первым
-    // кадром: ждём последнюю из них, а не первую.
-    await waitFor(() => (app.lastFrame() ?? '').includes('ист:'));
-    const frame = app.lastFrame() ?? '';
-    expect(frame).toContain('реализовать шаги');
-    expect(frame).toContain('ДЕТАЛИ — бэкенд');
-    // Задача, статус, отсутствие отчёта и история — секции панели (дизайн 3).
-    expect(lineWith(frame, 'pending')).toContain('◌');
-    expect(frame).toContain('(отчёта нет)');
-    expect(frame).toContain('ист: ◌');
-    app.unmount();
-  }, 20_000);
-
-  it('Enter на работе сворачивает и разворачивает её', async () => {
-    const created = await createWork(project, { title: 'Авторизация' });
-    await updateMap(project, created.work.id, (map) => {
-      addSession(map, { provider: 'codex', label: 'бэкенд', task: 'шаги 1–3' });
-    });
-
-    const app = render(<App sessions={[]} projectPath={project} />);
-    await press(app, 'w');
-    await waitFor(() => (app.lastFrame() ?? '').includes('бэкенд'));
-
-    await press(app, '\r');
-    await waitFor(() => !(app.lastFrame() ?? '').includes('бэкенд'));
-    // Фокус остался на списках: правая панель по-прежнему с подсказкой.
-    expect(app.lastFrame()).toContain('Enter на сессии');
-
-    await press(app, '\r');
-    await waitFor(() => (app.lastFrame() ?? '').includes('бэкенд'));
-
-    // h сворачивает ту же работу, l разворачивает (дизайн 8).
-    await press(app, 'h');
-    await waitFor(() => !(app.lastFrame() ?? '').includes('бэкенд'));
-    await press(app, 'l');
-    await waitFor(() => (app.lastFrame() ?? '').includes('бэкенд'));
-    app.unmount();
-  }, 20_000);
-
-  it('клавиши дерева работ ничего не делают в режиме «все сессии» (дизайн 8)', async () => {
-    const created = await createWork(project, { title: 'Авторизация' });
-    await updateMap(project, created.work.id, (map) => {
-      addSession(map, { provider: 'codex', label: 'бэкенд', task: 'шаги 1–3' });
-    });
-
-    const app = render(<App sessions={[]} projectPath={project} />);
-    // Сначала убеждаемся, что работа прочитана и развёрнута.
-    await press(app, 'w');
-    await waitFor(() => (app.lastFrame() ?? '').includes('бэкенд'));
-    await press(app, 'w');
-    await waitFor(() => (app.lastFrame() ?? '').includes('SESSIONS (0)'));
-
-    // В чужом режиме h и l трогать дерево не должны: выбранная строка — индекс
-    // списка сессий, по нему свернулась бы посторонняя работа.
-    await press(app, 'h');
-    await press(app, 'l');
-    await press(app, 'h');
-
-    await press(app, 'w');
-    await waitFor(() => (app.lastFrame() ?? '').includes('РАБОТЫ (1)'));
-    expect(app.lastFrame()).toContain('бэкенд');
-    expect(lineWith(app.lastFrame() ?? '', 'Авторизация')).toContain('▾');
-    app.unmount();
-  }, 20_000);
-});
-
-describe('диалоги, запуск и жизненный цикл', () => {
-  const previousBin = process.env.HARNAS_CLAUDE_BIN;
-  let logs = '';
-
-  beforeEach(async () => {
-    // Корень истории — пустой временный каталог: настоящий ~/.claude не читаем.
-    logs = await mkdtemp(path.join(tmpdir(), 'harnas-logs-'));
-    process.env.HARNAS_CLAUDE_BIN = STUB;
-    process.env.HARNAS_CODEX_BIN = STUB;
-  });
-
-  afterEach(async () => {
-    if (previousBin === undefined) delete process.env.HARNAS_CLAUDE_BIN;
-    else process.env.HARNAS_CLAUDE_BIN = previousBin;
-    delete process.env.HARNAS_CODEX_BIN;
-    await rm(logs, { recursive: true, force: true });
-  });
-
-  const ENTER = '\r';
-  const ESC = '\u001B';
-
-  // Оба корня истории — во временном каталоге: настоящие ~/.claude и ~/.codex
-  // тесты не читают даже на выходе процесса, когда фиксируются метрики.
-  const open = (): ReturnType<typeof render> =>
-    render(<App sessions={[]} root={logs} codexRoot={logs} projectPath={project} />);
-
-  const works = async (app: ReturnType<typeof render>): Promise<void> => {
-    await press(app, 'w');
-    await waitFor(() => (app.lastFrame() ?? '').includes('РАБОТЫ'));
+/** Индекс лога провайдера: из него берётся заголовок Claude Code (5.1). */
+function logIndex(id: string, title: string): SessionIndex {
+  return {
+    id,
+    project: '-tmp',
+    projectPath: project,
+    cwd: project,
+    gitBranch: 'main',
+    version: '2.1.247',
+    file: path.join(logs, `${id}.jsonl`),
+    title,
+    titleSource: 'ai',
+    startedAt: '2026-09-05T09:00:00.000Z',
+    endedAt: '2026-09-05T09:10:00.000Z',
+    lastUserRecordAt: null,
+    durationMs: 600_000,
+    records: 5,
+    malformedLines: 0,
+    models: {},
+    tools: {},
+    roles: {},
+    recordTypes: {},
+    primaryModel: 'claude-opus-5',
+    subsessionCount: 0,
+    provider: 'claude',
+    tokens: null,
   };
+}
 
-  /** Ждём состояния карты: запись идёт после кадра с запущенным агентом. */
-  const waitMap = async (workId: string, check: (status: string) => boolean): Promise<void> => {
-    const started = Date.now();
-    for (;;) {
-      const session = (await readMap(project, workId)).sessions[0];
-      if (session !== undefined && check(session.status)) return;
-      if (Date.now() - started > 8000) throw new Error('карта не дождалась');
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-  };
+/** Общее начало сценариев 27, 28 и 32: `prefix c` поднимает stub в панели. */
+const launch = async (app: ReturnType<typeof render>): Promise<string> => {
+  await mounted(app.stdin);
+  app.stdin.write(`${PREFIX}c`);
+  await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
+  return firstWorkId();
+};
 
-  it('N создаёт работу через диалог (4.1)', async () => {
+describe('new: быстрая сессия без диалога (5.1)', () => {
+  it('27: без работ заводит работу «без названия» и запускает агента с хуками', async () => {
     const app = open();
     try {
-      await works(app);
-      await press(app, 'N');
-      await waitFor(() => (app.lastFrame() ?? '').includes('НОВАЯ РАБОТА'));
-      // Проект в диалоге не выбирается — он всегда cwd харнесса (решение №9).
-      expect(app.lastFrame()).toContain('Проект:');
+      const workId = await launch(app);
+      const session = await waitMap(workId, (item) => item.status === 'active');
 
-      // Диалог модален: `w` печатается в поле, а не переключает режим колонки.
-      await press(app, 'w');
-      await press(app, 'Платежи');
-      await waitFor(() => (app.lastFrame() ?? '').includes('wПлатежи'));
-      expect(app.lastFrame()).toContain('РАБОТЫ');
-      await press(app, ENTER);
-      await press(app, ENTER);
+      // Работа создана автоматически, с пустой целью (5.1).
+      const { works } = await readWorksIndex();
+      expect(works).toHaveLength(1);
+      expect(works[0]?.title).toBe('без названия');
 
-      await waitFor(() => (app.lastFrame() ?? '').includes('РАБОТЫ (1)'));
-      // Диалог закрылся, на его месте снова ДЕТАЛИ.
-      expect(app.lastFrame()).toContain('ДЕТАЛИ');
-      const index = await readWorksIndex();
-      expect(index.works.map((work) => work.title)).toEqual(['wПлатежи']);
+      // Аргументы реестра доехали до бинаря: id сессии, MCP и файл хуков.
+      const frame = app.lastFrame() ?? '';
+      expect(frame).toContain('flags=--session-id,--mcp-config,--settings');
+      // Окружение: по нему хук и MCP-сервер узнают, кто звонит.
+      expect(frame).toContain(`harnas=${session.id}@${workId}`);
+
+      expect(session.launchedBy).toBe('tui');
+      expect(session.pid).toBeGreaterThan(0);
+      expect(session.providerSessionId).toMatch(/^[0-9a-f]{8}-/);
+      // Бриф быстрой сессии не пишется: она стартует без промпта (5.1).
+      expect(frame).not.toContain('{prompt}');
     } finally {
       app.unmount();
     }
   }, 30_000);
 
-  it('Esc закрывает диалог, не создавая работы', async () => {
+  it('28: заголовок Claude Code один раз переименовывает сессию и работу', async () => {
     const app = open();
     try {
-      await works(app);
-      await press(app, 'N');
-      await waitFor(() => (app.lastFrame() ?? '').includes('НОВАЯ РАБОТА'));
-      await press(app, ESC);
-      await waitFor(() => !(app.lastFrame() ?? '').includes('НОВАЯ РАБОТА'));
+      const workId = await launch(app);
+      const session = await waitMap(workId, (item) => item.providerSessionId !== null);
+      const uuid = session.providerSessionId as string;
 
-      expect((await readWorksIndex()).works).toEqual([]);
-    } finally {
-      app.unmount();
-    }
-  }, 30_000);
-
-  it('n в режиме работ создаёт pending сессию с брифом (4.2)', async () => {
-    const created = await createWork(project, { title: 'Авторизация' });
-    const app = open();
-    try {
-      await works(app);
-      await press(app, 'n');
-      await waitFor(() => (app.lastFrame() ?? '').includes('НОВАЯ СЕССИЯ'));
-      expect(app.lastFrame()).toContain('Провайдер');
-      // Настоящий агент не запускается: диалог живёт в левой колонке, а фокус
-      // остаётся на списках — правая панель по-прежнему с подсказкой.
-      expect(app.lastFrame()).not.toContain('stub готов');
-      expect(app.lastFrame()).toContain('Enter на сессии');
-
-      await press(app, ENTER);
-      await press(app, 'тесты');
-      await press(app, ENTER);
-      await press(app, 'прогнать e2e');
-      await press(app, ENTER);
-
-      await waitFor(() => (app.lastFrame() ?? '').includes('тесты'));
-      const map = await readMap(project, created.work.id);
-      expect(map.sessions).toHaveLength(1);
-      expect(map.sessions[0]?.status).toBe('pending');
-      const brief = await readFile(
-        path.join(workPaths(project, created.work.id).briefs, `${map.sessions[0]?.id}.md`),
-        'utf8',
+      app.rerender(
+        <App
+          sessions={[logIndex(uuid, 'Починить сборку')]}
+          root={logs}
+          codexRoot={logs}
+          projectPath={project}
+        />,
       );
-      expect(brief).toContain('прогнать e2e');
-    } finally {
-      app.unmount();
-    }
-  }, 30_000);
+      await waitMap(workId, (item) => item.label === 'Починить сборку');
+      expect((await readMap(project, workId)).work.title).toBe('Починить сборку');
 
-  it('Enter на ◌ показывает бриф и запускает агента с командой из реестра (4.3)', async () => {
-    const created = await createWork(project, { title: 'Авторизация' });
-    const workId = created.work.id;
-    const sessionId = await createPendingSession(project, workId, {
-      provider: 'claude',
-      label: 'тесты',
-      task: 'прогнать e2e',
-    });
-
-    const app = open();
-    try {
-      await works(app);
-      await press(app, 'j');
-      await waitFor(() => (app.lastFrame() ?? '').includes('ДЕТАЛИ — тесты'));
-
-      await press(app, ENTER);
-      await waitFor(() => (app.lastFrame() ?? '').includes('ЗАПУСК'));
-      const dialog = app.lastFrame() ?? '';
-      expect(dialog).toContain(`бриф: briefs/${sessionId}.md`);
-      // Тело диалога — первые строки брифа с диска.
-      expect(dialog).toContain('Авторизация');
-      expect(dialog).not.toContain('stub готов');
-
-      await press(app, ENTER);
-      await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
-      // Окружение сессии доехало до процесса: по нему MCP-сервер узнаёт звонящего.
-      await waitFor(() => (app.lastFrame() ?? '').includes(`harnas=${sessionId}@${workId}`));
-      expect(app.lastFrame()).toContain('--session-id');
-
-      await waitMap(workId, (status) => status === 'active');
-      const session = (await readMap(project, workId)).sessions[0];
-      expect(session?.providerSessionId).toMatch(/^[0-9a-f]{8}-/);
-    } finally {
-      app.unmount();
-    }
-  }, 30_000);
-
-  it('процесс не запустился — сессия остаётся pending, а не залипает в active', async () => {
-    // Бинаря провайдера в PATH нет: спавна не будет вовсе (спецификация, раздел 8).
-    process.env.HARNAS_CLAUDE_BIN = path.join(logs, 'нет-такого-бинаря');
-    const created = await createWork(project, { title: 'Авторизация' });
-    const workId = created.work.id;
-    await createPendingSession(project, workId, {
-      provider: 'claude',
-      label: 'тесты',
-      task: 'прогнать e2e',
-    });
-
-    const app = open();
-    try {
-      await works(app);
-      await press(app, 'j');
-      await waitFor(() => (app.lastFrame() ?? '').includes('ДЕТАЛИ — тесты'));
-      await press(app, ENTER);
-      await waitFor(() => (app.lastFrame() ?? '').includes('ЗАПУСК'));
-      await press(app, ENTER);
-
-      await waitFor(() => (app.lastFrame() ?? '').includes('не найден в PATH'));
-      // Ждём заведомо дольше, чем идёт запись карты после удачного запуска.
+      // Ручное переименование авто-заголовок больше не трогает (5.1).
+      await updateMap(project, workId, (map) => {
+        const target = map.sessions[0];
+        if (target !== undefined) target.label = 'мой ярлык';
+      });
+      app.rerender(
+        <App
+          sessions={[logIndex(uuid, 'Совсем другой заголовок')]}
+          root={logs}
+          codexRoot={logs}
+          projectPath={project}
+        />,
+      );
       await new Promise((resolve) => setTimeout(resolve, 400));
-
-      const session = (await readMap(project, workId)).sessions[0];
-      expect(session?.status).toBe('pending');
-      expect(session?.providerSessionId).toBeNull();
-      expect(session?.history.map((entry) => entry.status)).toEqual(['pending']);
+      expect((await readMap(project, workId)).sessions[0]?.label).toBe('мой ярлык');
     } finally {
       app.unmount();
     }
   }, 30_000);
+});
 
-  it('выход процесса переводит сессию в exited с кодом выхода', async () => {
+describe('события и просмотр (4.1, 6)', () => {
+  /** Живая сессия, поднятая не харнессом: её состояние ведут хуки. */
+  const outsideSession = async (label: string): Promise<{ workId: string; id: string }> => {
     const created = await createWork(project, { title: 'Авторизация' });
-    const workId = created.work.id;
-    await createPendingSession(project, workId, {
-      provider: 'claude',
-      label: 'тесты',
-      task: 'прогнать e2e',
-    });
-
-    const app = open();
-    try {
-      await works(app);
-      await press(app, 'j');
-      await waitFor(() => (app.lastFrame() ?? '').includes('ДЕТАЛИ — тесты'));
-      await press(app, ENTER);
-      await waitFor(() => (app.lastFrame() ?? '').includes('ЗАПУСК'));
-      await press(app, ENTER);
-      await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
-      await waitMap(workId, (status) => status === 'active');
-
-      // Фокус после запуска в терминале — ввод идёт агенту.
-      app.stdin.write('exit 3\r');
-      await waitMap(workId, (status) => status === 'exited');
-
-      const session = (await readMap(project, workId)).sessions[0];
-      expect(session?.history.at(-1)).toMatchObject({ status: 'exited', exitCode: 3 });
-    } finally {
-      app.unmount();
-    }
-  }, 30_000);
-
-  it('Enter на живой сессии вне харнесса объясняет, что attach невозможен', async () => {
-    const created = await createWork(project, { title: 'Авторизация' });
+    let id = '';
     await updateMap(project, created.work.id, (map) => {
-      const session = addSession(map, { provider: 'codex', label: 'бэкенд', task: 'шаги 1–3' });
+      const session = addSession(map, { provider: 'claude', label, task: 'шаги 1–3' });
       transitionSession(map, session.id, 'active');
+      id = session.id;
     });
+    await mkdir(workPaths(project, created.work.id).events, { recursive: true });
+    return { workId: created.work.id, id };
+  };
 
-    const app = open();
-    try {
-      await works(app);
-      await press(app, 'j');
-      await waitFor(() => (app.lastFrame() ?? '').includes('ДЕТАЛИ — бэкенд'));
+  const hook = (name: string, extra: Record<string, unknown> = {}): string =>
+    `${JSON.stringify({ hook_event_name: name, ...extra })}\n`;
 
-      await press(app, ENTER);
-      await waitFor(() => (app.lastFrame() ?? '').includes('вне харнесса'));
-      // Диалога при этом нет: живая сессия открывается справа, а не спрашивает.
-      expect(app.lastFrame()).not.toContain('ВОЗОБНОВИТЬ');
-      expect(app.lastFrame()).not.toContain('stub готов');
-    } finally {
-      app.unmount();
-    }
-  }, 30_000);
-
-  it('Enter на вышедшей сессии предлагает возобновление (4.4)', async () => {
-    const created = await createWork(project, { title: 'Авторизация' });
-    const workId = created.work.id;
-    const sessionId = await createPendingSession(project, workId, {
-      provider: 'codex',
-      label: 'бэкенд',
-      task: 'шаги 1–3',
-    });
-    await updateMap(project, workId, (map) => {
-      const session = transitionSession(map, sessionId, 'active');
-      session.providerSessionId = '7fa0e1ee-cc7b-4a1e-9d4e-000000000001';
-      transitionSession(map, sessionId, 'exited', { exitCode: 0 });
-    });
-
-    const app = open();
-    try {
-      await works(app);
-      await press(app, 'j');
-      await waitFor(() => (app.lastFrame() ?? '').includes('ДЕТАЛИ — бэкенд'));
-
-      await press(app, ENTER);
-      await waitFor(() => (app.lastFrame() ?? '').includes('ВОЗОБНОВИТЬ'));
-      const dialog = app.lastFrame() ?? '';
-      expect(dialog).toContain('resume');
-      expect(dialog).toContain('код 0');
-      expect(dialog).toContain('отчёта не было');
-
-      await press(app, ENTER);
-      await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
-      await waitMap(workId, (status) => status === 'active');
-
-      const session = (await readMap(project, workId)).sessions[0];
-      // Id сессии в карте тот же, прежний id у провайдера не потерян.
-      expect(session?.id).toBe(sessionId);
-      expect(session?.providerSessionId).toBe('7fa0e1ee-cc7b-4a1e-9d4e-000000000001');
-    } finally {
-      app.unmount();
-    }
-  }, 30_000);
-
-  it('s на вышедшей сессии дозаказывает резюме (4.5)', async () => {
-    const created = await createWork(project, { title: 'Авторизация' });
-    const workId = created.work.id;
-    const providerSessionId = '7fa0e1ee-cc7b-4a1e-9d4e-000000000002';
-    const sessionId = await createPendingSession(project, workId, {
-      provider: 'claude',
-      label: 'бэкенд',
-      task: 'шаги 1–3',
-    });
-    await updateMap(project, workId, (map) => {
-      const session = transitionSession(map, sessionId, 'active');
-      session.providerSessionId = providerSessionId;
-      transitionSession(map, sessionId, 'exited', { exitCode: 0 });
-    });
-    // Лог сессии, по которому считается резюме: временный корень, не ~/.claude.
-    await mkdir(path.join(logs, '-tmp-проект'), { recursive: true });
-    await writeFile(
-      path.join(logs, '-tmp-проект', `${providerSessionId}.jsonl`),
-      JSON.stringify({
-        type: 'user',
-        timestamp: '2026-09-02T10:00:00.000Z',
-        message: { role: 'user', content: [{ type: 'text', text: 'почини сборку' }] },
-      }),
-      'utf8',
+  it('29: blocked у неподключённой сессии поднимает ⚑, подключение его гасит', async () => {
+    const { workId, id } = await outsideSession('ревью');
+    await appendFile(
+      path.join(workPaths(project, workId).events, `${id}.jsonl`),
+      hook('Notification', { notification_type: 'permission_prompt' }),
     );
-    // Настоящий claude не запускается: вместо него отвечает заглушка core.
-    process.env.HARNAS_CLAUDE_BIN = SUMMARIZER_STUB;
-    process.env.HARNAS_STUB_SUMMARY = 'Сборка починена по транскрипту.';
 
     const app = open();
     try {
-      await works(app);
-      await press(app, 'j');
-      await waitFor(() => (app.lastFrame() ?? '').includes('ДЕТАЛИ — бэкенд'));
+      await mounted(app.stdin);
+      await waitFor(() => (app.lastFrame() ?? '').includes('ревью ждёт ответа'));
+      expect(app.lastFrame()).toContain('⚑');
 
-      await press(app, 's');
-      await waitFor(() => (app.lastFrame() ?? '').includes('РЕЗЮМЕ'));
-      expect(app.lastFrame()).toContain('claude -p');
-
-      await press(app, ENTER);
-      // Пока считается, сводка так и говорит (дизайн 4.5).
-      await waitFor(() => (app.lastFrame() ?? '').includes('считается'));
-
-      const started = Date.now();
-      for (;;) {
-        const session = (await readMap(project, workId)).sessions[0];
-        if (session?.summary === 'Сборка починена по транскрипту.') {
-          expect(session.summarySource).toBe('auto');
-          // Статус дозаказом не меняется: сессия как вышла, так и осталась.
-          expect(session.status).toBe('exited');
-          break;
-        }
-        if (Date.now() - started > 8000) throw new Error('резюме не дождались');
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
+      // Подключение к сессии-источнику гасит событие (дизайн 6).
+      app.stdin.write(`${PREFIX}j`);
+      await waitFor(() => !(app.lastFrame() ?? '').includes('ждёт ответа'));
     } finally {
-      delete process.env.HARNAS_STUB_SUMMARY;
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('30: подключение гасит unseen', async () => {
+    const { workId, id } = await outsideSession('план');
+    await appendFile(path.join(workPaths(project, workId).events, `${id}.jsonl`), hook('Stop'));
+
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'план').includes('unseen'));
+
+      app.stdin.write(`${PREFIX}j`);
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'план').includes('idle'));
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('в режиме навигации ходьба не подключает, а Enter подключает (3.2)', async () => {
+    const { workId, id } = await outsideSession('план');
+    await appendFile(path.join(workPaths(project, workId).events, `${id}.jsonl`), hook('Stop'));
+
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'план').includes('unseen'));
+
+      app.stdin.write(`${PREFIX}s`);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      // Ходьба по сайдбару — это ещё не подключение: `unseen` держится.
+      app.stdin.write('j');
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(lineWith(app.lastFrame() ?? '', 'план')).toContain('unseen');
+
+      app.stdin.write(ENTER);
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'план').includes('idle'));
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+});
+
+describe('строка статуса (макеты §3)', () => {
+  it('после префикса строка показывает список действий, клавиша его убирает', async () => {
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      app.stdin.write(PREFIX);
+      await waitFor(() => (app.lastFrame() ?? '').includes(`${PREFIX_NAME} …`));
+      expect(app.lastFrame()).toContain('? все');
+
+      // Неизвестная клавиша молча отменяет префикс.
+      app.stdin.write('z');
+      await waitFor(() => !(app.lastFrame() ?? '').includes(`${PREFIX_NAME} …`));
+      expect(app.lastFrame()).toContain(`${PREFIX_NAME} ?`);
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+});
+
+describe('закрытие сессии (3.2, макет 4.8)', () => {
+  it('32: prefix x спрашивает подтверждение, шлёт SIGHUP и переводит в exited', async () => {
+    const app = open();
+    try {
+      const workId = await launch(app);
+      await waitMap(workId, (item) => item.status === 'active');
+
+      app.stdin.write(`${PREFIX}x`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('SIGHUP'));
+      // Пока подтверждение открыто, ввод ему, а не гостю.
+      expect(app.lastFrame()).toContain('Enter — закрыть');
+
+      // Подтверждение подписывается на ввод эффектом: до подписки клавиша пропала бы.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      app.stdin.write(ENTER);
+      const session = await waitMap(workId, (item) => item.status === 'exited');
+      expect(session.history.at(-1)?.status).toBe('exited');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('prefix q при живой сессии спрашивает подтверждение выхода (макет 4.9)', async () => {
+    const app = open();
+    try {
+      const workId = await launch(app);
+      await waitMap(workId, (item) => item.status === 'active');
+
+      app.stdin.write(`${PREFIX}q`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('живые сессии'));
+      expect(app.lastFrame()).toContain('Enter — выйти');
+
+      // Esc оставляет харнесс на месте: панель снова у агента.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      app.stdin.write(ESC);
+      await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
+    } finally {
       app.unmount();
     }
   }, 30_000);

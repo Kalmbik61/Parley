@@ -10,13 +10,16 @@ import {
   activityOf,
   openEvents,
   watchEvents,
+  workPaths,
   type ActivityLog,
   type EventRecord,
   type SessionActivity,
+  type WorkEntry,
   type WorkSession,
 } from '@harnas/core';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { dotState, maxDotState, type DotState } from './components/activity-dot.js';
+import { workKey } from './work-rows.js';
 
 export interface ActivityWork {
   /** Ключ работы: `workKey(projectPath, id)`. */
@@ -25,6 +28,13 @@ export interface ActivityWork {
   eventsDir: string;
   sessions: readonly WorkSession[];
 }
+
+/** Работа для подписки: журналы хуков лежат в её каталоге `events/` (4.2). */
+export const activityWork = (entry: WorkEntry): ActivityWork => ({
+  key: workKey(entry.projectPath, entry.map.work.id),
+  eventsDir: workPaths(entry.projectPath, entry.map.work.id).events,
+  sessions: entry.map.sessions,
+});
 
 export interface ActivityOptions {
   works: readonly ActivityWork[];

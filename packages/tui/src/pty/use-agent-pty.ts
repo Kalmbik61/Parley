@@ -94,7 +94,11 @@ export interface AgentPtyState {
   alive(key: string): boolean;
   /** Перезапустить агента активной панели после его завершения. */
   restart(size: PtySize): void;
-  close(): void;
+  /**
+   * Закрыть панель по ключу (по умолчанию активную): процессу уходит SIGHUP,
+   * как при закрытии терминала (дизайн TUI v2, 3.2 и макет 4.8).
+   */
+  close(key?: string): void;
 }
 
 /**
@@ -112,9 +116,10 @@ export interface AgentPtyOptions {
   /**
    * Процесс цели запущен. Только по этому событию слой координации переводит
    * сессию работы в `active`: статус «процесс идёт» ставится, когда он идёт
-   * на самом деле (спецификация, раздел 5).
+   * на самом деле (спецификация, раздел 5). Вторым аргументом — сам PTY: из
+   * него берётся `pid` для проверки живости после перезапуска (5.4).
    */
-  onStart?: (target: AgentTarget) => void;
+  onStart?: (target: AgentTarget, pty: PtySession) => void;
   /**
    * Процесс цели завершился. Слой координации переводит по этому событию
    * сессию работы в `exited` и фиксирует её метрики (спецификация, раздел 6).
@@ -178,7 +183,7 @@ export function useAgentPty({ onStart, onExit, onFail }: AgentPtyOptions = {}): 
         { target, title: targetTitle(target), session, exit: undefined },
       ]);
       setActiveKey(key);
-      started.current?.(target);
+      started.current?.(target, session);
     } catch (reason: unknown) {
       const message = reason instanceof Error ? reason.message : String(reason);
       setError(message);
@@ -261,13 +266,16 @@ export function useAgentPty({ onStart, onExit, onFail }: AgentPtyOptions = {}): 
     [runs],
   );
 
-  const close = useCallback(() => {
-    if (activeKey === undefined) return;
-    live.current.get(activeKey)?.kill();
-    live.current.delete(activeKey);
-    setRuns((prev) => prev.filter((run) => targetKey(run.target) !== activeKey));
-    setActiveKey(undefined);
-  }, [activeKey]);
+  const close = useCallback<AgentPtyState['close']>(
+    (key = activeKey) => {
+      if (key === undefined) return;
+      live.current.get(key)?.kill();
+      live.current.delete(key);
+      setRuns((prev) => prev.filter((run) => targetKey(run.target) !== key));
+      setActiveKey((current) => (current === key ? undefined : current));
+    },
+    [activeKey],
+  );
 
   const active = runs.find((run) => targetKey(run.target) === activeKey);
 

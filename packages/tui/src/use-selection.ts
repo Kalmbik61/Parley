@@ -25,6 +25,8 @@ export interface SelectionState {
   work: string | null;
   session: string | null;
   selectWork: (key: string) => void;
+  /** Выбрать сессию, не подключаясь: ходьба по сайдбару в режиме навигации (3.2). */
+  selectSession: (sessionId: string) => void;
   /** Выбрать сессию и подключить к ней панель. */
   attach: (sessionId: string) => void;
 }
@@ -48,6 +50,8 @@ export function useSelection({ works, onAttach }: SelectionOptions): SelectionSt
     setChosenSession(null);
   }, []);
 
+  const selectSession = useCallback((sessionId: string) => setChosenSession(sessionId), []);
+
   const attach = useCallback(
     (sessionId: string) => {
       setChosenSession(sessionId);
@@ -56,5 +60,5 @@ export function useSelection({ works, onAttach }: SelectionOptions): SelectionSt
     [onAttach],
   );
 
-  return { work: work?.key ?? null, session, selectWork, attach };
+  return { work: work?.key ?? null, session, selectWork, selectSession, attach };
 }

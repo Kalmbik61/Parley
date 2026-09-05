@@ -30,6 +30,11 @@ export interface PrefixInputOptions {
   prefixByte: number;
   /** Клавиша, нажатая после префикса. Неизвестную колбэк просто игнорирует. */
   onAction: (key: string) => void;
+  /**
+   * Автомат ждёт вторую клавишу или дождался: по этому строка статуса
+   * показывает `ctrl+q …` со списком действий (макеты §3).
+   */
+  onAwait?: (awaiting: boolean) => void;
   /** Байты, принадлежащие гостю. */
   toGuest: (data: string) => void;
   /** Открыт оверлей или сайдбар в режиме навигации: ввод идёт им, не гостю. */
@@ -111,6 +116,7 @@ export function routeInput(data: Buffer, state: PrefixState, options: PrefixInpu
   const {
     prefixByte,
     onAction,
+    onAwait,
     toGuest,
     capture = false,
     onCapture,
@@ -131,6 +137,7 @@ export function routeInput(data: Buffer, state: PrefixState, options: PrefixInpu
   while (at < data.length) {
     if (state.awaiting) {
       state.awaiting = false;
+      onAwait?.(false);
       const key = data[at] as number;
       at += 1;
       pending = at;
@@ -145,6 +152,7 @@ export function routeInput(data: Buffer, state: PrefixState, options: PrefixInpu
       at += 1;
       pending = at;
       state.awaiting = true;
+      onAwait?.(true);
       continue;
     }
 

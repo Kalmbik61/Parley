@@ -182,3 +182,31 @@ export function summaryDialog(row: WorkRowSession, g: Glyphs, width: number): Di
     footer: 'Enter — заказать · Esc',
   };
 }
+
+/**
+ * 4.8. Закрытие живой сессии: процессу уйдёт SIGHUP, транскрипт останется у
+ * провайдера — карту и историю харнесс не трогает.
+ */
+export function closeSessionDialog(session: WorkSession, g: Glyphs): DialogSpec {
+  return {
+    title: `закрыть ${statusGlyph(session.status, g)} ${session.label}`,
+    fields: [],
+    info: [
+      `процессу будет послан SIGHUP${session.pid === null ? '' : ` · pid ${session.pid}`}`,
+      'транскрипт останется в ~/.claude',
+    ],
+    quote: [],
+    footer: 'Enter — закрыть · Esc',
+  };
+}
+
+/** 4.9. Выход при живых сессиях: их процессы получают SIGHUP (решение №5). */
+export function exitDialog(live: readonly string[]): DialogSpec {
+  return {
+    title: 'выход',
+    fields: [],
+    info: [`живые сессии: ${live.join(', ')}`, 'их процессы будут завершены'],
+    quote: [],
+    footer: 'Enter — выйти · Esc — остаться',
+  };
+}

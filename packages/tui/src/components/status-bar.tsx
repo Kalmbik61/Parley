@@ -9,18 +9,65 @@ export interface StatusBarProps {
   count: number;
   event: Pick<StatusEvent, 'text' | 'hint'> | null;
   width: number;
+  /** Имя префикса в подсказке и в списке действий (дизайн TUI v2, 3.1). */
+  prefix: string;
+  /** Нажат префикс, ждём вторую клавишу: вместо события — список действий (§3). */
+  awaiting?: boolean;
 }
 
-/** Короткая шпаргалка режима: режим переключается `w`, из терминала выходит Ctrl+Q. */
-const TAIL = 'w · Ctrl+Q';
+/**
+ * Действия префикса в порядке макета §3. Отбрасываются с конца, пока строка не
+ * влезет; `? все` не отбрасывается никогда.
+ */
+const ACTIONS: readonly string[] = [
+  'c новая',
+  'w работы',
+  'g история',
+  'i детали',
+  's сайдбар',
+  'j/k сессии',
+  'x закрыть',
+  'r возобновить',
+];
+const HELP = '? все';
+
+/** Список действий по ширине: с конца, пока влезает (макеты §3). */
+export function prefixHint(prefix: string, width: number): string {
+  const head = ` ${prefix} … `;
+  const room = Math.max(0, width - head.length);
+  for (let count = ACTIONS.length; count > 0; count--) {
+    const line = [...ACTIONS.slice(0, count), HELP].join(' · ');
+    if (line.length <= room) return `${head}${line}`;
+  }
+  return `${head}${HELP}`;
+}
 
 /**
  * Строка статуса — единственный канал уведомлений (дизайн координации TUI, 5).
- * Живёт вне рамок, на всю ширину терминала, в обоих режимах левой колонки.
+ * Живёт вне сетки сайдбара, на всю ширину терминала. Четыре состояния макетов
+ * §3: пустое, событие `⚑`, ожидание второй клавиши префикса и предупреждение
+ * (оно приходит обычным событием).
  */
-export function StatusBar({ count, event, width }: StatusBarProps): ReactNode {
+export function StatusBar({
+  count,
+  event,
+  width,
+  prefix,
+  awaiting = false,
+}: StatusBarProps): ReactNode {
   const g = glyphs();
-  const room = Math.max(0, width - TAIL.length - 2);
+  const tail = `${prefix} ?`;
+
+  // Пока ждём вторую клавишу, справа ничего нет: подсказка занимает всю строку.
+  if (awaiting) {
+    return (
+      <Box width={width}>
+        <Text wrap="truncate">{prefixHint(prefix, width)}</Text>
+      </Box>
+    );
+  }
+
+  const room = Math.max(0, width - tail.length - 2);
   const flag = count > 1 ? `${g.flag}${count}` : g.flag;
   const head = event === null ? '' : `${flag} ${event.text}`;
   const hint = event === null || event.hint === undefined ? '' : ` · ${event.hint}`;
@@ -40,7 +87,7 @@ export function StatusBar({ count, event, width }: StatusBarProps): ReactNode {
           </>
         )}
       </Text>
-      <Text dimColor>{TAIL}</Text>
+      <Text dimColor>{tail}</Text>
     </Box>
   );
 }

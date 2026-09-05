@@ -12,7 +12,7 @@ export interface RootProps {
 
 /** Связывает живой список сессий всех провайдеров с приложением. */
 export function Root({ root, codexRoot }: RootProps): ReactNode {
-  const { sessions, loading, rescan } = useSessions({
+  const { sessions, loading } = useSessions({
     ...(root === undefined ? {} : { claudeRoot: root }),
     ...(codexRoot === undefined ? {} : { codexRoot }),
   });
@@ -21,7 +21,6 @@ export function Root({ root, codexRoot }: RootProps): ReactNode {
   return (
     <App
       sessions={sessions}
-      onRescan={rescan}
       {...(root === undefined ? {} : { root })}
       {...(codexRoot === undefined ? {} : { codexRoot })}
     />

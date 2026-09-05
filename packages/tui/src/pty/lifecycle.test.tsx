@@ -1,10 +1,18 @@
-import type { SessionIndex } from '@harnas/core';
+/**
+ * Жизненный цикл агента в панели (TUI v2, 2.2 и 5.1): процесс вышел — панель
+ * показывает карточку `exited` с кодом выхода, а карта фиксирует переход.
+ *
+ * Настоящий агент не запускается никогда: вместо него stub-бинарь (specs/pty.md).
+ */
+
+import { readMap, readWorksIndex } from '@harnas/core';
+import { render } from 'ink-testing-library';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { render } from 'ink-testing-library';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { pinUnicodeGlyphs } from '../../test/glyphs-env.js';
 import { App } from '../app.js';
 
 const STUB = path.join(
@@ -15,39 +23,9 @@ const STUB = path.join(
   'stub-agent.mjs',
 );
 
-const ENTER = '\r';
-/** Префикс харнесса и единственное подключённое действие: `s` — фокус в списки. */
-const TO_LISTS = `${String.fromCharCode(0x11)}s`;
-const TAB = '\t';
+const PREFIX = String.fromCharCode(0x11);
 
-function session(over: Partial<SessionIndex> = {}): SessionIndex {
-  return {
-    id: 'сессия-1',
-    project: '-proj',
-    projectPath: '/work',
-    cwd: null,
-    gitBranch: 'main',
-    version: '2.1.247',
-    file: `/root/${over.id ?? 'сессия-1'}.jsonl`,
-    title: 'первая',
-    titleSource: 'custom',
-    startedAt: '2026-09-01T10:00:00.000Z',
-    endedAt: '2026-09-01T10:10:00.000Z',
-    lastUserRecordAt: null,
-    durationMs: 600_000,
-    records: 5,
-    malformedLines: 0,
-    models: {},
-    tools: {},
-    roles: {},
-    recordTypes: {},
-    primaryModel: 'claude-opus-5',
-    subsessionCount: 0,
-    provider: 'claude',
-    tokens: null,
-    ...over,
-  };
-}
+pinUnicodeGlyphs();
 
 const waitFor = async (check: () => boolean, timeoutMs = 8000): Promise<void> => {
   const started = Date.now();
@@ -57,176 +35,57 @@ const waitFor = async (check: () => boolean, timeoutMs = 8000): Promise<void> =>
   }
 };
 
-/**
- * Ink подписывается на stdin в эффекте после монтирования, а stdin в тестах —
- * заглушка: запись до подписки теряется молча. Ждём саму подписку, а не паузу.
- */
-const mounted = async (stdin: { listenerCount: (event: string) => number }): Promise<void> => {
-  await waitFor(() => stdin.listenerCount('readable') > 0);
-};
-
-/**
- * Домашняя папка харнесса и проект — во временных каталогах: App читает работы,
- * и настоящие ~/.harnas и <cwd>/.harnas тесты не касаются.
- */
 let home = '';
 let project = '';
+let logs = '';
+const previousBin = process.env['HARNAS_CLAUDE_BIN'];
 
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
   project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
+  logs = await mkdtemp(path.join(tmpdir(), 'harnas-logs-'));
   process.env['HARNAS_HOME'] = home;
+  process.env['HARNAS_CLAUDE_BIN'] = STUB;
 });
 
 afterEach(async () => {
   delete process.env['HARNAS_HOME'];
-  await Promise.all([home, project].map((dir) => rm(dir, { recursive: true, force: true })));
+  if (previousBin === undefined) delete process.env['HARNAS_CLAUDE_BIN'];
+  else process.env['HARNAS_CLAUDE_BIN'] = previousBin;
+  await Promise.all([home, project, logs].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-/** Заголовок правой панели: он рисуется в той же строке кадра, что и SESSIONS. */
-const rightHeader = (frame: string): string => {
-  const line = frame.split('\n').find((item) => item.includes('SESSIONS')) ?? '';
-  return (
-    line
-      .split('│')
-      .filter((cell) => cell.trim() !== '')
-      .at(-1) ?? ''
-  );
+/** Панель с живым stub: `prefix c` заводит работу и сразу подключает агента. */
+const withAgent = async (): Promise<ReturnType<typeof render>> => {
+  const app = render(<App sessions={[]} root={logs} codexRoot={logs} projectPath={project} />);
+  await waitFor(() => app.stdin.listenerCount('data') > 0);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  app.stdin.write(`${PREFIX}c`);
+  await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
+  return app;
 };
 
 describe('жизненный цикл агента', () => {
-  let root: string;
-  const original = process.env['HARNAS_CLAUDE_BIN'];
-
-  beforeEach(async () => {
-    root = await mkdtemp(path.join(tmpdir(), 'harnas-life-'));
-    process.env['HARNAS_CLAUDE_BIN'] = STUB;
-  });
-
-  afterEach(async () => {
-    if (original === undefined) delete process.env['HARNAS_CLAUDE_BIN'];
-    else process.env['HARNAS_CLAUDE_BIN'] = original;
-    await rm(root, { recursive: true, force: true });
-  });
-
-  const open = async (sessions: SessionIndex[]): Promise<ReturnType<typeof render>> => {
-    const app = render(<App sessions={sessions} root={root} projectPath={project} />);
-    await waitFor(() => (app.lastFrame() ?? '').includes('Enter на сессии'));
-    await mounted(app.stdin);
-    app.stdin.write(ENTER);
-    await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
-    return app;
-  };
-
-  it('завершение процесса видно в панели вместе с подсказкой', async () => {
-    const app = await open([session()]);
+  it('выход процесса переводит сессию в exited и показывает её карточку', async () => {
+    const app = await withAgent();
     try {
+      // Ввод идёт гостю: команда `exit` завершает stub с нужным кодом.
       app.stdin.write('exit 3\r');
-      await waitFor(() => (app.lastFrame() ?? '').includes('Агент завершился с кодом 3'));
-      expect(app.lastFrame()).toContain('R — перезапустить');
-      expect(app.lastFrame()).toContain('(завершён)');
+      await waitFor(() => (app.lastFrame() ?? '').includes('Enter — возобновить'));
+
+      const frame = app.lastFrame() ?? '';
+      expect(frame).toContain('exited');
+      expect(frame).toContain('код 3');
+      // Экран умершего агента панель уже не показывает.
+      expect(frame).not.toContain('stub готов');
+
+      const { works } = await readWorksIndex();
+      const workId = works[0]?.id as string;
+      const session = (await readMap(project, workId)).sessions[0];
+      expect(session?.status).toBe('exited');
+      expect(session?.history.at(-1)).toMatchObject({ status: 'exited', exitCode: 3 });
     } finally {
       app.unmount();
     }
-  }, 25_000);
-
-  it('штатный выход и выход по сигналу описываются по-разному', async () => {
-    const app = await open([session()]);
-    try {
-      app.stdin.write('exit 0\r');
-      await waitFor(() => (app.lastFrame() ?? '').includes('Агент завершился штатно'));
-    } finally {
-      app.unmount();
-    }
-  }, 25_000);
-
-  it('R перезапускает завершившегося агента', async () => {
-    const app = await open([session()]);
-    try {
-      app.stdin.write('exit 1\r');
-      await waitFor(() => (app.lastFrame() ?? '').includes('Агент завершился с кодом 1'));
-
-      app.stdin.write('R');
-      await waitFor(() => !(app.lastFrame() ?? '').includes('Агент завершился'));
-      expect(app.lastFrame()).toContain('stub готов');
-    } finally {
-      app.unmount();
-    }
-  }, 25_000);
-
-  it('повторный Enter по той же сессии не плодит второго агента', async () => {
-    const app = await open([session()]);
-    try {
-      app.stdin.write(TO_LISTS);
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      app.stdin.write(ENTER);
-      await new Promise((resolve) => setTimeout(resolve, 400));
-
-      expect(app.lastFrame()).not.toContain('уже есть активная сессия');
-    } finally {
-      app.unmount();
-    }
-  }, 25_000);
-
-  it('предупреждение о лимитах — на второй сессии своего провайдера (дизайн 5)', async () => {
-    const originalCodex = process.env['HARNAS_CODEX_BIN'];
-    process.env['HARNAS_CODEX_BIN'] = STUB;
-    const app = await open([
-      session({ id: 'a', title: 'кодекс', provider: 'codex' }),
-      session({ id: 'b', title: 'первая' }),
-      session({ id: 'c', title: 'вторая' }),
-    ]);
-    try {
-      app.stdin.write(TO_LISTS);
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      app.stdin.write('j');
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      app.stdin.write(ENTER);
-
-      // Вторая живая сессия, но другого провайдера: лимиты подписки общие внутри
-      // провайдера, а не между ним и соседним.
-      await waitFor(() => rightHeader(app.lastFrame() ?? '').includes('первая'));
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      expect(app.lastFrame()).not.toContain('уже есть активная сессия');
-
-      app.stdin.write(TO_LISTS);
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      app.stdin.write('j');
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      app.stdin.write(ENTER);
-
-      // Предупреждение живёт в строке статуса, а не поверх правой панели (дизайн 5).
-      await waitFor(() =>
-        (app.lastFrame() ?? '').includes('Cl: уже есть активная сессия — лимиты подписки общие'),
-      );
-      // Второй агент всё равно запустился — предупреждение не блокирует.
-      expect(rightHeader(app.lastFrame() ?? '')).toContain('вторая');
-    } finally {
-      if (originalCodex === undefined) delete process.env['HARNAS_CODEX_BIN'];
-      else process.env['HARNAS_CODEX_BIN'] = originalCodex;
-      app.unmount();
-    }
-  }, 25_000);
-
-  it('после завершения агента панель отпускает фокус', async () => {
-    const app = await open([
-      session({ id: 'a', title: 'первая' }),
-      session({ id: 'b', title: 'вторая' }),
-    ]);
-    try {
-      app.stdin.write('exit 0\r');
-      await waitFor(() => (app.lastFrame() ?? '').includes('Агент завершился штатно'));
-
-      // Tab снова работает: фокус уходит с терминала на списки. Выбор виден по
-      // тому, какую сессию открывает Enter — стрелки у строки больше нет (6.2).
-      app.stdin.write(TAB);
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      app.stdin.write('j');
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      app.stdin.write(ENTER);
-      await waitFor(() => rightHeader(app.lastFrame() ?? '').includes('вторая'));
-    } finally {
-      app.unmount();
-    }
-  }, 25_000);
+  }, 30_000);
 });

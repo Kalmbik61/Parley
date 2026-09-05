@@ -10,6 +10,7 @@
 import {
   addSession,
   commandInPath,
+  createWork,
   finishSession,
   linkProviderSession,
   loadProviders,
@@ -22,6 +23,8 @@ import {
   workPaths,
   writeBrief,
   writeMcpConfig,
+  writeWorkSettings,
+  type LaunchedBy,
   type MetricsRoots,
   type NewSession,
   type ProviderEntry,
@@ -112,12 +115,18 @@ export async function readBrief(
   }
 }
 
+/**
+ * Как поднимается процесс: `launch` — по брифу, `resume` — по `resumeArgs`,
+ * `new` — быстрая сессия без промпта вовсе (дизайн TUI v2, 5.1).
+ */
+type LaunchMode = 'launch' | 'resume' | 'new';
+
 /** Общая часть запуска и возобновления: конфиг MCP, подстановки, команда. */
 async function plan(
   projectPath: string,
   workId: string,
   session: WorkSession,
-  resume: boolean,
+  mode: LaunchMode,
 ): Promise<LaunchPlan> {
   const entry = await entryOf(session.provider);
   const paths = workPaths(projectPath, workId);
@@ -136,13 +145,22 @@ async function plan(
 
   // Продолжать нечего, пока id сессии у провайдера неизвестен: такой запуск —
   // новый процесс по тому же брифу, запись в карте остаётся прежней.
-  const resuming = resume && session.providerSessionId !== null;
+  const resuming = mode === 'resume' && session.providerSessionId !== null;
   let providerSessionId: string | null = null;
+
+  // Файл хуков нужен тому, кто его принимает (`claude --settings`); один на
+  // работу, потому что команда хука не зависит от сессии (дизайн 4.2).
+  const template = (resuming ? entry.runner.resumeArgs : entry.runner.args) ?? [];
+  if (template.includes('{settingsFile}')) {
+    subs.settingsFile = await writeWorkSettings(projectPath, workId);
+  }
 
   if (resuming) {
     subs.providerSessionId = session.providerSessionId as string;
   } else {
-    subs.prompt = await readBrief(projectPath, workId, session.id);
+    // Быстрая сессия стартует без промпта: карту и правила агент получает
+    // через MCP, бриф ей не пишется (5.1).
+    if (mode !== 'new') subs.prompt = await readBrief(projectPath, workId, session.id);
     if (entry.linkBy === 'session-id') {
       providerSessionId = session.providerSessionId ?? randomUUID();
       subs.sessionUuid = providerSessionId;
@@ -167,7 +185,7 @@ export function planLaunch(
   workId: string,
   session: WorkSession,
 ): Promise<LaunchPlan> {
-  return plan(projectPath, workId, session, false);
+  return plan(projectPath, workId, session, 'launch');
 }
 
 /** Возобновление вышедшей или завершённой сессии по `resumeArgs` (дизайн 4.4). */
@@ -176,7 +194,62 @@ export function planResume(
   workId: string,
   session: WorkSession,
 ): Promise<LaunchPlan> {
-  return plan(projectPath, workId, session, true);
+  return plan(projectPath, workId, session, 'resume');
+}
+
+/** Быстрая сессия `new`: тот же запуск, но без промпта (дизайн TUI v2, 5.1). */
+export function planNew(
+  projectPath: string,
+  workId: string,
+  session: WorkSession,
+): Promise<LaunchPlan> {
+  return plan(projectPath, workId, session, 'new');
+}
+
+/** Ярлык быстрой сессии, пока не появился заголовок Claude Code (5.1). */
+export const NEW_LABEL = 'новая сессия';
+/** Заголовок работы, созданной вместе с быстрой сессией (5.1). */
+export const UNTITLED_WORK = 'без названия';
+
+export interface NewSessionResult {
+  workId: string;
+  session: WorkSession;
+}
+
+/**
+ * `new` без диалога: работа берётся выбранная, а если работ нет — заводится
+ * «без названия» с пустой целью. Бриф такой сессии не пишется (5.1).
+ */
+export async function createNewSession(
+  projectPath: string,
+  workId: string | null,
+): Promise<NewSessionResult> {
+  const id = workId ?? (await createWork(projectPath, { title: UNTITLED_WORK, goal: '' })).work.id;
+  let created: WorkSession | undefined;
+  await updateMap(projectPath, id, (map) => {
+    created = addSession(map, { provider: 'claude', label: NEW_LABEL, task: '' });
+  });
+  if (created === undefined) throw new Error(`сессия в работе ${id} не создана`);
+  return { workId: id, session: created };
+}
+
+/**
+ * Заголовок Claude Code доехал до индекса логов: ярлык быстрой сессии и
+ * заголовок работы «без названия» обновляются из него один раз (5.1).
+ * Переименованную руками сессию не трогаем — она уже не `новая сессия`.
+ */
+export async function applyAutoTitle(
+  projectPath: string,
+  workId: string,
+  sessionId: string,
+  title: string,
+): Promise<void> {
+  await updateMap(projectPath, workId, (map) => {
+    const session = map.sessions.find((item) => item.id === sessionId);
+    if (session === undefined || session.label !== NEW_LABEL) return;
+    session.label = title;
+    if (map.work.title === UNTITLED_WORK) map.work.title = title;
+  });
 }
 
 /** Новая сессия работы: запись `pending` и бриф по общему шаблону (раздел 5). */
@@ -193,19 +266,33 @@ export async function createPendingSession(
   return created;
 }
 
+/** Процесс, поднятый харнессом: по нему проверяется живость после перезапуска (5.4). */
+export interface StartedProcess {
+  pid: number;
+  /** Время старта процесса из ОС; `null` — платформа его не сообщает. */
+  startedAtProcess: string | null;
+  launchedBy: LaunchedBy;
+}
+
 /**
  * Панель открыта, процесс запущен: `pending`/`exited`/`done`/`failed` → `active`
- * с записью id сессии у провайдера (спецификация, раздел 6).
+ * с записью id сессии у провайдера (спецификация, раздел 6) и приметами
+ * процесса, по которым сессия узнаётся после перезапуска харнесса (5.4).
  */
 export async function startSession(
   projectPath: string,
   workId: string,
   sessionId: string,
   providerSessionId: string | null,
+  started?: StartedProcess,
 ): Promise<void> {
   await updateMap(projectPath, workId, (map) => {
     const session = transitionSession(map, sessionId, 'active');
     if (providerSessionId !== null) session.providerSessionId = providerSessionId;
+    if (started === undefined) return;
+    session.pid = started.pid;
+    session.startedAtProcess = started.startedAtProcess;
+    session.launchedBy = started.launchedBy;
   });
 }
 

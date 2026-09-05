@@ -2,6 +2,8 @@ import type { WorkSession } from '@harnas/core';
 import { describe, expect, it } from 'vitest';
 import { glyphs } from './glyphs.js';
 import {
+  closeSessionDialog,
+  exitDialog,
   launchDialog,
   newSessionDialog,
   newWorkDialog,
@@ -28,6 +30,9 @@ function session(over: Partial<WorkSession> = {}): WorkSession {
     ],
     startedAt: '2026-09-02T13:00:00.000Z',
     endedAt: '2026-09-02T14:02:00.000Z',
+    pid: null,
+    startedAtProcess: null,
+    launchedBy: null,
     providerSessionId: '7fa0e1ee-cc7b',
     metrics: null,
     summary: null,
@@ -183,5 +188,29 @@ describe('диалог дозаказа резюме (4.5)', () => {
     const spec = summaryDialog(row(), g, NARROW);
     for (const info of spec.info) expect(info.length).toBeLessThanOrEqual(NARROW);
     expect(spec.info.join(' ')).toContain('claude -p');
+  });
+});
+
+describe('подтверждения TUI v2 (макеты 4.8 и 4.9)', () => {
+  it('закрытие сессии называет сигнал, pid и судьбу транскрипта', () => {
+    const spec = closeSessionDialog(session({ status: 'active', pid: 48213 }), g);
+    expect(spec.title).toBe(`закрыть ${g.active} бэкенд`);
+    expect(spec.fields).toEqual([]);
+    expect(spec.info[0]).toBe('процессу будет послан SIGHUP · pid 48213');
+    expect(spec.info[1]).toContain('транскрипт');
+    expect(spec.footer).toBe('Enter — закрыть · Esc');
+  });
+
+  it('без pid строка о процессе не врёт про несуществующий номер', () => {
+    const spec = closeSessionDialog(session({ status: 'active', pid: null }), g);
+    expect(spec.info[0]).toBe('процессу будет послан SIGHUP');
+  });
+
+  it('выход перечисляет живые сессии', () => {
+    const spec = exitDialog(['план', 'бэкенд']);
+    expect(spec.title).toBe('выход');
+    expect(spec.info[0]).toBe('живые сессии: план, бэкенд');
+    expect(spec.info[1]).toContain('завершены');
+    expect(spec.footer).toContain('Enter — выйти');
   });
 });
