@@ -176,6 +176,28 @@ describe('Sidebar', () => {
     expect(dividerAt(title)).toBe(26);
   });
 
+  // Чек-лист 23, нижняя граница: места нет вовсе, а ярлык всё равно 4 знака.
+  it('на экстремально узкой строке ярлык — 4 знака, буква состояния на месте', () => {
+    const all = lines(
+      <Sidebar
+        works={[work()]}
+        sessions={[item({ session: session({ label: 'исследовать миграции' }), state: 'blocked' })]}
+        selectedWork="/dev/shop w-0001"
+        selectedSession="s-01"
+        width={9}
+        height={8}
+      />,
+    );
+
+    const row = lineWith(all, 'исс');
+    // Три буквы и знак усечения — короче ярлык не режется (§7).
+    expect(row).toContain('исс…');
+    expect(row).not.toContain('иссл');
+    // Буква состояния не отбрасывается никогда (макет 1.2).
+    expect(row).toContain('b');
+    expect(dividerAt(row)).toBe(9);
+  });
+
   // Чек-лист 26.
   it('компактная строка под выбранной сессией: токены, длительность, ▤N и ⋮N', () => {
     const all = lines(

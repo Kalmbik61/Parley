@@ -363,7 +363,7 @@ describe('события и просмотр (4.1, 6)', () => {
     }
   }, 30_000);
 
-  it('30: подключение гасит unseen', async () => {
+  it('30: подключение гасит unseen, а оверлей деталей — нет', async () => {
     const { workId, id } = await outsideSession('план');
 
     const app = open();
@@ -374,6 +374,14 @@ describe('события и просмотр (4.1, 6)', () => {
       await waitFor(() => lineWith(app.lastFrame() ?? '', 'план').includes('idle'));
       await appendFile(path.join(workPaths(project, workId).events, `${id}.jsonl`), hook('Stop'));
       await waitFor(() => lineWith(app.lastFrame() ?? '', 'план').includes('unseen'));
+
+      // Оверлей деталей — просмотр, а не подключение: `unseen` держится (4.1).
+      app.stdin.write(`${PREFIX}i`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('детали · план'));
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      app.stdin.write(ESC);
+      await waitFor(() => !(app.lastFrame() ?? '').includes('детали · план'));
+      expect(lineWith(app.lastFrame() ?? '', 'план')).toContain('unseen');
 
       app.stdin.write(`${PREFIX}j`);
       await waitFor(() => lineWith(app.lastFrame() ?? '', 'план').includes('idle'));
