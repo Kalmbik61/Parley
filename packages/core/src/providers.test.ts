@@ -101,6 +101,43 @@ describe('подстановка аргументов запуска', () => {
     });
   });
 
+  it('claude получает системную вставку и при запуске, и при возобновлении', () => {
+    const guidance = 'Ты в харнессе my-harnas: работа w-0042, твоя сессия s-02.';
+
+    const started = startCommand(PROVIDERS.claude, {
+      sessionUuid: 'uuid-1',
+      systemPrompt: guidance,
+      prompt: 'бриф',
+    }).args;
+    expect(started[started.indexOf('--append-system-prompt') + 1]).toBe(guidance);
+
+    // Системный промпт не живёт в транскрипте: при `--resume` он собирается заново.
+    const resumed = resumeCommand(PROVIDERS.claude, {
+      providerSessionId: 'bb2137cb',
+      systemPrompt: guidance,
+    }).args;
+    expect(resumed[resumed.indexOf('--append-system-prompt') + 1]).toBe(guidance);
+  });
+
+  it('без вставки флаг --append-system-prompt не остаётся висячим', () => {
+    expect(
+      startCommand(PROVIDERS.claude, { sessionUuid: 'uuid-1', prompt: 'бриф' }).args,
+    ).not.toContain('--append-system-prompt');
+    expect(resumeCommand(PROVIDERS.claude, { providerSessionId: 'bb2137cb' }).args).not.toContain(
+      '--append-system-prompt',
+    );
+  });
+
+  it('провайдеру без такой возможности вставка не достаётся', () => {
+    const guidance = 'Ты в харнессе my-harnas.';
+    // У codex и glm подстановки `{systemPrompt}` в шаблоне нет — она отбрасывается
+    // молча, как `{settingsFile}`: своих механизмов системного промпта мы не трогаем.
+    expect(startCommand(PROVIDERS.codex, { systemPrompt: guidance, prompt: 'бриф' }).args).toEqual([
+      'бриф',
+    ]);
+    expect(startCommand(PROVIDERS.glm, { systemPrompt: guidance }).args).toEqual([]);
+  });
+
   it('без файла настроек флаг --settings не остаётся висячим', () => {
     expect(startCommand(PROVIDERS.claude, { sessionUuid: 'uuid-1', prompt: 'бриф' }).args).toEqual([
       '--session-id',

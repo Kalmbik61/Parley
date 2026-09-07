@@ -12,6 +12,7 @@ import type { RunnerSubstitutions } from './providers.js';
 import { buildSchemaReport } from './schema-report.js';
 import { buildIndex, buildSessionTree } from './session-tree.js';
 import { writeBrief } from './work/brief.js';
+import { systemGuidance } from './work/guidance.js';
 import { addSession } from './work/map.js';
 import { mcpConfigValue, writeMcpConfig } from './work/mcp-config.js';
 import { writeWorkSettings } from './work/settings-file.js';
@@ -158,6 +159,11 @@ async function newWorkSession(argv: string[]): Promise<void> {
   if (uuid !== null) subs.sessionUuid = uuid;
   if (mcp !== undefined) subs.mcpConfig = mcp;
   if (settingsFile !== null) subs.settingsFile = settingsFile;
+  // Системная вставка гида — тому, кто её принимает (`claude --append-system-prompt`):
+  // сессия, поднятая руками, должна знать про харнесс то же, что поднятая панелью.
+  if ((entry.runner.args ?? []).includes('{systemPrompt}')) {
+    subs.systemPrompt = systemGuidance(map, created);
+  }
   const { command, args } = startCommand(entry, subs);
 
   print({

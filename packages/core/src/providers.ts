@@ -30,14 +30,17 @@ export interface RunnerConfig {
   /**
    * Аргументы запуска новой сессии координации. Подстановки: `{sessionUuid}` —
    * uuid, сгенерированный харнессом, `{mcpConfig}`, `{settingsFile}` — файл
-   * настроек работы с хуками, `{prompt}` — стартовый бриф.
+   * настроек работы с хуками, `{systemPrompt}` — системная вставка гида,
+   * `{prompt}` — стартовый бриф.
    * undefined — новая сессия запускается без аргументов.
    */
   args?: string[];
   /**
    * Аргументы для возобновления конкретной сессии. Подстановки:
-   * `{providerSessionId}`, `{mcpConfig}`, `{settingsFile}`. undefined — провайдер не умеет
-   * открывать сессию по идентификатору, запускаем без аргументов.
+   * `{providerSessionId}`, `{mcpConfig}`, `{settingsFile}`, `{systemPrompt}`.
+   * Системный промпт в транскрипте не хранится, поэтому вставка гида идёт и
+   * сюда. undefined — провайдер не умеет открывать сессию по идентификатору,
+   * запускаем без аргументов.
    */
   resumeArgs?: string[];
   /**
@@ -94,6 +97,8 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{mcpConfig}',
         '--settings',
         '{settingsFile}',
+        '--append-system-prompt',
+        '{systemPrompt}',
         '{prompt}',
       ],
       resumeArgs: [
@@ -103,6 +108,8 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{mcpConfig}',
         '--settings',
         '{settingsFile}',
+        '--append-system-prompt',
+        '{systemPrompt}',
       ],
       // `-p <промпт>` — один ответ без интерактива: им считается дозаказ резюме.
       printArgs: ['-p', '{prompt}'],
@@ -152,11 +159,14 @@ export interface RunnerSubstitutions {
   mcpConfig?: string;
   /** Путь к `settings.json` работы с хуками (дизайн TUI v2, раздел 4.2). */
   settingsFile?: string;
+  /** Системная вставка гида (`work/guidance.ts`): кто ты и чем пользоваться. */
+  systemPrompt?: string;
   prompt?: string;
   providerSessionId?: string;
 }
 
-const PLACEHOLDER = /^\{(sessionUuid|mcpConfig|settingsFile|prompt|providerSessionId)\}$/;
+const PLACEHOLDER =
+  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|prompt|providerSessionId)\}$/;
 
 /**
  * Подставляет значения в шаблон аргументов.

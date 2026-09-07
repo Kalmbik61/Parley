@@ -172,6 +172,13 @@ describe('harnas-core work session new', () => {
     expect(args.at(-1)).toBe(brief);
     expect(brief).toContain('Составить план реализации');
 
+    // Системная вставка гида идёт тем же запуском: сессия, поднятая руками,
+    // знает про харнесс ровно то же, что поднятая панелью.
+    const guidance = args[args.indexOf('--append-system-prompt') + 1] as string;
+    expect(guidance).toContain('w-0001');
+    expect(guidance).toContain('s-01');
+    expect(guidance).toContain('read_guide');
+
     const map = await readMapFile('w-0001');
     expect(map.sessions).toHaveLength(1);
     expect(map.sessions[0]).toMatchObject({
