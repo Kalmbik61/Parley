@@ -844,6 +844,27 @@ describe('закрытие сессии (3.2, макет 4.8)', () => {
     }
   }, 30_000);
 
+  it('клик по сайдбару работает и при карточке в панели (3.3)', async () => {
+    const app = open();
+    try {
+      const workId = await launch(app);
+      await waitMap(workId, (item) => item.status === 'active');
+      app.stdin.write('exit 0\r');
+      await waitMap(workId, (item) => item.status === 'exited');
+      await waitFor(() => (app.lastFrame() ?? '').includes('Enter — возобновить'));
+
+      // Карточка захватывает клавиши, но мышь по сайдбару пропадать не должна:
+      // клик по строке `new` заводит вторую работу (3.3, 5.1).
+      const rows = (app.lastFrame() ?? '').split('\n');
+      const row = rows.findIndex((line) => / new\b/.test(line));
+      expect(row).toBeGreaterThanOrEqual(0);
+      app.stdin.write(`${ESC}[<0;3;${row + 1}M${ESC}[<0;3;${row + 1}m`);
+      await waitFor2(async () => (await readWorksIndex()).works.length === 2);
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
   it('prefix q без панелей харнесса не обещает завершить чужие процессы (5.4)', async () => {
     await outsideSession('ревью');
     const app = open();

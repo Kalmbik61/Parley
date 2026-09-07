@@ -176,6 +176,25 @@ describe('мышь (чек-лист 21)', () => {
     expect(it.scrolled).toEqual([]);
   });
 
+  it('21: под захватом карточки или навигации клик по сайдбару слышен', () => {
+    // Карточка и режим навигации слышат префикс — и мышь тоже: панели гость не
+    // нужен, а сайдбар кликабелен всегда (3.3).
+    const it = recorder({ mouseCapture: true, panelLeft: 26, capture: true, keepPrefix: true });
+    feed(click(0, 5, 3), it);
+
+    expect(it.mouse).toEqual([{ button: 0, x: 5, y: 3, kind: 'press' }]);
+    expect(it.guest).toEqual([]);
+    expect(it.captured).toEqual([click(0, 5, 3)]);
+  });
+
+  it('21: под захватом оверлея мышь пропадает целиком', () => {
+    const it = recorder({ mouseCapture: true, panelLeft: 26, capture: true });
+    feed(click(0, 5, 3), it);
+
+    expect(it.mouse).toEqual([]);
+    expect(it.guest).toEqual([]);
+  });
+
   it('21: при mouseCapture=false события не ловятся и уходят гостю как есть', () => {
     const it = recorder({ mouseCapture: false, panelLeft: 26 });
     feed(click(0, 5, 3), it);

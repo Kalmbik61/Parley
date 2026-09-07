@@ -182,8 +182,9 @@ export function routeInput(data: Buffer, state: PrefixState, options: PrefixInpu
       continue;
     }
 
-    // Под захватом мышь по-прежнему пропадает целиком: слышен только префикс.
-    const mouse = mouseCapture && !capture ? parseMouse(data, at) : undefined;
+    // Захват оверлея глотает и мышь; захват карточки или навигации слышит
+    // префикс — и клики по сайдбару тоже, панели без гостя они не мешают (3.3).
+    const mouse = mouseCapture && (!capture || keepPrefix) ? parseMouse(data, at) : undefined;
     if (mouse !== undefined) {
       flush(at);
       at += mouse.length;
