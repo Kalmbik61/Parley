@@ -363,6 +363,19 @@ describe('spawn_session', () => {
     expect((await readMapFile()).sessions).toHaveLength(1);
   });
 
+  it('пустая задача — ошибка: тихий старт доступен только TUI и CLI', async () => {
+    const client = await connect('s-01');
+    const result = await call(client, 'spawn_session', {
+      provider: 'claude',
+      label: 'бэк',
+      task: '',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('task');
+    expect((await readMapFile()).sessions).toHaveLength(1);
+  });
+
   it('неизвестная сессия в contextFrom — ошибка, записи нет', async () => {
     const client = await connect('s-01');
     const result = await call(client, 'spawn_session', {

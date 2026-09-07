@@ -225,6 +225,33 @@ describe('harnas-core work session new', () => {
     });
   }, 60_000);
 
+  it('без --task печатает тихую команду: бриф в системной вставке, промпта нет', async () => {
+    await newWork('Авторизация');
+    const printed = await ok(
+      'work',
+      'session',
+      'new',
+      '--work',
+      'w-0001',
+      '--provider',
+      'claude',
+      '--label',
+      'план',
+    );
+
+    const args = printed['args'] as string[];
+    const guidance = args[args.indexOf('--append-system-prompt') + 1] as string;
+    const brief = await readFile(printed['brief'] as string, 'utf8');
+    // Бриф уходит контекстом вместе со вставкой гида, а не первым сообщением:
+    // задачу пользователь напишет сам (план от 2026-09-06, раздел B).
+    expect(guidance).toContain('s-01');
+    expect(guidance).toContain('# Работа w-0001');
+    expect(brief).not.toContain('Задача:');
+    // Позиционного промпта в команде нет: последний аргумент — сама вставка.
+    expect(args.at(-1)).toBe(guidance);
+    expect((await readMapFile('w-0001')).sessions[0]?.task).toBe('');
+  }, 60_000);
+
   it('провайдеру без внешнего id uuid не выдаётся, конфиг уходит в аргументы', async () => {
     await newWork('Авторизация');
     const printed = await ok(

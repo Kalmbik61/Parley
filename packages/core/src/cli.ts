@@ -38,10 +38,12 @@ const USAGE = `harnas-core — индекс сессий Claude Code в JSON
   harnas-core work map --work <id> [--cwd <путь>]
                                             карта работы
   harnas-core work session new --work <id> --provider <p> --label <l>
-      --task <t> [--context s-01,s-02] [--cwd <путь>]
+      [--task <t>] [--context s-01,s-02] [--cwd <путь>]
                                             запись pending, бриф, MCP-конфиг,
                                             settings.json с хуками и готовая
-                                            команда запуска
+                                            команда запуска; без --task старт
+                                            тихий: бриф уходит контекстом, а
+                                            задачу пишет пользователь сам
 
   --json   формат по умолчанию и единственный, принимается для совместимости
   --root   корень истории (по умолчанию ~/.claude/projects, только чтение)
@@ -95,7 +97,9 @@ async function newWorkSession(argv: string[]): Promise<void> {
   const workId = requiredOption(argv, '--work');
   const provider = requiredOption(argv, '--provider');
   const label = requiredOption(argv, '--label');
-  const task = requiredOption(argv, '--task');
+  // Задача необязательна: без неё сессия стартует тихо — бриф уходит контекстом
+  // в системный промпт, а запрос пишет пользователь (план от 2026-09-06, B).
+  const task = optionValue(argv, '--task') ?? '';
   const contextFrom = (optionValue(argv, '--context') ?? '')
     .split(',')
     .map((id) => id.trim())
@@ -138,7 +142,7 @@ async function newWorkSession(argv: string[]): Promise<void> {
   const paths = workPaths(projectPath, workId);
   const brief = await writeBrief(projectPath, map, created);
   // Бриф читаем с диска: между записью и запуском его можно править (раздел 11).
-  const prompt = await readFile(brief, 'utf8');
+  const briefText = await readFile(brief, 'utf8');
   // Файл конфига нужен только тем, кто принимает путь; codex получает свой
   // сервер значением `-c`, и лишний файл ему писать незачем.
   const mcpFile =
@@ -155,14 +159,17 @@ async function newWorkSession(argv: string[]): Promise<void> {
     ? await writeWorkSettings(projectPath, workId)
     : null;
 
-  const subs: RunnerSubstitutions = { prompt };
+  // Тихий старт: бриф едет не первым сообщением, а контекстом вместе со
+  // вставкой гида — агент ждёт запроса пользователя.
+  const subs: RunnerSubstitutions = task === '' ? {} : { prompt: briefText };
   if (uuid !== null) subs.sessionUuid = uuid;
   if (mcp !== undefined) subs.mcpConfig = mcp;
   if (settingsFile !== null) subs.settingsFile = settingsFile;
   // Системная вставка гида — тому, кто её принимает (`claude --append-system-prompt`):
   // сессия, поднятая руками, должна знать про харнесс то же, что поднятая панелью.
   if ((entry.runner.args ?? []).includes('{systemPrompt}')) {
-    subs.systemPrompt = systemGuidance(map, created);
+    const guidance = systemGuidance(map, created);
+    subs.systemPrompt = task === '' ? `${guidance}\n\n${briefText}` : guidance;
   }
   const { command, args } = startCommand(entry, subs);
 

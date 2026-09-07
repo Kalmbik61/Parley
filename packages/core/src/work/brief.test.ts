@@ -91,6 +91,20 @@ describe('бриф сессии', () => {
     expect(brief).not.toContain('Артефакты');
   });
 
+  it('тихий старт: пустая задача не оставляет строку «Задача:», контекст на месте', () => {
+    const map = mapWithSessions();
+    const backend = map.sessions[1];
+    if (backend === undefined) throw new Error('нет сессии');
+    backend.task = '';
+
+    const brief = buildBrief(map, 's-02');
+    expect(brief).not.toContain('Задача:');
+    // Контекст родителя и правила — ради них бриф тихой сессии и собирается.
+    expect(brief).toContain('## Контекст');
+    expect(brief).toContain('План готов: 5 шагов, миграции отдельно.');
+    expect(brief).toContain('report');
+  });
+
   it('пустая цель работы не оставляет пустую строку «Цель:»', () => {
     const map = mapWithSessions();
     map.work.goal = '';

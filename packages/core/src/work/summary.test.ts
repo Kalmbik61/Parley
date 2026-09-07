@@ -197,6 +197,22 @@ describe('дозаказ резюме', () => {
     expect(args[1]).toContain('бэкенд');
   });
 
+  it('у тихой сессии задачи нет — строки «Её задача» в промпте тоже', async () => {
+    await claudeLog(ID, [claudeSay('user', 'почини сборку'), claudeSay('assistant', 'починил')]);
+    const { workId, sessionId } = await exited('claude');
+    await updateMap(project, workId, (map) => {
+      const target = map.sessions.find((item) => item.id === sessionId);
+      if (target !== undefined) target.task = '';
+    });
+
+    await requestAutoSummary(project, workId, sessionId, { claudeRoot, codexRoot });
+    const args = JSON.parse(await readFile(promptFile, 'utf8')) as string[];
+    expect(args[1]).not.toContain('Её задача');
+    // Роль сессии и разговор на месте: без задачи резюме всё равно считается.
+    expect(args[1]).toContain('бэкенд');
+    expect(args[1]).toContain('почини сборку');
+  });
+
   it('транскрипт Codex суммирует тот же claude -p', async () => {
     await codexLog(ID, [codexSay('user_message', 'прогони e2e'), codexSay('agent_message', 'ок')]);
     const { workId, sessionId } = await exited('codex');

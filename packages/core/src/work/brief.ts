@@ -29,7 +29,9 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
 
   if (map.work.goal !== '') lines.push(`Цель: ${map.work.goal}`, '');
   lines.push(`## Твоя сессия: ${session.id} — ${session.label}`, '');
-  lines.push(`Задача: ${session.task}`, '');
+  // Тихий старт: задачи нет, и пустая строка «Задача:» только сбивала бы с
+  // толку — её напишет пользователь первым сообщением (раздел B плана).
+  if (session.task !== '') lines.push(`Задача: ${session.task}`, '');
 
   if (session.contextFrom.length > 0) {
     lines.push('## Контекст', '');
