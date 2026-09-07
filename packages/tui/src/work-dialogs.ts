@@ -171,11 +171,16 @@ export function deleteSessionDialog(
  * сессия — CLI-сессия (`pid: null`, свежий журнал) или пережившая перезапуск
  * харнесса (раздел C).
  */
-export function deleteBlockedDialog(session: WorkSession, g: Glyphs): DialogSpec {
+export function deleteBlockedDialog(session: WorkSession, g: Glyphs, width: number): DialogSpec {
+  // pid стоит в конце строки: рамка режет хвост, и без обрезки слева пропадал бы
+  // именно номер, ради которого строка и длиннее.
+  const alive = 'сессия жива, но её процесс не у харнесса';
   return {
     title: `удалить ${statusGlyph(session.status, g)} ${session.label}`,
     info: [
-      `сессия жива, но её процесс не у харнесса${session.pid === null ? '' : ` · pid ${session.pid}`}`,
+      session.pid === null
+        ? alive
+        : truncateLeft(`${alive} · pid ${session.pid}`, width, g.ellipsis),
       'закройте её там, где она запущена, и повторите',
     ],
     quote: [],

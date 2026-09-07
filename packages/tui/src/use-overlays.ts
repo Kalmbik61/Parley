@@ -313,7 +313,7 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
             const { alive } = await checkSession(session, {
               lastRecordAt: log(session)?.lastRecordAt ?? null,
             });
-            if (alive) return askConfirm(deleteBlockedDialog(session, g), close);
+            if (alive) return askConfirm(deleteBlockedDialog(session, g, CONFIRM - 2), close);
           }
           const children = entry.map.sessions
             .filter((item) => item.parent === session.id)

@@ -64,7 +64,7 @@
    │ адаптеры схем → индекс сессий → watcher     хранилище карты (lock,   │
    │ метрики: токены, длительность, инструменты   .bak, переходы статусов) │
    │ журнал хуков → activity, живость по pid     harnas-core CLI (JSON)    │
-   │ harnas-mcp: get_map · report · spawn_session · wait_for · send/inbox  │
+   │ harnas-mcp: get_map · report · spawn · wait_for · send/inbox · guide  │
    └──────────────┬───────────────────────────────────────┬───────────────┘
                   │ типы и JSON                            │ stdio MCP
                   ▼                                        ▼

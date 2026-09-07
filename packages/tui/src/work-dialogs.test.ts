@@ -192,7 +192,7 @@ describe('удаление сессии (макеты 4.10 и 4.11)', () => {
   });
 
   it('живую вне харнесса сессию не удаляет, а объясняет почему', () => {
-    const spec = deleteBlockedDialog(session({ status: 'active', pid: null }), g);
+    const spec = deleteBlockedDialog(session({ status: 'active', pid: null }), g, BODY);
 
     expect(spec.title).toBe(`удалить ${g.active} бэкенд`);
     expect(spec.info[0]).toContain('жива');
@@ -200,5 +200,13 @@ describe('удаление сессии (макеты 4.10 и 4.11)', () => {
     // Подтверждать нечего: у отказа только выход.
     expect(spec.footer).toBe('Esc — понятно');
     expect(spec.footer).not.toContain('Enter');
+  });
+
+  it('строка с pid помещается в рамку и сохраняет сам pid', () => {
+    const spec = deleteBlockedDialog(session({ status: 'active', pid: 48213 }), g, BODY);
+
+    expect(spec.info[0]?.length).toBeLessThanOrEqual(BODY);
+    expect(spec.info[0]).toContain('pid 48213');
+    expect(spec.info[0]).toContain(g.ellipsis);
   });
 });
