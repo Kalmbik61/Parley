@@ -17,6 +17,7 @@ import {
   readMap,
   resumeCommand,
   startCommand,
+  systemGuidance,
   transitionSession,
   updateMap,
   workPaths,
@@ -120,6 +121,12 @@ async function plan(
   const template = (resuming ? entry.runner.resumeArgs : entry.runner.args) ?? [];
   if (template.includes('{settingsFile}')) {
     subs.settingsFile = await writeWorkSettings(projectPath, workId);
+  }
+  // Системная вставка гида идёт во всех трёх режимах, включая `resume`:
+  // системный промпт живёт в процессе, а не в транскрипте, и собирается заново
+  // при каждом запуске (план от 2026-09-06, раздел A).
+  if (template.includes('{systemPrompt}')) {
+    subs.systemPrompt = systemGuidance(await readMap(projectPath, workId), session.id);
   }
 
   if (resuming) {

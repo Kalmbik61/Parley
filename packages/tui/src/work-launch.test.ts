@@ -10,6 +10,7 @@ import {
   finishExited,
   linkSession,
   planLaunch,
+  planNew,
   planResume,
   readBrief,
   startSession,
@@ -201,6 +202,41 @@ describe('план возобновления', () => {
 
     expect(plan.args).not.toContain('resume');
     expect(plan.args.at(-1)).toContain('прогнать e2e');
+  });
+});
+
+describe('системная вставка гида', () => {
+  /** Значение `--append-system-prompt` в плане запуска; '' — флага нет. */
+  const guidanceOf = (args: string[]): string =>
+    args[args.indexOf('--append-system-prompt') + 1] ?? '';
+
+  it('доезжает во всех трёх режимах: launch, new и resume', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const session = await sessionOf(workId, sessionId);
+
+    for (const plan of [
+      await planLaunch(project, workId, session),
+      await planNew(project, workId, session),
+    ]) {
+      expect(plan.args).toContain('--append-system-prompt');
+      expect(guidanceOf(plan.args)).toContain(sessionId);
+      expect(guidanceOf(plan.args)).toContain(workId);
+    }
+
+    // Системный промпт живёт в процессе, а не в транскрипте: при `--resume` он
+    // собирается заново, иначе агент поднялся бы, не зная про харнесс.
+    const map = await readMap(project, workId);
+    map.sessions[0]!.providerSessionId = '7fa0e1ee-cc7b-4a1e-9d4e-000000000002';
+    const resumed = await planResume(project, workId, map.sessions[0]!);
+    expect(resumed.args).toContain('--resume');
+    expect(guidanceOf(resumed.args)).toContain(sessionId);
+  });
+
+  it('провайдеру без такой возможности вставка не достаётся', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
+
+    expect(plan.args).not.toContain('--append-system-prompt');
   });
 });
 

@@ -21,12 +21,20 @@
 // тест видит, что клик в панели доехал до гостя с пересчитанной колонкой (3.3).
 //
 // Аргументы командной строки печатаются при старте — так тест проверяет,
-// что до бинаря доехали `--resume <id>` и прочее.
+// что до бинаря доехали `--resume <id>` и прочее. Длинные значения при этом
+// урезаются: системная вставка гида (`--append-system-prompt`) — это десяток
+// строк, и напечатанная целиком она вытеснила бы с узкой панели весь экран
+// гостя. Uuid сессии в 36 знаков помещается целиком.
 
 import { appendFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 
-process.stdout.write(`stub готов args=${JSON.stringify(process.argv.slice(2))}\r\n`);
+const short = (value) => {
+  const line = value.replace(/\s+/g, ' ');
+  return line.length > 40 ? `${line.slice(0, 40)}…` : line;
+};
+
+process.stdout.write(`stub готов args=${JSON.stringify(process.argv.slice(2).map(short))}\r\n`);
 // Одни только флаги: их список короткий и целиком помещается в узкую панель,
 // тогда как полные аргументы с путями терминал переносит на несколько строк.
 process.stdout.write(
