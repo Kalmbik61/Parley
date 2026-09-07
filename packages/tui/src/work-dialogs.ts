@@ -58,7 +58,12 @@ export function launchDialog(
 ): DialogSpec {
   return {
     title: `запуск ${g.pending} ${session.label}`,
-    info: [briefLine(projectPath, workId, session.id, width, g)],
+    info: [
+      briefLine(projectPath, workId, session.id, width, g),
+      // Каким будет старт: с задачей — бриф первым сообщением, без неё бриф
+      // уходит контекстом, и агент ждёт запроса (план от 2026-09-06, B).
+      `старт: ${session.task === '' ? 'ждёт ваш запрос' : 'по брифу'}`,
+    ],
     quote: brief.split('\n'),
     footer: 'Enter — запустить · Esc — позже',
   };

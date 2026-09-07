@@ -53,16 +53,28 @@ describe('оверлей запуска (макет 4.5)', () => {
       BODY,
     );
     expect(spec.title).toBe(`запуск ${g.pending} бэкенд`);
-    expect(spec.info).toEqual(['бриф: .harnas/works/w-0042/briefs/s-04.md']);
+    expect(spec.info).toEqual(['бриф: .harnas/works/w-0042/briefs/s-04.md', 'старт: по брифу']);
     expect(spec.quote[0]).toBe('# Работа');
     expect(spec.footer).toContain('Enter — запустить');
     // Провайдер в заголовке не показывается, пока провайдер один (раздел 9).
     expect(spec.title).not.toContain('Claude');
   });
 
+  it('тихая сессия без задачи: старт ждёт запроса пользователя', () => {
+    const spec = launchDialog(
+      '/dev/shop',
+      'w-0042',
+      session({ status: 'pending', task: '' }),
+      '# Работа\n',
+      g,
+      BODY,
+    );
+    expect(spec.info[1]).toBe('старт: ждёт ваш запрос');
+  });
+
   it('в узкую строку едет короткая форма пути', () => {
     const spec = launchDialog('/dev/shop', 'w-0042', session({ status: 'pending' }), '', g, 26);
-    expect(spec.info).toEqual(['бриф: briefs/s-04.md']);
+    expect(spec.info).toEqual(['бриф: briefs/s-04.md', 'старт: по брифу']);
   });
 });
 

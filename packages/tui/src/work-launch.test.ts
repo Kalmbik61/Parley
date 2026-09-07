@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createChildSession,
+  createNewSession,
   createPendingSession,
   finishExited,
   linkSession,
@@ -230,6 +231,77 @@ describe('системная вставка гида', () => {
     const resumed = await planResume(project, workId, map.sessions[0]!);
     expect(resumed.args).toContain('--resume');
     expect(guidanceOf(resumed.args)).toContain(sessionId);
+  });
+
+  it('тихий ребёнок: бриф в системной вставке, промптом его нет', async () => {
+    const { workId, sessionId } = await pending('claude');
+    await updateMap(project, workId, (map) => {
+      const parent = map.sessions.find((item) => item.id === sessionId);
+      if (parent !== undefined) parent.summary = 'миграции готовы';
+    });
+    const { session: child } = await createChildSession(project, workId, sessionId);
+    expect(child.task).toBe('');
+
+    const plan = await planLaunch(project, workId, child);
+    const guidance = guidanceOf(plan.args);
+    expect(guidance).toContain(child.id);
+    expect(guidance).toContain('миграции готовы');
+    // Первым сообщением бриф не идёт: агент ждёт запроса пользователя.
+    expect(plan.args.at(-1)).toBe(guidance);
+    expect(plan.args.filter((item) => item.includes('миграции готовы'))).toHaveLength(1);
+  });
+
+  it('ребёнок с задачей стартует по брифу: бриф промптом, вставка без него', async () => {
+    const { workId } = await pending('claude');
+    const spawned = await createPendingSession(project, workId, {
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'реализовать шаги 1–3',
+    });
+
+    const plan = await planLaunch(project, workId, await sessionOf(workId, spawned));
+    expect(plan.args.at(-1)).toContain('реализовать шаги 1–3');
+    expect(guidanceOf(plan.args)).not.toContain('реализовать шаги 1–3');
+  });
+
+  it('resume тихого ребёнка снова несёт бриф: транскрипт родительского контекста не хранит', async () => {
+    const { workId, sessionId } = await pending('claude');
+    await updateMap(project, workId, (map) => {
+      const parent = map.sessions.find((item) => item.id === sessionId);
+      if (parent !== undefined) parent.summary = 'миграции готовы';
+    });
+    const { session: child } = await createChildSession(project, workId, sessionId);
+    await updateMap(project, workId, (map) => {
+      const target = map.sessions.find((item) => item.id === child.id);
+      if (target !== undefined) target.providerSessionId = '7fa0e1ee-cc7b-4a1e-9d4e-000000000003';
+    });
+
+    const plan = await planResume(project, workId, await sessionOf(workId, child.id));
+    expect(plan.args).toContain('--resume');
+    expect(guidanceOf(plan.args)).toContain('миграции готовы');
+  });
+
+  it('resume сессии с задачей брифа в системной вставке не несёт', async () => {
+    const { workId, sessionId } = await pending('claude');
+    await updateMap(project, workId, (map) => {
+      const target = map.sessions.find((item) => item.id === sessionId);
+      if (target !== undefined) target.providerSessionId = '7fa0e1ee-cc7b-4a1e-9d4e-000000000004';
+    });
+
+    const plan = await planResume(project, workId, await sessionOf(workId, sessionId));
+    expect(plan.args).toContain('--resume');
+    expect(guidanceOf(plan.args)).not.toContain('прогнать e2e');
+  });
+
+  it('быстрой сессии new брифа не пишется: вставка остаётся одной вставкой', async () => {
+    const { workId } = await pending('claude');
+    const quick = await createNewSession(project, workId);
+
+    const plan = await planNew(project, workId, quick.session);
+    expect(guidanceOf(plan.args)).not.toContain('# Работа');
+    await expect(
+      readFile(path.join(workPaths(project, workId).briefs, `${quick.session.id}.md`), 'utf8'),
+    ).rejects.toThrow();
   });
 
   it('провайдеру без такой возможности вставка не достаётся', async () => {

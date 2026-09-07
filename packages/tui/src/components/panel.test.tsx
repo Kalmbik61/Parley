@@ -79,7 +79,16 @@ describe('карточка панели (макеты §2)', () => {
     expect(frame).toContain('◌ тесты · pending');
     expect(frame).toContain('создана сессией «бэкенд»');
     expect(frame).toContain('.harnas/works/w-0042/briefs/s-04.md');
+    expect(frame).toContain('старт: по брифу');
     expect(frame).toContain('Enter — запустить');
+  });
+
+  it('pending без задачи обещает тихий старт: агент ждёт запроса (план B)', () => {
+    const child = session({ id: 's-04', label: 'тесты', task: '' });
+    const frame = frameOf(cardFor(entry([child]), child, 'pending', 'ctrl+q', false));
+
+    expect(frame).toContain('старт: ждёт ваш запрос');
+    expect(frame).not.toContain('старт: по брифу');
   });
 
   it('exited показывает код выхода и дозаказ резюме', () => {

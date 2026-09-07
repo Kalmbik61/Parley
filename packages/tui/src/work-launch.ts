@@ -84,6 +84,23 @@ export async function readBrief(
 }
 
 /**
+ * Бриф, если он записан. `null` — брифа у сессии нет вовсе: быстрой сессии
+ * `new` он не пишется (5.1), и придумывать его при запуске нечего.
+ */
+async function writtenBrief(
+  projectPath: string,
+  workId: string,
+  sessionId: string,
+): Promise<string | null> {
+  try {
+    return await readFile(briefFile(projectPath, workId, sessionId), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    return null;
+  }
+}
+
+/**
  * Как поднимается процесс: `launch` — по брифу, `resume` — по `resumeArgs`,
  * `new` — быстрая сессия без промпта вовсе (дизайн TUI v2, 5.1).
  */
@@ -111,6 +128,11 @@ async function plan(
   const subs: RunnerSubstitutions = {};
   if (mcp !== undefined) subs.mcpConfig = mcp;
 
+  // Тихий старт: задачи у сессии нет — бриф уходит контекстом в системный
+  // промпт, а не первым сообщением, и агент ждёт запроса пользователя
+  // (план от 2026-09-06, раздел B).
+  const quiet = session.task === '';
+
   // Продолжать нечего, пока id сессии у провайдера неизвестен: такой запуск —
   // новый процесс по тому же брифу, запись в карте остаётся прежней.
   const resuming = mode === 'resume' && session.providerSessionId !== null;
@@ -126,15 +148,20 @@ async function plan(
   // системный промпт живёт в процессе, а не в транскрипте, и собирается заново
   // при каждом запуске (план от 2026-09-06, раздел A).
   if (template.includes('{systemPrompt}')) {
-    subs.systemPrompt = systemGuidance(await readMap(projectPath, workId), session.id);
+    const guidance = systemGuidance(await readMap(projectPath, workId), session.id);
+    // Бриф тихой сессии идёт этим же путём и при `resume`: транскрипт начинается
+    // с сообщения пользователя, контекста родителя в нём нет.
+    const brief = quiet ? await writtenBrief(projectPath, workId, session.id) : null;
+    subs.systemPrompt = brief === null ? guidance : `${guidance}\n\n${brief}`;
   }
 
   if (resuming) {
     subs.providerSessionId = session.providerSessionId as string;
   } else {
     // Быстрая сессия стартует без промпта: карту и правила агент получает
-    // через MCP, бриф ей не пишется (5.1).
-    if (mode !== 'new') subs.prompt = await readBrief(projectPath, workId, session.id);
+    // через MCP, бриф ей не пишется (5.1). Тихая — тоже: её бриф уже уехал
+    // системным промптом.
+    if (mode !== 'new' && !quiet) subs.prompt = await readBrief(projectPath, workId, session.id);
     if (entry.linkBy === 'session-id') {
       providerSessionId = session.providerSessionId ?? randomUUID();
       subs.sessionUuid = providerSessionId;
@@ -210,7 +237,9 @@ export async function createNewSession(
 /**
  * `prefix C`: дочерняя сессия выбранной, руками. Родитель и контекст — выбранная
  * сессия, бриф собирается как у порождённых агентом (`spawn_session`): резюме и
- * артефакты родителя плюс правила. Стартует по брифу, а не пустой, как `new`.
+ * артефакты родителя плюс правила. Задачи у неё нет: бриф уходит контекстом в
+ * системный промпт, а запрос пишет пользователь первым сообщением (раздел B
+ * плана от 2026-09-06).
  */
 export async function createChildSession(
   projectPath: string,
@@ -224,7 +253,7 @@ export async function createChildSession(
     created = addSession(current, {
       provider: 'claude',
       label: NEW_LABEL,
-      task: `Продолжить работу сессии «${parent.label}»; задачу уточнит пользователь`,
+      task: '',
       parent: parentId,
       contextFrom: [parentId],
     });
