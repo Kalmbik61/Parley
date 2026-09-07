@@ -168,7 +168,7 @@ const TOOLS: Tool[] = [
   {
     name: 'wait_for',
     description:
-      'Ждёт завершения сессии (target — её id) или входящего сообщения (target = "inbox"). По таймауту возвращает {"state":"running"} — решай сам, звать ли снова.',
+      'Ждёт завершения сессии (target — её id) или входящего сообщения (target = "inbox"). По таймауту возвращает {"state":"running"} — решай сам, звать ли снова. {"state":"deleted"} значит, что сессию удалил человек: ждать больше нечего.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -305,9 +305,21 @@ async function waitFor(
     };
   } else {
     // Первая проба идёт до всякого ожидания, поэтому неизвестный id падает
-    // ошибкой сразу — ожидания не возникает (спецификация, раздел 8).
+    // ошибкой сразу — ожидания не возникает (спецификация, раздел 8). Сессию,
+    // удалённую человеком, от опечатки отличает `deletedSessions`: по ней ответ
+    // `deleted`, а не ошибка (план от 2026-09-06, раздел C).
+    let existed = false;
     probe = async () => {
-      const session = requireSession(await read(), target);
+      const map = await read();
+      if ((map.work.deletedSessions ?? []).includes(target)) {
+        return { state: 'deleted', sessionId: target };
+      }
+      const found = map.sessions.find((candidate) => candidate.id === target);
+      // Запись исчезла из карты, но следа удаления нет — карту правили мимо
+      // харнесса; ждать всё равно нечего, и ответ тот же.
+      if (found === undefined && existed) return { state: 'deleted', sessionId: target };
+      const session = requireSession(map, target);
+      existed = true;
       return (FINISHED as readonly string[]).includes(session.status)
         ? {
             state: session.status,
@@ -338,6 +350,10 @@ async function sendMessage(
 
   let created = '';
   await updateMap(context.projectPath, context.workId, (current) => {
+    // Отправителя проверяем наравне с получателем: сервер удалённой сессии ещё
+    // жив, и без проверки в карту легло бы письмо от несуществующего адресата,
+    // ответить на которое нечем (план от 2026-09-06, раздел C).
+    requireSession(current, sessionId);
     requireSession(current, to);
     created = addMessage(current, { from: sessionId, to, text }).id;
   });

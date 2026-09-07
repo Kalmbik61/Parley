@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -10,6 +10,7 @@ import { addSession } from './map.js';
 import type { WorkMap } from './types.js';
 import {
   createWork,
+  deleteSessionFiles,
   readMap,
   readWorksIndex,
   updateMap,
@@ -40,6 +41,15 @@ afterEach(async () => {
 });
 
 const isDirectory = async (dir: string): Promise<boolean> => (await stat(dir)).isDirectory();
+
+const exists = async (file: string): Promise<boolean> => {
+  try {
+    await stat(file);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 describe('песочница тестов', () => {
   it('без HARNAS_HOME дом уходит во временный каталог, а не в настоящий ~/.harnas', () => {
@@ -302,5 +312,42 @@ describe('readWorksIndex', () => {
 
     await writeFile(worksIndexPath(), '{"schemaVersion":1}', 'utf8');
     await expect(readWorksIndex()).rejects.toThrow(/не парсится/);
+  });
+});
+
+describe('deleteSessionFiles', () => {
+  /** Работа с сессией и всеми её файлами на диске: бриф, журнал, MCP-конфиг. */
+  const withFiles = async (): Promise<string> => {
+    const map = await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, map.work.id);
+    await mkdir(paths.events, { recursive: true });
+    await mkdir(paths.mcp, { recursive: true });
+    await writeFile(path.join(paths.briefs, 's-01.md'), '# Работа\n', 'utf8');
+    await writeFile(path.join(paths.briefs, 's-02.md'), '# Соседка\n', 'utf8');
+    await writeFile(path.join(paths.events, 's-01.jsonl'), '{}\n', 'utf8');
+    await writeFile(path.join(paths.mcp, 's-01.json'), '{}\n', 'utf8');
+    await writeFile(path.join(paths.artifacts, 'plan.md'), 'план\n', 'utf8');
+    return map.work.id;
+  };
+
+  it('25: удаляет бриф, журнал и MCP-конфиг сессии, артефакты не трогает', async () => {
+    const workId = await withFiles();
+    const paths = workPaths(project, workId);
+
+    await deleteSessionFiles(project, workId, 's-01');
+
+    expect(await exists(path.join(paths.briefs, 's-01.md'))).toBe(false);
+    expect(await exists(path.join(paths.events, 's-01.jsonl'))).toBe(false);
+    expect(await exists(path.join(paths.mcp, 's-01.json'))).toBe(false);
+    // Артефакты — результат работы, а не след сессии: они остаются (раздел C).
+    expect(await exists(path.join(paths.artifacts, 'plan.md'))).toBe(true);
+    // Файлы соседних сессий целы.
+    expect(await exists(path.join(paths.briefs, 's-02.md'))).toBe(true);
+  });
+
+  it('26: файла уже нет — не ошибка', async () => {
+    const map = await createWork(project, { title: 'Авторизация' });
+
+    await expect(deleteSessionFiles(project, map.work.id, 's-01')).resolves.toBeUndefined();
   });
 });

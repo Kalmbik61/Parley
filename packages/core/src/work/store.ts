@@ -124,6 +124,29 @@ export async function readMap(projectPath: string, workId: string): Promise<Work
   return parseMap(await readFile(file, 'utf8'), file);
 }
 
+/**
+ * Убирает с диска следы удалённой сессии: бриф, журнал событий и MCP-конфиг
+ * (план от 2026-09-06, раздел C). Артефакты не трогаем — это результат работы,
+ * а не след сессии. Отсутствие любого файла — не ошибка: журнала может не быть
+ * вовсе, а бриф не пишется быстрой сессии `new`.
+ *
+ * `projectPath` — проект ЗАПИСИ работы: закреплённая работа лежит в чужом
+ * проекте, и путь харнесса удалил бы файлы не там.
+ */
+export async function deleteSessionFiles(
+  projectPath: string,
+  workId: string,
+  sessionId: string,
+): Promise<void> {
+  const paths = workPaths(projectPath, workId);
+  const files = [
+    path.join(paths.briefs, `${sessionId}.md`),
+    path.join(paths.events, `${sessionId}.jsonl`),
+    path.join(paths.mcp, `${sessionId}.json`),
+  ];
+  await Promise.all(files.map((file) => rm(file, { force: true })));
+}
+
 /** Читает глобальный индекс; файла ещё нет — индекс пустой. */
 export async function readWorksIndex(): Promise<WorksIndex> {
   const file = worksIndexPath();

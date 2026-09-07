@@ -55,11 +55,13 @@ export {
   nextSessionId,
   nextWorkId,
   parseMap,
+  removeSession,
   transitionSession,
 } from './work/map.js';
 export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';
 export {
   createWork,
+  deleteSessionFiles,
   harnasHome,
   readMap,
   readWorksIndex,

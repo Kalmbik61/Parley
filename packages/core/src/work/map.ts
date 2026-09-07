@@ -26,23 +26,39 @@ export function canTransition(from: SessionStatus, to: SessionStatus): boolean {
   return to === 'done' || to === 'failed' || TRANSITIONS[from].includes(to);
 }
 
-/** Следующий свободный номер: id уже удалённых записей не переиспользуем. */
-function nextId(existing: readonly string[], prefix: string, width: number): string {
-  let max = 0;
-  for (const id of existing) {
-    const digits = id.startsWith(prefix) ? Number(id.slice(prefix.length)) : Number.NaN;
-    if (Number.isInteger(digits) && digits > max) max = digits;
-  }
-  return `${prefix}${String(max + 1).padStart(width, '0')}`;
+/** Номер в id вида `s-03`; `0` — id не из этой нумерации. */
+function numberOf(id: string, prefix: string): number {
+  const digits = id.startsWith(prefix) ? Number(id.slice(prefix.length)) : Number.NaN;
+  return Number.isInteger(digits) && digits > 0 ? digits : 0;
 }
 
-/** Следующий id сессии внутри работы: `s-01`, `s-02`, … */
+/** Наибольший занятый номер в списке id. */
+const maxNumber = (existing: readonly string[], prefix: string): number =>
+  existing.reduce((max, id) => Math.max(max, numberOf(id, prefix)), 0);
+
+/** Следующий свободный номер: id уже удалённых записей не переиспользуем. */
+function nextId(existing: readonly string[], prefix: string, width: number): string {
+  return `${prefix}${String(maxNumber(existing, prefix) + 1).padStart(width, '0')}`;
+}
+
+/**
+ * Следующий id сессии внутри работы: `s-01`, `s-02`, … Номер берётся по
+ * счётчику работы, а не по одному списку сессий: удалённая запись из списка
+ * ушла, но её id занят навсегда — иначе `s-03` в чужом брифе или в `contextFrom`
+ * стал бы указывать на другую сессию (план от 2026-09-06, раздел C). Счётчик
+ * пишется сразу же: карта всё равно сохраняется той же мутацией.
+ */
 export function nextSessionId(map: WorkMap): string {
-  return nextId(
-    map.sessions.map((session) => session.id),
-    's-',
-    2,
-  );
+  const next =
+    Math.max(
+      map.work.sessionSeq ?? 0,
+      maxNumber(
+        map.sessions.map((session) => session.id),
+        's-',
+      ),
+    ) + 1;
+  map.work.sessionSeq = next;
+  return `s-${String(next).padStart(2, '0')}`;
 }
 
 /** Следующий id сообщения внутри работы: `m-01`, `m-02`, … */
@@ -104,6 +120,37 @@ export function addSession(
   };
   map.sessions.push(session);
   return session;
+}
+
+/**
+ * Убирает сессию из карты (`prefix d`, план от 2026-09-06, раздел C). Дети
+ * поднимаются к родителю удалённой, её id уходит из чужих `contextFrom`, а
+ * письма остаются с пометкой `deleted` — переписку задним числом не переписывают.
+ * След удаления — только id в `work.deletedSessions`: ни ярлыка, ни задачи, ни
+ * резюме в карте не остаётся.
+ */
+export function removeSession(map: WorkMap, sessionId: string): WorkSession {
+  const at = map.sessions.findIndex((candidate) => candidate.id === sessionId);
+  if (at === -1) throw new Error(`сессии ${sessionId} нет в карте`);
+  const [removed] = map.sessions.splice(at, 1) as [WorkSession];
+
+  for (const session of map.sessions) {
+    if (session.parent === sessionId) session.parent = removed.parent;
+    if (session.contextFrom.includes(sessionId)) {
+      session.contextFrom = session.contextFrom.filter((id) => id !== sessionId);
+    }
+  }
+  for (const message of map.messages) {
+    if (message.from === sessionId || message.to === sessionId) message.deleted = true;
+  }
+
+  const deleted = map.work.deletedSessions ?? [];
+  if (!deleted.includes(sessionId)) deleted.push(sessionId);
+  map.work.deletedSessions = deleted;
+  // Счётчик помнит номер и после того, как запись исчезла: в картах без него
+  // максимум по списку после удаления самой свежей сессии уехал бы назад.
+  map.work.sessionSeq = Math.max(map.work.sessionSeq ?? 0, numberOf(sessionId, 's-'));
+  return removed;
 }
 
 export interface NewMessage {

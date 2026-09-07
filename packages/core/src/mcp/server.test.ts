@@ -6,7 +6,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { GUIDE } from '../work/guide.js';
-import { addMessage, addSession, transitionSession } from '../work/map.js';
+import { addMessage, addSession, removeSession, transitionSession } from '../work/map.js';
 import { createWork, updateMap, workPaths } from '../work/store.js';
 import type { WorkMap } from '../work/types.js';
 import { contextFromEnv } from './context.js';
@@ -523,6 +523,71 @@ describe('wait_for', () => {
     ]);
     // Прочитанным помечает только check_inbox.
     expect((await readMapFile()).messages[0]?.readAt).toBeNull();
+  });
+});
+
+describe('удалённая сессия (план от 2026-09-06, раздел C)', () => {
+  it('27: wait_for на id из deletedSessions отвечает deleted сразу', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await updateMap(project, workId, (map) => {
+      removeSession(map, 's-02');
+    });
+
+    const started = Date.now();
+    expect(await callOk(client, 'wait_for', { target: 's-02', timeoutSec: 30 })).toEqual({
+      state: 'deleted',
+      sessionId: 's-02',
+    });
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it('27: сессия, удалённая пока висит вызов, будит wait_for', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+
+    const pending = callOk(client, 'wait_for', { target: 's-02', timeoutSec: 20 });
+    await delay(60);
+    await updateMap(project, workId, (map) => {
+      removeSession(map, 's-02');
+    });
+
+    expect(await pending).toEqual({ state: 'deleted', sessionId: 's-02' });
+  });
+
+  it('27: id, которого не было никогда, — по-прежнему ошибка сразу', async () => {
+    const client = await connect('s-01');
+    const started = Date.now();
+    const result = await call(client, 'wait_for', { target: 's-77', timeoutSec: 30 });
+
+    expect(result.isError).toBe(true);
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it('28: сервер удалённой сессии не пишет в карту ни одним инструментом', async () => {
+    const owner = await connect('s-01');
+    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    // Сервер сессии `s-02` ещё жив: SessionEnd приходит раньше выхода процесса.
+    const orphan = await connect('s-02');
+    await updateMap(project, workId, (map) => {
+      removeSession(map, 's-02');
+    });
+    const before = await readMapFile();
+
+    const calls = [
+      call(orphan, 'report', { status: 'done', summary: 'успел' }),
+      call(orphan, 'spawn_session', { provider: 'claude', label: 'ещё', task: 'делать' }),
+      call(orphan, 'send_message', { to: 's-01', text: 'я ещё тут' }),
+      call(orphan, 'check_inbox'),
+    ];
+    for (const result of await Promise.all(calls)) {
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain('s-02');
+    }
+
+    const after = await readMapFile();
+    expect(after.sessions).toEqual(before.sessions);
+    expect(after.messages).toEqual(before.messages);
   });
 });
 
