@@ -28,6 +28,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { pinUnicodeGlyphs } from '../test/glyphs-env.js';
 import { App } from './app.js';
+import { createPendingSession } from './work-launch.js';
 
 const STUB = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -424,7 +425,7 @@ describe('переключение работ (2.1, 3.2)', () => {
     }
   }, 30_000);
 
-  it('prefix C заводит дочернюю сессию выбранной и запускает её по брифу', async () => {
+  it('13: prefix C заводит дочернюю сессию выбранной и стартует тихо', async () => {
     const app = open();
     try {
       const workId = await launch(app);
@@ -439,12 +440,77 @@ describe('переключение работ (2.1, 3.2)', () => {
       const child = (await readMap(project, workId)).sessions[1];
       expect(child?.parent).toBe('s-01');
       expect(child?.contextFrom).toEqual(['s-01']);
+      // Задачи у неё нет: её напишет пользователь первым сообщением (план B).
+      expect(child?.task).toBe('');
       // Дочерняя сессия запущена сразу, а её бриф несёт резюме родителя.
       await waitFor(() => (app.lastFrame() ?? '').includes('harnas=s-02@w-0001'));
       const brief = await readFile(path.join(workPaths(project, workId).briefs, 's-02.md'), 'utf8');
       expect(brief).toContain('миграции готовы');
+      // Бриф уехал в системную вставку, а не первым сообщением: в аргументах
+      // stub его заголовка нет, и агент ждёт запроса пользователя.
+      expect(app.lastFrame()).not.toContain('# Работа');
     } finally {
       app.unmount();
+    }
+  }, 30_000);
+
+  it('14: первое сообщение пользователя в тихой сессии начинает ход', async () => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    const workId = created.work.id;
+    await createPendingSession(project, workId, {
+      provider: 'claude',
+      label: 'план',
+      task: 'составить план',
+    });
+
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await waitFor(() => (app.lastFrame() ?? '').includes('план'));
+      app.stdin.write(`${PREFIX}C`);
+      await waitFor2(async () => (await readMap(project, workId)).sessions.length === 2);
+      await waitFor(() => (app.lastFrame() ?? '').includes('harnas=s-02@'));
+      // Пока пользователь молчит, хода нет: тихая сессия ничего не начинала.
+      // Ярлык в узком сайдбаре усечён — ищем строку по его началу.
+      expect(lineWith(app.lastFrame() ?? '', 'новая сес')).not.toContain('working');
+
+      // Первое сообщение пользователя — хук `UserPromptSubmit` (4.2).
+      app.stdin.write('event {"hook_event_name":"UserPromptSubmit"}\r');
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'новая сес').includes('working'));
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('19: сессия закреплённой чужой работы ложится в её проект, а не в харнесса', async () => {
+    const other = await mkdtemp(path.join(tmpdir(), 'harnas-other-'));
+    try {
+      const workId = (await createWork(other, { title: 'Автоплатежи', goal: '' })).work.id;
+      const app = open();
+      try {
+        await mounted(app.stdin);
+        app.stdin.write(`${PREFIX}w`);
+        await waitFor(() => (app.lastFrame() ?? '').includes('Автоплатежи'));
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        app.stdin.write(ENTER);
+        await waitFor(() => (app.lastFrame() ?? '').includes('сессии · Автоплатежи'));
+
+        app.stdin.write(`${PREFIX}c`);
+        await waitFor2(async () => (await readMap(other, workId)).sessions.length === 1);
+        await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
+        await waitFor(() => (app.lastFrame() ?? '').includes('новая сессия'));
+
+        app.stdin.write(`${PREFIX}C`);
+        await waitFor2(async () => (await readMap(other, workId)).sessions.length === 2);
+        expect((await readMap(other, workId)).sessions[1]?.parent).toBe('s-01');
+        // В проекте харнесса карты этой работы нет вовсе: `rm` и записи ушли бы
+        // не в тот проект (хвост TODOS, обязательное условие удаления сессии).
+        await expect(readMap(project, workId)).rejects.toThrow();
+      } finally {
+        app.unmount();
+      }
+    } finally {
+      await rm(other, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   }, 30_000);
 });

@@ -17,7 +17,7 @@ import {
   type SidebarTarget,
   type SidebarWork,
 } from './components/sidebar.js';
-import type { PanelState } from './use-panel.js';
+import type { PanelState, WorkRef } from './use-panel.js';
 import type { OverlaysState } from './use-overlays.js';
 import { usePrefixInput, withoutMouse, type MouseEvent } from './use-prefix-input.js';
 import type { SelectionState } from './use-selection.js';
@@ -43,8 +43,11 @@ export interface ActionsOptions {
   selection: SelectionState;
   /** Сессии каждой работы в порядке дерева: курсор навигации и ходьба `j`/`k`. */
   orders: ReadonlyMap<string, readonly string[]>;
-  /** Выбранная работа: в неё ложится новая сессия (5.1). */
-  workId: string | null;
+  /**
+   * Выбранная работа с её проектом: в неё ложится новая сессия (5.1). Проект
+   * берётся у записи работы — закреплённая работа бывает чужой (макет 4.2).
+   */
+  work: WorkRef | null;
   session: WorkSession | null;
   panel: PanelState;
   overlays: OverlaysState;
@@ -87,7 +90,7 @@ export function useActions(options: ActionsOptions): ActionsState {
       ),
     [workRows, orders],
   );
-  const { workId, session, sidebar, panelLeft, mouseCapture, onKey, toggleSidebar } = options;
+  const { work, session, sidebar, panelLeft, mouseCapture, onKey, toggleSidebar } = options;
 
   const [navigating, setNavigating] = useState(false);
   const [awaiting, setAwaiting] = useState(false);
@@ -117,14 +120,14 @@ export function useActions(options: ActionsOptions): ActionsState {
   );
 
   /**
-   * Новая сессия в работе `key`; `null` — в новой работе «без названия» (5.1).
+   * Новая сессия в работе `target`; `null` — в новой работе «без названия» (5.1).
    * Выбор переезжает за панелью: работа могла родиться этим же нажатием.
    */
   const create = useCallback(
-    (key: string | null) => {
+    (target: WorkRef | null) => {
       // Работа и сессия задаются явно: обе могли родиться этим же нажатием и в
       // выборе их ещё нет — `selectWork` без сессии вернул бы панель к прежней.
-      panel.create(key, (sessionId, workKey) => selection.selectWork(workKey, sessionId));
+      panel.create(target, (sessionId, workKey) => selection.selectWork(workKey, sessionId));
     },
     [panel, selection],
   );
@@ -153,11 +156,11 @@ export function useActions(options: ActionsOptions): ActionsState {
       onKey();
       // `c` про курсор не спрашивает: сессия ложится в выбранную работу, а если
       // работ нет — `panel.create(null)` заводит первую (3.2, 5.1).
-      if (key === 'c') return create(workId);
+      if (key === 'c') return create(work);
       // `C` — дочерняя сессия выбранной: родитель и контекст берутся из неё (3.2).
       if (key === 'C') {
-        if (workId === null || session === null) return;
-        return panel.createChild(workId, session.id, (sessionId, workKey) =>
+        if (work === null || session === null) return;
+        return panel.createChild(work, session.id, (sessionId, workKey) =>
           selection.selectWork(workKey, sessionId),
         );
       }
@@ -185,7 +188,7 @@ export function useActions(options: ActionsOptions): ActionsState {
       const overlay = OVERLAYS[key];
       if (overlay !== undefined) overlays.open(overlay);
     },
-    [create, workId, rows, selection, walk, workRows, overlays, onKey, toggleSidebar],
+    [create, work, rows, selection, walk, workRows, overlays, onKey, toggleSidebar],
   );
 
   /**

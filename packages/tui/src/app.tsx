@@ -158,7 +158,10 @@ export function App({
     workRows,
     selection,
     orders: order,
-    workId: chosen?.map.work.id ?? null,
+    // Работа вместе с её проектом: сессия ложится в проект записи, а не в
+    // проект харнесса — работа могла быть закреплена из чужого (макет 4.2).
+    work:
+      chosen === undefined ? null : { projectPath: chosen.projectPath, workId: chosen.map.work.id },
     session: current,
     panel,
     overlays,

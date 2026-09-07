@@ -39,6 +39,15 @@ export interface PanelOptions {
   onFail: (reason: unknown) => void;
 }
 
+/**
+ * Работа, в которую ложится сессия: проект берётся у записи работы, а не у
+ * харнесса — закреплённая работа может лежать в чужом проекте (макет 4.2).
+ */
+export interface WorkRef {
+  projectPath: string;
+  workId: string;
+}
+
 export interface PanelState {
   /** Экран агента, к которому подключена панель. */
   snapshot: TerminalSnapshot | undefined;
@@ -49,13 +58,14 @@ export interface PanelState {
   attach: (key: string) => void;
   /**
    * Быстрая сессия `new`: работа берётся выбранная, а `null` заводит «без
-   * названия», процесс стартует сразу (5.1). Колбэк получает id новой сессии и
-   * ключ её работы: работа могла родиться только что, и выбор едет за ней.
+   * названия» в проекте харнесса, процесс стартует сразу (5.1). Колбэк получает
+   * id новой сессии и ключ её работы: работа могла родиться только что, и выбор
+   * едет за ней.
    */
-  create: (workId: string | null, created: (sessionId: string, workKey: string) => void) => void;
-  /** `prefix C`: дочерняя сессия выбранной, запускается сразу по брифу. */
+  create: (work: WorkRef | null, created: (sessionId: string, workKey: string) => void) => void;
+  /** `prefix C`: дочерняя сессия выбранной, стартует тихо — бриф контекстом. */
   createChild: (
-    workId: string,
+    work: WorkRef,
     parentId: string,
     created: (sessionId: string, workKey: string) => void,
   ) => void;
@@ -168,11 +178,14 @@ export function usePanel({
   );
 
   const create = useCallback<PanelState['create']>(
-    (workId, created) => {
-      void createNewSession(projectPath, workId)
+    (work, created) => {
+      // Новая работа заводится там, где запущен харнесс; у выбранной проект
+      // берётся из её записи — она может быть чужой (макет 4.2).
+      const project = work?.projectPath ?? projectPath;
+      void createNewSession(project, work?.workId ?? null)
         .then(async ({ workId: id, session }) => {
-          openWork(projectPath, id, session, await planNew(projectPath, id, session));
-          created(session.id, workKey(projectPath, id));
+          openWork(project, id, session, await planNew(project, id, session));
+          created(session.id, workKey(project, id));
         })
         .catch(onFail);
     },
@@ -180,15 +193,15 @@ export function usePanel({
   );
 
   const createChild = useCallback<PanelState['createChild']>(
-    (workId, parentId, created) => {
-      void createChildSession(projectPath, workId, parentId)
+    ({ projectPath: project, workId }, parentId, created) => {
+      void createChildSession(project, workId, parentId)
         .then(async ({ session }) => {
-          openWork(projectPath, workId, session, await planLaunch(projectPath, workId, session));
-          created(session.id, workKey(projectPath, workId));
+          openWork(project, workId, session, await planLaunch(project, workId, session));
+          created(session.id, workKey(project, workId));
         })
         .catch(onFail);
     },
-    [projectPath, openWork, onFail],
+    [openWork, onFail],
   );
 
   const start = useCallback<PanelState['start']>(
