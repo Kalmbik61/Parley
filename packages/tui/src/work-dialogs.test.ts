@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { glyphs } from './glyphs.js';
 import {
   closeSessionDialog,
+  deleteBlockedDialog,
+  deleteSessionDialog,
   exitDialog,
   launchDialog,
   resumeDialog,
@@ -160,5 +162,43 @@ describe('подтверждения (макеты 4.8 и 4.9)', () => {
     expect(spec.info[0]).toBe('живые сессии: план, бэкенд');
     expect(spec.info[1]).toContain('завершены');
     expect(spec.footer).toContain('Enter — выйти');
+  });
+});
+
+describe('удаление сессии (макеты 4.10 и 4.11)', () => {
+  it('называет, что удаляется, что остаётся и куда денутся дети', () => {
+    const spec = deleteSessionDialog(session(), ['ревью', 'тесты'], g, BODY);
+
+    expect(spec.title).toBe(`удалить ${g.exited} бэкенд`);
+    expect(spec.info[0]).toBe('запись, бриф и журнал событий будут удалены');
+    expect(spec.info[1]).toBe('транскрипт в ~/.claude останется');
+    expect(spec.info[2]).toBe('дочерние: ревью, тесты → поднимутся на уровень');
+    expect(spec.quote).toEqual([]);
+    expect(spec.footer).toBe('Enter — удалить · Esc');
+    for (const info of spec.info) expect(info.length).toBeLessThanOrEqual(BODY);
+  });
+
+  it('без детей строки про них нет, а длинный список режется по ширине рамки', () => {
+    expect(deleteSessionDialog(session(), [], g, BODY).info).toHaveLength(2);
+
+    const many = deleteSessionDialog(
+      session(),
+      ['ревью', 'тесты', 'бэкенд', 'фронтенд', 'документация'],
+      g,
+      BODY,
+    );
+    expect(many.info[2]?.length).toBeLessThanOrEqual(BODY);
+    expect(many.info[2]).toContain(g.ellipsis);
+  });
+
+  it('живую вне харнесса сессию не удаляет, а объясняет почему', () => {
+    const spec = deleteBlockedDialog(session({ status: 'active', pid: null }), g);
+
+    expect(spec.title).toBe(`удалить ${g.active} бэкенд`);
+    expect(spec.info[0]).toContain('жива');
+    expect(spec.info[1]).toContain('закройте её там, где она запущена');
+    // Подтверждать нечего: у отказа только выход.
+    expect(spec.footer).toBe('Esc — понятно');
+    expect(spec.footer).not.toContain('Enter');
   });
 });

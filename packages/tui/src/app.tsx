@@ -137,6 +137,7 @@ export function App({
     works,
     sessions,
     index,
+    log,
     activityOf: activity.activityOf,
     stateOf: activity.stateOf,
     workState: activity.workState,

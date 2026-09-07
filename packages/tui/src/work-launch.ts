@@ -10,11 +10,13 @@
 import {
   addSession,
   createWork,
+  deleteSessionFiles,
   finishSession,
   linkProviderSession,
   loadProviders,
   mcpConfigValue,
   readMap,
+  removeSession,
   resumeCommand,
   startCommand,
   systemGuidance,
@@ -321,6 +323,23 @@ export async function createPendingSession(
   });
   await writeBrief(projectPath, map, created);
   return created;
+}
+
+/**
+ * `prefix d`: убрать сессию из карты и её файлы с диска (план от 2026-09-06,
+ * раздел C). Сначала карта — она источник истины: не удалившийся журнал читатели
+ * всё равно не покажут, а запись без карты показывать было бы нечем. Процесс к
+ * этому моменту уже вышел: его гасит панель.
+ */
+export async function deleteSession(
+  projectPath: string,
+  workId: string,
+  sessionId: string,
+): Promise<void> {
+  await updateMap(projectPath, workId, (map) => {
+    removeSession(map, sessionId);
+  });
+  await deleteSessionFiles(projectPath, workId, sessionId);
 }
 
 /** Процесс, поднятый харнессом: по нему проверяется живость после перезапуска (5.4). */

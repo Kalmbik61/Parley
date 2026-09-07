@@ -9,6 +9,7 @@
 //   alt               — уходит в alt-screen и печатает там
 //   mouse on|off      — включает/выключает отслеживание мыши (как это делает TUI)
 //   color             — печатает цветной текст
+//   deaf              — перестаёт слушать SIGHUP: так проверяется добивание SIGKILL
 //   event <json>      — дописывает строку в $HARNAS_WORK_DIR/events/$HARNAS_SESSION_ID.jsonl,
 //                       как это делает хук Claude Code (дизайн TUI v2, 4.2)
 //   event <сессия> <json> — то же, но в журнал другой сессии той же работы:
@@ -103,6 +104,12 @@ function handle(line) {
       break;
     case 'color':
       process.stdout.write('\u001B[31mкрасный\u001B[0m обычный\r\n');
+      break;
+    case 'deaf':
+      // Мягкое завершение больше не действует: харнесс должен добить SIGKILL.
+      process.removeAllListeners('SIGHUP');
+      process.on('SIGHUP', () => {});
+      process.stdout.write('deaf\r\n');
       break;
     case 'event':
       writeEvent(argument);

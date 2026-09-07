@@ -1,6 +1,6 @@
 /**
- * Содержимое подтверждений: запуск, возобновление, дозаказ резюме, закрытие
- * сессии и выход (макеты TUI v2, 4.5–4.9; прежний дизайн 4.3–4.5).
+ * Содержимое подтверждений: запуск, возобновление, дозаказ резюме, закрытие,
+ * удаление сессии и выход (макеты TUI v2, 4.5–4.11; прежний дизайн 4.3–4.5).
  *
  * Здесь только текст: файловой системы и Ink нет, поэтому макеты проверяются
  * тестами без запуска чего бы то ни было. Рамку рисует `components/overlay.tsx`,
@@ -137,6 +137,49 @@ export function closeSessionDialog(session: WorkSession, g: Glyphs): DialogSpec 
     ],
     quote: [],
     footer: 'Enter — закрыть · Esc',
+  };
+}
+
+/**
+ * 4.10. Удаление сессии: запись, бриф и журнал уходят с диска, транскрипт у
+ * провайдера остаётся, а дети поднимаются к родителю удалённой (план от
+ * 2026-09-06, раздел C).
+ */
+export function deleteSessionDialog(
+  session: WorkSession,
+  children: readonly string[],
+  g: Glyphs,
+  width: number,
+): DialogSpec {
+  const info = ['запись, бриф и журнал событий будут удалены', 'транскрипт в ~/.claude останется'];
+  if (children.length > 0) {
+    info.push(
+      truncate(`дочерние: ${children.join(', ')} → поднимутся на уровень`, width, g.ellipsis),
+    );
+  }
+  return {
+    title: `удалить ${statusGlyph(session.status, g)} ${session.label}`,
+    info,
+    quote: [],
+    footer: 'Enter — удалить · Esc',
+  };
+}
+
+/**
+ * 4.11. Отказ удалить живую сессию, чей процесс не у харнесса: закрыть её нечем,
+ * а удалённая запись оставила бы работающий процесс без места в карте. Такая
+ * сессия — CLI-сессия (`pid: null`, свежий журнал) или пережившая перезапуск
+ * харнесса (раздел C).
+ */
+export function deleteBlockedDialog(session: WorkSession, g: Glyphs): DialogSpec {
+  return {
+    title: `удалить ${statusGlyph(session.status, g)} ${session.label}`,
+    info: [
+      `сессия жива, но её процесс не у харнесса${session.pid === null ? '' : ` · pid ${session.pid}`}`,
+      'закройте её там, где она запущена, и повторите',
+    ],
+    quote: [],
+    footer: 'Esc — понятно',
   };
 }
 

@@ -69,6 +69,18 @@ function Probe({
 }
 
 describe('useActivity', () => {
+  it('34: журнал удалённой сессии состояния не заводит', async () => {
+    // Файл остался (и может дописаться снова: хук пишет по HARNAS_SESSION_ID),
+    // а записи в карте больше нет — читатели её не воскрешают (раздел C).
+    await appendFile(path.join(events, 's-01.jsonl'), hook('SessionEnd'));
+    const works: ActivityWork[] = [{ key: 'w1', eventsDir: events, sessions: [] }];
+
+    const { lastFrame } = render(<Probe works={works} />);
+    await settle();
+    // Ни точки сессии, ни точки работы, ни жалобы на пропавшие хуки.
+    expect(lastFrame()).toBe('|—|false');
+  });
+
   it('читает журнал хуков и выводит состояние сессии', async () => {
     await appendFile(path.join(events, 's-01.jsonl'), hook('UserPromptSubmit'));
     const works: ActivityWork[] = [{ key: 'w1', eventsDir: events, sessions: [session()] }];

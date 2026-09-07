@@ -1,6 +1,6 @@
 /**
  * Оверлеи: какой открыт, что в нём выбрано и что делает `Enter`
- * (дизайн TUI v2, 2.4 и 5.2–5.3; макеты 4.0–4.9).
+ * (дизайн TUI v2, 2.4 и 5.2–5.3; макеты 4.0–4.11).
  *
  * Пока оверлей открыт, ввод идёт ему, а не гостю: `use-actions.ts` держит
  * `capture`, а разбирает клавиши этот хук. Содержимое строят чистые функции
@@ -8,10 +8,12 @@
  */
 
 import {
+  checkSession,
   configPath,
   createWork,
   requestAutoSummary,
   updateMap,
+  type ActivityLog,
   type SessionActivity,
   type SessionIndex,
   type WorkEntry,
@@ -40,6 +42,8 @@ import type { SelectionState } from './use-selection.js';
 import type { StatusEventInit } from './use-status.js';
 import {
   closeSessionDialog,
+  deleteBlockedDialog,
+  deleteSessionDialog,
   exitDialog,
   launchDialog,
   resumeDialog,
@@ -57,12 +61,12 @@ export type OverlayKind =
   | 'history'
   | 'help'
   | 'sidebar'
-  /** Подтверждение 4.5–4.9: тело рисует `dialog.tsx` внутри рамки. */
+  /** Подтверждение 4.5–4.11: тело рисует `dialog.tsx` внутри рамки. */
   | 'confirm';
 
 /** Действие, открывающее оверлей: клавиша префикса или `Enter` в сайдбаре. */
 export type OverlayAction =
-  Exclude<OverlayKind, 'confirm'> | 'launch' | 'resume' | 'summary' | 'close' | 'exit';
+  Exclude<OverlayKind, 'confirm'> | 'launch' | 'resume' | 'summary' | 'close' | 'delete' | 'exit';
 
 export interface OverlaysOptions {
   /** Проект харнесса: в нём заводятся работы и ищется история (5.3). */
@@ -73,6 +77,8 @@ export interface OverlaysOptions {
   /** Индекс логов провайдера: пикер истории, токены и ветка. */
   sessions: readonly SessionIndex[];
   index: (session: WorkSession) => SessionIndex | undefined;
+  /** Что известно про лог провайдера: по нему живость сессии без pid (5.4). */
+  log: (session: WorkSession) => ActivityLog | null;
   activityOf: (sessionId: string) => SessionActivity | null;
   stateOf: (session: WorkSession) => DotState;
   workState: (key: string) => DotState | null;
@@ -98,7 +104,7 @@ export interface OverlaysState {
   kind: OverlayKind | null;
   /** Вид оверлея-списка; `null` — открыт не список. */
   view: OverlayView | null;
-  /** Подтверждение внутри рамки: его тело рисует `dialog.tsx` (4.5–4.9). */
+  /** Подтверждение внутри рамки: его тело рисует `dialog.tsx` (4.5–4.11). */
   confirm: { id: number; spec: DialogSpec } | null;
   /** Своя ширина открытого оверлея: по ней считается раскладка (§4.0). */
   desired: number | null;
@@ -120,6 +126,7 @@ const byRecency = (a: SessionIndex, b: SessionIndex): number =>
 
 export function useOverlays(options: OverlaysOptions): OverlaysState {
   const { projectPath, prefixName, works, sessions, index, entry, session, runKey } = options;
+  const { log } = options;
   const { order, branch, panel, selection, pin, push, fail, exit } = options;
 
   const [kind, setKind] = useState<OverlayKind | null>(null);
@@ -295,6 +302,32 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
         return;
       }
 
+      if (action === 'delete') {
+        const atHarness = runKey !== null && panel.alive(runKey);
+        void (async () => {
+          // Живую сессию, чей процесс не у нас, удалять нельзя: закрыть её нечем,
+          // а без записи она осталась бы работать в никуда (раздел C). Живость
+          // считает та же `checkSession`, что и сверка карты: у CLI-сессии с
+          // `pid: null` её решает свежесть журнала.
+          if (!atHarness && session.status === 'active') {
+            const { alive } = await checkSession(session, {
+              lastRecordAt: log(session)?.lastRecordAt ?? null,
+            });
+            if (alive) return askConfirm(deleteBlockedDialog(session, g), close);
+          }
+          const children = entry.map.sessions
+            .filter((item) => item.parent === session.id)
+            .map((item) => item.label);
+          askConfirm(deleteSessionDialog(session, children, g, CONFIRM - 2), () => {
+            close();
+            panel.remove({ projectPath: project, workId }, session.id, () =>
+              push([{ text: 'сессия удалена' }]),
+            );
+          });
+        })().catch(fail);
+        return;
+      }
+
       // 'close': SIGHUP процессу панели (макет 4.8).
       if (session.status !== 'active') return guard(`«${session.label}» не запущена`);
       if (runKey === null || !panel.alive(runKey)) {
@@ -305,7 +338,7 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
         panel.close(runKey);
       });
     },
-    [works, entry, session, runKey, panel, selection, askConfirm, close, push, fail, exit, g],
+    [works, entry, session, runKey, log, panel, selection, askConfirm, close, push, fail, exit, g],
   );
 
   /** Ходьба по сессиям в оверлее сайдбара (§1.3). */

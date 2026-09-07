@@ -46,6 +46,12 @@ export interface WorkTarget {
   providerSessionId: string | null;
 }
 
+/**
+ * Сколько ждать мягкого выхода после SIGHUP, прежде чем послать SIGKILL: удаляем
+ * запись только после выхода процесса (план от 2026-09-06, раздел C).
+ */
+export const KILL_AFTER_MS = 3000;
+
 /** Ключ живой панели сессии работы: по нему же идёт attach (дизайн 8). */
 export const workRunKey = (projectPath: string, workId: string, sessionId: string): string =>
   `work:${projectPath} ${workId} ${sessionId}`;
@@ -107,6 +113,13 @@ export interface AgentPtyState {
    * как при закрытии терминала (дизайн TUI v2, 3.2 и макет 4.8).
    */
   close(key?: string): void;
+  /**
+   * Закрыть панель и дождаться выхода процесса: SIGHUP, ожидание до
+   * `KILL_AFTER_MS`, затем SIGKILL. Нужно удалению сессии — её запись уходит из
+   * карты только после выхода, иначе обработчик выхода и хук `SessionEnd` писали
+   * бы в удалённую сессию (план от 2026-09-06, раздел C).
+   */
+  stop(key: string): Promise<void>;
 }
 
 /**
@@ -282,6 +295,25 @@ export function useAgentPty({ onStart, onExit, onFail }: AgentPtyOptions = {}): 
     [activeKey],
   );
 
+  const stop = useCallback<AgentPtyState['stop']>(
+    async (key) => {
+      const session = live.current.get(key);
+      if (session !== undefined && session.state === 'running') {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(() => session.kill('SIGKILL'), KILL_AFTER_MS);
+          const off = session.onExit(() => {
+            clearTimeout(timer);
+            off();
+            resolve();
+          });
+          session.kill();
+        });
+      }
+      close(key);
+    },
+    [close],
+  );
+
   const active = runs.find((run) => targetKey(run.target) === activeKey);
   const running = useMemo(
     () => runs.filter((run) => run.exit === undefined).map((run) => run.session),
@@ -301,5 +333,6 @@ export function useAgentPty({ onStart, onExit, onFail }: AgentPtyOptions = {}): 
       if (key !== undefined) live.current.get(key)?.write(data);
     },
     close,
+    stop,
   };
 }

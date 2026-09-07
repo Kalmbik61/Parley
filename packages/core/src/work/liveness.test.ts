@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
 import { checkSession, isAlive, processStartedAt, reconcileMap } from './liveness.js';
-import { addSession, transitionSession } from './map.js';
+import { addSession, removeSession, transitionSession } from './map.js';
 import { createWork, readMap, updateMap } from './store.js';
 import type { WorkSession } from './types.js';
 
@@ -200,6 +200,24 @@ describe('reconcileMap (чек-лист 15)', () => {
 
     expect((await reconcileMap(project, work.id)).length).toBe(1);
     expect(await reconcileMap(project, work.id)).toEqual([]);
+  });
+
+  it('34: удалённая сессия сверкой живости не возвращается', async () => {
+    const { work } = await createWork(project, { title: 'работа' });
+    const dead = start();
+    const startedAtProcess = await processStartedAt(dead.pid ?? 0);
+    await stop(dead);
+    const id = await seed(work.id, { pid: dead.pid ?? 0, startedAtProcess });
+    await updateMap(project, work.id, (map) => {
+      removeSession(map, id);
+    });
+
+    // Мёртвый процесс в карте больше не значится: переводить некого, и записи
+    // из следа удаления не появляется (план от 2026-09-06, раздел C).
+    expect(await reconcileMap(project, work.id)).toEqual([]);
+    const map = await readMap(project, work.id);
+    expect(map.sessions).toEqual([]);
+    expect(map.work.deletedSessions).toEqual([id]);
   });
 
   it('сессия без pid: молчащая уходит в exited', async () => {

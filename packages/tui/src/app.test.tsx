@@ -881,6 +881,199 @@ describe('закрытие сессии (3.2, макет 4.8)', () => {
   }, 30_000);
 });
 
+describe('удаление сессии (3.2, макет 4.10)', () => {
+  const hook = (name: string, extra: Record<string, unknown> = {}): string =>
+    `${JSON.stringify({ hook_event_name: name, ...extra })}\n`;
+
+  /** Оверлей подтверждения подписывается на ввод эффектом: до подписки клавиша пропала бы. */
+  const confirm = async (app: ReturnType<typeof render>): Promise<void> => {
+    await waitFor(() => (app.lastFrame() ?? '').includes('Enter — удалить'));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    app.stdin.write(ENTER);
+  };
+
+  /** Ярлык руками: обе быстрые сессии зовутся одинаково, а в кадре их надо различать. */
+  const rename = async (workId: string, sessionId: string, label: string): Promise<void> => {
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((item) => item.id === sessionId);
+      if (session !== undefined) session.label = label;
+    });
+  };
+
+  it('29: prefix d на живой подключённой сессии удаляет её, дети поднимаются', async () => {
+    const app = open();
+    try {
+      const workId = await launch(app);
+      await waitMap(workId, (item) => item.status === 'active');
+      await rename(workId, 's-01', 'план');
+      // Дочерняя сессия: после удаления родителя она поднимется на уровень.
+      app.stdin.write(`${PREFIX}C`);
+      await waitFor2(async () => (await readMap(project, workId)).sessions.length === 2);
+      await rename(workId, 's-02', 'ревью');
+      await waitFor(() => (app.lastFrame() ?? '').includes('ревью'));
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'план') !== '');
+
+      // Обратно на родителя: его PTY у харнесса, панель подключена к нему.
+      app.stdin.write(`${PREFIX}k`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('harnas=s-01@'));
+
+      app.stdin.write(`${PREFIX}d`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('удалить'));
+      const frame = app.lastFrame() ?? '';
+      expect(frame).toContain('удалить ● план');
+      expect(frame).toContain('запись, бриф и журнал событий будут удалены');
+      expect(frame).toContain('транскрипт в ~/.claude останется');
+      expect(frame).toContain('дочерние: ревью → поднимутся на уровень');
+      await confirm(app);
+
+      await waitFor2(async () => (await readMap(project, workId)).sessions.length === 1);
+      const map = await readMap(project, workId);
+      expect(map.sessions.map((item) => item.id)).toEqual(['s-02']);
+      // Ребёнок поднялся к родителю удалённой, ссылка на неё вычищена.
+      expect(map.sessions[0]?.parent).toBeNull();
+      expect(map.sessions[0]?.contextFrom).toEqual([]);
+      expect(map.work.deletedSessions).toEqual(['s-01']);
+      await waitFor(() => (app.lastFrame() ?? '').includes('сессия удалена'));
+
+      // Выбор чинится сам: панель показывает карточку оставшейся сессии, а не
+      // экран удалённой — её PTY харнесс закрыл (2.2).
+      await waitFor(() => (app.lastFrame() ?? '').includes('запущена харнессом'));
+      expect(lineWith(app.lastFrame() ?? '', 'запущена харнессом')).not.toBe('');
+      expect(app.lastFrame()).toContain('ревью');
+
+      // Журнал удалённой сессии, дописанный хуком после удаления, записи не
+      // создаёт: настройки одни на работу, и хук пишет по HARNAS_SESSION_ID.
+      const paths = workPaths(project, workId);
+      await mkdir(paths.events, { recursive: true });
+      await appendFile(path.join(paths.events, 's-01.jsonl'), hook('SessionEnd'));
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      expect((await readMap(project, workId)).sessions.map((item) => item.id)).toEqual(['s-02']);
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('30: живую CLI-сессию удалить нельзя, устаревшую — можно', async () => {
+    const { workId } = await outsideSession('ревью');
+
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await waitFor(() => (app.lastFrame() ?? '').includes('ревью'));
+
+      // pid у неё null, а журнал свежий: по `checkSession` она жива, и её процесс
+      // не у харнесса — закрыть его нечем (раздел C).
+      app.stdin.write(`${PREFIX}d`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('её процесс не у харнесса'));
+      expect(app.lastFrame()).toContain('закройте её там, где она запущена');
+      expect(app.lastFrame()).not.toContain('Enter — удалить');
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      app.stdin.write(ESC);
+      await waitFor(() => !(app.lastFrame() ?? '').includes('закройте её там'));
+      expect((await readMap(project, workId)).sessions).toHaveLength(1);
+
+      // Тот же журнал, но устаревший: сессия давно молчит и живой не считается.
+      await updateMap(project, workId, (map) => {
+        const session = map.sessions[0];
+        if (session !== undefined) session.startedAt = '2020-01-01T00:00:00.000Z';
+      });
+      await waitFor2(async () => (await readMap(project, workId)).sessions[0]?.status === 'exited');
+
+      app.stdin.write(`${PREFIX}d`);
+      await confirm(app);
+      await waitFor2(async () => (await readMap(project, workId)).sessions.length === 0);
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('31: Esc в подтверждении ничего не меняет', async () => {
+    const app = open();
+    try {
+      const workId = await launch(app);
+      await waitMap(workId, (item) => item.status === 'active');
+
+      app.stdin.write(`${PREFIX}d`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('Enter — удалить'));
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      app.stdin.write(ESC);
+      await waitFor(() => !(app.lastFrame() ?? '').includes('Enter — удалить'));
+
+      // Запись на месте, процесс жив: гость по-прежнему слышит ввод.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect((await readMap(project, workId)).sessions).toHaveLength(1);
+      app.stdin.write('echo цела\r');
+      await waitFor(() => (app.lastFrame() ?? '').includes('цела'));
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('32: удаление последней сессии оставляет пустую работу, new снова работает', async () => {
+    const app = open();
+    try {
+      const workId = await launch(app);
+      await waitMap(workId, (item) => item.status === 'active');
+
+      app.stdin.write(`${PREFIX}d`);
+      await confirm(app);
+      await waitFor2(async () => (await readMap(project, workId)).sessions.length === 0);
+
+      // Панель показывает карточку «сессий нет», точки у работы больше нет.
+      await waitFor(() => (app.lastFrame() ?? '').includes('сессий нет'));
+
+      // `prefix c` кладёт сессию в ту же работу, и её id не переиспользован.
+      app.stdin.write(`${PREFIX}c`);
+      await waitFor2(async () => (await readMap(project, workId)).sessions.length === 1);
+      expect((await readMap(project, workId)).sessions[0]?.id).toBe('s-02');
+      expect((await readWorksIndex()).works).toHaveLength(1);
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('33: удаление в закреплённой чужой работе трогает только её проект', async () => {
+    const other = await mkdtemp(path.join(tmpdir(), 'harnas-other-'));
+    try {
+      const workId = (await createWork(other, { title: 'Автоплатежи', goal: '' })).work.id;
+      const app = open();
+      try {
+        await mounted(app.stdin);
+        app.stdin.write(`${PREFIX}w`);
+        await waitFor(() => (app.lastFrame() ?? '').includes('Автоплатежи'));
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        app.stdin.write(ENTER);
+        await waitFor(() => (app.lastFrame() ?? '').includes('сессии · Автоплатежи'));
+
+        app.stdin.write(`${PREFIX}c`);
+        await waitFor2(async () => (await readMap(other, workId)).sessions.length === 1);
+        await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
+        // Сессия доехала до сайдбара: до этого кадра `prefix C` не о ком говорить.
+        await waitFor(() => (app.lastFrame() ?? '').includes('новая сессия'));
+        // Дочерняя: у неё есть бриф, и по нему видно, в каком проекте удаляли.
+        app.stdin.write(`${PREFIX}C`);
+        await waitFor2(async () => (await readMap(other, workId)).sessions.length === 2);
+        await waitFor(() => (app.lastFrame() ?? '').includes('harnas=s-02@'));
+        // Обе сессии в сайдбаре: до этого кадра выбор ещё стоит на первой.
+        await waitFor(() => (app.lastFrame() ?? '').split('новая сессия').length > 2);
+        const brief = path.join(workPaths(other, workId).briefs, 's-02.md');
+        expect(await readFile(brief, 'utf8')).toContain('# Работа');
+
+        app.stdin.write(`${PREFIX}d`);
+        await confirm(app);
+        await waitFor2(async () => (await readMap(other, workId)).sessions.length === 1);
+        await expect(readFile(brief, 'utf8')).rejects.toThrow();
+        // В проекте харнесса этой работы нет вовсе — `rm` ушёл бы не туда.
+        await expect(readMap(project, workId)).rejects.toThrow();
+      } finally {
+        app.unmount();
+      }
+    } finally {
+      await rm(other, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  }, 30_000);
+});
+
 describe('песочница тестов', () => {
   it('без HARNAS_HOME дом уходит во временный каталог, а не в настоящий ~/.harnas', () => {
     // Жёсткое правило задания: настоящие ~/.harnas и ~/.claude тесты не трогают.

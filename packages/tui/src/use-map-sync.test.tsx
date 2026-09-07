@@ -10,14 +10,16 @@ import {
   addSession,
   createWork,
   readMap,
+  removeSession,
   transitionSession,
   updateMap,
+  workPaths,
   type SessionActivity,
   type WorkEntry,
 } from '@harnas/core';
 import { Text } from 'ink';
 import { render } from 'ink-testing-library';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { ReactNode } from 'react';
@@ -150,6 +152,34 @@ describe('useMapSync', () => {
     try {
       await new Promise((resolve) => setTimeout(resolve, 400));
       await waitSession(entry.map.work.id, (status) => status === 'done');
+    } finally {
+      app.unmount();
+    }
+  }, 20_000);
+
+  it('34: удалённую сессию не воскрешает ни SessionEnd, ни сверка живости', async () => {
+    const { entry, sessionId } = await liveWork();
+    // Журнал остаётся на диске и дописывается после удаления: settings один на
+    // работу, и хук пишет по HARNAS_SESSION_ID (план от 2026-09-06, раздел C).
+    const events = workPaths(project, entry.map.work.id).events;
+    await mkdir(events, { recursive: true });
+    await writeFile(
+      path.join(events, `${sessionId}.jsonl`),
+      `${JSON.stringify({ hook_event_name: 'SessionEnd' })}\n`,
+      'utf8',
+    );
+    const map = await updateMap(project, entry.map.work.id, (current) => {
+      removeSession(current, sessionId);
+    });
+
+    const app = render(
+      <Probe works={[{ projectPath: project, map }]} state={activity({ exited: true })} />,
+    );
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const after = await readMap(project, entry.map.work.id);
+      expect(after.sessions).toEqual([]);
+      expect(after.work.deletedSessions).toEqual([sessionId]);
     } finally {
       app.unmount();
     }

@@ -8,7 +8,7 @@
  */
 
 import { processStartedAt, type MetricsRoots } from '@harnas/core';
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import type { TerminalSnapshot } from './pty/terminal-buffer.js';
 import type { PtyExit, PtySession } from './pty/pty-session.js';
 import { useAgentPty, workRunKey, type AgentTarget } from './pty/use-agent-pty.js';
@@ -18,6 +18,7 @@ import { usePtyTerminal } from './pty/use-pty-terminal.js';
 import {
   createChildSession,
   createNewSession,
+  deleteSession,
   finishExited,
   planLaunch,
   planNew,
@@ -81,6 +82,12 @@ export interface PanelState {
   ) => void;
   /** SIGHUP процессу панели (макет 4.8). */
   close: (key: string) => void;
+  /**
+   * `prefix d`: закрыть процесс сессии, дождаться его выхода и удалить сессию из
+   * карты и с диска (макет 4.10). Проект берётся у записи работы: закреплённая
+   * работа лежит в чужом проекте, и `rm` по пути харнесса ушёл бы не туда.
+   */
+  remove: (work: WorkRef, sessionId: string, done: () => void) => void;
   /** Байты гостю на экране: пока панель показывает карточку, они пропадают. */
   write: (data: string) => void;
   /** Скроллбэк панели: колесо без отслеживания мыши у гостя (3.3). */
@@ -121,9 +128,15 @@ export function usePanel({
     [onFail],
   );
 
+  // Сессии, которые сейчас удаляются: их выход в карту не пишем — записи вот-вот
+  // не станет, и `exited` лёг бы поверх удаления ошибкой «сессии нет» (раздел C).
+  const removing = useRef(new Set<string>());
+
   const onExit = useCallback(
     (target: AgentTarget, exited: PtyExit) => {
       if (target.kind !== 'work') return;
+      const key = workRunKey(target.projectPath, target.workId, target.sessionId);
+      if (removing.current.has(key)) return;
       void finishExited(target.projectPath, target.workId, target.sessionId, exited, roots).catch(
         onFail,
       );
@@ -204,6 +217,20 @@ export function usePanel({
     [openWork, onFail],
   );
 
+  const remove = useCallback<PanelState['remove']>(
+    ({ projectPath: project, workId }, sessionId, done) => {
+      const key = workRunKey(project, workId, sessionId);
+      removing.current.add(key);
+      void agent
+        .stop(key)
+        .then(() => deleteSession(project, workId, sessionId))
+        .then(done)
+        .catch(onFail)
+        .finally(() => removing.current.delete(key));
+    },
+    [agent, onFail],
+  );
+
   const start = useCallback<PanelState['start']>(
     (project, workId, session, mode) => {
       const planner = mode === 'launch' ? planLaunch : planResume;
@@ -226,6 +253,7 @@ export function usePanel({
     create,
     createChild,
     start,
+    remove,
     close: agent.close,
     write: agent.write,
     scroll,

@@ -1,6 +1,7 @@
 /**
- * E2E со stub-бинарём (чек-лист спецификации TUI v2, пункты 34–36): полный цикл
- * состояний по событиям хуков, живость после перезапуска и мышь.
+ * E2E со stub-бинарём: полный цикл состояний по событиям хуков, живость после
+ * перезапуска и мышь (чек-лист спецификации TUI v2, пункты 34–36), тихий старт
+ * до отчёта и удаление сессии (чек-лист плана от 2026-09-06, пункты 35–37).
  *
  * Настоящий `claude` здесь не запускается никогда: вместо него stub-бинарь,
  * а `~/.harnas`, проект и корни истории — во временных каталогах.
@@ -11,6 +12,7 @@ import {
   createWork,
   processStartedAt,
   readMap,
+  isAlive,
   readWorksIndex,
   transitionSession,
   updateMap,
@@ -21,7 +23,7 @@ import {
 import { render } from 'ink-testing-library';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,6 +40,7 @@ const STUB = path.join(
 
 /** Префикс харнесса (дизайн 3.1–3.2). */
 const PREFIX = String.fromCharCode(0x11);
+const ENTER = '\r';
 
 pinUnicodeGlyphs();
 
@@ -77,6 +80,15 @@ const waitFor = async (check: () => boolean, timeoutMs = 8000): Promise<void> =>
 };
 
 const settle = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Ожидание условия, за которым надо сходить на диск: карта или индекс работ. */
+const waitFor2 = async (check: () => Promise<boolean>, timeoutMs = 8000): Promise<void> => {
+  const started = Date.now();
+  while (!(await check())) {
+    if (Date.now() - started > timeoutMs) throw new Error('не дождались');
+    await settle(25);
+  }
+};
 
 /** Ink подписывается на stdin эффектом: до подписки запись теряется молча. */
 const mounted = async (stdin: { listenerCount: (event: string) => number }): Promise<void> => {
@@ -276,6 +288,185 @@ describe('36: мышь (3.3)', () => {
       // полноэкранный агент держал бы raw-режим и увидел байты сразу.
       app.stdin.write('\u001B[<0;30;5M\r');
       await waitFor(() => (app.lastFrame() ?? '').includes('mouse-event 0 3 5'));
+    } finally {
+      app.unmount();
+    }
+  }, 40_000);
+});
+
+/**
+ * Один вызов инструмента у настоящего MCP-сервера сессии: сервер поднимается той
+ * же командой из `mcp/<id>.json`, что и у агента, и говорит по stdio JSON-RPC.
+ * Так `report` доходит до карты тем же путём, что в жизни.
+ */
+async function callTool(
+  configFile: string,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const config = JSON.parse(await readFile(configFile, 'utf8')) as {
+    mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }>;
+  };
+  const server = config.mcpServers['harnas'];
+  if (server === undefined) throw new Error(`в ${configFile} нет сервера harnas`);
+
+  const child = spawn(server.command, server.args, {
+    env: { ...process.env, ...server.env },
+    stdio: ['pipe', 'pipe', 'ignore'],
+  });
+  outside.push(child);
+  try {
+    const answer = new Promise<string>((resolve, reject) => {
+      let buffer = '';
+      child.stdout?.on('data', (chunk: Buffer) => {
+        buffer += chunk.toString('utf8');
+        let at = buffer.indexOf('\n');
+        while (at !== -1) {
+          const line = buffer.slice(0, at);
+          buffer = buffer.slice(at + 1);
+          const message = JSON.parse(line) as { id?: number; result?: unknown };
+          if (message.id === 2) resolve(JSON.stringify(message.result));
+          at = buffer.indexOf('\n');
+        }
+      });
+      child.on('exit', () => reject(new Error('MCP-сервер вышел без ответа')));
+    });
+
+    const send = (message: unknown): void => {
+      child.stdin?.write(`${JSON.stringify(message)}\n`);
+    };
+    send({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'e2e', version: '0.0.0' },
+      },
+    });
+    send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } });
+    return await answer;
+  } finally {
+    child.kill('SIGKILL');
+  }
+}
+
+describe('план 2026-09-06, пункт 37: тихий старт доходит до отчёта', () => {
+  it('prefix C → пользователь пишет → ход идёт → report → done', async () => {
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await launch(app);
+      const workId = await firstWorkId();
+      const plan = await waitSession(workId, (item) => item.status === 'active');
+      await rename(workId, plan.id, 'план');
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'план') !== '');
+
+      app.stdin.write(`${PREFIX}C`);
+      const child = await waitSession(workId, (item) => item.id !== plan.id);
+      await waitFor(() => (app.lastFrame() ?? '').includes(`harnas=${child.id}@`));
+      await rename(workId, child.id, 'ревью');
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'ревью') !== '');
+      // Задачи у тихой сессии нет: пока пользователь молчит, хода тоже нет.
+      expect(child.task).toBe('');
+      expect(lineWith(app.lastFrame() ?? '', 'ревью')).not.toContain('working');
+
+      // Первое сообщение пользователя — хук `UserPromptSubmit` (4.2).
+      app.stdin.write(`event ${JSON.stringify({ hook_event_name: 'UserPromptSubmit' })}\r`);
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'ревью').includes('working'));
+
+      // Агент отчитался своим MCP-сервером: сессия уходит в `done` с резюме.
+      const mcpConfig = path.join(workPaths(project, workId).mcp, `${child.id}.json`);
+      const answer = await callTool(mcpConfig, 'report', {
+        status: 'done',
+        summary: 'ревью прошло',
+      });
+      expect(answer).toContain('done');
+
+      const done = await waitSession(
+        workId,
+        (item) => item.id === child.id && item.status === 'done',
+      );
+      expect(done.summary).toBe('ревью прошло');
+      expect(done.summarySource).toBe('agent');
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'ревью').includes('done'));
+    } finally {
+      app.unmount();
+    }
+  }, 40_000);
+});
+
+describe('план 2026-09-06, пункт 35: удаление живой сессии с детьми (макет 4.10)', () => {
+  it('SIGHUP → выход → дети поднялись, сайдбар и панель обновились', async () => {
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await launch(app);
+      const workId = await firstWorkId();
+      const plan = await waitSession(workId, (item) => item.status === 'active');
+      await rename(workId, plan.id, 'план');
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'план') !== '');
+
+      app.stdin.write(`${PREFIX}C`);
+      const child = await waitSession(workId, (item) => item.id !== plan.id);
+      await rename(workId, child.id, 'ревью');
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'ревью') !== '');
+
+      // Обратно на родителя: его PTY у харнесса, панель показывает его гостя.
+      app.stdin.write(`${PREFIX}k`);
+      await waitFor(() => (app.lastFrame() ?? '').includes(`harnas=${plan.id}@`));
+      const pid = (await waitSession(workId, (item) => item.id === plan.id)).pid as number;
+      expect(isAlive(pid)).toBe(true);
+
+      app.stdin.write(`${PREFIX}d`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('Enter — удалить'));
+      await settle(150);
+      app.stdin.write(ENTER);
+
+      // Процесс получил SIGHUP и вышел, и только потом исчезла запись.
+      await waitFor2(async () => (await readMap(project, workId)).sessions.length === 1);
+      expect(isAlive(pid)).toBe(false);
+
+      const map = await readMap(project, workId);
+      expect(map.sessions[0]?.id).toBe(child.id);
+      expect(map.sessions[0]?.parent).toBeNull();
+
+      // Сайдбар и панель догнали карту: строки удалённой нет, экран не её.
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'план') === '');
+      expect(app.lastFrame()).not.toContain(`harnas=${plan.id}@`);
+      expect(app.lastFrame()).toContain('ревью');
+    } finally {
+      app.unmount();
+    }
+  }, 40_000);
+});
+
+describe('план 2026-09-06, пункт 36: сессия не слышит SIGHUP', () => {
+  it('через три секунды уходит SIGKILL, и только тогда удаляется запись', async () => {
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await launch(app);
+      const workId = await firstWorkId();
+      const session = await waitSession(workId, (item) => item.status === 'active');
+      const pid = session.pid as number;
+
+      // Stub перестаёт слушать мягкое завершение: выйти он сам не согласится.
+      app.stdin.write('deaf\r');
+      await waitFor(() => (app.lastFrame() ?? '').includes('deaf'));
+
+      app.stdin.write(`${PREFIX}d`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('Enter — удалить'));
+      await settle(150);
+      const started = Date.now();
+      app.stdin.write(ENTER);
+
+      await waitFor2(async () => (await readMap(project, workId)).sessions.length === 0, 15_000);
+      // Ждали выхода, а не убили сразу: запись пережила SIGHUP на три секунды.
+      expect(Date.now() - started).toBeGreaterThanOrEqual(2500);
+      expect(isAlive(pid)).toBe(false);
     } finally {
       app.unmount();
     }
