@@ -8,6 +8,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { commandInPath, loadProviders } from '../providers.js';
 import { writeBrief } from '../work/brief.js';
+import { GUIDE } from '../work/guide.js';
 import { addMessage, addSession } from '../work/map.js';
 import { finishSession } from '../work/metrics.js';
 import { readMap, updateMap, workPaths } from '../work/store.js';
@@ -120,7 +121,7 @@ const TOOLS: Tool[] = [
   {
     name: 'get_map',
     description:
-      'Карта работы целиком: сессии, их статусы, резюме и артефакты, сообщения — плюс список провайдеров реестра с флагом доступности в PATH. Вызови первым делом.',
+      'Карта работы целиком: сессии, их статусы, резюме и артефакты, сообщения — плюс список провайдеров реестра с флагом доступности в PATH. Вызови первым делом; подробный гид — инструмент read_guide',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -195,6 +196,12 @@ const TOOLS: Tool[] = [
   {
     name: 'check_inbox',
     description: 'Отдаёт непрочитанные сообщения этой сессии и помечает их прочитанными.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'read_guide',
+    description:
+      'Подробный гид по харнессу: сущности, жизненный цикл сессии, что класть в отчёт и артефакты, как ждать подчинённую сессию, чего не делать. Читай, когда коротких описаний не хватило.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
 ];
@@ -350,7 +357,7 @@ async function checkInbox(context: McpContext, sessionId: string): Promise<unkno
 }
 
 const NO_SESSION =
-  'сессия не задана (HARNAS_SESSION_ID пуст): доступен только get_map. Создай сессию через харнесс или `harnas-core work session new` — тогда работают остальные инструменты.';
+  'сессия не задана (HARNAS_SESSION_ID пуст): доступны только get_map и read_guide. Создай сессию через харнесс или `harnas-core work session new` — тогда работают остальные инструменты.';
 
 async function dispatch(
   context: McpContext,
@@ -358,6 +365,8 @@ async function dispatch(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   if (name === 'get_map') return getMap(context);
+  // Гид не про конкретную сессию: он доступен и без `HARNAS_SESSION_ID`.
+  if (name === 'read_guide') return GUIDE;
 
   const { sessionId } = context;
   if (sessionId === null) throw new Error(NO_SESSION);
@@ -383,7 +392,10 @@ export function createHarnasServer(context: McpContext): Server {
     const args = isRecord(request.params.arguments) ? request.params.arguments : {};
     try {
       const result = await dispatch(context, request.params.name, args);
-      return { content: [{ type: 'text', text: `${JSON.stringify(result, null, 2)}\n` }] };
+      // Гид — готовый текст: заворачивать его в JSON-строку с экранированием
+      // значило бы отдать агенту документ, который ему же и разбирать.
+      const text = typeof result === 'string' ? result : `${JSON.stringify(result, null, 2)}\n`;
+      return { content: [{ type: 'text', text }] };
     } catch (error) {
       return { content: [{ type: 'text', text: (error as Error).message }], isError: true };
     }

@@ -5,6 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { GUIDE } from '../work/guide.js';
 import { addMessage, addSession, transitionSession } from '../work/map.js';
 import { createWork, updateMap, workPaths } from '../work/store.js';
 import type { WorkMap } from '../work/types.js';
@@ -141,19 +142,46 @@ describe('contextFromEnv', () => {
 });
 
 describe('список инструментов', () => {
-  it('ровно шесть инструментов спецификации', async () => {
+  it('ровно семь инструментов спецификации', async () => {
     const client = await connect('s-01');
     const { tools } = await client.listTools();
 
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       'check_inbox',
       'get_map',
+      'read_guide',
       'report',
       'send_message',
       'spawn_session',
       'wait_for',
     ]);
     expect(tools.every((tool) => (tool.description ?? '') !== '')).toBe(true);
+  });
+
+  it('описание get_map отсылает ко второму слою гида', async () => {
+    const client = await connect('s-01');
+    const { tools } = await client.listTools();
+    const getMap = tools.find((tool) => tool.name === 'get_map');
+
+    expect(getMap?.description).toMatch(/подробный гид — инструмент read_guide$/);
+  });
+});
+
+describe('read_guide', () => {
+  it('отдаёт подробный гид целиком', async () => {
+    const client = await connect('s-01');
+    const result = await call(client, 'read_guide');
+
+    expect(result.isError, result.text).toBe(false);
+    expect(result.text).toBe(GUIDE);
+  });
+
+  it('работает без HARNAS_SESSION_ID: гид не про конкретную сессию', async () => {
+    const client = await connect(null);
+    const result = await call(client, 'read_guide');
+
+    expect(result.isError, result.text).toBe(false);
+    expect(result.text).toBe(GUIDE);
   });
 });
 
