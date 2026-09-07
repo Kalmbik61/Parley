@@ -69,6 +69,8 @@ export {
 } from './work/store.js';
 export type { NewWork, WorkPaths, WriteOptions } from './work/store.js';
 export { buildBrief, writeBrief } from './work/brief.js';
+export { GUIDE } from './work/guide.js';
+export { systemGuidance } from './work/guidance.js';
 export {
   SUMMARIZER,
   SUMMARY_TIMEOUT_MS,
