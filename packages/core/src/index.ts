@@ -62,7 +62,9 @@ export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';
 export {
   createWork,
   deleteSessionFiles,
+  deleteWorkFiles,
   harnasHome,
+  pruneWorksIndex,
   readMap,
   readWorksIndex,
   updateMap,

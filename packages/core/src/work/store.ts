@@ -147,6 +147,24 @@ export async function deleteSessionFiles(
   await Promise.all(files.map((file) => rm(file, { force: true })));
 }
 
+/**
+ * Удаляет работу целиком: каталог `.harnas/works/<id>` со всем содержимым,
+ * включая артефакты, и её запись в глобальном индексе. Каталога уже нет —
+ * не ошибка: запись из индекса всё равно снимается.
+ */
+export async function deleteWorkFiles(
+  projectPath: string,
+  workId: string,
+  { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS }: WriteOptions = {},
+): Promise<void> {
+  await rm(workPaths(projectPath, workId).dir, { recursive: true, force: true });
+  await withWorksIndex(lockTimeoutMs, (index) => {
+    index.works = index.works.filter(
+      (work) => !(work.id === workId && work.projectPath === projectPath),
+    );
+  });
+}
+
 /** Читает глобальный индекс; файла ещё нет — индекс пустой. */
 export async function readWorksIndex(): Promise<WorksIndex> {
   const file = worksIndexPath();
@@ -200,6 +218,29 @@ function upsert(index: WorksIndex, entry: WorkIndexEntry): void {
   );
   if (at === -1) index.works.push(entry);
   else index.works[at] = entry;
+}
+
+/**
+ * Снимает из глобального индекса записи, у которых карты на диске больше нет:
+ * каталог работы снесли руками, проект удалили или переехал. Автоматически при
+ * чтении так не делается — закреплённая чужая работа на отключённом диске
+ * выглядит так же. Возвращает снятые записи.
+ */
+export async function pruneWorksIndex({
+  lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS,
+}: WriteOptions = {}): Promise<WorkIndexEntry[]> {
+  return withWorksIndex(lockTimeoutMs, async (index) => {
+    const removed: WorkIndexEntry[] = [];
+    const kept: WorkIndexEntry[] = [];
+    for (const entry of index.works) {
+      const alive = await stat(workPaths(entry.projectPath, entry.id).map)
+        .then((info) => info.isFile())
+        .catch(() => false);
+      (alive ? kept : removed).push(entry);
+    }
+    index.works = kept;
+    return removed;
+  });
 }
 
 export interface NewWork {

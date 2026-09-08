@@ -18,6 +18,7 @@ import { mcpConfigValue, writeMcpConfig } from './work/mcp-config.js';
 import { writeWorkSettings } from './work/settings-file.js';
 import {
   createWork,
+  pruneWorksIndex,
   readMap,
   readWorksIndex,
   updateMap,
@@ -35,6 +36,7 @@ const USAGE = `harnas-core — индекс сессий Claude Code в JSON
   harnas-core work new --title <t> [--goal <g>] [--cwd <путь>]
                                             новая работа в проекте
   harnas-core work list [--all]             работы глобального индекса
+  harnas-core work prune                    снять из индекса работы без карты
   harnas-core work map --work <id> [--cwd <путь>]
                                             карта работы
   harnas-core work session new --work <id> --provider <p> --label <l>
@@ -207,6 +209,12 @@ async function workCommand(rest: string[], argv: string[]): Promise<number> {
     const all = argv.includes('--all');
     const { works } = await readWorksIndex();
     print(all ? works : works.filter((work) => work.status !== 'archived'));
+    return 0;
+  }
+
+  if (subcommand === 'prune') {
+    // Записи без карты на диске: работу снесли мимо харнесса или проект уехал.
+    print(await pruneWorksIndex());
     return 0;
   }
 

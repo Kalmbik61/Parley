@@ -75,6 +75,19 @@ afterEach(async () => {
   await rm(binDir, { recursive: true, force: true });
 });
 
+describe('harnas-core work prune', () => {
+  it('печатает снятые записи и оставляет в индексе только работы с картой', async () => {
+    await newWork('Живая');
+    await newWork('Снесённая');
+    await rm(workPaths(project, 'w-0002').dir, { recursive: true, force: true });
+
+    const removed = (await ok('work', 'prune')) as unknown as WorksIndex['works'];
+
+    expect(removed).toEqual([expect.objectContaining({ id: 'w-0002', title: 'Снесённая' })]);
+    expect((await readIndexFile()).works.map((work) => work.id)).toEqual(['w-0001']);
+  }, 60_000);
+});
+
 describe('harnas-core work new', () => {
   it('создаёт работу, карту на диске и запись в глобальном индексе', async () => {
     const created = await newWork('Авторизация');

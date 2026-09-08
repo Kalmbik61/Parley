@@ -11,6 +11,8 @@ import type { WorkMap } from './types.js';
 import {
   createWork,
   deleteSessionFiles,
+  deleteWorkFiles,
+  pruneWorksIndex,
   readMap,
   readWorksIndex,
   updateMap,
@@ -312,6 +314,52 @@ describe('readWorksIndex', () => {
 
     await writeFile(worksIndexPath(), '{"schemaVersion":1}', 'utf8');
     await expect(readWorksIndex()).rejects.toThrow(/не парсится/);
+  });
+});
+
+describe('pruneWorksIndex', () => {
+  it('убирает из индекса записи, у которых карты на диске больше нет', async () => {
+    const kept = await createWork(project, { title: 'Живая' });
+    const gone = await createWork(other, { title: 'Снесённая' });
+    await rm(workPaths(other, gone.work.id).dir, { recursive: true, force: true });
+
+    const removed = await pruneWorksIndex();
+
+    expect(removed).toEqual([expect.objectContaining({ id: gone.work.id, projectPath: other })]);
+    const { works } = await readWorksIndex();
+    expect(works.map((work) => [work.projectPath, work.id])).toEqual([[project, kept.work.id]]);
+  });
+
+  it('целый индекс не трогает и ничего не возвращает', async () => {
+    await createWork(project, { title: 'Живая' });
+    const before = await readFile(worksIndexPath(), 'utf8');
+
+    expect(await pruneWorksIndex()).toEqual([]);
+    expect(await readFile(worksIndexPath(), 'utf8')).toBe(before);
+  });
+});
+
+describe('deleteWorkFiles', () => {
+  it('сносит каталог работы целиком и снимает её запись из индекса', async () => {
+    const kept = await createWork(project, { title: 'Живая' });
+    const gone = await createWork(project, { title: 'Лишняя' });
+    const paths = workPaths(project, gone.work.id);
+    await writeFile(path.join(paths.artifacts, 'plan.md'), 'план\n', 'utf8');
+
+    await deleteWorkFiles(project, gone.work.id);
+
+    expect(await exists(paths.dir)).toBe(false);
+    expect(await exists(workPaths(project, kept.work.id).map)).toBe(true);
+    expect((await readWorksIndex()).works.map((work) => work.id)).toEqual([kept.work.id]);
+  });
+
+  it('каталога уже нет — запись из индекса всё равно уходит, ошибки нет', async () => {
+    const gone = await createWork(project, { title: 'Снесённая' });
+    await rm(workPaths(project, gone.work.id).dir, { recursive: true, force: true });
+
+    await deleteWorkFiles(project, gone.work.id);
+
+    expect((await readWorksIndex()).works).toEqual([]);
   });
 });
 
