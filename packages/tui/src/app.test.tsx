@@ -20,7 +20,7 @@ import {
 } from '@harnas/core';
 import { render } from 'ink-testing-library';
 import { execFile } from 'node:child_process';
-import { appendFile, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -90,6 +90,12 @@ const mounted = async (stdin: { listenerCount: (event: string) => number }): Pro
   await waitFor(() => stdin.listenerCount('data') > 0 || stdin.listenerCount('readable') > 0);
   await new Promise((resolve) => setTimeout(resolve, 100));
 };
+
+const pathExists = (file: string): Promise<boolean> =>
+  stat(file).then(
+    () => true,
+    () => false,
+  );
 
 const lineWith = (frame: string, text: string): string =>
   frame.split('\n').find((line) => line.includes(text)) ?? '';
@@ -1003,6 +1009,61 @@ describe('удаление сессии (3.2, макет 4.10)', () => {
       app.stdin.write(`${PREFIX}d`);
       await confirm(app);
       await waitFor2(async () => (await readMap(project, workId)).sessions.length === 0);
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('prefix D удаляет работу целиком: процессы закрыты, каталог и запись индекса сняты', async () => {
+    const app = open();
+    try {
+      const workId = await launch(app);
+      await waitMap(workId, (item) => item.status === 'active');
+      // Вторая, дочерняя сессия: её PTY тоже у харнесса и тоже закрывается.
+      app.stdin.write(`${PREFIX}C`);
+      await waitFor2(async () => (await readMap(project, workId)).sessions.length === 2);
+      // Ребёнок доехал до сайдбара: диалог считает сессии по карте в состоянии.
+      await rename(workId, 's-02', 'ребёнок');
+      await waitFor(() => (app.lastFrame() ?? '').includes('ребёнок'));
+      const paths = workPaths(project, workId);
+      await writeFile(path.join(paths.artifacts, 'plan.md'), 'план\n', 'utf8');
+
+      app.stdin.write(`${PREFIX}D`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('удалить работу'));
+      const frame = app.lastFrame() ?? '';
+      expect(frame).toContain(`удалить работу ${workId}`);
+      expect(frame).toContain('2 сессии, карта, брифы, журналы и артефакты');
+      expect(frame).toContain('запись уйдёт из глобального индекса');
+      await confirm(app);
+
+      await waitFor2(async () => !(await pathExists(paths.dir)));
+      expect((await readWorksIndex()).works).toEqual([]);
+      await waitFor(() => (app.lastFrame() ?? '').includes('работа удалена'));
+      // Сайдбар пуст: ни работы, ни её сессий, снова первая строка `new`.
+      await waitFor(() => (app.lastFrame() ?? '').includes('new — первая сессия'));
+      expect(app.lastFrame()).not.toContain(workId);
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('prefix D при живой CLI-сессии отказывает и ничего не трогает', async () => {
+    const { workId } = await outsideSession('ревью');
+
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await waitFor(() => (app.lastFrame() ?? '').includes('ревью'));
+
+      app.stdin.write(`${PREFIX}D`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('«ревью» жива'));
+      expect(app.lastFrame()).not.toContain('Enter — удалить');
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      app.stdin.write(ESC);
+      await waitFor(() => !(app.lastFrame() ?? '').includes('«ревью» жива'));
+
+      expect(await pathExists(workPaths(project, workId).map)).toBe(true);
+      expect((await readWorksIndex()).works).toHaveLength(1);
     } finally {
       app.unmount();
     }

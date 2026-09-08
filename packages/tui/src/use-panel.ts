@@ -19,6 +19,7 @@ import {
   createChildSession,
   createNewSession,
   deleteSession,
+  deleteWork,
   finishExited,
   planLaunch,
   planNew,
@@ -88,6 +89,11 @@ export interface PanelState {
    * работа лежит в чужом проекте, и `rm` по пути харнесса ушёл бы не туда.
    */
   remove: (work: WorkRef, sessionId: string, done: () => void) => void;
+  /**
+   * `prefix D`: закрыть процессы всех сессий работы, дождаться их выхода и
+   * удалить работу целиком — каталог с артефактами и запись индекса (макет 4.12).
+   */
+  removeWork: (work: WorkRef, sessionIds: readonly string[], done: () => void) => void;
   /** Байты гостю на экране: пока панель показывает карточку, они пропадают. */
   write: (data: string) => void;
   /** Скроллбэк панели: колесо без отслеживания мыши у гостя (3.3). */
@@ -231,6 +237,21 @@ export function usePanel({
     [agent, onFail],
   );
 
+  const removeWork = useCallback<PanelState['removeWork']>(
+    ({ projectPath: project, workId }, sessionIds, done) => {
+      const keys = sessionIds.map((id) => workRunKey(project, workId, id));
+      for (const key of keys) removing.current.add(key);
+      void Promise.all(keys.map((key) => agent.stop(key)))
+        .then(() => deleteWork(project, workId))
+        .then(done)
+        .catch(onFail)
+        .finally(() => {
+          for (const key of keys) removing.current.delete(key);
+        });
+    },
+    [agent, onFail],
+  );
+
   const start = useCallback<PanelState['start']>(
     (project, workId, session, mode) => {
       const planner = mode === 'launch' ? planLaunch : planResume;
@@ -254,6 +275,7 @@ export function usePanel({
     createChild,
     start,
     remove,
+    removeWork,
     close: agent.close,
     write: agent.write,
     scroll,

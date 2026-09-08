@@ -11,6 +11,7 @@ import {
   addSession,
   createWork,
   deleteSessionFiles,
+  deleteWorkFiles,
   finishSession,
   linkProviderSession,
   loadProviders,
@@ -341,6 +342,10 @@ export async function deleteSession(
   });
   await deleteSessionFiles(projectPath, workId, sessionId);
 }
+
+/** Работа целиком: каталог с артефактами и запись индекса; PTY закрывает панель. */
+export const deleteWork = (projectPath: string, workId: string): Promise<void> =>
+  deleteWorkFiles(projectPath, workId);
 
 /** Процесс, поднятый харнессом: по нему проверяется живость после перезапуска (5.4). */
 export interface StartedProcess {

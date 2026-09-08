@@ -44,6 +44,8 @@ import {
   closeSessionDialog,
   deleteBlockedDialog,
   deleteSessionDialog,
+  deleteWorkBlockedDialog,
+  deleteWorkDialog,
   exitDialog,
   launchDialog,
   resumeDialog,
@@ -66,7 +68,14 @@ export type OverlayKind =
 
 /** Действие, открывающее оверлей: клавиша префикса или `Enter` в сайдбаре. */
 export type OverlayAction =
-  Exclude<OverlayKind, 'confirm'> | 'launch' | 'resume' | 'summary' | 'close' | 'delete' | 'exit';
+  | Exclude<OverlayKind, 'confirm'>
+  | 'launch'
+  | 'resume'
+  | 'summary'
+  | 'close'
+  | 'delete'
+  | 'deleteWork'
+  | 'exit';
 
 export interface OverlaysOptions {
   /** Проект харнесса: в нём заводятся работы и ищется история (5.3). */
@@ -237,6 +246,32 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
         );
         if (live.length === 0) return exit();
         askConfirm(exitDialog(live), exit);
+        return;
+      }
+
+      if (action === 'deleteWork') {
+        if (entry === undefined) return guard('работа не выбрана');
+        const { projectPath: project, map } = entry;
+        const id = map.work.id;
+        void (async () => {
+          // Как и у сессии: живую не у харнесса закрыть нечем, а без записи она
+          // осталась бы работать в никуда (5.5). Свои PTY панель закроет сама.
+          for (const one of map.sessions) {
+            if (one.status !== 'active' || panel.alive(workRunKey(project, id, one.id))) continue;
+            const { alive } = await checkSession(one, {
+              lastRecordAt: log(one)?.lastRecordAt ?? null,
+            });
+            if (alive) return askConfirm(deleteWorkBlockedDialog(id, one, g, CONFIRM - 2), close);
+          }
+          const dialog = deleteWorkDialog(id, map.work.title, map.sessions.length, g, CONFIRM - 2);
+          askConfirm(dialog, () => {
+            close();
+            const ids = map.sessions.map((one) => one.id);
+            panel.removeWork({ projectPath: project, workId: id }, ids, () =>
+              push([{ text: 'работа удалена' }]),
+            );
+          });
+        })().catch(fail);
         return;
       }
 

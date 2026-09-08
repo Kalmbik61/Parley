@@ -188,6 +188,55 @@ export function deleteBlockedDialog(session: WorkSession, g: Glyphs, width: numb
   };
 }
 
+const sessionsWord = (count: number): string => {
+  const last = count % 10;
+  const tens = count % 100;
+  if (last === 1 && tens !== 11) return 'сессия';
+  if (last >= 2 && last <= 4 && (tens < 12 || tens > 14)) return 'сессии';
+  return 'сессий';
+};
+
+/**
+ * 4.12. Удаление работы: каталог со всем содержимым, включая артефакты, и её
+ * запись в глобальном индексе; транскрипты у провайдера остаются.
+ */
+export function deleteWorkDialog(
+  workId: string,
+  title: string,
+  sessions: number,
+  g: Glyphs,
+  width: number,
+): DialogSpec {
+  return {
+    title: truncate(`удалить работу ${workId} · ${title}`, width, g.ellipsis),
+    info: [
+      `${sessions} ${sessionsWord(sessions)}, карта, брифы, журналы и артефакты`,
+      'будут удалены; транскрипты ~/.claude останутся',
+      'запись уйдёт из глобального индекса',
+    ],
+    quote: [],
+    footer: 'Enter — удалить · Esc',
+  };
+}
+
+/** 4.13. Отказ удалить работу: в ней живая сессия, чей процесс не у харнесса. */
+export function deleteWorkBlockedDialog(
+  workId: string,
+  session: WorkSession,
+  g: Glyphs,
+  width: number,
+): DialogSpec {
+  return {
+    title: `удалить работу ${workId}`,
+    info: [
+      truncate(`«${session.label}» жива, но её процесс не у харнесса`, width, g.ellipsis),
+      'закройте её там, где она запущена, и повторите',
+    ],
+    quote: [],
+    footer: 'Esc — понятно',
+  };
+}
+
 /** 4.9. Выход при живых сессиях: их процессы получают SIGHUP (решение №5). */
 export function exitDialog(live: readonly string[]): DialogSpec {
   return {

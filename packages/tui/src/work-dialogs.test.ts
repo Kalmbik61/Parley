@@ -5,6 +5,8 @@ import {
   closeSessionDialog,
   deleteBlockedDialog,
   deleteSessionDialog,
+  deleteWorkBlockedDialog,
+  deleteWorkDialog,
   exitDialog,
   launchDialog,
   resumeDialog,
@@ -162,6 +164,43 @@ describe('подтверждения (макеты 4.8 и 4.9)', () => {
     expect(spec.info[0]).toBe('живые сессии: план, бэкенд');
     expect(spec.info[1]).toContain('завершены');
     expect(spec.footer).toContain('Enter — выйти');
+  });
+});
+
+describe('удаление работы (макеты 4.12 и 4.13)', () => {
+  it('называет работу, число сессий и что уходит с диска', () => {
+    const spec = deleteWorkDialog('w-0002', 'Авторизация', 3, g, BODY);
+
+    expect(spec.title).toBe('удалить работу w-0002 · Авторизация');
+    expect(spec.info[0]).toBe('3 сессии, карта, брифы, журналы и артефакты');
+    expect(spec.info[1]).toBe('будут удалены; транскрипты ~/.claude останутся');
+    expect(spec.info[2]).toBe('запись уйдёт из глобального индекса');
+    expect(spec.footer).toBe('Enter — удалить · Esc');
+    for (const info of spec.info) expect(info.length).toBeLessThanOrEqual(BODY);
+  });
+
+  it('длинный заголовок режется по ширине рамки, одна сессия склоняется', () => {
+    const spec = deleteWorkDialog(
+      'w-0002',
+      'Очень длинный заголовок работы про всё на свете',
+      1,
+      g,
+      BODY,
+    );
+
+    expect(spec.title.length).toBeLessThanOrEqual(BODY);
+    expect(spec.title).toContain(g.ellipsis);
+    expect(spec.info[0]).toBe('1 сессия, карта, брифы, журналы и артефакты');
+  });
+
+  it('живая сессия не у харнесса не даёт удалить работу', () => {
+    const spec = deleteWorkBlockedDialog('w-0002', session({ status: 'active' }), g, BODY);
+
+    expect(spec.title).toBe('удалить работу w-0002');
+    expect(spec.info[0]).toContain('«бэкенд» жива');
+    expect(spec.info[0]).toContain('не у харнесса');
+    expect(spec.info[1]).toContain('закройте её там, где она запущена');
+    expect(spec.footer).toBe('Esc — понятно');
   });
 });
 
