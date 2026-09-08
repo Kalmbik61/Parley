@@ -67,4 +67,11 @@ describe('подробный гид', () => {
     expect(GUIDE).toContain('state: deleted');
     expect(GUIDE.split('\n').length).toBeGreaterThan(30);
   });
+
+  it('запрещает удалять и переносить каталоги .harnas руками', () => {
+    // Агент без инструмента удаления не должен идти в shell: удаление сессии —
+    // только из TUI, удаления работы пока нет вовсе.
+    expect(GUIDE).toMatch(/[Нн]е удаля[^\n]*\.harnas/);
+    expect(GUIDE).toContain('из TUI');
+  });
 });
