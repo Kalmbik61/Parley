@@ -18,7 +18,7 @@ import {
   type WorkSession,
 } from '@harnas/core';
 import { render } from 'ink-testing-library';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,8 +35,12 @@ const STUB = path.join(
 );
 
 const PREFIX = String.fromCharCode(0x11);
+/** Префикс после смены `prefix` на `w` (сценарий настроек). */
+const PREFIX_W = String.fromCharCode(0x17);
 const ENTER = '\r';
 const ESC = '\u001B';
+const DOWN = '\u001B[B';
+const BACKSPACE = '\u007F';
 
 pinUnicodeGlyphs();
 
@@ -444,6 +448,200 @@ describe('сайдбар оверлеем (макет 1.3, решение №9)'
       await settled();
       app.stdin.write('b');
       await waitFor(() => !(app.lastFrame() ?? '').includes('сессии · '));
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+});
+
+describe('настройки (макет 4.14)', () => {
+  /**
+   * Клавиша за клавишей: Ink отдаёт обработчику каждый кусок stdin целиком, и
+   * пять стрелок одной записью были бы одной непонятной последовательностью.
+   */
+  const press = async (app: ReturnType<typeof render>, key: string, times = 1): Promise<void> => {
+    for (let step = 0; step < times; step += 1) {
+      app.stdin.write(key);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+  };
+
+  /** Строка оверлея с этим ключом: значение и подсказка стоят в ней же. */
+  const row = (app: ReturnType<typeof render>, key: string): string =>
+    (app.lastFrame() ?? '').split('\n').find((line) => line.includes(key)) ?? '';
+
+  /** `config.json` во временном доме; `null` — его ещё нет. */
+  const readConfig = async (): Promise<Record<string, unknown> | null> => {
+    try {
+      return JSON.parse(await readFile(path.join(home, 'config.json'), 'utf8')) as Record<
+        string,
+        unknown
+      >;
+    } catch {
+      return null;
+    }
+  };
+
+  /** Запись идёт после кадра: файла ждём отдельно от рамки. */
+  const waitConfig = async (
+    check: (data: Record<string, unknown> | null) => boolean,
+    timeoutMs = 8000,
+  ): Promise<void> => {
+    const started = Date.now();
+    while (!check(await readConfig())) {
+      if (Date.now() - started > timeoutMs) throw new Error('настройки не дождались');
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  };
+
+  const openSettings = async (app: ReturnType<typeof render>): Promise<void> => {
+    await mounted(app);
+    app.stdin.write(`${PREFIX},`);
+    await waitFor(() => (app.lastFrame() ?? '').includes('┌ настройки'));
+    await settled();
+  };
+
+  it('Enter переключает булеву настройку и сразу пишет её в файл', async () => {
+    const app = open();
+    try {
+      await openSettings(app);
+      expect(app.lastFrame()).toContain('autoLaunch');
+      await waitFor(() => row(app, 'autoLaunch').includes('да'));
+
+      await press(app, DOWN, 5);
+      app.stdin.write(ENTER);
+      await waitConfig((data) => data?.['autoLaunch'] === false);
+      await waitFor(() => row(app, 'autoLaunch').includes('нет'));
+
+      await settled();
+      app.stdin.write(ENTER);
+      await waitConfig((data) => data?.['autoLaunch'] === true);
+      await waitFor(() => row(app, 'autoLaunch').includes('да'));
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('ввод числа сохраняется, а подвал возвращается к «изменить»', async () => {
+    const app = open();
+    try {
+      await openSettings(app);
+      await press(app, DOWN);
+      app.stdin.write(ENTER);
+      await waitFor(() => row(app, 'sidebarWidth').includes('26▌'));
+
+      await press(app, BACKSPACE, 2);
+      await press(app, '40');
+      await waitFor(() => row(app, 'sidebarWidth').includes('40▌'));
+
+      app.stdin.write(ENTER);
+      await waitConfig((data) => data?.['sidebarWidth'] === 40);
+      await waitFor(() => !(app.lastFrame() ?? '').includes('▌'));
+      expect(app.lastFrame()).toContain('Enter — изменить');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('битое значение — событие в строке статуса, ввод остаётся открытым', async () => {
+    const app = open();
+    try {
+      await openSettings(app);
+      app.stdin.write(ENTER);
+      await waitFor(() => row(app, 'prefix').includes('q▌'));
+
+      await press(app, BACKSPACE);
+      await press(app, 'ww');
+      app.stdin.write(ENTER);
+      await waitFor(() => (app.lastFrame() ?? '').includes('prefix: ожидается один знак'));
+      // Ввод никуда не делся: курсор на месте, а файла так и нет.
+      expect(row(app, 'prefix')).toContain('ww▌');
+      expect(await readConfig()).toBeNull();
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('строка из окружения тусклая, а Enter на ней только объясняет', async () => {
+    process.env['HARNAS_MOUSE'] = '0';
+    const app = open();
+    try {
+      await openSettings(app);
+      await waitFor(() => row(app, 'mouseCapture').includes('задано HARNAS_MOUSE'));
+
+      await press(app, DOWN, 2);
+      app.stdin.write(ENTER);
+      await waitFor(() => (app.lastFrame() ?? '').includes('задано окружением HARNAS_MOUSE'));
+      expect(await readConfig()).toBeNull();
+    } finally {
+      app.unmount();
+      delete process.env['HARNAS_MOUSE'];
+    }
+  }, 30_000);
+
+  it('смена prefix действует сразу: справка открывается по новому префиксу', async () => {
+    const app = open();
+    try {
+      await openSettings(app);
+      app.stdin.write(ENTER);
+      await waitFor(() => row(app, 'prefix').includes('q▌'));
+
+      await press(app, BACKSPACE);
+      await press(app, 'w');
+      app.stdin.write(ENTER);
+      await waitConfig((data) => data?.['prefix'] === 'w');
+      await settled();
+      app.stdin.write(ESC);
+      await waitFor(() => !(app.lastFrame() ?? '').includes('┌ настройки'));
+
+      await settled();
+      app.stdin.write(`${PREFIX_W}?`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('┌ привязки · префикс ctrl+w'));
+
+      // Прежний `ctrl+q` теперь принадлежит гостю: справку он не открывает.
+      await settled();
+      app.stdin.write(ESC);
+      await waitFor(() => !(app.lastFrame() ?? '').includes('┌ привязки'));
+      await settled();
+      app.stdin.write(`${PREFIX}?`);
+      await settled();
+      expect(app.lastFrame()).not.toContain('┌ привязки');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('Esc закрывает ввод, второй — оверлей, файл не тронут', async () => {
+    const app = open();
+    try {
+      await openSettings(app);
+      app.stdin.write(ENTER);
+      await waitFor(() => row(app, 'prefix').includes('q▌'));
+
+      await settled();
+      app.stdin.write(ESC);
+      await waitFor(() => (app.lastFrame() ?? '').includes('Enter — изменить'));
+      expect(app.lastFrame()).toContain('┌ настройки');
+
+      await settled();
+      app.stdin.write(ESC);
+      await waitFor(() => !(app.lastFrame() ?? '').includes('┌ настройки'));
+      expect(await readConfig()).toBeNull();
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('14: ascii из оверлея переключает глифы в следующем кадре', async () => {
+    const app = open();
+    try {
+      await openSettings(app);
+      await press(app, DOWN, 3);
+      app.stdin.write(ENTER);
+      // Рамка того же оверлея в следующем кадре — из запасного набора (6.1).
+      await waitFor(() => (app.lastFrame() ?? '').includes('+ настройки'));
+      expect(app.lastFrame()).not.toContain('┌ настройки');
+      expect(row(app, 'ascii')).toContain('да');
     } finally {
       app.unmount();
     }

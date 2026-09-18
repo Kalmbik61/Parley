@@ -64,7 +64,7 @@ export function App({
     (err: unknown) => push([{ text: err instanceof Error ? err.message : String(err) }]),
     [push],
   );
-  const config = useConfig(push);
+  const { config, fromEnv, update: updateConfig } = useConfig(push);
   const prefixName = `ctrl+${config.prefix}`;
   const { works, loading } = useWorks({
     projectPath,
@@ -154,6 +154,9 @@ export function App({
     branch,
     panel,
     selection,
+    config,
+    fromEnv,
+    updateConfig,
     pin: (key) => setPinned((current) => new Set([...current, key])),
     push,
     fail,

@@ -11,11 +11,15 @@ import {
   checkSession,
   configPath,
   createWork,
+  ENV_NAMES,
+  parseSetting,
   requestAutoSummary,
   updateMap,
   type ActivityLog,
+  type HarnasConfig,
   type SessionActivity,
   type SessionIndex,
+  type TypedSettingKey,
   type WorkEntry,
   type WorkSession,
 } from '@harnas/core';
@@ -32,6 +36,8 @@ import {
   helpView,
   historyItems,
   pickerView,
+  SETTINGS,
+  settingsView,
   workItems,
   type PickerItem,
 } from './overlays.js';
@@ -62,6 +68,8 @@ export type OverlayKind =
   | 'works'
   | 'history'
   | 'help'
+  /** Настройки: шесть полей файла, `Enter` переключает или открывает ввод (3.4). */
+  | 'settings'
   | 'sidebar'
   /** Подтверждение 4.5–4.11: тело рисует `dialog.tsx` внутри рамки. */
   | 'confirm';
@@ -102,6 +110,11 @@ export interface OverlaysOptions {
   branch: (projectPath: string) => string | null;
   panel: PanelState;
   selection: SelectionState;
+  /** Настройки как они сейчас применены: их показывает и правит оверлей 4.14. */
+  config: HarnasConfig;
+  /** Ключи из окружения: файл их не перекроет, строка тусклая (3.4). */
+  fromEnv: ReadonlyArray<keyof HarnasConfig>;
+  updateConfig: (patch: Partial<HarnasConfig>) => void;
   /** Закрепить чужую работу в сайдбаре до выхода (2.1, решение №3). */
   pin: (key: string) => void;
   push: (events: readonly StatusEventInit[]) => void;
@@ -130,6 +143,16 @@ const CONFIRM = 48;
 const PICKER = 56;
 const DETAILS = 64;
 
+/** Патч из одного поля: ключ приходит из `SETTINGS` строкой, а не литералом. */
+function patchOf<K extends keyof HarnasConfig>(
+  key: K,
+  value: HarnasConfig[K],
+): Partial<HarnasConfig> {
+  const patch: Partial<HarnasConfig> = {};
+  patch[key] = value;
+  return patch;
+}
+
 const byRecency = (a: SessionIndex, b: SessionIndex): number =>
   String(b.endedAt ?? '').localeCompare(String(a.endedAt ?? ''));
 
@@ -137,6 +160,7 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
   const { projectPath, prefixName, works, sessions, index, entry, session, runKey } = options;
   const { log } = options;
   const { order, branch, panel, selection, pin, push, fail, exit } = options;
+  const { config, fromEnv, updateConfig } = options;
 
   const [kind, setKind] = useState<OverlayKind | null>(null);
   const [filter, setFilter] = useState('');
@@ -229,10 +253,17 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
     (action: OverlayAction) => {
       const guard = (message: string): void => push([{ text: message }]);
 
-      if (action === 'works' || action === 'history' || action === 'help' || action === 'sidebar') {
+      if (
+        action === 'works' ||
+        action === 'history' ||
+        action === 'help' ||
+        action === 'settings' ||
+        action === 'sidebar'
+      ) {
         setFilter('');
         setAt(0);
         setScroll(0);
+        setEditing(null);
         setKind(action);
         return;
       }
@@ -376,6 +407,19 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
     [works, entry, session, runKey, log, panel, selection, askConfirm, close, push, fail, exit, g],
   );
 
+  /**
+   * Событие о клавише, которую разбираем прямо сейчас (оверлей настроек).
+   * Отдельной микрозадачей: гашение событий по нажатию (`use-actions`,
+   * `onCapture`) читает тот же чанк stdin позже нас и погасило бы это событие,
+   * не показав его (дизайн координации, раздел 5).
+   */
+  const report = useCallback(
+    (text: string) => {
+      queueMicrotask(() => push([{ text }]));
+    },
+    [push],
+  );
+
   /** Ходьба по сессиям в оверлее сайдбара (§1.3). */
   const walk = useCallback(
     (delta: number) => {
@@ -398,6 +442,37 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
       if (key.escape) {
         if (editing !== null) return setEditing(null);
         return close();
+      }
+
+      if (kind === 'settings') {
+        const setting = SETTINGS[at];
+        if (setting === undefined) return;
+        if (editing !== null) {
+          if (key.return) {
+            // Ввод открыт только у текстовых ключей: булевы переключаются на месте.
+            const parsed = parseSetting(setting.key as TypedSettingKey, editing);
+            // Битое значение — событие, а ввод остаётся открытым (решение плана).
+            if ('error' in parsed) return report(parsed.error);
+            updateConfig(patchOf(setting.key, parsed.value));
+            return setEditing(null);
+          }
+          if (key.backspace || key.delete) return setEditing([...editing].slice(0, -1).join(''));
+          if (key.ctrl || key.meta || input === '') return;
+          return setEditing(editing + input);
+        }
+        if (input === 'j' || key.downArrow) {
+          return setAt((now) => Math.min(now + 1, SETTINGS.length - 1));
+        }
+        if (input === 'k' || key.upArrow) return setAt((now) => Math.max(0, now - 1));
+        if (!key.return) return;
+        if (fromEnv.includes(setting.key)) {
+          const name = ENV_NAMES[setting.key];
+          return report(`${setting.key} задано окружением ${name} — файл его не перекроет`);
+        }
+        const value = config[setting.key];
+        // Булеву `Enter` переключает сразу, остальным открывает ввод (решение плана).
+        if (typeof value === 'boolean') return updateConfig(patchOf(setting.key, !value));
+        return setEditing(String(value));
       }
 
       if (kind === 'details') {
@@ -483,6 +558,9 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
       });
     }
     if (kind === 'help') return helpView(prefixName, filter, configPath(), g);
+    if (kind === 'settings') {
+      return settingsView({ config, fromEnv, at, editing, configFile: configPath(), g });
+    }
     if (kind === 'details' && entry !== undefined && session !== null) {
       return detailsView({
         entry,
@@ -506,6 +584,8 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
     entry,
     session,
     editing,
+    config,
+    fromEnv,
     summarizing,
     prefixName,
     projectPath,
@@ -526,7 +606,8 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
     confirm: confirm === null ? null : { id: confirm.id, spec: confirm.spec },
     desired,
     scroll,
-    focus: kind === 'works' || kind === 'history' ? at + 2 : undefined,
+    // Шапка и линейка настроек не строки списка: фокус считается от них (4.14).
+    focus: kind === 'works' || kind === 'history' || kind === 'settings' ? at + 2 : undefined,
     open,
     close,
     submit: () => confirm?.run(),
