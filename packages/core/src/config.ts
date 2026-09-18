@@ -22,6 +22,18 @@ export interface HarnasConfig {
   ascii: boolean;
   /** Порог молчания лога для страховочной `activity` (раздел 4.3). */
   silenceThresholdMs: number;
+  /**
+   * Будить ли адресата звонком через channel; без него письма живут по pull
+   * (разговор агентов, 4.4). Выключается и пробой версии `claude`.
+   */
+  channelPush: boolean;
+  /**
+   * Потолок писем одной сессии за скользящий час: защита от переписки двух
+   * вежливых агентов до конца лимита подписки (разговор агентов, 4.7).
+   */
+  messageRate: number;
+  /** Ширина панели треда; уже минимума лента нечитаема (разговор агентов, 6.1). */
+  threadWidth: number;
 }
 
 export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
@@ -30,6 +42,9 @@ export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
   mouseCapture: true,
   ascii: false,
   silenceThresholdMs: 30_000,
+  channelPush: true,
+  messageRate: 20,
+  threadWidth: 30,
 };
 
 export interface LoadedConfig {
@@ -58,6 +73,12 @@ const isPrefix = (value: unknown): value is string =>
 const isPositiveInt = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value > 0;
 
+/** Ниже этого тред не докуется: 24 колонки — предел читаемости (6.1). */
+const THREAD_MIN = 24;
+const isThreadWidth = (value: unknown): value is number =>
+  isPositiveInt(value) && value >= THREAD_MIN;
+const THREAD_EXPECTED = `целое не меньше ${THREAD_MIN}`;
+
 /** Значения из файла: тут JSON, поэтому типы проверяются как есть. */
 function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatch {
   const patch: ConfigPatch = {};
@@ -80,6 +101,9 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   take('mouseCapture', (value) => typeof value === 'boolean', 'true или false');
   take('ascii', (value) => typeof value === 'boolean', 'true или false');
   take('silenceThresholdMs', isPositiveInt, 'целое больше нуля');
+  take('channelPush', (value) => typeof value === 'boolean', 'true или false');
+  take('messageRate', isPositiveInt, 'целое больше нуля');
+  take('threadWidth', isThreadWidth, THREAD_EXPECTED);
   return patch;
 }
 
@@ -96,7 +120,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
     return value === undefined || value === '' ? undefined : value;
   };
 
-  const flag = (name: string, key: 'mouseCapture' | 'ascii'): void => {
+  const flag = (name: string, key: 'mouseCapture' | 'ascii' | 'channelPush'): void => {
     const value = text(name);
     if (value === undefined) return;
     const lower = value.toLowerCase();
@@ -105,12 +129,18 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
     else complain(`${name}: ожидается 0 или 1`);
   };
 
-  const count = (name: string, key: 'sidebarWidth' | 'silenceThresholdMs'): void => {
+  // Проверка передаётся как в `fromFile`: у `threadWidth` она своя, с минимумом.
+  const count = (
+    name: string,
+    key: 'sidebarWidth' | 'silenceThresholdMs' | 'messageRate' | 'threadWidth',
+    ok: (value: unknown) => boolean = isPositiveInt,
+    expected = 'целое больше нуля',
+  ): void => {
     const value = text(name);
     if (value === undefined) return;
     const parsed = Number(value);
-    if (isPositiveInt(parsed)) patch[key] = parsed;
-    else complain(`${name}: ожидается целое больше нуля`);
+    if (ok(parsed)) patch[key] = parsed;
+    else complain(`${name}: ожидается ${expected}`);
   };
 
   const prefix = text('HARNAS_PREFIX');
@@ -122,6 +152,9 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   flag('HARNAS_MOUSE', 'mouseCapture');
   flag('HARNAS_ASCII', 'ascii');
   count('HARNAS_SILENCE_MS', 'silenceThresholdMs');
+  flag('HARNAS_CHANNEL_PUSH', 'channelPush');
+  count('HARNAS_MESSAGE_RATE', 'messageRate');
+  count('HARNAS_THREAD_WIDTH', 'threadWidth', isThreadWidth, THREAD_EXPECTED);
   return patch;
 }
 
