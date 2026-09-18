@@ -32,11 +32,13 @@ import {
   helpView,
   historyItems,
   pickerView,
+  threadOverlayView,
   workItems,
   type PickerItem,
 } from './overlays.js';
 import { workRunKey } from './pty/use-agent-pty.js';
 import type { PanelState } from './use-panel.js';
+import type { ThreadState } from './use-thread.js';
 import { withoutMouse } from './use-prefix-input.js';
 import type { SelectionState } from './use-selection.js';
 import type { StatusEventInit } from './use-status.js';
@@ -63,12 +65,17 @@ export type OverlayKind =
   | 'history'
   | 'help'
   | 'sidebar'
+  /** Тред-запасник: на узком терминале док не влезает (разговор агентов, 6.1). */
+  | 'thread'
   /** Подтверждение 4.5–4.11: тело рисует `dialog.tsx` внутри рамки. */
   | 'confirm';
 
-/** Действие, открывающее оверлей: клавиша префикса или `Enter` в сайдбаре. */
+/**
+ * Действие, открывающее оверлей: клавиша префикса или `Enter` в сайдбаре. Треда
+ * тут нет: его показывает `use-thread.ts`, а здесь он только рисуется (6.1).
+ */
 export type OverlayAction =
-  | Exclude<OverlayKind, 'confirm'>
+  | Exclude<OverlayKind, 'confirm' | 'thread'>
   | 'launch'
   | 'resume'
   | 'summary'
@@ -102,6 +109,12 @@ export interface OverlaysOptions {
   branch: (projectPath: string) => string | null;
   panel: PanelState;
   selection: SelectionState;
+  /**
+   * Тред выбранной сессии: когда док не влезает, тот же вид ложится оверлеем
+   * (разговор агентов, 6.1). Состояние живёт в `use-thread.ts` — здесь только
+   * рисунок и `Esc`, иначе открытость треда была бы в двух местах сразу.
+   */
+  thread: ThreadState;
   /** Закрепить чужую работу в сайдбаре до выхода (2.1, решение №3). */
   pin: (key: string) => void;
   push: (events: readonly StatusEventInit[]) => void;
@@ -136,7 +149,7 @@ const byRecency = (a: SessionIndex, b: SessionIndex): number =>
 export function useOverlays(options: OverlaysOptions): OverlaysState {
   const { projectPath, prefixName, works, sessions, index, entry, session, runKey } = options;
   const { log } = options;
-  const { order, branch, panel, selection, pin, push, fail, exit } = options;
+  const { order, branch, panel, selection, pin, push, fail, exit, thread } = options;
 
   const [kind, setKind] = useState<OverlayKind | null>(null);
   const [filter, setFilter] = useState('');
@@ -151,6 +164,12 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
   );
   const confirmId = useRef(0);
   const g = glyphs();
+
+  // Тред-запасник состоянием здесь не хранится: открытость треда живёт в
+  // `use-thread.ts`, а модальный оверлей ложится поверх него и, закрывшись,
+  // возвращает тред на место (6.1).
+  const visible: OverlayKind | null =
+    kind ?? (thread.overlay && entry !== undefined && session !== null ? 'thread' : null);
 
   const close = useCallback(() => {
     setKind(null);
@@ -397,8 +416,13 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
 
       if (key.escape) {
         if (editing !== null) return setEditing(null);
+        // Открыт один тред: закрывает его тот, кто его и держит (6.1).
+        if (kind === null) return thread.close();
         return close();
       }
+
+      // Тред закрывается и повторным `t` — как сайдбар-оверлей своим `b`.
+      if (kind === null && input === 't') return thread.close();
 
       if (kind === 'details') {
         if (editing !== null) {
@@ -457,7 +481,7 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
         setFilter((now) => now + input);
       }
     },
-    { isActive: kind !== null && kind !== 'confirm' },
+    { isActive: visible !== null && visible !== 'confirm' },
   );
 
   const view = useMemo<OverlayView | null>(() => {
@@ -483,6 +507,9 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
       });
     }
     if (kind === 'help') return helpView(prefixName, filter, configPath(), g);
+    if (visible === 'thread' && entry !== undefined && session !== null) {
+      return threadOverlayView(entry, session.id, thread.width, g);
+    }
     if (kind === 'details' && entry !== undefined && session !== null) {
       return detailsView({
         entry,
@@ -500,6 +527,8 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
     return null;
   }, [
     kind,
+    visible,
+    thread.width,
     shown,
     filter,
     at,
@@ -517,11 +546,20 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
     g,
   ]);
 
+  // Рамка треда ровно по ширине дока: строки в них одни и те же (6.1).
   const desired =
-    kind === null ? null : kind === 'confirm' ? CONFIRM : kind === 'details' ? DETAILS : PICKER;
+    visible === null
+      ? null
+      : visible === 'confirm'
+        ? CONFIRM
+        : visible === 'details'
+          ? DETAILS
+          : visible === 'thread'
+            ? thread.width + 2
+            : PICKER;
 
   return {
-    kind,
+    kind: visible,
     view,
     confirm: confirm === null ? null : { id: confirm.id, spec: confirm.spec },
     desired,

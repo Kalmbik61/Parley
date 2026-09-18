@@ -21,6 +21,7 @@ import {
   WIDE,
 } from './components/sidebar.js';
 import { StatusBar } from './components/status-bar.js';
+import { Thread } from './components/thread.js';
 import { workRunKey } from './pty/use-agent-pty.js';
 import { useActions } from './use-actions.js';
 import { activityWork, useActivity } from './use-activity.js';
@@ -36,6 +37,7 @@ import { useAttachSession, useSelection } from './use-selection.js';
 import { useSessionLink } from './use-session-link.js';
 import { useStatus } from './use-status.js';
 import { useTerminalSize } from './use-terminal-size.js';
+import { useThread } from './use-thread.js';
 import { useWorks } from './use-works.js';
 import { sessionOrders, workKey } from './work-rows.js';
 
@@ -88,10 +90,16 @@ export function App({
   const panelLeft = width === null ? 0 : width + 1;
   const panelCols = Math.max(2, columns - panelLeft);
   const panelRows = Math.max(2, rows - 1);
+  // Тред справа от панели: пока он докован, гостю остаётся меньше колонок, и
+  // PTY узнаёт о них тем же путём, что при ресайзе терминала (разговор
+  // агентов, 6.1). Состояние хука нужно раньше самой панели, поэтому вид
+  // выбранной сессии он отдаёт отдельно — записи работы здесь ещё нет.
+  const thread = useThread({ panelCols, height: panelRows, width: config.threadWidth });
+  const bodyCols = thread.docked ? panelCols - thread.width - 1 : panelCols;
   const panel = usePanel({
     projectPath,
     roots,
-    cols: panelCols,
+    cols: bodyCols,
     rows: panelRows,
     mouseCapture: config.mouseCapture,
     channel,
@@ -139,6 +147,8 @@ export function App({
     height: panelRows,
   };
 
+  const threadOf = thread.viewOf(chosen, current?.id ?? null);
+
   const overlays = useOverlays({
     projectPath,
     prefixName,
@@ -156,6 +166,7 @@ export function App({
     branch,
     panel,
     selection,
+    thread,
     pin: (key) => setPinned((current) => new Set([...current, key])),
     push,
     fail,
@@ -174,6 +185,7 @@ export function App({
     session: current,
     panel,
     overlays,
+    thread,
     // Мышь: цели клика берутся из раскладки самого сайдбара (3.3).
     sidebar: width === null ? null : sidebar,
     panelLeft,
@@ -236,11 +248,15 @@ export function App({
                 prefixName,
                 runKey !== null && panel.alive(runKey),
               )}
-              width={panelCols}
+              width={bodyCols}
               height={panelRows}
             />
           )}
         </Box>
+        {/* Модальный оверлей ложится и на тред: док возвращается, закрывшись (6.1). */}
+        {thread.docked && overlays.kind === null && (
+          <Thread view={threadOf} width={thread.width} height={panelRows} />
+        )}
       </Box>
 
       <StatusBar

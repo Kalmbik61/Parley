@@ -7,6 +7,7 @@
  */
 
 import {
+  addMessage,
   addSession,
   createWork,
   harnasHome,
@@ -1152,6 +1153,116 @@ describe('удаление сессии (3.2, макет 4.10)', () => {
       }
     } finally {
       await rm(other, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  }, 30_000);
+});
+
+describe('тред выбранной сессии (6.1–6.3, приёмка 8.20, 8.21, 8.23, 8.37, 8.41)', () => {
+  /** Новая ширина терминала: клавиши берут раскладку из эффекта, ему нужен кадр. */
+  const resize = async (app: ReturnType<typeof render>, columns: number): Promise<void> => {
+    Object.defineProperty(app.stdout, 'columns', { value: columns, configurable: true });
+    app.stdout.emit('resize');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  };
+
+  /** Работа с двумя поддеревьями и письмом в первом: треды у них разные (3.4). */
+  const threadWork = async (): Promise<string> => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    await updateMap(project, created.work.id, (map) => {
+      const plan = addSession(map, { provider: 'claude', label: 'план', task: '' });
+      const backend = addSession(map, {
+        provider: 'claude',
+        label: 'бэкенд',
+        task: '',
+        parent: plan.id,
+      });
+      const review = addSession(map, { provider: 'claude', label: 'ревью', task: '' });
+      addSession(map, { provider: 'claude', label: 'тесты', task: '', parent: review.id });
+      addMessage(map, { from: plan.id, to: backend.id, text: 'где миграция?', kind: 'question' });
+    });
+    return created.work.id;
+  };
+
+  it('20, 21: док отдаёт панели 80 колонок, а набранное по-прежнему идёт гостю', async () => {
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      // Макет 6.1: сайдбар 26, разделитель, панель 80, разделитель, тред 30.
+      await resize(app, 138);
+      await launch(app);
+
+      app.stdin.write(`${PREFIX}t`);
+      // Одинокая корневая сессия видит тред всей работы (3.4).
+      await waitFor(() => (app.lastFrame() ?? '').includes('тред · работа'));
+      expect(app.lastFrame()).toContain('писем пока нет');
+      // PTY узнаёт новые колонки тем же путём, что при ресайзе терминала (6.1).
+      await waitFor(() => (app.lastFrame() ?? '').includes('resize 80x'));
+
+      // Панель треда не модальная: строка уходит агенту, а не харнессу (8.21).
+      app.stdin.write('echo привет\r');
+      await waitFor(() => (app.lastFrame() ?? '').includes('привет'));
+
+      // Повторное `t` закрывает тред и возвращает панели её колонки (6.1).
+      app.stdin.write(`${PREFIX}t`);
+      await waitFor(() => {
+        const frame = app.lastFrame() ?? '';
+        return frame.lastIndexOf('resize 111x') > frame.lastIndexOf('resize 80x');
+      });
+      expect(app.lastFrame()).not.toContain('тред · работа');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('23: смена выбранной сессии меняет тред и его заголовок', async () => {
+    await threadWork();
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await waitFor(() => (app.lastFrame() ?? '').includes('сессии · Авторизация'));
+      await resize(app, 138);
+
+      app.stdin.write(`${PREFIX}t`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('тред · план'));
+      // Непрочитанное видно и числом в заголовке, и самой лентой (6.2, 6.3).
+      expect(lineWith(app.lastFrame() ?? '', 'тред · план')).toContain('▤1');
+      expect(app.lastFrame()).toContain('где миграция?');
+
+      // Две сессии вниз — соседнее поддерево: у него свой тред (3.4).
+      app.stdin.write(`${PREFIX}j`);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      app.stdin.write(`${PREFIX}j`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('тред · ревью'));
+      expect(app.lastFrame()).not.toContain('где миграция?');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('37, 41: узкому терминалу достаётся тот же тред оверлеем-запасником', async () => {
+    await threadWork();
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await waitFor(() => (app.lastFrame() ?? '').includes('сессии · Авторизация'));
+      await resize(app, 138);
+
+      app.stdin.write(`${PREFIX}t`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('тред · план'));
+      expect(app.lastFrame()).not.toContain('┌ тред');
+
+      // На 120 колонках панели осталось бы 62 — меньше минимума (решение D21).
+      await resize(app, 120);
+      await waitFor(() => (app.lastFrame() ?? '').includes('┌ тред · план'));
+      // Строки те же: вид один на док и на оверлей (8.41).
+      expect(app.lastFrame()).toContain('где миграция?');
+
+      // Терминал вернул ширину — тред вернулся в док.
+      await resize(app, 138);
+      await waitFor(() => !(app.lastFrame() ?? '').includes('┌ тред'));
+      expect(app.lastFrame()).toContain('тред · план');
+    } finally {
+      app.unmount();
     }
   }, 30_000);
 });

@@ -19,6 +19,7 @@ import {
 } from './components/sidebar.js';
 import type { PanelState, WorkRef } from './use-panel.js';
 import type { OverlaysState } from './use-overlays.js';
+import type { ThreadState } from './use-thread.js';
 import { usePrefixInput, withoutMouse, type MouseEvent } from './use-prefix-input.js';
 import type { SelectionState } from './use-selection.js';
 import { sessionSequence } from './work-rows.js';
@@ -53,6 +54,8 @@ export interface ActionsOptions {
   session: WorkSession | null;
   panel: PanelState;
   overlays: OverlaysState;
+  /** Тред выбранной сессии: `t` докует его справа или открывает оверлеем (6.1). */
+  thread: ThreadState;
   /** Сайдбар, как он нарисован: из его раскладки берутся цели клика (3.3). */
   sidebar: SidebarProps | null;
   /** Колонок слева от панели: клик не правее — сайдбару. */
@@ -81,7 +84,7 @@ export interface ActionsState {
 }
 
 export function useActions(options: ActionsOptions): ActionsState {
-  const { prefixByte, workRows, selection, orders, panel, overlays } = options;
+  const { prefixByte, workRows, selection, orders, panel, overlays, thread } = options;
   const order = orders.get(selection.work ?? '') ?? [];
   // Все сессии сайдбара сверху вниз: по ним `j`/`k` ходят по кругу через работы.
   const sequence = useMemo(
@@ -180,6 +183,8 @@ export function useActions(options: ActionsOptions): ActionsState {
       }
       // Сайдбара на этой ширине нет — `b` открывает его оверлеем (решение №9).
       if (key === 'b') return toggleSidebar() ? undefined : overlays.open('sidebar');
+      // Тред строится вокруг выбранной сессии: без неё показывать нечего (6.2).
+      if (key === 't') return session === null ? undefined : thread.toggle();
       if (key >= '1' && key <= '9') {
         const work = workRows[Number(key) - 1];
         if (work === undefined) return;
@@ -190,7 +195,19 @@ export function useActions(options: ActionsOptions): ActionsState {
       const overlay = OVERLAYS[key];
       if (overlay !== undefined) overlays.open(overlay);
     },
-    [create, work, rows, selection, walk, workRows, overlays, onKey, toggleSidebar],
+    [
+      create,
+      work,
+      session,
+      rows,
+      selection,
+      walk,
+      workRows,
+      overlays,
+      thread,
+      onKey,
+      toggleSidebar,
+    ],
   );
 
   /**

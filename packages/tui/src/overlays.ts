@@ -33,6 +33,7 @@ import {
   wrapText,
 } from './format.js';
 import { statusGlyph, type Glyphs } from './glyphs.js';
+import { threadView } from './thread-view.js';
 
 /** Ширина тела внутри рамки: рамка минус два бока. */
 const bodyWidth = (frame: number): number => frame - 2;
@@ -336,6 +337,7 @@ const BINDINGS: ReadonlyArray<readonly [string, string]> = [
   ['1..9', 'выбрать работу по номеру'],
   ['s', 'фокус в сайдбар'],
   ['b', 'спрятать / показать сайдбар'],
+  ['t', 'тред выбранной сессии справа от панели'],
   ['x', 'закрыть выбранную сессию'],
   ['d', 'удалить выбранную сессию (с подтверждением)'],
   ['D', 'удалить выбранную работу целиком (с подтверждением)'],
@@ -344,6 +346,34 @@ const BINDINGS: ReadonlyArray<readonly [string, string]> = [
   ['?', 'эта справка'],
   ['q', 'выйти из харнесса'],
 ];
+
+/**
+ * 6.1. Тред-запасник: на узком терминале док не влезает, и та же лента
+ * показывается оверлеем. Строки считает та же функция, что и у дока, а ширина
+ * тела рамки равна ширине дока — поэтому в обоих местах они совпадают. Окно по
+ * высоте здесь не режется: тело рамки листает `components/overlay.tsx` (§4.0).
+ */
+export function threadOverlayView(
+  entry: WorkEntry,
+  sessionId: string,
+  width: number,
+  g: Glyphs,
+): OverlayView {
+  const view = threadView({
+    entry,
+    sessionId,
+    width,
+    height: Number.POSITIVE_INFINITY,
+    scroll: 0,
+    g,
+  });
+  return {
+    title: view.unread > 0 ? `${view.title} ${g.mail}${view.unread}` : view.title,
+    desired: width + 2,
+    lines: view.lines,
+    footer: ` ${g.up}${g.down} — прокрутка · Esc — закрыть`,
+  };
+}
 
 /**
  * 4.4. Справка: первой строкой — как сменить префикс, если его перехватывает
