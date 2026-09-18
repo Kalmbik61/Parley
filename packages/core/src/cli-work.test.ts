@@ -325,6 +325,35 @@ describe('harnas-core work session new', () => {
     expect(config.mcpServers['harnas']?.env).not.toHaveProperty('HARNAS_CHANNEL');
   }, 60_000);
 
+  it('чужому провайдеру версия не пробуется: про push в stderr ни слова', async () => {
+    // Push — возможность Claude Code, у codex и GLM канала нет вовсе (4.4).
+    // Сравнивать их версию с минимумом claude бессмысленно, и лишний
+    // `<провайдер> --version` на каждый запуск тоже не нужен.
+    await newWork('Авторизация');
+    const codexStub = path.join(binDir, 'codex-stub');
+    await writeFile(codexStub, '#!/bin/sh\necho "codex-cli 0.5.0"\nexit 0\n', { mode: 0o755 });
+    const result = await cliEnv(
+      { HARNAS_CODEX_BIN: codexStub },
+      'work',
+      'session',
+      'new',
+      '--work',
+      'w-0001',
+      '--provider',
+      'codex',
+      '--label',
+      'бэкенд',
+      '--task',
+      'Код',
+    );
+
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stderr).not.toContain('push выключен');
+    expect(result.stderr).not.toContain('младше');
+    const printed = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(printed['args']).not.toContain('--dangerously-load-development-channels');
+  }, 60_000);
+
   it('провайдеру без внешнего id uuid не выдаётся, конфиг уходит в аргументы', async () => {
     await newWork('Авторизация');
     const printed = await ok(
