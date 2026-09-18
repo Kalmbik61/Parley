@@ -26,9 +26,18 @@
 // урезаются: системная вставка гида (`--append-system-prompt`) — это десяток
 // строк, и напечатанная целиком она вытеснила бы с узкой панели весь экран
 // гостя. Uuid сессии в 36 знаков помещается целиком.
+//
+// `--version` stub отвечает и выходит: перед запуском с флагом канала харнесс
+// пробует версию (разговор агентов, 4.4). `HARNAS_STUB_VERSION` подменяет
+// ответ — так проверяется отказ от push на старой сборке.
 
 import { appendFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+
+if (process.argv.includes('--version')) {
+  process.stdout.write(`${process.env.HARNAS_STUB_VERSION ?? '2.1.276 (Claude Code)'}\n`);
+  process.exit(0);
+}
 
 const short = (value) => {
   const line = value.replace(/\s+/g, ' ');
@@ -44,6 +53,10 @@ process.stdout.write(
     .filter((argument) => argument.startsWith('--'))
     .join(',')}\r\n`,
 );
+// Значение флага канала отдельной короткой строкой: сам флаг длиннее панели и
+// в кадре переносится, а тесту нужно видеть, дошёл ли звонок (4.4).
+const channelAt = process.argv.indexOf('--dangerously-load-development-channels');
+process.stdout.write(`channel=${channelAt === -1 ? '-' : process.argv[channelAt + 1]}\r\n`);
 process.stdout.write(`cwd=${process.cwd()}\r\n`);
 // Окружение сессии работы: по нему тест видит, что до процесса доехали
 // HARNAS_WORK_DIR и HARNAS_SESSION_ID. Печатаем коротко — панель узкая.

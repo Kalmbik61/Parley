@@ -16,6 +16,7 @@ import {
   linkProviderSession,
   loadProviders,
   mcpConfigValue,
+  MCP_SERVER_NAME,
   readMap,
   removeSession,
   resumeCommand,
@@ -38,6 +39,25 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
+/** Чем именно будить сессию: имя сервера из конфига MCP (разговор агентов, 4.4). */
+const CHANNEL_VALUE = `server:${MCP_SERVER_NAME}`;
+
+/**
+ * Оверрайд `providers.json` заменяет `args` целиком, поэтому шаблон без
+ * `{channel}` выключает push для этого провайдера. Это законно, но молча —
+ * поэтому раз на работу об этом говорит строка статуса (4.4).
+ */
+const NO_CHANNEL_WARNING = 'providers.json без {channel}: push выключен';
+
+/** Чего хочет запуск сверх самой сессии. */
+export interface LaunchOptions {
+  /**
+   * Будить ли сессию звонком: флаг канала в команде и `HARNAS_CHANNEL` в
+   * конфиге MCP. Панель берёт значение из настроек и пробы версии (4.4).
+   */
+  channel?: boolean;
+}
+
 /** Чем и как поднимать процесс сессии в правой панели. */
 export interface LaunchPlan {
   command: string;
@@ -50,6 +70,8 @@ export interface LaunchPlan {
    * `null` — провайдер связывается с логом иначе, гадать за него нечего.
    */
   providerSessionId: string | null;
+  /** Что в запуске пошло не так, оставшись запуском: строка статуса покажет `⚑`. */
+  warnings: string[];
 }
 
 async function entryOf(provider: string): Promise<ProviderEntry> {
@@ -115,21 +137,10 @@ async function plan(
   workId: string,
   session: WorkSession,
   mode: LaunchMode,
+  options: LaunchOptions = {},
 ): Promise<LaunchPlan> {
   const entry = await entryOf(session.provider);
   const paths = workPaths(projectPath, workId);
-  const params = { workDir: paths.dir, sessionId: session.id };
-
-  // Файл конфига нужен только тем, кто принимает путь; codex получает сервер
-  // значением `-c`, и лишний файл ему незачем.
-  const file =
-    entry.runner.mcpConfig === 'json-file'
-      ? await writeMcpConfig(projectPath, workId, session.id)
-      : null;
-  const mcp = mcpConfigValue(entry.runner.mcpConfig, params, file ?? '');
-
-  const subs: RunnerSubstitutions = {};
-  if (mcp !== undefined) subs.mcpConfig = mcp;
 
   // Тихий старт: задачи у сессии нет — бриф уходит контекстом в системный
   // промпт, а не первым сообщением, и агент ждёт запроса пользователя
@@ -144,6 +155,30 @@ async function plan(
   // Файл хуков нужен тому, кто его принимает (`claude --settings`); один на
   // работу, потому что команда хука не зависит от сессии (дизайн 4.2).
   const template = (resuming ? entry.runner.resumeArgs : entry.runner.args) ?? [];
+
+  // Звонок доходит только туда, куда уехал флаг канала: без `{channel}` в
+  // шаблоне ставить `HARNAS_CHANNEL` некому и незачем.
+  const warnings: string[] = [];
+  const channel = options.channel === true && template.includes('{channel}');
+  // Молчим про чужих провайдеров: push — возможность Claude Code, у codex и GLM
+  // `{channel}` в шаблоне нет и быть не должно.
+  if (options.channel === true && !channel && entry.id === 'claude') {
+    warnings.push(NO_CHANNEL_WARNING);
+  }
+
+  const params = { workDir: paths.dir, sessionId: session.id, ...(channel ? { channel } : {}) };
+
+  // Файл конфига нужен только тем, кто принимает путь; codex получает сервер
+  // значением `-c`, и лишний файл ему незачем.
+  const file =
+    entry.runner.mcpConfig === 'json-file'
+      ? await writeMcpConfig(projectPath, workId, session.id, undefined, channel)
+      : null;
+  const mcp = mcpConfigValue(entry.runner.mcpConfig, params, file ?? '');
+
+  const subs: RunnerSubstitutions = {};
+  if (mcp !== undefined) subs.mcpConfig = mcp;
+  if (channel) subs.channel = CHANNEL_VALUE;
   if (template.includes('{settingsFile}')) {
     subs.settingsFile = await writeWorkSettings(projectPath, workId);
   }
@@ -180,6 +215,7 @@ async function plan(
     // даже унаследовав окружение от агента.
     env: { HARNAS_WORK_DIR: paths.dir, HARNAS_SESSION_ID: session.id },
     providerSessionId,
+    warnings,
   };
 }
 
@@ -188,8 +224,9 @@ export function planLaunch(
   projectPath: string,
   workId: string,
   session: WorkSession,
+  options?: LaunchOptions,
 ): Promise<LaunchPlan> {
-  return plan(projectPath, workId, session, 'launch');
+  return plan(projectPath, workId, session, 'launch', options);
 }
 
 /** Возобновление вышедшей или завершённой сессии по `resumeArgs` (дизайн 4.4). */
@@ -197,8 +234,9 @@ export function planResume(
   projectPath: string,
   workId: string,
   session: WorkSession,
+  options?: LaunchOptions,
 ): Promise<LaunchPlan> {
-  return plan(projectPath, workId, session, 'resume');
+  return plan(projectPath, workId, session, 'resume', options);
 }
 
 /** Быстрая сессия `new`: тот же запуск, но без промпта (дизайн TUI v2, 5.1). */
@@ -206,8 +244,9 @@ export function planNew(
   projectPath: string,
   workId: string,
   session: WorkSession,
+  options?: LaunchOptions,
 ): Promise<LaunchPlan> {
-  return plan(projectPath, workId, session, 'new');
+  return plan(projectPath, workId, session, 'new', options);
 }
 
 /** Ярлык быстрой сессии, пока не появился заголовок Claude Code (5.1). */

@@ -443,6 +443,69 @@ describe('план 2026-09-06, пункт 35: удаление живой сес
   }, 40_000);
 });
 
+describe('разговор агентов, 8.27 и 8.32: включение push', () => {
+  /** Конфиг MCP запущенной сессии: в нём видно, разбудят её звонком или нет. */
+  const mcpEnv = async (workId: string, sessionId: string): Promise<Record<string, string>> => {
+    const file = path.join(workPaths(project, workId).mcp, `${sessionId}.json`);
+    const config = JSON.parse(await readFile(file, 'utf8')) as {
+      mcpServers: Record<string, { env: Record<string, string> }>;
+    };
+    return config.mcpServers['harnas']?.env ?? {};
+  };
+
+  it('по умолчанию до stub доезжает флаг канала, а до сервера — HARNAS_CHANNEL', async () => {
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await launch(app);
+      await waitFor(() => (app.lastFrame() ?? '').includes('channel=server:harnas'));
+
+      const workId = await firstWorkId();
+      const session = await waitSession(workId, (item) => item.status === 'active');
+      expect(await mcpEnv(workId, session.id)).toMatchObject({ HARNAS_CHANNEL: '1' });
+    } finally {
+      app.unmount();
+    }
+  }, 40_000);
+
+  it('channelPush: false — ни флага, ни переменной: разговор живёт по pull', async () => {
+    process.env['HARNAS_CHANNEL_PUSH'] = '0';
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await launch(app);
+      await waitFor(() => (app.lastFrame() ?? '').includes('channel=-'));
+
+      const workId = await firstWorkId();
+      const session = await waitSession(workId, (item) => item.status === 'active');
+      expect(await mcpEnv(workId, session.id)).not.toHaveProperty('HARNAS_CHANNEL');
+    } finally {
+      app.unmount();
+      delete process.env['HARNAS_CHANNEL_PUSH'];
+    }
+  }, 40_000);
+
+  it('claude старше минимума: проба выключает push и говорит об этом один раз', async () => {
+    // Иначе запуск падал бы с «unknown option», а причина была бы видна только
+    // в панели гостя (решение D19).
+    process.env['HARNAS_STUB_VERSION'] = '2.0.9 (Claude Code)';
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await waitFor(() => (app.lastFrame() ?? '').includes('push выключен: claude 2.0.9'));
+      await launch(app);
+      await waitFor(() => (app.lastFrame() ?? '').includes('channel=-'));
+
+      const workId = await firstWorkId();
+      const session = await waitSession(workId, (item) => item.status === 'active');
+      expect(await mcpEnv(workId, session.id)).not.toHaveProperty('HARNAS_CHANNEL');
+    } finally {
+      app.unmount();
+      delete process.env['HARNAS_STUB_VERSION'];
+    }
+  }, 40_000);
+});
+
 describe('план 2026-09-06, пункт 36: сессия не слышит SIGHUP', () => {
   it('через три секунды уходит SIGKILL, и только тогда удаляется запись', async () => {
     const app = open();

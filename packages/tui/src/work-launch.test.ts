@@ -164,6 +164,49 @@ describe('план запуска', () => {
     expect(plan.args.at(-1)).toBe('правленый бриф\n');
   });
 
+  it('с push в команде появляется флаг канала, а в конфиге MCP — HARNAS_CHANNEL', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId), {
+      channel: true,
+    });
+
+    const at = plan.args.indexOf('--dangerously-load-development-channels');
+    expect(at).toBeGreaterThan(-1);
+    expect(plan.args[at + 1]).toBe('server:harnas');
+    expect(plan.warnings).toEqual([]);
+
+    const configFile = plan.args[plan.args.indexOf('--mcp-config') + 1] as string;
+    const config = JSON.parse(await readFile(configFile, 'utf8'));
+    expect(config.mcpServers.harnas.env.HARNAS_CHANNEL).toBe('1');
+  });
+
+  it('без push ни флага, ни переменной: сессия живёт по pull', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
+
+    expect(plan.args).not.toContain('--dangerously-load-development-channels');
+    const configFile = plan.args[plan.args.indexOf('--mcp-config') + 1] as string;
+    const config = JSON.parse(await readFile(configFile, 'utf8'));
+    expect(config.mcpServers.harnas.env).not.toHaveProperty('HARNAS_CHANNEL');
+  });
+
+  it('оверрайд providers.json без {channel} выключает push, но не молча', async () => {
+    // Оверрайд заменяет `args` целиком — это законно, и всё же push пропал бы
+    // без следа: харнесс говорит об этом строкой статуса (4.4).
+    await writeFile(
+      path.join(home, 'providers.json'),
+      JSON.stringify({ claude: { args: ['--session-id', '{sessionUuid}', '{prompt}'] } }),
+      'utf8',
+    );
+    const { workId, sessionId } = await pending('claude');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId), {
+      channel: true,
+    });
+
+    expect(plan.args).not.toContain('--dangerously-load-development-channels');
+    expect(plan.warnings).toEqual(['providers.json без {channel}: push выключен']);
+  });
+
   it('неизвестный провайдер — ошибка, а не запуск наугад', async () => {
     const { workId, sessionId } = await pending('выдуманный');
     await expect(planLaunch(project, workId, await sessionOf(workId, sessionId))).rejects.toThrow(
@@ -195,6 +238,20 @@ describe('план возобновления', () => {
     expect(plan.args[2]).toBe('-c');
     // Бриф второй раз не подставляется: сессия продолжается, а не начинается.
     expect(plan.args.join(' ')).not.toContain('прогнать e2e');
+  });
+
+  it('возобновление с push тоже несёт флаг канала: сессия просыпается и после resume', async () => {
+    const { workId, sessionId } = await pending('claude');
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((item) => item.id === sessionId);
+      if (session !== undefined) session.providerSessionId = 'c0ffee00-1111-2222-3333-444455556666';
+    });
+    const plan = await planResume(project, workId, await sessionOf(workId, sessionId), {
+      channel: true,
+    });
+
+    const at = plan.args.indexOf('--dangerously-load-development-channels');
+    expect(plan.args[at + 1]).toBe('server:harnas');
   });
 
   it('без id у провайдера запускает новый процесс по брифу', async () => {

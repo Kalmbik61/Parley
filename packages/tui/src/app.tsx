@@ -24,6 +24,7 @@ import { StatusBar } from './components/status-bar.js';
 import { workRunKey } from './pty/use-agent-pty.js';
 import { useActions } from './use-actions.js';
 import { activityWork, useActivity } from './use-activity.js';
+import { useChannelProbe } from './use-channel.js';
 import { useConfig } from './use-config.js';
 import { useGitBranch } from './use-git-branch.js';
 import { useLogIndex } from './use-log-index.js';
@@ -64,6 +65,11 @@ export function App({
     [push],
   );
   const config = useConfig(push);
+  // Push через channel: настройка плюс проба версии `claude` — старая сборка
+  // флага канала не принимает (разговор агентов, 4.4).
+  const channelSupported = useChannelProbe(config.channelPush, push);
+  const channel = config.channelPush && channelSupported;
+  const warn = useCallback((text: string) => push([{ text }]), [push]);
   const prefixName = `ctrl+${config.prefix}`;
   const { works } = useWorks({ projectPath, prefix: prefixName, onEvents: push });
 
@@ -88,7 +94,9 @@ export function App({
     cols: panelCols,
     rows: panelRows,
     mouseCapture: config.mouseCapture,
+    channel,
     onFail: fail,
+    onWarn: warn,
   });
 
   // Ветка работы: приоритетно из индекса логов, у работы без логов — из `.git/HEAD`.

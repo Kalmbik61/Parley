@@ -37,8 +37,15 @@ export interface PanelOptions {
   rows: number;
   /** Ловит ли харнесс мышь сам: тогда отслеживание держится и без гостя (3.3). */
   mouseCapture?: boolean;
+  /**
+   * Будить ли сессии звонком через channel: флаг канала уходит в команду
+   * запуска, а `HARNAS_CHANNEL` — в конфиг MCP (разговор агентов, 4.4).
+   */
+  channel?: boolean;
   /** Ошибка запуска или записи в карту уходит в строку статуса (раздел 6). */
   onFail: (reason: unknown) => void;
+  /** Запуск состоялся, но не таким, как просили: предупреждение в строку статуса. */
+  onWarn?: (text: string) => void;
 }
 
 /**
@@ -112,7 +119,9 @@ export function usePanel({
   cols,
   rows,
   mouseCapture = false,
+  channel = false,
   onFail,
+  onWarn,
 }: PanelOptions): PanelState {
   // Процесс поднялся — только теперь сессия становится `active`, с приметами
   // процесса, по которым её узнают после перезапуска харнесса (5.1, 5.4).
@@ -173,9 +182,19 @@ export function usePanel({
     mouseCapture,
   );
 
+  // Предупреждения запуска, уже показанные: они про работу, а не про сессию, и
+  // на каждом запуске повторять их незачем (4.4).
+  const warned = useRef(new Set<string>());
+
   /** Поднять процесс сессии в панели по готовому плану запуска. */
   const openWork = useCallback(
     (project: string, workId: string, session: WorkSession, plan: LaunchPlan) => {
+      for (const text of plan.warnings) {
+        const seen = `${workKey(project, workId)} ${text}`;
+        if (warned.current.has(seen)) continue;
+        warned.current.add(seen);
+        onWarn?.(text);
+      }
       agent.open(
         {
           kind: 'work',
@@ -193,7 +212,7 @@ export function usePanel({
         { cols, rows },
       );
     },
-    [agent, cols, rows],
+    [agent, cols, rows, onWarn],
   );
 
   const create = useCallback<PanelState['create']>(
@@ -203,24 +222,29 @@ export function usePanel({
       const project = work?.projectPath ?? projectPath;
       void createNewSession(project, work?.workId ?? null)
         .then(async ({ workId: id, session }) => {
-          openWork(project, id, session, await planNew(project, id, session));
+          openWork(project, id, session, await planNew(project, id, session, { channel }));
           created(session.id, workKey(project, id));
         })
         .catch(onFail);
     },
-    [projectPath, openWork, onFail],
+    [projectPath, openWork, channel, onFail],
   );
 
   const createChild = useCallback<PanelState['createChild']>(
     ({ projectPath: project, workId }, parentId, created) => {
       void createChildSession(project, workId, parentId)
         .then(async ({ session }) => {
-          openWork(project, workId, session, await planLaunch(project, workId, session));
+          openWork(
+            project,
+            workId,
+            session,
+            await planLaunch(project, workId, session, { channel }),
+          );
           created(session.id, workKey(project, workId));
         })
         .catch(onFail);
     },
-    [openWork, onFail],
+    [openWork, channel, onFail],
   );
 
   const remove = useCallback<PanelState['remove']>(
@@ -255,11 +279,11 @@ export function usePanel({
   const start = useCallback<PanelState['start']>(
     (project, workId, session, mode) => {
       const planner = mode === 'launch' ? planLaunch : planResume;
-      void planner(project, workId, session)
+      void planner(project, workId, session, { channel })
         .then((plan) => openWork(project, workId, session, plan))
         .catch(onFail);
     },
-    [openWork, onFail],
+    [openWork, channel, onFail],
   );
 
   return {
