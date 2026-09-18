@@ -7,6 +7,29 @@ import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
 import type { MessageKind } from '../work/types.js';
 import { watchInbox, type Ring } from './inbox-watch.js';
 
+/**
+ * Крючок на чтение карты: работу сносят живьём (префикс `D`), и `readMap`
+ * бросает прямо посреди захода сторожа. Подмена ставит этот случай без гонки с
+ * файловой системой — бросаем на первом чтении, которое видит письмо.
+ */
+const hooks = vi.hoisted(() => ({ breakOnce: false }));
+
+vi.mock('../work/store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../work/store.js')>();
+  return {
+    ...actual,
+    readMap: async (projectPath: string, id: string) => {
+      const map = await actual.readMap(projectPath, id);
+      if (!hooks.breakOnce) return map;
+      if (!map.messages.some((message) => message.to === 's-02' && message.readAt === null)) {
+        return map;
+      }
+      hooks.breakOnce = false;
+      throw new Error('карта исчезла');
+    },
+  };
+});
+
 let project = '';
 let workId = '';
 
@@ -50,6 +73,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   for (const stop of stops.splice(0)) stop();
+  hooks.breakOnce = false;
   await rm(project, { recursive: true, force: true });
 });
 
@@ -120,6 +144,26 @@ describe('watchInbox', () => {
     await letter('s-02', 'привет');
 
     await settle(() => expect(rings).toHaveLength(1));
+    expect(rings[0]?.meta['message_id']).toBe('m-01');
+    // Вторая половина пункта 8.31: карту сторож не трогал ни разу — ни на
+    // сорвавшемся звонке, ни на удавшемся.
+    const map = await readMap(project, workId);
+    expect(map.messages).toHaveLength(1);
+    expect(map.messages[0]?.readAt).toBeNull();
+  });
+
+  it('карта не прочиталась на заходе: сторож переживает и звонит позже', async () => {
+    // Работу сносят живьём (префикс `D`), и `readMap` бросает: необработанный
+    // отказ убил бы цикл молча, а с ним и все инструменты харнесса у агента.
+    hooks.breakOnce = true;
+    const rings: Ring[] = [];
+    start('s-02', async (ring) => {
+      rings.push(ring);
+    });
+    await letter('s-02', 'привет');
+
+    await settle(() => expect(rings).toHaveLength(1));
+    expect(hooks.breakOnce).toBe(false);
     expect(rings[0]?.meta['message_id']).toBe('m-01');
   });
 
