@@ -1265,6 +1265,50 @@ describe('тред выбранной сессии (6.1–6.3, приёмка 8.
       app.unmount();
     }
   }, 30_000);
+
+  /** Лента на два экрана: письма подписаны двузначно, чтобы не путать 1 и 10. */
+  const chattyWork = async (): Promise<string> => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    await updateMap(project, created.work.id, (map) => {
+      const plan = addSession(map, { provider: 'claude', label: 'план', task: '' });
+      const backend = addSession(map, {
+        provider: 'claude',
+        label: 'бэкенд',
+        task: '',
+        parent: plan.id,
+      });
+      for (let at = 1; at <= 20; at += 1) {
+        const minute = String(at + 9).padStart(2, '0');
+        const text = `письмо ${String(at).padStart(2, '0')}`;
+        addMessage(map, { from: plan.id, to: backend.id, text }, `2026-09-08T12:${minute}:00.000Z`);
+      }
+    });
+    return created.work.id;
+  };
+
+  it('41: лента длиннее окна — и док, и оверлей стоят на её хвосте', async () => {
+    await chattyWork();
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await waitFor(() => (app.lastFrame() ?? '').includes('сессии · Авторизация'));
+      await resize(app, 138);
+
+      app.stdin.write(`${PREFIX}t`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('тред · план'));
+      // Док держится хвоста: последнее письмо видно, первое ушло вверх (6.3).
+      expect(app.lastFrame()).toContain('письмо 20');
+      expect(app.lastFrame()).not.toContain('письмо 01');
+
+      // Оверлей-запасник показывает тот же хвост, а не начало ленты (6.1, 8.41).
+      await resize(app, 120);
+      await waitFor(() => (app.lastFrame() ?? '').includes('┌ тред · план'));
+      expect(app.lastFrame()).toContain('письмо 20');
+      expect(app.lastFrame()).not.toContain('письмо 01');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
 });
 
 describe('песочница тестов', () => {

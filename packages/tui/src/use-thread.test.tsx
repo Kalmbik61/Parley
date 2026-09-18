@@ -45,11 +45,18 @@ function session(id: string, label: string, parent: string | null): WorkSession 
   };
 }
 
-function letter(id: string, time: string, text: string, kind: MessageKind = 'note'): Message {
-  return { id, from: 's-01', to: 's-02', at: at(time), text, kind, readAt: at('12:50') };
+function letter(
+  id: string,
+  time: string,
+  text: string,
+  kind: MessageKind = 'note',
+  from = 's-01',
+  to = 's-02',
+): Message {
+  return { id, from, to, at: at(time), text, kind, readAt: at('12:50') };
 }
 
-/** Карта: родитель «план», ребёнок «бэкенд» и письма между ними. */
+/** Карта: два поддерева — «план» с «бэкендом» и «ревью» с «тестами» (3.4). */
 function entryWith(messages: Message[]): WorkEntry {
   return {
     projectPath: '/dev/shop',
@@ -64,7 +71,12 @@ function entryWith(messages: Message[]): WorkEntry {
         updatedAt: at('12:43'),
         deletedSessions: [],
       },
-      sessions: [session('s-01', 'план', null), session('s-02', 'бэкенд', 's-01')],
+      sessions: [
+        session('s-01', 'план', null),
+        session('s-02', 'бэкенд', 's-01'),
+        session('s-03', 'ревью', null),
+        session('s-04', 'тесты', 's-03'),
+      ],
       messages,
     },
   };
@@ -82,19 +94,27 @@ interface ProbeProps {
   entry: WorkEntry | undefined;
   /** Колонки панели агента до дока: из них и считается правило (6.1). */
   panelCols: number;
+  /** Выбранная сессия: её группа и решает, какой тред виден (6.2). */
+  sessionId?: string;
   width?: number;
   height?: number;
 }
 
 /** Клавиши: `t` — открыть и закрыть, `u` — вверх по ленте, `f` — обратно к хвосту. */
-function Probe({ entry, panelCols, width = 30, height = 6 }: ProbeProps): ReactNode {
+function Probe({
+  entry,
+  panelCols,
+  sessionId = 's-02',
+  width = 30,
+  height = 6,
+}: ProbeProps): ReactNode {
   const thread = useThread({ panelCols, height, width });
   useInput((input) => {
     if (input === 't') thread.toggle();
     if (input === 'u') thread.scrollBy(-2);
     if (input === 'f') thread.follow();
   });
-  const view = thread.viewOf(entry, 's-02');
+  const view = thread.viewOf(entry, sessionId);
   views.push(view);
   const where = thread.docked ? 'док' : thread.overlay ? 'оверлей' : '—';
   return <Text>{`${thread.open ? 'открыт' : 'закрыт'}|${where}|${view?.title ?? 'нет'}`}</Text>;
@@ -198,6 +218,49 @@ describe('useThread: строки и прокрутка (6.3, приёмка 8.3
 
     app.stdin.write('f');
     await settle();
+    expect(views.at(-1)?.below).toBe(0);
+    app.unmount();
+  });
+
+  it('22: новое письмо вне хвоста позицию не сбивает, а `↓N` растёт', async () => {
+    const entry = entryWith(chatter);
+    const app = render(<Probe entry={entry} panelCols={WIDE} height={5} />);
+    await settle();
+
+    app.stdin.write('u');
+    await settle();
+    const before = views.at(-1);
+    expect(before?.below).toBe(2);
+
+    // Пришло письмо: лента выросла снизу, а окно стоит там, где его оставили.
+    const grown = entryWith([...chatter, letter('m-9', '12:30', 'ещё')]);
+    app.rerender(<Probe entry={grown} panelCols={WIDE} height={5} />);
+    await settle();
+    expect(views.at(-1)?.lines.map((line) => line.text)).toEqual(
+      before?.lines.map((line) => line.text),
+    );
+    expect(views.at(-1)?.below).toBe(4);
+    app.unmount();
+  });
+
+  it('смена группы треда возвращает ленту на хвост (6.2)', async () => {
+    // У «тестов» своё поддерево и своя лента: прокрутка «плана» ей не указ.
+    const entry = entryWith([
+      ...chatter,
+      ...Array.from({ length: 8 }, (_, at) =>
+        letter(`r-${at}`, `13:${10 + at}`, `ревью ${at}`, 'note', 's-03', 's-04'),
+      ),
+    ]);
+    const app = render(<Probe entry={entry} panelCols={WIDE} height={5} />);
+    await settle();
+
+    app.stdin.write('u');
+    await settle();
+    expect(views.at(-1)?.below).toBe(2);
+
+    app.rerender(<Probe entry={entry} panelCols={WIDE} height={5} sessionId="s-04" />);
+    await settle();
+    expect(views.at(-1)?.title).toBe('тред · ревью');
     expect(views.at(-1)?.below).toBe(0);
     app.unmount();
   });
