@@ -42,6 +42,16 @@ describe('конфиг MCP-сервера на сессию', () => {
     expect(config.mcpServers[MCP_SERVER_NAME]?.args).toEqual([]);
   });
 
+  it('при push сервер получает HARNAS_CHANNEL: без него сторож входящих спит', () => {
+    expect(mcpConfig({ ...params, channel: true }).mcpServers[MCP_SERVER_NAME]?.env).toEqual({
+      HARNAS_WORK_DIR: '/project/.harnas/works/w-0042',
+      HARNAS_SESSION_ID: 's-02',
+      HARNAS_CHANNEL: '1',
+    });
+    // Без push переменной нет вовсе: сервер не объявляет channel и не звонит.
+    expect(mcpConfig(params).mcpServers[MCP_SERVER_NAME]?.env).not.toHaveProperty('HARNAS_CHANNEL');
+  });
+
   it('JSON разбирается обратно в тот же конфиг', () => {
     expect(JSON.parse(mcpConfigJson(params))).toEqual(mcpConfig(params));
   });
@@ -52,6 +62,10 @@ describe('конфиг MCP-сервера на сессию', () => {
         `args=[${JSON.stringify(MCP_SERVER_ENTRY)}],` +
         'env={HARNAS_WORK_DIR="/project/.harnas/works/w-0042",HARNAS_SESSION_ID="s-02"}}',
     );
+  });
+
+  it('codex звонка не получает: push — возможность Claude Code (4.4)', () => {
+    expect(codexMcpOverride({ ...params, channel: true })).toBe(codexMcpOverride(params));
   });
 
   it('кавычки в пути экранируются, а не рвут TOML', () => {
@@ -100,5 +114,14 @@ describe('writeMcpConfig', () => {
       path.join(project, '.harnas', 'works', 'w-0001'),
     );
     expect(written.mcpServers[MCP_SERVER_NAME]?.env['HARNAS_SESSION_ID']).toBe('s-01');
+    expect(written.mcpServers[MCP_SERVER_NAME]?.env).not.toHaveProperty('HARNAS_CHANNEL');
+  });
+
+  it('с включённым push кладёт в конфиг HARNAS_CHANNEL', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const file = await writeMcpConfig(project, 'w-0001', 's-01', undefined, true);
+
+    const written = JSON.parse(await readFile(file, 'utf8')) as ReturnType<typeof mcpConfig>;
+    expect(written.mcpServers[MCP_SERVER_NAME]?.env['HARNAS_CHANNEL']).toBe('1');
   });
 });

@@ -31,6 +31,12 @@ export interface McpConfigParams {
   sessionId: string;
   /** Чем запускать сервер; по умолчанию node и скрипт сервера по абсолютному пути. */
   command?: string;
+  /**
+   * Будить ли сессию звонком: `HARNAS_CHANNEL` включает у сервера сторожа
+   * входящих (разговор агентов, 4.4). Без флага канала у агента звонить некуда,
+   * поэтому переменную ставит только тот, кто этот флаг передал.
+   */
+  channel?: boolean;
 }
 
 export interface McpStdioServer {
@@ -49,13 +55,22 @@ export interface McpConfigFile {
  * узнаёт из окружения, поэтому агенту не нужно представляться (спецификация,
  * раздел 4).
  */
-export function mcpConfig({ workDir, sessionId, command }: McpConfigParams): McpConfigFile {
+export function mcpConfig({
+  workDir,
+  sessionId,
+  command,
+  channel,
+}: McpConfigParams): McpConfigFile {
   return {
     mcpServers: {
       [MCP_SERVER_NAME]: {
         type: 'stdio',
         ...serverLaunch(command),
-        env: { HARNAS_WORK_DIR: workDir, HARNAS_SESSION_ID: sessionId },
+        env: {
+          HARNAS_WORK_DIR: workDir,
+          HARNAS_SESSION_ID: sessionId,
+          ...(channel === true ? { HARNAS_CHANNEL: '1' } : {}),
+        },
       },
     },
   };
@@ -73,6 +88,9 @@ const tomlString = (value: string): string => JSON.stringify(value);
  * Тот же сервер значением для `codex -c`: файла-конфига MCP у codex нет,
  * серверы живут в `~/.codex/config.toml`, а `-c mcp_servers.<имя>=<таблица>`
  * добавляет свой, не трогая файл пользователя.
+ *
+ * `channel` здесь не учитывается: звонок — возможность Claude Code, codex живёт
+ * по pull (разговор агентов, 4.4).
  */
 export function codexMcpOverride({ workDir, sessionId, command }: McpConfigParams): string {
   const env = `env={HARNAS_WORK_DIR=${tomlString(workDir)},HARNAS_SESSION_ID=${tomlString(sessionId)}}`;
@@ -98,17 +116,19 @@ export async function writeMcpConfig(
   workId: string,
   sessionId: string,
   command?: string,
+  channel = false,
 ): Promise<string> {
   const paths = workPaths(projectPath, workId);
   const file = path.join(paths.mcp, `${sessionId}.json`);
   await mkdir(paths.mcp, { recursive: true });
   await writeFile(
     file,
-    mcpConfigJson(
-      command === undefined
-        ? { workDir: paths.dir, sessionId }
-        : { workDir: paths.dir, sessionId, command },
-    ),
+    mcpConfigJson({
+      workDir: paths.dir,
+      sessionId,
+      ...(command === undefined ? {} : { command }),
+      ...(channel ? { channel } : {}),
+    }),
     'utf8',
   );
   return file;
