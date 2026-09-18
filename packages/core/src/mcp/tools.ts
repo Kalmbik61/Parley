@@ -4,6 +4,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   type CallToolResult,
+  type Request,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { DEFAULT_CONFIG } from '../config.js';
@@ -21,6 +22,7 @@ import {
   type WorkSession,
 } from '../work/types.js';
 import type { McpContext } from './context.js';
+import { watchInbox, type Ring } from './inbox-watch.js';
 import { waitForMap } from './watch-map.js';
 
 /** Таймаут `wait_for` по умолчанию — десять минут (спецификация, раздел 4). */
@@ -433,12 +435,58 @@ async function dispatch(
 }
 
 /**
+ * Что агент должен знать про звонок (разговор агентов, 4.5). Текст доставляется
+ * при подключении, поэтому он короткий и весь про поведение: этикет тут —
+ * половина защиты от переписки двух вежливых агентов до конца лимита (4.7).
+ */
+export const CHANNEL_INSTRUCTIONS = `Письма коллег по этой работе объявляются тегом <channel source="harnas">: в нём from — id сессии-отправителя, from_label — её роль, kind — вид письма. Текста письма в теге нет: увидел тег — позови check_inbox, он отдаст все непрочитанные разом.
+Отвечай send_message(to=<from>) только на \`question\`; note и decision ответа не требуют, «спасибо» и «принято» не пишут. Договорённость фиксируй одним письмом с kind: decision тому, с кем договорился.
+Про письмо звонят один раз; check_inbox и wait_for("inbox") — страховка, если канал молчит.`;
+
+/**
+ * Уведомление-звонок. Метода нет в `ServerNotification`, поэтому он объявляется
+ * генериком `Server`: так `notification` проверяется по типу, а не гасится
+ * приведением.
+ */
+type ChannelNotification = {
+  method: 'notifications/claude/channel';
+  params: Ring;
+};
+
+/**
  * MCP-сервер одной сессии. Ошибки инструментов возвращаются агенту результатом
  * с `isError`, а не протокольным отказом: клиенту нужно не падение вызова, а
  * текст, из которого понятно, что поправить.
  */
-export function createHarnasServer(context: McpContext): Server {
-  const server = new Server({ name: 'harnas', version: '0.0.0' }, { capabilities: { tools: {} } });
+export function createHarnasServer(context: McpContext): Server<Request, ChannelNotification> {
+  // Сессии нет — звонить некому: сервер без `HARNAS_SESSION_ID` умеет только
+  // отдавать карту и гид (4.2).
+  const { sessionId } = context;
+  const channel = context.channel && sessionId !== null;
+  const server = new Server<Request, ChannelNotification>(
+    { name: 'harnas', version: '0.0.0' },
+    {
+      capabilities: channel ? { tools: {}, experimental: { 'claude/channel': {} } } : { tools: {} },
+      ...(channel ? { instructions: CHANNEL_INSTRUCTIONS } : {}),
+    },
+  );
+
+  if (channel) {
+    let stop: (() => void) | null = null;
+    // Сторож стартует после `initialized`: до него клиент уведомления не ждёт.
+    server.oninitialized = () => {
+      stop = watchInbox(
+        { ...context, sessionId },
+        {
+          pollMs: context.pollMs ?? POLL_MS,
+          notify: (ring) =>
+            server.notification({ method: 'notifications/claude/channel', params: ring }),
+        },
+      );
+    };
+    // Транспорт закрыт — звонить больше некуда, и цикл не должен держать процесс.
+    server.onclose = () => stop?.();
+  }
 
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: TOOLS }));
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {

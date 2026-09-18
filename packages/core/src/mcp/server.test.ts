@@ -4,13 +4,14 @@ import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
 import { GUIDE } from '../work/guide.js';
 import { addMessage, addSession, removeSession, transitionSession } from '../work/map.js';
 import { createWork, updateMap, workPaths } from '../work/store.js';
 import type { WorkMap } from '../work/types.js';
 import { contextFromEnv } from './context.js';
+import type { Ring } from './inbox-watch.js';
 import {
   DEFAULT_TIMEOUT_SEC,
   MAX_TIMEOUT_SEC,
@@ -56,6 +57,8 @@ async function connect(
   sessionId: string | null,
   pollMs = 40,
   messageRate = DEFAULT_CONFIG.messageRate,
+  channel = false,
+  rings: Ring[] = [],
 ): Promise<Client> {
   const context = {
     projectPath: project,
@@ -64,10 +67,18 @@ async function connect(
     sessionId,
     pollMs,
     messageRate,
+    channel,
   };
   const server = createHarnasServer(context);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test', version: '0.0.0' });
+  // Звонок ловится общим обработчиком, а не `setNotificationHandler`: тот
+  // требует zod-схему, а zod в зависимостях core нет.
+  client.fallbackNotificationHandler = async (notification) => {
+    if (notification.method === 'notifications/claude/channel') {
+      rings.push(notification.params as unknown as Ring);
+    }
+  };
   await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
   opened.push({ client, server });
   return client;
@@ -113,6 +124,7 @@ afterEach(async () => {
   delete process.env.HARNAS_CLAUDE_BIN;
   delete process.env.HARNAS_WORK_DIR;
   delete process.env.HARNAS_SESSION_ID;
+  delete process.env.HARNAS_CHANNEL;
   if (savedPath === undefined) delete process.env.PATH;
   else process.env.PATH = savedPath;
   await Promise.all(
@@ -130,7 +142,17 @@ describe('contextFromEnv', () => {
       workId,
       workDir: workPaths(project, workId).dir,
       sessionId: 's-01',
+      channel: false,
     });
+  });
+
+  it('HARNAS_CHANNEL включает звонок, без переменной его нет', () => {
+    process.env.HARNAS_WORK_DIR = workPaths(project, workId).dir;
+    process.env.HARNAS_SESSION_ID = 's-01';
+    expect(contextFromEnv().channel).toBe(false);
+
+    process.env.HARNAS_CHANNEL = '1';
+    expect(contextFromEnv().channel).toBe(true);
   });
 
   it('без HARNAS_SESSION_ID сессии нет, а без HARNAS_WORK_DIR — ошибка', () => {
@@ -662,6 +684,109 @@ describe('удалённая сессия (план от 2026-09-06, разде�
     const after = await readMapFile();
     expect(after.sessions).toEqual(before.sessions);
     expect(after.messages).toEqual(before.messages);
+  });
+});
+
+describe('channel: звонок про письмо (разговор агентов, 4.2)', () => {
+  const withChannel = (sessionId: string | null, rings: Ring[] = []): Promise<Client> =>
+    connect(sessionId, 40, DEFAULT_CONFIG.messageRate, true, rings);
+
+  const rung = (rings: Ring[], count: number): Promise<void> =>
+    vi.waitFor(() => expect(rings).toHaveLength(count), { timeout: 2000, interval: 10 });
+
+  /** Пара «отправитель — адресат»: письмо пишет вторая сессия, звонит первой. */
+  async function pair(): Promise<Client> {
+    const owner = await connect('s-01');
+    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    return connect('s-02');
+  }
+
+  it('объявляет capability и учит этикету в instructions', async () => {
+    const client = await withChannel('s-01');
+
+    expect(client.getServerCapabilities()?.experimental).toEqual({ 'claude/channel': {} });
+    const instructions = client.getInstructions() ?? '';
+    expect(instructions).toContain('source="harnas"');
+    expect(instructions).toContain('только на `question`');
+    expect(instructions).toContain('check_inbox');
+  });
+
+  it('письмо звонит один раз, карта не тронута, check_inbox отдаёт его', async () => {
+    const rings: Ring[] = [];
+    const first = await withChannel('s-01', rings);
+    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    const second = await connect('s-02');
+    await callOk(second, 'send_message', { to: 's-01', text: 'где миграция?', kind: 'question' });
+
+    await rung(rings, 1);
+    // Звонок без текста письма: агент забирает его сам.
+    expect(rings[0]?.content).not.toContain('миграция');
+    expect(rings[0]?.meta).toEqual({
+      message_id: 'm-01',
+      from: 's-02',
+      from_label: 'бэк',
+      kind: 'question',
+      unread: '1',
+    });
+    expect((await readMapFile()).messages[0]?.readAt).toBeNull();
+
+    const inbox = await callOk(first, 'check_inbox');
+    expect((inbox['messages'] as { text: string }[]).map((item) => item.text)).toEqual([
+      'где миграция?',
+    ]);
+    await delay(150);
+    expect(rings).toHaveLength(1);
+  });
+
+  it('письмо, лежавшее в карте до подключения, звонит после initialize', async () => {
+    const second = await pair();
+    await callOk(second, 'send_message', { to: 's-01', text: 'привет' });
+
+    const rings: Ring[] = [];
+    await withChannel('s-01', rings);
+    await rung(rings, 1);
+    expect(rings[0]?.meta['kind']).toBe('note');
+  });
+
+  it('звонок доходит и при висящем wait_for, письмо остаётся одно', async () => {
+    const rings: Ring[] = [];
+    const first = await withChannel('s-01', rings);
+    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    const second = await connect('s-02');
+
+    const waiting = callOk(first, 'wait_for', { target: 'inbox', timeoutSec: 5 });
+    await delay(50);
+    await callOk(second, 'send_message', { to: 's-01', text: 'привет' });
+
+    const waited = await waiting;
+    expect(waited['messages']).toHaveLength(1);
+    await rung(rings, 1);
+    expect((await readMapFile()).messages).toHaveLength(1);
+  });
+
+  it('без HARNAS_CHANNEL нет ни capability, ни instructions, ни звонка', async () => {
+    const rings: Ring[] = [];
+    const first = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, rings);
+    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    const second = await connect('s-02');
+    await callOk(second, 'send_message', { to: 's-01', text: 'привет' });
+
+    await delay(200);
+    expect(first.getServerCapabilities()?.experimental).toBeUndefined();
+    expect(first.getInstructions()).toBeUndefined();
+    expect(rings).toHaveLength(0);
+  });
+
+  it('без HARNAS_SESSION_ID сторожа нет и при HARNAS_CHANNEL', async () => {
+    const rings: Ring[] = [];
+    const guest = await withChannel(null, rings);
+    const second = await pair();
+    await callOk(second, 'send_message', { to: 's-01', text: 'привет' });
+
+    await delay(200);
+    expect(guest.getServerCapabilities()?.experimental).toBeUndefined();
+    expect(guest.getInstructions()).toBeUndefined();
+    expect(rings).toHaveLength(0);
   });
 });
 

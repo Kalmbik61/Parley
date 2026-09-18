@@ -13,6 +13,12 @@ export interface McpContext {
   workDir: string;
   /** `null` — сессия не создана харнессом: доступен только `get_map`. */
   sessionId: string | null;
+  /**
+   * Будить ли свою сессию звонком через channel (разговор агентов, 4.2).
+   * Включает харнесс переменной `HARNAS_CHANNEL`, когда запустил агента с
+   * флагом канала; без сессии звонить всё равно некому.
+   */
+  channel: boolean;
   /** Как часто перечитывать карту, если `fs.watch` промолчал. Тесты ускоряют. */
   pollMs?: number;
   /**
@@ -49,5 +55,8 @@ export function contextFromEnv(env: NodeJS.ProcessEnv = process.env): McpContext
     workId: path.basename(workDir),
     workDir,
     sessionId: value(env, 'HARNAS_SESSION_ID'),
+    // Переменную пишет сам харнесс ровно со значением `1`: чужое значение —
+    // не наша настройка, и звонок остаётся выключенным.
+    channel: value(env, 'HARNAS_CHANNEL') === '1',
   };
 }

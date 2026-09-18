@@ -26,12 +26,16 @@ import { waitForMap } from './watch-map.js';
  * письмо позвонит ещё раз, и это правильно — агент его так и не забрал.
  */
 
-/** Звонок: что пришло и от кого, без текста — текст агент заберёт `check_inbox`. */
-export interface Ring {
+/**
+ * Звонок: что пришло и от кого, без текста — текст агент заберёт `check_inbox`.
+ * Псевдоним, а не интерфейс: у интерфейса нет неявной индексной сигнатуры, и
+ * `params` уведомления SDK его бы не принял.
+ */
+export type Ring = {
   content: string;
   /** Ключи — только идентификаторы: остальные Claude Code молча выбросит (4.2). */
   meta: Record<string, string>;
-}
+};
 
 export interface InboxWatchOptions {
   notify: (ring: Ring) => Promise<void>;
