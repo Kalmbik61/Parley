@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { workPaths } from './store.js';
+import { decisionsOf, participantLabel, threadOf } from './thread.js';
 import type { WorkMap, WorkSession } from './types.js';
 
 /**
@@ -9,9 +10,16 @@ import type { WorkMap, WorkSession } from './types.js';
  */
 const RULES = [
   'В начале работы вызови `get_map` — получишь карту работы и список провайдеров.',
-  'Вопросы другим сессиям задавай через `send_message`, ответы забирай `check_inbox`.',
+  'Письма коллег приходят сами; на `question` отвечай тому, кто спросил, через `send_message`, и не заканчивай ход с неотвеченным вопросом; на `note` и `decision` не отвечай; договорённость помечай одним письмом `kind: decision`.',
   'Перед завершением обязательно вызови `report` — иначе результат никуда не попадёт.',
 ];
+
+/**
+ * Время решения — местное и короткое: бриф читают рядом с человеком, которому
+ * UTC из карты ни о чём не говорит (спецификация 2026-09-08, 5.2).
+ */
+const clock = (at: string): string =>
+  new Date(at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 
 function sessionOf(map: WorkMap, sessionId: string): WorkSession {
   const session = map.sessions.find((candidate) => candidate.id === sessionId);
@@ -47,6 +55,31 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
       }
       lines.push('');
     }
+  }
+
+  // Знакомство с коллегами и уже принятыми решениями треда (спецификация 5.2):
+  // без них сессия не знает, кому писать, и переспрашивает то, о чём в её
+  // группе договорились до неё. Пустые разделы не печатаются.
+  const thread = threadOf(map, session.id);
+  const colleagues = thread.members.filter((id) => id !== session.id);
+  if (colleagues.length > 0) {
+    lines.push('## Коллеги', '');
+    for (const id of colleagues) {
+      const mate = sessionOf(map, id);
+      const parent = id === session.parent ? ' (родитель)' : '';
+      lines.push(`- ${mate.id} — ${mate.label}${parent}: ${mate.status}`);
+    }
+    lines.push('');
+  }
+
+  const decisions = decisionsOf(thread);
+  if (decisions.length > 0) {
+    lines.push('## Решения треда', '');
+    for (const decision of decisions) {
+      const who = participantLabel(map, decision.from);
+      lines.push(`- ${clock(decision.at)} ${who}: «${decision.text}»`);
+    }
+    lines.push('');
   }
 
   lines.push('## Правила', '');

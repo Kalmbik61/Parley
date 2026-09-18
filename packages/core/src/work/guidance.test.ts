@@ -46,6 +46,17 @@ describe('системная вставка', () => {
     expect(text).toMatch(/субагент/);
   });
 
+  it('письма коллег приходят звонком канала, а виды письма названы', () => {
+    const text = systemGuidance(mapOf('Авторизация', 'логин по e-mail'), 's-03');
+
+    // Этикет из спецификации 4.7: отвечают только на вопрос, и агент должен
+    // знать, что письмо придёт само — иначе он будет дёргать check_inbox.
+    expect(text).toContain('<channel source="harnas">');
+    expect(text).toContain('question');
+    expect(text).toContain('decision');
+    expect(text.split('\n').length).toBeLessThanOrEqual(12);
+  });
+
   it('цель работы пуста — строки цели нет', () => {
     const text = systemGuidance(mapOf('Авторизация', ''), 's-01');
     expect(text).not.toContain('Цель работы');
@@ -66,6 +77,14 @@ describe('подробный гид', () => {
     expect(GUIDE).toContain('spawn_session');
     expect(GUIDE).toContain('state: deleted');
     expect(GUIDE.split('\n').length).toBeGreaterThan(30);
+  });
+
+  it('учит разговаривать: тред, виды писем, этикет и потолок писем', () => {
+    expect(GUIDE).toContain('## Как разговаривать');
+    expect(GUIDE).toMatch(/[Нн]а `note` и `decision` не отвеча/);
+    expect(GUIDE).toContain('messageRate');
+    // Оговорка про роль-агента: без mcp__harnas__* она ни письма, ни отчёта.
+    expect(GUIDE).toContain('mcp__harnas__');
   });
 
   it('запрещает удалять и переносить каталоги .harnas руками', () => {

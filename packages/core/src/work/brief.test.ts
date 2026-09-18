@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildBrief, writeBrief } from './brief.js';
-import { addSession } from './map.js';
+import { addMessage, addSession } from './map.js';
 import { createWork } from './store.js';
 import type { WorkMap } from './types.js';
 
@@ -62,7 +62,7 @@ describe('бриф сессии', () => {
     // 5 — три правила.
     expect(brief).toContain('get_map');
     expect(brief).toContain('send_message');
-    expect(brief).toContain('check_inbox');
+    expect(brief).toContain('на `note` и `decision` не отвечай');
     expect(brief).toContain('report');
   });
 
@@ -122,6 +122,60 @@ describe('бриф сессии', () => {
     if (backend === undefined) throw new Error('нет сессии');
     backend.contextFrom = ['s-77'];
     expect(() => buildBrief(map, 's-02')).toThrow(/s-77/);
+  });
+});
+
+/** Тред родителя: у s-02 появляется брат-ревью и решение от s-01 (спецификация 5.2). */
+function mapWithThread(): WorkMap {
+  const map = mapWithSessions();
+  addSession(
+    map,
+    { provider: 'claude', label: 'ревью', task: 'Проверить шаги 1–3', parent: 's-01' },
+    AT,
+  );
+  addMessage(
+    map,
+    { from: 's-01', to: 's-02', text: 'миграции отдельным PR', kind: 'decision' },
+    '2026-09-02T12:42:00.000Z',
+  );
+  addMessage(map, { from: 's-01', to: 's-02', text: 'а где миграции?', kind: 'question' }, AT);
+  return map;
+}
+
+describe('бриф: коллеги и решения треда', () => {
+  it('знакомит с участниками треда и помечает родителя', () => {
+    const brief = buildBrief(mapWithThread(), 's-02');
+
+    expect(brief).toContain('## Коллеги');
+    expect(brief).toContain('- s-01 — план (родитель): done');
+    expect(brief).toContain('- s-03 — ревью: pending');
+    // Сама сессия себе не коллега.
+    expect(brief).not.toContain('- s-02 —');
+  });
+
+  it('несёт решения треда со временем и подписью, заметки и вопросы — нет', () => {
+    const brief = buildBrief(mapWithThread(), 's-02');
+
+    expect(brief).toContain('## Решения треда');
+    expect(brief).toMatch(/- \d\d:\d\d план: «миграции отдельным PR»/);
+    expect(brief).not.toContain('а где миграции?');
+  });
+
+  it('одинокая сессия: ни коллег, ни решений — разделов нет', () => {
+    const map = mapWithSessions();
+    map.sessions = map.sessions.slice(0, 1);
+    map.messages = [];
+
+    const brief = buildBrief(map, 's-01');
+    expect(brief).not.toContain('## Коллеги');
+    expect(brief).not.toContain('## Решения треда');
+  });
+
+  it('коллеги есть, решений нет — печатается только раздел коллег', () => {
+    const brief = buildBrief(mapWithSessions(), 's-02');
+
+    expect(brief).toContain('## Коллеги');
+    expect(brief).not.toContain('## Решения треда');
   });
 });
 
