@@ -141,6 +141,13 @@ export {
   writeMcpConfig,
 } from './work/mcp-config.js';
 export type { McpConfigFile, McpConfigParams, McpStdioServer } from './work/mcp-config.js';
+export {
+  CHANNEL_MIN_VERSION,
+  channelSupported,
+  parseVersion,
+  probeChannelSupport,
+} from './work/channel.js';
+export type { ChannelProbe } from './work/channel.js';
 export { contextFromEnv } from './mcp/context.js';
 export type { McpContext } from './mcp/context.js';
 export { DEFAULT_TIMEOUT_SEC, MAX_TIMEOUT_SEC, createHarnasServer } from './mcp/tools.js';
