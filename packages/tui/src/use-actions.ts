@@ -60,6 +60,11 @@ export interface ActionsOptions {
   sidebar: SidebarProps | null;
   /** Колонок слева от панели: клик не правее — сайдбару. */
   panelLeft: number;
+  /**
+   * Последняя колонка панели гостя: при доке треда она меньше правого края
+   * терминала, и события правее неё листают ленту, а не уходят агенту (6.3).
+   */
+  panelRight: number;
   /** `config.mouseCapture`: выключен — харнесс мышь не ловит вовсе (3.3). */
   mouseCapture: boolean;
   /**
@@ -95,7 +100,8 @@ export function useActions(options: ActionsOptions): ActionsState {
       ),
     [workRows, orders],
   );
-  const { work, session, sidebar, panelLeft, mouseCapture, onKey, toggleSidebar } = options;
+  const { work, session, sidebar, panelLeft, panelRight, mouseCapture, onKey, toggleSidebar } =
+    options;
 
   const [navigating, setNavigating] = useState(false);
   const [awaiting, setAwaiting] = useState(false);
@@ -250,9 +256,11 @@ export function useActions(options: ActionsOptions): ActionsState {
     },
     mouseCapture,
     panelLeft,
+    panelRight,
     mouseTracking: panel.snapshot?.mouseTracking ?? 'none',
     onMouse,
     onScroll: panel.scroll,
+    onThreadScroll: thread.scrollBy,
   });
 
   // Режим навигации: стрелки и `j`/`k` по всем строкам сайдбара сверху вниз,

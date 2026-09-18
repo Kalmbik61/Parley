@@ -19,6 +19,7 @@ interface Recorder {
   captured: string[];
   mouse: MouseEvent[];
   scrolled: number[];
+  threadScrolled: number[];
   options: PrefixInputOptions;
 }
 
@@ -28,6 +29,7 @@ function recorder(over: Partial<PrefixInputOptions> = {}): Recorder {
   const captured: string[] = [];
   const mouse: MouseEvent[] = [];
   const scrolled: number[] = [];
+  const threadScrolled: number[] = [];
 
   return {
     guest,
@@ -35,6 +37,7 @@ function recorder(over: Partial<PrefixInputOptions> = {}): Recorder {
     captured,
     mouse,
     scrolled,
+    threadScrolled,
     options: {
       prefixByte: ctrlByte('q') ?? 0,
       toGuest: (data) => guest.push(data),
@@ -42,6 +45,7 @@ function recorder(over: Partial<PrefixInputOptions> = {}): Recorder {
       onCapture: (data) => captured.push(data),
       onMouse: (event) => mouse.push(event),
       onScroll: (lines) => scrolled.push(lines),
+      onThreadScroll: (lines) => threadScrolled.push(lines),
       ...over,
     },
   };
@@ -209,6 +213,51 @@ describe('мышь (чек-лист 21)', () => {
 
     expect(it.guest).toEqual(['до', 'после']);
     expect(it.mouse).toHaveLength(1);
+  });
+
+  /**
+   * Док треда лежит правее панели, и колонок гостя там нет. Живой Claude Code
+   * включает отслеживание мыши, поэтому без правой границы колесо над лентой
+   * уходило бы ему с чужой координатой, а лента стояла бы на месте (6.3,
+   * решение D18).
+   */
+  describe('22: правая граница панели', () => {
+    /** Сайдбар 26, панель 80 (колонки 27–106), разделитель 107, тред 108–137. */
+    const docked = { mouseCapture: true, panelLeft: 26, panelRight: 106 } as const;
+
+    it('22: колесо над тредом листает тред, а не гостя, при включённом tracking', () => {
+      const it = recorder({ ...docked, mouseTracking: 'any' });
+      feed(click(64, 120, 6) + click(65, 120, 6), it);
+
+      expect(it.threadScrolled).toEqual([-WHEEL_LINES, WHEEL_LINES]);
+      expect(it.guest).toEqual([]);
+      expect(it.scrolled).toEqual([]);
+    });
+
+    it('22: клик по треду ничего не делает', () => {
+      const it = recorder({ ...docked, mouseTracking: 'any' });
+      feed(click(0, 120, 6) + click(0, 120, 6, 'm'), it);
+
+      expect(it.threadScrolled).toEqual([]);
+      expect(it.guest).toEqual([]);
+      expect(it.mouse).toEqual([]);
+    });
+
+    it('22: событие в панели по-прежнему уходит гостю с пересчётом колонок', () => {
+      const it = recorder({ ...docked, mouseTracking: 'vt200' });
+      feed(click(0, 30, 4), it);
+
+      expect(it.guest).toEqual([click(0, 4, 4)]);
+      expect(it.threadScrolled).toEqual([]);
+    });
+
+    it('22: без дока правая граница не задана и колесо остаётся гостю', () => {
+      const it = recorder({ mouseCapture: true, panelLeft: 26, mouseTracking: 'any' });
+      feed(click(64, 120, 6), it);
+
+      expect(it.guest).toEqual([click(64, 94, 6)]);
+      expect(it.threadScrolled).toEqual([]);
+    });
   });
 
   it('21: не-мышиная escape-последовательность уходит гостю целиком', () => {

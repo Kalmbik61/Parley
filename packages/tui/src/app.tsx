@@ -189,6 +189,8 @@ export function App({
     // Мышь: цели клика берутся из раскладки самого сайдбара (3.3).
     sidebar: width === null ? null : sidebar,
     panelLeft,
+    // Без дока панель доходит до края терминала, и правее неё ничего нет (6.3).
+    panelRight: panelLeft + bodyCols,
     mouseCapture: config.mouseCapture,
     onKey: keyPressed,
     // Уже 60 колонок сайдбара нет вовсе: `b` открывает его оверлеем (решение №9).

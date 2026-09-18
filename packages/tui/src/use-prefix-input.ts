@@ -50,11 +50,19 @@ export interface PrefixInputOptions {
   mouseCapture?: boolean;
   /** Колонок слева от панели: клик не правее — сайдбару. */
   panelLeft?: number;
+  /**
+   * Последняя колонка панели гостя; правее неё лежит док треда (6.3, решение
+   * D18). `undefined` — дока нет, и вся правая часть терминала принадлежит
+   * гостю, как раньше.
+   */
+  panelRight?: number;
   /** Что просит гость: `none` — колесо листает наш скроллбэк. */
   mouseTracking?: MouseTracking;
   onMouse?: (event: MouseEvent) => void;
   /** Прокрутка скроллбэка: меньше нуля — вверх, больше — вниз. */
   onScroll?: (lines: number) => void;
+  /** Колесо над доком треда: те же знаки, что у скроллбэка. */
+  onThreadScroll?: (lines: number) => void;
 }
 
 /** Ждём ли вторую клавишу префикса. Живёт между чанками: префикс мог их разделить. */
@@ -115,10 +123,27 @@ function wheelLines({ button, kind }: MouseEvent): number {
 }
 
 function routeMouse(event: MouseEvent, options: PrefixInputOptions): void {
-  const { panelLeft = 0, mouseTracking = 'none', onMouse, onScroll, toGuest } = options;
+  const {
+    panelLeft = 0,
+    panelRight,
+    mouseTracking = 'none',
+    onMouse,
+    onScroll,
+    onThreadScroll,
+    toGuest,
+  } = options;
 
   if (event.x <= panelLeft) {
     onMouse?.(event);
+    return;
+  }
+  // Тред идёт до ветки гостя: живой Claude Code включает отслеживание мыши, и
+  // без этой проверки колесо над лентой уходило бы ему с координатой за
+  // пределами его колонок, а лента стояла бы на месте (6.3, решение D18).
+  if (panelRight !== undefined && event.x > panelRight) {
+    const lines = wheelLines(event);
+    // Клик по треду ничего не делает: выбирать в ленте нечего (6.3).
+    if (lines !== 0) onThreadScroll?.(lines);
     return;
   }
   // Гость считает колонки от своего левого края, а не от края терминала.
