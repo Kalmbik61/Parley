@@ -15,6 +15,11 @@ export interface McpContext {
   sessionId: string | null;
   /** Как часто перечитывать карту, если `fs.watch` промолчал. Тесты ускоряют. */
   pollMs?: number;
+  /**
+   * Потолок писем этой сессии за скользящий час (разговор агентов, 4.7). В
+   * окружении его нет: `server.ts` берёт значение из настроек при старте.
+   */
+  messageRate?: number;
 }
 
 const value = (env: NodeJS.ProcessEnv, name: string): string | null => {

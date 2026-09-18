@@ -6,13 +6,20 @@ import {
   type CallToolResult,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
+import { DEFAULT_CONFIG } from '../config.js';
 import { commandInPath, loadProviders } from '../providers.js';
 import { writeBrief } from '../work/brief.js';
 import { GUIDE } from '../work/guide.js';
 import { addMessage, addSession } from '../work/map.js';
 import { finishSession } from '../work/metrics.js';
 import { readMap, updateMap, workPaths } from '../work/store.js';
-import type { Artifact, Message, WorkMap, WorkSession } from '../work/types.js';
+import {
+  MESSAGE_KINDS,
+  type Artifact,
+  type Message,
+  type WorkMap,
+  type WorkSession,
+} from '../work/types.js';
 import type { McpContext } from './context.js';
 import { waitForMap } from './watch-map.js';
 
@@ -27,6 +34,9 @@ const POLL_MS = 2000;
 
 /** Статусы, на которых `wait_for` перестаёт ждать (спецификация, раздел 4). */
 const FINISHED = ['done', 'failed', 'exited'] as const;
+
+/** Скользящий час для окна писем (разговор агентов, 4.7, решение D20). */
+const RATE_WINDOW_MS = 60 * 60 * 1000;
 
 export function waitTimeoutMs(timeoutSec: number | undefined): number {
   const seconds = timeoutSec ?? DEFAULT_TIMEOUT_SEC;
@@ -115,7 +125,25 @@ const messageView = (message: Message) => ({
   from: message.from,
   at: message.at,
   text: message.text,
+  kind: message.kind,
 });
+
+/**
+ * Окно писем (разговор агентов, 4.7): два вежливых агента способны отвечать
+ * друг другу, пока не кончится лимит подписки, поэтому сервер считает письма
+ * этой сессии за последний час по всей карте. Скользящий час отличает петлю от
+ * честной долгой работы и восстанавливается сам; состояния нет — всё в карте.
+ */
+function assertRate(map: WorkMap, sessionId: string, limit: number, now: number): void {
+  const recent = map.messages.filter(
+    (message) => message.from === sessionId && now - Date.parse(message.at) < RATE_WINDOW_MS,
+  ).length;
+  if (recent >= limit) {
+    throw new Error(
+      `слишком часто: ${recent} писем за час от этой сессии (лимит ${limit}); отчитайся report и обратись к человеку`,
+    );
+  }
+}
 
 const TOOLS: Tool[] = [
   {
@@ -183,12 +211,19 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'send_message',
-    description: 'Кладёт сообщение другой сессии работы. Она заберёт его своим check_inbox.',
+    description:
+      'Кладёт сообщение другой сессии работы. Она заберёт его своим check_inbox. Отвечай только на question: заметка и решение ответа не требуют.',
     inputSchema: {
       type: 'object',
       properties: {
         to: { type: 'string', description: 'Id сессии-получателя.' },
         text: { type: 'string' },
+        kind: {
+          type: 'string',
+          enum: [...MESSAGE_KINDS],
+          description:
+            'question — жду ответа; decision — договорились; note — заметка (по умолчанию).',
+        },
       },
       required: ['to', 'text'],
     },
@@ -347,6 +382,7 @@ async function sendMessage(
 ): Promise<unknown> {
   const to = stringArg(args, 'to');
   const text = stringArg(args, 'text');
+  const kind = args['kind'] === undefined ? 'note' : enumArg(args, 'kind', MESSAGE_KINDS);
 
   let created = '';
   await updateMap(context.projectPath, context.workId, (current) => {
@@ -355,7 +391,8 @@ async function sendMessage(
     // ответить на которое нечем (план от 2026-09-06, раздел C).
     requireSession(current, sessionId);
     requireSession(current, to);
-    created = addMessage(current, { from: sessionId, to, text }).id;
+    assertRate(current, sessionId, context.messageRate ?? DEFAULT_CONFIG.messageRate, Date.now());
+    created = addMessage(current, { from: sessionId, to, text, kind }).id;
   });
   return { messageId: created };
 }

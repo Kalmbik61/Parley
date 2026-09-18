@@ -5,6 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { DEFAULT_CONFIG } from '../config.js';
 import { GUIDE } from '../work/guide.js';
 import { addMessage, addSession, removeSession, transitionSession } from '../work/map.js';
 import { createWork, updateMap, workPaths } from '../work/store.js';
@@ -51,13 +52,18 @@ async function callOk(
   return JSON.parse(result.text) as Record<string, unknown>;
 }
 
-async function connect(sessionId: string | null, pollMs = 40): Promise<Client> {
+async function connect(
+  sessionId: string | null,
+  pollMs = 40,
+  messageRate = DEFAULT_CONFIG.messageRate,
+): Promise<Client> {
   const context = {
     projectPath: project,
     workId,
     workDir: workPaths(project, workId).dir,
     sessionId,
     pollMs,
+    messageRate,
   };
   const server = createHarnasServer(context);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -403,7 +409,7 @@ describe('send_message и check_inbox', () => {
     const stored = (await readMapFile()).messages[0];
     const inbox = await callOk(first, 'check_inbox');
     expect(inbox['messages']).toEqual([
-      { id: 'm-01', from: 's-02', at: stored?.at, text: 'нужен план' },
+      { id: 'm-01', from: 's-02', at: stored?.at, text: 'нужен план', kind: 'note' },
     ]);
     expect((await readMapFile()).messages[0]?.readAt).not.toBeNull();
 
@@ -428,6 +434,74 @@ describe('send_message и check_inbox', () => {
     expect(result.isError).toBe(true);
     expect(result.text).toContain('s-77');
     expect((await readMapFile()).messages).toEqual([]);
+  });
+
+  it('принимает три вида, четвёртый — ошибка с перечнем, без kind — note', async () => {
+    const first = await connect('s-01');
+    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    const second = await connect('s-02');
+
+    await callOk(second, 'send_message', { to: 's-01', text: 'где миграция?', kind: 'question' });
+    await callOk(second, 'send_message', { to: 's-01', text: 'делаем так', kind: 'decision' });
+    await callOk(second, 'send_message', { to: 's-01', text: 'просто так' });
+    expect((await readMapFile()).messages.map((message) => message.kind)).toEqual([
+      'question',
+      'decision',
+      'note',
+    ]);
+
+    const broken = await call(second, 'send_message', {
+      to: 's-01',
+      text: 'а так?',
+      kind: 'вопрос',
+    });
+    expect(broken.isError).toBe(true);
+    expect(broken.text).toContain('question');
+    expect(broken.text).toContain('decision');
+    expect((await readMapFile()).messages).toHaveLength(3);
+  });
+
+  it('ответ check_inbox и wait_for несёт kind', async () => {
+    const first = await connect('s-01');
+    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    const second = await connect('s-02');
+    await callOk(second, 'send_message', { to: 's-01', text: 'где миграция?', kind: 'question' });
+
+    const waited = await callOk(first, 'wait_for', { target: 'inbox', timeoutSec: 5 });
+    expect((waited['messages'] as { kind: string }[]).map((item) => item.kind)).toEqual([
+      'question',
+    ]);
+
+    const inbox = await callOk(first, 'check_inbox');
+    expect((inbox['messages'] as { kind: string }[]).map((item) => item.kind)).toEqual([
+      'question',
+    ]);
+  });
+
+  it('окно messageRate: третье письмо за час отказано, письмо старше часа не считается', async () => {
+    const first = await connect('s-01');
+    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    const second = await connect('s-02', 40, 2);
+
+    await callOk(second, 'send_message', { to: 's-01', text: 'раз' });
+    await callOk(second, 'send_message', { to: 's-01', text: 'два' });
+    // Письмо другой сессии в чужой счёт не идёт: окно считает только свои.
+    await callOk(first, 'send_message', { to: 's-02', text: 'от другого' });
+
+    const refused = await call(second, 'send_message', { to: 's-01', text: 'три' });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('слишком часто');
+    expect(refused.text).toContain('report');
+    expect((await readMapFile()).messages).toHaveLength(3);
+
+    // Первое письмо уезжает за окно — место в часе освобождается само.
+    await updateMap(project, workId, (map) => {
+      const oldest = map.messages[0];
+      if (oldest !== undefined) oldest.at = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    });
+    expect(await callOk(second, 'send_message', { to: 's-01', text: 'три' })).toEqual({
+      messageId: 'm-04',
+    });
   });
 });
 

@@ -3,13 +3,17 @@
 // В stdout идёт ТОЛЬКО протокол JSON-RPC, диагностика — в stderr.
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { loadConfig } from '../config.js';
 import { contextFromEnv } from './context.js';
 import { createHarnasServer } from './tools.js';
 
 async function main(): Promise<number> {
   let server;
   try {
-    server = createHarnasServer(contextFromEnv());
+    // Потолок писем живёт в настройках, а не в окружении: сервер читает их сам
+    // при старте, на время жизни процесса значение не меняется (4.7).
+    const { config } = await loadConfig();
+    server = createHarnasServer({ ...contextFromEnv(), messageRate: config.messageRate });
   } catch (error) {
     process.stderr.write(`harnas-mcp: ${(error as Error).message}\n`);
     return 1;
