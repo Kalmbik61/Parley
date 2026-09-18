@@ -12,7 +12,8 @@ import { waitForMap } from './watch-map.js';
  *   while (!stopped)
  *     found = await waitForMap(map, probe, waitMs, pollMs)
  *             probe: письма to === me && readAt === null && id ∉ rung
- *                    (пусто → null: ждём дальше)
+ *                    (пусто → null: ждём дальше), звонок собирается тут же —
+ *                    по тому же снимку карты
  *     for letter of found:
  *       rung.add(id)                ← звоним про письмо один раз
  *       await notify(звонок)        ← сорвалось: rung.delete(id), позвоним позже
@@ -48,6 +49,12 @@ export interface InboxWatchOptions {
 /** Оборот сторожа: час без писем — просто новый заход, агент этого не видит. */
 const LONG_MS = 60 * 60 * 1000;
 
+/** Письмо и готовый звонок про него: оба собраны по одному снимку карты. */
+interface Call {
+  letter: Message;
+  ring: Ring;
+}
+
 export function ringFor(letter: Message, fromLabel: string, unread: number): Ring {
   return {
     content: `Новое письмо от ${fromLabel} (${letter.kind}): позови check_inbox.`,
@@ -71,38 +78,48 @@ export function watchInbox(
   let stopped = false;
   const mapFile = workPaths(context.projectPath, context.workId).map;
 
-  const probe = async (): Promise<Message[] | null> => {
+  /**
+   * Заход по карте: и письма, и звонки про них считаются по одному снимку.
+   * Второе чтение карты ради `unread` показало бы «0 непрочитанных» в звонке
+   * про письмо, которое агент успел забрать сам, — и звонок спорил бы сам с
+   * собой. Заодно всё, что умеет бросить, остаётся внутри пробы: отказ ловит
+   * `catch` вокруг `waitForMap`, и цикл сторожа его переживает.
+   */
+  const probe = async (): Promise<Call[] | null> => {
     // Пустой список будит `waitForMap` и гасит его таймеры: иначе закрытый
     // транспорт оставил бы процесс ждать своего часа.
     if (stopped) return [];
     const map = await readMap(context.projectPath, context.workId);
-    const letters = map.messages.filter(
-      (message) =>
-        message.to === context.sessionId && message.readAt === null && !rung.has(message.id),
+    const mine = map.messages.filter(
+      (message) => message.to === context.sessionId && message.readAt === null,
     );
-    return letters.length === 0 ? null : letters.sort((a, b) => a.at.localeCompare(b.at));
+    const letters = mine
+      .filter((message) => !rung.has(message.id))
+      .sort((a, b) => a.at.localeCompare(b.at));
+    if (letters.length === 0) return null;
+    return letters.map((letter) => ({
+      letter,
+      ring: ringFor(letter, participantLabel(map, letter.from), mine.length),
+    }));
   };
 
   void (async () => {
     while (!stopped) {
-      let found: Message[] | null = null;
+      let found: Call[] | null = null;
       try {
         found = await waitForMap(mapFile, probe, waitMs, pollMs);
       } catch {
-        // Карта не парсится или исчезла: подождём следующего изменения.
+        // Карта не парсится или исчезла (работу снесли живьём): подождём
+        // следующего изменения.
         await new Promise((resolve) => setTimeout(resolve, pollMs));
         continue;
       }
       if (stopped || found === null) continue;
-      const map = await readMap(context.projectPath, context.workId);
-      const unread = map.messages.filter(
-        (message) => message.to === context.sessionId && message.readAt === null,
-      ).length;
       let failed = false;
-      for (const letter of found) {
+      for (const { letter, ring } of found) {
         rung.add(letter.id);
         try {
-          await notify(ringFor(letter, participantLabel(map, letter.from), unread));
+          await notify(ring);
         } catch {
           // Звонок не дошёл (транспорт закрыт, клиент занят): позвоним снова.
           rung.delete(letter.id);
