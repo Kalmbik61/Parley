@@ -9,6 +9,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { DEFAULT_CONFIG } from '../config.js';
 import { commandInPath, loadProviders } from '../providers.js';
+import { agentDirs, assertAgent } from '../work/agents.js';
 import { writeBrief } from '../work/brief.js';
 import { GUIDE } from '../work/guide.js';
 import { addMessage, addSession } from '../work/map.js';
@@ -191,6 +192,11 @@ const TOOLS: Tool[] = [
           description: 'Id сессий, чьи резюме и артефакты попадут в бриф.',
           items: { type: 'string' },
         },
+        agent: {
+          type: 'string',
+          description:
+            'Роль сессии — агент Claude Code: имя файла .claude/agents/<name>.md проекта или ~/.claude/agents/<name>.md. Определение с урезанным списком tools обязано включать mcp__harnas__*, иначе роль не сможет ни написать коллеге, ни отчитаться.',
+        },
       },
       required: ['provider', 'label', 'task'],
     },
@@ -299,6 +305,8 @@ async function spawnSession(
   const label = stringArg(args, 'label');
   const task = stringArg(args, 'task');
   const contextFrom = stringsArg(args, 'contextFrom');
+  // Роль необязательна: без неё сессия идёт обычным агентом провайдера.
+  const agent = args['agent'] === undefined ? null : stringArg(args, 'agent');
 
   const registry = await loadProviders();
   const entry = registry[provider];
@@ -313,11 +321,27 @@ async function spawnSession(
     );
   }
 
+  // Роль проверяем до записи: `pending`, который нечем запустить, — мусор в
+  // карте (спецификация 2026-09-08, раздел 7).
+  if (agent !== null) {
+    if (!(entry.runner.args ?? []).includes('{agent}')) {
+      throw new Error(`провайдер ${provider} агентов не принимает`);
+    }
+    await assertAgent(agent, agentDirs(context.projectPath));
+  }
+
   let created = '';
   const map = await updateMap(context.projectPath, context.workId, (current) => {
     requireSession(current, sessionId);
     for (const id of contextFrom) requireSession(current, id);
-    created = addSession(current, { provider, label, task, parent: sessionId, contextFrom }).id;
+    created = addSession(current, {
+      provider,
+      label,
+      task,
+      parent: sessionId,
+      contextFrom,
+      agent,
+    }).id;
   });
   await writeBrief(context.projectPath, map, created);
   return { sessionId: created };

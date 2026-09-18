@@ -12,6 +12,7 @@ import type { ProviderEntry, RunnerSubstitutions } from './providers.js';
 import { buildSchemaReport } from './schema-report.js';
 import { buildIndex, buildSessionTree } from './session-tree.js';
 import { loadConfig } from './config.js';
+import { agentDirs, assertAgent } from './work/agents.js';
 import { writeBrief } from './work/brief.js';
 import {
   CHANNEL_MIN_VERSION,
@@ -47,12 +48,14 @@ const USAGE = `harnas-core — индекс сессий Claude Code в JSON
   harnas-core work map --work <id> [--cwd <путь>]
                                             карта работы
   harnas-core work session new --work <id> --provider <p> --label <l>
-      [--task <t>] [--context s-01,s-02] [--cwd <путь>]
+      [--task <t>] [--context s-01,s-02] [--agent <name>] [--cwd <путь>]
                                             запись pending, бриф, MCP-конфиг,
                                             settings.json с хуками и готовая
                                             команда запуска; без --task старт
                                             тихий: бриф уходит контекстом, а
-                                            задачу пишет пользователь сам
+                                            задачу пишет пользователь сам;
+                                            --agent — роль Claude Code из
+                                            .claude/agents/<name>.md
 
   --json   формат по умолчанию и единственный, принимается для совместимости
   --root   корень истории (по умолчанию ~/.claude/projects, только чтение)
@@ -141,6 +144,8 @@ async function newWorkSession(argv: string[]): Promise<void> {
     .split(',')
     .map((id) => id.trim())
     .filter((id) => id !== '');
+  // Роль Claude Code необязательна: без неё сессия идёт обычным агентом.
+  const agent = optionValue(argv, '--agent') ?? null;
   const projectPath = await resolveProject(argv, workId);
 
   // Провайдера и бинарь проверяем до записи: запись `pending`, которую нечем
@@ -158,6 +163,15 @@ async function newWorkSession(argv: string[]): Promise<void> {
     );
   }
 
+  // Роль проверяется там же, где провайдер и бинарь: запись `pending`, которую
+  // нечем запустить ролью, — тот же мусор в карте (спецификация 2026-09-08, 7).
+  if (agent !== null) {
+    if (!(entry.runner.args ?? []).includes('{agent}')) {
+      throw new Error(`провайдер ${provider} агентов не принимает`);
+    }
+    await assertAgent(agent, agentDirs(projectPath));
+  }
+
   // Провайдеру, принимающему id снаружи, uuid выдаём сразу и кладём в карту:
   // иначе после ручного запуска связь записи с логом провайдера потерялась бы.
   const uuid = entry.linkBy === 'session-id' ? randomUUID() : null;
@@ -168,7 +182,14 @@ async function newWorkSession(argv: string[]): Promise<void> {
         throw new Error(`сессии ${id} нет в карте`);
       }
     }
-    const session = addSession(current, { provider, label, task, parent: null, contextFrom });
+    const session = addSession(current, {
+      provider,
+      label,
+      task,
+      parent: null,
+      contextFrom,
+      agent,
+    });
     if (uuid !== null) session.providerSessionId = uuid;
     // Процесс поднимет пользователь напечатанной командой: pid харнессу неизвестен,
     // живость такой сессии видна только по логу (дизайн TUI v2, раздел 5.4).
@@ -205,6 +226,7 @@ async function newWorkSession(argv: string[]): Promise<void> {
   if (uuid !== null) subs.sessionUuid = uuid;
   if (mcp !== undefined) subs.mcpConfig = mcp;
   if (channel) subs.channel = CHANNEL_VALUE;
+  if (agent !== null) subs.agent = agent;
   if (settingsFile !== null) subs.settingsFile = settingsFile;
   // Системная вставка гида — тому, кто её принимает (`claude --append-system-prompt`):
   // сессия, поднятая руками, должна знать про харнесс то же, что поднятая панелью.

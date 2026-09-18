@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -123,6 +123,7 @@ afterEach(async () => {
   }
   delete process.env.HARNAS_HOME;
   delete process.env.HARNAS_CLAUDE_BIN;
+  delete process.env.HARNAS_CODEX_BIN;
   delete process.env.HARNAS_WORK_DIR;
   delete process.env.HARNAS_SESSION_ID;
   delete process.env.HARNAS_CHANNEL;
@@ -402,6 +403,51 @@ describe('spawn_session', () => {
 
     expect(result.isError).toBe(true);
     expect(result.text).toContain('task');
+    expect((await readMapFile()).sessions).toHaveLength(1);
+  });
+
+  it('роль агента проверяется по определению проекта и попадает в карту', async () => {
+    await mkdir(path.join(project, '.claude', 'agents'), { recursive: true });
+    await writeFile(path.join(project, '.claude', 'agents', 'reviewer.md'), '# роль\n', 'utf8');
+    const client = await connect('s-01');
+
+    await callOk(client, 'spawn_session', {
+      provider: 'claude',
+      label: 'ревью',
+      task: 'проверить план',
+      agent: 'reviewer',
+    });
+
+    expect(session(await readMapFile(), 's-02').agent).toBe('reviewer');
+  });
+
+  it('определения агента нет — ошибка, записи нет', async () => {
+    const client = await connect('s-01');
+    const result = await call(client, 'spawn_session', {
+      provider: 'claude',
+      label: 'ревью',
+      task: 'проверить план',
+      agent: 'reviewer',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('агента reviewer нет');
+    expect((await readMapFile()).sessions).toHaveLength(1);
+  });
+
+  it('провайдер без подстановки {agent} — ошибка, записи нет', async () => {
+    // У codex флага роли нет: запись, которую нечем запустить ролью, не заводим.
+    process.env.HARNAS_CODEX_BIN = path.join(binDir, 'claude');
+    const client = await connect('s-01');
+    const result = await call(client, 'spawn_session', {
+      provider: 'codex',
+      label: 'ревью',
+      task: 'проверить план',
+      agent: 'reviewer',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('агентов не принимает');
     expect((await readMapFile()).sessions).toHaveLength(1);
   });
 

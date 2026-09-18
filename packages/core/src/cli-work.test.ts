@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -352,6 +352,71 @@ describe('harnas-core work session new', () => {
     expect(result.stderr).not.toContain('младше');
     const printed = JSON.parse(result.stdout) as Record<string, unknown>;
     expect(printed['args']).not.toContain('--dangerously-load-development-channels');
+  }, 60_000);
+
+  it('--agent кладёт роль в карту и в команду запуска', async () => {
+    await newWork('Авторизация');
+    await mkdir(path.join(project, '.claude', 'agents'), { recursive: true });
+    await writeFile(path.join(project, '.claude', 'agents', 'reviewer.md'), '# роль\n', 'utf8');
+    const printed = await ok(
+      'work',
+      'session',
+      'new',
+      '--work',
+      'w-0001',
+      '--provider',
+      'claude',
+      '--label',
+      'ревью',
+      '--task',
+      'Проверить план',
+      '--agent',
+      'reviewer',
+    );
+
+    const args = printed['args'] as string[];
+    expect(args[args.indexOf('--agent') + 1]).toBe('reviewer');
+    expect((await readMapFile('w-0001')).sessions[0]?.agent).toBe('reviewer');
+  }, 60_000);
+
+  it('агента без определения и провайдера без роли CLI отвергает до записи', async () => {
+    await newWork('Авторизация');
+    const missing = await cli(
+      'work',
+      'session',
+      'new',
+      '--work',
+      'w-0001',
+      '--provider',
+      'claude',
+      '--label',
+      'ревью',
+      '--agent',
+      'reviewer',
+    );
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).toContain('агента reviewer нет');
+
+    await mkdir(path.join(project, '.claude', 'agents'), { recursive: true });
+    await writeFile(path.join(project, '.claude', 'agents', 'reviewer.md'), '# роль\n', 'utf8');
+    // У codex флага роли нет: запись, которую нечем запустить ролью, не заводим.
+    const foreign = await cli(
+      'work',
+      'session',
+      'new',
+      '--work',
+      'w-0001',
+      '--provider',
+      'codex',
+      '--label',
+      'ревью',
+      '--agent',
+      'reviewer',
+    );
+    expect(foreign.code).toBe(1);
+    expect(foreign.stderr).toContain('агентов не принимает');
+
+    expect((await readMapFile('w-0001')).sessions).toHaveLength(0);
   }, 60_000);
 
   it('провайдеру без внешнего id uuid не выдаётся, конфиг уходит в аргументы', async () => {
