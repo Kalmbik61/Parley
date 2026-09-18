@@ -506,6 +506,51 @@ describe('разговор агентов, 8.27 и 8.32: включение push
   }, 40_000);
 });
 
+describe('разговор агентов, 8.27: запуск под ролью', () => {
+  /** `pending` с ролью: такую запись кладёт `spawn_session` или CLI с `--agent`. */
+  const roled = async (agent: string | null): Promise<string> => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    const workId = created.work.id;
+    await updateMap(project, workId, (map) => {
+      addSession(map, { provider: 'claude', label: 'ревью', task: 'шаги 1–3', agent });
+    });
+    return workId;
+  };
+
+  /** `Enter` на карточке `pending` → оверлей запуска → `Enter` → живой stub. */
+  const start = async (app: ReturnType<typeof render>): Promise<void> => {
+    await waitFor(() => lineWith(app.lastFrame() ?? '', 'ревью') !== '');
+    app.stdin.write(ENTER);
+    await waitFor(() => (app.lastFrame() ?? '').includes('Enter — запустить'));
+    await settle(150);
+    app.stdin.write(ENTER);
+  };
+
+  it('роль доезжает до бинаря флагом --agent', async () => {
+    await roled('reviewer');
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await start(app);
+      await waitFor(() => (app.lastFrame() ?? '').includes('agent=reviewer'));
+    } finally {
+      app.unmount();
+    }
+  }, 40_000);
+
+  it('сессия без роли стартует обычным claude: флага нет', async () => {
+    await roled(null);
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await start(app);
+      await waitFor(() => (app.lastFrame() ?? '').includes('agent=-'));
+    } finally {
+      app.unmount();
+    }
+  }, 40_000);
+});
+
 describe('план 2026-09-06, пункт 36: сессия не слышит SIGHUP', () => {
   it('через три секунды уходит SIGKILL, и только тогда удаляется запись', async () => {
     const app = open();

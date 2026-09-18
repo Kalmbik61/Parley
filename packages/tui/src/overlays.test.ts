@@ -43,6 +43,7 @@ function session(over: Partial<WorkSession> = {}): WorkSession {
     summary: null,
     summarySource: null,
     artifacts: [],
+    agent: null,
     ...over,
   };
 }
@@ -108,6 +109,17 @@ describe('детали сессии (макет 4.1)', () => {
       expect(found, label).toBeGreaterThan(at);
       at = found;
     }
+  });
+
+  it('роль сессии — поле АГЕНТ сразу за ЗАДАЧА; без роли поля нет (5.1)', () => {
+    const lines = details({ session: session({ agent: 'reviewer' }) });
+    const task = lines.findIndex((line) => line.includes('ЗАДАЧА'));
+    const at = lines.findIndex((line) => line.includes('АГЕНТ'));
+
+    expect(at).toBeGreaterThan(task);
+    expect(at).toBeLessThan(lines.findIndex((line) => line.includes('СОСТ.')));
+    expect(lines[at]).toContain('reviewer');
+    expect(details().some((line) => line.includes('АГЕНТ'))).toBe(false);
   });
 
   it('СОСТ. живой — activity, длительность и время с последнего события', () => {

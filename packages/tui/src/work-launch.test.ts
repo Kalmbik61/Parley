@@ -207,6 +207,32 @@ describe('план запуска', () => {
     expect(plan.warnings).toEqual(['providers.json без {channel}: push выключен']);
   });
 
+  it('роль сессии уезжает флагом --agent; без роли пара выпадает целиком', async () => {
+    // Пикера агентов в TUI нет: роль выбрана при создании записи, и запуск
+    // обязан её донести — иначе сессия стартует обычным claude (5.1).
+    const created = await createWork(project, { title: 'Авторизация', goal: '' });
+    const workId = created.work.id;
+    const roled = await createPendingSession(project, workId, {
+      provider: 'claude',
+      label: 'ревью',
+      task: 'посмотреть шаги 1–3',
+      agent: 'reviewer',
+    });
+    const plan = await planLaunch(project, workId, await sessionOf(workId, roled));
+
+    const at = plan.args.indexOf('--agent');
+    expect(at).toBeGreaterThan(-1);
+    expect(plan.args[at + 1]).toBe('reviewer');
+
+    const plain = await createPendingSession(project, workId, {
+      provider: 'claude',
+      label: 'тесты',
+      task: 'прогнать e2e',
+    });
+    const without = await planLaunch(project, workId, await sessionOf(workId, plain));
+    expect(without.args).not.toContain('--agent');
+  });
+
   it('неизвестный провайдер — ошибка, а не запуск наугад', async () => {
     const { workId, sessionId } = await pending('выдуманный');
     await expect(planLaunch(project, workId, await sessionOf(workId, sessionId))).rejects.toThrow(
@@ -252,6 +278,24 @@ describe('план возобновления', () => {
 
     const at = plan.args.indexOf('--dangerously-load-development-channels');
     expect(plan.args[at + 1]).toBe('server:harnas');
+  });
+
+  it('возобновление идёт под той же ролью: агент живёт в процессе, а не в транскрипте', async () => {
+    const created = await createWork(project, { title: 'Авторизация', goal: '' });
+    const workId = created.work.id;
+    const sessionId = await createPendingSession(project, workId, {
+      provider: 'claude',
+      label: 'ревью',
+      task: 'посмотреть шаги 1–3',
+      agent: 'reviewer',
+    });
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((item) => item.id === sessionId);
+      if (session !== undefined) session.providerSessionId = 'c0ffee00-1111-2222-3333-444455556666';
+    });
+
+    const plan = await planResume(project, workId, await sessionOf(workId, sessionId));
+    expect(plan.args[plan.args.indexOf('--agent') + 1]).toBe('reviewer');
   });
 
   it('без id у провайдера запускает новый процесс по брифу', async () => {

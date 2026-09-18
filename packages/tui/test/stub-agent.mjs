@@ -57,6 +57,10 @@ process.stdout.write(
 // в кадре переносится, а тесту нужно видеть, дошёл ли звонок (4.4).
 const channelAt = process.argv.indexOf('--dangerously-load-development-channels');
 process.stdout.write(`channel=${channelAt === -1 ? '-' : process.argv[channelAt + 1]}\r\n`);
+// Роль тем же способом: в `args=` имя тонет среди урезанных путей, а тесту
+// нужно видеть, под каким агентом стартовала сессия (5.1).
+const agentAt = process.argv.indexOf('--agent');
+process.stdout.write(`agent=${agentAt === -1 ? '-' : process.argv[agentAt + 1]}\r\n`);
 process.stdout.write(`cwd=${process.cwd()}\r\n`);
 // Окружение сессии работы: по нему тест видит, что до процесса доехали
 // HARNAS_WORK_DIR и HARNAS_SESSION_ID. Печатаем коротко — панель узкая.

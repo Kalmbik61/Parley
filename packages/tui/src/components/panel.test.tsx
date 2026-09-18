@@ -26,6 +26,7 @@ function session(over: Partial<WorkSession> = {}): WorkSession {
     summary: null,
     summarySource: null,
     artifacts: [],
+    agent: null,
     ...over,
   };
 }
@@ -89,6 +90,17 @@ describe('карточка панели (макеты §2)', () => {
 
     expect(frame).toContain('старт: ждёт ваш запрос');
     expect(frame).not.toContain('старт: по брифу');
+  });
+
+  it('pending называет роль под ярлыком; без роли строки нет (5.1)', () => {
+    const roled = session({ id: 's-04', label: 'ревью', agent: 'reviewer' });
+    const frame = frameOf(cardFor(entry([roled]), roled, 'pending', 'ctrl+q', false));
+
+    expect(frame).toContain('агент: reviewer');
+    const plain = session({ id: 's-04', label: 'ревью' });
+    expect(frameOf(cardFor(entry([plain]), plain, 'pending', 'ctrl+q', false))).not.toContain(
+      'агент:',
+    );
   });
 
   it('exited показывает код выхода и дозаказ резюме', () => {

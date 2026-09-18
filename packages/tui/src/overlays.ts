@@ -164,6 +164,9 @@ export function detailsView({
   };
 
   add('ЗАДАЧА', session.task === '' ? '—' : session.task);
+  // Роль показывается только у тех, кто с ней запущен: у сессии без агента
+  // поля нет вовсе, чтобы прочерк не выглядел настройкой (5.1).
+  if (session.agent !== null) add('АГЕНТ', session.agent, 1);
   add('СОСТ.', stateLine(session, state, activity, atHarness, index?.endedAt ?? null, now, g), 2);
   add('ТОКЕНЫ', tokensLine(session.metrics?.tokens ?? index?.tokens ?? null, g), 2);
   add('СВОДКА', summaryLine(session, prefix, summarizing));

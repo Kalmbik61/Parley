@@ -170,6 +170,11 @@ async function plan(
   const subs: RunnerSubstitutions = {};
   if (mcp !== undefined) subs.mcpConfig = mcp;
   if (channel) subs.channel = CHANNEL_VALUE;
+  // Роль сессии ставится при каждом запуске, включая `resume`: агент Claude
+  // Code живёт в процессе, а не в транскрипте, как и системная вставка (5.1).
+  // Проверка имени осталась там, где создавалась запись, — второй раз файл
+  // агента читать нечего.
+  if (session.agent !== null) subs.agent = session.agent;
   if (template.includes('{settingsFile}')) {
     subs.settingsFile = await writeWorkSettings(projectPath, workId);
   }

@@ -111,6 +111,9 @@ function cardLines(
   if (session.status === 'pending') {
     return [
       `${head} · pending`,
+      // Роль видна до запуска: пикера агентов у `prefix c` и `prefix C` нет, и
+      // карточка — единственное место, где имя сверяется перед стартом (5.1).
+      ...(session.agent === null ? [] : [`агент: ${session.agent}`]),
       ...(parent === null ? [] : [`создана сессией «${parent}»`]),
       ...(brief === null ? [] : [`бриф: ${brief}`]),
       // Каким будет старт: задачи нет — бриф уйдёт контекстом, и агент будет
