@@ -54,6 +54,14 @@ export interface OverlayBox {
   wide: boolean;
 }
 
+/**
+ * Сколько строк тела достаётся оверлею с подсказкой на терминале в `rows`:
+ * рамке остаётся `rows − 3` (см. `overlayBox`), из них верх и низ забирает сама
+ * рамка, а последнюю строку — подсказка. Тот, кто режет окно до рамки (тред,
+ * 6.1), режет по этой мерке — иначе `Overlay` отрезал бы ему хвост.
+ */
+export const overlayRoom = (rows: number): number => Math.max(0, rows - 6);
+
 const clampWidth = (desired: number, columns: number): number =>
   Math.max(MIN_WIDTH, Math.min(desired, columns - 4));
 

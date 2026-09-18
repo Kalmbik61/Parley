@@ -98,6 +98,8 @@ interface ProbeProps {
   sessionId?: string;
   width?: number;
   height?: number;
+  /** Строк тела у рамки запасника: в харнессе их считает `overlayRoom(rows)`. */
+  overlayRoom?: number;
 }
 
 /** Клавиши: `t` — открыть и закрыть, `u` — вверх по ленте, `f` — обратно к хвосту. */
@@ -107,8 +109,9 @@ function Probe({
   sessionId = 's-02',
   width = 30,
   height = 6,
+  overlayRoom = 4,
 }: ProbeProps): ReactNode {
-  const thread = useThread({ panelCols, height, width });
+  const thread = useThread({ panelCols, height, overlayRoom, width });
   useInput((input) => {
     if (input === 't') thread.toggle();
     if (input === 'u') thread.scrollBy(-2);

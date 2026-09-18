@@ -28,8 +28,16 @@ export interface ThreadOptions {
   panelCols: number;
   /** Строк у панели; одну забирает заголовок треда. */
   height: number;
+  /** Строк тела у оверлея-запасника: по ним режется лента, когда док не влез. */
+  overlayRoom: number;
   /** `config.threadWidth`: ширина тела треда (6.1). */
   width: number;
+}
+
+/** Где стоит лента: чья это группа и сколько строк от её начала (6.2–6.3). */
+interface Scroll {
+  owner: string | null;
+  at: number;
 }
 
 export interface ThreadState {
@@ -50,15 +58,23 @@ export interface ThreadState {
   viewOf: (entry: WorkEntry | undefined, sessionId: string | null) => ThreadView | null;
 }
 
-export function useThread({ panelCols, height, width }: ThreadOptions): ThreadState {
+export function useThread({
+  panelCols,
+  height,
+  overlayRoom,
+  width,
+}: ThreadOptions): ThreadState {
   const [open, setOpen] = useState(false);
-  // `null` — лента держится хвоста; число — сколько строк от её начала (6.3).
-  const [scroll, setScroll] = useState<number | null>(null);
+  // `null` — лента держится хвоста; иначе строки от начала и владелец группы,
+  // которой это положение принадлежит (6.2, 6.3).
+  const [scroll, setScroll] = useState<Scroll | null>(null);
   const g = glyphs();
 
-  // Заголовок треда занимает первую строку колонки, лента идёт под ним.
-  const room = Math.max(0, height - 1);
   const fits = threadFits(panelCols, width);
+  // В доке первую строку колонки занимает заголовок треда, у запасника окно
+  // ограничивает рамка: вид один на оба места, поэтому режется он сразу под то
+  // место, где показывается (6.1, приёмка 8.41).
+  const room = fits ? Math.max(0, height - 1) : overlayRoom;
 
   /**
    * Хвост последнего посчитанного вида: от него отсчитывается уход вверх, и он
@@ -66,6 +82,8 @@ export function useThread({ panelCols, height, width }: ThreadOptions): ThreadSt
    * новыми письмами (6.3).
    */
   const tail = useRef(0);
+  /** Владелец показанного треда: с ним сверяется хозяин прокрутки (6.2). */
+  const owner = useRef<string | null>(null);
   const cache = useRef<{ key: readonly unknown[]; view: ThreadView } | null>(null);
 
   const viewOf = useCallback(
@@ -74,7 +92,13 @@ export function useThread({ panelCols, height, width }: ThreadOptions): ThreadSt
       const key: readonly unknown[] = [entry.map, sessionId, width, room, scroll];
       const kept = cache.current;
       if (kept !== null && kept.key.every((value, at) => value === key[at])) return kept.view;
-      const view = threadView({ entry, sessionId, width, height: room, scroll, g });
+      const cut = (at: number | null): ThreadView =>
+        threadView({ entry, sessionId, width, height: room, scroll: at, g });
+      let view = cut(scroll?.at ?? null);
+      // Положение принадлежит своей группе: у соседнего поддерева лента другая,
+      // и открывается она с хвоста, а не с чужого смещения (6.2).
+      if (scroll !== null && scroll.owner !== view.owner) view = cut(null);
+      owner.current = view.owner;
       tail.current = Math.max(0, view.total - room);
       cache.current = { key, view };
       return view;
@@ -84,10 +108,11 @@ export function useThread({ panelCols, height, width }: ThreadOptions): ThreadSt
 
   const scrollBy = useCallback((lines: number) => {
     setScroll((now) => {
-      const next = (now ?? tail.current) + lines;
+      const from = now !== null && now.owner === owner.current ? now.at : tail.current;
+      const next = from + lines;
       // Вернулись к хвосту — снова следим за ним: иначе новое письмо приходило
       // бы ниже окна, а `↓N` считал бы строки, которые и так видны (6.3).
-      return next >= tail.current ? null : Math.max(0, next);
+      return next >= tail.current ? null : { owner: owner.current, at: Math.max(0, next) };
     });
   }, []);
 

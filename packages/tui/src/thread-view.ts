@@ -40,6 +40,8 @@ export interface ThreadViewOptions {
 export interface ThreadView {
   /** «тред · план» у поддерева, «тред · работа» у одинокого корня (6.2). */
   title: string;
+  /** Владелец треда: по нему видно, что группа сменилась и лента другая (6.2). */
+  owner: string | null;
   /** Непрочитанные во всём треде: заголовок показывает их числом `▤N`. */
   unread: number;
   /** Строки, уже нарезанные под `height`. */
@@ -119,6 +121,7 @@ export function threadView({
 
   return {
     title: thread.owner === null ? 'тред · работа' : `тред · ${label(thread.owner)}`,
+    owner: thread.owner,
     unread: thread.messages.filter((message) => message.readAt === null).length,
     lines: window,
     below: total - (start + window.length),

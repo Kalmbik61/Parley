@@ -422,7 +422,14 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
       }
 
       // Тред закрывается и повторным `t` — как сайдбар-оверлей своим `b`.
-      if (kind === null && input === 't') return thread.close();
+      if (kind === null) {
+        if (input === 't') return thread.close();
+        // Запасник листается той же прокруткой, что и док: положение ленты одно
+        // на оба места, и ресайз терминала его не теряет (6.3).
+        if (key.downArrow || input === 'j') return thread.scrollBy(1);
+        if (key.upArrow || input === 'k') return thread.scrollBy(-1);
+        return;
+      }
 
       if (kind === 'details') {
         if (editing !== null) {
@@ -508,7 +515,8 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
     }
     if (kind === 'help') return helpView(prefixName, filter, configPath(), g);
     if (visible === 'thread' && entry !== undefined && session !== null) {
-      return threadOverlayView(entry, session.id, thread.width, g);
+      const pane = thread.viewOf(entry, session.id);
+      if (pane !== null) return threadOverlayView(pane, thread.width, g);
     }
     if (kind === 'details' && entry !== undefined && session !== null) {
       return detailsView({
@@ -529,6 +537,7 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
     kind,
     visible,
     thread.width,
+    thread.viewOf,
     shown,
     filter,
     at,

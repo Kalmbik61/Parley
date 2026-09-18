@@ -9,8 +9,8 @@
 
 import { defaultCodexRoot, defaultRoot, type SessionIndex, type WorkSession } from '@harnas/core';
 import { Box, useApp } from 'ink';
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
-import { overlayCovers, OverlayHost } from './components/overlay.js';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { overlayCovers, OverlayHost, overlayRoom } from './components/overlay.js';
 import { cardFor, Panel } from './components/panel.js';
 import {
   Sidebar,
@@ -99,7 +99,12 @@ export function App({
   // PTY узнаёт о них тем же путём, что при ресайзе терминала (разговор
   // агентов, 6.1). Состояние хука нужно раньше самой панели, поэтому вид
   // выбранной сессии он отдаёт отдельно — записи работы здесь ещё нет.
-  const thread = useThread({ panelCols, height: panelRows, width: config.threadWidth });
+  const thread = useThread({
+    panelCols,
+    height: panelRows,
+    overlayRoom: overlayRoom(rows),
+    width: config.threadWidth,
+  });
   const bodyCols = thread.docked ? panelCols - thread.width - 1 : panelCols;
   const panel = usePanel({
     projectPath,
@@ -152,7 +157,15 @@ export function App({
     height: panelRows,
   };
 
-  const threadOf = thread.viewOf(chosen, current?.id ?? null);
+  // Лента считается только там, где её видно: закрытому треду обход поддерева и
+  // перенос всех писем на каждую новую карту ни к чему. Запасник просит свой вид
+  // сам, через тот же кэш (6.1).
+  const threadPane = thread.docked ? thread.viewOf(chosen, current?.id ?? null) : null;
+  // Выбранная сессия исчезла (удалили её или работу) — тред закрывается: без
+  // сессии `t` его и не открывает, а док съедал бы колонки под пустую колонку.
+  useEffect(() => {
+    if (current === null) thread.close();
+  }, [current, thread.close]);
 
   const overlays = useOverlays({
     projectPath,
@@ -262,7 +275,7 @@ export function App({
         </Box>
         {/* Модальный оверлей ложится и на тред: док возвращается, закрывшись (6.1). */}
         {thread.docked && overlays.kind === null && (
-          <Thread view={threadOf} width={thread.width} height={panelRows} />
+          <Thread view={threadPane} width={thread.width} height={panelRows} />
         )}
       </Box>
 

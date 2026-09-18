@@ -34,7 +34,7 @@ import {
   wrapText,
 } from './format.js';
 import { statusGlyph, type Glyphs } from './glyphs.js';
-import { threadView } from './thread-view.js';
+import type { ThreadView } from './thread-view.js';
 
 /** Ширина тела внутри рамки: рамка минус два бока. */
 const bodyWidth = (frame: number): number => frame - 2;
@@ -351,26 +351,19 @@ const BINDINGS: ReadonlyArray<readonly [string, string]> = [
 
 /**
  * 6.1. Тред-запасник: на узком терминале док не влезает, и та же лента
- * показывается оверлеем. Строки считает та же функция, что и у дока, а ширина
- * тела рамки равна ширине дока — поэтому в обоих местах они совпадают. Окно по
- * высоте здесь не режется: тело рамки листает `components/overlay.tsx` (§4.0).
+ * показывается оверлеем. Вид сюда приходит готовым — тот самый, что у дока
+ * (приёмка 8.41), уже нарезанный `use-thread.ts` по телу рамки (`overlayRoom`)
+ * и по общей прокрутке. Резать окно ещё раз здесь нельзя: `Overlay` отсчитывает
+ * своё от начала списка, и лента открывалась бы с самых старых писем (6.3).
  */
-export function threadOverlayView(
-  entry: WorkEntry,
-  sessionId: string,
-  width: number,
-  g: Glyphs,
-): OverlayView {
-  const view = threadView({
-    entry,
-    sessionId,
-    width,
-    height: Number.POSITIVE_INFINITY,
-    scroll: 0,
-    g,
-  });
+export function threadOverlayView(view: ThreadView, width: number, g: Glyphs): OverlayView {
+  // Те же пометки, что в заголовке дока: непрочитанные и хвост ленты (6.3).
+  const marks = [
+    view.unread > 0 ? `${g.mail}${view.unread}` : '',
+    view.below > 0 ? `${g.down}${view.below}` : '',
+  ].filter((mark) => mark !== '');
   return {
-    title: view.unread > 0 ? `${view.title} ${g.mail}${view.unread}` : view.title,
+    title: [view.title, ...marks].join(' '),
     desired: width + 2,
     lines: view.lines,
     footer: ` ${g.up}${g.down} — прокрутка · Esc — закрыть`,
