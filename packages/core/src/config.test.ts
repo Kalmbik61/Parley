@@ -1,10 +1,10 @@
 /** Чек-лист приёмки TUI v2, пункт 14: дефолты / файл / env и битый JSON. */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_CONFIG, configPath, loadConfig } from './config.js';
+import { DEFAULT_CONFIG, configPath, loadConfig, parseSetting, saveConfig } from './config.js';
 
 let home = '';
 const file = (): string => path.join(home, 'config.json');
@@ -33,6 +33,7 @@ describe('loadConfig', () => {
       channelPush: true,
       messageRate: 20,
       threadWidth: 30,
+      autoLaunch: true,
     });
     expect(loaded.config).toEqual(DEFAULT_CONFIG);
     expect(loaded.warning).toBeNull();
@@ -48,6 +49,7 @@ describe('loadConfig', () => {
       channelPush: false,
       messageRate: 5,
       threadWidth: 24,
+      autoLaunch: false,
     });
 
     const fromFile = await loadConfig(file(), {});
@@ -60,6 +62,7 @@ describe('loadConfig', () => {
       channelPush: false,
       messageRate: 5,
       threadWidth: 24,
+      autoLaunch: false,
     });
     expect(fromFile.warning).toBeNull();
 
@@ -72,6 +75,7 @@ describe('loadConfig', () => {
       HARNAS_CHANNEL_PUSH: '1',
       HARNAS_MESSAGE_RATE: '7',
       HARNAS_THREAD_WIDTH: '40',
+      HARNAS_AUTO_LAUNCH: '1',
     });
     expect(fromEnv.config).toEqual({
       prefix: 'a',
@@ -82,6 +86,7 @@ describe('loadConfig', () => {
       channelPush: true,
       messageRate: 7,
       threadWidth: 40,
+      autoLaunch: true,
     });
     expect(fromEnv.warning).toBeNull();
   });
@@ -160,6 +165,18 @@ describe('loadConfig', () => {
     expect(loaded.warning).toBeNull();
   });
 
+  it('сообщает, какие ключи пришли из окружения', async () => {
+    await write({ prefix: 'w' });
+    const loaded = await loadConfig(file(), { HARNAS_MOUSE: '0', HARNAS_ASCII: 'мимо' });
+
+    // Битая переменная ключ не перекрывает — и в список не попадает.
+    expect(loaded.fromEnv).toEqual(['mouseCapture']);
+  });
+
+  it('без окружения список пуст', async () => {
+    expect((await loadConfig(file(), {})).fromEnv).toEqual([]);
+  });
+
   it('путь по умолчанию — config.json в HARNAS_HOME', () => {
     const saved = process.env.HARNAS_HOME;
     process.env.HARNAS_HOME = home;
@@ -169,5 +186,52 @@ describe('loadConfig', () => {
       if (saved === undefined) delete process.env.HARNAS_HOME;
       else process.env.HARNAS_HOME = saved;
     }
+  });
+});
+
+describe('parseSetting', () => {
+  it('prefix — один знак', () => {
+    expect(parseSetting('prefix', 'w')).toEqual({ value: 'w' });
+    expect(parseSetting('prefix', 'ww')).toEqual({ error: 'prefix: ожидается один знак' });
+  });
+
+  it('числа — целое больше нуля', () => {
+    expect(parseSetting('sidebarWidth', '30')).toEqual({ value: 30 });
+    expect(parseSetting('silenceThresholdMs', '0')).toEqual({
+      error: 'silenceThresholdMs: ожидается целое больше нуля',
+    });
+    expect(parseSetting('sidebarWidth', '2.5')).toMatchObject({ error: expect.any(String) });
+  });
+
+  it('messageRate и threadWidth — теми же правилами, что и у файла', () => {
+    expect(parseSetting('messageRate', '7')).toEqual({ value: 7 });
+    expect(parseSetting('threadWidth', '40')).toEqual({ value: 40 });
+    expect(parseSetting('threadWidth', '20')).toEqual({
+      error: 'threadWidth: ожидается целое не меньше 24',
+    });
+  });
+});
+
+describe('saveConfig', () => {
+  it('файла нет — создаёт каталог и файл с одним ключом', async () => {
+    const nested = path.join(home, 'глубже', 'config.json');
+    await saveConfig({ autoLaunch: false }, nested);
+
+    expect(JSON.parse(await readFile(nested, 'utf8'))).toEqual({ autoLaunch: false });
+    expect((await readFile(nested, 'utf8')).endsWith('\n')).toBe(true);
+  });
+
+  it('сохраняет чужие ключи и перекрывает свой', async () => {
+    await write({ prefix: 'w', comment: 'моё' });
+    await saveConfig({ prefix: 'a' }, file());
+
+    expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({ prefix: 'a', comment: 'моё' });
+  });
+
+  it('битый файл перезаписывается целиком', async () => {
+    await write('{ не json');
+    await saveConfig({ ascii: true }, file());
+
+    expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({ ascii: true });
   });
 });

@@ -8,7 +8,7 @@
  * (раздел 10). `HARNAS_ESCAPE_KEY` больше не читается: его заменил `prefix`.
  */
 
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { harnasHome } from './work/store.js';
 
@@ -34,6 +34,8 @@ export interface HarnasConfig {
   messageRate: number;
   /** Ширина панели треда; уже минимума лента нечитаема (разговор агентов, 6.1). */
   threadWidth: number;
+  /** Запускать ли `pending` от агента самим, в фоне, без диалога (раздел 5.2). */
+  autoLaunch: boolean;
 }
 
 export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
@@ -45,12 +47,28 @@ export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
   channelPush: true,
   messageRate: 20,
   threadWidth: 30,
+  autoLaunch: true,
+};
+
+/** Имя переменной окружения для каждого ключа — один источник для загрузчика и оверлея. */
+export const ENV_NAMES: Readonly<Record<keyof HarnasConfig, string>> = {
+  prefix: 'HARNAS_PREFIX',
+  sidebarWidth: 'HARNAS_SIDEBAR_WIDTH',
+  mouseCapture: 'HARNAS_MOUSE',
+  ascii: 'HARNAS_ASCII',
+  silenceThresholdMs: 'HARNAS_SILENCE_MS',
+  channelPush: 'HARNAS_CHANNEL_PUSH',
+  messageRate: 'HARNAS_MESSAGE_RATE',
+  threadWidth: 'HARNAS_THREAD_WIDTH',
+  autoLaunch: 'HARNAS_AUTO_LAUNCH',
 };
 
 export interface LoadedConfig {
   config: HarnasConfig;
   /** Что не прочиталось. `null` — вопросов к настройкам нет. */
   warning: string | null;
+  /** Ключи, чьё значение пришло из окружения: файл их не перекроет. */
+  fromEnv: ReadonlyArray<keyof HarnasConfig>;
 }
 
 /** Файл настроек. Его может не быть — тогда работают дефолты. */
@@ -104,6 +122,7 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   take('channelPush', (value) => typeof value === 'boolean', 'true или false');
   take('messageRate', isPositiveInt, 'целое больше нуля');
   take('threadWidth', isThreadWidth, THREAD_EXPECTED);
+  take('autoLaunch', (value) => typeof value === 'boolean', 'true или false');
   return patch;
 }
 
@@ -120,7 +139,8 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
     return value === undefined || value === '' ? undefined : value;
   };
 
-  const flag = (name: string, key: 'mouseCapture' | 'ascii' | 'channelPush'): void => {
+  const flag = (key: 'mouseCapture' | 'ascii' | 'channelPush' | 'autoLaunch'): void => {
+    const name = ENV_NAMES[key];
     const value = text(name);
     if (value === undefined) return;
     const lower = value.toLowerCase();
@@ -131,11 +151,11 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
 
   // Проверка передаётся как в `fromFile`: у `threadWidth` она своя, с минимумом.
   const count = (
-    name: string,
     key: 'sidebarWidth' | 'silenceThresholdMs' | 'messageRate' | 'threadWidth',
     ok: (value: unknown) => boolean = isPositiveInt,
     expected = 'целое больше нуля',
   ): void => {
+    const name = ENV_NAMES[key];
     const value = text(name);
     if (value === undefined) return;
     const parsed = Number(value);
@@ -143,18 +163,19 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
     else complain(`${name}: ожидается ${expected}`);
   };
 
-  const prefix = text('HARNAS_PREFIX');
+  const prefix = text(ENV_NAMES.prefix);
   if (prefix !== undefined) {
     if (isPrefix(prefix)) patch.prefix = prefix;
-    else complain('HARNAS_PREFIX: ожидается один знак');
+    else complain(`${ENV_NAMES.prefix}: ожидается один знак`);
   }
-  count('HARNAS_SIDEBAR_WIDTH', 'sidebarWidth');
-  flag('HARNAS_MOUSE', 'mouseCapture');
-  flag('HARNAS_ASCII', 'ascii');
-  count('HARNAS_SILENCE_MS', 'silenceThresholdMs');
-  flag('HARNAS_CHANNEL_PUSH', 'channelPush');
-  count('HARNAS_MESSAGE_RATE', 'messageRate');
-  count('HARNAS_THREAD_WIDTH', 'threadWidth', isThreadWidth, THREAD_EXPECTED);
+  count('sidebarWidth');
+  flag('mouseCapture');
+  flag('ascii');
+  count('silenceThresholdMs');
+  flag('channelPush');
+  count('messageRate');
+  count('threadWidth', isThreadWidth, THREAD_EXPECTED);
+  flag('autoLaunch');
   return patch;
 }
 
@@ -195,8 +216,60 @@ export async function loadConfig(
     }
   }
 
+  const envPatch = fromEnv(env, complain);
+
   return {
-    config: { ...DEFAULT_CONFIG, ...filePatch, ...fromEnv(env, complain) },
+    config: { ...DEFAULT_CONFIG, ...filePatch, ...envPatch },
     warning: problems.length === 0 ? null : problems.join('; '),
+    // Битая переменная ключ не перекрывает, в патч не попадает — и в список тоже.
+    fromEnv: Object.keys(envPatch) as ReadonlyArray<keyof HarnasConfig>,
   };
+}
+
+/** Ключи, значение которых вводится текстом; булевы переключаются без ввода. */
+export type TypedSettingKey =
+  | 'prefix'
+  | 'sidebarWidth'
+  | 'silenceThresholdMs'
+  | 'messageRate'
+  | 'threadWidth';
+
+/**
+ * Разбор введённого значения теми же правилами, что и у файла: оверлей настроек
+ * (раздел 3.4) не должен расходиться с загрузчиком.
+ */
+export function parseSetting<K extends TypedSettingKey>(
+  key: K,
+  text: string,
+): { value: HarnasConfig[K] } | { error: string } {
+  if (key === 'prefix') {
+    if (isPrefix(text)) return { value: text as HarnasConfig[K] };
+    return { error: `${key}: ожидается один знак` };
+  }
+  // У `threadWidth` проверка своя, с минимумом: та же, что и у файла.
+  const ok = key === 'threadWidth' ? isThreadWidth : isPositiveInt;
+  const expected = key === 'threadWidth' ? THREAD_EXPECTED : 'целое больше нуля';
+  const parsed = Number(text);
+  if (ok(parsed)) return { value: parsed as HarnasConfig[K] };
+  return { error: `${key}: ожидается ${expected}` };
+}
+
+/**
+ * Пишет часть настроек в файл, сохраняя чужие ключи. Каталог создаёт. Битый файл
+ * перезаписывается целиком: пользователь правит настройку, а не чинит JSON.
+ */
+export async function saveConfig(
+  patch: Partial<HarnasConfig>,
+  file: string = configPath(),
+): Promise<void> {
+  let kept: Record<string, unknown> = {};
+  try {
+    const data: unknown = JSON.parse(await readFile(file, 'utf8'));
+    if (isRecord(data)) kept = data;
+  } catch {
+    // Файла нет, он не читается или не парсится — пишем с нуля.
+  }
+
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, `${JSON.stringify({ ...kept, ...patch }, null, 2)}\n`, 'utf8');
 }

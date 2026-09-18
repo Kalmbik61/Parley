@@ -67,7 +67,15 @@ const waitFor = async (check: () => boolean, timeoutMs = 8000): Promise<void> =>
 };
 
 /** Открывает цель и печатает всё, что сказал процесс, плюс ошибку запуска. */
-function Probe({ target, opens = 1 }: { target: AgentTarget; opens?: number }): ReactNode {
+function Probe({
+  target,
+  opens = 1,
+  focus = true,
+}: {
+  target: AgentTarget;
+  opens?: number;
+  focus?: boolean;
+}): ReactNode {
   const [out, setOut] = useState('');
   const agent = useAgentPty();
   const started = useRef(false);
@@ -76,8 +84,8 @@ function Probe({ target, opens = 1 }: { target: AgentTarget; opens?: number }): 
     if (started.current) return;
     started.current = true;
     // Повторное открытие той же цели не должно плодить второй процесс.
-    for (let at = 0; at < opens; at++) agent.open(target, { cols: 80, rows: 10 });
-  }, [agent, target, opens]);
+    for (let at = 0; at < opens; at++) agent.open(target, { cols: 80, rows: 10 }, { focus });
+  }, [agent, target, opens, focus]);
 
   const live = agent.active?.session;
   useEffect(
@@ -85,7 +93,9 @@ function Probe({ target, opens = 1 }: { target: AgentTarget; opens?: number }): 
     [live],
   );
 
-  return <Text>{`${agent.error ?? ''}|${out}`}</Text>;
+  return (
+    <Text>{`${agent.error ?? ''}|${out}|live=${agent.live.length}|active=${agent.active === undefined ? 'none' : 'yes'}`}</Text>
+  );
 }
 
 let root = '';
@@ -156,6 +166,17 @@ describe('раннеры провайдеров', () => {
       await new Promise((resolve) => setTimeout(resolve, 300));
       const frames = (app.lastFrame() ?? '').split('stub готов');
       expect(frames).toHaveLength(2);
+    } finally {
+      app.unmount();
+    }
+  }, 25_000);
+
+  it('open с focus: false поднимает процесс, но панель не переключает', async () => {
+    const app = render(<Probe target={{ kind: 'new', provider: 'claude' }} focus={false} />);
+    try {
+      await waitFor(() => flat(app.lastFrame()).includes('live=1'));
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(flat(app.lastFrame())).toContain('active=none');
     } finally {
       app.unmount();
     }

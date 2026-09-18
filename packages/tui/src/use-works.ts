@@ -1,4 +1,4 @@
-import { readWorks, watchWorks, type WorkEntry } from '@harnas/core';
+import { DEFAULT_CONFIG, readWorks, watchWorks, type WorkEntry } from '@harnas/core';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { glyphs } from './glyphs.js';
 import type { StatusEventInit } from './use-status.js';
@@ -14,6 +14,8 @@ export interface WorksOptions {
    * считает то же условие, что и `send_message` (разговор агентов, 4.7).
    */
   messageRate?: number;
+  /** Включён ли автозапуск `pending` от агента: меняет текст события (5.2). */
+  autoLaunch?: boolean;
   /** События карты уходят в строку статуса — единственный канал уведомлений. */
   onEvents?: (events: readonly StatusEventInit[]) => void;
 }
@@ -32,7 +34,8 @@ export interface WorksState {
 export function useWorks({
   projectPath,
   prefix,
-  messageRate,
+  messageRate = DEFAULT_CONFIG.messageRate,
+  autoLaunch = false,
   onEvents,
 }: WorksOptions): WorksState {
   const [works, setWorks] = useState<WorkEntry[]>([]);
@@ -47,12 +50,15 @@ export function useWorks({
 
   const apply = useCallback(
     (next: WorkEntry[]) => {
-      const events = worksEvents(previous.current, next, glyphs(), prefix, messageRate);
+      const events = worksEvents(previous.current, next, glyphs(), prefix, {
+        rate: messageRate,
+        autoLaunch,
+      });
       previous.current = next;
       setWorks(next);
       if (events.length > 0) notify.current?.(events);
     },
-    [prefix, messageRate],
+    [prefix, messageRate, autoLaunch],
   );
 
   useEffect(() => {

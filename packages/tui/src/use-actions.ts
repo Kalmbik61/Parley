@@ -31,6 +31,7 @@ const OVERLAYS: Readonly<Record<string, Parameters<OverlaysState['open']>[0]>> =
   i: 'details',
   r: 'resume',
   R: 'summary',
+  ',': 'settings',
   '?': 'help',
   x: 'close',
   d: 'delete',

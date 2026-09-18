@@ -29,6 +29,7 @@ import { useChannelProbe } from './use-channel.js';
 import { useConfig } from './use-config.js';
 import { useGitBranch } from './use-git-branch.js';
 import { useLogIndex } from './use-log-index.js';
+import { useAutoLaunch } from './use-auto-launch.js';
 import { useMapSync } from './use-map-sync.js';
 import { useOverlays } from './use-overlays.js';
 import { usePanel } from './use-panel.js';
@@ -66,17 +67,18 @@ export function App({
     (err: unknown) => push([{ text: err instanceof Error ? err.message : String(err) }]),
     [push],
   );
-  const config = useConfig(push);
+  const { config, fromEnv, update: updateConfig } = useConfig(push);
   // Push через channel: настройка плюс проба версии `claude` — старая сборка
   // флага канала не принимает (разговор агентов, 4.4).
   const channelSupported = useChannelProbe(config.channelPush, push);
   const channel = config.channelPush && channelSupported;
   const warn = useCallback((text: string) => push([{ text }]), [push]);
   const prefixName = `ctrl+${config.prefix}`;
-  const { works } = useWorks({
+  const { works, loading } = useWorks({
     projectPath,
     prefix: prefixName,
     messageRate: config.messageRate,
+    autoLaunch: config.autoLaunch,
     onEvents: push,
   });
 
@@ -185,6 +187,9 @@ export function App({
     panel,
     selection,
     thread,
+    config,
+    fromEnv,
+    updateConfig,
     pin: (key) => setPinned((current) => new Set([...current, key])),
     push,
     fail,
@@ -221,6 +226,14 @@ export function App({
 
   // Сессии провайдеров без внешнего id привязываются к логу по cwd и времени.
   useSessionLink({ works, sessions, roots });
+  // `pending` от агента поднимается сама, в фоне: панель остаётся у пользователя (5.2).
+  useAutoLaunch({
+    works,
+    loading,
+    enabled: config.autoLaunch,
+    launch: (project, workId, session) =>
+      panel.start(project, workId, session, 'launch', { focus: false }),
+  });
   useMapSync({
     works,
     roots,

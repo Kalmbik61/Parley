@@ -69,6 +69,11 @@ const targetTitle = (target: AgentTarget): string => {
   return target.title;
 };
 
+export interface OpenOptions {
+  /** Переключать ли панель на запущенного агента; по умолчанию да. */
+  focus?: boolean;
+}
+
 /** Один запущенный агент. На цель их не больше одного (specs/pty.md). */
 export interface AgentRun {
   target: AgentTarget;
@@ -89,7 +94,11 @@ export interface AgentPtyState {
   live: readonly PtySession[];
   /** Нет бинаря или не удалось запустить. */
   error: string | undefined;
-  open(target: AgentTarget, size: PtySize): void;
+  /**
+   * Запустить агента цели и показать его. `focus: false` — поднять процесс в
+   * фоне, не трогая панель: так стартуют `pending` от агента (дизайн 5.2).
+   */
+  open(target: AgentTarget, size: PtySize, options?: OpenOptions): void;
   /**
    * Показать уже запущенную панель по её ключу. `false` — такой панели у
    * харнесса нет: сессию запустили вне TUI, и подключаться не к чему (решение №5).
@@ -175,54 +184,57 @@ export function useAgentPty({ onStart, onExit, onFail }: AgentPtyOptions = {}): 
   // Путь к бинарю ищется один раз на команду и переиспользуется.
   const binaries = useRef(new Map<string, string>());
 
-  const start = useCallback((file: string, args: string[], target: AgentTarget, size: PtySize) => {
-    setError(undefined);
-    const key = targetKey(target);
-    // cwd есть у существующей сессии и у сессии работы: агент должен видеть
-    // тот же проект — у чужой работы это не cwd харнесса (решение №9).
-    const cwd =
-      target.kind === 'session' ? target.session.cwd : target.kind === 'work' ? target.cwd : null;
-    // Окружение сессии работы: по нему MCP-сервер узнаёт, кто звонит.
-    const env = target.kind === 'work' ? { ...process.env, ...target.env } : undefined;
+  const start = useCallback(
+    (file: string, args: string[], target: AgentTarget, size: PtySize, focus: boolean) => {
+      setError(undefined);
+      const key = targetKey(target);
+      // cwd есть у существующей сессии и у сессии работы: агент должен видеть
+      // тот же проект — у чужой работы это не cwd харнесса (решение №9).
+      const cwd =
+        target.kind === 'session' ? target.session.cwd : target.kind === 'work' ? target.cwd : null;
+      // Окружение сессии работы: по нему MCP-сервер узнаёт, кто звонит.
+      const env = target.kind === 'work' ? { ...process.env, ...target.env } : undefined;
 
-    try {
-      const session = spawnPtySession({
-        file,
-        args,
-        cols: size.cols,
-        rows: size.rows,
-        ...(cwd === null ? {} : { cwd }),
-        ...(env === undefined ? {} : { env }),
-      });
+      try {
+        const session = spawnPtySession({
+          file,
+          args,
+          cols: size.cols,
+          rows: size.rows,
+          ...(cwd === null ? {} : { cwd }),
+          ...(env === undefined ? {} : { env }),
+        });
 
-      session.onExit((exit) => {
-        live.current.delete(key);
-        setRuns((prev) =>
-          prev.map((run) => (targetKey(run.target) === key ? { ...run, exit } : run)),
-        );
-        exited.current?.(target, exit);
-      });
+        session.onExit((exit) => {
+          live.current.delete(key);
+          setRuns((prev) =>
+            prev.map((run) => (targetKey(run.target) === key ? { ...run, exit } : run)),
+          );
+          exited.current?.(target, exit);
+        });
 
-      // Прежний процесс той же цели гасим: один активный PTY на сессию.
-      live.current.get(key)?.kill();
-      live.current.set(key, session);
+        // Прежний процесс той же цели гасим: один активный PTY на сессию.
+        live.current.get(key)?.kill();
+        live.current.set(key, session);
 
-      setRuns((prev) => [
-        ...prev.filter((run) => targetKey(run.target) !== key),
-        { target, title: targetTitle(target), session, exit: undefined },
-      ]);
-      setActiveKey(key);
-      started.current?.(target, session);
-    } catch (reason: unknown) {
-      const message = reason instanceof Error ? reason.message : String(reason);
-      setError(message);
-      failed.current?.(target, message);
-    }
-  }, []);
+        setRuns((prev) => [
+          ...prev.filter((run) => targetKey(run.target) !== key),
+          { target, title: targetTitle(target), session, exit: undefined },
+        ]);
+        if (focus) setActiveKey(key);
+        started.current?.(target, session);
+      } catch (reason: unknown) {
+        const message = reason instanceof Error ? reason.message : String(reason);
+        setError(message);
+        failed.current?.(target, message);
+      }
+    },
+    [],
+  );
 
   /** Ищет бинарь провайдера и запускает его. Бинаря нет — объясняем, а не падаем. */
   const launch = useCallback(
-    (target: AgentTarget, size: PtySize) => {
+    (target: AgentTarget, size: PtySize, focus: boolean) => {
       // У сессии работы команда уже посчитана слоем координации по реестру.
       const { command, args } =
         target.kind === 'work'
@@ -234,14 +246,14 @@ export function useAgentPty({ onStart, onExit, onFail }: AgentPtyOptions = {}): 
       const known = binaries.current.get(command);
 
       if (known !== undefined) {
-        start(known, args, target, size);
+        start(known, args, target, size, focus);
         return;
       }
 
       void findRunnerBinary(command)
         .then((file) => {
           binaries.current.set(command, file);
-          start(file, args, target, size);
+          start(file, args, target, size, focus);
         })
         .catch((reason: unknown) => {
           const message = reason instanceof Error ? reason.message : String(reason);
@@ -262,14 +274,14 @@ export function useAgentPty({ onStart, onExit, onFail }: AgentPtyOptions = {}): 
   }, []);
 
   const open = useCallback<AgentPtyState['open']>(
-    (target, size) => {
+    (target, size, { focus = true }: OpenOptions = {}) => {
       const key = targetKey(target);
       // У цели уже есть живой агент — показываем его, а не плодим второго.
       if (live.current.has(key)) {
-        setActiveKey(key);
+        if (focus) setActiveKey(key);
         return;
       }
-      launch(target, size);
+      launch(target, size, focus);
     },
     [launch],
   );

@@ -26,6 +26,7 @@ function sessionEvents(
   after: WorkEntry,
   g: Glyphs,
   prefix: string,
+  autoLaunch: boolean,
 ): StatusEventInit[] {
   const events: StatusEventInit[] = [];
   const known = new Map(before.map.sessions.map((session) => [session.id, session]));
@@ -42,11 +43,18 @@ function sessionEvents(
     if (previous === undefined) {
       // Работу открыл пользователь — новая запись появляется уже `pending`.
       if (session.status === 'pending') {
-        events.push({
-          text: `${providerMarkOf(session.provider)}: pending «${session.label}» в «${title}»`,
-          hint: `${prefix} s ${g.arrow} Enter — запустить`,
-          source,
-        });
+        const mark = providerMarkOf(session.provider);
+        // Порождённую агентом при включённом автозапуске поднимет сам харнесс
+        // (5.2): звать человека к Enter незачем. Заведённую человеком — по-прежнему.
+        events.push(
+          autoLaunch && session.parent !== null
+            ? { text: `${mark}: «${session.label}» в «${title}» — запускается`, source }
+            : {
+                text: `${mark}: pending «${session.label}» в «${title}»`,
+                hint: `${prefix} s ${g.arrow} Enter — запустить`,
+                source,
+              },
+        );
       }
       continue;
     }
@@ -154,8 +162,14 @@ export function worksEvents(
   g: Glyphs,
   /** Имя префикса: клавиши харнесса зовутся в подсказках только через него (§3). */
   prefix: string,
-  /** Потолок писем одной сессии за час: тот же, что считает `send_message` (4.7). */
-  rate: number = DEFAULT_CONFIG.messageRate,
+  // Обе настройки правят только тексты, поэтому идут одним мешком: позиционным
+  // пятым аргументом они бы путались — число и флаг рядом не читаются.
+  {
+    /** Потолок писем одной сессии за час: тот же, что считает `send_message` (4.7). */
+    rate = DEFAULT_CONFIG.messageRate,
+    /** Включён ли автозапуск `pending` от агента: тогда подсказка «запустить» лишняя. */
+    autoLaunch = false,
+  }: { rate?: number; autoLaunch?: boolean } = {},
 ): StatusEventInit[] {
   const before = new Map(
     previous.map((entry) => [workKey(entry.projectPath, entry.map.work.id), entry]),
@@ -166,7 +180,7 @@ export function worksEvents(
     const was = before.get(workKey(entry.projectPath, entry.map.work.id));
     if (was === undefined) continue;
     events.push(
-      ...sessionEvents(was, entry, g, prefix),
+      ...sessionEvents(was, entry, g, prefix, autoLaunch),
       ...messageEvents(was, entry, g),
       ...decisionEvents(was, entry, g),
       ...rateEvents(was, entry, rate),
