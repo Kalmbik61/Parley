@@ -91,6 +91,8 @@ export interface NewSession {
   task: string;
   parent?: string | null;
   contextFrom?: string[];
+  /** Роль Claude Code, которой запустится сессия; без неё — обычная сессия. */
+  agent?: string | null;
 }
 
 /** Заводит в карте сессию `pending` — так её создаёт и агент, и пользователь. */
@@ -118,6 +120,7 @@ export function addSession(
     summary: null,
     summarySource: null,
     artifacts: [],
+    agent: init.agent ?? null,
   };
   map.sessions.push(session);
   return session;
@@ -297,4 +300,6 @@ function migrateSession(session: Record<string, unknown>): void {
   session['pid'] ??= null;
   session['startedAtProcess'] ??= null;
   session['launchedBy'] ??= null;
+  // Роли появились 2026-09-08: до них сессия запускалась только сама собой.
+  session['agent'] ??= null;
 }

@@ -84,6 +84,12 @@ export interface WorkSession {
   summary: string | null;
   summarySource: SummarySource | null;
   artifacts: Artifact[];
+  /**
+   * Имя агента Claude Code, ролью которого запущена сессия (`claude --agent`);
+   * `null` — обычная сессия. На диске может отсутствовать (карты до 2026-09-08):
+   * `parseMap` подставляет `null` (спецификация 2026-09-08, 3.2).
+   */
+  agent: string | null;
 }
 
 /**

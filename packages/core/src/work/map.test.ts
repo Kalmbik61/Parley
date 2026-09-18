@@ -17,6 +17,20 @@ const emptyMap = (): WorkMap => ({
 });
 
 describe('addSession', () => {
+  it('роль агента берётся из init, без неё — null', () => {
+    const map = emptyMap();
+    const plain = addSession(map, { provider: 'claude', label: 'план', task: 'план' });
+    const roled = addSession(map, {
+      provider: 'claude',
+      label: 'ревью',
+      task: 'проверить',
+      agent: 'reviewer',
+    });
+
+    expect(plain.agent).toBeNull();
+    expect(roled.agent).toBe('reviewer');
+  });
+
   it('нумерует сессии s-NN по порядку и создаёт запись pending', () => {
     const map = emptyMap();
     const first = addSession(map, { provider: 'claude', label: 'план', task: 'составить план' });
@@ -240,6 +254,18 @@ describe('parseMap', () => {
       kind: 'note',
       readAt: null,
     });
+  });
+
+  it('35: карта без agent у сессии читается как null, остальные поля не тронуты', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'план', task: 'план' });
+    const legacy = JSON.parse(JSON.stringify(map)) as { sessions: Record<string, unknown>[] };
+    delete legacy.sessions[0]?.['agent'];
+
+    const parsed = parseMap(JSON.stringify(legacy), 'map.json');
+    expect(parsed.sessions[0]?.agent).toBeNull();
+    expect(parsed.sessions[0]?.label).toBe('план');
+    expect(parsed.sessions[0]?.history).toHaveLength(1);
   });
 
   it('битый json — ошибка', () => {
