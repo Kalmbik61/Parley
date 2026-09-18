@@ -8,7 +8,7 @@
  * (раздел 10). `HARNAS_ESCAPE_KEY` больше не читается: его заменил `prefix`.
  */
 
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { harnasHome } from './work/store.js';
 
@@ -35,10 +35,22 @@ export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
   autoLaunch: true,
 };
 
+/** Имя переменной окружения для каждого ключа — один источник для загрузчика и оверлея. */
+export const ENV_NAMES: Readonly<Record<keyof HarnasConfig, string>> = {
+  prefix: 'HARNAS_PREFIX',
+  sidebarWidth: 'HARNAS_SIDEBAR_WIDTH',
+  mouseCapture: 'HARNAS_MOUSE',
+  ascii: 'HARNAS_ASCII',
+  silenceThresholdMs: 'HARNAS_SILENCE_MS',
+  autoLaunch: 'HARNAS_AUTO_LAUNCH',
+};
+
 export interface LoadedConfig {
   config: HarnasConfig;
   /** Что не прочиталось. `null` — вопросов к настройкам нет. */
   warning: string | null;
+  /** Ключи, чьё значение пришло из окружения: файл их не перекроет. */
+  fromEnv: ReadonlyArray<keyof HarnasConfig>;
 }
 
 /** Файл настроек. Его может не быть — тогда работают дефолты. */
@@ -100,7 +112,8 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
     return value === undefined || value === '' ? undefined : value;
   };
 
-  const flag = (name: string, key: 'mouseCapture' | 'ascii' | 'autoLaunch'): void => {
+  const flag = (key: 'mouseCapture' | 'ascii' | 'autoLaunch'): void => {
+    const name = ENV_NAMES[key];
     const value = text(name);
     if (value === undefined) return;
     const lower = value.toLowerCase();
@@ -109,7 +122,8 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
     else complain(`${name}: ожидается 0 или 1`);
   };
 
-  const count = (name: string, key: 'sidebarWidth' | 'silenceThresholdMs'): void => {
+  const count = (key: 'sidebarWidth' | 'silenceThresholdMs'): void => {
+    const name = ENV_NAMES[key];
     const value = text(name);
     if (value === undefined) return;
     const parsed = Number(value);
@@ -117,16 +131,16 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
     else complain(`${name}: ожидается целое больше нуля`);
   };
 
-  const prefix = text('HARNAS_PREFIX');
+  const prefix = text(ENV_NAMES.prefix);
   if (prefix !== undefined) {
     if (isPrefix(prefix)) patch.prefix = prefix;
-    else complain('HARNAS_PREFIX: ожидается один знак');
+    else complain(`${ENV_NAMES.prefix}: ожидается один знак`);
   }
-  count('HARNAS_SIDEBAR_WIDTH', 'sidebarWidth');
-  flag('HARNAS_MOUSE', 'mouseCapture');
-  flag('HARNAS_ASCII', 'ascii');
-  count('HARNAS_SILENCE_MS', 'silenceThresholdMs');
-  flag('HARNAS_AUTO_LAUNCH', 'autoLaunch');
+  count('sidebarWidth');
+  flag('mouseCapture');
+  flag('ascii');
+  count('silenceThresholdMs');
+  flag('autoLaunch');
   return patch;
 }
 
@@ -167,8 +181,52 @@ export async function loadConfig(
     }
   }
 
+  const envPatch = fromEnv(env, complain);
+
   return {
-    config: { ...DEFAULT_CONFIG, ...filePatch, ...fromEnv(env, complain) },
+    config: { ...DEFAULT_CONFIG, ...filePatch, ...envPatch },
     warning: problems.length === 0 ? null : problems.join('; '),
+    // Битая переменная ключ не перекрывает, в патч не попадает — и в список тоже.
+    fromEnv: Object.keys(envPatch) as ReadonlyArray<keyof HarnasConfig>,
   };
+}
+
+/** Ключи, значение которых вводится текстом; булевы переключаются без ввода. */
+export type TypedSettingKey = 'prefix' | 'sidebarWidth' | 'silenceThresholdMs';
+
+/**
+ * Разбор введённого значения теми же правилами, что и у файла: оверлей настроек
+ * (раздел 3.4) не должен расходиться с загрузчиком.
+ */
+export function parseSetting<K extends TypedSettingKey>(
+  key: K,
+  text: string,
+): { value: HarnasConfig[K] } | { error: string } {
+  if (key === 'prefix') {
+    if (isPrefix(text)) return { value: text as HarnasConfig[K] };
+    return { error: `${key}: ожидается один знак` };
+  }
+  const parsed = Number(text);
+  if (isPositiveInt(parsed)) return { value: parsed as HarnasConfig[K] };
+  return { error: `${key}: ожидается целое больше нуля` };
+}
+
+/**
+ * Пишет часть настроек в файл, сохраняя чужие ключи. Каталог создаёт. Битый файл
+ * перезаписывается целиком: пользователь правит настройку, а не чинит JSON.
+ */
+export async function saveConfig(
+  patch: Partial<HarnasConfig>,
+  file: string = configPath(),
+): Promise<void> {
+  let kept: Record<string, unknown> = {};
+  try {
+    const data: unknown = JSON.parse(await readFile(file, 'utf8'));
+    if (isRecord(data)) kept = data;
+  } catch {
+    // Файла нет, он не читается или не парсится — пишем с нуля.
+  }
+
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, `${JSON.stringify({ ...kept, ...patch }, null, 2)}\n`, 'utf8');
 }

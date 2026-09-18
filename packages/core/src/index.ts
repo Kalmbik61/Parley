@@ -101,8 +101,15 @@ export type {
   LiveSessionMetrics,
   MetricsRoots,
 } from './work/metrics.js';
-export { DEFAULT_CONFIG, configPath, loadConfig } from './config.js';
-export type { HarnasConfig, LoadedConfig } from './config.js';
+export {
+  DEFAULT_CONFIG,
+  ENV_NAMES,
+  configPath,
+  loadConfig,
+  parseSetting,
+  saveConfig,
+} from './config.js';
+export type { HarnasConfig, LoadedConfig, TypedSettingKey } from './config.js';
 export { activityOf } from './work/activity.js';
 export type {
   Activity,
