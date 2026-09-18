@@ -8,7 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
 import { GUIDE } from '../work/guide.js';
 import { addMessage, addSession, removeSession, transitionSession } from '../work/map.js';
-import { createWork, updateMap, workPaths } from '../work/store.js';
+import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
+import { decisionsOf, threadOf } from '../work/thread.js';
 import type { WorkMap } from '../work/types.js';
 import { contextFromEnv } from './context.js';
 import type { Ring } from './inbox-watch.js';
@@ -787,6 +788,103 @@ describe('channel: звонок про письмо (разговор агент
     expect(guest.getServerCapabilities()?.experimental).toBeUndefined();
     expect(guest.getInstructions()).toBeUndefined();
     expect(rings).toHaveLength(0);
+  });
+});
+
+describe('двухсторонний разговор (разговор агентов, 8.29)', () => {
+  const rung = (rings: Ring[], count: number): Promise<void> =>
+    vi.waitFor(() => expect(rings).toHaveLength(count), { timeout: 2000, interval: 10 });
+
+  const texts = (result: Record<string, unknown>): string[] =>
+    (result['messages'] as { text: string }[]).map((item) => item.text);
+
+  /** Две сессии одной работы, у каждой свой сервер со звонком: план и его бэк. */
+  async function talkers(ringsA: Ring[], ringsB: Ring[]): Promise<{ plan: Client; back: Client }> {
+    const plan = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, true, ringsA);
+    await callOk(plan, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    const back = await connect('s-02', 40, DEFAULT_CONFIG.messageRate, true, ringsB);
+    return { plan, back };
+  }
+
+  it('вопрос → звонок → ответ → звонок → решение: три письма, одно решение', async () => {
+    const ringsA: Ring[] = [];
+    const ringsB: Ring[] = [];
+    const { plan, back } = await talkers(ringsA, ringsB);
+
+    await callOk(plan, 'send_message', {
+      to: 's-02',
+      text: 'где лежит миграция users?',
+      kind: 'question',
+    });
+    await rung(ringsB, 1);
+    expect(ringsB[0]?.meta).toMatchObject({ from: 's-01', from_label: 'план', kind: 'question' });
+    expect(texts(await callOk(back, 'check_inbox'))).toEqual(['где лежит миграция users?']);
+
+    await callOk(back, 'send_message', { to: 's-01', text: 'в db/migrations/0007' });
+    await rung(ringsA, 1);
+    expect(ringsA[0]?.meta).toMatchObject({ from: 's-02', from_label: 'бэк', kind: 'note' });
+    expect(texts(await callOk(plan, 'check_inbox'))).toEqual(['в db/migrations/0007']);
+
+    await callOk(plan, 'send_message', {
+      to: 's-02',
+      text: 'миграции отдельным PR',
+      kind: 'decision',
+    });
+    await rung(ringsB, 2);
+    expect(texts(await callOk(back, 'check_inbox'))).toEqual(['миграции отдельным PR']);
+
+    const thread = threadOf(await readMap(project, workId), 's-02');
+    expect(thread.messages.map((message) => message.kind)).toEqual([
+      'question',
+      'note',
+      'decision',
+    ]);
+    expect(decisionsOf(thread).map((message) => message.text)).toEqual(['миграции отдельным PR']);
+    // Звонков ровно три — по одному на письмо, и каждое забрано check_inbox.
+    expect(ringsB.map((ring) => ring.meta['message_id'])).toEqual(['m-01', 'm-03']);
+    expect(ringsA.map((ring) => ring.meta['message_id'])).toEqual(['m-02']);
+    expect(thread.messages.every((message) => message.readAt !== null)).toBe(true);
+    await delay(150);
+    expect(ringsA.length + ringsB.length).toBe(3);
+  });
+
+  it('тот же разговор, когда план ждёт wait_for("inbox") вместо звонка', async () => {
+    const ringsA: Ring[] = [];
+    const ringsB: Ring[] = [];
+    const { plan, back } = await talkers(ringsA, ringsB);
+
+    await callOk(plan, 'send_message', {
+      to: 's-02',
+      text: 'где лежит миграция users?',
+      kind: 'question',
+    });
+    await rung(ringsB, 1);
+    expect(texts(await callOk(back, 'check_inbox'))).toEqual(['где лежит миграция users?']);
+
+    // План не ждёт звонка: висящий wait_for будит его тем же самым письмом.
+    const waiting = callOk(plan, 'wait_for', { target: 'inbox', timeoutSec: 5 });
+    await delay(50);
+    await callOk(back, 'send_message', { to: 's-01', text: 'в db/migrations/0007' });
+    expect(texts(await waiting)).toEqual(['в db/migrations/0007']);
+    // Звонок приходит и сюда, но письмо в карте одно: wait_for его не помечает,
+    // и забирает его тот же check_inbox (4.3).
+    await rung(ringsA, 1);
+    expect(texts(await callOk(plan, 'check_inbox'))).toEqual(['в db/migrations/0007']);
+
+    await callOk(plan, 'send_message', {
+      to: 's-02',
+      text: 'миграции отдельным PR',
+      kind: 'decision',
+    });
+    await rung(ringsB, 2);
+    expect(texts(await callOk(back, 'check_inbox'))).toEqual(['миграции отдельным PR']);
+
+    const map = await readMap(project, workId);
+    const thread = threadOf(map, 's-02');
+    expect(thread.messages).toHaveLength(3);
+    expect(decisionsOf(thread)).toHaveLength(1);
+    expect(map.messages.filter((message) => message.to === 's-01')).toHaveLength(1);
+    expect(map.messages.every((message) => message.readAt !== null)).toBe(true);
   });
 });
 
