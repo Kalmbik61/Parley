@@ -1,9 +1,10 @@
 /**
- * Содержимое оверлеев: детали, пикеры и справка (макеты TUI v2, 4.1–4.4).
+ * Содержимое оверлеев: детали, пикеры, справка и настройки (макеты TUI v2,
+ * 4.1–4.4 и 4.14).
  * Файловой системы и Ink здесь нет — только текст.
  */
 
-import type { SessionIndex, WorkEntry, WorkSession } from '@harnas/core';
+import { DEFAULT_CONFIG, type SessionIndex, type WorkEntry, type WorkSession } from '@harnas/core';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -14,6 +15,7 @@ import {
   helpView,
   historyItems,
   pickerView,
+  settingsView,
   workItems,
 } from './overlays.js';
 
@@ -346,9 +348,56 @@ describe('справка (макет 4.4)', () => {
     }
     // Текст `c` — как в макете 4.4: про выбранную работу, без оговорок (3.2).
     expect(all).toContain('новая сессия Claude в выбранной работе');
+    // Настройки правятся из TUI — строка стоит перед справкой (макет 4.14).
+    expect(all).toContain(',        настройки');
 
     const filtered = helpView('ctrl+q', 'резюме', '/c.json', g).lines;
     expect(filtered.filter((line) => line.text.includes('дозаказать'))).toHaveLength(1);
     expect(filtered.some((line) => line.text.includes('пикер работ'))).toBe(false);
+  });
+});
+
+describe('настройки (макет 4.14)', () => {
+  const base = {
+    fromEnv: [] as ReadonlyArray<keyof typeof DEFAULT_CONFIG>,
+    at: 0,
+    editing: null,
+    configFile: path.join(homedir(), '.harnas', 'config.json'),
+    g,
+  };
+
+  it('шесть строк в порядке файла, выбранная подсвечена', () => {
+    const view = settingsView({ ...base, config: DEFAULT_CONFIG, at: 5 });
+    const rows = view.lines.slice(2);
+    expect(rows.map((line) => line.text.trim().split(/\s+/)[0])).toEqual([
+      'prefix',
+      'sidebarWidth',
+      'mouseCapture',
+      'ascii',
+      'silenceThresholdMs',
+      'autoLaunch',
+    ]);
+    expect(rows[5]?.selected).toBe(true);
+    expect(rows[5]?.text).toContain('да');
+    expect(view.lines[0]?.text).toContain('~/.harnas/config.json');
+    expect(view.footer).toContain('изменить');
+  });
+
+  it('перекрытая окружением строка тусклая и называет переменную', () => {
+    const view = settingsView({ ...base, config: DEFAULT_CONFIG, fromEnv: ['mouseCapture'] });
+    const row = view.lines.find((line) => line.text.includes('mouseCapture'));
+    expect(row?.dim).toBe(true);
+    expect(row?.text).toContain('задано HARNAS_MOUSE');
+  });
+
+  it('ввод показывает набранное с курсором и меняет подвал', () => {
+    const view = settingsView({ ...base, config: DEFAULT_CONFIG, at: 1, editing: '3' });
+    expect(view.lines[3]?.text).toMatch(/sidebarWidth\s+3▌/);
+    expect(view.footer).toContain('сохранить');
+  });
+
+  it('строки не шире тела рамки', () => {
+    const view = settingsView({ ...base, config: DEFAULT_CONFIG });
+    for (const line of view.lines) expect(line.text.length).toBeLessThanOrEqual(54);
   });
 });

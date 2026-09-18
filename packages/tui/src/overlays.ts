@@ -1,18 +1,20 @@
 /**
- * Содержимое оверлеев-списков: детали сессии, пикеры работ и истории, справка
- * (макеты TUI v2, 4.1–4.4).
+ * Содержимое оверлеев-списков: детали сессии, пикеры работ и истории, справка,
+ * настройки (макеты TUI v2, 4.1–4.4 и 4.14).
  *
  * Здесь только текст: ни файловой системы, ни Ink, ни состояния — поэтому
  * макеты проверяются тестами без запуска чего бы то ни было. Рамку и прокрутку
  * рисует `components/overlay.tsx`, состояние держит `use-overlays.ts`.
  */
 
-import type {
-  SessionActivity,
-  SessionIndex,
-  TokenTotals,
-  WorkEntry,
-  WorkSession,
+import {
+  ENV_NAMES,
+  type HarnasConfig,
+  type SessionActivity,
+  type SessionIndex,
+  type TokenTotals,
+  type WorkEntry,
+  type WorkSession,
 } from '@harnas/core';
 import {
   DETAILS_WIDTH,
@@ -338,6 +340,7 @@ const BINDINGS: ReadonlyArray<readonly [string, string]> = [
   ['D', 'удалить выбранную работу целиком (с подтверждением)'],
   ['r', 'возобновить выбранную сессию'],
   ['R', 'дозаказать резюме (exited)'],
+  [',', 'настройки'],
   ['?', 'эта справка'],
   ['q', 'выйти из харнесса'],
 ];
@@ -373,5 +376,78 @@ export function helpView(
     desired: PICKER_WIDTH,
     lines,
     footer: ` ${g.up}${g.down} — прокрутка · Esc — закрыть`,
+  };
+}
+
+/** Порядок строк — порядок полей в файле из дизайна 3.4. */
+export const SETTINGS: ReadonlyArray<{ key: keyof HarnasConfig; hint: string }> = [
+  { key: 'prefix', hint: 'буква префикса, ctrl+<буква>' },
+  { key: 'sidebarWidth', hint: 'ширина сайдбара, колонок' },
+  { key: 'mouseCapture', hint: 'харнесс ловит мышь сам' },
+  { key: 'ascii', hint: 'ASCII-глифы вместо Unicode' },
+  { key: 'silenceThresholdMs', hint: 'порог молчания лога, мс' },
+  { key: 'autoLaunch', hint: 'pending от агента стартует сама' },
+];
+
+/** Колонки строки настройки: ключ и значение (макет 4.14). */
+const SETTING_KEY = 20;
+const SETTING_VALUE = 7;
+
+export interface SettingsOptions {
+  config: HarnasConfig;
+  fromEnv: ReadonlyArray<keyof HarnasConfig>;
+  /** Выбранная строка (индекс в SETTINGS). */
+  at: number;
+  /** Открытый ввод: текст с курсором вместо значения выбранной строки. */
+  editing: string | null;
+  configFile: string;
+  g: Glyphs;
+}
+
+/**
+ * 4.14. Настройки: путь к файлу в шапке, шесть строк в порядке дизайна 3.4.
+ * Перекрытая окружением строка тусклая и вместо подсказки называет переменную:
+ * файл её не перекроет (решение плана от 2026-09-18).
+ */
+export function settingsView({
+  config,
+  fromEnv,
+  at,
+  editing,
+  configFile,
+  g,
+}: SettingsOptions): OverlayView {
+  const width = bodyWidth(PICKER_WIDTH);
+  const lines: OverlayLine[] = [
+    { text: truncate(` ${withHome(configFile)}`, width, g.ellipsis) },
+    { text: '', rule: true },
+  ];
+
+  for (const [index, { key, hint }] of SETTINGS.entries()) {
+    const value = config[key];
+    const shown =
+      editing !== null && index === at
+        ? `${editing}${cursor(g)}`
+        : typeof value === 'boolean'
+          ? value
+            ? 'да'
+            : 'нет'
+          : String(value);
+    const overridden = fromEnv.includes(key);
+    const head = ` ${key.padEnd(SETTING_KEY)}${shown.padEnd(SETTING_VALUE)}`;
+    const tail = overridden ? `задано ${ENV_NAMES[key]}` : hint;
+    lines.push({
+      text: `${head}${truncate(tail, width - head.length, g.ellipsis)}`,
+      selected: index === at,
+      dim: overridden,
+    });
+  }
+
+  return {
+    title: 'настройки',
+    desired: PICKER_WIDTH,
+    lines,
+    footer:
+      editing === null ? ' Enter — изменить · Esc — закрыть' : ' Enter — сохранить · Esc — отмена',
   };
 }
