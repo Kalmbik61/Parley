@@ -122,6 +122,34 @@ describe('детали сессии (макет 4.1)', () => {
     expect(details().some((line) => line.includes('АГЕНТ'))).toBe(false);
   });
 
+  it('34: ВХОДЯЩИЕ подписывают отправителя ярлыком participantLabel (решение D9)', () => {
+    const letter = {
+      id: 'm-01',
+      from: 's-01',
+      to: 's-02',
+      at: '2026-09-05T09:41:00.000Z',
+      text: 'жду миграции',
+      kind: 'note' as const,
+      readAt: null,
+    };
+    const lines = details({
+      entry: entry({
+        work: {
+          id: 'w-0042',
+          title: 'Авторизация',
+          goal: 'Логин по e-mail, сессии, миграции',
+          status: 'active',
+          createdAt: '2026-09-05T09:00:00.000Z',
+          updatedAt: '2026-09-05T09:00:00.000Z',
+          deletedSessions: ['s-01'],
+        },
+        messages: [letter],
+      }),
+    });
+
+    expect(lines.some((line) => line.includes('s-01 (удалена)'))).toBe(true);
+  });
+
   it('СОСТ. живой — activity, длительность и время с последнего события', () => {
     const line = details().find((text) => text.includes('СОСТ.')) ?? '';
     expect(line).toContain('● working');

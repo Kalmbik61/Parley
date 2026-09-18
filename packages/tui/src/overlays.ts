@@ -7,12 +7,13 @@
  * рисует `components/overlay.tsx`, состояние держит `use-overlays.ts`.
  */
 
-import type {
-  SessionActivity,
-  SessionIndex,
-  TokenTotals,
-  WorkEntry,
-  WorkSession,
+import {
+  participantLabel,
+  type SessionActivity,
+  type SessionIndex,
+  type TokenTotals,
+  type WorkEntry,
+  type WorkSession,
 } from '@harnas/core';
 import {
   DETAILS_WIDTH,
@@ -173,7 +174,6 @@ export function detailsView({
   add('СВОДКА', summaryLine(session, prefix, summarizing));
 
   // ВХОДЯЩИЕ: непрочитанные с `▤` первыми, затем последние прочитанные (dim).
-  const labels = new Map(entry.map.sessions.map((item) => [item.id, item.label]));
   const inbox = entry.map.messages.filter((message) => message.to === session.id);
   const unread = inbox.filter((message) => message.readAt === null);
   const read = inbox.filter((message) => message.readAt !== null).slice(-READ_SHOWN);
@@ -181,7 +181,9 @@ export function detailsView({
   if (shown.length === 0) add('ВХОДЯЩИЕ', '—', 1);
   for (const [at, message] of shown.entries()) {
     const mark = message.readAt === null ? `${g.mail} ` : '';
-    const from = labels.get(message.from) ?? message.from;
+    // Подпись участника одна на бриф, тред, события и детали (решение D9):
+    // у удалённой сессии ярлыка в карте уже нет, и её след подписан «(удалена)».
+    const from = participantLabel(entry.map, message.from);
     const text = `${mark}${from} ${formatClock(message.at)} «${message.text}»`;
     const rows = field(at === 0 ? 'ВХОДЯЩИЕ' : '', text, width, 1, g);
     lines.push(...rows.map((row) => ({ ...row, dim: message.readAt !== null })));
