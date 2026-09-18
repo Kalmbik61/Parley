@@ -74,12 +74,14 @@ export interface PanelState {
   /**
    * Запуск `pending` по брифу или возобновление вышедшей через `resumeArgs`
    * (оверлеи 4.5 и 4.6). Проект берётся у работы: она может быть чужой.
+   * `focus: false` — поднять процесс в фоне, панель не переключать (5.2).
    */
   start: (
     projectPath: string,
     workId: string,
     session: WorkSession,
     mode: 'launch' | 'resume',
+    options?: { focus?: boolean },
   ) => void;
   /** SIGHUP процессу панели (макет 4.8). */
   close: (key: string) => void;
@@ -175,7 +177,7 @@ export function usePanel({
 
   /** Поднять процесс сессии в панели по готовому плану запуска. */
   const openWork = useCallback(
-    (project: string, workId: string, session: WorkSession, plan: LaunchPlan) => {
+    (project: string, workId: string, session: WorkSession, plan: LaunchPlan, focus = true) => {
       agent.open(
         {
           kind: 'work',
@@ -191,6 +193,7 @@ export function usePanel({
           providerSessionId: plan.providerSessionId,
         },
         { cols, rows },
+        { focus },
       );
     },
     [agent, cols, rows],
@@ -253,10 +256,10 @@ export function usePanel({
   );
 
   const start = useCallback<PanelState['start']>(
-    (project, workId, session, mode) => {
+    (project, workId, session, mode, { focus = true } = {}) => {
       const planner = mode === 'launch' ? planLaunch : planResume;
       void planner(project, workId, session)
-        .then((plan) => openWork(project, workId, session, plan))
+        .then((plan) => openWork(project, workId, session, plan, focus))
         .catch(onFail);
     },
     [openWork, onFail],

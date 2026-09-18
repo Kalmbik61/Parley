@@ -9,6 +9,8 @@ export interface WorksOptions {
   projectPath: string;
   /** Имя префикса: подсказки событий зовут клавиши только через него (§3). */
   prefix: string;
+  /** Включён ли автозапуск `pending` от агента: меняет текст события (5.2). */
+  autoLaunch?: boolean;
   /** События карты уходят в строку статуса — единственный канал уведомлений. */
   onEvents?: (events: readonly StatusEventInit[]) => void;
 }
@@ -24,7 +26,12 @@ export interface WorksState {
  * Живой список работ: читается один раз и дальше обновляется по событиям watcher
  * карт — без опроса по таймеру, как и список сессий (specs/ui.md).
  */
-export function useWorks({ projectPath, prefix, onEvents }: WorksOptions): WorksState {
+export function useWorks({
+  projectPath,
+  prefix,
+  autoLaunch = false,
+  onEvents,
+}: WorksOptions): WorksState {
   const [works, setWorks] = useState<WorkEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [generation, setGeneration] = useState(0);
@@ -37,12 +44,12 @@ export function useWorks({ projectPath, prefix, onEvents }: WorksOptions): Works
 
   const apply = useCallback(
     (next: WorkEntry[]) => {
-      const events = worksEvents(previous.current, next, glyphs(), prefix);
+      const events = worksEvents(previous.current, next, glyphs(), prefix, autoLaunch);
       previous.current = next;
       setWorks(next);
       if (events.length > 0) notify.current?.(events);
     },
-    [prefix],
+    [prefix, autoLaunch],
   );
 
   useEffect(() => {

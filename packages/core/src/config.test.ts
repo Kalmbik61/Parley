@@ -30,6 +30,7 @@ describe('loadConfig', () => {
       mouseCapture: true,
       ascii: false,
       silenceThresholdMs: 30_000,
+      autoLaunch: true,
     });
     expect(loaded.config).toEqual(DEFAULT_CONFIG);
     expect(loaded.warning).toBeNull();
@@ -42,6 +43,7 @@ describe('loadConfig', () => {
       mouseCapture: false,
       ascii: true,
       silenceThresholdMs: 5000,
+      autoLaunch: false,
     });
 
     const fromFile = await loadConfig(file(), {});
@@ -51,6 +53,7 @@ describe('loadConfig', () => {
       mouseCapture: false,
       ascii: true,
       silenceThresholdMs: 5000,
+      autoLaunch: false,
     });
     expect(fromFile.warning).toBeNull();
 
@@ -60,6 +63,7 @@ describe('loadConfig', () => {
       HARNAS_MOUSE: '1',
       HARNAS_ASCII: '0',
       HARNAS_SILENCE_MS: '60000',
+      HARNAS_AUTO_LAUNCH: '1',
     });
     expect(fromEnv.config).toEqual({
       prefix: 'a',
@@ -67,6 +71,7 @@ describe('loadConfig', () => {
       mouseCapture: true,
       ascii: false,
       silenceThresholdMs: 60_000,
+      autoLaunch: true,
     });
     expect(fromEnv.warning).toBeNull();
   });

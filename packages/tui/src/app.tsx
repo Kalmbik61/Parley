@@ -27,6 +27,7 @@ import { activityWork, useActivity } from './use-activity.js';
 import { useConfig } from './use-config.js';
 import { useGitBranch } from './use-git-branch.js';
 import { useLogIndex } from './use-log-index.js';
+import { useAutoLaunch } from './use-auto-launch.js';
 import { useMapSync } from './use-map-sync.js';
 import { useOverlays } from './use-overlays.js';
 import { usePanel } from './use-panel.js';
@@ -65,7 +66,12 @@ export function App({
   );
   const config = useConfig(push);
   const prefixName = `ctrl+${config.prefix}`;
-  const { works } = useWorks({ projectPath, prefix: prefixName, onEvents: push });
+  const { works, loading } = useWorks({
+    projectPath,
+    prefix: prefixName,
+    autoLaunch: config.autoLaunch,
+    onEvents: push,
+  });
 
   const { index, log } = useLogIndex(sessions);
   const activity = useActivity({
@@ -181,6 +187,14 @@ export function App({
 
   // Сессии провайдеров без внешнего id привязываются к логу по cwd и времени.
   useSessionLink({ works, sessions, roots });
+  // `pending` от агента поднимается сама, в фоне: панель остаётся у пользователя (5.2).
+  useAutoLaunch({
+    works,
+    loading,
+    enabled: config.autoLaunch,
+    launch: (project, workId, session) =>
+      panel.start(project, workId, session, 'launch', { focus: false }),
+  });
   useMapSync({
     works,
     roots,

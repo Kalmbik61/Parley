@@ -23,6 +23,7 @@ function sessionEvents(
   after: WorkEntry,
   g: Glyphs,
   prefix: string,
+  autoLaunch: boolean,
 ): StatusEventInit[] {
   const events: StatusEventInit[] = [];
   const known = new Map(before.map.sessions.map((session) => [session.id, session]));
@@ -39,11 +40,18 @@ function sessionEvents(
     if (previous === undefined) {
       // Работу открыл пользователь — новая запись появляется уже `pending`.
       if (session.status === 'pending') {
-        events.push({
-          text: `${providerMarkOf(session.provider)}: pending «${session.label}» в «${title}»`,
-          hint: `${prefix} s ${g.arrow} Enter — запустить`,
-          source,
-        });
+        const mark = providerMarkOf(session.provider);
+        // Порождённую агентом при включённом автозапуске поднимет сам харнесс
+        // (5.2): звать человека к Enter незачем. Заведённую человеком — по-прежнему.
+        events.push(
+          autoLaunch && session.parent !== null
+            ? { text: `${mark}: «${session.label}» в «${title}» — запускается`, source }
+            : {
+                text: `${mark}: pending «${session.label}» в «${title}»`,
+                hint: `${prefix} s ${g.arrow} Enter — запустить`,
+                source,
+              },
+        );
       }
       continue;
     }
@@ -96,6 +104,8 @@ export function worksEvents(
   g: Glyphs,
   /** Имя префикса: клавиши харнесса зовутся в подсказках только через него (§3). */
   prefix: string,
+  /** Включён ли автозапуск `pending` от агента: тогда подсказка «запустить» лишняя. */
+  autoLaunch = false,
 ): StatusEventInit[] {
   const before = new Map(
     previous.map((entry) => [workKey(entry.projectPath, entry.map.work.id), entry]),
@@ -105,7 +115,10 @@ export function worksEvents(
   for (const entry of next) {
     const was = before.get(workKey(entry.projectPath, entry.map.work.id));
     if (was === undefined) continue;
-    events.push(...sessionEvents(was, entry, g, prefix), ...messageEvents(was, entry, g));
+    events.push(
+      ...sessionEvents(was, entry, g, prefix, autoLaunch),
+      ...messageEvents(was, entry, g),
+    );
   }
   return events;
 }

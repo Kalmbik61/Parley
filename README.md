@@ -185,18 +185,26 @@ node packages/core/dist/cli.js session <id>
   "sidebarWidth": 26,
   "mouseCapture": true,
   "ascii": false,
-  "silenceThresholdMs": 30000
+  "silenceThresholdMs": 30000,
+  "autoLaunch": true
 }
 ```
 
 Переменные окружения перекрывают файл: `HARNAS_PREFIX`, `HARNAS_SIDEBAR_WIDTH`,
-`HARNAS_MOUSE`, `HARNAS_ASCII`, `HARNAS_SILENCE_MS`. Битый файл запуску не мешает:
+`HARNAS_MOUSE`, `HARNAS_ASCII`, `HARNAS_SILENCE_MS`, `HARNAS_AUTO_LAUNCH`. Битый файл запуску не мешает:
 работают значения по умолчанию, а причина уезжает в строку статуса событием `⚑`.
 
 `prefix` — буква, которая станет `ctrl+<буква>`. Меняйте её, если `ctrl+q`
 перехватывает ваш терминал (в справке `ctrl+q ?` это написано первой строкой).
 `ascii: true` (или `HARNAS_ASCII=1`) заменяет Unicode-глифы на ASCII-запасные;
 то же происходит само, когда локаль терминала задана и не UTF-8.
+`autoLaunch` (по умолчанию включён) — `pending` сессию, которую породил агент через
+`spawn_session`, харнесс поднимает сам, в фоне: панель остаётся у вас, в строке
+статуса — «запускается». Запускаются только записи, появившиеся при живом TUI;
+найденные при старте ждут `Enter` как раньше. С `autoLaunch: false` (или
+`HARNAS_AUTO_LAUNCH=0`) любую `pending` запускаете вы через диалог с брифом — так
+его можно поправить до старта. Сессии, заведённые вами (`prefix c`, `prefix C`,
+CLI), настройка не трогает.
 
 ## Состояние агента: хуки и живость
 

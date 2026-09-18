@@ -89,6 +89,37 @@ describe('worksEvents', () => {
     });
   });
 
+  it('при автозапуске pending от агента сообщает о старте и не зовёт запускать', () => {
+    const events = worksEvents(
+      [entry([session()])],
+      [
+        entry([
+          session(),
+          session({ id: 's-04', label: 'тесты', parent: 's-01', status: 'pending' }),
+        ]),
+      ],
+      g,
+      PREFIX,
+      true,
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.text).toBe('Cl: «тесты» в «Авторизация» — запускается');
+    expect(events[0]?.hint).toBeUndefined();
+  });
+
+  it('при автозапуске pending без родителя по-прежнему зовёт запустить: её завёл человек', () => {
+    const events = worksEvents(
+      [entry([session()])],
+      [entry([session(), session({ id: 's-04', label: 'тесты', status: 'pending' })])],
+      g,
+      PREFIX,
+      true,
+    );
+
+    expect(events[0]?.hint).toBe('ctrl+q s → Enter — запустить');
+  });
+
   it('новая активная сессия событием не считается — её запустил сам пользователь', () => {
     const events = worksEvents(
       [entry([session()])],

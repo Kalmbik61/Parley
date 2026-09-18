@@ -22,6 +22,8 @@ export interface HarnasConfig {
   ascii: boolean;
   /** Порог молчания лога для страховочной `activity` (раздел 4.3). */
   silenceThresholdMs: number;
+  /** Запускать ли `pending` от агента самим, в фоне, без диалога (раздел 5.2). */
+  autoLaunch: boolean;
 }
 
 export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
@@ -30,6 +32,7 @@ export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
   mouseCapture: true,
   ascii: false,
   silenceThresholdMs: 30_000,
+  autoLaunch: true,
 };
 
 export interface LoadedConfig {
@@ -80,6 +83,7 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   take('mouseCapture', (value) => typeof value === 'boolean', 'true или false');
   take('ascii', (value) => typeof value === 'boolean', 'true или false');
   take('silenceThresholdMs', isPositiveInt, 'целое больше нуля');
+  take('autoLaunch', (value) => typeof value === 'boolean', 'true или false');
   return patch;
 }
 
@@ -96,7 +100,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
     return value === undefined || value === '' ? undefined : value;
   };
 
-  const flag = (name: string, key: 'mouseCapture' | 'ascii'): void => {
+  const flag = (name: string, key: 'mouseCapture' | 'ascii' | 'autoLaunch'): void => {
     const value = text(name);
     if (value === undefined) return;
     const lower = value.toLowerCase();
@@ -122,6 +126,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   flag('HARNAS_MOUSE', 'mouseCapture');
   flag('HARNAS_ASCII', 'ascii');
   count('HARNAS_SILENCE_MS', 'silenceThresholdMs');
+  flag('HARNAS_AUTO_LAUNCH', 'autoLaunch');
   return patch;
 }
 
