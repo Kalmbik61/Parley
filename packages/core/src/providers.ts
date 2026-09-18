@@ -31,13 +31,14 @@ export interface RunnerConfig {
    * Аргументы запуска новой сессии координации. Подстановки: `{sessionUuid}` —
    * uuid, сгенерированный харнессом, `{mcpConfig}`, `{settingsFile}` — файл
    * настроек работы с хуками, `{systemPrompt}` — системная вставка гида,
-   * `{prompt}` — стартовый бриф.
+   * `{channel}` — канал звонка, `{agent}` — роль, `{prompt}` — стартовый бриф.
    * undefined — новая сессия запускается без аргументов.
    */
   args?: string[];
   /**
    * Аргументы для возобновления конкретной сессии. Подстановки:
-   * `{providerSessionId}`, `{mcpConfig}`, `{settingsFile}`, `{systemPrompt}`.
+   * `{providerSessionId}`, `{mcpConfig}`, `{settingsFile}`, `{systemPrompt}`,
+   * `{channel}`, `{agent}`.
    * Системный промпт в транскрипте не хранится, поэтому вставка гида идёт и
    * сюда. undefined — провайдер не умеет открывать сессию по идентификатору,
    * запускаем без аргументов.
@@ -99,6 +100,13 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{settingsFile}',
         '--append-system-prompt',
         '{systemPrompt}',
+        // Флаг документирован, но скрыт из `--help`: research preview канала
+        // (спецификация 2026-09-08, 4.4). Пустая подстановка выбрасывает пару
+        // целиком, как у `--mcp-config`, — тогда сессия живёт по pull.
+        '--dangerously-load-development-channels',
+        '{channel}',
+        '--agent',
+        '{agent}',
         '{prompt}',
       ],
       resumeArgs: [
@@ -110,6 +118,10 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{settingsFile}',
         '--append-system-prompt',
         '{systemPrompt}',
+        '--dangerously-load-development-channels',
+        '{channel}',
+        '--agent',
+        '{agent}',
       ],
       // `-p <промпт>` — один ответ без интерактива: им считается дозаказ резюме.
       printArgs: ['-p', '{prompt}'],
@@ -163,10 +175,14 @@ export interface RunnerSubstitutions {
   systemPrompt?: string;
   prompt?: string;
   providerSessionId?: string;
+  /** Канал звонка: `server:harnas` при включённом push, иначе подстановки нет. */
+  channel?: string;
+  /** Имя роли для `claude --agent` (спецификация 2026-09-08, 4.4). */
+  agent?: string;
 }
 
 const PLACEHOLDER =
-  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|prompt|providerSessionId)\}$/;
+  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|prompt|providerSessionId|channel|agent)\}$/;
 
 /**
  * Подставляет значения в шаблон аргументов.

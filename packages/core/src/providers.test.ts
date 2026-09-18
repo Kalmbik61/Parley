@@ -138,6 +138,55 @@ describe('подстановка аргументов запуска', () => {
     expect(startCommand(PROVIDERS.glm, { systemPrompt: guidance }).args).toEqual([]);
   });
 
+  it('claude с channel получает пару флага канала и при запуске, и при возобновлении', () => {
+    expect(
+      startCommand(PROVIDERS.claude, {
+        sessionUuid: 'uuid-1',
+        channel: 'server:harnas',
+        prompt: 'бриф',
+      }).args,
+    ).toEqual([
+      '--session-id',
+      'uuid-1',
+      '--dangerously-load-development-channels',
+      'server:harnas',
+      'бриф',
+    ]);
+
+    // Сервер звонит и в возобновлённую сессию: флаг нужен обоим шаблонам.
+    expect(
+      resumeCommand(PROVIDERS.claude, {
+        providerSessionId: 'bb2137cb',
+        channel: 'server:harnas',
+      }).args,
+    ).toEqual(['--resume', 'bb2137cb', '--dangerously-load-development-channels', 'server:harnas']);
+  });
+
+  it('без channel пара выпадает целиком: push выключен — флага нет', () => {
+    expect(startCommand(PROVIDERS.claude, { sessionUuid: 'uuid-1', prompt: 'бриф' }).args).toEqual([
+      '--session-id',
+      'uuid-1',
+      'бриф',
+    ]);
+    expect(resumeCommand(PROVIDERS.claude, { providerSessionId: 'bb2137cb' }).args).toEqual([
+      '--resume',
+      'bb2137cb',
+    ]);
+  });
+
+  it('claude с agent получает пару --agent, без agent пара выпадает', () => {
+    expect(
+      startCommand(PROVIDERS.claude, { sessionUuid: 'uuid-1', agent: 'ревьюер', prompt: 'бриф' })
+        .args,
+    ).toEqual(['--session-id', 'uuid-1', '--agent', 'ревьюер', 'бриф']);
+    expect(
+      resumeCommand(PROVIDERS.claude, { providerSessionId: 'bb2137cb', agent: 'ревьюер' }).args,
+    ).toEqual(['--resume', 'bb2137cb', '--agent', 'ревьюер']);
+    expect(
+      startCommand(PROVIDERS.claude, { sessionUuid: 'uuid-1', prompt: 'бриф' }).args,
+    ).not.toContain('--agent');
+  });
+
   it('без файла настроек флаг --settings не остаётся висячим', () => {
     expect(startCommand(PROVIDERS.claude, { sessionUuid: 'uuid-1', prompt: 'бриф' }).args).toEqual([
       '--session-id',
