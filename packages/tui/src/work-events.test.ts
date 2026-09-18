@@ -26,7 +26,11 @@ function session(over: Partial<WorkSession> = {}): WorkSession {
   };
 }
 
-const entry = (sessions: WorkSession[], messages: Message[] = []): WorkEntry => ({
+const entry = (
+  sessions: WorkSession[],
+  messages: Message[] = [],
+  deletedSessions: string[] = [],
+): WorkEntry => ({
   projectPath: '/dev/shop',
   map: {
     schemaVersion: 1,
@@ -37,6 +41,7 @@ const entry = (sessions: WorkSession[], messages: Message[] = []): WorkEntry => 
       status: 'active',
       createdAt: '2026-09-01T10:00:00.000Z',
       updatedAt: '2026-09-02T10:00:00.000Z',
+      deletedSessions,
     },
     sessions,
     messages,
@@ -179,5 +184,123 @@ describe('worksEvents', () => {
       summarySource: 'agent',
     });
     expect(worksEvents([entry([before])], [entry([after])], g, PREFIX)).toEqual([]);
+  });
+
+  it('24: новое решение всплывает своей строкой, а не письмом', () => {
+    const sessions = [
+      session({ id: 's-01', label: 'план' }),
+      session({ id: 's-02', label: 'бэкенд' }),
+    ];
+    const events = worksEvents(
+      [entry(sessions)],
+      [entry(sessions, [message({ kind: 'decision', text: 'миграции отдельно' })])],
+      g,
+      PREFIX,
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.text).toBe('✓ план: решение «миграции отдельно»');
+    expect(events[0]?.source?.sessionId).toBe('s-02');
+  });
+
+  it('24: прочитанное решение всплывает тоже — звонок опережает карту', () => {
+    const sessions = [session({ id: 's-01', label: 'план' }), session({ id: 's-02' })];
+    const events = worksEvents(
+      [entry(sessions)],
+      [
+        entry(sessions, [
+          message({
+            kind: 'decision',
+            text: 'миграции отдельно',
+            readAt: '2026-09-02T09:42:00.000Z',
+          }),
+        ]),
+      ],
+      g,
+      PREFIX,
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.text).toContain('решение');
+  });
+
+  it('34: удалённый отправитель решения подписан ярлыком participantLabel', () => {
+    const sessions = [session({ id: 's-02', label: 'бэкенд' })];
+    const events = worksEvents(
+      [entry(sessions, [], ['s-01'])],
+      [entry(sessions, [message({ kind: 'decision', text: 'ждём ревью' })], ['s-01'])],
+      g,
+      PREFIX,
+    );
+
+    expect(events[0]?.text).toBe('✓ s-01 (удалена): решение «ждём ревью»');
+  });
+
+  it('38: достигнутый потолок писем всплывает один раз и зовёт сессию-отправителя', () => {
+    const sessions = [
+      session({ id: 's-01', label: 'план' }),
+      session({ id: 's-02', label: 'бэкенд' }),
+    ];
+    const sent = [
+      message({ id: 'm-01', at: '2026-09-02T09:10:00.000Z' }),
+      message({ id: 'm-02', at: '2026-09-02T09:20:00.000Z' }),
+    ];
+    const third = message({ id: 'm-03', at: '2026-09-02T09:30:00.000Z' });
+
+    const events = worksEvents(
+      [entry(sessions, sent)],
+      [entry(sessions, [...sent, third])],
+      g,
+      PREFIX,
+      3,
+    );
+
+    const rate = events.filter((event) => event.text.includes('слишком част'));
+    expect(rate).toHaveLength(1);
+    expect(rate[0]?.text).toBe('слишком частые письма · план');
+    expect(rate[0]?.source?.sessionId).toBe('s-01');
+  });
+
+  it('38: за потолком событие не повторяется на каждое письмо', () => {
+    const sessions = [session({ id: 's-01' }), session({ id: 's-02' })];
+    const sent = [
+      message({ id: 'm-01', at: '2026-09-02T09:10:00.000Z' }),
+      message({ id: 'm-02', at: '2026-09-02T09:20:00.000Z' }),
+      message({ id: 'm-03', at: '2026-09-02T09:30:00.000Z' }),
+    ];
+    const fourth = message({ id: 'm-04', at: '2026-09-02T09:40:00.000Z' });
+
+    const events = worksEvents(
+      [entry(sessions, sent)],
+      [entry(sessions, [...sent, fourth])],
+      g,
+      PREFIX,
+      3,
+    );
+
+    expect(events.filter((event) => event.text.includes('слишком част'))).toEqual([]);
+  });
+
+  it('38: письмо старше часа в потолок не идёт, как и письмо чужой сессии', () => {
+    const sessions = [
+      session({ id: 's-01', label: 'план' }),
+      session({ id: 's-02', label: 'бэкенд' }),
+    ];
+    const sent = [
+      message({ id: 'm-01', at: '2026-09-02T08:00:00.000Z' }),
+      message({ id: 'm-02', at: '2026-09-02T09:20:00.000Z' }),
+      message({ id: 'm-03', from: 's-02', to: 's-01', at: '2026-09-02T09:25:00.000Z' }),
+    ];
+    const third = message({ id: 'm-04', at: '2026-09-02T09:30:00.000Z' });
+
+    const events = worksEvents(
+      [entry(sessions, sent)],
+      [entry(sessions, [...sent, third])],
+      g,
+      PREFIX,
+      3,
+    );
+
+    expect(events.filter((event) => event.text.includes('слишком част'))).toEqual([]);
   });
 });

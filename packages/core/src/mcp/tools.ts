@@ -39,7 +39,7 @@ const POLL_MS = 2000;
 const FINISHED = ['done', 'failed', 'exited'] as const;
 
 /** Скользящий час для окна писем (разговор агентов, 4.7, решение D20). */
-const RATE_WINDOW_MS = 60 * 60 * 1000;
+export const RATE_WINDOW_MS = 60 * 60 * 1000;
 
 export function waitTimeoutMs(timeoutSec: number | undefined): number {
   const seconds = timeoutSec ?? DEFAULT_TIMEOUT_SEC;

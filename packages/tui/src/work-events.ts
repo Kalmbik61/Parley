@@ -3,9 +3,15 @@
  * (дизайн координации TUI, таблица в разделе 5).
  */
 
-import type { Message, WorkEntry, WorkSession } from '@harnas/core';
+import {
+  DEFAULT_CONFIG,
+  participantLabel,
+  RATE_WINDOW_MS,
+  type Message,
+  type WorkEntry,
+} from '@harnas/core';
 import type { Glyphs } from './glyphs.js';
-import type { StatusEventInit } from './use-status.js';
+import type { StatusEventInit, StatusSource } from './use-status.js';
 import { providerMarkOf, workKey } from './work-rows.js';
 
 /** Столько знаков цитаты помещается в строку статуса рядом с остальным. */
@@ -14,9 +20,6 @@ const QUOTE = 20;
 const quote = (text: string, g: Glyphs): string =>
   // Пробел перед знаком усечения выглядит опечаткой — режем по последнему слову.
   text.length > QUOTE ? `«${text.slice(0, QUOTE).trimEnd()}${g.ellipsis}»` : `«${text}»`;
-
-const labelOf = (sessions: readonly WorkSession[], id: string): string =>
-  sessions.find((session) => session.id === id)?.label ?? id;
 
 function sessionEvents(
   before: WorkEntry,
@@ -69,21 +72,74 @@ function sessionEvents(
   return events;
 }
 
-function messageEvents(before: WorkEntry, after: WorkEntry, g: Glyphs): StatusEventInit[] {
+/** Письма, появившиеся между двумя чтениями карты. */
+const fresh = (before: WorkEntry, after: WorkEntry): Message[] => {
   const known = new Set(before.map.messages.map((message: Message) => message.id));
-  return after.map.messages
-    .filter((message) => !known.has(message.id) && message.readAt === null)
+  return after.map.messages.filter((message) => !known.has(message.id));
+};
+
+/** Источник события письма — сессия получателя: событие гаснет, подключившись к ней. */
+const toSource = (after: WorkEntry, sessionId: string): StatusSource => ({
+  projectPath: after.projectPath,
+  workId: after.map.work.id,
+  sessionId,
+});
+
+function messageEvents(before: WorkEntry, after: WorkEntry, g: Glyphs): StatusEventInit[] {
+  const label = (id: string): string => participantLabel(after.map, id);
+  return (
+    fresh(before, after)
+      // Решение показывается своей строкой ниже: две строки об одном письме
+      // раздували бы счётчик `⚑N` (макет 6.1 показывает ровно одно событие).
+      .filter((message) => message.readAt === null && message.kind !== 'decision')
+      .map((message) => ({
+        text: `${g.mail} ${label(message.from)} → ${label(message.to)}: ${quote(message.text, g)}`,
+        source: toSource(after, message.to),
+      }))
+  );
+}
+
+/**
+ * Решение треда — событие строки статуса (6.4). Непрочитанность здесь не
+ * условие, в отличие от письма: со звонком адресат просыпается сам и успевает
+ * забрать письмо `check_inbox` раньше, чем карта дойдёт до TUI, а договорённость
+ * человек должен увидеть в любом случае.
+ */
+function decisionEvents(before: WorkEntry, after: WorkEntry, g: Glyphs): StatusEventInit[] {
+  return fresh(before, after)
+    .filter((message) => message.kind === 'decision')
     .map((message) => ({
-      text: `${g.mail} ${labelOf(after.map.sessions, message.from)} → ${labelOf(
-        after.map.sessions,
-        message.to,
-      )}: ${quote(message.text, g)}`,
-      source: {
-        projectPath: after.projectPath,
-        workId: after.map.work.id,
-        sessionId: message.to,
-      },
+      text: `${g.done} ${participantLabel(after.map, message.from)}: решение ${quote(
+        message.text,
+        g,
+      )}`,
+      source: toSource(after, message.to),
     }));
+}
+
+/**
+ * Потолок переписки (4.7): TUI считает то же скользящее окно, что и
+ * `send_message`, — письма отправителя за час по полю `at` всей карты. Событие
+ * поднимается ровно на письме, которым окно заполнилось: дальше счёт больше
+ * потолка, и строка статуса молчит, пока окно не опустеет и не наполнится снова.
+ * Состояния для этого не нужно — всё выводится из двух карт.
+ */
+function rateEvents(before: WorkEntry, after: WorkEntry, rate: number): StatusEventInit[] {
+  const events: StatusEventInit[] = [];
+  for (const message of fresh(before, after)) {
+    const at = Date.parse(message.at);
+    const window = after.map.messages.filter((other) => {
+      const when = Date.parse(other.at);
+      return other.from === message.from && when <= at && at - when < RATE_WINDOW_MS;
+    });
+    if (window.length !== rate) continue;
+    events.push({
+      // `⚑` рисует сама строка статуса, в тексте события его нет.
+      text: `слишком частые письма · ${participantLabel(after.map, message.from)}`,
+      source: toSource(after, message.from),
+    });
+  }
+  return events;
 }
 
 /**
@@ -96,6 +152,8 @@ export function worksEvents(
   g: Glyphs,
   /** Имя префикса: клавиши харнесса зовутся в подсказках только через него (§3). */
   prefix: string,
+  /** Потолок писем одной сессии за час: тот же, что считает `send_message` (4.7). */
+  rate: number = DEFAULT_CONFIG.messageRate,
 ): StatusEventInit[] {
   const before = new Map(
     previous.map((entry) => [workKey(entry.projectPath, entry.map.work.id), entry]),
@@ -105,7 +163,12 @@ export function worksEvents(
   for (const entry of next) {
     const was = before.get(workKey(entry.projectPath, entry.map.work.id));
     if (was === undefined) continue;
-    events.push(...sessionEvents(was, entry, g, prefix), ...messageEvents(was, entry, g));
+    events.push(
+      ...sessionEvents(was, entry, g, prefix),
+      ...messageEvents(was, entry, g),
+      ...decisionEvents(was, entry, g),
+      ...rateEvents(was, entry, rate),
+    );
   }
   return events;
 }

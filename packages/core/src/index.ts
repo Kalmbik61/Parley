@@ -152,7 +152,12 @@ export {
 export type { ChannelProbe } from './work/channel.js';
 export { contextFromEnv } from './mcp/context.js';
 export type { McpContext } from './mcp/context.js';
-export { DEFAULT_TIMEOUT_SEC, MAX_TIMEOUT_SEC, createHarnasServer } from './mcp/tools.js';
+export {
+  DEFAULT_TIMEOUT_SEC,
+  MAX_TIMEOUT_SEC,
+  RATE_WINDOW_MS,
+  createHarnasServer,
+} from './mcp/tools.js';
 export { MESSAGE_KINDS } from './work/types.js';
 export type {
   Artifact,

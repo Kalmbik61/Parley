@@ -73,7 +73,12 @@ export function App({
   const channel = config.channelPush && channelSupported;
   const warn = useCallback((text: string) => push([{ text }]), [push]);
   const prefixName = `ctrl+${config.prefix}`;
-  const { works } = useWorks({ projectPath, prefix: prefixName, onEvents: push });
+  const { works } = useWorks({
+    projectPath,
+    prefix: prefixName,
+    messageRate: config.messageRate,
+    onEvents: push,
+  });
 
   const { index, log } = useLogIndex(sessions);
   const activity = useActivity({
