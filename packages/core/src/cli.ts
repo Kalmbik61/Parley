@@ -102,16 +102,18 @@ async function channelFor(entry: ProviderEntry): Promise<boolean> {
   const { config } = await loadConfig();
   if (!config.channelPush) return false;
 
+  // Сначала чужие: у codex и GLM канала нет вовсе — ни флага, ни переменной
+  // (4.4). Пробовать их версию нечем и не с чем: минимум `2.1.211` — про
+  // claude, а лишний `<провайдер> --version` стоил бы подпроцесса на запуск.
+  if (entry.id !== 'claude') return false;
+  if (entry.runner.args?.includes('{channel}') !== true) {
+    process.stderr.write('providers.json без {channel}: push выключен\n');
+    return false;
+  }
+
   const probe = await probeChannelSupport(entry.runner.command);
   if (!probe.supported) {
     process.stderr.write(`push выключен: claude ${probe.version} младше ${CHANNEL_MIN_VERSION}\n`);
-    return false;
-  }
-  if (entry.runner.args?.includes('{channel}') !== true) {
-    // Чужому провайдеру звонок не положен вовсе; про Claude молчать нельзя.
-    if (entry.id === 'claude') {
-      process.stderr.write('providers.json без {channel}: push выключен\n');
-    }
     return false;
   }
   return true;
