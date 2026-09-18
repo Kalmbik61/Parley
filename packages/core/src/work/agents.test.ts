@@ -50,7 +50,9 @@ describe('listAgents', () => {
     await defineAgent(homeDir, 'reviewer');
 
     expect(await listAgents(agentDirs(project, claudeHome))).toEqual(['reviewer']);
-    expect(await listAgents(agentDirs(path.join(project, 'нет'), claudeHome))).toEqual(['reviewer']);
+    expect(await listAgents(agentDirs(path.join(project, 'нет'), claudeHome))).toEqual([
+      'reviewer',
+    ]);
   });
 });
 

@@ -87,6 +87,11 @@ describe('подробный гид', () => {
     expect(GUIDE).toContain('mcp__harnas__');
   });
 
+  it('описывает роль-агента у spawn_session', () => {
+    expect(GUIDE).toContain('spawn_session(provider, label, task, contextFrom, agent)');
+    expect(GUIDE).toContain('.claude/agents/');
+  });
+
   it('запрещает удалять и переносить каталоги .harnas руками', () => {
     // Агент без инструмента удаления не должен идти в shell: удаление сессии —
     // только из TUI, удаления работы пока нет вовсе.

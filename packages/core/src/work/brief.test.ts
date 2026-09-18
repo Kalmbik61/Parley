@@ -153,6 +153,18 @@ describe('бриф: коллеги и решения треда', () => {
     expect(brief).not.toContain('- s-02 —');
   });
 
+  it('роль коллеги называется рядом с пометкой родителя', () => {
+    const map = mapWithThread();
+    const plan = map.sessions[0];
+    if (plan === undefined) throw new Error('нет сессии');
+    plan.agent = 'planner';
+
+    const brief = buildBrief(map, 's-02');
+    expect(brief).toContain('- s-01 — план (родитель, агент planner): done');
+    // Без роли скобок не появляется: обычная сессия ничем не помечена.
+    expect(brief).toContain('- s-03 — ревью: pending');
+  });
+
   it('несёт решения треда со временем и подписью, заметки и вопросы — нет', () => {
     const brief = buildBrief(mapWithThread(), 's-02');
 

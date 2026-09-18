@@ -66,8 +66,15 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
     lines.push('## Коллеги', '');
     for (const id of colleagues) {
       const mate = sessionOf(map, id);
-      const parent = id === session.parent ? ' (родитель)' : '';
-      lines.push(`- ${mate.id} — ${mate.label}${parent}: ${mate.status}`);
+      // Пометки в одних скобках: «(родитель, агент planner)» (спецификация 5.2).
+      // Роль коллеги видна сразу — с планировщиком и с ревьюером говорят
+      // по-разному, а лезть за этим в карту незачем.
+      const marks = [
+        ...(id === session.parent ? ['родитель'] : []),
+        ...(mate.agent === null ? [] : [`агент ${mate.agent}`]),
+      ];
+      const mark = marks.length === 0 ? '' : ` (${marks.join(', ')})`;
+      lines.push(`- ${mate.id} — ${mate.label}${mark}: ${mate.status}`);
     }
     lines.push('');
   }
