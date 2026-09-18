@@ -9,6 +9,7 @@
 
 import {
   addSession,
+  CHANNEL_VALUE,
   createWork,
   deleteSessionFiles,
   deleteWorkFiles,
@@ -16,7 +17,7 @@ import {
   linkProviderSession,
   loadProviders,
   mcpConfigValue,
-  MCP_SERVER_NAME,
+  NO_CHANNEL_WARNING,
   readMap,
   removeSession,
   resumeCommand,
@@ -38,16 +39,6 @@ import {
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-
-/** Чем именно будить сессию: имя сервера из конфига MCP (разговор агентов, 4.4). */
-const CHANNEL_VALUE = `server:${MCP_SERVER_NAME}`;
-
-/**
- * Оверрайд `providers.json` заменяет `args` целиком, поэтому шаблон без
- * `{channel}` выключает push для этого провайдера. Это законно, но молча —
- * поэтому раз на работу об этом говорит строка статуса (4.4).
- */
-const NO_CHANNEL_WARNING = 'providers.json без {channel}: push выключен';
 
 /** Чего хочет запуск сверх самой сессии. */
 export interface LaunchOptions {

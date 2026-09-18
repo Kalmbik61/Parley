@@ -143,6 +143,8 @@ export {
 export type { McpConfigFile, McpConfigParams, McpStdioServer } from './work/mcp-config.js';
 export {
   CHANNEL_MIN_VERSION,
+  CHANNEL_VALUE,
+  NO_CHANNEL_WARNING,
   channelSupported,
   parseVersion,
   probeChannelSupport,

@@ -13,10 +13,15 @@ import { buildSchemaReport } from './schema-report.js';
 import { buildIndex, buildSessionTree } from './session-tree.js';
 import { loadConfig } from './config.js';
 import { writeBrief } from './work/brief.js';
-import { CHANNEL_MIN_VERSION, probeChannelSupport } from './work/channel.js';
+import {
+  CHANNEL_MIN_VERSION,
+  CHANNEL_VALUE,
+  NO_CHANNEL_WARNING,
+  probeChannelSupport,
+} from './work/channel.js';
 import { systemGuidance } from './work/guidance.js';
 import { addSession } from './work/map.js';
-import { MCP_SERVER_NAME, mcpConfigValue, writeMcpConfig } from './work/mcp-config.js';
+import { mcpConfigValue, writeMcpConfig } from './work/mcp-config.js';
 import { writeWorkSettings } from './work/settings-file.js';
 import {
   createWork,
@@ -107,7 +112,7 @@ async function channelFor(entry: ProviderEntry): Promise<boolean> {
   // claude, а лишний `<провайдер> --version` стоил бы подпроцесса на запуск.
   if (entry.id !== 'claude') return false;
   if (entry.runner.args?.includes('{channel}') !== true) {
-    process.stderr.write('providers.json без {channel}: push выключен\n');
+    process.stderr.write(`${NO_CHANNEL_WARNING}\n`);
     return false;
   }
 
@@ -199,7 +204,7 @@ async function newWorkSession(argv: string[]): Promise<void> {
   const subs: RunnerSubstitutions = task === '' ? {} : { prompt: briefText };
   if (uuid !== null) subs.sessionUuid = uuid;
   if (mcp !== undefined) subs.mcpConfig = mcp;
-  if (channel) subs.channel = `server:${MCP_SERVER_NAME}`;
+  if (channel) subs.channel = CHANNEL_VALUE;
   if (settingsFile !== null) subs.settingsFile = settingsFile;
   // Системная вставка гида — тому, кто её принимает (`claude --append-system-prompt`):
   // сессия, поднятая руками, должна знать про харнесс то же, что поднятая панелью.
