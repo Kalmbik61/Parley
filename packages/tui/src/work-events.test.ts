@@ -49,6 +49,7 @@ const message = (over: Partial<Message> = {}): Message => ({
   to: 's-02',
   at: '2026-09-02T09:41:00.000Z',
   text: 'жду миграции',
+  kind: 'note',
   readAt: null,
   ...over,
 });

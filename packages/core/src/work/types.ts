@@ -86,6 +86,14 @@ export interface WorkSession {
   artifacts: Artifact[];
 }
 
+/**
+ * Вид письма: `question` ждёт ответа, `decision` фиксирует договорённость,
+ * `note` — всё остальное (спецификация 2026-09-08, 3.1). Вид нужен затем, что
+ * отвечать стоит не на каждое письмо, а решения треда собираются сами.
+ */
+export type MessageKind = 'note' | 'question' | 'decision';
+export const MESSAGE_KINDS: readonly MessageKind[] = ['note', 'question', 'decision'];
+
 /** Сообщение от сессии к сессии: доставляется по pull, живёт в карте. */
 export interface Message {
   id: string;
@@ -93,6 +101,8 @@ export interface Message {
   to: string;
   at: string;
   text: string;
+  /** На диске может отсутствовать (карты до 2026-09-08): `parseMap` подставляет `note`. */
+  kind: MessageKind;
   readAt: string | null;
   /**
    * Отправитель или получатель удалён (план от 2026-09-06, раздел C). Само

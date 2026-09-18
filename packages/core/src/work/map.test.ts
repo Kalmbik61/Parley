@@ -73,6 +73,20 @@ describe('addMessage', () => {
     expect(message.readAt).toBeNull();
     expect(addMessage(map, { from: 's-01', to: 's-02', text: 'ок' }).id).toBe('m-02');
   });
+
+  it('kind по умолчанию note, явный kind сохраняется', () => {
+    const map = emptyMap();
+    const plain = addMessage(map, { from: 's-01', to: 's-02', text: 'a' });
+    const question = addMessage(map, {
+      from: 's-01',
+      to: 's-02',
+      text: 'b',
+      kind: 'question',
+    });
+
+    expect(plain.kind).toBe('note');
+    expect(question.kind).toBe('question');
+  });
 });
 
 describe('transitionSession', () => {
@@ -199,6 +213,33 @@ describe('parseMap', () => {
     expect(parsed.sessions[0]?.pid).toBeNull();
     expect(parsed.sessions[0]?.startedAtProcess).toBeNull();
     expect(parsed.sessions[0]?.launchedBy).toBeNull();
+  });
+
+  it('35: карта без kind у письма читается как note, остальные поля не тронуты', () => {
+    const raw = JSON.stringify({
+      ...emptyMap(),
+      messages: [
+        {
+          id: 'm-01',
+          from: 's-01',
+          to: 's-02',
+          at: '2026-09-08T10:00:00.000Z',
+          text: 'x',
+          readAt: null,
+        },
+      ],
+    });
+
+    const map = parseMap(raw, 'map.json');
+    expect(map.messages[0]).toMatchObject({
+      id: 'm-01',
+      from: 's-01',
+      to: 's-02',
+      at: '2026-09-08T10:00:00.000Z',
+      text: 'x',
+      kind: 'note',
+      readAt: null,
+    });
   });
 
   it('битый json — ошибка', () => {

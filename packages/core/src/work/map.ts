@@ -1,6 +1,7 @@
 import type {
   HistoryEntry,
   Message,
+  MessageKind,
   SessionStatus,
   WorkMap,
   WorkProvider,
@@ -157,11 +158,22 @@ export interface NewMessage {
   from: string;
   to: string;
   text: string;
+  kind?: MessageKind;
 }
 
 /** Кладёт сообщение в карту непрочитанным: доставка — pull через `check_inbox`. */
 export function addMessage(map: WorkMap, init: NewMessage, at = new Date().toISOString()): Message {
-  const message: Message = { id: nextMessageId(map), ...init, at, readAt: null };
+  // Поля перечислены руками, а не `...init`: при разложении `kind: undefined`
+  // попал бы в карту ключом без значения, и письмо на диске осталось бы без вида.
+  const message: Message = {
+    id: nextMessageId(map),
+    from: init.from,
+    to: init.to,
+    text: init.text,
+    kind: init.kind ?? 'note',
+    at,
+    readAt: null,
+  };
   map.messages.push(message);
   return message;
 }
@@ -254,7 +266,19 @@ export function parseMap(raw: string, file: string): WorkMap {
   for (const session of map.sessions) {
     migrateSession(session as unknown as Record<string, unknown>);
   }
+  for (const message of map.messages) {
+    migrateMessage(message as unknown as Record<string, unknown>);
+  }
   return map;
+}
+
+/**
+ * Письма до 2026-09-08 вида не знали: заметка (спецификация 2026-09-08, 3.1).
+ * Миграция при чтении, как у `idle`: читатели карты дефолта не знают, а файл
+ * получит поле при первой же мутации.
+ */
+function migrateMessage(message: Record<string, unknown>): void {
+  message['kind'] ??= 'note';
 }
 
 /**
