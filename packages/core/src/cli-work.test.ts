@@ -30,12 +30,18 @@ interface Result {
  * доступность провайдеров подсунута оверрайдами на shell-заглушку.
  */
 async function cli(...args: string[]): Promise<Result> {
+  return cliEnv({}, ...args);
+}
+
+/** То же самое, но с добавкой к окружению: настройки харнесса читаются из него. */
+async function cliEnv(extra: NodeJS.ProcessEnv, ...args: string[]): Promise<Result> {
   const env = {
     ...process.env,
     HARNAS_HOME: home,
     HARNAS_CLAUDE_BIN: stub,
     HARNAS_CODEX_BIN: stub,
     HARNAS_GLM_BIN: '',
+    ...extra,
   };
   try {
     const { stdout, stderr } = await run('pnpm', ['exec', 'tsx', CLI, ...args], { cwd: REPO, env });
@@ -66,7 +72,9 @@ beforeEach(async () => {
   project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
   binDir = await mkdtemp(path.join(tmpdir(), 'harnas-bin-'));
   stub = path.join(binDir, 'agent-stub');
-  await writeFile(stub, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  // `--version` заглушка отвечает свежей сборкой: перед флагом канала CLI
+  // пробует версию (разговор агентов, 4.4).
+  await writeFile(stub, '#!/bin/sh\necho "2.1.276 (Claude Code)"\nexit 0\n', { mode: 0o755 });
 });
 
 afterEach(async () => {
@@ -235,6 +243,8 @@ describe('harnas-core work session new', () => {
     expect(config.mcpServers['harnas']?.env).toEqual({
       HARNAS_WORK_DIR: workPaths(project, 'w-0001').dir,
       HARNAS_SESSION_ID: 's-01',
+      // Push включён по умолчанию: сторож входящих будит сессию звонком (4.4).
+      HARNAS_CHANNEL: '1',
     });
   }, 60_000);
 
@@ -260,9 +270,59 @@ describe('harnas-core work session new', () => {
     expect(guidance).toContain('s-01');
     expect(guidance).toContain('# Работа w-0001');
     expect(brief).not.toContain('Задача:');
-    // Позиционного промпта в команде нет: последний аргумент — сама вставка.
-    expect(args.at(-1)).toBe(guidance);
+    // Позиционного промпта в команде нет: бриф уехал вставкой, а хвостом стоит
+    // значение флага канала.
+    expect(args).not.toContain(brief);
+    expect(args[args.indexOf('--append-system-prompt') + 1]).toBe(guidance);
+    expect(args.at(-1)).toBe('server:harnas');
     expect((await readMapFile('w-0001')).sessions[0]?.task).toBe('');
+  }, 60_000);
+
+  it('печатает команду с флагом канала, а конфиг MCP — с HARNAS_CHANNEL', async () => {
+    // Сессия из терминала получает push наравне с сессией панели (4.4).
+    await newWork('Авторизация');
+    const printed = await ok(
+      'work',
+      'session',
+      'new',
+      '--work',
+      'w-0001',
+      '--provider',
+      'claude',
+      '--label',
+      'план',
+    );
+
+    const args = printed['args'] as string[];
+    expect(args[args.indexOf('--dangerously-load-development-channels') + 1]).toBe('server:harnas');
+    const config = JSON.parse(await readFile(printed['mcpConfig'] as string, 'utf8')) as {
+      mcpServers: Record<string, { env: Record<string, string> }>;
+    };
+    expect(config.mcpServers['harnas']?.env['HARNAS_CHANNEL']).toBe('1');
+  }, 60_000);
+
+  it('с HARNAS_CHANNEL_PUSH=0 ни флага, ни переменной: разговор живёт по pull', async () => {
+    await newWork('Авторизация');
+    const result = await cliEnv(
+      { HARNAS_CHANNEL_PUSH: '0' },
+      'work',
+      'session',
+      'new',
+      '--work',
+      'w-0001',
+      '--provider',
+      'claude',
+      '--label',
+      'план',
+    );
+    expect(result.code, result.stderr).toBe(0);
+    const printed = JSON.parse(result.stdout) as Record<string, unknown>;
+
+    expect(printed['args']).not.toContain('--dangerously-load-development-channels');
+    const config = JSON.parse(await readFile(printed['mcpConfig'] as string, 'utf8')) as {
+      mcpServers: Record<string, { env: Record<string, string> }>;
+    };
+    expect(config.mcpServers['harnas']?.env).not.toHaveProperty('HARNAS_CHANNEL');
   }, 60_000);
 
   it('провайдеру без внешнего id uuid не выдаётся, конфиг уходит в аргументы', async () => {

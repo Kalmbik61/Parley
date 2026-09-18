@@ -8,13 +8,15 @@ import path from 'node:path';
 import { defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
 import { defaultRoot, discoverSessions } from './discover.js';
 import { commandInPath, loadProviders, startCommand } from './providers.js';
-import type { RunnerSubstitutions } from './providers.js';
+import type { ProviderEntry, RunnerSubstitutions } from './providers.js';
 import { buildSchemaReport } from './schema-report.js';
 import { buildIndex, buildSessionTree } from './session-tree.js';
+import { loadConfig } from './config.js';
 import { writeBrief } from './work/brief.js';
+import { CHANNEL_MIN_VERSION, probeChannelSupport } from './work/channel.js';
 import { systemGuidance } from './work/guidance.js';
 import { addSession } from './work/map.js';
-import { mcpConfigValue, writeMcpConfig } from './work/mcp-config.js';
+import { MCP_SERVER_NAME, mcpConfigValue, writeMcpConfig } from './work/mcp-config.js';
 import { writeWorkSettings } from './work/settings-file.js';
 import {
   createWork,
@@ -90,6 +92,32 @@ async function resolveProject(argv: string[], workId: string): Promise<string> {
 }
 
 /**
+ * Уходит ли в команду флаг канала (разговор агентов, 4.4). Настройка
+ * `channelPush`, проба `claude --version` и шаблон аргументов: у оверрайда
+ * `providers.json` без `{channel}` push выключается законно, но молча —
+ * поэтому о нём, как и о старой сборке, говорит stderr. Стандарт стдаут-JSON
+ * при этом не нарушается: диагностика туда не попадает.
+ */
+async function channelFor(entry: ProviderEntry): Promise<boolean> {
+  const { config } = await loadConfig();
+  if (!config.channelPush) return false;
+
+  const probe = await probeChannelSupport(entry.runner.command);
+  if (!probe.supported) {
+    process.stderr.write(`push выключен: claude ${probe.version} младше ${CHANNEL_MIN_VERSION}\n`);
+    return false;
+  }
+  if (entry.runner.args?.includes('{channel}') !== true) {
+    // Чужому провайдеру звонок не положен вовсе; про Claude молчать нельзя.
+    if (entry.id === 'claude') {
+      process.stderr.write('providers.json без {channel}: push выключен\n');
+    }
+    return false;
+  }
+  return true;
+}
+
+/**
  * Готовит запуск сессии без TUI (спецификация, раздел 4): запись `pending`,
  * бриф и MCP-конфиг на диске, команда запуска — в stdout. Сам процесс агента
  * харнесс тут не поднимает: пользователь запускает его руками из своего
@@ -145,11 +173,14 @@ async function newWorkSession(argv: string[]): Promise<void> {
   const brief = await writeBrief(projectPath, map, created);
   // Бриф читаем с диска: между записью и запуском его можно править (раздел 11).
   const briefText = await readFile(brief, 'utf8');
+  // Push через channel: настройка, проба версии и шаблон аргументов. Сессия из
+  // терминала получает звонок наравне с сессией панели (разговор агентов, 4.4).
+  const channel = await channelFor(entry);
   // Файл конфига нужен только тем, кто принимает путь; codex получает свой
   // сервер значением `-c`, и лишний файл ему писать незачем.
   const mcpFile =
     entry.runner.mcpConfig === 'json-file'
-      ? await writeMcpConfig(projectPath, workId, created)
+      ? await writeMcpConfig(projectPath, workId, created, undefined, channel)
       : null;
   const mcp = mcpConfigValue(
     entry.runner.mcpConfig,
@@ -166,6 +197,7 @@ async function newWorkSession(argv: string[]): Promise<void> {
   const subs: RunnerSubstitutions = task === '' ? {} : { prompt: briefText };
   if (uuid !== null) subs.sessionUuid = uuid;
   if (mcp !== undefined) subs.mcpConfig = mcp;
+  if (channel) subs.channel = `server:${MCP_SERVER_NAME}`;
   if (settingsFile !== null) subs.settingsFile = settingsFile;
   // Системная вставка гида — тому, кто её принимает (`claude --append-system-prompt`):
   // сессия, поднятая руками, должна знать про харнесс то же, что поднятая панелью.
