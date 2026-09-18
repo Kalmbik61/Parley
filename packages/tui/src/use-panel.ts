@@ -30,6 +30,25 @@ import {
 import type { WorkSession } from '@harnas/core';
 import { workKey } from './work-rows.js';
 
+/**
+ * Предупреждения запуска, которых для этой работы ещё не показывали; показанные
+ * запоминает в переданном множестве. Одно и то же предупреждение на каждом
+ * запуске поднимало бы `⚑N` заново — строка статуса дедупликации не делает
+ * (разговор агентов, 4.4, пункт 8.32).
+ */
+export function unseenWarnings(
+  shown: Set<string>,
+  work: string,
+  warnings: readonly string[],
+): string[] {
+  return warnings.filter((text) => {
+    const seen = `${work} ${text}`;
+    if (shown.has(seen)) return false;
+    shown.add(seen);
+    return true;
+  });
+}
+
 export interface PanelOptions {
   projectPath: string;
   roots: MetricsRoots;
@@ -189,10 +208,7 @@ export function usePanel({
   /** Поднять процесс сессии в панели по готовому плану запуска. */
   const openWork = useCallback(
     (project: string, workId: string, session: WorkSession, plan: LaunchPlan) => {
-      for (const text of plan.warnings) {
-        const seen = `${workKey(project, workId)} ${text}`;
-        if (warned.current.has(seen)) continue;
-        warned.current.add(seen);
+      for (const text of unseenWarnings(warned.current, workKey(project, workId), plan.warnings)) {
         onWarn?.(text);
       }
       agent.open(
