@@ -802,6 +802,60 @@ describe('гашение событий строки статуса (5, 6)', () 
       app.unmount();
     }
   }, 30_000);
+
+  it('24: событие решения гаснет при подключении к сессии-получателю', async () => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    const ids = { plan: '', backend: '', review: '' };
+    await updateMap(project, created.work.id, (map) => {
+      const plan = addSession(map, { provider: 'claude', label: 'план', task: '' });
+      const backend = addSession(map, {
+        provider: 'claude',
+        label: 'бэкенд',
+        task: '',
+        parent: plan.id,
+      });
+      const review = addSession(map, {
+        provider: 'claude',
+        label: 'ревью',
+        task: '',
+        parent: plan.id,
+      });
+      ids.plan = plan.id;
+      ids.backend = backend.id;
+      ids.review = review.id;
+    });
+
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await waitFor(() => (app.lastFrame() ?? '').includes('сессии · Авторизация'));
+
+      // Договорённость человек должен увидеть в любом случае: решение идёт в
+      // строку статуса своей строкой (6.4).
+      await updateMap(project, created.work.id, (map) => {
+        addMessage(map, {
+          from: ids.plan,
+          to: ids.review,
+          text: 'миграции отдельно',
+          kind: 'decision',
+        });
+      });
+      await waitFor(() => (app.lastFrame() ?? '').includes('✓ план: решение «миграции отдельно»'));
+      expect(app.lastFrame()).toContain('⚑');
+
+      // Источник события — получатель: соседняя сессия его не гасит.
+      app.stdin.write(`${PREFIX}j`);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(app.lastFrame()).toContain('✓ план: решение «миграции отдельно»');
+
+      // Подключение к получателю — гасит, и счётчик ⚑ падает до нуля (8.24).
+      app.stdin.write(`${PREFIX}j`);
+      await waitFor(() => !(app.lastFrame() ?? '').includes('решение «миграции отдельно»'));
+      expect(app.lastFrame()).not.toContain('⚑');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
 });
 
 describe('закрытие сессии (3.2, макет 4.8)', () => {
@@ -1261,6 +1315,39 @@ describe('тред выбранной сессии (6.1–6.3, приёмка 8.
       await resize(app, 138);
       await waitFor(() => !(app.lastFrame() ?? '').includes('┌ тред'));
       expect(app.lastFrame()).toContain('тред · план');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('37: ресайз с открытым доком отдаёт PTY колонки в обе стороны', async () => {
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await resize(app, 138);
+      await launch(app);
+
+      // Док на 138 колонках: сайдбар 26, панель 80, тред 30 (макет 6.1).
+      app.stdin.write(`${PREFIX}t`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('тред · работа'));
+      await waitFor(() => (app.lastFrame() ?? '').includes('resize 80x'));
+
+      // Ниже порога док уступает место оверлею, и панель забирает его колонки:
+      // 120 − 26 сайдбара − разделитель = 93 (решение D21).
+      await resize(app, 120);
+      await waitFor(() => (app.lastFrame() ?? '').includes('┌ тред'));
+
+      // Оверлей закрывает панель собой, поэтому обе ширины видно в её экране
+      // после возврата: 93 пришло на сужении, 80 — на обратном ходе.
+      await resize(app, 138);
+      await waitFor(() => !(app.lastFrame() ?? '').includes('┌ тред'));
+      await waitFor(() => {
+        const frame = app.lastFrame() ?? '';
+        return (
+          frame.includes('resize 93x') &&
+          frame.lastIndexOf('resize 80x') > frame.lastIndexOf('resize 93x')
+        );
+      });
     } finally {
       app.unmount();
     }

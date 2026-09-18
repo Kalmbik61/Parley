@@ -254,4 +254,38 @@ describe('threadView: окно', () => {
     expect(window.lines.map((line) => line.text)).toEqual(all.slice(-4));
     expect(window.below).toBe(0);
   });
+
+  it('39: лента в 500 писем рисуется срезом по высоте', () => {
+    // Письма идут подряд по минутам, начиная с полуночи: 500-е — в 08:19.
+    const many = entry(
+      [session(), session({ id: 's-02', label: 'бэкенд', parent: 's-01' })],
+      Array.from({ length: 500 }, (_, index) =>
+        letter(
+          `m-${String(index).padStart(3, '0')}`,
+          's-01',
+          's-02',
+          `${String(Math.floor(index / 60)).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}`,
+          'note',
+          `письмо ${String(index + 1).padStart(3, '0')}`,
+        ),
+      ),
+    );
+    const cut = (scroll: number | null): ThreadView =>
+      threadView({ entry: many, sessionId: 's-02', width: WIDTH, height: 20, scroll, g });
+
+    // Строк вдвое больше писем: заголовок и текст (6.3), а режутся они по
+    // высоте — вся тысяча в кадр не попадает (решение D15).
+    const tail = cut(null);
+
+    expect(tail.total).toBe(1000);
+    expect(tail.lines.length).toBeLessThanOrEqual(20);
+    expect(tail.lines.at(-1)?.text).toBe('  письмо 500');
+    expect(tail.below).toBe(0);
+
+    // От начала ленты видно первое письмо, а ниже окна — всё остальное.
+    const head = cut(0);
+
+    expect(head.lines[0]?.text).toBe(`${clock('00:00')} план ${g.arrow} бэкенд`);
+    expect(head.below).toBe(tail.total - 20);
+  });
 });
