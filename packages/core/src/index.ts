@@ -72,6 +72,8 @@ export {
   worksIndexPath,
 } from './work/store.js';
 export type { NewWork, WorkPaths, WriteOptions } from './work/store.js';
+export { decisionsOf, participantLabel, threadOf } from './work/thread.js';
+export type { Thread } from './work/thread.js';
 export { buildBrief, writeBrief } from './work/brief.js';
 export { GUIDE } from './work/guide.js';
 export { systemGuidance } from './work/guidance.js';
@@ -142,11 +144,13 @@ export type { McpConfigFile, McpConfigParams, McpStdioServer } from './work/mcp-
 export { contextFromEnv } from './mcp/context.js';
 export type { McpContext } from './mcp/context.js';
 export { DEFAULT_TIMEOUT_SEC, MAX_TIMEOUT_SEC, createHarnasServer } from './mcp/tools.js';
+export { MESSAGE_KINDS } from './work/types.js';
 export type {
   Artifact,
   HistoryEntry,
   LaunchedBy,
   Message,
+  MessageKind,
   SessionMetrics,
   SessionStatus,
   SummarySource,
