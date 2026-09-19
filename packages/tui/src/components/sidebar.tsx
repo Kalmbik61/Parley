@@ -207,6 +207,33 @@ export interface SidebarProps {
 
 const pad = (used: number, width: number): string => ' '.repeat(Math.max(0, width - used));
 
+/**
+ * Строка-грань блока сайдбара, ровно `width` символов (план рамок, задача 2).
+ * Верхняя несёт заголовок «╭─ заголовок ─…─╮», нижняя — пустая «╰──…──╯».
+ * Заголовок режется существующим `truncate` по `width - 4`.
+ */
+export function frameLine({
+  title,
+  width,
+  g,
+  top,
+}: {
+  title: string | null;
+  width: number;
+  g: Glyphs;
+  top: boolean;
+}): string {
+  if (!top) {
+    return `${g.frame.bottomLeft}${g.frame.horizontal.repeat(Math.max(0, width - 2))}${g.frame.bottomRight}`;
+  }
+  const label = truncate(title ?? '', Math.max(0, width - 4), g.ellipsis);
+  const head = `${g.frame.topLeft}${g.frame.horizontal} ${label} `;
+  const tail = `${g.frame.horizontal.repeat(Math.max(0, width - head.length - 1))}${g.frame.topRight}`;
+  const line = `${head}${tail}`;
+  // Заголовок впритык к ширине: хвоста без запаса не хватает, режем по месту.
+  return line.length > width ? `${line.slice(0, width - 1)}${g.frame.topRight}` : line;
+}
+
 /** Разделитель сайдбара и панели; в режиме навигации — cyan и жирный (макет 1.5). */
 function Divider({ g, navigating }: { g: Glyphs; navigating: boolean }): ReactNode {
   return navigating ? (

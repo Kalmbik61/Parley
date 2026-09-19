@@ -2,8 +2,10 @@ import type { SessionIndex, WorkEntry, WorkSession } from '@harnas/core';
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
 import { pinUnicodeGlyphs } from '../../test/glyphs-env.js';
+import { glyphs } from '../glyphs.js';
 import {
   branchOf,
+  frameLine,
   Sidebar,
   sidebarCursorRows,
   SidebarOverlay,
@@ -377,6 +379,32 @@ describe('Sidebar', () => {
     expect(lineWith(all, 'сессии ·')).toContain('сессии · Авторизация');
     expect(lineWith(all, 'выше')).toMatch(/… \d+ выше/);
     expect(lineWith(all, 'шаг 19')).toContain('шаг 19');
+  });
+});
+
+describe('frameLine', () => {
+  it('верхняя грань занимает всю ширину и несёт заголовок', () => {
+    const line = frameLine({ title: 'работы', width: 26, g: glyphs(), top: true });
+    expect(line).toHaveLength(26);
+    expect(line.startsWith('╭─ работы ')).toBe(true);
+    expect(line.endsWith('╮')).toBe(true);
+  });
+
+  it('заголовок длиннее ширины усекается', () => {
+    const line = frameLine({
+      title: 'сессии · ОченьДлинноеНазваниеРаботы',
+      width: 18,
+      g: glyphs(),
+      top: true,
+    });
+    expect(line).toHaveLength(18);
+    expect(line).toContain(glyphs().ellipsis);
+  });
+
+  it('нижняя грань без заголовка', () => {
+    expect(frameLine({ title: null, width: 26, g: glyphs(), top: false })).toBe(
+      `╰${'─'.repeat(24)}╯`,
+    );
   });
 });
 
