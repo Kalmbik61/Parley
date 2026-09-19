@@ -122,3 +122,23 @@ describe('Thread рамка (план рамок, находка сверки: �
     expect(rows.at(-1)).toBe(`╰${'─'.repeat(30)}╯`);
   });
 });
+
+describe('высота колонки треда (план рамок, находка сверки)', () => {
+  const rows = (node: Parameters<typeof render>[0]): number =>
+    (render(node).lastFrame() ?? '').split('\n').length;
+
+  // Грани встают в результат безусловно, а строки ленты приходят снаружи:
+  // без обрезки тред перерастал отведённое и сдвигал раскладку.
+  it('колонка занимает ровно height при любой высоте, включая вырожденную', () => {
+    for (const height of [0, 1, 2, 3, 6, 12]) {
+      expect(rows(<Thread view={null} width={30} height={height} />)).toBe(Math.max(1, height));
+    }
+  });
+
+  it('лента длиннее отведённого не растягивает колонку', () => {
+    const lines = Array.from({ length: 50 }, (_, at) => ({ text: `письмо ${at}` }));
+    for (const height of [4, 8, 20]) {
+      expect(rows(<Thread view={view({ lines })} width={30} height={height} />)).toBe(height);
+    }
+  });
+});

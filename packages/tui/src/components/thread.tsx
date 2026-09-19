@@ -80,24 +80,32 @@ export function Thread({ view, width, height }: ThreadProps): ReactNode {
   const frameWidth = width + 2;
   const marks = threadMarks(view, g);
 
+  const rows: ReactNode[] = [
+    <Text key="грань-верх" dimColor>
+      {frameLine({
+        title: view === null ? 'тред' : view.title,
+        right: marks === '' ? null : marks,
+        width: frameWidth,
+        g,
+        top: true,
+      })}
+    </Text>,
+    ...lines.map((line, at) => <Row key={`лента-${at}`} line={line} width={width} g={g} />),
+    ...Array.from({ length: filler }, (_, at) => (
+      <Row key={`пусто-${at}`} line={{ text: '' }} width={width} g={g} />
+    )),
+    <Text key="грань-низ" dimColor>
+      {frameLine({ title: null, width: frameWidth, g, top: false })}
+    </Text>,
+  ];
+
+  // Режем по высоте, как это делает сайдбар: строки ленты приходят снаружи, и
+  // доверять их числу нельзя. На высоте меньше трёх одни только грани уже не
+  // влезают, а перерасти отведённое тред не имеет права — на высотах всех трёх
+  // зон стоит раскладка целиком.
   return (
     <Box flexDirection="column" width={frameWidth}>
-      <Text dimColor>
-        {frameLine({
-          title: view === null ? 'тред' : view.title,
-          right: marks === '' ? null : marks,
-          width: frameWidth,
-          g,
-          top: true,
-        })}
-      </Text>
-      {lines.map((line, at) => (
-        <Row key={at} line={line} width={width} g={g} />
-      ))}
-      {Array.from({ length: filler }, (_, at) => (
-        <Row key={`пусто-${at}`} line={{ text: '' }} width={width} g={g} />
-      ))}
-      <Text dimColor>{frameLine({ title: null, width: frameWidth, g, top: false })}</Text>
+      {rows.slice(0, Math.max(0, height))}
     </Box>
   );
 }
