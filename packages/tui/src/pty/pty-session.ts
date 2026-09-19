@@ -32,9 +32,11 @@ export interface PtySession {
 }
 
 /** Минимальные размеры: node-pty на нулях ведёт себя непредсказуемо. */
+export const MIN_PTY = 2;
+
 const clampSize = (cols: number, rows: number): { cols: number; rows: number } => ({
-  cols: Math.max(2, Math.floor(cols)),
-  rows: Math.max(2, Math.floor(rows)),
+  cols: Math.max(MIN_PTY, Math.floor(cols)),
+  rows: Math.max(MIN_PTY, Math.floor(rows)),
 });
 
 /**

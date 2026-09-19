@@ -66,6 +66,12 @@ export interface ActionsOptions {
    * терминала, и события правее неё листают ленту, а не уходят агенту (6.3).
    */
   panelRight: number;
+  /**
+   * Ячеек рамки панели до экрана гостя: на столько же сдвинуты его первая
+   * колонка и строка, и на столько же правится координата клика, уходящего
+   * ему (план рамок, задача 6).
+   */
+  panelInset: number;
   /** `config.mouseCapture`: выключен — харнесс мышь не ловит вовсе (3.3). */
   mouseCapture: boolean;
   /**
@@ -101,8 +107,17 @@ export function useActions(options: ActionsOptions): ActionsState {
       ),
     [workRows, orders],
   );
-  const { work, session, sidebar, panelLeft, panelRight, mouseCapture, onKey, toggleSidebar } =
-    options;
+  const {
+    work,
+    session,
+    sidebar,
+    panelLeft,
+    panelRight,
+    panelInset,
+    mouseCapture,
+    onKey,
+    toggleSidebar,
+  } = options;
 
   const [navigating, setNavigating] = useState(false);
   const [awaiting, setAwaiting] = useState(false);
@@ -258,6 +273,7 @@ export function useActions(options: ActionsOptions): ActionsState {
     mouseCapture,
     panelLeft,
     panelRight,
+    panelInset,
     mouseTracking: panel.snapshot?.mouseTracking ?? 'none',
     onMouse,
     onScroll: panel.scroll,

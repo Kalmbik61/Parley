@@ -59,7 +59,9 @@ const card = (over: Partial<CardProps> = {}): CardProps => ({
 });
 
 const frameOf = (props: Partial<CardProps>): string =>
-  render(<Panel screen={undefined} card={card(props)} width={61} height={22} />).lastFrame() ?? '';
+  render(
+    <Panel screen={undefined} card={card(props)} width={61} height={22} navigating={false} />,
+  ).lastFrame() ?? '';
 
 describe('карточка панели (макеты §2)', () => {
   it('сессий нет — карточка объясняет, с чего начать', () => {

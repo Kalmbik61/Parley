@@ -11,7 +11,7 @@ import { defaultCodexRoot, defaultRoot, type SessionIndex, type WorkSession } fr
 import { Box, useApp } from 'ink';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { overlayCovers, OverlayHost, overlayRoom } from './components/overlay.js';
-import { cardFor, Panel } from './components/panel.js';
+import { cardFor, Panel, PANEL_FRAME } from './components/panel.js';
 import {
   Sidebar,
   SidebarOverlay,
@@ -22,6 +22,7 @@ import {
 } from './components/sidebar.js';
 import { StatusBar } from './components/status-bar.js';
 import { Thread } from './components/thread.js';
+import { MIN_PTY } from './pty/pty-session.js';
 import { workRunKey } from './pty/use-agent-pty.js';
 import { useActions } from './use-actions.js';
 import { activityWork, useActivity } from './use-activity.js';
@@ -114,11 +115,17 @@ export function App({
   // Рамка панели (план рамок, задача 6) съедает по колонке слева и справа и по
   // строке сверху и снизу; вычитаем её тут же, где уже вычтены колонки дока
   // треда — иначе размер до node-pty не дойдёт, и экран агента поедет.
+  //
+  // Пол — тот же `MIN_PTY`, что у `pty-session` и у буфера xterm: иначе на
+  // терминале в три строки гостю выставлялся бы один размер, а панель
+  // показывала бы другой, и его экран ушёл бы в никуда.
+  const guestCols = Math.max(MIN_PTY, bodyCols - 2 * PANEL_FRAME);
+  const guestRows = Math.max(MIN_PTY, panelRows - 2 * PANEL_FRAME);
   const panel = usePanel({
     projectPath,
     roots,
-    cols: Math.max(1, bodyCols - 2),
-    rows: Math.max(1, panelRows - 2),
+    cols: guestCols,
+    rows: guestRows,
     mouseCapture: config.mouseCapture,
     channel,
     onFail: fail,
@@ -220,6 +227,9 @@ export function App({
     panelLeft,
     // Без дока панель доходит до края терминала, и правее неё ничего нет (6.3).
     panelRight: panelLeft + bodyCols,
+    // Рамка панели: экран гостя начинается на колонку правее и строку ниже,
+    // и его координаты мыши надо сдвигать на неё (план рамок, задача 6).
+    panelInset: PANEL_FRAME,
     mouseCapture: config.mouseCapture,
     onKey: keyPressed,
     // Уже 60 колонок сайдбара нет вовсе: `b` открывает его оверлеем (решение №9).
@@ -287,8 +297,8 @@ export function App({
                 prefixName,
                 runKey !== null && panel.alive(runKey),
               )}
-              width={bodyCols}
-              height={panelRows}
+              width={guestCols}
+              height={guestRows}
               navigating={actions.navigating}
             />
           )}

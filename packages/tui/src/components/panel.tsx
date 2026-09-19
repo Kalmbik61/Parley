@@ -177,12 +177,20 @@ export interface PanelProps {
   /** Экран живого агента; `undefined` — панель показывает карточку. */
   screen: TerminalSnapshot | undefined;
   card: CardProps;
-  /** Внешние размеры вместе с рамкой: `Box` съедает по 2 на каждую ось (план рамок, задача 6). */
+  /**
+   * Размеры ЭКРАНА ГОСТЯ, без рамки: ровно те, что ушли в `node-pty`. Рамку
+   * панель добавляет к ним сама (план рамок, задача 6). Так у бюджета один
+   * источник: считать его вторым разом здесь — значит однажды разойтись
+   * с тем, что выставлено самому псевдотерминалу.
+   */
   width: number;
   height: number;
   /** Слушает ли панель ввод: рамка cyan, когда `false`, иначе dim — приём граней сайдбара (план рамок, задача 6). */
   navigating: boolean;
 }
+
+/** Рамка панели: по ячейке с каждой стороны. */
+export const PANEL_FRAME = 1;
 
 /**
  * Рамка по всем четырём сторонам через штатный `Box`: у панели, в отличие от
@@ -196,16 +204,16 @@ export function Panel({ screen, card, width, height, navigating }: PanelProps): 
   return (
     <Box
       flexDirection="column"
-      width={width}
-      height={height}
+      width={width + 2 * PANEL_FRAME}
+      height={height + 2 * PANEL_FRAME}
       borderStyle={g.ascii ? 'classic' : 'round'}
       borderColor={active ? 'cyan' : undefined}
       borderDimColor={!active}
     >
       {screen !== undefined ? (
-        <TerminalView snapshot={screen} height={height - 2} />
+        <TerminalView snapshot={screen} height={height} />
       ) : (
-        <Card card={card} width={width - 2} />
+        <Card card={card} width={width} />
       )}
     </Box>
   );

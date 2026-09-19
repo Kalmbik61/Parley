@@ -56,6 +56,12 @@ export interface PrefixInputOptions {
    * гостю, как раньше.
    */
   panelRight?: number;
+  /**
+   * Сколько ячеек занимает рамка панели до экрана гостя: его первая колонка и
+   * строка начинаются на столько же правее и ниже (план рамок, задача 6).
+   * Без этого клик уходил бы гостю со смещением на рамку.
+   */
+  panelInset?: number;
   /** Что просит гость: `none` — колесо листает наш скроллбэк. */
   mouseTracking?: MouseTracking;
   onMouse?: (event: MouseEvent) => void;
@@ -126,6 +132,7 @@ function routeMouse(event: MouseEvent, options: PrefixInputOptions): void {
   const {
     panelLeft = 0,
     panelRight,
+    panelInset = 0,
     mouseTracking = 'none',
     onMouse,
     onScroll,
@@ -146,9 +153,16 @@ function routeMouse(event: MouseEvent, options: PrefixInputOptions): void {
     if (lines !== 0) onThreadScroll?.(lines);
     return;
   }
-  // Гость считает колонки от своего левого края, а не от края терминала.
+  // Гость считает колонки и строки от своего левого верхнего угла, а не от края
+  // терминала: вычитаем и сайдбар, и рамку панели (план рамок, задача 6).
   if (mouseTracking !== 'none') {
-    toGuest(sgrSequence({ ...event, x: event.x - panelLeft }));
+    toGuest(
+      sgrSequence({
+        ...event,
+        x: event.x - panelLeft - panelInset,
+        y: event.y - panelInset,
+      }),
+    );
     return;
   }
   const lines = wheelLines(event);
