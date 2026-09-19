@@ -704,11 +704,19 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps): ReactNode {
             </Text>
           ) : (
             // Без рамки блока верхняя грань становится обычной dim-строкой с
-            // заголовком, а нижняя — просто пустой: рамку даёт сам оверлей
-            // (план рамок, задача 5, решение №5).
-            <Text key={row.key} dimColor>
-              {row.title === null ? '' : ` ${row.title}`}
-            </Text>
+            // заголовком, а нижняя — пустой (план рамок, задача 5, решение №5).
+            // Обе идут через `Row`, а не своим `Text`: он добивает строку до
+            // ширины и режет заголовок. Голый `<Text>` с пустой строкой Ink
+            // схлопывает в нулевую высоту, а длинный заголовок переносит на
+            // вторую строку и разрывает рамку оверлея.
+            <Row
+              key={row.key}
+              text={row.title === null ? '' : ` ${row.title}`}
+              width={content}
+              g={g}
+              navigating={navigating}
+              framed={false}
+            />
           )
         ) : (
           <Row

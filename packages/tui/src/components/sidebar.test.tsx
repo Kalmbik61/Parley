@@ -400,6 +400,46 @@ describe('Sidebar', () => {
     expect(lineWith(all, 'сессии ·')).toContain('сессии · Авторизация');
   });
 
+  // Грань-низ без заголовка рисовалась голым `<Text>` с пустой строкой, и Ink
+  // схлопывал её в нулевую высоту: оверлей выходил на две строки короче.
+  it('оверлей занимает всю запрошенную высоту, считая свою рамку', () => {
+    for (const height of [8, 10, 14]) {
+      const all = lines(
+        <SidebarOverlay
+          works={[work()]}
+          sessions={[item()]}
+          selectedWork="/dev/shop w-0001"
+          selectedSession="s-01"
+          width={26}
+          height={height}
+        />,
+      );
+      expect(all.filter((line) => line.trim() !== '')).toHaveLength(height + 2);
+    }
+  });
+
+  // Заголовок блока в оверлее шёл без усечения: Ink переносил его на вторую
+  // строку, и у переноса не было ни левой, ни правой грани рамки.
+  it('длинный заголовок блока в оверлее усекается, а не переносится', () => {
+    const all = lines(
+      <SidebarOverlay
+        works={[work({ title: 'Перенос платёжного провайдера на новый шлюз' })]}
+        sessions={[item()]}
+        selectedWork="/dev/shop w-0001"
+        selectedSession="s-01"
+        width={26}
+        height={10}
+      />,
+    );
+
+    const title = lineWith(all, 'сессии ·');
+    expect(title).toContain(glyphs().ellipsis);
+    // Рамку рисует оверлей: каждая непустая строка кончается её правым боком.
+    for (const line of all.filter((row) => row.trim() !== '')) {
+      expect(Array.from(line)).toHaveLength(28);
+    }
+  });
+
   it('длинный список сессий сворачивается в окно с липким заголовком', () => {
     const sessions = Array.from({ length: 20 }, (_, at) =>
       item({
