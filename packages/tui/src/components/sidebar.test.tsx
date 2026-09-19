@@ -501,6 +501,47 @@ describe('frameLine', () => {
       `╭${'─'.repeat(3)}╮`,
     );
   });
+
+  // Второе, правое поле верхней грани (план рамок, находка сверки: рамка треда):
+  // ярлык слева, короткая пометка у правого угла, горизонталь между ними.
+  it('правое поле встаёт у угла, ярлык остаётся слева', () => {
+    const line = frameLine({
+      title: 'тред · план',
+      right: '▤1',
+      width: 32,
+      g: glyphs(),
+      top: true,
+    });
+    expect(line).toHaveLength(32);
+    expect(line.startsWith('╭─ тред · план ')).toBe(true);
+    expect(line.endsWith(' ▤1 ─╮')).toBe(true);
+  });
+
+  it('без правого поля поведение прежнее', () => {
+    expect(frameLine({ title: 'работы', right: null, width: 26, g: glyphs(), top: true })).toBe(
+      frameLine({ title: 'работы', width: 26, g: glyphs(), top: true }),
+    );
+  });
+
+  it('нехватка места режет ярлык первым — правое поле не отдаёт ни знака', () => {
+    const line = frameLine({
+      title: 'тред · оченьдлинныйярлык',
+      right: '▤9 ↓12',
+      width: 20,
+      g: glyphs(),
+      top: true,
+    });
+    expect(line).toHaveLength(20);
+    expect(line).toContain(glyphs().ellipsis);
+    expect(line.endsWith('▤9 ↓12 ─╮')).toBe(true);
+    expect(line).not.toContain('оченьдлинныйярлык');
+  });
+
+  it('нижняя грань правое поле не несёт — низ остаётся глухим', () => {
+    expect(frameLine({ title: 'тред', right: '▤1', width: 26, g: glyphs(), top: false })).toBe(
+      `╰${'─'.repeat(24)}╯`,
+    );
+  });
 });
 
 // layout() собирает сайдбар двумя блоками с гранями (план рамок, задача 3).

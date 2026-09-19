@@ -111,7 +111,10 @@ export function App({
     overlayRoom: overlayRoom(rows),
     width: config.threadWidth,
   });
-  const bodyCols = thread.docked ? panelCols - thread.width - 1 : panelCols;
+  // Тред занимает `width + 2`, а не `width + 1`: у него своя рамка, и правая
+  // грань добавила вторую колонку сверх содержимого (план рамок, находка
+  // сверки: рамка треда). `threadFits` считает по тому же числу.
+  const bodyCols = thread.docked ? panelCols - thread.width - 2 : panelCols;
   // Рамка панели (план рамок, задача 6) съедает по колонке слева и справа и по
   // строке сверху и снизу; вычитаем её тут же, где уже вычтены колонки дока
   // треда — иначе размер до node-pty не дойдёт, и экран агента поедет.

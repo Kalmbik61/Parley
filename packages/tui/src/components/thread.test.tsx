@@ -3,11 +3,12 @@
  * непрочитанные и хвост ленты справа.
  */
 
+import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
 import { pinUnicodeGlyphs } from '../../test/glyphs-env.js';
 import { glyphs } from '../glyphs.js';
 import type { ThreadView } from '../thread-view.js';
-import { threadHead } from './thread.js';
+import { Thread, threadHead, threadMarks } from './thread.js';
 
 pinUnicodeGlyphs();
 
@@ -44,5 +45,80 @@ describe('threadHead (6.2, 6.3)', () => {
     expect(head).toHaveLength(20);
     expect(head).toContain('…');
     expect(head.endsWith('▤9')).toBe(true);
+  });
+});
+
+// Пометки вынесены из `threadHead` отдельной функцией: ей же теперь считает
+// правое поле верхней грани дока (план рамок, находка сверки: рамка треда).
+describe('threadMarks (6.2, 6.3)', () => {
+  it('сессии нет — пометок нет', () => {
+    expect(threadMarks(null, g)).toBe('');
+  });
+
+  it('непрочитанного и хвоста нет — пустая строка', () => {
+    expect(threadMarks(view(), g)).toBe('');
+  });
+
+  it('только непрочитанные', () => {
+    expect(threadMarks(view({ unread: 3 }), g)).toBe('▤3');
+  });
+
+  it('непрочитанные и хвост ленты вместе', () => {
+    expect(threadMarks(view({ unread: 3, below: 12 }), g)).toBe('▤3 ↓12');
+  });
+});
+
+/**
+ * Тред в рамке (план рамок, находка сверки: рамка треда): верхняя грань несёт
+ * заголовок и пометки, боковые — у каждой строки ленты, нижняя замыкает
+ * колонку. Приём и бюджет — те же, что у блоков сайдбара (`frameLine`).
+ */
+describe('Thread рамка (план рамок, находка сверки: рамка треда)', () => {
+  const sample = (): ThreadView =>
+    view({
+      unread: 3,
+      below: 12,
+      lines: [{ text: 'первое письмо' }, { text: 'второе письмо' }],
+    });
+
+  const frameOf = (props: { view: ThreadView | null; width: number; height: number }): string[] =>
+    (render(<Thread {...props} />).lastFrame() ?? '').split('\n');
+
+  it('верхняя грань несёт ярлык слева и пометки справа', () => {
+    const rows = frameOf({ view: sample(), width: 30, height: 8 });
+    const top = rows[0] ?? '';
+    expect(top).toHaveLength(32); // width + 2 — правая грань добавилась (задача 3).
+    expect(top.startsWith('╭─ тред · план ')).toBe(true);
+    expect(top).toContain('▤3 ↓12');
+    expect(top.endsWith('─╮')).toBe(true);
+  });
+
+  it('нижняя грань замыкает колонку', () => {
+    const rows = frameOf({ view: sample(), width: 30, height: 8 });
+    expect(rows.at(-1)).toBe(`╰${'─'.repeat(30)}╯`);
+  });
+
+  it('строки ленты идут между боковыми гранями шириной ровно тела', () => {
+    const rows = frameOf({ view: sample(), width: 30, height: 8 });
+    for (const row of rows.slice(1, -1)) {
+      expect(row.startsWith('│')).toBe(true);
+      expect(row.endsWith('│')).toBe(true);
+      expect(row).toHaveLength(32);
+    }
+    expect(rows.some((row) => row.includes('первое письмо'))).toBe(true);
+    expect(rows.some((row) => row.includes('второе письмо'))).toBe(true);
+  });
+
+  it('высота колонки остаётся ровно height строк — рамка забирает две, не одну', () => {
+    const rows = frameOf({ view: sample(), width: 30, height: 8 });
+    expect(rows).toHaveLength(8);
+  });
+
+  it('сессия не выбрана — рамка на месте, ярлык «тред» без пометок', () => {
+    const rows = frameOf({ view: null, width: 30, height: 8 });
+    expect(rows[0]?.startsWith('╭')).toBe(true);
+    expect(rows[0]).toContain('тред');
+    expect(rows[0]).not.toMatch(/[▤↓]/);
+    expect(rows.at(-1)).toBe(`╰${'─'.repeat(30)}╯`);
   });
 });

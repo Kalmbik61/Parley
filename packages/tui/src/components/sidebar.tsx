@@ -216,28 +216,46 @@ const pad = (used: number, width: number): string => ' '.repeat(Math.max(0, widt
  * Верхняя несёт заголовок «╭─ заголовок ─…─╮», нижняя — пустая «╰──…──╯».
  * Заголовок режется существующим `truncate` по `width - 5`: два угла, дефис
  * и два пробела вокруг подписи. Места нет — грань глухая.
+ *
+ * Второе, правое поле верхней грани — короткая пометка у угла, зеркально
+ * заголовку: «╭─ заголовок ────… пометка ─╮» (план рамок, находка сверки:
+ * рамка треда). Приоритет при нехватке места — у пометки: заголовок режется
+ * первым, без пометки тред врал бы про непрочитанное. Нижняя грань правое
+ * поле не несёт — как и заголовок, оно относится только к верхней.
  */
 export function frameLine({
   title,
+  right = null,
   width,
   g,
   top,
 }: {
   title: string | null;
+  right?: string | null;
   width: number;
   g: Glyphs;
   top: boolean;
 }): string {
   const left = top ? g.frame.topLeft : g.frame.bottomLeft;
-  const right = top ? g.frame.topRight : g.frame.bottomRight;
-  const plain = `${left}${g.frame.horizontal.repeat(Math.max(0, width - 2))}${right}`;
-  if (!top || title === null) return plain;
-  // Фиксированных символов пять: два угла, дефис после левого и пробелы вокруг
-  // заголовка. Не влезают — грань остаётся глухой, без подписи.
-  const room = width - 5;
-  if (room <= 0) return plain;
+  const cornerRight = top ? g.frame.topRight : g.frame.bottomRight;
+  const plain = `${left}${g.frame.horizontal.repeat(Math.max(0, width - 2))}${cornerRight}`;
+  if (!top) return plain;
+  // Хвост грани: без пометки — просто угол, с ней — те же пробел-дефис, что
+  // и слева у заголовка, зеркально.
+  const tail = right === null ? cornerRight : ` ${right} ${g.frame.horizontal}${cornerRight}`;
+  if (title === null) {
+    if (right === null) return plain;
+    return `${left}${g.frame.horizontal.repeat(Math.max(0, width - 1 - tail.length))}${tail}`;
+  }
+  // Фиксированных символов пять у заголовка одного, плюс три у пометки (два
+  // пробела и дефис вокруг неё — сам угол уже в `tail`). Не влезают — грань
+  // остаётся глухой под заголовок, пометка при этом никуда не девается.
+  const room = width - 5 - (right === null ? 0 : right.length + 3);
+  if (room <= 0) {
+    return `${left}${g.frame.horizontal.repeat(Math.max(0, width - 1 - tail.length))}${tail}`;
+  }
   const head = `${left}${g.frame.horizontal} ${truncate(title, room, g.ellipsis)} `;
-  return `${head}${g.frame.horizontal.repeat(width - head.length - 1)}${right}`;
+  return `${head}${g.frame.horizontal.repeat(Math.max(0, width - head.length - tail.length))}${tail}`;
 }
 
 /**

@@ -20,8 +20,6 @@ export interface Glyphs {
   blink: string;
   /** Живые субагенты в компактной строке: `⋮N` (макеты §6). */
   subagent: string;
-  /** Разделитель сайдбара и панели (макеты §6). */
-  divider: string;
   /** Непрочитанные сообщения: `▤N`. */
   mail: string;
   expanded: string;
@@ -66,7 +64,6 @@ const UNICODE: Glyphs = {
   failed: '✗',
   blink: '○',
   subagent: '⋮',
-  divider: '│',
   mail: '▤',
   expanded: '▾',
   collapsed: '▸',
@@ -98,7 +95,6 @@ const ASCII: Glyphs = {
   failed: 'x',
   blink: 'o',
   subagent: ':',
-  divider: '|',
   mail: '@',
   expanded: 'v',
   collapsed: '>',
