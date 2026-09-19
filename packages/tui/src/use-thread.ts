@@ -10,6 +10,7 @@
 
 import type { WorkEntry } from '@harnas/core';
 import { useCallback, useRef, useState } from 'react';
+import { PANEL_FRAME } from './components/panel.js';
 import { glyphs } from './glyphs.js';
 import { threadView, type ThreadView } from './thread-view.js';
 
@@ -19,9 +20,16 @@ import { threadView, type ThreadView } from './thread-view.js';
  */
 export const PANEL_MIN = 80;
 
-/** Влезает ли док: панель отдаёт тред с разделителем и остаётся не уже минимума. */
+/**
+ * Влезает ли док: панель отдаёт тред с разделителем, и то, что реально
+ * достаётся гостю — уже за вычетом рамки самой панели (`PANEL_FRAME`, план
+ * рамок, задача 6) — остаётся не уже минимума. Решать по числу до рамки
+ * нельзя: `app.tsx` вычитает её из `bodyCols` уже после этого решения, и гостю
+ * доставалось на `2 * PANEL_FRAME` меньше, чем обещал `PANEL_MIN` (находка
+ * сверки плана рамок).
+ */
 export const threadFits = (panelCols: number, width: number): boolean =>
-  panelCols - width - 1 >= PANEL_MIN;
+  panelCols - width - 1 - 2 * PANEL_FRAME >= PANEL_MIN;
 
 export interface ThreadOptions {
   /** Колонки панели агента без дока: из них и вычитается тред с разделителем. */
@@ -58,12 +66,7 @@ export interface ThreadState {
   viewOf: (entry: WorkEntry | undefined, sessionId: string | null) => ThreadView | null;
 }
 
-export function useThread({
-  panelCols,
-  height,
-  overlayRoom,
-  width,
-}: ThreadOptions): ThreadState {
+export function useThread({ panelCols, height, overlayRoom, width }: ThreadOptions): ThreadState {
   const [open, setOpen] = useState(false);
   // `null` — лента держится хвоста; иначе строки от начала и владелец группы,
   // которой это положение принадлежит (6.2, 6.3).

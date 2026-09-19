@@ -12,8 +12,9 @@ import { render } from 'ink-testing-library';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { pinUnicodeGlyphs } from '../test/glyphs-env.js';
+import { PANEL_FRAME } from './components/panel.js';
 import type { ThreadView } from './thread-view.js';
-import { useThread } from './use-thread.js';
+import { PANEL_MIN, threadFits, useThread } from './use-thread.js';
 
 pinUnicodeGlyphs();
 
@@ -123,9 +124,14 @@ function Probe({
   return <Text>{`${thread.open ? 'открыт' : 'закрыт'}|${where}|${view?.title ?? 'нет'}`}</Text>;
 }
 
-/** Панель 138 колонок без сайдбара: 111 из них — панели агента (макет 6.1). */
-const WIDE = 111;
-/** Тот же терминал в 120 колонок: панели остаётся 93, и док уже не влезает. */
+/**
+ * Панели агента (без сайдбара) — 113 колонок: у дока после рамки панели
+ * (`PANEL_FRAME`) гостю останется ровно 80 — минимум D21 (макет 6.1; рамка
+ * съедает ещё 2 колонки сверх дока и разделителя треда, находка сверки плана
+ * рамок).
+ */
+const WIDE = 113;
+/** Терминал уже, в 120 колонок: панели остаётся 93, и док уже не влезает. */
 const NARROW = 93;
 
 describe('useThread: правило дока (6.1, приёмка 8.19)', () => {
@@ -156,7 +162,7 @@ describe('useThread: правило дока (6.1, приёмка 8.19)', () => 
   });
 
   it('ширина треда из настроек двигает порог: 24 колонки докуются там, где 30 — нет', async () => {
-    const app = render(<Probe entry={entryWith([])} panelCols={105} width={24} />);
+    const app = render(<Probe entry={entryWith([])} panelCols={107} width={24} />);
     await settle();
 
     app.stdin.write('t');
@@ -182,6 +188,24 @@ describe('useThread: правило дока (6.1, приёмка 8.19)', () => 
     await settle();
     expect(app.lastFrame()).toBe('открыт|док|тред · план');
     app.unmount();
+  });
+});
+
+describe('threadFits: гость не уже PANEL_MIN, когда тред докован (находка сверки плана рамок)', () => {
+  it('на любой ширине, где док разрешён, гостю за вычетом рамки панели остаётся не меньше PANEL_MIN', () => {
+    // Инвариант, а не одна точка: приёмка `threadFits` уже трижды жила ровно на
+    // границе (план рамок). `panelCols - width - 1` — это `bodyCols` из
+    // `app.tsx`; рамку панели (`PANEL_FRAME`) с него снимает сам `app.tsx`
+    // ДО того, как отдать колонки гостю, — значит и здесь решение должно
+    // считаться по тому же числу, что действительно дойдёт до PTY.
+    for (let panelCols = 0; panelCols <= 240; panelCols += 1) {
+      for (const width of [24, 30, 40, 60, 90, 120]) {
+        if (!threadFits(panelCols, width)) continue;
+        const bodyCols = panelCols - width - 1;
+        const guestCols = bodyCols - 2 * PANEL_FRAME;
+        expect(guestCols).toBeGreaterThanOrEqual(PANEL_MIN);
+      }
+    }
   });
 });
 
