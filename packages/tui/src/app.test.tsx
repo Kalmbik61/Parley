@@ -1094,8 +1094,9 @@ describe('удаление сессии (3.2, макет 4.10)', () => {
       await waitFor2(async () => !(await pathExists(paths.dir)));
       expect((await readWorksIndex()).works).toEqual([]);
       await waitFor(() => (app.lastFrame() ?? '').includes('работа удалена'));
-      // Сайдбар пуст: ни работы, ни её сессий, снова первая строка `new`.
-      await waitFor(() => (app.lastFrame() ?? '').includes('new — первая сессия'));
+      // Сайдбар пуст: ни работы, ни её сессий, кнопка `new` наверху блока и
+      // подсказка о первой сессии под ней отдельной строкой (план рамок, задача 4).
+      await waitFor(() => (app.lastFrame() ?? '').includes('первая сессия'));
       expect(app.lastFrame()).not.toContain(workId);
     } finally {
       app.unmount();

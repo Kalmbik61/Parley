@@ -247,6 +247,54 @@ function Divider({ g, navigating }: { g: Glyphs; navigating: boolean }): ReactNo
   );
 }
 
+/**
+ * Текст кнопки `new` неизменен (план рамок, задача 4, решение №4): длинная
+ * подсказка «первая сессия» внутрь не идёт — она не влезла бы в плашку на
+ * узком сайдбаре 18, поэтому рисуется отдельной строкой снаружи.
+ */
+const NEW_BUTTON_TEXT = ' + new ';
+
+/**
+ * Фон плашки `new` под курсором — акцентный cyan вместо общего blackBright
+ * подсветки строк: кнопка отличима от обычного выбранного ряда (план рамок,
+ * задача 4). В ASCII-наборе, как и у общей подсветки, — reverse video.
+ */
+function buttonProps(
+  selected: boolean,
+  g: Glyphs,
+): { backgroundColor?: string; inverse?: boolean } {
+  if (!selected) return {};
+  return g.ascii ? { inverse: true } : { backgroundColor: 'cyan' };
+}
+
+/**
+ * Кнопка `new` — первая строка блока работ (план рамок, задача 4, решение №4):
+ * компактная плашка, фон только под текстом. В `Row` фон красит и добивку до
+ * ширины — здесь добивка фон не несёт нарочно: иначе на строке под курсором
+ * лёг бы фон на фон.
+ */
+function NewButton({
+  selected,
+  width,
+  g,
+  navigating,
+  divider,
+}: {
+  selected: boolean;
+  width: number;
+  g: Glyphs;
+  navigating: boolean;
+  divider: boolean;
+}): ReactNode {
+  return (
+    <Text wrap="truncate">
+      <Text {...buttonProps(selected, g)}>{NEW_BUTTON_TEXT}</Text>
+      {pad(NEW_BUTTON_TEXT.length, width)}
+      {divider && <Divider g={g} navigating={navigating} />}
+    </Text>
+  );
+}
+
 /** Простая строка сайдбара: текст слева, добивка до ширины, разделитель. */
 function Row({
   text,
@@ -420,6 +468,8 @@ type SidebarRow = { key: string; target: SidebarTarget | null } & (
   | { kind: 'text'; text: string; dim: boolean; selected: boolean }
   // Грань блока (план рамок, задача 3): цели у неё нет — под клик не попадает.
   | { kind: 'frame'; text: string }
+  // Кнопка `new` (план рамок, задача 4): цель та же `NEW_TARGET`, что и раньше.
+  | { kind: 'button'; selected: boolean }
 );
 
 /** Верхняя и нижняя грани у каждого из двух блоков сайдбара (план рамок, задача 3). */
@@ -455,10 +505,16 @@ function layout({
     text: frameLine({ title, width, g, top }),
   });
 
-  const top: SidebarRow[] = [];
+  // Кнопка `new` — первая строка блока работ, до самих работ (план рамок,
+  // задача 4): цель та же `NEW_TARGET`, курсор и клик ходят как раньше.
+  const top: SidebarRow[] = [
+    { kind: 'button', key: 'new', target: NEW_TARGET, selected: atCursor(NEW_TARGET) },
+  ];
   if (works.length === 0) {
     top.push(line('нет-работ', ' работ нет'));
-    top.push(line('new', ' new — первая сессия', false, atCursor(NEW_TARGET), NEW_TARGET));
+    // Подсказка — отдельная dim-строка под кнопкой, а не текст внутри неё:
+    // не поместилась бы в плашку на узком сайдбаре 18 (план рамок, задача 4).
+    top.push(line('подсказка-new', ' первая сессия'));
   } else {
     for (const work of works) {
       const target: SidebarTarget = { kind: 'work', key: work.key };
@@ -470,7 +526,6 @@ function layout({
         line(`${work.key} проект`, `   ${projectLine(work, width, g)}`, true, selected, target),
       );
     }
-    top.push(line('new', ' new', false, atCursor(NEW_TARGET), NEW_TARGET));
   }
 
   const selectedTitle = works.find((work) => work.key === selectedWork)?.title ?? null;
@@ -598,6 +653,15 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps): ReactNode {
             key={row.key}
             item={row.item}
             depth={row.depth}
+            selected={row.selected}
+            width={width}
+            g={g}
+            navigating={navigating}
+            divider={divider}
+          />
+        ) : row.kind === 'button' ? (
+          <NewButton
+            key={row.key}
             selected={row.selected}
             width={width}
             g={g}

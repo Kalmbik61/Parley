@@ -20,6 +20,25 @@ const highlighted = (line: string): boolean =>
 const cyan = (line: string): boolean =>
   line.includes('\u001B[36m') || line.includes('\u001B[38;5;6m');
 
+/** Фон cyan — акцент кнопки `new` под курсором, а не общий blackBright (план рамок, задача 4). */
+const accent = (line: string): boolean =>
+  line.includes('\u001B[46m') || line.includes('\u001B[48;5;6m');
+
+/**
+ * Обычных (без ANSI) символов сразу после первого сброса фона строки — до
+ * следующего управляющего кода. У компактной плашки кнопки там ещё остаётся
+ * добивка пробелами, у подсветки на всю ширину строки — уже ничего: фон
+ * тянется до самого разделителя (план рамок, задача 4).
+ */
+const plainAfterBackground = (line: string): number => {
+  const reset = '\u001B[49m';
+  const at = line.indexOf(reset);
+  if (at < 0) return -1;
+  const rest = line.slice(at + reset.length);
+  const next = rest.indexOf('\u001B');
+  return next < 0 ? rest.length : next;
+};
+
 /**
  * Строка-грань блока (план рамок, задача 3): рисуется обычным dim-текстом безо
  * всякого цвета по `navigating` — это задача 5. У остальных строк разделитель
@@ -107,10 +126,24 @@ describe('сайдбар: подсветка и режим навигации', 
 
   it('строка под курсором подсвечена наравне с выбранными (макет 1.5)', () => {
     const lines = frameOf(true, { kind: 'new', key: '' });
-    expect(highlighted(lineWith(lines, ' new'))).toBe(true);
+    // У кнопки свой акцент — cyan, а не общий blackBright (план рамок, задача 4).
+    expect(accent(lineWith(lines, ' new'))).toBe(true);
     // Курсор не отбирает подсветку у выбранной работы и её сессии.
     expect(highlighted(lineWith(lines, 'Авторизация'))).toBe(true);
     expect(highlighted(lineWith(lines, 'Платежи'))).toBe(false);
+  });
+
+  // Компактная плашка кнопки: фон только вокруг текста, а не на всю ширину
+  // строки, как у обычной подсветки выбранного ряда (план рамок, задача 4).
+  it('фон кнопки под курсором не тянется на всю ширину строки', () => {
+    const lines = frameOf(true, { kind: 'new', key: '' });
+    const button = lineWith(lines, ' new');
+    const selectedWork = lineWith(lines, 'Авторизация');
+
+    // За плашкой кнопки остаётся некрашеная добивка пробелами до разделителя.
+    expect(plainAfterBackground(button)).toBeGreaterThan(10);
+    // У обычной подсветки фон доходит до разделителя без зазора.
+    expect(plainAfterBackground(selectedWork)).toBe(0);
   });
 
   it('в режиме навигации разделитель становится cyan (макет 1.5)', () => {

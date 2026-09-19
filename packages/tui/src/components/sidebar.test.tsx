@@ -326,7 +326,8 @@ describe('Sidebar', () => {
     for (const line of all) if (!isFrameLine(line)) expect(dividerAt(line)).toBe(18);
   });
 
-  it('работ нет — верх сайдбара из двух строк', () => {
+  // Кнопка выше подсказки, а подсказка — своей строкой (план рамок, задача 4).
+  it('работ нет — кнопка, за ней «работ нет» и подсказка отдельной строкой', () => {
     const all = lines(
       <Sidebar
         works={[]}
@@ -338,8 +339,11 @@ describe('Sidebar', () => {
       />,
     );
 
+    expect(lineWith(all, '+ new')).toContain('+ new');
     expect(lineWith(all, 'работ нет')).toContain('работ нет');
-    expect(lineWith(all, 'первая')).toContain('new — первая сессия');
+    expect(lineWith(all, 'первая сессия')).toContain('первая сессия');
+    // Длинная подсказка больше не спрятана внутри кнопки.
+    expect(lineWith(all, '+ new')).not.toContain('первая сессия');
   });
 
   // Макет 1.3: место разделителя занимает рамка оверлея, а не знак усечения.
@@ -525,6 +529,65 @@ describe('Sidebar блоки с гранями', () => {
     expect(frames).toHaveLength(4);
     for (const line of frames) expect(dividerAt(line)).toBe(-1);
     for (const line of all.filter((line) => !isFrameLine(line))) expect(dividerAt(line)).toBe(26);
+  });
+});
+
+// Кнопка `new` наверху блока работ (план рамок, задача 4).
+describe('Кнопка new вверху блока работ', () => {
+  it('кнопка стоит первой строкой блока работ, до самих работ', () => {
+    const all = lines(
+      <Sidebar
+        works={[work(), work({ key: 'k2', number: 2, title: 'Платежи' })]}
+        sessions={[item()]}
+        selectedWork="/dev/shop w-0001"
+        selectedSession="s-01"
+        width={26}
+        height={14}
+      />,
+    );
+
+    const button = all.findIndex((line) => line.includes('+ new'));
+    const firstWork = all.findIndex((line) => line.includes('Авторизация'));
+    expect(button).toBeGreaterThanOrEqual(0);
+    expect(button).toBeLessThan(firstWork);
+  });
+
+  it('текст кнопки короткий, остальная ширина строки — обычная добивка пробелами', () => {
+    const all = lines(
+      <Sidebar
+        works={[work()]}
+        sessions={[item()]}
+        selectedWork="/dev/shop w-0001"
+        selectedSession="s-01"
+        width={26}
+        height={12}
+      />,
+    );
+
+    const row = lineWith(all, '+ new');
+    const before = row.slice(0, dividerAt(row));
+    // Плашка не растянута на всю ширину: перед разделителем — только текст
+    // кнопки и пустая добивка, а не всякий заполненный фон (план рамок, задача 4).
+    expect(before.trim()).toBe('+ new');
+    expect(before).toHaveLength(26);
+  });
+
+  // Без работ подсказка «первая сессия» не влезла бы в компактную плашку —
+  // остаётся отдельной строкой под кнопкой (план рамок, задача 4).
+  it('без работ кнопка и подсказка — разные строки', () => {
+    const all = lines(
+      <Sidebar
+        works={[]}
+        sessions={[]}
+        selectedWork={null}
+        selectedSession={null}
+        width={18}
+        height={8}
+      />,
+    );
+
+    expect(lineWith(all, '+ new')).not.toContain('первая сессия');
+    expect(all.some((line) => line.includes('первая сессия'))).toBe(true);
   });
 });
 
