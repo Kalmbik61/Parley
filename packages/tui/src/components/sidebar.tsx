@@ -210,7 +210,8 @@ const pad = (used: number, width: number): string => ' '.repeat(Math.max(0, widt
 /**
  * Строка-грань блока сайдбара, ровно `width` символов (план рамок, задача 2).
  * Верхняя несёт заголовок «╭─ заголовок ─…─╮», нижняя — пустая «╰──…──╯».
- * Заголовок режется существующим `truncate` по `width - 4`.
+ * Заголовок режется существующим `truncate` по `width - 5`: два угла, дефис
+ * и два пробела вокруг подписи. Места нет — грань глухая.
  */
 export function frameLine({
   title,
@@ -223,15 +224,16 @@ export function frameLine({
   g: Glyphs;
   top: boolean;
 }): string {
-  if (!top) {
-    return `${g.frame.bottomLeft}${g.frame.horizontal.repeat(Math.max(0, width - 2))}${g.frame.bottomRight}`;
-  }
-  const label = truncate(title ?? '', Math.max(0, width - 4), g.ellipsis);
-  const head = `${g.frame.topLeft}${g.frame.horizontal} ${label} `;
-  const tail = `${g.frame.horizontal.repeat(Math.max(0, width - head.length - 1))}${g.frame.topRight}`;
-  const line = `${head}${tail}`;
-  // Заголовок впритык к ширине: хвоста без запаса не хватает, режем по месту.
-  return line.length > width ? `${line.slice(0, width - 1)}${g.frame.topRight}` : line;
+  const left = top ? g.frame.topLeft : g.frame.bottomLeft;
+  const right = top ? g.frame.topRight : g.frame.bottomRight;
+  const plain = `${left}${g.frame.horizontal.repeat(Math.max(0, width - 2))}${right}`;
+  if (!top || title === null) return plain;
+  // Фиксированных символов пять: два угла, дефис после левого и пробелы вокруг
+  // заголовка. Не влезают — грань остаётся глухой, без подписи.
+  const room = width - 5;
+  if (room <= 0) return plain;
+  const head = `${left}${g.frame.horizontal} ${truncate(title, room, g.ellipsis)} `;
+  return `${head}${g.frame.horizontal.repeat(width - head.length - 1)}${right}`;
 }
 
 /** Разделитель сайдбара и панели; в режиме навигации — cyan и жирный (макет 1.5). */

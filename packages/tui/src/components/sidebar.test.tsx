@@ -406,6 +406,19 @@ describe('frameLine', () => {
       `╰${'─'.repeat(24)}╯`,
     );
   });
+
+  // Заголовок впритык к ширине занимал место пробела и упирался в угол.
+  it('усечённый заголовок сохраняет пробел перед углом', () => {
+    const line = frameLine({ title: 'сессии · Авторизация', width: 18, g: glyphs(), top: true });
+    expect(line).toHaveLength(18);
+    expect(line.endsWith(' ╮')).toBe(true);
+  });
+
+  it('без места под подпись грань остаётся глухой', () => {
+    expect(frameLine({ title: 'работы', width: 5, g: glyphs(), top: true })).toBe(
+      `╭${'─'.repeat(3)}╮`,
+    );
+  });
 });
 
 describe('branchOf', () => {
