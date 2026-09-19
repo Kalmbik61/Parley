@@ -20,6 +20,13 @@ const highlighted = (line: string): boolean =>
 const cyan = (line: string): boolean =>
   line.includes('\u001B[36m') || line.includes('\u001B[38;5;6m');
 
+/**
+ * Строка-грань блока (план рамок, задача 3): рисуется обычным dim-текстом безо
+ * всякого цвета по `navigating` — это задача 5. У остальных строк разделитель
+ * и его цвет не тронуты.
+ */
+const isFrame = (line: string): boolean => line.includes('╭') || line.includes('╰');
+
 function session(over: Partial<WorkSession> = {}): WorkSession {
   return {
     id: 's-01',
@@ -107,7 +114,13 @@ describe('сайдбар: подсветка и режим навигации', 
   });
 
   it('в режиме навигации разделитель становится cyan (макет 1.5)', () => {
-    expect(frameOf(true).every(cyan)).toBe(true);
+    // Грани блоков цвет по navigating не несут (тоже задача 5) — исключаем
+    // их из проверки, оставляя её в силе для всех обычных строк.
+    expect(
+      frameOf(true)
+        .filter((line) => !isFrame(line))
+        .every(cyan),
+    ).toBe(true);
     expect(frameOf(false).some(cyan)).toBe(false);
   });
 });

@@ -418,7 +418,12 @@ type SidebarRow = { key: string; target: SidebarTarget | null } & (
   | { kind: 'work'; work: SidebarWork; selected: boolean }
   | { kind: 'session'; item: SidebarSession; depth: number; selected: boolean }
   | { kind: 'text'; text: string; dim: boolean; selected: boolean }
+  // Грань блока (план рамок, задача 3): цели у неё нет — под клик не попадает.
+  | { kind: 'frame'; text: string }
 );
+
+/** Верхняя и нижняя грани у каждого из двух блоков сайдбара (план рамок, задача 3). */
+const FRAME_ROWS = 4;
 
 /**
  * Раскладка сайдбара сверху вниз: ровно `height` строк. Чистая — из неё же
@@ -442,6 +447,13 @@ function layout({
     selected = false,
     target: SidebarTarget | null = null,
   ): SidebarRow => ({ kind: 'text', key, text, dim, selected, target });
+  // Грань не кликабельна — цели у неё нет ни в клике мышью, ни в курсоре (§3, инвариант 2).
+  const frame = (key: string, title: string | null, top: boolean): SidebarRow => ({
+    kind: 'frame',
+    key,
+    target: null,
+    text: frameLine({ title, width, g, top }),
+  });
 
   const top: SidebarRow[] = [];
   if (works.length === 0) {
@@ -469,7 +481,8 @@ function layout({
   // у `pending` её нет (решение №7).
   const compact = chosen !== null && chosen.state !== 'pending';
 
-  const capacity = Math.max(0, height - top.length - 2);
+  // Бюджет окна сессий отдаёт 4 строки под грани обоих блоков (§3, инвариант 3).
+  const capacity = Math.max(0, height - top.length - FRAME_ROWS);
   let room = capacity - (compact ? 1 : 0);
   // Строки «… N выше / ниже» тоже занимают место (макет §5).
   if (ordered.length > room) room -= 2;
@@ -503,18 +516,18 @@ function layout({
 
   const visible = bottom.slice(0, capacity);
   const filler = Math.max(0, capacity - visible.length);
+  const sessionsTitle = selectedTitle === null ? 'сессии' : `сессии · ${selectedTitle}`;
 
   return [
-    ...top.slice(0, Math.max(0, height - 2)),
-    line('линейка', g.rule.repeat(width)),
-    line(
-      'заголовок',
-      selectedTitle === null
-        ? ' сессии'
-        : ` сессии · ${truncate(selectedTitle, Math.max(MIN_LABEL, width - 10), g.ellipsis)}`,
-    ),
+    // Блок работ: грань-верх с заголовком → работы → грань-низ (§3).
+    frame('грань-работы-верх', 'работы', true),
+    ...top.slice(0, Math.max(0, height - FRAME_ROWS)),
+    frame('грань-работы-низ', null, false),
+    // Блок сессий: грань-верх с заголовком «сессии · <работа>» → сессии → грань-низ (§3).
+    frame('грань-сессии-верх', sessionsTitle, true),
     ...visible,
     ...Array.from({ length: filler }, (_, at) => line(`пусто-${at}`, '')),
+    frame('грань-сессии-низ', null, false),
   ];
 }
 
@@ -586,6 +599,12 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps): ReactNode {
             navigating={navigating}
             divider={divider}
           />
+        ) : row.kind === 'frame' ? (
+          // Обычный dim-текст без разделителя: цвет по `navigating` и боковые
+          // грани у обычных строк — задача 5 (план рамок, §3, «что не делать»).
+          <Text key={row.key} dimColor>
+            {row.text}
+          </Text>
         ) : (
           <Row
             key={row.key}

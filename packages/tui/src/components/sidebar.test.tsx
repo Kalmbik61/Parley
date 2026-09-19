@@ -9,6 +9,7 @@ import {
   Sidebar,
   sidebarCursorRows,
   SidebarOverlay,
+  sidebarTargets,
   sidebarWidth,
   stepCursor,
   type SidebarSession,
@@ -79,6 +80,12 @@ const lineWith = (all: readonly string[], text: string): string =>
 /** Колонка разделителя `│` — она же ширина содержимого сайдбара. */
 const dividerAt = (line: string): number => Array.from(line).indexOf('│');
 
+/** Строка-грань блока (план рамок, задача 3): начинается с верхнего или нижнего угла. */
+const isFrameLine = (line: string): boolean => {
+  const g = glyphs();
+  return line.startsWith(g.frame.topLeft) || line.startsWith(g.frame.bottomLeft);
+};
+
 describe('Sidebar', () => {
   // Чек-лист 22.
   it('ширины 26, 18 и скрытый сайдбар считаются по ширине терминала', () => {
@@ -117,8 +124,9 @@ describe('Sidebar', () => {
     // Дочерняя сессия — отступом и глифом `└` (макет 1.1).
     expect(lineWith(all, 'ревью')).toContain('└ ●');
 
-    // Каждая строка сайдбара кончается разделителем на 27-й колонке.
-    for (const line of all) expect(dividerAt(line)).toBe(26);
+    // Каждая обычная строка сайдбара кончается разделителем на 27-й колонке;
+    // строки-грани (план рамок, задача 3) разделителя не несут — своя граница.
+    for (const line of all) if (!isFrameLine(line)) expect(dividerAt(line)).toBe(26);
   });
 
   it('у работы без сессий точка не рисуется (решение №6)', () => {
@@ -315,7 +323,7 @@ describe('Sidebar', () => {
     expect(compact).toContain('▤1');
     expect(compact).toContain('⋮1');
 
-    for (const line of all) expect(dividerAt(line)).toBe(18);
+    for (const line of all) if (!isFrameLine(line)) expect(dividerAt(line)).toBe(18);
   });
 
   it('работ нет — верх сайдбара из двух строк', () => {
@@ -335,6 +343,9 @@ describe('Sidebar', () => {
   });
 
   // Макет 1.3: место разделителя занимает рамка оверлея, а не знак усечения.
+  // Высота 10, а не 8: две дополнительные грани блока работ (план рамок, задача 3)
+  // отъедают чистых 2 строки бюджета — без запаса единственная сессия сама
+  // попала бы в окно с «… N ниже», что тут ни при чём.
   it('в оверлее строки кончаются рамкой без своего разделителя и без «…»', () => {
     const all = lines(
       <SidebarOverlay
@@ -343,7 +354,7 @@ describe('Sidebar', () => {
         selectedWork="/dev/shop w-0001"
         selectedSession="s-01"
         width={26}
-        height={8}
+        height={10}
       />,
     );
 
@@ -418,6 +429,86 @@ describe('frameLine', () => {
     expect(frameLine({ title: 'работы', width: 5, g: glyphs(), top: true })).toBe(
       `╭${'─'.repeat(3)}╮`,
     );
+  });
+});
+
+// layout() собирает сайдбар двумя блоками с гранями (план рамок, задача 3).
+describe('Sidebar блоки с гранями', () => {
+  const twoWorks = [work(), work({ key: 'k2', number: 2, title: 'Платежи' })];
+
+  it('строки граней не ломают соответствие строки и цели клика', () => {
+    const props = {
+      works: twoWorks,
+      sessions: [item()],
+      selectedWork: '/dev/shop w-0001',
+      selectedSession: 's-01',
+      width: 26,
+      height: 14,
+    };
+    const targets = sidebarTargets(props);
+    const all = lines(<Sidebar {...props} />);
+
+    // Грань — там, где цели нет.
+    expect(targets[0]).toBeNull();
+    expect(all[0]).toContain('╭');
+    // Цель строки работы совпадает с её номером сверху.
+    const at = all.findIndex((line) => line.includes('Авторизация'));
+    expect(targets[at]).toEqual({ kind: 'work', key: '/dev/shop w-0001' });
+  });
+
+  it('высота сайдбара остаётся ровно height при разных значениях', () => {
+    const base = {
+      works: twoWorks,
+      sessions: [item()],
+      selectedWork: '/dev/shop w-0001',
+      selectedSession: 's-01',
+      width: 26,
+    };
+    expect(sidebarTargets({ ...base, height: 24 })).toHaveLength(24);
+    expect(sidebarTargets({ ...base, height: 14 })).toHaveLength(14);
+    expect(sidebarTargets({ ...base, height: 10 })).toHaveLength(10);
+  });
+
+  it('оба блока собраны гранью-верхом с заголовком, гранью-низом и без старой линейки', () => {
+    const all = lines(
+      <Sidebar
+        works={[work()]}
+        sessions={[item()]}
+        selectedWork="/dev/shop w-0001"
+        selectedSession="s-01"
+        width={26}
+        height={14}
+      />,
+    );
+
+    const frames = all.filter(isFrameLine);
+    // Две грани у блока работ, две — у блока сессий (§3, инвариант 3).
+    expect(frames).toHaveLength(4);
+    expect(frames[0]).toContain('работы');
+    expect(frames[2]).toContain('сессии · Авторизация');
+    // Нижние грани заголовка не несут.
+    expect(frames[1]).not.toContain('работы');
+    expect(frames[3]).not.toContain('сессии');
+    // Старая отдельная строка-линейка `────…` (без заголовка, вне грани) исчезла.
+    expect(all.some((line) => line === glyphs().rule.repeat(26))).toBe(false);
+  });
+
+  it('грани блоков разделителя не несут — у обычных строк он остаётся', () => {
+    const all = lines(
+      <Sidebar
+        works={[work()]}
+        sessions={[item()]}
+        selectedWork="/dev/shop w-0001"
+        selectedSession="s-01"
+        width={26}
+        height={14}
+      />,
+    );
+
+    const frames = all.filter(isFrameLine);
+    expect(frames).toHaveLength(4);
+    for (const line of frames) expect(dividerAt(line)).toBe(-1);
+    for (const line of all.filter((line) => !isFrameLine(line))) expect(dividerAt(line)).toBe(26);
   });
 });
 
