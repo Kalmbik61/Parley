@@ -518,7 +518,7 @@ function layout({
   const filler = Math.max(0, capacity - visible.length);
   const sessionsTitle = selectedTitle === null ? 'сессии' : `сессии · ${selectedTitle}`;
 
-  return [
+  const rows: SidebarRow[] = [
     // Блок работ: грань-верх с заголовком → работы → грань-низ (§3).
     frame('грань-работы-верх', 'работы', true),
     ...top.slice(0, Math.max(0, height - FRAME_ROWS)),
@@ -529,6 +529,11 @@ function layout({
     ...Array.from({ length: filler }, (_, at) => line(`пусто-${at}`, '')),
     frame('грань-сессии-низ', null, false),
   ];
+  // Четыре грани встают в результат безусловно, и на высоте меньше четырёх их
+  // одних больше, чем места. Режем по высоте: картинка на таком экране всё
+  // равно вырожденная, а вот контракт «ровно `height` строк» нарушать нельзя —
+  // на нём стоит попадание клика (`use-actions.ts:229`).
+  return rows.slice(0, Math.max(0, height));
 }
 
 /**

@@ -469,6 +469,22 @@ describe('Sidebar блоки с гранями', () => {
     expect(sidebarTargets({ ...base, height: 10 })).toHaveLength(10);
   });
 
+  // Четыре грани не влезают в высоту меньше четырёх, а `prefix b` на терминале
+  // в 5–7 строк открывает оверлей ровно с `height` 3 (`app.tsx:259`). Строк
+  // должно остаться ровно столько, сколько места: на длине массива стоит клик.
+  it('на вырожденной высоте раскладка не перерастает отведённое место', () => {
+    const base = {
+      works: [work()],
+      sessions: [],
+      selectedWork: '/dev/shop w-0001',
+      selectedSession: null,
+      width: 26,
+    };
+    for (const height of [0, 1, 2, 3, 4, 5]) {
+      expect(sidebarTargets({ ...base, height })).toHaveLength(height);
+    }
+  });
+
   it('оба блока собраны гранью-верхом с заголовком, гранью-низом и без старой линейки', () => {
     const all = lines(
       <Sidebar
