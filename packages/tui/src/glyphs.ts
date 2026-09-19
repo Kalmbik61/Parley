@@ -47,6 +47,15 @@ export interface Glyphs {
   quote: string;
   /** Запасной набор: подсветка выбора в нём — reverse video (6.1). */
   ascii: boolean;
+  /** Грани рамок зон (план рамок, задача 1); в ASCII-наборе — `+-|`. */
+  frame: {
+    topLeft: string;
+    topRight: string;
+    bottomLeft: string;
+    bottomRight: string;
+    horizontal: string;
+    vertical: string;
+  };
 }
 
 const UNICODE: Glyphs = {
@@ -71,6 +80,14 @@ const UNICODE: Glyphs = {
   arrow: '→',
   quote: '▏',
   ascii: false,
+  frame: {
+    topLeft: '╭',
+    topRight: '╮',
+    bottomLeft: '╰',
+    bottomRight: '╯',
+    horizontal: '─',
+    vertical: '│',
+  },
 };
 
 const ASCII: Glyphs = {
@@ -95,6 +112,14 @@ const ASCII: Glyphs = {
   arrow: '->',
   quote: '|',
   ascii: true,
+  frame: {
+    topLeft: '+',
+    topRight: '+',
+    bottomLeft: '+',
+    bottomRight: '+',
+    horizontal: '-',
+    vertical: '|',
+  },
 };
 
 /**

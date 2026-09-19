@@ -83,6 +83,21 @@ describe('statusColor', () => {
   });
 });
 
+describe('frame', () => {
+  it('несёт грани рамки в обоих наборах', () => {
+    applyGlyphsConfig(false);
+    expect(glyphs().frame).toEqual({
+      topLeft: '╭', topRight: '╮', bottomLeft: '╰', bottomRight: '╯',
+      horizontal: '─', vertical: '│',
+    });
+    applyGlyphsConfig(true);
+    expect(glyphs().frame).toEqual({
+      topLeft: '+', topRight: '+', bottomLeft: '+', bottomRight: '+',
+      horizontal: '-', vertical: '|',
+    });
+  });
+});
+
 describe('ширина глифов', () => {
   it('каждый Unicode-глиф занимает одну колонку по меркам Ink (string-width)', async () => {
     // Ink режет строки по string-width, а бюджеты списков считают String.length:
