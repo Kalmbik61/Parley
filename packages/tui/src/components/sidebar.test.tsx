@@ -77,8 +77,12 @@ const lines = (node: Parameters<typeof render>[0]): string[] =>
 const lineWith = (all: readonly string[], text: string): string =>
   all.find((line) => line.includes(text)) ?? '';
 
-/** Колонка разделителя `│` — она же ширина содержимого сайдбара. */
-const dividerAt = (line: string): number => Array.from(line).indexOf('│');
+/**
+ * Колонка правой грани блока: вертикаль у обычных строк, угол — у граней.
+ * Вертикаль есть и слева (план рамок, задача 5), поэтому берём последнее
+ * вхождение — оно всегда правое.
+ */
+const rightFrameAt = (line: string): number => Array.from(line).lastIndexOf('│');
 
 /** Строка-грань блока (план рамок, задача 3): начинается с верхнего или нижнего угла. */
 const isFrameLine = (line: string): boolean => {
@@ -124,9 +128,10 @@ describe('Sidebar', () => {
     // Дочерняя сессия — отступом и глифом `└` (макет 1.1).
     expect(lineWith(all, 'ревью')).toContain('└ ●');
 
-    // Каждая обычная строка сайдбара кончается разделителем на 27-й колонке;
-    // строки-грани (план рамок, задача 3) разделителя не несут — своя граница.
-    for (const line of all) if (!isFrameLine(line)) expect(dividerAt(line)).toBe(26);
+    // Каждая строка кончается правой гранью блока на 26-й колонке: у обычных
+    // строк — вертикаль, у верхней и нижней граней блока — угол. Разделителя
+    // больше нет — грань встаёт на его прежнее место (план рамок, задача 5).
+    for (const line of all) expect(Array.from(line)[25]).toMatch(/[│╮╯]/);
   });
 
   it('у работы без сессий точка не рисуется (решение №6)', () => {
@@ -179,14 +184,16 @@ describe('Sidebar', () => {
     expect(row).toContain('idle');
     expect(row).toContain('…');
     expect(row).toContain('иссле');
-    expect(dividerAt(row)).toBe(26);
+    expect(rightFrameAt(row)).toBe(25);
 
     const title = lineWith(all, 'Перенос');
     expect(title).toContain('…');
-    expect(dividerAt(title)).toBe(26);
+    expect(rightFrameAt(title)).toBe(25);
   });
 
   // Чек-лист 23, нижняя граница: места нет вовсе, а ярлык всё равно 4 знака.
+  // Ширина 11, а не 9: боковые грани (план рамок, задача 5) забирают 2 колонки
+  // содержимого, и именно на content = 9 приходится прежняя крайняя граница.
   it('на экстремально узкой строке ярлык — 4 знака, буква состояния на месте', () => {
     const all = lines(
       <Sidebar
@@ -194,7 +201,7 @@ describe('Sidebar', () => {
         sessions={[item({ session: session({ label: 'исследовать миграции' }), state: 'blocked' })]}
         selectedWork="/dev/shop w-0001"
         selectedSession="s-01"
-        width={9}
+        width={11}
         height={8}
       />,
     );
@@ -205,7 +212,7 @@ describe('Sidebar', () => {
     expect(row).not.toContain('иссл');
     // Буква состояния не отбрасывается никогда (макет 1.2).
     expect(row).toContain('b');
-    expect(dividerAt(row)).toBe(9);
+    expect(rightFrameAt(row)).toBe(10);
   });
 
   // Чек-лист 26.
@@ -229,7 +236,7 @@ describe('Sidebar', () => {
     expect(compact).toContain('12м');
     expect(compact).toContain('▤2');
     expect(compact).toContain('⋮1');
-    expect(dividerAt(compact)).toBe(26);
+    expect(rightFrameAt(compact)).toBe(25);
 
     // Под невыбранной сессией счётчиков нет (макет §5).
     expect(all.some((line) => line.includes('⋮4'))).toBe(false);
@@ -323,7 +330,8 @@ describe('Sidebar', () => {
     expect(compact).toContain('▤1');
     expect(compact).toContain('⋮1');
 
-    for (const line of all) if (!isFrameLine(line)) expect(dividerAt(line)).toBe(18);
+    // Та же правая грань на узком сайдбаре — на 18-й колонке (план рамок, задача 5).
+    for (const line of all) expect(Array.from(line)[17]).toMatch(/[│╮╯]/);
   });
 
   // Кнопка выше подсказки, а подсказка — своей строкой (план рамок, задача 4).
@@ -371,6 +379,25 @@ describe('Sidebar', () => {
     }
     // Точка работы стоит на своём месте и рамкой не съедена (макет 1.1).
     expect(lineWith(all, 'Авторизация')).toContain('●');
+  });
+
+  // Оверлей рисует рамку сам — вложенных рамок у блоков внутри быть не должно
+  // (план рамок, задача 5, решение №5).
+  it('внутри оверлея своих граней у блоков нет, заголовки — обычным текстом', () => {
+    const all = lines(
+      <SidebarOverlay
+        works={[work()]}
+        sessions={[item()]}
+        selectedWork="/dev/shop w-0001"
+        selectedSession="s-01"
+        width={26}
+        height={10}
+      />,
+    );
+
+    expect(all.some(isFrameLine)).toBe(false);
+    expect(lineWith(all, 'работы')).toContain('работы');
+    expect(lineWith(all, 'сессии ·')).toContain('сессии · Авторизация');
   });
 
   it('длинный список сессий сворачивается в окно с липким заголовком', () => {
@@ -527,8 +554,9 @@ describe('Sidebar блоки с гранями', () => {
 
     const frames = all.filter(isFrameLine);
     expect(frames).toHaveLength(4);
-    for (const line of frames) expect(dividerAt(line)).toBe(-1);
-    for (const line of all.filter((line) => !isFrameLine(line))) expect(dividerAt(line)).toBe(26);
+    for (const line of frames) expect(rightFrameAt(line)).toBe(-1);
+    for (const line of all.filter((line) => !isFrameLine(line)))
+      expect(rightFrameAt(line)).toBe(25);
   });
 });
 
@@ -565,11 +593,11 @@ describe('Кнопка new вверху блока работ', () => {
     );
 
     const row = lineWith(all, '+ new');
-    const before = row.slice(0, dividerAt(row));
-    // Плашка не растянута на всю ширину: перед разделителем — только текст
-    // кнопки и пустая добивка, а не всякий заполненный фон (план рамок, задача 4).
-    expect(before.trim()).toBe('+ new');
-    expect(before).toHaveLength(26);
+    // Между боковыми гранями — только текст кнопки и пустая добивка, а не
+    // всякий заполненный фон (план рамок, задача 4; боковые грани — задача 5).
+    const inner = row.slice(1, rightFrameAt(row));
+    expect(inner.trim()).toBe('+ new');
+    expect(inner).toHaveLength(24);
   });
 
   // Без работ подсказка «первая сессия» не влезла бы в компактную плашку —

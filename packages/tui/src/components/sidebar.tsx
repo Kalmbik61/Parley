@@ -201,8 +201,12 @@ export interface SidebarProps {
   navigating?: boolean;
   /** Курсор режима навигации: его строка подсвечена наравне с выбранными (3.2). */
   cursor?: SidebarTarget | null;
-  /** Свой разделитель справа; в оверлее его место занимает рамка (макет 1.3). */
-  divider?: boolean;
+  /**
+   * Рамки блоков и боковые грани сайдбара; в оверлее рамку даёт сам оверлей —
+   * `framed={false}` убирает и грани блоков, и боковые вертикали, а заголовки
+   * блоков остаются обычными строками (план рамок, задача 5, решение №5).
+   */
+  framed?: boolean;
 }
 
 const pad = (used: number, width: number): string => ' '.repeat(Math.max(0, width - used));
@@ -236,15 +240,17 @@ export function frameLine({
   return `${head}${g.frame.horizontal.repeat(width - head.length - 1)}${right}`;
 }
 
-/** Разделитель сайдбара и панели; в режиме навигации — cyan и жирный (макет 1.5). */
-function Divider({ g, navigating }: { g: Glyphs; navigating: boolean }): ReactNode {
-  return navigating ? (
-    <Text bold color="cyan">
-      {g.divider}
-    </Text>
-  ) : (
-    <Text dimColor>{g.divider}</Text>
-  );
+/**
+ * Цвет граней блока по активности: `navigating` — bold cyan, иначе dim. Ровно
+ * приём, которым раньше красился разделитель `Divider` (план рамок, задача 5).
+ */
+function frameColor(navigating: boolean): { bold?: boolean; color?: string; dimColor?: boolean } {
+  return navigating ? { bold: true, color: 'cyan' } : { dimColor: true };
+}
+
+/** Боковая грань блока: вертикаль слева и справа у каждой обычной строки (§3, §5). */
+function FrameEdge({ g, navigating }: { g: Glyphs; navigating: boolean }): ReactNode {
+  return <Text {...frameColor(navigating)}>{g.frame.vertical}</Text>;
 }
 
 /**
@@ -278,30 +284,31 @@ function NewButton({
   width,
   g,
   navigating,
-  divider,
+  framed,
 }: {
   selected: boolean;
   width: number;
   g: Glyphs;
   navigating: boolean;
-  divider: boolean;
+  framed: boolean;
 }): ReactNode {
   return (
     <Text wrap="truncate">
+      {framed && <FrameEdge g={g} navigating={navigating} />}
       <Text {...buttonProps(selected, g)}>{NEW_BUTTON_TEXT}</Text>
       {pad(NEW_BUTTON_TEXT.length, width)}
-      {divider && <Divider g={g} navigating={navigating} />}
+      {framed && <FrameEdge g={g} navigating={navigating} />}
     </Text>
   );
 }
 
-/** Простая строка сайдбара: текст слева, добивка до ширины, разделитель. */
+/** Простая строка сайдбара: боковые грани, текст слева, добивка до ширины. */
 function Row({
   text,
   width,
   g,
   navigating,
-  divider,
+  framed,
   selected = false,
   dim = true,
 }: {
@@ -309,17 +316,18 @@ function Row({
   width: number;
   g: Glyphs;
   navigating: boolean;
-  divider: boolean;
+  framed: boolean;
   selected?: boolean;
   dim?: boolean;
 }): ReactNode {
   return (
     <Text wrap="truncate">
+      {framed && <FrameEdge g={g} navigating={navigating} />}
       <Text {...selectionProps(selected, g)}>
         <Text dimColor={dim}>{truncate(text, width, g.ellipsis)}</Text>
         {pad(text.length, width)}
       </Text>
-      {divider && <Divider g={g} navigating={navigating} />}
+      {framed && <FrameEdge g={g} navigating={navigating} />}
     </Text>
   );
 }
@@ -331,14 +339,14 @@ function WorkRow({
   width,
   g,
   navigating,
-  divider,
+  framed,
 }: {
   work: SidebarWork;
   selected: boolean;
   width: number;
   g: Glyphs;
   navigating: boolean;
-  divider: boolean;
+  framed: boolean;
 }): ReactNode {
   const head = ` ${work.number === null ? '' : `${work.number} `}`;
   // Точка стоит на предпоследней колонке, последняя всегда пустая (макет 1.1).
@@ -346,13 +354,14 @@ function WorkRow({
 
   return (
     <Text wrap="truncate">
+      {framed && <FrameEdge g={g} navigating={navigating} />}
       <Text {...selectionProps(selected, g)}>
         {head}
         {title}
         {pad(head.length + title.length + 2, width)}
         {work.state === null ? ' ' : <ActivityDot state={work.state} g={g} />}{' '}
       </Text>
-      {divider && <Divider g={g} navigating={navigating} />}
+      {framed && <FrameEdge g={g} navigating={navigating} />}
     </Text>
   );
 }
@@ -377,7 +386,7 @@ function SessionRow({
   width,
   g,
   navigating,
-  divider,
+  framed,
 }: {
   item: SidebarSession;
   depth: number;
@@ -385,7 +394,7 @@ function SessionRow({
   width: number;
   g: Glyphs;
   navigating: boolean;
-  divider: boolean;
+  framed: boolean;
 }): ReactNode {
   const indent = ' '.repeat(1 + depth * 2);
   const child = depth > 0 ? `${g.child} ` : '';
@@ -400,6 +409,7 @@ function SessionRow({
 
   return (
     <Text wrap="truncate">
+      {framed && <FrameEdge g={g} navigating={navigating} />}
       <Text {...selectionProps(selected, g)}>
         {indent}
         <Text dimColor>{child}</Text>
@@ -408,7 +418,7 @@ function SessionRow({
         {pad(head + label.length + tail.length + 1, width)}
         <Text {...dotColor(item.state)}>{tail}</Text>{' '}
       </Text>
-      {divider && <Divider g={g} navigating={navigating} />}
+      {framed && <FrameEdge g={g} navigating={navigating} />}
     </Text>
   );
 }
@@ -467,7 +477,9 @@ type SidebarRow = { key: string; target: SidebarTarget | null } & (
   | { kind: 'session'; item: SidebarSession; depth: number; selected: boolean }
   | { kind: 'text'; text: string; dim: boolean; selected: boolean }
   // Грань блока (план рамок, задача 3): цели у неё нет — под клик не попадает.
-  | { kind: 'frame'; text: string }
+  // `title` нужен рендеру: без рамок (`framed={false}`) заголовок идёт обычной
+  // строкой вместо верхней грани, а не глухим текстом (план рамок, задача 5).
+  | { kind: 'frame'; text: string; title: string | null }
   // Кнопка `new` (план рамок, задача 4): цель та же `NEW_TARGET`, что и раньше.
   | { kind: 'button'; selected: boolean }
 );
@@ -487,8 +499,13 @@ function layout({
   width,
   height,
   cursor = null,
+  framed = true,
 }: SidebarProps): SidebarRow[] {
   const g = glyphs();
+  // Боковые грани отъедают по колонке слева и справа; без них (`framed={false}`,
+  // оверлей рисует рамку сам) содержимому остаётся вся ширина (план рамок,
+  // задача 5, бюджет места).
+  const content = framed ? width - 2 : width;
   const atCursor = (target: SidebarTarget | null): boolean => sameTarget(cursor, target);
   const line = (
     key: string,
@@ -502,6 +519,7 @@ function layout({
     kind: 'frame',
     key,
     target: null,
+    title,
     text: frameLine({ title, width, g, top }),
   });
 
@@ -521,9 +539,9 @@ function layout({
       const selected = work.key === selectedWork || atCursor(target);
       top.push({ kind: 'work', key: work.key, work, selected, target });
       // Вторая строка отбрасывается у `done`-работ и на узком сайдбаре (§7).
-      if (work.done || width <= NARROW) continue;
+      if (work.done || content <= NARROW) continue;
       top.push(
-        line(`${work.key} проект`, `   ${projectLine(work, width, g)}`, true, selected, target),
+        line(`${work.key} проект`, `   ${projectLine(work, content, g)}`, true, selected, target),
       );
     }
   }
@@ -561,7 +579,13 @@ function layout({
       // Компактная строка принадлежит выбранной сессии, а не курсору (решение №7).
       if (!chosenRow || !compact) continue;
       bottom.push(
-        line(`${item.session.id} метрики`, `   ${compactLine(item, width, g)}`, true, true, target),
+        line(
+          `${item.session.id} метрики`,
+          `   ${compactLine(item, content, g)}`,
+          true,
+          true,
+          target,
+        ),
       );
     }
     if (end < ordered.length) {
@@ -632,21 +656,26 @@ export function stepCursor(
 }
 
 export const Sidebar = memo(function Sidebar(props: SidebarProps): ReactNode {
-  const { width, navigating = false, divider = true } = props;
+  const { width, navigating = false, framed = true } = props;
   const g = glyphs();
+  // Боковые грани отъедают по колонке слева и справа; без них (оверлей рисует
+  // рамку сам) обычные строки занимают всю ширину, как раньше (план рамок,
+  // задача 5, бюджет места). Общая ширина строки остаётся `width` в обоих
+  // случаях — разделителя, добавлявшего лишнюю колонку, больше нет (решение №6).
+  const content = framed ? width - 2 : width;
 
   return (
-    <Box flexDirection="column" width={width + (divider ? 1 : 0)}>
+    <Box flexDirection="column" width={width}>
       {layout(props).map((row) =>
         row.kind === 'work' ? (
           <WorkRow
             key={row.key}
             work={row.work}
             selected={row.selected}
-            width={width}
+            width={content}
             g={g}
             navigating={navigating}
-            divider={divider}
+            framed={framed}
           />
         ) : row.kind === 'session' ? (
           <SessionRow
@@ -654,34 +683,41 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps): ReactNode {
             item={row.item}
             depth={row.depth}
             selected={row.selected}
-            width={width}
+            width={content}
             g={g}
             navigating={navigating}
-            divider={divider}
+            framed={framed}
           />
         ) : row.kind === 'button' ? (
           <NewButton
             key={row.key}
             selected={row.selected}
-            width={width}
+            width={content}
             g={g}
             navigating={navigating}
-            divider={divider}
+            framed={framed}
           />
         ) : row.kind === 'frame' ? (
-          // Обычный dim-текст без разделителя: цвет по `navigating` и боковые
-          // грани у обычных строк — задача 5 (план рамок, §3, «что не делать»).
-          <Text key={row.key} dimColor>
-            {row.text}
-          </Text>
+          framed ? (
+            <Text key={row.key} {...frameColor(navigating)}>
+              {row.text}
+            </Text>
+          ) : (
+            // Без рамки блока верхняя грань становится обычной dim-строкой с
+            // заголовком, а нижняя — просто пустой: рамку даёт сам оверлей
+            // (план рамок, задача 5, решение №5).
+            <Text key={row.key} dimColor>
+              {row.title === null ? '' : ` ${row.title}`}
+            </Text>
+          )
         ) : (
           <Row
             key={row.key}
             text={row.text}
-            width={width}
+            width={content}
             g={g}
             navigating={navigating}
-            divider={divider}
+            framed={framed}
             dim={row.dim}
             selected={row.selected}
           />
@@ -706,7 +742,7 @@ export function SidebarOverlay(props: SidebarProps): ReactNode {
       width={props.width + 2}
       marginTop={1}
     >
-      <Sidebar {...props} divider={false} />
+      <Sidebar {...props} framed={false} />
     </Box>
   );
 }

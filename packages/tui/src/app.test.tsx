@@ -478,12 +478,13 @@ describe('переключение работ (2.1, 3.2)', () => {
       await waitFor2(async () => (await readMap(project, workId)).sessions.length === 2);
       await waitFor(() => (app.lastFrame() ?? '').includes('harnas=s-02@'));
       // Пока пользователь молчит, хода нет: тихая сессия ничего не начинала.
-      // Ярлык в узком сайдбаре усечён — ищем строку по его началу.
-      expect(lineWith(app.lastFrame() ?? '', 'новая сес')).not.toContain('working');
+      // Ярлык у дочерней сессии режется боковыми гранями сайдбара (план рамок,
+      // задача 5) — ищем строку по началу, которое усечение не задевает.
+      expect(lineWith(app.lastFrame() ?? '', 'новая')).not.toContain('working');
 
       // Первое сообщение пользователя — хук `UserPromptSubmit` (4.2).
       app.stdin.write('event {"hook_event_name":"UserPromptSubmit"}\r');
-      await waitFor(() => lineWith(app.lastFrame() ?? '', 'новая сес').includes('working'));
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'новая').includes('working'));
     } finally {
       app.unmount();
     }
@@ -1193,7 +1194,9 @@ describe('удаление сессии (3.2, макет 4.10)', () => {
         await waitFor2(async () => (await readMap(other, workId)).sessions.length === 2);
         await waitFor(() => (app.lastFrame() ?? '').includes('harnas=s-02@'));
         // Обе сессии в сайдбаре: до этого кадра выбор ещё стоит на первой.
-        await waitFor(() => (app.lastFrame() ?? '').split('новая сессия').length > 2);
+        // Дочерняя режется боковыми гранями сайдбара (план рамок, задача 5) —
+        // считаем по началу ярлыка, не по полной строке.
+        await waitFor(() => (app.lastFrame() ?? '').split('новая').length > 2);
         const brief = path.join(workPaths(other, workId).briefs, 's-02.md');
         expect(await readFile(brief, 'utf8')).toContain('# Работа');
 
@@ -1238,11 +1241,12 @@ describe('тред выбранной сессии (6.1–6.3, приёмка 8.
     return created.work.id;
   };
 
-  it('20, 21: док отдаёт панели 80 колонок, а набранное по-прежнему идёт гостю', async () => {
+  it('20, 21: док отдаёт панели 81 колонку, а набранное по-прежнему идёт гостю', async () => {
     const app = open();
     try {
       await mounted(app.stdin);
-      // Макет 6.1: сайдбар 26, разделитель, панель 80, разделитель, тред 30.
+      // Макет 6.1: сайдбар 26, панель 81, разделитель, тред 30 (план рамок,
+      // задача 5: разделителя между сайдбаром и панелью больше нет).
       await resize(app, 138);
       await launch(app);
 
@@ -1251,7 +1255,7 @@ describe('тред выбранной сессии (6.1–6.3, приёмка 8.
       await waitFor(() => (app.lastFrame() ?? '').includes('тред · работа'));
       expect(app.lastFrame()).toContain('писем пока нет');
       // PTY узнаёт новые колонки тем же путём, что при ресайзе терминала (6.1).
-      await waitFor(() => (app.lastFrame() ?? '').includes('resize 80x'));
+      await waitFor(() => (app.lastFrame() ?? '').includes('resize 81x'));
 
       // Панель треда не модальная: строка уходит агенту, а не харнессу (8.21).
       app.stdin.write('echo привет\r');
@@ -1261,7 +1265,7 @@ describe('тред выбранной сессии (6.1–6.3, приёмка 8.
       app.stdin.write(`${PREFIX}t`);
       await waitFor(() => {
         const frame = app.lastFrame() ?? '';
-        return frame.lastIndexOf('resize 111x') > frame.lastIndexOf('resize 80x');
+        return frame.lastIndexOf('resize 112x') > frame.lastIndexOf('resize 81x');
       });
       expect(app.lastFrame()).not.toContain('тред · работа');
     } finally {
@@ -1306,7 +1310,7 @@ describe('тред выбранной сессии (6.1–6.3, приёмка 8.
       await waitFor(() => (app.lastFrame() ?? '').includes('тред · план'));
       expect(app.lastFrame()).not.toContain('┌ тред');
 
-      // На 120 колонках панели осталось бы 62 — меньше минимума (решение D21).
+      // На 120 колонках панели осталось бы 63 — меньше минимума (решение D21).
       await resize(app, 120);
       await waitFor(() => (app.lastFrame() ?? '').includes('┌ тред · план'));
       // Строки те же: вид один на док и на оверлей (8.41).
@@ -1328,25 +1332,26 @@ describe('тред выбранной сессии (6.1–6.3, приёмка 8.
       await resize(app, 138);
       await launch(app);
 
-      // Док на 138 колонках: сайдбар 26, панель 80, тред 30 (макет 6.1).
+      // Док на 138 колонках: сайдбар 26, панель 81, тред 30 (макет 6.1; план
+      // рамок, задача 5: разделителя между сайдбаром и панелью больше нет).
       app.stdin.write(`${PREFIX}t`);
       await waitFor(() => (app.lastFrame() ?? '').includes('тред · работа'));
-      await waitFor(() => (app.lastFrame() ?? '').includes('resize 80x'));
+      await waitFor(() => (app.lastFrame() ?? '').includes('resize 81x'));
 
       // Ниже порога док уступает место оверлею, и панель забирает его колонки:
-      // 120 − 26 сайдбара − разделитель = 93 (решение D21).
+      // 120 − 26 сайдбара = 94 (решение D21).
       await resize(app, 120);
       await waitFor(() => (app.lastFrame() ?? '').includes('┌ тред'));
 
       // Оверлей закрывает панель собой, поэтому обе ширины видно в её экране
-      // после возврата: 93 пришло на сужении, 80 — на обратном ходе.
+      // после возврата: 94 пришло на сужении, 81 — на обратном ходе.
       await resize(app, 138);
       await waitFor(() => !(app.lastFrame() ?? '').includes('┌ тред'));
       await waitFor(() => {
         const frame = app.lastFrame() ?? '';
         return (
-          frame.includes('resize 93x') &&
-          frame.lastIndexOf('resize 80x') > frame.lastIndexOf('resize 93x')
+          frame.includes('resize 94x') &&
+          frame.lastIndexOf('resize 81x') > frame.lastIndexOf('resize 94x')
         );
       });
     } finally {

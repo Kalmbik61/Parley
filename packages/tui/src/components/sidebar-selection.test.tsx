@@ -39,13 +39,6 @@ const plainAfterBackground = (line: string): number => {
   return next < 0 ? rest.length : next;
 };
 
-/**
- * Строка-грань блока (план рамок, задача 3): рисуется обычным dim-текстом безо
- * всякого цвета по `navigating` — это задача 5. У остальных строк разделитель
- * и его цвет не тронуты.
- */
-const isFrame = (line: string): boolean => line.includes('╭') || line.includes('╰');
-
 function session(over: Partial<WorkSession> = {}): WorkSession {
   return {
     id: 's-01',
@@ -146,14 +139,10 @@ describe('сайдбар: подсветка и режим навигации', 
     expect(plainAfterBackground(selectedWork)).toBe(0);
   });
 
+  // Грани блоков красятся тем же приёмом, что и боковые грани обычных строк —
+  // исключений для строк-граней больше нет (план рамок, задача 5).
   it('в режиме навигации разделитель становится cyan (макет 1.5)', () => {
-    // Грани блоков цвет по navigating не несут (тоже задача 5) — исключаем
-    // их из проверки, оставляя её в силе для всех обычных строк.
-    expect(
-      frameOf(true)
-        .filter((line) => !isFrame(line))
-        .every(cyan),
-    ).toBe(true);
+    expect(frameOf(true).every(cyan)).toBe(true);
     expect(frameOf(false).some(cyan)).toBe(false);
   });
 });

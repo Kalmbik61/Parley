@@ -94,7 +94,10 @@ export function App({
   // Работы чужих проектов, выбранные пикером, живут в сайдбаре до выхода (2.1).
   const [pinned, setPinned] = useState<ReadonlySet<string>>(new Set());
   const width = hidden ? null : sidebarWidth(columns, config.sidebarWidth);
-  const panelLeft = width === null ? 0 : width + 1;
+  // Разделителя между сайдбаром и панелью больше нет — его место заняла
+  // правая грань сайдбара, нарисованная внутри его собственной ширины (план
+  // рамок, задача 5, решение №6).
+  const panelLeft = width === null ? 0 : width;
   const panelCols = Math.max(2, columns - panelLeft);
   const panelRows = Math.max(2, rows - 1);
   // Тред справа от панели: пока он докован, гостю остаётся меньше колонок, и
