@@ -1254,18 +1254,21 @@ describe('тред выбранной сессии (6.1–6.3, приёмка 8.
       // Одинокая корневая сессия видит тред всей работы (3.4).
       await waitFor(() => (app.lastFrame() ?? '').includes('тред · работа'));
       expect(app.lastFrame()).toContain('писем пока нет');
-      // PTY узнаёт новые колонки тем же путём, что при ресайзе терминала (6.1).
-      await waitFor(() => (app.lastFrame() ?? '').includes('resize 81x'));
+      // PTY узнаёт новые колонки тем же путём, что при ресайзе терминала (6.1);
+      // рамка панели отъедает ещё 2 у того, что реально доходит до гостя: 81 − 2
+      // (план рамок, задача 6).
+      await waitFor(() => (app.lastFrame() ?? '').includes('resize 79x'));
 
       // Панель треда не модальная: строка уходит агенту, а не харнессу (8.21).
       app.stdin.write('echo привет\r');
       await waitFor(() => (app.lastFrame() ?? '').includes('привет'));
 
-      // Повторное `t` закрывает тред и возвращает панели её колонки (6.1).
+      // Повторное `t` закрывает тред и возвращает панели её колонки (6.1); гостю
+      // достаётся 112 − 2 рамки (план рамок, задача 6).
       app.stdin.write(`${PREFIX}t`);
       await waitFor(() => {
         const frame = app.lastFrame() ?? '';
-        return frame.lastIndexOf('resize 112x') > frame.lastIndexOf('resize 81x');
+        return frame.lastIndexOf('resize 110x') > frame.lastIndexOf('resize 79x');
       });
       expect(app.lastFrame()).not.toContain('тред · работа');
     } finally {
@@ -1336,22 +1339,25 @@ describe('тред выбранной сессии (6.1–6.3, приёмка 8.
       // рамок, задача 5: разделителя между сайдбаром и панелью больше нет).
       app.stdin.write(`${PREFIX}t`);
       await waitFor(() => (app.lastFrame() ?? '').includes('тред · работа'));
-      await waitFor(() => (app.lastFrame() ?? '').includes('resize 81x'));
+      // Рамка панели отъедает 2 у того, что доходит до гостя: 81 − 2 (план
+      // рамок, задача 6).
+      await waitFor(() => (app.lastFrame() ?? '').includes('resize 79x'));
 
       // Ниже порога док уступает место оверлею, и панель забирает его колонки:
-      // 120 − 26 сайдбара = 94 (решение D21).
+      // 120 − 26 сайдбара = 94, гостю из них — 92 (решение D21; план рамок,
+      // задача 6).
       await resize(app, 120);
       await waitFor(() => (app.lastFrame() ?? '').includes('┌ тред'));
 
       // Оверлей закрывает панель собой, поэтому обе ширины видно в её экране
-      // после возврата: 94 пришло на сужении, 81 — на обратном ходе.
+      // после возврата: 92 пришло на сужении, 79 — на обратном ходе.
       await resize(app, 138);
       await waitFor(() => !(app.lastFrame() ?? '').includes('┌ тред'));
       await waitFor(() => {
         const frame = app.lastFrame() ?? '';
         return (
-          frame.includes('resize 94x') &&
-          frame.lastIndexOf('resize 81x') > frame.lastIndexOf('resize 94x')
+          frame.includes('resize 92x') &&
+          frame.lastIndexOf('resize 79x') > frame.lastIndexOf('resize 92x')
         );
       });
     } finally {
@@ -1398,6 +1404,101 @@ describe('тред выбранной сессии (6.1–6.3, приёмка 8.
       await waitFor(() => (app.lastFrame() ?? '').includes('┌ тред · план'));
       expect(app.lastFrame()).toContain('письмо 20');
       expect(app.lastFrame()).not.toContain('письмо 01');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+});
+
+describe('рамка панели PTY: бюджет размеров (план рамок, задача 6)', () => {
+  /** Новые колонки и строки терминала: обеим нужен кадр, чтобы эффект их подхватил. */
+  const resize = async (
+    app: ReturnType<typeof render>,
+    columns: number,
+    rows: number,
+  ): Promise<void> => {
+    Object.defineProperty(app.stdout, 'columns', { value: columns, configurable: true });
+    Object.defineProperty(app.stdout, 'rows', { value: rows, configurable: true });
+    app.stdout.emit('resize');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  };
+
+  it('120×40 с сайдбаром 26: гостю достаётся 92×37 — рамка съедает по 2 на ось', async () => {
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await resize(app, 120, 40);
+      await launch(app);
+
+      app.stdin.write('size\r');
+      await waitFor(() => (app.lastFrame() ?? '').includes('size 92x37'));
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('узкий терминал 80×24: сайдбар сжимается до 18, гостю — 60×21', async () => {
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await resize(app, 80, 24);
+      await launch(app);
+
+      app.stdin.write('size\r');
+      await waitFor(() => (app.lastFrame() ?? '').includes('size 60x21'));
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('сайдбар скрыт целиком (< 60 колонок): панели вся ширина минус рамка', async () => {
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await resize(app, 50, 30);
+      // На этой ширине сайдбара нет вовсе — нет и строки «сессии · », по
+      // которой обычно ждёт `launch`; ждём саму заглушку агента.
+      app.stdin.write(`${PREFIX}c`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      app.stdin.write('size\r');
+      await waitFor(() => (app.lastFrame() ?? '').includes('size 48x27'));
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('открытый док треда режет ширину тем же способом, что и рамка панели', async () => {
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await resize(app, 138, 40);
+      await launch(app);
+
+      app.stdin.write(`${PREFIX}t`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('тред · работа'));
+
+      // 138 − 26 сайдбара − 31 дока (30 + разделитель) − 2 рамки = 79; строки те же (37).
+      app.stdin.write('size\r');
+      await waitFor(() => (app.lastFrame() ?? '').includes('size 79x37'));
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('ресайз терминала в обе стороны: PTY получает уменьшенный размер каждый раз', async () => {
+    const app = open();
+    try {
+      await mounted(app.stdin);
+      await resize(app, 120, 40);
+      await launch(app);
+
+      await resize(app, 80, 24);
+      await waitFor(() => (app.lastFrame() ?? '').includes('resize 60x21'));
+
+      await resize(app, 120, 40);
+      await waitFor(() => (app.lastFrame() ?? '').includes('resize 92x37'));
     } finally {
       app.unmount();
     }

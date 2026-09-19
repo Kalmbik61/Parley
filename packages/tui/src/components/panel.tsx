@@ -177,11 +177,36 @@ export interface PanelProps {
   /** Экран живого агента; `undefined` — панель показывает карточку. */
   screen: TerminalSnapshot | undefined;
   card: CardProps;
+  /** Внешние размеры вместе с рамкой: `Box` съедает по 2 на каждую ось (план рамок, задача 6). */
   width: number;
   height: number;
+  /** Слушает ли панель ввод: рамка cyan, когда `false`, иначе dim — приём граней сайдбара (план рамок, задача 6). */
+  navigating: boolean;
 }
 
-export function Panel({ screen, card, width, height }: PanelProps): ReactNode {
-  if (screen !== undefined) return <TerminalView snapshot={screen} height={height} />;
-  return <Card card={card} width={width} />;
+/**
+ * Рамка по всем четырём сторонам через штатный `Box`: у панели, в отличие от
+ * сайдбара, нет контракта «номер строки ↔ цель клика», ради которого сайдбар
+ * рисует грани символами (план рамок, задача 6). Цвет — тот же приём, что и у
+ * граней сайдбара: активная зона cyan, неактивная — dim.
+ */
+export function Panel({ screen, card, width, height, navigating }: PanelProps): ReactNode {
+  const g = glyphs();
+  const active = !navigating;
+  return (
+    <Box
+      flexDirection="column"
+      width={width}
+      height={height}
+      borderStyle={g.ascii ? 'classic' : 'round'}
+      borderColor={active ? 'cyan' : undefined}
+      borderDimColor={!active}
+    >
+      {screen !== undefined ? (
+        <TerminalView snapshot={screen} height={height - 2} />
+      ) : (
+        <Card card={card} width={width - 2} />
+      )}
+    </Box>
+  );
 }

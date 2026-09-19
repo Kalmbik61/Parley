@@ -111,11 +111,14 @@ export function App({
     width: config.threadWidth,
   });
   const bodyCols = thread.docked ? panelCols - thread.width - 1 : panelCols;
+  // Рамка панели (план рамок, задача 6) съедает по колонке слева и справа и по
+  // строке сверху и снизу; вычитаем её тут же, где уже вычтены колонки дока
+  // треда — иначе размер до node-pty не дойдёт, и экран агента поедет.
   const panel = usePanel({
     projectPath,
     roots,
-    cols: bodyCols,
-    rows: panelRows,
+    cols: Math.max(1, bodyCols - 2),
+    rows: Math.max(1, panelRows - 2),
     mouseCapture: config.mouseCapture,
     channel,
     onFail: fail,
@@ -286,6 +289,7 @@ export function App({
               )}
               width={bodyCols}
               height={panelRows}
+              navigating={actions.navigating}
             />
           )}
         </Box>
