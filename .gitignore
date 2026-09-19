@@ -6,3 +6,4 @@ claude-export/
 .omc/sessions/
 .DS_Store
 files.zip
+.harnas/
