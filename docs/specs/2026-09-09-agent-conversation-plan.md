@@ -639,6 +639,12 @@ export function threadView(options: ThreadViewOptions): ThreadView
 
 ### C2. Док справа, клавиша `t`, оверлей-запасник, ресайз PTY
 
+*(Эта задача и `width: number; // ширина тела треда, без разделителя` в C1 —
+как задумывалось тогда: одна левая грань `│`, без своей рамки. План рамок
+`2026-09-19-tui-frames-plan.md` это отменил: у треда теперь рамка со всех
+сторон, `width + 2`, а не `width + 1` с разделителем. Как есть сейчас —
+`2026-09-08-agent-conversation-design.md`, §6.1.)*
+
 **Files:**
 - Create: `packages/tui/src/components/thread.tsx` (рендер `ThreadView` столбцом: заголовок, строки, разделитель `│` слева — по образцу `sidebar.tsx`)
 - Create: `packages/tui/src/use-thread.ts` (состояние: `open`, `scroll`, `docked`, `width`; `toggle()`, `scrollBy(lines)`, `follow()`; правило дока `panelCols - 1 - width >= 80`; `useMemo` строк по `[entry, sessionId, width, height, scroll]`)
