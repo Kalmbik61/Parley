@@ -7,7 +7,7 @@
 
 import chalk from 'chalk';
 import { PALETTES, type Palette, type PaletteName } from './palettes.js';
-import { roles, type Theme } from './roles.js';
+import { roles, type RoleProps, type Theme } from './roles.js';
 
 const NAMES = Object.keys(PALETTES) as PaletteName[];
 
@@ -55,6 +55,19 @@ export function applyThemeConfig(name: string, at: number = level): void {
   level = at;
   const resolved = resolve(name, at);
   current = roles(resolved.palette, resolved.level);
+}
+
+/**
+ * Роль → пропсы рамки `Box` (кусок 3, задание, шаг 3): `borderColor` и
+ * `borderDimColor` — имена, которыми `Box` в Ink настраивает цвет рамки,
+ * `RoleProps` называет те же вещи `color`/`dimColor` для `Text`. Один общий
+ * хелпер на все места с рамками — не по хелперу на компонент.
+ */
+export function borderBoxProps(role: RoleProps): { borderColor?: string; borderDimColor?: boolean } {
+  return {
+    ...(role.color === undefined ? {} : { borderColor: role.color }),
+    ...(role.dimColor === undefined ? {} : { borderDimColor: role.dimColor }),
+  };
 }
 
 export type { Palette, PaletteName, Theme };

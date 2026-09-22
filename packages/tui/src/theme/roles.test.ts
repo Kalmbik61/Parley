@@ -3,7 +3,7 @@ import { applyThemeConfig, theme } from './index.js';
 import { PALETTES } from './palettes.js';
 import { roles, type RoleProps, type Theme } from './roles.js';
 
-/** Все шестнадцать листовых ролей темы, плоским списком. */
+/** Все листовые роли темы, плоским списком. */
 function leaves(t: Theme): RoleProps[] {
   return [
     t.bg.panel,
@@ -19,9 +19,11 @@ function leaves(t: Theme): RoleProps[] {
     t.fg.second,
     t.fg.muted,
     t.fg.accent,
+    t.fg.badge,
     t.status.live,
     t.status.warn,
     t.status.fail,
+    t.status.unseen,
   ];
 }
 
@@ -41,6 +43,18 @@ describe('уровни 3 и 2 — hex своей палитры, fills: true (п
   }
 });
 
+describe('bg.badge — слот cyan, не surface (дизайн 3.2, уточнён)', () => {
+  for (const level of [3, 2] as const) {
+    for (const [name, palette] of Object.entries(PALETTES)) {
+      it(`${name} на уровне ${level}: bg.badge = cyan палитры, отдельно от bg.selection (surface)`, () => {
+        const t = roles(palette, level);
+        expect(t.bg.badge).toEqual({ backgroundColor: palette.cyan });
+        expect(t.bg.badge).not.toEqual(t.bg.selection);
+      });
+    }
+  }
+});
+
 describe('уровень 1 — только имена ANSI и dimColor, ни одного hex (приёмка A)', () => {
   for (const [name, palette] of Object.entries(PALETTES)) {
     it(`${name}: ни в одной роли нет символа '#', fills === false`, () => {
@@ -55,9 +69,24 @@ describe('уровень 1 — только имена ANSI и dimColor, ни о
       expect(t.fg.muted).toEqual({ dimColor: true });
     });
 
-    it(`${name}: bg.badge совпадает с bg.selection (плашка красится тем же слотом, что выбранный ряд, не акцентом cyan)`, () => {
+    // Дизайн 3.2 (уточнён): плашка не может делить слот с выбранным рядом —
+    // общий `surface`/`blackBright` сделал бы её невидимой ровно там, где она
+    // нужна. У неё свой акцент — тот же ANSI `cyan`, что и в сегодняшнем коде
+    // (`sidebar.tsx` `buttonProps`), и он отличается от подсветки `bg.selection`.
+    it(`${name}: bg.badge — ANSI 'cyan', отдельно от bg.selection`, () => {
       const t = roles(palette, 1);
-      expect(t.bg.badge).toEqual(t.bg.selection);
+      expect(t.bg.badge).toEqual({ backgroundColor: 'cyan' });
+      expect(t.bg.badge).not.toEqual(t.bg.selection);
+    });
+
+    it(`${name}: fg.badge пуст — текст плашки сегодня не подкрашен отдельно`, () => {
+      const t = roles(palette, 1);
+      expect(t.fg.badge).toEqual({});
+    });
+
+    it(`${name}: status.unseen — ANSI 'blue' (точка непрочитанного в компактной строке)`, () => {
+      const t = roles(palette, 1);
+      expect(t.status.unseen).toEqual({ color: 'blue' });
     });
   }
 });

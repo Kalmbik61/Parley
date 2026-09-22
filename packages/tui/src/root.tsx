@@ -1,6 +1,7 @@
 import { Text } from 'ink';
 import type { ReactNode } from 'react';
 import { App } from './app.js';
+import { theme } from './theme/index.js';
 import { useSessions } from './use-sessions.js';
 
 export interface RootProps {
@@ -17,7 +18,7 @@ export function Root({ root, codexRoot }: RootProps): ReactNode {
     ...(codexRoot === undefined ? {} : { codexRoot }),
   });
 
-  if (loading) return <Text dimColor>читаю историю сессий…</Text>;
+  if (loading) return <Text {...theme().fg.muted}>читаю историю сессий…</Text>;
   return (
     <App
       sessions={sessions}

@@ -15,6 +15,7 @@ import { Box, Text } from 'ink';
 import type { ReactNode } from 'react';
 import { truncate } from '../format.js';
 import { glyphs, type Glyphs } from '../glyphs.js';
+import { theme } from '../theme/index.js';
 import type { ThreadView } from '../thread-view.js';
 import { frameLine } from './sidebar.js';
 import type { OverlayLine } from './overlay.js';
@@ -62,9 +63,9 @@ function Row({ line, width, g }: { line: OverlayLine; width: number; g: Glyphs }
   const filled = rule ? text : `${text}${' '.repeat(Math.max(0, width - text.length))}`;
   return (
     <Text wrap="truncate">
-      <Text dimColor>{g.frame.vertical}</Text>
-      <Text dimColor={rule || line.dim === true}>{filled}</Text>
-      <Text dimColor>{g.frame.vertical}</Text>
+      <Text {...theme().border.idle}>{g.frame.vertical}</Text>
+      <Text {...(rule || line.dim === true ? theme().fg.muted : {})}>{filled}</Text>
+      <Text {...theme().border.idle}>{g.frame.vertical}</Text>
     </Text>
   );
 }
@@ -81,7 +82,7 @@ export function Thread({ view, width, height }: ThreadProps): ReactNode {
   const marks = threadMarks(view, g);
 
   const rows: ReactNode[] = [
-    <Text key="грань-верх" dimColor>
+    <Text key="грань-верх" {...theme().border.idle}>
       {frameLine({
         title: view === null ? 'тред' : view.title,
         right: marks === '' ? null : marks,
@@ -94,7 +95,7 @@ export function Thread({ view, width, height }: ThreadProps): ReactNode {
     ...Array.from({ length: filler }, (_, at) => (
       <Row key={`пусто-${at}`} line={{ text: '' }} width={width} g={g} />
     )),
-    <Text key="грань-низ" dimColor>
+    <Text key="грань-низ" {...theme().border.idle}>
       {frameLine({ title: null, width: frameWidth, g, top: false })}
     </Text>,
   ];

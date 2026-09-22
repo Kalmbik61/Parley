@@ -11,6 +11,7 @@ import type { ReactNode } from 'react';
 import { formatClock, truncate } from '../format.js';
 import { glyphs } from '../glyphs.js';
 import type { TerminalSnapshot } from '../pty/terminal-buffer.js';
+import { borderBoxProps, theme } from '../theme/index.js';
 import { dotColor, dotGlyph, type DotState } from './activity-dot.js';
 import { TerminalView } from './terminal-view.js';
 
@@ -165,7 +166,7 @@ function Card({ card, width }: { card: CardProps; width: number }): ReactNode {
         )}
       </Text>
       {rest.map((line, at) => (
-        <Text key={at} wrap="truncate" dimColor>
+        <Text key={at} wrap="truncate" {...theme().fg.muted}>
           {line === '' ? ' ' : `${INDENT}${truncate(line, room, g.ellipsis)}`}
         </Text>
       ))}
@@ -207,8 +208,7 @@ export function Panel({ screen, card, width, height, navigating }: PanelProps): 
       width={width + 2 * PANEL_FRAME}
       height={height + 2 * PANEL_FRAME}
       borderStyle={g.ascii ? 'classic' : 'round'}
-      borderColor={active ? 'cyan' : undefined}
-      borderDimColor={!active}
+      {...borderBoxProps(active ? theme().border.active : theme().border.idle)}
     >
       {screen !== undefined ? (
         <TerminalView snapshot={screen} height={height} />

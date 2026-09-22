@@ -6,6 +6,7 @@
  */
 
 import type { SessionStatus } from '@harnas/core';
+import { theme } from './theme/index.js';
 
 export interface Glyphs {
   pending: string;
@@ -154,7 +155,7 @@ export function selectionProps(
   g: Glyphs,
 ): { backgroundColor?: string; inverse?: boolean } {
   if (!selected) return {};
-  return g.ascii ? { inverse: true } : { backgroundColor: 'blackBright' };
+  return g.ascii ? { inverse: true } : theme().bg.selection;
 }
 
 export function statusGlyph(status: SessionStatus, g: Glyphs): string {
@@ -166,12 +167,12 @@ export function statusColor(status: SessionStatus): { color?: string; dimColor?:
   switch (status) {
     case 'active':
     case 'done':
-      return { color: 'green' };
+      return theme().status.live;
     case 'exited':
-      return { color: 'yellow' };
+      return theme().status.warn;
     case 'failed':
-      return { color: 'red' };
+      return theme().status.fail;
     case 'pending':
-      return { dimColor: true };
+      return theme().fg.muted;
   }
 }

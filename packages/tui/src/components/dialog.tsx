@@ -2,6 +2,7 @@ import { Box, Text, useInput } from 'ink';
 import { useRef, useState, type ReactNode } from 'react';
 import { truncate, truncateLeft, wrapText } from '../format.js';
 import { glyphs } from '../glyphs.js';
+import { theme } from '../theme/index.js';
 import { withoutMouse } from '../use-prefix-input.js';
 
 /** Вариант селектора `‹ ›`. Недоступный показывается, но не выбирается (дизайн 4.2). */
@@ -163,7 +164,7 @@ export function Dialog({
   const lines: ReactNode[] = [];
   for (const [index, text] of info.entries()) {
     lines.push(
-      <Text key={`info-${index}`} dimColor wrap="truncate">
+      <Text key={`info-${index}`} {...theme().fg.muted} wrap="truncate">
         {truncate(text, width, g.ellipsis)}
       </Text>,
     );
@@ -182,7 +183,7 @@ export function Dialog({
         <Text
           key={field.key}
           wrap="truncate"
-          {...(off ? { dimColor: true } : {})}
+          {...(off ? theme().fg.muted : {})}
           {...(selected ? { bold: true } : {})}
         >
           {truncate(`${label}‹ ${option?.label ?? '—'} ›${note}`, width, g.ellipsis)}
@@ -227,7 +228,7 @@ export function Dialog({
   return (
     <Box flexDirection="column">
       {lines}
-      <Text dimColor wrap="truncate">
+      <Text {...theme().fg.muted} wrap="truncate">
         {truncate(footer, width, g.ellipsis)}
       </Text>
     </Box>

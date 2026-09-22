@@ -11,6 +11,7 @@ import type { Activity, SessionStatus } from '@harnas/core';
 import { Text } from 'ink';
 import { useCallback, useSyncExternalStore, type ReactNode } from 'react';
 import type { Glyphs } from '../glyphs.js';
+import { theme } from '../theme/index.js';
 
 /** Что рисует точка: activity живой сессии или её жизненный цикл (4.1). */
 export type DotState = Activity | Exclude<SessionStatus, 'active'>;
@@ -115,18 +116,22 @@ export function dotGlyph(state: DotState, g: Glyphs, blinked = false): string {
 /** Цвета таблицы макетов §6. Пустых пропсов не передаём — exactOptionalPropertyTypes. */
 export function dotColor(state: DotState): { color?: string; dimColor?: boolean } {
   switch (state) {
+    // Отклонение принято сознательно (дизайн темы TUI, 3.2): раньше здесь
+    // стоял `blackBright`, роль `fg.muted` на шестнадцати цветах отдаёт `dim`.
+    // Серый остаётся серым, но код всё-таки другой — единственное место, где
+    // кадр шестнадцати цветов отличается от прежнего.
     case 'working':
-      return { color: 'blackBright' };
+      return theme().fg.muted;
     case 'blocked':
-      return { color: 'yellow' };
+      return theme().status.warn;
     case 'unseen':
-      return { color: 'blue' };
+      return theme().status.unseen;
     case 'failed':
-      return { color: 'red' };
+      return theme().status.fail;
     case 'idle':
     case 'pending':
     case 'exited':
-      return { dimColor: true };
+      return theme().fg.muted;
     case 'done':
       // Работа закончена отчётом — цвет ей не нужен (макеты §6).
       return {};

@@ -19,6 +19,7 @@ import {
 } from '../format.js';
 import { glyphs, selectionProps, type Glyphs } from '../glyphs.js';
 import { pad } from '../theme/fill.js';
+import { borderBoxProps, theme } from '../theme/index.js';
 import { treeOrder, workKey, type LiveMetrics } from '../work-rows.js';
 import { ActivityDot, dotColor, stateLetter, type DotState } from './activity-dot.js';
 
@@ -262,7 +263,7 @@ export function frameLine({
  * приём, которым раньше красился разделитель `Divider` (план рамок, задача 5).
  */
 function frameColor(navigating: boolean): { bold?: boolean; color?: string; dimColor?: boolean } {
-  return navigating ? { bold: true, color: 'cyan' } : { dimColor: true };
+  return navigating ? { bold: true, ...theme().border.active } : theme().border.idle;
 }
 
 /** Боковая грань блока: вертикаль слева и справа у каждой обычной строки (§3, §5). */
@@ -278,16 +279,17 @@ function FrameEdge({ g, navigating }: { g: Glyphs; navigating: boolean }): React
 const NEW_BUTTON_TEXT = ' + new ';
 
 /**
- * Фон плашки `new` под курсором — акцентный cyan вместо общего blackBright
- * подсветки строк: кнопка отличима от обычного выбранного ряда (план рамок,
- * задача 4). В ASCII-наборе, как и у общей подсветки, — reverse video.
+ * Фон плашки `new` под курсором — акцент темы (`bg.badge`) вместо общей
+ * подсветки строк (`bg.selection`): кнопка отличима от обычного выбранного
+ * ряда (план рамок, задача 4; дизайн темы TUI, 3.2). В ASCII-наборе, как и у
+ * общей подсветки, — reverse video.
  */
 function buttonProps(
   selected: boolean,
   g: Glyphs,
-): { backgroundColor?: string; inverse?: boolean } {
+): { backgroundColor?: string; color?: string; dimColor?: boolean; inverse?: boolean } {
   if (!selected) return {};
-  return g.ascii ? { inverse: true } : { backgroundColor: 'cyan' };
+  return g.ascii ? { inverse: true } : { ...theme().bg.badge, ...theme().fg.badge };
 }
 
 /**
@@ -341,7 +343,7 @@ function Row({
     <Text wrap="truncate">
       {framed && <FrameEdge g={g} navigating={navigating} />}
       <Text {...selectionProps(selected, g)}>
-        <Text dimColor={dim}>{truncate(text, width, g.ellipsis)}</Text>
+        <Text {...(dim ? theme().fg.muted : {})}>{truncate(text, width, g.ellipsis)}</Text>
         {pad(text.length, width)}
       </Text>
       {framed && <FrameEdge g={g} navigating={navigating} />}
@@ -429,7 +431,7 @@ function SessionRow({
       {framed && <FrameEdge g={g} navigating={navigating} />}
       <Text {...selectionProps(selected, g)}>
         {indent}
-        <Text dimColor>{child}</Text>
+        <Text {...theme().fg.muted}>{child}</Text>
         <ActivityDot state={item.state} g={g} />
         {` ${label}`}
         {pad(head + label.length + tail.length + 1, width)}
@@ -761,7 +763,10 @@ export function SidebarOverlay(props: SidebarProps): ReactNode {
   return (
     <Box
       borderStyle={g.ascii ? 'classic' : 'single'}
-      borderColor="cyan"
+      // Оверлей заменяет собой всю правую часть, пока показан: слушающей
+      // зоны, кроме него, тогда нет — рамка всегда активная, тем же приёмом,
+      // что и у общего оверлея (`overlay.tsx`).
+      {...borderBoxProps(theme().border.active)}
       // Место разделителя занимает правый бок рамки: без этого строки не
       // помещались бы в неё и кончались знаком усечения (макет 1.3).
       width={props.width + 2}

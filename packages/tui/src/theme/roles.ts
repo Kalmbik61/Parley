@@ -29,7 +29,11 @@ export interface Theme {
     agent: RoleProps;
     /** Выбранный ряд во всех списках. */
     selection: RoleProps;
-    /** Плашка `new` — фон только под текстом. */
+    /**
+     * Плашка `new` — фон только под текстом. Не может делить слот с
+     * `selection`: плашка живёт ровно на строке под курсором, и общий
+     * `surface` сделал бы её невидимой там же, где она нужна (3.2).
+     */
     badge: RoleProps;
   };
   border: {
@@ -47,6 +51,8 @@ export interface Theme {
     muted: RoleProps;
     /** Провайдер, заголовки workflow, `▤`. */
     accent: RoleProps;
+    /** Текст на плашке `new` — читается на её акцентном фоне (3.2). */
+    badge: RoleProps;
   };
   status: {
     /** `●` active, `✓` done. */
@@ -55,6 +61,8 @@ export interface Theme {
     warn: RoleProps;
     /** `✗` failed, ошибки запуска. */
     fail: RoleProps;
+    /** Точка непрочитанного в компактной строке. */
+    unseen: RoleProps;
   };
   /** Добивать ли строку зоны до ширины блока фоном (5.1). */
   fills: boolean;
@@ -77,7 +85,7 @@ function colorRoles(p: Palette): Theme {
       overlay: bg(p.crust),
       agent: bg(p.base),
       selection: bg(p.surface),
-      badge: bg(p.surface),
+      badge: bg(p.cyan),
     },
     border: {
       active: fg(p.cyan),
@@ -88,11 +96,13 @@ function colorRoles(p: Palette): Theme {
       second: fg(p.subtext),
       muted: fg(p.muted),
       accent: fg(p.magenta),
+      badge: fg(p.base),
     },
     status: {
       live: fg(p.green),
       warn: fg(p.yellow),
       fail: fg(p.red),
+      unseen: fg(p.blue),
     },
     fills: true,
   };
@@ -112,7 +122,9 @@ function terminalRoles(): Theme {
       overlay: EMPTY,
       agent: EMPTY,
       selection: ansiBg('blackBright'),
-      badge: ansiBg('blackBright'),
+      // Как сегодня в коде (`sidebar.tsx` `buttonProps`): акцент плашки —
+      // ANSI `cyan`, а не общая подсветка ряда.
+      badge: ansiBg('cyan'),
     },
     border: {
       active: ansiColor('cyan'),
@@ -123,11 +135,14 @@ function terminalRoles(): Theme {
       second: DIM,
       muted: DIM,
       accent: ansiColor('magenta'),
+      // Текст плашки сегодня не подкрашен отдельно — только фон.
+      badge: EMPTY,
     },
     status: {
       live: ansiColor('green'),
       warn: ansiColor('yellow'),
       fail: ansiColor('red'),
+      unseen: ansiColor('blue'),
     },
     fills: false,
   };
@@ -154,11 +169,13 @@ function monoRoles(): Theme {
       second: EMPTY,
       muted: EMPTY,
       accent: EMPTY,
+      badge: EMPTY,
     },
     status: {
       live: EMPTY,
       warn: EMPTY,
       fail: EMPTY,
+      unseen: EMPTY,
     },
     fills: false,
   };

@@ -12,6 +12,7 @@ import { Box, Text } from 'ink';
 import type { ReactNode } from 'react';
 import { truncate } from '../format.js';
 import { glyphs, selectionProps, type Glyphs } from '../glyphs.js';
+import { borderBoxProps, theme } from '../theme/index.js';
 import type { DialogSpec } from '../work-dialogs.js';
 import { Dialog } from './dialog.js';
 
@@ -124,7 +125,7 @@ function topBorder(title: string, width: number, g: Glyphs): string {
 function Line({ line, width, g }: { line: OverlayLine; width: number; g: Glyphs }): ReactNode {
   if (line.rule === true) {
     return (
-      <Text dimColor wrap="truncate">
+      <Text {...theme().fg.muted} wrap="truncate">
         {(g.ascii ? '-' : '─').repeat(width)}
       </Text>
     );
@@ -132,7 +133,7 @@ function Line({ line, width, g }: { line: OverlayLine; width: number; g: Glyphs 
   const text = truncate(line.text, width, g.ellipsis);
   return (
     <Text wrap="truncate">
-      <Text {...selectionProps(line.selected === true, g)} dimColor={line.dim === true}>
+      <Text {...selectionProps(line.selected === true, g)} {...(line.dim === true ? theme().fg.muted : {})}>
         {text}
         {' '.repeat(Math.max(0, width - text.length))}
       </Text>
@@ -168,12 +169,12 @@ export function Overlay({
 
   return (
     <Box flexDirection="column" width={box.width} marginLeft={box.offset} marginTop={1}>
-      <Text color="cyan">{topBorder(title, box.width, g)}</Text>
+      <Text {...theme().border.active}>{topBorder(title, box.width, g)}</Text>
       <Box
         flexDirection="column"
         borderStyle={g.ascii ? 'classic' : 'single'}
         borderTop={false}
-        borderColor="cyan"
+        {...borderBoxProps(theme().border.active)}
         width={box.width}
         height={box.height - 1}
       >
@@ -184,14 +185,16 @@ export function Overlay({
             {visible.map((line, at) => (
               <Line key={start + at} line={line} width={inner} g={g} />
             ))}
-            {below > 0 && <Text dimColor wrap="truncate">{` ${g.ellipsis} ${below} ниже`}</Text>}
+            {below > 0 && (
+              <Text {...theme().fg.muted} wrap="truncate">{` ${g.ellipsis} ${below} ниже`}</Text>
+            )}
             {Array.from({ length: Math.max(0, room - visible.length) }, (_, at) => (
               <Text key={`пусто-${at}`}> </Text>
             ))}
           </>
         )}
         {footer !== undefined && (
-          <Text dimColor wrap="truncate">
+          <Text {...theme().fg.muted} wrap="truncate">
             {truncate(footer, inner, g.ellipsis)}
           </Text>
         )}

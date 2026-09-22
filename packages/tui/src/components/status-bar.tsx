@@ -2,6 +2,7 @@ import { Box, Text } from 'ink';
 import type { ReactNode } from 'react';
 import { truncate } from '../format.js';
 import { glyphs, type Glyphs } from '../glyphs.js';
+import { theme } from '../theme/index.js';
 import type { StatusEvent } from '../use-status.js';
 
 export interface StatusBarProps {
@@ -89,7 +90,7 @@ export function StatusBar({
     return (
       <Box width={width} justifyContent="space-between">
         <Text wrap="truncate">{` ${truncate(navigationHint(g), room, g.ellipsis)}`}</Text>
-        <Text dimColor>{tail}</Text>
+        <Text {...theme().fg.muted}>{tail}</Text>
       </Box>
     );
   }
@@ -107,14 +108,14 @@ export function StatusBar({
         ) : (
           <>
             {' '}
-            <Text color="yellow" bold>
+            <Text {...theme().status.warn} bold>
               {left.slice(0, flag.length)}
             </Text>
             {left.slice(flag.length)}
           </>
         )}
       </Text>
-      <Text dimColor>{tail}</Text>
+      <Text {...theme().fg.muted}>{tail}</Text>
     </Box>
   );
 }

@@ -1,14 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
 
 // Цвета в тестах по умолчанию выключены (stdout не TTY), а проверяем мы именно
-// фон выбранной строки и цвет разделителя — включаем их до импорта Ink и chalk.
+// фон выбранной строки и цвет разделителя — включаем их до импорта Ink и
+// chalk. Уровень 3 (не 1): часть проверок теперь идёт при `pinTheme(3)` и
+// смотрит на настоящий truecolor hex палитры, а не на его приближение —
+// chalk решает про уровень один раз при загрузке модуля, и на весь файл он
+// общий (дизайн темы TUI, 7.1). Именованным ANSI-цветам ('cyan',
+// 'blackBright') уровень безразличен — код тот же на 1, 2 и 3, так что старые
+// проверки (уровень темы 1) этим не задеты.
 vi.hoisted(() => {
-  process.env['FORCE_COLOR'] = '1';
+  process.env['FORCE_COLOR'] = '3';
 });
 
 import type { WorkSession } from '@harnas/core';
 import { render } from 'ink-testing-library';
 import { pinUnicodeGlyphs } from '../../test/glyphs-env.js';
+import { pinTheme } from '../../test/theme-env.js';
+import { PALETTES } from '../theme/palettes.js';
 import { Sidebar, type SidebarSession, type SidebarTarget, type SidebarWork } from './sidebar.js';
 
 pinUnicodeGlyphs();
@@ -144,5 +152,44 @@ describe('сайдбар: подсветка и режим навигации', 
   it('в режиме навигации разделитель становится cyan (макет 1.5)', () => {
     expect(frameOf(true).every(cyan)).toBe(true);
     expect(frameOf(false).some(cyan)).toBe(false);
+  });
+});
+
+/**
+ * Кусок 3, приёмка: те же два места — фон выбранного ряда и цвет рамки — на
+ * уровне 3 отдают настоящий truecolor hex палитры (`bg.selection` = surface,
+ * `border.active` = cyan), а не его приближение. Роли и на уровне 1, и на
+ * уровне 3 остаются теми же двумя ролями — меняется только то, что палитра
+ * отдаёт на этом уровне (дизайн темы TUI, 4.1).
+ */
+describe('сайдбар: то же самое на уровне 3 — hex вместо имён ANSI', () => {
+  pinTheme(3);
+
+  const hexBg = (hex: string): string => {
+    const n = hex.replace('#', '');
+    const r = parseInt(n.slice(0, 2), 16);
+    const g = parseInt(n.slice(2, 4), 16);
+    const b = parseInt(n.slice(4, 6), 16);
+    return `[48;2;${r};${g};${b}m`;
+  };
+  const hexFg = (hex: string): string => {
+    const n = hex.replace('#', '');
+    const r = parseInt(n.slice(0, 2), 16);
+    const g = parseInt(n.slice(2, 4), 16);
+    const b = parseInt(n.slice(4, 6), 16);
+    return `[38;2;${r};${g};${b}m`;
+  };
+  const selectedHex = (line: string): boolean => line.includes(hexBg(PALETTES.mocha.surface));
+  const frameHex = (line: string): boolean => line.includes(hexFg(PALETTES.mocha.cyan));
+
+  it('фон выбранного ряда — hex `surface` палитры, а не имя ANSI', () => {
+    const lines = frameOf();
+    expect(selectedHex(lineWith(lines, 'Авторизация'))).toBe(true);
+    expect(selectedHex(lineWith(lines, 'Платежи'))).toBe(false);
+  });
+
+  it('в режиме навигации рамка — hex `cyan` палитры, а не имя ANSI', () => {
+    expect(frameOf(true).every(frameHex)).toBe(true);
+    expect(frameOf(false).some(frameHex)).toBe(false);
   });
 });
