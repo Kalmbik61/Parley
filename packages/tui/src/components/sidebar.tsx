@@ -8,6 +8,7 @@
 
 import type { SessionIndex, WorkEntry, WorkSession, WorkStatus } from '@harnas/core';
 import { Box, Text } from 'ink';
+import stringWidth from 'string-width';
 import { memo, type ReactNode } from 'react';
 import {
   formatDuration,
@@ -18,7 +19,7 @@ import {
   withHome,
 } from '../format.js';
 import { glyphs, selectionProps, type Glyphs } from '../glyphs.js';
-import { pad } from '../theme/fill.js';
+import { pad, zoneBg } from '../theme/fill.js';
 import { borderBoxProps, theme } from '../theme/index.js';
 import { treeOrder, workKey, type LiveMetrics } from '../work-rows.js';
 import { ActivityDot, dotColor, stateLetter, type DotState } from './activity-dot.js';
@@ -294,9 +295,9 @@ function buttonProps(
 
 /**
  * Кнопка `new` — первая строка блока работ (план рамок, задача 4, решение №4):
- * компактная плашка, фон только под текстом. В `Row` фон красит и добивку до
- * ширины — здесь добивка фон не несёт нарочно: иначе на строке под курсором
- * лёг бы фон на фон.
+ * компактная плашка, фон только под текстом. Добивка после неё несёт фон
+ * зоны (`bg.sidebar`), а не фон плашки — иначе на строке под курсором лёг бы
+ * фон на фон (дизайн темы TUI, 5.1).
  */
 function NewButton({
   selected,
@@ -314,14 +315,20 @@ function NewButton({
   return (
     <Text wrap="truncate">
       {framed && <FrameEdge g={g} navigating={navigating} />}
-      <Text {...buttonProps(selected, g)}>{NEW_BUTTON_TEXT}</Text>
-      {pad(NEW_BUTTON_TEXT.length, width)}
+      <Text {...zoneBg(theme().bg.sidebar)}>
+        <Text {...buttonProps(selected, g)}>{NEW_BUTTON_TEXT}</Text>
+        {pad(NEW_BUTTON_TEXT.length, width)}
+      </Text>
       {framed && <FrameEdge g={g} navigating={navigating} />}
     </Text>
   );
 }
 
-/** Простая строка сайдбара: боковые грани, текст слева, добивка до ширины. */
+/**
+ * Простая строка сайдбара: боковые грани, текст слева, добивка до ширины.
+ * Фон зоны (`bg.sidebar`) красит текст и добивку вместе — выбранный ряд
+ * перекрывает его своим `bg.selection` изнутри (5.1).
+ */
 function Row({
   text,
   width,
@@ -339,12 +346,18 @@ function Row({
   selected?: boolean;
   dim?: boolean;
 }): ReactNode {
+  // Добивка считается по колонкам показанного текста, а не по длине исходной
+  // строки: иначе широкий символ укоротил бы её и фон зоны не дошёл бы до
+  // края (дизайн темы TUI, 5.1).
+  const shown = truncate(text, width, g.ellipsis);
   return (
     <Text wrap="truncate">
       {framed && <FrameEdge g={g} navigating={navigating} />}
-      <Text {...selectionProps(selected, g)}>
-        <Text {...(dim ? theme().fg.muted : {})}>{truncate(text, width, g.ellipsis)}</Text>
-        {pad(text.length, width)}
+      <Text {...zoneBg(theme().bg.sidebar)}>
+        <Text {...selectionProps(selected, g)}>
+          <Text {...(dim ? theme().fg.muted : {})}>{shown}</Text>
+          {pad(stringWidth(shown), width)}
+        </Text>
       </Text>
       {framed && <FrameEdge g={g} navigating={navigating} />}
     </Text>
@@ -374,11 +387,13 @@ function WorkRow({
   return (
     <Text wrap="truncate">
       {framed && <FrameEdge g={g} navigating={navigating} />}
-      <Text {...selectionProps(selected, g)}>
-        {head}
-        {title}
-        {pad(head.length + title.length + 2, width)}
-        {work.state === null ? ' ' : <ActivityDot state={work.state} g={g} />}{' '}
+      <Text {...zoneBg(theme().bg.sidebar)}>
+        <Text {...selectionProps(selected, g)}>
+          {head}
+          {title}
+          {pad(stringWidth(head) + stringWidth(title) + 2, width)}
+          {work.state === null ? ' ' : <ActivityDot state={work.state} g={g} />}{' '}
+        </Text>
       </Text>
       {framed && <FrameEdge g={g} navigating={navigating} />}
     </Text>
@@ -429,13 +444,15 @@ function SessionRow({
   return (
     <Text wrap="truncate">
       {framed && <FrameEdge g={g} navigating={navigating} />}
-      <Text {...selectionProps(selected, g)}>
-        {indent}
-        <Text {...theme().fg.muted}>{child}</Text>
-        <ActivityDot state={item.state} g={g} />
-        {` ${label}`}
-        {pad(head + label.length + tail.length + 1, width)}
-        <Text {...dotColor(item.state)}>{tail}</Text>{' '}
+      <Text {...zoneBg(theme().bg.sidebar)}>
+        <Text {...selectionProps(selected, g)}>
+          {indent}
+          <Text {...theme().fg.muted}>{child}</Text>
+          <ActivityDot state={item.state} g={g} />
+          {` ${label}`}
+          {pad(head + stringWidth(label) + stringWidth(tail) + 1, width)}
+          <Text {...dotColor(item.state)}>{tail}</Text>{' '}
+        </Text>
       </Text>
       {framed && <FrameEdge g={g} navigating={navigating} />}
     </Text>

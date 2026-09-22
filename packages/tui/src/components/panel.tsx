@@ -8,9 +8,11 @@ import { workPaths, type WorkEntry, type WorkSession } from '@harnas/core';
 import { Box, Text } from 'ink';
 import path from 'node:path';
 import type { ReactNode } from 'react';
+import stringWidth from 'string-width';
 import { formatClock, truncate } from '../format.js';
 import { glyphs } from '../glyphs.js';
 import type { TerminalSnapshot } from '../pty/terminal-buffer.js';
+import { pad, zoneBg } from '../theme/fill.js';
 import { borderBoxProps, theme } from '../theme/index.js';
 import { dotColor, dotGlyph, type DotState } from './activity-dot.js';
 import { TerminalView } from './terminal-view.js';
@@ -145,31 +147,50 @@ function cardLines(
   ];
 }
 
-function Card({ card, width }: { card: CardProps; width: number }): ReactNode {
+/**
+ * Хвостовая добивка строки карточки до ширины панели: только при
+ * `theme().fills` (5.1) — иначе кадр обязан остаться прежним, а строки
+ * карточки сегодня останавливаются на `room`, не доходя до `width`.
+ */
+function cardTail(used: number, width: number): string {
+  return theme().fills ? pad(used, width) : '';
+}
+
+/** Экспортирован для прямой проверки заливки строк без рамки `Panel`. */
+export function Card({ card, width }: { card: CardProps; width: number }): ReactNode {
   const g = glyphs();
   const glyph = dotGlyph(card.state, g);
   const room = Math.max(10, width - MARGIN);
   const [first = '', ...rest] = cardLines(card, glyph);
+  const firstText =
+    card.session === null
+      ? truncate(first, room, g.ellipsis)
+      : `${glyph}${truncate(first.slice(glyph.length), room - glyph.length, g.ellipsis)}`;
 
   return (
     <Box flexDirection="column">
-      <Text> </Text>
-      <Text wrap="truncate">
+      <Text {...zoneBg(theme().bg.panel)}>{theme().fills ? pad(0, width) : ' '}</Text>
+      <Text wrap="truncate" {...zoneBg(theme().bg.panel)}>
         {INDENT}
         {card.session === null ? (
-          truncate(first, room, g.ellipsis)
+          firstText
         ) : (
           <>
             <Text {...dotColor(card.state)}>{glyph}</Text>
             {truncate(first.slice(glyph.length), room - glyph.length, g.ellipsis)}
           </>
         )}
+        {cardTail(INDENT.length + stringWidth(firstText), width)}
       </Text>
-      {rest.map((line, at) => (
-        <Text key={at} wrap="truncate" {...theme().fg.muted}>
-          {line === '' ? ' ' : `${INDENT}${truncate(line, room, g.ellipsis)}`}
-        </Text>
-      ))}
+      {rest.map((line, at) => {
+        const text = line === '' ? ' ' : `${INDENT}${truncate(line, room, g.ellipsis)}`;
+        return (
+          <Text key={at} wrap="truncate" {...theme().fg.muted} {...zoneBg(theme().bg.panel)}>
+            {text}
+            {cardTail(stringWidth(text), width)}
+          </Text>
+        );
+      })}
     </Box>
   );
 }

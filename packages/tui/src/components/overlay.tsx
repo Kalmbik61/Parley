@@ -10,8 +10,10 @@
 
 import { Box, Text } from 'ink';
 import type { ReactNode } from 'react';
+import stringWidth from 'string-width';
 import { truncate } from '../format.js';
 import { glyphs, selectionProps, type Glyphs } from '../glyphs.js';
+import { pad, zoneBg } from '../theme/fill.js';
 import { borderBoxProps, theme } from '../theme/index.js';
 import type { DialogSpec } from '../work-dialogs.js';
 import { Dialog } from './dialog.js';
@@ -122,20 +124,37 @@ function topBorder(title: string, width: number, g: Glyphs): string {
   return `${head}${rule.repeat(Math.max(0, width - head.length - 1))}${corner[1]}`;
 }
 
-function Line({ line, width, g }: { line: OverlayLine; width: number; g: Glyphs }): ReactNode {
+/**
+ * Строка тела оверлея: список, линейка, подвал и «N ниже» рисуются одним и
+ * тем же `Line` — все они текст (или линейка) шириной `width`, добитый
+ * пробелами, и фон зоны (`bg.overlay`) только при `theme().fills` (5.1).
+ * Экспортирован для прямой проверки заливки без рамки `Box` вокруг тела.
+ */
+export function Line({
+  line,
+  width,
+  g,
+}: {
+  line: OverlayLine;
+  width: number;
+  g: Glyphs;
+}): ReactNode {
   if (line.rule === true) {
     return (
-      <Text {...theme().fg.muted} wrap="truncate">
+      <Text {...theme().fg.muted} {...zoneBg(theme().bg.overlay)} wrap="truncate">
         {(g.ascii ? '-' : '─').repeat(width)}
       </Text>
     );
   }
   const text = truncate(line.text, width, g.ellipsis);
   return (
-    <Text wrap="truncate">
-      <Text {...selectionProps(line.selected === true, g)} {...(line.dim === true ? theme().fg.muted : {})}>
+    <Text wrap="truncate" {...zoneBg(theme().bg.overlay)}>
+      <Text
+        {...selectionProps(line.selected === true, g)}
+        {...(line.dim === true ? theme().fg.muted : {})}
+      >
         {text}
-        {' '.repeat(Math.max(0, width - text.length))}
+        {pad(stringWidth(text), width)}
       </Text>
     </Text>
   );
@@ -186,18 +205,19 @@ export function Overlay({
               <Line key={start + at} line={line} width={inner} g={g} />
             ))}
             {below > 0 && (
-              <Text {...theme().fg.muted} wrap="truncate">{` ${g.ellipsis} ${below} ниже`}</Text>
+              <Line
+                key="ниже"
+                line={{ text: ` ${g.ellipsis} ${below} ниже`, dim: true }}
+                width={inner}
+                g={g}
+              />
             )}
             {Array.from({ length: Math.max(0, room - visible.length) }, (_, at) => (
-              <Text key={`пусто-${at}`}> </Text>
+              <Line key={`пусто-${at}`} line={{ text: '' }} width={inner} g={g} />
             ))}
           </>
         )}
-        {footer !== undefined && (
-          <Text {...theme().fg.muted} wrap="truncate">
-            {truncate(footer, inner, g.ellipsis)}
-          </Text>
-        )}
+        {footer !== undefined && <Line line={{ text: footer, dim: true }} width={inner} g={g} />}
       </Box>
     </Box>
   );

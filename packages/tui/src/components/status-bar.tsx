@@ -1,7 +1,9 @@
 import { Box, Text } from 'ink';
 import type { ReactNode } from 'react';
+import stringWidth from 'string-width';
 import { truncate } from '../format.js';
 import { glyphs, type Glyphs } from '../glyphs.js';
+import { gap, pad, zoneBg } from '../theme/fill.js';
 import { theme } from '../theme/index.js';
 import type { StatusEvent } from '../use-status.js';
 
@@ -71,12 +73,17 @@ export function StatusBar({
 }: StatusBarProps): ReactNode {
   const g = glyphs();
   const tail = `${prefix} ?`;
+  const fills = theme().fills;
 
   // Пока ждём вторую клавишу, справа ничего нет: подсказка занимает всю строку.
   if (awaiting) {
+    const content = prefixHint(prefix, width);
     return (
       <Box width={width}>
-        <Text wrap="truncate">{prefixHint(prefix, width)}</Text>
+        <Text wrap="truncate" {...zoneBg(theme().bg.status)}>
+          {content}
+          {fills ? pad(stringWidth(content), width) : ''}
+        </Text>
       </Box>
     );
   }
@@ -87,9 +94,24 @@ export function StatusBar({
 
   // Режим навигации занимает левую часть строки вместо события (макет 1.5).
   if (navigating) {
+    const left = ` ${truncate(navigationHint(g), room, g.ellipsis)}`;
+    // Фон зоны красит строку одним `<Text>` целиком (5.1): `justifyContent:
+    // 'space-between'` оставлял бы зазор между левой и правой частью на фоне
+    // терминала, а не строки. Без заливки — прежняя раскладка `Box`.
+    if (fills) {
+      return (
+        <Box width={width}>
+          <Text wrap="truncate" {...theme().bg.status}>
+            {left}
+            {gap(left, tail, width)}
+            <Text {...theme().fg.muted}>{tail}</Text>
+          </Text>
+        </Box>
+      );
+    }
     return (
       <Box width={width} justifyContent="space-between">
-        <Text wrap="truncate">{` ${truncate(navigationHint(g), room, g.ellipsis)}`}</Text>
+        <Text wrap="truncate">{left}</Text>
         <Text {...theme().fg.muted}>{tail}</Text>
       </Box>
     );
@@ -99,22 +121,35 @@ export function StatusBar({
   const head = event === null ? '' : `${flag} ${event.text}`;
   const hint = event === null || event.hint === undefined ? '' : ` · ${event.hint}`;
   const left = truncate(`${head}${hint}`, room, g.ellipsis);
+  const leftText = event === null ? '' : ` ${left}`;
+  const leftContent =
+    event === null ? (
+      ''
+    ) : (
+      <>
+        {' '}
+        <Text {...theme().status.warn} bold>
+          {left.slice(0, flag.length)}
+        </Text>
+        {left.slice(flag.length)}
+      </>
+    );
+
+  if (fills) {
+    return (
+      <Box width={width}>
+        <Text wrap="truncate" {...theme().bg.status}>
+          {leftContent}
+          {gap(leftText, tail, width)}
+          <Text {...theme().fg.muted}>{tail}</Text>
+        </Text>
+      </Box>
+    );
+  }
 
   return (
     <Box width={width} justifyContent="space-between">
-      <Text wrap="truncate">
-        {event === null ? (
-          ''
-        ) : (
-          <>
-            {' '}
-            <Text {...theme().status.warn} bold>
-              {left.slice(0, flag.length)}
-            </Text>
-            {left.slice(flag.length)}
-          </>
-        )}
-      </Text>
+      <Text wrap="truncate">{leftContent}</Text>
       <Text {...theme().fg.muted}>{tail}</Text>
     </Box>
   );
