@@ -18,6 +18,7 @@ import {
   withHome,
 } from '../format.js';
 import { glyphs, selectionProps, type Glyphs } from '../glyphs.js';
+import { pad } from '../theme/fill.js';
 import { treeOrder, workKey, type LiveMetrics } from '../work-rows.js';
 import { ActivityDot, dotColor, stateLetter, type DotState } from './activity-dot.js';
 
@@ -208,8 +209,6 @@ export interface SidebarProps {
    */
   framed?: boolean;
 }
-
-const pad = (used: number, width: number): string => ' '.repeat(Math.max(0, width - used));
 
 /**
  * Строка-грань блока сайдбара, ровно `width` символов (план рамок, задача 2).

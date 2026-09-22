@@ -15,6 +15,7 @@
   "dependencies": {
     "@harnas/core": "workspace:*",
     "@xterm/headless": "^5",
+    "chalk": "^5",
     "ink": "^5",
     "node-pty": "^1",
     "react": "^18",
