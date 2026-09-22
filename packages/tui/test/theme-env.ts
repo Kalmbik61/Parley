@@ -29,7 +29,9 @@ async function apply(name: string, level?: number): Promise<void> {
 
 export function pinTheme(level: number): void {
   beforeEach(() => apply('mocha', level));
-  afterEach(() => apply('mocha'));
+  // Уровень липкий, поэтому и здесь он задаётся явно: сбрасывается имя
+  // палитры, а не уровень — вернуть «естественный» уровень тесту незачем.
+  afterEach(() => apply('mocha', level));
 }
 
 pinTheme(1);

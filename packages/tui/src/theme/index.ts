@@ -27,7 +27,15 @@ function resolve(name: string, level: number): { palette: Palette; level: number
   return { palette: isPaletteName(name) ? PALETTES[name] : PALETTES.mocha, level };
 }
 
-let current: Theme = roles(PALETTES.mocha, chalk.level);
+/**
+ * Уровень цвета — свойство терминала, а не темы: он выясняется один раз и
+ * живёт до конца работы. Поэтому он липкий — смена имени палитры его не
+ * трогает. Иначе `useConfig`, применяя тему из файла, возвращал бы уровень к
+ * `chalk.level` и сбрасывал бы `pinTheme` в тестах (дизайн 7.1).
+ */
+// Тип шире, чем `ColorSupportLevel` у chalk: уровень приходит и от `pinTheme`.
+let level: number = chalk.level;
+let current: Theme = roles(PALETTES.mocha, level);
 
 /** Текущая тема: роли на уровне, применённом последним `applyThemeConfig`. */
 export function theme(): Theme {
@@ -35,12 +43,17 @@ export function theme(): Theme {
 }
 
 /**
- * Применить тему по имени. `level` — уровень цвета (4.1); по умолчанию —
- * `chalk.level`, тем же уровнем красит и сам Ink. Параметр нужен тестам и
- * ничему больше.
+ * Применить тему по имени. `at` — уровень цвета (4.1); по умолчанию остаётся
+ * прежний, а в начале работы это `chalk.level` — тем же уровнем красит и сам
+ * Ink. Явный уровень нужен тестам и ничему больше.
+ *
+ * Уровень, с которым считаются роли, у `terminal` свой (ветка 1), но липким
+ * становится именно `at`: иначе `terminal` навсегда опускал бы харнесс до
+ * шестнадцати цветов и возврат к палитре ничего бы не дал.
  */
-export function applyThemeConfig(name: string, level: number = chalk.level): void {
-  const resolved = resolve(name, level);
+export function applyThemeConfig(name: string, at: number = level): void {
+  level = at;
+  const resolved = resolve(name, at);
   current = roles(resolved.palette, resolved.level);
 }
 
