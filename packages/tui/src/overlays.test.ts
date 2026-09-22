@@ -423,11 +423,22 @@ describe('настройки (макет 4.14)', () => {
       'messageRate',
       'threadWidth',
       'autoLaunch',
+      'theme',
     ]);
     expect(rows[8]?.selected).toBe(true);
     expect(rows[8]?.text).toContain('да');
     expect(view.lines[0]?.text).toContain('~/.harnas/config.json');
     expect(view.footer).toContain('изменить');
+  });
+
+  it('тема — строка списка: показывает текущее имя, подвал говорит про стрелки', () => {
+    const view = settingsView({ ...base, config: { ...DEFAULT_CONFIG, theme: 'nord' }, at: 9 });
+    const rows = view.lines.slice(2);
+    expect(rows[9]?.text).toContain('theme');
+    expect(rows[9]?.text).toContain('nord');
+    expect(rows[9]?.selected).toBe(true);
+    expect(view.footer).toContain('←/→ — палитра');
+    expect(view.footer).not.toContain('Enter — изменить');
   });
 
   it('перекрытая окружением строка тусклая и называет переменную', () => {
@@ -443,8 +454,8 @@ describe('настройки (макет 4.14)', () => {
     expect(view.footer).toContain('сохранить');
   });
 
-  it('строки не шире тела рамки', () => {
-    const view = settingsView({ ...base, config: DEFAULT_CONFIG });
+  it('строки не шире тела рамки — на самом длинном имени темы tokyo-night', () => {
+    const view = settingsView({ ...base, config: { ...DEFAULT_CONFIG, theme: 'tokyo-night' } });
     for (const line of view.lines) expect(line.text.length).toBeLessThanOrEqual(54);
   });
 });

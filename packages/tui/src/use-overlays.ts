@@ -14,6 +14,7 @@ import {
   ENV_NAMES,
   parseSetting,
   requestAutoSummary,
+  THEME_NAMES,
   updateMap,
   type ActivityLog,
   type HarnasConfig,
@@ -495,6 +496,24 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
           return setAt((now) => Math.min(now + 1, SETTINGS.length - 1));
         }
         if (input === 'k' || key.upArrow) return setAt((now) => Math.max(0, now - 1));
+
+        // Тема — третий вид поля: не булева и не типизированная, ввода текста
+        // нет. `←`/`→` листают `THEME_NAMES` по кругу и сразу пишут файл, как
+        // булевы; `Enter` на этой строке делает то же, что `→` — иначе строка
+        // выглядела бы мёртвой (план кусок 2, задача D).
+        if (setting.key === 'theme' && (key.leftArrow || key.rightArrow || key.return)) {
+          if (fromEnv.includes(setting.key)) {
+            const name = ENV_NAMES[setting.key];
+            return report(`${setting.key} задано окружением ${name} — файл его не перекроет`);
+          }
+          const names: readonly string[] = THEME_NAMES;
+          const delta = key.leftArrow ? -1 : 1;
+          const from = Math.max(0, names.indexOf(config.theme));
+          const next = names[(from + delta + names.length) % names.length];
+          if (next !== undefined) updateConfig(patchOf('theme', next));
+          return;
+        }
+
         if (!key.return) return;
         if (fromEnv.includes(setting.key)) {
           const name = ENV_NAMES[setting.key];

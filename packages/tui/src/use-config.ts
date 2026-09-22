@@ -17,6 +17,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { withHome } from './format.js';
 import { applyGlyphsConfig } from './glyphs.js';
+import { applyThemeConfig } from './theme/index.js';
 import type { StatusEventInit } from './use-status.js';
 
 export interface ConfigState {
@@ -42,6 +43,9 @@ export function useConfig(push: (events: readonly StatusEventInit[]) => void): C
         // Набор глифов берётся из тех же настроек, а не из окружения напрямую:
         // источник один (раздел 7). Ставим его до кадра, который их применит.
         applyGlyphsConfig(loaded.ascii);
+        // Тема — тем же приёмом: источник один (дизайн темы TUI, раздел 6),
+        // ставим её до кадра, который её применит.
+        applyThemeConfig(loaded.theme);
         setConfig(loaded);
         setFromEnv(env);
         if (warning === null) return;
@@ -63,6 +67,7 @@ export function useConfig(push: (events: readonly StatusEventInit[]) => void): C
     void saveConfig(patch)
       .then(() => {
         if (patch.ascii !== undefined) applyGlyphsConfig(patch.ascii);
+        if (patch.theme !== undefined) applyThemeConfig(patch.theme);
         setConfig((previous) => ({ ...previous, ...patch }));
       })
       .catch((error: unknown) => {

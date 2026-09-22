@@ -418,11 +418,13 @@ export const SETTINGS: ReadonlyArray<{ key: keyof HarnasConfig; hint: string }> 
   { key: 'messageRate', hint: 'потолок писем сессии за час' },
   { key: 'threadWidth', hint: 'ширина треда, колонок' },
   { key: 'autoLaunch', hint: 'pending от агента стартует сама' },
+  { key: 'theme', hint: 'палитра интерфейса' },
 ];
 
 /** Колонки строки настройки: ключ и значение (макет 4.14). */
 const SETTING_KEY = 20;
-const SETTING_VALUE = 7;
+// 12: `tokyo-night` — самое длинное имя темы (одиннадцать знаков) плюс пробел.
+const SETTING_VALUE = 12;
 
 export interface SettingsOptions {
   config: HarnasConfig;
@@ -479,6 +481,12 @@ export function settingsView({
     desired: PICKER_WIDTH,
     lines,
     footer:
-      editing === null ? ' Enter — изменить · Esc — закрыть' : ' Enter — сохранить · Esc — отмена',
+      editing !== null
+        ? ' Enter — сохранить · Esc — отмена'
+        : // Тема — третий вид поля: листается ←/→, ввода текста нет, Enter на
+          // ней самой обычным «изменить» не выглядит (план кусок 2, задача D).
+          SETTINGS[at]?.key === 'theme'
+          ? ' ←/→ — палитра · Esc — закрыть'
+          : ' Enter — изменить · Esc — закрыть',
   };
 }

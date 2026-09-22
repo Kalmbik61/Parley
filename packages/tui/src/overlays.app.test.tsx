@@ -40,6 +40,8 @@ const PREFIX_W = String.fromCharCode(0x17);
 const ENTER = '\r';
 const ESC = '\u001B';
 const DOWN = '\u001B[B';
+const LEFT = '\u001B[D';
+const RIGHT = '\u001B[C';
 const BACKSPACE = '\u007F';
 
 pinUnicodeGlyphs();
@@ -644,6 +646,66 @@ describe('настройки (макет 4.14)', () => {
       expect(row(app, 'ascii')).toContain('да');
     } finally {
       app.unmount();
+    }
+  }, 30_000);
+
+  it('тема: ←/→ листают THEME_NAMES по кругу, Enter шагает вперёд без ввода', async () => {
+    const app = open();
+    try {
+      await openSettings(app);
+      // Тема — последняя строка настроек (SETTINGS, дизайн 3.4): девять шагов вниз.
+      await press(app, DOWN, 9);
+      await waitFor(() => row(app, 'theme').includes('mocha'));
+      expect(app.lastFrame()).toContain('←/→ — палитра');
+
+      // Левый край списка — по кругу на 'terminal', а не застревание на месте.
+      app.stdin.write(LEFT);
+      await waitConfig((data) => data?.['theme'] === 'terminal');
+      await waitFor(() => row(app, 'theme').includes('terminal'));
+
+      app.stdin.write(LEFT);
+      await waitConfig((data) => data?.['theme'] === 'tokyo-night');
+      await waitFor(() => row(app, 'theme').includes('tokyo-night'));
+
+      app.stdin.write(RIGHT);
+      await waitConfig((data) => data?.['theme'] === 'terminal');
+      await waitFor(() => row(app, 'theme').includes('terminal'));
+
+      // Правый край списка — по кругу обратно на 'mocha'.
+      app.stdin.write(RIGHT);
+      await waitConfig((data) => data?.['theme'] === 'mocha');
+      await waitFor(() => row(app, 'theme').includes('mocha'));
+
+      // Enter на строке темы шагает вперёд и не открывает ввод текста.
+      await settled();
+      app.stdin.write(ENTER);
+      await waitConfig((data) => data?.['theme'] === 'latte');
+      await waitFor(() => row(app, 'theme').includes('latte'));
+      expect(app.lastFrame()).not.toContain('▌');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('тема из HARNAS_THEME: строка тусклая, ←/→ и Enter только объясняют', async () => {
+    process.env['HARNAS_THEME'] = 'nord';
+    const app = open();
+    try {
+      await openSettings(app);
+      await press(app, DOWN, 9);
+      await waitFor(() => row(app, 'theme').includes('задано HARNAS_THEME'));
+
+      app.stdin.write(RIGHT);
+      await waitFor(() => (app.lastFrame() ?? '').includes('задано окружением HARNAS_THEME'));
+      expect(await readConfig()).toBeNull();
+
+      await settled();
+      app.stdin.write(ENTER);
+      await waitFor(() => (app.lastFrame() ?? '').includes('задано окружением HARNAS_THEME'));
+      expect(await readConfig()).toBeNull();
+    } finally {
+      app.unmount();
+      delete process.env['HARNAS_THEME'];
     }
   }, 30_000);
 });
