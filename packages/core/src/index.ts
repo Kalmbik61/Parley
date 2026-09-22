@@ -106,6 +106,7 @@ export type {
 export {
   DEFAULT_CONFIG,
   ENV_NAMES,
+  THEME_NAMES,
   configPath,
   loadConfig,
   parseSetting,

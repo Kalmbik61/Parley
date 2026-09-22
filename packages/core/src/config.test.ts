@@ -34,6 +34,7 @@ describe('loadConfig', () => {
       messageRate: 20,
       threadWidth: 30,
       autoLaunch: true,
+      theme: 'mocha',
     });
     expect(loaded.config).toEqual(DEFAULT_CONFIG);
     expect(loaded.warning).toBeNull();
@@ -63,6 +64,7 @@ describe('loadConfig', () => {
       messageRate: 5,
       threadWidth: 24,
       autoLaunch: false,
+      theme: 'mocha',
     });
     expect(fromFile.warning).toBeNull();
 
@@ -87,6 +89,7 @@ describe('loadConfig', () => {
       messageRate: 7,
       threadWidth: 40,
       autoLaunch: true,
+      theme: 'mocha',
     });
     expect(fromEnv.warning).toBeNull();
   });
@@ -163,6 +166,45 @@ describe('loadConfig', () => {
 
     expect(loaded.config.prefix).toBe('q');
     expect(loaded.warning).toBeNull();
+  });
+
+  it('theme: имя читается из файла', async () => {
+    await write({ theme: 'nord' });
+    const loaded = await loadConfig(file(), {});
+
+    expect(loaded.config.theme).toBe('nord');
+    expect(loaded.warning).toBeNull();
+  });
+
+  it('theme: HARNAS_THEME перекрывает файл и попадает в fromEnv', async () => {
+    await write({ theme: 'nord' });
+    const loaded = await loadConfig(file(), { HARNAS_THEME: 'gruvbox' });
+
+    expect(loaded.config.theme).toBe('gruvbox');
+    expect(loaded.fromEnv).toContain('theme');
+  });
+
+  it('theme: неизвестное имя в файле — дефолт и жалоба, остальные поля целы', async () => {
+    await write({ theme: 'неон', prefix: 'w' });
+    const loaded = await loadConfig(file(), {});
+
+    expect(loaded.config.theme).toBe(DEFAULT_CONFIG.theme);
+    expect(loaded.config.prefix).toBe('w');
+    expect(loaded.warning).toContain('theme');
+  });
+
+  it('theme: неизвестное имя в HARNAS_THEME — дефолт и жалоба, ключа нет в fromEnv', async () => {
+    const loaded = await loadConfig(file(), { HARNAS_THEME: 'неон' });
+
+    expect(loaded.config.theme).toBe(DEFAULT_CONFIG.theme);
+    expect(loaded.warning).toContain('HARNAS_THEME');
+    expect(loaded.fromEnv).not.toContain('theme');
+  });
+
+  it('пустая HARNAS_THEME — то же самое, что незаданная', async () => {
+    await write({ theme: 'nord' });
+
+    expect((await loadConfig(file(), { HARNAS_THEME: '' })).config.theme).toBe('nord');
   });
 
   it('сообщает, какие ключи пришли из окружения', async () => {

@@ -36,7 +36,12 @@ export interface HarnasConfig {
   threadWidth: number;
   /** Запускать ли `pending` от агента самим, в фоне, без диалога (раздел 5.2). */
   autoLaunch: boolean;
+  /** Имя темы: пять палитр плюс `terminal` (дизайн темы `2026-09-22-tui-theme-design.md`, раздел 6). */
+  theme: string;
 }
+
+/** Шесть имён тем: пять палитр плюс явный отказ от них (дизайн темы, раздел 3.3). */
+export const THEME_NAMES = ['mocha', 'latte', 'gruvbox', 'nord', 'tokyo-night', 'terminal'] as const;
 
 export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
   prefix: 'q',
@@ -48,6 +53,7 @@ export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
   messageRate: 20,
   threadWidth: 30,
   autoLaunch: true,
+  theme: 'mocha',
 };
 
 /** Имя переменной окружения для каждого ключа — один источник для загрузчика и оверлея. */
@@ -61,6 +67,7 @@ export const ENV_NAMES: Readonly<Record<keyof HarnasConfig, string>> = {
   messageRate: 'HARNAS_MESSAGE_RATE',
   threadWidth: 'HARNAS_THREAD_WIDTH',
   autoLaunch: 'HARNAS_AUTO_LAUNCH',
+  theme: 'HARNAS_THEME',
 };
 
 export interface LoadedConfig {
@@ -97,6 +104,10 @@ const isThreadWidth = (value: unknown): value is number =>
   isPositiveInt(value) && value >= THREAD_MIN;
 const THREAD_EXPECTED = `целое не меньше ${THREAD_MIN}`;
 
+const isThemeName = (value: unknown): value is string =>
+  typeof value === 'string' && (THEME_NAMES as readonly string[]).includes(value);
+const THEME_EXPECTED = `одно из ${THEME_NAMES.join(', ')}`;
+
 /** Значения из файла: тут JSON, поэтому типы проверяются как есть. */
 function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatch {
   const patch: ConfigPatch = {};
@@ -123,6 +134,7 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   take('messageRate', isPositiveInt, 'целое больше нуля');
   take('threadWidth', isThreadWidth, THREAD_EXPECTED);
   take('autoLaunch', (value) => typeof value === 'boolean', 'true или false');
+  take('theme', isThemeName, THEME_EXPECTED);
   return patch;
 }
 
@@ -167,6 +179,11 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   if (prefix !== undefined) {
     if (isPrefix(prefix)) patch.prefix = prefix;
     else complain(`${ENV_NAMES.prefix}: ожидается один знак`);
+  }
+  const theme = text(ENV_NAMES.theme);
+  if (theme !== undefined) {
+    if (isThemeName(theme)) patch.theme = theme;
+    else complain(`${ENV_NAMES.theme}: ожидается ${THEME_EXPECTED}`);
   }
   count('sidebarWidth');
   flag('mouseCapture');
