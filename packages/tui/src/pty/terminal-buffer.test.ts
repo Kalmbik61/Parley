@@ -132,6 +132,38 @@ describe('createTerminalBuffer', () => {
   });
 });
 
+describe('подсветка гостя reverse video', () => {
+  it('хвостовые пробелы инверсной полосы не срезаются', async () => {
+    // Агент рисует выбранную строку через reverse video и добивает её
+    // пробелами до края: своего фона у таких ячеек нет, но полоса видна
+    // именно ими. Срезать их — значит обрезать чужую подсветку.
+    const buffer = createTerminalBuffer(10, 2);
+    await write(buffer, `${ESC}[7mHELLO     ${ESC}[0m`);
+
+    const [line] = buffer.snapshot().lines;
+    expect(line?.[0]).toMatchObject({ text: 'HELLO     ', inverse: true });
+    buffer.dispose();
+  });
+
+  it('строка из одних инверсных пробелов остаётся строкой', async () => {
+    const buffer = createTerminalBuffer(6, 2);
+    await write(buffer, `${ESC}[7m      ${ESC}[0m`);
+
+    const [line] = buffer.snapshot().lines;
+    expect(line).toEqual([{ text: '      ', inverse: true }]);
+    buffer.dispose();
+  });
+
+  it('хвостовые пробелы без инверсии и без фона по-прежнему срезаются', async () => {
+    const buffer = createTerminalBuffer(10, 2);
+    await write(buffer, 'HELLO     ');
+
+    const [line] = buffer.snapshot().lines;
+    expect(line).toEqual([{ text: 'HELLO' }]);
+    buffer.dispose();
+  });
+});
+
 describe('курсор в снимке', () => {
   it('позиция курсора идёт за текстом и за CUP', async () => {
     const buffer = createTerminalBuffer(20, 4);

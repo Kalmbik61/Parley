@@ -208,9 +208,12 @@ export function createTerminalBuffer(
             }
           }
 
-          // Хвостовые пробелы без фона рисовать незачем.
+          // Хвостовые пробелы без фона рисовать незачем. Инверсия тут равна
+          // фону: агент рисует ею выбранную строку и добивает пробелами до
+          // края, и своего фона у таких ячеек нет — срезав их, мы обрежем
+          // чужую подсветку (дизайн темы TUI, 5.3).
           const last = segments[segments.length - 1];
-          if (last !== undefined && last.backgroundColor === undefined) {
+          if (last !== undefined && last.backgroundColor === undefined && last.inverse !== true) {
             last.text = last.text.replace(/\s+$/, '');
             if (last.text === '') segments.pop();
           }
