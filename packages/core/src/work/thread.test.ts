@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { addMessage, addSession, removeSession } from './map.js';
-import { decisionsOf, participantLabel, threadOf } from './thread.js';
+import { decisionsOf, participantLabel, sessionTag, threadOf } from './thread.js';
 import type { Message, MessageKind, WorkMap } from './types.js';
 
 const emptyMap = (): WorkMap => ({
@@ -114,5 +114,21 @@ describe('participantLabel', () => {
     // Ярлыка удалённой в карте не остаётся — только id в `deletedSessions`.
     expect(participantLabel(map, 's-03')).toBe('s-03 (удалена)');
     expect(participantLabel(map, 's-99')).toBe('s-99');
+  });
+});
+
+describe('sessionTag', () => {
+  it.each([
+    ['s-01', 'S01'],
+    ['s-12', 'S12'],
+    ['s-1', 'S1'],
+    ['S01', 'S01'],
+    ['s01', 's01'],
+    ['session-1', 'session-1'],
+    ['w-0010', 'w-0010'],
+    ['s-', 's-'],
+    ['', ''],
+  ])('%s → %s', (id, expected) => {
+    expect(sessionTag(id)).toBe(expected);
   });
 });

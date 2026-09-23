@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { modelBadge, providerBadge, providerMark } from './model-badge.js';
+import { modelBadge, modelName, providerBadge, providerMark } from './model-badge.js';
 import type { Provider } from './session-index.js';
 
 describe('modelBadge', () => {
@@ -32,6 +32,34 @@ describe('modelBadge', () => {
   it('регистр не мешает распознаванию', () => {
     expect(modelBadge('Claude-Opus-5')).toBe('Opus');
     expect(modelBadge('GPT-5.2-CODEX')).toBe('Codex');
+  });
+});
+
+describe('modelName', () => {
+  it.each([
+    ['claude-opus-5-5', 'Opus 5.5'],
+    ['claude-fable-5-1', 'Fable 5.1'],
+    ['claude-sonnet-5', 'Sonnet 5'],
+    // Дата сборки на конце — не версия, отбрасывается.
+    ['claude-haiku-4-5-20251001', 'Haiku 4.5'],
+    ['gpt-5.2-codex', 'Codex'],
+    ['gpt-5.1-codex-max', 'Codex'],
+    ['gpt-5', 'GPT-5'],
+    ['mistral-large', 'mistral-larg…'],
+    ['своя', 'своя'],
+    ['Claude-Opus-5-5', 'Opus 5.5'],
+  ] as const)('%s → %s', (model, expected) => {
+    expect(modelName(model)).toBe(expected);
+  });
+
+  it('служебные значения — null, а не бейдж', () => {
+    expect(modelName(null)).toBeNull();
+    expect(modelName('<synthetic>')).toBeNull();
+  });
+
+  it('modelBadge не меняется рядом с новой функцией', () => {
+    expect(modelBadge('claude-opus-5-5')).toBe('Opus');
+    expect(modelBadge('claude-haiku-4-5-20251001')).toBe('Haiku');
   });
 });
 

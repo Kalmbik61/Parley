@@ -77,3 +77,16 @@ export function participantLabel(map: WorkMap, id: string): string {
   if (session !== undefined) return session.label;
   return (map.work.deletedSessions ?? []).includes(id) ? `${id} (удалена)` : id;
 }
+
+/** Номер в id вида `s-01`, `s-12`; чужая форма id не трогается (дизайн комнаты, 4). */
+const SESSION_ID = /^s-(\d+)$/;
+
+/**
+ * Короткий номер сессии для комнаты: `s-01` → `S01`. Форма id вне `s-<цифры>` —
+ * ручной запуск или чужая сессия — печатается как есть: выдуманный номер хуже
+ * сырого id.
+ */
+export function sessionTag(id: string): string {
+  const match = SESSION_ID.exec(id);
+  return match === null ? id : `S${match[1]}`;
+}

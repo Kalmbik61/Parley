@@ -43,7 +43,7 @@ export type {
   RunnerSubstitutions,
   SessionLink,
 } from './providers.js';
-export { modelBadge, providerBadge, providerMark } from './model-badge.js';
+export { modelBadge, modelName, providerBadge, providerMark } from './model-badge.js';
 export { buildSchemaReport, observeRecord } from './schema-report.js';
 export type { FieldReport, SchemaReport, SchemaReportResult, TypeReport } from './schema-report.js';
 export {
@@ -72,7 +72,7 @@ export {
   worksIndexPath,
 } from './work/store.js';
 export type { NewWork, WorkPaths, WriteOptions } from './work/store.js';
-export { decisionsOf, participantLabel, threadOf } from './work/thread.js';
+export { decisionsOf, participantLabel, sessionTag, threadOf } from './work/thread.js';
 export type { Thread } from './work/thread.js';
 export { buildBrief, writeBrief } from './work/brief.js';
 export { GUIDE } from './work/guide.js';
