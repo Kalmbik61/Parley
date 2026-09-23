@@ -108,7 +108,9 @@ const work = (): WorkEntry =>
   );
 
 const modelOf =
-  (models: Record<string, string | null> = { 's-01': 'claude-opus-5-5', 's-02': 'gpt-5.2-codex' }) =>
+  (
+    models: Record<string, string | null> = { 's-01': 'claude-opus-5-5', 's-02': 'gpt-5.2-codex' },
+  ) =>
   (id: string): string | null =>
     models[id] ?? null;
 
@@ -287,8 +289,7 @@ describe('roomView: письмо', () => {
     const lines = view().lines;
     const fresh = lines.find((line) => line.text.startsWith(`${clock('12:43')}  S01`));
     const old = lines.find(
-      (line) =>
-        line.text === `${clock('12:40')}  S01 (Opus 5.5) ${g.arrow} S02 (Codex) · вопрос`,
+      (line) => line.text === `${clock('12:40')}  S01 (Opus 5.5) ${g.arrow} S02 (Codex) · вопрос`,
     );
 
     expect(fresh?.mark).toBe('unseen');
@@ -336,6 +337,27 @@ describe('roomView: письмо', () => {
       lines.some((line) => line.tone === 'muted' && line.text === '' && line.rule !== true),
     ).toBe(true);
     expect(lines.at(-1)?.text).not.toBe('');
+  });
+});
+
+describe('roomView: длинное решение', () => {
+  it('в блоке сверху — две строки с многоточием, полный текст остаётся в ленте', () => {
+    const long = Array.from({ length: 40 }, (_, index) => `пункт${index + 1}`).join(' ');
+    const lines = view({
+      entry: entry(
+        [session(), session({ id: 's-02', label: 'бэкенд', provider: 'codex' })],
+        [letter('m-01', 's-01', 's-02', '12:40', 'decision', long)],
+      ),
+    }).lines;
+
+    const rule = lines.findIndex((line) => line.rule === true);
+    const block = lines.slice(lines.findIndex((line) => line.text === 'РЕШЕНИЯ') + 1, rule);
+    expect(block).toHaveLength(2);
+    expect(block.at(-1)?.text.endsWith(g.ellipsis)).toBe(true);
+    for (const line of block) expect([...line.text].length).toBeLessThanOrEqual(WIDTH);
+
+    // В ленте письмо-решение целиком: последний пункт на месте.
+    expect(lines.slice(rule).some((line) => line.text.includes('пункт40'))).toBe(true);
   });
 });
 

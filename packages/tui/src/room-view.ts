@@ -25,6 +25,13 @@ const INDENT = '  ';
 const DECISIONS_SHOWN = 5;
 
 /**
+ * Строк на решение в блоке сверху. Решения агентов — абзацы на десяток строк
+ * (живой прогон w-0010): целиком два таких занимали весь экран и ещё раз
+ * повторялись в ленте. Сверху — начало с многоточием, полный текст — в ленте.
+ */
+const DECISION_ROWS = 2;
+
+/**
  * Подпись участника комнаты (дизайн комнаты, 4): известная сессия —
  * `S03 (Codex)`, где имя модели берётся из `modelOf`, а если модель неизвестна
  * (сессия ещё не писала, провайдер логов не отдаёт) — подпись провайдера из
@@ -136,7 +143,15 @@ export function roomView({ entry, width, height, scroll, g, modelOf }: RoomViewO
     if (older > 0) lines.push({ text: `+${older} раньше`, tone: 'muted' });
     for (const decision of decisions.slice(-DECISIONS_SHOWN)) {
       const text = `${formatClock(decision.at)} ${tag(decision.from)}: «${decision.text}»`;
-      for (const row of paragraph(`${g.done} `, text, width, g)) lines.push({ text: row, tone: 'head' });
+      const rows = paragraph(`${g.done} `, text, width, g);
+      const shown = rows.slice(0, DECISION_ROWS);
+      if (rows.length > DECISION_ROWS) {
+        const last = shown[DECISION_ROWS - 1] ?? '';
+        // Многоточие встаёт в ту же ширину: строка не длиннее ленты.
+        shown[DECISION_ROWS - 1] =
+          `${last.length >= width ? last.slice(0, width - 1) : last}${g.ellipsis}`;
+      }
+      for (const row of shown) lines.push({ text: row, tone: 'head' });
     }
     lines.push({ text: '', tone: 'muted', rule: true });
   }
