@@ -213,3 +213,26 @@
   `string-width` рядом с готовым `fillLine` из `packages/tui/src/theme/fill.ts`;
   затем `frameLine` в `sidebar.tsx` и `topBorder` в `overlay.tsx`.
 - **Зависит от:** ничего.
+
+## Три роли темы объявлены, но не применены (2026-09-23)
+
+- **Что не так:** `fg.accent` (пурпурный: провайдер, заголовки workflow, `▤`),
+  `fg.second` (второстепенный текст: цитата брифа, второй ряд строки) и
+  `status.live` (зелёный: `●` active, `✓` done) объявлены в
+  `packages/tui/src/theme/roles.ts` и проверены тестами, но ни один компонент
+  их не зовёт. Рядом лежит причина: `statusColor` в `packages/tui/src/glyphs.ts`
+  — мёртвая функция, её вызывает только собственный тест `glyphs.test.ts`, а
+  цвета точек на самом деле задаёт `dotColor` в
+  `packages/tui/src/components/activity-dot.tsx`, где `done` вообще без цвета.
+- **Почему отложено:** замена имён ANSI на роли (кусок 3 темы) держала
+  обещание «кадр знак в знак»: места, которые сегодня рисуются `dim` или без
+  цвета, ушли к `fg.muted` и к пустым пропсам, а не к своим ролям. Дать им
+  цвет — значит изменить картинку, то есть отдельное решение, а не перенос.
+- **С чего начать:** `packages/tui/src/work-rows.ts` (`providerMarkOf` — сама
+  подпись `Cl/Cx/GL`) и `packages/tui/src/work-events.ts` (где она попадает в
+  строку статуса); `packages/tui/src/components/sidebar.tsx` (значок `▤` и
+  заголовки работ); `packages/tui/src/components/thread.tsx` и
+  `components/dialog.tsx` (цитата и второй ряд — кандидаты на `fg.second`).
+  Заодно решить судьбу `statusColor`: подключить к компактной строке или
+  удалить вместе с её тестом.
+- **Зависит от:** ничего.

@@ -199,6 +199,7 @@ node packages/core/dist/cli.js session <id>
   "sidebarWidth": 26,
   "mouseCapture": true,
   "ascii": false,
+  "theme": "mocha",
   "silenceThresholdMs": 30000,
   "channelPush": true,
   "messageRate": 20,
@@ -208,7 +209,7 @@ node packages/core/dist/cli.js session <id>
 ```
 
 Переменные окружения перекрывают файл: `HARNAS_PREFIX`, `HARNAS_SIDEBAR_WIDTH`,
-`HARNAS_MOUSE`, `HARNAS_ASCII`, `HARNAS_SILENCE_MS`, `HARNAS_CHANNEL_PUSH`,
+`HARNAS_MOUSE`, `HARNAS_ASCII`, `HARNAS_THEME`, `HARNAS_SILENCE_MS`, `HARNAS_CHANNEL_PUSH`,
 `HARNAS_MESSAGE_RATE`, `HARNAS_THREAD_WIDTH`, `HARNAS_AUTO_LAUNCH`. Битый файл
 запуску не мешает:
 работают значения по умолчанию, а причина уезжает в строку статуса событием `⚑`.
@@ -217,6 +218,11 @@ node packages/core/dist/cli.js session <id>
 перехватывает ваш терминал (в справке `ctrl+q ?` это написано первой строкой).
 `ascii: true` (или `HARNAS_ASCII=1`) заменяет Unicode-глифы на ASCII-запасные;
 то же происходит само, когда локаль терминала задана и не UTF-8.
+`theme` (`mocha` по умолчанию, или `HARNAS_THEME`) — палитра интерфейса: `mocha`,
+`latte`, `gruvbox`, `nord`, `tokyo-night`, `terminal`. `terminal` — отказ от своей
+палитры в пользу цветов терминала, как было раньше. Тёмная тема рассчитана на
+тёмный терминал, светлая — на светлый: у Ink нет фона у рамки, и на контрастном
+фоне между блоками видны линии цвета терминала (дизайн темы, 5.2).
 `autoLaunch` (по умолчанию включён) — `pending` сессию, которую породил агент через
 `spawn_session`, харнесс поднимает сам, в фоне: панель остаётся у вас, в строке
 статуса — «запускается». Запускаются только записи, появившиеся при живом TUI;
