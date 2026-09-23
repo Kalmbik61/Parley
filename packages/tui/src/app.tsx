@@ -9,8 +9,8 @@
 
 import { defaultCodexRoot, defaultRoot, type SessionIndex, type WorkSession } from '@harnas/core';
 import { Box, useApp } from 'ink';
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { overlayCovers, OverlayHost, overlayRoom } from './components/overlay.js';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { overlayCovers, OverlayHost } from './components/overlay.js';
 import { cardFor, Panel, PANEL_FRAME } from './components/panel.js';
 import { Room } from './components/room.js';
 import {
@@ -22,7 +22,6 @@ import {
   WIDE,
 } from './components/sidebar.js';
 import { StatusBar } from './components/status-bar.js';
-import { Thread } from './components/thread.js';
 import { MIN_PTY } from './pty/pty-session.js';
 import { workRunKey } from './pty/use-agent-pty.js';
 import { useActions } from './use-actions.js';
@@ -41,7 +40,6 @@ import { useAttachSession, useSelection } from './use-selection.js';
 import { useSessionLink } from './use-session-link.js';
 import { useStatus } from './use-status.js';
 import { useTerminalSize } from './use-terminal-size.js';
-import { useThread } from './use-thread.js';
 import { useWorks } from './use-works.js';
 import { sessionOrders, workKey } from './work-rows.js';
 
@@ -103,28 +101,14 @@ export function App({
   const panelLeft = width === null ? 0 : width;
   const panelCols = Math.max(2, columns - panelLeft);
   const panelRows = Math.max(2, rows - 1);
-  // Тред справа от панели: пока он докован, гостю остаётся меньше колонок, и
-  // PTY узнаёт о них тем же путём, что при ресайзе терминала (разговор
-  // агентов, 6.1). Состояние хука нужно раньше самой панели, поэтому вид
-  // выбранной сессии он отдаёт отдельно — записи работы здесь ещё нет.
-  const thread = useThread({
-    panelCols,
-    height: panelRows,
-    overlayRoom: overlayRoom(rows),
-    width: config.threadWidth,
-  });
-  // Тред занимает `width + 2`, а не `width + 1`: у него своя рамка, и правая
-  // грань добавила вторую колонку сверх содержимого (план рамок, находка
-  // сверки: рамка треда). `threadFits` считает по тому же числу.
-  const bodyCols = thread.docked ? panelCols - thread.width - 2 : panelCols;
   // Рамка панели (план рамок, задача 6) съедает по колонке слева и справа и по
-  // строке сверху и снизу; вычитаем её тут же, где уже вычтены колонки дока
-  // треда — иначе размер до node-pty не дойдёт, и экран агента поедет.
+  // строке сверху и снизу; вычитаем её тут же — иначе размер до node-pty не
+  // дойдёт, и экран агента поедет.
   //
   // Пол — тот же `MIN_PTY`, что у `pty-session` и у буфера xterm: иначе на
   // терминале в три строки гостю выставлялся бы один размер, а панель
   // показывала бы другой, и его экран ушёл бы в никуда.
-  const guestCols = Math.max(MIN_PTY, bodyCols - 2 * PANEL_FRAME);
+  const guestCols = Math.max(MIN_PTY, panelCols - 2 * PANEL_FRAME);
   const guestRows = Math.max(MIN_PTY, panelRows - 2 * PANEL_FRAME);
   const panel = usePanel({
     projectPath,
@@ -219,16 +203,6 @@ export function App({
     roomSelected: selection.room,
   };
 
-  // Лента считается только там, где её видно: закрытому треду обход поддерева и
-  // перенос всех писем на каждую новую карту ни к чему. Запасник просит свой вид
-  // сам, через тот же кэш (6.1).
-  const threadPane = thread.docked ? thread.viewOf(chosen, current?.id ?? null) : null;
-  // Выбранная сессия исчезла (удалили её или работу) — тред закрывается: без
-  // сессии `t` его и не открывает, а док съедал бы колонки под пустую колонку.
-  useEffect(() => {
-    if (current === null) thread.close();
-  }, [current, thread.close]);
-
   const overlays = useOverlays({
     projectPath,
     prefixName,
@@ -246,7 +220,6 @@ export function App({
     branch,
     panel,
     selection,
-    thread,
     config,
     fromEnv,
     updateConfig,
@@ -269,14 +242,11 @@ export function App({
     session: current,
     panel,
     overlays,
-    thread,
     room: roomState,
     push,
     // Мышь: цели клика берутся из раскладки самого сайдбара (3.3).
     sidebar: width === null ? null : sidebar,
     panelLeft,
-    // Без дока панель доходит до края терминала, и правее неё ничего нет (6.3).
-    panelRight: panelLeft + bodyCols,
     // Рамка панели: экран гостя начинается на колонку правее и строку ниже,
     // и его координаты мыши надо сдвигать на неё (план рамок, задача 6).
     panelInset: PANEL_FRAME,
@@ -358,10 +328,6 @@ export function App({
             />
           )}
         </Box>
-        {/* Модальный оверлей ложится и на тред: док возвращается, закрывшись (6.1). */}
-        {thread.docked && overlays.kind === null && (
-          <Thread view={threadPane} width={thread.width} height={panelRows} />
-        )}
       </Box>
 
       <StatusBar

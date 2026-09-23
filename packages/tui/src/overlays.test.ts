@@ -411,7 +411,7 @@ describe('настройки (макет 4.14)', () => {
   };
 
   it('строки в порядке файла, выбранная подсвечена', () => {
-    const view = settingsView({ ...base, config: DEFAULT_CONFIG, at: 8 });
+    const view = settingsView({ ...base, config: DEFAULT_CONFIG, at: 7 });
     const rows = view.lines.slice(2);
     expect(rows.map((line) => line.text.trim().split(/\s+/)[0])).toEqual([
       'prefix',
@@ -421,22 +421,21 @@ describe('настройки (макет 4.14)', () => {
       'silenceThresholdMs',
       'channelPush',
       'messageRate',
-      'threadWidth',
       'autoLaunch',
       'theme',
     ]);
-    expect(rows[8]?.selected).toBe(true);
-    expect(rows[8]?.text).toContain('да');
+    expect(rows[7]?.selected).toBe(true);
+    expect(rows[7]?.text).toContain('да');
     expect(view.lines[0]?.text).toContain('~/.harnas/config.json');
     expect(view.footer).toContain('изменить');
   });
 
   it('тема — строка списка: показывает текущее имя, подвал говорит про стрелки', () => {
-    const view = settingsView({ ...base, config: { ...DEFAULT_CONFIG, theme: 'nord' }, at: 9 });
+    const view = settingsView({ ...base, config: { ...DEFAULT_CONFIG, theme: 'nord' }, at: 8 });
     const rows = view.lines.slice(2);
-    expect(rows[9]?.text).toContain('theme');
-    expect(rows[9]?.text).toContain('nord');
-    expect(rows[9]?.selected).toBe(true);
+    expect(rows[8]?.text).toContain('theme');
+    expect(rows[8]?.text).toContain('nord');
+    expect(rows[8]?.selected).toBe(true);
     expect(view.footer).toContain('←/→ — палитра');
     expect(view.footer).not.toContain('Enter — изменить');
   });

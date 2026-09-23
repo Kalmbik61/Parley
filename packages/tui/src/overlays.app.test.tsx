@@ -510,7 +510,7 @@ describe('настройки (макет 4.14)', () => {
       expect(app.lastFrame()).toContain('autoLaunch');
       await waitFor(() => row(app, 'autoLaunch').includes('да'));
 
-      await press(app, DOWN, 8);
+      await press(app, DOWN, 7);
       app.stdin.write(ENTER);
       await waitConfig((data) => data?.['autoLaunch'] === false);
       await waitFor(() => row(app, 'autoLaunch').includes('нет'));
@@ -653,8 +653,8 @@ describe('настройки (макет 4.14)', () => {
     const app = open();
     try {
       await openSettings(app);
-      // Тема — последняя строка настроек (SETTINGS, дизайн 3.4): девять шагов вниз.
-      await press(app, DOWN, 9);
+      // Тема — последняя строка настроек (SETTINGS, дизайн 3.4): восемь шагов вниз.
+      await press(app, DOWN, 8);
       await waitFor(() => row(app, 'theme').includes('mocha'));
       expect(app.lastFrame()).toContain('←/→ — палитра');
 
@@ -692,7 +692,7 @@ describe('настройки (макет 4.14)', () => {
     const app = open();
     try {
       await openSettings(app);
-      await press(app, DOWN, 9);
+      await press(app, DOWN, 8);
       await waitFor(() => row(app, 'theme').includes('задано HARNAS_THEME'));
 
       app.stdin.write(RIGHT);

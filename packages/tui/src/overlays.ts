@@ -36,7 +36,6 @@ import {
   wrapText,
 } from './format.js';
 import { statusGlyph, type Glyphs } from './glyphs.js';
-import type { ThreadView } from './thread-view.js';
 
 /** Ширина тела внутри рамки: рамка минус два бока. */
 const bodyWidth = (frame: number): number => frame - 2;
@@ -353,27 +352,6 @@ const BINDINGS: ReadonlyArray<readonly [string, string]> = [
 ];
 
 /**
- * 6.1. Тред-запасник: на узком терминале док не влезает, и та же лента
- * показывается оверлеем. Вид сюда приходит готовым — тот самый, что у дока
- * (приёмка 8.41), уже нарезанный `use-thread.ts` по телу рамки (`overlayRoom`)
- * и по общей прокрутке. Резать окно ещё раз здесь нельзя: `Overlay` отсчитывает
- * своё от начала списка, и лента открывалась бы с самых старых писем (6.3).
- */
-export function threadOverlayView(view: ThreadView, width: number, g: Glyphs): OverlayView {
-  // Те же пометки, что в заголовке дока: непрочитанные и хвост ленты (6.3).
-  const marks = [
-    view.unread > 0 ? `${g.mail}${view.unread}` : '',
-    view.below > 0 ? `${g.down}${view.below}` : '',
-  ].filter((mark) => mark !== '');
-  return {
-    title: [view.title, ...marks].join(' '),
-    desired: width + 2,
-    lines: view.lines,
-    footer: ` ${g.up}${g.down} — прокрутка · Esc — закрыть`,
-  };
-}
-
-/**
  * 4.4. Справка: первой строкой — как сменить префикс, если его перехватывает
  * терминал; ниже фильтр и все привязки.
  */
@@ -416,7 +394,6 @@ export const SETTINGS: ReadonlyArray<{ key: keyof HarnasConfig; hint: string }> 
   { key: 'silenceThresholdMs', hint: 'порог молчания лога, мс' },
   { key: 'channelPush', hint: 'звонок адресату через channel' },
   { key: 'messageRate', hint: 'потолок писем сессии за час' },
-  { key: 'threadWidth', hint: 'ширина треда, колонок' },
   { key: 'autoLaunch', hint: 'pending от агента стартует сама' },
   { key: 'theme', hint: 'палитра интерфейса' },
 ];

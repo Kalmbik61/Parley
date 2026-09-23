@@ -32,7 +32,6 @@ describe('loadConfig', () => {
       silenceThresholdMs: 30_000,
       channelPush: true,
       messageRate: 20,
-      threadWidth: 30,
       autoLaunch: true,
       theme: 'mocha',
     });
@@ -49,7 +48,6 @@ describe('loadConfig', () => {
       silenceThresholdMs: 5000,
       channelPush: false,
       messageRate: 5,
-      threadWidth: 24,
       autoLaunch: false,
     });
 
@@ -62,7 +60,6 @@ describe('loadConfig', () => {
       silenceThresholdMs: 5000,
       channelPush: false,
       messageRate: 5,
-      threadWidth: 24,
       autoLaunch: false,
       theme: 'mocha',
     });
@@ -76,7 +73,6 @@ describe('loadConfig', () => {
       HARNAS_SILENCE_MS: '60000',
       HARNAS_CHANNEL_PUSH: '1',
       HARNAS_MESSAGE_RATE: '7',
-      HARNAS_THREAD_WIDTH: '40',
       HARNAS_AUTO_LAUNCH: '1',
     });
     expect(fromEnv.config).toEqual({
@@ -87,7 +83,6 @@ describe('loadConfig', () => {
       silenceThresholdMs: 60_000,
       channelPush: true,
       messageRate: 7,
-      threadWidth: 40,
       autoLaunch: true,
       theme: 'mocha',
     });
@@ -138,27 +133,38 @@ describe('loadConfig', () => {
     expect(loaded.warning).toContain('HARNAS_SIDEBAR_WIDTH');
   });
 
-  it('тред уже минимума и потолок писем меньше единицы — жалоба и дефолт', async () => {
-    await write({ threadWidth: 20, messageRate: 0, channelPush: true });
+  it('потолок писем меньше единицы — жалоба и дефолт, остальные поля целы', async () => {
+    await write({ messageRate: 0, channelPush: true });
     const loaded = await loadConfig(file(), {});
 
-    expect(loaded.config.threadWidth).toBe(DEFAULT_CONFIG.threadWidth);
     expect(loaded.config.messageRate).toBe(DEFAULT_CONFIG.messageRate);
     expect(loaded.config.channelPush).toBe(true);
-    expect(loaded.warning).toContain('threadWidth');
-    expect(loaded.warning).toContain('24');
     expect(loaded.warning).toContain('messageRate');
   });
 
-  it('HARNAS_THREAD_WIDTH уже минимума — жалоба и дефолт, HARNAS_CHANNEL_PUSH=0 гасит push', async () => {
-    const loaded = await loadConfig(file(), {
-      HARNAS_THREAD_WIDTH: '20',
-      HARNAS_CHANNEL_PUSH: '0',
-    });
+  it('HARNAS_CHANNEL_PUSH=0 гасит push', async () => {
+    const loaded = await loadConfig(file(), { HARNAS_CHANNEL_PUSH: '0' });
 
-    expect(loaded.config.threadWidth).toBe(DEFAULT_CONFIG.threadWidth);
     expect(loaded.config.channelPush).toBe(false);
-    expect(loaded.warning).toContain('HARNAS_THREAD_WIDTH');
+    expect(loaded.warning).toBeNull();
+  });
+
+  it('устаревший ключ threadWidth в config.json читается без жалобы, saveConfig его сохраняет (кусок 4: док ушёл)', async () => {
+    await write({ threadWidth: 20 });
+    const loaded = await loadConfig(file(), {});
+
+    expect(loaded.config).toEqual(DEFAULT_CONFIG);
+    expect(loaded.warning).toBeNull();
+
+    await saveConfig({ prefix: 'a' }, file());
+    expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({ threadWidth: 20, prefix: 'a' });
+  });
+
+  it('устаревшая переменная HARNAS_THREAD_WIDTH не даёт жалобы (кусок 4: док ушёл)', async () => {
+    const loaded = await loadConfig(file(), { HARNAS_THREAD_WIDTH: '999' });
+
+    expect(loaded.warning).toBeNull();
+    expect(loaded.fromEnv).toEqual([]);
   });
 
   it('HARNAS_ESCAPE_KEY больше не читается', async () => {
@@ -245,12 +251,8 @@ describe('parseSetting', () => {
     expect(parseSetting('sidebarWidth', '2.5')).toMatchObject({ error: expect.any(String) });
   });
 
-  it('messageRate и threadWidth — теми же правилами, что и у файла', () => {
+  it('messageRate — теми же правилами, что и у файла', () => {
     expect(parseSetting('messageRate', '7')).toEqual({ value: 7 });
-    expect(parseSetting('threadWidth', '40')).toEqual({ value: 40 });
-    expect(parseSetting('threadWidth', '20')).toEqual({
-      error: 'threadWidth: ожидается целое не меньше 24',
-    });
   });
 });
 

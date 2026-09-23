@@ -1,8 +1,7 @@
 /**
  * Вид комнаты: вся переписка работы, заголовок с числительным, участники и
  * решения по новым подписям (дизайн комнаты 2026-09-23, раздел 5 и 8).
- * Фикстура — карта работы, как в `thread-view.test.ts`: ни Ink, ни файловой
- * системы здесь нет.
+ * Ни Ink, ни файловой системы здесь нет.
  */
 
 import type { Message, MessageKind, WorkEntry, WorkSession } from '@harnas/core';
@@ -356,6 +355,39 @@ describe('roomView: окно', () => {
 
     expect(window.lines.map((line) => line.text)).toEqual(all.slice(1, 5));
     expect(window.below).toBe(all.length - 5);
+  });
+
+  // Перенесено из теста треда (приёмка 39 прежнего дизайна): окно проверено и
+  // на масштабе, а не только на пяти письмах — срез по высоте, хвост и `below`.
+  it('лента в 500 писем рисуется срезом по высоте', () => {
+    const minute = (index: number): string =>
+      `${String(Math.floor(index / 60)).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}`;
+    const many = entry(
+      [session(), session({ id: 's-02', label: 'бэкенд', provider: 'codex' })],
+      Array.from({ length: 500 }, (_, index) =>
+        letter(
+          `m-${String(index).padStart(3, '0')}`,
+          's-01',
+          's-02',
+          minute(index),
+          'note',
+          `письмо ${String(index + 1).padStart(3, '0')}`,
+        ),
+      ),
+    );
+    const cut = (scroll: number | null): RoomView => view({ entry: many, height: 20, scroll });
+
+    // Вся лента в окно не попадает: в кадре ровно высота, а не тысячи строк.
+    const tail = cut(null);
+    expect(tail.total).toBeGreaterThan(1000);
+    expect(tail.lines).toHaveLength(20);
+    expect(tail.lines.at(-1)?.text).toBe('письмо 500');
+    expect(tail.below).toBe(0);
+
+    // От начала ленты видно первое письмо, а ниже окна — всё остальное.
+    const head = cut(0);
+    expect(head.lines.some((line) => line.text.startsWith(clock('00:00')))).toBe(true);
+    expect(head.below).toBe(tail.total - 20);
   });
 
   it('прокрутка дальше хвоста окно в пустоту не уводит', () => {

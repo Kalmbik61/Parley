@@ -18,7 +18,7 @@ import { formatClock, wrapText } from './format.js';
 import type { Glyphs } from './glyphs.js';
 import { registryEntry, treeOrder } from './work-rows.js';
 
-/** Отступ продолжения переноса в блоке решений — как в `thread-view.ts`. */
+/** Отступ продолжения переноса в блоке решений. */
 const INDENT = '  ';
 
 /** Сколько последних решений видно; старше — одной строкой «+N раньше». */
@@ -62,7 +62,7 @@ function kindSuffix(kind: MessageKind): string {
 
 /**
  * Абзац решения с переносом: первая строка с меткой, продолжения — с отступом
- * на её ширину (как в `thread-view.ts`).
+ * на её ширину.
  */
 function paragraph(mark: string, text: string, width: number, g: Glyphs): string[] {
   return wrapText(text, width - INDENT.length, Number.POSITIVE_INFINITY, g.ellipsis).map(

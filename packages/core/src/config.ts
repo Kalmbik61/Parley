@@ -32,8 +32,6 @@ export interface HarnasConfig {
    * вежливых агентов до конца лимита подписки (разговор агентов, 4.7).
    */
   messageRate: number;
-  /** Ширина панели треда; уже минимума лента нечитаема (разговор агентов, 6.1). */
-  threadWidth: number;
   /** Запускать ли `pending` от агента самим, в фоне, без диалога (раздел 5.2). */
   autoLaunch: boolean;
   /** Имя темы: пять палитр плюс `terminal` (дизайн темы `2026-09-22-tui-theme-design.md`, раздел 6). */
@@ -51,7 +49,6 @@ export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
   silenceThresholdMs: 30_000,
   channelPush: true,
   messageRate: 20,
-  threadWidth: 30,
   autoLaunch: true,
   theme: 'mocha',
 };
@@ -65,7 +62,6 @@ export const ENV_NAMES: Readonly<Record<keyof HarnasConfig, string>> = {
   silenceThresholdMs: 'HARNAS_SILENCE_MS',
   channelPush: 'HARNAS_CHANNEL_PUSH',
   messageRate: 'HARNAS_MESSAGE_RATE',
-  threadWidth: 'HARNAS_THREAD_WIDTH',
   autoLaunch: 'HARNAS_AUTO_LAUNCH',
   theme: 'HARNAS_THEME',
 };
@@ -98,12 +94,6 @@ const isPrefix = (value: unknown): value is string =>
 const isPositiveInt = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value > 0;
 
-/** Ниже этого тред не докуется: 24 колонки — предел читаемости (6.1). */
-const THREAD_MIN = 24;
-const isThreadWidth = (value: unknown): value is number =>
-  isPositiveInt(value) && value >= THREAD_MIN;
-const THREAD_EXPECTED = `целое не меньше ${THREAD_MIN}`;
-
 const isThemeName = (value: unknown): value is string =>
   typeof value === 'string' && (THEME_NAMES as readonly string[]).includes(value);
 const THEME_EXPECTED = `одно из ${THEME_NAMES.join(', ')}`;
@@ -132,7 +122,6 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   take('silenceThresholdMs', isPositiveInt, 'целое больше нуля');
   take('channelPush', (value) => typeof value === 'boolean', 'true или false');
   take('messageRate', isPositiveInt, 'целое больше нуля');
-  take('threadWidth', isThreadWidth, THREAD_EXPECTED);
   take('autoLaunch', (value) => typeof value === 'boolean', 'true или false');
   take('theme', isThemeName, THEME_EXPECTED);
   return patch;
@@ -161,18 +150,13 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
     else complain(`${name}: ожидается 0 или 1`);
   };
 
-  // Проверка передаётся как в `fromFile`: у `threadWidth` она своя, с минимумом.
-  const count = (
-    key: 'sidebarWidth' | 'silenceThresholdMs' | 'messageRate' | 'threadWidth',
-    ok: (value: unknown) => boolean = isPositiveInt,
-    expected = 'целое больше нуля',
-  ): void => {
+  const count = (key: 'sidebarWidth' | 'silenceThresholdMs' | 'messageRate'): void => {
     const name = ENV_NAMES[key];
     const value = text(name);
     if (value === undefined) return;
     const parsed = Number(value);
-    if (ok(parsed)) patch[key] = parsed;
-    else complain(`${name}: ожидается ${expected}`);
+    if (isPositiveInt(parsed)) patch[key] = parsed;
+    else complain(`${name}: ожидается целое больше нуля`);
   };
 
   const prefix = text(ENV_NAMES.prefix);
@@ -191,7 +175,6 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   count('silenceThresholdMs');
   flag('channelPush');
   count('messageRate');
-  count('threadWidth', isThreadWidth, THREAD_EXPECTED);
   flag('autoLaunch');
   return patch;
 }
@@ -244,12 +227,7 @@ export async function loadConfig(
 }
 
 /** Ключи, значение которых вводится текстом; булевы переключаются без ввода. */
-export type TypedSettingKey =
-  | 'prefix'
-  | 'sidebarWidth'
-  | 'silenceThresholdMs'
-  | 'messageRate'
-  | 'threadWidth';
+export type TypedSettingKey = 'prefix' | 'sidebarWidth' | 'silenceThresholdMs' | 'messageRate';
 
 /**
  * Разбор введённого значения теми же правилами, что и у файла: оверлей настроек
@@ -263,12 +241,9 @@ export function parseSetting<K extends TypedSettingKey>(
     if (isPrefix(text)) return { value: text as HarnasConfig[K] };
     return { error: `${key}: ожидается один знак` };
   }
-  // У `threadWidth` проверка своя, с минимумом: та же, что и у файла.
-  const ok = key === 'threadWidth' ? isThreadWidth : isPositiveInt;
-  const expected = key === 'threadWidth' ? THREAD_EXPECTED : 'целое больше нуля';
   const parsed = Number(text);
-  if (ok(parsed)) return { value: parsed as HarnasConfig[K] };
-  return { error: `${key}: ожидается ${expected}` };
+  if (isPositiveInt(parsed)) return { value: parsed as HarnasConfig[K] };
+  return { error: `${key}: ожидается целое больше нуля` };
 }
 
 /**

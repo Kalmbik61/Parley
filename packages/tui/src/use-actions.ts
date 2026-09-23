@@ -20,7 +20,6 @@ import {
 import type { PanelState, WorkRef } from './use-panel.js';
 import type { OverlaysState } from './use-overlays.js';
 import type { RoomState } from './use-room.js';
-import type { ThreadState } from './use-thread.js';
 import { usePrefixInput, withoutMouse, type MouseEvent } from './use-prefix-input.js';
 import type { SelectionState } from './use-selection.js';
 import type { StatusEventInit } from './use-status.js';
@@ -87,8 +86,6 @@ export interface ActionsOptions {
   session: WorkSession | null;
   panel: PanelState;
   overlays: OverlaysState;
-  /** Тред выбранной сессии: остаётся только состоянием — `t` его больше не открывает (дизайн комнаты, 3.1). */
-  thread: ThreadState;
   /**
    * Комната работы: `t` выбирает и уводит из неё, стрелки и колесо без
    * префикса листают её ленту, пока она выбрана (дизайн комнаты, 3–5).
@@ -100,11 +97,6 @@ export interface ActionsOptions {
   sidebar: SidebarProps | null;
   /** Колонок слева от панели: клик не правее — сайдбару. */
   panelLeft: number;
-  /**
-   * Последняя колонка панели гостя: при доке треда она меньше правого края
-   * терминала, и события правее неё листают ленту, а не уходят агенту (6.3).
-   */
-  panelRight: number;
   /**
    * Ячеек рамки панели до экрана гостя: на столько же сдвинуты его первая
    * колонка и строка, и на столько же правится координата клика, уходящего
@@ -140,7 +132,7 @@ type WalkStop =
   | { work: string; kind: 'room' };
 
 export function useActions(options: ActionsOptions): ActionsState {
-  const { prefixByte, workRows, selection, orders, roomWorks, panel, overlays, thread, room, push } =
+  const { prefixByte, workRows, selection, orders, roomWorks, panel, overlays, room, push } =
     options;
   const order = orders.get(selection.work ?? '') ?? [];
   // Все сессии сайдбара сверху вниз, а следом за сессиями каждой работы — её
@@ -156,17 +148,8 @@ export function useActions(options: ActionsOptions): ActionsState {
     }
     return out;
   }, [workRows, orders, roomWorks]);
-  const {
-    work,
-    session,
-    sidebar,
-    panelLeft,
-    panelRight,
-    panelInset,
-    mouseCapture,
-    onKey,
-    toggleSidebar,
-  } = options;
+  const { work, session, sidebar, panelLeft, panelInset, mouseCapture, onKey, toggleSidebar } =
+    options;
 
   const [navigating, setNavigating] = useState(false);
   const [awaiting, setAwaiting] = useState(false);
@@ -361,12 +344,10 @@ export function useActions(options: ActionsOptions): ActionsState {
     },
     mouseCapture,
     panelLeft,
-    panelRight,
     panelInset,
     mouseTracking: panel.snapshot?.mouseTracking ?? 'none',
     onMouse,
     onScroll: panel.scroll,
-    onThreadScroll: thread.scrollBy,
     roomSelected: selection.room,
     onRoomScroll: room.scrollBy,
   });

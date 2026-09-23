@@ -51,12 +51,6 @@ export interface PrefixInputOptions {
   /** Колонок слева от панели: клик не правее — сайдбару. */
   panelLeft?: number;
   /**
-   * Последняя колонка панели гостя; правее неё лежит док треда (6.3, решение
-   * D18). `undefined` — дока нет, и вся правая часть терминала принадлежит
-   * гостю, как раньше.
-   */
-  panelRight?: number;
-  /**
    * Сколько ячеек занимает рамка панели до экрана гостя: его первая колонка и
    * строка начинаются на столько же правее и ниже (план рамок, задача 6).
    * Без этого клик уходил бы гостю со смещением на рамку.
@@ -67,8 +61,6 @@ export interface PrefixInputOptions {
   onMouse?: (event: MouseEvent) => void;
   /** Прокрутка скроллбэка: меньше нуля — вверх, больше — вниз. */
   onScroll?: (lines: number) => void;
-  /** Колесо над доком треда: те же знаки, что у скроллбэка. */
-  onThreadScroll?: (lines: number) => void;
   /**
    * Комната занимает место панели (дизайн комнаты, 3): колесо над её зоной
    * листает ленту вместо гостя, клик по ней не делает ничего — выбирать в
@@ -139,12 +131,10 @@ function wheelLines({ button, kind }: MouseEvent): number {
 function routeMouse(event: MouseEvent, options: PrefixInputOptions): void {
   const {
     panelLeft = 0,
-    panelRight,
     panelInset = 0,
     mouseTracking = 'none',
     onMouse,
     onScroll,
-    onThreadScroll,
     roomSelected = false,
     onRoomScroll,
     toGuest,
@@ -152,15 +142,6 @@ function routeMouse(event: MouseEvent, options: PrefixInputOptions): void {
 
   if (event.x <= panelLeft) {
     onMouse?.(event);
-    return;
-  }
-  // Тред идёт до ветки гостя: живой Claude Code включает отслеживание мыши, и
-  // без этой проверки колесо над лентой уходило бы ему с координатой за
-  // пределами его колонок, а лента стояла бы на месте (6.3, решение D18).
-  if (panelRight !== undefined && event.x > panelRight) {
-    const lines = wheelLines(event);
-    // Клик по треду ничего не делает: выбирать в ленте нечего (6.3).
-    if (lines !== 0) onThreadScroll?.(lines);
     return;
   }
   // Комната стоит на месте гостя (дизайн комнаты, 3): колесо листает её,
