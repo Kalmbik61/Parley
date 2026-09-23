@@ -1,4 +1,4 @@
-import type { SessionIndex, WorkEntry, WorkSession } from '@harnas/core';
+import { sessionTag, type SessionIndex, type WorkEntry, type WorkSession } from '@harnas/core';
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
 import { pinUnicodeGlyphs } from '../../test/glyphs-env.js';
@@ -13,6 +13,7 @@ import {
   sidebarWidth,
   stepCursor,
   type SidebarSession,
+  type SidebarTarget,
   type SidebarWork,
 } from './sidebar.js';
 
@@ -125,8 +126,12 @@ describe('Sidebar', () => {
     expect(lineWith(all, 'new')).toContain(' new');
     expect(lineWith(all, 'сессии ·')).toContain('сессии · Авторизация');
     expect(lineWith(all, 'план')).toContain('working');
-    // Дочерняя сессия — отступом и глифом `└` (макет 1.1).
-    expect(lineWith(all, 'ревью')).toContain('└ ●');
+    // Номер сессии стоит перед ярлыком (дизайн комнаты, 4).
+    expect(lineWith(all, 'план')).toContain('S01 план');
+    // Дочерняя сессия — отступом и глифом `└` (макет 1.1); её ярлык на этой
+    // ширине режется номером и глифом отступа — ищем по началу.
+    expect(lineWith(all, 'рев')).toContain('└ ●');
+    expect(lineWith(all, 'рев')).toContain('S02');
 
     // Каждая строка кончается правой гранью блока на 26-й колонке: у обычных
     // строк — вертикаль, у верхней и нижней граней блока — угол. Разделителя
@@ -192,8 +197,9 @@ describe('Sidebar', () => {
   });
 
   // Чек-лист 23, нижняя граница: места нет вовсе, а ярлык всё равно 4 знака.
-  // Ширина 11, а не 9: боковые грани (план рамок, задача 5) забирают 2 колонки
-  // содержимого, и именно на content = 9 приходится прежняя крайняя граница.
+  // Ширина 15, а не 9: боковые грани (план рамок, задача 5) забирают 2 колонки
+  // содержимого, номер сессии перед ярлыком — ещё 4 (дизайн комнаты, 4), и
+  // именно на content = 13 приходится прежняя крайняя граница.
   it('на экстремально узкой строке ярлык — 4 знака, буква состояния на месте', () => {
     const all = lines(
       <Sidebar
@@ -201,7 +207,7 @@ describe('Sidebar', () => {
         sessions={[item({ session: session({ label: 'исследовать миграции' }), state: 'blocked' })]}
         selectedWork="/dev/shop w-0001"
         selectedSession="s-01"
-        width={11}
+        width={15}
         height={8}
       />,
     );
@@ -210,9 +216,11 @@ describe('Sidebar', () => {
     // Три буквы и знак усечения — короче ярлык не режется (§7).
     expect(row).toContain('исс…');
     expect(row).not.toContain('иссл');
+    // Номер сессии стоит перед ярлыком, тоже не отбрасывается (дизайн комнаты, 4).
+    expect(row).toContain('S01');
     // Буква состояния не отбрасывается никогда (макет 1.2).
     expect(row).toContain('b');
-    expect(rightFrameAt(row)).toBe(10);
+    expect(rightFrameAt(row)).toBe(14);
   });
 
   // Чек-лист 26.
@@ -805,5 +813,232 @@ describe('Sidebar курсор навигации', () => {
     // включены (`sidebar-selection.test.tsx`); здесь — что раскладка не поехала.
     expect(lineWith(all, 'new')).toContain(' new');
     expect(lineWith(all, 'план')).toContain('working');
+  });
+});
+
+// Дизайн комнаты, 4: номер сессии перед ярлыком, общая ширина строки прежняя.
+describe('строка сессии: номер перед ярлыком', () => {
+  it('печатает sessionTag(id) перед ярлыком через пробел', () => {
+    const all = lines(
+      <Sidebar
+        works={[work()]}
+        sessions={[item({ session: session({ id: 's-03', label: 'проверка' }) })]}
+        selectedWork="/dev/shop w-0001"
+        selectedSession="s-03"
+        width={26}
+        height={10}
+      />,
+    );
+
+    expect(lineWith(all, 'проверка')).toContain('S03 проверка');
+  });
+
+  // Приёмка: общая ширина строки равна ширине блока — инвариантом по набору
+  // ширин сайдбара, при разных по длине формах номера (S1, S12, S001).
+  it('общая ширина строки прежняя при любой ширине сайдбара и форме номера', () => {
+    for (const width of [18, 22, 26, 34, 40]) {
+      for (const id of ['s-1', 's-12', 's-001']) {
+        const all = lines(
+          <Sidebar
+            works={[work()]}
+            sessions={[
+              item({ session: session({ id, label: 'исследовать варианты миграции' }) }),
+            ]}
+            selectedWork="/dev/shop w-0001"
+            selectedSession={id}
+            width={width}
+            height={10}
+          />,
+        );
+        // Тег никогда не режется — это и делает его надёжным якорем поиска
+        // строки на любой ширине, в отличие от ярлыка (он может укоротиться
+        // вплоть до пола MIN_LABEL).
+        const row = lineWith(all, sessionTag(id));
+        expect(row).not.toBe('');
+        expect(rightFrameAt(row)).toBe(width - 1);
+      }
+    }
+  });
+
+  // Пол MIN_LABEL и слово состояния целы, несмотря на добавленный номер (§7).
+  it('ярлык не короче четырёх знаков, слово состояния не отбрасывается', () => {
+    const all = lines(
+      <Sidebar
+        works={[work()]}
+        sessions={[
+          item({
+            session: session({ id: 's-07', label: 'исследовать варианты миграции' }),
+            state: 'idle',
+          }),
+        ]}
+        selectedWork="/dev/shop w-0001"
+        selectedSession="s-07"
+        width={26}
+        height={10}
+      />,
+    );
+
+    const row = lineWith(all, 'S07');
+    expect(row).toContain('idle');
+    const labelPart = row.split('S07')[1] ?? '';
+    // Как минимум 4 знака ярлыка (не считая многоточия) видны на строке.
+    expect(labelPart.replace(glyphs().ellipsis, '').trim().length).toBeGreaterThanOrEqual(4);
+  });
+});
+
+// Дизайн комнаты, 3: последняя строка блока «сессии», только когда есть письма.
+describe('строка комнаты', () => {
+  it('нет писем — строки нет вовсе', () => {
+    const all = lines(
+      <Sidebar
+        works={[work()]}
+        sessions={[item()]}
+        selectedWork="/dev/shop w-0001"
+        selectedSession="s-01"
+        width={26}
+        height={12}
+        room={null}
+      />,
+    );
+
+    expect(all.some((line) => line.includes('комната'))).toBe(false);
+  });
+
+  it('есть письма без непрочитанных — справа их число', () => {
+    const all = lines(
+      <Sidebar
+        works={[work()]}
+        sessions={[item()]}
+        selectedWork="/dev/shop w-0001"
+        selectedSession="s-01"
+        width={26}
+        height={12}
+        room={{ letters: 5, unread: 0 }}
+      />,
+    );
+
+    const row = lineWith(all, 'комната');
+    expect(row).not.toBe('');
+    expect(row).toContain('5');
+    expect(row).not.toContain(`${glyphs().mail}5`);
+  });
+
+  it('есть непрочитанные — «▤N» вместо общего числа', () => {
+    const all = lines(
+      <Sidebar
+        works={[work()]}
+        sessions={[item()]}
+        selectedWork="/dev/shop w-0001"
+        selectedSession="s-01"
+        width={26}
+        height={12}
+        room={{ letters: 5, unread: 2 }}
+      />,
+    );
+
+    const row = lineWith(all, 'комната');
+    expect(row).toContain(`${glyphs().mail}2`);
+  });
+
+  it('строка комнаты — последняя в блоке сессий', () => {
+    const all = lines(
+      <Sidebar
+        works={[work()]}
+        sessions={[item(), item({ session: session({ id: 's-02', label: 'ревью', parent: 's-01' }) })]}
+        selectedWork="/dev/shop w-0001"
+        selectedSession="s-01"
+        width={26}
+        height={16}
+        room={{ letters: 1, unread: 0 }}
+      />,
+    );
+
+    const roomAt = all.findIndex((line) => line.includes('комната'));
+    const lastSessionAt = all.findLastIndex((line) => line.includes('ревью'));
+    // Нижняя грань блока сессий — вторая по счёту (первая закрывает блок работ).
+    const graneNiz = all.findIndex(
+      (line, at) => at > roomAt && line.startsWith(glyphs().frame.bottomLeft),
+    );
+    // Комната идёт после всех строк сессий (включая дочернюю), и перед ней
+    // до нижней грани блока — только пустая добивка, не другая сессия.
+    expect(roomAt).toBeGreaterThan(lastSessionAt);
+    expect(graneNiz).toBeGreaterThan(roomAt);
+    for (const line of all.slice(roomAt + 1, graneNiz)) {
+      expect(line).not.toContain('S0');
+    }
+  });
+
+  it('цель строки — kind: room с ключом выбранной работы', () => {
+    const props = {
+      works: [work()],
+      sessions: [item()],
+      selectedWork: '/dev/shop w-0001',
+      selectedSession: 's-01',
+      width: 26,
+      height: 12,
+      room: { letters: 3, unread: 0 },
+    };
+    const all = lines(<Sidebar {...props} />);
+    const targets = sidebarTargets(props);
+    const at = all.findIndex((line) => line.includes('комната'));
+
+    expect(targets[at]).toEqual({ kind: 'room', key: '/dev/shop w-0001' });
+  });
+
+  it('roomSelected подсвечивает строку комнаты, а не строку сессии', () => {
+    const all = lines(
+      <Sidebar
+        works={[work()]}
+        sessions={[item()]}
+        selectedWork="/dev/shop w-0001"
+        selectedSession="s-01"
+        width={26}
+        height={12}
+        room={{ letters: 3, unread: 0 }}
+        roomSelected={true}
+      />,
+    );
+
+    // Подсветка — цвет (проверяется отдельно в `sidebar-selection.test.tsx`);
+    // здесь — что раскладка не поехала и строка комнаты на месте.
+    expect(lineWith(all, 'комната')).toContain('комната');
+  });
+});
+
+// Дизайн комнаты, 5: комната достижима курсором режима навигации и уходит с
+// неё — тем же `stepCursor`, что и у остальных строк сайдбара.
+describe('sidebarCursorRows и stepCursor: комната', () => {
+  it('без комнаты (room: null) список строк прежний', () => {
+    const rows = sidebarCursorRows([work()], ['s-01', 's-02'], null);
+    expect(rows.some((row) => row.kind === 'room')).toBe(false);
+  });
+
+  it('с комнатой — она последней строкой, после сессий выбранной работы', () => {
+    const rows = sidebarCursorRows([work()], ['s-01', 's-02'], '/dev/shop w-0001');
+    expect(rows.at(-1)).toEqual({ kind: 'room', key: '/dev/shop w-0001' });
+  });
+
+  it('курсор доходит до комнаты с последней сессии и уходит с неё в обе стороны', () => {
+    // `sidebarCursorRows` — плоский список строк САМОГО сайдбара (работы, new,
+    // сессии выбранной работы, её комната последней) — круг замыкает первая
+    // работа, а не следующая: сайдбар одновременно показывает сессии только
+    // одной, выбранной работы (2.1).
+    const rows = sidebarCursorRows(
+      [work(), work({ key: 'k2', number: 2, title: 'Платежи' })],
+      ['s-01', 's-02'],
+      '/dev/shop w-0001',
+    );
+    const last: SidebarTarget = { kind: 'session', key: 's-02' };
+
+    const toRoom = stepCursor(rows, last, 1);
+    expect(toRoom).toEqual({ kind: 'room', key: '/dev/shop w-0001' });
+
+    // Дальше — по кругу, к первой строке списка (первая работа).
+    const afterRoom = stepCursor(rows, toRoom, 1);
+    expect(afterRoom).toEqual({ kind: 'work', key: '/dev/shop w-0001' });
+
+    // И обратно с комнаты — к последней сессии, с которой пришли.
+    const back = stepCursor(rows, toRoom, -1);
+    expect(back).toEqual(last);
   });
 });

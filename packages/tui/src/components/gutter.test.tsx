@@ -109,6 +109,8 @@ function sidebarProps(
   cursor: SidebarTarget | null = null,
   ownWorks: readonly SidebarWork[] = works,
   ownSessions: readonly SidebarSession[] = sessions,
+  room: SidebarProps['room'] = null,
+  roomSelected = false,
 ): SidebarProps {
   return {
     works: ownWorks,
@@ -119,6 +121,8 @@ function sidebarProps(
     height,
     framed: false,
     cursor,
+    room,
+    roomSelected,
   };
 }
 
@@ -152,6 +156,20 @@ describe('жёлоб на уровне 0 — сайдбар (дизайн 4.3, �
 
     // Ровно два маркера на весь кадр: первая строка работы + первая строка
     // сессии — считаем по всему кадру, а не по одной догадке.
+    expect(lines.filter((line) => line.startsWith('›')).length).toBe(2);
+  });
+
+  // Приёмка (дизайн комнаты, 3-4, 6): у выбранной строки комнаты маркер
+  // жёлоба стоит так же, как у любой строки списка — своей функцией
+  // (`gutterMark`), общей с `SessionRow`.
+  it('маркер жёлоба стоит у выбранной строки комнаты, а не у строки сессии', () => {
+    const lines = sidebarFrame(26, 16, null, works, sessions, { letters: 3, unread: 1 }, true);
+    const room = lines.find((line) => line.includes('комната'));
+    const workSession = lines.find((line) => line.includes('Session1'));
+
+    expect(room?.startsWith('›')).toBe(true);
+    // Комната выбрана вместо сессии — строка сессии маркер уступает ей.
+    expect(workSession?.startsWith('›')).toBe(false);
     expect(lines.filter((line) => line.startsWith('›')).length).toBe(2);
   });
 

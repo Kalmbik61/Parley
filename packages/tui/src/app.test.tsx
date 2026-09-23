@@ -407,6 +407,49 @@ describe('переключение работ (2.1, 3.2)', () => {
     }
   }, 30_000);
 
+  // Дизайн комнаты, 5: комната работы — остановка ходьбы `j`/`k` после её
+  // последней сессии, и уйти с неё можно теми же клавишами.
+  it('j/k заходят в комнату работы после её последней сессии и выходят из неё, не трогая панель гостя', async () => {
+    const app = open();
+    try {
+      const workId = await twoWorks(app);
+      // Письмо даёт первой работе комнату; второй — нет (сравнение шагов).
+      await updateMap(project, workId, (map) => {
+        const from = map.sessions[0]?.id ?? 's-01';
+        addMessage(map, { from, to: from, text: 'заметка' });
+      });
+
+      app.stdin.write(`${PREFIX}1`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('альфа-один'));
+      await waitFor(() => (app.lastFrame() ?? '').includes('комната'));
+
+      // Один `j` с единственной сессии работы 1 — в её комнату: работа не
+      // меняется, панель гостя не трогается (комната, 3-4) — экран прежний.
+      app.stdin.write(`${PREFIX}j`);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(app.lastFrame()).toContain('альфа-один');
+      expect(app.lastFrame()).not.toContain('бета-два');
+
+      // Второй `j` — дальше по кругу, в сессию работы 2: комната была
+      // промежуточной остановкой, а не пропущена.
+      app.stdin.write(`${PREFIX}j`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('бета-два'));
+
+      // Обратно: первый `k` возвращает в комнату работы 1 — панель ещё на
+      // сессии работы 2, её экран цел (комната не отключает и не подключает).
+      app.stdin.write(`${PREFIX}k`);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(app.lastFrame()).toContain('бета-два');
+
+      // Второй `k` — на сессию работы 1: подключение возвращает прежний экран.
+      app.stdin.write(`${PREFIX}k`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('альфа-один'));
+      expect(app.lastFrame()).not.toContain('бета-два');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
   it('переключение работы возвращает к последней подключённой в ней сессии', async () => {
     const app = open();
     try {
@@ -420,7 +463,10 @@ describe('переключение работ (2.1, 3.2)', () => {
       app.stdin.write('echo гамма-три\r');
       await waitFor(() => (app.lastFrame() ?? '').includes('гамма-три'));
       // Обе сессии первой работы в сайдбаре: память выбора сверяется с деревом.
-      await waitFor(() => (app.lastFrame() ?? '').split('новая сессия').length > 2);
+      // Ярлык теперь делит колонки с номером сессии и на узком сайдбаре режется —
+      // считаем по началу, которое усечение не задевает (план рамок, задача 5;
+      // дизайн комнаты, 4).
+      await waitFor(() => (app.lastFrame() ?? '').split('новая с').length > 2);
 
       app.stdin.write(`${PREFIX}2`);
       await waitFor(() => (app.lastFrame() ?? '').includes('бета-два'));
@@ -478,13 +524,14 @@ describe('переключение работ (2.1, 3.2)', () => {
       await waitFor2(async () => (await readMap(project, workId)).sessions.length === 2);
       await waitFor(() => (app.lastFrame() ?? '').includes('harnas=s-02@'));
       // Пока пользователь молчит, хода нет: тихая сессия ничего не начинала.
-      // Ярлык у дочерней сессии режется боковыми гранями сайдбара (план рамок,
-      // задача 5) — ищем строку по началу, которое усечение не задевает.
-      expect(lineWith(app.lastFrame() ?? '', 'новая')).not.toContain('working');
+      // Ярлык у дочерней сессии режется и боковыми гранями сайдбара (план рамок,
+      // задача 5), и номером сессии перед ним (дизайн комнаты, 4) — ищем строку
+      // по началу, которое усечение не задевает.
+      expect(lineWith(app.lastFrame() ?? '', 'нов')).not.toContain('working');
 
       // Первое сообщение пользователя — хук `UserPromptSubmit` (4.2).
       app.stdin.write('event {"hook_event_name":"UserPromptSubmit"}\r');
-      await waitFor(() => lineWith(app.lastFrame() ?? '', 'новая').includes('working'));
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'нов').includes('working'));
     } finally {
       app.unmount();
     }
@@ -506,7 +553,9 @@ describe('переключение работ (2.1, 3.2)', () => {
         app.stdin.write(`${PREFIX}c`);
         await waitFor2(async () => (await readMap(other, workId)).sessions.length === 1);
         await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
-        await waitFor(() => (app.lastFrame() ?? '').includes('новая сессия'));
+        // Ярлык делит колонки с номером сессии и на узком сайдбаре режется —
+        // считаем по началу (дизайн комнаты, 4).
+        await waitFor(() => (app.lastFrame() ?? '').includes('новая с'));
 
         app.stdin.write(`${PREFIX}C`);
         await waitFor2(async () => (await readMap(other, workId)).sessions.length === 2);
@@ -703,8 +752,10 @@ describe('панель следует за подключённым агенто
       await waitFor(() => !(app.lastFrame() ?? '').includes('альфа-один'));
       app.stdin.write('echo бета-два\r');
       await waitFor(() => (app.lastFrame() ?? '').includes('бета-два'));
-      // Обе сессии в сайдбаре: до этого кадра `j`/`k` ходить ещё некуда.
-      await waitFor(() => (app.lastFrame() ?? '').split('новая сессия').length > 2);
+      // Обе сессии в сайдбаре: до этого кадра `j`/`k` ходить ещё некуда. Ярлык
+      // делит колонки с номером сессии и на узком сайдбаре режется — считаем по
+      // началу (дизайн комнаты, 4).
+      await waitFor(() => (app.lastFrame() ?? '').split('новая с').length > 2);
 
       // Назад к первой: её экран на месте, чужого на нём нет.
       app.stdin.write(`${PREFIX}k`);
@@ -1188,15 +1239,18 @@ describe('удаление сессии (3.2, макет 4.10)', () => {
         await waitFor2(async () => (await readMap(other, workId)).sessions.length === 1);
         await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
         // Сессия доехала до сайдбара: до этого кадра `prefix C` не о ком говорить.
-        await waitFor(() => (app.lastFrame() ?? '').includes('новая сессия'));
+        // Ярлык делит колонки с номером сессии и на узком сайдбаре режется —
+        // считаем по началу (дизайн комнаты, 4).
+        await waitFor(() => (app.lastFrame() ?? '').includes('новая с'));
         // Дочерняя: у неё есть бриф, и по нему видно, в каком проекте удаляли.
         app.stdin.write(`${PREFIX}C`);
         await waitFor2(async () => (await readMap(other, workId)).sessions.length === 2);
         await waitFor(() => (app.lastFrame() ?? '').includes('harnas=s-02@'));
         // Обе сессии в сайдбаре: до этого кадра выбор ещё стоит на первой.
-        // Дочерняя режется боковыми гранями сайдбара (план рамок, задача 5) —
-        // считаем по началу ярлыка, не по полной строке.
-        await waitFor(() => (app.lastFrame() ?? '').split('новая').length > 2);
+        // Дочерняя режется боковыми гранями сайдбара (план рамок, задача 5) и
+        // отступом с номером сессии перед ярлыком (дизайн комнаты, 4) сильнее
+        // родительской — общее начало у обеих короче, чем «новая».
+        await waitFor(() => (app.lastFrame() ?? '').split('нов').length > 2);
         const brief = path.join(workPaths(other, workId).briefs, 's-02.md');
         expect(await readFile(brief, 'utf8')).toContain('# Работа');
 

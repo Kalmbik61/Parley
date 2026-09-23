@@ -145,9 +145,24 @@ export function App({
     pinned,
   });
   const order = useMemo(() => sessionOrders(works), [works]);
+  // Работы, у которых есть комната — хотя бы одно письмо (дизайн комнаты, 3):
+  // ходьба `j`/`k` заходит в комнату работы после её последней сессии (5).
+  const roomWorks = useMemo(
+    () =>
+      new Set(
+        works
+          .filter((entry) => entry.map.messages.length > 0)
+          .map((entry) => workKey(entry.projectPath, entry.map.work.id)),
+      ),
+    [works],
+  );
 
   const selection = useSelection({
-    works: workRows.map((work) => ({ key: work.key, sessions: order.get(work.key) ?? [] })),
+    works: workRows.map((work) => ({
+      key: work.key,
+      sessions: order.get(work.key) ?? [],
+      room: roomWorks.has(work.key),
+    })),
     // Подключение к панели: `unseen` гаснет, событие сессии-источника тоже (4.1, 6).
     onAttach: useAttachSession({ works, markSeen: activity.markSeen, seen, attach: panel.attach }),
   });
@@ -161,6 +176,16 @@ export function App({
       ? null
       : workRunKey(chosen.projectPath, chosen.map.work.id, current.id);
   const sessionOrder = order.get(selection.work ?? '') ?? [];
+  // Данные строки комнаты — письма выбранной работы целиком, не поддерева
+  // (дизайн комнаты, 3); работы нет или писем в ней нет — строки нет вовсе.
+  const chosenMessages = chosen?.map.messages ?? [];
+  const room =
+    chosen === undefined || chosenMessages.length === 0
+      ? null
+      : {
+          letters: chosenMessages.length,
+          unread: chosenMessages.filter((message) => message.readAt === null).length,
+        };
 
   const sidebar = {
     works: workRows,
@@ -173,6 +198,8 @@ export function App({
     selectedSession: selection.session,
     width: width ?? WIDE,
     height: panelRows,
+    room,
+    roomSelected: selection.room,
   };
 
   // Лента считается только там, где её видно: закрытому треду обход поддерева и
@@ -217,6 +244,7 @@ export function App({
     workRows,
     selection,
     orders: order,
+    roomWorks,
     // Работа вместе с её проектом: сессия ложится в проект записи, а не в
     // проект харнесса — работа могла быть закреплена из чужого (макет 4.2).
     work:

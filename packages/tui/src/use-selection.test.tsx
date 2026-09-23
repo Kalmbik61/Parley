@@ -88,6 +88,147 @@ describe('useSelection', () => {
   });
 });
 
+/**
+ * Комната вместо сессии (дизайн комнаты 2026-09-23, 3-4): `session` не
+ * меняется, `onAttach` не зовётся никогда, признак снимает любой явный выбор.
+ */
+function RoomProbe({ works }: { works: readonly SelectionWork[] }): ReactNode {
+  const selection = useSelection({ works, onAttach: (id) => attached.push(id) });
+  useInput((input) => {
+    if (input === '1') selection.selectWork('w1');
+    if (input === '2') selection.selectWork('w2');
+    if (input === 'a') selection.attach('s-02');
+    if (input === 's') selection.selectSession('s-02');
+    if (input === 'r') selection.selectRoom();
+    if (input === 'R') selection.selectRoom('w2');
+    if (input === 'l') selection.leaveRoom();
+  });
+  return (
+    <Text>{`${selection.work ?? '—'}|${selection.session ?? '—'}|${selection.room ? 'room' : 'session'}`}</Text>
+  );
+}
+
+/** Те же работы, но у каждой есть письма — значит, и комната (дизайн комнаты, 3). */
+const roomWorks: SelectionWork[] = works.map((work) => ({ ...work, room: true }));
+
+describe('useSelection: комната', () => {
+  it('выбор комнаты не меняет ни работу, ни сессию и не зовёт onAttach', async () => {
+    attached.length = 0;
+    const { stdin, lastFrame } = render(<RoomProbe works={roomWorks} />);
+    await settle();
+    expect(lastFrame()).toBe('w1|s-01|session');
+
+    stdin.write('r');
+    await settle();
+    expect(lastFrame()).toBe('w1|s-01|room');
+    expect(attached).toEqual([]);
+  });
+
+  it('leaveRoom возвращает к той же сессии, с которой пришли — она не менялась', async () => {
+    attached.length = 0;
+    const { stdin, lastFrame } = render(<RoomProbe works={roomWorks} />);
+    await settle();
+
+    stdin.write('r');
+    await settle();
+    stdin.write('l');
+    await settle();
+    expect(lastFrame()).toBe('w1|s-01|session');
+    expect(attached).toEqual([]);
+  });
+
+  it('selectRoom(key) переключает работу без attach — сессия чинится сама под новую работу', async () => {
+    attached.length = 0;
+    const { stdin, lastFrame } = render(<RoomProbe works={roomWorks} />);
+    await settle();
+
+    // Комната другой, ещё не выбранной работы — идёт ходьба `j`/`k` (5).
+    stdin.write('R');
+    await settle();
+    // w2 несёт только `s-03`: `session` самочинится на неё, PTY не тронут.
+    expect(lastFrame()).toBe('w2|s-03|room');
+    expect(attached).toEqual([]);
+  });
+
+  it('явный выбор работы снимает признак комнаты', async () => {
+    attached.length = 0;
+    const { stdin, lastFrame } = render(<RoomProbe works={roomWorks} />);
+    await settle();
+
+    stdin.write('r');
+    await settle();
+    stdin.write('2');
+    await settle();
+    expect(lastFrame()).toBe('w2|s-03|session');
+  });
+
+  it('явный выбор сессии (без подключения) снимает признак комнаты', async () => {
+    attached.length = 0;
+    const { stdin, lastFrame } = render(<RoomProbe works={roomWorks} />);
+    await settle();
+
+    stdin.write('r');
+    await settle();
+    stdin.write('s');
+    await settle();
+    expect(lastFrame()).toBe('w1|s-02|session');
+    // `selectSession` тоже не подключает панель — как и раньше.
+    expect(attached).toEqual([]);
+  });
+
+  it('подключение (attach) снимает признак комнаты', async () => {
+    attached.length = 0;
+    const { stdin, lastFrame } = render(<RoomProbe works={roomWorks} />);
+    await settle();
+
+    stdin.write('r');
+    await settle();
+    stdin.write('a');
+    await settle();
+    expect(lastFrame()).toBe('w1|s-02|session');
+    expect(attached).toEqual(['s-02']);
+  });
+  it('работа с выбранной комнатой исчезла — признак не переезжает на соседнюю', async () => {
+    attached.length = 0;
+    const { stdin, lastFrame, rerender } = render(<RoomProbe works={roomWorks} />);
+    await settle();
+
+    stdin.write('R');
+    await settle();
+    expect(lastFrame()).toBe('w2|s-03|room');
+
+    // Работу w2 удалили или сняли с неё пин: выбор чинится на w1, а комната
+    // w1 никем не выбиралась.
+    rerender(<RoomProbe works={[roomWorks[0]!]} />);
+    await settle();
+    expect(lastFrame()).toBe('w1|s-01|session');
+  });
+
+  it('в работе без писем комнату не выбрать', async () => {
+    attached.length = 0;
+    const { stdin, lastFrame } = render(<RoomProbe works={works} />);
+    await settle();
+
+    stdin.write('r');
+    await settle();
+    expect(lastFrame()).toBe('w1|s-01|session');
+  });
+
+  it('письма пропали, пока выбрана комната, — выбор возвращается к сессии', async () => {
+    attached.length = 0;
+    const { stdin, lastFrame, rerender } = render(<RoomProbe works={roomWorks} />);
+    await settle();
+
+    stdin.write('r');
+    await settle();
+    expect(lastFrame()).toBe('w1|s-01|room');
+
+    rerender(<RoomProbe works={works} />);
+    await settle();
+    expect(lastFrame()).toBe('w1|s-01|session');
+  });
+});
+
 /** Работа с сессиями: id нумеруются внутри работы, поэтому у всех работ есть `s-01`. */
 function entry(workId: string, labels: readonly string[] = ['план']): WorkEntry {
   const map: WorkMap = {

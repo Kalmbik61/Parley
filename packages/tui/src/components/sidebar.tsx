@@ -6,7 +6,7 @@
  * точек — из `use-activity.ts`, выбор — из `use-selection.ts`.
  */
 
-import type { SessionIndex, WorkEntry, WorkSession, WorkStatus } from '@harnas/core';
+import { sessionTag, type SessionIndex, type WorkEntry, type WorkSession, type WorkStatus } from '@harnas/core';
 import { Box, Text } from 'ink';
 import stringWidth from 'string-width';
 import { memo, type ReactNode } from 'react';
@@ -210,6 +210,17 @@ export interface SidebarProps {
    * блоков остаются обычными строками (план рамок, задача 5, решение №5).
    */
   framed?: boolean;
+  /**
+   * Данные строки комнаты выбранной работы: число писем и число непрочитанных
+   * адресатом (дизайн комнаты, 3). `null` — работа не выбрана или писем в ней
+   * нет вовсе — тогда строки нет (раздел 3, «Строка комнаты»).
+   */
+  room?: { letters: number; unread: number } | null;
+  /**
+   * Комната выбрана вместо сессии: строка комнаты подсвечена, строка сессии —
+   * нет (дизайн комнаты, разделы 4 и 6).
+   */
+  roomSelected?: boolean;
 }
 
 /**
@@ -434,7 +445,11 @@ function projectLine(work: SidebarWork, width: number, g: Glyphs): string {
   return `${project} · ${branch}`;
 }
 
-/** Строка сессии: `[отступ] глиф ярлык … слово`; отступ и глиф не отбрасываются (§7). */
+/**
+ * Строка сессии: `[отступ] глиф номер ярлык … слово`; отступ и глиф не
+ * отбрасываются (§7). Номер — `sessionTag(id)` — отбирает у ярлыка свою
+ * ширину и пробел следом; общая ширина строки не меняется (дизайн комнаты, 4).
+ */
 function SessionRow({
   item,
   depth,
@@ -457,7 +472,8 @@ function SessionRow({
   const child = depth > 0 ? `${g.child} ` : '';
   // На 18 слово состояния заменяется буквой, и только у живых состояний (1.2).
   const tail = w <= NARROW ? stateLetter(item.state) : item.state;
-  const head = indent.length + child.length + 2;
+  const tag = sessionTag(item.session.id);
+  const head = indent.length + child.length + 2 + stringWidth(tag) + 1;
   const label = truncate(
     item.session.label,
     Math.max(MIN_LABEL, w - head - tail.length - 2),
@@ -473,9 +489,51 @@ function SessionRow({
           {indent}
           <Text {...theme().fg.muted}>{child}</Text>
           <ActivityDot state={item.state} g={g} />
-          {` ${label}`}
+          {` ${tag} ${label}`}
           {pad(head + stringWidth(label) + stringWidth(tail) + 1, w)}
           <Text {...dotColor(item.state)}>{tail}</Text>{' '}
+        </Text>
+      </Text>
+      {framed && <FrameEdge g={g} navigating={navigating} />}
+    </Text>
+  );
+}
+
+/**
+ * Строка комнаты — последняя в блоке «сессии», только когда в работе есть
+ * хотя бы одно письмо (дизайн комнаты, 3): слева глиф и подпись, справа —
+ * число писем, а если есть непрочитанные адресатом — `▤N` вместо него.
+ * Подсветка, заливка и жёлоб — те же функции, что у `SessionRow`.
+ */
+function RoomRow({
+  room,
+  selected,
+  width,
+  g,
+  navigating,
+  framed,
+}: {
+  room: { letters: number; unread: number };
+  selected: boolean;
+  width: number;
+  g: Glyphs;
+  navigating: boolean;
+  framed: boolean;
+}): ReactNode {
+  const w = gutterWidth(width);
+  const left = ` ${g.mail} комната`;
+  const tail = room.unread > 0 ? `${g.mail}${room.unread}` : `${room.letters}`;
+  const shown = truncate(left, Math.max(0, w - stringWidth(tail) - 1), g.ellipsis);
+
+  return (
+    <Text wrap="truncate">
+      {framed && <FrameEdge g={g} navigating={navigating} />}
+      {theme().gutter && <Text>{gutterMark(selected, g)}</Text>}
+      <Text {...zoneBg(theme().bg.sidebar)}>
+        <Text {...selectionProps(selected, g)}>
+          {shown}
+          {pad(stringWidth(shown) + stringWidth(tail) + 1, w)}
+          {tail}{' '}
         </Text>
       </Text>
       {framed && <FrameEdge g={g} navigating={navigating} />}
@@ -524,8 +582,8 @@ function orderOf(
 
 /** Что стоит за строкой сайдбара: по ней же работает клик мышью (3.3). */
 export interface SidebarTarget {
-  kind: 'work' | 'session' | 'new';
-  /** Ключ работы, id сессии; у строки `new` ключа нет. */
+  kind: 'work' | 'session' | 'new' | 'room';
+  /** Ключ работы, id сессии; у строки `new` ключа нет. У `room` — ключ работы. */
   key: string;
 }
 
@@ -542,6 +600,9 @@ type SidebarRow = { key: string; target: SidebarTarget | null } & (
   | { kind: 'frame'; text: string; title: string | null }
   // Кнопка `new` (план рамок, задача 4): цель та же `NEW_TARGET`, что и раньше.
   | { kind: 'button'; selected: boolean }
+  // Строка комнаты (дизайн комнаты, 3): последняя в блоке сессий, когда в
+  // работе есть письма.
+  | { kind: 'room'; room: { letters: number; unread: number }; selected: boolean }
 );
 
 /** Верхняя и нижняя грани у каждого из двух блоков сайдбара (план рамок, задача 3). */
@@ -560,6 +621,8 @@ function layout({
   height,
   cursor = null,
   framed = true,
+  room = null,
+  roomSelected = false,
 }: SidebarProps): SidebarRow[] {
   const g = glyphs();
   // Боковые грани отъедают по колонке слева и справа; без них (`framed={false}`,
@@ -623,15 +686,16 @@ function layout({
   // у `pending` её нет (решение №7).
   const compact = chosen !== null && chosen.state !== 'pending';
 
-  // Бюджет окна сессий отдаёт 4 строки под грани обоих блоков (§3, инвариант 3).
+  // Бюджет окна сессий отдаёт 4 строки под грани обоих блоков (§3, инвариант 3)
+  // и одну строку под комнату, когда она есть (дизайн комнаты, 3).
   const capacity = Math.max(0, height - top.length - FRAME_ROWS);
-  let room = capacity - (compact ? 1 : 0);
+  let sessionBudget = capacity - (compact ? 1 : 0) - (room === null ? 0 : 1);
   // Строки «… N выше / ниже» тоже занимают место (макет §5).
-  if (ordered.length > room) room -= 2;
+  if (ordered.length > sessionBudget) sessionBudget -= 2;
   const { start, end } = visibleWindow(
     ordered.length,
     selectedAt < 0 ? 0 : selectedAt,
-    Math.max(0, room),
+    Math.max(0, sessionBudget),
   );
 
   const bottom: SidebarRow[] = [];
@@ -643,7 +707,9 @@ function layout({
     for (const { item, depth } of ordered.slice(start, end)) {
       const chosenRow = item.session.id === selectedSession;
       const target: SidebarTarget = { kind: 'session', key: item.session.id };
-      const selected = chosenRow || atCursor(target);
+      // Комната выбрана вместо сессии — строка сессии подсветку уступает ей
+      // (дизайн комнаты, 6); курсор режима навигации подсвечивает как обычно.
+      const selected = (chosenRow && !roomSelected) || atCursor(target);
       bottom.push({ kind: 'session', key: item.session.id, item, depth, selected, target });
       // Компактная строка принадлежит выбранной сессии, а не курсору (решение №7).
       if (!chosenRow || !compact) continue;
@@ -652,7 +718,7 @@ function layout({
           `${item.session.id} метрики`,
           `   ${compactLine(item, gutterWidth(content), g)}`,
           true,
-          true,
+          !roomSelected,
           target,
         ),
       );
@@ -660,6 +726,14 @@ function layout({
     if (end < ordered.length) {
       bottom.push(line('ниже', ` ${g.ellipsis} ${ordered.length - end} ниже`));
     }
+  }
+
+  // Строка комнаты — последняя в блоке «сессии», только когда в работе есть
+  // письма (раздел 3, «Строка комнаты»); ведёт себя как строка списка.
+  if (room !== null) {
+    const target: SidebarTarget = { kind: 'room', key: selectedWork ?? '' };
+    const selected = roomSelected || atCursor(target);
+    bottom.push({ kind: 'room', key: 'комната', room, selected, target });
   }
 
   const visible = bottom.slice(0, capacity);
@@ -697,16 +771,19 @@ export const sameTarget = (a: SidebarTarget | null, b: SidebarTarget | null): bo
 
 /**
  * Строки, по которым ходит курсор режима навигации: работы сверху вниз, строка
- * `new`, затем сессии выбранной работы (дизайн 3.2, макеты 1.5 и §8). Окно
- * видимых сессий здесь не при чём: курсор доходит и до тех, что уехали за край.
+ * `new`, затем сессии выбранной работы, а следом — её комната, когда она есть
+ * (дизайн 3.2, макеты 1.5 и §8; дизайн комнаты, 5). Окно видимых сессий здесь
+ * не при чём: курсор доходит и до тех, что уехали за край.
  */
 export const sidebarCursorRows = (
   works: readonly SidebarWork[],
   sessions: readonly string[],
+  room: string | null = null,
 ): SidebarTarget[] => [
   ...works.map((work): SidebarTarget => ({ kind: 'work', key: work.key })),
   NEW_TARGET,
   ...sessions.map((id): SidebarTarget => ({ kind: 'session', key: id })),
+  ...(room === null ? [] : [{ kind: 'room' as const, key: room }]),
 ];
 
 /**
@@ -760,6 +837,16 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps): ReactNode {
         ) : row.kind === 'button' ? (
           <NewButton
             key={row.key}
+            selected={row.selected}
+            width={content}
+            g={g}
+            navigating={navigating}
+            framed={framed}
+          />
+        ) : row.kind === 'room' ? (
+          <RoomRow
+            key={row.key}
+            room={row.room}
             selected={row.selected}
             width={content}
             g={g}

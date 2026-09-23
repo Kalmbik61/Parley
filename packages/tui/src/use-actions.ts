@@ -22,7 +22,6 @@ import type { OverlaysState } from './use-overlays.js';
 import type { ThreadState } from './use-thread.js';
 import { usePrefixInput, withoutMouse, type MouseEvent } from './use-prefix-input.js';
 import type { SelectionState } from './use-selection.js';
-import { sessionSequence } from './work-rows.js';
 
 /** Клавиша префикса → оверлей, который она открывает (таблица 3.2). */
 const OVERLAYS: Readonly<Record<string, Parameters<OverlaysState['open']>[0]>> = {
@@ -47,6 +46,12 @@ export interface ActionsOptions {
   selection: SelectionState;
   /** Сессии каждой работы в порядке дерева: курсор навигации и ходьба `j`/`k`. */
   orders: ReadonlyMap<string, readonly string[]>;
+  /**
+   * Ключи работ, у которых есть комната — хотя бы одно письмо (дизайн комнаты,
+   * 3 и 5): ходьба `j`/`k` заходит в комнату работы после её последней сессии,
+   * только когда работа в этом множестве.
+   */
+  roomWorks: ReadonlySet<string>;
   /**
    * Выбранная работа с её проектом: в неё ложится новая сессия (5.1). Проект
    * берётся у записи работы — закреплённая работа бывает чужой (макет 4.2).
@@ -95,18 +100,27 @@ export interface ActionsState {
   cursor: SidebarTarget | null;
 }
 
+/** Остановка ходьбы `j`/`k`: сессия работы или её комната следом за ними (комната, 5). */
+type WalkStop =
+  | { work: string; kind: 'session'; session: string }
+  | { work: string; kind: 'room' };
+
 export function useActions(options: ActionsOptions): ActionsState {
-  const { prefixByte, workRows, selection, orders, panel, overlays, thread } = options;
+  const { prefixByte, workRows, selection, orders, roomWorks, panel, overlays, thread } = options;
   const order = orders.get(selection.work ?? '') ?? [];
-  // Все сессии сайдбара сверху вниз: по ним `j`/`k` ходят по кругу через работы.
-  const sequence = useMemo(
-    () =>
-      sessionSequence(
-        workRows.map((work) => work.key),
-        orders,
-      ),
-    [workRows, orders],
-  );
+  // Все сессии сайдбара сверху вниз, а следом за сессиями каждой работы — её
+  // комната, если она есть: по ним `j`/`k` ходят по кругу через работы (3.2;
+  // дизайн комнаты, 5).
+  const sequence = useMemo(() => {
+    const out: WalkStop[] = [];
+    for (const work of workRows) {
+      for (const sessionId of orders.get(work.key) ?? []) {
+        out.push({ work: work.key, kind: 'session', session: sessionId });
+      }
+      if (roomWorks.has(work.key)) out.push({ work: work.key, kind: 'room' });
+    }
+    return out;
+  }, [workRows, orders, roomWorks]);
   const {
     work,
     session,
@@ -123,23 +137,41 @@ export function useActions(options: ActionsOptions): ActionsState {
   const [awaiting, setAwaiting] = useState(false);
   const [cursor, setCursor] = useState<SidebarTarget | null>(null);
 
+  // Комната достижима курсором режима навигации только у выбранной работы, и
+  // только когда она у этой работы есть (дизайн комнаты, 3 и 5).
+  const roomKey =
+    selection.work !== null && roomWorks.has(selection.work) ? selection.work : null;
   /** Строки сайдбара сверху вниз: по ним ходит курсор режима навигации (3.2). */
-  const rows = useMemo(() => sidebarCursorRows(workRows, order), [workRows, order]);
+  const rows = useMemo(
+    () => sidebarCursorRows(workRows, order, roomKey),
+    [workRows, order, roomKey],
+  );
 
   /**
-   * `prefix j`/`k`: соседняя сессия с подключением к панели (3.2). Ходьба идёт
-   * по всему сайдбару по кругу: с одной сессией на работу иначе некуда шагать.
+   * `prefix j`/`k`: соседняя сессия с подключением к панели, а после последней
+   * сессии работы — её комната, если она есть (3.2; дизайн комнаты, 5). Ходьба
+   * идёт по всему сайдбару по кругу: с одной сессией на работу иначе некуда
+   * шагать. Комната не подключает панель — `selectRoom` не зовёт `onAttach`
+   * никогда, даже когда шаг заодно переносит выбор на чужую работу (комната, 3-4).
    */
   const walk = useCallback(
     (delta: number) => {
       const at = Math.max(
         0,
         sequence.findIndex(
-          (item) => item.work === selection.work && item.session === selection.session,
+          (item) =>
+            item.work === selection.work &&
+            (selection.room
+              ? item.kind === 'room'
+              : item.kind === 'session' && item.session === selection.session),
         ),
       );
       const next = sequence[(at + delta + sequence.length) % (sequence.length || 1)];
       if (next === undefined) return;
+      if (next.kind === 'room') {
+        setCursor({ kind: 'room', key: next.work });
+        return selection.selectRoom(next.work);
+      }
       setCursor({ kind: 'session', key: next.session });
       selection.selectWork(next.work, next.session);
     },
@@ -193,13 +225,16 @@ export function useActions(options: ActionsOptions): ActionsState {
       }
       if (key === 'j' || key === 'k') return walk(key === 'j' ? 1 : -1);
       if (key === 's') {
-        // Курсор входит в сайдбар там, где стоит выбор (макет 1.5).
+        // Курсор входит в сайдбар там, где стоит выбор (макет 1.5); выбрана
+        // комната — курсор встаёт на её строку (дизайн комнаты, 5).
         const at: SidebarTarget | null =
-          selection.session !== null
-            ? { kind: 'session', key: selection.session }
-            : selection.work !== null
-              ? { kind: 'work', key: selection.work }
-              : null;
+          selection.room && selection.work !== null
+            ? { kind: 'room', key: selection.work }
+            : selection.session !== null
+              ? { kind: 'session', key: selection.session }
+              : selection.work !== null
+                ? { kind: 'work', key: selection.work }
+                : null;
         setCursor(stepCursor(rows, at, 0));
         return setNavigating(true);
       }
@@ -246,6 +281,7 @@ export function useActions(options: ActionsOptions): ActionsState {
     if (navigating) setCursor(target);
     if (target.kind === 'work') return selection.selectWork(target.key);
     if (target.kind === 'new') return create(null);
+    if (target.kind === 'room') return selection.selectRoom();
     selection.attach(target.key);
   };
 
@@ -297,6 +333,9 @@ export function useActions(options: ActionsOptions): ActionsState {
       // Выбрана строка `new` верхнего уровня — сессия ложится в новую работу
       // «без названия» (5.1).
       if (cursor?.kind === 'new') return create(null);
+      // Строка комнаты: `Enter` выбирает её и выходит из режима — комната уже
+      // принадлежит выбранной работе, переключать работу не нужно (комната, 5).
+      if (cursor?.kind === 'room') return selection.selectRoom();
 
       const id = cursor?.key ?? selection.session;
       if (id === null) return;

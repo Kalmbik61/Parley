@@ -267,7 +267,9 @@ describe('36: мышь (3.3)', () => {
       const second = await waitSession(workId, (item) => item.id !== plan.id);
       await waitFor(() => (app.lastFrame() ?? '').includes(`harnas=${second.id}@`));
       // Обе строки в кадре: выбрана вторая, и клик должен попасть строго в первую.
-      await waitFor(() => lineWith(app.lastFrame() ?? '', second.label) !== '');
+      // Ярлык делит колонки с номером сессии и на узком сайдбаре режется —
+      // ищем по началу, которое усечение не задевает (дизайн комнаты, 4).
+      await waitFor(() => lineWith(app.lastFrame() ?? '', second.label.slice(0, 7)) !== '');
 
       const y = (app.lastFrame() ?? '').split('\n').findIndex((line) => line.includes('план')) + 1;
       expect(y).toBeGreaterThan(0);
@@ -371,14 +373,17 @@ describe('план 2026-09-06, пункт 37: тихий старт доходи
       const child = await waitSession(workId, (item) => item.id !== plan.id);
       await waitFor(() => (app.lastFrame() ?? '').includes(`harnas=${child.id}@`));
       await rename(workId, child.id, 'ревью');
-      await waitFor(() => lineWith(app.lastFrame() ?? '', 'ревью') !== '');
+      // Дочерняя сессия делит колонки с номером и глифом отступа (план рамок,
+      // задача 5; дизайн комнаты, 4) — на узком сайдбаре ярлык режется до
+      // начала, ищем по нему, а не по полному слову.
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'рев') !== '');
       // Задачи у тихой сессии нет: пока пользователь молчит, хода тоже нет.
       expect(child.task).toBe('');
-      expect(lineWith(app.lastFrame() ?? '', 'ревью')).not.toContain('working');
+      expect(lineWith(app.lastFrame() ?? '', 'рев')).not.toContain('working');
 
       // Первое сообщение пользователя — хук `UserPromptSubmit` (4.2).
       app.stdin.write(`event ${JSON.stringify({ hook_event_name: 'UserPromptSubmit' })}\r`);
-      await waitFor(() => lineWith(app.lastFrame() ?? '', 'ревью').includes('working'));
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'рев').includes('working'));
 
       // Агент отчитался своим MCP-сервером: сессия уходит в `done` с резюме.
       const mcpConfig = path.join(workPaths(project, workId).mcp, `${child.id}.json`);
@@ -394,7 +399,7 @@ describe('план 2026-09-06, пункт 37: тихий старт доходи
       );
       expect(done.summary).toBe('ревью прошло');
       expect(done.summarySource).toBe('agent');
-      await waitFor(() => lineWith(app.lastFrame() ?? '', 'ревью').includes('done'));
+      await waitFor(() => lineWith(app.lastFrame() ?? '', 'рев').includes('done'));
     } finally {
       app.unmount();
     }
