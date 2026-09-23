@@ -52,9 +52,10 @@ describe('StatusBar', () => {
   });
 
   it('ожидание второй клавиши показывает действия, `? все` не отбрасывается (§3)', () => {
-    const wide = frameOf(<StatusBar count={0} event={null} width={120} prefix="ctrl+q" awaiting />);
+    const wide = frameOf(<StatusBar count={0} event={null} width={160} prefix="ctrl+q" awaiting />);
     expect(wide).toContain('ctrl+q …');
     expect(wide).toContain('c новая');
+    expect(wide).toContain(', настройки');
     expect(wide).toContain('r возобновить');
     expect(wide).toContain('? все');
     // Справа во время ожидания ничего нет: подсказка занимает всю строку.
