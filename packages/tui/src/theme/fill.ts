@@ -6,6 +6,7 @@
  */
 
 import stringWidth from 'string-width';
+import type { Glyphs } from '../glyphs.js';
 import { theme } from './index.js';
 import type { RoleProps } from './roles.js';
 
@@ -50,4 +51,27 @@ export function zoneBg(role: RoleProps): RoleProps {
  */
 export function gap(left: string, right: string, width: number): string {
   return pad(stringWidth(left) + stringWidth(right), width);
+}
+
+/**
+ * Содержимое колонки-жёлоба слева у списков (дизайн темы TUI, 4.3, кусок 6):
+ * пустая строка, когда жёлоб выключен (`theme().gutter === false`) — колонки
+ * нет вовсе; знак `cursor` у выбранной строки и пробел у остальных, когда
+ * включён. Одна функция на все списки (сайдбар и оверлей), а не по копии на
+ * компонент; у двустрочного ряда вызывающий передаёт `selected: false` для
+ * второй строки — маркер стоит только на первой (4.3).
+ */
+export function gutterMark(selected: boolean, g: Glyphs): string {
+  if (!theme().gutter) return '';
+  return selected ? g.cursor : ' ';
+}
+
+/**
+ * Полезная ширина текста внутри списка с жёлобом: на одну колонку меньше при
+ * включённом жёлобе, иначе не меняется. Общая точка расчёта для сайдбара и
+ * оверлея (4.3) — жёлоб берёт колонку из ширины зоны, а не добавляет к ней,
+ * и никто не считает `width - 1` у себя по месту.
+ */
+export function gutterWidth(width: number): number {
+  return theme().gutter ? Math.max(0, width - 1) : width;
 }

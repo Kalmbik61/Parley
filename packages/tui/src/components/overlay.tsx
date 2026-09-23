@@ -13,7 +13,7 @@ import type { ReactNode } from 'react';
 import stringWidth from 'string-width';
 import { truncate } from '../format.js';
 import { glyphs, selectionProps, type Glyphs } from '../glyphs.js';
-import { pad, zoneBg } from '../theme/fill.js';
+import { gutterMark, gutterWidth, pad, zoneBg } from '../theme/fill.js';
 import { borderBoxProps, theme } from '../theme/index.js';
 import type { DialogSpec } from '../work-dialogs.js';
 import { Dialog } from './dialog.js';
@@ -134,10 +134,19 @@ export function Line({
   line,
   width,
   g,
+  gutter = true,
 }: {
   line: OverlayLine;
   width: number;
   g: Glyphs;
+  /**
+   * Эта строка — часть списка и получает колонку-жёлоб (уровень 0, дизайн
+   * 4.3, кусок 6): выключается только у подвала (`footer` в `Overlay`) —
+   * там выбора нет, и колонку отбирать не за что («где жёлоба нет»).
+   * Линейка (`line.rule === true`) колонку не получает в любом случае — она
+   * не часть выбираемого списка.
+   */
+  gutter?: boolean;
 }): ReactNode {
   if (line.rule === true) {
     return (
@@ -146,15 +155,17 @@ export function Line({
       </Text>
     );
   }
-  const text = truncate(line.text, width, g.ellipsis);
+  const w = gutter ? gutterWidth(width) : width;
+  const text = truncate(line.text, w, g.ellipsis);
   return (
     <Text wrap="truncate" {...zoneBg(theme().bg.overlay)}>
+      {gutter && theme().gutter && <Text>{gutterMark(line.selected === true, g)}</Text>}
       <Text
         {...selectionProps(line.selected === true, g)}
         {...(line.dim === true ? theme().fg.muted : {})}
       >
         {text}
-        {pad(stringWidth(text), width)}
+        {pad(stringWidth(text), w)}
       </Text>
     </Text>
   );
@@ -217,7 +228,9 @@ export function Overlay({
             ))}
           </>
         )}
-        {footer !== undefined && <Line line={{ text: footer, dim: true }} width={inner} g={g} />}
+        {footer !== undefined && (
+          <Line line={{ text: footer, dim: true }} width={inner} g={g} gutter={false} />
+        )}
       </Box>
     </Box>
   );

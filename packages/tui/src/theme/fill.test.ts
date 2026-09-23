@@ -1,6 +1,8 @@
 import stringWidth from 'string-width';
 import { describe, expect, it } from 'vitest';
-import { fillLine, pad } from './fill.js';
+import { pinTheme } from '../../test/theme-env.js';
+import { glyphs } from '../glyphs.js';
+import { fillLine, gutterMark, gutterWidth, pad } from './fill.js';
 
 describe('pad — переезжает из sidebar.tsx без изменений (приёмка B)', () => {
   it('добивает пробелами до ширины', () => {
@@ -72,5 +74,59 @@ describe('fillLine — считает по колонкам, а не по дли
         expect(stringWidth(fillLine(text, width))).toBe(width);
       }
     }
+  });
+});
+
+/**
+ * Жёлоб — колонка-маркер выбора в монохроме (дизайн темы TUI, 4.3; план,
+ * кусок 6). Общий уровень темы в тестах — 1 (`setupFiles`, `theme-env.ts`);
+ * здесь он переопределяется явно там, где нужен уровень 0 или инвариант «на
+ * уровнях ≥1 жёлоба нет».
+ */
+describe('gutterWidth — жёлоб берёт колонку из ширины зоны, а не добавляет к ней (4.3)', () => {
+  describe('уровень 0 — жёлоб включён', () => {
+    pinTheme(0);
+
+    it('полезная ширина на одну колонку меньше — инвариант по диапазону ширин', () => {
+      for (let width = 1; width <= 20; width++) {
+        expect(gutterWidth(width)).toBe(width - 1);
+      }
+    });
+
+    it('width = 0 — вырожденный случай, не уходит в отрицательное', () => {
+      expect(gutterWidth(0)).toBe(0);
+    });
+  });
+
+  describe.each([1, 2, 3])('уровень %i — жёлоба нет, ширина прежняя', (level) => {
+    pinTheme(level);
+
+    it('ширина не меняется — инвариант по диапазону ширин', () => {
+      for (let width = 0; width <= 20; width++) {
+        expect(gutterWidth(width)).toBe(width);
+      }
+    });
+  });
+});
+
+describe('gutterMark — знак `cursor` у выбранной строки, пробел у остальных (4.3)', () => {
+  describe('уровень 0 — жёлоб включён', () => {
+    pinTheme(0);
+
+    it('выбранная строка — cursor, обычная — пробел', () => {
+      const g = glyphs({ LC_ALL: 'ru_RU.UTF-8' });
+      expect(gutterMark(true, g)).toBe(g.cursor);
+      expect(gutterMark(false, g)).toBe(' ');
+    });
+  });
+
+  describe.each([1, 2, 3])('уровень %i — жёлоба нет, колонки нет вовсе', (level) => {
+    pinTheme(level);
+
+    it('пустая строка независимо от выбора — колонку нечем занимать', () => {
+      const g = glyphs({ LC_ALL: 'ru_RU.UTF-8' });
+      expect(gutterMark(true, g)).toBe('');
+      expect(gutterMark(false, g)).toBe('');
+    });
   });
 });

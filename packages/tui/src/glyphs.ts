@@ -44,6 +44,12 @@ export interface Glyphs {
   arrow: string;
   /** Цитата в диалоге запуска: первые строки брифа (макет 4.3). */
   quote: string;
+  /**
+   * Маркер выбранного ряда в колонке-жёлобе (уровень 0, дизайн темы TUI, 4.3):
+   * на этом уровне chalk снимает и фон, и `inverse` — цвет там не носитель
+   * смысла вовсе, и выбор различим только этим глифом.
+   */
+  cursor: string;
   /** Запасной набор: подсветка выбора в нём — reverse video (6.1). */
   ascii: boolean;
   /** Грани рамок зон (план рамок, задача 1); в ASCII-наборе — `+-|`. */
@@ -77,6 +83,7 @@ const UNICODE: Glyphs = {
   cache: '⇄',
   arrow: '→',
   quote: '▏',
+  cursor: '›',
   ascii: false,
   frame: {
     topLeft: '╭',
@@ -108,6 +115,7 @@ const ASCII: Glyphs = {
   cache: 'c',
   arrow: '->',
   quote: '|',
+  cursor: '>',
   ascii: true,
   frame: {
     topLeft: '+',

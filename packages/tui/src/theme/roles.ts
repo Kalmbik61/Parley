@@ -66,6 +66,12 @@ export interface Theme {
   };
   /** Добивать ли строку зоны до ширины блока фоном (5.1). */
   fills: boolean;
+  /**
+   * Колонка-жёлоб слева у списков (4.3): включена только на уровне 0, где
+   * chalk снимает и фон, и `inverse` — выбор ряда там носит только глиф.
+   * Выше подсветку несёт `bg.selection`, и колонку отбирать не за что.
+   */
+  gutter: boolean;
 }
 
 const EMPTY: RoleProps = {};
@@ -105,6 +111,7 @@ function colorRoles(p: Palette): Theme {
       unseen: fg(p.blue),
     },
     fills: true,
+    gutter: false,
   };
 }
 
@@ -145,6 +152,7 @@ function terminalRoles(): Theme {
       unseen: ansiColor('blue'),
     },
     fills: false,
+    gutter: false,
   };
 }
 
@@ -178,6 +186,7 @@ function monoRoles(): Theme {
       unseen: EMPTY,
     },
     fills: false,
+    gutter: true,
   };
 }
 

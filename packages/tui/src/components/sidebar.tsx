@@ -19,7 +19,7 @@ import {
   withHome,
 } from '../format.js';
 import { glyphs, selectionProps, type Glyphs } from '../glyphs.js';
-import { pad, zoneBg } from '../theme/fill.js';
+import { gutterMark, gutterWidth, pad, zoneBg } from '../theme/fill.js';
 import { borderBoxProps, theme } from '../theme/index.js';
 import { treeOrder, workKey, type LiveMetrics } from '../work-rows.js';
 import { ActivityDot, dotColor, stateLetter, type DotState } from './activity-dot.js';
@@ -312,12 +312,20 @@ function NewButton({
   navigating: boolean;
   framed: boolean;
 }): ReactNode {
+  // Жёлоб (уровень 0, дизайн 4.3): колонка отбирается из `width`, а не
+  // добавляется к нему — общий расчёт для всех рядов списка (`gutterWidth`).
+  const w = gutterWidth(width);
+  // Текст плашки длины не меняет, но на узкой колонке он шире ряда — и с
+  // жёлобом это начинается на знак раньше. Режем, иначе плашка выдавливает
+  // правую грань рамки.
+  const label = truncate(NEW_BUTTON_TEXT, w, g.ellipsis);
   return (
     <Text wrap="truncate">
       {framed && <FrameEdge g={g} navigating={navigating} />}
+      {theme().gutter && <Text>{gutterMark(selected, g)}</Text>}
       <Text {...zoneBg(theme().bg.sidebar)}>
-        <Text {...buttonProps(selected, g)}>{NEW_BUTTON_TEXT}</Text>
-        {pad(NEW_BUTTON_TEXT.length, width)}
+        <Text {...buttonProps(selected, g)}>{label}</Text>
+        {pad(stringWidth(label), w)}
       </Text>
       {framed && <FrameEdge g={g} navigating={navigating} />}
     </Text>
@@ -337,6 +345,7 @@ function Row({
   framed,
   selected = false,
   dim = true,
+  gutterColumn = true,
 }: {
   text: string;
   width: number;
@@ -345,18 +354,29 @@ function Row({
   framed: boolean;
   selected?: boolean;
   dim?: boolean;
+  /**
+   * Эта строка — часть списка и получает колонку-жёлоб (уровень 0, 4.3):
+   * выключается только у заголовка блока без рамки (`framed={false}`) — там
+   * выбора нет, и колонку отбирать не за что (кусок 6, «где жёлоба нет»).
+   * Маркера здесь не бывает никогда — только пробел: `Row` рисует хвостовые
+   * строки двустрочных рядов и служебные строки списка, а не первую строку
+   * выбранного ряда (та подсвечивается в `WorkRow`/`SessionRow`/`NewButton`).
+   */
+  gutterColumn?: boolean;
 }): ReactNode {
+  const w = gutterColumn ? gutterWidth(width) : width;
   // Добивка считается по колонкам показанного текста, а не по длине исходной
   // строки: иначе широкий символ укоротил бы её и фон зоны не дошёл бы до
   // края (дизайн темы TUI, 5.1).
-  const shown = truncate(text, width, g.ellipsis);
+  const shown = truncate(text, w, g.ellipsis);
   return (
     <Text wrap="truncate">
       {framed && <FrameEdge g={g} navigating={navigating} />}
+      {gutterColumn && theme().gutter && <Text>{gutterMark(false, g)}</Text>}
       <Text {...zoneBg(theme().bg.sidebar)}>
         <Text {...selectionProps(selected, g)}>
           <Text {...(dim ? theme().fg.muted : {})}>{shown}</Text>
-          {pad(stringWidth(shown), width)}
+          {pad(stringWidth(shown), w)}
         </Text>
       </Text>
       {framed && <FrameEdge g={g} navigating={navigating} />}
@@ -380,18 +400,20 @@ function WorkRow({
   navigating: boolean;
   framed: boolean;
 }): ReactNode {
+  const w = gutterWidth(width);
   const head = ` ${work.number === null ? '' : `${work.number} `}`;
   // Точка стоит на предпоследней колонке, последняя всегда пустая (макет 1.1).
-  const title = truncate(work.title, Math.max(MIN_LABEL, width - head.length - 2), g.ellipsis);
+  const title = truncate(work.title, Math.max(MIN_LABEL, w - head.length - 2), g.ellipsis);
 
   return (
     <Text wrap="truncate">
       {framed && <FrameEdge g={g} navigating={navigating} />}
+      {theme().gutter && <Text>{gutterMark(selected, g)}</Text>}
       <Text {...zoneBg(theme().bg.sidebar)}>
         <Text {...selectionProps(selected, g)}>
           {head}
           {title}
-          {pad(stringWidth(head) + stringWidth(title) + 2, width)}
+          {pad(stringWidth(head) + stringWidth(title) + 2, w)}
           {work.state === null ? ' ' : <ActivityDot state={work.state} g={g} />}{' '}
         </Text>
       </Text>
@@ -430,27 +452,29 @@ function SessionRow({
   navigating: boolean;
   framed: boolean;
 }): ReactNode {
+  const w = gutterWidth(width);
   const indent = ' '.repeat(1 + depth * 2);
   const child = depth > 0 ? `${g.child} ` : '';
   // На 18 слово состояния заменяется буквой, и только у живых состояний (1.2).
-  const tail = width <= NARROW ? stateLetter(item.state) : item.state;
+  const tail = w <= NARROW ? stateLetter(item.state) : item.state;
   const head = indent.length + child.length + 2;
   const label = truncate(
     item.session.label,
-    Math.max(MIN_LABEL, width - head - tail.length - 2),
+    Math.max(MIN_LABEL, w - head - tail.length - 2),
     g.ellipsis,
   );
 
   return (
     <Text wrap="truncate">
       {framed && <FrameEdge g={g} navigating={navigating} />}
+      {theme().gutter && <Text>{gutterMark(selected, g)}</Text>}
       <Text {...zoneBg(theme().bg.sidebar)}>
         <Text {...selectionProps(selected, g)}>
           {indent}
           <Text {...theme().fg.muted}>{child}</Text>
           <ActivityDot state={item.state} g={g} />
           {` ${label}`}
-          {pad(head + stringWidth(label) + stringWidth(tail) + 1, width)}
+          {pad(head + stringWidth(label) + stringWidth(tail) + 1, w)}
           <Text {...dotColor(item.state)}>{tail}</Text>{' '}
         </Text>
       </Text>
@@ -576,8 +600,17 @@ function layout({
       top.push({ kind: 'work', key: work.key, work, selected, target });
       // Вторая строка отбрасывается у `done`-работ и на узком сайдбаре (§7).
       if (work.done || content <= NARROW) continue;
+      // Хвостовая строка тоже получает колонку-жёлоб (маркер — только на
+      // первой строке ряда, 4.3), поэтому её текст меряется по той же
+      // уменьшенной ширине, что достанется ей при рендере в `Row`.
       top.push(
-        line(`${work.key} проект`, `   ${projectLine(work, content, g)}`, true, selected, target),
+        line(
+          `${work.key} проект`,
+          `   ${projectLine(work, gutterWidth(content), g)}`,
+          true,
+          selected,
+          target,
+        ),
       );
     }
   }
@@ -617,7 +650,7 @@ function layout({
       bottom.push(
         line(
           `${item.session.id} метрики`,
-          `   ${compactLine(item, content, g)}`,
+          `   ${compactLine(item, gutterWidth(content), g)}`,
           true,
           true,
           target,
@@ -752,6 +785,9 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps): ReactNode {
               g={g}
               navigating={navigating}
               framed={false}
+              // Заголовок блока — не ряд списка: выбора у него нет, и колонку
+              // отбирать не за что (кусок 6, «где жёлоба нет»).
+              gutterColumn={false}
             />
           )
         ) : (

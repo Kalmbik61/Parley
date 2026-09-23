@@ -19,6 +19,7 @@ describe('glyphs', () => {
     expect(g.down).toBe('↓');
     expect(g.cache).toBe('⇄');
     expect(g.arrow).toBe('→');
+    expect(g.cursor).toBe('›');
   });
 
   it('ascii из настроек даёт запасной набор', () => {
@@ -40,6 +41,7 @@ describe('glyphs', () => {
     expect(g.down).toBe('o');
     expect(g.cache).toBe('c');
     expect(g.arrow).toBe('->');
+    expect(g.cursor).toBe('>');
   });
 
   it('переменную окружения сам не читает: её разбирает loadConfig (3.4)', () => {

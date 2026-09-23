@@ -103,6 +103,17 @@ describe('уровень 0 — все роли пустой объект, fills 
   }
 });
 
+describe('gutter — только на уровне 0 (дизайн 4.3, кусок 6, приёмка)', () => {
+  for (const [name, palette] of Object.entries(PALETTES)) {
+    it(`${name}: gutter === true на уровне 0, false на 1, 2 и 3`, () => {
+      expect(roles(palette, 0).gutter).toBe(true);
+      expect(roles(palette, 1).gutter).toBe(false);
+      expect(roles(palette, 2).gutter).toBe(false);
+      expect(roles(palette, 3).gutter).toBe(false);
+    });
+  }
+});
+
 describe('реестр — applyThemeConfig/theme (index.ts)', () => {
   afterEach(() => applyThemeConfig('mocha'));
 
