@@ -32,7 +32,7 @@ export interface LiveMetrics {
  * Набор провайдеров открыт: `providers.json` добавляет свои CLI, и подписи для
  * них в реестре нет — показываем сырой id, а не падаем.
  */
-const registryEntry = (provider: string): ProviderInfo | undefined =>
+export const registryEntry = (provider: string): ProviderInfo | undefined =>
   (PROVIDERS as Record<string, ProviderInfo | undefined>)[provider];
 
 export function providerMarkOf(provider: string): string {
