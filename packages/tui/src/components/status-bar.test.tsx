@@ -55,9 +55,12 @@ describe('StatusBar', () => {
     const wide = frameOf(<StatusBar count={0} event={null} width={160} prefix="ctrl+q" awaiting />);
     expect(wide).toContain('ctrl+q …');
     expect(wide).toContain('c новая');
+    // Комната стоит перед настройками (дизайн комнаты, 3).
+    expect(wide).toContain('t комната');
     expect(wide).toContain(', настройки');
     expect(wide).toContain('r возобновить');
     expect(wide).toContain('? все');
+    expect(wide.indexOf('t комната')).toBeLessThan(wide.indexOf(', настройки'));
     // Справа во время ожидания ничего нет: подсказка занимает всю строку.
     expect(wide).not.toContain('ctrl+q ?');
 

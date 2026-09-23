@@ -423,25 +423,28 @@ describe('переключение работ (2.1, 3.2)', () => {
       await waitFor(() => (app.lastFrame() ?? '').includes('альфа-один'));
       await waitFor(() => (app.lastFrame() ?? '').includes('комната'));
 
-      // Один `j` с единственной сессии работы 1 — в её комнату: работа не
-      // меняется, панель гостя не трогается (комната, 3-4) — экран прежний.
+      // Один `j` с единственной сессии работы 1 — в её комнату: она занимает
+      // место панели (кусок 3), гость больше не виден, но и не подключается
+      // заново — экран его PTY цел, просто сейчас не нарисован (комната, 3-4).
       app.stdin.write(`${PREFIX}j`);
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      expect(app.lastFrame()).toContain('альфа-один');
+      await waitFor(() => (app.lastFrame() ?? '').includes('комната · 1 письмо'));
+      expect(app.lastFrame()).not.toContain('альфа-один');
       expect(app.lastFrame()).not.toContain('бета-два');
 
       // Второй `j` — дальше по кругу, в сессию работы 2: комната была
-      // промежуточной остановкой, а не пропущена.
+      // промежуточной остановкой, а не пропущена, и панель возвращает гостя.
       app.stdin.write(`${PREFIX}j`);
       await waitFor(() => (app.lastFrame() ?? '').includes('бета-два'));
 
-      // Обратно: первый `k` возвращает в комнату работы 1 — панель ещё на
-      // сессии работы 2, её экран цел (комната не отключает и не подключает).
+      // Обратно: первый `k` возвращает в комнату работы 1 — снова её лента,
+      // не экран работы 2 и не работы 1 (комната не отключает и не подключает).
       app.stdin.write(`${PREFIX}k`);
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      expect(app.lastFrame()).toContain('бета-два');
+      await waitFor(() => (app.lastFrame() ?? '').includes('комната · 1 письмо'));
+      expect(app.lastFrame()).not.toContain('бета-два');
+      expect(app.lastFrame()).not.toContain('альфа-один');
 
-      // Второй `k` — на сессию работы 1: подключение возвращает прежний экран.
+      // Второй `k` — на сессию работы 1: подключение возвращает прежний
+      // экран, ничем не тронутый за время в комнате.
       app.stdin.write(`${PREFIX}k`);
       await waitFor(() => (app.lastFrame() ?? '').includes('альфа-один'));
       expect(app.lastFrame()).not.toContain('бета-два');
@@ -1269,7 +1272,7 @@ describe('удаление сессии (3.2, макет 4.10)', () => {
   }, 30_000);
 });
 
-describe('тред выбранной сессии (6.1–6.3, приёмка 8.20, 8.21, 8.23, 8.37, 8.41)', () => {
+describe('комната работы на месте панели (дизайн комнаты 2026-09-23, разделы 3–5)', () => {
   /** Новая ширина терминала: клавиши берут раскладку из эффекта, ему нужен кадр. */
   const resize = async (app: ReturnType<typeof render>, columns: number): Promise<void> => {
     Object.defineProperty(app.stdout, 'columns', { value: columns, configurable: true });
@@ -1277,177 +1280,91 @@ describe('тред выбранной сессии (6.1–6.3, приёмка 8.
     await new Promise((resolve) => setTimeout(resolve, 150));
   };
 
-  /** Работа с двумя поддеревьями и письмом в первом: треды у них разные (3.4). */
-  const threadWork = async (): Promise<string> => {
-    const created = await createWork(project, { title: 'Авторизация' });
-    await updateMap(project, created.work.id, (map) => {
-      const plan = addSession(map, { provider: 'claude', label: 'план', task: '' });
-      const backend = addSession(map, {
-        provider: 'claude',
-        label: 'бэкенд',
-        task: '',
-        parent: plan.id,
-      });
-      const review = addSession(map, { provider: 'claude', label: 'ревью', task: '' });
-      addSession(map, { provider: 'claude', label: 'тесты', task: '', parent: review.id });
-      addMessage(map, { from: plan.id, to: backend.id, text: 'где миграция?', kind: 'question' });
+  /** Письмо в первую (единственную) сессию только что запущенного стаба. */
+  const giveRoom = async (app: ReturnType<typeof render>, workId: string): Promise<void> => {
+    await updateMap(project, workId, (map) => {
+      const first = map.sessions[0];
+      if (first !== undefined) addMessage(map, { from: first.id, to: first.id, text: 'заметка' });
     });
-    return created.work.id;
+    await waitFor(() => (app.lastFrame() ?? '').includes('▤ комната'));
   };
 
-  it('20, 21: док отдаёт панели 82 колонки, а набранное по-прежнему идёт гостю', async () => {
-    const app = open();
-    try {
-      await mounted(app.stdin);
-      // Макет 6.1: сайдбар 26, панель 82, тред 30 в своей рамке (план рамок,
-      // задача 5: разделителя между сайдбаром и панелью больше нет; находка
-      // сверки — рамка треда: у самого треда тоже есть правая грань, он занимает
-      // 32, а не 31). Порог — 140, не 138: `threadFits` теперь считает по тому,
-      // что реально дойдёт до гостя за вычетом рамки панели, а не до неё
-      // (находка сверки).
-      await resize(app, 140);
-      await launch(app);
-
-      app.stdin.write(`${PREFIX}t`);
-      // Одинокая корневая сессия видит тред всей работы (3.4).
-      await waitFor(() => (app.lastFrame() ?? '').includes('тред · работа'));
-      expect(app.lastFrame()).toContain('писем пока нет');
-      // PTY узнаёт новые колонки тем же путём, что при ресайзе терминала (6.1);
-      // рамка панели отъедает ещё 2 у того, что реально доходит до гостя: 82 − 2
-      // (план рамок, задача 6).
-      await waitFor(() => (app.lastFrame() ?? '').includes('resize 80x'));
-
-      // Панель треда не модальная: строка уходит агенту, а не харнессу (8.21).
-      app.stdin.write('echo привет\r');
-      await waitFor(() => (app.lastFrame() ?? '').includes('привет'));
-
-      // Повторное `t` закрывает тред и возвращает панели её колонки (6.1); гостю
-      // достаётся 114 − 2 рамки (план рамок, задача 6).
-      app.stdin.write(`${PREFIX}t`);
-      await waitFor(() => {
-        const frame = app.lastFrame() ?? '';
-        return frame.lastIndexOf('resize 112x') > frame.lastIndexOf('resize 81x');
-      });
-      expect(app.lastFrame()).not.toContain('тред · работа');
-    } finally {
-      app.unmount();
-    }
-  }, 30_000);
-
-  it('23: смена выбранной сессии меняет тред и его заголовок', async () => {
-    await threadWork();
-    const app = open();
-    try {
-      await mounted(app.stdin);
-      await waitFor(() => (app.lastFrame() ?? '').includes('сессии · Авторизация'));
-      await resize(app, 140);
-
-      app.stdin.write(`${PREFIX}t`);
-      await waitFor(() => (app.lastFrame() ?? '').includes('тред · план'));
-      // Непрочитанное видно и числом в заголовке, и самой лентой (6.2, 6.3).
-      expect(lineWith(app.lastFrame() ?? '', 'тред · план')).toContain('▤1');
-      expect(app.lastFrame()).toContain('где миграция?');
-
-      // Две сессии вниз — соседнее поддерево: у него свой тред (3.4).
-      app.stdin.write(`${PREFIX}j`);
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      app.stdin.write(`${PREFIX}j`);
-      await waitFor(() => (app.lastFrame() ?? '').includes('тред · ревью'));
-      expect(app.lastFrame()).not.toContain('где миграция?');
-    } finally {
-      app.unmount();
-    }
-  }, 30_000);
-
-  it('37, 41: узкому терминалу достаётся тот же тред оверлеем-запасником', async () => {
-    await threadWork();
-    const app = open();
-    try {
-      await mounted(app.stdin);
-      await waitFor(() => (app.lastFrame() ?? '').includes('сессии · Авторизация'));
-      await resize(app, 140);
-
-      app.stdin.write(`${PREFIX}t`);
-      await waitFor(() => (app.lastFrame() ?? '').includes('тред · план'));
-      expect(app.lastFrame()).not.toContain('┌ тред');
-
-      // На 120 колонках панели осталось бы 62 — меньше минимума (решение D21).
-      await resize(app, 120);
-      await waitFor(() => (app.lastFrame() ?? '').includes('┌ тред · план'));
-      // Строки те же: вид один на док и на оверлей (8.41).
-      expect(app.lastFrame()).toContain('где миграция?');
-
-      // Терминал вернул ширину — тред вернулся в док.
-      await resize(app, 140);
-      await waitFor(() => !(app.lastFrame() ?? '').includes('┌ тред'));
-      expect(app.lastFrame()).toContain('тред · план');
-    } finally {
-      app.unmount();
-    }
-  }, 30_000);
-
-  it('37: ресайз с открытым доком отдаёт PTY колонки в обе стороны', async () => {
-    const app = open();
-    try {
-      await mounted(app.stdin);
-      await resize(app, 140);
-      await launch(app);
-
-      // Док на 140 колонках: сайдбар 26, панель 82, тред 30 в своей рамке
-      // (макет 6.1; план рамок, задача 5: разделителя между сайдбаром и
-      // панелью больше нет; находка сверки — рамка треда: тред занимает 32).
-      // Порог — 140, не 138: `threadFits` теперь считает по тому, что реально
-      // дойдёт до гостя за вычетом рамки панели (находка сверки).
-      app.stdin.write(`${PREFIX}t`);
-      await waitFor(() => (app.lastFrame() ?? '').includes('тред · работа'));
-      // Рамка панели отъедает 2 у того, что доходит до гостя: 82 − 2 (план
-      // рамок, задача 6).
-      await waitFor(() => (app.lastFrame() ?? '').includes('resize 80x'));
-
-      // Ниже порога док уступает место оверлею, и панель забирает его колонки:
-      // 120 − 26 сайдбара = 94, гостю из них — 92 (решение D21; план рамок,
-      // задача 6).
-      await resize(app, 120);
-      await waitFor(() => (app.lastFrame() ?? '').includes('┌ тред'));
-
-      // Оверлей закрывает панель собой, поэтому обе ширины видно в её экране
-      // после возврата: 92 пришло на сужении, 80 — на обратном ходе.
-      await resize(app, 140);
-      await waitFor(() => !(app.lastFrame() ?? '').includes('┌ тред'));
-      await waitFor(() => {
-        const frame = app.lastFrame() ?? '';
-        return (
-          frame.includes('resize 92x') &&
-          frame.lastIndexOf('resize 80x') > frame.lastIndexOf('resize 92x')
-        );
-      });
-    } finally {
-      app.unmount();
-    }
-  }, 30_000);
-
   /** Лента на два экрана: письма подписаны двузначно, чтобы не путать 1 и 10. */
-  const chattyWork = async (): Promise<string> => {
+  const chattyRoomWork = async (): Promise<string> => {
     const created = await createWork(project, { title: 'Авторизация' });
     await updateMap(project, created.work.id, (map) => {
       const plan = addSession(map, { provider: 'claude', label: 'план', task: '' });
-      const backend = addSession(map, {
-        provider: 'claude',
-        label: 'бэкенд',
-        task: '',
-        parent: plan.id,
-      });
       for (let at = 1; at <= 20; at += 1) {
         const minute = String(at + 9).padStart(2, '0');
         const text = `письмо ${String(at).padStart(2, '0')}`;
-        addMessage(map, { from: plan.id, to: backend.id, text }, `2026-09-08T12:${minute}:00.000Z`);
+        addMessage(map, { from: plan.id, to: plan.id, text }, `2026-09-08T12:${minute}:00.000Z`);
       }
     });
     return created.work.id;
   };
 
-  it('41: лента длиннее окна — и док, и оверлей стоят на её хвосте', async () => {
-    await chattyWork();
+  it('ctrl+q t открывает комнату работы, повторный — возвращает в ту же сессию', async () => {
+    const app = open();
+    try {
+      const workId = await launch(app);
+      await giveRoom(app, workId);
+
+      app.stdin.write(`${PREFIX}t`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('комната · 1 письмо'));
+      expect(app.lastFrame()).not.toContain('stub готов');
+
+      // Повторное `t` возвращает панель к той же сессии — её экран цел.
+      app.stdin.write(`${PREFIX}t`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
+      expect(app.lastFrame()).not.toContain('комната · 1 письмо');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('в работе без писем ctrl+q t — только событие строки статуса, комната не открывается', async () => {
+    const app = open();
+    try {
+      await launch(app);
+
+      app.stdin.write(`${PREFIX}t`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('писем в работе пока нет'));
+      // Панель осталась на гостe — комната не подменила её.
+      expect(app.lastFrame()).toContain('stub готов');
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('пока выбрана комната, гостю не доходит ни одного байта — PTY не трогается вовсе', async () => {
+    const app = open();
+    try {
+      const workId = await launch(app);
+      await giveRoom(app, workId);
+
+      app.stdin.write(`${PREFIX}t`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('комната · 1 письмо'));
+
+      // Печать, стрелки и Enter — живая заглушка отозвалась бы на `echo`, но
+      // молчит: ни один байт до неё не дошёл (дизайн комнаты, 3–4).
+      app.stdin.write('echo секрет-42\r');
+      app.stdin.write('\u001B[A\u001B[B');
+      app.stdin.write(ENTER);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(app.lastFrame()).not.toContain('секрет-42');
+
+      // Комната закрылась — та же строка снова доходит до гостя как обычно.
+      app.stdin.write(`${PREFIX}t`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
+      app.stdin.write('echo секрет-42\r');
+      await waitFor(() => (app.lastFrame() ?? '').includes('секрет-42'));
+    } finally {
+      app.unmount();
+    }
+  }, 30_000);
+
+  it('стрелки без префикса листают ленту, G возвращает на хвост', async () => {
+    await chattyRoomWork();
     const app = open();
     try {
       await mounted(app.stdin);
@@ -1455,16 +1372,20 @@ describe('тред выбранной сессии (6.1–6.3, приёмка 8.
       await resize(app, 140);
 
       app.stdin.write(`${PREFIX}t`);
-      await waitFor(() => (app.lastFrame() ?? '').includes('тред · план'));
-      // Док держится хвоста: последнее письмо видно, первое ушло вверх (6.3).
+      await waitFor(() => (app.lastFrame() ?? '').includes('комната · 20 писем'));
+      // Лента держится хвоста: последнее письмо видно, первое — нет (5.4).
       expect(app.lastFrame()).toContain('письмо 20');
       expect(app.lastFrame()).not.toContain('письмо 01');
 
-      // Оверлей-запасник показывает тот же хвост, а не начало ленты (6.1, 8.41).
-      await resize(app, 120);
-      await waitFor(() => (app.lastFrame() ?? '').includes('┌ тред · план'));
-      expect(app.lastFrame()).toContain('письмо 20');
-      expect(app.lastFrame()).not.toContain('письмо 01');
+      // `↑` без префикса — гостю (которого здесь и нет) не уходит, листает
+      // ленту вверх; в шапке растёт `↓N`.
+      for (let at = 0; at < 30; at += 1) app.stdin.write('\u001B[A');
+      await waitFor(() => /↓\d/.test(app.lastFrame() ?? ''));
+
+      // `G` — назад к хвосту.
+      app.stdin.write('G');
+      await waitFor(() => (app.lastFrame() ?? '').includes('письмо 20'));
+      expect(app.lastFrame()).not.toMatch(/↓\d/);
     } finally {
       app.unmount();
     }
@@ -1530,20 +1451,30 @@ describe('рамка панели PTY: бюджет размеров (план �
     }
   }, 30_000);
 
-  it('открытый док треда режет ширину тем же способом, что и рамка панели', async () => {
+  it('комната на месте панели не режет размеры PTY: гость остаётся тем же, пока она выбрана', async () => {
     const app = open();
     try {
       await mounted(app.stdin);
-      await resize(app, 140, 40);
-      await launch(app);
+      await resize(app, 120, 40);
+      const workId = await launch(app);
+      app.stdin.write('size\r');
+      await waitFor(() => (app.lastFrame() ?? '').includes('size 92x37'));
+
+      await updateMap(project, workId, (map) => {
+        const first = map.sessions[0];
+        if (first !== undefined) addMessage(map, { from: first.id, to: first.id, text: 'заметка' });
+      });
+      await waitFor(() => (app.lastFrame() ?? '').includes('▤ комната'));
 
       app.stdin.write(`${PREFIX}t`);
-      await waitFor(() => (app.lastFrame() ?? '').includes('тред · работа'));
+      await waitFor(() => (app.lastFrame() ?? '').includes('комната · 1 письмо'));
 
-      // 140 − 26 сайдбара − 32 дока (30 + рамка треда, находка сверки) − 2 рамки
-      // панели = 80; строки те же (37).
+      // Комната закрылась — размер гостя тот же, что и до неё: PTY не тронут
+      // вовсе, пока она была на месте панели (дизайн комнаты, 3).
+      app.stdin.write(`${PREFIX}t`);
+      await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
       app.stdin.write('size\r');
-      await waitFor(() => (app.lastFrame() ?? '').includes('size 80x37'));
+      await waitFor(() => (app.lastFrame() ?? '').includes('size 92x37'));
     } finally {
       app.unmount();
     }

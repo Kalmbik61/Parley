@@ -20,6 +20,7 @@ interface Recorder {
   mouse: MouseEvent[];
   scrolled: number[];
   threadScrolled: number[];
+  roomScrolled: number[];
   options: PrefixInputOptions;
 }
 
@@ -30,6 +31,7 @@ function recorder(over: Partial<PrefixInputOptions> = {}): Recorder {
   const mouse: MouseEvent[] = [];
   const scrolled: number[] = [];
   const threadScrolled: number[] = [];
+  const roomScrolled: number[] = [];
 
   return {
     guest,
@@ -38,6 +40,7 @@ function recorder(over: Partial<PrefixInputOptions> = {}): Recorder {
     mouse,
     scrolled,
     threadScrolled,
+    roomScrolled,
     options: {
       prefixByte: ctrlByte('q') ?? 0,
       toGuest: (data) => guest.push(data),
@@ -46,6 +49,7 @@ function recorder(over: Partial<PrefixInputOptions> = {}): Recorder {
       onMouse: (event) => mouse.push(event),
       onScroll: (lines) => scrolled.push(lines),
       onThreadScroll: (lines) => threadScrolled.push(lines),
+      onRoomScroll: (lines) => roomScrolled.push(lines),
       ...over,
     },
   };
@@ -257,6 +261,52 @@ describe('мышь (чек-лист 21)', () => {
 
       expect(it.guest).toEqual([click(64, 94, 6)]);
       expect(it.threadScrolled).toEqual([]);
+    });
+  });
+
+  /**
+   * Комната стоит на месте панели целиком, пока выбрана (дизайн комнаты, 3):
+   * колесо над её зоной листает ленту, клик — ничего не делает, и это не
+   * зависит от того, чего просит отслеживание мыши скрытого за ней гостя.
+   */
+  describe('дизайн комнаты, 3–5: зона панели, пока выбрана комната', () => {
+    it('колесо над панелью листает комнату, а не гостя', () => {
+      const it = recorder({ mouseCapture: true, panelLeft: 26, roomSelected: true });
+      feed(click(64, 40, 6) + click(65, 40, 6), it);
+
+      expect(it.roomScrolled).toEqual([-WHEEL_LINES, WHEEL_LINES]);
+      expect(it.guest).toEqual([]);
+      expect(it.scrolled).toEqual([]);
+    });
+
+    it('клик по панели ничего не делает', () => {
+      const it = recorder({ mouseCapture: true, panelLeft: 26, roomSelected: true });
+      feed(click(0, 40, 6) + click(0, 40, 6, 'm'), it);
+
+      expect(it.roomScrolled).toEqual([]);
+      expect(it.guest).toEqual([]);
+      expect(it.mouse).toEqual([]);
+    });
+
+    it('отслеживание мыши у скрытого гостя роли не играет — колесо всё равно листает комнату', () => {
+      const it = recorder({
+        mouseCapture: true,
+        panelLeft: 26,
+        roomSelected: true,
+        mouseTracking: 'any',
+      });
+      feed(click(64, 40, 6), it);
+
+      expect(it.roomScrolled).toEqual([-WHEEL_LINES]);
+      expect(it.guest).toEqual([]);
+    });
+
+    it('колесо и клик над сайдбаром работают как раньше', () => {
+      const it = recorder({ mouseCapture: true, panelLeft: 26, roomSelected: true });
+      feed(click(0, 5, 3), it);
+
+      expect(it.mouse).toEqual([{ button: 0, x: 5, y: 3, kind: 'press' }]);
+      expect(it.roomScrolled).toEqual([]);
     });
   });
 

@@ -473,6 +473,20 @@ describe('Sidebar', () => {
 });
 
 describe('frameLine', () => {
+  // Ширина грани — контракт: длиннее Ink переносит строку, и зона растёт на
+  // строку, сдвигая тело (линза «вид комнаты», пометка `▤20 ↓356` на узкой панели).
+  it('ни при каком сочетании заголовка и пометки не шире заданной ширины', () => {
+    const g = glyphs();
+    for (let width = 2; width <= 40; width++) {
+      for (const title of [null, 'комната · 40 писем', 'работы']) {
+        for (const right of [null, '▤1', '▤20 ↓356']) {
+          const line = frameLine({ title, right, width, g, top: true });
+          expect([...line]).toHaveLength(width);
+        }
+      }
+    }
+  });
+
   it('верхняя грань занимает всю ширину и несёт заголовок', () => {
     const line = frameLine({ title: 'работы', width: 26, g: glyphs(), top: true });
     expect(line).toHaveLength(26);
@@ -841,9 +855,7 @@ describe('строка сессии: номер перед ярлыком', () =
         const all = lines(
           <Sidebar
             works={[work()]}
-            sessions={[
-              item({ session: session({ id, label: 'исследовать варианты миграции' }) }),
-            ]}
+            sessions={[item({ session: session({ id, label: 'исследовать варианты миграции' }) })]}
             selectedWork="/dev/shop w-0001"
             selectedSession={id}
             width={width}
@@ -944,7 +956,10 @@ describe('строка комнаты', () => {
     const all = lines(
       <Sidebar
         works={[work()]}
-        sessions={[item(), item({ session: session({ id: 's-02', label: 'ревью', parent: 's-01' }) })]}
+        sessions={[
+          item(),
+          item({ session: session({ id: 's-02', label: 'ревью', parent: 's-01' }) }),
+        ]}
         selectedWork="/dev/shop w-0001"
         selectedSession="s-01"
         width={26}

@@ -19,9 +19,36 @@ import {
 } from './components/sidebar.js';
 import type { PanelState, WorkRef } from './use-panel.js';
 import type { OverlaysState } from './use-overlays.js';
+import type { RoomState } from './use-room.js';
 import type { ThreadState } from './use-thread.js';
 import { usePrefixInput, withoutMouse, type MouseEvent } from './use-prefix-input.js';
 import type { SelectionState } from './use-selection.js';
+import type { StatusEventInit } from './use-status.js';
+
+/**
+ * Клавиши прокрутки ленты комнаты без префикса (дизайн комнаты, 5.4): гостю не
+ * уходят вовсе, пока комната выбрана (`capture` ниже). Единственное
+ * поддерживаемое кодирование — то же, что у `parseMouse` в
+ * `use-prefix-input.ts`: `xterm`-последовательности стрелок, `PgUp`/`PgDn` и
+ * `End`. `j`/`k`/`G` — обычные символы: конфликтовать им не с чем, комната
+ * держит весь ввод у себя.
+ */
+type RoomKey = 'up' | 'down' | 'pageUp' | 'pageDown' | 'tail';
+
+const ROOM_KEYS: ReadonlyArray<readonly [string, RoomKey]> = [
+  ['\u001B[A', 'up'],
+  ['k', 'up'],
+  ['\u001B[B', 'down'],
+  ['j', 'down'],
+  ['\u001B[5~', 'pageUp'],
+  ['\u001B[6~', 'pageDown'],
+  ['\u001B[F', 'tail'],
+  ['\u001B[4~', 'tail'],
+  ['G', 'tail'],
+];
+
+const roomKeyOf = (data: string): RoomKey | null =>
+  ROOM_KEYS.find(([sequence]) => sequence === data)?.[1] ?? null;
 
 /** Клавиша префикса → оверлей, который она открывает (таблица 3.2). */
 const OVERLAYS: Readonly<Record<string, Parameters<OverlaysState['open']>[0]>> = {
@@ -60,8 +87,15 @@ export interface ActionsOptions {
   session: WorkSession | null;
   panel: PanelState;
   overlays: OverlaysState;
-  /** Тред выбранной сессии: `t` докует его справа или открывает оверлеем (6.1). */
+  /** Тред выбранной сессии: остаётся только состоянием — `t` его больше не открывает (дизайн комнаты, 3.1). */
   thread: ThreadState;
+  /**
+   * Комната работы: `t` выбирает и уводит из неё, стрелки и колесо без
+   * префикса листают её ленту, пока она выбрана (дизайн комнаты, 3–5).
+   */
+  room: RoomState;
+  /** Событие строки статуса «писем в работе пока нет» — тем же механизмом, что и остальные (дизайн комнаты, 5). */
+  push: (events: readonly StatusEventInit[]) => void;
   /** Сайдбар, как он нарисован: из его раскладки берутся цели клика (3.3). */
   sidebar: SidebarProps | null;
   /** Колонок слева от панели: клик не правее — сайдбару. */
@@ -106,7 +140,8 @@ type WalkStop =
   | { work: string; kind: 'room' };
 
 export function useActions(options: ActionsOptions): ActionsState {
-  const { prefixByte, workRows, selection, orders, roomWorks, panel, overlays, thread } = options;
+  const { prefixByte, workRows, selection, orders, roomWorks, panel, overlays, thread, room, push } =
+    options;
   const order = orders.get(selection.work ?? '') ?? [];
   // Все сессии сайдбара сверху вниз, а следом за сессиями каждой работы — её
   // комната, если она есть: по ним `j`/`k` ходят по кругу через работы (3.2;
@@ -240,8 +275,14 @@ export function useActions(options: ActionsOptions): ActionsState {
       }
       // Сайдбара на этой ширине нет — `b` открывает его оверлеем (решение №9).
       if (key === 'b') return toggleSidebar() ? undefined : overlays.open('sidebar');
-      // Тред строится вокруг выбранной сессии: без неё показывать нечего (6.2).
-      if (key === 't') return session === null ? undefined : thread.toggle();
+      // Комната выбранной работы: повторное `t` уводит туда, откуда пришли, а
+      // без писем в работе — только событие, комнате нечего показывать
+      // (дизайн комнаты, 3 и 5).
+      if (key === 't') {
+        if (selection.room) return selection.leaveRoom();
+        if (roomKey !== null) return selection.selectRoom();
+        return push([{ text: 'писем в работе пока нет' }]);
+      }
       if (key >= '1' && key <= '9') {
         const work = workRows[Number(key) - 1];
         if (work === undefined) return;
@@ -261,7 +302,8 @@ export function useActions(options: ActionsOptions): ActionsState {
       walk,
       workRows,
       overlays,
-      thread,
+      roomKey,
+      push,
       onKey,
       toggleSidebar,
     ],
@@ -290,21 +332,32 @@ export function useActions(options: ActionsOptions): ActionsState {
   // самой панели: карта с выбором приезжает через watcher позже, чем поднимается PTY.
   const card = panel.attached === null || !panel.alive(panel.attached);
 
-  // Весь ввод — гостю, кроме префикса; пока открыт оверлей или сайдбар в режиме
-  // навигации, гостю не уходит ничего (3.1).
+  // Весь ввод — гостю, кроме префикса; пока открыт оверлей, сайдбар в режиме
+  // навигации или выбрана комната, гостю не уходит ничего (3.1; комната, 3–4).
   usePrefixInput(true, {
     prefixByte,
     onAction,
     onAwait: setAwaiting,
     toGuest: panel.write,
-    capture: overlays.kind !== null || navigating || card,
-    // Оверлей глух и к префиксу, а сайдбар и карточка — нет: действия харнесса
-    // слышны и в режиме навигации, не выходя из него (3.1–3.2).
-    keepPrefix: overlays.kind === null && (navigating || card),
+    capture: overlays.kind !== null || navigating || card || selection.room,
+    // Оверлей глух и к префиксу, а сайдбар, карточка и комната — нет: действия
+    // харнесса слышны и в этих режимах, не выходя из них (3.1–3.2; комната, 4).
+    keepPrefix: overlays.kind === null && (navigating || card || selection.room),
     // Ввод оверлея и списков — тоже нажатия харнесса; события мыши ими не
-    // считаются: они гостю не уходят, но и клавишами не являются.
+    // считаются: они гостю не уходят, но и клавишами не являются. Пока выбрана
+    // комната и не открыт оверлей, тот же чанк ещё листает её ленту (5.4) —
+    // `navigating` проверяется отдельно: войдя в сайдбар с комнаты, стрелки
+    // должны водить курсор, а не лист.
     onCapture: (data) => {
-      if (withoutMouse(data) !== '') onKey();
+      const text = withoutMouse(data);
+      if (text !== '') onKey();
+      if (!selection.room || navigating || overlays.kind !== null) return;
+      const move = roomKeyOf(text);
+      if (move === 'up') room.scrollBy(-1);
+      else if (move === 'down') room.scrollBy(1);
+      else if (move === 'pageUp') room.scrollBy(-room.height);
+      else if (move === 'pageDown') room.scrollBy(room.height);
+      else if (move === 'tail') room.follow();
     },
     mouseCapture,
     panelLeft,
@@ -314,6 +367,8 @@ export function useActions(options: ActionsOptions): ActionsState {
     onMouse,
     onScroll: panel.scroll,
     onThreadScroll: thread.scrollBy,
+    roomSelected: selection.room,
+    onRoomScroll: room.scrollBy,
   });
 
   // Режим навигации: стрелки и `j`/`k` по всем строкам сайдбара сверху вниз,
@@ -353,12 +408,14 @@ export function useActions(options: ActionsOptions): ActionsState {
 
   // `Enter` на карточке: запуск `pending`, возобновление вышедшей или
   // завершённой; у сессии, запущенной вне харнесса, подключать нечего (2.2).
+  // Выбрана комната — панель показывает не карточку, а ленту: `Enter` карточки
+  // ей не принадлежит (дизайн комнаты, 3).
   useInput(
     (_input, key) => {
       if (!key.return || session === null || session.status === 'active') return;
       overlays.open(session.status === 'pending' ? 'launch' : 'resume');
     },
-    { isActive: card && !navigating && overlays.kind === null && !awaiting },
+    { isActive: card && !navigating && !selection.room && overlays.kind === null && !awaiting },
   );
 
   return { navigating, awaiting, cursor };

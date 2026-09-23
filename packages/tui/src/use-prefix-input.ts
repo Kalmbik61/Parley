@@ -1,5 +1,5 @@
 import { useStdin } from 'ink';
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { MouseTracking } from './pty/terminal-buffer.js';
 
 /**
@@ -69,6 +69,14 @@ export interface PrefixInputOptions {
   onScroll?: (lines: number) => void;
   /** Колесо над доком треда: те же знаки, что у скроллбэка. */
   onThreadScroll?: (lines: number) => void;
+  /**
+   * Комната занимает место панели (дизайн комнаты, 3): колесо над её зоной
+   * листает ленту вместо гостя, клик по ней не делает ничего — выбирать в
+   * ленте нечего, а PTY гостя эта зона не трогает вовсе.
+   */
+  roomSelected?: boolean;
+  /** Колесо над комнатой: те же знаки, что у скроллбэка (комната, 5.4). */
+  onRoomScroll?: (lines: number) => void;
 }
 
 /** Ждём ли вторую клавишу префикса. Живёт между чанками: префикс мог их разделить. */
@@ -137,6 +145,8 @@ function routeMouse(event: MouseEvent, options: PrefixInputOptions): void {
     onMouse,
     onScroll,
     onThreadScroll,
+    roomSelected = false,
+    onRoomScroll,
     toGuest,
   } = options;
 
@@ -151,6 +161,14 @@ function routeMouse(event: MouseEvent, options: PrefixInputOptions): void {
     const lines = wheelLines(event);
     // Клик по треду ничего не делает: выбирать в ленте нечего (6.3).
     if (lines !== 0) onThreadScroll?.(lines);
+    return;
+  }
+  // Комната стоит на месте гостя (дизайн комнаты, 3): колесо листает её,
+  // независимо от того, чего просит скрытый за ней PTY, — его отслеживание
+  // мыши сюда не должно доходить вовсе, эта зона его не трогает.
+  if (roomSelected) {
+    const lines = wheelLines(event);
+    if (lines !== 0) onRoomScroll?.(lines);
     return;
   }
   // Гость считает колонки и строки от своего левого верхнего угла, а не от края
@@ -248,7 +266,12 @@ export function usePrefixInput(active: boolean, options: PrefixInputOptions): vo
   const latest = useRef(options);
   const state = useRef<PrefixState>(createPrefixState());
 
-  useEffect(() => {
+  // Синхронный эффект: под частым фоновым перерисовыванием (мигание точек,
+  // watcher) пассивный `useEffect` мог не успеть обновить ссылку раньше, чем
+  // придёт следующий байт stdin — обработчик стрелял бы устаревшим `onAction`
+  // и `capture` (найдено на двух подряд `prefix j` без PTY между ними, что
+  // раньше не проверялось: обычный переход сессии всегда ждёт вывод гостя).
+  useLayoutEffect(() => {
     latest.current = options;
   });
 

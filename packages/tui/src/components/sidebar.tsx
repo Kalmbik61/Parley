@@ -6,7 +6,13 @@
  * точек — из `use-activity.ts`, выбор — из `use-selection.ts`.
  */
 
-import { sessionTag, type SessionIndex, type WorkEntry, type WorkSession, type WorkStatus } from '@harnas/core';
+import {
+  sessionTag,
+  type SessionIndex,
+  type WorkEntry,
+  type WorkSession,
+  type WorkStatus,
+} from '@harnas/core';
 import { Box, Text } from 'ink';
 import stringWidth from 'string-width';
 import { memo, type ReactNode } from 'react';
@@ -255,6 +261,10 @@ export function frameLine({
   // Хвост грани: без пометки — просто угол, с ней — те же пробел-дефис, что
   // и слева у заголовка, зеркально.
   const tail = right === null ? cornerRight : ` ${right} ${g.frame.horizontal}${cornerRight}`;
+  // Пометка сама длиннее грани — грань остаётся глухой. Строка обязана быть
+  // ровно `width`: длиннее Ink перенесёт её, и зона вырастет на строку, сдвинув
+  // всё тело вниз (линза «вид комнаты»: шапка `▤20 ↓356` на узкой панели).
+  if (tail.length > width - 1) return plain;
   if (title === null) {
     if (right === null) return plain;
     return `${left}${g.frame.horizontal.repeat(Math.max(0, width - 1 - tail.length))}${tail}`;

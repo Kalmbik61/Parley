@@ -12,6 +12,7 @@ import { Box, useApp } from 'ink';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { overlayCovers, OverlayHost, overlayRoom } from './components/overlay.js';
 import { cardFor, Panel, PANEL_FRAME } from './components/panel.js';
+import { Room } from './components/room.js';
 import {
   Sidebar,
   SidebarOverlay,
@@ -35,6 +36,7 @@ import { useMapSync } from './use-map-sync.js';
 import { useOverlays } from './use-overlays.js';
 import { usePanel } from './use-panel.js';
 import { ctrlByte } from './use-prefix-input.js';
+import { useRoom } from './use-room.js';
 import { useAttachSession, useSelection } from './use-selection.js';
 import { useSessionLink } from './use-session-link.js';
 import { useStatus } from './use-status.js';
@@ -187,6 +189,21 @@ export function App({
           unread: chosenMessages.filter((message) => message.readAt === null).length,
         };
 
+  // Модель участника комнаты — из того же индекса логов, откуда сайдбар берёт
+  // `live.model` (`sidebarSessions` → `metricsOf`): core о логах не знает,
+  // подпись собирает `participantTag` в tui (дизайн комнаты, 4).
+  const modelOf = useCallback(
+    (id: string): string | null => {
+      const found = chosen?.map.sessions.find((item) => item.id === id);
+      return found === undefined ? null : (index(found)?.primaryModel ?? null);
+    },
+    [chosen, index],
+  );
+  const roomState = useRoom({ width: guestCols, height: guestRows, modelOf });
+  // Лента считается только когда комната выбрана — переход по всем письмам
+  // работы на каждую новую карту ни к чему, пока её не видно.
+  const roomPane = selection.room ? roomState.viewOf(chosen) : null;
+
   const sidebar = {
     works: workRows,
     sessions: sidebarSessions(chosen, {
@@ -253,6 +270,8 @@ export function App({
     panel,
     overlays,
     thread,
+    room: roomState,
+    push,
     // Мышь: цели клика берутся из раскладки самого сайдбара (3.3).
     sidebar: width === null ? null : sidebar,
     panelLeft,
@@ -316,6 +335,11 @@ export function App({
               onSubmit={overlays.submit}
               onCancel={overlays.close}
             />
+          ) : selection.room ? (
+            // Комната занимает место панели целиком, пока выбрана (дизайн
+            // комнаты, 3): гостя она не трогает — его PTY живёт как обычно,
+            // просто панель сейчас показывает не его.
+            <Room view={roomPane} width={guestCols} height={guestRows} />
           ) : (
             // Панель показывает гостя, пока к ней подключён живой агент, и карточку
             // выбранной сессии, когда гостя нет; ходьба по сайдбару её не трогает (2.2).

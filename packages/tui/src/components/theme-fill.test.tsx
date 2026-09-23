@@ -20,9 +20,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { pinUnicodeGlyphs } from '../../test/glyphs-env.js';
 import { pinTheme } from '../../test/theme-env.js';
 import { glyphs } from '../glyphs.js';
+import type { RoomLine, RoomView } from '../room-view.js';
 import { PALETTES } from '../theme/palettes.js';
 import { Line, type OverlayLine } from './overlay.js';
 import { Card, type CardProps } from './panel.js';
+import { Room } from './room.js';
 import { Sidebar, type SidebarSession, type SidebarTarget, type SidebarWork } from './sidebar.js';
 import { StatusBar } from './status-bar.js';
 
@@ -251,6 +253,41 @@ describe('заливка зон темы фоном (дизайн 5.1, кусо�
     });
   });
 
+  describe('комната (дизайн комнаты, 5)', () => {
+    const ROOM_WIDTH = 40;
+
+    const roomView = (lines: readonly RoomLine[]): RoomView => ({
+      title: 'комната · 2 письма',
+      unread: 1,
+      lines,
+      below: 0,
+      total: lines.length,
+    });
+
+    it('каждая строка ленты, включая пустую хвостовую, несёт bg.panel на всю ширину тела', () => {
+      const lines = (
+        render(
+          <Room
+            view={roomView([
+              { text: 'S01 (Claude) · S02 (Codex)', tone: 'muted' },
+              { text: '16:23  S01 (Claude) → S02 (Codex)', tone: 'head', mark: 'unseen' },
+            ])}
+            width={ROOM_WIDTH}
+            height={8}
+          />,
+        ).lastFrame() ?? ''
+      ).split('\n');
+      // Верх и низ рамки заливки не несут — заливают только строки тела.
+      const body = lines.slice(1, -1);
+      expect(body.length).toBeGreaterThan(0);
+      for (const line of body) {
+        expect(line.includes(PANEL_BG)).toBe(true);
+        // Ширина строки — тело плюс боковые грани.
+        expect(stringWidth(line)).toBe(ROOM_WIDTH + 2);
+      }
+    });
+  });
+
   describe('оверлей (5)', () => {
     const INNER = 28;
 
@@ -392,6 +429,26 @@ describe('без заливки на уровне 1 — сквозной инв�
       // Без темы строки короче ширины карточки — добивки за `room` нет.
       expect(stringWidth(line)).toBeLessThan(40);
     }
+  });
+
+  it('комната: строки ленты фона не несут', () => {
+    const lines = (
+      render(
+        <Room
+          view={{
+            title: 'комната · 1 письмо',
+            unread: 0,
+            lines: [{ text: 'S01 (Claude) · S02 (Codex)', tone: 'muted' }],
+            below: 0,
+            total: 1,
+          }}
+          width={30}
+          height={6}
+        />,
+      ).lastFrame() ?? ''
+    ).split('\n');
+
+    for (const line of lines) expect(line.includes(PANEL_BG)).toBe(false);
   });
 
   it('оверлей: ни фона на строке списка, ни фона на пустом заполнителе', () => {
