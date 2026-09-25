@@ -65,6 +65,7 @@ export {
   deleteSessionFiles,
   deleteWorkFiles,
   harnasHome,
+  MapLockTimeoutError,
   pruneWorksIndex,
   readMap,
   readWorksIndex,
@@ -73,6 +74,13 @@ export {
   worksIndexPath,
 } from './work/store.js';
 export type { NewWork, WorkPaths, WriteOptions } from './work/store.js';
+export {
+  hostLeaseActive,
+  readHostLease,
+  removeHostLease,
+  writeHostLease,
+} from './work/lease.js';
+export type { HostLease } from './work/lease.js';
 export { decisionsOf, participantLabel, sessionTag, threadOf } from './work/thread.js';
 export type { Thread } from './work/thread.js';
 export { buildBrief, writeBrief } from './work/brief.js';

@@ -34,6 +34,8 @@ describe('loadConfig', () => {
       messageRate: 20,
       autoLaunch: true,
       theme: 'mocha',
+      fontFamily: 'Menlo',
+      fontSize: 13,
     });
     expect(loaded.config).toEqual(DEFAULT_CONFIG);
     expect(loaded.warning).toBeNull();
@@ -62,6 +64,8 @@ describe('loadConfig', () => {
       messageRate: 5,
       autoLaunch: false,
       theme: 'mocha',
+      fontFamily: 'Menlo',
+      fontSize: 13,
     });
     expect(fromFile.warning).toBeNull();
 
@@ -85,8 +89,53 @@ describe('loadConfig', () => {
       messageRate: 7,
       autoLaunch: true,
       theme: 'mocha',
+      fontFamily: 'Menlo',
+      fontSize: 13,
     });
     expect(fromEnv.warning).toBeNull();
+  });
+
+  it('fontFamily и fontSize: файл перекрывает дефолт, окружение — файл', async () => {
+    await write({ fontFamily: 'Fira Code', fontSize: 16 });
+    const fromFile = await loadConfig(file(), {});
+    expect(fromFile.config.fontFamily).toBe('Fira Code');
+    expect(fromFile.config.fontSize).toBe(16);
+    expect(fromFile.warning).toBeNull();
+
+    const fromEnv = await loadConfig(file(), { HARNAS_FONT_FAMILY: 'Menlo', HARNAS_FONT_SIZE: '20' });
+    expect(fromEnv.config.fontFamily).toBe('Menlo');
+    expect(fromEnv.config.fontSize).toBe(20);
+    expect(fromEnv.fromEnv).toEqual(expect.arrayContaining(['fontFamily', 'fontSize']));
+  });
+
+  it('fontSize: границы 8…32 — инвариант по диапазону, не одно число', async () => {
+    await write({ fontSize: 7 });
+    const tooSmall = await loadConfig(file(), {});
+    expect(tooSmall.config.fontSize).toBe(DEFAULT_CONFIG.fontSize);
+    expect(tooSmall.warning).toContain('fontSize');
+
+    await write({ fontSize: 33 });
+    const tooLarge = await loadConfig(file(), {});
+    expect(tooLarge.config.fontSize).toBe(DEFAULT_CONFIG.fontSize);
+    expect(tooLarge.warning).toContain('fontSize');
+
+    await write({ fontSize: 8 });
+    expect((await loadConfig(file(), {})).config.fontSize).toBe(8);
+
+    await write({ fontSize: 32 });
+    expect((await loadConfig(file(), {})).config.fontSize).toBe(32);
+
+    await write({});
+    const badEnv = await loadConfig(file(), { HARNAS_FONT_SIZE: '999' });
+    expect(badEnv.config.fontSize).toBe(DEFAULT_CONFIG.fontSize);
+    expect(badEnv.warning).toContain('HARNAS_FONT_SIZE');
+  });
+
+  it('fontFamily: пустая строка в файле — жалоба и дефолт', async () => {
+    await write({ fontFamily: '' });
+    const loaded = await loadConfig(file(), {});
+    expect(loaded.config.fontFamily).toBe(DEFAULT_CONFIG.fontFamily);
+    expect(loaded.warning).toContain('fontFamily');
   });
 
   it('пустая переменная — то же, что незаданная', async () => {
@@ -253,6 +302,30 @@ describe('parseSetting', () => {
 
   it('messageRate — теми же правилами, что и у файла', () => {
     expect(parseSetting('messageRate', '7')).toEqual({ value: 7 });
+  });
+
+  it('булевы ключи — те же множества да/нет, что у окружения', () => {
+    expect(parseSetting('autoLaunch', 'yes')).toEqual({ value: true });
+    expect(parseSetting('mouseCapture', '0')).toEqual({ value: false });
+    expect(parseSetting('ascii', 'мимо')).toEqual({ error: 'ascii: ожидается 0 или 1' });
+  });
+
+  it('theme — только из THEME_NAMES', () => {
+    expect(parseSetting('theme', 'nord')).toEqual({ value: 'nord' });
+    expect(parseSetting('theme', 'неон')).toMatchObject({ error: expect.any(String) });
+  });
+
+  it('fontFamily — непустая строка', () => {
+    expect(parseSetting('fontFamily', 'Fira Code')).toEqual({ value: 'Fira Code' });
+    expect(parseSetting('fontFamily', '')).toMatchObject({ error: expect.any(String) });
+  });
+
+  it('fontSize — целое от 8 до 32', () => {
+    expect(parseSetting('fontSize', '16')).toEqual({ value: 16 });
+    expect(parseSetting('fontSize', '8')).toEqual({ value: 8 });
+    expect(parseSetting('fontSize', '32')).toEqual({ value: 32 });
+    expect(parseSetting('fontSize', '7')).toMatchObject({ error: expect.any(String) });
+    expect(parseSetting('fontSize', '33')).toMatchObject({ error: expect.any(String) });
   });
 });
 

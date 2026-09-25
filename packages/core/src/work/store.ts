@@ -65,6 +65,19 @@ const RETRY_MS = 20;
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Таймаут `map.lock` — отдельный класс, а не голая `Error`: карту пишут трое
+ * (TUI, хост и MCP-серверы агентов), и хосту нужно отличить именно занятость
+ * блокировки от прочих сбоев записи, чтобы не падать, а сообщить `host.notice`
+ * и повторить на следующем событии (план, кусок 1.4).
+ */
+export class MapLockTimeoutError extends Error {
+  constructor(lockFile: string, timeoutMs: number) {
+    super(`блокировка ${lockFile} не снята за ${timeoutMs} мс`);
+    this.name = 'MapLockTimeoutError';
+  }
+}
+
 /** Эксклюзивное создание файла — атомарная операция файловой системы. */
 async function acquireLock(lockFile: string, timeoutMs: number): Promise<FileHandle> {
   const deadline = Date.now() + timeoutMs;
@@ -74,7 +87,7 @@ async function acquireLock(lockFile: string, timeoutMs: number): Promise<FileHan
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       if (Date.now() >= deadline) {
-        throw new Error(`блокировка ${lockFile} не снята за ${timeoutMs} мс`);
+        throw new MapLockTimeoutError(lockFile, timeoutMs);
       }
       await delay(RETRY_MS);
     }

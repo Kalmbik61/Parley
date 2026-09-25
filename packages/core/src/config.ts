@@ -36,6 +36,10 @@ export interface HarnasConfig {
   autoLaunch: boolean;
   /** Имя темы: пять палитр плюс `terminal` (дизайн темы `2026-09-22-tui-theme-design.md`, раздел 6). */
   theme: string;
+  /** Шрифт панели терминала в окне (кусок 1.10 плана окна). */
+  fontFamily: string;
+  /** Кегль панели терминала в пунктах: 8…32 (кусок 1.10 плана окна). */
+  fontSize: number;
 }
 
 /** Шесть имён тем: пять палитр плюс явный отказ от них (дизайн темы, раздел 3.3). */
@@ -51,6 +55,8 @@ export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
   messageRate: 20,
   autoLaunch: true,
   theme: 'mocha',
+  fontFamily: 'Menlo',
+  fontSize: 13,
 };
 
 /** Имя переменной окружения для каждого ключа — один источник для загрузчика и оверлея. */
@@ -64,6 +70,8 @@ export const ENV_NAMES: Readonly<Record<keyof HarnasConfig, string>> = {
   messageRate: 'HARNAS_MESSAGE_RATE',
   autoLaunch: 'HARNAS_AUTO_LAUNCH',
   theme: 'HARNAS_THEME',
+  fontFamily: 'HARNAS_FONT_FAMILY',
+  fontSize: 'HARNAS_FONT_SIZE',
 };
 
 export interface LoadedConfig {
@@ -98,6 +106,19 @@ const isThemeName = (value: unknown): value is string =>
   typeof value === 'string' && (THEME_NAMES as readonly string[]).includes(value);
 const THEME_EXPECTED = `одно из ${THEME_NAMES.join(', ')}`;
 
+const isFontFamily = (value: unknown): value is string =>
+  typeof value === 'string' && value.trim() !== '';
+
+/** Границы кегля — инвариантом по диапазону (правила проверки плана), не одним числом. */
+const FONT_SIZE_MIN = 8;
+const FONT_SIZE_MAX = 32;
+const isFontSize = (value: unknown): value is number =>
+  typeof value === 'number' &&
+  Number.isInteger(value) &&
+  value >= FONT_SIZE_MIN &&
+  value <= FONT_SIZE_MAX;
+const FONT_SIZE_EXPECTED = `целое от ${FONT_SIZE_MIN} до ${FONT_SIZE_MAX}`;
+
 /** Значения из файла: тут JSON, поэтому типы проверяются как есть. */
 function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatch {
   const patch: ConfigPatch = {};
@@ -124,6 +145,8 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   take('messageRate', isPositiveInt, 'целое больше нуля');
   take('autoLaunch', (value) => typeof value === 'boolean', 'true или false');
   take('theme', isThemeName, THEME_EXPECTED);
+  take('fontFamily', isFontFamily, 'непустая строка');
+  take('fontSize', isFontSize, FONT_SIZE_EXPECTED);
   return patch;
 }
 
@@ -176,6 +199,18 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   flag('channelPush');
   count('messageRate');
   flag('autoLaunch');
+
+  const fontFamily = text(ENV_NAMES.fontFamily);
+  if (fontFamily !== undefined) {
+    if (isFontFamily(fontFamily)) patch.fontFamily = fontFamily;
+    else complain(`${ENV_NAMES.fontFamily}: ожидается непустая строка`);
+  }
+  const fontSize = text(ENV_NAMES.fontSize);
+  if (fontSize !== undefined) {
+    const parsed = Number(fontSize);
+    if (isFontSize(parsed)) patch.fontSize = parsed;
+    else complain(`${ENV_NAMES.fontSize}: ожидается ${FONT_SIZE_EXPECTED}`);
+  }
   return patch;
 }
 
@@ -229,17 +264,45 @@ export async function loadConfig(
 /** Ключи, значение которых вводится текстом; булевы переключаются без ввода. */
 export type TypedSettingKey = 'prefix' | 'sidebarWidth' | 'silenceThresholdMs' | 'messageRate';
 
+/** Булевы ключи настроек — те же множества «да/нет», что у загрузчика окружения. */
+const BOOLEAN_KEYS: ReadonlySet<keyof HarnasConfig> = new Set([
+  'mouseCapture',
+  'ascii',
+  'channelPush',
+  'autoLaunch',
+]);
+
 /**
- * Разбор введённого значения теми же правилами, что и у файла: оверлей настроек
- * (раздел 3.4) не должен расходиться с загрузчиком.
+ * Разбор введённого значения теми же правилами, что и у файла и у окружения:
+ * `settings.set` хоста (кусок 1.4) не должен расходиться с загрузчиком. Раньше
+ * понимал только числовые ключи и `prefix` — теперь любой ключ `HarnasConfig`.
  */
-export function parseSetting<K extends TypedSettingKey>(
+export function parseSetting<K extends keyof HarnasConfig>(
   key: K,
   text: string,
 ): { value: HarnasConfig[K] } | { error: string } {
   if (key === 'prefix') {
     if (isPrefix(text)) return { value: text as HarnasConfig[K] };
     return { error: `${key}: ожидается один знак` };
+  }
+  if (key === 'theme') {
+    if (isThemeName(text)) return { value: text as HarnasConfig[K] };
+    return { error: `${key}: ожидается ${THEME_EXPECTED}` };
+  }
+  if (key === 'fontFamily') {
+    if (isFontFamily(text)) return { value: text as HarnasConfig[K] };
+    return { error: `${key}: ожидается непустая строка` };
+  }
+  if (key === 'fontSize') {
+    const parsed = Number(text);
+    if (isFontSize(parsed)) return { value: parsed as HarnasConfig[K] };
+    return { error: `${key}: ожидается ${FONT_SIZE_EXPECTED}` };
+  }
+  if (BOOLEAN_KEYS.has(key)) {
+    const lower = text.toLowerCase();
+    if (TRUE.has(lower)) return { value: true as HarnasConfig[K] };
+    if (FALSE.has(lower)) return { value: false as HarnasConfig[K] };
+    return { error: `${key}: ожидается 0 или 1` };
   }
   const parsed = Number(text);
   if (isPositiveInt(parsed)) return { value: parsed as HarnasConfig[K] };

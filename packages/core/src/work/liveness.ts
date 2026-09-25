@@ -122,6 +122,8 @@ export async function checkSession(
 export interface ReconcileOptions extends MetricsRoots {
   now?: number;
   silenceThresholdMs?: number;
+  /** Таймаут `map.lock` для перевода мёртвых сессий в `exited` (кусок 1.4 хоста). */
+  lockTimeoutMs?: number;
 }
 
 /** Время последней записи лога сессии; `null` — лога такого провайдера мы не читаем. */

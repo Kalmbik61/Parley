@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, chmod, rm, stat, writeFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
+import { harnasHome } from '@harnas/core';
 import { createHostContext } from './context.js';
 import type { HostContext } from './context.js';
 import { createHostServer } from './server.js';
@@ -8,7 +9,8 @@ import { createLog } from './log.js';
 import { watchIdle } from './idle.js';
 import { hostPaths, MAX_SOCKET_PATH_BYTES } from './paths.js';
 import type { HostPaths } from './paths.js';
-import { METHOD_HANDLERS, NOTIFICATION_HANDLERS } from './methods/index.js';
+import { createMethodHandlers, NOTIFICATION_HANDLERS } from './methods/index.js';
+import { createWorksService } from './works/works-service.js';
 
 export interface HostOptions {
   home?: string;
@@ -42,12 +44,22 @@ const DEFAULT_IDLE_MS = 300_000;
 const DEFAULT_HELLO_TIMEOUT_MS = 5_000;
 
 export async function startHost(options: HostOptions = {}): Promise<RunningHost> {
-  const paths = hostPaths(options.home);
+  const resolvedHome = options.home ?? harnasHome();
+  const paths = hostPaths(resolvedHome);
 
-  // 1. Слишком длинный путь сокета — отказ до того, как на диске что-то появится.
+  // 1. Слишком длинный путь сокета — отказ до того, как на диске или в
+  //    окружении что-то появится.
   if (Buffer.byteLength(paths.socket, 'utf8') > MAX_SOCKET_PATH_BYTES) {
     throw new SocketPathTooLong(paths.socket);
   }
+
+  // Работы (`readWorksIndex`, `createWork`, …) живут в core и берут дом только
+  // из `process.env.HARNAS_HOME` — параметра-оверрайда у них нет. Чтобы список
+  // работ хоста совпадал с его же файлами (`options.home` в тестах — не
+  // настоящий `~/.harnas`), окружение здесь и приводится к тому же дому,
+  // а на остановке возвращается прежним (см. `runShutdown`).
+  const previousHarnasHome = process.env['HARNAS_HOME'];
+  process.env['HARNAS_HOME'] = resolvedHome;
 
   // 2. Каталог хоста всегда 0700, независимо от того, был он уже или нет.
   await mkdir(paths.dir, { recursive: true, mode: 0o700 });
@@ -55,6 +67,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
   // 3. Живой хост на этом сокете — отказ; осколки упавшего — подчищаются.
   if (await socketIsAlive(paths.socket)) {
+    restoreHarnasHome(previousHarnasHome);
     throw new HostAlreadyRunning();
   }
   await removeHostFiles(paths);
@@ -90,11 +103,16 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     requestShutdown: (reason) => runShutdown(reason),
   });
 
+  // Работы стартуют и останавливаются вместе с хостом: TUI и окно узнают о них
+  // через `works.list`/`works.changed`, а на остановке хост снимает свою аренду.
+  const worksService = createWorksService(handle.context);
+  handle.context.onShutdown(() => worksService.stop());
+
   const server = createHostServer({
     context: handle.context,
     token,
     helloTimeoutMs,
-    methodHandlers: METHOD_HANDLERS,
+    methodHandlers: createMethodHandlers({ works: worksService }),
     notificationHandlers: NOTIFICATION_HANDLERS,
     registerClient: handle.addClient,
     unregisterClient: handle.removeClient,
@@ -113,6 +131,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
   // 7. Таймер простоя: ни клиентов, ни занятых ключей — отсчёт стартует сразу.
   idleWatcher.notify(true);
+
+  await worksService.start();
 
   // 8. SIGTERM/SIGINT — обычная остановка.
   const onSignal = (): void => {
@@ -140,6 +160,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     for (const client of handle.context.clients()) client.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await removeHostFiles(paths);
+    restoreHarnasHome(previousHarnasHome);
     log.info('хост остановлен', { reason });
     resolveClosed(reason);
   }
@@ -176,4 +197,10 @@ async function socketIsAlive(socketPath: string): Promise<boolean> {
 
 async function removeHostFiles(paths: HostPaths): Promise<void> {
   await Promise.all([paths.socket, paths.token, paths.pid].map((file) => rm(file, { force: true })));
+}
+
+/** Возвращает `HARNAS_HOME` к тому, чем оно было до `startHost` (см. там же). */
+function restoreHarnasHome(previous: string | undefined): void {
+  if (previous === undefined) delete process.env['HARNAS_HOME'];
+  else process.env['HARNAS_HOME'] = previous;
 }

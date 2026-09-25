@@ -5,9 +5,13 @@
  * харнесса разом поднимало бы процессы из всех старых работ.
  *
  * Сессии без `parent` завёл человек (диалог, `prefix C`, CLI) — их он запускает сам.
+ *
+ * Работу с живой арендой хоста (`host.lease`, кусок 1.4 плана хоста) TUI не
+ * трогает: сессии внутри неё запускает и видит хост, второй запуск тем же
+ * pending удвоил бы процесс агента.
  */
 
-import type { WorkEntry, WorkSession } from '@harnas/core';
+import { hostLeaseActive, type WorkEntry, type WorkSession } from '@harnas/core';
 import { useEffect, useRef } from 'react';
 
 export interface AutoLaunchOptions {
@@ -33,13 +37,27 @@ export function useAutoLaunch({ works, loading, enabled, launch }: AutoLaunchOpt
       );
       return;
     }
+
+    // Кандидаты собираются синхронно (иначе повторный рендер до того, как
+    // асинхронная проверка аренды вернётся, отметил бы их как известные и
+    // запуска не случилось бы вовсе), а сама аренда сверяется отдельно —
+    // `hostLeaseActive` читает файл с диска.
+    const candidates: Array<{ projectPath: string; workId: string; session: WorkSession }> = [];
     for (const entry of works) {
       for (const session of entry.map.sessions) {
         if (known.current.has(session.id)) continue;
         known.current.add(session.id);
         if (!enabled || session.status !== 'pending' || session.parent === null) continue;
-        start.current(entry.projectPath, entry.map.work.id, session);
+        candidates.push({ projectPath: entry.projectPath, workId: entry.map.work.id, session });
       }
     }
+    if (candidates.length === 0) return;
+
+    void (async () => {
+      for (const candidate of candidates) {
+        if (await hostLeaseActive(candidate.projectPath, candidate.workId)) continue;
+        start.current(candidate.projectPath, candidate.workId, candidate.session);
+      }
+    })();
   }, [works, loading, enabled]);
 }

@@ -10,6 +10,7 @@ import type { MethodName, NotificationName, ResponseMessage } from '@harnas/prot
 import { createClient } from './client.js';
 import type { Client } from './client.js';
 import type { AnyHandler, AnyNotificationHandler, HostContext, RequestInfo } from './context.js';
+import { HostError } from './errors.js';
 
 export interface ServerOptions {
   context: HostContext;
@@ -160,6 +161,15 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
       client.send({ id, result });
     })
     .catch((error: unknown) => {
+      // `HostError` несёт свой код протокола (`conflict`, `bad_request`, …) —
+      // остальное считаем неожиданным сбоем и заворачиваем в `internal`.
+      if (error instanceof HostError) {
+        const errorField = error.data === undefined
+          ? { code: error.code, message: error.message }
+          : { code: error.code, message: error.message, data: error.data };
+        client.send({ id, error: errorField });
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       options.context.log.error('обработчик метода упал', { method, error: message });
       client.send({ id, error: { code: 'internal', message } });

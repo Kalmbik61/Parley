@@ -165,7 +165,10 @@ export function silenceMs(lastRecordAt: string | null, now: number = Date.now())
 /** Статусы, при переходе в которые метрики фиксируются в карте. */
 export type FinalStatus = 'done' | 'failed' | 'exited';
 
-export interface FinishOptions extends MetricsRoots, TransitionOptions {}
+export interface FinishOptions extends MetricsRoots, TransitionOptions {
+  /** Таймаут `map.lock` записи перехода (кусок 1.4 хоста: сверка живости работ). */
+  lockTimeoutMs?: number;
+}
 
 /**
  * Переводит сессию в конечный статус и фиксирует в карте итоговые метрики из
@@ -191,12 +194,17 @@ export async function finishSession(
       ? null
       : await readSessionMetrics(session.provider, providerSessionId, options);
 
-  return updateMap(projectPath, workId, (map) => {
-    const target = transitionSession(map, sessionId, to, options);
-    // Лог читался до захвата блокировки: если сессию за это время перепривязали
-    // к другому логу, чужие числа в карту не попадут.
-    if (measured !== null && target.providerSessionId === providerSessionId) {
-      target.metrics = measured.metrics;
-    }
-  });
+  return updateMap(
+    projectPath,
+    workId,
+    (map) => {
+      const target = transitionSession(map, sessionId, to, options);
+      // Лог читался до захвата блокировки: если сессию за это время перепривязали
+      // к другому логу, чужие числа в карту не попадут.
+      if (measured !== null && target.providerSessionId === providerSessionId) {
+        target.metrics = measured.metrics;
+      }
+    },
+    options.lockTimeoutMs === undefined ? {} : { lockTimeoutMs: options.lockTimeoutMs },
+  );
 }
