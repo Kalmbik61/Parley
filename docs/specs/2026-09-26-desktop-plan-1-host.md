@@ -425,6 +425,13 @@ export function createWorksService(host: HostContext, options?: { debounceMs?: n
 - **`settings.get`** → `loadConfig()`. В `locked` попадают ключи, заданные
   переменными окружения из `ENV_NAMES`, со значением — именем переменной.
 - **`settings.set`**:
+  - `parseSetting` в core сейчас понимает только `prefix`, `sidebarWidth`,
+    `silenceThresholdMs` и `messageRate`. Кусок расширяет его до
+    `parseSetting(key: keyof HarnasConfig, text: string)`: булевы (`autoLaunch`,
+    `channelPush`, `mouseCapture`, `ascii`) — те же множества «да/нет», что у
+    загрузчика; `theme` — только из `THEME_NAMES`. Новые ключи следующих кусков
+    (`fontFamily`, `fontSize`, `resumeRate`, `worktreeRoot`) добавляют свои ветки
+    там же;
   - `parseSetting(key, value)` → `saveConfig({ [key]: parsed })` → новый конфиг;
   - ошибка разбора → `bad_request` с её текстом.
 

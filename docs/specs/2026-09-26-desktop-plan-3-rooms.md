@@ -30,7 +30,12 @@
   - `letters.ts` и тест.
 - Изменить в `packages/core/src/`:
   - `work/types.ts`;
-  - `work/map.ts` — миграция в `parseMap`, переходы, `addMessage`;
+  - `work/map.ts` — `parseMap` принимает `schemaVersion` 1 (с миграцией) и 2;
+    переходы; `addMessage` и `NewMessage.to: string[]`; `removeSession` помечает
+    письма через `message.to.includes(sessionId)` — сравнение строки с массивом
+    молча сломало бы пометку `deleted`;
+  - core и TUI в этом куске меняются одним коммитом: иначе TUI не соберётся на
+    новых типах;
   - `work/metrics.ts` — `finishSession`;
   - `work/liveness.ts`;
   - `work/launch.ts`, `work/thread.ts`, `work/brief.ts`, `work/summary.ts`,
@@ -385,6 +390,8 @@ export function pointerText(letters: readonly Message[], rooms: readonly Room[])
    письма в `check_inbox`.
 3. Письмо человека будит адресата; рассылка человека будит всех участников.
 4. Все четыре варианта `pointerText`. Кириллица и кавычки в названии комнаты целы.
+   Тесты `pointerText(1)` и `pointerText(3)` из 1.8 переписываются на новую
+   сигнатуру.
 5. `rooms.send` в комнату, где адресат не участник → `bad_request`.
 
 **Приёмка**
