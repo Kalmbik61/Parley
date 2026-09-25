@@ -30,6 +30,11 @@
 // `--version` stub отвечает и выходит: перед запуском с флагом канала харнесс
 // пробует версию (разговор агентов, 4.4). `HARNAS_STUB_VERSION` подменяет
 // ответ — так проверяется отказ от push на старой сборке.
+//
+// `HARNAS_STUB_ENV` — имена переменных через запятую: stub печатает их после
+// баннера строками `env <имя>=<значение>`, `-` — переменной нет. Так тест видит,
+// какое окружение доехало до агента. Без переменной баннер прежний: лишняя
+// строка вытеснила бы его начало с узкой панели.
 
 import { appendFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -67,6 +72,9 @@ process.stdout.write(`cwd=${process.cwd()}\r\n`);
 process.stdout.write(
   `harnas=${process.env.HARNAS_SESSION_ID ?? '-'}@${(process.env.HARNAS_WORK_DIR ?? '-').split('/').pop()}\r\n`,
 );
+for (const name of (process.env.HARNAS_STUB_ENV ?? '').split(',').filter(Boolean)) {
+  process.stdout.write(`env ${name}=${process.env[name] ?? '-'}\r\n`);
+}
 
 process.on('SIGHUP', () => process.exit(129));
 process.stdout.on('resize', () => {

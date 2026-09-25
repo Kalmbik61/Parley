@@ -193,3 +193,79 @@ describe('раннеры провайдеров', () => {
     }
   }, 25_000);
 });
+
+/**
+ * Claude Code ставит своим дочерним процессам метки родительской сессии, и TUI,
+ * запущенный из его сессии, их наследует. Агент с такой меткой считает себя
+ * вложенным и молча не пишет транскрипт, а по транскриптам харнесс строит индекс
+ * сессий, метрики и страховку активности.
+ */
+describe('окружение агента', () => {
+  const inherited: Record<string, string> = {
+    CLAUDE_CODE_CHILD_SESSION: '1',
+    CLAUDE_CODE_SESSION_ID: 'сессия-родителя',
+    CLAUDE_CODE_BRIDGE_SESSION_ID: 'мост-родителя',
+    // Соседняя настройка пользователя: её агент получает как есть.
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8000',
+  };
+  const saved = new Map<string, string | undefined>();
+
+  beforeEach(() => {
+    // Эти переменные stub печатает после баннера: `env <имя>=<значение>`.
+    const report = [...Object.keys(inherited), 'HARNAS_SESSION_ID'].join(',');
+    for (const [name, value] of Object.entries({ ...inherited, HARNAS_STUB_ENV: report })) {
+      saved.set(name, process.env[name]);
+      process.env[name] = value;
+    }
+  });
+
+  afterEach(() => {
+    for (const [name, value] of saved) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    saved.clear();
+  });
+
+  /** Кадр stub, когда отчёт об окружении допечатан целиком. */
+  async function reportedEnv(target: AgentTarget): Promise<string> {
+    const app = render(<Probe target={target} />);
+    try {
+      await waitFor(() => flat(app.lastFrame()).includes('env HARNAS_SESSION_ID='));
+      return flat(app.lastFrame());
+    } finally {
+      app.unmount();
+    }
+  }
+
+  it('сессия работы: меток родителя у агента нет, остальное окружение на месте', async () => {
+    const frame = await reportedEnv({
+      kind: 'work',
+      projectPath: root,
+      workId: 'w-1',
+      sessionId: 's-1',
+      provider: 'claude',
+      title: 'бэкенд',
+      command: 'claude',
+      args: [],
+      cwd: root,
+      env: { HARNAS_WORK_DIR: root, HARNAS_SESSION_ID: 's-1' },
+      providerSessionId: null,
+    });
+    expect(frame).toContain('env CLAUDE_CODE_CHILD_SESSION=-');
+    expect(frame).toContain('env CLAUDE_CODE_SESSION_ID=-');
+    expect(frame).toContain('env CLAUDE_CODE_BRIDGE_SESSION_ID=-');
+    expect(frame).toContain('env CLAUDE_CODE_MAX_OUTPUT_TOKENS=8000');
+    expect(frame).toContain('env HARNAS_SESSION_ID=s-1');
+  }, 25_000);
+
+  it('новый запуск: метки срезаются и без окружения работы', async () => {
+    const frame = await reportedEnv({ kind: 'new', provider: 'claude' });
+    expect(frame).toContain('env CLAUDE_CODE_CHILD_SESSION=-');
+    expect(frame).toContain('env CLAUDE_CODE_SESSION_ID=-');
+    expect(frame).toContain('env CLAUDE_CODE_BRIDGE_SESSION_ID=-');
+    expect(frame).toContain('env CLAUDE_CODE_MAX_OUTPUT_TOKENS=8000');
+    // Срезается копия: окружение самого харнесса остаётся как было.
+    expect(process.env['CLAUDE_CODE_CHILD_SESSION']).toBe('1');
+  }, 25_000);
+});

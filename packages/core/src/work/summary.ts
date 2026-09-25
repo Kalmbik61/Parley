@@ -13,7 +13,7 @@ import { adapterV1 } from '../adapter-v1.js';
 import { defaultCodexRoot, discoverCodexSessions } from '../codex/discover.js';
 import { defaultRoot, discoverSessions } from '../discover.js';
 import { forEachJsonlRecord, type RawRecord } from '../jsonl.js';
-import { commandBinary, loadProviders, printCommand } from '../providers.js';
+import { agentEnv, commandBinary, loadProviders, printCommand } from '../providers.js';
 import type { MetricsRoots } from './metrics.js';
 import { readMap, updateMap } from './store.js';
 import type { WorkMap, WorkProvider, WorkSession } from './types.js';
@@ -172,7 +172,7 @@ function runSummarizer(
   return new Promise((resolve, reject) => {
     const child = spawn(commandBinary(command, env), [...args], {
       cwd,
-      env,
+      env: agentEnv(env),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 

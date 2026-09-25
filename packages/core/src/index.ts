@@ -23,6 +23,7 @@ export type { DiscoveredCodexSession } from './codex/discover.js';
 export { buildCodexIndex, indexCodexSession } from './codex/index-session.js';
 export {
   PROVIDERS,
+  agentEnv,
   commandBinary,
   commandInPath,
   loadProviders,

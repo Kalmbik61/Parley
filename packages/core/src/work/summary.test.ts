@@ -44,6 +44,7 @@ beforeEach(async () => {
   setEnv('HARNAS_STUB_SUMMARY', undefined);
   setEnv('HARNAS_STUB_FAIL', undefined);
   setEnv('HARNAS_STUB_HANG', undefined);
+  setEnv('HARNAS_STUB_ENV', undefined);
 });
 
 afterEach(async () => {
@@ -272,6 +273,30 @@ describe('дозаказ резюме', () => {
       requestAutoSummary(project, workId, sessionId, { claudeRoot, codexRoot }),
     ).rejects.toThrow(/пуст/);
     expect((await readMap(project, workId)).sessions[0]?.summary).toBeNull();
+  });
+
+  it('метки родительской сессии Claude Code до суммаризатора не доезжают', async () => {
+    await claudeLog(ID, [claudeSay('user', 'почини сборку')]);
+    const { workId, sessionId } = await exited('claude');
+    // TUI, запущенный из сессии Claude Code, наследует её метки; соседняя
+    // настройка пользователя при этом доезжает как есть.
+    setEnv('CLAUDE_CODE_CHILD_SESSION', '1');
+    setEnv('CLAUDE_CODE_SESSION_ID', 'сессия-родителя');
+    setEnv('CLAUDE_CODE_BRIDGE_SESSION_ID', 'мост-родителя');
+    setEnv('CLAUDE_CODE_MAX_OUTPUT_TOKENS', '8000');
+    setEnv(
+      'HARNAS_STUB_ENV',
+      'CLAUDE_CODE_CHILD_SESSION,CLAUDE_CODE_SESSION_ID,CLAUDE_CODE_BRIDGE_SESSION_ID,CLAUDE_CODE_MAX_OUTPUT_TOKENS',
+    );
+
+    // Вместо резюме stub печатает, что увидел в своём окружении.
+    const seen = await requestAutoSummary(project, workId, sessionId, { claudeRoot, codexRoot });
+    expect(seen.split('\n')).toEqual([
+      'env CLAUDE_CODE_CHILD_SESSION=-',
+      'env CLAUDE_CODE_SESSION_ID=-',
+      'env CLAUDE_CODE_BRIDGE_SESSION_ID=-',
+      'env CLAUDE_CODE_MAX_OUTPUT_TOKENS=8000',
+    ]);
   });
 
   it('суммаризатор молчит дольше таймаута — вызов обрывается', async () => {

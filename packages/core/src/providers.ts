@@ -274,6 +274,28 @@ export function commandBinary(command: string, env: NodeJS.ProcessEnv = process.
   return env[overrideVariable(command)] ?? command;
 }
 
+/**
+ * Метки родительской сессии: Claude Code ставит их своим дочерним процессам, а
+ * харнесс — никогда. Значит, значение в окружении — наследство: TUI запущен из
+ * сессии Claude Code. Агент с такой меткой считает себя вложенным в чужую
+ * сессию, а интерактивный вдобавок перестаёт писать транскрипт (claude 2.1.283:
+ * «Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker») —
+ * тот самый, по которому харнесс строит индекс сессий, метрики и страховку
+ * активности. Claude Code и сам поднимает свои фоновые сессии без этих меток.
+ */
+const PARENT_SESSION_ENV = [
+  'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_CODE_BRIDGE_SESSION_ID',
+];
+
+/** Окружение запускаемого агента: всё то же, кроме меток родительской сессии. */
+export function agentEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const clean = { ...env };
+  for (const name of PARENT_SESSION_ENV) delete clean[name];
+  return clean;
+}
+
 async function isExecutableFile(candidate: string): Promise<boolean> {
   try {
     const info = await stat(candidate);

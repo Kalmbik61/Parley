@@ -1,5 +1,6 @@
 import {
   PROVIDERS,
+  agentEnv,
   runnerCommand,
   type Provider,
   type SessionIndex,
@@ -192,8 +193,11 @@ export function useAgentPty({ onStart, onExit, onFail }: AgentPtyOptions = {}): 
       // тот же проект — у чужой работы это не cwd харнесса (решение №9).
       const cwd =
         target.kind === 'session' ? target.session.cwd : target.kind === 'work' ? target.cwd : null;
-      // Окружение сессии работы: по нему MCP-сервер узнаёт, кто звонит.
-      const env = target.kind === 'work' ? { ...process.env, ...target.env } : undefined;
+      // Окружение сессии работы: по нему MCP-сервер узнаёт, кто звонит. Метки
+      // родительской сессии Claude Code не достаются агенту ни у какой цели.
+      const env = agentEnv(
+        target.kind === 'work' ? { ...process.env, ...target.env } : process.env,
+      );
 
       try {
         const session = spawnPtySession({
@@ -202,7 +206,7 @@ export function useAgentPty({ onStart, onExit, onFail }: AgentPtyOptions = {}): 
           cols: size.cols,
           rows: size.rows,
           ...(cwd === null ? {} : { cwd }),
-          ...(env === undefined ? {} : { env }),
+          env,
         });
 
         session.onExit((exit) => {

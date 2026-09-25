@@ -8,6 +8,9 @@
 //   HARNAS_STUB_SUMMARY  — что напечатать в stdout вместо резюме
 //   HARNAS_STUB_FAIL     — завершиться с ошибкой и текстом в stderr
 //   HARNAS_STUB_HANG     — не отвечать вовсе (проверка таймаута)
+//   HARNAS_STUB_ENV      — имена переменных через запятую: вместо резюме
+//                          напечатать их строками `env <имя>=<значение>`
+//                          (`-` — переменной нет)
 
 import { writeFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -24,6 +27,11 @@ if (process.env.HARNAS_STUB_FAIL) {
 if (process.env.HARNAS_STUB_HANG) {
   // Молчим, пока вызывающий не оборвёт нас по таймауту.
   await sleep(60_000);
+} else if (process.env.HARNAS_STUB_ENV) {
+  const names = process.env.HARNAS_STUB_ENV.split(',');
+  process.stdout.write(
+    `${names.map((name) => `env ${name}=${process.env[name] ?? '-'}`).join('\n')}\n`,
+  );
 } else {
   process.stdout.write(`${process.env.HARNAS_STUB_SUMMARY ?? 'Сессия завершена.'}\n`);
 }
