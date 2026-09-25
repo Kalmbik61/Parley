@@ -156,14 +156,23 @@ export function glyphs(env: NodeJS.ProcessEnv = process.env): Glyphs {
 
 /**
  * Подсветка выбранного ряда — общая для всех списков и режимов (дизайн 6.2):
- * фон bright black, а в запасном наборе reverse video (6.1). Текст не меняется.
+ * фон `bg.selection` темы, а в запасном наборе reverse video (6.1); текст жирный.
  */
 export function selectionProps(
   selected: boolean,
   g: Glyphs,
-): { backgroundColor?: string; inverse?: boolean } {
+): { backgroundColor?: string; inverse?: boolean; bold?: boolean } {
   if (!selected) return {};
-  return g.ascii ? { inverse: true } : theme().bg.selection;
+  // Жирный — второй признак выбора, не зависящий от цвета.
+  return g.ascii ? { inverse: true, bold: true } : { ...theme().bg.selection, bold: true };
+}
+
+/**
+ * Цвет меты (путь проекта, метрики, слово состояния): на подсветке выбранного
+ * ряда тусклый `fg.muted` теряется, поэтому там — `fg.second`.
+ */
+export function metaProps(selected: boolean): { color?: string; dimColor?: boolean } {
+  return selected ? theme().fg.second : theme().fg.muted;
 }
 
 export function statusGlyph(status: SessionStatus, g: Glyphs): string {

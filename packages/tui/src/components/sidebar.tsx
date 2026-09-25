@@ -24,7 +24,7 @@ import {
   visibleWindow,
   withHome,
 } from '../format.js';
-import { glyphs, selectionProps, type Glyphs } from '../glyphs.js';
+import { glyphs, metaProps, selectionProps, type Glyphs } from '../glyphs.js';
 import { gutterMark, gutterWidth, pad, zoneBg } from '../theme/fill.js';
 import { borderBoxProps, theme } from '../theme/index.js';
 import { treeOrder, workKey, type LiveMetrics } from '../work-rows.js';
@@ -396,7 +396,7 @@ function Row({
       {gutterColumn && theme().gutter && <Text>{gutterMark(false, g)}</Text>}
       <Text {...zoneBg(theme().bg.sidebar)}>
         <Text {...selectionProps(selected, g)}>
-          <Text {...(dim ? theme().fg.muted : {})}>{shown}</Text>
+          <Text {...(dim ? metaProps(selected) : {})}>{shown}</Text>
           {pad(stringWidth(shown), w)}
         </Text>
       </Text>
@@ -435,7 +435,11 @@ function WorkRow({
           {head}
           {title}
           {pad(stringWidth(head) + stringWidth(title) + 2, w)}
-          {work.state === null ? ' ' : <ActivityDot state={work.state} g={g} />}{' '}
+          {work.state === null ? (
+            ' '
+          ) : (
+            <ActivityDot state={work.state} g={g} selected={selected} />
+          )}{' '}
         </Text>
       </Text>
       {framed && <FrameEdge g={g} navigating={navigating} />}
@@ -497,11 +501,11 @@ function SessionRow({
       <Text {...zoneBg(theme().bg.sidebar)}>
         <Text {...selectionProps(selected, g)}>
           {indent}
-          <Text {...theme().fg.muted}>{child}</Text>
-          <ActivityDot state={item.state} g={g} />
+          <Text {...metaProps(selected)}>{child}</Text>
+          <ActivityDot state={item.state} g={g} selected={selected} />
           {` ${tag} ${label}`}
           {pad(head + stringWidth(label) + stringWidth(tail) + 1, w)}
-          <Text {...dotColor(item.state)}>{tail}</Text>{' '}
+          <Text {...dotColor(item.state, selected)}>{tail}</Text>{' '}
         </Text>
       </Text>
       {framed && <FrameEdge g={g} navigating={navigating} />}

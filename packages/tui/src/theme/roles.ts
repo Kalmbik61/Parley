@@ -32,7 +32,7 @@ export interface Theme {
     /**
      * Плашка `new` — фон только под текстом. Не может делить слот с
      * `selection`: плашка живёт ровно на строке под курсором, и общий
-     * `surface` сделал бы её невидимой там же, где она нужна (3.2).
+     * фон сделал бы её невидимой там же, где она нужна (3.2).
      */
     badge: RoleProps;
   };
@@ -90,7 +90,7 @@ function colorRoles(p: Palette): Theme {
       status: bg(p.mantle),
       overlay: bg(p.crust),
       agent: bg(p.base),
-      selection: bg(p.surface),
+      selection: bg(p.selection),
       badge: bg(p.cyan),
     },
     border: {

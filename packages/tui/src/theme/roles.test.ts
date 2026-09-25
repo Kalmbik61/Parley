@@ -46,7 +46,7 @@ describe('уровни 3 и 2 — hex своей палитры, fills: true (п
 describe('bg.badge — слот cyan, не surface (дизайн 3.2, уточнён)', () => {
   for (const level of [3, 2] as const) {
     for (const [name, palette] of Object.entries(PALETTES)) {
-      it(`${name} на уровне ${level}: bg.badge = cyan палитры, отдельно от bg.selection (surface)`, () => {
+      it(`${name} на уровне ${level}: bg.badge = cyan палитры, отдельно от bg.selection`, () => {
         const t = roles(palette, level);
         expect(t.bg.badge).toEqual({ backgroundColor: palette.cyan });
         expect(t.bg.badge).not.toEqual(t.bg.selection);
@@ -70,7 +70,7 @@ describe('уровень 1 — только имена ANSI и dimColor, ни о
     });
 
     // Дизайн 3.2 (уточнён): плашка не может делить слот с выбранным рядом —
-    // общий `surface`/`blackBright` сделал бы её невидимой ровно там, где она
+    // общий с подсветкой `blackBright` сделал бы её невидимой ровно там, где она
     // нужна. У неё свой акцент — тот же ANSI `cyan`, что и в сегодняшнем коде
     // (`sidebar.tsx` `buttonProps`), и он отличается от подсветки `bg.selection`.
     it(`${name}: bg.badge — ANSI 'cyan', отдельно от bg.selection`, () => {

@@ -13,8 +13,15 @@ export interface Palette {
   mantle: string;
   /** Фон оверлеев — дальше всех от текста. */
   crust: string;
-  /** Выбранный ряд, плашка `new`. */
+  /** Слот исходной палитры; выбранный ряд ушёл в `selection`, ролью не занят. */
   surface: string;
+  /**
+   * Выбранный ряд во всех списках: `cyan` палитры, смешанный с `mantle`.
+   * Прежний серый `surface` отличался от фона сайдбара на 1.4:1 и глазом не
+   * читался; оттенок акцента заметен и сменой тона. Доля `cyan` — наибольшая,
+   * при которой проходит тест контраста выбранного ряда (`contrast.test.ts`).
+   */
+  selection: string;
   /** Рамка неактивной зоны. */
   overlay: string;
   /** Тело. */
@@ -38,9 +45,12 @@ export type PaletteName = 'mocha' | 'latte' | 'gruvbox' | 'nord' | 'tokyo-night'
  * Значения — таблица 3.3 дизайна дословно, кроме нескольких слотов в двух
  * палитрах: mocha, gruvbox и tokyo-night проходят тест на контраст (7.2,
  * приёмка A) целиком как есть. Правило: `fg.default`/`fg.second` — не ниже
- * 4.5:1 против `base`/`mantle`/`crust` и не ниже 3:1 против `surface`;
- * `fg.muted` — мета, не тело текста, поэтому не ниже 3:1 против всех четырёх;
- * акценты и статусы — не ниже 3:1 против всех четырёх. Плюс инвариант
+ * 4.5:1 против `base`/`mantle`/`crust`; `fg.muted` — мета, не тело текста,
+ * поэтому не ниже 3:1 против всех трёх; акценты и статусы — не ниже 3:1
+ * против всех трёх. Против `selection`: `fg.default` не ниже 4.5:1,
+ * `fg.second` не ниже 3:1 (мета выбранного ряда рисуется им, а не
+ * `fg.muted`), акценты и статусы не ниже 3:1, кроме `red` — ему 2:1: `✗`
+ * читается формой, а не только цветом. Плюс инвариант
  * ступеней: `text`→`subtext`→`muted` не ниже 1.2:1 на каждом шаге. При
  * провале правится яркость слота (HSL `l`, тон и насыщенность не трогаются),
  * минимальным сдвигом до прохода:
@@ -63,6 +73,7 @@ export const PALETTES: Record<PaletteName, Palette> = {
     mantle: '#181825',
     crust: '#11111b',
     surface: '#313244',
+    selection: '#415f6c',
     overlay: '#6c7086',
     text: '#cdd6f4',
     subtext: '#a6adc8',
@@ -80,6 +91,7 @@ export const PALETTES: Record<PaletteName, Palette> = {
     mantle: '#e6e9ef',
     crust: '#dce0e8',
     surface: '#ccd0da',
+    selection: '#bbd4e2',
     overlay: '#9ca0b0',
     text: '#4c4f69',
     subtext: '#606276',
@@ -97,6 +109,7 @@ export const PALETTES: Record<PaletteName, Palette> = {
     mantle: '#1d2021',
     crust: '#181818',
     surface: '#3c3836',
+    selection: '#41533e',
     overlay: '#504945',
     text: '#ebdbb2',
     subtext: '#d5c4a1',
@@ -114,6 +127,7 @@ export const PALETTES: Record<PaletteName, Palette> = {
     mantle: '#272c36',
     crust: '#21252e',
     surface: '#3b4252',
+    selection: '#3d4e59',
     overlay: '#4c566a',
     text: '#eceff4',
     subtext: '#d5dbe7',
@@ -131,6 +145,7 @@ export const PALETTES: Record<PaletteName, Palette> = {
     mantle: '#16161e',
     crust: '#101014',
     surface: '#292e42',
+    selection: '#3a576d',
     overlay: '#414868',
     text: '#c0caf5',
     subtext: '#a9b1d6',

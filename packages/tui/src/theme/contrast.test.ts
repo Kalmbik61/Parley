@@ -28,16 +28,13 @@ describe('проверка действительно падает на плох
 
 describe('контраст палитр (приёмка задачи A, дизайн 7.2)', () => {
   // Текст против фонов зон: bg.panel=base, bg.sidebar=mantle,
-  // bg.overlay=crust, bg.selection=surface (таблица 3.2).
-  const backgrounds: Array<{ name: string; slot: 'base' | 'mantle' | 'crust' | 'surface' }> = [
+  // bg.overlay=crust (таблица 3.2). Выбранный ряд — отдельным блоком ниже.
+  const backgrounds: Array<{ name: string; slot: 'base' | 'mantle' | 'crust' }> = [
     { name: 'bg.panel', slot: 'base' },
     { name: 'bg.sidebar', slot: 'mantle' },
     { name: 'bg.overlay', slot: 'crust' },
-    { name: 'bg.selection', slot: 'surface' },
   ];
-  // fg.default, fg.second — тело: не ниже 4.5:1 против base/mantle/crust,
-  // не ниже 3:1 против surface (выбранный ряд — не место для мелкого текста,
-  // но это не мета).
+  // fg.default, fg.second — тело: не ниже 4.5:1 против base/mantle/crust.
   const bodySlots: Array<{ name: string; slot: 'text' | 'subtext' }> = [
     { name: 'fg.default', slot: 'text' },
     { name: 'fg.second', slot: 'subtext' },
@@ -53,14 +50,13 @@ describe('контраст палитр (приёмка задачи A, диза
   for (const [paletteName, palette] of Object.entries(PALETTES)) {
     describe(paletteName, () => {
       for (const bg of backgrounds) {
-        const bodyMin = bg.slot === 'surface' ? 3 : 4.5;
         for (const fg of bodySlots) {
-          it(`${fg.name} против ${bg.name} не ниже ${bodyMin}:1`, () => {
-            expect(contrastRatio(palette[fg.slot], palette[bg.slot])).toBeGreaterThanOrEqual(bodyMin);
+          it(`${fg.name} против ${bg.name} не ниже 4.5:1`, () => {
+            expect(contrastRatio(palette[fg.slot], palette[bg.slot])).toBeGreaterThanOrEqual(4.5);
           });
         }
         // fg.muted — мета (время, токены, pending), не тело: порог ниже, но
-        // одинаковый на всех четырёх фонах, включая выбранный ряд.
+        // одинаковый на всех трёх фонах.
         it(`fg.muted против ${bg.name} не ниже 3:1`, () => {
           expect(contrastRatio(palette.muted, palette[bg.slot])).toBeGreaterThanOrEqual(3);
         });
@@ -70,6 +66,26 @@ describe('контраст палитр (приёмка задачи A, диза
           });
         }
       }
+
+      // Выбранный ряд (bg.selection = selection): тело читается как на
+      // полотне, мета рисуется fg.second, а не fg.muted, поэтому fg.muted здесь
+      // не проверяется. Статусы и акцент — 3:1, кроме красного: `✗` читается
+      // формой, ему хватает 2:1. Точка `unseen` (blue) отличается от `idle`
+      // только цветом — ей тоже 3:1.
+      describe('bg.selection', () => {
+        it('fg.default не ниже 4.5:1, fg.second не ниже 3:1', () => {
+          expect(contrastRatio(palette.text, palette.selection)).toBeGreaterThanOrEqual(4.5);
+          expect(contrastRatio(palette.subtext, palette.selection)).toBeGreaterThanOrEqual(3);
+        });
+        for (const slot of ['magenta', 'green', 'yellow', 'blue'] as const) {
+          it(`${slot} не ниже 3:1`, () => {
+            expect(contrastRatio(palette[slot], palette.selection)).toBeGreaterThanOrEqual(3);
+          });
+        }
+        it('red (✗ failed) не ниже 2:1', () => {
+          expect(contrastRatio(palette.red, palette.selection)).toBeGreaterThanOrEqual(2);
+        });
+      });
     });
   }
 });

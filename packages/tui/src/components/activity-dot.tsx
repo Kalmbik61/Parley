@@ -10,7 +10,7 @@
 import type { Activity, SessionStatus } from '@harnas/core';
 import { Text } from 'ink';
 import { useCallback, useSyncExternalStore, type ReactNode } from 'react';
-import type { Glyphs } from '../glyphs.js';
+import { metaProps, type Glyphs } from '../glyphs.js';
 import { theme } from '../theme/index.js';
 
 /** Что рисует точка: activity живой сессии или её жизненный цикл (4.1). */
@@ -113,15 +113,22 @@ export function dotGlyph(state: DotState, g: Glyphs, blinked = false): string {
   }
 }
 
-/** Цвета таблицы макетов §6. Пустых пропсов не передаём — exactOptionalPropertyTypes. */
-export function dotColor(state: DotState): { color?: string; dimColor?: boolean } {
+/**
+ * Цвета таблицы макетов §6. Пустых пропсов не передаём — exactOptionalPropertyTypes.
+ * `selected` — слово состояния стоит на подсветке выбранного ряда: серые
+ * состояния там рисуются `fg.second` (`metaProps`).
+ */
+export function dotColor(
+  state: DotState,
+  selected = false,
+): { color?: string; dimColor?: boolean } {
   switch (state) {
     // Отклонение принято сознательно (дизайн темы TUI, 3.2): раньше здесь
     // стоял `blackBright`, роль `fg.muted` на шестнадцати цветах отдаёт `dim`.
     // Серый остаётся серым, но код всё-таки другой — единственное место, где
     // кадр шестнадцати цветов отличается от прежнего.
     case 'working':
-      return theme().fg.muted;
+      return metaProps(selected);
     case 'blocked':
       return theme().status.warn;
     case 'unseen':
@@ -131,7 +138,7 @@ export function dotColor(state: DotState): { color?: string; dimColor?: boolean 
     case 'idle':
     case 'pending':
     case 'exited':
-      return theme().fg.muted;
+      return metaProps(selected);
     case 'done':
       // Работа закончена отчётом — цвет ей не нужен (макеты §6).
       return {};
@@ -157,9 +164,11 @@ export function stateLetter(state: DotState): string {
 export interface ActivityDotProps {
   state: DotState;
   g: Glyphs;
+  /** Точка стоит на подсветке выбранного ряда (`dotColor`). */
+  selected?: boolean;
 }
 
-export function ActivityDot({ state, g }: ActivityDotProps): ReactNode {
+export function ActivityDot({ state, g, selected = false }: ActivityDotProps): ReactNode {
   const blinked = useBlink(state === 'working');
-  return <Text {...dotColor(state)}>{dotGlyph(state, g, blinked)}</Text>;
+  return <Text {...dotColor(state, selected)}>{dotGlyph(state, g, blinked)}</Text>;
 }

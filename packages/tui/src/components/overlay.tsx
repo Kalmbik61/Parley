@@ -12,7 +12,7 @@ import { Box, Text } from 'ink';
 import type { ReactNode } from 'react';
 import stringWidth from 'string-width';
 import { truncate } from '../format.js';
-import { glyphs, selectionProps, type Glyphs } from '../glyphs.js';
+import { glyphs, metaProps, selectionProps, type Glyphs } from '../glyphs.js';
 import { gutterMark, gutterWidth, pad, zoneBg } from '../theme/fill.js';
 import { borderBoxProps, theme } from '../theme/index.js';
 import type { DialogSpec } from '../work-dialogs.js';
@@ -154,7 +154,7 @@ export function Line({
       {gutter && theme().gutter && <Text>{gutterMark(line.selected === true, g)}</Text>}
       <Text
         {...selectionProps(line.selected === true, g)}
-        {...(line.dim === true ? theme().fg.muted : {})}
+        {...(line.dim === true ? metaProps(line.selected === true) : {})}
       >
         {text}
         {pad(stringWidth(text), w)}

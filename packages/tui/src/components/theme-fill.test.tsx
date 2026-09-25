@@ -54,8 +54,10 @@ const ESC = String.fromCharCode(27);
 const ANSI_CODE = new RegExp(`${ESC}\\[[0-9;]*m`, 'g');
 const stripAnsi = (line: string): string => line.replace(ANSI_CODE, '');
 
+const hexFg = (hex: string): string => hexBg(hex).replace('[48;', '[38;');
+
 const SIDEBAR_BG = hexBg(p.mantle);
-const SELECTION_BG = hexBg(p.surface);
+const SELECTION_BG = hexBg(p.selection);
 const BADGE_BG = hexBg(p.cyan);
 const PANEL_BG = hexBg(p.base);
 const OVERLAY_BG = hexBg(p.crust);
@@ -334,6 +336,19 @@ describe('заливка зон темы фоном (дизайн 5.1, кусо�
       expect(frame.includes(SELECTION_BG)).toBe(true);
       expect(frame.includes(OVERLAY_BG)).toBe(false);
       expect(stringWidth(frame)).toBe(INNER);
+    });
+
+    // На подсветке тусклый `fg.muted` теряется — тусклая строка под курсором
+    // рисуется `fg.second`; без курсора остаётся `fg.muted`.
+    it('тусклая строка под курсором — `fg.second`, без курсора — `fg.muted`', () => {
+      const g = glyphs();
+      const chosen =
+        render(<Line line={{ text: ' мета', dim: true, selected: true }} width={INNER} g={g} />).lastFrame() ??
+        '';
+      const plain = render(<Line line={{ text: ' мета', dim: true }} width={INNER} g={g} />).lastFrame() ?? '';
+      expect(chosen.includes(hexFg(p.subtext))).toBe(true);
+      expect(chosen.includes(hexFg(p.muted))).toBe(false);
+      expect(plain.includes(hexFg(p.muted))).toBe(true);
     });
   });
 

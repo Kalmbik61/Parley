@@ -157,7 +157,7 @@ describe('сайдбар: подсветка и режим навигации', 
 
 /**
  * Кусок 3, приёмка: те же два места — фон выбранного ряда и цвет рамки — на
- * уровне 3 отдают настоящий truecolor hex палитры (`bg.selection` = surface,
+ * уровне 3 отдают настоящий truecolor hex палитры (`bg.selection` = selection,
  * `border.active` = cyan), а не его приближение. Роли и на уровне 1, и на
  * уровне 3 остаются теми же двумя ролями — меняется только то, что палитра
  * отдаёт на этом уровне (дизайн темы TUI, 4.1).
@@ -179,13 +179,50 @@ describe('сайдбар: то же самое на уровне 3 — hex вм�
     const b = parseInt(n.slice(4, 6), 16);
     return `[38;2;${r};${g};${b}m`;
   };
-  const selectedHex = (line: string): boolean => line.includes(hexBg(PALETTES.mocha.surface));
+  const selectedHex = (line: string): boolean => line.includes(hexBg(PALETTES.mocha.selection));
   const frameHex = (line: string): boolean => line.includes(hexFg(PALETTES.mocha.cyan));
+  const secondHex = (line: string): boolean => line.includes(hexFg(PALETTES.mocha.subtext));
+  const mutedHex = (line: string): boolean => line.includes(hexFg(PALETTES.mocha.muted));
+  const bold = (line: string): boolean => line.includes('\u001B[1m');
 
-  it('фон выбранного ряда — hex `surface` палитры, а не имя ANSI', () => {
+  it('фон выбранного ряда — hex `selection` палитры, а не имя ANSI', () => {
     const lines = frameOf();
     expect(selectedHex(lineWith(lines, 'Авторизация'))).toBe(true);
     expect(selectedHex(lineWith(lines, 'Платежи'))).toBe(false);
+  });
+
+  // Серый `surface` отличался от фона сайдбара на 1.4:1 и глазом не читался:
+  // выбор теперь носит оттенок акцента и жирный текст.
+  it('фон выбранного ряда — не прежний серый `surface`', () => {
+    expect(PALETTES.mocha.selection).not.toBe(PALETTES.mocha.surface);
+    expect(lineWith(frameOf(), 'Авторизация')).not.toContain(hexBg(PALETTES.mocha.surface));
+  });
+
+  it('выбранные работа и сессия жирные, остальные ряды — нет', () => {
+    const lines = frameOf();
+    expect(bold(lineWith(lines, 'Авторизация'))).toBe(true);
+    expect(bold(lineWith(lines, 'план'))).toBe(true);
+    expect(bold(lineWith(lines, 'Платежи'))).toBe(false);
+    expect(bold(lineWith(lines, 'ревью'))).toBe(false);
+  });
+
+  // На подсветке тусклый `fg.muted` теряется: мета выбранного ряда — вторичным.
+  // `fg.muted` не должно остаться нигде на выбранном ряду — ни в слове
+  // состояния, ни в точке рядом с ним, ни в компактной строке.
+  it('на выбранном ряду нет `fg.muted`: мета, слово и точка — `fg.second`', () => {
+    const lines = frameOf();
+    for (const text of ['Авторизация', '~/dev/shop · main', 'план', '1м']) {
+      expect(secondHex(lineWith(lines, text))).toBe(true);
+      expect(mutedHex(lineWith(lines, text))).toBe(false);
+    }
+  });
+
+  it('невыбранные ряды рисуют мету и точку `fg.muted`, как раньше', () => {
+    const lines = frameOf();
+    for (const text of ['Платежи', 'ревью']) {
+      expect(mutedHex(lineWith(lines, text))).toBe(true);
+      expect(secondHex(lineWith(lines, text))).toBe(false);
+    }
   });
 
   it('в режиме навигации рамка — hex `cyan` палитры, а не имя ANSI', () => {
