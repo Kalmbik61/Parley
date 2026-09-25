@@ -45,6 +45,15 @@ importers:
         specifier: ^1.30.0
         version: 1.30.0(zod@4.5.4)
 
+  packages/host:
+    dependencies:
+      '@harnas/core':
+        specifier: workspace:*
+        version: link:../core
+      '@harnas/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+
   packages/protocol:
     dependencies:
       '@harnas/core':
