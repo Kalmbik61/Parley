@@ -7,3 +7,5 @@ claude-export/
 .DS_Store
 files.zip
 .harnas/
+packages/desktop/out/
+test-results/

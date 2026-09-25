@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "./src",
+    "outDir": "./out-tsc/node",
+    "types": ["electron-vite/node"]
+  },
+  "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*"],
+  "exclude": ["src/**/*.test.ts", "src/renderer/**/*"],
+  "references": [{ "path": "../protocol" }, { "path": "../host" }]
+}

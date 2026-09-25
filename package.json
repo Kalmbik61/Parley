@@ -11,6 +11,7 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "dev": "pnpm --filter @harnas/tui dev",
+    "dev:desktop": "pnpm --filter @harnas/host build && pnpm --filter @harnas/desktop dev",
     "lint": "eslint packages tools",
     "format": "prettier --write .",
     "postinstall": "node scripts/fix-node-pty-perms.mjs"
