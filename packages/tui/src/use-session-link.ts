@@ -1,6 +1,5 @@
-import type { MetricsRoots, SessionIndex, WorkEntry } from '@harnas/core';
+import { linkSession, type MetricsRoots, type SessionIndex, type WorkEntry } from '@harnas/core';
 import { useEffect, useRef } from 'react';
-import { linkSession } from './work-launch.js';
 
 export interface SessionLinkOptions {
   works: readonly WorkEntry[];

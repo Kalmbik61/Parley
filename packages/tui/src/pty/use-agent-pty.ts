@@ -1,13 +1,13 @@
 import {
   PROVIDERS,
   agentEnv,
+  findRunnerBinary,
   runnerCommand,
   type Provider,
   type SessionIndex,
   type WorkProvider,
 } from '@harnas/core';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { findRunnerBinary } from './find-binary.js';
 import { spawnPtySession, type PtyExit, type PtySession } from './pty-session.js';
 
 export interface PtySize {
@@ -26,7 +26,7 @@ export type AgentTarget =
 
 /**
  * Сессия работы: команду, аргументы, cwd и окружение считает слой координации
- * (`work-launch.ts`) по реестру провайдеров — здесь они уже готовы.
+ * (`@harnas/core`, `work/launch.ts`) по реестру провайдеров — здесь они уже готовы.
  */
 export interface WorkTarget {
   kind: 'work';

@@ -9,6 +9,7 @@
 
 import {
   addSession,
+  createPendingSession,
   createWork,
   readMap,
   transitionSession,
@@ -25,7 +26,6 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { pinUnicodeGlyphs } from '../test/glyphs-env.js';
 import { App } from './app.js';
-import { createPendingSession } from './work-launch.js';
 
 const STUB = path.join(
   path.dirname(fileURLToPath(import.meta.url)),

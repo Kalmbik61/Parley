@@ -1,4 +1,3 @@
-import { createWork, readMap, transitionSession, updateMap, workPaths } from '@harnas/core';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -15,11 +14,14 @@ import {
   planResume,
   readBrief,
   startSession,
-} from './work-launch.js';
+} from './launch.js';
+import { transitionSession } from './map.js';
+import { createWork, readMap, updateMap, workPaths } from './store.js';
 
 /** Пути к бинарям подменяются на заглушку: настоящий агент здесь не запускается. */
 const STUB = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
+  '..',
   '..',
   'test',
   'stub-agent.mjs',
@@ -423,6 +425,20 @@ describe('переходы статусов', () => {
     expect(session.providerSessionId).toBe('uuid-1');
     expect(session.startedAt).not.toBeNull();
     expect(session.history.map((entry) => entry.status)).toEqual(['pending', 'active']);
+  });
+
+  it('startSession с приметами процесса пишет в карту launchedBy: host', async () => {
+    const { workId, sessionId } = await pending('claude');
+    await startSession(project, workId, sessionId, 'uuid-host', {
+      pid: 4242,
+      startedAtProcess: null,
+      launchedBy: 'host',
+    });
+
+    const session = await sessionOf(workId, sessionId);
+    expect(session.pid).toBe(4242);
+    expect(session.startedAtProcess).toBeNull();
+    expect(session.launchedBy).toBe('host');
   });
 
   it('выход процесса переводит active → exited и пишет код выхода в history', async () => {

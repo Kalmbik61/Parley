@@ -2,6 +2,7 @@ import { access, readFile, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
 import type { Provider } from './session-index.js';
+import { overrideVariable } from './work/find-binary.js';
 import { harnasHome } from './work/store.js';
 import type { WorkProvider } from './work/types.js';
 
@@ -260,11 +261,6 @@ export function runnerCommand(
     : resumeCommand(entry, { providerSessionId: sessionId });
 }
 
-/** Переменная-оверрайд пути к бинарю: `claude` → `HARNAS_CLAUDE_BIN`. */
-function overrideVariable(command: string): string {
-  return `HARNAS_${command.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_BIN`;
-}
-
 /**
  * Что именно запускается вместо команды провайдера. Оверрайд нужен
  * нестандартным установкам и тестам, где вместо настоящего агента стоит stub;
@@ -312,7 +308,7 @@ async function isExecutableFile(candidate: string): Promise<boolean> {
  * бинаря нет (спецификация, раздел 8), — записи в карте при этом не появляется.
  *
  * Учитывается та же переменная-оверрайд, что и при запуске в PTY
- * (`packages/tui/src/pty/find-binary.ts`): иначе проверка отвергала бы
+ * (`work/find-binary.ts`): иначе проверка отвергала бы
  * провайдера, которого харнесс на самом деле запустит.
  */
 export async function commandInPath(

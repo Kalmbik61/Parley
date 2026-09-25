@@ -76,6 +76,31 @@ export type { NewWork, WorkPaths, WriteOptions } from './work/store.js';
 export { decisionsOf, participantLabel, sessionTag, threadOf } from './work/thread.js';
 export type { Thread } from './work/thread.js';
 export { buildBrief, writeBrief } from './work/brief.js';
+export {
+  applyAutoTitle,
+  createChildSession,
+  createNewSession,
+  createPendingSession,
+  deleteSession,
+  deleteWork,
+  finishExited,
+  linkSession,
+  NEW_LABEL,
+  planLaunch,
+  planNew,
+  planResume,
+  readBrief,
+  registerResumed,
+  startSession,
+  UNTITLED_WORK,
+} from './work/launch.js';
+export type { LaunchOptions, LaunchPlan, NewSessionResult, StartedProcess } from './work/launch.js';
+export {
+  BinaryNotFoundError,
+  findBinary,
+  findRunnerBinary,
+  overrideVariable,
+} from './work/find-binary.js';
 export { GUIDE } from './work/guide.js';
 export { systemGuidance } from './work/guidance.js';
 export {

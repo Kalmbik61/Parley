@@ -7,7 +7,9 @@
  */
 
 import {
+  applyAutoTitle,
   finishSession,
+  NEW_LABEL,
   reconcileMap,
   type MetricsRoots,
   type SessionActivity,
@@ -18,7 +20,6 @@ import {
 import { useEffect, useRef } from 'react';
 import { workRunKey } from './pty/use-agent-pty.js';
 import type { StatusEventInit } from './use-status.js';
-import { applyAutoTitle, NEW_LABEL } from './work-launch.js';
 
 export interface MapSyncOptions {
   works: readonly WorkEntry[];

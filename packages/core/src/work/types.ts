@@ -24,8 +24,8 @@ export interface HistoryEntry {
   signal?: number;
 }
 
-/** Кто запустил сессию: панель харнесса или напечатанная команда CLI. */
-export type LaunchedBy = 'tui' | 'cli';
+/** Кто запустил сессию: панель харнесса, хост или напечатанная команда CLI. */
+export type LaunchedBy = 'tui' | 'cli' | 'host';
 
 /** Резюме написал сам агент через `report` или его дозаказали через `claude -p`. */
 export type SummarySource = 'agent' | 'auto';

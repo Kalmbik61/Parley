@@ -13,8 +13,12 @@ import {
   createWork,
   ENV_NAMES,
   parseSetting,
+  planResume,
+  readBrief,
+  registerResumed,
   requestAutoSummary,
   THEME_NAMES,
+  UNTITLED_WORK,
   updateMap,
   type ActivityLog,
   type HarnasConfig,
@@ -60,7 +64,6 @@ import {
   summaryDialog,
   type DialogSpec,
 } from './work-dialogs.js';
-import { planResume, readBrief, registerResumed, UNTITLED_WORK } from './work-launch.js';
 import { workKey } from './work-rows.js';
 
 /** Что может быть открыто; одновременно — не больше одного (§4.0). */

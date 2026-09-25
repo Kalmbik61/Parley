@@ -3,18 +3,11 @@
  * сессии в карте (дизайн TUI v2, 2.2, 5.1 и 5.4).
  *
  * Спавнится только немодифицированный бинарь провайдера из PATH — команду и
- * аргументы считает `work-launch.ts` по реестру. Здесь лишь связывание: процесс
- * поднялся — сессия `active` с `pid`, процесс вышел — `exited` с кодом.
+ * аргументы считает `@harnas/core` (`work/launch.ts`) по реестру. Здесь лишь
+ * связывание: процесс поднялся — сессия `active` с `pid`, процесс вышел —
+ * `exited` с кодом.
  */
 
-import { processStartedAt, type MetricsRoots } from '@harnas/core';
-import { useCallback, useRef } from 'react';
-import type { TerminalSnapshot } from './pty/terminal-buffer.js';
-import type { PtyExit, PtySession } from './pty/pty-session.js';
-import { useAgentPty, workRunKey, type AgentTarget } from './pty/use-agent-pty.js';
-import { useHostTerminalModes } from './pty/use-host-modes.js';
-import { usePtyResize } from './pty/use-pty-resize.js';
-import { usePtyTerminal } from './pty/use-pty-terminal.js';
 import {
   createChildSession,
   createNewSession,
@@ -24,10 +17,19 @@ import {
   planLaunch,
   planNew,
   planResume,
+  processStartedAt,
   startSession,
   type LaunchPlan,
-} from './work-launch.js';
-import type { WorkSession } from '@harnas/core';
+  type MetricsRoots,
+  type WorkSession,
+} from '@harnas/core';
+import { useCallback, useRef } from 'react';
+import type { TerminalSnapshot } from './pty/terminal-buffer.js';
+import type { PtyExit, PtySession } from './pty/pty-session.js';
+import { useAgentPty, workRunKey, type AgentTarget } from './pty/use-agent-pty.js';
+import { useHostTerminalModes } from './pty/use-host-modes.js';
+import { usePtyResize } from './pty/use-pty-resize.js';
+import { usePtyTerminal } from './pty/use-pty-terminal.js';
 import { workKey } from './work-rows.js';
 
 /**

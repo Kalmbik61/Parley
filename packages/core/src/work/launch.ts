@@ -7,38 +7,32 @@
  * какими аргументами его позвать.
  */
 
-import {
-  addSession,
-  CHANNEL_VALUE,
-  createWork,
-  deleteSessionFiles,
-  deleteWorkFiles,
-  finishSession,
-  linkProviderSession,
-  loadProviders,
-  mcpConfigValue,
-  NO_CHANNEL_WARNING,
-  readMap,
-  removeSession,
-  resumeCommand,
-  startCommand,
-  systemGuidance,
-  transitionSession,
-  updateMap,
-  workPaths,
-  writeBrief,
-  writeMcpConfig,
-  writeWorkSettings,
-  type LaunchedBy,
-  type MetricsRoots,
-  type NewSession,
-  type ProviderEntry,
-  type RunnerSubstitutions,
-  type WorkSession,
-} from '@harnas/core';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import {
+  loadProviders,
+  resumeCommand,
+  startCommand,
+  type ProviderEntry,
+  type RunnerSubstitutions,
+} from '../providers.js';
+import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
+import { writeBrief } from './brief.js';
+import { systemGuidance } from './guidance.js';
+import { addSession, removeSession, transitionSession, type NewSession } from './map.js';
+import { mcpConfigValue, writeMcpConfig } from './mcp-config.js';
+import { finishSession, linkProviderSession, type MetricsRoots } from './metrics.js';
+import { writeWorkSettings } from './settings-file.js';
+import {
+  createWork,
+  deleteSessionFiles,
+  deleteWorkFiles,
+  readMap,
+  updateMap,
+  workPaths,
+} from './store.js';
+import type { LaunchedBy, WorkSession } from './types.js';
 
 /** Чего хочет запуск сверх самой сессии. */
 export interface LaunchOptions {
