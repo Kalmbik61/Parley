@@ -11,8 +11,11 @@
  */
 
 import { create } from 'zustand';
-import type { SessionRef } from '@harnas/protocol';
+import { refKey, type SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../shared/bridge.js';
+
+/** Сколько последних сессий держать для палитры ⌘K (кусок 2.3) — больше и не показать за один экран списка. */
+const RECENT_SESSIONS_LIMIT = 20;
 
 export interface DialogsState {
   newWork: boolean;
@@ -46,6 +49,15 @@ export interface UiState {
    * панелей в сетке может быть несколько одновременно, по одной на группу.
    */
   visibleSessionRefs: Record<string, true>;
+  /**
+   * Последние выбранные сессии, самая свежая первой — палитра ⌘K показывает
+   * их первыми при пустом запросе (кусок 2.3, спека 5.2). Пишется там же,
+   * где и `lastSessionByWork` (`selectSession`, на каждую активацию панели
+   * терминала в сетке), но это отдельный список: `lastSessionByWork` держит
+   * только ПО ОДНОЙ сессии на работу, а тут нужен общий порядок по всем
+   * работам сразу.
+   */
+  recentSessionRefs: readonly SessionRef[];
 
   selectSession: (workKey: string, ref: SessionRef) => void;
   /** `Workspace.tsx` зовёт на каждую смену активной панели dockview. */
@@ -74,13 +86,19 @@ export const useUiStore = create<UiState>((set, get) => ({
   lastSessionByWork: {},
   activePanelId: null,
   visibleSessionRefs: {},
+  recentSessionRefs: [],
 
   selectSession: (workKey, ref) =>
-    set((state) => ({
-      selectedRef: ref,
-      selectedWorkKey: workKey,
-      lastSessionByWork: { ...state.lastSessionByWork, [workKey]: ref.sessionId },
-    })),
+    set((state) => {
+      const key = refKey(ref);
+      const withoutCurrent = state.recentSessionRefs.filter((item) => refKey(item) !== key);
+      return {
+        selectedRef: ref,
+        selectedWorkKey: workKey,
+        lastSessionByWork: { ...state.lastSessionByWork, [workKey]: ref.sessionId },
+        recentSessionRefs: [ref, ...withoutCurrent].slice(0, RECENT_SESSIONS_LIMIT),
+      };
+    }),
 
   setActivePanelId: (id) => set({ activePanelId: id }),
 

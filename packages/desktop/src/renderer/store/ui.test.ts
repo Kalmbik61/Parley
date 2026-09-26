@@ -14,6 +14,7 @@ beforeEach(() => {
     dialogs: { newWork: false, newSession: { open: false, parentSessionId: null }, settings: false },
     lastSessionByWork: {},
     activePanelId: null,
+    recentSessionRefs: [],
   });
 });
 
@@ -23,6 +24,16 @@ describe('useUiStore.selectSession', () => {
 
     expect(useUiStore.getState().selectedRef).toEqual(ref);
     expect(useUiStore.getState().lastSessionByWork['/tmp/proj w-01']).toBe('s-01');
+  });
+
+  it('копит недавние сессии, самая свежая первой, без повторов (для палитры ⌘K, кусок 2.3)', () => {
+    const other: SessionRef = { projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-02' };
+
+    useUiStore.getState().selectSession('/tmp/proj w-01', ref);
+    useUiStore.getState().selectSession('/tmp/proj w-01', other);
+    useUiStore.getState().selectSession('/tmp/proj w-01', ref);
+
+    expect(useUiStore.getState().recentSessionRefs).toEqual([ref, other]);
   });
 });
 

@@ -108,6 +108,7 @@ beforeEach(() => {
     lastSessionByWork: {},
     activePanelId: null,
     visibleSessionRefs: {},
+    recentSessionRefs: [],
   });
 });
 

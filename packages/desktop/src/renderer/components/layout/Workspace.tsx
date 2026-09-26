@@ -32,12 +32,14 @@ import {
 import type { WorkEntry } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../../shared/bridge.js';
+import { buildCommands } from '../../lib/commands.js';
 import { sessionRowLabel } from '../../lib/participant.js';
 import { panelId, workKey, type PanelSpec } from '../../lib/panel-id.js';
 import { useUiStore } from '../../store/ui.js';
 import { PANEL_COMPONENTS, PanelHostContext } from './panel-registry.js';
 import { readDragPayload } from './sidebar-drag.js';
 import { useLayoutPersistence } from './use-layout-persistence.js';
+import { CommandPalette } from '../palette/CommandPalette.js';
 import { SessionPicker, sessionCandidates } from '../palette/SessionPicker.js';
 
 export interface WorkspaceHandle {
@@ -106,6 +108,14 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
   const worksRef = useRef(works);
   worksRef.current = works;
 
+  // Общая точка входа «открыть сессию в сетке» — и для `openSession` из
+  // `WorkspaceHandle` (клик в сайдбаре), и для команд палитры ⌘K (кусок 2.3).
+  const openSessionInGrid = (sessionRef: SessionRef, sessionWorkKey: string, title: string): void => {
+    const api = apiRef.current;
+    if (api === null) return;
+    openOrFocus(api, { kind: 'terminal', ref: sessionRef, workKey: sessionWorkKey }, title);
+  };
+
   // `apiRef` — для императивных вызовов (открыть/закрыть панель), а это
   // состояние — специально для `useLayoutPersistence` (кусок 2.2): хук должен
   // сам перезапустить свой эффект, когда dockview станет готов, а ref такого
@@ -118,15 +128,20 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
     workKey: string;
     referencePanel: string;
   } | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  // Только для команд палитры (кусок 2.3): `buildCommands` не читает
+  // `useUiStore` сам (см. комментарий в `lib/commands.ts`), поэтому нужную
+  // часть его состояния забираем сюда селекторами, чтобы список команд
+  // пересобирался при их изменении (например, подпись «пауза будильника»).
+  const lastSessionByWork = useUiStore((state) => state.lastSessionByWork);
+  const wakePaused = useUiStore((state) => state.wakePaused);
+  const recentSessionRefs = useUiStore((state) => state.recentSessionRefs);
 
   useImperativeHandle(
     handleRef,
     () => ({
-      openSession(sessionRef, sessionWorkKey, title) {
-        const api = apiRef.current;
-        if (api === null) return;
-        openOrFocus(api, { kind: 'terminal', ref: sessionRef, workKey: sessionWorkKey }, title);
-      },
+      openSession: openSessionInGrid,
     }),
     [],
   );
@@ -167,6 +182,13 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
   useEffect(
     () =>
       bridge.app.onMenu((action) => {
+        // Палитра открывается и без готового dockview (например, самый первый
+        // кадр окна) — ей самой API сетки не нужен, только командам внутри.
+        if (action === 'palette') {
+          setPaletteOpen(true);
+          return;
+        }
+
         const api = apiRef.current;
         if (api === null) return;
 
@@ -199,6 +221,24 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
   const openPanelIds = new Set(apiRef.current?.panels.map((panel) => panel.id) ?? []);
   const pickerCandidates = pickerEntry === undefined ? [] : sessionCandidates(pickerEntry, openPanelIds);
 
+  const commands = buildCommands({
+    works,
+    lastSessionByWork,
+    wakePaused,
+    recentSessionRefs,
+    actions: {
+      openSession: openSessionInGrid,
+      closeActivePanel: () => apiRef.current?.activePanel?.api.close(),
+      newSession: () => {
+        const ui = useUiStore.getState();
+        ui.openNewSessionDialog(ui.selectedRef?.sessionId ?? null);
+      },
+      newWork: () => useUiStore.getState().openNewWorkDialog(),
+      settings: () => useUiStore.getState().openSettingsDialog(),
+      toggleWake: () => void useUiStore.getState().toggleWake(bridge),
+    },
+  });
+
   return (
     <PanelHostContext.Provider value={{ bridge, theme, fontFamily, fontSize }}>
       <div className="min-h-0 min-w-0 flex-1">
@@ -228,6 +268,11 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
           });
           setPicker(null);
         }}
+      />
+      <CommandPalette
+        open={paletteOpen}
+        commands={commands}
+        onOpenChange={(open) => setPaletteOpen(open)}
       />
     </PanelHostContext.Provider>
   );
