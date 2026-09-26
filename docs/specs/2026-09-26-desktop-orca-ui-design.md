@@ -1574,7 +1574,8 @@ interface GrepResult { files: Array<{ path: string; hits: Array<{ line: number; 
 - **`openPath` не запускает исполняемое.** На macOS это двойной клик Finder: `.command`
   выполняется в Terminal, `.app` запускается, а у файлов агента нет карантина, и
   Gatekeeper не спросит. Каталоги-бандлы (с расширением), файлы `.app .command .tool
-  .terminal .workflow .action .pkg .mpkg .jar .scpt .sh` и файлы с битом x — по имени и
+  .terminal .workflow .action .pkg .mpkg .jar .scpt .sh`, ссылки-перенаправления
+  `.fileloc .webloc .inetloc` и файлы с битом x — по имени и
   правам и самого пути, и его `realpath` — только показываются в Finder. Ответ
   `'revealed'`, тост «Исполняемый файл не открывается — показан в Finder».
 

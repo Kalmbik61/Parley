@@ -274,7 +274,7 @@ export interface RootsRegistry {
 export function createRootsRegistry(source: RootsSource): RootsRegistry;
 
 // main/files/open-path.ts
-export const EXECUTABLE_EXTENSIONS: readonly string[];   // .app .command .tool .terminal .workflow .action .pkg .mpkg .jar .scpt .sh
+export const EXECUTABLE_EXTENSIONS: readonly string[];   // .app .command .tool .terminal .workflow .action .pkg .mpkg .jar .scpt .sh .fileloc .webloc .inetloc
 /** Имя и права и самого пути, и его realpath. */
 export function openVerdict(paths: Array<{ name: string; isDirectory: boolean; mode: number }>): 'open' | 'reveal';
 
