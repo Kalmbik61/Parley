@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildBrief, writeBrief } from './brief.js';
 import { addMessage, addSession } from './map.js';
+import { addRoom } from './rooms.js';
 import { createWork } from './store.js';
 import type { WorkMap } from './types.js';
 
@@ -190,6 +191,44 @@ describe('бриф: коллеги и решения треда', () => {
 
     expect(brief).toContain('## Коллеги');
     expect(brief).not.toContain('## Решения треда');
+  });
+});
+
+describe('бриф: комнаты', () => {
+  it('перечисляет комнаты, где сессия участник, с составом', () => {
+    const map = mapWithThread();
+    addRoom(map, { title: 'Бэкенд', creator: 's-01', members: ['s-02'] });
+
+    const brief = buildBrief(map, 's-02');
+    expect(brief).toContain('## Коллеги');
+    expect(brief).toContain('r-01 «Бэкенд»');
+    // Создатель комнаты — коллега, себя в составе не повторяем.
+    expect(brief).toContain('план');
+    expect(brief).not.toMatch(/r-01 «Бэкенд»[^\n]*s-02/);
+  });
+
+  it('человек-участник комнаты назван «человек»', () => {
+    const map = mapWithSessions();
+    addRoom(map, { title: 'Штаб', creator: 'human', members: ['s-01', 's-02'] });
+
+    const brief = buildBrief(map, 's-02');
+    expect(brief).toContain('r-01 «Штаб»');
+    expect(brief).toContain('человек');
+  });
+
+  it('нет ни треда, ни комнат — раздела «Коллеги» нет', () => {
+    const map = mapWithSessions();
+    map.sessions = map.sessions.slice(0, 1);
+    map.messages = [];
+
+    const brief = buildBrief(map, 's-01');
+    expect(brief).not.toContain('## Коллеги');
+  });
+
+  it('комнат нет, но есть коллега по треду — раздел «Коллеги» есть, комнат в нём нет', () => {
+    const brief = buildBrief(mapWithSessions(), 's-02');
+    expect(brief).toContain('## Коллеги');
+    expect(brief).not.toMatch(/r-\d\d/);
   });
 });
 

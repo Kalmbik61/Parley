@@ -205,6 +205,33 @@ describe('список инструментов', () => {
 
     expect(getMap?.description).toMatch(/подробный гид — инструмент read_guide$/);
   });
+
+  it('ни в одном описании нет устаревшего текста «pending запускает человек»', async () => {
+    const client = await connect('s-01');
+    const { tools } = await client.listTools();
+
+    for (const tool of tools) {
+      expect(tool.description ?? '').not.toContain('pending запускает человек');
+    }
+  });
+
+  it('report и close_session говорят, что done не закрывает сессию, а close_session — только с согласия', async () => {
+    const client = await connect('s-01');
+    const { tools } = await client.listTools();
+    const report = tools.find((tool) => tool.name === 'report');
+    const closeSession = tools.find((tool) => tool.name === 'close_session');
+
+    expect(report?.description).toMatch(/остаётся на связи/);
+    expect(closeSession?.description).toMatch(/только после явного согласия/);
+  });
+
+  it('wait_for предупреждает: сдавшей report сессии — ждать через inbox, не по id', async () => {
+    const client = await connect('s-01');
+    const { tools } = await client.listTools();
+    const waitFor = tools.find((tool) => tool.name === 'wait_for');
+
+    expect(waitFor?.description).toMatch(/"inbox"[\s\S]*не по id/);
+  });
 });
 
 describe('read_guide', () => {

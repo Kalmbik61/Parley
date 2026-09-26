@@ -1,9 +1,10 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { isMember } from './rooms.js';
 import { displayStatus } from './status-view.js';
 import { workPaths } from './store.js';
 import { decisionsOf, participantLabel, threadOf } from './thread.js';
-import type { WorkMap, WorkSession } from './types.js';
+import { HUMAN, type WorkMap, type WorkSession } from './types.js';
 
 /**
  * Три правила, без которых агент не узнает про карту (спецификация, раздел 5).
@@ -63,7 +64,11 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
   // группе договорились до неё. Пустые разделы не печатаются.
   const thread = threadOf(map, session.id);
   const colleagues = thread.members.filter((id) => id !== session.id);
-  if (colleagues.length > 0) {
+  // Комнаты, где сессия участник (этап 3, раздел 6.3): без них сессия узнаёт
+  // о своих комнатах только из ответа `create_room`, а на резюме сессии в
+  // брифе комната появляется у всех остальных участников.
+  const rooms = map.rooms.filter((room) => isMember(room, session.id));
+  if (colleagues.length > 0 || rooms.length > 0) {
     lines.push('## Коллеги', '');
     for (const id of colleagues) {
       const mate = sessionOf(map, id);
@@ -76,6 +81,15 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
       ];
       const mark = marks.length === 0 ? '' : ` (${marks.join(', ')})`;
       lines.push(`- ${mate.id} — ${mate.label}${mark}: ${displayStatus(mate)}`);
+    }
+    for (const room of rooms) {
+      // Создатель в `members` не пишется (спецификация 6.1), поэтому состав
+      // собираем из него и списка участников; себя в составе не повторяем.
+      const participants = [room.creator, ...room.members]
+        .filter((id, at, all) => all.indexOf(id) === at && id !== session.id)
+        .map((id) => (id === HUMAN ? 'человек' : participantLabel(map, id)));
+      const composition = participants.length === 0 ? '' : `: ${participants.join(', ')}`;
+      lines.push(`- ${room.id} «${room.title}»${composition}`);
     }
     lines.push('');
   }
