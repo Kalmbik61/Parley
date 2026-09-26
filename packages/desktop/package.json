@@ -21,7 +21,11 @@
     "tailwindcss": "^4.3.3",
     "@tailwindcss/vite": "^4.3.3",
     "@harnas/protocol": "workspace:*",
-    "@harnas/host": "workspace:*"
+    "@harnas/host": "workspace:*",
+    "@harnas/core": "workspace:*",
+    "@radix-ui/react-context-menu": "^2.2.16",
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-select": "^2.2.6"
   },
   "devDependencies": {
     "vitest": "^2.1.0",

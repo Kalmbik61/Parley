@@ -62,6 +62,8 @@ export class HostConnection {
   private closed = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelayMs = 500;
+  /** Причина, по которой `spawn()` заведомо не поднимет хост (например, нет `node` в PATH). */
+  private spawnFailure: string | null = null;
 
   constructor(options: HostConnectionOptions) {
     this.paths = options.paths;
@@ -88,8 +90,19 @@ export class HostConnection {
   /** Первое подключение. Резолвится и при удачном рукопожатии, и при mismatch — в обоих случаях связь с хостом установлена. */
   async connect(): Promise<void> {
     this.closed = false;
+    this.spawnFailure = null;
     this.setStatus({ state: 'connecting' });
     await this.connectOnce();
+  }
+
+  /**
+   * Сообщает, что `spawn()` заведомо не поднимет хост — раньше таймаута
+   * подключения, а не после него: иначе таймаут перетёр бы внятную причину
+   * (например, «нет node в PATH») невыразительным `ECONNREFUSED` сокета.
+   */
+  reportUnavailable(reason: string): void {
+    this.spawnFailure = reason;
+    this.setStatus({ state: 'disconnected', reason });
   }
 
   private async connectOnce(): Promise<void> {
@@ -102,6 +115,9 @@ export class HostConnection {
         return;
       } catch (err) {
         if (this.closed) throw err instanceof Error ? err : new Error(String(err));
+        if (this.spawnFailure !== null) {
+          throw new Error(this.spawnFailure);
+        }
         if (Date.now() >= deadline) {
           const message = err instanceof Error ? err.message : String(err);
           this.setStatus({ state: 'disconnected', reason: message });

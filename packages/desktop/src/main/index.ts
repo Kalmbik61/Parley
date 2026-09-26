@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { hostPaths } from '@harnas/host';
 import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron';
 import { HostConnection } from './host-connection.js';
-import { resolveHostEntry, spawnHost } from './host-launcher.js';
+import { resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
 import { forwardHostToWindow, registerIpc } from './ipc.js';
 import { createAppMenu } from './menu.js';
 import { createSecureWindow } from './security.js';
@@ -38,12 +38,23 @@ if (!gotLock) {
       paths,
       env: shellEnv.env,
       spawn: () => {
-        try {
-          const entry = resolveHostEntry();
-          spawnHost({ env: shellEnv.env, entry, nodeBin: process.execPath });
-        } catch (err) {
-          console.error('[harnas] не удалось запустить хост', err);
-        }
+        void (async () => {
+          // Системный node, не бинарь Electron: node-pty хоста собран под ABI
+          // системного Node и под Node самого Electron не загрузится (спека 3.2).
+          const nodeBin = await resolveNodeBin(shellEnv.env);
+          if (nodeBin === null) {
+            const reason = 'Не найден node в PATH login-shell';
+            console.error(`[harnas] ${reason}`);
+            connection.reportUnavailable(reason);
+            return;
+          }
+          try {
+            const entry = resolveHostEntry();
+            spawnHost({ env: shellEnv.env, entry, nodeBin });
+          } catch (err) {
+            console.error('[harnas] не удалось запустить хост', err);
+          }
+        })();
       },
     });
 

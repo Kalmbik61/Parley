@@ -10,5 +10,5 @@
   },
   "include": ["src/renderer/**/*", "src/shared/**/*"],
   "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"],
-  "references": [{ "path": "../protocol" }]
+  "references": [{ "path": "../protocol" }, { "path": "../core" }]
 }
