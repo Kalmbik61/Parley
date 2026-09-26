@@ -55,6 +55,10 @@ acf8e679`.
     `app:set-appearance`, событие `app:appearance`;
   - `src/main/index.ts` — хранилище `ui.json`, `nativeTheme.themeSource` до создания
     окна, `backgroundColor` окна по теме;
+  - `.../renderer/store/ui.ts` — поле `dark` и действие `setDark`: единственный источник
+    тёмности в рендерере, из него тему берут терминал (1.3) и Monaco (7.3);
+  - `.../renderer/main.tsx` — `.dark` на `<html>` до первого кадра и подписка
+    `watchSystemDark` → `setDark`;
   - `packages/desktop/package.json` — `tw-animate-css`.
 
 **Интерфейсы**
@@ -95,6 +99,10 @@ export function createUiStore(file: string): UiStore;
 export function applyDarkClass(dark: boolean, root?: HTMLElement): void;
 /** Подписка на `prefers-color-scheme`; возвращает отписку. Главный процесс уже выставил themeSource. */
 export function watchSystemDark(onChange: (dark: boolean) => void): () => void;
+
+// renderer/store/ui.ts, дополнение к UiState
+dark: boolean;                  // начальное — matchMedia('(prefers-color-scheme: dark)').matches
+setDark(dark: boolean): void;   // applyDarkClass(dark) и запись в стор
 
 // bridge.ts, дополнение к app
 loadUi(): Promise<UiFile>;
@@ -152,6 +160,8 @@ export const FRAME_RULES: ReadonlyArray<{ rule: string; pattern: RegExp }>;
    - `'--dangerously-skip-permissions'` в коде → находка.
 6. Рамочный тест на всём репозитории зелёный. Единственное нынешнее совпадение,
    `core/src/codex/discover.ts:8`, — комментарий, и он пропущен.
+7. `useUiStore.getState().setDark(true)` ставит `.dark` на `<html>` и `dark: true` в
+   сторе; `setDark(false)` снимает то и другое.
 
 **Приёмка**
 - [ ] Все тесты зелёные, `pnpm lint` чистый.
@@ -287,7 +297,8 @@ export function minimumContrastRatio(dark: boolean): number;
 **Поведение**
 - **Терминал.**
   - Тема и `minimumContrastRatio` меняются при смене `.dark` без пересоздания
-    терминала: `term.options.theme = xtermTheme(dark)`.
+    терминала: `term.options.theme = xtermTheme(dark)`. Тёмность — из
+    `useUiStore(s => s.dark)` (1.1).
   - Шрифт — `config.fontFamily` и `config.fontSize` (новые значения по умолчанию из
     `core`).
   - Внутренний отступ 4px — CSS контейнера.
