@@ -13,6 +13,7 @@ import { createHostHandlers } from './methods/index.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
 import { createPtyManager } from './pty/pty-manager.js';
+import { createSessionsService } from './sessions/sessions-service.js';
 
 export interface HostOptions {
   home?: string;
@@ -118,17 +119,23 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Живые PTY сессий (1.6). На остановке хоста добиваются вместе с ним —
   // иначе процесс агента остаётся сиротой без хоста, который бы его закрыл.
   const ptyManager = createPtyManager(handle.context);
-  handle.context.onShutdown(async () => {
-    await Promise.all(
-      ptyManager.list().map((pty) =>
-        ptyManager.stop(pty.ref).catch((error: unknown) => {
-          log.error('остановка PTY на выключении хоста не удалась', { ref: pty.ref, error: String(error) });
-        }),
-      ),
-    );
-  });
 
-  const handlers = createHostHandlers({ works: worksService, activity: activityService, pty: ptyManager });
+  // Создание, запуск и автозапуск сессий (1.7). На остановке хоста гасит все
+  // живые PTY сам — той же дорогой, что и явный `sessions.stop`.
+  const sessionsService = createSessionsService(
+    handle.context,
+    worksService,
+    ptyManager,
+    activityService,
+  );
+  handle.context.onShutdown(() => sessionsService.stopAll());
+
+  const handlers = createHostHandlers({
+    works: worksService,
+    activity: activityService,
+    pty: ptyManager,
+    sessions: sessionsService,
+  });
   const server = createHostServer({
     context: handle.context,
     token,

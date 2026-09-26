@@ -2,10 +2,12 @@ import type { MethodName, NotificationName } from '@harnas/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { AnyHandler, AnyNotificationHandler } from '../context.js';
 import type { PtyManager } from '../pty/pty-manager.js';
+import type { SessionsService } from '../sessions/sessions-service.js';
 import type { WorksService } from '../works/works-service.js';
 import { hostInfo, hostShutdown } from './host.js';
 import { createPtyHandlers } from './pty.js';
 import { providersList } from './providers.js';
+import { createSessionHandlers } from './sessions.js';
 import { settingsGet, settingsSet } from './settings.js';
 import { worksCreate, worksDelete, worksList } from './works.js';
 
@@ -13,6 +15,7 @@ export interface MethodDeps {
   works: WorksService;
   activity: ActivityService;
   pty: PtyManager;
+  sessions: SessionsService;
 }
 
 export interface HostHandlers {
@@ -34,6 +37,7 @@ export interface HostHandlers {
  */
 export function createHostHandlers(deps: MethodDeps): HostHandlers {
   const pty = createPtyHandlers(deps);
+  const sessions = createSessionHandlers(deps);
 
   return {
     methods: {
@@ -47,6 +51,10 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
       'settings.set': settingsSet as AnyHandler,
       'pty.attach': pty.ptyAttach as AnyHandler,
       'pty.detach': pty.ptyDetach as AnyHandler,
+      'sessions.create': sessions.sessionsCreate as AnyHandler,
+      'sessions.resume': sessions.sessionsResume as AnyHandler,
+      'sessions.stop': sessions.sessionsStop as AnyHandler,
+      'sessions.delete': sessions.sessionsDelete as AnyHandler,
     },
     notifications: {
       'pty.input': pty.ptyInput as AnyNotificationHandler,
