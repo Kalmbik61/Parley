@@ -197,6 +197,26 @@ async function findBaseCheckout(projectPath: string, base: string): Promise<stri
   return match?.path ?? null;
 }
 
+/**
+ * Есть ли незакоммиченное в каталоге, не считая `.harnas/` — там сам гарнес
+ * хранит своё состояние прямо внутри проекта, и без `.gitignore` на этот
+ * каталог `git status` в нём всегда грязный: `base_dirty` тогда получали бы
+ * всегда и слияние никогда бы не проходило. Синтаксис exclude-пасспеки
+ * работает с git 1.9.
+ */
+async function isDirty(checkoutPath: string): Promise<boolean> {
+  const { stdout } = await run('git', [
+    '-C',
+    checkoutPath,
+    'status',
+    '--porcelain',
+    '--',
+    '.',
+    ':(exclude).harnas',
+  ]);
+  return stdout.trim() !== '';
+}
+
 export interface WorktreeDiff {
   /** Коммиты ветки от общего предка с базой, плюс незакоммиченное поверх них. */
   patch: string;
@@ -243,10 +263,7 @@ export async function worktreeDiff(projectPath: string, info: WorktreeInfo): Pro
   for (const file of uncommittedFiles) files.set(file.path, file);
 
   const baseCheckout = await findBaseCheckout(projectPath, info.base);
-  const baseDirty =
-    baseCheckout === null
-      ? false
-      : (await run('git', ['-C', baseCheckout, 'status', '--porcelain'])).stdout.trim() !== '';
+  const baseDirty = baseCheckout === null ? false : await isDirty(baseCheckout);
 
   const workingTreePatch = uncommittedPatch + untrackedPatches.join('');
   return {
@@ -286,13 +303,9 @@ export async function mergeWorktree(
   const baseCheckout = await findBaseCheckout(projectPath, info.base);
   if (baseCheckout === null) return { ok: false, reason: 'base_not_checked_out', files: [] };
 
-  const baseDirty =
-    (await run('git', ['-C', baseCheckout, 'status', '--porcelain'])).stdout.trim() !== '';
-  if (baseDirty) return { ok: false, reason: 'base_dirty', files: [] };
+  if (await isDirty(baseCheckout)) return { ok: false, reason: 'base_dirty', files: [] };
 
-  const worktreeDirty =
-    (await run('git', ['-C', info.path, 'status', '--porcelain'])).stdout.trim() !== '';
-  if (worktreeDirty) return { ok: false, reason: 'uncommitted', files: [] };
+  if (await isDirty(info.path)) return { ok: false, reason: 'uncommitted', files: [] };
 
   try {
     await run('git', ['-C', baseCheckout, 'merge', '--no-ff', info.branch, '-m', message]);

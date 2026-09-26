@@ -225,6 +225,22 @@ describe('mergeWorktree', () => {
     expect(result).toMatchObject({ ok: false, reason: 'base_not_checked_out' });
   });
 
+  it('изменения только в .harnas/ базы без .gitignore — не грязь, слияние проходит', async () => {
+    const info = await withCommittedFeature();
+    // .harnas/ — своё состояние гарнеса внутри проекта; если проект его не
+    // игнорирует, `git status` в базе всегда видит эти файлы. baseDirty должен
+    // их не замечать, иначе слияние никогда бы не проходило ни у одного
+    // проекта без .gitignore на .harnas/.
+    await mkdir(path.join(project, '.harnas'), { recursive: true });
+    await writeFile(path.join(project, '.harnas', 'state.json'), '{}\n', 'utf8');
+
+    const diff = await worktreeDiff(project, info);
+    expect(diff.baseDirty).toBe(false);
+
+    const result = await mergeWorktree(project, info, 'harnas: влить фичу');
+    expect(result.ok).toBe(true);
+  });
+
   it('незакоммиченное в worktree — uncommitted', async () => {
     const info = await withCommittedFeature();
     await writeFile(path.join(info.path, 'draft.md'), 'черновик\n', 'utf8');
