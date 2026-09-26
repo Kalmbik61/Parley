@@ -3,12 +3,14 @@ import type { ActivityService } from '../activity/activity-service.js';
 import type { AnyHandler, AnyNotificationHandler } from '../context.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
+import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
 import { hostInfo, hostShutdown } from './host.js';
 import { createPtyHandlers } from './pty.js';
 import { providersList } from './providers.js';
 import { createSessionHandlers } from './sessions.js';
 import { settingsGet, settingsSet } from './settings.js';
+import { createWakeHandlers } from './wake.js';
 import { worksCreate, worksDelete, worksList } from './works.js';
 
 export interface MethodDeps {
@@ -16,6 +18,7 @@ export interface MethodDeps {
   activity: ActivityService;
   pty: PtyManager;
   sessions: SessionsService;
+  wake: WakeService;
 }
 
 export interface HostHandlers {
@@ -38,6 +41,7 @@ export interface HostHandlers {
 export function createHostHandlers(deps: MethodDeps): HostHandlers {
   const pty = createPtyHandlers(deps);
   const sessions = createSessionHandlers(deps);
+  const wake = createWakeHandlers(deps);
 
   return {
     methods: {
@@ -55,6 +59,9 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
       'sessions.resume': sessions.sessionsResume as AnyHandler,
       'sessions.stop': sessions.sessionsStop as AnyHandler,
       'sessions.delete': sessions.sessionsDelete as AnyHandler,
+      'wake.pause': wake.wakePause as AnyHandler,
+      'wake.resume': wake.wakeResume as AnyHandler,
+      'wake.state': wake.wakeState as AnyHandler,
     },
     notifications: {
       'pty.input': pty.ptyInput as AnyNotificationHandler,

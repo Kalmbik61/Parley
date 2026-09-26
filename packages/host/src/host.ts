@@ -14,6 +14,7 @@ import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
 import { createPtyManager } from './pty/pty-manager.js';
 import { createSessionsService } from './sessions/sessions-service.js';
+import { createWakeService } from './wake/wake-service.js';
 
 export interface HostOptions {
   home?: string;
@@ -130,11 +131,18 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   );
   handle.context.onShutdown(() => sessionsService.stopAll());
 
+  // Будильник живых сессий (1.8): печатает указатель на непрочитанные письма
+  // простаивающему агенту без канала. Останавливается вместе с хостом — иначе
+  // его таймеры Enter/предохранителя пережили бы закрытые PTY.
+  const wakeService = createWakeService(handle.context, worksService, activityService, ptyManager);
+  handle.context.onShutdown(async () => wakeService.stop());
+
   const handlers = createHostHandlers({
     works: worksService,
     activity: activityService,
     pty: ptyManager,
     sessions: sessionsService,
+    wake: wakeService,
   });
   const server = createHostServer({
     context: handle.context,
@@ -162,6 +170,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
   await worksService.start();
   await activityService.start();
+  wakeService.start();
 
   // 8. SIGTERM/SIGINT — обычная остановка.
   const onSignal = (): void => {
