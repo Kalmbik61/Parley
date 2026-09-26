@@ -1,9 +1,8 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hostPaths } from '@harnas/host';
 import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron';
 import { HostConnection } from './host-connection.js';
-import { resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
+import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
 import { forwardHostToWindow, registerIpc } from './ipc.js';
 import { createLayoutStore, desktopLayoutsPath } from './layout-store.js';
 import { createAppMenu } from './menu.js';
@@ -56,7 +55,7 @@ if (!gotLock) {
             return;
           }
           try {
-            const entry = resolveHostEntry();
+            const entry = resolveHostEntry({ packaged: app.isPackaged, resourcesPath: process.resourcesPath });
             spawnHost({ env: shellEnv.env, entry, nodeBin });
           } catch (err) {
             console.error('[harnas] не удалось запустить хост', err);

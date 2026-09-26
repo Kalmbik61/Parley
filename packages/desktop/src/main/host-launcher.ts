@@ -3,15 +3,41 @@ import { constants } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { harnasHome } from '@harnas/core';
+import type { HostPaths } from '@harnas/host';
 
 const require = createRequire(import.meta.url);
 
 /**
- * Путь к точке входа хоста в dev-режиме — обычный workspace-пакет
- * `@harnas/host`. Кусок 1.13 добавит здесь же ветку для пути внутри
- * собранного `.app` (`process.resourcesPath/host/dist/main.js`).
+ * Пути хоста — то же самое, что `hostPaths()` из `@harnas/host`, но
+ * посчитанное здесь без импорта самого пакета: `@harnas/host` при загрузке
+ * (даже ради одного `hostPaths`) тянет за собой `host.ts` → `pty-manager` →
+ * `node-pty`, а Electron нативных модулей грузить не должен (спека 3.2).
+ * Тип `HostPaths` берём импортом только типа — он стирается при сборке и
+ * рантайм-зависимости от пакета не создаёт.
  */
-export function resolveHostEntry(): string {
+export function hostPaths(home: string = harnasHome()): HostPaths {
+  const dir = path.join(home, 'host');
+  return {
+    dir,
+    socket: path.join(dir, 'host.sock'),
+    token: path.join(dir, 'host.token'),
+    pid: path.join(dir, 'host.pid'),
+    log: path.join(dir, 'host.log'),
+  };
+}
+
+/**
+ * Путь к точке входа хоста. В dev — обычный workspace-пакет `@harnas/host`.
+ * В собранном `.app` (`packaged: true`) пакета `@harnas/host` в приложении
+ * нет вовсе (кусок 1.13, электрон-билдер его исключает — вместе с node-pty),
+ * поэтому путь собирается напрямую до `Resources/host`, куда `dist`
+ * раскладывает `pnpm deploy` хоста.
+ */
+export function resolveHostEntry(options: { packaged: boolean; resourcesPath: string }): string {
+  if (options.packaged) {
+    return path.join(options.resourcesPath, 'host', 'dist', 'main.js');
+  }
   return require.resolve('@harnas/host/main');
 }
 

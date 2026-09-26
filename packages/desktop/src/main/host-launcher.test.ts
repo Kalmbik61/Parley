@@ -1,8 +1,11 @@
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { resolveNodeBin } from './host-launcher.js';
+import { hostPaths, resolveHostEntry, resolveNodeBin } from './host-launcher.js';
+
+const require = createRequire(import.meta.url);
 
 /**
  * `resolveNodeBin` ищет `node` в PATH логин-шелла — не в `process.execPath`
@@ -63,5 +66,41 @@ describe('resolveNodeBin', () => {
     const found = await resolveNodeBin({});
 
     expect(found).toBeNull();
+  });
+});
+
+describe('hostPaths', () => {
+  it('кладёт файлы хоста в <home>/host', () => {
+    const paths = hostPaths('/tmp/fake-home');
+
+    expect(paths).toEqual({
+      dir: path.join('/tmp/fake-home', 'host'),
+      socket: path.join('/tmp/fake-home', 'host', 'host.sock'),
+      token: path.join('/tmp/fake-home', 'host', 'host.token'),
+      pid: path.join('/tmp/fake-home', 'host', 'host.pid'),
+      log: path.join('/tmp/fake-home', 'host', 'host.log'),
+    });
+  });
+});
+
+/**
+ * Кусок 1.13: в собранном `.app` пакета `@harnas/host` нет вовсе (его тянет
+ * `extraResources` в `Resources/host`, минуя node_modules приложения — иначе
+ * пришлось бы тащить и node-pty, спека 3.2), поэтому `resolveHostEntry`
+ * ветвится на `packaged`, а не всегда резолвит workspace-пакет.
+ */
+describe('resolveHostEntry', () => {
+  it('в dev-режиме резолвит workspace-пакет @harnas/host', () => {
+    const entry = resolveHostEntry({ packaged: false, resourcesPath: '/unused' });
+
+    expect(entry).toBe(require.resolve('@harnas/host/main'));
+  });
+
+  it('в собранном приложении читает Resources/host/dist/main.js', () => {
+    const entry = resolveHostEntry({ packaged: true, resourcesPath: '/Applications/harnas.app/Contents/Resources' });
+
+    expect(entry).toBe(
+      path.join('/Applications/harnas.app/Contents/Resources', 'host', 'dist', 'main.js'),
+    );
   });
 });

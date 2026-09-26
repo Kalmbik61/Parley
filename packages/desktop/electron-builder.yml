@@ -1,0 +1,35 @@
+# Неподписанный .app для владельца (план 1.13, спека §3.2, §13): без identity,
+# без нотаризации — раздача другим не входит в v1 (спека §13).
+appId: dev.harnas.desktop
+productName: harnas
+directories:
+  output: dist
+# electron-vite (`pnpm build`) кладёт готовые бандлы в out/main, out/preload,
+# out/renderer — их и упаковываем. `out/host` (см. `dist` в package.json)
+# едет отдельно через extraResources, а не через node_modules приложения.
+files:
+  - out/main/**
+  - out/preload/**
+  - out/renderer/**
+  - package.json
+  - '!node_modules/@harnas/host/**'
+  - '!node_modules/node-pty/**'
+  - '!node_modules/.pnpm/@harnas+host@**'
+  - '!node_modules/.pnpm/node-pty@**'
+# node-pty хоста собран под системный Node (спека §3.2) — Electron его вообще
+# не грузит, поэтому пересобирать нативные модули под ABI Electron незачем.
+npmRebuild: false
+extraResources:
+  - from: out/host
+    to: host
+  # `createFilter` в electron-builder жёстко режет каталог `node_modules`,
+  # когда он лежит прямо на верхнем уровне копируемого `from` (сравнение
+  # строкой "node_modules" — https://github.com/electron-userland/electron-builder/issues,
+  # это касается «мёртвый node_modules у корня» независимо от `filter`).
+  # Обходим тем же приёмом, что и остальные: копируем node_modules хоста
+  # отдельной записью, где он уже не верхний уровень своего `from`.
+  - from: out/host/node_modules
+    to: host/node_modules
+mac:
+  target: dir
+  identity: null
