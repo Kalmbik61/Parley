@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +44,10 @@ test.describe('панель терминала: ввод стаба и восс�
 
   test.beforeEach(async () => {
     home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-term-'));
+
+    // Проект общий между прогонами: без очистки в нём копятся работы прошлых запусков.
+    await rm('/tmp/harnas-e2e-terminal', { recursive: true, force: true });
+    await mkdir('/tmp/harnas-e2e-terminal', { recursive: true });
   });
 
   test.afterEach(async () => {
@@ -54,7 +58,7 @@ test.describe('панель терминала: ввод стаба и восс�
     // `HARNAS_CLAUDE_BIN` — тот же оверрайд, что использует core/host для
     // подмены бинаря: настоящий `claude` в автотестах не запускается никогда
     // (план этапа 1, «Правила проверки»).
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent };
+    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
 
     let app = await electron.launch({ args: [mainEntry], env });
     let window = await app.firstWindow();
@@ -97,7 +101,7 @@ test.describe('панель терминала: ввод стаба и восс�
     await terminalInput.type('hello');
     await terminalInput.press('Enter');
 
-    await expect(window.getByText('echo: hello')).toBeVisible();
+    await expect(window.getByText('echo: hello', { exact: true })).toBeVisible();
 
     await app.close();
 
@@ -106,7 +110,7 @@ test.describe('панель терминала: ввод стаба и восс�
     await window.locator(`[data-session-id="${session.ref.sessionId}"]`).click();
 
     // Экран восстановлен из снимка хоста — без нового ввода.
-    await expect(window.getByText('echo: hello')).toBeVisible();
+    await expect(window.getByText('echo: hello', { exact: true })).toBeVisible();
 
     await app.close();
   });

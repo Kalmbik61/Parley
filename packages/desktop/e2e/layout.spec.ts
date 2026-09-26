@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +36,10 @@ test.describe('раскладка сетки переживает перезап
 
   test.beforeEach(async () => {
     home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-layout-'));
+
+    // Проект общий между прогонами: без очистки в нём копятся работы прошлых запусков.
+    await rm('/tmp/harnas-e2e-layout', { recursive: true, force: true });
+    await mkdir('/tmp/harnas-e2e-layout', { recursive: true });
   });
 
   test.afterEach(async () => {
@@ -43,7 +47,7 @@ test.describe('раскладка сетки переживает перезап
   });
 
   test('три открытые панели на месте после нового запуска', async () => {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent };
+    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
 
     let app = await electron.launch({ args: [mainEntry], env });
     let window = await app.firstWindow();
@@ -87,10 +91,18 @@ test.describe('раскладка сетки переживает перезап
 
     // Три панели рядом — тот же приём ⌘D, что в `e2e/grid.spec.ts`.
     await window.locator(`[data-session-id="${a.ref.sessionId}"]`).click();
-    await window.keyboard.press('Meta+D');
-    await window.getByText('S02 два').click();
-    await window.keyboard.press('Meta+D');
-    await window.getByText('S03 три').click();
+    // Акселератор ⌘D живёт в нативном меню, а keyboard.press шлёт клавиши только
+    // в страницу — поэтому действие меню отправляется тем же IPC, что и из меню.
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]?.webContents.send('menu:action', 'split-right');
+    });
+    await window.getByRole('dialog').getByText('S02 два').click();
+    // Акселератор ⌘D живёт в нативном меню, а keyboard.press шлёт клавиши только
+    // в страницу — поэтому действие меню отправляется тем же IPC, что и из меню.
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]?.webContents.send('menu:action', 'split-right');
+    });
+    await window.getByRole('dialog').getByText('S03 три').click();
 
     await expect(window.locator('.xterm-helper-textarea')).toHaveCount(3);
 

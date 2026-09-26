@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +36,10 @@ test.describe('сетка панелей: три терминала рядом (
 
   test.beforeEach(async () => {
     home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-grid-'));
+
+    // Проект общий между прогонами: без очистки в нём копятся работы прошлых запусков.
+    await rm('/tmp/harnas-e2e-grid', { recursive: true, force: true });
+    await mkdir('/tmp/harnas-e2e-grid', { recursive: true });
   });
 
   test.afterEach(async () => {
@@ -43,7 +47,7 @@ test.describe('сетка панелей: три терминала рядом (
   });
 
   test('ввод в одну панель не попадает в две другие', async () => {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent };
+    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
 
     const app = await electron.launch({ args: [mainEntry], env });
     const window = await app.firstWindow();
@@ -91,11 +95,19 @@ test.describe('сетка панелей: три терминала рядом (
     // (в отличие от вкладок в одной группе, где видна только активная).
     await window.locator(`[data-session-id="${a.ref.sessionId}"]`).click();
 
-    await window.keyboard.press('Meta+D');
-    await window.getByText('S02 два').click();
+    // Акселератор ⌘D живёт в нативном меню, а keyboard.press шлёт клавиши только
+    // в страницу — поэтому действие меню отправляется тем же IPC, что и из меню.
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]?.webContents.send('menu:action', 'split-right');
+    });
+    await window.getByRole('dialog').getByText('S02 два').click();
 
-    await window.keyboard.press('Meta+D');
-    await window.getByText('S03 три').click();
+    // Акселератор ⌘D живёт в нативном меню, а keyboard.press шлёт клавиши только
+    // в страницу — поэтому действие меню отправляется тем же IPC, что и из меню.
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]?.webContents.send('menu:action', 'split-right');
+    });
+    await window.getByRole('dialog').getByText('S03 три').click();
 
     const inputs = window.locator('.xterm-helper-textarea');
     await expect(inputs).toHaveCount(3);
@@ -114,14 +126,14 @@ test.describe('сетка панелей: три терминала рядом (
     await inputs.nth(2).type('третий');
     await inputs.nth(2).press('Enter');
 
-    await expect(window.getByText('echo: один')).toBeVisible();
-    await expect(window.getByText('echo: второй')).toBeVisible();
-    await expect(window.getByText('echo: третий')).toBeVisible();
+    await expect(window.getByText('echo: один', { exact: true })).toBeVisible();
+    await expect(window.getByText('echo: второй', { exact: true })).toBeVisible();
+    await expect(window.getByText('echo: третий', { exact: true })).toBeVisible();
 
     // Каждая панель видит только свой ввод — эхо чужих строк на экране нет.
-    expect(await window.getByText('echo: второй').count()).toBe(1);
-    expect(await window.getByText('echo: третий').count()).toBe(1);
-    expect(await window.getByText('echo: один').count()).toBe(1);
+    expect(await window.getByText('echo: второй', { exact: true }).count()).toBe(1);
+    expect(await window.getByText('echo: третий', { exact: true }).count()).toBe(1);
+    expect(await window.getByText('echo: один', { exact: true }).count()).toBe(1);
 
     await app.close();
   });

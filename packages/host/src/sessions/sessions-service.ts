@@ -23,6 +23,7 @@ import {
   processStartedAt,
   readMap,
   startSession,
+  updateMap,
   type WorkEntry,
 } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
@@ -147,25 +148,44 @@ export function createSessionsService(
     return ref;
   }
 
+  /**
+   * Быстрая и дочерняя сессии core заводит с ярлыком «новая сессия» и
+   * провайдером claude. Ярлык и провайдер из диалога окна должны остаться —
+   * иначе выбор человека молча терялся бы. Пустой ярлык оставляет «новую
+   * сессию», и тогда её переименует заголовок Claude Code (автозаголовок).
+   */
+  async function applyChoice(ref: SessionRef, label: string, provider: string): Promise<void> {
+    const trimmed = label.trim();
+    await updateMap(ref.projectPath, ref.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session === undefined) return;
+      if (trimmed !== '') session.label = trimmed;
+      session.provider = provider;
+    });
+  }
+
   async function create(input: CreateSessionInput): Promise<SessionRef> {
     const { projectPath, workId, provider, label, task, parent } = input;
 
     if (workId === null) {
       const created = await createNewSession(projectPath, null);
-      return createInteractive(
-        { projectPath, workId: created.workId, sessionId: created.session.id },
-        'new',
-      );
+      const ref = { projectPath, workId: created.workId, sessionId: created.session.id };
+      await applyChoice(ref, label, provider);
+      return createInteractive(ref, 'new');
     }
 
     if (task === '' && parent === null) {
       const created = await createNewSession(projectPath, workId);
-      return createInteractive({ projectPath, workId, sessionId: created.session.id }, 'new');
+      const ref = { projectPath, workId, sessionId: created.session.id };
+      await applyChoice(ref, label, provider);
+      return createInteractive(ref, 'new');
     }
 
     if (task === '' && parent !== null) {
       const created = await createChildSession(projectPath, workId, parent);
-      return createInteractive({ projectPath, workId, sessionId: created.session.id }, 'launch');
+      const ref = { projectPath, workId, sessionId: created.session.id };
+      await applyChoice(ref, label, provider);
+      return createInteractive(ref, 'launch');
     }
 
     const sessionId = await createPendingSession(projectPath, workId, {

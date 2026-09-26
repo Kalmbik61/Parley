@@ -34,7 +34,7 @@ import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../../shared/bridge.js';
 import { buildCommands } from '../../lib/commands.js';
 import { sessionRowLabel } from '../../lib/participant.js';
-import { panelId, workKey, type PanelSpec } from '../../lib/panel-id.js';
+import { panelId, specFromPanelId, workKey, type PanelSpec } from '../../lib/panel-id.js';
 import { useUiStore } from '../../store/ui.js';
 import { PANEL_COMPONENTS, PanelHostContext } from './panel-registry.js';
 import { readDragPayload } from './sidebar-drag.js';
@@ -95,7 +95,7 @@ function focusAdjacent(api: DockviewApi, delta: 1 | -1): void {
 }
 
 function specOf(panel: IDockviewPanel): PanelSpec {
-  return panel.api.getParameters<PanelSpec>();
+  return specFromPanelId(panel.id) ?? panel.api.getParameters<PanelSpec>();
 }
 
 export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Workspace(

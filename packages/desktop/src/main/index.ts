@@ -12,6 +12,12 @@ import { captureShellEnv } from './shell-env.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// При своём HARNAS_HOME (тесты, второй дом) у окна свой userData: лок одного
+// экземпляра тогда привязан к дому так же, как хост, и чужой дом его не держит.
+if (process.env.HARNAS_HOME) {
+  app.setPath('userData', path.join(process.env.HARNAS_HOME, 'desktop', 'electron'));
+}
+
 // Второй экземпляр не поднимает второй хост и не открывает второе окно —
 // фокусирует первое (см. план, «На что смотреть на ревью», пункт 1).
 const gotLock = app.requestSingleInstanceLock();
@@ -78,7 +84,9 @@ if (!gotLock) {
       window.webContents.once('did-finish-load', () => {
         forwardHostToWindow(connection, window);
       });
-      void window.loadFile(indexHtmlPath);
+      // E2E читают текст экрана терминала — им нужен DOM-рендер xterm вместо WebGL.
+      const search = process.env.HARNAS_TERMINAL_RENDERER === 'dom' ? { search: 'renderer=dom' } : {};
+      void window.loadFile(indexHtmlPath, search);
       return window;
     };
 

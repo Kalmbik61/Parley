@@ -38,10 +38,10 @@ function usePanelHost(): PanelHostContextValue {
 
 function TerminalPanelContent({ api, params }: IDockviewPanelProps<PanelSpec>): JSX.Element {
   const host = usePanelHost();
-  // `isActive` — активная ли это вкладка своей группы прямо сейчас: ровно то,
-  // что план называет «видна» (тест 5а куска 2.1). Значение читается заново
-  // при монтировании на случай, если панель родилась уже неактивной.
-  const [visible, setVisible] = useState(api.isActive);
+  // «Видна» (тест 5а куска 2.1) — это `isVisible`: активная вкладка своей
+  // группы. `isActive` у dockview один на всё окно — с ним соседние группы
+  // отключались от потока и переставали показывать вывод агента.
+  const [visible, setVisible] = useState(api.isVisible);
 
   if (params.ref === undefined) throw new Error('panel-registry: панель terminal без ref');
   const ref = params.ref;
@@ -51,10 +51,10 @@ function TerminalPanelContent({ api, params }: IDockviewPanelProps<PanelSpec>): 
     // (`App.tsx#wireNotifications`): в отличие от `visible` выше (эта одна
     // панель), там нужны видимые панели ВСЕХ групп сразу.
     const key = refKey(ref);
-    useUiStore.getState().setSessionVisible(key, api.isActive);
-    const subscription = api.onDidActiveChange(({ isActive }) => {
-      setVisible(isActive);
-      useUiStore.getState().setSessionVisible(key, isActive);
+    useUiStore.getState().setSessionVisible(key, api.isVisible);
+    const subscription = api.onDidVisibilityChange(({ isVisible }) => {
+      setVisible(isVisible);
+      useUiStore.getState().setSessionVisible(key, isVisible);
     });
     return () => {
       subscription.dispose();

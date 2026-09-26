@@ -43,3 +43,29 @@ export function panelId(spec: PanelSpec): string {
     }
   }
 }
+
+/**
+ * Обратное к `panelId`: описание панели из её id. Параметры, которые dockview
+ * отдаёт через `getParameters()`, в живом окне приходили без `workKey`, и
+ * ⌘D находил «нет сессий без панели». id же детерминирован и содержит всё
+ * нужное, поэтому источником истины для описания служит он.
+ */
+export function specFromPanelId(id: string): PanelSpec | null {
+  const colon = id.indexOf(':');
+  if (colon === -1) return null;
+  const kind = id.slice(0, colon);
+  const rest = id.slice(colon + 1);
+  if (kind === 'terminal' || kind === 'changes') {
+    const parts = rest.split('\u0000');
+    if (parts.length !== 3) return null;
+    const [projectPath, workId, sessionId] = parts as [string, string, string];
+    return { kind, ref: { projectPath, workId, sessionId }, workKey: workKey(projectPath, workId) };
+  }
+  if (kind === 'mail') return { kind, workKey: rest };
+  if (kind === 'room') {
+    const last = rest.lastIndexOf(':');
+    if (last === -1) return null;
+    return { kind, workKey: rest.slice(0, last), roomId: rest.slice(last + 1) };
+  }
+  return null;
+}

@@ -10,3 +10,4 @@ files.zip
 packages/desktop/out/
 packages/desktop/out-tsc/
 test-results/
+**/.omc/state/

@@ -23,7 +23,7 @@
 import { useEffect, useRef } from 'react';
 import type { WorkEntry } from '@harnas/core';
 import type { HarnasBridge } from '../../../shared/bridge.js';
-import { workKey, type PanelSpec } from '../../lib/panel-id.js';
+import { workKey, type PanelSpec, specFromPanelId } from '../../lib/panel-id.js';
 
 export const WORKSPACE_LAYOUT_KEY = 'window';
 
@@ -91,7 +91,8 @@ export function useLayoutPersistence({ api, bridge, works }: UseLayoutPersistenc
         if (disposed || layout === null) return;
         api.fromJSON(layout);
         for (const panel of api.panels) {
-          if (!isPanelValid(worksRef.current, panel.api.getParameters())) api.removePanel(panel);
+          const spec = specFromPanelId(panel.id) ?? panel.api.getParameters();
+          if (!isPanelValid(worksRef.current, spec)) api.removePanel(panel);
         }
       })
       .catch(() => {

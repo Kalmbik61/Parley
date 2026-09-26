@@ -86,10 +86,9 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
       theme: themeNameToXtermTheme(theme),
       fontFamily,
       fontSize,
-      // Параллельно с канвой/WebGL держит реальный DOM-текст экрана — нужен
-      // не только читалкам с экрана, но и ручной проверке ⌘C по плану, и
-      // будущим E2E, которым иначе пришлось бы читать пиксели канвы.
-      screenReaderMode: true,
+      // screenReaderMode не включаем: в нём xterm игнорирует события
+      // insertText, а через них приходят выбор эмодзи, диктовка и буквы с
+      // диакритикой по долгому нажатию в macOS — ввод терялся бы.
     });
 
     const fit = new FitAddon();
@@ -106,16 +105,20 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
     term.loadAddon(searchAddon);
     term.loadAddon(webLinks);
 
-    try {
-      const webgl = new WebglAddon();
-      term.loadAddon(webgl);
-      webgl.onContextLoss(() => webgl.dispose());
-    } catch {
-      // WebGL недоступен (headless CI, старый драйвер GPU) — xterm остаётся
-      // на обычном canvas-рендере, разницы для пользователя почти нет.
-    }
-
     term.open(container);
+
+    // WebGL-аддон подключается только после open: до него у терминала нет
+    // элемента. E2E просят DOM-рендер (`?renderer=dom`), чтобы читать текст
+    // экрана, а не пиксели канвы.
+    if (!domRendererRequested()) {
+      try {
+        const webgl = new WebglAddon();
+        term.loadAddon(webgl);
+        webgl.onContextLoss(() => webgl.dispose());
+      } catch {
+        // WebGL недоступен (старый драйвер GPU) — xterm остаётся на DOM-рендере.
+      }
+    }
     setSearch(searchAddon);
 
     term.attachCustomKeyEventHandler((event) => {
@@ -239,4 +242,13 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
   }, [visible, container, ref.projectPath, ref.workId, ref.sessionId]);
 
   return { search };
+}
+
+/** Окно открыто с `?renderer=dom` — так его открывает main при HARNAS_TERMINAL_RENDERER=dom. */
+function domRendererRequested(): boolean {
+  try {
+    return new URLSearchParams(globalThis.location?.search ?? '').get('renderer') === 'dom';
+  } catch {
+    return false;
+  }
 }

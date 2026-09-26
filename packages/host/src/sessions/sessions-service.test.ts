@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { addSession, createWork, readMap, saveConfig, updateMap, workPaths } from '@harnas/core';
+import { addSession, createWork, NEW_LABEL, readMap, saveConfig, updateMap, workPaths } from '@harnas/core';
 import type { WorkEntry } from '@harnas/core';
 import type { EventData, EventName, SessionRef } from '@harnas/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -189,6 +189,36 @@ describe('create() + launch(): argv и окружение процесса', () 
     expect(args.argv[args.argv.length - 2]).toBe('--append-system-prompt');
 
     await service.stop(ref);
+  });
+
+  it('быстрая сессия сохраняет ярлык из диалога; пустой ярлык оставляет «новую сессию»', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const named = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: '  бэкенд ',
+      task: '',
+      parent: null,
+    });
+    const unnamed = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: '',
+      task: '',
+      parent: null,
+    });
+
+    const map = await readMap(project, work.work.id);
+    expect(map.sessions.find((s) => s.id === named.sessionId)?.label).toBe('бэкенд');
+    expect(map.sessions.find((s) => s.id === unnamed.sessionId)?.label).toBe(NEW_LABEL);
+
+    await service.stop(named);
+    await service.stop(unnamed);
   });
 });
 

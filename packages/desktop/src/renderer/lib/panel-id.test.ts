@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionRef } from '@harnas/protocol';
-import { panelId, workKey } from './panel-id.js';
+import { panelId, specFromPanelId, workKey, type PanelSpec } from './panel-id.js';
 
 const ref: SessionRef = { projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-01' };
 
@@ -25,5 +25,24 @@ describe('panelId', () => {
     expect(() => panelId({ kind: 'terminal', workKey: key })).toThrow();
     expect(() => panelId({ kind: 'changes', workKey: key })).toThrow();
     expect(() => panelId({ kind: 'room', workKey: key })).toThrow();
+  });
+});
+
+describe('specFromPanelId', () => {
+  it('обращает panelId для всех видов, включая путь с пробелом', () => {
+    const ref = { projectPath: '/tmp/мой проект', workId: 'w-0001', sessionId: 's-03' };
+    const key = workKey(ref.projectPath, ref.workId);
+    const specs: PanelSpec[] = [
+      { kind: 'terminal', ref, workKey: key },
+      { kind: 'changes', ref, workKey: key },
+      { kind: 'mail', workKey: key },
+      { kind: 'room', workKey: key, roomId: 'r-02' },
+    ];
+    for (const spec of specs) expect(specFromPanelId(panelId(spec))).toEqual(spec);
+  });
+
+  it('чужой id — null', () => {
+    expect(specFromPanelId('что-то')).toBeNull();
+    expect(specFromPanelId('terminal:без-разделителей')).toBeNull();
   });
 });
