@@ -2,7 +2,7 @@
 
 import type { WorkEntry, WorkSession } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
-import { dotState, maxDotState } from '../../lib/dot-state.js';
+import { displayStatus, dotState, maxDotState } from '../../lib/dot-state.js';
 import { treeOrder, workKey } from '../../lib/tree-order.js';
 import type { ActivityEntry } from '../../store/activity.js';
 import { activityFor } from '../../store/activity.js';
@@ -50,7 +50,7 @@ export function WorkList({
         const states = treeOrder(entry.map.sessions).map(({ session }) => {
           const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
           const activity = activityFor(activityByRef, ref)?.activity.activity ?? null;
-          return dotState(session.status, activity);
+          return dotState(displayStatus(session), activity);
         });
         const workDot = maxDotState(states);
 

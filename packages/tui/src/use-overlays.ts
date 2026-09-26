@@ -11,6 +11,7 @@ import {
   checkSession,
   configPath,
   createWork,
+  displayStatus,
   ENV_NAMES,
   parseSetting,
   planResume,
@@ -294,7 +295,8 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
           // Как и у сессии: живую не у харнесса закрыть нечем, а без записи она
           // осталась бы работать в никуда (5.5). Свои PTY панель закроет сама.
           for (const one of map.sessions) {
-            if (one.status !== 'active' || panel.alive(workRunKey(project, id, one.id))) continue;
+            if (displayStatus(one) !== 'active' || panel.alive(workRunKey(project, id, one.id)))
+              continue;
             const { alive } = await checkSession(one, {
               lastRecordAt: log(one)?.lastRecordAt ?? null,
             });
@@ -324,7 +326,8 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
       }
 
       if (action === 'launch') {
-        if (session.status !== 'pending') return guard(`«${session.label}» уже запускалась`);
+        if (displayStatus(session) !== 'pending')
+          return guard(`«${session.label}» уже запускалась`);
         // Бриф перечитывается с диска: между созданием и запуском его правят
         // своим редактором (макет 4.5).
         void readBrief(project, workId, session.id)
@@ -340,7 +343,7 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
       }
 
       if (action === 'resume') {
-        if (session.status === 'pending' || session.status === 'active') {
+        if (displayStatus(session) === 'pending' || displayStatus(session) === 'active') {
           return guard(`«${session.label}» не завершена — возобновлять нечего`);
         }
         void planResume(project, workId, session)
@@ -357,7 +360,7 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
       }
 
       if (action === 'summary') {
-        if (session.status !== 'exited') {
+        if (displayStatus(session) !== 'exited') {
           return guard(`«${session.label}»: резюме дозаказывают вышедшей сессии`);
         }
         askConfirm(summaryDialog(session, g), () => {
@@ -381,7 +384,7 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
           // а без записи она осталась бы работать в никуда (раздел C). Живость
           // считает та же `checkSession`, что и сверка карты: у CLI-сессии с
           // `pid: null` её решает свежесть журнала.
-          if (!atHarness && session.status === 'active') {
+          if (!atHarness && displayStatus(session) === 'active') {
             const { alive } = await checkSession(session, {
               lastRecordAt: log(session)?.lastRecordAt ?? null,
             });
@@ -401,7 +404,7 @@ export function useOverlays(options: OverlaysOptions): OverlaysState {
       }
 
       // 'close': SIGHUP процессу панели (макет 4.8).
-      if (session.status !== 'active') return guard(`«${session.label}» не запущена`);
+      if (displayStatus(session) !== 'active') return guard(`«${session.label}» не запущена`);
       if (runKey === null || !panel.alive(runKey)) {
         return guard(`«${session.label}» запущена вне харнесса — закрыть её нечем`);
       }

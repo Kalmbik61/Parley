@@ -241,9 +241,9 @@ describe('createActivityService', () => {
     const { ref, workId } = await activeSession();
     await updateMap(project, workId, (map) => {
       map.messages.push(
-        { id: 'm1', from: 's-00', to: ref.sessionId, at: new Date().toISOString(), text: 'привет', kind: 'note', readAt: null },
-        { id: 'm2', from: 's-00', to: ref.sessionId, at: new Date().toISOString(), text: 'ещё', kind: 'note', readAt: null },
-        { id: 'm3', from: 's-00', to: ref.sessionId, at: new Date().toISOString(), text: 'прочитано', kind: 'note', readAt: new Date().toISOString() },
+        { id: 'm1', roomId: null, from: 's-00', to: [ref.sessionId], at: new Date().toISOString(), text: 'привет', kind: 'note', readBy: {} },
+        { id: 'm2', roomId: null, from: 's-00', to: [ref.sessionId], at: new Date().toISOString(), text: 'ещё', kind: 'note', readBy: {} },
+        { id: 'm3', roomId: null, from: 's-00', to: [ref.sessionId], at: new Date().toISOString(), text: 'прочитано', kind: 'note', readBy: { [ref.sessionId]: new Date().toISOString() } },
       );
     });
 

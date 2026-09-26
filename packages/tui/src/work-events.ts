@@ -5,8 +5,11 @@
 
 import {
   DEFAULT_CONFIG,
+  displayStatus,
+  isUnreadFor,
   participantLabel,
   RATE_WINDOW_MS,
+  recipientsOf,
   type Message,
   type WorkEntry,
 } from '@harnas/core';
@@ -42,7 +45,7 @@ function sessionEvents(
 
     if (previous === undefined) {
       // Работу открыл пользователь — новая запись появляется уже `pending`.
-      if (session.status === 'pending') {
+      if (displayStatus(session) === 'pending') {
         const mark = providerMarkOf(session.provider);
         // Порождённую агентом при включённом автозапуске поднимет сам харнесс
         // (5.2): звать человека к Enter незачем. Заведённую человеком — по-прежнему.
@@ -59,7 +62,11 @@ function sessionEvents(
       continue;
     }
 
-    if (previous.status !== 'exited' && session.status === 'exited' && session.summary === null) {
+    if (
+      displayStatus(previous) !== 'exited' &&
+      displayStatus(session) === 'exited' &&
+      session.summary === null
+    ) {
       events.push({
         text: `${g.exited} ${session.label} вышла без отчёта`,
         hint: `${prefix} r — возобновить`,
@@ -99,11 +106,18 @@ function messageEvents(before: WorkEntry, after: WorkEntry, g: Glyphs): StatusEv
     fresh(before, after)
       // Решение показывается своей строкой ниже: две строки об одном письме
       // раздували бы счётчик `⚑N` (макет 6.1 показывает ровно одно событие).
-      .filter((message) => message.readAt === null && message.kind !== 'decision')
-      .map((message) => ({
-        text: `${g.mail} ${label(message.from)} → ${label(message.to)}: ${quote(message.text, g)}`,
-        source: toSource(after, message.to),
-      }))
+      .filter(
+        (message) =>
+          recipientsOf(message, after.map).some((id) => isUnreadFor(message, id, after.map)) &&
+          message.kind !== 'decision',
+      )
+      .map((message) => {
+        const to = recipientsOf(message, after.map);
+        return {
+          text: `${g.mail} ${label(message.from)} → ${to.map(label).join(', ')}: ${quote(message.text, g)}`,
+          source: toSource(after, to[0] ?? message.from),
+        };
+      })
   );
 }
 
@@ -121,7 +135,7 @@ function decisionEvents(before: WorkEntry, after: WorkEntry, g: Glyphs): StatusE
         message.text,
         g,
       )}`,
-      source: toSource(after, message.to),
+      source: toSource(after, recipientsOf(message, after.map)[0] ?? message.from),
     }));
 }
 

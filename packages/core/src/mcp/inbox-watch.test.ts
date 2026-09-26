@@ -21,7 +21,11 @@ vi.mock('../work/store.js', async (importOriginal) => {
     readMap: async (projectPath: string, id: string) => {
       const map = await actual.readMap(projectPath, id);
       if (!hooks.breakOnce) return map;
-      if (!map.messages.some((message) => message.to === 's-02' && message.readAt === null)) {
+      if (
+        !map.messages.some(
+          (message) => message.to.includes('s-02') && message.readBy['s-02'] === undefined,
+        )
+      ) {
         return map;
       }
       hooks.breakOnce = false;
@@ -52,7 +56,7 @@ function start(sessionId: string, notify: (ring: Ring) => Promise<void>): () => 
 
 async function letter(to: string, text: string, kind: MessageKind = 'note'): Promise<void> {
   await updateMap(project, workId, (map) => {
-    addMessage(map, { from: 's-01', to, text, kind });
+    addMessage(map, { from: 's-01', to: [to], text, kind });
   });
 }
 
@@ -99,9 +103,9 @@ describe('watchInbox', () => {
       unread: '1',
     });
 
-    // Письмо забирает агент, а не сторож: `readAt` остаётся пустым, второго
+    // Письмо забирает агент, а не сторож: `readBy` остаётся пустым, второго
     // звонка про то же письмо нет.
-    expect((await readMap(project, workId)).messages[0]?.readAt).toBeNull();
+    expect((await readMap(project, workId)).messages[0]?.readBy).toEqual({});
     await delay(150);
     expect(rings).toHaveLength(1);
   });
@@ -119,8 +123,8 @@ describe('watchInbox', () => {
 
   it('звонок говорит, сколько писем заберёт один check_inbox', async () => {
     await updateMap(project, workId, (map) => {
-      addMessage(map, { from: 's-01', to: 's-02', text: 'раз' });
-      addMessage(map, { from: 's-01', to: 's-02', text: 'два' });
+      addMessage(map, { from: 's-01', to: ['s-02'], text: 'раз' });
+      addMessage(map, { from: 's-01', to: ['s-02'], text: 'два' });
     });
     const rings: Ring[] = [];
     start('s-02', async (ring) => {
@@ -149,7 +153,7 @@ describe('watchInbox', () => {
     // сорвавшемся звонке, ни на удавшемся.
     const map = await readMap(project, workId);
     expect(map.messages).toHaveLength(1);
-    expect(map.messages[0]?.readAt).toBeNull();
+    expect(map.messages[0]?.readBy).toEqual({});
   });
 
   it('карта не прочиталась на заходе: сторож переживает и звонит позже', async () => {
@@ -173,7 +177,7 @@ describe('watchInbox', () => {
       rings.push(ring);
     });
     await updateMap(project, workId, (map) => {
-      addMessage(map, { from: 's-02', to: 's-01', text: 'от меня' });
+      addMessage(map, { from: 's-02', to: ['s-01'], text: 'от меня' });
     });
 
     await delay(200);

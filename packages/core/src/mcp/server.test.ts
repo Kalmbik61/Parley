@@ -7,7 +7,13 @@ import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
 import { GUIDE } from '../work/guide.js';
-import { addMessage, addSession, removeSession, transitionSession } from '../work/map.js';
+import {
+  addMessage,
+  addSession,
+  removeSession,
+  setResult,
+  transitionSession,
+} from '../work/map.js';
 import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
 import { decisionsOf, threadOf } from '../work/thread.js';
 import type { WorkMap } from '../work/types.js';
@@ -271,8 +277,9 @@ describe('report', () => {
     const stored = session(await readMapFile(), 's-01');
     expect(stored.summary).toBe('середина');
     expect(stored.summarySource).toBe('agent');
-    expect(stored.status).toBe('pending');
-    expect(stored.history.map((entry) => entry.status)).toEqual(['pending']);
+    expect(stored.lifecycle).toBe('pending');
+    expect(stored.result).toBeNull();
+    expect(stored.history.map((entry) => entry.event)).toEqual(['pending']);
   });
 
   it('done переводит сессию и сохраняет артефакты', async () => {
@@ -285,12 +292,14 @@ describe('report', () => {
 
     expect(result['status']).toBe('done');
     const stored = session(await readMapFile(), 's-01');
-    expect(stored.status).toBe('done');
+    expect(stored.result).toBe('done');
+    // Итог процесс не меняет (спецификация 7.1).
+    expect(stored.lifecycle).toBe('pending');
     expect(stored.summary).toBe('план готов');
     expect(stored.artifacts).toEqual([
       { kind: 'plan', path: '.harnas/works/w-0001/artifacts/plan.md' },
     ]);
-    expect(stored.endedAt).not.toBeNull();
+    expect(stored.resultAt).not.toBeNull();
   });
 
   it('повторный report перезаписывает резюме и артефакты', async () => {
@@ -305,7 +314,7 @@ describe('report', () => {
     const stored = session(await readMapFile(), 's-01');
     expect(stored.summary).toBe('второе');
     expect(stored.artifacts).toEqual([]);
-    expect(stored.status).toBe('failed');
+    expect(stored.result).toBe('failed');
   });
 
   it('абсолютный путь артефакта — ошибка, карта не меняется', async () => {
@@ -331,7 +340,7 @@ describe('report', () => {
 
     expect(result.isError).toBe(true);
     expect(result.text).toMatch(/за пределы проекта/);
-    expect(session(await readMapFile(), 's-01').status).toBe('pending');
+    expect(session(await readMapFile(), 's-01').result).toBeNull();
   });
 
   it('неизвестный статус — ошибка', async () => {
@@ -355,7 +364,7 @@ describe('spawn_session', () => {
 
     expect(result).toEqual({ sessionId: 's-02' });
     const stored = session(await readMapFile(), 's-02');
-    expect(stored.status).toBe('pending');
+    expect(stored.lifecycle).toBe('pending');
     expect(stored.provider).toBe('claude');
     expect(stored.parent).toBe('s-01');
     expect(stored.contextFrom).toEqual(['s-01']);
@@ -480,7 +489,7 @@ describe('send_message и check_inbox', () => {
     expect(inbox['messages']).toEqual([
       { id: 'm-01', from: 's-02', at: stored?.at, text: 'нужен план', kind: 'note' },
     ]);
-    expect((await readMapFile()).messages[0]?.readAt).not.toBeNull();
+    expect((await readMapFile()).messages[0]?.readBy['s-01']).toBeDefined();
 
     const again = await callOk(first, 'check_inbox');
     expect(again['messages']).toEqual([]);
@@ -490,7 +499,7 @@ describe('send_message и check_inbox', () => {
     const first = await connect('s-01');
     await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
     await updateMap(project, workId, (map) => {
-      addMessage(map, { from: 's-01', to: 's-02', text: 'не тебе' });
+      addMessage(map, { from: 's-01', to: ['s-02'], text: 'не тебе' });
     });
 
     expect(await callOk(first, 'check_inbox')).toEqual({ messages: [] });
@@ -602,7 +611,7 @@ describe('wait_for', () => {
       target.summary = 'сделано';
       target.summarySource = 'agent';
       target.artifacts = [{ kind: 'code', path: 'src/auth.ts' }];
-      transitionSession(map, 's-02', 'done');
+      setResult(map, 's-02', 'done');
     });
 
     expect(await callOk(client, 'wait_for', { target: 's-02', timeoutSec: 5 })).toEqual({
@@ -621,7 +630,7 @@ describe('wait_for', () => {
     await delay(60);
     await updateMap(project, workId, (map) => {
       session(map, 's-02').summary = 'упал на миграциях';
-      transitionSession(map, 's-02', 'failed');
+      setResult(map, 's-02', 'failed');
     });
 
     expect(await pending).toEqual({
@@ -632,7 +641,7 @@ describe('wait_for', () => {
     });
   });
 
-  it('exited тоже прекращает ожидание', async () => {
+  it('sleeping тоже прекращает ожидание', async () => {
     const client = await connect('s-01');
     await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
 
@@ -640,11 +649,11 @@ describe('wait_for', () => {
     await delay(60);
     await updateMap(project, workId, (map) => {
       transitionSession(map, 's-02', 'active');
-      transitionSession(map, 's-02', 'exited', { exitCode: 1 });
+      transitionSession(map, 's-02', 'sleeping', { exitCode: 1 });
     });
 
     expect(await pending).toEqual({
-      state: 'exited',
+      state: 'sleeping',
       sessionId: 's-02',
       summary: null,
       artifacts: [],
@@ -656,7 +665,7 @@ describe('wait_for', () => {
     const pending = callOk(client, 'wait_for', { target: 'inbox', timeoutSec: 20 });
     await delay(60);
     await updateMap(project, workId, (map) => {
-      addMessage(map, { from: 's-01', to: 's-01', text: 'проснись' });
+      addMessage(map, { from: 's-01', to: ['s-01'], text: 'проснись' });
     });
 
     const result = await pending;
@@ -665,7 +674,7 @@ describe('wait_for', () => {
       'проснись',
     ]);
     // Прочитанным помечает только check_inbox.
-    expect((await readMapFile()).messages[0]?.readAt).toBeNull();
+    expect((await readMapFile()).messages[0]?.readBy).toEqual({});
   });
 });
 
@@ -775,7 +784,7 @@ describe('channel: звонок про письмо (разговор агент
       kind: 'question',
       unread: '1',
     });
-    expect((await readMapFile()).messages[0]?.readAt).toBeNull();
+    expect((await readMapFile()).messages[0]?.readBy).toEqual({});
 
     const inbox = await callOk(first, 'check_inbox');
     expect((inbox['messages'] as { text: string }[]).map((item) => item.text)).toEqual([
@@ -889,7 +898,7 @@ describe('двухсторонний разговор (разговор аген
     // Звонков ровно три — по одному на письмо, и каждое забрано check_inbox.
     expect(ringsB.map((ring) => ring.meta['message_id'])).toEqual(['m-01', 'm-03']);
     expect(ringsA.map((ring) => ring.meta['message_id'])).toEqual(['m-02']);
-    expect(thread.messages.every((message) => message.readAt !== null)).toBe(true);
+    expect(thread.messages.every((message) => Object.keys(message.readBy).length > 0)).toBe(true);
     await delay(150);
     expect(ringsA.length + ringsB.length).toBe(3);
   });
@@ -929,8 +938,8 @@ describe('двухсторонний разговор (разговор аген
     const thread = threadOf(map, 's-02');
     expect(thread.messages).toHaveLength(3);
     expect(decisionsOf(thread)).toHaveLength(1);
-    expect(map.messages.filter((message) => message.to === 's-01')).toHaveLength(1);
-    expect(map.messages.every((message) => message.readAt !== null)).toBe(true);
+    expect(map.messages.filter((message) => message.to.includes('s-01'))).toHaveLength(1);
+    expect(map.messages.every((message) => Object.keys(message.readBy).length > 0)).toBe(true);
   });
 });
 

@@ -51,7 +51,10 @@ const sessionOf = (patch: Partial<WorkSession>): WorkSession => ({
   task: '',
   parent: null,
   contextFrom: [],
-  status: 'active',
+  lifecycle: 'active',
+  result: null,
+  resultAt: null,
+  closedAt: null,
   history: [],
   startedAt: null,
   endedAt: null,
@@ -162,7 +165,7 @@ describe('reconcileMap (чек-лист 15)', () => {
     return id;
   }
 
-  it('мёртвая active уходит в exited, живая остаётся', async () => {
+  it('мёртвая active уходит в sleeping, живая остаётся', async () => {
     const { work } = await createWork(project, { title: 'работа' });
     const alive = start();
     const dead = start();
@@ -178,20 +181,20 @@ describe('reconcileMap (чек-лист 15)', () => {
     expect(await reconcileMap(project, work.id)).toEqual([deadId]);
 
     const map = await readMap(project, work.id);
-    expect(map.sessions.find((session) => session.id === aliveId)?.status).toBe('active');
+    expect(map.sessions.find((session) => session.id === aliveId)?.lifecycle).toBe('active');
     const exited = map.sessions.find((session) => session.id === deadId);
-    expect(exited?.status).toBe('exited');
+    expect(exited?.lifecycle).toBe('sleeping');
     // Код выхода неизвестен: харнесс процесс не ждал — в записи стоит `null`,
     // и это не то же самое, что «поле забыли» (чек-лист 15).
     expect(exited?.history.at(-1)).toEqual({
-      status: 'exited',
+      event: 'sleeping',
       at: expect.any(String),
       exitCode: null,
     });
     expect(exited?.endedAt).not.toBeNull();
   });
 
-  it('второй проход мёртвых не находит: сессия уже exited', async () => {
+  it('второй проход мёртвых не находит: сессия уже sleeping', async () => {
     const { work } = await createWork(project, { title: 'работа' });
     const dead = start();
     const startedAtProcess = await processStartedAt(dead.pid ?? 0);
@@ -220,7 +223,7 @@ describe('reconcileMap (чек-лист 15)', () => {
     expect(map.work.deletedSessions).toEqual([id]);
   });
 
-  it('сессия без pid: молчащая уходит в exited', async () => {
+  it('сессия без pid: молчащая уходит в sleeping', async () => {
     const { work } = await createWork(project, { title: 'работа' });
     const now = Date.now();
     const id = await seed(work.id, {
@@ -229,6 +232,41 @@ describe('reconcileMap (чек-лист 15)', () => {
     });
 
     expect(await reconcileMap(project, work.id, { now })).toEqual([id]);
-    expect((await readMap(project, work.id)).sessions[0]?.status).toBe('exited');
+    expect((await readMap(project, work.id)).sessions[0]?.lifecycle).toBe('sleeping');
+  });
+
+  it('sleeping с живым своим процессом возвращается в active, с чужим — нет', async () => {
+    const { work } = await createWork(project, { title: 'работа' });
+    const alive = start();
+    const startedAtProcess = await processStartedAt(alive.pid ?? 0);
+    // Так миграция v1 оставляет бывшую `done`: спит с итогом, а процесс жив.
+    const ownId = await seed(work.id, {
+      lifecycle: 'sleeping',
+      result: 'done',
+      pid: alive.pid ?? 0,
+      startedAtProcess,
+    });
+    // Тот же pid, но время старта другое — pid переиспользован чужим процессом.
+    const reusedId = await seed(work.id, {
+      lifecycle: 'sleeping',
+      pid: alive.pid ?? 0,
+      startedAtProcess: '2020-01-01T00:00:00.000Z',
+    });
+    // Время старта не записано — угадывать не беремся.
+    const unknownId = await seed(work.id, {
+      lifecycle: 'sleeping',
+      pid: alive.pid ?? 0,
+      startedAtProcess: null,
+    });
+
+    expect(await reconcileMap(project, work.id)).toEqual([]);
+
+    const map = await readMap(project, work.id);
+    const own = map.sessions.find((session) => session.id === ownId);
+    expect(own?.lifecycle).toBe('active');
+    expect(own?.result).toBe('done');
+    expect(own?.history.at(-1)).toMatchObject({ event: 'active' });
+    expect(map.sessions.find((session) => session.id === reusedId)?.lifecycle).toBe('sleeping');
+    expect(map.sessions.find((session) => session.id === unknownId)?.lifecycle).toBe('sleeping');
   });
 });

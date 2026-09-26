@@ -2,7 +2,8 @@ import type {
   HistoryEntry,
   Message,
   MessageKind,
-  SessionStatus,
+  SessionLifecycle,
+  SessionResult,
   WorkMap,
   WorkProvider,
   WorkSession,
@@ -10,21 +11,20 @@ import type {
 } from './types.js';
 
 /**
- * Таблица переходов из спецификации, раздел 6. `done` и `failed` разрешены из
- * любого статуса — они приходят только из `report`, и отчитаться агент может
- * когда угодно; поэтому в таблице их нет, они проверяются отдельно.
+ * Переходы оси процесса (спецификация 7.1). Итог в таблице не живёт: его ставит
+ * `setResult`, и отчитаться агент может когда угодно, кроме как после `closed`.
+ * Из `closed` выхода нет — закрытая сессия писем не получает и не поднимается.
  */
-const TRANSITIONS: Readonly<Record<SessionStatus, readonly SessionStatus[]>> = {
-  pending: ['active'],
-  active: ['exited'],
-  exited: ['active'],
-  done: ['active'],
-  failed: ['active'],
+const TRANSITIONS: Readonly<Record<SessionLifecycle, readonly SessionLifecycle[]>> = {
+  pending: ['active', 'closed'],
+  active: ['sleeping', 'closed'],
+  sleeping: ['active', 'closed'],
+  closed: [],
 };
 
-/** Допустим ли переход статуса сессии. */
-export function canTransition(from: SessionStatus, to: SessionStatus): boolean {
-  return to === 'done' || to === 'failed' || TRANSITIONS[from].includes(to);
+/** Допустим ли переход сессии по оси процесса. */
+export function canTransition(from: SessionLifecycle, to: SessionLifecycle): boolean {
+  return TRANSITIONS[from].includes(to);
 }
 
 /** Номер в id вида `s-03`; `0` — id не из этой нумерации. */
@@ -108,8 +108,11 @@ export function addSession(
     task: init.task,
     parent: init.parent ?? null,
     contextFrom: init.contextFrom ?? [],
-    status: 'pending',
-    history: [{ status: 'pending', at }],
+    lifecycle: 'pending',
+    result: null,
+    resultAt: null,
+    closedAt: null,
+    history: [{ event: 'pending', at }],
     startedAt: null,
     endedAt: null,
     pid: null,
@@ -145,7 +148,9 @@ export function removeSession(map: WorkMap, sessionId: string): WorkSession {
     }
   }
   for (const message of map.messages) {
-    if (message.from === sessionId || message.to === sessionId) message.deleted = true;
+    // `to` — массив: сравнение строки с ним было бы всегда ложным и молча
+    // перестало бы помечать письма удалённой сессии.
+    if (message.from === sessionId || message.to.includes(sessionId)) message.deleted = true;
   }
 
   const deleted = map.work.deletedSessions ?? [];
@@ -159,9 +164,12 @@ export function removeSession(map: WorkMap, sessionId: string): WorkSession {
 
 export interface NewMessage {
   from: string;
-  to: string;
+  /** Адресаты; в комнате пустой список — рассылка всем участникам. */
+  to: string[];
   text: string;
   kind?: MessageKind;
+  /** Комната письма; без неё письмо прямое. */
+  roomId?: string | null;
 }
 
 /** Кладёт сообщение в карту непрочитанным: доставка — pull через `check_inbox`. */
@@ -170,12 +178,13 @@ export function addMessage(map: WorkMap, init: NewMessage, at = new Date().toISO
   // попал бы в карту ключом без значения, и письмо на диске осталось бы без вида.
   const message: Message = {
     id: nextMessageId(map),
+    roomId: init.roomId ?? null,
     from: init.from,
-    to: init.to,
+    to: [...init.to],
     text: init.text,
     kind: init.kind ?? 'note',
     at,
-    readAt: null,
+    readBy: {},
   };
   map.messages.push(message);
   return message;
@@ -184,7 +193,7 @@ export function addMessage(map: WorkMap, init: NewMessage, at = new Date().toISO
 export interface TransitionOptions {
   at?: string;
   /**
-   * Код выхода процесса: пишется в запись history перехода в `exited`. `null` —
+   * Код выхода процесса: пишется в запись history ухода в `sleeping`. `null` —
    * процесс завершился без харнесса, и кода у нас нет (дизайн 5.4).
    */
   exitCode?: number | null;
@@ -192,30 +201,58 @@ export interface TransitionOptions {
   signal?: number;
 }
 
+const findSession = (map: WorkMap, sessionId: string): WorkSession => {
+  const session = map.sessions.find((candidate) => candidate.id === sessionId);
+  if (session === undefined) throw new Error(`сессии ${sessionId} нет в карте`);
+  return session;
+};
+
 /**
- * Переводит сессию в новый статус, проверяя таблицу переходов, и дописывает
+ * Переводит сессию по оси процесса, проверяя таблицу переходов, и дописывает
  * `history`. Недопустимый переход — ошибка, карта не меняется.
  */
 export function transitionSession(
   map: WorkMap,
   sessionId: string,
-  to: SessionStatus,
+  to: SessionLifecycle,
   { at = new Date().toISOString(), exitCode, signal }: TransitionOptions = {},
 ): WorkSession {
-  const session = map.sessions.find((candidate) => candidate.id === sessionId);
-  if (session === undefined) throw new Error(`сессии ${sessionId} нет в карте`);
-  if (!canTransition(session.status, to)) {
-    throw new Error(`недопустимый переход ${session.status} → ${to} (сессия ${sessionId})`);
+  const session = findSession(map, sessionId);
+  if (!canTransition(session.lifecycle, to)) {
+    throw new Error(`недопустимый переход ${session.lifecycle} → ${to} (сессия ${sessionId})`);
   }
 
-  session.status = to;
-  const entry: HistoryEntry = { status: to, at };
+  session.lifecycle = to;
+  const entry: HistoryEntry = { event: to, at };
   if (exitCode !== undefined) entry.exitCode = exitCode;
   if (signal !== undefined) entry.signal = signal;
   session.history.push(entry);
   if (to === 'active' && session.startedAt === null) session.startedAt = at;
-  // Возобновлённая сессия снова жива, завершённая — фиксирует время выхода.
-  session.endedAt = to === 'active' ? null : at;
+  if (to === 'closed') session.closedAt = at;
+  // Поднятая сессия снова жива; уснувшая или закрытая — фиксирует время выхода.
+  // Закрытие спящей время выхода не сдвигает: процесс ушёл раньше.
+  if (to === 'active') session.endedAt = null;
+  else if (session.endedAt === null) session.endedAt = at;
+  return session;
+}
+
+/**
+ * Ставит итог из `report`. Процесс он не меняет (спецификация 7.1); после
+ * `closed` итог не принимается — закрытая сессия уже ничего не сдаёт.
+ */
+export function setResult(
+  map: WorkMap,
+  sessionId: string,
+  result: SessionResult,
+  at = new Date().toISOString(),
+): WorkSession {
+  const session = findSession(map, sessionId);
+  if (session.lifecycle === 'closed') {
+    throw new Error(`сессия ${sessionId} закрыта: итог ${result} не принят`);
+  }
+  session.result = result;
+  session.resultAt = at;
+  session.history.push({ event: result, at });
   return session;
 }
 
@@ -229,19 +266,39 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
  */
 const LEGACY_IDLE = 'idle';
 
-/** Запись сессии проверяем по полям, от которых зависят мутации: id, статус, history. */
-const isSessionShape = (value: unknown): boolean =>
-  isRecord(value) &&
-  typeof value.id === 'string' &&
-  typeof value.status === 'string' &&
-  (Object.hasOwn(TRANSITIONS, value.status) || value.status === LEGACY_IDLE) &&
-  Array.isArray(value.history);
+/** Единый статус карты v1 — вход миграции в две оси. */
+const V1_STATUSES: readonly string[] = [
+  'pending',
+  'active',
+  'exited',
+  'done',
+  'failed',
+  LEGACY_IDLE,
+];
 
-const isMessageShape = (value: unknown): boolean => isRecord(value) && typeof value.id === 'string';
+/** Запись сессии проверяем по полям, от которых зависят мутации: id, статус, history. */
+const isSessionShape =
+  (version: 1 | 2) =>
+  (value: unknown): boolean =>
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    (version === 1
+      ? typeof value.status === 'string' && V1_STATUSES.includes(value.status)
+      : typeof value.lifecycle === 'string' && Object.hasOwn(TRANSITIONS, value.lifecycle)) &&
+    Array.isArray(value.history);
+
+/** У письма v2 адресаты — массив: по нему идут `removeSession` и `recipientsOf`. */
+const isMessageShape =
+  (version: 1 | 2) =>
+  (value: unknown): boolean =>
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    (version === 1 ? typeof value.to === 'string' : Array.isArray(value.to));
 
 /**
  * Разбирает карту. Форма undocumented-логов тут ни при чём: файл пишем мы сами,
- * поэтому чужая форма — повод отказаться, а не догадываться (раздел 8).
+ * поэтому чужая форма — повод отказаться, а не догадываться (раздел 8). Карта
+ * v1 поднимается до v2 в памяти; на диск v2 ляжет первой же мутацией.
  */
 export function parseMap(raw: string, file: string): WorkMap {
   let data: unknown;
@@ -252,17 +309,26 @@ export function parseMap(raw: string, file: string): WorkMap {
   }
 
   const work = isRecord(data) ? data.work : undefined;
+  const version = isRecord(data) ? data.schemaVersion : undefined;
   if (
     !isRecord(data) ||
-    data.schemaVersion !== 1 ||
+    (version !== 1 && version !== 2) ||
     !isRecord(work) ||
     typeof work.id !== 'string' ||
     !Array.isArray(data.sessions) ||
     !Array.isArray(data.messages) ||
-    !data.sessions.every(isSessionShape) ||
-    !data.messages.every(isMessageShape)
+    (version === 2 && !Array.isArray(data.rooms)) ||
+    !data.sessions.every(isSessionShape(version)) ||
+    !data.messages.every(isMessageShape(version))
   ) {
     throw new Error(`карта ${file} не парсится: неожиданная форма`);
+  }
+
+  if (version === 1) {
+    for (const session of data.sessions as Record<string, unknown>[]) migrateSessionV1(session);
+    for (const message of data.messages as Record<string, unknown>[]) migrateMessageV1(message);
+    data.rooms = [];
+    data.schemaVersion = 2;
   }
 
   const map = data as unknown as WorkMap;
@@ -276,6 +342,47 @@ export function parseMap(raw: string, file: string): WorkMap {
 }
 
 /**
+ * Единый статус v1 → две оси (план этапа 3, 3.1). Выход процесса стал сном:
+ * такую сессию письмо поднимает. Отчитавшаяся тоже спит, но с итогом — если её
+ * процесс на деле жив, сверка живости вернёт её в `active`.
+ */
+function migrateSessionV1(session: Record<string, unknown>): void {
+  const status = session['status'] === LEGACY_IDLE ? 'active' : session['status'];
+  const history = session['history'] as unknown[];
+  for (const entry of history) {
+    if (!isRecord(entry)) continue;
+    const event = entry['status'];
+    entry['event'] = event === 'exited' ? 'sleeping' : event === LEGACY_IDLE ? 'active' : event;
+    delete entry['status'];
+  }
+
+  if (status === 'done' || status === 'failed') {
+    session['lifecycle'] = 'sleeping';
+    session['result'] = status;
+    const last = [...history]
+      .reverse()
+      .find((entry) => isRecord(entry) && entry['event'] === status);
+    session['resultAt'] = isRecord(last) && typeof last['at'] === 'string' ? last['at'] : null;
+  } else {
+    session['lifecycle'] = status === 'exited' ? 'sleeping' : status;
+    session['result'] = null;
+    session['resultAt'] = null;
+  }
+  session['closedAt'] = null;
+  delete session['status'];
+}
+
+/** Один адресат v1 → список; отметка прочтения v1 была его, она и переезжает. */
+function migrateMessageV1(message: Record<string, unknown>): void {
+  const to = message['to'] as string;
+  const readAt = message['readAt'];
+  message['roomId'] = null;
+  message['to'] = [to];
+  message['readBy'] = typeof readAt === 'string' ? { [to]: readAt } : {};
+  delete message['readAt'];
+}
+
+/**
  * Письма до 2026-09-08 вида не знали: заметка (спецификация 2026-09-08, 3.1).
  * Миграция при чтении, как у `idle`: читатели карты дефолта не знают, а файл
  * получит поле при первой же мутации.
@@ -284,19 +391,8 @@ function migrateMessage(message: Record<string, unknown>): void {
   message['kind'] ??= 'note';
 }
 
-/**
- * Приводит запись сессии к текущей форме: `idle` становится `active` (и в
- * `history` тоже — иначе в архиве остался бы статус, которого больше нет), а
- * полей процесса в старых картах просто не было.
- */
+/** Полей процесса в старых картах просто не было. */
 function migrateSession(session: Record<string, unknown>): void {
-  if (session['status'] === LEGACY_IDLE) session['status'] = 'active';
-  const history = session['history'];
-  if (Array.isArray(history)) {
-    for (const entry of history) {
-      if (isRecord(entry) && entry['status'] === LEGACY_IDLE) entry['status'] = 'active';
-    }
-  }
   session['pid'] ??= null;
   session['startedAtProcess'] ??= null;
   session['launchedBy'] ??= null;

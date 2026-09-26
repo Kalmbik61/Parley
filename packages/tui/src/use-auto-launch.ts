@@ -11,7 +11,7 @@
  * pending удвоил бы процесс агента.
  */
 
-import { hostLeaseActive, type WorkEntry, type WorkSession } from '@harnas/core';
+import { displayStatus, hostLeaseActive, type WorkEntry, type WorkSession } from '@harnas/core';
 import { useEffect, useRef } from 'react';
 
 export interface AutoLaunchOptions {
@@ -47,7 +47,7 @@ export function useAutoLaunch({ works, loading, enabled, launch }: AutoLaunchOpt
       for (const session of entry.map.sessions) {
         if (known.current.has(session.id)) continue;
         known.current.add(session.id);
-        if (!enabled || session.status !== 'pending' || session.parent === null) continue;
+        if (!enabled || displayStatus(session) !== 'pending' || session.parent === null) continue;
         candidates.push({ projectPath: entry.projectPath, workId: entry.map.work.id, session });
       }
     }

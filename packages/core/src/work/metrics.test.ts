@@ -299,17 +299,17 @@ async function workWithActiveSession(providerSessionId: string | null): Promise<
 }
 
 describe('finishSession', () => {
-  it('фиксирует метрики в карте при переходе в exited', async () => {
+  it('фиксирует метрики в карте при уходе в sleeping', async () => {
     const workId = await workWithActiveSession('session-1');
 
-    await finishSession(project, workId, 's-01', 'exited', {
+    await finishSession(project, workId, 's-01', 'sleeping', {
       claudeRoot: FIXTURES,
       at: '2026-08-26T13:10:00.000Z',
       exitCode: 0,
     });
 
     const [session] = (await readMap(project, workId)).sessions;
-    expect(session?.status).toBe('exited');
+    expect(session?.lifecycle).toBe('sleeping');
     expect(session?.endedAt).toBe('2026-08-26T13:10:00.000Z');
     expect(session?.metrics).toEqual({
       durationMs: SESSION_1.durationMs,
@@ -317,7 +317,7 @@ describe('finishSession', () => {
       toolCalls: SESSION_1.toolCalls,
     });
     expect(session?.history.at(-1)).toEqual({
-      status: 'exited',
+      event: 'sleeping',
       at: '2026-08-26T13:10:00.000Z',
       exitCode: 0,
     });
@@ -329,27 +329,29 @@ describe('finishSession', () => {
     await finishSession(project, workId, 's-01', 'done', { claudeRoot: FIXTURES });
 
     const [session] = (await readMap(project, workId)).sessions;
-    expect(session?.status).toBe('done');
+    expect(session?.result).toBe('done');
+    // Итог процесс не меняет (спецификация 7.1).
+    expect(session?.lifecycle).toBe('active');
     expect(session?.metrics?.tokens).toEqual(SESSION_1.tokens);
   });
 
   it('сессия не привязана к логу — статус меняется, метрики остаются null', async () => {
     const workId = await workWithActiveSession(null);
 
-    await finishSession(project, workId, 's-01', 'exited', { claudeRoot: FIXTURES });
+    await finishSession(project, workId, 's-01', 'sleeping', { claudeRoot: FIXTURES });
 
     const [session] = (await readMap(project, workId)).sessions;
-    expect(session?.status).toBe('exited');
+    expect(session?.lifecycle).toBe('sleeping');
     expect(session?.metrics).toBeNull();
   });
 
   it('лог провайдера уже почистили — статус меняется, метрики остаются null', async () => {
     const workId = await workWithActiveSession('никакого-лога-нет');
 
-    await finishSession(project, workId, 's-01', 'exited', { claudeRoot: FIXTURES });
+    await finishSession(project, workId, 's-01', 'sleeping', { claudeRoot: FIXTURES });
 
     const [session] = (await readMap(project, workId)).sessions;
-    expect(session?.status).toBe('exited');
+    expect(session?.lifecycle).toBe('sleeping');
     expect(session?.metrics).toBeNull();
   });
 
@@ -363,8 +365,8 @@ describe('finishSession', () => {
       'utf8',
     );
 
-    // pending → exited в таблице переходов раздела 6 нет: процесс ещё не запускали.
-    await expect(finishSession(project, map.work.id, 's-01', 'exited')).rejects.toThrow(
+    // pending → sleeping в таблице переходов нет: процесс ещё не запускали.
+    await expect(finishSession(project, map.work.id, 's-01', 'sleeping')).rejects.toThrow(
       /недопустимый переход/,
     );
     expect(

@@ -4,20 +4,31 @@ import type { TokenTotals } from '../counters.js';
 export type WorkStatus = 'active' | 'done' | 'archived';
 
 /**
- * Статус сессии. Первые три ставит харнесс по PTY, хукам и логам, `done` и
- * `failed` приходят только из отчёта агента (спецификация, раздел 3).
- *
- * `idle` удалён 2026-09-05 (ревью TUI v2): простой живого агента описывает не
- * карта, а `activity`; старые карты с `idle` читаются как `active`.
+ * Прежний единый статус сессии (карта v1). В карте его больше нет: с v2 он
+ * собирается из двух осей функцией `displayStatus` (`status-view.ts`) —
+ * замороженный TUI и точки окна рисуют именно его.
  */
 export type SessionStatus = 'pending' | 'active' | 'exited' | 'done' | 'failed';
 
 /**
- * Одна ступень жизненного цикла. Код выхода и сигнал есть только у перехода
- * в `exited`; ДЕТАЛИ показывают их как «код 0» или «сигнал 9» (дизайн TUI, раздел 3).
+ * Ось процесса (спецификация 7.1): `sleeping` — процесса нет, но сессия на связи
+ * и письмо её поднимает; `closed` — закрыта явно и писем не получает.
+ */
+export type SessionLifecycle = 'pending' | 'active' | 'sleeping' | 'closed';
+
+/**
+ * Ось итога: приходит только из `report` и процесс не меняет — после
+ * `report(done)` сессия остаётся `active` (спецификация 7.1).
+ */
+export type SessionResult = 'done' | 'failed';
+
+/**
+ * Одна ступень жизни сессии: переход по оси процесса или поставленный итог.
+ * Код выхода и сигнал есть только у ухода в `sleeping` по выходу процесса;
+ * ДЕТАЛИ показывают их как «код 0» или «сигнал 9» (дизайн TUI, раздел 3).
  */
 export interface HistoryEntry {
-  status: SessionStatus;
+  event: SessionLifecycle | SessionResult;
   at: string;
   /** Код выхода; `null` — процесс завершился без нас и код неизвестен. */
   exitCode?: number | null;
@@ -66,7 +77,12 @@ export interface WorkSession {
   parent: string | null;
   /** Сессии, чьи резюме и артефакты попали в бриф. */
   contextFrom: string[];
-  status: SessionStatus;
+  lifecycle: SessionLifecycle;
+  result: SessionResult | null;
+  /** Когда поставлен последний итог; `null` — итога нет. */
+  resultAt: string | null;
+  /** Когда сессию закрыли явно; `null` — не закрыта. */
+  closedAt: string | null;
   history: HistoryEntry[];
   startedAt: string | null;
   endedAt: string | null;
@@ -100,16 +116,41 @@ export interface WorkSession {
 export type MessageKind = 'note' | 'question' | 'decision';
 export const MESSAGE_KINDS: readonly MessageKind[] = ['note', 'question', 'decision'];
 
-/** Сообщение от сессии к сессии: доставляется по pull, живёт в карте. */
+/** Отправитель письма из окна: человек не сессия и id `s-NN` у него нет. */
+export const HUMAN = 'human';
+/** Отправитель системного письма хоста («S05 не поднялась: …»). */
+export const SYSTEM = 'system';
+
+/** Комната — круг участников переписки (спецификация 6.1). */
+export interface Room {
+  /** `r-01`; счётчик `work.roomSeq`, id не переиспользуется. */
+  id: string;
+  title: string;
+  /** Id сессии-создателя или `human`. */
+  creator: string;
+  /** Id сессий; человек — участник всегда и в список не пишется. */
+  members: string[];
+  createdAt: string;
+}
+
+/** Письмо: доставляется по pull, живёт в карте. */
 export interface Message {
   id: string;
+  /** Комната письма; `null` — прямое письмо, как до комнат. */
+  roomId: string | null;
+  /** Id сессии, `human` или `system`. */
   from: string;
-  to: string;
+  /** Адресаты; в комнате пустой список значит «всем участникам» (`recipientsOf`). */
+  to: string[];
   at: string;
   text: string;
   /** На диске может отсутствовать (карты до 2026-09-08): `parseMap` подставляет `note`. */
   kind: MessageKind;
-  readAt: string | null;
+  /**
+   * Отметки прочтения по адресатам: у рассылки комнаты каждый читает сам, и
+   * одна отметка на письмо спрятала бы его от тех, кто ещё не прочёл.
+   */
+  readBy: Record<string, string>;
   /**
    * Отправитель или получатель удалён (план от 2026-09-06, раздел C). Само
    * письмо остаётся: переписку не переписывают задним числом, но отвечать на
@@ -136,14 +177,20 @@ export interface Work {
    * `state: deleted` вместо ошибки «сессии нет в карте».
    */
   deletedSessions?: string[];
+  /** Сколько номеров комнат уже выдано: id комнаты, как и сессии, не переиспользуется. */
+  roomSeq?: number;
 }
 
-/** Карта работы — один файл `map.json`, пишет только харнесс. */
+/**
+ * Карта работы — один файл `map.json`, пишет только харнесс. Версия 2 — с
+ * комнатами и двумя осями сессии; карту v1 `parseMap` поднимает при чтении.
+ */
 export interface WorkMap {
-  schemaVersion: 1;
+  schemaVersion: 2;
   work: Work;
   sessions: WorkSession[];
   messages: Message[];
+  rooms: Room[];
 }
 
 /** Запись глобального индекса работ `HARNAS_HOME/works-index.json`. */

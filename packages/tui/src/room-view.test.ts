@@ -26,7 +26,10 @@ function session(over: Partial<WorkSession> = {}): WorkSession {
     task: 'составить план',
     parent: null,
     contextFrom: [],
-    status: 'active',
+    lifecycle: 'active',
+    result: null,
+    resultAt: null,
+    closedAt: null,
     history: [],
     startedAt: at('12:30'),
     endedAt: null,
@@ -52,7 +55,16 @@ function letter(
   text: string,
   readAt: string | null = at('12:44'),
 ): Message {
-  return { id, from, to, at: at(time), text, kind, readAt };
+  return {
+    id,
+    roomId: null,
+    from,
+    to: [to],
+    at: at(time),
+    text,
+    kind,
+    readBy: readAt === null ? {} : { [to]: readAt },
+  };
 }
 
 function entry(
@@ -63,7 +75,8 @@ function entry(
   return {
     projectPath: '/dev/shop',
     map: {
-      schemaVersion: 1,
+      schemaVersion: 2,
+      rooms: [],
       work: {
         id: 'w-0042',
         title: 'Авторизация',

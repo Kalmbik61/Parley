@@ -8,6 +8,7 @@
 
 import {
   applyAutoTitle,
+  displayStatus,
   finishSession,
   NEW_LABEL,
   reconcileMap,
@@ -67,11 +68,11 @@ export function useMapSync({
   useEffect(() => {
     for (const entry of works) {
       for (const session of entry.map.sessions) {
-        if (session.status !== 'active' || ended.current.has(session.id)) continue;
+        if (displayStatus(session) !== 'active' || ended.current.has(session.id)) continue;
         if (held(workRunKey(entry.projectPath, entry.map.work.id, session.id))) continue;
         if (activityOf(session.id)?.exited !== true) continue;
         ended.current = new Set([...ended.current, session.id]);
-        void finishSession(entry.projectPath, entry.map.work.id, session.id, 'exited', {
+        void finishSession(entry.projectPath, entry.map.work.id, session.id, 'sleeping', {
           exitCode: null,
           ...roots,
         }).catch(() => {});

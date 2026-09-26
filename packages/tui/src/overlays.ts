@@ -8,9 +8,14 @@
  */
 
 import {
+  displayStatus,
   ENV_NAMES,
+  historyStatus,
+  isUnreadFor,
   participantLabel,
+  recipientsOf,
   type HarnasConfig,
+  type Message,
   type SessionActivity,
   type SessionIndex,
   type TokenTotals,
@@ -72,7 +77,7 @@ function tokensLine(tokens: TokenTotals | null, g: Glyphs): string {
 
 /** Последняя ступень истории в нынешнем статусе: из неё время и код выхода. */
 const lastStep = (session: WorkSession): WorkSession['history'][number] | undefined =>
-  [...session.history].reverse().find((entry) => entry.status === session.status);
+  [...session.history].reverse().find((entry) => historyStatus(entry) === displayStatus(session));
 
 /**
  * СОСТ.: у живой — activity, длительность и время с последнего события любой
@@ -89,9 +94,9 @@ function stateLine(
 ): string {
   const glyph = dotGlyph(state, g);
   const step = lastStep(session);
-  if (session.status === 'pending') return `${glyph} pending`;
+  if (displayStatus(session) === 'pending') return `${glyph} pending`;
 
-  if (session.status === 'active') {
+  if (displayStatus(session) === 'active') {
     const started = session.startedAt === null ? null : now - Date.parse(session.startedAt);
     // «Молчит Nм» считается от последнего события любой оси (4.3); секунды здесь
     // важны, поэтому берётся длительность, а не короткая форма «сейчас». Событий
@@ -113,7 +118,7 @@ function stateLine(
         : '';
   const duration =
     session.metrics === null ? '' : ` · ${formatDuration(session.metrics.durationMs)}`;
-  return `${glyph} ${session.status} ${at}${duration}${code}`;
+  return `${glyph} ${displayStatus(session)} ${at}${duration}${code}`;
 }
 
 /** СВОДКА: чей отчёт и есть ли он вообще (макет 4.1). */
@@ -121,10 +126,16 @@ function summaryLine(session: WorkSession, prefix: string, summarizing: boolean)
   // Дозаказ уже идёт: пометка стоит здесь, а не только в строке статуса (4.1).
   if (summarizing) return 'авто-резюме: считается…';
   if (session.summary === null) {
-    return session.status === 'exited' ? `(отчёта нет) · ${prefix} R — дозаказать` : '(отчёта нет)';
+    return displayStatus(session) === 'exited'
+      ? `(отчёта нет) · ${prefix} R — дозаказать`
+      : '(отчёта нет)';
   }
   const mark =
-    session.summarySource === 'auto' ? 'авто: ' : session.status === 'active' ? 'progress: ' : '';
+    session.summarySource === 'auto'
+      ? 'авто: '
+      : displayStatus(session) === 'active'
+        ? 'progress: '
+        : '';
   return `${mark}«${session.summary}»`;
 }
 
@@ -175,19 +186,22 @@ export function detailsView({
   add('СВОДКА', summaryLine(session, prefix, summarizing));
 
   // ВХОДЯЩИЕ: непрочитанные с `▤` первыми, затем последние прочитанные (dim).
-  const inbox = entry.map.messages.filter((message) => message.to === session.id);
-  const unread = inbox.filter((message) => message.readAt === null);
-  const read = inbox.filter((message) => message.readAt !== null).slice(-READ_SHOWN);
+  const inbox = entry.map.messages.filter((message) =>
+    recipientsOf(message, entry.map).includes(session.id),
+  );
+  const fresh = (message: Message): boolean => isUnreadFor(message, session.id, entry.map);
+  const unread = inbox.filter(fresh);
+  const read = inbox.filter((message) => !fresh(message)).slice(-READ_SHOWN);
   const shown = [...unread, ...read.reverse()];
   if (shown.length === 0) add('ВХОДЯЩИЕ', '—', 1);
   for (const [at, message] of shown.entries()) {
-    const mark = message.readAt === null ? `${g.mail} ` : '';
+    const mark = fresh(message) ? `${g.mail} ` : '';
     // Подпись участника одна на бриф, тред, события и детали (решение D9):
     // у удалённой сессии ярлыка в карте уже нет, и её след подписан «(удалена)».
     const from = participantLabel(entry.map, message.from);
     const text = `${mark}${from} ${formatClock(message.at)} «${message.text}»`;
     const rows = field(at === 0 ? 'ВХОДЯЩИЕ' : '', text, width, 1, g);
-    lines.push(...rows.map((row) => ({ ...row, dim: message.readAt !== null })));
+    lines.push(...rows.map((row) => ({ ...row, dim: !fresh(message) })));
   }
 
   if (session.artifacts.length === 0) add('АРТЕФ.', '—', 1);
@@ -202,7 +216,7 @@ export function detailsView({
   add(
     'ИСТОРИЯ',
     session.history
-      .map((step) => `${statusGlyph(step.status, g)} ${formatClock(step.at)}`)
+      .map((step) => `${statusGlyph(historyStatus(step), g)} ${formatClock(step.at)}`)
       .join(` ${g.arrow} `),
     2,
   );

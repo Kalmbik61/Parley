@@ -12,8 +12,10 @@ import { commandInPath, loadProviders } from '../providers.js';
 import { agentDirs, assertAgent } from '../work/agents.js';
 import { writeBrief } from '../work/brief.js';
 import { GUIDE } from '../work/guide.js';
+import { unreadFor } from '../work/letters.js';
 import { addMessage, addSession } from '../work/map.js';
 import { finishSession } from '../work/metrics.js';
+import { displayStatus } from '../work/status-view.js';
 import { readMap, updateMap, workPaths } from '../work/store.js';
 import {
   MESSAGE_KINDS,
@@ -35,8 +37,17 @@ export const MAX_TIMEOUT_SEC = 30 * 60;
 /** Как часто перечитывать карту, когда `fs.watch` промолчал. */
 const POLL_MS = 2000;
 
-/** Статусы, на которых `wait_for` перестаёт ждать (спецификация, раздел 4). */
-const FINISHED = ['done', 'failed', 'exited'] as const;
+/**
+ * Состояние, на котором `wait_for` перестаёт ждать (спецификация 7.1): у цели
+ * есть итог или процесса больше нет — ушла в `sleeping` или `closed`. `null` —
+ * цель ещё работает.
+ */
+function finishedState(session: WorkSession): string | null {
+  if (session.result !== null) return session.result;
+  return session.lifecycle === 'sleeping' || session.lifecycle === 'closed'
+    ? session.lifecycle
+    : null;
+}
 
 /** Скользящий час для окна писем (разговор агентов, 4.7, решение D20). */
 export const RATE_WINDOW_MS = 60 * 60 * 1000;
@@ -119,9 +130,6 @@ function requireSession(map: WorkMap, sessionId: string): WorkSession {
   if (session === undefined) throw new Error(`сессии ${sessionId} нет в карте`);
   return session;
 }
-
-const unread = (map: WorkMap, sessionId: string): Message[] =>
-  map.messages.filter((message) => message.to === sessionId && message.readAt === null);
 
 const messageView = (message: Message) => ({
   id: message.id,
@@ -290,7 +298,9 @@ async function report(
   const session = requireSession(map, sessionId);
   return {
     sessionId,
-    status: session.status,
+    // Ответ прежней формы: сданный итог виден сразу, даже у сессии, которую
+    // харнесс ещё не отметил запущенной.
+    status: session.result ?? displayStatus(session),
     summary: session.summary,
     artifacts: session.artifacts,
   };
@@ -359,7 +369,7 @@ async function waitFor(
   let probe: () => Promise<unknown | null>;
   if (target === 'inbox') {
     probe = async () => {
-      const messages = unread(await read(), sessionId);
+      const messages = unreadFor(await read(), sessionId);
       return messages.length === 0
         ? null
         : { state: 'message', messages: messages.map(messageView) };
@@ -381,9 +391,10 @@ async function waitFor(
       if (found === undefined && existed) return { state: 'deleted', sessionId: target };
       const session = requireSession(map, target);
       existed = true;
-      return (FINISHED as readonly string[]).includes(session.status)
+      const state = finishedState(session);
+      return state !== null
         ? {
-            state: session.status,
+            state,
             sessionId: target,
             summary: session.summary,
             artifacts: session.artifacts,
@@ -418,7 +429,7 @@ async function sendMessage(
     requireSession(current, sessionId);
     requireSession(current, to);
     assertRate(current, sessionId, context.messageRate ?? DEFAULT_CONFIG.messageRate, Date.now());
-    created = addMessage(current, { from: sessionId, to, text, kind }).id;
+    created = addMessage(current, { from: sessionId, to: [to], text, kind }).id;
   });
   return { messageId: created };
 }
@@ -428,9 +439,9 @@ async function checkInbox(context: McpContext, sessionId: string): Promise<unkno
   const at = new Date().toISOString();
   await updateMap(context.projectPath, context.workId, (current) => {
     requireSession(current, sessionId);
-    const inbox = unread(current, sessionId);
+    const inbox = unreadFor(current, sessionId);
     messages = inbox.map((message) => ({ ...message }));
-    for (const message of inbox) message.readAt = at;
+    for (const message of inbox) message.readBy[sessionId] = at;
   });
   return { messages: messages.map(messageView) };
 }

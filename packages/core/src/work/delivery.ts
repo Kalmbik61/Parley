@@ -13,7 +13,7 @@ export interface DeliveryInput {
   activity: SessionActivity | null;
   hasDraft: boolean;
   paused: boolean;
-  /** Письма сессии с `readAt === null`, без удалённых. */
+  /** Непрочитанные письма сессии (`unreadFor`); удалённые отсеет сама доставка. */
   unread: readonly Message[];
   /** Id писем, на которые указатель уже печатали — второй раз не набираем. */
   pointed: ReadonlySet<string>;
@@ -47,7 +47,7 @@ export function deliveryAction(input: DeliveryInput): DeliveryAction {
     return { kind: 'none', reason: 'already-pointed' };
   }
 
-  if (session.status !== 'active') return { kind: 'none', reason: 'not-live' };
+  if (session.lifecycle !== 'active') return { kind: 'none', reason: 'not-live' };
   if (activity === null || (activity.activity !== 'unseen' && activity.activity !== 'idle')) {
     return { kind: 'none', reason: 'busy' };
   }

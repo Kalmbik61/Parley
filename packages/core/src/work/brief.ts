@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { displayStatus } from './status-view.js';
 import { workPaths } from './store.js';
 import { decisionsOf, participantLabel, threadOf } from './thread.js';
 import type { WorkMap, WorkSession } from './types.js';
@@ -74,7 +75,7 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
         ...(mate.agent === null ? [] : [`агент ${mate.agent}`]),
       ];
       const mark = marks.length === 0 ? '' : ` (${marks.join(', ')})`;
-      lines.push(`- ${mate.id} — ${mate.label}${mark}: ${mate.status}`);
+      lines.push(`- ${mate.id} — ${mate.label}${mark}: ${displayStatus(mate)}`);
     }
     lines.push('');
   }

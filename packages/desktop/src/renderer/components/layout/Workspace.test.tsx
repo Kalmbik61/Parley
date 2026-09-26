@@ -61,7 +61,10 @@ function session(id: string, label: string): WorkSession {
     task: '',
     parent: null,
     contextFrom: [],
-    status: 'active',
+    lifecycle: 'active',
+    result: null,
+    resultAt: null,
+    closedAt: null,
     history: [],
     startedAt: null,
     endedAt: null,
@@ -80,7 +83,8 @@ function session(id: string, label: string): WorkSession {
 const entry: WorkEntry = {
   projectPath: '/tmp/w-01',
   map: {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    rooms: [],
     work: { id: 'w-01', title: 'Работа', goal: '', status: 'active', createdAt: '2026-01-01', updatedAt: '2026-01-01' },
     sessions: [session('s-01', 'план'), session('s-02', 'бэкенд')],
     messages: [],

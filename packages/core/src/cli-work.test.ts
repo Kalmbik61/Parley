@@ -209,7 +209,7 @@ describe('harnas-core work session new', () => {
       task: 'Составить план реализации',
       parent: null,
       contextFrom: [],
-      status: 'pending',
+      lifecycle: 'pending',
       pid: null,
       startedAtProcess: null,
       launchedBy: 'cli',

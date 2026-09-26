@@ -18,6 +18,7 @@ import {
   loadConfig,
   NEW_LABEL,
   openEvents,
+  unreadFor,
   watchEvents,
   workPaths,
   type ActivityLog,
@@ -137,8 +138,7 @@ export function createActivityService(
   }
 
   const unreadOf = (entry: WorkEntry, sessionId: string): number =>
-    entry.map.messages.filter((message) => message.to === sessionId && message.readAt === null)
-      .length;
+    unreadFor(entry.map, sessionId).length;
 
   function metricsFor(
     entry: WorkEntry,
@@ -178,7 +178,7 @@ export function createActivityService(
   /** Привязка сессии к логу провайдера, который не принимает id снаружи (5). */
   function maybeLink(ref: SessionRef, key: string, session: WorkSession): void {
     if (session.providerSessionId !== null || session.startedAt === null) return;
-    if (session.status !== 'active' || linkInFlight.has(key)) return;
+    if (session.lifecycle !== 'active' || linkInFlight.has(key)) return;
     linkInFlight.add(key);
     void linkSession(ref.projectPath, ref.workId, session, roots)
       .catch(() => {})
@@ -192,7 +192,7 @@ export function createActivityService(
     session: WorkSession,
     events: readonly EventRecord[] | null,
   ): void {
-    if (session.launchedBy !== 'host' || session.status !== 'active') return;
+    if (session.launchedBy !== 'host' || session.lifecycle !== 'active') return;
     if (events !== null || hooksMissingNotified.has(key)) return;
     hooksMissingNotified.add(key);
     host.broadcast('host.notice', {

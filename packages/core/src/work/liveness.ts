@@ -13,7 +13,8 @@ import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { DEFAULT_CONFIG } from '../config.js';
 import { finishSession, readSessionMetrics, silenceMs, type MetricsRoots } from './metrics.js';
-import { readMap } from './store.js';
+import { transitionSession } from './map.js';
+import { readMap, updateMap } from './store.js';
 import type { WorkSession } from './types.js';
 
 const run = promisify(execFile);
@@ -122,7 +123,7 @@ export async function checkSession(
 export interface ReconcileOptions extends MetricsRoots {
   now?: number;
   silenceThresholdMs?: number;
-  /** Таймаут `map.lock` для перевода мёртвых сессий в `exited` (кусок 1.4 хоста). */
+  /** Таймаут `map.lock` для перевода мёртвых сессий в `sleeping` (кусок 1.4 хоста). */
   lockTimeoutMs?: number;
 }
 
@@ -134,10 +135,26 @@ async function lastRecordOf(session: WorkSession, roots: MetricsRoots): Promise<
 }
 
 /**
- * Сверяет все `active` сессии работы с состоянием ОС и переводит мёртвые в
- * `exited` (харнесс процесс не ждал, и код выхода в записи `history` — `null`).
- * Возвращает id тех, кого перевела. Вызывается при старте харнесса и по
- * событию watcher, но не по таймеру (раздел 8.2).
+ * Спящая сессия на деле жива: pid есть в ОС, и время его старта совпало с
+ * записанным. Без записанного времени не угадываем — переиспользованный pid
+ * чужого процесса поднял бы сессию, которой нет.
+ */
+async function aliveWhileSleeping(session: WorkSession): Promise<boolean> {
+  if (session.pid === null || session.startedAtProcess === null || !isAlive(session.pid)) {
+    return false;
+  }
+  const actual = await processStartedAt(session.pid);
+  if (actual === null) return false;
+  return Math.abs(Date.parse(actual) - Date.parse(session.startedAtProcess)) <= START_TOLERANCE_MS;
+}
+
+/**
+ * Сверяет сессии работы с состоянием ОС. Мёртвые `active` уходят в `sleeping`
+ * (харнесс процесс не ждал, и код выхода в записи `history` — `null`); `sleeping`
+ * с живым своим процессом возвращается в `active` — так миграция v1 чинит
+ * бывшие `done`, чей процесс ещё работает (план этапа 3, 3.1). Возвращает id
+ * уснувших. Вызывается при старте харнесса и по событию watcher, но не по
+ * таймеру (раздел 8.2).
  */
 export async function reconcileMap(
   projectPath: string,
@@ -145,14 +162,20 @@ export async function reconcileMap(
   {
     now = Date.now(),
     silenceThresholdMs = DEFAULT_CONFIG.silenceThresholdMs,
+    lockTimeoutMs,
     ...roots
   }: ReconcileOptions = {},
 ): Promise<string[]> {
   const map = await readMap(projectPath, workId);
   const dead: string[] = [];
+  const revived: string[] = [];
 
   for (const session of map.sessions) {
-    if (session.status !== 'active') continue;
+    if (session.lifecycle === 'sleeping') {
+      if (await aliveWhileSleeping(session)) revived.push(session.id);
+      continue;
+    }
+    if (session.lifecycle !== 'active') continue;
     // Лог читаем только там, где он и решает: у сессии с pid ответ даёт ОС.
     const lastRecordAt = session.pid === null ? await lastRecordOf(session, roots) : null;
     const { alive } = await checkSession(session, { now, silenceThresholdMs, lastRecordAt });
@@ -160,8 +183,28 @@ export async function reconcileMap(
   }
 
   const at = new Date(now).toISOString();
+  const lock = lockTimeoutMs === undefined ? {} : { lockTimeoutMs };
+  if (revived.length > 0) {
+    await updateMap(
+      projectPath,
+      workId,
+      (current) => {
+        for (const id of revived) {
+          // Пока шла сверка, сессию могли закрыть или поднять — трогаем только спящую.
+          const session = current.sessions.find((candidate) => candidate.id === id);
+          if (session?.lifecycle === 'sleeping') transitionSession(current, id, 'active', { at });
+        }
+      },
+      lock,
+    );
+  }
   for (const id of dead) {
-    await finishSession(projectPath, workId, id, 'exited', { at, exitCode: null, ...roots });
+    await finishSession(projectPath, workId, id, 'sleeping', {
+      at,
+      exitCode: null,
+      ...lock,
+      ...roots,
+    });
   }
   return dead;
 }

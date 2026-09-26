@@ -1,3 +1,4 @@
+import { recipientsOf } from './letters.js';
 import type { Message, WorkMap, WorkSession } from './types.js';
 
 /**
@@ -53,12 +54,14 @@ export function threadOf(map: WorkMap, sessionId: string): Thread {
   // письмо остаётся в том треде, где живёт его второй конец.
   const here = (id: string): boolean => inside.has(id) || gone.has(id);
   const messages = byTime(
-    map.messages.filter(
-      (message) =>
+    map.messages.filter((message) => {
+      const to = recipientsOf(message, map);
+      return (
         here(message.from) &&
-        here(message.to) &&
-        (inside.has(message.from) || inside.has(message.to)),
-    ),
+        to.every(here) &&
+        (inside.has(message.from) || to.some((id) => inside.has(id)))
+      );
+    }),
   );
   return { owner, members, messages };
 }

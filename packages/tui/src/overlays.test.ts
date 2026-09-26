@@ -30,10 +30,13 @@ function session(over: Partial<WorkSession> = {}): WorkSession {
     task: 'Реализовать шаги 1–3 плана',
     parent: null,
     contextFrom: [],
-    status: 'active',
+    lifecycle: 'active',
+    result: null,
+    resultAt: null,
+    closedAt: null,
     history: [
-      { status: 'pending', at: '2026-09-05T09:12:00.000Z' },
-      { status: 'active', at: '2026-09-05T09:14:00.000Z' },
+      { event: 'pending', at: '2026-09-05T09:12:00.000Z' },
+      { event: 'active', at: '2026-09-05T09:14:00.000Z' },
     ],
     startedAt: '2026-09-05T09:14:00.000Z',
     endedAt: null,
@@ -53,7 +56,8 @@ function session(over: Partial<WorkSession> = {}): WorkSession {
 const entry = (over: Partial<WorkEntry['map']> = {}, sessions = [session()]): WorkEntry => ({
   projectPath: '/dev/shop',
   map: {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    rooms: [],
     work: {
       id: 'w-0042',
       title: 'Авторизация',
@@ -127,12 +131,13 @@ describe('детали сессии (макет 4.1)', () => {
   it('34: ВХОДЯЩИЕ подписывают отправителя ярлыком participantLabel (решение D9)', () => {
     const letter = {
       id: 'm-01',
+      roomId: null,
       from: 's-01',
-      to: 's-02',
+      to: ['s-02'],
       at: '2026-09-05T09:41:00.000Z',
       text: 'жду миграции',
       kind: 'note' as const,
-      readAt: null,
+      readBy: {},
     };
     const lines = details({
       entry: entry({
@@ -171,9 +176,9 @@ describe('детали сессии (макет 4.1)', () => {
     const line =
       details({
         session: session({
-          status: 'exited',
+          lifecycle: 'sleeping',
           endedAt: '2026-09-05T09:40:00.000Z',
-          history: [{ status: 'exited', at: '2026-09-05T09:40:00.000Z', exitCode: 0 }],
+          history: [{ event: 'sleeping', at: '2026-09-05T09:40:00.000Z', exitCode: 0 }],
         }),
         state: 'exited',
       }).find((text) => text.includes('СОСТ.')) ?? '';
@@ -182,7 +187,7 @@ describe('детали сессии (макет 4.1)', () => {
   });
 
   it('СВОДКА: пока идёт дозаказ — «авто-резюме: считается…» (макет 4.1)', () => {
-    const exited = session({ status: 'exited', endedAt: '2026-09-05T09:40:00.000Z' });
+    const exited = session({ lifecycle: 'sleeping', endedAt: '2026-09-05T09:40:00.000Z' });
     const line =
       details({ session: exited, state: 'exited', summarizing: true }).find((text) =>
         text.includes('СВОДКА'),
@@ -210,7 +215,7 @@ describe('детали сессии (макет 4.1)', () => {
       details({ session: session({ summary: 'готово', summarySource: 'auto' }) }).join('\n'),
     ).toContain('авто: «готово»');
     expect(
-      details({ session: session({ status: 'exited' }), state: 'exited' }).join('\n'),
+      details({ session: session({ lifecycle: 'sleeping' }), state: 'exited' }).join('\n'),
     ).toContain('ctrl+q R — дозаказать');
   });
 
@@ -221,21 +226,23 @@ describe('детали сессии (макет 4.1)', () => {
           messages: [
             {
               id: 'm-01',
+              roomId: null,
               from: 's-01',
-              to: 's-02',
+              to: ['s-02'],
               at: '2026-09-05T09:12:00.000Z',
               text: 'начинай со схемы',
               kind: 'note',
-              readAt: '2026-09-05T09:13:00.000Z',
+              readBy: { 's-02': '2026-09-05T09:13:00.000Z' },
             },
             {
               id: 'm-02',
+              roomId: null,
               from: 's-01',
-              to: 's-02',
+              to: ['s-02'],
               at: '2026-09-05T09:41:00.000Z',
               text: 'жду миграции',
               kind: 'note',
-              readAt: null,
+              readBy: {},
             },
           ],
         },

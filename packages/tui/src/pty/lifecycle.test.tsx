@@ -82,8 +82,8 @@ describe('жизненный цикл агента', () => {
       const { works } = await readWorksIndex();
       const workId = works[0]?.id as string;
       const session = (await readMap(project, workId)).sessions[0];
-      expect(session?.status).toBe('exited');
-      expect(session?.history.at(-1)).toMatchObject({ status: 'exited', exitCode: 3 });
+      expect(session?.lifecycle).toBe('sleeping');
+      expect(session?.history.at(-1)).toMatchObject({ event: 'sleeping', exitCode: 3 });
     } finally {
       app.unmount();
     }

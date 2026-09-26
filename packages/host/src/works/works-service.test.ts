@@ -108,7 +108,7 @@ describe('источники', () => {
 });
 
 describe('живость', () => {
-  it('карта с active-сессией мёртвого pid после старта становится exited', async () => {
+  it('карта с active-сессией мёртвого pid после старта становится sleeping', async () => {
     const map = await createWork(projectA, { title: 'Работа' });
     await updateMap(projectA, map.work.id, (current) => {
       const created = addSession(current, { provider: 'claude', label: 'план', task: 't' });
@@ -121,7 +121,7 @@ describe('живость', () => {
     await s.start();
 
     const entry = s.entry(projectA, map.work.id);
-    expect(entry?.map.sessions[0]?.status).toBe('exited');
+    expect(entry?.map.sessions[0]?.lifecycle).toBe('sleeping');
   });
 });
 
@@ -170,7 +170,7 @@ describe('лок', () => {
     await s.start();
 
     expect(broadcasts.some((b) => b.event === 'host.notice')).toBe(true);
-    expect(s.entry(projectA, map.work.id)?.map.sessions[0]?.status).toBe('active');
+    expect(s.entry(projectA, map.work.id)?.map.sessions[0]?.lifecycle).toBe('active');
 
     await rm(lockFile, { force: true });
     broadcasts = [];
@@ -178,7 +178,7 @@ describe('лок', () => {
     await createWork(projectB, { title: 'Толчок' });
     await new Promise((resolve) => setTimeout(resolve, 150));
 
-    expect(s.entry(projectA, map.work.id)?.map.sessions[0]?.status).toBe('exited');
+    expect(s.entry(projectA, map.work.id)?.map.sessions[0]?.lifecycle).toBe('sleeping');
   });
 });
 

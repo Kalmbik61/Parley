@@ -6,7 +6,7 @@ import type { WorkMap } from './types.js';
 /** Карта из двух полей: вставке нужны только работа и id сессии. */
 function mapOf(title: string, goal: string): WorkMap {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     work: {
       id: 'w-0001',
       title,
@@ -17,6 +17,7 @@ function mapOf(title: string, goal: string): WorkMap {
     },
     sessions: [],
     messages: [],
+    rooms: [],
   };
 }
 

@@ -10,7 +10,10 @@ const sessionOf = (patch: Partial<WorkSession> = {}): WorkSession => ({
   task: '',
   parent: null,
   contextFrom: [],
-  status: 'active',
+  lifecycle: 'active',
+  result: null,
+  resultAt: null,
+  closedAt: null,
   history: [],
   startedAt: null,
   endedAt: null,
@@ -28,12 +31,13 @@ const sessionOf = (patch: Partial<WorkSession> = {}): WorkSession => ({
 
 const messageOf = (patch: Partial<Message> = {}): Message => ({
   id: 'm-01',
+  roomId: null,
   from: 's-00',
-  to: 's-01',
+  to: ['s-01'],
   at: new Date().toISOString(),
   text: 'привет',
   kind: 'note',
-  readAt: null,
+  readBy: {},
   ...patch,
 });
 
@@ -73,7 +77,7 @@ describe('deliveryAction', () => {
       deliveryAction({
         ...base,
         paused: true,
-        session: sessionOf({ status: 'exited' }),
+        session: sessionOf({ lifecycle: 'sleeping' }),
         hasDraft: true,
       }),
     ).toEqual({ kind: 'none', reason: 'paused' });
@@ -99,8 +103,8 @@ describe('deliveryAction', () => {
   });
 
   it('3. сессия не active — none(not-live)', () => {
-    for (const status of ['pending', 'exited', 'done', 'failed'] as const) {
-      expect(deliveryAction({ ...base, session: sessionOf({ status }) })).toEqual({
+    for (const lifecycle of ['pending', 'sleeping', 'closed'] as const) {
+      expect(deliveryAction({ ...base, session: sessionOf({ lifecycle }) })).toEqual({
         kind: 'none',
         reason: 'not-live',
       });

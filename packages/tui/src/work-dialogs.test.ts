@@ -27,10 +27,13 @@ function session(over: Partial<WorkSession> = {}): WorkSession {
     task: 'шаги 1–3',
     parent: null,
     contextFrom: [],
-    status: 'exited',
+    lifecycle: 'sleeping',
+    result: null,
+    resultAt: null,
+    closedAt: null,
     history: [
-      { status: 'active', at: '2026-09-02T13:00:00.000Z' },
-      { status: 'exited', at: '2026-09-02T14:02:00.000Z', exitCode: 0 },
+      { event: 'active', at: '2026-09-02T13:00:00.000Z' },
+      { event: 'sleeping', at: '2026-09-02T14:02:00.000Z', exitCode: 0 },
     ],
     startedAt: '2026-09-02T13:00:00.000Z',
     endedAt: '2026-09-02T14:02:00.000Z',
@@ -51,7 +54,7 @@ describe('оверлей запуска (макет 4.5)', () => {
     const spec = launchDialog(
       '/dev/shop',
       'w-0042',
-      session({ status: 'pending' }),
+      session({ lifecycle: 'pending' }),
       '# Работа\n\nЗадача: шаги 1–3\n',
       g,
       BODY,
@@ -68,7 +71,7 @@ describe('оверлей запуска (макет 4.5)', () => {
     const spec = launchDialog(
       '/dev/shop',
       'w-0042',
-      session({ status: 'pending', task: '' }),
+      session({ lifecycle: 'pending', task: '' }),
       '# Работа\n',
       g,
       BODY,
@@ -77,7 +80,7 @@ describe('оверлей запуска (макет 4.5)', () => {
   });
 
   it('в узкую строку едет короткая форма пути', () => {
-    const spec = launchDialog('/dev/shop', 'w-0042', session({ status: 'pending' }), '', g, 26);
+    const spec = launchDialog('/dev/shop', 'w-0042', session({ lifecycle: 'pending' }), '', g, 26);
     expect(spec.info).toEqual(['бриф: briefs/s-04.md', 'старт: по брифу']);
   });
 });
@@ -96,7 +99,7 @@ describe('оверлей возобновления (макет 4.6)', () => {
   it('сигнал важнее кода выхода', () => {
     const spec = resumeDialog(
       session({
-        history: [{ status: 'exited', at: '2026-09-02T14:02:00.000Z', exitCode: 0, signal: 9 }],
+        history: [{ event: 'sleeping', at: '2026-09-02T14:02:00.000Z', exitCode: 0, signal: 9 }],
       }),
       'claude --resume 7fa0e1ee-cc7b',
       g,
@@ -106,7 +109,12 @@ describe('оверлей возобновления (макет 4.6)', () => {
 
   it('у завершённой сессии резюме помечено как перезаписываемое', () => {
     const spec = resumeDialog(
-      session({ status: 'done', summary: 'План готов: 5 шагов', summarySource: 'agent' }),
+      session({
+        lifecycle: 'sleeping',
+        result: 'done',
+        summary: 'План готов: 5 шагов',
+        summarySource: 'agent',
+      }),
       'claude --resume 7fa0e1ee-cc7b',
       g,
     );
@@ -146,7 +154,7 @@ describe('оверлей дозаказа резюме (макет 4.7)', () => 
 
 describe('подтверждения (макеты 4.8 и 4.9)', () => {
   it('закрытие сессии называет сигнал, pid и судьбу транскрипта', () => {
-    const spec = closeSessionDialog(session({ status: 'active', pid: 48213 }), g);
+    const spec = closeSessionDialog(session({ lifecycle: 'active', pid: 48213 }), g);
     expect(spec.title).toBe(`закрыть ${g.active} бэкенд`);
     expect(spec.info[0]).toBe('процессу будет послан SIGHUP · pid 48213');
     expect(spec.info[1]).toContain('транскрипт');
@@ -154,7 +162,7 @@ describe('подтверждения (макеты 4.8 и 4.9)', () => {
   });
 
   it('без pid строка о процессе не врёт про несуществующий номер', () => {
-    const spec = closeSessionDialog(session({ status: 'active', pid: null }), g);
+    const spec = closeSessionDialog(session({ lifecycle: 'active', pid: null }), g);
     expect(spec.info[0]).toBe('процессу будет послан SIGHUP');
   });
 
@@ -194,7 +202,7 @@ describe('удаление работы (макеты 4.12 и 4.13)', () => {
   });
 
   it('живая сессия не у харнесса не даёт удалить работу', () => {
-    const spec = deleteWorkBlockedDialog('w-0002', session({ status: 'active' }), g, BODY);
+    const spec = deleteWorkBlockedDialog('w-0002', session({ lifecycle: 'active' }), g, BODY);
 
     expect(spec.title).toBe('удалить работу w-0002');
     expect(spec.info[0]).toContain('«бэкенд» жива');
@@ -231,7 +239,7 @@ describe('удаление сессии (макеты 4.10 и 4.11)', () => {
   });
 
   it('живую вне харнесса сессию не удаляет, а объясняет почему', () => {
-    const spec = deleteBlockedDialog(session({ status: 'active', pid: null }), g, BODY);
+    const spec = deleteBlockedDialog(session({ lifecycle: 'active', pid: null }), g, BODY);
 
     expect(spec.title).toBe(`удалить ${g.active} бэкенд`);
     expect(spec.info[0]).toContain('жива');
@@ -242,7 +250,7 @@ describe('удаление сессии (макеты 4.10 и 4.11)', () => {
   });
 
   it('строка с pid помещается в рамку и сохраняет сам pid', () => {
-    const spec = deleteBlockedDialog(session({ status: 'active', pid: 48213 }), g, BODY);
+    const spec = deleteBlockedDialog(session({ lifecycle: 'active', pid: 48213 }), g, BODY);
 
     expect(spec.info[0]?.length).toBeLessThanOrEqual(BODY);
     expect(spec.info[0]).toContain('pid 48213');

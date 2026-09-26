@@ -6,6 +6,7 @@
  * здесь — только маршрут «клавиша → действие». Всё, что не префикс, уходит гостю.
  */
 
+import { displayStatus } from '@harnas/core';
 import type { WorkSession } from '@harnas/core';
 import { useInput } from 'ink';
 import { useCallback, useMemo, useState } from 'react';
@@ -376,8 +377,8 @@ export function useActions(options: ActionsOptions): ActionsState {
       const id = cursor?.key ?? selection.session;
       if (id === null) return;
       // Не живую сессию `Enter` запускает или возобновляет оверлеем (4.5, 4.6).
-      if (session !== null && session.status !== 'active') {
-        overlays.open(session.status === 'pending' ? 'launch' : 'resume');
+      if (session !== null && displayStatus(session) !== 'active') {
+        overlays.open(displayStatus(session) === 'pending' ? 'launch' : 'resume');
         return;
       }
       selection.attach(id);
@@ -393,8 +394,8 @@ export function useActions(options: ActionsOptions): ActionsState {
   // ей не принадлежит (дизайн комнаты, 3).
   useInput(
     (_input, key) => {
-      if (!key.return || session === null || session.status === 'active') return;
-      overlays.open(session.status === 'pending' ? 'launch' : 'resume');
+      if (!key.return || session === null || displayStatus(session) === 'active') return;
+      overlays.open(displayStatus(session) === 'pending' ? 'launch' : 'resume');
     },
     { isActive: card && !navigating && !selection.room && overlays.kind === null && !awaiting },
   );

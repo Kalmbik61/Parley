@@ -7,7 +7,8 @@ function entry(id: string, createdAt: string): WorkEntry {
   return {
     projectPath: '/tmp/proj',
     map: {
-      schemaVersion: 1,
+      schemaVersion: 2,
+      rooms: [],
       work: { id, title: id, goal: '', status: 'active', createdAt, updatedAt: createdAt },
       sessions: [],
       messages: [],

@@ -12,10 +12,12 @@ import {
   createPendingSession,
   createWork,
   readMap,
+  setResult,
   transitionSession,
   updateMap,
   workPaths,
   type SessionIndex,
+  type SessionStatus,
   type WorkSession,
 } from '@harnas/core';
 import { render } from 'ink-testing-library';
@@ -106,7 +108,7 @@ const open = (sessions: SessionIndex[] = []): ReturnType<typeof render> =>
 /** Работа с одной сессией в нужном статусе: на ней и открываются оверлеи. */
 const workWith = async (
   label: string,
-  status: WorkSession['status'],
+  status: SessionStatus,
   over: Partial<WorkSession> = {},
 ): Promise<{ workId: string; id: string }> => {
   const created = await createWork(project, { title: 'Авторизация', goal: '' });
@@ -115,7 +117,8 @@ const workWith = async (
     const session = addSession(map, { provider: 'claude', label, task: 'шаги 1–3' });
     if (status !== 'pending') transitionSession(map, session.id, 'active');
     if (status !== 'pending' && status !== 'active') {
-      transitionSession(map, session.id, status, { exitCode: 0 });
+      transitionSession(map, session.id, 'sleeping', { exitCode: 0 });
+      if (status !== 'exited') setResult(map, session.id, status);
     }
     Object.assign(session, over);
     id = session.id;
@@ -180,8 +183,8 @@ describe('пикер истории: возобновление (5.3, чек-л�
       const created = (await readMap(project, workId)).sessions.find(
         (item) => item.providerSessionId === uuid,
       );
-      expect(created?.status).toBe('active');
-      expect(created?.history.map((step) => step.status)).toEqual(['active']);
+      expect(created?.lifecycle).toBe('active');
+      expect(created?.history.map((step) => step.event)).toEqual(['active']);
       expect(created?.label).toBe('исправить flaky-тест auth');
 
       // До бинаря доехали `--resume`, конфиг MCP и файл хуков.
@@ -375,7 +378,7 @@ describe('запуск pending (макет 4.5)', () => {
       await new Promise((resolve) => setTimeout(resolve, 150));
       app.stdin.write(ENTER);
       await waitFor(() => (app.lastFrame() ?? '').includes('stub готов'));
-      await waitMap(workId, (map) => map.sessions[0]?.status === 'active');
+      await waitMap(workId, (map) => map.sessions[0]?.lifecycle === 'active');
     } finally {
       app.unmount();
     }
@@ -399,8 +402,8 @@ describe('возобновление и дозаказ резюме (макет�
       await new Promise((resolve) => setTimeout(resolve, 150));
       app.stdin.write(ENTER);
       await waitFor(() => (app.lastFrame() ?? '').includes('flags=--resume'));
-      await waitMap(workId, (map) => map.sessions[0]?.status === 'active');
-      expect((await readMap(project, workId)).sessions[0]?.history.at(-1)?.status).toBe('active');
+      await waitMap(workId, (map) => map.sessions[0]?.lifecycle === 'active');
+      expect((await readMap(project, workId)).sessions[0]?.history.at(-1)?.event).toBe('active');
     } finally {
       app.unmount();
     }

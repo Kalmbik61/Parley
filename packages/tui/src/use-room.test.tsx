@@ -30,7 +30,10 @@ function session(id: string, label: string): WorkSession {
     task: '',
     parent: null,
     contextFrom: [],
-    status: 'active',
+    lifecycle: 'active',
+    result: null,
+    resultAt: null,
+    closedAt: null,
     history: [],
     startedAt: at('12:30'),
     endedAt: null,
@@ -47,14 +50,24 @@ function session(id: string, label: string): WorkSession {
 }
 
 function letter(id: string, time: string, text: string, kind: MessageKind = 'note'): Message {
-  return { id, from: 's-01', to: 's-02', at: at(time), text, kind, readAt: at('12:50') };
+  return {
+    id,
+    roomId: null,
+    from: 's-01',
+    to: ['s-02'],
+    at: at(time),
+    text,
+    kind,
+    readBy: { 's-02': at('12:50') },
+  };
 }
 
 function work(workId: string, title: string, messages: Message[]): WorkEntry {
   return {
     projectPath: '/dev/shop',
     map: {
-      schemaVersion: 1,
+      schemaVersion: 2,
+      rooms: [],
       work: {
         id: workId,
         title,

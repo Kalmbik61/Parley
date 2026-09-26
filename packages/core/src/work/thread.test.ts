@@ -4,7 +4,7 @@ import { decisionsOf, participantLabel, sessionTag, threadOf } from './thread.js
 import type { Message, MessageKind, WorkMap } from './types.js';
 
 const emptyMap = (): WorkMap => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   work: {
     id: 'w-0001',
     title: 'Авторизация',
@@ -15,6 +15,7 @@ const emptyMap = (): WorkMap => ({
   },
   sessions: [],
   messages: [],
+  rooms: [],
 });
 
 const at = (clock: string): string => `2026-09-08T${clock}:00.000Z`;
@@ -25,7 +26,7 @@ const letter = (
   to: string,
   clock: string,
   kind: MessageKind,
-): Message => addMessage(map, { from, to, text: `${from} → ${to}`, kind }, at(clock));
+): Message => addMessage(map, { from, to: [to], text: `${from} → ${to}`, kind }, at(clock));
 
 const ids = (messages: readonly Message[]): string[] => messages.map((message) => message.id);
 

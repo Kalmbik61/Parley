@@ -7,7 +7,14 @@
  * `use-activity.ts`, выбор — `use-selection.ts`, карты — `use-map-sync.ts`.
  */
 
-import { defaultCodexRoot, defaultRoot, type SessionIndex, type WorkSession } from '@harnas/core';
+import {
+  defaultCodexRoot,
+  defaultRoot,
+  isUnreadFor,
+  recipientsOf,
+  type SessionIndex,
+  type WorkSession,
+} from '@harnas/core';
 import { Box, useApp } from 'ink';
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { overlayCovers, OverlayHost } from './components/overlay.js';
@@ -170,7 +177,9 @@ export function App({
       ? null
       : {
           letters: chosenMessages.length,
-          unread: chosenMessages.filter((message) => message.readAt === null).length,
+          unread: chosenMessages.filter((message) =>
+            recipientsOf(message, chosen.map).some((id) => isUnreadFor(message, id, chosen.map)),
+          ).length,
         };
 
   // Модель участника комнаты — из того же индекса логов, откуда сайдбар берёт

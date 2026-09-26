@@ -11,7 +11,10 @@ function session(id: string, label: string): WorkSession {
     task: '',
     parent: null,
     contextFrom: [],
-    status: 'active',
+    lifecycle: 'active',
+    result: null,
+    resultAt: null,
+    closedAt: null,
     history: [],
     startedAt: null,
     endedAt: null,
@@ -30,7 +33,8 @@ function session(id: string, label: string): WorkSession {
 const work: WorkEntry = {
   projectPath: '/tmp/w-01',
   map: {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    rooms: [],
     work: { id: 'w-01', title: 'Платежи', goal: '', status: 'active', createdAt: '2026-01-01', updatedAt: '2026-01-01' },
     sessions: [session('s-01', 'план'), session('s-02', 'бэкенд'), session('s-03', 'фронт')],
     messages: [],
@@ -108,7 +112,8 @@ describe('buildCommands — порядок (тест 3)', () => {
     const emptyWork: WorkEntry = {
       projectPath: '/tmp/w-02',
       map: {
-        schemaVersion: 1,
+        schemaVersion: 2,
+        rooms: [],
         work: { id: 'w-02', title: 'Пусто', goal: '', status: 'active', createdAt: '2026-01-02', updatedAt: '2026-01-02' },
         sessions: [],
         messages: [],

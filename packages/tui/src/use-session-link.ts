@@ -1,4 +1,10 @@
-import { linkSession, type MetricsRoots, type SessionIndex, type WorkEntry } from '@harnas/core';
+import {
+  displayStatus,
+  linkSession,
+  type MetricsRoots,
+  type SessionIndex,
+  type WorkEntry,
+} from '@harnas/core';
 import { useEffect, useRef } from 'react';
 
 export interface SessionLinkOptions {
@@ -27,7 +33,7 @@ export function useSessionLink({ works, sessions, roots }: SessionLinkOptions): 
     for (const entry of works) {
       for (const session of entry.map.sessions) {
         if (session.providerSessionId !== null || session.startedAt === null) continue;
-        if (session.status !== 'active') continue;
+        if (displayStatus(session) !== 'active') continue;
 
         const key = `${entry.projectPath} ${entry.map.work.id} ${session.id}`;
         if (inFlight.current.has(key)) continue;

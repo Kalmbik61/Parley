@@ -11,6 +11,7 @@ import {
   addSession,
   createPendingSession,
   createWork,
+  displayStatus,
   harnasHome,
   readMap,
   readWorksIndex,
@@ -199,7 +200,7 @@ describe('new: быстрая сессия без диалога (5.1)', () => {
     const app = open();
     try {
       const workId = await launch(app);
-      const session = await waitMap(workId, (item) => item.status === 'active');
+      const session = await waitMap(workId, (item) => displayStatus(item) === 'active');
 
       // Работа создана автоматически, с пустой целью (5.1).
       const { works } = await readWorksIndex();
@@ -314,7 +315,7 @@ describe('навигация по сайдбару (3.2, макеты 1.5 и §8
     const app = open();
     try {
       const workId = await launch(app);
-      await waitMap(workId, (item) => item.status === 'active');
+      await waitMap(workId, (item) => displayStatus(item) === 'active');
 
       // Сессия → работа → `new`: пять строк сайдбара обходятся по кругу (3.2).
       await cursorToNew(app);
@@ -343,7 +344,7 @@ describe('навигация по сайдбару (3.2, макеты 1.5 и §8
     const app = open();
     try {
       const workId = await launch(app);
-      await waitMap(workId, (item) => item.status === 'active');
+      await waitMap(workId, (item) => displayStatus(item) === 'active');
 
       // Курсор стоит на `new`, но `c` про курсор не спрашивает: сессия ложится
       // в выбранную работу (3.2).
@@ -371,7 +372,7 @@ describe('переключение работ (2.1, 3.2)', () => {
   /** Две работы с живыми stub: первая сказала «альфа», вторая — «бета». */
   const twoWorks = async (app: ReturnType<typeof render>): Promise<string> => {
     const workId = await launch(app);
-    await waitMap(workId, (item) => item.status === 'active');
+    await waitMap(workId, (item) => displayStatus(item) === 'active');
     app.stdin.write('echo альфа-один\r');
     await waitFor(() => (app.lastFrame() ?? '').includes('альфа-один'));
 
@@ -416,7 +417,7 @@ describe('переключение работ (2.1, 3.2)', () => {
       // Письмо даёт первой работе комнату; второй — нет (сравнение шагов).
       await updateMap(project, workId, (map) => {
         const from = map.sessions[0]?.id ?? 's-01';
-        addMessage(map, { from, to: from, text: 'заметка' });
+        addMessage(map, { from, to: [from], text: 'заметка' });
       });
 
       app.stdin.write(`${PREFIX}1`);
@@ -485,7 +486,7 @@ describe('переключение работ (2.1, 3.2)', () => {
     const app = open();
     try {
       const workId = await launch(app);
-      await waitMap(workId, (item) => item.status === 'active');
+      await waitMap(workId, (item) => displayStatus(item) === 'active');
       await updateMap(project, workId, (map) => {
         const parent = map.sessions[0];
         if (parent !== undefined) parent.summary = 'миграции готовы';
@@ -717,7 +718,7 @@ describe('панель следует за подключённым агенто
     const app = open();
     try {
       const workId = await launch(app);
-      const first = await waitMap(workId, (item) => item.status === 'active');
+      const first = await waitMap(workId, (item) => displayStatus(item) === 'active');
 
       // Вторая сессия той же работы: панель переезжает на неё.
       app.stdin.write(`${PREFIX}c`);
@@ -744,7 +745,7 @@ describe('панель следует за подключённым агенто
     const app = open();
     try {
       const workId = await launch(app);
-      await waitMap(workId, (item) => item.status === 'active');
+      await waitMap(workId, (item) => displayStatus(item) === 'active');
 
       // Первый гость сказал своё — этот экран должен пережить уход панели.
       app.stdin.write('echo альфа-один\r');
@@ -790,7 +791,9 @@ describe('панель следует за подключённым агенто
       // Команда `exit 7` завершила бы stub, будь ввод по-прежнему у него.
       app.stdin.write('exit 7\r');
       await new Promise((resolve) => setTimeout(resolve, 600));
-      expect((await waitSession(workId, (item) => item.id === ours.id)).status).toBe('active');
+      expect(displayStatus(await waitSession(workId, (item) => item.id === ours.id))).toBe(
+        'active',
+      );
 
       // Обратно на нашу сессию, но без подключения: карточка про неё не врёт.
       app.stdin.write(`${PREFIX}s`);
@@ -890,7 +893,7 @@ describe('гашение событий строки статуса (5, 6)', () 
       await updateMap(project, created.work.id, (map) => {
         addMessage(map, {
           from: ids.plan,
-          to: ids.review,
+          to: [ids.review],
           text: 'миграции отдельно',
           kind: 'decision',
         });
@@ -918,7 +921,7 @@ describe('закрытие сессии (3.2, макет 4.8)', () => {
     const app = open();
     try {
       const workId = await launch(app);
-      await waitMap(workId, (item) => item.status === 'active');
+      await waitMap(workId, (item) => displayStatus(item) === 'active');
 
       app.stdin.write(`${PREFIX}x`);
       await waitFor(() => (app.lastFrame() ?? '').includes('SIGHUP'));
@@ -928,8 +931,8 @@ describe('закрытие сессии (3.2, макет 4.8)', () => {
       // Подтверждение подписывается на ввод эффектом: до подписки клавиша пропала бы.
       await new Promise((resolve) => setTimeout(resolve, 150));
       app.stdin.write(ENTER);
-      const session = await waitMap(workId, (item) => item.status === 'exited');
-      expect(session.history.at(-1)?.status).toBe('exited');
+      const session = await waitMap(workId, (item) => displayStatus(item) === 'exited');
+      expect(session.history.at(-1)?.event).toBe('sleeping');
     } finally {
       app.unmount();
     }
@@ -939,11 +942,11 @@ describe('закрытие сессии (3.2, макет 4.8)', () => {
     const app = open();
     try {
       const workId = await launch(app);
-      await waitMap(workId, (item) => item.status === 'active');
+      await waitMap(workId, (item) => displayStatus(item) === 'active');
 
       // Гость вышел сам: в панели карточка «exited» с подсказкой про Enter.
       app.stdin.write('exit 0\r');
-      await waitMap(workId, (item) => item.status === 'exited');
+      await waitMap(workId, (item) => displayStatus(item) === 'exited');
       await waitFor(() => (app.lastFrame() ?? '').includes('Enter — возобновить'));
 
       // Клавише некуда уходить, и Enter делает то, что обещает карточка.
@@ -964,9 +967,9 @@ describe('закрытие сессии (3.2, макет 4.8)', () => {
     const app = open();
     try {
       const workId = await launch(app);
-      await waitMap(workId, (item) => item.status === 'active');
+      await waitMap(workId, (item) => displayStatus(item) === 'active');
       app.stdin.write('exit 0\r');
-      await waitMap(workId, (item) => item.status === 'exited');
+      await waitMap(workId, (item) => displayStatus(item) === 'exited');
       await waitFor(() => (app.lastFrame() ?? '').includes('Enter — возобновить'));
 
       // Карточка захватывает клавиши, но мышь по сайдбару пропадать не должна:
@@ -1002,7 +1005,7 @@ describe('закрытие сессии (3.2, макет 4.8)', () => {
     const app = open();
     try {
       const workId = await launch(app);
-      await waitMap(workId, (item) => item.status === 'active');
+      await waitMap(workId, (item) => displayStatus(item) === 'active');
 
       app.stdin.write(`${PREFIX}q`);
       await waitFor(() => (app.lastFrame() ?? '').includes('живые сессии'));
@@ -1041,7 +1044,7 @@ describe('удаление сессии (3.2, макет 4.10)', () => {
     const app = open();
     try {
       const workId = await launch(app);
-      await waitMap(workId, (item) => item.status === 'active');
+      await waitMap(workId, (item) => displayStatus(item) === 'active');
       await rename(workId, 's-01', 'план');
       // Дочерняя сессия: после удаления родителя она поднимется на уровень.
       app.stdin.write(`${PREFIX}C`);
@@ -1114,7 +1117,9 @@ describe('удаление сессии (3.2, макет 4.10)', () => {
         const session = map.sessions[0];
         if (session !== undefined) session.startedAt = '2020-01-01T00:00:00.000Z';
       });
-      await waitFor2(async () => (await readMap(project, workId)).sessions[0]?.status === 'exited');
+      await waitFor2(
+        async () => (await readMap(project, workId)).sessions[0]?.lifecycle === 'sleeping',
+      );
 
       app.stdin.write(`${PREFIX}d`);
       await confirm(app);
@@ -1128,7 +1133,7 @@ describe('удаление сессии (3.2, макет 4.10)', () => {
     const app = open();
     try {
       const workId = await launch(app);
-      await waitMap(workId, (item) => item.status === 'active');
+      await waitMap(workId, (item) => displayStatus(item) === 'active');
       // Вторая, дочерняя сессия: её PTY тоже у харнесса и тоже закрывается.
       app.stdin.write(`${PREFIX}C`);
       await waitFor2(async () => (await readMap(project, workId)).sessions.length === 2);
@@ -1184,7 +1189,7 @@ describe('удаление сессии (3.2, макет 4.10)', () => {
     const app = open();
     try {
       const workId = await launch(app);
-      await waitMap(workId, (item) => item.status === 'active');
+      await waitMap(workId, (item) => displayStatus(item) === 'active');
 
       app.stdin.write(`${PREFIX}d`);
       await waitFor(() => (app.lastFrame() ?? '').includes('Enter — удалить'));
@@ -1206,7 +1211,7 @@ describe('удаление сессии (3.2, макет 4.10)', () => {
     const app = open();
     try {
       const workId = await launch(app);
-      await waitMap(workId, (item) => item.status === 'active');
+      await waitMap(workId, (item) => displayStatus(item) === 'active');
 
       app.stdin.write(`${PREFIX}d`);
       await confirm(app);
@@ -1284,7 +1289,7 @@ describe('комната работы на месте панели (дизайн
   const giveRoom = async (app: ReturnType<typeof render>, workId: string): Promise<void> => {
     await updateMap(project, workId, (map) => {
       const first = map.sessions[0];
-      if (first !== undefined) addMessage(map, { from: first.id, to: first.id, text: 'заметка' });
+      if (first !== undefined) addMessage(map, { from: first.id, to: [first.id], text: 'заметка' });
     });
     await waitFor(() => (app.lastFrame() ?? '').includes('▤ комната'));
   };
@@ -1297,7 +1302,7 @@ describe('комната работы на месте панели (дизайн
       for (let at = 1; at <= 20; at += 1) {
         const minute = String(at + 9).padStart(2, '0');
         const text = `письмо ${String(at).padStart(2, '0')}`;
-        addMessage(map, { from: plan.id, to: plan.id, text }, `2026-09-08T12:${minute}:00.000Z`);
+        addMessage(map, { from: plan.id, to: [plan.id], text }, `2026-09-08T12:${minute}:00.000Z`);
       }
     });
     return created.work.id;
@@ -1462,7 +1467,8 @@ describe('рамка панели PTY: бюджет размеров (план �
 
       await updateMap(project, workId, (map) => {
         const first = map.sessions[0];
-        if (first !== undefined) addMessage(map, { from: first.id, to: first.id, text: 'заметка' });
+        if (first !== undefined)
+          addMessage(map, { from: first.id, to: [first.id], text: 'заметка' });
       });
       await waitFor(() => (app.lastFrame() ?? '').includes('▤ комната'));
 

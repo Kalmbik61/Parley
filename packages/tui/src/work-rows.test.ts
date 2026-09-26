@@ -10,7 +10,10 @@ function session(over: Partial<WorkSession> = {}): WorkSession {
     task: 'составить план',
     parent: null,
     contextFrom: [],
-    status: 'active',
+    lifecycle: 'active',
+    result: null,
+    resultAt: null,
+    closedAt: null,
     history: [],
     startedAt: '2026-09-05T09:12:00.000Z',
     endedAt: null,
@@ -35,7 +38,7 @@ function entry(projectPath: string, id: string, sessions: WorkSession[] = []): W
     createdAt: '2026-09-05T10:00:00.000Z',
     updatedAt: '2026-09-05T10:00:00.000Z',
   };
-  return { projectPath, map: { schemaVersion: 1, work, sessions, messages: [] } };
+  return { projectPath, map: { schemaVersion: 2, work, sessions, messages: [], rooms: [] } };
 }
 
 const ids = (sessions: WorkSession[]): Array<[string, number]> =>

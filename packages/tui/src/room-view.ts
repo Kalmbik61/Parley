@@ -8,8 +8,11 @@
  */
 
 import {
+  isUnreadFor,
   modelName,
+  recipientsOf,
   sessionTag,
+  type Message,
   type MessageKind,
   type WorkEntry,
   type WorkMap,
@@ -116,6 +119,9 @@ export interface RoomView {
 export function roomView({ entry, width, height, scroll, g, modelOf }: RoomViewOptions): RoomView {
   const map = entry.map;
   const tag = (id: string): string => participantTag(map, id, modelOf);
+  // Письмо непрочитано, пока его не прочёл хоть один адресат.
+  const unseen = (message: Message): boolean =>
+    recipientsOf(message, map).some((id) => isUnreadFor(message, id, map));
   const messages = [...map.messages].sort((a, b) => a.at.localeCompare(b.at));
   const lines: RoomLine[] = [];
 
@@ -125,7 +131,7 @@ export function roomView({ entry, width, height, scroll, g, modelOf }: RoomViewO
   const seen = new Set<string>();
   for (const message of map.messages) {
     seen.add(message.from);
-    seen.add(message.to);
+    for (const id of recipientsOf(message, map)) seen.add(id);
   }
   const participants = treeOrder(map.sessions)
     .map((item) => item.session.id)
@@ -157,10 +163,11 @@ export function roomView({ entry, width, height, scroll, g, modelOf }: RoomViewO
   }
 
   messages.forEach((message, index) => {
-    const fresh = message.readAt === null;
-    const head = `${formatClock(message.at)}  ${tag(message.from)} ${g.arrow} ${tag(
-      message.to,
-    )}${kindSuffix(message.kind)}`;
+    const fresh = unseen(message);
+    const to = recipientsOf(message, map).map(tag).join(', ');
+    const head = `${formatClock(message.at)}  ${tag(message.from)} ${g.arrow} ${to}${kindSuffix(
+      message.kind,
+    )}`;
     // Непрочитанность НЕ гасит письмо (5.3): тон один и тот же для всех писем,
     // непрочитанное отличается только знаком `mark`, который рисует компонент.
     lines.push(fresh ? { text: head, tone: 'head', mark: 'unseen' } : { text: head, tone: 'head' });
@@ -181,7 +188,7 @@ export function roomView({ entry, width, height, scroll, g, modelOf }: RoomViewO
 
   return {
     title: `комната · ${messages.length} ${mailWord(messages.length)}`,
-    unread: messages.filter((message) => message.readAt === null).length,
+    unread: messages.filter(unseen).length,
     lines: window,
     below: total - (start + window.length),
     total,

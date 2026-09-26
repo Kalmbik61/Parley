@@ -71,15 +71,14 @@ export function createSessionsService(
 
   // Запись карты по выходу процесса идёт асинхронно и без ожидания в самом
   // обработчике `exit` (его сигнатура синхронная) — но `stop()`/`delete()`
-  // обязаны вернуться только после того, как карта уже носит `exited`, иначе
+  // обязаны вернуться только после того, как карта уже носит `sleeping`, иначе
   // вызывающая сторона (тест, `sessions.delete`) увидит гонку с ещё не
   // дописанным файлом. Промис по каждой сессии живёт здесь до своего
   // завершения, `stop()` его дожидается следом за самим выходом процесса.
   const finalizing = new Map<string, Promise<void>>();
 
-  // Процесс вышел — карта переходит в `exited` (спецификация, раздел 6).
-  // Сессия, уже отчитавшаяся `done`/`failed`, остаётся в своём статусе — это
-  // проверяет сам `finishExited`.
+  // Процесс вышел — сессия засыпает (спецификация 7.1): письмо её поднимет.
+  // Итог `done`/`failed` — другая ось, выход процесса его не трогает.
   pty.on('exit', (ref, exit) => {
     const key = refKey(ref);
     const done = finishExited(ref.projectPath, ref.workId, ref.sessionId, {
@@ -87,7 +86,7 @@ export function createSessionsService(
       signal: exit.signal ?? undefined,
     })
       .catch((error: unknown) => {
-        host.log.error('переход сессии в exited не записался', { ref, error: String(error) });
+        host.log.error('переход сессии в sleeping не записался', { ref, error: String(error) });
       })
       .finally(() => {
         finalizing.delete(key);

@@ -110,11 +110,17 @@ export function createWorksService(
     }
   }
 
-  /** Сверяет живость `active`-сессий с pid и подставляет в снимок уже пересчитанную карту. */
+  /**
+   * Сверяет живость сессий с pid и подставляет в снимок уже пересчитанную карту.
+   * Спящая с pid тоже кандидат: её процесс может оказаться жив (бывшая `done`
+   * из карты v1), и сверка вернёт её в `active`.
+   */
   async function reconcileLiveness(works: readonly WorkEntry[]): Promise<void> {
     for (const work of works) {
       const hasLiveCandidate = work.map.sessions.some(
-        (session) => session.status === 'active' && session.pid !== null,
+        (session) =>
+          (session.lifecycle === 'active' || session.lifecycle === 'sleeping') &&
+          session.pid !== null,
       );
       if (!hasLiveCandidate) continue;
 

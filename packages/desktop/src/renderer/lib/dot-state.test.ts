@@ -1,9 +1,31 @@
 import { describe, expect, it } from 'vitest';
 import type { Activity, SessionStatus } from '@harnas/core';
-import { dotColorVar, dotState, maxDotState, STATE_WORDS, type DotState } from './dot-state.js';
+import {
+  displayStatus,
+  dotColorVar,
+  dotState,
+  maxDotState,
+  STATE_WORDS,
+  type DotState,
+} from './dot-state.js';
 
 const STATUSES: SessionStatus[] = ['pending', 'active', 'exited', 'done', 'failed'];
 const ACTIVITIES: Array<Activity | null> = ['working', 'blocked', 'unseen', 'idle', null];
+
+describe('displayStatus', () => {
+  // Копия core/work/status-view.ts: та же таблица, что и в её тесте.
+  it.each([
+    ['pending', null, 'pending'],
+    ['active', null, 'active'],
+    ['active', 'done', 'done'],
+    ['sleeping', null, 'exited'],
+    ['sleeping', 'failed', 'failed'],
+    ['closed', null, 'exited'],
+    ['closed', 'done', 'done'],
+  ] as const)('%s + %s → %s', (lifecycle, result, expected) => {
+    expect(displayStatus({ lifecycle, result })).toBe(expected);
+  });
+});
 
 describe('dotState', () => {
   it('таблица всех сочетаний статуса и активности', () => {

@@ -7,7 +7,7 @@
  * тело — существующий `dialog.tsx`.
  */
 
-import { workPaths, type WorkSession } from '@harnas/core';
+import { displayStatus, historyStatus, workPaths, type WorkSession } from '@harnas/core';
 import path from 'node:path';
 import { formatClock, truncate, truncateLeft } from './format.js';
 import { statusGlyph, type Glyphs } from './glyphs.js';
@@ -82,7 +82,9 @@ export function resumePreview(
 
 /** Как сессия закончилась: время, код выхода или сигнал (решение №11). */
 function exitLine(session: WorkSession): string {
-  const last = [...session.history].reverse().find((entry) => entry.status === session.status);
+  const last = [...session.history]
+    .reverse()
+    .find((entry) => historyStatus(entry) === displayStatus(session));
   const at = formatClock(last?.at ?? session.endedAt);
   const mark =
     last?.signal !== undefined && last.signal !== 0
@@ -91,7 +93,7 @@ function exitLine(session: WorkSession): string {
         typeof last?.exitCode === 'number'
         ? `код ${last.exitCode}`
         : null;
-  const head = session.status === 'exited' ? 'вышла' : 'завершилась';
+  const head = displayStatus(session) === 'exited' ? 'вышла' : 'завершилась';
   return mark === null ? `${head} ${at}` : `${head} ${at} · ${mark}`;
 }
 
@@ -104,7 +106,7 @@ function summaryLine(session: WorkSession, g: Glyphs): string {
 /** 4.6. Тот же оверлей для `○ exited` и для завершённых `✓` / `✗`. */
 export function resumeDialog(session: WorkSession, command: string, g: Glyphs): DialogSpec {
   return {
-    title: `возобновить ${statusGlyph(session.status, g)} ${session.label}`,
+    title: `возобновить ${statusGlyph(displayStatus(session), g)} ${session.label}`,
     info: [command, exitLine(session), summaryLine(session, g)],
     quote: [],
     footer: 'Enter — возобновить · Esc',
@@ -117,7 +119,7 @@ export function resumeDialog(session: WorkSession, command: string, g: Glyphs): 
  */
 export function summaryDialog(session: WorkSession, g: Glyphs): DialogSpec {
   return {
-    title: `резюме для ${statusGlyph(session.status, g)} ${session.label}`,
+    title: `резюме для ${statusGlyph(displayStatus(session), g)} ${session.label}`,
     info: ['один вызов claude -p по транскрипту', 'результат — сводка с пометкой «авто»'],
     quote: [],
     footer: 'Enter — заказать · Esc',
@@ -130,7 +132,7 @@ export function summaryDialog(session: WorkSession, g: Glyphs): DialogSpec {
  */
 export function closeSessionDialog(session: WorkSession, g: Glyphs): DialogSpec {
   return {
-    title: `закрыть ${statusGlyph(session.status, g)} ${session.label}`,
+    title: `закрыть ${statusGlyph(displayStatus(session), g)} ${session.label}`,
     info: [
       `процессу будет послан SIGHUP${session.pid === null ? '' : ` · pid ${session.pid}`}`,
       'транскрипт останется в ~/.claude',
@@ -158,7 +160,7 @@ export function deleteSessionDialog(
     );
   }
   return {
-    title: `удалить ${statusGlyph(session.status, g)} ${session.label}`,
+    title: `удалить ${statusGlyph(displayStatus(session), g)} ${session.label}`,
     info,
     quote: [],
     footer: 'Enter — удалить · Esc',
@@ -176,7 +178,7 @@ export function deleteBlockedDialog(session: WorkSession, g: Glyphs, width: numb
   // именно номер, ради которого строка и длиннее.
   const alive = 'сессия жива, но её процесс не у харнесса';
   return {
-    title: `удалить ${statusGlyph(session.status, g)} ${session.label}`,
+    title: `удалить ${statusGlyph(displayStatus(session), g)} ${session.label}`,
     info: [
       session.pid === null
         ? alive

@@ -9,8 +9,10 @@
 import {
   addSession,
   createWork,
+  displayStatus,
   readMap,
   removeSession,
+  setResult,
   transitionSession,
   updateMap,
   workPaths,
@@ -95,7 +97,8 @@ const waitSession = async (
 ): Promise<void> => {
   const started = Date.now();
   for (;;) {
-    const status = (await readMap(project, workId)).sessions[0]?.status ?? '';
+    const first = (await readMap(project, workId)).sessions[0];
+    const status = first === undefined ? '' : displayStatus(first);
     if (check(status)) return;
     if (Date.now() - started > timeoutMs) throw new Error(`карта не дождалась: ${status}`);
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -112,7 +115,7 @@ describe('useMapSync', () => {
       const session = (await readMap(project, entry.map.work.id)).sessions[0];
       // Процесс завершился без харнесса: кода выхода у нас нет (чек-лист 15).
       expect(session?.history.at(-1)).toEqual({
-        status: 'exited',
+        event: 'sleeping',
         at: expect.any(String),
         exitCode: null,
       });
@@ -140,7 +143,7 @@ describe('useMapSync', () => {
   it('SessionEnd у сессии с отчётом статус не меняет (чек-лист 5)', async () => {
     const { entry, sessionId } = await liveWork();
     const reported = await updateMap(project, entry.map.work.id, (current) => {
-      transitionSession(current, sessionId, 'done');
+      setResult(current, sessionId, 'done');
     });
 
     const app = render(

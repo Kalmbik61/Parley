@@ -18,7 +18,7 @@ export const worksDelete: Handler<'works.delete'> = async (params) => {
   // на длительность debounce, а конфликт должен решаться по настоящему состоянию.
   const map = await readMap(params.projectPath, params.workId).catch(() => null);
   const busy = map?.sessions.some(
-    (session) => session.status === 'active' && session.pid !== null && isAlive(session.pid),
+    (session) => session.lifecycle === 'active' && session.pid !== null && isAlive(session.pid),
   );
   if (busy === true) {
     throw new HostError('conflict', `у работы ${params.workId} есть живая сессия`);

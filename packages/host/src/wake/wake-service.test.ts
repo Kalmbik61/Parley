@@ -80,7 +80,7 @@ async function activeSession(): Promise<{ workId: string; sessionId: string }> {
 
 async function sendLetter(workId: string, to: string, text = 'тело письма — секрет'): Promise<void> {
   await updateMap(project, workId, (map) => {
-    addMessage(map, { from: 's-00', to, text });
+    addMessage(map, { from: 's-00', to: [to], text });
   });
 }
 
@@ -192,9 +192,9 @@ describe('WakeService', () => {
     // бы застать письма по одному и напечатать три отдельных указателя с (1),
     // а второй и третий заблокировались бы уже висящей попыткой (`in-flight`).
     await updateMap(project, workId, (map) => {
-      addMessage(map, { from: 's-00', to: sessionId, text: 'один' });
-      addMessage(map, { from: 's-00', to: sessionId, text: 'два' });
-      addMessage(map, { from: 's-00', to: sessionId, text: 'три' });
+      addMessage(map, { from: 's-00', to: [sessionId], text: 'один' });
+      addMessage(map, { from: 's-00', to: [sessionId], text: 'два' });
+      addMessage(map, { from: 's-00', to: [sessionId], text: 'три' });
     });
 
     const expected = `echo: ${pointerText(3)}`;

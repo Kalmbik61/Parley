@@ -244,7 +244,7 @@ describe('create(): карта после старта', () => {
 
     const map = await readMap(project, work.work.id);
     const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
-    expect(session?.status).toBe('active');
+    expect(session?.lifecycle).toBe('active');
     expect(session?.launchedBy).toBe('host');
     expect(session?.pid).toBeGreaterThan(0);
     expect(session?.providerSessionId).toBe(uuid);
@@ -254,7 +254,7 @@ describe('create(): карта после старта', () => {
 });
 
 describe('выход процесса', () => {
-  it('STUB_EXIT_AFTER_MS=100: сессия становится exited, код 3 в истории, приходит pty.exit', async () => {
+  it('STUB_EXIT_AFTER_MS=100: сессия засыпает (sleeping), код 3 в истории, приходит pty.exit', async () => {
     const work = await createWork(project, { title: 'Работа', goal: '' });
     setEnv('STUB_EXIT_AFTER_MS', '100');
 
@@ -268,11 +268,11 @@ describe('выход процесса', () => {
       parent: null,
     });
 
-    await waitFor(async () => (await readMap(project, work.work.id)).sessions.find((s) => s.id === ref.sessionId)?.status === 'exited');
+    await waitFor(async () => (await readMap(project, work.work.id)).sessions.find((s) => s.id === ref.sessionId)?.lifecycle === 'sleeping');
 
     const map = await readMap(project, work.work.id);
     const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
-    expect(session?.history.at(-1)).toMatchObject({ status: 'exited', exitCode: 3 });
+    expect(session?.history.at(-1)).toMatchObject({ event: 'sleeping', exitCode: 3 });
 
     const exitEvent = broadcasts.find((b) => b.event === 'pty.exit');
     expect(exitEvent).toBeDefined();
@@ -286,8 +286,8 @@ describe('autoLaunchCandidates', () => {
       projectPath: '/tmp/project',
       map: { work: { id: 'w-01' }, sessions } as WorkEntry['map'],
     });
-    const pendingWithParent = { id: 's-2', status: 'pending', parent: 's-1' } as WorkEntry['map']['sessions'][number];
-    const pendingNoParent = { id: 's-3', status: 'pending', parent: null } as WorkEntry['map']['sessions'][number];
+    const pendingWithParent = { id: 's-2', lifecycle: 'pending', parent: 's-1' } as WorkEntry['map']['sessions'][number];
+    const pendingNoParent = { id: 's-3', lifecycle: 'pending', parent: null } as WorkEntry['map']['sessions'][number];
 
     // До старта хоста: даже если сессия pending-с-родителем, без firstReadDone
     // это первое чтение работы — трогать её нельзя.
@@ -333,11 +333,11 @@ describe('autoLaunch: сервис', () => {
     });
 
     await waitFor(
-      async () => (await readMap(project, work.work.id)).sessions.find((s) => s.id === spawnedId)?.status === 'active',
+      async () => (await readMap(project, work.work.id)).sessions.find((s) => s.id === spawnedId)?.lifecycle === 'active',
     );
 
     const map = await readMap(project, work.work.id);
-    expect(map.sessions.find((s) => s.id === oldNoParentId)?.status).toBe('pending');
+    expect(map.sessions.find((s) => s.id === oldNoParentId)?.lifecycle).toBe('pending');
 
     await sessions.stop({ projectPath: project, workId: work.work.id, sessionId: spawnedId });
   });
@@ -364,12 +364,12 @@ describe('autoLaunch: сервис', () => {
     // Ждать нечего: изменение уже пройдёт цикл сервиса, лишь бы не запустилось.
     await new Promise((resolve) => setTimeout(resolve, 150));
     const map = await readMap(project, work.work.id);
-    expect(map.sessions.find((s) => s.id === spawnedId)?.status).toBe('pending');
+    expect(map.sessions.find((s) => s.id === spawnedId)?.lifecycle).toBe('pending');
   });
 });
 
 describe('stop() / delete()', () => {
-  it('stop(): сессия становится exited; delete() живой сессии останавливает процесс и убирает запись с диска', async () => {
+  it('stop(): сессия становится sleeping; delete() живой сессии останавливает процесс и убирает запись с диска', async () => {
     const work = await createWork(project, { title: 'Работа', goal: '' });
     const pty = createPtyManager(fakeHost());
     const service = createSessionsService(fakeHost(), fakeWorks(), pty, fakeActivity());
@@ -384,7 +384,7 @@ describe('stop() / delete()', () => {
     });
     await service.stop(stopped);
     const afterStop = await readMap(project, work.work.id);
-    expect(afterStop.sessions.find((s) => s.id === stopped.sessionId)?.status).toBe('exited');
+    expect(afterStop.sessions.find((s) => s.id === stopped.sessionId)?.lifecycle).toBe('sleeping');
 
     const deleted = await service.create({
       projectPath: project,
@@ -428,12 +428,12 @@ describe('запуск без бинаря', () => {
 
     const map = await readMap(project, work.work.id);
     expect(map.sessions).toHaveLength(1);
-    expect(map.sessions[0]?.status).toBe('pending');
+    expect(map.sessions[0]?.lifecycle).toBe('pending');
   });
 });
 
 describe('stopAll()', () => {
-  it('гасит все живые сессии — в картах exited', async () => {
+  it('гасит все живые сессии — в картах sleeping', async () => {
     const workA = await createWork(project, { title: 'A', goal: '' });
     const workB = await createWork(project, { title: 'B', goal: '' });
     const pty = createPtyManager(fakeHost());
@@ -464,7 +464,7 @@ describe('stopAll()', () => {
 
     const mapA = await readMap(project, workA.work.id);
     const mapB = await readMap(project, workB.work.id);
-    expect(mapA.sessions.find((s) => s.id === refA.sessionId)?.status).toBe('exited');
-    expect(mapB.sessions.find((s) => s.id === refB.sessionId)?.status).toBe('exited');
+    expect(mapA.sessions.find((s) => s.id === refA.sessionId)?.lifecycle).toBe('sleeping');
+    expect(mapB.sessions.find((s) => s.id === refB.sessionId)?.lifecycle).toBe('sleeping');
   });
 });

@@ -1,3 +1,4 @@
+import { unreadFor } from '../work/letters.js';
 import { readMap, workPaths } from '../work/store.js';
 import { participantLabel } from '../work/thread.js';
 import type { Message } from '../work/types.js';
@@ -7,11 +8,11 @@ import { waitForMap } from './watch-map.js';
 /*
  * Сторож входящих (разговор агентов 2026-09-08, 4.2; решения D8, D16). Только
  * читает карту и звонит — письмо агент забирает сам своим `check_inbox`,
- * поэтому `readAt` остаётся честным, а гонок с `check_inbox` и `wait_for` нет:
+ * поэтому `readBy` остаётся честным, а гонок с `check_inbox` и `wait_for` нет:
  *
  *   while (!stopped)
  *     found = await waitForMap(map, probe, waitMs, pollMs)
- *             probe: письма to === me && readAt === null && id ∉ rung
+ *             probe: unreadFor(me) && id ∉ rung
  *                    (пусто → null: ждём дальше), звонок собирается тут же —
  *                    по тому же снимку карты
  *     for letter of found:
@@ -21,7 +22,7 @@ import { waitForMap } from './watch-map.js';
  *   состояния письма (карту меняет только агент своими инструментами)
  *     непрочитано ──звонок──▶ непрочитано, звонок сделан
  *          │                             │
- *          └────check_inbox / wait_for───┴──▶ прочитано (readAt)
+ *          └────check_inbox / wait_for───┴──▶ прочитано (readBy[me])
  *
  * Множество `rung` живёт в памяти процесса: после перезапуска непрочитанное
  * письмо позвонит ещё раз, и это правильно — агент его так и не забрал.
@@ -90,9 +91,7 @@ export function watchInbox(
     // транспорт оставил бы процесс ждать своего часа.
     if (stopped) return [];
     const map = await readMap(context.projectPath, context.workId);
-    const mine = map.messages.filter(
-      (message) => message.to === context.sessionId && message.readAt === null,
-    );
+    const mine = unreadFor(map, context.sessionId);
     const letters = mine
       .filter((message) => !rung.has(message.id))
       .sort((a, b) => a.at.localeCompare(b.at));

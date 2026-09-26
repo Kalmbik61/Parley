@@ -27,7 +27,10 @@ function session(over: Partial<WorkSession> = {}): WorkSession {
     task: 'разложить работу по шагам',
     parent: null,
     contextFrom: [],
-    status: 'active',
+    lifecycle: 'active',
+    result: null,
+    resultAt: null,
+    closedAt: null,
     history: [],
     startedAt: '2026-09-05T09:12:00.000Z',
     endedAt: null,
@@ -271,7 +274,7 @@ describe('Sidebar', () => {
         works={[work()]}
         sessions={[
           item({
-            session: session({ status: 'pending', label: 'доки' }),
+            session: session({ lifecycle: 'pending', label: 'доки' }),
             state: 'pending',
             unread: 1,
           }),
@@ -315,7 +318,7 @@ describe('Sidebar', () => {
         sessions={[
           item({ unread: 1, subagents: 1 }),
           item({
-            session: session({ id: 's-02', label: 'тесты', status: 'exited' }),
+            session: session({ id: 's-02', label: 'тесты', lifecycle: 'sleeping' }),
             state: 'exited',
           }),
         ]}
@@ -726,7 +729,8 @@ describe('branchOf', () => {
   const entry = (sessions: WorkSession[]): WorkEntry => ({
     projectPath: '/dev/shop',
     map: {
-      schemaVersion: 1,
+      schemaVersion: 2,
+      rooms: [],
       work: {
         id: 'w-0001',
         title: 'Авторизация',

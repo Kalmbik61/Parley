@@ -9,7 +9,24 @@
  * «S03 закончила ход») намеренно — то же состояние, тот же текст.
  */
 
-import type { Activity, SessionStatus } from '@harnas/core';
+import type { Activity, SessionStatus, WorkSession } from '@harnas/core';
+
+/**
+ * Прежний единый статус из двух осей карты v2 — копия `displayStatus` из
+ * `core/work/status-view.ts`. Рендерер берёт из core только типы: рантайм core
+ * тянет Node и в песочницу окна не собирается. Правка одной требует правки другой.
+ */
+export function displayStatus(session: Pick<WorkSession, 'lifecycle' | 'result'>): SessionStatus {
+  switch (session.lifecycle) {
+    case 'pending':
+      return 'pending';
+    case 'active':
+      return session.result ?? 'active';
+    case 'sleeping':
+    case 'closed':
+      return session.result ?? 'exited';
+  }
+}
 
 /** Что рисует точка: activity живой сессии или её жизненный цикл (4.1). */
 export type DotState = Activity | Exclude<SessionStatus, 'active'>;

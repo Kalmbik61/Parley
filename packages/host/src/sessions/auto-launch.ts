@@ -22,7 +22,7 @@ export function autoLaunchCandidates(
   return next.map.sessions
     .filter(
       (session) =>
-        session.status === 'pending' && session.parent !== null && !knownIds.has(session.id),
+        session.lifecycle === 'pending' && session.parent !== null && !knownIds.has(session.id),
     )
     .map((session) => session.id);
 }

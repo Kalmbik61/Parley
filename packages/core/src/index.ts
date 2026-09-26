@@ -57,8 +57,11 @@ export {
   nextWorkId,
   parseMap,
   removeSession,
+  setResult,
   transitionSession,
 } from './work/map.js';
+export { displayStatus, historyStatus } from './work/status-view.js';
+export { isUnreadFor, recipientsOf, unreadFor } from './work/letters.js';
 export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';
 export {
   createWork,
@@ -202,14 +205,17 @@ export {
   RATE_WINDOW_MS,
   createHarnasServer,
 } from './mcp/tools.js';
-export { MESSAGE_KINDS } from './work/types.js';
+export { HUMAN, MESSAGE_KINDS, SYSTEM } from './work/types.js';
 export type {
   Artifact,
   HistoryEntry,
   LaunchedBy,
   Message,
   MessageKind,
+  Room,
+  SessionLifecycle,
   SessionMetrics,
+  SessionResult,
   SessionStatus,
   SummarySource,
   Work,

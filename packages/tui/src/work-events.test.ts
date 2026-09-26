@@ -13,7 +13,10 @@ function session(over: Partial<WorkSession> = {}): WorkSession {
     task: 'составить план',
     parent: null,
     contextFrom: [],
-    status: 'active',
+    lifecycle: 'active',
+    result: null,
+    resultAt: null,
+    closedAt: null,
     history: [],
     startedAt: null,
     endedAt: null,
@@ -33,7 +36,8 @@ const entry = (
 ): WorkEntry => ({
   projectPath: '/dev/shop',
   map: {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    rooms: [],
     work: {
       id: 'w-0001',
       title: 'Авторизация',
@@ -50,12 +54,13 @@ const entry = (
 
 const message = (over: Partial<Message> = {}): Message => ({
   id: 'm-01',
+  roomId: null,
   from: 's-01',
-  to: 's-02',
+  to: ['s-02'],
   at: '2026-09-02T09:41:00.000Z',
   text: 'жду миграции',
   kind: 'note',
-  readAt: null,
+  readBy: {},
   ...over,
 });
 
@@ -64,7 +69,7 @@ const PREFIX = 'ctrl+q';
 
 describe('worksEvents', () => {
   it('первое чтение событий не порождает', () => {
-    expect(worksEvents([], [entry([session({ status: 'pending' })])], g, PREFIX)).toEqual([]);
+    expect(worksEvents([], [entry([session({ lifecycle: 'pending' })])], g, PREFIX)).toEqual([]);
   });
 
   it('без изменений событий нет', () => {
@@ -78,7 +83,7 @@ describe('worksEvents', () => {
       [
         entry([
           session(),
-          session({ id: 's-04', label: 'тесты', provider: 'codex', status: 'pending' }),
+          session({ id: 's-04', label: 'тесты', provider: 'codex', lifecycle: 'pending' }),
         ]),
       ],
       g,
@@ -101,7 +106,7 @@ describe('worksEvents', () => {
       [
         entry([
           session(),
-          session({ id: 's-04', label: 'тесты', parent: 's-01', status: 'pending' }),
+          session({ id: 's-04', label: 'тесты', parent: 's-01', lifecycle: 'pending' }),
         ]),
       ],
       g,
@@ -117,7 +122,7 @@ describe('worksEvents', () => {
   it('при автозапуске pending без родителя по-прежнему зовёт запустить: её завёл человек', () => {
     const events = worksEvents(
       [entry([session()])],
-      [entry([session(), session({ id: 's-04', label: 'тесты', status: 'pending' })])],
+      [entry([session(), session({ id: 's-04', label: 'тесты', lifecycle: 'pending' })])],
       g,
       PREFIX,
       { autoLaunch: true },
@@ -129,7 +134,7 @@ describe('worksEvents', () => {
   it('новая активная сессия событием не считается — её запустил сам пользователь', () => {
     const events = worksEvents(
       [entry([session()])],
-      [entry([session(), session({ id: 's-02', status: 'active' })])],
+      [entry([session(), session({ id: 's-02', lifecycle: 'active' })])],
       g,
       PREFIX,
     );
@@ -139,7 +144,7 @@ describe('worksEvents', () => {
   it('выход без отчёта зовёт возобновить или дозаказать резюме', () => {
     const events = worksEvents(
       [entry([session({ id: 's-02', label: 'бэкенд' })])],
-      [entry([session({ id: 's-02', label: 'бэкенд', status: 'exited' })])],
+      [entry([session({ id: 's-02', label: 'бэкенд', lifecycle: 'sleeping' })])],
       g,
       PREFIX,
     );
@@ -151,7 +156,7 @@ describe('worksEvents', () => {
   it('выход с отчётом молчит: смотреть не на что', () => {
     const events = worksEvents(
       [entry([session({ id: 's-02', label: 'бэкенд' })])],
-      [entry([session({ id: 's-02', label: 'бэкенд', status: 'exited', summary: 'готово' })])],
+      [entry([session({ id: 's-02', label: 'бэкенд', lifecycle: 'sleeping', summary: 'готово' })])],
       g,
       PREFIX,
     );
@@ -178,7 +183,7 @@ describe('worksEvents', () => {
     const sessions = [session({ id: 's-01' }), session({ id: 's-02' })];
     const events = worksEvents(
       [entry(sessions)],
-      [entry(sessions, [message({ readAt: '2026-09-02T09:43:00.000Z' })])],
+      [entry(sessions, [message({ readBy: { 's-02': '2026-09-02T09:43:00.000Z' } })])],
       g,
       PREFIX,
     );
@@ -186,15 +191,15 @@ describe('worksEvents', () => {
   });
 
   it('новая работа не всплывает: она и так видна в списке', () => {
-    expect(worksEvents([], [entry([session({ status: 'pending' })])], g, PREFIX)).toEqual([]);
+    expect(worksEvents([], [entry([session({ lifecycle: 'pending' })])], g, PREFIX)).toEqual([]);
   });
 
   it('готовое авто-резюме всплывает в строке статуса (дизайн 4.5)', () => {
-    const before = session({ id: 's-02', label: 'бэкенд', status: 'exited' });
+    const before = session({ id: 's-02', label: 'бэкенд', lifecycle: 'sleeping' });
     const after = session({
       id: 's-02',
       label: 'бэкенд',
-      status: 'exited',
+      lifecycle: 'sleeping',
       summary: 'Сборка починена.',
       summarySource: 'auto',
     });
@@ -207,10 +212,11 @@ describe('worksEvents', () => {
   });
 
   it('отчёт самого агента авто-резюме не считается', () => {
-    const before = session({ id: 's-02', status: 'exited' });
+    const before = session({ id: 's-02', lifecycle: 'sleeping' });
     const after = session({
       id: 's-02',
-      status: 'done',
+      lifecycle: 'sleeping',
+      result: 'done',
       summary: 'План готов',
       summarySource: 'agent',
     });
@@ -243,7 +249,7 @@ describe('worksEvents', () => {
           message({
             kind: 'decision',
             text: 'миграции отдельно',
-            readAt: '2026-09-02T09:42:00.000Z',
+            readBy: { 's-02': '2026-09-02T09:42:00.000Z' },
           }),
         ]),
       ],
@@ -320,7 +326,7 @@ describe('worksEvents', () => {
     const sent = [
       message({ id: 'm-01', at: '2026-09-02T08:00:00.000Z' }),
       message({ id: 'm-02', at: '2026-09-02T09:20:00.000Z' }),
-      message({ id: 'm-03', from: 's-02', to: 's-01', at: '2026-09-02T09:25:00.000Z' }),
+      message({ id: 'm-03', from: 's-02', to: ['s-01'], at: '2026-09-02T09:25:00.000Z' }),
     ];
     const third = message({ id: 'm-04', at: '2026-09-02T09:30:00.000Z' });
 

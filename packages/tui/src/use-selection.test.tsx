@@ -232,7 +232,8 @@ describe('useSelection: комната', () => {
 /** Работа с сессиями: id нумеруются внутри работы, поэтому у всех работ есть `s-01`. */
 function entry(workId: string, labels: readonly string[] = ['план']): WorkEntry {
   const map: WorkMap = {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    rooms: [],
     work: {
       id: workId,
       title: workId,

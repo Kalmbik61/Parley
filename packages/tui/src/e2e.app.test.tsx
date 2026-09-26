@@ -10,9 +10,10 @@
 import {
   addSession,
   createWork,
+  displayStatus,
+  isAlive,
   processStartedAt,
   readMap,
-  isAlive,
   readWorksIndex,
   transitionSession,
   updateMap,
@@ -148,7 +149,7 @@ describe('34: полный цикл состояний по событиям х�
       await mounted(app.stdin);
       await launch(app);
       const workId = await firstWorkId();
-      const plan = await waitSession(workId, (item) => item.status === 'active');
+      const plan = await waitSession(workId, (item) => displayStatus(item) === 'active');
       await rename(workId, plan.id, 'план');
       await waitFor(() => lineWith(app.lastFrame() ?? '', 'план') !== '');
 
@@ -224,14 +225,14 @@ describe('35: живость после перезапуска харнесса 
     } finally {
       first.unmount();
     }
-    expect((await readMap(project, workId)).sessions[0]?.status).toBe('active');
+    expect((await readMap(project, workId)).sessions[0]?.lifecycle).toBe('active');
 
     const app = open();
     try {
       await mounted(app.stdin);
       // Перезапуск: pid и время старта совпали — сессия по-прежнему живая (5.4).
       await waitFor(() => (app.lastFrame() ?? '').includes('вне харнесса'));
-      expect((await readMap(project, workId)).sessions[0]?.status).toBe('active');
+      expect((await readMap(project, workId)).sessions[0]?.lifecycle).toBe('active');
 
       child.kill('SIGKILL');
       await once(child, 'exit');
@@ -240,8 +241,8 @@ describe('35: живость после перезапуска харнесса 
         map.work.goal = 'проверка живости';
       });
 
-      const session = await waitSession(workId, (item) => item.status === 'exited');
-      expect(session.history.at(-1)?.status).toBe('exited');
+      const session = await waitSession(workId, (item) => displayStatus(item) === 'exited');
+      expect(session.history.at(-1)?.event).toBe('sleeping');
       await waitFor(() => lineWith(app.lastFrame() ?? '', 'ревью').includes('exited'));
     } finally {
       app.unmount();
@@ -258,7 +259,7 @@ describe('36: мышь (3.3)', () => {
       await mounted(app.stdin);
       await launch(app);
       const workId = await firstWorkId();
-      const plan = await waitSession(workId, (item) => item.status === 'active');
+      const plan = await waitSession(workId, (item) => displayStatus(item) === 'active');
       await rename(workId, plan.id, 'план');
       await waitFor(() => lineWith(app.lastFrame() ?? '', 'план') !== '');
 
@@ -365,7 +366,7 @@ describe('план 2026-09-06, пункт 37: тихий старт доходи
       await mounted(app.stdin);
       await launch(app);
       const workId = await firstWorkId();
-      const plan = await waitSession(workId, (item) => item.status === 'active');
+      const plan = await waitSession(workId, (item) => displayStatus(item) === 'active');
       await rename(workId, plan.id, 'план');
       await waitFor(() => lineWith(app.lastFrame() ?? '', 'план') !== '');
 
@@ -395,7 +396,7 @@ describe('план 2026-09-06, пункт 37: тихий старт доходи
 
       const done = await waitSession(
         workId,
-        (item) => item.id === child.id && item.status === 'done',
+        (item) => item.id === child.id && displayStatus(item) === 'done',
       );
       expect(done.summary).toBe('ревью прошло');
       expect(done.summarySource).toBe('agent');
@@ -413,7 +414,7 @@ describe('план 2026-09-06, пункт 35: удаление живой сес
       await mounted(app.stdin);
       await launch(app);
       const workId = await firstWorkId();
-      const plan = await waitSession(workId, (item) => item.status === 'active');
+      const plan = await waitSession(workId, (item) => displayStatus(item) === 'active');
       await rename(workId, plan.id, 'план');
       await waitFor(() => lineWith(app.lastFrame() ?? '', 'план') !== '');
 
@@ -469,7 +470,7 @@ describe('разговор агентов, 8.27 и 8.32: включение push
       await waitFor(() => (app.lastFrame() ?? '').includes('channel=server:harnas'));
 
       const workId = await firstWorkId();
-      const session = await waitSession(workId, (item) => item.status === 'active');
+      const session = await waitSession(workId, (item) => displayStatus(item) === 'active');
       expect(await mcpEnv(workId, session.id)).toMatchObject({ HARNAS_CHANNEL: '1' });
     } finally {
       app.unmount();
@@ -485,7 +486,7 @@ describe('разговор агентов, 8.27 и 8.32: включение push
       await waitFor(() => (app.lastFrame() ?? '').includes('channel=-'));
 
       const workId = await firstWorkId();
-      const session = await waitSession(workId, (item) => item.status === 'active');
+      const session = await waitSession(workId, (item) => displayStatus(item) === 'active');
       expect(await mcpEnv(workId, session.id)).not.toHaveProperty('HARNAS_CHANNEL');
     } finally {
       app.unmount();
@@ -505,7 +506,7 @@ describe('разговор агентов, 8.27 и 8.32: включение push
       await waitFor(() => (app.lastFrame() ?? '').includes('channel=-'));
 
       const workId = await firstWorkId();
-      const session = await waitSession(workId, (item) => item.status === 'active');
+      const session = await waitSession(workId, (item) => displayStatus(item) === 'active');
       expect(await mcpEnv(workId, session.id)).not.toHaveProperty('HARNAS_CHANNEL');
     } finally {
       app.unmount();
@@ -566,7 +567,7 @@ describe('план 2026-09-06, пункт 36: сессия не слышит SIG
       await mounted(app.stdin);
       await launch(app);
       const workId = await firstWorkId();
-      const session = await waitSession(workId, (item) => item.status === 'active');
+      const session = await waitSession(workId, (item) => displayStatus(item) === 'active');
       const pid = session.pid as number;
 
       // Stub перестаёт слушать мягкое завершение: выйти он сам не согласится.

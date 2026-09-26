@@ -7,7 +7,12 @@ import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
 import { Sidebar } from './Sidebar.js';
 
-function session(id: string, label: string, status: WorkSession['status'] = 'active'): WorkSession {
+function session(
+  id: string,
+  label: string,
+  lifecycle: WorkSession['lifecycle'] = 'active',
+  result: WorkSession['result'] = null,
+): WorkSession {
   return {
     id,
     provider: 'claude',
@@ -15,7 +20,10 @@ function session(id: string, label: string, status: WorkSession['status'] = 'act
     task: '',
     parent: null,
     contextFrom: [],
-    status,
+    lifecycle,
+    result,
+    resultAt: null,
+    closedAt: null,
     history: [],
     startedAt: null,
     endedAt: null,
@@ -35,7 +43,8 @@ function work(id: string, createdAt: string, title: string, sessions: WorkSessio
   return {
     projectPath: `/tmp/${id}`,
     map: {
-      schemaVersion: 1,
+      schemaVersion: 2,
+      rooms: [],
       work: { id, title, goal: '', status: 'active', createdAt, updatedAt: createdAt },
       sessions,
       messages: [],

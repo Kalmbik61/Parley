@@ -165,7 +165,7 @@ async function exited(provider: string, providerSessionId: string | null = ID) {
   await updateMap(project, workId, (map) => {
     const session = addSession(map, { provider, label: 'бэкенд', task: 'шаги 1–3' });
     sessionId = session.id;
-    session.status = 'exited';
+    session.lifecycle = 'sleeping';
     session.providerSessionId = providerSessionId;
   });
   return { workId, sessionId };
@@ -187,7 +187,8 @@ describe('дозаказ резюме', () => {
     expect(session?.summary).toBe('Сборка починена, тесты зелёные.');
     expect(session?.summarySource).toBe('auto');
     // Дозаказ статуса не меняет: сессия как вышла без отчёта, так и осталась.
-    expect(session?.status).toBe('exited');
+    expect(session?.lifecycle).toBe('sleeping');
+    expect(session?.result).toBeNull();
 
     // Команда и аргументы пришли из реестра — их подменяет providers.json,
     // а не код вызова.

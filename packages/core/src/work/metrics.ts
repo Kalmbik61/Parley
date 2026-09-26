@@ -5,10 +5,10 @@ import { indexCodexSession } from '../codex/index-session.js';
 import { defaultRoot, discoverSessions } from '../discover.js';
 import type { ProviderEntry } from '../providers.js';
 import { indexSessionFile, type SessionIndex } from '../session-index.js';
-import { transitionSession } from './map.js';
+import { setResult, transitionSession } from './map.js';
 import type { TransitionOptions } from './map.js';
 import { readMap, updateMap } from './store.js';
-import type { SessionMetrics, WorkMap, WorkProvider } from './types.js';
+import type { SessionMetrics, SessionResult, WorkMap, WorkProvider } from './types.js';
 
 /** Корни истории провайдеров. Переопределяются тестами; в бою — значения по умолчанию. */
 export interface MetricsRoots {
@@ -162,8 +162,11 @@ export function silenceMs(lastRecordAt: string | null, now: number = Date.now())
   return Number.isNaN(at) ? null : Math.max(0, now - at);
 }
 
-/** Статусы, при переходе в которые метрики фиксируются в карте. */
-export type FinalStatus = 'done' | 'failed' | 'exited';
+/**
+ * Когда метрики фиксируются в карте: итог из `report` или уход процесса в
+ * `sleeping`. Итог ставится по своей оси и процесс не трогает (спецификация 7.1).
+ */
+export type FinalStatus = SessionResult | 'sleeping';
 
 export interface FinishOptions extends MetricsRoots, TransitionOptions {
   /** Таймаут `map.lock` записи перехода (кусок 1.4 хоста: сверка живости работ). */
@@ -171,7 +174,7 @@ export interface FinishOptions extends MetricsRoots, TransitionOptions {
 }
 
 /**
- * Переводит сессию в конечный статус и фиксирует в карте итоговые метрики из
+ * Ставит итог или усыпляет сессию и фиксирует в карте итоговые метрики из
  * логов провайдера: архив работы хранит их, даже если логи потом почистят
  * (спецификация, раздел 6). Метрик нет (сессия не привязана к логу, файла уже
  * нет) — в карте остаётся прежнее значение, статус меняется всё равно.
@@ -198,7 +201,10 @@ export async function finishSession(
     projectPath,
     workId,
     (map) => {
-      const target = transitionSession(map, sessionId, to, options);
+      const target =
+        to === 'sleeping'
+          ? transitionSession(map, sessionId, to, options)
+          : setResult(map, sessionId, to, options.at);
       // Лог читался до захвата блокировки: если сессию за это время перепривязали
       // к другому логу, чужие числа в карту не попадут.
       if (measured !== null && target.providerSessionId === providerSessionId) {

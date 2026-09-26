@@ -8,6 +8,7 @@
 
 import {
   activityOf,
+  displayStatus,
   openEvents,
   watchEvents,
   workPaths,
@@ -178,7 +179,7 @@ export function useActivity({
 
   const stateOf = useCallback(
     (session: WorkSession): DotState =>
-      dotState(session.status, states.get(session.id)?.activity ?? null),
+      dotState(displayStatus(session), states.get(session.id)?.activity ?? null),
     [states],
   );
 

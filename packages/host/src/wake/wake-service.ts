@@ -11,8 +11,7 @@
  * письма уже указаны и не в полёте ли уже указатель.
  */
 
-import { deliveryAction } from '@harnas/core';
-import type { Message, WorkSession } from '@harnas/core';
+import { deliveryAction, unreadFor } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
 import type { SessionRef } from '@harnas/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -50,8 +49,6 @@ interface AttemptState {
   timeoutTimer: NodeJS.Timeout | undefined;
 }
 
-const unreadOf = (session: WorkSession, messages: readonly Message[]): Message[] =>
-  messages.filter((message) => message.to === session.id && message.readAt === null);
 
 export function createWakeService(
   host: HostContext,
@@ -163,7 +160,7 @@ export function createWakeService(
       activity: live?.activity ?? null,
       hasDraft: handle.hasDraft(),
       paused: isPaused,
-      unread: unreadOf(session, entry.map.messages),
+      unread: unreadFor(entry.map, session.id),
       pointed: state.pointed,
       inFlight: state.inFlight,
     });

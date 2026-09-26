@@ -11,7 +11,7 @@ const AT = '2026-09-02T10:00:00.000Z';
 
 function mapWithSessions(): WorkMap {
   const map: WorkMap = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     work: {
       id: 'w-0042',
       title: 'Авторизация',
@@ -22,9 +22,11 @@ function mapWithSessions(): WorkMap {
     },
     sessions: [],
     messages: [],
+    rooms: [],
   };
   const plan = addSession(map, { provider: 'claude', label: 'план', task: 'Составить план' }, AT);
-  plan.status = 'done';
+  plan.lifecycle = 'sleeping';
+  plan.result = 'done';
   plan.summary = 'План готов: 5 шагов, миграции отдельно.';
   plan.summarySource = 'agent';
   plan.artifacts = [{ kind: 'plan', path: '.harnas/works/w-0042/artifacts/plan.md' }];
@@ -135,10 +137,10 @@ function mapWithThread(): WorkMap {
   );
   addMessage(
     map,
-    { from: 's-01', to: 's-02', text: 'миграции отдельным PR', kind: 'decision' },
+    { from: 's-01', to: ['s-02'], text: 'миграции отдельным PR', kind: 'decision' },
     '2026-09-02T12:42:00.000Z',
   );
-  addMessage(map, { from: 's-01', to: 's-02', text: 'а где миграции?', kind: 'question' }, AT);
+  addMessage(map, { from: 's-01', to: ['s-02'], text: 'а где миграции?', kind: 'question' }, AT);
   return map;
 }
 

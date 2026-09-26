@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { sessionOrders, sessionSequence, treeOrder, workKey } from './tree-order.js';
 import type { WorkSession } from '@harnas/core';
 
-function session(id: string, parent: string | null, status: WorkSession['status'] = 'active'): WorkSession {
+function session(
+  id: string,
+  parent: string | null,
+  lifecycle: WorkSession['lifecycle'] = 'active',
+  result: WorkSession['result'] = null,
+): WorkSession {
   return {
     id,
     provider: 'claude',
@@ -10,7 +15,10 @@ function session(id: string, parent: string | null, status: WorkSession['status'
     task: '',
     parent,
     contextFrom: [],
-    status,
+    lifecycle,
+    result,
+    resultAt: null,
+    closedAt: null,
     history: [],
     startedAt: null,
     endedAt: null,
@@ -38,9 +46,9 @@ describe('treeOrder', () => {
   it('вложенность и порядок не меняются от смены статусов', () => {
     const base = [session('s-01', null), session('s-02', 's-01'), session('s-03', 's-02')];
     const changed = [
-      session('s-01', null, 'done'),
-      session('s-02', 's-01', 'failed'),
-      session('s-03', 's-02', 'exited'),
+      session('s-01', null, 'sleeping', 'done'),
+      session('s-02', 's-01', 'sleeping', 'failed'),
+      session('s-03', 's-02', 'sleeping'),
     ];
 
     const before = treeOrder(base).map((item) => `${item.session.id}:${item.depth}`);
@@ -81,7 +89,8 @@ describe('workKey / sessionOrders', () => {
       {
         projectPath: '/tmp/proj',
         map: {
-          schemaVersion: 1 as const,
+          schemaVersion: 2 as const,
+          rooms: [],
           work: { id: 'w-01', title: 't', goal: '', status: 'active' as const, createdAt: '', updatedAt: '' },
           sessions: [session('s-01', null), session('s-02', 's-01')],
           messages: [],

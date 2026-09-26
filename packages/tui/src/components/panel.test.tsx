@@ -14,8 +14,11 @@ function session(over: Partial<WorkSession> = {}): WorkSession {
     task: 'шаги 1–3',
     parent: null,
     contextFrom: [],
-    status: 'pending',
-    history: [{ status: 'pending', at: '2026-09-05T09:12:00.000Z' }],
+    lifecycle: 'pending',
+    result: null,
+    resultAt: null,
+    closedAt: null,
+    history: [{ event: 'pending', at: '2026-09-05T09:12:00.000Z' }],
     startedAt: null,
     endedAt: null,
     pid: null,
@@ -34,7 +37,8 @@ function session(over: Partial<WorkSession> = {}): WorkSession {
 const entry = (sessions: WorkSession[]): WorkEntry => ({
   projectPath: '/dev/shop',
   map: {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    rooms: [],
     work: {
       id: 'w-0042',
       title: 'Авторизация',
@@ -107,10 +111,13 @@ describe('карточка панели (макеты §2)', () => {
 
   it('exited показывает код выхода и дозаказ резюме', () => {
     const exited = session({
-      status: 'exited',
+      lifecycle: 'sleeping',
+      result: null,
+      resultAt: null,
+      closedAt: null,
       history: [
-        { status: 'active', at: '2026-09-05T13:00:00.000Z' },
-        { status: 'exited', at: '2026-09-05T14:02:00.000Z', exitCode: 0 },
+        { event: 'active', at: '2026-09-05T13:00:00.000Z' },
+        { event: 'sleeping', at: '2026-09-05T14:02:00.000Z', exitCode: 0 },
       ],
     });
     const frame = frameOf({ session: exited, state: 'exited' });
@@ -124,10 +131,11 @@ describe('карточка панели (макеты §2)', () => {
 
   it('done показывает резюме и артефакты', () => {
     const done = session({
-      status: 'done',
+      lifecycle: 'sleeping',
+      result: 'done',
       summary: 'План готов: 5 шагов',
       artifacts: [{ kind: 'plan', path: 'works/w-0042/artifacts/plan.md' }],
-      history: [{ status: 'done', at: '2026-09-05T12:40:00.000Z', exitCode: 0 }],
+      history: [{ event: 'done', at: '2026-09-05T12:40:00.000Z', exitCode: 0 }],
     });
     const frame = frameOf({ session: done, state: 'done' });
 
@@ -140,7 +148,7 @@ describe('карточка панели (макеты §2)', () => {
   });
 
   it('живая сессия в карточке — только та, чей PTY не у харнесса (5.4)', () => {
-    const outside = session({ status: 'active', pid: 48213, launchedBy: 'cli' });
+    const outside = session({ lifecycle: 'active', pid: 48213, launchedBy: 'cli' });
     const frame = frameOf({ session: outside, state: 'working' });
 
     expect(frame).toContain('● бэкенд · working · запущена вне харнесса');
@@ -150,7 +158,7 @@ describe('карточка панели (макеты §2)', () => {
   });
 
   it('живая сессия харнесса, отпущенная панелью, зовёт подключиться, а не врёт (2.2)', () => {
-    const ours = session({ status: 'active', pid: 48213, launchedBy: 'tui' });
+    const ours = session({ lifecycle: 'active', pid: 48213, launchedBy: 'tui' });
     const frame = frameOf({ session: ours, state: 'working', atHarness: true });
 
     expect(frame).toContain('● бэкенд · working');

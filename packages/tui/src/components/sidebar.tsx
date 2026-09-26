@@ -8,6 +8,7 @@
 
 import {
   sessionTag,
+  unreadFor,
   type SessionIndex,
   type WorkEntry,
   type WorkSession,
@@ -189,9 +190,7 @@ export function sidebarSessions(
     session,
     state: state(session),
     live: metricsOf(session, index(session)),
-    unread: entry.map.messages.filter(
-      (message) => message.to === session.id && message.readAt === null,
-    ).length,
+    unread: unreadFor(entry.map, session.id).length,
     subagents: subagents(session),
   }));
 }

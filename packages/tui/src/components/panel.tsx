@@ -4,7 +4,13 @@
  * поверх области гостя; оверлеи и подтверждения живут выше, в композиции.
  */
 
-import { workPaths, type WorkEntry, type WorkSession } from '@harnas/core';
+import {
+  displayStatus,
+  historyStatus,
+  workPaths,
+  type WorkEntry,
+  type WorkSession,
+} from '@harnas/core';
 import { Box, Text } from 'ink';
 import path from 'node:path';
 import type { ReactNode } from 'react';
@@ -55,7 +61,7 @@ export function cardFor(
       : (entry.map.sessions.find((item) => item.id === session.parent)?.label ?? null);
   // У `pending` показывается только путь брифа, сам бриф — в оверлее (решение №12).
   const brief =
-    entry === undefined || session === null || session.status !== 'pending'
+    entry === undefined || session === null || displayStatus(session) !== 'pending'
       ? null
       : path.join(
           path.relative(entry.projectPath, workPaths(entry.projectPath, entry.map.work.id).briefs),
@@ -66,7 +72,7 @@ export function cardFor(
 
 /** Последняя ступень истории в нынешнем статусе: из неё время и код выхода. */
 const lastStep = (session: WorkSession): WorkSession['history'][number] | undefined =>
-  [...session.history].reverse().find((entry) => entry.status === session.status);
+  [...session.history].reverse().find((entry) => historyStatus(entry) === displayStatus(session));
 
 /** Когда сессия закончилась: время последней ступени (макеты §2). */
 const closedAt = (session: WorkSession): string =>
@@ -92,7 +98,7 @@ function cardLines(
   const head = `${glyph} ${session.label}`;
 
   // Живая сессия попадает в карточку только одна: та, чей PTY не у харнесса (5.4).
-  if (session.status === 'active') {
+  if (displayStatus(session) === 'active') {
     // Своя же сессия, от которой панель отпустили ходьбой по сайдбару: к ней
     // можно вернуться, и карточка зовёт это сделать, а не выдумывает чужой PTY.
     if (atHarness) {
@@ -111,7 +117,7 @@ function cardLines(
     ];
   }
 
-  if (session.status === 'pending') {
+  if (displayStatus(session) === 'pending') {
     return [
       `${head} · pending`,
       // Роль видна до запуска: пикера агентов у `prefix c` и `prefix C` нет, и
@@ -127,7 +133,7 @@ function cardLines(
     ];
   }
 
-  if (session.status === 'exited') {
+  if (displayStatus(session) === 'exited') {
     return [
       `${head} · exited ${exitTail(session)}`,
       session.summary === null ? 'отчёта не было · резюме: нет' : `резюме: «${session.summary}»`,
@@ -139,7 +145,7 @@ function cardLines(
 
   // `done` и `failed` — отчёт агента, а не выход процесса: код здесь не при чём.
   return [
-    `${head} · ${session.status} ${closedAt(session)}`,
+    `${head} · ${displayStatus(session)} ${closedAt(session)}`,
     session.summary === null ? 'отчёта нет' : `«${session.summary}»`,
     ...session.artifacts.map((artifact) => `арт: ${artifact.kind}: ${artifact.path}`),
     '',

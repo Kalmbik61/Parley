@@ -33,7 +33,10 @@ function session(over: Partial<WorkSession> = {}): WorkSession {
     task: '',
     parent: null,
     contextFrom: [],
-    status: 'active',
+    lifecycle: 'active',
+    result: null,
+    resultAt: null,
+    closedAt: null,
     history: [],
     startedAt: '2026-09-05T09:00:00.000Z',
     endedAt: null,
@@ -181,7 +184,7 @@ describe('useActivity', () => {
         sessions: [
           session(),
           session({ id: 's-02', label: 'бэкенд' }),
-          session({ id: 's-03', label: 'тесты', status: 'exited' }),
+          session({ id: 's-03', label: 'тесты', lifecycle: 'sleeping' }),
         ],
       },
     ];

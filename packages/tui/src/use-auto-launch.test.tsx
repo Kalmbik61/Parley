@@ -22,7 +22,10 @@ function session(over: Partial<WorkSession> = {}): WorkSession {
     task: 'составить план',
     parent: null,
     contextFrom: [],
-    status: 'active',
+    lifecycle: 'active',
+    result: null,
+    resultAt: null,
+    closedAt: null,
     history: [],
     startedAt: null,
     endedAt: null,
@@ -38,7 +41,8 @@ function session(over: Partial<WorkSession> = {}): WorkSession {
 const entry = (sessions: WorkSession[], projectPath = '/dev/shop'): WorkEntry => ({
   projectPath,
   map: {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    rooms: [],
     work: {
       id: 'w-0001',
       title: 'Авторизация',
@@ -54,7 +58,7 @@ const entry = (sessions: WorkSession[], projectPath = '/dev/shop'): WorkEntry =>
 
 /** pending от агента: у неё есть родитель. */
 const spawned = (id = 's-02'): WorkSession =>
-  session({ id, label: 'ревью', parent: 's-01', status: 'pending' });
+  session({ id, label: 'ревью', parent: 's-01', lifecycle: 'pending' });
 
 /**
  * Проверка аренды (`hostLeaseActive`) читает файл с диска и поэтому асинхронна:
@@ -127,7 +131,7 @@ describe('useAutoLaunch', () => {
     try {
       app.rerender(
         <Probe
-          works={[entry([session(), session({ id: 's-02', status: 'pending' })])]}
+          works={[entry([session(), session({ id: 's-02', lifecycle: 'pending' })])]}
           launched={launched}
         />,
       );

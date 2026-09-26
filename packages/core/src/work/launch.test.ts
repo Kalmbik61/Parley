@@ -15,7 +15,7 @@ import {
   readBrief,
   startSession,
 } from './launch.js';
-import { transitionSession } from './map.js';
+import { setResult } from './map.js';
 import { createWork, readMap, updateMap, workPaths } from './store.js';
 
 /** Пути к бинарям подменяются на заглушку: настоящий агент здесь не запускается. */
@@ -81,7 +81,7 @@ describe('создание pending сессии', () => {
     const { workId, sessionId } = await pending('claude');
     const session = await sessionOf(workId, sessionId);
 
-    expect(session.status).toBe('pending');
+    expect(session.lifecycle).toBe('pending');
     expect(session.parent).toBeNull();
     const brief = await readFile(
       path.join(workPaths(project, workId).briefs, `${sessionId}.md`),
@@ -421,10 +421,10 @@ describe('переходы статусов', () => {
     await startSession(project, workId, sessionId, 'uuid-1');
 
     const session = await sessionOf(workId, sessionId);
-    expect(session.status).toBe('active');
+    expect(session.lifecycle).toBe('active');
     expect(session.providerSessionId).toBe('uuid-1');
     expect(session.startedAt).not.toBeNull();
-    expect(session.history.map((entry) => entry.status)).toEqual(['pending', 'active']);
+    expect(session.history.map((entry) => entry.event)).toEqual(['pending', 'active']);
   });
 
   it('startSession с приметами процесса пишет в карту launchedBy: host', async () => {
@@ -441,7 +441,7 @@ describe('переходы статусов', () => {
     expect(session.launchedBy).toBe('host');
   });
 
-  it('выход процесса переводит active → exited и пишет код выхода в history', async () => {
+  it('выход процесса переводит active → sleeping и пишет код выхода в history', async () => {
     const { workId, sessionId } = await pending('claude');
     await startSession(project, workId, sessionId, null);
     await finishExited(
@@ -456,8 +456,8 @@ describe('переходы статусов', () => {
     );
 
     const session = await sessionOf(workId, sessionId);
-    expect(session.status).toBe('exited');
-    expect(session.history.at(-1)).toMatchObject({ status: 'exited', exitCode: 3 });
+    expect(session.lifecycle).toBe('sleeping');
+    expect(session.history.at(-1)).toMatchObject({ event: 'sleeping', exitCode: 3 });
     expect(session.endedAt).not.toBeNull();
   });
 
@@ -478,11 +478,11 @@ describe('переходы статусов', () => {
     expect((await sessionOf(workId, sessionId)).history.at(-1)).toMatchObject({ signal: 9 });
   });
 
-  it('отчитавшуюся сессию выход процесса не трогает: done важнее exited', async () => {
+  it('выход процесса итог отчёта не трогает: done остаётся, сессия спит', async () => {
     const { workId, sessionId } = await pending('claude');
     await startSession(project, workId, sessionId, null);
     await updateMap(project, workId, (map) => {
-      const session = transitionSession(map, sessionId, 'done');
+      const session = setResult(map, sessionId, 'done');
       session.summary = 'готово';
     });
 
@@ -498,7 +498,8 @@ describe('переходы статусов', () => {
     );
 
     const session = await sessionOf(workId, sessionId);
-    expect(session.status).toBe('done');
+    expect(session.result).toBe('done');
+    expect(session.lifecycle).toBe('sleeping');
     expect(session.summary).toBe('готово');
   });
 });

@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { addMessage, addSession, parseMap, removeSession, transitionSession } from './map.js';
-import type { SessionStatus, WorkMap } from './types.js';
+import {
+  addMessage,
+  addSession,
+  canTransition,
+  parseMap,
+  removeSession,
+  setResult,
+  transitionSession,
+} from './map.js';
+import type { SessionLifecycle, WorkMap } from './types.js';
 
 const emptyMap = (): WorkMap => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   work: {
     id: 'w-0001',
     title: 'Авторизация',
@@ -14,7 +22,15 @@ const emptyMap = (): WorkMap => ({
   },
   sessions: [],
   messages: [],
+  rooms: [],
 });
+
+/** Пустая карта v1 — как её писали до комнат. */
+const emptyV1 = (): Record<string, unknown> => {
+  const map: Record<string, unknown> = { ...emptyMap(), schemaVersion: 1 };
+  delete map['rooms'];
+  return map;
+};
 
 describe('addSession', () => {
   it('роль агента берётся из init, без неё — null', () => {
@@ -44,8 +60,11 @@ describe('addSession', () => {
 
     expect(first.id).toBe('s-01');
     expect(second.id).toBe('s-02');
-    expect(first.status).toBe('pending');
-    expect(first.history).toEqual([{ status: 'pending', at: first.history[0]?.at }]);
+    expect(first.lifecycle).toBe('pending');
+    expect(first.result).toBeNull();
+    expect(first.resultAt).toBeNull();
+    expect(first.closedAt).toBeNull();
+    expect(first.history).toEqual([{ event: 'pending', at: first.history[0]?.at }]);
     expect(first.parent).toBeNull();
     expect(first.contextFrom).toEqual([]);
     expect(second.parent).toBe('s-01');
@@ -81,19 +100,21 @@ describe('addSession', () => {
 describe('addMessage', () => {
   it('нумерует сообщения m-NN и кладёт их непрочитанными', () => {
     const map = emptyMap();
-    const message = addMessage(map, { from: 's-02', to: 's-01', text: 'жду миграции' });
+    const message = addMessage(map, { from: 's-02', to: ['s-01'], text: 'жду миграции' });
 
     expect(message.id).toBe('m-01');
-    expect(message.readAt).toBeNull();
-    expect(addMessage(map, { from: 's-01', to: 's-02', text: 'ок' }).id).toBe('m-02');
+    expect(message.readBy).toEqual({});
+    expect(message.roomId).toBeNull();
+    expect(message.to).toEqual(['s-01']);
+    expect(addMessage(map, { from: 's-01', to: ['s-02'], text: 'ок' }).id).toBe('m-02');
   });
 
   it('kind по умолчанию note, явный kind сохраняется', () => {
     const map = emptyMap();
-    const plain = addMessage(map, { from: 's-01', to: 's-02', text: 'a' });
+    const plain = addMessage(map, { from: 's-01', to: ['s-02'], text: 'a' });
     const question = addMessage(map, {
       from: 's-01',
-      to: 's-02',
+      to: ['s-02'],
       text: 'b',
       kind: 'question',
     });
@@ -104,58 +125,76 @@ describe('addMessage', () => {
 });
 
 describe('transitionSession', () => {
-  const withStatus = (status: SessionStatus): WorkMap => {
+  const withLifecycle = (lifecycle: SessionLifecycle): WorkMap => {
     const map = emptyMap();
     const session = addSession(map, { provider: 'claude', label: 'план', task: 't' });
-    session.status = status;
+    session.lifecycle = lifecycle;
     return map;
   };
 
-  const allowed: Array<[SessionStatus, SessionStatus]> = [
-    ['pending', 'active'],
-    ['active', 'exited'],
-    ['exited', 'active'],
-    ['done', 'active'],
-    ['failed', 'active'],
-    ['active', 'done'],
-    ['active', 'failed'],
-    ['pending', 'done'],
-    ['exited', 'done'],
-    ['exited', 'failed'],
-  ];
+  const LIFECYCLES: readonly SessionLifecycle[] = ['pending', 'active', 'sleeping', 'closed'];
+  const ALLOWED = new Set([
+    'pending→active',
+    'pending→closed',
+    'active→sleeping',
+    'active→closed',
+    'sleeping→active',
+    'sleeping→closed',
+  ]);
+  const pairs = LIFECYCLES.flatMap((from) => LIFECYCLES.map((to) => [from, to] as const));
 
-  it.each(allowed)('переход %s → %s разрешён', (from, to) => {
-    const map = withStatus(from);
-    const session = transitionSession(map, 's-01', to, { at: '2026-09-02T11:00:00.000Z' });
-
-    expect(session.status).toBe(to);
-    expect(session.history.at(-1)).toEqual({ status: to, at: '2026-09-02T11:00:00.000Z' });
+  it('переходы — инвариантом по всем 16 парам', () => {
+    expect(pairs).toHaveLength(16);
+    for (const [from, to] of pairs) {
+      const map = withLifecycle(from);
+      const allowed = ALLOWED.has(`${from}→${to}`);
+      expect(canTransition(from, to), `${from} → ${to}`).toBe(allowed);
+      if (allowed) {
+        const session = transitionSession(map, 's-01', to, { at: '2026-09-02T11:00:00.000Z' });
+        expect(session.lifecycle).toBe(to);
+        expect(session.history.at(-1)).toEqual({ event: to, at: '2026-09-02T11:00:00.000Z' });
+      } else {
+        expect(() => transitionSession(map, 's-01', to), `${from} → ${to}`).toThrow(
+          /недопустимый переход/,
+        );
+        expect(map.sessions[0]?.lifecycle).toBe(from);
+        expect(map.sessions[0]?.history).toHaveLength(1);
+      }
+    }
   });
 
-  const forbidden: Array<[SessionStatus, SessionStatus]> = [
-    ['active', 'pending'],
-    ['pending', 'exited'],
-    ['active', 'active'],
-    ['done', 'exited'],
-  ];
+  it('closed ставит closedAt', () => {
+    const map = withLifecycle('sleeping');
+    const session = transitionSession(map, 's-01', 'closed', { at: '2026-09-02T11:00:00.000Z' });
 
-  it.each(forbidden)('переход %s → %s запрещён', (from, to) => {
-    const map = withStatus(from);
+    expect(session.closedAt).toBe('2026-09-02T11:00:00.000Z');
+  });
 
-    expect(() => transitionSession(map, 's-01', to)).toThrow(/недопустимый переход/);
-    expect(map.sessions[0]?.status).toBe(from);
-    expect(map.sessions[0]?.history).toHaveLength(1);
+  it('итог ставится из любого состояния, кроме closed, и процесс не меняет', () => {
+    for (const lifecycle of ['pending', 'active', 'sleeping'] as const) {
+      const map = withLifecycle(lifecycle);
+      const session = setResult(map, 's-01', 'done', '2026-09-02T11:00:00.000Z');
+      expect(session.lifecycle).toBe(lifecycle);
+      expect(session.result).toBe('done');
+      expect(session.resultAt).toBe('2026-09-02T11:00:00.000Z');
+      expect(session.history.at(-1)).toEqual({ event: 'done', at: '2026-09-02T11:00:00.000Z' });
+    }
+
+    const closed = withLifecycle('closed');
+    expect(() => setResult(closed, 's-01', 'failed')).toThrow(/закрыта/);
+    expect(closed.sessions[0]?.result).toBeNull();
+    expect(closed.sessions[0]?.history).toHaveLength(1);
   });
 
   it('код выхода пишется в последнюю запись history', () => {
-    const map = withStatus('active');
-    const session = transitionSession(map, 's-01', 'exited', {
+    const map = withLifecycle('active');
+    const session = transitionSession(map, 's-01', 'sleeping', {
       at: '2026-09-02T11:00:00.000Z',
       exitCode: 1,
     });
 
     expect(session.history.at(-1)).toEqual({
-      status: 'exited',
+      event: 'sleeping',
       at: '2026-09-02T11:00:00.000Z',
       exitCode: 1,
     });
@@ -163,15 +202,15 @@ describe('transitionSession', () => {
   });
 
   it('сигнал завершения пишется рядом с кодом выхода', () => {
-    const map = withStatus('active');
-    const session = transitionSession(map, 's-01', 'exited', {
+    const map = withLifecycle('active');
+    const session = transitionSession(map, 's-01', 'sleeping', {
       at: '2026-09-02T11:00:00.000Z',
       exitCode: 137,
       signal: 9,
     });
 
     expect(session.history.at(-1)).toEqual({
-      status: 'exited',
+      event: 'sleeping',
       at: '2026-09-02T11:00:00.000Z',
       exitCode: 137,
       signal: 9,
@@ -179,9 +218,9 @@ describe('transitionSession', () => {
   });
 
   it('startedAt ставится при первом переходе в active, endedAt снимается при возобновлении', () => {
-    const map = withStatus('pending');
+    const map = withLifecycle('pending');
     transitionSession(map, 's-01', 'active', { at: '2026-09-02T11:00:00.000Z' });
-    transitionSession(map, 's-01', 'exited', { at: '2026-09-02T11:30:00.000Z' });
+    transitionSession(map, 's-01', 'sleeping', { at: '2026-09-02T11:30:00.000Z' });
     const resumed = transitionSession(map, 's-01', 'active', { at: '2026-09-02T12:00:00.000Z' });
 
     expect(resumed.startedAt).toBe('2026-09-02T11:00:00.000Z');
@@ -199,20 +238,288 @@ describe('parseMap', () => {
     expect(parseMap(JSON.stringify(map), 'map.json')).toEqual(map);
   });
 
-  it('карта со статусом idle читается как active — и в history тоже', () => {
-    const map = emptyMap();
-    const session = addSession(map, { provider: 'claude', label: 'план', task: 't' });
-    // Так карту писала версия до 2026-09-05: статус idle был частью цикла.
-    const legacy = JSON.parse(JSON.stringify(map)) as {
-      sessions: { status: string; history: { status: string; at: string }[] }[];
+  it('карта v1 поднимается до v2 поле в поле (три сессии и пять писем, как в w-0010)', () => {
+    const v1 = {
+      ...emptyV1(),
+      work: { ...emptyMap().work, id: 'w-0010', sessionSeq: 3 },
+      sessions: [
+        {
+          id: 's-01',
+          provider: 'claude',
+          label: 'план',
+          task: 'составить план',
+          parent: null,
+          contextFrom: [],
+          status: 'done',
+          history: [
+            { status: 'pending', at: '2026-09-20T10:00:00.000Z' },
+            { status: 'active', at: '2026-09-20T10:01:00.000Z' },
+            { status: 'done', at: '2026-09-20T10:30:00.000Z' },
+            { status: 'active', at: '2026-09-20T11:00:00.000Z' },
+            { status: 'done', at: '2026-09-20T11:40:00.000Z' },
+          ],
+          startedAt: '2026-09-20T10:01:00.000Z',
+          endedAt: '2026-09-20T11:40:00.000Z',
+          pid: 4242,
+          startedAtProcess: '2026-09-20T10:01:00.000Z',
+          launchedBy: 'tui',
+          providerSessionId: 'uuid-1',
+          metrics: null,
+          summary: 'план готов',
+          summarySource: 'agent',
+          artifacts: [{ kind: 'plan', path: 'docs/plan.md' }],
+          agent: null,
+        },
+        {
+          id: 's-02',
+          provider: 'codex',
+          label: 'бэкенд',
+          task: 'шаги 1–3',
+          parent: 's-01',
+          contextFrom: ['s-01'],
+          status: 'exited',
+          history: [
+            { status: 'pending', at: '2026-09-20T10:05:00.000Z' },
+            { status: 'active', at: '2026-09-20T10:06:00.000Z' },
+            { status: 'exited', at: '2026-09-20T10:50:00.000Z', exitCode: 0 },
+          ],
+          startedAt: '2026-09-20T10:06:00.000Z',
+          endedAt: '2026-09-20T10:50:00.000Z',
+          pid: null,
+          startedAtProcess: null,
+          launchedBy: 'tui',
+          providerSessionId: null,
+          metrics: null,
+          summary: null,
+          summarySource: null,
+          artifacts: [],
+          agent: null,
+        },
+        {
+          id: 's-03',
+          provider: 'claude',
+          label: 'ревью',
+          task: 'проверить',
+          parent: 's-01',
+          contextFrom: [],
+          status: 'active',
+          history: [
+            { status: 'pending', at: '2026-09-20T10:10:00.000Z' },
+            { status: 'active', at: '2026-09-20T10:11:00.000Z' },
+          ],
+          startedAt: '2026-09-20T10:11:00.000Z',
+          endedAt: null,
+          pid: 777,
+          startedAtProcess: '2026-09-20T10:11:00.000Z',
+          launchedBy: 'host',
+          providerSessionId: 'uuid-3',
+          metrics: null,
+          summary: null,
+          summarySource: null,
+          artifacts: [],
+          agent: 'reviewer',
+        },
+      ],
+      messages: [
+        {
+          id: 'm-01',
+          from: 's-01',
+          to: 's-02',
+          at: '2026-09-20T10:07:00.000Z',
+          text: 'начни с миграции',
+          kind: 'note',
+          readAt: '2026-09-20T10:08:00.000Z',
+        },
+        {
+          id: 'm-02',
+          from: 's-02',
+          to: 's-01',
+          at: '2026-09-20T10:20:00.000Z',
+          text: 'схема ок?',
+          kind: 'question',
+          readAt: '2026-09-20T10:21:00.000Z',
+        },
+        {
+          id: 'm-03',
+          from: 's-01',
+          to: 's-02',
+          at: '2026-09-20T10:22:00.000Z',
+          text: 'да',
+          kind: 'decision',
+          readAt: null,
+        },
+        {
+          id: 'm-04',
+          from: 's-03',
+          to: 's-01',
+          at: '2026-09-20T10:40:00.000Z',
+          text: 'замечания',
+          readAt: null,
+        },
+        {
+          id: 'm-05',
+          from: 's-01',
+          to: 's-03',
+          at: '2026-09-20T10:45:00.000Z',
+          text: 'поправил',
+          kind: 'note',
+          readAt: null,
+          deleted: true,
+        },
+      ],
     };
-    (legacy.sessions[0] as { status: string }).status = 'idle';
-    legacy.sessions[0]?.history.push({ status: 'idle', at: '2026-09-02T11:00:00.000Z' });
+
+    const parsed = parseMap(JSON.stringify(v1), 'map.json');
+
+    const [s1, s2, s3] = v1.sessions as unknown as [
+      Record<string, unknown>,
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ];
+    // Поля v1, которых в v2 нет: статус и история прежней формы.
+    const strip = (session: Record<string, unknown>): Record<string, unknown> => {
+      const rest = { ...session };
+      delete rest['status'];
+      delete rest['history'];
+      return rest;
+    };
+    expect(parsed).toEqual({
+      schemaVersion: 2,
+      work: v1.work,
+      rooms: [],
+      sessions: [
+        {
+          ...strip(s1),
+          lifecycle: 'sleeping',
+          result: 'done',
+          resultAt: '2026-09-20T11:40:00.000Z',
+          closedAt: null,
+          history: [
+            { event: 'pending', at: '2026-09-20T10:00:00.000Z' },
+            { event: 'active', at: '2026-09-20T10:01:00.000Z' },
+            { event: 'done', at: '2026-09-20T10:30:00.000Z' },
+            { event: 'active', at: '2026-09-20T11:00:00.000Z' },
+            { event: 'done', at: '2026-09-20T11:40:00.000Z' },
+          ],
+        },
+        {
+          ...strip(s2),
+          lifecycle: 'sleeping',
+          result: null,
+          resultAt: null,
+          closedAt: null,
+          history: [
+            { event: 'pending', at: '2026-09-20T10:05:00.000Z' },
+            { event: 'active', at: '2026-09-20T10:06:00.000Z' },
+            { event: 'sleeping', at: '2026-09-20T10:50:00.000Z', exitCode: 0 },
+          ],
+        },
+        {
+          ...strip(s3),
+          lifecycle: 'active',
+          result: null,
+          resultAt: null,
+          closedAt: null,
+          history: [
+            { event: 'pending', at: '2026-09-20T10:10:00.000Z' },
+            { event: 'active', at: '2026-09-20T10:11:00.000Z' },
+          ],
+        },
+      ],
+      messages: [
+        {
+          id: 'm-01',
+          roomId: null,
+          from: 's-01',
+          to: ['s-02'],
+          at: '2026-09-20T10:07:00.000Z',
+          text: 'начни с миграции',
+          kind: 'note',
+          readBy: { 's-02': '2026-09-20T10:08:00.000Z' },
+        },
+        {
+          id: 'm-02',
+          roomId: null,
+          from: 's-02',
+          to: ['s-01'],
+          at: '2026-09-20T10:20:00.000Z',
+          text: 'схема ок?',
+          kind: 'question',
+          readBy: { 's-01': '2026-09-20T10:21:00.000Z' },
+        },
+        {
+          id: 'm-03',
+          roomId: null,
+          from: 's-01',
+          to: ['s-02'],
+          at: '2026-09-20T10:22:00.000Z',
+          text: 'да',
+          kind: 'decision',
+          readBy: {},
+        },
+        {
+          id: 'm-04',
+          roomId: null,
+          from: 's-03',
+          to: ['s-01'],
+          at: '2026-09-20T10:40:00.000Z',
+          text: 'замечания',
+          kind: 'note',
+          readBy: {},
+        },
+        {
+          id: 'm-05',
+          roomId: null,
+          from: 's-01',
+          to: ['s-03'],
+          at: '2026-09-20T10:45:00.000Z',
+          text: 'поправил',
+          kind: 'note',
+          readBy: {},
+          deleted: true,
+        },
+      ],
+    });
+  });
+
+  it('разобранная v1 пишется как v2 и читается обратно без потерь', () => {
+    const v1 = {
+      ...emptyV1(),
+      sessions: [
+        {
+          id: 's-01',
+          status: 'failed',
+          history: [{ status: 'failed', at: '2026-09-02T11:00:00.000Z' }],
+        },
+      ],
+      messages: [{ id: 'm-01', from: 's-01', to: 's-02', at: 'x', text: 't', readAt: null }],
+    };
+    const once = parseMap(JSON.stringify(v1), 'map.json');
+    const twice = parseMap(JSON.stringify(once), 'map.json');
+
+    expect(once.schemaVersion).toBe(2);
+    expect(JSON.parse(JSON.stringify(once))).toMatchObject({ schemaVersion: 2, rooms: [] });
+    expect(twice).toEqual(once);
+  });
+
+  it('карта v1 со статусом idle читается как active — и в history тоже', () => {
+    const legacy = {
+      ...emptyV1(),
+      sessions: [
+        {
+          id: 's-01',
+          status: 'idle',
+          history: [
+            { status: 'pending', at: '2026-09-02T10:00:00.000Z' },
+            { status: 'idle', at: '2026-09-02T11:00:00.000Z' },
+          ],
+        },
+      ],
+    };
 
     const parsed = parseMap(JSON.stringify(legacy), 'map.json');
-    expect(parsed.sessions[0]?.status).toBe('active');
-    expect(parsed.sessions[0]?.history.map((entry) => entry.status)).toEqual(['pending', 'active']);
-    expect(session.id).toBe('s-01');
+    expect(parsed.sessions[0]?.lifecycle).toBe('active');
+    expect(parsed.sessions[0]?.history.map((entry) => entry.event)).toEqual(['pending', 'active']);
   });
 
   it('в старой карте без полей процесса они читаются как null', () => {
@@ -231,7 +538,7 @@ describe('parseMap', () => {
 
   it('35: карта без kind у письма читается как note, остальные поля не тронуты', () => {
     const raw = JSON.stringify({
-      ...emptyMap(),
+      ...emptyV1(),
       messages: [
         {
           id: 'm-01',
@@ -248,24 +555,12 @@ describe('parseMap', () => {
     expect(map.messages[0]).toMatchObject({
       id: 'm-01',
       from: 's-01',
-      to: 's-02',
+      to: ['s-02'],
       at: '2026-09-08T10:00:00.000Z',
       text: 'x',
       kind: 'note',
-      readAt: null,
+      readBy: {},
     });
-  });
-
-  it('35: карта без agent у сессии читается как null, остальные поля не тронуты', () => {
-    const map = emptyMap();
-    addSession(map, { provider: 'claude', label: 'план', task: 'план' });
-    const legacy = JSON.parse(JSON.stringify(map)) as { sessions: Record<string, unknown>[] };
-    delete legacy.sessions[0]?.['agent'];
-
-    const parsed = parseMap(JSON.stringify(legacy), 'map.json');
-    expect(parsed.sessions[0]?.agent).toBeNull();
-    expect(parsed.sessions[0]?.label).toBe('план');
-    expect(parsed.sessions[0]?.history).toHaveLength(1);
   });
 
   it('битый json — ошибка', () => {
@@ -274,7 +569,20 @@ describe('parseMap', () => {
 
   it('чужая форма или другая версия схемы — ошибка', () => {
     expect(() =>
-      parseMap('{"schemaVersion":2,"work":{},"sessions":[],"messages":[]}', 'map.json'),
+      parseMap('{"schemaVersion":2,"work":{},"sessions":[],"messages":[],"rooms":[]}', 'map.json'),
+    ).toThrow(/не парсится/);
+    expect(() =>
+      parseMap(
+        '{"schemaVersion":3,"work":{"id":"w-0001"},"sessions":[],"messages":[],"rooms":[]}',
+        'map.json',
+      ),
+    ).toThrow(/не парсится/);
+    // v2 без комнат — не наша карта: v2 пишется только с ними.
+    expect(() =>
+      parseMap(
+        '{"schemaVersion":2,"work":{"id":"w-0001"},"sessions":[],"messages":[]}',
+        'map.json',
+      ),
     ).toThrow(/не парсится/);
     expect(() => parseMap('{"schemaVersion":1,"sessions":[]}', 'map.json')).toThrow(/не парсится/);
     expect(() => parseMap('[]', 'map.json')).toThrow(/не парсится/);
@@ -297,6 +605,15 @@ describe('parseMap', () => {
         'map.json',
       ),
     ).toThrow(/не парсится/);
+    // v2: статус v1 вместо оси процесса и один адресат строкой — чужая форма.
+    const v2 = (sessions: string, messages: string): string =>
+      `{"schemaVersion":2,"work":{"id":"w-0001"},"sessions":${sessions},"messages":${messages},"rooms":[]}`;
+    expect(() =>
+      parseMap(v2('[{"id":"s-01","status":"active","history":[]}]', '[]'), 'map.json'),
+    ).toThrow(/не парсится/);
+    expect(() => parseMap(v2('[]', '[{"id":"m-01","to":"s-01"}]'), 'map.json')).toThrow(
+      /не парсится/,
+    );
   });
 });
 
@@ -335,14 +652,17 @@ describe('removeSession', () => {
 
   it('21: сообщения удалённой остаются в карте с пометкой deleted', () => {
     const map = tree();
-    addMessage(map, { from: 's-02', to: 's-01', text: 'жду миграции' });
-    addMessage(map, { from: 's-01', to: 's-03', text: 'не про неё' });
+    addMessage(map, { from: 's-02', to: ['s-01'], text: 'жду миграции' });
+    addMessage(map, { from: 's-01', to: ['s-03'], text: 'не про неё' });
+    addMessage(map, { from: 's-01', to: ['s-03', 's-02'], text: 'обоим' });
     removeSession(map, 's-02');
 
-    expect(map.messages).toHaveLength(2);
+    expect(map.messages).toHaveLength(3);
     expect(map.messages[0]?.deleted).toBe(true);
     expect(map.messages[0]?.text).toBe('жду миграции');
     expect(map.messages[1]?.deleted).toBeUndefined();
+    // Удалённая — один из адресатов: `to.includes`, а не сравнение строки с массивом.
+    expect(map.messages[2]?.deleted).toBe(true);
   });
 
   it('22: id не переиспользуется — счётчик sessionSeq переживает удаление', () => {

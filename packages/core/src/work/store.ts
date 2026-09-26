@@ -276,7 +276,7 @@ export async function createWork(
 ): Promise<WorkMap> {
   const at = new Date().toISOString();
   const map: WorkMap = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     work: {
       id: 'w-0000',
       title: init.title,
@@ -287,6 +287,7 @@ export async function createWork(
     },
     sessions: [],
     messages: [],
+    rooms: [],
   };
 
   await withWorksIndex(lockTimeoutMs, async (index) => {

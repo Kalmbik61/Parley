@@ -68,11 +68,12 @@ describe('createWork', () => {
     const map = await createWork(project, { title: 'Авторизация', goal: 'логин по паролю' });
     const paths = workPaths(project, 'w-0001');
 
-    expect(map.schemaVersion).toBe(1);
+    expect(map.schemaVersion).toBe(2);
     expect(map.work.id).toBe('w-0001');
     expect(map.work.status).toBe('active');
     expect(map.sessions).toEqual([]);
     expect(map.messages).toEqual([]);
+    expect(map.rooms).toEqual([]);
     expect(paths.dir).toBe(path.join(project, '.harnas', 'works', 'w-0001'));
     expect(await isDirectory(paths.briefs)).toBe(true);
     expect(await isDirectory(paths.artifacts)).toBe(true);
@@ -130,6 +131,26 @@ describe('createWork', () => {
 });
 
 describe('updateMap', () => {
+  it('карта v1 на диске после первой мутации ложится как v2 и читается без потерь', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, 'w-0001');
+    const v1 = JSON.parse(await readFile(paths.map, 'utf8')) as Record<string, unknown>;
+    delete v1['rooms'];
+    v1['schemaVersion'] = 1;
+    v1['sessions'] = [{ id: 's-01', status: 'exited', history: [{ status: 'exited', at: 'x' }] }];
+    v1['messages'] = [{ id: 'm-01', from: 's-02', to: 's-01', at: 'x', text: 't', readAt: null }];
+    await writeFile(paths.map, JSON.stringify(v1), 'utf8');
+
+    const updated = await updateMap(project, 'w-0001', () => {});
+
+    const raw = JSON.parse(await readFile(paths.map, 'utf8')) as WorkMap;
+    expect(raw.schemaVersion).toBe(2);
+    expect(raw.rooms).toEqual([]);
+    expect(raw.sessions[0]).toMatchObject({ lifecycle: 'sleeping', result: null });
+    expect(raw.messages[0]).toMatchObject({ to: ['s-01'], readBy: {}, roomId: null });
+    expect(await readMap(project, 'w-0001')).toEqual(updated);
+  });
+
   it('пишет карту, кладёт прежнюю версию в .bak и обновляет индекс', async () => {
     await createWork(project, { title: 'Авторизация' });
     const paths = workPaths(project, 'w-0001');

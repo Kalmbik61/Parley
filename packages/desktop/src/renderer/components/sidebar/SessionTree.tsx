@@ -6,7 +6,7 @@
 
 import type { WorkSession } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
-import { dotState, STATE_WORDS } from '../../lib/dot-state.js';
+import { displayStatus, dotState, STATE_WORDS } from '../../lib/dot-state.js';
 import { sessionRowLabel } from '../../lib/participant.js';
 import { treeOrder, workKey } from '../../lib/tree-order.js';
 import type { ActivityEntry } from '../../store/activity.js';
@@ -46,14 +46,15 @@ export function SessionTree({
       {treeOrder(sessions).map(({ session, depth }) => {
         const ref: SessionRef = { projectPath, workId, sessionId: session.id };
         const entry = activityFor(activityByRef, ref);
-        const state = dotState(session.status, entry?.activity.activity ?? null);
+        const status = displayStatus(session);
+        const state = dotState(status, entry?.activity.activity ?? null);
         const selected = session.id === selectedSessionId;
         const label = sessionRowLabel(session.id, session.label);
 
         return (
           <div key={session.id}>
             <SessionMenu
-              status={session.status}
+              status={status}
               label={label}
               onOpen={() => onOpen(session)}
               onResume={() => onResume(session)}

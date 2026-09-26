@@ -331,8 +331,8 @@ export async function registerResumed(
   let created: WorkSession | undefined;
   await updateMap(projectPath, workId, (map) => {
     const session = addSession(map, { provider: 'claude', label, task: '' }, at);
-    session.status = 'active';
-    session.history = [{ status: 'active', at }];
+    session.lifecycle = 'active';
+    session.history = [{ event: 'active', at }];
     session.startedAt = at;
     session.providerSessionId = providerSessionId;
     created = session;
@@ -385,7 +385,7 @@ export interface StartedProcess {
 }
 
 /**
- * Панель открыта, процесс запущен: `pending`/`exited`/`done`/`failed` → `active`
+ * Панель открыта, процесс запущен: `pending`/`sleeping` → `active`
  * с записью id сессии у провайдера (спецификация, раздел 6) и приметами
  * процесса, по которым сессия узнаётся после перезапуска харнесса (5.4).
  */
@@ -402,7 +402,7 @@ export async function startSession(
     // `active → active` таблицей не разрешён и здесь не нужен — остаётся
     // записать приметы процесса.
     const session =
-      current?.status === 'active' ? current : transitionSession(map, sessionId, 'active');
+      current?.lifecycle === 'active' ? current : transitionSession(map, sessionId, 'active');
     if (providerSessionId !== null) session.providerSessionId = providerSessionId;
     if (started === undefined) return;
     session.pid = started.pid;
@@ -446,9 +446,9 @@ export async function linkSession(
 }
 
 /**
- * Процесс сессии завершился: `active` → `exited` с кодом выхода в
- * `history` и фиксацией итоговых метрик. Сессия, успевшая отчитаться, остаётся
- * в своём `done`/`failed` — отчёт агента важнее выхода процесса (раздел 6).
+ * Процесс сессии завершился: `active` → `sleeping` с кодом выхода в
+ * `history` и фиксацией итоговых метрик. Итог отчёта выход процесса не трогает:
+ * это другая ось (спецификация 7.1).
  */
 export async function finishExited(
   projectPath: string,
@@ -461,9 +461,9 @@ export async function finishExited(
     (candidate) => candidate.id === sessionId,
   );
   if (session === undefined) return;
-  if (session.status !== 'active') return;
+  if (session.lifecycle !== 'active') return;
 
-  await finishSession(projectPath, workId, sessionId, 'exited', {
+  await finishSession(projectPath, workId, sessionId, 'sleeping', {
     ...roots,
     exitCode: exit.exitCode,
     ...(exit.signal === undefined ? {} : { signal: exit.signal }),
