@@ -14,6 +14,7 @@ import {
   setResult,
   transitionSession,
 } from '../work/map.js';
+import { addRoom } from '../work/rooms.js';
 import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
 import { decisionsOf, threadOf } from '../work/thread.js';
 import type { WorkMap } from '../work/types.js';
@@ -178,14 +179,17 @@ describe('contextFromEnv', () => {
 });
 
 describe('список инструментов', () => {
-  it('ровно семь инструментов спецификации', async () => {
+  it('ровно десять инструментов спецификации', async () => {
     const client = await connect('s-01');
     const { tools } = await client.listTools();
 
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       'check_inbox',
+      'close_session',
+      'create_room',
       'get_map',
       'read_guide',
+      'read_room',
       'report',
       'send_message',
       'spawn_session',
@@ -257,6 +261,9 @@ describe('без HARNAS_SESSION_ID', () => {
       call(client, 'wait_for', { target: 'inbox', timeoutSec: 0 }),
       call(client, 'send_message', { to: 's-01', text: 'привет' }),
       call(client, 'check_inbox'),
+      call(client, 'create_room', { title: 'x', members: ['s-01'] }),
+      call(client, 'read_room', { room: 'r-01' }),
+      call(client, 'close_session', { target: 's-01' }),
     ];
 
     for (const result of await Promise.all(calls)) {
@@ -349,6 +356,19 @@ describe('report', () => {
 
     expect(result.isError).toBe(true);
     expect(result.text).toMatch(/done/);
+  });
+
+  it('после close_session — ошибка любым статусом, резюме не меняется', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'close_session', { target: 's-01' });
+
+    const progress = await call(client, 'report', { status: 'progress', summary: 'x' });
+    expect(progress.isError).toBe(true);
+    expect(progress.text).toContain('закрыта');
+
+    const done = await call(client, 'report', { status: 'done', summary: 'x' });
+    expect(done.isError).toBe(true);
+    expect(session(await readMapFile(), 's-01').summary).toBeNull();
   });
 });
 
@@ -487,7 +507,15 @@ describe('send_message и check_inbox', () => {
     const stored = (await readMapFile()).messages[0];
     const inbox = await callOk(first, 'check_inbox');
     expect(inbox['messages']).toEqual([
-      { id: 'm-01', from: 's-02', at: stored?.at, text: 'нужен план', kind: 'note' },
+      {
+        id: 'm-01',
+        from: 's-02',
+        fromLabel: 'бэк',
+        at: stored?.at,
+        text: 'нужен план',
+        kind: 'note',
+        room: null,
+      },
     ]);
     expect((await readMapFile()).messages[0]?.readBy['s-01']).toBeDefined();
 
@@ -580,6 +608,255 @@ describe('send_message и check_inbox', () => {
     expect(await callOk(second, 'send_message', { to: 's-01', text: 'три' })).toEqual({
       messageId: 'm-04',
     });
+  });
+
+  it('to массивом из одного элемента — как строка', async () => {
+    const first = await connect('s-01');
+    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    const second = await connect('s-02');
+
+    const sent = await callOk(second, 'send_message', { to: ['s-01'], text: 'массивом' });
+    expect(sent['messageId']).toBe('m-01');
+    expect((await readMapFile()).messages[0]?.to).toEqual(['s-01']);
+  });
+
+  it('без room несколько адресатов в to — ошибка, письмо не создано', async () => {
+    const first = await connect('s-01');
+    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+
+    const result = await call(first, 'send_message', { to: ['s-01', 's-02'], text: 'кому?' });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('room');
+    expect((await readMapFile()).messages).toEqual([]);
+  });
+
+  it('закрытому адресату без room — ошибка', async () => {
+    const first = await connect('s-01');
+    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await callOk(first, 'close_session', { target: 's-02' });
+
+    const result = await call(first, 'send_message', { to: 's-02', text: 'привет' });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('s-02');
+    expect(result.text).toContain('закрыта');
+  });
+});
+
+describe('create_room', () => {
+  it('незнакомый участник — ошибка, комната не создаётся', async () => {
+    const client = await connect('s-01');
+    const result = await call(client, 'create_room', { title: 'бэкенд', members: ['s-09'] });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('s-09');
+    expect((await readMapFile()).rooms).toEqual([]);
+  });
+
+  it('повторы схлопнуты, создатель в members не попадает', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
+
+    const result = await callOk(client, 'create_room', {
+      title: 'бэкенд',
+      members: ['s-02', 's-02', 's-03', 's-01'],
+    });
+
+    expect(result).toEqual({ roomId: 'r-01' });
+    const room = (await readMapFile()).rooms[0];
+    expect(room?.creator).toBe('s-01');
+    expect(room?.members).toEqual(['s-02', 's-03']);
+  });
+
+  it('письмо о добавлении уходит всем участникам, кроме создателя', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
+    await callOk(client, 'create_room', { title: 'бэкенд', members: ['s-02', 's-03'] });
+
+    const second = await connect('s-02');
+    const inboxSecond = await callOk(second, 'check_inbox');
+    expect((inboxSecond['messages'] as { text: string }[]).map((m) => m.text)).toEqual([
+      'Вас добавили в r-01 «бэкенд» с S02 и S03',
+    ]);
+
+    const third = await connect('s-03');
+    const inboxThird = await callOk(third, 'check_inbox');
+    expect((inboxThird['messages'] as { text: string }[]).map((m) => m.text)).toEqual([
+      'Вас добавили в r-01 «бэкенд» с S02 и S03',
+    ]);
+
+    // Создатель своё же приглашение не получает.
+    expect((await callOk(client, 'check_inbox'))['messages']).toEqual([]);
+  });
+
+  it('закрытый участник — ошибка, комната не создаётся', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await callOk(client, 'close_session', { target: 's-02' });
+
+    const result = await call(client, 'create_room', { title: 'x', members: ['s-02'] });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('s-02');
+    expect((await readMapFile()).rooms).toEqual([]);
+  });
+});
+
+describe('send_message и check_inbox в комнате', () => {
+  /** Комната с двумя участниками; приглашения уже забраны check_inbox. */
+  async function roomSetup(): Promise<{ owner: Client; a: Client; b: Client }> {
+    const owner = await connect('s-01');
+    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
+    await callOk(owner, 'create_room', { title: 'комната', members: ['s-02', 's-03'] });
+    const a = await connect('s-02');
+    const b = await connect('s-03');
+    await callOk(a, 'check_inbox');
+    await callOk(b, 'check_inbox');
+    return { owner, a, b };
+  }
+
+  it('рассылка видна каждому участнику и отмечается прочитанной отдельно', async () => {
+    const { owner, a, b } = await roomSetup();
+    await callOk(owner, 'send_message', { room: 'r-01', text: 'всем привет' });
+
+    const inboxA = await callOk(a, 'check_inbox');
+    const messagesA = inboxA['messages'] as { text: string; room: { id: string; title: string } }[];
+    expect(messagesA.map((m) => m.text)).toEqual(['всем привет']);
+    expect(messagesA[0]?.room).toEqual({ id: 'r-01', title: 'комната' });
+
+    // b ещё не читал — письмо остаётся непрочитанным именно у него.
+    const broadcast = (await readMapFile()).messages.find((m) => m.text === 'всем привет');
+    expect(broadcast?.readBy['s-02']).toBeDefined();
+    expect(broadcast?.readBy['s-03']).toBeUndefined();
+
+    const inboxB = await callOk(b, 'check_inbox');
+    expect((inboxB['messages'] as { text: string }[]).map((m) => m.text)).toEqual(['всем привет']);
+  });
+
+  it('адресное письмо в комнате видит только адресат', async () => {
+    const { owner, a, b } = await roomSetup();
+    await callOk(owner, 'send_message', { room: 'r-01', to: 's-02', text: 'только тебе' });
+
+    expect((await callOk(a, 'check_inbox'))['messages']).toHaveLength(1);
+    expect((await callOk(b, 'check_inbox'))['messages']).toEqual([]);
+  });
+
+  it('не участник комнаты — ошибка и отправителю, и как адресату', async () => {
+    const owner = await connect('s-01');
+    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'сторонний', task: 'делать' }); // s-03
+    await callOk(owner, 'create_room', { title: 'комната', members: ['s-02'] });
+
+    const stranger = await connect('s-03');
+    const asSender = await call(stranger, 'send_message', { room: 'r-01', text: 'я тут?' });
+    expect(asSender.isError).toBe(true);
+    expect(asSender.text).toContain('s-03');
+
+    const asRecipient = await call(owner, 'send_message', { room: 'r-01', to: 's-03', text: 'эй' });
+    expect(asRecipient.isError).toBe(true);
+    expect(asRecipient.text).toContain('s-03');
+  });
+
+  it('messageRate на рассылку в комнате считается как одно письмо', async () => {
+    const owner = await connect('s-01', 40, 2); // лимит — два письма в час
+    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
+    // Комната заведена в обход create_room: его приглашения не должны путать счёт.
+    await updateMap(project, workId, (map) => {
+      addRoom(map, { title: 'комната', creator: 's-01', members: ['s-02', 's-03'] });
+    });
+
+    await callOk(owner, 'send_message', { room: 'r-01', text: 'раз' });
+    await callOk(owner, 'send_message', { room: 'r-01', text: 'два' });
+    const refused = await call(owner, 'send_message', { room: 'r-01', text: 'три' });
+
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('слишком часто');
+    // Была бы рассылка на два письма (по адресату), лимит исчерпался бы на первом вызове.
+    expect((await readMapFile()).messages).toHaveLength(2);
+  });
+});
+
+describe('read_room', () => {
+  it('не участнику — ошибка, отметки не меняются', async () => {
+    const owner = await connect('s-01');
+    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'сторонний', task: 'делать' }); // s-03
+    await callOk(owner, 'create_room', { title: 'комната', members: ['s-02'] });
+    await callOk(owner, 'send_message', { room: 'r-01', text: 'привет' });
+
+    const stranger = await connect('s-03');
+    const result = await call(stranger, 'read_room', { room: 'r-01' });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('s-03');
+  });
+
+  it('участнику отдаёт последние limit писем, не отмечая прочтение', async () => {
+    const owner = await connect('s-01');
+    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await callOk(owner, 'create_room', { title: 'комната', members: ['s-02'] });
+    const second = await connect('s-02');
+    await callOk(second, 'check_inbox'); // забрали приглашение
+
+    await callOk(owner, 'send_message', { room: 'r-01', text: 'раз' });
+    await callOk(owner, 'send_message', { room: 'r-01', text: 'два' });
+    await callOk(owner, 'send_message', { room: 'r-01', text: 'три' });
+
+    const result = await callOk(second, 'read_room', { room: 'r-01', limit: 2 });
+    expect((result['messages'] as { text: string }[]).map((m) => m.text)).toEqual(['два', 'три']);
+
+    const broadcasts = (await readMapFile()).messages.filter((m) =>
+      ['раз', 'два', 'три'].includes(m.text),
+    );
+    expect(broadcasts.every((m) => Object.keys(m.readBy).length === 0)).toBe(true);
+  });
+});
+
+describe('close_session', () => {
+  it('закрывает себя', async () => {
+    const client = await connect('s-01');
+    const result = await callOk(client, 'close_session', { target: 's-01' });
+
+    expect(result).toEqual({ sessionId: 's-01' });
+    expect(session(await readMapFile(), 's-01').lifecycle).toBe('closed');
+  });
+
+  it('закрывает прямого потомка', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+
+    await callOk(client, 'close_session', { target: 's-02' });
+    expect(session(await readMapFile(), 's-02').lifecycle).toBe('closed');
+  });
+
+  it('закрывает косвенного потомка', async () => {
+    const owner = await connect('s-01');
+    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    const child = await connect('s-02');
+    await callOk(child, 'spawn_session', { provider: 'claude', label: 'внук', task: 'делать' }); // s-03
+
+    await callOk(owner, 'close_session', { target: 's-03' });
+    expect(session(await readMapFile(), 's-03').lifecycle).toBe('closed');
+  });
+
+  it('соседа закрыть нельзя', async () => {
+    const owner = await connect('s-01');
+    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
+    const second = await connect('s-02');
+
+    const result = await call(second, 'close_session', { target: 's-03' });
+    expect(result.isError).toBe(true);
+    expect(session(await readMapFile(), 's-03').lifecycle).toBe('pending');
+  });
+
+  it('повторное закрытие — ошибка', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'close_session', { target: 's-01' });
+
+    const result = await call(client, 'close_session', { target: 's-01' });
+    expect(result.isError).toBe(true);
   });
 });
 

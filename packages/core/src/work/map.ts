@@ -33,8 +33,8 @@ function numberOf(id: string, prefix: string): number {
   return Number.isInteger(digits) && digits > 0 ? digits : 0;
 }
 
-/** Наибольший занятый номер в списке id. */
-const maxNumber = (existing: readonly string[], prefix: string): number =>
+/** Наибольший занятый номер в списке id. Нужен и `rooms.ts` — счётчик комнат той же формы. */
+export const maxNumber = (existing: readonly string[], prefix: string): number =>
   existing.reduce((max, id) => Math.max(max, numberOf(id, prefix)), 0);
 
 /** Следующий свободный номер: id уже удалённых записей не переиспользуем. */

@@ -13,14 +13,17 @@ import { agentDirs, assertAgent } from '../work/agents.js';
 import { writeBrief } from '../work/brief.js';
 import { GUIDE } from '../work/guide.js';
 import { unreadFor } from '../work/letters.js';
-import { addMessage, addSession } from '../work/map.js';
+import { addMessage, addSession, transitionSession } from '../work/map.js';
 import { finishSession } from '../work/metrics.js';
+import { addRoom, isDescendant, isMember, joinNotice } from '../work/rooms.js';
 import { displayStatus } from '../work/status-view.js';
 import { readMap, updateMap, workPaths } from '../work/store.js';
+import { participantLabel } from '../work/thread.js';
 import {
   MESSAGE_KINDS,
   type Artifact,
   type Message,
+  type Room,
   type WorkMap,
   type WorkSession,
 } from '../work/types.js';
@@ -89,6 +92,25 @@ function stringsArg(args: Record<string, unknown>, name: string): string[] {
   return value as string[];
 }
 
+/**
+ * `to` у `send_message`: одна строка (как раньше) или массив — обе формы
+ * приходят от клиентов агентов, а `send_message` без `room` всё равно требует
+ * ровно одного адресата после разбора.
+ */
+function toArg(args: Record<string, unknown>, name: string): string[] {
+  const value = args[name];
+  if (value === undefined) return [];
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value) && value.every((item) => typeof item === 'string')) {
+    return value as string[];
+  }
+  throw new Error(`аргумент ${name}: ожидалась строка или массив строк`);
+}
+
+function optionalStringArg(args: Record<string, unknown>, name: string): string | null {
+  return args[name] === undefined ? null : stringArg(args, name);
+}
+
 function numberArg(args: Record<string, unknown>, name: string): number | undefined {
   const value = args[name];
   if (value === undefined) return undefined;
@@ -131,13 +153,31 @@ function requireSession(map: WorkMap, sessionId: string): WorkSession {
   return session;
 }
 
-const messageView = (message: Message) => ({
-  id: message.id,
-  from: message.from,
-  at: message.at,
-  text: message.text,
-  kind: message.kind,
-});
+function requireRoom(map: WorkMap, roomId: string): Room {
+  const room = map.rooms.find((candidate) => candidate.id === roomId);
+  if (room === undefined) throw new Error(`комнаты ${roomId} нет в карте`);
+  return room;
+}
+
+/** Сессия существует и не закрыта — иначе письмо доставлять некому (спецификация 6.2). */
+function assertDeliverable(map: WorkMap, sessionId: string): void {
+  const session = requireSession(map, sessionId);
+  if (session.lifecycle === 'closed') throw new Error(`сессия ${sessionId} закрыта`);
+}
+
+/** Письмо в ответе агенту: комната и подпись отправителя — не только id (спецификация 6.2). */
+const messageView = (message: Message, map: WorkMap) => {
+  const room = message.roomId === null ? null : (map.rooms.find((r) => r.id === message.roomId) ?? null);
+  return {
+    id: message.id,
+    from: message.from,
+    fromLabel: participantLabel(map, message.from),
+    at: message.at,
+    text: message.text,
+    kind: message.kind,
+    room: room === null ? null : { id: room.id, title: room.title },
+  };
+};
 
 /**
  * Окно писем (разговор агентов, 4.7): два вежливых агента способны отвечать
@@ -228,11 +268,15 @@ const TOOLS: Tool[] = [
   {
     name: 'send_message',
     description:
-      'Кладёт сообщение другой сессии работы. Она заберёт его своим check_inbox. Отвечай только на question: заметка и решение ответа не требуют.',
+      'Кладёт сообщение в переписку. Без room — ровно одному адресату работы, как раньше. С room — отправитель и адресаты обязаны быть участниками комнаты; пустой или отсутствующий to — рассылка всем участникам. Отвечай только на question: заметка и решение ответа не требуют.',
     inputSchema: {
       type: 'object',
       properties: {
-        to: { type: 'string', description: 'Id сессии-получателя.' },
+        to: {
+          description:
+            'Id адресата или несколько сразу. Без room — ровно один; с room и без to — рассылка комнате.',
+          oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+        },
         text: { type: 'string' },
         kind: {
           type: 'string',
@@ -240,14 +284,58 @@ const TOOLS: Tool[] = [
           description:
             'question — жду ответа; decision — договорились; note — заметка (по умолчанию).',
         },
+        room: { type: 'string', description: 'Id комнаты из get_map; без него письмо прямое.' },
       },
-      required: ['to', 'text'],
+      required: ['text'],
     },
   },
   {
     name: 'check_inbox',
-    description: 'Отдаёт непрочитанные сообщения этой сессии и помечает их прочитанными.',
+    description:
+      'Отдаёт непрочитанные письма этой сессии — прямые и из её комнат, включая рассылки — и помечает их прочитанными. У каждого письма — подпись отправителя и комната, если она есть.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'create_room',
+    description:
+      'Заводит комнату — постоянный круг переписки для нескольких сессий. Вызывающий становится создателем и участником; остальным участникам уходит письмо о добавлении.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        members: {
+          type: 'array',
+          description: 'Id сессий-участников из get_map; себя указывать не нужно.',
+          items: { type: 'string' },
+        },
+      },
+      required: ['title', 'members'],
+    },
+  },
+  {
+    name: 'read_room',
+    description:
+      'Лента комнаты для контекста — последние limit писем, без пометок прочтения. Доступна только участникам.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        room: { type: 'string', description: 'Id комнаты из get_map.' },
+        limit: { type: 'number', description: 'Сколько последних писем отдать; по умолчанию 50.' },
+      },
+      required: ['room'],
+    },
+  },
+  {
+    name: 'close_session',
+    description:
+      'Закрывает сессию насовсем: письма ей больше не приходят, будильник её не поднимает. Цель — сама сессия или её потомок. Зови только после явного согласия человека.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'Id сессии: своей или порождённой по цепочке.' },
+      },
+      required: ['target'],
+    },
   },
   {
     name: 'read_guide',
@@ -286,6 +374,11 @@ async function report(
   // должен увидеть уже готовое резюме, а не пустое поле.
   let map = await updateMap(context.projectPath, context.workId, (current) => {
     const session = requireSession(current, sessionId);
+    // Закрытая сессия ничего больше не сдаёт (спецификация 7.1) — проверяем
+    // раньше записи резюме, иначе progress на закрытой тихо прошёл бы мимо.
+    if (session.lifecycle === 'closed') {
+      throw new Error(`сессия ${sessionId} закрыта: report не принят`);
+    }
     session.summary = summary;
     session.summarySource = 'agent';
     session.artifacts = artifacts;
@@ -369,10 +462,11 @@ async function waitFor(
   let probe: () => Promise<unknown | null>;
   if (target === 'inbox') {
     probe = async () => {
-      const messages = unreadFor(await read(), sessionId);
+      const map = await read();
+      const messages = unreadFor(map, sessionId);
       return messages.length === 0
         ? null
-        : { state: 'message', messages: messages.map(messageView) };
+        : { state: 'message', messages: messages.map((message) => messageView(message, map)) };
     };
   } else {
     // Первая проба идёт до всякого ожидания, поэтому неизвестный id падает
@@ -417,9 +511,10 @@ async function sendMessage(
   sessionId: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  const to = stringArg(args, 'to');
+  const to = toArg(args, 'to');
   const text = stringArg(args, 'text');
   const kind = args['kind'] === undefined ? 'note' : enumArg(args, 'kind', MESSAGE_KINDS);
+  const roomId = optionalStringArg(args, 'room');
 
   let created = '';
   await updateMap(context.projectPath, context.workId, (current) => {
@@ -427,9 +522,29 @@ async function sendMessage(
     // жив, и без проверки в карту легло бы письмо от несуществующего адресата,
     // ответить на которое нечем (план от 2026-09-06, раздел C).
     requireSession(current, sessionId);
-    requireSession(current, to);
     assertRate(current, sessionId, context.messageRate ?? DEFAULT_CONFIG.messageRate, Date.now());
-    created = addMessage(current, { from: sessionId, to: [to], text, kind }).id;
+
+    if (roomId !== null) {
+      const room = requireRoom(current, roomId);
+      if (!isMember(room, sessionId)) {
+        throw new Error(`сессия ${sessionId} не участник комнаты ${roomId}`);
+      }
+      for (const memberId of to) {
+        if (!isMember(room, memberId)) {
+          throw new Error(`сессия ${memberId} не участник комнаты ${roomId}`);
+        }
+        assertDeliverable(current, memberId);
+      }
+      // Пустой to в комнате — рассылка всем участникам (recipientsOf её и разберёт).
+      created = addMessage(current, { from: sessionId, to, text, kind, roomId }).id;
+    } else {
+      if (to.length !== 1) {
+        throw new Error('без room нужен ровно один адресат в to');
+      }
+      const target = to[0] as string;
+      assertDeliverable(current, target);
+      created = addMessage(current, { from: sessionId, to: [target], text, kind }).id;
+    }
   });
   return { messageId: created };
 }
@@ -437,13 +552,84 @@ async function sendMessage(
 async function checkInbox(context: McpContext, sessionId: string): Promise<unknown> {
   let messages: Message[] = [];
   const at = new Date().toISOString();
-  await updateMap(context.projectPath, context.workId, (current) => {
+  const map = await updateMap(context.projectPath, context.workId, (current) => {
     requireSession(current, sessionId);
     const inbox = unreadFor(current, sessionId);
     messages = inbox.map((message) => ({ ...message }));
     for (const message of inbox) message.readBy[sessionId] = at;
   });
-  return { messages: messages.map(messageView) };
+  return { messages: messages.map((message) => messageView(message, map)) };
+}
+
+async function createRoom(
+  context: McpContext,
+  sessionId: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const title = stringArg(args, 'title');
+  const membersInput = stringsArg(args, 'members');
+
+  let roomId = '';
+  await updateMap(context.projectPath, context.workId, (current) => {
+    requireSession(current, sessionId);
+    // Повторы схлопнуты, себя в список участников не добавляем — создатель и
+    // так участник (спецификация 6.1).
+    const members = [...new Set(membersInput)].filter((id) => id !== sessionId);
+    for (const memberId of members) {
+      const member = requireSession(current, memberId);
+      if (member.lifecycle === 'closed') {
+        throw new Error(`сессия ${memberId} закрыта: в комнату не добавить`);
+      }
+    }
+
+    const room = addRoom(current, { title, creator: sessionId, members });
+    roomId = room.id;
+    const notice = joinNotice(room, current);
+    for (const memberId of members) {
+      addMessage(current, { from: sessionId, to: [memberId], roomId: room.id, kind: 'note', text: notice });
+    }
+  });
+  return { roomId };
+}
+
+async function readRoom(
+  context: McpContext,
+  sessionId: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const roomId = stringArg(args, 'room');
+  const limit = numberArg(args, 'limit') ?? 50;
+
+  const map = await readMap(context.projectPath, context.workId);
+  const room = requireRoom(map, roomId);
+  if (!isMember(room, sessionId)) {
+    throw new Error(`сессия ${sessionId} не участник комнаты ${roomId}`);
+  }
+
+  const inRoom = map.messages
+    .filter((message) => message.roomId === roomId)
+    .sort((a, b) => a.at.localeCompare(b.at))
+    .slice(-limit);
+  return { messages: inRoom.map((message) => messageView(message, map)) };
+}
+
+async function closeSession(
+  context: McpContext,
+  sessionId: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const target = stringArg(args, 'target');
+
+  await updateMap(context.projectPath, context.workId, (current) => {
+    requireSession(current, target);
+    if (target !== sessionId && !isDescendant(current, sessionId, target)) {
+      throw new Error(
+        `сессия ${target} не подчинена ${sessionId}: close_session закрывает только себя или потомка`,
+      );
+    }
+    transitionSession(current, target, 'closed');
+  });
+  return { sessionId: target };
 }
 
 const NO_SESSION =
@@ -466,6 +652,9 @@ async function dispatch(
   if (name === 'wait_for') return waitFor(context, sessionId, args);
   if (name === 'send_message') return sendMessage(context, sessionId, args);
   if (name === 'check_inbox') return checkInbox(context, sessionId);
+  if (name === 'create_room') return createRoom(context, sessionId, args);
+  if (name === 'read_room') return readRoom(context, sessionId, args);
+  if (name === 'close_session') return closeSession(context, sessionId, args);
   throw new Error(`неизвестный инструмент ${name}`);
 }
 
