@@ -8,6 +8,7 @@ import type { WorksService } from '../works/works-service.js';
 import { hostInfo, hostShutdown } from './host.js';
 import { createPtyHandlers } from './pty.js';
 import { providersList } from './providers.js';
+import { roomsCreate, roomsSend } from './rooms.js';
 import { createSessionHandlers } from './sessions.js';
 import { settingsGet, settingsSet } from './settings.js';
 import { createWakeHandlers } from './wake.js';
@@ -65,6 +66,8 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
       'wake.pause': wake.wakePause as AnyHandler,
       'wake.resume': wake.wakeResume as AnyHandler,
       'wake.state': wake.wakeState as AnyHandler,
+      'rooms.create': roomsCreate as AnyHandler,
+      'rooms.send': roomsSend as AnyHandler,
     },
     notifications: {
       'pty.input': pty.ptyInput as AnyNotificationHandler,

@@ -6,7 +6,7 @@
  * решение по снимку состояния.
  */
 
-import type { Message, WorkSession } from './types.js';
+import type { Message, Room, WorkSession } from './types.js';
 import type { SessionActivity } from './activity.js';
 
 export interface DeliveryInput {
@@ -16,6 +16,8 @@ export interface DeliveryInput {
   paused: boolean;
   /** Непрочитанные письма сессии (`unreadFor`); удалённые отсеет сама доставка. */
   unread: readonly Message[];
+  /** Комнаты работы — для названия комнаты в тексте указателя. */
+  rooms: readonly Room[];
   /** Id писем, на которые указатель уже печатали — второй раз не набираем. */
   pointed: ReadonlySet<string>;
   inFlight: boolean;
@@ -40,9 +42,28 @@ export type DeliveryAction =
   | { kind: 'type-pointer'; text: string; letterIds: string[] }
   | { kind: 'resume'; text: string; letterIds: string[] };
 
-/** 'Новые письма (N). Вызови check_inbox.' — этап 3 добавит комнаты. */
-export function pointerText(count: number): string {
-  return `Новые письма (${count}). Вызови check_inbox.`;
+/**
+ * Текст указателя (план, кусок 3.5): сколько писем и откуда — прямые, одна
+ * комната с названием, несколько комнат списком, комнаты вместе с прямыми.
+ * Названия у нескольких комнат нет: строка набирается в чужой терминал и
+ * должна оставаться короткой, подробности отдаст `check_inbox`.
+ */
+export function pointerText(letters: readonly Message[], rooms: readonly Room[]): string {
+  const tail = 'Вызови check_inbox.';
+  const head = `Новые письма (${letters.length})`;
+  const roomIds = [
+    ...new Set(letters.flatMap((message) => (message.roomId === null ? [] : [message.roomId]))),
+  ].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+  const direct = letters.some((message) => message.roomId === null);
+
+  if (roomIds.length === 0) return `${head}. ${tail}`;
+  if (direct) return `${head} в ${roomIds.join(', ')} и лично. ${tail}`;
+  if (roomIds.length > 1) return `${head} в ${roomIds.join(', ')}. ${tail}`;
+
+  const id = roomIds[0] as string;
+  const room = rooms.find((candidate) => candidate.id === id);
+  // Комнаты в карте нет (письмо пережило её) — хватит и id.
+  return room === undefined ? `${head} в ${id}. ${tail}` : `${head} в ${id} «${room.title}». ${tail}`;
 }
 
 /**
@@ -50,7 +71,8 @@ export function pointerText(count: number): string {
  * к уже удалённой сессии (`deleted`) в счёт не идут — сама доставка их не читает.
  */
 export function deliveryAction(input: DeliveryInput): DeliveryAction {
-  const { session, activity, hasDraft, paused, unread, pointed, inFlight, resumeAllowed } = input;
+  const { session, activity, hasDraft, paused, unread, rooms, pointed, inFlight, resumeAllowed } =
+    input;
 
   if (paused) return { kind: 'none', reason: 'paused' };
   // Закрытая писем не получает вовсе (спецификация 7.1) — сколько бы их ни было.
@@ -68,7 +90,7 @@ export function deliveryAction(input: DeliveryInput): DeliveryAction {
     if (!resumeAllowed) return { kind: 'none', reason: 'resume-limit' };
     return {
       kind: 'resume',
-      text: pointerText(letters.length),
+      text: pointerText(letters, rooms),
       letterIds: letters.map((message) => message.id),
     };
   }
@@ -81,7 +103,7 @@ export function deliveryAction(input: DeliveryInput): DeliveryAction {
 
   return {
     kind: 'type-pointer',
-    text: pointerText(letters.length),
+    text: pointerText(letters, rooms),
     letterIds: letters.map((message) => message.id),
   };
 }

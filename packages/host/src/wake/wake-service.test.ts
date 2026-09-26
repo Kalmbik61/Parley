@@ -7,12 +7,13 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   addMessage,
+  addRoom,
   addSession,
   createWork,
-  pointerText,
   readMap,
   SYSTEM,
   transitionSession,
+  unreadFor,
   updateMap,
   workPaths,
 } from '@harnas/core';
@@ -21,6 +22,7 @@ import type { HostContext } from '../context.js';
 import { createActivityService } from '../activity/activity-service.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import { createPtyManager } from '../pty/pty-manager.js';
+import { createHumanRoom, sendHumanLetter } from '../rooms/rooms-service.js';
 import { createSessionsService } from '../sessions/sessions-service.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 import type { PtyLaunch } from '../pty/pty-process.js';
@@ -41,6 +43,9 @@ async function waitFor(check: () => boolean, timeoutMs = 5000): Promise<void> {
 }
 
 const settle = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Указатель на прямые письма — байт в байт по плану (сквозные ограничения). */
+const pointer = (count: number): string => `Новые письма (${count}). Вызови check_inbox.`;
 
 let home = '';
 let project = '';
@@ -169,7 +174,7 @@ describe('WakeService', () => {
 
     await sendLetter(workId, sessionId, 'секретное тело письма');
 
-    const expected = `echo: ${pointerText(1)}`;
+    const expected = `echo: ${pointer(1)}`;
     await waitFor(() => stream().includes(expected), 3000);
     expect(stream()).toContain(expected);
     expect(stream()).not.toContain('секретное тело письма');
@@ -197,11 +202,11 @@ describe('WakeService', () => {
 
     // Ход ещё не закончился — указателя быть не должно.
     await settle(250);
-    expect(stream()).not.toContain(`echo: ${pointerText(1)}`);
+    expect(stream()).not.toContain(`echo: ${pointer(1)}`);
 
     // Ход закончился (Stop) — теперь указатель уходит.
     await waitFor(() => stream().includes('echo: привет'), 3000);
-    await waitFor(() => stream().includes(`echo: ${pointerText(1)}`), 3000);
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
   }, 20_000);
 
   it('3: черновик блокирует указатель; после \\r черновик снят — указатель уходит', async () => {
@@ -211,10 +216,10 @@ describe('WakeService', () => {
     pty.input(ref, 'пр');
     await sendLetter(workId, sessionId);
     await settle(300);
-    expect(stream()).not.toContain(`echo: ${pointerText(1)}`);
+    expect(stream()).not.toContain(`echo: ${pointer(1)}`);
 
     pty.input(ref, '\r');
-    await waitFor(() => stream().includes(`echo: ${pointerText(1)}`), 3000);
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
   });
 
   it('4: три письма — один указатель с (3)', async () => {
@@ -230,7 +235,7 @@ describe('WakeService', () => {
       addMessage(map, { from: 's-00', to: [sessionId], text: 'три' });
     });
 
-    const expected = `echo: ${pointerText(3)}`;
+    const expected = `echo: ${pointer(3)}`;
     await waitFor(() => stream().includes(expected), 5000);
     expect(stream().split(expected)).toHaveLength(2);
   });
@@ -241,7 +246,7 @@ describe('WakeService', () => {
 
     await sendLetter(workId, sessionId);
 
-    const expected = `echo: ${pointerText(1)}`;
+    const expected = `echo: ${pointer(1)}`;
     await waitFor(() => stream().includes(expected), 3000);
 
     await waitFor(
@@ -262,11 +267,11 @@ describe('WakeService', () => {
     expect(wake.paused()).toBe(true);
     await sendLetter(workId, sessionId);
     await settle(300);
-    expect(stream()).not.toContain(`echo: ${pointerText(1)}`);
+    expect(stream()).not.toContain(`echo: ${pointer(1)}`);
 
     wake.resume();
     expect(wake.paused()).toBe(false);
-    await waitFor(() => stream().includes(`echo: ${pointerText(1)}`), 3000);
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
   });
 
   it('7: ввод человека между текстом и Enter — Enter не уходит, приходит pointer-cancelled', async () => {
@@ -275,7 +280,7 @@ describe('WakeService', () => {
 
     await sendLetter(workId, sessionId);
 
-    const raw = pointerText(1);
+    const raw = pointer(1);
     await waitFor(() => stream().includes(raw), 3000);
     pty.input(ref, 'X');
 
@@ -384,8 +389,8 @@ describe('WakeService: подъём спящей письмом', () => {
     });
 
     const argv = await readArgv(argsFile);
-    expect(argv.at(-1)).toBe(pointerText(1));
-    await waitFor(() => stream().includes(`echo: ${pointerText(1)}`), 5000);
+    expect(argv.at(-1)).toBe(pointer(1));
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 5000);
     expect(stream()).not.toContain('тело письма');
 
     const ref = { projectPath: project, workId, sessionId: target };
@@ -412,13 +417,13 @@ describe('WakeService: подъём спящей письмом', () => {
 
     // Хода ещё не было (SessionStart — работа): указателя нет.
     await settle(400);
-    expect(stream()).not.toContain(pointerText(1));
+    expect(stream()).not.toContain(pointer(1));
 
     // Первый ход нового процесса закончился — теперь указатель уходит.
     const ref = { projectPath: project, workId, sessionId: target };
     pty.input(ref, 'привет\r');
     await waitFor(() => stream().includes('echo: привет'), 5000);
-    await waitFor(() => stream().includes(`echo: ${pointerText(1)}`), 5000);
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 5000);
   }, 20_000);
 
   it('5: седьмой подъём за час — письмо ждёт, приходит resume-limit один раз', async () => {
@@ -484,5 +489,138 @@ describe('WakeService: подъём спящей письмом', () => {
     expect(sessions.live(ref)).toBe(false);
     expect(existsSync(argsFile)).toBe(false);
     expect((await readMap(project, workId)).sessions.find((s) => s.id === target)?.lifecycle).toBe('closed');
+  }, 20_000);
+});
+
+/** Работа с тремя живыми сессиями хоста; `events/` заведён, как при настоящем запуске. */
+async function trio(): Promise<{ workId: string; ids: [string, string, string] }> {
+  const map = await createWork(project, { title: 'Работа' });
+  const ids: string[] = [];
+  await updateMap(project, map.work.id, (current) => {
+    for (const label of ['один', 'два', 'три']) {
+      const created = addSession(current, { provider: 'claude', label, task: 'сделать' });
+      created.launchedBy = 'host';
+      transitionSession(current, created.id, 'active');
+      ids.push(created.id);
+    }
+  });
+  await mkdir(workPaths(project, map.work.id).events, { recursive: true });
+  return { workId: map.work.id, ids: ids as [string, string, string] };
+}
+
+/**
+ * works+activity+pty+wake и по стабу на каждую сессию. Письма, лежавшие в
+ * карте до старта (приглашения в комнату), будильник считает указанными —
+ * будят только новые.
+ */
+async function trioRig(workId: string, ids: readonly string[]): Promise<Map<string, () => string>> {
+  const host = fakeHost();
+  const works = createWorksService(host, { debounceMs: 20 });
+  const activity = createActivityService(host, works, { claudeRoot, codexRoot });
+  const pty = createPtyManager(host);
+  const wake = createWakeService(host, works, activity, pty, { launch: async () => {} }, { enterDelayMs: 30 });
+
+  await works.start();
+  await activity.start();
+  wake.start();
+
+  const streams = new Map<string, string>();
+  pty.on('output', (ref, data) => {
+    streams.set(ref.sessionId, (streams.get(ref.sessionId) ?? '') + data);
+  });
+  for (const sessionId of ids) {
+    pty.start(
+      { projectPath: project, workId, sessionId },
+      { command: process.execPath, args: [STUB], cwd: project, env: { ...process.env } },
+    );
+  }
+
+  stoppers.push(async () => {
+    for (const sessionId of ids) {
+      await pty.stop({ projectPath: project, workId, sessionId }, { graceMs: 200 }).catch(() => {});
+    }
+    wake.stop();
+    await activity.stop();
+    await works.stop();
+  });
+
+  await waitFor(() => ids.every((id) => (streams.get(id) ?? '').includes('STUB READY')));
+  // Затишье после записей подготовки: письма — уже в спокойный снимок.
+  await settle(200);
+  return new Map(ids.map((id) => [id, () => streams.get(id) ?? '']));
+}
+
+const inRoom = (count: number, room: string, title: string): string =>
+  `Новые письма (${count}) в ${room} «${title}». Вызови check_inbox.`;
+
+describe('WakeService: комнаты (3.5)', () => {
+  it('1: рассылка комнаты будит всех участников, кроме отправителя', async () => {
+    const { workId, ids } = await trio();
+    const [a, b, c] = ids;
+    await updateMap(project, workId, (map) => {
+      addRoom(map, { title: 'Ревью «схемы»', creator: a, members: [b, c] });
+    });
+    const streams = await trioRig(workId, ids);
+
+    await updateMap(project, workId, (map) => {
+      addMessage(map, { from: a, to: [], roomId: 'r-01', text: 'всем' });
+    });
+
+    const expected = `echo: ${inRoom(1, 'r-01', 'Ревью «схемы»')}`;
+    await waitFor(() => streams.get(b)?.().includes(expected) === true, 3000);
+    await waitFor(() => streams.get(c)?.().includes(expected) === true, 3000);
+    await settle(300);
+    expect(streams.get(a)?.()).not.toContain('Новые письма');
+  }, 20_000);
+
+  it('2: адресное письмо в комнате будит только адресата; неадресату ни указателя, ни письма', async () => {
+    const { workId, ids } = await trio();
+    const [a, b, c] = ids;
+    await updateMap(project, workId, (map) => {
+      addRoom(map, { title: 'Трое', creator: a, members: [b, c] });
+    });
+    const streams = await trioRig(workId, ids);
+
+    await updateMap(project, workId, (map) => {
+      addMessage(map, { from: a, to: [b], roomId: 'r-01', text: 'только тебе' });
+    });
+
+    await waitFor(() => streams.get(b)?.().includes(`echo: ${inRoom(1, 'r-01', 'Трое')}`) === true, 3000);
+    await settle(300);
+    expect(streams.get(c)?.()).not.toContain('Новые письма');
+    expect(streams.get(a)?.()).not.toContain('Новые письма');
+
+    // `check_inbox` отдаёт `unreadFor`: неадресату в нём пусто.
+    const map = await readMap(project, workId);
+    expect(unreadFor(map, c)).toEqual([]);
+    expect(unreadFor(map, b).map((message) => message.text)).toEqual(['только тебе']);
+  }, 20_000);
+
+  it('3а: прямое письмо человека будит адресата', async () => {
+    const { workId, ids } = await trio();
+    const [a, b] = ids;
+    const streams = await trioRig(workId, ids);
+
+    await sendHumanLetter({ projectPath: project, workId, roomId: null, to: [b], text: 'от человека', kind: 'note' });
+
+    await waitFor(() => streams.get(b)?.().includes(`echo: ${pointer(1)}`) === true, 3000);
+    await settle(300);
+    expect(streams.get(a)?.()).not.toContain('Новые письма');
+  }, 20_000);
+
+  it('3б: рассылка человека будит всех участников его комнаты, и только их', async () => {
+    const { workId, ids } = await trio();
+    const [a, b, c] = ids;
+    const roomId = await createHumanRoom({ projectPath: project, workId, title: 'Созвон', members: [a, b] });
+    const streams = await trioRig(workId, ids);
+
+    await sendHumanLetter({ projectPath: project, workId, roomId, to: [], text: 'всем', kind: 'decision' });
+
+    // Приглашение в комнату тоже ещё не прочитано — в счёт указателя оно идёт.
+    const expected = `echo: ${inRoom(2, roomId, 'Созвон')}`;
+    await waitFor(() => streams.get(a)?.().includes(expected) === true, 3000);
+    await waitFor(() => streams.get(b)?.().includes(expected) === true, 3000);
+    await settle(300);
+    expect(streams.get(c)?.()).not.toContain('Новые письма');
   }, 20_000);
 });

@@ -38,6 +38,20 @@ export const METHODS = {
   'wake.state': z.object({}),
   'settings.get': z.object({}),
   'settings.set': z.object({ key: z.string(), value: z.string() }),
+  'rooms.create': z.object({
+    projectPath: z.string(),
+    workId: z.string(),
+    title: z.string().min(1),
+    members: z.array(z.string()).min(1),
+  }),
+  'rooms.send': z.object({
+    projectPath: z.string(),
+    workId: z.string(),
+    roomId: z.string().nullable(),
+    to: z.array(z.string()),
+    text: z.string().min(1),
+    kind: z.enum(['note', 'question', 'decision']),
+  }),
 } as const;
 
 // Уведомления клиента — без id и без ответа: их слишком много, чтобы ждать каждое.
@@ -68,6 +82,8 @@ export interface Results {
   'wake.state': { paused: boolean };
   'settings.get': { config: HarnasConfig; locked: Record<string, string> };
   'settings.set': { config: HarnasConfig };
+  'rooms.create': { roomId: string };
+  'rooms.send': { messageId: string };
 }
 
 export type MethodName = keyof typeof METHODS;

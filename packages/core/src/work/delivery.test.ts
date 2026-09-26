@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionActivity } from './activity.js';
 import { deliveryAction, pointerText } from './delivery.js';
-import type { Message, WorkSession } from './types.js';
+import type { Message, Room, WorkSession } from './types.js';
 
 const sessionOf = (patch: Partial<WorkSession> = {}): WorkSession => ({
   id: 's-01',
@@ -51,13 +51,41 @@ const activityOf = (activity: SessionActivity['activity']): SessionActivity => (
   hooksMissing: false,
 });
 
+const roomOf = (id: string, title: string): Room => ({
+  id,
+  title,
+  creator: 's-01',
+  members: ['s-02'],
+  createdAt: new Date().toISOString(),
+});
+
 describe('pointerText', () => {
-  it('одно письмо', () => {
-    expect(pointerText(1)).toBe('Новые письма (1). Вызови check_inbox.');
+  const rooms = [roomOf('r-01', 'Ревью «схемы» — ёж'), roomOf('r-02', 'Вторая')];
+
+  it('одно прямое письмо', () => {
+    expect(pointerText([messageOf()], rooms)).toBe('Новые письма (1). Вызови check_inbox.');
   });
 
-  it('три письма', () => {
-    expect(pointerText(3)).toBe('Новые письма (3). Вызови check_inbox.');
+  it('три прямых письма', () => {
+    const letters = ['m-01', 'm-02', 'm-03'].map((id) => messageOf({ id }));
+    expect(pointerText(letters, rooms)).toBe('Новые письма (3). Вызови check_inbox.');
+  });
+
+  it('все из одной комнаты — id и название; кириллица и кавычки целы', () => {
+    const letters = [messageOf({ id: 'm-01', roomId: 'r-01' }), messageOf({ id: 'm-02', roomId: 'r-01' })];
+    expect(pointerText(letters, rooms)).toBe(
+      'Новые письма (2) в r-01 «Ревью «схемы» — ёж». Вызови check_inbox.',
+    );
+  });
+
+  it('из нескольких комнат — список id', () => {
+    const letters = [messageOf({ id: 'm-01', roomId: 'r-02' }), messageOf({ id: 'm-02', roomId: 'r-01' })];
+    expect(pointerText(letters, rooms)).toBe('Новые письма (2) в r-01, r-02. Вызови check_inbox.');
+  });
+
+  it('комнаты вместе с прямыми — «и лично»', () => {
+    const letters = [messageOf({ id: 'm-01', roomId: 'r-01' }), messageOf({ id: 'm-02' })];
+    expect(pointerText(letters, rooms)).toBe('Новые письма (2) в r-01 и лично. Вызови check_inbox.');
   });
 });
 
@@ -68,6 +96,7 @@ describe('deliveryAction', () => {
     hasDraft: false,
     paused: false,
     unread: [messageOf()],
+    rooms: [],
     pointed: new Set<string>(),
     inFlight: false,
     resumeAllowed: true,
