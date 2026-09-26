@@ -98,7 +98,7 @@
 | Редактор | Monaco с правкой, сохранение только по ⌘S, баннер при изменении файла на диске |
 | Файловые операции | main-процесс Electron. Git-жизнь сессии (дифф, коммит, слияние) — хост |
 | Ревью | Monaco diff, заметки к строкам уходят агенту, одна главная кнопка, проверка конфликтов через `git merge-tree` |
-| Браузер | `<webview>` в слое поверхностей, общий раздел `persist:harnas-browser`, Design Mode по клику |
+| Браузер | `<webview>` в слое поверхностей, общий раздел `persist:harnas-browser`, только http(s) — `file:` не открывается, Design Mode по клику |
 | Порядок этапов | Облик → Каркас → Карточки → Внимание → Терминал → ⌘J → Редактор → Ревью → Браузер |
 | После MVP | PR/CI через `gh`, задачи GitHub/Linear, переназначение клавиш, скроллбэк на диск, монитор ресурсов, «не засыпать», канбан, раздача одной задачи нескольким сессиям |
 | Совместимость хоста | Только добавления, `PROTOCOL_VERSION` остаётся 1; хост сообщает список своих методов в ответе `hello` |
@@ -146,11 +146,12 @@
   → { marked: number }   // сколько реально сменили readBy.human; повтор — 0, не ошибка
 
 // Этап 5. Отправка текста агенту «сразу, но с защитой» (раздел 8.6).
+// SendReason и SendResult лежат в protocol/src/types.ts: их берут и хост, и окно.
 'pty.send': { ref: SessionRef; text: string; submit: boolean }   // text: 1..65536 байт UTF-8
   → { inserted: boolean; submitted: boolean; reason: SendReason | null }
 type SendReason =
   | 'blocked'       // агент ждёт разрешения или ответа: текст НЕ вставлен
-  | 'busy'          // будильник сейчас печатает указатель этой сессии: текст НЕ вставлен
+  | 'busy'          // будильник напечатал указатель этой сессии, Enter ещё не ушёл: текст НЕ вставлен
   | 'no-paste-mode' // многострочный текст, а агент не включил bracketed paste: НЕ вставлен
   | 'draft'         // вставлен, Enter не нажат: в поле ввода черновик человека
   | 'input'         // вставлен, Enter не нажат: человек печатал в окне ожидания Enter
@@ -160,10 +161,15 @@ type SendReason =
 'worktrees.mergeCheck': { ref: SessionRef }
   → { status: 'clean' } | { status: 'conflicts'; files: string[] } | { status: 'unsupported' }
 
-// Этап 8. Изменения папки проекта для сессии без своего worktree.
-'changes.project': { ref: SessionRef } → ProjectChanges
+// Этап 8. Изменения папки проекта для сессии без своего worktree; `.harnas/` не входит (раздел 11.5).
+'changes.project': { ref: SessionRef; patch?: boolean } → ProjectChanges
 'changes.commitProject': { ref: SessionRef; message: string /* 1..10000 */ } → { commit: string }
 ```
+
+**Новый параметр** старого метода: `'worktrees.diff': { ref; patch?: boolean }`. `false` —
+в ответе `patch: ''`, текст патча не строится. Новое окно патч не просит: строка
+протокола ограничена 8 МБ, и дифф с lock-файлами обрушил бы вкладку. Старый хост поле
+отбросит, старое окно его не шлёт.
 
 **Новое уведомление** (без ответа):
 
@@ -210,8 +216,8 @@ interface ProjectChanges {
 ### 3.3 Мост окна
 
 `window.harnas` (`src/shared/bridge.ts`) сохраняет `call`, `notify`, `on`, `onStatus` и
-получает новые группы. Каждая — отдельный канал из белого списка `main/ipc.ts`.
-Аргументы проверяются в main, как сейчас.
+получает новые группы. Каждая — отдельный канал из белого списка `main/ipc.ts`; каналы
+`files:*` регистрирует `main/files/ipc.ts`. Аргументы проверяются в main, как сейчас.
 
 ```ts
 interface HarnasBridge {
@@ -228,9 +234,11 @@ interface HarnasBridge {
     setAppearance(mode: 'system' | 'dark' | 'light'): Promise<void>;  // nativeTheme.themeSource
     onAppearance(listener: (dark: boolean) => void): () => void;
     pathForFile(file: File): string;                                   // webUtils.getPathForFile в preload
-    openPath(absPath: string): Promise<void>;                          // в приложении по умолчанию, только внутри корней
+    // в приложении по умолчанию, только внутри корней; исполняемое и бандлы — только показать в Finder (раздел 10.8)
+    openPath(absPath: string): Promise<'opened' | 'revealed'>;
     showInFinder(absPath: string): Promise<void>;
-    loadNotes(workKey: string, sessionId: string): Promise<NotesFile>;
+    // битый файл: заметки пустые, corruptedTo — куда его переименовали (раздел 13)
+    loadNotes(workKey: string, sessionId: string): Promise<{ file: NotesFile; corruptedTo: string | null }>;
     saveNotes(workKey: string, sessionId: string, notes: NotesFile): Promise<void>;
     saveDropImage(source: 'clipboard'): Promise<string | null>;        // путь PNG в drops/ или null, если в буфере нет картинки
     removeLayout(workKey: string): Promise<void>;                      // работа удалена (раздел 5.8)
@@ -241,7 +249,15 @@ interface HarnasBridge {
   files: FilesApi;       // раздел 10.7
   browser: BrowserApi;   // раздел 12.5
 }
+```
 
+**Ошибки каналов.** `ipcMain.handle` отдаёт рендереру только `message` ошибки, а
+`contextBridge` теряет собственные поля `Error`. Поэтому код ошибки едет в тексте:
+main бросает `encodeIpcError({ code, message })`, рендерер читает `decodeIpcError(err)`
+(`shared/ipc-error.ts`). Так окно отличает `not_found` хоста от прочего сбоя и
+`files:denied` от других ошибок файлов.
+
+```ts
 type FocusTarget =
   | { kind: 'session'; ref: SessionRef }
   | { kind: 'mail'; projectPath: string; workId: string }
@@ -309,7 +325,7 @@ interface UiFile {
 | `attention/store.ts` | Производное внимание по сессиям и работам, видимость для `activity.seen` | 4 |
 | `palette/store.ts` | Открыта ли палитра, запрос, секции | 6 |
 | `files/store.ts` | Открытые буферы, «изменён», конфликт с диском, корень проводника | 7 |
-| `review/notes-store.ts` | Заметки сессии, отправленные, устаревшие | 8 |
+| `review/notes/store.ts` | Заметки сессии, отправленные, устаревшие | 8 |
 | `browser/store.ts` | Состояние вкладок браузера: адрес, заголовок, история, Design Mode | 9 |
 
 ### 3.6 Карта файлов
@@ -318,10 +334,12 @@ interface UiFile {
 или удалено. Точный список по кускам — в файлах плана.
 
 ```
-shared/   bridge.ts (переписан) · keybindings.ts · layout-types.ts · ui-types.ts · files-types.ts · browser-types.ts (новые)
+shared/   bridge.ts (переписан) · keybindings.ts · layout-types.ts · ui-types.ts · files-types.ts · browser-types.ts
+          work-keys.ts · ipc-error.ts (новые)
 main/     index.ts · ipc.ts · menu.ts (из реестра клавиш) · window.ts (новый, вместо security.ts)
           ui-store.ts · notes-store.ts · drops.ts · notifications.ts · roots.ts (новые)
-          layout-store.ts (v2) · files/{fs-api,git-api,watch}.ts · browser/{guard,design-mode,guest-pick}.ts (новые)
+          layout-store.ts (v2) · files/{fs-api,git-api,watch,ipc,open-path}.ts
+          browser/{guard,design-mode,guest-pick,favicon}.ts (новые)
 renderer/ styles/{tokens,base,scrollbars}.css · assets/fonts/Geist-Variable.woff2 (новые)
           ui/*  примитивы shadcn/ui (новые)
           shell/{AppShell,Titlebar,Resizer,StatusBar,Landing,ErrorBoundary}.tsx (новые)
@@ -739,7 +757,8 @@ interface WorkLayout {
 
 ### 5.7 История «назад / вперёд»
 
-- Запись истории — `{ workKey, tabId | null }`. Пишется на каждую смену активной работы
+- Запись истории — `{ workKey, tabId | null, at }`, `at` — время записи: по нему
+  палитра считает свежесть (раздел 9.2). Пишется на каждую смену активной работы
   или вкладки, кроме переходов самой историей.
 - Не больше 50 записей. Подряд одинаковые не дублируются.
 - ⌘⌥← и ⌘⌥→, кнопки в заголовке. Запись с закрытой вкладкой пропускается.
@@ -1077,15 +1096,25 @@ interface WorkAttention {
 
 ### 8.3 Ссылки
 
-- **Провайдер** `terminal/links.ts` — `ILinkProvider` xterm. Кандидаты:
-  - `(?:~|\.{1,2})?(?:/[\w.@+-]+)+(?::\d+(?::\d+)?)?` — абсолютные и относительные пути;
-  - `[\w.@+-]+(?:/[\w.@+-]+)*\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?` — `src/a.ts:12:3`;
+- **Провайдер** `terminal/links.ts` — `ILinkProvider` xterm. Кандидаты, флаг `u`:
+  - `(?:~|\.{1,2})?(?:/[\p{L}\p{N}_.@+-]+)+(?::\d+(?::\d+)?)?` — абсолютные и
+    относительные пути;
+  - `[\p{L}\p{N}_.@+-]+(?:/[\p{L}\p{N}_.@+-]+)*\.[\p{L}\p{N}]{1,8}(?::\d+(?::\d+)?)?` —
+    `src/a.ts:12:3`; в расширении обязательна буква, поэтому `version 1.2.3` не ссылка;
   - URL `https?://…` — как сейчас `WebLinksAddon`.
+  - `\p{L}` вместо `\w`: без него `./docs/Отчёт.md` обрывался бы на `./docs`.
+  - Слева от пути — не символ пути: `src/app/main.ts:12:3` не совпадает ещё и как
+    `/app/main.ts:12:3`. URL ищется первым и важнее пути, совпадения не пересекаются.
+    Хвостовые `.,;:!?)` в путь не входят.
+  - Диапазоны ссылок — в ячейках xterm: широкие символы занимают две. Перенесённая
+    строка (`isWrapped`) склеивается с предыдущей.
 - **Разрешение путей.** Относительный путь считается от папки сессии: `worktree.path`,
-  если worktree создан, иначе `projectPath`. Пути вне корней работы (раздел 10.8) ссылкой
-  не становятся.
-- **Проверка существования.** `files.stat` пачкой по видимым строкам, кэш на 500 путей
-  с жизнью 10 с. Несуществующий путь ссылкой не становится.
+  если worktree создан (`createdAt !== null`), иначе `projectPath`. `~` раскрывает main.
+- **Проверка.** `files.locate` пачкой по видимым строкам (раздел 10.7), кэш на 500 путей
+  с жизнью 10 с. Main делает `realpath` и ищет корень: агент печатает `/private/tmp/…`,
+  а корень записан как `/tmp/…`; путь из папки проекта при сессии в worktree принадлежит
+  корню проекта. Несуществующий путь и путь вне корней работы этой сессии (раздел 10.8)
+  ссылкой не становятся.
 - **Клик по пути** открывает меню у курсора: «Открыть в редакторе» (с этапа 7), «Открыть
   в приложении по умолчанию», «Показать в Finder», «Скопировать путь». ⌘-клик сразу
   открывает редактор на строке и колонке, до этапа 7 — приложение по умолчанию.
@@ -1105,7 +1134,9 @@ interface WorkAttention {
 
 - **Многострочная вставка** ⌘V идёт через `term.paste()`: xterm сам оборачивает её в
   bracketed paste, если агент включил режим. Это уже так и не меняется.
-- **Скриншот.** ⌘V, когда в буфере картинка и нет текста:
+- **Скриншот.** ⌘V, когда в буфере картинка и нет текста. Окно ловит событие `paste`
+  (картинки видны в `clipboardData.items`), а не нажатие: пункт меню «Вставить» идёт тем
+  же путём.
   1. main сохраняет PNG в `drops/` (`app.saveDropImage('clipboard')`);
   2. в терминал через `pty.send { submit: false }` уходит путь к файлу — Claude и Codex
      понимают путь к картинке как вложение;
@@ -1142,20 +1173,38 @@ pty.send({ ref, text, submit }):
        - пустой после очистки → HostError('bad_request', 'пустой текст')
        - длиннее 64 КиБ → HostError('bad_request', 'текст длиннее 64 КиБ')
   3. activity(ref) === 'blocked'           → { inserted:false, submitted:false, reason:'blocked' }
-  4. у будильника по этой сессии попытка inFlight → { inserted:false, submitted:false, reason:'busy' }
+  4. будильник напечатал указатель этой сессии, Enter ещё не ушёл (inFlight)
+                                           → { inserted:false, submitted:false, reason:'busy' }
   5. multiline = clean.includes('\n')
      paste = handle.screen.modes.bracketedPasteMode
      multiline && !paste                    → { inserted:false, submitted:false, reason:'no-paste-mode' }
      payload = paste ? ESC[200~ + clean + ESC[201~ : clean
-  6. pty.write(ref, payload)
+  6. pty.write(ref, payload); черновик хоста поставлен
   7. !submit                                → { inserted:true, submitted:false, reason:null }
   8. handle.hasDraft()                      → { inserted:true, submitted:false, reason:'draft' }
-       (черновик считается ДО нашей вставки: печать хоста его не меняет)
+       (черновик считается ДО нашей вставки: человека или хоста от прошлой вставки без Enter)
   9. ждать enterDelayMs, слушая pty.on('draft') по ref
        был ввод человека                    → { inserted:true, submitted:false, reason:'input' }
        pty.get(ref)?.pid !== pid            → { inserted:true, submitted:false, reason:'restarted' }
-  10. pty.write(ref, '\r')                  → { inserted:true, submitted:true, reason:null }
+  10. pty.write(ref, '\r'); черновик хоста снят → { inserted:true, submitted:true, reason:null }
 ```
+
+**Черновик хоста.** Текст, вставленный `pty.send` без Enter (`submit: false`, исходы
+`draft` и `input`), остаётся в поле ввода агента, а черновик человека его не видит:
+печать хоста его не меняет. Без защиты будильник получил бы `hasDraft: false`,
+допечатал бы указатель после пути файла и через 500 мс нажал бы Enter — промпт человека
+ушёл бы без его ведома. То же в 500 мс ожидания Enter самого `pty.send`. Поэтому:
+- `PtyManager` держит флаг «черновик хоста», `hasDraft()` учитывает его вместе с
+  черновиком человека;
+- флаг ставит вставка `pty.send`: на время ожидания своего Enter и после любой вставки
+  без Enter;
+- снимают его Enter самого `pty.send`, а также Enter, ⌃C и ⌃U человека; у нового
+  процесса сессии его нет;
+- будильник видит `hasDraft()` и поверх такого текста не печатает и Enter не жмёт;
+- событие `draft` шлёт только ввод человека: иначе ожидание Enter приняло бы
+  собственную вставку за ввод;
+- свой указатель без Enter будильник по-прежнему не помечает — его правила (спека окна
+  7.3) не меняются.
 
 **Почему при `blocked` текст не вставляется совсем.** Это уточнение к «вставляем и
 говорим» из диалога. Пока агент показывает диалог разрешения или выбор варианта,
@@ -1209,7 +1258,8 @@ pty.send({ ref, text, submit }):
 | подстрока | 20 |
 | нечёткое: символы по порядку, с разрывами | 10 минус 1 за каждый разрыв, не ниже 1 |
 
-4. Очки документа — сумма очков токенов. Поле «название» умножается на 1.5.
+4. Очки документа — сумма очков токенов. Поле «название» умножается на 1.5, у файлов
+   (имя файла) — на 2 (раздел 10.2): вес задаёт сам документ.
 5. При равенстве решает свежесть: корзины «< 1 ч», «< 1 сут», «< 1 нед», «старше». Время
    берётся из истории (раздел 5.7), для работ и сессий — `lastEventAt`. Дальше — порядок
    сайдбара.
@@ -1281,18 +1331,20 @@ interface ActionDef {
   остаются родными ролями Electron с зарегистрированными сочетаниями: они работают в
   любом сфокусированном поле.
 - **Фокус в странице браузера.** Нажатия внутри `<webview>` до окна не доходят. Main
-  слушает `before-input-event` гостя: сочетание реестра с `when: 'always'` гасится в
-  госте и уходит окну как `menu:action` (так делает Orca,
-  `src/shared/window-shortcut-policy.ts`). ⌘F внутри страницы — поиск по странице
-  (`findInPage`).
+  слушает `before-input-event` гостя: сочетание реестра с `when: 'always'` или
+  `when: 'browser'` гасится в госте и уходит окну как `menu:action` (так делает Orca,
+  `src/shared/window-shortcut-policy.ts`). ⌘F, ⌘+, ⌘− и ⌘0 внутри страницы — действия
+  `browser.find`, `browser.zoomIn`, `browser.zoomOut`, `browser.zoomReset` с
+  `when: 'browser'` и без пункта меню: поиск по странице (`findInPage`) и масштаб
+  (раздел 12.4).
 
 **Контекст фокуса:**
 
 | Фокус | Что достаётся полю, а не окну |
 |---|---|
 | Терминал (`lib/keys.ts#shouldForwardToTerminal`) | всё без ⌘, кроме ⌃Tab, ⌃⇧Tab, ⌃1–9: агенты их не используют, а терминал отдаёт вместо ⌃Tab простой Tab. ⌘F открывает поиск терминала, ⌘K очищает его |
-| Monaco | ⌘D (следующее вхождение), аккорды ⌘K …, ⌘F (поиск в файле), ⌘S (сохранить), ⌘/ и прочие сочетания редактора; остальные ⌘-сочетания реестра — окну |
-| Поле ввода (палитра, форма, адресная строка) | правка текста: ⌘A, ⌘C, ⌘V, ⌘Z, ⌘←/→; Esc закрывает свой слой |
+| Monaco | ⌘D (следующее вхождение), аккорды ⌘K …, ⌘F (поиск в файле), ⌘S (сохранить), ⌘/, ⌘[ и ⌘] (отступ), ⌘L (выделить строку), ⌘⇧↑/↓ (выделить до края) и прочие сочетания редактора; остальные ⌘-сочетания реестра — окну |
+| Поле ввода (палитра, форма, адресная строка) | правка текста: ⌘A, ⌘C, ⌘V, ⌘Z, ⌘←/→, ⌘⇧↑/↓; Esc закрывает свой слой |
 | Остальное | всё реестру |
 
 | Действие | Клавиши | Меню |
@@ -1396,7 +1448,7 @@ interface ActionDef {
 ### 10.5 Сохранение и изменения на диске
 
 Состояния буфера (`files/store.ts`): `clean`, `dirty`, `disk-changed-clean`,
-`disk-changed-dirty`, `deleted`.
+`disk-changed-dirty`, `deleted`; служебные — `loading`, `saving`, `error`.
 
 - **При открытии** запоминается `mtimeMs`, а файл ставится на слежение
   (`files.watch(root, path)` → событие `files:changed`).
@@ -1406,13 +1458,19 @@ interface ActionDef {
   - буфер `dirty` — жёлтый баннер над редактором: «Файл изменён на диске (вероятно,
     агентом)». Действия:
     - «Перезагрузить» — мои правки пропадут;
-    - «Сравнить» — вкладка Monaco diff «диск ↔ буфер»;
+    - «Сравнить» — Monaco diff «диск ↔ буфер» режимом той же вкладки файла: своего
+      вида вкладки у сравнения нет;
     - «Оставить мои» — баннер закрыт, следующее ⌘S спросит.
+- **Эхо своей записи** — не изменение на диске. Событие слежения с `mtimeMs` не новее
+  своей последней записи пропускается. Событие во время записи (`saving`) ждёт её ответа
+  и применяется, только если новее записанного: агент успел записать между нашим
+  `rename` и ответом.
 - **Файл удалён на диске** — баннер «Файл удалён на диске»: «Сохранить заново» или
   «Закрыть».
 - **⌘S** зовёт `files.write(root, path, text, expectedMtimeMs)`:
   - main сравнивает `mtimeMs` на диске с ожидаемым;
-  - совпало — запись: временный файл рядом и `rename` с сохранением прав;
+  - совпало — запись: временный файл рядом со случайным именем и `rename` с сохранением
+    прав (раздел 10.8);
   - не совпало — ответ `conflict`, и окно спрашивает «Файл изменён на диске после
     открытия. Перезаписать изменения на диске?»: «Перезаписать», «Сравнить»,
     «Отмена».
@@ -1446,19 +1504,22 @@ interface FileRoot { workKey: string; spec: FileRootSpec }   // spec: проек
 interface FilesApi {
   list(root: FileRoot, dir: string): Promise<DirEntry[]>;     // dir относительный, '' — корень
   stat(root: FileRoot, paths: string[]): Promise<Array<FileStat | null>>;  // до 200 путей
+  // абсолютные пути из вывода агента (этап 5): realpath и корень ищет main, `~` раскрывает он же; до 200
+  locate(absPaths: string[]): Promise<Array<{ root: FileRoot; relPath: string; stat: FileStat } | null>>;
   readText(root: FileRoot, path: string): Promise<TextFile>;
   readBytes(root: FileRoot, path: string, limit?: number): Promise<Uint8Array>;  // по умолчанию до 20 МБ
   write(root: FileRoot, path: string, text: string, expectedMtimeMs: number | null)
     : Promise<{ ok: true; mtimeMs: number } | { ok: false; conflict: { mtimeMs: number } }>;
-  watch(root: FileRoot, path: string): Promise<string>;       // id подписки
+  watch(root: FileRoot, path: string): Promise<string>;       // id подписки; path '' — дерево корня
   unwatch(id: string): Promise<void>;
   onChanged(listener: (e: { id: string; path: string; mtimeMs: number | null; deleted: boolean }) => void): () => void;
-  onTreeChanged(listener: (e: { rootKey: string; dirs: string[] }) => void): () => void;
+  onTreeChanged(listener: (e: { rootKey: string; dirs: string[] }) => void): () => void;   // rootKey — shared/work-keys.ts
   lsFiles(root: FileRoot): Promise<string[]>;
   grep(root: FileRoot, query: GrepQuery, signalId: string): Promise<GrepResult>;
   cancel(signalId: string): Promise<void>;
-  gitShow(root: FileRoot, rev: string, path: string): Promise<TextFile | null>;   // null — файла в ревизии нет
+  gitShow(root: FileRoot, rev: string, path: string): Promise<TextFile | null>;   // null — файла или ревизии нет
   gitStatus(root: FileRoot): Promise<Record<string, 'M' | 'A' | 'D' | 'U' | 'R'>>;
+  gitCommitFiles(root: FileRoot, hash: string): Promise<DiffFile[]>;   // файлы одного коммита, этап 8
 }
 
 interface DirEntry { name: string; kind: 'file' | 'dir' | 'symlink'; size: number; mtimeMs: number; ignored: boolean }
@@ -1473,20 +1534,49 @@ interface GrepResult { files: Array<{ path: string; hits: Array<{ line: number; 
 `main/roots.ts` держит реестр разрешённых корней. Main сам подписан на `works.list` и
 `works.changed` через свой `HostConnection`.
 
-Реестр корней, `files.stat`, `app.openPath` и `app.showInFinder` появляются уже в
-этапе 5: на них стоят ссылки терминала (раздел 8.3). Остальной файловый API приходит в
-этапе 7.
+Реестр корней, `files.stat`, `files.locate`, `app.openPath` и `app.showInFinder`
+появляются уже в этапе 5: на них стоят ссылки терминала (раздел 8.3). Остальной
+файловый API приходит в этапе 7.
+
+Агент может положить в worktree что угодно, в том числе симлинки и исполняемые файлы.
+Правила ниже держат окно внутри корней и против таких подкладок.
 
 - **Корни:** `projectPath` каждой работы и `worktree.path` каждой сессии с
-  `worktree.createdAt !== null`. Ключ корня — `workKey` плюс вид плюс `sessionId`.
+  `worktree.createdAt !== null`. Ключ корня — `workKey` плюс вид плюс `sessionId`
+  (`shared/work-keys.ts`, один формат у main и окна).
 - **Проверка каждого вызова:**
   1. Путь внутри корня относительный. Абсолютные пути, `..` после нормализации и NUL —
      отказ.
-  2. `realpath` цели, а для несуществующей при записи — `realpath` родителя. Результат
-     обязан лежать внутри `realpath` корня: симлинк наружу — отказ.
-  3. Запись внутрь `.git/` — отказ.
+  2. Чтение — `realpath` цели обязан лежать внутри `realpath` корня: симлинк наружу —
+     отказ.
+  3. Запись — `lstat` последнего звена. Симлинк допустим, только если его `realpath`
+     внутри корня; висячий симлинк — отказ: иначе `realpath` цели упал бы, проверка
+     ушла бы к родителю, и файл создался бы по ссылке снаружи. Обычный файл —
+     `realpath` внутри корня. Файла нет — `realpath` родителя внутри корня. Запись идёт
+     по `realpath`.
+  4. Запись в `.git` — отказ: среди звеньев от `realpath` корня до `realpath` цели есть
+     `.git` в любом регистре. Так ловятся `.GIT/config` на APFS, ссылка на `.git` и файл
+     `.git` в корне worktree.
+- **Запись файла** — всегда через временный файл рядом со случайным именем:
+  `open(…, 'wx')`, затем права и `rename`. Предсказуемое имя можно было бы заранее
+  подложить симлинком наружу; `wx` на занятом имени отказывает.
+- **Обход без git** (⌘P и поиск в не-git корне) идёт по `lstat`: в каталоги-симлинки не
+  заходит, файлы-симлинки берёт, только если их `realpath` внутри корня.
+- **`files.gitShow`** путь проверяет лексически (относительный, без `..` и NUL) и
+  зовёт git с `cwd = realpath(корня)`: у удалённого файла и старого пути переименования
+  на диске ничего нет. `rev` — только `HEAD` или 7–40 hex с `^` на конце, плюс
+  `--end-of-options`: иначе `--output=<файл>` из рендерера заставил бы git писать вне
+  корней.
+- **`files.locate`** раскрывает `~`, делает `realpath` и ищет самый длинный корень, в
+  котором лежит путь; вне корней — `null`.
 - **Ошибки** — `files:denied` с текстом «Путь вне папок работы», в окне — тост.
 - **`openPath` и `showInFinder`** принимают только пути внутри корней.
+- **`openPath` не запускает исполняемое.** На macOS это двойной клик Finder: `.command`
+  выполняется в Terminal, `.app` запускается, а у файлов агента нет карантина, и
+  Gatekeeper не спросит. Каталоги-бандлы (с расширением), файлы `.app .command .tool
+  .terminal .workflow .action .pkg .mpkg .jar .scpt .sh` и файлы с битом x — по имени и
+  правам и самого пути, и его `realpath` — только показываются в Finder. Ответ
+  `'revealed'`, тост «Исполняемый файл не открывается — показан в Finder».
 
 ## 11. Ревью изменений (этап 8)
 
@@ -1579,7 +1669,10 @@ interface GrepResult { files: Array<{ path: string; hits: Array<{ line: number; 
 
 ### 11.4 Заметки к строкам
 
-**Модель** (`review/notes/types.ts`, хранится в `notes/<sha1(workKey)>/<sessionId>.json`):
+**Модель** (`review/notes/types.ts`, хранится в `notes/<sha1(workKey)>/<sessionId>.json`).
+`sessionId` идёт в имя файла как есть, поэтому main принимает только формат core
+`s-<цифры>`; `workKey` — строка до 4096 символов, в имя идёт её `sha1`. Иначе `../..` из
+рендерера читал бы и писал JSON вне `notes/`.
 
 ```ts
 interface NotesFile { version: 1; notes: DiffNote[] }
@@ -1657,6 +1750,16 @@ interface DiffNote {
   - `git diff HEAD` с numstat и неотслеживаемыми — так же, как патч worktree;
   - коммит — `git add -A` и `git commit -m`, как `worktrees.commit`, но в `projectPath`;
   - сессия с worktree на эти методы получает `bad_request`.
+  - **`.harnas/` исключён** из всех команд `changes.*` (`-- . ':(exclude).harnas'`):
+    дифф, numstat, неотслеживаемые и `git add -A`. В папке проекта там лежит состояние
+    харнесса — карта, журналы хуков, письма. Без исключения «Незакоммиченные» не пустели
+    бы никогда, а «Закоммитить всё в папке» положило бы журналы в историю: по README
+    коммитить `.harnas/` — выбор человека. В worktree этого каталога нет; так же уже
+    исключает его `isDirty` в core. Изменён только `.harnas/` — «нет изменений».
+- **`patch: false`** у `worktrees.diff` и `changes.project` — ответ без текста патча
+  (раздел 3.2): вкладке «Изменения» и диффу на Monaco он не нужен.
+- **Ошибки git** — текстом, который окно показывает как есть: git не запускается —
+  «Git не найден», папка не под git — «Папка не под git» (раздел 13).
 
 ## 12. Встроенный браузер и Design Mode (этап 9)
 
@@ -1673,37 +1776,59 @@ interface DiffNote {
 
 | Ввод | Адрес |
 |---|---|
-| есть схема `http:`, `https:`, `file:` | как есть (для `file:` — только внутри корней работы, раздел 10.8) |
+| есть схема `http:`, `https:` | как есть |
+| схема `file:` | ошибка под полем «Локальные файлы здесь не открываются» (раздел 12.2) |
 | `localhost[:порт][/…]`, `127.0.0.1…`, `[::1]…` | `http://` + ввод |
 | без пробелов, есть точка | `https://` + ввод |
 | иначе | ошибка под полем «Введите адрес — поиска нет» |
 
 - Вкладка показывает favicon (`page-favicon-updated`) и заголовок
-  (`page-title-updated`).
+  (`page-title-updated`). Favicon качает main — только http(s), только `image/*`, не
+  больше 64 КБ — и отдаёт окну как `data:`: CSP окна внешних картинок не пускает.
 - В раскладке сохраняется только адрес.
-- Новая вкладка браузера (палитра «Новая вкладка браузера» или «+») открывается с
-  пустой страницей и фокусом в адресной строке.
+- Новая вкладка браузера (палитра «Новая вкладка браузера» или «+») открывается без
+  страницы: заглушка с адресной строкой и фокусом в ней. `<webview>` появляется с первым
+  адресом.
 
 ### 12.2 Устройство и защита
 
 - **`<webview>`** живёт в слое поверхностей, раздел 5.5.
-  - Атрибуты: `partition="persist:harnas-browser"`, `allowpopups` не ставится,
-    `webpreferences="contextIsolation=yes, sandbox=yes"`.
+  - Атрибуты: `partition="persist:harnas-browser"`, `allowpopups`,
+    `webpreferences="contextIsolation=yes, sandbox=yes"`. `allowpopups` ставится: без
+    него Electron гасит `window.open` и `target=_blank` гостя ещё до
+    `setWindowOpenHandler`, и вкладка по ссылке не откроется. Обработчик всё равно
+    отвечает `deny` — окон нет.
+  - Монтируется только с адресом (раздел 12.1).
   - В главном окне: `webPreferences.webviewTag: true`.
-- **`main/browser/guard.ts`** на `app.on('web-contents-created')`:
-  - Главное окно, `will-attach-webview`:
+- **`file:` во встроенный браузер не пускается вовсе.** У схемы `file:` в Electron
+  лишние права (фьюз `GrantFileProtocolExtraPrivileges` включён по умолчанию): страница
+  `file://` делает `fetch` к любому `file://`. HTML, который агент положил в worktree,
+  прочёл бы `~/.ssh/*` и отправил в сеть, а подзагрузки — не навигация. Локальный HTML
+  смотрят превью файла или системным браузером; превью во вкладке — после MVP (раздел
+  17).
+- **`main/browser/guard.ts`:**
+  - Главное окно, `will-attach-webview`. Обработчик вешает `createMainWindow` до
+    `loadFile`: страж рядом с регистрацией IPC опоздал бы к первому `<webview>`.
     - удаляются `preload` и `preloadURL`;
     - выставляются `nodeIntegration: false`, `nodeIntegrationInSubFrames: false`,
       `contextIsolation: true`, `sandbox: true`, `webSecurity: true`,
-      `allowRunningInsecureContent: false`;
+      `allowRunningInsecureContent: false`, `webviewTag: false`;
+    - снимаются `enableBlinkFeatures` и `experimentalFeatures`: их мог включить атрибут
+      `webpreferences`;
     - любой `partition`, кроме `persist:harnas-browser`, — `preventDefault`;
-    - `src` не по правилам раздела 12.1 — `preventDefault`.
-  - Гостевые `webContents` (`getType() === 'webview'`):
+    - `src` не `http(s)` — `preventDefault`.
+  - Любой другой `webContents` (гость, DevTools) на `will-attach-webview` получает
+    `preventDefault`: вложенный `<webview>` мимо стража не прикрепится.
+  - Гостевые `webContents` (`getType() === 'webview'`), обработчики ставятся на
+    `app.on('web-contents-created')` до создания окна:
     - `setWindowOpenHandler` → `{ action: 'deny' }` и событие окну `browser:open-tab
       { url }`: новая вкладка браузера в активной группе, если адрес проходит правила;
-    - `will-navigate` и `will-redirect` пропускают только `http`, `https` и `file`
-      внутри корней;
-    - `javascript:`, `data:` верхнего уровня и прочие схемы — отказ.
+    - главный фрейм — только `http`, `https` и `about:blank`; подфрейм — ещё
+      `about:srcdoc`, `data:` и `blob:`. `file:`, `javascript:` и прочие схемы — отказ
+      везде;
+    - проверка — на `will-navigate`, `will-redirect` и `will-frame-navigate` (все
+      фреймы), а также на `did-start-navigation`: программная навигация (`src`,
+      `loadURL`) `will-navigate` не вызывает, её останавливает `stop()`.
   - Сессия раздела:
     - `setPermissionRequestHandler((_, _, cb) => cb(false))` и
       `setPermissionCheckHandler(() => false)`: камера, микрофон, геолокация,
@@ -1725,7 +1850,8 @@ interface DiffNote {
    - рисует оверлей: рамка 2px `#3b82f6` поверх элемента под курсором
      (`document.elementFromPoint`), подпись `tag.class · 320×48`;
    - в capture-фазе перехватывает `click`, `mousedown` и `pointerdown`
-     (`preventDefault`, `stopPropagation`), чтобы клик не сработал на странице;
+     (`preventDefault`, `stopPropagation`), чтобы клик не сработал на странице; события
+     с `isTrusted: false` пропускает — страница не выберет элемент за человека;
    - возвращает `Promise`, который по клику разрешается данными элемента, а по Esc —
      `null`.
 4. **Данные элемента:**
@@ -1740,12 +1866,16 @@ interface DiffNote {
 | `rect` | `getBoundingClientRect()` в CSS-пикселях и `devicePixelRatio` |
 
 5. **Проверка в main.** Main заново проверяет форму и длины данных: строки обрезаются,
-   неизвестные поля выкидываются.
+   неизвестные поля выкидываются. `url` main берёт сам — `guest.getURL()` без query и
+   hash, — а не из данных страницы.
 6. **Скриншот.** `guest.capturePage(rect)` — прямоугольник, пересечённый с видимой
-   областью. PNG уходит в `drops/`. Элемент вне видимой области сначала прокручивается
-   в неё скриптом.
+   областью; CSS-пиксели переводятся в DIP с учётом масштаба страницы
+   (`getZoomFactor()`, раздел 12.4). PNG уходит в `drops/`. Элемент вне видимой области
+   сначала прокручивается в неё скриптом.
 7. **Карточка результата** поверх вкладки браузера: миниатюра, селектор, текст (2
-   строки). Кнопки:
+   строки). Миниатюра — `thumbnail` результата: тот же снимок, уменьшенный в main до
+   320 px по ширине, как `data:image/png`. Сам PNG лежит в `drops/` вне корней работы,
+   `files.readBytes` его не отдаст, а `file://` в окне запрещён. Кнопки:
    - «Отправить агенту ▾» — меню сессий работы, как у заметок;
    - «Копировать» — текст блока в буфер;
    - «Ещё раз» — снова включает выбор.
@@ -1782,10 +1912,12 @@ interface BrowserApi {
   zoom(webContentsId: number, step: 1 | -1 | 0): Promise<void>;   // ⌘+, ⌘−, ⌘0
   clearData(): Promise<void>;
   onOpenTab(listener: (url: string) => void): () => void;
+  onFavicon(listener: (e: { webContentsId: number; dataUrl: string }) => void): () => void;   // раздел 12.1
 }
 interface PickResult {
   url: string; selector: string; text: string; html: string;
   styles: Record<string, string>; imagePath: string | null;
+  thumbnail: string | null;   // уменьшенный data:image/png для карточки
 }
 ```
 
@@ -1810,6 +1942,8 @@ interface PickResult {
 | Картинки нет в буфере при ⌘V | Обычная вставка текста |
 | `drops/` недоступна для записи | Тост «Не удалось сохранить скриншот: …», вставки нет |
 | Путь вне корней работы (файлы, ссылки, `openPath`) | Отказ `files:denied`, тост «Путь вне папок работы» |
+| «Открыть в приложении» на исполняемом файле или бандле | Не открывается: показан в Finder, тост «Исполняемый файл не открывается — показан в Finder» (раздел 10.8) |
+| Запись через висячий симлинк или симлинк наружу | Отказ `files:denied`, файл вне корня не создаётся (раздел 10.8) |
 | Файл больше 20 МБ, двоичный, не UTF-8 | Раздел 10.4 |
 | Запись поверх изменения на диске | Диалог «Перезаписать / Сравнить / Отмена» (раздел 10.5) |
 | Файл удалён на диске при открытой вкладке | Баннер «Файл удалён на диске: Сохранить заново / Закрыть» |
@@ -1823,6 +1957,7 @@ interface PickResult {
 | Monaco или воркер не загрузился | Граница ошибки вкладки: «Редактор не загрузился» + «Повторить» + «Открыть в приложении» |
 | Гостевая страница упала | Тело «Страница упала» + «Перезагрузить» |
 | Адрес не прошёл правила | Ошибка под адресной строкой, навигации нет |
+| `file:` в адресной строке, ссылке или `window.open` страницы | Не открывается: в адресной строке — «Локальные файлы здесь не открываются», в странице — отказ навигации (раздел 12.2) |
 | Страница просит разрешение (камера и т.п.) | Отказ без вопроса |
 | Design Mode на странице без видимого элемента под курсором | Подсветки нет, клик ничего не выбирает |
 | `capturePage` не удался | Блок уходит без строки «Скриншот» |
@@ -1844,7 +1979,7 @@ interface PickResult {
 | `attention/derive.ts` | таблица `sessionAttention`; `humanUnread` поднимает уровень; комнаты не поднимают |
 | `attention/seen.ts` | 1 с непрерывной видимости; сброс при потере фокуса; повтор не чаще 2 с |
 | `attention/notify.ts` | уведомление только при переходе; подавление при видимости; теги; ключи настроек |
-| `host/pty/send.ts` | все ветки алгоритма 8.6, включая `restarted` и отмену Enter вводом; очистка текста |
+| `host/pty/send.ts` | все ветки алгоритма 8.6, включая `restarted` и отмену Enter вводом; очистка текста; черновик хоста: будильник не печатает поверх вставки без Enter |
 | `host/pty/type-and-submit.ts` | будильник после выноса общего кода не изменился (прежние тесты `wake-service` зелёные без правок) |
 | `host/methods/pty.ts` | `pty.attach` больше не отмечает «просмотрено»; `activity.seen` отмечает |
 | `core` `mail.markRead` | пишет `readBy.human`, повтор — 0, чужие id игнорируются |
@@ -1852,11 +1987,11 @@ interface PickResult {
 | `palette/score.ts` | таблица очков, `ё` = `е`, вес названия, корзины свежести |
 | `terminal/links.ts` | регулярки, разрешение относительно worktree, отказ вне корней |
 | `terminal/drop.ts` | экранирование путей с пробелами и `'` |
-| `main/roots.ts` | `..`, абсолютный путь, NUL, симлинк наружу, запись в `.git/` |
-| `main/files/*` | `write` с конфликтом `mtime`; `readText` для двоичного, большого и не UTF-8 |
+| `main/roots.ts` | `..`, абсолютный путь, NUL, симлинк наружу, висячий симлинк при записи, запись в `.git` в любом регистре, `locate` с `/private/tmp` |
+| `main/files/*` | `write` с конфликтом `mtime` и подложенным временным именем; `readText` для двоичного, большого и не UTF-8; обход без git не идёт по каталогам-симлинкам; `gitShow` отвергает `rev` вне `HEAD` и hex; `openPath` не открывает `.command` и `.app` |
 | `review/notes/*` | формат отправки (одна строка, диапазон, старая сторона); переезд якоря в ±20 строк; `stale` |
 | `browser/url.ts` | таблица 12.1 |
-| `main/browser/guard.ts` | `will-attach-webview` вычищает preload и чужой раздел; схемы навигации; разрешения — отказ |
+| `main/browser/guard.ts` | `will-attach-webview` вычищает preload, ставит `webviewTag: false`, отвергает чужой раздел; вложенный `<webview>` гостя — отказ; `file:` — отказ во всех фреймах и в программной навигации; разрешения — отказ |
 | `main/browser/design-mode.ts` | проверка формы данных, обрезка длин, пересечение прямоугольника с видимой областью |
 
 ### 14.2 Компонентные (Testing Library)
@@ -1941,8 +2076,9 @@ interface PickResult {
 ### 15.2 Защита приложения
 
 - **IPC.** Белый список каналов в `main/ipc.ts` растёт на группы `app:*`, `files:*` и
-  `browser:*`. Каждый обработчик проверяет типы и пределы аргументов. Методы хоста — по
-  списку `METHODS`, как сейчас.
+  `browser:*`; группу `files:*` регистрирует `main/files/ipc.ts`. Каждый обработчик
+  проверяет типы и пределы аргументов: пути, `rev`, `sessionId`, `workKey` (разделы 10.8,
+  11.4). Методы хоста — по списку `METHODS`, как сейчас.
 - **Файлы.** Раздел 10.8. Рендерер не получает абсолютных путей вне корней и не
   использует `file://`.
 - **`<webview>`.** Раздел 12.2.
@@ -2037,8 +2173,8 @@ dockview пока остаётся, его вкладки получают то�
 
 **Что делается:**
 - `pty.send` и общий с будильником код;
-- реестр корней `main/roots.ts`, `files.stat`, `app.openPath`, `app.showInFinder`
-  (раздел 10.8);
+- реестр корней `main/roots.ts`, `files.stat`, `files.locate`, `app.openPath`,
+  `app.showInFinder` (раздел 10.8);
 - ссылки, меню, поиск, WebGL-политика;
 - вставка скриншота, перетаскивание файлов.
 
@@ -2126,6 +2262,9 @@ dockview пока остаётся, его вкладки получают то�
    diffstat, слияние победителя.
 9. Вложенные сплиты терминала внутри вкладки.
 10. Значки провайдеров с лицензией вендора, если на этапе 3 взяты буквенные.
+11. Локальный HTML во вкладке браузера: `session.protocol.handle('file', …)` раздела
+    браузера с проверкой `realpath` корня на каждый запрос. В MVP `file:` во встроенный
+    браузер не пускается вовсе (раздел 12.2).
 
 ## 18. Допущения и открытые вопросы
 

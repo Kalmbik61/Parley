@@ -73,7 +73,11 @@ export function emptyLayout(random?: () => number): WorkLayout;
 export function groups(layout: WorkLayout): GroupNode[];                 // визуальный порядок: слева направо, сверху вниз
 export function findTab(layout: WorkLayout, tabId: string): { group: GroupNode; index: number } | null;
 export function openTab(layout: WorkLayout, tab: TabSpec, where?: Where): WorkLayout;   // есть — фокус, нет — вставка
+/** Чистая операция дерева; человек закрывает вкладки только через requestCloseTabs стора (2.2). */
 export function closeTab(layout: WorkLayout, tabId: string): WorkLayout;
+/** Поля вкладки без kind и id; растёт по нужде. Пока одно — адрес вкладки браузера (9.2). */
+export type TabPatch = { url?: string };
+export function updateTab(layout: WorkLayout, tabId: string, patch: TabPatch): WorkLayout;
 export function moveTab(layout: WorkLayout, tabId: string,
   target: { groupId: string; index: number } | { groupId: string; edge: Edge }, sizes?: GroupSizes): OpResult;
 export function splitGroup(layout: WorkLayout, groupId: string, direction: 'row' | 'column',
@@ -98,6 +102,11 @@ export function parseWorkLayout(raw: unknown): WorkLayout | null;        // ра
   - группа опустела и она не корень — удаляется, её сосед по сплиту занимает место
     сплита;
   - `activeGroupId` переходит на соседа.
+  - Функция чистая и синхронная: вопрос о несохранённом буфере в неё не встаёт.
+    Закрытие человеком идёт через `requestCloseTabs` (2.2).
+- **`updateTab`** меняет поля вкладки на месте: id, вид, группа и место в строке те же,
+  `closedTabs` не трогается. Нет такой вкладки или поле не её вида (`url` у терминала) —
+  прежняя раскладка той же ссылкой.
 - **`moveTab` с `edge`** создаёт новую группу с вкладкой на указанной стороне
   целевой группы:
   - `left` и `top` — новая группа первым ребёнком;
@@ -144,7 +153,7 @@ export function parseWorkLayout(raw: unknown): WorkLayout | null;        // ра
     `ratio: 'x'`; принимает результат `JSON.parse(JSON.stringify(layout))`.
 14. **Инвариант по диапазону.** Генератор с зерном делает 500 случайных операций из
     таблицы: `open`, `close`, `move` в строку и к краю, `split`, `setRatio`,
-    `reopen`, `prune`. После каждой `validateLayout` пуст, а число групп ≤ 8.
+    `reopen`, `prune`, `update`. После каждой `validateLayout` пуст, а число групп ≤ 8.
 15. `tabId` детерминирован. `nodeId` с подставным `random` даёт ожидаемую строку
     `g-xxxxxx`.
 16. `splitGroup` вкладкой, уже открытой в другой группе: вкладка одна на раскладку,
@@ -152,6 +161,9 @@ export function parseWorkLayout(raw: unknown): WorkLayout | null;        // ра
 17. При 8 группах `moveTab` единственной вкладки группы к краю другой группы разрешён:
     групп по-прежнему 8. Та же операция со второй вкладкой группы →
     `too-many-groups`.
+18. `updateTab` вкладки браузера `{ url: 'http://localhost:5173/a' }`: адрес новый, id,
+    группа и индекс те же, `validateLayout` пуст. Неизвестный id и `url` у вкладки
+    терминала → та же ссылка на раскладку.
 
 **Приёмка**
 - [ ] Все тесты зелёные.
@@ -213,6 +225,8 @@ export function removeMru(mru: Mru, workKey: string, tabId: string): Mru;
 
 // renderer/layout/store.ts
 export type LayoutOp = (layout: WorkLayout) => WorkLayout | OpResult;
+/** Вопрос перед закрытием вкладок человеком; false — человек отменил. С 7.3 — несохранённые буферы. */
+export type CloseGuard = (workKey: string, tabIds: string[]) => Promise<boolean>;
 export interface LayoutState {
   /** Владелец активной работы; `ui.json.activeWorkKey` — её копия на диске (persistence). */
   activeWorkKey: string | null;
@@ -228,6 +242,13 @@ export interface LayoutState {
   hydrate(workKey: string, layout: WorkLayout | null): void;
   /** Применяет операцию к раскладке работы; ошибку операции возвращает, раскладку не трогает. */
   apply(workKey: string, op: LayoutOp): OpError | null;
+  /**
+   * Единственный путь закрытия вкладок человеком: крестик, средняя кнопка, меню вкладки,
+   * `close-panel` (⌘W). Сначала guard, потом closeTab по каждой; false — отменено, раскладка та же.
+   */
+  requestCloseTabs(workKey: string, tabIds: string[]): Promise<boolean>;
+  /** null — закрывать без вопроса (до 7.3). */
+  setCloseGuard(guard: CloseGuard | null): void;
   drop(workKey: string): void;
   back(): void;
   forward(): void;
@@ -302,9 +323,18 @@ export function neighborWork(order: string[], workKey: string): string | null;
     снимают флаг. Запись пропускается, если раскладки её работы нет в `layouts` или
     вкладка закрыта;
   - `canBack`, `canForward` и `entries` читают `history` стора, поэтому кнопки
-    заголовка (2.3) перерисовываются сами.
+    заголовка (2.3) перерисовываются сами;
+  - `entries()` отдаёт записи со временем `at`. По ним недавние сессии (2.7), свежесть
+    палитры (6.2) и «последняя сессия работы» вкладки «Изменения» (8.2).
 - **MRU** — в том же `apply`: `touchMru` при смене активной вкладки активной группы,
   `removeMru` при закрытии вкладки.
+- **Закрытие вкладок человеком** — только `requestCloseTabs(workKey, ids)`:
+  - сначала `closeGuard` (7.3 спросит про несохранённые буферы); `false` — ничего не
+    закрыто, ответ `false`;
+  - иначе `apply(closeTab)` по каждой вкладке по порядку, ответ `true`;
+  - guard не задан — закрывается сразу.
+  - Без вопроса вкладки убирают только `pruneLayout` (мёртвые сессии, комнаты и корни:
+    записывать некуда) и `drop` (работа исчезла из снимка).
 
 **Тесты**
 1. `layout-store`: файл v1 → `load` даёт `null`, `save` пишет v2; v2 туда-обратно;
@@ -335,6 +365,9 @@ export function neighborWork(order: string[], workKey: string): string | null;
     работ ровно один раз.
 14. `ipc`: `app:save-layout` при `LayoutTooLargeError` пишет `console.warn` и отвечает
     успехом.
+15. `store.requestCloseTabs`: без guard вкладки закрыты, ответ `true`. Guard получил
+    `workKey` и id и ответил `false` — раскладка прежняя, ответ `false`. Ответил `true` —
+    закрыты обе вкладки из списка.
 
 **Приёмка**
 - [ ] Все тесты зелёные.
@@ -592,9 +625,12 @@ export interface TerminalKeyEvent {
 - **Пустая группа** (корень пустой работы) — текст «Откройте сессию из сайдбара, ⌘T —
   новая сессия» (спека 5.8).
 - **Вкладка:**
-  - клик — `focusTab`, средняя кнопка — `closeTab`;
-  - меню: «Закрыть», «Закрыть остальные», «Закрыть справа», «Разделить вправо»,
-    «Разделить вниз» — два последних открывают выбор сессии, как ⌘D;
+  - клик — `focusTab`;
+  - крестик и средняя кнопка — `requestCloseTabs(workKey, [id])` (2.2), не `closeTab`
+    напрямую: с 7.3 закрытие спросит про несохранённый файл;
+  - меню: «Закрыть», «Закрыть остальные», «Закрыть справа» — один вызов
+    `requestCloseTabs` со всем списком; «Разделить вправо», «Разделить вниз» открывают
+    выбор сессии, как ⌘D;
   - закрытие показывает тост «Вкладка закрыта — ⌘⇧T вернёт».
 - **Тела вкладок**, каждое в `ErrorBoundary` с `onClose`:
   - `mail` — `MailPanel`, `room` — `RoomPanel`, `diff` — нынешний `ChangesPanel`
@@ -605,7 +641,7 @@ export interface TerminalKeyEvent {
 
 | Действие меню или клавиша | Что делает |
 |---|---|
-| `close-panel` | закрыть активную вкладку |
+| `close-panel` | `requestCloseTabs` активной вкладки |
 | `reopen-tab` | вернуть закрытую |
 | `prev-panel` / `next-panel` | фокус на предыдущую или следующую группу в визуальном порядке |
 | `split-right` / `split-down` | `openPicker` с активной работой и её открытыми сессиями → выбор → `splitGroup` активной группы с `sizes` из DOM |
@@ -620,9 +656,10 @@ export interface TerminalKeyEvent {
 **Тесты**
 1. Одна группа — `TabStrip` внутри `#titlebar-tabs`. Две группы — две строки в телах,
    слот заголовка пуст.
-2. У активной вкладки `data-active="true"` и нижняя полоса. Средняя кнопка закрывает.
-3. «Закрыть остальные» оставляет одну вкладку, «Закрыть справа» — вкладки слева и
-   текущую.
+2. У активной вкладки `data-active="true"` и нижняя полоса. Средняя кнопка и крестик
+   зовут `requestCloseTabs` с id вкладки, и она закрыта.
+3. «Закрыть остальные» — один вызов `requestCloseTabs` со всеми, кроме текущей: остаётся
+   одна вкладка. «Закрыть справа» — остаются вкладки слева и текущая.
 4. `layoutKeyAction`: ⌃2 → `{ tab-index: 1 }`, ⌃Tab → `mru +1`, ⌘⇧] → `tab-step +1`,
    ⌘J → `null`.
 5. `shouldForwardToTerminal`: ⌃Tab, ⌃1 → `false`; ⌃C, ⌃A → `true`.
@@ -711,6 +748,7 @@ export interface TerminalSurfaceProps {
   visible: boolean;
   fontFamily: string; fontSize: number;
 }
+/** 5.3 дописывает openSearch() и clear() — их зовут действия find и terminal.clear (6.3). */
 export interface TerminalSurfaceHandle { focus(): void; scrollToBottom(): void; search: SearchAddon | null }
 /** Реестр живых поверхностей для фокуса, прокрутки и поиска (4.3, 5.3). */
 export const terminalSurfaces: Map<string /* refKey */, TerminalSurfaceHandle>;
@@ -798,10 +836,13 @@ export function useAnchorRect(groupId: string): { top: number; left: number; wid
 - Создать: `packages/desktop/src/renderer/layout/dnd.ts` и тест,
   `packages/desktop/src/renderer/layout/DropIndicator.tsx`.
 - Изменить:
-  - `shell/AppShell.tsx` — один `DndContext` с сенсорами, `DragOverlay` и
-    `onDragEnd → applyDrop` над сайдбаром, заголовком и центром;
+  - `shell/AppShell.tsx` — один `DndContext` с сенсорами, `DragOverlay`,
+    `collisionDetection={layoutCollision}` и `onDragEnd → applyDrop` над сайдбаром,
+    заголовком и центром;
   - `layout/LayoutView.tsx`, `TabStrip.tsx`, `GroupView.tsx` — только droppable и
     sortable: сортируемые вкладки, зоны броска; своего `DndContext` нет;
+  - `terminal/TerminalSurface.tsx` — droppable зоны `terminal` с `sessionId` на корне
+    поверхности;
   - `components/sidebar/SessionTree.tsx` — строка сессии активной работы становится
     перетаскиваемой через `@dnd-kit`; HTML5-перетаскивание уходит. Без флага
     `?center=new` сессии в старый центр до 2.7 не перетаскиваются: он уходит в 2.7;
@@ -815,11 +856,19 @@ export type DragItem = { kind: 'tab'; tabId: string } | { kind: 'session'; sessi
 export type DropZone =
   | { kind: 'strip'; groupId: string; index: number }
   | { kind: 'center'; groupId: string }
-  | { kind: 'edge'; groupId: string; edge: Edge };
+  | { kind: 'edge'; groupId: string; edge: Edge }
+  | { kind: 'terminal'; sessionId: string };    // поверхность терминала: путь в поле ввода (7.2)
 export interface RectLike { left: number; top: number; width: number; height: number }
 /** Центр или край: край — 25% ширины или высоты; в углу побеждает ближайшая сторона. */
-export function zoneForPoint(point: { x: number; y: number }, body: RectLike, groupId: string): DropZone;
-export function applyDrop(layout: WorkLayout, item: DragItem, zone: DropZone, sizes: GroupSizes): OpResult;
+export function zoneForPoint(point: { x: number; y: number }, body: RectLike, groupId: string): Exclude<DropZone, { kind: 'terminal' }>;
+/** Принимает ли терминал предмет: в этапе 2 — никакой (tab и session → false); 7.2 добавит file. */
+export function acceptsTerminal(item: DragItem): boolean;
+/**
+ * collisionDetection DndContext: терминал под указателем и acceptsTerminal(active) — зона
+ * терминала важнее центра и краёв тела группы; иначе droppable терминалов пропускаются.
+ */
+export const layoutCollision: CollisionDetection;
+export function applyDrop(layout: WorkLayout, item: DragItem, zone: Exclude<DropZone, { kind: 'terminal' }>, sizes: GroupSizes): OpResult;
 /** onDragEnd @dnd-kit → что бросили (`active.data`) и куда (`over.data` + zoneForPoint); null — мимо зон. */
 export function dropFromDragEnd(event: DragEndEvent): { item: DragItem; zone: DropZone } | null;
 ```
@@ -832,11 +881,21 @@ export function dropFromDragEnd(event: DragEndEvent): { item: DragItem; zone: Dr
 | Вкладку → центр тела | `moveTab` последней в группу |
 | Вкладку → край тела | `moveTab` с `edge` |
 | Сессию → строку, центр или край | `openTab(terminal)` в зону. Если вкладка уже открыта — `moveTab` туда |
+| Файл (с 7.2) → терминал сессии | путь в поле ввода агента (спека 5.4, 8.5); раскладка не меняется |
 
 - **Один `DndContext` — в `AppShell`.** Строка сессии живёт в сайдбаре, а зоны броска —
   в центре. `useDraggable` вне провайдера получает контекст по умолчанию и молча не
   тащит, поэтому провайдер накрывает сайдбар, заголовок и центр. `onDragEnd` —
   `dropFromDragEnd` и `apply(activeWorkKey, applyDrop(…))`.
+- **Зона терминала.** Поверхность лежит в слое над телом своей группы, и по
+  прямоугольникам @dnd-kit их не различит. Поэтому `DndContext` получает
+  `collisionDetection={layoutCollision}`:
+  - предмет, который терминал принимает (`acceptsTerminal`), над поверхностью — зона
+    `terminal`, она важнее центра и краёв тела;
+  - вкладка и строка сессии терминал не видят: над ним работают зоны тела группы, как
+    без поверхности;
+  - `onDragEnd` с зоной `terminal` раскладку не трогает, а зовёт `onTerminalDrop(item,
+    sessionId)`. До 7.2 таких предметов нет, и ветка пустая.
 - **Индикаторы** — спека 5.4: линия 2px blue-500 в строке, подсветка тела,
   полупрозрачная половина у края.
 - **Сессии неактивной работы** не тащатся: курсор `not-allowed`, активатор `@dnd-kit`
@@ -859,6 +918,11 @@ export function dropFromDragEnd(event: DragEndEvent): { item: DragItem; zone: Dr
 8. `AppShell` с `?center=new`: его `onDragEnd` с `active` строки сессии сайдбара и
    `over` тела группы открывает вкладку терминала в этой группе. Строка и тело — под
    одним `DndContext`.
+9. `layoutCollision`, указатель над поверхностью терминала в центре тела: для вкладки и
+   сессии — зона `center` этой группы; для подставного предмета, который
+   `acceptsTerminal` принимает, — `terminal` с `sessionId` поверхности.
+10. `dropFromDragEnd` с `over` поверхности терминала → `{ kind: 'terminal', sessionId }`;
+    `onDragEnd` с такой зоной раскладку не меняет.
 
 **Приёмка**
 - [ ] Все тесты зелёные.

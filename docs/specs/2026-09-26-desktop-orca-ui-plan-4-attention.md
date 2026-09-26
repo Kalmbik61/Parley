@@ -109,9 +109,12 @@ Results['mail.markRead'] = { marked: number };
   - `store.ts` и тест;
   - `use-mark-read.ts` и тест;
   - `next.ts` и тест.
+- Создать: `packages/desktop/src/renderer/layout/use-tab-meta-extras.ts` — один хук
+  собирает `extras` из хранилищ; 7.3 и 9.2 дописывают в него свои поля.
 - Изменить в `packages/desktop/src/renderer/`:
   - `attention/derive.ts` и тест — `isHumanUnread`;
-  - `layout/Tab.tsx` и `layout/tab-meta.ts` — `unread` и значок вопроса из внимания;
+  - `layout/tab-meta.ts` и тест — вход `extras`: `unread` и значок вопроса из внимания;
+  - `layout/Tab.tsx` — `extras` из `useTabMetaExtras()`;
   - `sidebar/WorkCard.tsx`, `sidebar/SessionRow.tsx` — данные из `attention/store.ts`;
   - `components/mail/MailPanel.tsx`, `components/rooms/RoomPanel.tsx` —
     `useMarkRead` на письмах;
@@ -127,6 +130,20 @@ Results['mail.markRead'] = { marked: number };
 // attention/derive.ts, дополнение
 /** Не прочитано человеком по правилам 3.2: письмо ему или сообщение комнаты, не от него, без readBy.human. */
 export function isHumanUnread(message: Message): boolean;
+
+// layout/tab-meta.ts — tabMeta остаётся чистой; данные хранилищ приходят одним входом.
+// Сигнатура с 4.2 не меняется: 7.3 и 9.2 наполняют свои поля, а не добавляют параметры.
+export interface TabMetaExtras {
+  attention: Record<string /* refKey */, Attention>;   // 4.2
+  dirtyTabIds: ReadonlySet<string>;                     // 7.3: вкладки file с несохранённым буфером; до него пусто
+  browser: Record<string /* tabId */, { title: string | null; favicon: string | null }>;  // 9.2; до него пусто
+}
+export const EMPTY_EXTRAS: TabMetaExtras;
+export interface TabMeta { /* поля 2.4 */ needsYou: boolean }   // значок вопроса вместо точки
+export function tabMeta(tab: TabSpec, entry: WorkEntry | null, extras?: TabMetaExtras): TabMeta;  // без extras — EMPTY_EXTRAS
+
+// layout/use-tab-meta-extras.ts
+export function useTabMetaExtras(): TabMetaExtras;
 
 // attention/seen.ts
 export interface VisibilityInput {
@@ -223,6 +240,9 @@ export function nextAttentionTarget(
    `badgeCount` при каждом его изменении и только тогда.
 9. Строка статуса при `needsYou: 2, unseen: 1, humanUnread: 3` — «2 ждут тебя · 1 не
    просмотрено»; при `needsYou: 0, unseen: 0` сегмента нет.
+10. `tabMeta` вкладки терминала: в `extras.attention` сессия `needs-you` → `unread` и
+    `needsYou` истинны; `unseen` → `unread` истинно, `needsYou` ложно; без `extras` оба
+    ложны, как в этапе 2.
 
 **Приёмка**
 - [ ] Все тесты зелёные.
