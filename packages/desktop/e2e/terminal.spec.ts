@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type Page } from '@playwright/test';
+import { stopHost } from './stop-host.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
@@ -51,6 +52,7 @@ test.describe('панель терминала: ввод стаба и восс�
   });
 
   test.afterEach(async () => {
+    await stopHost(home);
     await rm(home, { recursive: true, force: true });
   });
 

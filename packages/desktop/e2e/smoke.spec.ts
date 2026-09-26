@@ -10,6 +10,7 @@ import { _electron as electron, expect, test } from '@playwright/test';
 // возвращает именно этот путь строкой (тот же механизм, что использует
 // playwright-core внутри electron.launch()).
 import electronBinary from 'electron';
+import { stopHost } from './stop-host.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
@@ -30,6 +31,7 @@ test.describe('окно поднимает хост и переживает ег
   });
 
   test.afterEach(async () => {
+    await stopHost(home);
     await rm(home, { recursive: true, force: true });
   });
 
