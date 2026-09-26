@@ -11,6 +11,7 @@
  * файле нет и не должно быть (приёмка куска 1.5).
  */
 
+import { existsSync } from 'node:fs';
 import {
   activityOf,
   applyAutoTitle,
@@ -65,7 +66,8 @@ const workKeyOf = (projectPath: string, workId: string): string => `${projectPat
 
 interface WorkWatch {
   journal: EventsLog;
-  watcher: EventsWatcher;
+  /** `null` — каталога `events/` ещё нет или наблюдение сломалось: ждём повтора. */
+  watcher: EventsWatcher | null;
 }
 
 export function createActivityService(
@@ -237,26 +239,56 @@ export function createActivityService(
     maybeHooksMissing(ref, key, session, events);
   }
 
-  function ensureWorkWatch(entry: WorkEntry): WorkWatch {
+  /**
+   * Наблюдение за журналами работы. `renewed` — наблюдатель только что заведён:
+   * всё, что хуки успели дописать до него, никто не прочёл, журналы работы
+   * нужно перечитать.
+   *
+   * `createWork` каталога `events/` не заводит — его создаёт запись настроек
+   * при запуске сессии, а `watchEvents` на несуществующий каталог падает один
+   * раз и больше не пробует. Поэтому без каталога наблюдатель не запоминается,
+   * и каждое следующее изменение списка работ (запуск сессии пишет карту уже
+   * после каталога) пробует снова. Сами каталог не заводим: его отсутствие —
+   * признак сессии без хуков (`hooks-missing`), `openEvents` отличает его от
+   * пустого журнала.
+   */
+  function ensureWorkWatch(entry: WorkEntry): { watch: WorkWatch; renewed: boolean } {
     const wk = workKeyOf(entry.projectPath, entry.map.work.id);
-    const existing = workWatches.get(wk);
-    if (existing !== undefined) return existing;
-
     const eventsDir = workPaths(entry.projectPath, entry.map.work.id).events;
-    const journal = openEvents(eventsDir);
+    let watch = workWatches.get(wk);
+    if (watch === undefined) {
+      watch = { journal: openEvents(eventsDir), watcher: null };
+      workWatches.set(wk, watch);
+    }
+    if (watch.watcher !== null || !existsSync(eventsDir)) return { watch, renewed: false };
+
+    const current = watch;
+    let failed = false;
     const watcher = watchEvents(
       eventsDir,
-      (sessionId) => void readJournal(entry.projectPath, entry.map.work.id, journal, sessionId),
+      (sessionId) =>
+        void readJournal(entry.projectPath, entry.map.work.id, current.journal, sessionId),
       {
-        onError: (error) =>
+        onError: (error) => {
           host.log.warn('наблюдение за журналом активности: событие пропущено', {
             error: String(error),
-          }),
+          });
+          // Сломавшийся наблюдатель (каталог удалили, гонка с его созданием)
+          // заводится заново на следующем изменении списка работ.
+          failed = true;
+          if (current.watcher !== null) {
+            current.watcher.close();
+            current.watcher = null;
+          }
+        },
       },
     );
-    const watch: WorkWatch = { journal, watcher };
-    workWatches.set(wk, watch);
-    return watch;
+    if (failed) {
+      watcher.close();
+      return { watch, renewed: false };
+    }
+    watch.watcher = watcher;
+    return { watch, renewed: true };
   }
 
   async function readJournal(
@@ -288,7 +320,7 @@ export function createActivityService(
 
     for (const [wk, watch] of Array.from(workWatches)) {
       if (validWorks.has(wk)) continue;
-      watch.watcher.close();
+      watch.watcher?.close();
       workWatches.delete(wk);
     }
 
@@ -305,16 +337,17 @@ export function createActivityService(
   function handleWorksChange(snapshot: WorksSnapshot): void {
     if (stopped) return;
     for (const entry of snapshot.entries) {
-      const watch = ensureWorkWatch(entry);
+      const { watch, renewed } = ensureWorkWatch(entry);
       for (const session of entry.map.sessions) {
         const ref: SessionRef = {
           projectPath: entry.projectPath,
           workId: entry.map.work.id,
           sessionId: session.id,
         };
-        if (journals.has(refKey(ref))) recompute(ref);
+        if (journals.has(refKey(ref)) && !renewed) recompute(ref);
         // Первое чтение журнала новой сессии — читатель мог появиться раньше её
-        // (работа известна, сессия только что добавлена).
+        // (работа известна, сессия только что добавлена); после нового
+        // наблюдателя — всё, что хуки дописали без него.
         else void readJournal(entry.projectPath, entry.map.work.id, watch.journal, session.id);
       }
     }
@@ -362,7 +395,7 @@ export function createActivityService(
       unsubscribeLog?.();
       for (const timer of silenceTimers.values()) clearTimeout(timer);
       silenceTimers.clear();
-      for (const watch of workWatches.values()) watch.watcher.close();
+      for (const watch of workWatches.values()) watch.watcher?.close();
       workWatches.clear();
       logIndex.stop();
     },

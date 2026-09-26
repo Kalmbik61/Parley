@@ -360,4 +360,33 @@ describe('createActivityService', () => {
 
     expect(activityChanges(ref).length).toBe(afterFirst);
   }, 20_000);
+  it('9: работа без events/ на старте — первая сессия после запуска видна по хукам', async () => {
+    // `createWork` каталога журналов не заводит: наблюдатель на старте ставить
+    // не на что, и без повтора хуки первой сессии не были бы видны никогда.
+    const map = await createWork(project, { title: 'Новая' });
+    const workId = map.work.id;
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+
+    // Запуск сессии: сначала каталог (`writeWorkSettings`), потом запись карты.
+    await mkdir(workPaths(project, workId).events, { recursive: true });
+    let sessionId = '';
+    await updateMap(project, workId, (current) => {
+      const created = addSession(current, { provider: 'claude', label: 'план', task: 'сделать' });
+      sessionId = created.id;
+      created.launchedBy = 'host';
+      transitionSession(current, created.id, 'active');
+    });
+    const ref: SessionRef = { projectPath: project, workId, sessionId };
+    await waitFor(() => a.get(ref) !== undefined);
+    await settle();
+
+    await appendFile(
+      path.join(workPaths(project, workId).events, `${sessionId}.jsonl`),
+      hook('UserPromptSubmit'),
+    );
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+  }, 20_000);
 });

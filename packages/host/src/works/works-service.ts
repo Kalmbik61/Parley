@@ -73,6 +73,8 @@ export function createWorksService(
   let stopped = false;
   let timer: NodeJS.Timeout | undefined;
   let latest: WorkEntry[] = [];
+  /** Номер чтения `latest` (`watchWorks`): старое чтение свежее не затирает. */
+  let latestSeq = 0;
   let ownLease: HostLease | null = null;
 
   const buildSnapshot = (): WorksSnapshot => ({
@@ -167,7 +169,12 @@ export function createWorksService(
   function ensureWatcher(projectPath: string): void {
     if (stopped || watchers.has(projectPath)) return;
     const watcher = watchWorks(
-      (works) => {
+      (works, seq) => {
+        // Наблюдателей несколько (дом и каждый проект), каждый читает список
+        // сам, и медленное старое чтение одного может прийти позже свежего
+        // чтения другого.
+        if (seq < latestSeq) return;
+        latestSeq = seq;
         latest = works;
         scheduleRefresh();
       },
@@ -244,8 +251,11 @@ export function createWorksService(
       for (const item of index.works) ensureWatcher(item.projectPath);
 
       const initial = await readWorks(harnasHome());
-      latest = initial;
-      await refresh(initial);
+      // Наблюдатель успел отдать своё чтение, пока шло это, — его и берём:
+      // номер у начального чтения не спросить, а следующее событие всё равно
+      // перечитает список.
+      if (latestSeq === 0) latest = initial;
+      await refresh(latest);
     },
     snapshot: buildSnapshot,
     entry: (projectPath, workId) => entries.get(workKey(projectPath, workId)),

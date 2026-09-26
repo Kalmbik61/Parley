@@ -178,7 +178,11 @@ describe('WakeService', () => {
 
   it('2: письмо во время хода — указатель уходит только после Stop', async () => {
     const { workId, sessionId } = await activeSession();
-    const { stream, pty, ref } = await rig(sessionId, workId, {
+    // Как при настоящем запуске: `events/` заводит запись настроек до старта
+    // процесса. Без каталога активность не видела бы хуков стаба, пока карта
+    // не изменится, а тогда пересчёт будильника обгонял бы чтение журнала.
+    await mkdir(workPaths(project, workId).events, { recursive: true });
+    const { stream, pty, ref, activity } = await rig(sessionId, workId, {
       STUB_HOOKS: '1',
       STUB_TURN_MS: '500',
       HARNAS_WORK_DIR: path.join(project, '.harnas', 'works', workId),
@@ -186,7 +190,9 @@ describe('WakeService', () => {
     });
 
     pty.input(ref, 'привет\r');
-    await settle(50);
+    // Письмо — когда хост уже знает о ходе: журнал хуков склеивается 100 мс, и
+    // письмо, пришедшее раньше, застало бы сессию ещё простаивающей.
+    await waitFor(() => activity.get(ref)?.activity.activity === 'working', 3000);
     await sendLetter(workId, sessionId);
 
     // Ход ещё не закончился — указателя быть не должно.

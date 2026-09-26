@@ -77,6 +77,14 @@ export interface WorksWatcher {
   close(): void;
 }
 
+/**
+ * Номер чтения списка — общий для всех наблюдателей процесса и растёт с
+ * началом чтения, а не с его концом. Чтения идут параллельно (всплеск событий,
+ * несколько наблюдателей хоста), и медленное старое может закончиться позже
+ * свежего: по номеру его можно узнать и отбросить.
+ */
+let readSeq = 0;
+
 /** Меняют список работ только эти файлы; `map.lock`, `.bak` и `.tmp` — шум. */
 const relevant = (name: string): boolean =>
   name.endsWith('map.json') || name.endsWith('works-index.json');
@@ -91,20 +99,25 @@ const relevant = (name: string): boolean =>
  * работ самого проекта наблюдается вдобавок — на случай другого `HARNAS_HOME`.
  */
 export function watchWorks(
-  onWorks: (works: WorkEntry[]) => void,
+  onWorks: (works: WorkEntry[], seq: number) => void,
   projectPath: string = process.cwd(),
   { debounceMs = 300, onError }: WatchWorksOptions = {},
 ): WorksWatcher {
   const watchers: FSWatcher[] = [];
   let timer: NodeJS.Timeout | undefined;
   let closed = false;
+  let applied = 0;
 
   const refresh = (): void => {
     timer = undefined;
     if (closed) return;
+    const seq = ++readSeq;
     readWorks(projectPath)
       .then((works) => {
-        if (!closed) onWorks(works);
+        // Чтение, начатое раньше уже отданного, несёт устаревший список.
+        if (closed || seq < applied) return;
+        applied = seq;
+        onWorks(works, seq);
       })
       .catch((error: unknown) => onError?.(error));
   };
