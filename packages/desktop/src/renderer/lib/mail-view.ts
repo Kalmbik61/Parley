@@ -1,17 +1,19 @@
 /**
- * Вид «вся почта работы»: вся переписка работы одной лентой. Перенос
- * `roomView` из `tui/src/room-view.ts` (дизайн комнаты §5) — тот же смысл, что
+ * Вид «вся почта работы»: письма без комнаты одной лентой (спека 6.4: «письма
+ * без комнаты показывает вид «вся почта работы» ... письма с комнатой —
+ * уходят в её отдельную ленту»). Комнатная лента заведена в куске 3.6 —
+ * `lib/room-view.ts`, поверх этого же модуля: он переиспользует
+ * `recipientsOf`/`isUnreadFor`/`toLetterView`/`DECISIONS_SHOWN` отсюда, чтобы
+ * разбор письма в адресатов и отметку «непрочитано» не дублировать.
+ *
+ * Перенос `roomView` из `tui/src/room-view.ts` (дизайн комнаты §5) — тот же смысл, что
  * и у прежней «комнаты»: в отличие от треда (`threadOf`) лента не смотрит на
  * выбранную сессию, а берёт все письма и участников работы сразу. Отличия от
  * оригинала:
  *   - здесь нет терминальной ширины/высоты — лента рисуется и прокручивается
  *     в DOM (`MailPanel.tsx`), а не режется построчно под фиксированный экран;
- *   - карта уже v2 (комнаты landed в куске 3.1): своей ленты у комнаты пока
- *     нет (кусок 3.6), поэтому «вся почта работы» по-прежнему показывает
- *     вообще все письма работы, и с `roomId`, и без — как раньше показывала
- *     «комната» в TUI (дизайн окна 6.4 говорит это же про финальное деление:
- *     письма без комнаты остаются в этом виде, письма с комнатой — уходят в
- *     её отдельную ленту, когда та появится).
+ *   - до куска 3.6 сюда попадали вообще все письма, и с `roomId`, и без — тут
+ *     это уже неверно: письма комнаты показывает `room-view.ts`.
  *
  * `recipientsOf`/`isUnreadFor` перенесены из `core/work/letters.ts` значением:
  * рендерер тянет из `@harnas/core` только типы (см. `lib/dot-state.ts`,
@@ -28,14 +30,14 @@ import { treeOrder } from './tree-order.js';
 const HUMAN = 'human';
 const SYSTEM = 'system';
 
-/** Сколько последних решений видно в шапке; старше — строкой «+N раньше». */
-const DECISIONS_SHOWN = 5;
+/** Сколько последних решений видно в шапке; старше — строкой «+N раньше» (используется и `room-view.ts`). */
+export const DECISIONS_SHOWN = 5;
 
 /**
  * Адресаты письма: `to`, а у рассылки комнаты (пустой `to`) — все участники,
  * кроме отправителя (спецификация 6.1, перенос из `core/work/letters.ts`).
  */
-function recipientsOf(message: Message, map: WorkMap): string[] {
+export function recipientsOf(message: Message, map: WorkMap): string[] {
   if (message.roomId === null || message.to.length > 0) return message.to;
   const room = map.rooms.find((candidate: Room) => candidate.id === message.roomId);
   if (room === undefined) return [];
@@ -46,7 +48,7 @@ function recipientsOf(message: Message, map: WorkMap): string[] {
 }
 
 /** Письмо адресовано сессии, и она его ещё не прочла (перенос из `core/work/letters.ts`). */
-function isUnreadFor(message: Message, sessionId: string, map: WorkMap): boolean {
+export function isUnreadFor(message: Message, sessionId: string, map: WorkMap): boolean {
   return message.readBy[sessionId] === undefined && recipientsOf(message, map).includes(sessionId);
 }
 
@@ -74,6 +76,28 @@ export interface MailView {
   letters: LetterView[];
 }
 
+/**
+ * Одно письмо в строку ленты — общая для «всей почты» и для `room-view.ts`
+ * (там письма те же, разбор адресатов и отметки «непрочитано» одинаковый,
+ * разнится только фильтр по `roomId` вызывающей стороны).
+ */
+export function toLetterView(message: Message, map: WorkMap, tag: (id: string) => string): LetterView {
+  const recipients = recipientsOf(message, map);
+  // Рассылка комнаты («всем»): пустой `to` у письма с `roomId` — иначе
+  // адресат печатался бы поимённо и там, где письмо явно уходило «всем»
+  // (дизайн окна 6.3, пример `→ всем`).
+  const broadcast = message.roomId !== null && message.to.length === 0;
+  return {
+    id: message.id,
+    time: formatClock(message.at),
+    from: tag(message.from),
+    to: broadcast ? 'всем' : recipients.map(tag).join(', '),
+    kind: message.kind,
+    text: message.text,
+    unread: recipients.some((id) => isUnreadFor(message, id, map)),
+  };
+}
+
 export function mailView(
   entry: WorkEntry,
   providers: Array<{ id: string; label: string }>,
@@ -81,32 +105,17 @@ export function mailView(
 ): MailView {
   const map = entry.map;
   const tag = (id: string): string => participantTag(map, id, models[id] ?? null, providers);
-  const messages = [...map.messages].sort((a, b) => a.at.localeCompare(b.at));
+  // Только письма без комнаты (спека 6.4) — письма комнаты показывает
+  // `room-view.ts#roomView`.
+  const messages = map.messages.filter((message) => message.roomId === null).sort((a, b) => a.at.localeCompare(b.at));
 
-  const toLetter = (message: Message): LetterView => {
-    const recipients = recipientsOf(message, map);
-    // Рассылка комнаты («всем»): пустой `to` у письма с `roomId` — иначе
-    // адресат печатался бы поимённо и там, где письмо явно уходило «всем»
-    // (дизайн окна 6.3, пример `→ всем`).
-    const broadcast = message.roomId !== null && message.to.length === 0;
-    return {
-      id: message.id,
-      time: formatClock(message.at),
-      from: tag(message.from),
-      to: broadcast ? 'всем' : recipients.map(tag).join(', '),
-      kind: message.kind,
-      text: message.text,
-      unread: recipients.some((id) => isUnreadFor(message, id, map)),
-    };
-  };
-
-  const letters = messages.map(toLetter);
+  const letters = messages.map((message) => toLetterView(message, map, tag));
 
   // Участники: сессии, встреченные хотя бы в одном письме отправителем или
   // адресатом, в порядке сайдбара (`treeOrder`); человек и системные письма —
   // отдельно следом, раз `treeOrder` про сессии карты ничего про них не знает.
   const seen = new Set<string>();
-  for (const message of map.messages) {
+  for (const message of messages) {
     seen.add(message.from);
     for (const id of recipientsOf(message, map)) seen.add(id);
   }

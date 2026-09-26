@@ -48,6 +48,7 @@ function noopActions(): CommandActions {
   return {
     openSession: () => {},
     openMail: () => {},
+    openRoom: () => {},
     closeActivePanel: () => {},
     newSession: () => {},
     newWork: () => {},
@@ -164,5 +165,24 @@ describe('buildCommands — порядок (тест 3)', () => {
       actions: noopActions(),
     });
     expect(withoutMail.some((command) => command.id.startsWith('mail:'))).toBe(false);
+  });
+
+  it('комнаты работы — команды сразу за «вся почта работы» (кусок 3.6)', () => {
+    const withRoom: WorkEntry = {
+      ...work,
+      map: { ...work.map, rooms: [{ id: 'r-01', title: 'Обсуждение', creator: 's-01', members: ['s-02'], createdAt: '2026-01-01' }] },
+    };
+    let opened: { workKey: string; roomId: string } | null = null;
+    const commands = buildCommands({
+      works: [withRoom],
+      lastSessionByWork: {},
+      wakePaused: null,
+      recentSessionRefs: [],
+      actions: { ...noopActions(), openRoom: (key, roomId) => (opened = { workKey: key, roomId }) },
+    });
+
+    expect(commands[1]?.id).toBe('room:/tmp/w-01 w-01:r-01');
+    void commands[1]?.run();
+    expect(opened).toEqual({ workKey: '/tmp/w-01 w-01', roomId: 'r-01' });
   });
 });

@@ -1,9 +1,9 @@
 /**
- * Настройки в окне (кусок 1.10 плана окна): `silenceThresholdMs`,
- * `messageRate`, `autoLaunch`, `theme`, `fontFamily`, `fontSize`.
- * Заблокированное переменной окружения поле неактивно и подписано «задано
- * HARNAS_…»; сохранение — по одному полю через `settings.set`, ошибка — под
- * полем.
+ * Настройки в окне (кусок 1.10 плана окна, `resumeRate` — кусок 3.6):
+ * `silenceThresholdMs`, `messageRate`, `resumeRate`, `autoLaunch`, `theme`,
+ * `fontFamily`, `fontSize`. Заблокированное переменной окружения поле
+ * неактивно и подписано «задано HARNAS_…»; сохранение — по одному полю через
+ * `settings.set`, ошибка — под полем.
  */
 
 import { useEffect, useState, type ReactNode } from 'react';
@@ -95,6 +95,15 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                   defaultValue={String(config.messageRate)}
                   disabled={locked.messageRate !== undefined}
                   onBlur={(event) => void save('messageRate', event.target.value)}
+                />
+              </FieldRow>
+
+              <FieldRow label="Подъёмов сессии в час (0…60)" lockedBy={locked.resumeRate ?? null} error={errors.resumeRate}>
+                <input
+                  className="rounded border border-[var(--h-overlay)] bg-transparent px-2 py-1 text-sm disabled:opacity-50"
+                  defaultValue={String(config.resumeRate)}
+                  disabled={locked.resumeRate !== undefined}
+                  onBlur={(event) => void save('resumeRate', event.target.value)}
                 />
               </FieldRow>
 

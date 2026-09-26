@@ -1,7 +1,10 @@
 /**
- * Меню строки сессии (Radix ContextMenu, кусок 1.10 плана окна): «Открыть»
- * всегда, «Возобновить» у `exited`/`done`/`failed`, «Остановить» и «Удалить» —
- * с подтверждением через `ConfirmDialog`.
+ * Меню строки сессии (Radix ContextMenu, кусок 1.10 плана окна, «Закрыть…» и
+ * «Создать комнату с…» — кусок 3.6): «Открыть» всегда, «Возобновить» у
+ * `exited`/`done`/`failed`, «Остановить», «Закрыть…» и «Удалить» — с
+ * подтверждением через `ConfirmDialog` (тест 4 куска 3.6: без подтверждения
+ * «Закрыть…» ничего не шлёт). Уже закрытую сессию закрывать повторно незачем —
+ * пункт скрыт (спека 5.1: закрытая сессия и так тусклая в дереве).
  */
 
 import { useState, type ReactNode } from 'react';
@@ -14,16 +17,31 @@ const STOPPABLE: ReadonlySet<SessionStatus> = new Set(['active', 'pending']);
 
 export interface SessionMenuProps {
   status: SessionStatus;
+  /** Сессия уже закрыта (`lifecycle === 'closed'`) — не выводится из `status`, он на закрытие не влияет (`dot-state.ts#displayStatus`). */
+  closed: boolean;
   label: string;
   onOpen: () => void;
   onResume: () => void;
   onStop: () => void;
+  onClose: () => void;
   onDelete: () => void;
+  onCreateRoom: () => void;
   children: ReactNode;
 }
 
-export function SessionMenu({ status, label, onOpen, onResume, onStop, onDelete, children }: SessionMenuProps): JSX.Element {
-  const [confirm, setConfirm] = useState<'stop' | 'delete' | null>(null);
+export function SessionMenu({
+  status,
+  closed,
+  label,
+  onOpen,
+  onResume,
+  onStop,
+  onClose,
+  onDelete,
+  onCreateRoom,
+  children,
+}: SessionMenuProps): JSX.Element {
+  const [confirm, setConfirm] = useState<'stop' | 'close' | 'delete' | null>(null);
 
   return (
     <>
@@ -53,6 +71,20 @@ export function SessionMenu({ status, label, onOpen, onResume, onStop, onDelete,
                 Остановить
               </ContextMenu.Item>
             ) : null}
+            {!closed ? (
+              <ContextMenu.Item
+                className="cursor-default rounded px-2 py-1 outline-none data-[highlighted]:bg-[var(--h-selection)]"
+                onSelect={() => setConfirm('close')}
+              >
+                Закрыть…
+              </ContextMenu.Item>
+            ) : null}
+            <ContextMenu.Item
+              className="cursor-default rounded px-2 py-1 outline-none data-[highlighted]:bg-[var(--h-selection)]"
+              onSelect={onCreateRoom}
+            >
+              Создать комнату с…
+            </ContextMenu.Item>
             <ContextMenu.Separator className="my-1 h-px bg-[var(--h-overlay)]" />
             <ContextMenu.Item
               className="cursor-default rounded px-2 py-1 text-[var(--h-red)] outline-none data-[highlighted]:bg-[var(--h-selection)]"
@@ -70,6 +102,14 @@ export function SessionMenu({ status, label, onOpen, onResume, onStop, onDelete,
         confirmLabel="Остановить"
         onConfirm={onStop}
         onOpenChange={(open) => setConfirm(open ? 'stop' : null)}
+      />
+      <ConfirmDialog
+        open={confirm === 'close'}
+        title={`Закрыть «${label}»?`}
+        description="Сессия больше не получит писем"
+        confirmLabel="Закрыть"
+        onConfirm={onClose}
+        onOpenChange={(open) => setConfirm(open ? 'close' : null)}
       />
       <ConfirmDialog
         open={confirm === 'delete'}

@@ -3,16 +3,23 @@
  * работам и сессиям (кусок 1.10 плана окна). С куска 2.1 строка сессии не
  * держит собственную панель — «выбрать» и «открыть» одинаково просят
  * `Workspace` сфокусировать существующую панель или завести новую вкладку.
+ *
+ * «Создать комнату с…» (кусок 3.6) заведён здесь же, локальным состоянием, а
+ * не в `store/ui.ts`: диалог нужен только сайдбару, палитра ⌘K его не
+ * открывает (в отличие от «новой сессии») — так же, как `NewWorkDialog` внизу.
  */
 
-import type { WorkSession } from '@harnas/core';
+import { useState } from 'react';
+import type { Room, WorkSession } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
+import { sessionRowLabel } from '../../lib/participant.js';
 import { workKey } from '../../lib/tree-order.js';
 import type { HarnasBridge } from '../../../shared/bridge.js';
 import { useActivityStore } from '../../store/activity.js';
 import { useUiStore } from '../../store/ui.js';
 import { orderedWorks, useWorksStore } from '../../store/works.js';
 import { NewWorkDialog } from '../dialogs/NewWorkDialog.js';
+import { CreateRoomDialog, type RoomCandidate } from '../rooms/CreateRoomDialog.js';
 import { WorkList } from './WorkList.js';
 
 export interface SidebarProps {
@@ -21,9 +28,11 @@ export interface SidebarProps {
   onOpenSession: (workKey: string, ref: SessionRef, session: WorkSession) => void;
   /** Клик по строке «вся почта работы» — `Workspace.openMail` через `App.tsx` (кусок 2.4). */
   onOpenMail: (workKey: string) => void;
+  /** Клик по строке комнаты — `Workspace.openRoom` через `App.tsx` (кусок 3.6). */
+  onOpenRoom: (workKey: string, roomId: string, title: string) => void;
 }
 
-export function Sidebar({ bridge, onOpenSession, onOpenMail }: SidebarProps): JSX.Element {
+export function Sidebar({ bridge, onOpenSession, onOpenMail, onOpenRoom }: SidebarProps): JSX.Element {
   const entries = useWorksStore((state) => state.entries);
   const branches = useWorksStore((state) => state.branches);
   const activityByRef = useActivityStore((state) => state.byRef);
@@ -33,6 +42,8 @@ export function Sidebar({ bridge, onOpenSession, onOpenMail }: SidebarProps): JS
   const newWorkOpen = useUiStore((state) => state.dialogs.newWork);
   const openNewWorkDialog = useUiStore((state) => state.openNewWorkDialog);
   const closeNewWorkDialog = useUiStore((state) => state.closeNewWorkDialog);
+
+  const [createRoomFor, setCreateRoomFor] = useState<{ ref: SessionRef; label: string } | null>(null);
 
   const ordered = orderedWorks(entries);
 
@@ -47,9 +58,30 @@ export function Sidebar({ bridge, onOpenSession, onOpenMail }: SidebarProps): JS
   const handleStop = (ref: SessionRef): void => {
     bridge.call('sessions.stop', { ref }).catch(() => {});
   };
+  const handleClose = (ref: SessionRef): void => {
+    bridge.call('sessions.close', { ref }).catch(() => {});
+  };
   const handleDelete = (ref: SessionRef): void => {
     bridge.call('sessions.delete', { ref }).catch(() => {});
   };
+  const handleOpenRoom = (key: string, room: Room): void => onOpenRoom(key, room.id, room.title);
+
+  // Кандидаты «Создать комнату с…» — остальные сессии той же работы, кроме
+  // той, с которой открыли пункт меню (она уже обязательный участник).
+  const roomCandidates: RoomCandidate[] =
+    createRoomFor === null
+      ? []
+      : (entries
+          .find(
+            (item) =>
+              item.projectPath === createRoomFor.ref.projectPath && item.map.work.id === createRoomFor.ref.workId,
+          )
+          ?.map.sessions.filter((session) => session.id !== createRoomFor.ref.sessionId)
+          .map((session) => ({
+            id: session.id,
+            label: sessionRowLabel(session.id, session.label),
+            closed: session.lifecycle === 'closed',
+          })) ?? []);
 
   return (
     <div className="flex h-full w-72 shrink-0 flex-col border-r border-[var(--h-overlay)] bg-[var(--h-mantle)]">
@@ -77,8 +109,11 @@ export function Sidebar({ bridge, onOpenSession, onOpenMail }: SidebarProps): JS
             onOpen={(ref, session) => handleOpen(workKey(ref.projectPath, ref.workId), ref, session)}
             onResume={(ref) => handleResume(ref)}
             onStop={(ref) => handleStop(ref)}
+            onClose={(ref) => handleClose(ref)}
             onDelete={(ref) => handleDelete(ref)}
+            onCreateRoom={(ref, session) => setCreateRoomFor({ ref, label: sessionRowLabel(session.id, session.label) })}
             onOpenMail={onOpenMail}
+            onOpenRoom={handleOpenRoom}
           />
         )}
       </div>
@@ -87,6 +122,19 @@ export function Sidebar({ bridge, onOpenSession, onOpenMail }: SidebarProps): JS
         bridge={bridge}
         onOpenChange={(open) => (open ? openNewWorkDialog() : closeNewWorkDialog())}
       />
+      {createRoomFor !== null ? (
+        <CreateRoomDialog
+          open
+          bridge={bridge}
+          projectPath={createRoomFor.ref.projectPath}
+          workId={createRoomFor.ref.workId}
+          requiredMember={{ id: createRoomFor.ref.sessionId, label: createRoomFor.label }}
+          candidates={roomCandidates}
+          onOpenChange={(open) => {
+            if (!open) setCreateRoomFor(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

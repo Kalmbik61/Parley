@@ -47,6 +47,8 @@ export interface WorkspaceHandle {
   openSession(ref: SessionRef, sessionWorkKey: string, title: string): void;
   /** Строка «вся почта работы» в сайдбаре (кусок 2.4) — тот же принцип: фокус или новая вкладка. */
   openMail(sessionWorkKey: string): void;
+  /** Строка комнаты в сайдбаре (кусок 3.6) — тот же принцип: фокус или новая вкладка. */
+  openRoom(sessionWorkKey: string, roomId: string, title: string): void;
 }
 
 export interface WorkspaceProps {
@@ -67,14 +69,15 @@ function findWork(works: readonly WorkEntry[], key: string): WorkEntry | undefin
   return works.find((entry) => workKey(entry.projectPath, entry.map.work.id) === key);
 }
 
-/** Заголовок вкладки: для терминала/изменений — ярлык сессии, иначе — вид панели. */
+/** Заголовок вкладки: для терминала/изменений — ярлык сессии, для комнаты — её название. */
 function titleFor(spec: PanelSpec, entry: WorkEntry | undefined): string {
   if (spec.kind === 'terminal' || spec.kind === 'changes') {
     if (spec.ref === undefined) return spec.kind;
     const label = entry?.map.sessions.find((session) => session.id === spec.ref?.sessionId)?.label ?? '';
     return sessionRowLabel(spec.ref.sessionId, label);
   }
-  return spec.kind === 'mail' ? 'Вся почта работы' : 'Комната';
+  if (spec.kind === 'mail') return 'Вся почта работы';
+  return entry?.map.rooms.find((room) => room.id === spec.roomId)?.title ?? 'Комната';
 }
 
 function openOrFocus(api: DockviewApi, spec: PanelSpec, title: string, position?: PanelPosition): void {
@@ -127,6 +130,15 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
     openOrFocus(api, { kind: 'mail', workKey: sessionWorkKey }, 'Вся почта работы');
   };
 
+  // Строка комнаты в сайдбаре (кусок 3.6) и команда палитры ⌘K — тот же
+  // принцип, что и у «всей почты работы»: панель на весь адрес
+  // `room:<workKey>:<roomId>`, а не на конкретную работу по имени.
+  const openRoomInGrid = (sessionWorkKey: string, roomId: string, title: string): void => {
+    const api = apiRef.current;
+    if (api === null) return;
+    openOrFocus(api, { kind: 'room', workKey: sessionWorkKey, roomId }, title);
+  };
+
   // `apiRef` — для императивных вызовов (открыть/закрыть панель), а это
   // состояние — специально для `useLayoutPersistence` (кусок 2.2): хук должен
   // сам перезапустить свой эффект, когда dockview станет готов, а ref такого
@@ -154,6 +166,7 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
     () => ({
       openSession: openSessionInGrid,
       openMail: openMailInGrid,
+      openRoom: openRoomInGrid,
     }),
     [],
   );
@@ -241,6 +254,7 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
     actions: {
       openSession: openSessionInGrid,
       openMail: openMailInGrid,
+      openRoom: openRoomInGrid,
       closeActivePanel: () => apiRef.current?.activePanel?.api.close(),
       newSession: () => {
         const ui = useUiStore.getState();

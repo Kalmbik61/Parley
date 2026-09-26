@@ -16,6 +16,9 @@
  * «Вся почта работы» (кусок 2.4) — команда на каждую работу, сразу за
  * командой самой работы: она открывает панель `mail` (`Workspace#openMail`),
  * а не переключается на сессию, поэтому не смешана с сессионными командами.
+ *
+ * Комнаты (кусок 3.6) — по команде на каждую комнату работы, сразу за
+ * командой «вся почта работы»: та же логика, панель `room`, а не сессия.
  */
 
 import type { WorkEntry } from '@harnas/core';
@@ -38,6 +41,8 @@ export interface CommandActions {
   openSession(ref: SessionRef, workKey: string, title: string): void;
   /** «Вся почта работы» (кусок 2.4) — `Workspace.tsx#openMail`. */
   openMail(workKey: string): void;
+  /** Комната (кусок 3.6) — `Workspace.tsx#openRoom`. */
+  openRoom(workKey: string, roomId: string, title: string): void;
   closeActivePanel(): void;
   newSession(): void;
   newWork(): void;
@@ -61,8 +66,11 @@ export function buildCommands(state: BuildCommandsState): Command[] {
 
   const workCommandByKey = new Map<string, Command>();
   const mailCommandByKey = new Map<string, Command>();
+  /** Ключ — `<workKey>:<roomId>`: id комнаты внутри работы, не глобально уникален. */
+  const roomCommandsByKey = new Map<string, Command>();
   const sessionCommandByKey = new Map<string, Command>();
   const sessionKeysByWork = new Map<string, string[]>();
+  const roomKeysByWork = new Map<string, string[]>();
 
   for (const work of ordered) {
     const key = workKey(work.projectPath, work.map.work.id);
@@ -99,6 +107,20 @@ export function buildCommands(state: BuildCommandsState): Command[] {
         run: () => actions.openMail(key),
       });
     }
+
+    const roomKeys: string[] = [];
+    for (const room of work.map.rooms) {
+      const roomKey = `${key}:${room.id}`;
+      roomCommandsByKey.set(roomKey, {
+        id: `room:${roomKey}`,
+        title: room.title,
+        hint: work.map.work.title,
+        keywords: [room.title, 'комната', work.map.work.title],
+        run: () => actions.openRoom(key, room.id, room.title),
+      });
+      roomKeys.push(roomKey);
+    }
+    roomKeysByWork.set(key, roomKeys);
 
     const sessionKeys: string[] = [];
     for (const { session } of treeSessions) {
@@ -137,6 +159,10 @@ export function buildCommands(state: BuildCommandsState): Command[] {
     if (workCommand !== undefined) rest.push(workCommand);
     const mailCommand = mailCommandByKey.get(key);
     if (mailCommand !== undefined) rest.push(mailCommand);
+    for (const roomKey of roomKeysByWork.get(key) ?? []) {
+      const roomCommand = roomCommandsByKey.get(roomKey);
+      if (roomCommand !== undefined) rest.push(roomCommand);
+    }
     for (const sessionKey of sessionKeysByWork.get(key) ?? []) {
       if (used.has(sessionKey)) continue;
       const command = sessionCommandByKey.get(sessionKey);

@@ -6,6 +6,7 @@ import type { HostStatus } from '../shared/bridge.js';
 import { Sidebar } from './components/sidebar/Sidebar.js';
 import { StatusBar } from './components/StatusBar.js';
 import { Workspace, type WorkspaceHandle } from './components/layout/Workspace.js';
+import { InterruptedBanner } from './components/InterruptedBanner.js';
 import { NewSessionDialog } from './components/dialogs/NewSessionDialog.js';
 import { SettingsDialog } from './components/settings/SettingsDialog.js';
 import { sessionRowLabel } from './lib/participant.js';
@@ -152,6 +153,7 @@ export function App(): JSX.Element {
 
   return (
     <div className="flex h-screen flex-col bg-[var(--h-base)] text-[var(--h-text)]">
+      <InterruptedBanner bridge={bridge} />
       <div className="flex min-h-0 flex-1">
         <Sidebar
           bridge={bridge}
@@ -159,6 +161,7 @@ export function App(): JSX.Element {
             workspaceRef.current?.openSession(ref, key, sessionRowLabel(session.id, session.label))
           }
           onOpenMail={(key) => workspaceRef.current?.openMail(key)}
+          onOpenRoom={(key, roomId, title) => workspaceRef.current?.openRoom(key, roomId, title)}
         />
         <Workspace
           ref={workspaceRef}

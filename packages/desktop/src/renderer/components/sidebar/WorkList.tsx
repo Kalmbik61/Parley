@@ -1,6 +1,6 @@
 /** Список работ: номер 1…9 по порядку создания, заголовок, хвост пути, ветка, точка работы. */
 
-import type { WorkEntry, WorkSession } from '@harnas/core';
+import type { Room, WorkEntry, WorkSession } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import { displayStatus, dotState, maxDotState } from '../../lib/dot-state.js';
 import { treeOrder, workKey } from '../../lib/tree-order.js';
@@ -27,9 +27,14 @@ export interface WorkListProps {
   onOpen: (ref: SessionRef, session: WorkSession) => void;
   onResume: (ref: SessionRef, session: WorkSession) => void;
   onStop: (ref: SessionRef, session: WorkSession) => void;
+  onClose: (ref: SessionRef, session: WorkSession) => void;
   onDelete: (ref: SessionRef, session: WorkSession) => void;
+  /** «Создать комнату с…» (кусок 3.6) — сессия, с которой открыли пункт меню. */
+  onCreateRoom: (ref: SessionRef, session: WorkSession) => void;
   /** «Вся почта работы» (кусок 2.4) — `Workspace.tsx#openMail` через `App.tsx`. */
   onOpenMail: (workKey: string) => void;
+  /** Строка комнаты (кусок 3.6) — `Workspace.tsx#openRoom` через `App.tsx`. */
+  onOpenRoom: (workKey: string, room: Room) => void;
 }
 
 export function WorkList({
@@ -42,8 +47,11 @@ export function WorkList({
   onOpen,
   onResume,
   onStop,
+  onClose,
   onDelete,
+  onCreateRoom,
   onOpenMail,
+  onOpenRoom,
 }: WorkListProps): JSX.Element {
   return (
     <div className="flex flex-col gap-3">
@@ -72,10 +80,12 @@ export function WorkList({
               projectPath={entry.projectPath}
               workId={entry.map.work.id}
               sessions={entry.map.sessions}
+              rooms={entry.map.rooms}
               selectedSessionId={selectedWorkKey === key ? selectedSessionId : null}
               activityByRef={activityByRef}
               hasMail={entry.map.messages.length > 0}
               onOpenMail={() => onOpenMail(key)}
+              onOpenRoom={(room) => onOpenRoom(key, room)}
               onSelect={(session) =>
                 onSelectSession(key, { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }, session)
               }
@@ -88,8 +98,14 @@ export function WorkList({
               onStop={(session) =>
                 onStop({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }, session)
               }
+              onClose={(session) =>
+                onClose({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }, session)
+              }
               onDelete={(session) =>
                 onDelete({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }, session)
+              }
+              onCreateRoom={(session) =>
+                onCreateRoom({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }, session)
               }
             />
           </div>
