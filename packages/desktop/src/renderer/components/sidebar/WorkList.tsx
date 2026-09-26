@@ -28,6 +28,8 @@ export interface WorkListProps {
   onResume: (ref: SessionRef, session: WorkSession) => void;
   onStop: (ref: SessionRef, session: WorkSession) => void;
   onDelete: (ref: SessionRef, session: WorkSession) => void;
+  /** «Вся почта работы» (кусок 2.4) — `Workspace.tsx#openMail` через `App.tsx`. */
+  onOpenMail: (workKey: string) => void;
 }
 
 export function WorkList({
@@ -41,6 +43,7 @@ export function WorkList({
   onResume,
   onStop,
   onDelete,
+  onOpenMail,
 }: WorkListProps): JSX.Element {
   return (
     <div className="flex flex-col gap-3">
@@ -71,6 +74,8 @@ export function WorkList({
               sessions={entry.map.sessions}
               selectedSessionId={selectedWorkKey === key ? selectedSessionId : null}
               activityByRef={activityByRef}
+              hasMail={entry.map.messages.length > 0}
+              onOpenMail={() => onOpenMail(key)}
               onSelect={(session) =>
                 onSelectSession(key, { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }, session)
               }

@@ -45,6 +45,8 @@ import { SessionPicker, sessionCandidates } from '../palette/SessionPicker.js';
 export interface WorkspaceHandle {
   /** Сайдбар (клик по строке сессии) — фокус на панель или новая вкладка (тест 2). */
   openSession(ref: SessionRef, sessionWorkKey: string, title: string): void;
+  /** Строка «вся почта работы» в сайдбаре (кусок 2.4) — тот же принцип: фокус или новая вкладка. */
+  openMail(sessionWorkKey: string): void;
 }
 
 export interface WorkspaceProps {
@@ -116,6 +118,15 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
     openOrFocus(api, { kind: 'terminal', ref: sessionRef, workKey: sessionWorkKey }, title);
   };
 
+  // Заголовок вкладки всегда один и тот же (`titleFor`) — панель на весь адрес
+  // `mail:<workKey>`, а не на конкретную работу по имени, так что второй
+  // «вся почта работы» другой работы не перезаписывает эту вкладку.
+  const openMailInGrid = (sessionWorkKey: string): void => {
+    const api = apiRef.current;
+    if (api === null) return;
+    openOrFocus(api, { kind: 'mail', workKey: sessionWorkKey }, 'Вся почта работы');
+  };
+
   // `apiRef` — для императивных вызовов (открыть/закрыть панель), а это
   // состояние — специально для `useLayoutPersistence` (кусок 2.2): хук должен
   // сам перезапустить свой эффект, когда dockview станет готов, а ref такого
@@ -142,6 +153,7 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
     handleRef,
     () => ({
       openSession: openSessionInGrid,
+      openMail: openMailInGrid,
     }),
     [],
   );
@@ -228,6 +240,7 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
     recentSessionRefs,
     actions: {
       openSession: openSessionInGrid,
+      openMail: openMailInGrid,
       closeActivePanel: () => apiRef.current?.activePanel?.api.close(),
       newSession: () => {
         const ui = useUiStore.getState();

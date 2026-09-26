@@ -2,6 +2,11 @@
  * Дерево сессий одной работы: порядок и вложенность — из `lib/tree-order.ts`.
  * Строки перетаскиваются в сетку (кусок 2.1 плана окна): `dragPayload` кладёт
  * адрес сессии под свой MIME, `Workspace.tsx` читает его в `onDidDrop`.
+ *
+ * Строка «вся почта работы» (кусок 2.4) стоит здесь, а не в `WorkList.tsx`,
+ * хотя она не про сессию: `SessionTree` уже вызывается ровно один раз на
+ * работу (план куска называет именно этот файл), и `hasMail` — то же самое
+ * булево на работу, что и остальные пропсы этого компонента.
  */
 
 import type { WorkSession } from '@harnas/core';
@@ -22,11 +27,14 @@ export interface SessionTreeProps {
   sessions: readonly WorkSession[];
   selectedSessionId: string | null;
   activityByRef: Record<string, ActivityEntry>;
+  /** В работе есть хотя бы одно письмо — показывать строку «вся почта работы» (спека 6.4). */
+  hasMail: boolean;
   onSelect: (session: WorkSession) => void;
   onOpen: (session: WorkSession) => void;
   onResume: (session: WorkSession) => void;
   onStop: (session: WorkSession) => void;
   onDelete: (session: WorkSession) => void;
+  onOpenMail: () => void;
 }
 
 export function SessionTree({
@@ -35,14 +43,27 @@ export function SessionTree({
   sessions,
   selectedSessionId,
   activityByRef,
+  hasMail,
   onSelect,
   onOpen,
   onResume,
   onStop,
   onDelete,
+  onOpenMail,
 }: SessionTreeProps): JSX.Element {
   return (
     <div>
+      {hasMail ? (
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={onOpenMail}
+          className="flex min-w-0 cursor-default items-center gap-2 rounded px-2 py-1 pl-2 text-sm text-[var(--h-subtext)] hover:bg-[var(--h-surface)]"
+        >
+          <span className="w-2 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">Вся почта работы</span>
+        </div>
+      ) : null}
       {treeOrder(sessions).map(({ session, depth }) => {
         const ref: SessionRef = { projectPath, workId, sessionId: session.id };
         const entry = activityFor(activityByRef, ref);

@@ -19,9 +19,11 @@ export interface SidebarProps {
   bridge: HarnasBridge;
   /** Клик по строке или «Открыть» в меню сессии — `Workspace.openSession` через `App.tsx`. */
   onOpenSession: (workKey: string, ref: SessionRef, session: WorkSession) => void;
+  /** Клик по строке «вся почта работы» — `Workspace.openMail` через `App.tsx` (кусок 2.4). */
+  onOpenMail: (workKey: string) => void;
 }
 
-export function Sidebar({ bridge, onOpenSession }: SidebarProps): JSX.Element {
+export function Sidebar({ bridge, onOpenSession, onOpenMail }: SidebarProps): JSX.Element {
   const entries = useWorksStore((state) => state.entries);
   const branches = useWorksStore((state) => state.branches);
   const activityByRef = useActivityStore((state) => state.byRef);
@@ -76,6 +78,7 @@ export function Sidebar({ bridge, onOpenSession }: SidebarProps): JSX.Element {
             onResume={(ref) => handleResume(ref)}
             onStop={(ref) => handleStop(ref)}
             onDelete={(ref) => handleDelete(ref)}
+            onOpenMail={onOpenMail}
           />
         )}
       </div>

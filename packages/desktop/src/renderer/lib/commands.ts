@@ -13,9 +13,9 @@
  * состоянием заводят компоненты. `buildCommands` от этого проверяется без
  * монтирования React и без фейкового бриджа.
  *
- * «Вся почта работы» (действие куска 2.4) сюда пока не входит: панель `mail`
- * уже есть как заглушка (`panel-registry.tsx`), а команда для неё появится
- * вместе с моделью писем в 2.4 — раньше её нечем наполнить.
+ * «Вся почта работы» (кусок 2.4) — команда на каждую работу, сразу за
+ * командой самой работы: она открывает панель `mail` (`Workspace#openMail`),
+ * а не переключается на сессию, поэтому не смешана с сессионными командами.
  */
 
 import type { WorkEntry } from '@harnas/core';
@@ -36,6 +36,8 @@ export interface Command {
 export interface CommandActions {
   /** Открыть сессию в сетке — `Workspace.tsx#openSession`/`openOrFocus`. */
   openSession(ref: SessionRef, workKey: string, title: string): void;
+  /** «Вся почта работы» (кусок 2.4) — `Workspace.tsx#openMail`. */
+  openMail(workKey: string): void;
   closeActivePanel(): void;
   newSession(): void;
   newWork(): void;
@@ -58,6 +60,7 @@ export function buildCommands(state: BuildCommandsState): Command[] {
   const ordered = orderedWorks(works);
 
   const workCommandByKey = new Map<string, Command>();
+  const mailCommandByKey = new Map<string, Command>();
   const sessionCommandByKey = new Map<string, Command>();
   const sessionKeysByWork = new Map<string, string[]>();
 
@@ -83,6 +86,19 @@ export function buildCommands(state: BuildCommandsState): Command[] {
         );
       },
     });
+
+    // Строка сайдбара «вся почта работы» появляется, только если в работе
+    // есть письма (`SessionTree.tsx`) — команда палитры повторяет то же
+    // условие: пустая почта нескольких работ не должна засорять список.
+    if (work.map.messages.length > 0) {
+      mailCommandByKey.set(key, {
+        id: `mail:${key}`,
+        title: 'Вся почта работы',
+        hint: work.map.work.title,
+        keywords: ['вся почта работы', 'почта', work.map.work.title],
+        run: () => actions.openMail(key),
+      });
+    }
 
     const sessionKeys: string[] = [];
     for (const { session } of treeSessions) {
@@ -119,6 +135,8 @@ export function buildCommands(state: BuildCommandsState): Command[] {
     const key = workKey(work.projectPath, work.map.work.id);
     const workCommand = workCommandByKey.get(key);
     if (workCommand !== undefined) rest.push(workCommand);
+    const mailCommand = mailCommandByKey.get(key);
+    if (mailCommand !== undefined) rest.push(mailCommand);
     for (const sessionKey of sessionKeysByWork.get(key) ?? []) {
       if (used.has(sessionKey)) continue;
       const command = sessionCommandByKey.get(sessionKey);

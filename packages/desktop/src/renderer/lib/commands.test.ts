@@ -47,6 +47,7 @@ const refC: SessionRef = { projectPath: '/tmp/w-01', workId: 'w-01', sessionId: 
 function noopActions(): CommandActions {
   return {
     openSession: () => {},
+    openMail: () => {},
     closeActivePanel: () => {},
     newSession: () => {},
     newWork: () => {},
@@ -132,5 +133,36 @@ describe('buildCommands — порядок (тест 3)', () => {
     expect(workCommand).toBeDefined();
     void workCommand?.run();
     expect(opened).toBe(false);
+  });
+
+  it('«Вся почта работы» — только если в работе есть письма, сразу за командой работы', () => {
+    const withMail: WorkEntry = {
+      ...work,
+      map: {
+        ...work.map,
+        messages: [{ id: 'm-1', roomId: null, from: 's-01', to: ['s-02'], at: '2026-01-01T10:00:00.000Z', text: 'т', kind: 'note', readBy: {} }],
+      },
+    };
+    let openedMailFor: string | null = null;
+    const commands = buildCommands({
+      works: [withMail],
+      lastSessionByWork: {},
+      wakePaused: null,
+      recentSessionRefs: [],
+      actions: { ...noopActions(), openMail: (key) => (openedMailFor = key) },
+    });
+
+    expect(commands[1]?.id).toBe('mail:/tmp/w-01 w-01');
+    void commands[1]?.run();
+    expect(openedMailFor).toBe('/tmp/w-01 w-01');
+
+    const withoutMail = buildCommands({
+      works: [work],
+      lastSessionByWork: {},
+      wakePaused: null,
+      recentSessionRefs: [],
+      actions: noopActions(),
+    });
+    expect(withoutMail.some((command) => command.id.startsWith('mail:'))).toBe(false);
   });
 });

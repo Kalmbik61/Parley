@@ -158,6 +158,7 @@ export function App(): JSX.Element {
           onOpenSession={(key, ref, session) =>
             workspaceRef.current?.openSession(ref, key, sessionRowLabel(session.id, session.label))
           }
+          onOpenMail={(key) => workspaceRef.current?.openMail(key)}
         />
         <Workspace
           ref={workspaceRef}
