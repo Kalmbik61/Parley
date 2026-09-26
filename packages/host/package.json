@@ -20,6 +20,9 @@
   },
   "dependencies": {
     "@harnas/core": "workspace:*",
-    "@harnas/protocol": "workspace:*"
+    "@harnas/protocol": "workspace:*",
+    "@xterm/addon-serialize": "^0.14",
+    "@xterm/headless": "^5",
+    "node-pty": "^1"
   }
 }

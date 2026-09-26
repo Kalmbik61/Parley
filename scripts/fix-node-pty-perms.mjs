@@ -16,7 +16,13 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 async function findNodePtyDirs() {
   const found = new Set();
 
-  for (const from of [repoRoot, path.join(repoRoot, 'packages', 'tui')]) {
+  for (const from of [
+    repoRoot,
+    path.join(repoRoot, 'packages', 'tui'),
+    // Хост завёл свой node-pty в 1.6 — та же версия обычно дедуплицируется в
+    // один каталог стора со скопом tui, но полагаться на это не стоит.
+    path.join(repoRoot, 'packages', 'host'),
+  ]) {
     try {
       const require = createRequire(path.join(from, 'package.json'));
       found.add(path.dirname(require.resolve('node-pty/package.json')));

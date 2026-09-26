@@ -9,9 +9,10 @@ import { createLog } from './log.js';
 import { watchIdle } from './idle.js';
 import { hostPaths, MAX_SOCKET_PATH_BYTES } from './paths.js';
 import type { HostPaths } from './paths.js';
-import { createMethodHandlers, NOTIFICATION_HANDLERS } from './methods/index.js';
+import { createHostHandlers } from './methods/index.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
+import { createPtyManager } from './pty/pty-manager.js';
 
 export interface HostOptions {
   home?: string;
@@ -110,17 +111,30 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   handle.context.onShutdown(() => worksService.stop());
 
   // Активность живёт поверх работ: точка статуса и строка метрик окна (1.5).
-  // Свой метод появится в 1.6 (`pty.attach`/`pty.input` вызовут `markSeen`) —
-  // пока сервис доступен только другим кускам хоста через `deps`.
+  // `pty.attach`/`pty.input` (1.6) зовут её `markSeen`.
   const activityService = createActivityService(handle.context, worksService);
   handle.context.onShutdown(() => activityService.stop());
 
+  // Живые PTY сессий (1.6). На остановке хоста добиваются вместе с ним —
+  // иначе процесс агента остаётся сиротой без хоста, который бы его закрыл.
+  const ptyManager = createPtyManager(handle.context);
+  handle.context.onShutdown(async () => {
+    await Promise.all(
+      ptyManager.list().map((pty) =>
+        ptyManager.stop(pty.ref).catch((error: unknown) => {
+          log.error('остановка PTY на выключении хоста не удалась', { ref: pty.ref, error: String(error) });
+        }),
+      ),
+    );
+  });
+
+  const handlers = createHostHandlers({ works: worksService, activity: activityService, pty: ptyManager });
   const server = createHostServer({
     context: handle.context,
     token,
     helloTimeoutMs,
-    methodHandlers: createMethodHandlers({ works: worksService, activity: activityService }),
-    notificationHandlers: NOTIFICATION_HANDLERS,
+    methodHandlers: handlers.methods,
+    notificationHandlers: handlers.notifications,
     registerClient: handle.addClient,
     unregisterClient: handle.removeClient,
   });
