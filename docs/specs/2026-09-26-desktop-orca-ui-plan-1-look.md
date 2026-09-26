@@ -145,15 +145,22 @@ export function collectSourceFiles(dir: string): Promise<string[]>;
 - **Старт.** Main читает `ui.json`, ставит `nativeTheme.themeSource = appearance` и
   только потом создаёт окно с `backgroundColor` `#0a0a0a` или `#ffffff` по
   `nativeTheme.shouldUseDarkColors`. Так при старте нет белой вспышки в тёмной теме.
-- **Смена темы.** `app:set-appearance` меняет `themeSource` и пишет `ui.json`.
-  `nativeTheme.on('updated')` шлёт окну `app:appearance` с текущей тёмностью.
+- **Смена темы.** `app:set-appearance` сперва пишет `ui.json`, потом меняет
+  `themeSource`: если запись упала, тема не меняется и окно получает ошибку — диск и
+  окно не расходятся. `nativeTheme.on('updated')` шлёт окну `app:appearance` с текущей
+  тёмностью.
   Рендерер ставит `.dark` по `matchMedia('(prefers-color-scheme: dark)')` — Electron
   синхронизирует его с `themeSource`.
 - **`ui.json`:**
-  - битый или отсутствующий файл → `DEFAULT_UI`;
-  - `save` сливает ключи верхнего уровня: вложенные объекты сливаются целиком,
-    например весь `notifications`;
-  - ширины приводятся к пределам;
+  - битый или отсутствующий файл → `DEFAULT_UI`; любая другая ошибка чтения (`EISDIR`,
+    `EACCES`) — тоже `DEFAULT_UI` и предупреждение в лог main: старт окна из-за
+    `ui.json` не падает;
+  - `save` сливает ключи верхнего уровня, а вложенные объекты (`leftSidebar`,
+    `rightSidebar`, `notifications`) — на один уровень: текущее ⊕ патч, потом
+    `normalizeUi`. Частичный `{ notifications: { sound: false } }` не откатывает
+    остальные флаги к значениям по умолчанию;
+  - ширины приводятся к пределам; нечисло, `NaN` и `±Infinity` → начальная ширина;
+  - `app:save-ui` отвергает не-объекты, `null` и массивы;
   - запись атомарна: уникальный временный файл и `rename` (`atomic-file.ts`);
   - записи идут очередью на файл (`createFileQueue`): `save` читает файл после конца
     предыдущей записи. Параллельные IPC-вызовы — `setAppearance` и `saveUi`, ресайз
@@ -167,6 +174,9 @@ export function collectSourceFiles(dir: string): Promise<string[]>;
     упавших команд, там бывают запрещённые строки;
   - правила — спека 14.4. «Запись в каталоги агентов» срабатывает на сам путь, при
     чтении тоже: чтение этих путей рамка 15.1 не предполагает;
+  - комментарии распознаются с состоянием: `//`-строка и всё внутри `/* … */` —
+    комментарий, строка, начатая с `*`, — только внутри блока. Код вроде
+    `*gen() {…}` или перенос `* 2` проверяется;
   - совпадение валит тест со списком `файл:строка — правило`.
 - **`NOTICE`:**
   - Orca: MIT, «Copyright (c) 2026 Lovecast Inc.», полный текст MIT, список
@@ -211,6 +221,16 @@ export function collectSourceFiles(dir: string): Promise<string[]>;
      текстов целиком.
 10. `collectSourceFiles` во временном каталоге: `a.ts` — в списке; `a.test.ts`,
     `a.json`, `.omc/state/x.ts` и `node_modules/x.ts` — нет.
+11. Инвариант ширин: для `leftSidebar.width` из диапазона −1e9…1e9 с шагом и для
+    `NaN`, `±Infinity`, `'300'`, `null` результат `normalizeUi` — конечное число в
+    220–500; то же для правого (≥ 220).
+12. Частичный вложенный патч: после `save({ notifications: { …все true, mail: false } })`
+    вызов `save({ notifications: { sound: false } })` оставляет `mail: false`.
+13. `ui.json` — каталог: `load()` отдаёт `DEFAULT_UI` и не бросает.
+14. IPC: `app:save-ui` с `[]`, `null`, `'x'` отвергается; `app:set-appearance`, когда
+    подставной `save` падает, — промис отвергнут, `themeSource` прежний.
+15. `scanSource` с состоянием блока: метод-генератор `*gen() { return '.credentials.json' }`
+    → находка; строка внутри `/* … */` без ведущей `*` с тем же текстом → пусто.
 
 **Приёмка**
 - [ ] Все тесты зелёные, `pnpm lint` чистый.
