@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -106,9 +106,22 @@ test.describe('раскладка сетки переживает перезап
 
     await expect(window.locator('.xterm-helper-textarea')).toHaveCount(3);
 
-    // Тишина сохранения — 500 мс (план, кусок 2.2): ждём с запасом, иначе
-    // закрытие окна может обогнать debounce и раскладка не долетит до диска.
-    await window.waitForTimeout(900);
+    // Тишина сохранения — 500 мс (план, кусок 2.2). Под нагрузкой фиксированной
+    // паузы не хватало: закрытие обгоняло запись. Ждём, пока на диске окажутся
+    // все три панели.
+    const layoutsFile = path.join(home, 'desktop', 'layouts.json');
+    await expect
+      .poll(
+        async () => {
+          try {
+            return ((await readFile(layoutsFile, 'utf8')).match(/terminal:/g) ?? []).length >= 3;
+          } catch {
+            return false;
+          }
+        },
+        { timeout: 10_000 },
+      )
+      .toBe(true);
 
     await app.close();
 
