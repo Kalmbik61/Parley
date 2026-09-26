@@ -162,4 +162,26 @@ describe('useLayoutPersistence', () => {
 
     expect(bridge.layoutSaves).toHaveLength(1);
   });
+
+  it('до прихода списка работ раскладка не восстанавливается и не выбрасывает панели', async () => {
+    bridge = createFakeBridge();
+    await bridge.app.saveLayout(WORKSPACE_LAYOUT_KEY, { grid: {} });
+    bridge.layoutSaves.length = 0;
+
+    const alivePanel = panel('terminal:alive', { kind: 'terminal', ref: refAlive, workKey });
+    const api = createFakeApi([alivePanel]);
+
+    const { rerender } = renderHook(
+      ({ loaded }: { loaded: boolean }) =>
+        useLayoutPersistence({ api, bridge, works: loaded ? [entry] : [], worksLoaded: loaded }),
+      { initialProps: { loaded: false } },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(api.fromJSONCalls).toHaveLength(0);
+    expect(api.removed).toHaveLength(0);
+
+    rerender({ loaded: true });
+    await waitFor(() => expect(api.fromJSONCalls).toHaveLength(1));
+    expect(api.removed).toHaveLength(0);
+  });
 });

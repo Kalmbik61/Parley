@@ -39,6 +39,7 @@ import { useUiStore } from '../../store/ui.js';
 import { PANEL_COMPONENTS, PanelHostContext } from './panel-registry.js';
 import { readDragPayload } from './sidebar-drag.js';
 import { useLayoutPersistence } from './use-layout-persistence.js';
+import { useWorksStore } from '../../store/works.js';
 import { CommandPalette } from '../palette/CommandPalette.js';
 import { SessionPicker, sessionCandidates } from '../palette/SessionPicker.js';
 
@@ -144,7 +145,8 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
   // сам перезапустить свой эффект, когда dockview станет готов, а ref такого
   // сигнала React не даёт.
   const [api, setApi] = useState<DockviewApi | null>(null);
-  useLayoutPersistence({ api, bridge, works });
+  const worksLoaded = useWorksStore((state) => !state.loading);
+  useLayoutPersistence({ api, bridge, works, worksLoaded });
 
   const [picker, setPicker] = useState<{
     direction: 'right' | 'below';

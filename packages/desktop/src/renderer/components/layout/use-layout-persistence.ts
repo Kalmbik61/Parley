@@ -72,9 +72,19 @@ export interface UseLayoutPersistenceOptions {
   api: LayoutApi | null;
   bridge: HarnasBridge;
   works: readonly WorkEntry[];
+  /**
+   * Список работ уже пришёл от хоста. До этого восстанавливать нельзя: все
+   * панели сочлись бы панелями несуществующих сессий и выбросились бы.
+   */
+  worksLoaded?: boolean;
 }
 
-export function useLayoutPersistence({ api, bridge, works }: UseLayoutPersistenceOptions): void {
+export function useLayoutPersistence({
+  api,
+  bridge,
+  works,
+  worksLoaded = true,
+}: UseLayoutPersistenceOptions): void {
   // `works` меняется на каждое событие хоста — эффект ниже заведён один раз на
   // готовый `api` и не должен пересоздавать подписку из-за этого; свежий
   // список читается через ref в момент восстановления.
@@ -82,8 +92,11 @@ export function useLayoutPersistence({ api, bridge, works }: UseLayoutPersistenc
   worksRef.current = works;
 
   useEffect(() => {
-    if (api === null) return;
+    if (api === null || !worksLoaded) return;
     let disposed = false;
+    // Пока раскладка не восстановлена, изменения не сохраняем: иначе пустая
+    // сетка первого кадра перезаписала бы файл раньше, чем его прочитали.
+    let restored = false;
 
     bridge.app
       .loadLayout(WORKSPACE_LAYOUT_KEY)
@@ -95,6 +108,9 @@ export function useLayoutPersistence({ api, bridge, works }: UseLayoutPersistenc
           if (!isPanelValid(worksRef.current, spec)) api.removePanel(panel);
         }
       })
+      .finally(() => {
+        restored = true;
+      })
       .catch(() => {
         // Раскладка просто не восстановится — план требует это только от
         // самого хранилища (битый файл → пустые раскладки), здесь достаточно
@@ -103,6 +119,7 @@ export function useLayoutPersistence({ api, bridge, works }: UseLayoutPersistenc
 
     let timer: ReturnType<typeof setTimeout> | null = null;
     const subscription = api.onDidLayoutChange(() => {
+      if (!restored) return;
       if (timer !== null) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = null;
@@ -119,5 +136,5 @@ export function useLayoutPersistence({ api, bridge, works }: UseLayoutPersistenc
       if (timer !== null) clearTimeout(timer);
       subscription.dispose();
     };
-  }, [api, bridge]);
+  }, [api, bridge, worksLoaded]);
 }

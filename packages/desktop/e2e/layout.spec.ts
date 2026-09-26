@@ -114,7 +114,12 @@ test.describe('раскладка сетки переживает перезап
       .poll(
         async () => {
           try {
-            return ((await readFile(layoutsFile, 'utf8')).match(/terminal:/g) ?? []).length >= 3;
+            // id панели встречается в JSON dockview в нескольких местах —
+            // считаем сами панели сохранённой раскладки, а не вхождения строки.
+            const file = JSON.parse(await readFile(layoutsFile, 'utf8')) as {
+              layouts: Record<string, { panels?: Record<string, unknown> }>;
+            };
+            return Object.keys(file.layouts.window?.panels ?? {}).length >= 3;
           } catch {
             return false;
           }
