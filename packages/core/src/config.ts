@@ -45,6 +45,13 @@ export interface HarnasConfig {
   fontFamily: string;
   /** Кегль панели терминала в пунктах: 8…32 (кусок 1.10 плана окна). */
   fontSize: number;
+  /**
+   * Корень, под которым заводятся worktree сессий: `<root>/<проект>-<хеш6>/…`
+   * (спецификация 8.1). Тильда раскрывается там, где путь строится
+   * (`plannedWorktree`), — здесь остаётся как есть, чтобы сохранялась в файл
+   * настроек переносимой между машинами.
+   */
+  worktreeRoot: string;
 }
 
 /** Шесть имён тем: пять палитр плюс явный отказ от них (дизайн темы, раздел 3.3). */
@@ -63,6 +70,7 @@ export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
   theme: 'mocha',
   fontFamily: 'Menlo',
   fontSize: 13,
+  worktreeRoot: '~/harnas/worktrees',
 };
 
 /** Имя переменной окружения для каждого ключа — один источник для загрузчика и оверлея. */
@@ -79,6 +87,7 @@ export const ENV_NAMES: Readonly<Record<keyof HarnasConfig, string>> = {
   theme: 'HARNAS_THEME',
   fontFamily: 'HARNAS_FONT_FAMILY',
   fontSize: 'HARNAS_FONT_SIZE',
+  worktreeRoot: 'HARNAS_WORKTREE_ROOT',
 };
 
 export interface LoadedConfig {
@@ -114,6 +123,9 @@ const isThemeName = (value: unknown): value is string =>
 const THEME_EXPECTED = `одно из ${THEME_NAMES.join(', ')}`;
 
 const isFontFamily = (value: unknown): value is string =>
+  typeof value === 'string' && value.trim() !== '';
+
+const isWorktreeRoot = (value: unknown): value is string =>
   typeof value === 'string' && value.trim() !== '';
 
 /** Границы кегля — инвариантом по диапазону (правила проверки плана), не одним числом. */
@@ -165,6 +177,7 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   take('theme', isThemeName, THEME_EXPECTED);
   take('fontFamily', isFontFamily, 'непустая строка');
   take('fontSize', isFontSize, FONT_SIZE_EXPECTED);
+  take('worktreeRoot', isWorktreeRoot, 'непустая строка');
   return patch;
 }
 
@@ -234,6 +247,11 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
     const parsed = Number(fontSize);
     if (isFontSize(parsed)) patch.fontSize = parsed;
     else complain(`${ENV_NAMES.fontSize}: ожидается ${FONT_SIZE_EXPECTED}`);
+  }
+  const worktreeRoot = text(ENV_NAMES.worktreeRoot);
+  if (worktreeRoot !== undefined) {
+    if (isWorktreeRoot(worktreeRoot)) patch.worktreeRoot = worktreeRoot;
+    else complain(`${ENV_NAMES.worktreeRoot}: ожидается непустая строка`);
   }
   return patch;
 }
@@ -315,6 +333,10 @@ export function parseSetting<K extends keyof HarnasConfig>(
   }
   if (key === 'fontFamily') {
     if (isFontFamily(text)) return { value: text as HarnasConfig[K] };
+    return { error: `${key}: ожидается непустая строка` };
+  }
+  if (key === 'worktreeRoot') {
+    if (isWorktreeRoot(text)) return { value: text as HarnasConfig[K] };
     return { error: `${key}: ожидается непустая строка` };
   }
   if (key === 'fontSize') {

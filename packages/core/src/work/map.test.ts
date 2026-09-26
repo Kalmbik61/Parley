@@ -394,6 +394,7 @@ describe('parseMap', () => {
           result: 'done',
           resultAt: '2026-09-20T11:40:00.000Z',
           closedAt: null,
+          worktree: null,
           history: [
             { event: 'pending', at: '2026-09-20T10:00:00.000Z' },
             { event: 'active', at: '2026-09-20T10:01:00.000Z' },
@@ -408,6 +409,7 @@ describe('parseMap', () => {
           result: null,
           resultAt: null,
           closedAt: null,
+          worktree: null,
           history: [
             { event: 'pending', at: '2026-09-20T10:05:00.000Z' },
             { event: 'active', at: '2026-09-20T10:06:00.000Z' },
@@ -420,6 +422,7 @@ describe('parseMap', () => {
           result: null,
           resultAt: null,
           closedAt: null,
+          worktree: null,
           history: [
             { event: 'pending', at: '2026-09-20T10:10:00.000Z' },
             { event: 'active', at: '2026-09-20T10:11:00.000Z' },

@@ -1,6 +1,8 @@
+import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -67,6 +69,7 @@ async function connect(
   messageRate = DEFAULT_CONFIG.messageRate,
   channel = false,
   rings: Ring[] = [],
+  worktreeRoot = DEFAULT_CONFIG.worktreeRoot,
 ): Promise<Client> {
   const context = {
     projectPath: project,
@@ -76,6 +79,7 @@ async function connect(
     pollMs,
     messageRate,
     channel,
+    worktreeRoot,
   };
   const server = createHarnasServer(context);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -102,6 +106,24 @@ const session = (map: WorkMap, id: string) => {
 };
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+const run = promisify(execFile);
+const git = (dir: string, args: string[]) => run('git', ['-C', dir, ...args]);
+
+/**
+ * Репозиторий с одним коммитом на `main` — для тестов `spawn_session
+ * { worktree: true }`. Сам инструмент зовёт настоящий git по PATH: `beforeEach`
+ * глушит PATH ради проверки провайдеров, здесь он на время теста возвращается.
+ */
+async function initGitProject(): Promise<void> {
+  process.env.PATH = savedPath ?? '';
+  await run('git', ['init', '-b', 'main', project]);
+  await git(project, ['config', 'user.email', 'тест@harnas']);
+  await git(project, ['config', 'user.name', 'тест']);
+  await writeFile(path.join(project, 'README.md'), 'старт\n', 'utf8');
+  await git(project, ['add', 'README.md']);
+  await git(project, ['commit', '-m', 'первый']);
+}
 
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
@@ -519,6 +541,68 @@ describe('spawn_session', () => {
     expect(result.isError).toBe(true);
     expect(result.text).toContain('s-09');
     expect((await readMapFile()).sessions).toHaveLength(1);
+  });
+});
+
+describe('spawn_session worktree', () => {
+  it('проект не git — ошибка, записи нет', async () => {
+    const client = await connect('s-01');
+
+    const result = await call(client, 'spawn_session', {
+      provider: 'claude',
+      label: 'бэк',
+      task: 'делать',
+      worktree: true,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('в проекте нет git');
+    expect((await readMapFile()).sessions).toHaveLength(1);
+  });
+
+  it('git-проект — план worktree с createdAt: null и базой от ветки проекта', async () => {
+    await initGitProject();
+    const worktreeRoot = path.join(home, 'worktrees');
+    const client = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, [], worktreeRoot);
+
+    const result = await callOk(client, 'spawn_session', {
+      provider: 'claude',
+      label: 'бэк',
+      task: 'делать',
+      worktree: true,
+    });
+    expect(result).toEqual({ sessionId: 's-02' });
+
+    const stored = session(await readMapFile(), 's-02');
+    expect(stored.worktree).not.toBeNull();
+    expect(stored.worktree?.branch).toBe(`harnas/${workId}/s-02`);
+    expect(stored.worktree?.base).toBe('main');
+    expect(stored.worktree?.createdAt).toBeNull();
+    expect(path.dirname(stored.worktree?.path ?? '')).toContain(worktreeRoot);
+  });
+
+  it('ребёнок сессии в worktree берёт базой ветку родителя', async () => {
+    await initGitProject();
+    const worktreeRoot = path.join(home, 'worktrees');
+    const first = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, [], worktreeRoot);
+    await callOk(first, 'spawn_session', {
+      provider: 'claude',
+      label: 'бэк',
+      task: 'делать',
+      worktree: true,
+    }); // s-02, база — main
+
+    const second = await connect('s-02', 40, DEFAULT_CONFIG.messageRate, false, [], worktreeRoot);
+    await callOk(second, 'spawn_session', {
+      provider: 'claude',
+      label: 'ревью',
+      task: 'проверить',
+      worktree: true,
+    }); // s-03, родитель — s-02, уже в своём worktree
+
+    const parentBranch = session(await readMapFile(), 's-02').worktree?.branch;
+    const child = session(await readMapFile(), 's-03');
+    expect(child.worktree?.base).toBe(parentBranch);
   });
 });
 

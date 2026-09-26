@@ -26,6 +26,11 @@ export interface McpContext {
    * окружении его нет: `server.ts` берёт значение из настроек при старте.
    */
   messageRate?: number;
+  /**
+   * Корень worktree для `spawn_session { worktree: true }` (спецификация 8.1).
+   * В окружении его тоже нет — `server.ts` берёт из настроек, как и `messageRate`.
+   */
+  worktreeRoot?: string;
 }
 
 const value = (env: NodeJS.ProcessEnv, name: string): string | null => {

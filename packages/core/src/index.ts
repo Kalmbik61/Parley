@@ -67,6 +67,18 @@ export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';
 export { addRoom, isDescendant, isMember, joinNotice, nextRoomId } from './work/rooms.js';
 export type { NewRoom } from './work/rooms.js';
 export {
+  commitWorktree,
+  createWorktree,
+  discardWorktree,
+  DirtyWorktreeError,
+  isGitRepo,
+  baseBranchOf,
+  mergeWorktree,
+  plannedWorktree,
+  worktreeDiff,
+} from './work/worktree.js';
+export type { MergeResult, WorktreeDiff } from './work/worktree.js';
+export {
   createWork,
   deleteSessionFiles,
   deleteWorkFiles,
@@ -228,4 +240,5 @@ export type {
   WorkSession,
   WorkStatus,
   WorksIndex,
+  WorktreeInfo,
 } from './work/types.js';

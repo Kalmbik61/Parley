@@ -124,6 +124,7 @@ export function addSession(
     summarySource: null,
     artifacts: [],
     agent: init.agent ?? null,
+    worktree: null,
   };
   map.sessions.push(session);
   return session;
@@ -398,4 +399,6 @@ function migrateSession(session: Record<string, unknown>): void {
   session['launchedBy'] ??= null;
   // Роли появились 2026-09-08: до них сессия запускалась только сама собой.
   session['agent'] ??= null;
+  // Worktree появился в куске 4.1: до него все сессии работали прямо в проекте.
+  session['worktree'] ??= null;
 }

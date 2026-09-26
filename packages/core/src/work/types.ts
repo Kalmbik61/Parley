@@ -61,6 +61,21 @@ export interface SessionMetrics {
  */
 export type WorkProvider = string;
 
+/**
+ * Своя рабочая копия git для сессии (спецификация 8.1, 8.2): путь и ветка
+ * планируются заранее (`plannedWorktree` в `work/worktree.ts`), а на диске
+ * появляются только при запуске — до этого `createdAt` держит план живым, не
+ * подтверждая, что каталог и ветка уже существуют.
+ */
+export interface WorktreeInfo {
+  path: string;
+  branch: string;
+  /** Ветка или коммит, от которого worktree отведён; в него же идёт слияние. */
+  base: string;
+  /** `null` — worktree только запланирован, хост ещё не создал его на диске. */
+  createdAt: string | null;
+}
+
 export interface WorkSession {
   id: string;
   provider: WorkProvider;
@@ -106,6 +121,12 @@ export interface WorkSession {
    * `parseMap` подставляет `null` (спецификация 2026-09-08, 3.2).
    */
   agent: string | null;
+  /**
+   * Своя рабочая копия git; `null` — сессия работает прямо в каталоге проекта.
+   * В картах на диске до этого куска поля нет вовсе: `parseMap` подставляет
+   * `null` (кусок 4.1 плана worktree).
+   */
+  worktree: WorktreeInfo | null;
 }
 
 /**

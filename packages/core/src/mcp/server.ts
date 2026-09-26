@@ -13,7 +13,11 @@ async function main(): Promise<number> {
     // Потолок писем живёт в настройках, а не в окружении: сервер читает их сам
     // при старте, на время жизни процесса значение не меняется (4.7).
     const { config } = await loadConfig();
-    server = createHarnasServer({ ...contextFromEnv(), messageRate: config.messageRate });
+    server = createHarnasServer({
+      ...contextFromEnv(),
+      messageRate: config.messageRate,
+      worktreeRoot: config.worktreeRoot,
+    });
   } catch (error) {
     process.stderr.write(`harnas-mcp: ${(error as Error).message}\n`);
     return 1;

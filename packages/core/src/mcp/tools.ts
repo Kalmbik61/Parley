@@ -27,6 +27,7 @@ import {
   type WorkMap,
   type WorkSession,
 } from '../work/types.js';
+import { baseBranchOf, isGitRepo, plannedWorktree } from '../work/worktree.js';
 import type { McpContext } from './context.js';
 import { watchInbox, type Ring } from './inbox-watch.js';
 import { waitForMap } from './watch-map.js';
@@ -245,6 +246,11 @@ const TOOLS: Tool[] = [
           description:
             'Роль сессии — агент Claude Code: имя файла .claude/agents/<name>.md проекта или ~/.claude/agents/<name>.md. Определение с урезанным списком tools обязано включать mcp__harnas__*, иначе роль не сможет ни написать коллеге, ни отчитаться.',
         },
+        worktree: {
+          type: 'boolean',
+          description:
+            'Изолировать сессию в своём git worktree — правки не трогают рабочую копию проекта, пока их не решат влить (панель окна «Изменения»). Только для проекта с git; создаёт сам харнесс перед запуском.',
+        },
       },
       required: ['provider', 'label', 'task'],
     },
@@ -410,6 +416,8 @@ async function spawnSession(
   const contextFrom = stringsArg(args, 'contextFrom');
   // Роль необязательна: без неё сессия идёт обычным агентом провайдера.
   const agent = args['agent'] === undefined ? null : stringArg(args, 'agent');
+  // Изоляция необязательна: без флага сессия работает прямо в каталоге проекта.
+  const worktree = args['worktree'] === true;
 
   const registry = await loadProviders();
   const entry = registry[provider];
@@ -433,18 +441,43 @@ async function spawnSession(
     await assertAgent(agent, agentDirs(context.projectPath));
   }
 
+  // База worktree — та же причина, что и роль: пропускаем до записи в карту, а
+  // не после. `updateMap` мутирует карту синхронно, поэтому асинхронные проверки
+  // git идут заранее (спецификация 8.1).
+  let worktreeBase: string | null = null;
+  if (worktree) {
+    if (!(await isGitRepo(context.projectPath))) {
+      throw new Error('в проекте нет git — worktree не завести');
+    }
+    const parent = requireSession(await readMap(context.projectPath, context.workId), sessionId);
+    worktreeBase =
+      parent.worktree !== null ? parent.worktree.branch : await baseBranchOf(context.projectPath);
+  }
+
   let created = '';
   const map = await updateMap(context.projectPath, context.workId, (current) => {
     requireSession(current, sessionId);
     for (const id of contextFrom) requireSession(current, id);
-    created = addSession(current, {
+    const session = addSession(current, {
       provider,
       label,
       task,
       parent: sessionId,
       contextFrom,
       agent,
-    }).id;
+    });
+    created = session.id;
+    if (worktreeBase !== null) {
+      // Сам worktree на диске заводит хост перед запуском (кусок 4.2); здесь —
+      // только план с `createdAt: null`.
+      session.worktree = plannedWorktree(
+        context.projectPath,
+        context.workId,
+        session.id,
+        worktreeBase,
+        context.worktreeRoot ?? DEFAULT_CONFIG.worktreeRoot,
+      );
+    }
   });
   await writeBrief(context.projectPath, map, created);
   return { sessionId: created };

@@ -37,6 +37,7 @@ describe('loadConfig', () => {
       theme: 'mocha',
       fontFamily: 'Menlo',
       fontSize: 13,
+      worktreeRoot: '~/harnas/worktrees',
     });
     expect(loaded.config).toEqual(DEFAULT_CONFIG);
     expect(loaded.warning).toBeNull();
@@ -68,6 +69,7 @@ describe('loadConfig', () => {
       theme: 'mocha',
       fontFamily: 'Menlo',
       fontSize: 13,
+      worktreeRoot: '~/harnas/worktrees',
     });
     expect(fromFile.warning).toBeNull();
 
@@ -94,6 +96,7 @@ describe('loadConfig', () => {
       theme: 'mocha',
       fontFamily: 'Menlo',
       fontSize: 13,
+      worktreeRoot: '~/harnas/worktrees',
     });
     expect(fromEnv.warning).toBeNull();
   });

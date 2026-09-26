@@ -208,7 +208,9 @@ async function plan(
   return {
     command,
     args,
-    cwd: projectPath,
+    // Сессия в своём worktree живёт там во всех режимах, включая `resume`:
+    // `claude --resume` ищет транскрипт по каталогу, а не по id (спецификация 8.1).
+    cwd: session.worktree !== null ? session.worktree.path : projectPath,
     // Те же переменные, что у MCP-сервера в конфиге: сервер знает, кто звонит,
     // даже унаследовав окружение от агента.
     env: { HARNAS_WORK_DIR: paths.dir, HARNAS_SESSION_ID: session.id },
