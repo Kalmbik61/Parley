@@ -25,6 +25,17 @@ describe('useUiStore.selectSession', () => {
   });
 });
 
+describe('useUiStore.closePanel', () => {
+  it('очищает выбор сессии, работа в сайдбаре остаётся отмеченной', () => {
+    useUiStore.getState().selectSession('/tmp/proj w-01', ref);
+
+    useUiStore.getState().closePanel();
+
+    expect(useUiStore.getState().selectedRef).toBeNull();
+    expect(useUiStore.getState().selectedWorkKey).toBe('/tmp/proj w-01');
+  });
+});
+
 describe('useUiStore диалоги', () => {
   it('новая работа — открыть/закрыть', () => {
     useUiStore.getState().openNewWorkDialog();

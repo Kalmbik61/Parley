@@ -32,6 +32,8 @@ export interface UiState {
   lastSessionByWork: Record<string, string>;
 
   selectSession: (workKey: string, ref: SessionRef) => void;
+  /** ⌘W: панель терминала пустеет, сессия на хосте не трогается (кусок 1.11). */
+  closePanel: () => void;
   setWindowFocused: (focused: boolean) => void;
   openNewWorkDialog: () => void;
   closeNewWorkDialog: () => void;
@@ -59,6 +61,8 @@ export const useUiStore = create<UiState>((set, get) => ({
       selectedWorkKey: workKey,
       lastSessionByWork: { ...state.lastSessionByWork, [workKey]: ref.sessionId },
     })),
+
+  closePanel: () => set({ selectedRef: null }),
 
   setWindowFocused: (focused) => set({ windowFocused: focused }),
 
