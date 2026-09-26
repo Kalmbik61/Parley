@@ -8,4 +8,5 @@ claude-export/
 files.zip
 .harnas/
 packages/desktop/out/
+packages/desktop/out-tsc/
 test-results/

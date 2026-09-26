@@ -22,6 +22,8 @@ export interface FakeBridge extends HarnasBridge {
   emitMenu(action: MenuAction): void;
   readonly appNotified: Array<{ title: string; body: string }>;
   readonly badges: number[];
+  /** Вызовы `app.saveLayout` — для теста тишины 500 мс (кусок 2.2). */
+  readonly layoutSaves: Array<{ workKey: string; layout: unknown }>;
 }
 
 export function createFakeBridge(): FakeBridge {
@@ -33,6 +35,8 @@ export function createFakeBridge(): FakeBridge {
   const calls: Array<{ method: MethodName; params: unknown }> = [];
   const appNotified: Array<{ title: string; body: string }> = [];
   const badges: number[] = [];
+  const layoutSaves: Array<{ workKey: string; layout: unknown }> = [];
+  const layouts = new Map<string, unknown>();
   let status: HostStatus = { state: 'connected', hostVersion: '0.0.0-test' };
 
   const bridge: FakeBridge = {
@@ -43,6 +47,7 @@ export function createFakeBridge(): FakeBridge {
     calls,
     appNotified,
     badges,
+    layoutSaves,
 
     call: async (method, params) => {
       calls.push({ method, params });
@@ -77,6 +82,11 @@ export function createFakeBridge(): FakeBridge {
       },
       chooseFolder: async () => null,
       restartHost: async () => {},
+      loadLayout: async (workKey) => layouts.get(workKey) ?? null,
+      saveLayout: async (workKey, layout) => {
+        layouts.set(workKey, layout);
+        layoutSaves.push({ workKey, layout });
+      },
       onMenu: (listener) => {
         menuListeners.add(listener);
         return () => menuListeners.delete(listener);

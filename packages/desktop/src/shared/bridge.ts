@@ -36,6 +36,9 @@ export interface HarnasBridge {
     chooseFolder(): Promise<string | null>;
     restartHost(): Promise<void>;
     onMenu(listener: (action: MenuAction) => void): () => void;
+    /** Раскладка dockview (кусок 2.2 плана окна) — хранилище в `main/layout-store.ts`. */
+    loadLayout(workKey: string): Promise<unknown | null>;
+    saveLayout(workKey: string, layout: unknown): Promise<void>;
   };
 }
 

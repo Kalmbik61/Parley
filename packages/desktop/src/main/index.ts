@@ -5,6 +5,7 @@ import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electr
 import { HostConnection } from './host-connection.js';
 import { resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
 import { forwardHostToWindow, registerIpc } from './ipc.js';
+import { createLayoutStore, desktopLayoutsPath } from './layout-store.js';
 import { createAppMenu } from './menu.js';
 import { createSecureWindow } from './security.js';
 import { captureShellEnv } from './shell-env.js';
@@ -85,6 +86,7 @@ if (!gotLock) {
     registerIpc({
       ipcMain,
       connection,
+      layoutStore: createLayoutStore(desktopLayoutsPath()),
       openExternal: (url) => shell.openExternal(url),
       chooseFolder: async () => {
         const window = mainWindow;

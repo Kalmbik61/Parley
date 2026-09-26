@@ -2,6 +2,7 @@ import { METHODS, NOTIFICATIONS } from '@harnas/protocol';
 import type { MethodName, NotificationName } from '@harnas/protocol';
 import type { BrowserWindow, IpcMain } from 'electron';
 import type { HostConnection } from './host-connection.js';
+import type { LayoutStore } from './layout-store.js';
 
 const METHOD_NAMES = new Set<string>(Object.keys(METHODS));
 const NOTIFICATION_NAMES = new Set<string>(Object.keys(NOTIFICATIONS));
@@ -31,6 +32,8 @@ export interface RegisterIpcOptions {
   chooseFolder: () => Promise<string | null>;
   showNotification: (note: { title: string; body: string }) => void;
   setBadge: (count: number) => void;
+  /** Раскладка dockview (кусок 2.2 плана окна). */
+  layoutStore: LayoutStore;
 }
 
 /**
@@ -41,7 +44,7 @@ export interface RegisterIpcOptions {
  * процесса, а этот список — на уровне протокола.
  */
 export function registerIpc(options: RegisterIpcOptions): void {
-  const { ipcMain, connection, openExternal, chooseFolder, showNotification, setBadge } = options;
+  const { ipcMain, connection, openExternal, chooseFolder, showNotification, setBadge, layoutStore } = options;
 
   ipcMain.handle('host:call', async (_event, method: unknown, params: unknown) => {
     if (typeof method !== 'string' || !isMethodName(method)) {
@@ -73,6 +76,16 @@ export function registerIpc(options: RegisterIpcOptions): void {
   ipcMain.handle('app:choose-folder', () => chooseFolder());
 
   ipcMain.handle('app:restart-host', () => connection.restartHost());
+
+  ipcMain.handle('app:load-layout', (_event, workKey: unknown) => {
+    if (typeof workKey !== 'string') throw new Error(`неверный ключ раскладки: ${String(workKey)}`);
+    return layoutStore.load(workKey);
+  });
+
+  ipcMain.handle('app:save-layout', (_event, workKey: unknown, layout: unknown) => {
+    if (typeof workKey !== 'string') throw new Error(`неверный ключ раскладки: ${String(workKey)}`);
+    return layoutStore.save(workKey, layout);
+  });
 }
 
 /**

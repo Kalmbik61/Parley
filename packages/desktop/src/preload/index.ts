@@ -57,6 +57,9 @@ const bridge = {
     },
     chooseFolder: () => ipcRenderer.invoke('app:choose-folder') as Promise<string | null>,
     restartHost: () => ipcRenderer.invoke('app:restart-host') as Promise<void>,
+    loadLayout: (workKey: string) => ipcRenderer.invoke('app:load-layout', workKey) as Promise<unknown | null>,
+    saveLayout: (workKey: string, layout: unknown) =>
+      ipcRenderer.invoke('app:save-layout', workKey, layout) as Promise<void>,
     onMenu: (listener: (action: MenuAction) => void) => {
       menuListeners.add(listener);
       return () => menuListeners.delete(listener);

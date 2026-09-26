@@ -37,6 +37,7 @@ import { panelId, workKey, type PanelSpec } from '../../lib/panel-id.js';
 import { useUiStore } from '../../store/ui.js';
 import { PANEL_COMPONENTS, PanelHostContext } from './panel-registry.js';
 import { readDragPayload } from './sidebar-drag.js';
+import { useLayoutPersistence } from './use-layout-persistence.js';
 import { SessionPicker, sessionCandidates } from '../palette/SessionPicker.js';
 
 export interface WorkspaceHandle {
@@ -105,6 +106,13 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
   const worksRef = useRef(works);
   worksRef.current = works;
 
+  // `apiRef` — для императивных вызовов (открыть/закрыть панель), а это
+  // состояние — специально для `useLayoutPersistence` (кусок 2.2): хук должен
+  // сам перезапустить свой эффект, когда dockview станет готов, а ref такого
+  // сигнала React не даёт.
+  const [api, setApi] = useState<DockviewApi | null>(null);
+  useLayoutPersistence({ api, bridge, works });
+
   const [picker, setPicker] = useState<{
     direction: 'right' | 'below';
     workKey: string;
@@ -126,6 +134,7 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
   const handleReady = (event: DockviewReadyEvent): void => {
     const api = event.api;
     apiRef.current = api;
+    setApi(api);
 
     api.onDidActivePanelChange(({ panel }) => {
       useUiStore.getState().setActivePanelId(panel?.id ?? null);
