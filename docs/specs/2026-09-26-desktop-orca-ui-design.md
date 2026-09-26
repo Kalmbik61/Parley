@@ -232,9 +232,12 @@ interface HarnasBridge {
     loadNotes(workKey: string, sessionId: string): Promise<NotesFile>;
     saveNotes(workKey: string, sessionId: string, notes: NotesFile): Promise<void>;
     saveDropImage(source: 'clipboard'): Promise<string | null>;        // путь PNG в drops/ или null, если в буфере нет картинки
+    removeLayout(workKey: string): Promise<void>;                      // работа удалена (раздел 5.8)
+    titlebarDoubleClick(): void;                                       // действие macOS по двойному клику (раздел 5.1)
+    revealWork(projectPath: string, workId: string): Promise<void>;    // «Показать в Finder» из меню карточки (раздел 6.4)
   };
-  files: FilesApi;       // раздел 10.8
-  browser: BrowserApi;   // раздел 12.6
+  files: FilesApi;       // раздел 10.7
+  browser: BrowserApi;   // раздел 12.5
 }
 
 type FocusTarget =
@@ -1019,9 +1022,9 @@ interface WorkAttention {
 
 **Звук.** `silent: !ui.notifications.sound`.
 
-**Разрешение.** Если macOS запретил уведомления, `Notification.isSupported()` или
-отказ системы, в секции «Уведомления» настроек показывается подсказка «macOS запретил
-уведомления для Harnas — Системные настройки → Уведомления».
+**Разрешение.** Electron на macOS не сообщает, запретил ли пользователь уведомления.
+Поэтому в секции «Уведомления» настроек подсказка стоит всегда: «Не приходят —
+Системные настройки → Уведомления → Harnas».
 
 ### 7.5 Тосты
 
@@ -1764,6 +1767,9 @@ interface BrowserApi {
   pickStart(webContentsId: number): Promise<PickResult | null>;  // null — отменён Esc
   pickCancel(webContentsId: number): Promise<void>;
   openDevTools(webContentsId: number): Promise<void>;
+  find(webContentsId: number, text: string, forward: boolean): Promise<{ matches: number; active: number }>; // ⌘F в странице
+  stopFind(webContentsId: number): Promise<void>;
+  zoom(webContentsId: number, step: 1 | -1 | 0): Promise<void>;   // ⌘+, ⌘−, ⌘0
   clearData(): Promise<void>;
   onOpenTab(listener: (url: string) => void): () => void;
 }
@@ -1866,7 +1872,7 @@ interface PickResult {
 | 2 | Раскладка: ⌘D, перенос вкладки к краю, закрытие — сплит схлопнулся. Раскладка работы переживает перезапуск окна. Смена работы меняет центр. Перенос вкладки терминала не делает второго `pty.attach` (счётчик вызовов из фейк-бриджа main) и сохраняет текст экрана |
 | 3 | Карточки: работа с `blocked` сессией встаёт первой — тест дописывает событие `Notification` вида `permission_prompt` в журнал хуков сессии, как это делает хук из `--settings`, и хост выводит `blocked` сам; форма новой работы с «Создать ещё» |
 | 4 | Уведомление: клик (через IPC `app:focus-target`, как `menu:action` в `layout.spec.ts`) открывает работу и вкладку; `activity.seen` гасит «не просмотрено» только при фокусе |
-| 5 | `pty.send`: заметка-текст доходит до стаба как `PASTE<<…>>` и Enter; при черновике Enter не нажат; перетаскивание файла вставляет экранированный путь без Enter |
+| 5 | `pty.send`: заметка-текст доходит до стаба как `PASTE<<…>>` и Enter; при черновике Enter не нажат. Перетаскивание файла из Finder в E2E не воспроизводится (у синтетического `File` нет пути) — его закрывают компонентный тест с подставным `pathForFile` и живая приёмка |
 | 6 | ⌘J: найти сессию по ярлыку и открыть; ⌘1 выбирает строку; «Создать работу» из пустого результата |
 | 7 | Открыть файл из дерева, правка, ⌘S, файл на диске изменился; внешняя запись при грязном буфере показывает баннер |
 | 8 | Коммит в worktree из «Изменений»; заметка к строке → отправка → стаб получил блок формата 11.4; слияние в базу; конфликт показан `mergeCheck` |
@@ -1874,8 +1880,9 @@ interface PickResult {
 
 ### 14.4 Рамочный тест
 
-`tools/frame-check.test.ts` в корне репозитория. Vitest ищет по исходникам всех
-пакетов (`packages/*/src`, `tools/`). Не проверяются:
+`packages/core/test/frame-check.test.ts`: корневого прогона vitest нет, `pnpm test` —
+это тесты пакетов, а рамка — забота core. Тест ищет по исходникам всех пакетов
+(`packages/*/src`) и `tools/`. Не проверяются:
 - тесты и `docs/`;
 - сам рамочный тест;
 - строки-комментарии (`//`, `/*`, ` * `): предупреждения вроде
