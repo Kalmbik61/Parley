@@ -20,12 +20,15 @@ export interface SessionMenuProps {
   /** Сессия уже закрыта (`lifecycle === 'closed'`) — не выводится из `status`, он на закрытие не влияет (`dot-state.ts#displayStatus`). */
   closed: boolean;
   label: string;
+  /** Сессия в своём worktree (`session.worktree !== null`) — только тогда есть что смотреть в «Изменения» (кусок 4.3 плана worktree). */
+  hasWorktree: boolean;
   onOpen: () => void;
   onResume: () => void;
   onStop: () => void;
   onClose: () => void;
   onDelete: () => void;
   onCreateRoom: () => void;
+  onOpenChanges: () => void;
   children: ReactNode;
 }
 
@@ -33,12 +36,14 @@ export function SessionMenu({
   status,
   closed,
   label,
+  hasWorktree,
   onOpen,
   onResume,
   onStop,
   onClose,
   onDelete,
   onCreateRoom,
+  onOpenChanges,
   children,
 }: SessionMenuProps): JSX.Element {
   const [confirm, setConfirm] = useState<'stop' | 'close' | 'delete' | null>(null);
@@ -85,6 +90,14 @@ export function SessionMenu({
             >
               Создать комнату с…
             </ContextMenu.Item>
+            {hasWorktree ? (
+              <ContextMenu.Item
+                className="cursor-default rounded px-2 py-1 outline-none data-[highlighted]:bg-[var(--h-selection)]"
+                onSelect={onOpenChanges}
+              >
+                Изменения
+              </ContextMenu.Item>
+            ) : null}
             <ContextMenu.Separator className="my-1 h-px bg-[var(--h-overlay)]" />
             <ContextMenu.Item
               className="cursor-default rounded px-2 py-1 text-[var(--h-red)] outline-none data-[highlighted]:bg-[var(--h-selection)]"

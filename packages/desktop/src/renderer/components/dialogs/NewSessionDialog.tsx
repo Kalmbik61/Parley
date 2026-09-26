@@ -2,6 +2,12 @@
  * Новая сессия (⌘T): провайдер из `providers.list` (недоступный — неактивен),
  * ярлык, задача (пустая — тихий старт) и «дочерняя выбранной» → `sessions.create`
  * (кусок 1.10 плана окна).
+ *
+ * «В своём worktree» (кусок 4.3 плана worktree, спека 5.1): неактивен, пока
+ * `worktrees.available` не подтвердит, что проект — git-репозиторий. `branches`
+ * из сайдбара для этого не годится — при отсоединённой голове ветки нет и у
+ * git-проекта, а `worktrees.available` смотрит именно на `git rev-parse
+ * --is-inside-work-tree`, не на текущую ветку.
  */
 
 import { useEffect, useState } from 'react';
@@ -38,6 +44,8 @@ export function NewSessionDialog({
   const [label, setLabel] = useState('');
   const [task, setTask] = useState('');
   const [childOfSelected, setChildOfSelected] = useState(false);
+  const [worktree, setWorktree] = useState(false);
+  const [worktreeAvailable, setWorktreeAvailable] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -51,6 +59,18 @@ export function NewSessionDialog({
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   }, [open, bridge]);
+
+  useEffect(() => {
+    if (!open) {
+      setWorktreeAvailable(false);
+      setWorktree(false);
+      return;
+    }
+    bridge
+      .call('worktrees.available', { projectPath })
+      .then((result) => setWorktreeAvailable(result.available))
+      .catch(() => setWorktreeAvailable(false));
+  }, [open, bridge, projectPath]);
 
   const submit = async (): Promise<void> => {
     if (workId === null) {
@@ -66,11 +86,13 @@ export function NewSessionDialog({
         label,
         task,
         parent: childOfSelected ? selectedSessionId : null,
+        worktree,
       });
       onOpenChange(false);
       setLabel('');
       setTask('');
       setChildOfSelected(false);
+      setWorktree(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -129,6 +151,15 @@ export function NewSessionDialog({
                 onChange={(event) => setChildOfSelected(event.target.checked)}
               />
               дочерняя выбранной
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={worktree}
+                disabled={!worktreeAvailable}
+                onChange={(event) => setWorktree(event.target.checked)}
+              />
+              в своём worktree
             </label>
             {error !== null ? <p className="text-[var(--h-red)]">{error}</p> : null}
           </div>

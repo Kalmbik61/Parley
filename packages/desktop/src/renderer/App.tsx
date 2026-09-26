@@ -95,6 +95,14 @@ export function App(): JSX.Element {
           return entry?.map.sessions.find((session) => session.id === ref.sessionId)?.label ?? ref.sessionId;
         },
       }),
+      // trust-wait (кусок 4.3 плана worktree, спека 8.3): сессия в своём
+      // worktree не отвечает с запуска — вероятно, ждёт доверия к папке в
+      // терминале claude/codex. Пометка строки — `SessionTree.tsx` (тот же
+      // стор уведомлений), здесь только macOS-уведомление.
+      bridge.on('host.notice', (notice) => {
+        if (notice.kind !== 'trust-wait') return;
+        bridge.app.notify({ title: 'Ждёт доверия к папке', body: notice.text });
+      }),
       // 'close-panel'/'split-right'/'split-down'/'prev-panel'/'next-panel' — у
       // `Workspace` своя подписка на те же события: только он знает про
       // dockview (кусок 2.1 плана окна).
@@ -162,6 +170,9 @@ export function App(): JSX.Element {
           }
           onOpenMail={(key) => workspaceRef.current?.openMail(key)}
           onOpenRoom={(key, roomId, title) => workspaceRef.current?.openRoom(key, roomId, title)}
+          onOpenChanges={(key, ref, session) =>
+            workspaceRef.current?.openChanges(ref, key, sessionRowLabel(session.id, session.label))
+          }
         />
         <Workspace
           ref={workspaceRef}

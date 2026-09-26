@@ -14,12 +14,14 @@ function renderMenu(onClose: () => void): void {
       status="active"
       closed={false}
       label="S01 план"
+      hasWorktree={false}
       onOpen={() => {}}
       onResume={() => {}}
       onStop={() => {}}
       onClose={onClose}
       onDelete={() => {}}
       onCreateRoom={() => {}}
+      onOpenChanges={() => {}}
     >
       <div>строка сессии</div>
     </SessionMenu>,
@@ -67,12 +69,14 @@ describe('SessionMenu — тест 4', () => {
         status="exited"
         closed
         label="S01 план"
+        hasWorktree={false}
         onOpen={() => {}}
         onResume={() => {}}
         onStop={() => {}}
         onClose={() => {}}
         onDelete={() => {}}
         onCreateRoom={() => {}}
+        onOpenChanges={() => {}}
       >
         <div>строка сессии</div>
       </SessionMenu>,
@@ -80,5 +84,28 @@ describe('SessionMenu — тест 4', () => {
 
     fireEvent.contextMenu(screen.getByText('строка сессии'));
     expect(screen.queryByText('Закрыть…')).toBeNull();
+  });
+
+  it('«Изменения» видно только у сессии со своим worktree', () => {
+    render(
+      <SessionMenu
+        status="active"
+        closed={false}
+        label="S01 план"
+        hasWorktree
+        onOpen={() => {}}
+        onResume={() => {}}
+        onStop={() => {}}
+        onClose={() => {}}
+        onDelete={() => {}}
+        onCreateRoom={() => {}}
+        onOpenChanges={() => {}}
+      >
+        <div>строка сессии</div>
+      </SessionMenu>,
+    );
+
+    fireEvent.contextMenu(screen.getByText('строка сессии'));
+    expect(screen.getByText('Изменения')).toBeTruthy();
   });
 });

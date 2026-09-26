@@ -19,12 +19,13 @@
  */
 
 import type { Room, WorkSession } from '@harnas/core';
-import type { SessionRef } from '@harnas/protocol';
+import { refKey, type SessionRef } from '@harnas/protocol';
 import { displayStatus, dotState, STATE_WORDS } from '../../lib/dot-state.js';
 import { sessionRowLabel } from '../../lib/participant.js';
 import { treeOrder, workKey } from '../../lib/tree-order.js';
 import type { ActivityEntry } from '../../store/activity.js';
 import { activityFor } from '../../store/activity.js';
+import { useNoticesStore } from '../../store/notices.js';
 import { DRAG_MIME, dragPayload } from '../layout/sidebar-drag.js';
 import { MetricsLine } from './MetricsLine.js';
 import { SessionMenu } from './SessionMenu.js';
@@ -73,6 +74,8 @@ export interface SessionTreeProps {
   onCreateRoom: (session: WorkSession) => void;
   onOpenMail: () => void;
   onOpenRoom: (room: Room) => void;
+  /** «Изменения» из меню сессии (кусок 4.3 плана worktree) — только у сессий со своим worktree. */
+  onOpenChanges: (session: WorkSession) => void;
 }
 
 export function SessionTree({
@@ -92,7 +95,20 @@ export function SessionTree({
   onCreateRoom,
   onOpenMail,
   onOpenRoom,
+  onOpenChanges,
 }: SessionTreeProps): JSX.Element {
+  // trust-wait (кусок 4.3, спека 8.3): сессия в worktree запущена, но за
+  // trustWaitMs хуки молчат — вероятно, ждёт доверия к папке в терминале.
+  // Пометка держится, пока не пришло другое уведомление по этой же сессии
+  // (`host.notice` не шлёт отдельного события «прошло» — тем же приёмом, что
+  // и строка статуса, читаем последнее уведомление на адрес).
+  const notices = useNoticesStore((state) => state.notices);
+  const trustWaiting = new Set(
+    notices
+      .filter((notice) => notice.kind === 'trust-wait' && notice.ref !== null)
+      .map((notice) => refKey(notice.ref as SessionRef)),
+  );
+
   const humanRooms = rooms.filter((room) => room.creator === HUMAN);
   const roomsByCreator = new Map<string, Room[]>();
   for (const room of rooms) {
@@ -126,6 +142,7 @@ export function SessionTree({
         const selected = session.id === selectedSessionId;
         const label = sessionRowLabel(session.id, session.label);
         const closed = session.lifecycle === 'closed';
+        const trustWait = trustWaiting.has(refKey(ref));
 
         return (
           <div key={session.id}>
@@ -133,12 +150,14 @@ export function SessionTree({
               status={status}
               closed={closed}
               label={label}
+              hasWorktree={session.worktree !== null}
               onOpen={() => onOpen(session)}
               onResume={() => onResume(session)}
               onStop={() => onStop(session)}
               onClose={() => onClose(session)}
               onDelete={() => onDelete(session)}
               onCreateRoom={() => onCreateRoom(session)}
+              onOpenChanges={() => onOpenChanges(session)}
             >
               <div
                 role="button"
@@ -164,6 +183,11 @@ export function SessionTree({
               >
                 <StatusDot state={state} />
                 <span className="min-w-0 flex-1 truncate">{label}</span>
+                {trustWait ? (
+                  <span title="не отвечает с запуска — возможно, ждёт доверия к папке" className="shrink-0 text-[var(--h-yellow)]">
+                    ⚠
+                  </span>
+                ) : null}
                 <span className="shrink-0 truncate text-xs text-[var(--h-muted)]">{closed ? 'закрыта' : STATE_WORDS[state]}</span>
               </div>
             </SessionMenu>

@@ -21,6 +21,7 @@ import type { HarnasBridge } from '../../../shared/bridge.js';
 import { TerminalPanel } from '../terminal/TerminalPanel.js';
 import { MailPanel } from '../mail/MailPanel.js';
 import { RoomPanel } from '../rooms/RoomPanel.js';
+import { ChangesPanel } from '../changes/ChangesPanel.js';
 import { activityFor, useActivityStore } from '../../store/activity.js';
 import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
@@ -165,15 +166,32 @@ function RoomPanelContent({ params }: IDockviewPanelProps<PanelSpec>): JSX.Eleme
   );
 }
 
-function placeholder(text: string): FC<IDockviewPanelProps<PanelSpec>> {
-  return function PlaceholderPanel() {
-    return <div className="flex h-full items-center justify-center text-sm text-[var(--h-muted)]">{text}</div>;
-  };
+/**
+ * Панель «Изменения» (кусок 4.3): worktree берётся из `store/works.ts` по
+ * `ref` панели, тем же приёмом, что и `MailPanelContent`/`RoomPanelContent` —
+ * `params` держит только адрес, свежие данные сессии приходят через стор.
+ * Сессия без worktree (уже отброшен, карта устарела) — панель это не прячет
+ * сама, а просто говорит об этом: закрыть висящую вкладку решает пользователь.
+ */
+function ChangesPanelContent({ params }: IDockviewPanelProps<PanelSpec>): JSX.Element {
+  const host = usePanelHost();
+  const entries = useWorksStore((state) => state.entries);
+
+  if (params.ref === undefined) throw new Error('panel-registry: панель changes без ref');
+  const ref = params.ref;
+  const entry = entries.find((item) => item.projectPath === ref.projectPath && item.map.work.id === ref.workId);
+  const session = entry?.map.sessions.find((item) => item.id === ref.sessionId);
+
+  if (session === undefined || session.worktree === null) {
+    return <div className="flex h-full items-center justify-center text-sm text-[var(--h-muted)]">У сессии нет своего worktree</div>;
+  }
+
+  return <ChangesPanel bridge={host.bridge} sessionRef={ref} base={session.worktree.base} />;
 }
 
 export const PANEL_COMPONENTS: Record<PanelSpec['kind'], FC<IDockviewPanelProps<PanelSpec>>> = {
   terminal: TerminalPanelContent,
   mail: MailPanelContent,
   room: RoomPanelContent,
-  changes: placeholder('Изменения — скоро (кусок 4.3)'),
+  changes: ChangesPanelContent,
 };

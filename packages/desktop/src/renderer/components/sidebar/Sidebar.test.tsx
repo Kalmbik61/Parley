@@ -91,7 +91,7 @@ describe('Sidebar', () => {
       lastSessionByWork: {},
     });
 
-    render(<Sidebar bridge={createFakeBridge()} onOpenSession={() => {}} onOpenMail={() => {}} onOpenRoom={() => {}} />);
+    render(<Sidebar bridge={createFakeBridge()} onOpenSession={() => {}} onOpenMail={() => {}} onOpenRoom={() => {}} onOpenChanges={() => {}} />);
 
     const numbers = screen.getAllByText(/^[123]$/).map((el) => el.textContent);
     expect(numbers).toEqual(['1', '2', '3']);
@@ -108,7 +108,7 @@ describe('Sidebar', () => {
       error: null,
     });
 
-    render(<Sidebar bridge={createFakeBridge()} onOpenSession={() => {}} onOpenMail={() => {}} onOpenRoom={() => {}} />);
+    render(<Sidebar bridge={createFakeBridge()} onOpenSession={() => {}} onOpenMail={() => {}} onOpenRoom={() => {}} onOpenChanges={() => {}} />);
 
     const row = screen.getByText(`S01 ${longLabel}`);
     expect(row.className).toContain('truncate');
@@ -117,7 +117,7 @@ describe('Sidebar', () => {
   });
 
   it('«Работ пока нет» — пустой список', () => {
-    render(<Sidebar bridge={createFakeBridge()} onOpenSession={() => {}} onOpenMail={() => {}} onOpenRoom={() => {}} />);
+    render(<Sidebar bridge={createFakeBridge()} onOpenSession={() => {}} onOpenMail={() => {}} onOpenRoom={() => {}} onOpenChanges={() => {}} />);
     expect(screen.getByText('Работ пока нет')).toBeTruthy();
   });
 });

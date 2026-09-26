@@ -63,6 +63,7 @@ describe('SessionTree — тест 1', () => {
         onCreateRoom={noop}
         onOpenMail={noop}
         onOpenRoom={noop}
+        onOpenChanges={noop}
       />,
     );
 
@@ -96,6 +97,7 @@ describe('SessionTree — тест 1', () => {
         onCreateRoom={noop}
         onOpenMail={noop}
         onOpenRoom={noop}
+        onOpenChanges={noop}
       />,
     );
 
@@ -122,6 +124,7 @@ describe('SessionTree — тест 1', () => {
         onCreateRoom={noop}
         onOpenMail={noop}
         onOpenRoom={noop}
+        onOpenChanges={noop}
       />,
     );
 

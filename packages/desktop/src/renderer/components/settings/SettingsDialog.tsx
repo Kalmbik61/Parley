@@ -131,6 +131,15 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                 </select>
               </FieldRow>
 
+              <FieldRow label="Корень worktree" lockedBy={locked.worktreeRoot ?? null} error={errors.worktreeRoot}>
+                <input
+                  className="rounded border border-[var(--h-overlay)] bg-transparent px-2 py-1 text-sm disabled:opacity-50"
+                  defaultValue={config.worktreeRoot}
+                  disabled={locked.worktreeRoot !== undefined}
+                  onBlur={(event) => void save('worktreeRoot', event.target.value)}
+                />
+              </FieldRow>
+
               <FieldRow label="Шрифт терминала" lockedBy={locked.fontFamily ?? null} error={errors.fontFamily}>
                 <input
                   className="rounded border border-[var(--h-overlay)] bg-transparent px-2 py-1 text-sm disabled:opacity-50"

@@ -35,6 +35,8 @@ export interface WorkListProps {
   onOpenMail: (workKey: string) => void;
   /** Строка комнаты (кусок 3.6) — `Workspace.tsx#openRoom` через `App.tsx`. */
   onOpenRoom: (workKey: string, room: Room) => void;
+  /** «Изменения» из меню сессии (кусок 4.3) — `Workspace.tsx#openChanges` через `App.tsx`. */
+  onOpenChanges: (ref: SessionRef, session: WorkSession) => void;
 }
 
 export function WorkList({
@@ -52,6 +54,7 @@ export function WorkList({
   onCreateRoom,
   onOpenMail,
   onOpenRoom,
+  onOpenChanges,
 }: WorkListProps): JSX.Element {
   return (
     <div className="flex flex-col gap-3">
@@ -106,6 +109,9 @@ export function WorkList({
               }
               onCreateRoom={(session) =>
                 onCreateRoom({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }, session)
+              }
+              onOpenChanges={(session) =>
+                onOpenChanges({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }, session)
               }
             />
           </div>

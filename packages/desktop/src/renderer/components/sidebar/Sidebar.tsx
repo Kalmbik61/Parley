@@ -30,9 +30,11 @@ export interface SidebarProps {
   onOpenMail: (workKey: string) => void;
   /** Клик по строке комнаты — `Workspace.openRoom` через `App.tsx` (кусок 3.6). */
   onOpenRoom: (workKey: string, roomId: string, title: string) => void;
+  /** «Изменения» из меню сессии — `Workspace.openChanges` через `App.tsx` (кусок 4.3). */
+  onOpenChanges: (workKey: string, ref: SessionRef, session: WorkSession) => void;
 }
 
-export function Sidebar({ bridge, onOpenSession, onOpenMail, onOpenRoom }: SidebarProps): JSX.Element {
+export function Sidebar({ bridge, onOpenSession, onOpenMail, onOpenRoom, onOpenChanges }: SidebarProps): JSX.Element {
   const entries = useWorksStore((state) => state.entries);
   const branches = useWorksStore((state) => state.branches);
   const activityByRef = useActivityStore((state) => state.byRef);
@@ -65,6 +67,7 @@ export function Sidebar({ bridge, onOpenSession, onOpenMail, onOpenRoom }: Sideb
     bridge.call('sessions.delete', { ref }).catch(() => {});
   };
   const handleOpenRoom = (key: string, room: Room): void => onOpenRoom(key, room.id, room.title);
+  const handleOpenChanges = (key: string, ref: SessionRef, session: WorkSession): void => onOpenChanges(key, ref, session);
 
   // Кандидаты «Создать комнату с…» — остальные сессии той же работы, кроме
   // той, с которой открыли пункт меню (она уже обязательный участник).
@@ -114,6 +117,7 @@ export function Sidebar({ bridge, onOpenSession, onOpenMail, onOpenRoom }: Sideb
             onCreateRoom={(ref, session) => setCreateRoomFor({ ref, label: sessionRowLabel(session.id, session.label) })}
             onOpenMail={onOpenMail}
             onOpenRoom={handleOpenRoom}
+            onOpenChanges={(ref, session) => handleOpenChanges(workKey(ref.projectPath, ref.workId), ref, session)}
           />
         )}
       </div>

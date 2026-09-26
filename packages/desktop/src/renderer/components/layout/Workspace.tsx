@@ -50,6 +50,8 @@ export interface WorkspaceHandle {
   openMail(sessionWorkKey: string): void;
   /** Строка комнаты в сайдбаре (кусок 3.6) — тот же принцип: фокус или новая вкладка. */
   openRoom(sessionWorkKey: string, roomId: string, title: string): void;
+  /** «Изменения» из меню сессии (кусок 4.3) — тот же принцип: фокус или новая вкладка. */
+  openChanges(ref: SessionRef, sessionWorkKey: string, title: string): void;
 }
 
 export interface WorkspaceProps {
@@ -140,6 +142,14 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
     openOrFocus(api, { kind: 'room', workKey: sessionWorkKey, roomId }, title);
   };
 
+  // «Изменения» из меню сессии (кусок 4.3) — адрес панели тот же, что и у
+  // терминала (`ref`), но отдельный вид: `panelId` различает их по префиксу.
+  const openChangesInGrid = (sessionRef: SessionRef, sessionWorkKey: string, title: string): void => {
+    const api = apiRef.current;
+    if (api === null) return;
+    openOrFocus(api, { kind: 'changes', ref: sessionRef, workKey: sessionWorkKey }, title);
+  };
+
   // `apiRef` — для императивных вызовов (открыть/закрыть панель), а это
   // состояние — специально для `useLayoutPersistence` (кусок 2.2): хук должен
   // сам перезапустить свой эффект, когда dockview станет готов, а ref такого
@@ -169,6 +179,7 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
       openSession: openSessionInGrid,
       openMail: openMailInGrid,
       openRoom: openRoomInGrid,
+      openChanges: openChangesInGrid,
     }),
     [],
   );
