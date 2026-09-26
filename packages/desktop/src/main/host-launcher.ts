@@ -1,5 +1,5 @@
 import { access, stat } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { closeSync, constants, mkdirSync, openSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -72,12 +72,27 @@ export async function resolveNodeBin(env: NodeJS.ProcessEnv): Promise<string | n
  *
  * `nodeBin` — системный `node`, найденный `resolveNodeBin`; вызывающий код
  * обязан проверить его на `null` раньше, сюда попадает только найденный путь.
+ *
+ * `stderrFile` — куда дописывается stderr хоста. Падение мимо логгера (необработанное
+ * исключение) иначе не оставляет следа: `host.log` пишет только сам хост.
  */
-export function spawnHost(options: { env: NodeJS.ProcessEnv; entry: string; nodeBin: string }): void {
-  const child = spawn(options.nodeBin, [options.entry], {
-    env: options.env,
-    detached: true,
-    stdio: 'ignore',
-  });
-  child.unref();
+export function spawnHost(options: {
+  env: NodeJS.ProcessEnv;
+  entry: string;
+  nodeBin: string;
+  stderrFile: string;
+}): void {
+  // Каталог хоста при первом запуске ещё не создан — его права хост потом выставит сам.
+  mkdirSync(path.dirname(options.stderrFile), { recursive: true, mode: 0o700 });
+  const stderr = openSync(options.stderrFile, 'a', 0o600);
+  try {
+    const child = spawn(options.nodeBin, [options.entry], {
+      env: options.env,
+      detached: true,
+      stdio: ['ignore', 'ignore', stderr],
+    });
+    child.unref();
+  } finally {
+    closeSync(stderr);
+  }
 }

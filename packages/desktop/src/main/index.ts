@@ -56,7 +56,7 @@ if (!gotLock) {
           }
           try {
             const entry = resolveHostEntry({ packaged: app.isPackaged, resourcesPath: process.resourcesPath });
-            spawnHost({ env: shellEnv.env, entry, nodeBin });
+            spawnHost({ env: shellEnv.env, entry, nodeBin, stderrFile: path.join(paths.dir, 'host.err') });
           } catch (err) {
             console.error('[harnas] не удалось запустить хост', err);
           }

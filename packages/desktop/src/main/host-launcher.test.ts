@@ -1,9 +1,9 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { hostPaths, resolveHostEntry, resolveNodeBin } from './host-launcher.js';
+import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
 
 const require = createRequire(import.meta.url);
 
@@ -102,5 +102,34 @@ describe('resolveHostEntry', () => {
     expect(entry).toBe(
       path.join('/Applications/harnas.app/Contents/Resources', 'host', 'dist', 'main.js'),
     );
+  });
+});
+
+/**
+ * Хост отсоединён от окна, и раньше его stderr уходил в никуда: упавший хост
+ * не оставлял ни строчки — ни в `host.log` (падение мимо логгера), ни где-то
+ * ещё. Теперь трассировка падения дописывается в файл рядом с логом.
+ */
+describe('spawnHost', () => {
+  let home: string;
+
+  beforeEach(async () => {
+    home = await mkdtemp(path.join(tmpdir(), 'hl-'));
+  });
+
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it('дописывает stderr упавшего хоста в файл, создавая каталог хоста', async () => {
+    const entry = path.join(home, 'crash.mjs');
+    await writeFile(entry, "throw new Error('хост упал');\n");
+    const stderrFile = path.join(home, 'host', 'host.err');
+
+    spawnHost({ env: process.env, entry, nodeBin: process.execPath, stderrFile });
+
+    await expect
+      .poll(async () => readFile(stderrFile, 'utf8').catch(() => ''), { timeout: 4000 })
+      .toContain('хост упал');
   });
 });
