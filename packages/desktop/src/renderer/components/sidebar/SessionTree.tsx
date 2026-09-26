@@ -1,12 +1,17 @@
-/** Дерево сессий одной работы: порядок и вложенность — из `lib/tree-order.ts`. */
+/**
+ * Дерево сессий одной работы: порядок и вложенность — из `lib/tree-order.ts`.
+ * Строки перетаскиваются в сетку (кусок 2.1 плана окна): `dragPayload` кладёт
+ * адрес сессии под свой MIME, `Workspace.tsx` читает его в `onDidDrop`.
+ */
 
 import type { WorkSession } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import { dotState, STATE_WORDS } from '../../lib/dot-state.js';
 import { sessionRowLabel } from '../../lib/participant.js';
-import { treeOrder } from '../../lib/tree-order.js';
+import { treeOrder, workKey } from '../../lib/tree-order.js';
 import type { ActivityEntry } from '../../store/activity.js';
 import { activityFor } from '../../store/activity.js';
+import { DRAG_MIME, dragPayload } from '../layout/sidebar-drag.js';
 import { MetricsLine } from './MetricsLine.js';
 import { SessionMenu } from './SessionMenu.js';
 import { StatusDot } from './StatusDot.js';
@@ -58,6 +63,13 @@ export function SessionTree({
               <div
                 role="button"
                 tabIndex={0}
+                draggable
+                onDragStart={(event) =>
+                  event.dataTransfer.setData(
+                    DRAG_MIME,
+                    dragPayload({ kind: 'terminal', ref, workKey: workKey(projectPath, workId) }),
+                  )
+                }
                 data-session-id={session.id}
                 data-selected={selected}
                 onClick={() => onSelect(session)}

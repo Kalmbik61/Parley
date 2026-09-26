@@ -2,6 +2,12 @@
  * Состояние самого окна: выбор в сайдбаре, фокус окна (нужен уведомлениям —
  * «сессия … не видна: она не выбрана или окно не в фокусе»), диалоги и пауза
  * будильника живых сессий (кусок 1.10 плана окна).
+ *
+ * `selectedRef`/`selectedWorkKey` с куска 2.1 плана окна больше не «единственная
+ * открытая панель» (панелей теперь много, `Workspace.tsx`) — это адрес АКТИВНОЙ
+ * панели сетки, если она терминальная; их выставляет сам `Workspace` по событию
+ * dockview `onDidActivePanelChange`, а не сайдбар напрямую. Сайдбар и ⌘1…⌘9
+ * по-прежнему читают их для подсветки и для «последней сессии работы».
  */
 
 import { create } from 'zustand';
@@ -30,10 +36,22 @@ export interface UiState {
   dialogs: DialogsState;
   /** Последняя открытая сессия каждой работы: для ⌘1…⌘9 (кусок 1.11). */
   lastSessionByWork: Record<string, string>;
+  /** id активной панели сетки (`lib/panel-id.ts#panelId`) — `null`, если панелей нет вовсе (кусок 2.1). */
+  activePanelId: string | null;
+  /**
+   * Сессии, чья панель терминала сейчас видна (активная вкладка своей группы,
+   * `@harnas/protocol#refKey`) — кусок 2.1, «Уведомления теперь считают
+   * видимой сессию, у которой видна панель в сетке, а не выбранную в
+   * сайдбаре». В отличие от `activePanelId` (панель ОДНА — с фокусом), видимых
+   * панелей в сетке может быть несколько одновременно, по одной на группу.
+   */
+  visibleSessionRefs: Record<string, true>;
 
   selectSession: (workKey: string, ref: SessionRef) => void;
-  /** ⌘W: панель терминала пустеет, сессия на хосте не трогается (кусок 1.11). */
-  closePanel: () => void;
+  /** `Workspace.tsx` зовёт на каждую смену активной панели dockview. */
+  setActivePanelId: (id: string | null) => void;
+  /** `panel-registry.tsx` зовёт при каждом `onDidActiveChange` панели терминала и при её закрытии. */
+  setSessionVisible: (refKey: string, visible: boolean) => void;
   setWindowFocused: (focused: boolean) => void;
   openNewWorkDialog: () => void;
   closeNewWorkDialog: () => void;
@@ -54,6 +72,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   wakePaused: null,
   dialogs: CLOSED_DIALOGS,
   lastSessionByWork: {},
+  activePanelId: null,
+  visibleSessionRefs: {},
 
   selectSession: (workKey, ref) =>
     set((state) => ({
@@ -62,7 +82,17 @@ export const useUiStore = create<UiState>((set, get) => ({
       lastSessionByWork: { ...state.lastSessionByWork, [workKey]: ref.sessionId },
     })),
 
-  closePanel: () => set({ selectedRef: null }),
+  setActivePanelId: (id) => set({ activePanelId: id }),
+
+  setSessionVisible: (key, visible) =>
+    set((state) => {
+      if (!visible) {
+        if (!(key in state.visibleSessionRefs)) return state;
+        const rest = Object.fromEntries(Object.entries(state.visibleSessionRefs).filter(([entryKey]) => entryKey !== key));
+        return { visibleSessionRefs: rest };
+      }
+      return { visibleSessionRefs: { ...state.visibleSessionRefs, [key]: true } };
+    }),
 
   setWindowFocused: (focused) => set({ windowFocused: focused }),
 

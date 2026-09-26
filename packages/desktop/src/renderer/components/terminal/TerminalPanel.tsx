@@ -16,11 +16,20 @@ export interface TerminalPanelProps {
   theme: string;
   fontFamily: string;
   fontSize: number;
+  /** Видна ли панель в сетке (кусок 2.1 плана окна) — по умолчанию видна. */
+  visible?: boolean;
 }
 
-export function TerminalPanel({ bridge, sessionRef, theme, fontFamily, fontSize }: TerminalPanelProps): JSX.Element {
+export function TerminalPanel({
+  bridge,
+  sessionRef,
+  theme,
+  fontFamily,
+  fontSize,
+  visible = true,
+}: TerminalPanelProps): JSX.Element {
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
-  const { search } = useTerminal({ bridge, ref: sessionRef, container, theme, fontFamily, fontSize });
+  const { search } = useTerminal({ bridge, ref: sessionRef, container, theme, fontFamily, fontSize, visible });
 
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');

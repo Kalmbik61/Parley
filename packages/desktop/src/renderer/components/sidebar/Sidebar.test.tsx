@@ -82,7 +82,7 @@ describe('Sidebar', () => {
       lastSessionByWork: {},
     });
 
-    render(<Sidebar bridge={createFakeBridge()} />);
+    render(<Sidebar bridge={createFakeBridge()} onOpenSession={() => {}} />);
 
     const numbers = screen.getAllByText(/^[123]$/).map((el) => el.textContent);
     expect(numbers).toEqual(['1', '2', '3']);
@@ -99,7 +99,7 @@ describe('Sidebar', () => {
       error: null,
     });
 
-    render(<Sidebar bridge={createFakeBridge()} />);
+    render(<Sidebar bridge={createFakeBridge()} onOpenSession={() => {}} />);
 
     const row = screen.getByText(`S01 ${longLabel}`);
     expect(row.className).toContain('truncate');
@@ -108,7 +108,7 @@ describe('Sidebar', () => {
   });
 
   it('«Работ пока нет» — пустой список', () => {
-    render(<Sidebar bridge={createFakeBridge()} />);
+    render(<Sidebar bridge={createFakeBridge()} onOpenSession={() => {}} />);
     expect(screen.getByText('Работ пока нет')).toBeTruthy();
   });
 });

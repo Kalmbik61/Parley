@@ -3,6 +3,13 @@
  * плана окна, спека 5.2/5.3): подключение, пересинхронизация, поток вывода,
  * ввод, ресайз с тишиной и отключение при размонтировании. Терминал живёт,
  * пока есть контейнер в DOM — без него открывать нечего.
+ *
+ * Подключение к хосту (`pty.attach`/`pty.detach`) отдельно от жизни самого
+ * xterm-объекта (кусок 2.1 плана окна, «Видимость»): в сетке панель терминала
+ * может быть смонтирована, но не быть активной вкладкой своей группы —
+ * невидимая вкладка должна отцепиться от хоста, а видимая — подключиться со
+ * свежим снимком, без пересоздания xterm и потери его локального состояния.
+ * Поэтому подключение управляется отдельным эффектом по параметру `visible`.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -27,6 +34,13 @@ export interface UseTerminalOptions {
   theme: string;
   fontFamily: string;
   fontSize: number;
+  /**
+   * Видна ли панель сейчас (активная вкладка своей группы в сетке). По
+   * умолчанию `true` — вне `Workspace` (например, в тестах панели) терминал
+   * ведёт себя как раньше: подключается на монтировании, отключается на
+   * размонтировании.
+   */
+  visible?: boolean;
 }
 
 export interface UseTerminalResult {
@@ -49,7 +63,7 @@ function isHttpUrl(url: string): boolean {
 }
 
 export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
-  const { ref, container, theme, fontFamily, fontSize } = options;
+  const { ref, container, theme, fontFamily, fontSize, visible = true } = options;
   const [search, setSearch] = useState<SearchAddon | null>(null);
 
   // `bridge` стабилен на весь жизненный цикл окна (один `window.harnas`, см.
@@ -57,6 +71,13 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
   // его через ref, а не через замыкание, из тех же соображений.
   const bridgeRef = useRef(options.bridge);
   bridgeRef.current = options.bridge;
+
+  // Мост между эффектом создания xterm (ниже) и эффектом видимости (в конце
+  // функции): подключение к хосту должно переживать переключение вкладок без
+  // пересоздания самого терминала, поэтому `attach`/`detach` живут в ref, а не
+  // вызываются напрямую из эффекта создания.
+  const attachRef = useRef<(() => Promise<void>) | null>(null);
+  const detachRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (container === null) return;
@@ -112,13 +133,25 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
     // до снимка, которому он логически предшествует.
     let snapshotWritten = false;
     let pendingOutput: string[] = [];
+    // Подключены ли мы сейчас к выводу хоста — эффект видимости дальше по
+    // файлу включает и выключает это через `attach`/`detach`; вывод и
+    // «просмотрено» (`markSeen` на хосте — побочный эффект `pty.attach`) не
+    // должны доставаться невидимой вкладке (кусок 2.1, тест 5а).
+    let connected = false;
+    // Экран сбрасывается перед КАЖДЫМ повторным подключением (пересинхрон,
+    // возврат видимости) — иначе новый снимок лёг бы поверх старого экрана.
+    // Самое первое подключение сбрасывать незачем: терминал и так пуст.
+    let everConnected = false;
 
     const attach = async (): Promise<void> => {
+      if (everConnected) term.reset();
+      everConnected = true;
+      connected = true;
       snapshotWritten = false;
       pendingOutput = [];
       try {
         const { snapshot, cols, rows } = await bridgeRef.current.call('pty.attach', { ref });
-        if (disposed) return;
+        if (disposed || !connected) return;
         term.resize(cols, rows);
         term.write(snapshot);
         snapshotWritten = true;
@@ -129,14 +162,24 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
         // терминал остаётся пустым вместо падения панели.
       }
     };
-    void attach();
+
+    const detach = (): void => {
+      if (!connected) return;
+      connected = false;
+      bridgeRef.current.call('pty.detach', { ref }).catch(() => {
+        // Отключение — лучшее усилие: сокет мог уже закрыться раньше нас.
+      });
+    };
+
+    attachRef.current = attach;
+    detachRef.current = detach;
 
     const dataDisposable = term.onData((data) => {
       bridgeRef.current.notify('pty.input', { ref, data });
     });
 
     const unsubscribeOutput = bridgeRef.current.on('pty.output', (event) => {
-      if (!sameRef(event.ref, ref)) return;
+      if (!sameRef(event.ref, ref) || !connected) return;
       if (!snapshotWritten) {
         pendingOutput.push(event.data);
         return;
@@ -146,7 +189,6 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
 
     const unsubscribeResync = bridgeRef.current.on('pty.resync', (event) => {
       if (!sameRef(event.ref, ref)) return;
-      term.reset();
       void attach();
     });
 
@@ -169,9 +211,13 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
       dataDisposable.dispose();
       unsubscribeOutput();
       unsubscribeResync();
-      bridgeRef.current.call('pty.detach', { ref }).catch(() => {
-        // Отключение — лучшее усилие: сокет мог уже закрыться раньше нас.
-      });
+      // Само отключение от хоста — забота эффекта видимости ниже: React чистит
+      // эффекты одного рендера в порядке их объявления (этот — первым), так
+      // что на размонтировании эффект видимости всё ещё дозвонится до
+      // `pty.detach` через `detachRef` следом за этой функцией — рефы нарочно
+      // не обнуляются здесь, иначе к его цепочке "если видима — отключиться"
+      // подключаться было бы уже не от чего, и на каждое закрытие панели
+      // осело бы на один `pty.detach` меньше, чем нужно.
       setSearch(null);
       term.dispose();
     };
@@ -180,6 +226,17 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
     // терминал на каждый ререндер `App`/`SettingsDialog` было бы заметнее
     // пользователю, чем помощь от смены цвета без реаттача.
   }, [container, ref.projectPath, ref.workId, ref.sessionId]);
+
+  // Подключение к хосту следует видимости, а не монтированию: невидимая
+  // вкладка отцепляется (без потери самого xterm выше), видимая — цепляется
+  // заново со свежим снимком (спека 5.1, «Видимость», кусок 2.1). Эффект
+  // сам обязан быть в паре с созданием терминала — тот же список
+  // зависимостей плюс `visible`, иначе после пересоздания терминала (эффект
+  // выше) с тем же `visible` подключения бы не случилось вовсе.
+  useEffect(() => {
+    if (visible) void attachRef.current?.();
+    return () => detachRef.current?.();
+  }, [visible, container, ref.projectPath, ref.workId, ref.sessionId]);
 
   return { search };
 }

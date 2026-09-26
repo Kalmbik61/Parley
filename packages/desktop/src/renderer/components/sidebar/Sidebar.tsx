@@ -1,8 +1,11 @@
 /**
  * Сайдбар: список работ слева, дерево сессий каждой — навигация мышью по
- * работам и сессиям (кусок 1.10 плана окна).
+ * работам и сессиям (кусок 1.10 плана окна). С куска 2.1 строка сессии не
+ * держит собственную панель — «выбрать» и «открыть» одинаково просят
+ * `Workspace` сфокусировать существующую панель или завести новую вкладку.
  */
 
+import type { WorkSession } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import { workKey } from '../../lib/tree-order.js';
 import type { HarnasBridge } from '../../../shared/bridge.js';
@@ -14,26 +17,28 @@ import { WorkList } from './WorkList.js';
 
 export interface SidebarProps {
   bridge: HarnasBridge;
+  /** Клик по строке или «Открыть» в меню сессии — `Workspace.openSession` через `App.tsx`. */
+  onOpenSession: (workKey: string, ref: SessionRef, session: WorkSession) => void;
 }
 
-export function Sidebar({ bridge }: SidebarProps): JSX.Element {
+export function Sidebar({ bridge, onOpenSession }: SidebarProps): JSX.Element {
   const entries = useWorksStore((state) => state.entries);
   const branches = useWorksStore((state) => state.branches);
   const activityByRef = useActivityStore((state) => state.byRef);
 
   const selectedWorkKey = useUiStore((state) => state.selectedWorkKey);
   const selectedRef = useUiStore((state) => state.selectedRef);
-  const selectSession = useUiStore((state) => state.selectSession);
   const newWorkOpen = useUiStore((state) => state.dialogs.newWork);
   const openNewWorkDialog = useUiStore((state) => state.openNewWorkDialog);
   const closeNewWorkDialog = useUiStore((state) => state.closeNewWorkDialog);
 
   const ordered = orderedWorks(entries);
 
-  // «Открыть» и клик по строке — одно и то же: сама панель терминала появится
-  // в куске 1.11, здесь выбор только меняет подсветку и метрики под ней.
-  const handleSelect = (key: string, ref: SessionRef): void => selectSession(key, ref);
-  const handleOpen = (ref: SessionRef): void => selectSession(workKey(ref.projectPath, ref.workId), ref);
+  // «Открыть» и клик по строке — одно и то же: обе просят `Workspace`
+  // сфокусировать панель сессии или завести новую вкладку (кусок 2.1).
+  // Подсветка строки сама обновится по факту (`onDidActivePanelChange` в
+  // `Workspace` пишет `selectedRef`/`selectedWorkKey` в этот же стор).
+  const handleOpen = (key: string, ref: SessionRef, session: WorkSession): void => onOpenSession(key, ref, session);
   const handleResume = (ref: SessionRef): void => {
     bridge.call('sessions.resume', { ref }).catch(() => {});
   };
@@ -66,8 +71,8 @@ export function Sidebar({ bridge }: SidebarProps): JSX.Element {
             selectedWorkKey={selectedWorkKey}
             selectedSessionId={selectedRef?.sessionId ?? null}
             activityByRef={activityByRef}
-            onSelectSession={(key, ref) => handleSelect(key, ref)}
-            onOpen={(ref) => handleOpen(ref)}
+            onSelectSession={(key, ref, session) => handleOpen(key, ref, session)}
+            onOpen={(ref, session) => handleOpen(workKey(ref.projectPath, ref.workId), ref, session)}
             onResume={(ref) => handleResume(ref)}
             onStop={(ref) => handleStop(ref)}
             onDelete={(ref) => handleDelete(ref)}

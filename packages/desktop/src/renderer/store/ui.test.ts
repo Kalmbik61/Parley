@@ -13,6 +13,7 @@ beforeEach(() => {
     wakePaused: null,
     dialogs: { newWork: false, newSession: { open: false, parentSessionId: null }, settings: false },
     lastSessionByWork: {},
+    activePanelId: null,
   });
 });
 
@@ -25,14 +26,13 @@ describe('useUiStore.selectSession', () => {
   });
 });
 
-describe('useUiStore.closePanel', () => {
-  it('очищает выбор сессии, работа в сайдбаре остаётся отмеченной', () => {
-    useUiStore.getState().selectSession('/tmp/proj w-01', ref);
+describe('useUiStore.setActivePanelId', () => {
+  it('запоминает id активной панели сетки; сброс — в null', () => {
+    useUiStore.getState().setActivePanelId('terminal:/tmp/proj\u0000w-01\u0000s-01');
+    expect(useUiStore.getState().activePanelId).toBe('terminal:/tmp/proj\u0000w-01\u0000s-01');
 
-    useUiStore.getState().closePanel();
-
-    expect(useUiStore.getState().selectedRef).toBeNull();
-    expect(useUiStore.getState().selectedWorkKey).toBe('/tmp/proj w-01');
+    useUiStore.getState().setActivePanelId(null);
+    expect(useUiStore.getState().activePanelId).toBeNull();
   });
 });
 
