@@ -13,7 +13,10 @@
 
 **Перед стартом.** Сверить с кодом этапов 2–3:
 - `attention/derive.ts` (`WorkAttention`, `humanUnreadLetters`, `roomUnreadForHuman`);
-- `layout/store.ts`, `terminal/TerminalSurface.tsx` (`terminalSurfaces`);
+- `sidebar/use-sidebar-sections.ts` (`useSidebarSections`), `store/ui.ts` (зеркало
+  `ui.notifications`), `store/host.ts` (`useHostSupports`);
+- `layout/store.ts` (очередь до `hydrate`), `terminal/TerminalSurface.tsx`
+  (`terminalSurfaces`);
 - `renderer/notifications.ts` (что заменяется), `lib/capabilities.ts`
   (`REQUIRED_METHODS`).
 
@@ -41,11 +44,11 @@
 **Интерфейсы**
 
 ```ts
-// core/work/letters.ts — через updateMap
+// core/work/letters.ts — через updateMap(…, { touch: false }) из 3.1
 /**
  * Ставит readBy.human = now письмам, которые человек видит: прямым письмам человеку
  * и сообщениям комнат, не от самого человека. Уже прочитанные и чужие id пропускаются.
- * Возвращает, сколько отметок поставлено.
+ * Возвращает, сколько отметок поставлено. work.updatedAt не сдвигается.
  */
 export async function markHumanRead(projectPath: string, workId: string, messageIds: string[]): Promise<number>;
 
@@ -58,14 +61,20 @@ Results['mail.markRead'] = { marked: number };
 **Поведение**
 - **`pty.attach`** отдаёт снимок и подписывает клиента, «просмотрено» не трогает.
   `pty.input` по-прежнему зовёт `markSeen`.
-- **`activity.seen { ref }`** зовёт `activity.markSeen(ref)`. Неизвестная сессия —
-  тихо игнорируется: уведомление, ответа нет.
+- **`activity.seen { ref }`** зовёт `activity.markSeen(ref)`, только если сессия есть в
+  снимке работ хоста: `markSeen` кладёт `seenAt` для любого ref, и чужие ref копили бы
+  мусор. Неизвестная сессия — тихо игнорируется: уведомление, ответа нет.
+- **Между 4.1 и 4.2** «не просмотрено» гаснет только вводом в терминал: `pty.attach`
+  его больше не гасит, а окно ещё не шлёт `activity.seen`. Временная регрессия, её
+  снимает 4.2.
 - **`mail.markRead`:**
   - пустой результат — не ошибка: `{ marked: 0 }`;
   - работы нет — `not_found`;
   - запись карты — одна, `updateMap` на все id сразу.
 - **`markHumanRead`** не трогает письма, адресованные только агентам (`roomId ===
   null` и `to` без `human`), и письма от `human`.
+- **`work.updatedAt` не сдвигается** (`touch: false`): прочтение — не событие работы,
+  карточка не всплывает в начало своего ранга (спека 6.2).
 
 **Тесты**
 1. `markHumanRead`:
@@ -73,11 +82,14 @@ Results['mail.markRead'] = { marked: number };
    - повтор → 0;
    - письмо S01 агенту S02 → 0;
    - сообщение комнаты от S02 → 1;
-   - неизвестный id → 0.
+   - неизвестный id → 0;
+   - `work.updatedAt` после отметок прежний — `mail.markRead` не меняет порядок
+     сайдбара.
 2. Хост: `pty.attach` сессии в `unseen` оставляет `unseen` — подставная активность без
    вызова `markSeen`.
 3. Хост: `activity.seen` зовёт `markSeen` ровно этой сессии; неизвестная — без
-   исключения, хост живёт (тот же приём, что в тесте `94c5f8c`).
+   исключения и без вызова `markSeen`, хост живёт (тот же приём, что в тесте
+   `94c5f8c`).
 4. Хост: `mail.markRead` для несуществующей работы → `not_found`; 501 id —
    `bad_request` на схеме.
 
@@ -98,18 +110,24 @@ Results['mail.markRead'] = { marked: number };
   - `use-mark-read.ts` и тест;
   - `next.ts` и тест.
 - Изменить в `packages/desktop/src/renderer/`:
+  - `attention/derive.ts` и тест — `isHumanUnread`;
   - `layout/Tab.tsx` и `layout/tab-meta.ts` — `unread` и значок вопроса из внимания;
   - `sidebar/WorkCard.tsx`, `sidebar/SessionRow.tsx` — данные из `attention/store.ts`;
   - `components/mail/MailPanel.tsx`, `components/rooms/RoomPanel.tsx` —
     `useMarkRead` на письмах;
   - `shell/StatusBar.tsx` — сегмент 3: «N ждут тебя · M не просмотрено», клик — к
     следующей;
-  - `App.tsx` — бейдж через `app.setBadge`: из `attention/store.ts`, прежний расчёт в
-    `notifications.ts` отключается.
+  - `App.tsx` — бейдж через `app.setBadge` из `attention/store.ts`;
+  - `notifications.ts` и тест — `createNotificationWatcher` больше не ставит бейдж: его
+    `setBadge` уходит (сам файл удаляет 4.3).
 
 **Интерфейсы**
 
 ```ts
+// attention/derive.ts, дополнение
+/** Не прочитано человеком по правилам 3.2: письмо ему или сообщение комнаты, не от него, без readBy.human. */
+export function isHumanUnread(message: Message): boolean;
+
 // attention/seen.ts
 export interface VisibilityInput {
   windowFocused: boolean;
@@ -136,13 +154,17 @@ export function useAttention(): { byWork: Record<string, WorkAttention>; totals:
 export function badgeCount(totals: AttentionTotals): number;   // needsYou + humanUnread
 
 // attention/use-mark-read.ts
-/** Ref-колбэк для элемента письма: видимое ≥1 с при фокусе окна непрочитанное уходит в mail.markRead пачкой через 500 мс. */
+/**
+ * Ref-колбэк для элемента письма: видимое ≥1 с при фокусе окна непрочитанное уходит в mail.markRead
+ * пачкой через 500 мс. `unread` — isHumanUnread(message), а не LetterView.unread: тот значит
+ * «хоть один адресат не прочёл».
+ */
 export function useMarkRead(input: {
   bridge: HarnasBridge; projectPath: string; workId: string; active: boolean;
 }): (messageId: string, unread: boolean) => (el: HTMLElement | null) => void;
 
 // attention/next.ts
-/** Следующая по кругу сессия уровня needs-you, затем unseen, в видимом порядке сайдбара. */
+/** Следующая по кругу сессия уровня needs-you, затем unseen, в видимом порядке сайдбара — sections из useSidebarSections() (3.3). */
 export function nextAttentionTarget(
   sections: SidebarSection[], byWork: Record<string, WorkAttention>,
   activity: Record<string, ActivityEntry>, current: SessionRef | null,
@@ -168,9 +190,13 @@ export function nextAttentionTarget(
     вместо точки при `needs-you`;
   - карточка и строка — как в 3.3, но из `useAttention`.
 - **Строка статуса.** «2 ждут тебя · 1 не просмотрено». Нули не показываются, при двух
-  нулях сегмента нет. Клик — `nextAttentionTarget` → активная работа и фокус вкладки
-  (`openTab`).
-- **Бейдж** — `badgeCount`, ноль — пустой. Шлётся при изменении.
+  нулях сегмента нет.
+  - «N ждут тебя» — сессии (`totals.needsYou`). Письма в счёт не входят: они в бейдже
+    и на карточках, а клик ведёт только к сессиям.
+  - Клик — `nextAttentionTarget` по секциям `useSidebarSections()` → активная работа и
+    фокус вкладки (`openTab`).
+- **Бейдж** — `badgeCount`, ноль — пустой. Шлётся из `App` при изменении. Прежний
+  `createNotificationWatcher` бейдж больше не ставит, иначе два источника спорили бы.
 
 **Тесты**
 1. `visibleSessions`:
@@ -191,6 +217,12 @@ export function nextAttentionTarget(
 5. `nextAttentionTarget`: сначала `needs-you` по порядку сайдбара, по кругу; нет
    `needs-you` — первая `unseen`; нет обеих — `null`.
 6. Вкладка терминала сессии в `needs-you`: `data-unread="true"` и значок вопроса.
+7. `isHumanUnread` и `useMarkRead`: письмо человеку, прочитанное другим адресатом, но
+   не человеком, уходит в пачку; прочитанное человеком — нет.
+8. `createNotificationWatcher` больше не зовёт `setBadge`; бейдж шлёт `App` —
+   `badgeCount` при каждом его изменении и только тогда.
+9. Строка статуса при `needsYou: 2, unseen: 1, humanUnread: 3` — «2 ждут тебя · 1 не
+   просмотрено»; при `needsYou: 0, unseen: 0` сегмента нет.
 
 **Приёмка**
 - [ ] Все тесты зелёные.
@@ -211,13 +243,16 @@ export function nextAttentionTarget(
 - Изменить:
   - `src/shared/bridge.ts` — `app.notify(note: AppNote)`, `app.onFocusTarget`, типы
     `AppNote` и `FocusTarget` (спека 3.3);
-  - `src/preload/index.ts`, `src/main/ipc.ts` — проверка `AppNote`, событие
-    `app:focus-target`;
-  - `src/main/index.ts` — уведомитель, `app.on('activate')` не мешает переходу;
+  - `src/preload/index.ts`, `src/main/ipc.ts` и `ipc.test.ts` — проверка `AppNote`,
+    событие `app:focus-target`, канал `app:take-focus-target`;
+  - `src/main/index.ts` — уведомитель, `app.on('activate')` не мешает переходу; клик
+    при закрытом окне создаёт его заново;
+  - `renderer/test-utils/fake-bridge.ts` — `appNotified` с `AppNote`, `onFocusTarget` и
+    эмиттер `emitFocusTarget`;
   - `renderer/App.tsx` — `wireAttentionNotifications` вместо `wireNotifications`,
     обработчик `onFocusTarget`;
-  - `renderer/components/settings/SettingsDialog.tsx` — секция «Уведомления» читает и
-    пишет `ui.json.notifications`, текст подсказки про системные настройки.
+  - `renderer/components/settings/SettingsDialog.tsx` — подсказка про системные
+    настройки в секции «Уведомления»; сами переключатели пишут `patchUi` с 2.3.
 - Удалить: `renderer/notifications.ts` и его тест.
 
 **Интерфейсы**
@@ -227,9 +262,20 @@ export function nextAttentionTarget(
 export interface NotificationLike { show(): void; close(): void; on(event: 'click', cb: () => void): void }
 export function createNotifier(deps: {
   create(options: { title: string; body: string; silent: boolean }): NotificationLike;
-  focusWindow(): void;                     // restore → show → focus
+  /** restore → show → focus; окна нет (macOS держит приложение без окон) — создать заново. */
+  focusWindow(): void;
+  /** Живому окну — сразу; окну, которое только создаётся, — через отложенную цель (app:take-focus-target). */
   sendFocusTarget(target: FocusTarget): void;
 }): { notify(note: AppNote): void; closeAll(): void };
+
+// bridge.ts, дополнение к app
+notify(note: AppNote): void;
+/** При подписке забирает у main отложенную цель (app:take-focus-target) и отдаёт её слушателю первой. */
+onFocusTarget(listener: (target: FocusTarget) => void): () => void;
+
+// test-utils/fake-bridge.ts, дополнение к FakeBridge
+readonly appNotified: AppNote[];
+emitFocusTarget(target: FocusTarget): void;
 
 // renderer/attention/notify.ts — замена notifications.ts
 export interface NotifyDeps {
@@ -256,25 +302,39 @@ export function applyFocusTarget(target: FocusTarget, deps: {
 ```
 
 **Поведение**
+- **Один поток перехода.** Уточнение к спеке 3.3: отдельного `onNotificationClick` нет.
+  Клик по уведомлению и меню Dock приходят одним событием `app:focus-target`
+  (`onFocusTarget`).
 - **Когда шлём** — таблица спеки 7.4: переход сессии в `blocked` или `unseen`, новое
   письмо человеку, уведомления хоста `trust-wait`, `launch-failed`, `resume-failed`.
   - Повтор того же состояния не уведомляет.
-  - Ключ в `prefs()` выключен — не шлём.
+  - Ключ в `prefs()` выключен — не шлём. `prefs()` — `ui.notifications` зеркала
+    `store/ui.ts` (2.3).
   - `isTargetVisible` — видимость по правилам 4.2: для сессии — её терминал, для
     почты — вкладка почты активна при фокусе.
+  - `onWorks` берёт первый снимок за базу: письма, которые уже были на старте, не
+    уведомляют. Уведомляет только письмо, которого не было в прошлом снимке.
 - **Текст:**
   - заголовок `<работа> · S02 исполнитель — ждёт тебя` или `— закончил ход`;
   - для письма — `<работа> · письмо от S01`, `вопрос от S01` или `решение от S01`;
-  - тело — первая строка задачи, итога (`result`, иначе `summary`) или письма, до 200
-    символов.
+  - уведомления хоста — `<работа> · S02 исполнитель — ждёт доверия к папке`
+    (`trust-wait`), `— не запустилась` (`launch-failed`), `— не возобновилась`
+    (`resume-failed`). В `App.tsx` сейчас есть только `trust-wait`, остальные два новые;
+  - тело — первая строка задачи, итога (`result`, иначе `summary`), письма или текста
+    уведомления хоста, до 200 символов.
 - **Теги:** `session:<refKey>`, `mail:<workKey>`, `notice:<kind>:<refKey>`. Main
   закрывает прежнее уведомление с тем же тегом перед показом нового.
 - **Клик:**
   1. Main: `restore()`, если свёрнуто, `show()`, `focus()`.
   2. Main шлёт `app:focus-target`.
   3. Рендерер: `applyFocusTarget` — активная работа, вкладка (`openTab`), вспышка 600
-     мс (кольцо 2px `--ring`), прокрутка терминала вниз.
+     мс (кольцо 2px `--ring`), прокрутка терминала вниз. Работа ещё не показывалась —
+     `openTab` ждёт её `hydrate` в очереди (2.2).
   - Цели нет — окно просто на переднем плане, тост «Работа или сессия уже удалены».
+  - **Окна нет** (macOS держит приложение и без окон): main создаёт окно заново и
+    кладёт цель в «отложенную». `onFocusTarget` в preload при подписке спрашивает
+    `app:take-focus-target` и отдаёт цель слушателю первой. Main отдаёт её один раз:
+    раньше подписки рендерера событие `app:focus-target` потерялось бы.
 - **Звук** — `silent: !prefs().sound`.
 - **Подсказка в настройках.** Electron на macOS не сообщает, запретил ли пользователь
   уведомления. Поэтому в секции «Уведомления» всегда стоит строка: «Не приходят —
@@ -294,7 +354,9 @@ export function applyFocusTarget(target: FocusTarget, deps: {
 3. Новое письмо человеку → уведомление `mail:<workKey>`. Письмо агенту агенту — нет.
 4. `applyFocusTarget` для сессии: `setActiveWork`, `openTab(terminal)`, `flash`,
    `scrollToBottom`. Для удалённой сессии → `false`, ничего не открыто.
-5. `SettingsDialog`: переключатели «Уведомления» пишут `saveUi({ notifications })`.
+5. `SettingsDialog`: в секции «Уведомления» всегда видна подсказка «Не приходят —
+   Системные настройки → Уведомления → Harnas». Запись переключателей уже проверяют
+   тест 1 куска 1.4 и тест 11 куска 2.3.
 6. **E2E `attention.spec.ts`, переход.** Две работы, у второй — сессия.
    `app.evaluate` шлёт окну `app:focus-target` с этой сессией. Вторая работа активна,
    вкладка её сессии в фокусе.
@@ -302,8 +364,18 @@ export function applyFocusTarget(target: FocusTarget, deps: {
    - Вкладка сессии неактивна; тест дописывает в журнал хуков
      `{"hook_event_name":"UserPromptSubmit"}` и `{"hook_event_name":"Stop"}`;
    - карточка становится жирной (`unseen`);
-   - вкладку активируют при фокусе окна (`BrowserWindow.focus()` через
-     `app.evaluate`) — за 3 с карточка перестаёт быть жирной.
+   - окно выводится в фокус: `app.evaluate(({ app, BrowserWindow }) => {
+     app.focus({ steal: true }); BrowserWindow.getAllWindows()[0]?.focus(); })`. Если
+     под Playwright `document.hasFocus()` всё равно ложно, фокус эмулируется событием
+     `focus` окна рендерера (`window.dispatchEvent(new Event('focus'))`);
+   - вкладку активируют — за 3 с карточка перестаёт быть жирной.
+8. `createNotifier` при закрытом окне: клик → `focusWindow` создаёт окно; цель уходит
+   первому подписчику `onFocusTarget` через `app:take-focus-target`, повторный запрос
+   отдаёт `null`.
+9. `createAttentionNotifier.onWorks`: первый снимок с письмами человеку — ни одного
+   уведомления; второй с новым письмом — одно.
+10. `onHostNotice` вида `launch-failed` → заголовок `<работа> · S02 исполнитель — не
+    запустилась`, тег `notice:launch-failed:<refKey>`.
 
 **Приёмка**
 - [ ] Все тесты зелёные, E2E зелёные.

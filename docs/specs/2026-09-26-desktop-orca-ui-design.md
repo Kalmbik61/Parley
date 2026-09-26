@@ -127,7 +127,8 @@
 - Только новые методы и уведомления; `PROTOCOL_VERSION` остаётся `1`.
 - Ответ `hello` получает поле `methods: string[]` — имена всех методов и уведомлений,
   которые хост понимает.
-- Хост без этого поля считается хостом «до этапа 4».
+- Хост без этого поля считается хостом «до этапа 3»: поле появляется в этапе 3 вместе
+  с `works.rename` и `works.setStatus`.
 - Если нужного метода нет, окно прячет функцию и показывает в строке статуса «Хост старее
   окна — перезапустить». Кнопка зовёт существующий `app.restartHost()` с
   предупреждением, что живые агенты оборвутся и поднимутся через `--resume`.
@@ -222,8 +223,8 @@ interface HarnasBridge {
     loadUi(): Promise<UiFile>;                                         // раздел 3.4
     saveUi(patch: Partial<UiFile>): Promise<void>;                     // слияние по ключам верхнего уровня
     notify(note: AppNote): void;                                       // заменяет notify({title, body})
-    onNotificationClick(listener: (target: FocusTarget) => void): () => void;
-    onFocusTarget(listener: (target: FocusTarget) => void): () => void; // тот же поток из меню Dock
+    // клик по уведомлению и меню Dock — один поток: отдельного onNotificationClick нет (план 4.3)
+    onFocusTarget(listener: (target: FocusTarget) => void): () => void;
     setAppearance(mode: 'system' | 'dark' | 'light'): Promise<void>;  // nativeTheme.themeSource
     onAppearance(listener: (dark: boolean) => void): () => void;
     pathForFile(file: File): string;                                   // webUtils.getPathForFile в preload
@@ -233,6 +234,7 @@ interface HarnasBridge {
     saveNotes(workKey: string, sessionId: string, notes: NotesFile): Promise<void>;
     saveDropImage(source: 'clipboard'): Promise<string | null>;        // путь PNG в drops/ или null, если в буфере нет картинки
     removeLayout(workKey: string): Promise<void>;                      // работа удалена (раздел 5.8)
+    retainLayouts(workKeys: string[]): Promise<void>;                  // первый снимок: остальные раскладки стираются (раздел 5.8)
     titlebarDoubleClick(): void;                                       // действие macOS по двойному клику (раздел 5.1)
     revealWork(projectPath: string, workId: string): Promise<void>;    // «Показать в Finder» из меню карточки (раздел 6.4)
   };
@@ -276,8 +278,8 @@ interface LayoutsFileV2 { version: 2; works: Record<string /* workKey */, WorkLa
 interface UiFile {
   version: 1;
   appearance: 'system' | 'dark' | 'light';          // по умолчанию 'system'
-  leftSidebar: { open: boolean; width: number };     // 280, пределы 220–500
-  rightSidebar: { open: boolean; width: number; tab: 'files' | 'changes' }; // 350, пределы 220…(окно − 320)
+  leftSidebar: { open: boolean; width: number };     // открыт; 280, пределы 220–500
+  rightSidebar: { open: boolean; width: number; tab: 'files' | 'changes' }; // открыт, 'files'; 350, пределы 220…(окно − 320)
   activeWorkKey: string | null;
   pinnedWorks: string[];                             // workKey в порядке закрепления
   collapsedProjects: string[];                       // projectPath
@@ -301,9 +303,9 @@ interface UiFile {
 |---|---|---|
 | `store/works.ts` | Снимок работ (есть) | — |
 | `store/activity.ts` | `activity.changed` по сессиям (есть) | — |
-| `store/ui.ts` | Активная работа, сайдбары, диалоги, фокус окна, тема; читает и пишет `ui.json` | 1–2 |
-| `layout/store.ts` | Раскладки работ, активная группа, закрытые вкладки; операции — чистые функции `layout/tree.ts` | 2 |
-| `layout/history.ts` | История «назад / вперёд» и MRU вкладок | 2 |
+| `store/ui.ts` | Зеркало `ui.json` (сайдбары, закреплённые, настройки), диалоги, фокус окна, тема; читает и пишет `ui.json`, кроме `activeWorkKey` | 1–2 |
+| `layout/store.ts` | Активная работа (`activeWorkKey`, его копию в `ui.json` пишет `layout/persistence.ts`), раскладки работ, активная группа, закрытые вкладки, история «назад / вперёд» и MRU вкладок; операции — чистые функции `layout/tree.ts` и `layout/history.ts` | 2 |
+| `layout/history.ts` | Чистые функции истории и MRU; их состояние — в `layout/store.ts` | 2 |
 | `attention/store.ts` | Производное внимание по сессиям и работам, видимость для `activity.seen` | 4 |
 | `palette/store.ts` | Открыта ли палитра, запрос, секции | 6 |
 | `files/store.ts` | Открытые буферы, «изменён», конфликт с диском, корень проводника | 7 |
@@ -475,7 +477,8 @@ renderer/ styles/{tokens,base,scrollbars}.css · assets/fonts/Geist-Variable.wof
   - Для `claude`, `codex` и других провайдеров из `providers.list` берутся из
     официальных наборов бренда вендоров, если их лицензия разрешает показ для
     обозначения интеграции.
-  - Иначе — буквенный значок: первая буква провайдера на подложке `--muted`.
+  - Иначе — буквенный значок на подложке `--muted`: `C` у `claude`, `X` у `codex`, у
+    остальных — первая буква id провайдера.
   - Логотипы из репозитория Orca не берём (раздел 18, вопрос 1).
 
 ### 4.7 Тема по системе
@@ -750,7 +753,9 @@ interface WorkLayout {
   - только после прихода списка работ (`worksLoaded`, кусок 2.2);
   - `pruneLayout` выкидывает вкладки удалённых сессий и комнат, а также файлы, корень
     которых исчез;
-  - браузерные вкладки восстанавливаются с сохранённым адресом.
+  - браузерные вкладки восстанавливаются с сохранённым адресом;
+  - раскладки работ, которых нет в первом снимке (удалены при закрытом окне), стираются
+    (`app.retainLayouts`).
 - **Раскладка больше 1 МБ** не сохраняется, старый файл остаётся, в консоль main
   уходит предупреждение.
 - **Работа без сохранённой раскладки** открывается с одной пустой группой. Пустое
@@ -820,6 +825,8 @@ interface WorkLayout {
 1. Ранг по убыванию.
 2. Время последнего события по убыванию:
    `max(lastEventAt всех сессий, work.updatedAt, время последнего письма)`.
+   Переименование, смена статуса и отметки прочтения `work.updatedAt` не сдвигают
+   (`updateMap(…, { touch: false })`): иначе прочтение письма поднимало бы карточку.
 3. `work.createdAt` по возрастанию.
 
 Пересортировка происходит на каждое изменение `activity.changed` или `works.changed`.
@@ -876,7 +883,10 @@ interface WorkLayout {
 | Строка сессии | меню по правой кнопке | нынешнее `SessionMenu.tsx`: Открыть · Открыть рядом · Возобновить · Остановить · Закрыть… · Создать комнату с… · Изменения · Удалить…; плюс «Скопировать путь worktree» |
 
 - **Удалить работу** — `ConfirmDialog` с числом сессий и предупреждением, что живые
-  процессы остановятся, затем `works.delete`.
+  процессы остановятся. После подтверждения окно останавливает живые сессии
+  (`sessions.stop`), затем зовёт `works.delete`: хост отвечает `conflict`, пока у
+  работы есть живая сессия. Подтверждение — согласие человека на остановку (раздел
+  15.1, п. 7).
 - **Завершить и Архивировать** — новые методы, раздел 6.7.
 
 ### 6.5 Клавиатура сайдбара
@@ -900,7 +910,7 @@ interface WorkLayout {
 | Название | 1–120 символов; обязательно |
 | Цель | многострочное, до 4000 символов; можно пусто |
 | Сразу запустить сессию | переключатель, по умолчанию включён |
-| Агент | из `providers.list`, только `available`; по умолчанию `ui.json.lastProvider`, иначе первый доступный |
+| Агент | из `providers.list`, только `available`; по умолчанию `ui.json.lastProvider`, иначе `claude`; если выбранного нет среди доступных — первый доступный |
 | Ярлык | до 40 символов; по умолчанию пусто, тогда ярлык — имя агента |
 | Задача | многострочное, до 20000 символов |
 | Свой worktree | переключатель; виден, если `worktrees.available` для проекта; по умолчанию выключен |
@@ -1869,7 +1879,7 @@ interface PickResult {
 | Этап | Сценарий |
 |---|---|
 | 1 | Окно в тёмной и светлой теме (`colorScheme` эмуляции); существующие пять сценариев зелёные |
-| 2 | Раскладка: ⌘D, перенос вкладки к краю, закрытие — сплит схлопнулся. Раскладка работы переживает перезапуск окна. Смена работы меняет центр. Перенос вкладки терминала не делает второго `pty.attach` (счётчик вызовов из фейк-бриджа main) и сохраняет текст экрана |
+| 2 | Раскладка: ⌘D, перенос вкладки к краю, закрытие — сплит схлопнулся. Раскладка работы переживает перезапуск окна. Смена работы меняет центр. Перенос вкладки терминала не пересоздаёт поверхность — `data-mount-id` у неё тот же, значит, второго `pty.attach` не было — и сохраняет текст экрана |
 | 3 | Карточки: работа с `blocked` сессией встаёт первой — тест дописывает событие `Notification` вида `permission_prompt` в журнал хуков сессии, как это делает хук из `--settings`, и хост выводит `blocked` сам; форма новой работы с «Создать ещё» |
 | 4 | Уведомление: клик (через IPC `app:focus-target`, как `menu:action` в `layout.spec.ts`) открывает работу и вкладку; `activity.seen` гасит «не просмотрено» только при фокусе |
 | 5 | `pty.send`: заметка-текст доходит до стаба как `PASTE<<…>>` и Enter; при черновике Enter не нажат. Перетаскивание файла из Finder в E2E не воспроизводится (у синтетического `File` нет пути) — его закрывают компонентный тест с подставным `pathForFile` и живая приёмка |
@@ -1882,16 +1892,18 @@ interface PickResult {
 
 `packages/core/test/frame-check.test.ts`: корневого прогона vitest нет, `pnpm test` —
 это тесты пакетов, а рамка — забота core. Тест ищет по исходникам всех пакетов
-(`packages/*/src`) и `tools/`. Не проверяются:
+(`packages/*/src`) и `tools/` — только файлы `.ts`, `.tsx`, `.js`, `.mjs`, `.cjs`. Не
+проверяются:
 - тесты и `docs/`;
 - сам рамочный тест;
+- каталоги с точкой в начале имени (`.omc/` хуков хранит JSON с выводом команд);
 - строки-комментарии (`//`, `/*`, ` * `): предупреждения вроде
   `core/src/codex/discover.ts:8` («`~/.codex/auth.json` не читать никогда») законны.
 
 | Запрещено | Правило |
 |---|---|
 | Учётные данные агентов | `.credentials.json`, `Claude Code-credentials`, `find-generic-password`, `codex/auth.json` |
-| Запись в каталоги агентов | `.claude/settings.json`, `.claude.json`, `.codex/config.toml` — в любом вызове записи |
+| Запись в каталоги агентов | `.claude/settings.json`, `.claude.json`, `.codex/config.toml` — любое упоминание пути вне комментария: построчно запись от чтения не отличить, а чтение этих путей раздел 15.1 тоже не предполагает |
 | API провайдеров | `api.anthropic.com`, `chatgpt.com/backend-api` |
 | YOLO-флаги | `--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`, `bypassPermissions` вне раздела «запрещено» самого теста |
 
