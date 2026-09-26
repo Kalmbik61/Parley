@@ -112,3 +112,24 @@ describe('методы куска 1.3', () => {
     client.close();
   });
 });
+
+describe('уведомления', () => {
+  // Окно восстанавливает раскладку и шлёт `pty.resize` терминалу сессии, чей
+  // PTY остался у прежнего хоста. Бросок обработчика уведомления ронял хост,
+  // окно поднимало новый — и тот падал на том же уведомлении.
+  it('брошенное обработчиком уведомления исключение не роняет хост', async () => {
+    const { home, token } = await boot();
+    const client = connectRaw(hostPaths(home).socket);
+    await waitConnected(client.socket);
+    await hello(client, token);
+
+    const ref = { projectPath: '/нет-такого', workId: 'w-01', sessionId: 's-01' };
+    client.send({ method: 'pty.resize', params: { ref, cols: 80, rows: 24 } });
+    client.send({ method: 'pty.input', params: { ref, data: 'x' } });
+    client.send({ id: 300, method: 'host.info', params: {} });
+
+    const response = await client.next();
+    expect(response.result).toMatchObject({ clients: 1 });
+    client.close();
+  });
+});

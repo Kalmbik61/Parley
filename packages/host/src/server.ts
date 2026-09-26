@@ -143,7 +143,15 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
 
   if (parsed.kind === 'notification') {
     const handler = options.notificationHandlers[parsed.message.method];
-    handler?.(parsed.params as never, request);
+    // Ответить на уведомление нечем, а исключение отсюда уходит в обработчик
+    // 'data' сокета и роняет весь хост: `pty.resize` терминала, чей PTY остался
+    // у прежнего хоста, валил каждый новый хост сразу после подключения окна.
+    try {
+      handler?.(parsed.params as never, request);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      options.context.log.warn('обработчик уведомления упал', { method: parsed.message.method, error: message });
+    }
     return;
   }
 
