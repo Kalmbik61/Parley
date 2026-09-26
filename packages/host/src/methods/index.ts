@@ -1,4 +1,5 @@
 import type { MethodName, NotificationName } from '@harnas/protocol';
+import type { ActivityService } from '../activity/activity-service.js';
 import type { AnyHandler, AnyNotificationHandler } from '../context.js';
 import type { WorksService } from '../works/works-service.js';
 import { hostInfo, hostShutdown } from './host.js';
@@ -8,6 +9,8 @@ import { worksCreate, worksDelete, worksList } from './works.js';
 
 export interface MethodDeps {
   works: WorksService;
+  /** Пока без своего метода: `pty.attach`/`pty.input` куска 1.6 позовут `markSeen`. */
+  activity: ActivityService;
 }
 
 /**
