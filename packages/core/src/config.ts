@@ -32,6 +32,11 @@ export interface HarnasConfig {
    * вежливых агентов до конца лимита подписки (разговор агентов, 4.7).
    */
   messageRate: number;
+  /**
+   * Потолок подъёмов одной спящей сессии письмами за скользящий час: сверх него
+   * письма ждут, а не жгут подписку за ночь (спецификация окна 7.4). 0…60.
+   */
+  resumeRate: number;
   /** Запускать ли `pending` от агента самим, в фоне, без диалога (раздел 5.2). */
   autoLaunch: boolean;
   /** Имя темы: пять палитр плюс `terminal` (дизайн темы `2026-09-22-tui-theme-design.md`, раздел 6). */
@@ -53,6 +58,7 @@ export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
   silenceThresholdMs: 30_000,
   channelPush: true,
   messageRate: 20,
+  resumeRate: 6,
   autoLaunch: true,
   theme: 'mocha',
   fontFamily: 'Menlo',
@@ -68,6 +74,7 @@ export const ENV_NAMES: Readonly<Record<keyof HarnasConfig, string>> = {
   silenceThresholdMs: 'HARNAS_SILENCE_MS',
   channelPush: 'HARNAS_CHANNEL_PUSH',
   messageRate: 'HARNAS_MESSAGE_RATE',
+  resumeRate: 'HARNAS_RESUME_RATE',
   autoLaunch: 'HARNAS_AUTO_LAUNCH',
   theme: 'HARNAS_THEME',
   fontFamily: 'HARNAS_FONT_FAMILY',
@@ -119,6 +126,16 @@ const isFontSize = (value: unknown): value is number =>
   value <= FONT_SIZE_MAX;
 const FONT_SIZE_EXPECTED = `целое от ${FONT_SIZE_MIN} до ${FONT_SIZE_MAX}`;
 
+/** Ноль подъёмов разрешён: так письма никогда не будят спящих, только ждут. */
+const RESUME_RATE_MIN = 0;
+const RESUME_RATE_MAX = 60;
+const isResumeRate = (value: unknown): value is number =>
+  typeof value === 'number' &&
+  Number.isInteger(value) &&
+  value >= RESUME_RATE_MIN &&
+  value <= RESUME_RATE_MAX;
+const RESUME_RATE_EXPECTED = `целое от ${RESUME_RATE_MIN} до ${RESUME_RATE_MAX}`;
+
 /** Значения из файла: тут JSON, поэтому типы проверяются как есть. */
 function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatch {
   const patch: ConfigPatch = {};
@@ -143,6 +160,7 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   take('silenceThresholdMs', isPositiveInt, 'целое больше нуля');
   take('channelPush', (value) => typeof value === 'boolean', 'true или false');
   take('messageRate', isPositiveInt, 'целое больше нуля');
+  take('resumeRate', isResumeRate, RESUME_RATE_EXPECTED);
   take('autoLaunch', (value) => typeof value === 'boolean', 'true или false');
   take('theme', isThemeName, THEME_EXPECTED);
   take('fontFamily', isFontFamily, 'непустая строка');
@@ -198,6 +216,12 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   count('silenceThresholdMs');
   flag('channelPush');
   count('messageRate');
+  const resumeRate = text(ENV_NAMES.resumeRate);
+  if (resumeRate !== undefined) {
+    const parsed = Number(resumeRate);
+    if (isResumeRate(parsed)) patch.resumeRate = parsed;
+    else complain(`${ENV_NAMES.resumeRate}: ожидается ${RESUME_RATE_EXPECTED}`);
+  }
   flag('autoLaunch');
 
   const fontFamily = text(ENV_NAMES.fontFamily);
@@ -297,6 +321,12 @@ export function parseSetting<K extends keyof HarnasConfig>(
     const parsed = Number(text);
     if (isFontSize(parsed)) return { value: parsed as HarnasConfig[K] };
     return { error: `${key}: ожидается ${FONT_SIZE_EXPECTED}` };
+  }
+  if (key === 'resumeRate') {
+    // Отдельная ветка: общая для чисел отвергла бы допустимый ноль.
+    const parsed = Number(text);
+    if (isResumeRate(parsed)) return { value: parsed as HarnasConfig[K] };
+    return { error: `${key}: ожидается ${RESUME_RATE_EXPECTED}` };
   }
   if (BOOLEAN_KEYS.has(key)) {
     const lower = text.toLowerCase();

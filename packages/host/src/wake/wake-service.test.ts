@@ -1,17 +1,32 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { addMessage, addSession, createWork, pointerText, transitionSession, updateMap } from '@harnas/core';
+import {
+  addMessage,
+  addSession,
+  createWork,
+  pointerText,
+  readMap,
+  SYSTEM,
+  transitionSession,
+  updateMap,
+  workPaths,
+} from '@harnas/core';
 import type { EventData, EventName, SessionRef } from '@harnas/protocol';
 import type { HostContext } from '../context.js';
 import { createActivityService } from '../activity/activity-service.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import { createPtyManager } from '../pty/pty-manager.js';
+import { createSessionsService } from '../sessions/sessions-service.js';
+import type { SessionsService } from '../sessions/sessions-service.js';
 import type { PtyLaunch } from '../pty/pty-process.js';
 import { createWorksService } from '../works/works-service.js';
 import type { WorksService } from '../works/works-service.js';
+import { ResumeLimiter } from './resume-limiter.js';
 import { createWakeService } from './wake-service.js';
 import type { WakeService, WakeServiceOptions } from './wake-service.js';
 
@@ -33,6 +48,12 @@ let claudeRoot = '';
 let codexRoot = '';
 let broadcasts: Array<{ event: EventName; data: unknown }>;
 let stoppers: Array<() => Promise<void> | void> = [];
+let extraEnv: string[] = [];
+
+function setEnv(key: string, value: string): void {
+  process.env[key] = value;
+  extraEnv.push(key);
+}
 
 function fakeHost(): HostContext {
   return {
@@ -61,6 +82,8 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const stop of stoppers) await stop();
   stoppers = [];
+  for (const key of extraEnv) delete process.env[key];
+  extraEnv = [];
   delete process.env['HARNAS_HOME'];
   await Promise.all([home, project, claudeRoot, codexRoot].map((dir) => rm(dir, { recursive: true, force: true })));
 });
@@ -104,7 +127,11 @@ async function rig(
   const works = createWorksService(host, { debounceMs: 20 });
   const activity = createActivityService(host, works, { claudeRoot, codexRoot });
   const pty = createPtyManager(host);
-  const wake = createWakeService(host, works, activity, pty, { enterDelayMs: 30, ...wakeOptions });
+  // Подъёма в этих тестах нет: все сессии живые, и `launch` будильнику не нужен.
+  const wake = createWakeService(host, works, activity, pty, { launch: async () => {} }, {
+    enterDelayMs: 30,
+    ...wakeOptions,
+  });
 
   await works.start();
   await activity.start();
@@ -255,4 +282,201 @@ describe('WakeService', () => {
     expect(cancelled).toBeDefined();
     expect((cancelled?.data as { ref: SessionRef }).ref).toEqual(ref);
   });
+});
+
+/**
+ * Спящая сессия-адресат `s-01` и сессия-отправитель `s-02` в `pending`: её
+ * будильник не трогает (поднимает autoLaunch), а письмо о сбое ей приходит.
+ */
+async function sleepingPair(
+  lifecycle: 'sleeping' | 'closed' = 'sleeping',
+): Promise<{ workId: string; target: string; sender: string; providerSessionId: string }> {
+  const map = await createWork(project, { title: 'Работа' });
+  const providerSessionId = randomUUID();
+  let target = '';
+  let sender = '';
+  await updateMap(project, map.work.id, (current) => {
+    const created = addSession(current, { provider: 'claude', label: 'адресат', task: 'сделать' });
+    target = created.id;
+    created.launchedBy = 'host';
+    created.providerSessionId = providerSessionId;
+    transitionSession(current, created.id, 'active');
+    transitionSession(current, created.id, lifecycle);
+    sender = addSession(current, { provider: 'claude', label: 'отправитель', task: 'писать' }).id;
+  });
+  // Спящая уже жила: каталог журналов хуков завёл её первый запуск (`--settings`).
+  await mkdir(workPaths(project, map.work.id).events, { recursive: true });
+  return { workId: map.work.id, target, sender, providerSessionId };
+}
+
+interface ResumeRig {
+  pty: ReturnType<typeof createPtyManager>;
+  sessions: SessionsService;
+  stream: () => string;
+}
+
+/** works+activity+pty+sessions+wake: будильник поднимает сессии настоящим `launch` со стабом. */
+async function resumeRig(wakeOptions: WakeServiceOptions = {}): Promise<ResumeRig> {
+  // Настоящий `claude` в автотестах не запускается никогда — только стаб.
+  setEnv('HARNAS_CLAUDE_BIN', STUB);
+  const host = fakeHost();
+  const works = createWorksService(host, { debounceMs: 20 });
+  const activity = createActivityService(host, works, { claudeRoot, codexRoot });
+  const pty = createPtyManager(host);
+  const sessions = createSessionsService(host, works, pty, activity);
+  const wake = createWakeService(host, works, activity, pty, sessions, { enterDelayMs: 30, ...wakeOptions });
+
+  let stream = '';
+  pty.on('output', (_ref, data) => {
+    stream += data;
+  });
+
+  await works.start();
+  await activity.start();
+  wake.start();
+
+  stoppers.push(async () => {
+    wake.stop();
+    await sessions.stopAll();
+    await activity.stop();
+    await works.stop();
+  });
+  // Всплеск событий наблюдателя от записей подготовки ещё может догонять старт:
+  // два наблюдателя работ читают их независимо, и позднее, но устаревшее чтение
+  // перекрыло бы снимок со свежим письмом. Письма шлём после затишья.
+  await settle(200);
+  return { pty, sessions, stream: () => stream };
+}
+
+async function tempArgsFile(): Promise<string> {
+  const dir = await mkdtemp(path.join(tmpdir(), 'harnas-wake-args-'));
+  stoppers.push(() => rm(dir, { recursive: true, force: true }));
+  return path.join(dir, 'args.json');
+}
+
+async function readArgv(file: string): Promise<string[]> {
+  await waitFor(() => existsSync(file), 5000);
+  return (JSON.parse(await readFile(file, 'utf8')) as { argv: string[] }).argv;
+}
+
+const notices = (kind: string): unknown[] =>
+  broadcasts.filter((b) => b.event === 'host.notice' && (b.data as { kind: string }).kind === kind);
+
+describe('WakeService: подъём спящей письмом', () => {
+  it('3: письмо спящей Claude — указатель последним аргументом, стаб отвечает эхом указателя', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    setEnv('STUB_PROMPT_FROM_ARGV', '1');
+    const { stream, sessions } = await resumeRig();
+
+    await sendLetter(workId, target, 'тело письма');
+    // Отправитель — настоящая сессия, а не s-00 из хелпера.
+    await updateMap(project, workId, (map) => {
+      const letter = map.messages.at(-1);
+      if (letter !== undefined) letter.from = sender;
+    });
+
+    const argv = await readArgv(argsFile);
+    expect(argv.at(-1)).toBe(pointerText(1));
+    await waitFor(() => stream().includes(`echo: ${pointerText(1)}`), 5000);
+    expect(stream()).not.toContain('тело письма');
+
+    const ref = { projectPath: project, workId, sessionId: target };
+    expect(sessions.live(ref)).toBe(true);
+  }, 20_000);
+
+  it('4: провайдер без {prompt} — подъём без промпта, указатель печатается после первого Stop', async () => {
+    // Тестовый реестр: `resumeArgs` Claude без `{prompt}`.
+    await writeFile(
+      path.join(home, 'providers.json'),
+      JSON.stringify({ claude: { resumeArgs: ['--resume', '{providerSessionId}'] } }),
+    );
+    const { workId, target, providerSessionId } = await sleepingPair();
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    setEnv('STUB_HOOKS', '1');
+    const { stream, pty } = await resumeRig();
+
+    await sendLetter(workId, target);
+
+    const argv = await readArgv(argsFile);
+    expect(argv.slice(-2)).toEqual(['--resume', providerSessionId]);
+    await waitFor(() => stream().includes('STUB READY'), 5000);
+
+    // Хода ещё не было (SessionStart — работа): указателя нет.
+    await settle(400);
+    expect(stream()).not.toContain(pointerText(1));
+
+    // Первый ход нового процесса закончился — теперь указатель уходит.
+    const ref = { projectPath: project, workId, sessionId: target };
+    pty.input(ref, 'привет\r');
+    await waitFor(() => stream().includes('echo: привет'), 5000);
+    await waitFor(() => stream().includes(`echo: ${pointerText(1)}`), 5000);
+  }, 20_000);
+
+  it('5: седьмой подъём за час — письмо ждёт, приходит resume-limit один раз', async () => {
+    const { workId, target } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    const limiter = new ResumeLimiter(() => 6);
+    for (let i = 0; i < 6; i += 1) expect(limiter.tryTake(ref)).toBe(true);
+    const { sessions } = await resumeRig({ limiter });
+
+    await sendLetter(workId, target, 'первое');
+    await waitFor(() => notices('resume-limit').length > 0, 5000);
+    await sendLetter(workId, target, 'второе');
+    await settle(300);
+
+    expect(notices('resume-limit')).toHaveLength(1);
+    expect(sessions.live(ref)).toBe(false);
+    const map = await readMap(project, workId);
+    expect(map.sessions.find((s) => s.id === target)?.lifecycle).toBe('sleeping');
+  }, 20_000);
+
+  it('6: стаб выходит сразу — отправителю письмо от system, есть resume-failed', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    setEnv('STUB_EXIT_AFTER_MS', '10');
+    await resumeRig();
+
+    await updateMap(project, workId, (map) => {
+      addMessage(map, { from: sender, to: [target], text: 'проснись' });
+    });
+
+    await waitFor(() => notices('resume-failed').length > 0, 8000);
+    const map = await readMap(project, workId);
+    const systemLetters = map.messages.filter((m) => m.from === SYSTEM);
+    expect(systemLetters).toHaveLength(1);
+    expect(systemLetters[0]?.to).toEqual([sender]);
+    expect(systemLetters[0]?.text).toMatch(/^S01 не поднялась: /);
+
+    // Выход процесса дописывает карту следом (выход или сверка живости — кто
+    // первый) — дождаться, чтобы уборка теста не гонялась с этой записью.
+    for (;;) {
+      const session = (await readMap(project, workId)).sessions.find((s) => s.id === target);
+      if (session?.lifecycle === 'sleeping') break;
+      await settle(20);
+    }
+    await settle(100);
+  }, 20_000);
+
+  it('7: closed не поднимается ни письмом, ни resumeInterrupted', async () => {
+    const { workId, target } = await sleepingPair();
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    const { sessions } = await resumeRig();
+    const ref = { projectPath: project, workId, sessionId: target };
+
+    await sessions.close(ref);
+    expect((await readMap(project, workId)).sessions.find((s) => s.id === target)?.lifecycle).toBe('closed');
+
+    await sendLetter(workId, target);
+    await settle(400);
+    await sessions.resumeInterrupted([ref]);
+    await expect(sessions.launch(ref, 'resume')).rejects.toThrow(/закрыта/);
+    await settle(200);
+
+    expect(sessions.live(ref)).toBe(false);
+    expect(existsSync(argsFile)).toBe(false);
+    expect((await readMap(project, workId)).sessions.find((s) => s.id === target)?.lifecycle).toBe('closed');
+  }, 20_000);
 });

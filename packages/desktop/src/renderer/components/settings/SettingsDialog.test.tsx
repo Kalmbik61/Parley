@@ -11,6 +11,7 @@ const CONFIG = {
   silenceThresholdMs: 30_000,
   channelPush: true,
   messageRate: 20,
+  resumeRate: 6,
   autoLaunch: true,
   theme: 'mocha',
   fontFamily: 'Menlo',

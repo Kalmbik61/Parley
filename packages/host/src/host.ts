@@ -131,10 +131,17 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   );
   handle.context.onShutdown(() => sessionsService.stopAll());
 
-  // Будильник живых сессий (1.8): печатает указатель на непрочитанные письма
-  // простаивающему агенту без канала. Останавливается вместе с хостом — иначе
-  // его таймеры Enter/предохранителя пережили бы закрытые PTY.
-  const wakeService = createWakeService(handle.context, worksService, activityService, ptyManager);
+  // Будильник (1.8, 3.4): печатает указатель на непрочитанные письма
+  // простаивающему агенту без канала и поднимает спящих письмом. Останавливается
+  // вместе с хостом — иначе его таймеры Enter/предохранителя пережили бы
+  // закрытые PTY.
+  const wakeService = createWakeService(
+    handle.context,
+    worksService,
+    activityService,
+    ptyManager,
+    sessionsService,
+  );
   handle.context.onShutdown(async () => wakeService.stop());
 
   const handlers = createHostHandlers({
@@ -169,6 +176,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   idleWatcher.notify(true);
 
   await worksService.start();
+  // Сверка живости уже прошла на первом чтении работ: те, чей журнал оборван
+  // посреди хода, прерваны падением прошлого хоста (спека 10).
+  await sessionsService.collectInterrupted().catch((error: unknown) => {
+    log.error('список прерванных сессий не собрался', { error: String(error) });
+  });
   await activityService.start();
   wakeService.start();
 

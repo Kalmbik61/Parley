@@ -31,7 +31,9 @@ export type NoticeKind =
   | 'hooks-missing'
   | 'launch-failed'
   | 'pointer-timeout'
-  | 'pointer-cancelled';
+  | 'pointer-cancelled'
+  | 'resume-failed'
+  | 'resume-limit';
 
 export interface HostNotice {
   kind: NoticeKind;

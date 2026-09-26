@@ -1,8 +1,9 @@
 /**
- * Правила будильника живых сессий (план, кусок 1.8): печатать ли в терминал
+ * Правила будильника (план, куски 1.8 и 3.4): печатать ли в терминал
  * простаивающего агента текст-указатель на непрочитанные письма и каким его
- * текстом. Функция чистая — PTY, таймеры и подписки на события живут в
- * `host/wake/wake-service.ts`, здесь только решение по снимку состояния.
+ * текстом, а спящую — поднимать ли письмом. Функция чистая — PTY, таймеры,
+ * лимит подъёмов и подписки на события живут в `host/wake/`, здесь только
+ * решение по снимку состояния.
  */
 
 import type { Message, WorkSession } from './types.js';
@@ -18,14 +19,26 @@ export interface DeliveryInput {
   /** Id писем, на которые указатель уже печатали — второй раз не набираем. */
   pointed: ReadonlySet<string>;
   inFlight: boolean;
+  /** Лимит подъёмов (`resumeRate`) ещё позволяет поднять спящую сессию. */
+  resumeAllowed: boolean;
 }
 
 export type DeliveryAction =
   | {
       kind: 'none';
-      reason: 'paused' | 'no-letters' | 'already-pointed' | 'not-live' | 'busy' | 'draft' | 'in-flight';
+      reason:
+        | 'paused'
+        | 'closed'
+        | 'no-letters'
+        | 'already-pointed'
+        | 'resume-limit'
+        | 'not-live'
+        | 'busy'
+        | 'draft'
+        | 'in-flight';
     }
-  | { kind: 'type-pointer'; text: string; letterIds: string[] };
+  | { kind: 'type-pointer'; text: string; letterIds: string[] }
+  | { kind: 'resume'; text: string; letterIds: string[] };
 
 /** 'Новые письма (N). Вызови check_inbox.' — этап 3 добавит комнаты. */
 export function pointerText(count: number): string {
@@ -33,13 +46,15 @@ export function pointerText(count: number): string {
 }
 
 /**
- * Правила по порядку, первое сработавшее решает (план, кусок 1.8). Письма к
- * уже удалённой сессии (`deleted`) в счёт не идут — сама доставка их не читает.
+ * Правила по порядку, первое сработавшее решает (план, куски 1.8 и 3.4). Письма
+ * к уже удалённой сессии (`deleted`) в счёт не идут — сама доставка их не читает.
  */
 export function deliveryAction(input: DeliveryInput): DeliveryAction {
-  const { session, activity, hasDraft, paused, unread, pointed, inFlight } = input;
+  const { session, activity, hasDraft, paused, unread, pointed, inFlight, resumeAllowed } = input;
 
   if (paused) return { kind: 'none', reason: 'paused' };
+  // Закрытая писем не получает вовсе (спецификация 7.1) — сколько бы их ни было.
+  if (session.lifecycle === 'closed') return { kind: 'none', reason: 'closed' };
 
   const letters = unread.filter((message) => message.deleted !== true);
   if (letters.length === 0) return { kind: 'none', reason: 'no-letters' };
@@ -47,6 +62,16 @@ export function deliveryAction(input: DeliveryInput): DeliveryAction {
     return { kind: 'none', reason: 'already-pointed' };
   }
 
+  // Спящую письмо поднимает (спецификация 7.2), но не чаще `resumeRate` в час:
+  // сверх лимита письма ждут, а не жгут подписку за ночь (7.4).
+  if (session.lifecycle === 'sleeping') {
+    if (!resumeAllowed) return { kind: 'none', reason: 'resume-limit' };
+    return {
+      kind: 'resume',
+      text: pointerText(letters.length),
+      letterIds: letters.map((message) => message.id),
+    };
+  }
   if (session.lifecycle !== 'active') return { kind: 'none', reason: 'not-live' };
   if (activity === null || (activity.activity !== 'unseen' && activity.activity !== 'idle')) {
     return { kind: 'none', reason: 'busy' };

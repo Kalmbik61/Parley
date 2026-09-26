@@ -70,6 +70,7 @@ describe('deliveryAction', () => {
     unread: [messageOf()],
     pointed: new Set<string>(),
     inFlight: false,
+    resumeAllowed: true,
   };
 
   it('1. пауза — none(paused), даже если остальные условия тоже нарушены', () => {
@@ -102,13 +103,43 @@ describe('deliveryAction', () => {
     });
   });
 
-  it('3. сессия не active — none(not-live)', () => {
-    for (const lifecycle of ['pending', 'sleeping', 'closed'] as const) {
-      expect(deliveryAction({ ...base, session: sessionOf({ lifecycle }) })).toEqual({
-        kind: 'none',
-        reason: 'not-live',
-      });
-    }
+  it('3. pending — none(not-live): её поднимает autoLaunch, а не письмо', () => {
+    expect(deliveryAction({ ...base, session: sessionOf({ lifecycle: 'pending' }) })).toEqual({
+      kind: 'none',
+      reason: 'not-live',
+    });
+  });
+
+  it('3.4-1. closed — none(closed); sleeping поднимается письмом, сверх лимита — none(resume-limit)', () => {
+    expect(deliveryAction({ ...base, session: sessionOf({ lifecycle: 'closed' }) })).toEqual({
+      kind: 'none',
+      reason: 'closed',
+    });
+    // Закрытую не поднимает и лимит: отказ раньше него.
+    expect(
+      deliveryAction({ ...base, session: sessionOf({ lifecycle: 'closed' }), resumeAllowed: false }),
+    ).toEqual({ kind: 'none', reason: 'closed' });
+
+    const sleeping = sessionOf({ lifecycle: 'sleeping' });
+    const a = messageOf({ id: 'm-01' });
+    const b = messageOf({ id: 'm-02' });
+    expect(deliveryAction({ ...base, session: sleeping, unread: [a, b], activity: null })).toEqual({
+      kind: 'resume',
+      text: 'Новые письма (2). Вызови check_inbox.',
+      letterIds: ['m-01', 'm-02'],
+    });
+    expect(deliveryAction({ ...base, session: sleeping, resumeAllowed: false })).toEqual({
+      kind: 'none',
+      reason: 'resume-limit',
+    });
+    // Пауза держит и подъём; уже указанные письма второй раз не поднимают.
+    expect(deliveryAction({ ...base, session: sleeping, paused: true })).toEqual({
+      kind: 'none',
+      reason: 'paused',
+    });
+    expect(
+      deliveryAction({ ...base, session: sleeping, unread: [a], pointed: new Set(['m-01']) }),
+    ).toEqual({ kind: 'none', reason: 'already-pointed' });
   });
 
   it('4а. активности не известно — none(busy)', () => {

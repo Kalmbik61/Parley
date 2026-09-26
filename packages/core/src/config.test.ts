@@ -32,6 +32,7 @@ describe('loadConfig', () => {
       silenceThresholdMs: 30_000,
       channelPush: true,
       messageRate: 20,
+      resumeRate: 6,
       autoLaunch: true,
       theme: 'mocha',
       fontFamily: 'Menlo',
@@ -62,6 +63,7 @@ describe('loadConfig', () => {
       silenceThresholdMs: 5000,
       channelPush: false,
       messageRate: 5,
+      resumeRate: 6,
       autoLaunch: false,
       theme: 'mocha',
       fontFamily: 'Menlo',
@@ -87,6 +89,7 @@ describe('loadConfig', () => {
       silenceThresholdMs: 60_000,
       channelPush: true,
       messageRate: 7,
+      resumeRate: 6,
       autoLaunch: true,
       theme: 'mocha',
       fontFamily: 'Menlo',
@@ -302,6 +305,23 @@ describe('parseSetting', () => {
 
   it('messageRate — теми же правилами, что и у файла', () => {
     expect(parseSetting('messageRate', '7')).toEqual({ value: 7 });
+  });
+
+  it('resumeRate — целое от 0 до 60 и в файле, и в окружении, и в parseSetting', async () => {
+    expect(parseSetting('resumeRate', '0')).toEqual({ value: 0 });
+    expect(parseSetting('resumeRate', '60')).toEqual({ value: 60 });
+    expect(parseSetting('resumeRate', '-1')).toMatchObject({ error: expect.any(String) });
+    expect(parseSetting('resumeRate', '61')).toMatchObject({ error: expect.any(String) });
+    expect(parseSetting('resumeRate', '2.5')).toMatchObject({ error: expect.any(String) });
+
+    await write({ resumeRate: 61 });
+    const fromFile = await loadConfig(file(), {});
+    expect(fromFile.config.resumeRate).toBe(6);
+    expect(fromFile.warning).toContain('resumeRate');
+
+    const fromEnv = await loadConfig(file(), { HARNAS_RESUME_RATE: '0' });
+    expect(fromEnv.config.resumeRate).toBe(0);
+    expect(fromEnv.fromEnv).toContain('resumeRate');
   });
 
   it('булевы ключи — те же множества да/нет, что у окружения', () => {

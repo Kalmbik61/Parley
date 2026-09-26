@@ -28,6 +28,9 @@ export const METHODS = {
   'sessions.resume': z.object({ ref: sessionRef }),
   'sessions.stop': z.object({ ref: sessionRef }),
   'sessions.delete': z.object({ ref: sessionRef }),
+  'sessions.close': z.object({ ref: sessionRef }),
+  'sessions.interrupted': z.object({}),
+  'sessions.resumeInterrupted': z.object({ refs: z.array(sessionRef) }),
   'pty.attach': z.object({ ref: sessionRef }),
   'pty.detach': z.object({ ref: sessionRef }),
   'wake.pause': z.object({}),
@@ -55,6 +58,9 @@ export interface Results {
   'sessions.resume': { ok: true };
   'sessions.stop': { ok: true };
   'sessions.delete': { ok: true };
+  'sessions.close': { ok: true };
+  'sessions.interrupted': { refs: SessionRef[] };
+  'sessions.resumeInterrupted': { ok: true };
   'pty.attach': { snapshot: string; cols: number; rows: number };
   'pty.detach': { ok: true };
   'wake.pause': { paused: boolean };

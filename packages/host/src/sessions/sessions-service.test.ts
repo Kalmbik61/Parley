@@ -4,7 +4,16 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { addSession, createWork, NEW_LABEL, readMap, saveConfig, updateMap, workPaths } from '@harnas/core';
+import {
+  addSession,
+  createWork,
+  NEW_LABEL,
+  readMap,
+  saveConfig,
+  transitionSession,
+  updateMap,
+  workPaths,
+} from '@harnas/core';
 import type { WorkEntry } from '@harnas/core';
 import type { EventData, EventName, SessionRef } from '@harnas/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -466,5 +475,41 @@ describe('stopAll()', () => {
     const mapB = await readMap(project, workB.work.id);
     expect(mapA.sessions.find((s) => s.id === refA.sessionId)?.lifecycle).toBe('sleeping');
     expect(mapB.sessions.find((s) => s.id === refB.sessionId)?.lifecycle).toBe('sleeping');
+  });
+});
+
+describe('закрытие по карте', () => {
+  it('8: close_session в карте при живом PTY — процесс получил SIGHUP, карта остаётся closed', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const works = service({ debounceMs: 20 });
+    const pty = createPtyManager(fakeHost());
+    const sessions = createSessionsService(fakeHost(), works, pty, fakeActivity());
+    await works.start();
+
+    const ref = await sessions.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'a',
+      task: 'т',
+      parent: null,
+    });
+    expect(sessions.live(ref)).toBe(true);
+
+    // Так карту меняет `close_session` агента: прямо в файле, мимо хоста.
+    await updateMap(project, work.work.id, (map) => {
+      transitionSession(map, ref.sessionId, 'closed');
+    });
+
+    await waitFor(() => broadcasts.some((b) => b.event === 'pty.exit'));
+    const exit = broadcasts.find((b) => b.event === 'pty.exit')?.data as { ref: SessionRef; signal: number | null };
+    expect(exit.ref).toEqual(ref);
+    // SIGHUP — 1: хост гасит процесс той же дорогой, что и «Остановить».
+    expect(exit.signal).toBe(1);
+    expect(sessions.live(ref)).toBe(false);
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const map = await readMap(project, work.work.id);
+    expect(map.sessions.find((s) => s.id === ref.sessionId)?.lifecycle).toBe('closed');
   });
 });

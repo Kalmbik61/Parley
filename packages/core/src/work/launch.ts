@@ -41,6 +41,13 @@ export interface LaunchOptions {
    * конфиге MCP. Панель берёт значение из настроек и пробы версии (4.4).
    */
   channel?: boolean;
+  /**
+   * Первый ход возобновлённой сессии — указатель на письма, которыми хост
+   * поднимает спящую (спецификация окна 7.2). Только в `resume` и только если в
+   * `resumeArgs` провайдера есть `{prompt}`: иначе подстановка выпадает, и хост
+   * печатает указатель сам после первого простоя.
+   */
+  prompt?: string;
 }
 
 /** Чем и как поднимать процесс сессии в правой панели. */
@@ -185,6 +192,7 @@ async function plan(
 
   if (resuming) {
     subs.providerSessionId = session.providerSessionId as string;
+    if (options.prompt !== undefined && template.includes('{prompt}')) subs.prompt = options.prompt;
   } else {
     // Быстрая сессия стартует без промпта: карту и правила агент получает
     // через MCP, бриф ей не пишется (5.1). Тихая — тоже: её бриф уже уехал

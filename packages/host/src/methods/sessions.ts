@@ -1,6 +1,6 @@
 /**
- * Методы `sessions.*`: создание, возобновление, остановка и удаление сессий
- * (план, кусок 1.7). Сам запуск и правила создания живут в `SessionsService` —
+ * Методы `sessions.*`: создание, возобновление, остановка, закрытие и удаление
+ * сессий, прерванные падением хоста (план, куски 1.7 и 3.4). Сам запуск и правила создания живут в `SessionsService` —
  * здесь только разбор параметров протокола и форма ответа.
  */
 
@@ -16,6 +16,9 @@ export interface SessionHandlers {
   sessionsResume: Handler<'sessions.resume'>;
   sessionsStop: Handler<'sessions.stop'>;
   sessionsDelete: Handler<'sessions.delete'>;
+  sessionsClose: Handler<'sessions.close'>;
+  sessionsInterrupted: Handler<'sessions.interrupted'>;
+  sessionsResumeInterrupted: Handler<'sessions.resumeInterrupted'>;
 }
 
 export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers {
@@ -37,6 +40,18 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
 
     sessionsDelete: async (params) => {
       await deps.sessions.delete(params.ref);
+      return { ok: true };
+    },
+
+    sessionsClose: async (params) => {
+      await deps.sessions.close(params.ref);
+      return { ok: true };
+    },
+
+    sessionsInterrupted: async () => ({ refs: deps.sessions.interrupted() }),
+
+    sessionsResumeInterrupted: async (params) => {
+      await deps.sessions.resumeInterrupted(params.refs);
       return { ok: true };
     },
   };
