@@ -5,14 +5,25 @@
  * `emit*` имитирует события и статус, пришедшие от хоста.
  */
 
-import type { EventData, EventName, MethodName, NotificationName, Params, Result } from '@harnas/protocol';
+import type {
+  EventData,
+  EventName,
+  MethodName,
+  NotificationName,
+  Params,
+  Result,
+} from '@harnas/protocol';
 import type { HarnasBridge, HostStatus, MenuAction } from '../../shared/bridge.js';
+import { DEFAULT_UI, normalizeUi, type UiFile } from '../../shared/ui-types.js';
 
 type Handler = (params: never) => unknown;
 
 export interface FakeBridge extends HarnasBridge {
   /** Обработчик `call` для конкретного метода; без него `call` отклоняется. */
-  setHandler<M extends MethodName>(method: M, handler: (params: Params<M>) => Result<M> | Promise<Result<M>>): void;
+  setHandler<M extends MethodName>(
+    method: M,
+    handler: (params: Params<M>) => Result<M> | Promise<Result<M>>,
+  ): void;
   /** Уведомления, отправленные наружу (`notify`), — для проверки, что дошло. */
   readonly notified: Array<{ method: NotificationName; params: unknown }>;
   /** Вызовы `call` — для проверки, что и с какими параметрами позвали. */
@@ -24,6 +35,8 @@ export interface FakeBridge extends HarnasBridge {
   readonly badges: number[];
   /** Вызовы `app.saveLayout` — для теста тишины 500 мс (кусок 2.2). */
   readonly layoutSaves: Array<{ workKey: string; layout: unknown }>;
+  /** Системная тёмность, будто бы её сообщил `nativeTheme.on('updated')` (кусок 1.1). */
+  emitAppearance(dark: boolean): void;
 }
 
 export function createFakeBridge(): FakeBridge {
@@ -31,6 +44,7 @@ export function createFakeBridge(): FakeBridge {
   const eventListeners = new Map<EventName, Set<(data: unknown) => void>>();
   const statusListeners = new Set<(status: HostStatus) => void>();
   const menuListeners = new Set<(action: MenuAction) => void>();
+  const appearanceListeners = new Set<(dark: boolean) => void>();
   const notified: Array<{ method: NotificationName; params: unknown }> = [];
   const calls: Array<{ method: MethodName; params: unknown }> = [];
   const appNotified: Array<{ title: string; body: string }> = [];
@@ -38,6 +52,7 @@ export function createFakeBridge(): FakeBridge {
   const layoutSaves: Array<{ workKey: string; layout: unknown }> = [];
   const layouts = new Map<string, unknown>();
   let status: HostStatus = { state: 'connected', hostVersion: '0.0.0-test' };
+  let ui: UiFile = DEFAULT_UI;
 
   const bridge: FakeBridge = {
     setHandler: (method, handler) => {
@@ -87,6 +102,18 @@ export function createFakeBridge(): FakeBridge {
         layouts.set(workKey, layout);
         layoutSaves.push({ workKey, layout });
       },
+      loadUi: async () => ui,
+      saveUi: async (patch) => {
+        ui = normalizeUi({ ...ui, ...patch });
+        return ui;
+      },
+      setAppearance: async (mode) => {
+        ui = { ...ui, appearance: mode };
+      },
+      onAppearance: (listener) => {
+        appearanceListeners.add(listener);
+        return () => appearanceListeners.delete(listener);
+      },
       onMenu: (listener) => {
         menuListeners.add(listener);
         return () => menuListeners.delete(listener);
@@ -102,6 +129,9 @@ export function createFakeBridge(): FakeBridge {
     },
     emitMenu: (action) => {
       for (const listener of menuListeners) listener(action);
+    },
+    emitAppearance: (dark) => {
+      for (const listener of appearanceListeners) listener(dark);
     },
   };
 

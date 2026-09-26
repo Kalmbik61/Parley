@@ -1,12 +1,5 @@
 @import 'tailwindcss';
-
-html,
-body,
-#root {
-  height: 100%;
-}
-
-body {
-  margin: 0;
-  background-color: #171717;
-}
+@import 'tw-animate-css';
+@import './styles/tokens.css';
+@import './styles/base.css';
+@import './styles/scrollbars.css';

@@ -1,10 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@harnas/protocol';
 import type { HarnasBridge, HostStatus, MenuAction } from '../shared/bridge.js';
+import type { Appearance, UiFile } from '../shared/ui-types.js';
 
 const eventListeners = new Map<EventName, Set<(data: unknown) => void>>();
 const statusListeners = new Set<(status: HostStatus) => void>();
 const menuListeners = new Set<(action: MenuAction) => void>();
+const appearanceListeners = new Set<(dark: boolean) => void>();
 
 ipcRenderer.on('host:event', (_event, message: EventMessage) => {
   const listeners = eventListeners.get(message.event);
@@ -18,6 +20,10 @@ ipcRenderer.on('host:status', (_event, status: HostStatus) => {
 
 ipcRenderer.on('menu:action', (_event, action: MenuAction) => {
   for (const listener of menuListeners) listener(action);
+});
+
+ipcRenderer.on('app:appearance', (_event, dark: boolean) => {
+  for (const listener of appearanceListeners) listener(dark);
 });
 
 /**
@@ -57,9 +63,19 @@ const bridge = {
     },
     chooseFolder: () => ipcRenderer.invoke('app:choose-folder') as Promise<string | null>,
     restartHost: () => ipcRenderer.invoke('app:restart-host') as Promise<void>,
-    loadLayout: (workKey: string) => ipcRenderer.invoke('app:load-layout', workKey) as Promise<unknown | null>,
+    loadLayout: (workKey: string) =>
+      ipcRenderer.invoke('app:load-layout', workKey) as Promise<unknown | null>,
     saveLayout: (workKey: string, layout: unknown) =>
       ipcRenderer.invoke('app:save-layout', workKey, layout) as Promise<void>,
+    loadUi: () => ipcRenderer.invoke('app:load-ui') as Promise<UiFile>,
+    saveUi: (patch: Partial<Omit<UiFile, 'version'>>) =>
+      ipcRenderer.invoke('app:save-ui', patch) as Promise<UiFile>,
+    setAppearance: (mode: Appearance) =>
+      ipcRenderer.invoke('app:set-appearance', mode) as Promise<void>,
+    onAppearance: (listener: (dark: boolean) => void) => {
+      appearanceListeners.add(listener);
+      return () => appearanceListeners.delete(listener);
+    },
     onMenu: (listener: (action: MenuAction) => void) => {
       menuListeners.add(listener);
       return () => menuListeners.delete(listener);

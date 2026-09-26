@@ -1,0 +1,346 @@
+/*
+ * Токены темы — дословная копия блоков `@theme inline`, `:root` и `.dark` из
+ * Orca (https://github.com/Kalmbik61/orca-harnas, коммит acf8e679),
+ * src/renderer/src/assets/main.css (спека 4.1). Переименовано:
+ * `--worktree-sidebar*` → `--work-sidebar*` (у нас сайдбар работ, не worktree),
+ * `--tab-group-split-divider*` → `--split-divider*`.
+ * Copyright (c) 2026 Lovecast Inc. Лицензия MIT — полный текст в NOTICE в
+ * корне репозитория.
+ */
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-editor-surface: var(--editor-surface);
+  --color-agent-question: var(--agent-question);
+  --color-agent-question-text: var(--agent-question-text);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-work-sidebar: var(--work-sidebar);
+  --color-work-sidebar-foreground: var(--work-sidebar-foreground);
+  --color-work-sidebar-accent: var(--work-sidebar-accent);
+  --color-work-sidebar-accent-foreground: var(--work-sidebar-accent-foreground);
+  --color-work-sidebar-border: var(--work-sidebar-border);
+  --color-work-sidebar-ring: var(--work-sidebar-ring);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-terminal-pane-title-on-dark-fg: var(--terminal-pane-title-on-dark-fg);
+  --color-terminal-pane-title-on-dark-input-fg: var(--terminal-pane-title-on-dark-input-fg);
+  --color-terminal-pane-title-on-dark-placeholder: var(--terminal-pane-title-on-dark-placeholder);
+  --color-terminal-pane-title-on-dark-button-fg: var(--terminal-pane-title-on-dark-button-fg);
+  --color-terminal-pane-title-on-dark-button-hover-fg: var(
+    --terminal-pane-title-on-dark-button-hover-fg
+  );
+  --color-terminal-pane-title-on-dark-input-bg: var(--terminal-pane-title-on-dark-input-bg);
+  --color-terminal-pane-title-on-dark-separator: var(--terminal-pane-title-on-dark-separator);
+  --color-terminal-pane-title-on-light-fg: var(--terminal-pane-title-on-light-fg);
+  --color-terminal-pane-title-on-light-input-fg: var(--terminal-pane-title-on-light-input-fg);
+  --color-terminal-pane-title-on-light-placeholder: var(--terminal-pane-title-on-light-placeholder);
+  --color-terminal-pane-title-on-light-button-fg: var(--terminal-pane-title-on-light-button-fg);
+  --color-terminal-pane-title-on-light-button-hover-fg: var(
+    --terminal-pane-title-on-light-button-hover-fg
+  );
+  --color-terminal-pane-title-on-light-input-bg: var(--terminal-pane-title-on-light-input-bg);
+  --color-terminal-pane-title-on-light-separator: var(--terminal-pane-title-on-light-separator);
+  --color-ai-action-accent: var(--ai-action-accent);
+  --color-status-success: var(--status-success);
+  --color-status-success-background: var(--status-success-background);
+  --color-status-success-border: var(--status-success-border);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-background: var(--status-warning-background);
+  --color-status-warning-border: var(--status-warning-border);
+  --color-workspace-status-done: var(--workspace-status-done);
+  --color-workspace-status-review: var(--workspace-status-review);
+  --color-workspace-status-progress: var(--workspace-status-progress);
+  --color-split-divider: var(--split-divider);
+  --color-split-divider-strong: var(--split-divider-strong);
+  --color-git-graph-ref: var(--git-graph-ref);
+  --color-git-graph-remote-ref: var(--git-graph-remote-ref);
+  --color-git-graph-base-ref: var(--git-graph-base-ref);
+  --color-git-graph-lane-1: var(--git-graph-lane-1);
+  --color-git-graph-lane-2: var(--git-graph-lane-2);
+  --color-git-graph-lane-3: var(--git-graph-lane-3);
+  --color-git-graph-lane-4: var(--git-graph-lane-4);
+  --color-git-graph-lane-5: var(--git-graph-lane-5);
+  --color-annotation-highlight: var(--annotation-highlight);
+  --shadow-floating: 0 10px 24px rgb(0 0 0 / 0.18);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* ── Light Mode ──────────────────────────────────────── */
+
+:root {
+  --app-font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-sans: var(--app-font-family);
+  --font-mono:
+    'SF Mono', SFMono-Regular, ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Liberation Mono',
+    monospace;
+  --radius: 0.625rem;
+  --orca-security-background: #fff;
+  --orca-security-foreground: #0a0a0a;
+  --orca-security-card: #fff;
+  --orca-security-card-foreground: #0a0a0a;
+  --orca-security-popover: #fff;
+  --orca-security-popover-foreground: #0a0a0a;
+  --orca-security-primary: #171717;
+  --orca-security-primary-foreground: #fafafa;
+  --orca-security-secondary: #f5f5f5;
+  --orca-security-secondary-foreground: #171717;
+  --orca-security-muted: #f5f5f5;
+  --orca-security-muted-foreground: #737373;
+  --orca-security-accent: #f5f5f5;
+  --orca-security-accent-foreground: #171717;
+  --orca-security-border: #e5e5e5;
+  --orca-security-input: #e5e5e5;
+  --orca-security-ring: #a1a1a1;
+  --background: #fff;
+  --editor-surface: #ffffff;
+  --foreground: #0a0a0a;
+  --card: #fff;
+  --card-foreground: #0a0a0a;
+  --popover: #fff;
+  --popover-foreground: #0a0a0a;
+  --primary: #171717;
+  --primary-foreground: #fafafa;
+  --secondary: #f5f5f5;
+  --secondary-foreground: #171717;
+  --muted: #f5f5f5;
+  --muted-foreground: #737373;
+  --accent: #f5f5f5;
+  --accent-foreground: #171717;
+  --destructive: #e40014;
+  --destructive-foreground: #fcf3f3;
+  --border: #e5e5e5;
+  --input: #e5e5e5;
+  --ring: #a1a1a1;
+  --terminal-pane-locate: var(--color-blue-600);
+  --ai-action-accent: var(--color-violet-500);
+  /* "An agent is asking you something" — one hue for every surface that shows
+     it (sidebar, tabs, dashboard, kanban). Orange, not amber: it has to stay
+     separable from working-yellow at a glance. */
+  --agent-question: var(--color-orange-600);
+  /* Legible weight for text/glyphs on a tinted --agent-question surface. */
+  --agent-question-text: var(--color-orange-700);
+  --status-success: #15803d;
+  --status-success-background: color-mix(in srgb, var(--status-success) 10%, transparent);
+  --status-success-border: color-mix(in srgb, var(--status-success) 25%, transparent);
+  /* Needs-attention state that is not an error: a resume that did not carry on, an update that
+     failed. Yellow, so it stays apart from destructive red and from the orange working state. */
+  --status-warning: #ca8a04;
+  --status-warning-background: color-mix(in srgb, var(--status-warning) 10%, transparent);
+  --status-warning-border: color-mix(in srgb, var(--status-warning) 25%, transparent);
+  /* Workspace PR-state tones: same hue in both themes so a status keeps its
+     identity when the theme flips. */
+  --workspace-status-done: #c7a594;
+  --workspace-status-review: #16a34a;
+  --workspace-status-progress: #d4a300;
+  --chart-1: var(--color-blue-300);
+  --chart-2: var(--color-blue-500);
+  --chart-3: var(--color-blue-600);
+  --chart-4: var(--color-blue-700);
+  --chart-5: var(--color-blue-800);
+  --work-sidebar: #f5f5f5;
+  --work-sidebar-foreground: #0a0a0a;
+  --work-sidebar-accent: #eaeaea;
+  --work-sidebar-accent-foreground: #171717;
+  --work-sidebar-border: #e5e5e5;
+  --work-sidebar-ring: #a1a1a1;
+  --sidebar: #fafafa;
+  --sidebar-foreground: #0a0a0a;
+  --sidebar-primary: #171717;
+  --sidebar-primary-foreground: #fafafa;
+  --sidebar-accent: #f5f5f5;
+  --sidebar-accent-foreground: #171717;
+  --sidebar-border: #e5e5e5;
+  --sidebar-ring: #a1a1a1;
+  --terminal-pane-title-on-dark-fg: rgb(255 255 255 / 0.52);
+  --terminal-pane-title-on-dark-input-fg: rgb(255 255 255 / 0.7);
+  --terminal-pane-title-on-dark-placeholder: rgb(255 255 255 / 0.38);
+  --terminal-pane-title-on-dark-button-fg: rgb(255 255 255);
+  --terminal-pane-title-on-dark-button-hover-fg: rgb(255 255 255);
+  --terminal-pane-title-on-dark-input-bg: rgb(255 255 255 / 0.04);
+  --terminal-pane-title-on-dark-separator: rgb(255 255 255 / 0.06);
+  --terminal-pane-title-on-light-fg: rgb(24 24 27 / 0.64);
+  --terminal-pane-title-on-light-input-fg: rgb(24 24 27 / 0.82);
+  --terminal-pane-title-on-light-placeholder: rgb(24 24 27 / 0.48);
+  --terminal-pane-title-on-light-button-fg: rgb(24 24 27);
+  --terminal-pane-title-on-light-button-hover-fg: rgb(24 24 27);
+  --terminal-pane-title-on-light-input-bg: rgb(24 24 27 / 0.05);
+  --terminal-pane-title-on-light-separator: rgb(24 24 27 / 0.1);
+  --git-decoration-added: #587c0c;
+  --git-decoration-modified: #895503;
+  --git-decoration-deleted: #ad0707;
+  --git-decoration-renamed: #007acc;
+  --git-decoration-untracked: #007100;
+  --git-decoration-copied: #007acc;
+  --git-decoration-ignored: #8c8c8c;
+  --diff-added-ground: color-mix(in srgb, var(--git-decoration-added) 13%, transparent);
+  --diff-added-gutter: color-mix(in srgb, var(--git-decoration-added) 26%, transparent);
+  --diff-removed-ground: color-mix(in srgb, var(--git-decoration-deleted) 11%, transparent);
+  --diff-removed-gutter: color-mix(in srgb, var(--git-decoration-deleted) 22%, transparent);
+  --git-graph-ref: #007acc;
+  --git-graph-remote-ref: #b66dff;
+  --git-graph-base-ref: #ea5c00;
+  --git-graph-lane-1: #ffb000;
+  --git-graph-lane-2: #dc267f;
+  --git-graph-lane-3: #994f00;
+  --git-graph-lane-4: #40b0a6;
+  --git-graph-lane-5: #b66dff;
+  --annotation-highlight: #f59e0b;
+  --markdown-search-match: #facc15;
+  --markdown-search-match-active: #fb923c;
+  /* Why: tab-group splits use a dedicated divider — `--border` is too faint on
+     card/editor surfaces when panes are side-by-side or stacked. Default must
+     meet >=3:1 against `--card`, not only the hover/drag strong state. */
+  --split-divider: #868690;
+  --split-divider-strong: #71717a;
+}
+
+/* ── Dark Mode ───────────────────────────────────────── */
+
+.dark {
+  --orca-security-background: #0a0a0a;
+  --orca-security-foreground: #fafafa;
+  --orca-security-card: #171717;
+  --orca-security-card-foreground: #fafafa;
+  --orca-security-popover: #171717;
+  --orca-security-popover-foreground: #fafafa;
+  --orca-security-primary: #e5e5e5;
+  --orca-security-primary-foreground: #171717;
+  --orca-security-secondary: #262626;
+  --orca-security-secondary-foreground: #fafafa;
+  --orca-security-muted: #262626;
+  --orca-security-muted-foreground: #a1a1a1;
+  --orca-security-accent: #404040;
+  --orca-security-accent-foreground: #fafafa;
+  --orca-security-border: rgb(255 255 255 / 0.07);
+  --orca-security-input: rgb(255 255 255 / 0.15);
+  --orca-security-ring: #737373;
+  --background: #0a0a0a;
+  --editor-surface: #1e1e1e;
+  --foreground: #fafafa;
+  --card: #171717;
+  --card-foreground: #fafafa;
+  --popover: #171717;
+  --popover-foreground: #fafafa;
+  --primary: #e5e5e5;
+  --primary-foreground: #171717;
+  --secondary: #262626;
+  --secondary-foreground: #fafafa;
+  --muted: #262626;
+  --muted-foreground: #a1a1a1;
+  --accent: #404040;
+  --accent-foreground: #fafafa;
+  --destructive: #ff6568;
+  --destructive-foreground: #df2225;
+  --border: rgb(255 255 255 / 0.07);
+  --input: rgb(255 255 255 / 0.15);
+  --ring: #737373;
+  --terminal-pane-locate: var(--color-blue-400);
+  --ai-action-accent: var(--color-violet-400);
+  --agent-question: var(--color-orange-500);
+  --agent-question-text: var(--color-orange-300);
+  --status-success: #86efac;
+  --status-success-background: color-mix(in srgb, var(--status-success) 10%, transparent);
+  --status-success-border: color-mix(in srgb, var(--status-success) 25%, transparent);
+  --status-warning: #eab308;
+  --status-warning-background: color-mix(in srgb, var(--status-warning) 10%, transparent);
+  --status-warning-border: color-mix(in srgb, var(--status-warning) 25%, transparent);
+  --workspace-status-done: #c7a594;
+  --workspace-status-review: #16a34a;
+  --workspace-status-progress: #d4a300;
+  --chart-1: var(--color-blue-300);
+  --chart-2: var(--color-blue-500);
+  --chart-3: var(--color-blue-600);
+  --chart-4: var(--color-blue-700);
+  --chart-5: var(--color-blue-800);
+  /* Why: light mode sets work-sidebar to secondary (#f5f5f5); mirror that
+     lift in dark mode so the panel reads clearly above #0a0a0a canvas. */
+  --work-sidebar: #2a2a2a;
+  --work-sidebar-foreground: #fafafa;
+  --work-sidebar-accent: #353535;
+  --work-sidebar-accent-foreground: #fafafa;
+  /* Match --border / --sidebar-border (7%) so the left sidebar's divider lines
+     aren't brighter than the rest of the UI in dark mode (#5906). */
+  --work-sidebar-border: rgb(255 255 255 / 0.07);
+  --work-sidebar-ring: #737373;
+  --sidebar: #171717;
+  --sidebar-foreground: #fafafa;
+  --sidebar-primary: #1447e6;
+  --sidebar-primary-foreground: #fafafa;
+  --sidebar-accent: #262626;
+  --sidebar-accent-foreground: #fafafa;
+  --sidebar-border: rgb(255 255 255 / 0.07);
+  --sidebar-ring: #525252;
+  --terminal-pane-title-on-dark-fg: rgb(255 255 255 / 0.52);
+  --terminal-pane-title-on-dark-input-fg: rgb(255 255 255 / 0.7);
+  --terminal-pane-title-on-dark-placeholder: rgb(255 255 255 / 0.38);
+  --terminal-pane-title-on-dark-button-fg: rgb(255 255 255);
+  --terminal-pane-title-on-dark-button-hover-fg: rgb(255 255 255);
+  --terminal-pane-title-on-dark-input-bg: rgb(255 255 255 / 0.04);
+  --terminal-pane-title-on-dark-separator: rgb(255 255 255 / 0.06);
+  --terminal-pane-title-on-light-fg: rgb(24 24 27 / 0.64);
+  --terminal-pane-title-on-light-input-fg: rgb(24 24 27 / 0.82);
+  --terminal-pane-title-on-light-placeholder: rgb(24 24 27 / 0.48);
+  --terminal-pane-title-on-light-button-fg: rgb(24 24 27);
+  --terminal-pane-title-on-light-button-hover-fg: rgb(24 24 27);
+  --terminal-pane-title-on-light-input-bg: rgb(24 24 27 / 0.05);
+  --terminal-pane-title-on-light-separator: rgb(24 24 27 / 0.1);
+  --git-decoration-added: #81b88b;
+  --git-decoration-modified: #e2c08d;
+  --git-decoration-deleted: #c74e39;
+  --git-decoration-renamed: #73c991;
+  --git-decoration-untracked: #73c991;
+  --git-decoration-copied: #73c991;
+  --git-decoration-ignored: #6e6e6e;
+  --diff-added-ground: color-mix(in srgb, var(--git-decoration-added) 16%, transparent);
+  --diff-added-gutter: color-mix(in srgb, var(--git-decoration-added) 30%, transparent);
+  --diff-removed-ground: color-mix(in srgb, var(--git-decoration-deleted) 18%, transparent);
+  --diff-removed-gutter: color-mix(in srgb, var(--git-decoration-deleted) 32%, transparent);
+  --git-graph-ref: #3794ff;
+  --git-graph-remote-ref: #b66dff;
+  --git-graph-base-ref: #ea5c00;
+  --git-graph-lane-1: #ffb000;
+  --git-graph-lane-2: #dc267f;
+  --git-graph-lane-3: #ce9178;
+  --git-graph-lane-4: #40b0a6;
+  --git-graph-lane-5: #b66dff;
+  --annotation-highlight: #fbbf24;
+  --markdown-search-match: #facc15;
+  --markdown-search-match-active: #fb923c;
+  /* Brighter than terminal defaults so the always-visible line clears 3:1 on `--card`. */
+  --split-divider: #71717a;
+  --split-divider-strong: #a1a1aa;
+}

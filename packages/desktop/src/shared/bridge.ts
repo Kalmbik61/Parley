@@ -1,4 +1,12 @@
-import type { EventData, EventName, MethodName, NotificationName, Params, Result } from '@harnas/protocol';
+import type {
+  EventData,
+  EventName,
+  MethodName,
+  NotificationName,
+  Params,
+  Result,
+} from '@harnas/protocol';
+import type { Appearance, UiFile } from './ui-types.js';
 
 /** Состояние связи окна с хостом — источник для диалогов и строки статуса. */
 export type HostStatus =
@@ -39,6 +47,13 @@ export interface HarnasBridge {
     /** Раскладка dockview (кусок 2.2 плана окна) — хранилище в `main/layout-store.ts`. */
     loadLayout(workKey: string): Promise<unknown | null>;
     saveLayout(workKey: string, layout: unknown): Promise<void>;
+    /** `ui.json` (кусок 1.1 плана окна, спека 3.4) — хранилище в `main/ui-store.ts`. */
+    loadUi(): Promise<UiFile>;
+    saveUi(patch: Partial<Omit<UiFile, 'version'>>): Promise<UiFile>;
+    /** Меняет `nativeTheme.themeSource` в главном процессе и пишет `ui.json` (спека 4.7). */
+    setAppearance(mode: Appearance): Promise<void>;
+    /** Системная тёмность подхватывается при `nativeTheme.on('updated')` (спека 4.7). */
+    onAppearance(listener: (dark: boolean) => void): () => void;
   };
 }
 

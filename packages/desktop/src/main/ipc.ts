@@ -1,8 +1,10 @@
 import { METHODS, NOTIFICATIONS } from '@harnas/protocol';
 import type { MethodName, NotificationName } from '@harnas/protocol';
-import type { BrowserWindow, IpcMain } from 'electron';
+import type { BrowserWindow, IpcMain, NativeTheme } from 'electron';
+import type { Appearance, UiFile } from '../shared/ui-types.js';
 import type { HostConnection } from './host-connection.js';
 import type { LayoutStore } from './layout-store.js';
+import type { UiStore } from './ui-store.js';
 
 const METHOD_NAMES = new Set<string>(Object.keys(METHODS));
 const NOTIFICATION_NAMES = new Set<string>(Object.keys(NOTIFICATIONS));
@@ -25,6 +27,10 @@ export function isAllowedExternalUrl(url: string): boolean {
   }
 }
 
+function isAppearance(value: unknown): value is Appearance {
+  return value === 'system' || value === 'dark' || value === 'light';
+}
+
 export interface RegisterIpcOptions {
   ipcMain: IpcMain;
   connection: HostConnection;
@@ -34,6 +40,10 @@ export interface RegisterIpcOptions {
   setBadge: (count: number) => void;
   /** Раскладка dockview (кусок 2.2 плана окна). */
   layoutStore: LayoutStore;
+  /** `ui.json` (кусок 1.1 плана окна, спека 3.4). */
+  uiStore: UiStore;
+  /** Меняет `nativeTheme.themeSource`; запись в `ui.json` — забота обработчика `app:set-appearance` ниже (спека 4.7). */
+  setAppearance: (mode: Appearance) => void;
 }
 
 /**
@@ -44,7 +54,17 @@ export interface RegisterIpcOptions {
  * процесса, а этот список — на уровне протокола.
  */
 export function registerIpc(options: RegisterIpcOptions): void {
-  const { ipcMain, connection, openExternal, chooseFolder, showNotification, setBadge, layoutStore } = options;
+  const {
+    ipcMain,
+    connection,
+    openExternal,
+    chooseFolder,
+    showNotification,
+    setBadge,
+    layoutStore,
+    uiStore,
+    setAppearance,
+  } = options;
 
   ipcMain.handle('host:call', async (_event, method: unknown, params: unknown) => {
     if (typeof method !== 'string' || !isMethodName(method)) {
@@ -86,6 +106,28 @@ export function registerIpc(options: RegisterIpcOptions): void {
     if (typeof workKey !== 'string') throw new Error(`неверный ключ раскладки: ${String(workKey)}`);
     return layoutStore.save(workKey, layout);
   });
+
+  ipcMain.handle('app:load-ui', (): Promise<UiFile> => uiStore.load());
+
+  ipcMain.handle('app:save-ui', async (_event, patch: unknown) => {
+    // `async`, а не просто `throw` в обычной функции: белый список каналов
+    // проверяют тесты на подставном `ipcMain` (`ipc.test.ts`), а он, в отличие
+    // от настоящего Electron, не оборачивает синхронный throw в отказ промиса
+    // сам — так же устроен уже существующий `app:open-external` выше.
+    if (typeof patch !== 'object' || patch === null) {
+      throw new Error(`неверный патч ui.json: ${String(patch)}`);
+    }
+    return uiStore.save(patch as Partial<Omit<UiFile, 'version'>>);
+  });
+
+  ipcMain.handle('app:set-appearance', async (_event, mode: unknown) => {
+    if (!isAppearance(mode)) throw new Error(`неверный режим темы: ${String(mode)}`);
+    // Порядок важен для теста «во время записи ui.json валиден»: тему в
+    // nativeTheme меняем сразу, а на диск пишем через тот же UiStore, что и
+    // app:save-ui — двух копий логики атомарной записи не заводим.
+    setAppearance(mode);
+    await uiStore.save({ appearance: mode });
+  });
 }
 
 /**
@@ -113,4 +155,22 @@ export function forwardHostToWindow(
       unsubStatus();
     },
   };
+}
+
+/**
+ * Смена системной темы (спека 4.7): `nativeTheme.on('updated')` шлёт окну
+ * текущую тёмность. Сам выбор темы (`system`/`dark`/`light`) уже осел в
+ * `nativeTheme.themeSource` через `app:set-appearance` — рендереру остаётся
+ * только переставить `.dark` по факту.
+ */
+export function forwardAppearanceToWindow(
+  nativeTheme: NativeTheme,
+  window: BrowserWindow,
+): { dispose: () => void } {
+  const send = (): void => {
+    if (window.isDestroyed()) return;
+    window.webContents.send('app:appearance', nativeTheme.shouldUseDarkColors);
+  };
+  nativeTheme.on('updated', send);
+  return { dispose: () => nativeTheme.off('updated', send) };
 }

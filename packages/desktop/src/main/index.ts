@@ -1,13 +1,14 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, shell } from 'electron';
 import { HostConnection } from './host-connection.js';
 import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
-import { forwardHostToWindow, registerIpc } from './ipc.js';
+import { forwardAppearanceToWindow, forwardHostToWindow, registerIpc } from './ipc.js';
 import { createLayoutStore, desktopLayoutsPath } from './layout-store.js';
 import { createAppMenu } from './menu.js';
 import { createSecureWindow } from './security.js';
 import { captureShellEnv } from './shell-env.js';
+import { createUiStore, desktopUiPath } from './ui-store.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -55,8 +56,16 @@ if (!gotLock) {
             return;
           }
           try {
-            const entry = resolveHostEntry({ packaged: app.isPackaged, resourcesPath: process.resourcesPath });
-            spawnHost({ env: shellEnv.env, entry, nodeBin, stderrFile: path.join(paths.dir, 'host.err') });
+            const entry = resolveHostEntry({
+              packaged: app.isPackaged,
+              resourcesPath: process.resourcesPath,
+            });
+            spawnHost({
+              env: shellEnv.env,
+              entry,
+              nodeBin,
+              stderrFile: path.join(paths.dir, 'host.err'),
+            });
           } catch (err) {
             console.error('[harnas] не удалось запустить хост', err);
           }
@@ -70,21 +79,33 @@ if (!gotLock) {
       console.error('[harnas] не удалось подключиться к хосту', err);
     }
 
+    // `ui.json` и `themeSource` — до первого окна: `nativeTheme.shouldUseDarkColors`
+    // ниже должен уже отражать выбор пользователя, иначе `backgroundColor` возьмёт
+    // системную тему вместо сохранённой (спека 4.7, «Старт»).
+    const uiStore = createUiStore(desktopUiPath());
+    const ui = await uiStore.load();
+    nativeTheme.themeSource = ui.appearance;
+
     const preloadPath = path.join(dirname, '../preload/index.js');
     const indexHtmlPath = path.join(dirname, '../renderer/index.html');
     const indexHtmlUrl = `file://${indexHtmlPath}`;
 
     const openWindow = (): BrowserWindow => {
       const window = createSecureWindow(preloadPath, indexHtmlUrl);
+      // Цвет фона — до первой загрузки страницы: иначе в тёмной теме мелькает
+      // белый холст Electron по умолчанию, пока не подгрузится CSS (спека 4.7).
+      window.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#0a0a0a' : '#ffffff');
       // Раньше did-finish-load слать события в это окно бессмысленно и вредно:
       // прелоад ещё может не успеть навесить свои `ipcRenderer.on` (первая,
       // самая важная навигация — с about:blank на наш index.html), и самое
       // первое сообщение (обычно «хост подключён») уйдёт в пустоту.
       window.webContents.once('did-finish-load', () => {
         forwardHostToWindow(connection, window);
+        forwardAppearanceToWindow(nativeTheme, window);
       });
       // E2E читают текст экрана терминала — им нужен DOM-рендер xterm вместо WebGL.
-      const search = process.env.HARNAS_TERMINAL_RENDERER === 'dom' ? { search: 'renderer=dom' } : {};
+      const search =
+        process.env.HARNAS_TERMINAL_RENDERER === 'dom' ? { search: 'renderer=dom' } : {};
       void window.loadFile(indexHtmlPath, search);
       return window;
     };
@@ -94,6 +115,10 @@ if (!gotLock) {
       ipcMain,
       connection,
       layoutStore: createLayoutStore(desktopLayoutsPath()),
+      uiStore,
+      setAppearance: (mode) => {
+        nativeTheme.themeSource = mode;
+      },
       openExternal: (url) => shell.openExternal(url),
       chooseFolder: async () => {
         const window = mainWindow;
