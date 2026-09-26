@@ -25,7 +25,7 @@ class FakeIpcMain {
   }
 }
 
-function setup(): {
+function setup(overrides: { uiStore?: UiStore } = {}): {
   ipcMain: FakeIpcMain;
   connection: HostConnection;
   layoutStore: LayoutStore;
@@ -44,10 +44,12 @@ function setup(): {
     load: vi.fn().mockResolvedValue(null),
     save: vi.fn().mockResolvedValue(undefined),
   };
-  const uiStore: UiStore = {
-    load: vi.fn().mockResolvedValue(DEFAULT_UI),
-    save: vi.fn().mockResolvedValue(DEFAULT_UI),
-  };
+  const uiStore: UiStore =
+    overrides.uiStore ??
+    ({
+      load: vi.fn().mockResolvedValue(DEFAULT_UI),
+      save: vi.fn().mockResolvedValue(DEFAULT_UI),
+    } satisfies UiStore);
   const setAppearance = vi.fn();
 
   registerIpc({
@@ -108,8 +110,12 @@ describe('registerIpc', () => {
     expect(uiStore.save).toHaveBeenCalledWith({ appearance: 'dark' });
   });
 
-  it('app:save-ui с не-объектом отвергается', async () => {
+  // Тест 14 раунда исправлений (находка I3): `typeof [] === 'object'` — старая
+  // проверка `typeof patch !== 'object' || patch === null` пропускала массивы.
+  it('app:save-ui отвергает массив, null и не-объект (тест 14)', async () => {
     const { ipcMain } = setup();
+    await expect(ipcMain.invoke('app:save-ui', [1, 2, 3])).rejects.toThrow();
+    await expect(ipcMain.invoke('app:save-ui', null)).rejects.toThrow();
     await expect(ipcMain.invoke('app:save-ui', 'oops')).rejects.toThrow();
   });
 
@@ -124,6 +130,21 @@ describe('registerIpc', () => {
   it('app:set-appearance с неверным режимом отвергается', async () => {
     const { ipcMain, setAppearance } = setup();
     await expect(ipcMain.invoke('app:set-appearance', 'blue')).rejects.toThrow();
+    expect(setAppearance).not.toHaveBeenCalled();
+  });
+
+  // Тест 14 раунда исправлений (находка I4): запись на диск должна случиться
+  // ДО смены nativeTheme.themeSource — иначе при отказе записи окно уже
+  // сменило тему в памяти, а ui.json остался со старой, и на следующем
+  // перезапуске тема «откатится» без действия пользователя.
+  it('app:set-appearance: падение uiStore.save отклоняет промис и не трогает тему (тест 14)', async () => {
+    const failingUiStore: UiStore = {
+      load: vi.fn().mockResolvedValue(DEFAULT_UI),
+      save: vi.fn().mockRejectedValue(new Error('диск сломался')),
+    };
+    const { ipcMain, setAppearance } = setup({ uiStore: failingUiStore });
+
+    await expect(ipcMain.invoke('app:set-appearance', 'dark')).rejects.toThrow('диск сломался');
     expect(setAppearance).not.toHaveBeenCalled();
   });
 });

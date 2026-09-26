@@ -114,7 +114,9 @@ export function registerIpc(options: RegisterIpcOptions): void {
     // проверяют тесты на подставном `ipcMain` (`ipc.test.ts`), а он, в отличие
     // от настоящего Electron, не оборачивает синхронный throw в отказ промиса
     // сам — так же устроен уже существующий `app:open-external` выше.
-    if (typeof patch !== 'object' || patch === null) {
+    // `Array.isArray` отдельно: `typeof [] === 'object'` (раунд исправлений 1,
+    // находка I3/тест 14) — без неё массив проходил бы как патч.
+    if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
       throw new Error(`неверный патч ui.json: ${String(patch)}`);
     }
     return uiStore.save(patch as Partial<Omit<UiFile, 'version'>>);
@@ -122,11 +124,12 @@ export function registerIpc(options: RegisterIpcOptions): void {
 
   ipcMain.handle('app:set-appearance', async (_event, mode: unknown) => {
     if (!isAppearance(mode)) throw new Error(`неверный режим темы: ${String(mode)}`);
-    // Порядок важен для теста «во время записи ui.json валиден»: тему в
-    // nativeTheme меняем сразу, а на диск пишем через тот же UiStore, что и
-    // app:save-ui — двух копий логики атомарной записи не заводим.
-    setAppearance(mode);
+    // Сначала диск, потом nativeTheme (раунд исправлений 1, находка I4/тест 14):
+    // при отказе записи промис отклоняется и тема в окне не меняется — иначе
+    // окно уже перекрасилось бы, а ui.json остался бы со старым значением, и
+    // на следующем запуске тема «откатилась» бы без действия пользователя.
     await uiStore.save({ appearance: mode });
+    setAppearance(mode);
   });
 }
 

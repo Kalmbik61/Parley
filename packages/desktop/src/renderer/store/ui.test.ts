@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SessionRef } from '@harnas/protocol';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { useUiStore } from './ui.js';
@@ -11,7 +11,11 @@ beforeEach(() => {
     selectedWorkKey: null,
     windowFocused: true,
     wakePaused: null,
-    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null }, settings: false },
+    dialogs: {
+      newWork: false,
+      newSession: { open: false, parentSessionId: null },
+      settings: false,
+    },
     lastSessionByWork: {},
     activePanelId: null,
     recentSessionRefs: [],
@@ -57,9 +61,31 @@ describe('useUiStore диалоги', () => {
 
   it('новая сессия — помнит родителя', () => {
     useUiStore.getState().openNewSessionDialog('s-01');
-    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: true, parentSessionId: 's-01' });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({
+      open: true,
+      parentSessionId: 's-01',
+    });
     useUiStore.getState().closeNewSessionDialog();
-    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: false, parentSessionId: null });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({
+      open: false,
+      parentSessionId: null,
+    });
+  });
+});
+
+describe('useUiStore.setDark', () => {
+  afterEach(() => {
+    document.documentElement.classList.remove('dark');
+  });
+
+  it('true ставит .dark на <html> и dark: true в сторе; false снимает и то, и другое (тест 7)', () => {
+    useUiStore.getState().setDark(true);
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
+    expect(useUiStore.getState().dark).toBe(true);
+
+    useUiStore.getState().setDark(false);
+    expect(document.documentElement.classList.contains('dark')).toBe(false);
+    expect(useUiStore.getState().dark).toBe(false);
   });
 });
 

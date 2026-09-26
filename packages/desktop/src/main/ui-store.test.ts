@@ -56,6 +56,62 @@ describe('createUiStore', () => {
     });
   });
 
+  // Тест 12 раунда исправлений: частичный вложенный патч не должен откатывать
+  // нетронутые подполя к DEFAULT_UI — раньше `{ sound: false }` поверх
+  // «всё true, mail: false» возвращал needsYou/finished/mail к дефолтному true.
+  it('частичный вложенный патч оставляет нетронутые подполя как было (тест 12)', async () => {
+    const store = createUiStore(file);
+    await store.save({
+      notifications: { needsYou: true, finished: true, mail: false, sound: true },
+    });
+
+    await store.save({ notifications: { sound: false } });
+
+    await expect(store.load()).resolves.toEqual({
+      ...DEFAULT_UI,
+      notifications: { needsYou: true, finished: true, mail: false, sound: false },
+    });
+  });
+
+  it('частичный патч rightSidebar не теряет open/width, тронутые только tab (тест 12)', async () => {
+    const store = createUiStore(file);
+    await store.save({ rightSidebar: { open: false, width: 400, tab: 'changes' } });
+
+    await store.save({ rightSidebar: { tab: 'files' } });
+
+    await expect(store.load()).resolves.toEqual({
+      ...DEFAULT_UI,
+      rightSidebar: { open: false, width: 400, tab: 'files' },
+    });
+  });
+
+  // Тест 8 раунда исправлений: до `atomic-file.ts` два save() без await между
+  // ними падали ENOENT на общем `.tmp` (находка C3); после — очередь на файл
+  // гарантирует, что оба патча читают друг друга по очереди, а не вслепую.
+  it('два параллельных save разных ключей без await не теряют ни один (тест 8)', async () => {
+    const store = createUiStore(file);
+    const first = store.save({ appearance: 'dark' });
+    const second = store.save({ pinnedWorks: ['k'] });
+
+    await expect(Promise.all([first, second])).resolves.toBeDefined();
+
+    await expect(store.load()).resolves.toEqual({
+      ...DEFAULT_UI,
+      appearance: 'dark',
+      pinnedWorks: ['k'],
+    });
+  });
+
+  // Тест 13 раунда исправлений: `ui.json`, указывающий на каталог, раньше
+  // пробрасывал EISDIR наружу (находка I2) — старт окна падал бы до создания
+  // BrowserWindow, потому что `main/index.ts` зовёт `load()` без try/catch.
+  it('ui.json как каталог → load отдаёт DEFAULT_UI и не бросает (тест 13)', async () => {
+    await mkdir(file, { recursive: true });
+    const store = createUiStore(file);
+
+    await expect(store.load()).resolves.toEqual(DEFAULT_UI);
+  });
+
   it('запись атомарна: во время записи ui.json всегда читается как валидный JSON (тест 3, как тест 5 куска 2.2 прошлого плана)', async () => {
     const store = createUiStore(file);
     await store.save({ appearance: 'dark' });

@@ -13,6 +13,7 @@
 import { create } from 'zustand';
 import { refKey, type SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../shared/bridge.js';
+import { applyDarkClass } from '../theme/appearance.js';
 
 /** Сколько последних сессий держать для палитры ⌘K (кусок 2.3) — больше и не показать за один экран списка. */
 const RECENT_SESSIONS_LIMIT = 20;
@@ -30,6 +31,14 @@ const CLOSED_DIALOGS: DialogsState = {
 };
 
 export interface UiState {
+  /**
+   * Единственный источник тёмности в рендерере (спека 4.7, раунд исправлений 1
+   * куска 1.1): терминал (кусок 1.3) и Monaco (кусок 7.3) берут тему отсюда, а
+   * не читают `matchMedia` каждый сам по себе. Начальное значение — системное
+   * предпочтение; `main.tsx` синхронизирует `.dark` на `<html>` тем же полем
+   * до первого кадра React.
+   */
+  dark: boolean;
   selectedRef: SessionRef | null;
   /** Работа выбранной сессии — ключ `lib/tree-order.ts#workKey`. */
   selectedWorkKey: string | null;
@@ -59,6 +68,8 @@ export interface UiState {
    */
   recentSessionRefs: readonly SessionRef[];
 
+  /** Ставит/снимает `.dark` на `<html>` (`applyDarkClass`) и пишет в стор — единственная точка входа для обоих. */
+  setDark: (dark: boolean) => void;
   selectSession: (workKey: string, ref: SessionRef) => void;
   /** `Workspace.tsx` зовёт на каждую смену активной панели dockview. */
   setActivePanelId: (id: string | null) => void;
@@ -78,6 +89,12 @@ export interface UiState {
 }
 
 export const useUiStore = create<UiState>((set, get) => ({
+  // `matchMedia` не определён в jsdom (тесты рендерера) — как и `document`
+  // выше в `windowFocused`, читаем его защищённо: в настоящем окне Electron
+  // (полноценный Chromium) он есть всегда, а в тестах стор просто не должен
+  // падать при импорте.
+  dark:
+    typeof matchMedia === 'undefined' ? false : matchMedia('(prefers-color-scheme: dark)').matches,
   selectedRef: null,
   selectedWorkKey: null,
   windowFocused: typeof document === 'undefined' ? true : document.hasFocus(),
@@ -87,6 +104,11 @@ export const useUiStore = create<UiState>((set, get) => ({
   activePanelId: null,
   visibleSessionRefs: {},
   recentSessionRefs: [],
+
+  setDark: (dark) => {
+    applyDarkClass(dark);
+    set({ dark });
+  },
 
   selectSession: (workKey, ref) =>
     set((state) => {
@@ -106,7 +128,9 @@ export const useUiStore = create<UiState>((set, get) => ({
     set((state) => {
       if (!visible) {
         if (!(key in state.visibleSessionRefs)) return state;
-        const rest = Object.fromEntries(Object.entries(state.visibleSessionRefs).filter(([entryKey]) => entryKey !== key));
+        const rest = Object.fromEntries(
+          Object.entries(state.visibleSessionRefs).filter(([entryKey]) => entryKey !== key),
+        );
         return { visibleSessionRefs: rest };
       }
       return { visibleSessionRefs: { ...state.visibleSessionRefs, [key]: true } };
@@ -117,15 +141,20 @@ export const useUiStore = create<UiState>((set, get) => ({
   openNewWorkDialog: () => set((state) => ({ dialogs: { ...state.dialogs, newWork: true } })),
   closeNewWorkDialog: () => set((state) => ({ dialogs: { ...state.dialogs, newWork: false } })),
   openNewSessionDialog: (parentSessionId) =>
-    set((state) => ({ dialogs: { ...state.dialogs, newSession: { open: true, parentSessionId } } })),
+    set((state) => ({
+      dialogs: { ...state.dialogs, newSession: { open: true, parentSessionId } },
+    })),
   closeNewSessionDialog: () =>
-    set((state) => ({ dialogs: { ...state.dialogs, newSession: { open: false, parentSessionId: null } } })),
+    set((state) => ({
+      dialogs: { ...state.dialogs, newSession: { open: false, parentSessionId: null } },
+    })),
   openSettingsDialog: () => set((state) => ({ dialogs: { ...state.dialogs, settings: true } })),
   closeSettingsDialog: () => set((state) => ({ dialogs: { ...state.dialogs, settings: false } })),
 
   toggleWake: async (bridge) => {
     const paused = get().wakePaused;
-    const result = paused === true ? await bridge.call('wake.resume', {}) : await bridge.call('wake.pause', {});
+    const result =
+      paused === true ? await bridge.call('wake.resume', {}) : await bridge.call('wake.pause', {});
     set({ wakePaused: result.paused });
   },
 

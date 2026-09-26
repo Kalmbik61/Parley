@@ -8,6 +8,11 @@
  * корне репозитория.
  */
 
+/* Без этой строки утилиты `dark:` компилируются по `prefers-color-scheme`
+   (дефолт Tailwind 4), а не по классу `.dark` на `<html>` (Orca main.css:27,
+   раунд исправлений 1, находка M3). */
+@custom-variant dark (&:is(.dark *));
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

@@ -55,16 +55,25 @@ const isAppearance = (value: unknown): value is Appearance =>
 const isStringArray = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((item) => typeof item === 'string');
 
+/**
+ * `typeof value === 'number'` пропускает `NaN` и `±Infinity` — `Math.max`/
+ * `Math.min` с таким аргументом дают `NaN` (спецификация ECMA), и клапан
+ * пределов ниже такую ширину не ловит (раунд исправлений 1, находка C2/тест 11).
+ * Нечисловые и нефинитные значения поэтому отсекаются ДО клапана, а не внутри
+ * него — граница остаётся инвариантом по диапазону, а не «числом минус NaN».
+ */
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value);
+
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
 
 function normalizeLeftSidebar(value: unknown): UiFile['leftSidebar'] {
   const source = isRecord(value) ? value : {};
   const open = typeof source.open === 'boolean' ? source.open : DEFAULT_UI.leftSidebar.open;
-  const width =
-    typeof source.width === 'number'
-      ? clamp(source.width, LEFT_SIDEBAR.min, LEFT_SIDEBAR.max)
-      : DEFAULT_UI.leftSidebar.width;
+  const width = isFiniteNumber(source.width)
+    ? clamp(source.width, LEFT_SIDEBAR.min, LEFT_SIDEBAR.max)
+    : DEFAULT_UI.leftSidebar.width;
   return { open, width };
 }
 
@@ -72,10 +81,9 @@ function normalizeRightSidebar(value: unknown): UiFile['rightSidebar'] {
   const source = isRecord(value) ? value : {};
   const open = typeof source.open === 'boolean' ? source.open : DEFAULT_UI.rightSidebar.open;
   // Верхний предел зависит от ширины окна — здесь недоступен, приводим только низ (см. `RIGHT_SIDEBAR`).
-  const width =
-    typeof source.width === 'number'
-      ? Math.max(source.width, RIGHT_SIDEBAR.min)
-      : DEFAULT_UI.rightSidebar.width;
+  const width = isFiniteNumber(source.width)
+    ? Math.max(source.width, RIGHT_SIDEBAR.min)
+    : DEFAULT_UI.rightSidebar.width;
   const tab =
     source.tab === 'files' || source.tab === 'changes' ? source.tab : DEFAULT_UI.rightSidebar.tab;
   return { open, width, tab };
