@@ -13,21 +13,30 @@
  */
 
 import {
+  addMessage,
   agentEnv,
+  baseBranchOf,
   createChildSession,
   createNewSession,
   createPendingSession,
+  createWorktree,
   deleteSession,
+  DirtyWorktreeError,
+  discardWorktree,
   finishExited,
   findRunnerBinary,
+  isGitRepo,
   loadConfig,
   openEvents,
   planLaunch,
   planNew,
   planResume,
+  plannedWorktree,
   processStartedAt,
   readMap,
+  sessionTag,
   startSession,
+  SYSTEM,
   transitionSession,
   updateMap,
   workPaths,
@@ -37,6 +46,7 @@ import { refKey } from '@harnas/protocol';
 import type { SessionRef, WorksSnapshot } from '@harnas/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
+import { HostError } from '../errors.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { WorksService } from '../works/works-service.js';
 import { autoLaunchCandidates } from './auto-launch.js';
@@ -49,6 +59,8 @@ export interface CreateSessionInput {
   label: string;
   task: string;
   parent: string | null;
+  /** Своя рабочая копия git — план пишется сразу, каталог заводит `launch()` (спека 8.1). */
+  worktree?: boolean;
 }
 
 export type LaunchMode = 'launch' | 'resume' | 'new';
@@ -60,7 +72,8 @@ export interface SessionsService {
   stop(ref: SessionRef): Promise<void>;
   /** Насовсем: `closed` в карте и остановка PTY, если он жив. */
   close(ref: SessionRef): Promise<void>;
-  delete(ref: SessionRef): Promise<void>;
+  /** `force` — грязный worktree отбрасывается вместе с сессией; без него — `conflict` (спека 8.3). */
+  delete(ref: SessionRef, force?: boolean): Promise<void>;
   live(ref: SessionRef): boolean;
   stopAll(): Promise<void>;
   /** Собирает прерванных посреди хода — на старте хоста, после сверки живости. */
@@ -148,6 +161,46 @@ export function createSessionsService(
         throw new Error(`сессия ${ref.sessionId} закрыта`);
       }
 
+      // Worktree запланирован (`plannedWorktree` в `create()` или `spawn_session`
+      // в core), но каталога на диске ещё нет — заводим его перед первым же
+      // запуском, в том числе перед `resume` прерванной сессии (спека 8.1–8.3).
+      if (session.worktree !== null && session.worktree.createdAt === null) {
+        const worktree = session.worktree;
+        try {
+          await createWorktree(ref.projectPath, worktree);
+        } catch (error) {
+          const text = `worktree для ${sessionTag(ref.sessionId)} не создан: ${(error as Error).message}`;
+          host.broadcast('host.notice', {
+            kind: 'launch-failed',
+            ref,
+            text,
+            at: new Date().toISOString(),
+          });
+          const parentId = session.parent;
+          if (parentId !== null) {
+            await updateMap(ref.projectPath, ref.workId, (current) => {
+              if (current.sessions.some((candidate) => candidate.id === parentId)) {
+                addMessage(current, { from: SYSTEM, to: [parentId], text });
+              }
+            }).catch((mapError: unknown) => {
+              host.log.error('письмо о несозданном worktree не записалось', {
+                ref,
+                error: String(mapError),
+              });
+            });
+          }
+          throw error;
+        }
+        const createdAt = new Date().toISOString();
+        worktree.createdAt = createdAt;
+        await updateMap(ref.projectPath, ref.workId, (current) => {
+          const target = current.sessions.find((candidate) => candidate.id === ref.sessionId);
+          if (target?.worktree !== null && target?.worktree !== undefined) {
+            target.worktree.createdAt = createdAt;
+          }
+        });
+      }
+
       const planFn = mode === 'resume' ? planResume : mode === 'new' ? planNew : planLaunch;
       const plan = await planFn(ref.projectPath, ref.workId, session, {
         channel: false,
@@ -218,13 +271,50 @@ export function createSessionsService(
     });
   }
 
+  /** База worktree ребёнка — ветка родителя, если он сам в worktree, иначе база проекта (как у `spawn_session`). */
+  async function worktreeBaseFor(ref: SessionRef, parentId: string | null): Promise<string> {
+    if (parentId !== null) {
+      const map = await readMap(ref.projectPath, ref.workId);
+      const parent = map.sessions.find((candidate) => candidate.id === parentId);
+      if (parent?.worktree !== null && parent?.worktree !== undefined) return parent.worktree.branch;
+    }
+    return baseBranchOf(ref.projectPath);
+  }
+
+  /**
+   * План worktree пишется в карту сразу — тем же путём, что `spawn_session` в
+   * core (кусок 4.1); каталог на диске заводит `launch()` перед первым запуском.
+   */
+  async function attachWorktreePlan(ref: SessionRef, parentId: string | null): Promise<void> {
+    const base = await worktreeBaseFor(ref, parentId);
+    const { config } = await loadConfig();
+    await updateMap(ref.projectPath, ref.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session === undefined) return;
+      session.worktree = plannedWorktree(
+        ref.projectPath,
+        ref.workId,
+        ref.sessionId,
+        base,
+        config.worktreeRoot,
+      );
+    });
+  }
+
   async function create(input: CreateSessionInput): Promise<SessionRef> {
-    const { projectPath, workId, provider, label, task, parent } = input;
+    const { projectPath, workId, provider, label, task, parent, worktree } = input;
+
+    // Проверка до создания сессии, а не после (как и в `spawn_session` core,
+    // кусок 4.1) — иначе в карте осталась бы pending-сессия, которую нечем завести.
+    if (worktree === true && !(await isGitRepo(projectPath))) {
+      throw new HostError('bad_request', 'в проекте нет git — worktree не завести');
+    }
 
     if (workId === null) {
       const created = await createNewSession(projectPath, null);
       const ref = { projectPath, workId: created.workId, sessionId: created.session.id };
       await applyChoice(ref, label, provider);
+      if (worktree === true) await attachWorktreePlan(ref, null);
       return createInteractive(ref, 'new');
     }
 
@@ -232,6 +322,7 @@ export function createSessionsService(
       const created = await createNewSession(projectPath, workId);
       const ref = { projectPath, workId, sessionId: created.session.id };
       await applyChoice(ref, label, provider);
+      if (worktree === true) await attachWorktreePlan(ref, null);
       return createInteractive(ref, 'new');
     }
 
@@ -239,6 +330,7 @@ export function createSessionsService(
       const created = await createChildSession(projectPath, workId, parent);
       const ref = { projectPath, workId, sessionId: created.session.id };
       await applyChoice(ref, label, provider);
+      if (worktree === true) await attachWorktreePlan(ref, parent);
       return createInteractive(ref, 'launch');
     }
 
@@ -249,7 +341,9 @@ export function createSessionsService(
       parent,
       contextFrom: parent === null ? [] : [parent],
     });
-    return createInteractive({ projectPath, workId, sessionId }, 'launch');
+    const ref = { projectPath, workId, sessionId };
+    if (worktree === true) await attachWorktreePlan(ref, parent);
+    return createInteractive(ref, 'launch');
   }
 
   async function stop(ref: SessionRef): Promise<void> {
@@ -279,8 +373,21 @@ export function createSessionsService(
     }
   }
 
-  async function del(ref: SessionRef): Promise<void> {
+  async function del(ref: SessionRef, force = false): Promise<void> {
     await stop(ref);
+    // Worktree — рабочая копия на диске, а не только запись в карте: грязную
+    // без явного согласия теряют молча (спека 8.3), поэтому проверка раньше
+    // самого удаления записи.
+    const map = await readMap(ref.projectPath, ref.workId).catch(() => null);
+    const worktree = map?.sessions.find((candidate) => candidate.id === ref.sessionId)?.worktree;
+    if (worktree !== null && worktree !== undefined && worktree.createdAt !== null) {
+      try {
+        await discardWorktree(ref.projectPath, worktree, { force });
+      } catch (error) {
+        if (error instanceof DirtyWorktreeError) throw new HostError('conflict', error.message);
+        throw error;
+      }
+    }
     await deleteSession(ref.projectPath, ref.workId, ref.sessionId);
   }
 

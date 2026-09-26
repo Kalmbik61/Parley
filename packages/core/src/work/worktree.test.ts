@@ -136,6 +136,24 @@ describe('worktreeDiff', () => {
   });
 });
 
+describe('worktreeDiff — untracked-файлы', () => {
+  it('содержимое untracked-файла попадает в patch, индекс при этом не трогается', async () => {
+    await initProject();
+    const info = plannedWorktree(project, 'w-0001', 's-02', 'main', worktreeRoot);
+    await createWorktree(project, info);
+
+    await writeFile(path.join(info.path, 'untracked.md'), 'непрослеженное\n', 'utf8');
+
+    const diff = await worktreeDiff(project, info);
+
+    expect(diff.patch).toContain('непрослеженное');
+    expect(diff.files.find((file) => file.path === 'untracked.md')?.status).toBe('A');
+    // `--no-index` не должен ничего добавить в индекс — иначе следующий коммит
+    // подхватил бы файл без ведома пользователя.
+    expect((await git(info.path, ['status', '--porcelain'])).stdout.trim()).toBe('?? untracked.md');
+  });
+});
+
 describe('commitWorktree', () => {
   it('коммитит всё незакоммиченное одной записью', async () => {
     await initProject();

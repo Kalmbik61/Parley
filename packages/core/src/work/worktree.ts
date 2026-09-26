@@ -100,6 +100,15 @@ function parseNameStatus(raw: string): DiffFile[] {
   return files;
 }
 
+/** Пути файлов, которых нет в индексе вовсе (`??` в `git status --porcelain`). */
+function parseUntrackedPaths(raw: string): string[] {
+  const paths: string[] = [];
+  for (const line of raw.split('\n')) {
+    if (line[0] === '?' && line[1] === '?') paths.push(line.slice(3));
+  }
+  return paths;
+}
+
 /**
  * `git status --porcelain`: незакоммиченное, включая untracked-файлы — их
  * `git diff` без индекса не видит вовсе, а трогать индекс ради чтения не
@@ -155,6 +164,32 @@ async function listWorktrees(projectPath: string): Promise<WorktreeListEntry[]> 
   return entries;
 }
 
+/**
+ * Содержимое untracked-файла как diff от пустоты. `git diff` без явного индекса
+ * (`--no-index`) untracked-файлы не трогает вовсе — обычный `git add` перед
+ * диффом пометил бы файл подготовленным для не подозревающего об этом коммита
+ * следом, а этого делать нельзя (только чтение). Код выхода 1 у `--no-index` —
+ * «файлы отличаются», не сбой; `execFile` иначе принял бы его за ошибку.
+ */
+async function untrackedPatch(worktreePath: string, filePath: string): Promise<string> {
+  try {
+    const { stdout } = await run('git', [
+      '-C',
+      worktreePath,
+      'diff',
+      '--no-index',
+      '--',
+      '/dev/null',
+      filePath,
+    ]);
+    return stdout;
+  } catch (error) {
+    const withOutput = error as { code?: number; stdout?: string };
+    if (withOutput.code === 1 && typeof withOutput.stdout === 'string') return withOutput.stdout;
+    throw error;
+  }
+}
+
 /** Где выгружена ветка `base` — основной каталог или чужой worktree; `null` — нигде. */
 async function findBaseCheckout(projectPath: string, base: string): Promise<string | null> {
   const entries = await listWorktrees(projectPath);
@@ -194,6 +229,14 @@ export async function worktreeDiff(projectPath: string, info: WorktreeInfo): Pro
   const uncommittedPatch =
     uncommittedFiles.length === 0 ? '' : (await run('git', ['-C', info.path, 'diff', 'HEAD'])).stdout;
 
+  // `git diff HEAD` untracked-файлы не показывает вовсе (их нет в индексе,
+  // сравнивать нечего) — их содержимое дифф от пустоты добирает отдельно, файл
+  // за файлом, не трогая сам индекс (EXTRA, кусок 4.2).
+  const untrackedPaths = parseUntrackedPaths(porcelain);
+  const untrackedPatches = await Promise.all(
+    untrackedPaths.map((filePath) => untrackedPatch(info.path, filePath)),
+  );
+
   // Уже закоммиченное в ветке и то, что ещё в рабочем дереве, — один и тот же
   // путь может встретиться в обоих списках; актуальнее второй.
   const files = new Map(committedFiles.map((file) => [file.path, file]));
@@ -205,8 +248,9 @@ export async function worktreeDiff(projectPath: string, info: WorktreeInfo): Pro
       ? false
       : (await run('git', ['-C', baseCheckout, 'status', '--porcelain'])).stdout.trim() !== '';
 
+  const workingTreePatch = uncommittedPatch + untrackedPatches.join('');
   return {
-    patch: uncommittedPatch === '' ? committedPatch : `${committedPatch}${uncommittedPatch}`,
+    patch: workingTreePatch === '' ? committedPatch : `${committedPatch}${workingTreePatch}`,
     files: [...files.values()],
     uncommitted: uncommittedFiles.length > 0,
     baseCheckout,

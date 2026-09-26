@@ -5,6 +5,7 @@ import type { PtyManager } from '../pty/pty-manager.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
+import type { WorktreesService } from '../worktrees/worktrees-service.js';
 import { hostInfo, hostShutdown } from './host.js';
 import { createPtyHandlers } from './pty.js';
 import { providersList } from './providers.js';
@@ -12,6 +13,7 @@ import { roomsCreate, roomsSend } from './rooms.js';
 import { createSessionHandlers } from './sessions.js';
 import { settingsGet, settingsSet } from './settings.js';
 import { createWakeHandlers } from './wake.js';
+import { createWorktreesHandlers } from './worktrees.js';
 import { worksCreate, worksDelete, worksList } from './works.js';
 
 export interface MethodDeps {
@@ -20,6 +22,7 @@ export interface MethodDeps {
   pty: PtyManager;
   sessions: SessionsService;
   wake: WakeService;
+  worktrees: WorktreesService;
 }
 
 export interface HostHandlers {
@@ -43,6 +46,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
   const pty = createPtyHandlers(deps);
   const sessions = createSessionHandlers(deps);
   const wake = createWakeHandlers(deps);
+  const worktrees = createWorktreesHandlers(deps);
 
   return {
     methods: {
@@ -68,6 +72,11 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
       'wake.state': wake.wakeState as AnyHandler,
       'rooms.create': roomsCreate as AnyHandler,
       'rooms.send': roomsSend as AnyHandler,
+      'worktrees.available': worktrees.worktreesAvailable as AnyHandler,
+      'worktrees.diff': worktrees.worktreesDiff as AnyHandler,
+      'worktrees.commit': worktrees.worktreesCommit as AnyHandler,
+      'worktrees.merge': worktrees.worktreesMerge as AnyHandler,
+      'worktrees.discard': worktrees.worktreesDiscard as AnyHandler,
     },
     notifications: {
       'pty.input': pty.ptyInput as AnyNotificationHandler,

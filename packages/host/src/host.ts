@@ -15,6 +15,7 @@ import { createActivityService } from './activity/activity-service.js';
 import { createPtyManager } from './pty/pty-manager.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { createWakeService } from './wake/wake-service.js';
+import { createWorktreesService } from './worktrees/worktrees-service.js';
 
 export interface HostOptions {
   home?: string;
@@ -144,12 +145,17 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   );
   handle.context.onShutdown(async () => wakeService.stop());
 
+  // Дифф, коммит, слияние и отбрасывание worktree сессии (4.2) — «Остановить»
+  // при отбрасывании она делит с обычным `sessions.stop`.
+  const worktreesService = createWorktreesService(sessionsService);
+
   const handlers = createHostHandlers({
     works: worksService,
     activity: activityService,
     pty: ptyManager,
     sessions: sessionsService,
     wake: wakeService,
+    worktrees: worktreesService,
   });
   const server = createHostServer({
     context: handle.context,

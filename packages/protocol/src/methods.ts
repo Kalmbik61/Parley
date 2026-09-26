@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { HarnasConfig } from '@harnas/core';
+import type { HarnasConfig, MergeResult, WorktreeDiff } from '@harnas/core';
 import type { SessionRef, WorksSnapshot } from './types.js';
 
 export const sessionRef = z.object({
@@ -24,10 +24,11 @@ export const METHODS = {
     label: z.string(),
     task: z.string(),
     parent: z.string().nullable(),
+    worktree: z.boolean().optional(),
   }),
   'sessions.resume': z.object({ ref: sessionRef }),
   'sessions.stop': z.object({ ref: sessionRef }),
-  'sessions.delete': z.object({ ref: sessionRef }),
+  'sessions.delete': z.object({ ref: sessionRef, force: z.boolean().optional() }),
   'sessions.close': z.object({ ref: sessionRef }),
   'sessions.interrupted': z.object({}),
   'sessions.resumeInterrupted': z.object({ refs: z.array(sessionRef) }),
@@ -52,6 +53,11 @@ export const METHODS = {
     text: z.string().min(1),
     kind: z.enum(['note', 'question', 'decision']),
   }),
+  'worktrees.available': z.object({ projectPath: z.string() }),
+  'worktrees.diff': z.object({ ref: sessionRef }),
+  'worktrees.commit': z.object({ ref: sessionRef, message: z.string().min(1) }),
+  'worktrees.merge': z.object({ ref: sessionRef }),
+  'worktrees.discard': z.object({ ref: sessionRef, force: z.boolean() }),
 } as const;
 
 // Уведомления клиента — без id и без ответа: их слишком много, чтобы ждать каждое.
@@ -84,6 +90,11 @@ export interface Results {
   'settings.set': { config: HarnasConfig };
   'rooms.create': { roomId: string };
   'rooms.send': { messageId: string };
+  'worktrees.available': { available: boolean };
+  'worktrees.diff': WorktreeDiff;
+  'worktrees.commit': { commit: string };
+  'worktrees.merge': MergeResult;
+  'worktrees.discard': { ok: true };
 }
 
 export type MethodName = keyof typeof METHODS;

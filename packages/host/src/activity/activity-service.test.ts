@@ -339,6 +339,54 @@ describe('createActivityService', () => {
     ).toBe(false);
   }, 20_000);
 
+  it('trust-wait (план, кусок 4.2): сессия в worktree без единого хука за trustWaitMs — уведомление', async () => {
+    const { ref } = await activeSession({ createEventsDir: false });
+    // Стаб без `STUB_HOOKS` — журнала не будет вовсе (как хуки Claude Code,
+    // застрявшего на диалоге доверия к незнакомой папке, спека 8.2).
+    await updateMap(project, ref.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session === undefined) return;
+      session.worktree = {
+        path: path.join(project, 'worktree'),
+        branch: 'harnas/w-0001/s-01',
+        base: 'main',
+        createdAt: new Date().toISOString(),
+      };
+    });
+
+    const w = await works();
+    const a = activity(w, { trustWaitMs: 200 });
+    await a.start();
+
+    await waitFor(
+      () =>
+        broadcasts.some(
+          (entry) => entry.event === 'host.notice' && (entry.data as { kind: string }).kind === 'trust-wait',
+        ),
+      5000,
+    );
+
+    const notice = broadcasts.find(
+      (entry) => entry.event === 'host.notice' && (entry.data as { kind: string }).kind === 'trust-wait',
+    );
+    expect((notice?.data as { ref: SessionRef }).ref).toEqual(ref);
+    expect((notice?.data as { text: string }).text).toContain('доверия к папке');
+  }, 20_000);
+
+  it('trust-wait: сессия не в worktree — уведомления нет, даже без хуков', async () => {
+    await activeSession({ createEventsDir: false });
+    const w = await works();
+    const a = activity(w, { trustWaitMs: 200 });
+    await a.start();
+    await settle(400);
+
+    expect(
+      broadcasts.some(
+        (entry) => entry.event === 'host.notice' && (entry.data as { kind: string }).kind === 'trust-wait',
+      ),
+    ).toBe(false);
+  }, 20_000);
+
   it('8: одинаковый повторный расчёт не даёт второго события', async () => {
     const { ref } = await activeSession();
     const w = await works();

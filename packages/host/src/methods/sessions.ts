@@ -24,7 +24,14 @@ export interface SessionHandlers {
 export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers {
   return {
     sessionsCreate: async (params) => {
-      const ref = await deps.sessions.create(params);
+      // `exactOptionalPropertyTypes`: zod даёт `worktree?: boolean | undefined`,
+      // а `CreateSessionInput.worktree?: boolean` явного `undefined` ключом не
+      // принимает — той же дорогой, что `LaunchOptions.prompt` в `launch.ts`.
+      const { worktree, ...rest } = params;
+      const ref = await deps.sessions.create({
+        ...rest,
+        ...(worktree === undefined ? {} : { worktree }),
+      });
       return { ref };
     },
 
@@ -39,7 +46,7 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
     },
 
     sessionsDelete: async (params) => {
-      await deps.sessions.delete(params.ref);
+      await deps.sessions.delete(params.ref, params.force);
       return { ok: true };
     },
 

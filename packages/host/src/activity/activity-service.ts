@@ -19,6 +19,7 @@ import {
   loadConfig,
   NEW_LABEL,
   openEvents,
+  sessionTag,
   unreadFor,
   watchEvents,
   workPaths,
@@ -50,6 +51,8 @@ export interface SessionLive {
  */
 export interface ActivityServiceOptions extends MetricsRoots {
   silenceThresholdMs?: number;
+  /** Сессия в worktree без единого хука дольше этого срока — `trust-wait` (спека 8.2, план 4.2). */
+  trustWaitMs?: number;
   now?: () => number;
 }
 
@@ -63,6 +66,9 @@ export interface ActivityService {
 }
 
 const workKeyOf = (projectPath: string, workId: string): string => `${projectPath}\u0000${workId}`;
+
+/** Спека 8.2: доверие к папке worktree подтверждают руками, и хук может не прийти вовсе. */
+const DEFAULT_TRUST_WAIT_MS = 20_000;
 
 interface WorkWatch {
   journal: EventsLog;
@@ -81,6 +87,7 @@ export function createActivityService(
   };
   const nowFn = options.now ?? Date.now;
   let silenceThresholdMs = options.silenceThresholdMs ?? 30_000;
+  const trustWaitMs = options.trustWaitMs ?? DEFAULT_TRUST_WAIT_MS;
 
   const logIndex: LogIndex = createLogIndex(roots);
   const live = new Map<string, SessionLive>();
@@ -89,6 +96,8 @@ export function createActivityService(
   const silenceTimers = new Map<string, NodeJS.Timeout>();
   const autoTitled = new Set<string>();
   const hooksMissingNotified = new Set<string>();
+  const trustWaitTimers = new Map<string, NodeJS.Timeout>();
+  const trustWaitNotified = new Set<string>();
   const linkInFlight = new Set<string>();
   const workWatches = new Map<string, WorkWatch>();
   const listeners = new Set<(ref: SessionRef, value: SessionLive) => void>();
@@ -102,6 +111,13 @@ export function createActivityService(
     if (timer === undefined) return;
     clearTimeout(timer);
     silenceTimers.delete(key);
+  }
+
+  function clearTrustWaitTimer(key: string): void {
+    const timer = trustWaitTimers.get(key);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    trustWaitTimers.delete(key);
   }
 
   /** Час икс тишины — либо уже прошёл (задержка 0), либо ставится единственный таймер. */
@@ -205,6 +221,39 @@ export function createActivityService(
     });
   }
 
+  /**
+   * Сессия в worktree запущена, но за `trustWaitMs` ни одного хука — возможно,
+   * терминал ждёт подтверждения доверия к незнакомой папке (спека 8.2). В
+   * отличие от `hooks-missing` (сразу), здесь даётся срок: доверие подтверждают
+   * руками, а не за долю секунды после старта процесса.
+   */
+  function maybeTrustWait(ref: SessionRef, key: string, session: WorkSession): void {
+    if (session.worktree === null || session.launchedBy !== 'host' || session.lifecycle !== 'active') {
+      clearTrustWaitTimer(key);
+      return;
+    }
+    if (trustWaitNotified.has(key) || trustWaitTimers.has(key)) return;
+    const startedAt = session.startedAt === null ? Number.NaN : Date.parse(session.startedAt);
+    if (Number.isNaN(startedAt)) return;
+
+    const delay = Math.max(0, startedAt + trustWaitMs - nowFn());
+    trustWaitTimers.set(
+      key,
+      setTimeout(() => {
+        trustWaitTimers.delete(key);
+        // Хук успел прийти, пока таймер ждал, — журнал сейчас не пуст.
+        if ((journals.get(key) ?? null) !== null) return;
+        trustWaitNotified.add(key);
+        host.broadcast('host.notice', {
+          kind: 'trust-wait',
+          ref,
+          text: `${sessionTag(ref.sessionId)} не отвечает с запуска — возможно, ждёт доверия к папке`,
+          at: new Date().toISOString(),
+        });
+      }, delay),
+    );
+  }
+
   function recompute(ref: SessionRef): void {
     if (stopped) return;
     const entry = works.entry(ref.projectPath, ref.workId);
@@ -237,6 +286,7 @@ export function createActivityService(
     maybeAutoTitle(ref, key, session);
     maybeLink(ref, key, session);
     maybeHooksMissing(ref, key, session, events);
+    maybeTrustWait(ref, key, session);
   }
 
   /**
@@ -331,7 +381,11 @@ export function createActivityService(
     for (const key of Array.from(hooksMissingNotified)) {
       if (!validSessions.has(key)) hooksMissingNotified.delete(key);
     }
+    for (const key of Array.from(trustWaitNotified)) {
+      if (!validSessions.has(key)) trustWaitNotified.delete(key);
+    }
     for (const [key] of Array.from(silenceTimers)) if (!validSessions.has(key)) clearSilenceTimer(key);
+    for (const [key] of Array.from(trustWaitTimers)) if (!validSessions.has(key)) clearTrustWaitTimer(key);
   }
 
   function handleWorksChange(snapshot: WorksSnapshot): void {
@@ -395,6 +449,8 @@ export function createActivityService(
       unsubscribeLog?.();
       for (const timer of silenceTimers.values()) clearTimeout(timer);
       silenceTimers.clear();
+      for (const timer of trustWaitTimers.values()) clearTimeout(timer);
+      trustWaitTimers.clear();
       for (const watch of workWatches.values()) watch.watcher?.close();
       workWatches.clear();
       logIndex.stop();

@@ -1,20 +1,25 @@
+import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   addSession,
   createWork,
+  createWorktree,
   NEW_LABEL,
+  plannedWorktree,
   readMap,
   saveConfig,
+  SYSTEM,
   transitionSession,
   updateMap,
   workPaths,
 } from '@harnas/core';
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry, WorktreeInfo } from '@harnas/core';
 import type { EventData, EventName, SessionRef } from '@harnas/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
@@ -25,6 +30,17 @@ import { autoLaunchCandidates } from './auto-launch.js';
 import { createSessionsService } from './sessions-service.js';
 
 const STUB = fileURLToPath(new URL('../../test/stub-agent.mjs', import.meta.url));
+const runGit = promisify(execFile);
+
+/** Репозиторий с одним коммитом на ветке `main` — общая точка отсчёта тестов worktree. */
+async function initGitProject(dir: string): Promise<void> {
+  await runGit('git', ['init', '-b', 'main', dir]);
+  await runGit('git', ['-C', dir, 'config', 'user.email', 'тест@harnas']);
+  await runGit('git', ['-C', dir, 'config', 'user.name', 'тест']);
+  await writeFile(path.join(dir, 'README.md'), 'старт\n', 'utf8');
+  await runGit('git', ['-C', dir, 'add', 'README.md']);
+  await runGit('git', ['-C', dir, 'commit', '-m', 'первый']);
+}
 
 async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 5000): Promise<void> {
   const started = Date.now();
@@ -104,6 +120,11 @@ afterEach(async () => {
 async function tempArgsFile(): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), 'harnas-sessions-args-'));
   return path.join(dir, 'args.json');
+}
+
+/** Корень worktree отдельно от `project`: `<root>/<проект>-<хеш6>/…` не должен жить внутри самого репозитория. */
+async function tempWorktreeRoot(): Promise<string> {
+  return mkdtemp(path.join(tmpdir(), 'harnas-sessions-worktrees-'));
 }
 
 interface StubArgs {
@@ -511,5 +532,163 @@ describe('закрытие по карте', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     const map = await readMap(project, work.work.id);
     expect(map.sessions.find((s) => s.id === ref.sessionId)?.lifecycle).toBe('closed');
+  });
+});
+
+describe('worktree (план, кусок 4.2)', () => {
+  it('1: sessions.create({ worktree: true }) — cwd стаба и createdAt в карте', async () => {
+    await initGitProject(project);
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    setEnv('HARNAS_WORKTREE_ROOT', await tempWorktreeRoot());
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'сделай штуку',
+      parent: null,
+      worktree: true,
+    });
+
+    const args = await readArgs(argsFile);
+    const map = await readMap(project, work.work.id);
+    const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+    expect(session?.worktree).not.toBeNull();
+    expect(session?.worktree?.createdAt).not.toBeNull();
+    // Путь сравнивается разрешённым симлинков: на macOS `/tmp` — симлинк на
+    // `/private/tmp`, а PTY отдаёт `cwd` уже разрешённым (тот же приём, что и в
+    // `worktree.test.ts` core про `baseCheckout`).
+    expect(await realpath(args.cwd)).toBe(await realpath(session?.worktree?.path as string));
+    expect(existsSync(session?.worktree?.path as string)).toBe(true);
+
+    await service.stop(ref);
+  });
+
+  it('2: дочерняя сессия со своим worktree, поднятая autoLaunch, — каталог заведён до запуска стаба', async () => {
+    // Тест «autoLaunch: false в настройках» выше по файлу пишет флаг в общий
+    // для процесса `config.json` (сандбокс-дом один на файл) и не возвращает
+    // его назад — без явного включения здесь autoLaunch остался бы выключен и
+    // для этого теста тоже.
+    await saveConfig({ autoLaunch: true });
+
+    await initGitProject(project);
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const worktreeRootDir = await tempWorktreeRoot();
+    let parentId = '';
+    await updateMap(project, work.work.id, (map) => {
+      parentId = addSession(map, { provider: 'claude', label: 'родитель', task: 'т' }).id;
+    });
+
+    const works = service({ debounceMs: 30 });
+    const pty = createPtyManager(fakeHost());
+    const sessions = createSessionsService(fakeHost(), works, pty, fakeActivity());
+    await works.start();
+
+    // Так `spawn_session({ worktree: true })` пишет план в карту (core, кусок 4.1):
+    // каталог на диске к этому моменту ещё не существует, `createdAt` — `null`.
+    let childId = '';
+    await updateMap(project, work.work.id, (map) => {
+      const child = addSession(map, {
+        provider: 'claude',
+        label: 'дочерняя',
+        task: 'т',
+        parent: parentId,
+      });
+      childId = child.id;
+      child.worktree = plannedWorktree(project, work.work.id, child.id, 'main', worktreeRootDir);
+    });
+
+    await waitFor(
+      async () =>
+        (await readMap(project, work.work.id)).sessions.find((s) => s.id === childId)?.lifecycle === 'active',
+    );
+
+    const map = await readMap(project, work.work.id);
+    const child = map.sessions.find((s) => s.id === childId);
+    expect(child?.worktree?.createdAt).not.toBeNull();
+    expect(existsSync(child?.worktree?.path as string)).toBe(true);
+
+    await sessions.stop({ projectPath: project, workId: work.work.id, sessionId: childId });
+  });
+
+  it('3: ветка уже существует — launch-failed, письмо от system родителю, сессия остаётся pending', async () => {
+    await initGitProject(project);
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const worktreeRootDir = await tempWorktreeRoot();
+    let parentId = '';
+    await updateMap(project, work.work.id, (map) => {
+      parentId = addSession(map, { provider: 'claude', label: 'родитель', task: 'т' }).id;
+    });
+
+    let childId = '';
+    await updateMap(project, work.work.id, (map) => {
+      const child = addSession(map, {
+        provider: 'claude',
+        label: 'дочерняя',
+        task: 'т',
+        parent: parentId,
+      });
+      childId = child.id;
+      child.worktree = plannedWorktree(project, work.work.id, child.id, 'main', worktreeRootDir);
+    });
+
+    // Ветка плана уже занята — `git worktree add -b <ветка>` откажет.
+    const branch = (await readMap(project, work.work.id)).sessions.find((s) => s.id === childId)
+      ?.worktree?.branch as string;
+    await runGit('git', ['-C', project, 'branch', branch]);
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref: SessionRef = { projectPath: project, workId: work.work.id, sessionId: childId };
+
+    await expect(service.launch(ref, 'launch')).rejects.toThrow();
+
+    const notice = broadcasts.find(
+      (b) => b.event === 'host.notice' && (b.data as { kind: string }).kind === 'launch-failed',
+    );
+    expect(notice).toBeDefined();
+
+    const map = await readMap(project, work.work.id);
+    expect(map.sessions.find((s) => s.id === childId)?.lifecycle).toBe('pending');
+    const letter = map.messages.find((m) => m.from === SYSTEM && m.to.includes(parentId));
+    expect(letter).toBeDefined();
+    expect(letter?.text).toContain('worktree');
+  });
+
+  it('7: sessions.delete грязного worktree без force — conflict; с force — сессия и worktree убраны целиком', async () => {
+    await initGitProject(project);
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const worktreeRootDir = await tempWorktreeRoot();
+
+    let sessionId = '';
+    let info!: WorktreeInfo;
+    await updateMap(project, work.work.id, (map) => {
+      const created = addSession(map, { provider: 'claude', label: 'a', task: 'т' });
+      sessionId = created.id;
+      created.worktree = plannedWorktree(project, work.work.id, created.id, 'main', worktreeRootDir);
+      info = created.worktree;
+    });
+    await createWorktree(project, info);
+    await updateMap(project, work.work.id, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === sessionId);
+      if (session?.worktree !== null && session?.worktree !== undefined) {
+        session.worktree.createdAt = new Date().toISOString();
+      }
+    });
+    await writeFile(path.join(info.path, 'черновик.md'), 'незакоммиченное\n', 'utf8');
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref: SessionRef = { projectPath: project, workId: work.work.id, sessionId };
+
+    await expect(service.delete(ref)).rejects.toMatchObject({ code: 'conflict' });
+    expect(existsSync(info.path)).toBe(true);
+    expect((await readMap(project, work.work.id)).sessions.some((s) => s.id === sessionId)).toBe(true);
+
+    await service.delete(ref, true);
+    expect(existsSync(info.path)).toBe(false);
+    expect((await readMap(project, work.work.id)).sessions.some((s) => s.id === sessionId)).toBe(false);
   });
 });

@@ -33,7 +33,8 @@ export type NoticeKind =
   | 'pointer-timeout'
   | 'pointer-cancelled'
   | 'resume-failed'
-  | 'resume-limit';
+  | 'resume-limit'
+  | 'trust-wait';
 
 export interface HostNotice {
   kind: NoticeKind;
