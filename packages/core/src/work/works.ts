@@ -135,8 +135,10 @@ export function watchWorks(
       watcher.on('error', (error) => onError?.(error));
       watchers.push(watcher);
     } catch (error) {
-      // Каталога может не быть: ни одной работы ещё не создавали — это не повод падать.
-      onError?.(error);
+      // Каталога может не быть: ни одной работы ещё не создавали — это не повод
+      // падать и не ошибка, о которой стоит сообщать (хост писал её в лог при
+      // каждом старте, наблюдая за HARNAS_HOME как за проектом).
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') onError?.(error);
     }
   }
 
