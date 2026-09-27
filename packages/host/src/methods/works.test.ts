@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -168,6 +168,30 @@ describe('works.rename / works.setStatus', () => {
     expect((await reply(client, 3)).error?.code).toBe('not_found');
     client.close();
   });
+
+  // Раунд исправлений 1, находка 2: работу удалили между проверкой обработчика и
+  // записью. Лок карты занят заранее, чтобы запрос гарантированно встал в
+  // ожидание уже после проверки, — иначе гонку почти всегда выигрывает not_found.
+  for (const [method, extra] of [
+    ['works.rename', { title: 'Икс' }],
+    ['works.setStatus', { status: 'archived' }],
+  ] as const) {
+    it(`${method}: работа удалена, пока запись ждала map.lock — not_found, хост жив`, async () => {
+      const { client, dir, workId } = await withWork();
+      const paths = workPaths(dir, workId);
+      const held = await open(paths.lock, 'wx');
+
+      client.send({ id: 2, method, params: { projectPath: dir, workId, ...extra } });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      await held.close();
+      await rm(paths.dir, { recursive: true, force: true });
+
+      expect((await reply(client, 2)).error?.code).toBe('not_found');
+      client.send({ id: 3, method: 'works.list', params: {} });
+      expect((await reply(client, 3)).result).toBeDefined();
+      client.close();
+    });
+  }
 });
 
 describe('providers.list', () => {

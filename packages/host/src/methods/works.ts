@@ -5,6 +5,7 @@ import {
   readMap,
   renameWork,
   setWorkStatus,
+  WorkNotFoundError,
 } from '@harnas/core';
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
@@ -35,25 +36,31 @@ export const worksDelete: Handler<'works.delete'> = async (params) => {
 };
 
 /**
- * Работы нет — `not_found`: `updateMap` на несуществующую работу бросает
- * обычную `Error`, и хост отдал бы `internal`. Карта читается заранее, как в
- * `worksDelete`.
+ * Работы нет — `not_found`, а не `internal`. Карта читается заранее, как в
+ * `worksDelete` (битая карта — тоже `not_found`), а работу, удалённую уже после
+ * этой проверки (`works.delete` другого клиента во время ожидания `map.lock`),
+ * core сообщает `WorkNotFoundError` из самой записи.
  */
 async function requireWork(projectPath: string, workId: string): Promise<void> {
   const map = await readMap(projectPath, workId).catch(() => null);
   if (map === null) throw new HostError('not_found', `работы ${workId} нет`);
 }
 
+function notFoundOnGone(error: unknown): never {
+  if (error instanceof WorkNotFoundError) throw new HostError('not_found', error.message);
+  throw error;
+}
+
 export const worksRename: Handler<'works.rename'> = async (params) => {
   // Пустое или длинное название отсекает схема протокола (`bad_request`) —
   // те же правила, что у core, поэтому до `renameWork` оно не доходит.
   await requireWork(params.projectPath, params.workId);
-  await renameWork(params.projectPath, params.workId, params.title);
+  await renameWork(params.projectPath, params.workId, params.title).catch(notFoundOnGone);
   return { ok: true };
 };
 
 export const worksSetStatus: Handler<'works.setStatus'> = async (params) => {
   await requireWork(params.projectPath, params.workId);
-  await setWorkStatus(params.projectPath, params.workId, params.status);
+  await setWorkStatus(params.projectPath, params.workId, params.status).catch(notFoundOnGone);
   return { ok: true };
 };
