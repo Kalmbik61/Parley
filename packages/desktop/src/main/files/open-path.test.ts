@@ -48,12 +48,38 @@ describe('openVerdict (кусок 5.2, тест 12)', () => {
   it('белый список — ровно спека 10.8', () => {
     expect([...OPENABLE_EXTENSIONS].sort()).toEqual(
       [
-        'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'bmp', 'tiff', 'ico', 'svg',
+        'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'bmp', 'tiff', 'ico',
         'pdf',
         'txt', 'md', 'markdown', 'rtf', 'csv', 'tsv', 'json', 'yaml', 'yml', 'toml', 'xml', 'log',
         'docx', 'xlsx', 'pptx', 'pages', 'numbers', 'key', 'odt', 'ods', 'odp',
         'mp3', 'wav', 'm4a', 'aac', 'flac', 'mp4', 'mov', 'm4v', 'webm',
       ].sort(),
     );
+  });
+
+  it('svg — reveal: браузер по умолчанию исполнит его скрипты (раунд исправлений 1)', () => {
+    for (const name of ['logo.svg', 'LOGO.SVG']) {
+      expect(openVerdict([file(name), file(name)]), name).toBe('reveal');
+    }
+  });
+
+  it('двойное расширение решает последнее: a.pdf.command — reveal, a.command.pdf — open', () => {
+    expect(openVerdict([file('a.pdf.command'), file('a.pdf.command')])).toBe('reveal');
+    expect(openVerdict([file('a.txt.app'), file('a.txt.app')])).toBe('reveal');
+    expect(openVerdict([file('a.command.pdf'), file('a.command.pdf')])).toBe('open');
+  });
+
+  it('исполняемые и перенаправляющие расширения — reveal', () => {
+    const names = [
+      'x.command', 'x.tool', 'x.terminal', 'x.webloc', 'x.inetloc', 'x.fileloc', 'x.pkg', 'x.dmg', 'x.jar',
+      'x.py', 'x.sh', 'x.applescript', 'x.scpt', 'x.html',
+    ];
+    for (const name of names) {
+      expect(openVerdict([file(name), file(name)]), name).toBe('reveal');
+    }
+    // Бандлы — каталоги с расширением.
+    for (const name of ['X.app', 'x.workflow', 'x.action', 'x.pkg']) {
+      expect(openVerdict([folder(name), folder(name)]), name).toBe('reveal');
+    }
   });
 });

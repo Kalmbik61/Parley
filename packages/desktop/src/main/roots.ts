@@ -5,13 +5,14 @@
  * наружу, поэтому сравниваются только `realpath` обеих сторон.
  */
 import type { Stats } from 'node:fs';
-import { lstat, realpath } from 'node:fs/promises';
+import { lstat, realpath, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { WorksSnapshot } from '@harnas/protocol';
 import type { FileRoot } from '../shared/files-types.js';
 import type { FileRootSpec } from '../shared/layout-types.js';
 import { rootKey, workKey as makeWorkKey } from '../shared/work-keys.js';
+import { HostError } from './host-connection.js';
 
 export interface RootsSource {
   /** `connection.call('works.list', {})`. */
@@ -47,19 +48,55 @@ export interface RootsRegistry {
   expandHome(p: string): string;
 }
 
-interface RootEntry {
+interface RootEntry extends RootPath {
   root: FileRoot;
+}
+
+/** Корень для сравнения путей: realpath и признак тома без учёта регистра. */
+export interface RootPath {
   /** realpath корня. */
   absPath: string;
+  /** Том корня не различает регистр: stat корня и его пути в другом регистре — один dev/ino. */
+  caseInsensitive: boolean;
 }
 
 /** Каталоги, запись в которые из окна обошла бы git и `map.lock` хоста (спека 10.8, п. 4). */
 const WRITE_FORBIDDEN_SEGMENTS = new Set(['.git', '.harnas']);
 
-function isInside(root: string, target: string): boolean {
-  if (target === root) return true;
-  const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
-  return target.startsWith(prefix);
+/**
+ * Путь цели относительно корня, если цель внутри него (сам корень — ''), иначе null.
+ * Байтовое сравнение ошиблось бы на macOS: имя с диска и имя из запроса бывают в
+ * разных формах Unicode (NFC/NFD) и, на томе без учёта регистра, в разном регистре.
+ * Регистр сглаживается только у такого тома: на чувствительном `proj` рядом с `Proj` —
+ * другой каталог. Сравнение по звеньям, а не по префиксу строки: `Proj2` не внутри `Proj`.
+ */
+export function relativeInside(root: RootPath, target: string): string | null {
+  const fold = (p: string): string[] => {
+    const nfc = p.normalize('NFC');
+    return (root.caseInsensitive ? nfc.toLowerCase() : nfc).split(path.sep).filter((s) => s !== '');
+  };
+  const base = fold(root.absPath);
+  const full = fold(target);
+  if (full.length < base.length || base.some((segment, i) => segment !== full[i])) return null;
+  // Хвост — из NFC-формы исходного регистра: число звеньев сглаживание не меняет.
+  return target.normalize('NFC').split(path.sep).filter((s) => s !== '').slice(base.length).join(path.sep);
+}
+
+/** Регистр каждой буквы наоборот: путь «в другом регистре» для пробы тома. */
+function swapCase(p: string): string {
+  return [...p].map((c) => (c === c.toUpperCase() ? c.toLowerCase() : c.toUpperCase())).join('');
+}
+
+/** Проба тома корня: путь в другом регистре ведёт в тот же каталог. Без букв или при ошибке — с учётом регистра (строже). */
+async function probeCaseInsensitive(absPath: string): Promise<boolean> {
+  const swapped = swapCase(absPath);
+  if (swapped === absPath) return false;
+  try {
+    const [a, b] = await Promise.all([stat(absPath), stat(swapped)]);
+    return a.dev === b.dev && a.ino === b.ino;
+  } catch {
+    return false;
+  }
 }
 
 function hasForbiddenSegment(rel: string): boolean {
@@ -68,6 +105,16 @@ function hasForbiddenSegment(rel: string): boolean {
 
 function isEnoent(error: unknown): boolean {
   return (error as { code?: unknown } | null)?.code === 'ENOENT';
+}
+
+/**
+ * Ошибка диска в resolve: нет пути — `not_found` (окно отличает его от отказа), прочее
+ * (ENAMETOOLONG, ENOTDIR, ELOOP, EACCES…) — `files:denied`: контракт resolve — только отказ.
+ */
+function diskError(error: unknown, relPath: string): Error {
+  if (isEnoent(error)) return new HostError('not_found', `no such path: ${relPath}`);
+  const code = (error as { code?: unknown } | null)?.code;
+  return new FilesDeniedError(`cannot resolve ${relPath}: ${typeof code === 'string' ? code : 'error'}`);
 }
 
 async function realpathOrNull(p: string): Promise<string | null> {
@@ -92,8 +139,10 @@ async function buildEntries(snapshot: WorksSnapshot): Promise<Map<string, RootEn
     }
     for (const candidate of candidates) {
       pending.push(
-        realpathOrNull(candidate.dir).then((absPath) =>
-          absPath === null ? null : { root: { workKey: key, spec: candidate.spec }, absPath },
+        realpathOrNull(candidate.dir).then(async (absPath) =>
+          absPath === null
+            ? null
+            : { root: { workKey: key, spec: candidate.spec }, absPath, caseInsensitive: await probeCaseInsensitive(absPath) },
         ),
       );
     }
@@ -166,31 +215,35 @@ export function createRootsRegistry(source: RootsSource, options: { home?: strin
     if (entry === undefined) throw new FilesDeniedError(`unknown root: ${rootKey(root)}`);
     if (relPath.includes('\0')) throw new FilesDeniedError('path contains NUL');
     if (path.isAbsolute(relPath)) throw new FilesDeniedError(`absolute path: ${relPath}`);
-    const base = entry.absPath;
-    const target = path.resolve(base, relPath);
-    if (!isInside(base, target)) throw new FilesDeniedError(`path escapes root: ${relPath}`);
+    const target = path.resolve(entry.absPath, relPath);
+    const lexical = relativeInside(entry, target);
+    if (lexical === null) throw new FilesDeniedError(`path escapes root: ${relPath}`);
 
     if (mode === 'read') {
-      const real = await realpath(target);
-      if (!isInside(base, real)) throw new FilesDeniedError(`path escapes root via link: ${relPath}`);
+      const real = await realpath(target).catch((error: unknown) => {
+        throw diskError(error, relPath);
+      });
+      if (relativeInside(entry, real) === null) throw new FilesDeniedError(`path escapes root via link: ${relPath}`);
       return real;
     }
 
     // Запись: лексическая проверка `.git`/`.harnas` ещё до диска — `.GIT/config` на
     // регистрозависимом диске иначе упал бы с ENOENT, а не отказом.
-    if (hasForbiddenSegment(path.relative(base, target))) throw new FilesDeniedError(`write into protected folder: ${relPath}`);
+    if (hasForbiddenSegment(lexical)) throw new FilesDeniedError(`write into protected folder: ${relPath}`);
 
     let real: string;
     let link: Stats | null;
     try {
       link = await lstat(target);
     } catch (error) {
-      if (!isEnoent(error)) throw error;
+      if (!isEnoent(error)) throw diskError(error, relPath);
       link = null;
     }
     if (link === null) {
-      // Файла нет: проверяем родителя, новый файл ляжет в его realpath.
-      const parent = await realpath(path.dirname(target));
+      // Файла нет: проверяем родителя, новый файл ляжет в его realpath. Нет и родителя — not_found.
+      const parent = await realpath(path.dirname(target)).catch((error: unknown) => {
+        throw diskError(error, relPath);
+      });
       real = path.join(parent, path.basename(target));
     } else {
       try {
@@ -198,12 +251,13 @@ export function createRootsRegistry(source: RootsSource, options: { home?: strin
       } catch (error) {
         // Висячая ссылка: иначе проверка ушла бы к родителю, и файл создался бы по ссылке снаружи.
         if (link.isSymbolicLink() && isEnoent(error)) throw new FilesDeniedError(`dangling link: ${relPath}`);
-        throw error;
+        throw diskError(error, relPath);
       }
     }
-    if (!isInside(base, real)) throw new FilesDeniedError(`path escapes root via link: ${relPath}`);
+    const inside = relativeInside(entry, real);
+    if (inside === null) throw new FilesDeniedError(`path escapes root via link: ${relPath}`);
     // Ссылка `foo → .git` и файл `.git` в корне worktree видны только по realpath.
-    if (hasForbiddenSegment(path.relative(base, real))) throw new FilesDeniedError(`write into protected folder: ${relPath}`);
+    if (hasForbiddenSegment(inside)) throw new FilesDeniedError(`write into protected folder: ${relPath}`);
     return real;
   };
 
@@ -212,20 +266,20 @@ export function createRootsRegistry(source: RootsSource, options: { home?: strin
     if (real === null) return null;
     // Только корни своей работы: у работ одного проекта корень `project` общий, и поиск
     // по всем отдал бы путь одной из них (спека 10.8).
-    let best: RootEntry | null = null;
+    let best: { entry: RootEntry; relPath: string } | null = null;
     for (const entry of entries.get(key) ?? []) {
-      if (!isInside(entry.absPath, real)) continue;
-      if (best === null || entry.absPath.length > best.absPath.length) best = entry;
+      const relPath = relativeInside(entry, real);
+      if (relPath === null) continue;
+      if (best === null || entry.absPath.length > best.entry.absPath.length) best = { entry, relPath };
     }
-    if (best === null) return null;
-    return { root: best.root, relPath: path.relative(best.absPath, real) };
+    return best === null ? null : { root: best.entry.root, relPath: best.relPath };
   };
 
   const insideAnyRoot: RootsRegistry['insideAnyRoot'] = async (absPath) => {
     const real = await realAbs(absPath);
     if (real === null) return null;
     for (const list of entries.values()) {
-      if (list.some((entry) => isInside(entry.absPath, real))) return real;
+      if (list.some((entry) => relativeInside(entry, real) !== null)) return real;
     }
     return null;
   };

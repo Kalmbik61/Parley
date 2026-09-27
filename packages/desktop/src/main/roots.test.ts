@@ -5,7 +5,8 @@ import type { WorksSnapshot } from '@harnas/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FileRoot } from '../shared/files-types.js';
 import { workKey } from '../shared/work-keys.js';
-import { createRootsRegistry, FilesDeniedError, type RootsRegistry, type RootsSource } from './roots.js';
+import { HostError } from './host-connection.js';
+import { createRootsRegistry, FilesDeniedError, relativeInside, type RootsRegistry, type RootsSource } from './roots.js';
 
 /** Сессия фикстуры: `worktree` — путь созданного worktree, `planned` — запланированного (`createdAt: null`). */
 interface SessionFixture {
@@ -360,5 +361,95 @@ describe('удалённый worktree (тест 11)', () => {
   it('корень с упавшим realpath пропущен, остальные на месте', async () => {
     const { registry } = await ready([{ id: 's-02', worktree: path.join(dir, 'gone') }]);
     expect(registry.roots(KEY())).toEqual([{ spec: { kind: 'project' }, absPath: await realpath(project) }]);
+  });
+});
+
+describe('регистр и форма Unicode (раунд исправлений 1)', () => {
+  /** Том tmp нечувствителен к регистру — так на обычной macOS; на чувствительном тест не о чем проверять. */
+  const insensitive = async (): Promise<boolean> => {
+    const probe = path.join(dir, 'CaseProbe');
+    await mkdir(probe);
+    try {
+      return (await realpath(path.join(dir, 'caseprobe')).then(() => true, () => false));
+    } finally {
+      await rm(probe, { recursive: true, force: true });
+    }
+  };
+
+  it('Proj/Src и proj/src на нечувствительном томе — внутри корня', async (ctx) => {
+    if (!(await insensitive())) ctx.skip();
+    const proj = path.join(dir, 'Proj');
+    await mkdir(path.join(proj, 'Src'), { recursive: true });
+    await writeFile(path.join(proj, 'Src', 'a.ts'), 'a');
+    const source = fakeSource(snapshot([{ projectPath: proj, workId: 'w-c' }]));
+    const registry = createRootsRegistry(source);
+    source.connect();
+    const key = workKey(proj, 'w-c');
+    await vi.waitFor(() => expect(registry.roots(key)).toHaveLength(1));
+
+    const lower = path.join(dir, 'proj', 'src', 'a.ts');
+    expect(await registry.locate(key, lower)).toEqual({ root: { workKey: key, spec: { kind: 'project' } }, relPath: path.join('src', 'a.ts') });
+    expect(await registry.insideAnyRoot(lower)).not.toBeNull();
+    expect(await registry.insideAnyRoot(path.join(dir, 'PROJ', 'SRC', 'a.ts'))).not.toBeNull();
+    // Соседний каталог с другим именем — снаружи и здесь.
+    await mkdir(path.join(dir, 'Proj2'));
+    await writeFile(path.join(dir, 'Proj2', 'b.ts'), 'b');
+    expect(await registry.locate(key, path.join(dir, 'proj2', 'b.ts'))).toBeNull();
+    expect(await registry.insideAnyRoot(path.join(dir, 'Proj2', 'b.ts'))).toBeNull();
+  });
+
+  it.runIf(process.platform === 'darwin')('NFD-имя против NFC-корня — внутри корня', async () => {
+    const nfc = path.join(dir, 'caf\u00e9');
+    await mkdir(nfc);
+    await writeFile(path.join(nfc, 'a.ts'), 'a');
+    const source = fakeSource(snapshot([{ projectPath: nfc, workId: 'w-u' }]));
+    const registry = createRootsRegistry(source);
+    source.connect();
+    const key = workKey(nfc, 'w-u');
+    await vi.waitFor(() => expect(registry.roots(key)).toHaveLength(1));
+
+    const nfd = path.join(dir, 'cafe\u0301', 'a.ts');
+    expect(await registry.locate(key, nfd)).toEqual({ root: { workKey: key, spec: { kind: 'project' } }, relPath: 'a.ts' });
+    expect(await registry.insideAnyRoot(nfd)).not.toBeNull();
+  });
+
+  it('relativeInside: регистр различается только у нечувствительного корня, соседнее имя — снаружи', () => {
+    const sensitive = { absPath: '/v/Proj', caseInsensitive: false };
+    const folded = { absPath: '/v/Proj', caseInsensitive: true };
+    expect(relativeInside(sensitive, '/v/Proj/a.ts')).toBe('a.ts');
+    expect(relativeInside(sensitive, '/v/proj/a.ts')).toBeNull();
+    expect(relativeInside(folded, '/v/proj/A.ts')).toBe('A.ts');
+    expect(relativeInside(folded, '/v/Proj')).toBe('');
+    for (const root of [sensitive, folded]) {
+      expect(relativeInside(root, '/v/Proj2/a.ts')).toBeNull();
+      expect(relativeInside(root, '/v/Project')).toBeNull();
+      expect(relativeInside(root, '/v')).toBeNull();
+    }
+    expect(relativeInside({ absPath: '/v/caf\u00e9', caseInsensitive: false }, '/v/cafe\u0301/x')).toBe('x');
+  });
+});
+
+describe('ошибки resolve (раунд исправлений 1)', () => {
+  it('нет файла при чтении — not_found', async () => {
+    const { registry } = await ready();
+    const error = await registry.resolve(PROJECT_ROOT(), 'src/nope.ts', 'read').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(HostError);
+    expect((error as HostError).code).toBe('not_found');
+  });
+
+  it('запись при отсутствующем родителе на 2+ уровня — not_found', async () => {
+    const { registry } = await ready();
+    const error = await registry.resolve(PROJECT_ROOT(), 'new/deeper/file.ts', 'write').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(HostError);
+    expect((error as HostError).code).toBe('not_found');
+  });
+
+  it('ENAMETOOLONG и прочие ошибки realpath — FilesDeniedError', async () => {
+    const { registry } = await ready();
+    const long = `${'a'.repeat(5000)}/x.ts`;
+    await expect(registry.resolve(PROJECT_ROOT(), long, 'read')).rejects.toBeInstanceOf(FilesDeniedError);
+    await expect(registry.resolve(PROJECT_ROOT(), long, 'write')).rejects.toBeInstanceOf(FilesDeniedError);
+    // ENOTDIR: файл как каталог.
+    await expect(registry.resolve(PROJECT_ROOT(), 'src/a.ts/x', 'read')).rejects.toBeInstanceOf(FilesDeniedError);
   });
 });

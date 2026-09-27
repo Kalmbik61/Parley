@@ -477,6 +477,51 @@ describe('app:open-path и app:show-in-finder (кусок 5.2, тест 13)', ()
     expect(openPath).toHaveBeenLastCalledWith(path.join(await realpath(other), 'notes.md'));
   });
 
+  /**
+   * TOCTOU (раунд исправлений 1): файл подменяется между первой проверкой и открытием.
+   * Подмена — во втором вызове insideAnyRoot, то есть в повторной проверке перед openPath.
+   */
+  const swapOnRecheck = (swap: () => Promise<void>): RootsRegistry => {
+    let calls = 0;
+    return {
+      ...roots,
+      insideAnyRoot: async (absPath) => {
+        calls += 1;
+        if (calls === 2) await swap();
+        return roots.insideAnyRoot(absPath);
+      },
+    };
+  };
+
+  it('файл подменён симлинком наружу между проверкой и открытием — reveal, openPath не вызван', async () => {
+    const target = path.join(project, 'report.pdf');
+    await writeFile(target, '%PDF');
+    const { ipcMain, openPath, showItemInFolder } = setup({
+      roots: swapOnRecheck(async () => {
+        await rm(target);
+        await symlink('/etc/hosts', target);
+      }),
+    });
+    expect(await ipcMain.invoke('app:open-path', target)).toBe('revealed');
+    expect(openPath).not.toHaveBeenCalled();
+    expect(showItemInFolder).toHaveBeenCalledWith(target);
+  });
+
+  it('файл подменён другим файлом того же имени (другой inode) — reveal', async () => {
+    const target = path.join(project, 'report.pdf');
+    await writeFile(target, '%PDF');
+    const { ipcMain, openPath, showItemInFolder } = setup({
+      roots: swapOnRecheck(async () => {
+        await rm(target);
+        await writeFile(path.join(project, 'other.pdf'), '%PDF-2');
+        await writeFile(target, '%PDF-3');
+      }),
+    });
+    expect(await ipcMain.invoke('app:open-path', target)).toBe('revealed');
+    expect(openPath).not.toHaveBeenCalled();
+    expect(showItemInFolder).toHaveBeenCalledWith(target);
+  });
+
   it('непустой ответ shell.openPath — ошибка failed', async () => {
     await writeFile(path.join(project, 'a.txt'), 'a');
     const { ipcMain, openPath } = setup({ roots });
