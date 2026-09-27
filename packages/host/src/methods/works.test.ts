@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -184,7 +184,9 @@ describe('works.rename / works.setStatus', () => {
       client.send({ id: 2, method, params: { projectPath: dir, workId, ...extra } });
       await new Promise((resolve) => setTimeout(resolve, 150));
       await held.close();
-      await rm(paths.dir, { recursive: true, force: true });
+      // Каталог уносится одним rename, а не rm: ожидающий писатель мог бы создать лок в
+      // каталоге посреди рекурсивного удаления, и rm упал бы с ENOTEMPTY.
+      await rename(paths.dir, path.join(dir, 'gone-work'));
 
       expect((await reply(client, 2)).error?.code).toBe('not_found');
       client.send({ id: 3, method: 'works.list', params: {} });
