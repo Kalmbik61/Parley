@@ -1,0 +1,388 @@
+/**
+ * Тесты 2, 3, 5, 12, 13, 14, 17 куска 2.5: слой поверхностей работы рядом с
+ * её `LayoutView` — так их монтирует контейнер работы в `AppShell.tsx`.
+ * xterm подменён фейком со счётчиками конструктора и `dispose`.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
+import { refKey } from '@harnas/protocol';
+import type { WorkEntry, WorkSession } from '@harnas/core';
+import type { LayoutNode } from '../../shared/layout-types.js';
+import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
+import { terminalSurfaces } from '../terminal/TerminalSurface.js';
+import { XTERM_LIGHT } from '../terminal/xterm-themes.js';
+import { useUiStore } from '../store/ui.js';
+import { useWorksStore } from '../store/works.js';
+import { EMPTY_HISTORY } from './history.js';
+import { LayoutView } from './LayoutView.js';
+import { useLayoutStore } from './store.js';
+import { SurfaceLayer } from './SurfaceLayer.js';
+import { tabMeta } from './tab-meta.js';
+import { focusTab, moveTab } from './tree.js';
+
+const state = vi.hoisted(() => ({
+  constructed: 0,
+  disposed: 0,
+  /** Номер вызова конструктора (с 1), на котором он бросает; 0 — не бросать. */
+  throwOnCall: 0,
+}));
+
+vi.mock('@xterm/xterm', () => ({
+  Terminal: vi.fn().mockImplementation((initialOptions: Record<string, unknown>) => {
+    state.constructed += 1;
+    if (state.constructed === state.throwOnCall) throw new Error('xterm упал');
+    return {
+      cols: 80,
+      rows: 24,
+      options: { ...initialOptions },
+      open: () => {},
+      loadAddon: () => {},
+      write: () => {},
+      reset: () => {},
+      dispose: () => {
+        state.disposed += 1;
+      },
+      resize: () => {},
+      focus: () => {},
+      scrollToBottom: () => {},
+      onData: () => ({ dispose: () => {} }),
+      attachCustomKeyEventHandler: () => {},
+      hasSelection: () => false,
+      getSelection: () => '',
+    };
+  }),
+}));
+vi.mock('@xterm/addon-fit', () => ({ FitAddon: vi.fn().mockImplementation(() => ({ fit: () => {} })) }));
+vi.mock('@xterm/addon-search', () => ({ SearchAddon: vi.fn().mockImplementation(() => ({ findNext: () => true })) }));
+vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: vi.fn().mockImplementation(() => ({})) }));
+vi.mock('@xterm/addon-webgl', () => ({
+  WebglAddon: vi.fn().mockImplementation(() => ({ onContextLoss: () => {}, dispose: () => {} })),
+}));
+
+class ResizeObserverStub {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+
+function session(id: string, label: string): WorkSession {
+  return {
+    id,
+    provider: 'claude',
+    label,
+    task: '',
+    parent: null,
+    contextFrom: [],
+    lifecycle: 'active',
+    result: null,
+    resultAt: null,
+    closedAt: null,
+    history: [],
+    startedAt: null,
+    endedAt: null,
+    pid: null,
+    startedAtProcess: null,
+    launchedBy: 'host',
+    providerSessionId: null,
+    metrics: null,
+    summary: null,
+    summarySource: null,
+    artifacts: [],
+    agent: null,
+    worktree: null,
+  };
+}
+
+const PROJECT = '/tmp/p';
+const WORK_KEY = '/tmp/p w';
+
+function entry(sessions: WorkSession[]): WorkEntry {
+  return {
+    projectPath: PROJECT,
+    map: {
+      schemaVersion: 2,
+      rooms: [],
+      work: { id: 'w', title: 'Работа', goal: '', status: 'active', createdAt: '2026-01-01', updatedAt: '2026-01-01' },
+      sessions,
+      messages: [],
+    },
+  };
+}
+
+function refOf(sessionId: string): { projectPath: string; workId: string; sessionId: string } {
+  return { projectPath: PROJECT, workId: 'w', sessionId };
+}
+
+function setLayout(root: LayoutNode, activeGroupId: string): void {
+  useLayoutStore.setState({
+    activeWorkKey: WORK_KEY,
+    layouts: { [WORK_KEY]: { root, activeGroupId, closedTabs: [] } },
+    hydrated: { [WORK_KEY]: true },
+    pending: {},
+    history: EMPTY_HISTORY,
+    mru: {},
+    navigating: false,
+  });
+}
+
+/** Две группы: g1 — [a, x] (активна a), g2 — [b]. */
+function twoGroups(): LayoutNode {
+  return {
+    type: 'split',
+    id: 's1',
+    direction: 'row',
+    ratio: 0.5,
+    children: [
+      {
+        type: 'group',
+        id: 'g1',
+        tabs: [
+          { kind: 'terminal', id: 'terminal:a', sessionId: 'a' },
+          { kind: 'terminal', id: 'terminal:x', sessionId: 'x' },
+        ],
+        activeTabId: 'terminal:a',
+      },
+      { type: 'group', id: 'g2', tabs: [{ kind: 'terminal', id: 'terminal:b', sessionId: 'b' }], activeTabId: 'terminal:b' },
+    ],
+  };
+}
+
+let bridge: FakeBridge;
+
+function renderWork(active = true): ReturnType<typeof render> {
+  return render(
+    <div data-testid="work-container">
+      <LayoutView workKey={WORK_KEY} active={active} bridge={bridge} fontFamily="Menlo" fontSize={13} />
+      <SurfaceLayer workKey={WORK_KEY} active={active} bridge={bridge} fontFamily="Menlo" fontSize={13} />
+    </div>,
+  );
+}
+
+function surface(tabId: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`[data-surface-layer] [data-tab-id="${tabId}"]`);
+}
+
+function attachCount(sessionId: string): number {
+  return bridge.calls.filter(
+    (call) => call.method === 'pty.attach' && (call.params as { ref: { sessionId: string } }).ref.sessionId === sessionId,
+  ).length;
+}
+
+function detachCount(sessionId: string): number {
+  return bridge.calls.filter(
+    (call) => call.method === 'pty.detach' && (call.params as { ref: { sessionId: string } }).ref.sessionId === sessionId,
+  ).length;
+}
+
+async function flush(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+beforeEach(() => {
+  state.constructed = 0;
+  state.disposed = 0;
+  state.throwOnCall = 0;
+  vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+  bridge = createFakeBridge();
+  bridge.setHandler('pty.attach', () => ({ snapshot: 'СНИМОК', cols: 80, rows: 24 }));
+  bridge.setHandler('pty.detach', () => ({ ok: true as const }));
+  useWorksStore.setState({
+    entries: [entry([session('a', 'альфа'), session('b', 'бета'), session('x', 'икс')])],
+    branches: {},
+    loading: false,
+    error: null,
+  });
+  useUiStore.setState({ visibleSessionRefs: {} });
+  act(() => useUiStore.getState().setDark(true));
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  act(() => useUiStore.getState().setDark(false));
+  useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
+  useLayoutStore.setState({
+    activeWorkKey: null,
+    layouts: {},
+    hydrated: {},
+    pending: {},
+    history: EMPTY_HISTORY,
+    mru: {},
+    navigating: false,
+  });
+});
+
+describe('SurfaceLayer — перенос вкладки (тест 2)', () => {
+  it('Terminal создан один раз, pty.attach не прибавилось, data-mount-id прежний, меняется только якорь', async () => {
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+
+    const before = surface('terminal:a');
+    if (before === null) throw new Error('нет поверхности terminal:a');
+    const mountId = before.dataset.mountId;
+    expect(mountId).toMatch(/.+/);
+    expect(before.style.getPropertyValue('position-anchor')).toBe('--g-g1');
+    const constructed = state.constructed;
+    const attaches = attachCount('a');
+    expect(attaches).toBe(1);
+
+    act(() => {
+      useLayoutStore.getState().apply(WORK_KEY, (layout) => moveTab(layout, 'terminal:a', { groupId: 'g2', index: 1 }));
+    });
+    await flush();
+
+    const after = surface('terminal:a');
+    expect(after).toBe(before);
+    expect(after?.dataset.mountId).toBe(mountId);
+    expect(after?.style.getPropertyValue('position-anchor')).toBe('--g-g2');
+    expect(state.constructed).toBe(constructed);
+    expect(attachCount('a')).toBe(attaches);
+    // Тело группы объявляет якорь, к которому привязана поверхность.
+    expect(document.querySelector<HTMLElement>('[data-group-body="g2"]')?.style.getPropertyValue('anchor-name')).toBe('--g-g2');
+  });
+});
+
+describe('SurfaceLayer — видимость (тесты 3, 17)', () => {
+  it('тест 3: вкладка стала неактивной → pty.detach, снова активной → pty.attach со снимком', async () => {
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+    expect(attachCount('a')).toBe(1);
+    expect(attachCount('x')).toBe(0);
+    expect(surface('terminal:x')?.style.visibility).toBe('hidden');
+    expect(surface('terminal:x')?.hasAttribute('inert')).toBe(true);
+    expect(surface('terminal:a')?.hasAttribute('inert')).toBe(false);
+
+    act(() => {
+      useLayoutStore.getState().apply(WORK_KEY, (layout) => focusTab(layout, 'terminal:x'));
+    });
+    await flush();
+    expect(detachCount('a')).toBe(1);
+    expect(attachCount('x')).toBe(1);
+    expect(surface('terminal:a')?.style.visibility).toBe('hidden');
+    expect(surface('terminal:a')?.hasAttribute('inert')).toBe(true);
+
+    act(() => {
+      useLayoutStore.getState().apply(WORK_KEY, (layout) => focusTab(layout, 'terminal:a'));
+    });
+    await flush();
+    expect(attachCount('a')).toBe(2);
+    expect(state.constructed).toBe(3);
+  });
+
+  it('тест 17: visibleSessionRefs держит refKey видимой поверхности; неактивная или размонтированная — ключа нет', async () => {
+    setLayout(twoGroups(), 'g1');
+    const { unmount } = renderWork();
+    await flush();
+    const visible = (): Record<string, true> => useUiStore.getState().visibleSessionRefs;
+    expect(visible()[refKey(refOf('a'))]).toBe(true);
+    expect(visible()[refKey(refOf('b'))]).toBe(true);
+    expect(refKey(refOf('x')) in visible()).toBe(false);
+
+    act(() => {
+      useLayoutStore.getState().apply(WORK_KEY, (layout) => focusTab(layout, 'terminal:x'));
+    });
+    await flush();
+    expect(refKey(refOf('a')) in visible()).toBe(false);
+    expect(visible()[refKey(refOf('x'))]).toBe(true);
+
+    unmount();
+    expect(visible()).toEqual({});
+  });
+});
+
+describe('SurfaceLayer — реестр terminalSurfaces (тест 5)', () => {
+  it('ключ есть, пока поверхность смонтирована', async () => {
+    setLayout(twoGroups(), 'g1');
+    const { unmount } = renderWork();
+    await flush();
+    expect(terminalSurfaces.has(refKey(refOf('a')))).toBe(true);
+    expect(terminalSurfaces.has(refKey(refOf('x')))).toBe(true);
+
+    await act(async () => {
+      await useLayoutStore.getState().requestCloseTabs(WORK_KEY, ['terminal:x']);
+    });
+    await flush();
+    expect(terminalSurfaces.has(refKey(refOf('x')))).toBe(false);
+    expect(terminalSurfaces.has(refKey(refOf('a')))).toBe(true);
+
+    unmount();
+    expect(terminalSurfaces.has(refKey(refOf('a')))).toBe(false);
+  });
+});
+
+describe('SurfaceLayer — фон обёртки отступа (тест 12)', () => {
+  it('#282c34 при dark; после setDark(false) — фон XTERM_LIGHT, Terminal не создан заново', async () => {
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+    const pad = surface('terminal:a')?.querySelector<HTMLElement>('[data-testid="terminal-surface-pad"]');
+    if (pad === null || pad === undefined) throw new Error('нет обёртки отступа');
+    expect(pad.style.backgroundColor).toBe('rgb(40, 44, 52)');
+    const constructed = state.constructed;
+
+    act(() => useUiStore.getState().setDark(false));
+    const probe = document.createElement('div');
+    probe.style.backgroundColor = XTERM_LIGHT.background ?? '';
+    expect(pad.style.backgroundColor).toBe(probe.style.backgroundColor);
+    expect(state.constructed).toBe(constructed);
+  });
+});
+
+describe('SurfaceLayer — удалённая сессия (тест 13)', () => {
+  it('в слое нет поверхности её вкладки, в теле видна MissingBody, «Close» убирает вкладку', async () => {
+    const root: LayoutNode = {
+      type: 'group',
+      id: 'g1',
+      tabs: [{ kind: 'terminal', id: 'terminal:gone', sessionId: 'gone' }],
+      activeTabId: 'terminal:gone',
+    };
+    setLayout(root, 'g1');
+    renderWork();
+    await flush();
+
+    expect(surface('terminal:gone')).toBeNull();
+    expect(attachCount('gone')).toBe(0);
+    const body = document.querySelector<HTMLElement>('[data-group-body="g1"]');
+    if (body === null) throw new Error('нет тела группы');
+    expect(within(body).getByText('Session deleted')).toBeTruthy();
+    fireEvent.click(within(body).getByRole('button', { name: 'Close' }));
+    await flush();
+    const layout = useLayoutStore.getState().layouts[WORK_KEY];
+    expect(layout?.root.type === 'group' ? layout.root.tabs : null).toEqual([]);
+  });
+});
+
+describe('SurfaceLayer — граница ошибки поверхности (тест 14)', () => {
+  it('xterm одной вкладки бросает: запасной вид с заголовком внутри корня, «Close» — requestCloseTabs; соседняя жива', async () => {
+    // Порядок поверхностей — по id вкладки: первым конструируется terminal:a.
+    state.throwOnCall = 1;
+    const requestClose = vi.spyOn(useLayoutStore.getState(), 'requestCloseTabs');
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      setLayout(twoGroups(), 'g1');
+      renderWork();
+      await flush();
+
+      const root = surface('terminal:a');
+      if (root === null) throw new Error('корень поверхности terminal:a размонтирован');
+      const fallback = within(root);
+      const title = tabMeta({ kind: 'terminal', id: 'terminal:a', sessionId: 'a' }, useWorksStore.getState().entries[0] ?? null).title;
+      expect(fallback.getByText(title)).toBeTruthy();
+      fireEvent.click(fallback.getByRole('button', { name: 'Close' }));
+      expect(requestClose).toHaveBeenCalledWith(WORK_KEY, ['terminal:a']);
+
+      // Соседняя поверхность (terminal:b, другая группа) жива.
+      expect(surface('terminal:b')?.querySelector('[data-testid="terminal-surface-pad"]')).not.toBeNull();
+      expect(state.disposed).toBe(0);
+    } finally {
+      spy.mockRestore();
+      requestClose.mockRestore();
+    }
+  });
+});

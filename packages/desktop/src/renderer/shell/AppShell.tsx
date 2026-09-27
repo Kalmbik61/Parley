@@ -23,12 +23,19 @@
  * прежний путь через `workspaceRef` для них недоступен (`Workspace` не
  * смонтирован), поэтому вместо dockview-API они зовут `setActiveWork` и
  * `apply` в `layout/store.ts` напрямую.
+ *
+ * Кусок 2.5 (спека 5.5): под флагом центр — контейнеры трёх последних активных
+ * работ (LRU). Контейнер — `position: absolute; inset: 0`, в нём `LayoutView`
+ * работы и следом её `SurfaceLayer`; контейнер — containing block поверхностей,
+ * а тела групп — его потомки, поэтому `anchor()` действительны. Неактивные
+ * контейнеры скрыты (`visibility: hidden`, `inert`), но смонтированы — терминалы
+ * живы. Меню `find` и входы сайдбара под флагом тоже обслуживает `AppShell`.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { WorkSession } from '@harnas/core';
-import type { SessionRef } from '@harnas/protocol';
+import { refKey, type SessionRef } from '@harnas/protocol';
 import type { HarnasBridge, HostStatus } from '../../shared/bridge.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { noticeText, S } from '../../shared/strings.js';
@@ -45,9 +52,12 @@ import { sessionLabelFor, sessionRowLabel } from '../lib/participant.js';
 import { treeOrder, workKey } from '../lib/tree-order.js';
 import { tabId } from '../layout/ids.js';
 import { LayoutView } from '../layout/LayoutView.js';
+import { createLru, type Lru } from '../layout/lru.js';
+import { SurfaceLayer } from '../layout/SurfaceLayer.js';
 import { useLayoutPersistence } from '../layout/persistence.js';
 import { useLayoutStore } from '../layout/store.js';
 import { focusGroup, groups, openTab, openTerminalSessionIds, reopenClosed, splitGroup, type GroupSizes } from '../layout/tree.js';
+import { terminalSurfaces } from '../terminal/TerminalSurface.js';
 import { useNoticesStore } from '../store/notices.js';
 import { useUiStore } from '../store/ui.js';
 import { orderedWorks, useWorksStore } from '../store/works.js';
@@ -74,6 +84,46 @@ function measureGroupSizes(): GroupSizes {
   return sizes;
 }
 
+/** Слои поверхностей живут у трёх последних работ (план, «Числа»). */
+const SURFACE_WORKS = 3;
+
+interface WorkContainerProps {
+  workKey: string;
+  active: boolean;
+  bridge: HarnasBridge;
+  fontFamily: string;
+  fontSize: number;
+}
+
+/**
+ * Контейнер одной работы LRU (кусок 2.5). Пока раскладки работы нет в
+ * `layouts` (до `hydrate` после `setActiveWork`), контейнер пуст: ни
+ * `LayoutView`, ни `SurfaceLayer`.
+ */
+function WorkContainer({ workKey, active, bridge, fontFamily, fontSize }: WorkContainerProps): JSX.Element {
+  const hasLayout = useLayoutStore((state) => state.layouts[workKey] !== undefined);
+  const ref = useRef<HTMLDivElement>(null);
+  // `inert` в React 18 — не булев проп, ставится руками.
+  useLayoutEffect(() => {
+    ref.current?.toggleAttribute('inert', !active);
+  }, [active]);
+  return (
+    <div
+      ref={ref}
+      data-work-container={workKey}
+      className="absolute inset-0 flex"
+      style={active ? undefined : { visibility: 'hidden' }}
+    >
+      {hasLayout ? (
+        <>
+          <LayoutView workKey={workKey} active={active} bridge={bridge} fontFamily={fontFamily} fontSize={fontSize} />
+          <SurfaceLayer workKey={workKey} active={active} bridge={bridge} fontFamily={fontFamily} fontSize={fontSize} />
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 export interface AppShellProps {
   bridge: HarnasBridge;
   /** Строка статуса; `App` рендерит `AppShell` только при `'connected'`. */
@@ -92,6 +142,36 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   // загрузки страницы.
   const [centerNew] = useState(() => new URLSearchParams(location.search).get('center') === 'new');
   const activeWorkKey = useLayoutStore((state) => state.activeWorkKey);
+
+  // LRU контейнеров работ (кусок 2.5). Касание — прямо в рендере: контейнер
+  // новой активной работы должен появиться в том же кадре, что и смена
+  // `activeWorkKey`, а повторное касание того же ключа безвредно.
+  const lruRef = useRef<Lru<string> | null>(null);
+  if (lruRef.current === null) lruRef.current = createLru<string>(SURFACE_WORKS);
+  const lru = lruRef.current;
+  const touchedRef = useRef<string | null>(null);
+  if (centerNew && activeWorkKey !== null && touchedRef.current !== activeWorkKey) {
+    lru.touch(activeWorkKey);
+    touchedRef.current = activeWorkKey;
+  }
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
+  // `drop` (работа пропала из снимка) убирает работу и из LRU — её контейнер
+  // размонтируется, xterm освобождаются. Раскладка исчезает из `layouts`
+  // только в `drop`.
+  useEffect(
+    () =>
+      useLayoutStore.subscribe((state, prev) => {
+        let changed = false;
+        for (const key of Object.keys(prev.layouts)) {
+          if (key in state.layouts || !lru.has(key)) continue;
+          lru.remove(key);
+          if (touchedRef.current === key) touchedRef.current = null;
+          changed = true;
+        }
+        if (changed) rerender();
+      }),
+    [lru],
+  );
 
   const entries = useWorksStore((state) => state.entries);
   const loading = useWorksStore((state) => state.loading);
@@ -180,6 +260,21 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     useUiStore.getState().openPicker({ workKey: key, direction, openSessionIds: openTerminalSessionIds(layout) });
   };
 
+  // ⌘F под флагом: полоса поиска только у видимой поверхности активной группы
+  // активной работы — сами поверхности на меню не подписаны (их смонтировано
+  // много, и полоса открылась бы во всех, включая скрытые).
+  const openSearchCenterNew = (): void => {
+    const key = useLayoutStore.getState().activeWorkKey;
+    const layout = key === null ? undefined : useLayoutStore.getState().layouts[key];
+    if (key === null || layout === undefined) return;
+    const activeGroup = groups(layout).find((group) => group.id === layout.activeGroupId);
+    const tab = activeGroup?.tabs.find((candidate) => candidate.id === activeGroup.activeTabId);
+    if (tab?.kind !== 'terminal') return;
+    const entry = useWorksStore.getState().entries.find((item) => workKey(item.projectPath, item.map.work.id) === key);
+    if (entry === undefined) return;
+    terminalSurfaces.get(refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: tab.sessionId }))?.openSearch();
+  };
+
   useEffect(
     () =>
       bridge.app.onMenu((action) => {
@@ -196,6 +291,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
         else if (action === 'next-panel') focusAdjacentGroupCenterNew(1);
         else if (action === 'split-right') beginSplitCenterNew('right');
         else if (action === 'split-down') beginSplitCenterNew('down');
+        else if (action === 'find') openSearchCenterNew();
       }),
     [bridge, centerNew],
   );
@@ -252,10 +348,23 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
             closed: session.lifecycle === 'closed',
           })) ?? []);
 
+  // Входы сайдбара под флагом (кусок 2.5): сначала работа, по которой
+  // кликнули, становится активной (id `mail` общий на раскладку), затем вкладка
+  // открывается в её раскладке.
   const handleOpenSession = (key: string, ref: SessionRef, session: WorkSession): void =>
-    workspaceRef.current?.openSession(ref, key, sessionRowLabel(session.id, session.label));
+    centerNew
+      ? openTabCenterNew(key, { kind: 'terminal', id: tabId.terminal(ref.sessionId), sessionId: ref.sessionId })
+      : workspaceRef.current?.openSession(ref, key, sessionRowLabel(session.id, session.label));
   const handleOpenChanges = (key: string, ref: SessionRef, session: WorkSession): void =>
-    workspaceRef.current?.openChanges(ref, key, sessionRowLabel(session.id, session.label));
+    centerNew
+      ? openTabCenterNew(key, { kind: 'diff', id: tabId.diff(ref.sessionId, null), sessionId: ref.sessionId, commit: null })
+      : workspaceRef.current?.openChanges(ref, key, sessionRowLabel(session.id, session.label));
+  const handleOpenMail = (key: string): void =>
+    centerNew ? openTabCenterNew(key, { kind: 'mail', id: tabId.mail() }) : workspaceRef.current?.openMail(key);
+  const handleOpenRoom = (key: string, roomId: string, title: string): void =>
+    centerNew
+      ? openTabCenterNew(key, { kind: 'room', id: tabId.room(roomId), roomId })
+      : workspaceRef.current?.openRoom(key, roomId, title);
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
@@ -272,8 +381,8 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
                   <Sidebar
                     bridge={bridge}
                     onOpenSession={handleOpenSession}
-                    onOpenMail={(key) => workspaceRef.current?.openMail(key)}
-                    onOpenRoom={(key, roomId, title) => workspaceRef.current?.openRoom(key, roomId, title)}
+                    onOpenMail={handleOpenMail}
+                    onOpenRoom={handleOpenRoom}
                     onOpenChanges={handleOpenChanges}
                   />
                 </ErrorBoundary>
@@ -291,15 +400,25 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
           <ErrorBoundary title={S.shell.layoutError}>
             {centerNew ? (
               // Активной работы ещё нет (`layout/persistence.ts` её не выбрал) —
-              // центр пуст: ни групп, ни строки вкладок в `#titlebar-tabs`
-              // (спека 5.3, тест 15). `LayoutView` сам ищет свою работу в
-              // `store/works.ts` и ничего не покажет, пока её тоже нет —
-              // проверка тут не даёт смонтироваться раньше времени.
-              activeWorkKey !== null ? (
-                <LayoutView workKey={activeWorkKey} bridge={bridge} fontFamily={fontFamily} fontSize={fontSize} />
-              ) : (
-                <div className="min-h-0 min-w-0 flex-1" />
-              )
+              // LRU пуст, центр пуст: ни групп, ни строки вкладок в
+              // `#titlebar-tabs` (спека 5.3, тест 15). Контейнеры — в порядке
+              // ключей, а не LRU: смена активной работы не должна переставлять
+              // узлы DOM с живыми xterm.
+              <div className="relative min-h-0 min-w-0 flex-1">
+                {lru
+                  .keys()
+                  .sort()
+                  .map((key) => (
+                    <WorkContainer
+                      key={key}
+                      workKey={key}
+                      active={key === activeWorkKey}
+                      bridge={bridge}
+                      fontFamily={fontFamily}
+                      fontSize={fontSize}
+                    />
+                  ))}
+              </div>
             ) : (
               <Workspace ref={workspaceRef} bridge={bridge} works={entries} fontFamily={fontFamily} fontSize={fontSize} />
             )}

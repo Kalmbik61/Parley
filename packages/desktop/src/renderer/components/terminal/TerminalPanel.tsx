@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react';
 import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../../shared/bridge.js';
 import { S } from '../../../shared/strings.js';
-import { useTerminal } from './use-terminal.js';
+import { useTerminal } from '../../terminal/use-terminal.js';
 
 export interface TerminalPanelProps {
   bridge: HarnasBridge;

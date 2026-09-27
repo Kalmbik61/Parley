@@ -19,9 +19,9 @@ import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import type { SessionRef } from '@harnas/protocol';
-import type { HarnasBridge } from '../../../shared/bridge.js';
-import { shouldForwardToTerminal } from '../../lib/keys.js';
-import { useUiStore } from '../../store/ui.js';
+import type { HarnasBridge } from '../../shared/bridge.js';
+import { shouldForwardToTerminal } from '../lib/keys.js';
+import { useUiStore } from '../store/ui.js';
 import { minimumContrastRatio, XTERM_OPTIONS, xtermTheme } from './xterm-themes.js';
 
 /** Тишина после последнего ресайза, прежде чем уйдёт `pty.resize` (спека 5.2). */
@@ -46,6 +46,12 @@ export interface UseTerminalOptions {
 export interface UseTerminalResult {
   /** Для строки поиска панели (⌘F); `null`, пока терминал не открыт. */
   search: SearchAddon | null;
+  /**
+   * Сам xterm — для ручки поверхности (`TerminalSurface.tsx`, кусок 2.5):
+   * `focus()` и `scrollToBottom()` из реестра `terminalSurfaces`. `null`, пока
+   * терминал не открыт.
+   */
+  terminal: Terminal | null;
 }
 
 function sameRef(a: SessionRef, b: SessionRef): boolean {
@@ -65,6 +71,7 @@ function isHttpUrl(url: string): boolean {
 export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
   const { ref, container, fontFamily, fontSize, visible = true } = options;
   const [search, setSearch] = useState<SearchAddon | null>(null);
+  const [terminal, setTerminal] = useState<Terminal | null>(null);
   // Тёмность — из общего стора (кусок 1.1), не проп: тема терминала должна
   // меняться на лету при смене `.dark`, без пересоздания хука по цепочке
   // App → Workspace → TerminalPanel (спека 4.7).
@@ -79,6 +86,13 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
   // его через ref, а не через замыкание, из тех же соображений.
   const bridgeRef = useRef(options.bridge);
   bridgeRef.current = options.bridge;
+
+  // Видимость для `ResizeObserver` ниже (кусок 2.5): тот заведён один раз на
+  // создание терминала, а размер PTY задаёт только видимая поверхность —
+  // скрытая (в слое их много: все вкладки трёх работ) слала бы хосту чужой
+  // размер. Поэтому колбэк читает свежую видимость через ref.
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
 
   // Мост между эффектом создания xterm (ниже) и эффектом видимости (в конце
   // функции): подключение к хосту должно переживать переключение вкладок без
@@ -131,6 +145,7 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
       }
     }
     setSearch(searchAddon);
+    setTerminal(term);
 
     term.attachCustomKeyEventHandler((event) => {
       // ⌘C при выделении — копия в буфер обмена; сама клавиша дальше не идёт
@@ -221,6 +236,10 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     const resizeObserver = new ResizeObserver(() => {
+      // Скрытая поверхность изменения размера пропускает: при появлении
+      // `attach()` сам сделает `fit()` и при расхождении с хостом один
+      // `pty.resize` (правило 1.3) — отдельный resize тут дал бы второй SIGWINCH.
+      if (!visibleRef.current) return;
       fit.fit();
       if (resizeTimer !== null) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
@@ -246,6 +265,7 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
       // подключаться было бы уже не от чего, и на каждое закрытие панели
       // осело бы на один `pty.detach` меньше, чем нужно.
       setSearch(null);
+      setTerminal(null);
       termRef.current = null;
       term.dispose();
     };
@@ -279,7 +299,7 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
     return () => detachRef.current?.();
   }, [visible, container, ref.projectPath, ref.workId, ref.sessionId]);
 
-  return { search };
+  return { search, terminal };
 }
 
 /** Окно открыто с `?renderer=dom` — так его открывает main при HARNAS_TERMINAL_RENDERER=dom. */

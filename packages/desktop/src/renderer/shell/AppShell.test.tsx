@@ -32,7 +32,7 @@ import { AppShell } from './AppShell.js';
 // `sonner` просто не рисует ничего; здесь он подменён, чтобы проверить сам вызов.
 vi.mock('sonner', () => ({ toast: vi.fn() }));
 
-const state = vi.hoisted(() => ({ terminals: [] as unknown[] }));
+const state = vi.hoisted(() => ({ terminals: [] as unknown[], disposed: 0 }));
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: vi.fn().mockImplementation((initialOptions: Record<string, unknown>) => {
@@ -46,8 +46,12 @@ vi.mock('@xterm/xterm', () => ({
       loadAddon: () => {},
       write: () => {},
       reset: () => {},
-      dispose: () => {},
+      dispose: () => {
+        state.disposed += 1;
+      },
       resize: () => {},
+      focus: () => {},
+      scrollToBottom: () => {},
       onData: () => ({ dispose: () => {} }),
       attachCustomKeyEventHandler: () => {},
       hasSelection: () => false,
@@ -142,6 +146,7 @@ let bridge: FakeBridge;
 
 beforeEach(() => {
   state.terminals = [];
+  state.disposed = 0;
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
   bridge = createFakeBridge();
   bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
@@ -535,5 +540,205 @@ describe('AppShell — ?center=new: отказ сплита при 8 групп�
     expect(vi.mocked(toast)).toHaveBeenCalledWith('No more than 8 groups per workspace');
     const afterLayout = useLayoutStore.getState().layouts[workKey1];
     expect(afterLayout && groups(afterLayout)).toHaveLength(8);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Кусок 2.5: контейнеры работ LRU, слой поверхностей, ⌘F и входы сайдбара.
+// ---------------------------------------------------------------------------
+
+function keyOf(id: string): string {
+  return `/tmp/${id} ${id}`;
+}
+
+function container(key: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`[data-work-container="${key}"]`);
+}
+
+function attachCalls(sessionId: string): number {
+  return bridge.calls.filter(
+    (call) => call.method === 'pty.attach' && (call.params as { ref: { sessionId: string } }).ref.sessionId === sessionId,
+  ).length;
+}
+
+/** Делает работу активной, ждёт её гидрации и открывает в ней терминал сессии. */
+async function activateWithTerminal(key: string, sessionId: string): Promise<void> {
+  act(() => useLayoutStore.getState().setActiveWork(key));
+  await waitFor(() => expect(useLayoutStore.getState().hydrated[key]).toBe(true));
+  act(() => {
+    useLayoutStore.getState().apply(key, (layout) => openTab(layout, term(sessionId)));
+  });
+  await flush();
+}
+
+function fourWorks(): WorkEntry[] {
+  return [
+    work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')]),
+    work('w-02', '2026-01-02', 'Вторая', [session('s-02', 'два')]),
+    work('w-03', '2026-01-03', 'Третья', [session('s-03', 'три')]),
+    work('w-04', '2026-01-04', 'Четвёртая', [session('s-04', 'четыре')]),
+  ];
+}
+
+async function renderCenterNew(entries: WorkEntry[]): Promise<void> {
+  setCenterNewFlag();
+  useWorksStore.setState({ entries, branches: {}, loading: false, error: null });
+  render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
+  await flush();
+  // Первую активную работу выбирает `layout/persistence.ts` — дождаться, чтобы
+  // он не перебил выбор теста.
+  await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).not.toBeNull());
+}
+
+describe('AppShell — ?center=new: LRU контейнеров работ (тест 4 куска 2.5)', () => {
+  it('четыре работы подряд: контейнер первой размонтирован (dispose), возврат создаёт терминал заново и подключает', async () => {
+    await renderCenterNew(fourWorks());
+    await activateWithTerminal(keyOf('w-01'), 's-01');
+    await activateWithTerminal(keyOf('w-02'), 's-02');
+    await activateWithTerminal(keyOf('w-03'), 's-03');
+    expect(container(keyOf('w-01'))).not.toBeNull();
+    expect(state.disposed).toBe(0);
+
+    await activateWithTerminal(keyOf('w-04'), 's-04');
+    expect(container(keyOf('w-01'))).toBeNull();
+    expect(state.disposed).toBe(1);
+    expect(document.querySelectorAll('[data-work-container]')).toHaveLength(3);
+
+    const created = state.terminals.length;
+    const attaches = attachCalls('s-01');
+    act(() => useLayoutStore.getState().setActiveWork(keyOf('w-01')));
+    await flush();
+    expect(container(keyOf('w-01'))?.querySelector('[data-tab-id="terminal:s-01"]')).not.toBeNull();
+    expect(state.terminals.length).toBe(created + 1);
+    expect(attachCalls('s-01')).toBe(attaches + 1);
+  });
+});
+
+describe('AppShell — ?center=new: контейнеры работ (тесты 7, 8 куска 2.5)', () => {
+  it('тест 7: у каждой из трёх работ свой контейнер, LayoutView раньше SurfaceLayer, у слоя нет классов и стилей', async () => {
+    await renderCenterNew(fourWorks().slice(0, 3));
+    await activateWithTerminal(keyOf('w-01'), 's-01');
+    await activateWithTerminal(keyOf('w-02'), 's-02');
+    await activateWithTerminal(keyOf('w-03'), 's-03');
+
+    for (const id of ['w-01', 'w-02', 'w-03']) {
+      const box = container(keyOf(id));
+      if (box === null) throw new Error(`нет контейнера ${id}`);
+      const group = box.querySelector('[data-group-id]');
+      const layer = box.querySelector<HTMLElement>('[data-surface-layer]');
+      if (group === null || layer === null) throw new Error(`в контейнере ${id} нет LayoutView или SurfaceLayer`);
+      expect(group.compareDocumentPosition(layer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(layer.getAttribute('class')).toBeNull();
+      expect(layer.getAttribute('style')).toBeNull();
+      expect(box.className).toContain('absolute');
+      expect(box.className).toContain('inset-0');
+    }
+  });
+
+  it('тест 8: тела групп неактивной работы в DOM, контейнер скрыт и inert; в заголовке — строка только активной', async () => {
+    await renderCenterNew(fourWorks().slice(0, 2));
+    await activateWithTerminal(keyOf('w-01'), 's-01');
+    await activateWithTerminal(keyOf('w-02'), 's-02');
+
+    const inactive = container(keyOf('w-01'));
+    const active = container(keyOf('w-02'));
+    if (inactive === null || active === null) throw new Error('нет контейнеров');
+    expect(inactive.querySelector('[data-group-body]')).not.toBeNull();
+    expect(inactive.style.visibility).toBe('hidden');
+    expect(inactive.hasAttribute('inert')).toBe(true);
+    expect(active.style.visibility).not.toBe('hidden');
+    expect(active.hasAttribute('inert')).toBe(false);
+
+    const titlebarTabs = document.getElementById('titlebar-tabs');
+    expect(titlebarTabs?.querySelector('[data-tab-id="terminal:s-02"]')).not.toBeNull();
+    expect(titlebarTabs?.querySelector('[data-tab-id="terminal:s-01"]')).toBeNull();
+    expect(titlebarTabs?.querySelectorAll('[role="tablist"]')).toHaveLength(1);
+  });
+});
+
+describe('AppShell — ?center=new: работа LRU без раскладки и drop (тест 16 куска 2.5)', () => {
+  it('контейнер пуст до hydrate, после — LayoutView и поверхности; drop — контейнер размонтирован, dispose', async () => {
+    await renderCenterNew(fourWorks().slice(0, 2));
+    await activateWithTerminal(keyOf('w-01'), 's-01');
+
+    // Раскладка второй работы с диска ещё не пришла.
+    let resolveLoad: ((value: null) => void) | null = null;
+    vi.spyOn(bridge.app, 'loadLayout').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveLoad = resolve;
+        }),
+    );
+    act(() => useLayoutStore.getState().setActiveWork(keyOf('w-02')));
+    await flush();
+    const box = container(keyOf('w-02'));
+    expect(box).not.toBeNull();
+    expect(box?.childElementCount).toBe(0);
+    // Открытие вкладки до гидрации ждёт в очереди `pending` и применится в `hydrate`.
+    act(() => {
+      useLayoutStore.getState().apply(keyOf('w-02'), (layout) => openTab(layout, term('s-02')));
+    });
+
+    await act(async () => {
+      resolveLoad?.(null);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(container(keyOf('w-02'))?.querySelector('[data-group-id]')).not.toBeNull());
+    await flush();
+    expect(container(keyOf('w-02'))?.querySelector('[data-surface-layer] [data-tab-id="terminal:s-02"]')).not.toBeNull();
+
+    const disposed = state.disposed;
+    act(() => useLayoutStore.getState().drop(keyOf('w-02')));
+    await flush();
+    expect(container(keyOf('w-02'))).toBeNull();
+    expect(state.disposed).toBe(disposed + 1);
+  });
+});
+
+describe('AppShell — ?center=new: вход «Почта» сайдбара (тест 10 куска 2.5)', () => {
+  it('клик по «Почта» работы B, пока активна A: активна B, вкладка mail в раскладке B', async () => {
+    const letter = { id: 'm-1', roomId: null, from: 's-02', to: ['s-01'], at: '2026-01-02T10:00:00.000Z', text: 'т', kind: 'note' as const, readBy: {} };
+    const a = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')]);
+    const bBase = work('w-02', '2026-01-02', 'Вторая', [session('s-02', 'два')]);
+    const b: WorkEntry = { ...bBase, map: { ...bBase.map, messages: [letter] } };
+    await renderCenterNew([a, b]);
+    act(() => useLayoutStore.getState().setActiveWork(keyOf('w-01')));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-01')]).toBe(true));
+
+    fireEvent.click(screen.getByText('All workspace mail'));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-02')]).toBe(true));
+
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
+    const layoutB = useLayoutStore.getState().layouts[keyOf('w-02')];
+    if (layoutB === undefined) throw new Error('раскладка B не гидрирована');
+    expect(groups(layoutB).flatMap((group) => group.tabs.map((tab) => tab.id))).toEqual(['mail']);
+    const layoutA = useLayoutStore.getState().layouts[keyOf('w-01')];
+    expect(layoutA === undefined ? [] : groups(layoutA).flatMap((group) => group.tabs)).toEqual([]);
+  });
+});
+
+describe('AppShell — ?center=new: меню find (тест 15 куска 2.5)', () => {
+  it('полоса поиска открывается только у видимой поверхности активной группы', async () => {
+    mockNonZeroRects();
+    await renderCenterNew([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один'), session('s-02', 'два'), session('s-03', 'три')])]);
+    const key = keyOf('w-01');
+    act(() => useLayoutStore.getState().setActiveWork(key));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[key]).toBe(true));
+    // Группа 1 — s-01; группа 2 (активная) — s-02 и s-03, видна s-03.
+    act(() => {
+      useLayoutStore.getState().apply(key, (layout) => openTab(layout, term('s-01')));
+      const layout = useLayoutStore.getState().layouts[key];
+      if (layout === undefined) throw new Error('нет раскладки');
+      useLayoutStore.getState().apply(key, (l) => splitGroup(l, layout.activeGroupId, 'row', term('s-02'), { [layout.activeGroupId]: { width: 800, height: 600 } }));
+      useLayoutStore.getState().apply(key, (l) => openTab(l, term('s-03')));
+    });
+    await flush();
+
+    act(() => bridge.emitMenu('find'));
+    await flush();
+
+    const bars = screen.getAllByPlaceholderText('Find…');
+    expect(bars).toHaveLength(1);
+    expect(bars[0]?.closest('[data-tab-id]')?.getAttribute('data-tab-id')).toBe('terminal:s-03');
   });
 });

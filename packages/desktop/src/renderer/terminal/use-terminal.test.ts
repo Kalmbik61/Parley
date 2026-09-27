@@ -8,8 +8,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import type { SessionRef } from '@harnas/protocol';
-import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
-import { useUiStore } from '../../store/ui.js';
+import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
+import { useUiStore } from '../store/ui.js';
 import { minimumContrastRatio, xtermTheme } from './xterm-themes.js';
 import { useTerminal } from './use-terminal.js';
 
@@ -351,5 +351,67 @@ describe('useTerminal — тема на лету (тест 2 куска 1.3)', (
     } finally {
       act(() => useUiStore.getState().setDark(false));
     }
+  });
+});
+
+describe('useTerminal — видимость и размер (куски 2.5, тесты 9 и 11)', () => {
+  function renderWithVisibility(bridge: FakeBridge, visible: boolean) {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    return renderHook(
+      (props: { visible: boolean }) =>
+        useTerminal({ bridge, ref, container, fontFamily: 'Menlo', fontSize: 13, visible: props.visible }),
+      { initialProps: { visible } },
+    );
+  }
+
+  it('тест 9: невидимая поверхность на ResizeObserver не шлёт pty.resize; видимая — шлёт через 50 мс', async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = createFakeBridge();
+      bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
+      bridge.setHandler('pty.detach', () => ({ ok: true as const }));
+      const { rerender } = renderWithVisibility(bridge, false);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const observer = ResizeObserverStub.instances[0];
+      observer?.trigger();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(bridge.notified.filter((n) => n.method === 'pty.resize')).toHaveLength(0);
+
+      rerender({ visible: true });
+      await vi.advanceTimersByTimeAsync(0);
+      // Появление само по себе resize не шлёт — размер совпал с ответом attach.
+      expect(bridge.notified.filter((n) => n.method === 'pty.resize')).toHaveLength(0);
+
+      observer?.trigger();
+      await vi.advanceTimersByTimeAsync(49);
+      expect(bridge.notified.filter((n) => n.method === 'pty.resize')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(bridge.notified.filter((n) => n.method === 'pty.resize')).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('тест 11: стала видимой, attach 80×24; fit 80×24 — resize нет; fit 100×30 — ровно один 100×30', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('pty.attach', () => ({ snapshot: 'S', cols: 80, rows: 24 }));
+    bridge.setHandler('pty.detach', () => ({ ok: true as const }));
+    state.nextFitSize = { cols: 80, rows: 24 };
+    const { rerender } = renderWithVisibility(bridge, false);
+    expect(bridge.calls.filter((c) => c.method === 'pty.attach')).toHaveLength(0);
+
+    rerender({ visible: true });
+    await waitFor(() => expect(state.terminals[0]?.writes).toEqual(['S']));
+    expect(bridge.notified.filter((n) => n.method === 'pty.resize')).toHaveLength(0);
+
+    rerender({ visible: false });
+    state.nextFitSize = { cols: 100, rows: 30 };
+    rerender({ visible: true });
+    await waitFor(() => expect(bridge.notified.filter((n) => n.method === 'pty.resize')).toHaveLength(1));
+    expect(bridge.notified.filter((n) => n.method === 'pty.resize')).toEqual([
+      { method: 'pty.resize', params: { ref, cols: 100, rows: 30 } },
+    ]);
   });
 });

@@ -16,7 +16,7 @@
  * «Разделить» из меню действовали бы не на ту группу, куда только что кликнули.
  */
 
-import { createContext, useContext } from 'react';
+import { createContext, useContext, useLayoutEffect, useRef } from 'react';
 import type { WorkEntry, WorkSession } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
@@ -36,6 +36,12 @@ export interface LayoutBodyContextValue {
   bridge: HarnasBridge;
   fontFamily: string;
   fontSize: number;
+  /**
+   * Работа активна (кусок 2.5): у неактивной работы LRU единственная группа
+   * не порталит строку вкладок в `#titlebar-tabs` — там строка только
+   * активной работы.
+   */
+  active: boolean;
 }
 
 export const LayoutBodyContext = createContext<LayoutBodyContextValue | null>(null);
@@ -63,9 +69,8 @@ function TabBody({ tab, entry, host, onMissing }: TabBodyProps): JSX.Element {
     case 'terminal': {
       const session = entry.map.sessions.find((candidate) => candidate.id === tab.sessionId);
       if (session === undefined) return <MissingBody kind="session" onClose={onMissing} />;
-      return (
-        <TerminalBody bridge={host.bridge} sessionRef={refOf(entry, tab.sessionId)} fontFamily={host.fontFamily} fontSize={host.fontSize} />
-      );
+      // Сам терминал — в слое поверхностей (`SurfaceLayer.tsx`, кусок 2.5).
+      return <TerminalBody />;
     }
     case 'mail':
       return <MailBody bridge={host.bridge} entry={entry} />;
@@ -100,6 +105,13 @@ export function GroupView({ workKey, group, entry, singleGroup }: GroupViewProps
   const host = useLayoutBody();
   const activeTab = group.tabs.find((candidate) => candidate.id === group.activeTabId) ?? null;
 
+  // Тело группы — якорь поверхностей слоя (спека 5.5): `anchor-name` через
+  // `setProperty`, в `CSSProperties` @types/react 18 его нет.
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    bodyRef.current?.style.setProperty('anchor-name', `--g-${group.id}`);
+  }, [group.id]);
+
   const closeActive = (): void => {
     if (activeTab === null) return;
     void useLayoutStore.getState().requestCloseTabs(workKey, [activeTab.id]);
@@ -111,8 +123,11 @@ export function GroupView({ workKey, group, entry, singleGroup }: GroupViewProps
       className="flex h-full min-h-0 min-w-0 flex-1 flex-col"
       onPointerDownCapture={() => useLayoutStore.getState().apply(workKey, (layout) => focusGroup(layout, group.id))}
     >
-      <TabStrip workKey={workKey} group={group} entry={entry} portal={singleGroup} />
-      <div className="min-h-0 min-w-0 flex-1">
+      {/* Неактивная работа с одной группой строку не рисует вовсе: в заголовке
+          место активной работы, а строка на месте поменяла бы высоту тела —
+          и размер терминала при возврате к работе. */}
+      {singleGroup && !host.active ? null : <TabStrip workKey={workKey} group={group} entry={entry} portal={singleGroup} />}
+      <div ref={bodyRef} data-group-body={group.id} className="min-h-0 min-w-0 flex-1">
         {group.tabs.length === 0 ? (
           <div className="flex h-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
             {S.tabs.emptyGroup}

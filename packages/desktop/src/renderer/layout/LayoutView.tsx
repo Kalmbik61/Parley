@@ -9,8 +9,9 @@
  * Клавиши, которые ловит сам рендерер, а не системное меню (спека 5.3, до
  * реестра клавиш 6.1) — ⌃Tab/⌃⇧Tab (MRU вкладок работы), ⌃1–9 (вкладка по
  * номеру в активной группе), ⌘⇧[/⌘⇧] (соседняя вкладка активной группы) —
- * висят тут: `LayoutView` монтирован, только пока его работа активна, поэтому
- * слушатель на `window` всегда бьёт по правильной работе без доп. проверки.
+ * висят тут. С 2.5 `LayoutView` смонтирован у трёх работ LRU сразу, поэтому
+ * слушатель на `window` заводится только при `active` — иначе клавиша била бы
+ * по всем трём раскладкам.
  *
  * Раунд исправлений 1 (ревью A, Important №1): ⌃Tab/⌃⇧Tab держат зажатым ⌃, как
  * в VS Code/Orca — повторные `Tab` идут дальше по СНИМКУ MRU, сделанному на
@@ -35,6 +36,11 @@ import { focusTab, groups } from './tree.js';
 
 export interface LayoutViewProps {
   workKey: string;
+  /**
+   * Работа активна (кусок 2.5): контейнеры трёх работ LRU смонтированы разом,
+   * а клавиши 2.4 и строка вкладок в заголовке — только у активной.
+   */
+  active: boolean;
   bridge: HarnasBridge;
   fontFamily: string;
   fontSize: number;
@@ -51,7 +57,7 @@ interface MruSession {
   index: number;
 }
 
-export function LayoutView({ workKey, bridge, fontFamily, fontSize }: LayoutViewProps): JSX.Element | null {
+export function LayoutView({ workKey, active, bridge, fontFamily, fontSize }: LayoutViewProps): JSX.Element | null {
   const layout = useLayoutStore((state) => state.layouts[workKey]);
   const entries = useWorksStore((state) => state.entries);
   const entry = entries.find((item) => workKeyOf(item.projectPath, item.map.work.id) === workKey);
@@ -59,6 +65,7 @@ export function LayoutView({ workKey, bridge, fontFamily, fontSize }: LayoutView
   const mruSessionRef = useRef<MruSession | null>(null);
 
   useEffect(() => {
+    if (!active) return undefined;
     // Отпускание ⌃ (или потеря фокуса окна) фиксирует итог цикла: снятая
     // вкладка встаёт первой, остальные снимка — следом, в прежнем порядке
     // между собой (та же форма, что `history.ts#touchMru`, только по индексу
@@ -122,7 +129,7 @@ export function LayoutView({ workKey, bridge, fontFamily, fontSize }: LayoutView
       // снимок следующей работе не принадлежит, отбрасываем его без commit.
       mruSessionRef.current = null;
     };
-  }, [workKey]);
+  }, [workKey, active]);
 
   // Раскладка ещё не гидрирована (`layout/persistence.ts`, доля кадра сразу
   // после смены активной работы) или сама работа уже пропала из снимка —
@@ -134,7 +141,7 @@ export function LayoutView({ workKey, bridge, fontFamily, fontSize }: LayoutView
   const singleGroup = groups(layout).length === 1;
 
   return (
-    <LayoutBodyContext.Provider value={{ bridge, fontFamily, fontSize }}>
+    <LayoutBodyContext.Provider value={{ bridge, fontFamily, fontSize, active }}>
       <div className="flex h-full min-h-0 min-w-0 flex-1">
         <NodeView workKey={workKey} node={layout.root} entry={entry} singleGroup={singleGroup} />
       </div>

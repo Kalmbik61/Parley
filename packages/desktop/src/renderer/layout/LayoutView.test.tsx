@@ -2,7 +2,9 @@
  * Тест 17 куска 2.4: `LayoutView` отдаёт `fontFamily`/`fontSize` телу терминала
  * (контекст `GroupView.tsx#LayoutBodyContext`, как раньше `PanelHostContext`),
  * а тело комнаты получает тот же `bridge` — раскладка с двумя группами:
- * терминал в одной, комната в другой.
+ * терминал в одной, комната в другой. С куска 2.5 сам терминал живёт в слое
+ * поверхностей — шрифт до него доходит через `SurfaceLayer` рядом с
+ * `LayoutView`, как их монтирует контейнер работы в `AppShell.tsx`.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -13,6 +15,7 @@ import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js'
 import { useWorksStore } from '../store/works.js';
 import { EMPTY_HISTORY } from './history.js';
 import { LayoutView } from './LayoutView.js';
+import { SurfaceLayer } from './SurfaceLayer.js';
 import { useLayoutStore } from './store.js';
 
 const state = vi.hoisted(() => ({ terminalOptions: [] as Array<Record<string, unknown>> }));
@@ -152,7 +155,12 @@ async function flush(): Promise<void> {
 
 describe('LayoutView — тест 17', () => {
   it('тело терминала создаёт Terminal с fontFamily/fontSize; тело комнаты получает тот же bridge', async () => {
-    render(<LayoutView workKey={WORK_KEY} bridge={bridge} fontFamily="Menlo" fontSize={15} />);
+    render(
+      <>
+        <LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={15} />
+        <SurfaceLayer workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={15} />
+      </>,
+    );
     await flush();
 
     expect(state.terminalOptions).toHaveLength(1);
@@ -208,7 +216,7 @@ describe('LayoutView — раунд исправлений 1: ⌃Tab держи�
 
   it('⌃ удержан, Tab ×2 обходит MRU дальше двух последних; отпускание ⌃ фиксирует итог', async () => {
     setUpThreeTabs();
-    render(<LayoutView workKey={WORK_KEY} bridge={bridge} fontFamily="Menlo" fontSize={13} />);
+    render(<LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} />);
     await flush();
     expect(activeTabId()).toBe('terminal:c');
 
@@ -229,7 +237,7 @@ describe('LayoutView — раунд исправлений 1: ⌃Tab держи�
 
   it('потеря фокуса окна во время удержания ⌃ тоже фиксирует итог цикла', async () => {
     setUpThreeTabs();
-    render(<LayoutView workKey={WORK_KEY} bridge={bridge} fontFamily="Menlo" fontSize={13} />);
+    render(<LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} />);
     await flush();
 
     fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true });
@@ -238,5 +246,34 @@ describe('LayoutView — раунд исправлений 1: ⌃Tab держи�
 
     fireEvent(window, new FocusEvent('blur'));
     expect(useLayoutStore.getState().mru[WORK_KEY]).toEqual(['terminal:a', 'terminal:c', 'terminal:b']);
+  });
+});
+
+describe('LayoutView — active: false (кусок 2.5)', () => {
+  it('неактивная работа не ловит клавиши 2.4 и не порталит строку вкладок в заголовок', async () => {
+    const slot = document.createElement('div');
+    slot.id = 'titlebar-tabs';
+    document.body.appendChild(slot);
+    try {
+      const group: GroupNode = {
+        type: 'group',
+        id: 'g1',
+        tabs: [
+          { kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01' },
+          { kind: 'room', id: 'room:r-01', roomId: 'r-01' },
+        ],
+        activeTabId: 'room:r-01',
+      };
+      useLayoutStore.setState({ layouts: { [WORK_KEY]: { root: group, activeGroupId: 'g1', closedTabs: [] } } });
+      render(<LayoutView workKey={WORK_KEY} active={false} bridge={bridge} fontFamily="Menlo" fontSize={13} />);
+      await flush();
+
+      fireEvent.keyDown(window, { key: '1', ctrlKey: true });
+      const root = useLayoutStore.getState().layouts[WORK_KEY]?.root;
+      expect(root?.type === 'group' ? root.activeTabId : null).toBe('room:r-01');
+      expect(slot.childElementCount).toBe(0);
+    } finally {
+      slot.remove();
+    }
   });
 });
