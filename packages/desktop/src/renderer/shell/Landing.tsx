@@ -5,6 +5,7 @@
  * пустое окно при `hiddenInset` было бы нечем утащить.
  */
 
+import { S } from '../../shared/strings.js';
 import { useUiStore } from '../store/ui.js';
 import { Button } from '../ui/button.js';
 
@@ -20,11 +21,11 @@ export function Landing(): JSX.Element {
       <h1 className="text-lg font-medium text-foreground">Harnas</h1>
       <div className="flex gap-2">
         <Button type="button" onClick={() => openNewWorkDialog()}>
-          Новая работа
+          {S.landing.newWorkspace}
           <kbd className="ml-1.5 rounded bg-black/10 px-1.5 py-0.5 text-[10px] dark:bg-white/10">⌘N</kbd>
         </Button>
         <Button type="button" variant="outline" onClick={() => setPaletteOpen(true)}>
-          Палитра
+          {S.landing.palette}
           <kbd className="ml-1.5 rounded bg-black/10 px-1.5 py-0.5 text-[10px] dark:bg-white/10">⌘K</kbd>
         </Button>
       </div>

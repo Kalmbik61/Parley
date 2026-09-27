@@ -20,6 +20,8 @@ import { useEffect, useState } from 'react';
 import type { MergeResult, WorktreeDiff } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../../shared/bridge.js';
+import { decodeIpcError } from '../../../shared/ipc-error.js';
+import { errorText, S } from '../../../shared/strings.js';
 import { sessionTag } from '../../lib/participant.js';
 import { ConfirmDialog } from '../dialogs/ConfirmDialog.js';
 import { DiffView } from './DiffView.js';
@@ -31,26 +33,16 @@ export interface ChangesPanelProps {
   base: string;
 }
 
-const STATUS_LABEL: Record<string, string> = {
-  A: 'добавлен',
-  M: 'изменён',
-  D: 'удалён',
-  R: 'переименован',
-};
+const STATUS_LABEL: Record<string, string> = S.changes.fileStatus;
 
 /** Причина, по которой «Влить» неактивна — текст под курсором на самой кнопке. */
 function mergeDisabledReason(diff: WorktreeDiff): string | null {
-  if (diff.baseDirty) return 'база грязная: в её рабочей копии есть незакоммиченное';
-  if (diff.uncommitted) return 'в worktree есть незакоммиченное — сперва закоммитить';
+  if (diff.baseDirty) return S.changes.mergeBlockedBaseDirty;
+  if (diff.uncommitted) return S.changes.mergeBlockedUncommitted;
   return null;
 }
 
-const MERGE_FAIL_TEXT: Record<Exclude<MergeResult, { ok: true }>['reason'], string> = {
-  base_not_checked_out: 'база нигде не выгружена',
-  base_dirty: 'база грязная',
-  uncommitted: 'в worktree есть незакоммиченное',
-  conflict: 'конфликт слияния',
-};
+const MERGE_FAIL_TEXT: Record<Exclude<MergeResult, { ok: true }>['reason'], string> = S.changes.mergeFailReason;
 
 export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): JSX.Element {
   const [diff, setDiff] = useState<WorktreeDiff | null>(null);
@@ -71,7 +63,10 @@ export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): J
         setDiff(result);
         setLoadError(null);
       })
-      .catch((err: unknown) => setLoadError(err instanceof Error ? err.message : String(err)));
+      .catch((err: unknown) => {
+        console.warn('[harnas] worktrees.diff', err);
+        setLoadError(errorText(decodeIpcError(err).code, S.errors.actions.loadChanges));
+      });
   };
 
   useEffect(load, [bridge, sessionRef.projectPath, sessionRef.workId, sessionRef.sessionId]);
@@ -84,7 +79,8 @@ export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): J
       setCommitMessage('');
       load();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
+      console.warn('[harnas] worktrees.commit', err);
+      setActionError(errorText(decodeIpcError(err).code, S.errors.actions.commit));
     }
   };
 
@@ -104,7 +100,8 @@ export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): J
       }
       setActionError(MERGE_FAIL_TEXT[result.reason]);
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
+      console.warn('[harnas] worktrees.merge', err);
+      setActionError(errorText(decodeIpcError(err).code, S.errors.actions.merge));
     }
   };
 
@@ -119,22 +116,26 @@ export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): J
         roomId: null,
         to: [sessionRef.sessionId],
         kind: 'question',
-        text: `Слияние ${label} упёрлось в конфликт: ${conflictFiles.join(', ')}. Разреши и закоммить.`,
+        text: S.changes.mergeConflictMessage(label, conflictFiles.join(', ')),
       })
       .then(() => setSentToAgent(true))
-      .catch((err: unknown) => setActionError(err instanceof Error ? err.message : String(err)));
+      .catch((err: unknown) => {
+        console.warn('[harnas] rooms.send', err);
+        setActionError(errorText(decodeIpcError(err).code, S.errors.actions.assignToAgent));
+      });
   };
 
   const discard = (force: boolean): void => {
     bridge.call('worktrees.discard', { ref: sessionRef, force }).catch((err: unknown) => {
-      setActionError(err instanceof Error ? err.message : String(err));
+      console.warn('[harnas] worktrees.discard', err);
+      setActionError(errorText(decodeIpcError(err).code, S.errors.actions.discard));
     });
   };
 
   if (diff === null) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        {loadError ?? 'Загрузка…'}
+        {loadError ?? S.changes.loading}
       </div>
     );
   }
@@ -145,7 +146,7 @@ export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): J
     <div className="flex h-full flex-col gap-3 overflow-y-auto p-3 text-sm">
       <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
         {diff.files.length === 0 ? (
-          <span className="text-muted-foreground">Файлов нет</span>
+          <span className="text-muted-foreground">{S.changes.noFiles}</span>
         ) : (
           diff.files.map((file) => (
             <span key={file.path} className="rounded bg-muted px-2 py-0.5">
@@ -160,7 +161,7 @@ export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): J
           <>
             <input
               className="rounded border border-input bg-transparent px-2 py-1 text-xs"
-              placeholder="сообщение коммита"
+              placeholder={S.changes.commitMessagePlaceholder}
               value={commitMessage}
               onChange={(event) => setCommitMessage(event.target.value)}
             />
@@ -169,7 +170,7 @@ export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): J
               className="rounded bg-primary px-3 py-1 text-xs text-primary-foreground"
               onClick={() => void commit()}
             >
-              Закоммитить всё
+              {S.changes.commitAll}
             </button>
           </>
         ) : null}
@@ -180,7 +181,7 @@ export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): J
           title={disabledReason ?? undefined}
           onClick={() => void merge()}
         >
-          Влить в {base}
+          {S.changes.mergeInto(base)}
         </button>
         <button
           type="button"
@@ -191,7 +192,7 @@ export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): J
           className="rounded bg-destructive px-3 py-1 text-xs text-white hover:bg-destructive/90 dark:bg-destructive/60"
           onClick={() => setFirstConfirmOpen(true)}
         >
-          Отбросить
+          {S.changes.discard}
         </button>
       </div>
 
@@ -200,16 +201,16 @@ export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): J
 
       {conflictFiles !== null ? (
         <div className="rounded border border-status-warning-border p-2 text-xs">
-          <p className="mb-1">Конфликт: {conflictFiles.join(', ')}</p>
+          <p className="mb-1">{S.changes.conflictLabel(conflictFiles.join(', '))}</p>
           {sentToAgent ? (
-            <p className="text-muted-foreground">Письмо отправлено</p>
+            <p className="text-muted-foreground">{S.changes.messageSent}</p>
           ) : (
             <button
               type="button"
               className="rounded border border-status-warning-border bg-status-warning-background px-3 py-1 text-status-warning"
               onClick={assignToAgent}
             >
-              Поручить агенту
+              {S.changes.assignToAgent}
             </button>
           )}
         </div>
@@ -219,8 +220,8 @@ export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): J
 
       <ConfirmDialog
         open={firstConfirmOpen}
-        title={`Отбросить «${label}»?`}
-        confirmLabel="Отбросить"
+        title={S.changes.discardConfirmTitle(label)}
+        confirmLabel={S.changes.discard}
         onConfirm={() => {
           if (diff.uncommitted) setSecondConfirmOpen(true);
           else discard(false);
@@ -229,8 +230,8 @@ export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): J
       />
       <ConfirmDialog
         open={secondConfirmOpen}
-        title="Незакоммиченные изменения будут потеряны"
-        confirmLabel="Отбросить всё равно"
+        title={S.changes.discardAllConfirmTitle}
+        confirmLabel={S.changes.discardAllConfirm}
         onConfirm={() => discard(true)}
         onOpenChange={setSecondConfirmOpen}
       />

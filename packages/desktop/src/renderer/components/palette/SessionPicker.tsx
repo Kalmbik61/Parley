@@ -14,6 +14,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import type { WorkEntry } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
+import { S } from '../../../shared/strings.js';
 import { sessionRowLabel } from '../../lib/participant.js';
 import { treeOrder } from '../../lib/tree-order.js';
 
@@ -45,9 +46,9 @@ export function SessionPicker({ open, candidates, onSelect, onOpenChange }: Sess
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/50" />
         <Dialog.Content className="fixed left-1/2 top-1/2 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg bg-card p-2 text-foreground shadow-lg">
-          <Dialog.Title className="px-2 py-1 text-sm font-medium">Сессия в новую панель</Dialog.Title>
+          <Dialog.Title className="px-2 py-1 text-sm font-medium">{S.picker.title}</Dialog.Title>
           {candidates.length === 0 ? (
-            <p className="px-2 py-2 text-sm text-muted-foreground">У этой работы нет сессий без панели</p>
+            <p className="px-2 py-2 text-sm text-muted-foreground">{S.picker.empty}</p>
           ) : (
             <ul className="flex flex-col">
               {candidates.map((candidate) => (

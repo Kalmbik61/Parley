@@ -57,22 +57,22 @@ describe('SettingsDialog — тест 1 куска 1.4: секции спеки 
     openSettings(bridge);
 
     // «Вид» — активная секция по умолчанию.
-    await screen.findByText('Система');
-    expect(screen.queryByText('Тема')).toBeNull();
+    await screen.findByText('System');
+    expect(screen.queryByText('Theme')).toBeNull();
 
-    switchTo('Терминал');
+    switchTo('Terminal');
     await screen.findByDisplayValue('Menlo');
-    expect(screen.queryByText('Тема')).toBeNull();
+    expect(screen.queryByText('Theme')).toBeNull();
     expect(screen.queryByDisplayValue('mocha')).toBeNull();
 
-    switchTo('Агенты');
-    await screen.findByText('Корень worktree');
-    expect(screen.queryByText('Тема')).toBeNull();
+    switchTo('Agents');
+    await screen.findByText('Worktree root');
+    expect(screen.queryByText('Theme')).toBeNull();
     expect(screen.queryByDisplayValue('mocha')).toBeNull();
 
-    switchTo('Уведомления');
-    await screen.findByLabelText('звук');
-    expect(screen.queryByText('Тема')).toBeNull();
+    switchTo('Notifications');
+    await screen.findByLabelText('sound');
+    expect(screen.queryByText('Theme')).toBeNull();
     expect(screen.queryByDisplayValue('mocha')).toBeNull();
   });
 
@@ -82,7 +82,7 @@ describe('SettingsDialog — тест 1 куска 1.4: секции спеки 
     const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
     openSettings(bridge);
 
-    fireEvent.click(await screen.findByText('Тёмная'));
+    fireEvent.click(await screen.findByText('Dark'));
 
     await waitFor(() => expect(setAppearanceSpy).toHaveBeenCalledWith('dark'));
     expect(saveUiSpy).not.toHaveBeenCalled();
@@ -93,8 +93,8 @@ describe('SettingsDialog — тест 1 куска 1.4: секции спеки 
     const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
     openSettings(bridge);
 
-    switchTo('Уведомления');
-    const soundToggle = await screen.findByLabelText('звук');
+    switchTo('Notifications');
+    const soundToggle = await screen.findByLabelText('sound');
     fireEvent.click(soundToggle);
 
     await waitFor(() =>
@@ -110,7 +110,7 @@ describe('SettingsDialog — тест 1 куска 1.4: секции спеки 
     bridge.setHandler('settings.set', ({ value }) => ({ config: { ...CONFIG, fontSize: Number(value) } }));
     render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
 
-    switchTo('Терминал');
+    switchTo('Terminal');
     const fontSize = await screen.findByDisplayValue('13');
     fireEvent.change(fontSize, { target: { value: '16' } });
     fireEvent.blur(fontSize);
@@ -126,8 +126,8 @@ describe('SettingsDialog — тест 2: поле, заданное окруже
     const bridge = createFakeBridge();
     openSettings(bridge, { fontFamily: 'HARNAS_FONT_FAMILY' });
 
-    switchTo('Терминал');
-    await screen.findByText(/задано HARNAS_FONT_FAMILY/);
+    switchTo('Terminal');
+    await screen.findByText(/set by HARNAS_FONT_FAMILY/);
     const fontFamily = screen.getByDisplayValue('Menlo') as HTMLInputElement;
     expect(fontFamily.disabled).toBe(true);
 
@@ -137,26 +137,29 @@ describe('SettingsDialog — тест 2: поле, заданное окруже
 });
 
 describe('SettingsDialog — тест 3: ошибка хоста при сохранении', () => {
-  it('видна под полем, успешное сохранение убирает прежнюю ошибку и обновляет конфиг', async () => {
+  // Кусок E.1: рендерер больше не показывает error.message хоста напрямую —
+  // код ошибки идёт через decodeIpcError (подставной мост шлёт { code,
+  // message } без Electron-обёртки, см. shared/ipc-error.ts) в errorText(code, action).
+  it('видна под полем как errorText(code), успешное сохранение убирает прежнюю ошибку и обновляет конфиг', async () => {
     const bridge = createFakeBridge();
     bridge.setHandler('settings.get', () => ({ config: CONFIG, locked: {} }));
     let attempt = 0;
     bridge.setHandler('settings.set', ({ value }) => {
       attempt += 1;
-      if (attempt === 1) throw new Error('messageRate: ожидается целое больше нуля');
+      if (attempt === 1) throw { code: 'bad_request', message: 'messageRate: ожидается целое больше нуля' };
       return { config: { ...CONFIG, messageRate: Number(value) } };
     });
 
     render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
-    switchTo('Агенты');
+    switchTo('Agents');
 
     const messageRate = await screen.findByDisplayValue('20');
     fireEvent.change(messageRate, { target: { value: '0' } });
     fireEvent.blur(messageRate);
-    await waitFor(() => expect(screen.getByText('messageRate: ожидается целое больше нуля')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Couldn't save settings: invalid request.")).toBeTruthy());
 
     fireEvent.change(messageRate, { target: { value: '7' } });
     fireEvent.blur(messageRate);
-    await waitFor(() => expect(screen.queryByText('messageRate: ожидается целое больше нуля')).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Couldn't save settings: invalid request.")).toBeNull());
   });
 });

@@ -12,6 +12,7 @@
 
 import { ArrowLeft, ArrowRight, PanelLeft, PanelRight, Search } from 'lucide-react';
 import type { HarnasBridge } from '../../shared/bridge.js';
+import { S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
 import { useUiStore } from '../store/ui.js';
 import { Button } from '../ui/button.js';
@@ -50,19 +51,19 @@ export function Titlebar({ bridge }: TitlebarProps): JSX.Element {
           type="button"
           variant="ghost"
           size="icon-xs"
-          aria-label="Сайдбар работ"
+          aria-label={S.titlebar.toggleSidebar}
           onClick={() => setSidebar('left', { open: !leftOpen })}
         >
           <PanelLeft className="size-3.5" />
         </Button>
-        <Button type="button" variant="ghost" size="icon-xs" aria-label="Назад" disabled={!canBack} onClick={back}>
+        <Button type="button" variant="ghost" size="icon-xs" aria-label={S.titlebar.back} disabled={!canBack} onClick={back}>
           <ArrowLeft className="size-3.5" />
         </Button>
         <Button
           type="button"
           variant="ghost"
           size="icon-xs"
-          aria-label="Вперёд"
+          aria-label={S.titlebar.forward}
           disabled={!canForward}
           onClick={forward}
         >
@@ -79,10 +80,10 @@ export function Titlebar({ bridge }: TitlebarProps): JSX.Element {
           className="flex h-6 items-center gap-1.5 rounded-md border border-input bg-background px-2 text-xs text-muted-foreground hover:bg-accent"
         >
           <Search className="size-3.5" />
-          Поиск
+          {S.titlebar.search}
           <kbd className="rounded border border-border px-1 text-[10px]">⌘K</kbd>
         </button>
-        <Button type="button" variant="ghost" size="icon-xs" aria-label="Правый сайдбар" disabled>
+        <Button type="button" variant="ghost" size="icon-xs" aria-label={S.titlebar.rightSidebar} disabled>
           <PanelRight className="size-3.5" />
         </Button>
       </div>

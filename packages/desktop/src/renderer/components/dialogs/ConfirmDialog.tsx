@@ -8,6 +8,7 @@
  * конфигурируемости, которую не заказывали).
  */
 
+import { S } from '../../../shared/strings.js';
 import { Button } from '../../ui/button.js';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../ui/dialog.js';
 
@@ -44,7 +45,7 @@ export function ConfirmDialog({
         <DialogFooter>
           <DialogClose asChild>
             <Button type="button" variant="ghost">
-              Отмена
+              {S.common.cancel}
             </Button>
           </DialogClose>
           <Button

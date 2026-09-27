@@ -13,16 +13,16 @@ const DAY = 24 * HOUR;
 /** Длительность одной строкой: 45с / 12м / 1ч 4м / 3д 2ч. */
 export function formatDuration(ms: number | null): string {
   if (ms === null) return '—';
-  if (ms < MINUTE) return `${Math.max(0, Math.round(ms / 1000))}с`;
-  if (ms < HOUR) return `${Math.round(ms / MINUTE)}м`;
+  if (ms < MINUTE) return `${Math.max(0, Math.round(ms / 1000))}s`;
+  if (ms < HOUR) return `${Math.round(ms / MINUTE)}m`;
   if (ms < DAY) {
     const hours = Math.floor(ms / HOUR);
     const minutes = Math.round((ms % HOUR) / MINUTE);
-    return minutes === 0 ? `${hours}ч` : `${hours}ч ${minutes}м`;
+    return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
   }
   const days = Math.floor(ms / DAY);
   const hours = Math.round((ms % DAY) / HOUR);
-  return hours === 0 ? `${days}д` : `${days}д ${hours}ч`;
+  return hours === 0 ? `${days}d` : `${days}d ${hours}h`;
 }
 
 /** Число с единицей: один знак после запятой, пока значение меньше десяти. */
@@ -38,7 +38,7 @@ export function formatTokens(value: number): string {
   if (value < 1000) return String(Math.max(0, Math.round(value)));
   const thousands = value / 1000;
   // 999_600 округлилось бы до «1000к» — такое число уже читается как миллионы.
-  return Math.round(thousands) < 1000 ? withUnit(thousands, 'к') : withUnit(value / 1_000_000, 'М');
+  return Math.round(thousands) < 1000 ? withUnit(thousands, 'k') : withUnit(value / 1_000_000, 'M');
 }
 
 /**

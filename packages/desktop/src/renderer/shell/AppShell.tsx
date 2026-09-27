@@ -17,6 +17,7 @@ import { useEffect, useRef } from 'react';
 import type { WorkSession } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge, HostStatus } from '../../shared/bridge.js';
+import { S } from '../../shared/strings.js';
 import { LEFT_SIDEBAR } from '../../shared/ui-types.js';
 import { InterruptedBanner } from '../components/InterruptedBanner.js';
 import { NewWorkDialog } from '../components/dialogs/NewWorkDialog.js';
@@ -163,7 +164,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
           {ui.leftSidebar.open ? (
             <>
               <div ref={leftSidebarRef} style={{ width: ui.leftSidebar.width }} className="h-full shrink-0 overflow-hidden">
-                <ErrorBoundary title="Не удалось показать сайдбар работ">
+                <ErrorBoundary title={S.shell.sidebarError}>
                   <Sidebar
                     bridge={bridge}
                     onOpenSession={handleOpenSession}
@@ -183,7 +184,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
               />
             </>
           ) : null}
-          <ErrorBoundary title="Не удалось показать раскладку">
+          <ErrorBoundary title={S.shell.layoutError}>
             <Workspace ref={workspaceRef} bridge={bridge} works={entries} fontFamily={fontFamily} fontSize={fontSize} />
           </ErrorBoundary>
         </div>

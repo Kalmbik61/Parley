@@ -77,6 +77,6 @@ describe('SessionPicker', () => {
 
   it('пустой список кандидатов — заметно, что открывать нечего', () => {
     render(<SessionPicker open candidates={[]} onSelect={() => {}} onOpenChange={() => {}} />);
-    expect(screen.getByText('У этой работы нет сессий без панели')).toBeTruthy();
+    expect(screen.getByText('This workspace has no sessions without a panel')).toBeTruthy();
   });
 });

@@ -14,7 +14,7 @@ useUiStore.getState().setDark(useUiStore.getState().dark);
 watchSystemDark((dark) => useUiStore.getState().setDark(dark));
 
 const container = document.getElementById('root');
-if (container === null) throw new Error('#root не найден');
+if (container === null) throw new Error('#root not found');
 
 createRoot(container).render(
   <StrictMode>

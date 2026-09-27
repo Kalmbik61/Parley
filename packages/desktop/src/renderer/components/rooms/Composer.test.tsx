@@ -19,9 +19,9 @@ const MEMBERS = [
 ];
 
 function typeAndSend(text: string): void {
-  const textarea = screen.getByPlaceholderText('⌘Enter — отправить');
+  const textarea = screen.getByPlaceholderText('⌘Enter to send');
   fireEvent.change(textarea, { target: { value: text } });
-  fireEvent.click(screen.getByText('Отправить'));
+  fireEvent.click(screen.getByText('Send'));
 }
 
 describe('Composer — тест 2', () => {
@@ -43,7 +43,7 @@ describe('Composer — тест 2', () => {
     typeAndSend('двоим');
 
     expect(sent[0]?.to.sort()).toEqual(['s-01', 's-02']);
-    expect(screen.getByLabelText('всем').getAttribute('aria-checked')).toBe('false');
+    expect(screen.getByLabelText('everyone').getAttribute('aria-checked')).toBe('false');
   });
 
   it('закрытого участника выбрать нельзя', () => {

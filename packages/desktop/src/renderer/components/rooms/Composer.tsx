@@ -16,6 +16,7 @@
 
 import { useState } from 'react';
 import type { MessageKind } from '@harnas/core';
+import { S } from '../../../shared/strings.js';
 import { Button } from '../../ui/button.js';
 import { Checkbox } from '../../ui/checkbox.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select.js';
@@ -40,9 +41,9 @@ export interface ComposerProps {
 }
 
 const KIND_LABELS: Record<MessageKind, string> = {
-  note: 'заметка',
-  question: 'вопрос',
-  decision: 'решение',
+  note: S.rooms.kindLabels.note,
+  question: S.rooms.kindLabels.question,
+  decision: S.rooms.kindLabels.decision,
 };
 
 export function Composer({ members, onSend }: ComposerProps): JSX.Element {
@@ -72,7 +73,7 @@ export function Composer({ members, onSend }: ComposerProps): JSX.Element {
       <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
         <label className="flex items-center gap-1.5">
           <Checkbox checked={selected.size === 0} onCheckedChange={() => setSelected(new Set())} />
-          всем
+          {S.rooms.everyone}
         </label>
         {members.map((member) => (
           <label key={member.id} className={`flex items-center gap-1.5 ${member.closed ? 'opacity-50' : ''}`}>
@@ -108,12 +109,12 @@ export function Composer({ members, onSend }: ComposerProps): JSX.Element {
             submit();
           }
         }}
-        placeholder="⌘Enter — отправить"
+        placeholder={S.rooms.composerPlaceholder}
         className="min-h-16 resize-none"
       />
       <div className="flex justify-end">
         <Button type="button" size="sm" onClick={submit}>
-          Отправить
+          {S.rooms.send}
         </Button>
       </div>
     </div>

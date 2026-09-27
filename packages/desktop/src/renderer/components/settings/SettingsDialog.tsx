@@ -20,6 +20,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { HarnasConfig } from '@harnas/core';
 import type { HarnasBridge } from '../../../shared/bridge.js';
+import { decodeIpcError } from '../../../shared/ipc-error.js';
+import { errorText, S } from '../../../shared/strings.js';
 import type { Appearance, UiFile } from '../../../shared/ui-types.js';
 import { useUiStore } from '../../store/ui.js';
 import { Button } from '../../ui/button.js';
@@ -41,10 +43,10 @@ export interface SettingsDialogProps {
 type SettingsSection = 'appearance' | 'terminal' | 'agents' | 'notifications';
 
 const SECTION_LABELS: Record<SettingsSection, string> = {
-  appearance: 'Вид',
-  terminal: 'Терминал',
-  agents: 'Агенты',
-  notifications: 'Уведомления',
+  appearance: S.settings.sections.appearance,
+  terminal: S.settings.sections.terminal,
+  agents: S.settings.sections.agents,
+  notifications: S.settings.sections.notifications,
 };
 
 const SECTION_ORDER: readonly SettingsSection[] = ['appearance', 'terminal', 'agents', 'notifications'];
@@ -66,7 +68,7 @@ function FieldRow({
     <label className="flex flex-col gap-1 text-sm">
       <span>
         {label}
-        {lockedBy !== null ? <span className="text-muted-foreground"> (задано {lockedBy})</span> : null}
+        {lockedBy !== null ? <span className="text-muted-foreground"> {S.settings.lockedBy(lockedBy)}</span> : null}
       </span>
       {children}
       {error !== undefined ? <span className="text-xs text-destructive">{error}</span> : null}
@@ -114,7 +116,10 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
         setErrors({});
         setLoadError(null);
       })
-      .catch((err: unknown) => setLoadError(err instanceof Error ? err.message : String(err)));
+      .catch((err: unknown) => {
+        console.warn('[harnas] settings.get', err);
+        setLoadError(errorText(decodeIpcError(err).code, S.errors.actions.loadSettings));
+      });
   }, [open, bridge]);
 
   const save = async (key: keyof HarnasConfig, value: string): Promise<void> => {
@@ -130,7 +135,9 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
         return next;
       });
     } catch (err) {
-      setErrors((prev) => ({ ...prev, [key]: err instanceof Error ? err.message : String(err) }));
+      console.warn('[harnas] settings.set', key, err);
+      const message = errorText(decodeIpcError(err).code, S.errors.actions.saveSettings);
+      setErrors((prev) => ({ ...prev, [key]: message }));
     }
   };
 
@@ -148,7 +155,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent aria-describedby={undefined} className="w-[26rem] max-w-[26rem]">
-        <DialogTitle>Настройки</DialogTitle>
+        <DialogTitle>{S.settings.title}</DialogTitle>
         {loadError !== null ? <p className="text-xs text-destructive">{loadError}</p> : null}
 
         <Tabs value={section} onValueChange={(value) => setSection(value as SettingsSection)}>
@@ -170,9 +177,9 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                   if (value !== '') changeAppearance(value as Appearance);
                 }}
               >
-                <ToggleGroupItem value="system">Система</ToggleGroupItem>
-                <ToggleGroupItem value="dark">Тёмная</ToggleGroupItem>
-                <ToggleGroupItem value="light">Светлая</ToggleGroupItem>
+                <ToggleGroupItem value="system">{S.settings.appearanceSystem}</ToggleGroupItem>
+                <ToggleGroupItem value="dark">{S.settings.appearanceDark}</ToggleGroupItem>
+                <ToggleGroupItem value="light">{S.settings.appearanceLight}</ToggleGroupItem>
               </ToggleGroup>
             ) : null}
           </TabsContent>
@@ -180,7 +187,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
           <TabsContent value="terminal" className="flex flex-col gap-3">
             {config !== null ? (
               <>
-                <FieldRow label="Шрифт терминала" lockedBy={locked.fontFamily ?? null} error={errors.fontFamily}>
+                <FieldRow label={S.settings.terminalFont} lockedBy={locked.fontFamily ?? null} error={errors.fontFamily}>
                   <Input
                     defaultValue={config.fontFamily}
                     disabled={locked.fontFamily !== undefined}
@@ -188,7 +195,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                   />
                 </FieldRow>
 
-                <FieldRow label="Кегль терминала (8…32)" lockedBy={locked.fontSize ?? null} error={errors.fontSize}>
+                <FieldRow label={S.settings.terminalFontSize} lockedBy={locked.fontSize ?? null} error={errors.fontSize}>
                   <Input
                     defaultValue={String(config.fontSize)}
                     disabled={locked.fontSize !== undefined}
@@ -203,7 +210,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
             {config !== null ? (
               <>
                 <FieldRow
-                  label="Порог молчания, мс"
+                  label={S.settings.silenceThreshold}
                   lockedBy={locked.silenceThresholdMs ?? null}
                   error={errors.silenceThresholdMs}
                 >
@@ -214,7 +221,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                   />
                 </FieldRow>
 
-                <FieldRow label="Потолок писем в час" lockedBy={locked.messageRate ?? null} error={errors.messageRate}>
+                <FieldRow label={S.settings.messageCap} lockedBy={locked.messageRate ?? null} error={errors.messageRate}>
                   <Input
                     defaultValue={String(config.messageRate)}
                     disabled={locked.messageRate !== undefined}
@@ -223,7 +230,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                 </FieldRow>
 
                 <FieldRow
-                  label="Подъёмов сессии в час (0…60)"
+                  label={S.settings.resumeRate}
                   lockedBy={locked.resumeRate ?? null}
                   error={errors.resumeRate}
                 >
@@ -236,9 +243,9 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
 
                 <label className="flex items-center justify-between gap-2 text-sm">
                   <span>
-                    Автозапуск pending-сессий
+                    {S.settings.autoLaunchPending}
                     {locked.autoLaunch !== undefined ? (
-                      <span className="text-muted-foreground"> (задано {locked.autoLaunch})</span>
+                      <span className="text-muted-foreground"> {S.settings.lockedBy(locked.autoLaunch)}</span>
                     ) : null}
                   </span>
                   <Switch
@@ -251,7 +258,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                   <span className="text-xs text-destructive">{errors.autoLaunch}</span>
                 ) : null}
 
-                <FieldRow label="Корень worktree" lockedBy={locked.worktreeRoot ?? null} error={errors.worktreeRoot}>
+                <FieldRow label={S.settings.worktreeRoot} lockedBy={locked.worktreeRoot ?? null} error={errors.worktreeRoot}>
                   <Input
                     defaultValue={config.worktreeRoot}
                     disabled={locked.worktreeRoot !== undefined}
@@ -266,22 +273,22 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
             {uiLoaded ? (
               <>
                 <NotificationRow
-                  label="нужен ты"
+                  label={S.settings.notifyNeedsYou}
                   checked={ui.notifications.needsYou}
                   onCheckedChange={(checked) => toggleNotification('needsYou', checked)}
                 />
                 <NotificationRow
-                  label="закончил ход"
+                  label={S.settings.notifyFinished}
                   checked={ui.notifications.finished}
                   onCheckedChange={(checked) => toggleNotification('finished', checked)}
                 />
                 <NotificationRow
-                  label="письмо тебе"
+                  label={S.settings.notifyMail}
                   checked={ui.notifications.mail}
                   onCheckedChange={(checked) => toggleNotification('mail', checked)}
                 />
                 <NotificationRow
-                  label="звук"
+                  label={S.settings.notifySound}
                   checked={ui.notifications.sound}
                   onCheckedChange={(checked) => toggleNotification('sound', checked)}
                 />
@@ -292,7 +299,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
 
         <DialogFooter>
           <DialogClose asChild>
-            <Button type="button">Готово</Button>
+            <Button type="button">{S.common.done}</Button>
           </DialogClose>
         </DialogFooter>
       </DialogContent>

@@ -15,6 +15,7 @@
 import { useEffect, useState } from 'react';
 import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../shared/bridge.js';
+import { S } from '../../shared/strings.js';
 import { sessionTag } from '../lib/participant.js';
 import { Button } from '../ui/button.js';
 
@@ -47,9 +48,9 @@ export function InterruptedBanner({ bridge }: InterruptedBannerProps): JSX.Eleme
 
   return (
     <div className="flex items-center justify-between gap-3 border-b border-border bg-card px-3 py-2 text-sm text-foreground">
-      <span>Прерваны посреди хода: {refs.map((ref) => sessionTag(ref.sessionId)).join(', ')}</span>
+      <span>{S.banners.interrupted(refs.map((ref) => sessionTag(ref.sessionId)).join(', '))}</span>
       <Button type="button" size="sm" onClick={resumeAll} className="shrink-0">
-        Поднять всех
+        {S.banners.resumeAll}
       </Button>
     </div>
   );

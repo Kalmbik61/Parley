@@ -38,7 +38,7 @@ describe('Titlebar (тест 7)', () => {
     const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
     render(<Titlebar bridge={bridge} />);
 
-    fireEvent.click(screen.getByLabelText('Сайдбар работ'));
+    fireEvent.click(screen.getByLabelText('Workspace sidebar'));
 
     expect(useUiStore.getState().ui.leftSidebar).toEqual({ open: false, width: DEFAULT_UI.leftSidebar.width });
     expect(saveUiSpy).toHaveBeenCalledWith({
@@ -48,7 +48,7 @@ describe('Titlebar (тест 7)', () => {
 
   it('«назад» неактивна, пока canBack() ложно, и активна после смены вкладки', () => {
     render(<Titlebar bridge={bridge} />);
-    const backButton = (): HTMLButtonElement => screen.getByLabelText('Назад') as HTMLButtonElement;
+    const backButton = (): HTMLButtonElement => screen.getByLabelText('Back') as HTMLButtonElement;
     expect(backButton().disabled).toBe(true);
 
     let layout = emptyLayout();
@@ -67,10 +67,10 @@ describe('Titlebar (тест 7)', () => {
   it('поиск «⌘K» открывает палитру, «правый сайдбар» неактивен (до 7.2)', () => {
     render(<Titlebar bridge={bridge} />);
 
-    fireEvent.click(screen.getByText('Поиск'));
+    fireEvent.click(screen.getByText('Search'));
     expect(useUiStore.getState().paletteOpen).toBe(true);
 
-    expect((screen.getByLabelText('Правый сайдбар') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByLabelText('Right sidebar') as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('двойной клик по пустому месту заголовка зовёт app.titlebarDoubleClick', () => {
@@ -81,7 +81,7 @@ describe('Titlebar (тест 7)', () => {
 
   it('двойной клик по кнопке не зовёт titlebarDoubleClick (не «пустое место»)', () => {
     render(<Titlebar bridge={bridge} />);
-    fireEvent.doubleClick(screen.getByLabelText('Сайдбар работ'));
+    fireEvent.doubleClick(screen.getByLabelText('Workspace sidebar'));
     expect(bridge.titlebarDoubleClicks).toHaveLength(0);
   });
 });

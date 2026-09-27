@@ -59,7 +59,7 @@ describe('ErrorBoundary (тест 5)', () => {
         <Bomb crash={false} onMount={onMount} />
       </ErrorBoundary>,
     );
-    fireEvent.click(screen.getByText('Повторить'));
+    fireEvent.click(screen.getByText('Retry'));
 
     expect(mounts).toBe(2);
     expect(screen.getByText('ок')).toBeTruthy();
@@ -76,7 +76,7 @@ describe('ErrorBoundary (тест 5)', () => {
         <Bomb crash={true} onMount={() => {}} />
       </ErrorBoundary>,
     );
-    expect(screen.queryByText('Закрыть')).toBeNull();
+    expect(screen.queryByText('Close')).toBeNull();
 
     const onClose = vi.fn();
     rerender(
@@ -84,7 +84,7 @@ describe('ErrorBoundary (тест 5)', () => {
         <Bomb crash={true} onMount={() => {}} />
       </ErrorBoundary>,
     );
-    fireEvent.click(screen.getByText('Закрыть'));
+    fireEvent.click(screen.getByText('Close'));
     expect(onClose).toHaveBeenCalledTimes(1);
 
     errorSpy.mockRestore();

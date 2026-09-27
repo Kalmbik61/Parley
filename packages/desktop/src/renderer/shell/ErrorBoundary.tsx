@@ -8,6 +8,7 @@
  */
 
 import { Component, Fragment, type ReactNode } from 'react';
+import { S } from '../../shared/strings.js';
 import { Button } from '../ui/button.js';
 
 export interface ErrorBoundaryProps {
@@ -42,11 +43,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           <p className="text-xs text-muted-foreground">{error.message}</p>
           <div className="mt-1 flex gap-2">
             <Button type="button" size="sm" onClick={this.retry}>
-              Повторить
+              {S.common.retry}
             </Button>
             {this.props.onClose !== undefined ? (
               <Button type="button" size="sm" variant="ghost" onClick={this.props.onClose}>
-                Закрыть
+                {S.common.close}
               </Button>
             ) : null}
           </div>

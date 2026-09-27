@@ -20,6 +20,7 @@
 
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { S } from '../../../shared/strings.js';
 import type { LetterView } from '../../lib/mail-view.js';
 
 export interface LetterProps {
@@ -29,8 +30,8 @@ export interface LetterProps {
 
 /** Вид письма суффиксом заголовка: у заметки его нет (перенос из `room-view.ts`). */
 function kindSuffix(kind: LetterView['kind']): string {
-  if (kind === 'question') return ' · вопрос';
-  if (kind === 'decision') return ' · решение';
+  if (kind === 'question') return S.mail.kindSuffixQuestion;
+  if (kind === 'decision') return S.mail.kindSuffixDecision;
   return '';
 }
 
@@ -68,7 +69,7 @@ export function Letter({ letter, onOpenExternal }: LetterProps): JSX.Element {
     <div data-letter-id={letter.id} className="py-2">
       <div className="flex items-center gap-1 text-xs text-muted-foreground">
         {letter.unread ? (
-          <span aria-label="непрочитано" className="text-foreground">
+          <span aria-label={S.mail.unreadAriaLabel} className="text-foreground">
             ▤
           </span>
         ) : null}

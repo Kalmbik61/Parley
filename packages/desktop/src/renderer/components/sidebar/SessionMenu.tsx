@@ -11,6 +11,7 @@
 
 import { useState, type ReactNode } from 'react';
 import type { SessionStatus } from '@harnas/core';
+import { S } from '../../../shared/strings.js';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -61,43 +62,49 @@ export function SessionMenu({
       <ContextMenu>
         <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
         <ContextMenuContent>
-          <ContextMenuItem onSelect={onOpen}>Открыть</ContextMenuItem>
-          {RESUMABLE.has(status) ? <ContextMenuItem onSelect={onResume}>Возобновить</ContextMenuItem> : null}
-          {STOPPABLE.has(status) ? (
-            <ContextMenuItem onSelect={() => setConfirm('stop')}>Остановить</ContextMenuItem>
+          <ContextMenuItem onSelect={onOpen}>{S.sidebar.sessionMenu.open}</ContextMenuItem>
+          {RESUMABLE.has(status) ? (
+            <ContextMenuItem onSelect={onResume}>{S.sidebar.sessionMenu.resume}</ContextMenuItem>
           ) : null}
-          {!closed ? <ContextMenuItem onSelect={() => setConfirm('close')}>Закрыть…</ContextMenuItem> : null}
-          <ContextMenuItem onSelect={onCreateRoom}>Создать комнату с…</ContextMenuItem>
-          {hasWorktree ? <ContextMenuItem onSelect={onOpenChanges}>Изменения</ContextMenuItem> : null}
+          {STOPPABLE.has(status) ? (
+            <ContextMenuItem onSelect={() => setConfirm('stop')}>{S.sidebar.sessionMenu.stop}</ContextMenuItem>
+          ) : null}
+          {!closed ? (
+            <ContextMenuItem onSelect={() => setConfirm('close')}>{S.sidebar.sessionMenu.closeEllipsis}</ContextMenuItem>
+          ) : null}
+          <ContextMenuItem onSelect={onCreateRoom}>{S.sidebar.sessionMenu.createRoomWith}</ContextMenuItem>
+          {hasWorktree ? (
+            <ContextMenuItem onSelect={onOpenChanges}>{S.sidebar.sessionMenu.changes}</ContextMenuItem>
+          ) : null}
           <ContextMenuSeparator />
           <ContextMenuItem
             className="text-destructive focus:bg-destructive focus:text-destructive-foreground"
             onSelect={() => setConfirm('delete')}
           >
-            Удалить
+            {S.common.delete}
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
 
       <ConfirmDialog
         open={confirm === 'stop'}
-        title={`Остановить «${label}»?`}
-        confirmLabel="Остановить"
+        title={S.sidebar.sessionMenu.stopConfirmTitle(label)}
+        confirmLabel={S.sidebar.sessionMenu.stop}
         onConfirm={onStop}
         onOpenChange={(open) => setConfirm(open ? 'stop' : null)}
       />
       <ConfirmDialog
         open={confirm === 'close'}
-        title={`Закрыть «${label}»?`}
-        description="Сессия больше не получит писем"
-        confirmLabel="Закрыть"
+        title={S.sidebar.sessionMenu.closeConfirmTitle(label)}
+        description={S.sidebar.sessionMenu.closeConfirmDescription}
+        confirmLabel={S.common.close}
         onConfirm={onClose}
         onOpenChange={(open) => setConfirm(open ? 'close' : null)}
       />
       <ConfirmDialog
         open={confirm === 'delete'}
-        title={`Удалить «${label}»?`}
-        confirmLabel="Удалить"
+        title={S.sidebar.sessionMenu.deleteConfirmTitle(label)}
+        confirmLabel={S.common.delete}
         onConfirm={onDelete}
         onOpenChange={(open) => setConfirm(open ? 'delete' : null)}
       />

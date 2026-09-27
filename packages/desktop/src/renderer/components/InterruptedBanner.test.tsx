@@ -24,9 +24,9 @@ describe('InterruptedBanner — тест 5', () => {
 
     render(<InterruptedBanner bridge={bridge} />);
 
-    await screen.findByText('Прерваны посреди хода: S03, S05');
+    await screen.findByText('Interrupted mid-turn: S03, S05');
 
-    fireEvent.click(screen.getByText('Поднять всех'));
+    fireEvent.click(screen.getByText('Resume all'));
 
     const call = bridge.calls.find((entry) => entry.method === 'sessions.resumeInterrupted');
     expect(call?.params).toEqual({ refs: REFS });

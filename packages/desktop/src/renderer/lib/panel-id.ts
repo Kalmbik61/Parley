@@ -32,13 +32,13 @@ export function panelId(spec: PanelSpec): string {
   switch (spec.kind) {
     case 'terminal':
     case 'changes': {
-      if (spec.ref === undefined) throw new Error(`panelId: панель «${spec.kind}» требует ref`);
+      if (spec.ref === undefined) throw new Error(`panelId: panel "${spec.kind}" requires ref`);
       return `${spec.kind}:${refKey(spec.ref)}`;
     }
     case 'mail':
       return `mail:${spec.workKey}`;
     case 'room': {
-      if (spec.roomId === undefined) throw new Error('panelId: панель «room» требует roomId');
+      if (spec.roomId === undefined) throw new Error('panelId: panel "room" requires roomId');
       return `room:${spec.workKey}:${spec.roomId}`;
     }
   }

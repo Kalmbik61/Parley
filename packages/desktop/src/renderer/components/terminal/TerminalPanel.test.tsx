@@ -62,7 +62,7 @@ describe('TerminalPanel', () => {
     bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
     render(<TerminalPanel bridge={bridge} sessionRef={ref} fontFamily="Menlo" fontSize={13} />);
 
-    expect(screen.queryByPlaceholderText('Найти…')).toBeNull();
+    expect(screen.queryByPlaceholderText('Find…')).toBeNull();
   });
 
   it('⌘F открывает строку, Enter зовёт findNext, Escape закрывает', () => {
@@ -71,12 +71,12 @@ describe('TerminalPanel', () => {
     render(<TerminalPanel bridge={bridge} sessionRef={ref} fontFamily="Menlo" fontSize={13} />);
 
     act(() => bridge.emitMenu('find'));
-    const input = screen.getByPlaceholderText('Найти…');
+    const input = screen.getByPlaceholderText('Find…');
     fireEvent.change(input, { target: { value: 'hello' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(state.findNext).toHaveBeenCalledWith('hello');
 
     fireEvent.keyDown(input, { key: 'Escape' });
-    expect(screen.queryByPlaceholderText('Найти…')).toBeNull();
+    expect(screen.queryByPlaceholderText('Find…')).toBeNull();
   });
 });

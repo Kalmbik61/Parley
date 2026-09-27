@@ -162,11 +162,11 @@ describe('AppShell — Landing и оболочка с работой (тест 6
     expect(screen.getByTestId('landing')).toBeTruthy();
     expect(screen.queryByTestId('app-shell')).toBeNull();
     expect(screen.getByTestId('titlebar')).toBeTruthy();
-    expect(screen.getByText('хост 0.0.0-test')).toBeTruthy();
+    expect(screen.getByText('Host 0.0.0-test')).toBeTruthy();
 
     const titlebar = screen.getByTestId('titlebar');
     expect(titlebar.parentElement).toBe(container.firstElementChild);
-    expect(titlebar.nextElementSibling?.textContent).toContain('Прерваны');
+    expect(titlebar.nextElementSibling?.textContent).toContain('Interrupted');
   });
 
   it('с работой: сайдбар и центр вместо Landing', async () => {
@@ -187,9 +187,9 @@ describe('AppShell — меню и диалоги (тест 9)', () => {
     render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
     await flush();
 
-    fireEvent.click(screen.getByRole('button', { name: /Новая работа/ }));
+    fireEvent.click(screen.getByRole('button', { name: /New workspace/ }));
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText('Новая работа')).toBeTruthy();
+    expect(within(dialog).getByText('New workspace')).toBeTruthy();
     fireEvent.keyDown(dialog, { key: 'Escape' });
     await flush();
 
@@ -199,7 +199,7 @@ describe('AppShell — меню и диалоги (тест 9)', () => {
     await flush();
 
     act(() => bridge.emitMenu('palette'));
-    expect(await screen.findByText('Палитра команд')).toBeTruthy();
+    expect(await screen.findByText('Command palette')).toBeTruthy();
   });
 
   it('подпись сочетания палитры — ⌘K и в заголовке, и на Landing; ⌘J нигде нет (до 6.2)', async () => {
@@ -222,7 +222,7 @@ describe('AppShell — меню и диалоги (тест 9)', () => {
     expect(screen.queryByText('Первая')).toBeNull();
     expect(useUiStore.getState().ui.leftSidebar.open).toBe(false);
 
-    fireEvent.click(screen.getByText('Поиск'));
+    fireEvent.click(screen.getByText('Search'));
     expect(useUiStore.getState().paletteOpen).toBe(true);
   });
 });

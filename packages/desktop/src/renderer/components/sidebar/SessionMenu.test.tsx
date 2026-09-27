@@ -39,10 +39,10 @@ describe('SessionMenu — тест 4', () => {
     renderMenu(() => (closed = true));
 
     fireEvent.contextMenu(screen.getByText('строка сессии'));
-    fireEvent.click(screen.getByText('Закрыть…'));
+    fireEvent.click(screen.getByText('Close…'));
 
-    expect(screen.getByText('Закрыть «S01 план»?')).toBeTruthy();
-    expect(screen.getByText('Сессия больше не получит писем')).toBeTruthy();
+    expect(screen.getByText('Close "S01 план"?')).toBeTruthy();
+    expect(screen.getByText('Session will no longer receive mail')).toBeTruthy();
     expect(closed).toBe(false);
   });
 
@@ -51,8 +51,8 @@ describe('SessionMenu — тест 4', () => {
     renderMenu(() => (closed = true));
 
     fireEvent.contextMenu(screen.getByText('строка сессии'));
-    fireEvent.click(screen.getByText('Закрыть…'));
-    fireEvent.click(screen.getAllByText('Закрыть')[0] as HTMLElement);
+    fireEvent.click(screen.getByText('Close…'));
+    fireEvent.click(screen.getAllByText('Close')[0] as HTMLElement);
 
     expect(closed).toBe(true);
   });
@@ -62,8 +62,8 @@ describe('SessionMenu — тест 4', () => {
     renderMenu(() => (closed = true));
 
     fireEvent.contextMenu(screen.getByText('строка сессии'));
-    fireEvent.click(screen.getByText('Закрыть…'));
-    fireEvent.click(screen.getByText('Отмена'));
+    fireEvent.click(screen.getByText('Close…'));
+    fireEvent.click(screen.getByText('Cancel'));
 
     expect(closed).toBe(false);
   });
@@ -88,7 +88,7 @@ describe('SessionMenu — тест 4', () => {
     );
 
     fireEvent.contextMenu(screen.getByText('строка сессии'));
-    expect(screen.queryByText('Закрыть…')).toBeNull();
+    expect(screen.queryByText('Close…')).toBeNull();
   });
 
   it('«Изменения» видно только у сессии со своим worktree', () => {
@@ -111,6 +111,6 @@ describe('SessionMenu — тест 4', () => {
     );
 
     fireEvent.contextMenu(screen.getByText('строка сессии'));
-    expect(screen.getByText('Изменения')).toBeTruthy();
+    expect(screen.getByText('Changes')).toBeTruthy();
   });
 });

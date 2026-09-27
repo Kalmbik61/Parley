@@ -75,7 +75,7 @@ describe('participantTag', () => {
 
   it('удалённая сессия', () => {
     const map = mapWith([], ['s-09']);
-    expect(participantTag(map, 's-09', null, providers)).toBe('S09 (удалена)');
+    expect(participantTag(map, 's-09', null, providers)).toBe('S09 (deleted)');
   });
 
   it('чужой id — как есть', () => {
@@ -83,9 +83,9 @@ describe('participantTag', () => {
     expect(participantTag(map, 'manual-1', null, providers)).toBe('manual-1');
   });
 
-  it('человек — «Вы», системное письмо — «Система»', () => {
+  it('человек — «You», системное письмо — «System»', () => {
     const map = mapWith([]);
-    expect(participantTag(map, 'human', null, providers)).toBe('Вы');
-    expect(participantTag(map, 'system', null, providers)).toBe('Система');
+    expect(participantTag(map, 'human', null, providers)).toBe('You');
+    expect(participantTag(map, 'system', null, providers)).toBe('System');
   });
 });

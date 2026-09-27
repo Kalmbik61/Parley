@@ -99,7 +99,7 @@ describe('Sidebar', () => {
     // «бейдж/клавиша» шкалы 4.3 (10px), не «ветка/мета» (11px).
     for (const el of numberEls) expect(el.className).toContain('text-[10px]');
 
-    expect(screen.getByText('↑1.2к ↓845 · 12м · ▤1 · ⋮1')).toBeTruthy();
+    expect(screen.getByText('↑1.2k ↓845 · 12m · ▤1 · ⋮1')).toBeTruthy();
   });
 
   it('длинный ярлык (200 знаков) не ломает ширину — обрезается через CSS truncate', () => {
@@ -121,6 +121,6 @@ describe('Sidebar', () => {
 
   it('«Работ пока нет» — пустой список', () => {
     render(<Sidebar bridge={createFakeBridge()} onOpenSession={() => {}} onOpenMail={() => {}} onOpenRoom={() => {}} onOpenChanges={() => {}} />);
-    expect(screen.getByText('Работ пока нет')).toBeTruthy();
+    expect(screen.getByText('No workspaces yet')).toBeTruthy();
   });
 });

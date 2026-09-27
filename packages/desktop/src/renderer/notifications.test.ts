@@ -20,7 +20,7 @@ describe('createNotificationWatcher', () => {
     watcher.handle(ref, 'blocked');
     watcher.handle(ref, 'blocked');
 
-    expect(notified).toEqual([{ title: 'S03 ждёт ответа', body: 'бэкенд' }]);
+    expect(notified).toEqual([{ title: 'S03 needs a reply', body: 'бэкенд' }]);
   });
 
   it('у видимой — ни разу', () => {
@@ -49,7 +49,7 @@ describe('createNotificationWatcher', () => {
 
     watcher.handle(ref, 'unseen');
 
-    expect(notified).toEqual([{ title: 'S03 закончила ход', body: 'ревью' }]);
+    expect(notified).toEqual([{ title: 'S03 is done', body: 'ревью' }]);
   });
 
   it('бейдж считает сессии в blocked и unseen', () => {
@@ -100,7 +100,7 @@ describe('wireNotifications', () => {
       metrics: null,
     });
 
-    expect(bridge.appNotified).toEqual([{ title: 'S03 ждёт ответа', body: 'план' }]);
+    expect(bridge.appNotified).toEqual([{ title: 'S03 needs a reply', body: 'план' }]);
     expect(bridge.badges.at(-1)).toBe(1);
     dispose();
   });

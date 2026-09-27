@@ -18,6 +18,7 @@ import { createContext, useContext, useEffect, useState, type FC } from 'react';
 import type { IDockviewPanelProps } from 'dockview-react';
 import { refKey, type SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../../shared/bridge.js';
+import { S } from '../../../shared/strings.js';
 import { TerminalPanel } from '../terminal/TerminalPanel.js';
 import { MailPanel } from '../mail/MailPanel.js';
 import { RoomPanel } from '../rooms/RoomPanel.js';
@@ -38,7 +39,7 @@ export const PanelHostContext = createContext<PanelHostContextValue | null>(null
 
 function usePanelHost(): PanelHostContextValue {
   const value = useContext(PanelHostContext);
-  if (value === null) throw new Error('панель dockview вне PanelHostContext (Workspace должен его выставлять)');
+  if (value === null) throw new Error('dockview panel outside PanelHostContext (Workspace must provide it)');
   return value;
 }
 
@@ -49,7 +50,7 @@ function TerminalPanelContent({ api, params }: IDockviewPanelProps<PanelSpec>): 
   // отключались от потока и переставали показывать вывод агента.
   const [visible, setVisible] = useState(api.isVisible);
 
-  if (params.ref === undefined) throw new Error('panel-registry: панель terminal без ref');
+  if (params.ref === undefined) throw new Error('panel-registry: terminal panel without ref');
   const ref = params.ref;
 
   useEffect(() => {
@@ -102,7 +103,7 @@ function MailPanelContent({ params }: IDockviewPanelProps<PanelSpec>): JSX.Eleme
 
   const entry = entries.find((item) => workKey(item.projectPath, item.map.work.id) === params.workKey);
   if (entry === undefined) {
-    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Работа закрыта</div>;
+    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{S.errors.workspaceClosed}</div>;
   }
 
   // `LiveMetrics.model` — единственный источник имени модели у рендерера
@@ -143,7 +144,7 @@ function RoomPanelContent({ params }: IDockviewPanelProps<PanelSpec>): JSX.Eleme
 
   const entry = entries.find((item) => workKey(item.projectPath, item.map.work.id) === params.workKey);
   if (entry === undefined || params.roomId === undefined) {
-    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Работа закрыта</div>;
+    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{S.errors.workspaceClosed}</div>;
   }
 
   const models: Record<string, string | null> = {};
@@ -175,13 +176,13 @@ function ChangesPanelContent({ params }: IDockviewPanelProps<PanelSpec>): JSX.El
   const host = usePanelHost();
   const entries = useWorksStore((state) => state.entries);
 
-  if (params.ref === undefined) throw new Error('panel-registry: панель changes без ref');
+  if (params.ref === undefined) throw new Error('panel-registry: changes panel without ref');
   const ref = params.ref;
   const entry = entries.find((item) => item.projectPath === ref.projectPath && item.map.work.id === ref.workId);
   const session = entry?.map.sessions.find((item) => item.id === ref.sessionId);
 
   if (session === undefined || session.worktree === null) {
-    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">У сессии нет своего worktree</div>;
+    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{S.errors.noWorktree}</div>;
   }
 
   return <ChangesPanel bridge={host.bridge} sessionRef={ref} base={session.worktree.base} />;

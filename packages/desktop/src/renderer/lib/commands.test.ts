@@ -106,8 +106,8 @@ describe('buildCommands — порядок (тест 3)', () => {
       actions: noopActions(),
     }).find((command) => command.id === 'action:toggle-wake');
 
-    expect(paused?.title).toBe('Снять паузу будильника');
-    expect(running?.title).toBe('Пауза будильника');
+    expect(paused?.title).toBe('Resume auto-wake');
+    expect(running?.title).toBe('Pause auto-wake');
   });
 
   it('работа без сессий: команда работы существует, но запуск ничего не открывает', () => {

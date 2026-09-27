@@ -7,6 +7,7 @@
 
 import { Diff, Hunk } from 'react-diff-view';
 import 'react-diff-view/style/index.css';
+import { S } from '../../../shared/strings.js';
 import { filePathOf, parsePatch, type GitDiffFile } from '../../lib/diff.js';
 
 export interface DiffViewProps {
@@ -22,7 +23,7 @@ function FileDiff({ file }: { file: GitDiffFile }): JSX.Element {
         {path}
       </div>
       {file.isBinary === true ? (
-        <p className="px-2 py-2 text-xs text-muted-foreground">двоичный файл</p>
+        <p className="px-2 py-2 text-xs text-muted-foreground">{S.changes.binaryFile}</p>
       ) : (
         <Diff viewType="unified" diffType={file.type} hunks={file.hunks}>
           {(hunks) => hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />)}
@@ -36,7 +37,7 @@ export function DiffView({ patch }: DiffViewProps): JSX.Element {
   const files = parsePatch(patch);
 
   if (files.length === 0) {
-    return <p className="px-2 py-2 text-sm text-muted-foreground">Изменений нет</p>;
+    return <p className="px-2 py-2 text-sm text-muted-foreground">{S.changes.noChanges}</p>;
   }
 
   return (

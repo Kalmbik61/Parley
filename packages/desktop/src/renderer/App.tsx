@@ -3,6 +3,7 @@ import { refKey } from '@harnas/protocol';
 import type { HarnasConfig } from '@harnas/core';
 import { getHostClient } from './host-client.js';
 import type { HostStatus } from '../shared/bridge.js';
+import { S } from '../shared/strings.js';
 import { AppShell } from './shell/AppShell.js';
 import { NewSessionDialog } from './components/dialogs/NewSessionDialog.js';
 import { SettingsDialog } from './components/settings/SettingsDialog.js';
@@ -80,7 +81,7 @@ export function App(): JSX.Element {
       // стор уведомлений), здесь только macOS-уведомление.
       bridge.on('host.notice', (notice) => {
         if (notice.kind !== 'trust-wait') return;
-        bridge.app.notify({ title: 'Ждёт доверия к папке', body: notice.text });
+        bridge.app.notify({ title: S.notifications.trustWaitTitle, body: notice.text });
       }),
       // 'palette'/'new-work'/'toggle-left-sidebar'/'work-1…9' слушает
       // `AppShell` (кусок 2.3) — у него для них есть ручка `Workspace` и
@@ -113,22 +114,22 @@ export function App(): JSX.Element {
   if (status.state === 'mismatch') {
     return (
       <div className="flex h-screen flex-col items-center justify-center gap-4 text-neutral-200">
-        <p>Хост старой версии. Перезапустить? Живых сессий: {status.liveSessions ?? '—'}.</p>
+        <p>{S.connection.mismatchScreen(status.liveSessions)}</p>
         <button type="button" className="rounded bg-neutral-700 px-4 py-2" onClick={handleRestart}>
-          Перезапустить
+          {S.connection.restart}
         </button>
       </div>
     );
   }
 
   if (status.state === 'connecting') {
-    return <div className="flex h-screen items-center justify-center text-neutral-400">Подключение к хосту…</div>;
+    return <div className="flex h-screen items-center justify-center text-neutral-400">{S.connection.connectingScreen}</div>;
   }
 
   if (status.state === 'disconnected') {
     return (
       <div className="flex h-screen items-center justify-center text-neutral-400">
-        Нет связи с хостом: {status.reason}
+        {S.connection.disconnectedScreen(status.reason)}
       </div>
     );
   }

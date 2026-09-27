@@ -8,6 +8,7 @@ import '@xterm/xterm/css/xterm.css';
 import { useEffect, useState } from 'react';
 import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../../shared/bridge.js';
+import { S } from '../../../shared/strings.js';
 import { useTerminal } from './use-terminal.js';
 
 export interface TerminalPanelProps {
@@ -53,7 +54,7 @@ export function TerminalPanel({
               if (event.key === 'Enter') search?.findNext(query);
               if (event.key === 'Escape') setSearchOpen(false);
             }}
-            placeholder="Найти…"
+            placeholder={S.terminal.findPlaceholder}
             className="w-48 bg-transparent text-sm text-popover-foreground outline-none"
           />
         </div>

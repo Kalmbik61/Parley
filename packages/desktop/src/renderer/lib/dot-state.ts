@@ -8,6 +8,7 @@
  */
 
 import type { Activity, SessionLifecycle, SessionStatus, WorkSession } from '@harnas/core';
+import { S } from '../../shared/strings.js';
 
 /**
  * Прежний единый статус из двух осей карты v2 — копия `displayStatus` из
@@ -75,20 +76,20 @@ export function maxDotState(states: readonly DotState[]): DotState | null {
 export function stateWord(state: DotState, lifecycle: SessionLifecycle): string {
   switch (state) {
     case 'working':
-      return 'работает';
+      return S.states.working;
     case 'blocked':
-      return 'ждёт тебя';
+      return S.states.blocked;
     case 'unseen':
-      return 'закончил · не просмотрено';
+      return S.states.unseen;
     case 'idle':
-      return 'простаивает';
+      return S.states.idle;
     case 'pending':
-      return 'ожидает запуска';
+      return S.states.pending;
     case 'exited':
-      return lifecycle === 'closed' ? 'закрыта' : 'спит';
+      return lifecycle === 'closed' ? S.states.closed : S.states.asleep;
     case 'done':
-      return 'готово';
+      return S.states.done;
     case 'failed':
-      return 'сбой';
+      return S.states.failed;
   }
 }

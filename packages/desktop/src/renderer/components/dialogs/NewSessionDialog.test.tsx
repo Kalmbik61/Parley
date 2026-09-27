@@ -30,7 +30,7 @@ describe('NewSessionDialog — тест 1: флажок «в своём worktree
       />,
     );
 
-    const row = await screen.findByText('в своём worktree');
+    const row = await screen.findByText('In its own worktree');
     const toggle = row.closest('label')?.querySelector('button[role="switch"]') as HTMLButtonElement;
     expect(toggle.disabled).toBe(true);
   });
@@ -51,7 +51,7 @@ describe('NewSessionDialog — тест 1: флажок «в своём worktree
       />,
     );
 
-    const row = await screen.findByText('в своём worktree');
+    const row = await screen.findByText('In its own worktree');
     const toggle = row.closest('label')?.querySelector('button[role="switch"]') as HTMLButtonElement;
     expect(toggle.disabled).toBe(false);
   });

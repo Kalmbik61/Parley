@@ -22,6 +22,7 @@
  */
 
 import type { Message, MessageKind, Room, WorkEntry, WorkMap } from '@harnas/core';
+import { S } from '../../shared/strings.js';
 import { participantTag } from './participant-tag.js';
 import { treeOrder } from './tree-order.js';
 
@@ -91,7 +92,7 @@ export function toLetterView(message: Message, map: WorkMap, tag: (id: string) =
     id: message.id,
     time: formatClock(message.at),
     from: tag(message.from),
-    to: broadcast ? 'всем' : recipients.map(tag).join(', '),
+    to: broadcast ? S.rooms.everyone : recipients.map(tag).join(', '),
     kind: message.kind,
     text: message.text,
     unread: recipients.some((id) => isUnreadFor(message, id, map)),

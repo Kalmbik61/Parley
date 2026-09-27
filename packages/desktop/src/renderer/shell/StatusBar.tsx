@@ -7,12 +7,13 @@
 
 import type { HostNotice } from '@harnas/protocol';
 import type { HostStatus } from '../../shared/bridge.js';
+import { S } from '../../shared/strings.js';
 
 const CONNECTION_TEXT: Record<HostStatus['state'], (status: HostStatus) => string> = {
-  connecting: () => 'подключение…',
-  connected: (status) => (status.state === 'connected' ? `хост ${status.hostVersion}` : ''),
-  mismatch: () => 'хост другой версии',
-  disconnected: (status) => (status.state === 'disconnected' ? `нет связи: ${status.reason}` : ''),
+  connecting: () => S.connection.statusConnecting,
+  connected: (status) => (status.state === 'connected' ? S.connection.statusConnected(status.hostVersion) : ''),
+  mismatch: () => S.connection.statusMismatch,
+  disconnected: (status) => (status.state === 'disconnected' ? S.connection.statusDisconnected(status.reason) : ''),
 };
 
 export interface StatusBarProps {
@@ -33,7 +34,7 @@ export function StatusBar({ status, lastNotice, wakePaused, onToggleWake }: Stat
         disabled={wakePaused === null}
         className="shrink-0 rounded px-2 py-0.5 text-foreground hover:bg-accent disabled:opacity-50"
       >
-        {wakePaused === true ? 'будильник на паузе' : 'будильник работает'}
+        {wakePaused === true ? S.statusBar.wakePaused : S.statusBar.wakeOn}
       </button>
     </div>
   );

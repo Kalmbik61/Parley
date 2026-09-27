@@ -130,7 +130,7 @@ describe('SessionTree — тест 1', () => {
       />,
     );
 
-    expect(screen.getByText('закрыта')).toBeTruthy();
+    expect(screen.getByText('Closed')).toBeTruthy();
     const row = screen.getByText('S01 план').parentElement;
     expect(row?.className).toContain('opacity-60');
   });
@@ -175,6 +175,6 @@ describe('SessionTree — тест 1', () => {
       />,
     );
 
-    expect(screen.getByText('ждёт тебя')).toBeTruthy();
+    expect(screen.getByText('Needs you')).toBeTruthy();
   });
 });

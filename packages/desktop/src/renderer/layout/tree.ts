@@ -448,7 +448,7 @@ export function validateLayout(layout: WorkLayout): string[] {
     for (const tab of group.tabs) tabCounts.set(tab.id, (tabCounts.get(tab.id) ?? 0) + 1);
   }
   for (const [id, count] of tabCounts) {
-    if (count > 1) errors.push(`дубль id вкладки: ${id}`);
+    if (count > 1) errors.push(`duplicate tab id: ${id}`);
   }
 
   // Дубль id УЗЛА (группы или сплита) — отдельный от дубля id вкладки инвариант:
@@ -457,29 +457,29 @@ export function validateLayout(layout: WorkLayout): string[] {
   const nodeIdCounts = new Map<string, number>();
   for (const id of allNodeIds(layout.root)) nodeIdCounts.set(id, (nodeIdCounts.get(id) ?? 0) + 1);
   for (const [id, count] of nodeIdCounts) {
-    if (count > 1) errors.push(`дубль id узла: ${id}`);
+    if (count > 1) errors.push(`duplicate node id: ${id}`);
   }
 
   for (const group of allGroups) {
-    if (group.tabs.length === 0 && !isRoot(group.id)) errors.push(`пустая некорневая группа: ${group.id}`);
+    if (group.tabs.length === 0 && !isRoot(group.id)) errors.push(`empty non-root group: ${group.id}`);
     if (group.tabs.length === 0) {
-      if (group.activeTabId !== null) errors.push(`activeTabId пустой группы не null: ${group.id}`);
+      if (group.activeTabId !== null) errors.push(`activeTabId of an empty group is not null: ${group.id}`);
     } else if (group.activeTabId === null || !group.tabs.some((t) => t.id === group.activeTabId)) {
-      errors.push(`activeTabId не из своей группы: ${group.id}`);
+      errors.push(`activeTabId not from its own group: ${group.id}`);
     }
   }
 
   const walkSplits = (node: LayoutNode): void => {
     if (node.type === 'group') return;
-    if (node.ratio < LIMITS.ratio.min || node.ratio > LIMITS.ratio.max) errors.push(`ratio вне диапазона: ${node.id}`);
+    if (node.ratio < LIMITS.ratio.min || node.ratio > LIMITS.ratio.max) errors.push(`ratio out of range: ${node.id}`);
     walkSplits(node.children[0]);
     walkSplits(node.children[1]);
   };
   walkSplits(layout.root);
 
-  if (allGroups.length > LIMITS.maxGroups) errors.push(`групп больше ${LIMITS.maxGroups}: ${allGroups.length}`);
+  if (allGroups.length > LIMITS.maxGroups) errors.push(`more groups than the ${LIMITS.maxGroups} limit: ${allGroups.length}`);
   if (!allGroups.some((g) => g.id === layout.activeGroupId)) {
-    errors.push(`activeGroupId не существует: ${layout.activeGroupId}`);
+    errors.push(`activeGroupId does not exist: ${layout.activeGroupId}`);
   }
 
   return errors;

@@ -10,11 +10,12 @@ import { refKey, type SessionRef } from '@harnas/protocol';
 import type { Activity } from '@harnas/core';
 import { noticeTitle } from './lib/participant.js';
 import type { HarnasBridge } from '../shared/bridge.js';
+import { S } from '../shared/strings.js';
 
 /** Заголовок уведомления для каждого «тревожного» activity; остальные — не тревога. */
 const ALERT_SUFFIX: Partial<Record<Activity, string>> = {
-  blocked: 'ждёт ответа',
-  unseen: 'закончила ход',
+  blocked: S.notifications.alertSuffixBlocked,
+  unseen: S.notifications.alertSuffixUnseen,
 };
 
 export interface NotificationWatcher {

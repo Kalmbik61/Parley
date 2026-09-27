@@ -23,6 +23,7 @@
 
 import type { WorkEntry } from '@harnas/core';
 import { refKey, type SessionRef } from '@harnas/protocol';
+import { S } from '../../shared/strings.js';
 import { sessionRowLabel } from './participant.js';
 import { orderedWorks } from '../store/works.js';
 import { treeOrder, workKey } from './tree-order.js';
@@ -82,7 +83,7 @@ export function buildCommands(state: BuildCommandsState): Command[] {
     workCommandByKey.set(key, {
       id: `work:${key}`,
       title: work.map.work.title,
-      hint: 'работа',
+      hint: S.palette.workspaceHint,
       keywords: [work.map.work.title],
       run: () => {
         // Нет ни одной сессии — переключаться не на что (как ⌘1…⌘9 в `App.tsx`).
@@ -101,9 +102,9 @@ export function buildCommands(state: BuildCommandsState): Command[] {
     if (work.map.messages.length > 0) {
       mailCommandByKey.set(key, {
         id: `mail:${key}`,
-        title: 'Вся почта работы',
+        title: S.mail.allWorkspaceMail,
         hint: work.map.work.title,
-        keywords: ['вся почта работы', 'почта', work.map.work.title],
+        keywords: ['all workspace mail', 'mail', work.map.work.title],
         run: () => actions.openMail(key),
       });
     }
@@ -115,7 +116,7 @@ export function buildCommands(state: BuildCommandsState): Command[] {
         id: `room:${roomKey}`,
         title: room.title,
         hint: work.map.work.title,
-        keywords: [room.title, 'комната', work.map.work.title],
+        keywords: [room.title, 'room', work.map.work.title],
         run: () => actions.openRoom(key, room.id, room.title),
       });
       roomKeys.push(roomKey);
@@ -173,24 +174,29 @@ export function buildCommands(state: BuildCommandsState): Command[] {
   const actionCommands: Command[] = [
     {
       id: 'action:new-session',
-      title: 'Новая сессия',
-      keywords: ['новая сессия', 'создать сессию'],
+      title: S.menu.newSession,
+      keywords: ['new session', 'create session'],
       run: actions.newSession,
     },
     {
       id: 'action:new-work',
-      title: 'Новая работа',
-      keywords: ['новая работа', 'создать работу'],
+      title: S.menu.newWork,
+      keywords: ['new workspace', 'create workspace'],
       run: actions.newWork,
     },
-    { id: 'action:settings', title: 'Настройки', keywords: ['настройки'], run: actions.settings },
+    { id: 'action:settings', title: S.menu.settings, keywords: ['settings'], run: actions.settings },
     {
       id: 'action:toggle-wake',
-      title: wakePaused === true ? 'Снять паузу будильника' : 'Пауза будильника',
-      keywords: ['будильник', 'пауза'],
+      title: wakePaused === true ? S.palette.resumeAutoWake : S.palette.pauseAutoWake,
+      keywords: ['auto-wake', 'pause'],
       run: actions.toggleWake,
     },
-    { id: 'action:close-panel', title: 'Закрыть панель', keywords: ['закрыть панель'], run: actions.closeActivePanel },
+    {
+      id: 'action:close-panel',
+      title: S.menu.closePanel,
+      keywords: ['close panel'],
+      run: actions.closeActivePanel,
+    },
   ];
 
   return [...recent, ...rest, ...actionCommands];

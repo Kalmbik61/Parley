@@ -33,9 +33,9 @@ describe('ChangesPanel — тест 3: «Влить» неактивна с пр
     bridge.setHandler('worktrees.diff', async () => baseDiff({ baseDirty: true }));
     render(<ChangesPanel bridge={bridge} sessionRef={ref} base="main" />);
 
-    const button = (await screen.findByText('Влить в main')).closest('button');
+    const button = (await screen.findByText('Merge into main')).closest('button');
     expect(button?.disabled).toBe(true);
-    expect(button?.title).toMatch(/база грязная/);
+    expect(button?.title).toMatch(/Base is dirty/);
   });
 
   it('uncommitted — кнопка неактивна, подсказка называет незакоммиченное', async () => {
@@ -43,9 +43,9 @@ describe('ChangesPanel — тест 3: «Влить» неактивна с пр
     bridge.setHandler('worktrees.diff', async () => baseDiff({ uncommitted: true }));
     render(<ChangesPanel bridge={bridge} sessionRef={ref} base="main" />);
 
-    const button = (await screen.findByText('Влить в main')).closest('button');
+    const button = (await screen.findByText('Merge into main')).closest('button');
     expect(button?.disabled).toBe(true);
-    expect(button?.title).toMatch(/незакоммиченное/);
+    expect(button?.title).toMatch(/uncommitted/);
   });
 
   it('ни baseDirty, ни uncommitted — кнопка активна', async () => {
@@ -53,7 +53,7 @@ describe('ChangesPanel — тест 3: «Влить» неактивна с пр
     bridge.setHandler('worktrees.diff', async () => baseDiff());
     render(<ChangesPanel bridge={bridge} sessionRef={ref} base="main" />);
 
-    const button = (await screen.findByText('Влить в main')).closest('button');
+    const button = (await screen.findByText('Merge into main')).closest('button');
     expect(button?.disabled).toBe(false);
   });
 });
@@ -71,10 +71,10 @@ describe('ChangesPanel — тест 4: «Поручить агенту»', () =>
 
     render(<ChangesPanel bridge={bridge} sessionRef={ref} base="main" />);
 
-    fireEvent.click(await screen.findByText('Влить в main'));
-    fireEvent.click(await screen.findByText('Поручить агенту'));
+    fireEvent.click(await screen.findByText('Merge into main'));
+    fireEvent.click(await screen.findByText('Assign to agent'));
 
-    const sent = await screen.findByText('Письмо отправлено');
+    const sent = await screen.findByText('Message sent');
     expect(sent).toBeTruthy();
 
     const call = bridge.calls.find((item) => item.method === 'rooms.send');
@@ -99,17 +99,17 @@ describe('ChangesPanel — тест 5: «Отбросить» грязного w
     bridge.setHandler('worktrees.discard', async () => ({ ok: true as const }));
 
     render(<ChangesPanel bridge={bridge} sessionRef={ref} base="main" />);
-    await screen.findByText('Влить в main');
+    await screen.findByText('Merge into main');
 
-    fireEvent.click(screen.getByText('Отбросить'));
-    expect(await screen.findByText('Отбросить «S02»?')).toBeTruthy();
+    fireEvent.click(screen.getByText('Discard'));
+    expect(await screen.findByText('Discard "S02"?')).toBeTruthy();
 
     // Первое подтверждение у грязного worktree не отбрасывает сразу — открывает второе.
-    fireEvent.click(screen.getAllByText('Отбросить')[1] as HTMLElement);
+    fireEvent.click(screen.getAllByText('Discard')[1] as HTMLElement);
     expect(bridge.calls.some((item) => item.method === 'worktrees.discard')).toBe(false);
 
-    expect(await screen.findByText('Незакоммиченные изменения будут потеряны')).toBeTruthy();
-    fireEvent.click(screen.getByText('Отбросить всё равно'));
+    expect(await screen.findByText('Uncommitted changes will be lost')).toBeTruthy();
+    fireEvent.click(screen.getByText('Discard anyway'));
 
     const call = bridge.calls.find((item) => item.method === 'worktrees.discard');
     expect(call?.params).toMatchObject({ ref, force: true });
@@ -121,11 +121,11 @@ describe('ChangesPanel — тест 5: «Отбросить» грязного w
     bridge.setHandler('worktrees.discard', async () => ({ ok: true as const }));
 
     render(<ChangesPanel bridge={bridge} sessionRef={ref} base="main" />);
-    await screen.findByText('Влить в main');
+    await screen.findByText('Merge into main');
 
-    fireEvent.click(screen.getByText('Отбросить'));
-    expect(await screen.findByText('Отбросить «S02»?')).toBeTruthy();
-    fireEvent.click(screen.getAllByText('Отбросить')[1] as HTMLElement);
+    fireEvent.click(screen.getByText('Discard'));
+    expect(await screen.findByText('Discard "S02"?')).toBeTruthy();
+    fireEvent.click(screen.getAllByText('Discard')[1] as HTMLElement);
 
     const call = bridge.calls.find((item) => item.method === 'worktrees.discard');
     expect(call?.params).toMatchObject({ ref, force: false });
@@ -138,7 +138,7 @@ describe('ChangesPanel — раунд исправлений 1 куска 1.4 (�
     bridge.setHandler('worktrees.diff', async () => baseDiff());
     render(<ChangesPanel bridge={bridge} sessionRef={ref} base="main" />);
 
-    const discard = await screen.findByText('Отбросить');
+    const discard = await screen.findByText('Discard');
     expect(discard.className).toContain('text-white');
     expect(discard.className).toContain('dark:bg-destructive/60');
     expect(discard.className).not.toContain('text-destructive-foreground');

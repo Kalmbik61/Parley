@@ -14,6 +14,8 @@
 
 import { useEffect, useState } from 'react';
 import type { HarnasBridge } from '../../../shared/bridge.js';
+import { decodeIpcError } from '../../../shared/ipc-error.js';
+import { errorText, S } from '../../../shared/strings.js';
 import { Button } from '../../ui/button.js';
 import { Checkbox } from '../../ui/checkbox.js';
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from '../../ui/dialog.js';
@@ -70,7 +72,7 @@ export function CreateRoomDialog({
   const submit = async (): Promise<void> => {
     const trimmed = title.trim();
     if (trimmed === '') {
-      setError('нужно название');
+      setError(S.rooms.nameRequired);
       return;
     }
     try {
@@ -82,22 +84,23 @@ export function CreateRoomDialog({
       });
       onOpenChange(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      console.warn('[harnas] rooms.create', err);
+      setError(errorText(decodeIpcError(err).code, S.errors.actions.createRoom));
     }
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent aria-describedby={undefined} className="w-96 max-w-96">
-        <DialogTitle>Создать комнату с {requiredMember.label}</DialogTitle>
+        <DialogTitle>{S.rooms.createTitle(requiredMember.label)}</DialogTitle>
         <div className="flex flex-col gap-3 text-sm">
           <label className="flex flex-col gap-1">
-            Название
+            {S.rooms.nameField}
             <Input value={title} onChange={(event) => setTitle(event.target.value)} />
           </label>
           {candidates.length > 0 ? (
             <div className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">Ещё участники</span>
+              <span className="text-xs text-muted-foreground">{S.rooms.moreParticipants}</span>
               <div className="flex flex-wrap gap-3 text-xs">
                 {candidates.map((candidate) => (
                   <label
@@ -120,11 +123,11 @@ export function CreateRoomDialog({
         <DialogFooter>
           <DialogClose asChild>
             <Button type="button" variant="ghost">
-              Отмена
+              {S.common.cancel}
             </Button>
           </DialogClose>
           <Button type="button" onClick={() => void submit()}>
-            Создать
+            {S.common.create}
           </Button>
         </DialogFooter>
       </DialogContent>

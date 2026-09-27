@@ -9,6 +9,7 @@
 import { useLayoutEffect, useRef } from 'react';
 import type { WorkEntry, WorkMap } from '@harnas/core';
 import type { HarnasBridge } from '../../../shared/bridge.js';
+import { S } from '../../../shared/strings.js';
 import { roomView } from '../../lib/room-view.js';
 import { participantTag } from '../../lib/participant-tag.js';
 import { Decisions } from '../mail/Decisions.js';
@@ -45,7 +46,7 @@ export function RoomPanel({ entry, roomId, providers, models, bridge, onOpenExte
   }, [view?.letters.length]);
 
   if (view === null) {
-    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Комната не найдена</div>;
+    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{S.rooms.notFound}</div>;
   }
 
   const members: ComposerMember[] = view.memberIds.map((id) => ({

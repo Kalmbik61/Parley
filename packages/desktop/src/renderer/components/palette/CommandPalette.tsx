@@ -13,6 +13,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
+import { S } from '../../../shared/strings.js';
 import { fuzzyScore } from '../../lib/fuzzy.js';
 import type { Command } from '../../lib/commands.js';
 
@@ -69,7 +70,7 @@ export function CommandPalette({ open, commands, onOpenChange }: CommandPaletteP
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/50" />
         <Dialog.Content className="fixed left-1/2 top-[20%] w-[32rem] -translate-x-1/2 rounded-lg bg-card p-2 text-foreground shadow-lg">
-          <Dialog.Title className="px-2 py-1 text-sm font-medium">Палитра команд</Dialog.Title>
+          <Dialog.Title className="px-2 py-1 text-sm font-medium">{S.menu.commandPalette}</Dialog.Title>
           <input
             autoFocus
             value={query}
@@ -89,12 +90,12 @@ export function CommandPalette({ open, commands, onOpenChange }: CommandPaletteP
                 onOpenChange(false);
               }
             }}
-            placeholder="Работа, сессия или действие…"
+            placeholder={S.palette.searchPlaceholder}
             className="w-full rounded bg-muted px-2 py-1.5 text-sm text-foreground outline-none"
           />
           <ul className="mt-2 max-h-80 overflow-y-auto">
             {results.length === 0 ? (
-              <li className="px-2 py-2 text-sm text-muted-foreground">Ничего не найдено</li>
+              <li className="px-2 py-2 text-sm text-muted-foreground">{S.palette.empty}</li>
             ) : (
               results.map((command, index) => (
                 <li key={command.id}>

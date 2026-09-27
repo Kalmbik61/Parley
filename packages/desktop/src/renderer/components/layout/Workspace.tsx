@@ -34,6 +34,7 @@ import {
 import type { WorkEntry } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../../shared/bridge.js';
+import { S } from '../../../shared/strings.js';
 import { sessionRowLabel } from '../../lib/participant.js';
 import { panelId, specFromPanelId, workKey, type PanelSpec } from '../../lib/panel-id.js';
 import { useUiStore } from '../../store/ui.js';
@@ -92,8 +93,8 @@ function titleFor(spec: PanelSpec, entry: WorkEntry | undefined): string {
     const label = entry?.map.sessions.find((session) => session.id === spec.ref?.sessionId)?.label ?? '';
     return sessionRowLabel(spec.ref.sessionId, label);
   }
-  if (spec.kind === 'mail') return 'Вся почта работы';
-  return entry?.map.rooms.find((room) => room.id === spec.roomId)?.title ?? 'Комната';
+  if (spec.kind === 'mail') return S.mail.allWorkspaceMail;
+  return entry?.map.rooms.find((room) => room.id === spec.roomId)?.title ?? S.rooms.fallbackTitle;
 }
 
 function openOrFocus(api: DockviewApi, spec: PanelSpec, title: string, position?: PanelPosition): void {
@@ -143,7 +144,7 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
   const openMailInGrid = (sessionWorkKey: string): void => {
     const api = apiRef.current;
     if (api === null) return;
-    openOrFocus(api, { kind: 'mail', workKey: sessionWorkKey }, 'Вся почта работы');
+    openOrFocus(api, { kind: 'mail', workKey: sessionWorkKey }, S.mail.allWorkspaceMail);
   };
 
   // Строка комнаты в сайдбаре (кусок 3.6) и команда палитры ⌘K — тот же

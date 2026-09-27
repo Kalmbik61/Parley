@@ -6,6 +6,8 @@
 
 import { useState } from 'react';
 import type { HarnasBridge } from '../../../shared/bridge.js';
+import { decodeIpcError } from '../../../shared/ipc-error.js';
+import { errorText, S } from '../../../shared/strings.js';
 import { Button } from '../../ui/button.js';
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from '../../ui/dialog.js';
 import { Input } from '../../ui/input.js';
@@ -19,7 +21,7 @@ export interface NewWorkDialogProps {
 
 export function NewWorkDialog({ open, bridge, onOpenChange }: NewWorkDialogProps): JSX.Element {
   const [projectPath, setProjectPath] = useState<string | null>(null);
-  const [title, setTitle] = useState('Новая работа');
+  const [title, setTitle] = useState(S.dialogs.newWork.title);
   const [goal, setGoal] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -30,7 +32,7 @@ export function NewWorkDialog({ open, bridge, onOpenChange }: NewWorkDialogProps
 
   const submit = async (): Promise<void> => {
     if (projectPath === null) {
-      setError('выберите каталог проекта');
+      setError(S.dialogs.newWork.selectFolderRequired);
       return;
     }
     setError(null);
@@ -38,27 +40,28 @@ export function NewWorkDialog({ open, bridge, onOpenChange }: NewWorkDialogProps
       await bridge.call('works.create', { projectPath, title, goal });
       onOpenChange(false);
       setProjectPath(null);
-      setTitle('Новая работа');
+      setTitle(S.dialogs.newWork.title);
       setGoal('');
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      console.warn('[harnas] works.create', err);
+      setError(errorText(decodeIpcError(err).code, S.errors.actions.createWorkspace));
     }
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent aria-describedby={undefined} className="w-96 max-w-96">
-        <DialogTitle>Новая работа</DialogTitle>
+        <DialogTitle>{S.dialogs.newWork.title}</DialogTitle>
         <div className="flex flex-col gap-3 text-sm">
           <Button type="button" variant="outline" className="justify-start truncate font-normal" onClick={() => void chooseFolder()}>
-            {projectPath ?? 'Выбрать каталог…'}
+            {projectPath ?? S.dialogs.newWork.chooseFolderPlaceholder}
           </Button>
           <label className="flex flex-col gap-1">
-            Заголовок
+            {S.dialogs.newWork.titleField}
             <Input value={title} onChange={(event) => setTitle(event.target.value)} />
           </label>
           <label className="flex flex-col gap-1">
-            Цель
+            {S.dialogs.newWork.goalField}
             <Textarea value={goal} onChange={(event) => setGoal(event.target.value)} />
           </label>
           {error !== null ? <p className="text-destructive">{error}</p> : null}
@@ -66,11 +69,11 @@ export function NewWorkDialog({ open, bridge, onOpenChange }: NewWorkDialogProps
         <DialogFooter>
           <DialogClose asChild>
             <Button type="button" variant="ghost">
-              Отмена
+              {S.common.cancel}
             </Button>
           </DialogClose>
           <Button type="button" onClick={() => void submit()}>
-            Создать
+            {S.common.create}
           </Button>
         </DialogFooter>
       </DialogContent>

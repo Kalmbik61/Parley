@@ -17,6 +17,7 @@
  */
 
 import type { WorkMap } from '@harnas/core';
+import { S } from '../../shared/strings.js';
 import { sessionTag } from './participant.js';
 
 // Те же литералы, что `HUMAN`/`SYSTEM` в `core/work/types.ts` — импортировать
@@ -85,12 +86,14 @@ export function participantTag(
   model: string | null,
   providers: Array<{ id: string; label: string }>,
 ): string {
-  if (id === HUMAN) return 'Вы';
-  if (id === SYSTEM) return 'Система';
+  if (id === HUMAN) return S.participants.human;
+  if (id === SYSTEM) return S.participants.system;
 
   const session = map.sessions.find((candidate) => candidate.id === id);
   if (session === undefined) {
-    return (map.work.deletedSessions ?? []).includes(id) ? `${sessionTag(id)} (удалена)` : id;
+    return (map.work.deletedSessions ?? []).includes(id)
+      ? `${sessionTag(id)} ${S.participants.deletedSuffix}`
+      : id;
   }
   const providerLabel = providers.find((entry) => entry.id === session.provider)?.label ?? session.provider;
   const name = modelName(model) ?? providerLabel;

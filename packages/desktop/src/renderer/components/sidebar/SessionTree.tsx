@@ -21,6 +21,7 @@
 
 import type { Room, WorkSession } from '@harnas/core';
 import { refKey, type SessionRef } from '@harnas/protocol';
+import { S } from '../../../shared/strings.js';
 import { displayStatus, dotState, stateWord } from '../../lib/dot-state.js';
 import { sessionRowLabel } from '../../lib/participant.js';
 import { treeOrder, workKey } from '../../lib/tree-order.js';
@@ -129,7 +130,7 @@ export function SessionTree({
           className="flex h-6 min-w-0 cursor-default items-center gap-2 rounded px-2 text-[11px] text-muted-foreground hover:bg-work-sidebar-accent"
         >
           <span className="w-2 shrink-0" />
-          <span className="min-w-0 flex-1 truncate">Вся почта работы</span>
+          <span className="min-w-0 flex-1 truncate">{S.mail.allWorkspaceMail}</span>
         </div>
       ) : null}
       {humanRooms.map((room) => (
@@ -185,7 +186,7 @@ export function SessionTree({
                 <StatusDot state={state} lifecycle={session.lifecycle} />
                 <span className="min-w-0 flex-1 truncate">{label}</span>
                 {trustWait ? (
-                  <span title="не отвечает с запуска — возможно, ждёт доверия к папке" className="shrink-0 text-yellow-500">
+                  <span title={S.sidebar.trustWaitTooltip} className="shrink-0 text-yellow-500">
                     ⚠
                   </span>
                 ) : null}

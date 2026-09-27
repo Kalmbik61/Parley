@@ -14,6 +14,8 @@
 
 import { useEffect, useState } from 'react';
 import type { HarnasBridge } from '../../../shared/bridge.js';
+import { decodeIpcError } from '../../../shared/ipc-error.js';
+import { errorText, S } from '../../../shared/strings.js';
 import { Button } from '../../ui/button.js';
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from '../../ui/dialog.js';
 import { Input } from '../../ui/input.js';
@@ -63,7 +65,10 @@ export function NewSessionDialog({
         const firstAvailable = result.providers.find((item) => item.available);
         setProvider((current) => (current !== '' ? current : (firstAvailable ?? result.providers[0])?.id ?? ''));
       })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+      .catch((err: unknown) => {
+        console.warn('[harnas] providers.list', err);
+        setError(errorText(decodeIpcError(err).code, S.errors.actions.loadProviders));
+      });
   }, [open, bridge]);
 
   useEffect(() => {
@@ -80,7 +85,7 @@ export function NewSessionDialog({
 
   const submit = async (): Promise<void> => {
     if (workId === null) {
-      setError('нет выбранной работы');
+      setError(S.dialogs.newSession.selectWorkRequired);
       return;
     }
     setError(null);
@@ -100,18 +105,19 @@ export function NewSessionDialog({
       setChildOfSelected(false);
       setWorktree(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      console.warn('[harnas] sessions.create', err);
+      setError(errorText(decodeIpcError(err).code, S.errors.actions.createSession));
     }
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent aria-describedby={undefined} className="w-96 max-w-96">
-        <DialogTitle>Новая сессия</DialogTitle>
+        <DialogTitle>{S.dialogs.newSession.title}</DialogTitle>
         <div className="flex flex-col gap-3 text-sm">
           <Select value={provider} onValueChange={setProvider}>
             <SelectTrigger>
-              <SelectValue placeholder="провайдер…" />
+              <SelectValue placeholder={S.dialogs.newSession.providerPlaceholder} />
             </SelectTrigger>
             <SelectContent>
               {providers.map((item) => (
@@ -122,13 +128,13 @@ export function NewSessionDialog({
             </SelectContent>
           </Select>
           <label className="flex flex-col gap-1">
-            Ярлык
+            {S.dialogs.newSession.labelField}
             <Input value={label} onChange={(event) => setLabel(event.target.value)} />
           </label>
           <label className="flex flex-col gap-1">
-            Задача
+            {S.dialogs.newSession.taskField}
             <Textarea
-              placeholder="пусто — тихий старт, задачу агент получит первым сообщением"
+              placeholder={S.dialogs.newSession.taskPlaceholder}
               value={task}
               onChange={(event) => setTask(event.target.value)}
             />
@@ -139,22 +145,22 @@ export function NewSessionDialog({
               disabled={selectedSessionId === null}
               onCheckedChange={setChildOfSelected}
             />
-            дочерняя выбранной
+            {S.dialogs.newSession.childOfSelected}
           </label>
           <label className="flex items-center gap-2">
             <Switch checked={worktree} disabled={!worktreeAvailable} onCheckedChange={setWorktree} />
-            в своём worktree
+            {S.dialogs.newSession.inOwnWorktree}
           </label>
           {error !== null ? <p className="text-destructive">{error}</p> : null}
         </div>
         <DialogFooter>
           <DialogClose asChild>
             <Button type="button" variant="ghost">
-              Отмена
+              {S.common.cancel}
             </Button>
           </DialogClose>
           <Button type="button" onClick={() => void submit()}>
-            Запустить
+            {S.dialogs.newSession.submit}
           </Button>
         </DialogFooter>
       </DialogContent>

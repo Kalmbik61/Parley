@@ -11,6 +11,7 @@
 
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { WorkEntry } from '@harnas/core';
+import { S } from '../../../shared/strings.js';
 import { mailView } from '../../lib/mail-view.js';
 import { Decisions } from './Decisions.js';
 import { Letter } from './Letter.js';
@@ -20,15 +21,6 @@ export interface MailPanelProps {
   providers: Array<{ id: string; label: string }>;
   models: Record<string, string | null>;
   onOpenExternal: (url: string) => void;
-}
-
-/** Число писем словом: перенос `mailWord` из `tui/src/room-view.ts`. */
-function mailWord(count: number): string {
-  const mod10 = count % 10;
-  const mod100 = count % 100;
-  if (mod10 === 1 && mod100 !== 11) return 'письмо';
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'письма';
-  return 'писем';
 }
 
 /** Ушёл ли пользователь от хвоста ленты дальше, чем на пиксельный люфт округления. */
@@ -85,7 +77,7 @@ export function MailPanel({ entry, providers, models, onOpenExternal }: MailPane
       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
         <div className="min-w-0">
           <div className="text-sm font-medium text-foreground">
-            вся почта · {view.letters.length} {mailWord(view.letters.length)}
+            {S.mail.headerPrefix} · {view.letters.length} {S.mail.messageWord(view.letters.length)}
           </div>
           <div className="truncate text-xs text-muted-foreground">{view.participants.join(' · ')}</div>
         </div>

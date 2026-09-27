@@ -71,7 +71,6 @@ export const S = {
       closeEllipsis: 'Close…',
       createRoomWith: 'Create room with…',
       changes: 'Changes',
-      delete: 'Delete',
       stopConfirmTitle: (label: string): string => `Stop "${label}"?`,
       closeConfirmTitle: (label: string): string => `Close "${label}"?`,
       closeConfirmDescription: 'Session will no longer receive mail',
@@ -123,7 +122,7 @@ export const S = {
   rooms: {
     fallbackTitle: 'Room',
     notFound: 'Room not found',
-    everyone: 'Everyone',
+    everyone: 'everyone',
     kindLabels: {
       note: 'Note',
       question: 'Question',
@@ -189,13 +188,21 @@ export const S = {
     } as Record<string, string>,
     mergeBlockedBaseDirty: 'Base is dirty: its working copy has uncommitted changes',
     mergeBlockedUncommitted: 'Worktree has uncommitted changes — commit first',
-    /** Причина отказа `worktrees.merge()` (`MergeResult` из `@harnas/core`) — ключ строкой, см. шапку файла. */
+    /**
+     * Причина отказа `worktrees.merge()` — ключи те же четыре, что и в
+     * `Exclude<MergeResult, { ok: true }>['reason']` (`@harnas/core`), но без
+     * импорта самого типа (шапка файла: `shared/` не тянет типы пакетов,
+     * которых нет в `references` `tsconfig.node.json`). Без каста в
+     * `Record<string, string>` — доступ по известному ключу остаётся `string`,
+     * а не `string | undefined`, и `ChangesPanel.tsx` присваивает объект прямо
+     * в свой строго типизированный `MERGE_FAIL_TEXT` без доп. проверок.
+     */
     mergeFailReason: {
       base_not_checked_out: 'Base is not checked out anywhere',
       base_dirty: 'Base is dirty',
       uncommitted: 'Worktree has uncommitted changes',
       conflict: 'Merge conflict',
-    } as Record<string, string>,
+    },
     loading: 'Loading…',
     noFiles: 'No files',
     commitMessagePlaceholder: 'Commit message',
@@ -291,16 +298,17 @@ export const S = {
       loadSettings: 'load settings',
       saveSettings: 'save settings',
     },
+    /** Панель пережила исчезновение своей работы/сессии из снимка (`panel-registry.tsx`, план «На что смотреть на ревью», п. 3). */
+    workspaceClosed: 'Workspace closed',
+    noWorktree: 'This session has no worktree of its own',
   },
 
   /** Оболочка окна (`shell/AppShell.tsx`) — заголовки `ErrorBoundary` вокруг сайдбара и раскладки. */
   shell: {
     sidebarError: "Couldn't show workspace sidebar",
     layoutError: "Couldn't show layout",
-    errorBoundaryRetry: 'Retry',
-    errorBoundaryClose: 'Close',
   },
-} as const;
+};
 
 /** Английский текст по коду ошибки протокола (`ErrorCode` из `@harnas/protocol`, плюс наш `'failed'`). */
 const ERROR_REASON: Record<string, string> = {

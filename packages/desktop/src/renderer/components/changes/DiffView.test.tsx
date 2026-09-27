@@ -27,7 +27,7 @@ Binary files a/image.png and b/image.png differ
 describe('DiffView', () => {
   it('пустой патч — «изменений нет»', () => {
     render(<DiffView patch="" />);
-    expect(screen.getByText('Изменений нет')).toBeTruthy();
+    expect(screen.getByText('No changes')).toBeTruthy();
   });
 
   it('текстовый файл: путь и строки ханка отрисованы', () => {
@@ -40,6 +40,6 @@ describe('DiffView', () => {
   it('бинарный файл — строка «двоичный файл» вместо ханков', () => {
     render(<DiffView patch={BINARY_FILE_PATCH} />);
     expect(screen.getByText('image.png')).toBeTruthy();
-    expect(screen.getByText('двоичный файл')).toBeTruthy();
+    expect(screen.getByText('Binary file')).toBeTruthy();
   });
 });
