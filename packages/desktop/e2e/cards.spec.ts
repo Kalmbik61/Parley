@@ -55,9 +55,11 @@ async function hookEvent(workId: string, sessionId: string, event: Record<string
   await appendFile(path.join(dir, `${sessionId}.jsonl`), `${JSON.stringify(event)}\n`);
 }
 
-/** Порядок карточек сверху вниз — по `data-work-key` (кусок 3.3). */
+/** Порядок карточек сверху вниз — по `data-work-key` (кусок 3.3); с 4.3 его носят и вкладки. */
 const cardOrder = (window: Page): Promise<string[]> =>
-  window.evaluate(() => [...document.querySelectorAll('[data-work-key]')].map((el) => el.getAttribute('data-work-key') ?? ''));
+  window.evaluate(() =>
+    [...document.querySelectorAll('[data-work-key]:not([role="tab"])')].map((el) => el.getAttribute('data-work-key') ?? ''),
+  );
 
 /** Указатель — над центром раскладки, вне сайдбара: иначе пересортировка ждёт его ухода. */
 async function pointerAway(window: Page): Promise<void> {
@@ -153,7 +155,7 @@ test.describe('карточки сайдбара и форма новой раб
       { title: 'e2e-cards-one', sessions: 1 },
       { title: 'e2e-cards-two', sessions: 1 },
     ]);
-    await expect(window.locator('[data-work-key]')).toHaveCount(3);
+    await expect(window.locator('[data-work-key]:not([role="tab"])')).toHaveCount(3);
     await expect(window.locator('#titlebar-tabs [role="tab"][data-tab-id^="terminal:"]')).toHaveCount(1);
   });
 });
