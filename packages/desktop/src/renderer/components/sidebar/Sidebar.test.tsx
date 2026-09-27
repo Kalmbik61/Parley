@@ -93,8 +93,11 @@ describe('Sidebar', () => {
 
     render(<Sidebar bridge={createFakeBridge()} onOpenSession={() => {}} onOpenMail={() => {}} onOpenRoom={() => {}} onOpenChanges={() => {}} />);
 
-    const numbers = screen.getAllByText(/^[123]$/).map((el) => el.textContent);
-    expect(numbers).toEqual(['1', '2', '3']);
+    const numberEls = screen.getAllByText(/^[123]$/);
+    expect(numberEls.map((el) => el.textContent)).toEqual(['1', '2', '3']);
+    // Раунд исправлений 1 (находка A№5): порядковый номер (подсказка ⌘1…⌘9) —
+    // «бейдж/клавиша» шкалы 4.3 (10px), не «ветка/мета» (11px).
+    for (const el of numberEls) expect(el.className).toContain('text-[10px]');
 
     expect(screen.getByText('↑1.2к ↓845 · 12м · ▤1 · ⋮1')).toBeTruthy();
   });

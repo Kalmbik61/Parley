@@ -71,7 +71,7 @@ export function WorkList({
         return (
           <div key={key} data-work-key={key}>
             <div className="flex min-w-0 items-center gap-2 px-2 py-1">
-              <span className="w-4 shrink-0 text-right text-[11px] text-muted-foreground">{index < 9 ? index + 1 : ''}</span>
+              <span className="w-4 shrink-0 text-right text-[10px] text-muted-foreground">{index < 9 ? index + 1 : ''}</span>
               {workDot !== null ? <StatusDot state={workDot} /> : <span className="h-2 w-2 shrink-0" />}
               <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-work-sidebar-foreground">{entry.map.work.title}</span>
             </div>

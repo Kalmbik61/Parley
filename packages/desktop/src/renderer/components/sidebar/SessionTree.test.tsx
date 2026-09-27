@@ -6,6 +6,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import type { Room, WorkSession } from '@harnas/core';
+import { refKey, type SessionRef } from '@harnas/protocol';
+import type { ActivityEntry } from '../../store/activity.js';
 import { SessionTree } from './SessionTree.js';
 
 afterEach(cleanup);
@@ -131,5 +133,48 @@ describe('SessionTree — тест 1', () => {
     expect(screen.getByText('закрыта')).toBeTruthy();
     const row = screen.getByText('S01 план').parentElement;
     expect(row?.className).toContain('opacity-60');
+  });
+
+  it('blocked — слово состояния «ждёт тебя» (раунд исправлений 1, тест 5 брифа куска 1.3)', () => {
+    const ref: SessionRef = { projectPath: '/tmp/w-01', workId: 'w-01', sessionId: 's-01' };
+    const activityByRef: Record<string, ActivityEntry> = {
+      [refKey(ref)]: {
+        ref,
+        activity: {
+          activity: 'blocked',
+          subagents: 0,
+          turnEndedAt: null,
+          lastEventAt: null,
+          source: 'hooks',
+          exited: false,
+          hooksMissing: false,
+        },
+        metrics: null,
+      },
+    };
+
+    render(
+      <SessionTree
+        projectPath="/tmp/w-01"
+        workId="w-01"
+        sessions={[session('s-01', 'план')]}
+        rooms={[]}
+        selectedSessionId={null}
+        activityByRef={activityByRef}
+        hasMail={false}
+        onSelect={noop}
+        onOpen={noop}
+        onResume={noop}
+        onStop={noop}
+        onClose={noop}
+        onDelete={noop}
+        onCreateRoom={noop}
+        onOpenMail={noop}
+        onOpenRoom={noop}
+        onOpenChanges={noop}
+      />,
+    );
+
+    expect(screen.getByText('ждёт тебя')).toBeTruthy();
   });
 });

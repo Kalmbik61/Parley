@@ -32,6 +32,14 @@ const state = vi.hoisted(() => ({
   linkHandler: null as ((event: unknown, uri: string) => void) | null,
   webglContextLoss: null as (() => void) | null,
   webglDisposed: false,
+  /**
+   * Раунд исправлений 1, находка B№2: подставной FitAddon подбирает этот
+   * размер (если задан) на последнем созданном терминале при каждом вызове
+   * `fit()` — имитирует то, что настоящий `FitAddon.proposeDimensions()`
+   * считает по реальному размеру контейнера, независимо от того, что
+   * ответил хост в `pty.attach`.
+   */
+  nextFitSize: null as { cols: number; rows: number } | null,
 }));
 
 vi.mock('@xterm/xterm', () => ({
@@ -88,6 +96,13 @@ vi.mock('@xterm/addon-fit', () => ({
   FitAddon: vi.fn().mockImplementation(() => ({
     fit: () => {
       state.fitCalls += 1;
+      if (state.nextFitSize !== null) {
+        const last = state.terminals[state.terminals.length - 1];
+        if (last !== undefined) {
+          last.cols = state.nextFitSize.cols;
+          last.rows = state.nextFitSize.rows;
+        }
+      }
     },
   })),
 }));
@@ -146,6 +161,7 @@ beforeEach(() => {
   state.linkHandler = null;
   state.webglContextLoss = null;
   state.webglDisposed = false;
+  state.nextFitSize = null;
   ResizeObserverStub.instances = [];
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
 });
@@ -187,6 +203,38 @@ describe('useTerminal — подключение', () => {
 
     bridge.emit('pty.output', { ref: otherRef, data: 'чужой' });
     expect(state.terminals[0]?.writes).toEqual(['СНИМОК']);
+  });
+});
+
+describe('useTerminal — attach() не должен перетирать fit() размером хоста (раунд исправлений 1, находка B№2)', () => {
+  it('размер контейнера после fit() отличается от ответа attach — уходит pty.resize с размером контейнера', async () => {
+    const bridge = createFakeBridge();
+    // Свежий PTY хоста ещё не получал ни одного pty.resize и отвечает своим
+    // DEFAULT_SIZE (packages/host/src/pty/pty-manager.ts) — здесь 120×40, а
+    // реальный контейнер вмещает 100×30 (подставной FitAddon имитирует это).
+    bridge.setHandler('pty.attach', () => ({ snapshot: 'СНИМОК', cols: 120, rows: 40 }));
+    state.nextFitSize = { cols: 100, rows: 30 };
+
+    renderTerminal(bridge);
+
+    await waitFor(() => expect(bridge.notified.some((n) => n.method === 'pty.resize')).toBe(true));
+
+    expect(state.terminals[0]?.cols).toBe(100);
+    expect(state.terminals[0]?.rows).toBe(30);
+    expect(bridge.notified.filter((n) => n.method === 'pty.resize')).toEqual([
+      { method: 'pty.resize', params: { ref, cols: 100, rows: 30 } },
+    ]);
+  });
+
+  it('размер контейнера после fit() совпал с ответом attach — pty.resize не уходит', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
+    state.nextFitSize = { cols: 80, rows: 24 };
+
+    renderTerminal(bridge);
+    await waitFor(() => expect(state.terminals[0]?.writes).toEqual(['']));
+
+    expect(bridge.notified.filter((n) => n.method === 'pty.resize')).toHaveLength(0);
   });
 });
 

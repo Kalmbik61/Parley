@@ -383,7 +383,7 @@ renderer/ styles/{tokens,base,scrollbars}.css · assets/fonts/Geist-Variable.wof
 | `--sidebar-accent` | hover в правом сайдбаре | `#262626` | `#f5f5f5` |
 | `--primary` / `--primary-foreground` | главные кнопки | `#e5e5e5` / `#171717` | `#171717` / `#fafafa` |
 | `--secondary`, `--muted` | подложки | `#262626` | `#f5f5f5` |
-| `--muted-foreground` | вторичный текст | `#a1a1a1` | `#737373` |
+| `--muted-foreground` | вторичный текст | `#a1a1a1` | `#666666` (у Orca `#737373` — ниже AA на `--work-sidebar-accent`) |
 | `--accent` / `--accent-foreground` | выделенная строка | `#404040` / `#fafafa` | `#f5f5f5` / `#171717` |
 | `--destructive` | удаление, ошибка | `#ff6568` | `#e40014` |
 | `--border` | все границы | `rgb(255 255 255 / .07)` | `#e5e5e5` |

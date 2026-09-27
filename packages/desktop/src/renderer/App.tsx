@@ -173,7 +173,7 @@ export function App(): JSX.Element {
   const newSessionWork = selectedRef ?? null;
 
   return (
-    <div className="flex h-screen flex-col bg-background text-[var(--h-text)]">
+    <div className="flex h-screen flex-col bg-background text-foreground">
       <InterruptedBanner bridge={bridge} />
       <div className="flex min-h-0 flex-1">
         <Sidebar

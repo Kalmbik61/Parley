@@ -171,6 +171,19 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
         snapshotWritten = true;
         for (const chunk of pendingOutput) term.write(chunk);
         pendingOutput = [];
+        // Размер окна главнее размера хоста (раунд исправлений 1, находка
+        // B№2): у только что созданного PTY хост ещё не получал ни одного
+        // pty.resize и отвечает своим DEFAULT_SIZE (packages/host/src/pty/
+        // pty-manager.ts) — тот не совпадает с реальным размером контейнера,
+        // и терминал недозаполняет панель до следующего ресайза окна. fit()
+        // после снимка подбирает актуальный размер по контейнеру; если он не
+        // совпал с тем, что применили выше, сообщаем хосту наш размер прямым
+        // pty.resize — не через debounce-таймер ниже, это разовая поправка
+        // сразу после attach, а не серия ресайзов контейнера.
+        fit.fit();
+        if (term.cols !== cols || term.rows !== rows) {
+          bridgeRef.current.notify('pty.resize', { ref, cols: term.cols, rows: term.rows });
+        }
       } catch {
         // Хост ещё не завёл `pty.attach` (куски 1.6/1.7) или сессии уже нет —
         // терминал остаётся пустым вместо падения панели.
