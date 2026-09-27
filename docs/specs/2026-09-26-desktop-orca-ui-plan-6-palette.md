@@ -207,7 +207,10 @@ export function forwardGuestShortcuts(contents: Pick<WebContents, 'on' | 'off'>,
   - `store.ts` и тест;
   - `Palette.tsx` и тест.
 - Изменить:
-  - `renderer/shell/Titlebar.tsx` — поле «Поиск ⌘J» открывает `Palette`;
+  - `renderer/shell/Titlebar.tsx` — поле «Поиск» открывает `Palette`, подпись ⌘K
+    (2.3) меняется на ⌘J;
+  - `renderer/shell/Landing.tsx` — кнопка «Палитра» открывает `Palette`, подпись ⌘K
+    (2.3) меняется на ⌘J;
   - `renderer/layout/TabStrip.tsx` — «+» открывает `Palette` в режиме «открыть»;
   - `renderer/shell/AppShell.tsx` — `group.splitRight` и `group.splitDown` открывают
     палитру в режиме «Открыть в новой группе»;
