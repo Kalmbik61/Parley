@@ -7,7 +7,7 @@ import type {
   Result,
   SessionRef,
 } from '@harnas/protocol';
-import type { FileRoot, FileStat, Located } from './files-types.js';
+import type { DirEntry, FileRoot, FileStat, Located, TextFile, WriteResult } from './files-types.js';
 import type { WorkLayout } from './layout-types.js';
 import type { Appearance, UiFile } from './ui-types.js';
 
@@ -129,12 +129,24 @@ export interface HarnasBridge {
      */
     saveDropImage(source: 'clipboard'): Promise<string | null>;
   };
-  /** Файловый API main (спека 10.7); в этапе 5 — только `stat` и `locate`. */
+  /**
+   * Файловый API main (спека 10.7): `stat` и `locate` — с этапа 5, `list`, `readText`,
+   * `readBytes` и `write` — с 7.1a. Отказы — коды `files:denied`, `files:too-large`,
+   * `not_found`, `bad_request` (`decodeIpcError`).
+   */
   files: {
     /** До 200 путей; `null` — пути нет или он вне корня. */
     stat(root: FileRoot, paths: string[]): Promise<Array<FileStat | null>>;
     /** До 200 путей; корень ищется только среди корней работы workKey; `~` раскрывает main. */
     locate(workKey: string, absPaths: string[]): Promise<Array<Located | null>>;
+    /** dir относительный, '' — корень; без `.git` и `.harnas`, только файлы, папки и симлинки. */
+    list(root: FileRoot, dir: string): Promise<DirEntry[]>;
+    /** Больше 20 МБ — `files:too-large`; не обычный файл — `bad_request`. */
+    readText(root: FileRoot, path: string): Promise<TextFile>;
+    /** limit — 1 байт … 20 МБ, по умолчанию 20 МБ; больше — `files:too-large`. */
+    readBytes(root: FileRoot, path: string, limit?: number): Promise<Uint8Array>;
+    /** expectedMtimeMs: null — файла быть не должно: создать; уже есть — conflict. */
+    write(root: FileRoot, path: string, text: string, expectedMtimeMs: number | null): Promise<WriteResult>;
   };
 }
 

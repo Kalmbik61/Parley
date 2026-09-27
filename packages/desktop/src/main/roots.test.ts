@@ -453,3 +453,12 @@ describe('ошибки resolve (раунд исправлений 1)', () => {
     await expect(registry.resolve(PROJECT_ROOT(), 'src/a.ts/x', 'read')).rejects.toBeInstanceOf(FilesDeniedError);
   });
 });
+
+describe('rootPath (кусок 7.1a)', () => {
+  it('realpath корня; неизвестный корень — FilesDeniedError', async () => {
+    const { registry } = await ready();
+    expect(registry.rootPath(PROJECT_ROOT())).toBe(await realpath(project));
+    expect(() => registry.rootPath({ workKey: KEY(), spec: { kind: 'worktree', sessionId: 's-09' } })).toThrow(FilesDeniedError);
+    expect(() => registry.rootPath({ workKey: 'nope', spec: { kind: 'project' } })).toThrow(FilesDeniedError);
+  });
+});

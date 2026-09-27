@@ -23,3 +23,47 @@ describe('fake-bridge: files и openPath (кусок 5.2)', () => {
     expect(bridge.revealedPaths).toEqual(['/c']);
   });
 });
+
+describe('fake-bridge: files.list, readText, readBytes, write (кусок 7.1a)', () => {
+  const root = { workKey: 'k', spec: { kind: 'project' as const } };
+  const code = async (promise: Promise<unknown>): Promise<string> =>
+    promise.then(
+      () => 'resolved',
+      (error: { code?: string }) => error.code ?? 'no-code',
+    );
+
+  it('по умолчанию: list — [], readText и readBytes — not_found, write — ok с растущим mtimeMs', async () => {
+    const bridge = createFakeBridge();
+    expect(await bridge.files.list(root, '')).toEqual([]);
+    expect(await code(bridge.files.readText(root, 'a.ts'))).toBe('not_found');
+    expect(await code(bridge.files.readBytes(root, 'a.png'))).toBe('not_found');
+    const first = await bridge.files.write(root, 'a.ts', 'x', null);
+    const second = await bridge.files.write(root, 'a.ts', 'y', 5);
+    expect(first.ok && second.ok && second.mtimeMs > first.mtimeMs).toBe(true);
+    expect(bridge.writes).toEqual([
+      { root, path: 'a.ts', text: 'x', expectedMtimeMs: null },
+      { root, path: 'a.ts', text: 'y', expectedMtimeMs: 5 },
+    ]);
+    expect(bridge.readTextCalls).toEqual([{ root, path: 'a.ts' }]);
+  });
+
+  it('ответы по сеттерам; отказ — объект с code; conflict — только у следующего write', async () => {
+    const bridge = createFakeBridge();
+    const entry = { name: 'a.ts', kind: 'file' as const, size: 1, mtimeMs: 1, ignored: false, target: null };
+    bridge.setDir(root, '', [entry]);
+    bridge.setDir(root, 'gone', { code: 'not_found', message: 'gone' });
+    expect(await bridge.files.list(root, '')).toEqual([entry]);
+    expect(await code(bridge.files.list(root, 'gone'))).toBe('not_found');
+    const file = { text: 'abc', mtimeMs: 7, size: 3, binary: false, utf8: true, readOnlyReason: null };
+    bridge.setFile(root, 'a.ts', file);
+    bridge.setFile(root, 'big.ts', { code: 'files:too-large', message: 'big' });
+    expect(await bridge.files.readText(root, 'a.ts')).toEqual(file);
+    expect(await code(bridge.files.readText(root, 'big.ts'))).toBe('files:too-large');
+    bridge.setBytes(root, 'a.png', new Uint8Array([1, 2]));
+    expect([...(await bridge.files.readBytes(root, 'a.png'))]).toEqual([1, 2]);
+    bridge.setWriteConflict(root, 'a.ts', 99);
+    expect(await bridge.files.write(root, 'a.ts', 'z', 7)).toEqual({ ok: false, conflict: { mtimeMs: 99 } });
+    expect((await bridge.files.write(root, 'a.ts', 'z', 99)).ok).toBe(true);
+    expect(bridge.writes).toHaveLength(2);
+  });
+});

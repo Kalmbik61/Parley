@@ -1,5 +1,5 @@
 /**
- * Каналы `files:*` (спека 10.7, кусок 5.2). Все будущие каналы группы регистрирует
+ * Каналы `files:*` (спека 10.7, куски 5.2 и 7.1a). Все будущие каналы группы регистрирует
  * этот модуль. Аргументы проверяются до обращения к диску: рендереру путь без
  * проверки main не доверяется.
  */
@@ -8,7 +8,7 @@ import type { FileRoot } from '../../shared/files-types.js';
 import { HostError } from '../host-connection.js';
 import { isValidPathArg, isValidWorkKey, withIpcError } from '../ipc.js';
 import type { RootsRegistry } from '../roots.js';
-import { createFsApi, MAX_PATHS_PER_CALL } from './fs-api.js';
+import { createFsApi, LIMITS, MAX_PATHS_PER_CALL } from './fs-api.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -26,6 +26,16 @@ export function isFileRoot(value: unknown): value is FileRoot {
 
 function isPathList(value: unknown): value is string[] {
   return Array.isArray(value) && value.length <= MAX_PATHS_PER_CALL && value.every(isValidPathArg);
+}
+
+/** Предел `readBytes`: целое от 1 байта до 20 МБ; `undefined` — по умолчанию 20 МБ. */
+function isByteLimit(value: unknown): value is number | undefined {
+  return value === undefined || (Number.isInteger(value) && (value as number) >= 1 && (value as number) <= LIMITS.openableBytes);
+}
+
+/** `null` — «файла быть не должно»; иначе конечное число. */
+function isExpectedMtime(value: unknown): value is number | null {
+  return value === null || (typeof value === 'number' && Number.isFinite(value));
 }
 
 export interface RegisterFilesIpcOptions {
@@ -51,6 +61,45 @@ export function registerFilesIpc({ ipcMain, roots }: RegisterFilesIpcOptions): v
       if (!isValidWorkKey(workKey)) throw new HostError('bad_request', 'invalid work key');
       if (!isPathList(absPaths)) throw new HostError('bad_request', 'invalid path list');
       return api.locate(workKey, absPaths);
+    }),
+  );
+
+  ipcMain.handle(
+    'files:list',
+    withIpcError(async (_event, root: unknown, dir: unknown) => {
+      if (!isFileRoot(root)) throw new HostError('bad_request', 'invalid file root');
+      if (!isValidPathArg(dir)) throw new HostError('bad_request', 'invalid path');
+      return api.list(root, dir);
+    }),
+  );
+
+  ipcMain.handle(
+    'files:read-text',
+    withIpcError(async (_event, root: unknown, relPath: unknown) => {
+      if (!isFileRoot(root)) throw new HostError('bad_request', 'invalid file root');
+      if (!isValidPathArg(relPath)) throw new HostError('bad_request', 'invalid path');
+      return api.readText(root, relPath);
+    }),
+  );
+
+  ipcMain.handle(
+    'files:read-bytes',
+    withIpcError(async (_event, root: unknown, relPath: unknown, limit: unknown) => {
+      if (!isFileRoot(root)) throw new HostError('bad_request', 'invalid file root');
+      if (!isValidPathArg(relPath)) throw new HostError('bad_request', 'invalid path');
+      if (!isByteLimit(limit)) throw new HostError('bad_request', 'invalid byte limit');
+      return api.readBytes(root, relPath, limit);
+    }),
+  );
+
+  ipcMain.handle(
+    'files:write',
+    withIpcError(async (_event, root: unknown, relPath: unknown, text: unknown, expectedMtimeMs: unknown) => {
+      if (!isFileRoot(root)) throw new HostError('bad_request', 'invalid file root');
+      if (!isValidPathArg(relPath)) throw new HostError('bad_request', 'invalid path');
+      if (typeof text !== 'string') throw new HostError('bad_request', 'invalid text');
+      if (!isExpectedMtime(expectedMtimeMs)) throw new HostError('bad_request', 'invalid expected mtime');
+      return api.write(root, relPath, text, expectedMtimeMs);
     }),
   );
 }

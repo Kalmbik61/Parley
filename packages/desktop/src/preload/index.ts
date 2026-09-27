@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@harnas/protocol';
 import type { AppNote, FocusTarget, HarnasBridge, HostStatus, MenuAction } from '../shared/bridge.js';
-import type { FileRoot, FileStat, Located } from '../shared/files-types.js';
+import type { DirEntry, FileRoot, FileStat, Located, TextFile, WriteResult } from '../shared/files-types.js';
 import type { WorkLayout } from '../shared/layout-types.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 
@@ -141,6 +141,12 @@ const bridge = {
       ipcRenderer.invoke('files:stat', root, paths) as Promise<Array<FileStat | null>>,
     locate: (workKey: string, absPaths: string[]) =>
       ipcRenderer.invoke('files:locate', workKey, absPaths) as Promise<Array<Located | null>>,
+    list: (root: FileRoot, dir: string) => ipcRenderer.invoke('files:list', root, dir) as Promise<DirEntry[]>,
+    readText: (root: FileRoot, path: string) => ipcRenderer.invoke('files:read-text', root, path) as Promise<TextFile>,
+    readBytes: (root: FileRoot, path: string, limit?: number) =>
+      ipcRenderer.invoke('files:read-bytes', root, path, limit) as Promise<Uint8Array>,
+    write: (root: FileRoot, path: string, text: string, expectedMtimeMs: number | null) =>
+      ipcRenderer.invoke('files:write', root, path, text, expectedMtimeMs) as Promise<WriteResult>,
   },
 };
 

@@ -14,7 +14,7 @@ import type {
   Result,
 } from '@harnas/protocol';
 import type { AppNote, FocusTarget, HarnasBridge, HostStatus, MenuAction } from '../../shared/bridge.js';
-import type { FileRoot, FileStat, Located } from '../../shared/files-types.js';
+import type { DirEntry, FileRoot, FileStat, Located, TextFile } from '../../shared/files-types.js';
 import type { WorkLayout } from '../../shared/layout-types.js';
 import type { IpcErrorInfo } from '../../shared/ipc-error.js';
 import { rootKey } from '../../shared/work-keys.js';
@@ -81,6 +81,17 @@ export interface FakeBridge extends HarnasBridge {
   /** Ответ app.saveDropImage: путь, null (картинки нет) или отказ — объект с code, как отказы подставного моста (кусок 5.4). */
   setSaveDropImage(answer: string | null | IpcErrorInfo): void;
   readonly saveDropImageCalls: Array<'clipboard'>;
+  /** Ответ `files.list`; по умолчанию `[]`. Отказ — объект с code (кусок 7.1a). */
+  setDir(root: FileRoot, dir: string, entries: DirEntry[] | IpcErrorInfo): void;
+  /** Ответ `files.readText`; по умолчанию отказ `not_found`. */
+  setFile(root: FileRoot, path: string, file: TextFile | IpcErrorInfo): void;
+  /** Ответ `files.readBytes`; по умолчанию отказ `not_found`. */
+  setBytes(root: FileRoot, path: string, bytes: Uint8Array | IpcErrorInfo): void;
+  /** Следующий write этого пути ответит conflict с этим mtimeMs; без него — ok с новым mtimeMs. */
+  setWriteConflict(root: FileRoot, path: string, mtimeMs: number): void;
+  /** Вызовы `files.write`, в том числе ответившие conflict. */
+  readonly writes: Array<{ root: FileRoot; path: string; text: string; expectedMtimeMs: number | null }>;
+  readonly readTextCalls: Array<{ root: FileRoot; path: string }>;
 }
 
 export function createFakeBridge(): FakeBridge {
@@ -111,6 +122,16 @@ export function createFakeBridge(): FakeBridge {
   const pastes: number[] = [];
   let saveDropImageAnswer: string | null | IpcErrorInfo = null;
   const saveDropImageCalls: Array<'clipboard'> = [];
+  const dirs = new Map<string, DirEntry[] | IpcErrorInfo>();
+  const textFiles = new Map<string, TextFile | IpcErrorInfo>();
+  const byteFiles = new Map<string, Uint8Array | IpcErrorInfo>();
+  const writeConflicts = new Map<string, number>();
+  const writes: Array<{ root: FileRoot; path: string; text: string; expectedMtimeMs: number | null }> = [];
+  const readTextCalls: Array<{ root: FileRoot; path: string }> = [];
+  /** mtimeMs ответа write: растёт с каждой записью, как на диске. */
+  let writeMtimeMs = 1_700_000_000_000;
+  const fileKey = (root: FileRoot, path: string): string => `${rootKey(root)}\n${path}`;
+  const notFound = (path: string): IpcErrorInfo => ({ code: 'not_found', message: `fake-bridge: no file ${path}` });
   const layouts = new Map<string, WorkLayout>();
   let status: HostStatus = {
     state: 'connected',
@@ -154,11 +175,52 @@ export function createFakeBridge(): FakeBridge {
       saveDropImageAnswer = answer;
     },
     saveDropImageCalls,
+    setDir: (root, dir, entries) => {
+      dirs.set(fileKey(root, dir), entries);
+    },
+    setFile: (root, path, file) => {
+      textFiles.set(fileKey(root, path), file);
+    },
+    setBytes: (root, path, bytes) => {
+      byteFiles.set(fileKey(root, path), bytes);
+    },
+    setWriteConflict: (root, path, mtimeMs) => {
+      writeConflicts.set(fileKey(root, path), mtimeMs);
+    },
+    writes,
+    readTextCalls,
     files: {
       stat: async (root, paths) => paths.map((path) => fileStats.get(`${rootKey(root)}\n${path}`) ?? null),
       locate: async (workKey, absPaths) => {
         locateCalls.push({ workKey, absPaths: [...absPaths] });
         return absPaths.map((absPath) => located.get(`${workKey}\n${absPath}`) ?? null);
+      },
+      list: async (root, dir) => {
+        const answer = dirs.get(fileKey(root, dir)) ?? [];
+        if (!Array.isArray(answer)) throw answer;
+        return answer.map((entry) => ({ ...entry }));
+      },
+      readText: async (root, path) => {
+        readTextCalls.push({ root, path });
+        const answer = textFiles.get(fileKey(root, path)) ?? notFound(path);
+        if ('code' in answer) throw answer;
+        return { ...answer };
+      },
+      readBytes: async (root, path) => {
+        const answer = byteFiles.get(fileKey(root, path)) ?? notFound(path);
+        if (!(answer instanceof Uint8Array)) throw answer;
+        return answer.slice();
+      },
+      write: async (root, path, text, expectedMtimeMs) => {
+        writes.push({ root, path, text, expectedMtimeMs });
+        const key = fileKey(root, path);
+        const conflict = writeConflicts.get(key);
+        if (conflict !== undefined) {
+          writeConflicts.delete(key);
+          return { ok: false, conflict: { mtimeMs: conflict } };
+        }
+        writeMtimeMs += 1000;
+        return { ok: true, mtimeMs: writeMtimeMs };
       },
     },
 

@@ -27,6 +27,9 @@ function setup(): { ipcMain: FakeIpcMain; roots: { [K in keyof RootsRegistry]: R
     insideAnyRoot: vi.fn().mockResolvedValue(null),
     roots: vi.fn().mockReturnValue([]),
     expandHome: vi.fn((p: string) => p),
+    rootPath: vi.fn(() => {
+      throw new FilesDeniedError('no roots');
+    }),
   };
   registerFilesIpc({ ipcMain: ipcMain as unknown as IpcMain, roots: roots as unknown as RootsRegistry });
   return { ipcMain, roots };
@@ -45,9 +48,16 @@ async function code(promise: unknown): Promise<string> {
 }
 
 describe('files/ipc: каналы files:stat и files:locate (кусок 5.2)', () => {
-  it('регистрирует ровно files:stat и files:locate', () => {
+  it('регистрирует ровно каналы 5.2 и 7.1a', () => {
     const { ipcMain } = setup();
-    expect([...ipcMain.handlers.keys()].sort()).toEqual(['files:locate', 'files:stat']);
+    expect([...ipcMain.handlers.keys()].sort()).toEqual([
+      'files:list',
+      'files:locate',
+      'files:read-bytes',
+      'files:read-text',
+      'files:stat',
+      'files:write',
+    ]);
   });
 
   it('files:stat: путь вне корня — null, а не отказ пачки', async () => {
@@ -109,5 +119,54 @@ describe('files/ipc: каналы files:stat и files:locate (кусок 5.2)', 
     const { ipcMain, roots } = setup();
     roots.locate.mockRejectedValueOnce(new FilesDeniedError('outside'));
     expect(await code(ipcMain.invoke('files:locate', KEY, ['/a']))).toBe('files:denied');
+  });
+});
+
+describe('files/ipc: list, read-text, read-bytes, write (кусок 7.1a)', () => {
+  const MB = 1024 * 1024;
+
+  it('верные аргументы доходят до реестра; его отказ — files:denied', async () => {
+    const { ipcMain, roots } = setup();
+    expect(await code(ipcMain.invoke('files:list', ROOT, ''))).toBe('files:denied');
+    expect(await code(ipcMain.invoke('files:read-text', ROOT, 'a.ts'))).toBe('files:denied');
+    expect(await code(ipcMain.invoke('files:read-bytes', ROOT, 'a.png'))).toBe('files:denied');
+    expect(await code(ipcMain.invoke('files:read-bytes', ROOT, 'a.png', undefined))).toBe('files:denied');
+    expect(await code(ipcMain.invoke('files:read-bytes', ROOT, 'a.png', 1))).toBe('files:denied');
+    expect(await code(ipcMain.invoke('files:read-bytes', ROOT, 'a.png', 20 * MB))).toBe('files:denied');
+    expect(await code(ipcMain.invoke('files:write', ROOT, 'a.ts', 'text', null))).toBe('files:denied');
+    expect(await code(ipcMain.invoke('files:write', ROOT, 'a.ts', '', 1.5))).toBe('files:denied');
+    expect(roots.resolve).toHaveBeenCalledTimes(8);
+  });
+
+  it('проверка аргументов (тест 11): неверная форма — bad_request, диск не тронут', async () => {
+    const { ipcMain, roots } = setup();
+    const bad: Array<[string, ...unknown[]]> = [
+      ['files:list', null, ''],
+      ['files:list', ROOT, 42],
+      ['files:list', ROOT, 'a\0b'],
+      ['files:read-text', ROOT, 'a\0b'],
+      ['files:read-text', { workKey: KEY }, 'a.ts'],
+      ['files:read-text', ROOT, undefined],
+      ['files:read-bytes', ROOT, 'a\0b'],
+      ['files:read-bytes', ROOT, 'a.png', 0],
+      ['files:read-bytes', ROOT, 'a.png', 21 * MB],
+      ['files:read-bytes', ROOT, 'a.png', 20 * MB + 1],
+      ['files:read-bytes', ROOT, 'a.png', 1.5],
+      ['files:read-bytes', ROOT, 'a.png', -1],
+      ['files:read-bytes', ROOT, 'a.png', '5'],
+      ['files:read-bytes', ROOT, 'a.png', null],
+      ['files:write', ROOT, 'a\0b', 't', null],
+      ['files:write', ROOT, 'a.ts', 't', Number.NaN],
+      ['files:write', ROOT, 'a.ts', 't', Number.POSITIVE_INFINITY],
+      ['files:write', ROOT, 'a.ts', 't', '123'],
+      ['files:write', ROOT, 'a.ts', 't', undefined],
+      ['files:write', ROOT, 'a.ts', 42, null],
+      ['files:write', ROOT, 'a.ts', null, null],
+      ['files:write', null, 'a.ts', 't', null],
+    ];
+    for (const [channel, ...args] of bad) {
+      expect(await code(ipcMain.invoke(channel, ...args)), `${channel} ${String(args.at(-1))}`).toBe('bad_request');
+    }
+    expect(roots.resolve).not.toHaveBeenCalled();
   });
 });

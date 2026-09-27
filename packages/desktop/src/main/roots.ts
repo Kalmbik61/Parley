@@ -46,6 +46,8 @@ export interface RootsRegistry {
    * `showInFinder` раскрывают путь тем же домом, что `locate`, а не своим.
    */
   expandHome(p: string): string;
+  /** realpath корня — cwd для git (7.1b) и сверка каталога записи; нет корня — FilesDeniedError. */
+  rootPath(root: FileRoot): string;
 }
 
 interface RootEntry extends RootPath {
@@ -290,5 +292,10 @@ export function createRootsRegistry(source: RootsSource, options: { home?: strin
     insideAnyRoot,
     roots: (key) => (entries.get(key) ?? []).map((entry) => ({ spec: entry.root.spec, absPath: entry.absPath })),
     expandHome,
+    rootPath: (root) => {
+      const entry = findRoot(root);
+      if (entry === undefined) throw new FilesDeniedError(`unknown root: ${rootKey(root)}`);
+      return entry.absPath;
+    },
   };
 }
