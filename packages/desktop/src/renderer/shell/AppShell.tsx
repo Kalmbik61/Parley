@@ -48,6 +48,7 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core';
 import { toast } from 'sonner';
+import { useShallow } from 'zustand/react/shallow';
 import { refKey, type SessionRef } from '@harnas/protocol';
 import type { HarnasBridge, HostStatus } from '../../shared/bridge.js';
 import type { TabSpec } from '../../shared/layout-types.js';
@@ -149,6 +150,30 @@ const WorkContainer = memo(function WorkContainer({ workKey, active, bridge, fon
   );
 });
 
+/**
+ * Сторож раскладок (`layout/persistence.ts`) отдельным ребёнком оболочки (кусок 3.4): ему
+ * нужен видимый порядок сайдбара, а тот меняется на каждую пересортировку по вниманию —
+ * подписка в теле `AppShell` перерисовывала бы всю оболочку (раунд исправлений 1 куска 3.3).
+ *
+ * `visibleOrder` — только если секции посчитаны по этому же снимку (их пишет layout-эффект
+ * `SidebarSectionsWriter`, он отстаёт на рендер) и `ui.json` загружен; иначе `null`, и
+ * persistence ждёт: по устаревшему порядку сосед выбрался бы среди пропавших работ.
+ * Подписка — на массив ключей с поверхностным сравнением.
+ */
+const LayoutPersistence = memo(function LayoutPersistence({ bridge }: { bridge: HarnasBridge }): null {
+  const entries = useWorksStore((state) => state.entries);
+  const worksLoaded = useWorksStore((state) => !state.loading);
+  const uiLoaded = useUiStore((state) => state.uiLoaded);
+  const visibleOrder = useSidebarSectionsStore(
+    useShallow((state) => (uiLoaded && state.entries === entries ? visibleWorkOrder(state.sections) : null)),
+  );
+  // Состав снимка — все работы, с архивными и скрытыми; порядок создания — только для
+  // устойчивости списка `retainLayouts`.
+  const order = orderedWorks(entries).map((entry) => workKey(entry.projectPath, entry.map.work.id));
+  useLayoutPersistence({ bridge, works: entries, worksLoaded, order, visibleOrder });
+  return null;
+});
+
 export interface AppShellProps {
   bridge: HarnasBridge;
   /** Строка статуса; `App` рендерит `AppShell` только при `'connected'`. */
@@ -198,12 +223,10 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   const loading = useWorksStore((state) => state.loading);
   const worksLoaded = !loading;
   const ordered = orderedWorks(entries);
-  const order = ordered.map((entry) => workKey(entry.projectPath, entry.map.work.id));
   // «Работ нет» — это ответ хоста, а не просто пустой начальный снимок:
   // до первого `works.list` показывать `Landing` рано (спека 5.10, «после загрузки»).
   const showLanding = worksLoaded && entries.length === 0;
 
-  useLayoutPersistence({ bridge, works: entries, worksLoaded, order });
 
   const ui = useUiStore((state) => state.ui);
   const setSidebar = useUiStore((state) => state.setSidebar);
@@ -551,6 +574,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
           компонент, а не хук в теле: на каждое `activity.changed` перерисовывается он, а не
           вся оболочка (раунд исправлений 1 куска 3.3). */}
       <SidebarSectionsWriter />
+      <LayoutPersistence bridge={bridge} />
       {shell}
       {/* Обёртка оверлея — размером с источник, её центр модификатор ставит
           под указатель; ярлык — по центру обёртки (раунд исправлений 1, ревью B). */}

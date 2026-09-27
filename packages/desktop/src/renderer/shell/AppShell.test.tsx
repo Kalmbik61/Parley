@@ -1025,3 +1025,46 @@ describe('AppShell — меню сайдбара (кусок 3.4)', () => {
 });
 
 const S_TOO_SMALL = 'Not enough room for another group';
+
+// ---------------------------------------------------------------------------
+// Кусок 3.4, решение контролёра 1: сосед и работа на старте — по видимому порядку того же
+// снимка, а не по устаревшему в рендере, где снимок только что пришёл.
+// ---------------------------------------------------------------------------
+
+describe('AppShell — видимый порядок для persistence (решение контролёра 1)', () => {
+  const blocked = (id: string, sessionId: string) =>
+    ({
+      ref: { projectPath: `/tmp/${id}`, workId: id, sessionId },
+      activity: {
+        activity: 'blocked' as const,
+        subagents: 0,
+        turnEndedAt: null,
+        lastEventAt: '2026-01-05T00:00:00.000Z',
+        source: 'hooks' as const,
+        exited: false,
+        hooksMissing: false,
+      },
+      metrics: null,
+    });
+
+  it('старт: активна первая работа видимого порядка (где нужен ты), а не первая по созданию', async () => {
+    const [w1, w2] = fourWorks();
+    const entry = blocked('w-02', 's-02');
+    useActivityStore.setState({ byRef: { [refKey(entry.ref)]: entry } });
+    await renderShell([w1!, w2!]);
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
+  });
+
+  it('активная удалена, а соседняя в том же снимке архивирована — сосед среди оставшихся, не архивная', async () => {
+    const [w1, w2, w3] = fourWorks();
+    await renderShell([w1!, w2!, w3!]);
+    act(() => useLayoutStore.getState().setActiveWork(keyOf('w-02')));
+    await flush();
+
+    const archived3: WorkEntry = { ...w3!, map: { ...w3!.map, work: { ...w3!.map.work, status: 'archived' } } };
+    act(() => useWorksStore.setState({ entries: [w1!, archived3] }));
+    await flush();
+
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
+  });
+});

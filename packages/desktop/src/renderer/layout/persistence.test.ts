@@ -45,13 +45,13 @@ function session(id: string, overrides: Partial<WorkSession> = {}): WorkSession 
   };
 }
 
-function work(id: string, projectPath: string, sessions: WorkSession[] = []): WorkEntry {
+function work(id: string, projectPath: string, sessions: WorkSession[] = [], status: 'active' | 'done' | 'archived' = 'active'): WorkEntry {
   return {
     projectPath,
     map: {
       schemaVersion: 2,
       rooms: [],
-      work: { id, title: id, goal: '', status: 'active', createdAt: '2026-01-01', updatedAt: '2026-01-01' },
+      work: { id, title: id, goal: '', status, createdAt: '2026-01-01', updatedAt: '2026-01-01' },
       sessions,
       messages: [],
     },
@@ -147,7 +147,7 @@ describe('useLayoutPersistence', () => {
           bridge,
           works: loaded ? [entryA] : [],
           worksLoaded: loaded,
-          order: loaded ? [keyA] : [],
+          order: loaded ? [keyA] : [], visibleOrder: loaded ? [keyA] : [],
         }),
       { initialProps: { loaded: false } },
     );
@@ -172,7 +172,7 @@ describe('useLayoutPersistence', () => {
 
     const entryA = work('w-a', '/tmp/a', [session('s-01')]); // s-99 в карте нет
 
-    renderHook(() => useLayoutPersistence({ bridge, works: [entryA], worksLoaded: true, order: [keyA] }));
+    renderHook(() => useLayoutPersistence({ bridge, works: [entryA], worksLoaded: true, order: [keyA], visibleOrder: [keyA] }));
 
     await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
 
@@ -189,7 +189,7 @@ describe('useLayoutPersistence', () => {
 
     const { rerender } = renderHook(
       ({ entries, order }: { entries: WorkEntry[]; order: string[] }) =>
-        useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order }),
+        useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order, visibleOrder: order }),
       { initialProps: { entries: [entryA, entryB], order: [keyA, keyB] } },
     );
 
@@ -209,7 +209,7 @@ describe('useLayoutPersistence', () => {
     const entryB = work('w-b', '/tmp/b', [session('s-10')]);
 
     renderHook(() =>
-      useLayoutPersistence({ bridge, works: [entryA, entryB], worksLoaded: true, order: [keyA, keyB] }),
+      useLayoutPersistence({ bridge, works: [entryA, entryB], worksLoaded: true, order: [keyA, keyB], visibleOrder: [keyA, keyB] }),
     );
     await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
     // Работа B в этом тесте не активна и не гидрируется сама — гидрируем напрямую,
@@ -253,7 +253,7 @@ describe('useLayoutPersistence', () => {
     useLayoutStore.getState().apply(keyA, (l) => openTab(l, pendingTab, 'active'));
     expect(useLayoutStore.getState().layouts[keyA]).toBeUndefined();
 
-    renderHook(() => useLayoutPersistence({ bridge, works: [entryA], worksLoaded: true, order: [keyA] }));
+    renderHook(() => useLayoutPersistence({ bridge, works: [entryA], worksLoaded: true, order: [keyA], visibleOrder: [keyA] }));
 
     await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
 
@@ -276,7 +276,7 @@ describe('useLayoutPersistence', () => {
 
     const { rerender } = renderHook(
       ({ order }: { order: string[] }) =>
-        useLayoutPersistence({ bridge, works: [entryA, entryB], worksLoaded: true, order }),
+        useLayoutPersistence({ bridge, works: [entryA, entryB], worksLoaded: true, order, visibleOrder: order }),
       { initialProps: { order: [keyA, keyB] } },
     );
 
@@ -295,7 +295,7 @@ describe('useLayoutPersistence', () => {
 
     const { rerender } = renderHook(
       ({ entries, order }: { entries: WorkEntry[]; order: string[] }) =>
-        useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order }),
+        useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order, visibleOrder: order }),
       { initialProps: { entries: [entryA, entryB, entryC], order: [keyA, keyB, keyC] } },
     );
     await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).toBe(keyA));
@@ -315,7 +315,7 @@ describe('useLayoutPersistence', () => {
 
     const { rerender } = renderHook(
       ({ entries, order }: { entries: WorkEntry[]; order: string[] }) =>
-        useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order }),
+        useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order, visibleOrder: order }),
       { initialProps: { entries: [entryA, entryB, entryC], order: [keyA, keyB, keyC] } },
     );
     await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).toBe(keyA));
@@ -340,7 +340,7 @@ describe('useLayoutPersistence', () => {
 
     const { rerender } = renderHook(
       ({ entries, order }: { entries: WorkEntry[]; order: string[] }) =>
-        useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order }),
+        useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order, visibleOrder: order }),
       { initialProps: { entries: [entryA, entryB, entryC], order: [keyA, keyB, keyC] } },
     );
     await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).toBe(keyA));
@@ -360,7 +360,7 @@ describe('useLayoutPersistence', () => {
 
     const { rerender } = renderHook(
       ({ entries, order }: { entries: WorkEntry[]; order: string[] }) =>
-        useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order }),
+        useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order, visibleOrder: order }),
       { initialProps: { entries: [entryA, entryB], order: [keyA, keyB] } },
     );
     await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).toBe(keyA));
@@ -382,7 +382,7 @@ describe('useLayoutPersistence', () => {
     const entryB = work('w-b', '/tmp/b');
 
     const { rerender } = renderHook(
-      ({ order }: { order: string[] }) => useLayoutPersistence({ bridge, works: [entryA, entryB], worksLoaded: true, order }),
+      ({ order }: { order: string[] }) => useLayoutPersistence({ bridge, works: [entryA, entryB], worksLoaded: true, order, visibleOrder: order }),
       { initialProps: { order: [keyA, keyB] } },
     );
     rerender({ order: [keyA, keyB] });
@@ -398,7 +398,7 @@ describe('useLayoutPersistence', () => {
 
     const { rerender } = renderHook(
       ({ entries, order }: { entries: WorkEntry[]; order: string[] }) =>
-        useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order }),
+        useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order, visibleOrder: order }),
       { initialProps: { entries: [] as WorkEntry[], order: [] as string[] } },
     );
 
@@ -422,7 +422,7 @@ describe('useLayoutPersistence', () => {
     const entryA = work('w-a', '/tmp/a', [session('s-01')]);
 
     const { unmount } = renderHook(() =>
-      useLayoutPersistence({ bridge, works: [entryA], worksLoaded: true, order: [keyA] }),
+      useLayoutPersistence({ bridge, works: [entryA], worksLoaded: true, order: [keyA], visibleOrder: [keyA] }),
     );
     await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
 
@@ -446,7 +446,7 @@ describe('useLayoutPersistence', () => {
     const entryB = work('w-b', '/tmp/b');
 
     const { unmount } = renderHook(() =>
-      useLayoutPersistence({ bridge, works: [entryA, entryB], worksLoaded: true, order: [keyA, keyB] }),
+      useLayoutPersistence({ bridge, works: [entryA, entryB], worksLoaded: true, order: [keyA, keyB], visibleOrder: [keyA, keyB] }),
     );
     await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).toBe(keyA));
 
@@ -463,7 +463,7 @@ describe('useLayoutPersistence', () => {
     const bridge = createFakeBridge();
     const entryA = work('w-a', '/tmp/a', [session('s-01')]);
 
-    renderHook(() => useLayoutPersistence({ bridge, works: [entryA], worksLoaded: true, order: [keyA] }));
+    renderHook(() => useLayoutPersistence({ bridge, works: [entryA], worksLoaded: true, order: [keyA], visibleOrder: [keyA] }));
     await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
 
     vi.useFakeTimers();
@@ -473,5 +473,116 @@ describe('useLayoutPersistence', () => {
     window.dispatchEvent(new Event('beforeunload'));
 
     expect(bridge.layoutSaves.some((s) => s.workKey === keyA)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Кусок 3.4: состав снимка (`order`) и видимый порядок (`visibleOrder`) — разные входы.
+// ---------------------------------------------------------------------------
+
+describe('useLayoutPersistence — order и visibleOrder (кусок 3.4)', () => {
+  type Props = { entries: WorkEntry[]; order: string[]; visibleOrder: string[] | null };
+  const mount = (bridge: ReturnType<typeof createFakeBridge>, initialProps: Props) =>
+    renderHook(
+      ({ entries, order, visibleOrder }: Props) => useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order, visibleOrder }),
+      { initialProps },
+    );
+
+  it('активная архивирована → соседняя по прежнему visibleOrder, раскладка остаётся (тест 9)', async () => {
+    const bridge = createFakeBridge();
+    const [a, b, c] = [work('w-a', '/tmp/a'), work('w-b', '/tmp/b'), work('w-c', '/tmp/c')];
+    const { rerender } = mount(bridge, { entries: [a, b, c], order: [keyA, keyB, keyC], visibleOrder: [keyA, keyB, keyC] });
+    await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).toBe(keyA));
+    useLayoutStore.getState().setActiveWork(keyB);
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyB]).toBe(true));
+
+    const archived = work('w-b', '/tmp/b', [], 'archived');
+    rerender({ entries: [a, archived, c], order: [keyA, keyB, keyC], visibleOrder: [keyA, keyC] });
+
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyC);
+    expect(bridge.layoutRemovals).toEqual([]);
+    expect(useLayoutStore.getState().layouts[keyB]).toBeDefined();
+  });
+
+  it('активная пропала из снимка → соседняя по прежнему visibleOrder и removeLayout (тест 9)', async () => {
+    const bridge = createFakeBridge();
+    const [a, b, c] = [work('w-a', '/tmp/a'), work('w-b', '/tmp/b'), work('w-c', '/tmp/c')];
+    // Видимый порядок не совпадает с составом: сосед B на экране — A.
+    const { rerender } = mount(bridge, { entries: [a, b, c], order: [keyA, keyB, keyC], visibleOrder: [keyC, keyB, keyA] });
+    await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).toBe(keyC));
+    useLayoutStore.getState().setActiveWork(keyB);
+
+    rerender({ entries: [a, c], order: [keyA, keyC], visibleOrder: [keyC, keyA] });
+
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyA);
+    expect(bridge.layoutRemovals).toEqual([keyB]);
+  });
+
+  it('снимок пришёл, а видимого порядка для него ещё нет (null) — сосед выбирается, когда порядок придёт', async () => {
+    const bridge = createFakeBridge();
+    const [a, b, c] = [work('w-a', '/tmp/a'), work('w-b', '/tmp/b'), work('w-c', '/tmp/c')];
+    const { rerender } = mount(bridge, { entries: [a, b, c], order: [keyA, keyB, keyC], visibleOrder: [keyA, keyB, keyC] });
+    await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).toBe(keyA));
+    useLayoutStore.getState().setActiveWork(keyB);
+
+    rerender({ entries: [a, c], order: [keyA, keyC], visibleOrder: null });
+    expect(bridge.layoutRemovals).toEqual([keyB]);
+    expect(useLayoutStore.getState().activeWorkKey).toBeNull();
+
+    rerender({ entries: [a, c], order: [keyA, keyC], visibleOrder: [keyC, keyA] });
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyC);
+  });
+
+  it('свернуть проект активной и скрыть её done — ни drop, ни removeLayout, активная прежняя (тест 13)', async () => {
+    const bridge = createFakeBridge();
+    const [a, b] = [work('w-a', '/tmp/a'), work('w-b', '/tmp/b')];
+    const { rerender } = mount(bridge, { entries: [a, b], order: [keyA, keyB], visibleOrder: [keyA, keyB] });
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
+    const original = useLayoutStore.getState().drop;
+    const drop = vi.fn(original);
+    useLayoutStore.setState({ drop });
+
+    // Проект A свёрнут.
+    rerender({ entries: [a, b], order: [keyA, keyB], visibleOrder: [keyB] });
+    // A стала done и скрыта (showDoneWorks: false).
+    const doneA = work('w-a', '/tmp/a', [], 'done');
+    rerender({ entries: [doneA, b], order: [keyA, keyB], visibleOrder: [keyB] });
+
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyA);
+    expect(drop).not.toHaveBeenCalled();
+    expect(bridge.layoutRemovals).toEqual([]);
+    expect(useLayoutStore.getState().layouts[keyA]).toBeDefined();
+    useLayoutStore.setState({ drop: original });
+  });
+
+  it('первый снимок: retainLayouts со всеми работами, включая архивные; до uiLoaded активной нет; после — из ui.json, хотя проект свёрнут (тест 14)', async () => {
+    const bridge = createFakeBridge();
+    await bridge.app.saveUi({ activeWorkKey: keyB });
+    const [a, b, c] = [work('w-a', '/tmp/a'), work('w-b', '/tmp/b'), work('w-c', '/tmp/c', [], 'archived')];
+    const { rerender } = mount(bridge, { entries: [a, b, c], order: [keyA, keyB, keyC], visibleOrder: null });
+
+    expect(bridge.layoutRetains).toEqual([[keyA, keyB, keyC]]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(useLayoutStore.getState().activeWorkKey).toBeNull();
+
+    // ui.json загружен: проект B свёрнут — в видимом порядке его нет.
+    rerender({ entries: [a, b, c], order: [keyA, keyB, keyC], visibleOrder: [keyA] });
+    await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).toBe(keyB));
+    expect(bridge.layoutRetains).toHaveLength(1);
+  });
+
+  it('старт: активная из ui.json архивная — первая в visibleOrder, а не в order', async () => {
+    const bridge = createFakeBridge();
+    await bridge.app.saveUi({ activeWorkKey: keyA });
+    const [a, b, c] = [work('w-a', '/tmp/a', [], 'archived'), work('w-b', '/tmp/b'), work('w-c', '/tmp/c')];
+    mount(bridge, { entries: [a, b, c], order: [keyA, keyB, keyC], visibleOrder: [keyC, keyB] });
+    await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).toBe(keyC));
+  });
+
+  it('старт: видимый порядок пуст (всё свёрнуто) — первая неархивная в order', async () => {
+    const bridge = createFakeBridge();
+    const [a, b] = [work('w-a', '/tmp/a', [], 'archived'), work('w-b', '/tmp/b')];
+    mount(bridge, { entries: [a, b], order: [keyA, keyB], visibleOrder: [] });
+    await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).toBe(keyB));
   });
 });

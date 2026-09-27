@@ -71,6 +71,9 @@ export function neighborWork(order: string[], workKey: string): string | null {
  * то, что он ДЕЙСТВИТЕЛЬНО остался в новом `order` — сначала вперёд от места
  * удалённой работы, потом назад; если и там, и там все соседи тоже пропали в
  * этом же снимке — первая работа нового `order`; нет вовсе ни одной — `null`.
+ *
+ * С куска 3.4 оба порядка — видимые (`visibleOrder` до и после снимка): соседа человек
+ * видел на экране, а архивная или скрытая работа кандидатом не бывает.
  */
 function survivingNeighbor(prevOrder: readonly string[], removedKey: string, order: readonly string[]): string | null {
   const index = prevOrder.indexOf(removedKey);
@@ -97,38 +100,151 @@ export interface UseLayoutPersistenceInput {
   bridge: HarnasBridge;
   works: WorkEntry[];
   worksLoaded: boolean;
-  /** `workKey` в порядке сайдбара: до 3.4 — `orderedWorks`, с 3.4 — `visibleWorkOrder`. */
+  /**
+   * Состав снимка (кусок 3.4): все работы — с архивными, свёрнутыми и скрытыми `done`,
+   * синхронно из `works`. По нему `retainLayouts` первого снимка, `drop` и `removeLayout`.
+   */
   order: string[];
+  /**
+   * Видимый порядок сайдбара того же снимка (`visibleWorkOrder`); `null` — ещё не посчитан:
+   * до загрузки `ui.json` или пока секции отстают от снимка. Нужен только для выбора соседа
+   * и выбора на старте — эти решения ждут, пока он придёт.
+   */
+  visibleOrder: string[] | null;
 }
 
-export function useLayoutPersistence({ bridge, works, worksLoaded, order }: UseLayoutPersistenceInput): void {
+/** Решение об активной работе, которое ждёт видимого порядка (или ответа `ui.json`). */
+type PendingChoice =
+  /** Первый непустой снимок: `ui.activeWorkKey`, иначе первая видимая. */
+  | { kind: 'start' }
+  /** Активная пропала или архивирована: соседняя по прежнему видимому порядку. */
+  | { kind: 'replace'; removed: string; prevVisible: readonly string[] };
+
+export function useLayoutPersistence({ bridge, works, worksLoaded, order, visibleOrder }: UseLayoutPersistenceInput): void {
   // `works` меняется на каждое событие хоста — эффекты ниже заведены на
-  // `worksLoaded`/`order` и не должны пересоздавать подписку из-за этого;
+  // подписи состава и порядка и не должны пересоздавать подписку из-за этого;
   // свежий список читается через ref в момент восстановления.
   const worksRef = useRef(works);
   worksRef.current = works;
 
-  // `null` — снимок ещё не приходил: следующий эффект отличает первый снимок
-  // (выбор activeWorkKey и retainLayouts — ровно один раз) от последующих
-  // (диф пропавших работ).
-  const prevOrderRef = useRef<string[] | null>(null);
-
-  // Выбор активной работы по `ui.json` ещё в пути (первый снимок был не пуст).
-  // Не флаг `cancelled` в очистке эффекта (раунд исправлений куска 2.7): `order`
-  // у вызывающей стороны — новый массив на каждый рендер, эффект
-  // перезапускается задолго до ответа `loadUi`, и отмена по очистке роняла
-  // выбор — активной после перезапуска становилась первая работа, а не
-  // последняя активная (спека 5.6). Отменяет выбор только размонтирование.
-  const initialPendingRef = useRef(false);
-  const disposedRef = useRef(false);
+  // Архивные — часть состава, но не кандидаты в активные (спека 6.1).
+  const archived = new Set(
+    works.filter((entry) => entry.map.work.status === 'archived').map((entry) => workKeyOf(entry.projectPath, entry.map.work.id)),
+  );
+  // Входы — свежие массивы на каждый рендер `AppShell`; эффект перезапускают только подписи.
   const orderRef = useRef(order);
   orderRef.current = order;
+  const visibleRef = useRef(visibleOrder);
+  visibleRef.current = visibleOrder;
+  const archivedRef = useRef<ReadonlySet<string>>(archived);
+  archivedRef.current = archived;
+  const orderSig = JSON.stringify(order);
+  const visibleSig = visibleOrder === null ? null : JSON.stringify(visibleOrder);
+  const archivedSig = JSON.stringify([...archived]);
+
+  // `null` — снимок ещё не приходил: следующий эффект отличает первый снимок
+  // (retainLayouts — ровно один раз) от последующих (диф пропавших работ).
+  const prevOrderRef = useRef<string[] | null>(null);
+  const prevArchivedRef = useRef<ReadonlySet<string>>(new Set());
+  /** Последний посчитанный видимый порядок — «прежний» для выбора соседа. */
+  const lastVisibleRef = useRef<string[] | null>(null);
+  const pendingRef = useRef<PendingChoice | null>(null);
+  /** `activeWorkKey` из `ui.json`; `undefined` — ответа ещё нет. */
+  const fromDiskRef = useRef<string | null | undefined>(undefined);
+  // Отменяет выбор по `ui.json` только размонтирование, а не перезапуск эффекта
+  // (раунд исправлений куска 2.7): входы — новые массивы на каждый рендер.
+  const disposedRef = useRef(false);
   useEffect(() => {
     disposedRef.current = false;
     return () => {
       disposedRef.current = true;
     };
   }, []);
+
+  /**
+   * Выбирает активную работу, когда для решения всё есть (спека 5.6, кусок 3.4). Других
+   * поводов менять активную у persistence нет: свернуть проект, скрыть `done`, закрепить —
+   * это видимый порядок, а не состав, раскладки и активная работа от них не меняются.
+   */
+  const resolveActive = useRef((): void => {
+    const store = useLayoutStore.getState;
+    const current = orderRef.current;
+    const visible = visibleRef.current;
+    const isArchived = (key: string): boolean => archivedRef.current.has(key);
+    const firstLive = (): string | null => visible?.[0] ?? current.find((key) => !isArchived(key)) ?? null;
+    const fromDisk = (): string | null => {
+      const disk = fromDiskRef.current;
+      return disk !== null && disk !== undefined && current.includes(disk) && !isArchived(disk) ? disk : null;
+    };
+
+    const pending = pendingRef.current;
+    if (pending?.kind === 'start') {
+      if (fromDiskRef.current === undefined || visible === null) return;
+      pendingRef.current = null;
+      // Пока ждали, человек мог уже выбрать работу сам — не затираем.
+      if (store().activeWorkKey === null) store().setActiveWork(fromDisk() ?? firstLive());
+      return;
+    }
+    if (pending?.kind === 'replace') {
+      if (visible === null) return;
+      pendingRef.current = null;
+      const active = store().activeWorkKey;
+      if (active === null || active === pending.removed) {
+        store().setActiveWork(survivingNeighbor(pending.prevVisible, pending.removed, visible) ?? firstLive());
+      }
+      return;
+    }
+    // Пустой старт (тест 16) или все работы пропадали: как только снимок принёс работу,
+    // показывать нужно её, а не Landing, — по тому же правилу, что и на старте.
+    if (store().activeWorkKey === null && visible !== null) {
+      const next = fromDisk() ?? firstLive();
+      if (next !== null) store().setActiveWork(next);
+    }
+  });
+
+  useEffect(() => {
+    if (!worksLoaded) return;
+    const current = orderRef.current;
+    const prevOrder = prevOrderRef.current;
+    const prevVisible = lastVisibleRef.current;
+
+    if (prevOrder === null) {
+      // Работы, удалённые при закрытом окне, не должны копиться в файле вечно —
+      // первый снимок оставляет раскладки только тех работ, что в нём есть.
+      bridge.app.retainLayouts(current).catch(() => {});
+      if (current.length > 0) pendingRef.current = { kind: 'start' };
+      const applyDisk = (key: string | null): void => {
+        if (disposedRef.current) return;
+        fromDiskRef.current = key;
+        resolveActive.current();
+      };
+      bridge.app
+        .loadUi()
+        .then((ui) => applyDisk(ui.activeWorkKey))
+        .catch(() => applyDisk(null));
+    } else {
+      // Все пропавшие разом (раунд исправлений 1, Critical): сначала снимаем ВСЕ дропы,
+      // а замену активной решаем по окончательному составу. `drop()` сам обнуляет
+      // `activeWorkKey`, поэтому исходное значение читаем ДО цикла.
+      const activeBefore = useLayoutStore.getState().activeWorkKey;
+      const missingKeys = prevOrder.filter((key) => !current.includes(key));
+      for (const key of missingKeys) {
+        useLayoutStore.getState().drop(key);
+        bridge.app.removeLayout(key).catch(() => {});
+      }
+      // Архивная остаётся в составе и с раскладкой, но активной быть перестаёт (спека 6.7).
+      const becameArchived =
+        activeBefore !== null && archivedRef.current.has(activeBefore) && !prevArchivedRef.current.has(activeBefore);
+      if (activeBefore !== null && (missingKeys.includes(activeBefore) || becameArchived)) {
+        pendingRef.current = { kind: 'replace', removed: activeBefore, prevVisible: prevVisible ?? prevOrder };
+      }
+    }
+    prevOrderRef.current = current;
+    prevArchivedRef.current = archivedRef.current;
+
+    resolveActive.current();
+    if (visibleRef.current !== null) lastVisibleRef.current = visibleRef.current;
+  }, [worksLoaded, orderSig, visibleSig, archivedSig, bridge]);
 
   // Работы, чья САМАЯ ПЕРВАЯ гидрация принесла что-то сверх диска — очередь
   // `pending`, применённая внутри `hydrate` (раунд исправлений 1, Important
@@ -138,62 +254,6 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order }: UseL
   // никогда. Общий `Set`, а не состояние стора — это внутренняя бухгалтерия
   // между двумя эффектами этого хука, не часть публичного `LayoutState`.
   const dirtyFirstHydrateRef = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    if (!worksLoaded) return;
-    const prevOrder = prevOrderRef.current;
-    prevOrderRef.current = order;
-
-    if (prevOrder === null) {
-      // Работы, удалённые при закрытом окне, не должны копиться в файле вечно —
-      // первый снимок оставляет раскладки только тех работ, что в нём есть.
-      bridge.app.retainLayouts(order).catch(() => {});
-
-      initialPendingRef.current = order.length > 0;
-      // Состав берётся свежий (`orderRef`): пока ждали диск, работа могла пропасть.
-      const applyInitial = (fromDisk: string | null): void => {
-        initialPendingRef.current = false;
-        if (disposedRef.current) return;
-        // Пока ждали диск, снимок мог обновиться и уже выбрать активную работу
-        // сам (пустой старт → пришли работы, см. ветку ниже) — не затираем её.
-        if (useLayoutStore.getState().activeWorkKey !== null) return;
-        const current = orderRef.current;
-        useLayoutStore.getState().setActiveWork(fromDisk !== null && current.includes(fromDisk) ? fromDisk : (current[0] ?? null));
-      };
-
-      bridge.app
-        .loadUi()
-        .then((ui) => applyInitial(ui.activeWorkKey))
-        .catch(() => applyInitial(null));
-
-      return undefined;
-    }
-
-    // Все пропавшие разом (раунд исправлений 1, Critical): сначала снимаем
-    // ВСЕ дропы, и только потом, зная окончательный новый `order`, решаем,
-    // кем заменить активную работу, если пропала именно она — `drop()` сам
-    // обнуляет `activeWorkKey`, когда дропает текущую активную, поэтому
-    // исходное значение читаем ДО цикла, а не полагаемся на него после.
-    const activeBeforeDrops = useLayoutStore.getState().activeWorkKey;
-    const missingKeys = prevOrder.filter((key) => !order.includes(key));
-
-    for (const key of missingKeys) {
-      useLayoutStore.getState().drop(key);
-      bridge.app.removeLayout(key).catch(() => {});
-    }
-
-    if (activeBeforeDrops !== null && missingKeys.includes(activeBeforeDrops)) {
-      useLayoutStore.getState().setActiveWork(survivingNeighbor(prevOrder, activeBeforeDrops, order));
-    }
-
-    // Пустой старт (тест 16): работ не было, activeWorkKey — null; как только
-    // снимок принёс хоть одну работу, показывать нужно её, а не Landing. Пока
-    // выбор по `ui.json` в пути — решает он.
-    if (!initialPendingRef.current && useLayoutStore.getState().activeWorkKey === null && order.length > 0) {
-      useLayoutStore.getState().setActiveWork(order[0] ?? null);
-    }
-    return undefined;
-  }, [worksLoaded, order, bridge]);
 
   const activeWorkKey = useLayoutStore((state) => state.activeWorkKey);
   const activeHydrated = useLayoutStore((state) =>
