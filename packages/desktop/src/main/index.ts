@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, nativeTheme, Notification, shell, systemPreferences } from 'electron';
 import type { WorksSnapshot } from '@harnas/protocol';
 import { S } from '../shared/strings.js';
-import { cleanupDrops, dropsDir, saveImage } from './drops.js';
+import { cleanupDrops, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
 import { registerFilesIpc } from './files/ipc.js';
 import { HostConnection } from './host-connection.js';
 import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
@@ -47,6 +47,9 @@ async function clipboardPng(): Promise<Buffer | null> {
     if (type === undefined) continue;
     const blob = await item.getType(type);
     if (!(blob instanceof Blob)) continue;
+    // Огромную картинку не грузим в память целиком: отказ до arrayBuffer. PNG после
+    // пересборки nativeImage проверит сам saveImage.
+    if (blob.size > MAX_DROP_IMAGE_BYTES) throw new DropTooLargeError(blob.size);
     const bytes = Buffer.from(await blob.arrayBuffer());
     if (type === 'image/png') return bytes;
     const image = nativeImage.createFromBuffer(bytes);

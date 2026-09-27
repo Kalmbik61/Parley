@@ -311,7 +311,7 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
       } catch (error) {
         const { code, message } = decodeIpcError(error);
         console.warn('[harnas] saveDropImage', message);
-        toast.error(errorText(code, S.errors.actions.saveScreenshot));
+        toast.error(code === 'drops:too-large' ? S.terminal.imageTooLarge : errorText(code, S.errors.actions.saveScreenshot));
         return;
       }
       if (saved !== null) await sendWithToast(sendDeps, sessionRef, pathsToInput([saved]), false);

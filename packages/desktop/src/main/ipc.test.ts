@@ -7,6 +7,7 @@ import type { WorksSnapshot } from '@harnas/protocol';
 import { decodeIpcError } from '../shared/ipc-error.js';
 import { workKey } from '../shared/work-keys.js';
 import { DEFAULT_UI } from '../shared/ui-types.js';
+import { DropTooLargeError, MAX_DROP_IMAGE_BYTES } from './drops.js';
 import { HostError, type HostConnection } from './host-connection.js';
 import { LayoutTooLargeError, type LayoutStore } from './layout-store.js';
 import type { UiStore } from './ui-store.js';
@@ -332,6 +333,15 @@ describe('registerIpc', () => {
     saveDropImage.mockRejectedValue(new Error('EACCES'));
     await expect(ipcMain.invoke('app:save-drop-image', 'clipboard')).rejects.toSatisfy((error: unknown) => {
       expect(decodeIpcError(error)).toEqual({ code: 'failed', message: 'EACCES' });
+      return true;
+    });
+  });
+
+  it('картинка больше 20 МБ: отказ saveDropImage доходит с кодом drops:too-large (fix-main-r1)', async () => {
+    const { ipcMain, saveDropImage } = setup();
+    saveDropImage.mockRejectedValue(new DropTooLargeError(MAX_DROP_IMAGE_BYTES + 1));
+    await expect(ipcMain.invoke('app:save-drop-image', 'clipboard')).rejects.toSatisfy((error: unknown) => {
+      expect(decodeIpcError(error).code).toBe('drops:too-large');
       return true;
     });
   });

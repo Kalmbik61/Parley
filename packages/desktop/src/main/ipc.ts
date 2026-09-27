@@ -5,6 +5,7 @@ import { clampNoteText } from '../shared/app-note.js';
 import type { AppNote, FocusTarget } from '../shared/bridge.js';
 import { encodeIpcError } from '../shared/ipc-error.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
+import { DropTooLargeError } from './drops.js';
 import { HostError } from './host-connection.js';
 import type { HostConnection } from './host-connection.js';
 import { LayoutTooLargeError } from './layout-store.js';
@@ -33,6 +34,7 @@ export function withIpcError(
     } catch (error) {
       if (error instanceof HostError) throw encodeIpcError({ code: error.code, message: error.message });
       if (error instanceof FilesDeniedError) throw encodeIpcError({ code: error.code, message: error.message });
+      if (error instanceof DropTooLargeError) throw encodeIpcError({ code: error.code, message: error.message });
       const message = error instanceof Error ? error.message : String(error);
       throw encodeIpcError({ code: 'failed', message });
     }

@@ -14,6 +14,8 @@
  * пустой xterm закрыл бы `MissingBody` с «Закрыть» (спека 5.10).
  */
 
+import { useMemo } from 'react';
+import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { useWorksStore } from '../store/works.js';
@@ -42,6 +44,20 @@ export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize }: 
     state.entries.find((item) => workKeyOf(item.projectPath, item.map.work.id) === workKey),
   );
 
+  // Один объект sessionRef на сессию, пока не сменились проект и работа: новый литерал на каждый
+  // рендер слоя заставлял бы поверхность снимать и заново вешать слушатель paste (он зависит от ref).
+  const projectPath = entry?.projectPath;
+  const workId = entry?.map.work.id;
+  const sessionRefs = useMemo(() => new Map<string, SessionRef>(), [projectPath, workId]);
+  const sessionRefOf = (sessionId: string): SessionRef => {
+    let ref = sessionRefs.get(sessionId);
+    if (ref === undefined) {
+      ref = { projectPath: projectPath ?? '', workId: workId ?? '', sessionId };
+      sessionRefs.set(sessionId, ref);
+    }
+    return ref;
+  };
+
   const surfaces: SurfaceSpec[] = [];
   if (layout !== undefined && entry !== undefined) {
     const sessionIds = new Set(entry.map.sessions.map((session) => session.id));
@@ -67,7 +83,7 @@ export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize }: 
             <TerminalSurface
               key={surface.tabId}
               bridge={bridge}
-              sessionRef={{ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: surface.sessionId }}
+              sessionRef={sessionRefOf(surface.sessionId)}
               tabId={surface.tabId}
               groupId={surface.groupId}
               visible={surface.visible}

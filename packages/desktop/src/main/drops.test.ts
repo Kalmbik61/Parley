@@ -2,7 +2,7 @@ import { lstat, lutimes, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, u
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { cleanupDrops, dropsDir, saveImage } from './drops.js';
+import { cleanupDrops, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
 
 let base: string;
 let dir: string;
@@ -43,6 +43,17 @@ describe('saveImage (тест 1)', () => {
   it('png: null → null и ни одного файла', async () => {
     expect(await saveImage({ png: null, dir, now: NOW })).toBeNull();
     expect(await readdir(dir).catch(() => [])).toEqual([]);
+  });
+
+  it('предел 20 МБ: больше — DropTooLargeError (код drops:too-large), файл не пишется; ровно 20 МБ — пишется', async () => {
+    expect(MAX_DROP_IMAGE_BYTES).toBe(20 * 1024 * 1024);
+    const tooLarge = saveImage({ png: Buffer.alloc(MAX_DROP_IMAGE_BYTES + 1), dir, now: NOW });
+    await expect(tooLarge).rejects.toBeInstanceOf(DropTooLargeError);
+    await expect(tooLarge).rejects.toMatchObject({ code: 'drops:too-large' });
+    expect(await readdir(dir).catch(() => [])).toEqual([]);
+
+    const saved = await saveImage({ png: Buffer.alloc(MAX_DROP_IMAGE_BYTES), dir, now: NOW });
+    expect(saved).not.toBeNull();
   });
 
   it('пустая картинка → null', async () => {

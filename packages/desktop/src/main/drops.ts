@@ -13,6 +13,22 @@ export function dropsDir(home: string = harnasHome()): string {
   return path.join(home, 'desktop', 'drops');
 }
 
+/**
+ * Предел картинки из буфера (раунд fix-main-r1): случайно скопированный огромный скриншот (несколько
+ * 5K-мониторов, «Copy image» из редактора со слоями) не пишется на диск молча — окно показывает тост.
+ */
+export const MAX_DROP_IMAGE_BYTES = 20 * 1024 * 1024;
+
+/** Картинка больше предела; код доезжает до окна через IPC (`withIpcError`). */
+export class DropTooLargeError extends Error {
+  readonly code = 'drops:too-large';
+
+  constructor(bytes: number) {
+    super(`clipboard image is ${bytes} bytes, limit ${MAX_DROP_IMAGE_BYTES}`);
+    this.name = 'DropTooLargeError';
+  }
+}
+
 /** Сколько раз пробуем новое имя, если занято: 65536 имён на секунду — хватит с запасом. */
 const MAX_ATTEMPTS = 32;
 
@@ -26,7 +42,8 @@ function stamp(now: Date): string {
 
 /**
  * PNG из картинки буфера: имя YYYYMMDD-HHMMSS-<4 hex>.png, open(…, 'wx', 0o600). Занятое имя (в том
- * числе симлинк) не перезаписывается: EEXIST — новое случайное имя. Пустая картинка → null.
+ * числе симлинк) не перезаписывается: EEXIST — новое случайное имя. Пустая картинка → null,
+ * больше MAX_DROP_IMAGE_BYTES — DropTooLargeError, файл не пишется.
  *
  * `wx` (O_CREAT|O_EXCL) не идёт по симлинку: подложенная в `drops/` ссылка на чужой файл
  * даёт EEXIST, а не запись в её цель.
@@ -39,6 +56,7 @@ export async function saveImage(input: {
 }): Promise<string | null> {
   const { png, dir } = input;
   if (png === null || png.length === 0) return null;
+  if (png.length > MAX_DROP_IMAGE_BYTES) throw new DropTooLargeError(png.length);
   const now = input.now ?? new Date();
   const random = input.random ?? Math.random;
   await mkdir(dir, { recursive: true, mode: 0o700 });

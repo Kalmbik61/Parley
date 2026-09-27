@@ -314,6 +314,8 @@ export const S = {
     useRegex: 'Use regular expression',
     previousMatch: 'Previous match',
     nextMatch: 'Next match',
+    /** Картинка из буфера больше предела main (`drops.ts`, 20 МБ) — не сохранена и не отправлена. */
+    imageTooLarge: 'Image is larger than 20 MB — not sent',
   },
 
   /**

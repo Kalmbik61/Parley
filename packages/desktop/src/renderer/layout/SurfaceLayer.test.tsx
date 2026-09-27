@@ -283,6 +283,33 @@ describe('SurfaceLayer — реестр terminalSurfaces (тест 5)', () => {
   });
 });
 
+describe('SurfaceLayer — стабильный sessionRef (раунд fix-main-r1, п.5)', () => {
+  it('перерисовка слоя с тем же ref не переустанавливает слушатель paste поверхности', async () => {
+    const add = vi.spyOn(HTMLElement.prototype, 'addEventListener');
+    try {
+      setLayout(twoGroups(), 'g1');
+      const view = renderWork();
+      await flush();
+      const pasteListeners = (): number => add.mock.calls.filter(([type]) => type === 'paste').length;
+      const before = pasteListeners();
+      expect(before).toBeGreaterThan(0);
+
+      // Слой перерисован (новая раскладка того же набора вкладок), поля ref не менялись.
+      act(() => useLayoutStore.getState().apply(WORK_KEY, (layout) => focusTab(layout, 'terminal:x')));
+      view.rerender(
+        <div data-testid="work-container">
+          <LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} />
+          <SurfaceLayer workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} />
+        </div>,
+      );
+      await flush();
+      expect(pasteListeners()).toBe(before);
+    } finally {
+      add.mockRestore();
+    }
+  });
+});
+
 describe('SurfaceLayer — фон обёртки отступа (тест 12)', () => {
   it('#282c34 при dark; после setDark(false) — фон XTERM_LIGHT, Terminal не создан заново', async () => {
     setLayout(twoGroups(), 'g1');

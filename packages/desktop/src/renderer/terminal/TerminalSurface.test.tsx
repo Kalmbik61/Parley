@@ -330,5 +330,14 @@ describe('TerminalSurface', () => {
       expect(sends()).toEqual([]);
       expect(inputs()).toEqual([]);
     });
+
+    it('картинка больше 20 МБ (drops:too-large) → свой тост, pty.send нет (fix-main-r1)', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      bridge.setSaveDropImage({ code: 'drops:too-large', message: 'm' });
+      const target = await mounted();
+      expect(pasteImage(target)).toBe(false);
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Image is larger than 20 MB — not sent'));
+      expect(sends()).toEqual([]);
+    });
   });
 });
