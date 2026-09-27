@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -116,5 +116,65 @@ test.describe('панель терминала: ввод стаба и восс�
     await expect(window.getByText('echo: hello', { exact: true })).toBeVisible();
 
     await app.close();
+  });
+
+  test('тест 15 (кусок 5.3): указатель по строкам с URL и путём — ни pageerror, ни ошибок console', async () => {
+    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    await mkdir(path.join(project, 'src'), { recursive: true });
+    await writeFile(path.join(project, 'src', 'a.ts'), 'export {};\n');
+
+    const app = await electron.launch({ args: [mainEntry], env });
+    try {
+      const window = await app.firstWindow();
+      // Неперехваченное исключение (как SyntaxError `WebLinksAddon` на флагах `gg`) Playwright
+      // отдаёт событием `pageerror`, а не `console`: собираем оба.
+      const errors: string[] = [];
+      window.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`));
+      window.on('console', (message) => {
+        if (message.type() === 'error') errors.push(`console: ${message.text()}`);
+      });
+      await expect(window.getByTestId('landing')).toBeVisible();
+
+      const work = await window.evaluate(
+        (projectPath: string) =>
+          (globalThis as { harnas: { call: (m: string, p: unknown) => Promise<{ workId: string }> } }).harnas.call(
+            'works.create',
+            { projectPath, title: 'e2e-links', goal: '' },
+          ),
+        project,
+      );
+      const session = await window.evaluate(
+        ({ workId, projectPath }: { workId: string; projectPath: string }) =>
+          (
+            globalThis as {
+              harnas: { call: (m: string, p: unknown) => Promise<{ ref: { sessionId: string } }> };
+            }
+          ).harnas.call('sessions.create', { projectPath, workId, provider: 'claude', label: 'links', task: '', parent: null }),
+        { workId: work.workId, projectPath: project },
+      );
+
+      await window.locator(`[data-session-id="${session.ref.sessionId}"]`).click();
+      const terminalInput = window.locator('.xterm-helper-textarea');
+      await terminalInput.click();
+      await terminalInput.type('https://example.com/x ./src/a.ts:12');
+      await terminalInput.press('Enter');
+      await expect(window.getByText('echo: https://example.com/x ./src/a.ts:12', { exact: true })).toBeVisible();
+
+      // Указатель проходит по каждой строке экрана в нескольких точках: xterm зовёт
+      // провайдеры ссылок на строку под указателем.
+      const box = await window.locator('.xterm-screen').first().boundingBox();
+      if (box === null) throw new Error('нет .xterm-screen');
+      const rowHeight = 12;
+      for (let y = box.y + rowHeight / 2; y < box.y + Math.min(box.height, rowHeight * 12); y += rowHeight / 2) {
+        for (let x = box.x + 8; x < box.x + Math.min(box.width, 400); x += 24) {
+          await window.mouse.move(x, y);
+        }
+      }
+      await window.waitForTimeout(300);
+
+      expect(errors).toEqual([]);
+    } finally {
+      await app.close();
+    }
   });
 });
