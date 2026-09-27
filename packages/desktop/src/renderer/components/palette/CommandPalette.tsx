@@ -13,7 +13,7 @@
  * и не зависит от деталей чужой библиотеки.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { S } from '../../../shared/strings.js';
 import { fuzzyScore } from '../../lib/fuzzy.js';
@@ -48,6 +48,9 @@ function filterCommands(commands: readonly Command[], query: string): Command[] 
 export function CommandPalette({ open, commands, onOpenChange }: CommandPaletteProps): JSX.Element {
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  /** Где был фокус до открытия: кнопка Search, терминал… */
+  const opener = useRef<HTMLElement | null>(null);
 
   const results = useMemo(() => filterCommands(commands, query), [commands, query]);
 
@@ -71,10 +74,29 @@ export function CommandPalette({ open, commands, onOpenChange }: CommandPaletteP
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/50" />
-        <Dialog.Content className="fixed left-1/2 top-[20%] w-[32rem] -translate-x-1/2 rounded-lg bg-card p-2 text-foreground shadow-lg">
+        {/* Фокус после закрытия — туда, откуда открыли (раунд исправлений 2 куска 3.4). Radix
+            Dialog сам возвращает его только своему `Dialog.Trigger`, а его у палитры нет: её
+            открывают кнопка Search, ⌘K и меню, — и фокус падал на `<body>`. Если команда уже
+            сама перевела фокус (открыла вкладку терминала), его не отнимаем. */}
+        <Dialog.Content
+          className="fixed left-1/2 top-[20%] w-[32rem] -translate-x-1/2 rounded-lg bg-card p-2 text-foreground shadow-lg"
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+            inputRef.current?.focus();
+          }}
+          onCloseAutoFocus={(event) => {
+            const back = opener.current;
+            opener.current = null;
+            if (back === null || !back.isConnected) return;
+            if (document.activeElement !== null && document.activeElement !== document.body) return;
+            event.preventDefault();
+            back.focus();
+          }}
+        >
           <Dialog.Title className="px-2 py-1 text-sm font-medium">{S.menu.commandPalette}</Dialog.Title>
           <input
-            autoFocus
+            ref={inputRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {

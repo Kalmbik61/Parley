@@ -32,7 +32,7 @@ import {
 } from '../ui/context-menu.js';
 import { DESTRUCTIVE_ITEM } from './CardMenu.js';
 import { useSidebarHold } from './use-sidebar-hold.js';
-import { returnCursorFocus } from './use-sidebar-keys.js';
+import { focusSidebarItem, returnCursorFocus } from './use-sidebar-keys.js';
 
 const RESUMABLE: ReadonlySet<SessionStatus> = new Set(['exited', 'done', 'failed']);
 const STOPPABLE: ReadonlySet<SessionStatus> = new Set(['active', 'pending']);
@@ -86,6 +86,8 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
   };
 
   const worktree = session.worktree;
+  // Подтверждение открыто пунктом меню, которого уже нет: фокус — строке (раунд 2).
+  const focusRow = (event: Event): void => focusSidebarItem(event, { workKey, sessionId: session.id });
 
   return (
     <>
@@ -135,6 +137,7 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
         confirmLabel={S.sidebar.sessionMenu.stop}
         onConfirm={() => call('sessions.stop')}
         onOpenChange={(next) => setConfirm(next ? 'stop' : null)}
+        onCloseAutoFocus={focusRow}
       />
       <ConfirmDialog
         open={confirm === 'close'}
@@ -143,6 +146,7 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
         confirmLabel={S.common.close}
         onConfirm={() => call('sessions.close')}
         onOpenChange={(next) => setConfirm(next ? 'close' : null)}
+        onCloseAutoFocus={focusRow}
       />
       <ConfirmDialog
         open={confirm === 'delete'}
@@ -150,6 +154,7 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
         confirmLabel={S.common.delete}
         onConfirm={() => call('sessions.delete')}
         onOpenChange={(next) => setConfirm(next ? 'delete' : null)}
+        onCloseAutoFocus={focusRow}
       />
     </>
   );

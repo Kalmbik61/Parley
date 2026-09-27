@@ -17,6 +17,7 @@ import { useHostStore } from '../store/host.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { useSidebarSectionsStore, useSidebarSectionsSync } from './use-sidebar-sections.js';
+import { CommandPalette } from '../components/palette/CommandPalette.js';
 import { WorkSidebar, type WorkSidebarProps } from './WorkSidebar.js';
 
 /**
@@ -578,5 +579,77 @@ describe('WorkSidebar — клавиатура, раунд исправлени�
     const overflow = errors.mock.calls.filter((args) => args.some((arg) => String(arg).includes('Maximum call stack')));
     errors.mockRestore();
     expect(overflow).toEqual([]);
+  });
+});
+
+describe('WorkSidebar — возврат фокуса после подтверждений и палитры (кусок 3.4, раунд 2)', () => {
+  const a = makeWork('w-a', { createdAt: '2026-09-27T08:00:00.000Z', sessions: [makeSession('s-01', 'a1')] });
+  const b = makeWork('w-b', { createdAt: '2026-09-27T07:00:00.000Z', sessions: [makeSession('s-01', 'b1')] });
+  const cardOf = (entry: WorkEntry): HTMLElement => document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"]`) as HTMLElement;
+  const rowOf = (entry: WorkEntry, id: string): HTMLElement =>
+    document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"] [data-session-id="${id}"]`) as HTMLElement;
+
+  /** Как мышью: правая кнопка фокусирует карточку и открывает её меню. */
+  function rightClick(element: HTMLElement): void {
+    fireEvent.pointerDown(element, { button: 2 });
+    act(() => element.focus());
+    fireEvent.pointerUp(element, { button: 2 });
+    fireEvent.contextMenu(element);
+  }
+
+  function setup(): void {
+    setWorks([a, b]);
+    useLayoutStore.setState({ activeWorkKey: keyOf(b) });
+    bridge.setHandler('works.setStatus', () => ({ ok: true as const }));
+    render(<Harness />);
+  }
+
+  it('Archive подтверждён — фокус в списке, не на body; карточка ушла из снимка — фокус на активной карточке', async () => {
+    setup();
+    rightClick(cardOf(a));
+    fireEvent.click(screen.getByText(S.cardMenu.archive));
+    fireEvent.click(screen.getByRole('button', { name: S.cardMenu.archive }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+    expect(list().contains(document.activeElement)).toBe(true);
+
+    // Хост архивировал работу — карточка с фокусом пропала из DOM.
+    act(() => setWorks([b]));
+    await waitFor(() => expect(document.activeElement).toBe(cardOf(b)));
+  });
+
+  it('Cancel — фокус на карточке, откуда открыли меню; у строки сессии — на строке', async () => {
+    setup();
+    rightClick(cardOf(a));
+    fireEvent.click(screen.getByText(S.cardMenu.archive));
+    fireEvent.click(screen.getByText(S.common.cancel));
+    await waitFor(() => expect(document.activeElement).toBe(cardOf(a)));
+
+    rightClick(rowOf(a, 's-01'));
+    fireEvent.click(screen.getByText(S.sidebar.sessionMenu.stop));
+    fireEvent.click(screen.getByText(S.common.cancel));
+    await waitFor(() => expect(document.activeElement).toBe(rowOf(a, 's-01')));
+  });
+
+  it('палитра, открытая кнопкой Search, закрыта Esc — фокус на кнопке Search', async () => {
+    function WithPalette(): JSX.Element {
+      const open = useUiStore((state) => state.paletteOpen);
+      return (
+        <>
+          <Harness />
+          <CommandPalette open={open} commands={[]} onOpenChange={(next) => useUiStore.getState().setPaletteOpen(next)} />
+        </>
+      );
+    }
+    setWorks([a]);
+    render(<WithPalette />);
+    const search = screen.getByRole('button', { name: /Search/ });
+    act(() => search.focus());
+    fireEvent.click(search);
+    const input = await screen.findByPlaceholderText(S.palette.searchPlaceholder);
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    fireEvent.keyDown(input, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(search));
   });
 });

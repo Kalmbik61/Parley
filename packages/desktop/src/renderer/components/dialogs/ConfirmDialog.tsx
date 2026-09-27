@@ -20,6 +20,8 @@ export interface ConfirmDialogProps {
   confirmLabel: string;
   onConfirm: () => void;
   onOpenChange: (open: boolean) => void;
+  /** Куда вернуть фокус после закрытия, если не туда, где он был при открытии (Radix). */
+  onCloseAutoFocus?: (event: Event) => void;
 }
 
 export function ConfirmDialog({
@@ -29,6 +31,7 @@ export function ConfirmDialog({
   confirmLabel,
   onConfirm,
   onOpenChange,
+  onCloseAutoFocus,
 }: ConfirmDialogProps): JSX.Element {
   // Одно подтверждение на одно открытие (раунд исправлений 1 куска 3.4, находка 6): кнопка
   // остаётся в DOM на время анимации закрытия, и двойной клик слал второй вызов — у
@@ -47,6 +50,7 @@ export function ConfirmDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         {...(description === undefined ? { 'aria-describedby': undefined } : null)}
+        {...(onCloseAutoFocus === undefined ? null : { onCloseAutoFocus })}
         className="w-80 max-w-80"
       >
         <DialogTitle>{title}</DialogTitle>

@@ -31,7 +31,7 @@ import {
   ContextMenuTrigger,
 } from '../ui/context-menu.js';
 import { useSidebarHold } from './use-sidebar-hold.js';
-import { returnCursorFocus } from './use-sidebar-keys.js';
+import { focusSidebarItem, returnCursorFocus } from './use-sidebar-keys.js';
 
 /** Пункты спеки 6.4 — они же `data-card-action` пунктов. */
 export type CardAction = 'pin' | 'unpin' | 'new-session' | 'new-room' | 'open-mail' | 'rename'
@@ -91,6 +91,9 @@ export function CardMenu({ entry, pinned, bridge, onRename, onOpenMail, children
     const { ui, patchUi } = useUiStore.getState();
     patchUi({ pinnedWorks: pinned ? ui.pinnedWorks.filter((item) => item !== key) : [...ui.pinnedWorks.filter((item) => item !== key), key] });
   };
+
+  // Подтверждение открыто пунктом меню, которого уже нет: фокус — карточке (раунд 2).
+  const focusCard = (event: Event): void => focusSidebarItem(event, { workKey: key, sessionId: null });
 
   const deleteWork = async (): Promise<void> => {
     // Сессии — из свежего снимка: пока меню было открыто, какая-то могла запуститься.
@@ -207,6 +210,7 @@ export function CardMenu({ entry, pinned, bridge, onRename, onOpenMail, children
         confirmLabel={S.cardMenu.archive}
         onConfirm={() => setStatus('archived', S.errors.actions.archiveWorkspace)}
         onOpenChange={(next) => setConfirm(next ? 'archive' : null)}
+        onCloseAutoFocus={focusCard}
       />
       <ConfirmDialog
         open={confirm === 'delete'}
@@ -217,6 +221,7 @@ export function CardMenu({ entry, pinned, bridge, onRename, onOpenMail, children
           deleteWork().catch(reportError('works.delete', S.errors.actions.deleteWorkspace));
         }}
         onOpenChange={(next) => setConfirm(next ? 'delete' : null)}
+        onCloseAutoFocus={focusCard}
       />
     </>
   );

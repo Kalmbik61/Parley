@@ -22,6 +22,8 @@
 import { useEffect, useRef, type FocusEvent, type KeyboardEvent, type RefObject } from 'react';
 import { create } from 'zustand';
 import { isTextEntryTarget } from '../layout/keys.js';
+import { workKey as workKeyOf } from '../lib/tree-order.js';
+import { useSidebarSectionsStore } from './use-sidebar-sections.js';
 
 export interface SidebarCursor {
   workKey: string;
@@ -125,6 +127,29 @@ export function returnCursorFocus(event: Event): void {
   element.focus();
 }
 
+/**
+ * `onCloseAutoFocus` подтверждений из меню карточки и строки (раунд исправлений 2): фокус —
+ * элементу, чьё меню открыло диалог, найденному заново по ключу. Сам Radix Dialog
+ * возвращает фокус только своему `Dialog.Trigger`, а подтверждение открывает пункт уже
+ * закрытого меню — и фокус падал на `<body>`. Элемента нет (работа удалена или архивирована, сессия удалена) —
+ * фокус на список: его `onFocus` ставит курсор на активную карточку.
+ */
+export function focusSidebarItem(event: Event, cursor: SidebarCursor): void {
+  const list = document.querySelector<HTMLElement>('[data-sidebar-list]');
+  if (list === null) return;
+  event.preventDefault();
+  const element = elementOf(list, cursor) ?? elementOf(list, { workKey: cursor.workKey, sessionId: null });
+  if (element !== null) element.focus();
+  else list.focus();
+}
+
+/** Показана ли работа в каком-нибудь развёрнутом разделе сайдбара. */
+function shownInSidebar(key: string): boolean {
+  return useSidebarSectionsStore
+    .getState()
+    .sections.some((section) => !section.collapsed && section.works.some((entry) => workKeyOf(entry.projectPath, entry.map.work.id) === key));
+}
+
 export interface SidebarKeysInput {
   /** Прокручиваемый список сайдбара. */
   listRef: RefObject<HTMLElement>;
@@ -147,6 +172,44 @@ export function useSidebarKeys({ listRef, activeWorkKey, onActivateWork, onShowC
   const pointer = useRef(false);
   /** Идёт свой перевод фокуса: вложенный `onFocus` от него — не новый вход. */
   const redirecting = useRef(false);
+
+  // Элемент с фокусом ушёл из DOM (раунд исправлений 2): подтверждение Archive/Delete
+  // вернуло фокус карточке, а следующий снимок хоста её убрал — фокус падал на `<body>`, и
+  // Tab начинался с начала окна. Тот же элемент перерисован заново (карточка переехала в
+  // Pinned) — фокус ему; пропала строка — её карточке; пропала работа — списку, то есть
+  // активной карточке. Работа ещё показана, но её узла нет — это край виртуального списка:
+  // фокус не трогаем, иначе прокрутка колесом дёргала бы список к активной карточке.
+  useEffect(() => {
+    const list = listRef.current;
+    if (list === null) return undefined;
+    let last: { element: HTMLElement; cursor: SidebarCursor } | null = null;
+    const onFocusIn = (event: globalThis.FocusEvent): void => {
+      const target = event.target;
+      const cursor = target instanceof Element ? cursorOf(target) : null;
+      last = cursor === null ? null : { element: target as HTMLElement, cursor };
+    };
+    const onFocusOut = (event: globalThis.FocusEvent): void => {
+      // Без `relatedTarget` фокус уходит в никуда — так же выглядит и удаление узла.
+      if (event.relatedTarget !== null) last = null;
+    };
+    const observer = new MutationObserver(() => {
+      if (last === null || last.element.isConnected) return;
+      const { cursor } = last;
+      last = null;
+      if (document.activeElement !== null && document.activeElement !== document.body) return;
+      const element = elementOf(list, cursor) ?? elementOf(list, { workKey: cursor.workKey, sessionId: null });
+      if (element !== null) element.focus();
+      else if (!shownInSidebar(cursor.workKey)) list.focus();
+    });
+    list.addEventListener('focusin', onFocusIn);
+    list.addEventListener('focusout', onFocusOut);
+    observer.observe(list, { childList: true, subtree: true });
+    return () => {
+      list.removeEventListener('focusin', onFocusIn);
+      list.removeEventListener('focusout', onFocusOut);
+      observer.disconnect();
+    };
+  }, [listRef]);
 
   return {
     onPointerDown: () => {
