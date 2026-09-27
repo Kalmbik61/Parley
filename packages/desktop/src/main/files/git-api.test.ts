@@ -454,7 +454,7 @@ describe('walkFiles и поиск без git (тест 11)', () => {
       await writeFile(path.join(dir, '.harnas', 'map.json'), 'needle map\n');
       await symlink(path.join(dir, '.harnas', 'map.json'), path.join(dir, 'map-link.txt'));
       execFileSync('mkfifo', [path.join(dir, 'pipe')]);
-      expect((await walkFiles(dir, 50_000)).sort()).toEqual(['in-link.txt', 'real.txt']);
+      expect((await walkFiles(dir, 50_000)).paths.sort()).toEqual(['in-link.txt', 'real.txt']);
       const enoent: GitRunner = {
         run: async () => {
           throw Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' });
@@ -470,7 +470,70 @@ describe('walkFiles и поиск без git (тест 11)', () => {
 
   it('предел обхода', async () => {
     for (let i = 0; i < 5; i++) await writeFile(path.join(dir, `f${i}`), '');
-    expect(await walkFiles(dir, 3)).toHaveLength(3);
+    expect(await walkFiles(dir, 3)).toEqual({ paths: expect.any(Array), truncated: true });
+    expect((await walkFiles(dir, 3)).paths).toHaveLength(3);
+    expect(await walkFiles(dir, 5)).toEqual({ paths: expect.any(Array), truncated: false });
+  });
+});
+
+describe('обход: отмена и бюджет времени (раунд fix-7.1b, п.1)', () => {
+  /** 40 каталогов по 2 файла и файл в корне. */
+  async function tree(): Promise<void> {
+    await writeFile(path.join(dir, 'top.txt'), 'needle\n');
+    for (let i = 0; i < 40; i++) {
+      await mkdir(path.join(dir, `d${i}`));
+      await writeFile(path.join(dir, `d${i}`, 'a.txt'), 'needle\n');
+      await writeFile(path.join(dir, `d${i}`, 'b.txt'), 'needle\n');
+    }
+  }
+
+  it('отмена посреди обхода: найденное к этому моменту и truncated', async () => {
+    await tree();
+    const controller = new AbortController();
+    let dirs = 0;
+    // Часы спрашиваются на каждом каталоге: третий каталог отменяет обход.
+    const now = (): number => {
+      dirs += 1;
+      if (dirs === 3) controller.abort();
+      return 0;
+    };
+    const result = await walkFiles(dir, 50_000, { signal: controller.signal, budgetMs: 10_000, now });
+    expect(result.truncated).toBe(true);
+    expect(result.paths).toContain('top.txt');
+    expect(result.paths.length).toBeLessThan(81);
+  });
+
+  it('бюджет времени: обход останавливается с truncated', async () => {
+    await tree();
+    let clock = 0;
+    const result = await walkFiles(dir, 50_000, { budgetMs: 5, now: () => clock++ });
+    expect(result.truncated).toBe(true);
+    expect(result.paths).toContain('top.txt');
+    expect(result.paths.length).toBeLessThan(81);
+  });
+
+  it('без отмены и бюджета — всё дерево, truncated false', async () => {
+    await tree();
+    const result = await walkFiles(dir, 50_000);
+    expect(result).toEqual({ paths: expect.any(Array), truncated: false });
+    expect(result.paths).toHaveLength(81);
+  });
+
+  it('grep без git: бюджет обхода исчерпан — найденное в корне и truncated', async () => {
+    await tree();
+    const result = await api(dir, createGitRunner(process.env), { walkBudgetMs: 0 }).grep(ROOT, Q('needle'), 's');
+    expect(result.truncated).toBe(true);
+    expect(result.files.map((f) => f.path)).toEqual(['top.txt']);
+  });
+
+  it('lsFiles без git: частичный список по бюджету не кэшируется', async () => {
+    await tree();
+    // Тот же объект настроек: бюджет читается на каждом вызове.
+    const options = { git: createGitRunner(process.env), roots: { rootPath: () => dir }, spawnWorker, walkBudgetMs: 0, isTreeWatched: () => true };
+    const a = createGitApi(options);
+    expect(await a.lsFiles(ROOT)).toEqual(['top.txt']);
+    options.walkBudgetMs = 10_000;
+    expect(await a.lsFiles(ROOT)).toHaveLength(81);
   });
 });
 
@@ -488,5 +551,64 @@ describe('кэш lsFiles (тест 14)', () => {
     expect((await a.lsFiles(ROOT)).sort()).toEqual(['a.txt', 'b.txt']);
     a.invalidate(rootKey(ROOT));
     expect((await a.lsFiles(ROOT)).sort()).toEqual(['a.txt', 'b.txt', 'c.txt']);
+  });
+});
+
+describe('длинная строка попадания (раунд fix-7.1b, п.2)', () => {
+  const half = 'x'.repeat(2_500_000);
+  const body = `head\n${half}NEEDLE${half}\ntail\n`;
+
+  for (const kind of ['git', 'не git'] as const) {
+    it(`${kind}: строка 5 МБ → text ≤ 1000, ranges на совпадении`, async () => {
+      if (kind === 'git') await initRepo(dir);
+      await writeFile(path.join(dir, 'min.js'), body);
+      const result = await api(dir).grep(ROOT, Q('NEEDLE'), 's');
+      const hit = result.files[0]?.hits[0];
+      expect(hit?.line).toBe(2);
+      expect(hit?.text.length).toBeLessThanOrEqual(1000);
+      const [start, end] = hit?.ranges[0] ?? [0, 0];
+      expect(hit?.text.slice(start, end)).toBe('NEEDLE');
+    });
+  }
+
+  it('runGrepWorker ranges: отменён до подсветки — неподсвеченные тоже окном', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await runGrepWorker(
+      { kind: 'ranges', query: Q('NEEDLE'), files: [{ path: 'min.js', hits: [{ line: 2, text: `${half}NEEDLE${half}`, ranges: [] }] }] },
+      { signal: controller.signal, timeoutMs: 10_000, spawn: spawnWorker },
+    );
+    expect(result.truncated).toBe(true);
+    expect(result.files[0]?.hits[0]?.text.length).toBeLessThanOrEqual(1000);
+  });
+});
+
+describe('неверная регулярка (раунд fix-7.1b, п.3)', () => {
+  for (const kind of ['git', 'не git'] as const) {
+    it(`${kind}: неверная для RegExp → bad_request до запуска git и воркера`, async () => {
+      if (kind === 'git') await initRepo(dir);
+      await writeFile(path.join(dir, 'a.txt'), 'a(b\n');
+      const runner = createGitRunner(process.env);
+      const a = api(dir, runner);
+      const spy = vi.spyOn(runner, 'run');
+      let spawned = 0;
+      const counted = api(dir, runner, {
+        spawnWorker: () => {
+          spawned += 1;
+          return spawnWorker();
+        },
+      });
+      expect(await codeOf(counted.grep(ROOT, Q('a(', { regex: true }), 's'))).toBe('bad_request');
+      expect(spy.mock.calls.filter(([args]) => args.includes('grep'))).toHaveLength(0);
+      expect(spawned).toBe(0);
+      // Без режима регулярки тот же текст — просто текст.
+      expect((await a.grep(ROOT, Q('a('), 's')).files.map((f) => f.path)).toEqual(['a.txt']);
+    });
+  }
+
+  it('git: верная для RegExp, но не для ERE — прочий код git → failed', async () => {
+    await initRepo(dir);
+    await writeFile(path.join(dir, 'a.txt'), 'x\n');
+    expect(await codeOf(api(dir).grep(ROOT, Q('(?:x)', { regex: true }), 's'))).toBe('failed');
   });
 });

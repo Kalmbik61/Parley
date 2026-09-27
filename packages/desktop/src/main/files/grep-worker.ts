@@ -18,6 +18,11 @@ import type { GrepHit, GrepQuery, GrepResult } from '../../shared/files-types.js
 export const GREP_LIMITS = { hits: 2000, files: 200 } as const;
 /** Файлы больше 20 МБ поиск пропускает — тот же предел, что у чтения в редактор. */
 export const GREP_MAX_FILE_BYTES = 20 * 1024 * 1024;
+/**
+ * Текст попадания — окно до 1000 кодовых единиц вокруг первого совпадения: строка минифицированного
+ * файла бывает в мегабайты, а попаданий в ответе до 2000 — окну незачем копировать гигабайты.
+ */
+export const HIT_TEXT_LIMIT = 1000;
 /** NUL в первых 8 КБ — двоичный, как `-I` у git. */
 const BINARY_PROBE_BYTES = 8192;
 
@@ -65,6 +70,35 @@ export function matchRanges(query: GrepQuery, line: string): [number, number][] 
   return re === null ? [] : rangesOf(re, line);
 }
 
+const isHigh = (code: number): boolean => code >= 0xd800 && code <= 0xdbff;
+const isLow = (code: number): boolean => code >= 0xdc00 && code <= 0xdfff;
+
+/**
+ * Окно строки не длиннее HIT_TEXT_LIMIT вокруг первого совпадения; ranges — от начала окна, у
+ * края обрезаны. Совпадения нет (ERE git и RegExp JS разошлись, подсветка не успела) — начало
+ * строки. Суррогатная пара на краю окна не режется: край сдвигается внутрь.
+ */
+export function clipHit(line: string, ranges: [number, number][]): { text: string; ranges: [number, number][] } {
+  if (line.length <= HIT_TEXT_LIMIT) return { text: line, ranges };
+  const first = ranges[0];
+  let start = 0;
+  if (first !== undefined) {
+    const [from, to] = first;
+    start = to - from >= HIT_TEXT_LIMIT ? from : from - Math.floor((HIT_TEXT_LIMIT - (to - from)) / 2);
+    start = Math.max(0, Math.min(start, line.length - HIT_TEXT_LIMIT));
+  }
+  let end = start + HIT_TEXT_LIMIT;
+  if (start > 0 && isLow(line.charCodeAt(start)) && isHigh(line.charCodeAt(start - 1))) start += 1;
+  if (end < line.length && isHigh(line.charCodeAt(end - 1)) && isLow(line.charCodeAt(end))) end -= 1;
+  const inside: [number, number][] = [];
+  for (const [from, to] of ranges) {
+    const a = Math.max(from, start);
+    const b = Math.min(to, end);
+    if (b > a) inside.push([a - start, b - start]);
+  }
+  return { text: line.slice(start, end), ranges: inside };
+}
+
 /** Содержимое обычного файла внутри корня или null: наружу по ссылке, не файл, больше предела, двоичный. */
 function readCandidate(rootPath: string, relPath: string): string | null {
   let real: string;
@@ -109,7 +143,10 @@ export function runJob(job: GrepJob, post: (message: GrepWorkerMessage) => void)
     for (const file of job.files) {
       post({
         type: 'file',
-        file: { path: file.path, hits: file.hits.map((hit) => ({ ...hit, ranges: re === null ? [] : rangesOf(re, hit.text) })) },
+        file: {
+          path: file.path,
+          hits: file.hits.map((hit) => ({ ...hit, ...clipHit(hit.text, re === null ? [] : rangesOf(re, hit.text)) })),
+        },
       });
     }
     post({ type: 'done', truncated: false });
@@ -137,7 +174,7 @@ export function runJob(job: GrepJob, post: (message: GrepWorkerMessage) => void)
         truncated = true;
         break;
       }
-      hits.push({ line: i + 1, text: line, ranges });
+      hits.push({ line: i + 1, ...clipHit(line, ranges) });
       hitCount += 1;
     }
     if (hits.length > 0) {

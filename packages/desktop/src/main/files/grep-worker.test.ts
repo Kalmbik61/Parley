@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { GrepQuery } from '../../shared/files-types.js';
-import { GREP_LIMITS, matchRanges, runJob, type GrepWorkerMessage } from './grep-worker.js';
+import { clipHit, GREP_LIMITS, HIT_TEXT_LIMIT, matchRanges, runJob, type GrepWorkerMessage } from './grep-worker.js';
 
 const Q = (text: string, extra: Partial<GrepQuery> = {}): GrepQuery => ({
   text,
@@ -109,5 +109,59 @@ describe('runJob', () => {
     } finally {
       await rm(outside, { recursive: true, force: true });
     }
+  });
+});
+
+describe('clipHit: окно строки попадания (раунд fix-7.1b, п.2)', () => {
+  const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+  it('строка 5 МБ, совпадение в середине: text ≤ 1000, ranges — на совпадении внутри окна', () => {
+    const half = 'x'.repeat(2_500_000);
+    const line = `${half}NEEDLE${half}NEEDLE`;
+    const clipped = clipHit(line, matchRanges(Q('NEEDLE'), line));
+    expect(HIT_TEXT_LIMIT).toBe(1000);
+    expect(clipped.text.length).toBeLessThanOrEqual(1000);
+    expect(clipped.ranges).toHaveLength(1);
+    const [start, end] = clipped.ranges[0] ?? [0, 0];
+    expect(clipped.text.slice(start, end)).toBe('NEEDLE');
+  });
+
+  it('короткая строка — как есть', () => {
+    expect(clipHit('a needle b', [[2, 8]])).toEqual({ text: 'a needle b', ranges: [[2, 8]] });
+  });
+
+  it('без совпадения — начало строки, ranges пустые', () => {
+    const clipped = clipHit('y'.repeat(5000), []);
+    expect(clipped).toEqual({ text: 'y'.repeat(1000), ranges: [] });
+  });
+
+  it('суррогатная пара на краю окна не режется', () => {
+    for (const lead of ['', 'x']) {
+      for (const tail of ['', 'x']) {
+        const line = `${lead}${'😀'.repeat(3000)}NEEDLE${tail}${'😀'.repeat(3000)}`;
+        const clipped = clipHit(line, matchRanges(Q('NEEDLE'), line));
+        expect(clipped.text.length).toBeLessThanOrEqual(1000);
+        expect(lone.test(clipped.text)).toBe(false);
+        const [start, end] = clipped.ranges[0] ?? [0, 0];
+        expect(clipped.text.slice(start, end)).toBe('NEEDLE');
+      }
+    }
+  });
+
+  it('совпадение длиннее окна — окно с его начала, range обрезан окном', () => {
+    const line = `ab${'z'.repeat(3000)}`;
+    const clipped = clipHit(line, [[2, 3002]]);
+    expect(clipped.text).toBe('z'.repeat(1000));
+    expect(clipped.ranges).toEqual([[0, 1000]]);
+  });
+
+  it('ranges: длинная строка уходит окном', () => {
+    const messages: GrepWorkerMessage[] = [];
+    const line = `${'q'.repeat(100_000)}needle${'q'.repeat(100_000)}`;
+    runJob({ kind: 'ranges', query: Q('needle'), files: [{ path: 'a', hits: [{ line: 1, text: line, ranges: [] }] }] }, (m) => messages.push(m));
+    const hit = messages[0]?.type === 'file' ? messages[0].file.hits[0] : undefined;
+    expect(hit?.text.length).toBeLessThanOrEqual(1000);
+    const [start, end] = hit?.ranges[0] ?? [0, 0];
+    expect(hit?.text.slice(start, end)).toBe('needle');
   });
 });

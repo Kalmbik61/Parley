@@ -14,7 +14,7 @@ import { rootKey } from '../../shared/work-keys.js';
 import { HostError } from '../host-connection.js';
 import type { RootsRegistry } from '../roots.js';
 import { detectText, LIMITS } from './fs-api.js';
-import { GREP_LIMITS, type GrepJob, type GrepWorkerMessage } from './grep-worker.js';
+import { clipHit, GREP_LIMITS, type GrepJob, type GrepWorkerMessage } from './grep-worker.js';
 
 export type { GrepJob } from './grep-worker.js';
 
@@ -233,12 +233,28 @@ function insideReal(base: string, real: string): string | null {
   return real.startsWith(base + path.sep) ? real.slice(base.length + 1) : null;
 }
 
-/** Не-git корень: обход по lstat до 50 000 обычных файлов, без node_modules, .git и .harnas; симлинки — правила ниже. */
-export async function walkFiles(root: string, limit: number): Promise<string[]> {
+/**
+ * Не-git корень: обход по lstat до 50 000 обычных файлов, без node_modules, .git и .harnas; симлинки — правила ниже.
+ * Отмена и бюджет времени проверяются на каждом каталоге и у каждой ссылки (у ссылки — realpath и stat,
+ * их в одной папке бывают десятки тысяч): огромный корень иначе держал бы пул fs main без предела, а
+ * `cancel` и закрытие окна не останавливали бы начатый обход. Корень читается всегда — бюджет 0 даёт
+ * его файлы. truncated — остановлен отменой, временем или пределом числа файлов.
+ */
+export async function walkFiles(
+  root: string,
+  limit: number,
+  options: { signal?: AbortSignal; budgetMs?: number; now?: () => number } = {},
+): Promise<{ paths: string[]; truncated: boolean }> {
+  const now = options.now ?? Date.now;
+  const deadline = options.budgetMs === undefined ? Infinity : now() + options.budgetMs;
+  const stopped = (): boolean => options.signal?.aborted === true || now() >= deadline;
   const base = await realpath(root);
   const out: string[] = [];
   const stack = [''];
-  while (stack.length > 0 && out.length < limit) {
+  let first = true;
+  while (stack.length > 0) {
+    if (out.length >= limit || (!first && stopped())) return { paths: out, truncated: true };
+    first = false;
     const dir = stack.pop() ?? '';
     let entries;
     try {
@@ -248,12 +264,13 @@ export async function walkFiles(root: string, limit: number): Promise<string[]> 
       continue;
     }
     for (const entry of entries) {
-      if (out.length >= limit) break;
+      if (out.length >= limit) return { paths: out, truncated: true };
       if (WALK_SKIP.has(entry.name.toLowerCase())) continue;
       const rel = dir === '' ? entry.name : `${dir}/${entry.name}`;
       if (entry.isDirectory()) stack.push(rel);
       else if (entry.isFile()) out.push(rel);
       else if (entry.isSymbolicLink()) {
+        if (stopped()) return { paths: out, truncated: true };
         // Файл-ссылка — только если цель — обычный файл внутри корня и не в `.git`/`.harnas`:
         // ссылка `docs/home → ~` иначе отдала бы окну `~/.aws/credentials`.
         try {
@@ -268,7 +285,7 @@ export async function walkFiles(root: string, limit: number): Promise<string[]> 
       // FIFO, сокеты и устройства — не файлы: пропускаются.
     }
   }
-  return out;
+  return { paths: out, truncated: false };
 }
 
 /** rev для gitShow: HEAD или 7–40 hex, в конце допустим ^. */
@@ -294,8 +311,13 @@ export function runGrepWorker(
     const finish = (truncated: boolean): void => {
       if (settled) return;
       settle();
-      // У `ranges` строки уже найдены git: неподсвеченные уходят с пустыми ranges.
-      const files = job.kind === 'ranges' ? [...done, ...job.files.slice(done.length)] : done;
+      // У `ranges` строки уже найдены git: неподсвеченные уходят с пустыми ranges — и тоже окном:
+      // регулярку в main не исполняем, поэтому окно с начала строки.
+      const rest = job.kind === 'ranges' ? job.files.slice(done.length) : [];
+      const files = [
+        ...done,
+        ...rest.map((file) => ({ path: file.path, hits: file.hits.map((hit) => ({ ...hit, ...clipHit(hit.text, []) })) })),
+      ];
       resolve({ files, truncated });
     };
     const stop = (): void => finish(true);
@@ -340,6 +362,11 @@ export interface GitApiOptions {
   /** Кэш `lsFiles` — только у корня под слежением дерева: сбросить иначе нечем. */
   isTreeWatched?: (rootKey: string) => boolean;
   grepTimeoutMs?: number;
+  /**
+   * Бюджет обхода не-git корня (⌘P и поиск); по умолчанию 10 с, как у воркера поиска. Читается
+   * на каждом вызове: тест меняет его между вызовами.
+   */
+  walkBudgetMs?: number;
   /** Предел вывода `gitShow`; по умолчанию 20 МБ. */
   showMaxBytes?: number;
 }
@@ -375,24 +402,46 @@ export function createGitApi(options: GitApiOptions): GitApi {
     }
   };
 
-  const listFiles = async (root: FileRoot): Promise<string[]> => {
+  const walk = (rootPath: string, signal?: AbortSignal): ReturnType<typeof walkFiles> =>
+    walkFiles(rootPath, WALK_LIMIT, { budgetMs: options.walkBudgetMs ?? GREP_TIMEOUT_MS, ...(signal === undefined ? {} : { signal }) });
+
+  /**
+   * partial — список неполон из-за бюджета времени: такой не кэшируется, следующий ⌘P обойдёт
+   * заново. Предел 50 000 — не partial: повтор дал бы тот же список.
+   */
+  const listFiles = async (root: FileRoot): Promise<{ paths: string[]; partial: boolean }> => {
     const rootPath = roots.rootPath(root);
     if ((await gitRootOf(git, rootPath)) !== null) {
       const result = await read(['ls-files', '-co', '--exclude-standard', '-z', ...PATHSPEC], rootPath);
-      if (result !== null && result.code === 0) return parseLsFiles(result.stdout);
+      if (result !== null && result.code === 0) return { paths: parseLsFiles(result.stdout), partial: false };
       console.warn(`[harnas] files: git ls-files exited with code ${String(result?.code)}, walking instead`);
     }
-    return walkFiles(rootPath, WALK_LIMIT);
+    const found = await walk(rootPath);
+    return { paths: found.paths, partial: found.truncated && found.paths.length < WALK_LIMIT };
   };
 
   const grepIn = async (root: FileRoot, query: GrepQuery, signal: AbortSignal): Promise<GrepResult> => {
+    // Неверная регулярка — одинаково на обоих корнях: воркер иначе молча не нашёл бы ничего, а git
+    // вышел бы с 128. Сборка RegExp не исполняет её — в main безопасна; прежний поиск уже отменён.
+    if (query.regex) {
+      try {
+        new RegExp(query.text);
+      } catch {
+        throw new HostError('bad_request', 'invalid regular expression');
+      }
+    }
     const rootPath = roots.rootPath(root);
-    const walk = async (): Promise<GrepResult> => {
-      const paths = await walkFiles(rootPath, WALK_LIMIT);
+    const walkAndGrep = async (): Promise<GrepResult> => {
+      const walked = await walk(rootPath, signal);
       if (signal.aborted) return { files: [], truncated: true };
-      return runGrepWorker({ kind: 'walk', query, rootPath, paths }, { signal, timeoutMs, spawn: options.spawnWorker });
+      // Бюджет обхода исчерпан — ищем в найденном: у воркера свой предел времени.
+      const found = await runGrepWorker(
+        { kind: 'walk', query, rootPath, paths: walked.paths },
+        { signal, timeoutMs, spawn: options.spawnWorker },
+      );
+      return { files: found.files, truncated: found.truncated || walked.truncated };
     };
-    if ((await gitRootOf(git, rootPath)) === null) return walk();
+    if ((await gitRootOf(git, rootPath)) === null) return walkAndGrep();
     const flags = [
       ...(query.caseSensitive ? [] : ['-i']),
       ...(query.wholeWord ? ['-w'] : []),
@@ -402,7 +451,7 @@ export function createGitApi(options: GitApiOptions): GitApi {
     // Запрос — только сразу после -e: иначе `-f/путь/вне/корней` git прочёл бы файлом шаблонов.
     const args = ['grep', '-n', '-I', '--no-color', '--null', ...flags, '--untracked', '-e', query.text, ...PATHSPEC];
     const result = await read(args, rootPath, { signal, onStdout: (chunk) => parser.push(chunk) });
-    if (result === null) return walk();
+    if (result === null) return walkAndGrep();
     const found = parser.result();
     if (signal.aborted) return { files: found.files, truncated: true };
     // 0 — нашлось, 1 — нет; null — погашен на пределе. Прочее — ошибка git (битая регулярка и т.п.).
@@ -420,14 +469,18 @@ export function createGitApi(options: GitApiOptions): GitApi {
   return {
     lsFiles: (root) => {
       const key = rootKey(root);
-      if (options.isTreeWatched?.(key) !== true) return listFiles(root);
+      if (options.isTreeWatched?.(key) !== true) return listFiles(root).then((found) => found.paths);
       const cached = lsCache.get(key);
       if (cached !== undefined) return cached;
-      const pending = listFiles(root);
+      const listed = listFiles(root);
+      const pending = listed.then((found) => found.paths);
       lsCache.set(key, pending);
-      pending.catch(() => {
+      const forget = (): void => {
         if (lsCache.get(key) === pending) lsCache.delete(key);
-      });
+      };
+      listed.then((found) => {
+        if (found.partial) forget();
+      }, forget);
       return pending;
     },
 
