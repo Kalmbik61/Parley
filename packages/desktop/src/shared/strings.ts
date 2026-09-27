@@ -84,6 +84,10 @@ export const S = {
   statusBar: {
     wakePaused: 'Auto-wake paused',
     wakeOn: 'Auto-wake on',
+    /** Хосту не хватает методов этой сборки окна (спека 3.2, 5.9). */
+    hostOutdated: 'Host is outdated — restart',
+    restartHostTitle: 'Restart host?',
+    restartHostDescription: 'Live agents will be interrupted and come back with --resume.',
   },
 
   /** Общие диалоги, не привязанные к своей области (mail/rooms/settings/…). */

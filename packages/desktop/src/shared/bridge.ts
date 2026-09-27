@@ -12,7 +12,8 @@ import type { Appearance, UiFile } from './ui-types.js';
 /** Состояние связи окна с хостом — источник для диалогов и строки статуса. */
 export type HostStatus =
   | { state: 'connecting' }
-  | { state: 'connected'; hostVersion: string }
+  /** `methods: null` — хост до этапа 3: ответ `hello` без списка методов (спека 3.2). */
+  | { state: 'connected'; hostVersion: string; methods: string[] | null }
   | { state: 'mismatch'; hostVersion: string; liveSessions: number | null }
   | { state: 'disconnected'; reason: string };
 

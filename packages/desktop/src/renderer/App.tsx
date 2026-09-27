@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { refKey } from '@harnas/protocol';
 import type { HarnasConfig } from '@harnas/core';
 import { getHostClient } from './host-client.js';
-import type { HostStatus } from '../shared/bridge.js';
 import { noticeText, S } from '../shared/strings.js';
 import { selectedSessionOf, useLayoutStore } from './layout/store.js';
 import { AppShell } from './shell/AppShell.js';
@@ -11,6 +10,7 @@ import { SettingsDialog } from './components/settings/SettingsDialog.js';
 import { sessionLabelFor } from './lib/participant.js';
 import { wireNotifications } from './notifications.js';
 import { useActivityStore } from './store/activity.js';
+import { useHostStore } from './store/host.js';
 import { useNoticesStore } from './store/notices.js';
 import { useUiStore } from './store/ui.js';
 import { useWorksStore } from './store/works.js';
@@ -39,7 +39,8 @@ function selectedParentId(): string | null {
 
 export function App(): JSX.Element {
   const bridge = getHostClient();
-  const [status, setStatus] = useState<HostStatus>({ state: 'connecting' });
+  // Статус связи — в `store/host.ts`: его читает и `useHostSupports` (кусок 3.1).
+  const status = useHostStore((state) => state.status);
   // Конфигурация хранится здесь ради терминала — панелям нужны живые
   // `fontFamily`/`fontSize` как значения, а не как CSS-переменные: xterm
   // красит канвой. Тему окна (тёмная/светлая) панели берут из `useUiStore`
@@ -57,7 +58,7 @@ export function App(): JSX.Element {
   const openSettingsDialog = useUiStore((state) => state.openSettingsDialog);
   const closeSettingsDialog = useUiStore((state) => state.closeSettingsDialog);
 
-  useEffect(() => getHostClient().onStatus(setStatus), []);
+  useEffect(() => useHostStore.getState().init(getHostClient()), []);
 
   // Хранилища и уведомления живут только пока связь с хостом есть: без неё
   // `works.list`/`settings.get` всё равно отвечать некому.

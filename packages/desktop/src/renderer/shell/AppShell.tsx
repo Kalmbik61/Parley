@@ -461,7 +461,13 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
           </ErrorBoundary>
         </div>
       )}
-      <StatusBar status={status} noticeLine={noticeLine} wakePaused={wakePaused} onToggleWake={() => void toggleWake(bridge)} />
+      <StatusBar
+        status={status}
+        noticeLine={noticeLine}
+        wakePaused={wakePaused}
+        onToggleWake={() => void toggleWake(bridge)}
+        onRestartHost={() => void bridge.app.restartHost()}
+      />
       <CommandPalette open={paletteOpen} commands={commands} onOpenChange={setPaletteOpen} />
       <SessionPicker
         open={picker !== null}

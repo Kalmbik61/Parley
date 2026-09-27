@@ -25,6 +25,7 @@ import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { AppShell } from './AppShell.js';
+import { REQUIRED_METHODS } from '../lib/capabilities.js';
 
 // Тесты 10, 13, 14, 15 куска 2.4 зовут `toast` и из `AppShell.tsx`
 // (отказ сплита), и из `layout/Tab.tsx` (закрытие вкладки) — без смонтированного
@@ -190,7 +191,7 @@ async function flush(): Promise<void> {
   });
 }
 
-const STATUS = { state: 'connected' as const, hostVersion: '0.0.0-test' };
+const STATUS = { state: 'connected' as const, hostVersion: '0.0.0-test', methods: [...REQUIRED_METHODS] };
 
 describe('AppShell — Landing и оболочка с работой (тест 6)', () => {
   it('без работ: Landing в центре, Titlebar и StatusBar на месте, баннер сразу после заголовка', async () => {

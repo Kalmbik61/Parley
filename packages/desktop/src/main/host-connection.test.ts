@@ -11,6 +11,8 @@ interface FakeServerOptions {
   hostVersion?: string;
   protocolOk?: boolean;
   liveSessions?: number;
+  /** Список методов в ответе `hello`; не задан — поля нет, как у хоста до этапа 3. */
+  methods?: string[];
 }
 
 /**
@@ -45,7 +47,15 @@ function startFakeServer(paths: HostPaths, options: FakeServerOptions = {}): Pro
               continue;
             }
             socket.write(
-              encodeLine({ id: message.id, result: { hostVersion, protocol: PROTOCOL_VERSION, pid: process.pid } }),
+              encodeLine({
+                id: message.id,
+                result: {
+                  hostVersion,
+                  protocol: PROTOCOL_VERSION,
+                  pid: process.pid,
+                  ...(options.methods === undefined ? {} : { methods: options.methods }),
+                },
+              }),
             );
             continue;
           }
@@ -159,6 +169,30 @@ describe('HostConnection', () => {
     expect(statuses.at(-1)).toEqual({ state: 'mismatch', hostVersion: '9.9.9', liveSessions: 2 });
     connection.close();
     server.close();
+  });
+
+  it('ответ hello без methods — methods: null, с methods — массив', async () => {
+    await writeToken(paths);
+    const old = await startFakeServer(paths, { hostVersion: '1.0.0' });
+    const statuses: unknown[] = [];
+    const first = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000 });
+    first.onStatus((status) => statuses.push(status));
+    await first.connect();
+    expect(statuses.at(-1)).toEqual({ state: 'connected', hostVersion: '1.0.0', methods: null });
+    first.close();
+    await new Promise<void>((resolve) => old.close(() => resolve()));
+
+    const fresh = await startFakeServer(paths, { hostVersion: '2.0.0', methods: ['hello', 'works.rename'] });
+    const second = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000 });
+    second.onStatus((status) => statuses.push(status));
+    await second.connect();
+    expect(statuses.at(-1)).toEqual({
+      state: 'connected',
+      hostVersion: '2.0.0',
+      methods: ['hello', 'works.rename'],
+    });
+    second.close();
+    fresh.close();
   });
 
   it('после host.shutdown переподключается к новому', async () => {

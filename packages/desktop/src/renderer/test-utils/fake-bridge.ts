@@ -15,6 +15,7 @@ import type {
 } from '@harnas/protocol';
 import type { HarnasBridge, HostStatus, MenuAction } from '../../shared/bridge.js';
 import type { WorkLayout } from '../../shared/layout-types.js';
+import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { DEFAULT_UI, normalizeUi, type UiFile } from '../../shared/ui-types.js';
 
 type Handler = (params: never) => unknown;
@@ -31,6 +32,11 @@ export interface FakeBridge extends HarnasBridge {
   readonly calls: Array<{ method: MethodName; params: unknown }>;
   emit<E extends EventName>(event: E, data: EventData<E>): void;
   emitStatus(status: HostStatus): void;
+  /**
+   * Методы хоста в статусе connected; null — хост до этапа 3. По умолчанию REQUIRED_METHODS.
+   * Заново рассылает статус подписчикам onStatus, как emitStatus.
+   */
+  setHostMethods(methods: string[] | null): void;
   emitMenu(action: MenuAction): void;
   readonly appNotified: Array<{ title: string; body: string }>;
   readonly badges: number[];
@@ -61,7 +67,11 @@ export function createFakeBridge(): FakeBridge {
   const layoutRetains: string[][] = [];
   const titlebarDoubleClicks: number[] = [];
   const layouts = new Map<string, WorkLayout>();
-  let status: HostStatus = { state: 'connected', hostVersion: '0.0.0-test' };
+  let status: HostStatus = {
+    state: 'connected',
+    hostVersion: '0.0.0-test',
+    methods: [...REQUIRED_METHODS],
+  };
   let ui: UiFile = DEFAULT_UI;
 
   const bridge: FakeBridge = {
@@ -153,6 +163,9 @@ export function createFakeBridge(): FakeBridge {
     emitStatus: (next) => {
       status = next;
       for (const listener of statusListeners) listener(next);
+    },
+    setHostMethods: (methods) => {
+      bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods });
     },
     emitMenu: (action) => {
       for (const listener of menuListeners) listener(action);

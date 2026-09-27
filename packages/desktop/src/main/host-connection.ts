@@ -8,6 +8,7 @@ import {
   type EventMessage,
   type MethodName,
   type NotificationName,
+  type Result,
 } from '@harnas/protocol';
 import type { HostStatus } from '../shared/bridge.js';
 import { S } from '../shared/strings.js';
@@ -168,9 +169,13 @@ export class HostConnection {
     );
 
     try {
-      const result = (await pendingPromise) as { hostVersion: string; protocol: number; pid: number };
+      const result = (await pendingPromise) as Result<'hello'>;
       this.reconnectDelayMs = 500;
-      this.setStatus({ state: 'connected', hostVersion: result.hostVersion });
+      this.setStatus({
+        state: 'connected',
+        hostVersion: result.hostVersion,
+        methods: result.methods ?? null,
+      });
     } catch (err) {
       if (err instanceof HostError && err.code === 'protocol_mismatch') {
         const data = err.data ?? {};

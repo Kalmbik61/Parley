@@ -26,6 +26,7 @@ import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { AppShell } from './AppShell.js';
+import { REQUIRED_METHODS } from '../lib/capabilities.js';
 
 vi.mock('sonner', () => ({ toast: vi.fn() }));
 
@@ -194,7 +195,11 @@ async function flush(): Promise<void> {
   });
 }
 
-const STATUS = { state: 'connected' as const, hostVersion: '0.0.0-test' };
+const STATUS = {
+  state: 'connected' as const,
+  hostVersion: '0.0.0-test',
+  methods: [...REQUIRED_METHODS],
+};
 
 function keyOf(id: string): string {
   return `/tmp/${id} ${id}`;
