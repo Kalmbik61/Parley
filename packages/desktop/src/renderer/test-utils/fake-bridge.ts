@@ -15,7 +15,18 @@ import type {
 } from '@harnas/protocol';
 import type { AppNote, FocusTarget, HarnasBridge, HostStatus } from '../../shared/bridge.js';
 import type { ActionId } from '../../shared/keybindings.js';
-import type { FileRoot, FileStat, Located } from '../../shared/files-types.js';
+import type {
+  DirEntry,
+  FileChangedEvent,
+  FileRoot,
+  FileStat,
+  GitStatusLetter,
+  GrepQuery,
+  GrepResult,
+  Located,
+  TextFile,
+  TreeChangedEvent,
+} from '../../shared/files-types.js';
 import type { WorkLayout } from '../../shared/layout-types.js';
 import type { IpcErrorInfo } from '../../shared/ipc-error.js';
 import { rootKey } from '../../shared/work-keys.js';
@@ -82,6 +93,33 @@ export interface FakeBridge extends HarnasBridge {
   /** Ответ app.saveDropImage: путь, null (картинки нет) или отказ — объект с code, как отказы подставного моста (кусок 5.4). */
   setSaveDropImage(answer: string | null | IpcErrorInfo): void;
   readonly saveDropImageCalls: Array<'clipboard'>;
+  /** Ответ `files.list`; по умолчанию `[]`. Отказ — объект с code (кусок 7.1a). */
+  setDir(root: FileRoot, dir: string, entries: DirEntry[] | IpcErrorInfo): void;
+  /** Ответ `files.readText`; по умолчанию отказ `not_found`. */
+  setFile(root: FileRoot, path: string, file: TextFile | IpcErrorInfo): void;
+  /** Ответ `files.readBytes`; по умолчанию отказ `not_found`. */
+  setBytes(root: FileRoot, path: string, bytes: Uint8Array | IpcErrorInfo): void;
+  /** Следующий write этого пути ответит conflict с этим mtimeMs; без него — ok с новым mtimeMs. */
+  setWriteConflict(root: FileRoot, path: string, mtimeMs: number): void;
+  /** Вызовы `files.write`, в том числе ответившие conflict. */
+  readonly writes: Array<{ root: FileRoot; path: string; text: string; expectedMtimeMs: number | null }>;
+  readonly readTextCalls: Array<{ root: FileRoot; path: string }>;
+  /** Ответ `files.lsFiles` корня; по умолчанию `[]`. Отказ — объект с code (кусок 7.1b). */
+  setLsFiles(root: FileRoot, paths: string[] | IpcErrorInfo): void;
+  /** Ответ следующих `files.grep`; по умолчанию пусто. */
+  setGrepResult(result: GrepResult | IpcErrorInfo): void;
+  /** Ответ `files.gitStatus` корня; по умолчанию `{}`. */
+  setGitStatus(root: FileRoot, status: Record<string, GitStatusLetter>): void;
+  /** `watch` корня → отказ `files:watch-failed`. */
+  setWatchFails(root: FileRoot): void;
+  emitFileChanged(e: FileChangedEvent): void;
+  emitTreeChanged(e: TreeChangedEvent): void;
+  readonly grepCalls: Array<{ root: FileRoot; query: GrepQuery; signalId: string }>;
+  readonly cancelCalls: string[];
+  readonly watchCalls: Array<{ root: FileRoot; path: string; id: string }>;
+  readonly unwatchCalls: string[];
+  readonly lsFilesCalls: FileRoot[];
+  readonly gitStatusCalls: FileRoot[];
 }
 
 export function createFakeBridge(): FakeBridge {
@@ -112,6 +150,29 @@ export function createFakeBridge(): FakeBridge {
   const pastes: number[] = [];
   let saveDropImageAnswer: string | null | IpcErrorInfo = null;
   const saveDropImageCalls: Array<'clipboard'> = [];
+  const dirs = new Map<string, DirEntry[] | IpcErrorInfo>();
+  const textFiles = new Map<string, TextFile | IpcErrorInfo>();
+  const byteFiles = new Map<string, Uint8Array | IpcErrorInfo>();
+  const writeConflicts = new Map<string, number>();
+  const writes: Array<{ root: FileRoot; path: string; text: string; expectedMtimeMs: number | null }> = [];
+  const readTextCalls: Array<{ root: FileRoot; path: string }> = [];
+  const lsFilesAnswers = new Map<string, string[] | IpcErrorInfo>();
+  let grepAnswer: GrepResult | IpcErrorInfo = { files: [], truncated: false };
+  const gitStatuses = new Map<string, Record<string, GitStatusLetter>>();
+  const watchFails = new Set<string>();
+  const changedListeners = new Set<(e: FileChangedEvent) => void>();
+  const treeListeners = new Set<(e: TreeChangedEvent) => void>();
+  const grepCalls: Array<{ root: FileRoot; query: GrepQuery; signalId: string }> = [];
+  const cancelCalls: string[] = [];
+  const watchCalls: Array<{ root: FileRoot; path: string; id: string }> = [];
+  const unwatchCalls: string[] = [];
+  const lsFilesCalls: FileRoot[] = [];
+  const gitStatusCalls: FileRoot[] = [];
+  let watchSeq = 0;
+  /** mtimeMs ответа write: растёт с каждой записью, как на диске. */
+  let writeMtimeMs = 1_700_000_000_000;
+  const fileKey = (root: FileRoot, path: string): string => `${rootKey(root)}\n${path}`;
+  const notFound = (path: string): IpcErrorInfo => ({ code: 'not_found', message: `fake-bridge: no file ${path}` });
   const layouts = new Map<string, WorkLayout>();
   let status: HostStatus = {
     state: 'connected',
@@ -155,11 +216,116 @@ export function createFakeBridge(): FakeBridge {
       saveDropImageAnswer = answer;
     },
     saveDropImageCalls,
+    setDir: (root, dir, entries) => {
+      dirs.set(fileKey(root, dir), entries);
+    },
+    setFile: (root, path, file) => {
+      textFiles.set(fileKey(root, path), file);
+    },
+    setBytes: (root, path, bytes) => {
+      byteFiles.set(fileKey(root, path), bytes);
+    },
+    setWriteConflict: (root, path, mtimeMs) => {
+      writeConflicts.set(fileKey(root, path), mtimeMs);
+    },
+    writes,
+    readTextCalls,
+    setLsFiles: (root, paths) => {
+      lsFilesAnswers.set(rootKey(root), paths);
+    },
+    setGrepResult: (result) => {
+      grepAnswer = result;
+    },
+    setGitStatus: (root, status) => {
+      gitStatuses.set(rootKey(root), status);
+    },
+    setWatchFails: (root) => {
+      watchFails.add(rootKey(root));
+    },
+    emitFileChanged: (e) => {
+      for (const listener of changedListeners) listener(e);
+    },
+    emitTreeChanged: (e) => {
+      for (const listener of treeListeners) listener(e);
+    },
+    grepCalls,
+    cancelCalls,
+    watchCalls,
+    unwatchCalls,
+    lsFilesCalls,
+    gitStatusCalls,
     files: {
       stat: async (root, paths) => paths.map((path) => fileStats.get(`${rootKey(root)}\n${path}`) ?? null),
       locate: async (workKey, absPaths) => {
         locateCalls.push({ workKey, absPaths: [...absPaths] });
         return absPaths.map((absPath) => located.get(`${workKey}\n${absPath}`) ?? null);
+      },
+      list: async (root, dir) => {
+        const answer = dirs.get(fileKey(root, dir)) ?? [];
+        if (!Array.isArray(answer)) throw answer;
+        return answer.map((entry) => ({ ...entry }));
+      },
+      readText: async (root, path) => {
+        readTextCalls.push({ root, path });
+        const answer = textFiles.get(fileKey(root, path)) ?? notFound(path);
+        if ('code' in answer) throw answer;
+        return { ...answer };
+      },
+      readBytes: async (root, path) => {
+        const answer = byteFiles.get(fileKey(root, path)) ?? notFound(path);
+        if (!(answer instanceof Uint8Array)) throw answer;
+        return answer.slice();
+      },
+      write: async (root, path, text, expectedMtimeMs) => {
+        writes.push({ root, path, text, expectedMtimeMs });
+        const key = fileKey(root, path);
+        const conflict = writeConflicts.get(key);
+        if (conflict !== undefined) {
+          writeConflicts.delete(key);
+          return { ok: false, conflict: { mtimeMs: conflict } };
+        }
+        writeMtimeMs += 1000;
+        return { ok: true, mtimeMs: writeMtimeMs };
+      },
+      watch: async (root, path) => {
+        if (path === '' && watchFails.has(rootKey(root))) {
+          throw { code: 'files:watch-failed', message: 'fake-bridge: watch failed' } satisfies IpcErrorInfo;
+        }
+        watchSeq += 1;
+        const id = `watch-${watchSeq}`;
+        watchCalls.push({ root, path, id });
+        return id;
+      },
+      unwatch: async (id) => {
+        unwatchCalls.push(id);
+      },
+      onChanged: (listener) => {
+        changedListeners.add(listener);
+        return () => changedListeners.delete(listener);
+      },
+      onTreeChanged: (listener) => {
+        treeListeners.add(listener);
+        return () => treeListeners.delete(listener);
+      },
+      lsFiles: async (root) => {
+        lsFilesCalls.push(root);
+        const answer = lsFilesAnswers.get(rootKey(root)) ?? [];
+        if (!Array.isArray(answer)) throw answer;
+        return [...answer];
+      },
+      grep: async (root, query, signalId) => {
+        grepCalls.push({ root, query: { ...query }, signalId });
+        const answer = grepAnswer;
+        if ('code' in answer) throw answer;
+        return structuredClone(answer);
+      },
+      cancel: async (signalId) => {
+        cancelCalls.push(signalId);
+      },
+      gitShow: async () => null,
+      gitStatus: async (root) => {
+        gitStatusCalls.push(root);
+        return { ...(gitStatuses.get(rootKey(root)) ?? {}) };
       },
     },
 

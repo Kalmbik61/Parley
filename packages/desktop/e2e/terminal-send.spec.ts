@@ -48,6 +48,31 @@ async function sendToAgent(window: Page, ref: Ref, text: string, submit: boolean
   );
 }
 
+/** Синтетический бросок файла на поле ввода терминала — как в тесте броска ниже; исход preventDefault. */
+async function dropFile(window: Page, file: string): Promise<{ over: boolean; drop: boolean }> {
+  await window.evaluate(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.id = 'e2e-drop-input';
+    input.style.display = 'none';
+    document.body.appendChild(input);
+  });
+  await window.locator('#e2e-drop-input').setInputFiles(file);
+  return window.locator('.xterm-helper-textarea').first().evaluate((textarea) => {
+    const input = document.getElementById('e2e-drop-input') as HTMLInputElement;
+    const picked = input.files?.[0];
+    if (picked === undefined) throw new Error('файл не выбран');
+    const data = new DataTransfer();
+    data.items.add(picked);
+    const over = new DragEvent('dragover', { dataTransfer: data, bubbles: true, cancelable: true });
+    textarea.dispatchEvent(over);
+    const drop = new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true });
+    textarea.dispatchEvent(drop);
+    input.remove();
+    return { over: over.defaultPrevented, drop: drop.defaultPrevented };
+  });
+}
+
 test.describe('отправка агенту из окна (кусок 5.4)', () => {
   let home: string;
   let project: string;
@@ -144,6 +169,37 @@ test.describe('отправка агенту из окна (кусок 5.4)', ()
     await expect.poll(() => screenText(window)).toContain(`PASTE<<'${file}' >>`);
     await window.waitForTimeout(1000);
     expect(await screenText(window)).not.toContain('echo:');
+  });
+
+  // Раунд fix-host-resync (review-5.4-B, Critical): после Resume открытая вкладка молчала —
+  // хост терял её подписку на exit и о новом процессе не сообщал; обход — переключить вкладку.
+  test('stub вышел → бросок даёт тост «isn\'t running» с Resume → после Resume бросок виден в той же вкладке', async () => {
+    // Выход по команде самого stub, набранной в терминале, — сигналы и поиск pid не нужны.
+    const input = window.locator('.xterm-helper-textarea');
+    await input.click();
+    await input.type('STUB_EXIT');
+    await input.press('Enter');
+    await expect.poll(async () => ((await window.evaluate(() => (globalThis as unknown as Harnas).harnas.call('host.info', {}))) as { liveSessions: number }).liveSessions).toBe(0);
+    // Resume в тосте есть только у сессии, чей выход уже записан в карту (canResume); запись
+    // идёт через файл карты и рассылку works.changed — на холодном старте дольше 5 с по умолчанию.
+    await expect(window.getByText('Asleep').first()).toBeVisible({ timeout: 15_000 });
+
+    const first = path.join(project, 'before-resume.txt');
+    await writeFile(first, 'x');
+    expect(await dropFile(window, first)).toEqual({ over: true, drop: true });
+    const toast = window.locator('[data-sonner-toast]').filter({ hasText: "isn't running" });
+    await expect(toast).toBeVisible();
+    await toast.getByRole('button', { name: 'Resume' }).click();
+    await expect.poll(async () => ((await window.evaluate(() => (globalThis as unknown as Harnas).harnas.call('host.info', {}))) as { liveSessions: number }).liveSessions).toBe(1);
+
+    // Новый stub включает bracketed paste не сразу после старта процесса, а экран вкладки без
+    // исправления его строку готовности не покажет — ждём так же, как beforeEach после неё.
+    await window.waitForTimeout(500);
+    // Ни переключения вкладки, ни ручного pty.attach: вкладка та же, что была открыта.
+    const second = path.join(project, 'after-resume.txt');
+    await writeFile(second, 'y');
+    expect(await dropFile(window, second)).toEqual({ over: true, drop: true });
+    await expect.poll(() => screenText(window), { timeout: 10_000 }).toContain(`PASTE<<'${second}' >>`);
   });
 
   test('бросок файла на терминал — путь в кавычках shell без Enter', async () => {

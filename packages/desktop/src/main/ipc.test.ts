@@ -94,6 +94,9 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore; roots?
       insideAnyRoot: vi.fn().mockResolvedValue(null),
       roots: vi.fn().mockReturnValue([]),
       expandHome: vi.fn((p: string) => p),
+      rootPath: vi.fn(() => {
+        throw new FilesDeniedError('no roots');
+      }),
     } satisfies RootsRegistry);
 
   registerIpc({

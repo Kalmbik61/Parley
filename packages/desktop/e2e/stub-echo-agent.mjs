@@ -27,6 +27,9 @@ const PASTE_END = '\x1b[201~';
 function typed(text) {
   for (const char of text) {
     if (char === '\r' || char === '\n') {
+      // Команда выхода (раунд fix-host-resync): E2E завершает свой stub сам, без сигнала чужим
+      // процессам и без поиска pid по всей машине.
+      if (buffer === 'STUB_EXIT') process.exit(0);
       // В сыром режиме tty сам \n в \r\n не переводит: строка вставки может быть многострочной.
       process.stdout.write(bracketed ? `\r\necho: ${buffer.replace(/\r?\n/g, '\r\n')}\r\n` : `echo: ${buffer}\r\n`);
       buffer = '';
