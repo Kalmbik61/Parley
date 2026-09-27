@@ -20,6 +20,7 @@ export type MenuAction =
   | 'new-session'
   | 'new-work'
   | 'close-panel'
+  | 'reopen-tab'
   | 'split-right'
   | 'split-down'
   | 'prev-panel'

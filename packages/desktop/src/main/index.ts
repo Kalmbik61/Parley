@@ -90,13 +90,21 @@ if (!gotLock) {
     const preloadPath = path.join(dirname, '../preload/index.js');
     const indexHtmlPath = path.join(dirname, '../renderer/index.html');
 
+    // Флаги окна из `search` (`location.search` рендерера читает их сама, `main/window.ts`
+    // просто грузит файл с готовой строкой запроса): `renderer=dom` — E2E читают текст
+    // экрана терминала, им нужен DOM-рендер xterm вместо WebGL; `center=new` — новый центр
+    // раскладки (`?center=new`, кусок 2.4) вместо прежнего `Workspace` на dockview.
+    const searchFlags = [
+      process.env.HARNAS_TERMINAL_RENDERER === 'dom' ? 'renderer=dom' : null,
+      process.env.HARNAS_DESKTOP_CENTER === 'new' ? 'center=new' : null,
+    ].filter((flag): flag is string => flag !== null);
+
     const openWindow = (): BrowserWindow => {
       const window = createMainWindow({
         dark: nativeTheme.shouldUseDarkColors,
         preloadPath,
         indexHtmlPath,
-        // E2E читают текст экрана терминала — им нужен DOM-рендер xterm вместо WebGL.
-        ...(process.env.HARNAS_TERMINAL_RENDERER === 'dom' ? { search: 'renderer=dom' } : {}),
+        ...(searchFlags.length > 0 ? { search: searchFlags.join('&') } : {}),
       });
       // Раньше did-finish-load слать события в это окно бессмысленно и вредно:
       // прелоад ещё может не успеть навесить свои `ipcRenderer.on` (первая,

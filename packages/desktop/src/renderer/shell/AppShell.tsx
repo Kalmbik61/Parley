@@ -1,22 +1,36 @@
 /**
- * Оболочка окна (кусок 2.3, спека 4.4, 5.1, 5.9, 5.10): заголовок, сайдбар
- * работ, центр и строка статуса — рамка, которую раньше собирал `App.tsx`
- * напрямую. Центр до 2.4 — прежний `Workspace` на dockview; новый центр
- * (дерево сплитов) появится за флагом `?center=new`.
+ * Оболочка окна (куски 2.3–2.4, спека 4.4, 5.1, 5.3, 5.9, 5.10): заголовок,
+ * сайдбар работ, центр и строка статуса — рамка, которую раньше собирал
+ * `App.tsx` напрямую. Центр — прежний `Workspace` на dockview; с
+ * `?center=new` (читается из `location.search` один раз при монтировании,
+ * кусок 2.4) — `LayoutView` активной работы, а `Workspace` вовсе не
+ * монтируется. Флаг сохранится до 2.7, когда dockview уйдёт совсем.
  *
  * Сюда же переехали из `App.tsx`: ручка `Workspace` (`workspaceRef`),
  * `selectWorkByNumber` (⌘1…⌘9) и подписка на меню `work-1…9` — читать снимок
  * работ и решать, какую сессию открыть, можно и здесь, и там, но `AppShell`
  * уже держит саму ручку `Workspace`, а App.tsx после этого куска — нет.
+ * `selectWorkByNumber` пока не тронут флагом (бриф куска 2.4 не называет его
+ * среди действий, которые под флагом ведут себя иначе) — под `?center=new`
+ * ⌘1…⌘9 временно не переключают сессию, это донастроят более поздние куски.
  * `CommandPalette`, `SessionPicker`, `NewWorkDialog` и `CreateRoomDialog`
  * монтируются здесь же (а не в `Sidebar`/`Workspace`) — они нужны и над
  * `Landing`, где ни сайдбара, ни `Workspace` вовсе нет.
+ *
+ * Под флагом `AppShell` сам обслуживает часть меню (`close-panel`,
+ * `reopen-tab`, `prev-panel`, `next-panel`, `split-right`, `split-down`) и
+ * «открывающие» действия палитры (`openSession`/`openMail`/`openRoom`) —
+ * прежний путь через `workspaceRef` для них недоступен (`Workspace` не
+ * смонтирован), поэтому вместо dockview-API они зовут `setActiveWork` и
+ * `apply` в `layout/store.ts` напрямую.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import type { WorkSession } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge, HostStatus } from '../../shared/bridge.js';
+import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { noticeText, S } from '../../shared/strings.js';
 import { LEFT_SIDEBAR } from '../../shared/ui-types.js';
 import { InterruptedBanner } from '../components/InterruptedBanner.js';
@@ -29,7 +43,11 @@ import { Sidebar } from '../components/sidebar/Sidebar.js';
 import { buildCommands } from '../lib/commands.js';
 import { sessionLabelFor, sessionRowLabel } from '../lib/participant.js';
 import { treeOrder, workKey } from '../lib/tree-order.js';
+import { tabId } from '../layout/ids.js';
+import { LayoutView } from '../layout/LayoutView.js';
 import { useLayoutPersistence } from '../layout/persistence.js';
+import { useLayoutStore } from '../layout/store.js';
+import { focusGroup, groups, openTab, reopenClosed, splitGroup, type GroupSizes } from '../layout/tree.js';
 import { useNoticesStore } from '../store/notices.js';
 import { useUiStore } from '../store/ui.js';
 import { orderedWorks, useWorksStore } from '../store/works.js';
@@ -38,6 +56,28 @@ import { Landing } from './Landing.js';
 import { Resizer } from './Resizer.js';
 import { StatusBar } from './StatusBar.js';
 import { Titlebar } from './Titlebar.js';
+
+/** Id сессий, у которых уже открыт терминал в раскладке работы — кандидаты `SessionPicker` при «Разделить» (спека 5.2). */
+function openTerminalSessionIds(layout: WorkLayout): string[] {
+  return groups(layout).flatMap((group) => group.tabs.filter((tab) => tab.kind === 'terminal').map((tab) => tab.sessionId));
+}
+
+/**
+ * Пиксельные размеры всех групп текущей раскладки — `GroupView.tsx` метит
+ * каждую `data-group-id` (кусок 2.4). Нужны `splitGroup`/`moveTab` для отказа
+ * «слишком мало места» (спека 5.2, «Числа»: минимум 240×160): в jsdom
+ * (компонентные тесты) `getBoundingClientRect` без подмены дал бы одни нули.
+ */
+function measureGroupSizes(): GroupSizes {
+  const sizes: GroupSizes = {};
+  for (const element of document.querySelectorAll<HTMLElement>('[data-group-id]')) {
+    const id = element.dataset.groupId;
+    if (id === undefined) continue;
+    const rect = element.getBoundingClientRect();
+    sizes[id] = { width: rect.width, height: rect.height };
+  }
+  return sizes;
+}
 
 export interface AppShellProps {
   bridge: HarnasBridge;
@@ -50,6 +90,13 @@ export interface AppShellProps {
 
 export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps): JSX.Element {
   const workspaceRef = useRef<WorkspaceHandle>(null);
+
+  // Флаг нового центра — читается из `location.search` один раз при монтировании
+  // (кусок 2.4): `?center=new` не появляется и не исчезает за время жизни окна,
+  // `main/index.ts` ставит его в `search` при `HARNAS_DESKTOP_CENTER=new` ещё до
+  // загрузки страницы.
+  const [centerNew] = useState(() => new URLSearchParams(location.search).get('center') === 'new');
+  const activeWorkKey = useLayoutStore((state) => state.activeWorkKey);
 
   const entries = useWorksStore((state) => state.entries);
   const loading = useWorksStore((state) => state.loading);
@@ -106,6 +153,38 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     );
   };
 
+  // Под флагом `close-panel`/`reopen-tab`/`prev-panel`/`next-panel`/
+  // `split-right`/`split-down` больше не обслуживает `Workspace` (тот вовсе не
+  // смонтирован) — вместо dockview-API эти пять действий работают прямо через
+  // `layout/store.ts` на раскладке активной работы (спека 5.3, п. «Клавиши»).
+  const closeActiveTabCenterNew = (): void => {
+    const key = useLayoutStore.getState().activeWorkKey;
+    const layout = key === null ? undefined : useLayoutStore.getState().layouts[key];
+    if (key === null || layout === undefined) return;
+    const activeGroup = groups(layout).find((group) => group.id === layout.activeGroupId);
+    const activeTabId = activeGroup?.activeTabId;
+    if (activeTabId !== null && activeTabId !== undefined) void useLayoutStore.getState().requestCloseTabs(key, [activeTabId]);
+  };
+
+  const focusAdjacentGroupCenterNew = (delta: 1 | -1): void => {
+    const key = useLayoutStore.getState().activeWorkKey;
+    const layout = key === null ? undefined : useLayoutStore.getState().layouts[key];
+    if (key === null || layout === undefined) return;
+    const all = groups(layout);
+    if (all.length === 0) return;
+    const index = all.findIndex((group) => group.id === layout.activeGroupId);
+    const nextIndex = (((index === -1 ? 0 : index + delta) % all.length) + all.length) % all.length;
+    const target = all[nextIndex];
+    if (target !== undefined) useLayoutStore.getState().apply(key, (l) => focusGroup(l, target.id));
+  };
+
+  const beginSplitCenterNew = (direction: 'right' | 'down'): void => {
+    const key = useLayoutStore.getState().activeWorkKey;
+    const layout = key === null ? undefined : useLayoutStore.getState().layouts[key];
+    if (key === null || layout === undefined) return;
+    useUiStore.getState().openPicker({ workKey: key, direction, openSessionIds: openTerminalSessionIds(layout) });
+  };
+
   useEffect(
     () =>
       bridge.app.onMenu((action) => {
@@ -113,12 +192,30 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
         else if (action === 'new-work') openNewWorkDialog();
         else if (action === 'toggle-left-sidebar') setSidebar('left', { open: !useUiStore.getState().ui.leftSidebar.open });
         else if (action.startsWith('work-')) selectWorkByNumber(Number(action.slice('work-'.length)));
+        else if (!centerNew) return;
+        else if (action === 'close-panel') closeActiveTabCenterNew();
+        else if (action === 'reopen-tab') {
+          const key = useLayoutStore.getState().activeWorkKey;
+          if (key !== null) useLayoutStore.getState().apply(key, reopenClosed);
+        } else if (action === 'prev-panel') focusAdjacentGroupCenterNew(-1);
+        else if (action === 'next-panel') focusAdjacentGroupCenterNew(1);
+        else if (action === 'split-right') beginSplitCenterNew('right');
+        else if (action === 'split-down') beginSplitCenterNew('down');
       }),
-    [bridge],
+    [bridge, centerNew],
   );
 
   const pickerEntry = picker === null ? undefined : ordered.find((entry) => workKey(entry.projectPath, entry.map.work.id) === picker.workKey);
   const pickerCandidates = picker === null || pickerEntry === undefined ? [] : sessionCandidates(pickerEntry, new Set(picker.openSessionIds));
+
+  // Открывающие действия палитры под флагом: сессия/почта/комната могут
+  // принадлежать НЕ активной сейчас работе (в отличие от общей сетки dockview,
+  // у каждой работы теперь своя раскладка) — сначала переключить работу, потом
+  // открыть вкладку в НЕЙ (бриф куска 2.4, «действия палитры "открыть"»).
+  const openTabCenterNew = (key: string, tab: TabSpec): void => {
+    useLayoutStore.getState().setActiveWork(key);
+    useLayoutStore.getState().apply(key, (layout) => openTab(layout, tab));
+  };
 
   const commands = buildCommands({
     works: entries,
@@ -126,10 +223,16 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     wakePaused,
     recentSessionRefs,
     actions: {
-      openSession: (ref, key, title) => workspaceRef.current?.openSession(ref, key, title),
-      openMail: (key) => workspaceRef.current?.openMail(key),
-      openRoom: (key, roomId, title) => workspaceRef.current?.openRoom(key, roomId, title),
-      closeActivePanel: () => workspaceRef.current?.closeActivePanel(),
+      openSession: (ref, key, title) =>
+        centerNew
+          ? openTabCenterNew(key, { kind: 'terminal', id: tabId.terminal(ref.sessionId), sessionId: ref.sessionId })
+          : workspaceRef.current?.openSession(ref, key, title),
+      openMail: (key) => (centerNew ? openTabCenterNew(key, { kind: 'mail', id: tabId.mail() }) : workspaceRef.current?.openMail(key)),
+      openRoom: (key, roomId, title) =>
+        centerNew
+          ? openTabCenterNew(key, { kind: 'room', id: tabId.room(roomId), roomId })
+          : workspaceRef.current?.openRoom(key, roomId, title),
+      closeActivePanel: () => (centerNew ? closeActiveTabCenterNew() : workspaceRef.current?.closeActivePanel()),
       newSession: () => {
         const state = useUiStore.getState();
         state.openNewSessionDialog(state.selectedRef?.sessionId ?? null);
@@ -191,7 +294,20 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
             </>
           ) : null}
           <ErrorBoundary title={S.shell.layoutError}>
-            <Workspace ref={workspaceRef} bridge={bridge} works={entries} fontFamily={fontFamily} fontSize={fontSize} />
+            {centerNew ? (
+              // Активной работы ещё нет (`layout/persistence.ts` её не выбрал) —
+              // центр пуст: ни групп, ни строки вкладок в `#titlebar-tabs`
+              // (спека 5.3, тест 15). `LayoutView` сам ищет свою работу в
+              // `store/works.ts` и ничего не покажет, пока её тоже нет —
+              // проверка тут не даёт смонтироваться раньше времени.
+              activeWorkKey !== null ? (
+                <LayoutView workKey={activeWorkKey} bridge={bridge} fontFamily={fontFamily} fontSize={fontSize} />
+              ) : (
+                <div className="min-h-0 min-w-0 flex-1" />
+              )
+            ) : (
+              <Workspace ref={workspaceRef} bridge={bridge} works={entries} fontFamily={fontFamily} fontSize={fontSize} />
+            )}
           </ErrorBoundary>
         </div>
       )}
@@ -205,11 +321,24 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
         }}
         onSelect={(sessionRef) => {
           if (picker === null) return;
-          const label = sessionRowLabel(
-            sessionRef.sessionId,
-            pickerEntry?.map.sessions.find((session) => session.id === sessionRef.sessionId)?.label ?? '',
-          );
-          workspaceRef.current?.openBeside(sessionRef, picker.workKey, label, picker.direction);
+          if (centerNew) {
+            const layout = useLayoutStore.getState().layouts[picker.workKey];
+            if (layout !== undefined) {
+              const tab: TabSpec = { kind: 'terminal', id: tabId.terminal(sessionRef.sessionId), sessionId: sessionRef.sessionId };
+              const direction = picker.direction === 'right' ? 'row' : 'column';
+              const error = useLayoutStore
+                .getState()
+                .apply(picker.workKey, (l) => splitGroup(l, layout.activeGroupId, direction, tab, measureGroupSizes()));
+              if (error === 'too-many-groups') toast(S.tabs.tooManyGroups);
+              else if (error === 'too-small') toast(S.tabs.tooSmall);
+            }
+          } else {
+            const label = sessionRowLabel(
+              sessionRef.sessionId,
+              pickerEntry?.map.sessions.find((session) => session.id === sessionRef.sessionId)?.label ?? '',
+            );
+            workspaceRef.current?.openBeside(sessionRef, picker.workKey, label, picker.direction);
+          }
           closePicker();
         }}
       />

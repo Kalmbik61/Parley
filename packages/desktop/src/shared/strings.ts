@@ -228,6 +228,23 @@ export const S = {
     findPlaceholder: 'Find…',
   },
 
+  /** Раскладка: строка вкладок и тела вкладок — `layout/*` (кусок 2.4, спека 5.3, 5.8, 5.10). */
+  tabs: {
+    mail: 'Mail',
+    /** `Changes S02` без коммита, `Changes S02 · a1b2c3d` — с ним (первые 7 hex, спека 5.2). */
+    diffTitle: (sessionTag: string, shortHash: string | null): string =>
+      shortHash === null ? `Changes ${sessionTag}` : `Changes ${sessionTag} · ${shortHash}`,
+    openTab: 'Open…',
+    emptyGroup: 'Open a session from the sidebar, ⌘T for a new session',
+    closedToast: 'Tab closed — ⌘⇧T to reopen',
+    tooSmall: 'Not enough room for another group',
+    tooManyGroups: 'No more than 8 groups per workspace',
+    missingSession: 'Session deleted',
+    missingRoom: 'Room deleted',
+    closeOthers: 'Close others',
+    closeToRight: 'Close to the right',
+  },
+
   /** Баннер прерванных сессий — `components/InterruptedBanner.tsx`. */
   banners: {
     interrupted: (labels: string): string => `Interrupted mid-turn: ${labels}`,
@@ -258,6 +275,7 @@ export const S = {
     newSession: 'New session',
     newWork: 'New workspace',
     closePanel: 'Close panel',
+    reopenTab: 'Reopen closed tab',
     splitRight: 'Split right',
     splitDown: 'Split down',
     prevPanel: 'Previous panel',

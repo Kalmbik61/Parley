@@ -39,6 +39,7 @@ export function createAppMenu(getFocusedWindow: () => BrowserWindow | null): Men
         { label: S.menu.newSession, accelerator: 'CmdOrCtrl+T', click: () => send('new-session') },
         { label: S.menu.newWork, accelerator: 'CmdOrCtrl+N', click: () => send('new-work') },
         { label: S.menu.closePanel, accelerator: 'CmdOrCtrl+W', click: () => send('close-panel') },
+        { label: S.menu.reopenTab, accelerator: 'CmdOrCtrl+Shift+T', click: () => send('reopen-tab') },
         { label: S.menu.splitRight, accelerator: 'CmdOrCtrl+D', click: () => send('split-right') },
         { label: S.menu.splitDown, accelerator: 'CmdOrCtrl+Shift+D', click: () => send('split-down') },
         { type: 'separator' },
