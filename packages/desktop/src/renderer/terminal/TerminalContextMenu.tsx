@@ -8,7 +8,7 @@
  * экран xterm: агенту ничего не уходит, скроллбэк хоста остаётся.
  */
 
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import type { Terminal } from '@xterm/xterm';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
@@ -26,37 +26,57 @@ export interface TerminalContextMenuProps {
 export function TerminalContextMenu({ bridge, terminal, onClear, onFind, onSplit, children }: TerminalContextMenuProps): JSX.Element {
   // Выделение читается в момент открытия: пока меню открыто, вывод агента его не снимет из пунктов.
   const [hasSelection, setHasSelection] = useState(false);
+  // Пункт выполняется, когда меню закроется. Пока оно открыто, FocusScope Radix держит фокус
+  // внутри меню, а после размонтирования в setTimeout(0) возвращает его туда, где он был до
+  // правого клика: фокус, поставленный прямо в onSelect, был бы отнят, и вставка от
+  // межпроцессного app.paste() ушла бы мимо терминала. onCloseAutoFocus гасит этот возврат и
+  // выполняет пункт — фокус ставит он сам. null — меню закрыто без выбора (Esc, клик мимо):
+  // тогда возврат фокуса как у Radix.
+  const pending = useRef<(() => void) | null>(null);
+  const afterClose = (action: () => void) => () => {
+    pending.current = action;
+  };
 
   return (
     <ContextMenu onOpenChange={(open) => open && setHasSelection(terminal?.hasSelection() ?? false)}>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent data-testid="terminal-context-menu">
+      <ContextMenuContent
+        data-testid="terminal-context-menu"
+        onCloseAutoFocus={(event) => {
+          const action = pending.current;
+          pending.current = null;
+          if (action === null) return;
+          event.preventDefault();
+          action();
+        }}
+      >
         {hasSelection ? (
           <ContextMenuItem
-            onSelect={() => {
+            onSelect={afterClose(() => {
               const text = terminal?.getSelection() ?? '';
               navigator.clipboard.writeText(text).catch((error: unknown) => console.warn('[harnas] clipboard', error));
-            }}
+            })}
           >
             {S.common.copy}
           </ContextMenuItem>
         ) : null}
         <ContextMenuItem
-          onSelect={() => {
+          onSelect={afterClose(() => {
             // Фокус до вставки: событие paste получает сфокусированный элемент — поле xterm.
             terminal?.focus();
             bridge.app.paste();
-          }}
+          })}
         >
           {S.terminal.paste}
         </ContextMenuItem>
-        <ContextMenuItem onSelect={() => terminal?.selectAll()}>{S.terminal.selectAll}</ContextMenuItem>
+        <ContextMenuItem onSelect={afterClose(() => terminal?.selectAll())}>{S.terminal.selectAll}</ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={onClear}>{S.terminal.clear}</ContextMenuItem>
-        <ContextMenuItem onSelect={onFind}>{S.actions.find}</ContextMenuItem>
+        <ContextMenuItem onSelect={afterClose(onClear)}>{S.terminal.clear}</ContextMenuItem>
+        {/* Find: openSearch сам ставит фокус в поле поиска. */}
+        <ContextMenuItem onSelect={afterClose(onFind)}>{S.actions.find}</ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => onSplit('right')}>{S.actions.splitRight}</ContextMenuItem>
-        <ContextMenuItem onSelect={() => onSplit('down')}>{S.actions.splitDown}</ContextMenuItem>
+        <ContextMenuItem onSelect={afterClose(() => onSplit('right'))}>{S.actions.splitRight}</ContextMenuItem>
+        <ContextMenuItem onSelect={afterClose(() => onSplit('down'))}>{S.actions.splitDown}</ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );

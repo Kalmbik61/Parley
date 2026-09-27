@@ -56,6 +56,14 @@ async function openMenu(selection = ''): Promise<void> {
 
 const item = (name: string): HTMLElement => screen.getByRole('menuitem', { name });
 
+/** Пункт меню выполняется после закрытия — в onCloseAutoFocus, из setTimeout(0) Radix. */
+async function closeTimers(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
 describe('тест 7: TerminalContextMenu', () => {
   it('семь пунктов по порядку спеки 8.4; Copy — только при выделении', async () => {
     await openMenu('picked');
@@ -69,9 +77,7 @@ describe('тест 7: TerminalContextMenu', () => {
       'Split down',
     ]);
     fireEvent.click(item('Copy'));
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await closeTimers();
     expect(clipboard).toEqual(['picked']);
     cleanup();
 
@@ -83,6 +89,7 @@ describe('тест 7: TerminalContextMenu', () => {
   it('Paste фокусирует терминал и пишет запись в pastes', async () => {
     await openMenu();
     fireEvent.click(item('Paste'));
+    await closeTimers();
     expect(xtermMock.callsOf('focus', 0)).toHaveLength(1);
     expect(bridge.pastes).toHaveLength(1);
   });
@@ -90,9 +97,11 @@ describe('тест 7: TerminalContextMenu', () => {
   it('Select all — selectAll; Clear — clear без pty.input', async () => {
     await openMenu();
     fireEvent.click(item('Select all'));
+    await closeTimers();
     expect(xtermMock.callsOf('selectAll', 0)).toHaveLength(1);
     fireEvent.contextMenu(screen.getByTestId('terminal-surface-pad'));
     fireEvent.click(item('Clear'));
+    await closeTimers();
     expect(xtermMock.callsOf('clear', 0)).toHaveLength(1);
     expect(bridge.notified.filter((n) => n.method === 'pty.input')).toEqual([]);
   });
@@ -100,12 +109,82 @@ describe('тест 7: TerminalContextMenu', () => {
   it('Find открывает полосу поиска', async () => {
     await openMenu();
     fireEvent.click(item('Find'));
+    await closeTimers();
     expect(screen.getByPlaceholderText('Find…')).toBeTruthy();
   });
 
   it('Split right — палитра в режиме splitRight (openWith, кусок 6.2)', async () => {
     await openMenu();
     fireEvent.click(item('Split right'));
+    await closeTimers();
     expect(usePaletteStore.getState()).toMatchObject({ open: true, mode: 'splitRight' });
+  });
+});
+
+/**
+ * Раунд fix-main-r1, п.2: Radix при закрытии меню возвращает фокус туда, где он был до правого
+ * клика, через setTimeout(0) — Paste и Find не должны его отдавать.
+ */
+describe('фокус после Paste и Find', () => {
+  /** Поле ввода xterm: настоящий фейк только пишет focus() в журнал, здесь он двигает фокус. */
+  function wireXtermTextarea(): void {
+    xtermMock.onOpen = (element) => {
+      const textarea = document.createElement('textarea');
+      textarea.className = 'xterm-helper-textarea';
+      element.appendChild(textarea);
+    };
+    xtermMock.onCall = (term, method) => {
+      if (method === 'focus') term.element?.querySelector('textarea')?.focus();
+    };
+  }
+
+  async function openMenuWithFocusElsewhere(): Promise<HTMLButtonElement> {
+    wireXtermTextarea();
+    const other = document.createElement('button');
+    other.textContent = 'sidebar';
+    document.body.appendChild(other);
+    await openMenu();
+    other.focus();
+    // Фокус до правого клика — вне терминала (так его и запомнит FocusScope меню).
+    fireEvent.contextMenu(screen.getByTestId('terminal-surface-pad'));
+    return other;
+  }
+
+  it('Paste: фокус в терминале до app.paste() и остаётся там после закрытия меню', async () => {
+    const other = await openMenuWithFocusElsewhere();
+    const focusAtPaste: (Element | null)[] = [];
+    const originalPaste = bridge.app.paste;
+    bridge.app.paste = () => {
+      focusAtPaste.push(document.activeElement);
+      originalPaste();
+    };
+    fireEvent.click(item('Paste'));
+    await closeTimers();
+    const textarea = xtermMock.terminals[0]?.element?.querySelector('textarea');
+    expect(textarea).toBeTruthy();
+    expect(focusAtPaste).toEqual([textarea]);
+    expect(document.activeElement).toBe(textarea);
+    expect(document.activeElement).not.toBe(other);
+    other.remove();
+  });
+
+  it('Find: фокус в поле поиска и остаётся там после закрытия меню', async () => {
+    const other = await openMenuWithFocusElsewhere();
+    fireEvent.click(item('Find'));
+    await closeTimers();
+    expect(document.activeElement).toBe(screen.getByPlaceholderText('Find…'));
+    other.remove();
+  });
+
+  it('Find при уже открытой полосе: фокус снова в поле', async () => {
+    const other = await openMenuWithFocusElsewhere();
+    fireEvent.click(item('Find'));
+    await closeTimers();
+    other.focus();
+    fireEvent.contextMenu(screen.getByTestId('terminal-surface-pad'));
+    fireEvent.click(item('Find'));
+    await closeTimers();
+    expect(document.activeElement).toBe(screen.getByPlaceholderText('Find…'));
+    other.remove();
   });
 });
