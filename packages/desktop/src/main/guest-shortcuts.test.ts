@@ -87,4 +87,30 @@ describe('forwardGuestShortcuts (тест 7)', () => {
     expect(guest.input({ key: 'j', code: 'KeyJ', meta: true })).toBe(false);
     expect(send).not.toHaveBeenCalled();
   });
+
+  it('⌃Tab и ⌃⇧Tab — остаются странице: keyUp ⌃ из гостя не долетит, цикл MRU не закончится (раунд исправлений 1)', () => {
+    const guest = fakeGuest();
+    const send = vi.fn<(id: ActionId) => void>();
+    forwardGuestShortcuts(guest.contents, send);
+
+    expect(guest.input({ key: 'Tab', code: 'Tab', control: true })).toBe(false);
+    expect(guest.input({ key: 'Tab', code: 'Tab', control: true, shift: true })).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('автоповтор: ⌘N удержан — один send, повторы погашены; ⌘= удержан — каждый шаг', () => {
+    const guest = fakeGuest();
+    const send = vi.fn<(id: ActionId) => void>();
+    forwardGuestShortcuts(guest.contents, send);
+
+    expect(guest.input({ key: 'n', code: 'KeyN', meta: true })).toBe(true);
+    expect(guest.input({ key: 'n', code: 'KeyN', meta: true, isAutoRepeat: true })).toBe(true);
+    expect(guest.input({ key: 'n', code: 'KeyN', meta: true, isAutoRepeat: true })).toBe(true);
+    expect(send.mock.calls.map(([id]) => id)).toEqual(['work.new']);
+
+    send.mockClear();
+    guest.input({ key: '=', code: 'Equal', meta: true });
+    guest.input({ key: '=', code: 'Equal', meta: true, isAutoRepeat: true });
+    expect(send.mock.calls.map(([id]) => id)).toEqual(['browser.zoomIn', 'browser.zoomIn']);
+  });
 });

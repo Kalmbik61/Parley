@@ -47,7 +47,41 @@ function whenOverlaps(a: ActionDef['when'], b: ActionDef['when']): boolean {
   return a === b || a === 'always' || b === 'always';
 }
 
+/**
+ * Все ActionId: `Record<ActionId, true>` не соберётся, если член типа пропущен или лишний, —
+ * так тест ниже ловит расхождение типа и таблицы (раунд исправлений 1).
+ */
+const ALL_ACTION_IDS: Record<ActionId, true> = {
+  'palette.open': true, 'files.quickOpen': true, 'files.search': true,
+  'work.new': true, 'session.new': true, 'room.new': true,
+  'work.goto.1': true, 'work.goto.2': true, 'work.goto.3': true, 'work.goto.4': true, 'work.goto.5': true,
+  'work.goto.6': true, 'work.goto.7': true, 'work.goto.8': true, 'work.goto.9': true,
+  'work.prev': true, 'work.next': true, 'works.showArchived': true,
+  'history.back': true, 'history.forward': true,
+  'sidebar.left.toggle': true, 'sidebar.right.toggle': true, 'sidebar.files': true, 'sidebar.changes': true,
+  'group.splitRight': true, 'group.splitDown': true, 'group.prev': true, 'group.next': true,
+  'tab.close': true, 'tab.reopen': true, 'tab.prev': true, 'tab.next': true, 'tab.mruNext': true, 'tab.mruPrev': true,
+  'tab.goto.1': true, 'tab.goto.2': true, 'tab.goto.3': true, 'tab.goto.4': true, 'tab.goto.5': true,
+  'tab.goto.6': true, 'tab.goto.7': true, 'tab.goto.8': true, 'tab.goto.9': true,
+  find: true, 'terminal.clear': true, 'settings.open': true,
+  'attention.next': true, 'wake.toggle': true, 'host.restart': true,
+  'appearance.system': true, 'appearance.dark': true, 'appearance.light': true,
+  'browser.newTab': true,
+  'browser.find': true, 'browser.zoomIn': true, 'browser.zoomOut': true, 'browser.zoomReset': true,
+};
+
 describe('ACTIONS (тест 1)', () => {
+  it('у каждого ActionId ровно одна запись в ACTIONS', () => {
+    const ids = ACTIONS.map((action) => action.id);
+    expect([...ids].sort()).toEqual(Object.keys(ALL_ACTION_IDS).sort());
+  });
+
+  it('автоповтор — только у шагов навигации и масштаба', () => {
+    expect(ACTIONS.filter((action) => action.repeatable === true).map((action) => action.id).sort()).toEqual(
+      ['browser.zoomIn', 'browser.zoomOut', 'group.next', 'group.prev', 'tab.next', 'tab.prev', 'work.next', 'work.prev'],
+    );
+  });
+
   it('id уникальны', () => {
     const ids = ACTIONS.map((action) => action.id);
     expect(new Set(ids).size).toBe(ids.length);

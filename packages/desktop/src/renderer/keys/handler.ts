@@ -47,11 +47,13 @@ function matchesAny(accelerators: readonly string[], event: KeyLike): boolean {
   return accelerators.some((accelerator) => matchesAccelerator(accelerator, event));
 }
 
+/** Действия, которые удержание клавиши повторяет (шаги навигации). */
+const REPEATABLE = new Set<ActionId>(ACTIONS.filter((action) => action.repeatable === true).map((action) => action.id));
+
 /** `when` действия допускает контекст. `browser` рендерер не ловит: клавиши у гостя. */
 function whenAllows(when: ActionDef['when'], context: FocusContext): boolean {
   if (when === 'always') return true;
   if (when === 'terminal') return context === 'terminal';
-  if (when === 'editor') return context === 'monaco';
   return false;
 }
 
@@ -83,13 +85,21 @@ export function installKeyHandler(input: {
   available(id: ActionId): boolean; // действие реализовано и поддержано хостом (6.1b)
   endMruCycle(): void; // keyup Control и blur окна — конец цикла ⌃Tab
 }): () => void {
+  // Сбой одного действия — в консоль, а не неперехваченной ошибкой окна; следующие нажатия работают.
+  const guarded = (action: () => void): void => {
+    try {
+      action();
+    } catch (error) {
+      console.error('[harnas] key action failed', error);
+    }
+  };
   const onKeyDown = (event: KeyboardEvent): void => {
     const resolved = resolveAction(event, input.context(), input.paletteOpen());
     if (resolved === null) return;
     if (typeof resolved !== 'string') {
       event.preventDefault();
       event.stopPropagation();
-      input.pickPaletteRow(resolved.index);
+      guarded(() => input.pickPaletteRow(resolved.index));
       return;
     }
     if (!input.available(resolved)) return;
@@ -98,7 +108,9 @@ export function installKeyHandler(input: {
     // Capture на window раньше xterm и Monaco: ⌘K не уходит агенту.
     event.preventDefault();
     event.stopPropagation();
-    input.run(resolved);
+    // Автоповтор погашен выше, но запускает только шаг навигации: удержанный ⌘N — одна работа.
+    if (event.repeat && !REPEATABLE.has(resolved)) return;
+    guarded(() => input.run(resolved));
   };
   const onKeyUp = (event: KeyboardEvent): void => {
     if (event.key === 'Control') input.endMruCycle();

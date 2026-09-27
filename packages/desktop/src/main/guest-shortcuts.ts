@@ -9,9 +9,11 @@ import type { ActionDef, ActionId, KeyLike } from '../shared/keybindings.js';
 
 /**
  * ⌘⇧↑↓ таблица 9.6 отдаёт полю ввода, а main не знает, в поле ли фокус страницы: остаются
- * ей. Роли «Правки» (⌘C…) в реестре не живут и так не трогаются.
+ * ей. ⌃Tab/⌃⇧Tab — тоже (решение сверки 9): цикл MRU кончается отпусканием ⌃, а keyUp из
+ * гостя окну не пересылается — цикл остался бы открытым. Роли «Правки» (⌘C…) в реестре не
+ * живут и так не трогаются.
  */
-const KEPT_BY_PAGE = new Set<ActionId>(['work.prev', 'work.next']);
+const KEPT_BY_PAGE = new Set<ActionId>(['work.prev', 'work.next', 'tab.mruNext', 'tab.mruPrev']);
 
 const FORWARDED: readonly ActionDef[] = ACTIONS.filter(
   (action) =>
@@ -40,6 +42,8 @@ export function forwardGuestShortcuts(
     const action = FORWARDED.find((candidate) => matchesAccelerator(candidate.keys as string, key));
     if (action === undefined) return;
     event.preventDefault();
+    // Автоповтор гасится и у неповторяемых — иначе страница получила бы удержанный ⌘N.
+    if (input.isAutoRepeat && action.repeatable !== true) return;
     send(action.id);
   };
   contents.on('before-input-event', listener);

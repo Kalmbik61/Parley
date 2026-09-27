@@ -32,8 +32,13 @@ export interface ActionDef {
   keywords: string[]; // для палитры, английские
   keys: string | null; // accelerator Electron: 'CmdOrCtrl+J', 'Control+Tab'…
   menu: MenuName | null; // null — без пункта меню (⌃Tab, ⌃1–9, палитровые действия)
-  when: 'always' | 'terminal' | 'editor' | 'browser';
+  // 'editor' из брифа убран в раунде исправлений 1: ни одно действие его не берёт (план 7 тоже),
+  // сочетания Monaco гасит список MONACO_KEYS обработчика.
+  when: 'always' | 'terminal' | 'browser';
   inPalette: boolean; // false — служебное: palette.open, work.goto.N, tab.goto.N, tab.mruNext/Prev
+  // Удержание клавиши повторяет действие — только шаги навигации и масштаба. У прочих
+  // автоповтор гасится без запуска: удержанный ⌘N иначе создал бы несколько работ.
+  repeatable?: true;
 }
 
 type Digit = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
@@ -65,17 +70,17 @@ export const ACTIONS: readonly ActionDef[] = [
   ...DIGITS.map(
     (n): ActionDef => ({ id: `work.goto.${n}`, title: S.actions.workspaceNumber(n), keywords: ['workspace'], keys: `CmdOrCtrl+${n}`, menu: 'workspace', when: 'always', inPalette: false }),
   ),
-  { id: 'work.prev', title: S.actions.previousWorkspace, keywords: ['workspace', 'up'], keys: 'CmdOrCtrl+Shift+Up', menu: 'workspace', when: 'always', inPalette: true },
-  { id: 'work.next', title: S.actions.nextWorkspace, keywords: ['workspace', 'down'], keys: 'CmdOrCtrl+Shift+Down', menu: 'workspace', when: 'always', inPalette: true },
+  { id: 'work.prev', title: S.actions.previousWorkspace, keywords: ['workspace', 'up'], keys: 'CmdOrCtrl+Shift+Up', menu: 'workspace', when: 'always', inPalette: true, repeatable: true },
+  { id: 'work.next', title: S.actions.nextWorkspace, keywords: ['workspace', 'down'], keys: 'CmdOrCtrl+Shift+Down', menu: 'workspace', when: 'always', inPalette: true, repeatable: true },
 
   { id: 'group.splitRight', title: S.actions.splitRight, keywords: ['split', 'group', 'pane'], keys: 'CmdOrCtrl+D', menu: 'tab', when: 'always', inPalette: true },
   { id: 'group.splitDown', title: S.actions.splitDown, keywords: ['split', 'group', 'pane'], keys: 'CmdOrCtrl+Shift+D', menu: 'tab', when: 'always', inPalette: true },
   { id: 'tab.close', title: S.actions.closeTab, keywords: ['close', 'tab'], keys: 'CmdOrCtrl+W', menu: 'tab', when: 'always', inPalette: true },
   { id: 'tab.reopen', title: S.actions.reopenClosedTab, keywords: ['reopen', 'restore', 'tab'], keys: 'CmdOrCtrl+Shift+T', menu: 'tab', when: 'always', inPalette: true },
-  { id: 'tab.prev', title: S.actions.previousTab, keywords: ['tab', 'left'], keys: 'CmdOrCtrl+Shift+[', menu: 'tab', when: 'always', inPalette: true },
-  { id: 'tab.next', title: S.actions.nextTab, keywords: ['tab', 'right'], keys: 'CmdOrCtrl+Shift+]', menu: 'tab', when: 'always', inPalette: true },
-  { id: 'group.prev', title: S.actions.previousGroup, keywords: ['group', 'pane'], keys: 'CmdOrCtrl+[', menu: 'tab', when: 'always', inPalette: true },
-  { id: 'group.next', title: S.actions.nextGroup, keywords: ['group', 'pane'], keys: 'CmdOrCtrl+]', menu: 'tab', when: 'always', inPalette: true },
+  { id: 'tab.prev', title: S.actions.previousTab, keywords: ['tab', 'left'], keys: 'CmdOrCtrl+Shift+[', menu: 'tab', when: 'always', inPalette: true, repeatable: true },
+  { id: 'tab.next', title: S.actions.nextTab, keywords: ['tab', 'right'], keys: 'CmdOrCtrl+Shift+]', menu: 'tab', when: 'always', inPalette: true, repeatable: true },
+  { id: 'group.prev', title: S.actions.previousGroup, keywords: ['group', 'pane'], keys: 'CmdOrCtrl+[', menu: 'tab', when: 'always', inPalette: true, repeatable: true },
+  { id: 'group.next', title: S.actions.nextGroup, keywords: ['group', 'pane'], keys: 'CmdOrCtrl+]', menu: 'tab', when: 'always', inPalette: true, repeatable: true },
   { id: 'tab.mruNext', title: S.actions.nextRecentTab, keywords: ['recent', 'tab'], keys: 'Control+Tab', menu: null, when: 'always', inPalette: false },
   { id: 'tab.mruPrev', title: S.actions.previousRecentTab, keywords: ['recent', 'tab'], keys: 'Control+Shift+Tab', menu: null, when: 'always', inPalette: false },
   ...DIGITS.map(
@@ -96,8 +101,8 @@ export const ACTIONS: readonly ActionDef[] = [
 
   // Фокус в странице — клавиши у гостя: их пересылает main (`main/guest-shortcuts.ts`), рендерер не ловит.
   { id: 'browser.find', title: S.actions.findInPage, keywords: ['browser', 'search', 'page'], keys: 'CmdOrCtrl+F', menu: null, when: 'browser', inPalette: true },
-  { id: 'browser.zoomIn', title: S.actions.zoomIn, keywords: ['browser', 'zoom', 'bigger'], keys: 'CmdOrCtrl+Plus', menu: null, when: 'browser', inPalette: true },
-  { id: 'browser.zoomOut', title: S.actions.zoomOut, keywords: ['browser', 'zoom', 'smaller'], keys: 'CmdOrCtrl+-', menu: null, when: 'browser', inPalette: true },
+  { id: 'browser.zoomIn', title: S.actions.zoomIn, keywords: ['browser', 'zoom', 'bigger'], keys: 'CmdOrCtrl+Plus', menu: null, when: 'browser', inPalette: true, repeatable: true },
+  { id: 'browser.zoomOut', title: S.actions.zoomOut, keywords: ['browser', 'zoom', 'smaller'], keys: 'CmdOrCtrl+-', menu: null, when: 'browser', inPalette: true, repeatable: true },
   { id: 'browser.zoomReset', title: S.actions.actualSize, keywords: ['browser', 'zoom', 'reset'], keys: 'CmdOrCtrl+0', menu: null, when: 'browser', inPalette: true },
 ];
 
@@ -145,14 +150,37 @@ function keyMatches(name: string, event: KeyLike): boolean {
  * раскладке — это Shift+`=`.
  */
 export function matchesAccelerator(accelerator: string, event: KeyLike): boolean {
+  const parsed = parseAccelerator(accelerator);
+  if (event.metaKey !== parsed.meta) return false;
+  if (event.ctrlKey !== parsed.ctrl) return false;
+  if (event.altKey !== parsed.alt) return false;
+  if (parsed.name !== 'Plus' && event.shiftKey !== parsed.shift) return false;
+  return keyMatches(parsed.name, event);
+}
+
+interface ParsedAccelerator {
+  name: string;
+  meta: boolean;
+  ctrl: boolean;
+  alt: boolean;
+  shift: boolean;
+}
+
+/** Разбор по строке сочетания — один раз: matchesAccelerator зовётся десятки раз на каждое нажатие. */
+const PARSED = new Map<string, ParsedAccelerator>();
+
+function parseAccelerator(accelerator: string): ParsedAccelerator {
+  const cached = PARSED.get(accelerator);
+  if (cached !== undefined) return cached;
   const parts = accelerator.split('+');
-  const name = parts[parts.length - 1] ?? '';
   const mods = new Set(parts.slice(0, -1));
-  if (event.metaKey !== (mods.has('CmdOrCtrl') || mods.has('CommandOrControl') || mods.has('Cmd') || mods.has('Command'))) {
-    return false;
-  }
-  if (event.ctrlKey !== (mods.has('Control') || mods.has('Ctrl'))) return false;
-  if (event.altKey !== (mods.has('Alt') || mods.has('Option'))) return false;
-  if (name !== 'Plus' && event.shiftKey !== mods.has('Shift')) return false;
-  return keyMatches(name, event);
+  const parsed: ParsedAccelerator = {
+    name: parts[parts.length - 1] ?? '',
+    meta: mods.has('CmdOrCtrl') || mods.has('CommandOrControl') || mods.has('Cmd') || mods.has('Command'),
+    ctrl: mods.has('Control') || mods.has('Ctrl'),
+    alt: mods.has('Alt') || mods.has('Option'),
+    shift: mods.has('Shift'),
+  };
+  PARSED.set(accelerator, parsed);
+  return parsed;
 }

@@ -1402,9 +1402,16 @@ interface ActionDef {
   keywords: string[];
   keys: string | null;          // accelerator Electron, null — без сочетания
   menu: 'app' | 'edit' | 'view' | 'workspace' | 'tab' | 'terminal' | null;  // Harnas, Правка, Вид, Работа, Вкладка, Терминал
-  when: 'always' | 'terminal' | 'editor' | 'browser';
+  when: 'always' | 'terminal' | 'browser';
+  repeatable?: true;            // удержание клавиши повторяет действие
 }
 ```
+
+**Автоповтор.** Удержанная клавиша повторяет только шаги навигации и масштаба
+(`repeatable`: вкладка, группа, работа ←/→, масштаб страницы). У прочих действий повтор
+гасится без запуска — и в окне (`event.repeat`), и в госте (`input.isAutoRepeat`):
+удержанный ⌘N создаёт одну работу. Исключение действия ловится обработчиком и уходит в
+консоль, следующие нажатия работают.
 
 **Кто ловит сочетания.** Все сочетания реестра ловит один обработчик рендерера
 (`keys/handler.ts`): `keydown` на `window` в capture-фазе, до xterm и Monaco. Он
