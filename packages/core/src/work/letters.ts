@@ -1,3 +1,4 @@
+import { readMap, updateMap, WorkNotFoundError, workPaths } from './store.js';
 import { HUMAN, type Message, type WorkMap } from './types.js';
 
 /**
@@ -23,3 +24,59 @@ export const isUnreadFor = (message: Message, sessionId: string, map: WorkMap): 
 /** Непрочитанные письма сессии в порядке карты. */
 export const unreadFor = (map: WorkMap, sessionId: string): Message[] =>
   map.messages.filter((message) => isUnreadFor(message, sessionId, map));
+
+/**
+ * Письмо, которое человек видит и ещё не прочёл: прямое письмо ему или сообщение
+ * комнаты (человек — участник любой комнаты), не от него самого. То же правило, что
+ * `humanUnreadLetters` и `roomUnreadForHuman` окна (`attention/derive.ts`): иначе
+ * отметка гасила бы не то, что окно считает непрочитанным.
+ */
+const unreadForHuman = (message: Message): boolean =>
+  message.from !== HUMAN &&
+  message.readBy[HUMAN] === undefined &&
+  (message.roomId !== null || message.to.includes(HUMAN));
+
+/**
+ * Ставит readBy.human = now письмам, которые человек видит: прямым письмам человеку
+ * и сообщениям комнат, не от самого человека. Уже прочитанные и чужие id пропускаются.
+ * Возвращает, сколько отметок поставлено. work.updatedAt не сдвигается.
+ * Подходящих id нет — 0 без updateMap: карта, индекс и .bak не переписываются.
+ * Карты нет — WorkNotFoundError, как у updateMap.
+ */
+export async function markHumanRead(
+  projectPath: string,
+  workId: string,
+  messageIds: string[],
+): Promise<number> {
+  const wanted = new Set(messageIds);
+  const pending = (map: WorkMap): Message[] =>
+    map.messages.filter((message) => wanted.has(message.id) && unreadForHuman(message));
+
+  // Сперва чтение без лока: updateMap пишет индекс, .bak и карту всегда, и повтор
+  // пачки окна разослал бы works.changed всем клиентам впустую.
+  let current: WorkMap;
+  try {
+    current = await readMap(projectPath, workId);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new WorkNotFoundError(`карты ${workPaths(projectPath, workId).map} нет — работы ${workId} не существует`);
+    }
+    throw error;
+  }
+  if (pending(current).length === 0) return 0;
+
+  // Под локом отбираем заново: другой клиент мог отметить часть писем между чтениями.
+  let marked = 0;
+  await updateMap(
+    projectPath,
+    workId,
+    (map) => {
+      const at = new Date().toISOString();
+      const fresh = pending(map);
+      for (const message of fresh) message.readBy[HUMAN] = at;
+      marked = fresh.length;
+    },
+    { touch: false },
+  );
+  return marked;
+}

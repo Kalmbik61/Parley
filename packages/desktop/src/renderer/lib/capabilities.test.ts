@@ -37,6 +37,14 @@ describe('capabilities', () => {
     expect(missingMethods(connected(null))).toContain('works.rename');
   });
 
+  it('окну этапа 4 нужны activity.seen и mail.markRead (кусок 4.1)', () => {
+    expect(REQUIRED_METHODS).toContain('activity.seen');
+    expect(REQUIRED_METHODS).toContain('mail.markRead');
+    expect(missingMethods(connected(null))).toEqual(
+      expect.arrayContaining(['activity.seen', 'mail.markRead']),
+    );
+  });
+
   it('новый хост, отдавший ключи METHODS и NOTIFICATIONS протокола, — недостающих нет', () => {
     const all = [...Object.keys(METHODS), ...Object.keys(NOTIFICATIONS)].sort();
     expect(missingMethods(connected(all))).toEqual([]);

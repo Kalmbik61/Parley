@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import { METHODS } from './methods.js';
+import { METHODS, NOTIFICATIONS } from './methods.js';
 import type { Params, Result } from './methods.js';
 
 describe('типы методов', () => {
@@ -57,5 +57,33 @@ describe('works.setStatus', () => {
   it('принимает active, done и archived, неверный статус отвергает до хоста', () => {
     for (const status of ['active', 'done', 'archived']) expect(parse(status).success).toBe(true);
     expect(parse('deleted').success).toBe(false);
+  });
+});
+
+describe('mail.markRead', () => {
+  const parse = (messageIds: unknown) =>
+    METHODS['mail.markRead'].safeParse({ projectPath: '/p', workId: 'w-0001', messageIds });
+  const ids = (count: number): string[] => Array.from({ length: count }, (_, i) => `m-${i + 1}`);
+
+  it('пачка 1–500 id проходит, пустая и 501 — отвергаются на схеме', () => {
+    expect(parse(ids(1)).success).toBe(true);
+    expect(parse(ids(500)).success).toBe(true);
+    expect(parse([]).success).toBe(false);
+    expect(parse(ids(501)).success).toBe(false);
+  });
+
+  it('результат — число отметок', () => {
+    expectTypeOf<Result<'mail.markRead'>>().toEqualTypeOf<{ marked: number }>();
+  });
+});
+
+describe('activity.seen', () => {
+  it('уведомление с ref сессии', () => {
+    const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-01' };
+    expect(NOTIFICATIONS['activity.seen'].safeParse({ ref }).success).toBe(true);
+    expect(NOTIFICATIONS['activity.seen'].safeParse({}).success).toBe(false);
+    expectTypeOf<Params<'activity.seen'>>().toEqualTypeOf<{
+      ref: { projectPath: string; workId: string; sessionId: string };
+    }>();
   });
 });

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { refKey } from '@harnas/protocol';
+import type { WorkEntry } from '@harnas/core';
 import type { EventName, ResponseMessage, SessionRef } from '@harnas/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { Client } from '../client.js';
@@ -8,6 +9,7 @@ import type { HostContext, RequestInfo } from '../context.js';
 import { HostError } from '../errors.js';
 import type { ExitInfo } from '../pty/pty-process.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
+import type { WorksService } from '../works/works-service.js';
 import { createPtyHandlers } from './pty.js';
 
 type EventMessage = { event: EventName; data: unknown };
@@ -104,6 +106,21 @@ function fakeActivity(): ActivityService & { markSeen: ReturnType<typeof vi.fn> 
   };
 }
 
+/**
+ * `WorksService`-заглушка: `entry` знает только работу w-01 проекта /tmp/project
+ * с сессиями `sessions` — снимок работ хоста для проверки `activity.seen`.
+ */
+function fakeWorks(sessions: string[] = ['s-01']): WorksService {
+  const entry = {
+    projectPath: '/tmp/project',
+    map: { work: { id: 'w-01' }, sessions: sessions.map((id) => ({ id })) },
+  } as unknown as WorkEntry;
+  return {
+    entry: (projectPath: string, workId: string) =>
+      projectPath === entry.projectPath && workId === 'w-01' ? entry : undefined,
+  } as unknown as WorksService;
+}
+
 const ref = (id = 's-01'): SessionRef => ({ projectPath: '/tmp/project', workId: 'w-01', sessionId: id });
 
 const outputEvents = (client: { sent: Array<ResponseMessage | EventMessage> }): EventMessage[] =>
@@ -115,16 +132,18 @@ const resyncEvents = (client: { sent: Array<ResponseMessage | EventMessage> }): 
 describe('createPtyHandlers', () => {
   it('pty.attach на несуществующую сессию — not_found', async () => {
     const pty = fakePtyManager();
-    const handlers = createPtyHandlers({ pty: pty.manager, activity: fakeActivity() });
+    const handlers = createPtyHandlers({ pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
     const client = fakeClient();
 
     await expect(handlers.ptyAttach({ ref: ref() }, requestOf(client))).rejects.toBeInstanceOf(HostError);
   });
 
-  it('pty.attach отдаёт снимок и помечает активность увиденной', async () => {
+  // Кусок 4.1 (спека 3.2): подключение — не просмотр. Невидимая, но подключённая
+  // вкладка и окно не в фокусе больше не гасят «не просмотрено».
+  it('pty.attach отдаёт снимок и «не просмотрено» не гасит', async () => {
     const pty = fakePtyManager();
     const activity = fakeActivity();
-    const handlers = createPtyHandlers({ pty: pty.manager, activity });
+    const handlers = createPtyHandlers({ pty: pty.manager, activity, works: fakeWorks() });
     const sessionRef = ref();
     pty.markLive(sessionRef);
     const client = fakeClient();
@@ -132,12 +151,38 @@ describe('createPtyHandlers', () => {
     const result = await handlers.ptyAttach({ ref: sessionRef }, requestOf(client));
 
     expect(result).toEqual(pty.snapshotResult);
-    expect(activity.markSeen).toHaveBeenCalledWith(sessionRef);
+    expect(activity.markSeen).not.toHaveBeenCalled();
+  });
+
+  it('activity.seen зовёт markSeen ровно этой сессии', () => {
+    const pty = fakePtyManager();
+    const activity = fakeActivity();
+    const handlers = createPtyHandlers({ pty: pty.manager, activity, works: fakeWorks(['s-01', 's-02']) });
+
+    handlers.activitySeen({ ref: ref('s-02') }, requestOf(fakeClient()));
+
+    expect(activity.markSeen).toHaveBeenCalledTimes(1);
+    expect(activity.markSeen).toHaveBeenCalledWith(ref('s-02'));
+  });
+
+  it('activity.seen неизвестной сессии или работы — тихо, без markSeen и без исключения', () => {
+    const pty = fakePtyManager();
+    const activity = fakeActivity();
+    const handlers = createPtyHandlers({ pty: pty.manager, activity, works: fakeWorks() });
+    const client = fakeClient();
+
+    expect(() => handlers.activitySeen({ ref: ref('s-09') }, requestOf(client))).not.toThrow();
+    expect(() =>
+      handlers.activitySeen({ ref: { ...ref(), workId: 'w-99' } }, requestOf(client)),
+    ).not.toThrow();
+    expect(activity.markSeen).not.toHaveBeenCalled();
+    // Уведомление без ответа: клиенту ничего не ушло.
+    expect(client.sent).toEqual([]);
   });
 
   it('поток идёт только клиенту, подключённому этой сессии — второй клиент без attach его не получает', async () => {
     const pty = fakePtyManager();
-    const handlers = createPtyHandlers({ pty: pty.manager, activity: fakeActivity() });
+    const handlers = createPtyHandlers({ pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
     const sessionRef = ref();
     pty.markLive(sessionRef);
 
@@ -154,7 +199,7 @@ describe('createPtyHandlers', () => {
 
   it('pty.detach снимает подписку: после него клиент вывод не получает', async () => {
     const pty = fakePtyManager();
-    const handlers = createPtyHandlers({ pty: pty.manager, activity: fakeActivity() });
+    const handlers = createPtyHandlers({ pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
     const sessionRef = ref();
     pty.markLive(sessionRef);
     const client = fakeClient();
@@ -168,7 +213,7 @@ describe('createPtyHandlers', () => {
 
   it('backpressure: send()===false останавливает поток и шлёт pty.resync до нового attach', async () => {
     const pty = fakePtyManager();
-    const handlers = createPtyHandlers({ pty: pty.manager, activity: fakeActivity() });
+    const handlers = createPtyHandlers({ pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
     const sessionRef = ref();
     pty.markLive(sessionRef);
 
@@ -194,7 +239,7 @@ describe('createPtyHandlers', () => {
 
   it('выход процесса убирает подписчиков сессии', async () => {
     const pty = fakePtyManager();
-    const handlers = createPtyHandlers({ pty: pty.manager, activity: fakeActivity() });
+    const handlers = createPtyHandlers({ pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
     const sessionRef = ref();
     pty.markLive(sessionRef);
     const client = fakeClient();
@@ -209,7 +254,7 @@ describe('createPtyHandlers', () => {
   it('pty.input: идёт в manager.input и помечает активность увиденной', () => {
     const pty = fakePtyManager();
     const activity = fakeActivity();
-    const handlers = createPtyHandlers({ pty: pty.manager, activity });
+    const handlers = createPtyHandlers({ pty: pty.manager, activity, works: fakeWorks() });
     const sessionRef = ref();
 
     handlers.ptyInput({ ref: sessionRef, data: 'hello\r' }, requestOf(fakeClient()));
@@ -220,7 +265,7 @@ describe('createPtyHandlers', () => {
 
   it('pty.resize: идёт в manager.resize с новыми размерами', () => {
     const pty = fakePtyManager();
-    const handlers = createPtyHandlers({ pty: pty.manager, activity: fakeActivity() });
+    const handlers = createPtyHandlers({ pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
     const sessionRef = ref();
 
     handlers.ptyResize({ ref: sessionRef, cols: 100, rows: 30 }, requestOf(fakeClient()));

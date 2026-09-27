@@ -85,12 +85,20 @@ export const METHODS = {
   'worktrees.commit': z.object({ ref: sessionRef, message: z.string().min(1) }),
   'worktrees.merge': z.object({ ref: sessionRef }),
   'worktrees.discard': z.object({ ref: sessionRef, force: z.boolean() }),
+  // Пачка окна — до 500 id (500 мс тишины); пустую слать незачем.
+  'mail.markRead': z.object({
+    projectPath: z.string(),
+    workId: z.string(),
+    messageIds: z.array(z.string()).min(1).max(500),
+  }),
 } as const;
 
 // Уведомления клиента — без id и без ответа: их слишком много, чтобы ждать каждое.
 export const NOTIFICATIONS = {
   'pty.input': z.object({ ref: sessionRef, data: z.string() }),
   'pty.resize': z.object({ ref: sessionRef, cols: z.number().int().min(2), rows: z.number().int().min(2) }),
+  // Окно видит терминал сессии — «просмотрено» ставит видимость, а не подключение (спека 7.2).
+  'activity.seen': z.object({ ref: sessionRef }),
 } as const;
 
 export interface Results {
@@ -125,6 +133,7 @@ export interface Results {
   'worktrees.commit': { commit: string };
   'worktrees.merge': MergeResult;
   'worktrees.discard': { ok: true };
+  'mail.markRead': { marked: number };
 }
 
 export type MethodName = keyof typeof METHODS;
