@@ -36,6 +36,26 @@ describe('тест 9: createWebglPolicy', () => {
     expect(seen.get('t3')).toEqual([true]);
   });
 
+  it('десять терминалов, скрываются s01…s09 по очереди: WebGL у s04…s09 и видимого s10', () => {
+    const policy = createWebglPolicy();
+    const keys = Array.from({ length: 10 }, (_, i) => `s${String(i + 1).padStart(2, '0')}`);
+    const last = new Map<string, boolean>();
+    for (const key of keys) policy.subscribe(key, (want) => last.set(key, want));
+    policy.update('s01', true);
+    // Как клики по сайдбару: следующий виден, прежний скрыт — в обоих порядках эффектов.
+    for (let i = 1; i < keys.length; i += 1) {
+      const [shown, hiddenKey] = [keys[i] ?? '', keys[i - 1] ?? ''];
+      if (i % 2 === 0) {
+        policy.update(shown, true);
+        policy.update(hiddenKey, false);
+      } else {
+        policy.update(hiddenKey, false);
+        policy.update(shown, true);
+      }
+    }
+    expect(keys.map((key) => last.get(key))).toEqual([false, false, false, true, true, true, true, true, true, true]);
+  });
+
   it('forget одного из шести — место получает следующий скрытый', () => {
     const { policy, keys, last } = eight();
     for (const key of keys) policy.update(key, false);

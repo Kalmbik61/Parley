@@ -19,6 +19,8 @@ export interface WebglPolicy {
   forget(key: string): void;
   /** 'dom' после 3 потерь за 60 с: дальше want для key — всегда false, до перезагрузки окна. */
   onContextLoss(key: string): 'retry' | 'dom';
+  /** Освобождение WebGL у key не удалось: дальше want — всегда false, как после 'dom'. */
+  forceDom(key: string): void;
 }
 
 export function createWebglPolicy(
@@ -99,6 +101,10 @@ export function createWebglPolicy(
       domOnly.add(key);
       recompute();
       return 'dom';
+    },
+    forceDom(key) {
+      domOnly.add(key);
+      recompute();
     },
   };
 }

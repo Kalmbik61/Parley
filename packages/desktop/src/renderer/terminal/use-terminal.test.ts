@@ -24,6 +24,10 @@ const state = vi.hoisted(() => ({
   webglContextLoss: null as (() => void) | null,
   webglCreated: 0,
   webglDisposed: 0,
+  /** Раунд fix-main-r1: `dispose` аддона бросает, как 0.19 поверх xterm 5.5 (`_store` нет). */
+  webglDisposeThrows: false,
+  /** Созданные аддоны WebGL: чей он (по `loadAddon`) и освобождён ли. */
+  webglAddons: [] as { disposed: boolean }[],
   /**
    * Раунд исправлений 1, находка B№2: подставной FitAddon подбирает этот
    * размер (если задан) на последнем созданном терминале при каждом вызове
@@ -58,14 +62,19 @@ vi.mock('@xterm/addon-fit', async () => {
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: vi.fn().mockImplementation(() => {
     state.webglCreated += 1;
-    return {
+    const addon = {
+      disposed: false,
       onContextLoss: (cb: () => void) => {
         state.webglContextLoss = cb;
       },
       dispose: () => {
         state.webglDisposed += 1;
+        addon.disposed = true;
+        if (state.webglDisposeThrows) throw new TypeError("Cannot read properties of undefined (reading '_isDisposed')");
       },
     };
+    state.webglAddons.push(addon);
+    return addon;
   }),
 }));
 
@@ -108,6 +117,8 @@ beforeEach(() => {
   state.webglContextLoss = null;
   state.webglCreated = 0;
   state.webglDisposed = 0;
+  state.webglDisposeThrows = false;
+  state.webglAddons = [];
   state.nextFitSize = null;
   ResizeObserverStub.instances = [];
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
@@ -349,6 +360,118 @@ describe('тест 11: опции xterm, ссылки и WebGL (кусок 5.3)'
       expect(state.webglCreated).toBe(2);
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+describe('раунд fix-main-r1: освобождение WebGL не роняет терминал', () => {
+  /** Живой (не освобождённый) аддон WebGL, загруженный в этот xterm. */
+  function liveWebgl(term: unknown): boolean {
+    return xtermMock.terminals.some(
+      (t, index) =>
+        t === term &&
+        xtermMock
+          .callsOf('loadAddon', index)
+          .some((call) => state.webglAddons.some((addon) => addon === call.args[0] && !addon.disposed)),
+    );
+  }
+
+  it('dispose бросает — наружу ничего, xterm пересоздан на DOM и переподключён', async () => {
+    const subscribe = vi.spyOn(webglPolicy, 'subscribe');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      state.webglDisposeThrows = true;
+      const bridge = createFakeBridge();
+      bridge.setHandler('pty.attach', () => ({ snapshot: 'снимок', cols: 80, rows: 24 }));
+      bridge.setHandler('pty.detach', () => ({ ok: true as const }));
+      const sessionRef: SessionRef = { projectPath: '/tmp/proj', workId: 'w-01', sessionId: 'wg-throw' };
+      const { result } = renderTerminal(bridge, sessionRef);
+      await waitFor(() => expect(state.webglCreated).toBe(1));
+      const listener = subscribe.mock.calls[0]?.[1];
+
+      expect(() => act(() => listener?.(false))).not.toThrow();
+      await waitFor(() => expect(xtermMock.terminals).toHaveLength(2));
+      expect(xtermMock.terminals[0]?.disposed).toBe(true);
+      const fresh = xtermMock.terminals[1];
+      expect(fresh?.disposed).toBe(false);
+      expect(result.current.terminal).toBe(fresh);
+      // Новый xterm — на DOM-рендере: WebGL для этого ключа больше не просится.
+      expect(state.webglCreated).toBe(1);
+      await waitFor(() => expect(fresh?.writes).toContain('снимок'));
+      expect(bridge.calls.filter((c) => c.method === 'pty.attach')).toHaveLength(2);
+    } finally {
+      subscribe.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  it('повторное освобождение не зовёт dispose второй раз', async () => {
+    const subscribe = vi.spyOn(webglPolicy, 'subscribe');
+    try {
+      const bridge = createFakeBridge();
+      bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
+      bridge.setHandler('pty.detach', () => ({ ok: true as const }));
+      const { unmount } = renderTerminal(bridge, { projectPath: '/tmp/proj', workId: 'w-01', sessionId: 'wg-twice' });
+      await waitFor(() => expect(state.webglCreated).toBe(1));
+      const listener = subscribe.mock.calls[0]?.[1];
+      act(() => listener?.(false));
+      act(() => listener?.(false));
+      unmount();
+      expect(state.webglDisposed).toBe(1);
+    } finally {
+      subscribe.mockRestore();
+    }
+  });
+
+  /** Десять терминалов одной работы; клики по строкам сайдбара — следующий виден, прежний скрыт. */
+  async function tenTerminals(prefix: string) {
+    const bridge = createFakeBridge();
+    bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
+    bridge.setHandler('pty.detach', () => ({ ok: true as const }));
+    const hooks = Array.from({ length: 10 }, (_, i) => {
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const sessionRef: SessionRef = { projectPath: '/tmp/proj', workId: 'w-01', sessionId: `${prefix}-s${String(i + 1).padStart(2, '0')}` };
+      return renderHook(
+        ({ visible }: { visible: boolean }) =>
+          useTerminal({ bridge, ref: sessionRef, container, fontFamily: 'Menlo', fontSize: 13, visible, ...surfaceOptions() }),
+        { initialProps: { visible: i === 0 } },
+      );
+    });
+    for (let i = 1; i < hooks.length; i += 1) {
+      expect(() =>
+        act(() => {
+          hooks[i]?.rerender({ visible: true });
+          hooks[i - 1]?.rerender({ visible: false });
+        }),
+      ).not.toThrow();
+    }
+    return hooks;
+  }
+
+  it('десять терминалов, скрываются s01…s09 по очереди: WebGL у s04…s09 и видимого', async () => {
+    const hooks = await tenTerminals('wg-order');
+    await waitFor(() => {
+      const withWebgl = hooks.map((hook) => liveWebgl(hook.result.current.terminal));
+      expect(withWebgl).toEqual([false, false, false, true, true, true, true, true, true, true]);
+    });
+  });
+
+  it('то же, когда dispose бросает: наружу ничего, все десять xterm живы', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      state.webglDisposeThrows = true;
+      const hooks = await tenTerminals('wg-throw10');
+      await waitFor(() => {
+        for (const hook of hooks) {
+          const term = hook.result.current.terminal as unknown as { disposed: boolean } | null;
+          expect(term?.disposed).toBe(false);
+        }
+      });
+      // Сорванное освобождение — пересоздание на DOM: у вытесненного s01 WebGL больше нет.
+      expect(liveWebgl(hooks[0]?.result.current.terminal)).toBe(false);
+    } finally {
+      warn.mockRestore();
     }
   });
 });

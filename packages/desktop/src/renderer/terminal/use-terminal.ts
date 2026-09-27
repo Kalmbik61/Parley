@@ -76,6 +76,9 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
   const { ref, container, fontFamily, fontSize, visible = true } = options;
   const [search, setSearch] = useState<SearchAddon | null>(null);
   const [terminal, setTerminal] = useState<Terminal | null>(null);
+  // Поколение xterm: растёт, когда освобождение WebGL бросило и рендерер xterm в неизвестном
+  // состоянии — тогда терминал пересоздаётся (уже на DOM) и переподключается к хосту со снимком.
+  const [generation, setGeneration] = useState(0);
   // Тёмность — из общего стора (кусок 1.1), не проп: тема терминала должна
   // меняться на лету при смене `.dark`, без пересоздания хука по цепочке
   // App → Workspace → TerminalPanel (спека 4.7).
@@ -161,15 +164,31 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
     // экрана, а не пиксели канвы — тогда подписки на политику нет совсем.
     // Контекст держат только видимые и шесть последних скрытых (`webgl-policy.ts`).
     const policyKey = refKey(ref);
+    let disposed = false;
     let webgl: WebglAddon | null = null;
     let wantWebgl = false;
     let webglRetry: ReturnType<typeof setTimeout> | null = null;
     const releaseWebgl = (): void => {
       if (webglRetry !== null) clearTimeout(webglRetry);
       webglRetry = null;
+      // Ссылка обнуляется до dispose: повторное освобождение (политика, потеря контекста,
+      // размонтирование) второй раз его не зовёт.
       const addon = webgl;
       webgl = null;
-      addon?.dispose();
+      if (addon === null) return;
+      try {
+        addon.dispose();
+      } catch (error) {
+        // Наружу — никогда: исключение из подписчика политики всплыло бы в эффект другого
+        // терминала и до его ErrorBoundary. Так падал addon-webgl 0.19 (он для xterm 6: читает
+        // `_core._store`, которого в 5.5 нет); теперь стоит парный 5.5 выпуск 0.18, а здесь —
+        // страховка от любого другого сбоя освобождения.
+        // Рендерер после сорванного dispose мог остаться освобождённым без замены на DOM —
+        // этот xterm больше не рисует, поэтому он пересоздаётся на DOM (без WebGL для ключа).
+        console.warn('[harnas] webgl dispose', error);
+        webglPolicy.forceDom(policyKey);
+        if (!disposed) setGeneration((value) => value + 1);
+      }
     };
     const loadWebgl = (): void => {
       if (webgl !== null) return;
@@ -212,7 +231,6 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
       return shouldForwardToTerminal(event);
     });
 
-    let disposed = false;
     // Вывод, пришедший раньше снимка (гонка attach ⇄ pty.output), копится и
     // дописывается следом — иначе на экране мог бы оказаться кусок вывода
     // до снимка, которому он логически предшествует.
@@ -335,7 +353,7 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
     // заметнее пользователю, чем помощь от смены шрифта без реаттача. Тема —
     // исключение (спека 4.7): её меняет отдельный эффект ниже через
     // `term.options`, без пересоздания.
-  }, [container, ref.projectPath, ref.workId, ref.sessionId]);
+  }, [container, ref.projectPath, ref.workId, ref.sessionId, generation]);
 
   // Смена темы на лету при переключении `.dark`, без пересоздания терминала
   // (спека 4.7): `dark` нарочно не входит в зависимости эффекта создания
@@ -357,14 +375,14 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
   useEffect(() => {
     if (visible) void attachRef.current?.();
     return () => detachRef.current?.();
-  }, [visible, container, ref.projectPath, ref.workId, ref.sessionId]);
+  }, [visible, container, ref.projectPath, ref.workId, ref.sessionId, generation]);
 
   // Видимость — политике WebGL (спека 8.1). Эффект после эффекта создания: подписка уже
   // есть, и после пересоздания xterm (там `forget`) видимость сообщается заново.
   useEffect(() => {
     if (container === null || domRendererRequested()) return;
     webglPolicy.update(refKey(ref), visible);
-  }, [visible, container, ref.projectPath, ref.workId, ref.sessionId]);
+  }, [visible, container, ref.projectPath, ref.workId, ref.sessionId, generation]);
 
   return { search, terminal };
 }
