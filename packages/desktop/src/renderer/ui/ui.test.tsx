@@ -26,6 +26,8 @@ import { MENU_GLASS } from './glass.js';
 import { Command, CommandInput, CommandItem, CommandList, CommandShortcut } from './command.js';
 import { Toaster } from './sonner.js';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './tooltip.js';
+import { buttonVariants } from './button.js';
+import { contrastRatio, compositeOver } from '../test-utils/contrast.js';
 
 afterEach(cleanup);
 
@@ -283,5 +285,25 @@ describe('ui/sonner — тест 7', () => {
     } finally {
       useUiStore.setState({ dark: initialDark });
     }
+  });
+});
+
+describe('ui/button — раунд исправлений 1 куска 1.4 (ревью B, находка «текст destructive-кнопки нечитаем в тёмной теме»)', () => {
+  it('вариант destructive — белый текст, а не --destructive-foreground (тот в Orca — цвет красного текста на обычном фоне, не текста на красной кнопке)', () => {
+    const classes = buttonVariants({ variant: 'destructive' });
+    expect(classes).toContain('text-white');
+    expect(classes).toContain('dark:bg-destructive/60');
+    expect(classes).toContain('hover:bg-destructive/90');
+    expect(classes).not.toContain('destructive-foreground');
+  });
+
+  it('контраст белого текста на destructive-кнопке — WCAG AA (≥4.5) в обеих темах, значения из tokens.css', () => {
+    // Светлая тема: `bg-destructive` непрозрачный — --destructive #e40014 (tokens.css:152).
+    expect(contrastRatio([255, 255, 255], [0xe4, 0x00, 0x14])).toBeGreaterThanOrEqual(4.5);
+
+    // Тёмная тема: `dark:bg-destructive/60` — 60% --destructive #ff6568 (tokens.css:275)
+    // поверх --background #0a0a0a (tokens.css:260), эффективный фон ≈ #9d4142.
+    const darkEffectiveBg = compositeOver([0xff, 0x65, 0x68], 0.6, [0x0a, 0x0a, 0x0a]);
+    expect(contrastRatio([255, 255, 255], darkEffectiveBg)).toBeGreaterThanOrEqual(4.5);
   });
 });

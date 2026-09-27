@@ -15,7 +15,14 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: 'bg-primary text-primary-foreground shadow hover:bg-primary/90',
-        destructive: 'bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90',
+        // `--destructive-foreground` у Orca — цвет красного ТЕКСТА на обычном
+        // фоне (пример: сообщение об ошибке), не текста на красной кнопке —
+        // на кнопке даёт 1.66:1 в тёмной теме вместо нужных 4.5 (раунд
+        // исправлений 1 куска 1.4, ревью B). Recipe shadcn для Tailwind 4:
+        // сплошной белый текст, а в тёмной теме — сама заливка кнопки на 60%
+        // прозрачности (иначе насыщенный `--destructive` тёмной темы слишком
+        // яркий рядом с остальными сплошными кнопками).
+        destructive: 'bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive/60',
         outline:
           'border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground',
         secondary: 'bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80',

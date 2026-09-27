@@ -184,7 +184,11 @@ export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): J
         </button>
         <button
           type="button"
-          className="rounded bg-destructive px-3 py-1 text-xs text-destructive-foreground"
+          // Тот же приём, что и `ui/button.tsx` вариант `destructive` (раунд
+          // исправлений 1 куска 1.4, ревью B): `--destructive-foreground` —
+          // цвет красного текста на обычном фоне у Orca, не текста на самой
+          // красной кнопке — там даёт 1.66:1 вместо нужных 4.5.
+          className="rounded bg-destructive px-3 py-1 text-xs text-white hover:bg-destructive/90 dark:bg-destructive/60"
           onClick={() => setFirstConfirmOpen(true)}
         >
           Отбросить

@@ -108,7 +108,18 @@ export function CommandPalette({ open, commands, onOpenChange }: CommandPaletteP
                   >
                     <span>{command.title}</span>
                     {command.hint !== undefined ? (
-                      <span className="text-xs text-muted-foreground">{command.hint}</span>
+                      // На подсвеченной строке (`bg-accent`) обычный `muted-foreground`
+                      // не наследует смену фона и даёт 4.01:1 в тёмной теме вместо
+                      // нужных 4.5 (раунд исправлений 1 куска 1.4, ревью B) —
+                      // `text-accent-foreground/80` держит подсказку тусклее
+                      // заголовка строки, но читаемой на самом `--accent`.
+                      <span
+                        className={
+                          index === activeIndex ? 'text-xs text-accent-foreground/80' : 'text-xs text-muted-foreground'
+                        }
+                      >
+                        {command.hint}
+                      </span>
                     ) : null}
                   </button>
                 </li>

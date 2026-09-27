@@ -131,3 +131,16 @@ describe('ChangesPanel — тест 5: «Отбросить» грязного w
     expect(call?.params).toMatchObject({ ref, force: false });
   });
 });
+
+describe('ChangesPanel — раунд исправлений 1 куска 1.4 (ревью B, находка «текст destructive-кнопки нечитаем в тёмной теме»)', () => {
+  it('«Отбросить» — белый текст на destructive, в тёмной теме заливка на 60% прозрачности (тот же приём, что ui/button variant="destructive")', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('worktrees.diff', async () => baseDiff());
+    render(<ChangesPanel bridge={bridge} sessionRef={ref} base="main" />);
+
+    const discard = await screen.findByText('Отбросить');
+    expect(discard.className).toContain('text-white');
+    expect(discard.className).toContain('dark:bg-destructive/60');
+    expect(discard.className).not.toContain('text-destructive-foreground');
+  });
+});
