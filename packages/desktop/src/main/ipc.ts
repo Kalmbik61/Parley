@@ -125,6 +125,11 @@ export function registerIpc(options: RegisterIpcOptions): void {
     }),
   );
 
+  ipcMain.handle(
+    'host:activity-snapshot',
+    withIpcError(async () => connection.activitySnapshot()),
+  );
+
   ipcMain.on('host:notify', (_event, method: unknown, params: unknown) => {
     if (typeof method !== 'string' || !isNotificationName(method)) return;
     connection.notify(method, params);

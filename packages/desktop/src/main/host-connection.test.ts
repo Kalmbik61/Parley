@@ -13,6 +13,8 @@ interface FakeServerOptions {
   liveSessions?: number;
   /** Список методов в ответе `hello`; не задан — поля нет, как у хоста до этапа 3. */
   methods?: string[];
+  /** События сразу после ответа `hello` — как повтор активности настоящего хоста. */
+  afterHello?: unknown[];
 }
 
 /**
@@ -57,6 +59,7 @@ function startFakeServer(paths: HostPaths, options: FakeServerOptions = {}): Pro
                 },
               }),
             );
+            for (const event of options.afterHello ?? []) socket.write(encodeLine(event));
             continue;
           }
           if (message.method === 'host.shutdown' && typeof message.id === 'number') {
@@ -194,6 +197,43 @@ describe('HostConnection', () => {
     second.close();
     fresh.close();
   });
+
+  it('activity.changed до подписки окна копится по сессии; новое подключение начинает снимок заново', async () => {
+    const activity = (sessionId: string, state: string): unknown => ({
+      event: 'activity.changed',
+      data: {
+        ref: { projectPath: '/p', workId: 'w-0001', sessionId },
+        activity: { activity: state },
+        metrics: null,
+      },
+    });
+    await writeToken(paths);
+    let server = await startFakeServer(paths, {
+      afterHello: [activity('s-1', 'idle'), activity('s-2', 'working'), activity('s-1', 'blocked')],
+    });
+    const spawn = vi.fn(() => {
+      void startFakeServer(paths, { afterHello: [activity('s-2', 'idle')] }).then((s) => {
+        server = s;
+      });
+    });
+    const connection = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 2000 });
+    // Слушателей событий нет — окно ещё не подписалось.
+    await connection.connect();
+    await vi.waitFor(() => expect(connection.activitySnapshot()).toHaveLength(2));
+    const states = (): Record<string, string> =>
+      Object.fromEntries(
+        connection
+          .activitySnapshot()
+          .map((entry) => [entry.ref.sessionId, entry.activity.activity as string]),
+      );
+    expect(states()).toEqual({ 's-1': 'blocked', 's-2': 'working' });
+
+    await connection.restartHost();
+    await vi.waitFor(() => expect(states()).toEqual({ 's-2': 'idle' }));
+
+    connection.close();
+    server.close();
+  }, 10000);
 
   it('после host.shutdown переподключается к новому', async () => {
     await writeToken(paths);

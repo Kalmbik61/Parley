@@ -5,6 +5,8 @@ import {
   encodeLine,
   LineDecoder,
   PROTOCOL_VERSION,
+  refKey,
+  type EventData,
   type EventMessage,
   type MethodName,
   type NotificationName,
@@ -66,6 +68,14 @@ export class HostConnection {
   private reconnectDelayMs = 500;
   /** Причина, по которой `spawn()` заведомо не поднимет хост (например, нет `node` в PATH). */
   private spawnFailure: string | null = null;
+  /**
+   * Последнее `activity.changed` по каждой сессии текущего подключения. Хост
+   * повторяет активность новому клиенту сразу после `hello`, а рендерер
+   * подписывается на события позже (после статуса connected, после
+   * перезагрузки окна) — без этого кеша повтор уходил бы в пустоту, и ждущая
+   * разрешения сессия выглядела бы idle до следующего события.
+   */
+  private readonly activityCache = new Map<string, EventData<'activity.changed'>>();
 
   constructor(options: HostConnectionOptions) {
     this.paths = options.paths;
@@ -76,6 +86,11 @@ export class HostConnection {
   onEvent(listener: (message: EventMessage) => void): () => void {
     this.eventListeners.add(listener);
     return () => this.eventListeners.delete(listener);
+  }
+
+  /** Снимок кеша активности — окно берёт его, подписавшись на события (`host:activity-snapshot`). */
+  activitySnapshot(): Array<EventData<'activity.changed'>> {
+    return [...this.activityCache.values()];
   }
 
   onStatus(listener: (status: HostStatus) => void): () => void {
@@ -154,6 +169,10 @@ export class HostConnection {
 
     this.socket = socket;
     this.decoder = new LineDecoder();
+    // Новое подключение — новый повтор от хоста: записи прошлого хоста могли
+    // пропасть вместе с ним. Чистим до `hello`, а не после ответа: повтор идёт
+    // в том же куске данных сразу за ответом и разобрался бы раньше продолжения.
+    this.activityCache.clear();
     socket.on('data', (chunk: Buffer) => this.handleChunk(chunk));
     socket.on('close', () => this.handleClose());
     // Ошибки сокета проявляются как 'close' — отдельный обработчик тут не нужен,
@@ -207,6 +226,10 @@ export class HostConnection {
     const obj = raw as Record<string, unknown>;
 
     if (typeof obj.event === 'string') {
+      if (obj.event === 'activity.changed') {
+        const data = obj.data as EventData<'activity.changed'>;
+        this.activityCache.set(refKey(data.ref), data);
+      }
       for (const listener of this.eventListeners) listener(obj as unknown as EventMessage);
       return;
     }

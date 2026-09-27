@@ -44,6 +44,12 @@ export interface HarnasBridge {
   notify<N extends NotificationName>(method: N, params: Params<N>): void;
   on<E extends EventName>(event: E, listener: (data: EventData<E>) => void): () => void;
   onStatus(listener: (status: HostStatus) => void): () => void;
+  /**
+   * Последняя активность каждой сессии, которую main видел на текущем
+   * подключении, — в том числе повтор хоста после `hello`, пришедший раньше
+   * подписки рендерера (`main/host-connection.ts#activitySnapshot`).
+   */
+  activitySnapshot(): Promise<Array<EventData<'activity.changed'>>>;
   app: {
     openExternal(url: string): Promise<void>;
     notify(note: { title: string; body: string }): void;

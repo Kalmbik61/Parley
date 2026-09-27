@@ -37,6 +37,8 @@ export interface FakeBridge extends HarnasBridge {
    * Заново рассылает статус подписчикам onStatus, как emitStatus.
    */
   setHostMethods(methods: string[] | null): void;
+  /** Что вернёт `activitySnapshot` — будто main запомнил эти события до подписки. */
+  setActivitySnapshot(entries: Array<EventData<'activity.changed'>>): void;
   emitMenu(action: MenuAction): void;
   readonly appNotified: Array<{ title: string; body: string }>;
   readonly badges: number[];
@@ -73,6 +75,7 @@ export function createFakeBridge(): FakeBridge {
     methods: [...REQUIRED_METHODS],
   };
   let ui: UiFile = DEFAULT_UI;
+  let activitySnapshot: Array<EventData<'activity.changed'>> = [];
 
   const bridge: FakeBridge = {
     setHandler: (method, handler) => {
@@ -109,6 +112,10 @@ export function createFakeBridge(): FakeBridge {
       statusListeners.add(listener);
       listener(status);
       return () => statusListeners.delete(listener);
+    },
+    activitySnapshot: async () => [...activitySnapshot],
+    setActivitySnapshot: (entries) => {
+      activitySnapshot = [...entries];
     },
     app: {
       openExternal: async () => {},

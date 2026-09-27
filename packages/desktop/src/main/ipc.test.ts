@@ -41,6 +41,7 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore } = {})
     restartHost: vi.fn(),
     onEvent: vi.fn(),
     onStatus: vi.fn(),
+    activitySnapshot: vi.fn().mockReturnValue([{ ref: { sessionId: 's-1' } }]),
   } as unknown as HostConnection;
   const layoutStore: LayoutStore =
     overrides.layoutStore ??
@@ -76,6 +77,11 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore } = {})
 }
 
 describe('registerIpc', () => {
+  it('host:activity-snapshot отдаёт снимок активности из HostConnection (раунд исправлений 1 куска 3.1)', async () => {
+    const { ipcMain } = setup();
+    expect(await ipcMain.invoke('host:activity-snapshot')).toEqual([{ ref: { sessionId: 's-1' } }]);
+  });
+
   it('неизвестный метод отвергается', async () => {
     const { ipcMain } = setup();
     await expect(ipcMain.invoke('host:call', 'no.such.method', {})).rejects.toThrow();
