@@ -14,9 +14,16 @@
  * (`getBoundingClientRect` при «Разделить», спека 5.2 «Числа»: минимум
  * 240×160). Клик где угодно в группе фокусирует её — без этого ⌃1–9 и
  * «Разделить» из меню действовали бы не на ту группу, куда только что кликнули.
+ *
+ * Кусок 2.6 (спека 5.4): тело — droppable `body`, центр или край решает
+ * `zoneForPoint` по точке броска. У неактивной работы зона выключена: тела
+ * скрытых работ LRU лежат на месте тела активной. Тело позиционировано
+ * (`relative`) ради `DropIndicator`, но без `z-index` — своего контекста
+ * наложения не создаёт, и индикатор встаёт над поверхностью терминала.
  */
 
-import { createContext, useContext, useLayoutEffect, useRef } from 'react';
+import { createContext, useCallback, useContext, useLayoutEffect, useRef } from 'react';
+import { useDroppable } from '@dnd-kit/core';
 import type { WorkEntry, WorkSession } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
@@ -28,6 +35,8 @@ import { MailBody } from './bodies/MailBody.js';
 import { MissingBody } from './bodies/MissingBody.js';
 import { RoomBody } from './bodies/RoomBody.js';
 import { TerminalBody } from './bodies/TerminalBody.js';
+import { dndId, type DropTargetData } from './dnd.js';
+import { DropIndicator, useDropPreview } from './DropIndicator.js';
 import { TabStrip } from './TabStrip.js';
 import { useLayoutStore } from './store.js';
 import { focusGroup } from './tree.js';
@@ -107,7 +116,18 @@ export function GroupView({ workKey, group, entry, singleGroup }: GroupViewProps
 
   // Тело группы — якорь поверхностей слоя (спека 5.5): `anchor-name` через
   // `setProperty`, в `CSSProperties` @types/react 18 его нет.
-  const bodyRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const bodyData: DropTargetData = { workKey, kind: 'body', groupId: group.id };
+  const { setNodeRef } = useDroppable({ id: dndId.body(workKey, group.id), data: bodyData, disabled: !host.active });
+  const setBody = useCallback(
+    (node: HTMLDivElement | null) => {
+      bodyRef.current = node;
+      setNodeRef(node);
+    },
+    [setNodeRef],
+  );
+  const preview = useDropPreview();
+  const target = (preview?.kind === 'center' || preview?.kind === 'edge') && preview.groupId === group.id ? preview : null;
   useLayoutEffect(() => {
     bodyRef.current?.style.setProperty('anchor-name', `--g-${group.id}`);
   }, [group.id]);
@@ -126,8 +146,11 @@ export function GroupView({ workKey, group, entry, singleGroup }: GroupViewProps
       {/* Неактивная работа с одной группой строку не рисует вовсе: в заголовке
           место активной работы, а строка на месте поменяла бы высоту тела —
           и размер терминала при возврате к работе. */}
-      {singleGroup && !host.active ? null : <TabStrip workKey={workKey} group={group} entry={entry} portal={singleGroup} />}
-      <div ref={bodyRef} data-group-body={group.id} className="min-h-0 min-w-0 flex-1">
+      {singleGroup && !host.active ? null : (
+        <TabStrip workKey={workKey} group={group} entry={entry} portal={singleGroup} active={host.active} />
+      )}
+      <div ref={setBody} data-group-body={group.id} className="relative min-h-0 min-w-0 flex-1">
+        {target === null ? null : <DropIndicator edge={target.kind === 'edge' ? target.edge : null} />}
         {group.tabs.length === 0 ? (
           <div className="flex h-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
             {S.tabs.emptyGroup}

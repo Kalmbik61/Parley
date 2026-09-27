@@ -1,7 +1,10 @@
 /**
  * Дерево сессий одной работы: порядок и вложенность — из `lib/tree-order.ts`.
- * Строки перетаскиваются в сетку (кусок 2.1 плана окна): `dragPayload` кладёт
- * адрес сессии под свой MIME, `Workspace.tsx` читает его в `onDidDrop`.
+ * Строки сессий активной работы перетаскиваются в раскладку через `@dnd-kit`
+ * (кусок 2.6, спека 5.4, 6.4): `DndContext` один — в `AppShell.tsx`, он же
+ * решает, куда бросили. HTML5-перетаскивание в dockview ушло: до 2.7 в старый
+ * центр сессии не тащатся. Сессии неактивной работы не тащатся вовсе — курсор
+ * `not-allowed`, активатор выключен; их открывает клик.
  *
  * Строка «вся почта работы» (кусок 2.4) стоит здесь, а не в `WorkList.tsx`,
  * хотя она не про сессию: `SessionTree` уже вызывается ровно один раз на
@@ -19,6 +22,8 @@
  * `session.lifecycle` отдельным аргументом, а не только собранное состояние.
  */
 
+import { forwardRef, useCallback, type HTMLAttributes, type PointerEvent } from 'react';
+import { useDraggable } from '@dnd-kit/core';
 import type { Room, WorkSession } from '@harnas/core';
 import { refKey, type SessionRef } from '@harnas/protocol';
 import { S } from '../../../shared/strings.js';
@@ -28,7 +33,8 @@ import { treeOrder, workKey } from '../../lib/tree-order.js';
 import type { ActivityEntry } from '../../store/activity.js';
 import { activityFor } from '../../store/activity.js';
 import { useNoticesStore } from '../../store/notices.js';
-import { DRAG_MIME, dragPayload } from '../layout/sidebar-drag.js';
+import { dndId, type DragSourceData } from '../../layout/dnd.js';
+import { useLayoutStore } from '../../layout/store.js';
 import { MetricsLine } from './MetricsLine.js';
 import { SessionMenu } from './SessionMenu.js';
 import { StatusDot } from './StatusDot.js';
@@ -56,6 +62,54 @@ function RoomRow({ room, depth, onOpen }: RoomRowProps): JSX.Element {
     </div>
   );
 }
+
+interface SessionRowProps extends HTMLAttributes<HTMLDivElement> {
+  workKey: string;
+  sessionId: string;
+  draggable: boolean;
+  selected: boolean;
+}
+
+/**
+ * Строка сессии — отдельным компонентом ради `useDraggable`. `SessionMenu`
+ * оборачивает её `asChild`, поэтому ref и пропсы триггера меню (свой
+ * `onPointerDown` в том числе) доходят сюда и сливаются со слушателями
+ * @dnd-kit. Атрибуты @dnd-kit (`role`, `tabIndex`, `aria-*`) не ставятся:
+ * строка уже кнопка со своей ролью. `data-draggable` ставим сами: у @dnd-kit
+ * такого атрибута нет.
+ */
+const SessionRow = forwardRef<HTMLDivElement, SessionRowProps>(function SessionRow(
+  { workKey: key, sessionId, draggable, selected, onPointerDown, children, ...rest },
+  forwardedRef,
+) {
+  const data: DragSourceData = { item: { kind: 'session', sessionId } };
+  const { setNodeRef, listeners } = useDraggable({ id: dndId.session(key, sessionId), data, disabled: !draggable });
+  const ref = useCallback(
+    (node: HTMLDivElement | null) => {
+      setNodeRef(node);
+      if (typeof forwardedRef === 'function') forwardedRef(node);
+      else if (forwardedRef !== null) forwardedRef.current = node;
+    },
+    [setNodeRef, forwardedRef],
+  );
+  return (
+    <div
+      {...rest}
+      ref={ref}
+      role="button"
+      tabIndex={0}
+      {...(draggable ? { 'data-draggable': '' } : {})}
+      data-session-id={sessionId}
+      data-selected={selected}
+      onPointerDown={(event) => {
+        onPointerDown?.(event);
+        (listeners?.onPointerDown as ((event: PointerEvent<HTMLDivElement>) => void) | undefined)?.(event);
+      }}
+    >
+      {children}
+    </div>
+  );
+});
 
 export interface SessionTreeProps {
   projectPath: string;
@@ -111,6 +165,11 @@ export function SessionTree({
       .map((notice) => refKey(notice.ref as SessionRef)),
   );
 
+  const key = workKey(projectPath, workId);
+  // Тащить можно только сессии активной работы (спека 6.4): зоны броска есть
+  // лишь у её раскладки.
+  const draggable = useLayoutStore((state) => state.activeWorkKey === key);
+
   const humanRooms = rooms.filter((room) => room.creator === HUMAN);
   const roomsByCreator = new Map<string, Room[]>();
   for (const room of rooms) {
@@ -161,21 +220,16 @@ export function SessionTree({
               onCreateRoom={() => onCreateRoom(session)}
               onOpenChanges={() => onOpenChanges(session)}
             >
-              <div
-                role="button"
-                tabIndex={0}
-                draggable
-                onDragStart={(event) =>
-                  event.dataTransfer.setData(
-                    DRAG_MIME,
-                    dragPayload({ kind: 'terminal', ref, workKey: workKey(projectPath, workId) }),
-                  )
-                }
-                data-session-id={session.id}
-                data-selected={selected}
+              <SessionRow
+                workKey={key}
+                sessionId={session.id}
+                draggable={draggable}
+                selected={selected}
                 onClick={() => onSelect(session)}
                 style={{ paddingLeft: `${depth * 12 + 8}px` }}
-                className={`flex h-6 min-w-0 cursor-default items-center gap-2 rounded px-2 text-[11px] ${
+                className={`flex h-6 min-w-0 items-center gap-2 rounded px-2 text-[11px] ${
+                  draggable ? 'cursor-default' : 'cursor-not-allowed'
+                } ${
                   selected
                     ? 'bg-work-sidebar-accent text-work-sidebar-accent-foreground'
                     : closed
@@ -191,7 +245,7 @@ export function SessionTree({
                   </span>
                 ) : null}
                 <span className="shrink-0 truncate text-[11px] text-muted-foreground">{stateWord(state, session.lifecycle)}</span>
-              </div>
+              </SessionRow>
             </SessionMenu>
             {selected ? <MetricsLine metrics={entry?.metrics ?? null} /> : null}
             {(roomsByCreator.get(session.id) ?? []).map((room) => (

@@ -15,17 +15,26 @@
  * `--card`); на меню `find` поверхность сама не подписывается — смонтированы
  * все вкладки трёх работ, и ⌘F открыл бы полосу во всех; полосу открывает
  * `openSearch()` ручки, его зовёт `AppShell`.
+ *
+ * Кусок 2.6 (спека 5.4): корень — droppable `terminal` с `sessionId`, только
+ * пока поверхность видима: скрытые терминалы группы лежат на месте видимого,
+ * и бросок ушёл бы в чужую вкладку. В этапе 2 терминал ничего не принимает
+ * (`acceptsTerminal`) — зона оживёт с файлами в 7.2. `z-index` у корня нет:
+ * индикатор тела группы (`DropIndicator`, `z-index` 10) должен лечь поверх.
  */
 
 import '@xterm/xterm/css/xterm.css';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Terminal } from '@xterm/xterm';
 import type { SearchAddon } from '@xterm/addon-search';
+import { useDroppable } from '@dnd-kit/core';
 import { refKey, type SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
+import { dndId, type DropTargetData } from '../layout/dnd.js';
+import { useDropPreview } from '../layout/DropIndicator.js';
 import { useLayoutStore } from '../layout/store.js';
 import { tabMeta } from '../layout/tab-meta.js';
 import { focusTab } from '../layout/tree.js';
@@ -68,10 +77,23 @@ function newMountId(): string {
 
 export function TerminalSurface(props: TerminalSurfaceProps): JSX.Element {
   const { sessionRef, tabId, groupId, visible } = props;
-  const rootRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const [mountId] = useState(newMountId);
   const dark = useUiStore((state) => state.dark);
   const key = workKeyOf(sessionRef.projectPath, sessionRef.workId);
+  const dropData: DropTargetData = { workKey: key, kind: 'terminal', sessionId: sessionRef.sessionId };
+  const drop = useDroppable({ id: dndId.terminal(key, tabId), data: dropData, disabled: !visible });
+  const { setNodeRef } = drop;
+  const setRoot = useCallback(
+    (node: HTMLDivElement | null) => {
+      rootRef.current = node;
+      setNodeRef(node);
+    },
+    [setNodeRef],
+  );
+  const preview = useDropPreview();
+  // Рамка терминала — индикатор броска в него (спека 5.4).
+  const dropTarget = visible && preview?.kind === 'terminal' && preview.sessionId === sessionRef.sessionId;
   const entry = useWorksStore((state) =>
     state.entries.find((item) => item.projectPath === sessionRef.projectPath && item.map.work.id === sessionRef.workId),
   );
@@ -117,13 +139,17 @@ export function TerminalSurface(props: TerminalSurfaceProps): JSX.Element {
 
   return (
     <div
-      ref={rootRef}
+      ref={setRoot}
       data-tab-id={tabId}
       data-mount-id={mountId}
       className="absolute overflow-hidden"
       onPointerDownCapture={focusOwnTab}
       onFocusCapture={focusOwnTab}
-      style={{ visibility: visible ? 'visible' : 'hidden', backgroundColor: xtermTheme(dark).background }}
+      style={{
+        visibility: visible ? 'visible' : 'hidden',
+        backgroundColor: xtermTheme(dark).background,
+        ...(dropTarget ? { outline: '2px solid rgb(59,130,246)', outlineOffset: '-2px' } : {}),
+      }}
     >
       <ErrorBoundary title={title} onClose={() => void useLayoutStore.getState().requestCloseTabs(key, [tabId])}>
         <SurfaceInner {...props} />

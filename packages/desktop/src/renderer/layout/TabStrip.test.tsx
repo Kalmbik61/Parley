@@ -81,7 +81,7 @@ describe('TabStrip — тест 1', () => {
     host.id = 'titlebar-tabs';
     document.body.appendChild(host);
 
-    const { container } = render(<TabStrip workKey={WORK_KEY} group={group} entry={e} portal />);
+    const { container } = render(<TabStrip workKey={WORK_KEY} group={group} entry={e} portal active />);
 
     expect(container.querySelector('[data-tab-id]')).toBeNull();
     expect(host.querySelector('[data-tab-id]')).not.toBeNull();
@@ -98,7 +98,7 @@ describe('TabStrip — тест 1', () => {
     });
     const e = entry([]);
 
-    const { container } = render(<TabStrip workKey={WORK_KEY} group={group} entry={e} portal={false} />);
+    const { container } = render(<TabStrip workKey={WORK_KEY} group={group} entry={e} portal={false} active />);
     expect(container.querySelector('[data-tab-id="mail"]')).not.toBeNull();
   });
 });
@@ -121,7 +121,7 @@ describe('TabStrip — раунд исправлений 1: доступност
     });
     const e = entry([session('a', ''), session('b', ''), session('c', '')]);
 
-    render(<TabStrip workKey={WORK_KEY} group={group} entry={e} portal={false} />);
+    render(<TabStrip workKey={WORK_KEY} group={group} entry={e} portal={false} active />);
 
     const tablist = screen.getByRole('tablist');
     expect(tablist.getAttribute('aria-label')).toBe('Tabs');
@@ -155,7 +155,7 @@ describe('TabStrip — раунд исправлений 1: доступност
     });
     const e = entry([session('a', '')]);
 
-    render(<TabStrip workKey={WORK_KEY} group={group} entry={e} portal={false} />);
+    render(<TabStrip workKey={WORK_KEY} group={group} entry={e} portal={false} active />);
     const tablist = screen.getByRole('tablist');
 
     // Ничего не переполнено (вкладки помещаются целиком) — прокрутка не

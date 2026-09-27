@@ -8,6 +8,8 @@ import { cleanup, render, screen } from '@testing-library/react';
 import type { Room, WorkSession } from '@harnas/core';
 import { refKey, type SessionRef } from '@harnas/protocol';
 import type { ActivityEntry } from '../../store/activity.js';
+import { EMPTY_HISTORY } from '../../layout/history.js';
+import { useLayoutStore } from '../../layout/store.js';
 import { SessionTree } from './SessionTree.js';
 
 afterEach(cleanup);
@@ -176,5 +178,51 @@ describe('SessionTree — тест 1', () => {
     );
 
     expect(screen.getByText('Needs you')).toBeTruthy();
+  });
+});
+
+describe('SessionTree — перетаскивание (тест 6 куска 2.6)', () => {
+  function renderTree(workId: string): void {
+    render(
+      <SessionTree
+        projectPath={`/tmp/${workId}`}
+        workId={workId}
+        sessions={[session('s-01', 'план')]}
+        rooms={[]}
+        selectedSessionId={null}
+        activityByRef={{}}
+        hasMail={false}
+        onSelect={noop}
+        onOpen={noop}
+        onResume={noop}
+        onStop={noop}
+        onClose={noop}
+        onDelete={noop}
+        onCreateRoom={noop}
+        onOpenMail={noop}
+        onOpenRoom={noop}
+        onOpenChanges={noop}
+      />,
+    );
+  }
+
+  afterEach(() => {
+    useLayoutStore.setState({ activeWorkKey: null, layouts: {}, hydrated: {}, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
+  });
+
+  it('у строки сессии неактивной работы нет data-draggable и курсор not-allowed, у активной — есть; HTML5-перетаскивания нет', () => {
+    useLayoutStore.setState({ activeWorkKey: '/tmp/w-02 w-02' });
+    renderTree('w-01');
+    const inactive = document.querySelector<HTMLElement>('[data-session-id="s-01"]');
+    expect(inactive?.hasAttribute('data-draggable')).toBe(false);
+    expect(inactive?.className).toContain('cursor-not-allowed');
+    expect(inactive?.getAttribute('draggable')).toBeNull();
+    cleanup();
+
+    renderTree('w-02');
+    const active = document.querySelector<HTMLElement>('[data-session-id="s-01"]');
+    expect(active?.hasAttribute('data-draggable')).toBe(true);
+    expect(active?.className).not.toContain('cursor-not-allowed');
+    expect(active?.getAttribute('draggable')).toBeNull();
   });
 });

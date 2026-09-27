@@ -30,9 +30,27 @@
  * а тела групп — его потомки, поэтому `anchor()` действительны. Неактивные
  * контейнеры скрыты (`visibility: hidden`, `inert`), но смонтированы — терминалы
  * живы. Меню `find` и входы сайдбара под флагом тоже обслуживает `AppShell`.
+ *
+ * Кусок 2.6 (спека 5.4): один `DndContext` на всё окно — строка сессии живёт
+ * в сайдбаре, строка вкладок одной группы — в заголовке, зоны броска — в
+ * центре, а `useDraggable` вне провайдера молча не тащит. `PointerSensor` — с
+ * порогом 4 px: без него @dnd-kit начинает перетаскивание уже на
+ * `pointerdown` и глушит следующий `click`, и строка сессии перестала бы
+ * открываться по клику, а крестик — закрывать вкладку. Без `?center=new` зон
+ * броска нет — сессии в старый центр не тащатся до 2.7.
  */
 
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragMoveEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core';
 import { toast } from 'sonner';
 import type { WorkSession } from '@harnas/core';
 import { refKey, type SessionRef } from '@harnas/protocol';
@@ -50,7 +68,10 @@ import { Sidebar } from '../components/sidebar/Sidebar.js';
 import { buildCommands } from '../lib/commands.js';
 import { sessionLabelFor, sessionRowLabel } from '../lib/participant.js';
 import { treeOrder, workKey } from '../lib/tree-order.js';
+import { applyDrop, dragItemOf, dropFromDragEnd, layoutCollision, onTerminalDrop, type DragItem, type DropZone } from '../layout/dnd.js';
+import { DropPreviewContext } from '../layout/DropIndicator.js';
 import { tabId } from '../layout/ids.js';
+import { tabMeta } from '../layout/tab-meta.js';
 import { LayoutView } from '../layout/LayoutView.js';
 import { createLru, type Lru } from '../layout/lru.js';
 import { SurfaceLayer } from '../layout/SurfaceLayer.js';
@@ -82,6 +103,26 @@ function measureGroupSizes(): GroupSizes {
     sizes[id] = { width: rect.width, height: rect.height };
   }
   return sizes;
+}
+
+/** Одинаковые ли зоны — чтобы не перерисовывать индикаторы на каждый сдвиг мыши. */
+function sameZone(a: DropZone | null, b: DropZone | null): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * Ярлык предмета в `DragOverlay`: заголовок вкладки или строка сессии активной
+ * работы — тот же текст, что человек видел под курсором.
+ */
+function dragLabel(item: DragItem, key: string | null): string {
+  const entry = useWorksStore.getState().entries.find((candidate) => workKey(candidate.projectPath, candidate.map.work.id) === key);
+  if (item.kind === 'session') {
+    const session = entry?.map.sessions.find((candidate) => candidate.id === item.sessionId);
+    return sessionRowLabel(item.sessionId, session?.label ?? '');
+  }
+  const layout = key === null ? undefined : useLayoutStore.getState().layouts[key];
+  const tab = layout === undefined ? undefined : groups(layout).flatMap((group) => group.tabs).find((candidate) => candidate.id === item.tabId);
+  return tab === undefined ? item.tabId : tabMeta(tab, entry ?? null).title;
 }
 
 /** Слои поверхностей живут у трёх последних работ (план, «Числа»). */
@@ -208,6 +249,47 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   const noticeLine = lastNotice === null ? '' : noticeText(lastNotice, sessionLabelFor(entries, lastNotice.ref));
 
   const leftSidebarRef = useRef<HTMLDivElement>(null);
+
+  // Перетаскивание (кусок 2.6). `dragging` — ярлык в `DragOverlay`, `dropZone`
+  // — где сейчас бросок, для индикаторов в строке, теле и терминале.
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [dropZone, setDropZone] = useState<DropZone | null>(null);
+
+  const handleDragStart = (event: DragStartEvent): void => {
+    const item = dragItemOf(event.active.data.current);
+    setDragging(item === null ? null : dragLabel(item, useLayoutStore.getState().activeWorkKey));
+  };
+
+  const handleDragMove = (event: DragMoveEvent): void => {
+    const zone = dropFromDragEnd(event)?.zone ?? null;
+    setDropZone((prev) => (sameZone(prev, zone) ? prev : zone));
+  };
+
+  const handleDragEnd = (event: DragEndEvent): void => {
+    setDragging(null);
+    setDropZone(null);
+    const drop = dropFromDragEnd(event);
+    const key = useLayoutStore.getState().activeWorkKey;
+    if (drop === null || key === null) return;
+    // Зона чужой работы сюда не доходит (`layoutCollision`), но раскладку
+    // меняем только у той работы, чья зона под указателем.
+    const owner = (event.over?.data.current as { workKey?: unknown } | undefined)?.workKey;
+    if (owner !== key) return;
+    const { item, zone } = drop;
+    if (zone.kind === 'terminal') {
+      onTerminalDrop(item, zone.sessionId);
+      return;
+    }
+    const error = useLayoutStore.getState().apply(key, (layout) => applyDrop(layout, item, zone, measureGroupSizes()));
+    if (error === 'too-many-groups') toast(S.tabs.tooManyGroups);
+    else if (error === 'too-small') toast(S.tabs.tooSmall);
+  };
+
+  const handleDragCancel = (): void => {
+    setDragging(null);
+    setDropZone(null);
+  };
 
   // N-я по порядку создания работа и её последняя открытая сессия
   // (`store/ui.ts#lastSessionByWork`), иначе первая по дереву — тот же
@@ -366,7 +448,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
       ? openTabCenterNew(key, { kind: 'room', id: tabId.room(roomId), roomId })
       : workspaceRef.current?.openRoom(key, roomId, title);
 
-  return (
+  const shell = (
     <div className="flex h-screen flex-col bg-background text-foreground">
       <Titlebar bridge={bridge} />
       <InterruptedBanner bridge={bridge} />
@@ -475,5 +557,28 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
         />
       ) : null}
     </div>
+  );
+
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={layoutCollision(activeWorkKey)}
+      onDragStart={handleDragStart}
+      onDragMove={handleDragMove}
+      onDragEnd={handleDragEnd}
+      onDragCancel={handleDragCancel}
+    >
+      <DropPreviewContext.Provider value={dropZone}>{shell}</DropPreviewContext.Provider>
+      <DragOverlay dropAnimation={null}>
+        {dragging === null ? null : (
+          <div
+            data-drag-overlay
+            className="inline-flex h-7 max-w-60 items-center truncate rounded border border-border bg-popover px-2 text-xs text-popover-foreground shadow"
+          >
+            {dragging}
+          </div>
+        )}
+      </DragOverlay>
+    </DndContext>
   );
 }
