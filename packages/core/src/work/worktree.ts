@@ -73,10 +73,25 @@ export async function baseBranchOf(checkoutPath: string): Promise<string> {
   return (await run('git', ['-C', checkoutPath, 'rev-parse', 'HEAD'])).stdout.trim();
 }
 
-/** Заводит worktree на диске: каталог создаёт сама команда, родителя — на всякий случай мы. */
+/**
+ * Заводит worktree на диске: каталог создаёт сама команда, родителя — на всякий случай мы.
+ * База и ветка — из карты (база бывает веткой родителя): проверка до git и до
+ * mkdir, `--end-of-options` — чтобы база вида `--upload-pack=…` не стала флагом.
+ */
 export async function createWorktree(projectPath: string, info: WorktreeInfo): Promise<void> {
+  await assertRevisions(projectPath, [info.base, info.branch]);
   await mkdir(path.dirname(info.path), { recursive: true });
-  await run('git', ['-C', projectPath, 'worktree', 'add', info.path, '-b', info.branch, info.base]);
+  await run('git', [
+    '-C',
+    projectPath,
+    'worktree',
+    'add',
+    '-b',
+    info.branch,
+    '--end-of-options',
+    info.path,
+    info.base,
+  ]);
 }
 
 export interface DiffFile {
@@ -726,6 +741,9 @@ export async function mergeWorktree(
   info: WorktreeInfo,
   message: string,
 ): Promise<MergeResult> {
+  // Как в mergeCheck: база и ветка из карты — до любого git, иначе флаг вместо
+  // ветки ушёл бы в `git merge` параметром.
+  await assertRevisions(projectPath, [info.base, info.branch]);
   const baseCheckout = await findBaseCheckout(projectPath, info.base);
   if (baseCheckout === null) return { ok: false, reason: 'base_not_checked_out', files: [] };
 
@@ -735,7 +753,7 @@ export async function mergeWorktree(
   if (await isDirty(info.path, prefix)) return { ok: false, reason: 'uncommitted', files: [] };
 
   try {
-    await run('git', ['-C', baseCheckout, 'merge', '--no-ff', info.branch, '-m', message]);
+    await run('git', ['-C', baseCheckout, 'merge', '--no-ff', '-m', message, '--end-of-options', info.branch]);
   } catch {
     // Конфликт: список файлов из индекса, затем откат — база не остаётся
     // наполовину слитой ни при каком исходе (правило куска 4.1).
@@ -760,6 +778,9 @@ export async function discardWorktree(
   info: WorktreeInfo,
   options: { force?: boolean } = {},
 ): Promise<void> {
+  // Ветка из карты — проверка раньше `worktree remove`: иначе каталог уже
+  // удалён, а `branch -D` с флагом вместо имени падает на полпути.
+  await assertRevisions(projectPath, [info.branch]);
   if (options.force !== true) {
     const dirty =
       (await run('git', ['-C', info.path, 'status', '--porcelain'])).stdout.trim() !== '';
@@ -774,5 +795,5 @@ export async function discardWorktree(
   if (options.force === true) removeArgs.push('--force');
   removeArgs.push(info.path);
   await run('git', removeArgs);
-  await run('git', ['-C', projectPath, 'branch', '-D', info.branch]);
+  await run('git', ['-C', projectPath, 'branch', '-D', '--end-of-options', info.branch]);
 }

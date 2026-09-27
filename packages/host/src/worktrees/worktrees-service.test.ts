@@ -181,6 +181,21 @@ describe('discard (6)', () => {
   });
 });
 
+describe('ветка карты — не ревизия (раунд исправлений 2 куска 8.1)', () => {
+  it('merge и discard с веткой-флагом — bad_request, каталог worktree на месте', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    await updateMap(project, ref.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session?.worktree !== null && session?.worktree !== undefined) session.worktree.branch = '-c';
+    });
+    const service = createWorktreesService(stubSessions());
+
+    await expect(service.merge(ref)).rejects.toMatchObject({ code: 'bad_request' });
+    await expect(service.discard(ref, true)).rejects.toMatchObject({ code: 'bad_request' });
+    expect(existsSync(info.path)).toBe(true);
+  });
+});
+
 describe('без своего worktree', () => {
   it('diff/commit/merge/discard сессии без worktree — bad_request', async () => {
     const work = await createWork(project, { title: 'Работа', goal: '' });

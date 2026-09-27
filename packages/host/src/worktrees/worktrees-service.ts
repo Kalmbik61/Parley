@@ -121,7 +121,13 @@ export function createWorktreesService(
     async merge(ref) {
       const { label, worktree } = await requireWorktree(ref);
       const message = `harnas: влить ${sessionTag(ref.sessionId)} (${label}) из ${worktree.branch}`;
-      return mergeWorktree(ref.projectPath, worktree, message);
+      try {
+        return await mergeWorktree(ref.projectPath, worktree, message);
+      } catch (error) {
+        // Только отказ по ревизии — bad_request; прочий сбой merge идёт как раньше (internal с логом сервера).
+        if (error instanceof InvalidRevisionError) throw gitFailure(error);
+        throw error;
+      }
     },
 
     async discard(ref, force) {
@@ -134,6 +140,7 @@ export function createWorktreesService(
           await discardWorktree(ref.projectPath, worktree, { force });
         } catch (error) {
           if (error instanceof DirtyWorktreeError) throw new HostError('conflict', error.message);
+          if (error instanceof InvalidRevisionError) throw gitFailure(error);
           throw error;
         }
       }

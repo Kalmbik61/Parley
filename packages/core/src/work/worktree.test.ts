@@ -617,6 +617,65 @@ describe('mergeCheck — ревизии из карты и старый git (р�
   });
 });
 
+describe('ревизии из карты в mergeWorktree, createWorktree, discardWorktree (раунд исправлений 2)', () => {
+  const exists = (file: string): Promise<boolean> =>
+    access(file).then(
+      () => true,
+      () => false,
+    );
+  const bads = (canary: string): string[] => ['-c', `--upload-pack=touch ${canary}`];
+
+  it('mergeWorktree: флаг вместо базы или ветки — InvalidRevisionError, канарейки нет; нормальная ветка — как раньше', async () => {
+    await initProject();
+    const info = await freshWorktree();
+    await writeFile(path.join(info.path, 'feature.md'), 'фича\n', 'utf8');
+    await git(info.path, ['add', 'feature.md']);
+    await git(info.path, ['commit', '-m', 'фича']);
+    const canary = path.join(root, 'canary');
+    for (const bad of bads(canary)) {
+      await expect(mergeWorktree(project, { ...info, base: bad }, 'влить')).rejects.toBeInstanceOf(
+        InvalidRevisionError,
+      );
+      await expect(mergeWorktree(project, { ...info, branch: bad }, 'влить')).rejects.toBeInstanceOf(
+        InvalidRevisionError,
+      );
+    }
+    expect(await exists(canary)).toBe(false);
+    const result = await mergeWorktree(project, info, 'влить');
+    expect(result.ok).toBe(true);
+  });
+
+  it('createWorktree: флаг вместо базы или ветки — InvalidRevisionError, каталога и канарейки нет', async () => {
+    await initProject();
+    const info = plannedWorktree(project, 'w-0001', 's-02', 'main', worktreeRoot);
+    const canary = path.join(root, 'canary');
+    for (const bad of bads(canary)) {
+      await expect(createWorktree(project, { ...info, base: bad })).rejects.toBeInstanceOf(InvalidRevisionError);
+      await expect(createWorktree(project, { ...info, branch: bad })).rejects.toBeInstanceOf(InvalidRevisionError);
+    }
+    expect(await exists(canary)).toBe(false);
+    expect(await exists(info.path)).toBe(false);
+    await createWorktree(project, info);
+    expect(await exists(info.path)).toBe(true);
+  });
+
+  it('discardWorktree: флаг вместо ветки — InvalidRevisionError до удаления каталога; нормальная — как раньше', async () => {
+    await initProject();
+    const info = await freshWorktree();
+    const canary = path.join(root, 'canary');
+    for (const bad of bads(canary)) {
+      await expect(discardWorktree(project, { ...info, branch: bad }, { force: true })).rejects.toBeInstanceOf(
+        InvalidRevisionError,
+      );
+    }
+    expect(await exists(canary)).toBe(false);
+    expect(await exists(info.path)).toBe(true);
+    await discardWorktree(project, info);
+    expect(await exists(info.path)).toBe(false);
+    expect((await git(project, ['branch', '--list', info.branch])).stdout.trim()).toBe('');
+  });
+});
+
 describe('вложенный репозиторий и .harnas в worktree (раунд исправлений 1)', () => {
   async function nestedRepo(dir: string): Promise<void> {
     const nested = path.join(dir, 'nested');
