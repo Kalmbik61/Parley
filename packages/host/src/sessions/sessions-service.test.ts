@@ -691,4 +691,35 @@ describe('worktree (план, кусок 4.2)', () => {
     expect(existsSync(info.path)).toBe(false);
     expect((await readMap(project, work.work.id)).sessions.some((s) => s.id === sessionId)).toBe(false);
   });
+
+  it('8: sessions.delete с флагом вместо ветки в карте — bad_request, как merge/discard; worktree и запись на месте (долг 8.1)', async () => {
+    await initGitProject(project);
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const worktreeRootDir = await tempWorktreeRoot();
+
+    let sessionId = '';
+    let info!: WorktreeInfo;
+    await updateMap(project, work.work.id, (map) => {
+      const created = addSession(map, { provider: 'claude', label: 'a', task: 'т' });
+      sessionId = created.id;
+      created.worktree = plannedWorktree(project, work.work.id, created.id, 'main', worktreeRootDir);
+      info = created.worktree;
+    });
+    await createWorktree(project, info);
+    // Карту мог переписать агент: ветка стала флагом.
+    await updateMap(project, work.work.id, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === sessionId);
+      if (session?.worktree !== null && session?.worktree !== undefined) {
+        session.worktree.createdAt = new Date().toISOString();
+        session.worktree.branch = '-c';
+      }
+    });
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref: SessionRef = { projectPath: project, workId: work.work.id, sessionId };
+
+    await expect(service.delete(ref, true)).rejects.toMatchObject({ code: 'bad_request' });
+    expect(existsSync(info.path)).toBe(true);
+    expect((await readMap(project, work.work.id)).sessions.some((s) => s.id === sessionId)).toBe(true);
+  });
 });

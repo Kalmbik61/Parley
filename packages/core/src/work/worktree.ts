@@ -793,7 +793,9 @@ export async function discardWorktree(
 
   const removeArgs = ['-C', projectPath, 'worktree', 'remove'];
   if (options.force === true) removeArgs.push('--force');
-  removeArgs.push(info.path);
+  // Путь из карты, как и ревизии, может переписать агент: «--» не даёт ему
+  // стать опцией `worktree remove`.
+  removeArgs.push('--', info.path);
   await run('git', removeArgs);
   await run('git', ['-C', projectPath, 'branch', '-D', '--end-of-options', info.branch]);
 }

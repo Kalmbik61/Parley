@@ -674,6 +674,20 @@ describe('ревизии из карты в mergeWorktree, createWorktree, disca
     expect(await exists(info.path)).toBe(false);
     expect((await git(project, ['branch', '--list', info.branch])).stdout.trim()).toBe('');
   });
+
+  it('discardWorktree: путь из карты с ведущим «-» идёт в worktree remove путём, а не опцией (долг 8.1)', async () => {
+    await initProject();
+    // Относительный путь от `-C projectPath`: так git сам создаёт каталог «-wt»,
+    // а без «--» `worktree remove -wt` читается как пачка ключей и падает кодом 129.
+    const branch = 'harnas/w-0001/s-09';
+    await git(project, ['worktree', 'add', '-b', branch, '--', '-wt', 'main']);
+    const info = { ...plannedWorktree(project, 'w-0001', 's-09', 'main', worktreeRoot), path: '-wt', branch };
+
+    await discardWorktree(project, info, { force: true });
+
+    expect(await exists(path.join(project, '-wt'))).toBe(false);
+    expect((await git(project, ['branch', '--list', branch])).stdout.trim()).toBe('');
+  });
 });
 
 describe('вложенный репозиторий и .harnas в worktree (раунд исправлений 1)', () => {
