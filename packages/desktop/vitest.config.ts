@@ -13,6 +13,8 @@ export default defineConfig({
     // `dist/**` — вывод `electron-builder` (кусок 1.13): внутри упакованного
     // `.app` лежит `pnpm deploy` хоста целиком, вместе с его `*.test.ts` —
     // без исключения vitest пытается прогнать их тут, под чужим tsconfig.
-    exclude: ['**/node_modules/**', 'e2e/**', 'out/**', 'dist/**'],
+    // `prototype/**` — интерактивный прототип комнат (пользовательский, со своей сборкой
+    // и своими тестами): в набор тестов окна он не входит.
+    exclude: ['**/node_modules/**', 'e2e/**', 'out/**', 'dist/**', 'prototype/**'],
   },
 });
