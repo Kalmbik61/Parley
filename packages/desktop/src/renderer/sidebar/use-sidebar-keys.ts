@@ -13,9 +13,14 @@
  * отложенным порядком, свёрнутыми группами и раскрытыми закрытыми сессиями. При
  * виртуализации (больше 50 карточек) это только нарисованная часть; `focus()` прокручивает
  * к элементу, и виртуализатор дорисовывает следующие.
+ *
+ * Раунд исправлений 1: roving tabindex (WAI-ARIA tree). Точка входа в порядке Tab одна —
+ * элемент под курсором (`useCursorStop`), остальные карточки и строки −1: Tab с курсора
+ * уходит из списка одним нажатием, а не по всем строкам сессий.
  */
 
-import { useRef, type FocusEvent, type KeyboardEvent, type RefObject } from 'react';
+import { useEffect, useRef, type FocusEvent, type KeyboardEvent, type RefObject } from 'react';
+import { create } from 'zustand';
 import { isTextEntryTarget } from '../layout/keys.js';
 
 export interface SidebarCursor {
@@ -65,6 +70,61 @@ function elementOf(list: HTMLElement, cursor: SidebarCursor): HTMLElement | null
   }) ?? null;
 }
 
+interface CursorState {
+  /** Элемент под курсором; `null` — курсора ещё нет, точка входа — активная карточка. */
+  cursor: SidebarCursor | null;
+  /** Курсор, чьё меню открыто по Shift+F10: закрытое меню возвращает фокус ему. */
+  menuReturn: SidebarCursor | null;
+}
+
+/**
+ * Курсор — в отдельном сторе, а не в состоянии сайдбара: карточки и строки — `memo`, и на
+ * шаг курсора перерисовываются только два элемента, прежний и новый.
+ */
+export const useSidebarCursorStore = create<CursorState>(() => ({ cursor: null, menuReturn: null }));
+
+const setCursor = (cursor: SidebarCursor | null): void => {
+  const current = useSidebarCursorStore.getState().cursor;
+  if (current === cursor || (current !== null && cursor !== null && sameCursor(current, cursor))) return;
+  useSidebarCursorStore.setState({ cursor });
+};
+
+/**
+ * Точка входа ли этот элемент (tabIndex 0 и `aria-selected`). Пока курсора нет — активная
+ * карточка. Элемент под курсором ушёл из DOM (сессия закрыта, работа удалена, карточка
+ * уехала за край виртуального списка) — курсор сбрасывается, иначе в список не войти Tab.
+ */
+export function useCursorStop(workKey: string, sessionId: string | null, active: boolean): boolean {
+  const stop = useSidebarCursorStore((state) =>
+    state.cursor === null ? sessionId === null && active : state.cursor.workKey === workKey && state.cursor.sessionId === sessionId,
+  );
+  useEffect(
+    () => () => {
+      const cursor = useSidebarCursorStore.getState().cursor;
+      if (cursor !== null && cursor.workKey === workKey && cursor.sessionId === sessionId) setCursor(null);
+    },
+    [workKey, sessionId],
+  );
+  return stop;
+}
+
+/**
+ * `onCloseAutoFocus` меню карточки и строки. Меню, открытое Shift+F10, возвращает фокус
+ * элементу под курсором, найденному заново по его ключу: Radix держит ссылку на прежний
+ * узел, и после перерисовки карточки (→/← по «+N closed») фокус уходил не туда (раунд
+ * исправлений 1, находка 4). Меню, открытое мышью, фокус не трогает — пусть решает Radix.
+ */
+export function returnCursorFocus(event: Event): void {
+  const back = useSidebarCursorStore.getState().menuReturn;
+  if (back === null) return;
+  useSidebarCursorStore.setState({ menuReturn: null });
+  const list = document.querySelector<HTMLElement>('[data-sidebar-list]');
+  const element = list === null ? null : elementOf(list, back);
+  if (element === null) return;
+  event.preventDefault();
+  element.focus();
+}
+
 export interface SidebarKeysInput {
   /** Прокручиваемый список сайдбара. */
   listRef: RefObject<HTMLElement>;
@@ -85,6 +145,8 @@ export function useSidebarKeys({ listRef, activeWorkKey, onActivateWork, onShowC
   // Фокус от указателя остаётся там, куда кликнули: курсор на активную карточку ставит
   // только вход с клавиатуры (или клик по пустому месту списка).
   const pointer = useRef(false);
+  /** Идёт свой перевод фокуса: вложенный `onFocus` от него — не новый вход. */
+  const redirecting = useRef(false);
 
   return {
     onPointerDown: () => {
@@ -96,16 +158,39 @@ export function useSidebarKeys({ listRef, activeWorkKey, onActivateWork, onShowC
     onFocus: (event) => {
       const list = listRef.current;
       if (list === null) return;
+      const target = event.target;
+      // Фокус в порталах меню и диалогов всплывает сюда по дереву React, но это не список.
+      // Прежде курсор уводил фокус из меню на карточку, ловушка фокуса меню возвращала
+      // его — и так до переполнения стека (раунд исправлений 1, находка 2).
+      if (!list.contains(target) || redirecting.current) return;
+      const own = cursorOf(target);
       const related = event.relatedTarget;
-      if (related instanceof Node && list.contains(related)) return;
-      if (pointer.current && event.target !== list) return;
-      // Поле переименования берёт фокус само, а закрытое меню или диалог возвращают его
-      // своему триггеру — это не вход в сайдбар, курсор не переставляется.
-      if (isTextEntryTarget(event.target)) return;
-      if (related instanceof Element && related.closest('[role="menu"], [role="dialog"]') !== null) return;
+      // Клик по пустому месту списка — всегда курсор на активную карточку, откуда бы ни
+      // пришёл фокус (находка 3). Вход с клавиатуры (Tab, Shift+Tab) — только снаружи: не
+      // из списка, не из меню или диалога (они возвращают фокус своему триггеру) и не без
+      // источника (окно снова стало активным, программный `focus()`).
+      const entered =
+        target === list ||
+        (!pointer.current &&
+          related instanceof Element &&
+          !list.contains(related) &&
+          related.closest('[role="menu"], [role="dialog"]') === null &&
+          !isTextEntryTarget(target));
+      if (!entered) {
+        if (own !== null) setCursor(own);
+        return;
+      }
       const cards = [...list.querySelectorAll<HTMLElement>('[data-work-key]')];
-      const target = cards.find((card) => card.dataset.workKey === activeWorkKey) ?? cards[0];
-      if (target !== undefined && target !== event.target) target.focus();
+      const card = cards.find((item) => item.dataset.workKey === activeWorkKey) ?? cards[0];
+      if (card === undefined) return;
+      setCursor(cursorOf(card));
+      if (card === target) return;
+      redirecting.current = true;
+      try {
+        card.focus();
+      } finally {
+        redirecting.current = false;
+      }
     },
     onKeyDown: (event) => {
       const list = listRef.current;
@@ -117,6 +202,7 @@ export function useSidebarKeys({ listRef, activeWorkKey, onActivateWork, onShowC
 
       if (event.key === 'F10' && event.shiftKey) {
         event.preventDefault();
+        useSidebarCursorStore.setState({ menuReturn: current });
         const rect = element.getBoundingClientRect();
         element.dispatchEvent(
           new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: rect.bottom }),
@@ -128,7 +214,10 @@ export function useSidebarKeys({ listRef, activeWorkKey, onActivateWork, onShowC
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault();
         const next = moveCursor(cursorElements(list).flatMap((item) => cursorOf(item) ?? []), current, event.key);
-        if (next !== null) elementOf(list, next)?.focus();
+        if (next !== null) {
+          setCursor(next);
+          elementOf(list, next)?.focus();
+        }
       } else if (current.sessionId === null && event.key === 'Enter') {
         event.preventDefault();
         onActivateWork(current.workKey);
@@ -137,7 +226,9 @@ export function useSidebarKeys({ listRef, activeWorkKey, onActivateWork, onShowC
         onShowClosed(current.workKey, event.key === 'ArrowRight');
       } else if (current.sessionId !== null && event.key === 'ArrowLeft') {
         event.preventDefault();
-        elementOf(list, { workKey: current.workKey, sessionId: null })?.focus();
+        const card = { workKey: current.workKey, sessionId: null };
+        setCursor(card);
+        elementOf(list, card)?.focus();
       }
     },
   };

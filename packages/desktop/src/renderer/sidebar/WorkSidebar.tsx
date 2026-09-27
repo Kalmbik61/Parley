@@ -231,6 +231,9 @@ export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail,
       <div
         ref={listRef}
         data-sidebar-list
+        // Дерево WAI-ARIA: ↑↓ по карточкам и строкам, →/← — раскрыть и свернуть (спека 6.5).
+        role="tree"
+        aria-label={S.sidebar.workspaceList}
         // Клик по пустому месту списка — фокус сайдбара (спека 6.5), курсор на активной карточке.
         tabIndex={-1}
         onFocus={keys.onFocus}

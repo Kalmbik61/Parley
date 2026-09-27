@@ -85,6 +85,8 @@ export const S = {
     roomsMenu: 'Rooms',
     /** `aria-label` поля переименования на месте (спека 6.4). */
     renameField: 'Workspace name',
+    /** aria-label списка карточек — дерево «работа → сессии» для клавиатуры (спека 6.5). */
+    workspaceList: 'Workspaces',
     sessionMenu: {
       open: 'Open',
       /** Кусок 3.4: сплит вправо с вкладкой терминала сессии. */

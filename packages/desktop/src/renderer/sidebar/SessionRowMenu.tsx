@@ -32,6 +32,7 @@ import {
 } from '../ui/context-menu.js';
 import { DESTRUCTIVE_ITEM } from './CardMenu.js';
 import { useSidebarHold } from './use-sidebar-hold.js';
+import { returnCursorFocus } from './use-sidebar-keys.js';
 
 const RESUMABLE: ReadonlySet<SessionStatus> = new Set(['exited', 'done', 'failed']);
 const STOPPABLE: ReadonlySet<SessionStatus> = new Set(['active', 'pending']);
@@ -66,9 +67,16 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
     const tab: TabSpec = { kind: 'terminal', id: tabId.terminal(session.id), sessionId: session.id };
     const store = useLayoutStore.getState();
     store.setActiveWork(workKey);
-    const error = store.apply(workKey, (layout) => splitGroup(layout, layout.activeGroupId, 'row', tab, measureGroupSizes()));
-    if (error === 'too-many-groups') toast(S.tabs.tooManyGroups);
-    else if (error === 'too-small') toast(S.tabs.tooSmall);
+    // Отказ сообщается изнутри операции: у негидрированной работы она выполняется позже, в
+    // `hydrate`, а тот ошибки очереди молча отбрасывает — ответ `apply` тогда всегда `null`
+    // (раунд исправлений 1, находка 1). Одна пустая группа (работу ни разу не открывали) —
+    // не отказ: `splitGroup` просто кладёт вкладку в неё, сплитить там нечего.
+    store.apply(workKey, (layout) => {
+      const result = splitGroup(layout, layout.activeGroupId, 'row', tab, measureGroupSizes());
+      if (result.error === 'too-many-groups') toast(S.tabs.tooManyGroups);
+      else if (result.error === 'too-small') toast(S.tabs.tooSmall);
+      return result;
+    });
   };
 
   const openChanges = (): void => {
@@ -83,7 +91,7 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
     <>
       <ContextMenu onOpenChange={setOpen}>
         <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-        <ContextMenuContent>
+        <ContextMenuContent onCloseAutoFocus={returnCursorFocus}>
           <ContextMenuItem onSelect={onOpen}>{S.sidebar.sessionMenu.open}</ContextMenuItem>
           <ContextMenuItem onSelect={openBeside}>{S.sidebar.sessionMenu.openBeside}</ContextMenuItem>
           {RESUMABLE.has(status) ? (

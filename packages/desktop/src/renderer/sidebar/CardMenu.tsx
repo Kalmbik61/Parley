@@ -31,6 +31,7 @@ import {
   ContextMenuTrigger,
 } from '../ui/context-menu.js';
 import { useSidebarHold } from './use-sidebar-hold.js';
+import { returnCursorFocus } from './use-sidebar-keys.js';
 
 /** Пункты спеки 6.4 — они же `data-card-action` пунктов. */
 export type CardAction = 'pin' | 'unpin' | 'new-session' | 'new-room' | 'open-mail' | 'rename'
@@ -110,7 +111,10 @@ export function CardMenu({ entry, pinned, bridge, onRename, onOpenMail, children
         <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
         <ContextMenuContent
           onCloseAutoFocus={(event) => {
-            if (!renameChosen.current) return;
+            if (!renameChosen.current) {
+              returnCursorFocus(event);
+              return;
+            }
             renameChosen.current = false;
             event.preventDefault();
           }}

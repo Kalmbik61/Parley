@@ -27,6 +27,7 @@ import { CardMenu } from './CardMenu.js';
 import { InlineRename } from './InlineRename.js';
 import { RoomsMenu } from './RoomsMenu.js';
 import { SessionRow } from './SessionRow.js';
+import { useCursorStop } from './use-sidebar-keys.js';
 
 export interface WorkCardProps {
   entry: WorkEntry;
@@ -97,6 +98,7 @@ export const WorkCard = memo(function WorkCard({
   const expanded = useExpandedClosed((state) => state.keys[key] === true);
   const expand = useExpandedClosed((state) => state.expand);
   const [renaming, setRenaming] = useState(false);
+  const stop = useCursorStop(key, null, active);
   // Без `works.rename` у хоста нет ни пункта меню, ни двойного клика (спека 3.2).
   const canRename = useHostSupports('works.rename');
 
@@ -137,15 +139,18 @@ export const WorkCard = memo(function WorkCard({
     <div
       data-work-key={key}
       data-active={active}
-      // Курсор клавиатуры сайдбара — фокус (`use-sidebar-keys.ts`); в порядок Tab карточка не входит.
-      tabIndex={-1}
+      // Курсор клавиатуры сайдбара — фокус (`use-sidebar-keys.ts`); в порядке Tab — только
+      // элемент под курсором (roving tabindex, раунд исправлений 1).
+      role="treeitem"
+      aria-selected={stop}
+      tabIndex={stop ? 0 : -1}
       onClick={(event) => {
         // События меню и диалогов карточки идут из порталов, но всплывают по дереву React —
         // выбор пункта меню не должен заодно активировать работу (кусок 3.4).
         if (event.currentTarget.contains(event.target as Node)) onActivate();
       }}
       className={cn(
-        'relative mb-1.5 cursor-default overflow-hidden rounded-lg border py-1 pl-2.5 pr-1.5 outline-none focus-visible:ring-1 focus-visible:ring-work-sidebar-ring',
+        'relative mb-1.5 cursor-default overflow-hidden rounded-lg border py-1 pl-2.5 pr-1.5 outline-none focus-visible:ring-1 focus-visible:ring-work-sidebar-focus-ring',
         active
           ? 'border-work-sidebar-border bg-[color-mix(in_srgb,var(--work-sidebar-foreground)_8%,transparent)] shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:bg-[color-mix(in_srgb,var(--work-sidebar-foreground)_10%,transparent)]'
           : 'border-transparent hover:bg-work-sidebar-accent/40',
@@ -209,7 +214,7 @@ export const WorkCard = memo(function WorkCard({
         ) : null}
       </div>
       {shownRows.length > 0 ? (
-        <div className="mt-0.5">
+        <div role="group" className="mt-0.5">
           {shownRows.map(({ session, depth }) => (
             <SessionRow
               key={session.id}

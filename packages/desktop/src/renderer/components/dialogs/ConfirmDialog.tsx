@@ -8,6 +8,7 @@
  * конфигурируемости, которую не заказывали).
  */
 
+import { useEffect, useRef } from 'react';
 import { S } from '../../../shared/strings.js';
 import { Button } from '../../ui/button.js';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../ui/dialog.js';
@@ -29,6 +30,14 @@ export function ConfirmDialog({
   onConfirm,
   onOpenChange,
 }: ConfirmDialogProps): JSX.Element {
+  // Одно подтверждение на одно открытие (раунд исправлений 1 куска 3.4, находка 6): кнопка
+  // остаётся в DOM на время анимации закрытия, и двойной клик слал второй вызов — у
+  // удаления он получал `not_found` и показывал ложный тост после успешного удаления.
+  const confirmed = useRef(false);
+  useEffect(() => {
+    if (open) confirmed.current = false;
+  }, [open]);
+
   // `aria-describedby={undefined}` без описания — приём из `ui/ui.test.tsx`,
   // чтобы Radix не предупреждал в консоли про отсутствующее описание. С
   // реальным `DialogDescription` атрибут не задаём вовсе (не то же самое, что
@@ -52,6 +61,8 @@ export function ConfirmDialog({
             type="button"
             variant="destructive"
             onClick={() => {
+              if (confirmed.current) return;
+              confirmed.current = true;
               onConfirm();
               onOpenChange(false);
             }}

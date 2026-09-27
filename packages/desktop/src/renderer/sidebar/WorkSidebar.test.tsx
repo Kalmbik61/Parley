@@ -1,7 +1,7 @@
 /** Тесты 5, 6, 8, 15, 16 куска 3.3: сайдбар карточек (спека 6.1, 6.2). */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import type { WorkEntry } from '@harnas/core';
 import { S } from '../../shared/strings.js';
@@ -437,6 +437,7 @@ describe('WorkSidebar — клавиатура (спека 6.5, кусок 3.4)'
 
     // Tab из «New workspace» попадает в первый доступный элемент списка — курсор на активной.
     const firstRow = document.querySelector<HTMLElement>(`[data-work-key="${keyOf(a)}"] [data-session-id="s-01"]`);
+    act(() => screen.getByText(S.sidebar.addWorkspace).closest('button')?.focus());
     act(() => firstRow?.focus());
     const cardB = document.querySelector<HTMLElement>(`[data-work-key="${keyOf(b)}"]`);
     expect(document.activeElement).toBe(cardB);
@@ -470,5 +471,112 @@ describe('WorkSidebar — клавиатура (спека 6.5, кусок 3.4)'
     fireEvent.keyDown(card, { key: 'F10', shiftKey: true });
     expect(screen.getByRole('menu')).toBeTruthy();
     expect(screen.getByText('Pin')).toBeTruthy();
+  });
+});
+
+/** Следующий по порядку Tab элемент документа после `from` (tabIndex ≥ 0, как считает браузер). */
+function nextTabbable(from: HTMLElement): HTMLElement | null {
+  const all = [...document.querySelectorAll<HTMLElement>('a[href], button, input, textarea, select, [tabindex]')].filter(
+    (element) => element.tabIndex >= 0 && !(element as HTMLButtonElement).disabled,
+  );
+  return all.find((element) => (from.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 && !from.contains(element)) ?? null;
+}
+
+describe('WorkSidebar — клавиатура, раунд исправлений 1 (находки 2–5)', () => {
+  const a = makeWork('w-a', { createdAt: '2026-09-27T08:00:00.000Z', sessions: [makeSession('s-01', 'a1'), makeSession('s-02', 'a2')] });
+  const b = makeWork('w-b', { createdAt: '2026-09-27T07:00:00.000Z', sessions: [makeSession('s-01', 'b1')] });
+  const cardOf = (entry: WorkEntry): HTMLElement => document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"]`) as HTMLElement;
+  const rowOf = (entry: WorkEntry, id: string): HTMLElement =>
+    document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"] [data-session-id="${id}"]`) as HTMLElement;
+  const stops = (): HTMLElement[] =>
+    [...list().querySelectorAll<HTMLElement>('[data-work-key], [data-session-id]')].filter((element) => element.tabIndex === 0);
+
+  function setup(): void {
+    setWorks([a, b]);
+    useLayoutStore.setState({ activeWorkKey: keyOf(b) });
+    render(<Harness />);
+  }
+
+  it('находка 3: клик по пустому месту списка, когда фокус уже на строке в списке, — курсор на активной карточке', () => {
+    setup();
+    const row = rowOf(a, 's-02');
+    fireEvent.pointerDown(row);
+    act(() => row.focus());
+    fireEvent.pointerUp(row);
+    expect(document.activeElement).toBe(row);
+
+    fireEvent.pointerDown(list());
+    act(() => list().focus());
+    fireEvent.pointerUp(list());
+    expect(document.activeElement).toBe(cardOf(b));
+  });
+
+  it('находка 5: одна точка входа — tabIndex 0 только у элемента под курсором, роли дерева и aria-selected', () => {
+    setup();
+    expect(list().getAttribute('role')).toBe('tree');
+    expect(cardOf(a).getAttribute('role')).toBe('treeitem');
+    expect(rowOf(a, 's-01').getAttribute('role')).toBe('treeitem');
+    // До курсора точка входа — активная карточка.
+    expect(stops()).toEqual([cardOf(b)]);
+
+    act(() => screen.getByText(S.sidebar.addWorkspace).closest('button')?.focus());
+    act(() => rowOf(a, 's-01').focus());
+    expect(document.activeElement).toBe(cardOf(b));
+    expect(cardOf(b).getAttribute('aria-selected')).toBe('true');
+    // Tab с курсора уходит из сайдбара одним нажатием: строк сессий в порядке Tab нет.
+    const next = nextTabbable(cardOf(b));
+    expect(next === null || !list().contains(next)).toBe(true);
+
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(rowOf(b, 's-01'));
+    expect(stops()).toEqual([rowOf(b, 's-01')]);
+    expect(rowOf(b, 's-01').getAttribute('aria-selected')).toBe('true');
+    expect(cardOf(b).getAttribute('aria-selected')).toBe('false');
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowUp' });
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowUp' });
+    expect(stops()).toEqual([rowOf(a, 's-02')]);
+  });
+
+  it('находка 4: →/← на карточке, затем Shift+F10 → Esc — фокус на той же карточке; у строки — на строке', async () => {
+    const closed = makeWork('w-c', { sessions: [makeSession('s-01', 'open'), makeSession('s-02', 'old', { lifecycle: 'closed' })] });
+    setWorks([closed, b]);
+    useLayoutStore.setState({ activeWorkKey: keyOf(b) });
+    render(<Harness />);
+    const card = cardOf(closed);
+    act(() => card.focus());
+    fireEvent.keyDown(card, { key: 'ArrowRight' });
+    fireEvent.keyDown(card, { key: 'ArrowLeft' });
+    fireEvent.keyDown(card, { key: 'F10', shiftKey: true });
+    expect(screen.getByRole('menu')).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    // Radix возвращает фокус таймером после размонтирования меню.
+    await waitFor(() => expect(document.activeElement).toBe(cardOf(closed)));
+
+    fireEvent.keyDown(cardOf(closed), { key: 'ArrowDown' });
+    const row = rowOf(closed, 's-01');
+    expect(document.activeElement).toBe(row);
+    fireEvent.keyDown(row, { key: 'F10', shiftKey: true });
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    await waitFor(() => expect(document.activeElement).toBe(rowOf(closed, 's-01')));
+  });
+
+  it('находка 2: меню и подтверждение открываются и закрываются — стек не переполняется, фокус не скачет', async () => {
+    setup();
+    const errors = vi.spyOn(console, 'error');
+    act(() => rowOf(a, 's-01').focus());
+    for (let i = 0; i < 3; i += 1) {
+      fireEvent.keyDown(rowOf(a, 's-01'), { key: 'F10', shiftKey: true });
+      const item = screen.getByText('Stop');
+      act(() => item.focus());
+      fireEvent.click(item);
+      fireEvent.click(screen.getByText('Cancel'));
+      fireEvent.keyDown(cardOf(a), { key: 'F10', shiftKey: true });
+      fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+      await waitFor(() => expect(document.activeElement).toBe(cardOf(a)));
+    }
+    const overflow = errors.mock.calls.filter((args) => args.some((arg) => String(arg).includes('Maximum call stack')));
+    errors.mockRestore();
+    expect(overflow).toEqual([]);
   });
 });

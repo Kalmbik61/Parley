@@ -138,6 +138,34 @@ describe('CardMenu — «Delete…» (тест 2, решение 5)', () => {
   });
 });
 
+describe('CardMenu — двойной клик в подтверждении (раунд 1, находка 6)', () => {
+  it('Delete и Archive: два клика подряд по кнопке — один вызов, без лишнего тоста', async () => {
+    bridge.setHandler('sessions.stop', () => ({ ok: true as const }));
+    bridge.setHandler('works.delete', () => ({ ok: true as const }));
+    bridge.setHandler('works.setStatus', () => ({ ok: true as const }));
+    renderMenu();
+    openMenu();
+    fireEvent.click(screen.getByText('Archive'));
+    const archive = screen.getAllByText('Archive')[0] as HTMLElement;
+    act(() => {
+      archive.click();
+      archive.click();
+    });
+    openMenu();
+    fireEvent.click(screen.getByText('Delete…'));
+    const confirm = screen.getAllByText('Delete')[0] as HTMLElement;
+    act(() => {
+      confirm.click();
+      confirm.click();
+    });
+    await flush();
+    await waitFor(() => expect(bridge.calls.filter((call) => call.method === 'works.delete')).toHaveLength(1));
+    expect(bridge.calls.filter((call) => call.method === 'works.setStatus')).toHaveLength(1);
+    expect(bridge.calls.filter((call) => call.method === 'sessions.stop')).toHaveLength(1);
+    expect(toast).not.toHaveBeenCalled();
+  });
+});
+
 describe('CardMenu — статус (тесты 16, 19, решение 2)', () => {
   it('Mark as done — works.setStatus done; Archive — только после подтверждения', async () => {
     bridge.setHandler('works.setStatus', () => ({ ok: true as const }));

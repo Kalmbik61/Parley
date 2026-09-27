@@ -50,6 +50,7 @@
   --color-work-sidebar-accent-foreground: var(--work-sidebar-accent-foreground);
   --color-work-sidebar-border: var(--work-sidebar-border);
   --color-work-sidebar-ring: var(--work-sidebar-ring);
+  --color-work-sidebar-focus-ring: var(--work-sidebar-focus-ring);
   --color-work-sidebar-muted-foreground: var(--work-sidebar-muted-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
@@ -191,6 +192,9 @@
   --work-sidebar-accent-foreground: #171717;
   --work-sidebar-border: #e5e5e5;
   --work-sidebar-ring: #a1a1a1;
+  /* Раунд исправлений 1 куска 3.4: кольцо фокуса карточек и строк — ≥ 3:1 к любому фону
+     сайдбара (tokens.test.ts); Orca-вский --work-sidebar-ring даёт 2.4:1. */
+  --work-sidebar-focus-ring: #737373;
   /* Кусок 3.3 (не из Orca): вторичный текст карточек. Самый тёмный фон сайдбара —
      активная карточка (8% --work-sidebar-foreground), а на ней и на amber-500/10
      поверх неё --muted-foreground ниже 4.5:1 (tokens.test.ts, тест 14). */
@@ -316,6 +320,7 @@
      aren't brighter than the rest of the UI in dark mode (#5906). */
   --work-sidebar-border: rgb(255 255 255 / 0.07);
   --work-sidebar-ring: #737373;
+  --work-sidebar-focus-ring: #a1a1a1;
   /* Кусок 3.3: то же для тёмной — активная карточка 10% --work-sidebar-foreground. */
   --work-sidebar-muted-foreground: #bdbdbd;
   --sidebar: #171717;

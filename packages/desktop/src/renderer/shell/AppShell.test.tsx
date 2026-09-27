@@ -1049,15 +1049,42 @@ describe('AppShell — меню сайдбара (кусок 3.4)', () => {
     expect(toast).not.toHaveBeenCalledWith(S_TOO_SMALL);
   });
 
+  it('«Open to the side» у строки работы, которую ни разу не открывали (раунд 1, находка 1): вкладка сессии в её раскладке', async () => {
+    mockNonZeroRects();
+    await renderShell([
+      work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')]),
+      work('w-02', '2026-01-02', 'Вторая', [session('s-02', 'два')]),
+    ]);
+    await activateWithTerminal(keyOf('w-01'), 's-01');
+    expect(useLayoutStore.getState().hydrated[keyOf('w-02')]).toBeUndefined();
+
+    fireEvent.contextMenu(document.querySelector(`[data-work-key="${keyOf('w-02')}"] [data-session-id="s-02"]`) as HTMLElement);
+    fireEvent.click(screen.getByText('Open to the side'));
+
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-02')]).toBe(true));
+    await flush();
+    const layout = useLayoutStore.getState().layouts[keyOf('w-02')];
+    if (layout === undefined) throw new Error('раскладки нет');
+    expect(groups(layout).map((group) => group.tabs.map((tab) => tab.id))).toEqual([[tabId.terminal('s-02')]]);
+  });
+
   it('выбор комнаты в меню # (тест 4): работа активна, вкладка room в её раскладке', async () => {
     const withRoom = work('w-02', '2026-01-02', 'Вторая', [session('s-02', 'два')]);
     withRoom.map.rooms = [{ id: 'r-01', title: 'Design', creator: 'human', members: [], createdAt: '2026-01-02' }];
     await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')]), withRoom]);
     act(() => useLayoutStore.getState().setActiveWork(keyOf('w-01')));
 
+    // Раунд исправлений 1, находка 2: фокус из портала меню всплывал по дереву React в
+    // `onFocus` списка, тот уводил фокус на карточку, ловушка фокуса меню возвращала его —
+    // и так до «Maximum call stack size exceeded» (jsdom отдаёт её в console.error).
+    const errors = vi.spyOn(console, 'error');
     const card = document.querySelector(`[data-work-key="${keyOf('w-02')}"]`) as HTMLElement;
     fireEvent.keyDown(within(card).getByRole('button', { name: 'Rooms' }), { key: 'Enter' });
     fireEvent.click(screen.getByText('Design'));
+    const overflow = errors.mock.calls.filter((args) => args.some((arg) => String(arg).includes('Maximum call stack')));
+    errors.mockRestore();
+    expect(overflow).toEqual([]);
 
     expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
     await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-02')]).toBe(true));

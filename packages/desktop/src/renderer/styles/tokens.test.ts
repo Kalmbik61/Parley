@@ -154,3 +154,35 @@ describe('tokens.css — «разрушители» меню (кусок 3.4, р
     });
   }
 });
+
+/**
+ * Раунд исправлений 1 куска 3.4, находка 7: кольцо фокуса карточки и строки сессии —
+ * не-текстовый контраст WCAG 1.4.11, ≥ 3:1 к каждому фону, на котором оно рисуется.
+ */
+describe('tokens.css — кольцо фокуса сайдбара (кусок 3.4, раунд 1)', () => {
+  const css = readFileSync(TOKENS_PATH, 'utf8');
+
+  function readHex(theme: 'light' | 'dark', name: string): Rgb {
+    const rootStart = css.indexOf(':root {');
+    const darkStart = css.indexOf('.dark {');
+    const block = theme === 'light' ? css.slice(rootStart, darkStart) : css.slice(darkStart, css.indexOf('}', darkStart));
+    const match = block.match(new RegExp(`--${name}:\\s*#([0-9a-fA-F]{6});`));
+    if (match === null) throw new Error(`tokens.css: --${name} не найден (${theme})`);
+    const hex = match[1] as string;
+    return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
+  }
+
+  const AMBER_500: Rgb = [254, 154, 0];
+  const CARD_MIX = { light: 0.08, dark: 0.1 } as const;
+
+  for (const theme of ['light', 'dark'] as const) {
+    it(`${theme}: к фону сайдбара, активной карточке, выбранной и подсвеченной строке — не ниже 3:1`, () => {
+      const ring = readHex(theme, 'work-sidebar-focus-ring');
+      const sidebar = readHex(theme, 'work-sidebar');
+      const activeCard = compositeOver(readHex(theme, 'work-sidebar-foreground'), CARD_MIX[theme], sidebar);
+      for (const under of [sidebar, activeCard, readHex(theme, 'work-sidebar-accent'), compositeOver(AMBER_500, 0.1, activeCard)]) {
+        expect(contrastOf(ring, under)).toBeGreaterThanOrEqual(3);
+      }
+    });
+  }
+});

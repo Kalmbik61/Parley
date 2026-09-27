@@ -32,6 +32,7 @@ import type { ActivityEntry } from '../store/activity.js';
 import { useNoticesStore } from '../store/notices.js';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '../ui/hover-card.js';
 import { SessionRowMenu } from './SessionRowMenu.js';
+import { useCursorStop } from './use-sidebar-keys.js';
 
 /** Сколько символов задачи показывает тултип (план 3.3). */
 const TASK_PREVIEW = 300;
@@ -70,10 +71,11 @@ export const SessionRow = memo(function SessionRow({
   const data: DragSourceData = { item: { kind: 'session', sessionId: session.id } };
   const dragId = dndId.session(workKey, session.id);
   const { setNodeRef, listeners } = useDraggable({ id: dragId, data, disabled: !draggable });
+  const stop = useCursorStop(workKey, session.id, false);
 
   // Тултип под своим управлением (раунд исправлений 1 куска 3.3, ревью B, находка 1): после
   // перетаскивания соседней строки наведение показывало тултип перетащенной. Строка —
-  // `tabIndex=0`, pointerdown в браузере её фокусирует, а Radix открывает карточку и по
+  // фокусируемая (`tabIndex`), pointerdown в браузере её фокусирует, а Radix открывает карточку и по
   // фокусу; фокус остаётся на перетащенной строке и после броска, а открытая карточка
   // держится после отпускания, если в документе есть выделение (`hasSelectionRef`).
   // Поэтому во время любого перетаскивания тултипы строк закрыты, после броска тоже закрыты,
@@ -146,8 +148,11 @@ export const SessionRow = memo(function SessionRow({
       <HoverCardTrigger asChild>
         <div
           ref={setRowRef}
-          role="button"
-          tabIndex={0}
+          // Строка — узел дерева сайдбара; в порядке Tab — только под курсором (roving
+          // tabindex, раунд исправлений 1): иначе Tab шёл по всем строкам всех карточек.
+          role="treeitem"
+          aria-selected={stop}
+          tabIndex={stop ? 0 : -1}
           data-session-id={session.id}
           data-selected={selected}
           {...(draggable ? { 'data-draggable': '' } : {})}
@@ -170,7 +175,8 @@ export const SessionRow = memo(function SessionRow({
           }}
           style={{ paddingLeft: `${depth * 12 + 6}px` }}
           className={cn(
-            'flex h-6 min-w-0 items-center gap-1.5 rounded-md pr-1.5 text-[11px] text-work-sidebar-foreground',
+            // Кольцо внутрь: карточка режет выступающее (`overflow-hidden`).
+            'flex h-6 min-w-0 items-center gap-1.5 rounded-md pr-1.5 text-[11px] text-work-sidebar-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-work-sidebar-focus-ring',
             draggable ? 'cursor-default' : 'cursor-not-allowed',
             selected ? 'bg-work-sidebar-accent' : highlighted ? 'bg-amber-500/10' : 'hover:bg-work-sidebar-accent/60',
             closed && 'opacity-50',
