@@ -32,6 +32,26 @@ function isAppearance(value: unknown): value is Appearance {
   return value === 'system' || value === 'dark' || value === 'light';
 }
 
+/**
+ * Ограничения `workKey` каналов раскладки (раунд исправлений 1, Important B):
+ * непустая строка до 4096 символов (тот же предел, что план числит за
+ * каналами заметок) и не одно из специальных имён свойств JS-объекта.
+ * `layout-store.ts` теперь и сам не путает такие ключи со своим прототипом
+ * (`Map` вместо `Record`), но этот канал — единственное место «проверки
+ * аргументов» из сквозных правил, и должен отказывать им сам, defence-in-depth.
+ */
+const FORBIDDEN_WORK_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const MAX_WORK_KEY_LENGTH = 4096;
+
+function isValidWorkKey(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= MAX_WORK_KEY_LENGTH &&
+    !FORBIDDEN_WORK_KEYS.has(value)
+  );
+}
+
 export interface RegisterIpcOptions {
   ipcMain: IpcMain;
   connection: HostConnection;
@@ -98,13 +118,13 @@ export function registerIpc(options: RegisterIpcOptions): void {
 
   ipcMain.handle('app:restart-host', () => connection.restartHost());
 
-  ipcMain.handle('app:load-layout', (_event, workKey: unknown) => {
-    if (typeof workKey !== 'string') throw new Error(`неверный ключ раскладки: ${String(workKey)}`);
+  ipcMain.handle('app:load-layout', async (_event, workKey: unknown) => {
+    if (!isValidWorkKey(workKey)) throw new Error(`неверный ключ раскладки: ${String(workKey)}`);
     return layoutStore.load(workKey);
   });
 
   ipcMain.handle('app:save-layout', async (_event, workKey: unknown, layout: unknown) => {
-    if (typeof workKey !== 'string') throw new Error(`неверный ключ раскладки: ${String(workKey)}`);
+    if (!isValidWorkKey(workKey)) throw new Error(`неверный ключ раскладки: ${String(workKey)}`);
     try {
       await layoutStore.save(workKey, layout);
     } catch (error) {
@@ -120,7 +140,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
   });
 
   ipcMain.handle('app:remove-layout', async (_event, workKey: unknown) => {
-    if (typeof workKey !== 'string') throw new Error(`неверный ключ раскладки: ${String(workKey)}`);
+    if (!isValidWorkKey(workKey)) throw new Error(`неверный ключ раскладки: ${String(workKey)}`);
     return layoutStore.remove(workKey);
   });
 
@@ -129,7 +149,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     // (`ipc.test.ts`), в отличие от настоящего Electron, не оборачивает
     // синхронный throw в отказ промиса сам — та же причина, что и у
     // `app:save-ui` выше.
-    if (!Array.isArray(workKeys) || !workKeys.every((key) => typeof key === 'string')) {
+    if (!Array.isArray(workKeys) || !workKeys.every(isValidWorkKey)) {
       throw new Error(`неверный список ключей раскладок: ${String(workKeys)}`);
     }
     return layoutStore.retain(workKeys);

@@ -58,6 +58,35 @@ export function neighborWork(order: string[], workKey: string): string | null {
   return order[index - 1] ?? null;
 }
 
+/**
+ * Замена пропавшей активной работы, когда из снимка ОДНИМ разом могло уйти
+ * сразу несколько работ (массовое удаление/архивация, переподключение к
+ * хосту после простоя) — раунд исправлений 1, Critical A+B. Просто
+ * `neighborWork(prevOrder, key)` тут не годится: он считает по статичному
+ * старому порядку и не знает, что вычисленный сосед сам тоже мог пропасть в
+ * этом же снимке — старый цикл по каждому пропавшему ключу переприсваивал
+ * `activeWorkKey` на такого «соседа», и если цепочка соседей замыкалась сама
+ * на себя, в итоге получался ключ, которого уже нет ни в `order`, ни в
+ * `layouts` (полностью удалённый `drop`).
+ *
+ * Поэтому здесь ищем по прежнему `order`, но проверяем каждого кандидата на
+ * то, что он ДЕЙСТВИТЕЛЬНО остался в новом `order` — сначала вперёд от места
+ * удалённой работы, потом назад; если и там, и там все соседи тоже пропали в
+ * этом же снимке — первая работа нового `order`; нет вовсе ни одной — `null`.
+ */
+function survivingNeighbor(prevOrder: readonly string[], removedKey: string, order: readonly string[]): string | null {
+  const index = prevOrder.indexOf(removedKey);
+  for (let i = index + 1; i < prevOrder.length; i += 1) {
+    const candidate = prevOrder[i];
+    if (candidate !== undefined && order.includes(candidate)) return candidate;
+  }
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const candidate = prevOrder[i];
+    if (candidate !== undefined && order.includes(candidate)) return candidate;
+  }
+  return order[0] ?? null;
+}
+
 /** `loadLayout` → `parseWorkLayout` → `pruneLayout(isTabAlive)`; `null` на любом шаге → `emptyLayout()`. */
 async function restoreLayout(bridge: HarnasBridge, entry: WorkEntry | undefined, key: string): Promise<WorkLayout> {
   const raw = await bridge.app.loadLayout(key);
@@ -85,6 +114,15 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order }: UseL
   // (выбор activeWorkKey и retainLayouts — ровно один раз) от последующих
   // (диф пропавших работ).
   const prevOrderRef = useRef<string[] | null>(null);
+
+  // Работы, чья САМАЯ ПЕРВАЯ гидрация принесла что-то сверх диска — очередь
+  // `pending`, применённая внутри `hydrate` (раунд исправлений 1, Important
+  // A): сама по себе первая гидрация не «изменение» (см. эффект сохранения
+  // ниже), но если в неё влилась очередь `pending`, результат уже ОТЛИЧАЕТСЯ
+  // от того, что на диске, и должен уйти в `saveLayout`, иначе не уйдёт
+  // никогда. Общий `Set`, а не состояние стора — это внутренняя бухгалтерия
+  // между двумя эффектами этого хука, не часть публичного `LayoutState`.
+  const dirtyFirstHydrateRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!worksLoaded) return;
@@ -118,12 +156,21 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order }: UseL
       };
     }
 
-    for (const key of prevOrder) {
-      if (order.includes(key)) continue;
-      const wasActive = useLayoutStore.getState().activeWorkKey === key;
+    // Все пропавшие разом (раунд исправлений 1, Critical): сначала снимаем
+    // ВСЕ дропы, и только потом, зная окончательный новый `order`, решаем,
+    // кем заменить активную работу, если пропала именно она — `drop()` сам
+    // обнуляет `activeWorkKey`, когда дропает текущую активную, поэтому
+    // исходное значение читаем ДО цикла, а не полагаемся на него после.
+    const activeBeforeDrops = useLayoutStore.getState().activeWorkKey;
+    const missingKeys = prevOrder.filter((key) => !order.includes(key));
+
+    for (const key of missingKeys) {
       useLayoutStore.getState().drop(key);
       bridge.app.removeLayout(key).catch(() => {});
-      if (wasActive) useLayoutStore.getState().setActiveWork(neighborWork(prevOrder, key));
+    }
+
+    if (activeBeforeDrops !== null && missingKeys.includes(activeBeforeDrops)) {
+      useLayoutStore.getState().setActiveWork(survivingNeighbor(prevOrder, activeBeforeDrops, order));
     }
 
     // Пустой старт (тест 16): работ не было, activeWorkKey — null; как только
@@ -148,14 +195,24 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order }: UseL
     const key = activeWorkKey;
     const entry = worksRef.current.find((candidate) => workKeyOf(candidate.projectPath, candidate.map.work.id) === key);
 
+    // Помечает «грязным» ДО вызова `hydrate` — сама очередь `pending`
+    // проверяется прямо здесь, а не внутри стора: `hydrate` её тут же
+    // потребляет (см. `store.ts`), и это последний момент, когда её видно.
+    const hydrateWork = (layout: WorkLayout): void => {
+      if ((useLayoutStore.getState().pending[key]?.length ?? 0) > 0) {
+        dirtyFirstHydrateRef.current.add(key);
+      }
+      useLayoutStore.getState().hydrate(key, layout);
+    };
+
     restoreLayout(bridge, entry, key)
       .then((layout) => {
-        if (!cancelled) useLayoutStore.getState().hydrate(key, layout);
+        if (!cancelled) hydrateWork(layout);
       })
       .catch(() => {
         // План требует здесь только не уронить окно — раскладка просто
         // откроется пустой, как если бы сохранённой не было вовсе.
-        if (!cancelled) useLayoutStore.getState().hydrate(key, emptyLayout());
+        if (!cancelled) hydrateWork(emptyLayout());
       });
 
     return () => {
@@ -165,55 +222,92 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order }: UseL
 
   // Сохранение раскладки — 500 мс тишины, свой таймер на каждую работу (спека
   // 5.8). Самую первую гидрацию работы (переход `undefined → раскладка`) не
-  // сохраняем: это чтение с диска, а не изменение человеком.
+  // сохраняем: это чтение с диска, а не изменение человеком — кроме случая,
+  // когда в неё влилась очередь `pending` (раунд исправлений 1, Important A,
+  // `dirtyFirstHydrateRef` выше) — тогда результат уже не то, что на диске.
+  //
+  // Раунд исправлений 1, Important B: размонтирование хука (в реальном окне —
+  // закрытие) или `pagehide`/`beforeunload` до истечения тишины не должны
+  // тихо терять последнюю правку — недописанные таймеры флашатся немедленно.
   useEffect(() => {
     const timers = new Map<string, ReturnType<typeof setTimeout>>();
+    const pendingLayouts = new Map<string, WorkLayout>();
+
+    const flush = (key: string): void => {
+      const timer = timers.get(key);
+      if (timer === undefined) return;
+      clearTimeout(timer);
+      timers.delete(key);
+      const layout = pendingLayouts.get(key);
+      pendingLayouts.delete(key);
+      if (layout !== undefined) {
+        bridge.app.saveLayout(key, layout).catch(() => {
+          // Отказ (например, `LayoutTooLargeError`) main уже погасил
+          // предупреждением в свою консоль — рендереру тут делать нечего.
+        });
+      }
+    };
+    const flushAll = (): void => {
+      for (const key of [...timers.keys()]) flush(key);
+    };
 
     const unsubscribe = useLayoutStore.subscribe((state, prevState) => {
       if (state.layouts === prevState.layouts) return;
       for (const [key, layout] of Object.entries(state.layouts)) {
         const prevLayout = prevState.layouts[key];
-        if (prevLayout === undefined || prevLayout === layout) continue;
+        if (prevLayout === layout) continue;
+        if (prevLayout === undefined && !dirtyFirstHydrateRef.current.delete(key)) continue;
 
         const timer = timers.get(key);
         if (timer !== undefined) clearTimeout(timer);
-        timers.set(
-          key,
-          setTimeout(() => {
-            timers.delete(key);
-            bridge.app.saveLayout(key, layout).catch(() => {
-              // Отказ (например, `LayoutTooLargeError`) main уже погасил
-              // предупреждением в свою консоль — рендереру тут делать нечего.
-            });
-          }, SAVE_SILENCE_MS),
-        );
+        pendingLayouts.set(key, layout);
+        timers.set(key, setTimeout(() => flush(key), SAVE_SILENCE_MS));
       }
     });
 
+    window.addEventListener('pagehide', flushAll);
+    window.addEventListener('beforeunload', flushAll);
+
     return () => {
       unsubscribe();
-      for (const timer of timers.values()) clearTimeout(timer);
+      flushAll();
+      window.removeEventListener('pagehide', flushAll);
+      window.removeEventListener('beforeunload', flushAll);
     };
   }, [bridge]);
 
   // `activeWorkKey` — владелец стора, но его копию в `ui.json` пишет только
   // persistence (спека 5.6), с той же тишиной 300 мс, что и раньше у `ui.ts`.
+  // Тот же флаш при размонтировании/закрытии окна, что и у раскладки выше
+  // (раунд исправлений 1, Important B).
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let pendingKey: string | null | undefined;
+
+    const flush = (): void => {
+      if (timer === null) return;
+      clearTimeout(timer);
+      timer = null;
+      const key = pendingKey;
+      pendingKey = undefined;
+      if (key !== undefined) bridge.app.saveUi({ activeWorkKey: key }).catch(() => {});
+    };
 
     const unsubscribe = useLayoutStore.subscribe((state, prevState) => {
       if (state.activeWorkKey === prevState.activeWorkKey) return;
-      const next = state.activeWorkKey;
       if (timer !== null) clearTimeout(timer);
-      timer = setTimeout(() => {
-        timer = null;
-        bridge.app.saveUi({ activeWorkKey: next }).catch(() => {});
-      }, ACTIVE_WORK_SILENCE_MS);
+      pendingKey = state.activeWorkKey;
+      timer = setTimeout(flush, ACTIVE_WORK_SILENCE_MS);
     });
+
+    window.addEventListener('pagehide', flush);
+    window.addEventListener('beforeunload', flush);
 
     return () => {
       unsubscribe();
-      if (timer !== null) clearTimeout(timer);
+      flush();
+      window.removeEventListener('pagehide', flush);
+      window.removeEventListener('beforeunload', flush);
     };
   }, [bridge]);
 }

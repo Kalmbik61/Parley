@@ -51,39 +51,56 @@ export function desktopLayoutsPath(home: string = harnasHome()): string {
   return path.join(home, 'desktop', 'layouts.json');
 }
 
-function emptyFile(): LayoutsFileV2 {
-  return { version: 2, works: {} };
+/**
+ * `works` в памяти держим как `Map`, а не `Record`/`{}` (раунд исправлений 1,
+ * Important B): строка `"__proto__"` на плоском объекте — не обычное
+ * свойство, а унаследованный аксессор `Object.prototype.__proto__`.
+ * Присваивание `obj[key] = value`, когда СВОЕГО свойства с таким именем у
+ * `obj` ещё нет, идёт через этот аксессор и меняет сам `[[Prototype]]`
+ * объекта вместо того, чтобы создать запись — значение тихо пропадает, а
+ * объект превращается в замаскированный `Object.prototype`. Ровно это раньше
+ * делала `filterWorks` в `remove`/`retain`, строя результат заново через
+ * `result[key] = value` на свежем `{}`. `Map` не путает строку `"__proto__"`
+ * со своим прототипом ни на чтении, ни на записи — вся внутренняя работа
+ * поэтому через неё; JSON на диске `Map` не поддерживает, конвертация на
+ * границе — через `Object.fromEntries`/`Object.keys`, которые создают и
+ * читают СОБСТВЕННЫЕ свойства напрямую (`[[DefineOwnProperty]]`), а не через
+ * `[[Set]]`/`[[Get]]`, идущие по цепочке прототипов.
+ */
+function emptyWorks(): Map<string, unknown> {
+  return new Map();
 }
 
-/** Ключи, для которых `keep` истинно; порядок не важен — файл лишь хранилище по ключу. */
-function filterWorks(works: Record<string, unknown>, keep: (key: string) => boolean): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(works)) {
-    if (keep(key)) result[key] = value;
+/** Безопасный разбор `works` из уже распарсенного JSON — `null`, если это не объект. */
+function worksFromRaw(raw: unknown): Map<string, unknown> | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const map = new Map<string, unknown>();
+  for (const key of Object.keys(raw)) {
+    if (Object.hasOwn(raw, key)) map.set(key, (raw as Record<string, unknown>)[key]);
   }
-  return result;
+  return map;
 }
 
 /**
- * v1 (`layouts`) и битый JSON — оба читаются как пустой v2-файл (план,
+ * v1 (`layouts`) и битый JSON — оба читаются как пустая карта (план,
  * «Поведение»): разбираться в причине повреждения незачем — следующий
  * `save`/`remove`/`retain` перезапишет файл валидным v2-содержимым сам.
  */
-async function readLayoutsFile(file: string): Promise<LayoutsFileV2> {
+async function readLayoutsFile(file: string): Promise<Map<string, unknown>> {
   let raw: string;
   try {
     raw = await readFile(file, 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyFile();
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyWorks();
     throw error;
   }
 
   try {
     const data = JSON.parse(raw) as Partial<LayoutsFileV2>;
-    if (data.version !== 2 || typeof data.works !== 'object' || data.works === null) return emptyFile();
-    return { version: 2, works: data.works };
+    if (data.version !== 2) return emptyWorks();
+    return worksFromRaw(data.works) ?? emptyWorks();
   } catch {
-    return emptyFile();
+    return emptyWorks();
   }
 }
 
@@ -106,7 +123,11 @@ export function createLayoutStore(file: string, options: CreateLayoutStoreOption
   // при записи (тест 9, тот же приём, что и `ui-store.ts`).
   const enqueue = createFileQueue();
 
-  async function writeFile(next: LayoutsFileV2): Promise<void> {
+  async function writeWorks(works: Map<string, unknown>): Promise<void> {
+    // `Object.fromEntries` создаёт собственные свойства напрямую
+    // (`CreateDataPropertyOrThrow`), а не через `obj[key] = value` — безопасно
+    // даже для ключа `"__proto__"` (см. комментарий у `emptyWorks` выше).
+    const next: LayoutsFileV2 = { version: 2, works: Object.fromEntries(works) };
     const text = `${JSON.stringify(next, null, 2)}\n`;
     const sizeBytes = Buffer.byteLength(text, 'utf8');
     if (sizeBytes > maxBytes) throw new LayoutTooLargeError(file, sizeBytes, maxBytes);
@@ -115,27 +136,32 @@ export function createLayoutStore(file: string, options: CreateLayoutStoreOption
 
   return {
     async load(workKey) {
-      const data = await readLayoutsFile(file);
-      return data.works[workKey] ?? null;
+      const works = await readLayoutsFile(file);
+      return works.get(workKey) ?? null;
     },
 
     save: (workKey, layout) =>
       enqueue(async () => {
-        const data = await readLayoutsFile(file);
-        await writeFile({ version: 2, works: { ...data.works, [workKey]: layout } });
+        const works = await readLayoutsFile(file);
+        works.set(workKey, layout);
+        await writeWorks(works);
       }),
 
     remove: (workKey) =>
       enqueue(async () => {
-        const data = await readLayoutsFile(file);
-        await writeFile({ version: 2, works: filterWorks(data.works, (key) => key !== workKey) });
+        const works = await readLayoutsFile(file);
+        works.delete(workKey);
+        await writeWorks(works);
       }),
 
     retain: (workKeys) =>
       enqueue(async () => {
-        const data = await readLayoutsFile(file);
+        const works = await readLayoutsFile(file);
         const keep = new Set([...workKeys, 'window']);
-        await writeFile({ version: 2, works: filterWorks(data.works, (key) => keep.has(key)) });
+        for (const key of [...works.keys()]) {
+          if (!keep.has(key)) works.delete(key);
+        }
+        await writeWorks(works);
       }),
   };
 }

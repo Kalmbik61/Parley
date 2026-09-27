@@ -141,10 +141,18 @@ export const useLayoutStore: UseBoundStore<StoreApi<LayoutState>> = create<Layou
     // `navigating` подавляет запись истории внутри `setActiveWork`/`apply`
     // ниже — это переход самой историей, а не новый шаг человека.
     set({ navigating: true });
-    get().setActiveWork(result.entry.workKey);
-    const tabId = result.entry.tabId;
-    if (tabId !== null) get().apply(result.entry.workKey, (layout) => focusTab(layout, tabId));
-    set({ history: result.history, navigating: false });
+    // `try/finally` (раунд исправлений 1, Minor): и `tree.ts`, и `focusTab`
+    // сегодня никогда не бросают, но если `setActiveWork`/`apply` всё же
+    // бросят (например, будущая операция расширит `LayoutOp` чем-то не таким
+    // отказоустойчивым), `navigating` не должен залипнуть `true` навсегда —
+    // тогда вся последующая история молча перестала бы писаться.
+    try {
+      get().setActiveWork(result.entry.workKey);
+      const tabId = result.entry.tabId;
+      if (tabId !== null) get().apply(result.entry.workKey, (layout) => focusTab(layout, tabId));
+    } finally {
+      set({ history: result.history, navigating: false });
+    }
   }
 
   return {
@@ -176,6 +184,9 @@ export const useLayoutStore: UseBoundStore<StoreApi<LayoutState>> = create<Layou
 
     hydrate: (workKey, layout) => {
       const state = get();
+      // Повторный вызов для уже гидрированной работы — молчаливый no-op:
+      // живое состояние в памяти не должно затираться более старым чтением
+      // с диска, кто бы его ни принёс повторно (раунд исправлений 1).
       if (state.hydrated[workKey] === true) return;
 
       const initial = layout ?? emptyLayout();

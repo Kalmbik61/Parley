@@ -120,6 +120,42 @@ describe('registerIpc', () => {
     expect(layoutStore.retain).not.toHaveBeenCalled();
   });
 
+  // Раунд исправлений 1, Important B: "__proto__"/"constructor"/"prototype" —
+  // валидные строки по `typeof`, но ломают `filterWorks`/плоские объекты
+  // ниже по цепочке (main/layout-store.ts) — канал обязан отвергать их сам,
+  // как единственный слой с «проверкой аргументов» из сквозных правил.
+  it('app:load-layout/app:save-layout/app:remove-layout отвергают "__proto__"/"constructor"/"prototype", пустую строку и слишком длинный ключ', async () => {
+    const { ipcMain, layoutStore } = setup();
+    const bad = ['__proto__', 'constructor', 'prototype', '', 'x'.repeat(4097)];
+
+    for (const workKey of bad) {
+      await expect(ipcMain.invoke('app:load-layout', workKey)).rejects.toThrow();
+      await expect(ipcMain.invoke('app:save-layout', workKey, {})).rejects.toThrow();
+      await expect(ipcMain.invoke('app:remove-layout', workKey)).rejects.toThrow();
+    }
+    expect(layoutStore.load).not.toHaveBeenCalled();
+    expect(layoutStore.save).not.toHaveBeenCalled();
+    expect(layoutStore.remove).not.toHaveBeenCalled();
+  });
+
+  it('app:retain-layouts отвергает массив с "__proto__"/"constructor"/"prototype"', async () => {
+    const { ipcMain, layoutStore } = setup();
+    await expect(ipcMain.invoke('app:retain-layouts', ['ok', '__proto__'])).rejects.toThrow();
+    await expect(ipcMain.invoke('app:retain-layouts', ['constructor'])).rejects.toThrow();
+    expect(layoutStore.retain).not.toHaveBeenCalled();
+  });
+
+  it('app:load-layout принимает обычный workKey и ключ ровно в 4096 символов', async () => {
+    const { ipcMain, layoutStore } = setup();
+    const maxLenKey = 'x'.repeat(4096);
+
+    await ipcMain.invoke('app:load-layout', 'window');
+    await ipcMain.invoke('app:load-layout', maxLenKey);
+
+    expect(layoutStore.load).toHaveBeenCalledWith('window');
+    expect(layoutStore.load).toHaveBeenCalledWith(maxLenKey);
+  });
+
   // Тест 14 куска 2.2: раскладка больше лимита не должна доходить до рендерера
   // отказом — план требует тихого предупреждения в консоль main и успешного ответа.
   it('app:save-layout при LayoutTooLargeError пишет console.warn и отвечает успехом (тест 14)', async () => {

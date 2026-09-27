@@ -159,4 +159,41 @@ describe('createLayoutStore (формат v2, кусок 2.2)', () => {
     await expect(store.load('b')).resolves.toEqual({ vb: 2 });
     await expect(store.load('c')).resolves.toEqual({ vc: 3 });
   });
+
+  // Раунд исправлений 1, Important B: workKey "__proto__" на плоском объекте —
+  // не обычное свойство, а унаследованный аксессор Object.prototype.__proto__.
+  // `remove`/`retain`, построенные на `obj[key] = value` для СВЕЖЕГО объекта,
+  // на этом ключе меняют сам [[Prototype]] результата вместо записи значения.
+  it('workKey "__proto__" переживает remove другого ключа, не портит объект works', async () => {
+    const store = createLayoutStore(file);
+    await store.save('__proto__', { polluted: true });
+    await store.save('other', { a: 1 });
+
+    await store.remove('other');
+
+    const raw = JSON.parse(await readFile(file, 'utf8')) as LayoutsFileV2;
+    expect(Object.hasOwn(raw.works, '__proto__')).toBe(true);
+    expect(Object.keys(raw.works)).toEqual(['__proto__']);
+    expect(Object.getPrototypeOf(raw)).toBe(Object.prototype); // сам файл не тронут
+
+    await expect(store.load('__proto__')).resolves.toEqual({ polluted: true });
+  });
+
+  it('retain(["__proto__"]) сохраняет запись как обычное свойство, не портит объект', async () => {
+    const store = createLayoutStore(file);
+    await store.save('__proto__', { polluted: true });
+    await store.save('other', { a: 1 });
+
+    await store.retain(['__proto__']);
+
+    await expect(store.load('__proto__')).resolves.toEqual({ polluted: true });
+    await expect(store.load('other')).resolves.toBeNull();
+  });
+
+  it('load("__proto__") без такой записи в файле отдаёт null, а не Object.prototype', async () => {
+    const store = createLayoutStore(file);
+    await store.save('other', { a: 1 });
+
+    await expect(store.load('__proto__')).resolves.toBeNull();
+  });
 });

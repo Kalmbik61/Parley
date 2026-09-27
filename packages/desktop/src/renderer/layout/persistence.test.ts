@@ -238,6 +238,38 @@ describe('useLayoutPersistence', () => {
     expect(bridge.layoutSaves).toHaveLength(2);
   });
 
+  // Раунд исправлений 1, Important A: вкладка, открытая через `apply` ДО того,
+  // как работа гидрирована (уходит в `pending`), должна попасть на диск после
+  // гидрации — иначе, если по этой работе больше ничего не изменится, она не
+  // сохранится вообще никогда (переход `layouts[key]: undefined → значение`
+  // сам по себе не считается «изменением», см. тест 3/4 — это тот самый
+  // случай, когда его всё-таки нужно посчитать: очередь была не пуста).
+  it('вкладка из pending, применённая на первой гидрации, всё равно сохраняется (раунд исправлений 1, Important A)', async () => {
+    const bridge = createFakeBridge();
+    const entryA = work('w-a', '/tmp/a', [session('s-01')]);
+    const pendingTab: TabSpec = { kind: 'terminal', id: tabId.terminal('s-01'), sessionId: 's-01' };
+
+    // Клик по сессии этой работы до того, как она стала показанной (сценарий
+    // 2.7/4.3) — уходит в pending, потому что `worksLoaded`/гидрация ещё не было.
+    useLayoutStore.getState().apply(keyA, (l) => openTab(l, pendingTab, 'active'));
+    expect(useLayoutStore.getState().layouts[keyA]).toBeUndefined();
+
+    renderHook(() => useLayoutPersistence({ bridge, works: [entryA], worksLoaded: true, order: [keyA] }));
+
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
+
+    await waitFor(
+      () => {
+        expect(bridge.layoutSaves.some((s) => s.workKey === keyA)).toBe(true);
+      },
+      { timeout: 2000 },
+    );
+
+    const saved = bridge.layoutSaves.find((s) => s.workKey === keyA);
+    const ids = groups(saved?.layout as WorkLayout).flatMap((g) => g.tabs.map((t) => t.id));
+    expect(ids).toContain(pendingTab.id);
+  });
+
   it('первый снимок после worksLoaded зовёт retainLayouts ровно один раз (тест 13)', () => {
     const bridge = createFakeBridge();
     const entryA = work('w-a', '/tmp/a');
@@ -296,6 +328,50 @@ describe('useLayoutPersistence', () => {
     expect(bridge.layoutRemovals).toEqual([keyC]);
   });
 
+  // Раунд исправлений 1, Critical (A+B): активная работа и её единственный
+  // выживший сосед по прежнему `order` пропадают ОДНИМ снимком — старая версия
+  // цикла считала `neighborWork` по каждому пропавшему ключу отдельно и на
+  // втором шаге принимала уже назначенного «преемника» за только что ставшего
+  // активным, откатываясь обратно на первый (уже удалённый) ключ-призрак.
+  it('активная работа и её сосед пропадают одним снимком → активна выжившая (раунд исправлений 1, Critical)', async () => {
+    const bridge = createFakeBridge();
+    const entryA = work('w-a', '/tmp/a');
+    const entryB = work('w-b', '/tmp/b');
+    const entryC = work('w-c', '/tmp/c');
+
+    const { rerender } = renderHook(
+      ({ entries, order }: { entries: WorkEntry[]; order: string[] }) =>
+        useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order }),
+      { initialProps: { entries: [entryA, entryB, entryC], order: [keyA, keyB, keyC] } },
+    );
+    await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).toBe(keyA));
+
+    useLayoutStore.getState().setActiveWork(keyB);
+    // B и C пропадают разом — остаётся только A.
+    rerender({ entries: [entryA], order: [keyA] });
+
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyA);
+    expect(bridge.layoutRemovals.sort()).toEqual([keyB, keyC].sort());
+  });
+
+  it('исчезли все работы разом → activeWorkKey становится null, а не ключ-призрак (раунд исправлений 1, Critical)', async () => {
+    const bridge = createFakeBridge();
+    const entryA = work('w-a', '/tmp/a');
+    const entryB = work('w-b', '/tmp/b');
+
+    const { rerender } = renderHook(
+      ({ entries, order }: { entries: WorkEntry[]; order: string[] }) =>
+        useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order }),
+      { initialProps: { entries: [entryA, entryB], order: [keyA, keyB] } },
+    );
+    await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).toBe(keyA));
+
+    rerender({ entries: [], order: [] });
+
+    expect(useLayoutStore.getState().activeWorkKey).toBeNull();
+    expect(bridge.layoutRemovals.sort()).toEqual([keyA, keyB].sort());
+  });
+
   it('старт без работ, потом снимок с двумя — активна первая, saveUi после 300 мс тишины (тест 16)', async () => {
     const bridge = createFakeBridge();
     const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
@@ -318,5 +394,66 @@ describe('useLayoutPersistence', () => {
 
     await vi.advanceTimersByTimeAsync(300);
     expect(saveUiSpy).toHaveBeenCalledWith({ activeWorkKey: keyA });
+  });
+
+  // Раунд исправлений 1, Important B: закрытие окна = размонтирование этого
+  // хука в реальном Electron — правка внутри тишины 500/300 мс не должна
+  // тихо теряться, если он размонтируется раньше, чем таймер успел сработать.
+  it('размонтирование до истечения тишины 500 мс всё равно сохраняет раскладку (раунд исправлений 1, Important B)', async () => {
+    const bridge = createFakeBridge();
+    const entryA = work('w-a', '/tmp/a', [session('s-01')]);
+
+    const { unmount } = renderHook(() =>
+      useLayoutPersistence({ bridge, works: [entryA], worksLoaded: true, order: [keyA] }),
+    );
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
+
+    vi.useFakeTimers();
+    const newTab: TabSpec = { kind: 'terminal', id: tabId.terminal('s-01'), sessionId: 's-01' };
+    useLayoutStore.getState().apply(keyA, (l) => openTab(l, newTab, 'active'));
+
+    unmount();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const saved = bridge.layoutSaves.find((s) => s.workKey === keyA);
+    expect(saved).toBeDefined();
+    const ids = groups(saved?.layout as WorkLayout).flatMap((g) => g.tabs.map((t) => t.id));
+    expect(ids).toContain(newTab.id);
+  });
+
+  it('размонтирование до истечения тишины 300 мс всё равно пишет activeWorkKey в ui.json (раунд исправлений 1, Important B)', async () => {
+    const bridge = createFakeBridge();
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+    const entryA = work('w-a', '/tmp/a');
+    const entryB = work('w-b', '/tmp/b');
+
+    const { unmount } = renderHook(() =>
+      useLayoutPersistence({ bridge, works: [entryA, entryB], worksLoaded: true, order: [keyA, keyB] }),
+    );
+    await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).toBe(keyA));
+
+    vi.useFakeTimers();
+    useLayoutStore.getState().setActiveWork(keyB);
+
+    unmount();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(saveUiSpy).toHaveBeenCalledWith({ activeWorkKey: keyB });
+  });
+
+  it('beforeunload флашит отложенное сохранение раскладки без ожидания тишины (раунд исправлений 1, Important B)', async () => {
+    const bridge = createFakeBridge();
+    const entryA = work('w-a', '/tmp/a', [session('s-01')]);
+
+    renderHook(() => useLayoutPersistence({ bridge, works: [entryA], worksLoaded: true, order: [keyA] }));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
+
+    vi.useFakeTimers();
+    const newTab: TabSpec = { kind: 'terminal', id: tabId.terminal('s-01'), sessionId: 's-01' };
+    useLayoutStore.getState().apply(keyA, (l) => openTab(l, newTab, 'active'));
+
+    window.dispatchEvent(new Event('beforeunload'));
+
+    expect(bridge.layoutSaves.some((s) => s.workKey === keyA)).toBe(true);
   });
 });
