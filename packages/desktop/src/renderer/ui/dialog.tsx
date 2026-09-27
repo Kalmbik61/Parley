@@ -9,7 +9,15 @@
  * заголовок и описание переносят длинные слова. Иначе минимальная ширина содержимого
  * (длинный путь, название в 120 символов без пробелов) распирала колонку сетки, и поля
  * с кнопками выходили за правый край диалога.
+ *
+ * Высота (находка живой проверки review-3.5-rr2): диалог не выше окна минус поля, заголовок
+ * (`h2` Radix) и подвал (`data-dialog-footer`) не сжимаются, прочие прямые потомки — тело —
+ * сжимаются и прокручиваются. Иначе New workspace (632px) в окне 800×500 уводил Cancel и Create
+ * за нижний край. Правило общее: диалоги по отдельности не трогаются. Корень палитры
+ * (`cmdk-root`) исключён — у него своя прокрутка списка. `-m-1 p-1` у тела: прокрутка
+ * обрезает всё за краем, и без запаса обрезалось бы кольцо фокуса полей.
  */
+
 
 import * as React from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
@@ -46,7 +54,9 @@ export const DialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        'fixed left-[50%] top-[50%] z-50 grid w-full grid-cols-1 max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 rounded-xl border border-border bg-card p-6 shadow-[0_20px_60px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.08)] duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] dark:shadow-[0_24px_72px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.08)]',
+        'fixed left-[50%] top-[50%] z-50 flex w-full flex-col max-h-[calc(100dvh-2rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 rounded-xl border border-border bg-card p-6 shadow-[0_20px_60px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.08)] duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] dark:shadow-[0_24px_72px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.08)]',
+        // Тело — прямой потомок, кроме заголовка, подвала и корня палитры. Классы — буквально: Tailwind ищет их в тексте.
+        '[&>:not(h2,[data-dialog-footer],[cmdk-root])]:min-h-0 [&>:not(h2,[data-dialog-footer],[cmdk-root])]:overflow-y-auto [&>:not(h2,[data-dialog-footer],[cmdk-root])]:-m-1 [&>:not(h2,[data-dialog-footer],[cmdk-root])]:p-1',
         className,
       )}
       {...props}
@@ -79,7 +89,8 @@ export function DialogFooter({
 }: React.HTMLAttributes<HTMLDivElement>): JSX.Element {
   return (
     <div
-      className={cn('flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2', className)}
+      data-dialog-footer=""
+      className={cn('flex shrink-0 flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2', className)}
       {...props}
     />
   );
@@ -91,7 +102,7 @@ export const DialogTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn('text-sm font-semibold leading-none tracking-tight break-words', className)}
+    className={cn('shrink-0 text-sm font-semibold leading-none tracking-tight break-words', className)}
     {...props}
   />
 ));

@@ -55,6 +55,45 @@ async function overflowOf(window: Page, name: string): Promise<string[]> {
   }, name);
 }
 
+/** Кнопки подвала диалогов окна (и крестик заголовка): они обязаны быть видны при любой высоте окна. */
+const FOOTER_BUTTON = /^(Cancel|Create|Retry|Done|Close|Delete.*)$/;
+
+/**
+ * Высота диалогов (находка живой проверки review-3.5-rr2): диалог целиком в окне, а каждая
+ * кнопка подвала — внутри окна по вертикали и сверху её центра нет чужого элемента (клик дойдёт).
+ */
+async function footerProblemsOf(window: Page, name: string): Promise<string[]> {
+  const dialog = window.getByRole('dialog');
+  const problems = await dialog.evaluate(
+    (el, [dialogName, pattern]) => {
+      const out: string[] = [];
+      const height = window.innerHeight;
+      const box = el.getBoundingClientRect();
+      if (box.top < -0.5 || box.bottom > height + 0.5) {
+        out.push(`${dialogName}: dialog ${Math.round(box.top)}..${Math.round(box.bottom)} outside 0..${height}`);
+      }
+      const re = new RegExp(pattern);
+      const buttons = [...el.querySelectorAll('button')].filter((b) => re.test((b.textContent ?? '').trim()));
+      if (buttons.length === 0) out.push(`${dialogName}: no footer buttons found`);
+      for (const button of buttons) {
+        const label = (button.textContent ?? '').trim();
+        const rect = button.getBoundingClientRect();
+        if (rect.bottom > height + 0.5) {
+          out.push(`${dialogName}: «${label}» bottom ${Math.round(rect.bottom)} > ${height}`);
+          continue;
+        }
+        // Выключенная кнопка (New room без участников) пропускает указатель — проверять нечего.
+        if (button.disabled) continue;
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        if (hit === null || !button.contains(hit)) out.push(`${dialogName}: «${label}» covered or not clickable`);
+      }
+      return out;
+    },
+    [name, FOOTER_BUTTON.source] as const,
+  );
+  return problems;
+}
+
 async function closeDialog(window: Page): Promise<void> {
   await window.keyboard.press('Escape');
   await expect(window.getByRole('dialog')).toBeHidden();
@@ -86,7 +125,7 @@ for (const size of [
       await rm(base, { recursive: true, force: true });
     });
 
-    test('ничего не выходит за правый край: New workspace, New session, New room, Delete, палитра, Settings', async () => {
+    test('ничего не выходит за правый край, подвал в окне: New workspace, New session, New room, Delete, палитра, Settings', async () => {
       test.setTimeout(90_000);
       const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
       const electronApp = await electron.launch({ args: [mainEntry], env });
@@ -110,7 +149,10 @@ for (const size of [
       await composer.getByLabel('Title').fill(LONG_TITLE);
       await composer.getByLabel('Label').fill(LONG_LABEL);
       problems.push(...(await overflowOf(window, 'New workspace')));
-      await closeDialog(window);
+      problems.push(...(await footerProblemsOf(window, 'New workspace')));
+      // Кнопка подвала нажимается мышью и при окне 800×500.
+      await composer.getByRole('button', { name: 'Cancel', exact: true }).click({ timeout: 5_000 });
+      await expect(window.getByRole('dialog')).toBeHidden();
 
       const cardAction = async (action: string): Promise<void> => {
         await card.getByText(LONG_TITLE).click({ button: 'right' });
@@ -120,16 +162,19 @@ for (const size of [
       await cardAction('new-session');
       await window.getByRole('dialog').getByLabel('Label').fill(LONG_LABEL);
       problems.push(...(await overflowOf(window, 'New session')));
+      problems.push(...(await footerProblemsOf(window, 'New session')));
       await closeDialog(window);
 
       await cardAction('new-room');
       await expect(window.getByRole('dialog')).toContainText(LONG_LABEL);
       problems.push(...(await overflowOf(window, 'New room')));
+      problems.push(...(await footerProblemsOf(window, 'New room')));
       await closeDialog(window);
 
       await cardAction('delete');
       await expect(window.getByRole('dialog')).toContainText(LONG_TITLE);
       problems.push(...(await overflowOf(window, 'Delete')));
+      problems.push(...(await footerProblemsOf(window, 'Delete')));
       await closeDialog(window);
 
       await window.getByRole('button', { name: 'Search ⌘K' }).first().click();
@@ -139,6 +184,7 @@ for (const size of [
       await window.keyboard.press('Enter');
       await expect(window.getByRole('dialog')).toContainText('Settings');
       problems.push(...(await overflowOf(window, 'Settings')));
+      problems.push(...(await footerProblemsOf(window, 'Settings')));
       await closeDialog(window);
 
       expect(problems).toEqual([]);
