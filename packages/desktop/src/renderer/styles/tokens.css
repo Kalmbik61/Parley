@@ -52,6 +52,9 @@
   --color-work-sidebar-ring: var(--work-sidebar-ring);
   --color-work-sidebar-focus-ring: var(--work-sidebar-focus-ring);
   --color-work-sidebar-muted-foreground: var(--work-sidebar-muted-foreground);
+  --color-palette-selected: var(--palette-selected);
+  --color-palette-selected-foreground: var(--palette-selected-foreground);
+  --color-palette-selected-muted: var(--palette-selected-muted);
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
@@ -199,6 +202,12 @@
      активная карточка (8% --work-sidebar-foreground), а на ней и на amber-500/10
      поверх неё --muted-foreground ниже 4.5:1 (tokens.test.ts, тест 14). */
   --work-sidebar-muted-foreground: #595959;
+  /* Кусок 6.3 (не из Orca, перенос ревью 6.2-B): выделенная строка палитры ⌘J. Смесь 13 %
+     --foreground давала к фону палитры 1.33:1; нужно ≥ 3:1 (WCAG 1.4.11, tokens.test.ts).
+     Тёмная строка с белым текстом — 13.9:1 к фону палитры, текст 15.1:1, вторичный 8.7:1. */
+  --palette-selected: #262626;
+  --palette-selected-foreground: #fafafa;
+  --palette-selected-muted: #c4c4c4;
   --sidebar: #fafafa;
   --sidebar-foreground: #0a0a0a;
   --sidebar-primary: #171717;
@@ -323,6 +332,11 @@
   --work-sidebar-focus-ring: #a1a1a1;
   /* Кусок 3.3: то же для тёмной — активная карточка 10% --work-sidebar-foreground. */
   --work-sidebar-muted-foreground: #bdbdbd;
+  /* Кусок 6.3: тёмная — прежний --accent (1.91:1 к фону палитры), вторичный текст светлее
+     --muted-foreground: тот на #404040 даёт 4.0:1, этот — 5.5:1. */
+  --palette-selected: #404040;
+  --palette-selected-foreground: #fafafa;
+  --palette-selected-muted: #bdbdbd;
   --sidebar: #171717;
   --sidebar-foreground: #fafafa;
   --sidebar-primary: #1447e6;

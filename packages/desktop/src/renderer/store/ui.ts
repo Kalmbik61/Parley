@@ -36,6 +36,12 @@ export interface DialogsState {
    * меню строки; `null` — «New room» из меню карточки (кусок 3.4), обязательного нет.
    */
   createRoom: { projectPath: string; workId: string; requiredMember: { id: string; label: string } | null } | null;
+  /**
+   * Подтверждение перезапуска хоста (кусок 6.3): одно на «Host is outdated — restart» строки
+   * статуса и действие палитры `host.restart`. Строка статуса с 4.2 работает на пропах —
+   * поэтому состояние здесь, а не в её `useState`.
+   */
+  restartHost: boolean;
 }
 
 const CLOSED_DIALOGS: DialogsState = {
@@ -43,6 +49,7 @@ const CLOSED_DIALOGS: DialogsState = {
   newSession: { open: false, parentSessionId: null, work: null },
   settings: false,
   createRoom: null,
+  restartHost: false,
 };
 
 export interface UiState {
@@ -88,6 +95,11 @@ export interface UiState {
    * указателя в портал меню — не уход с сайдбара.
    */
   sidebarHolds: Record<string, true>;
+  /**
+   * Временный показ архивных работ (кусок 6.3, спека 6.7): в памяти окна до перезапуска, не в
+   * `ui.json`. Счётчики, бейдж, `attention.next` и выбор соседа архивные не берут и при нём.
+   */
+  showArchived: boolean;
 
   /** Ставит/снимает `.dark` на `<html>` (`applyDarkClass`) и пишет в стор — единственная точка входа для обоих. */
   setDark: (dark: boolean) => void;
@@ -102,6 +114,9 @@ export interface UiState {
   closeSettingsDialog: () => void;
   openCreateRoomDialog: (input: NonNullable<DialogsState['createRoom']>) => void;
   closeCreateRoomDialog: () => void;
+  confirmRestartHost: () => void;
+  closeRestartHostDialog: () => void;
+  toggleShowArchived: () => void;
   toggleWake: (bridge: HarnasBridge) => Promise<void>;
 
   /**
@@ -156,6 +171,7 @@ export const useUiStore = create<UiState>((set, get) => {
     uiLoaded: false,
     sidebarHovering: false,
     sidebarHolds: {},
+    showArchived: false,
 
     setDark: (dark) => {
       applyDarkClass(dark);
@@ -194,6 +210,9 @@ export const useUiStore = create<UiState>((set, get) => {
     closeSettingsDialog: () => set((state) => ({ dialogs: { ...state.dialogs, settings: false } })),
     openCreateRoomDialog: (input) => set((state) => ({ dialogs: { ...state.dialogs, createRoom: input } })),
     closeCreateRoomDialog: () => set((state) => ({ dialogs: { ...state.dialogs, createRoom: null } })),
+    confirmRestartHost: () => set((state) => ({ dialogs: { ...state.dialogs, restartHost: true } })),
+    closeRestartHostDialog: () => set((state) => ({ dialogs: { ...state.dialogs, restartHost: false } })),
+    toggleShowArchived: () => set((state) => ({ showArchived: !state.showArchived })),
 
     toggleWake: async (bridge) => {
       const paused = get().wakePaused;

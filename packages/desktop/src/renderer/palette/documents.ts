@@ -16,6 +16,7 @@ import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import type { WorkAttention } from '../attention/derive.js';
 import type { HistoryEntry } from '../layout/history.js';
+import { whenShown } from '../attention/focus-target.js';
 import { tabId } from '../layout/ids.js';
 import { measureGroupSizes } from '../layout/measure.js';
 import { useLayoutStore } from '../layout/store.js';
@@ -26,6 +27,7 @@ import { isoMs } from '../lib/iso-time.js';
 import { sessionLabelText, sessionRowLabel, sessionTag } from '../lib/participant.js';
 import { treeOrder, workKey } from '../lib/tree-order.js';
 import type { ActivityEntry } from '../store/activity.js';
+import { terminalSurfaces } from '../terminal/surface-registry.js';
 import { recencyBucket, scoreDocument } from './score.js';
 import type { PaletteMode } from './store.js';
 
@@ -104,15 +106,17 @@ export function buildDocuments(input: {
     const base = (orderIndex.get(key) ?? input.order.length) * 1000;
     const layout = layouts[key];
 
-    // Вкладка открывается там, где уже есть; ⌘Enter — в новой группе справа.
+    // Вкладка открывается там, где уже есть; ⌘Enter — в новой группе справа. Открытая вкладка
+    // получает фокус ввода (ревью 6.2-B, Important 1): набранное после выбора не теряется.
     const open = (tab: TabSpec) => (runMode: 'default' | 'split') => {
-      if (split) {
-        splitInto(key, tab, direction);
-        return;
+      let opened: boolean;
+      if (split) opened = splitInto(key, tab, direction);
+      else {
+        useLayoutStore.getState().setActiveWork(key);
+        if (runMode === 'split') opened = splitInto(key, tab, 'row');
+        else opened = useLayoutStore.getState().apply(key, (current) => openTab(current, tab)) === null;
       }
-      useLayoutStore.getState().setActiveWork(key);
-      if (runMode === 'split') splitInto(key, tab, 'row');
-      else useLayoutStore.getState().apply(key, (current) => openTab(current, tab));
+      if (opened) void focusOpened(key, tab, entry);
     };
 
     const sessionState = (session: WorkSession): DotState =>
@@ -259,13 +263,64 @@ function workDot(attention: WorkAttention | undefined): DotState | undefined {
   }
 }
 
-/** Новая группа рядом с активной группой работы; отказ — тостом, как у прежнего выбора сессии. */
-function splitInto(key: string, tab: TabSpec, direction: 'row' | 'column'): void {
+/** Новая группа рядом с активной группой работы; отказ — тостом, как у прежнего выбора сессии. false — отказ. */
+function splitInto(key: string, tab: TabSpec, direction: 'row' | 'column'): boolean {
   const error = useLayoutStore
     .getState()
     .apply(key, (layout) => splitGroup(layout, layout.activeGroupId, direction, tab, measureGroupSizes()));
   if (error === 'too-many-groups') toast(S.tabs.tooManyGroups);
   else if (error === 'too-small') toast(S.tabs.tooSmall);
+  return error === null;
+}
+
+/** Сколько ждём, пока палитра уйдёт из DOM (план, «Переход по уведомлению» — те же 2 с). */
+const PALETTE_GONE_TIMEOUT_MS = 2000;
+const PALETTE_GONE_POLL_MS = 16;
+
+/**
+ * Палитра ушла из DOM. Пока она смонтирована, ловушка фокуса Radix возвращает фокус в её поле:
+ * фокус, отданный терминалу раньше, пропал бы вместе с палитрой, и `activeElement` стал бы `body`.
+ */
+function paletteGone(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const check = (): void => {
+      if (document.querySelector('[data-palette]') === null) resolve(true);
+      else if (Date.now() - started >= PALETTE_GONE_TIMEOUT_MS) resolve(false);
+      else setTimeout(check, PALETTE_GONE_POLL_MS);
+    };
+    check();
+  });
+}
+
+/**
+ * Фокус ввода — в поверхность открытой вкладки, как у перехода по уведомлению
+ * (`applyFocusTarget`, 4.3): дождаться показа (работа могла быть не гидрирована, контейнер —
+ * `inert`) и ухода палитры. Терминал — `focus()` его поверхности; комната и почта — их поле
+ * ввода, иначе сама вкладка. Фокус, который человек за это время увёл сам (или который забрал
+ * открытый действием диалог), не перехватывается.
+ */
+async function focusOpened(key: string, tab: TabSpec, entry: WorkEntry): Promise<void> {
+  if (!(await whenShown(key, tab)) || !(await paletteGone())) return;
+  const current = document.activeElement;
+  if (current !== null && current !== document.body) return;
+  if (tab.kind === 'terminal') {
+    terminalSurfaces.get(refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: tab.sessionId }))?.focus();
+    return;
+  }
+  const layout = useLayoutStore.getState().layouts[key];
+  const groupId = layout === undefined ? undefined : groups(layout).find((group) => group.activeTabId === tab.id)?.id;
+  const container = [...document.querySelectorAll<HTMLElement>('[data-work-container]')].find(
+    (element) => element.dataset.workContainer === key,
+  );
+  const body = [...(container?.querySelectorAll<HTMLElement>('[data-group-body]') ?? [])].find(
+    (element) => element.dataset.groupBody === groupId,
+  );
+  const field = body?.querySelector<HTMLElement>('textarea:not([disabled]), input:not([type="hidden"]):not([disabled])');
+  const tabElement = [...document.querySelectorAll<HTMLElement>('[role="tab"][data-work-key][data-tab-id]')].find(
+    (element) => element.dataset.workKey === key && element.dataset.tabId === tab.id,
+  );
+  (field ?? tabElement)?.focus();
 }
 
 export interface RankedSection {

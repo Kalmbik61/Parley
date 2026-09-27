@@ -75,17 +75,25 @@ export function neighborWork(order: string[], workKey: string): string | null {
  * С куска 3.4 оба порядка — видимые (`visibleOrder` до и после снимка): соседа человек
  * видел на экране, а архивная или скрытая работа кандидатом не бывает.
  */
-function survivingNeighbor(prevOrder: readonly string[], removedKey: string, order: readonly string[]): string | null {
+function survivingNeighbor(
+  prevOrder: readonly string[],
+  removedKey: string,
+  order: readonly string[],
+  isArchived: (key: string) => boolean,
+): string | null {
+  // С куска 6.3 показанные архивные есть и в видимом порядке, но соседом не бывают (спека 6.7).
+  const fits = (candidate: string | undefined): candidate is string =>
+    candidate !== undefined && order.includes(candidate) && !isArchived(candidate);
   const index = prevOrder.indexOf(removedKey);
   for (let i = index + 1; i < prevOrder.length; i += 1) {
     const candidate = prevOrder[i];
-    if (candidate !== undefined && order.includes(candidate)) return candidate;
+    if (fits(candidate)) return candidate;
   }
   for (let i = index - 1; i >= 0; i -= 1) {
     const candidate = prevOrder[i];
-    if (candidate !== undefined && order.includes(candidate)) return candidate;
+    if (fits(candidate)) return candidate;
   }
-  return order[0] ?? null;
+  return order.find((key) => !isArchived(key)) ?? null;
 }
 
 /** `loadLayout` → `parseWorkLayout` → `pruneLayout(isTabAlive)`; `null` на любом шаге → `emptyLayout()`. */
@@ -228,7 +236,9 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order, visibl
     const current = orderRef.current;
     const visible = visibleRef.current;
     const isArchived = (key: string): boolean => archivedRef.current.has(key);
-    const firstLive = (): string | null => visible?.[0] ?? current.find((key) => !isArchived(key)) ?? null;
+    // «Первая видимая» — неархивная: показанные архивные (6.3) стоят в visibleOrder.
+    const firstLive = (): string | null =>
+      visible?.find((key) => !isArchived(key)) ?? current.find((key) => !isArchived(key)) ?? null;
     const fromDisk = (): string | null => {
       const disk = fromDiskRef.current;
       return disk !== null && disk !== undefined && current.includes(disk) && !isArchived(disk) ? disk : null;
@@ -247,7 +257,7 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order, visibl
       pendingRef.current = null;
       const active = store().activeWorkKey;
       if (active === null || active === pending.removed) {
-        store().setActiveWork(survivingNeighbor(pending.prevVisible, pending.removed, visible) ?? firstLive());
+        store().setActiveWork(survivingNeighbor(pending.prevVisible, pending.removed, visible, isArchived) ?? firstLive());
       }
       return;
     }

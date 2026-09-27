@@ -9,7 +9,6 @@
  * видит и русский `notice.text` показать не может, даже случайно.
  */
 
-import { useState } from 'react';
 import type { HostStatus } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
@@ -28,8 +27,12 @@ export interface StatusBarProps {
   noticeLine: string;
   wakePaused: boolean | null;
   onToggleWake: () => void;
-  /** «Restart» в подтверждении: AppShell передаёт () => void bridge.app.restartHost(). */
+  /** «Restart» в подтверждении: AppShell перезапускает хост, отказ — тостом. */
   onRestartHost: () => void;
+  /** Подтверждение открыто — AppShell: dialogs.restartHost (кусок 6.3, тот же диалог, что у палитры). */
+  restartHostOpen: boolean;
+  /** true — confirmRestartHost(), false — closeRestartHostDialog(). */
+  onRestartHostOpenChange(open: boolean): void;
   /** Итоги внимания по секциям сайдбара (кусок 4.2): AppShell — useAttentionTotals(). */
   attention: { needsYou: number; unseen: number };
   /** Клик по сегменту внимания — «следующая, где нужен ты» (спека 7.6): AppShell — openNextAttention. */
@@ -42,12 +45,11 @@ export function StatusBar({
   wakePaused,
   onToggleWake,
   onRestartHost,
+  restartHostOpen,
+  onRestartHostOpenChange,
   attention,
   onNextAttention,
 }: StatusBarProps): JSX.Element {
-  // Подтверждение — локальное состояние строки статуса; 6.3 переведёт его
-  // открытие на общий `confirmRestartHost`.
-  const [confirmOpen, setConfirmOpen] = useState(false);
   const outdated = missingMethods(status).length > 0;
   // Письма в счёт не входят: они в бейдже и на карточках, а клик ведёт только к сессиям.
   const attentionText = S.statusBar.attention(attention.needsYou, attention.unseen);
@@ -68,19 +70,20 @@ export function StatusBar({
       {outdated ? (
         <button
           type="button"
-          onClick={() => setConfirmOpen(true)}
+          onClick={() => onRestartHostOpenChange(true)}
           className="shrink-0 rounded px-2 py-0.5 text-foreground hover:bg-accent"
         >
           {S.statusBar.hostOutdated}
         </button>
       ) : null}
+      {/* Диалог смонтирован и без кнопки «устарел»: его открывает и действие палитры host.restart. */}
       <ConfirmDialog
-        open={confirmOpen}
+        open={restartHostOpen}
         title={S.statusBar.restartHostTitle}
         description={S.statusBar.restartHostDescription}
         confirmLabel={S.connection.restart}
         onConfirm={onRestartHost}
-        onOpenChange={setConfirmOpen}
+        onOpenChange={onRestartHostOpenChange}
       />
       <button
         type="button"

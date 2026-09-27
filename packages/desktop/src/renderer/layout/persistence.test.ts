@@ -587,6 +587,53 @@ describe('useLayoutPersistence — order и visibleOrder (кусок 3.4)', () =
   });
 });
 
+// Тест 7 куска 6.3: показ архивных включён — в visibleOrder есть архивные, но соседом и
+// «первой видимой» они не бывают (спека 6.7).
+describe('useLayoutPersistence — показ архивных (тест 7 куска 6.3)', () => {
+  type Props = { entries: WorkEntry[]; order: string[]; visibleOrder: string[] | null };
+  const mount = (bridge: ReturnType<typeof createFakeBridge>, initialProps: Props) =>
+    renderHook(
+      ({ entries, order, visibleOrder }: Props) => useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order, visibleOrder }),
+      { initialProps },
+    );
+
+  it('активная архивирована — активна соседняя неархивная, хотя архивный сосед виден', async () => {
+    const bridge = createFakeBridge();
+    const [a, b, c] = [work('w-a', '/tmp/a'), work('w-b', '/tmp/b'), work('w-c', '/tmp/c', [], 'archived')];
+    // Показанная архивная C стоит на экране сразу после B.
+    const { rerender } = mount(bridge, { entries: [a, b, c], order: [keyA, keyB, keyC], visibleOrder: [keyA, keyB, keyC] });
+    await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).toBe(keyA));
+    useLayoutStore.getState().setActiveWork(keyB);
+
+    const archivedB = work('w-b', '/tmp/b', [], 'archived');
+    rerender({ entries: [a, archivedB, c], order: [keyA, keyB, keyC], visibleOrder: [keyA, keyB, keyC] });
+
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyA);
+  });
+
+  it('клик по показанной архивной делает её активной, и следующий снимок её не выталкивает', async () => {
+    const bridge = createFakeBridge();
+    const [a, c] = [work('w-a', '/tmp/a'), work('w-c', '/tmp/c', [], 'archived')];
+    const { rerender } = mount(bridge, { entries: [a, c], order: [keyA, keyC], visibleOrder: [keyA, keyC] });
+    await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).toBe(keyA));
+    useLayoutStore.getState().setActiveWork(keyC);
+
+    // Новый снимок работ (событие хоста) с той же архивной C.
+    const freshA = work('w-a', '/tmp/a', [session('s-01')]);
+    const freshC = work('w-c', '/tmp/c', [], 'archived');
+    rerender({ entries: [freshA, freshC], order: [keyA, keyC], visibleOrder: [keyA, keyC] });
+
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyC);
+  });
+
+  it('старт: первая в visibleOrder — архивная; активной становится первая неархивная', async () => {
+    const bridge = createFakeBridge();
+    const [a, b] = [work('w-a', '/tmp/a', [], 'archived'), work('w-b', '/tmp/b')];
+    mount(bridge, { entries: [a, b], order: [keyA, keyB], visibleOrder: [keyA, keyB] });
+    await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).toBe(keyB));
+  });
+});
+
 describe('ensureHydrated (тест 7 куска 6.2)', () => {
   it('работа, не показанная за запуск, — один loadLayout и её вкладки в раскладках; гидрированная — без вызова', async () => {
     const bridge = createFakeBridge();

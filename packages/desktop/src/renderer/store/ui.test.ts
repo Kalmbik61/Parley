@@ -12,7 +12,9 @@ beforeEach(() => {
       newSession: { open: false, parentSessionId: null, work: null },
       settings: false,
       createRoom: null,
+      restartHost: false,
     },
+    showArchived: false,
     ui: DEFAULT_UI,
     uiLoaded: false,
   });
@@ -59,6 +61,30 @@ describe('useUiStore диалоги', () => {
   it('«New room» из меню карточки — createRoom без обязательного участника (кусок 3.4)', () => {
     useUiStore.getState().openCreateRoomDialog({ projectPath: '/tmp/p', workId: 'w-01', requiredMember: null });
     expect(useUiStore.getState().dialogs.createRoom).toEqual({ projectPath: '/tmp/p', workId: 'w-01', requiredMember: null });
+  });
+});
+
+describe('useUiStore — показ архивных и подтверждение перезапуска хоста (кусок 6.3)', () => {
+  it('showArchived — в памяти окна: переключается туда и обратно, app.saveUi не зовётся', async () => {
+    const bridge = createFakeBridge();
+    const dispose = useUiStore.getState().init(bridge);
+    await vi.waitFor(() => expect(useUiStore.getState().uiLoaded).toBe(true));
+    const saveUi = vi.spyOn(bridge.app, 'saveUi');
+    expect(useUiStore.getState().showArchived).toBe(false);
+    useUiStore.getState().toggleShowArchived();
+    expect(useUiStore.getState().showArchived).toBe(true);
+    useUiStore.getState().toggleShowArchived();
+    expect(useUiStore.getState().showArchived).toBe(false);
+    expect(saveUi).not.toHaveBeenCalled();
+    dispose();
+  });
+
+  it('dialogs.restartHost — confirmRestartHost открывает, closeRestartHostDialog закрывает', () => {
+    expect(useUiStore.getState().dialogs.restartHost).toBe(false);
+    useUiStore.getState().confirmRestartHost();
+    expect(useUiStore.getState().dialogs.restartHost).toBe(true);
+    useUiStore.getState().closeRestartHostDialog();
+    expect(useUiStore.getState().dialogs.restartHost).toBe(false);
   });
 });
 

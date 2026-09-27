@@ -63,7 +63,7 @@ beforeEach(() => {
   useUiStore.setState({
     windowFocused: true,
     wakePaused: null,
-    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null },
+    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null, restartHost: false },
     visibleSessionRefs: {},
   });
   useLayoutStore.setState({

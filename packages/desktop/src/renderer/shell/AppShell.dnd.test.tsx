@@ -135,6 +135,7 @@ beforeEach(() => {
       newSession: { open: false, parentSessionId: null, work: null },
       settings: false,
       createRoom: null,
+      restartHost: false,
     },
     visibleSessionRefs: {},
     ui: DEFAULT_UI,

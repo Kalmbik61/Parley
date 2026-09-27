@@ -27,7 +27,7 @@ const keysOf = (works: WorkEntry[]): string[] => works.map((e) => e.map.work.id)
 function build(
   entries: WorkEntry[],
   levels: Record<string, WorkAttention> = {},
-  opts: { pinned?: string[]; collapsed?: string[]; showDone?: boolean } = {},
+  opts: { pinned?: string[]; collapsed?: string[]; showDone?: boolean; showArchived?: boolean } = {},
 ) {
   const attention: Record<string, WorkAttention> = {};
   for (const e of entries) attention[key(e)] = levels[e.map.work.id] ?? att('idle');
@@ -37,6 +37,7 @@ function build(
     pinned: opts.pinned ?? [],
     collapsed: opts.collapsed ?? [],
     showDone: opts.showDone ?? true,
+    showArchived: opts.showArchived ?? false,
   });
 }
 
@@ -157,6 +158,46 @@ describe('buildSections (6)', () => {
     const sections = build([work('/p/a', 'w1'), work('/p/a', 'w2', 'archived')], {}, { collapsed: ['/p/a'] });
     expect(sections[0]!.collapsed).toBe(true);
     expect(sections[0]!.works).toHaveLength(1);
+  });
+});
+
+// Тест 6 куска 6.3: показ архивных (спека 6.1, 6.7) — в конце своей секции, после done.
+describe('buildSections — showArchived (тест 6 куска 6.3)', () => {
+  const list = () => [
+    work('/p/a', 'arch', 'archived'),
+    work('/p/a', 'done1', 'done'),
+    work('/p/a', 'act'),
+  ];
+
+  it('showArchived: false — как в 3.2: архивных нет', () => {
+    expect(keysOf(build(list())[0]!.works)).toEqual(['act', 'done1']);
+  });
+
+  it('showArchived: true — архивная в конце своей секции, после done, даже со срочным вниманием', () => {
+    const levels = { arch: att('needs-you', '2026-09-27T12:00:00.000Z') };
+    expect(keysOf(build(list(), levels, { showArchived: true })[0]!.works)).toEqual(['act', 'done1', 'arch']);
+  });
+
+  it('showArchived: true и showDone: false — done скрыта, архивная видна', () => {
+    expect(keysOf(build(list(), {}, { showArchived: true, showDone: false })[0]!.works)).toEqual(['act', 'arch']);
+  });
+
+  it('закреплённая архивная — в конце Pinned', () => {
+    const arch = work('/p/a', 'arch', 'archived');
+    const pin = work('/p/b', 'pin');
+    const sections = build([arch, pin], {}, { pinned: [key(arch), key(pin)], showArchived: true });
+    expect(sections[0]!.kind).toBe('pinned');
+    expect(keysOf(sections[0]!.works)).toEqual(['pin', 'arch']);
+  });
+
+  it('внимание архивной не поднимает группу проекта, а группы из одних архивных сортируются устойчиво', () => {
+    const hot = work('/p/a', 'hot', 'archived');
+    const calm = work('/p/b', 'calm');
+    const levels = { hot: att('needs-you'), calm: att('idle') };
+    const sections = build([hot, calm], levels, { showArchived: true });
+    expect(sections.map((section) => section.title)).toEqual(['b', 'a']);
+    const onlyArchived = build([work('/p/b', 'b', 'archived'), work('/p/a', 'a', 'archived')], {}, { showArchived: true });
+    expect(onlyArchived.map((section) => section.title)).toEqual(['a', 'b']);
   });
 });
 

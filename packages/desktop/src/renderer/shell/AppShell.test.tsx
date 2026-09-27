@@ -27,6 +27,7 @@ import { useWorksStore } from '../store/works.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { refKey } from '@harnas/protocol';
 import { workKey } from '../lib/tree-order.js';
+import { encodeIpcError } from '../../shared/ipc-error.js';
 import { AppShell } from './AppShell.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
@@ -152,7 +153,7 @@ beforeEach(() => {
   useUiStore.setState({
     windowFocused: true,
     wakePaused: null,
-    dialogs: { newWork: { open: false, projectPath: null, title: '' }, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null },
+    dialogs: { newWork: { open: false, projectPath: null, title: '' }, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null, restartHost: false },
     visibleSessionRefs: {},
     ui: DEFAULT_UI,
     uiLoaded: true,
@@ -1509,5 +1510,219 @@ describe('AppShell — клавиши только у активной рабо�
     expect(activeTabOf(active)).toBe(tabId.mail());
 
     expect(useLayoutStore.getState().layouts[hidden]).toBe(hiddenLayout);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Кусок 6.3: действия палитры через `runAction` и фокус после выбора строки.
+// ---------------------------------------------------------------------------
+
+/** ⌘J, запрос и клик по первой строке с этим текстом — так человек выбирает действие или сессию. */
+async function pickInPalette(query: string, row: RegExp): Promise<void> {
+  act(() => bridge.emitMenu('palette.open'));
+  const input = await screen.findByPlaceholderText(/./, { selector: '[cmdk-input]' });
+  fireEvent.change(input, { target: { value: query } });
+  const [first] = await screen.findAllByRole('option', { name: row });
+  if (first === undefined) throw new Error(`нет строки ${String(row)}`);
+  fireEvent.click(first);
+  await flush();
+}
+
+function archivedWork(id: string, projectPath: string, sessions: WorkSession[]): WorkEntry {
+  const base = work(id, '2026-01-09', `Архивная ${id}`, sessions);
+  return { projectPath, map: { ...base.map, work: { ...base.map.work, status: 'archived' } } };
+}
+
+describe('AppShell — показ архивных (тесты 6, 7 куска 6.3)', () => {
+  beforeEach(() => useUiStore.setState({ showArchived: false }));
+  afterEach(() => useUiStore.setState({ showArchived: false }));
+
+  it('Show archived workspaces: архивная — в конце своей секции и приглушена; второй вызов прячет', async () => {
+    const w1 = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')]);
+    const arch = archivedWork('w-09', '/tmp/w-01', []);
+    const archKey = workKey('/tmp/w-01', 'w-09');
+    await renderShell([w1, arch]);
+    const card = () => document.querySelector<HTMLElement>(`[data-work-key="${CSS.escape(archKey)}"]`);
+    expect(card()).toBeNull();
+
+    await pickInPalette('Show archived', /^Show archived workspaces/);
+    expect(card()).not.toBeNull();
+    expect(card()?.className).toContain('opacity-60');
+    const keys = [...document.querySelectorAll<HTMLElement>('[data-work-key]')].map((element) => element.dataset.workKey);
+    expect(keys.at(-1)).toBe(archKey);
+
+    await pickInPalette('Show archived', /^Show archived workspaces/);
+    expect(card()).toBeNull();
+  });
+
+  it('архивная с сессией needs-you видна, но строка статуса её не считает, а attention.next её не выбирает', async () => {
+    const w1 = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')]);
+    const arch = archivedWork('w-09', '/tmp/w-09', [session('s-09', 'ждёт')]);
+    const ref = { projectPath: '/tmp/w-09', workId: 'w-09', sessionId: 's-09' };
+    useActivityStore.setState({
+      byRef: {
+        [refKey(ref)]: {
+          ref,
+          activity: { activity: 'blocked', subagents: 0, turnEndedAt: null, lastEventAt: '2026-01-05T00:00:00.000Z', source: 'hooks', exited: false, hooksMissing: false },
+          metrics: null,
+        },
+      },
+    });
+    await renderShell([w1, arch]);
+    act(() => useUiStore.getState().toggleShowArchived());
+    await flush();
+
+    expect(document.querySelector(`[data-work-key="${CSS.escape(workKey('/tmp/w-09', 'w-09'))}"]`)).not.toBeNull();
+    expect(document.querySelector('[data-attention-segment]')).toBeNull();
+
+    await pickInPalette('Next session', /^Next session that needs you/);
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
+  });
+});
+
+describe('AppShell — действия 6.3 из палитры (тесты 8, 9 куска 6.3)', () => {
+  afterEach(() => useHostStore.setState({ status: { state: 'connecting' } }));
+
+  it('Restart host…: подтверждение из стора; app.restartHost — только после Restart', async () => {
+    const restartHost = vi.spyOn(bridge.app, 'restartHost');
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+
+    await pickInPalette('Restart host', /^Restart host/);
+    expect(useUiStore.getState().dialogs.restartHost).toBe(true);
+    expect(await screen.findByRole('dialog', { name: 'Restart host?' })).toBeTruthy();
+    expect(restartHost).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restart' }));
+    await flush();
+    expect(restartHost).toHaveBeenCalledTimes(1);
+    expect(useUiStore.getState().dialogs.restartHost).toBe(false);
+  });
+
+  it('Host is outdated — restart строки статуса открывает тот же диалог стора', async () => {
+    useWorksStore.setState({ entries: [], branches: {}, loading: false, error: null });
+    render(<AppShell bridge={bridge} status={{ state: 'connected', hostVersion: '0.0.1', methods: null }} fontFamily="Menlo" fontSize={13} />);
+    await flush();
+    fireEvent.click(screen.getByRole('button', { name: 'Host is outdated — restart' }));
+    expect(useUiStore.getState().dialogs.restartHost).toBe(true);
+  });
+
+  it('отказ app.restartHost — тост Couldn\'t restart host: …', async () => {
+    vi.mocked(toast).mockClear();
+    vi.spyOn(bridge.app, 'restartHost').mockRejectedValueOnce(encodeIpcError({ code: 'internal', message: 'сбой' }));
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+    act(() => useUiStore.getState().confirmRestartHost());
+    fireEvent.click(await screen.findByRole('button', { name: 'Restart' }));
+    await waitFor(() => expect(vi.mocked(toast)).toHaveBeenCalledWith("Couldn't restart host: host error."));
+  });
+
+  it('New session — диалог с родителем, выбранной сессией (как ⌘T)', async () => {
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+    await activateWithTerminal(keyOf('w-01'), 's-01');
+    await pickInPalette('New session', /^New session/);
+    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: true, parentSessionId: 's-01', work: null });
+  });
+
+  it('New room — «Создать комнату» активной работы без обязательного участника', async () => {
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+    await pickInPalette('New room', /^New room/);
+    expect(useUiStore.getState().dialogs.createRoom).toEqual({ projectPath: '/tmp/w-01', workId: 'w-01', requiredMember: null });
+  });
+
+  it('Pause auto-wake — wake.pause; отказ — тост Couldn\'t toggle auto-wake: …', async () => {
+    vi.mocked(toast).mockClear();
+    bridge.setHandler('wake.state', () => ({ paused: false }));
+    const pauses: unknown[] = [];
+    bridge.setHandler('wake.pause', (params) => {
+      pauses.push(params);
+      return { paused: true };
+    });
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+    // wake.toggle доступен только с wake.pause и wake.resume хоста.
+    act(() => useHostStore.setState({ status: STATUS }));
+    act(() => useUiStore.setState({ wakePaused: false }));
+    await pickInPalette('Pause auto-wake', /^Pause auto-wake/);
+    await waitFor(() => expect(pauses).toHaveLength(1));
+    expect(useUiStore.getState().wakePaused).toBe(true);
+
+    bridge.setHandler('wake.resume', () => {
+      throw encodeIpcError({ code: 'internal', message: 'сбой' });
+    });
+    await pickInPalette('Resume auto-wake', /^Resume auto-wake/);
+    await waitFor(() => expect(vi.mocked(toast)).toHaveBeenCalledWith("Couldn't toggle auto-wake: host error."));
+  });
+
+  it('Theme: dark — setAppearance, app.saveUi не зовётся', async () => {
+    const setAppearance = vi.spyOn(bridge.app, 'setAppearance');
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+    const saveUi = vi.spyOn(bridge.app, 'saveUi');
+    await pickInPalette('Theme: dark', /^Theme: dark/);
+    expect(setAppearance).toHaveBeenCalledWith('dark');
+    expect(saveUi).not.toHaveBeenCalled();
+  });
+
+  it('⌘T без активной работы — тост No active workspace, диалога нет', async () => {
+    vi.mocked(toast).mockClear();
+    render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
+    await flush();
+    fireEvent.keyDown(window, { key: 't', code: 'KeyT', metaKey: true });
+    expect(vi.mocked(toast)).toHaveBeenCalledWith('No active workspace');
+    expect(useUiStore.getState().dialogs.newSession.open).toBe(false);
+  });
+});
+
+describe('AppShell — фокус после выбора строки палитры (перенос ревью 6.2-B, Important 1)', () => {
+  /** xterm-мок с помощником ввода, как у настоящего: focus() поверхности кладёт в него фокус. */
+  function helperTextareas(): void {
+    xtermMock.onOpen = (element, terminal) => {
+      const xterm = document.createElement('div');
+      xterm.className = 'xterm';
+      const helper = document.createElement('textarea');
+      helper.className = 'xterm-helper-textarea';
+      xterm.appendChild(helper);
+      element.appendChild(xterm);
+      terminal.focus = () => helper.focus();
+    };
+  }
+
+  it('сессия другой работы: вкладка открыта, фокус — в её терминале, а не body', async () => {
+    helperTextareas();
+    await renderShell([
+      work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')]),
+      work('w-02', '2026-01-02', 'Вторая', [session('s-02', 'исполнитель')]),
+    ]);
+    act(() => useLayoutStore.getState().setActiveWork(keyOf('w-01')));
+    await flush();
+
+    await pickInPalette('исполнитель', /исполнитель/);
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
+    await waitFor(() => {
+      const active = document.activeElement;
+      expect(active?.classList.contains('xterm-helper-textarea')).toBe(true);
+      expect(active?.closest('[data-work-container]')?.getAttribute('data-work-container')).toBe(keyOf('w-02'));
+    });
+  });
+
+  it('вкладка терминала уже открыта и активна — фокус всё равно в терминале', async () => {
+    helperTextareas();
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+    await activateWithTerminal(keyOf('w-01'), 's-01');
+    const card = document.querySelector<HTMLElement>('[data-work-key]');
+    card?.focus();
+
+    await pickInPalette('один', /один/);
+    await waitFor(() => expect(document.activeElement?.classList.contains('xterm-helper-textarea')).toBe(true));
+  });
+
+  it('комната: фокус — в поле ввода её тела', async () => {
+    const base = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')]);
+    const withRoom: WorkEntry = { ...base, map: { ...base.map, rooms: [{ id: 'r-01', title: 'Совещание', creator: 'human', members: ['s-01'], createdAt: '2026-01-01T00:00:00.000Z' }] } };
+    await renderShell([withRoom]);
+
+    await pickInPalette('Совещание', /Совещание/);
+    await waitFor(() => {
+      const active = document.activeElement;
+      expect(active === null || active === document.body).toBe(false);
+      expect(active?.closest('[data-group-body]') !== null || active?.getAttribute('role') === 'tab').toBe(true);
+    });
   });
 });

@@ -62,11 +62,13 @@ function RowIcon({ doc }: { doc: PaletteDoc }): JSX.Element {
   return <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />;
 }
 
-// Выделенная строка (спека 9.3): в светлой теме — смесь с foreground и тонкая рамка, в тёмной — `--accent`.
+// Выделенная строка (спека 9.3): токены `--palette-selected*` (кусок 6.3) — в светлой теме тёмная
+// строка, ≥ 3:1 к фону палитры (было 1.33:1, ревью 6.2-B), в тёмной — прежний `--accent`.
+// Вторичный текст и значки строки (`text-muted-foreground`) на выделении берут свой светлый тон.
 const ROW_CLASS = cn(
   'min-w-0 gap-3 rounded-lg px-3 py-2.5',
-  'data-[selected=true]:bg-[color-mix(in_srgb,var(--foreground)_13%,var(--background))] data-[selected=true]:text-foreground data-[selected=true]:shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--foreground)_19%,transparent)]',
-  'dark:data-[selected=true]:bg-accent dark:data-[selected=true]:text-accent-foreground dark:data-[selected=true]:shadow-none',
+  'data-[selected=true]:bg-palette-selected data-[selected=true]:text-palette-selected-foreground',
+  '[&[data-selected=true]_.text-muted-foreground]:text-palette-selected-muted',
 );
 
 interface BodyProps extends PaletteProps {

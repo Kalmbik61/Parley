@@ -213,6 +213,11 @@ describe('WorkCard — done и длинное название (тест 7)', ()
     expect(card().className).not.toContain('opacity-60');
   });
 
+  it('status archived (показ архивных, тест 6 куска 6.3) — приглушена, как done', () => {
+    renderCard(makeWork('w-01', { status: 'archived' }));
+    expect(card().className).toContain('opacity-60');
+  });
+
   it('название из 60 эмодзи в DOM целиком, у заголовка класс truncate', () => {
     const title = '🎉'.repeat(60);
     renderCard(makeWork('w-01', { title }));

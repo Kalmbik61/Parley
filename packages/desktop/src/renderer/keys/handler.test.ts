@@ -261,10 +261,10 @@ describe('installKeyHandler (тест 5)', () => {
 });
 
 describe('isActionAvailable (тест 2 куска 6.1b)', () => {
-  it('group.splitRight — да; works.showArchived, files.quickOpen, sidebar.right.toggle — нет (до 6.3 и этапов 7–9)', () => {
+  it('group.splitRight и works.showArchived (6.3) — да; files.quickOpen, sidebar.right.toggle — нет (до этапов 7–9)', () => {
     const methods = new Set<string>();
     expect(isActionAvailable('group.splitRight', methods)).toBe(true);
-    expect(isActionAvailable('works.showArchived', methods)).toBe(false);
+    expect(isActionAvailable('works.showArchived', methods)).toBe(true);
     expect(isActionAvailable('files.quickOpen', methods)).toBe(false);
     expect(isActionAvailable('sidebar.right.toggle', methods)).toBe(false);
   });
@@ -273,8 +273,16 @@ describe('isActionAvailable (тест 2 куска 6.1b)', () => {
     for (const id of ['palette.open', 'work.new', 'session.new', 'settings.open', 'sidebar.left.toggle', 'work.goto.1', 'work.goto.9', 'work.prev', 'work.next', 'history.back', 'history.forward', 'group.splitRight', 'group.splitDown', 'group.prev', 'group.next', 'tab.close', 'tab.reopen', 'tab.prev', 'tab.next', 'tab.goto.1', 'tab.goto.9', 'tab.mruNext', 'tab.mruPrev', 'find', 'terminal.clear'] as const) {
       expect(IMPLEMENTED_ACTIONS.has(id)).toBe(true);
     }
-    for (const id of ['browser.find', 'browser.newTab', 'wake.toggle', 'host.restart', 'attention.next', 'room.new', 'appearance.dark'] as const) {
+    for (const id of ['browser.find', 'browser.newTab', 'files.quickOpen', 'files.search', 'sidebar.files', 'sidebar.changes', 'sidebar.right.toggle'] as const) {
       expect(IMPLEMENTED_ACTIONS.has(id)).toBe(false);
     }
+  });
+
+  it('действия 6.3 реализованы; wake.toggle доступен только с wake.pause и wake.resume хоста', () => {
+    for (const id of ['works.showArchived', 'attention.next', 'wake.toggle', 'host.restart', 'appearance.system', 'appearance.dark', 'appearance.light', 'room.new'] as const) {
+      expect(IMPLEMENTED_ACTIONS.has(id)).toBe(true);
+    }
+    expect(isActionAvailable('wake.toggle', new Set(['wake.pause']))).toBe(false);
+    expect(isActionAvailable('wake.toggle', new Set(['wake.pause', 'wake.resume']))).toBe(true);
   });
 });

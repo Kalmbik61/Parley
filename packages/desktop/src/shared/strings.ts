@@ -496,8 +496,13 @@ export const S = {
       openFile: 'open file',
       revealInFinder: 'reveal in Finder',
       saveScreenshot: 'save screenshot',
+      toggleAutoWake: 'toggle auto-wake',
+      restartHost: 'restart host',
+      closeTab: 'close tab',
     },
     noWorktree: 'This session has no worktree of its own',
+    /** Действие работы (⌘T, ⌘W, разделение…) без активной работы — тост (кусок 6.3). */
+    noActiveWorkspace: 'No active workspace',
   },
 
   /**

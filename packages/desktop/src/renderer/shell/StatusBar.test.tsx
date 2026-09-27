@@ -2,20 +2,39 @@
  * Тест 12 куска 3.1: хост старее окна — сегмент «Host is outdated — restart»,
  * клик спрашивает подтверждение, `Restart` зовёт `onRestartHost` один раз,
  * `Cancel` — ни разу. С полным `REQUIRED_METHODS` сегмента нет.
+ *
+ * С куска 6.3 подтверждение — в сторе (`dialogs.restartHost`), как у действия палитры
+ * `host.restart`: строка статуса открывает его через `onRestartHostOpenChange`.
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { HostStatus } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
-import { StatusBar } from './StatusBar.js';
+import { useUiStore } from '../store/ui.js';
+import { StatusBar, type StatusBarProps } from './StatusBar.js';
 
 afterEach(cleanup);
+beforeEach(() => useUiStore.getState().closeRestartHostDialog());
+
+/** Строка статуса с подтверждением из стора — так её подключает `AppShell`. */
+function BoundStatusBar(props: Omit<StatusBarProps, 'restartHostOpen' | 'onRestartHostOpenChange'>): JSX.Element {
+  const open = useUiStore((state) => state.dialogs.restartHost);
+  return (
+    <StatusBar
+      {...props}
+      restartHostOpen={open}
+      onRestartHostOpenChange={(next) =>
+        next ? useUiStore.getState().confirmRestartHost() : useUiStore.getState().closeRestartHostDialog()
+      }
+    />
+  );
+}
 
 function renderBar(status: HostStatus, onRestartHost = vi.fn()) {
   render(
-    <StatusBar
+    <BoundStatusBar
       status={status}
       noticeLine=""
       wakePaused={false}
@@ -37,6 +56,22 @@ describe('StatusBar: хост старее окна', () => {
     expect(screen.getByRole('dialog', { name: 'Restart host?' })).toBeTruthy();
     expect(screen.getByText(S.statusBar.restartHostDescription)).toBeTruthy();
 
+    fireEvent.click(screen.getByRole('button', { name: 'Restart' }));
+    expect(onRestartHost).toHaveBeenCalledTimes(1);
+    expect(useUiStore.getState().dialogs.restartHost).toBe(false);
+  });
+
+  it('кнопка открывает подтверждение через стор — тот же диалог, что у действия host.restart (тест 8 куска 6.3)', () => {
+    const onRestartHost = renderBar(old);
+    fireEvent.click(screen.getByRole('button', { name: 'Host is outdated — restart' }));
+    expect(useUiStore.getState().dialogs.restartHost).toBe(true);
+    expect(onRestartHost).not.toHaveBeenCalled();
+  });
+
+  it('открытое в сторе подтверждение видно и при полном наборе методов (путь палитры)', () => {
+    act(() => useUiStore.getState().confirmRestartHost());
+    const onRestartHost = renderBar({ state: 'connected', hostVersion: '2.0.0', methods: [...REQUIRED_METHODS] });
+    expect(screen.getByRole('dialog', { name: 'Restart host?' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Restart' }));
     expect(onRestartHost).toHaveBeenCalledTimes(1);
   });
@@ -61,7 +96,7 @@ describe('StatusBar: внимание (тест 9 куска 4.2)', () => {
 
   function renderAttention(attention: { needsYou: number; unseen: number; humanUnread?: number }, onNext = vi.fn()) {
     render(
-      <StatusBar
+      <BoundStatusBar
         status={connected}
         noticeLine=""
         wakePaused={false}

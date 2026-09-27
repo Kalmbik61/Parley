@@ -46,20 +46,24 @@ export function buildSections(input: {
   entries: WorkEntry[];
   attention: Record<string, WorkAttention>;   // ключ — workKey
   pinned: string[]; collapsed: string[]; showDone: boolean;
+  /** false — archived скрыты, как в 3.2; true — в конце своей секции, после done (кусок 6.3, спека 6.7). */
+  showArchived: boolean;
 }): SidebarSection[] {
-  const { entries, attention, showDone } = input;
+  const { entries, attention, showDone, showArchived } = input;
   const pinned = new Set(input.pinned);
   const collapsed = new Set(input.collapsed);
 
   // Работе без посчитанного внимания — `off` со временем карты (`attentionOf` в derive.ts).
   const attentionOf = (entry: WorkEntry): WorkAttention => attentionIn(attention, entry);
 
-  // `done` внизу своей секции — одно правило для всех секций, «Закреплённых» тоже.
+  // `done` внизу своей секции, показанные архивные — под ними: одно правило для всех секций,
+  // «Закреплённых» тоже.
+  const tail = (entry: WorkEntry): number => (entry.map.work.status === 'archived' ? 2 : entry.map.work.status === 'done' ? 1 : 0);
   const sortWorks = (works: WorkEntry[]): WorkEntry[] =>
     [...works].sort((a, b) => {
-      const aDone = a.map.work.status === 'done' ? 1 : 0;
-      const bDone = b.map.work.status === 'done' ? 1 : 0;
-      if (aDone !== bDone) return aDone - bDone;
+      const aTail = tail(a);
+      const bTail = tail(b);
+      if (aTail !== bTail) return aTail - bTail;
       const byAttention = compareWorks(
         { attention: attentionOf(a), createdAt: a.map.work.createdAt },
         { attention: attentionOf(b), createdAt: b.map.work.createdAt },
@@ -72,7 +76,8 @@ export function buildSections(input: {
     });
 
   const shown = entries.filter(
-    (entry) => entry.map.work.status !== 'archived' && (showDone || entry.map.work.status !== 'done'),
+    (entry) =>
+      (showArchived || entry.map.work.status !== 'archived') && (showDone || entry.map.work.status !== 'done'),
   );
 
   const pinnedWorks: WorkEntry[] = [];
@@ -89,9 +94,14 @@ export function buildSections(input: {
 
   // Ранг группы — по показанным в ней работам: закреплённая поднимает «Закреплённые»,
   // а не свой проект. Время на порядок групп не влияет, иначе группы прыгали бы (6.1).
-  // Считается один раз на группу, а не в каждом вызове компаратора.
+  // Считается один раз на группу, а не в каждом вызове компаратора. Показанная архивная ранг
+  // не поднимает — во внимание она не входит (спека 6.7); группа из одних архивных — ниже всех,
+  // но с числом, а не `-Infinity`: разность двух бесконечностей сломала бы сортировку.
   const groupRank = (works: WorkEntry[]): number =>
-    Math.max(...works.map((entry) => ATTENTION_RANK[attentionOf(entry).level]));
+    Math.max(
+      -1,
+      ...works.filter((entry) => entry.map.work.status !== 'archived').map((entry) => ATTENTION_RANK[attentionOf(entry).level]),
+    );
 
   const projects: SidebarSection[] = [...byProject.entries()]
     .map(([projectPath, works]) => ({

@@ -82,6 +82,7 @@ beforeEach(() => {
       newSession: { open: false, parentSessionId: null, work: null },
       settings: false,
       createRoom: null,
+      restartHost: false,
     },
   });
   useLayoutStore.setState({
@@ -117,6 +118,20 @@ function mockNonZeroRects(): void {
 }
 
 describe('Palette (тест 6)', () => {
+  it('выделенная строка — токены --palette-selected*, без прежних bg-accent и смеси 13 % (кусок 6.3, ревью 6.2-B)', async () => {
+    const w = makeWork('w-01', { projectPath: '/tmp/a', title: 'Первая', sessions: [makeSession('s-01', 'план')] });
+    setup([w]);
+    act(() => usePaletteStore.getState().openWith('default'));
+    renderPalette();
+    await type('S01');
+
+    const row = selectedOption();
+    expect(row?.className).toContain('data-[selected=true]:bg-palette-selected');
+    expect(row?.className).toContain('[&[data-selected=true]_.text-muted-foreground]:text-palette-selected-muted');
+    expect(row?.className).not.toContain('bg-accent');
+    expect(row?.className).not.toContain('13%');
+  });
+
   it('ввод S02 — первая строка сессия; Enter открывает её вкладку, палитра закрыта', async () => {
     const w = makeWork('w-01', { projectPath: '/tmp/a', title: 'Первая', sessions: [makeSession('s-01', 'план'), makeSession('s-02', 'бэкенд')] });
     setup([w]);

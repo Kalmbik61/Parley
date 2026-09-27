@@ -62,6 +62,7 @@ export function useSidebarSectionsSync(): SidebarSection[] {
   const pinned = useUiStore((state) => state.ui.pinnedWorks);
   const collapsed = useUiStore((state) => state.ui.collapsedProjects);
   const showDone = useUiStore((state) => state.ui.showDoneWorks);
+  const showArchived = useUiStore((state) => state.showArchived);
   const hovering = useUiStore((state) => state.sidebarHovering);
 
   // Структурное разделение: работа, чьё внимание не изменилось, сохраняет прежний объект, а
@@ -87,8 +88,8 @@ export function useSidebarSectionsSync(): SidebarSection[] {
   }, [entries, byRef]);
   previous.current = attention;
   const fresh = useMemo(
-    () => buildSections({ entries, attention, pinned, collapsed, showDone }),
-    [entries, attention, pinned, collapsed, showDone],
+    () => buildSections({ entries, attention, pinned, collapsed, showDone, showArchived }),
+    [entries, attention, pinned, collapsed, showDone, showArchived],
   );
   const sections = useDeferredOrder(fresh, hovering, MAX_DEFER_MS);
 

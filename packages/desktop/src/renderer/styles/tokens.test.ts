@@ -186,3 +186,49 @@ describe('tokens.css — кольцо фокуса сайдбара (кусок 
     });
   }
 });
+
+/**
+ * Перенос ревью 6.2-B (Minor 1) в кусок 6.3: выделенная строка палитры. В светлой теме смесь
+ * 13 % `--foreground` давала к фону палитры 1.33:1 — ниже ориентира WCAG 1.4.11 (3:1) для
+ * не-текстового элемента. Фон палитры — `bg-background/96` поверх затемнения `bg-black/55`, под
+ * которым что угодно от чёрного до белого: проверяются обе крайности. Текст строки — ≥ 4.5:1.
+ */
+describe('tokens.css — выделенная строка палитры (кусок 6.3, перенос ревью 6.2-B)', () => {
+  const css = readFileSync(TOKENS_PATH, 'utf8');
+
+  function readHex(theme: 'light' | 'dark', name: string): Rgb {
+    const rootStart = css.indexOf(':root {');
+    const darkStart = css.indexOf('.dark {');
+    const block = theme === 'light' ? css.slice(rootStart, darkStart) : css.slice(darkStart, css.indexOf('}', darkStart));
+    // `--background` светлой темы записан коротко (`#fff`) — трёхзначный разворачивается.
+    const match = block.match(new RegExp(`--${name}:\\s*#([0-9a-fA-F]{6}|[0-9a-fA-F]{3});`));
+    if (match === null) throw new Error(`tokens.css: --${name} не найден (${theme})`);
+    const short = match[1] as string;
+    const hex = short.length === 3 ? [...short].map((digit) => digit + digit).join('') : short;
+    return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
+  }
+
+  /** Фон палитры над страницей `page`: затемнение 55 % чёрного, поверх — 96 % `--background`. */
+  function paletteBackground(theme: 'light' | 'dark', page: Rgb): Rgb {
+    return compositeOver(readHex(theme, 'background'), 0.96, compositeOver([0, 0, 0], 0.55, page));
+  }
+
+  it('светлая: фон выделенной строки к фону палитры — не ниже 3:1 (была смесь 13 %: 1.33:1)', () => {
+    const selected = readHex('light', 'palette-selected');
+    for (const page of [[0, 0, 0], [255, 255, 255]] as const) {
+      expect(contrastOf(selected, paletteBackground('light', page))).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it('тёмная не хуже прежней: фон выделения — прежний --accent', () => {
+    expect(readHex('dark', 'palette-selected')).toEqual(readHex('dark', 'accent'));
+  });
+
+  for (const theme of ['light', 'dark'] as const) {
+    it(`${theme}: заголовок и вторичный текст выделенной строки — не ниже 4.5:1`, () => {
+      const selected = readHex(theme, 'palette-selected');
+      expect(contrastOf(readHex(theme, 'palette-selected-foreground'), selected)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastOf(readHex(theme, 'palette-selected-muted'), selected)).toBeGreaterThanOrEqual(4.5);
+    });
+  }
+});

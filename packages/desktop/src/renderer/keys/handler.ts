@@ -11,8 +11,8 @@ import type { FocusContext } from './focus-context.js';
 export type ResolvedKey = ActionId | { kind: 'palette.row'; index: number }; // index 0–8 — ⌘1–9
 
 /**
- * Действия с исполнителем: в 6.1b — ветки `run` в `AppShell`; 6.3 и этапы 7–9 дописывают свои.
- * Прочие действия реестра нажатие не гасит, а клик пункта меню ничего не делает.
+ * Действия с исполнителем — ветки `runAction` (`palette/actions.ts`, 6.3); этапы 7–9 дописывают
+ * свои. Прочие действия реестра нажатие не гасит, а клик пункта меню ничего не делает.
  */
 export const IMPLEMENTED_ACTIONS: ReadonlySet<ActionId> = new Set<ActionId>([
   'palette.open',
@@ -37,6 +37,14 @@ export const IMPLEMENTED_ACTIONS: ReadonlySet<ActionId> = new Set<ActionId>([
   'tab.mruPrev',
   'find',
   'terminal.clear',
+  'works.showArchived',
+  'attention.next',
+  'wake.toggle',
+  'host.restart',
+  'appearance.system',
+  'appearance.dark',
+  'appearance.light',
+  'room.new',
 ]);
 
 /** Действию нужны методы хоста: без них оно недоступно, даже когда реализовано. */
