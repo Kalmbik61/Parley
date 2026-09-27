@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { HarnasConfig, MergeResult, WorktreeDiff } from '@harnas/core';
+import type { HarnasConfig, MergeCheck, MergeResult, ProjectChanges, WorktreeDiff } from '@harnas/core';
 import type { SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 export const sessionRef = z.object({
@@ -81,10 +81,15 @@ export const METHODS = {
     kind: z.enum(['note', 'question', 'decision']),
   }),
   'worktrees.available': z.object({ projectPath: z.string() }),
-  'worktrees.diff': z.object({ ref: sessionRef }),
+  // `patch` только добавлен: старый хост его отбросит, старое окно не шлёт. false — `patch: ''`.
+  'worktrees.diff': z.object({ ref: sessionRef, patch: z.boolean().optional() }),
   'worktrees.commit': z.object({ ref: sessionRef, message: z.string().min(1) }),
   'worktrees.merge': z.object({ ref: sessionRef }),
   'worktrees.discard': z.object({ ref: sessionRef, force: z.boolean() }),
+  // Этап 8: конфликты до слияния и изменения папки проекта для сессии без worktree (спека 3.2, 11.5).
+  'worktrees.mergeCheck': z.object({ ref: sessionRef }),
+  'changes.project': z.object({ ref: sessionRef, patch: z.boolean().optional() }),
+  'changes.commitProject': z.object({ ref: sessionRef, message: z.string().min(1).max(10000) }),
   // Пачка окна — до 500 id (500 мс тишины); пустую слать незачем.
   'mail.markRead': z.object({
     projectPath: z.string(),
@@ -136,6 +141,9 @@ export interface Results {
   'worktrees.commit': { commit: string };
   'worktrees.merge': MergeResult;
   'worktrees.discard': { ok: true };
+  'worktrees.mergeCheck': MergeCheck;
+  'changes.project': ProjectChanges;
+  'changes.commitProject': { commit: string };
   'mail.markRead': { marked: number };
   'pty.send': SendResult;
 }

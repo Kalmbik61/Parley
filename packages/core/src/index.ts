@@ -73,11 +73,32 @@ export {
   DirtyWorktreeError,
   isGitRepo,
   baseBranchOf,
+  commitProject,
+  gitStateReason,
+  GitStateError,
+  InvalidRevisionError,
+  joinDiffFiles,
+  mergeCheck,
   mergeWorktree,
+  NothingToCommitError,
+  parseCommits,
+  parseMergeTree,
+  parseNameStatusZ,
+  parseNumstat,
+  parsePorcelainPaths,
   plannedWorktree,
+  projectChanges,
   worktreeDiff,
 } from './work/worktree.js';
-export type { MergeResult, WorktreeDiff } from './work/worktree.js';
+export type {
+  BranchCommit,
+  DiffFile,
+  GitStateReason,
+  MergeCheck,
+  MergeResult,
+  ProjectChanges,
+  WorktreeDiff,
+} from './work/worktree.js';
 export {
   createWork,
   deleteSessionFiles,

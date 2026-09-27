@@ -9,6 +9,9 @@ import {
   addSession,
   createWork,
   createWorktree,
+  GitStateError,
+  InvalidRevisionError,
+  NothingToCommitError,
   plannedWorktree,
   readMap,
   sessionTag,
@@ -17,7 +20,8 @@ import {
 import type { WorktreeInfo } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import type { SessionsService } from '../sessions/sessions-service.js';
-import { createWorktreesService } from './worktrees-service.js';
+import { HostError } from '../errors.js';
+import { createWorktreesService, gitFailure } from './worktrees-service.js';
 
 const run = promisify(execFile);
 const git = (dir: string, args: string[]) => run('git', ['-C', dir, ...args]);
@@ -177,6 +181,21 @@ describe('discard (6)', () => {
   });
 });
 
+describe('ветка карты — не ревизия (раунд исправлений 2 куска 8.1)', () => {
+  it('merge и discard с веткой-флагом — bad_request, каталог worktree на месте', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    await updateMap(project, ref.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session?.worktree !== null && session?.worktree !== undefined) session.worktree.branch = '-c';
+    });
+    const service = createWorktreesService(stubSessions());
+
+    await expect(service.merge(ref)).rejects.toMatchObject({ code: 'bad_request' });
+    await expect(service.discard(ref, true)).rejects.toMatchObject({ code: 'bad_request' });
+    expect(existsSync(info.path)).toBe(true);
+  });
+});
+
 describe('без своего worktree', () => {
   it('diff/commit/merge/discard сессии без worktree — bad_request', async () => {
     const work = await createWork(project, { title: 'Работа', goal: '' });
@@ -194,3 +213,104 @@ describe('без своего worktree', () => {
   });
 });
 
+
+/** Сессия без своего worktree — работает прямо в папке проекта. */
+async function plainSession(projectPath = project): Promise<SessionRef> {
+  const work = await createWork(projectPath, { title: 'Работа', goal: '' });
+  let sessionId = '';
+  await updateMap(projectPath, work.work.id, (map) => {
+    sessionId = addSession(map, { provider: 'claude', label: 'a', task: 'т' }).id;
+  });
+  return { projectPath, workId: work.work.id, sessionId };
+}
+
+describe('ревью изменений (кусок 8.1)', () => {
+  it('diff с patch: false — патч пуст, числа и файлы на месте', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+    await writeFile(path.join(info.path, 'draft.md'), 'черновик\n', 'utf8');
+
+    const bare = await service.diff(ref, false);
+    expect(bare.patch).toBe('');
+    expect(bare.files).toEqual([{ path: 'draft.md', status: 'A', oldPath: null, additions: 1, deletions: 0 }]);
+    expect(bare.stats).toEqual({ additions: 1, deletions: 0 });
+    expect((await service.diff(ref)).patch).toContain('черновик');
+  });
+
+  it('mergeCheck сессии с worktree — clean; без worktree — bad_request', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+    await writeFile(path.join(info.path, 'x.md'), 'x\n', 'utf8');
+    await git(info.path, ['add', 'x.md']);
+    await git(info.path, ['commit', '-m', 'x']);
+
+    expect(await service.mergeCheck(ref)).toEqual({ status: 'clean' });
+    await expect(service.mergeCheck(await plainSession())).rejects.toMatchObject({ code: 'bad_request' });
+  });
+
+  it('тест 12: changes.* для сессии с worktree — bad_request', async () => {
+    const { ref } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+
+    await expect(service.projectChanges(ref)).rejects.toMatchObject({ code: 'bad_request' });
+    await expect(service.commitProject(ref, 'm')).rejects.toMatchObject({ code: 'bad_request' });
+  });
+
+  it('тест 12: projectChanges и commitProject сессии без worktree; без изменений — conflict', async () => {
+    const ref = await plainSession();
+    const service = createWorktreesService(stubSessions());
+
+    await expect(service.commitProject(ref, 'пусто')).rejects.toMatchObject({ code: 'conflict' });
+
+    await writeFile(path.join(project, 'README.md'), 'старт\nещё\n', 'utf8');
+    const changes = await service.projectChanges(ref, false);
+    expect(changes).toMatchObject({
+      patch: '',
+      branch: 'main',
+      files: [{ path: 'README.md', status: 'M', oldPath: null, additions: 1, deletions: 0 }],
+    });
+
+    const { commit } = await service.commitProject(ref, 'папка');
+    expect((await git(project, ['rev-parse', 'HEAD'])).stdout.trim()).toBe(commit);
+  });
+
+  it('папка не под git — bad_request с причиной not-a-repo', async () => {
+    const plain = await mkdtemp(path.join(tmpdir(), 'harnas-worktrees-svc-plain-'));
+    try {
+      const ref = await plainSession(plain);
+      const service = createWorktreesService(stubSessions());
+      await expect(service.projectChanges(ref)).rejects.toMatchObject({
+        code: 'bad_request',
+        data: { reason: 'not-a-repo' },
+      });
+    } finally {
+      await rm(plain, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('gitFailure (тест 13)', () => {
+  it('git-missing — internal с причиной; not-a-repo и no-commits — bad_request', () => {
+    const missing = gitFailure(new GitStateError('git-missing', 'нет git'));
+    expect(missing).toBeInstanceOf(HostError);
+    expect(missing).toMatchObject({ code: 'internal', data: { reason: 'git-missing' } });
+    expect(gitFailure(new GitStateError('not-a-repo', 'x'))).toMatchObject({
+      code: 'bad_request',
+      data: { reason: 'not-a-repo' },
+    });
+    expect(gitFailure(new GitStateError('no-commits', 'x'))).toMatchObject({
+      code: 'bad_request',
+      data: { reason: 'no-commits' },
+    });
+  });
+
+  it('NothingToCommitError — conflict; прочее — internal без data', () => {
+    expect(gitFailure(new NothingToCommitError('пусто'))).toMatchObject({ code: 'conflict' });
+    const revision = gitFailure(new InvalidRevisionError('не имя ревизии: "-c"'));
+    expect(revision).toMatchObject({ code: 'bad_request' });
+    expect(revision.data).toBeUndefined();
+    const other = gitFailure(new Error('сбой'));
+    expect(other).toMatchObject({ code: 'internal', message: 'сбой' });
+    expect(other.data).toBeUndefined();
+  });
+});

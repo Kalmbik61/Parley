@@ -25,6 +25,7 @@ import {
   discardWorktree,
   finishExited,
   findRunnerBinary,
+  InvalidRevisionError,
   isGitRepo,
   loadConfig,
   openEvents,
@@ -49,6 +50,7 @@ import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { WorksService } from '../works/works-service.js';
+import { gitFailure } from '../worktrees/worktrees-service.js';
 import { autoLaunchCandidates } from './auto-launch.js';
 import { findInterrupted } from './interrupted.js';
 
@@ -385,6 +387,8 @@ export function createSessionsService(
         await discardWorktree(ref.projectPath, worktree, { force });
       } catch (error) {
         if (error instanceof DirtyWorktreeError) throw new HostError('conflict', error.message);
+        // Ветка из карты — не ревизия: тот же bad_request, что у worktrees.merge/discard.
+        if (error instanceof InvalidRevisionError) throw gitFailure(error);
         throw error;
       }
     }

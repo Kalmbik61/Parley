@@ -54,6 +54,9 @@ export const REQUIRED_METHODS: readonly string[] = [
   'activity.seen',
   'mail.markRead',
   'pty.send',
+  'worktrees.mergeCheck',
+  'changes.project',
+  'changes.commitProject',
 ];
 
 /** Методы хоста; без связи — пусто: звать всё равно некого. */

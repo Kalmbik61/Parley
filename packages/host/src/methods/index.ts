@@ -6,6 +6,7 @@ import type { SessionsService } from '../sessions/sessions-service.js';
 import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
 import type { WorktreesService } from '../worktrees/worktrees-service.js';
+import { createChangesHandlers } from './changes.js';
 import { hostInfo, hostShutdown } from './host.js';
 import { mailMarkRead } from './mail.js';
 import { createPtyHandlers } from './pty.js';
@@ -48,6 +49,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
   const sessions = createSessionHandlers(deps);
   const wake = createWakeHandlers(deps);
   const worktrees = createWorktreesHandlers(deps);
+  const changes = createChangesHandlers(deps);
 
   return {
     methods: {
@@ -81,6 +83,9 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
       'worktrees.commit': worktrees.worktreesCommit as AnyHandler,
       'worktrees.merge': worktrees.worktreesMerge as AnyHandler,
       'worktrees.discard': worktrees.worktreesDiscard as AnyHandler,
+      'worktrees.mergeCheck': worktrees.worktreesMergeCheck as AnyHandler,
+      'changes.project': changes.changesProject as AnyHandler,
+      'changes.commitProject': changes.changesCommitProject as AnyHandler,
       'mail.markRead': mailMarkRead as AnyHandler,
     },
     notifications: {

@@ -1,6 +1,6 @@
 /**
  * Методы `worktrees.*`: доступность, дифф, коммит, слияние и отбрасывание
- * (план, кусок 4.2). Правила живут в `worktrees/worktrees-service.ts` — здесь
+ * (план, кусок 4.2), проверка конфликтов до слияния (кусок 8.1). Правила живут в `worktrees/worktrees-service.ts` — здесь
  * только разбор параметров протокола и форма ответа.
  */
 
@@ -17,6 +17,7 @@ export interface WorktreesHandlers {
   worktreesCommit: Handler<'worktrees.commit'>;
   worktreesMerge: Handler<'worktrees.merge'>;
   worktreesDiscard: Handler<'worktrees.discard'>;
+  worktreesMergeCheck: Handler<'worktrees.mergeCheck'>;
 }
 
 export function createWorktreesHandlers(deps: WorktreesMethodDeps): WorktreesHandlers {
@@ -25,7 +26,7 @@ export function createWorktreesHandlers(deps: WorktreesMethodDeps): WorktreesHan
       available: await deps.worktrees.available(params.projectPath),
     }),
 
-    worktreesDiff: async (params) => deps.worktrees.diff(params.ref),
+    worktreesDiff: async (params) => deps.worktrees.diff(params.ref, params.patch),
 
     worktreesCommit: async (params) => ({
       commit: await deps.worktrees.commit(params.ref, params.message),
@@ -37,5 +38,7 @@ export function createWorktreesHandlers(deps: WorktreesMethodDeps): WorktreesHan
       await deps.worktrees.discard(params.ref, params.force);
       return { ok: true };
     },
+
+    worktreesMergeCheck: async (params) => deps.worktrees.mergeCheck(params.ref),
   };
 }
