@@ -17,6 +17,21 @@ export const METHODS = {
   'works.list': z.object({}),
   'works.create': z.object({ projectPath: z.string(), title: z.string(), goal: z.string() }),
   'works.delete': z.object({ projectPath: z.string(), workId: z.string() }),
+  // Предел — по кодовым точкам: `.max(120)` zod считает UTF-16, эмодзи шло бы за два.
+  'works.rename': z.object({
+    projectPath: z.string(),
+    workId: z.string(),
+    title: z
+      .string()
+      .trim()
+      .min(1)
+      .refine((title) => [...title].length <= 120),
+  }),
+  'works.setStatus': z.object({
+    projectPath: z.string(),
+    workId: z.string(),
+    status: z.enum(['active', 'done', 'archived']),
+  }),
   'sessions.create': z.object({
     projectPath: z.string(),
     workId: z.string().nullable(),
@@ -67,13 +82,16 @@ export const NOTIFICATIONS = {
 } as const;
 
 export interface Results {
-  hello: { hostVersion: string; protocol: number; pid: number };
+  /** `methods` — все методы и уведомления хоста; нет поля — хост до этапа 3 (спека 3.2). */
+  hello: { hostVersion: string; protocol: number; pid: number; methods?: string[] };
   'host.info': { hostVersion: string; pid: number; startedAt: string; clients: number; liveSessions: number };
   'host.shutdown': { ok: true };
   'providers.list': { providers: Array<{ id: string; label: string; available: boolean }> };
   'works.list': WorksSnapshot;
   'works.create': { workId: string };
   'works.delete': { ok: true };
+  'works.rename': { ok: true };
+  'works.setStatus': { ok: true };
   'sessions.create': { ref: SessionRef };
   'sessions.resume': { ok: true };
   'sessions.stop': { ok: true };
