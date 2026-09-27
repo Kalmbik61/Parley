@@ -1,7 +1,9 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, shell, systemPreferences } from 'electron';
+import type { WorksSnapshot } from '@harnas/protocol';
 import { S } from '../shared/strings.js';
+import { registerFilesIpc } from './files/ipc.js';
 import { HostConnection } from './host-connection.js';
 import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
 import { forwardAppearanceToWindow, forwardHostToWindow, registerIpc } from './ipc.js';
@@ -14,6 +16,7 @@ import {
   type LoggedNotification,
   type NotificationLike,
 } from './notifications.js';
+import { createRootsRegistry, type RootsSource } from './roots.js';
 import { captureShellEnv } from './shell-env.js';
 import { createUiStore, desktopUiPath } from './ui-store.js';
 import { createMainWindow, titlebarDoubleClickAction } from './window.js';
@@ -163,6 +166,31 @@ if (!gotLock) {
       },
     });
 
+    // Реестр корней файлов (кусок 5.2, спека 10.8). `works.list` — на каждое (пере)подключение:
+    // снимок работ новому клиенту хост не шлёт, а первый `connect()` выше мог упасть.
+    // `onStatus` отдаёт текущий статус сразу при подписке — уже поднятая связь читается тут же.
+    const rootsSource: RootsSource = {
+      list: () => connection.call('works.list', {}) as Promise<WorksSnapshot>,
+      onChange: (listener) =>
+        connection.onEvent((message) => {
+          if (message.event === 'works.changed') listener(message.data as WorksSnapshot);
+        }),
+      onConnected: (listener) =>
+        connection.onStatus((status) => {
+          if (status.state === 'connected') listener();
+        }),
+    };
+    const roots = createRootsRegistry(rootsSource);
+
+    // E2E (`HARNAS_SHELL=log`): «открыть в приложении» и «показать в Finder» — в журнал main,
+    // а не на экран человека (настоящие открыли бы приложение и Finder); тест читает журнал
+    // через `app.evaluate` (`globalThis.__harnasShell`).
+    const shellLog: Array<{ action: 'openPath' | 'showItemInFolder'; path: string }> = [];
+    const logShell = process.env.HARNAS_SHELL === 'log';
+    if (logShell) {
+      (globalThis as { __harnasShell?: typeof shellLog }).__harnasShell = shellLog;
+    }
+
     registerIpc({
       ipcMain,
       connection,
@@ -172,7 +200,16 @@ if (!gotLock) {
         nativeTheme.themeSource = mode;
       },
       openExternal: (url) => shell.openExternal(url),
-      showItemInFolder: (path) => shell.showItemInFolder(path),
+      showItemInFolder: (path) => {
+        if (logShell) shellLog.push({ action: 'showItemInFolder', path });
+        else shell.showItemInFolder(path);
+      },
+      roots,
+      openPath: async (path) => {
+        if (!logShell) return shell.openPath(path);
+        shellLog.push({ action: 'openPath', path });
+        return '';
+      },
       chooseFolder: async () => {
         const window = mainWindow;
         const result = window
@@ -202,6 +239,7 @@ if (!gotLock) {
         }
       },
     });
+    registerFilesIpc({ ipcMain, roots });
     createAppMenu(() => mainWindow);
 
     // Клик по уведомлению без окон: macOS может прислать `activate` раньше клика. Окно

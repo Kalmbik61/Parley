@@ -14,7 +14,9 @@ import type {
   Result,
 } from '@harnas/protocol';
 import type { AppNote, FocusTarget, HarnasBridge, HostStatus, MenuAction } from '../../shared/bridge.js';
+import type { FileRoot, FileStat, Located } from '../../shared/files-types.js';
 import type { WorkLayout } from '../../shared/layout-types.js';
+import { rootKey } from '../../shared/work-keys.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { DEFAULT_UI, normalizeUi, type UiFile } from '../../shared/ui-types.js';
 
@@ -60,6 +62,17 @@ export interface FakeBridge extends HarnasBridge {
   readonly revealedWorks: Array<{ projectPath: string; workId: string }>;
   /** Чем ответит следующий `app.revealWork`: ошибка — отказ, `null` — успех. */
   setRevealWorkError(error: unknown): void;
+  /** Ответ `files.locate` для пути в работе workKey; по умолчанию `null` на каждый путь (кусок 5.2). */
+  setLocated(workKey: string, absPath: string, located: Located | null): void;
+  /** Ответ `files.stat` для пути в корне; по умолчанию `null`. */
+  setFileStat(root: FileRoot, path: string, stat: FileStat | null): void;
+  /** Вызовы `files.locate` — пачки путей, как их отправил рендерер. */
+  readonly locateCalls: Array<{ workKey: string; absPaths: string[] }>;
+  /** Чем ответит `app.openPath`: `'opened'` (по умолчанию), `'revealed'` или ошибка — отказ. */
+  setOpenPathResult(result: 'opened' | 'revealed' | { error: unknown }): void;
+  /** Вызовы `app.openPath` и `app.showInFinder`. */
+  readonly openedPaths: string[];
+  readonly revealedPaths: string[];
 }
 
 export function createFakeBridge(): FakeBridge {
@@ -80,6 +93,12 @@ export function createFakeBridge(): FakeBridge {
   const titlebarDoubleClicks: number[] = [];
   const revealedWorks: Array<{ projectPath: string; workId: string }> = [];
   let revealWorkError: unknown = null;
+  const located = new Map<string, Located | null>();
+  const fileStats = new Map<string, FileStat | null>();
+  const locateCalls: Array<{ workKey: string; absPaths: string[] }> = [];
+  let openPathResult: 'opened' | 'revealed' | { error: unknown } = 'opened';
+  const openedPaths: string[] = [];
+  const revealedPaths: string[] = [];
   const layouts = new Map<string, WorkLayout>();
   let status: HostStatus = {
     state: 'connected',
@@ -104,6 +123,25 @@ export function createFakeBridge(): FakeBridge {
     revealedWorks,
     setRevealWorkError: (error) => {
       revealWorkError = error;
+    },
+    setLocated: (workKey, absPath, answer) => {
+      located.set(`${workKey}\n${absPath}`, answer);
+    },
+    setFileStat: (root, path, stat) => {
+      fileStats.set(`${rootKey(root)}\n${path}`, stat);
+    },
+    locateCalls,
+    setOpenPathResult: (result) => {
+      openPathResult = result;
+    },
+    openedPaths,
+    revealedPaths,
+    files: {
+      stat: async (root, paths) => paths.map((path) => fileStats.get(`${rootKey(root)}\n${path}`) ?? null),
+      locate: async (workKey, absPaths) => {
+        locateCalls.push({ workKey, absPaths: [...absPaths] });
+        return absPaths.map((absPath) => located.get(`${workKey}\n${absPath}`) ?? null);
+      },
     },
 
     call: async (method, params) => {
@@ -190,6 +228,14 @@ export function createFakeBridge(): FakeBridge {
       revealWork: async (projectPath, workId) => {
         revealedWorks.push({ projectPath, workId });
         if (revealWorkError !== null) throw revealWorkError;
+      },
+      openPath: async (absPath) => {
+        openedPaths.push(absPath);
+        if (typeof openPathResult === 'object') throw openPathResult.error;
+        return openPathResult;
+      },
+      showInFinder: async (absPath) => {
+        revealedPaths.push(absPath);
       },
     },
 

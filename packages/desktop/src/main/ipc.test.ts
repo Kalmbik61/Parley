@@ -1,11 +1,17 @@
-import { describe, expect, it, vi } from 'vitest';
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IpcMain } from 'electron';
+import type { WorksSnapshot } from '@harnas/protocol';
 import { decodeIpcError } from '../shared/ipc-error.js';
+import { workKey } from '../shared/work-keys.js';
 import { DEFAULT_UI } from '../shared/ui-types.js';
 import { HostError, type HostConnection } from './host-connection.js';
 import { LayoutTooLargeError, type LayoutStore } from './layout-store.js';
 import type { UiStore } from './ui-store.js';
-import { registerIpc } from './ipc.js';
+import { registerIpc, withIpcError } from './ipc.js';
+import { createRootsRegistry, FilesDeniedError, type RootsRegistry } from './roots.js';
 
 /** Подставной `ipcMain`: сохраняет обработчики и умеет их дёргать, как настоящий `invoke`. */
 class FakeIpcMain {
@@ -26,7 +32,7 @@ class FakeIpcMain {
   }
 }
 
-function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore } = {}): {
+function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore; roots?: RootsRegistry } = {}): {
   ipcMain: FakeIpcMain;
   connection: HostConnection;
   layoutStore: LayoutStore;
@@ -36,6 +42,7 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore } = {})
   showItemInFolder: ReturnType<typeof vi.fn>;
   showNotification: ReturnType<typeof vi.fn>;
   takeFocusTarget: ReturnType<typeof vi.fn>;
+  openPath: ReturnType<typeof vi.fn>;
 } {
   const ipcMain = new FakeIpcMain();
   const connection = {
@@ -65,6 +72,18 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore } = {})
   const showItemInFolder = vi.fn();
   const showNotification = vi.fn();
   const takeFocusTarget = vi.fn().mockReturnValue(null);
+  // Настоящие shell.openPath/showItemInFolder тесты не зовут никогда: открыли бы приложения
+  // и Finder на экране человека (решение контролёра 5.2).
+  const openPath = vi.fn().mockResolvedValue('');
+  const roots: RootsRegistry =
+    overrides.roots ??
+    ({
+      resolve: vi.fn().mockRejectedValue(new FilesDeniedError('no roots')),
+      locate: vi.fn().mockResolvedValue(null),
+      insideAnyRoot: vi.fn().mockResolvedValue(null),
+      roots: vi.fn().mockReturnValue([]),
+      expandHome: vi.fn((p: string) => p),
+    } satisfies RootsRegistry);
 
   registerIpc({
     ipcMain: ipcMain as unknown as IpcMain,
@@ -79,6 +98,8 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore } = {})
     takeFocusTarget,
     setBadge: vi.fn(),
     showItemInFolder,
+    roots,
+    openPath,
   });
 
   return {
@@ -91,6 +112,7 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore } = {})
     showItemInFolder,
     showNotification,
     takeFocusTarget,
+    openPath,
   };
 }
 
@@ -365,5 +387,124 @@ describe('registerIpc — app:notify и app:take-focus-target (кусок 4.3)',
     takeFocusTarget.mockReturnValueOnce(target).mockReturnValueOnce(null);
     await expect(ipcMain.invoke('app:take-focus-target')).resolves.toEqual(target);
     await expect(ipcMain.invoke('app:take-focus-target')).resolves.toBeNull();
+  });
+});
+
+/** Код ошибки канала, как его прочтёт рендерер; `resolved` — канал ответил успехом. */
+async function codeOf(promise: unknown): Promise<string> {
+  try {
+    await promise;
+  } catch (error) {
+    return decodeIpcError(error).code;
+  }
+  return 'resolved';
+}
+
+describe('withIpcError (кусок 5.2, тест 15)', () => {
+  it('FilesDeniedError → files:denied, HostError — свой код, прочее — failed', async () => {
+    expect(await codeOf(withIpcError(() => Promise.reject(new FilesDeniedError('outside')))({}))).toBe('files:denied');
+    expect(await codeOf(withIpcError(() => Promise.reject(new HostError('not_found', 'x')))({}))).toBe('not_found');
+    expect(await codeOf(withIpcError(() => Promise.reject(new Error('boom')))({}))).toBe('failed');
+    expect(await codeOf(withIpcError(() => {
+      throw new FilesDeniedError('sync');
+    })({}))).toBe('files:denied');
+  });
+});
+
+describe('app:open-path и app:show-in-finder (кусок 5.2, тест 13)', () => {
+  let dir = '';
+  let project = '';
+  let other = '';
+  let roots: RootsRegistry;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'harnas-openpath-'));
+    project = path.join(dir, 'home', 'proj');
+    other = path.join(dir, 'other');
+    await mkdir(project, { recursive: true });
+    await mkdir(other);
+    const snapshot = {
+      branches: {},
+      entries: [
+        { projectPath: project, map: { work: { id: 'w-1' }, sessions: [] } },
+        { projectPath: other, map: { work: { id: 'w-2' }, sessions: [] } },
+      ],
+    } as unknown as WorksSnapshot;
+    roots = createRootsRegistry(
+      {
+        list: async () => snapshot,
+        onChange: () => () => {},
+        onConnected: (listener) => {
+          listener();
+          return () => {};
+        },
+      },
+      { home: path.join(dir, 'home') },
+    );
+    await vi.waitFor(() => expect(roots.roots(workKey(other, 'w-2'))).toHaveLength(1));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('.command в корне — showItemInFolder, openPath не вызван, ответ revealed', async () => {
+    const script = path.join(project, 'run.command');
+    await writeFile(script, 'echo hi');
+    const { ipcMain, openPath, showItemInFolder } = setup({ roots });
+    expect(await ipcMain.invoke('app:open-path', script)).toBe('revealed');
+    expect(showItemInFolder).toHaveBeenCalledWith(script);
+    expect(openPath).not.toHaveBeenCalled();
+  });
+
+  it('симлинк link.txt → a.txt (0644) — openPath: права по ссылке (stat), а не у самой ссылки', async () => {
+    await writeFile(path.join(project, 'a.txt'), 'a');
+    await chmod(path.join(project, 'a.txt'), 0o644);
+    await symlink('a.txt', path.join(project, 'link.txt'));
+    const { ipcMain, openPath, showItemInFolder } = setup({ roots });
+    expect(await ipcMain.invoke('app:open-path', path.join(project, 'link.txt'))).toBe('opened');
+    expect(openPath).toHaveBeenCalledWith(path.join(await realpath(project), 'a.txt'));
+    expect(showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  it('~/… внутри корня раскрыт по подставному дому и открыт; путь в корне другой работы — открыт', async () => {
+    await writeFile(path.join(project, 'report.pdf'), '%PDF');
+    await writeFile(path.join(other, 'notes.md'), '#');
+    const { ipcMain, openPath } = setup({ roots });
+    expect(await ipcMain.invoke('app:open-path', '~/proj/report.pdf')).toBe('opened');
+    expect(openPath).toHaveBeenLastCalledWith(path.join(await realpath(project), 'report.pdf'));
+    expect(await ipcMain.invoke('app:open-path', path.join(other, 'notes.md'))).toBe('opened');
+    expect(openPath).toHaveBeenLastCalledWith(path.join(await realpath(other), 'notes.md'));
+  });
+
+  it('непустой ответ shell.openPath — ошибка failed', async () => {
+    await writeFile(path.join(project, 'a.txt'), 'a');
+    const { ipcMain, openPath } = setup({ roots });
+    openPath.mockResolvedValueOnce('No application knows how to open');
+    expect(await codeOf(ipcMain.invoke('app:open-path', path.join(project, 'a.txt')))).toBe('failed');
+  });
+
+  it('путь вне корней — files:denied; showInFinder — то же, а внутри корня зовёт showItemInFolder с раскрытым путём', async () => {
+    await writeFile(path.join(dir, 'outside.txt'), '');
+    await writeFile(path.join(project, 'a.txt'), '');
+    const { ipcMain, openPath, showItemInFolder } = setup({ roots });
+    expect(await codeOf(ipcMain.invoke('app:open-path', path.join(dir, 'outside.txt')))).toBe('files:denied');
+    expect(await codeOf(ipcMain.invoke('app:open-path', '/etc/hosts'))).toBe('files:denied');
+    expect(await codeOf(ipcMain.invoke('app:show-in-finder', '/etc/hosts'))).toBe('files:denied');
+    expect(openPath).not.toHaveBeenCalled();
+    expect(showItemInFolder).not.toHaveBeenCalled();
+
+    expect(await ipcMain.invoke('app:show-in-finder', '~/proj/a.txt')).toBeUndefined();
+    expect(showItemInFolder).toHaveBeenCalledWith(path.join(project, 'a.txt'));
+  });
+
+  it('не-строка и NUL — отказ до диска (тест 14)', async () => {
+    const { ipcMain, openPath, showItemInFolder } = setup({ roots });
+    for (const value of [42, null, ['/a'], { path: '/a' }, '/a\0b']) {
+      expect(await codeOf(ipcMain.invoke('app:open-path', value))).toBe('bad_request');
+      expect(await codeOf(ipcMain.invoke('app:show-in-finder', value))).toBe('bad_request');
+    }
+    expect(openPath).not.toHaveBeenCalled();
+    expect(showItemInFolder).not.toHaveBeenCalled();
   });
 });

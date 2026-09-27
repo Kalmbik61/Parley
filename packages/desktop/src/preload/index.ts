@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@harnas/protocol';
 import type { AppNote, FocusTarget, HarnasBridge, HostStatus, MenuAction } from '../shared/bridge.js';
+import type { FileRoot, FileStat, Located } from '../shared/files-types.js';
 import type { WorkLayout } from '../shared/layout-types.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 
@@ -126,6 +127,14 @@ const bridge = {
     },
     revealWork: (projectPath: string, workId: string) =>
       ipcRenderer.invoke('app:reveal-work', projectPath, workId) as Promise<void>,
+    openPath: (absPath: string) => ipcRenderer.invoke('app:open-path', absPath) as Promise<'opened' | 'revealed'>,
+    showInFinder: (absPath: string) => ipcRenderer.invoke('app:show-in-finder', absPath) as Promise<void>,
+  },
+  files: {
+    stat: (root: FileRoot, paths: string[]) =>
+      ipcRenderer.invoke('files:stat', root, paths) as Promise<Array<FileStat | null>>,
+    locate: (workKey: string, absPaths: string[]) =>
+      ipcRenderer.invoke('files:locate', workKey, absPaths) as Promise<Array<Located | null>>,
   },
 };
 

@@ -7,6 +7,7 @@ import type {
   Result,
   SessionRef,
 } from '@harnas/protocol';
+import type { FileRoot, FileStat, Located } from './files-types.js';
 import type { WorkLayout } from './layout-types.js';
 import type { Appearance, UiFile } from './ui-types.js';
 
@@ -105,6 +106,20 @@ export interface HarnasBridge {
      * папку проекта; незнакомая работа — отказ с кодом `not_found`.
      */
     revealWork(projectPath: string, workId: string): Promise<void>;
+    /**
+     * Только внутри корней любой работы; открывается только белый список, остальное
+     * показывается в Finder (кусок 5.2, спека 10.8). Вне корней — отказ `files:denied`.
+     */
+    openPath(absPath: string): Promise<'opened' | 'revealed'>;
+    /** Только внутри корней любой работы, иначе отказ `files:denied`; `~` раскрывает main. */
+    showInFinder(absPath: string): Promise<void>;
+  };
+  /** Файловый API main (спека 10.7); в этапе 5 — только `stat` и `locate`. */
+  files: {
+    /** До 200 путей; `null` — пути нет или он вне корня. */
+    stat(root: FileRoot, paths: string[]): Promise<Array<FileStat | null>>;
+    /** До 200 путей; корень ищется только среди корней работы workKey; `~` раскрывает main. */
+    locate(workKey: string, absPaths: string[]): Promise<Array<Located | null>>;
   };
 }
 

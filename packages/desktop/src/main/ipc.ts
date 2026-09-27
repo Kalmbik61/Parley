@@ -10,6 +10,8 @@ import type { HostConnection } from './host-connection.js';
 import { LayoutTooLargeError } from './layout-store.js';
 import type { LayoutStore } from './layout-store.js';
 import type { UiStore } from './ui-store.js';
+import { openOrReveal, revealInFinder } from './files/open-path.js';
+import { FilesDeniedError, type RootsRegistry } from './roots.js';
 
 /**
  * Оборачивает обработчик `ipcMain.handle`: сквозные правила плана («Окно»)
@@ -19,8 +21,10 @@ import type { UiStore } from './ui-store.js';
  * Рендерер читает код через `decodeIpcError` и показывает `errorText(code,
  * action)`; исходное сообщение (может быть русским текстом хоста) — только
  * `console.warn` у вызывающей стороны, сюда оно попадает как есть.
+ * `FilesDeniedError` (путь вне корней, кусок 5.2) — код `files:denied`: окно
+ * показывает по нему `S.files.denied`. Экспорт — для каналов `files/ipc.ts`.
  */
-function withIpcError(
+export function withIpcError(
   handler: (event: unknown, ...args: unknown[]) => unknown,
 ): (event: unknown, ...args: unknown[]) => Promise<unknown> {
   return async (event, ...args) => {
@@ -28,6 +32,7 @@ function withIpcError(
       return await handler(event, ...args);
     } catch (error) {
       if (error instanceof HostError) throw encodeIpcError({ code: error.code, message: error.message });
+      if (error instanceof FilesDeniedError) throw encodeIpcError({ code: error.code, message: error.message });
       const message = error instanceof Error ? error.message : String(error);
       throw encodeIpcError({ code: 'failed', message });
     }
@@ -70,13 +75,18 @@ function isAppearance(value: unknown): value is Appearance {
 const FORBIDDEN_WORK_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const MAX_WORK_KEY_LENGTH = 4096;
 
-function isValidWorkKey(value: unknown): value is string {
+export function isValidWorkKey(value: unknown): value is string {
   return (
     typeof value === 'string' &&
     value.length > 0 &&
     value.length <= MAX_WORK_KEY_LENGTH &&
     !FORBIDDEN_WORK_KEYS.has(value)
   );
+}
+
+/** Путь из рендерера (кусок 5.2): строка без NUL — иначе отказ ещё до диска. */
+export function isValidPathArg(value: unknown): value is string {
+  return typeof value === 'string' && !value.includes('\0');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -136,6 +146,10 @@ export interface RegisterIpcOptions {
   titlebarDoubleClick: () => void;
   /** «Reveal in Finder» карточки работы (кусок 3.4) — `shell.showItemInFolder`. */
   showItemInFolder: (path: string) => void;
+  /** Реестр корней файлов (кусок 5.2, спека 10.8): `app:open-path` и `app:show-in-finder` пускают только внутрь корней. */
+  roots: RootsRegistry;
+  /** `shell.openPath`: '' — успех, иначе текст ошибки. В тестах и E2E — подмена, настоящий открыл бы приложение. */
+  openPath: (absPath: string) => Promise<string>;
 }
 
 /**
@@ -159,6 +173,8 @@ export function registerIpc(options: RegisterIpcOptions): void {
     setAppearance,
     titlebarDoubleClick,
     showItemInFolder,
+    roots,
+    openPath,
   } = options;
 
   ipcMain.handle(
@@ -306,6 +322,22 @@ export function registerIpc(options: RegisterIpcOptions): void {
         );
       if (!known) throw new HostError('not_found', `work not found: ${String(projectPath)} ${String(workId)}`);
       showItemInFolder(projectPath);
+    }),
+  );
+
+  ipcMain.handle(
+    'app:open-path',
+    withIpcError(async (_event, absPath: unknown) => {
+      if (!isValidPathArg(absPath)) throw new HostError('bad_request', 'invalid path');
+      return openOrReveal(absPath, { roots, openPath, showItemInFolder });
+    }),
+  );
+
+  ipcMain.handle(
+    'app:show-in-finder',
+    withIpcError(async (_event, absPath: unknown) => {
+      if (!isValidPathArg(absPath)) throw new HostError('bad_request', 'invalid path');
+      await revealInFinder(absPath, { roots, showItemInFolder });
     }),
   );
 }

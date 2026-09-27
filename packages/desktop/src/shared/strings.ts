@@ -423,6 +423,16 @@ export const S = {
     noWorktree: 'This session has no worktree of its own',
   },
 
+  /**
+   * Файлы и пути (кусок 5.2, спека 10.8): main текста для человека не пишет — окно
+   * показывает `denied` по коду `files:denied`, `revealedInFinder` — по ответу
+   * `'revealed'` у `app.openPath` (тосты 5.3 и 7.x).
+   */
+  files: {
+    denied: 'Path is outside the workspace folders',
+    revealedInFinder: "This file can't be opened from here — shown in Finder",
+  },
+
   /** Оболочка окна (`shell/AppShell.tsx`) — заголовки `ErrorBoundary` вокруг сайдбара и раскладки. */
   shell: {
     sidebarError: "Couldn't show workspace sidebar",
