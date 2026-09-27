@@ -25,6 +25,7 @@ export const S = {
     delete: 'Delete',
     done: 'Done',
     retry: 'Retry',
+    copy: 'Copy',
   },
 
   /**
@@ -305,6 +306,25 @@ export const S = {
   /** Поверхность терминала — `terminal/TerminalSurface.tsx`. */
   terminal: {
     findPlaceholder: 'Find…',
+    /** Меню терминала (кусок 5.3, спека 8.4): Copy — `S.common.copy`, Find и Split — `S.menu`. */
+    paste: 'Paste',
+    selectAll: 'Select all',
+    clear: 'Clear',
+    /** `aria-label` полосы поиска ⌘F (спека 8.2); × — `S.common.close`. */
+    matchCase: 'Match case',
+    useRegex: 'Use regular expression',
+    previousMatch: 'Previous match',
+    nextMatch: 'Next match',
+  },
+
+  /**
+   * Меню ссылки терминала (кусок 5.3, спека 8.3): «Reveal in Finder» и «Copy path» —
+   * `S.cardMenu.reveal` и `copyPath`; «Open in editor» добавит 7.3.
+   */
+  links: {
+    openInDefaultApp: 'Open in default app',
+    openInBrowser: 'Open in browser',
+    copyLink: 'Copy link',
   },
 
   /** Раскладка: строка вкладок и тела вкладок — `layout/*` (кусок 2.4, спека 5.3, 5.8, 5.10). */
@@ -470,6 +490,8 @@ export const S = {
       archiveWorkspace: 'archive workspace',
       deleteWorkspace: 'delete workspace',
       revealWorkspace: 'reveal workspace in Finder',
+      openFile: 'open file',
+      revealInFinder: 'reveal in Finder',
     },
     noWorktree: 'This session has no worktree of its own',
   },
@@ -481,7 +503,7 @@ export const S = {
    */
   files: {
     denied: 'Path is outside the workspace folders',
-    revealedInFinder: "This file can't be opened from here — shown in Finder",
+    revealedInFinder: "This file type doesn't open here — revealed in Finder",
   },
 
   /** Оболочка окна (`shell/AppShell.tsx`) — заголовки `ErrorBoundary` вокруг сайдбара и раскладки. */

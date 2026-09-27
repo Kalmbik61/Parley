@@ -113,6 +113,11 @@ export interface HarnasBridge {
     openPath(absPath: string): Promise<'opened' | 'revealed'>;
     /** Только внутри корней любой работы, иначе отказ `files:denied`; `~` раскрывает main. */
     showInFinder(absPath: string): Promise<void>;
+    /**
+     * Пункт «Paste» меню терминала (кусок 5.3, спека 8.4). Main: webContents.paste() окна — то же
+     * событие paste, что у ⌘V; execCommand('paste') в песочнице не работает.
+     */
+    paste(): void;
   };
   /** Файловый API main (спека 10.7); в этапе 5 — только `stat` и `locate`. */
   files: {

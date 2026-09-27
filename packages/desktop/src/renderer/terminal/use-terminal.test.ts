@@ -5,33 +5,25 @@
  * Terminal, который пишет в массив»).
  */
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
-import type { SessionRef } from '@harnas/protocol';
+import type { ILink } from '@xterm/xterm';
+import { refKey, type SessionRef } from '@harnas/protocol';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
+import { lineFromText, xtermMock } from '../test-utils/xterm-mock.js';
 import { useUiStore } from '../store/ui.js';
 import { minimumContrastRatio, xtermTheme } from './xterm-themes.js';
-import { useTerminal } from './use-terminal.js';
-
-interface FakeTerminalInstance {
-  cols: number;
-  rows: number;
-  writes: string[];
-  resets: number;
-  disposed: boolean;
-  selection: string;
-  onDataHandler: ((data: string) => void) | null;
-  keyHandler: ((event: { type: string; metaKey: boolean; key: string }) => boolean) | null;
-  /** `use-terminal.ts` меняет тему на лету через `options.theme`/`options.minimumContrastRatio` (тест 2 куска 1.3). */
-  options: Record<string, unknown>;
-}
+import { useTerminal, type UseTerminalOptions } from './use-terminal.js';
+import { webglPolicy } from './webgl-policy.js';
 
 const state = vi.hoisted(() => ({
-  terminals: [] as FakeTerminalInstance[],
   fitCalls: 0,
-  linkHandler: null as ((event: unknown, uri: string) => void) | null,
   webglContextLoss: null as (() => void) | null,
-  webglDisposed: false,
+  webglCreated: 0,
+  webglDisposed: 0,
   /**
    * Раунд исправлений 1, находка B№2: подставной FitAddon подбирает этот
    * размер (если задан) на последнем созданном терминале при каждом вызове
@@ -42,91 +34,39 @@ const state = vi.hoisted(() => ({
   nextFitSize: null as { cols: number; rows: number } | null,
 }));
 
-vi.mock('@xterm/xterm', () => ({
-  Terminal: vi.fn().mockImplementation((initialOptions: Record<string, unknown>) => {
-    const instance: FakeTerminalInstance = {
-      cols: 80,
-      rows: 24,
-      writes: [],
-      resets: 0,
-      disposed: false,
-      selection: '',
-      onDataHandler: null,
-      keyHandler: null,
-      options: { ...initialOptions },
-    };
-    state.terminals.push(instance);
-    return {
-      get cols() {
-        return instance.cols;
-      },
-      get rows() {
-        return instance.rows;
-      },
-      // Один и тот же объект, что и в `instance.options` — присвоение через
-      // `term.options.theme = …` в хуке обязано быть видно в `state.terminals`.
-      options: instance.options,
-      open: () => {},
-      loadAddon: () => {},
-      write: (data: string) => instance.writes.push(data),
-      reset: () => {
-        instance.resets += 1;
-      },
-      dispose: () => {
-        instance.disposed = true;
-      },
-      resize: (cols: number, rows: number) => {
-        instance.cols = cols;
-        instance.rows = rows;
-      },
-      onData: (handler: (data: string) => void) => {
-        instance.onDataHandler = handler;
-        return { dispose: () => {} };
-      },
-      attachCustomKeyEventHandler: (handler: FakeTerminalInstance['keyHandler']) => {
-        instance.keyHandler = handler;
-      },
-      hasSelection: () => instance.selection !== '',
-      getSelection: () => instance.selection,
-    };
-  }),
-}));
+vi.mock('@xterm/xterm', async () => (await import('../test-utils/xterm-mock.js')).xtermModule);
+vi.mock('@xterm/addon-search', async () => (await import('../test-utils/xterm-mock.js')).searchModule);
 
-vi.mock('@xterm/addon-fit', () => ({
-  FitAddon: vi.fn().mockImplementation(() => ({
-    fit: () => {
-      state.fitCalls += 1;
-      if (state.nextFitSize !== null) {
-        const last = state.terminals[state.terminals.length - 1];
-        if (last !== undefined) {
-          last.cols = state.nextFitSize.cols;
-          last.rows = state.nextFitSize.rows;
+vi.mock('@xterm/addon-fit', async () => {
+  const { xtermMock: mock } = await import('../test-utils/xterm-mock.js');
+  return {
+    FitAddon: vi.fn().mockImplementation(() => ({
+      fit: () => {
+        state.fitCalls += 1;
+        if (state.nextFitSize !== null) {
+          const last = mock.terminals[mock.terminals.length - 1];
+          if (last !== undefined) {
+            last.cols = state.nextFitSize.cols;
+            last.rows = state.nextFitSize.rows;
+          }
         }
-      }
-    },
-  })),
-}));
-
-vi.mock('@xterm/addon-search', () => ({
-  SearchAddon: vi.fn().mockImplementation(() => ({ findNext: () => true })),
-}));
-
-vi.mock('@xterm/addon-web-links', () => ({
-  WebLinksAddon: vi.fn().mockImplementation((handler: (event: unknown, uri: string) => void) => {
-    state.linkHandler = handler;
-    return {};
-  }),
-}));
+      },
+    })),
+  };
+});
 
 vi.mock('@xterm/addon-webgl', () => ({
-  WebglAddon: vi.fn().mockImplementation(() => ({
-    onContextLoss: (cb: () => void) => {
-      state.webglContextLoss = cb;
-    },
-    dispose: () => {
-      state.webglDisposed = true;
-    },
-  })),
+  WebglAddon: vi.fn().mockImplementation(() => {
+    state.webglCreated += 1;
+    return {
+      onContextLoss: (cb: () => void) => {
+        state.webglContextLoss = cb;
+      },
+      dispose: () => {
+        state.webglDisposed += 1;
+      },
+    };
+  }),
 }));
 
 const ref: SessionRef = { projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-01' };
@@ -147,20 +87,28 @@ class ResizeObserverStub {
   }
 }
 
-function renderTerminal(bridge: FakeBridge, sessionRef: SessionRef = ref) {
+/** Поля 5.3, которые даёт `TerminalSurface`: здесь — заглушки. */
+const surfaceOptions = (): Pick<UseTerminalOptions, 'workKey' | 'cwd' | 'onFind' | 'onLink'> => ({
+  workKey: '/tmp/proj\u0000w-01',
+  cwd: '/tmp/proj',
+  onFind: () => {},
+  onLink: () => {},
+});
+
+function renderTerminal(bridge: FakeBridge, sessionRef: SessionRef = ref, extra: Partial<UseTerminalOptions> = {}) {
   const container = document.createElement('div');
   document.body.appendChild(container);
   return renderHook(() =>
-    useTerminal({ bridge, ref: sessionRef, container, fontFamily: 'Menlo', fontSize: 13 }),
+    useTerminal({ bridge, ref: sessionRef, container, fontFamily: 'Menlo', fontSize: 13, ...surfaceOptions(), ...extra }),
   );
 }
 
 beforeEach(() => {
-  state.terminals = [];
+  xtermMock.reset();
   state.fitCalls = 0;
-  state.linkHandler = null;
   state.webglContextLoss = null;
-  state.webglDisposed = false;
+  state.webglCreated = 0;
+  state.webglDisposed = 0;
   state.nextFitSize = null;
   ResizeObserverStub.instances = [];
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
@@ -191,7 +139,7 @@ describe('useTerminal — подключение', () => {
     resolveAttach?.({ snapshot: 'СНИМОК', cols: 80, rows: 24 });
 
     await waitFor(() => {
-      expect(state.terminals[0]?.writes).toEqual(['СНИМОК', 'ранний кусок']);
+      expect(xtermMock.terminals[0]?.writes).toEqual(['СНИМОК', 'ранний кусок']);
     });
   });
 
@@ -199,10 +147,10 @@ describe('useTerminal — подключение', () => {
     const bridge = createFakeBridge();
     bridge.setHandler('pty.attach', () => ({ snapshot: 'СНИМОК', cols: 80, rows: 24 }));
     renderTerminal(bridge);
-    await waitFor(() => expect(state.terminals[0]?.writes).toEqual(['СНИМОК']));
+    await waitFor(() => expect(xtermMock.terminals[0]?.writes).toEqual(['СНИМОК']));
 
     bridge.emit('pty.output', { ref: otherRef, data: 'чужой' });
-    expect(state.terminals[0]?.writes).toEqual(['СНИМОК']);
+    expect(xtermMock.terminals[0]?.writes).toEqual(['СНИМОК']);
   });
 });
 
@@ -219,8 +167,8 @@ describe('useTerminal — attach() не должен перетирать fit() 
 
     await waitFor(() => expect(bridge.notified.some((n) => n.method === 'pty.resize')).toBe(true));
 
-    expect(state.terminals[0]?.cols).toBe(100);
-    expect(state.terminals[0]?.rows).toBe(30);
+    expect(xtermMock.terminals[0]?.cols).toBe(100);
+    expect(xtermMock.terminals[0]?.rows).toBe(30);
     expect(bridge.notified.filter((n) => n.method === 'pty.resize')).toEqual([
       { method: 'pty.resize', params: { ref, cols: 100, rows: 30 } },
     ]);
@@ -232,7 +180,7 @@ describe('useTerminal — attach() не должен перетирать fit() 
     state.nextFitSize = { cols: 80, rows: 24 };
 
     renderTerminal(bridge);
-    await waitFor(() => expect(state.terminals[0]?.writes).toEqual(['']));
+    await waitFor(() => expect(xtermMock.terminals[0]?.writes).toEqual(['']));
 
     expect(bridge.notified.filter((n) => n.method === 'pty.resize')).toHaveLength(0);
   });
@@ -252,8 +200,8 @@ describe('useTerminal — pty.resync', () => {
     bridge.emit('pty.resync', { ref });
 
     await waitFor(() => expect(attachCalls).toBe(2));
-    expect(state.terminals[0]?.resets).toBe(1);
-    expect(state.terminals[0]?.writes).toEqual(['СНИМОК-1', 'СНИМОК-2']);
+    expect(xtermMock.terminals[0]?.resets).toBe(1);
+    expect(xtermMock.terminals[0]?.writes).toEqual(['СНИМОК-1', 'СНИМОК-2']);
   });
 });
 
@@ -289,27 +237,127 @@ describe('useTerminal — клавиши', () => {
     const bridge = createFakeBridge();
     bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
     renderTerminal(bridge);
-    await waitFor(() => expect(state.terminals[0]?.keyHandler).not.toBeNull());
+    await waitFor(() => expect(xtermMock.terminals[0]?.keyHandler).not.toBeNull());
 
-    const handler = state.terminals[0]?.keyHandler;
-    expect(handler?.({ type: 'keydown', metaKey: true, key: 't' })).toBe(false);
-    expect(handler?.({ type: 'keydown', metaKey: false, key: 'a' })).toBe(true);
+    const handler = xtermMock.terminals[0]?.keyHandler;
+    expect(handler?.(new KeyboardEvent('keydown', { metaKey: true, key: 't' }))).toBe(false);
+    expect(handler?.(new KeyboardEvent('keydown', { metaKey: false, key: 'a' }))).toBe(true);
   });
 });
 
-describe('useTerminal — ссылки', () => {
-  it('https открывается наружу, file — нет', async () => {
+describe('тест 10: ⌘K и ⌘F в терминале (кусок 5.3)', () => {
+  it('⌘K — clear, defaultPrevented, pty.input нет; ⌘F — onFind, defaultPrevented', async () => {
     const bridge = createFakeBridge();
     bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
-    const openExternal = vi.spyOn(bridge.app, 'openExternal').mockResolvedValue(undefined);
+    const onFind = vi.fn();
+    renderTerminal(bridge, ref, { onFind });
+    await waitFor(() => expect(xtermMock.terminals[0]?.keyHandler).not.toBeNull());
+    const handler = xtermMock.terminals[0]?.keyHandler;
+
+    const clearKey = new KeyboardEvent('keydown', { key: 'k', metaKey: true, cancelable: true });
+    expect(handler?.(clearKey)).toBe(false);
+    expect(clearKey.defaultPrevented).toBe(true);
+    expect(xtermMock.callsOf('clear', 0)).toHaveLength(1);
+
+    const findKey = new KeyboardEvent('keydown', { key: 'f', metaKey: true, cancelable: true });
+    expect(handler?.(findKey)).toBe(false);
+    expect(findKey.defaultPrevented).toBe(true);
+    expect(onFind).toHaveBeenCalledTimes(1);
+
+    // Отпускание ⌘K не чистит второй раз, обычная k идёт агенту как раньше.
+    handler?.(new KeyboardEvent('keyup', { key: 'k', metaKey: true, cancelable: true }));
+    expect(xtermMock.callsOf('clear', 0)).toHaveLength(1);
+    expect(bridge.notified.filter((n) => n.method === 'pty.input')).toEqual([]);
+  });
+});
+
+describe('тест 11: опции xterm, ссылки и WebGL (кусок 5.3)', () => {
+  it('allowProposedApi и linkHandler в конструкторе; registerLinkProvider; web-links не импортируется', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
     renderTerminal(bridge);
-    await waitFor(() => expect(state.linkHandler).not.toBeNull());
+    await waitFor(() => expect(xtermMock.terminals).toHaveLength(1));
+    const options = xtermMock.terminals[0]?.initialOptions;
+    expect(options?.allowProposedApi).toBe(true);
+    expect(options?.linkHandler).toBeTruthy();
+    expect(xtermMock.callsOf('registerLinkProvider', 0)).toHaveLength(1);
+    const source = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'use-terminal.ts'), 'utf8');
+    expect(source).not.toContain('@xterm/addon-web-links');
+  });
 
-    state.linkHandler?.({} as MouseEvent, 'https://example.com');
-    state.linkHandler?.({} as MouseEvent, 'file:///etc/passwd');
+  it('linkHandler (OSC 8): https — onLink с kind url; file:///etc/passwd — ничего', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
+    const onLink = vi.fn();
+    renderTerminal(bridge, ref, { onLink });
+    await waitFor(() => expect(xtermMock.terminals).toHaveLength(1));
+    const handler = xtermMock.terminals[0]?.initialOptions.linkHandler as { activate: (event: MouseEvent, text: string) => void };
+    const event = new MouseEvent('click');
+    handler.activate(event, 'https://example.com');
+    handler.activate(event, 'file:///etc/passwd');
+    expect(onLink).toHaveBeenCalledTimes(1);
+    expect(onLink).toHaveBeenCalledWith({ kind: 'url', url: 'https://example.com' }, event);
+  });
 
-    expect(openExternal).toHaveBeenCalledTimes(1);
-    expect(openExternal).toHaveBeenCalledWith('https://example.com');
+  it('провайдер ссылок: files.locate с workKey терминала, клик — onLink', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
+    const located = { root: { workKey: 'wk', spec: { kind: 'project' as const } }, relPath: 'src/a.ts', stat: { kind: 'file' as const, size: 1, mtimeMs: 0 } };
+    bridge.setLocated('wk', '/tmp/proj/src/a.ts', located);
+    const onLink = vi.fn();
+    renderTerminal(bridge, ref, { workKey: 'wk', onLink });
+    await waitFor(() => expect(xtermMock.terminals[0]?.linkProviders).toHaveLength(1));
+    const term = xtermMock.terminals[0];
+    term?.setLines([lineFromText('see src/a.ts:12')]);
+    const links = await new Promise<ILink[] | undefined>((resolve) => term?.linkProviders[0]?.provideLinks(1, resolve));
+    expect(bridge.locateCalls).toEqual([{ workKey: 'wk', absPaths: ['/tmp/proj/src/a.ts'] }]);
+    links?.[0]?.activate(new MouseEvent('click'), 'src/a.ts:12');
+    expect(onLink).toHaveBeenCalledWith({ kind: 'path', absPath: '/tmp/proj/src/a.ts', located, line: 12 }, expect.any(MouseEvent));
+  });
+
+  it('want: false от webglPolicy — dispose аддона WebGL; размонтирование — forget', async () => {
+    const subscribe = vi.spyOn(webglPolicy, 'subscribe');
+    const forget = vi.spyOn(webglPolicy, 'forget');
+    try {
+      const bridge = createFakeBridge();
+      bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
+      bridge.setHandler('pty.detach', () => ({ ok: true as const }));
+      const { unmount } = renderTerminal(bridge);
+      await waitFor(() => expect(state.webglCreated).toBe(1));
+      const listener = subscribe.mock.calls[0]?.[1];
+      expect(subscribe.mock.calls[0]?.[0]).toBe(refKey(ref));
+
+      act(() => listener?.(false));
+      expect(state.webglDisposed).toBe(1);
+      act(() => listener?.(true));
+      expect(state.webglCreated).toBe(2);
+
+      unmount();
+      expect(forget).toHaveBeenCalledWith(refKey(ref));
+    } finally {
+      subscribe.mockRestore();
+      forget.mockRestore();
+    }
+  });
+
+  it('потеря контекста: dispose и через 1 с новая попытка', async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = createFakeBridge();
+      bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
+      bridge.setHandler('pty.detach', () => ({ ok: true as const }));
+      renderTerminal(bridge, otherRef);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(state.webglCreated).toBe(1);
+      state.webglContextLoss?.();
+      expect(state.webglDisposed).toBe(1);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(state.webglCreated).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(state.webglCreated).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -319,14 +367,14 @@ describe('useTerminal — размонтирование', () => {
     bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
     bridge.setHandler('pty.detach', () => ({ ok: true as const }));
     const { unmount } = renderTerminal(bridge);
-    await waitFor(() => expect(state.terminals[0]?.writes).toEqual(['']));
+    await waitFor(() => expect(xtermMock.terminals[0]?.writes).toEqual(['']));
 
     unmount();
 
     expect(bridge.calls.filter((c) => c.method === 'pty.detach')).toEqual([
       { method: 'pty.detach', params: { ref } },
     ]);
-    expect(state.terminals[0]?.disposed).toBe(true);
+    expect(xtermMock.terminals[0]?.disposed).toBe(true);
   });
 });
 
@@ -337,8 +385,8 @@ describe('useTerminal — тема на лету (тест 2 куска 1.3)', (
       const bridge = createFakeBridge();
       bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
       renderTerminal(bridge);
-      await waitFor(() => expect(state.terminals).toHaveLength(1));
-      const term = state.terminals[0];
+      await waitFor(() => expect(xtermMock.terminals).toHaveLength(1));
+      const term = xtermMock.terminals[0];
       expect(term?.options.theme).toEqual(xtermTheme(false));
 
       act(() => useUiStore.getState().setDark(true));
@@ -347,7 +395,7 @@ describe('useTerminal — тема на лету (тест 2 куска 1.3)', (
       expect(term?.options.minimumContrastRatio).toBe(minimumContrastRatio(true));
       // Ни dispose, ни новый Terminal не звались — тот же самый объект.
       expect(term?.disposed).toBe(false);
-      expect(state.terminals).toHaveLength(1);
+      expect(xtermMock.terminals).toHaveLength(1);
     } finally {
       act(() => useUiStore.getState().setDark(false));
     }
@@ -360,7 +408,7 @@ describe('useTerminal — видимость и размер (куски 2.5, т
     document.body.appendChild(container);
     return renderHook(
       (props: { visible: boolean }) =>
-        useTerminal({ bridge, ref, container, fontFamily: 'Menlo', fontSize: 13, visible: props.visible }),
+        useTerminal({ bridge, ref, container, fontFamily: 'Menlo', fontSize: 13, visible: props.visible, ...surfaceOptions() }),
       { initialProps: { visible } },
     );
   }
@@ -403,7 +451,7 @@ describe('useTerminal — видимость и размер (куски 2.5, т
     expect(bridge.calls.filter((c) => c.method === 'pty.attach')).toHaveLength(0);
 
     rerender({ visible: true });
-    await waitFor(() => expect(state.terminals[0]?.writes).toEqual(['S']));
+    await waitFor(() => expect(xtermMock.terminals[0]?.writes).toEqual(['S']));
     expect(bridge.notified.filter((n) => n.method === 'pty.resize')).toHaveLength(0);
 
     rerender({ visible: false });

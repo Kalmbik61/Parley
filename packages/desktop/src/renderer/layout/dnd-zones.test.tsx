@@ -47,47 +47,11 @@ vi.mock('@dnd-kit/sortable', async (importOriginal) => {
   };
 });
 
-const state = vi.hoisted(() => ({
-  constructed: 0,
-  disposed: 0,
-  /** Номер вызова конструктора (с 1), на котором он бросает; 0 — не бросать. */
-  throwOnCall: 0,
-}));
-
-vi.mock('@xterm/xterm', () => ({
-  Terminal: vi.fn().mockImplementation((initialOptions: Record<string, unknown>) => {
-    state.constructed += 1;
-    if (state.constructed === state.throwOnCall) throw new Error('xterm упал');
-    return {
-      cols: 80,
-      rows: 24,
-      options: { ...initialOptions },
-      open: () => {},
-      loadAddon: () => {},
-      write: () => {},
-      reset: () => {},
-      dispose: () => {
-        state.disposed += 1;
-      },
-      resize: () => {},
-      focus: () => {},
-      scrollToBottom: () => {},
-      onData: () => ({ dispose: () => {} }),
-      attachCustomKeyEventHandler: () => {},
-      hasSelection: () => false,
-      getSelection: () => '',
-    };
-  }),
-}));
+vi.mock('@xterm/xterm', async () => (await import('../test-utils/xterm-mock.js')).xtermModule);
 vi.mock('@xterm/addon-fit', () => ({
   FitAddon: vi.fn().mockImplementation(() => ({ fit: () => {} })),
 }));
-vi.mock('@xterm/addon-search', () => ({
-  SearchAddon: vi.fn().mockImplementation(() => ({ findNext: () => true })),
-}));
-vi.mock('@xterm/addon-web-links', () => ({
-  WebLinksAddon: vi.fn().mockImplementation(() => ({})),
-}));
+vi.mock('@xterm/addon-search', async () => (await import('../test-utils/xterm-mock.js')).searchModule);
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: vi.fn().mockImplementation(() => ({ onContextLoss: () => {}, dispose: () => {} })),
 }));

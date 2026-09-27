@@ -16,16 +16,24 @@ import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
-import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
-import type { SessionRef } from '@harnas/protocol';
+import { refKey, type SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { shouldForwardToTerminal } from '../lib/keys.js';
 import { useUiStore } from '../store/ui.js';
+import { createLinkProvider, createStatCache, isHttpUrl, type TerminalLink } from './links.js';
+import { webglPolicy } from './webgl-policy.js';
 import { minimumContrastRatio, XTERM_OPTIONS, xtermTheme } from './xterm-themes.js';
 
 /** Тишина после последнего ресайза, прежде чем уйдёт `pty.resize` (спека 5.2). */
 const RESIZE_SILENCE_MS = 50;
+/** Повтор WebGL после потери контекста (спека 8.1). */
+const WEBGL_RETRY_MS = 1_000;
+/**
+ * `SearchAddon` считает совпадения до `highlightLimit` включительно: на единицу больше
+ * предела счётчика, чтобы `SearchBar` отличил «ровно 1000» от «1000+» (спека 8.2).
+ */
+const SEARCH_HIGHLIGHT_LIMIT = 1_001;
 
 export interface UseTerminalOptions {
   bridge: HarnasBridge;
@@ -41,6 +49,17 @@ export interface UseTerminalOptions {
    * размонтировании.
    */
   visible?: boolean;
+  /** Работа терминала (из sessionRef): files.locate(workKey, …), сверка located.root.workKey. */
+  workKey: string;
+  /** sessionCwd(сессия из useWorksStore, projectPath): от него относительные пути. */
+  cwd: string;
+  /**
+   * ⌘F в терминале — openSearch() своей поверхности. Ветка временная: 6.1b переносит ⌘K и
+   * ⌘F в обработчик окна (спека 9.6) и убирает `onFind`.
+   */
+  onFind(): void;
+  /** Клик по ссылке и по OSC 8; ⌘-клик или меню решает TerminalSurface. */
+  onLink(link: TerminalLink, event: MouseEvent): void;
 }
 
 export interface UseTerminalResult {
@@ -56,16 +75,6 @@ export interface UseTerminalResult {
 
 function sameRef(a: SessionRef, b: SessionRef): boolean {
   return a.projectPath === b.projectPath && a.workId === b.workId && a.sessionId === b.sessionId;
-}
-
-/** Ссылки открываются наружу только по http/https — как и в основном процессе (`main/ipc.ts#isAllowedExternalUrl`). */
-function isHttpUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-  } catch {
-    return false;
-  }
 }
 
 export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
@@ -94,6 +103,12 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
 
+  // Провайдер ссылок и обработчик клавиш заведены один раз на создание xterm, а работа,
+  // папка сессии (worktree появляется позже) и колбэки поверхности могут смениться —
+  // читаются через ref.
+  const linkContextRef = useRef({ workKey: options.workKey, cwd: options.cwd, onFind: options.onFind, onLink: options.onLink });
+  linkContextRef.current = { workKey: options.workKey, cwd: options.cwd, onFind: options.onFind, onLink: options.onLink };
+
   // Мост между эффектом создания xterm (ниже) и эффектом видимости (в конце
   // функции): подключение к хосту должно переживать переключение вкладок без
   // пересоздания самого терминала, поэтому `attach`/`detach` живут в ref, а не
@@ -113,41 +128,102 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
       // screenReaderMode не включаем: в нём xterm игнорирует события
       // insertText, а через них приходят выбор эмодзи, диктовка и буквы с
       // диакритикой по долгому нажатию в macOS — ввод терялся бы.
+      // Декорации совпадений `SearchAddon` 0.16 — предлагаемый API xterm 5.5
+      // (`registerDecoration`): без опции он бросает, и нет ни подсветки, ни счётчика.
+      allowProposedApi: true,
+      // Ссылки OSC 8: без своего обработчика xterm показал бы `confirm()` с текстом не из `S`
+      // и позвал бы `window.open`. Наружу — только http(s), прочие схемы — ничего.
+      linkHandler: {
+        activate: (event, text) => {
+          if (isHttpUrl(text)) linkContextRef.current.onLink({ kind: 'url', url: text }, event);
+        },
+      },
     });
     termRef.current = term;
 
     const fit = new FitAddon();
-    const searchAddon = new SearchAddon();
-    const webLinks = new WebLinksAddon(
-      (_event, uri) => {
-        if (!isHttpUrl(uri)) return;
-        void bridgeRef.current.app.openExternal(uri);
-      },
-      { urlRegex: /https?:\/\/[^\s]+/g },
-    );
+    const searchAddon = new SearchAddon({ highlightLimit: SEARCH_HIGHLIGHT_LIMIT });
 
     term.loadAddon(fit);
     term.loadAddon(searchAddon);
-    term.loadAddon(webLinks);
+
+    // Ссылки — свой провайдер (`links.ts`) вместо `WebLinksAddon`: тот на каждом наведении
+    // падал `SyntaxError` на флагах `gg`. Кэш `files.locate` — у каждого терминала свой.
+    const statCache = createStatCache((key, absPaths) => bridgeRef.current.files.locate(key, absPaths));
+    const linkProvider = term.registerLinkProvider(
+      createLinkProvider(term, {
+        workKey: () => linkContextRef.current.workKey,
+        cwd: () => linkContextRef.current.cwd,
+        cache: statCache,
+        onLink: (link, event) => linkContextRef.current.onLink(link, event),
+      }),
+    );
 
     term.open(container);
 
     // WebGL-аддон подключается только после open: до него у терминала нет
     // элемента. E2E просят DOM-рендер (`?renderer=dom`), чтобы читать текст
-    // экрана, а не пиксели канвы.
-    if (!domRendererRequested()) {
+    // экрана, а не пиксели канвы — тогда подписки на политику нет совсем.
+    // Контекст держат только видимые и шесть последних скрытых (`webgl-policy.ts`).
+    const policyKey = refKey(ref);
+    let webgl: WebglAddon | null = null;
+    let wantWebgl = false;
+    let webglRetry: ReturnType<typeof setTimeout> | null = null;
+    const releaseWebgl = (): void => {
+      if (webglRetry !== null) clearTimeout(webglRetry);
+      webglRetry = null;
+      const addon = webgl;
+      webgl = null;
+      addon?.dispose();
+    };
+    const loadWebgl = (): void => {
+      if (webgl !== null) return;
       try {
-        const webgl = new WebglAddon();
-        term.loadAddon(webgl);
-        webgl.onContextLoss(() => webgl.dispose());
+        const addon = new WebglAddon();
+        term.loadAddon(addon);
+        webgl = addon;
+        addon.onContextLoss(() => {
+          releaseWebgl();
+          // Три потери за 60 с — DOM до перезагрузки окна: политика больше не даст want: true.
+          if (webglPolicy.onContextLoss(policyKey) === 'retry') {
+            webglRetry = setTimeout(() => {
+              webglRetry = null;
+              if (wantWebgl) loadWebgl();
+            }, WEBGL_RETRY_MS);
+          }
+        });
       } catch {
         // WebGL недоступен (старый драйвер GPU) — xterm остаётся на DOM-рендере.
       }
-    }
+    };
+    const unsubscribeWebgl = domRendererRequested()
+      ? null
+      : webglPolicy.subscribe(policyKey, (want) => {
+          wantWebgl = want;
+          if (want) loadWebgl();
+          else releaseWebgl();
+        });
     setSearch(searchAddon);
     setTerminal(term);
 
     term.attachCustomKeyEventHandler((event) => {
+      // ⌘K и ⌘F терминал берёт себе. `preventDefault` обязателен: на macOS ⌘-сочетание
+      // сначала получает страница, пункт меню — только необработанное (`registerAccelerator:
+      // false` там не действует), и без него ⌘K заодно открыл бы палитру. Агенту ничего не
+      // уходит. Ветка временная — до обработчика окна 6.1b (спека 9.6).
+      if (event.type === 'keydown' && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+        const key = event.key.toLowerCase();
+        if (key === 'k') {
+          event.preventDefault();
+          term.clear();
+          return false;
+        }
+        if (key === 'f') {
+          event.preventDefault();
+          linkContextRef.current.onFind();
+          return false;
+        }
+      }
       // ⌘C при выделении — копия в буфер обмена; сама клавиша дальше не идёт
       // в pty.input, как и любое другое ⌘-сочетание (`lib/keys.ts`).
       if (event.type === 'keydown' && event.metaKey && event.key.toLowerCase() === 'c' && term.hasSelection()) {
@@ -257,6 +333,10 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
       dataDisposable.dispose();
       unsubscribeOutput();
       unsubscribeResync();
+      linkProvider.dispose();
+      unsubscribeWebgl?.();
+      if (unsubscribeWebgl !== null) webglPolicy.forget(policyKey);
+      releaseWebgl();
       // Само отключение от хоста — забота эффекта видимости ниже: React чистит
       // эффекты одного рендера в порядке их объявления (этот — первым), так
       // что на размонтировании эффект видимости всё ещё дозвонится до
@@ -297,6 +377,13 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
   useEffect(() => {
     if (visible) void attachRef.current?.();
     return () => detachRef.current?.();
+  }, [visible, container, ref.projectPath, ref.workId, ref.sessionId]);
+
+  // Видимость — политике WebGL (спека 8.1). Эффект после эффекта создания: подписка уже
+  // есть, и после пересоздания xterm (там `forget`) видимость сообщается заново.
+  useEffect(() => {
+    if (container === null || domRendererRequested()) return;
+    webglPolicy.update(refKey(ref), visible);
   }, [visible, container, ref.projectPath, ref.workId, ref.sessionId]);
 
   return { search, terminal };

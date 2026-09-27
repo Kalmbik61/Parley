@@ -5,7 +5,8 @@
  * ни поверхность, ни контейнер работы не `inert`.
  *
  * xterm подменён фейком, как в `shell/AppShell.test.tsx`: настоящий рисует в канву, которой в
- * jsdom нет. Фейк запоминает, был ли его контейнер под `inert` в момент `focus()`.
+ * jsdom нет. Общий мок (`test-utils/xterm-mock.ts`) через `onCall` запоминает, был ли контейнер
+ * под `inert` в момент `focus()`.
  */
 
 import { act, cleanup, render, waitFor } from '@testing-library/react';
@@ -25,6 +26,7 @@ import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import { terminalSurfaces } from '../terminal/TerminalSurface.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
+import { xtermMock } from '../test-utils/xterm-mock.js';
 import { flashTab } from './flash.js';
 import { applyFocusTarget, whenShown } from './focus-target.js';
 
@@ -34,40 +36,9 @@ const xterm = vi.hoisted(() => ({
   events: [] as Array<{ call: 'focus' | 'scrollToBottom'; inert: boolean; workContainer: string | null }>,
 }));
 
-vi.mock('@xterm/xterm', () => ({
-  Terminal: vi.fn().mockImplementation((initialOptions: Record<string, unknown>) => {
-    let container: HTMLElement | null = null;
-    const record = (call: 'focus' | 'scrollToBottom'): void => {
-      xterm.events.push({
-        call,
-        inert: container?.closest('[inert]') != null,
-        workContainer: container?.closest('[data-work-container]')?.getAttribute('data-work-container') ?? null,
-      });
-    };
-    return {
-      cols: 80,
-      rows: 24,
-      options: { ...initialOptions },
-      open: (element: HTMLElement) => {
-        container = element;
-      },
-      loadAddon: () => {},
-      write: () => {},
-      reset: () => {},
-      dispose: () => {},
-      resize: () => {},
-      focus: () => record('focus'),
-      scrollToBottom: () => record('scrollToBottom'),
-      onData: () => ({ dispose: () => {} }),
-      attachCustomKeyEventHandler: () => {},
-      hasSelection: () => false,
-      getSelection: () => '',
-    };
-  }),
-}));
+vi.mock('@xterm/xterm', async () => (await import('../test-utils/xterm-mock.js')).xtermModule);
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: vi.fn().mockImplementation(() => ({ fit: () => {} })) }));
-vi.mock('@xterm/addon-search', () => ({ SearchAddon: vi.fn().mockImplementation(() => ({ findNext: () => true })) }));
-vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: vi.fn().mockImplementation(() => ({})) }));
+vi.mock('@xterm/addon-search', async () => (await import('../test-utils/xterm-mock.js')).searchModule);
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: vi.fn().mockImplementation(() => ({ onContextLoss: () => {}, dispose: () => {} })),
 }));
@@ -125,6 +96,16 @@ let bridge: FakeBridge;
 
 beforeEach(() => {
   xterm.events = [];
+  xtermMock.reset();
+  // Был ли контейнер терминала под `inert` в момент `focus()`/`scrollToBottom()`.
+  xtermMock.onCall = (term, method) => {
+    if (method !== 'focus' && method !== 'scrollToBottom') return;
+    xterm.events.push({
+      call: method,
+      inert: term.element?.closest('[inert]') != null,
+      workContainer: term.element?.closest('[data-work-container]')?.getAttribute('data-work-container') ?? null,
+    });
+  };
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
   bridge = createFakeBridge();
   bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));

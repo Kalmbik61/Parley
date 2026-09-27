@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
 import type { WorkEntry, WorkSession } from '@harnas/core';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
+import { xtermMock } from '../test-utils/xterm-mock.js';
 import type { LayoutNode, TabSpec } from '../../shared/layout-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { tabId } from '../layout/ids.js';
@@ -36,36 +37,9 @@ import { useHostStore } from '../store/host.js';
 // `sonner` просто не рисует ничего; здесь он подменён, чтобы проверить сам вызов.
 vi.mock('sonner', () => ({ toast: vi.fn() }));
 
-const state = vi.hoisted(() => ({ terminals: [] as unknown[], disposed: 0 }));
-
-vi.mock('@xterm/xterm', () => ({
-  Terminal: vi.fn().mockImplementation((initialOptions: Record<string, unknown>) => {
-    const instance = {};
-    state.terminals.push(instance);
-    return {
-      cols: 80,
-      rows: 24,
-      options: { ...initialOptions },
-      open: () => {},
-      loadAddon: () => {},
-      write: () => {},
-      reset: () => {},
-      dispose: () => {
-        state.disposed += 1;
-      },
-      resize: () => {},
-      focus: () => {},
-      scrollToBottom: () => {},
-      onData: () => ({ dispose: () => {} }),
-      attachCustomKeyEventHandler: () => {},
-      hasSelection: () => false,
-      getSelection: () => '',
-    };
-  }),
-}));
+vi.mock('@xterm/xterm', async () => (await import('../test-utils/xterm-mock.js')).xtermModule);
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: vi.fn().mockImplementation(() => ({ fit: () => {} })) }));
-vi.mock('@xterm/addon-search', () => ({ SearchAddon: vi.fn().mockImplementation(() => ({ findNext: () => true })) }));
-vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: vi.fn().mockImplementation(() => ({})) }));
+vi.mock('@xterm/addon-search', async () => (await import('../test-utils/xterm-mock.js')).searchModule);
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: vi.fn().mockImplementation(() => ({ onContextLoss: () => {}, dispose: () => {} })),
 }));
@@ -164,8 +138,7 @@ function work(id: string, createdAt: string, title: string, sessions: WorkSessio
 let bridge: FakeBridge;
 
 beforeEach(() => {
-  state.terminals = [];
-  state.disposed = 0;
+  xtermMock.reset();
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
   bridge = createFakeBridge();
   bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
@@ -553,19 +526,19 @@ describe('AppShell — LRU контейнеров работ (тест 4 кус�
     await activateWithTerminal(keyOf('w-02'), 's-02');
     await activateWithTerminal(keyOf('w-03'), 's-03');
     expect(container(keyOf('w-01'))).not.toBeNull();
-    expect(state.disposed).toBe(0);
+    expect(xtermMock.disposed).toBe(0);
 
     await activateWithTerminal(keyOf('w-04'), 's-04');
     expect(container(keyOf('w-01'))).toBeNull();
-    expect(state.disposed).toBe(1);
+    expect(xtermMock.disposed).toBe(1);
     expect(document.querySelectorAll('[data-work-container]')).toHaveLength(3);
 
-    const created = state.terminals.length;
+    const created = xtermMock.terminals.length;
     const attaches = attachCalls('s-01');
     act(() => useLayoutStore.getState().setActiveWork(keyOf('w-01')));
     await flush();
     expect(container(keyOf('w-01'))?.querySelector('[data-tab-id="terminal:s-01"]')).not.toBeNull();
-    expect(state.terminals.length).toBe(created + 1);
+    expect(xtermMock.terminals.length).toBe(created + 1);
     expect(attachCalls('s-01')).toBe(attaches + 1);
   });
 });
@@ -643,11 +616,11 @@ describe('AppShell — работа LRU без раскладки и drop (те�
     await flush();
     expect(container(keyOf('w-02'))?.querySelector('[data-surface-layer] [data-tab-id="terminal:s-02"]')).not.toBeNull();
 
-    const disposed = state.disposed;
+    const disposed = xtermMock.disposed;
     act(() => useLayoutStore.getState().drop(keyOf('w-02')));
     await flush();
     expect(container(keyOf('w-02'))).toBeNull();
-    expect(state.disposed).toBe(disposed + 1);
+    expect(xtermMock.disposed).toBe(disposed + 1);
   });
 });
 
@@ -698,6 +671,32 @@ describe('AppShell — меню find (тест 15 куска 2.5)', () => {
     const bars = screen.getAllByPlaceholderText('Find…');
     expect(bars).toHaveLength(1);
     expect(bars[0]?.closest('[data-tab-id]')?.getAttribute('data-tab-id')).toBe('terminal:s-03');
+  });
+});
+
+describe('AppShell — ⌘K в терминале (тест 10 куска 5.3)', () => {
+  it('⌘K в терминале чистит экран, палитра не открыта', async () => {
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+    const key = keyOf('w-01');
+    act(() => useLayoutStore.getState().setActiveWork(key));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[key]).toBe(true));
+    act(() => useLayoutStore.getState().apply(key, (layout) => openTab(layout, term('s-01'))));
+    await flush();
+
+    const terminal = xtermMock.terminals.at(-1);
+    const event = new KeyboardEvent('keydown', { key: 'k', metaKey: true, cancelable: true, bubbles: true });
+    // Нажатие получает xterm, а затем оно всплывает до окна; меню macOS в jsdom нет — его
+    // проверяет приёмка.
+    act(() => {
+      terminal?.keyHandler?.(event);
+      window.dispatchEvent(event);
+    });
+    await flush();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(xtermMock.callsOf('clear', terminal?.index)).toHaveLength(1);
+    expect(useUiStore.getState().paletteOpen).toBe(false);
+    expect(screen.queryByText('Command palette')).toBeNull();
   });
 });
 

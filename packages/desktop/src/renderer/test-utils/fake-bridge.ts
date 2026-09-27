@@ -73,6 +73,10 @@ export interface FakeBridge extends HarnasBridge {
   /** Вызовы `app.openPath` и `app.showInFinder`. */
   readonly openedPaths: string[];
   readonly revealedPaths: string[];
+  /** Вызовы `app.openExternal` (кусок 5.3). */
+  readonly externalOpened: string[];
+  /** Вызовы `app.paste` — по записи на вызов (кусок 5.3). */
+  readonly pastes: number[];
 }
 
 export function createFakeBridge(): FakeBridge {
@@ -99,6 +103,8 @@ export function createFakeBridge(): FakeBridge {
   let openPathResult: 'opened' | 'revealed' | { error: unknown } = 'opened';
   const openedPaths: string[] = [];
   const revealedPaths: string[] = [];
+  const externalOpened: string[] = [];
+  const pastes: number[] = [];
   const layouts = new Map<string, WorkLayout>();
   let status: HostStatus = {
     state: 'connected',
@@ -136,6 +142,8 @@ export function createFakeBridge(): FakeBridge {
     },
     openedPaths,
     revealedPaths,
+    externalOpened,
+    pastes,
     files: {
       stat: async (root, paths) => paths.map((path) => fileStats.get(`${rootKey(root)}\n${path}`) ?? null),
       locate: async (workKey, absPaths) => {
@@ -172,7 +180,9 @@ export function createFakeBridge(): FakeBridge {
       activitySnapshot = [...entries];
     },
     app: {
-      openExternal: async () => {},
+      openExternal: async (url) => {
+        externalOpened.push(url);
+      },
       notify: (note) => {
         appNotified.push(note);
       },
@@ -236,6 +246,9 @@ export function createFakeBridge(): FakeBridge {
       },
       showInFinder: async (absPath) => {
         revealedPaths.push(absPath);
+      },
+      paste: () => {
+        pastes.push(pastes.length);
       },
     },
 

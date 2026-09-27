@@ -308,6 +308,13 @@ export function registerIpc(options: RegisterIpcOptions): void {
     titlebarDoubleClick();
   });
 
+  // «Paste» меню терминала (кусок 5.3): вставка родным путём окна — срабатывает то же событие
+  // paste, что у ⌘V, и картинку из буфера ловит тот же обработчик (5.4). Только отправителю:
+  // чужое окно вставку не получает.
+  ipcMain.on('app:paste', (event) => {
+    event.sender.paste();
+  });
+
   ipcMain.handle(
     'app:reveal-work',
     withIpcError(async (_event, projectPath: unknown, workId: unknown) => {

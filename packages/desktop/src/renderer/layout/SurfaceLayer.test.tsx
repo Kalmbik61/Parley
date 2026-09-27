@@ -10,6 +10,7 @@ import { refKey } from '@harnas/protocol';
 import type { WorkEntry, WorkSession } from '@harnas/core';
 import type { LayoutNode } from '../../shared/layout-types.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
+import { xtermMock } from '../test-utils/xterm-mock.js';
 import { terminalSurfaces } from '../terminal/TerminalSurface.js';
 import { XTERM_LIGHT } from '../terminal/xterm-themes.js';
 import { useUiStore } from '../store/ui.js';
@@ -21,41 +22,9 @@ import { SurfaceLayer } from './SurfaceLayer.js';
 import { tabMeta } from './tab-meta.js';
 import { focusTab, moveTab } from './tree.js';
 
-const state = vi.hoisted(() => ({
-  constructed: 0,
-  disposed: 0,
-  /** Номер вызова конструктора (с 1), на котором он бросает; 0 — не бросать. */
-  throwOnCall: 0,
-}));
-
-vi.mock('@xterm/xterm', () => ({
-  Terminal: vi.fn().mockImplementation((initialOptions: Record<string, unknown>) => {
-    state.constructed += 1;
-    if (state.constructed === state.throwOnCall) throw new Error('xterm упал');
-    return {
-      cols: 80,
-      rows: 24,
-      options: { ...initialOptions },
-      open: () => {},
-      loadAddon: () => {},
-      write: () => {},
-      reset: () => {},
-      dispose: () => {
-        state.disposed += 1;
-      },
-      resize: () => {},
-      focus: () => {},
-      scrollToBottom: () => {},
-      onData: () => ({ dispose: () => {} }),
-      attachCustomKeyEventHandler: () => {},
-      hasSelection: () => false,
-      getSelection: () => '',
-    };
-  }),
-}));
+vi.mock('@xterm/xterm', async () => (await import('../test-utils/xterm-mock.js')).xtermModule);
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: vi.fn().mockImplementation(() => ({ fit: () => {} })) }));
-vi.mock('@xterm/addon-search', () => ({ SearchAddon: vi.fn().mockImplementation(() => ({ findNext: () => true })) }));
-vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: vi.fn().mockImplementation(() => ({})) }));
+vi.mock('@xterm/addon-search', async () => (await import('../test-utils/xterm-mock.js')).searchModule);
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: vi.fn().mockImplementation(() => ({ onContextLoss: () => {}, dispose: () => {} })),
 }));
@@ -183,9 +152,7 @@ async function flush(): Promise<void> {
 }
 
 beforeEach(() => {
-  state.constructed = 0;
-  state.disposed = 0;
-  state.throwOnCall = 0;
+  xtermMock.reset();
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
   bridge = createFakeBridge();
   bridge.setHandler('pty.attach', () => ({ snapshot: 'СНИМОК', cols: 80, rows: 24 }));
@@ -227,7 +194,7 @@ describe('SurfaceLayer — перенос вкладки (тест 2)', () => {
     const mountId = before.dataset.mountId;
     expect(mountId).toMatch(/.+/);
     expect(before.style.getPropertyValue('position-anchor')).toBe('--g-g1');
-    const constructed = state.constructed;
+    const constructed = xtermMock.constructed;
     const attaches = attachCount('a');
     expect(attaches).toBe(1);
 
@@ -240,7 +207,7 @@ describe('SurfaceLayer — перенос вкладки (тест 2)', () => {
     expect(after).toBe(before);
     expect(after?.dataset.mountId).toBe(mountId);
     expect(after?.style.getPropertyValue('position-anchor')).toBe('--g-g2');
-    expect(state.constructed).toBe(constructed);
+    expect(xtermMock.constructed).toBe(constructed);
     expect(attachCount('a')).toBe(attaches);
     // Тело группы объявляет якорь, к которому привязана поверхность.
     expect(document.querySelector<HTMLElement>('[data-group-body="g2"]')?.style.getPropertyValue('anchor-name')).toBe('--g-g2');
@@ -272,7 +239,7 @@ describe('SurfaceLayer — видимость (тесты 3, 17)', () => {
     });
     await flush();
     expect(attachCount('a')).toBe(2);
-    expect(state.constructed).toBe(3);
+    expect(xtermMock.constructed).toBe(3);
   });
 
   it('тест 17: visibleSessionRefs держит refKey видимой поверхности; неактивная или размонтированная — ключа нет', async () => {
@@ -324,13 +291,13 @@ describe('SurfaceLayer — фон обёртки отступа (тест 12)', 
     const pad = surface('terminal:a')?.querySelector<HTMLElement>('[data-testid="terminal-surface-pad"]');
     if (pad === null || pad === undefined) throw new Error('нет обёртки отступа');
     expect(pad.style.backgroundColor).toBe('rgb(40, 44, 52)');
-    const constructed = state.constructed;
+    const constructed = xtermMock.constructed;
 
     act(() => useUiStore.getState().setDark(false));
     const probe = document.createElement('div');
     probe.style.backgroundColor = XTERM_LIGHT.background ?? '';
     expect(pad.style.backgroundColor).toBe(probe.style.backgroundColor);
-    expect(state.constructed).toBe(constructed);
+    expect(xtermMock.constructed).toBe(constructed);
   });
 });
 
@@ -361,7 +328,7 @@ describe('SurfaceLayer — удалённая сессия (тест 13)', () =>
 describe('SurfaceLayer — граница ошибки поверхности (тест 14)', () => {
   it('xterm одной вкладки бросает: запасной вид с заголовком внутри корня, «Close» — requestCloseTabs; соседняя жива', async () => {
     // Порядок поверхностей — по id вкладки: первым конструируется terminal:a.
-    state.throwOnCall = 1;
+    xtermMock.throwOnCall = 1;
     const requestClose = vi.spyOn(useLayoutStore.getState(), 'requestCloseTabs');
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -379,7 +346,7 @@ describe('SurfaceLayer — граница ошибки поверхности (�
 
       // Соседняя поверхность (terminal:b, другая группа) жива.
       expect(surface('terminal:b')?.querySelector('[data-testid="terminal-surface-pad"]')).not.toBeNull();
-      expect(state.disposed).toBe(0);
+      expect(xtermMock.disposed).toBe(0);
     } finally {
       spy.mockRestore();
       requestClose.mockRestore();

@@ -30,6 +30,13 @@ class FakeIpcMain {
     if (!handler) throw new Error(`нет обработчика для ${channel}`);
     return handler({}, ...args);
   }
+
+  /** Как `invoke`, но со своим событием — для каналов, которые читают `event.sender`. */
+  invokeWithEvent(channel: string, event: unknown, ...args: unknown[]): unknown {
+    const handler = this.handlers.get(channel);
+    if (!handler) throw new Error(`нет обработчика для ${channel}`);
+    return handler(event, ...args);
+  }
 }
 
 function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore; roots?: RootsRegistry } = {}): {
@@ -291,6 +298,13 @@ describe('registerIpc', () => {
     const { ipcMain, titlebarDoubleClick } = setup();
     ipcMain.invoke('app:titlebar-double-click');
     expect(titlebarDoubleClick).toHaveBeenCalled();
+  });
+
+  it('тест 14 куска 5.3: app:paste зовёт paste() у event.sender', () => {
+    const { ipcMain } = setup();
+    const paste = vi.fn();
+    ipcMain.invokeWithEvent('app:paste', { sender: { paste } });
+    expect(paste).toHaveBeenCalledTimes(1);
   });
 
   it('app:set-appearance с неверным режимом отвергается', async () => {

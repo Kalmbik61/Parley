@@ -129,6 +129,9 @@ const bridge = {
       ipcRenderer.invoke('app:reveal-work', projectPath, workId) as Promise<void>,
     openPath: (absPath: string) => ipcRenderer.invoke('app:open-path', absPath) as Promise<'opened' | 'revealed'>,
     showInFinder: (absPath: string) => ipcRenderer.invoke('app:show-in-finder', absPath) as Promise<void>,
+    paste: () => {
+      ipcRenderer.send('app:paste');
+    },
   },
   files: {
     stat: (root: FileRoot, paths: string[]) =>

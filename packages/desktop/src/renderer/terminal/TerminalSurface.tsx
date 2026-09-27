@@ -31,16 +31,19 @@ import { useDroppable } from '@dnd-kit/core';
 import { refKey, type SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import type { TabSpec } from '../../shared/layout-types.js';
-import { S } from '../../shared/strings.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { dndId, type DropTargetData } from '../layout/dnd.js';
 import { useTerminalDropPreview } from '../layout/DropIndicator.js';
 import { useLayoutStore } from '../layout/store.js';
 import { tabMeta } from '../layout/tab-meta.js';
-import { focusTab } from '../layout/tree.js';
+import { focusTab, openTerminalSessionIds } from '../layout/tree.js';
 import { ErrorBoundary } from '../shell/ErrorBoundary.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
+import { LinkMenu, openLinkPath, openLinkUrl, type LinkMenuState } from './LinkMenu.js';
+import { sessionCwd, type TerminalLink } from './links.js';
+import { SearchBar } from './SearchBar.js';
+import { TerminalContextMenu } from './TerminalContextMenu.js';
 import { useTerminal } from './use-terminal.js';
 import { xtermTheme } from './xterm-themes.js';
 
@@ -57,14 +60,15 @@ export interface TerminalSurfaceProps {
 }
 
 /**
- * openSearch() — с 2.5: полоса поиска из TerminalPanel с фокусом в поле.
- * 5.3 меняет полосу на SearchBar и дописывает clear(); их зовут действия find и terminal.clear (6.3).
+ * openSearch() — с 2.5, с 5.3 открывает SearchBar с фокусом в поле.
+ * clear() — с 5.3: term.clear(), агенту ничего не уходит. Их зовут действия find и terminal.clear (6.3).
  */
 export interface TerminalSurfaceHandle {
   focus(): void;
   scrollToBottom(): void;
   search: SearchAddon | null;
   openSearch(): void;
+  clear(): void;
 }
 
 /** Реестр живых поверхностей для фокуса, прокрутки и поиска (4.3, 5.3). */
@@ -180,14 +184,53 @@ export function TerminalSurface(props: TerminalSurfaceProps): JSX.Element {
  * поверхности, а пропы внутреннего компонента — те же ссылки, и xterm с
  * `use-terminal` при этом не трогаются.
  */
-const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, visible, fontFamily, fontSize }: TerminalSurfaceProps): JSX.Element {
+const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, visible, fontFamily, fontSize }: TerminalSurfaceProps): JSX.Element {
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
-  const { search, terminal } = useTerminal({ bridge, ref: sessionRef, container, fontFamily, fontSize, visible });
-  const dark = useUiStore((state) => state.dark);
-
+  const key = workKeyOf(sessionRef.projectPath, sessionRef.workId);
+  // Папка сессии для относительных путей ссылок (спека 8.3): worktree, когда он создан,
+  // иначе проект. Селектор отдаёт строку — перерисовка только при её смене.
+  const cwd = useWorksStore((state) => {
+    const entry = state.entries.find((item) => item.projectPath === sessionRef.projectPath && item.map.work.id === sessionRef.workId);
+    const session = entry?.map.sessions.find((item) => item.id === sessionRef.sessionId);
+    return session === undefined ? sessionRef.projectPath : sessionCwd(session, sessionRef.projectPath);
+  });
   const [searchOpen, setSearchOpen] = useState(false);
-  const [query, setQuery] = useState('');
+  const [linkMenu, setLinkMenu] = useState<LinkMenuState | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const openSearch = useCallback(() => {
+    setSearchOpen(true);
+    // Уже открытая полоса `autoFocus` второй раз не сработает — фокус руками.
+    inputRef.current?.focus();
+  }, []);
+
+  // Обычный клик — меню у курсора; ⌘-клик — сразу действие: путь — приложение по умолчанию
+  // (редактор — с 7.3), адрес — системный браузер (встроенный — с 9.2).
+  const onLink = useCallback(
+    (link: TerminalLink, event: MouseEvent) => {
+      if (event.metaKey) {
+        if (link.kind === 'path') void openLinkPath(bridge, link.absPath);
+        else openLinkUrl(bridge, link.url);
+        return;
+      }
+      setLinkMenu({ link, x: event.clientX, y: event.clientY });
+    },
+    [bridge],
+  );
+
+  const { search, terminal } = useTerminal({
+    bridge,
+    ref: sessionRef,
+    container,
+    fontFamily,
+    fontSize,
+    visible,
+    workKey: key,
+    cwd,
+    onFind: openSearch,
+    onLink,
+  });
+  const dark = useUiStore((state) => state.dark);
 
   // Ручка читает свежие `search`/`terminal` через ref: сама она заводится один
   // раз и живёт в реестре всё время монтирования (тест 5), а не пересоздаётся
@@ -221,14 +264,19 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, visible, f
       get search() {
         return liveRef.current.search;
       },
-      openSearch: () => {
-        setSearchOpen(true);
-        // Уже открытая полоса `autoFocus` второй раз не сработает — фокус руками.
-        inputRef.current?.focus();
-      },
+      openSearch,
+      clear: () => liveRef.current.terminal?.clear(),
     }),
-    [],
+    [openSearch],
   );
+
+  // «Split right/down» меню терминала — как в меню вкладки (`layout/Tab.tsx#beginSplit`):
+  // сначала своя вкладка активна, затем выбор сессии для новой группы.
+  const beginSplit = (direction: 'right' | 'down'): void => {
+    useLayoutStore.getState().apply(key, (layout) => focusTab(layout, tabId));
+    const layout = useLayoutStore.getState().layouts[key];
+    useUiStore.getState().openPicker({ workKey: key, direction, openSessionIds: openTerminalSessionIds(layout) });
+  };
 
   // Вставка — через xterm, но уже чистым текстом (sanitizePaste): capture на
   // контейнере срабатывает раньше обработчика paste скрытого поля xterm, а
@@ -260,27 +308,30 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, visible, f
   return (
     <div className="relative flex h-full min-w-0 flex-col">
       {searchOpen ? (
-        <div className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded border border-border bg-popover px-2 py-1">
-          <input
-            ref={inputRef}
-            autoFocus
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') search?.findNext(query);
-              if (event.key === 'Escape') setSearchOpen(false);
-            }}
-            placeholder={S.terminal.findPlaceholder}
-            className="w-48 bg-transparent text-sm text-popover-foreground outline-none"
-          />
-        </div>
+        <SearchBar
+          ref={inputRef}
+          search={search}
+          onClose={() => {
+            setSearchOpen(false);
+            terminal?.focus();
+          }}
+        />
       ) : null}
       {/* Отступ 4px — на обёртке, а не на контейнере xterm: FitAddon меряет
           родителя терминала и падинг контейнера не заметил бы (как в
           `TerminalPanel.tsx`). Фон — фон темы xterm, а не `--card`. */}
-      <div data-testid="terminal-surface-pad" className="min-h-0 flex-1 p-1" style={{ backgroundColor: xtermTheme(dark).background }}>
-        <div ref={setContainer} className="h-full w-full" />
-      </div>
+      <TerminalContextMenu
+        bridge={bridge}
+        terminal={terminal}
+        onClear={() => terminal?.clear()}
+        onFind={openSearch}
+        onSplit={beginSplit}
+      >
+        <div data-testid="terminal-surface-pad" className="min-h-0 flex-1 p-1" style={{ backgroundColor: xtermTheme(dark).background }}>
+          <div ref={setContainer} className="h-full w-full" />
+        </div>
+      </TerminalContextMenu>
+      {linkMenu === null ? null : <LinkMenu bridge={bridge} state={linkMenu} onClose={() => setLinkMenu(null)} />}
     </div>
   );
 });

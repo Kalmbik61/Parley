@@ -12,37 +12,16 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { Room, WorkEntry, WorkSession } from '@harnas/core';
 import type { GroupNode, SplitNode } from '../../shared/layout-types.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
+import { xtermMock } from '../test-utils/xterm-mock.js';
 import { useWorksStore } from '../store/works.js';
 import { EMPTY_HISTORY } from './history.js';
 import { LayoutView } from './LayoutView.js';
 import { SurfaceLayer } from './SurfaceLayer.js';
 import { useLayoutStore } from './store.js';
 
-const state = vi.hoisted(() => ({ terminalOptions: [] as Array<Record<string, unknown>> }));
-
-vi.mock('@xterm/xterm', () => ({
-  Terminal: vi.fn().mockImplementation((initialOptions: Record<string, unknown>) => {
-    state.terminalOptions.push(initialOptions);
-    return {
-      cols: 80,
-      rows: 24,
-      options: { ...initialOptions },
-      open: () => {},
-      loadAddon: () => {},
-      write: () => {},
-      reset: () => {},
-      dispose: () => {},
-      resize: () => {},
-      onData: () => ({ dispose: () => {} }),
-      attachCustomKeyEventHandler: () => {},
-      hasSelection: () => false,
-      getSelection: () => '',
-    };
-  }),
-}));
+vi.mock('@xterm/xterm', async () => (await import('../test-utils/xterm-mock.js')).xtermModule);
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: vi.fn().mockImplementation(() => ({ fit: () => {} })) }));
-vi.mock('@xterm/addon-search', () => ({ SearchAddon: vi.fn().mockImplementation(() => ({ findNext: () => true })) }));
-vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: vi.fn().mockImplementation(() => ({})) }));
+vi.mock('@xterm/addon-search', async () => (await import('../test-utils/xterm-mock.js')).searchModule);
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: vi.fn().mockImplementation(() => ({ onContextLoss: () => {}, dispose: () => {} })),
 }));
@@ -102,7 +81,7 @@ const WORK_KEY = '/tmp/p w';
 let bridge: FakeBridge;
 
 beforeEach(() => {
-  state.terminalOptions = [];
+  xtermMock.reset();
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
   bridge = createFakeBridge();
   bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
@@ -163,8 +142,8 @@ describe('LayoutView — тест 17', () => {
     );
     await flush();
 
-    expect(state.terminalOptions).toHaveLength(1);
-    expect(state.terminalOptions[0]).toMatchObject({ fontFamily: 'Menlo', fontSize: 15 });
+    expect(xtermMock.terminals.map((term) => term.initialOptions)).toHaveLength(1);
+    expect(xtermMock.terminals.map((term) => term.initialOptions)[0]).toMatchObject({ fontFamily: 'Menlo', fontSize: 15 });
 
     // Тело комнаты получило тот же bridge: providers.list уходит через него, и
     // содержимое комнаты (её название) видно, значит `entry` тоже дошёл.

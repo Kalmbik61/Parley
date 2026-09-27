@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ClientRect, DndContextProps, DragEndEvent, DroppableContainer } from '@dnd-kit/core';
 import type { WorkEntry, WorkSession } from '@harnas/core';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
+import { xtermMock } from '../test-utils/xterm-mock.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { onTerminalDrop, type DragSourceData, type DropTargetData } from '../layout/dnd.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
@@ -53,42 +54,11 @@ vi.mock('../layout/dnd.js', async (importOriginal) => {
   return { ...mod, onTerminalDrop: vi.fn() };
 });
 
-const state = vi.hoisted(() => ({ terminals: [] as unknown[], disposed: 0 }));
-
-vi.mock('@xterm/xterm', () => ({
-  Terminal: vi.fn().mockImplementation((initialOptions: Record<string, unknown>) => {
-    const instance = {};
-    state.terminals.push(instance);
-    return {
-      cols: 80,
-      rows: 24,
-      options: { ...initialOptions },
-      open: () => {},
-      loadAddon: () => {},
-      write: () => {},
-      reset: () => {},
-      dispose: () => {
-        state.disposed += 1;
-      },
-      resize: () => {},
-      focus: () => {},
-      scrollToBottom: () => {},
-      onData: () => ({ dispose: () => {} }),
-      attachCustomKeyEventHandler: () => {},
-      hasSelection: () => false,
-      getSelection: () => '',
-    };
-  }),
-}));
+vi.mock('@xterm/xterm', async () => (await import('../test-utils/xterm-mock.js')).xtermModule);
 vi.mock('@xterm/addon-fit', () => ({
   FitAddon: vi.fn().mockImplementation(() => ({ fit: () => {} })),
 }));
-vi.mock('@xterm/addon-search', () => ({
-  SearchAddon: vi.fn().mockImplementation(() => ({ findNext: () => true })),
-}));
-vi.mock('@xterm/addon-web-links', () => ({
-  WebLinksAddon: vi.fn().mockImplementation(() => ({})),
-}));
+vi.mock('@xterm/addon-search', async () => (await import('../test-utils/xterm-mock.js')).searchModule);
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: vi.fn().mockImplementation(() => ({ onContextLoss: () => {}, dispose: () => {} })),
 }));
@@ -148,8 +118,7 @@ function work(id: string, createdAt: string, title: string, sessions: WorkSessio
 let bridge: FakeBridge;
 
 beforeEach(() => {
-  state.terminals = [];
-  state.disposed = 0;
+  xtermMock.reset();
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
   bridge = createFakeBridge();
   bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
