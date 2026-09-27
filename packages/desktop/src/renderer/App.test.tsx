@@ -142,6 +142,7 @@ describe('App — уведомление trust-wait (раунд исправле
                 summarySource: null,
                 artifacts: [],
                 agent: null,
+                worktree: null,
               },
             ],
             messages: [],
@@ -197,6 +198,7 @@ function session(id: string, label: string): WorkSession {
     summarySource: null,
     artifacts: [],
     agent: null,
+    worktree: null,
   };
 }
 

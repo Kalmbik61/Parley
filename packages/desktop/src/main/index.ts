@@ -92,9 +92,11 @@ if (!gotLock) {
 
     // Флаги окна из `search` (`location.search` рендерера читает их сама, `main/window.ts`
     // просто грузит файл с готовой строкой запроса): `renderer=dom` — E2E читают текст
-    // экрана терминала, им нужен DOM-рендер xterm вместо WebGL.
+    // экрана терминала, им нужен DOM-рендер xterm вместо WebGL. `sidebar=old` — прежний
+    // сайдбар до 3.5, для сравнения с карточками (кусок 3.3).
     const searchFlags = [
       process.env.HARNAS_TERMINAL_RENDERER === 'dom' ? 'renderer=dom' : null,
+      process.env.HARNAS_DESKTOP_SIDEBAR === 'old' ? 'sidebar=old' : null,
     ].filter((flag): flag is string => flag !== null);
 
     const openWindow = (): BrowserWindow => {

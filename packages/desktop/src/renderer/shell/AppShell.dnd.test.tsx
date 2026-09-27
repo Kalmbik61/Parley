@@ -123,6 +123,7 @@ function session(id: string, label: string): WorkSession {
     summarySource: null,
     artifacts: [],
     agent: null,
+    worktree: null,
   };
 }
 

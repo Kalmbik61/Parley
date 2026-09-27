@@ -97,6 +97,7 @@ function session(id: string, label: string): WorkSession {
     summarySource: null,
     artifacts: [],
     agent: null,
+    worktree: null,
   };
 }
 
@@ -304,6 +305,8 @@ describe('AppShell — меню и диалоги (тест 9)', () => {
     render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
     await flush();
     expect(screen.getByText('Первая')).toBeTruthy();
+    // «Search» — две кнопки: в заголовке и вверху сайдбара карточек (кусок 3.3).
+    expect(screen.getAllByText('Search')).toHaveLength(2);
 
     act(() => bridge.emitMenu('toggle-left-sidebar'));
     expect(screen.queryByText('Первая')).toBeNull();
@@ -632,8 +635,10 @@ describe('AppShell — работа LRU без раскладки и drop (те�
 });
 
 describe('AppShell — вход «Почта» сайдбара (тест 10 куска 2.5)', () => {
-  it('клик по «Почта» работы B, пока активна A: активна B, вкладка mail в раскладке B', async () => {
-    const letter = { id: 'm-1', roomId: null, from: 's-02', to: ['s-01'], at: '2026-01-02T10:00:00.000Z', text: 'т', kind: 'note' as const, readBy: {} };
+  // С куска 3.3 строки «All workspace mail» в сайдбаре нет: почту открывает ✉N карточки,
+  // поэтому письмо — человеку.
+  it('клик по ✉1 работы B, пока активна A: активна B, вкладка mail в раскладке B', async () => {
+    const letter = { id: 'm-1', roomId: null, from: 's-02', to: ['human'], at: '2026-01-02T10:00:00.000Z', text: 'т', kind: 'note' as const, readBy: {} };
     const a = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')]);
     const bBase = work('w-02', '2026-01-02', 'Вторая', [session('s-02', 'два')]);
     const b: WorkEntry = { ...bBase, map: { ...bBase.map, messages: [letter] } };
@@ -641,7 +646,7 @@ describe('AppShell — вход «Почта» сайдбара (тест 10 к�
     act(() => useLayoutStore.getState().setActiveWork(keyOf('w-01')));
     await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-01')]).toBe(true));
 
-    fireEvent.click(screen.getByText('All workspace mail'));
+    fireEvent.click(screen.getByText('✉1'));
     await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-02')]).toBe(true));
 
     expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
@@ -788,5 +793,51 @@ describe('AppShell — меню history-back / history-forward (кусок 2.7)'
     act(() => bridge.emitMenu('history-forward'));
     await flush();
     expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Кусок 3.3: сайдбар карточек вместо прежнего.
+// ---------------------------------------------------------------------------
+
+describe('AppShell — сайдбар карточек (кусок 3.3)', () => {
+  afterEach(() => {
+    window.history.replaceState(null, '', '/');
+  });
+
+  it('карточка работы с data-work-key; «+ workspace» открывает NewWorkDialog (тест 8)', async () => {
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+    expect(document.querySelector(`[data-work-key="${keyOf('w-01')}"]`)).not.toBeNull();
+    expect(document.querySelector('[data-work-sidebar]')).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /\+ workspace/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('New workspace')).toBeTruthy();
+  });
+
+  it('клик по строке сессии неактивной работы: работа активна, вкладка её терминала открыта', async () => {
+    await renderShell(fourWorks().slice(0, 2));
+    act(() => useLayoutStore.getState().setActiveWork(keyOf('w-01')));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-01')]).toBe(true));
+
+    fireEvent.click(document.querySelector(`[data-work-key="${keyOf('w-02')}"] [data-session-id="s-02"]`) as HTMLElement);
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-02')]).toBe(true));
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
+    const layout = useLayoutStore.getState().layouts[keyOf('w-02')];
+    expect(layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id))).toEqual([tabId.terminal('s-02')]);
+  });
+
+  it('клик по карточке делает работу активной', async () => {
+    await renderShell(fourWorks().slice(0, 2));
+    act(() => useLayoutStore.getState().setActiveWork(keyOf('w-01')));
+    fireEvent.click(document.querySelector(`[data-work-key="${keyOf('w-02')}"]`) as HTMLElement);
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
+  });
+
+  it('?sidebar=old — прежний сайдбар для сравнения до 3.5', async () => {
+    window.history.replaceState(null, '', '/?sidebar=old');
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+    expect(document.querySelector('[data-work-sidebar]')).toBeNull();
+    expect(screen.getByText('Workspaces')).toBeTruthy();
   });
 });

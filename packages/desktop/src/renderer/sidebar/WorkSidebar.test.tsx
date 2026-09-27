@@ -1,0 +1,231 @@
+/** Тесты 5, 6, 8, 15, 16 куска 3.3: сайдбар карточек (спека 6.1, 6.2). */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { useState } from 'react';
+import type { WorkEntry } from '@harnas/core';
+import { S } from '../../shared/strings.js';
+import { DEFAULT_UI } from '../../shared/ui-types.js';
+import { EMPTY_HISTORY } from '../layout/history.js';
+import { useLayoutStore } from '../layout/store.js';
+import { workKey } from '../lib/tree-order.js';
+import { useActivityStore } from '../store/activity.js';
+import { useNoticesStore } from '../store/notices.js';
+import { useUiStore } from '../store/ui.js';
+import { useWorksStore } from '../store/works.js';
+import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { useSidebarSectionsStore, useSidebarSectionsSync } from './use-sidebar-sections.js';
+import { WorkSidebar, type WorkSidebarProps } from './WorkSidebar.js';
+
+const keyOf = (entry: WorkEntry): string => workKey(entry.projectPath, entry.map.work.id);
+
+let setShown: (shown: boolean) => void = () => {};
+
+/** Как в окне: писатель секций — снаружи сайдбара (в `AppShell`), сайдбар можно спрятать (⌘B). */
+function Harness(props: Partial<WorkSidebarProps>): JSX.Element {
+  useSidebarSectionsSync();
+  const [shown, set] = useState(true);
+  setShown = set;
+  return shown ? (
+    <WorkSidebar onActivateWork={props.onActivateWork ?? (() => {})} onOpenSession={props.onOpenSession ?? (() => {})} onOpenMail={props.onOpenMail ?? (() => {})} />
+  ) : (
+    <></>
+  );
+}
+
+function setWorks(entries: WorkEntry[]): void {
+  useWorksStore.setState({ entries, branches: {}, loading: false, error: null });
+}
+
+const cardKeys = (): string[] =>
+  [...document.querySelectorAll<HTMLElement>('[data-work-key]')].map((element) => element.getAttribute('data-work-key') ?? '');
+
+const list = (): HTMLElement => {
+  const element = document.querySelector<HTMLElement>('[data-sidebar-list]');
+  if (element === null) throw new Error('списка нет');
+  return element;
+};
+
+beforeEach(() => {
+  setWorks([]);
+  useActivityStore.setState({ byRef: {} });
+  useNoticesStore.setState({ notices: [] });
+  useUiStore.setState({
+    ui: DEFAULT_UI,
+    sidebarHovering: false,
+    paletteOpen: false,
+    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null }, settings: false, createRoom: null },
+  });
+  useLayoutStore.setState({ activeWorkKey: null, layouts: {}, hydrated: {}, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
+  useSidebarSectionsStore.setState({ sections: [], attention: {} });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
+
+describe('WorkSidebar — состав (тест 5)', () => {
+  it('Pinned наверху, свёрнутый проект без карточек, архивных нет', () => {
+    const pinned = makeWork('w-pin', { projectPath: '/p/zeta', title: 'Закреплённая' });
+    const open = makeWork('w-open', { projectPath: '/p/alpha', title: 'Открытая' });
+    const hidden = makeWork('w-hidden', { projectPath: '/p/beta', title: 'В свёрнутом' });
+    const archived = makeWork('w-arch', { projectPath: '/p/alpha', title: 'Архивная', status: 'archived' });
+    setWorks([pinned, open, hidden, archived]);
+    useUiStore.setState({ ui: { ...DEFAULT_UI, pinnedWorks: [keyOf(pinned)], collapsedProjects: ['/p/beta'] } });
+
+    render(<Harness />);
+
+    const headers = [...document.querySelectorAll<HTMLElement>('[data-section-key]')].map((element) => element.getAttribute('data-section-key'));
+    expect(headers[0]).toBe('pinned');
+    expect(screen.getByText(S.sidebar.pinned)).toBeTruthy();
+    expect(cardKeys()).toEqual([keyOf(pinned), keyOf(open)]);
+    // Свёрнутый проект — только заголовок.
+    expect(headers).toContain('/p/beta');
+    expect(screen.queryByText('В свёрнутом')).toBeNull();
+    expect(screen.queryByText('Архивная')).toBeNull();
+  });
+
+  it('заголовок проекта: имя папки, число работ, полный путь в тултипе; клик сворачивает и разворачивает', () => {
+    setWorks([makeWork('w-1', { projectPath: '/Users/me/VoiceStudio' }), makeWork('w-2', { projectPath: '/Users/me/VoiceStudio' })]);
+    render(<Harness />);
+    const header = document.querySelector<HTMLElement>('[data-section-key="/Users/me/VoiceStudio"]');
+    if (header === null) throw new Error('заголовка нет');
+    expect(header.textContent).toContain('VoiceStudio');
+    expect(header.textContent).toContain('2');
+    expect(header.getAttribute('title')).toBe('/Users/me/VoiceStudio');
+
+    fireEvent.click(header);
+    expect(useUiStore.getState().ui.collapsedProjects).toEqual(['/Users/me/VoiceStudio']);
+    expect(cardKeys()).toEqual([]);
+    fireEvent.click(header);
+    expect(useUiStore.getState().ui.collapsedProjects).toEqual([]);
+    expect(cardKeys()).toHaveLength(2);
+  });
+
+  it('при 60 работах в DOM больше нуля и меньше 60 карточек (виртуализация)', () => {
+    const works = Array.from({ length: 60 }, (_, index) =>
+      makeWork(`w-${String(index).padStart(2, '0')}`, { projectPath: '/p/many', sessions: [makeSession('s-01', 'a')] }),
+    );
+    setWorks(works);
+    // У jsdom раскладки нет: первый рендер берёт высоту из `initialRect`, но сразу после
+    // монтирования virtual-core замеряет `offsetHeight` списка (в jsdom — 0) и оставил бы
+    // ноль карточек. Списку даём высоту окна — иначе тест ничего не доказывает.
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.hasAttribute('data-sidebar-list') ? 800 : 0;
+      },
+    });
+    try {
+      render(<Harness />);
+      const count = cardKeys().length;
+      expect(count).toBeGreaterThan(0);
+      expect(count).toBeLessThan(60);
+    } finally {
+      if (original !== undefined) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', original);
+    }
+  });
+
+  it('при 50 работах виртуализации нет — все карточки в DOM', () => {
+    setWorks(Array.from({ length: 50 }, (_, index) => makeWork(`w-${String(index).padStart(2, '0')}`, { projectPath: '/p/many' })));
+    render(<Harness />);
+    expect(cardKeys()).toHaveLength(50);
+  });
+
+  it('клики: карточка — onActivateWork, строка сессии — onOpenSession, ✉N — onOpenMail', () => {
+    const onActivateWork = vi.fn();
+    const onOpenSession = vi.fn();
+    const onOpenMail = vi.fn();
+    const entry = makeWork('w-1', {
+      sessions: [makeSession('s-01', 'a')],
+      messages: [{ id: 'm-1', roomId: null, from: 's-01', to: ['human'], at: '2026-09-27T09:00:00.000Z', text: 't', kind: 'note', readBy: {} }],
+    });
+    setWorks([entry]);
+    render(<Harness onActivateWork={onActivateWork} onOpenSession={onOpenSession} onOpenMail={onOpenMail} />);
+
+    fireEvent.click(document.querySelector('[data-work-key]') as HTMLElement);
+    expect(onActivateWork).toHaveBeenCalledWith(keyOf(entry));
+    fireEvent.click(document.querySelector('[data-session-id="s-01"]') as HTMLElement);
+    expect(onOpenSession).toHaveBeenCalledWith(keyOf(entry), 's-01');
+    fireEvent.click(screen.getByText('✉1'));
+    expect(onOpenMail).toHaveBeenCalledWith(keyOf(entry));
+  });
+});
+
+describe('WorkSidebar — пересортировка под указателем (тест 6)', () => {
+  it('pointerenter, событие blocked — порядок прежний; pointerleave — работа первая', () => {
+    const older = makeWork('w-old', { createdAt: '2026-09-27T07:00:00.000Z', sessions: [makeSession('s-01', 'a')] });
+    const newer = makeWork('w-new', { createdAt: '2026-09-27T08:00:00.000Z', sessions: [makeSession('s-01', 'b')] });
+    setWorks([older, newer]);
+    render(<Harness />);
+    expect(cardKeys()).toEqual([keyOf(newer), keyOf(older)]);
+
+    fireEvent.pointerEnter(list());
+    expect(useUiStore.getState().sidebarHovering).toBe(true);
+    act(() =>
+      useActivityStore.setState({
+        byRef: activityMap([makeActivity({ projectPath: older.projectPath, workId: 'w-old', sessionId: 's-01' }, 'blocked')]),
+      }),
+    );
+    expect(cardKeys()).toEqual([keyOf(newer), keyOf(older)]);
+
+    fireEvent.pointerLeave(list());
+    expect(useUiStore.getState().sidebarHovering).toBe(false);
+    expect(cardKeys()).toEqual([keyOf(older), keyOf(newer)]);
+  });
+});
+
+describe('WorkSidebar — размонтирование под указателем (тест 15)', () => {
+  it('сайдбар закрыт (⌘B) под указателем — sidebarHovering ложно, пересортировка не ждёт 3 с', () => {
+    const older = makeWork('w-old', { createdAt: '2026-09-27T07:00:00.000Z', sessions: [makeSession('s-01', 'a')] });
+    const newer = makeWork('w-new', { createdAt: '2026-09-27T08:00:00.000Z', sessions: [makeSession('s-01', 'b')] });
+    setWorks([older, newer]);
+    render(<Harness />);
+    fireEvent.pointerEnter(list());
+    expect(useUiStore.getState().sidebarHovering).toBe(true);
+
+    act(() => setShown(false));
+    expect(useUiStore.getState().sidebarHovering).toBe(false);
+
+    act(() =>
+      useActivityStore.setState({
+        byRef: activityMap([makeActivity({ projectPath: older.projectPath, workId: 'w-old', sessionId: 's-01' }, 'blocked')]),
+      }),
+    );
+    // Без таймеров: новый порядок в сторе сразу.
+    const order = useSidebarSectionsStore.getState().sections.flatMap((section) => section.works.map(keyOf));
+    expect(order).toEqual([keyOf(older), keyOf(newer)]);
+  });
+});
+
+describe('WorkSidebar — верх (тесты 8, 16)', () => {
+  it('Search с подписью ⌘K открывает палитру; ⌘J нет', () => {
+    setWorks([makeWork('w-1')]);
+    render(<Harness />);
+    const search = screen.getByRole('button', { name: /Search/ });
+    expect(within(search).getByText('⌘K')).toBeTruthy();
+    expect(screen.queryByText('⌘J')).toBeNull();
+    fireEvent.click(search);
+    expect(useUiStore.getState().paletteOpen).toBe(true);
+  });
+
+  it('«+ workspace» и «+» заголовка проекта открывают форму новой работы (openNewWorkDialog), без сворачивания группы', () => {
+    setWorks([makeWork('w-1', { projectPath: '/p/one' })]);
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: /\+ workspace/ }));
+    expect(useUiStore.getState().dialogs.newWork).toBe(true);
+
+    act(() => useUiStore.getState().closeNewWorkDialog());
+    fireEvent.click(screen.getByRole('button', { name: S.sidebar.newWorkspaceInProject }));
+    expect(useUiStore.getState().dialogs.newWork).toBe(true);
+    expect(useUiStore.getState().ui.collapsedProjects).toEqual([]);
+  });
+
+  it('у корня сайдбара нет своей правой границы — шов рисует Resizer', () => {
+    render(<Harness />);
+    const root = document.querySelector<HTMLElement>('[data-work-sidebar]');
+    expect(root?.className).not.toMatch(/\bborder-r\b/);
+  });
+});
