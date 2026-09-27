@@ -19,6 +19,15 @@ import { orderedWorks, useWorksStore } from './store/works.js';
 import { applyTheme } from './theme/apply-theme.js';
 
 /**
+ * Запасные `fontFamily`/`fontSize` панели терминала до первого ответа
+ * `settings.get` — копия значений по умолчанию `core/src/config.ts`
+ * (кусок 1.3 плана окна, спека 4.3): рантайм `core` в песочницу рендерера не
+ * собирается, импортировать саму константу нельзя, только типы.
+ */
+const DEFAULT_FONT_FAMILY = "'SF Mono', Menlo, monospace";
+const DEFAULT_FONT_SIZE = 14;
+
+/**
  * Оболочка окна: сайдбар слева, справа — сетка панелей `Workspace` (кусок 2.1
  * плана окна; до него здесь была одна панель терминала на выбранную в
  * сайдбаре сессию). Пока хост не подключён (или не совпала версия), сайдбара
@@ -27,9 +36,13 @@ import { applyTheme } from './theme/apply-theme.js';
 export function App(): JSX.Element {
   const bridge = getHostClient();
   const [status, setStatus] = useState<HostStatus>({ state: 'connecting' });
-  // Тема применяется сразу к CSS-переменным (`applyTheme`), а сама конфигурация
-  // хранится ещё и здесь — панели терминала нужны живые `theme`/`fontFamily`/
-  // `fontSize` как значения, а не как CSS-переменные: xterm красит канвой.
+  // `applyTheme` остаётся ради палитры TUI (`config.theme`, раздел 4.9 спеки —
+  // окно её не показывает и не читает для своего облика, но старые
+  // потребители `--h-*` вроде `SettingsDialog.tsx` пока на ней), а сама
+  // конфигурация хранится ещё и здесь — панели терминала нужны живые
+  // `fontFamily`/`fontSize` как значения, а не как CSS-переменные: xterm
+  // красит канвой. Тему терминала (тёмная/светлая) панели берут из
+  // `useUiStore` напрямую (кусок 1.3 плана окна, спека 4.7), не отсюда.
   const [config, setConfig] = useState<HarnasConfig | null>(null);
 
   const workspaceRef = useRef<WorkspaceHandle>(null);
@@ -160,7 +173,7 @@ export function App(): JSX.Element {
   const newSessionWork = selectedRef ?? null;
 
   return (
-    <div className="flex h-screen flex-col bg-[var(--h-base)] text-[var(--h-text)]">
+    <div className="flex h-screen flex-col bg-background text-[var(--h-text)]">
       <InterruptedBanner bridge={bridge} />
       <div className="flex min-h-0 flex-1">
         <Sidebar
@@ -178,9 +191,8 @@ export function App(): JSX.Element {
           ref={workspaceRef}
           bridge={bridge}
           works={entries}
-          theme={config?.theme ?? 'mocha'}
-          fontFamily={config?.fontFamily ?? 'Menlo'}
-          fontSize={config?.fontSize ?? 13}
+          fontFamily={config?.fontFamily ?? DEFAULT_FONT_FAMILY}
+          fontSize={config?.fontSize ?? DEFAULT_FONT_SIZE}
         />
       </div>
       <StatusBar

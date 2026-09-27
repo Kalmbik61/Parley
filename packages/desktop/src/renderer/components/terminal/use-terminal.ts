@@ -21,7 +21,8 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../../shared/bridge.js';
 import { shouldForwardToTerminal } from '../../lib/keys.js';
-import { themeNameToXtermTheme } from './xterm-theme.js';
+import { useUiStore } from '../../store/ui.js';
+import { minimumContrastRatio, XTERM_OPTIONS, xtermTheme } from './xterm-themes.js';
 
 /** Тишина после последнего ресайза, прежде чем уйдёт `pty.resize` (спека 5.2). */
 const RESIZE_SILENCE_MS = 50;
@@ -31,7 +32,6 @@ export interface UseTerminalOptions {
   ref: SessionRef;
   /** `null`, пока контейнер ещё не смонтирован — терминал ждёт. */
   container: HTMLDivElement | null;
-  theme: string;
   fontFamily: string;
   fontSize: number;
   /**
@@ -63,8 +63,16 @@ function isHttpUrl(url: string): boolean {
 }
 
 export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
-  const { ref, container, theme, fontFamily, fontSize, visible = true } = options;
+  const { ref, container, fontFamily, fontSize, visible = true } = options;
   const [search, setSearch] = useState<SearchAddon | null>(null);
+  // Тёмность — из общего стора (кусок 1.1), не проп: тема терминала должна
+  // меняться на лету при смене `.dark`, без пересоздания хука по цепочке
+  // App → Workspace → TerminalPanel (спека 4.7).
+  const dark = useUiStore((state) => state.dark);
+  // Текущий xterm — для отдельного эффекта смены темы ниже: он не должен
+  // пересоздавать терминал, поэтому держит ссылку на уже созданный объект
+  // вместо того, чтобы быть в зависимостях эффекта создания.
+  const termRef = useRef<Terminal | null>(null);
 
   // `bridge` стабилен на весь жизненный цикл окна (один `window.harnas`, см.
   // `App.tsx`), но колбэки ниже заведены один раз на монтирование — читают
@@ -83,13 +91,16 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
     if (container === null) return;
 
     const term = new Terminal({
-      theme: themeNameToXtermTheme(theme),
+      ...XTERM_OPTIONS,
+      theme: xtermTheme(useUiStore.getState().dark),
+      minimumContrastRatio: minimumContrastRatio(useUiStore.getState().dark),
       fontFamily,
       fontSize,
       // screenReaderMode не включаем: в нём xterm игнорирует события
       // insertText, а через них приходят выбор эмодзи, диктовка и буквы с
       // диакритикой по долгому нажатию в macOS — ввод терялся бы.
     });
+    termRef.current = term;
 
     const fit = new FitAddon();
     const searchAddon = new SearchAddon();
@@ -222,13 +233,27 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
       // подключаться было бы уже не от чего, и на каждое закрытие панели
       // осело бы на один `pty.detach` меньше, чем нужно.
       setSearch(null);
+      termRef.current = null;
       term.dispose();
     };
     // Терминал заводится заново только при смене контейнера или сессии.
-    // Смена темы/шрифта на лету не поддержана: полей мало, а пересоздавать
-    // терминал на каждый ререндер `App`/`SettingsDialog` было бы заметнее
-    // пользователю, чем помощь от смены цвета без реаттача.
+    // Шрифт (`fontFamily`/`fontSize`) на лету не подхватывается: полей мало, а
+    // пересоздавать терминал на каждый ререндер `App`/`SettingsDialog` было бы
+    // заметнее пользователю, чем помощь от смены шрифта без реаттача. Тема —
+    // исключение (спека 4.7): её меняет отдельный эффект ниже через
+    // `term.options`, без пересоздания.
   }, [container, ref.projectPath, ref.workId, ref.sessionId]);
+
+  // Смена темы на лету при переключении `.dark`, без пересоздания терминала
+  // (спека 4.7): `dark` нарочно не входит в зависимости эффекта создания
+  // выше — иначе каждое переключение темы пересоздавало бы xterm и роняло
+  // его локальное состояние (скролл, выделение).
+  useEffect(() => {
+    const term = termRef.current;
+    if (term === null) return;
+    term.options.theme = xtermTheme(dark);
+    term.options.minimumContrastRatio = minimumContrastRatio(dark);
+  }, [dark]);
 
   // Подключение к хосту следует видимости, а не монтированию: невидимая
   // вкладка отцепляется (без потери самого xterm выше), видимая — цепляется

@@ -20,12 +20,15 @@ import { Workspace, type WorkspaceHandle } from './Workspace.js';
 const state = vi.hoisted(() => ({ terminals: [] as unknown[] }));
 
 vi.mock('@xterm/xterm', () => ({
-  Terminal: vi.fn().mockImplementation(() => {
+  Terminal: vi.fn().mockImplementation((initialOptions: Record<string, unknown>) => {
     const instance = {};
     state.terminals.push(instance);
     return {
       cols: 80,
       rows: 24,
+      // `use-terminal.ts` меняет тему на лету через `options.theme` — без
+      // этого объекта присвоение упало бы (`Cannot set properties of undefined`).
+      options: { ...initialOptions },
       open: () => {},
       loadAddon: () => {},
       write: () => {},
@@ -123,7 +126,7 @@ afterEach(() => {
 
 function renderWorkspace(): { current: WorkspaceHandle | null } {
   const handle: { current: WorkspaceHandle | null } = { current: null };
-  render(<Workspace ref={handle} bridge={bridge} works={[entry]} theme="mocha" fontFamily="Menlo" fontSize={13} />);
+  render(<Workspace ref={handle} bridge={bridge} works={[entry]} fontFamily="Menlo" fontSize={13} />);
   return handle;
 }
 

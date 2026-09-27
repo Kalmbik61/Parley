@@ -87,20 +87,20 @@ export function Sidebar({ bridge, onOpenSession, onOpenMail, onOpenRoom, onOpenC
           })) ?? []);
 
   return (
-    <div className="flex h-full w-72 shrink-0 flex-col border-r border-[var(--h-overlay)] bg-[var(--h-mantle)]">
-      <div className="flex items-center justify-between border-b border-[var(--h-overlay)] px-2 py-2">
-        <span className="text-sm font-medium text-[var(--h-text)]">Работы</span>
+    <div className="flex h-full w-72 shrink-0 flex-col border-r border-border bg-work-sidebar">
+      <div className="flex items-center justify-between border-b border-border px-2 py-2">
+        <span className="text-xs font-medium text-work-sidebar-foreground">Работы</span>
         <button
           type="button"
           onClick={openNewWorkDialog}
-          className="rounded px-2 py-1 text-xs text-[var(--h-text)] hover:bg-[var(--h-surface)]"
+          className="rounded px-2 py-1 text-xs text-work-sidebar-foreground hover:bg-work-sidebar-accent"
         >
           + работа
         </button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
         {ordered.length === 0 ? (
-          <p className="p-2 text-sm text-[var(--h-muted)]">Работ пока нет</p>
+          <p className="p-2 text-xs text-muted-foreground">Работ пока нет</p>
         ) : (
           <WorkList
             entries={ordered}

@@ -9,9 +9,12 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock('@xterm/xterm', () => ({
-  Terminal: vi.fn().mockImplementation(() => ({
+  Terminal: vi.fn().mockImplementation((initialOptions: Record<string, unknown>) => ({
     cols: 80,
     rows: 24,
+    // `use-terminal.ts` меняет тему на лету через `options.theme` — без этого
+    // объекта то присвоение упало бы (`Cannot set properties of undefined`).
+    options: { ...initialOptions },
     open: () => {},
     loadAddon: () => {},
     write: () => {},
@@ -57,7 +60,7 @@ describe('TerminalPanel', () => {
   it('строка поиска скрыта, пока не пришло меню «find»', () => {
     const bridge = createFakeBridge();
     bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
-    render(<TerminalPanel bridge={bridge} sessionRef={ref} theme="mocha" fontFamily="Menlo" fontSize={13} />);
+    render(<TerminalPanel bridge={bridge} sessionRef={ref} fontFamily="Menlo" fontSize={13} />);
 
     expect(screen.queryByPlaceholderText('Найти…')).toBeNull();
   });
@@ -65,7 +68,7 @@ describe('TerminalPanel', () => {
   it('⌘F открывает строку, Enter зовёт findNext, Escape закрывает', () => {
     const bridge = createFakeBridge();
     bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
-    render(<TerminalPanel bridge={bridge} sessionRef={ref} theme="mocha" fontFamily="Menlo" fontSize={13} />);
+    render(<TerminalPanel bridge={bridge} sessionRef={ref} fontFamily="Menlo" fontSize={13} />);
 
     act(() => bridge.emitMenu('find'));
     const input = screen.getByPlaceholderText('Найти…');

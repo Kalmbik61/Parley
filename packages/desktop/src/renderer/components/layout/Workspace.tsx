@@ -19,13 +19,14 @@
  */
 
 import 'dockview-react/dist/styles/dockview.css';
+import '../../styles/dockview.css';
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import {
   DockviewReact,
   positionToDirection,
-  themeCatppuccinMocha,
   type DockviewApi,
   type DockviewReadyEvent,
+  type DockviewTheme,
   type Direction,
   type IDockviewPanel,
 } from 'dockview-react';
@@ -57,10 +58,16 @@ export interface WorkspaceHandle {
 export interface WorkspaceProps {
   bridge: HarnasBridge;
   works: readonly WorkEntry[];
-  theme: string;
   fontFamily: string;
   fontSize: number;
 }
+
+/**
+ * Своя тема dockview вместо каталожной Catppuccin — только имя и класс:
+ * цвета берёт `styles/dockview.css` из токенов (кусок 1.3 плана окна, спека
+ * 4.7). Файл и эта тема временные: dockview целиком уходит в 2.7.
+ */
+const dockviewTheme: DockviewTheme = { name: 'harnas', className: 'dockview-theme-harnas' };
 
 interface PanelPosition {
   direction: Direction;
@@ -107,7 +114,7 @@ function specOf(panel: IDockviewPanel): PanelSpec {
 }
 
 export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Workspace(
-  { bridge, works, theme, fontFamily, fontSize },
+  { bridge, works, fontFamily, fontSize },
   handleRef,
 ) {
   const apiRef = useRef<DockviewApi | null>(null);
@@ -280,12 +287,12 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
   });
 
   return (
-    <PanelHostContext.Provider value={{ bridge, theme, fontFamily, fontSize }}>
+    <PanelHostContext.Provider value={{ bridge, fontFamily, fontSize }}>
       <div className="min-h-0 min-w-0 flex-1">
         <DockviewReact
           className="h-full w-full"
           components={PANEL_COMPONENTS}
-          theme={themeCatppuccinMocha}
+          theme={dockviewTheme}
           onReady={handleReady}
         />
       </div>

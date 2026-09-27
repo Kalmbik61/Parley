@@ -1,14 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Activity, SessionStatus } from '@harnas/core';
-import {
-  displayStatus,
-  dotColorVar,
-  dotState,
-  maxDotState,
-  stateWord,
-  STATE_WORDS,
-  type DotState,
-} from './dot-state.js';
+import { displayStatus, dotState, maxDotState, stateWord, type DotState } from './dot-state.js';
 
 const STATUSES: SessionStatus[] = ['pending', 'active', 'exited', 'done', 'failed'];
 const ACTIVITIES: Array<Activity | null> = ['working', 'blocked', 'unseen', 'idle', null];
@@ -66,21 +58,6 @@ describe('maxDotState', () => {
   });
 });
 
-describe('STATE_WORDS', () => {
-  it('слово есть у каждого состояния', () => {
-    const states: DotState[] = ['working', 'blocked', 'unseen', 'idle', 'pending', 'exited', 'done', 'failed'];
-    for (const state of states) {
-      expect(STATE_WORDS[state]).toBeTypeOf('string');
-      expect(STATE_WORDS[state].length).toBeGreaterThan(0);
-    }
-  });
-
-  it('blocked и unseen совпадают с заголовками уведомлений', () => {
-    expect(STATE_WORDS.blocked).toBe('ждёт ответа');
-    expect(STATE_WORDS.unseen).toBe('закончила ход');
-  });
-});
-
 describe('stateWord', () => {
   // Тест 6 куска 1.2 плана: девять строк таблицы спеки 4.2 (`exited` даёт две
   // строки — по `lifecycle`). Второй параметр для остальных состояний не
@@ -119,18 +96,5 @@ describe('stateWord', () => {
 
   it('failed → «сбой»', () => {
     expect(stateWord('failed', 'closed')).toBe('сбой');
-  });
-});
-
-describe('dotColorVar', () => {
-  it('у done цвета нет', () => {
-    expect(dotColorVar('done')).toBeNull();
-  });
-
-  it('у остальных состояний цвет есть', () => {
-    const states: DotState[] = ['working', 'blocked', 'unseen', 'idle', 'pending', 'exited', 'failed'];
-    for (const state of states) {
-      expect(dotColorVar(state)).not.toBeNull();
-    }
   });
 });

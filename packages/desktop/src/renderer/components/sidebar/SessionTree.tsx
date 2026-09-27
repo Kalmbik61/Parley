@@ -12,15 +12,16 @@
  * сессия, стоит сразу под её строкой; комната человека — прямо под работой,
  * тем же уровнем, что и «вся почта работы» (строка человека рисуется первой,
  * до дерева сессий, — так же, как «вся почта работы» до куска 3.6). Закрытая
- * сессия (`lifecycle === 'closed'`) — тусклая, слово состояния заменяется на
- * «закрыта»: `displayStatus` этого не различает, он сворачивает `closed` в
- * `exited`/`done`/`failed` того же вида, что и у спящей без итога
- * (`lib/dot-state.ts`), а в дереве это два разных состояния сессии.
+ * сессия (`lifecycle === 'closed'`) — тусклая, слово состояния — «закрыта»
+ * (`stateWord`, кусок 1.2/1.3, спека 4.2): `displayStatus`/`dotState` этого не
+ * различают, они сворачивают `closed` в `exited`/`done`/`failed` того же вида,
+ * что и у спящей без итога (`lib/dot-state.ts`), поэтому `stateWord` берёт
+ * `session.lifecycle` отдельным аргументом, а не только собранное состояние.
  */
 
 import type { Room, WorkSession } from '@harnas/core';
 import { refKey, type SessionRef } from '@harnas/protocol';
-import { displayStatus, dotState, STATE_WORDS } from '../../lib/dot-state.js';
+import { displayStatus, dotState, stateWord } from '../../lib/dot-state.js';
 import { sessionRowLabel } from '../../lib/participant.js';
 import { treeOrder, workKey } from '../../lib/tree-order.js';
 import type { ActivityEntry } from '../../store/activity.js';
@@ -47,7 +48,7 @@ function RoomRow({ room, depth, onOpen }: RoomRowProps): JSX.Element {
       onClick={onOpen}
       data-room-id={room.id}
       style={{ paddingLeft: `${depth * 12 + 8}px` }}
-      className="flex min-w-0 cursor-default items-center gap-2 rounded px-2 py-1 text-sm text-[var(--h-subtext)] hover:bg-[var(--h-surface)]"
+      className="flex h-6 min-w-0 cursor-default items-center gap-2 rounded px-2 text-[11px] text-muted-foreground hover:bg-work-sidebar-accent"
     >
       <span className="w-2 shrink-0" />
       <span className="min-w-0 flex-1 truncate">{room.title}</span>
@@ -125,7 +126,7 @@ export function SessionTree({
           role="button"
           tabIndex={0}
           onClick={onOpenMail}
-          className="flex min-w-0 cursor-default items-center gap-2 rounded px-2 py-1 pl-2 text-sm text-[var(--h-subtext)] hover:bg-[var(--h-surface)]"
+          className="flex h-6 min-w-0 cursor-default items-center gap-2 rounded px-2 text-[11px] text-muted-foreground hover:bg-work-sidebar-accent"
         >
           <span className="w-2 shrink-0" />
           <span className="min-w-0 flex-1 truncate">Вся почта работы</span>
@@ -173,22 +174,22 @@ export function SessionTree({
                 data-selected={selected}
                 onClick={() => onSelect(session)}
                 style={{ paddingLeft: `${depth * 12 + 8}px` }}
-                className={`flex min-w-0 cursor-default items-center gap-2 rounded px-2 py-1 text-sm ${
+                className={`flex h-6 min-w-0 cursor-default items-center gap-2 rounded px-2 text-[11px] ${
                   selected
-                    ? 'bg-[var(--h-selection)] text-[var(--h-text)]'
+                    ? 'bg-work-sidebar-accent text-work-sidebar-accent-foreground'
                     : closed
-                      ? 'text-[var(--h-muted)] opacity-60 hover:bg-[var(--h-surface)]'
-                      : 'text-[var(--h-subtext)] hover:bg-[var(--h-surface)]'
+                      ? 'text-muted-foreground opacity-60 hover:bg-work-sidebar-accent'
+                      : 'text-work-sidebar-foreground hover:bg-work-sidebar-accent'
                 }`}
               >
-                <StatusDot state={state} />
+                <StatusDot state={state} lifecycle={session.lifecycle} />
                 <span className="min-w-0 flex-1 truncate">{label}</span>
                 {trustWait ? (
-                  <span title="не отвечает с запуска — возможно, ждёт доверия к папке" className="shrink-0 text-[var(--h-yellow)]">
+                  <span title="не отвечает с запуска — возможно, ждёт доверия к папке" className="shrink-0 text-yellow-500">
                     ⚠
                   </span>
                 ) : null}
-                <span className="shrink-0 truncate text-xs text-[var(--h-muted)]">{closed ? 'закрыта' : STATE_WORDS[state]}</span>
+                <span className="shrink-0 truncate text-[11px] text-muted-foreground">{stateWord(state, session.lifecycle)}</span>
               </div>
             </SessionMenu>
             {selected ? <MetricsLine metrics={entry?.metrics ?? null} /> : null}

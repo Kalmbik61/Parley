@@ -1,12 +1,10 @@
 /**
  * Состояние точки сессии/работы: activity живой сессии или её жизненный цикл.
  * `dotState` и `maxDotState` перенесены из
- * `tui/src/components/activity-dot.tsx` дословно (дизайн TUI v2, 4.1). Слова
- * состояний — новые: в TUI на них не было места (там точку подписывала одна
- * буква, `stateLetter`), в окне рядом с точкой есть колонка под слово (кусок
- * 1.10 плана окна, «строка: точка, S03, ярлык, слово состояния»). Тексты
- * `blocked`/`unseen` совпадают с заголовками уведомлений («S03 ждёт ответа» /
- * «S03 закончила ход») намеренно — то же состояние, тот же текст.
+ * `tui/src/components/activity-dot.tsx` дословно (дизайн TUI v2, 4.1). Слово
+ * состояния рядом с точкой — `stateWord` ниже (спека 4.2, кусок 1.2 плана
+ * окна): в TUI на него не было места (там точку подписывала одна буква,
+ * `stateLetter`).
  */
 
 import type { Activity, SessionLifecycle, SessionStatus, WorkSession } from '@harnas/core';
@@ -65,25 +63,14 @@ export function maxDotState(states: readonly DotState[]): DotState | null {
   return best;
 }
 
-/** Слово состояния рядом с точкой в строке сайдбара. */
-export const STATE_WORDS: Readonly<Record<DotState, string>> = {
-  working: 'работает',
-  blocked: 'ждёт ответа',
-  unseen: 'закончила ход',
-  idle: 'простаивает',
-  pending: 'не запущена',
-  exited: 'вышла',
-  done: 'готово',
-  failed: 'ошибка',
-};
-
 /**
  * Слово состояния рядом со значком — колонка таблицы спеки 4.2 (кусок 1.2
- * плана окна; используют куски 1.3 и 3.3). Отдельно от старого `STATE_WORDS`
- * намеренно: тексты спеки 4.2 другие («ждёт тебя», не «ждёт ответа», и т. д.),
- * а `STATE_WORDS`/`dotColorVar` — код прежней палитры `--h-*` (раздел 4.9
- * спеки), который уходит только в 1.3. У `exited` слово решает `lifecycle`:
- * «закрыта» для `closed`, иначе — «спит» (сессия жива, просто не выведена).
+ * плана окна; используют куски 1.3 и 3.3). Заменяет прежние `STATE_WORDS`
+ * (тексты спеки 4.2 другие: «ждёт тебя», не «ждёт ответа», и т. д.) и
+ * `dotColorVar` — код прежней палитры `--h-*` (раздел 4.9 спеки), который
+ * ушёл в 1.3 вместе с их последними потребителями (`SessionTree.tsx`,
+ * `StatusDot.tsx`). У `exited` слово решает `lifecycle`: «закрыта» для
+ * `closed`, иначе — «спит» (сессия жива, просто не выведена).
  */
 export function stateWord(state: DotState, lifecycle: SessionLifecycle): string {
   switch (state) {
@@ -103,29 +90,5 @@ export function stateWord(state: DotState, lifecycle: SessionLifecycle): string 
       return 'готово';
     case 'failed':
       return 'сбой';
-  }
-}
-
-/**
- * Цвет точки по палитре (CSS-переменные темы — `theme/palettes.ts`). Роли те
- * же, что и в `tui/src/theme/roles.ts`: `warn` — жёлтый, `unseen` — синий,
- * `fail` — красный. У `done` цвета нет (точка не рисуется).
- */
-export function dotColorVar(state: DotState): string | null {
-  switch (state) {
-    case 'blocked':
-      return 'var(--h-yellow)';
-    case 'unseen':
-      return 'var(--h-blue)';
-    case 'failed':
-      return 'var(--h-red)';
-    case 'working':
-    case 'idle':
-    case 'pending':
-    case 'exited':
-      return 'var(--h-muted)';
-    case 'done':
-      // Работа закончена отчётом — цвет ей не нужен (перенос из TUI, макеты §6).
-      return null;
   }
 }

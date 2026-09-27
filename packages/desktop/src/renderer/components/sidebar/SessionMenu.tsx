@@ -1,15 +1,23 @@
 /**
- * Меню строки сессии (Radix ContextMenu, кусок 1.10 плана окна, «Закрыть…» и
- * «Создать комнату с…» — кусок 3.6): «Открыть» всегда, «Возобновить» у
- * `exited`/`done`/`failed`, «Остановить», «Закрыть…» и «Удалить» — с
- * подтверждением через `ConfirmDialog` (тест 4 куска 3.6: без подтверждения
- * «Закрыть…» ничего не шлёт). Уже закрытую сессию закрывать повторно незачем —
- * пункт скрыт (спека 5.1: закрытая сессия и так тусклая в дереве).
+ * Меню строки сессии (кусок 1.10 плана окна; «Закрыть…» и «Создать комнату
+ * с…» — кусок 3.6): «Открыть» всегда, «Возобновить» у `exited`/`done`/`failed`,
+ * «Остановить», «Закрыть…» и «Удалить» — с подтверждением через `ConfirmDialog`
+ * (тест 4 куска 3.6: без подтверждения «Закрыть…» ничего не шлёт). Уже
+ * закрытую сессию закрывать повторно незачем — пункт скрыт (спека 5.1:
+ * закрытая сессия и так тусклая в дереве). С куска 1.3 плана окна — на общих
+ * примитивах `ui/context-menu` (облик «стекло», спека 4.5) вместо голого
+ * `@radix-ui/react-context-menu`; пункты и их условия те же.
  */
 
 import { useState, type ReactNode } from 'react';
-import * as ContextMenu from '@radix-ui/react-context-menu';
 import type { SessionStatus } from '@harnas/core';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '../../ui/context-menu.js';
 import { ConfirmDialog } from '../dialogs/ConfirmDialog.js';
 
 const RESUMABLE: ReadonlySet<SessionStatus> = new Set(['exited', 'done', 'failed']);
@@ -50,64 +58,26 @@ export function SessionMenu({
 
   return (
     <>
-      <ContextMenu.Root>
-        <ContextMenu.Trigger asChild>{children}</ContextMenu.Trigger>
-        <ContextMenu.Portal>
-          <ContextMenu.Content className="min-w-40 rounded-md bg-[var(--h-mantle)] p-1 text-sm text-[var(--h-text)] shadow-lg">
-            <ContextMenu.Item
-              className="cursor-default rounded px-2 py-1 outline-none data-[highlighted]:bg-[var(--h-selection)]"
-              onSelect={onOpen}
-            >
-              Открыть
-            </ContextMenu.Item>
-            {RESUMABLE.has(status) ? (
-              <ContextMenu.Item
-                className="cursor-default rounded px-2 py-1 outline-none data-[highlighted]:bg-[var(--h-selection)]"
-                onSelect={onResume}
-              >
-                Возобновить
-              </ContextMenu.Item>
-            ) : null}
-            {STOPPABLE.has(status) ? (
-              <ContextMenu.Item
-                className="cursor-default rounded px-2 py-1 outline-none data-[highlighted]:bg-[var(--h-selection)]"
-                onSelect={() => setConfirm('stop')}
-              >
-                Остановить
-              </ContextMenu.Item>
-            ) : null}
-            {!closed ? (
-              <ContextMenu.Item
-                className="cursor-default rounded px-2 py-1 outline-none data-[highlighted]:bg-[var(--h-selection)]"
-                onSelect={() => setConfirm('close')}
-              >
-                Закрыть…
-              </ContextMenu.Item>
-            ) : null}
-            <ContextMenu.Item
-              className="cursor-default rounded px-2 py-1 outline-none data-[highlighted]:bg-[var(--h-selection)]"
-              onSelect={onCreateRoom}
-            >
-              Создать комнату с…
-            </ContextMenu.Item>
-            {hasWorktree ? (
-              <ContextMenu.Item
-                className="cursor-default rounded px-2 py-1 outline-none data-[highlighted]:bg-[var(--h-selection)]"
-                onSelect={onOpenChanges}
-              >
-                Изменения
-              </ContextMenu.Item>
-            ) : null}
-            <ContextMenu.Separator className="my-1 h-px bg-[var(--h-overlay)]" />
-            <ContextMenu.Item
-              className="cursor-default rounded px-2 py-1 text-[var(--h-red)] outline-none data-[highlighted]:bg-[var(--h-selection)]"
-              onSelect={() => setConfirm('delete')}
-            >
-              Удалить
-            </ContextMenu.Item>
-          </ContextMenu.Content>
-        </ContextMenu.Portal>
-      </ContextMenu.Root>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem onSelect={onOpen}>Открыть</ContextMenuItem>
+          {RESUMABLE.has(status) ? <ContextMenuItem onSelect={onResume}>Возобновить</ContextMenuItem> : null}
+          {STOPPABLE.has(status) ? (
+            <ContextMenuItem onSelect={() => setConfirm('stop')}>Остановить</ContextMenuItem>
+          ) : null}
+          {!closed ? <ContextMenuItem onSelect={() => setConfirm('close')}>Закрыть…</ContextMenuItem> : null}
+          <ContextMenuItem onSelect={onCreateRoom}>Создать комнату с…</ContextMenuItem>
+          {hasWorktree ? <ContextMenuItem onSelect={onOpenChanges}>Изменения</ContextMenuItem> : null}
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            className="text-destructive focus:bg-destructive focus:text-destructive-foreground"
+            onSelect={() => setConfirm('delete')}
+          >
+            Удалить
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
 
       <ConfirmDialog
         open={confirm === 'stop'}

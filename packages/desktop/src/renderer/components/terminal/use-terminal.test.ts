@@ -6,9 +6,11 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import type { SessionRef } from '@harnas/protocol';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
+import { useUiStore } from '../../store/ui.js';
+import { minimumContrastRatio, xtermTheme } from './xterm-themes.js';
 import { useTerminal } from './use-terminal.js';
 
 interface FakeTerminalInstance {
@@ -20,6 +22,8 @@ interface FakeTerminalInstance {
   selection: string;
   onDataHandler: ((data: string) => void) | null;
   keyHandler: ((event: { type: string; metaKey: boolean; key: string }) => boolean) | null;
+  /** `use-terminal.ts` меняет тему на лету через `options.theme`/`options.minimumContrastRatio` (тест 2 куска 1.3). */
+  options: Record<string, unknown>;
 }
 
 const state = vi.hoisted(() => ({
@@ -31,7 +35,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock('@xterm/xterm', () => ({
-  Terminal: vi.fn().mockImplementation(() => {
+  Terminal: vi.fn().mockImplementation((initialOptions: Record<string, unknown>) => {
     const instance: FakeTerminalInstance = {
       cols: 80,
       rows: 24,
@@ -41,6 +45,7 @@ vi.mock('@xterm/xterm', () => ({
       selection: '',
       onDataHandler: null,
       keyHandler: null,
+      options: { ...initialOptions },
     };
     state.terminals.push(instance);
     return {
@@ -50,6 +55,9 @@ vi.mock('@xterm/xterm', () => ({
       get rows() {
         return instance.rows;
       },
+      // Один и тот же объект, что и в `instance.options` — присвоение через
+      // `term.options.theme = …` в хуке обязано быть видно в `state.terminals`.
+      options: instance.options,
       open: () => {},
       loadAddon: () => {},
       write: (data: string) => instance.writes.push(data),
@@ -128,7 +136,7 @@ function renderTerminal(bridge: FakeBridge, sessionRef: SessionRef = ref) {
   const container = document.createElement('div');
   document.body.appendChild(container);
   return renderHook(() =>
-    useTerminal({ bridge, ref: sessionRef, container, theme: 'mocha', fontFamily: 'Menlo', fontSize: 13 }),
+    useTerminal({ bridge, ref: sessionRef, container, fontFamily: 'Menlo', fontSize: 13 }),
   );
 }
 
@@ -271,5 +279,29 @@ describe('useTerminal — размонтирование', () => {
       { method: 'pty.detach', params: { ref } },
     ]);
     expect(state.terminals[0]?.disposed).toBe(true);
+  });
+});
+
+describe('useTerminal — тема на лету (тест 2 куска 1.3)', () => {
+  it('setDark меняет options.theme и options.minimumContrastRatio без пересоздания терминала', async () => {
+    act(() => useUiStore.getState().setDark(false));
+    try {
+      const bridge = createFakeBridge();
+      bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
+      renderTerminal(bridge);
+      await waitFor(() => expect(state.terminals).toHaveLength(1));
+      const term = state.terminals[0];
+      expect(term?.options.theme).toEqual(xtermTheme(false));
+
+      act(() => useUiStore.getState().setDark(true));
+
+      expect(term?.options.theme).toEqual(xtermTheme(true));
+      expect(term?.options.minimumContrastRatio).toBe(minimumContrastRatio(true));
+      // Ни dispose, ни новый Terminal не звались — тот же самый объект.
+      expect(term?.disposed).toBe(false);
+      expect(state.terminals).toHaveLength(1);
+    } finally {
+      act(() => useUiStore.getState().setDark(false));
+    }
   });
 });

@@ -13,7 +13,6 @@ import { useTerminal } from './use-terminal.js';
 export interface TerminalPanelProps {
   bridge: HarnasBridge;
   sessionRef: SessionRef;
-  theme: string;
   fontFamily: string;
   fontSize: number;
   /** Видна ли панель в сетке (кусок 2.1 плана окна) — по умолчанию видна. */
@@ -23,13 +22,12 @@ export interface TerminalPanelProps {
 export function TerminalPanel({
   bridge,
   sessionRef,
-  theme,
   fontFamily,
   fontSize,
   visible = true,
 }: TerminalPanelProps): JSX.Element {
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
-  const { search } = useTerminal({ bridge, ref: sessionRef, container, theme, fontFamily, fontSize, visible });
+  const { search } = useTerminal({ bridge, ref: sessionRef, container, fontFamily, fontSize, visible });
 
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -46,7 +44,7 @@ export function TerminalPanel({
   return (
     <div className="relative flex h-full min-w-0 flex-1 flex-col">
       {searchOpen ? (
-        <div className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded border border-[var(--h-overlay)] bg-[var(--h-mantle)] px-2 py-1">
+        <div className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded border border-border bg-popover px-2 py-1">
           <input
             autoFocus
             value={query}
@@ -56,11 +54,17 @@ export function TerminalPanel({
               if (event.key === 'Escape') setSearchOpen(false);
             }}
             placeholder="Найти…"
-            className="w-48 bg-transparent text-sm text-[var(--h-text)] outline-none"
+            className="w-48 bg-transparent text-sm text-popover-foreground outline-none"
           />
         </div>
       ) : null}
-      <div ref={setContainer} className="min-h-0 flex-1" />
+      {/* Отступ 4px — на обёртке, а не на самом контейнере xterm (спека 4.7):
+          FitAddon меряет ширину/высоту РОДИТЕЛЯ терминала и вычитает падинг
+          только у своего собственного элемента, так что падинг контейнера он
+          бы не заметил и обрезал бы контент по краю. */}
+      <div className="min-h-0 flex-1 p-1">
+        <div ref={setContainer} className="h-full w-full" />
+      </div>
     </div>
   );
 }

@@ -30,7 +30,6 @@ import { workKey } from '../../lib/tree-order.js';
 
 export interface PanelHostContextValue {
   bridge: HarnasBridge;
-  theme: string;
   fontFamily: string;
   fontSize: number;
 }
@@ -73,7 +72,6 @@ function TerminalPanelContent({ api, params }: IDockviewPanelProps<PanelSpec>): 
     <TerminalPanel
       bridge={host.bridge}
       sessionRef={ref}
-      theme={host.theme}
       fontFamily={host.fontFamily}
       fontSize={host.fontSize}
       visible={visible}

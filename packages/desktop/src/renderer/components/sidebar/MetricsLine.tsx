@@ -9,5 +9,5 @@ export interface MetricsLineProps {
 
 export function MetricsLine({ metrics }: MetricsLineProps): JSX.Element | null {
   if (metrics === null) return null;
-  return <div className="truncate pl-6 text-xs text-[var(--h-muted)]">{formatMetricsLine(metrics)}</div>;
+  return <div className="truncate pl-6 text-[11px] text-muted-foreground">{formatMetricsLine(metrics)}</div>;
 }

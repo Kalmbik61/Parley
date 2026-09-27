@@ -22,14 +22,14 @@ export interface StatusBarProps {
 
 export function StatusBar({ status, lastNotice, wakePaused, onToggleWake }: StatusBarProps): JSX.Element {
   return (
-    <div className="flex h-8 shrink-0 items-center justify-between gap-3 border-t border-[var(--h-overlay)] bg-[var(--h-mantle)] px-3 text-xs text-[var(--h-subtext)]">
+    <div className="flex h-6 shrink-0 items-center justify-between gap-3 border-t border-border bg-card px-3 text-xs text-muted-foreground">
       <span className="min-w-0 flex-1 truncate">{lastNotice?.text ?? ''}</span>
       <span className="shrink-0">{CONNECTION_TEXT[status.state](status)}</span>
       <button
         type="button"
         onClick={onToggleWake}
         disabled={wakePaused === null}
-        className="shrink-0 rounded px-2 py-0.5 text-[var(--h-text)] hover:bg-[var(--h-surface)] disabled:opacity-50"
+        className="shrink-0 rounded px-2 py-0.5 text-foreground hover:bg-accent disabled:opacity-50"
       >
         {wakePaused === true ? 'будильник на паузе' : 'будильник работает'}
       </button>
