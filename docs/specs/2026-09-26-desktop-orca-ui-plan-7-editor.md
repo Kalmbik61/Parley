@@ -665,7 +665,10 @@ errors: { actions: { readFolder: 'read folder' } },
   - `renderer/sidebar/SessionRowMenu.tsx` и тест — «Delete» сессии сначала закрывает её
     вкладки `file:w:<id>:*`;
   - `src/shared/strings.ts` — строки ниже;
-  - `TODOS.md` — вопрос при закрытии окна (ниже).
+  - `src/main/window.ts` и тест, `src/shared/bridge.ts`, `src/preload/index.ts`,
+    `renderer/test-utils/fake-bridge.ts` — вопрос при закрытии окна (ниже): каналы
+    `app:dirty-buffers` (рендерер → main, число грязных буферов) и `app:confirm-close` /
+    `app:close-answer`.
 
 **Интерфейсы**
 
@@ -801,9 +804,16 @@ files: {
     подтверждения — `requestCloseTabs` её вкладок `file:w:<id>:*`, «Отмена» —
     `sessions.delete` нет;
   - раскладка работы не гидрирована — ни её вкладок, ни буферов нет, вопроса нет.
-- **Закрытие окна**, ⌘Q и перезагрузка бросают несохранённые буферы без вопроса. Вопрос
-  (`beforeunload` в рендерере и `will-prevent-unload` в main) в MVP не входит — строка в
-  `TODOS.md`.
+- **Закрытие окна**, ⌘Q и перезагрузка с несохранёнными буферами спрашивают в самом окне
+  (решение контролёра: потеря правок молча недопустима, а родной диалог `beforeunload`
+  E2E не нажать). Рендерер держит main в курсе числа грязных буферов (`app:dirty-buffers`
+  при каждом изменении). Main на `close` окна (⌘Q — через него же, `before-quit`),
+  если число больше нуля, зовёт `preventDefault` и шлёт `app:confirm-close`; рендерер
+  показывает тот же `SaveChangesDialog` по всем грязным буферам (`Save all` / `Don't save` /
+  `Cancel`, тексты из `S`) и отвечает `app:close-answer`: `Save all` — сохранить и закрыть,
+  если все записи удались (ошибка — окно остаётся, тост); `Don't save` — закрыть; `Cancel` —
+  окно остаётся. Нет грязных буферов — окно закрывается сразу, вопроса нет (E2E без правок
+  не меняются). Перезагрузка из меню — тот же путь.
 - **Точка «не сохранён»** — `tabMeta` берёт её из `extras.dirtyTabIds` (4.2):
   `useTabMetaExtras` кладёт туда `bufferKey` грязных буферов, а `tabMeta` ищет
   `bufferKey(workKey(entry…), tab.id)`. По одному `tabId` грязный буфер одной работы
@@ -852,6 +862,12 @@ files: {
      `docs/index.ts`, одиночный `a.ts` — `a.ts`.
 10. `fileKind`: `README.MD` → `markdown`, `x.tsv` → `tsv`, `logo.SVG` → `image`,
     `a.pdf` → `pdf`, `Makefile` → `text`.
+11. Закрытие окна (`main/window.ts`, подставной `BrowserWindow`): грязных буферов 0 —
+    `close` без `preventDefault`; 2 — `preventDefault` и `app:confirm-close`; ответ
+    `Don't save` — окно закрыто; `Cancel` — нет; `Save all` с ошибкой записи — окно
+    остаётся, тост. Рендерер: `app:confirm-close` открывает `SaveChangesDialog` по всем
+    грязным буферам. E2E: правка файла → закрыть окно → вопрос в окне → `Don't save` →
+    приложение закрылось.
 
 **Приёмка**
 - [ ] Все тесты зелёные.
