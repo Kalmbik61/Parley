@@ -1,8 +1,14 @@
+import { EventEmitter } from 'node:events';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import type { IpcMain } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { FilesDeniedError, type RootsRegistry } from '../roots.js';
+import type { GitRunner } from './git-api.js';
 import { registerFilesIpc } from './ipc.js';
+import type { WatchFs } from './watch.js';
 
 /** Подставной `ipcMain`, как в `main/ipc.test.ts`. */
 class FakeIpcMain {
@@ -13,13 +19,66 @@ class FakeIpcMain {
   }
 
   invoke(channel: string, ...args: unknown[]): unknown {
+    return this.invokeFrom(new FakeSender(), channel, ...args);
+  }
+
+  invokeFrom(sender: FakeSender, channel: string, ...args: unknown[]): unknown {
     const handler = this.handlers.get(channel);
     if (!handler) throw new Error(`нет обработчика для ${channel}`);
-    return handler({}, ...args);
+    return handler({ sender }, ...args);
   }
 }
 
-function setup(): { ipcMain: FakeIpcMain; roots: { [K in keyof RootsRegistry]: ReturnType<typeof vi.fn> } } {
+/** Подставной `webContents` окна: события навигации и закрытия, журнал `send`. */
+class FakeSender extends EventEmitter {
+  static next = 1;
+  readonly id = FakeSender.next++;
+  readonly sent: Array<[string, unknown]> = [];
+  destroyed = false;
+
+  send(channel: string, payload: unknown): void {
+    this.sent.push([channel, payload]);
+  }
+
+  isDestroyed(): boolean {
+    return this.destroyed;
+  }
+}
+
+/** Подставной git: rev-parse — корень без prefix, grep висит до отмены, прочее — пустой ответ. */
+function fakeGit(): GitRunner & { run: ReturnType<typeof vi.fn> } {
+  const empty = { code: 0, stdout: Buffer.alloc(0), stderr: '', truncated: false };
+  return {
+    run: vi.fn(async (args: string[], _cwd: string, options?: { signal?: AbortSignal }) => {
+      if (args.includes('rev-parse')) return { ...empty, stdout: Buffer.from('\n') };
+      if (args.includes('grep')) {
+        return new Promise<Awaited<ReturnType<GitRunner['run']>>>((resolve) => {
+          const done = (): void => resolve({ ...empty, code: null });
+          if (options?.signal?.aborted) done();
+          options?.signal?.addEventListener('abort', done, { once: true });
+        });
+      }
+      return empty;
+    }),
+  };
+}
+
+function fakeWatchFs(): WatchFs & {
+  mock: { calls: unknown[][] };
+  watchers: Array<{ close: ReturnType<typeof vi.fn>; listener: (event: string, filename: string | null) => void }>;
+} {
+  const watchers: Array<{ close: ReturnType<typeof vi.fn>; listener: (event: string, filename: string | null) => void }> = [];
+  const fn = vi.fn((_target: string, _options: unknown, listener: (event: string, filename: string | null) => void) => {
+    const watcher = Object.assign(new EventEmitter(), { close: vi.fn() });
+    watchers.push({ close: watcher.close, listener });
+    return watcher;
+  });
+  return Object.assign(fn, { watchers }) as unknown as ReturnType<typeof fakeWatchFs>;
+}
+
+function setup(
+  extra: { rootPath?: string; git?: GitRunner; watchFs?: WatchFs } = {},
+): { ipcMain: FakeIpcMain; roots: { [K in keyof RootsRegistry]: ReturnType<typeof vi.fn> } } {
   const ipcMain = new FakeIpcMain();
   const roots = {
     resolve: vi.fn().mockRejectedValue(new FilesDeniedError('outside')),
@@ -28,10 +87,23 @@ function setup(): { ipcMain: FakeIpcMain; roots: { [K in keyof RootsRegistry]: R
     roots: vi.fn().mockReturnValue([]),
     expandHome: vi.fn((p: string) => p),
     rootPath: vi.fn(() => {
+      if (extra.rootPath !== undefined) return extra.rootPath;
       throw new FilesDeniedError('no roots');
     }),
   };
-  registerFilesIpc({ ipcMain: ipcMain as unknown as IpcMain, roots: roots as unknown as RootsRegistry });
+  if (extra.rootPath !== undefined) {
+    const base = extra.rootPath;
+    roots.resolve.mockImplementation(async (_root: unknown, rel: string) => path.join(base, rel));
+  }
+  registerFilesIpc({
+    ipcMain: ipcMain as unknown as IpcMain,
+    roots: roots as unknown as RootsRegistry,
+    git: extra.git ?? fakeGit(),
+    spawnGrepWorker: () => {
+      throw new Error('воркер в тестах каналов не нужен');
+    },
+    ...(extra.watchFs === undefined ? {} : { watchFs: extra.watchFs }),
+  });
   return { ipcMain, roots };
 }
 
@@ -48,14 +120,21 @@ async function code(promise: unknown): Promise<string> {
 }
 
 describe('files/ipc: каналы files:stat и files:locate (кусок 5.2)', () => {
-  it('регистрирует ровно каналы 5.2 и 7.1a', () => {
+  it('регистрирует ровно каналы 5.2, 7.1a и 7.1b', () => {
     const { ipcMain } = setup();
     expect([...ipcMain.handlers.keys()].sort()).toEqual([
+      'files:cancel',
+      'files:git-show',
+      'files:git-status',
+      'files:grep',
       'files:list',
       'files:locate',
+      'files:ls-files',
       'files:read-bytes',
       'files:read-text',
       'files:stat',
+      'files:unwatch',
+      'files:watch',
       'files:write',
     ]);
   });
@@ -168,5 +247,139 @@ describe('files/ipc: list, read-text, read-bytes, write (кусок 7.1a)', () =
       expect(await code(ipcMain.invoke(channel, ...args)), `${channel} ${String(args.at(-1))}`).toBe('bad_request');
     }
     expect(roots.resolve).not.toHaveBeenCalled();
+  });
+});
+
+const QUERY = { text: 'needle', caseSensitive: false, wholeWord: false, regex: false };
+
+describe('files/ipc: git, поиск и слежение (кусок 7.1b)', () => {
+  it('проверка аргументов (тест 15): неверная форма — bad_request, git не запускался', async () => {
+    const git = fakeGit();
+    const { ipcMain, roots } = setup({ git });
+    const bad: Array<[string, ...unknown[]]> = [
+      ['files:grep', ROOT, { ...QUERY, text: '' }, 's'],
+      ['files:grep', ROOT, { ...QUERY, text: 'x'.repeat(1001) }, 's'],
+      ['files:grep', ROOT, { ...QUERY, text: 'a\0b' }, 's'],
+      ['files:grep', ROOT, { ...QUERY, text: 42 }, 's'],
+      ['files:grep', ROOT, { ...QUERY, regex: 'true' }, 's'],
+      ['files:grep', ROOT, { ...QUERY, caseSensitive: 1 }, 's'],
+      ['files:grep', ROOT, { text: 'x', caseSensitive: false, wholeWord: false }, 's'],
+      ['files:grep', ROOT, null, 's'],
+      ['files:grep', ROOT, QUERY, 's'.repeat(129)],
+      ['files:grep', ROOT, QUERY, ''],
+      ['files:grep', ROOT, QUERY, 7],
+      ['files:grep', null, QUERY, 's'],
+      ['files:cancel', 's'.repeat(129)],
+      ['files:cancel', ''],
+      ['files:cancel', null],
+      ['files:unwatch', 'i'.repeat(129)],
+      ['files:unwatch', ''],
+      ['files:watch', ROOT, 'a\0b'],
+      ['files:watch', ROOT, 42],
+      ['files:watch', null, ''],
+      ['files:ls-files', null],
+      ['files:git-status', { workKey: KEY }],
+      ['files:git-show', ROOT, '--output=/tmp/x', 'a.ts'],
+      ['files:git-show', ROOT, 'HEAD;rm', 'a.ts'],
+      ['files:git-show', ROOT, 42, 'a.ts'],
+      ['files:git-show', ROOT, 'HEAD', 'a\0b'],
+      ['files:git-show', ROOT, 'HEAD', '../x'],
+      ['files:git-show', ROOT, 'HEAD', '/etc/hosts'],
+      ['files:git-show', null, 'HEAD', 'a.ts'],
+    ];
+    for (const [channel, ...args] of bad) {
+      expect(await code(ipcMain.invoke(channel, ...args)), `${channel} ${JSON.stringify(args).slice(0, 80)}`).toBe('bad_request');
+    }
+    expect(git.run).not.toHaveBeenCalled();
+    expect(roots.resolve).not.toHaveBeenCalled();
+    // Граница: ровно 1000 символов и id в 128 — можно.
+    expect(await code(ipcMain.invoke('files:cancel', 's'.repeat(128)))).toBe('resolved');
+    expect(await code(ipcMain.invoke('files:unwatch', 'i'.repeat(128)))).toBe('resolved');
+    expect(await code(ipcMain.invoke('files:grep', ROOT, { ...QUERY, text: 'x'.repeat(1000) }, 's'.repeat(128)))).toBe('files:denied');
+  });
+
+  it('перезагрузка окна снимает его слежение и гасит незавершённый grep; закрытие — тоже (тест 13)', async () => {
+    const dir = await realpath(await mkdtemp(path.join(tmpdir(), 'harnas-filesipc-')));
+    try {
+      const git = fakeGit();
+      const watchFs = fakeWatchFs();
+      const { ipcMain } = setup({ rootPath: dir, git, watchFs });
+      const sender = new FakeSender();
+      const other = new FakeSender();
+      const id = (await ipcMain.invokeFrom(sender, 'files:watch', ROOT, '')) as string;
+      expect(typeof id).toBe('string');
+      const otherId = (await ipcMain.invokeFrom(other, 'files:watch', ROOT, '')) as string;
+      expect(watchFs.watchers).toHaveLength(1);
+
+      // Событие дерева уходит обоим окнам пачкой.
+      watchFs.watchers[0]?.listener('rename', 'src/new.ts');
+      await vi.waitFor(() => expect(sender.sent).toContainEqual(['files:tree-changed', { rootKey: `${KEY} project`, dirs: ['src'] }]));
+      expect(other.sent).toHaveLength(1);
+
+      const grep = ipcMain.invokeFrom(sender, 'files:grep', ROOT, QUERY, 'sig') as Promise<unknown>;
+      await vi.waitFor(() => expect(git.run.mock.calls.some(([args]) => (args as string[]).includes('grep'))).toBe(true));
+
+      // Навигация подкадра и внутри документа — не перезагрузка.
+      sender.emit('did-start-navigation', { isMainFrame: false, isSameDocument: false });
+      sender.emit('did-start-navigation', { isMainFrame: true, isSameDocument: true });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      let settled = false;
+      void grep.then(() => (settled = true));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(settled).toBe(false);
+
+      sender.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+      expect(await grep).toEqual({ files: [], truncated: true });
+      // Корень ещё смотрит другое окно — fs.watch жив; его подписка снимается закрытием.
+      expect(watchFs.watchers[0]?.close).not.toHaveBeenCalled();
+      // Чужой id окну не снять.
+      await ipcMain.invokeFrom(sender, 'files:unwatch', otherId);
+      expect(watchFs.watchers[0]?.close).not.toHaveBeenCalled();
+      other.destroyed = true;
+      other.emit('destroyed');
+      expect(watchFs.watchers[0]?.close).toHaveBeenCalled();
+
+      // Окно после перезагрузки подписывается заново — новый fs.watch.
+      await ipcMain.invokeFrom(sender, 'files:watch', ROOT, '');
+      expect(watchFs.watchers).toHaveLength(2);
+      void id;
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('watch корня при EMFILE — files:watch-failed (тест 13)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const dir = await realpath(await mkdtemp(path.join(tmpdir(), 'harnas-filesipc-')));
+    try {
+      const { ipcMain } = setup({
+        rootPath: dir,
+        watchFs: () => {
+          throw Object.assign(new Error('EMFILE'), { code: 'EMFILE' });
+        },
+      });
+      expect(await code(ipcMain.invoke('files:watch', ROOT, ''))).toBe('files:watch-failed');
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('cancel гасит grep этого окна по signalId', async () => {
+    const dir = await realpath(await mkdtemp(path.join(tmpdir(), 'harnas-filesipc-')));
+    try {
+      const git = fakeGit();
+      const { ipcMain } = setup({ rootPath: dir, git });
+      const sender = new FakeSender();
+      const grep = ipcMain.invokeFrom(sender, 'files:grep', ROOT, QUERY, 'sig') as Promise<unknown>;
+      await vi.waitFor(() => expect(git.run.mock.calls.some(([args]) => (args as string[]).includes('grep'))).toBe(true));
+      // Тот же signalId другого окна — не его поиск.
+      await ipcMain.invokeFrom(new FakeSender(), 'files:cancel', 'sig');
+      await ipcMain.invokeFrom(sender, 'files:cancel', 'sig');
+      expect(await grep).toEqual({ files: [], truncated: true });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

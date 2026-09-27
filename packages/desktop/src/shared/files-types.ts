@@ -48,3 +48,41 @@ export interface TextFile {
 
 /** Ответ `files.write`: `conflict` — `mtimeMs` на диске не тот, что ждал буфер; запись не сделана. */
 export type WriteResult = { ok: true; mtimeMs: number } | { ok: false; conflict: { mtimeMs: number } };
+
+/** Буква git-статуса в дереве (спека 10.1): U — неотслеживаемый; конфликт приходит как M. */
+export type GitStatusLetter = 'M' | 'A' | 'D' | 'U' | 'R';
+
+/** Запрос поиска в файлах (спека 10.3): флаги «Aa», «Слово», «.*». */
+export interface GrepQuery {
+  text: string;
+  caseSensitive: boolean;
+  wholeWord: boolean;
+  regex: boolean;
+}
+
+/** Совпадение поиска: номер строки с 1, текст строки и `[начало, конец)` совпадений в кодовых единицах. */
+export interface GrepHit {
+  line: number;
+  text: string;
+  ranges: [number, number][];
+}
+
+/** Ответ поиска: `truncated` — упёрся в предел, отменён или остановлен по времени. */
+export interface GrepResult {
+  files: Array<{ path: string; hits: GrepHit[] }>;
+  truncated: boolean;
+}
+
+/** Событие слежения за файлом: id подписки из `watch`, путь как его назвал `watch`. */
+export interface FileChangedEvent {
+  id: string;
+  path: string;
+  mtimeMs: number | null;
+  deleted: boolean;
+}
+
+/** Пачка изменений дерева корня: `rootKey` — `shared/work-keys.ts`, папки относительные, '' — корень. */
+export interface TreeChangedEvent {
+  rootKey: string;
+  dirs: string[];
+}

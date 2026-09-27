@@ -1,7 +1,19 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@harnas/protocol';
 import type { AppNote, FocusTarget, HarnasBridge, HostStatus, MenuAction } from '../shared/bridge.js';
-import type { DirEntry, FileRoot, FileStat, Located, TextFile, WriteResult } from '../shared/files-types.js';
+import type {
+  DirEntry,
+  FileChangedEvent,
+  FileRoot,
+  FileStat,
+  GitStatusLetter,
+  GrepQuery,
+  GrepResult,
+  Located,
+  TextFile,
+  TreeChangedEvent,
+  WriteResult,
+} from '../shared/files-types.js';
 import type { WorkLayout } from '../shared/layout-types.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 
@@ -10,6 +22,8 @@ const statusListeners = new Set<(status: HostStatus) => void>();
 const menuListeners = new Set<(action: MenuAction) => void>();
 const appearanceListeners = new Set<(dark: boolean) => void>();
 const focusTargetListeners = new Set<(target: FocusTarget) => void>();
+const fileChangedListeners = new Set<(e: FileChangedEvent) => void>();
+const treeChangedListeners = new Set<(e: TreeChangedEvent) => void>();
 /** Цель клика, пришедшая, пока у `onFocusTarget` не было слушателей (кусок 4.3). */
 let heldFocusTarget: FocusTarget | null = null;
 
@@ -46,6 +60,14 @@ ipcRenderer.on('app:appearance', (_event, dark: boolean) => {
 
 ipcRenderer.on('app:focus-target', (_event, target: FocusTarget) => {
   deliverFocusTarget(target);
+});
+
+ipcRenderer.on('files:changed', (_event, e: FileChangedEvent) => {
+  for (const listener of fileChangedListeners) listener(e);
+});
+
+ipcRenderer.on('files:tree-changed', (_event, e: TreeChangedEvent) => {
+  for (const listener of treeChangedListeners) listener(e);
 });
 
 /**
@@ -147,6 +169,24 @@ const bridge = {
       ipcRenderer.invoke('files:read-bytes', root, path, limit) as Promise<Uint8Array>,
     write: (root: FileRoot, path: string, text: string, expectedMtimeMs: number | null) =>
       ipcRenderer.invoke('files:write', root, path, text, expectedMtimeMs) as Promise<WriteResult>,
+    watch: (root: FileRoot, path: string) => ipcRenderer.invoke('files:watch', root, path) as Promise<string>,
+    unwatch: (id: string) => ipcRenderer.invoke('files:unwatch', id) as Promise<void>,
+    onChanged: (listener: (e: FileChangedEvent) => void) => {
+      fileChangedListeners.add(listener);
+      return () => fileChangedListeners.delete(listener);
+    },
+    onTreeChanged: (listener: (e: TreeChangedEvent) => void) => {
+      treeChangedListeners.add(listener);
+      return () => treeChangedListeners.delete(listener);
+    },
+    lsFiles: (root: FileRoot) => ipcRenderer.invoke('files:ls-files', root) as Promise<string[]>,
+    grep: (root: FileRoot, query: GrepQuery, signalId: string) =>
+      ipcRenderer.invoke('files:grep', root, query, signalId) as Promise<GrepResult>,
+    cancel: (signalId: string) => ipcRenderer.invoke('files:cancel', signalId) as Promise<void>,
+    gitShow: (root: FileRoot, rev: string, path: string) =>
+      ipcRenderer.invoke('files:git-show', root, rev, path) as Promise<TextFile | null>,
+    gitStatus: (root: FileRoot) =>
+      ipcRenderer.invoke('files:git-status', root) as Promise<Record<string, GitStatusLetter>>,
   },
 };
 

@@ -4,6 +4,8 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, nativeThem
 import type { WorksSnapshot } from '@harnas/protocol';
 import { S } from '../shared/strings.js';
 import { cleanupDrops, dropsDir, saveImage } from './drops.js';
+import { createGitRunner } from './files/git-api.js';
+import createGrepWorker from './files/grep-worker?nodeWorker';
 import { registerFilesIpc } from './files/ipc.js';
 import { HostConnection } from './host-connection.js';
 import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
@@ -282,7 +284,14 @@ if (!gotLock) {
         }
       },
     });
-    registerFilesIpc({ ipcMain, roots });
+    // git — с PATH login-shell, как хост; воркер поиска — отдельный бандл electron-vite.
+    // Слежение и поиски окна снимаются его перезагрузкой и закрытием (files/ipc.ts).
+    registerFilesIpc({
+      ipcMain,
+      roots,
+      git: createGitRunner(shellEnv.env),
+      spawnGrepWorker: () => createGrepWorker({}),
+    });
     createAppMenu(() => mainWindow);
 
     // Клик по уведомлению без окон: macOS может прислать `activate` раньше клика. Окно

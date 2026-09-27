@@ -7,7 +7,19 @@ import type {
   Result,
   SessionRef,
 } from '@harnas/protocol';
-import type { DirEntry, FileRoot, FileStat, Located, TextFile, WriteResult } from './files-types.js';
+import type {
+  DirEntry,
+  FileChangedEvent,
+  FileRoot,
+  FileStat,
+  GitStatusLetter,
+  GrepQuery,
+  GrepResult,
+  Located,
+  TextFile,
+  TreeChangedEvent,
+  WriteResult,
+} from './files-types.js';
 import type { WorkLayout } from './layout-types.js';
 import type { Appearance, UiFile } from './ui-types.js';
 
@@ -131,8 +143,9 @@ export interface HarnasBridge {
   };
   /**
    * Файловый API main (спека 10.7): `stat` и `locate` — с этапа 5, `list`, `readText`,
-   * `readBytes` и `write` — с 7.1a. Отказы — коды `files:denied`, `files:too-large`,
-   * `not_found`, `bad_request` (`decodeIpcError`).
+   * `readBytes` и `write` — с 7.1a, git, поиск и слежение — с 7.1b. Отказы — коды
+   * `files:denied`, `files:too-large`, `files:watch-failed`, `not_found`, `bad_request`
+   * (`decodeIpcError`).
    */
   files: {
     /** До 200 путей; `null` — пути нет или он вне корня. */
@@ -147,6 +160,22 @@ export interface HarnasBridge {
     readBytes(root: FileRoot, path: string, limit?: number): Promise<Uint8Array>;
     /** expectedMtimeMs: null — файла быть не должно: создать; уже есть — conflict. */
     write(root: FileRoot, path: string, text: string, expectedMtimeMs: number | null): Promise<WriteResult>;
+    /** id подписки; path '' — дерево корня. Не запустилось — `files:watch-failed`. */
+    watch(root: FileRoot, path: string): Promise<string>;
+    unwatch(id: string): Promise<void>;
+    /** Файл подписки изменился: дроссель 100 мс; `deleted` — файла нет. */
+    onChanged(listener: (e: FileChangedEvent) => void): () => void;
+    /** Пачка раз в 300 мс; rootKey — `shared/work-keys.ts`. */
+    onTreeChanged(listener: (e: TreeChangedEvent) => void): () => void;
+    /** Для ⌘P: git — отслеживаемые и новые без игнорируемых; не git — обход до 50 000. */
+    lsFiles(root: FileRoot): Promise<string[]>;
+    /** До 2000 совпадений и 200 файлов; отменён, остановлен по пределу — найденное с truncated. */
+    grep(root: FileRoot, query: GrepQuery, signalId: string): Promise<GrepResult>;
+    cancel(signalId: string): Promise<void>;
+    /** rev — HEAD или 7–40 hex с ^; null — файла или ревизии нет. */
+    gitShow(root: FileRoot, rev: string, path: string): Promise<TextFile | null>;
+    /** Пути от папки корня; не git — {}. */
+    gitStatus(root: FileRoot): Promise<Record<string, GitStatusLetter>>;
   };
 }
 

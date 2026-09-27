@@ -1,7 +1,8 @@
 /**
  * Файловый API main (спека 10.7). В 5.2 — `stat` и `locate`: на них стоят ссылки
  * терминала (спека 8.3); в 7.1a — `list`, `readText`, `readBytes` и `write` для
- * дерева и редактора; git, поиск и слежение приходят в 7.1b. Каждый путь проходит
+ * дерева и редактора; git, поиск и слежение — в 7.1b (`git-api.ts`, `watch.ts`), здесь
+ * от них только `ignored` у `list`. Каждый путь проходит
  * реестр корней (`main/roots.ts`), отказ по одному пути пачку `stat` не валит.
  */
 import { isUtf8 } from 'node:buffer';
@@ -38,6 +39,8 @@ export interface FsApi {
 export interface FsApiOptions {
   /** Случайная часть имени временного файла записи; подменяют тесты. */
   random?: () => string;
+  /** Имена папки, которые игнорирует git (`GitApi.checkIgnored`, 7.1b); без него `ignored: false`. */
+  checkIgnored?: (root: FileRoot, dir: string, names: string[]) => Promise<Set<string>>;
 }
 
 function errorCode(error: unknown): unknown {
@@ -293,7 +296,16 @@ export function createFsApi(roots: RootsRegistry, options: FsApiOptions = {}): F
             return null;
           }),
       );
-      return entries.filter((entry): entry is DirEntry => entry !== null);
+      const found = entries.filter((entry): entry is DirEntry => entry !== null);
+      let ignored = new Set<string>();
+      try {
+        // Один вызов `git check-ignore` на всю папку, а не по вызову на имя.
+        ignored = (await options.checkIgnored?.(root, dir, found.map((entry) => entry.name))) ?? ignored;
+      } catch (error) {
+        // Дерево без приглушения лучше, чем дерево без папки.
+        console.warn('[harnas] files: checkIgnored failed', error);
+      }
+      return found.map((entry) => (ignored.has(entry.name) ? { ...entry, ignored: true } : entry));
     },
 
     readText: async (root, relPath) => {

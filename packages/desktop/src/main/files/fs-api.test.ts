@@ -10,6 +10,7 @@ import { decodeIpcError } from '../../shared/ipc-error.js';
 import { workKey } from '../../shared/work-keys.js';
 import { createRootsRegistry, type RootsRegistry } from '../roots.js';
 import { createFsApi, detectText, LIMITS, writeAtomicPreservingMode } from './fs-api.js';
+import { createGitApi, createGitRunner } from './git-api.js';
 
 let dir = '';
 let project = '';
@@ -435,5 +436,37 @@ describe('раунд исправлений 1 (кусок 7.1a)', () => {
     const entries = await createFsApi(registry).list(ROOT(), 'linkdir');
     expect(entries.map((entry) => entry.name)).toEqual(['a.ts']);
     expect(entries[0]).toMatchObject({ kind: 'file', size: 3, target: null });
+  });
+});
+
+describe('files.list: ignored по git check-ignore (кусок 7.1b, тест 1)', () => {
+  it('файл и папка из .gitignore — ignored: true; папка без игнорируемых — все false, без ошибки', async () => {
+    execFileSync('git', ['init', '-q'], { cwd: project });
+    await writeFile(path.join(project, '.gitignore'), '*.log\nbuild/\n');
+    await writeFile(path.join(project, 'debug.log'), '');
+    await mkdir(path.join(project, 'build'));
+    const git = createGitApi({
+      git: createGitRunner(process.env),
+      roots: registry,
+      spawnWorker: () => {
+        throw new Error('воркер list не нужен');
+      },
+    });
+    const api = createFsApi(registry, { checkIgnored: git.checkIgnored });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const byName = new Map((await api.list(ROOT(), '')).map((entry) => [entry.name, entry.ignored]));
+    expect(Object.fromEntries(byName)).toEqual({ '.gitignore': false, 'debug.log': true, build: true, src: false });
+    // В src игнорируемых нет: check-ignore выходит с 1 — это не ошибка.
+    expect((await api.list(ROOT(), 'src')).map((entry) => entry.ignored)).toEqual([false]);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('checkIgnored отказал — ignored: false у всех и предупреждение', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const api = createFsApi(registry, { checkIgnored: async () => Promise.reject(new Error('boom')) });
+    expect((await api.list(ROOT(), 'src')).map((entry) => entry.ignored)).toEqual([false]);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
