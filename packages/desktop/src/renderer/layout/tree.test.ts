@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { GroupNode, TabSpec, WorkLayout } from '../../shared/layout-types.js';
+import type { GroupNode, LayoutNode, TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { tabId } from './ids.js';
 import {
   LIMITS,
@@ -7,6 +7,7 @@ import {
   emptyLayout,
   findTab,
   focusGroup,
+  focusTab,
   groups,
   moveTab,
   openTab,
@@ -57,6 +58,81 @@ function buildGroups(n: number): { layout: WorkLayout; groupIds: string[] } {
     groupIds.push(layout.activeGroupId);
   }
   return { layout, groupIds };
+}
+
+/**
+ * Раунд исправлений 1, Critical B: три раскладки с дублирующимся id УЗЛА (группы или
+ * сплита) вместо вкладки — их нельзя получить через публичный API (`nodeId` берёт
+ * случайные 6 hex), но `parseWorkLayout` читает `layouts.json` с диска, куда раскладка
+ * может попасть повреждённой в обход API. `twoSiblingGroups` — дубль id прямо у двух
+ * групп; `groupInsideAncestorSplit` — самый показательный: id группы совпадает с id
+ * сплита-предка, из-за чего `replaceNode` (ищет по id без учёта `type`) находит предка
+ * раньше настоящей цели и стирает всё поддерево; `twoSplitsInDifferentBranches` — тот
+ * же класс дефекта у двух сплитов.
+ */
+function duplicateNodeIdLayouts(): {
+  twoSiblingGroups: WorkLayout;
+  groupInsideAncestorSplit: WorkLayout;
+  twoSplitsInDifferentBranches: WorkLayout;
+} {
+  const tabA = freshTab();
+  const tabB = freshTab();
+  const groupA: GroupNode = { type: 'group', id: 'g-DUP', tabs: [tabA], activeTabId: tabA.id };
+  const groupB: GroupNode = { type: 'group', id: 'g-DUP', tabs: [tabB], activeTabId: tabB.id };
+  const twoSiblingGroups: WorkLayout = {
+    root: { type: 'split', id: 's-x', direction: 'row', ratio: 0.5, children: [groupA, groupB] },
+    activeGroupId: 'g-DUP',
+    closedTabs: [],
+  };
+
+  const tabC = freshTab();
+  const tabD = freshTab();
+  const tabE = freshTab();
+  const groupC: GroupNode = { type: 'group', id: 'DUP', tabs: [tabC], activeTabId: tabC.id };
+  const groupD: GroupNode = { type: 'group', id: 'g-d', tabs: [tabD], activeTabId: tabD.id };
+  const groupE: GroupNode = { type: 'group', id: 'g-e', tabs: [tabE], activeTabId: tabE.id };
+  const innerSplit: LayoutNode = {
+    type: 'split',
+    id: 's-inner',
+    direction: 'row',
+    ratio: 0.5,
+    children: [groupC, groupD],
+  };
+  const groupInsideAncestorSplit: WorkLayout = {
+    root: { type: 'split', id: 'DUP', direction: 'column', ratio: 0.5, children: [innerSplit, groupE] },
+    activeGroupId: 'DUP',
+    closedTabs: [],
+  };
+
+  const t1 = freshTab();
+  const t2 = freshTab();
+  const t3 = freshTab();
+  const t4 = freshTab();
+  const groupF: GroupNode = { type: 'group', id: 'g-f', tabs: [t1], activeTabId: t1.id };
+  const groupG: GroupNode = { type: 'group', id: 'g-g', tabs: [t2], activeTabId: t2.id };
+  const groupH: GroupNode = { type: 'group', id: 'g-h', tabs: [t3], activeTabId: t3.id };
+  const groupI: GroupNode = { type: 'group', id: 'g-i', tabs: [t4], activeTabId: t4.id };
+  const splitLeft: LayoutNode = {
+    type: 'split',
+    id: 's-SAME',
+    direction: 'row',
+    ratio: 0.5,
+    children: [groupF, groupG],
+  };
+  const splitRight: LayoutNode = {
+    type: 'split',
+    id: 's-SAME',
+    direction: 'row',
+    ratio: 0.5,
+    children: [groupH, groupI],
+  };
+  const twoSplitsInDifferentBranches: WorkLayout = {
+    root: { type: 'split', id: 's-root', direction: 'column', ratio: 0.5, children: [splitLeft, splitRight] },
+    activeGroupId: 'g-f',
+    closedTabs: [],
+  };
+
+  return { twoSiblingGroups, groupInsideAncestorSplit, twoSplitsInDifferentBranches };
 }
 
 describe('openTab', () => {
@@ -351,6 +427,62 @@ describe('splitGroup', () => {
   });
 });
 
+describe('sizes нечисловые (раунд исправлений 1, Important B)', () => {
+  // Неизвестный/неконечный размер целевой группы — как 0 у свёрнутого окна:
+  // трактуется как «места нет», а не как «места достаточно».
+  it('NaN в width (row) → too-small, раскладка та же ссылка', () => {
+    const layout = openTab(emptyLayout(), freshTab(), 'active');
+    const groupId = layout.activeGroupId;
+    const result = splitGroup(layout, groupId, 'row', freshTab(), { [groupId]: { width: NaN, height: 999 } });
+    expect(result.error).toBe('too-small');
+    expect(result.layout).toBe(layout);
+  });
+
+  it('NaN в height (column) → too-small', () => {
+    const layout = openTab(emptyLayout(), freshTab(), 'active');
+    const groupId = layout.activeGroupId;
+    const result = splitGroup(layout, groupId, 'column', freshTab(), { [groupId]: { width: 999, height: NaN } });
+    expect(result.error).toBe('too-small');
+    expect(result.layout).toBe(layout);
+  });
+
+  it('Infinity в width (row) → too-small', () => {
+    const layout = openTab(emptyLayout(), freshTab(), 'active');
+    const groupId = layout.activeGroupId;
+    const result = splitGroup(layout, groupId, 'row', freshTab(), { [groupId]: { width: Infinity, height: 999 } });
+    expect(result.error).toBe('too-small');
+    expect(result.layout).toBe(layout);
+  });
+
+  it('-Infinity в width (row) → too-small', () => {
+    const layout = openTab(emptyLayout(), freshTab(), 'active');
+    const groupId = layout.activeGroupId;
+    const result = splitGroup(layout, groupId, 'row', freshTab(), { [groupId]: { width: -Infinity, height: 999 } });
+    expect(result.error).toBe('too-small');
+    expect(result.layout).toBe(layout);
+  });
+
+  it('конечный нормальный размер по-прежнему проходит (контроль)', () => {
+    const layout = openTab(emptyLayout(), freshTab(), 'active');
+    const groupId = layout.activeGroupId;
+    const result = splitGroup(layout, groupId, 'row', freshTab(), { [groupId]: { width: 600, height: 999 } });
+    expect(result.error).toBeNull();
+  });
+
+  it('то же для moveTab с edge', () => {
+    const t1 = freshTab();
+    const t2 = freshTab();
+    let layout = openTab(emptyLayout(), t1, 'active');
+    const groupId = layout.activeGroupId;
+    layout = openTab(layout, t2, 'active');
+
+    const result = moveTab(layout, t2.id, { groupId, edge: 'right' }, { [groupId]: { width: NaN, height: 999 } });
+
+    expect(result.error).toBe('too-small');
+    expect(result.layout).toBe(layout);
+  });
+});
+
 describe('setRatio', () => {
   // Тест 10.
   it('приводит долю к 0.1–0.9, NaN и Infinity не меняют раскладку', () => {
@@ -434,6 +566,109 @@ describe('pruneLayout', () => {
     expect(soleGroup(pruned).tabs).toEqual([]);
     expect(validateLayout(pruned)).toEqual([]);
   });
+
+  // Раунд исправлений 1, Important A: no-op (все живы) — та же ссылка на раскладку
+  // (от этого зависят подписки zustand в 2.2).
+  it('no-op (все вкладки живы) — та же ссылка на раскладку', () => {
+    const tabA = freshTab();
+    const tabB = freshTab();
+    let layout = openTab(emptyLayout(), tabA, 'active');
+    const groupA = layout.activeGroupId;
+    const split = splitGroup(layout, groupA, 'row', tabB);
+    expect(split.error).toBeNull();
+    layout = split.layout;
+
+    const pruned = pruneLayout(layout, () => true);
+
+    expect(pruned).toBe(layout);
+  });
+
+  // Раунд исправлений 1, Important B: pruneLayout чистит и closedTabs тем же alive —
+  // reopenClosed не должен возвращать вкладку, которую alive() только что объявил мёртвой.
+  it('чистит closedTabs тем же alive', () => {
+    const tabA = freshTab();
+    const tabB = freshTab();
+    let layout = openTab(emptyLayout(), tabA, 'active');
+    layout = openTab(layout, tabB, 'active');
+    layout = closeTab(layout, tabB.id);
+    expect(layout.closedTabs.map((t) => t.id)).toEqual([tabB.id]);
+
+    // alive объявляет мёртвыми обе — и открытую A, и уже закрытую B.
+    const pruned = pruneLayout(layout, (tab) => tab.id !== tabA.id && tab.id !== tabB.id);
+
+    expect(pruned.closedTabs).toEqual([]);
+    // Пустой стек — reopenClosed не находит, что открывать, отдаёт ту же ссылку.
+    expect(reopenClosed(pruned)).toBe(pruned);
+  });
+
+  it('closedTabs без изменений (все живы) — та же ссылка на массив', () => {
+    const tabA = freshTab();
+    const tabB = freshTab();
+    let layout = openTab(emptyLayout(), tabA, 'active');
+    layout = openTab(layout, tabB, 'active');
+    layout = closeTab(layout, tabB.id);
+
+    const pruned = pruneLayout(layout, () => true);
+
+    expect(pruned).toBe(layout);
+    expect(pruned.closedTabs).toBe(layout.closedTabs);
+  });
+});
+
+describe('focusGroup', () => {
+  // Раунд исправлений 1, Minor A.
+  it('несуществующий groupId — та же ссылка', () => {
+    const layout = openTab(emptyLayout(), freshTab(), 'active');
+    expect(focusGroup(layout, 'нет-такой')).toBe(layout);
+  });
+
+  it('уже активная группа — та же ссылка', () => {
+    const layout = openTab(emptyLayout(), freshTab(), 'active');
+    expect(focusGroup(layout, layout.activeGroupId)).toBe(layout);
+  });
+
+  it('переключает на существующую неактивную группу', () => {
+    const layout = openTab(emptyLayout(), freshTab(), 'active');
+    const groupA = layout.activeGroupId;
+    const split = splitGroup(layout, groupA, 'row', freshTab());
+    expect(split.error).toBeNull();
+    const withB = split.layout; // activeGroupId сейчас — B (только что созданная).
+    expect(withB.activeGroupId).not.toBe(groupA);
+
+    const focused = focusGroup(withB, groupA);
+
+    expect(focused.activeGroupId).toBe(groupA);
+  });
+});
+
+describe('focusTab', () => {
+  // Раунд исправлений 1, Important A.
+  it('фокусирует вкладку в неактивной группе — group.activeTabId и layout.activeGroupId меняются', () => {
+    const tabA = freshTab();
+    const tabB = freshTab();
+    let layout = openTab(emptyLayout(), tabA, 'active');
+    const groupA = layout.activeGroupId;
+    const split = splitGroup(layout, groupA, 'row', tabB);
+    expect(split.error).toBeNull();
+    layout = split.layout; // activeGroupId сейчас — группа B.
+    expect(layout.activeGroupId).not.toBe(groupA);
+
+    const focused = focusTab(layout, tabA.id);
+
+    expect(focused.activeGroupId).toBe(groupA);
+    expect(groupById(focused, groupA).activeTabId).toBe(tabA.id);
+  });
+
+  it('несуществующий id — та же ссылка', () => {
+    const layout = openTab(emptyLayout(), freshTab(), 'active');
+    expect(focusTab(layout, 'нет-такой')).toBe(layout);
+  });
+
+  it('уже сфокусированная вкладка в уже активной группе — та же ссылка', () => {
+    const tab = freshTab();
+    const layout = openTab(emptyLayout(), tab, 'active');
+    expect(focusTab(layout, tab.id)).toBe(layout);
+  });
 });
 
 describe('updateTab', () => {
@@ -458,6 +693,23 @@ describe('updateTab', () => {
 
     expect(updateTab(layout, 'нет-такой', { url: 'x' })).toBe(layout);
     expect(updateTab(layout, before.id, { url: 'x' })).toBe(layout);
+  });
+});
+
+describe('validateLayout — дубль id узла, не только вкладки (раунд исправлений 1, Critical B)', () => {
+  it('двух групп-сиблингов', () => {
+    const { twoSiblingGroups } = duplicateNodeIdLayouts();
+    expect(validateLayout(twoSiblingGroups)).not.toEqual([]);
+  });
+
+  it('группы и сплита-предка (порча при replaceNode: предок находится раньше цели)', () => {
+    const { groupInsideAncestorSplit } = duplicateNodeIdLayouts();
+    expect(validateLayout(groupInsideAncestorSplit)).not.toEqual([]);
+  });
+
+  it('двух сплитов в разных ветках', () => {
+    const { twoSplitsInDifferentBranches } = duplicateNodeIdLayouts();
+    expect(validateLayout(twoSplitsInDifferentBranches)).not.toEqual([]);
   });
 });
 
@@ -573,6 +825,40 @@ describe('parseWorkLayout', () => {
     expect(parseWorkLayout({})).toBeNull();
     expect(parseWorkLayout({ root: {}, activeGroupId: 'x', closedTabs: [] })).toBeNull();
   });
+
+  // Раунд исправлений 1, Critical B: то же самое, но через диск (JSON.parse/stringify),
+  // как реально попадает в parseWorkLayout из layouts.json.
+  it('отвергает дубль id узла с диска — двух групп-сиблингов', () => {
+    const { twoSiblingGroups } = duplicateNodeIdLayouts();
+    expect(parseWorkLayout(JSON.parse(JSON.stringify(twoSiblingGroups)))).toBeNull();
+  });
+
+  it('отвергает дубль id узла с диска — группы и сплита-предка', () => {
+    const { groupInsideAncestorSplit } = duplicateNodeIdLayouts();
+    expect(parseWorkLayout(JSON.parse(JSON.stringify(groupInsideAncestorSplit)))).toBeNull();
+  });
+
+  it('отвергает дубль id узла с диска — двух сплитов в разных ветках', () => {
+    const { twoSplitsInDifferentBranches } = duplicateNodeIdLayouts();
+    expect(parseWorkLayout(JSON.parse(JSON.stringify(twoSplitsInDifferentBranches)))).toBeNull();
+  });
+
+  // Раунд исправлений 1, Minor B: лишние поля узлов/вкладок/раскладки отсекаются —
+  // 2.2 пишет результат `parseWorkLayout` обратно на диск, лишнее не должно путешествовать.
+  it('отсекает лишние поля узлов, вкладок и раскладки верхнего уровня', () => {
+    const layout = validLayout();
+    const raw = JSON.parse(JSON.stringify(layout)) as Record<string, unknown>;
+    raw.extraTop = 'внешнее';
+    const root = raw.root as Record<string, unknown>;
+    root.extraNode = 'на узле';
+    const children = root.children as Record<string, unknown>[];
+    const firstGroup = children[0] as Record<string, unknown>;
+    firstGroup.extraGroup = 'на группе';
+    const tabs = firstGroup.tabs as Record<string, unknown>[];
+    (tabs[0] as Record<string, unknown>).extraTab = 'на вкладке';
+
+    expect(parseWorkLayout(raw)).toEqual(layout);
+  });
 });
 
 describe('findTab', () => {
@@ -633,6 +919,13 @@ describe('тест 14: инвариант по диапазону (500 случ�
       walk(layout.root);
       return ids;
     };
+
+    // Раунд исправлений 1, Critical B: независимая от `validateLayout` проверка
+    // уникальности id УЗЛОВ (групп и сплитов вместе) — своя реализация в тесте,
+    // а не вызов внутренней логики `tree.ts`, чтобы дефект в самой `validateLayout`
+    // не остался незамеченным за счёт того же кода, что и проверяемый.
+    const allNodeIds = (node: WorkLayout['root']): string[] =>
+      node.type === 'group' ? [node.id] : [node.id, ...allNodeIds(node.children[0]), ...allNodeIds(node.children[1])];
 
     const nextFreshTab = (): TabSpec => {
       counter += 1;
@@ -719,6 +1012,10 @@ describe('тест 14: инвариант по диапазону (500 случ�
         if (errors.length > 0) throw new Error(`нарушены инварианты: ${JSON.stringify(errors)}`);
         if (groups(layout).length > LIMITS.maxGroups) {
           throw new Error(`групп больше ${LIMITS.maxGroups}: ${groups(layout).length}`);
+        }
+        const nodeIds = allNodeIds(layout.root);
+        if (new Set(nodeIds).size !== nodeIds.length) {
+          throw new Error(`дубль id узла: ${JSON.stringify(nodeIds)}`);
         }
       }
     } catch (error) {

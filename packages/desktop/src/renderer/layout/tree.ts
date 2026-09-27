@@ -55,6 +55,17 @@ export function findTab(layout: WorkLayout, tabId: string): { group: GroupNode; 
   return null;
 }
 
+/**
+ * Id всех узлов дерева (группы и сплиты вместе, а не порознь по типу): `replaceNode`
+ * (ниже) ищет узел по `id` без учёта `type`, поэтому дубль id между группой и сплитом
+ * (не только между двумя группами) портит дерево так же, как дубль id вкладки — один
+ * общий инвариант для обоих типов узлов (раунд исправлений 1, Critical B).
+ */
+function allNodeIds(node: LayoutNode): string[] {
+  if (node.type === 'group') return [node.id];
+  return [node.id, ...allNodeIds(node.children[0]), ...allNodeIds(node.children[1])];
+}
+
 /** Первая группа поддерева в визуальном порядке (для «сосед — сплит» при закрытии). */
 function firstGroupId(node: LayoutNode): string {
   return node.type === 'group' ? node.id : firstGroupId(node.children[0]);
@@ -112,7 +123,12 @@ function edgeOf(direction: 'row' | 'column'): Edge {
 }
 
 function tooSmall(direction: 'row' | 'column', size: { width: number; height: number }): boolean {
-  return direction === 'row' ? size.width < LIMITS.minGroup.width * 2 : size.height < LIMITS.minGroup.height * 2;
+  const value = direction === 'row' ? size.width : size.height;
+  // Неизвестный размер (NaN/±Infinity) — как 0 у свёрнутого окна: считаем, что места
+  // нет, а не пропускаем сплит с непроверенным размером (раунд исправлений 1, Important B —
+  // `NaN < порог` иначе даёт `false`, и сплит проходит вслепую).
+  if (!Number.isFinite(value)) return true;
+  return value < (direction === 'row' ? LIMITS.minGroup.width : LIMITS.minGroup.height) * 2;
 }
 
 // ---- операции над вкладками группы -----------------------------------------
@@ -385,6 +401,10 @@ export function reopenClosed(layout: WorkLayout): WorkLayout {
 function pruneNode(node: LayoutNode, alive: (tab: TabSpec) => boolean): LayoutNode | null {
   if (node.type === 'group') {
     const tabs = node.tabs.filter(alive);
+    // Никто не умер — та же ссылка (раунд исправлений 1, Important A): иначе
+    // `pruneLayout` пересобирает всё дерево заново на каждый вызов, даже когда
+    // ни одна вкладка не пропала, а от этого зависят подписки zustand в 2.2.
+    if (tabs.length === node.tabs.length) return node;
     if (tabs.length === 0) return null;
     const activeTabId = tabs.some((t) => t.id === node.activeTabId) ? node.activeTabId : (tabs[0]?.id ?? null);
     return { ...node, tabs, activeTabId };
@@ -400,13 +420,19 @@ function pruneNode(node: LayoutNode, alive: (tab: TabSpec) => boolean): LayoutNo
 
 export function pruneLayout(layout: WorkLayout, alive: (tab: TabSpec) => boolean): WorkLayout {
   const prunedRoot = pruneNode(layout.root, alive);
+  // `closedTabs` — тем же `alive` (раунд исправлений 1, Important B): иначе
+  // `reopenClosed` может вернуть вкладку, которую `alive` только что объявил мёртвой.
+  const filteredClosed = layout.closedTabs.filter(alive);
+  const closedChanged = filteredClosed.length !== layout.closedTabs.length;
+  if (prunedRoot === layout.root && !closedChanged) return layout;
+
   const rootIdHint = layout.root.type === 'group' ? layout.root.id : nodeId('g');
   const root: LayoutNode = prunedRoot ?? { type: 'group', id: rootIdHint, tabs: [], activeTabId: null };
   const survivors = flattenGroups(root);
   const activeGroupId = survivors.some((g) => g.id === layout.activeGroupId)
     ? layout.activeGroupId
     : (survivors[0]?.id ?? root.id);
-  return { root, activeGroupId, closedTabs: layout.closedTabs };
+  return { root, activeGroupId, closedTabs: closedChanged ? filteredClosed : layout.closedTabs };
 }
 
 // ---- проверка и разбор -------------------------------------------------------
@@ -423,6 +449,15 @@ export function validateLayout(layout: WorkLayout): string[] {
   }
   for (const [id, count] of tabCounts) {
     if (count > 1) errors.push(`дубль id вкладки: ${id}`);
+  }
+
+  // Дубль id УЗЛА (группы или сплита) — отдельный от дубля id вкладки инвариант:
+  // `replaceNode` ищет по id без учёта `type`, поэтому дубль между группой и
+  // сплитом-предком портит дерево так же тихо (раунд исправлений 1, Critical B).
+  const nodeIdCounts = new Map<string, number>();
+  for (const id of allNodeIds(layout.root)) nodeIdCounts.set(id, (nodeIdCounts.get(id) ?? 0) + 1);
+  for (const [id, count] of nodeIdCounts) {
+    if (count > 1) errors.push(`дубль id узла: ${id}`);
   }
 
   for (const group of allGroups) {
@@ -453,64 +488,93 @@ export function validateLayout(layout: WorkLayout): string[] {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-function isFileRootSpec(value: unknown): value is FileRootSpec {
-  if (!isRecord(value)) return false;
-  if (value.kind === 'project') return true;
-  return value.kind === 'worktree' && typeof value.sessionId === 'string';
+/**
+ * Разбор (не просто проверка) — каждая функция строит НОВЫЙ объект только из полей
+ * своего типа, а не пропускает исходный `value` как есть: лишние поля с диска
+ * (старый формат, чужая правка `layouts.json`) иначе тихо путешествовали бы туда-обратно,
+ * раз 2.2 пишет результат `parseWorkLayout` обратно на диск (раунд исправлений 1, Minor B).
+ */
+function parseFileRootSpec(value: unknown): FileRootSpec | null {
+  if (!isRecord(value)) return null;
+  if (value.kind === 'project') return { kind: 'project' };
+  if (value.kind === 'worktree' && typeof value.sessionId === 'string') {
+    return { kind: 'worktree', sessionId: value.sessionId };
+  }
+  return null;
 }
 
-function isTabSpec(value: unknown): value is TabSpec {
-  if (!isRecord(value) || typeof value.id !== 'string') return false;
+function parseTabSpec(value: unknown): TabSpec | null {
+  if (!isRecord(value) || typeof value.id !== 'string') return null;
+  const id = value.id;
   switch (value.kind) {
     case 'terminal':
-      return typeof value.sessionId === 'string';
+      return typeof value.sessionId === 'string' ? { kind: 'terminal', id, sessionId: value.sessionId } : null;
     case 'mail':
-      return value.id === 'mail';
+      return id === 'mail' ? { kind: 'mail', id: 'mail' } : null;
     case 'room':
-      return typeof value.roomId === 'string';
-    case 'diff':
-      return typeof value.sessionId === 'string' && (value.commit === null || typeof value.commit === 'string');
-    case 'file':
-      return isFileRootSpec(value.root) && typeof value.path === 'string';
+      return typeof value.roomId === 'string' ? { kind: 'room', id, roomId: value.roomId } : null;
+    case 'diff': {
+      if (typeof value.sessionId !== 'string') return null;
+      const commit = value.commit;
+      if (commit !== null && typeof commit !== 'string') return null;
+      return { kind: 'diff', id, sessionId: value.sessionId, commit };
+    }
+    case 'file': {
+      const root = parseFileRootSpec(value.root);
+      if (root === null || typeof value.path !== 'string') return null;
+      return { kind: 'file', id, root, path: value.path };
+    }
     case 'browser':
-      return typeof value.url === 'string';
+      return typeof value.url === 'string' ? { kind: 'browser', id, url: value.url } : null;
     default:
-      return false;
+      return null;
   }
 }
 
-function isLayoutNode(value: unknown): value is LayoutNode {
-  if (!isRecord(value) || typeof value.id !== 'string') return false;
+function parseTabSpecArray(value: unknown): TabSpec[] | null {
+  if (!Array.isArray(value)) return null;
+  const tabs: TabSpec[] = [];
+  for (const item of value) {
+    const tab = parseTabSpec(item);
+    if (tab === null) return null;
+    tabs.push(tab);
+  }
+  return tabs;
+}
+
+function parseLayoutNode(value: unknown): LayoutNode | null {
+  if (!isRecord(value) || typeof value.id !== 'string') return null;
+  const id = value.id;
   if (value.type === 'group') {
-    return (
-      Array.isArray(value.tabs) &&
-      value.tabs.every(isTabSpec) &&
-      (value.activeTabId === null || typeof value.activeTabId === 'string')
-    );
+    const tabs = parseTabSpecArray(value.tabs);
+    if (tabs === null) return null;
+    const activeTabId = value.activeTabId;
+    if (activeTabId !== null && typeof activeTabId !== 'string') return null;
+    return { type: 'group', id, tabs, activeTabId };
   }
   if (value.type === 'split') {
-    return (
-      (value.direction === 'row' || value.direction === 'column') &&
-      typeof value.ratio === 'number' &&
-      Number.isFinite(value.ratio) &&
-      Array.isArray(value.children) &&
-      value.children.length === 2 &&
-      isLayoutNode(value.children[0]) &&
-      isLayoutNode(value.children[1])
-    );
+    const direction = value.direction;
+    if (direction !== 'row' && direction !== 'column') return null;
+    const ratio = value.ratio;
+    if (typeof ratio !== 'number' || !Number.isFinite(ratio)) return null;
+    if (!Array.isArray(value.children) || value.children.length !== 2) return null;
+    const a = parseLayoutNode(value.children[0]);
+    const b = parseLayoutNode(value.children[1]);
+    if (a === null || b === null) return null;
+    return { type: 'split', id, direction, ratio, children: [a, b] };
   }
-  return false;
+  return null;
 }
 
 /** Разбор с диска: мусор или нарушенный инвариант → `null`; битый `activeGroupId` — чинится. */
 export function parseWorkLayout(raw: unknown): WorkLayout | null {
   if (!isRecord(raw)) return null;
-  if (!isLayoutNode(raw.root)) return null;
+  const root = parseLayoutNode(raw.root);
+  if (root === null) return null;
   if (typeof raw.activeGroupId !== 'string') return null;
-  if (!Array.isArray(raw.closedTabs) || !raw.closedTabs.every(isTabSpec)) return null;
+  const closedTabs = parseTabSpecArray(raw.closedTabs);
+  if (closedTabs === null) return null;
 
-  const root: LayoutNode = raw.root;
-  const closedTabs: TabSpec[] = raw.closedTabs;
   const allGroups = flattenGroups(root);
   const activeGroupId = allGroups.some((g) => g.id === raw.activeGroupId)
     ? raw.activeGroupId
