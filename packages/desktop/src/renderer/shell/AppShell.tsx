@@ -53,6 +53,8 @@ import type { HarnasBridge, HostStatus } from '../../shared/bridge.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { noticeText, S } from '../../shared/strings.js';
 import { LEFT_SIDEBAR } from '../../shared/ui-types.js';
+import { openNextAttention } from '../attention/next.js';
+import { useAttentionTotals } from '../attention/store.js';
 import { InterruptedBanner } from '../components/InterruptedBanner.js';
 import { CommandPalette } from '../components/palette/CommandPalette.js';
 import { SessionPicker, sessionCandidates } from '../components/palette/SessionPicker.js';
@@ -245,6 +247,9 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   // текст (сквозное правило его не переводит), строка статуса показывает
   // `noticeText` по виду уведомления вместо него; сырой текст — только в
   // консоли (`store/notices.ts`).
+  // Итоги внимания для строки статуса (кусок 4.2): селектор по стору секций с поверхностным
+  // сравнением — оболочка перерисовывается, только когда меняются сами числа.
+  const attention = useAttentionTotals();
   const lastNotice = notices[0] ?? null;
   const noticeLine = lastNotice === null ? '' : noticeText(lastNotice, sessionLabelFor(entries, lastNotice.ref));
 
@@ -498,6 +503,8 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
         wakePaused={wakePaused}
         onToggleWake={() => void toggleWake(bridge)}
         onRestartHost={() => void bridge.app.restartHost()}
+        attention={attention}
+        onNextAttention={openNextAttention}
       />
       <CommandPalette open={paletteOpen} commands={commands} onOpenChange={setPaletteOpen} />
       <SessionPicker

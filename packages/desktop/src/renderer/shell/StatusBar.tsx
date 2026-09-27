@@ -30,6 +30,10 @@ export interface StatusBarProps {
   onToggleWake: () => void;
   /** «Restart» в подтверждении: AppShell передаёт () => void bridge.app.restartHost(). */
   onRestartHost: () => void;
+  /** Итоги внимания по секциям сайдбара (кусок 4.2): AppShell — useAttentionTotals(). */
+  attention: { needsYou: number; unseen: number };
+  /** Клик по сегменту внимания — «следующая, где нужен ты» (спека 7.6): AppShell — openNextAttention. */
+  onNextAttention: () => void;
 }
 
 export function StatusBar({
@@ -38,14 +42,28 @@ export function StatusBar({
   wakePaused,
   onToggleWake,
   onRestartHost,
+  attention,
+  onNextAttention,
 }: StatusBarProps): JSX.Element {
   // Подтверждение — локальное состояние строки статуса; 6.3 переведёт его
   // открытие на общий `confirmRestartHost`.
   const [confirmOpen, setConfirmOpen] = useState(false);
   const outdated = missingMethods(status).length > 0;
+  // Письма в счёт не входят: они в бейдже и на карточках, а клик ведёт только к сессиям.
+  const attentionText = S.statusBar.attention(attention.needsYou, attention.unseen);
   return (
     <div className="flex h-6 shrink-0 items-center justify-between gap-3 border-t border-border bg-card px-3 text-xs text-muted-foreground">
       <span className="min-w-0 flex-1 truncate">{noticeLine}</span>
+      {attentionText === '' ? null : (
+        <button
+          type="button"
+          data-attention-segment
+          onClick={onNextAttention}
+          className="shrink-0 rounded px-2 py-0.5 text-foreground hover:bg-accent"
+        >
+          {attentionText}
+        </button>
+      )}
       <span className="shrink-0">{CONNECTION_TEXT[status.state](status)}</span>
       {outdated ? (
         <button

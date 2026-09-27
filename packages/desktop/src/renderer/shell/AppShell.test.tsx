@@ -933,6 +933,8 @@ describe('AppShell — сайдбар карточек (кусок 3.3)', () => 
 });
 
 describe('AppShell и активность (раунд исправлений 1 куска 3.3)', () => {
+  // С куска 4.2 оболочка подписана на итоги внимания (строка статуса): `working` их не меняет,
+  // а порядок сайдбара поднимает — оболочка по-прежнему не перерисовывается.
   it('activity.changed не перерисовывает оболочку, а порядок сайдбара обновляется', async () => {
     const w1 = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'план')]);
     const w2 = work('w-02', '2026-01-02', 'Вторая', [session('s-01', 'план')]);
@@ -953,7 +955,7 @@ describe('AppShell и активность (раунд исправлений 1 
           [refKey(ref)]: {
             ref,
             activity: {
-              activity: 'blocked',
+              activity: 'working',
               subagents: 0,
               turnEndedAt: null,
               lastEventAt: '2026-01-03T00:00:00.000Z',
@@ -969,6 +971,54 @@ describe('AppShell и активность (раунд исправлений 1 
 
     expect(shellRenders.statusBar).toBe(before);
     expect(cardOrder()[0]).toBe(workKey('/tmp/w-02', 'w-02'));
+  });
+
+  // Решение контролёра 1 куска 4.2: итоги берутся селектором с поверхностным сравнением —
+  // метрики без смены итогов оболочку не трогают, смена итогов обновляет строку статуса.
+  it('итоги внимания: метрики не перерисовывают оболочку, смена итогов — обновляет строку статуса (кусок 4.2)', async () => {
+    const w1 = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'план')]);
+    useWorksStore.setState({ entries: [w1], branches: {}, loading: false, error: null });
+    render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
+    await flush();
+    const ref = { projectPath: '/tmp/w-01', workId: 'w-01', sessionId: 's-01' };
+    const entry = (activity: 'working' | 'blocked', tokensIn: number) => ({
+      ref,
+      activity: { activity, subagents: 0, turnEndedAt: null, lastEventAt: '2026-01-03T00:00:00.000Z', source: 'hooks' as const, exited: false, hooksMissing: false },
+      metrics: { tokensIn, tokensOut: 0, durationMs: 0, unread: 0, subagents: 0, model: 'opus' },
+    });
+    act(() => useActivityStore.setState({ byRef: { [refKey(ref)]: entry('working', 1) } }));
+    const before = shellRenders.statusBar;
+    act(() => useActivityStore.setState({ byRef: { [refKey(ref)]: entry('working', 2) } }));
+    act(() => useActivityStore.setState({ byRef: { [refKey(ref)]: entry('working', 3) } }));
+    expect(shellRenders.statusBar).toBe(before);
+    expect(document.querySelector('[data-attention-segment]')).toBeNull();
+
+    act(() => useActivityStore.setState({ byRef: { [refKey(ref)]: entry('blocked', 4) } }));
+    expect(shellRenders.statusBar).toBeGreaterThan(before);
+    expect(screen.getByRole('button', { name: '1 needs you' })).toBeTruthy();
+  });
+
+  it('клик по сегменту внимания открывает следующую сессию, где нужен человек (кусок 4.2, спека 7.6)', async () => {
+    const w1 = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'план')]);
+    const w2 = work('w-02', '2026-01-02', 'Вторая', [session('s-01', 'бэк'), session('s-02', 'фронт')]);
+    await renderShell([w1, w2]);
+    const ref = { projectPath: '/tmp/w-02', workId: 'w-02', sessionId: 's-02' };
+    act(() =>
+      useActivityStore.setState({
+        byRef: {
+          [refKey(ref)]: {
+            ref,
+            activity: { activity: 'blocked', subagents: 0, turnEndedAt: null, lastEventAt: null, source: 'hooks', exited: false, hooksMissing: false },
+            metrics: null,
+          },
+        },
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: '1 needs you' }));
+    expect(useLayoutStore.getState().activeWorkKey).toBe(workKey('/tmp/w-02', 'w-02'));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[workKey('/tmp/w-02', 'w-02')]).toBe(true));
+    const layout = useLayoutStore.getState().layouts[workKey('/tmp/w-02', 'w-02')];
+    expect(layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id))).toContain(tabId.terminal('s-02'));
   });
 });
 

@@ -21,6 +21,10 @@ import { useActivityStore } from './store/activity.js';
 import { useNoticesStore } from './store/notices.js';
 import { useUiStore } from './store/ui.js';
 import { useWorksStore } from './store/works.js';
+import { refKey, type SessionRef } from '@harnas/protocol';
+import type { Activity } from '@harnas/core';
+import { REQUIRED_METHODS } from './lib/capabilities.js';
+import { useSidebarSectionsStore } from './sidebar/use-sidebar-sections.js';
 
 // Тест 6 куска 2.7 читает пропсы диалога новой сессии, а не его разметку:
 // что именно диалог делает с `projectPath`/`workId`, проверяет его собственный тест.
@@ -67,6 +71,7 @@ beforeEach(() => {
     navigating: false,
   });
   dialogProps.last = null;
+  useSidebarSectionsStore.setState({ sections: [], attention: {}, entries: null });
   // `getHostClient()` читает `window.harnas` лениво — подставляем вручную,
   // как и задумано (комментарий в `host-client.ts`).
   bridge = createFakeBridge();
@@ -270,5 +275,98 @@ describe('App — «New session» из меню карточки (тест 15 к
     act(() => dialogProps.last?.onOpenChange(false));
     act(() => bridge.emitMenu('new-session'));
     expect(dialogProps.last).toMatchObject({ open: true, projectPath: '/tmp/w-01', workId: 'w-01' });
+  });
+});
+
+// Кусок 4.2: бейдж Dock и трекер «просмотрено» живут в эффекте App.
+describe('App — бейдж и «просмотрено» (тесты 8 и 13 куска 4.2)', () => {
+  const ref: SessionRef = { projectPath: '/tmp/w-01', workId: 'w-01', sessionId: 's-01' };
+
+  function emitActivity(activity: Activity, tokensIn = 0): void {
+    act(() => {
+      bridge.emit('activity.changed', {
+        ref,
+        activity: { activity, subagents: 0, turnEndedAt: null, lastEventAt: null, source: 'hooks', exited: false, hooksMissing: false },
+        metrics: { tokensIn, tokensOut: 0, durationMs: 0, unread: 0, subagents: 0, model: 'opus' },
+      });
+    });
+  }
+
+  function seenNotifications(): unknown[] {
+    return bridge.notified.filter((note) => note.method === 'activity.seen').map((note) => note.params);
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('тест 8: бейдж — badgeCount при каждом его изменении и только тогда', async () => {
+    const w1 = work('w-01', '2026-01-01', [session('s-01', 'план')]);
+    w1.map.messages = [
+      { id: 'm-1', roomId: null, from: 's-01', to: ['human'], at: '2026-01-01T00:00:00.000Z', text: 'вопрос', kind: 'question', readBy: {} },
+    ];
+    useWorksStore.setState({ entries: [w1], branches: {}, loading: false, error: null });
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(bridge.badges).toEqual([1]);
+
+    emitActivity('blocked');
+    expect(bridge.badges).toEqual([1, 2]);
+    emitActivity('blocked', 5);
+    expect(bridge.badges).toEqual([1, 2]);
+    // unseen в бейдж не входит.
+    emitActivity('unseen');
+    expect(bridge.badges).toEqual([1, 2, 1]);
+    emitActivity('idle');
+    expect(bridge.badges).toEqual([1, 2, 1]);
+  });
+
+  it('видимая сессия в unseen 1 с — activity.seen; окно без фокуса — нет', async () => {
+    vi.useFakeTimers();
+    useWorksStore.setState({ entries: [work('w-01', '2026-01-01', [session('s-01', 'план')])], branches: {}, loading: false, error: null });
+    useUiStore.setState({ visibleSessionRefs: { [refKey(ref)]: true }, windowFocused: false });
+    render(<App />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    emitActivity('unseen');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(seenNotifications()).toEqual([]);
+
+    act(() => useUiStore.setState({ windowFocused: true }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(999);
+    });
+    expect(seenNotifications()).toEqual([]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(seenNotifications()).toEqual([{ ref }]);
+  });
+
+  it('тест 13: хост без activity.seen — bridge.notify не зовётся; после setHostMethods(REQUIRED_METHODS) уходит', async () => {
+    vi.useFakeTimers();
+    bridge.setHostMethods(REQUIRED_METHODS.filter((method) => method !== 'activity.seen'));
+    useWorksStore.setState({ entries: [work('w-01', '2026-01-01', [session('s-01', 'план')])], branches: {}, loading: false, error: null });
+    useUiStore.setState({ visibleSessionRefs: { [refKey(ref)]: true }, windowFocused: true });
+    render(<App />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    emitActivity('unseen');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(seenNotifications()).toEqual([]);
+
+    act(() => bridge.setHostMethods([...REQUIRED_METHODS]));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(seenNotifications()).toEqual([{ ref }]);
   });
 });

@@ -4,14 +4,12 @@ import { createFakeBridge } from './test-utils/fake-bridge.js';
 import { createNotificationWatcher, wireNotifications } from './notifications.js';
 
 const ref: SessionRef = { projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-03' };
-const other: SessionRef = { projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-04' };
 
 describe('createNotificationWatcher', () => {
   it('blocked у невидимой сессии — notify ровно один раз', () => {
     const notified: Array<{ title: string; body: string }> = [];
     const watcher = createNotificationWatcher({
       notify: (note) => notified.push(note),
-      setBadge: () => {},
       isVisible: () => false,
       getSessionLabel: () => 'бэкенд',
     });
@@ -27,7 +25,6 @@ describe('createNotificationWatcher', () => {
     const notified: Array<{ title: string; body: string }> = [];
     const watcher = createNotificationWatcher({
       notify: (note) => notified.push(note),
-      setBadge: () => {},
       isVisible: () => true,
       getSessionLabel: () => 'бэкенд',
     });
@@ -42,7 +39,6 @@ describe('createNotificationWatcher', () => {
     const notified: Array<{ title: string; body: string }> = [];
     const watcher = createNotificationWatcher({
       notify: (note) => notified.push(note),
-      setBadge: () => {},
       isVisible: () => false,
       getSessionLabel: () => 'ревью',
     });
@@ -52,31 +48,10 @@ describe('createNotificationWatcher', () => {
     expect(notified).toEqual([{ title: 'S03 is done', body: 'ревью' }]);
   });
 
-  it('бейдж считает сессии в blocked и unseen', () => {
-    const badges: number[] = [];
-    const watcher = createNotificationWatcher({
-      notify: () => {},
-      setBadge: (count) => badges.push(count),
-      isVisible: () => false,
-      getSessionLabel: () => '',
-    });
-
-    watcher.handle(ref, 'blocked');
-    watcher.handle(other, 'unseen');
-    expect(badges.at(-1)).toBe(2);
-
-    watcher.handle(ref, 'working');
-    expect(badges.at(-1)).toBe(1);
-
-    watcher.handle(other, 'idle');
-    expect(badges.at(-1)).toBe(0);
-  });
-
   it('новая тревога после ухода из неё уведомляет снова', () => {
     const notified: Array<{ title: string; body: string }> = [];
     const watcher = createNotificationWatcher({
       notify: (note) => notified.push(note),
-      setBadge: () => {},
       isVisible: () => false,
       getSessionLabel: () => '',
     });
@@ -101,7 +76,8 @@ describe('wireNotifications', () => {
     });
 
     expect(bridge.appNotified).toEqual([{ title: 'S03 needs a reply', body: 'план' }]);
-    expect(bridge.badges.at(-1)).toBe(1);
+    // Тест 8 куска 4.2: бейдж шлёт App по badgeCount, наблюдатель уведомлений его не ставит.
+    expect(bridge.badges).toEqual([]);
     dispose();
   });
 });

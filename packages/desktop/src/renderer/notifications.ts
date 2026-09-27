@@ -1,9 +1,10 @@
 /**
- * Уведомления macOS и бейдж (кусок 1.10 плана окна): сессия перешла в
- * `blocked` или `unseen` и не видна (не выбрана или окно не в фокусе) —
- * `app.notify` с заголовком «S03 ждёт ответа»/«S03 закончила ход» и ярлыком
- * в тексте. Бейдж — число сессий сейчас в `blocked` или `unseen`, независимо
- * от видимости.
+ * Уведомления macOS (кусок 1.10 плана окна): сессия перешла в `blocked` или
+ * `unseen` и не видна (не выбрана или окно не в фокусе) — `app.notify` с
+ * заголовком «S03 ждёт ответа»/«S03 закончила ход» и ярлыком в тексте.
+ *
+ * Бейдж с куска 4.2 ставит `App` по `attention/store.ts#badgeCount`: два источника
+ * спорили бы. Сам файл заменяет 4.3.
  */
 
 import { refKey, type SessionRef } from '@harnas/protocol';
@@ -25,7 +26,6 @@ export interface NotificationWatcher {
 
 export interface NotificationDeps {
   notify: (note: { title: string; body: string }) => void;
-  setBadge: (count: number) => void;
   /** Видна ли сессия сейчас: выбрана в сайдбаре И окно в фокусе. */
   isVisible: (ref: SessionRef) => boolean;
   getSessionLabel: (ref: SessionRef) => string;
@@ -44,7 +44,6 @@ export function createNotificationWatcher(deps: NotificationDeps): NotificationW
 
     if (suffix === undefined) {
       alerting.delete(key);
-      deps.setBadge(alerting.size);
       return;
     }
 
@@ -52,7 +51,6 @@ export function createNotificationWatcher(deps: NotificationDeps): NotificationW
     // `activity.changed` с тем же activity — иначе спам при каждом обновлении.
     const wasAlerting = alerting.has(key);
     alerting.set(key, ref);
-    deps.setBadge(alerting.size);
     if (!wasAlerting && !deps.isVisible(ref)) {
       deps.notify({ title: noticeTitle(ref.sessionId, suffix), body: deps.getSessionLabel(ref) });
     }
@@ -64,12 +62,11 @@ export function createNotificationWatcher(deps: NotificationDeps): NotificationW
 /** Подключает наблюдатель к `bridge.on('activity.changed', …)`; возвращает отписку. */
 export function wireNotifications(
   bridge: HarnasBridge,
-  deps: Omit<NotificationDeps, 'notify' | 'setBadge'>,
+  deps: Omit<NotificationDeps, 'notify'>,
 ): () => void {
   const watcher = createNotificationWatcher({
     ...deps,
     notify: (note) => bridge.app.notify(note),
-    setBadge: (count) => bridge.app.setBadge(count),
   });
   return bridge.on('activity.changed', (event) => watcher.handle(event.ref, event.activity.activity));
 }

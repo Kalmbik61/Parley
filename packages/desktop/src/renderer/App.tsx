@@ -1,7 +1,13 @@
 import { useEffect, useState } from 'react';
-import { refKey } from '@harnas/protocol';
+import { refKey, type SessionRef } from '@harnas/protocol';
 import type { HarnasConfig } from '@harnas/core';
+import type { HarnasBridge } from '../shared/bridge.js';
 import { getHostClient } from './host-client.js';
+import { sessionAttention } from './attention/derive.js';
+import { createSeenTracker, visibleSessions } from './attention/seen.js';
+import { attentionTotals, badgeCount } from './attention/store.js';
+import { hostMethods } from './lib/capabilities.js';
+import { useSidebarSectionsStore } from './sidebar/use-sidebar-sections.js';
 import { noticeText, S } from '../shared/strings.js';
 import { selectedSessionOf, useLayoutStore } from './layout/store.js';
 import { AppShell } from './shell/AppShell.js';
@@ -35,6 +41,77 @@ const DEFAULT_FONT_SIZE = 14;
 /** Родитель новой сессии — выбранная сессия активной работы, читается в момент вызова. */
 function selectedParentId(): string | null {
   return selectedSessionOf(useLayoutStore.getState(), useWorksStore.getState().entries)?.ref.sessionId ?? null;
+}
+
+/**
+ * Бейдж Dock (кусок 4.2, спека 7.3): `badgeCount` по итогам секций сайдбара, в `app.setBadge`
+ * только когда число сменилось. Подписка на стор, а не хук: `App` не должен перерисовываться
+ * на каждое изменение внимания.
+ */
+function wireBadge(bridge: HarnasBridge): () => void {
+  let last: number | null = null;
+  const push = (): void => {
+    const { sections, attention } = useSidebarSectionsStore.getState();
+    const count = badgeCount(attentionTotals(sections, attention));
+    if (count === last) return;
+    last = count;
+    bridge.app.setBadge(count);
+  };
+  push();
+  return useSidebarSectionsStore.subscribe(push);
+}
+
+/**
+ * «Просмотрено» (кусок 4.2, спека 7.2): видимые терминалы сессий в `unseen` через 1 с уходят
+ * хосту уведомлением `activity.seen`. Пересчёт — на каждое изменение видимых поверхностей,
+ * фокуса, видимости документа, активности и снимка работ.
+ */
+function wireSeenTracker(bridge: HarnasBridge): () => void {
+  const tracker = createSeenTracker({
+    send: (ref) => {
+      // Метод проверяется в момент отправки: значение при монтировании устарело бы после
+      // перезапуска хоста другой версией.
+      if (hostMethods(useHostStore.getState().status).has('activity.seen')) bridge.notify('activity.seen', { ref });
+    },
+    now: () => Date.now(),
+    setTimer: setTimeout,
+    clearTimer: clearTimeout,
+  });
+  const recompute = (): void => {
+    const visible = visibleSessions(useUiStore.getState());
+    const unseen = new Map<string, SessionRef>();
+    if (visible.size > 0) {
+      const byRef = useActivityStore.getState().byRef;
+      for (const entry of useWorksStore.getState().entries) {
+        for (const session of entry.map.sessions) {
+          const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
+          const key = refKey(ref);
+          if (visible.has(key) && sessionAttention(session, byRef[key]?.activity ?? null) === 'unseen') unseen.set(key, ref);
+        }
+      }
+    }
+    tracker.update(visible, unseen);
+  };
+  recompute();
+  const unsubscribers = [
+    useUiStore.subscribe((state, prev) => {
+      if (
+        state.windowFocused !== prev.windowFocused ||
+        state.documentVisible !== prev.documentVisible ||
+        state.visibleSessionRefs !== prev.visibleSessionRefs
+      ) {
+        recompute();
+      }
+    }),
+    useActivityStore.subscribe(recompute),
+    useWorksStore.subscribe((state, prev) => {
+      if (state.entries !== prev.entries) recompute();
+    }),
+  ];
+  return () => {
+    for (const unsubscribe of unsubscribers) unsubscribe();
+    tracker.dispose();
+  };
 }
 
 export function App(): JSX.Element {
@@ -71,6 +148,9 @@ export function App(): JSX.Element {
       useActivityStore.getState().init(bridge),
       useUiStore.getState().init(bridge),
       useNoticesStore.getState().init(bridge),
+      // Бейдж и «просмотрено» (кусок 4.2) — рядом, оба по вниманию.
+      wireBadge(bridge),
+      wireSeenTracker(bridge),
       wireNotifications(bridge, {
         // Видна не выбранная сессия, а та, чей терминал сейчас активная
         // вкладка своей группы (`store/ui.ts#visibleSessionRefs`, пишет

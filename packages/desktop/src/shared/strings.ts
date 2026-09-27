@@ -139,6 +139,11 @@ export const S = {
     hostOutdated: 'Host is outdated — restart',
     restartHostTitle: 'Restart host?',
     restartHostDescription: 'Live agents will be interrupted and come back with --resume.',
+    /** «N ждут тебя · M не просмотрено» (кусок 4.2, спека 7.3): нулевая часть не пишется, обе нулевые — ''. */
+    attention: (needsYou: number, unseen: number): string =>
+      [needsYou > 0 ? `${needsYou} ${needsYou === 1 ? 'needs' : 'need'} you` : '', unseen > 0 ? `${unseen} unseen` : '']
+        .filter((part) => part !== '')
+        .join(' · '),
   },
 
   /** Общие диалоги, не привязанные к своей области (mail/rooms/settings/…). */
