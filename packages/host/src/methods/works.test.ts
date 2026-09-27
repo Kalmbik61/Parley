@@ -2,8 +2,9 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { addSession, readWorksIndex, transitionSession, updateMap, workPaths } from '@harnas/core';
+import { addSession, readMap, readWorksIndex, transitionSession, updateMap, workPaths } from '@harnas/core';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
+import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
 import type { RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
@@ -103,6 +104,68 @@ describe('works.create / works.delete', () => {
     expect(response.result).toEqual({ ok: true });
     expect((await readWorksIndex()).works).toEqual([]);
 
+    client.close();
+  });
+});
+
+/** Ответ на запрос `id`: события `works.changed` и прочие рассылки между ними пропускаются. */
+async function reply(client: TestClient, id: number): Promise<RawMessage> {
+  for (;;) {
+    const message = await client.next();
+    if (message.id === id) return message;
+  }
+}
+
+describe('works.rename / works.setStatus', () => {
+  async function withWork(): Promise<{ client: TestClient; dir: string; workId: string }> {
+    const { home, token } = await boot();
+    const dir = await project();
+    const client = connectRaw(hostPaths(home).socket);
+    await waitConnected(client.socket);
+    await hello(client, token);
+    client.send({ id: 1, method: 'works.create', params: { projectPath: dir, title: 'Старая', goal: '' } });
+    const workId = ((await reply(client, 1)).result as { workId: string }).workId;
+    return { client, dir, workId };
+  }
+
+  it('works.rename с пустым названием — bad_request, карта не тронута', async () => {
+    const { client, dir, workId } = await withWork();
+
+    client.send({ id: 2, method: 'works.rename', params: { projectPath: dir, workId, title: '   ' } });
+    expect((await reply(client, 2)).error?.code).toBe('bad_request');
+    expect((await readMap(dir, workId)).work.title).toBe('Старая');
+    client.close();
+  });
+
+  it('works.rename меняет название в карте на диске', async () => {
+    const { client, dir, workId } = await withWork();
+
+    client.send({ id: 2, method: 'works.rename', params: { projectPath: dir, workId, title: '  Новая  ' } });
+    expect((await reply(client, 2)).result).toEqual({ ok: true });
+    expect((await readMap(dir, workId)).work.title).toBe('Новая');
+    client.close();
+  });
+
+  it('works.setStatus пишет статус в карту на диске', async () => {
+    const { client, dir, workId } = await withWork();
+
+    client.send({ id: 2, method: 'works.setStatus', params: { projectPath: dir, workId, status: 'done' } });
+    expect((await reply(client, 2)).result).toEqual({ ok: true });
+    expect((await readMap(dir, workId)).work.status).toBe('done');
+    client.close();
+  });
+
+  it('несуществующая работа — not_found, а не internal', async () => {
+    const { client, dir } = await withWork();
+
+    client.send({ id: 2, method: 'works.rename', params: { projectPath: dir, workId: 'w-9999', title: 'Икс' } });
+    expect((await reply(client, 2)).error?.code).toBe('not_found');
+    client.send({
+      id: 3,
+      method: 'works.setStatus',
+      params: { projectPath: dir, workId: 'w-9999', status: 'archived' },
+    });
+    expect((await reply(client, 3)).error?.code).toBe('not_found');
     client.close();
   });
 });

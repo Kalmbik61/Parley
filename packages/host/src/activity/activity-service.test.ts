@@ -437,4 +437,24 @@ describe('createActivityService', () => {
     );
     await waitFor(() => a.get(ref)?.activity.activity === 'working');
   }, 20_000);
+
+  it('13: current() отдаёт сессию после PermissionRequest с blocked', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+
+    await appendFile(
+      path.join(workPaths(project, ref.workId).events, `${ref.sessionId}.jsonl`),
+      `${hook('UserPromptSubmit')}${hook('PermissionRequest')}`,
+    );
+    await waitFor(() => a.get(ref)?.activity.activity === 'blocked');
+
+    const current = a.current();
+    expect(current).toHaveLength(1);
+    expect(current[0]?.ref).toEqual(ref);
+    expect(current[0]?.activity.activity).toBe('blocked');
+    expect(current[0]?.metrics).toEqual(a.get(ref)?.metrics);
+  }, 20_000);
 });

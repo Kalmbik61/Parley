@@ -14,7 +14,7 @@ import { createSessionHandlers } from './sessions.js';
 import { settingsGet, settingsSet } from './settings.js';
 import { createWakeHandlers } from './wake.js';
 import { createWorktreesHandlers } from './worktrees.js';
-import { worksCreate, worksDelete, worksList } from './works.js';
+import { worksCreate, worksDelete, worksList, worksRename, worksSetStatus } from './works.js';
 
 export interface MethodDeps {
   works: WorksService;
@@ -55,6 +55,8 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
       'works.list': worksList(deps.works) as AnyHandler,
       'works.create': worksCreate as AnyHandler,
       'works.delete': worksDelete as AnyHandler,
+      'works.rename': worksRename as AnyHandler,
+      'works.setStatus': worksSetStatus as AnyHandler,
       'providers.list': providersList as AnyHandler,
       'settings.get': settingsGet as AnyHandler,
       'settings.set': settingsSet as AnyHandler,

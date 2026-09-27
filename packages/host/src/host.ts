@@ -163,7 +163,14 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     helloTimeoutMs,
     methodHandlers: handlers.methods,
     notificationHandlers: handlers.notifications,
-    registerClient: handle.addClient,
+    // Активность хост шлёт только при изменении, а живёт дольше окна: окно,
+    // перезапущенное при живом хосте, до следующего события считало бы
+    // ждущую разрешения сессию `idle` — в `blocked` она событий больше не шлёт.
+    // Поэтому новому клиенту сразу после ответа на `hello` — повтор текущей.
+    registerClient: (client) => {
+      handle.addClient(client);
+      for (const data of activityService.current()) client.send({ event: 'activity.changed', data });
+    },
     unregisterClient: handle.removeClient,
   });
 
