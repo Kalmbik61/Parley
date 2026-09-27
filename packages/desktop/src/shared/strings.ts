@@ -318,6 +318,22 @@ export const S = {
   },
 
   /**
+   * Тосты отправки агенту (кусок 5.4, спека 8.6); `session` — `sessionTag`: 'S02'. Copy —
+   * `S.common.copy`, Retry — `S.common.retry`, Resume — `S.sidebar.sessionMenu.resume`.
+   */
+  send: {
+    sent: (session: string): string => `Sent to ${session}`,
+    insertedDraft: (session: string): string => `Inserted into ${session} without Enter — your draft is in the input`,
+    insertedInput: (session: string): string => `Inserted into ${session} without Enter — you were typing in the terminal`,
+    insertedRestarted: (session: string): string => `Inserted into ${session} without Enter — the session restarted`,
+    blocked: (session: string): string => `${session} is waiting for your answer — text not inserted`,
+    busy: (session: string): string => `${session} is busy with another message — retry in a second`,
+    noPasteMode: (session: string): string => `${session} doesn't accept multi-line paste`,
+    notRunning: (session: string): string => `${session} isn't running`,
+    openSession: (session: string): string => `Open ${session}`,
+  },
+
+  /**
    * Меню ссылки терминала (кусок 5.3, спека 8.3): «Reveal in Finder» и «Copy path» —
    * `S.cardMenu.reveal` и `copyPath`; «Open in editor» добавит 7.3.
    */
@@ -492,6 +508,7 @@ export const S = {
       revealWorkspace: 'reveal workspace in Finder',
       openFile: 'open file',
       revealInFinder: 'reveal in Finder',
+      saveScreenshot: 'save screenshot',
     },
     noWorktree: 'This session has no worktree of its own',
   },
