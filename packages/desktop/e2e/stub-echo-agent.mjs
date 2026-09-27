@@ -14,16 +14,67 @@ process.stdout.write('stub-echo готов\r\n');
 
 let buffer = '';
 process.stdin.setEncoding('utf8');
-process.stdin.on('data', (chunk) => {
-  for (const char of chunk) {
+
+// Режим STUB_BRACKETED=1 (кусок 5.4): агент включает bracketed paste, как Claude и Codex, —
+// тогда хост оборачивает `pty.send` в ESC[200~ … ESC[201~. Вставка печатается как
+// `PASTE<<текст>>` и копится в строке; Enter — `echo: <строка>`, как без режима.
+// Терминал — в сыром режиме: иначе строка дошла бы только после перевода строки, а маркеры
+// вставки эхо tty показало бы как ^[[200~. Набранное эхо печатает сам stub.
+const bracketed = process.env.STUB_BRACKETED === '1';
+const PASTE_START = '\x1b[200~';
+const PASTE_END = '\x1b[201~';
+
+function typed(text) {
+  for (const char of text) {
     if (char === '\r' || char === '\n') {
-      process.stdout.write(`echo: ${buffer}\r\n`);
+      // В сыром режиме tty сам \n в \r\n не переводит: строка вставки может быть многострочной.
+      process.stdout.write(bracketed ? `\r\necho: ${buffer.replace(/\r?\n/g, '\r\n')}\r\n` : `echo: ${buffer}\r\n`);
       buffer = '';
     } else {
+      if (bracketed) process.stdout.write(char);
       buffer += char;
     }
   }
-});
+}
+
+if (!bracketed) {
+  process.stdin.on('data', typed);
+} else {
+  if (process.stdin.isTTY) process.stdin.setRawMode(true);
+  process.stdout.write('\x1b[?2004h');
+  let pending = '';
+  let pasting = false;
+  let pasted = '';
+  process.stdin.on('data', (chunk) => {
+    pending += chunk;
+    for (;;) {
+      const marker = pasting ? PASTE_END : PASTE_START;
+      const at = pending.indexOf(marker);
+      if (at === -1) {
+        // Хвост может быть началом маркера, разрезанного между кусками чтения, — ждём.
+        const esc = pending.lastIndexOf('\x1b');
+        const keep = esc !== -1 && marker.startsWith(pending.slice(esc)) ? pending.slice(esc) : '';
+        const ready = pending.slice(0, pending.length - keep.length);
+        if (pasting) pasted += ready;
+        else typed(ready);
+        pending = keep;
+        return;
+      }
+      const before = pending.slice(0, at);
+      pending = pending.slice(at + marker.length);
+      if (pasting) {
+        pasted += before;
+        process.stdout.write(`PASTE<<${pasted.replace(/\r?\n/g, '\r\n')}>>`);
+        buffer += pasted;
+        pasted = '';
+        pasting = false;
+      } else {
+        typed(before);
+        pasting = true;
+      }
+    }
+  });
+}
 
 process.on('SIGHUP', () => process.exit(129));
 process.on('SIGTERM', () => process.exit(0));

@@ -6,6 +6,9 @@ process.env.HARNAS_NOTIFICATIONS = 'log';
 // «Открыть в приложении» и «Показать в Finder» — тоже в журнал main (кусок 5.2): настоящие
 // shell.openPath и shell.showItemInFolder открыли бы приложение и Finder на экране человека.
 process.env.HARNAS_SHELL = 'log';
+// Скриншот из буфера — фиксированная картинка main (кусок 5.4): E2E не читают и не пишут
+// настоящий буфер обмена человека.
+process.env.HARNAS_DROPS = 'fake';
 
 export default defineConfig({
   testDir: './e2e',
