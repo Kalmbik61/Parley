@@ -10,6 +10,7 @@ import type { GroupNode, TabSpec, WorkLayout } from '../../shared/layout-types.j
 import {
   acceptsTerminal,
   applyDrop,
+  centerOverlayOnCursor,
   dndId,
   dropFromDragEnd,
   layoutCollision,
@@ -577,5 +578,63 @@ describe('layoutCollision (тесты 9, 11)', () => {
       () => true,
     );
     expect(hits[0]?.id).toBe(surface.id);
+  });
+});
+
+describe('оверлей под указателем (раунд исправлений 1, ревью B)', () => {
+  // Обёртка `DragOverlay` стоит на прямоугольнике исходного узла и сдвигается
+  // на `transform`: центр обёртки = левый-верхний угол источника + сдвиг + половина размера.
+  type Args = Parameters<typeof centerOverlayOnCursor>[0];
+  const source: ClientRect = { left: 146, top: 90, width: 271, height: 24, right: 417, bottom: 114 };
+  function args(over: Partial<Args>): Args {
+    return {
+      activatorEvent: { clientX: 243.5, clientY: 101 } as unknown as Event,
+      active: null,
+      activeNodeRect: source,
+      draggingNodeRect: source,
+      containerNodeRect: null,
+      over: null,
+      overlayNodeRect: source,
+      scrollableAncestors: [],
+      scrollableAncestorRects: [],
+      transform: { x: 0, y: 0, scaleX: 1, scaleY: 1 },
+      windowRect: null,
+      ...over,
+    };
+  }
+
+  it('центр оверлея совпадает с указателем при любом сдвиге (строка схвачена не за центр)', () => {
+    for (const delta of [
+      { x: 0, y: 0 },
+      { x: 456.5, y: 30 },
+      { x: 1056.5, y: -60 },
+    ]) {
+      const result = centerOverlayOnCursor(args({ transform: { ...delta, scaleX: 1, scaleY: 1 } }));
+      const pointer = { x: 243.5 + delta.x, y: 101 + delta.y };
+      expect(source.left + result.x + source.width / 2).toBe(pointer.x);
+      expect(source.top + result.y + source.height / 2).toBe(pointer.y);
+      expect(result.scaleX).toBe(1);
+      expect(result.scaleY).toBe(1);
+    }
+  });
+
+  it('вкладка схвачена на 75% ширины — центр тоже под указателем', () => {
+    const tab: ClientRect = { left: 1098, top: 4, width: 125, height: 28, right: 1223, bottom: 32 };
+    const result = centerOverlayOnCursor(
+      args({
+        activatorEvent: { clientX: 1191.75, clientY: 18 } as unknown as Event,
+        activeNodeRect: tab,
+        draggingNodeRect: tab,
+        transform: { x: -291.75, y: 400, scaleX: 1, scaleY: 1 },
+      }),
+    );
+    expect(tab.left + result.x + tab.width / 2).toBe(900);
+    expect(tab.top + result.y + tab.height / 2).toBe(418);
+  });
+
+  it('без события или прямоугольника источника — сдвиг как есть', () => {
+    const transform = { x: 7, y: 9, scaleX: 1, scaleY: 1 };
+    expect(centerOverlayOnCursor(args({ activatorEvent: null, transform }))).toEqual(transform);
+    expect(centerOverlayOnCursor(args({ activeNodeRect: null, transform }))).toEqual(transform);
   });
 });

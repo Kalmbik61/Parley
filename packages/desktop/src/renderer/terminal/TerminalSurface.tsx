@@ -24,7 +24,7 @@
  */
 
 import '@xterm/xterm/css/xterm.css';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Terminal } from '@xterm/xterm';
 import type { SearchAddon } from '@xterm/addon-search';
 import { useDroppable } from '@dnd-kit/core';
@@ -34,7 +34,7 @@ import type { TabSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { dndId, type DropTargetData } from '../layout/dnd.js';
-import { useDropPreview } from '../layout/DropIndicator.js';
+import { useTerminalDropPreview } from '../layout/DropIndicator.js';
 import { useLayoutStore } from '../layout/store.js';
 import { tabMeta } from '../layout/tab-meta.js';
 import { focusTab } from '../layout/tree.js';
@@ -91,9 +91,8 @@ export function TerminalSurface(props: TerminalSurfaceProps): JSX.Element {
     },
     [setNodeRef],
   );
-  const preview = useDropPreview();
   // Рамка терминала — индикатор броска в него (спека 5.4).
-  const dropTarget = visible && preview?.kind === 'terminal' && preview.sessionId === sessionRef.sessionId;
+  const dropTarget = useTerminalDropPreview(key, sessionRef.sessionId) && visible;
   const entry = useWorksStore((state) =>
     state.entries.find((item) => item.projectPath === sessionRef.projectPath && item.map.work.id === sessionRef.workId),
   );
@@ -158,7 +157,12 @@ export function TerminalSurface(props: TerminalSurfaceProps): JSX.Element {
   );
 }
 
-function SurfaceInner({ bridge, sessionRef, visible, fontFamily, fontSize }: TerminalSurfaceProps): JSX.Element {
+/**
+ * `memo` (раунд исправлений 1, ревью A): рамка броска перерисовывает корень
+ * поверхности, а пропы внутреннего компонента — те же ссылки, и xterm с
+ * `use-terminal` при этом не трогаются.
+ */
+const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, visible, fontFamily, fontSize }: TerminalSurfaceProps): JSX.Element {
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const { search, terminal } = useTerminal({ bridge, ref: sessionRef, container, fontFamily, fontSize, visible });
   const dark = useUiStore((state) => state.dark);
@@ -223,4 +227,4 @@ function SurfaceInner({ bridge, sessionRef, visible, fontFamily, fontSize }: Ter
       </div>
     </div>
   );
-}
+});

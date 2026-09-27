@@ -13,6 +13,7 @@ import type {
   CollisionDetection,
   DragEndEvent,
   DroppableContainer,
+  Modifier,
 } from '@dnd-kit/core';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { tabId as tabIdOf } from './ids.js';
@@ -271,6 +272,28 @@ function pointerOf(
   const rect = event.active.rect.current.translated;
   return rect === null ? null : { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
 }
+
+/**
+ * Модификатор `DragOverlay`: центр оверлея — под указателем (по образцу
+ * `snapCenterToCursor` из `@dnd-kit/modifiers`, без новой зависимости). Иначе
+ * @dnd-kit ставит оверлей на прямоугольник источника и сдвигает на дельту
+ * указателя, и ярлык отстаёт от курсора на расстояние от точки хвата до угла
+ * источника (ревью B: ~97 px у строки сессии, ~56 px у вкладки).
+ *
+ * Берётся `activeNodeRect`, а не `draggingNodeRect`: обёртка оверлея стоит
+ * ровно на прямоугольнике источника, а `draggingNodeRect` @dnd-kit меряет
+ * у уже сдвинутой обёртки — на порог активации (4 px) и мимо.
+ */
+export const centerOverlayOnCursor: Modifier = ({ activatorEvent, activeNodeRect, transform }) => {
+  const start = activatorEvent as (Event & { clientX?: unknown; clientY?: unknown }) | null;
+  if (activeNodeRect === null || start === null) return transform;
+  if (typeof start.clientX !== 'number' || typeof start.clientY !== 'number') return transform;
+  return {
+    ...transform,
+    x: transform.x + start.clientX - activeNodeRect.left - activeNodeRect.width / 2,
+    y: transform.y + start.clientY - activeNodeRect.top - activeNodeRect.height / 2,
+  };
+};
 
 /** onDragEnd @dnd-kit → что бросили (`active.data`) и куда (`over.data` — DropTargetData, + zoneForPoint); null — мимо зон. */
 export function dropFromDragEnd(event: DragEndEvent): { item: DragItem; zone: DropZone } | null {

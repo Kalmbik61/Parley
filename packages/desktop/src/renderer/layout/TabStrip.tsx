@@ -44,7 +44,7 @@ import { displayStatus, dotState } from '../lib/dot-state.js';
 import { activityFor, useActivityStore } from '../store/activity.js';
 import { useUiStore } from '../store/ui.js';
 import { dndId, type DragSourceData, type DropTargetData } from './dnd.js';
-import { useDropPreview } from './DropIndicator.js';
+import { useStripDropSlot } from './DropIndicator.js';
 import { Tab } from './Tab.js';
 import { openTerminalSessionIds } from './tree.js';
 import { tabMeta } from './tab-meta.js';
@@ -112,8 +112,7 @@ export function TabStrip({ workKey, group, entry, portal, active }: TabStripProp
     },
     [setNodeRef],
   );
-  const preview = useDropPreview();
-  const slot = preview?.kind === 'strip' && preview.groupId === group.id ? preview.index : null;
+  const slot = useStripDropSlot(workKey, group.id);
 
   useEffect(() => {
     const el = tablistRef.current;

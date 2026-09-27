@@ -14,8 +14,8 @@ import type { LayoutNode } from '../../shared/layout-types.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
-import { layoutCollision, type DragItem, type DropTargetData } from './dnd.js';
-import { DropIndicator } from './DropIndicator.js';
+import { dndId, layoutCollision, type DragItem, type DropTargetData } from './dnd.js';
+import { DropIndicator, setDropPreview } from './DropIndicator.js';
 import { EMPTY_HISTORY } from './history.js';
 import { LayoutView } from './LayoutView.js';
 import { useLayoutStore } from './store.js';
@@ -367,5 +367,84 @@ describe('индикатор над поверхностями (тест 15)', (
     expect(body.style.zIndex).toBe('');
     expect(surfaceRoot.className).not.toMatch(/\bz-/);
     expect(body.className).not.toMatch(/\bz-/);
+  });
+});
+
+describe('превью броска перерисовывает только свою зону (раунд исправлений 1, ревью A)', () => {
+  const PROJECT_B = '/tmp/q';
+  const WORK_KEY_B = '/tmp/q w';
+
+  /** Число рендеров каждого droppable с прошлого сброса: шпион `useDroppable` зовётся на каждый рендер. */
+  function renders(): Map<string, number> {
+    const counts = new Map<string, number>();
+    for (const call of spies.droppable) counts.set(call.id, (counts.get(call.id) ?? 0) + 1);
+    return counts;
+  }
+
+  it('смена зоны над группой g1 работы A не перерисовывает другие группы, поверхности и работу B', async () => {
+    // Работа B — те же id групп, вкладок и сессий: превью различает работы по ключу.
+    const entryB = { ...entry([session('a', 'альфа'), session('b', 'бета'), session('x', 'икс')]), projectPath: PROJECT_B };
+    useWorksStore.setState({ entries: [entry([session('a', 'альфа'), session('b', 'бета'), session('x', 'икс')]), entryB] });
+    setLayout(twoGroups(), 'g1');
+    useLayoutStore.setState((state) => ({
+      layouts: { ...state.layouts, [WORK_KEY_B]: { root: twoGroups(), activeGroupId: 'g1', closedTabs: [] } },
+      hydrated: { ...state.hydrated, [WORK_KEY_B]: true },
+    }));
+    render(
+      <>
+        <div data-work-container={WORK_KEY}>
+          <LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} />
+          <SurfaceLayer workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} />
+        </div>
+        <div data-work-container={WORK_KEY_B}>
+          <LayoutView workKey={WORK_KEY_B} active={false} bridge={bridge} fontFamily="Menlo" fontSize={13} />
+          <SurfaceLayer workKey={WORK_KEY_B} active={false} bridge={bridge} fontFamily="Menlo" fontSize={13} />
+        </div>
+      </>,
+    );
+    await flush();
+    const bodyA1 = dndId.body(WORK_KEY, 'g1');
+    const stripA1 = dndId.strip(WORK_KEY, 'g1');
+    const terminalA = dndId.terminal(WORK_KEY, 'terminal:a');
+    const all = new Set(spies.droppable.map((call) => call.id));
+
+    // Центр тела g1: индикатор — свой компонент, ни одна зона не перерисована.
+    spies.droppable = [];
+    act(() => setDropPreview(WORK_KEY, { kind: 'center', groupId: 'g1' }));
+    expect(renders().size).toBe(0);
+    expect(document.querySelector(`[data-work-container="${WORK_KEY}"] [data-group-body="g1"] [data-drop-indicator="center"]`)).not.toBeNull();
+    expect(document.querySelectorAll('[data-drop-indicator]')).toHaveLength(1);
+
+    // Та же зона ещё раз — никто не перерисован.
+    spies.droppable = [];
+    act(() => setDropPreview(WORK_KEY, { kind: 'center', groupId: 'g1' }));
+    expect(renders().size).toBe(0);
+
+    // Край того же тела — снова без перерисовки зон; строка g1 — только она.
+    spies.droppable = [];
+    act(() => setDropPreview(WORK_KEY, { kind: 'edge', groupId: 'g1', edge: 'left' }));
+    expect(renders().size).toBe(0);
+    expect(document.querySelector('[data-drop-indicator="left"]')).not.toBeNull();
+    spies.droppable = [];
+    act(() => setDropPreview(WORK_KEY, { kind: 'strip', groupId: 'g1', index: 1 }));
+    expect([...renders().keys()]).toEqual([stripA1]);
+    expect(document.querySelectorAll('[data-drop-indicator]')).toHaveLength(0);
+    expect(document.querySelectorAll('[data-drop-line]')).toHaveLength(1);
+
+    // Терминал сессии a: только его поверхность в A (и строка g1 гасит линию).
+    spies.droppable = [];
+    act(() => setDropPreview(WORK_KEY, { kind: 'terminal', sessionId: 'a' }));
+    expect(new Set(renders().keys())).toEqual(new Set([stripA1, terminalA]));
+
+    // Конец перетаскивания: гаснет только терминал; прочие droppable
+    // (другие группы, поверхности, вся работа B) не перерисовывались ни разу.
+    spies.droppable = [];
+    act(() => setDropPreview(null, null));
+    expect([...renders().keys()]).toEqual([terminalA]);
+    const untouched = [...all].filter((id) => ![stripA1, terminalA].includes(id));
+    expect(untouched).toContain(bodyA1);
+    expect(untouched.length).toBeGreaterThanOrEqual(10);
+    expect(untouched.some((id) => id.includes(WORK_KEY_B))).toBe(true);
+    expect(document.querySelectorAll('[data-drop-indicator], [data-drop-line]')).toHaveLength(0);
   });
 });

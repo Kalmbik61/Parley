@@ -36,7 +36,7 @@ import { MissingBody } from './bodies/MissingBody.js';
 import { RoomBody } from './bodies/RoomBody.js';
 import { TerminalBody } from './bodies/TerminalBody.js';
 import { dndId, type DropTargetData } from './dnd.js';
-import { DropIndicator, useDropPreview } from './DropIndicator.js';
+import { DropIndicator, useBodyDropPreview } from './DropIndicator.js';
 import { TabStrip } from './TabStrip.js';
 import { useLayoutStore } from './store.js';
 import { focusGroup } from './tree.js';
@@ -102,6 +102,15 @@ function TabBody({ tab, entry, host, onMissing }: TabBodyProps): JSX.Element {
   }
 }
 
+/**
+ * Индикатор тела — отдельный компонент (раунд исправлений 1, ревью A): смена
+ * зоны броска перерисовывает только его, а не группу вместе со строкой вкладок.
+ */
+function BodyDropIndicator({ workKey, groupId }: { workKey: string; groupId: string }): JSX.Element | null {
+  const target = useBodyDropPreview(workKey, groupId);
+  return target === null ? null : <DropIndicator edge={target === 'center' ? null : target} />;
+}
+
 export interface GroupViewProps {
   workKey: string;
   group: GroupNode;
@@ -126,8 +135,6 @@ export function GroupView({ workKey, group, entry, singleGroup }: GroupViewProps
     },
     [setNodeRef],
   );
-  const preview = useDropPreview();
-  const target = (preview?.kind === 'center' || preview?.kind === 'edge') && preview.groupId === group.id ? preview : null;
   useLayoutEffect(() => {
     bodyRef.current?.style.setProperty('anchor-name', `--g-${group.id}`);
   }, [group.id]);
@@ -150,7 +157,7 @@ export function GroupView({ workKey, group, entry, singleGroup }: GroupViewProps
         <TabStrip workKey={workKey} group={group} entry={entry} portal={singleGroup} active={host.active} />
       )}
       <div ref={setBody} data-group-body={group.id} className="relative min-h-0 min-w-0 flex-1">
-        {target === null ? null : <DropIndicator edge={target.kind === 'edge' ? target.edge : null} />}
+        <BodyDropIndicator workKey={workKey} groupId={group.id} />
         {group.tabs.length === 0 ? (
           <div className="flex h-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
             {S.tabs.emptyGroup}

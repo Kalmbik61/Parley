@@ -40,7 +40,7 @@
  * броска нет — сессии в старый центр не тащатся до 2.7.
  */
 
-import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -68,8 +68,8 @@ import { Sidebar } from '../components/sidebar/Sidebar.js';
 import { buildCommands } from '../lib/commands.js';
 import { sessionLabelFor, sessionRowLabel } from '../lib/participant.js';
 import { treeOrder, workKey } from '../lib/tree-order.js';
-import { applyDrop, dragItemOf, dropFromDragEnd, layoutCollision, onTerminalDrop, type DragItem, type DropZone } from '../layout/dnd.js';
-import { DropPreviewContext } from '../layout/DropIndicator.js';
+import { applyDrop, centerOverlayOnCursor, dragItemOf, dropFromDragEnd, layoutCollision, onTerminalDrop, type DragItem } from '../layout/dnd.js';
+import { setDropPreview } from '../layout/DropIndicator.js';
 import { tabId } from '../layout/ids.js';
 import { tabMeta } from '../layout/tab-meta.js';
 import { LayoutView } from '../layout/LayoutView.js';
@@ -105,11 +105,6 @@ function measureGroupSizes(): GroupSizes {
   return sizes;
 }
 
-/** Одинаковые ли зоны — чтобы не перерисовывать индикаторы на каждый сдвиг мыши. */
-function sameZone(a: DropZone | null, b: DropZone | null): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
 /**
  * Ярлык предмета в `DragOverlay`: заголовок вкладки или строка сессии активной
  * работы — тот же текст, что человек видел под курсором.
@@ -128,6 +123,9 @@ function dragLabel(item: DragItem, key: string | null): string {
 /** Слои поверхностей живут у трёх последних работ (план, «Числа»). */
 const SURFACE_WORKS = 3;
 
+/** Модификаторы оверлея — одна ссылка на всё время жизни окна. */
+const OVERLAY_MODIFIERS = [centerOverlayOnCursor];
+
 interface WorkContainerProps {
   workKey: string;
   active: boolean;
@@ -140,8 +138,12 @@ interface WorkContainerProps {
  * Контейнер одной работы LRU (кусок 2.5). Пока раскладки работы нет в
  * `layouts` (до `hydrate` после `setActiveWork`), контейнер пуст: ни
  * `LayoutView`, ни `SurfaceLayer`.
+ *
+ * `memo` (раунд исправлений 1 куска 2.6, ревью A): пропы — ключ, флаг, мост и
+ * шрифт, стабильны; начало и конец перетаскивания (`dragging` в `AppShell`)
+ * иначе перерисовывали бы все тела групп и поверхности трёх работ.
  */
-function WorkContainer({ workKey, active, bridge, fontFamily, fontSize }: WorkContainerProps): JSX.Element {
+const WorkContainer = memo(function WorkContainer({ workKey, active, bridge, fontFamily, fontSize }: WorkContainerProps): JSX.Element {
   const hasLayout = useLayoutStore((state) => state.layouts[workKey] !== undefined);
   const ref = useRef<HTMLDivElement>(null);
   // `inert` в React 18 — не булев проп, ставится руками.
@@ -163,7 +165,7 @@ function WorkContainer({ workKey, active, bridge, fontFamily, fontSize }: WorkCo
       ) : null}
     </div>
   );
-}
+});
 
 export interface AppShellProps {
   bridge: HarnasBridge;
@@ -250,11 +252,11 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
 
   const leftSidebarRef = useRef<HTMLDivElement>(null);
 
-  // Перетаскивание (кусок 2.6). `dragging` — ярлык в `DragOverlay`, `dropZone`
-  // — где сейчас бросок, для индикаторов в строке, теле и терминале.
+  // Перетаскивание (кусок 2.6). `dragging` — ярлык в `DragOverlay`. Где сейчас
+  // бросок, индикаторам сообщает `setDropPreview` — не состояние `AppShell`:
+  // иначе каждая смена зоны перерисовывала бы всё окно (раунд исправлений 1).
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const [dragging, setDragging] = useState<string | null>(null);
-  const [dropZone, setDropZone] = useState<DropZone | null>(null);
 
   const handleDragStart = (event: DragStartEvent): void => {
     const item = dragItemOf(event.active.data.current);
@@ -263,12 +265,12 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
 
   const handleDragMove = (event: DragMoveEvent): void => {
     const zone = dropFromDragEnd(event)?.zone ?? null;
-    setDropZone((prev) => (sameZone(prev, zone) ? prev : zone));
+    setDropPreview(useLayoutStore.getState().activeWorkKey, zone);
   };
 
   const handleDragEnd = (event: DragEndEvent): void => {
     setDragging(null);
-    setDropZone(null);
+    setDropPreview(null, null);
     const drop = dropFromDragEnd(event);
     const key = useLayoutStore.getState().activeWorkKey;
     if (drop === null || key === null) return;
@@ -288,7 +290,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
 
   const handleDragCancel = (): void => {
     setDragging(null);
-    setDropZone(null);
+    setDropPreview(null, null);
   };
 
   // N-я по порядку создания работа и её последняя открытая сессия
@@ -568,14 +570,18 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <DropPreviewContext.Provider value={dropZone}>{shell}</DropPreviewContext.Provider>
-      <DragOverlay dropAnimation={null}>
+      {shell}
+      {/* Обёртка оверлея — размером с источник, её центр модификатор ставит
+          под указатель; ярлык — по центру обёртки (раунд исправлений 1, ревью B). */}
+      <DragOverlay dropAnimation={null} modifiers={OVERLAY_MODIFIERS}>
         {dragging === null ? null : (
-          <div
-            data-drag-overlay
-            className="inline-flex h-7 max-w-60 items-center truncate rounded border border-border bg-popover px-2 text-xs text-popover-foreground shadow"
-          >
-            {dragging}
+          <div className="flex h-full w-full items-center justify-center">
+            <div
+              data-drag-overlay
+              className="inline-flex h-7 max-w-60 shrink-0 items-center truncate rounded border border-border bg-popover px-2 text-xs text-popover-foreground shadow"
+            >
+              {dragging}
+            </div>
           </div>
         )}
       </DragOverlay>
