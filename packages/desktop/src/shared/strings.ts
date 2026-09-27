@@ -2,17 +2,19 @@
  * Единственная таблица видимых текстов окна (кусок E.1, решение пользователя
  * 2026-09-27: интерфейс — только английский, как у Orca). И main, и рендерер
  * читают её отсюда — `shared/` входит в `tsconfig.node.json` и
- * `tsconfig.web.json` разом, поэтому здесь нет импортов из `@harnas/core` и
- * прочих пакетов (main их не резолвит через свои `references`): таблицы вроде
- * кодов слияния держат ключ обычной строкой, а не типом чужого пакета — тот
- * же приём, что и у `STATUS_LABEL`/`MERGE_FAIL_TEXT` в `ChangesPanel.tsx` до
- * этого куска.
+ * `tsconfig.web.json` разом. `@harnas/protocol` — единственный пакет в
+ * `references` ОБОИХ тсконфигов, поэтому типы `HostNotice`/`NoticeKind` (для
+ * `noticeText`) взяты оттуда; `@harnas/core` main не резолвит вовсе — таблицы
+ * вроде кодов слияния держат ключ обычной строкой, а не типом этого пакета,
+ * тот же приём, что и у `STATUS_LABEL`/`MERGE_FAIL_TEXT` в `ChangesPanel.tsx`
+ * до этого куска.
  *
  * Перевод — по глоссарию индекса плана (`docs/specs/2026-09-26-desktop-orca-ui-plan.md`,
  * «Сквозные ограничения» → «Язык интерфейса»): работа → workspace, почта →
  * mail, письмо → message, будильник → auto-wake и т. д. Группы ниже по
  * областям окна; параметризованные тексты — функции.
  */
+import type { HostNotice, NoticeKind } from '@harnas/protocol';
 
 export const S = {
   /** Общие подписи кнопок, переиспользуемые в нескольких диалогах. */
@@ -174,7 +176,7 @@ export const S = {
   /** ⌘D/⇧⌘D — `palette/SessionPicker.tsx`. */
   picker: {
     title: 'Session into new panel',
-    empty: 'This workspace has no sessions without a panel',
+    empty: 'Every session here already has a panel',
   },
 
   /** «Изменения» — `changes/ChangesPanel.tsx`, `changes/DiffView.tsx`. */
@@ -334,4 +336,42 @@ export function errorText(code: string, action?: string): string {
   const reason = ERROR_REASON[code] ?? DEFAULT_REASON;
   if (action === undefined) return `${reason.charAt(0).toUpperCase()}${reason.slice(1)}.`;
   return `Couldn't ${action}: ${reason}.`;
+}
+
+/**
+ * Английский смысл каждого `NoticeKind` (`@harnas/protocol`) — раунд
+ * исправлений 1 куска E.1: `HostNotice.text` хост пишет свободным русским
+ * текстом (например, `packages/host/src/activity/activity-service.ts:217,248`,
+ * `packages/host/src/sessions/sessions-service.ts:174,215`,
+ * `packages/host/src/wake/wake-service.ts:208,224,243,320,331`,
+ * `packages/host/src/works/works-service.ts:85,140`) — он приходит рантаймом
+ * по сокету, а не литералом в этом пакете, поэтому страж `english-ui` его не
+ * ловит. Смысл каждого вида взят из этих мест хоста, сам текст — нет: хост не
+ * трогаем (сквозное правило), `notice.text` остаётся только в `console.warn`
+ * у вызывающей стороны (`store/notices.ts`).
+ */
+const NOTICE_DETAIL: Record<NoticeKind, string> = {
+  'map-lock': 'workspace map is locked — try again in a moment',
+  'map-corrupt': "workspace map couldn't be read",
+  'hooks-missing': 'Claude Code hooks did not report — falling back to log-based status',
+  'launch-failed': "couldn't launch this session",
+  'pointer-timeout': 'no response after the wake-up nudge',
+  'pointer-cancelled': 'wake-up nudge cancelled by your input',
+  'resume-failed': "couldn't resume this session",
+  'resume-limit': 'hourly resume limit reached — mail is waiting',
+  'trust-wait': 'not responding since launch — may be waiting for folder trust',
+};
+
+/**
+ * Английский текст уведомления хоста для человека — строка статуса
+ * (`shell/StatusBar.tsx`, любой `NoticeKind`) и тело macOS-уведомления
+ * trust-wait (`App.tsx`). `label` — ярлык сессии по `notice.ref`, если
+ * вызывающая сторона его знает (рендерер ищет по снимку работ через
+ * `lib/participant.ts#sessionLabelFor`; main, у которого снимка нет, зовёт
+ * без него или с тем, что есть); без ярлыка — просто фраза с большой буквы.
+ */
+export function noticeText(notice: HostNotice, label?: string): string {
+  const detail = NOTICE_DETAIL[notice.kind];
+  if (label === undefined) return `${detail.charAt(0).toUpperCase()}${detail.slice(1)}.`;
+  return `${label}: ${detail}.`;
 }

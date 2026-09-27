@@ -3,10 +3,11 @@ import { refKey } from '@harnas/protocol';
 import type { HarnasConfig } from '@harnas/core';
 import { getHostClient } from './host-client.js';
 import type { HostStatus } from '../shared/bridge.js';
-import { S } from '../shared/strings.js';
+import { noticeText, S } from '../shared/strings.js';
 import { AppShell } from './shell/AppShell.js';
 import { NewSessionDialog } from './components/dialogs/NewSessionDialog.js';
 import { SettingsDialog } from './components/settings/SettingsDialog.js';
+import { sessionLabelFor } from './lib/participant.js';
 import { wireNotifications } from './notifications.js';
 import { useActivityStore } from './store/activity.js';
 import { useNoticesStore } from './store/notices.js';
@@ -81,7 +82,8 @@ export function App(): JSX.Element {
       // стор уведомлений), здесь только macOS-уведомление.
       bridge.on('host.notice', (notice) => {
         if (notice.kind !== 'trust-wait') return;
-        bridge.app.notify({ title: S.notifications.trustWaitTitle, body: notice.text });
+        const label = sessionLabelFor(useWorksStore.getState().entries, notice.ref);
+        bridge.app.notify({ title: S.notifications.trustWaitTitle, body: noticeText(notice, label) });
       }),
       // 'palette'/'new-work'/'toggle-left-sidebar'/'work-1…9' слушает
       // `AppShell` (кусок 2.3) — у него для них есть ручка `Workspace` и

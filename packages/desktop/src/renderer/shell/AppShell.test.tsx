@@ -180,6 +180,50 @@ describe('AppShell — Landing и оболочка с работой (тест 6
     expect(screen.getByTestId('app-shell')).toBeTruthy();
     expect(screen.getByText('Первая')).toBeTruthy();
   });
+
+  // Раунд исправлений 1 куска E.1 (ревью линза A, Critical): HostNotice.text
+  // хост пишет по-русски и не переводит (сквозное правило) — строка статуса
+  // обязана показывать noticeText(notice, label) по коду, а не notice.text.
+  it('строка статуса переводит уведомление хоста по коду, не показывает русский notice.text', async () => {
+    useNoticesStore.setState({
+      notices: [
+        {
+          kind: 'trust-wait',
+          ref: null,
+          text: 'русский текст хоста, который никто не должен увидеть',
+          at: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    });
+
+    render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
+    await flush();
+
+    expect(screen.getByText('Not responding since launch — may be waiting for folder trust.')).toBeTruthy();
+    expect(screen.queryByText(/русский/)).toBeNull();
+  });
+
+  it('строка статуса подставляет ярлык сессии, когда находит её в снимке работ', async () => {
+    const w1 = work('w-01', '2026-01-01', 'Первая', [session('s-03', 'бэкенд')]);
+    useWorksStore.setState({ entries: [w1], branches: {}, loading: false, error: null });
+    useNoticesStore.setState({
+      notices: [
+        {
+          kind: 'trust-wait',
+          ref: { projectPath: '/tmp/w-01', workId: 'w-01', sessionId: 's-03' },
+          text: 'русский',
+          at: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    });
+
+    render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
+    await flush();
+
+    expect(
+      screen.getByText('S03 бэкенд: not responding since launch — may be waiting for folder trust.'),
+    ).toBeTruthy();
+  });
 });
 
 describe('AppShell — меню и диалоги (тест 9)', () => {

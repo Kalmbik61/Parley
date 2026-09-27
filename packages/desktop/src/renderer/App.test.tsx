@@ -8,9 +8,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render } from '@testing-library/react';
+import { act, cleanup, render } from '@testing-library/react';
 import { App } from './App.js';
-import { createFakeBridge } from './test-utils/fake-bridge.js';
+import { createFakeBridge, type FakeBridge } from './test-utils/fake-bridge.js';
 import { useActivityStore } from './store/activity.js';
 import { useNoticesStore } from './store/notices.js';
 import { useUiStore } from './store/ui.js';
@@ -24,6 +24,8 @@ class ResizeObserverStub {
   unobserve(): void {}
   disconnect(): void {}
 }
+
+let bridge: FakeBridge;
 
 beforeEach(() => {
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
@@ -43,7 +45,8 @@ beforeEach(() => {
   });
   // `getHostClient()` читает `window.harnas` лениво — подставляем вручную,
   // как и задумано (комментарий в `host-client.ts`).
-  window.harnas = createFakeBridge();
+  bridge = createFakeBridge();
+  window.harnas = bridge;
 });
 
 afterEach(() => {
@@ -58,5 +61,90 @@ describe('App — корневая обёртка окна (раунд испр�
     expect(root).not.toBeNull();
     expect(root?.className).toContain('text-foreground');
     expect(root?.className ?? '').not.toMatch(/var\(--/);
+  });
+});
+
+// Раунд исправлений 1 куска E.1 (ревью линза A, Critical): тело настоящего
+// macOS-уведомления trust-wait раньше было сырым notice.text хоста
+// (по-русски); теперь — noticeText(notice, label) (`shared/strings.ts`).
+describe('App — уведомление trust-wait (раунд исправлений 1 куска E.1)', () => {
+  it('тело уведомления — английский noticeText, не русский notice.text хоста', () => {
+    render(<App />);
+
+    act(() => {
+      bridge.emit('host.notice', {
+        kind: 'trust-wait',
+        ref: null,
+        text: 'русский текст хоста, который никто не должен увидеть',
+        at: '2026-01-01T00:00:00.000Z',
+      });
+    });
+
+    expect(bridge.appNotified).toEqual([
+      { title: 'Waiting for folder trust', body: 'Not responding since launch — may be waiting for folder trust.' },
+    ]);
+  });
+
+  it('находит ярлык сессии в снимке работ и подставляет его в тело', () => {
+    useWorksStore.setState({
+      entries: [
+        {
+          projectPath: '/tmp/w-01',
+          map: {
+            schemaVersion: 2,
+            rooms: [],
+            work: { id: 'w-01', title: 'Первая', goal: '', status: 'active', createdAt: '2026-01-01', updatedAt: '2026-01-01' },
+            sessions: [
+              {
+                id: 's-03',
+                provider: 'claude',
+                label: 'бэкенд',
+                task: '',
+                parent: null,
+                contextFrom: [],
+                lifecycle: 'active',
+                result: null,
+                resultAt: null,
+                closedAt: null,
+                history: [],
+                startedAt: null,
+                endedAt: null,
+                pid: null,
+                startedAtProcess: null,
+                launchedBy: 'host',
+                providerSessionId: null,
+                metrics: null,
+                summary: null,
+                summarySource: null,
+                artifacts: [],
+                agent: null,
+              },
+            ],
+            messages: [],
+          },
+        },
+      ],
+      branches: {},
+      loading: false,
+      error: null,
+    });
+
+    render(<App />);
+
+    act(() => {
+      bridge.emit('host.notice', {
+        kind: 'trust-wait',
+        ref: { projectPath: '/tmp/w-01', workId: 'w-01', sessionId: 's-03' },
+        text: 'русский',
+        at: '2026-01-01T00:00:00.000Z',
+      });
+    });
+
+    expect(bridge.appNotified).toEqual([
+      {
+        title: 'Waiting for folder trust',
+        body: 'S03 бэкенд: not responding since launch — may be waiting for folder trust.',
+      },
+    ]);
   });
 });

@@ -17,7 +17,7 @@ import { useEffect, useRef } from 'react';
 import type { WorkSession } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge, HostStatus } from '../../shared/bridge.js';
-import { S } from '../../shared/strings.js';
+import { noticeText, S } from '../../shared/strings.js';
 import { LEFT_SIDEBAR } from '../../shared/ui-types.js';
 import { InterruptedBanner } from '../components/InterruptedBanner.js';
 import { NewWorkDialog } from '../components/dialogs/NewWorkDialog.js';
@@ -27,7 +27,7 @@ import { SessionPicker, sessionCandidates } from '../components/palette/SessionP
 import { CreateRoomDialog, type RoomCandidate } from '../components/rooms/CreateRoomDialog.js';
 import { Sidebar } from '../components/sidebar/Sidebar.js';
 import { buildCommands } from '../lib/commands.js';
-import { sessionRowLabel } from '../lib/participant.js';
+import { sessionLabelFor, sessionRowLabel } from '../lib/participant.js';
 import { treeOrder, workKey } from '../lib/tree-order.js';
 import { useLayoutPersistence } from '../layout/persistence.js';
 import { useNoticesStore } from '../store/notices.js';
@@ -78,6 +78,12 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   const recentSessionRefs = useUiStore((state) => state.recentSessionRefs);
   const toggleWake = useUiStore((state) => state.toggleWake);
   const notices = useNoticesStore((state) => state.notices);
+  // Раунд исправлений 1 куска E.1: `notice.text` хоста — русский свободный
+  // текст (сквозное правило его не переводит), строка статуса показывает
+  // `noticeText` по виду уведомления вместо него; сырой текст — только в
+  // консоли (`store/notices.ts`).
+  const lastNotice = notices[0] ?? null;
+  const noticeLine = lastNotice === null ? '' : noticeText(lastNotice, sessionLabelFor(entries, lastNotice.ref));
 
   const leftSidebarRef = useRef<HTMLDivElement>(null);
 
@@ -189,7 +195,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
           </ErrorBoundary>
         </div>
       )}
-      <StatusBar status={status} lastNotice={notices[0] ?? null} wakePaused={wakePaused} onToggleWake={() => void toggleWake(bridge)} />
+      <StatusBar status={status} noticeLine={noticeLine} wakePaused={wakePaused} onToggleWake={() => void toggleWake(bridge)} />
       <CommandPalette open={paletteOpen} commands={commands} onOpenChange={setPaletteOpen} />
       <SessionPicker
         open={picker !== null}

@@ -3,9 +3,12 @@
  * паузы будильника живых сессий (кусок 1.10 плана окна). Перенесена из
  * `renderer/components/StatusBar.tsx` в `renderer/shell/` куском 2.3
  * (спека 5.9) — содержимое не менялось.
+ *
+ * `noticeLine` приходит уже переведённым текстом (`shared/strings.ts#noticeText`,
+ * раунд исправлений 1 куска E.1) — сам компонент `HostNotice` больше не
+ * видит и русский `notice.text` показать не может, даже случайно.
  */
 
-import type { HostNotice } from '@harnas/protocol';
 import type { HostStatus } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 
@@ -18,15 +21,16 @@ const CONNECTION_TEXT: Record<HostStatus['state'], (status: HostStatus) => strin
 
 export interface StatusBarProps {
   status: HostStatus;
-  lastNotice: HostNotice | null;
+  /** Английский текст последнего уведомления хоста, уже собранный `noticeText` — пусто, если уведомлений ещё не было. */
+  noticeLine: string;
   wakePaused: boolean | null;
   onToggleWake: () => void;
 }
 
-export function StatusBar({ status, lastNotice, wakePaused, onToggleWake }: StatusBarProps): JSX.Element {
+export function StatusBar({ status, noticeLine, wakePaused, onToggleWake }: StatusBarProps): JSX.Element {
   return (
     <div className="flex h-6 shrink-0 items-center justify-between gap-3 border-t border-border bg-card px-3 text-xs text-muted-foreground">
-      <span className="min-w-0 flex-1 truncate">{lastNotice?.text ?? ''}</span>
+      <span className="min-w-0 flex-1 truncate">{noticeLine}</span>
       <span className="shrink-0">{CONNECTION_TEXT[status.state](status)}</span>
       <button
         type="button"
