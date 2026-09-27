@@ -742,3 +742,70 @@ describe('AppShell — ?center=new: меню find (тест 15 куска 2.5)',
     expect(bars[0]?.closest('[data-tab-id]')?.getAttribute('data-tab-id')).toBe('terminal:s-03');
   });
 });
+
+describe('AppShell — ?center=new: фокус группы из поверхности терминала (раунд исправлений 1 куска 2.5)', () => {
+  // Поверхность живёт в слое, а не внутри `GroupView`, — его
+  // `onPointerDownCapture` до неё не доходит; группу фокусирует сама поверхность.
+  async function twoGroupsFocusedOnSecond(): Promise<string> {
+    mockNonZeroRects();
+    await renderCenterNew([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один'), session('s-02', 'два')])]);
+    const key = keyOf('w-01');
+    act(() => useLayoutStore.getState().setActiveWork(key));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[key]).toBe(true));
+    act(() => {
+      useLayoutStore.getState().apply(key, (layout) => openTab(layout, term('s-01')));
+      const layout = useLayoutStore.getState().layouts[key];
+      if (layout === undefined) throw new Error('нет раскладки');
+      useLayoutStore.getState().apply(key, (l) => splitGroup(l, layout.activeGroupId, 'row', term('s-02'), { [layout.activeGroupId]: { width: 800, height: 600 } }));
+    });
+    await flush();
+    return key;
+  }
+
+  function groupOf(key: string, tab: string): string | undefined {
+    const layout = useLayoutStore.getState().layouts[key];
+    return layout === undefined ? undefined : groups(layout).find((group) => group.tabs.some((t) => t.id === tab))?.id;
+  }
+
+  function pad(tab: string): HTMLElement {
+    const el = document.querySelector<HTMLElement>(`[data-surface-layer] [data-tab-id="${tab}"] [data-testid="terminal-surface-pad"]`);
+    if (el === null) throw new Error(`нет поверхности ${tab}`);
+    return el;
+  }
+
+  it('pointerdown в поверхность неактивной группы: группа активна, ⌘F открывает полосу в ней', async () => {
+    const key = await twoGroupsFocusedOnSecond();
+    expect(useLayoutStore.getState().layouts[key]?.activeGroupId).toBe(groupOf(key, 'terminal:s-02'));
+
+    fireEvent.pointerDown(pad('terminal:s-01'));
+    expect(useLayoutStore.getState().layouts[key]?.activeGroupId).toBe(groupOf(key, 'terminal:s-01'));
+
+    act(() => bridge.emitMenu('find'));
+    await flush();
+    const bars = screen.getAllByPlaceholderText('Find…');
+    expect(bars).toHaveLength(1);
+    expect(bars[0]?.closest('[data-tab-id]')?.getAttribute('data-tab-id')).toBe('terminal:s-01');
+  });
+
+  it('focusin внутри поверхности неактивной группы: группа активна, ⌘F открывает полосу в ней', async () => {
+    const key = await twoGroupsFocusedOnSecond();
+
+    fireEvent.focusIn(pad('terminal:s-01'));
+    expect(useLayoutStore.getState().layouts[key]?.activeGroupId).toBe(groupOf(key, 'terminal:s-01'));
+
+    act(() => bridge.emitMenu('find'));
+    await flush();
+    const bars = screen.getAllByPlaceholderText('Find…');
+    expect(bars).toHaveLength(1);
+    expect(bars[0]?.closest('[data-tab-id]')?.getAttribute('data-tab-id')).toBe('terminal:s-01');
+  });
+
+  it('pointerdown и focusin в поверхность активной группы: раскладка той же ссылкой', async () => {
+    const key = await twoGroupsFocusedOnSecond();
+    const before = useLayoutStore.getState().layouts[key];
+
+    fireEvent.pointerDown(pad('terminal:s-02'));
+    fireEvent.focusIn(pad('terminal:s-02'));
+    expect(useLayoutStore.getState().layouts[key]).toBe(before);
+  });
+});

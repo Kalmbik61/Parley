@@ -28,6 +28,7 @@ import { S } from '../../shared/strings.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { useLayoutStore } from '../layout/store.js';
 import { tabMeta } from '../layout/tab-meta.js';
+import { focusTab } from '../layout/tree.js';
 import { ErrorBoundary } from '../shell/ErrorBoundary.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
@@ -104,12 +105,24 @@ export function TerminalSurface(props: TerminalSurfaceProps): JSX.Element {
   }, [sessionKey, visible]);
   useEffect(() => () => useUiStore.getState().setSessionVisible(sessionKey, false), [sessionKey]);
 
+  // Поверхность — сосед `GroupView`, а не потомок: его `onPointerDownCapture`
+  // клик по терминалу не видит, и ⌘F/«Split»/⌘[ ⌘] ушли бы в прежнюю активную
+  // группу. Поэтому группу (и вкладку в ней) делает активной сама поверхность —
+  // и по клику, и по фокусу клавиатурой. Capture и без `preventDefault`, чтобы
+  // не мешать выделению в xterm; в уже активной группе `focusTab` отдаёт ту же
+  // ссылку, и `apply` ничего не пишет.
+  const focusOwnTab = (): void => {
+    useLayoutStore.getState().apply(key, (layout) => focusTab(layout, tabId));
+  };
+
   return (
     <div
       ref={rootRef}
       data-tab-id={tabId}
       data-mount-id={mountId}
       className="absolute overflow-hidden"
+      onPointerDownCapture={focusOwnTab}
+      onFocusCapture={focusOwnTab}
       style={{ visibility: visible ? 'visible' : 'hidden', backgroundColor: xtermTheme(dark).background }}
     >
       <ErrorBoundary title={title} onClose={() => void useLayoutStore.getState().requestCloseTabs(key, [tabId])}>
