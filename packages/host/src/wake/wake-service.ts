@@ -33,6 +33,8 @@ import type { NoticeKind, SessionRef } from '@harnas/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import type { PtyManager } from '../pty/pty-manager.js';
+import { typeAndSubmit } from '../pty/type-and-submit.js';
+import type { Attempt } from '../pty/type-and-submit.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 import type { WorksService } from '../works/works-service.js';
 import { ResumeLimiter } from './resume-limiter.js';
@@ -54,6 +56,10 @@ export interface WakeService {
   pause(): void;
   resume(): void;
   stop(): void;
+  /** Текст указателя напечатан, а Enter ещё не ушёл (таймер Enter взведён). */
+  inFlight(ref: SessionRef): boolean;
+  /** Пауза перед Enter из WakeServiceOptions — одна на будильник и pty.send. */
+  readonly enterDelayMs: number;
 }
 
 const DEFAULT_ENTER_DELAY_MS = 500;
@@ -68,9 +74,11 @@ interface AttemptState {
   pointed: Set<string>;
   /** Указатель напечатан, ход по нему ещё не начался и не признан пропавшим. */
   inFlight: boolean;
-  /** Человек тронул клавиши в окне между текстом и Enter — событие `draft`. */
-  sawInput: boolean;
-  enterTimer: NodeJS.Timeout | undefined;
+  /**
+   * Печать указателя, чей Enter ещё не ушёл (`typeAndSubmit`). Наружу — `inFlight(ref)`:
+   * `pty.send` в это время отвечает busy, а не печатает поверх.
+   */
+  typing: Attempt | undefined;
   timeoutTimer: NodeJS.Timeout | undefined;
   /** Идёт подъём этой сессии: пока PTY не заведён, второй подъём не начинаем. */
   resuming: boolean;
@@ -135,6 +143,7 @@ export function createWakeService(
   let unsubscribeWorks: (() => void) | undefined;
   let unsubscribeActivity: (() => void) | undefined;
   let unsubscribeDraft: (() => void) | undefined;
+  let unsubscribeHostDraft: (() => void) | undefined;
   let unsubscribeExit: (() => void) | undefined;
 
   function stateFor(key: string): AttemptState {
@@ -143,8 +152,7 @@ export function createWakeService(
       state = {
         pointed: new Set(),
         inFlight: false,
-        sawInput: false,
-        enterTimer: undefined,
+        typing: undefined,
         timeoutTimer: undefined,
         resuming: false,
         resumedAt: null,
@@ -159,9 +167,10 @@ export function createWakeService(
   }
 
   function clearTimers(state: AttemptState): void {
-    if (state.enterTimer !== undefined) {
-      clearTimeout(state.enterTimer);
-      state.enterTimer = undefined;
+    if (state.typing !== undefined) {
+      const typing = state.typing;
+      state.typing = undefined;
+      typing.cancel();
     }
     if (state.timeoutTimer !== undefined) {
       clearTimeout(state.timeoutTimer);
@@ -297,13 +306,15 @@ export function createWakeService(
   function beginAttempt(
     ref: SessionRef,
     state: AttemptState,
-    pid: number,
     action: { text: string; letterIds: string[] },
   ): void {
-    pty.write(ref, action.text);
+    // Печать и Enter — общая механика с pty.send (кусок 5.1): Enter через паузу тому же
+    // pid, отмена по вводу человека. Черновиком хоста свой указатель не помечается —
+    // правила будильника (спека 7.3) прежние.
+    const typing = typeAndSubmit({ pty, enterDelayMs }, ref, action.text, true);
+    state.typing = typing;
     for (const id of action.letterIds) state.pointed.add(id);
     state.inFlight = true;
-    state.sawInput = false;
 
     // Предохранитель считает с момента печати, а не с Enter: без хуков (или без
     // самого Enter, если его отменил ввод человека) хост иначе ждал бы хода
@@ -312,29 +323,24 @@ export function createWakeService(
       state.timeoutTimer = undefined;
       // Попытка признана пропавшей — Enter, если ещё не ушёл, теперь не нужен:
       // ход всё равно не будет замечен.
-      if (state.enterTimer !== undefined) {
-        clearTimeout(state.enterTimer);
-        state.enterTimer = undefined;
-      }
+      clearTimers(state);
       state.inFlight = false;
       notice('pointer-timeout', ref, `сессия ${ref.sessionId} не начала ход после указателя`);
     }, pointerTimeoutMs);
 
-    state.enterTimer = setTimeout(() => {
-      state.enterTimer = undefined;
-      if (state.sawInput) {
+    void typing.done.then((outcome) => {
+      // Попытку уже сменили или отменили — её исход ничего не решает.
+      if (state.typing !== typing) return;
+      state.typing = undefined;
+      if (outcome === 'input') {
         // Человек уже печатает своё — Enter чужого текста испортил бы его строку.
         // Текст указателя остаётся в поле ввода, письма — в `pointed`: повторно
         // не набираем, следующий подъём — только на новое письмо.
         clearTimers(state);
         state.inFlight = false;
         notice('pointer-cancelled', ref, `указатель сессии ${ref.sessionId} отменён вводом человека`);
-        return;
       }
-      // Enter — тому же процессу, которому печатали текст: за время задержки
-      // сессию могли перезапустить, и посторонний Enter в чужой процесс не идёт.
-      if (pty.get(ref)?.pid === pid) pty.write(ref, '\r');
-    }, enterDelayMs);
+    });
   }
 
   function recompute(ref: SessionRef): void {
@@ -395,7 +401,7 @@ export function createWakeService(
       resumeAllowed: false,
     });
 
-    if (action.kind === 'type-pointer') beginAttempt(ref, state, handle.pid, action);
+    if (action.kind === 'type-pointer') beginAttempt(ref, state, action);
   }
 
   /** Все сессии всех работ: живые получают указатель, спящие — подъём. */
@@ -408,6 +414,10 @@ export function createWakeService(
   }
 
   return {
+    enterDelayMs,
+
+    inFlight: (ref) => attempts.get(refKey(ref))?.typing !== undefined,
+
     start() {
       if (started) return;
       started = true;
@@ -429,13 +439,11 @@ export function createWakeService(
         }
         recompute(ref);
       });
-      unsubscribeDraft = pty.on('draft', (ref) => {
-        const state = attempts.get(refKey(ref));
-        // Любое изменение флага черновика в окне ожидания Enter — это ввод
-        // человека, даже если черновик сам потом снова опустел.
-        if (state?.enterTimer !== undefined) state.sawInput = true;
-        recompute(ref);
-      });
+      // Ввод человека в окне ожидания Enter ловит сама печать (`typeAndSubmit`).
+      unsubscribeDraft = pty.on('draft', (ref) => recompute(ref));
+      // Черновик хоста снят (свой Enter pty.send) — письмо, пришедшее за ожидание, уходит
+      // сразу, а не ждёт следующего события сессии: у агента без хуков оно не пришло бы.
+      unsubscribeHostDraft = pty.on('host-draft', (ref) => recompute(ref));
       unsubscribeExit = pty.on('exit', (ref, exit) => {
         const state = stateFor(refKey(ref));
         clearTimers(state);
@@ -477,6 +485,7 @@ export function createWakeService(
       unsubscribeWorks?.();
       unsubscribeActivity?.();
       unsubscribeDraft?.();
+      unsubscribeHostDraft?.();
       unsubscribeExit?.();
       for (const state of attempts.values()) clearTimers(state);
       attempts.clear();

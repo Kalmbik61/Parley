@@ -19,22 +19,51 @@ const CSI = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const SS3 = /\x1bO./g;
 // Всё прочее ESC + один байт (Alt+клавиша, сброс терминала и т.п.).
 const OTHER_ESCAPE = /\x1b./g;
+// Маркеры bracketed paste — группой, чтобы `split` оставил их в выдаче.
+const PASTE_MARKERS = /(\x1b\[20[01]~)/;
+const PASTE_START = '\x1b[200~';
+const PASTE_END = '\x1b[201~';
 /* eslint-enable no-control-regex */
 
-function stripEscapes(data: string): string {
+/** Правила вырезания ESC-последовательностей; ими же чистит текст pty.send (спека 8.6, шаг 2). */
+export function stripEscapes(data: string): string {
   return data.replace(CSI, '').replace(SS3, '').replace(OTHER_ESCAPE, '');
 }
 
 export class DraftTracker {
   private count = 0;
+  /**
+   * Черновик хоста (спека 8.6): текст, вставленный `pty.send` без Enter. Печать хоста
+   * мимо трекера его не видна, поэтому флаг ставят и снимают явно; из ввода человека
+   * его снимают только Enter, ⌃C и ⌃U — строка ушла или стёрта целиком.
+   */
+  private host = false;
+  /**
+   * Идёт вставка человека: между `ESC[200~` и `ESC[201~` (маркеры могут прийти разными
+   * кусками). xterm переводит `\n` вставки в `\r`, и без этого многострочная вставка
+   * сняла бы черновик хоста — будильник допечатал бы указатель поверх промпта.
+   */
+  private inPaste = false;
 
   input(data: string): void {
+    for (const part of data.split(PASTE_MARKERS)) {
+      if (part === PASTE_START) this.inPaste = true;
+      else if (part === PASTE_END) this.inPaste = false;
+      else this.inputPlain(part);
+    }
+  }
+
+  private inputPlain(data: string): void {
     for (const char of Array.from(stripEscapes(data))) {
       const code = char.codePointAt(0) ?? 0;
 
-      if (char === '\r' || char === '\n' || code === 0x03 || code === 0x15) {
+      if ((char === '\r' || char === '\n') && this.inPaste) {
+        // Перевод строки внутри вставки — часть текста, а не Enter.
+        this.count += 1;
+      } else if (char === '\r' || char === '\n' || code === 0x03 || code === 0x15) {
         // Enter, Ctrl+C, Ctrl+U — строка ушла или стёрта целиком.
         this.count = 0;
+        this.host = false;
       } else if (code === 0x7f || code === 0x08) {
         // Backspace — не ниже нуля: лишние удаления пустой строки не считаются долгом.
         this.count = Math.max(0, this.count - 1);
@@ -47,8 +76,23 @@ export class DraftTracker {
     }
   }
 
+  /** Только черновик человека; черновик хоста — `hasHostDraft`. */
   get hasDraft(): boolean {
     return this.count > 0;
+  }
+
+  /** Вставка хоста без Enter осталась в поле ввода. */
+  markHost(): void {
+    this.host = true;
+  }
+
+  /** Enter самого pty.send. */
+  clearHost(): void {
+    this.host = false;
+  }
+
+  get hasHostDraft(): boolean {
+    return this.host;
   }
 
   reset(): void {

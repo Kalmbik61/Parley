@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DraftTracker } from './draft.js';
+import { DraftTracker, stripEscapes } from './draft.js';
 
 /** Таблица правил черновика — план, кусок 1.6. */
 const CASES: Array<{ input: string; hasDraft: boolean | 'unchanged' }> = [
@@ -46,5 +46,59 @@ describe('DraftTracker', () => {
     const tracker = new DraftTracker();
     tracker.input('\x7f\x7f\x7f');
     expect(tracker.hasDraft).toBe(false);
+  });
+});
+
+describe('DraftTracker: черновик хоста (кусок 5.1)', () => {
+  it('markHost ставит черновик хоста, hasDraft остаётся черновиком человека', () => {
+    const tracker = new DraftTracker();
+    tracker.markHost();
+    expect(tracker.hasHostDraft).toBe(true);
+    expect(tracker.hasDraft).toBe(false);
+    tracker.clearHost();
+    expect(tracker.hasHostDraft).toBe(false);
+  });
+
+  it('печатный ввод человека черновик хоста не снимает', () => {
+    const tracker = new DraftTracker();
+    tracker.markHost();
+    tracker.input('x');
+    expect(tracker.hasHostDraft).toBe(true);
+    expect(tracker.hasDraft).toBe(true);
+  });
+
+  for (const key of ['\r', '\x03', '\x15']) {
+    it(`${JSON.stringify(key)} человека снимает черновик хоста`, () => {
+      const tracker = new DraftTracker();
+      tracker.markHost();
+      tracker.input(key);
+      expect(tracker.hasHostDraft).toBe(false);
+    });
+  }
+
+  it('\\r внутри вставки человека (маркеры разными кусками) — не Enter; \\r после конца вставки снимает оба', () => {
+    const tracker = new DraftTracker();
+    tracker.markHost();
+    tracker.input('\x1b[200~a\rb\r');
+    expect(tracker.hasDraft).toBe(true);
+    expect(tracker.hasHostDraft).toBe(true);
+    tracker.input('\x1b[201~');
+    expect(tracker.hasDraft).toBe(true);
+    expect(tracker.hasHostDraft).toBe(true);
+    tracker.input('\r');
+    expect(tracker.hasDraft).toBe(false);
+    expect(tracker.hasHostDraft).toBe(false);
+  });
+
+  it('\\n внутри вставки — тоже печатный символ', () => {
+    const tracker = new DraftTracker();
+    tracker.input('\x1b[200~\n\x1b[201~');
+    expect(tracker.hasDraft).toBe(true);
+  });
+});
+
+describe('stripEscapes', () => {
+  it('экспортирован и вырезает ESC[31m', () => {
+    expect(stripEscapes('\x1b[31mred\x1b[0m')).toBe('red');
   });
 });

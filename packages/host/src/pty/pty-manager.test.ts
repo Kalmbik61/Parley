@@ -237,3 +237,84 @@ describe('PtyManager', () => {
     20_000,
   );
 });
+
+describe('PtyManager: черновик хоста (кусок 5.1)', () => {
+  /** Живая сессия со стабом и журналом событий draft и host-draft. */
+  async function started() {
+    const manager = createPtyManager(fakeHost());
+    const sessionRef = ref();
+    manager.start(sessionRef, launch());
+    await waitFor(() => manager.snapshot(sessionRef).snapshot.includes('STUB READY'));
+    const drafts: boolean[] = [];
+    const hostDrafts: boolean[] = [];
+    manager.on('draft', (_ref, value) => drafts.push(value));
+    manager.on('host-draft', (_ref, value) => hostDrafts.push(value));
+    return { manager, sessionRef, drafts, hostDrafts };
+  }
+
+  it('setHostDraft(true): hasDraft() истинно, draft нет, host-draft есть; повтор значения молчит', async () => {
+    const { manager, sessionRef, drafts, hostDrafts } = await started();
+    manager.setHostDraft(sessionRef, true);
+    expect(manager.get(sessionRef)?.hasDraft()).toBe(true);
+    expect(drafts).toEqual([]);
+    expect(hostDrafts).toEqual([true]);
+
+    manager.setHostDraft(sessionRef, true);
+    expect(hostDrafts).toEqual([true]);
+    manager.setHostDraft(sessionRef, false);
+    expect(hostDrafts).toEqual([true, false]);
+    expect(manager.get(sessionRef)?.hasDraft()).toBe(false);
+    await manager.stop(sessionRef, { graceMs: 200 });
+  });
+
+  it('ввод человека x черновик хоста не снимает', async () => {
+    const { manager, sessionRef } = await started();
+    manager.setHostDraft(sessionRef, true);
+    manager.input(sessionRef, 'x');
+    manager.input(sessionRef, '\x7f');
+    expect(manager.get(sessionRef)?.hasDraft()).toBe(true);
+    await manager.stop(sessionRef, { graceMs: 200 });
+  });
+
+  for (const key of ['\r', '\x03', '\x15']) {
+    it(`${JSON.stringify(key)} человека снимает черновик хоста и шлёт draft`, async () => {
+      const { manager, sessionRef, drafts } = await started();
+      manager.setHostDraft(sessionRef, true);
+      manager.input(sessionRef, key);
+      expect(manager.get(sessionRef)?.hasDraft()).toBe(false);
+      expect(drafts).toEqual([false]);
+      await manager.stop(sessionRef, { graceMs: 200 });
+    });
+  }
+
+  it('вставка человека с \\r, конец вставки отдельным куском, — черновики стоят; \\r после вставки снимает оба', async () => {
+    const { manager, sessionRef } = await started();
+    manager.setHostDraft(sessionRef, true);
+    manager.input(sessionRef, '\x1b[200~a\rb\r');
+    manager.input(sessionRef, '\x1b[201~');
+    expect(manager.get(sessionRef)?.hasDraft()).toBe(true);
+    manager.input(sessionRef, '\x15');
+    expect(manager.get(sessionRef)?.hasDraft()).toBe(false);
+
+    manager.setHostDraft(sessionRef, true);
+    manager.input(sessionRef, '\x1b[200~a\r');
+    manager.input(sessionRef, '\x1b[201~\r');
+    expect(manager.get(sessionRef)?.hasDraft()).toBe(false);
+    await manager.stop(sessionRef, { graceMs: 200 });
+  });
+
+  it('bracketedPaste() ручки — режим экрана: стаб его не включает', async () => {
+    const { manager, sessionRef } = await started();
+    expect(manager.get(sessionRef)?.bracketedPaste()).toBe(false);
+    await manager.stop(sessionRef, { graceMs: 200 });
+  });
+
+  it('новый процесс той же сессии черновика хоста не наследует', async () => {
+    const { manager, sessionRef } = await started();
+    manager.setHostDraft(sessionRef, true);
+    await manager.stop(sessionRef, { graceMs: 200 });
+    manager.start(sessionRef, launch());
+    expect(manager.get(sessionRef)?.hasDraft()).toBe(false);
+    await manager.stop(sessionRef, { graceMs: 200 });
+  });
+});

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { describe, expect, it, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { refKey } from '@harnas/protocol';
 import type { WorkEntry } from '@harnas/core';
 import type { EventName, ResponseMessage, SessionRef } from '@harnas/protocol';
@@ -9,7 +10,13 @@ import type { HostContext, RequestInfo } from '../context.js';
 import { HostError } from '../errors.js';
 import type { ExitInfo } from '../pty/pty-process.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
+import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
+import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
+import type { RawMessage, TestClient } from '../../test/helpers.js';
+import { startHost } from '../host.js';
+import type { RunningHost } from '../host.js';
+import { hostPaths } from '../paths.js';
 import { createPtyHandlers } from './pty.js';
 
 type EventMessage = { event: EventName; data: unknown };
@@ -63,14 +70,17 @@ function fakePtyManager() {
       throw new Error('в этом наборе тестов не используется');
     },
     get: (ref) =>
-      live.has(refKey(ref)) ? { ref, pid: 1, cols: 80, rows: 24, hasDraft: () => false } : undefined,
+      live.has(refKey(ref))
+        ? { ref, pid: 1, cols: 80, rows: 24, hasDraft: () => false, bracketedPaste: () => false }
+        : undefined,
     list: () => [],
     write: vi.fn(),
     input: vi.fn(),
     resize: vi.fn(),
     snapshot: () => snapshotResult,
     stop: async () => ({ exitCode: 0, signal: null }),
-    on(event: 'output' | 'exit' | 'draft', listener: never): () => void {
+    setHostDraft: vi.fn(),
+    on(event: 'output' | 'exit' | 'draft' | 'host-draft', listener: never): () => void {
       if (event === 'output') {
         outputListeners.add(listener);
         return () => outputListeners.delete(listener);
@@ -121,6 +131,11 @@ function fakeWorks(sessions: string[] = ['s-01']): WorksService {
   } as unknown as WorksService;
 }
 
+/** Будильник-заглушка: pty.send спрашивает только «указатель в полёте» и паузу Enter. */
+function fakeWake(): Pick<WakeService, 'inFlight' | 'enterDelayMs'> {
+  return { inFlight: () => false, enterDelayMs: 500 };
+}
+
 const ref = (id = 's-01'): SessionRef => ({ projectPath: '/tmp/project', workId: 'w-01', sessionId: id });
 
 const outputEvents = (client: { sent: Array<ResponseMessage | EventMessage> }): EventMessage[] =>
@@ -132,7 +147,7 @@ const resyncEvents = (client: { sent: Array<ResponseMessage | EventMessage> }): 
 describe('createPtyHandlers', () => {
   it('pty.attach на несуществующую сессию — not_found', async () => {
     const pty = fakePtyManager();
-    const handlers = createPtyHandlers({ pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
     const client = fakeClient();
 
     await expect(handlers.ptyAttach({ ref: ref() }, requestOf(client))).rejects.toBeInstanceOf(HostError);
@@ -143,7 +158,7 @@ describe('createPtyHandlers', () => {
   it('pty.attach отдаёт снимок и «не просмотрено» не гасит', async () => {
     const pty = fakePtyManager();
     const activity = fakeActivity();
-    const handlers = createPtyHandlers({ pty: pty.manager, activity, works: fakeWorks() });
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity, works: fakeWorks() });
     const sessionRef = ref();
     pty.markLive(sessionRef);
     const client = fakeClient();
@@ -157,7 +172,7 @@ describe('createPtyHandlers', () => {
   it('activity.seen зовёт markSeen ровно этой сессии', () => {
     const pty = fakePtyManager();
     const activity = fakeActivity();
-    const handlers = createPtyHandlers({ pty: pty.manager, activity, works: fakeWorks(['s-01', 's-02']) });
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity, works: fakeWorks(['s-01', 's-02']) });
 
     handlers.activitySeen({ ref: ref('s-02') }, requestOf(fakeClient()));
 
@@ -168,7 +183,7 @@ describe('createPtyHandlers', () => {
   it('activity.seen неизвестной сессии или работы — тихо, без markSeen и без исключения', () => {
     const pty = fakePtyManager();
     const activity = fakeActivity();
-    const handlers = createPtyHandlers({ pty: pty.manager, activity, works: fakeWorks() });
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity, works: fakeWorks() });
     const client = fakeClient();
 
     expect(() => handlers.activitySeen({ ref: ref('s-09') }, requestOf(client))).not.toThrow();
@@ -182,7 +197,7 @@ describe('createPtyHandlers', () => {
 
   it('поток идёт только клиенту, подключённому этой сессии — второй клиент без attach его не получает', async () => {
     const pty = fakePtyManager();
-    const handlers = createPtyHandlers({ pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
     const sessionRef = ref();
     pty.markLive(sessionRef);
 
@@ -199,7 +214,7 @@ describe('createPtyHandlers', () => {
 
   it('pty.detach снимает подписку: после него клиент вывод не получает', async () => {
     const pty = fakePtyManager();
-    const handlers = createPtyHandlers({ pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
     const sessionRef = ref();
     pty.markLive(sessionRef);
     const client = fakeClient();
@@ -213,7 +228,7 @@ describe('createPtyHandlers', () => {
 
   it('backpressure: send()===false останавливает поток и шлёт pty.resync до нового attach', async () => {
     const pty = fakePtyManager();
-    const handlers = createPtyHandlers({ pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
     const sessionRef = ref();
     pty.markLive(sessionRef);
 
@@ -239,7 +254,7 @@ describe('createPtyHandlers', () => {
 
   it('выход процесса убирает подписчиков сессии', async () => {
     const pty = fakePtyManager();
-    const handlers = createPtyHandlers({ pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
     const sessionRef = ref();
     pty.markLive(sessionRef);
     const client = fakeClient();
@@ -254,7 +269,7 @@ describe('createPtyHandlers', () => {
   it('pty.input: идёт в manager.input и помечает активность увиденной', () => {
     const pty = fakePtyManager();
     const activity = fakeActivity();
-    const handlers = createPtyHandlers({ pty: pty.manager, activity, works: fakeWorks() });
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity, works: fakeWorks() });
     const sessionRef = ref();
 
     handlers.ptyInput({ ref: sessionRef, data: 'hello\r' }, requestOf(fakeClient()));
@@ -265,11 +280,51 @@ describe('createPtyHandlers', () => {
 
   it('pty.resize: идёт в manager.resize с новыми размерами', () => {
     const pty = fakePtyManager();
-    const handlers = createPtyHandlers({ pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
     const sessionRef = ref();
 
     handlers.ptyResize({ ref: sessionRef, cols: 100, rows: 30 }, requestOf(fakeClient()));
 
     expect(pty.manager.resize).toHaveBeenCalledWith(sessionRef, 100, 30);
+  });
+});
+
+describe('pty.send через сервер хоста (кусок 5.1)', () => {
+  let hosts: RunningHost[] = [];
+  let homes: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(hosts.map((h) => h.context.shutdown('test-cleanup').catch(() => {})));
+    hosts = [];
+    await Promise.all(homes.map((home) => removeHome(home)));
+    homes = [];
+  });
+
+  async function connected(): Promise<TestClient> {
+    const home = await tempHome();
+    homes.push(home);
+    hosts.push(await startHost({ home }));
+    const token = await readFile(hostPaths(home).token, 'utf8');
+    const client = connectRaw(hostPaths(home).socket);
+    await waitConnected(client.socket);
+    await hello(client, token);
+    return client;
+  }
+
+  async function reply(client: TestClient, id: number): Promise<RawMessage> {
+    for (;;) {
+      const message = await client.next();
+      if (message.id === id) return message;
+    }
+  }
+
+  it('сессия без PTY — not_found; пустой text отвергает схема', async () => {
+    const client = await connected();
+    client.send({ id: 1, method: 'pty.send', params: { ref: ref(), text: 'hi', submit: true } });
+    expect((await reply(client, 1)).error?.code).toBe('not_found');
+
+    client.send({ id: 2, method: 'pty.send', params: { ref: ref(), text: '', submit: true } });
+    expect((await reply(client, 2)).error?.code).toBe('bad_request');
+    client.close();
   });
 });

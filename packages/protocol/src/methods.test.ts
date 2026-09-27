@@ -87,3 +87,21 @@ describe('activity.seen', () => {
     }>();
   });
 });
+
+describe('pty.send', () => {
+  const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-01' };
+
+  it('текст 1+ символов и submit; пустой текст и без submit — отвергаются на схеме', () => {
+    expect(METHODS['pty.send'].safeParse({ ref, text: 'hi', submit: true }).success).toBe(true);
+    expect(METHODS['pty.send'].safeParse({ ref, text: '', submit: true }).success).toBe(false);
+    expect(METHODS['pty.send'].safeParse({ ref, text: 'hi' }).success).toBe(false);
+  });
+
+  it('результат — SendResult', () => {
+    expectTypeOf<Result<'pty.send'>>().toEqualTypeOf<{
+      inserted: boolean;
+      submitted: boolean;
+      reason: 'blocked' | 'busy' | 'no-paste-mode' | 'draft' | 'input' | 'restarted' | null;
+    }>();
+  });
+});

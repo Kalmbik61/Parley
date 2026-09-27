@@ -6,6 +6,8 @@ export type {
   LiveMetrics,
   NoticeKind,
   ProtocolError,
+  SendReason,
+  SendResult,
   SessionRef,
   WorksSnapshot,
 } from './types.js';

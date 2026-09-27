@@ -63,6 +63,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
       'settings.set': settingsSet as AnyHandler,
       'pty.attach': pty.ptyAttach as AnyHandler,
       'pty.detach': pty.ptyDetach as AnyHandler,
+      'pty.send': pty.ptySend as AnyHandler,
       'sessions.create': sessions.sessionsCreate as AnyHandler,
       'sessions.resume': sessions.sessionsResume as AnyHandler,
       'sessions.stop': sessions.sessionsStop as AnyHandler,

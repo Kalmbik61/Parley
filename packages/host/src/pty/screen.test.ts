@@ -54,4 +54,14 @@ describe('createScreen', () => {
     expect(matches.length).toBeLessThanOrEqual(scrollback + rows + 5);
     screen.dispose();
   });
+
+  it('bracketedPaste(): ESC[?2004h включает режим вставки, ESC[?2004l выключает (кусок 5.1)', async () => {
+    const screen = createScreen(80, 24);
+    expect(screen.bracketedPaste()).toBe(false);
+    screen.write('\x1b[?2004h');
+    await waitFor(() => screen.bracketedPaste());
+    screen.write('\x1b[?2004l');
+    await waitFor(() => !screen.bracketedPaste());
+    screen.dispose();
+  });
 });
