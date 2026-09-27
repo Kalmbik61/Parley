@@ -1,11 +1,13 @@
 /**
  * Тесты 1, 4 и 7 куска 1.2 плана: `cn`, поведение диалога/выпадающего
- * меню/палитры команд (клавиатура и фокус — то, что не видно из чтения кода)
- * и тема тостов sonner от `useUiStore`.
+ * меню/палитры команд (клавиатура и фокус — то, что не видно из кода) и тема
+ * тостов sonner от `useUiStore`. Плюс раунд исправлений 1: общая «стеклянная»
+ * подложка пяти поверхностей (находка A №2) и общий `TooltipProvider`
+ * (находка B №4).
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { toast } from 'sonner';
 import { cn } from '../lib/cn.js';
 import { useUiStore } from '../store/ui.js';
@@ -16,8 +18,14 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from './dropdown-menu.js';
-import { Command, CommandInput, CommandItem, CommandList } from './command.js';
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from './context-menu.js';
+import { Popover, PopoverContent, PopoverTrigger } from './popover.js';
+import { HoverCard, HoverCardContent, HoverCardTrigger } from './hover-card.js';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './select.js';
+import { MENU_GLASS } from './glass.js';
+import { Command, CommandInput, CommandItem, CommandList, CommandShortcut } from './command.js';
 import { Toaster } from './sonner.js';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './tooltip.js';
 
 afterEach(cleanup);
 
@@ -94,6 +102,127 @@ describe('ui/dropdown-menu — тест 4', () => {
   });
 });
 
+describe('ui/glass — раунд исправлений 1 (находка A №2)', () => {
+  // Открываем каждую поверхность через `defaultOpen`, а не реальным
+  // взаимодействием — цель теста не переповторить открытие/закрытие (это уже
+  // проверено выше и в отчёте исполнителя), а убедиться, что рецепт «стекла»
+  // (`ui/glass.ts#MENU_GLASS`) реально применён у всех пяти одинаково.
+  const glassTokens = MENU_GLASS.split(' ');
+
+  function expectGlass(element: HTMLElement | null): void {
+    expect(element).not.toBeNull();
+    for (const token of glassTokens) {
+      expect(element?.className).toContain(token);
+    }
+  }
+
+  it('dropdown-menu', () => {
+    render(
+      <DropdownMenu defaultOpen>
+        <DropdownMenuTrigger>Меню</DropdownMenuTrigger>
+        <DropdownMenuContent data-testid="glass-surface">
+          <DropdownMenuItem>Пункт</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+    expectGlass(screen.queryByTestId('glass-surface'));
+  });
+
+  it('context-menu', () => {
+    // У ContextMenu нет `defaultOpen` (в отличие от прочих четырёх) — открытие
+    // всегда идёт от реального события `contextmenu` с точкой на экране.
+    render(
+      <ContextMenu>
+        <ContextMenuTrigger>Область</ContextMenuTrigger>
+        <ContextMenuContent data-testid="glass-surface">Пункт</ContextMenuContent>
+      </ContextMenu>,
+    );
+    fireEvent.contextMenu(screen.getByText('Область'));
+    expectGlass(screen.queryByTestId('glass-surface'));
+  });
+
+  it('popover', () => {
+    render(
+      <Popover defaultOpen>
+        <PopoverTrigger>Триггер</PopoverTrigger>
+        <PopoverContent data-testid="glass-surface">Содержимое</PopoverContent>
+      </Popover>,
+    );
+    expectGlass(screen.queryByTestId('glass-surface'));
+  });
+
+  it('hover-card', () => {
+    render(
+      <HoverCard defaultOpen>
+        <HoverCardTrigger>Триггер</HoverCardTrigger>
+        <HoverCardContent data-testid="glass-surface">Содержимое</HoverCardContent>
+      </HoverCard>,
+    );
+    expectGlass(screen.queryByTestId('glass-surface'));
+  });
+
+  it('select', () => {
+    render(
+      <Select defaultOpen defaultValue="a">
+        <SelectTrigger>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent data-testid="glass-surface">
+          <SelectItem value="a">Вариант А</SelectItem>
+        </SelectContent>
+      </Select>,
+    );
+    expectGlass(screen.queryByTestId('glass-surface'));
+  });
+});
+
+describe('ui/tooltip — раунд исправлений 1 (находка B №4)', () => {
+  it('один TooltipProvider на несколько тултипов — второй показывается без повторной задержки', () => {
+    // Реальные таймеры тут не годятся: `findByText` сам ждёт до ~1с, поэтому
+    // даже полная задержка в 400 мс осталась бы незамеченной — нужен точный
+    // момент времени, а не факт «рано или поздно появилось».
+    vi.useFakeTimers();
+    try {
+      render(
+        <TooltipProvider delayDuration={400}>
+          <Tooltip>
+            <TooltipTrigger>Первый</TooltipTrigger>
+            <TooltipContent>Подсказка 1</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger>Второй</TooltipTrigger>
+            <TooltipContent>Подсказка 2</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>,
+      );
+
+      const first = screen.getByText('Первый');
+      // Фокус открывает тултип мгновенно (клавиатурная навигация, минуя
+      // задержку наведения) — этим же путём тултип 1 «показан».
+      fireEvent.focus(first);
+      expect(screen.queryByText('Подсказка 1')).not.toBeNull();
+
+      // Закрытие тултипа 1 переводит общий провайдер в окно `skipDelayDuration`
+      // (300 мс у Radix по умолчанию) — до его истечения наведение на любой
+      // другой тултип открывает его сразу, без повторной задержки в 400 мс.
+      fireEvent.blur(first);
+
+      const second = screen.getByText('Второй');
+      fireEvent.pointerMove(second, { pointerType: 'mouse' });
+
+      // Спустя всего 50 мс (меньше и 400-мс задержки открытия, и 300-мс окна
+      // skip-delay) тултип 2 уже должен быть виден — иначе он ждёт полную
+      // задержку заново (старый баг — свой `TooltipProvider` на каждый `Tooltip`).
+      act(() => {
+        vi.advanceTimersByTime(50);
+      });
+      expect(screen.queryByText('Подсказка 2')).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('ui/command — тест 4', () => {
   it('ввод в CommandInput фильтрует пункты', () => {
     render(
@@ -114,33 +243,45 @@ describe('ui/command — тест 4', () => {
     expect(screen.queryByText('Терминал')).toBeNull();
     expect(screen.getByText('Файлы проекта')).toBeTruthy();
   });
+
+  it('CommandShortcut — 10px, как подсказки клавиш dropdown/context-menu (раунд исправлений 1, находка A minor №1)', () => {
+    render(<CommandShortcut>⌘K</CommandShortcut>);
+    const shortcut = screen.getByText('⌘K');
+    expect(shortcut.className).toContain('text-[10px]');
+    expect(shortcut.className).toContain('opacity-60');
+  });
 });
 
 describe('ui/sonner — тест 7', () => {
   it('dark: true в сторе — тема dark, dark: false — light', async () => {
     const initialDark = useUiStore.getState().dark;
-    useUiStore.setState({ dark: true });
+    // Раунд исправлений 1 (находка A minor №2): восстановление стора — в
+    // finally, а не последней строкой теста, иначе упавший раньше ассерт
+    // оставляет `dark` мутированным для тестов, идущих следом в том же файле.
+    try {
+      useUiStore.setState({ dark: true });
 
-    // `Toaster` рендерится порталом в `document.body`, а не в контейнер RTL, и
-    // без единого активного тоста sonner вовсе не рисует помеченный тегом
-    // `[data-sonner-toaster]` контейнер (`toasts.length === 0` → null) — сначала
-    // кладём тост, потом проверяем тему.
-    const { rerender } = render(<Toaster />);
-    toast('Проверка темы');
-    await waitFor(() => {
-      expect(
-        document.querySelector('[data-sonner-toaster]')?.getAttribute('data-sonner-theme'),
-      ).toBe('dark');
-    });
+      // `Toaster` рендерится порталом в `document.body`, а не в контейнер RTL,
+      // и без единого активного тоста sonner вовсе не рисует помеченный тегом
+      // `[data-sonner-toaster]` контейнер (`toasts.length === 0` → null) —
+      // сначала кладём тост, потом проверяем тему.
+      const { rerender } = render(<Toaster />);
+      toast('Проверка темы');
+      await waitFor(() => {
+        expect(
+          document.querySelector('[data-sonner-toaster]')?.getAttribute('data-sonner-theme'),
+        ).toBe('dark');
+      });
 
-    useUiStore.setState({ dark: false });
-    rerender(<Toaster />);
-    await waitFor(() => {
-      expect(
-        document.querySelector('[data-sonner-toaster]')?.getAttribute('data-sonner-theme'),
-      ).toBe('light');
-    });
-
-    useUiStore.setState({ dark: initialDark });
+      useUiStore.setState({ dark: false });
+      rerender(<Toaster />);
+      await waitFor(() => {
+        expect(
+          document.querySelector('[data-sonner-toaster]')?.getAttribute('data-sonner-theme'),
+        ).toBe('light');
+      });
+    } finally {
+      useUiStore.setState({ dark: initialDark });
+    }
   });
 });

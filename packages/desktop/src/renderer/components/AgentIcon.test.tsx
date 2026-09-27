@@ -20,3 +20,26 @@ describe('AgentIcon — тест 5', () => {
     expect(container.textContent).toBe(letter);
   });
 });
+
+describe('AgentIcon — раунд исправлений 1 (находки B №2 и №5)', () => {
+  it('оверрайд не зависит от регистра: Codex → X, CLAUDE → C', () => {
+    const codex = render(<AgentIcon provider="Codex" />);
+    expect(codex.container.textContent).toBe('X');
+    codex.unmount();
+
+    const claude = render(<AgentIcon provider="CLAUDE" />);
+    expect(claude.container.textContent).toBe('C');
+  });
+
+  it('провайдер с ведущим символом вне BMP — берёт весь code point, не половину суррогатной пары', () => {
+    // "🤖" — суррогатная пара; `charAt(0)` вернул бы одинокий старший
+    // суррогат, который рендерится как символ-заглушка, а не как эмодзи.
+    const { container } = render(<AgentIcon provider="🤖bot" />);
+    expect(container.textContent).toBe('🤖');
+  });
+
+  it('пустой provider — безопасный запасной символ, не падает', () => {
+    const { container } = render(<AgentIcon provider="" />);
+    expect(container.textContent).toBe('?');
+  });
+});

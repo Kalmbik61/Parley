@@ -9,8 +9,19 @@ const LETTER_OVERRIDES: Readonly<Record<string, string>> = {
   codex: 'X',
 };
 
+/**
+ * Раунд исправлений 1 (находки ревью B №2 и №5): id провайдера — открытый
+ * список произвольных строк (`WorkProvider`, `providers.json`), без проверки
+ * алфавита — регистр не гарантирован, а ведущий символ может быть вне BMP
+ * (эмодзи). Оверрайд ищем без учёта регистра; первую букву берём по code
+ * point (`Array.from`), а не `charAt(0)` — иначе суррогатная пара рвётся
+ * пополам, и вместо буквы/эмодзи рендерится символ-заглушка.
+ */
 function providerLetter(provider: string): string {
-  return LETTER_OVERRIDES[provider] ?? provider.charAt(0).toUpperCase();
+  const override = LETTER_OVERRIDES[provider.toLowerCase()];
+  if (override !== undefined) return override;
+  const firstCodePoint = Array.from(provider)[0];
+  return firstCodePoint === undefined ? '?' : firstCodePoint.toUpperCase();
 }
 
 export interface AgentIconProps {

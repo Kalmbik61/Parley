@@ -9,11 +9,17 @@
  * сайдбара (`lib/dot-state.ts#stateWord`, куски 1.3 и 3.3), а не сам значок.
  * Copyright (c) 2026 Lovecast Inc. Лицензия MIT — полный текст в NOTICE в
  * корне репозитория.
+ *
+ * Раунд исправлений 1 (находка ревью B №3): рядом со значком не всегда есть
+ * текст-дублёр (на вкладке терминала, спека 5.3, его нет вовсе) — значок
+ * должен быть самодостаточен для скринридера. Внешний `span` несёт
+ * `role="img"` и `aria-label` тем же словом, что даёт `stateWord`; все
+ * внутренние глифы (включая кольцо `working`) помечены `aria-hidden`.
  */
 
 import { CircleCheck, MessageCircleQuestion, Moon } from 'lucide-react';
 import type { SessionLifecycle } from '@harnas/core';
-import type { DotState } from '../lib/dot-state.js';
+import { stateWord, type DotState } from '../lib/dot-state.js';
 import { cn } from '../lib/cn.js';
 import { AgentWorkingSpinner } from './AgentWorkingSpinner.js';
 
@@ -41,6 +47,9 @@ export function AgentStateDot({
   const box = cn('inline-flex shrink-0 items-center justify-center', BOX[size], className);
   // `data-lifecycle` имеет смысл только у `exited` — у остальных состояний не выставляется.
   const effectiveLifecycle = state === 'exited' ? (lifecycle ?? 'sleeping') : undefined;
+  // Для не-`exited` состояний `stateWord` игнорирует второй аргумент —
+  // подставляем любое валидное значение просто чтобы удовлетворить сигнатуру.
+  const ariaLabel = stateWord(state, effectiveLifecycle ?? 'active');
 
   return (
     <span
@@ -48,6 +57,8 @@ export function AgentStateDot({
       data-state={state}
       data-lifecycle={effectiveLifecycle}
       data-testid="agent-state-dot"
+      role="img"
+      aria-label={ariaLabel}
     >
       {renderGlyph(state, effectiveLifecycle, size)}
     </span>

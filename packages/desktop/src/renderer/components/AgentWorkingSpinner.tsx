@@ -12,6 +12,14 @@
  * ноль фазы у всех колец, чтобы они не мигали вразнобой (спека 4.2) — здесь
  * даёт чистая функция `spinnerDelayMs`, подставленная в `animation-delay`
  * инлайн-стилем: она проверяется без DOM (тест 3 куска 1.2).
+ *
+ * Раунд исправлений 1 (находка ревью A+B №1): под `prefers-reduced-motion`
+ * `styles/agent-spinner.css` останавливает вращение, и без класса
+ * `motion-reduce:border-t-yellow-500` застывший прозрачный верхний край
+ * (`border-t-transparent`) выглядит как разорванное кольцо. Оригинал Orca
+ * прямо называет это исправленным багом (#9515: «a frozen transparent-top
+ * ring reads as a broken spinner; a complete ring reads as an intentional
+ * static marker») — заливаем разрыв тем же классом.
  */
 
 import { useState } from 'react';
@@ -35,8 +43,11 @@ export function AgentWorkingSpinner({ className }: AgentWorkingSpinnerProps): JS
   const [delayMs] = useState(() => spinnerDelayMs(Date.now(), SPINNER_PERIOD_MS));
   return (
     <span
+      // Чисто оформительский элемент — доступное имя целиком несёт внешний
+      // `role="img"`/`aria-label` на `AgentStateDot` (находка ревью B №3).
+      aria-hidden="true"
       className={cn(
-        'agent-working-spinner block rounded-full border-2 border-yellow-500 border-t-transparent',
+        'agent-working-spinner block rounded-full border-2 border-yellow-500 border-t-transparent motion-reduce:border-t-yellow-500',
         className,
       )}
       style={{ animationDelay: `${delayMs}ms` }}

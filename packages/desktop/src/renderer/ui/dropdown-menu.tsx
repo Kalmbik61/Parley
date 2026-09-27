@@ -9,6 +9,7 @@ import * as React from 'react';
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
 import { Check, ChevronRight, Circle } from 'lucide-react';
 import { cn } from '../lib/cn.js';
+import { MENU_GLASS, MENU_ITEM } from './glass.js';
 
 export const DropdownMenu = DropdownMenuPrimitive.Root;
 export const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
@@ -17,11 +18,8 @@ export const DropdownMenuPortal = DropdownMenuPrimitive.Portal;
 export const DropdownMenuSub = DropdownMenuPrimitive.Sub;
 export const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup;
 
-// Общая «стеклянная» подложка меню и общий вид пункта — таблица 4.4/4.5.
-const MENU_GLASS =
-  'z-50 min-w-[8rem] overflow-hidden rounded-[11px] border border-black/[0.14] bg-white/[0.82] p-1 text-popover-foreground shadow-[0_12px_28px_rgba(0,0,0,0.22)] backdrop-blur-2xl data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 dark:border-white/[0.14] dark:bg-black/[0.72] dark:shadow-[0_12px_28px_rgba(0,0,0,0.40)]';
-const MENU_ITEM =
-  'relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-xs leading-[17px] font-[450] outline-none transition-colors focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&>svg]:size-4 [&>svg]:shrink-0';
+// Список пунктов — своя ширина/отступ поверх общего «стекла» (`ui/glass.ts`).
+const MENU_SURFACE = cn(MENU_GLASS, 'min-w-[8rem] p-1');
 
 export const DropdownMenuSubTrigger = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.SubTrigger>,
@@ -42,7 +40,7 @@ export const DropdownMenuSubContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.SubContent>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubContent>
 >(({ className, ...props }, ref) => (
-  <DropdownMenuPrimitive.SubContent ref={ref} className={cn(MENU_GLASS, className)} {...props} />
+  <DropdownMenuPrimitive.SubContent ref={ref} className={cn(MENU_SURFACE, className)} {...props} />
 ));
 DropdownMenuSubContent.displayName = DropdownMenuPrimitive.SubContent.displayName;
 
@@ -54,7 +52,7 @@ export const DropdownMenuContent = React.forwardRef<
     <DropdownMenuPrimitive.Content
       ref={ref}
       sideOffset={sideOffset}
-      className={cn(MENU_GLASS, className)}
+      className={cn(MENU_SURFACE, className)}
       {...props}
     />
   </DropdownMenuPrimitive.Portal>

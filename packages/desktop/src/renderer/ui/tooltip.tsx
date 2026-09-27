@@ -3,16 +3,19 @@
  * 4.5): цвета инвертированы (`bg-foreground text-background`), задержка
  * показа 400 мс вместо дефолтных 700 у Radix.
  *
- * `Tooltip` сам оборачивает себя в `TooltipProvider` — тултип работает без
- * обязательной общей обёртки в корне приложения (её всё равно можно
- * поставить снаружи: ближайший Provider просто победит).
+ * Раунд исправлений 1 (находка ревью B №4): `Tooltip` — голый `Root`, как в
+ * эталонном shadcn. Прежняя версия заворачивала каждый `Tooltip` в свой
+ * `TooltipProvider` — из-за этого Radix терял общий `skipDelayDuration`
+ * между разными тултипами (после закрытия одного наведение на другой снова
+ * ждало полную задержку, а не показывалось мгновенно). Один `TooltipProvider`
+ * монтируется один раз в `renderer/main.tsx` вокруг `<App />`.
  */
 
 import * as React from 'react';
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import { cn } from '../lib/cn.js';
 
-const TOOLTIP_DELAY_MS = 400;
+export const TOOLTIP_DELAY_MS = 400;
 
 export const TooltipProvider = TooltipPrimitive.Provider;
 
@@ -20,11 +23,7 @@ export function Tooltip({
   delayDuration = TOOLTIP_DELAY_MS,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Root>): JSX.Element {
-  return (
-    <TooltipProvider delayDuration={delayDuration}>
-      <TooltipPrimitive.Root delayDuration={delayDuration} {...props} />
-    </TooltipProvider>
-  );
+  return <TooltipPrimitive.Root delayDuration={delayDuration} {...props} />;
 }
 
 export const TooltipTrigger = TooltipPrimitive.Trigger;

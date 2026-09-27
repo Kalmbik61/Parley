@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App.js';
 import { useUiStore } from './store/ui.js';
 import { watchSystemDark } from './theme/appearance.js';
+import { TOOLTIP_DELAY_MS, TooltipProvider } from './ui/tooltip.js';
 import './styles.css';
 
 // До первого кадра React — иначе первая отрисовка идёт в исходной светлой
@@ -17,6 +18,10 @@ if (container === null) throw new Error('#root не найден');
 
 createRoot(container).render(
   <StrictMode>
-    <App />
+    {/* Один провайдер на всё окно (раунд исправлений 1, находка ревью B №4) —
+        иначе тултипы теряют общий skipDelayDuration Radix между собой. */}
+    <TooltipProvider delayDuration={TOOLTIP_DELAY_MS}>
+      <App />
+    </TooltipProvider>
   </StrictMode>,
 );

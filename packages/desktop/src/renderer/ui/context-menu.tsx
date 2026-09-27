@@ -7,6 +7,7 @@ import * as React from 'react';
 import * as ContextMenuPrimitive from '@radix-ui/react-context-menu';
 import { Check, ChevronRight, Circle } from 'lucide-react';
 import { cn } from '../lib/cn.js';
+import { MENU_GLASS, MENU_ITEM } from './glass.js';
 
 export const ContextMenu = ContextMenuPrimitive.Root;
 export const ContextMenuTrigger = ContextMenuPrimitive.Trigger;
@@ -15,10 +16,8 @@ export const ContextMenuPortal = ContextMenuPrimitive.Portal;
 export const ContextMenuSub = ContextMenuPrimitive.Sub;
 export const ContextMenuRadioGroup = ContextMenuPrimitive.RadioGroup;
 
-const MENU_GLASS =
-  'z-50 min-w-[8rem] overflow-hidden rounded-[11px] border border-black/[0.14] bg-white/[0.82] p-1 text-popover-foreground shadow-[0_12px_28px_rgba(0,0,0,0.22)] backdrop-blur-2xl data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 dark:border-white/[0.14] dark:bg-black/[0.72] dark:shadow-[0_12px_28px_rgba(0,0,0,0.40)]';
-const MENU_ITEM =
-  'relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-xs leading-[17px] font-[450] outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&>svg]:size-4 [&>svg]:shrink-0';
+// Список пунктов — своя ширина/отступ поверх общего «стекла» (`ui/glass.ts`).
+const MENU_SURFACE = cn(MENU_GLASS, 'min-w-[8rem] p-1');
 
 export const ContextMenuSubTrigger = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.SubTrigger>,
@@ -39,7 +38,7 @@ export const ContextMenuSubContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.SubContent>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubContent>
 >(({ className, ...props }, ref) => (
-  <ContextMenuPrimitive.SubContent ref={ref} className={cn(MENU_GLASS, className)} {...props} />
+  <ContextMenuPrimitive.SubContent ref={ref} className={cn(MENU_SURFACE, className)} {...props} />
 ));
 ContextMenuSubContent.displayName = ContextMenuPrimitive.SubContent.displayName;
 
@@ -48,7 +47,7 @@ export const ContextMenuContent = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>
 >(({ className, ...props }, ref) => (
   <ContextMenuPrimitive.Portal>
-    <ContextMenuPrimitive.Content ref={ref} className={cn(MENU_GLASS, className)} {...props} />
+    <ContextMenuPrimitive.Content ref={ref} className={cn(MENU_SURFACE, className)} {...props} />
   </ContextMenuPrimitive.Portal>
 ));
 ContextMenuContent.displayName = ContextMenuPrimitive.Content.displayName;

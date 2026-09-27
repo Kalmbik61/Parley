@@ -122,9 +122,8 @@ export function CommandShortcut({
   ...props
 }: React.HTMLAttributes<HTMLSpanElement>): JSX.Element {
   return (
-    <span
-      className={cn('ml-auto text-xs tracking-widest text-muted-foreground', className)}
-      {...props}
-    />
+    // 10px/opacity-60 — как подсказки клавиш dropdown/context-menu (спека 4.3:
+    // «клавиши» 10px), а не свой размер; раунд исправлений 1, находка A minor №1.
+    <span className={cn('ml-auto text-[10px] tracking-widest opacity-60', className)} {...props} />
   );
 }

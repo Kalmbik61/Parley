@@ -8,16 +8,22 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
 import { AgentStateDot } from './AgentStateDot.js';
 import { spinnerDelayMs } from './AgentWorkingSpinner.js';
+import { stateWord } from '../lib/dot-state.js';
 
 afterEach(cleanup);
 
 describe('AgentStateDot — тест 2, таблица спеки 4.2', () => {
-  it('working — кольцо .agent-working-spinner, жёлтый цвет', () => {
+  it('working — кольцо .agent-working-spinner, жёлтый цвет, целое при reduced motion', () => {
     const { getByTestId } = render(<AgentStateDot state="working" />);
     const root = getByTestId('agent-state-dot');
     expect(root.getAttribute('data-state')).toBe('working');
     expect(root.innerHTML).toContain('agent-working-spinner');
     expect(root.innerHTML).toContain('border-yellow-500');
+    // Раунд исправлений 1 (находка A+B №1): без этого класса `prefers-reduced-
+    // motion` останавливает вращение (styles/agent-spinner.css), но верхний
+    // край кольца остаётся прозрачным (`border-t-transparent`) — застывший
+    // разрыв читается как сломанный спиннер, а не как статичный маркер.
+    expect(root.innerHTML).toContain('motion-reduce:border-t-yellow-500');
   });
 
   it('blocked — MessageCircleQuestion цвета --agent-question', () => {
@@ -97,6 +103,33 @@ describe('AgentStateDot — тест 2, таблица спеки 4.2', () => {
 
     const md = render(<AgentStateDot state="idle" />);
     expect(md.getByTestId('agent-state-dot').className).toContain('size-3');
+  });
+});
+
+describe('AgentStateDot — доступность (раунд исправлений 1, находка B №3)', () => {
+  // Значок должен быть самодостаточен для скринридера независимо от того,
+  // есть ли рядом текст-дублёр (на вкладке терминала, спека 5.3, его нет).
+  it.each([
+    ['working', 'active'],
+    ['blocked', 'active'],
+    ['unseen', 'active'],
+    ['idle', 'active'],
+    ['pending', 'pending'],
+    ['exited', 'sleeping'],
+    ['exited', 'closed'],
+    ['done', 'closed'],
+    ['failed', 'closed'],
+  ] as const)('%s (%s) — role="img" и aria-label по stateWord', (state, lifecycle) => {
+    const { getByTestId } = render(<AgentStateDot state={state} lifecycle={lifecycle} />);
+    const root = getByTestId('agent-state-dot');
+    expect(root.getAttribute('role')).toBe('img');
+    expect(root.getAttribute('aria-label')).toBe(stateWord(state, lifecycle));
+  });
+
+  it('внутренний глиф working (кольцо) — aria-hidden, имя целиком на внешнем role="img"', () => {
+    const { getByTestId } = render(<AgentStateDot state="working" />);
+    const root = getByTestId('agent-state-dot');
+    expect(root.querySelector('.agent-working-spinner')?.getAttribute('aria-hidden')).toBe('true');
   });
 });
 
