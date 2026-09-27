@@ -63,6 +63,7 @@ function fakePtyManager() {
   const live = new Set<string>();
   const outputListeners = new Set<(ref: SessionRef, data: string) => void>();
   const exitListeners = new Set<(ref: SessionRef, exit: ExitInfo) => void>();
+  const startListeners = new Set<(ref: SessionRef) => void>();
   const snapshotResult = { snapshot: 'SNAPSHOT', cols: 80, rows: 24 };
 
   const manager: PtyManager = {
@@ -80,7 +81,7 @@ function fakePtyManager() {
     snapshot: () => snapshotResult,
     stop: async () => ({ exitCode: 0, signal: null }),
     setHostDraft: vi.fn(),
-    on(event: 'output' | 'exit' | 'draft' | 'host-draft', listener: never): () => void {
+    on(event: 'output' | 'exit' | 'start' | 'draft' | 'host-draft', listener: never): () => void {
       if (event === 'output') {
         outputListeners.add(listener);
         return () => outputListeners.delete(listener);
@@ -88,6 +89,10 @@ function fakePtyManager() {
       if (event === 'exit') {
         exitListeners.add(listener);
         return () => exitListeners.delete(listener);
+      }
+      if (event === 'start') {
+        startListeners.add(listener);
+        return () => startListeners.delete(listener);
       }
       return () => {};
     },
@@ -101,7 +106,13 @@ function fakePtyManager() {
       for (const listener of outputListeners) listener(ref, data);
     },
     emitExit: (ref: SessionRef, exit: ExitInfo) => {
+      live.delete(refKey(ref));
       for (const listener of exitListeners) listener(ref, exit);
+    },
+    /** Новый процесс на ref — как `sessions.resume`: сессия снова жива, слушатели `start` узнают. */
+    emitStart: (ref: SessionRef) => {
+      live.add(refKey(ref));
+      for (const listener of startListeners) listener(ref);
     },
   };
 }
@@ -264,6 +275,103 @@ describe('createPtyHandlers', () => {
     pty.emitOutput(sessionRef, 'после выхода процесса подписки уже нет');
 
     expect(outputEvents(client)).toHaveLength(0);
+  });
+
+  // Раунд fix-host-resync (review-5.4-B, Critical): после sessions.resume открытая вкладка
+  // молчала — подписчики ref пропадали на exit, и о новом процессе окно не узнавало.
+  describe('оживление сессии: новый PTY на тот же ref', () => {
+    it('attach → exit → start: клиент получает pty.resync, повторный attach даёт снимок и поток нового процесса', async () => {
+      const pty = fakePtyManager();
+      const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
+      const sessionRef = ref();
+      pty.markLive(sessionRef);
+      const client = fakeClient();
+
+      await handlers.ptyAttach({ ref: sessionRef }, requestOf(client));
+      pty.emitExit(sessionRef, { exitCode: 0, signal: null });
+      expect(resyncEvents(client)).toHaveLength(0);
+
+      pty.snapshotResult.snapshot = 'NEW PROCESS';
+      pty.emitStart(sessionRef);
+
+      expect(resyncEvents(client)).toHaveLength(1);
+      expect(resyncEvents(client)[0]?.data).toEqual({ ref: sessionRef });
+
+      const result = await handlers.ptyAttach({ ref: sessionRef }, requestOf(client));
+      expect(result.snapshot).toBe('NEW PROCESS');
+      pty.emitOutput(sessionRef, 'вывод нового процесса');
+      expect(outputEvents(client).map((m) => m.data)).toEqual([{ ref: sessionRef, data: 'вывод нового процесса' }]);
+    });
+
+    it('после resync клиент из ожидания снят: следующий перезапуск без его attach второй resync не шлёт', async () => {
+      const pty = fakePtyManager();
+      const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
+      const sessionRef = ref();
+      pty.markLive(sessionRef);
+      const client = fakeClient();
+
+      await handlers.ptyAttach({ ref: sessionRef }, requestOf(client));
+      pty.emitExit(sessionRef, { exitCode: 0, signal: null });
+      pty.emitStart(sessionRef);
+      pty.emitExit(sessionRef, { exitCode: 0, signal: null });
+      pty.emitStart(sessionRef);
+
+      expect(resyncEvents(client)).toHaveLength(1);
+    });
+
+    it('pty.detach до оживления снимает клиента и из ожидания: resync ему не приходит', async () => {
+      const pty = fakePtyManager();
+      const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
+      const sessionRef = ref();
+      pty.markLive(sessionRef);
+      const stays = fakeClient();
+      const leaves = fakeClient();
+
+      await handlers.ptyAttach({ ref: sessionRef }, requestOf(stays));
+      await handlers.ptyAttach({ ref: sessionRef }, requestOf(leaves));
+      pty.emitExit(sessionRef, { exitCode: 0, signal: null });
+      await handlers.ptyDetach({ ref: sessionRef }, requestOf(leaves));
+      pty.emitStart(sessionRef);
+
+      expect(resyncEvents(stays)).toHaveLength(1);
+      expect(resyncEvents(leaves)).toHaveLength(0);
+    });
+
+    it('другой ref не затронут: его подписчик resync не получает и поток его сессии идёт дальше', async () => {
+      const pty = fakePtyManager();
+      const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks(['s-01', 's-02']) });
+      const revived = ref('s-01');
+      const other = ref('s-02');
+      pty.markLive(revived);
+      pty.markLive(other);
+      const onRevived = fakeClient();
+      const onOther = fakeClient();
+
+      await handlers.ptyAttach({ ref: revived }, requestOf(onRevived));
+      await handlers.ptyAttach({ ref: other }, requestOf(onOther));
+      pty.emitExit(revived, { exitCode: 0, signal: null });
+      pty.emitStart(revived);
+      pty.emitOutput(other, 'соседняя сессия');
+
+      expect(resyncEvents(onRevived)).toHaveLength(1);
+      expect(resyncEvents(onOther)).toHaveLength(0);
+      expect(outputEvents(onOther)).toHaveLength(1);
+      expect(outputEvents(onRevived)).toHaveLength(0);
+    });
+
+    it('start ref, на котором никто не ждёт, — ничего никому не шлёт', async () => {
+      const pty = fakePtyManager();
+      const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
+      const sessionRef = ref();
+      pty.markLive(sessionRef);
+      const attachedLive = fakeClient();
+      await handlers.ptyAttach({ ref: sessionRef }, requestOf(attachedLive));
+
+      // Первый старт ref (sessions.create) при живом подписчике — не оживление: resync не нужен.
+      pty.emitStart(ref('s-07'));
+
+      expect(resyncEvents(attachedLive)).toHaveLength(0);
+    });
   });
 
   it('pty.input: идёт в manager.input и помечает активность увиденной', () => {

@@ -41,6 +41,9 @@ export interface PtyHandlers {
  */
 export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
   const attached = new Map<string, Set<Client>>();
+  // Подписчики, чей процесс вышел: ждут нового PTY на тот же ref (`sessions.resume`), чтобы
+  // получить `pty.resync` и переподключиться сами — без этого открытая вкладка молчала бы.
+  const waiting = new Map<string, Set<Client>>();
   // Один отправитель на хост: «свой Enter в полёте» по сессии должен быть общим для всех
   // клиентов, иначе два окна обошли бы busy.
   const send = createSender(deps);
@@ -61,10 +64,30 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
     }
   });
 
-  // Сессии больше нет — подписчики этой сессии не нужны и другой такой ref
-  // (тот же projectPath+workId+sessionId) уже не появится.
+  // Процесс вышел, но ref может ожить: `sessions.resume` заводит новый PTY на тот же
+  // projectPath+workId+sessionId. Вывода мёртвому PTY нет — подписчики переходят в ожидание.
+  // Ожидание не растёт без меры: на мёртвый ref новый `pty.attach` не пройдёт (not_found),
+  // так что ждут только те, кто был подписан в момент выхода, пока их не снимет `pty.detach`
+  // или оживление.
   deps.pty.on('exit', (ref) => {
-    attached.delete(refKey(ref));
+    const key = refKey(ref);
+    const clients = attached.get(key);
+    attached.delete(key);
+    if (clients === undefined || clients.size === 0) return;
+    const pending = waiting.get(key) ?? new Set<Client>();
+    for (const client of clients) pending.add(client);
+    waiting.set(key, pending);
+  });
+
+  // Новый PTY на ref — ждущим `pty.resync`: окно само берёт снимок нового процесса через
+  // `pty.attach`. Из ожидания их снимаем сразу; закрытому клиенту send просто не доставит,
+  // и держать его дальше не будем.
+  deps.pty.on('start', (ref) => {
+    const key = refKey(ref);
+    const clients = waiting.get(key);
+    if (clients === undefined) return;
+    waiting.delete(key);
+    for (const client of clients) client.send({ event: 'pty.resync', data: { ref } });
   });
 
   return {
@@ -88,7 +111,11 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
     },
 
     ptyDetach: async (params, request) => {
-      attached.get(refKey(params.ref))?.delete(request.client);
+      const key = refKey(params.ref);
+      attached.get(key)?.delete(request.client);
+      const pending = waiting.get(key);
+      pending?.delete(request.client);
+      if (pending?.size === 0) waiting.delete(key);
       return { ok: true };
     },
 

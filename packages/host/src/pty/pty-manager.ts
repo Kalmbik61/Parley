@@ -44,6 +44,8 @@ export interface PtyManager {
   stop(ref: SessionRef, options?: { graceMs?: number }): Promise<ExitInfo>;
   on(event: 'output', listener: (ref: SessionRef, data: string) => void): () => void;
   on(event: 'exit', listener: (ref: SessionRef, exit: ExitInfo) => void): () => void;
+  /** Новый PTY на ref — и первый старт, и `sessions.resume` после выхода; ручка уже в `get()`. */
+  on(event: 'start', listener: (ref: SessionRef) => void): () => void;
   on(event: 'draft', listener: (ref: SessionRef, hasDraft: boolean) => void): () => void;
   /** Черновик хоста поставлен или снят. Слушает будильник (пересчёт сессии); typeAndSubmit — нет. */
   on(event: 'host-draft', listener: (ref: SessionRef, hasHostDraft: boolean) => void): () => void;
@@ -79,14 +81,16 @@ function toHandle(session: Session): PtyHandle {
 
 type OutputListener = (ref: SessionRef, data: string) => void;
 type ExitListener = (ref: SessionRef, exit: ExitInfo) => void;
+type StartListener = (ref: SessionRef) => void;
 type DraftListener = (ref: SessionRef, hasDraft: boolean) => void;
 type HostDraftListener = (ref: SessionRef, hasHostDraft: boolean) => void;
-type PtyListener = OutputListener | ExitListener | DraftListener | HostDraftListener;
+type PtyListener = OutputListener | ExitListener | StartListener | DraftListener | HostDraftListener;
 
 export function createPtyManager(host: HostContext): PtyManager {
   const sessions = new Map<string, Session>();
   const outputListeners = new Set<OutputListener>();
   const exitListeners = new Set<ExitListener>();
+  const startListeners = new Set<StartListener>();
   const draftListeners = new Set<DraftListener>();
   const hostDraftListeners = new Set<HostDraftListener>();
 
@@ -136,6 +140,10 @@ export function createPtyManager(host: HostContext): PtyManager {
       for (const resolve of session.stopWaiters) resolve(exit);
     });
 
+    // Последним: слушатель (methods/pty.ts) шлёт окнам pty.resync, и их pty.attach должен
+    // уже застать ручку и обработчики процесса.
+    for (const listener of Array.from(startListeners)) listener(ref);
+
     return toHandle(session);
   }
 
@@ -164,9 +172,10 @@ export function createPtyManager(host: HostContext): PtyManager {
   // значению `event`, а не принимать все три формы сразу.
   function on(event: 'output', listener: OutputListener): () => void;
   function on(event: 'exit', listener: ExitListener): () => void;
+  function on(event: 'start', listener: StartListener): () => void;
   function on(event: 'draft', listener: DraftListener): () => void;
   function on(event: 'host-draft', listener: HostDraftListener): () => void;
-  function on(event: 'output' | 'exit' | 'draft' | 'host-draft', listener: PtyListener): () => void {
+  function on(event: 'output' | 'exit' | 'start' | 'draft' | 'host-draft', listener: PtyListener): () => void {
     if (event === 'output') {
       const typed = listener as OutputListener;
       outputListeners.add(typed);
@@ -176,6 +185,11 @@ export function createPtyManager(host: HostContext): PtyManager {
       const typed = listener as ExitListener;
       exitListeners.add(typed);
       return () => exitListeners.delete(typed);
+    }
+    if (event === 'start') {
+      const typed = listener as StartListener;
+      startListeners.add(typed);
+      return () => startListeners.delete(typed);
     }
     if (event === 'host-draft') {
       const typed = listener as HostDraftListener;

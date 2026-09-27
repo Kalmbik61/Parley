@@ -196,6 +196,23 @@ describe('PtyManager', () => {
     expect(exit.exitCode).toBe(3);
   });
 
+  it("on('start'): новый PTY сессии сообщается слушателю, и ручка уже доступна через get()", async () => {
+    const manager = createPtyManager(fakeHost());
+    const sessionRef = ref();
+    const seen: Array<{ ref: SessionRef; live: boolean }> = [];
+    manager.on('start', (startedRef) => seen.push({ ref: startedRef, live: manager.get(startedRef) !== undefined }));
+
+    manager.start(sessionRef, launch());
+    await manager.stop(sessionRef, { graceMs: 200 });
+    manager.start(sessionRef, launch());
+
+    expect(seen).toEqual([
+      { ref: sessionRef, live: true },
+      { ref: sessionRef, live: true },
+    ]);
+    await manager.stop(sessionRef, { graceMs: 200 });
+  });
+
   it('STUB_HOOKS + STUB_TURN_MS: ход занимает заданное время между репликами', async () => {
     const manager = createPtyManager(fakeHost());
     const sessionRef = ref();
