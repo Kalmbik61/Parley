@@ -302,26 +302,31 @@ export async function createWork(
     rooms: [],
   };
 
+  // Карта пишется под блокировкой индекса и раньше самого индекса: наблюдатель
+  // HARNAS_HOME перечитывает список по записи индекса, и запись без карты он молча
+  // пропустил бы. За каталогом нового проекта ещё никто не следит, так что без
+  // этого порядка первая работа проекта не появилась бы в списке до следующей
+  // записи какой-нибудь карты. Сбой записи карты — и индекс не тронут.
   await withWorksIndex(lockTimeoutMs, async (index) => {
     let id = nextWorkId(index);
     while (await exists(workPaths(projectPath, id).map)) id = bumpWorkId(id);
     map.work.id = id;
-    index.works.push(entryOf(projectPath, map));
-  });
 
-  const paths = workPaths(projectPath, map.work.id);
-  await mkdir(paths.briefs, { recursive: true });
-  await mkdir(paths.artifacts, { recursive: true });
-  const text = serialize(map);
-  await withLock(paths.lock, lockTimeoutMs, async () => {
-    try {
-      await writeFile(paths.map, text, { encoding: 'utf8', flag: 'wx' });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      throw new Error(`карта ${paths.map} уже существует — работа не создана`);
-    }
-    // `.bak` с первой же записи: раздел 8 обещает предыдущую версию для любой карты.
-    await writeFile(paths.bak, text, 'utf8');
+    const paths = workPaths(projectPath, id);
+    await mkdir(paths.briefs, { recursive: true });
+    await mkdir(paths.artifacts, { recursive: true });
+    const text = serialize(map);
+    await withLock(paths.lock, lockTimeoutMs, async () => {
+      try {
+        await writeFile(paths.map, text, { encoding: 'utf8', flag: 'wx' });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        throw new Error(`карта ${paths.map} уже существует — работа не создана`);
+      }
+      // `.bak` с первой же записи: раздел 8 обещает предыдущую версию для любой карты.
+      await writeFile(paths.bak, text, 'utf8');
+    });
+    index.works.push(entryOf(projectPath, map));
   });
   return map;
 }

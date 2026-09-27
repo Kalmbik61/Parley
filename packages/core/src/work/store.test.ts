@@ -131,6 +131,19 @@ describe('createWork', () => {
     expect(first.work.title).toBe('Первая');
     expect(first.sessions).toHaveLength(1);
   });
+
+  it('запись в индексе появляется только вместе с картой: карта не записалась — индекс не тронут', async () => {
+    // Наблюдатель HARNAS_HOME читает список по записи индекса: запись без карты он
+    // пропустил бы, и первая работа нового проекта не появилась бы у хоста (кусок 3.5).
+    const lock = workPaths(project, 'w-0001').lock;
+    await mkdir(path.dirname(lock), { recursive: true });
+    await writeFile(lock, '');
+
+    await expect(createWork(project, { title: 'Первая' }, { lockTimeoutMs: 50 })).rejects.toThrow(
+      /не снята/,
+    );
+    expect((await readWorksIndex()).works).toEqual([]);
+  });
 });
 
 describe('updateMap', () => {

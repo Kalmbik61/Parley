@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -103,6 +103,65 @@ describe('works.create / works.delete', () => {
     const response = await client.next();
     expect(response.result).toEqual({ ok: true });
     expect((await readWorksIndex()).works).toEqual([]);
+
+    client.close();
+  });
+});
+
+describe('works.create: первая работа нового проекта без сессии', () => {
+  /** Следующее сообщение или null по таймауту — чтобы тест падал ожиданием, а не зависал. */
+  async function nextWithin(client: TestClient, ms: number): Promise<RawMessage | null> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), ms);
+    });
+    try {
+      return await Promise.race([client.next(), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  it('сразу попадает в снимок: works.changed с работой приходит, works.list её содержит', async () => {
+    const { home, token } = await boot();
+    const dir = await project();
+    const client = connectRaw(hostPaths(home).socket);
+    await waitConnected(client.socket);
+    await hello(client, token);
+
+    // Запись карты медленнее чтения списка по событию индекса — так бывает под нагрузкой
+    // (E2E куска 3.5). Детерминированно: чужой map.lock будущей w-0001 держится 500 мс.
+    const lock = workPaths(dir, 'w-0001').lock;
+    await mkdir(path.dirname(lock), { recursive: true });
+    await writeFile(lock, '');
+    const released = new Promise<void>((resolve) => {
+      setTimeout(() => void rm(lock, { force: true }).then(() => resolve()), 500);
+    });
+
+    client.send({ id: 1, method: 'works.create', params: { projectPath: dir, title: 'Новая', goal: '' } });
+    let workId: string | null = null;
+    let changed = false;
+    const hasWork = (data: unknown): boolean =>
+      (data as { entries: Array<{ projectPath: string; map: { work: { id: string } } }> }).entries.some(
+        (entry) => entry.projectPath === dir && entry.map.work.id === workId,
+      );
+    // Ни одна запись карты после создания не случается — снимок обязан обновиться сам.
+    const deadline = Date.now() + 3000;
+    while (!changed && Date.now() < deadline) {
+      const message = await nextWithin(client, deadline - Date.now());
+      if (message === null) break;
+      if (message.id === 1) workId = (message.result as { workId: string }).workId;
+      else if (message.event === 'works.changed' && workId !== null && hasWork(message.data)) {
+        changed = true;
+      }
+    }
+    await released;
+    expect(workId).toBe('w-0001');
+    expect(changed).toBe(true);
+
+    client.send({ id: 2, method: 'works.list', params: {} });
+    const list = await reply(client, 2);
+    expect(hasWork(list.result)).toBe(true);
 
     client.close();
   });
