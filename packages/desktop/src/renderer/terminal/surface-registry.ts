@@ -16,6 +16,8 @@ export interface TerminalSurfaceHandle {
   search: SearchAddon | null;
   openSearch(): void;
   clear(): void;
+  /** Фокус ввода внутри xterm этой поверхности — `terminal.clear` по клавише и пункту меню только сюда. */
+  hasFocus(): boolean;
 }
 
 /** Реестр живых поверхностей для фокуса, прокрутки и поиска (4.3, 5.3). */

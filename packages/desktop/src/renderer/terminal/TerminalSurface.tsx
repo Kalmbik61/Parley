@@ -277,6 +277,7 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
       },
       openSearch,
       clear: () => liveRef.current.terminal?.clear(),
+      hasFocus: () => liveRef.current.terminal?.element?.contains(document.activeElement) === true,
     }),
     [openSearch],
   );

@@ -350,6 +350,13 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     return terminalSurfaces.get(refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: tab.sessionId }));
   };
 
+  /**
+   * Поверхность с фокусом ввода в xterm. `terminal.clear` по клавише и по пункту меню — только
+   * сюда: гарантия «⌘K в сайдбаре не чистит терминал» не держится на одном `triggeredByAccelerator`
+   * main, на macOS живьём не проверенном (раунд fix-main-r1). Фокуса в терминале нет — ничего.
+   */
+  const focusedTerminalSurface = () => [...terminalSurfaces.values()].find((surface) => surface.hasFocus());
+
   /** Вкладка активной группы активной работы: соседняя по кругу (`step`) или N-я (`index`). */
   const focusTabInActiveGroup = (pick: (tabs: readonly TabSpec[], activeIndex: number) => TabSpec | undefined): void => {
     const key = useLayoutStore.getState().activeWorkKey;
@@ -402,7 +409,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
    * на раскладку активной работы; прочих действий реестра до 6.3 и этапов 7–9 здесь нет —
    * `isActionAvailable` их не пропускает.
    */
-  const run = (id: ActionId): void => {
+  const run = (id: ActionId, from: 'input' | 'palette' = 'input'): void => {
     const layoutStore = useLayoutStore.getState();
     if (id === 'palette.open') {
       // ⌘J при открытой палитре: обычная — закрыть, режим разделения или «+» — переключить в обычный.
@@ -441,14 +448,15 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     } else if (id === 'tab.mruNext') stepMru(1);
     else if (id === 'tab.mruPrev') stepMru(-1);
     else if (id === 'find') activeTerminalSurface()?.openSearch();
-    // Только `term.clear()` поверхности: агенту в pty ничего не уходит.
-    else if (id === 'terminal.clear') activeTerminalSurface()?.clear();
+    // Только `term.clear()` поверхности: агенту в pty ничего не уходит. Строку палитры выбирают
+    // явно, а фокус в этот миг у палитры — там цель активный терминал.
+    else if (id === 'terminal.clear') (from === 'palette' ? activeTerminalSurface() : focusedTerminalSurface())?.clear();
   };
   const runRef = useRef(run);
   runRef.current = run;
   // Одна ссылка на всё время жизни: палитра пересобирает документы по своим подпискам, а не на
   // каждую отрисовку оболочки.
-  const stableRun = useRef((id: ActionId): void => runRef.current(id)).current;
+  const stableRun = useRef((id: ActionId): void => runRef.current(id, 'palette')).current;
   const endMruCycleRef = useRef(endMruCycle);
   endMruCycleRef.current = endMruCycle;
 

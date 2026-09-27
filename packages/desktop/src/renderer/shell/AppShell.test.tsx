@@ -796,6 +796,61 @@ describe('AppShell — ⌘K в терминале (тест 10 куска 5.3, �
   });
 });
 
+describe('AppShell — terminal.clear только у терминала в фокусе (раунд fix-main-r1, п.6)', () => {
+  function focusTerminal(element: HTMLElement | null): HTMLTextAreaElement {
+    const xterm = document.createElement('div');
+    xterm.className = 'xterm';
+    const helper = document.createElement('textarea');
+    helper.className = 'xterm-helper-textarea';
+    xterm.appendChild(helper);
+    (element ?? document.body).appendChild(xterm);
+    helper.focus();
+    return helper;
+  }
+
+  async function withTerminal(): Promise<void> {
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+    await activateWithTerminal(keyOf('w-01'), 's-01');
+  }
+
+  it('пункт меню при фокусе в сайдбаре — ничего (запасной ход к triggeredByAccelerator)', async () => {
+    await withTerminal();
+    const terminal = xtermMock.terminals.at(-1);
+    const card = document.querySelector<HTMLElement>('[data-work-key]');
+    if (card === null) throw new Error('нет карточки');
+    card.focus();
+
+    act(() => bridge.emitMenu('terminal.clear'));
+    await flush();
+
+    expect(xtermMock.callsOf('clear', terminal?.index)).toHaveLength(0);
+  });
+
+  it('пункт меню при фокусе в терминале — clear() его поверхности', async () => {
+    await withTerminal();
+    const terminal = xtermMock.terminals.at(-1);
+    focusTerminal(terminal?.element ?? null);
+
+    act(() => bridge.emitMenu('terminal.clear'));
+    await flush();
+
+    expect(xtermMock.callsOf('clear', terminal?.index)).toHaveLength(1);
+  });
+
+  it('строка палитры «Clear terminal» — активный терминал, даже без фокуса в нём', async () => {
+    await withTerminal();
+    const terminal = xtermMock.terminals.at(-1);
+    act(() => bridge.emitMenu('palette.open'));
+    const input = await screen.findByPlaceholderText(/./, { selector: '[cmdk-input]' });
+    fireEvent.change(input, { target: { value: 'Clear terminal' } });
+    const row = await screen.findByRole('option', { name: /Clear terminal/ });
+    fireEvent.click(row);
+    await flush();
+
+    expect(xtermMock.callsOf('clear', terminal?.index)).toHaveLength(1);
+  });
+});
+
 describe('AppShell — фокус группы из поверхности терминала (раунд исправлений 1 куска 2.5)', () => {
   // Поверхность живёт в слое, а не внутри `GroupView`, — его
   // `onPointerDownCapture` до неё не доходит; группу фокусирует сама поверхность.

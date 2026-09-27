@@ -127,7 +127,7 @@ describe('buildFocusTargetDeps (раунд fix-main-r1, п.4)', () => {
   it('works — из стора в момент сборки, surface — из реестра поверхностей, openTab — в раскладку работы', () => {
     useWorksStore.setState({ entries: [work] });
     const apply = vi.spyOn(useLayoutStore.getState(), 'apply');
-    const handle: TerminalSurfaceHandle = { focus: vi.fn(), scrollToBottom: vi.fn(), search: null, openSearch: vi.fn(), clear: vi.fn() };
+    const handle: TerminalSurfaceHandle = { focus: vi.fn(), scrollToBottom: vi.fn(), search: null, openSearch: vi.fn(), clear: vi.fn(), hasFocus: () => false };
     const ref = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-02' };
     terminalSurfaces.set(refKey(ref), handle);
     try {
