@@ -5,7 +5,8 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { toast } from 'sonner';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { S } from '../../shared/strings.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { tabId } from '../layout/ids.js';
@@ -19,7 +20,13 @@ import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js'
 import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { NewWorkComposer, validateDraft, type NewWorkDraft } from './NewWorkComposer.js';
 
-afterEach(cleanup);
+vi.mock('sonner', () => ({ toast: vi.fn() }));
+
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+  vi.mocked(toast).mockClear();
+});
 
 const PROJECT = '/tmp/p';
 
@@ -276,5 +283,97 @@ describe('NewWorkComposer — агент и ярлык по умолчанию',
     fireEvent.click(screen.getByRole('button', { name: S.common.create }));
     await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
     expect(callsOf('sessions.create')[0]).toMatchObject({ label: 'мой ярлык' });
+  });
+});
+
+describe('NewWorkComposer — раунд исправлений 1', () => {
+  it('плейсхолдер агента — «Agent…», пока список агентов не пришёл', async () => {
+    bridge.setHandler('providers.list', () => new Promise(() => {}));
+    render(<NewWorkComposer open bridge={bridge} projectPath={PROJECT} onOpenChange={() => {}} />);
+    expect(await screen.findByText('Agent…')).toBeTruthy();
+    expect(screen.queryByText(S.dialogs.newSession.providerPlaceholder)).toBeNull();
+  });
+
+  it('двойной клик Create и двойной ⌘Enter во время ожидания — один works.create и один sessions.create', async () => {
+    let finishWork: (value: { workId: string }) => void = () => {};
+    let finishSession: () => void = () => {};
+    bridge.setHandler('works.create', () => new Promise((resolve) => (finishWork = resolve)));
+    bridge.setHandler(
+      'sessions.create',
+      (params) =>
+        new Promise((resolve) => {
+          finishSession = () => resolve({ ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: 's-01' } });
+        }),
+    );
+    const opened: boolean[] = [];
+    await renderComposer((open) => opened.push(open));
+    typeTitle('title');
+    const create = screen.getByRole('button', { name: S.common.create });
+    const title = screen.getByLabelText(S.dialogs.newWork.titleField);
+    const pressAll = (): void => {
+      fireEvent.click(create);
+      fireEvent.click(create);
+      fireEvent.keyDown(title, { key: 'Enter', metaKey: true });
+      fireEvent.keyDown(title, { key: 'Enter', metaKey: true });
+    };
+    pressAll();
+    await act(async () => {});
+    expect(callsOf('works.create')).toHaveLength(1);
+
+    await act(async () => finishWork({ workId: 'w-new' }));
+    expect(callsOf('sessions.create')).toHaveLength(1);
+    pressAll();
+    await act(async () => {});
+    await act(async () => finishSession());
+    await waitFor(() => expect(opened).toEqual([false]));
+    expect(callsOf('works.create')).toHaveLength(1);
+    expect(callsOf('sessions.create')).toHaveLength(1);
+  });
+
+  it('снимок не принёс работу за 10 с — подписка снята, тост, вкладка не открывается', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await renderComposer();
+    typeTitle('title');
+    fireEvent.click(screen.getByRole('button', { name: S.common.create }));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    await act(async () => {});
+
+    act(() => vi.advanceTimersByTime(9_000));
+    expect(toast).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(toast).toHaveBeenCalledWith('Workspace created — it will appear in the sidebar shortly');
+
+    // Поздний снимок уже не делает работу активной: человек мог уйти в другую.
+    emitNewWork();
+    expect(useLayoutStore.getState().activeWorkKey).toBeNull();
+    expect(useLayoutStore.getState().pending[NEW_KEY]).toBeUndefined();
+  });
+
+  it('снимок пришёл до 10 с — работа активна, тоста нет', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await renderComposer();
+    typeTitle('title');
+    fireEvent.click(screen.getByRole('button', { name: S.common.create }));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    await act(async () => {});
+    act(() => vi.advanceTimersByTime(5_000));
+    emitNewWork();
+    expect(useLayoutStore.getState().activeWorkKey).toBe(NEW_KEY);
+    act(() => vi.advanceTimersByTime(10_000));
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it('размонтирование снимает ожидание: ни активации, ни тоста', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await renderComposer();
+    typeTitle('title');
+    fireEvent.click(screen.getByRole('button', { name: S.common.create }));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    await act(async () => {});
+    cleanup();
+    emitNewWork();
+    expect(useLayoutStore.getState().activeWorkKey).toBeNull();
+    act(() => vi.advanceTimersByTime(10_000));
+    expect(toast).not.toHaveBeenCalled();
   });
 });

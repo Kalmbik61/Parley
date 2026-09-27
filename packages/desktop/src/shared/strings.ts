@@ -177,6 +177,9 @@ export const S = {
       labelTooLong: 'Label: up to 40 characters',
       taskTooLong: 'Task: up to 20,000 characters',
       agentRequired: 'Select an agent',
+      agentPlaceholder: 'Agent…',
+      /** Снимок работ не принёс новую работу за 10 с — вкладка не открыта вслепую. */
+      notListedYet: 'Workspace created — it will appear in the sidebar shortly',
     },
   },
 

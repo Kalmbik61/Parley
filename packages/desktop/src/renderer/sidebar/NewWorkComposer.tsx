@@ -15,7 +15,8 @@
  * компоненте: форму успевают закрыть, а при «Create more» ждут сразу несколько работ.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
@@ -79,10 +80,18 @@ export function validateDraft(draft: NewWorkDraft): Partial<Record<keyof NewWork
 }
 
 /**
- * Делает работу активной и открывает вкладку сессии, когда снимок работ её принёс. Работа
- * ещё не гидрирована — `apply` сам ждёт `hydrate` в очереди (кусок 2.2).
+ * Сколько ждать работу в снимке. Дольше — снимок, видимо, отстал (FSEvents под нагрузкой):
+ * поздняя активация выдернула бы человека из работы, в которую он уже ушёл.
  */
-function activateWhenListed(projectPath: string, workId: string, sessionId: string | null): void {
+const LISTED_TIMEOUT_MS = 10_000;
+
+/**
+ * Делает работу активной и открывает вкладку сессии, когда снимок работ её принёс. Работа
+ * ещё не гидрирована — `apply` сам ждёт `hydrate` в очереди (кусок 2.2). Не дождались за
+ * `LISTED_TIMEOUT_MS` — ожидание снимается, человеку тост; снятие лежит в `pending`, чтобы
+ * размонтирование формы не оставило подписку.
+ */
+function activateWhenListed(projectPath: string, workId: string, sessionId: string | null, pending: Set<() => void>): void {
   const key = workKey(projectPath, workId);
   const listed = (): boolean => {
     const entry = useWorksStore.getState().entries.find((item) => item.projectPath === projectPath && item.map.work.id === workId);
@@ -98,11 +107,21 @@ function activateWhenListed(projectPath: string, workId: string, sessionId: stri
     activate();
     return;
   }
+  const cancel = (): void => {
+    unsubscribe();
+    clearTimeout(timer);
+    pending.delete(cancel);
+  };
   const unsubscribe = useWorksStore.subscribe(() => {
     if (!listed()) return;
-    unsubscribe();
+    cancel();
     activate();
   });
+  const timer = setTimeout(() => {
+    cancel();
+    toast(S.dialogs.newWork.notListedYet);
+  }, LISTED_TIMEOUT_MS);
+  pending.add(cancel);
 }
 
 /** Значение пункта «Choose a folder…» в списке проектов — путём оно быть не может. */
@@ -135,6 +154,15 @@ export function NewWorkComposer({ open, projectPath: initialProject, bridge, onO
   /** Работа создана, а `sessions.create` упал — «Retry» повторяет только его. */
   const [createdWork, setCreatedWork] = useState<{ projectPath: string; workId: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Снятия ожиданий снимка (`activateWhenListed`) — все гасятся при размонтировании. */
+  const pendingRef = useRef(new Set<() => void>());
+
+  useEffect(() => {
+    const pending = pendingRef.current;
+    return () => {
+      for (const cancel of [...pending]) cancel();
+    };
+  }, []);
 
   // Каждое открытие — с чистой формой и проектом открывшего; «Create more» живёт до
   // перезапуска окна, агент выбирается заново по правилу (`lastProvider` помнит прошлый).
@@ -222,7 +250,7 @@ export function NewWorkComposer({ open, projectPath: initialProject, bridge, onO
         worktree,
       });
       useUiStore.getState().patchUi({ lastProvider: chosen });
-      activateWhenListed(work.projectPath, work.workId, ref.sessionId);
+      activateWhenListed(work.projectPath, work.workId, ref.sessionId, pendingRef.current);
       finish();
     } catch (err) {
       console.warn('[harnas] sessions.create', err);
@@ -253,7 +281,7 @@ export function NewWorkComposer({ open, projectPath: initialProject, bridge, onO
       return;
     }
     if (!startSession) {
-      activateWhenListed(projectPath, workId, null);
+      activateWhenListed(projectPath, workId, null, pendingRef.current);
       finish();
       return;
     }
@@ -322,7 +350,7 @@ export function NewWorkComposer({ open, projectPath: initialProject, bridge, onO
                 <span>{text.agentField}</span>
                 <Select value={provider ?? ''} onValueChange={setProvider}>
                   <SelectTrigger aria-label={text.agentField}>
-                    <SelectValue placeholder={S.dialogs.newSession.providerPlaceholder} />
+                    <SelectValue placeholder={text.agentPlaceholder} />
                   </SelectTrigger>
                   <SelectContent>
                     {providers

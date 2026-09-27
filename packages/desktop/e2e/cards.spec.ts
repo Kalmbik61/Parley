@@ -121,12 +121,9 @@ test.describe('карточки сайдбара и форма новой раб
 
   test('форма новой работы с «Create more» создаёт две работы подряд; проект — от «+» заголовка', async () => {
     const { window } = await launch();
-    // Нативный `dialog.showOpenDialog` E2E не выберет — проект уже известен по этой работе.
-    // Сессия в ней — не для формы: первая работа нового проекта без сессии в снимок хоста не
-    // попадает (индекс пишется раньше карты, а за каталогом проекта ещё никто не следит),
-    // появится только со следующей записью карты.
-    const seed = await createWork(window, 'e2e-cards-seed');
-    await createSession(window, seed.workId, 'seed');
+    // Проект уже известен по этой работе — «+» заголовка есть с первого кадра. Сессии в ней
+    // нет: первая работа нового проекта без сессии попадает в снимок и так (core 087d3c8).
+    await createWork(window, 'e2e-cards-seed');
     await expect(window.getByTestId('app-shell')).toBeVisible();
 
     await window.getByRole('button', { name: 'New workspace in project', exact: true }).click();
@@ -157,5 +154,39 @@ test.describe('карточки сайдбара и форма новой раб
     ]);
     await expect(window.locator('[data-work-key]:not([role="tab"])')).toHaveCount(3);
     await expect(window.locator('#titlebar-tabs [role="tab"][data-tab-id^="terminal:"]')).toHaveCount(1);
+  });
+
+  test('форма в новом проекте без «Start a session» — работа видна в сайдбаре', async () => {
+    const { electronApp, window } = await launch();
+    // Нативный выбор папки E2E не нажмёт — `showOpenDialog` в main отвечает сразу этим проектом.
+    await electronApp.evaluate(({ dialog }, dir) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [dir] })) as typeof dialog.showOpenDialog;
+    }, project);
+
+    await window.getByTestId('landing').getByRole('button', { name: 'New workspace' }).click();
+    const dialog = window.getByRole('dialog');
+    await dialog.getByRole('combobox', { name: 'Project' }).click();
+    await window.getByRole('option', { name: 'Choose a folder…' }).click();
+    await expect(dialog.getByRole('combobox', { name: 'Project' })).toHaveText(project);
+    await dialog.getByRole('switch', { name: 'Start a session' }).click();
+    await dialog.getByLabel('Title').fill('e2e-cards-bare');
+    await dialog.getByRole('button', { name: 'Create' }).click();
+    await expect(dialog).toBeHidden();
+
+    // Без сессии в работе — только снимок хоста: раньше индекс опережал карту, и работа не
+    // появлялась до следующей записи карты.
+    const card = window.locator('[data-work-key]:not([role="tab"])');
+    await expect(card).toHaveCount(1);
+    await expect(card).toContainText('e2e-cards-bare');
+    const snapshot = await call<{ entries: Array<{ projectPath: string; map: { work: { id: string; title: string }; sessions: unknown[] } }> }>(
+      window,
+      'works.list',
+      {},
+    );
+    expect(snapshot.entries.map((entry) => ({ title: entry.map.work.title, sessions: entry.map.sessions.length }))).toEqual([
+      { title: 'e2e-cards-bare', sessions: 0 },
+    ]);
+    const workId = snapshot.entries[0]?.map.work.id ?? '';
+    await expect(card).toHaveAttribute('data-work-key', `${project} ${workId}`);
   });
 });
