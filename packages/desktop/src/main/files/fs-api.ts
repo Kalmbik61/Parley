@@ -88,10 +88,19 @@ async function readRegular(absPath: string, limit: number): Promise<{ buffer: Bu
   }
 }
 
+/** Цель, какой её видела сверка `write`: `null` — файла быть не должно. */
+export type CheckedTarget = { mtimeMs: number; size: number } | null;
+
 /**
  * Запись по realpath из roots.resolve(…, 'write'): временный файл рядом со случайным
  * именем, open(…, 'wx'), сверка realpath его каталога с каталогом absPath, права прежние
- * (новый файл — 0644), rename. Имя занято или каталог подменён — ошибка, цель не тронута.
+ * (новый файл — 0644), повторная сверка цели, rename. Имя занято или каталог подменён —
+ * ошибка, цель не тронута. `absPath` обязан быть уже каноническим (realpath, как отдаёт
+ * `roots.resolve`): сверка каталога сравнивает строки, и путь за симлинком (`/var` →
+ * `/private/var` на macOS) дал бы ложный отказ «каталог подменён».
+ * `checked` — что видела сверка mtime в `write`; цель с тех пор изменилась — `conflict`,
+ * а не молчаливое затирание правки агента. Без `checked` (прямой вызов) сверяется только
+ * то, что цель не каталог.
  * `writeAtomic` из `atomic-file.ts` не годится: его имя предсказуемо, а `writeFile` идёт по
  * ссылке — подложенный заранее симлинк увёл бы запись наружу.
  */
@@ -99,7 +108,8 @@ export async function writeAtomicPreservingMode(
   absPath: string,
   text: string,
   random: () => string = () => randomBytes(4).toString('hex'),
-): Promise<number> {
+  checked?: CheckedTarget,
+): Promise<WriteResult> {
   const folder = path.dirname(absPath);
   const tmp = path.join(folder, `.${path.basename(absPath)}.${random()}.harnas-tmp`);
   let handle: FileHandle | null;
@@ -118,7 +128,8 @@ export async function writeAtomicPreservingMode(
     if ((await realpath(folder)) !== folder) throw new FilesDeniedError(`parent directory changed: ${folder}`);
     let mode = 0o644;
     try {
-      mode = (await fsStat(absPath)).mode & 0o777;
+      // Режим целиком, со setuid/setgid/sticky: «права прежние» — не только rwx.
+      mode = (await fsStat(absPath)).mode & 0o7777;
     } catch (error) {
       if (errorCode(error) !== 'ENOENT') throw error;
     }
@@ -129,13 +140,50 @@ export async function writeAtomicPreservingMode(
     const { mtimeMs } = await handle.stat();
     await handle.close();
     handle = null;
-    await rename(tmp, absPath);
-    return mtimeMs;
+    // Повторная сверка прямо перед rename: между сверкой в `write` и этой точкой прошло
+    // несколько await, и запись агента в это время rename затёр бы молча. Окно между этим
+    // stat и rename — остаточный риск спеки 10.8.
+    const now = await statOrNull(absPath);
+    if (now !== null && !now.isFile()) throw new HostError('bad_request', `not a regular file: ${absPath}`);
+    if (checked !== undefined) {
+      if (checked === null && now !== null) return await dropTemp(tmp, { ok: false, conflict: { mtimeMs: now.mtimeMs } });
+      if (checked !== null) {
+        if (now === null) throw new HostError('not_found', `no such file: ${absPath}`);
+        if (now.mtimeMs !== checked.mtimeMs || now.size !== checked.size) {
+          return await dropTemp(tmp, { ok: false, conflict: { mtimeMs: now.mtimeMs } });
+        }
+      }
+    }
+    try {
+      await rename(tmp, absPath);
+    } catch (error) {
+      // Цель стала каталогом уже после сверки — тот же предметный код, что и для каталога сразу.
+      if (errorCode(error) === 'EISDIR' || errorCode(error) === 'ENOTEMPTY') {
+        throw new HostError('bad_request', `not a regular file: ${absPath}`);
+      }
+      throw error;
+    }
+    return { ok: true, mtimeMs };
   } catch (error) {
     await handle?.close().catch(() => undefined);
     await unlink(tmp).catch(() => undefined);
     throw error;
   }
+}
+
+async function statOrNull(absPath: string): Promise<Stats | null> {
+  try {
+    return await fsStat(absPath);
+  } catch (error) {
+    if (errorCode(error) !== 'ENOENT') throw error;
+    return null;
+  }
+}
+
+/** Временный файл не нужен: запись не состоялась, цель не тронута. */
+async function dropTemp(tmp: string, result: WriteResult): Promise<WriteResult> {
+  await unlink(tmp).catch(() => undefined);
+  return result;
 }
 
 /** `stat` по realpath: FIFO, сокеты и прочие не-файлы окну не нужны — `null`, как отсутствующий путь. */
@@ -190,13 +238,7 @@ export function createFsApi(roots: RootsRegistry, options: FsApiOptions = {}): F
   };
 
   const writeChecked = async (real: string, text: string, expectedMtimeMs: number | null): Promise<WriteResult> => {
-    let current: Stats | null;
-    try {
-      current = await fsStat(real);
-    } catch (error) {
-      if (errorCode(error) !== 'ENOENT') throw error;
-      current = null;
-    }
+    const current = await statOrNull(real);
     if (current !== null && !current.isFile()) throw new HostError('bad_request', `not a regular file: ${real}`);
     if (expectedMtimeMs === null) {
       // «Файла быть не должно»: его успел создать агент — не перетираем молча.
@@ -206,7 +248,8 @@ export function createFsApi(roots: RootsRegistry, options: FsApiOptions = {}): F
       if (current === null) throw new HostError('not_found', `no such file: ${real}`);
       if (current.mtimeMs !== expectedMtimeMs) return { ok: false, conflict: { mtimeMs: current.mtimeMs } };
     }
-    return { ok: true, mtimeMs: await writeAtomicPreservingMode(real, text, options.random) };
+    const checked = current === null ? null : { mtimeMs: current.mtimeMs, size: current.size };
+    return writeAtomicPreservingMode(real, text, options.random, checked);
   };
 
   return {

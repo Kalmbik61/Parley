@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -361,5 +362,78 @@ describe('.git и .harnas (тест 10)', () => {
     expect(await codeOf(api.write(ROOT(), '.GIT/config', 'x', null))).toBe('files:denied');
     expect(await codeOf(api.write(ROOT(), '.harnas/works/w/map.json', 'x', null))).toBe('files:denied');
     expect(await readFile(path.join(project, '.harnas', 'works', 'w', 'map.json'), 'utf8')).toBe('{}');
+  });
+});
+
+describe('раунд исправлений 1 (кусок 7.1a)', () => {
+  it('агент пишет между сверкой mtime и rename — conflict с mtime диска, правка агента цела', async () => {
+    const target = path.join(project, 'src', 'a.ts');
+    const before = await stat(target);
+    // random зовётся уже после первой сверки mtime — ровно окно, где раньше запись агента терялась.
+    const api = createFsApi(registry, {
+      random: () => {
+        writeFileSync(target, 'AGENT WROTE THIS');
+        return 'race0001';
+      },
+    });
+    const result = await api.write(ROOT(), 'src/a.ts', 'WINDOW WROTE THIS', before.mtimeMs);
+    const now = await stat(target);
+    expect(result).toEqual({ ok: false, conflict: { mtimeMs: now.mtimeMs } });
+    expect(await readFile(target, 'utf8')).toBe('AGENT WROTE THIS');
+    expect(await leftovers(path.join(project, 'src'))).toEqual([]);
+  });
+
+  it('новый файл: агент создал его между сверкой и rename — conflict, файл агента цел', async () => {
+    const target = path.join(project, 'src', 'new.ts');
+    const api = createFsApi(registry, {
+      random: () => {
+        writeFileSync(target, 'agent');
+        return 'race0002';
+      },
+    });
+    const result = await api.write(ROOT(), 'src/new.ts', 'window', null);
+    expect(result).toEqual({ ok: false, conflict: { mtimeMs: (await stat(target)).mtimeMs } });
+    expect(await readFile(target, 'utf8')).toBe('agent');
+    expect(await leftovers(path.join(project, 'src'))).toEqual([]);
+  });
+
+  it('цель стала каталогом между сверкой и rename — bad_request, каталог и временных файлов нет', async () => {
+    const target = path.join(project, 'src', 'new.ts');
+    const api = createFsApi(registry, {
+      random: () => {
+        mkdirSync(target);
+        return 'race0003';
+      },
+    });
+    expect(await codeOf(api.write(ROOT(), 'src/new.ts', 'window', null))).toBe('bad_request');
+    expect((await stat(target)).isDirectory()).toBe(true);
+    expect(await leftovers(path.join(project, 'src'))).toEqual([]);
+  });
+
+  it('режим файла сохраняется целиком, со старшими битами (setuid)', async () => {
+    const target = path.join(project, 'src', 'a.ts');
+    await chmod(target, 0o4755);
+    const before = await stat(target);
+    expect(before.mode & 0o7777).toBe(0o4755);
+    expect((await createFsApi(registry).write(ROOT(), 'src/a.ts', 'new', before.mtimeMs)).ok).toBe(true);
+    expect((await stat(target)).mode & 0o7777).toBe(0o4755);
+  });
+
+  it('BOM и CRLF туда-обратно: readText → write → байты те же', async () => {
+    const target = path.join(project, 'src', 'crlf.ts');
+    const bytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('первая\r\nвторая\r\n', 'utf8')]);
+    await writeFile(target, bytes);
+    const api = createFsApi(registry);
+    const file = await api.readText(ROOT(), 'src/crlf.ts');
+    expect(file).toMatchObject({ utf8: true, binary: false, readOnlyReason: null });
+    expect((await api.write(ROOT(), 'src/crlf.ts', file.text, file.mtimeMs)).ok).toBe(true);
+    expect(Buffer.compare(await readFile(target), bytes)).toBe(0);
+  });
+
+  it('list по пути-симлинку на каталог внутри корня — содержимое цели', async () => {
+    await symlink(path.join(project, 'src'), path.join(project, 'linkdir'));
+    const entries = await createFsApi(registry).list(ROOT(), 'linkdir');
+    expect(entries.map((entry) => entry.name)).toEqual(['a.ts']);
+    expect(entries[0]).toMatchObject({ kind: 'file', size: 3, target: null });
   });
 });
