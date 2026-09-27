@@ -169,7 +169,7 @@ describe('SessionRow — тултип (тест 13)', () => {
         onOpen={() => {}}
       />,
     );
-    fireEvent.focus(row());
+    act(() => row().focus());
     const tooltip = await waitFor(() => {
       const element = document.querySelector<HTMLElement>('[data-session-tooltip]');
       if (element === null) throw new Error('тултипа нет');
@@ -244,10 +244,69 @@ describe('SessionRow — тултип и перетаскивание (раун�
     await pause(700);
     expect(tooltipText()).toBeNull();
 
-    fireEvent.pointerEnter(row('s-02'), { pointerType: 'mouse' });
+    // jsdom не считает :hover, а тултип открывается только под указателем (раунд исправлений 2).
+    const s02 = row('s-02');
+    const matches = Element.prototype.matches;
+    const hover = vi.spyOn(Element.prototype, 'matches').mockImplementation(function (this: Element, selector: string) {
+      return selector === ':hover' ? this === s02 : matches.call(this, selector);
+    });
+    fireEvent.pointerEnter(s02, { pointerType: 'mouse' });
     await waitFor(() => expect(tooltipText()).toContain('implementer task'));
+    hover.mockRestore();
     expect(tooltipText()).not.toContain('reviewer task');
     expect(document.querySelectorAll('[data-session-tooltip]')).toHaveLength(1);
+  });
+});
+
+describe('SessionRow — таймер открытия тултипа и перетаскивание (раунд исправлений 2 куска 3.3)', () => {
+  // jsdom не считает :hover — строка «под указателем» задаётся тестом.
+  let hovered: Element | null = null;
+  beforeEach(() => {
+    hovered = null;
+    const original = Element.prototype.matches;
+    vi.spyOn(Element.prototype, 'matches').mockImplementation(function (this: Element, selector: string) {
+      return selector === ':hover' ? this === hovered : original.call(this, selector);
+    });
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  const advance = (ms: number): void => act(() => void vi.advanceTimersByTime(ms));
+  const enter = (element: HTMLElement): void => {
+    hovered = element;
+    fireEvent.pointerEnter(element, { pointerType: 'mouse' });
+  };
+
+  it('таймер наведения S03, запущенный до порога перетаскивания, не открывает её тултип поверх S02', () => {
+    render(<DndRows sessions={[makeSession('s-02', 'implementer', { task: 'implementer task' }), makeSession('s-03', 'reviewer', { task: 'reviewer task' })]} />);
+    const s03 = row('s-03');
+
+    enter(s03);
+    advance(200);
+    fireEvent.pointerDown(s03, { isPrimary: true, button: 0, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(document, { isPrimary: true, clientX: 10, clientY: 40 });
+    advance(100);
+    // pointerleave у S03 в окне не приходит (захват указателя @dnd-kit) — здесь его тоже нет.
+    fireEvent.pointerUp(document, { isPrimary: true, clientX: 10, clientY: 40 });
+    enter(row('s-02'));
+
+    advance(300); // таймер S03 истёк (600 мс от её наведения)
+    expect(tooltipText()).toBeNull();
+    advance(300); // таймер S02
+    expect(tooltipText()).toContain('implementer task');
+    expect(tooltipText()).not.toContain('reviewer task');
+    expect(document.querySelectorAll('[data-session-tooltip]')).toHaveLength(1);
+  });
+
+  it('обычное наведение без перетаскивания открывает свой тултип после openDelay', () => {
+    render(<DndRows sessions={[makeSession('s-02', 'implementer', { task: 'implementer task' }), makeSession('s-03', 'reviewer', { task: 'reviewer task' })]} />);
+    enter(row('s-03'));
+    advance(599);
+    expect(tooltipText()).toBeNull();
+    advance(1);
+    expect(tooltipText()).toContain('reviewer task');
   });
 });
 

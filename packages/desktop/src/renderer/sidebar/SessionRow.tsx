@@ -90,10 +90,30 @@ export const SessionRow = memo(function SessionRow({
     },
     [setNodeRef],
   );
+  // Раунд исправлений 2: таймер открытия Radix (openDelay) стартует на pointerenter ещё до
+  // порога перетаскивания, а pointerleave, который его отменил бы, глотает захват указателя
+  // @dnd-kit — таймер срабатывает уже после броска, когда указатель над соседней строкой.
+  // Поэтому запрос Radix открыть принимается, только если сейчас нет перетаскивания, после
+  // последнего перетаскивания указатель заново входил в строку (или её заново фокусировали),
+  // и строка действительно под указателем или в фокусе.
+  const staleRef = useRef(false);
   useEffect(() => {
     setTooltipOpen(false);
+    if (dragging) staleRef.current = true;
     if (draggingThis && rowRef.current !== null && document.activeElement === rowRef.current) rowRef.current.blur();
   }, [dragging, draggingThis]);
+  const onTooltipOpenChange = (open: boolean): void => {
+    if (!open) {
+      setTooltipOpen(false);
+      return;
+    }
+    const node = rowRef.current;
+    if (dragging || staleRef.current || node === null) return;
+    if (node.matches(':hover') || document.activeElement === node) setTooltipOpen(true);
+  };
+  const freshIntent = (): void => {
+    if (!dragging) staleRef.current = false;
+  };
 
   // trust-wait (спека 8.3, план worktree 4.3) — то же правило, что было в `SessionTree.tsx`:
   // пометка держится, пока в последних уведомлениях есть trust-wait по этой сессии.
@@ -121,7 +141,7 @@ export const SessionRow = memo(function SessionRow({
   const secondary = 'text-work-sidebar-muted-foreground';
 
   return (
-    <HoverCard open={tooltipOpen && !dragging} onOpenChange={setTooltipOpen} openDelay={600} closeDelay={100}>
+    <HoverCard open={tooltipOpen && !dragging} onOpenChange={onTooltipOpenChange} openDelay={600} closeDelay={100}>
       <SessionRowMenu workKey={workKey} projectPath={projectPath} workId={workId} session={session} bridge={bridge} onOpen={onOpen}>
       <HoverCardTrigger asChild>
         <div
@@ -132,6 +152,8 @@ export const SessionRow = memo(function SessionRow({
           data-selected={selected}
           {...(draggable ? { 'data-draggable': '' } : {})}
           onPointerDown={listeners?.onPointerDown as ((event: PointerEvent<HTMLDivElement>) => void) | undefined}
+          onPointerEnter={freshIntent}
+          onFocus={freshIntent}
           onClick={(event) => {
             // Клик по строке — не клик по карточке: карточка сделала бы только работу активной.
             event.stopPropagation();
