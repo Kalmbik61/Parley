@@ -96,13 +96,13 @@ describe('DraftTracker: черновик хоста (кусок 5.1)', () => {
     expect(tracker.hasDraft).toBe(true);
   });
 
-  // Содержимое вставки человека не должно подделывать её конец (ревью 5.1-B):
-  // ни ⌃C/⌃U, ни байты ESC[201~ внутри содержимого — это текст, а не клавиши.
+  // Содержимое вставки человека — текст, а не клавиши (ревью 5.1-B). Поддельные байты
+  // маркеров внутри содержимого отсюда не отличить — их вырезает окно до xterm
+  // (TerminalSurface, раунд исправлений 2); хост разбирает маркеры по порядку.
   for (const [name, chunk] of [
     ['⌃C внутри вставки', '\x1b[200~before\x03after\x1b[201~'],
     ['⌃U внутри вставки', '\x1b[200~before\x15after\x1b[201~'],
-    ['поддельный ESC[201~ и \\r внутри вставки', '\x1b[200~text\x1b[201~\r\x1b[201~'],
-    ['поддельные ESC[200~/ESC[201~ и ⌃C внутри вставки', '\x1b[200~a\x1b[200~b\x1b[201~\x03\x1b[201~'],
+    ['\\r внутри вставки', '\x1b[200~a\rb\x1b[201~'],
     ['обычная вставка с \\n в конце', '\x1b[200~text\n\x1b[201~'],
   ]) {
     it(`${name} черновики не снимает; настоящий Enter после вставки снимает`, () => {
@@ -117,22 +117,35 @@ describe('DraftTracker: черновик хоста (кусок 5.1)', () => {
     });
   }
 
-  it('поддельный ESC[201~ в куске без настоящего конца: вставка открыта до конца следующих кусков', () => {
+  it('две вставки в одном куске с настоящим \\r между ними — черновики сняты', () => {
     const tracker = new DraftTracker();
     tracker.markHost();
-    tracker.input('\x1b[200~a\x1b[201~\r\x03');
-    // В куске последний ESC[201~ — до \r, так что хвост куска уже вне вставки:
-    // один кусок xterm = одна вставка, закрывается последним маркером куска.
+    tracker.input('\x1b[200~a\x1b[201~\r\x1b[200~b\x1b[201~');
     expect(tracker.hasHostDraft).toBe(false);
+    // Вторая вставка — новый черновик человека после Enter.
+    expect(tracker.hasDraft).toBe(true);
+  });
 
+  it('вставка из двух кусков с \\n и ⌃C внутри не снимает черновик до настоящего Enter после конца', () => {
+    const tracker = new DraftTracker();
     tracker.markHost();
-    tracker.input('\x1b[200~a\r');
-    tracker.input('b\x03\x15');
+    tracker.input('\x1b[200~AAAA');
+    tracker.input('BB\x03BB\nCCCC\x1b[201~');
     expect(tracker.hasHostDraft).toBe(true);
-    tracker.input('c\x1b[201~');
+    expect(tracker.hasDraft).toBe(true);
+    tracker.input('x');
     expect(tracker.hasHostDraft).toBe(true);
-    tracker.input('\x03');
+    tracker.input('\n');
     expect(tracker.hasHostDraft).toBe(false);
+    expect(tracker.hasDraft).toBe(false);
+  });
+
+  it('⌃C после конца вставки в том же куске — отмена', () => {
+    const tracker = new DraftTracker();
+    tracker.markHost();
+    tracker.input('\x1b[200~a\x1b[201~\x03');
+    expect(tracker.hasHostDraft).toBe(false);
+    expect(tracker.hasDraft).toBe(false);
   });
 
   it('ввод до вставки и после неё в одном куске считается как обычный', () => {

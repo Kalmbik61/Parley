@@ -48,34 +48,24 @@ export class DraftTracker {
   private inPaste = false;
 
   /**
-   * xterm шлёт вставку одним куском onData, поэтому в куске её границы — первый
-   * ESC[200~ и ПОСЛЕДНИЙ ESC[201~: всё между ними — содержимое, даже если в нём самом
-   * есть такие же байты (скопированный сырой лог терминала). Иначе содержимое могло бы
-   * «закрыть» вставку раньше времени, и его \r или ⌃C сняли бы черновик хоста.
-   * Нет закрывающего маркера — вставка открыта до ESC[201~ следующих кусков.
+   * Маркеры вставки разбираются по порядку, с состоянием через куски: ESC[200~
+   * открывает вставку, ESC[201~ закрывает, всё между — содержимое. Байты маркеров
+   * внутри самого содержимого здесь не отличить от настоящих — их вырезает окно
+   * до xterm (TerminalSurface), поэтому эвристик «последний маркер куска» нет:
+   * они ломали две вставки в одном куске и подделку на границе кусков.
    */
   input(data: string): void {
     let rest = data;
-    if (!this.inPaste) {
-      const start = rest.indexOf(PASTE_START);
-      if (start < 0) {
-        this.inputPlain(rest);
-        return;
-      }
-      this.inputPlain(rest.slice(0, start));
-      rest = rest.slice(start + PASTE_START.length);
-      this.inPaste = true;
+    while (rest.length > 0) {
+      const marker = this.inPaste ? PASTE_END : PASTE_START;
+      const at = rest.indexOf(marker);
+      const part = at < 0 ? rest : rest.slice(0, at);
+      if (this.inPaste) this.inputPasted(part);
+      else this.inputPlain(part);
+      if (at < 0) return;
+      this.inPaste = !this.inPaste;
+      rest = rest.slice(at + marker.length);
     }
-    const end = rest.lastIndexOf(PASTE_END);
-    if (end < 0) {
-      this.inputPasted(rest);
-      return;
-    }
-    this.inputPasted(rest.slice(0, end));
-    this.inPaste = false;
-    // После конца вставки в том же куске может начаться новая — её ищет рекурсия.
-    const tail = rest.slice(end + PASTE_END.length);
-    if (tail.length > 0) this.input(tail);
   }
 
   /** Содержимое вставки — только текст: переводы строк и ⌃C/⌃U в нём не клавиши. */
