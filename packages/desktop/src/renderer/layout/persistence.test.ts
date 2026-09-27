@@ -14,7 +14,7 @@ import { tabId } from './ids.js';
 import { emptyLayout, groups, openTab, splitGroup } from './tree.js';
 import { EMPTY_HISTORY } from './history.js';
 import { useLayoutStore } from './store.js';
-import { ensureHydrated, isTabAlive, neighborWork, useLayoutPersistence } from './persistence.js';
+import { ensureHydrated, isTabAlive, neighborWork, useLayoutPersistence, type UseLayoutPersistenceInput } from './persistence.js';
 
 function session(id: string, overrides: Partial<WorkSession> = {}): WorkSession {
   return {
@@ -627,5 +627,31 @@ describe('ensureHydrated (тест 7 куска 6.2)', () => {
     await waitFor(() => expect(bridge.layoutSaves.some((s) => s.workKey === keyB)).toBe(true), { timeout: 2000 });
     const saved = bridge.layoutSaves.find((s) => s.workKey === keyB);
     expect(groups(saved?.layout as WorkLayout).flatMap((g) => g.tabs.map((t) => t.id))).toContain(pendingTab.id);
+  });
+
+  it('работу удалили, пока её раскладка читалась, — поздний ответ её не гидрирует', async () => {
+    const bridge = createFakeBridge();
+    const entryA = work('w-a', '/tmp/a', [session('s-01')]);
+    const entryB = work('w-b', '/tmp/b', [session('s-02')]);
+    useLayoutStore.getState().setActiveWork(keyA);
+    const { rerender } = renderHook((props: UseLayoutPersistenceInput) => useLayoutPersistence(props), {
+      initialProps: { bridge, works: [entryA, entryB], worksLoaded: true, order: [keyA, keyB], visibleOrder: [keyA, keyB] },
+    });
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
+
+    let answer: (raw: WorkLayout | null) => void = () => {};
+    vi.spyOn(bridge.app, 'loadLayout').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const reading = ensureHydrated({ bridge, works: [entryA, entryB] });
+    rerender({ bridge, works: [entryA], worksLoaded: true, order: [keyA], visibleOrder: [keyA] });
+    answer(openTab(emptyLayout(), { kind: 'terminal', id: tabId.terminal('s-02'), sessionId: 's-02' }));
+    await reading;
+
+    expect(keyB in useLayoutStore.getState().layouts).toBe(false);
+    expect(keyB in useLayoutStore.getState().hydrated).toBe(false);
   });
 });

@@ -123,6 +123,13 @@ function hydrateWork(key: string, layout: WorkLayout): void {
 /** Работы, чью раскладку `ensureHydrated` уже читает: повторное открытие палитры не читает её второй раз. */
 const hydrating = new Set<string>();
 
+/**
+ * Сколько раз работу снимали (`drop`) за запуск. `hydrate` после `drop` снова примет ключ
+ * (`hydrated` уже не `true`), и поздний ответ чтения вернул бы в память раскладку удалённой
+ * работы; счётчик, а не список работ, — ключ может вернуться, и старый ответ всё равно чужой.
+ */
+const drops = new Map<string, number>();
+
 /** Гидрирует раскладки работ, ещё не показанных за этот запуск: тот же hydrateWork, что у первого показа. */
 export async function ensureHydrated(input: { bridge: HarnasBridge; works: WorkEntry[] }): Promise<void> {
   const jobs: Array<Promise<void>> = [];
@@ -130,11 +137,14 @@ export async function ensureHydrated(input: { bridge: HarnasBridge; works: WorkE
     const key = workKeyOf(entry.projectPath, entry.map.work.id);
     if (useLayoutStore.getState().hydrated[key] === true || hydrating.has(key)) continue;
     hydrating.add(key);
+    const dropsBefore = drops.get(key) ?? 0;
     jobs.push(
       restoreLayout(input.bridge, entry, key)
         .catch(() => emptyLayout())
         .then((layout) => {
           hydrating.delete(key);
+          // Работу удалили, пока читали, — ответ устарел.
+          if ((drops.get(key) ?? 0) !== dropsBefore) return;
           // Первый показ мог успеть раньше — живую раскладку не перечитываем.
           if (useLayoutStore.getState().hydrated[key] !== true) hydrateWork(key, layout);
         }),
@@ -276,6 +286,7 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order, visibl
       const activeBefore = useLayoutStore.getState().activeWorkKey;
       const missingKeys = prevOrder.filter((key) => !current.includes(key));
       for (const key of missingKeys) {
+        drops.set(key, (drops.get(key) ?? 0) + 1);
         useLayoutStore.getState().drop(key);
         bridge.app.removeLayout(key).catch(() => {});
       }
