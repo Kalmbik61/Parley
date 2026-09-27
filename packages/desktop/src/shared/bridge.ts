@@ -5,6 +5,7 @@ import type {
   NotificationName,
   Params,
   Result,
+  SessionRef,
 } from '@harnas/protocol';
 import type { WorkLayout } from './layout-types.js';
 import type { Appearance, UiFile } from './ui-types.js';
@@ -16,6 +17,25 @@ export type HostStatus =
   | { state: 'connected'; hostVersion: string; methods: string[] | null }
   | { state: 'mismatch'; hostVersion: string; liveSessions: number | null }
   | { state: 'disconnected'; reason: string };
+
+/**
+ * Куда ведёт клик по уведомлению (спека 3.3, 7.4): вкладка сессии, почты или комнаты.
+ * Main шлёт её окну событием `app:focus-target`; окну, которое ещё грузится, — через
+ * отложенную (`app:take-focus-target`).
+ */
+export type FocusTarget =
+  | { kind: 'session'; ref: SessionRef }
+  | { kind: 'mail'; projectPath: string; workId: string }
+  | { kind: 'room'; projectPath: string; workId: string; roomId: string };
+
+/** Уведомление macOS (спека 3.3, 7.4): одно на тег — новое закрывает прежнее. */
+export interface AppNote {
+  title: string;
+  body: string;
+  tag: string;
+  target: FocusTarget;
+  silent: boolean;
+}
 
 /** Действия меню приложения, приходящие в рендерер через `window.harnas.app.onMenu`. */
 export type MenuAction =
@@ -52,7 +72,9 @@ export interface HarnasBridge {
   activitySnapshot(): Promise<Array<EventData<'activity.changed'>>>;
   app: {
     openExternal(url: string): Promise<void>;
-    notify(note: { title: string; body: string }): void;
+    notify(note: AppNote): void;
+    /** При подписке отдаёт слушателю отложенную цель: сначала ту, что держит прелоад, иначе из app:take-focus-target. */
+    onFocusTarget(listener: (target: FocusTarget) => void): () => void;
     setBadge(count: number): void;
     chooseFolder(): Promise<string | null>;
     restartHost(): Promise<void>;

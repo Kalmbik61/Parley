@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkEntry, WorkSession } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
-import { noticeTitle, sessionLabelFor, sessionRowLabel } from './participant.js';
+import { sessionLabelFor, sessionRowLabel } from './participant.js';
 
 describe('sessionRowLabel', () => {
   // Раунд исправлений 1 куска 3.3: `NEW_LABEL` core ('новая сессия') окно показывает по-английски.
@@ -20,12 +20,6 @@ describe('sessionRowLabel', () => {
 
   it('чужая форма id печатается как есть', () => {
     expect(sessionRowLabel('manual-123', 'ручная')).toBe('manual-123 ручная');
-  });
-});
-
-describe('noticeTitle', () => {
-  it('S03 ждёт ответа', () => {
-    expect(noticeTitle('s-03', 'ждёт ответа')).toBe('S03 ждёт ответа');
   });
 });
 

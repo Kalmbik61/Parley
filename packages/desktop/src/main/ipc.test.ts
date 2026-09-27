@@ -34,6 +34,8 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore } = {})
   setAppearance: ReturnType<typeof vi.fn>;
   titlebarDoubleClick: ReturnType<typeof vi.fn>;
   showItemInFolder: ReturnType<typeof vi.fn>;
+  showNotification: ReturnType<typeof vi.fn>;
+  takeFocusTarget: ReturnType<typeof vi.fn>;
 } {
   const ipcMain = new FakeIpcMain();
   const connection = {
@@ -61,6 +63,8 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore } = {})
   const setAppearance = vi.fn();
   const titlebarDoubleClick = vi.fn();
   const showItemInFolder = vi.fn();
+  const showNotification = vi.fn();
+  const takeFocusTarget = vi.fn().mockReturnValue(null);
 
   registerIpc({
     ipcMain: ipcMain as unknown as IpcMain,
@@ -71,12 +75,23 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore } = {})
     titlebarDoubleClick,
     openExternal: vi.fn().mockResolvedValue(undefined),
     chooseFolder: vi.fn(),
-    showNotification: vi.fn(),
+    showNotification,
+    takeFocusTarget,
     setBadge: vi.fn(),
     showItemInFolder,
   });
 
-  return { ipcMain, connection, layoutStore, uiStore, setAppearance, titlebarDoubleClick, showItemInFolder };
+  return {
+    ipcMain,
+    connection,
+    layoutStore,
+    uiStore,
+    setAppearance,
+    titlebarDoubleClick,
+    showItemInFolder,
+    showNotification,
+    takeFocusTarget,
+  };
 }
 
 describe('registerIpc', () => {
@@ -296,5 +311,59 @@ describe('registerIpc', () => {
       });
     }
     expect(showItemInFolder).not.toHaveBeenCalled();
+  });
+});
+
+// Тесты 8 и 12 куска 4.3: `app:notify` принимает только `AppNote` и режет тексты до 200
+// кодовых точек; `app:take-focus-target` отдаёт отложенную цель main.
+describe('registerIpc — app:notify и app:take-focus-target (кусок 4.3)', () => {
+  const target = { kind: 'session', ref: { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-02' } };
+  const note = { title: 'Redesign · S02 executor — needs you', body: 'task', tag: 'session:x', target, silent: false };
+
+  it('верный AppNote доходит до showNotification как есть', () => {
+    const { ipcMain, showNotification } = setup();
+    ipcMain.invoke('app:notify', note);
+    expect(showNotification).toHaveBeenCalledWith(note);
+  });
+
+  it('цели почты и комнаты — тоже верная форма', () => {
+    const { ipcMain, showNotification } = setup();
+    ipcMain.invoke('app:notify', { ...note, target: { kind: 'mail', projectPath: '/tmp/p', workId: 'w-01' } });
+    ipcMain.invoke('app:notify', { ...note, target: { kind: 'room', projectPath: '/tmp/p', workId: 'w-01', roomId: 'r-1' } });
+    expect(showNotification).toHaveBeenCalledTimes(2);
+  });
+
+  it('title из 201 эмодзи — показано ровно 200 кодовых точек, последняя «…», суррогаты целы', () => {
+    const { ipcMain, showNotification } = setup();
+    ipcMain.invoke('app:notify', { ...note, title: '😀'.repeat(201), body: '😀'.repeat(201) });
+    const shown = showNotification.mock.calls[0]?.[0] as { title: string; body: string };
+    for (const text of [shown.title, shown.body]) {
+      const points = Array.from(text);
+      expect(points).toHaveLength(200);
+      expect(points[199]).toBe('…');
+      expect(points.slice(0, 199).every((point) => point === '😀')).toBe(true);
+    }
+  });
+
+  it.each([
+    ['target чужой формы', { ...note, target: { kind: 'session', ref: { projectPath: '/tmp/p' } } }],
+    ['target неизвестного вида', { ...note, target: { kind: 'browser', url: 'https://x' } }],
+    ['комната без roomId', { ...note, target: { kind: 'room', projectPath: '/tmp/p', workId: 'w-01' } }],
+    ["silent: 'yes'", { ...note, silent: 'yes' }],
+    ['tag: 1', { ...note, tag: 1 }],
+    ['title не строка', { ...note, title: null }],
+    ['не объект', 'note'],
+    ['null', null],
+  ])('%s — отказ, showNotification не зван', (_name, bad) => {
+    const { ipcMain, showNotification } = setup();
+    ipcMain.invoke('app:notify', bad);
+    expect(showNotification).not.toHaveBeenCalled();
+  });
+
+  it('app:take-focus-target отдаёт отложенную цель, повтор — null', async () => {
+    const { ipcMain, takeFocusTarget } = setup();
+    takeFocusTarget.mockReturnValueOnce(target).mockReturnValueOnce(null);
+    await expect(ipcMain.invoke('app:take-focus-target')).resolves.toEqual(target);
+    await expect(ipcMain.invoke('app:take-focus-target')).resolves.toBeNull();
   });
 });

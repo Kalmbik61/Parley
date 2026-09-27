@@ -1,0 +1,23 @@
+/*
+ * Вспышка вкладки после перехода по уведомлению (кусок 4.3, спека 7.4): кольцо 2px `--ring`
+ * на 600 мс. Атрибут ставит и снимает `attention/flash.ts`.
+ */
+@keyframes attention-flash {
+  from {
+    box-shadow: inset 0 0 0 2px var(--ring);
+  }
+  to {
+    box-shadow: inset 0 0 0 2px transparent;
+  }
+}
+
+[role='tab'][data-flash] {
+  animation: attention-flash 600ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [role='tab'][data-flash] {
+    animation: none;
+    box-shadow: inset 0 0 0 2px var(--ring);
+  }
+}

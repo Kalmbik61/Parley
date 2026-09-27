@@ -109,6 +109,7 @@ export function Tab({ workKey, group, tab, meta, dot, isActive, openSessionIds }
       <ContextMenuTrigger asChild>
         <div
           role="tab"
+          data-work-key={workKey}
           data-tab-id={tab.id}
           data-active={isActive}
           data-unread={meta.unread}

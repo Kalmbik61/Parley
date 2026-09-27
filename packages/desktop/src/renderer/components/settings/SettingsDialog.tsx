@@ -294,6 +294,8 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                 />
               </>
             ) : null}
+            {/* Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */}
+            <p className="text-xs text-muted-foreground">{S.settings.notificationsHint}</p>
           </TabsContent>
         </Tabs>
 

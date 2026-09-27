@@ -1,20 +1,23 @@
 import { useEffect, useState } from 'react';
 import { refKey, type SessionRef } from '@harnas/protocol';
 import type { HarnasConfig } from '@harnas/core';
-import type { HarnasBridge } from '../shared/bridge.js';
+import type { FocusTarget, HarnasBridge } from '../shared/bridge.js';
 import { getHostClient } from './host-client.js';
 import { sessionAttention } from './attention/derive.js';
 import { createSeenTracker, visibleSessions } from './attention/seen.js';
 import { attentionTotals, badgeCount } from './attention/store.js';
+import { flashTab } from './attention/flash.js';
+import { applyFocusTarget, whenShown } from './attention/focus-target.js';
+import { isTargetVisible, wireAttentionNotifications } from './attention/notify.js';
 import { hostMethods } from './lib/capabilities.js';
 import { useSidebarSectionsStore } from './sidebar/use-sidebar-sections.js';
-import { noticeText, S } from '../shared/strings.js';
+import { S } from '../shared/strings.js';
 import { selectedSessionOf, useLayoutStore } from './layout/store.js';
+import { openTab } from './layout/tree.js';
 import { AppShell } from './shell/AppShell.js';
 import { NewSessionDialog } from './components/dialogs/NewSessionDialog.js';
 import { SettingsDialog } from './components/settings/SettingsDialog.js';
-import { sessionLabelFor, sessionLabelText } from './lib/participant.js';
-import { wireNotifications } from './notifications.js';
+import { terminalSurfaces } from './terminal/TerminalSurface.js';
 import { useActivityStore } from './store/activity.js';
 import { useHostStore } from './store/host.js';
 import { useNoticesStore } from './store/notices.js';
@@ -22,6 +25,7 @@ import { useUiStore } from './store/ui.js';
 import { useWorksStore } from './store/works.js';
 import { workKey } from './lib/tree-order.js';
 import { Toaster } from './ui/sonner.js';
+import { toast } from 'sonner';
 
 /**
  * Запасные `fontFamily`/`fontSize` панели терминала до первого ответа
@@ -114,6 +118,52 @@ function wireSeenTracker(bridge: HarnasBridge): () => void {
   };
 }
 
+/**
+ * Клик по уведомлению (кусок 4.3, спека 7.4): цель приходит событием `app:focus-target`.
+ * Цель до первого снимка работ ждёт ответа `works.list` — иначе клик при закрытом окне
+ * кончался бы тостом «уже удалены»: подписки заводятся в connected, а снимок ещё в пути.
+ * Цели нет — тост: это ответ на действие человека (спека 7.5).
+ */
+function wireFocusTargets(bridge: HarnasBridge): () => void {
+  let waiting: FocusTarget | null = null;
+  let offWorks: (() => void) | null = null;
+
+  const apply = (target: FocusTarget): void => {
+    const applied = applyFocusTarget(target, {
+      works: useWorksStore.getState().entries,
+      setActiveWork: (key) => useLayoutStore.getState().setActiveWork(key),
+      openTab: (key, tab) => {
+        useLayoutStore.getState().apply(key, (layout) => openTab(layout, tab));
+      },
+      whenShown,
+      surface: (ref) => terminalSurfaces.get(refKey(ref)),
+      flash: (key, id) => flashTab(key, id),
+    });
+    if (!applied) toast(S.notifications.targetGone);
+  };
+
+  const offTarget = bridge.app.onFocusTarget((target) => {
+    if (!useWorksStore.getState().loading) {
+      apply(target);
+      return;
+    }
+    // Новая цель заменяет прежнюю, как у отложенной цели main.
+    waiting = target;
+    offWorks ??= useWorksStore.subscribe((state) => {
+      if (state.loading) return;
+      offWorks?.();
+      offWorks = null;
+      const next = waiting;
+      waiting = null;
+      if (next !== null) apply(next);
+    });
+  });
+  return () => {
+    offTarget();
+    offWorks?.();
+  };
+}
+
 export function App(): JSX.Element {
   const bridge = getHostClient();
   // Статус связи — в `store/host.ts`: его читает и `useHostSupports` (кусок 3.1).
@@ -151,31 +201,14 @@ export function App(): JSX.Element {
       // Бейдж и «просмотрено» (кусок 4.2) — рядом, оба по вниманию.
       wireBadge(bridge),
       wireSeenTracker(bridge),
-      wireNotifications(bridge, {
-        // Видна не выбранная сессия, а та, чей терминал сейчас активная
-        // вкладка своей группы (`store/ui.ts#visibleSessionRefs`, пишет
-        // `terminal/TerminalSurface.tsx`, кусок 2.5).
-        isVisible: (ref) => {
-          const ui = useUiStore.getState();
-          return ui.windowFocused && refKey(ref) in ui.visibleSessionRefs;
-        },
-        getSessionLabel: (ref) => {
-          const entry = useWorksStore
-            .getState()
-            .entries.find((item) => item.projectPath === ref.projectPath && item.map.work.id === ref.workId);
-          const label = entry?.map.sessions.find((session) => session.id === ref.sessionId)?.label;
-          return label === undefined ? ref.sessionId : sessionLabelText(label);
-        },
+      // Уведомления macOS и переход по ним (кусок 4.3). Пометка trust-wait в строке сессии —
+      // `sidebar/SessionRow.tsx` по стору уведомлений хоста.
+      wireAttentionNotifications(bridge, {
+        prefs: () => useUiStore.getState().ui.notifications,
+        isTargetVisible,
+        entries: () => useWorksStore.getState().entries,
       }),
-      // trust-wait (кусок 4.3 плана worktree, спека 8.3): сессия в своём
-      // worktree не отвечает с запуска — вероятно, ждёт доверия к папке в
-      // терминале claude/codex. Пометка строки — `sidebar/SessionRow.tsx` (тот же
-      // стор уведомлений), здесь только macOS-уведомление.
-      bridge.on('host.notice', (notice) => {
-        if (notice.kind !== 'trust-wait') return;
-        const label = sessionLabelFor(useWorksStore.getState().entries, notice.ref);
-        bridge.app.notify({ title: S.notifications.trustWaitTitle, body: noticeText(notice, label) });
-      }),
+      wireFocusTargets(bridge),
       // Меню раскладки, палитры и сайдбара слушает `AppShell` (куски 2.3–2.7);
       // здесь — только диалоги, которые монтирует сам `App`.
       bridge.app.onMenu((action) => {

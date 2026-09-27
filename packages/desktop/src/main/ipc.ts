@@ -1,6 +1,8 @@
 import { METHODS, NOTIFICATIONS } from '@harnas/protocol';
 import type { MethodName, NotificationName } from '@harnas/protocol';
 import type { BrowserWindow, IpcMain, NativeTheme } from 'electron';
+import { clampNoteText } from '../shared/app-note.js';
+import type { AppNote, FocusTarget } from '../shared/bridge.js';
 import { encodeIpcError } from '../shared/ipc-error.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 import { HostError } from './host-connection.js';
@@ -77,12 +79,52 @@ function isValidWorkKey(value: unknown): value is string {
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isFocusTarget(value: unknown): value is FocusTarget {
+  if (!isRecord(value)) return false;
+  switch (value.kind) {
+    case 'session': {
+      const ref = value.ref;
+      return (
+        isRecord(ref) &&
+        typeof ref.projectPath === 'string' &&
+        typeof ref.workId === 'string' &&
+        typeof ref.sessionId === 'string'
+      );
+    }
+    case 'mail':
+      return typeof value.projectPath === 'string' && typeof value.workId === 'string';
+    case 'room':
+      return typeof value.projectPath === 'string' && typeof value.workId === 'string' && typeof value.roomId === 'string';
+    default:
+      return false;
+  }
+}
+
+/** Форма `AppNote` из рендерера (кусок 4.3, спека 3.3): иначе main не покажет ничего. */
+export function isAppNote(value: unknown): value is AppNote {
+  return (
+    isRecord(value) &&
+    typeof value.title === 'string' &&
+    typeof value.body === 'string' &&
+    typeof value.tag === 'string' &&
+    typeof value.silent === 'boolean' &&
+    isFocusTarget(value.target)
+  );
+}
+
 export interface RegisterIpcOptions {
   ipcMain: IpcMain;
   connection: HostConnection;
   openExternal: (url: string) => Promise<void>;
   chooseFolder: () => Promise<string | null>;
-  showNotification: (note: { title: string; body: string }) => void;
+  /** Форму уже проверил и тексты обрезал `app:notify` (кусок 4.3). */
+  showNotification: (note: AppNote) => void;
+  /** Отложенная цель клика для окна, которое ещё грузилось (`app:take-focus-target`, кусок 4.3). */
+  takeFocusTarget: () => FocusTarget | null;
   setBadge: (count: number) => void;
   /** Раскладки работ, `layouts.json` (кусок 2.2 плана каркаса, спека 5.8). */
   layoutStore: LayoutStore;
@@ -110,6 +152,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     openExternal,
     chooseFolder,
     showNotification,
+    takeFocusTarget,
     setBadge,
     layoutStore,
     uiStore,
@@ -148,9 +191,14 @@ export function registerIpc(options: RegisterIpcOptions): void {
     }),
   );
 
-  ipcMain.on('app:notify', (_event, note: { title: string; body: string }) => {
-    showNotification(note);
+  ipcMain.on('app:notify', (_event, note: unknown) => {
+    // Неверная форма — тихий отказ: `send` ответа не ждёт, а показывать нечего.
+    if (!isAppNote(note)) return;
+    // Рендереру не верим и в длине (спека 15.2): режем так же, как окно.
+    showNotification({ ...note, title: clampNoteText(note.title), body: clampNoteText(note.body) });
   });
+
+  ipcMain.handle('app:take-focus-target', withIpcError(() => takeFocusTarget()));
 
   ipcMain.on('app:set-badge', (_event, count: number) => {
     setBadge(count);

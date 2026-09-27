@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@harnas/protocol';
-import type { HarnasBridge, HostStatus, MenuAction } from '../shared/bridge.js';
+import type { AppNote, FocusTarget, HarnasBridge, HostStatus, MenuAction } from '../shared/bridge.js';
 import type { WorkLayout } from '../shared/layout-types.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 
@@ -8,6 +8,22 @@ const eventListeners = new Map<EventName, Set<(data: unknown) => void>>();
 const statusListeners = new Set<(status: HostStatus) => void>();
 const menuListeners = new Set<(action: MenuAction) => void>();
 const appearanceListeners = new Set<(dark: boolean) => void>();
+const focusTargetListeners = new Set<(target: FocusTarget) => void>();
+/** Цель клика, пришедшая, пока у `onFocusTarget` не было слушателей (кусок 4.3). */
+let heldFocusTarget: FocusTarget | null = null;
+
+/**
+ * Цель получают слушатели, подписанные в момент доставки, а не в момент запроса:
+ * `StrictMode` в разработке подписывает эффект дважды, и ответ первого запроса иначе
+ * достался бы уже отписанному. Слушателей нет — цель ждёт первого подписчика.
+ */
+function deliverFocusTarget(target: FocusTarget): void {
+  if (focusTargetListeners.size === 0) {
+    heldFocusTarget = target;
+    return;
+  }
+  for (const listener of focusTargetListeners) listener(target);
+}
 
 ipcRenderer.on('host:event', (_event, message: EventMessage) => {
   const listeners = eventListeners.get(message.event);
@@ -25,6 +41,10 @@ ipcRenderer.on('menu:action', (_event, action: MenuAction) => {
 
 ipcRenderer.on('app:appearance', (_event, dark: boolean) => {
   for (const listener of appearanceListeners) listener(dark);
+});
+
+ipcRenderer.on('app:focus-target', (_event, target: FocusTarget) => {
+  deliverFocusTarget(target);
 });
 
 /**
@@ -57,8 +77,24 @@ const bridge = {
   activitySnapshot: () => ipcRenderer.invoke('host:activity-snapshot'),
   app: {
     openExternal: (url: string) => ipcRenderer.invoke('app:open-external', url) as Promise<void>,
-    notify: (note: { title: string; body: string }) => {
+    notify: (note: AppNote) => {
       ipcRenderer.send('app:notify', note);
+    },
+    onFocusTarget: (listener: (target: FocusTarget) => void) => {
+      focusTargetListeners.add(listener);
+      if (heldFocusTarget !== null) {
+        const target = heldFocusTarget;
+        heldFocusTarget = null;
+        listener(target);
+      } else {
+        // Цель, отложенная main, пока окно грузилось (клик при закрытом окне).
+        void (ipcRenderer.invoke('app:take-focus-target') as Promise<FocusTarget | null>)
+          .then((target) => {
+            if (target !== null) deliverFocusTarget(target);
+          })
+          .catch(() => {});
+      }
+      return () => focusTargetListeners.delete(listener);
     },
     setBadge: (count: number) => {
       ipcRenderer.send('app:set-badge', count);

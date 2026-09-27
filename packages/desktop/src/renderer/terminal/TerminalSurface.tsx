@@ -136,7 +136,7 @@ export function TerminalSurface(props: TerminalSurfaceProps): JSX.Element {
     rootRef.current?.toggleAttribute('inert', !visible);
   }, [visible]);
 
-  // Видимость сессии — для уведомлений (`App.tsx#wireNotifications`), как у
+  // Видимость сессии — для «просмотрено» и уведомлений (`attention/seen.ts#visibleSessions`), как у
   // `panel-registry.tsx`: на каждую смену и `false` при размонтировании.
   const sessionKey = refKey(sessionRef);
   useEffect(() => {
@@ -195,10 +195,29 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, visible, f
   const liveRef = useRef<{ search: SearchAddon | null; terminal: Terminal | null }>({ search, terminal });
   liveRef.current = { search, terminal };
 
+  // Переход по уведомлению (кусок 4.3) зовёт прокрутку и фокус, как только поверхность
+  // видима, а xterm `use-terminal` создаёт эффектом чуть позже: просьба до него ждёт терминала.
+  const deferredRef = useRef({ focus: false, scrollToBottom: false });
+  useEffect(() => {
+    if (terminal === null) return;
+    const deferred = deferredRef.current;
+    if (deferred.scrollToBottom) terminal.scrollToBottom();
+    if (deferred.focus) terminal.focus();
+    deferredRef.current = { focus: false, scrollToBottom: false };
+  }, [terminal]);
+
   const handle = useMemo<TerminalSurfaceHandle>(
     () => ({
-      focus: () => liveRef.current.terminal?.focus(),
-      scrollToBottom: () => liveRef.current.terminal?.scrollToBottom(),
+      focus: () => {
+        const current = liveRef.current.terminal;
+        if (current === null) deferredRef.current.focus = true;
+        else current.focus();
+      },
+      scrollToBottom: () => {
+        const current = liveRef.current.terminal;
+        if (current === null) deferredRef.current.scrollToBottom = true;
+        else current.scrollToBottom();
+      },
       get search() {
         return liveRef.current.search;
       },

@@ -25,6 +25,8 @@ import { refKey, type SessionRef } from '@harnas/protocol';
 import type { Activity } from '@harnas/core';
 import { REQUIRED_METHODS } from './lib/capabilities.js';
 import { useSidebarSectionsStore } from './sidebar/use-sidebar-sections.js';
+import { toast } from 'sonner';
+import { groups } from './layout/tree.js';
 
 // Тест 6 куска 2.7 читает пропсы диалога новой сессии, а не его разметку:
 // что именно диалог делает с `projectPath`/`workId`, проверяет его собственный тест.
@@ -35,6 +37,9 @@ vi.mock('./components/dialogs/NewSessionDialog.js', () => ({
     return null;
   },
 }));
+
+// Тест 4 куска 4.3 проверяет вызов тоста, а не его разметку; `Toaster` остаётся настоящим.
+vi.mock('sonner', async (importOriginal) => ({ ...(await importOriginal<typeof import('sonner')>()), toast: vi.fn() }));
 
 // Тест 6 открывает вкладку-терминал; настоящий xterm в jsdom падает на
 // `matchMedia` — поверхности тут не нужны, раскладка и диалог от них не зависят.
@@ -93,89 +98,32 @@ describe('App — корневая обёртка окна (раунд испр�
   });
 });
 
-// Раунд исправлений 1 куска E.1 (ревью линза A, Critical): тело настоящего
-// macOS-уведомления trust-wait раньше было сырым notice.text хоста
-// (по-русски); теперь — noticeText(notice, label) (`shared/strings.ts`).
-describe('App — уведомление trust-wait (раунд исправлений 1 куска E.1)', () => {
-  it('тело уведомления — английский noticeText, не русский notice.text хоста', () => {
+// Раунд исправлений 1 куска E.1: русский `notice.text` хоста в уведомление не идёт. Тесты
+// самого текста переехали в `attention/notify.test.ts` (тест 11 куска 4.3); здесь — сквозная
+// регрессия через подставной мост.
+describe('App — русский notice.text до уведомления не доходит (тест 11 куска 4.3)', () => {
+  it('host.notice trust-wait с русским text — в appNotified этого text нет', async () => {
+    useWorksStore.setState({ entries: [work('w-01', '2026-01-01', [session('s-03', 'backend')])], branches: {}, loading: false, error: null });
     render(<App />);
-
-    act(() => {
-      bridge.emit('host.notice', {
-        kind: 'trust-wait',
-        ref: null,
-        text: 'русский текст хоста, который никто не должен увидеть',
-        at: '2026-01-01T00:00:00.000Z',
-      });
+    await act(async () => {
+      await Promise.resolve();
     });
-
-    expect(bridge.appNotified).toEqual([
-      { title: 'Waiting for folder trust', body: 'Not responding since launch — may be waiting for folder trust.' },
-    ]);
-  });
-
-  it('находит ярлык сессии в снимке работ и подставляет его в тело', () => {
-    useWorksStore.setState({
-      entries: [
-        {
-          projectPath: '/tmp/w-01',
-          map: {
-            schemaVersion: 2,
-            rooms: [],
-            work: { id: 'w-01', title: 'Первая', goal: '', status: 'active', createdAt: '2026-01-01', updatedAt: '2026-01-01' },
-            sessions: [
-              {
-                id: 's-03',
-                provider: 'claude',
-                label: 'бэкенд',
-                task: '',
-                parent: null,
-                contextFrom: [],
-                lifecycle: 'active',
-                result: null,
-                resultAt: null,
-                closedAt: null,
-                history: [],
-                startedAt: null,
-                endedAt: null,
-                pid: null,
-                startedAtProcess: null,
-                launchedBy: 'host',
-                providerSessionId: null,
-                metrics: null,
-                summary: null,
-                summarySource: null,
-                artifacts: [],
-                agent: null,
-                worktree: null,
-              },
-            ],
-            messages: [],
-          },
-        },
-      ],
-      branches: {},
-      loading: false,
-      error: null,
-    });
-
-    render(<App />);
 
     act(() => {
       bridge.emit('host.notice', {
         kind: 'trust-wait',
         ref: { projectPath: '/tmp/w-01', workId: 'w-01', sessionId: 's-03' },
-        text: 'русский',
+        text: 'русский текст хоста, который никто не должен увидеть',
         at: '2026-01-01T00:00:00.000Z',
       });
     });
 
-    expect(bridge.appNotified).toEqual([
-      {
-        title: 'Waiting for folder trust',
-        body: 'S03 бэкенд: not responding since launch — may be waiting for folder trust.',
-      },
-    ]);
+    expect(bridge.appNotified).toHaveLength(1);
+    expect(JSON.stringify(bridge.appNotified)).not.toContain('русский текст хоста');
+    expect(bridge.appNotified[0]).toMatchObject({
+      title: 'w-01 · S03 backend — waiting for folder trust',
+      body: 'Not responding since launch — may be waiting for folder trust.',
+    });
   });
 });
 
@@ -368,5 +316,71 @@ describe('App — бейдж и «просмотрено» (тесты 8 и 13 �
       await vi.advanceTimersByTimeAsync(2000);
     });
     expect(seenNotifications()).toEqual([{ ref }]);
+  });
+});
+
+// Кусок 4.3: клик по уведомлению приходит событием `app:focus-target` (`onFocusTarget`).
+describe('App — переход по цели уведомления (тесты 4 и 15 куска 4.3)', () => {
+  const key = '/tmp/w-02 w-02';
+  const target = { kind: 'session', ref: { projectPath: '/tmp/w-02', workId: 'w-02', sessionId: 's-02' } } as const;
+
+  afterEach(() => {
+    vi.mocked(toast).mockClear();
+  });
+
+  async function flush(): Promise<void> {
+    for (let i = 0; i < 5; i += 1) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+  }
+
+  const terminalTabs = (): string[] => {
+    const layout = useLayoutStore.getState().layouts[key];
+    return layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id));
+  };
+
+  it('тест 4: цель удалённой сессии — тост «Workspace or session no longer exists», ничего не открыто', async () => {
+    useWorksStore.setState({ entries: [work('w-01', '2026-01-01', [session('s-01', 'план')])], branches: {}, loading: false, error: null });
+    render(<App />);
+    await flush();
+
+    act(() => bridge.emitFocusTarget(target));
+    expect(toast).toHaveBeenCalledWith('Workspace or session no longer exists');
+    expect(useLayoutStore.getState().activeWorkKey).not.toBe(key);
+  });
+
+  it('тест 4: живая цель — работа активна, вкладка её терминала открыта, тоста нет', async () => {
+    const w1 = work('w-01', '2026-01-01', [session('s-01', 'план')]);
+    const w2 = work('w-02', '2026-01-02', [session('s-02', 'бэк')]);
+    useWorksStore.setState({ entries: [w1, w2], branches: {}, loading: false, error: null });
+    render(<App />);
+    await flush();
+
+    act(() => bridge.emitFocusTarget(target));
+    await flush();
+    expect(useLayoutStore.getState().activeWorkKey).toBe(key);
+    expect(terminalTabs()).toContain('terminal:s-02');
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it('тест 15: отложенная цель до ответа works.list ждёт его — без тоста; после ответа применена', async () => {
+    const w2 = work('w-02', '2026-01-02', [session('s-02', 'бэк')]);
+    let answer: (value: { entries: WorkEntry[]; branches: Record<string, string | null> }) => void = () => {};
+    bridge.setHandler('works.list', () => new Promise((resolve) => (answer = resolve)));
+    useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
+    bridge.setPendingFocusTarget(target);
+
+    render(<App />);
+    await flush();
+    expect(useLayoutStore.getState().activeWorkKey).not.toBe(key);
+    expect(toast).not.toHaveBeenCalled();
+
+    answer({ entries: [w2], branches: {} });
+    await flush();
+    expect(useLayoutStore.getState().activeWorkKey).toBe(key);
+    expect(terminalTabs()).toContain('terminal:s-02');
+    expect(toast).not.toHaveBeenCalled();
   });
 });

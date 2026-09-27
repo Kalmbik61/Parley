@@ -13,7 +13,7 @@ import type {
   Params,
   Result,
 } from '@harnas/protocol';
-import type { HarnasBridge, HostStatus, MenuAction } from '../../shared/bridge.js';
+import type { AppNote, FocusTarget, HarnasBridge, HostStatus, MenuAction } from '../../shared/bridge.js';
 import type { WorkLayout } from '../../shared/layout-types.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { DEFAULT_UI, normalizeUi, type UiFile } from '../../shared/ui-types.js';
@@ -40,7 +40,11 @@ export interface FakeBridge extends HarnasBridge {
   /** Что вернёт `activitySnapshot` — будто main запомнил эти события до подписки. */
   setActivitySnapshot(entries: Array<EventData<'activity.changed'>>): void;
   emitMenu(action: MenuAction): void;
-  readonly appNotified: Array<{ title: string; body: string }>;
+  readonly appNotified: AppNote[];
+  /** Клик по уведомлению: событие `app:focus-target` слушателям `onFocusTarget` (кусок 4.3). */
+  emitFocusTarget(target: FocusTarget): void;
+  /** Отложенная цель main: первый подписчик onFocusTarget получает её сразу, как через app:take-focus-target. */
+  setPendingFocusTarget(target: FocusTarget | null): void;
   readonly badges: number[];
   /** Вызовы `app.saveLayout` — для теста тишины 500 мс (кусок 2.2). */
   readonly layoutSaves: Array<{ workKey: string; layout: WorkLayout }>;
@@ -66,7 +70,9 @@ export function createFakeBridge(): FakeBridge {
   const appearanceListeners = new Set<(dark: boolean) => void>();
   const notified: Array<{ method: NotificationName; params: unknown }> = [];
   const calls: Array<{ method: MethodName; params: unknown }> = [];
-  const appNotified: Array<{ title: string; body: string }> = [];
+  const appNotified: AppNote[] = [];
+  const focusTargetListeners = new Set<(target: FocusTarget) => void>();
+  let pendingFocusTarget: FocusTarget | null = null;
   const badges: number[] = [];
   const layoutSaves: Array<{ workKey: string; layout: WorkLayout }> = [];
   const layoutRemovals: string[] = [];
@@ -132,6 +138,15 @@ export function createFakeBridge(): FakeBridge {
       notify: (note) => {
         appNotified.push(note);
       },
+      onFocusTarget: (listener) => {
+        focusTargetListeners.add(listener);
+        if (pendingFocusTarget !== null) {
+          const target = pendingFocusTarget;
+          pendingFocusTarget = null;
+          listener(target);
+        }
+        return () => focusTargetListeners.delete(listener);
+      },
       setBadge: (count) => {
         badges.push(count);
       },
@@ -190,6 +205,12 @@ export function createFakeBridge(): FakeBridge {
     },
     emitMenu: (action) => {
       for (const listener of menuListeners) listener(action);
+    },
+    emitFocusTarget: (target) => {
+      for (const listener of focusTargetListeners) listener(target);
+    },
+    setPendingFocusTarget: (target) => {
+      pendingFocusTarget = target;
     },
     emitAppearance: (dark) => {
       for (const listener of appearanceListeners) listener(dark);

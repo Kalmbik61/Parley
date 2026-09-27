@@ -7,6 +7,13 @@ import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-l
 import { forwardAppearanceToWindow, forwardHostToWindow, registerIpc } from './ipc.js';
 import { createLayoutStore, desktopLayoutsPath } from './layout-store.js';
 import { createAppMenu } from './menu.js';
+import {
+  createLoggedNotification,
+  createNotifier,
+  createPendingFocusTarget,
+  type LoggedNotification,
+  type NotificationLike,
+} from './notifications.js';
 import { captureShellEnv } from './shell-env.js';
 import { createUiStore, desktopUiPath } from './ui-store.js';
 import { createMainWindow, titlebarDoubleClickAction } from './window.js';
@@ -97,6 +104,11 @@ if (!gotLock) {
       process.env.HARNAS_TERMINAL_RENDERER === 'dom' ? 'renderer=dom' : null,
     ].filter((flag): flag is string => flag !== null);
 
+    // Окна, у которых был did-finish-load: только им событие `app:focus-target` дойдёт —
+    // раньше прелоад ещё не слушает. Перезагрузка страницы снимает признак до нового конца.
+    const loadedWindows = new WeakSet<BrowserWindow>();
+    const pendingFocusTarget = createPendingFocusTarget();
+
     const openWindow = (): BrowserWindow => {
       const window = createMainWindow({
         dark: nativeTheme.shouldUseDarkColors,
@@ -112,10 +124,45 @@ if (!gotLock) {
         forwardHostToWindow(connection, window);
         forwardAppearanceToWindow(nativeTheme, window);
       });
+      window.webContents.on('did-start-loading', () => loadedWindows.delete(window));
+      window.webContents.on('did-finish-load', () => loadedWindows.add(window));
       return window;
     };
 
     mainWindow = openWindow();
+
+    // E2E (`HARNAS_NOTIFICATIONS=log`): уведомления — в журнал main, а не на экран
+    // человека; тест читает и кликает их через `app.evaluate` (`globalThis.__harnasNotifications`).
+    const notificationLog: LoggedNotification[] = [];
+    const logNotifications = process.env.HARNAS_NOTIFICATIONS === 'log';
+    if (logNotifications) {
+      (globalThis as { __harnasNotifications?: LoggedNotification[] }).__harnasNotifications = notificationLog;
+    }
+    const notifier = createNotifier({
+      create: (options): NotificationLike =>
+        logNotifications ? createLoggedNotification(notificationLog, options) : new Notification(options),
+      focusWindow: () => {
+        const window = mainWindow;
+        // После закрытия окна ссылка не обнуляется, а macOS держит приложение и без окон.
+        if (window === null || window.isDestroyed()) {
+          mainWindow = openWindow();
+          return;
+        }
+        if (window.isMinimized()) window.restore();
+        window.show();
+        window.focus();
+      },
+      sendFocusTarget: (target) => {
+        const window = mainWindow;
+        if (window !== null && !window.isDestroyed() && loadedWindows.has(window)) {
+          window.webContents.send('app:focus-target', target);
+        } else {
+          // Окно ещё грузится — в том числе созданное `activate` за миг до клика.
+          pendingFocusTarget.put(target);
+        }
+      },
+    });
+
     registerIpc({
       ipcMain,
       connection,
@@ -134,9 +181,8 @@ if (!gotLock) {
         if (result.canceled || result.filePaths.length === 0) return null;
         return result.filePaths[0] ?? null;
       },
-      showNotification: (note) => {
-        new Notification(note).show();
-      },
+      showNotification: (note) => notifier.notify(note),
+      takeFocusTarget: () => pendingFocusTarget.take(),
       setBadge: (count) => {
         app.dock?.setBadge(count > 0 ? String(count) : '');
       },
@@ -158,6 +204,8 @@ if (!gotLock) {
     });
     createAppMenu(() => mainWindow);
 
+    // Клик по уведомлению без окон: macOS может прислать `activate` раньше клика. Окно
+    // тогда создаёт этот обработчик, а цель клика ждёт его загрузки в отложенных.
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
         mainWindow = openWindow();

@@ -236,6 +236,8 @@ export const S = {
     notifyFinished: 'finished',
     notifyMail: 'mail to you',
     notifySound: 'sound',
+    /** Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */
+    notificationsHint: 'Not getting notifications? System Settings → Notifications → Harnas',
   },
 
   /** ⌘K — `palette/CommandPalette.tsx`, часть команд в `lib/commands.ts`. */
@@ -366,12 +368,23 @@ export const S = {
     forward: 'Forward',
   },
 
-  /** Уведомления macOS — `App.tsx` (trust-wait), `renderer/notifications.ts` (тревога сессии). */
+  /**
+   * Уведомления macOS — `renderer/attention/notify.ts` (кусок 4.3, спека 7.4). Название работы,
+   * ярлык сессии и отправитель — данные, идут как есть.
+   */
   notifications: {
-    trustWaitTitle: 'Waiting for folder trust',
-    /** Суффикс заголовка `"S03 " + suffix` — не то же самое, что `states.blocked` (третье лицо, спека 4.2 их и раньше различала). */
-    alertSuffixBlocked: 'needs a reply',
-    alertSuffixUnseen: 'is done',
+    /** «<работа> · <ярлык> — <событие>». */
+    sessionTitle: (workspace: string, session: string, event: string): string => `${workspace} · ${session} — ${event}`,
+    needsYou: 'needs you',
+    finished: 'finished',
+    trustWait: 'waiting for folder trust',
+    launchFailed: "couldn't launch",
+    resumeFailed: "couldn't resume",
+    /** «<работа> · письмо | вопрос | решение от S01» по `Message.kind`. */
+    mailTitle: (workspace: string, kind: 'note' | 'question' | 'decision', from: string): string =>
+      `${workspace} · ${kind === 'question' ? 'question' : kind === 'decision' ? 'decision' : 'message'} from ${from}`,
+    /** Тост: клик по уведомлению, чью работу или сессию успели удалить (спека 7.5). */
+    targetGone: 'Workspace or session no longer exists',
   },
 
   /** Тексты общих участников переписки — `lib/participant-tag.ts`. */
@@ -466,8 +479,8 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
 
 /**
  * Английский текст уведомления хоста для человека — строка статуса
- * (`shell/StatusBar.tsx`, любой `NoticeKind`) и тело macOS-уведомления
- * trust-wait (`App.tsx`). `label` — ярлык сессии по `notice.ref`, если
+ * (`shell/StatusBar.tsx`, любой `NoticeKind`) и тело macOS-уведомлений
+ * хоста (`renderer/attention/notify.ts`, без ярлыка — он в заголовке). `label` — ярлык сессии по `notice.ref`, если
  * вызывающая сторона его знает (рендерер ищет по снимку работ через
  * `lib/participant.ts#sessionLabelFor`; main, у которого снимка нет, зовёт
  * без него или с тем, что есть); без ярлыка — просто фраза с большой буквы.
