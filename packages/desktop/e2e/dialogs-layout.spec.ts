@@ -1,0 +1,147 @@
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { stopHost } from './stop-host.js';
+import { makeTempProject } from './tmp.js';
+
+/**
+ * Вёрстка диалогов с длинными значениями (раунд исправлений 2 куска 3.5): длинный путь проекта
+ * (`mkdtemp` на macOS — `/private/var/folders/…`), название работы в 120 символов и ярлык в 40.
+ * Прежде путь в Select задавал минимальную ширину формы, и поля с кнопкой Create выходили за
+ * правый край диалога New workspace. Проверка — геометрия: правый край каждого поля и кнопки
+ * не правее правого края диалога, и у самого диалога нет горизонтальной прокрутки.
+ */
+
+const dirname = path.dirname(fileURLToPath(import.meta.url));
+const mainEntry = path.resolve(dirname, '../out/main/index.js');
+const hostEntry = path.resolve(dirname, '../../host/dist/main.js');
+const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
+
+/** 120 символов без пробелов — худший случай: переносить нечему. */
+const LONG_TITLE = `layout-check-${'W'.repeat(107)}`;
+const LONG_LABEL = `label-${'L'.repeat(34)}`;
+
+test.skip(!existsSync(hostEntry), `packages/host/dist/main.js не собран — сначала pnpm --filter @harnas/host build: ${hostEntry}`);
+
+async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
+  return window.evaluate(
+    ([m, p]) => (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas.call(m, p),
+    [method, params] as const,
+  ) as Promise<T>;
+}
+
+/** Что вылезло за правый край открытого диалога — пустой список, если ничего. */
+async function overflowOf(window: Page, name: string): Promise<string[]> {
+  const dialog = window.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  // Диалог появляется с zoom-in: до конца анимации его рамка ещё меньше итоговой.
+  await dialog.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished.catch(() => undefined))));
+  return dialog.evaluate((el, dialogName) => {
+    const box = el.getBoundingClientRect();
+    const problems: string[] = [];
+    if (el.scrollWidth > el.clientWidth) problems.push(`${dialogName}: scrollWidth ${el.scrollWidth} > clientWidth ${el.clientWidth}`);
+    for (const node of el.querySelectorAll('input, textarea, button, [role="combobox"], [role="option"], h2')) {
+      const rect = node.getBoundingClientRect();
+      if (rect.width === 0) continue;
+      if (rect.right > box.right + 0.5) {
+        const what = (node.getAttribute('aria-label') ?? node.textContent ?? '').slice(0, 30);
+        problems.push(`${dialogName}: ${node.tagName.toLowerCase()} «${what}» right ${Math.round(rect.right)} > ${Math.round(box.right)}`);
+      }
+    }
+    return problems;
+  }, name);
+}
+
+async function closeDialog(window: Page): Promise<void> {
+  await window.keyboard.press('Escape');
+  await expect(window.getByRole('dialog')).toBeHidden();
+}
+
+for (const size of [
+  { width: 800, height: 500 },
+  { width: 1400, height: 900 },
+]) {
+  test.describe(`диалоги с длинными значениями, окно ${size.width}x${size.height}`, () => {
+    let home: string;
+    let base: string;
+    let project: string;
+    let app: ElectronApplication | null = null;
+
+    test.beforeEach(async () => {
+      home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-dialogs-'));
+      base = await makeTempProject('dialogs');
+      // Путь из mkdtemp и ещё длинное имя папки — заведомо шире любого диалога.
+      project = path.join(base, 'a-rather-long-project-folder-name-for-dialog-layout');
+      await mkdir(project);
+    });
+
+    test.afterEach(async () => {
+      await app?.close().catch(() => {});
+      app = null;
+      await stopHost(home);
+      await rm(home, { recursive: true, force: true });
+      await rm(base, { recursive: true, force: true });
+    });
+
+    test('ничего не выходит за правый край: New workspace, New session, New room, Delete, палитра, Settings', async () => {
+      test.setTimeout(90_000);
+      const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+      const electronApp = await electron.launch({ args: [mainEntry], env });
+      app = electronApp;
+      const window = await electronApp.firstWindow();
+      await electronApp.evaluate(({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, ...bounds }), size);
+      await expect(window.getByTestId('landing')).toBeVisible();
+
+      const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: LONG_TITLE, goal: '' });
+      await call(window, 'sessions.create', { projectPath: project, workId, provider: 'claude', label: LONG_LABEL, task: '', parent: null });
+      await expect(window.getByTestId('app-shell')).toBeVisible();
+      const card = window.locator(`[data-work-key="${project} ${workId}"]:not([role="tab"])`);
+      await expect(card).toContainText(LONG_LABEL);
+
+      const problems: string[] = [];
+
+      // New workspace от «+» заголовка проекта: проект выбран, поля заполнены длинными значениями.
+      await window.getByRole('button', { name: 'New workspace in project', exact: true }).click();
+      const composer = window.getByRole('dialog');
+      await expect(composer.getByRole('combobox', { name: 'Project' })).toHaveAttribute('title', project);
+      await composer.getByLabel('Title').fill(LONG_TITLE);
+      await composer.getByLabel('Label').fill(LONG_LABEL);
+      problems.push(...(await overflowOf(window, 'New workspace')));
+      await closeDialog(window);
+
+      const cardAction = async (action: string): Promise<void> => {
+        await card.getByText(LONG_TITLE).click({ button: 'right' });
+        await window.locator(`[data-card-action="${action}"]`).click();
+      };
+
+      await cardAction('new-session');
+      await window.getByRole('dialog').getByLabel('Label').fill(LONG_LABEL);
+      problems.push(...(await overflowOf(window, 'New session')));
+      await closeDialog(window);
+
+      await cardAction('new-room');
+      await expect(window.getByRole('dialog')).toContainText(LONG_LABEL);
+      problems.push(...(await overflowOf(window, 'New room')));
+      await closeDialog(window);
+
+      await cardAction('delete');
+      await expect(window.getByRole('dialog')).toContainText(LONG_TITLE);
+      problems.push(...(await overflowOf(window, 'Delete')));
+      await closeDialog(window);
+
+      await window.getByRole('button', { name: 'Search ⌘K' }).first().click();
+      await expect(window.getByRole('dialog')).toContainText(LONG_TITLE);
+      problems.push(...(await overflowOf(window, 'Palette')));
+      await window.getByRole('dialog').getByRole('textbox').fill('Settings');
+      await window.keyboard.press('Enter');
+      await expect(window.getByRole('dialog')).toContainText('Settings');
+      problems.push(...(await overflowOf(window, 'Settings')));
+      await closeDialog(window);
+
+      expect(problems).toEqual([]);
+    });
+  });
+}

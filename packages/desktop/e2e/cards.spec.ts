@@ -131,7 +131,7 @@ test.describe('карточки сайдбара и форма новой раб
 
     await window.getByRole('button', { name: 'New workspace in project', exact: true }).click();
     const dialog = window.getByRole('dialog');
-    await expect(dialog.getByRole('combobox', { name: 'Project' })).toHaveText(project);
+    await expect(dialog.getByRole('combobox', { name: 'Project' })).toHaveAttribute('title', project);
     await dialog.getByRole('checkbox', { name: 'Create more' }).click();
 
     // Агента форма подставляет по ответу providers.list. Под нагрузкой «Create» успевали нажать
@@ -176,7 +176,7 @@ test.describe('карточки сайдбара и форма новой раб
     const dialog = window.getByRole('dialog');
     await dialog.getByRole('combobox', { name: 'Project' }).click();
     await window.getByRole('option', { name: 'Choose a folder…' }).click();
-    await expect(dialog.getByRole('combobox', { name: 'Project' })).toHaveText(project);
+    await expect(dialog.getByRole('combobox', { name: 'Project' })).toHaveAttribute('title', project);
     await dialog.getByRole('switch', { name: 'Start a session' }).click();
     await dialog.getByLabel('Title').fill('e2e-cards-bare');
     await dialog.getByRole('button', { name: 'Create' }).click();

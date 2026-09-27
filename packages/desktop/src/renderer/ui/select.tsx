@@ -1,6 +1,11 @@
 /**
  * Выпадающий список shadcn/ui на `@radix-ui/react-select`, поверх — облик
  * Orca «стекло» для списка вариантов, тот же, что у меню (спека 4.5).
+ *
+ * Длинное значение (путь проекта) не распирает родителя: у кнопки `min-w-0`, значение
+ * обрезается многоточием (раунд исправлений 2 куска 3.5). `line-clamp-1` прежде по ширине
+ * не обрезал — из-за `whitespace-nowrap` строка одна и так, а минимальная ширина
+ * содержимого оставалась во всю длину текста, и вся форма выходила за край диалога.
  */
 
 import * as React from 'react';
@@ -20,7 +25,7 @@ export const SelectTrigger = React.forwardRef<
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
-      'flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1',
+      'flex h-9 w-full min-w-0 items-center justify-between whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50 [&>span]:min-w-0 [&>span]:truncate',
       className,
     )}
     {...props}
@@ -72,8 +77,9 @@ export const SelectContent = React.forwardRef<
       className={cn(
         MENU_GLASS,
         'relative max-h-96 min-w-[8rem]',
+        // Список не шире окна: длинные пункты обрезаются (`ItemText` ниже), а не уезжают за край.
         position === 'popper' &&
-          'data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1',
+          'max-w-[var(--radix-select-content-available-width)] data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1',
         className,
       )}
       {...props}
@@ -123,7 +129,7 @@ export const SelectItem = React.forwardRef<
         <Check className="size-4" />
       </SelectPrimitive.ItemIndicator>
     </span>
-    <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+    <SelectPrimitive.ItemText className="min-w-0 truncate">{children}</SelectPrimitive.ItemText>
   </SelectPrimitive.Item>
 ));
 SelectItem.displayName = SelectPrimitive.Item.displayName;

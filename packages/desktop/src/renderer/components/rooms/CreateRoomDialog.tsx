@@ -109,14 +109,17 @@ export function CreateRoomDialog({
                 {candidates.map((candidate) => (
                   <label
                     key={candidate.id}
-                    className={`flex items-center gap-1.5 ${candidate.closed ? 'opacity-50' : ''}`}
+                    className={`flex min-w-0 max-w-full items-center gap-1.5 ${candidate.closed ? 'opacity-50' : ''}`}
                   >
                     <Checkbox
                       checked={selected.has(candidate.id)}
                       disabled={candidate.closed}
                       onCheckedChange={() => toggle(candidate)}
                     />
-                    {candidate.label}
+                    {/* Ярлык до 40 символов без пробелов шире диалога — обрезается (раунд исправлений 2 куска 3.5). */}
+                    <span className="min-w-0 truncate" title={candidate.label}>
+                      {candidate.label}
+                    </span>
                   </label>
                 ))}
               </div>

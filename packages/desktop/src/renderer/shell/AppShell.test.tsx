@@ -902,7 +902,7 @@ describe('AppShell — сайдбар карточек (кусок 3.3)', () => 
 
     fireEvent.click(screen.getByRole('button', { name: 'New workspace in project' }));
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByRole('combobox', { name: 'Project' }).textContent).toBe('/tmp/w-01');
+    expect(within(dialog).getByRole('combobox', { name: 'Project' }).getAttribute('title')).toBe('/tmp/w-01');
     fireEvent.keyDown(dialog, { key: 'Escape' });
     await flush();
     expect(useUiStore.getState().dialogs.newWork).toEqual({ open: false, projectPath: null });

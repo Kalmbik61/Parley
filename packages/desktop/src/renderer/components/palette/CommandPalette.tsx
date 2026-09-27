@@ -131,7 +131,8 @@ export function CommandPalette({ open, commands, onOpenChange }: CommandPaletteP
                     onMouseEnter={() => setActiveIndex(index)}
                     onClick={() => runAt(index)}
                   >
-                    <span>{command.title}</span>
+                    {/* Название работы до 120 символов — в одну строку с многоточием, подсказка не сжимается. */}
+                    <span className="min-w-0 truncate">{command.title}</span>
                     {command.hint !== undefined ? (
                       // На подсвеченной строке (`bg-accent`) обычный `muted-foreground`
                       // не наследует смену фона и даёт 4.01:1 в тёмной теме вместо
@@ -140,7 +141,7 @@ export function CommandPalette({ open, commands, onOpenChange }: CommandPaletteP
                       // заголовка строки, но читаемой на самом `--accent`.
                       <span
                         className={
-                          index === activeIndex ? 'text-xs text-accent-foreground/80' : 'text-xs text-muted-foreground'
+                          index === activeIndex ? 'shrink-0 text-xs text-accent-foreground/80' : 'shrink-0 text-xs text-muted-foreground'
                         }
                       >
                         {command.hint}

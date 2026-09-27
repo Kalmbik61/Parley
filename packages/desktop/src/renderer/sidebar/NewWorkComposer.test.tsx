@@ -377,3 +377,51 @@ describe('NewWorkComposer — раунд исправлений 1', () => {
     expect(toast).not.toHaveBeenCalled();
   });
 });
+
+describe('NewWorkComposer — раунд исправлений 2 (агент по умолчанию, поле проекта)', () => {
+  /** `providers.list`, который тест отпускает сам, — ответ приходит после открытия формы. */
+  function deferProviders(): () => Promise<void> {
+    let release: () => void = () => {};
+    bridge.setHandler('providers.list', () => new Promise((resolve) => (release = () => resolve({ providers: PROVIDERS }))));
+    return async () => act(async () => release());
+  }
+
+  it('providers.list пришёл после открытия, затем Create — без «Select an agent», works.create и sessions.create с агентом по умолчанию', async () => {
+    const release = deferProviders();
+    render(<NewWorkComposer open bridge={bridge} projectPath={PROJECT} onOpenChange={() => {}} />);
+    await waitFor(() => expect(callsOf('providers.list')).toHaveLength(1));
+    await release();
+    expect(screen.getByRole('combobox', { name: S.dialogs.newWork.agentField }).textContent).toBe('Claude Code');
+    typeTitle('title');
+    fireEvent.click(screen.getByRole('button', { name: S.common.create }));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(screen.queryByText(S.dialogs.newWork.agentRequired)).toBeNull();
+    expect(callsOf('works.create')).toHaveLength(1);
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'claude' });
+  });
+
+  it('Create раньше ответа providers.list — форма дожидается его и создаёт с агентом по умолчанию, ошибки агента нет', async () => {
+    const release = deferProviders();
+    render(<NewWorkComposer open bridge={bridge} projectPath={PROJECT} onOpenChange={() => {}} />);
+    typeTitle('title');
+    fireEvent.click(screen.getByRole('button', { name: S.common.create }));
+    await act(async () => {});
+    expect(screen.queryByText(S.dialogs.newWork.agentRequired)).toBeNull();
+    expect(callsOf('works.create')).toHaveLength(0);
+    await release();
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(screen.queryByText(S.dialogs.newWork.agentRequired)).toBeNull();
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'claude' });
+  });
+
+  it('поле проекта — имя папки и приглушённый путь к ней, полный путь во всплывающей подсказке', async () => {
+    const deep = '/private/var/folders/xy/abcdef/T/harnas-e2e-cards-123456';
+    useWorksStore.setState({ entries: [makeWork('w-deep', { projectPath: deep })] });
+    render(<NewWorkComposer open bridge={bridge} projectPath={deep} onOpenChange={() => {}} />);
+    await act(async () => {});
+    const trigger = screen.getByRole('combobox', { name: S.dialogs.newWork.projectField });
+    expect(trigger.getAttribute('title')).toBe(deep);
+    expect(trigger.textContent).toContain('harnas-e2e-cards-123456');
+    expect(trigger.querySelector('.text-muted-foreground')?.textContent).toBe('/private/var/folders/xy/abcdef/T');
+  });
+});

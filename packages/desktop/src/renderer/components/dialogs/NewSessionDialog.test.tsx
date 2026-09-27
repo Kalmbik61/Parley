@@ -103,3 +103,26 @@ describe('NewSessionDialog — агент по умолчанию, как у ф�
     expect(await launchWith(providers, null)).toMatchObject({ provider: 'codex' });
   });
 });
+
+describe('NewSessionDialog — раунд исправлений 2 куска 3.5: ответ providers.list позже открытия', () => {
+  it('Launch раньше ответа — сессия создаётся с агентом по умолчанию, а не с пустым', async () => {
+    useUiStore.setState({ ui: { ...DEFAULT_UI, lastProvider: null } });
+    const bridge = createFakeBridge();
+    let release: () => void = () => {};
+    bridge.setHandler(
+      'providers.list',
+      () => new Promise((resolve) => (release = () => resolve({ providers: [{ id: 'claude', label: 'Claude Code', available: true }] }))),
+    );
+    bridge.setHandler('worktrees.available', async () => ({ available: false }));
+    bridge.setHandler('sessions.create', async () => ({ ref: { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-02' } }));
+    render(
+      <NewSessionDialog open bridge={bridge} projectPath="/tmp/p" workId="w-01" selectedSessionId={null} onOpenChange={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Launch' }));
+    await act(async () => {});
+    expect(bridge.calls.some((call) => call.method === 'sessions.create')).toBe(false);
+    await act(async () => release());
+    await waitFor(() => expect(bridge.calls.some((call) => call.method === 'sessions.create')).toBe(true));
+    expect(bridge.calls.find((call) => call.method === 'sessions.create')?.params).toMatchObject({ provider: 'claude' });
+  });
+});

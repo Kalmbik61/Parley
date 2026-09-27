@@ -4,6 +4,11 @@
  * содержимое под затемнением). Заголовок — 14px 600 (кусок 1.4, поведение
  * «Диалоги»): все диалоги окна на этом примитиве, менять кегль в каждом месте
  * использования не нужно.
+ *
+ * Раунд исправлений 2 куска 3.5: сетка содержимого — `grid-cols-1` (`minmax(0, 1fr)`), а
+ * заголовок и описание переносят длинные слова. Иначе минимальная ширина содержимого
+ * (длинный путь, название в 120 символов без пробелов) распирала колонку сетки, и поля
+ * с кнопками выходили за правый край диалога.
  */
 
 import * as React from 'react';
@@ -41,7 +46,7 @@ export const DialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        'fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 rounded-xl border border-border bg-card p-6 shadow-[0_20px_60px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.08)] duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] dark:shadow-[0_24px_72px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.08)]',
+        'fixed left-[50%] top-[50%] z-50 grid w-full grid-cols-1 max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 rounded-xl border border-border bg-card p-6 shadow-[0_20px_60px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.08)] duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] dark:shadow-[0_24px_72px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.08)]',
         className,
       )}
       {...props}
@@ -86,7 +91,7 @@ export const DialogTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn('text-sm font-semibold leading-none tracking-tight', className)}
+    className={cn('text-sm font-semibold leading-none tracking-tight break-words', className)}
     {...props}
   />
 ));
@@ -98,7 +103,7 @@ export const DialogDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={cn('text-sm text-muted-foreground', className)}
+    className={cn('text-sm text-muted-foreground break-words', className)}
     {...props}
   />
 ));

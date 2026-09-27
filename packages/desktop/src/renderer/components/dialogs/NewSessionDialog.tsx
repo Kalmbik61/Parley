@@ -15,7 +15,7 @@
  * (`lib/default-provider.ts`), и созданная сессия запоминает его в `ui.json.lastProvider`.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { HarnasBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, S } from '../../../shared/strings.js';
@@ -54,19 +54,29 @@ export function NewSessionDialog({
   const [worktree, setWorktree] = useState(false);
   const [worktreeAvailable, setWorktreeAvailable] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Агент по умолчанию из `providers.list` этого открытия. Launch раньше ответа ждёт его —
+   * иначе ушёл бы пустой провайдер (раунд исправлений 2 куска 3.5, то же у формы новой работы).
+   */
+  const providerRef = useRef<Promise<string> | null>(null);
 
   useEffect(() => {
     if (!open) return;
-    bridge
+    // Каждое открытие — заново по правилу: прошлый выбор уже лежит в `lastProvider`.
+    setProvider('');
+    providerRef.current = bridge
       .call('providers.list', {})
       .then((result) => {
+        const chosen = defaultProvider(result.providers, useUiStore.getState().ui.lastProvider) ?? '';
         setProviders(result.providers);
-        // Каждое открытие — заново по правилу: прошлый выбор уже лежит в `lastProvider`.
-        setProvider(defaultProvider(result.providers, useUiStore.getState().ui.lastProvider) ?? '');
+        // Выбор человека, сделанный до ответа, не затираем.
+        setProvider((current) => (current === '' ? chosen : current));
+        return chosen;
       })
       .catch((err: unknown) => {
         console.warn('[harnas] providers.list', err);
         setError(errorText(decodeIpcError(err).code, S.errors.actions.loadProviders));
+        return '';
       });
   }, [open, bridge]);
 
@@ -88,17 +98,19 @@ export function NewSessionDialog({
       return;
     }
     setError(null);
+    const loading = providerRef.current;
+    const chosen = provider === '' && loading !== null ? await loading : provider;
     try {
       await bridge.call('sessions.create', {
         projectPath,
         workId,
-        provider,
+        provider: chosen,
         label,
         task,
         parent: childOfSelected ? selectedSessionId : null,
         worktree,
       });
-      useUiStore.getState().patchUi({ lastProvider: provider });
+      useUiStore.getState().patchUi({ lastProvider: chosen });
       onOpenChange(false);
       setLabel('');
       setTask('');
@@ -114,7 +126,7 @@ export function NewSessionDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent aria-describedby={undefined} className="w-96 max-w-96">
         <DialogTitle>{S.dialogs.newSession.title}</DialogTitle>
-        <div className="flex flex-col gap-3 text-sm">
+        <div className="flex min-w-0 flex-col gap-3 text-sm">
           <Select value={provider} onValueChange={setProvider}>
             <SelectTrigger>
               <SelectValue placeholder={S.dialogs.newSession.providerPlaceholder} />

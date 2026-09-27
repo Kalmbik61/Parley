@@ -127,6 +127,30 @@ function activateWhenListed(projectPath: string, workId: string, sessionId: stri
 /** Значение пункта «Choose a folder…» в списке проектов — путём оно быть не может. */
 const CHOOSE_FOLDER = '\u0000choose-folder';
 
+/**
+ * Проект в списке и на кнопке — имя папки и приглушённый путь к ней (раунд исправлений 2):
+ * полный путь из `mkdtemp` или глубокой папки занимал всю ширину, а различает проекты прежде
+ * всего имя. Хвост обрезается многоточием (`ui/select.tsx`), полный путь — в `title`.
+ */
+function ProjectLabel({ path }: { path: string }): JSX.Element {
+  const trimmed = path.replace(/\/+$/, '') || path;
+  const cut = trimmed.lastIndexOf('/');
+  const name = trimmed.slice(cut + 1) || trimmed;
+  const parent = cut > 0 ? trimmed.slice(0, cut) : '';
+  return (
+    <>
+      {name}
+      {parent !== '' ? <span className="ml-2 text-muted-foreground">{parent}</span> : null}
+    </>
+  );
+}
+
+/** Ответ `providers.list` этого открытия формы: список и агент по умолчанию для него. */
+interface LoadedProviders {
+  providers: ProviderOption[];
+  provider: string | null;
+}
+
 export interface NewWorkComposerProps {
   open: boolean;
   /** От «+» заголовка проекта — уже выбран; `null` — ⌘N и «New workspace». */
@@ -156,6 +180,12 @@ export function NewWorkComposer({ open, projectPath: initialProject, bridge, onO
   const [busy, setBusy] = useState(false);
   /** Снятия ожиданий снимка (`activateWhenListed`) — все гасятся при размонтировании. */
   const pendingRef = useRef(new Set<() => void>());
+  /**
+   * `providers.list` этого открытия. Create, нажатый раньше ответа, ждёт его, а не отказывает
+   * молча «Select an agent» (раунд исправлений 2: под нагрузкой ошибка оставалась под полем,
+   * хотя агент по умолчанию уже пришёл и был показан).
+   */
+  const providersRef = useRef<Promise<LoadedProviders | null> | null>(null);
 
   useEffect(() => {
     const pending = pendingRef.current;
@@ -169,6 +199,7 @@ export function NewWorkComposer({ open, projectPath: initialProject, bridge, onO
   useEffect(() => {
     if (!open) return;
     setProjectPath(initialProject);
+    setProvider(null);
     setTitle('');
     setGoal('');
     setTask('');
@@ -182,15 +213,19 @@ export function NewWorkComposer({ open, projectPath: initialProject, bridge, onO
 
   useEffect(() => {
     if (!open) return;
-    bridge
+    providersRef.current = bridge
       .call('providers.list', {})
       .then((result) => {
+        const chosen = defaultProvider(result.providers, useUiStore.getState().ui.lastProvider);
         setProviders(result.providers);
-        setProvider(defaultProvider(result.providers, useUiStore.getState().ui.lastProvider));
+        // Выбор человека, сделанный до ответа, не затираем; черновик и Select — одно значение.
+        setProvider((current) => current ?? chosen);
+        return { providers: result.providers, provider: chosen };
       })
       .catch((err: unknown) => {
         console.warn('[harnas] providers.list', err);
         setError(errorText(decodeIpcError(err).code, S.errors.actions.loadProviders));
+        return null;
       });
   }, [open, bridge]);
 
@@ -233,10 +268,13 @@ export function NewWorkComposer({ open, projectPath: initialProject, bridge, onO
     onOpenChange(false);
   };
 
-  const createSession = async (work: { projectPath: string; workId: string }): Promise<void> => {
-    const chosen = provider ?? '';
+  const createSession = async (
+    work: { projectPath: string; workId: string },
+    chosen: string,
+    options: readonly ProviderOption[],
+  ): Promise<void> => {
     // Пустой ярлык по спеке 6.6 — имя агента; хост пустой ярлык пишет как есть.
-    const sessionLabel = label === '' ? (providers.find((item) => item.id === chosen)?.label ?? chosen) : label;
+    const sessionLabel = label === '' ? (options.find((item) => item.id === chosen)?.label ?? chosen) : label;
     setBusy(true);
     setError(null);
     try {
@@ -263,10 +301,24 @@ export function NewWorkComposer({ open, projectPath: initialProject, bridge, onO
   const submit = async (): Promise<void> => {
     if (busy) return;
     if (createdWork !== null) {
-      await createSession(createdWork);
+      await createSession(createdWork, provider ?? '', providers);
       return;
     }
-    const errors = validateDraft({ projectPath, title, goal, startSession, provider, label, task, worktree, createMore });
+    // Список агентов ещё не пришёл — дождаться его: состояние этого замыкания устарело бы,
+    // поэтому агент и список берутся из ответа.
+    let chosen = provider;
+    let options: readonly ProviderOption[] = providers;
+    const loading = providersRef.current;
+    if (startSession && chosen === null && loading !== null) {
+      setBusy(true);
+      const loaded = await loading;
+      setBusy(false);
+      if (loaded !== null) {
+        chosen = loaded.provider;
+        options = loaded.providers;
+      }
+    }
+    const errors = validateDraft({ projectPath, title, goal, startSession, provider: chosen, label, task, worktree, createMore });
     setFieldErrors(errors);
     if (projectPath === null || Object.keys(errors).length > 0) return;
     setBusy(true);
@@ -285,7 +337,7 @@ export function NewWorkComposer({ open, projectPath: initialProject, bridge, onO
       finish();
       return;
     }
-    await createSession({ projectPath, workId });
+    await createSession({ projectPath, workId }, chosen ?? '', options);
   };
 
   const workLocked = createdWork !== null;
@@ -305,8 +357,8 @@ export function NewWorkComposer({ open, projectPath: initialProject, bridge, onO
         }}
       >
         <DialogTitle>{text.title}</DialogTitle>
-        <div className="flex flex-col gap-3 text-sm">
-          <div className="flex flex-col gap-1">
+        <div className="flex min-w-0 flex-col gap-3 text-sm">
+          <div className="flex min-w-0 flex-col gap-1">
             <span>{text.projectField}</span>
             <Select
               value={projectPath ?? ''}
@@ -316,13 +368,13 @@ export function NewWorkComposer({ open, projectPath: initialProject, bridge, onO
                 else setProjectPath(value);
               }}
             >
-              <SelectTrigger aria-label={text.projectField}>
+              <SelectTrigger aria-label={text.projectField} {...(projectPath === null ? null : { title: projectPath })}>
                 <SelectValue placeholder={text.chooseFolderPlaceholder} />
               </SelectTrigger>
               <SelectContent>
                 {knownProjects.map((path) => (
-                  <SelectItem key={path} value={path}>
-                    {path}
+                  <SelectItem key={path} value={path} title={path}>
+                    <ProjectLabel path={path} />
                   </SelectItem>
                 ))}
                 <SelectItem value={CHOOSE_FOLDER}>{text.chooseFolderPlaceholder}</SelectItem>
