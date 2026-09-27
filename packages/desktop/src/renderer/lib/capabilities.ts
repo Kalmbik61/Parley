@@ -51,6 +51,8 @@ export const REQUIRED_METHODS: readonly string[] = [
   ...BASELINE_METHODS,
   'works.rename',
   'works.setStatus',
+  'activity.seen',
+  'mail.markRead',
 ];
 
 /** Методы хоста; без связи — пусто: звать всё равно некого. */
