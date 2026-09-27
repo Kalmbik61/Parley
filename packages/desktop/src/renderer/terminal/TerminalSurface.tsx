@@ -24,25 +24,34 @@
  */
 
 import '@xterm/xterm/css/xterm.css';
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import type { Terminal } from '@xterm/xterm';
 import type { SearchAddon } from '@xterm/addon-search';
 import { useDroppable } from '@dnd-kit/core';
+import { toast } from 'sonner';
+import type { WorkSession } from '@harnas/core';
 import { refKey, type SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../shared/bridge.js';
+import { decodeIpcError } from '../../shared/ipc-error.js';
 import type { TabSpec } from '../../shared/layout-types.js';
+import { errorText, S } from '../../shared/strings.js';
+import { flashTab } from '../attention/flash.js';
+import { applyFocusTarget, whenShown } from '../attention/focus-target.js';
+import { useHostSupports } from '../lib/capabilities.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { dndId, type DropTargetData } from '../layout/dnd.js';
 import { useTerminalDropPreview } from '../layout/DropIndicator.js';
 import { useLayoutStore } from '../layout/store.js';
 import { tabMeta } from '../layout/tab-meta.js';
-import { focusTab, openTerminalSessionIds } from '../layout/tree.js';
+import { focusTab, openTab, openTerminalSessionIds } from '../layout/tree.js';
 import { ErrorBoundary } from '../shell/ErrorBoundary.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import { LinkMenu, openLinkPath, openLinkUrl, type LinkMenuState } from './LinkMenu.js';
 import { sessionCwd, type TerminalLink } from './links.js';
 import { SearchBar } from './SearchBar.js';
+import { dragHasFiles, pasteHasOnlyImage, pathsToInput } from './drop.js';
+import { sendWithToast, type SendWithToastDeps } from './send.js';
 import { TerminalContextMenu } from './TerminalContextMenu.js';
 import { useTerminal } from './use-terminal.js';
 import { xtermTheme } from './xterm-themes.js';
@@ -90,6 +99,35 @@ const PASTE_CONTROL = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
  */
 function sanitizePaste(text: string): string {
   return text.replace(PASTE_CSI, '').replace(PASTE_CONTROL, '');
+}
+
+/** Сессия из снимка работ — для «Resume» тоста отправки; null — её уже нет. */
+function sessionOf(ref: SessionRef): WorkSession | null {
+  const entry = useWorksStore
+    .getState()
+    .entries.find((item) => item.projectPath === ref.projectPath && item.map.work.id === ref.workId);
+  return entry?.map.sessions.find((item) => item.id === ref.sessionId) ?? null;
+}
+
+/**
+ * «Open S02» тоста отправки (кусок 5.4): тот же переход, что клик по уведомлению в `App.tsx`
+ * (4.3) — работа, вкладка сессии и фокус терминала. Цели нет — тот же тост.
+ */
+function openSessionTab(ref: SessionRef): void {
+  const applied = applyFocusTarget(
+    { kind: 'session', ref },
+    {
+      works: useWorksStore.getState().entries,
+      setActiveWork: (key) => useLayoutStore.getState().setActiveWork(key),
+      openTab: (key, tab) => {
+        useLayoutStore.getState().apply(key, (layout) => openTab(layout, tab));
+      },
+      whenShown,
+      surface: (target) => terminalSurfaces.get(refKey(target)),
+      flash: (key, id) => flashTab(key, id),
+    },
+  );
+  if (!applied) toast(S.notifications.targetGone);
 }
 
 /** Случайный id монтирования — не `crypto.randomUUID`: тот требует защищённого контекста. */
@@ -278,16 +316,44 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
     useUiStore.getState().openPicker({ workKey: key, direction, openSessionIds: openTerminalSessionIds(layout) });
   };
 
+  // Отправка агенту — только явным действием человека: бросок файла или вставка скриншота
+  // (кусок 5.4, спека 8.5). Без `pty.send` у хоста (спека 3.2, 13) ни то ни другое не
+  // перехватывается: вставка идёт в xterm как прежде, бросок не принимается.
+  const canSend = useHostSupports('pty.send');
+  const sendDeps = useMemo<SendWithToastDeps>(() => ({ bridge, session: sessionOf, openSession: openSessionTab }), [bridge]);
+  const [dropping, setDropping] = useState(false);
+
   // Вставка — через xterm, но уже чистым текстом (sanitizePaste): capture на
   // контейнере срабатывает раньше обработчика paste скрытого поля xterm, а
   // stopPropagation не даёт xterm вставить сырой текст второй раз. xterm.paste
-  // сам обернёт текст в bracketed paste и переведёт переводы строк. Вставка без
-  // текста (картинка) не трогается — её добавит кусок 5.4 сюда же.
+  // сам обернёт текст в bracketed paste и переведёт переводы строк.
+  // Картинка без текста (кусок 5.4) — в том же слушателе: main сохраняет её в drops/, агенту
+  // уходит путь. Одного preventDefault мало: xterm defaultPrevented не смотрит и вставил бы
+  // пустой текст — при bracketed paste агент получил бы ESC[200~ESC[201~ вдобавок к пути.
   useEffect(() => {
     if (container === null || terminal === null) return;
+    const pasteScreenshot = async (): Promise<void> => {
+      let saved: string | null;
+      try {
+        saved = await bridge.app.saveDropImage('clipboard');
+      } catch (error) {
+        const { code, message } = decodeIpcError(error);
+        console.warn('[harnas] saveDropImage', message);
+        toast.error(errorText(code, S.errors.actions.saveScreenshot));
+        return;
+      }
+      if (saved !== null) await sendWithToast(sendDeps, sessionRef, pathsToInput([saved]), false);
+    };
     const onPaste = (event: ClipboardEvent): void => {
-      const text = event.clipboardData?.getData('text/plain') ?? '';
-      if (text === '') return;
+      const data = event.clipboardData;
+      const text = data?.getData('text/plain') ?? '';
+      if (text === '') {
+        if (data === null || !canSend || !pasteHasOnlyImage(data)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void pasteScreenshot();
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       const clean = sanitizePaste(text);
@@ -295,7 +361,29 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
     };
     container.addEventListener('paste', onPaste, true);
     return () => container.removeEventListener('paste', onPaste, true);
-  }, [container, terminal]);
+  }, [container, terminal, canSend, bridge, sendDeps, sessionRef]);
+
+  // Файлы из Finder (спека 8.5): бросок принимается, только если тащат файлы — иначе строка
+  // текста или ссылка из другого приложения тоже стала бы «файлом». Пути — без Enter.
+  const onDragOver = (event: DragEvent<HTMLDivElement>): void => {
+    if (!canSend || !dragHasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    setDropping(true);
+  };
+  const onDragLeave = (event: DragEvent<HTMLDivElement>): void => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropping(false);
+  };
+  const onDrop = (event: DragEvent<HTMLDivElement>): void => {
+    setDropping(false);
+    if (!canSend || !dragHasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    // Пустой путь — у `File` нет места на диске (синтетический): пропускаем.
+    const paths = Array.from(event.dataTransfer.files)
+      .map((file) => bridge.app.pathForFile(file))
+      .filter((path) => path !== '');
+    if (paths.length > 0) void sendWithToast(sendDeps, sessionRef, pathsToInput(paths), false);
+  };
 
   const sessionKey = refKey(sessionRef);
   useEffect(() => {
@@ -306,7 +394,13 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
   }, [sessionKey, handle]);
 
   return (
-    <div className="relative flex h-full min-w-0 flex-col">
+    <div
+      className="relative flex h-full min-w-0 flex-col"
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      style={dropping ? { outline: '2px solid rgb(59,130,246)', outlineOffset: '-2px' } : undefined}
+    >
       {searchOpen ? (
         <SearchBar
           ref={inputRef}

@@ -10,7 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ILink } from '@xterm/xterm';
 import { refKey, type SessionRef } from '@harnas/protocol';
+import { toast } from 'sonner';
+import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { workKey } from '../lib/tree-order.js';
+import { useHostStore } from '../store/host.js';
 import { useWorksStore } from '../store/works.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
@@ -19,6 +22,7 @@ import { TerminalSurface, terminalSurfaces } from './TerminalSurface.js';
 
 const state = vi.hoisted(() => ({ xtermPaste: vi.fn() }));
 
+vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 vi.mock('@xterm/xterm', async () => (await import('../test-utils/xterm-mock.js')).xtermModule);
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: vi.fn().mockImplementation(() => ({ fit: () => {} })) }));
 vi.mock('@xterm/addon-search', async () => (await import('../test-utils/xterm-mock.js')).searchModule);
@@ -34,6 +38,7 @@ class ResizeObserverStub {
 
 const ref: SessionRef = { projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-01' };
 let bridge: FakeBridge;
+let offHost: () => void = () => {};
 
 beforeEach(() => {
   xtermMock.reset();
@@ -50,9 +55,14 @@ beforeEach(() => {
   bridge = createFakeBridge();
   bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
   bridge.setHandler('pty.detach', () => ({ ok: true as const }));
+  // useHostSupports читает стор хоста: статус подставного моста — через init, как у App.
+  offHost = useHostStore.getState().init(bridge);
+  vi.mocked(toast).mockClear();
+  vi.mocked(toast.error).mockClear();
 });
 
 afterEach(() => {
+  offHost();
   cleanup();
   vi.unstubAllGlobals();
 });
@@ -199,6 +209,123 @@ describe('TerminalSurface', () => {
       await pasteText('\x1b\x07\x7f\x1b[200~');
       expect(xtermMock.callsOf('paste')).toEqual([]);
       expect(state.xtermPaste).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('файлы и скриншоты (кусок 5.4)', () => {
+    async function mounted(): Promise<HTMLElement> {
+      renderSurface();
+      await act(async () => {
+        await Promise.resolve();
+      });
+      return screen.getByTestId('xterm-textarea');
+    }
+
+    function sends(): unknown[] {
+      return bridge.calls.filter((call) => call.method === 'pty.send').map((call) => call.params);
+    }
+
+    function inputs(): unknown[] {
+      return bridge.notified.filter((call) => call.method === 'pty.input');
+    }
+
+    /** Вставка картинки без текста: как у ⌘V со скриншотом в буфере. */
+    function pasteImage(target: HTMLElement): boolean {
+      return fireEvent.paste(target, {
+        clipboardData: { items: [{ kind: 'file', type: 'image/png' }], types: ['Files'], getData: () => '', files: [] },
+      });
+    }
+
+    const files = (): { types: string[]; files: File[] } => ({
+      types: ['Files'],
+      files: [new File(['a'], 'a b.txt'), new File(['b'], "it's.png"), new File(['c'], '')],
+    });
+
+    it('тест 5: drop двух файлов → один pty.send с submit: false и экранированными путями; пустой путь пропущен', async () => {
+      bridge.setHandler('pty.send', () => ({ inserted: true, submitted: false, reason: null }));
+      const target = await mounted();
+      expect(fireEvent.dragOver(target, { dataTransfer: files() })).toBe(false);
+      expect(fireEvent.drop(target, { dataTransfer: files() })).toBe(false);
+      await waitFor(() => expect(sends()).toHaveLength(1));
+      expect(sends()).toEqual([{ ref, text: "'/fake/a b.txt' '/fake/it'\\''s.png' ", submit: false }]);
+      // Успех без Enter — тоста нет: путь и так виден в поле ввода.
+      expect(toast).not.toHaveBeenCalled();
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it('тест 5: dragover без Files в dataTransfer.types — бросок не принят', async () => {
+      const target = await mounted();
+      expect(fireEvent.dragOver(target, { dataTransfer: { types: ['text/plain', 'text/uri-list'], files: [] } })).toBe(true);
+    });
+
+    it('тест 5: хост без pty.send — бросок не принят, вставка картинки не перехвачена', async () => {
+      const target = await mounted();
+      act(() => bridge.setHostMethods(REQUIRED_METHODS.filter((method) => method !== 'pty.send')));
+      expect(fireEvent.dragOver(target, { dataTransfer: files() })).toBe(true);
+      fireEvent.drop(target, { dataTransfer: files() });
+      expect(pasteImage(target)).toBe(true);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(sends()).toEqual([]);
+      expect(bridge.saveDropImageCalls).toEqual([]);
+      expect(state.xtermPaste).toHaveBeenCalledTimes(1);
+    });
+
+    it('тест 6: картинка без текста → pty.send с путём в кавычках и пробелом, preventDefault; xterm и pty.input не видят вставки', async () => {
+      bridge.setHandler('pty.send', () => ({ inserted: true, submitted: false, reason: null }));
+      bridge.setSaveDropImage('/h/drops/a b.png');
+      const target = await mounted();
+      expect(pasteImage(target)).toBe(false);
+      await waitFor(() => expect(sends()).toHaveLength(1));
+      expect(sends()).toEqual([{ ref, text: "'/h/drops/a b.png' ", submit: false }]);
+      expect(bridge.saveDropImageCalls).toEqual(['clipboard']);
+      expect(state.xtermPaste).not.toHaveBeenCalled();
+      expect(xtermMock.callsOf('paste')).toEqual([]);
+      expect(inputs()).toEqual([]);
+    });
+
+    it('тест 6: вставка с текстом — картинку не сохраняет, текст идёт в xterm как прежде (5.1)', async () => {
+      const target = await mounted();
+      fireEvent.paste(target, {
+        clipboardData: {
+          items: [
+            { kind: 'string', type: 'text/plain' },
+            { kind: 'file', type: 'image/png' },
+          ],
+          types: ['text/plain', 'Files'],
+          getData: (type: string) => (type === 'text/plain' ? 'hello' : ''),
+          files: [],
+        },
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(bridge.saveDropImageCalls).toEqual([]);
+      expect(xtermMock.callsOf('paste').map((call) => call.args)).toEqual([['hello']]);
+      expect(sends()).toEqual([]);
+    });
+
+    it('тест 6: картинки нет (saveDropImage → null) — ни отправки, ни тоста', async () => {
+      bridge.setSaveDropImage(null);
+      const target = await mounted();
+      expect(pasteImage(target)).toBe(false);
+      await waitFor(() => expect(bridge.saveDropImageCalls).toEqual(['clipboard']));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(sends()).toEqual([]);
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("тест 6: saveDropImage отказал → тост Couldn't save screenshot: failed., pty.send нет", async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      bridge.setSaveDropImage({ code: 'failed', message: 'm' });
+      const target = await mounted();
+      expect(pasteImage(target)).toBe(false);
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Couldn't save screenshot: failed."));
+      expect(sends()).toEqual([]);
+      expect(inputs()).toEqual([]);
     });
   });
 });
