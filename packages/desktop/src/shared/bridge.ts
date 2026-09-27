@@ -44,9 +44,18 @@ export interface HarnasBridge {
     chooseFolder(): Promise<string | null>;
     restartHost(): Promise<void>;
     onMenu(listener: (action: MenuAction) => void): () => void;
-    /** Раскладка dockview (кусок 2.2 плана окна) — хранилище в `main/layout-store.ts`. */
+    /**
+     * `loadLayout`/`saveLayout` остаются на `unknown` до куска 2.7: ими же
+     * прежний `Workspace` пишет раскладку dockview под ключом `window` в тот
+     * же файл (`main/layout-store.ts`), который с этого куска хранит формат
+     * v2 — по одной раскладке `WorkLayout` на `workKey` (спека 5.8).
+     */
     loadLayout(workKey: string): Promise<unknown | null>;
     saveLayout(workKey: string, layout: unknown): Promise<void>;
+    /** Работа исчезла из снимка — стирает её раскладку из `layouts.json` (спека 5.8). */
+    removeLayout(workKey: string): Promise<void>;
+    /** Первый снимок после старта: раскладки работ, которых в нём нет, стираются (спека 5.8). */
+    retainLayouts(workKeys: string[]): Promise<void>;
     /** `ui.json` (кусок 1.1 плана окна, спека 3.4) — хранилище в `main/ui-store.ts`. */
     loadUi(): Promise<UiFile>;
     saveUi(patch: Partial<Omit<UiFile, 'version'>>): Promise<UiFile>;

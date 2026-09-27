@@ -35,6 +35,10 @@ export interface FakeBridge extends HarnasBridge {
   readonly badges: number[];
   /** Вызовы `app.saveLayout` — для теста тишины 500 мс (кусок 2.2). */
   readonly layoutSaves: Array<{ workKey: string; layout: unknown }>;
+  /** Вызовы `app.removeLayout` — работа пропала из снимка (кусок 2.2, тест 6). */
+  readonly layoutRemovals: string[];
+  /** Вызовы `app.retainLayouts` — первый снимок после `worksLoaded` (кусок 2.2, тест 13). */
+  readonly layoutRetains: string[][];
   /** Системная тёмность, будто бы её сообщил `nativeTheme.on('updated')` (кусок 1.1). */
   emitAppearance(dark: boolean): void;
 }
@@ -50,6 +54,8 @@ export function createFakeBridge(): FakeBridge {
   const appNotified: Array<{ title: string; body: string }> = [];
   const badges: number[] = [];
   const layoutSaves: Array<{ workKey: string; layout: unknown }> = [];
+  const layoutRemovals: string[] = [];
+  const layoutRetains: string[][] = [];
   const layouts = new Map<string, unknown>();
   let status: HostStatus = { state: 'connected', hostVersion: '0.0.0-test' };
   let ui: UiFile = DEFAULT_UI;
@@ -63,6 +69,8 @@ export function createFakeBridge(): FakeBridge {
     appNotified,
     badges,
     layoutSaves,
+    layoutRemovals,
+    layoutRetains,
 
     call: async (method, params) => {
       calls.push({ method, params });
@@ -101,6 +109,17 @@ export function createFakeBridge(): FakeBridge {
       saveLayout: async (workKey, layout) => {
         layouts.set(workKey, layout);
         layoutSaves.push({ workKey, layout });
+      },
+      removeLayout: async (workKey) => {
+        layouts.delete(workKey);
+        layoutRemovals.push(workKey);
+      },
+      retainLayouts: async (workKeys) => {
+        const keep = new Set(workKeys);
+        for (const key of [...layouts.keys()]) {
+          if (!keep.has(key)) layouts.delete(key);
+        }
+        layoutRetains.push([...workKeys]);
       },
       loadUi: async () => ui,
       saveUi: async (patch) => {

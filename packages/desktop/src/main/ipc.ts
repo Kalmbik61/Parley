@@ -3,6 +3,7 @@ import type { MethodName, NotificationName } from '@harnas/protocol';
 import type { BrowserWindow, IpcMain, NativeTheme } from 'electron';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 import type { HostConnection } from './host-connection.js';
+import { LayoutTooLargeError } from './layout-store.js';
 import type { LayoutStore } from './layout-store.js';
 import type { UiStore } from './ui-store.js';
 
@@ -102,9 +103,36 @@ export function registerIpc(options: RegisterIpcOptions): void {
     return layoutStore.load(workKey);
   });
 
-  ipcMain.handle('app:save-layout', (_event, workKey: unknown, layout: unknown) => {
+  ipcMain.handle('app:save-layout', async (_event, workKey: unknown, layout: unknown) => {
     if (typeof workKey !== 'string') throw new Error(`неверный ключ раскладки: ${String(workKey)}`);
-    return layoutStore.save(workKey, layout);
+    try {
+      await layoutStore.save(workKey, layout);
+    } catch (error) {
+      // Раскладка больше лимита — план требует тихого предупреждения в
+      // консоль main и успешного ответа: рендереру тут делать нечего, а
+      // старый файл на диске уже сохранил сам `LayoutStore.save`.
+      if (error instanceof LayoutTooLargeError) {
+        console.warn(`[harnas] ${error.message}`);
+        return;
+      }
+      throw error;
+    }
+  });
+
+  ipcMain.handle('app:remove-layout', async (_event, workKey: unknown) => {
+    if (typeof workKey !== 'string') throw new Error(`неверный ключ раскладки: ${String(workKey)}`);
+    return layoutStore.remove(workKey);
+  });
+
+  ipcMain.handle('app:retain-layouts', async (_event, workKeys: unknown) => {
+    // `async`, а не просто throw в обычной функции: подставной `ipcMain` теста
+    // (`ipc.test.ts`), в отличие от настоящего Electron, не оборачивает
+    // синхронный throw в отказ промиса сам — та же причина, что и у
+    // `app:save-ui` выше.
+    if (!Array.isArray(workKeys) || !workKeys.every((key) => typeof key === 'string')) {
+      throw new Error(`неверный список ключей раскладок: ${String(workKeys)}`);
+    }
+    return layoutStore.retain(workKeys);
   });
 
   ipcMain.handle('app:load-ui', (): Promise<UiFile> => uiStore.load());

@@ -67,6 +67,9 @@ const bridge = {
       ipcRenderer.invoke('app:load-layout', workKey) as Promise<unknown | null>,
     saveLayout: (workKey: string, layout: unknown) =>
       ipcRenderer.invoke('app:save-layout', workKey, layout) as Promise<void>,
+    removeLayout: (workKey: string) => ipcRenderer.invoke('app:remove-layout', workKey) as Promise<void>,
+    retainLayouts: (workKeys: string[]) =>
+      ipcRenderer.invoke('app:retain-layouts', workKeys) as Promise<void>,
     loadUi: () => ipcRenderer.invoke('app:load-ui') as Promise<UiFile>,
     saveUi: (patch: Partial<Omit<UiFile, 'version'>>) =>
       ipcRenderer.invoke('app:save-ui', patch) as Promise<UiFile>,

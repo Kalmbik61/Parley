@@ -111,6 +111,12 @@ test.describe('раскладка сетки переживает перезап
     // Тишина сохранения — 500 мс (план, кусок 2.2). Под нагрузкой фиксированной
     // паузы не хватало: закрытие обгоняло запись. Ждём, пока на диске окажутся
     // все три панели.
+    //
+    // Формат файла — v2 куска 2.2 (`{ version: 2, works }`): прежний
+    // `Workspace` на dockview по-прежнему пишет свою единую сетку под ключом
+    // `window`, но само хранилище теперь общее словарём по `workKey`, а не
+    // `{ version: 1, layouts }` — без этого правки опрос ищет несуществующий
+    // `file.layouts` и падает по таймауту.
     const layoutsFile = path.join(home, 'desktop', 'layouts.json');
     await expect
       .poll(
@@ -119,9 +125,10 @@ test.describe('раскладка сетки переживает перезап
             // id панели встречается в JSON dockview в нескольких местах —
             // считаем сами панели сохранённой раскладки, а не вхождения строки.
             const file = JSON.parse(await readFile(layoutsFile, 'utf8')) as {
-              layouts: Record<string, { panels?: Record<string, unknown> }>;
+              version: 2;
+              works: Record<string, { panels?: Record<string, unknown> }>;
             };
-            return Object.keys(file.layouts.window?.panels ?? {}).length >= 3;
+            return Object.keys(file.works.window?.panels ?? {}).length >= 3;
           } catch {
             return false;
           }

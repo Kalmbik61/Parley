@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { IpcMain } from 'electron';
 import { DEFAULT_UI } from '../shared/ui-types.js';
 import type { HostConnection } from './host-connection.js';
-import type { LayoutStore } from './layout-store.js';
+import { LayoutTooLargeError, type LayoutStore } from './layout-store.js';
 import type { UiStore } from './ui-store.js';
 import { registerIpc } from './ipc.js';
 
@@ -25,7 +25,7 @@ class FakeIpcMain {
   }
 }
 
-function setup(overrides: { uiStore?: UiStore } = {}): {
+function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore } = {}): {
   ipcMain: FakeIpcMain;
   connection: HostConnection;
   layoutStore: LayoutStore;
@@ -40,10 +40,14 @@ function setup(overrides: { uiStore?: UiStore } = {}): {
     onEvent: vi.fn(),
     onStatus: vi.fn(),
   } as unknown as HostConnection;
-  const layoutStore: LayoutStore = {
-    load: vi.fn().mockResolvedValue(null),
-    save: vi.fn().mockResolvedValue(undefined),
-  };
+  const layoutStore: LayoutStore =
+    overrides.layoutStore ??
+    ({
+      load: vi.fn().mockResolvedValue(null),
+      save: vi.fn().mockResolvedValue(undefined),
+      remove: vi.fn().mockResolvedValue(undefined),
+      retain: vi.fn().mockResolvedValue(undefined),
+    } satisfies LayoutStore);
   const uiStore: UiStore =
     overrides.uiStore ??
     ({
@@ -99,6 +103,52 @@ describe('registerIpc', () => {
 
     await ipcMain.invoke('app:save-layout', 'window', { a: 1 });
     expect(layoutStore.save).toHaveBeenCalledWith('window', { a: 1 });
+  });
+
+  it('app:remove-layout и app:retain-layouts уходят в LayoutStore (кусок 2.2)', async () => {
+    const { ipcMain, layoutStore } = setup();
+    await ipcMain.invoke('app:remove-layout', 'w-01');
+    expect(layoutStore.remove).toHaveBeenCalledWith('w-01');
+
+    await ipcMain.invoke('app:retain-layouts', ['w-01', 'w-02']);
+    expect(layoutStore.retain).toHaveBeenCalledWith(['w-01', 'w-02']);
+  });
+
+  it('app:retain-layouts с не-строкой в списке отвергается', async () => {
+    const { ipcMain, layoutStore } = setup();
+    await expect(ipcMain.invoke('app:retain-layouts', ['w-01', 1])).rejects.toThrow();
+    expect(layoutStore.retain).not.toHaveBeenCalled();
+  });
+
+  // Тест 14 куска 2.2: раскладка больше лимита не должна доходить до рендерера
+  // отказом — план требует тихого предупреждения в консоль main и успешного ответа.
+  it('app:save-layout при LayoutTooLargeError пишет console.warn и отвечает успехом (тест 14)', async () => {
+    const tooLarge = new LayoutTooLargeError('/tmp/layouts.json', 2_000_000, 1_000_000);
+    const layoutStore: LayoutStore = {
+      load: vi.fn().mockResolvedValue(null),
+      save: vi.fn().mockRejectedValue(tooLarge),
+      remove: vi.fn().mockResolvedValue(undefined),
+      retain: vi.fn().mockResolvedValue(undefined),
+    };
+    const { ipcMain } = setup({ layoutStore });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(ipcMain.invoke('app:save-layout', 'w-01', { huge: true })).resolves.toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(tooLarge.message));
+
+    warnSpy.mockRestore();
+  });
+
+  it('app:save-layout пробрасывает прочие ошибки LayoutStore (не глотает их вслепую)', async () => {
+    const layoutStore: LayoutStore = {
+      load: vi.fn().mockResolvedValue(null),
+      save: vi.fn().mockRejectedValue(new Error('диск сломался')),
+      remove: vi.fn().mockResolvedValue(undefined),
+      retain: vi.fn().mockResolvedValue(undefined),
+    };
+    const { ipcMain } = setup({ layoutStore });
+
+    await expect(ipcMain.invoke('app:save-layout', 'w-01', { a: 1 })).rejects.toThrow('диск сломался');
   });
 
   it('app:load-ui и app:save-ui уходят в UiStore (кусок 1.1)', async () => {
