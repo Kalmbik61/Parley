@@ -6,7 +6,7 @@
  * папка не под git) работает обходом `walkFiles` и поиском в воркере.
  */
 import { spawn } from 'node:child_process';
-import { readdir, realpath, stat } from 'node:fs/promises';
+import { lstat, readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { Worker } from 'node:worker_threads';
 import type { FileRoot, GitStatusLetter, GrepQuery, GrepResult, TextFile } from '../../shared/files-types.js';
@@ -288,6 +288,37 @@ export async function walkFiles(
   return { paths: out, truncated: false };
 }
 
+/** Одновременных lstat у фильтра ссылок: 50 000 путей — около 0,2 с, пул fs main не забит целиком. */
+const LSTAT_CONCURRENCY = 16;
+
+/**
+ * Пути `git ls-files` без ссылок, чья цель (realpath) лежит в `.git` или `.harnas` корня: pathspec
+ * исключает саму папку, но не ссылку на неё, и ⌘P показывал бы `link.json → .harnas/…`, которую
+ * обход без git уже прячет (раунд fix-7.1b, п.6). Вид берётся с диска (lstat), а не из индекса:
+ * у новых файлов режима нет, а отслеживаемый файл агент мог заменить ссылкой.
+ */
+export async function dropHiddenLinks(root: string, paths: string[]): Promise<string[]> {
+  const base = await realpath(root);
+  const keep = paths.map(() => true);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (let i = next++; i < paths.length; i = next++) {
+      const abs = path.join(base, paths[i] ?? '');
+      try {
+        if (!(await lstat(abs)).isSymbolicLink()) continue;
+        const inside = insideReal(base, await realpath(abs));
+        if (inside !== null && inside.split(path.sep).some((s) => s.toLowerCase() === '.git' || s.toLowerCase() === '.harnas')) {
+          keep[i] = false;
+        }
+      } catch {
+        // Нет файла или висячая ссылка — как отдал git.
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(LSTAT_CONCURRENCY, paths.length) }, worker));
+  return paths.filter((_p, i) => keep[i]);
+}
+
 /** rev для gitShow: HEAD или 7–40 hex, в конце допустим ^. */
 export function isSafeRev(rev: string): boolean {
   return rev === 'HEAD' || /^[0-9a-f]{7,40}\^?$/.test(rev);
@@ -387,6 +418,11 @@ export function createGitApi(options: GitApiOptions): GitApi {
   const showMaxBytes = options.showMaxBytes ?? LIMITS.openableBytes;
   const lsCache = new Map<string, Promise<string[]>>();
   const signals = new Map<string, AbortController>();
+  /**
+   * Папки, о сбое `check-ignore` в которых уже сказано: за каталогом-ссылкой git выходит с 128 на
+   * каждое раскрытие, и без этого лог main шумел бы на каждом `list`. Растёт не больше числа папок.
+   */
+  const ignoreWarned = new Set<string>();
 
   /** Вызов git для корня; git пропал из PATH после пробы — null, как у не-git корня. */
   const read = async (
@@ -413,7 +449,7 @@ export function createGitApi(options: GitApiOptions): GitApi {
     const rootPath = roots.rootPath(root);
     if ((await gitRootOf(git, rootPath)) !== null) {
       const result = await read(['ls-files', '-co', '--exclude-standard', '-z', ...PATHSPEC], rootPath);
-      if (result !== null && result.code === 0) return { paths: parseLsFiles(result.stdout), partial: false };
+      if (result !== null && result.code === 0) return { paths: await dropHiddenLinks(rootPath, parseLsFiles(result.stdout)), partial: false };
       console.warn(`[harnas] files: git ls-files exited with code ${String(result?.code)}, walking instead`);
     }
     const found = await walk(rootPath);
@@ -555,7 +591,11 @@ export function createGitApi(options: GitApiOptions): GitApi {
       // Выход 1 — «ничего не игнорируется», не ошибка.
       if (result.code === 1) return new Set();
       if (result.code !== 0) {
-        console.warn(`[harnas] files: git check-ignore exited with code ${String(result.code)}`);
+        const key = `${rootPath}\0${dir}`;
+        if (!ignoreWarned.has(key)) {
+          ignoreWarned.add(key);
+          console.warn(`[harnas] files: git check-ignore exited with code ${String(result.code)} in ${dir || '.'}`);
+        }
         return new Set();
       }
       const ignored = new Set(parseLsFiles(result.stdout));

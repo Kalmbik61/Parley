@@ -438,6 +438,24 @@ describe('checkIgnored', () => {
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
+
+  it('папка за каталогом-ссылкой (git выходит с 128): предупреждение один раз на папку, ignored пусто (раунд fix-7.1b, п.4)', async () => {
+    await initRepo(dir);
+    await mkdir(path.join(dir, 'sub'));
+    await mkdir(path.join(dir, 'other'));
+    await symlink(path.join(dir, 'sub'), path.join(dir, 'lnk'));
+    await symlink(path.join(dir, 'other'), path.join(dir, 'lnk2'));
+    const a = api(dir);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      for (let i = 0; i < 3; i++) expect(await a.checkIgnored(ROOT, 'lnk', ['x.ts'])).toEqual(new Set());
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(await a.checkIgnored(ROOT, 'lnk2', ['y.ts'])).toEqual(new Set());
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
 
 describe('walkFiles и поиск без git (тест 11)', () => {
@@ -610,5 +628,38 @@ describe('неверная регулярка (раунд fix-7.1b, п.3)', () =
     await initRepo(dir);
     await writeFile(path.join(dir, 'a.txt'), 'x\n');
     expect(await codeOf(api(dir).grep(ROOT, Q('(?:x)', { regex: true }), 's'))).toBe('failed');
+  });
+});
+
+describe('lsFiles: ссылки в .git и .harnas (раунд fix-7.1b, п.6)', () => {
+  async function links(): Promise<void> {
+    await mkdir(path.join(dir, '.harnas', 'works', 'w'), { recursive: true });
+    await writeFile(path.join(dir, '.harnas', 'works', 'w', 'map.json'), '{}');
+    await writeFile(path.join(dir, 'real.txt'), 'x');
+    await symlink('real.txt', path.join(dir, 'in-link.txt'));
+    await symlink('.harnas/works/w/map.json', path.join(dir, 'link.json'));
+    await symlink('.harnas', path.join(dir, 'harnas-dir'));
+  }
+
+  it('git: отслеживаемая и новая ссылка в .harnas/.git не отдаются; обычная ссылка — да', async () => {
+    await initRepo(dir);
+    await links();
+    commitAll(dir);
+    await symlink('.git/config', path.join(dir, 'git-config'));
+    await symlink('.harnas/works/w/map.json', path.join(dir, 'fresh-link.json'));
+    expect((await api(dir).lsFiles(ROOT)).sort()).toEqual(['in-link.txt', 'real.txt']);
+  });
+
+  it('не git: то же обходом', async () => {
+    await links();
+    await mkdir(path.join(dir, '.git'));
+    await writeFile(path.join(dir, '.git', 'config'), '');
+    await symlink('.git/config', path.join(dir, 'git-config'));
+    const enoent: GitRunner = {
+      run: async () => {
+        throw Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' });
+      },
+    };
+    expect((await api(dir, enoent).lsFiles(ROOT)).sort()).toEqual(['in-link.txt', 'real.txt']);
   });
 });
