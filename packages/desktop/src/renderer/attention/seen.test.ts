@@ -100,3 +100,38 @@ describe('createSeenTracker (тест 2)', () => {
     expect(sent).toEqual([]);
   });
 });
+
+// Найдено вживую (дефект 4.2, чинится с куском 4.3): настоящий `setTimeout` Chromium, вызванный
+// методом чужого объекта (`deps.setTimer(…)`), бросает «Illegal invocation» — таймеры jsdom и
+// поддельные таймеры vitest этого не замечают. Здесь таймеры проверяют `this` так же строго.
+describe('createSeenTracker — таймеры зовутся без this объекта deps', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('setTimer и clearTimer, требовательные к this, не бросают; send доходит', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const strict = (self: unknown): void => {
+      if (self !== undefined && self !== globalThis) throw new TypeError('Illegal invocation');
+    };
+    const setTimer = function (this: unknown, handler: () => void, ms?: number) {
+      strict(this);
+      return setTimeout(handler, ms);
+    } as unknown as typeof setTimeout;
+    const clearTimer = function (this: unknown, id?: ReturnType<typeof setTimeout>) {
+      strict(this);
+      clearTimeout(id);
+    } as unknown as typeof clearTimeout;
+    const sent: SessionRef[] = [];
+    const tracker = createSeenTracker({ send: (ref) => sent.push(ref), now: () => Date.now(), setTimer, clearTimer });
+
+    expect(() => tracker.update(new Set([A]), new Map([[A, a]]))).not.toThrow();
+    vi.advanceTimersByTime(1000);
+    expect(sent).toEqual([a]);
+    // Повтор уже запланирован — уход из видимости снимает его через clearTimer.
+    expect(() => tracker.update(new Set(), new Map())).not.toThrow();
+    expect(() => tracker.update(new Set([A]), new Map([[A, a]]))).not.toThrow();
+    expect(() => tracker.dispose()).not.toThrow();
+  });
+});

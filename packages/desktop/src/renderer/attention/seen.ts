@@ -39,6 +39,9 @@ export function createSeenTracker(deps: {
   setTimer: typeof setTimeout;
   clearTimer: typeof clearTimeout;
 }): SeenTracker {
+  // Таймеры — отдельными функциями, а не методами `deps`: настоящий `setTimeout` Chromium,
+  // вызванный с чужим `this` (`deps.setTimer(…)`), бросает «Illegal invocation».
+  const { setTimer, clearTimer } = deps;
   // Отсчёт идёт только у сессий «видна ∧ unseen»; выпала из пары — отсчёт сброшен.
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const refs = new Map<string, SessionRef>();
@@ -47,7 +50,7 @@ export function createSeenTracker(deps: {
   const schedule = (key: string, delay: number): void => {
     timers.set(
       key,
-      deps.setTimer(() => fire(key), delay),
+      setTimer(() => fire(key), delay),
     );
   };
 
@@ -72,7 +75,7 @@ export function createSeenTracker(deps: {
     update(visible, unseen) {
       for (const [key, timer] of [...timers]) {
         if (visible.has(key) && unseen.has(key)) continue;
-        deps.clearTimer(timer);
+        clearTimer(timer);
         timers.delete(key);
         refs.delete(key);
       }
@@ -88,7 +91,7 @@ export function createSeenTracker(deps: {
       }
     },
     dispose() {
-      for (const timer of timers.values()) deps.clearTimer(timer);
+      for (const timer of timers.values()) clearTimer(timer);
       timers.clear();
       refs.clear();
     },

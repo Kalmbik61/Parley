@@ -78,8 +78,10 @@ function wireSeenTracker(bridge: HarnasBridge): () => void {
       if (hostMethods(useHostStore.getState().status).has('activity.seen')) bridge.notify('activity.seen', { ref });
     },
     now: () => Date.now(),
-    setTimer: setTimeout,
-    clearTimer: clearTimeout,
+    // Обёртки, а не сами `setTimeout`/`clearTimeout`: вызванные методом объекта, они в
+    // Chromium бросают «Illegal invocation».
+    setTimer: (handler, ms) => setTimeout(handler, ms),
+    clearTimer: (timer) => clearTimeout(timer),
   });
   const recompute = (): void => {
     const visible = visibleSessions(useUiStore.getState());
