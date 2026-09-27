@@ -127,6 +127,7 @@ if (!gotLock) {
         nativeTheme.themeSource = mode;
       },
       openExternal: (url) => shell.openExternal(url),
+      showItemInFolder: (path) => shell.showItemInFolder(path),
       chooseFolder: async () => {
         const window = mainWindow;
         const result = window

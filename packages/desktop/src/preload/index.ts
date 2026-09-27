@@ -88,6 +88,8 @@ const bridge = {
     titlebarDoubleClick: () => {
       ipcRenderer.send('app:titlebar-double-click');
     },
+    revealWork: (projectPath: string, workId: string) =>
+      ipcRenderer.invoke('app:reveal-work', projectPath, workId) as Promise<void>,
   },
 };
 

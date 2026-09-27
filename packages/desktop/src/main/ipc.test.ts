@@ -33,6 +33,7 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore } = {})
   uiStore: UiStore;
   setAppearance: ReturnType<typeof vi.fn>;
   titlebarDoubleClick: ReturnType<typeof vi.fn>;
+  showItemInFolder: ReturnType<typeof vi.fn>;
 } {
   const ipcMain = new FakeIpcMain();
   const connection = {
@@ -59,6 +60,7 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore } = {})
     } satisfies UiStore);
   const setAppearance = vi.fn();
   const titlebarDoubleClick = vi.fn();
+  const showItemInFolder = vi.fn();
 
   registerIpc({
     ipcMain: ipcMain as unknown as IpcMain,
@@ -71,9 +73,10 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore } = {})
     chooseFolder: vi.fn(),
     showNotification: vi.fn(),
     setBadge: vi.fn(),
+    showItemInFolder,
   });
 
-  return { ipcMain, connection, layoutStore, uiStore, setAppearance, titlebarDoubleClick };
+  return { ipcMain, connection, layoutStore, uiStore, setAppearance, titlebarDoubleClick, showItemInFolder };
 }
 
 describe('registerIpc', () => {
@@ -272,5 +275,26 @@ describe('registerIpc', () => {
 
     await expect(ipcMain.invoke('app:set-appearance', 'dark')).rejects.toThrow('диск сломался');
     expect(setAppearance).not.toHaveBeenCalled();
+  });
+
+  // Тест 17 куска 3.4: «Reveal in Finder» — main сам сверяет работу со снимком хоста,
+  // рендерер не может открыть в Finder произвольный путь.
+  it('app:reveal-work существующей работы зовёт showItemInFolder(projectPath), чужой — not_found без вызова (тест 17 куска 3.4)', async () => {
+    const { ipcMain, connection, showItemInFolder } = setup();
+    const entry = { projectPath: '/tmp/proj', map: { work: { id: 'w-0001' } } };
+    vi.mocked(connection.call).mockResolvedValue({ entries: [entry], branches: {} });
+
+    await ipcMain.invoke('app:reveal-work', '/tmp/proj', 'w-0001');
+    expect(connection.call).toHaveBeenCalledWith('works.list', {});
+    expect(showItemInFolder).toHaveBeenCalledWith('/tmp/proj');
+
+    showItemInFolder.mockClear();
+    for (const args of [['/etc', 'w-0001'], ['/tmp/proj', 'w-9999'], [42, 'w-0001'], ['/tmp/proj', null]]) {
+      await expect(ipcMain.invoke('app:reveal-work', ...args)).rejects.toSatisfy((error: unknown) => {
+        expect(decodeIpcError(error).code).toBe('not_found');
+        return true;
+      });
+    }
+    expect(showItemInFolder).not.toHaveBeenCalled();
   });
 });

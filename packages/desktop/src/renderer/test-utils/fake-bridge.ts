@@ -52,6 +52,10 @@ export interface FakeBridge extends HarnasBridge {
   emitAppearance(dark: boolean): void;
   /** Журнал вызовов `app.titlebarDoubleClick` (кусок 2.3) — по одной записи на вызов. */
   readonly titlebarDoubleClicks: number[];
+  /** Журнал вызовов `app.revealWork` (кусок 3.4). */
+  readonly revealedWorks: Array<{ projectPath: string; workId: string }>;
+  /** Чем ответит следующий `app.revealWork`: ошибка — отказ, `null` — успех. */
+  setRevealWorkError(error: unknown): void;
 }
 
 export function createFakeBridge(): FakeBridge {
@@ -68,6 +72,8 @@ export function createFakeBridge(): FakeBridge {
   const layoutRemovals: string[] = [];
   const layoutRetains: string[][] = [];
   const titlebarDoubleClicks: number[] = [];
+  const revealedWorks: Array<{ projectPath: string; workId: string }> = [];
+  let revealWorkError: unknown = null;
   const layouts = new Map<string, WorkLayout>();
   let status: HostStatus = {
     state: 'connected',
@@ -89,6 +95,10 @@ export function createFakeBridge(): FakeBridge {
     layoutRemovals,
     layoutRetains,
     titlebarDoubleClicks,
+    revealedWorks,
+    setRevealWorkError: (error) => {
+      revealWorkError = error;
+    },
 
     call: async (method, params) => {
       calls.push({ method, params });
@@ -161,6 +171,10 @@ export function createFakeBridge(): FakeBridge {
       },
       titlebarDoubleClick: () => {
         titlebarDoubleClicks.push(titlebarDoubleClicks.length);
+      },
+      revealWork: async (projectPath, workId) => {
+        revealedWorks.push({ projectPath, workId });
+        if (revealWorkError !== null) throw revealWorkError;
       },
     },
 

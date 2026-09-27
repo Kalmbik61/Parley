@@ -78,6 +78,11 @@ export interface HarnasBridge {
     onAppearance(listener: (dark: boolean) => void): () => void;
     /** Двойной клик по пустому месту заголовка (кусок 2.3, спека 5.1). */
     titlebarDoubleClick(): void;
+    /**
+     * «Reveal in Finder» (кусок 3.4): main сверяет работу с `works.list` и показывает
+     * папку проекта; незнакомая работа — отказ с кодом `not_found`.
+     */
+    revealWork(projectPath: string, workId: string): Promise<void>;
   };
 }
 

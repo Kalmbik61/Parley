@@ -92,6 +92,8 @@ export interface RegisterIpcOptions {
   setAppearance: (mode: Appearance) => void;
   /** Двойной клик по пустому месту заголовка (кусок 2.3, спека 5.1) — системное действие macOS. */
   titlebarDoubleClick: () => void;
+  /** «Reveal in Finder» карточки работы (кусок 3.4) — `shell.showItemInFolder`. */
+  showItemInFolder: (path: string) => void;
 }
 
 /**
@@ -113,6 +115,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     uiStore,
     setAppearance,
     titlebarDoubleClick,
+    showItemInFolder,
   } = options;
 
   ipcMain.handle(
@@ -240,6 +243,23 @@ export function registerIpc(options: RegisterIpcOptions): void {
   ipcMain.on('app:titlebar-double-click', () => {
     titlebarDoubleClick();
   });
+
+  ipcMain.handle(
+    'app:reveal-work',
+    withIpcError(async (_event, projectPath: unknown, workId: unknown) => {
+      // Путь из рендерера в Finder не идёт как есть: показываем только папку проекта
+      // работы, которую знает хост (кусок 3.4). Иначе рендерер открыл бы любой путь.
+      // Форма записи — своя: `@harnas/core` main не резолвит (шапка `shared/strings.ts`).
+      const known =
+        typeof projectPath === 'string' &&
+        typeof workId === 'string' &&
+        ((await connection.call('works.list', {})) as { entries: Array<{ projectPath: string; map: { work: { id: string } } }> }).entries.some(
+          (entry) => entry.projectPath === projectPath && entry.map.work.id === workId,
+        );
+      if (!known) throw new HostError('not_found', `work not found: ${String(projectPath)} ${String(workId)}`);
+      showItemInFolder(projectPath);
+    }),
+  );
 }
 
 /**
