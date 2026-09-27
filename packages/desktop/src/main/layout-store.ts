@@ -41,7 +41,7 @@ export interface LayoutStore {
 /** Раскладка больше `maxBytes` — сохранение отказывает, старый файл остаётся (спека 5.8). */
 export class LayoutTooLargeError extends Error {
   constructor(file: string, sizeBytes: number, maxBytes: number) {
-    super(`раскладка ${file}: ${sizeBytes} байт больше предела ${maxBytes}`);
+    super(`layout ${file}: ${sizeBytes} bytes over the ${maxBytes} limit`);
     this.name = 'LayoutTooLargeError';
   }
 }

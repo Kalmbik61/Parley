@@ -62,7 +62,7 @@ async function readUiFile(file: string): Promise<UiFile> {
     raw = await readFile(file, 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return DEFAULT_UI;
-    console.warn(`[harnas] ui.json не читается (${file}): ${(error as Error).message}`);
+    console.warn(`[harnas] ui.json unreadable (${file}): ${(error as Error).message}`);
     return DEFAULT_UI;
   }
   try {

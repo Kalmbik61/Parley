@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { IpcMain } from 'electron';
+import { decodeIpcError } from '../shared/ipc-error.js';
 import { DEFAULT_UI } from '../shared/ui-types.js';
-import type { HostConnection } from './host-connection.js';
+import { HostError, type HostConnection } from './host-connection.js';
 import { LayoutTooLargeError, type LayoutStore } from './layout-store.js';
 import type { UiStore } from './ui-store.js';
 import { registerIpc } from './ipc.js';
@@ -84,6 +85,30 @@ describe('registerIpc', () => {
     const { ipcMain, connection } = setup();
     await ipcMain.invoke('host:call', 'works.list', {});
     expect(connection.call).toHaveBeenCalledWith('works.list', {});
+  });
+
+  // Кусок E.1: HostError, дошедший от хоста через HostConnection.call, обязан
+  // нести свой код протокола через encodeIpcError — рендерер читает его
+  // decodeIpcError и показывает errorText(code), а не русский текст хоста
+  // (тот — только console.warn у вызывающей стороны).
+  it('HostError от HostConnection.call доходит до рендерера с кодом (тест 4 куска E.1)', async () => {
+    const { ipcMain, connection } = setup();
+    vi.mocked(connection.call).mockRejectedValueOnce(new HostError('conflict', 'у работы есть живая сессия'));
+
+    await expect(ipcMain.invoke('host:call', 'works.delete', {})).rejects.toSatisfy((error: unknown) => {
+      expect(decodeIpcError(error)).toEqual({ code: 'conflict', message: 'у работы есть живая сессия' });
+      return true;
+    });
+  });
+
+  it('прочая (не HostError) ошибка host:call доходит до рендерера с кодом failed', async () => {
+    const { ipcMain, connection } = setup();
+    vi.mocked(connection.call).mockRejectedValueOnce(new Error('socket разорван'));
+
+    await expect(ipcMain.invoke('host:call', 'works.list', {})).rejects.toSatisfy((error: unknown) => {
+      expect(decodeIpcError(error)).toEqual({ code: 'failed', message: 'socket разорван' });
+      return true;
+    });
   });
 
   it('openExternal(file:///etc/passwd) и javascript: отвергаются', async () => {

@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, shell, systemPreferences } from 'electron';
+import { S } from '../shared/strings.js';
 import { HostConnection } from './host-connection.js';
 import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
 import { forwardAppearanceToWindow, forwardHostToWindow, registerIpc } from './ipc.js';
@@ -50,7 +51,7 @@ if (!gotLock) {
           // системного Node и под Node самого Electron не загрузится (спека 3.2).
           const nodeBin = await resolveNodeBin(shellEnv.env);
           if (nodeBin === null) {
-            const reason = 'Не найден node в PATH login-shell';
+            const reason = S.connection.reasonNodeNotFound;
             console.error(`[harnas] ${reason}`);
             connection.reportUnavailable(reason);
             return;
@@ -67,7 +68,7 @@ if (!gotLock) {
               stderrFile: path.join(paths.dir, 'host.err'),
             });
           } catch (err) {
-            console.error('[harnas] не удалось запустить хост', err);
+            console.error('[harnas] failed to start host', err);
           }
         })();
       },
@@ -76,7 +77,7 @@ if (!gotLock) {
     try {
       await connection.connect();
     } catch (err) {
-      console.error('[harnas] не удалось подключиться к хосту', err);
+      console.error('[harnas] failed to connect to host', err);
     }
 
     // `ui.json` и `themeSource` — до первого окна: `nativeTheme.shouldUseDarkColors`

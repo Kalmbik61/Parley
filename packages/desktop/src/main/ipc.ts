@@ -1,11 +1,36 @@
 import { METHODS, NOTIFICATIONS } from '@harnas/protocol';
 import type { MethodName, NotificationName } from '@harnas/protocol';
 import type { BrowserWindow, IpcMain, NativeTheme } from 'electron';
+import { encodeIpcError } from '../shared/ipc-error.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
+import { HostError } from './host-connection.js';
 import type { HostConnection } from './host-connection.js';
 import { LayoutTooLargeError } from './layout-store.js';
 import type { LayoutStore } from './layout-store.js';
 import type { UiStore } from './ui-store.js';
+
+/**
+ * Оборачивает обработчик `ipcMain.handle`: сквозные правила плана («Окно»)
+ * требуют, чтобы каждый из них бросал `encodeIpcError` — `HostError`
+ * (протокольная ошибка хоста, дошедшая через `HostConnection.call`) несёт
+ * свой код (`not_found`, `conflict`, …), всё остальное — общий `'failed'`.
+ * Рендерер читает код через `decodeIpcError` и показывает `errorText(code,
+ * action)`; исходное сообщение (может быть русским текстом хоста) — только
+ * `console.warn` у вызывающей стороны, сюда оно попадает как есть.
+ */
+function withIpcError(
+  handler: (event: unknown, ...args: unknown[]) => unknown,
+): (event: unknown, ...args: unknown[]) => Promise<unknown> {
+  return async (event, ...args) => {
+    try {
+      return await handler(event, ...args);
+    } catch (error) {
+      if (error instanceof HostError) throw encodeIpcError({ code: error.code, message: error.message });
+      const message = error instanceof Error ? error.message : String(error);
+      throw encodeIpcError({ code: 'failed', message });
+    }
+  };
+}
 
 const METHOD_NAMES = new Set<string>(Object.keys(METHODS));
 const NOTIFICATION_NAMES = new Set<string>(Object.keys(NOTIFICATIONS));
@@ -90,24 +115,30 @@ export function registerIpc(options: RegisterIpcOptions): void {
     titlebarDoubleClick,
   } = options;
 
-  ipcMain.handle('host:call', async (_event, method: unknown, params: unknown) => {
-    if (typeof method !== 'string' || !isMethodName(method)) {
-      throw new Error(`неизвестный метод: ${String(method)}`);
-    }
-    return connection.call(method, params);
-  });
+  ipcMain.handle(
+    'host:call',
+    withIpcError(async (_event, method: unknown, params: unknown) => {
+      if (typeof method !== 'string' || !isMethodName(method)) {
+        throw new Error(`unknown method: ${String(method)}`);
+      }
+      return connection.call(method, params);
+    }),
+  );
 
   ipcMain.on('host:notify', (_event, method: unknown, params: unknown) => {
     if (typeof method !== 'string' || !isNotificationName(method)) return;
     connection.notify(method, params);
   });
 
-  ipcMain.handle('app:open-external', async (_event, url: unknown) => {
-    if (typeof url !== 'string' || !isAllowedExternalUrl(url)) {
-      throw new Error(`запрещённый адрес: ${String(url)}`);
-    }
-    await openExternal(url);
-  });
+  ipcMain.handle(
+    'app:open-external',
+    withIpcError(async (_event, url: unknown) => {
+      if (typeof url !== 'string' || !isAllowedExternalUrl(url)) {
+        throw new Error(`forbidden URL: ${String(url)}`);
+      }
+      await openExternal(url);
+    }),
+  );
 
   ipcMain.on('app:notify', (_event, note: { title: string; body: string }) => {
     showNotification(note);
@@ -117,71 +148,89 @@ export function registerIpc(options: RegisterIpcOptions): void {
     setBadge(count);
   });
 
-  ipcMain.handle('app:choose-folder', () => chooseFolder());
+  ipcMain.handle('app:choose-folder', withIpcError(() => chooseFolder()));
 
-  ipcMain.handle('app:restart-host', () => connection.restartHost());
+  ipcMain.handle('app:restart-host', withIpcError(() => connection.restartHost()));
 
-  ipcMain.handle('app:load-layout', async (_event, workKey: unknown) => {
-    if (!isValidWorkKey(workKey)) throw new Error(`неверный ключ раскладки: ${String(workKey)}`);
-    return layoutStore.load(workKey);
-  });
+  ipcMain.handle(
+    'app:load-layout',
+    withIpcError(async (_event, workKey: unknown) => {
+      if (!isValidWorkKey(workKey)) throw new Error(`invalid layout key: ${String(workKey)}`);
+      return layoutStore.load(workKey);
+    }),
+  );
 
-  ipcMain.handle('app:save-layout', async (_event, workKey: unknown, layout: unknown) => {
-    if (!isValidWorkKey(workKey)) throw new Error(`неверный ключ раскладки: ${String(workKey)}`);
-    try {
-      await layoutStore.save(workKey, layout);
-    } catch (error) {
-      // Раскладка больше лимита — план требует тихого предупреждения в
-      // консоль main и успешного ответа: рендереру тут делать нечего, а
-      // старый файл на диске уже сохранил сам `LayoutStore.save`.
-      if (error instanceof LayoutTooLargeError) {
-        console.warn(`[harnas] ${error.message}`);
-        return;
+  ipcMain.handle(
+    'app:save-layout',
+    withIpcError(async (_event, workKey: unknown, layout: unknown) => {
+      if (!isValidWorkKey(workKey)) throw new Error(`invalid layout key: ${String(workKey)}`);
+      try {
+        await layoutStore.save(workKey, layout);
+      } catch (error) {
+        // Раскладка больше лимита — план требует тихого предупреждения в
+        // консоль main и успешного ответа: рендереру тут делать нечего, а
+        // старый файл на диске уже сохранил сам `LayoutStore.save`.
+        if (error instanceof LayoutTooLargeError) {
+          console.warn(`[harnas] ${error.message}`);
+          return;
+        }
+        throw error;
       }
-      throw error;
-    }
-  });
+    }),
+  );
 
-  ipcMain.handle('app:remove-layout', async (_event, workKey: unknown) => {
-    if (!isValidWorkKey(workKey)) throw new Error(`неверный ключ раскладки: ${String(workKey)}`);
-    return layoutStore.remove(workKey);
-  });
+  ipcMain.handle(
+    'app:remove-layout',
+    withIpcError(async (_event, workKey: unknown) => {
+      if (!isValidWorkKey(workKey)) throw new Error(`invalid layout key: ${String(workKey)}`);
+      return layoutStore.remove(workKey);
+    }),
+  );
 
-  ipcMain.handle('app:retain-layouts', async (_event, workKeys: unknown) => {
-    // `async`, а не просто throw в обычной функции: подставной `ipcMain` теста
-    // (`ipc.test.ts`), в отличие от настоящего Electron, не оборачивает
-    // синхронный throw в отказ промиса сам — та же причина, что и у
-    // `app:save-ui` выше.
-    if (!Array.isArray(workKeys) || !workKeys.every(isValidWorkKey)) {
-      throw new Error(`неверный список ключей раскладок: ${String(workKeys)}`);
-    }
-    return layoutStore.retain(workKeys);
-  });
+  ipcMain.handle(
+    'app:retain-layouts',
+    withIpcError(async (_event, workKeys: unknown) => {
+      // `async`, а не просто throw в обычной функции: подставной `ipcMain` теста
+      // (`ipc.test.ts`), в отличие от настоящего Electron, не оборачивает
+      // синхронный throw в отказ промиса сам — та же причина, что и у
+      // `app:save-ui` выше.
+      if (!Array.isArray(workKeys) || !workKeys.every(isValidWorkKey)) {
+        throw new Error(`invalid layout key list: ${String(workKeys)}`);
+      }
+      return layoutStore.retain(workKeys);
+    }),
+  );
 
-  ipcMain.handle('app:load-ui', (): Promise<UiFile> => uiStore.load());
+  ipcMain.handle('app:load-ui', withIpcError((): Promise<UiFile> => uiStore.load()));
 
-  ipcMain.handle('app:save-ui', async (_event, patch: unknown) => {
-    // `async`, а не просто `throw` в обычной функции: белый список каналов
-    // проверяют тесты на подставном `ipcMain` (`ipc.test.ts`), а он, в отличие
-    // от настоящего Electron, не оборачивает синхронный throw в отказ промиса
-    // сам — так же устроен уже существующий `app:open-external` выше.
-    // `Array.isArray` отдельно: `typeof [] === 'object'` (раунд исправлений 1,
-    // находка I3/тест 14) — без неё массив проходил бы как патч.
-    if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
-      throw new Error(`неверный патч ui.json: ${String(patch)}`);
-    }
-    return uiStore.save(patch as Partial<Omit<UiFile, 'version'>>);
-  });
+  ipcMain.handle(
+    'app:save-ui',
+    withIpcError(async (_event, patch: unknown) => {
+      // `async`, а не просто `throw` в обычной функции: белый список каналов
+      // проверяют тесты на подставном `ipcMain` (`ipc.test.ts`), а он, в отличие
+      // от настоящего Electron, не оборачивает синхронный throw в отказ промиса
+      // сам — так же устроен уже существующий `app:open-external` выше.
+      // `Array.isArray` отдельно: `typeof [] === 'object'` (раунд исправлений 1,
+      // находка I3/тест 14) — без неё массив проходил бы как патч.
+      if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
+        throw new Error(`invalid ui.json patch: ${String(patch)}`);
+      }
+      return uiStore.save(patch as Partial<Omit<UiFile, 'version'>>);
+    }),
+  );
 
-  ipcMain.handle('app:set-appearance', async (_event, mode: unknown) => {
-    if (!isAppearance(mode)) throw new Error(`неверный режим темы: ${String(mode)}`);
-    // Сначала диск, потом nativeTheme (раунд исправлений 1, находка I4/тест 14):
-    // при отказе записи промис отклоняется и тема в окне не меняется — иначе
-    // окно уже перекрасилось бы, а ui.json остался бы со старым значением, и
-    // на следующем запуске тема «откатилась» бы без действия пользователя.
-    await uiStore.save({ appearance: mode });
-    setAppearance(mode);
-  });
+  ipcMain.handle(
+    'app:set-appearance',
+    withIpcError(async (_event, mode: unknown) => {
+      if (!isAppearance(mode)) throw new Error(`invalid appearance mode: ${String(mode)}`);
+      // Сначала диск, потом nativeTheme (раунд исправлений 1, находка I4/тест 14):
+      // при отказе записи промис отклоняется и тема в окне не меняется — иначе
+      // окно уже перекрасилось бы, а ui.json остался бы со старым значением, и
+      // на следующем запуске тема «откатилась» бы без действия пользователя.
+      await uiStore.save({ appearance: mode });
+      setAppearance(mode);
+    }),
+  );
 
   ipcMain.on('app:titlebar-double-click', () => {
     titlebarDoubleClick();

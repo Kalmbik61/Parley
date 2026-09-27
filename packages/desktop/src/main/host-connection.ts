@@ -10,6 +10,7 @@ import {
   type NotificationName,
 } from '@harnas/protocol';
 import type { HostStatus } from '../shared/bridge.js';
+import { S } from '../shared/strings.js';
 
 interface PendingCall {
   resolve: (value: unknown) => void;
@@ -220,7 +221,7 @@ export class HostConnection {
 
   private handleClose(): void {
     this.socket = null;
-    const closedError = new Error('соединение с хостом закрыто');
+    const closedError = new Error(S.connection.reasonClosed);
     for (const pending of this.pending.values()) pending.reject(closedError);
     this.pending.clear();
 
@@ -245,7 +246,7 @@ export class HostConnection {
   }
 
   async call(method: MethodName, params: unknown): Promise<unknown> {
-    if (!this.socket) throw new Error('нет соединения с хостом');
+    if (!this.socket) throw new Error('no connection to host');
     const id = this.nextId++;
     const promise = new Promise<unknown>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });

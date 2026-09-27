@@ -14,7 +14,7 @@ async function runShell(shell: string, args: string[], timeoutMs: number): Promi
     let out = '';
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
-      reject(new Error(`shell не ответил за ${timeoutMs} мс`));
+      reject(new Error(`shell did not respond within ${timeoutMs}ms`));
     }, timeoutMs);
     child.stdout.on('data', (chunk: Buffer) => {
       out += chunk.toString('utf8');
@@ -26,7 +26,7 @@ async function runShell(shell: string, args: string[], timeoutMs: number): Promi
     child.on('close', (code) => {
       clearTimeout(timer);
       if (code === 0) resolve(out);
-      else reject(new Error(`shell вышел с кодом ${String(code)}`));
+      else reject(new Error(`shell exited with code ${String(code)}`));
     });
   });
 }
@@ -34,7 +34,7 @@ async function runShell(shell: string, args: string[], timeoutMs: number): Promi
 /** Оборачивает любой `run` (в том числе подставной, из теста) внешним таймаутом. */
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`shell не ответил за ${ms} мс`)), ms);
+    const timer = setTimeout(() => reject(new Error(`shell did not respond within ${ms}ms`)), ms);
     promise.then(
       (value) => {
         clearTimeout(timer);
@@ -67,7 +67,7 @@ export async function captureShellEnv(options?: {
     const output = await withTimeout(run(shell, ['-ilc', `printf '\\n${MARKER}\\n'; env -0`], timeoutMs), timeoutMs);
     const markerIndex = output.indexOf(MARKER);
     if (markerIndex === -1) {
-      return { env: { ...process.env }, fromShell: false, warning: 'маркер окружения не найден в выводе shell' };
+      return { env: { ...process.env }, fromShell: false, warning: 'environment marker not found in shell output' };
     }
     const afterMarker = output.slice(markerIndex + MARKER.length);
     const newline = afterMarker.indexOf('\n');
