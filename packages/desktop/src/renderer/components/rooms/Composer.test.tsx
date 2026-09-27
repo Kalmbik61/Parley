@@ -1,6 +1,8 @@
 /**
  * Тест 2 куска 3.6 плана окна: «всем» → `to: []`; выбраны двое → их id;
- * закрытого выбрать нельзя.
+ * закрытого выбрать нельзя. Кусок 1.4 плана «облик Orca»: адресаты —
+ * `ui/checkbox` (кнопка с `role="checkbox"`, а не `input[type="checkbox"]`),
+ * поэтому отмеченность читается через `aria-checked`, а не `.checked`.
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -41,16 +43,16 @@ describe('Composer — тест 2', () => {
     typeAndSend('двоим');
 
     expect(sent[0]?.to.sort()).toEqual(['s-01', 's-02']);
-    expect((screen.getByLabelText('всем') as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByLabelText('всем').getAttribute('aria-checked')).toBe('false');
   });
 
   it('закрытого участника выбрать нельзя', () => {
     render(<Composer members={MEMBERS} onSend={() => {}} />);
 
-    const closedCheckbox = screen.getByLabelText('S03 (закрыта)') as HTMLInputElement;
+    const closedCheckbox = screen.getByLabelText('S03 (закрыта)') as HTMLButtonElement;
     expect(closedCheckbox.disabled).toBe(true);
 
     fireEvent.click(closedCheckbox);
-    expect(closedCheckbox.checked).toBe(false);
+    expect(closedCheckbox.getAttribute('aria-checked')).toBe('false');
   });
 });

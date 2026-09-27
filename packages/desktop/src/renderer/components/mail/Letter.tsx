@@ -1,7 +1,10 @@
 /**
  * Одно письмо ленты «вся почта работы» (спека 5.1, 6.3): шапка — время,
  * отправитель, адресат, вид письма (заметку суффикс не помечает — перенос
- * `kindSuffix` из `tui/src/room-view.ts`); тело — markdown.
+ * `kindSuffix` из `tui/src/room-view.ts`); тело — markdown. Кегли — спека 4.3,
+ * поведение куска 1.4: заголовок письма 12px muted, тело 14px обычным цветом
+ * (было наоборот — старая палитра темы окна красила шапку в полный цвет, а
+ * тело приглушала).
  *
  * `react-markdown` + `remark-gfm`, **без** `rehype-raw` (план куска, файлы):
  * без него `<script>…</script>` в тексте письма попадает в дерево как узел
@@ -40,7 +43,7 @@ function markdownComponents(onOpenExternal: (url: string) => void): Components {
           event.preventDefault();
           if (href !== undefined) onOpenExternal(href);
         }}
-        className="text-[var(--h-blue)] underline"
+        className="text-primary underline"
       >
         {children}
       </a>
@@ -50,7 +53,7 @@ function markdownComponents(onOpenExternal: (url: string) => void): Components {
     // на дочерний `<code>` фенса, у инлайн-кода класса нет).
     code: ({ className, children }) => (
       <code
-        className={`rounded bg-[var(--h-surface)] font-mono text-[0.9em] ${
+        className={`rounded bg-muted font-mono text-[0.9em] ${
           className !== undefined ? 'block overflow-x-auto p-2' : 'px-1'
         }`}
       >
@@ -63,9 +66,9 @@ function markdownComponents(onOpenExternal: (url: string) => void): Components {
 export function Letter({ letter, onOpenExternal }: LetterProps): JSX.Element {
   return (
     <div data-letter-id={letter.id} className="py-2">
-      <div className="flex items-center gap-1 text-sm text-[var(--h-text)]">
+      <div className="flex items-center gap-1 text-xs text-muted-foreground">
         {letter.unread ? (
-          <span aria-label="непрочитано" className="text-[var(--h-blue)]">
+          <span aria-label="непрочитано" className="text-foreground">
             ▤
           </span>
         ) : null}
@@ -74,7 +77,7 @@ export function Letter({ letter, onOpenExternal }: LetterProps): JSX.Element {
           {kindSuffix(letter.kind)}
         </span>
       </div>
-      <div className="mt-1 text-sm text-[var(--h-subtext)]">
+      <div className="mt-1 text-sm text-foreground">
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents(onOpenExternal)}>
           {letter.text}
         </ReactMarkdown>

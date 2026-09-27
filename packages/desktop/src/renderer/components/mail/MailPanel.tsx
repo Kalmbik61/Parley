@@ -82,18 +82,18 @@ export function MailPanel({ entry, providers, models, onOpenExternal }: MailPane
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between gap-2 border-b border-[var(--h-overlay)] px-3 py-2">
+      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
         <div className="min-w-0">
-          <div className="text-sm font-medium text-[var(--h-text)]">
+          <div className="text-sm font-medium text-foreground">
             вся почта · {view.letters.length} {mailWord(view.letters.length)}
           </div>
-          <div className="truncate text-xs text-[var(--h-muted)]">{view.participants.join(' · ')}</div>
+          <div className="truncate text-xs text-muted-foreground">{view.participants.join(' · ')}</div>
         </div>
         {below > 0 ? (
           <button
             type="button"
             onClick={scrollToBottom}
-            className="shrink-0 rounded bg-[var(--h-surface)] px-2 py-1 text-xs text-[var(--h-text)]"
+            className="shrink-0 rounded bg-muted px-2 py-1 text-xs text-foreground"
           >
             ↓{below}
           </button>

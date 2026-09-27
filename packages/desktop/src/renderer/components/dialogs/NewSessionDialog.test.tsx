@@ -2,6 +2,8 @@
  * Тест 1 куска 4.3 плана worktree: флажок «в своём worktree» неактивен для
  * не-git проекта и активен для git-проекта, даже с отсоединённой головой
  * (`branches` для этого не годится — см. комментарий в самом компоненте).
+ * Кусок 1.4 плана «облик Orca»: флажок — `ui/switch` (кнопка с `role="switch"`,
+ * не `input[type="checkbox"]`), поэтому проверка ищет `button`, а не `input`.
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -28,9 +30,9 @@ describe('NewSessionDialog — тест 1: флажок «в своём worktree
       />,
     );
 
-    const checkbox = await screen.findByText('в своём worktree');
-    const input = checkbox.closest('label')?.querySelector('input[type="checkbox"]') as HTMLInputElement;
-    expect(input.disabled).toBe(true);
+    const row = await screen.findByText('в своём worktree');
+    const toggle = row.closest('label')?.querySelector('button[role="switch"]') as HTMLButtonElement;
+    expect(toggle.disabled).toBe(true);
   });
 
   it('git-проект (даже с отсоединённой головой — worktrees.available смотрит не на ветку) — флажок активен', async () => {
@@ -49,8 +51,8 @@ describe('NewSessionDialog — тест 1: флажок «в своём worktree
       />,
     );
 
-    const checkbox = await screen.findByText('в своём worktree');
-    const input = checkbox.closest('label')?.querySelector('input[type="checkbox"]') as HTMLInputElement;
-    expect(input.disabled).toBe(false);
+    const row = await screen.findByText('в своём worktree');
+    const toggle = row.closest('label')?.querySelector('button[role="switch"]') as HTMLButtonElement;
+    expect(toggle.disabled).toBe(false);
   });
 });

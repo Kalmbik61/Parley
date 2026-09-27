@@ -68,7 +68,7 @@ export function CommandPalette({ open, commands, onOpenChange }: CommandPaletteP
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/50" />
-        <Dialog.Content className="fixed left-1/2 top-[20%] w-[32rem] -translate-x-1/2 rounded-lg bg-[var(--h-base)] p-2 text-[var(--h-text)] shadow-lg">
+        <Dialog.Content className="fixed left-1/2 top-[20%] w-[32rem] -translate-x-1/2 rounded-lg bg-card p-2 text-foreground shadow-lg">
           <Dialog.Title className="px-2 py-1 text-sm font-medium">Палитра команд</Dialog.Title>
           <input
             autoFocus
@@ -90,25 +90,25 @@ export function CommandPalette({ open, commands, onOpenChange }: CommandPaletteP
               }
             }}
             placeholder="Работа, сессия или действие…"
-            className="w-full rounded bg-[var(--h-surface)] px-2 py-1.5 text-sm text-[var(--h-text)] outline-none"
+            className="w-full rounded bg-muted px-2 py-1.5 text-sm text-foreground outline-none"
           />
           <ul className="mt-2 max-h-80 overflow-y-auto">
             {results.length === 0 ? (
-              <li className="px-2 py-2 text-sm text-[var(--h-muted)]">Ничего не найдено</li>
+              <li className="px-2 py-2 text-sm text-muted-foreground">Ничего не найдено</li>
             ) : (
               results.map((command, index) => (
                 <li key={command.id}>
                   <button
                     type="button"
                     className={`flex w-full cursor-default items-center justify-between rounded px-2 py-1 text-left text-sm ${
-                      index === activeIndex ? 'bg-[var(--h-surface)]' : ''
+                      index === activeIndex ? 'bg-accent text-accent-foreground' : ''
                     }`}
                     onMouseEnter={() => setActiveIndex(index)}
                     onClick={() => runAt(index)}
                   >
                     <span>{command.title}</span>
                     {command.hint !== undefined ? (
-                      <span className="text-xs text-[var(--h-muted)]">{command.hint}</span>
+                      <span className="text-xs text-muted-foreground">{command.hint}</span>
                     ) : null}
                   </button>
                 </li>

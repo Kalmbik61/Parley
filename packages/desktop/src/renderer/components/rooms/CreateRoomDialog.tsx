@@ -5,11 +5,19 @@
  * убирать некуда, комната без неё не тот пункт меню, который нажали).
  * Создатель всегда `human` — комнату через окно заводит человек, а не агент
  * (спека 6.2 — `create_room` для агентов остаётся MCP-инструментом).
+ *
+ * Кусок 1.4 плана «облик Orca»: примитивы `ui/dialog`, `ui/input`,
+ * `ui/checkbox`, `ui/button` вместо голого Radix и токенов старой палитры —
+ * список остальных участников многовыборный (не вкл/выкл одной настройки),
+ * поэтому флажок, а не `ui/switch` (как у одиночных булевых полей диалогов).
  */
 
 import { useEffect, useState } from 'react';
-import * as Dialog from '@radix-ui/react-dialog';
 import type { HarnasBridge } from '../../../shared/bridge.js';
+import { Button } from '../../ui/button.js';
+import { Checkbox } from '../../ui/checkbox.js';
+import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from '../../ui/dialog.js';
+import { Input } from '../../ui/input.js';
 
 export interface RoomCandidate {
   id: string;
@@ -79,52 +87,47 @@ export function CreateRoomDialog({
   };
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/50" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 w-96 -translate-x-1/2 -translate-y-1/2 rounded-lg bg-[var(--h-base)] p-4 text-[var(--h-text)] shadow-lg">
-          <Dialog.Title className="text-sm font-medium">Создать комнату с {requiredMember.label}</Dialog.Title>
-          <div className="mt-3 flex flex-col gap-3 text-sm">
-            <label className="flex flex-col gap-1">
-              Название
-              <input
-                className="rounded border border-[var(--h-overlay)] bg-transparent px-2 py-1"
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-              />
-            </label>
-            {candidates.length > 0 ? (
-              <div className="flex flex-col gap-1">
-                <span className="text-xs text-[var(--h-muted)]">Ещё участники</span>
-                <div className="flex flex-wrap gap-3 text-xs">
-                  {candidates.map((candidate) => (
-                    <label key={candidate.id} className={`flex items-center gap-1 ${candidate.closed ? 'opacity-50' : ''}`}>
-                      <input
-                        type="checkbox"
-                        checked={selected.has(candidate.id)}
-                        disabled={candidate.closed}
-                        onChange={() => toggle(candidate)}
-                      />
-                      {candidate.label}
-                    </label>
-                  ))}
-                </div>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent aria-describedby={undefined} className="w-96 max-w-96">
+        <DialogTitle>Создать комнату с {requiredMember.label}</DialogTitle>
+        <div className="flex flex-col gap-3 text-sm">
+          <label className="flex flex-col gap-1">
+            Название
+            <Input value={title} onChange={(event) => setTitle(event.target.value)} />
+          </label>
+          {candidates.length > 0 ? (
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">Ещё участники</span>
+              <div className="flex flex-wrap gap-3 text-xs">
+                {candidates.map((candidate) => (
+                  <label
+                    key={candidate.id}
+                    className={`flex items-center gap-1.5 ${candidate.closed ? 'opacity-50' : ''}`}
+                  >
+                    <Checkbox
+                      checked={selected.has(candidate.id)}
+                      disabled={candidate.closed}
+                      onCheckedChange={() => toggle(candidate)}
+                    />
+                    {candidate.label}
+                  </label>
+                ))}
               </div>
-            ) : null}
-            {error !== null ? <p className="text-[var(--h-red)]">{error}</p> : null}
-          </div>
-          <div className="mt-4 flex justify-end gap-2">
-            <Dialog.Close asChild>
-              <button type="button" className="rounded px-3 py-1 text-[var(--h-subtext)]">
-                Отмена
-              </button>
-            </Dialog.Close>
-            <button type="button" className="rounded bg-[var(--h-blue)] px-3 py-1 text-[var(--h-base)]" onClick={() => void submit()}>
-              Создать
-            </button>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+            </div>
+          ) : null}
+          {error !== null ? <p className="text-destructive">{error}</p> : null}
+        </div>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button type="button" variant="ghost">
+              Отмена
+            </Button>
+          </DialogClose>
+          <Button type="button" onClick={() => void submit()}>
+            Создать
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

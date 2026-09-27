@@ -4,6 +4,8 @@
  * почты работы» (`MailPanel.tsx`) счёта писем тут нет — состав участников
  * комнаты фиксирован (`Room.creator`/`Room.members`), а не собирается по
  * переписке.
+ *
+ * Кусок 1.4 плана «облик Orca»: токены вместо старой палитры темы окна.
  */
 
 export interface RoomHeaderProps {
@@ -13,9 +15,9 @@ export interface RoomHeaderProps {
 
 export function RoomHeader({ title, participants }: RoomHeaderProps): JSX.Element {
   return (
-    <div className="border-b border-[var(--h-overlay)] px-3 py-2">
-      <div className="truncate text-sm font-medium text-[var(--h-text)]">{title}</div>
-      <div className="truncate text-xs text-[var(--h-muted)]">{participants.join(' · ')}</div>
+    <div className="border-b border-border px-3 py-2">
+      <div className="truncate text-sm font-medium text-foreground">{title}</div>
+      <div className="truncate text-xs text-muted-foreground">{participants.join(' · ')}</div>
     </div>
   );
 }

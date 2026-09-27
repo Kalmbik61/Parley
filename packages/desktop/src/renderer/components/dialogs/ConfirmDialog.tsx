@@ -1,6 +1,15 @@
-/** Общее подтверждение (Radix Dialog) — «Остановить»/«Удалить» сессию и т. п. */
+/**
+ * Общее подтверждение (Radix Dialog) — «Остановить»/«Удалить» сессию и т. п.
+ * Кусок 1.4 плана «облик Orca»: примитив `ui/dialog`, кнопка действия —
+ * `variant="destructive"` (спека 4.5, поведение «Диалоги»: «удаление —
+ * destructive») — все нынешние вызовы confirmLabel'ят необратимое или
+ * прерывающее действие (остановить/закрыть/удалить/отбросить), отдельного
+ * флажка «это не удаление» пока никто не просил (простота вместо
+ * конфигурируемости, которую не заказывали).
+ */
 
-import * as Dialog from '@radix-ui/react-dialog';
+import { Button } from '../../ui/button.js';
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../ui/dialog.js';
 
 export interface ConfirmDialogProps {
   open: boolean;
@@ -19,34 +28,37 @@ export function ConfirmDialog({
   onConfirm,
   onOpenChange,
 }: ConfirmDialogProps): JSX.Element {
+  // `aria-describedby={undefined}` без описания — приём из `ui/ui.test.tsx`,
+  // чтобы Radix не предупреждал в консоли про отсутствующее описание. С
+  // реальным `DialogDescription` атрибут не задаём вовсе (не то же самое, что
+  // `undefined` явно — см. `exactOptionalPropertyTypes` ниже по коду в других
+  // файлах): Radix сам связывает `aria-describedby` со своим id через контекст.
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/50" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg bg-[var(--h-base)] p-4 text-[var(--h-text)] shadow-lg">
-          <Dialog.Title className="text-sm font-medium">{title}</Dialog.Title>
-          {description !== undefined ? (
-            <Dialog.Description className="mt-1 text-xs text-[var(--h-subtext)]">{description}</Dialog.Description>
-          ) : null}
-          <div className="mt-4 flex justify-end gap-2">
-            <Dialog.Close asChild>
-              <button type="button" className="rounded px-3 py-1 text-sm text-[var(--h-subtext)]">
-                Отмена
-              </button>
-            </Dialog.Close>
-            <button
-              type="button"
-              className="rounded bg-[var(--h-red)] px-3 py-1 text-sm text-[var(--h-base)]"
-              onClick={() => {
-                onConfirm();
-                onOpenChange(false);
-              }}
-            >
-              {confirmLabel}
-            </button>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        {...(description === undefined ? { 'aria-describedby': undefined } : null)}
+        className="w-80 max-w-80"
+      >
+        <DialogTitle>{title}</DialogTitle>
+        {description !== undefined ? <DialogDescription>{description}</DialogDescription> : null}
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button type="button" variant="ghost">
+              Отмена
+            </Button>
+          </DialogClose>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={() => {
+              onConfirm();
+              onOpenChange(false);
+            }}
+          >
+            {confirmLabel}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

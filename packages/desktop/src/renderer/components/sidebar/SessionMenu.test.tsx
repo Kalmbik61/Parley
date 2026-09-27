@@ -1,5 +1,10 @@
 /**
  * Тест 4 куска 3.6 плана окна: «Закрыть…» без подтверждения ничего не шлёт.
+ * Кусок 1.4 плана «облик Orca»: `ConfirmDialog` теперь на `ui/dialog`, у
+ * которого есть свой скрытый для глаза, но не для дерева доступности крестик
+ * закрытия с тем же именем «Закрыть» — кнопка подтверждения находится первой
+ * по порядку в DOM (тот же приём, что и `getAllByText('Отбросить')[1]` в
+ * `ChangesPanel.test.tsx`, только тут искомая кнопка идёт до дубля, а не после).
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -47,7 +52,7 @@ describe('SessionMenu — тест 4', () => {
 
     fireEvent.contextMenu(screen.getByText('строка сессии'));
     fireEvent.click(screen.getByText('Закрыть…'));
-    fireEvent.click(screen.getByText('Закрыть'));
+    fireEvent.click(screen.getAllByText('Закрыть')[0] as HTMLElement);
 
     expect(closed).toBe(true);
   });

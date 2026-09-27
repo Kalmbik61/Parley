@@ -17,12 +17,12 @@ export interface DiffViewProps {
 function FileDiff({ file }: { file: GitDiffFile }): JSX.Element {
   const path = filePathOf(file);
   return (
-    <div className="rounded border border-[var(--h-overlay)]">
-      <div className="border-b border-[var(--h-overlay)] px-2 py-1 font-mono text-xs text-[var(--h-subtext)]">
+    <div className="rounded border border-border">
+      <div className="border-b border-border px-2 py-1 font-mono text-xs text-muted-foreground">
         {path}
       </div>
       {file.isBinary === true ? (
-        <p className="px-2 py-2 text-xs text-[var(--h-muted)]">двоичный файл</p>
+        <p className="px-2 py-2 text-xs text-muted-foreground">двоичный файл</p>
       ) : (
         <Diff viewType="unified" diffType={file.type} hunks={file.hunks}>
           {(hunks) => hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />)}
@@ -36,7 +36,7 @@ export function DiffView({ patch }: DiffViewProps): JSX.Element {
   const files = parsePatch(patch);
 
   if (files.length === 0) {
-    return <p className="px-2 py-2 text-sm text-[var(--h-muted)]">Изменений нет</p>;
+    return <p className="px-2 py-2 text-sm text-muted-foreground">Изменений нет</p>;
   }
 
   return (

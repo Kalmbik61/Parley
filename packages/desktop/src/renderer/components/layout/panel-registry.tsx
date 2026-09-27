@@ -102,7 +102,7 @@ function MailPanelContent({ params }: IDockviewPanelProps<PanelSpec>): JSX.Eleme
 
   const entry = entries.find((item) => workKey(item.projectPath, item.map.work.id) === params.workKey);
   if (entry === undefined) {
-    return <div className="flex h-full items-center justify-center text-sm text-[var(--h-muted)]">Работа закрыта</div>;
+    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Работа закрыта</div>;
   }
 
   // `LiveMetrics.model` — единственный источник имени модели у рендерера
@@ -143,7 +143,7 @@ function RoomPanelContent({ params }: IDockviewPanelProps<PanelSpec>): JSX.Eleme
 
   const entry = entries.find((item) => workKey(item.projectPath, item.map.work.id) === params.workKey);
   if (entry === undefined || params.roomId === undefined) {
-    return <div className="flex h-full items-center justify-center text-sm text-[var(--h-muted)]">Работа закрыта</div>;
+    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Работа закрыта</div>;
   }
 
   const models: Record<string, string | null> = {};
@@ -181,7 +181,7 @@ function ChangesPanelContent({ params }: IDockviewPanelProps<PanelSpec>): JSX.El
   const session = entry?.map.sessions.find((item) => item.id === ref.sessionId);
 
   if (session === undefined || session.worktree === null) {
-    return <div className="flex h-full items-center justify-center text-sm text-[var(--h-muted)]">У сессии нет своего worktree</div>;
+    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">У сессии нет своего worktree</div>;
   }
 
   return <ChangesPanel bridge={host.bridge} sessionRef={ref} base={session.worktree.base} />;

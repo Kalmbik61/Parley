@@ -1,8 +1,15 @@
-/** Новая работа: каталог, заголовок, цель → `works.create` (кусок 1.10 плана окна). */
+/**
+ * Новая работа: каталог, заголовок, цель → `works.create` (кусок 1.10 плана
+ * окна). Кусок 1.4 плана «облик Orca» — примитивы `ui/dialog`, `ui/input`,
+ * `ui/textarea`, `ui/button` вместо голого Radix и токенов старой палитры.
+ */
 
 import { useState } from 'react';
-import * as Dialog from '@radix-ui/react-dialog';
 import type { HarnasBridge } from '../../../shared/bridge.js';
+import { Button } from '../../ui/button.js';
+import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from '../../ui/dialog.js';
+import { Input } from '../../ui/input.js';
+import { Textarea } from '../../ui/textarea.js';
 
 export interface NewWorkDialogProps {
   open: boolean;
@@ -39,49 +46,34 @@ export function NewWorkDialog({ open, bridge, onOpenChange }: NewWorkDialogProps
   };
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/50" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 w-96 -translate-x-1/2 -translate-y-1/2 rounded-lg bg-[var(--h-base)] p-4 text-[var(--h-text)] shadow-lg">
-          <Dialog.Title className="text-sm font-medium">Новая работа</Dialog.Title>
-          <div className="mt-3 flex flex-col gap-3 text-sm">
-            <button
-              type="button"
-              onClick={() => void chooseFolder()}
-              className="truncate rounded border border-[var(--h-overlay)] px-2 py-1 text-left"
-            >
-              {projectPath ?? 'Выбрать каталог…'}
-            </button>
-            <label className="flex flex-col gap-1">
-              Заголовок
-              <input
-                className="rounded border border-[var(--h-overlay)] bg-transparent px-2 py-1"
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              Цель
-              <textarea
-                className="rounded border border-[var(--h-overlay)] bg-transparent px-2 py-1"
-                value={goal}
-                onChange={(event) => setGoal(event.target.value)}
-              />
-            </label>
-            {error !== null ? <p className="text-[var(--h-red)]">{error}</p> : null}
-          </div>
-          <div className="mt-4 flex justify-end gap-2">
-            <Dialog.Close asChild>
-              <button type="button" className="rounded px-3 py-1 text-[var(--h-subtext)]">
-                Отмена
-              </button>
-            </Dialog.Close>
-            <button type="button" className="rounded bg-[var(--h-blue)] px-3 py-1 text-[var(--h-base)]" onClick={() => void submit()}>
-              Создать
-            </button>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent aria-describedby={undefined} className="w-96 max-w-96">
+        <DialogTitle>Новая работа</DialogTitle>
+        <div className="flex flex-col gap-3 text-sm">
+          <Button type="button" variant="outline" className="justify-start truncate font-normal" onClick={() => void chooseFolder()}>
+            {projectPath ?? 'Выбрать каталог…'}
+          </Button>
+          <label className="flex flex-col gap-1">
+            Заголовок
+            <Input value={title} onChange={(event) => setTitle(event.target.value)} />
+          </label>
+          <label className="flex flex-col gap-1">
+            Цель
+            <Textarea value={goal} onChange={(event) => setGoal(event.target.value)} />
+          </label>
+          {error !== null ? <p className="text-destructive">{error}</p> : null}
+        </div>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button type="button" variant="ghost">
+              Отмена
+            </Button>
+          </DialogClose>
+          <Button type="button" onClick={() => void submit()}>
+            Создать
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -1,7 +1,9 @@
 /**
  * Диалог shadcn/ui на `@radix-ui/react-dialog`. Тень — таблица 4.4 (отдельная
  * от «стекла» меню: сплошная подложка `--card`, диалог не должен просвечивать
- * содержимое под затемнением).
+ * содержимое под затемнением). Заголовок — 14px 600 (кусок 1.4, поведение
+ * «Диалоги»): все диалоги окна на этом примитиве, менять кегль в каждом месте
+ * использования не нужно.
  */
 
 import * as React from 'react';
@@ -83,7 +85,7 @@ export const DialogTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn('text-lg font-semibold leading-none tracking-tight', className)}
+    className={cn('text-sm font-semibold leading-none tracking-tight', className)}
     {...props}
   />
 ));

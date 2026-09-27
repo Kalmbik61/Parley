@@ -1,11 +1,10 @@
 /**
- * Раунд исправлений 1 куска 1.3, находка B№3 (линза B, живой рендер):
- * `bg-[var(--h-base)]` на корневом `<div>` заменили на `bg-background`,
- * `text-[var(--h-text)]` рядом — забыли (спека 4.9: `--h-*` уходит вместе со
- * старой палитрой). Сейчас у остатка нет видимого эффекта (все реальные
- * текстовые узлы красят себя сами явным классом), но это прямой остаток
- * каталожной темы Catppuccin, который течёт вниз по DOM и расходится с новым
- * фоном при обычной смене темы — закрываем тестом на сам класс.
+ * Раунд исправлений 1 куска 1.3, находка B№3 (линза B, живой рендер): фон
+ * старой палитры темы окна на корневом `<div>` заменили на `bg-background`,
+ * пару `text-foreground` рядом — забыли (спека 4.9: старая палитра уходит
+ * целиком). С куска 1.4 старой палитры в кодовой базе больше нет вовсе (её
+ * файлы удалены) — тест переживает это как общую проверку: на корневом
+ * `<div>` нет произвольного `var(...)`, только именованные токены.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -53,11 +52,11 @@ afterEach(() => {
 });
 
 describe('App — корневая обёртка окна (раунд исправлений 1, находка B№3)', () => {
-  it('text-foreground рядом с bg-background, без остатка --h-text', () => {
+  it('text-foreground рядом с bg-background, без произвольного var(--…) старой палитры', () => {
     const { container } = render(<App />);
     const root = container.querySelector('.bg-background');
     expect(root).not.toBeNull();
     expect(root?.className).toContain('text-foreground');
-    expect(root?.className).not.toContain('--h-text');
+    expect(root?.className ?? '').not.toMatch(/var\(--/);
   });
 });

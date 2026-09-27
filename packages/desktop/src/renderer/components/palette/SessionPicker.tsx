@@ -41,17 +41,17 @@ export function SessionPicker({ open, candidates, onSelect, onOpenChange }: Sess
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/50" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg bg-[var(--h-base)] p-2 text-[var(--h-text)] shadow-lg">
+        <Dialog.Content className="fixed left-1/2 top-1/2 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg bg-card p-2 text-foreground shadow-lg">
           <Dialog.Title className="px-2 py-1 text-sm font-medium">Сессия в новую панель</Dialog.Title>
           {candidates.length === 0 ? (
-            <p className="px-2 py-2 text-sm text-[var(--h-muted)]">У этой работы нет сессий без панели</p>
+            <p className="px-2 py-2 text-sm text-muted-foreground">У этой работы нет сессий без панели</p>
           ) : (
             <ul className="flex flex-col">
               {candidates.map((candidate) => (
                 <li key={candidate.ref.sessionId}>
                   <button
                     type="button"
-                    className="w-full cursor-default rounded px-2 py-1 text-left text-sm text-[var(--h-text)] hover:bg-[var(--h-surface)]"
+                    className="w-full cursor-default rounded px-2 py-1 text-left text-sm text-foreground hover:bg-accent hover:text-accent-foreground"
                     onClick={() => onSelect(candidate.ref)}
                   >
                     {candidate.label}

@@ -16,7 +16,7 @@ import { useActivityStore } from './store/activity.js';
 import { useNoticesStore } from './store/notices.js';
 import { useUiStore } from './store/ui.js';
 import { orderedWorks, useWorksStore } from './store/works.js';
-import { applyTheme } from './theme/apply-theme.js';
+import { Toaster } from './ui/sonner.js';
 
 /**
  * Запасные `fontFamily`/`fontSize` панели терминала до первого ответа
@@ -36,13 +36,11 @@ const DEFAULT_FONT_SIZE = 14;
 export function App(): JSX.Element {
   const bridge = getHostClient();
   const [status, setStatus] = useState<HostStatus>({ state: 'connecting' });
-  // `applyTheme` остаётся ради палитры TUI (`config.theme`, раздел 4.9 спеки —
-  // окно её не показывает и не читает для своего облика, но старые
-  // потребители `--h-*` вроде `SettingsDialog.tsx` пока на ней), а сама
-  // конфигурация хранится ещё и здесь — панели терминала нужны живые
+  // Конфигурация хранится здесь ради терминала — панелям нужны живые
   // `fontFamily`/`fontSize` как значения, а не как CSS-переменные: xterm
-  // красит канвой. Тему терминала (тёмная/светлая) панели берут из
-  // `useUiStore` напрямую (кусок 1.3 плана окна, спека 4.7), не отсюда.
+  // красит канвой. Тему окна (тёмная/светлая) панели берут из `useUiStore`
+  // напрямую (кусок 1.3 плана окна, спека 4.7); ключ `config.theme` — это
+  // палитра TUI, окно её с куска 1.4 не читает и не показывает (спека 4.9).
   const [config, setConfig] = useState<HarnasConfig | null>(null);
 
   const workspaceRef = useRef<WorkspaceHandle>(null);
@@ -128,12 +126,9 @@ export function App(): JSX.Element {
 
     bridge
       .call('settings.get', {})
-      .then((result) => {
-        setConfig(result.config);
-        applyTheme(result.config.theme);
-      })
+      .then((result) => setConfig(result.config))
       .catch(() => {
-        // Без темы окно остаётся на дефолтной палитре — не повод падать.
+        // Без конфигурации терминал остаётся на запасных fontFamily/fontSize — не повод падать.
       });
 
     return () => {
@@ -213,11 +208,9 @@ export function App(): JSX.Element {
         open={settingsOpen}
         bridge={bridge}
         onOpenChange={(open) => (open ? openSettingsDialog() : closeSettingsDialog())}
-        onConfigChange={(next) => {
-          setConfig(next);
-          applyTheme(next.theme);
-        }}
+        onConfigChange={setConfig}
       />
+      <Toaster />
     </div>
   );
 }

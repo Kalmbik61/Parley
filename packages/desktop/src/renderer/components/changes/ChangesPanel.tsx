@@ -133,7 +133,7 @@ export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): J
 
   if (diff === null) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-[var(--h-muted)]">
+      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
         {loadError ?? 'Загрузка…'}
       </div>
     );
@@ -143,12 +143,12 @@ export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): J
 
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto p-3 text-sm">
-      <div className="flex flex-wrap gap-2 text-xs text-[var(--h-subtext)]">
+      <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
         {diff.files.length === 0 ? (
-          <span className="text-[var(--h-muted)]">Файлов нет</span>
+          <span className="text-muted-foreground">Файлов нет</span>
         ) : (
           diff.files.map((file) => (
-            <span key={file.path} className="rounded bg-[var(--h-surface)] px-2 py-0.5">
+            <span key={file.path} className="rounded bg-muted px-2 py-0.5">
               {STATUS_LABEL[file.status] ?? file.status} {file.path}
             </span>
           ))
@@ -159,14 +159,14 @@ export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): J
         {diff.uncommitted ? (
           <>
             <input
-              className="rounded border border-[var(--h-overlay)] bg-transparent px-2 py-1 text-xs"
+              className="rounded border border-input bg-transparent px-2 py-1 text-xs"
               placeholder="сообщение коммита"
               value={commitMessage}
               onChange={(event) => setCommitMessage(event.target.value)}
             />
             <button
               type="button"
-              className="rounded bg-[var(--h-blue)] px-3 py-1 text-xs text-[var(--h-base)]"
+              className="rounded bg-primary px-3 py-1 text-xs text-primary-foreground"
               onClick={() => void commit()}
             >
               Закоммитить всё
@@ -175,7 +175,7 @@ export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): J
         ) : null}
         <button
           type="button"
-          className="rounded bg-[var(--h-green)] px-3 py-1 text-xs text-[var(--h-base)] disabled:opacity-50"
+          className="rounded border border-status-success-border bg-status-success-background px-3 py-1 text-xs text-status-success disabled:opacity-50"
           disabled={disabledReason !== null}
           title={disabledReason ?? undefined}
           onClick={() => void merge()}
@@ -184,25 +184,25 @@ export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): J
         </button>
         <button
           type="button"
-          className="rounded bg-[var(--h-red)] px-3 py-1 text-xs text-[var(--h-base)]"
+          className="rounded bg-destructive px-3 py-1 text-xs text-destructive-foreground"
           onClick={() => setFirstConfirmOpen(true)}
         >
           Отбросить
         </button>
       </div>
 
-      {actionError !== null ? <p className="text-xs text-[var(--h-red)]">{actionError}</p> : null}
-      {loadError !== null ? <p className="text-xs text-[var(--h-red)]">{loadError}</p> : null}
+      {actionError !== null ? <p className="text-xs text-destructive">{actionError}</p> : null}
+      {loadError !== null ? <p className="text-xs text-destructive">{loadError}</p> : null}
 
       {conflictFiles !== null ? (
-        <div className="rounded border border-[var(--h-yellow)] p-2 text-xs">
+        <div className="rounded border border-status-warning-border p-2 text-xs">
           <p className="mb-1">Конфликт: {conflictFiles.join(', ')}</p>
           {sentToAgent ? (
-            <p className="text-[var(--h-muted)]">Письмо отправлено</p>
+            <p className="text-muted-foreground">Письмо отправлено</p>
           ) : (
             <button
               type="button"
-              className="rounded bg-[var(--h-yellow)] px-3 py-1 text-[var(--h-base)]"
+              className="rounded border border-status-warning-border bg-status-warning-background px-3 py-1 text-status-warning"
               onClick={assignToAgent}
             >
               Поручить агенту

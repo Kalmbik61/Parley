@@ -45,7 +45,7 @@ export function RoomPanel({ entry, roomId, providers, models, bridge, onOpenExte
   }, [view?.letters.length]);
 
   if (view === null) {
-    return <div className="flex h-full items-center justify-center text-sm text-[var(--h-muted)]">Комната не найдена</div>;
+    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Комната не найдена</div>;
   }
 
   const members: ComposerMember[] = view.memberIds.map((id) => ({
