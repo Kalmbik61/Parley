@@ -105,3 +105,39 @@ describe('pty.send', () => {
     }>();
   });
 });
+
+describe('ревью изменений (кусок 8.1)', () => {
+  const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-01' };
+
+  it('worktrees.diff принимает необязательный patch', () => {
+    expect(METHODS['worktrees.diff'].safeParse({ ref }).success).toBe(true);
+    expect(METHODS['worktrees.diff'].safeParse({ ref, patch: false }).success).toBe(true);
+    expect(METHODS['worktrees.diff'].safeParse({ ref, patch: 'нет' }).success).toBe(false);
+  });
+
+  it('worktrees.mergeCheck и changes.project — ref, у changes.project необязательный patch', () => {
+    expect(METHODS['worktrees.mergeCheck'].safeParse({ ref }).success).toBe(true);
+    expect(METHODS['worktrees.mergeCheck'].safeParse({}).success).toBe(false);
+    expect(METHODS['changes.project'].safeParse({ ref }).success).toBe(true);
+    expect(METHODS['changes.project'].safeParse({ ref, patch: false }).success).toBe(true);
+  });
+
+  it('changes.commitProject: сообщение 1–10 000 символов', () => {
+    const parse = (message: string) => METHODS['changes.commitProject'].safeParse({ ref, message });
+    expect(parse('m').success).toBe(true);
+    expect(parse('я'.repeat(10_000)).success).toBe(true);
+    expect(parse('').success).toBe(false);
+    expect(parse('я'.repeat(10_001)).success).toBe(false);
+  });
+
+  it('результаты: MergeCheck, ProjectChanges, { commit }, WorktreeDiff с новыми полями', () => {
+    expectTypeOf<Result<'worktrees.mergeCheck'>>().toEqualTypeOf<
+      { status: 'clean' } | { status: 'conflicts'; files: string[] } | { status: 'unsupported' }
+    >();
+    expectTypeOf<Result<'changes.project'>>().toHaveProperty('branch');
+    expectTypeOf<Result<'changes.project'>['branch']>().toEqualTypeOf<string | null>();
+    expectTypeOf<Result<'changes.commitProject'>>().toEqualTypeOf<{ commit: string }>();
+    expectTypeOf<Result<'worktrees.diff'>['stats']>().toEqualTypeOf<{ additions: number; deletions: number }>();
+    expectTypeOf<Result<'worktrees.diff'>['uncommittedPaths']>().toEqualTypeOf<string[]>();
+  });
+});
