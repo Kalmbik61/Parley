@@ -10,6 +10,7 @@ import {
   createWork,
   createWorktree,
   GitStateError,
+  InvalidRevisionError,
   NothingToCommitError,
   plannedWorktree,
   readMap,
@@ -290,6 +291,9 @@ describe('gitFailure (тест 13)', () => {
 
   it('NothingToCommitError — conflict; прочее — internal без data', () => {
     expect(gitFailure(new NothingToCommitError('пусто'))).toMatchObject({ code: 'conflict' });
+    const revision = gitFailure(new InvalidRevisionError('не имя ревизии: "-c"'));
+    expect(revision).toMatchObject({ code: 'bad_request' });
+    expect(revision.data).toBeUndefined();
     const other = gitFailure(new Error('сбой'));
     expect(other).toMatchObject({ code: 'internal', message: 'сбой' });
     expect(other.data).toBeUndefined();

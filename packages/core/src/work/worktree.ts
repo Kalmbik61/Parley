@@ -109,6 +109,14 @@ const MAX_BUFFER = 256 * 1024 * 1024;
 /** Каталог состояния харнесса в папке проекта (карта, журналы, письма) — не изменения проекта. */
 const HARNAS_PATHSPEC = ['--', '.', ':(exclude).harnas'];
 
+/**
+ * В worktree своего `.harnas/` по спеке нет, но агент с cwd в worktree может его
+ * завести — это не работа ветки. Глоб на любой глубине: префикс проекта-подкаталога
+ * не нужен, и `add` с таким исключением не выходит с кодом 1 при `.harnas/` в
+ * `.gitignore` (проба на git 2.53) — в отличие от `:(exclude).harnas`.
+ */
+const WORKTREE_PATHSPEC = ['--', '.', ':(exclude,glob)**/.harnas/**'];
+
 type NumstatEntry = { path: string; oldPath: string | null; additions: number | null; deletions: number | null };
 type NameStatusEntry = { path: string; oldPath: string | null; status: DiffFile['status'] };
 
@@ -219,13 +227,11 @@ const OBJECT_ID = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 
 /**
  * Код и stdout `git merge-tree --write-tree --name-only --no-messages -z`: 0 и id дерева первым полем — clean;
- * 1 и id дерева — conflicts (поля после id, без пустых и дублей); 129 — unsupported. Прочее, в том числе
- * код 1 без id дерева (ветки нет), — null: mergeCheck бросает ошибку.
+ * 1 и id дерева — conflicts (поля после id, без пустых и дублей). Прочее, в том числе код 1 без id дерева
+ * (ветки нет) и 129, — null: mergeCheck бросает ошибку. 129 — любой сбой разбора параметров, не только
+ * «git старше 2.38»: старый git mergeCheck распознаёт пробой версии до вызова.
  */
 export function parseMergeTree(code: number, stdout: string): MergeCheck | null {
-  // 129 — разбор параметров: git старше 2.38 не знает --write-tree. Текст
-  // «использование: …» не читаем — у человека git локализован.
-  if (code === 129) return { status: 'unsupported' };
   const [tree = '', ...rest] = zFields(stdout);
   if (!OBJECT_ID.test(tree)) return null;
   if (code === 0) return { status: 'clean' };
@@ -248,6 +254,56 @@ export class GitStateError extends Error {
 
 /** Изменён только .harnas/ или ничего: commitProject не коммитит, хост отвечает conflict. */
 export class NothingToCommitError extends Error {}
+
+/** База или ветка из параметров — не имя ревизии (флаг, диапазон, мусор из карты): git с ней не вызывается. */
+export class InvalidRevisionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidRevisionError';
+  }
+}
+
+/**
+ * `base`/`branch` приходят из `map.json` внутри проекта — его может переписать
+ * агент. Ведущий `-` отсекаем без git: `check-ref-format` принял бы его за
+ * свой флаг. Остальное — правилами имён веток git; SHA отсоединённой головы
+ * (`baseBranchOf`) им тоже удовлетворяет, диапазон `a..b` — нет.
+ */
+async function assertRevisions(projectPath: string, revisions: string[]): Promise<void> {
+  for (const revision of revisions) {
+    if (revision === '' || revision.startsWith('-')) {
+      throw new InvalidRevisionError(`не имя ревизии: ${JSON.stringify(revision)}`);
+    }
+    const { code } = await exitCode(['-C', projectPath, 'check-ref-format', '--branch', revision]);
+    if (code !== 0) throw new InvalidRevisionError(`не имя ревизии: ${JSON.stringify(revision)}`);
+  }
+}
+
+/** `merge-tree --write-tree` — с git 2.38. */
+const MERGE_TREE_MIN: [number, number] = [2, 38];
+
+/**
+ * Проба версии по PATH: тесты подменяют git через PATH. Отказ пробы (git
+ * нет) не кешируется — его разберёт `withGitState`. Строку `git version X.Y`
+ * git не переводит.
+ */
+const mergeTreeSupport = new Map<string, Promise<boolean>>();
+
+function supportsMergeTree(): Promise<boolean> {
+  const key = process.env.PATH ?? '';
+  let probe = mergeTreeSupport.get(key);
+  if (probe === undefined) {
+    probe = run('git', ['--version']).then(({ stdout }) => {
+      const match = /(\d+)\.(\d+)/.exec(stdout);
+      if (match === null) throw new Error(`git --version: ${stdout.trim()}`);
+      const [major, minor] = [Number(match[1]), Number(match[2])];
+      return major > MERGE_TREE_MIN[0] || (major === MERGE_TREE_MIN[0] && minor >= MERGE_TREE_MIN[1]);
+    });
+    probe.catch(() => mergeTreeSupport.delete(key));
+    mergeTreeSupport.set(key, probe);
+  }
+  return probe;
+}
 
 function isSpawnMissing(error: unknown): boolean {
   return (error as { code?: unknown } | null)?.code === 'ENOENT';
@@ -279,7 +335,7 @@ async function withGitState<T>(projectPath: string, action: () => Promise<T>): P
   try {
     return await action();
   } catch (error) {
-    if (error instanceof NothingToCommitError) throw error;
+    if (error instanceof NothingToCommitError || error instanceof InvalidRevisionError) throw error;
     const reason = await gitStateReason(projectPath, error);
     if (reason === null) throw error;
     const message = error instanceof Error ? error.message : String(error);
@@ -492,14 +548,23 @@ export async function worktreeDiff(
   options: { patch?: boolean } = {},
 ): Promise<WorktreeDiff> {
   return withGitState(projectPath, async () => {
-    const mergeBase = (await readGit(projectPath, ['merge-base', info.base, info.branch])).trim();
+    await assertRevisions(projectPath, [info.base, info.branch]);
+    const mergeBase = (
+      await readGit(projectPath, ['merge-base', '--end-of-options', info.base, info.branch])
+    ).trim();
 
     // Список и числа — одной парой сторон: общий предок против рабочего дерева.
-    const untracked = await untrackedFiles(info.path);
-    const files = await workingTreeFiles(info.path, [mergeBase], untracked);
+    const untracked = await untrackedFiles(info.path, WORKTREE_PATHSPEC);
+    const files = await workingTreeFiles(info.path, [mergeBase, ...WORKTREE_PATHSPEC], untracked);
 
     const uncommittedPaths = parsePorcelainPaths(
-      await readGitBuffer(info.path, ['status', '--porcelain=v1', '-z', '--untracked-files=all']),
+      await readGitBuffer(info.path, [
+        'status',
+        '--porcelain=v1',
+        '-z',
+        '--untracked-files=all',
+        ...WORKTREE_PATHSPEC,
+      ]),
     );
 
     const commits = parseCommits(
@@ -508,6 +573,7 @@ export async function worktreeDiff(
         '-n',
         String(MAX_COMMITS),
         '--format=%H%x00%s%x00%an%x00%aI',
+        '--end-of-options',
         `${mergeBase}..${info.branch}`,
       ]),
     );
@@ -518,9 +584,13 @@ export async function worktreeDiff(
 
     let patch = '';
     if (options.patch !== false) {
-      const committedPatch = await readGit(projectPath, ['diff', `${mergeBase}..${info.branch}`]);
+      const committedPatch = await readGit(projectPath, [
+        'diff',
+        '--end-of-options',
+        `${mergeBase}..${info.branch}`,
+      ]);
       const uncommittedPatch =
-        uncommittedPaths.length === 0 ? '' : await readGit(info.path, ['diff', 'HEAD']);
+        uncommittedPaths.length === 0 ? '' : await readGit(info.path, ['diff', 'HEAD', ...WORKTREE_PATHSPEC]);
       // `git diff HEAD` untracked-файлы не показывает вовсе (их нет в индексе,
       // сравнивать нечего) — их содержимое дифф от пустоты добирает отдельно, файл
       // за файлом, не трогая сам индекс (EXTRA, кусок 4.2).
@@ -550,12 +620,16 @@ export async function worktreeDiff(
  */
 export async function mergeCheck(projectPath: string, info: WorktreeInfo): Promise<MergeCheck> {
   return withGitState(projectPath, async () => {
+    await assertRevisions(projectPath, [info.base, info.branch]);
+    // Старый git — по версии, не по коду 129: тот же код дал бы и флаг вместо ветки.
+    if (!(await supportsMergeTree())) return { status: 'unsupported' };
     const { code, stdout } = await gitWithCode(projectPath, [
       'merge-tree',
       '--write-tree',
       '--name-only',
       '--no-messages',
       '-z',
+      '--end-of-options',
       info.base,
       info.branch,
     ]);
@@ -629,7 +703,7 @@ export async function commitProject(projectPath: string, message: string): Promi
 
 /** Коммитит всё незакоммиченное в worktree одной записью — «сохранить прогресс» из окна. */
 export async function commitWorktree(info: WorktreeInfo, message: string): Promise<string> {
-  await run('git', ['-C', info.path, 'add', '-A']);
+  await run('git', ['-C', info.path, 'add', '-A', ...WORKTREE_PATHSPEC]);
   await run('git', ['-C', info.path, 'commit', '-m', message]);
   return (await run('git', ['-C', info.path, 'rev-parse', 'HEAD'])).stdout.trim();
 }

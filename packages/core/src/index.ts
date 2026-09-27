@@ -76,6 +76,7 @@ export {
   commitProject,
   gitStateReason,
   GitStateError,
+  InvalidRevisionError,
   joinDiffFiles,
   mergeCheck,
   mergeWorktree,

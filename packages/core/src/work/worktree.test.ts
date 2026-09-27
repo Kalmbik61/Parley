@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -12,6 +12,7 @@ import {
   discardWorktree,
   DirtyWorktreeError,
   GitStateError,
+  InvalidRevisionError,
   isGitRepo,
   joinDiffFiles,
   mergeCheck,
@@ -403,13 +404,13 @@ describe('parseNameStatusZ и parsePorcelainPaths — тест 2', () => {
 describe('parseMergeTree — тест 6', () => {
   const tree = 'c'.repeat(40);
 
-  it('0 и id — clean; 1 и id — conflicts без дублей; 129 — unsupported', () => {
+  it('0 и id — clean; 1 и id — conflicts без дублей; 129 — null (старый git — проба версии в mergeCheck)', () => {
     expect(parseMergeTree(0, `${tree}\0`)).toEqual({ status: 'clean' });
     expect(parseMergeTree(1, `${tree}\0a.txt\0a.txt\0файл.txt\0`)).toEqual({
       status: 'conflicts',
       files: ['a.txt', 'файл.txt'],
     });
-    expect(parseMergeTree(129, '')).toEqual({ status: 'unsupported' });
+    expect(parseMergeTree(129, '')).toBeNull();
   });
 
   it('код 1 без id дерева (ветки нет) и прочие коды — null', () => {
@@ -559,6 +560,108 @@ describe('mergeCheck — тест 5', () => {
     await initProject();
     const info = await freshWorktree();
     await expect(mergeCheck(project, { ...info, base: 'нет-такой-ветки' })).rejects.toThrow();
+  });
+});
+
+describe('mergeCheck — ревизии из карты и старый git (раунд исправлений 1)', () => {
+  const exists = (file: string): Promise<boolean> =>
+    access(file).then(
+      () => true,
+      () => false,
+    );
+
+  it('флаг вместо базы или ветки — InvalidRevisionError, не unsupported; канарейки нет', async () => {
+    await initProject();
+    const info = await freshWorktree();
+    const canary = path.join(root, 'canary');
+    for (const bad of ['-c', `--upload-pack=touch ${canary}`]) {
+      await expect(mergeCheck(project, { ...info, base: bad })).rejects.toBeInstanceOf(InvalidRevisionError);
+      await expect(mergeCheck(project, { ...info, branch: bad })).rejects.toBeInstanceOf(InvalidRevisionError);
+      await expect(worktreeDiff(project, { ...info, base: bad })).rejects.toBeInstanceOf(InvalidRevisionError);
+    }
+    // Диапазон вместо ветки — тоже не имя ревизии.
+    await expect(mergeCheck(project, { ...info, branch: 'HEAD~1..' })).rejects.toBeInstanceOf(InvalidRevisionError);
+    expect(await exists(canary)).toBe(false);
+    // Нормальные ветка и база — как раньше.
+    expect(await mergeCheck(project, info)).toEqual({ status: 'clean' });
+  });
+
+  it('SHA вместо базы (отсоединённая голова) — проходит', async () => {
+    await initProject();
+    const info = await freshWorktree();
+    const sha = (await git(project, ['rev-parse', 'HEAD'])).stdout.trim();
+    expect(await mergeCheck(project, { ...info, base: sha })).toEqual({ status: 'clean' });
+  });
+
+  it('git 2.37 (подмена в PATH) — unsupported, merge-tree не вызывается', async () => {
+    await initProject();
+    const info = await freshWorktree();
+    const realGit = (await run('sh', ['-c', 'command -v git'])).stdout.trim();
+    const fakeBin = path.join(root, 'fake-bin');
+    const calls = path.join(root, 'calls.log');
+    await mkdir(fakeBin);
+    await writeFile(
+      path.join(fakeBin, 'git'),
+      `#!/bin/sh\necho "$@" >> '${calls}'\nif [ "$1" = "--version" ]; then echo "git version 2.37.0"; exit 0; fi\nexec '${realGit}' "$@"\n`,
+      'utf8',
+    );
+    await chmod(path.join(fakeBin, 'git'), 0o755);
+    const saved = process.env.PATH;
+    process.env.PATH = `${fakeBin}${path.delimiter}${saved ?? ''}`;
+    try {
+      expect(await mergeCheck(project, info)).toEqual({ status: 'unsupported' });
+    } finally {
+      process.env.PATH = saved;
+    }
+    expect(await readFile(calls, 'utf8')).not.toContain('merge-tree');
+  });
+});
+
+describe('вложенный репозиторий и .harnas в worktree (раунд исправлений 1)', () => {
+  async function nestedRepo(dir: string): Promise<void> {
+    const nested = path.join(dir, 'nested');
+    await run('git', ['init', '-b', 'main', nested]);
+    await setIdentity(nested);
+    await writeFile(path.join(nested, 'inner.txt'), 'i\n', 'utf8');
+    await git(nested, ['add', '.']);
+    await git(nested, ['commit', '-m', 'inner']);
+  }
+
+  it('неотслеживаемый вложенный репозиторий в папке проекта — один элемент, не падает', async () => {
+    await initProject();
+    await nestedRepo(project);
+    await writeFile(path.join(project, 'a.txt'), 'a\n', 'utf8');
+
+    const changes = await projectChanges(project);
+    expect(changes.files.map((file) => file.path)).toEqual(['a.txt', 'nested/']);
+    expect(changes.files.find((file) => file.path === 'nested/')?.status).toBe('A');
+  });
+
+  it('неотслеживаемый вложенный репозиторий в worktree — один элемент, не падает', async () => {
+    await initProject();
+    const info = await freshWorktree();
+    await nestedRepo(info.path);
+
+    const diff = await worktreeDiff(project, info);
+    expect(diff.files.map((file) => file.path)).toEqual(['nested/']);
+    expect(diff.uncommittedPaths).toEqual(['nested/']);
+  });
+
+  it('.harnas/ внутри worktree — не в files, не в uncommittedPaths и патче, не в коммите', async () => {
+    await initProject();
+    const info = await freshWorktree();
+    await mkdir(path.join(info.path, '.harnas', 'works', 'w'), { recursive: true });
+    await writeFile(path.join(info.path, '.harnas', 'works', 'w', 'log.jsonl'), '{"harnas":1}\n', 'utf8');
+    await writeFile(path.join(info.path, 'a.txt'), 'a\n', 'utf8');
+
+    const diff = await worktreeDiff(project, info);
+    expect(diff.files.map((file) => file.path)).toEqual(['a.txt']);
+    expect(diff.uncommittedPaths).toEqual(['a.txt']);
+    expect(diff.patch).not.toContain('harnas');
+
+    const commit = await commitWorktree(info, 'прогресс');
+    const names = (await git(info.path, ['show', '--name-only', '--format=', commit])).stdout.trim();
+    expect(names).toBe('a.txt');
   });
 });
 

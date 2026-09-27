@@ -11,6 +11,7 @@ import {
   discardWorktree,
   DirtyWorktreeError,
   GitStateError,
+  InvalidRevisionError,
   isGitRepo,
   mergeCheck,
   mergeWorktree,
@@ -52,7 +53,8 @@ export interface WorktreesService {
 /**
  * Ошибка git → HostError с причиной в data: окно показывает свой английский текст по ней (8.2a), сообщение
  * хоста — только в консоль. GitStateError: git-missing — internal, not-a-repo и no-commits — bad_request,
- * data: { reason }; NothingToCommitError — conflict; прочее — internal без data.
+ * data: { reason }; NothingToCommitError — conflict; InvalidRevisionError (база или ветка карты — не ревизия) —
+ * bad_request без data; прочее — internal без data.
  */
 export function gitFailure(error: unknown): HostError {
   if (error instanceof HostError) return error;
@@ -61,6 +63,7 @@ export function gitFailure(error: unknown): HostError {
     return new HostError(code, error.message, { reason: error.reason });
   }
   if (error instanceof NothingToCommitError) return new HostError('conflict', 'нет изменений для коммита');
+  if (error instanceof InvalidRevisionError) return new HostError('bad_request', error.message);
   return new HostError('internal', error instanceof Error ? error.message : String(error));
 }
 
