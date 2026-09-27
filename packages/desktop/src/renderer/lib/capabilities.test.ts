@@ -50,6 +50,12 @@ describe('capabilities', () => {
     expect(missingMethods(connected(null))).toContain('pty.send');
   });
 
+  it('окну этапа 8 нужны worktrees.mergeCheck, changes.project и changes.commitProject (кусок 8.1)', () => {
+    const review = ['worktrees.mergeCheck', 'changes.project', 'changes.commitProject'];
+    expect(REQUIRED_METHODS).toEqual(expect.arrayContaining(review));
+    expect(missingMethods(connected(null))).toEqual(expect.arrayContaining(review));
+  });
+
   it('новый хост, отдавший ключи METHODS и NOTIFICATIONS протокола, — недостающих нет', () => {
     const all = [...Object.keys(METHODS), ...Object.keys(NOTIFICATIONS)].sort();
     expect(missingMethods(connected(all))).toEqual([]);
