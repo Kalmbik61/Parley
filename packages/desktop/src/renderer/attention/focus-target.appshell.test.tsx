@@ -115,12 +115,10 @@ beforeEach(() => {
   useUiStore.setState({
     windowFocused: true,
     wakePaused: null,
-    dialogs: { newWork: { open: false, projectPath: null }, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null },
+    dialogs: { newWork: { open: false, projectPath: null, title: '' }, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null },
     visibleSessionRefs: {},
     ui: DEFAULT_UI,
     uiLoaded: true,
-    paletteOpen: false,
-    picker: null,
   });
   useUiStore.getState().init(bridge);
   useLayoutStore.setState({

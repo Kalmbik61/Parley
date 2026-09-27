@@ -86,6 +86,18 @@ describe('resolveAction (тест 4)', () => {
     expect(resolveAction(CMD_1, 'other', false)).toBe('work.goto.1');
   });
 
+  it('открытая палитра: ⌘D, ⌘N, ⌘W, ⌘T, ⌃Tab, ⌘B за ней не выполняются — только ⌘1–9 и ⌘J (решение контролёра 2 куска 6.2)', () => {
+    const CMD_N = cmd('n', 'KeyN');
+    const CMD_B = cmd('b', 'KeyB');
+    for (const context of ['input', 'other'] as const) {
+      for (const event of [CMD_D, CMD_N, CMD_W, CMD_T, CTRL_TAB, CMD_B, CMD_SHIFT_DOWN, CMD_BRACKET]) {
+        expect(resolveAction(event, context, true)).toBeNull();
+      }
+      expect(resolveAction(CMD_J, context, true)).toBe('palette.open');
+      expect(resolveAction(CMD_1, context, true)).toEqual({ kind: 'palette.row', index: 0 });
+    }
+  });
+
   it('⌘A в input — null', () => {
     expect(resolveAction(CMD_A, 'input', false)).toBeNull();
   });
@@ -117,7 +129,7 @@ describe('installKeyHandler (тест 5)', () => {
   function install(
     overrides: Partial<{
       context: FocusContext;
-      paletteOpen: boolean;
+      palette: boolean;
       available: (id: ActionId) => boolean;
       run: (id: ActionId) => void;
     }> = {},
@@ -130,7 +142,7 @@ describe('installKeyHandler (тест 5)', () => {
       pickPaletteRow,
       endMruCycle,
       context: () => overrides.context ?? 'other',
-      paletteOpen: () => overrides.paletteOpen ?? false,
+      paletteOpen: () => overrides.palette ?? false,
       available: overrides.available ?? (() => true),
     });
     return { run, pickPaletteRow, endMruCycle };
@@ -150,7 +162,7 @@ describe('installKeyHandler (тест 5)', () => {
   });
 
   it('palette.row — defaultPrevented и pickPaletteRow(0), run не вызван', () => {
-    const { run, pickPaletteRow } = install({ context: 'input', paletteOpen: true });
+    const { run, pickPaletteRow } = install({ context: 'input', palette: true });
     const event = keydown({ key: '1', code: 'Digit1', metaKey: true });
     expect(event.defaultPrevented).toBe(true);
     expect(pickPaletteRow).toHaveBeenCalledWith(0);

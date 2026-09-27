@@ -53,10 +53,10 @@ export function TerminalContextMenu({ bridge, terminal, onClear, onFind, onSplit
         <ContextMenuItem onSelect={() => terminal?.selectAll()}>{S.terminal.selectAll}</ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={onClear}>{S.terminal.clear}</ContextMenuItem>
-        <ContextMenuItem onSelect={onFind}>{S.menu.find}</ContextMenuItem>
+        <ContextMenuItem onSelect={onFind}>{S.actions.find}</ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => onSplit('right')}>{S.menu.splitRight}</ContextMenuItem>
-        <ContextMenuItem onSelect={() => onSplit('down')}>{S.menu.splitDown}</ContextMenuItem>
+        <ContextMenuItem onSelect={() => onSplit('right')}>{S.actions.splitRight}</ContextMenuItem>
+        <ContextMenuItem onSelect={() => onSplit('down')}>{S.actions.splitDown}</ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );

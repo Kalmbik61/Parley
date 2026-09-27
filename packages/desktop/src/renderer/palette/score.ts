@@ -1,6 +1,6 @@
 /**
  * Ранжирование палитры ⌘J (кусок 6.2, спека 9.2): очки токена по полю, документа по
- * токенам и корзина свежести. Заменяет прежний `lib/fuzzy.ts`.
+ * токенам и корзина свежести.
  *
  * Границы слов и смену регистра видно только в исходном поле, а сравнивать надо после
  * `normalize`. Поэтому `normalize` сохраняет длину строки (по кодовой единице): индексы
@@ -44,7 +44,7 @@ function isBoundary(field: string, index: number): boolean {
 }
 
 /** Нечёткое совпадение: символы токена по порядку; 10 минус 1 за каждый разрыв, не ниже 1; 0 — не нашлось. */
-function fuzzyScore(token: string, field: string): number {
+function inOrderScore(token: string, field: string): number {
   let position = -1;
   let gaps = 0;
   for (const char of token) {
@@ -70,7 +70,7 @@ export function scoreToken(token: string, field: string): number {
     best = Math.max(best, isBoundary(field, index) ? 40 : 20);
   }
   if (best > 0) return best;
-  return fuzzyScore(t, f);
+  return inOrderScore(t, f);
 }
 
 /** Вес поля «название» (спека 9.2, п. 4). */

@@ -2,12 +2,11 @@
  * Одна вкладка строки (кусок 2.4, спека 5.3, 14.2): значок вида, заголовок,
  * крестик закрытия, меню по правой кнопке. `TabStrip.tsx` уже посчитал
  * `TabMeta` и (для терминала) точку состояния — сам компонент только рисует
- * их и переводит клики/меню в вызовы `layout/store.ts`/`store/ui.ts`.
+ * их и переводит клики/меню в вызовы `layout/store.ts` и стора палитры.
  *
  * «Разделить вправо/вниз» сначала фокусирует ГРУППУ ЭТОЙ вкладки (`focusGroup`),
- * а не активную группу работы — иначе `openPicker`/`splitGroup`, вызванные
- * позже из `AppShell.tsx` по выбору в `SessionPicker`, резали бы чужую,
- * реально активную группу (спека 5.3, тест 14).
+ * а не активную группу работы — иначе палитра в режиме разделения (кусок 6.2)
+ * по выбору резала бы чужую, реально активную группу (спека 5.3, тест 14).
  *
  * Раунд исправлений 1 (ревью A, Important №2): паттерн ARIA tab — `aria-selected`
  * (состояние для скринридера, `data-active` его не заменяет) и roving tabindex
@@ -33,7 +32,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '../ui/context-menu.js';
-import { useUiStore } from '../store/ui.js';
+import { usePaletteStore } from '../palette/store.js';
 import { useLayoutStore } from './store.js';
 import { focusGroup, focusTab } from './tree.js';
 import type { TabMeta } from './tab-meta.js';
@@ -46,8 +45,6 @@ export interface TabProps {
   /** Точка состояния терминала — уже посчитана `TabStrip.tsx` (нужен `SessionRef` из `entry`, которого у `Tab` самого нет). */
   dot: { state: DotState; lifecycle: SessionLifecycle } | null;
   isActive: boolean;
-  /** Сессии работы, у которых уже открыт терминал — кандидаты `SessionPicker` при «Разделить» (спека 5.2). */
-  openSessionIds: readonly string[];
 }
 
 function TabIcon({ meta, dot }: Pick<TabProps, 'meta' | 'dot'>): JSX.Element {
@@ -77,7 +74,7 @@ function TabIcon({ meta, dot }: Pick<TabProps, 'meta' | 'dot'>): JSX.Element {
   }
 }
 
-export function Tab({ workKey, group, tab, meta, dot, isActive, openSessionIds }: TabProps): JSX.Element {
+export function Tab({ workKey, group, tab, meta, dot, isActive }: TabProps): JSX.Element {
   const closeIds = (ids: readonly string[]): void => {
     if (ids.length === 0) return;
     void useLayoutStore
@@ -95,9 +92,9 @@ export function Tab({ workKey, group, tab, meta, dot, isActive, openSessionIds }
     closeIds(group.tabs.slice(index + 1).map((candidate) => candidate.id));
   };
 
-  const beginSplit = (direction: 'right' | 'down'): void => {
+  const beginSplit = (mode: 'splitRight' | 'splitDown'): void => {
     useLayoutStore.getState().apply(workKey, (layout) => focusGroup(layout, group.id));
-    useUiStore.getState().openPicker({ workKey, direction, openSessionIds: [...openSessionIds] });
+    usePaletteStore.getState().openWith(mode);
   };
 
   const activateThis = (): void => {
@@ -161,8 +158,8 @@ export function Tab({ workKey, group, tab, meta, dot, isActive, openSessionIds }
         <ContextMenuItem onSelect={closeOthers}>{S.tabs.closeOthers}</ContextMenuItem>
         <ContextMenuItem onSelect={closeToRight}>{S.tabs.closeToRight}</ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => beginSplit('right')}>{S.menu.splitRight}</ContextMenuItem>
-        <ContextMenuItem onSelect={() => beginSplit('down')}>{S.menu.splitDown}</ContextMenuItem>
+        <ContextMenuItem onSelect={() => beginSplit('splitRight')}>{S.actions.splitRight}</ContextMenuItem>
+        <ContextMenuItem onSelect={() => beginSplit('splitDown')}>{S.actions.splitDown}</ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );

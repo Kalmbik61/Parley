@@ -109,7 +109,7 @@ beforeEach(() => {
 const NEW_KEY = workKey(PROJECT, 'w-new');
 
 async function renderComposer(onOpenChange: (open: boolean) => void = () => {}): Promise<void> {
-  render(<NewWorkComposer open bridge={bridge} projectPath={PROJECT} onOpenChange={onOpenChange} />);
+  render(<NewWorkComposer open bridge={bridge} projectPath={PROJECT} title="" onOpenChange={onOpenChange} />);
   // Агент по умолчанию выбирается после `providers.list`.
   await waitFor(() => expect(bridge.calls.some((call) => call.method === 'providers.list')).toBe(true));
   await act(async () => {});
@@ -289,7 +289,7 @@ describe('NewWorkComposer — агент и ярлык по умолчанию',
 describe('NewWorkComposer — раунд исправлений 1', () => {
   it('плейсхолдер агента — «Agent…», пока список агентов не пришёл', async () => {
     bridge.setHandler('providers.list', () => new Promise(() => {}));
-    render(<NewWorkComposer open bridge={bridge} projectPath={PROJECT} onOpenChange={() => {}} />);
+    render(<NewWorkComposer open bridge={bridge} projectPath={PROJECT} title="" onOpenChange={() => {}} />);
     expect(await screen.findByText('Agent…')).toBeTruthy();
     expect(screen.queryByText(S.dialogs.newSession.providerPlaceholder)).toBeNull();
   });
@@ -388,7 +388,7 @@ describe('NewWorkComposer — раунд исправлений 2 (агент п
 
   it('providers.list пришёл после открытия, затем Create — без «Select an agent», works.create и sessions.create с агентом по умолчанию', async () => {
     const release = deferProviders();
-    render(<NewWorkComposer open bridge={bridge} projectPath={PROJECT} onOpenChange={() => {}} />);
+    render(<NewWorkComposer open bridge={bridge} projectPath={PROJECT} title="" onOpenChange={() => {}} />);
     await waitFor(() => expect(callsOf('providers.list')).toHaveLength(1));
     await release();
     expect(screen.getByRole('combobox', { name: S.dialogs.newWork.agentField }).textContent).toBe('Claude Code');
@@ -402,7 +402,7 @@ describe('NewWorkComposer — раунд исправлений 2 (агент п
 
   it('Create раньше ответа providers.list — форма дожидается его и создаёт с агентом по умолчанию, ошибки агента нет', async () => {
     const release = deferProviders();
-    render(<NewWorkComposer open bridge={bridge} projectPath={PROJECT} onOpenChange={() => {}} />);
+    render(<NewWorkComposer open bridge={bridge} projectPath={PROJECT} title="" onOpenChange={() => {}} />);
     typeTitle('title');
     fireEvent.click(screen.getByRole('button', { name: S.common.create }));
     await act(async () => {});
@@ -417,11 +417,20 @@ describe('NewWorkComposer — раунд исправлений 2 (агент п
   it('поле проекта — имя папки и приглушённый путь к ней, полный путь во всплывающей подсказке', async () => {
     const deep = '/private/var/folders/xy/abcdef/T/harnas-e2e-cards-123456';
     useWorksStore.setState({ entries: [makeWork('w-deep', { projectPath: deep })] });
-    render(<NewWorkComposer open bridge={bridge} projectPath={deep} onOpenChange={() => {}} />);
+    render(<NewWorkComposer open bridge={bridge} projectPath={deep} title="" onOpenChange={() => {}} />);
     await act(async () => {});
     const trigger = screen.getByRole('combobox', { name: S.dialogs.newWork.projectField });
     expect(trigger.getAttribute('title')).toBe(deep);
     expect(trigger.textContent).toContain('harnas-e2e-cards-123456');
     expect(trigger.querySelector('.text-muted-foreground')?.textContent).toBe('/private/var/folders/xy/abcdef/T');
+  });
+});
+
+describe('NewWorkComposer — начальное название (кусок 6.2)', () => {
+  it('проп title — начальное название формы; works.create не зовётся, пока человек не нажал Create', async () => {
+    render(<NewWorkComposer open bridge={bridge} projectPath={PROJECT} title="Редизайн окна" onOpenChange={() => {}} />);
+    await waitFor(() => expect(callsOf('providers.list')).toHaveLength(1));
+    expect((screen.getByLabelText(S.dialogs.newWork.titleField) as HTMLInputElement).value).toBe('Редизайн окна');
+    expect(callsOf('works.create')).toEqual([]);
   });
 });

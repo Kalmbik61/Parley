@@ -87,6 +87,8 @@ const CTRL_ONLY_IDS = new Set<ActionId>(['tab.mruNext', 'tab.mruPrev']);
 for (let n = 1; n <= 9; n += 1) CTRL_ONLY_IDS.add(`tab.goto.${n}` as ActionId);
 
 const PALETTE_ROW_KEYS: readonly string[] = Array.from({ length: 9 }, (_, index) => `CmdOrCtrl+${index + 1}`);
+/** Сочетание самой палитры из реестра — ⌘J. */
+const PALETTE_KEYS: readonly string[] = ACTIONS.flatMap((action) => (action.id === 'palette.open' && action.keys !== null ? [action.keys] : []));
 
 function matchesAny(accelerators: readonly string[], event: KeyLike): boolean {
   return accelerators.some((accelerator) => matchesAccelerator(accelerator, event));
@@ -109,6 +111,9 @@ export function resolveAction(event: KeyLike, context: FocusContext, paletteOpen
   if (paletteOpen) {
     const row = PALETTE_ROW_KEYS.findIndex((accelerator) => matchesAccelerator(accelerator, event));
     if (row !== -1) return { kind: 'palette.row', index: row };
+    // За открытой палитрой сочетания окна не действуют (кусок 6.2): ⌘W не закрывает вкладку под
+    // ней, ⌘D не открывает второй выбор. Стрелки, Enter и Esc — полю палитры; ⌘J — закрыть.
+    return PALETTE_KEYS.some((accelerator) => matchesAccelerator(accelerator, event)) ? 'palette.open' : null;
   }
   if (context === 'monaco' && matchesAny(MONACO_KEYS, event)) return null;
   if (context === 'input' && matchesAny(INPUT_KEYS, event)) return null;
@@ -138,8 +143,9 @@ export function installKeyHandler(input: {
       console.error('[harnas] key action failed', error);
     }
   };
+  const { paletteOpen } = input;
   const onKeyDown = (event: KeyboardEvent): void => {
-    const resolved = resolveAction(event, input.context(), input.paletteOpen());
+    const resolved = resolveAction(event, input.context(), paletteOpen());
     if (resolved === null) return;
     if (typeof resolved !== 'string') {
       event.preventDefault();

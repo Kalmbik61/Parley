@@ -244,19 +244,18 @@ export const S = {
     notificationsHint: 'Not getting notifications? System Settings → Notifications → Harnas',
   },
 
-  /** ⌘K — `palette/CommandPalette.tsx`, часть команд в `lib/commands.ts`. */
+  /**
+   * Палитра ⌘J — `renderer/palette/Palette.tsx` (кусок 6.2, спека 9.3). Заголовок диалога для
+   * скринридера — `S.actions.commandPalette`, «Open mail» — `S.cardMenu.openMail`.
+   */
   palette: {
-    searchPlaceholder: 'Workspace, session, or action…',
-    empty: 'Nothing found',
-    workspaceHint: 'workspace',
-    pauseAutoWake: 'Pause auto-wake',
-    resumeAutoWake: 'Resume auto-wake',
-  },
-
-  /** ⌘D/⇧⌘D — `palette/SessionPicker.tsx`. */
-  picker: {
-    title: 'Session into new panel',
-    empty: 'Every session here already has a panel',
+    placeholder: 'Search tabs, workspaces, sessions, rooms, and actions…',
+    /** Заголовок режимов splitRight и splitDown. */
+    splitTitle: 'Open in new group',
+    sections: { tabs: 'Tabs', works: 'Workspaces', sessions: 'Sessions', rooms: 'Rooms', actions: 'Actions', files: 'Files' },
+    more: (n: number): string => `${n} more`,
+    createWorkspace: (query: string): string => `Create workspace "${query}"`,
+    footer: '↑↓ select · Enter open · ⌘Enter open to the side · Esc close',
   },
 
   /** «Изменения» — `changes/ChangesPanel.tsx`, `changes/DiffView.tsx`. */
@@ -385,20 +384,13 @@ export const S = {
     reasonClosed: 'Connection to host closed',
   },
 
-  /** Меню macOS — `main/menu.ts`; часть пунктов переиспользует палитра (`lib/commands.ts`). */
+  /**
+   * Названия меню macOS — `main/menu.ts` (кусок 6.1a, спека 9.6). Пункты — заголовки действий
+   * реестра, `S.actions`: их же берут палитра, меню вкладки и меню терминала.
+   */
   menu: {
     edit: 'Edit',
-    newSession: 'New session',
-    newWork: 'New workspace',
-    closePanel: 'Close panel',
-    splitRight: 'Split right',
-    splitDown: 'Split down',
-    commandPalette: 'Command palette',
-    find: 'Find',
-    settings: 'Settings',
     view: 'View',
-    // Меню реестра клавиш (кусок 6.1a, спека 9.6). Ключи выше, кроме `edit` и `view`, читают
-    // `Tab.tsx`, меню терминала 5.3, `CommandPalette` и `lib/commands.ts` — до 6.2.
     workspace: 'Workspace',
     tab: 'Tab',
     terminal: 'Terminal',

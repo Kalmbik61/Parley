@@ -139,8 +139,6 @@ beforeEach(() => {
     visibleSessionRefs: {},
     ui: DEFAULT_UI,
     uiLoaded: true,
-    paletteOpen: false,
-    picker: null,
   });
   useUiStore.getState().init(bridge);
   useLayoutStore.setState({

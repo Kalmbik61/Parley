@@ -43,7 +43,8 @@ import { dndId, type DropTargetData } from '../layout/dnd.js';
 import { useTerminalDropPreview } from '../layout/DropIndicator.js';
 import { useLayoutStore } from '../layout/store.js';
 import { tabMeta } from '../layout/tab-meta.js';
-import { focusTab, openTab, openTerminalSessionIds } from '../layout/tree.js';
+import { focusTab, openTab } from '../layout/tree.js';
+import { usePaletteStore } from '../palette/store.js';
 import { ErrorBoundary } from '../shell/ErrorBoundary.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
@@ -308,11 +309,10 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
   );
 
   // «Split right/down» меню терминала — как в меню вкладки (`layout/Tab.tsx#beginSplit`):
-  // сначала своя вкладка активна, затем выбор сессии для новой группы.
+  // сначала своя вкладка активна, затем палитра в режиме разделения выбирает содержимое.
   const beginSplit = (direction: 'right' | 'down'): void => {
     useLayoutStore.getState().apply(key, (layout) => focusTab(layout, tabId));
-    const layout = useLayoutStore.getState().layouts[key];
-    useUiStore.getState().openPicker({ workKey: key, direction, openSessionIds: openTerminalSessionIds(layout) });
+    usePaletteStore.getState().openWith(direction === 'right' ? 'splitRight' : 'splitDown');
   };
 
   // Отправка агенту — только явным действием человека: бросок файла или вставка скриншота

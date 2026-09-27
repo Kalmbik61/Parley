@@ -117,7 +117,7 @@ test.describe('раскладка на работу переживает пер�
     await electronApp.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.webContents.send('menu:action', 'group.splitRight');
     });
-    await window.getByRole('dialog').getByText('S02 два').click();
+    await window.getByRole('dialog').getByRole('option', { name: /S02 два/ }).click();
     const layoutA = [[`terminal:${a1}`], [`terminal:${a2}`]];
     await expect.poll(() => shownLayout(window, keyA)).toEqual(layoutA);
 

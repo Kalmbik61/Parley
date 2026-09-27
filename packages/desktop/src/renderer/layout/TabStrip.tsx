@@ -8,9 +8,9 @@
  * Точка состояния терминальных вкладок считается тут, а не в `Tab.tsx`: нужен
  * полный `SessionRef` (`entry.projectPath`/`workId` + `tab.sessionId`), а
  * `entry` есть только здесь и в `GroupView.tsx`, до `Tab.tsx` он не доходит.
- * `openSessionIds` — тоже здесь и один раз на всю строку: одинаков для всех
- * вкладок группы (кандидаты `SessionPicker` по всей раскладке работы, не по
- * одной группе).
+ *
+ * «+» строки (кусок 6.2) сначала делает активной СВОЮ группу, затем открывает палитру в
+ * режиме `open`: выбранное откроется в этой группе, а не в активной группе работы.
  *
  * Раунд исправлений 1 (ревью A, Important №2): строка — `role="tablist"`, а
  * стрелки ←/→ между вкладками — тут, а не в `Tab.tsx`, потому что только
@@ -43,11 +43,11 @@ import type { GroupNode } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { displayStatus, dotState } from '../lib/dot-state.js';
 import { activityFor, useActivityStore } from '../store/activity.js';
-import { useUiStore } from '../store/ui.js';
+import { usePaletteStore } from '../palette/store.js';
 import { dndId, type DragSourceData, type DropTargetData } from './dnd.js';
 import { useStripDropSlot } from './DropIndicator.js';
 import { Tab } from './Tab.js';
-import { openTerminalSessionIds } from './tree.js';
+import { focusGroup } from './tree.js';
 import { tabMeta } from './tab-meta.js';
 import { useLayoutStore } from './store.js';
 import { useTabMetaExtras } from './use-tab-meta-extras.js';
@@ -99,7 +99,6 @@ function wrapIndex(index: number, length: number): number {
 }
 
 export function TabStrip({ workKey, group, entry, portal, active }: TabStripProps): JSX.Element {
-  const layout = useLayoutStore((state) => state.layouts[workKey]);
   // Точке нужен только вид активности сессий этой строки, а не вся запись с метриками:
   // поверхностное сравнение держит строку от перерисовки на каждое `activity.changed`
   // (решение контролёра 2 куска 4.2) — как и `useTabMetaExtras`.
@@ -115,7 +114,6 @@ export function TabStrip({ workKey, group, entry, portal, active }: TabStripProp
     }),
   );
   const extras = useTabMetaExtras();
-  const openSessionIds = openTerminalSessionIds(layout);
 
   const tablistRef = useRef<HTMLDivElement | null>(null);
 
@@ -199,7 +197,6 @@ export function TabStrip({ workKey, group, entry, portal, active }: TabStripProp
                 meta={meta}
                 dot={dot}
                 isActive={tab.id === group.activeTabId}
-                openSessionIds={openSessionIds}
               />
             </SortableTab>
           );
@@ -213,7 +210,10 @@ export function TabStrip({ workKey, group, entry, portal, active }: TabStripProp
       <button
         type="button"
         aria-label={S.tabs.openTab}
-        onClick={() => useUiStore.getState().setPaletteOpen(true)}
+        onClick={() => {
+          useLayoutStore.getState().apply(workKey, (layout) => focusGroup(layout, group.id));
+          usePaletteStore.getState().openWith('open');
+        }}
         className="flex size-7 shrink-0 items-center justify-center text-muted-foreground hover:bg-accent hover:text-accent-foreground"
       >
         <Plus className="size-3.5" aria-hidden="true" />

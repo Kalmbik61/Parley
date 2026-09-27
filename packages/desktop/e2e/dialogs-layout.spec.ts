@@ -180,7 +180,7 @@ for (const size of [
       await window.getByRole('button', { name: 'Search ⌘J' }).first().click();
       await expect(window.getByRole('dialog')).toContainText(LONG_TITLE);
       problems.push(...(await overflowOf(window, 'Palette')));
-      await window.getByRole('dialog').getByRole('textbox').fill('Settings');
+      await window.getByRole('dialog').getByRole('combobox').fill('Settings');
       await window.keyboard.press('Enter');
       await expect(window.getByRole('dialog')).toContainText('Settings');
       problems.push(...(await overflowOf(window, 'Settings')));

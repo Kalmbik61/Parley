@@ -20,8 +20,11 @@ export interface DialogWork {
 }
 
 export interface DialogsState {
-  /** `projectPath` — проект «+» заголовка группы (кусок 3.5): форма откроется с ним; `null` — ⌘N. */
-  newWork: { open: boolean; projectPath: string | null };
+  /**
+   * `projectPath` — проект «+» заголовка группы (кусок 3.5): форма откроется с ним; `null` — ⌘N.
+   * `title` — начальное название: «Create workspace …» палитры (кусок 6.2); `''` — пусто.
+   */
+  newWork: { open: boolean; projectPath: string | null; title: string };
   /**
    * `work` — работа диалога: «New session» из меню карточки передаёт свою, и у неактивной
    * карточки диалог не должен уйти в чужую работу; `null` — активная работа (⌘T).
@@ -36,19 +39,11 @@ export interface DialogsState {
 }
 
 const CLOSED_DIALOGS: DialogsState = {
-  newWork: { open: false, projectPath: null },
+  newWork: { open: false, projectPath: null, title: '' },
   newSession: { open: false, parentSessionId: null, work: null },
   settings: false,
   createRoom: null,
 };
-
-/** Выбор сессии для ⌘D/⇧⌘D (`SessionPicker`, кусок 2.3) — что показывает `AppShell`. */
-export interface PickerState {
-  workKey: string;
-  direction: 'right' | 'down';
-  /** id сессий, у которых уже открыт терминал в этой работе — не кандидаты (спека 5.2). */
-  openSessionIds: string[];
-}
 
 export interface UiState {
   /**
@@ -81,9 +76,6 @@ export interface UiState {
   ui: UiFile;
   /** `true` — `app.loadUi()` уже ответил (или отказал), в `ui` не «слепок по умолчанию», а факт. */
   uiLoaded: boolean;
-  paletteOpen: boolean;
-  /** `null` — `SessionPicker` закрыт. */
-  picker: PickerState | null;
   /**
    * Порядок сайдбара держится (кусок 3.3, спека 6.2): указатель над списком, открыто меню
    * сайдбара или идёт переименование — пересортировка ждёт (`sidebar/use-sidebar-sections.ts`).
@@ -102,7 +94,7 @@ export interface UiState {
   /** `TerminalSurface.tsx` зовёт на каждую смену видимости и `false` при размонтировании. */
   setSessionVisible: (refKey: string, visible: boolean) => void;
   setWindowFocused: (focused: boolean) => void;
-  openNewWorkDialog: (projectPath?: string) => void;
+  openNewWorkDialog: (projectPath?: string | null, title?: string) => void;
   closeNewWorkDialog: () => void;
   openNewSessionDialog: (parentSessionId: string | null, work?: DialogWork) => void;
   closeNewSessionDialog: () => void;
@@ -126,9 +118,6 @@ export interface UiState {
   setAppearance: (mode: Appearance) => void;
   /** Сливает патч с объектом сайдбара из зеркала и отдаёт его целиком в `patchUi`. */
   setSidebar: (side: 'left' | 'right', patch: { open?: boolean; width?: number }) => void;
-  setPaletteOpen: (open: boolean) => void;
-  openPicker: (picker: PickerState) => void;
-  closePicker: () => void;
   setSidebarHovering: (hovering: boolean) => void;
   setSidebarHold: (id: string, on: boolean) => void;
 
@@ -165,8 +154,6 @@ export const useUiStore = create<UiState>((set, get) => {
     visibleSessionRefs: {},
     ui: DEFAULT_UI,
     uiLoaded: false,
-    paletteOpen: false,
-    picker: null,
     sidebarHovering: false,
     sidebarHolds: {},
 
@@ -189,10 +176,12 @@ export const useUiStore = create<UiState>((set, get) => {
 
     setWindowFocused: (focused) => set({ windowFocused: focused }),
 
-    openNewWorkDialog: (projectPath) =>
-      set((state) => ({ dialogs: { ...state.dialogs, newWork: { open: true, projectPath: projectPath ?? null } } })),
+    openNewWorkDialog: (projectPath, title) =>
+      set((state) => ({
+        dialogs: { ...state.dialogs, newWork: { open: true, projectPath: projectPath ?? null, title: title ?? '' } },
+      })),
     closeNewWorkDialog: () =>
-      set((state) => ({ dialogs: { ...state.dialogs, newWork: { open: false, projectPath: null } } })),
+      set((state) => ({ dialogs: { ...state.dialogs, newWork: { open: false, projectPath: null, title: '' } } })),
     openNewSessionDialog: (parentSessionId, work) =>
       set((state) => ({
         dialogs: { ...state.dialogs, newSession: { open: true, parentSessionId, work: work ?? null } },
@@ -241,9 +230,6 @@ export const useUiStore = create<UiState>((set, get) => {
       }
     },
 
-    setPaletteOpen: (open) => set({ paletteOpen: open }),
-    openPicker: (picker) => set({ picker }),
-    closePicker: () => set({ picker: null }),
     setSidebarHovering: (hovering) => set({ sidebarHovering: hovering }),
     setSidebarHold: (id, on) =>
       set((state) => {

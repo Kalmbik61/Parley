@@ -24,6 +24,7 @@ import { selectedSessionOf, useLayoutStore } from '../layout/store.js';
 import { workKey } from '../lib/tree-order.js';
 import { useNow } from '../lib/use-now.js';
 import { useActivityStore, type ActivityEntry } from '../store/activity.js';
+import { usePaletteStore } from '../palette/store.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import { ProjectGroup } from './ProjectGroup.js';
@@ -115,7 +116,7 @@ export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail,
   const pinnedWorks = useUiStore((state) => state.ui.pinnedWorks);
   const collapsedProjects = useUiStore((state) => state.ui.collapsedProjects);
   const patchUi = useUiStore((state) => state.patchUi);
-  const setPaletteOpen = useUiStore((state) => state.setPaletteOpen);
+  const openPalette = usePaletteStore((state) => state.openWith);
   const openNewWorkDialog = useUiStore((state) => state.openNewWorkDialog);
   const setSidebarHovering = useUiStore((state) => state.setSidebarHovering);
   const holding = useUiStore((state) => Object.keys(state.sidebarHolds).length > 0);
@@ -207,7 +208,7 @@ export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail,
       <div className="flex shrink-0 flex-col gap-0.5 p-2">
         <button
           type="button"
-          onClick={() => setPaletteOpen(true)}
+          onClick={() => openPalette('default')}
           className="flex h-8 items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-work-sidebar-accent"
         >
           <Search className="size-4 shrink-0" aria-hidden="true" />

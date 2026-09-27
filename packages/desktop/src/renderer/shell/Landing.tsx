@@ -6,12 +6,13 @@
  */
 
 import { S } from '../../shared/strings.js';
+import { usePaletteStore } from '../palette/store.js';
 import { useUiStore } from '../store/ui.js';
 import { Button } from '../ui/button.js';
 
 export function Landing(): JSX.Element {
   const openNewWorkDialog = useUiStore((state) => state.openNewWorkDialog);
-  const setPaletteOpen = useUiStore((state) => state.setPaletteOpen);
+  const openPalette = usePaletteStore((state) => state.openWith);
 
   return (
     <div data-testid="landing" className="flex flex-1 flex-col items-center justify-center gap-4">
@@ -24,7 +25,7 @@ export function Landing(): JSX.Element {
           {S.landing.newWorkspace}
           <kbd className="ml-1.5 rounded bg-black/10 px-1.5 py-0.5 text-[10px] dark:bg-white/10">⌘N</kbd>
         </Button>
-        <Button type="button" variant="outline" onClick={() => setPaletteOpen(true)}>
+        <Button type="button" variant="outline" onClick={() => openPalette('default')}>
           {S.landing.palette}
           <kbd className="ml-1.5 rounded bg-black/10 px-1.5 py-0.5 text-[10px] dark:bg-white/10">⌘J</kbd>
         </Button>

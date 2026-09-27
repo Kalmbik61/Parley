@@ -4,14 +4,15 @@
  * активной работы (`LayoutView`); с куска 2.7 он единственный: прежний центр и
  * его флаг ушли.
  *
- * `CommandPalette`, `SessionPicker`, `NewWorkComposer` и `CreateRoomDialog`
+ * Палитра ⌘J (`palette/Palette.tsx`, кусок 6.2), `NewWorkComposer` и `CreateRoomDialog`
  * монтируются здесь же (а не в сайдбаре) — они нужны и над `Landing`, где
- * сайдбара вовсе нет.
+ * сайдбара вовсе нет. На историю переходов оболочка не подписана: её читает сама
+ * открытая палитра.
  *
  * `AppShell` — единственная точка действий реестра клавиш (`run(id)`, кусок 6.1b,
  * спека 9.6): её зовут обработчик окна (`keys/handler.ts`) и клик по пункту меню
- * (`menu:action`). Там же входы сайдбара и «открывающие» действия палитры: все
- * они идут в `layout/store.ts` раскладки активной работы. Сессия,
+ * (`menu:action`), а строки действий палитры — через тот же `run`. Там же входы
+ * сайдбара: они идут в `layout/store.ts` раскладки активной работы. Сессия,
  * почта или комната могут принадлежать не активной сейчас работе — сначала
  * `setActiveWork`, потом `apply` в её раскладке.
  *
@@ -57,14 +58,11 @@ import { LEFT_SIDEBAR } from '../../shared/ui-types.js';
 import { openNextAttention } from '../attention/next.js';
 import { useAttentionTotals } from '../attention/store.js';
 import { InterruptedBanner } from '../components/InterruptedBanner.js';
-import { CommandPalette } from '../components/palette/CommandPalette.js';
-import { SessionPicker, sessionCandidates } from '../components/palette/SessionPicker.js';
 import { CreateRoomDialog, type RoomCandidate } from '../components/rooms/CreateRoomDialog.js';
 import { neighborInOrder, visibleWorkOrder } from '../sidebar/sort.js';
 import { SidebarSectionsWriter, useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
 import { NewWorkComposer } from '../sidebar/NewWorkComposer.js';
 import { WorkSidebar } from '../sidebar/WorkSidebar.js';
-import { buildCommands, recentSessionsFromHistory } from '../lib/commands.js';
 import { sessionLabelFor, sessionRowLabel } from '../lib/participant.js';
 import { workKey } from '../lib/tree-order.js';
 import { applyDrop, centerOverlayOnCursor, dragItemOf, dropFromDragEnd, layoutCollision, onTerminalDrop, type DragItem } from '../layout/dnd.js';
@@ -77,12 +75,14 @@ import { SurfaceLayer } from '../layout/SurfaceLayer.js';
 import { useLayoutPersistence } from '../layout/persistence.js';
 import { selectedSessionOf, useLayoutStore } from '../layout/store.js';
 import { measureGroupSizes } from '../layout/measure.js';
-import { findTab, focusGroup, focusTab, groups, openTab, openTerminalSessionIds, reopenClosed, splitGroup } from '../layout/tree.js';
+import { findTab, focusGroup, focusTab, groups, openTab, reopenClosed } from '../layout/tree.js';
 import { focusContext } from '../keys/focus-context.js';
 import { installKeyHandler, isActionAvailable } from '../keys/handler.js';
 import { createMruCycle, type MruCycle } from '../keys/mru-cycle.js';
 import { hostMethods } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
+import { Palette } from '../palette/Palette.js';
+import { usePaletteStore } from '../palette/store.js';
 import { terminalSurfaces } from '../terminal/TerminalSurface.js';
 import { useNoticesStore } from '../store/notices.js';
 import { useUiStore } from '../store/ui.js';
@@ -229,7 +229,6 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   const entries = useWorksStore((state) => state.entries);
   const loading = useWorksStore((state) => state.loading);
   const worksLoaded = !loading;
-  const ordered = orderedWorks(entries);
   // «Работ нет» — это ответ хоста, а не просто пустой начальный снимок:
   // до первого `works.list` показывать `Landing` рано (спека 5.10, «после загрузки»).
   const showLanding = worksLoaded && entries.length === 0;
@@ -237,20 +236,12 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
 
   const ui = useUiStore((state) => state.ui);
   const setSidebar = useUiStore((state) => state.setSidebar);
-  const paletteOpen = useUiStore((state) => state.paletteOpen);
-  const setPaletteOpen = useUiStore((state) => state.setPaletteOpen);
-  const picker = useUiStore((state) => state.picker);
-  const closePicker = useUiStore((state) => state.closePicker);
   const newWork = useUiStore((state) => state.dialogs.newWork);
   const openNewWorkDialog = useUiStore((state) => state.openNewWorkDialog);
   const closeNewWorkDialog = useUiStore((state) => state.closeNewWorkDialog);
   const createRoom = useUiStore((state) => state.dialogs.createRoom);
   const closeCreateRoomDialog = useUiStore((state) => state.closeCreateRoomDialog);
   const wakePaused = useUiStore((state) => state.wakePaused);
-  // Недавние сессии палитры — из истории переходов (кусок 2.7); подписка на
-  // `history`, чтобы список обновлялся вместе с ней.
-  const history = useLayoutStore((state) => state.history);
-  const recentSessionRefs = recentSessionsFromHistory(history.entries, entries);
   const toggleWake = useUiStore((state) => state.toggleWake);
   const notices = useNoticesStore((state) => state.notices);
   // Раунд исправлений 1 куска E.1: `notice.text` хоста — русский свободный
@@ -336,11 +327,12 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     if (target !== undefined) useLayoutStore.getState().apply(key, (l) => focusGroup(l, target.id));
   };
 
-  const beginSplit = (direction: 'right' | 'down'): void => {
+  // Содержимое новой группы выбирает палитра в режиме разделения (спека 9.5): вкладки, сессии
+  // без вкладки и комнаты активной работы.
+  const beginSplit = (mode: 'splitRight' | 'splitDown'): void => {
     const key = useLayoutStore.getState().activeWorkKey;
-    const layout = key === null ? undefined : useLayoutStore.getState().layouts[key];
-    if (key === null || layout === undefined) return;
-    useUiStore.getState().openPicker({ workKey: key, direction, openSessionIds: openTerminalSessionIds(layout) });
+    if (key === null || useLayoutStore.getState().layouts[key] === undefined) return;
+    usePaletteStore.getState().openWith(mode);
   };
 
   // ⌘F и ⌘K: поверхность активной вкладки активной группы активной работы — сами
@@ -412,8 +404,12 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
    */
   const run = (id: ActionId): void => {
     const layoutStore = useLayoutStore.getState();
-    if (id === 'palette.open') setPaletteOpen(true);
-    else if (id === 'work.new') openNewWorkDialog();
+    if (id === 'palette.open') {
+      // ⌘J при открытой палитре: обычная — закрыть, режим разделения или «+» — переключить в обычный.
+      const palette = usePaletteStore.getState();
+      if (palette.open && palette.mode === 'default') palette.close();
+      else palette.openWith('default');
+    } else if (id === 'work.new') openNewWorkDialog();
     else if (id === 'session.new') {
       // Родитель — выбранная сессия, как у ⌘T в `App.tsx`.
       const selected = selectedSessionOf(layoutStore, useWorksStore.getState().entries);
@@ -428,8 +424,8 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
       if (next !== null) layoutStore.setActiveWork(next);
     } else if (id === 'history.back') layoutStore.back();
     else if (id === 'history.forward') layoutStore.forward();
-    else if (id === 'group.splitRight') beginSplit('right');
-    else if (id === 'group.splitDown') beginSplit('down');
+    else if (id === 'group.splitRight') beginSplit('splitRight');
+    else if (id === 'group.splitDown') beginSplit('splitDown');
     else if (id === 'group.prev') focusAdjacentGroup(-1);
     else if (id === 'group.next') focusAdjacentGroup(1);
     else if (id === 'tab.close') closeActiveTab();
@@ -450,6 +446,9 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   };
   const runRef = useRef(run);
   runRef.current = run;
+  // Одна ссылка на всё время жизни: палитра пересобирает документы по своим подпискам, а не на
+  // каждую отрисовку оболочки.
+  const stableRun = useRef((id: ActionId): void => runRef.current(id)).current;
   const endMruCycleRef = useRef(endMruCycle);
   endMruCycleRef.current = endMruCycle;
 
@@ -457,10 +456,9 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     () =>
       installKeyHandler({
         run: (id) => runRef.current(id),
-        // Прежняя палитра строк по номеру не выбирает: `Palette` и её `pickRow` подключает 6.2.
-        pickPaletteRow: () => {},
+        pickPaletteRow: (index) => usePaletteStore.getState().pickRow(index),
         context: () => focusContext(document.activeElement),
-        paletteOpen: () => useUiStore.getState().paletteOpen,
+        paletteOpen: () => usePaletteStore.getState().open,
         available,
         endMruCycle: () => endMruCycleRef.current(),
       }),
@@ -476,36 +474,13 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     [bridge],
   );
 
-  const pickerEntry = picker === null ? undefined : ordered.find((entry) => workKey(entry.projectPath, entry.map.work.id) === picker.workKey);
-  const pickerCandidates = picker === null || pickerEntry === undefined ? [] : sessionCandidates(pickerEntry, new Set(picker.openSessionIds));
-
-  // Открывающие действия палитры и сайдбара: сессия/почта/комната могут
+  // Открывающие действия сайдбара: сессия/почта/комната могут
   // принадлежать НЕ активной сейчас работе (у каждой работы своя раскладка) —
   // сначала переключить работу, потом открыть вкладку в НЕЙ.
   const openTabInWork = (key: string, tab: TabSpec): void => {
     useLayoutStore.getState().setActiveWork(key);
     useLayoutStore.getState().apply(key, (layout) => openTab(layout, tab));
   };
-
-  const commands = buildCommands({
-    works: entries,
-    wakePaused,
-    recentSessionRefs,
-    actions: {
-      openWork: (key) => useLayoutStore.getState().setActiveWork(key),
-      openSession: (ref, key) => openTabInWork(key, { kind: 'terminal', id: tabId.terminal(ref.sessionId), sessionId: ref.sessionId }),
-      openMail: (key) => openTabInWork(key, { kind: 'mail', id: tabId.mail() }),
-      openRoom: (key, roomId) => openTabInWork(key, { kind: 'room', id: tabId.room(roomId), roomId }),
-      closeActivePanel: closeActiveTab,
-      newSession: () => {
-        const selected = selectedSessionOf(useLayoutStore.getState(), useWorksStore.getState().entries);
-        useUiStore.getState().openNewSessionDialog(selected?.ref.sessionId ?? null);
-      },
-      newWork: () => useUiStore.getState().openNewWorkDialog(),
-      settings: () => useUiStore.getState().openSettingsDialog(),
-      toggleWake: () => void toggleWake(bridge),
-    },
-  });
 
   // Кандидаты «Создать комнату с…» — остальные сессии той же работы, кроме
   // обязательного участника (сессии, с которой открыли пункт меню в сайдбаре).
@@ -595,31 +570,11 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
         attention={attention}
         onNextAttention={openNextAttention}
       />
-      <CommandPalette open={paletteOpen} commands={commands} onOpenChange={setPaletteOpen} />
-      <SessionPicker
-        open={picker !== null}
-        candidates={pickerCandidates}
-        onOpenChange={(open) => {
-          if (!open) closePicker();
-        }}
-        onSelect={(sessionRef) => {
-          if (picker === null) return;
-          const layout = useLayoutStore.getState().layouts[picker.workKey];
-          if (layout !== undefined) {
-            const tab: TabSpec = { kind: 'terminal', id: tabId.terminal(sessionRef.sessionId), sessionId: sessionRef.sessionId };
-            const direction = picker.direction === 'right' ? 'row' : 'column';
-            const error = useLayoutStore
-              .getState()
-              .apply(picker.workKey, (l) => splitGroup(l, layout.activeGroupId, direction, tab, measureGroupSizes()));
-            if (error === 'too-many-groups') toast(S.tabs.tooManyGroups);
-            else if (error === 'too-small') toast(S.tabs.tooSmall);
-          }
-          closePicker();
-        }}
-      />
+      <Palette bridge={bridge} run={stableRun} />
       <NewWorkComposer
         open={newWork.open}
         projectPath={newWork.projectPath}
+        title={newWork.title}
         bridge={bridge}
         onOpenChange={(open) => {
           if (!open) closeNewWorkDialog();

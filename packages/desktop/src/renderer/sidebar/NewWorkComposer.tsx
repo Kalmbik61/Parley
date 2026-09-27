@@ -155,11 +155,13 @@ export interface NewWorkComposerProps {
   open: boolean;
   /** От «+» заголовка проекта — уже выбран; `null` — ⌘N и «New workspace». */
   projectPath: string | null;
+  /** Начальное название: «Create workspace …» палитры (кусок 6.2); `''` — пусто. */
+  title: string;
   bridge: HarnasBridge;
   onOpenChange(open: boolean): void;
 }
 
-export function NewWorkComposer({ open, projectPath: initialProject, bridge, onOpenChange }: NewWorkComposerProps): JSX.Element {
+export function NewWorkComposer({ open, projectPath: initialProject, title: initialTitle, bridge, onOpenChange }: NewWorkComposerProps): JSX.Element {
   const entries = useWorksStore((state) => state.entries);
   const [projectPath, setProjectPath] = useState<string | null>(initialProject);
   const [chosenFolders, setChosenFolders] = useState<string[]>([]);
@@ -194,13 +196,13 @@ export function NewWorkComposer({ open, projectPath: initialProject, bridge, onO
     };
   }, []);
 
-  // Каждое открытие — с чистой формой и проектом открывшего; «Create more» живёт до
+  // Каждое открытие — с чистой формой, проектом и названием открывшего; «Create more» живёт до
   // перезапуска окна, агент выбирается заново по правилу (`lastProvider` помнит прошлый).
   useEffect(() => {
     if (!open) return;
     setProjectPath(initialProject);
     setProvider(null);
-    setTitle('');
+    setTitle(initialTitle);
     setGoal('');
     setTask('');
     setLabel('');
@@ -209,7 +211,7 @@ export function NewWorkComposer({ open, projectPath: initialProject, bridge, onO
     setError(null);
     setCreatedWork(null);
     setBusy(false);
-  }, [open, initialProject]);
+  }, [open, initialProject, initialTitle]);
 
   useEffect(() => {
     if (!open) return;

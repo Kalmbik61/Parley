@@ -15,6 +15,7 @@ import { ArrowLeft, ArrowRight, PanelLeft, PanelRight, Search } from 'lucide-rea
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
+import { usePaletteStore } from '../palette/store.js';
 import { useUiStore } from '../store/ui.js';
 import { Button } from '../ui/button.js';
 
@@ -30,7 +31,7 @@ function stopDoubleClick(event: React.MouseEvent): void {
 export function Titlebar({ bridge }: TitlebarProps): JSX.Element {
   const leftOpen = useUiStore((state) => state.ui.leftSidebar.open);
   const setSidebar = useUiStore((state) => state.setSidebar);
-  const setPaletteOpen = useUiStore((state) => state.setPaletteOpen);
+  const openPalette = usePaletteStore((state) => state.openWith);
 
   const back = useLayoutStore((state) => state.back);
   const forward = useLayoutStore((state) => state.forward);
@@ -77,7 +78,7 @@ export function Titlebar({ bridge }: TitlebarProps): JSX.Element {
       <div className="titlebar-no-drag flex items-center gap-1" onDoubleClick={stopDoubleClick}>
         <button
           type="button"
-          onClick={() => setPaletteOpen(true)}
+          onClick={() => openPalette('default')}
           className="flex h-6 items-center gap-1.5 rounded-md border border-input bg-background px-2 text-xs text-muted-foreground hover:bg-accent"
         >
           <Search className="size-3.5" />

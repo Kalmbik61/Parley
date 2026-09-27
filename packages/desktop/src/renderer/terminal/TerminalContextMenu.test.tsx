@@ -6,8 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { SessionRef } from '@harnas/protocol';
-import { workKey } from '../lib/tree-order.js';
-import { useUiStore } from '../store/ui.js';
+import { usePaletteStore } from '../palette/store.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { xtermMock } from '../test-utils/xterm-mock.js';
 import { TerminalSurface } from './TerminalSurface.js';
@@ -37,7 +36,7 @@ beforeEach(() => {
   bridge = createFakeBridge();
   bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
   bridge.setHandler('pty.detach', () => ({ ok: true as const }));
-  useUiStore.setState({ picker: null });
+  usePaletteStore.setState({ open: false, mode: 'default', query: '' });
 });
 
 afterEach(() => {
@@ -104,9 +103,9 @@ describe('тест 7: TerminalContextMenu', () => {
     expect(screen.getByPlaceholderText('Find…')).toBeTruthy();
   });
 
-  it('Split right — openPicker с direction right и работой терминала', async () => {
+  it('Split right — палитра в режиме splitRight (openWith, кусок 6.2)', async () => {
     await openMenu();
     fireEvent.click(item('Split right'));
-    expect(useUiStore.getState().picker).toEqual({ workKey: workKey(ref.projectPath, ref.workId), direction: 'right', openSessionIds: [] });
+    expect(usePaletteStore.getState()).toMatchObject({ open: true, mode: 'splitRight' });
   });
 });

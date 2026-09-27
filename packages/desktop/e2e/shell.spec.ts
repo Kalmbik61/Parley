@@ -180,7 +180,7 @@ test.describe('каркас окна: сплиты, перенос вкладо�
     await expect.poll(() => groupCount(window)).toBe(1);
 
     await sendMenu(electronApp, 'group.splitRight');
-    await window.getByRole('dialog').getByText('S02 два').click();
+    await window.getByRole('dialog').getByRole('option', { name: /S02 два/ }).click();
     await expect.poll(() => groupCount(window)).toBe(2);
     const sourceGroup = await groupIdOfTab(window, term(s2));
     const group1 = await groupIdOfTab(window, term(s1));
@@ -216,7 +216,7 @@ test.describe('каркас окна: сплиты, перенос вкладо�
 
     await window.locator(rowSel(work.key, s1)).click();
     await sendMenu(electronApp, 'group.splitRight');
-    await window.getByRole('dialog').getByText('S02 два').click();
+    await window.getByRole('dialog').getByRole('option', { name: /S02 два/ }).click();
     await expect.poll(() => groupCount(window)).toBe(2);
 
     await typeInto(window, s1, 'hello-mount');

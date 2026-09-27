@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
+import { usePaletteStore } from '../palette/store.js';
 import { EMPTY_HISTORY } from './history.js';
 import { useLayoutStore } from './store.js';
 import { Tab } from './Tab.js';
@@ -58,7 +59,7 @@ describe('Tab — тест 2', () => {
     const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
     setLayoutWithGroup(group);
 
-    render(<Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={meta('A')} dot={null} isActive openSessionIds={[]} />);
+    render(<Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={meta('A')} dot={null} isActive />);
     const el = screen.getByRole('tab');
     expect(el.getAttribute('data-active')).toBe('true');
     expect(el.style.borderBottom).toContain('color-mix');
@@ -68,7 +69,7 @@ describe('Tab — тест 2', () => {
     const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
     setLayoutWithGroup(group);
 
-    render(<Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive={false} openSessionIds={[]} />);
+    render(<Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive={false} />);
     const el = screen.getByRole('tab');
     expect(el.getAttribute('data-active')).toBe('false');
     expect(el.style.borderBottom).toBe('');
@@ -78,7 +79,7 @@ describe('Tab — тест 2', () => {
     const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
     setLayoutWithGroup(group);
 
-    render(<Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={meta('A')} dot={null} isActive openSessionIds={[]} />);
+    render(<Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={meta('A')} dot={null} isActive />);
     fireEvent.click(screen.getByLabelText('Close'));
 
     await vi.waitFor(() => expect(remainingIds()).toEqual(['b']));
@@ -88,7 +89,7 @@ describe('Tab — тест 2', () => {
     const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
     setLayoutWithGroup(group);
 
-    render(<Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={meta('A')} dot={null} isActive openSessionIds={[]} />);
+    render(<Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={meta('A')} dot={null} isActive />);
     fireEvent(screen.getByRole('tab'), new MouseEvent('auxclick', { bubbles: true, button: 1 }));
 
     await vi.waitFor(() => expect(remainingIds()).toEqual(['b']));
@@ -101,7 +102,7 @@ describe('Tab — тест 3', () => {
     setLayoutWithGroup(group);
     const spy = vi.spyOn(useLayoutStore.getState(), 'requestCloseTabs');
 
-    render(<Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive openSessionIds={[]} />);
+    render(<Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive />);
     fireEvent.contextMenu(screen.getByRole('tab'));
     fireEvent.click(screen.getByText('Close others'));
 
@@ -115,7 +116,7 @@ describe('Tab — тест 3', () => {
     setLayoutWithGroup(group);
     const spy = vi.spyOn(useLayoutStore.getState(), 'requestCloseTabs');
 
-    render(<Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive openSessionIds={[]} />);
+    render(<Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive />);
     fireEvent.contextMenu(screen.getByRole('tab'));
     fireEvent.click(screen.getByText('Close to the right'));
 
@@ -131,13 +132,13 @@ describe('Tab — тест 11', () => {
     setLayoutWithGroup(group);
 
     const { rerender } = render(
-      <Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive={false} openSessionIds={[]} />,
+      <Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive={false} />,
     );
     const inactiveClose = screen.getByLabelText('Close');
     expect(inactiveClose.className).toContain('opacity-0');
     expect(inactiveClose.className).toContain('group-hover:opacity-100');
 
-    rerender(<Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={meta('A')} dot={null} isActive openSessionIds={[]} />);
+    rerender(<Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={meta('A')} dot={null} isActive />);
     const activeClose = screen.getByLabelText('Close');
     expect(activeClose.className).toContain('opacity-100');
     expect(activeClose.className).not.toContain('opacity-0');
@@ -149,13 +150,13 @@ describe('Tab — раунд исправлений 1: доступность (�
     const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
     setLayoutWithGroup(group);
 
-    render(<Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={meta('A')} dot={null} isActive openSessionIds={[]} />);
+    render(<Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={meta('A')} dot={null} isActive />);
     const active = screen.getByRole('tab');
     expect(active.getAttribute('aria-selected')).toBe('true');
     expect(active.tabIndex).toBe(0);
     cleanup();
 
-    render(<Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive={false} openSessionIds={[]} />);
+    render(<Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive={false} />);
     const inactive = screen.getByRole('tab');
     expect(inactive.getAttribute('aria-selected')).toBe('false');
     expect(inactive.tabIndex).toBe(-1);
@@ -165,7 +166,7 @@ describe('Tab — раунд исправлений 1: доступность (�
     const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
     setLayoutWithGroup(group);
 
-    render(<Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive={false} openSessionIds={[]} />);
+    render(<Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive={false} />);
     fireEvent.keyDown(screen.getByRole('tab'), { key: 'Enter' });
 
     await vi.waitFor(() => expect(useLayoutStore.getState().layouts[WORK_KEY]?.root).toMatchObject({ activeTabId: 'b' }));
@@ -175,7 +176,7 @@ describe('Tab — раунд исправлений 1: доступность (�
     const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
     setLayoutWithGroup(group);
 
-    render(<Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive={false} openSessionIds={[]} />);
+    render(<Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive={false} />);
     fireEvent.keyDown(screen.getByRole('tab'), { key: ' ' });
 
     await vi.waitFor(() => expect(useLayoutStore.getState().layouts[WORK_KEY]?.root).toMatchObject({ activeTabId: 'b' }));
@@ -195,7 +196,7 @@ describe('Tab — отметки внимания (кусок 4.2)', () => {
         meta={{ ...meta('B'), unread: true, needsYou: true }}
         dot={{ state: 'done', lifecycle: 'active' }}
         isActive={false}
-        openSessionIds={[]}
+       
       />,
     );
     const el = screen.getByRole('tab');
@@ -208,10 +209,30 @@ describe('Tab — отметки внимания (кусок 4.2)', () => {
     const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a')], activeTabId: 'a' };
     setLayoutWithGroup(group);
     render(
-      <Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={meta('A')} dot={{ state: 'done', lifecycle: 'active' }} isActive openSessionIds={[]} />,
+      <Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={meta('A')} dot={{ state: 'done', lifecycle: 'active' }} isActive />,
     );
     const el = screen.getByRole('tab');
     expect(el.getAttribute('data-unread')).toBe('false');
     expect(el.querySelector('[data-testid="agent-state-dot"]')?.getAttribute('data-state')).toBe('done');
+  });
+});
+
+describe('Tab — «Split right/down» (кусок 6.2)', () => {
+  it('группа вкладки становится активной, палитра открывается в режиме разделения', () => {
+    const g1: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a')], activeTabId: 'a' };
+    const g2: GroupNode = { type: 'group', id: 'g2', tabs: [tab('b')], activeTabId: 'b' };
+    useLayoutStore.setState({
+      activeWorkKey: WORK_KEY,
+      layouts: { [WORK_KEY]: { root: { type: 'split', id: 's1', direction: 'row', ratio: 0.5, children: [g1, g2] }, activeGroupId: 'g2', closedTabs: [] } },
+      hydrated: { [WORK_KEY]: true },
+    });
+    usePaletteStore.setState({ open: false, mode: 'default', query: '' });
+
+    render(<Tab workKey={WORK_KEY} group={g1} tab={tab('a')} meta={meta('A')} dot={null} isActive />);
+    fireEvent.contextMenu(screen.getByRole('tab'));
+    fireEvent.click(screen.getByText('Split down'));
+
+    expect(useLayoutStore.getState().layouts[WORK_KEY]?.activeGroupId).toBe('g1');
+    expect(usePaletteStore.getState()).toMatchObject({ open: true, mode: 'splitDown' });
   });
 });

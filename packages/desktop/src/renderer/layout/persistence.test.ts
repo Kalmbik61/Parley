@@ -14,7 +14,7 @@ import { tabId } from './ids.js';
 import { emptyLayout, groups, openTab, splitGroup } from './tree.js';
 import { EMPTY_HISTORY } from './history.js';
 import { useLayoutStore } from './store.js';
-import { isTabAlive, neighborWork, useLayoutPersistence } from './persistence.js';
+import { ensureHydrated, isTabAlive, neighborWork, useLayoutPersistence } from './persistence.js';
 
 function session(id: string, overrides: Partial<WorkSession> = {}): WorkSession {
   return {
@@ -584,5 +584,48 @@ describe('useLayoutPersistence — order и visibleOrder (кусок 3.4)', () =
     const [a, b] = [work('w-a', '/tmp/a', [], 'archived'), work('w-b', '/tmp/b')];
     mount(bridge, { entries: [a, b], order: [keyA, keyB], visibleOrder: [] });
     await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).toBe(keyB));
+  });
+});
+
+describe('ensureHydrated (тест 7 куска 6.2)', () => {
+  it('работа, не показанная за запуск, — один loadLayout и её вкладки в раскладках; гидрированная — без вызова', async () => {
+    const bridge = createFakeBridge();
+    const entryA = work('w-a', '/tmp/a', [session('s-01')]);
+    const entryB = work('w-b', '/tmp/b', [session('s-02')]);
+    const savedB = openTab(emptyLayout(), { kind: 'terminal', id: tabId.terminal('s-02'), sessionId: 's-02' });
+    await bridge.app.saveLayout(keyB, savedB);
+    useLayoutStore.getState().setActiveWork(keyA);
+    renderHook(() => useLayoutPersistence({ bridge, works: [entryA, entryB], worksLoaded: true, order: [keyA, keyB], visibleOrder: [keyA, keyB] }));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
+    const loadLayoutSpy = vi.spyOn(bridge.app, 'loadLayout');
+
+    await ensureHydrated({ bridge, works: [entryA, entryB] });
+
+    expect(loadLayoutSpy).toHaveBeenCalledTimes(1);
+    expect(loadLayoutSpy).toHaveBeenCalledWith(keyB);
+    const layoutB = useLayoutStore.getState().layouts[keyB];
+    expect(layoutB && groups(layoutB).flatMap((g) => g.tabs.map((t) => t.id))).toEqual([tabId.terminal('s-02')]);
+    // Активная работа та же: палитра только читает раскладки.
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyA);
+
+    await ensureHydrated({ bridge, works: [entryA, entryB] });
+    expect(loadLayoutSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('операция из очереди, влитая в гидрацию палитрой, уходит в saveLayout', async () => {
+    const bridge = createFakeBridge();
+    const entryA = work('w-a', '/tmp/a', [session('s-01')]);
+    const entryB = work('w-b', '/tmp/b', [session('s-02')]);
+    useLayoutStore.getState().setActiveWork(keyA);
+    renderHook(() => useLayoutPersistence({ bridge, works: [entryA, entryB], worksLoaded: true, order: [keyA, keyB], visibleOrder: [keyA, keyB] }));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
+
+    const pendingTab: TabSpec = { kind: 'terminal', id: tabId.terminal('s-02'), sessionId: 's-02' };
+    useLayoutStore.getState().apply(keyB, (l) => openTab(l, pendingTab));
+    await ensureHydrated({ bridge, works: [entryA, entryB] });
+
+    await waitFor(() => expect(bridge.layoutSaves.some((s) => s.workKey === keyB)).toBe(true), { timeout: 2000 });
+    const saved = bridge.layoutSaves.find((s) => s.workKey === keyB);
+    expect(groups(saved?.layout as WorkLayout).flatMap((g) => g.tabs.map((t) => t.id))).toContain(pendingTab.id);
   });
 });

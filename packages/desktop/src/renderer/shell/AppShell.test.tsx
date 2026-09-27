@@ -30,6 +30,8 @@ import { workKey } from '../lib/tree-order.js';
 import { AppShell } from './AppShell.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
+import { usePaletteStore } from '../palette/store.js';
+import { Profiler } from 'react';
 
 // Тесты 10, 13, 14, 15 куска 2.4 зовут `toast` и из `AppShell.tsx`
 // (отказ сплита), и из `layout/Tab.tsx` (закрытие вкладки) — без смонтированного
@@ -150,13 +152,14 @@ beforeEach(() => {
   useUiStore.setState({
     windowFocused: true,
     wakePaused: null,
-    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null },
+    dialogs: { newWork: { open: false, projectPath: null, title: '' }, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null },
     visibleSessionRefs: {},
     ui: DEFAULT_UI,
     uiLoaded: true,
-    paletteOpen: false,
-    picker: null,
   });
+  usePaletteStore.setState({ open: false, mode: 'default', query: '' });
+  // cmdk палитры прокручивает выделенную строку — в jsdom `scrollIntoView` нет.
+  Element.prototype.scrollIntoView = vi.fn();
   useUiStore.getState().init(bridge);
   useLayoutStore.setState({
     activeWorkKey: null,
@@ -261,7 +264,7 @@ describe('AppShell — Landing и оболочка с работой (тест 6
 });
 
 describe('AppShell — меню и диалоги (тест 9)', () => {
-  it('на Landing: кнопка «Новая работа» и меню work.new открывают форму новой работы; меню palette.open — CommandPalette', async () => {
+  it('на Landing: кнопка «Новая работа» и меню work.new открывают форму новой работы; меню palette.open — Palette', async () => {
     render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
     await flush();
 
@@ -278,6 +281,8 @@ describe('AppShell — меню и диалоги (тест 9)', () => {
 
     act(() => bridge.emitMenu('palette.open'));
     expect(await screen.findByText('Command palette')).toBeTruthy();
+    expect(usePaletteStore.getState()).toMatchObject({ open: true, mode: 'default' });
+    expect(screen.getByPlaceholderText('Search tabs, workspaces, sessions, rooms, and actions…')).toBeTruthy();
   });
 
   it('подпись сочетания палитры — ⌘J и в заголовке, и на Landing; ⌘K нигде нет (тест 9 куска 6.1b)', async () => {
@@ -316,7 +321,7 @@ describe('AppShell — меню и диалоги (тест 9)', () => {
     expect(useUiStore.getState().ui.leftSidebar.open).toBe(false);
 
     fireEvent.click(screen.getByText('Search'));
-    expect(useUiStore.getState().paletteOpen).toBe(true);
+    expect(usePaletteStore.getState()).toMatchObject({ open: true, mode: 'default' });
   });
 });
 
@@ -336,8 +341,8 @@ describe('AppShell — activeWorkKey ещё не выбран (тест 15 ку�
   });
 });
 
-describe('AppShell — сплит и палитра (тест 13 куска 2.4)', () => {
-  it('split-right без уже открытых; выбор — вторая группа; «+» открывает палитру', async () => {
+describe('AppShell — сплит и палитра (тест 13 куска 2.4, тест 9 куска 6.2)', () => {
+  it('split-right: палитра «Open in new group», сессия с вкладкой — только вкладкой; выбор строки — вторая группа', async () => {
     mockNonZeroRects();
 
     const w1 = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'план'), session('s-02', 'бэкенд')]);
@@ -348,11 +353,9 @@ describe('AppShell — сплит и палитра (тест 13 куска 2.4)
     await flush();
     await waitFor(() => expect(useLayoutStore.getState().hydrated[workKey1]).toBe(true));
 
-    // Первая сессия уже открыта — как если бы её открыл сайдбар (вход подключит 2.5);
-    // тут — напрямую в сторе, других путей открыть первую вкладку в этом куске нет.
+    // Первая сессия уже открыта — как если бы её открыл сайдбар.
     useLayoutStore.getState().apply(workKey1, (layout) => openTab(layout, term('s-01')));
     await flush();
-    expect(useLayoutStore.getState().layouts[workKey1] && groups(useLayoutStore.getState().layouts[workKey1]!)).toHaveLength(1);
     // Одна группа — тест 1: её строка вкладок стоит в заголовке, не в теле.
     expect(document.getElementById('titlebar-tabs')?.querySelector('[data-tab-id]')).not.toBeNull();
 
@@ -360,22 +363,54 @@ describe('AppShell — сплит и палитра (тест 13 куска 2.4)
     await flush();
 
     const dialog = await screen.findByRole('dialog');
-    // «без уже открытых» (спека 5.2): s-01 уже открыта — кандидат только s-02.
-    expect(within(dialog).queryByText(/S01/)).toBeNull();
-    fireEvent.click(within(dialog).getByText('S02 бэкенд'));
+    expect(usePaletteStore.getState().mode).toBe('splitRight');
+    expect(within(dialog).getByText('Open in new group')).toBeTruthy();
+    // s-01 открыта — в палитре она вкладкой, а не второй строкой сессии.
+    expect(within(dialog).getAllByRole('option', { name: /S01 план/ })).toHaveLength(1);
+    fireEvent.click(within(dialog).getByRole('option', { name: /S02 бэкенд/ }));
+    await flush();
+
+    expect(usePaletteStore.getState().open).toBe(false);
+    const layout = useLayoutStore.getState().layouts[workKey1];
+    if (layout === undefined) throw new Error('раскладка не гидрирована');
+    expect(groups(layout).map((group) => group.tabs.map((tab) => tab.id))).toEqual([[tabId.terminal('s-01')], [tabId.terminal('s-02')]]);
+    expect(document.querySelectorAll('[data-group-id]')).toHaveLength(2);
+    expect(document.getElementById('titlebar-tabs')?.childElementCount ?? 0).toBe(0);
+  });
+
+  it('«+» строки вкладок неактивной группы — палитра в режиме open, выбор открывается в этой группе', async () => {
+    mockNonZeroRects();
+    const w1 = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'план'), session('s-02', 'бэкенд'), session('s-03', 'ревью')]);
+    useWorksStore.setState({ entries: [w1], branches: {}, loading: false, error: null });
+    const workKey1 = '/tmp/w-01 w-01';
+
+    render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
+    await flush();
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[workKey1]).toBe(true));
+    useLayoutStore.getState().apply(workKey1, (layout) => openTab(layout, term('s-01')));
+    const g1Id = useLayoutStore.getState().layouts[workKey1]?.activeGroupId;
+    if (g1Id === undefined) throw new Error('нет активной группы');
+    useLayoutStore.getState().apply(workKey1, (layout) => splitGroup(layout, g1Id, 'row', term('s-02'), { [g1Id]: { width: 800, height: 600 } }));
+    await flush();
+    expect(useLayoutStore.getState().layouts[workKey1]?.activeGroupId).not.toBe(g1Id);
+
+    const strip = document.querySelector(`[data-group-id="${g1Id}"]`);
+    if (strip === null) throw new Error('нет группы g1');
+    fireEvent.click(within(strip as HTMLElement).getByLabelText('Open…'));
+    await flush();
+
+    expect(usePaletteStore.getState()).toMatchObject({ open: true, mode: 'open' });
+    expect(useLayoutStore.getState().layouts[workKey1]?.activeGroupId).toBe(g1Id);
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'S03' } });
+    await flush();
+    fireEvent.click(screen.getAllByRole('option', { name: /S03 ревью/ })[0]!);
     await flush();
 
     const layout = useLayoutStore.getState().layouts[workKey1];
-    if (layout === undefined) throw new Error('раскладка не гидрирована');
+    if (layout === undefined) throw new Error('раскладка пропала');
+    const g1 = groups(layout).find((group) => group.id === g1Id);
+    expect(g1?.tabs.map((tab) => tab.id)).toEqual([tabId.terminal('s-01'), tabId.terminal('s-03')]);
     expect(groups(layout)).toHaveLength(2);
-    // Две группы (тест 1: «слот заголовка пуст», когда групп несколько;
-    // отдельная строка на каждую группу — `[data-group-id]` их обеих).
-    expect(document.querySelectorAll('[data-group-id]')).toHaveLength(2);
-    expect(document.getElementById('titlebar-tabs')?.childElementCount ?? 0).toBe(0);
-
-    // «+» строки вкладок (теперь их две — групп несколько) открывает палитру.
-    fireEvent.click(screen.getAllByLabelText('Open…')[0]!);
-    expect(await screen.findByText('Command palette')).toBeTruthy();
   });
 });
 
@@ -388,7 +423,7 @@ function siblingGroupId(root: LayoutNode, id: string): string | null {
   return siblingGroupId(a, id) ?? siblingGroupId(b, id);
 }
 
-describe('AppShell — разделение из меню вкладки неактивной группы (тест 14 куска 2.4)', () => {
+describe('AppShell — разделение из меню вкладки неактивной группы (тест 14 куска 2.4, тест 9 куска 6.2)', () => {
   it('«Разделить вправо» на вкладке неактивной группы делит ЕЁ группу; прежняя активная группа не тронута', async () => {
     mockNonZeroRects();
 
@@ -425,8 +460,11 @@ describe('AppShell — разделение из меню вкладки неа�
     fireEvent.click(screen.getByText('Split right'));
     await flush();
 
+    // Группа вкладки стала активной, палитра — в режиме разделения.
+    expect(useLayoutStore.getState().layouts[workKey1]?.activeGroupId).toBe(g1Id);
+    expect(usePaletteStore.getState()).toMatchObject({ open: true, mode: 'splitRight' });
     const dialog = await screen.findByRole('dialog');
-    fireEvent.click(within(dialog).getByText('S03 ревью'));
+    fireEvent.click(within(dialog).getByRole('option', { name: /S03 ревью/ }));
     await flush();
 
     const afterLayout = useLayoutStore.getState().layouts[workKey1];
@@ -477,7 +515,7 @@ describe('AppShell — отказ сплита при 8 группах (тест
     act(() => bridge.emitMenu('group.splitRight'));
     await flush();
     const dialog = await screen.findByRole('dialog');
-    fireEvent.click(within(dialog).getByText('S09 session 9'));
+    fireEvent.click(within(dialog).getByRole('option', { name: /S09 session 9/ }));
     await flush();
 
     expect(vi.mocked(toast)).toHaveBeenCalledWith('No more than 8 groups per workspace');
@@ -724,7 +762,7 @@ describe('AppShell — ⌘K в терминале (тест 10 куска 5.3, �
     expect(event.defaultPrevented).toBe(true);
     expect(xtermMock.callsOf('clear', terminal?.index)).toHaveLength(1);
     expect(bridge.notified.filter((n) => n.method === 'pty.input')).toEqual([]);
-    expect(useUiStore.getState().paletteOpen).toBe(false);
+    expect(usePaletteStore.getState().open).toBe(false);
     expect(screen.queryByText('Command palette')).toBeNull();
   });
 
@@ -754,7 +792,7 @@ describe('AppShell — ⌘K в терминале (тест 10 куска 5.3, �
 
     expect(event.defaultPrevented).toBe(false);
     expect(xtermMock.callsOf('clear', terminal?.index)).toHaveLength(0);
-    expect(useUiStore.getState().paletteOpen).toBe(false);
+    expect(usePaletteStore.getState().open).toBe(false);
   });
 });
 
@@ -965,7 +1003,7 @@ describe('AppShell — сайдбар карточек (кусок 3.3)', () => 
     expect(within(dialog).getByRole('combobox', { name: 'Project' }).getAttribute('title')).toBe('/tmp/w-01');
     fireEvent.keyDown(dialog, { key: 'Escape' });
     await flush();
-    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: false, projectPath: null });
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: false, projectPath: null, title: '' });
 
     act(() => bridge.emitMenu('work.new'));
     const again = await screen.findByRole('dialog');
@@ -989,6 +1027,87 @@ describe('AppShell — сайдбар карточек (кусок 3.3)', () => 
     act(() => useLayoutStore.getState().setActiveWork(keyOf('w-01')));
     fireEvent.click(document.querySelector(`[data-work-key="${keyOf('w-02')}"]`) as HTMLElement);
     expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
+  });
+});
+
+describe('AppShell и палитра: подписки и клавиши (тест 8 и решение контролёра 2 куска 6.2)', () => {
+  it('закрытая палитра: запись истории не перерисовывает AppShell; открытая — обновляет список', async () => {
+    const w1 = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'план'), session('s-02', 'бэкенд')]);
+    const key = keyOf('w-01');
+    useWorksStore.setState({ entries: [w1], branches: {}, loading: false, error: null });
+    let commits = 0;
+    render(
+      <Profiler id="shell" onRender={() => (commits += 1)}>
+        <AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />
+      </Profiler>,
+    );
+    await flush();
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[key]).toBe(true));
+    act(() => {
+      useLayoutStore.getState().apply(key, (layout) => openTab(openTab(layout, term('s-01')), term('s-02')));
+    });
+    await flush();
+    // История с двумя записями: ещё одна запись не меняет ни «назад», ни «вперёд» заголовка.
+    const history = (at: number) => ({
+      entries: [
+        { workKey: key, tabId: tabId.terminal('s-01'), at: at - 2 },
+        { workKey: key, tabId: tabId.terminal('s-02'), at: at - 1 },
+        { workKey: key, tabId: tabId.terminal('s-01'), at },
+      ],
+      index: 2,
+    });
+    act(() => useLayoutStore.setState({ history: { entries: history(Date.now()).entries.slice(0, 2), index: 1 } }));
+    await flush();
+
+    const before = commits;
+    act(() => useLayoutStore.setState({ history: history(Date.now()) }));
+    await flush();
+    expect(commits).toBe(before);
+
+    act(() => usePaletteStore.getState().openWith('default'));
+    await flush();
+    const tabs = (): string[] =>
+      within(screen.getByRole('dialog'))
+        .getAllByRole('option')
+        .map((option) => option.textContent ?? '');
+    expect(tabs()[0]).toContain('S01 план');
+    act(() =>
+      useLayoutStore.setState({
+        history: { entries: [...history(Date.now()).entries, { workKey: key, tabId: tabId.terminal('s-02'), at: Date.now() + 1000 }], index: 3 },
+      }),
+    );
+    await flush();
+    expect(tabs()[0]).toContain('S02 бэкенд');
+  });
+
+  it('при открытой палитре ⌘D, ⌘N, ⌘W, ⌘T за ней не выполняются; ⌘J закрывает', async () => {
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+    await activateWithTerminal(keyOf('w-01'), 's-01');
+    act(() => usePaletteStore.getState().openWith('default'));
+    await flush();
+    const input = screen.getByRole('combobox');
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    const layoutBefore = useLayoutStore.getState().layouts[keyOf('w-01')];
+
+    for (const key of ['d', 'n', 'w', 't']) {
+      act(() => {
+        input.dispatchEvent(new KeyboardEvent('keydown', { key, code: `Key${key.toUpperCase()}`, metaKey: true, bubbles: true, cancelable: true }));
+      });
+    }
+    await flush();
+
+    expect(useLayoutStore.getState().layouts[keyOf('w-01')]).toBe(layoutBefore);
+    expect(useUiStore.getState().dialogs.newWork.open).toBe(false);
+    expect(useUiStore.getState().dialogs.newSession.open).toBe(false);
+    expect(usePaletteStore.getState()).toMatchObject({ open: true, mode: 'default' });
+
+    const cmdJ = new KeyboardEvent('keydown', { key: 'j', code: 'KeyJ', metaKey: true, bubbles: true, cancelable: true });
+    act(() => {
+      input.dispatchEvent(cmdJ);
+    });
+    await flush();
+    expect(cmdJ.defaultPrevented).toBe(true);
+    expect(usePaletteStore.getState().open).toBe(false);
   });
 });
 

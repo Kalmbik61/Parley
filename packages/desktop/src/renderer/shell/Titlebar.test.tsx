@@ -11,6 +11,7 @@ import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { useLayoutStore } from '../layout/store.js';
 import { emptyLayout, focusTab, openTab } from '../layout/tree.js';
+import { usePaletteStore } from '../palette/store.js';
 import { useUiStore } from '../store/ui.js';
 import { Titlebar } from './Titlebar.js';
 
@@ -18,7 +19,8 @@ let bridge: FakeBridge;
 
 beforeEach(() => {
   bridge = createFakeBridge();
-  useUiStore.setState({ ui: DEFAULT_UI, uiLoaded: true, paletteOpen: false, picker: null });
+  useUiStore.setState({ ui: DEFAULT_UI, uiLoaded: true });
+  usePaletteStore.setState({ open: false, mode: 'default', query: '' });
   useUiStore.getState().init(bridge);
   useLayoutStore.setState({
     activeWorkKey: null,
@@ -70,7 +72,7 @@ describe('Titlebar (тест 7)', () => {
     expect(screen.getByText('⌘J')).toBeTruthy();
     expect(screen.queryByText('⌘K')).toBeNull();
     fireEvent.click(screen.getByText('Search'));
-    expect(useUiStore.getState().paletteOpen).toBe(true);
+    expect(usePaletteStore.getState()).toMatchObject({ open: true, mode: 'default' });
 
     expect((screen.getByLabelText('Right sidebar') as HTMLButtonElement).disabled).toBe(true);
   });

@@ -15,21 +15,19 @@ beforeEach(() => {
     },
     ui: DEFAULT_UI,
     uiLoaded: false,
-    paletteOpen: false,
-    picker: null,
   });
 });
 
 describe('useUiStore диалоги', () => {
   it('новая работа — открыть без проекта и с проектом «+» заголовка (кусок 3.5), закрыть', () => {
     useUiStore.getState().openNewWorkDialog();
-    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: null });
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: null, title: '' });
     useUiStore.getState().closeNewWorkDialog();
-    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: false, projectPath: null });
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: false, projectPath: null, title: '' });
     useUiStore.getState().openNewWorkDialog('/tmp/p');
-    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: '/tmp/p' });
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: '/tmp/p', title: '' });
     useUiStore.getState().closeNewWorkDialog();
-    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: false, projectPath: null });
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: false, projectPath: null, title: '' });
   });
 
   it('новая сессия — помнит родителя', () => {
@@ -182,19 +180,10 @@ describe('useUiStore.patchUi / setAppearance / setSidebar (кусок 2.3, те�
   });
 });
 
-describe('useUiStore — палитра, выбор сессии (⌘D) и «Создать комнату с…» (кусок 2.3)', () => {
-  it('paletteOpen переключается setPaletteOpen', () => {
-    useUiStore.getState().setPaletteOpen(true);
-    expect(useUiStore.getState().paletteOpen).toBe(true);
-    useUiStore.getState().setPaletteOpen(false);
-    expect(useUiStore.getState().paletteOpen).toBe(false);
-  });
-
-  it('openPicker/closePicker', () => {
-    useUiStore.getState().openPicker({ workKey: 'w', direction: 'right', openSessionIds: ['s-01'] });
-    expect(useUiStore.getState().picker).toEqual({ workKey: 'w', direction: 'right', openSessionIds: ['s-01'] });
-    useUiStore.getState().closePicker();
-    expect(useUiStore.getState().picker).toBeNull();
+describe('useUiStore — форма работы с названием и «Создать комнату с…» (куски 2.3, 6.2)', () => {
+  it('openNewWorkDialog(null, X) — форма с названием X («Create workspace …» палитры, кусок 6.2)', () => {
+    useUiStore.getState().openNewWorkDialog(null, 'X');
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: null, title: 'X' });
   });
 
   it('openCreateRoomDialog/closeCreateRoomDialog', () => {

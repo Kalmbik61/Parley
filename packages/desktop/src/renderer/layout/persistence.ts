@@ -96,6 +96,53 @@ async function restoreLayout(bridge: HarnasBridge, entry: WorkEntry | undefined,
   return entry === undefined ? base : pruneLayout(base, (tab) => isTabAlive(entry, tab));
 }
 
+/**
+ * Работы, чья САМАЯ ПЕРВАЯ гидрация принесла что-то сверх диска — очередь
+ * `pending`, применённая внутри `hydrate` (раунд исправлений 1, Important
+ * A): сама по себе первая гидрация не «изменение» (см. эффект сохранения
+ * в хуке), но если в неё влилась очередь `pending`, результат уже ОТЛИЧАЕТСЯ
+ * от того, что на диске, и должен уйти в `saveLayout`, иначе не уйдёт
+ * никогда.
+ *
+ * С куска 6.2 — общая на модуль, а не `useRef` хука: гидрирует и палитра
+ * (`ensureHydrated`), и операция из очереди (клик по строке сессии), влитая в
+ * такую гидрацию, иначе попала бы на диск только со следующей правкой.
+ */
+const dirtyFirstHydrate = new Set<string>();
+
+/**
+ * Первая гидрация работы — одна для первого показа и для палитры. Помечает
+ * «грязной» ДО вызова `hydrate`: `hydrate` очередь `pending` тут же потребляет
+ * (см. `store.ts`), и это последний момент, когда её видно.
+ */
+function hydrateWork(key: string, layout: WorkLayout): void {
+  if ((useLayoutStore.getState().pending[key]?.length ?? 0) > 0) dirtyFirstHydrate.add(key);
+  useLayoutStore.getState().hydrate(key, layout);
+}
+
+/** Работы, чью раскладку `ensureHydrated` уже читает: повторное открытие палитры не читает её второй раз. */
+const hydrating = new Set<string>();
+
+/** Гидрирует раскладки работ, ещё не показанных за этот запуск: тот же hydrateWork, что у первого показа. */
+export async function ensureHydrated(input: { bridge: HarnasBridge; works: WorkEntry[] }): Promise<void> {
+  const jobs: Array<Promise<void>> = [];
+  for (const entry of input.works) {
+    const key = workKeyOf(entry.projectPath, entry.map.work.id);
+    if (useLayoutStore.getState().hydrated[key] === true || hydrating.has(key)) continue;
+    hydrating.add(key);
+    jobs.push(
+      restoreLayout(input.bridge, entry, key)
+        .catch(() => emptyLayout())
+        .then((layout) => {
+          hydrating.delete(key);
+          // Первый показ мог успеть раньше — живую раскладку не перечитываем.
+          if (useLayoutStore.getState().hydrated[key] !== true) hydrateWork(key, layout);
+        }),
+    );
+  }
+  await Promise.all(jobs);
+}
+
 export interface UseLayoutPersistenceInput {
   bridge: HarnasBridge;
   works: WorkEntry[];
@@ -246,15 +293,6 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order, visibl
     if (visibleRef.current !== null) lastVisibleRef.current = visibleRef.current;
   }, [worksLoaded, orderSig, visibleSig, archivedSig, bridge]);
 
-  // Работы, чья САМАЯ ПЕРВАЯ гидрация принесла что-то сверх диска — очередь
-  // `pending`, применённая внутри `hydrate` (раунд исправлений 1, Important
-  // A): сама по себе первая гидрация не «изменение» (см. эффект сохранения
-  // ниже), но если в неё влилась очередь `pending`, результат уже ОТЛИЧАЕТСЯ
-  // от того, что на диске, и должен уйти в `saveLayout`, иначе не уйдёт
-  // никогда. Общий `Set`, а не состояние стора — это внутренняя бухгалтерия
-  // между двумя эффектами этого хука, не часть публичного `LayoutState`.
-  const dirtyFirstHydrateRef = useRef<Set<string>>(new Set());
-
   const activeWorkKey = useLayoutStore((state) => state.activeWorkKey);
   const activeHydrated = useLayoutStore((state) =>
     state.activeWorkKey === null ? true : state.hydrated[state.activeWorkKey] === true,
@@ -269,24 +307,14 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order, visibl
     const key = activeWorkKey;
     const entry = worksRef.current.find((candidate) => workKeyOf(candidate.projectPath, candidate.map.work.id) === key);
 
-    // Помечает «грязным» ДО вызова `hydrate` — сама очередь `pending`
-    // проверяется прямо здесь, а не внутри стора: `hydrate` её тут же
-    // потребляет (см. `store.ts`), и это последний момент, когда её видно.
-    const hydrateWork = (layout: WorkLayout): void => {
-      if ((useLayoutStore.getState().pending[key]?.length ?? 0) > 0) {
-        dirtyFirstHydrateRef.current.add(key);
-      }
-      useLayoutStore.getState().hydrate(key, layout);
-    };
-
     restoreLayout(bridge, entry, key)
       .then((layout) => {
-        if (!cancelled) hydrateWork(layout);
+        if (!cancelled) hydrateWork(key, layout);
       })
       .catch(() => {
         // План требует здесь только не уронить окно — раскладка просто
         // откроется пустой, как если бы сохранённой не было вовсе.
-        if (!cancelled) hydrateWork(emptyLayout());
+        if (!cancelled) hydrateWork(key, emptyLayout());
       });
 
     return () => {
@@ -298,7 +326,7 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order, visibl
   // 5.8). Самую первую гидрацию работы (переход `undefined → раскладка`) не
   // сохраняем: это чтение с диска, а не изменение человеком — кроме случая,
   // когда в неё влилась очередь `pending` (раунд исправлений 1, Important A,
-  // `dirtyFirstHydrateRef` выше) — тогда результат уже не то, что на диске.
+  // `dirtyFirstHydrate` выше) — тогда результат уже не то, что на диске.
   //
   // Раунд исправлений 1, Important B: размонтирование хука (в реальном окне —
   // закрытие) или `pagehide`/`beforeunload` до истечения тишины не должны
@@ -330,7 +358,7 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order, visibl
       for (const [key, layout] of Object.entries(state.layouts)) {
         const prevLayout = prevState.layouts[key];
         if (prevLayout === layout) continue;
-        if (prevLayout === undefined && !dirtyFirstHydrateRef.current.delete(key)) continue;
+        if (prevLayout === undefined && !dirtyFirstHydrate.delete(key)) continue;
 
         const timer = timers.get(key);
         if (timer !== undefined) clearTimeout(timer);

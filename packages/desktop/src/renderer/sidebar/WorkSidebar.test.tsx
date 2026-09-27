@@ -17,7 +17,8 @@ import { useHostStore } from '../store/host.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { useSidebarSectionsStore, useSidebarSectionsSync } from './use-sidebar-sections.js';
-import { CommandPalette } from '../components/palette/CommandPalette.js';
+import { Palette } from '../palette/Palette.js';
+import { usePaletteStore } from '../palette/store.js';
 import { WorkSidebar, type WorkSidebarProps } from './WorkSidebar.js';
 
 /**
@@ -95,8 +96,7 @@ beforeEach(() => {
     ui: DEFAULT_UI,
     sidebarHovering: false,
     sidebarHolds: {},
-    paletteOpen: false,
-    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null },
+    dialogs: { newWork: { open: false, projectPath: null, title: '' }, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null },
   });
   useLayoutStore.setState({ activeWorkKey: null, layouts: {}, hydrated: {}, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
   useSidebarSectionsStore.setState({ sections: [], attention: {} });
@@ -106,6 +106,7 @@ afterEach(() => {
   cleanup();
   disposeHost();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe('WorkSidebar — состав (тест 5)', () => {
@@ -273,19 +274,19 @@ describe('WorkSidebar — верх (тесты 8, 16)', () => {
     expect(within(search).getByText('⌘J')).toBeTruthy();
     expect(screen.queryByText('⌘K')).toBeNull();
     fireEvent.click(search);
-    expect(useUiStore.getState().paletteOpen).toBe(true);
+    expect(usePaletteStore.getState()).toMatchObject({ open: true, mode: 'default' });
   });
 
   it('«New workspace» и «+» заголовка проекта открывают форму новой работы (openNewWorkDialog), без сворачивания группы', () => {
     setWorks([makeWork('w-1', { projectPath: '/p/one' })]);
     render(<Harness />);
     fireEvent.click(screen.getByRole('button', { name: /^New workspace\s*⌘N$/ }));
-    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: null });
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: null, title: '' });
 
     act(() => useUiStore.getState().closeNewWorkDialog());
     fireEvent.click(screen.getByRole('button', { name: S.sidebar.newWorkspaceInProject }));
     // Кусок 3.5 (тест 7): «+» заголовка — с проектом этой группы.
-    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: '/p/one' });
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: '/p/one', title: '' });
     expect(useUiStore.getState().ui.collapsedProjects).toEqual([]);
   });
 
@@ -633,20 +634,27 @@ describe('WorkSidebar — возврат фокуса после подтвер�
 
   it('палитра, открытая кнопкой Search, закрыта Esc — фокус на кнопке Search', async () => {
     function WithPalette(): JSX.Element {
-      const open = useUiStore((state) => state.paletteOpen);
       return (
         <>
           <Harness />
-          <CommandPalette open={open} commands={[]} onOpenChange={(next) => useUiStore.getState().setPaletteOpen(next)} />
+          <Palette bridge={bridge} run={() => {}} />
         </>
       );
     }
+    usePaletteStore.setState({ open: false, mode: 'default', query: '' });
+    // cmdk палитры меряет список и прокручивает выделенную строку — в jsdom этого нет.
+    vi.stubGlobal('ResizeObserver', class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    });
+    Element.prototype.scrollIntoView = vi.fn();
     setWorks([a]);
     render(<WithPalette />);
     const search = screen.getByRole('button', { name: /Search/ });
     act(() => search.focus());
     fireEvent.click(search);
-    const input = await screen.findByPlaceholderText(S.palette.searchPlaceholder);
+    const input = await screen.findByPlaceholderText(S.palette.placeholder);
     await waitFor(() => expect(document.activeElement).toBe(input));
     fireEvent.keyDown(input, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
