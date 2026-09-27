@@ -126,7 +126,7 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
       // screenReaderMode не включаем: в нём xterm игнорирует события
       // insertText, а через них приходят выбор эмодзи, диктовка и буквы с
       // диакритикой по долгому нажатию в macOS — ввод терялся бы.
-      // Декорации совпадений `SearchAddon` 0.16 — предлагаемый API xterm 5.5
+      // Декорации совпадений `SearchAddon` 0.15 — предлагаемый API xterm 5.5
       // (`registerDecoration`): без опции он бросает, и нет ни подсветки, ни счётчика.
       allowProposedApi: true,
       // Ссылки OSC 8: без своего обработчика xterm показал бы `confirm()` с текстом не из `S`

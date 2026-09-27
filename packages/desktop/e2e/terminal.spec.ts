@@ -177,4 +177,70 @@ test.describe('панель терминала: ввод стаба и восс�
       await app.close();
     }
   });
+
+  test('раунд fix-6.2: аддоны под xterm 5.5 — ⌘F считает совпадения N/M, FitAddon подгоняет строки под окно', async () => {
+    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const app = await electron.launch({ args: [mainEntry], env });
+    try {
+      const window = await app.firstWindow();
+      const errors: string[] = [];
+      window.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`));
+      window.on('console', (message) => {
+        if (message.type() === 'error') errors.push(`console: ${message.text()}`);
+      });
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 1200, height: 600 }));
+      await expect(window.getByTestId('landing')).toBeVisible();
+
+      const work = await window.evaluate(
+        (projectPath: string) =>
+          (globalThis as { harnas: { call: (m: string, p: unknown) => Promise<{ workId: string }> } }).harnas.call(
+            'works.create',
+            { projectPath, title: 'e2e-addons', goal: '' },
+          ),
+        project,
+      );
+      const session = await window.evaluate(
+        ({ workId, projectPath }: { workId: string; projectPath: string }) =>
+          (
+            globalThis as {
+              harnas: { call: (m: string, p: unknown) => Promise<{ ref: { sessionId: string } }> };
+            }
+          ).harnas.call('sessions.create', { projectPath, workId, provider: 'claude', label: 'addons', task: '', parent: null }),
+        { workId: work.workId, projectPath: project },
+      );
+
+      await window.locator(`[data-session-id="${session.ref.sessionId}"]`).click();
+      const terminalInput = window.locator('.xterm-helper-textarea');
+      await terminalInput.click();
+      for (let i = 0; i < 3; i += 1) {
+        await terminalInput.type('needle');
+        await terminalInput.press('Enter');
+      }
+      await expect(window.getByText('echo: needle', { exact: true })).toHaveCount(3);
+
+      // FitAddon: строк DOM-рендерера столько, сколько влезает; выше окно — больше строк.
+      const rows = window.locator('.xterm-rows > div');
+      const rowsBefore = await rows.count();
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 1200, height: 900 }));
+      await expect.poll(() => rows.count()).toBeGreaterThan(rowsBefore);
+
+      // Поиск: «echo: needle» печатает только stub — ровно три совпадения; ↓ переходит к другому.
+      await terminalInput.click();
+      await window.keyboard.press('Meta+F');
+      const field = window.getByTestId('terminal-search').getByRole('textbox');
+      await expect(field).toBeFocused();
+      await field.fill('echo: needle');
+      await field.press('Enter');
+      const count = window.getByTestId('terminal-search-count');
+      await expect(count).toHaveText(/^[1-3]\/3$/);
+      const first = await count.textContent();
+      await field.press('Enter');
+      await expect(count).toHaveText(/^[1-3]\/3$/);
+      expect(await count.textContent()).not.toBe(first);
+
+      expect(errors).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  });
 });

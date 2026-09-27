@@ -5,23 +5,26 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { ISearchResultChangeEvent, SearchAddon } from '@xterm/addon-search';
+import type { SearchAddon } from '@xterm/addon-search';
 import { SearchBar } from './SearchBar.js';
 
 afterEach(cleanup);
 
+/** Событие счётчика: у `SearchAddon` 0.15 (под xterm 5) именованного типа `ISearchResultChangeEvent` нет. */
+type ResultsEvent = { resultIndex: number; resultCount: number };
+
 function fakeSearch() {
-  let listener: ((event: ISearchResultChangeEvent) => void) | null = null;
+  let listener: ((event: ResultsEvent) => void) | null = null;
   const addon = {
     findNext: vi.fn(() => true),
     findPrevious: vi.fn(() => true),
     clearDecorations: vi.fn(),
-    onDidChangeResults: (next: (event: ISearchResultChangeEvent) => void) => {
+    onDidChangeResults: (next: (event: ResultsEvent) => void) => {
       listener = next;
       return { dispose: () => (listener = null) };
     },
   };
-  return { addon, search: addon as unknown as SearchAddon, fire: (event: ISearchResultChangeEvent) => listener?.(event) };
+  return { addon, search: addon as unknown as SearchAddon, fire: (event: ResultsEvent) => listener?.(event) };
 }
 
 const DECORATIONS = {
