@@ -54,6 +54,7 @@ function makeContext(patch: { source?: ActionSource; activeWorkKey?: string | nu
   };
   const ui = {
     toggleSidebar: vi.fn(),
+    showRightTab: vi.fn(),
     openNewWork: vi.fn(),
     openNewSession: vi.fn(),
     openNewRoom: vi.fn(),
@@ -105,6 +106,8 @@ function expectation(id: ActionId): (spies: Spies) => void {
     'room.new': ({ ui }) => expect(ui.openNewRoom).toHaveBeenCalledTimes(1),
     'settings.open': ({ ui }) => expect(ui.openSettings).toHaveBeenCalledTimes(1),
     'sidebar.left.toggle': ({ ui }) => expect(ui.toggleSidebar).toHaveBeenCalledWith('left'),
+    'sidebar.right.toggle': ({ ui }) => expect(ui.toggleSidebar).toHaveBeenCalledWith('right'),
+    'sidebar.files': ({ ui }) => expect(ui.showRightTab).toHaveBeenCalledWith('files'),
     'work.prev': ({ layout }) => expect(layout.setActiveWork).toHaveBeenCalledWith(ORDER[8]),
     'work.next': ({ layout }) => expect(layout.setActiveWork).toHaveBeenCalledWith(ORDER[1]),
     'works.showArchived': ({ ui }) => expect(ui.toggleShowArchived).toHaveBeenCalledTimes(1),
@@ -150,7 +153,7 @@ describe('runAction — таблица по реестру (тест 1 куск�
 
   it('действия будущих этапов не реализованы и ничего не делают', () => {
     const spies = makeContext();
-    for (const id of ['files.quickOpen', 'sidebar.right.toggle', 'browser.newTab'] as const) {
+    for (const id of ['files.quickOpen', 'sidebar.changes', 'browser.newTab'] as const) {
       expect(IMPLEMENTED_ACTIONS.has(id)).toBe(false);
       runAction(id, spies.ctx);
     }
@@ -186,6 +189,14 @@ describe('runAction — без активной работы (тест 2 кус�
       expect(spies.layout.apply).not.toHaveBeenCalled();
     },
   );
+
+  it.each(['sidebar.right.toggle', 'sidebar.files'] as const)('%s без активной работы — тост, сайдбар не трогается (7.2)', (id) => {
+    const spies = makeContext({ activeWorkKey: null });
+    runAction(id, spies.ctx);
+    expect(spies.toast).toHaveBeenCalledWith('No active workspace');
+    expect(spies.ui.toggleSidebar).not.toHaveBeenCalled();
+    expect(spies.ui.showRightTab).not.toHaveBeenCalled();
+  });
 
   it('отказ requestCloseTabs — тост Couldn\'t close tab: …, без необработанного отказа', async () => {
     const spies = makeContext();

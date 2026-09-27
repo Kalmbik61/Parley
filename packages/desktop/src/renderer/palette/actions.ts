@@ -48,6 +48,8 @@ export interface ActionContext {
   sidebar: { order(): string[] };
   ui: {
     toggleSidebar(side: 'left' | 'right'): void;
+    /** Правый сайдбар на этой вкладке; открытый не прячет. */
+    showRightTab(tab: 'files' | 'changes'): void; // setSidebar('right', { open: true, tab })
     openNewWork(title?: string): void; // openNewWorkDialog(null, title)
     openNewSession(): void; // родитель — выбранная сессия, как у ⌘T
     openNewRoom(): void; // CreateRoomDialog активной работы без участника (3.4)
@@ -127,12 +129,19 @@ function toastOnError(ctx: ActionContext, promise: Promise<unknown>, action: str
   });
 }
 
-/** Действия, которым нужна активная работа (бриф 6.3): без неё — тост. */
+/** Действия, которым нужна активная работа (бриф 6.3): без неё — тост. Правого сайдбара без неё нет (7.2). */
 function needsActiveWork(id: ActionId): boolean {
-  return id === 'session.new' || id === 'room.new' || id.startsWith('group.') || id.startsWith('tab.');
+  return (
+    id === 'session.new' ||
+    id === 'room.new' ||
+    id === 'sidebar.right.toggle' ||
+    id === 'sidebar.files' ||
+    id.startsWith('group.') ||
+    id.startsWith('tab.')
+  );
 }
 
-/** Одна ветка на каждый реализованный `ActionId`; действия будущих этапов (7.2, 7.4, 8.2, 9.2) — без ветки. */
+/** Одна ветка на каждый реализованный `ActionId`; действия будущих этапов (7.4, 8.2, 9.2) — без ветки. */
 export function runAction(id: ActionId, ctx: ActionContext): void {
   // Без активной работы — тост; активная есть, но её раскладка ещё читается с диска — ветки
   // вкладок и групп ниже просто ничего не делают.
@@ -178,6 +187,12 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
       return;
     case 'sidebar.left.toggle':
       ctx.ui.toggleSidebar('left');
+      return;
+    case 'sidebar.right.toggle':
+      ctx.ui.toggleSidebar('right');
+      return;
+    case 'sidebar.files':
+      ctx.ui.showRightTab('files');
       return;
     case 'works.showArchived':
       ctx.ui.toggleShowArchived();

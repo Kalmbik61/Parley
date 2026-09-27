@@ -66,15 +66,31 @@ describe('Titlebar (тест 7)', () => {
     expect(backButton().disabled).toBe(false);
   });
 
-  it('поиск «⌘J» открывает палитру, ⌘K нет; «правый сайдбар» неактивен (до 7.2)', () => {
+  it('поиск «⌘J» открывает палитру, ⌘K нет', () => {
     render(<Titlebar bridge={bridge} />);
 
     expect(screen.getByText('⌘J')).toBeTruthy();
     expect(screen.queryByText('⌘K')).toBeNull();
     fireEvent.click(screen.getByText('Search'));
     expect(usePaletteStore.getState()).toMatchObject({ open: true, mode: 'default' });
+  });
 
-    expect((screen.getByLabelText('Right sidebar') as HTMLButtonElement).disabled).toBe(true);
+  it('«правый сайдбар» (7.2): без активной работы неактивен; с ней переключает ui.rightSidebar.open целым rightSidebar', () => {
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+    render(<Titlebar bridge={bridge} />);
+    const button = (): HTMLButtonElement => screen.getByLabelText('Right sidebar') as HTMLButtonElement;
+    expect(button().disabled).toBe(true);
+
+    act(() => {
+      useLayoutStore.getState().hydrate('w-01', emptyLayout());
+      useLayoutStore.getState().setActiveWork('w-01');
+    });
+    expect(button().disabled).toBe(false);
+    fireEvent.click(button());
+    expect(useUiStore.getState().ui.rightSidebar.open).toBe(false);
+    expect(saveUiSpy).toHaveBeenLastCalledWith({ rightSidebar: { ...DEFAULT_UI.rightSidebar, open: false } });
+    fireEvent.click(button());
+    expect(useUiStore.getState().ui.rightSidebar.open).toBe(true);
   });
 
   it('двойной клик по пустому месту заголовка зовёт app.titlebarDoubleClick', () => {

@@ -131,8 +131,11 @@ export interface UiState {
   patchUi: (patch: Partial<Omit<UiFile, 'version' | 'activeWorkKey'>>) => void;
   /** `app.setAppearance` (ui.json пишет main, кусок 1.1) и `appearance` в зеркале. */
   setAppearance: (mode: Appearance) => void;
-  /** Сливает патч с объектом сайдбара из зеркала и отдаёт его целиком в `patchUi`. */
-  setSidebar: (side: 'left' | 'right', patch: { open?: boolean; width?: number }) => void;
+  /**
+   * Сливает патч с объектом сайдбара из зеркала и отдаёт его целиком в `patchUi`. `tab` есть
+   * только у правого (кусок 7.2); у левого он отбрасывается, а не уходит лишним ключом в ui.json.
+   */
+  setSidebar: (side: 'left' | 'right', patch: { open?: boolean; width?: number; tab?: 'files' | 'changes' }) => void;
   setSidebarHovering: (hovering: boolean) => void;
   setSidebarHold: (id: string, on: boolean) => void;
 
@@ -243,7 +246,12 @@ export const useUiStore = create<UiState>((set, get) => {
     setSidebar: (side, patch) => {
       const current = get().ui;
       if (side === 'left') {
-        get().patchUi({ leftSidebar: { ...current.leftSidebar, ...patch } });
+        const left = {
+          ...current.leftSidebar,
+          ...(patch.open === undefined ? {} : { open: patch.open }),
+          ...(patch.width === undefined ? {} : { width: patch.width }),
+        };
+        get().patchUi({ leftSidebar: left });
       } else {
         get().patchUi({ rightSidebar: { ...current.rightSidebar, ...patch } });
       }

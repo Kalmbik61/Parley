@@ -11,7 +11,7 @@ import { create } from 'zustand';
 import type { StoreApi, UseBoundStore } from 'zustand';
 import type { WorkEntry } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
-import type { WorkLayout } from '../../shared/layout-types.js';
+import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { closeTab, emptyLayout, findTab, focusTab, groups } from './tree.js';
 import type { OpError, OpResult } from './tree.js';
@@ -93,6 +93,36 @@ export function selectedSessionOf(
   const entry = works.find((candidate) => workKeyOf(candidate.projectPath, candidate.map.work.id) === key);
   if (entry === undefined) return null;
   return { workKey: key, ref: { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: tab.sessionId } };
+}
+
+/** Сессия вкладки терминала или диффа; прочие вкладки сессии не называют. */
+function sessionOfTab(tab: TabSpec | undefined): string | null {
+  return tab?.kind === 'terminal' || tab?.kind === 'diff' ? tab.sessionId : null;
+}
+
+/**
+ * Сессия вкладки terminal или diff активной группы работы; иначе — самой свежей записи entries()
+ * этой работы, чья вкладка terminal или diff ещё в раскладке; иначе null. selectedSessionOf (2.7) —
+ * другое: только терминал активной вкладки активной работы (⌘T, подсветка строки сайдбара).
+ *
+ * Одна «сессия в фокусе» правого сайдбара: «Файлы» (7.2) и «Изменения» (8.2). История нужна,
+ * чтобы фокус на вкладке файла не сбрасывал корень на проект (кусок 7.2).
+ */
+export function focusedSessionOf(state: Pick<LayoutState, 'layouts' | 'entries'>, workKey: string): string | null {
+  const layout = state.layouts[workKey];
+  if (layout === undefined) return null;
+  const group = groups(layout).find((g) => g.id === layout.activeGroupId);
+  const active = sessionOfTab(group?.tabs.find((candidate) => candidate.id === group.activeTabId));
+  if (active !== null) return active;
+  const history = state.entries();
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const entry = history[index];
+    if (entry === undefined || entry.workKey !== workKey || entry.tabId === null) continue;
+    const found = findTab(layout, entry.tabId);
+    const sessionId = sessionOfTab(found?.group.tabs[found.index]);
+    if (sessionId !== null) return sessionId;
+  }
+  return null;
 }
 
 function layoutTabIds(layout: WorkLayout): Set<string> {

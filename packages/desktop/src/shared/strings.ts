@@ -499,6 +499,7 @@ export const S = {
       toggleAutoWake: 'toggle auto-wake',
       restartHost: 'restart host',
       closeTab: 'close tab',
+      readFolder: 'read folder',
     },
     noWorktree: 'This session has no worktree of its own',
     /** Действие работы (⌘T, ⌘W, разделение…) без активной работы — тост (кусок 6.3). */
@@ -513,6 +514,15 @@ export const S = {
   files: {
     denied: 'Path is outside the workspace folders',
     revealedInFinder: "This file type doesn't open here — revealed in Finder",
+    /** Вкладка правого сайдбара и её дерево (кусок 7.2, спека 10.1). */
+    panel: 'Files',
+    project: 'Project',
+    /** Корень-worktree в `RootPicker`: ярлык сессии и ветка — данные, идут как есть. */
+    worktreeRoot: (tag: string, branch: string): string => `⎇ ${tag} · ${branch}`,
+    rootGone: 'Session folder no longer exists',
+    refresh: 'Refresh',
+    showIgnored: 'Show ignored files',
+    copyRelativePath: 'Copy relative path',
   },
 
   /** Оболочка окна (`shell/AppShell.tsx`) — заголовки `ErrorBoundary` вокруг сайдбара и раскладки. */

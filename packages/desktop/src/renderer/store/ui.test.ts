@@ -193,6 +193,24 @@ describe('useUiStore.patchUi / setAppearance / setSidebar (кусок 2.3, те�
     dispose();
   });
 
+  it('setSidebar правого — tab и width сливаются с зеркалом, app.saveUi получает целый rightSidebar (7.2)', () => {
+    const bridge = createFakeBridge();
+    const dispose = useUiStore.getState().init(bridge);
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+
+    useUiStore.getState().setSidebar('right', { tab: 'changes' });
+    useUiStore.getState().setSidebar('right', { width: 400 });
+
+    expect(useUiStore.getState().ui.rightSidebar).toEqual({ open: true, width: 400, tab: 'changes' });
+    expect(saveUiSpy).toHaveBeenNthCalledWith(1, { rightSidebar: { open: true, width: 350, tab: 'changes' } });
+    expect(saveUiSpy).toHaveBeenNthCalledWith(2, { rightSidebar: { open: true, width: 400, tab: 'changes' } });
+
+    // У левого вкладки нет: лишний ключ в ui.json не уходит.
+    useUiStore.getState().setSidebar('left', { open: false, tab: 'files' });
+    expect(saveUiSpy).toHaveBeenLastCalledWith({ leftSidebar: { open: false, width: 280 } });
+    dispose();
+  });
+
   it('setAppearance зовёт bridge.app.setAppearance и меняет зеркало', () => {
     const bridge = createFakeBridge();
     const dispose = useUiStore.getState().init(bridge);

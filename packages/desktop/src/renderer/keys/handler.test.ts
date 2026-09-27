@@ -261,19 +261,20 @@ describe('installKeyHandler (тест 5)', () => {
 });
 
 describe('isActionAvailable (тест 2 куска 6.1b)', () => {
-  it('group.splitRight и works.showArchived (6.3) — да; files.quickOpen, sidebar.right.toggle — нет (до этапов 7–9)', () => {
+  it('group.splitRight, works.showArchived (6.3), sidebar.right.toggle и sidebar.files (7.2) — да; files.quickOpen — нет (до 7.4)', () => {
     const methods = new Set<string>();
     expect(isActionAvailable('group.splitRight', methods)).toBe(true);
     expect(isActionAvailable('works.showArchived', methods)).toBe(true);
     expect(isActionAvailable('files.quickOpen', methods)).toBe(false);
-    expect(isActionAvailable('sidebar.right.toggle', methods)).toBe(false);
+    expect(isActionAvailable('sidebar.right.toggle', methods)).toBe(true);
+    expect(isActionAvailable('sidebar.files', methods)).toBe(true);
   });
 
   it('ветки run 6.1b — все реализованы; browser.* и палитровые — нет', () => {
     for (const id of ['palette.open', 'work.new', 'session.new', 'settings.open', 'sidebar.left.toggle', 'work.goto.1', 'work.goto.9', 'work.prev', 'work.next', 'history.back', 'history.forward', 'group.splitRight', 'group.splitDown', 'group.prev', 'group.next', 'tab.close', 'tab.reopen', 'tab.prev', 'tab.next', 'tab.goto.1', 'tab.goto.9', 'tab.mruNext', 'tab.mruPrev', 'find', 'terminal.clear'] as const) {
       expect(IMPLEMENTED_ACTIONS.has(id)).toBe(true);
     }
-    for (const id of ['browser.find', 'browser.newTab', 'files.quickOpen', 'files.search', 'sidebar.files', 'sidebar.changes', 'sidebar.right.toggle'] as const) {
+    for (const id of ['browser.find', 'browser.newTab', 'files.quickOpen', 'files.search', 'sidebar.changes'] as const) {
       expect(IMPLEMENTED_ACTIONS.has(id)).toBe(false);
     }
   });

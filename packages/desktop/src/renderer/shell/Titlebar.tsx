@@ -2,7 +2,7 @@
  * Заголовок окна, 36px (кусок 2.3, спека 4.4, 5.1): светофор macOS слева
  * (отступ 80px под него держит `pl-20`, сама позиция — `trafficLightPosition`
  * в `main/window.ts`), дальше — сайдбар работ и история переходов; справа —
- * поиск (палитра ⌘J) и заглушка правого сайдбара (появится в 7.2).
+ * поиск (палитра ⌘J) и «правый сайдбар» (⌘L, с 7.2 — только при активной работе).
  *
  * Слот `#titlebar-tabs` — сам он пуст всегда: строку вкладок в него портали­рует
  * `layout/TabStrip.tsx` (кусок 2.4), когда в активной работе ровно одна группа
@@ -30,6 +30,9 @@ function stopDoubleClick(event: React.MouseEvent): void {
 
 export function Titlebar({ bridge }: TitlebarProps): JSX.Element {
   const leftOpen = useUiStore((state) => state.ui.leftSidebar.open);
+  const rightOpen = useUiStore((state) => state.ui.rightSidebar.open);
+  // Правый сайдбар есть только при активной работе (кусок 7.2): без неё кнопка неактивна.
+  const hasActiveWork = useLayoutStore((state) => state.activeWorkKey !== null);
   const setSidebar = useUiStore((state) => state.setSidebar);
   const openPalette = usePaletteStore((state) => state.openWith);
 
@@ -85,7 +88,15 @@ export function Titlebar({ bridge }: TitlebarProps): JSX.Element {
           {S.titlebar.search}
           <kbd className="rounded border border-border px-1 text-[10px]">⌘J</kbd>
         </button>
-        <Button type="button" variant="ghost" size="icon-xs" aria-label={S.titlebar.rightSidebar} disabled>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={S.titlebar.rightSidebar}
+          aria-pressed={hasActiveWork && rightOpen}
+          disabled={!hasActiveWork}
+          onClick={() => setSidebar('right', { open: !rightOpen })}
+        >
           <PanelRight className="size-3.5" />
         </Button>
       </div>

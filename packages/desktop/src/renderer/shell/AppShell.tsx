@@ -358,6 +358,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
         const current = useUiStore.getState().ui;
         setSidebar(side, { open: !(side === 'left' ? current.leftSidebar : current.rightSidebar).open });
       },
+      showRightTab: (tab) => setSidebar('right', { open: true, tab }),
       openNewWork: (title) => openNewWorkDialog(null, title),
       openNewSession: () => {
         // Родитель — выбранная сессия, как у ⌘T в `App.tsx`.

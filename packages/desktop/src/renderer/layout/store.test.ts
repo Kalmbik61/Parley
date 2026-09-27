@@ -10,7 +10,7 @@ import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { tabId } from './ids.js';
 import { emptyLayout, focusTab, groups, openTab, splitGroup } from './tree.js';
 import { EMPTY_HISTORY } from './history.js';
-import { selectedSessionOf, useLayoutStore } from './store.js';
+import { focusedSessionOf, selectedSessionOf, useLayoutStore } from './store.js';
 
 function terminalTab(sessionId: string): TabSpec {
   return { kind: 'terminal', id: tabId.terminal(sessionId), sessionId };
@@ -203,5 +203,40 @@ describe('selectedSessionOf (тест 5 куска 2.7)', () => {
   it('активной работы нет → null', () => {
     const layout = openTab(emptyLayout(), terminalTab('s-02'));
     expect(selectedSessionOf({ activeWorkKey: null, layouts: { [key]: layout } }, works)).toBeNull();
+  });
+});
+
+describe('focusedSessionOf (тест 2 куска 7.2)', () => {
+  const key = '/tmp/p w-01';
+  const fileTab: TabSpec = { kind: 'file', id: tabId.file({ kind: 'project' }, 'src/a.ts'), root: { kind: 'project' }, path: 'src/a.ts' };
+  const diffTab: TabSpec = { kind: 'diff', id: tabId.diff('s-03', null), sessionId: 's-03', commit: null };
+
+  function state(layout: WorkLayout, tabIds: Array<string | null>): Parameters<typeof focusedSessionOf>[0] {
+    const history = tabIds.map((tabId, index) => ({ workKey: key, tabId, at: index }));
+    return { layouts: { [key]: layout }, entries: () => history };
+  }
+
+  it('активна вкладка терминала S02 → s-02', () => {
+    const layout = openTab(openTab(emptyLayout(), fileTab), terminalTab('s-02'));
+    expect(focusedSessionOf(state(layout, [fileTab.id, tabId.terminal('s-02')]), key)).toBe('s-02');
+  });
+
+  it('активна вкладка файла, последней в истории была вкладка диффа S03 → s-03', () => {
+    const layout = openTab(openTab(openTab(emptyLayout(), terminalTab('s-02')), diffTab), fileTab);
+    const history = [tabId.terminal('s-02'), diffTab.id, fileTab.id];
+    // Запись другой работы в истории не в счёт, даже если она свежее.
+    const withForeign = { ...state(layout, history), entries: () => [...state(layout, history).entries(), { workKey: 'other', tabId: tabId.terminal('s-09'), at: 9 }] };
+    expect(focusedSessionOf(withForeign, key)).toBe('s-03');
+  });
+
+  it('вкладка S03 закрыта — берётся запись раньше', () => {
+    const layout = openTab(openTab(emptyLayout(), terminalTab('s-02')), fileTab);
+    expect(focusedSessionOf(state(layout, [tabId.terminal('s-02'), diffTab.id, fileTab.id]), key)).toBe('s-02');
+  });
+
+  it('вкладок сессий нет → null; раскладки нет → null', () => {
+    const layout = openTab(openTab(emptyLayout(), { kind: 'mail', id: tabId.mail() }), fileTab);
+    expect(focusedSessionOf(state(layout, [tabId.mail(), fileTab.id, null]), key)).toBeNull();
+    expect(focusedSessionOf({ layouts: {}, entries: () => [] }, key)).toBeNull();
   });
 });

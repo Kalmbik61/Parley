@@ -20,6 +20,8 @@ export const IMPLEMENTED_ACTIONS: ReadonlySet<ActionId> = new Set<ActionId>([
   'session.new',
   'settings.open',
   'sidebar.left.toggle',
+  'sidebar.right.toggle',
+  'sidebar.files',
   ...ACTIONS.filter((action) => action.id.startsWith('work.goto.') || action.id.startsWith('tab.goto.')).map((action) => action.id),
   'work.prev',
   'work.next',
