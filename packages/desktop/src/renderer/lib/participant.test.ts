@@ -4,6 +4,12 @@ import type { SessionRef } from '@harnas/protocol';
 import { noticeTitle, sessionLabelFor, sessionRowLabel } from './participant.js';
 
 describe('sessionRowLabel', () => {
+  // Раунд исправлений 1 куска 3.3: `NEW_LABEL` core ('новая сессия') окно показывает по-английски.
+  it('метка новой сессии из core — английская, обычная — как есть', () => {
+    expect(sessionRowLabel('s-01', 'новая сессия')).toBe('S01 New session');
+    expect(sessionRowLabel('s-02', 'новая')).toBe('S02 новая');
+  });
+
   it('s-03 → S03, склеивается с ярлыком', () => {
     expect(sessionRowLabel('s-03', 'бэкенд')).toBe('S03 бэкенд');
   });

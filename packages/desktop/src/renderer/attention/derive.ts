@@ -10,6 +10,7 @@
 import type { Message, SessionActivity, WorkEntry, WorkMap, WorkSession } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
 import { isoMs } from '../lib/iso-time.js';
+import { workKey } from '../lib/tree-order.js';
 import type { ActivityEntry } from '../store/activity.js';
 
 // Тот же литерал, что и `HUMAN` в `core/work/types.ts`: из core рендерер берёт только типы.
@@ -107,4 +108,37 @@ export function workAttention(entry: WorkEntry, activity: Record<string, Activit
   }
 
   return { level, needsYou, unseen, humanUnread, roomsUnread, lastEventAt };
+}
+
+/**
+ * Внимание работы из готового расчёта (ключ — workKey). Работе без расчёта (снимок работ
+ * пришёл раньше) — `off` со временем карты: одно правило для порядка (`sidebar/sort.ts`) и
+ * карточек (`sidebar/WorkSidebar.tsx`), раунд исправлений 1 куска 3.3.
+ */
+export function attentionOf(attention: Record<string, WorkAttention>, entry: WorkEntry): WorkAttention {
+  return (
+    attention[workKey(entry.projectPath, entry.map.work.id)] ?? {
+      level: 'off',
+      needsYou: 0,
+      unseen: 0,
+      humanUnread: 0,
+      roomsUnread: {},
+      lastEventAt: entry.map.work.updatedAt,
+    }
+  );
+}
+
+/** Два расчёта внимания работы совпадают по всем полям (комнаты — поштучно). */
+export function sameWorkAttention(a: WorkAttention, b: WorkAttention): boolean {
+  if (
+    a.level !== b.level ||
+    a.needsYou !== b.needsYou ||
+    a.unseen !== b.unseen ||
+    a.humanUnread !== b.humanUnread ||
+    a.lastEventAt !== b.lastEventAt
+  ) {
+    return false;
+  }
+  const rooms = Object.keys(a.roomsUnread);
+  return rooms.length === Object.keys(b.roomsUnread).length && rooms.every((id) => a.roomsUnread[id] === b.roomsUnread[id]);
 }

@@ -66,7 +66,8 @@ export const S = {
    */
   sidebar: {
     heading: 'Workspaces',
-    addWorkspace: '+ workspace',
+    /** Кнопка верха сайдбара; «+» рисует значок рядом, в тексте его нет (раунд 1 куска 3.3). */
+    addWorkspace: 'New workspace',
     empty: 'No workspaces yet',
     /** Заголовок секции закреплённых работ (спека 6.1). */
     pinned: 'Pinned',
@@ -329,6 +330,8 @@ export const S = {
     human: 'You',
     system: 'System',
     deletedSuffix: '(deleted)',
+    /** Ярлык сессии, созданной без названия (`NEW_LABEL` core) — `lib/participant.ts`. */
+    newSession: 'New session',
   },
 
   /** Действия для `errorText(code, action)` — фраза подставляется в «Couldn't <action>: …». */

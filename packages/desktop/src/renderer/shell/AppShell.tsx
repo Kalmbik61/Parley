@@ -23,8 +23,8 @@
  * живы.
  *
  * Кусок 3.3 (спека 6.1–6.4): слева — сайдбар карточек `WorkSidebar`. Секции и
- * внимание для него (и для ⌘1–9, строки статуса в 3.4) считает `useSidebarSectionsSync`
- * здесь, а не в сайдбаре: ⌘B прячет сайдбар, а порядок должен жить. Прежний `Sidebar`
+ * внимание для него (и для ⌘1–9, строки статуса в 3.4) считает `SidebarSectionsWriter`,
+ * смонтированный здесь, а не в сайдбаре: ⌘B прячет сайдбар, а порядок должен жить. Прежний `Sidebar`
  * доступен до 3.5 за флагом `?sidebar=old` (`HARNAS_DESKTOP_SIDEBAR=old` в main) — для
  * сравнения.
  *
@@ -59,7 +59,7 @@ import { CommandPalette } from '../components/palette/CommandPalette.js';
 import { SessionPicker, sessionCandidates } from '../components/palette/SessionPicker.js';
 import { CreateRoomDialog, type RoomCandidate } from '../components/rooms/CreateRoomDialog.js';
 import { Sidebar } from '../components/sidebar/Sidebar.js';
-import { useSidebarSectionsSync } from '../sidebar/use-sidebar-sections.js';
+import { SidebarSectionsWriter } from '../sidebar/use-sidebar-sections.js';
 import { WorkSidebar } from '../sidebar/WorkSidebar.js';
 import { buildCommands, recentSessionsFromHistory } from '../lib/commands.js';
 import { sessionLabelFor, sessionRowLabel } from '../lib/participant.js';
@@ -177,9 +177,6 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   // Флаг прежнего сайдбара читается один раз: `main/index.ts` ставит его в `search` до
   // загрузки окна, за время жизни окна он не меняется.
   const [oldSidebar] = useState(() => new URLSearchParams(location.search).get('sidebar') === 'old');
-  // Единственный писатель порядка сайдбара — живёт и при свёрнутом сайдбаре. Возврат
-  // (видимый порядок этого рендера) понадобится ⌘1–9 в 3.4.
-  useSidebarSectionsSync();
 
   // LRU контейнеров работ (кусок 2.5). Касание — прямо в рендере: контейнер
   // новой активной работы должен появиться в том же кадре, что и смена
@@ -544,6 +541,10 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
+      {/* Единственный писатель порядка сайдбара — живёт и при свёрнутом сайдбаре. Дочерний
+          компонент, а не хук в теле: на каждое `activity.changed` перерисовывается он, а не
+          вся оболочка (раунд исправлений 1 куска 3.3). */}
+      <SidebarSectionsWriter />
       {shell}
       {/* Обёртка оверлея — размером с источник, её центр модификатор ставит
           под указатель; ярлык — по центру обёртки (раунд исправлений 1, ревью B). */}

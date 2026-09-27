@@ -10,8 +10,8 @@
  * `draggable` нет — тащит @dnd-kit по указателю.
  */
 
-import type { PointerEvent } from 'react';
-import { useDraggable } from '@dnd-kit/core';
+import { memo, useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
+import { useDndContext, useDraggable } from '@dnd-kit/core';
 import type { WorkSession } from '@harnas/core';
 import { S } from '../../shared/strings.js';
 import { sessionAttention } from '../attention/derive.js';
@@ -43,9 +43,45 @@ export interface SessionRowProps {
   onOpen(): void;
 }
 
-export function SessionRow({ workKey, session, depth, activity, now, draggable, selected, onOpen }: SessionRowProps): JSX.Element {
+// `memo`: строка перерисовывается, только когда сменились её сессия, её запись активности
+// (стор активности заменяет лишь изменённую запись) или её флаги (раунд исправлений 1 куска 3.3).
+export const SessionRow = memo(function SessionRow({
+  workKey,
+  session,
+  depth,
+  activity,
+  now,
+  draggable,
+  selected,
+  onOpen,
+}: SessionRowProps): JSX.Element {
   const data: DragSourceData = { item: { kind: 'session', sessionId: session.id } };
-  const { setNodeRef, listeners } = useDraggable({ id: dndId.session(workKey, session.id), data, disabled: !draggable });
+  const dragId = dndId.session(workKey, session.id);
+  const { setNodeRef, listeners } = useDraggable({ id: dragId, data, disabled: !draggable });
+
+  // Тултип под своим управлением (раунд исправлений 1 куска 3.3, ревью B, находка 1): после
+  // перетаскивания соседней строки наведение показывало тултип перетащенной. Строка —
+  // `tabIndex=0`, pointerdown в браузере её фокусирует, а Radix открывает карточку и по
+  // фокусу; фокус остаётся на перетащенной строке и после броска, а открытая карточка
+  // держится после отпускания, если в документе есть выделение (`hasSelectionRef`).
+  // Поэтому во время любого перетаскивания тултипы строк закрыты, после броска тоже закрыты,
+  // а перетаскиваемая строка теряет фокус.
+  const { active } = useDndContext();
+  const dragging = active !== null;
+  const draggingThis = active?.id === dragId;
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const setRowRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      rowRef.current = node;
+      setNodeRef(node);
+    },
+    [setNodeRef],
+  );
+  useEffect(() => {
+    setTooltipOpen(false);
+    if (draggingThis && rowRef.current !== null && document.activeElement === rowRef.current) rowRef.current.blur();
+  }, [dragging, draggingThis]);
 
   // trust-wait (спека 8.3, план worktree 4.3) — то же правило, что было в `SessionTree.tsx`:
   // пометка держится, пока в последних уведомлениях есть trust-wait по этой сессии.
@@ -73,10 +109,10 @@ export function SessionRow({ workKey, session, depth, activity, now, draggable, 
   const secondary = 'text-work-sidebar-muted-foreground';
 
   return (
-    <HoverCard openDelay={600} closeDelay={100}>
+    <HoverCard open={tooltipOpen && !dragging} onOpenChange={setTooltipOpen} openDelay={600} closeDelay={100}>
       <HoverCardTrigger asChild>
         <div
-          ref={setNodeRef}
+          ref={setRowRef}
           role="button"
           tabIndex={0}
           data-session-id={session.id}
@@ -124,7 +160,7 @@ export function SessionRow({ workKey, session, depth, activity, now, draggable, 
       </HoverCardContent>
     </HoverCard>
   );
-}
+});
 
 function SessionTooltip({ session, activity, word }: { session: WorkSession; activity: ActivityEntry | null; word: string }): JSX.Element {
   const task = session.task.length > TASK_PREVIEW ? `${session.task.slice(0, TASK_PREVIEW)}…` : session.task;

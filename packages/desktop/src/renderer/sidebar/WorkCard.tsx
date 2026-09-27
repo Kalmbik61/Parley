@@ -2,8 +2,13 @@
  * Карточка работы в сайдбаре (кусок 3.3, спека 6.3): полоса внимания, заголовок со
  * счётчиками писем и комнат, мета и строки сессий. Внимание карточка не считает — его
  * отдаёт общий расчёт (`use-sidebar-sections.ts`), тот же, что упорядочил список.
+ *
+ * `memo` (раунд исправлений 1 куска 3.3, ревью A): `activity.changed` приходит на каждое
+ * изменение метрик любой сессии, а `WorkSidebar` отдаёт карточке только срез её сессий,
+ * прежний объект внимания и устойчивые колбэки — карточка чужой работы не перерисовывается.
  */
 
+import { memo, useRef } from 'react';
 import { create } from 'zustand';
 import type { WorkEntry } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
@@ -52,7 +57,7 @@ function folderName(projectPath: string): string {
   return projectPath.split('/').filter((part) => part !== '').at(-1) ?? projectPath;
 }
 
-export function WorkCard({
+export const WorkCard = memo(function WorkCard({
   entry,
   attention,
   activity,
@@ -69,6 +74,20 @@ export function WorkCard({
   const key = workKey(projectPath, map.work.id);
   const expanded = useExpandedClosed((state) => state.keys[key] === true);
   const expand = useExpandedClosed((state) => state.expand);
+
+  // Колбэк строки — один на сессию на всё время жизни карточки (строка — `memo`), а зовёт
+  // он всегда свежий `onOpenSession`.
+  const openSession = useRef(onOpenSession);
+  openSession.current = onOpenSession;
+  const rowOpeners = useRef(new Map<string, () => void>());
+  const openerFor = (sessionId: string): (() => void) => {
+    let opener = rowOpeners.current.get(sessionId);
+    if (opener === undefined) {
+      opener = () => openSession.current(sessionId);
+      rowOpeners.current.set(sessionId, opener);
+    }
+    return opener;
+  };
 
   const rows = treeOrder(map.sessions);
   const closedCount = rows.filter(({ session }) => session.lifecycle === 'closed').length;
@@ -147,7 +166,7 @@ export function WorkCard({
               now={now}
               draggable={active}
               selected={session.id === selectedSessionId}
-              onOpen={() => onOpenSession(session.id)}
+              onOpen={openerFor(session.id)}
             />
           ))}
         </div>
@@ -166,4 +185,4 @@ export function WorkCard({
       ) : null}
     </div>
   );
-}
+});

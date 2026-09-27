@@ -7,7 +7,7 @@ import { selectedSessionOf, useLayoutStore } from './layout/store.js';
 import { AppShell } from './shell/AppShell.js';
 import { NewSessionDialog } from './components/dialogs/NewSessionDialog.js';
 import { SettingsDialog } from './components/settings/SettingsDialog.js';
-import { sessionLabelFor } from './lib/participant.js';
+import { sessionLabelFor, sessionLabelText } from './lib/participant.js';
 import { wireNotifications } from './notifications.js';
 import { useActivityStore } from './store/activity.js';
 import { useHostStore } from './store/host.js';
@@ -82,7 +82,8 @@ export function App(): JSX.Element {
           const entry = useWorksStore
             .getState()
             .entries.find((item) => item.projectPath === ref.projectPath && item.map.work.id === ref.workId);
-          return entry?.map.sessions.find((session) => session.id === ref.sessionId)?.label ?? ref.sessionId;
+          const label = entry?.map.sessions.find((session) => session.id === ref.sessionId)?.label;
+          return label === undefined ? ref.sessionId : sessionLabelText(label);
         },
       }),
       // trust-wait (кусок 4.3 плана worktree, спека 8.3): сессия в своём

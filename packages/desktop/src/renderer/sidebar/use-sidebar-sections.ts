@@ -5,12 +5,16 @@
  * Поэтому считает один писатель, а остальные читают готовое из стора.
  *
  * Писатель живёт в `AppShell`, а не в `WorkSidebar`: сайдбар прячется по ⌘B, а порядок
- * для клавиш и статуса должен обновляться и тогда.
+ * для клавиш и статуса должен обновляться и тогда. Но не в теле `AppShell`, а в маленьком
+ * дочернем `SidebarSectionsWriter`: писатель подписан на активность, а хост шлёт
+ * `activity.changed` на каждое изменение метрик — иначе на каждое событие перерисовывалась
+ * бы вся оболочка (раунд исправлений 1 куска 3.3, ревью A).
  */
 
-import { useLayoutEffect, useMemo } from 'react';
+import { useLayoutEffect, useMemo, useRef } from 'react';
 import { create } from 'zustand';
-import { workAttention, type WorkAttention } from '../attention/derive.js';
+import type { WorkEntry } from '@harnas/core';
+import { sameWorkAttention, workAttention, type WorkAttention } from '../attention/derive.js';
 import { workKey } from '../lib/tree-order.js';
 import { useActivityStore } from '../store/activity.js';
 import { useUiStore } from '../store/ui.js';
@@ -24,10 +28,16 @@ const MAX_DEFER_MS = 3000;
 interface SidebarSectionsState {
   sections: SidebarSection[];
   attention: Record<string, WorkAttention>;
+  /**
+   * Снимок работ (ссылка `useWorksStore.entries`), по которому посчитаны `sections` и
+   * `attention`; `null` — ещё не считали. Обработчики клавиш (3.4) берут порядок через
+   * `getState()`: соседа и работу на старте выбирают, только когда здесь текущий снимок.
+   */
+  entries: WorkEntry[] | null;
 }
 
 /** Пишет только `useSidebarSectionsSync`; экспорт — для тестов. */
-export const useSidebarSectionsStore = create<SidebarSectionsState>(() => ({ sections: [], attention: {} }));
+export const useSidebarSectionsStore = create<SidebarSectionsState>(() => ({ sections: [], attention: {}, entries: null }));
 
 /** Секции в порядке на экране — общий источник WorkSidebar, ⌘1–9 и ⌘⇧↑↓ (3.4), nextAttentionTarget (4.2). */
 export function useSidebarSections(): SidebarSection[] {
@@ -41,9 +51,10 @@ export function useSidebarAttention(): Record<string, WorkAttention> {
 
 /**
  * Единственный писатель: buildSections из сторов работ, активности и зеркала ui.json,
- * затем useDeferredOrder по sidebarHovering. Зовётся один раз в AppShell — живёт и при
- * свёрнутом сайдбаре. Возвращает секции своего рендера: стор пишет эффект, поэтому
- * useSidebarSections() отстаёт на рендер, а AppShell берёт видимый порядок из возврата (3.4).
+ * затем useDeferredOrder по sidebarHovering. Зовётся один раз — в `SidebarSectionsWriter`
+ * под AppShell — и живёт при свёрнутом сайдбаре. Возвращает секции своего рендера: стор
+ * пишет эффект, поэтому useSidebarSections() отстаёт на рендер; обработчикам клавиш (3.4)
+ * хватает `getState()`.
  */
 export function useSidebarSectionsSync(): SidebarSection[] {
   const entries = useWorksStore((state) => state.entries);
@@ -53,13 +64,28 @@ export function useSidebarSectionsSync(): SidebarSection[] {
   const showDone = useUiStore((state) => state.ui.showDoneWorks);
   const hovering = useUiStore((state) => state.sidebarHovering);
 
-  const attention = useMemo(
-    () =>
-      Object.fromEntries(
-        entries.map((entry) => [workKey(entry.projectPath, entry.map.work.id), workAttention(entry, byRef)]),
-      ),
-    [entries, byRef],
-  );
+  // Структурное разделение: работа, чьё внимание не изменилось, сохраняет прежний объект, а
+  // если не изменилось ни у одной — прежней остаётся и вся карта. Тогда `memo`-карточка
+  // чужой работы не перерисовывается, а порядок не пересчитывается на метрики.
+  const previous = useRef<Record<string, WorkAttention>>({});
+  const attention = useMemo(() => {
+    const prev = previous.current;
+    let reused = 0;
+    const next: Record<string, WorkAttention> = {};
+    for (const entry of entries) {
+      const key = workKey(entry.projectPath, entry.map.work.id);
+      const fresh = workAttention(entry, byRef);
+      const old = prev[key];
+      if (old !== undefined && sameWorkAttention(old, fresh)) {
+        next[key] = old;
+        reused += 1;
+      } else {
+        next[key] = fresh;
+      }
+    }
+    return reused === entries.length && reused === Object.keys(prev).length ? prev : next;
+  }, [entries, byRef]);
+  previous.current = attention;
   const fresh = useMemo(
     () => buildSections({ entries, attention, pinned, collapsed, showDone }),
     [entries, attention, pinned, collapsed, showDone],
@@ -69,8 +95,17 @@ export function useSidebarSectionsSync(): SidebarSection[] {
   // Layout-эффект, а не обычный: читатели получают новый порядок до отрисовки кадра,
   // и сайдбар не мигает прежним порядком после смены данных.
   useLayoutEffect(() => {
-    useSidebarSectionsStore.setState({ sections, attention });
-  }, [sections, attention]);
+    useSidebarSectionsStore.setState({ sections, attention, entries });
+  }, [sections, attention, entries]);
 
   return sections;
+}
+
+/**
+ * Писатель как компонент: `AppShell` монтирует его и сам на активность не подписан. Ничего
+ * не рисует.
+ */
+export function SidebarSectionsWriter(): null {
+  useSidebarSectionsSync();
+  return null;
 }

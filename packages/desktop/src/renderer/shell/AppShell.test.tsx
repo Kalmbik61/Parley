@@ -24,6 +24,8 @@ import { useNoticesStore } from '../store/notices.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
+import { refKey } from '@harnas/protocol';
+import { workKey } from '../lib/tree-order.js';
 import { AppShell } from './AppShell.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 
@@ -66,6 +68,20 @@ vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: vi.fn().mockImplementa
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: vi.fn().mockImplementation(() => ({ onContextLoss: () => {}, dispose: () => {} })),
 }));
+
+// Раунд исправлений 1 куска 3.3 (ревью A): отрисовки `AppShell` считаются по его
+// незащищённому ребёнку — `StatusBar` рисуется ровно тогда, когда рисуется оболочка.
+const shellRenders = vi.hoisted(() => ({ statusBar: 0 }));
+vi.mock('./StatusBar.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./StatusBar.js')>();
+  return {
+    ...actual,
+    StatusBar: (props: Parameters<typeof actual.StatusBar>[0]) => {
+      shellRenders.statusBar += 1;
+      return actual.StatusBar(props);
+    },
+  };
+});
 
 class ResizeObserverStub {
   observe(): void {}
@@ -805,12 +821,12 @@ describe('AppShell — сайдбар карточек (кусок 3.3)', () => 
     window.history.replaceState(null, '', '/');
   });
 
-  it('карточка работы с data-work-key; «+ workspace» открывает NewWorkDialog (тест 8)', async () => {
+  it('карточка работы с data-work-key; «New workspace» открывает NewWorkDialog (тест 8)', async () => {
     await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
     expect(document.querySelector(`[data-work-key="${keyOf('w-01')}"]`)).not.toBeNull();
     expect(document.querySelector('[data-work-sidebar]')).not.toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: /\+ workspace/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^New workspace\s*⌘N$/ }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText('New workspace')).toBeTruthy();
   });
@@ -839,5 +855,45 @@ describe('AppShell — сайдбар карточек (кусок 3.3)', () => 
     await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
     expect(document.querySelector('[data-work-sidebar]')).toBeNull();
     expect(screen.getByText('Workspaces')).toBeTruthy();
+  });
+});
+
+describe('AppShell и активность (раунд исправлений 1 куска 3.3)', () => {
+  it('activity.changed не перерисовывает оболочку, а порядок сайдбара обновляется', async () => {
+    const w1 = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'план')]);
+    const w2 = work('w-02', '2026-01-02', 'Вторая', [session('s-01', 'план')]);
+    useWorksStore.setState({ entries: [w1, w2], branches: {}, loading: false, error: null });
+
+    render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
+    await flush();
+    const cardOrder = (): string[] =>
+      [...document.querySelectorAll<HTMLElement>('[data-work-key]')].map((element) => element.getAttribute('data-work-key') ?? '');
+    // Внимания нет, даты не ISO — порядок по ключу работы.
+    expect(cardOrder()).toEqual([workKey('/tmp/w-01', 'w-01'), workKey('/tmp/w-02', 'w-02')]);
+
+    const before = shellRenders.statusBar;
+    const ref = { projectPath: '/tmp/w-02', workId: 'w-02', sessionId: 's-01' };
+    act(() => {
+      useActivityStore.setState({
+        byRef: {
+          [refKey(ref)]: {
+            ref,
+            activity: {
+              activity: 'blocked',
+              subagents: 0,
+              turnEndedAt: null,
+              lastEventAt: '2026-01-03T00:00:00.000Z',
+              source: 'hooks',
+              exited: false,
+              hooksMissing: false,
+            },
+            metrics: null,
+          },
+        },
+      });
+    });
+
+    expect(shellRenders.statusBar).toBe(before);
+    expect(cardOrder()[0]).toBe(workKey('/tmp/w-02', 'w-02'));
   });
 });

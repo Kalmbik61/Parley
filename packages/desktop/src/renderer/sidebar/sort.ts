@@ -6,7 +6,7 @@
 
 import type { WorkEntry } from '@harnas/core';
 import { S } from '../../shared/strings.js';
-import { ATTENTION_RANK, type WorkAttention } from '../attention/derive.js';
+import { ATTENTION_RANK, attentionOf as attentionIn, type WorkAttention } from '../attention/derive.js';
 import { isoMs } from '../lib/iso-time.js';
 import { workKey } from '../lib/tree-order.js';
 
@@ -42,14 +42,6 @@ function folderName(projectPath: string): string {
   return parts.at(-1) ?? projectPath;
 }
 
-const OFF: Omit<WorkAttention, 'lastEventAt'> = {
-  level: 'off',
-  needsYou: 0,
-  unseen: 0,
-  humanUnread: 0,
-  roomsUnread: {},
-};
-
 export function buildSections(input: {
   entries: WorkEntry[];
   attention: Record<string, WorkAttention>;   // ключ — workKey
@@ -59,9 +51,8 @@ export function buildSections(input: {
   const pinned = new Set(input.pinned);
   const collapsed = new Set(input.collapsed);
 
-  // Работе без посчитанного внимания (снимок работ пришёл раньше) — `off` со временем карты.
-  const attentionOf = (entry: WorkEntry): WorkAttention =>
-    attention[workKey(entry.projectPath, entry.map.work.id)] ?? { ...OFF, lastEventAt: entry.map.work.updatedAt };
+  // Работе без посчитанного внимания — `off` со временем карты (`attentionOf` в derive.ts).
+  const attentionOf = (entry: WorkEntry): WorkAttention => attentionIn(attention, entry);
 
   // `done` внизу своей секции — одно правило для всех секций, «Закреплённых» тоже.
   const sortWorks = (works: WorkEntry[]): WorkEntry[] =>

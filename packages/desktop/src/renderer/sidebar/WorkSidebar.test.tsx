@@ -17,6 +17,32 @@ import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/
 import { useSidebarSectionsStore, useSidebarSectionsSync } from './use-sidebar-sections.js';
 import { WorkSidebar, type WorkSidebarProps } from './WorkSidebar.js';
 
+/**
+ * Отрисовки карточек (раунд исправлений 1 куска 3.3): Profiler ставится ВНУТРИ `memo`
+ * настоящей карточки — подменяется только её внутренняя функция, сравнение пропсов
+ * остаётся настоящим. Не `memo` — `type` нет, подсчёт пуст, и тест ниже падает.
+ */
+const cardRenders = vi.hoisted(() => ({ ids: [] as string[] }));
+vi.mock('./WorkCard.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./WorkCard.js')>();
+  const { Profiler, createElement } = await import('react');
+  const real = actual.WorkCard as unknown as { type?: (props: import('./WorkCard.js').WorkCardProps) => JSX.Element };
+  const inner = real.type;
+  if (typeof inner !== 'function') return actual;
+  return {
+    ...actual,
+    WorkCard: {
+      ...actual.WorkCard,
+      type: (props: import('./WorkCard.js').WorkCardProps) =>
+        createElement(
+          Profiler,
+          { id: props.entry.map.work.id, onRender: (id: string) => cardRenders.ids.push(id) },
+          inner(props),
+        ),
+    },
+  };
+});
+
 const keyOf = (entry: WorkEntry): string => workKey(entry.projectPath, entry.map.work.id);
 
 let setShown: (shown: boolean) => void = () => {};
@@ -134,6 +160,28 @@ describe('WorkSidebar — состав (тест 5)', () => {
     expect(cardKeys()).toHaveLength(50);
   });
 
+  // Раунд исправлений 1 куска 3.3: переход через порог 50 под указателем не меняет узел
+  // списка — `pointerleave` приходит на тот же узел, флаг не залипает.
+  it('переход через 50 карточек под указателем: узел списка тот же, уход указателя снимает флаг', () => {
+    const many = (n: number): WorkEntry[] =>
+      Array.from({ length: n }, (_, index) => makeWork(`w-${String(index).padStart(2, '0')}`, { projectPath: '/p/many' }));
+    setWorks(many(50));
+    render(<Harness />);
+    const before = list();
+    fireEvent.pointerEnter(before);
+    expect(useUiStore.getState().sidebarHovering).toBe(true);
+
+    act(() => setWorks(many(51)));
+    expect(list()).toBe(before);
+    fireEvent.pointerLeave(list());
+    expect(useUiStore.getState().sidebarHovering).toBe(false);
+
+    fireEvent.pointerEnter(list());
+    act(() => setWorks(many(50)));
+    expect(list()).toBe(before);
+    expect(cardKeys()).toHaveLength(50);
+  });
+
   it('клики: карточка — onActivateWork, строка сессии — onOpenSession, ✉N — onOpenMail', () => {
     const onActivateWork = vi.fn();
     const onOpenSession = vi.fn();
@@ -211,10 +259,10 @@ describe('WorkSidebar — верх (тесты 8, 16)', () => {
     expect(useUiStore.getState().paletteOpen).toBe(true);
   });
 
-  it('«+ workspace» и «+» заголовка проекта открывают форму новой работы (openNewWorkDialog), без сворачивания группы', () => {
+  it('«New workspace» и «+» заголовка проекта открывают форму новой работы (openNewWorkDialog), без сворачивания группы', () => {
     setWorks([makeWork('w-1', { projectPath: '/p/one' })]);
     render(<Harness />);
-    fireEvent.click(screen.getByRole('button', { name: /\+ workspace/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^New workspace\s*⌘N$/ }));
     expect(useUiStore.getState().dialogs.newWork).toBe(true);
 
     act(() => useUiStore.getState().closeNewWorkDialog());
@@ -227,5 +275,34 @@ describe('WorkSidebar — верх (тесты 8, 16)', () => {
     render(<Harness />);
     const root = document.querySelector<HTMLElement>('[data-work-sidebar]');
     expect(root?.className).not.toMatch(/\bborder-r\b/);
+  });
+});
+
+describe('перерисовки карточек (раунд исправлений 1 куска 3.3, ревью A)', () => {
+  it('activity.changed сессии работы A перерисовывает карточку A и не трогает карточку B', () => {
+    const a = makeWork('w-a', { projectPath: '/p/one', sessions: [makeSession('s-01', 'a')] });
+    const b = makeWork('w-b', { projectPath: '/p/one', sessions: [makeSession('s-01', 'b')] });
+    setWorks([a, b]);
+    render(<Harness />);
+    const refA = { projectPath: a.projectPath, workId: a.map.work.id, sessionId: 's-01' };
+
+    cardRenders.ids = [];
+    act(() => useActivityStore.setState({ byRef: activityMap([makeActivity(refA, 'working')]) }));
+    expect(cardRenders.ids).toContain('w-a');
+    expect(cardRenders.ids).not.toContain('w-b');
+
+    // Только метрики: порядок тот же, внимание то же — карточку B не трогает тоже.
+    cardRenders.ids = [];
+    act(() =>
+      useActivityStore.setState({
+        byRef: activityMap([
+          makeActivity(refA, 'working', {
+            metrics: { model: 'opus', contextTokens: 10, contextWindow: 100, costUsd: null, updatedAt: '2026-09-27T09:00:01.000Z' } as never,
+          }),
+        ]),
+      }),
+    );
+    expect(cardRenders.ids).toContain('w-a');
+    expect(cardRenders.ids).not.toContain('w-b');
   });
 });

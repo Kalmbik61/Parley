@@ -33,7 +33,7 @@ beforeEach(() => {
   useWorksStore.setState({ entries: [a, b], branches: {}, loading: false, error: null });
   useActivityStore.setState({ byRef: {} });
   useUiStore.setState({ ui: DEFAULT_UI, sidebarHovering: false });
-  useSidebarSectionsStore.setState({ sections: [], attention: {} });
+  useSidebarSectionsStore.setState({ sections: [], attention: {}, entries: null });
 });
 
 afterEach(cleanup);
@@ -106,5 +106,26 @@ describe('useSidebarSectionsSync и useSidebarAttention (тест 17)', () => {
     expect(result.current[keyA]?.level).toBe('needs-you');
     expect(result.current[keyA]?.needsYou).toBe(1);
     expect(result.current[keyB]?.level).toBe('idle');
+  });
+});
+
+describe('структурное разделение и снимок (раунд исправлений 1 куска 3.3)', () => {
+  it('событие работы A оставляет прежним объект внимания B; стор помнит снимок, по которому считал', () => {
+    renderHook(() => useSidebarSectionsSync());
+    const first = useSidebarSectionsStore.getState();
+    expect(first.entries).toBe(useWorksStore.getState().entries);
+
+    act(() => blockA());
+    const second = useSidebarSectionsStore.getState();
+    expect(second.attention[keyB]).toBe(first.attention[keyB]);
+    expect(second.attention[keyA]).not.toBe(first.attention[keyA]);
+
+    // Та же запись активности новым объектом, поля те же — вся карта внимания прежняя.
+    act(() => blockA());
+    expect(useSidebarSectionsStore.getState().attention).toBe(second.attention);
+
+    const next = [a, b, makeWork('w-c', { projectPath: '/p/two' })];
+    act(() => useWorksStore.setState({ entries: next }));
+    expect(useSidebarSectionsStore.getState().entries).toBe(next);
   });
 });

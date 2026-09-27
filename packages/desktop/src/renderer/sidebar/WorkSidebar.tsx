@@ -1,8 +1,8 @@
 /**
- * Сайдбар работ как у Orca (кусок 3.3, спека 6.1–6.3): сверху «Search» и «+ workspace»,
+ * Сайдбар работ как у Orca (кусок 3.3, спека 6.1–6.3): сверху «Search» и «New workspace»,
  * ниже — «Закреплённые» и группы проектов с карточками работ.
  *
- * Секции и внимание сайдбар не считает: их пишет `useSidebarSectionsSync` в `AppShell`
+ * Секции и внимание сайдбар не считает: их пишет `SidebarSectionsWriter` под `AppShell`
  * (`use-sidebar-sections.ts`), здесь только чтение — тот же порядок видят ⌘1–9 и строка
  * статуса. Сайдбар лишь сообщает, что указатель над списком (`sidebarHovering`): тогда
  * пересортировка ждёт, чтобы карточка не уехала из-под курсора (спека 6.2).
@@ -11,16 +11,17 @@
  * вторая линия рядом читалась бы толще (находка 2.3).
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Plus, Search } from 'lucide-react';
 import type { WorkEntry } from '@harnas/core';
+import { refKey } from '@harnas/protocol';
 import { S } from '../../shared/strings.js';
-import type { WorkAttention } from '../attention/derive.js';
+import { attentionOf } from '../attention/derive.js';
 import { selectedSessionOf, useLayoutStore } from '../layout/store.js';
 import { workKey } from '../lib/tree-order.js';
 import { useNow } from '../lib/use-now.js';
-import { useActivityStore } from '../store/activity.js';
+import { useActivityStore, type ActivityEntry } from '../store/activity.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import { ProjectGroup } from './ProjectGroup.js';
@@ -66,7 +67,33 @@ function estimateCard(entry: WorkEntry): number {
   return CARD_HEIGHT + SESSION_ROW_HEIGHT * open;
 }
 
-const OFF: WorkAttention = { level: 'off', needsYou: 0, unseen: 0, humanUnread: 0, roomsUnread: {}, lastEventAt: '' };
+/**
+ * Срез активности одной работы: только записи её сессий. Прежний объект, если все записи
+ * те же по ссылке (стор активности заменяет лишь изменённую), — тогда `memo`-карточка этой
+ * работы не перерисовывается на событие чужой (раунд исправлений 1 куска 3.3).
+ */
+function activitySlice(
+  entry: WorkEntry,
+  byRef: Record<string, ActivityEntry>,
+  previous: Record<string, ActivityEntry> | undefined,
+): Record<string, ActivityEntry> {
+  const next: Record<string, ActivityEntry> = {};
+  let same = previous !== undefined;
+  for (const session of entry.map.sessions) {
+    const key = refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id });
+    const value = byRef[key];
+    if (value !== undefined) next[key] = value;
+    if (same && previous?.[key] !== value) same = false;
+  }
+  if (same && previous !== undefined && Object.keys(previous).length === Object.keys(next).length) return previous;
+  return next;
+}
+
+interface CardHandlers {
+  onActivate(): void;
+  onOpenSession(sessionId: string): void;
+  onOpenMail(): void;
+}
 
 export function WorkSidebar({ onActivateWork, onOpenSession, onOpenMail }: WorkSidebarProps): JSX.Element {
   const sections = useSidebarSections();
@@ -84,10 +111,31 @@ export function WorkSidebar({ onActivateWork, onOpenSession, onOpenMail }: WorkS
   const openNewWorkDialog = useUiStore((state) => state.openNewWorkDialog);
   const setSidebarHovering = useUiStore((state) => state.setSidebarHovering);
   const now = useNow(NOW_PERIOD_MS);
+  const listRef = useRef<HTMLDivElement>(null);
 
   // ⌘B прячет сайдбар под указателем без `pointerleave`: флаг залип бы, и каждая
   // пересортировка ждала бы 3 с.
   useEffect(() => () => setSidebarHovering(false), [setSidebarHovering]);
+
+  // Колбэки карточек устойчивы (карточка — `memo`): один набор на работу, а зовёт он всегда
+  // свежие пропсы сайдбара — `AppShell` передаёт их стрелками.
+  const props = useRef({ onActivateWork, onOpenSession, onOpenMail });
+  props.current = { onActivateWork, onOpenSession, onOpenMail };
+  const handlers = useRef(new Map<string, CardHandlers>());
+  const handlersFor = (key: string): CardHandlers => {
+    let found = handlers.current.get(key);
+    if (found === undefined) {
+      found = {
+        onActivate: () => props.current.onActivateWork(key),
+        onOpenSession: (sessionId) => props.current.onOpenSession(key, sessionId),
+        onOpenMail: () => props.current.onOpenMail(key),
+      };
+      handlers.current.set(key, found);
+    }
+    return found;
+  };
+  // Срезы активности прошлого рендера — по workKey.
+  const slices = useRef(new Map<string, Record<string, ActivityEntry>>());
 
   const pinned = new Set(pinnedWorks);
   const toggleCollapsed = (projectPath: string): void => {
@@ -99,20 +147,23 @@ export function WorkSidebar({ onActivateWork, onOpenSession, onOpenMail }: WorkS
 
   const renderCard = (entry: WorkEntry): JSX.Element => {
     const key = workKey(entry.projectPath, entry.map.work.id);
+    const slice = activitySlice(entry, activity, slices.current.get(key));
+    slices.current.set(key, slice);
+    const cardHandlers = handlersFor(key);
     return (
       <WorkCard
         key={key}
         entry={entry}
-        attention={attention[key] ?? { ...OFF, lastEventAt: entry.map.work.updatedAt }}
-        activity={activity}
+        attention={attentionOf(attention, entry)}
+        activity={slice}
         active={key === activeWorkKey}
         pinned={pinned.has(key)}
         branch={branches[entry.projectPath] ?? null}
         now={now}
         selectedSessionId={selected?.workKey === key ? selected.ref.sessionId : null}
-        onActivate={() => onActivateWork(key)}
-        onOpenSession={(sessionId) => onOpenSession(key, sessionId)}
-        onOpenMail={() => onOpenMail(key)}
+        onActivate={cardHandlers.onActivate}
+        onOpenSession={cardHandlers.onOpenSession}
+        onOpenMail={cardHandlers.onOpenMail}
       />
     );
   };
@@ -141,22 +192,26 @@ export function WorkSidebar({ onActivateWork, onOpenSession, onOpenMail }: WorkS
           <kbd className="rounded border border-work-sidebar-border px-1 text-[10px] text-work-sidebar-muted-foreground">⌘N</kbd>
         </button>
       </div>
-      {cardCount > VIRTUALIZE_ABOVE ? (
-        <VirtualList
-          rows={rowsOf(sections)}
-          renderCard={renderCard}
-          onToggleCollapsed={toggleCollapsed}
-          onNewWork={openNewWorkDialog}
-          onHover={setSidebarHovering}
-        />
-      ) : (
-        <div
-          data-sidebar-list
-          onPointerEnter={() => setSidebarHovering(true)}
-          onPointerLeave={() => setSidebarHovering(false)}
-          className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto px-2 pb-2"
-        >
-          {sections.map((section) => (
+      {/* Один и тот же узел списка по обе стороны порога виртуализации: иначе при переходе
+          через 50 карточек под указателем старый узел пропадал без `pointerleave`, и флаг
+          `sidebarHovering` залипал (раунд исправлений 1 куска 3.3). */}
+      <div
+        ref={listRef}
+        data-sidebar-list
+        onPointerEnter={() => setSidebarHovering(true)}
+        onPointerLeave={() => setSidebarHovering(false)}
+        className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto px-2 pb-2"
+      >
+        {cardCount > VIRTUALIZE_ABOVE ? (
+          <VirtualList
+            scrollRef={listRef}
+            rows={rowsOf(sections)}
+            renderCard={renderCard}
+            onToggleCollapsed={toggleCollapsed}
+            onNewWork={openNewWorkDialog}
+          />
+        ) : (
+          sections.map((section) => (
             <ProjectGroup
               key={section.key}
               section={section}
@@ -165,24 +220,24 @@ export function WorkSidebar({ onActivateWork, onOpenSession, onOpenMail }: WorkS
             >
               {section.collapsed ? null : <div className="pt-0.5">{section.works.map(renderCard)}</div>}
             </ProjectGroup>
-          ))}
-        </div>
-      )}
+          ))
+        )}
+      </div>
     </div>
   );
 }
 
 interface VirtualListProps {
+  /** Прокручиваемый список `WorkSidebar` — он же ловит наведение. */
+  scrollRef: RefObject<HTMLDivElement>;
   rows: Row[];
   renderCard(entry: WorkEntry): JSX.Element;
   onToggleCollapsed(projectPath: string): void;
   onNewWork(): void;
-  onHover(hovering: boolean): void;
 }
 
 /** Больше 50 карточек (спека 6.1): в DOM — только видимые строки и запас по краям. */
-function VirtualList({ rows, renderCard, onToggleCollapsed, onNewWork, onHover }: VirtualListProps): JSX.Element {
-  const scrollRef = useRef<HTMLDivElement>(null);
+function VirtualList({ scrollRef, rows, renderCard, onToggleCollapsed, onNewWork }: VirtualListProps): JSX.Element {
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
@@ -200,38 +255,30 @@ function VirtualList({ rows, renderCard, onToggleCollapsed, onNewWork, onHover }
   });
 
   return (
-    <div
-      ref={scrollRef}
-      data-sidebar-list
-      onPointerEnter={() => onHover(true)}
-      onPointerLeave={() => onHover(false)}
-      className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto px-2 pb-2"
-    >
-      <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
-        {virtualizer.getVirtualItems().map((item) => {
-          const row = rows[item.index];
-          if (row === undefined) return null;
-          return (
-            <div
-              key={item.key}
-              data-index={item.index}
-              ref={virtualizer.measureElement}
-              className="absolute left-0 top-0 w-full"
-              style={{ transform: `translateY(${item.start}px)` }}
-            >
-              {row.kind === 'header' ? (
-                <ProjectGroup
-                  section={row.section}
-                  onToggleCollapsed={() => onToggleCollapsed(row.section.key)}
-                  onNewWork={onNewWork}
-                />
-              ) : (
-                renderCard(row.entry)
-              )}
-            </div>
-          );
-        })}
-      </div>
+    <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+      {virtualizer.getVirtualItems().map((item) => {
+        const row = rows[item.index];
+        if (row === undefined) return null;
+        return (
+          <div
+            key={item.key}
+            data-index={item.index}
+            ref={virtualizer.measureElement}
+            className="absolute left-0 top-0 w-full"
+            style={{ transform: `translateY(${item.start}px)` }}
+          >
+            {row.kind === 'header' ? (
+              <ProjectGroup
+                section={row.section}
+                onToggleCollapsed={() => onToggleCollapsed(row.section.key)}
+                onNewWork={onNewWork}
+              />
+            ) : (
+              renderCard(row.entry)
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
