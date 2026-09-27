@@ -930,11 +930,16 @@ export interface SendWithToastDeps {
    * зависимости — как у обработчика onFocusTarget в App.tsx.
    */
   openSession(ref: SessionRef): void;
+  /**
+   * Исход каждой попытки — первой и каждого Retry из тоста. Исход Retry вызывающему иначе не дойти:
+   * по нему 8.4b ставит заметкам sentAt (сверка этапа 8, I2).
+   */
+  onOutcome?(outcome: SendOutcome): void;
 }
 /**
  * Одна отправка окна на 5.4, 8.x и 9.x: sendToAgent, тост sendToast через sonner (ярлык — sessionTag) и его
  * кнопки: Copy — исходный текст в буфер, Open — openSession, Retry — тот же вызов, Resume — sessions.resume.
- * Возвращает исход: 8.4 ставит по нему sentAt.
+ * Возвращает исход первой попытки; исходы всех попыток, включая Retry, — в deps.onOutcome.
  */
 export async function sendWithToast(deps: SendWithToastDeps, ref: SessionRef, text: string, submit: boolean): Promise<SendOutcome>;
 
@@ -993,7 +998,9 @@ errors: { actions: { saveScreenshot: 'save screenshot' } },   // отправк�
   - кнопка `Copy` кладёт исходный текст в буфер;
   - `Open S02` — `applyFocusTarget({ kind: 'session', ref })` (4.3): работа, вкладка
     сессии и фокус терминала;
-  - `Retry` — тот же вызов `sendWithToast`;
+  - `Retry` — тот же вызов `sendWithToast` с теми же `deps`: его исход тоже уходит в
+    `onOutcome`. Без этого цепочка `busy` → `Retry` → `submitted` оставила бы заметки 8.4b
+    неотправленными;
   - `Resume` — `sessions.resume`, только если `canResume`: `status` `exited`, `done` или
     `failed` (набор `RESUMABLE` меню сессии: `SessionRowMenu` 3.4, прежде
     `components/sidebar/SessionMenu.tsx:24`) и сессия не закрыта. У закрытой
@@ -1038,9 +1045,11 @@ errors: { actions: { saveScreenshot: 'save screenshot' } },   // отправк�
    - `blocked` → тост с `Copy` и `Open S02`: `Copy` кладёт исходный текст в буфер,
      `Open S02` зовёт `openSession(ref)`;
    - `busy` → `Retry` повторяет вызов (второй `pty.send`);
+   - `onOutcome` получает исход первой попытки и каждого `Retry`: `busy`, затем
+     `submitted`;
    - `not_found` у сессии `exited` → `Resume` зовёт `sessions.resume`; у закрытой
      кнопки `Resume` нет;
-   - возвращает исход вызова.
+   - возвращает исход первой попытки.
 9. `ipc`: `app:save-drop-image` с `'clipboard'` зовёт `saveDropImage`; другой источник —
    отказ.
 10. **E2E `terminal-send.spec.ts`** (`STUB_BRACKETED=1`):
