@@ -9,16 +9,35 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render } from '@testing-library/react';
+import type { WorkEntry, WorkSession } from '@harnas/core';
 import { App } from './App.js';
+import type { NewSessionDialogProps } from './components/dialogs/NewSessionDialog.js';
 import { createFakeBridge, type FakeBridge } from './test-utils/fake-bridge.js';
+import { EMPTY_HISTORY } from './layout/history.js';
+import { tabId } from './layout/ids.js';
+import { useLayoutStore } from './layout/store.js';
+import { emptyLayout, openTab } from './layout/tree.js';
 import { useActivityStore } from './store/activity.js';
 import { useNoticesStore } from './store/notices.js';
 import { useUiStore } from './store/ui.js';
 import { useWorksStore } from './store/works.js';
 
-// jsdom не знает ResizeObserver — `Workspace.tsx` заводит его на dockview
-// безусловно, даже без открытых панелей терминала (тот же стаб, что и в
-// `Workspace.test.tsx`).
+// Тест 6 куска 2.7 читает пропсы диалога новой сессии, а не его разметку:
+// что именно диалог делает с `projectPath`/`workId`, проверяет его собственный тест.
+const dialogProps = vi.hoisted(() => ({ last: null as NewSessionDialogProps | null }));
+vi.mock('./components/dialogs/NewSessionDialog.js', () => ({
+  NewSessionDialog: (props: NewSessionDialogProps) => {
+    dialogProps.last = props;
+    return null;
+  },
+}));
+
+// Тест 6 открывает вкладку-терминал; настоящий xterm в jsdom падает на
+// `matchMedia` — поверхности тут не нужны, раскладка и диалог от них не зависят.
+vi.mock('./layout/SurfaceLayer.js', () => ({ SurfaceLayer: () => null }));
+
+// jsdom не знает ResizeObserver — группы раскладки и поверхности терминала
+// заводят его при монтировании.
 class ResizeObserverStub {
   observe(): void {}
   unobserve(): void {}
@@ -33,16 +52,21 @@ beforeEach(() => {
   useActivityStore.setState({ byRef: {} });
   useNoticesStore.setState({ notices: [] });
   useUiStore.setState({
-    selectedRef: null,
-    selectedWorkKey: null,
     windowFocused: true,
     wakePaused: null,
     dialogs: { newWork: false, newSession: { open: false, parentSessionId: null }, settings: false, createRoom: null },
-    lastSessionByWork: {},
-    activePanelId: null,
     visibleSessionRefs: {},
-    recentSessionRefs: [],
   });
+  useLayoutStore.setState({
+    activeWorkKey: null,
+    layouts: {},
+    hydrated: {},
+    pending: {},
+    history: EMPTY_HISTORY,
+    mru: {},
+    navigating: false,
+  });
+  dialogProps.last = null;
   // `getHostClient()` читает `window.harnas` лениво — подставляем вручную,
   // как и задумано (комментарий в `host-client.ts`).
   bridge = createFakeBridge();
@@ -146,5 +170,77 @@ describe('App — уведомление trust-wait (раунд исправле
         body: 'S03 бэкенд: not responding since launch — may be waiting for folder trust.',
       },
     ]);
+  });
+});
+
+function session(id: string, label: string): WorkSession {
+  return {
+    id,
+    provider: 'claude',
+    label,
+    task: '',
+    parent: null,
+    contextFrom: [],
+    lifecycle: 'active',
+    result: null,
+    resultAt: null,
+    closedAt: null,
+    history: [],
+    startedAt: null,
+    endedAt: null,
+    pid: null,
+    startedAtProcess: null,
+    launchedBy: 'host',
+    providerSessionId: null,
+    metrics: null,
+    summary: null,
+    summarySource: null,
+    artifacts: [],
+    agent: null,
+  };
+}
+
+function work(id: string, createdAt: string, sessions: WorkSession[]): WorkEntry {
+  return {
+    projectPath: `/tmp/${id}`,
+    map: {
+      schemaVersion: 2,
+      rooms: [],
+      work: { id, title: id, goal: '', status: 'active', createdAt, updatedAt: createdAt },
+      sessions,
+      messages: [],
+    },
+  };
+}
+
+// Кусок 2.7: выбор сессии больше не хранится в `store/ui.ts` — ⌘T берёт
+// работу из `activeWorkKey`, родителя — из активной вкладки-терминала её
+// активной группы (`selectedSessionOf`).
+describe('App — меню new-session (тест 6 куска 2.7)', () => {
+  it('диалог получает projectPath и workId активной работы и родителя из selectedSessionOf', async () => {
+    const w1 = work('w-01', '2026-01-01', [session('s-01', 'план')]);
+    const w2 = work('w-02', '2026-01-02', [session('s-01', 'бэк'), session('s-02', 'фронт')]);
+    useWorksStore.setState({ entries: [w1, w2], branches: {}, loading: false, error: null });
+    const key2 = '/tmp/w-02 w-02';
+    const layout = openTab(openTab(emptyLayout(), { kind: 'terminal', id: tabId.terminal('s-01'), sessionId: 's-01' }), {
+      kind: 'terminal',
+      id: tabId.terminal('s-02'),
+      sessionId: 's-02',
+    });
+    useLayoutStore.setState({ activeWorkKey: key2, layouts: { [key2]: layout }, hydrated: { [key2]: true } });
+
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    act(() => bridge.emitMenu('new-session'));
+
+    expect(dialogProps.last).toMatchObject({
+      open: true,
+      projectPath: '/tmp/w-02',
+      workId: 'w-02',
+      selectedSessionId: 's-02',
+    });
   });
 });

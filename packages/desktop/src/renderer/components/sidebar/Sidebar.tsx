@@ -1,8 +1,9 @@
 /**
  * Сайдбар: список работ слева, дерево сессий каждой — навигация мышью по
- * работам и сессиям (кусок 1.10 плана окна). С куска 2.1 строка сессии не
- * держит собственную панель — «выбрать» и «открыть» одинаково просят
- * `Workspace` сфокусировать существующую панель или завести новую вкладку.
+ * работам и сессиям (кусок 1.10 плана окна). Строка сессии не держит
+ * собственную вкладку — «выбрать» и «открыть» одинаково просят `AppShell`
+ * сделать работу активной и открыть (или сфокусировать) вкладку в её раскладке.
+ * Подсвечена выбранная сессия — `layout/store.ts#selectedSessionOf` (кусок 2.7).
  *
  * «+ работа» и «Создать комнату с…» (кусок 3.6) с куска 2.3 открывают свои
  * диалоги через `store/ui.ts`, а не монтируют их сами: `NewWorkDialog` и
@@ -13,6 +14,7 @@
 import type { Room, WorkSession } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import { S } from '../../../shared/strings.js';
+import { selectedSessionOf, useLayoutStore } from '../../layout/store.js';
 import { sessionRowLabel } from '../../lib/participant.js';
 import { workKey } from '../../lib/tree-order.js';
 import type { HarnasBridge } from '../../../shared/bridge.js';
@@ -23,13 +25,13 @@ import { WorkList } from './WorkList.js';
 
 export interface SidebarProps {
   bridge: HarnasBridge;
-  /** Клик по строке или «Открыть» в меню сессии — `Workspace.openSession` через `App.tsx`. */
+  /** Клик по строке или «Открыть» в меню сессии — вкладка-терминал в раскладке работы (`AppShell.tsx`). */
   onOpenSession: (workKey: string, ref: SessionRef, session: WorkSession) => void;
-  /** Клик по строке «вся почта работы» — `Workspace.openMail` через `App.tsx` (кусок 2.4). */
+  /** Клик по строке «вся почта работы» — вкладка `mail` (`AppShell.tsx`, кусок 2.4). */
   onOpenMail: (workKey: string) => void;
-  /** Клик по строке комнаты — `Workspace.openRoom` через `App.tsx` (кусок 3.6). */
+  /** Клик по строке комнаты — вкладка `room` (`AppShell.tsx`, кусок 3.6). */
   onOpenRoom: (workKey: string, roomId: string, title: string) => void;
-  /** «Изменения» из меню сессии — `Workspace.openChanges` через `App.tsx` (кусок 4.3). */
+  /** «Изменения» из меню сессии — вкладка `diff` (`AppShell.tsx`, кусок 4.3). */
   onOpenChanges: (workKey: string, ref: SessionRef, session: WorkSession) => void;
 }
 
@@ -38,17 +40,17 @@ export function Sidebar({ bridge, onOpenSession, onOpenMail, onOpenRoom, onOpenC
   const branches = useWorksStore((state) => state.branches);
   const activityByRef = useActivityStore((state) => state.byRef);
 
-  const selectedWorkKey = useUiStore((state) => state.selectedWorkKey);
-  const selectedRef = useUiStore((state) => state.selectedRef);
+  const activeWorkKey = useLayoutStore((state) => state.activeWorkKey);
+  const layouts = useLayoutStore((state) => state.layouts);
+  const selected = selectedSessionOf({ activeWorkKey, layouts }, entries);
   const openNewWorkDialog = useUiStore((state) => state.openNewWorkDialog);
   const openCreateRoomDialog = useUiStore((state) => state.openCreateRoomDialog);
 
   const ordered = orderedWorks(entries);
 
-  // «Открыть» и клик по строке — одно и то же: обе просят `Workspace`
-  // сфокусировать панель сессии или завести новую вкладку (кусок 2.1).
-  // Подсветка строки сама обновится по факту (`onDidActivePanelChange` в
-  // `Workspace` пишет `selectedRef`/`selectedWorkKey` в этот же стор).
+  // «Открыть» и клик по строке — одно и то же: обе просят `AppShell`
+  // сфокусировать вкладку сессии или завести новую. Подсветка строки сама
+  // обновится по факту — её выводит `selectedSessionOf` из раскладки.
   const handleOpen = (key: string, ref: SessionRef, session: WorkSession): void => onOpenSession(key, ref, session);
   const handleResume = (ref: SessionRef): void => {
     bridge.call('sessions.resume', { ref }).catch(() => {});
@@ -84,8 +86,8 @@ export function Sidebar({ bridge, onOpenSession, onOpenMail, onOpenRoom, onOpenC
           <WorkList
             entries={ordered}
             branches={branches}
-            selectedWorkKey={selectedWorkKey}
-            selectedSessionId={selectedRef?.sessionId ?? null}
+            selectedWorkKey={selected?.workKey ?? null}
+            selectedSessionId={selected?.ref.sessionId ?? null}
             activityByRef={activityByRef}
             onSelectSession={(key, ref, session) => handleOpen(key, ref, session)}
             onOpen={(ref, session) => handleOpen(workKey(ref.projectPath, ref.workId), ref, session)}

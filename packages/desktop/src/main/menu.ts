@@ -63,6 +63,9 @@ export function createAppMenu(getFocusedWindow: () => BrowserWindow | null): Men
       label: S.menu.view,
       submenu: [
         { label: S.menu.workspaceSidebar, accelerator: 'CmdOrCtrl+B', click: () => send('toggle-left-sidebar') },
+        { type: 'separator' },
+        { label: S.menu.back, accelerator: 'CmdOrCtrl+Alt+Left', click: () => send('history-back') },
+        { label: S.menu.forward, accelerator: 'CmdOrCtrl+Alt+Right', click: () => send('history-forward') },
       ],
     },
   ];

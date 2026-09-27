@@ -1,15 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SessionRef } from '@harnas/protocol';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { useUiStore } from './ui.js';
 
-const ref: SessionRef = { projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-01' };
-
 beforeEach(() => {
   useUiStore.setState({
-    selectedRef: null,
-    selectedWorkKey: null,
     windowFocused: true,
     wakePaused: null,
     dialogs: {
@@ -18,42 +13,10 @@ beforeEach(() => {
       settings: false,
       createRoom: null,
     },
-    lastSessionByWork: {},
-    activePanelId: null,
-    recentSessionRefs: [],
     ui: DEFAULT_UI,
     uiLoaded: false,
     paletteOpen: false,
     picker: null,
-  });
-});
-
-describe('useUiStore.selectSession', () => {
-  it('запоминает выбор и последнюю сессию работы', () => {
-    useUiStore.getState().selectSession('/tmp/proj w-01', ref);
-
-    expect(useUiStore.getState().selectedRef).toEqual(ref);
-    expect(useUiStore.getState().lastSessionByWork['/tmp/proj w-01']).toBe('s-01');
-  });
-
-  it('копит недавние сессии, самая свежая первой, без повторов (для палитры ⌘K, кусок 2.3)', () => {
-    const other: SessionRef = { projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-02' };
-
-    useUiStore.getState().selectSession('/tmp/proj w-01', ref);
-    useUiStore.getState().selectSession('/tmp/proj w-01', other);
-    useUiStore.getState().selectSession('/tmp/proj w-01', ref);
-
-    expect(useUiStore.getState().recentSessionRefs).toEqual([ref, other]);
-  });
-});
-
-describe('useUiStore.setActivePanelId', () => {
-  it('запоминает id активной панели сетки; сброс — в null', () => {
-    useUiStore.getState().setActivePanelId('terminal:/tmp/proj\u0000w-01\u0000s-01');
-    expect(useUiStore.getState().activePanelId).toBe('terminal:/tmp/proj\u0000w-01\u0000s-01');
-
-    useUiStore.getState().setActivePanelId(null);
-    expect(useUiStore.getState().activePanelId).toBeNull();
   });
 });
 

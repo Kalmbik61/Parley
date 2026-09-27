@@ -1,12 +1,12 @@
 /**
- * Тесты 6, 9, 10, 13 куска 2.3: `AppShell` без работ показывает `Landing` в
- * центре (заголовок и строка статуса остаются), с работой — сайдбар и центр;
- * меню и кнопки заголовка/`Landing` открывают нужные диалоги; выбор в
- * `SessionPicker` зовёт `Workspace#openBeside`; меню `work-2` открывает
- * последнюю сессию второй по порядку работы.
+ * Тесты 6, 9 куска 2.3: `AppShell` без работ показывает `Landing` в центре
+ * (заголовок и строка статуса остаются), с работой — сайдбар и центр; меню и
+ * кнопки заголовка/`Landing` открывают нужные диалоги. Тесты кусков 2.4–2.5 —
+ * центр из раскладок работ; с куска 2.7 он единственный: меню `work-2` делает
+ * активной вторую по порядку создания работу (тест 7), `history-back` и
+ * `history-forward` ходят по истории.
  *
- * xterm подменён фейком, как в `Workspace.test.tsx` — реальный xterm рисует
- * в канву, которой в jsdom нет.
+ * xterm подменён фейком — реальный xterm рисует в канву, которой в jsdom нет.
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -26,7 +26,7 @@ import { useWorksStore } from '../store/works.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { AppShell } from './AppShell.js';
 
-// Тесты 10, 13, 14, 15 куска 2.4 (`?center=new`) зовут `toast` и из `AppShell.tsx`
+// Тесты 10, 13, 14, 15 куска 2.4 зовут `toast` и из `AppShell.tsx`
 // (отказ сплита), и из `layout/Tab.tsx` (закрытие вкладки) — без смонтированного
 // `ui/sonner.tsx#Toaster` (тот живёт в `App.tsx`, не в `AppShell.tsx`) настоящий
 // `sonner` просто не рисует ничего; здесь он подменён, чтобы проверить сам вызов.
@@ -156,15 +156,10 @@ beforeEach(() => {
   useActivityStore.setState({ byRef: {} });
   useNoticesStore.setState({ notices: [] });
   useUiStore.setState({
-    selectedRef: null,
-    selectedWorkKey: null,
     windowFocused: true,
     wakePaused: null,
     dialogs: { newWork: false, newSession: { open: false, parentSessionId: null }, settings: false, createRoom: null },
-    lastSessionByWork: {},
-    activePanelId: null,
     visibleSessionRefs: {},
-    recentSessionRefs: [],
     ui: DEFAULT_UI,
     uiLoaded: true,
     paletteOpen: false,
@@ -187,15 +182,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   rectSpy?.mockRestore();
   rectSpy = null;
-  // Тесты `?center=new` (куска 2.4) переставляют `location.search` — не должно
-  // протечь в соседние тесты этого файла, которые проверяют старый центр.
-  window.history.pushState(null, '', '/');
 });
-
-/** `?center=new` читается `AppShell` из `location.search` при монтировании (кусок 2.4) — переставить ДО `render`. */
-function setCenterNewFlag(): void {
-  window.history.pushState(null, '', '/?center=new');
-}
 
 async function flush(): Promise<void> {
   await act(async () => {
@@ -326,54 +313,8 @@ describe('AppShell — меню и диалоги (тест 9)', () => {
   });
 });
 
-describe('AppShell — SessionPicker (тест 10)', () => {
-  it('выбор кандидата в SessionPicker зовёт Workspace#openBeside — открывает вторую сессию', async () => {
-    const w1 = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'план'), session('s-02', 'бэкенд')]);
-    useWorksStore.setState({ entries: [w1], branches: {}, loading: false, error: null });
-
-    const { container } = render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
-    await flush();
-
-    const row = container.querySelector('[data-session-id="s-01"]');
-    if (row === null) throw new Error('строка сессии s-01 не найдена');
-    fireEvent.click(row);
-    await flush();
-
-    act(() => bridge.emitMenu('split-right'));
-    await flush();
-
-    const dialog = await screen.findByRole('dialog');
-    fireEvent.click(within(dialog).getByText('S02 бэкенд'));
-    await flush();
-
-    expect(state.terminals).toHaveLength(2);
-  });
-});
-
-describe('AppShell — меню work-2 (тест 13)', () => {
-  it('открывает последнюю сессию второй по порядку создания работы', async () => {
-    const w1 = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'план')]);
-    const w2 = work('w-02', '2026-01-02', 'Вторая', [session('s-02', 'бэк'), session('s-03', 'фронт')]);
-    useWorksStore.setState({ entries: [w2, w1], branches: {}, loading: false, error: null });
-    useUiStore.setState({ lastSessionByWork: { '/tmp/w-02 w-02': 's-03' } });
-
-    render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
-    await flush();
-
-    act(() => bridge.emitMenu('work-2'));
-    await flush();
-
-    expect(
-      bridge.calls.some(
-        (call) => call.method === 'pty.attach' && (call.params as { ref: { sessionId: string } }).ref.sessionId === 's-03',
-      ),
-    ).toBe(true);
-  });
-});
-
-describe('AppShell — ?center=new, activeWorkKey ещё не выбран (тест 15 куска 2.4)', () => {
+describe('AppShell — activeWorkKey ещё не выбран (тест 15 куска 2.4)', () => {
   it('LayoutView не смонтирован, #titlebar-tabs пуст, пока работы есть, а активная работа ещё не выбрана', () => {
-    setCenterNewFlag();
     const w1 = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'план')]);
     useWorksStore.setState({ entries: [w1], branches: {}, loading: false, error: null });
 
@@ -388,9 +329,8 @@ describe('AppShell — ?center=new, activeWorkKey ещё не выбран (те
   });
 });
 
-describe('AppShell — ?center=new: сплит и палитра (тест 13 куска 2.4)', () => {
-  it('Workspace не смонтирован; split-right без уже открытых; выбор — вторая группа; «+» открывает палитру', async () => {
-    setCenterNewFlag();
+describe('AppShell — сплит и палитра (тест 13 куска 2.4)', () => {
+  it('split-right без уже открытых; выбор — вторая группа; «+» открывает палитру', async () => {
     mockNonZeroRects();
 
     const w1 = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'план'), session('s-02', 'бэкенд')]);
@@ -421,12 +361,10 @@ describe('AppShell — ?center=new: сплит и палитра (тест 13 к
     const layout = useLayoutStore.getState().layouts[workKey1];
     if (layout === undefined) throw new Error('раскладка не гидрирована');
     expect(groups(layout)).toHaveLength(2);
-    // Две группы — LayoutView отрисовал их сам, а не прежний Workspace/dockview
-    // (тест 1: «слот заголовка пуст», когда групп несколько; отдельная строка на
-    // каждую группу — `[data-group-id]` их обеих).
+    // Две группы (тест 1: «слот заголовка пуст», когда групп несколько;
+    // отдельная строка на каждую группу — `[data-group-id]` их обеих).
     expect(document.querySelectorAll('[data-group-id]')).toHaveLength(2);
     expect(document.getElementById('titlebar-tabs')?.childElementCount ?? 0).toBe(0);
-    expect(document.querySelector('.dockview-theme-harnas')).toBeNull();
 
     // «+» строки вкладок (теперь их две — групп несколько) открывает палитру.
     fireEvent.click(screen.getAllByLabelText('Open…')[0]!);
@@ -443,9 +381,8 @@ function siblingGroupId(root: LayoutNode, id: string): string | null {
   return siblingGroupId(a, id) ?? siblingGroupId(b, id);
 }
 
-describe('AppShell — ?center=new: разделение из меню вкладки неактивной группы (тест 14 куска 2.4)', () => {
+describe('AppShell — разделение из меню вкладки неактивной группы (тест 14 куска 2.4)', () => {
   it('«Разделить вправо» на вкладке неактивной группы делит ЕЁ группу; прежняя активная группа не тронута', async () => {
-    setCenterNewFlag();
     mockNonZeroRects();
 
     const w1 = work('w-01', '2026-01-01', 'Первая', [
@@ -504,9 +441,8 @@ describe('AppShell — ?center=new: разделение из меню вкла�
   });
 });
 
-describe('AppShell — ?center=new: отказ сплита при 8 группах (тест 10 куска 2.4)', () => {
+describe('AppShell — отказ сплита при 8 группах (тест 10 куска 2.4)', () => {
   it('9-я группа — тост «No more than 8 groups per workspace», раскладка не меняется', async () => {
-    setCenterNewFlag();
     mockNonZeroRects();
 
     const sessions = Array.from({ length: 9 }, (_, i) => session(`s-0${i + 1}`, `session ${i + 1}`));
@@ -580,8 +516,7 @@ function fourWorks(): WorkEntry[] {
   ];
 }
 
-async function renderCenterNew(entries: WorkEntry[]): Promise<void> {
-  setCenterNewFlag();
+async function renderShell(entries: WorkEntry[]): Promise<void> {
   useWorksStore.setState({ entries, branches: {}, loading: false, error: null });
   render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
   await flush();
@@ -590,9 +525,9 @@ async function renderCenterNew(entries: WorkEntry[]): Promise<void> {
   await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).not.toBeNull());
 }
 
-describe('AppShell — ?center=new: LRU контейнеров работ (тест 4 куска 2.5)', () => {
+describe('AppShell — LRU контейнеров работ (тест 4 куска 2.5)', () => {
   it('четыре работы подряд: контейнер первой размонтирован (dispose), возврат создаёт терминал заново и подключает', async () => {
-    await renderCenterNew(fourWorks());
+    await renderShell(fourWorks());
     await activateWithTerminal(keyOf('w-01'), 's-01');
     await activateWithTerminal(keyOf('w-02'), 's-02');
     await activateWithTerminal(keyOf('w-03'), 's-03');
@@ -614,9 +549,9 @@ describe('AppShell — ?center=new: LRU контейнеров работ (те�
   });
 });
 
-describe('AppShell — ?center=new: контейнеры работ (тесты 7, 8 куска 2.5)', () => {
+describe('AppShell — контейнеры работ (тесты 7, 8 куска 2.5)', () => {
   it('тест 7: у каждой из трёх работ свой контейнер, LayoutView раньше SurfaceLayer, у слоя нет классов и стилей', async () => {
-    await renderCenterNew(fourWorks().slice(0, 3));
+    await renderShell(fourWorks().slice(0, 3));
     await activateWithTerminal(keyOf('w-01'), 's-01');
     await activateWithTerminal(keyOf('w-02'), 's-02');
     await activateWithTerminal(keyOf('w-03'), 's-03');
@@ -636,7 +571,7 @@ describe('AppShell — ?center=new: контейнеры работ (тесты 
   });
 
   it('тест 8: тела групп неактивной работы в DOM, контейнер скрыт и inert; в заголовке — строка только активной', async () => {
-    await renderCenterNew(fourWorks().slice(0, 2));
+    await renderShell(fourWorks().slice(0, 2));
     await activateWithTerminal(keyOf('w-01'), 's-01');
     await activateWithTerminal(keyOf('w-02'), 's-02');
 
@@ -656,9 +591,9 @@ describe('AppShell — ?center=new: контейнеры работ (тесты 
   });
 });
 
-describe('AppShell — ?center=new: работа LRU без раскладки и drop (тест 16 куска 2.5)', () => {
+describe('AppShell — работа LRU без раскладки и drop (тест 16 куска 2.5)', () => {
   it('контейнер пуст до hydrate, после — LayoutView и поверхности; drop — контейнер размонтирован, dispose', async () => {
-    await renderCenterNew(fourWorks().slice(0, 2));
+    await renderShell(fourWorks().slice(0, 2));
     await activateWithTerminal(keyOf('w-01'), 's-01');
 
     // Раскладка второй работы с диска ещё не пришла.
@@ -695,13 +630,13 @@ describe('AppShell — ?center=new: работа LRU без раскладки �
   });
 });
 
-describe('AppShell — ?center=new: вход «Почта» сайдбара (тест 10 куска 2.5)', () => {
+describe('AppShell — вход «Почта» сайдбара (тест 10 куска 2.5)', () => {
   it('клик по «Почта» работы B, пока активна A: активна B, вкладка mail в раскладке B', async () => {
     const letter = { id: 'm-1', roomId: null, from: 's-02', to: ['s-01'], at: '2026-01-02T10:00:00.000Z', text: 'т', kind: 'note' as const, readBy: {} };
     const a = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')]);
     const bBase = work('w-02', '2026-01-02', 'Вторая', [session('s-02', 'два')]);
     const b: WorkEntry = { ...bBase, map: { ...bBase.map, messages: [letter] } };
-    await renderCenterNew([a, b]);
+    await renderShell([a, b]);
     act(() => useLayoutStore.getState().setActiveWork(keyOf('w-01')));
     await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-01')]).toBe(true));
 
@@ -717,10 +652,10 @@ describe('AppShell — ?center=new: вход «Почта» сайдбара (т
   });
 });
 
-describe('AppShell — ?center=new: меню find (тест 15 куска 2.5)', () => {
+describe('AppShell — меню find (тест 15 куска 2.5)', () => {
   it('полоса поиска открывается только у видимой поверхности активной группы', async () => {
     mockNonZeroRects();
-    await renderCenterNew([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один'), session('s-02', 'два'), session('s-03', 'три')])]);
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один'), session('s-02', 'два'), session('s-03', 'три')])]);
     const key = keyOf('w-01');
     act(() => useLayoutStore.getState().setActiveWork(key));
     await waitFor(() => expect(useLayoutStore.getState().hydrated[key]).toBe(true));
@@ -743,12 +678,12 @@ describe('AppShell — ?center=new: меню find (тест 15 куска 2.5)',
   });
 });
 
-describe('AppShell — ?center=new: фокус группы из поверхности терминала (раунд исправлений 1 куска 2.5)', () => {
+describe('AppShell — фокус группы из поверхности терминала (раунд исправлений 1 куска 2.5)', () => {
   // Поверхность живёт в слое, а не внутри `GroupView`, — его
   // `onPointerDownCapture` до неё не доходит; группу фокусирует сама поверхность.
   async function twoGroupsFocusedOnSecond(): Promise<string> {
     mockNonZeroRects();
-    await renderCenterNew([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один'), session('s-02', 'два')])]);
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один'), session('s-02', 'два')])]);
     const key = keyOf('w-01');
     act(() => useLayoutStore.getState().setActiveWork(key));
     await waitFor(() => expect(useLayoutStore.getState().hydrated[key]).toBe(true));
@@ -807,5 +742,50 @@ describe('AppShell — ?center=new: фокус группы из поверхн�
     fireEvent.pointerDown(pad('terminal:s-02'));
     fireEvent.focusIn(pad('terminal:s-02'));
     expect(useLayoutStore.getState().layouts[key]).toBe(before);
+  });
+});
+
+describe('AppShell — меню work-2 (тест 7 куска 2.7)', () => {
+  it('делает активной вторую по порядку создания работу, в центре — её раскладка', async () => {
+    // Снимок нарочно не в порядке создания: ⌘2 считает по `createdAt`, а не по массиву.
+    const [w1, w2, w3] = fourWorks();
+    await renderShell([w3!, w1!, w2!]);
+    await activateWithTerminal(keyOf('w-01'), 's-01');
+    await activateWithTerminal(keyOf('w-02'), 's-02');
+    await activateWithTerminal(keyOf('w-01'), 's-01');
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
+
+    act(() => bridge.emitMenu('work-2'));
+    await flush();
+
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
+    const active = container(keyOf('w-02'));
+    expect(active?.style.visibility).not.toBe('hidden');
+    expect(active?.querySelector('[data-group-id]')).not.toBeNull();
+    expect(active?.querySelector('[data-surface-layer] [data-tab-id="terminal:s-02"]')).not.toBeNull();
+    expect(document.getElementById('titlebar-tabs')?.querySelector('[data-tab-id="terminal:s-02"]')).not.toBeNull();
+  });
+});
+
+describe('AppShell — меню history-back / history-forward (кусок 2.7)', () => {
+  it('назад возвращает прежнюю работу, вперёд — снова вторую', async () => {
+    await renderShell(fourWorks().slice(0, 2));
+    await activateWithTerminal(keyOf('w-01'), 's-01');
+    // Как клик по строке сессии ещё не показанной работы: вкладка ждёт в
+    // `pending` и вливается в `hydrate` — в истории одна запись на переход.
+    act(() => {
+      useLayoutStore.getState().setActiveWork(keyOf('w-02'));
+      useLayoutStore.getState().apply(keyOf('w-02'), (layout) => openTab(layout, term('s-02')));
+    });
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-02')]).toBe(true));
+    await flush();
+
+    act(() => bridge.emitMenu('history-back'));
+    await flush();
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
+
+    act(() => bridge.emitMenu('history-forward'));
+    await flush();
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
   });
 });

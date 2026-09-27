@@ -2,13 +2,11 @@
  * Хранилище раскладок окна: `~/.harnas/desktop/layouts.json` (кусок 2.2 плана
  * каркаса, спека 3.4, 5.8). Формат v2 — ключ по `workKey` (по одной раскладке
  * `WorkLayout` на работу), а не общий на всё окно, как был v1: у каждой работы
- * теперь своя раскладка. Прежний `Workspace.tsx` (до 2.7) продолжает читать и
- * писать сюда же свою единую сетку dockview под ключом `window` — формат это
- * не мешает, он просто словарь по ключу.
+ * теперь своя раскладка.
  *
  * v1 (`{ version: 1, layouts }`, кусок 2.2 прежнего плана) и любой битый файл
- * читаются как пустой v2-файл (план, «Поведение»): раскладки dockview не
- * мигрируют — решено в разделе 1 диалога спеки, у каждой работы раскладка
+ * читаются как пустой v2-файл (план, «Поведение»): раскладки прежнего центра
+ * не мигрируют — решено в разделе 1 диалога спеки, у каждой работы раскладка
  * начинается заново.
  *
  * Запись — через общие `atomic-file.ts` (1.1): уникальный `.tmp` на каждый
@@ -34,7 +32,7 @@ export interface LayoutStore {
   load(workKey: string): Promise<unknown | null>;
   save(workKey: string, layout: unknown): Promise<void>;
   remove(workKey: string): Promise<void>;
-  /** Оставляет раскладки только этих работ и ключ `window` прежнего `Workspace` (до 2.7). */
+  /** Оставляет раскладки только этих работ; прочие ключи, включая `window` прежнего центра, стирает. */
   retain(workKeys: string[]): Promise<void>;
 }
 
@@ -157,7 +155,7 @@ export function createLayoutStore(file: string, options: CreateLayoutStoreOption
     retain: (workKeys) =>
       enqueue(async () => {
         const works = await readLayoutsFile(file);
-        const keep = new Set([...workKeys, 'window']);
+        const keep = new Set(workKeys);
         for (const key of [...works.keys()]) {
           if (!keep.has(key)) works.delete(key);
         }

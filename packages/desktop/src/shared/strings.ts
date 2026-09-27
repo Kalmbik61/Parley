@@ -223,7 +223,7 @@ export const S = {
     noChanges: 'No changes',
   },
 
-  /** Панель терминала — `terminal/TerminalPanel.tsx`. */
+  /** Поверхность терминала — `terminal/TerminalSurface.tsx`. */
   terminal: {
     findPlaceholder: 'Find…',
   },
@@ -288,6 +288,8 @@ export const S = {
     workspaceNumber: (n: string): string => `Workspace ${n}`,
     view: 'View',
     workspaceSidebar: 'Workspace sidebar',
+    back: 'Back',
+    forward: 'Forward',
   },
 
   /** Уведомления macOS — `App.tsx` (trust-wait), `renderer/notifications.ts` (тревога сессии). */
@@ -320,8 +322,6 @@ export const S = {
       loadSettings: 'load settings',
       saveSettings: 'save settings',
     },
-    /** Панель пережила исчезновение своей работы/сессии из снимка (`panel-registry.tsx`, план «На что смотреть на ревью», п. 3). */
-    workspaceClosed: 'Workspace closed',
     noWorktree: 'This session has no worktree of its own',
   },
 

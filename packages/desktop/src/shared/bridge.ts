@@ -6,6 +6,7 @@ import type {
   Params,
   Result,
 } from '@harnas/protocol';
+import type { WorkLayout } from './layout-types.js';
 import type { Appearance, UiFile } from './ui-types.js';
 
 /** Состояние связи окна с хостом — источник для диалогов и строки статуса. */
@@ -29,6 +30,8 @@ export type MenuAction =
   | 'toggle-left-sidebar'
   | 'find'
   | 'settings'
+  | 'history-back'
+  | 'history-forward'
   | `work-${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`;
 
 /**
@@ -48,13 +51,13 @@ export interface HarnasBridge {
     restartHost(): Promise<void>;
     onMenu(listener: (action: MenuAction) => void): () => void;
     /**
-     * `loadLayout`/`saveLayout` остаются на `unknown` до куска 2.7: ими же
-     * прежний `Workspace` пишет раскладку dockview под ключом `window` в тот
-     * же файл (`main/layout-store.ts`), который с этого куска хранит формат
-     * v2 — по одной раскладке `WorkLayout` на `workKey` (спека 5.8).
+     * Раскладка работы в `layouts.json` (`main/layout-store.ts`, формат v2 —
+     * по одной `WorkLayout` на `workKey`, спека 5.8). Файл пишет не только
+     * это окно, поэтому рендерер всё равно проверяет прочитанное
+     * (`layout/tree.ts#parseWorkLayout`).
      */
-    loadLayout(workKey: string): Promise<unknown | null>;
-    saveLayout(workKey: string, layout: unknown): Promise<void>;
+    loadLayout(workKey: string): Promise<WorkLayout | null>;
+    saveLayout(workKey: string, layout: WorkLayout): Promise<void>;
     /** Работа исчезла из снимка — стирает её раскладку из `layouts.json` (спека 5.8). */
     removeLayout(workKey: string): Promise<void>;
     /** Первый снимок после старта: раскладки работ, которых в нём нет, стираются (спека 5.8). */

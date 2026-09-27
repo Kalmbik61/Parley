@@ -1,9 +1,7 @@
 /**
  * Восстановление и сохранение раскладок работ (спека 5.6–5.8, кусок 2.2 плана
- * каркаса). В отличие от `components/layout/use-layout-persistence.ts` (общая
- * сетка dockview под ключом `window`, живёт до 2.7), здесь у каждой работы
- * своя раскладка в `layout/store.ts` — хук ведёт себя как сторож между этим
- * стором и мостом: гидрирует по требованию (когда работа впервые становится
+ * каркаса). У каждой работы своя раскладка в `layout/store.ts` — хук ведёт
+ * себя как сторож между этим стором и мостом: гидрирует по требованию (когда работа впервые становится
  * активной), пишет изменения на диск с тишиной и следит за составом снимка
  * работ (пропала работа — `drop` и `removeLayout`; пришли первые работы —
  * выбирает активную и зовёт `retainLayouts`).
@@ -115,6 +113,23 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order }: UseL
   // (диф пропавших работ).
   const prevOrderRef = useRef<string[] | null>(null);
 
+  // Выбор активной работы по `ui.json` ещё в пути (первый снимок был не пуст).
+  // Не флаг `cancelled` в очистке эффекта (раунд исправлений куска 2.7): `order`
+  // у вызывающей стороны — новый массив на каждый рендер, эффект
+  // перезапускается задолго до ответа `loadUi`, и отмена по очистке роняла
+  // выбор — активной после перезапуска становилась первая работа, а не
+  // последняя активная (спека 5.6). Отменяет выбор только размонтирование.
+  const initialPendingRef = useRef(false);
+  const disposedRef = useRef(false);
+  const orderRef = useRef(order);
+  orderRef.current = order;
+  useEffect(() => {
+    disposedRef.current = false;
+    return () => {
+      disposedRef.current = true;
+    };
+  }, []);
+
   // Работы, чья САМАЯ ПЕРВАЯ гидрация принесла что-то сверх диска — очередь
   // `pending`, применённая внутри `hydrate` (раунд исправлений 1, Important
   // A): сама по себе первая гидрация не «изменение» (см. эффект сохранения
@@ -130,30 +145,28 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order }: UseL
     prevOrderRef.current = order;
 
     if (prevOrder === null) {
-      let cancelled = false;
       // Работы, удалённые при закрытом окне, не должны копиться в файле вечно —
       // первый снимок оставляет раскладки только тех работ, что в нём есть.
       bridge.app.retainLayouts(order).catch(() => {});
 
-      const applyInitial = (initial: string | null): void => {
-        if (cancelled) return;
+      initialPendingRef.current = order.length > 0;
+      // Состав берётся свежий (`orderRef`): пока ждали диск, работа могла пропасть.
+      const applyInitial = (fromDisk: string | null): void => {
+        initialPendingRef.current = false;
+        if (disposedRef.current) return;
         // Пока ждали диск, снимок мог обновиться и уже выбрать активную работу
         // сам (пустой старт → пришли работы, см. ветку ниже) — не затираем её.
         if (useLayoutStore.getState().activeWorkKey !== null) return;
-        useLayoutStore.getState().setActiveWork(initial);
+        const current = orderRef.current;
+        useLayoutStore.getState().setActiveWork(fromDisk !== null && current.includes(fromDisk) ? fromDisk : (current[0] ?? null));
       };
 
       bridge.app
         .loadUi()
-        .then((ui) => {
-          const fromDisk = ui.activeWorkKey;
-          applyInitial(fromDisk !== null && order.includes(fromDisk) ? fromDisk : (order[0] ?? null));
-        })
-        .catch(() => applyInitial(order[0] ?? null));
+        .then((ui) => applyInitial(ui.activeWorkKey))
+        .catch(() => applyInitial(null));
 
-      return () => {
-        cancelled = true;
-      };
+      return undefined;
     }
 
     // Все пропавшие разом (раунд исправлений 1, Critical): сначала снимаем
@@ -174,8 +187,9 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order }: UseL
     }
 
     // Пустой старт (тест 16): работ не было, activeWorkKey — null; как только
-    // снимок принёс хоть одну работу, показывать нужно её, а не Landing.
-    if (useLayoutStore.getState().activeWorkKey === null && order.length > 0) {
+    // снимок принёс хоть одну работу, показывать нужно её, а не Landing. Пока
+    // выбор по `ui.json` в пути — решает он.
+    if (!initialPendingRef.current && useLayoutStore.getState().activeWorkKey === null && order.length > 0) {
       useLayoutStore.getState().setActiveWork(order[0] ?? null);
     }
     return undefined;

@@ -2,8 +2,7 @@
  * Тесты 3, 4, 5, 6, 12, 13, 16 куска 2.2 плана каркаса (`layout/persistence.ts`).
  * Стор — модуль-синглтон zustand, сбрасывается в `beforeEach`, как и в
  * `store.test.ts`. Таймер-паттерн (реальные таймеры на `waitFor`, подставные —
- * на проверку тишины) — тот же, что в старом
- * `components/layout/use-layout-persistence.test.ts`.
+ * на проверку тишины) — тот же, что был у сохранения прежнего центра (до 2.7).
  */
 
 import { cleanup, renderHook, waitFor } from '@testing-library/react';
@@ -370,6 +369,25 @@ describe('useLayoutPersistence', () => {
 
     expect(useLayoutStore.getState().activeWorkKey).toBeNull();
     expect(bridge.layoutRemovals.sort()).toEqual([keyA, keyB].sort());
+  });
+
+  // Кусок 2.7 (E2E `layout.spec.ts`): `order` у `AppShell` — новый массив на
+  // каждый рендер. Повторный прогон эффекта до ответа `loadUi` отменял выбор
+  // из `ui.json`, и активной после перезапуска становилась первая работа, а не
+  // последняя активная (спека 5.6).
+  it('перерисовка с тем же составом до ответа loadUi не сбивает последнюю активную работу из ui.json (кусок 2.7)', async () => {
+    const bridge = createFakeBridge();
+    await bridge.app.saveUi({ activeWorkKey: keyB });
+    const entryA = work('w-a', '/tmp/a');
+    const entryB = work('w-b', '/tmp/b');
+
+    const { rerender } = renderHook(
+      ({ order }: { order: string[] }) => useLayoutPersistence({ bridge, works: [entryA, entryB], worksLoaded: true, order }),
+      { initialProps: { order: [keyA, keyB] } },
+    );
+    rerender({ order: [keyA, keyB] });
+
+    await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).toBe(keyB));
   });
 
   it('старт без работ, потом снимок с двумя — активна первая, saveUi после 300 мс тишины (тест 16)', async () => {

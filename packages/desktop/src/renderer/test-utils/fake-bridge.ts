@@ -14,6 +14,7 @@ import type {
   Result,
 } from '@harnas/protocol';
 import type { HarnasBridge, HostStatus, MenuAction } from '../../shared/bridge.js';
+import type { WorkLayout } from '../../shared/layout-types.js';
 import { DEFAULT_UI, normalizeUi, type UiFile } from '../../shared/ui-types.js';
 
 type Handler = (params: never) => unknown;
@@ -34,7 +35,7 @@ export interface FakeBridge extends HarnasBridge {
   readonly appNotified: Array<{ title: string; body: string }>;
   readonly badges: number[];
   /** Вызовы `app.saveLayout` — для теста тишины 500 мс (кусок 2.2). */
-  readonly layoutSaves: Array<{ workKey: string; layout: unknown }>;
+  readonly layoutSaves: Array<{ workKey: string; layout: WorkLayout }>;
   /** Вызовы `app.removeLayout` — работа пропала из снимка (кусок 2.2, тест 6). */
   readonly layoutRemovals: string[];
   /** Вызовы `app.retainLayouts` — первый снимок после `worksLoaded` (кусок 2.2, тест 13). */
@@ -55,11 +56,11 @@ export function createFakeBridge(): FakeBridge {
   const calls: Array<{ method: MethodName; params: unknown }> = [];
   const appNotified: Array<{ title: string; body: string }> = [];
   const badges: number[] = [];
-  const layoutSaves: Array<{ workKey: string; layout: unknown }> = [];
+  const layoutSaves: Array<{ workKey: string; layout: WorkLayout }> = [];
   const layoutRemovals: string[] = [];
   const layoutRetains: string[][] = [];
   const titlebarDoubleClicks: number[] = [];
-  const layouts = new Map<string, unknown>();
+  const layouts = new Map<string, WorkLayout>();
   let status: HostStatus = { state: 'connected', hostVersion: '0.0.0-test' };
   let ui: UiFile = DEFAULT_UI;
 

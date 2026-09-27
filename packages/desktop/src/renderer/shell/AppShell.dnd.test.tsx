@@ -157,8 +157,6 @@ beforeEach(() => {
   useActivityStore.setState({ byRef: {} });
   useNoticesStore.setState({ notices: [] });
   useUiStore.setState({
-    selectedRef: null,
-    selectedWorkKey: null,
     windowFocused: true,
     wakePaused: null,
     dialogs: {
@@ -167,10 +165,7 @@ beforeEach(() => {
       settings: false,
       createRoom: null,
     },
-    lastSessionByWork: {},
-    activePanelId: null,
     visibleSessionRefs: {},
-    recentSessionRefs: [],
     ui: DEFAULT_UI,
     uiLoaded: true,
     paletteOpen: false,
@@ -191,15 +186,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
-  // Тесты `?center=new` (куска 2.4) переставляют `location.search` — не должно
-  // протечь в соседние тесты этого файла, которые проверяют старый центр.
-  window.history.pushState(null, '', '/');
 });
-
-/** `?center=new` читается `AppShell` из `location.search` при монтировании (кусок 2.4) — переставить ДО `render`. */
-function setCenterNewFlag(): void {
-  window.history.pushState(null, '', '/?center=new');
-}
 
 async function flush(): Promise<void> {
   await act(async () => {
@@ -242,8 +229,7 @@ function endEvent(
   } as unknown as DragEndEvent;
 }
 
-async function renderCenterNew(entries: WorkEntry[]): Promise<void> {
-  setCenterNewFlag();
+async function renderShell(entries: WorkEntry[]): Promise<void> {
   useWorksStore.setState({ entries, branches: {}, loading: false, error: null });
   render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
   await flush();
@@ -268,9 +254,9 @@ beforeEach(() => {
   vi.mocked(onTerminalDrop).mockClear();
 });
 
-describe('AppShell — ?center=new: сессия из сайдбара в тело группы (тест 8)', () => {
+describe('AppShell — сессия из сайдбара в тело группы (тест 8)', () => {
   it('onDragEnd с active строки сессии и over тела открывает вкладку терминала; строка и тело под одним DndContext', async () => {
-    await renderCenterNew([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
     const key = keyOf('w-01');
     await activate(key);
 
@@ -305,9 +291,9 @@ describe('AppShell — ?center=new: сессия из сайдбара в тел
   });
 });
 
-describe('AppShell — ?center=new: бросок в терминал (тест 10)', () => {
+describe('AppShell — бросок в терминал (тест 10)', () => {
   it('зона terminal раскладку не меняет и зовёт onTerminalDrop(item, sessionId)', async () => {
-    await renderCenterNew([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
     const key = keyOf('w-01');
     await activate(key);
     act(() => {
@@ -329,9 +315,9 @@ describe('AppShell — ?center=new: бросок в терминал (тест 1
   });
 });
 
-describe('AppShell — ?center=new: две работы в LRU (тест 11)', () => {
+describe('AppShell — две работы в LRU (тест 11)', () => {
   it('collisionDetection отдаёт тело активной работы, onDragEnd меняет её раскладку, чужая — та же ссылка', async () => {
-    await renderCenterNew([
+    await renderShell([
       work('w-01', '2026-01-01', 'Первая', [
         session('s-01', 'один'),
         session('s-11', 'одиннадцать'),
@@ -410,9 +396,9 @@ describe('AppShell — ?center=new: две работы в LRU (тест 11)', (
   });
 });
 
-describe('AppShell — ?center=new: клики под DndContext (тест 13)', () => {
+describe('AppShell — клики под DndContext (тест 13)', () => {
   it('клик по строке сессии открывает вкладку, крестик закрывает; сдвиг на 5 px начинает перетаскивание, на 3 px — нет', async () => {
-    await renderCenterNew([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
     const key = keyOf('w-01');
     await activate(key);
 

@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import type { WorkEntry, WorkSession } from '@harnas/core';
 import { createFakeBridge } from '../../test-utils/fake-bridge.js';
+import { EMPTY_HISTORY } from '../../layout/history.js';
+import { tabId } from '../../layout/ids.js';
+import { useLayoutStore } from '../../layout/store.js';
+import { emptyLayout, openTab } from '../../layout/tree.js';
 import { useActivityStore } from '../../store/activity.js';
 import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
@@ -58,12 +62,18 @@ beforeEach(() => {
   useWorksStore.setState({ entries: [], branches: {}, loading: false, error: null });
   useActivityStore.setState({ byRef: {} });
   useUiStore.setState({
-    selectedRef: null,
-    selectedWorkKey: null,
     windowFocused: true,
     wakePaused: null,
     dialogs: { newWork: false, newSession: { open: false, parentSessionId: null }, settings: false, createRoom: null },
-    lastSessionByWork: {},
+  });
+  useLayoutStore.setState({
+    activeWorkKey: null,
+    layouts: {},
+    hydrated: {},
+    pending: {},
+    history: EMPTY_HISTORY,
+    mru: {},
+    navigating: false,
   });
 });
 
@@ -82,13 +92,13 @@ describe('Sidebar', () => {
         },
       },
     });
-    useUiStore.setState({
-      selectedRef: { projectPath: '/tmp/w-02', workId: 'w-02', sessionId: 's-02' },
-      selectedWorkKey: '/tmp/w-02 w-02',
-      windowFocused: true,
-      wakePaused: null,
-      dialogs: { newWork: false, newSession: { open: false, parentSessionId: null }, settings: false, createRoom: null },
-      lastSessionByWork: {},
+    // Кусок 2.7: выбранная сессия — активная вкладка-терминал активной работы
+    // (`selectedSessionOf`), а не поле `store/ui.ts`.
+    const key = '/tmp/w-02 w-02';
+    useLayoutStore.setState({
+      activeWorkKey: key,
+      layouts: { [key]: openTab(emptyLayout(), { kind: 'terminal', id: tabId.terminal('s-02'), sessionId: 's-02' }) },
+      hydrated: { [key]: true },
     });
 
     render(<Sidebar bridge={createFakeBridge()} onOpenSession={() => {}} onOpenMail={() => {}} onOpenRoom={() => {}} onOpenChanges={() => {}} />);

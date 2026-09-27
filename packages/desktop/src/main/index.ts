@@ -92,11 +92,9 @@ if (!gotLock) {
 
     // Флаги окна из `search` (`location.search` рендерера читает их сама, `main/window.ts`
     // просто грузит файл с готовой строкой запроса): `renderer=dom` — E2E читают текст
-    // экрана терминала, им нужен DOM-рендер xterm вместо WebGL; `center=new` — новый центр
-    // раскладки (`?center=new`, кусок 2.4) вместо прежнего `Workspace` на dockview.
+    // экрана терминала, им нужен DOM-рендер xterm вместо WebGL.
     const searchFlags = [
       process.env.HARNAS_TERMINAL_RENDERER === 'dom' ? 'renderer=dom' : null,
-      process.env.HARNAS_DESKTOP_CENTER === 'new' ? 'center=new' : null,
     ].filter((flag): flag is string => flag !== null);
 
     const openWindow = (): BrowserWindow => {

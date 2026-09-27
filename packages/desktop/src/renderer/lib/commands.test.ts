@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkEntry, WorkSession } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
-import { buildCommands, type CommandActions } from './commands.js';
+import { buildCommands, recentSessionsFromHistory, type CommandActions } from './commands.js';
 
 function session(id: string, label: string): WorkSession {
   return {
@@ -46,6 +46,7 @@ const refC: SessionRef = { projectPath: '/tmp/w-01', workId: 'w-01', sessionId: 
 
 function noopActions(): CommandActions {
   return {
+    openWork: () => {},
     openSession: () => {},
     openMail: () => {},
     openRoom: () => {},
@@ -61,7 +62,6 @@ describe('buildCommands — порядок (тест 3)', () => {
   it('при пустом запросе недавние сессии идут первыми, без дублей дальше по списку', () => {
     const commands = buildCommands({
       works: [work],
-      lastSessionByWork: {},
       wakePaused: null,
       recentSessionRefs: [refC, refA],
       actions: noopActions(),
@@ -75,7 +75,6 @@ describe('buildCommands — порядок (тест 3)', () => {
   it('без недавних сессий — работа, потом её сессии по дереву, действия в конце', () => {
     const commands = buildCommands({
       works: [work],
-      lastSessionByWork: {},
       wakePaused: false,
       recentSessionRefs: [],
       actions: noopActions(),
@@ -93,14 +92,12 @@ describe('buildCommands — порядок (тест 3)', () => {
   it('заголовок «пауза будильника» переключается по wakePaused', () => {
     const paused = buildCommands({
       works: [],
-      lastSessionByWork: {},
       wakePaused: true,
       recentSessionRefs: [],
       actions: noopActions(),
     }).find((command) => command.id === 'action:toggle-wake');
     const running = buildCommands({
       works: [],
-      lastSessionByWork: {},
       wakePaused: false,
       recentSessionRefs: [],
       actions: noopActions(),
@@ -110,7 +107,9 @@ describe('buildCommands — порядок (тест 3)', () => {
     expect(running?.title).toBe('Pause auto-wake');
   });
 
-  it('работа без сессий: команда работы существует, но запуск ничего не открывает', () => {
+  // Кусок 2.7: работа открывается своей раскладкой — команда работы делает её
+  // активной, а не открывает «последнюю сессию» (`lastSessionByWork` ушёл).
+  it('работа без сессий: команда работы делает работу активной, сессий не открывает', () => {
     const emptyWork: WorkEntry = {
       projectPath: '/tmp/w-02',
       map: {
@@ -122,18 +121,19 @@ describe('buildCommands — порядок (тест 3)', () => {
       },
     };
     let opened = false;
+    let openedWork: string | null = null;
     const commands = buildCommands({
       works: [emptyWork],
-      lastSessionByWork: {},
       wakePaused: null,
       recentSessionRefs: [],
-      actions: { ...noopActions(), openSession: () => (opened = true) },
+      actions: { ...noopActions(), openSession: () => (opened = true), openWork: (key) => (openedWork = key) },
     });
 
     const workCommand = commands.find((command) => command.id === 'work:/tmp/w-02 w-02');
     expect(workCommand).toBeDefined();
     void workCommand?.run();
     expect(opened).toBe(false);
+    expect(openedWork).toBe('/tmp/w-02 w-02');
   });
 
   it('«Вся почта работы» — только если в работе есть письма, сразу за командой работы', () => {
@@ -147,7 +147,6 @@ describe('buildCommands — порядок (тест 3)', () => {
     let openedMailFor: string | null = null;
     const commands = buildCommands({
       works: [withMail],
-      lastSessionByWork: {},
       wakePaused: null,
       recentSessionRefs: [],
       actions: { ...noopActions(), openMail: (key) => (openedMailFor = key) },
@@ -159,7 +158,6 @@ describe('buildCommands — порядок (тест 3)', () => {
 
     const withoutMail = buildCommands({
       works: [work],
-      lastSessionByWork: {},
       wakePaused: null,
       recentSessionRefs: [],
       actions: noopActions(),
@@ -175,7 +173,6 @@ describe('buildCommands — порядок (тест 3)', () => {
     let opened: { workKey: string; roomId: string } | null = null;
     const commands = buildCommands({
       works: [withRoom],
-      lastSessionByWork: {},
       wakePaused: null,
       recentSessionRefs: [],
       actions: { ...noopActions(), openRoom: (key, roomId) => (opened = { workKey: key, roomId }) },
@@ -184,5 +181,35 @@ describe('buildCommands — порядок (тест 3)', () => {
     expect(commands[1]?.id).toBe('room:/tmp/w-01 w-01:r-01');
     void commands[1]?.run();
     expect(opened).toEqual({ workKey: '/tmp/w-01 w-01', roomId: 'r-01' });
+  });
+});
+
+describe('recentSessionsFromHistory (кусок 2.7)', () => {
+  it('вкладки-терминалы истории, свежие первыми, без повторов; прочие вкладки и чужие работы пропускаются', () => {
+    const key = '/tmp/w-01 w-01';
+    const refs = recentSessionsFromHistory(
+      [
+        { workKey: key, tabId: 'terminal:s-01', at: 1 },
+        { workKey: key, tabId: null, at: 2 },
+        { workKey: key, tabId: 'terminal:s-03', at: 3 },
+        { workKey: key, tabId: 'mail', at: 4 },
+        { workKey: '/tmp/gone gone', tabId: 'terminal:s-09', at: 5 },
+        { workKey: key, tabId: 'terminal:s-01', at: 6 },
+      ],
+      [work],
+    );
+
+    expect(refs).toEqual([refA, refC]);
+  });
+
+  it('не больше 20', () => {
+    const many: WorkEntry = {
+      ...work,
+      map: { ...work.map, sessions: Array.from({ length: 30 }, (_, i) => session(`s-${i}`, `x${i}`)) },
+    };
+    const entries = Array.from({ length: 30 }, (_, i) => ({ workKey: '/tmp/w-01 w-01', tabId: `terminal:s-${i}`, at: i }));
+    const refs = recentSessionsFromHistory(entries, [many]);
+    expect(refs).toHaveLength(20);
+    expect(refs[0]?.sessionId).toBe('s-29');
   });
 });

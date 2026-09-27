@@ -4,6 +4,7 @@ import type { HarnasConfig } from '@harnas/core';
 import { getHostClient } from './host-client.js';
 import type { HostStatus } from '../shared/bridge.js';
 import { noticeText, S } from '../shared/strings.js';
+import { selectedSessionOf, useLayoutStore } from './layout/store.js';
 import { AppShell } from './shell/AppShell.js';
 import { NewSessionDialog } from './components/dialogs/NewSessionDialog.js';
 import { SettingsDialog } from './components/settings/SettingsDialog.js';
@@ -13,6 +14,7 @@ import { useActivityStore } from './store/activity.js';
 import { useNoticesStore } from './store/notices.js';
 import { useUiStore } from './store/ui.js';
 import { useWorksStore } from './store/works.js';
+import { workKey } from './lib/tree-order.js';
 import { Toaster } from './ui/sonner.js';
 
 /**
@@ -30,6 +32,11 @@ const DEFAULT_FONT_SIZE = 14;
  * подключён (или не совпала версия), оболочки нет вовсе — показывать сайдбар
  * и раскладку, которые ещё нечем наполнить, бессмысленно.
  */
+/** Родитель новой сессии — выбранная сессия активной работы, читается в момент вызова. */
+function selectedParentId(): string | null {
+  return selectedSessionOf(useLayoutStore.getState(), useWorksStore.getState().entries)?.ref.sessionId ?? null;
+}
+
 export function App(): JSX.Element {
   const bridge = getHostClient();
   const [status, setStatus] = useState<HostStatus>({ state: 'connecting' });
@@ -40,7 +47,8 @@ export function App(): JSX.Element {
   // палитра TUI, окно её с куска 1.4 не читает и не показывает (спека 4.9).
   const [config, setConfig] = useState<HarnasConfig | null>(null);
 
-  const selectedRef = useUiStore((state) => state.selectedRef);
+  const activeWorkKey = useLayoutStore((state) => state.activeWorkKey);
+  const entries = useWorksStore((state) => state.entries);
   const newSessionOpen = useUiStore((state) => state.dialogs.newSession.open);
   const newSessionParent = useUiStore((state) => state.dialogs.newSession.parentSessionId);
   const openNewSessionDialog = useUiStore((state) => state.openNewSessionDialog);
@@ -62,9 +70,9 @@ export function App(): JSX.Element {
       useUiStore.getState().init(bridge),
       useNoticesStore.getState().init(bridge),
       wireNotifications(bridge, {
-        // Видна не выбранная в сайдбаре сессия, а та, чья панель терминала
-        // сейчас активная вкладка своей группы в сетке (`store/ui.ts#visibleSessionRefs`,
-        // пишет `panel-registry.tsx`) — кусок 2.1 плана окна.
+        // Видна не выбранная сессия, а та, чей терминал сейчас активная
+        // вкладка своей группы (`store/ui.ts#visibleSessionRefs`, пишет
+        // `terminal/TerminalSurface.tsx`, кусок 2.5).
         isVisible: (ref) => {
           const ui = useUiStore.getState();
           return ui.windowFocused && refKey(ref) in ui.visibleSessionRefs;
@@ -85,13 +93,11 @@ export function App(): JSX.Element {
         const label = sessionLabelFor(useWorksStore.getState().entries, notice.ref);
         bridge.app.notify({ title: S.notifications.trustWaitTitle, body: noticeText(notice, label) });
       }),
-      // 'palette'/'new-work'/'toggle-left-sidebar'/'work-1…9' слушает
-      // `AppShell` (кусок 2.3) — у него для них есть ручка `Workspace` и
-      // зеркало сайдбаров; 'close-panel'/'split-right'/'split-down'/…
-      // по-прежнему у самого `Workspace`: только он знает про dockview.
+      // Меню раскладки, палитры и сайдбара слушает `AppShell` (куски 2.3–2.7);
+      // здесь — только диалоги, которые монтирует сам `App`.
       bridge.app.onMenu((action) => {
         if (action === 'settings') openSettingsDialog();
-        if (action === 'new-session') openNewSessionDialog(useUiStore.getState().selectedRef?.sessionId ?? null);
+        if (action === 'new-session') openNewSessionDialog(selectedParentId());
       }),
     ];
 
@@ -136,7 +142,9 @@ export function App(): JSX.Element {
     );
   }
 
-  const newSessionWork = selectedRef ?? null;
+  // ⌘T (кусок 2.7): работа — активная, родитель — выбранная сессия
+  // (`selectedSessionOf`), если активна вкладка-терминал.
+  const newSessionWork = entries.find((entry) => workKey(entry.projectPath, entry.map.work.id) === activeWorkKey) ?? null;
 
   return (
     <>
@@ -150,9 +158,9 @@ export function App(): JSX.Element {
         open={newSessionOpen}
         bridge={bridge}
         projectPath={newSessionWork?.projectPath ?? ''}
-        workId={newSessionWork?.workId ?? null}
+        workId={newSessionWork?.map.work.id ?? null}
         selectedSessionId={newSessionParent}
-        onOpenChange={(open) => (open ? openNewSessionDialog(selectedRef?.sessionId ?? null) : closeNewSessionDialog())}
+        onOpenChange={(open) => (open ? openNewSessionDialog(selectedParentId()) : closeNewSessionDialog())}
       />
       <SettingsDialog
         open={settingsOpen}

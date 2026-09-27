@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@harnas/protocol';
 import type { HarnasBridge, HostStatus, MenuAction } from '../shared/bridge.js';
+import type { WorkLayout } from '../shared/layout-types.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 
 const eventListeners = new Map<EventName, Set<(data: unknown) => void>>();
@@ -64,8 +65,8 @@ const bridge = {
     chooseFolder: () => ipcRenderer.invoke('app:choose-folder') as Promise<string | null>,
     restartHost: () => ipcRenderer.invoke('app:restart-host') as Promise<void>,
     loadLayout: (workKey: string) =>
-      ipcRenderer.invoke('app:load-layout', workKey) as Promise<unknown | null>,
-    saveLayout: (workKey: string, layout: unknown) =>
+      ipcRenderer.invoke('app:load-layout', workKey) as Promise<WorkLayout | null>,
+    saveLayout: (workKey: string, layout: WorkLayout) =>
       ipcRenderer.invoke('app:save-layout', workKey, layout) as Promise<void>,
     removeLayout: (workKey: string) => ipcRenderer.invoke('app:remove-layout', workKey) as Promise<void>,
     retainLayouts: (workKeys: string[]) =>

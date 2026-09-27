@@ -5,11 +5,12 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
+import type { WorkEntry } from '@harnas/core';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { tabId } from './ids.js';
 import { emptyLayout, focusTab, groups, openTab, splitGroup } from './tree.js';
 import { EMPTY_HISTORY } from './history.js';
-import { useLayoutStore } from './store.js';
+import { selectedSessionOf, useLayoutStore } from './store.js';
 
 function terminalTab(sessionId: string): TabSpec {
   return { kind: 'terminal', id: tabId.terminal(sessionId), sessionId };
@@ -165,5 +166,42 @@ describe('requestCloseTabs (тест 15)', () => {
     expect(result).toBe(true);
     const finalLayout = useLayoutStore.getState().layouts.w1 as WorkLayout;
     expect(groups(finalLayout).flatMap((g) => g.tabs.map((t) => t.id))).toEqual([]);
+  });
+});
+
+describe('selectedSessionOf (тест 5 куска 2.7)', () => {
+  // Сессии в карте работы `selectedSessionOf` не проверяет — ей нужны только
+  // путь проекта и id работы, чтобы собрать `SessionRef`.
+  const works: WorkEntry[] = [
+    {
+      projectPath: '/tmp/p',
+      map: {
+        schemaVersion: 2,
+        rooms: [],
+        work: { id: 'w-01', title: 'A', goal: '', status: 'active', createdAt: '2026-01-01', updatedAt: '2026-01-01' },
+        sessions: [],
+        messages: [],
+      },
+    },
+  ];
+  const key = '/tmp/p w-01';
+
+  it('активная вкладка-терминал активной работы → её сессия', () => {
+    const layout = openTab(openTab(emptyLayout(), { kind: 'mail', id: tabId.mail() }), terminalTab('s-02'));
+    const state = { activeWorkKey: key, layouts: { [key]: layout } };
+    expect(selectedSessionOf(state, works)).toEqual({
+      workKey: key,
+      ref: { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-02' },
+    });
+  });
+
+  it('активна вкладка почты → null', () => {
+    const layout = openTab(openTab(emptyLayout(), terminalTab('s-02')), { kind: 'mail', id: tabId.mail() });
+    expect(selectedSessionOf({ activeWorkKey: key, layouts: { [key]: layout } }, works)).toBeNull();
+  });
+
+  it('активной работы нет → null', () => {
+    const layout = openTab(emptyLayout(), terminalTab('s-02'));
+    expect(selectedSessionOf({ activeWorkKey: null, layouts: { [key]: layout } }, works)).toBeNull();
   });
 });

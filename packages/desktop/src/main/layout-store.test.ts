@@ -17,7 +17,7 @@ describe('createLayoutStore (формат v2, кусок 2.2)', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('файл v1 (dockview) читается как пустой, save пишет v2 (тест 1)', async () => {
+  it('файл v1 (общая сетка окна) читается как пустой, save пишет v2 (тест 1)', async () => {
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, JSON.stringify({ version: 1, layouts: { window: { grid: {} } } }), 'utf8');
     const store = createLayoutStore(file);
@@ -65,7 +65,9 @@ describe('createLayoutStore (формат v2, кусок 2.2)', () => {
     await expect(store.load('b')).resolves.toEqual({ vb: 2 });
   });
 
-  it('retain(["a"]) оставляет "a" и ключ "window", остальные стирает (тест 1)', async () => {
+  // Кусок 2.7: прежнего центра с общей сеткой под ключом `window` больше нет —
+  // `retain` его не бережёт, это такая же пропавшая «работа», как и прочие.
+  it('retain(["a"]) оставляет только "a", ключ "window" стирает (тест 1, кусок 2.7)', async () => {
     const store = createLayoutStore(file);
     await store.save('a', { va: 1 });
     await store.save('b', { vb: 2 });
@@ -74,7 +76,7 @@ describe('createLayoutStore (формат v2, кусок 2.2)', () => {
     await store.retain(['a']);
 
     await expect(store.load('a')).resolves.toEqual({ va: 1 });
-    await expect(store.load('window')).resolves.toEqual({ grid: {} });
+    await expect(store.load('window')).resolves.toBeNull();
     await expect(store.load('b')).resolves.toBeNull();
   });
 

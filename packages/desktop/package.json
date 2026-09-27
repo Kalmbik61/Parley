@@ -44,7 +44,6 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
-    "dockview-react": "^8.3.1",
     "electron-vite": "^5.0.0",
     "gitdiff-parser": "^0.3.1",
     "lucide-react": "^1.48.0",

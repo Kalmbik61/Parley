@@ -9,7 +9,10 @@
 
 import { create } from 'zustand';
 import type { StoreApi, UseBoundStore } from 'zustand';
+import type { WorkEntry } from '@harnas/core';
+import type { SessionRef } from '@harnas/protocol';
 import type { WorkLayout } from '../../shared/layout-types.js';
+import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { closeTab, emptyLayout, findTab, focusTab, groups } from './tree.js';
 import type { OpError, OpResult } from './tree.js';
 import { EMPTY_HISTORY, pushHistory, removeMru, stepHistory, touchMru } from './history.js';
@@ -66,6 +69,30 @@ function applyOp(layout: WorkLayout, op: LayoutOp): { layout: WorkLayout; error:
 function activeTabOf(layout: WorkLayout): string | null {
   const group = groups(layout).find((g) => g.id === layout.activeGroupId);
   return group?.activeTabId ?? null;
+}
+
+/**
+ * Выбранная сессия: активная работа и терминал активной вкладки её активной группы; иначе null.
+ *
+ * Выводится, а не хранится (кусок 2.7): прежний центр сам писал «выбранную
+ * сессию» в `store/ui.ts` на каждую смену активной панели, и копия могла
+ * разойтись с тем, что видно. Отсюда её берут ⌘T (родитель новой сессии) и
+ * подсветка строки в сайдбаре.
+ */
+export function selectedSessionOf(
+  state: Pick<LayoutState, 'activeWorkKey' | 'layouts'>,
+  works: WorkEntry[],
+): { workKey: string; ref: SessionRef } | null {
+  const key = state.activeWorkKey;
+  if (key === null) return null;
+  const layout = state.layouts[key];
+  if (layout === undefined) return null;
+  const group = groups(layout).find((g) => g.id === layout.activeGroupId);
+  const tab = group?.tabs.find((candidate) => candidate.id === group.activeTabId);
+  if (tab?.kind !== 'terminal') return null;
+  const entry = works.find((candidate) => workKeyOf(candidate.projectPath, candidate.map.work.id) === key);
+  if (entry === undefined) return null;
+  return { workKey: key, ref: { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: tab.sessionId } };
 }
 
 function layoutTabIds(layout: WorkLayout): Set<string> {

@@ -1,21 +1,26 @@
 /**
  * Команды палитры ⌘K (кусок 2.3 плана окна, спека 5.2): работы, сессии всех
- * работ и общие действия. Список пересобирается заново при каждом открытии
- * палитры (вызывающая сторона — `Workspace.tsx`, у неё есть и живой список
- * работ, и API dockview) — команд от силы пара десятков, кешировать нечего.
+ * работ и общие действия. Список пересобирается заново при каждом рендере
+ * вызывающей стороны (`shell/AppShell.tsx`, у неё есть и живой список работ, и
+ * `layout/store.ts`) — команд от силы пара десятков, кешировать нечего.
  *
  * Модуль, как и весь `lib/`, не знает про `zustand` и `HarnasBridge` напрямую:
  * обращения к хранилищам и хосту приходят через `actions`, которые собирает
  * вызывающий компонент. Это расходится с интерфейсом из плана куска
  * (`buildCommands(state: { works, ui, bridge })`), где палитра сама трогала
  * бы хранилище и бридж, — но `lib/` в этом проекте везде держит только
- * чистые функции (см. `panel-id.ts`, `tree-order.ts`), а связь со сторонним
+ * чистые функции (см. `tree-order.ts`, `fuzzy.ts`), а связь со сторонним
  * состоянием заводят компоненты. `buildCommands` от этого проверяется без
  * монтирования React и без фейкового бриджа.
  *
  * «Вся почта работы» (кусок 2.4) — команда на каждую работу, сразу за
- * командой самой работы: она открывает панель `mail` (`Workspace#openMail`),
- * а не переключается на сессию, поэтому не смешана с сессионными командами.
+ * командой самой работы: она открывает вкладку `mail` в раскладке работы, а
+ * не переключается на сессию, поэтому не смешана с сессионными командами.
+ *
+ * С куска 2.7 команда работы делает её активной — работа открывается своей
+ * раскладкой, «последней сессии работы» больше нет. Недавние сессии для
+ * пустого запроса — вкладки-терминалы из истории переходов
+ * (`recentSessionsFromHistory`).
  *
  * Комнаты (кусок 3.6) — по команде на каждую комнату работы, сразу за
  * командой «вся почта работы»: та же логика, панель `room`, а не сессия.
@@ -24,6 +29,7 @@
 import type { WorkEntry } from '@harnas/core';
 import { refKey, type SessionRef } from '@harnas/protocol';
 import { S } from '../../shared/strings.js';
+import type { HistoryEntry } from '../layout/history.js';
 import { sessionRowLabel } from './participant.js';
 import { orderedWorks } from '../store/works.js';
 import { treeOrder, workKey } from './tree-order.js';
@@ -38,11 +44,13 @@ export interface Command {
 
 /** Действия, которые запускают команды палитры — их знает только вызывающий компонент (кусок 2.3). */
 export interface CommandActions {
-  /** Открыть сессию в сетке — `Workspace.tsx#openSession`/`openOrFocus`. */
+  /** Сделать работу активной — центр покажет её раскладку (кусок 2.7). */
+  openWork(workKey: string): void;
+  /** Открыть вкладку-терминал сессии в раскладке её работы. */
   openSession(ref: SessionRef, workKey: string, title: string): void;
-  /** «Вся почта работы» (кусок 2.4) — `Workspace.tsx#openMail`. */
+  /** «Вся почта работы» (кусок 2.4) — вкладка `mail` в раскладке работы. */
   openMail(workKey: string): void;
-  /** Комната (кусок 3.6) — `Workspace.tsx#openRoom`. */
+  /** Комната (кусок 3.6) — вкладка `room` в раскладке работы. */
   openRoom(workKey: string, roomId: string, title: string): void;
   closeActivePanel(): void;
   newSession(): void;
@@ -53,16 +61,46 @@ export interface CommandActions {
 
 export interface BuildCommandsState {
   works: readonly WorkEntry[];
-  /** `store/ui.ts#lastSessionByWork` — какую сессию открыть по команде «переключиться на работу». */
-  lastSessionByWork: Record<string, string>;
   wakePaused: boolean | null;
-  /** `store/ui.ts#recentSessionRefs` — порядок для пустого запроса: самые недавно открытые сессии первыми. */
+  /** `recentSessionsFromHistory` — порядок для пустого запроса: самые недавно открытые сессии первыми. */
   recentSessionRefs: readonly SessionRef[];
   actions: CommandActions;
 }
 
+/** Недавних сессий в палитре — не больше (спека 5.2). */
+const RECENT_SESSIONS_LIMIT = 20;
+const TERMINAL_TAB_PREFIX = 'terminal:';
+
+/**
+ * Недавние сессии для пустого запроса палитры: вкладки-терминалы из истории
+ * переходов (`layout/store.ts#entries`), свежие первыми, без повторов, до 20.
+ * Записи работ, которых нет в снимке, пропускаются — собрать `SessionRef` не из чего.
+ */
+export function recentSessionsFromHistory(entries: readonly HistoryEntry[], works: readonly WorkEntry[]): SessionRef[] {
+  const result: SessionRef[] = [];
+  const seen = new Set<string>();
+  for (let i = entries.length - 1; i >= 0 && result.length < RECENT_SESSIONS_LIMIT; i -= 1) {
+    const entry = entries[i];
+    // Формат id вкладки-терминала — `layout/ids.ts#tabId.terminal`.
+    const tab = entry?.tabId ?? null;
+    if (entry === undefined || tab === null || !tab.startsWith(TERMINAL_TAB_PREFIX)) continue;
+    const work = works.find((candidate) => workKey(candidate.projectPath, candidate.map.work.id) === entry.workKey);
+    if (work === undefined) continue;
+    const ref: SessionRef = {
+      projectPath: work.projectPath,
+      workId: work.map.work.id,
+      sessionId: tab.slice(TERMINAL_TAB_PREFIX.length),
+    };
+    const key = refKey(ref);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(ref);
+  }
+  return result;
+}
+
 export function buildCommands(state: BuildCommandsState): Command[] {
-  const { works, lastSessionByWork, wakePaused, recentSessionRefs, actions } = state;
+  const { works, wakePaused, recentSessionRefs, actions } = state;
   const ordered = orderedWorks(works);
 
   const workCommandByKey = new Map<string, Command>();
@@ -76,24 +114,13 @@ export function buildCommands(state: BuildCommandsState): Command[] {
   for (const work of ordered) {
     const key = workKey(work.projectPath, work.map.work.id);
     const treeSessions = treeOrder(work.map.sessions);
-    const lastSessionId = lastSessionByWork[key];
-    const targetSession =
-      treeSessions.find((item) => item.session.id === lastSessionId)?.session ?? treeSessions[0]?.session;
 
     workCommandByKey.set(key, {
       id: `work:${key}`,
       title: work.map.work.title,
       hint: S.palette.workspaceHint,
       keywords: [work.map.work.title],
-      run: () => {
-        // Нет ни одной сессии — переключаться не на что (как ⌘1…⌘9 в `App.tsx`).
-        if (targetSession === undefined) return;
-        actions.openSession(
-          { projectPath: work.projectPath, workId: work.map.work.id, sessionId: targetSession.id },
-          key,
-          sessionRowLabel(targetSession.id, targetSession.label),
-        );
-      },
+      run: () => actions.openWork(key),
     });
 
     // Строка сайдбара «вся почта работы» появляется, только если в работе

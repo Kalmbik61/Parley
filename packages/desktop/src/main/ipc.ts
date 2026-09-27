@@ -84,7 +84,7 @@ export interface RegisterIpcOptions {
   chooseFolder: () => Promise<string | null>;
   showNotification: (note: { title: string; body: string }) => void;
   setBadge: (count: number) => void;
-  /** Раскладка dockview (кусок 2.2 плана окна). */
+  /** Раскладки работ, `layouts.json` (кусок 2.2 плана каркаса, спека 5.8). */
   layoutStore: LayoutStore;
   /** `ui.json` (кусок 1.1 плана окна, спека 3.4). */
   uiStore: UiStore;

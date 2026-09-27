@@ -1,10 +1,9 @@
 /**
  * Раскладка активной работы (кусок 2.4, спека 5.1–5.3): дерево сплитов из
- * групп вкладок за флагом `?center=new` (`AppShell.tsx` решает, когда её
- * монтировать — при `activeWorkKey === null` `LayoutView` вовсе не в дереве).
+ * групп вкладок (`AppShell.tsx` решает, когда её монтировать — при
+ * `activeWorkKey === null` `LayoutView` вовсе не в дереве).
  * `bridge`/`fontFamily`/`fontSize` приходят пропами и раздаются телам вкладок
- * контекстом (`GroupView.tsx#LayoutBodyContext`), как раньше `PanelHostContext`
- * у `Workspace.tsx`.
+ * контекстом (`GroupView.tsx#LayoutBodyContext`).
  *
  * Клавиши, которые ловит сам рендерер, а не системное меню (спека 5.3, до
  * реестра клавиш 6.1) — ⌃Tab/⌃⇧Tab (MRU вкладок работы), ⌃1–9 (вкладка по

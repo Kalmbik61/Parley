@@ -20,6 +20,7 @@ export interface WorkListProps {
   /** Уже отсортированы по времени создания — `store/works.ts#orderedWorks`. */
   entries: readonly WorkEntry[];
   branches: Record<string, string | null>;
+  /** Выбранная сессия — `layout/store.ts#selectedSessionOf` (кусок 2.7). */
   selectedWorkKey: string | null;
   selectedSessionId: string | null;
   activityByRef: Record<string, ActivityEntry>;
@@ -31,11 +32,11 @@ export interface WorkListProps {
   onDelete: (ref: SessionRef, session: WorkSession) => void;
   /** «Создать комнату с…» (кусок 3.6) — сессия, с которой открыли пункт меню. */
   onCreateRoom: (ref: SessionRef, session: WorkSession) => void;
-  /** «Вся почта работы» (кусок 2.4) — `Workspace.tsx#openMail` через `App.tsx`. */
+  /** «Вся почта работы» (кусок 2.4) — вкладка `mail` через `AppShell.tsx`. */
   onOpenMail: (workKey: string) => void;
-  /** Строка комнаты (кусок 3.6) — `Workspace.tsx#openRoom` через `App.tsx`. */
+  /** Строка комнаты (кусок 3.6) — вкладка `room` через `AppShell.tsx`. */
   onOpenRoom: (workKey: string, room: Room) => void;
-  /** «Изменения» из меню сессии (кусок 4.3) — `Workspace.tsx#openChanges` через `App.tsx`. */
+  /** «Изменения» из меню сессии (кусок 4.3) — вкладка `diff` через `AppShell.tsx`. */
   onOpenChanges: (ref: SessionRef, session: WorkSession) => void;
 }
 
