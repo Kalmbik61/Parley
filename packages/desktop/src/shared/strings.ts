@@ -65,6 +65,8 @@ export const S = {
     heading: 'Workspaces',
     addWorkspace: '+ workspace',
     empty: 'No workspaces yet',
+    /** Заголовок секции закреплённых работ (спека 6.1). */
+    pinned: 'Pinned',
     trustWaitTooltip: 'Not responding since launch — may be waiting for folder trust',
     sessionMenu: {
       open: 'Open',
