@@ -1,10 +1,11 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type Page } from '@playwright/test';
 import { stopHost } from './stop-host.js';
+import { makeTempProject } from './tmp.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
@@ -42,18 +43,17 @@ async function hostSupportsPty(window: Page): Promise<boolean> {
 
 test.describe('панель терминала: ввод стаба и восстановление после перезапуска', () => {
   let home: string;
+  let project: string;
 
   test.beforeEach(async () => {
     home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-term-'));
-
-    // Проект общий между прогонами: без очистки в нём копятся работы прошлых запусков.
-    await rm('/tmp/harnas-e2e-terminal', { recursive: true, force: true });
-    await mkdir('/tmp/harnas-e2e-terminal', { recursive: true });
+    project = await makeTempProject('terminal');
   });
 
   test.afterEach(async () => {
     await stopHost(home);
     await rm(home, { recursive: true, force: true });
+    await rm(project, { recursive: true, force: true });
   });
 
   test('ввод hello и Enter дают echo: hello; новый запуск восстанавливает экран из снимка', async () => {
@@ -73,27 +73,28 @@ test.describe('панель терминала: ввод стаба и восс�
     }
 
     const work = await window.evaluate(
-      () =>
+      (projectPath: string) =>
         (globalThis as { harnas: { call: (m: string, p: unknown) => Promise<{ workId: string }> } }).harnas.call(
           'works.create',
-          { projectPath: '/tmp/harnas-e2e-terminal', title: 'e2e-terminal', goal: '' },
+          { projectPath, title: 'e2e-terminal', goal: '' },
         ),
+      project,
     );
     const session = await window.evaluate(
-      ({ workId }: { workId: string }) =>
+      ({ workId, projectPath }: { workId: string; projectPath: string }) =>
         (
           globalThis as {
             harnas: { call: (m: string, p: unknown) => Promise<{ ref: { sessionId: string } }> };
           }
         ).harnas.call('sessions.create', {
-          projectPath: '/tmp/harnas-e2e-terminal',
+          projectPath,
           workId,
           provider: 'claude',
           label: 'терминал',
           task: '',
           parent: null,
         }),
-      { workId: work.workId },
+      { workId: work.workId, projectPath: project },
     );
 
     await window.locator(`[data-session-id="${session.ref.sessionId}"]`).click();

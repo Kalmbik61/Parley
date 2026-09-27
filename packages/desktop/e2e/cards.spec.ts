@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { stopHost } from './stop-host.js';
+import { makeTempProject } from './tmp.js';
 
 /**
  * Карточки сайдбара (кусок 3.5, приёмка этапа 3, спека 6.2 и 6.6): порядок по вниманию, а не
@@ -20,7 +21,10 @@ const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
 const hostEntry = path.resolve(dirname, '../../host/dist/main.js');
 const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
-const project = '/tmp/harnas-e2e-cards';
+/** Свой каталог проекта у каждого теста (`makeTempProject`). */
+let project = '';
+/** Ожидание очистки формы «Create more» (см. тест). */
+const FORM_CLEARED = { timeout: 15_000 };
 
 test.skip(!existsSync(hostEntry), `packages/host/dist/main.js не собран — сначала pnpm --filter @harnas/host build: ${hostEntry}`);
 
@@ -74,9 +78,7 @@ test.describe('карточки сайдбара и форма новой раб
 
   test.beforeEach(async () => {
     home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-cards-'));
-    // Проект общий между прогонами: без очистки в нём копятся работы прошлых запусков.
-    await rm(project, { recursive: true, force: true });
-    await mkdir(project, { recursive: true });
+    project = await makeTempProject('cards');
   });
 
   test.afterEach(async () => {
@@ -84,6 +86,7 @@ test.describe('карточки сайдбара и форма новой раб
     app = null;
     await stopHost(home);
     await rm(home, { recursive: true, force: true });
+    await rm(project, { recursive: true, force: true });
   });
 
   async function launch(): Promise<{ electronApp: ElectronApplication; window: Page }> {
@@ -131,14 +134,20 @@ test.describe('карточки сайдбара и форма новой раб
     await expect(dialog.getByRole('combobox', { name: 'Project' })).toHaveText(project);
     await dialog.getByRole('checkbox', { name: 'Create more' }).click();
 
+    // Агента форма подставляет по ответу providers.list. Под нагрузкой «Create» успевали нажать
+    // раньше: проверка формы молча отказывала («Select an agent»), и название оставалось.
+    await expect(dialog.getByRole('combobox', { name: 'Agent' })).toHaveText('Claude');
+
     const titleField = dialog.getByLabel('Title');
     await titleField.fill('e2e-cards-one');
     await dialog.getByRole('button', { name: 'Create' }).click();
-    // Форма осталась открытой и очистила название.
-    await expect(titleField).toHaveValue('');
+    // Форма осталась открытой и очистила название. Очищает её ответ sessions.create; при
+    // параллельных прогонах на нагруженной машине он приходил и за 5 с, и позже — граница
+    // ожидания по умолчанию, отсюда запас (`FORM_CLEARED`).
+    await expect(titleField).toHaveValue('', FORM_CLEARED);
     await titleField.fill('e2e-cards-two');
     await titleField.press('Meta+Enter');
-    await expect(titleField).toHaveValue('');
+    await expect(titleField).toHaveValue('', FORM_CLEARED);
 
     // Обе работы — с первой сессией; последняя созданная активна, её терминал открыт.
     const created = async (): Promise<Array<{ title: string; sessions: number }>> => {

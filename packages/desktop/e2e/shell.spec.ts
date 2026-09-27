@@ -1,10 +1,11 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { stopHost } from './stop-host.js';
+import { makeTempProject } from './tmp.js';
 
 /**
  * Каркас окна (кусок 2.7 плана каркаса, спека 14.3, строка этапа 2): сплит с
@@ -20,7 +21,8 @@ const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
 const hostEntry = path.resolve(dirname, '../../host/dist/main.js');
 const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
-const project = '/tmp/harnas-e2e-shell';
+/** Свой каталог проекта у каждого теста (`makeTempProject`). */
+let project = '';
 
 test.skip(!existsSync(hostEntry), `packages/host/dist/main.js не собран — сначала pnpm --filter @harnas/host build: ${hostEntry}`);
 
@@ -144,9 +146,7 @@ test.describe('каркас окна: сплиты, перенос вкладо�
 
   test.beforeEach(async () => {
     home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-shell-'));
-    // Проект общий между прогонами: без очистки в нём копятся работы прошлых запусков.
-    await rm(project, { recursive: true, force: true });
-    await mkdir(project, { recursive: true });
+    project = await makeTempProject('shell');
   });
 
   test.afterEach(async () => {
@@ -154,6 +154,7 @@ test.describe('каркас окна: сплиты, перенос вкладо�
     app = null;
     await stopHost(home);
     await rm(home, { recursive: true, force: true });
+    await rm(project, { recursive: true, force: true });
   });
 
   async function launch(): Promise<{ electronApp: ElectronApplication; window: Page }> {
