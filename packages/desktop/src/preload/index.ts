@@ -1,13 +1,14 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@harnas/protocol';
-import type { AppNote, FocusTarget, HarnasBridge, HostStatus, MenuAction } from '../shared/bridge.js';
+import type { AppNote, FocusTarget, HarnasBridge, HostStatus } from '../shared/bridge.js';
+import type { ActionId } from '../shared/keybindings.js';
 import type { FileRoot, FileStat, Located } from '../shared/files-types.js';
 import type { WorkLayout } from '../shared/layout-types.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 
 const eventListeners = new Map<EventName, Set<(data: unknown) => void>>();
 const statusListeners = new Set<(status: HostStatus) => void>();
-const menuListeners = new Set<(action: MenuAction) => void>();
+const menuListeners = new Set<(id: ActionId) => void>();
 const appearanceListeners = new Set<(dark: boolean) => void>();
 const focusTargetListeners = new Set<(target: FocusTarget) => void>();
 /** Цель клика, пришедшая, пока у `onFocusTarget` не было слушателей (кусок 4.3). */
@@ -36,8 +37,8 @@ ipcRenderer.on('host:status', (_event, status: HostStatus) => {
   for (const listener of statusListeners) listener(status);
 });
 
-ipcRenderer.on('menu:action', (_event, action: MenuAction) => {
-  for (const listener of menuListeners) listener(action);
+ipcRenderer.on('menu:action', (_event, id: ActionId) => {
+  for (const listener of menuListeners) listener(id);
 });
 
 ipcRenderer.on('app:appearance', (_event, dark: boolean) => {
@@ -118,7 +119,7 @@ const bridge = {
       appearanceListeners.add(listener);
       return () => appearanceListeners.delete(listener);
     },
-    onMenu: (listener: (action: MenuAction) => void) => {
+    onMenu: (listener: (id: ActionId) => void) => {
       menuListeners.add(listener);
       return () => menuListeners.delete(listener);
     },

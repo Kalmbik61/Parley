@@ -171,7 +171,18 @@ function work(id: string, createdAt: string, sessions: WorkSession[]): WorkEntry
 // Кусок 2.7: выбор сессии больше не хранится в `store/ui.ts` — ⌘T берёт
 // работу из `activeWorkKey`, родителя — из активной вкладки-терминала её
 // активной группы (`selectedSessionOf`).
-describe('App — меню new-session (тест 6 куска 2.7)', () => {
+describe('App — меню session.new (тест 6 куска 2.7, тест 4 куска 6.1b)', () => {
+  it('settings.open открывает настройки — ветка run в AppShell, у App своего onMenu нет', async () => {
+    useWorksStore.setState({ entries: [work('w-01', '2026-01-01', [session('s-01', 'план')])], branches: {}, loading: false, error: null });
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    act(() => bridge.emitMenu('settings.open'));
+    expect(useUiStore.getState().dialogs.settings).toBe(true);
+  });
+
   it('диалог получает projectPath и workId активной работы и родителя из selectedSessionOf', async () => {
     const w1 = work('w-01', '2026-01-01', [session('s-01', 'план')]);
     const w2 = work('w-02', '2026-01-02', [session('s-01', 'бэк'), session('s-02', 'фронт')]);
@@ -189,7 +200,7 @@ describe('App — меню new-session (тест 6 куска 2.7)', () => {
       await Promise.resolve();
     });
 
-    act(() => bridge.emitMenu('new-session'));
+    act(() => bridge.emitMenu('session.new'));
 
     expect(dialogProps.last).toMatchObject({
       open: true,
@@ -221,7 +232,7 @@ describe('App — «New session» из меню карточки (тест 15 к
     expect(useLayoutStore.getState().activeWorkKey).toBe(key1);
 
     act(() => dialogProps.last?.onOpenChange(false));
-    act(() => bridge.emitMenu('new-session'));
+    act(() => bridge.emitMenu('session.new'));
     expect(dialogProps.last).toMatchObject({ open: true, projectPath: '/tmp/w-01', workId: 'w-01' });
   });
 });

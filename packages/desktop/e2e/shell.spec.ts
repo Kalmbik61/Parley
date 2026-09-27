@@ -179,7 +179,7 @@ test.describe('каркас окна: сплиты, перенос вкладо�
     await window.locator(rowSel(work.key, s1)).click();
     await expect.poll(() => groupCount(window)).toBe(1);
 
-    await sendMenu(electronApp, 'split-right');
+    await sendMenu(electronApp, 'group.splitRight');
     await window.getByRole('dialog').getByText('S02 два').click();
     await expect.poll(() => groupCount(window)).toBe(2);
     const sourceGroup = await groupIdOfTab(window, term(s2));
@@ -215,7 +215,7 @@ test.describe('каркас окна: сплиты, перенос вкладо�
     await expect(window.getByTestId('app-shell')).toBeVisible();
 
     await window.locator(rowSel(work.key, s1)).click();
-    await sendMenu(electronApp, 'split-right');
+    await sendMenu(electronApp, 'group.splitRight');
     await window.getByRole('dialog').getByText('S02 два').click();
     await expect.poll(() => groupCount(window)).toBe(2);
 
@@ -254,7 +254,7 @@ test.describe('каркас окна: сплиты, перенос вкладо�
     await expect.poll(() => isContainerShown(window, workA.key)).toBe(false);
     await expect(window.locator(`${containerSel(workB.key)} ${surfaceSel(term(b1))}`)).toHaveCount(1);
 
-    await sendMenu(electronApp, 'history-back');
+    await sendMenu(electronApp, 'history.back');
     await expect.poll(() => isContainerShown(window, workA.key)).toBe(true);
     await expect.poll(() => isContainerShown(window, workB.key)).toBe(false);
 

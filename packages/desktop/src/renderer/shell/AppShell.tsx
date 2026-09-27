@@ -8,10 +8,10 @@
  * монтируются здесь же (а не в сайдбаре) — они нужны и над `Landing`, где
  * сайдбара вовсе нет.
  *
- * `AppShell` обслуживает меню раскладки (`close-panel`, `reopen-tab`,
- * `prev-panel`, `next-panel`, `split-right`, `split-down`, `find`,
- * `history-back`, `history-forward`, `work-1…9`), входы сайдбара и
- * «открывающие» действия палитры: все они идут в `layout/store.ts`. Сессия,
+ * `AppShell` — единственная точка действий реестра клавиш (`run(id)`, кусок 6.1b,
+ * спека 9.6): её зовут обработчик окна (`keys/handler.ts`) и клик по пункту меню
+ * (`menu:action`). Там же входы сайдбара и «открывающие» действия палитры: все
+ * они идут в `layout/store.ts` раскладки активной работы. Сессия,
  * почта или комната могут принадлежать не активной сейчас работе — сначала
  * `setActiveWork`, потом `apply` в её раскладке.
  *
@@ -50,6 +50,7 @@ import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 import { refKey } from '@harnas/protocol';
 import type { HarnasBridge, HostStatus } from '../../shared/bridge.js';
+import type { ActionId } from '../../shared/keybindings.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { noticeText, S } from '../../shared/strings.js';
 import { LEFT_SIDEBAR } from '../../shared/ui-types.js';
@@ -59,7 +60,7 @@ import { InterruptedBanner } from '../components/InterruptedBanner.js';
 import { CommandPalette } from '../components/palette/CommandPalette.js';
 import { SessionPicker, sessionCandidates } from '../components/palette/SessionPicker.js';
 import { CreateRoomDialog, type RoomCandidate } from '../components/rooms/CreateRoomDialog.js';
-import { visibleWorkOrder } from '../sidebar/sort.js';
+import { neighborInOrder, visibleWorkOrder } from '../sidebar/sort.js';
 import { SidebarSectionsWriter, useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
 import { NewWorkComposer } from '../sidebar/NewWorkComposer.js';
 import { WorkSidebar } from '../sidebar/WorkSidebar.js';
@@ -70,14 +71,18 @@ import { applyDrop, centerOverlayOnCursor, dragItemOf, dropFromDragEnd, layoutCo
 import { setDropPreview } from '../layout/DropIndicator.js';
 import { tabId } from '../layout/ids.js';
 import { tabMeta } from '../layout/tab-meta.js';
-import { isTextEntryTarget, layoutKeyAction, neighborInOrder } from '../layout/keys.js';
 import { LayoutView } from '../layout/LayoutView.js';
 import { createLru, type Lru } from '../layout/lru.js';
 import { SurfaceLayer } from '../layout/SurfaceLayer.js';
 import { useLayoutPersistence } from '../layout/persistence.js';
 import { selectedSessionOf, useLayoutStore } from '../layout/store.js';
 import { measureGroupSizes } from '../layout/measure.js';
-import { focusGroup, groups, openTab, openTerminalSessionIds, reopenClosed, splitGroup } from '../layout/tree.js';
+import { findTab, focusGroup, focusTab, groups, openTab, openTerminalSessionIds, reopenClosed, splitGroup } from '../layout/tree.js';
+import { focusContext } from '../keys/focus-context.js';
+import { installKeyHandler, isActionAvailable } from '../keys/handler.js';
+import { createMruCycle, type MruCycle } from '../keys/mru-cycle.js';
+import { hostMethods } from '../lib/capabilities.js';
+import { useHostStore } from '../store/host.js';
 import { terminalSurfaces } from '../terminal/TerminalSurface.js';
 import { useNoticesStore } from '../store/notices.js';
 import { useUiStore } from '../store/ui.js';
@@ -101,6 +106,11 @@ function dragLabel(item: DragItem, key: string | null): string {
   const layout = key === null ? undefined : useLayoutStore.getState().layouts[key];
   const tab = layout === undefined ? undefined : groups(layout).flatMap((group) => group.tabs).find((candidate) => candidate.id === item.tabId);
   return tab === undefined ? item.tabId : tabMeta(tab, entry ?? null).title;
+}
+
+/** Доступность — одна для нажатия и для `menu:action` (кусок 6.1b): методы хоста в момент действия. */
+function available(id: ActionId): boolean {
+  return isActionAvailable(id, hostMethods(useHostStore.getState().status));
 }
 
 /** Слои поверхностей живут у трёх последних работ (план, «Числа»). */
@@ -303,23 +313,6 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     if (key !== undefined) useLayoutStore.getState().setActiveWork(key);
   };
 
-  // ⌘⇧↑↓ — соседняя работа того же порядка (кусок 3.4). Один обработчик на окно: у
-  // `LayoutView` трёх работ LRU этот исход проходит мимо. В поле ввода сочетание остаётся
-  // выделению до края (спека 9.6); терминал полем не считается — ⌘-сочетания его идут окну.
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      const action = layoutKeyAction(event);
-      if (action?.kind !== 'work-step' || isTextEntryTarget(event.target)) return;
-      const order = visibleWorkOrder(useSidebarSectionsStore.getState().sections);
-      const next = neighborInOrder(order, useLayoutStore.getState().activeWorkKey, action.step);
-      if (next === null) return;
-      event.preventDefault();
-      useLayoutStore.getState().setActiveWork(next);
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
-
   // Меню раскладки работает прямо через `layout/store.ts` на раскладке
   // активной работы (спека 5.3, п. «Клавиши»).
   const closeActiveTab = (): void => {
@@ -350,39 +343,135 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     useUiStore.getState().openPicker({ workKey: key, direction, openSessionIds: openTerminalSessionIds(layout) });
   };
 
-  // ⌘F: полоса поиска только у видимой поверхности активной группы
-  // активной работы — сами поверхности на меню не подписаны (их смонтировано
-  // много, и полоса открылась бы во всех, включая скрытые).
-  const openSearch = (): void => {
+  // ⌘F и ⌘K: поверхность активной вкладки активной группы активной работы — сами
+  // поверхности на действия не подписаны (их смонтировано много, и полоса открылась бы во
+  // всех, включая скрытые). Клик и фокус в терминале делают его группу активной (2.5).
+  const activeTerminalSurface = () => {
+    const key = useLayoutStore.getState().activeWorkKey;
+    const layout = key === null ? undefined : useLayoutStore.getState().layouts[key];
+    if (key === null || layout === undefined) return undefined;
+    const activeGroup = groups(layout).find((group) => group.id === layout.activeGroupId);
+    const tab = activeGroup?.tabs.find((candidate) => candidate.id === activeGroup.activeTabId);
+    if (tab?.kind !== 'terminal') return undefined;
+    const entry = useWorksStore.getState().entries.find((item) => workKey(item.projectPath, item.map.work.id) === key);
+    if (entry === undefined) return undefined;
+    return terminalSurfaces.get(refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: tab.sessionId }));
+  };
+
+  /** Вкладка активной группы активной работы: соседняя по кругу (`step`) или N-я (`index`). */
+  const focusTabInActiveGroup = (pick: (tabs: readonly TabSpec[], activeIndex: number) => TabSpec | undefined): void => {
     const key = useLayoutStore.getState().activeWorkKey;
     const layout = key === null ? undefined : useLayoutStore.getState().layouts[key];
     if (key === null || layout === undefined) return;
     const activeGroup = groups(layout).find((group) => group.id === layout.activeGroupId);
-    const tab = activeGroup?.tabs.find((candidate) => candidate.id === activeGroup.activeTabId);
-    if (tab?.kind !== 'terminal') return;
-    const entry = useWorksStore.getState().entries.find((item) => workKey(item.projectPath, item.map.work.id) === key);
-    if (entry === undefined) return;
-    terminalSurfaces.get(refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: tab.sessionId }))?.openSearch();
+    if (activeGroup === undefined || activeGroup.tabs.length === 0) return;
+    const tab = pick(activeGroup.tabs, activeGroup.tabs.findIndex((candidate) => candidate.id === activeGroup.activeTabId));
+    if (tab !== undefined) useLayoutStore.getState().apply(key, (l) => focusTab(l, tab.id));
   };
+
+  // Цикл ⌃Tab (6.1a) — один на окно: клавиши больше не висят в `LayoutView` трёх работ LRU.
+  const mruCycleRef = useRef<MruCycle | null>(null);
+  if (mruCycleRef.current === null) mruCycleRef.current = createMruCycle();
+  const mruCycle = mruCycleRef.current;
+
+  const stepMru = (step: 1 | -1): void => {
+    const state = useLayoutStore.getState();
+    const key = state.activeWorkKey;
+    if (key === null) return;
+    const layout = state.layouts[key];
+    if (layout === undefined) return;
+    // Вкладку снимка могли закрыть посреди цикла — она пропускается, а не глушит шаг.
+    // Предел — размер снимка: MRU хранит до 20 вкладок на работу.
+    let target = mruCycle.step(key, state.mru[key] ?? [], step);
+    for (let guard = 0; target !== null && findTab(layout, target) === null && guard < 20; guard += 1) {
+      target = mruCycle.step(key, state.mru[key] ?? [], step);
+    }
+    if (target !== null && findTab(layout, target) !== null) state.apply(key, (l) => focusTab(l, target));
+  };
+
+  // Отпускание ⌃ или потеря фокуса окна — итог цикла в `mru` стора (`setState`, как в 2.4).
+  // Снимок старше живого списка: вкладку, закрытую посреди цикла, он ещё помнит. Снятую
+  // закрыли — итога нет, живой список уже верен; прочие закрытые из итога выпадают, а
+  // открытые посреди цикла остаются следом.
+  const endMruCycle = (): void => {
+    const state = useLayoutStore.getState();
+    const done = mruCycle.commit(state.activeWorkKey);
+    if (done === null) return;
+    const live = state.mru[done.workKey] ?? [];
+    const target = done.mru[0];
+    if (target === undefined || !live.includes(target)) return;
+    const kept = done.mru.filter((id) => live.includes(id));
+    const fresh = live.filter((id) => !kept.includes(id));
+    useLayoutStore.setState((current) => ({ mru: { ...current.mru, [done.workKey]: [...kept, ...fresh] } }));
+  };
+
+  /**
+   * Одна точка действий реестра (кусок 6.1b): нажатие окна и клик пункта меню. Ветки действуют
+   * на раскладку активной работы; прочих действий реестра до 6.3 и этапов 7–9 здесь нет —
+   * `isActionAvailable` их не пропускает.
+   */
+  const run = (id: ActionId): void => {
+    const layoutStore = useLayoutStore.getState();
+    if (id === 'palette.open') setPaletteOpen(true);
+    else if (id === 'work.new') openNewWorkDialog();
+    else if (id === 'session.new') {
+      // Родитель — выбранная сессия, как у ⌘T в `App.tsx`.
+      const selected = selectedSessionOf(layoutStore, useWorksStore.getState().entries);
+      useUiStore.getState().openNewSessionDialog(selected?.ref.sessionId ?? null);
+    } else if (id === 'settings.open') useUiStore.getState().openSettingsDialog();
+    else if (id === 'sidebar.left.toggle') setSidebar('left', { open: !useUiStore.getState().ui.leftSidebar.open });
+    else if (id.startsWith('work.goto.')) selectWorkByNumber(Number(id.slice('work.goto.'.length)));
+    else if (id === 'work.prev' || id === 'work.next') {
+      // Порядок — в момент нажатия (3.4): оболочка на активность не подписана.
+      const order = visibleWorkOrder(useSidebarSectionsStore.getState().sections);
+      const next = neighborInOrder(order, layoutStore.activeWorkKey, id === 'work.next' ? 1 : -1);
+      if (next !== null) layoutStore.setActiveWork(next);
+    } else if (id === 'history.back') layoutStore.back();
+    else if (id === 'history.forward') layoutStore.forward();
+    else if (id === 'group.splitRight') beginSplit('right');
+    else if (id === 'group.splitDown') beginSplit('down');
+    else if (id === 'group.prev') focusAdjacentGroup(-1);
+    else if (id === 'group.next') focusAdjacentGroup(1);
+    else if (id === 'tab.close') closeActiveTab();
+    else if (id === 'tab.reopen') {
+      const key = layoutStore.activeWorkKey;
+      if (key !== null) layoutStore.apply(key, reopenClosed);
+    } else if (id === 'tab.prev' || id === 'tab.next') {
+      const step = id === 'tab.next' ? 1 : -1;
+      focusTabInActiveGroup((tabs, index) => tabs[(((index + step) % tabs.length) + tabs.length) % tabs.length]);
+    } else if (id.startsWith('tab.goto.')) {
+      const n = Number(id.slice('tab.goto.'.length));
+      focusTabInActiveGroup((tabs) => tabs[n - 1]);
+    } else if (id === 'tab.mruNext') stepMru(1);
+    else if (id === 'tab.mruPrev') stepMru(-1);
+    else if (id === 'find') activeTerminalSurface()?.openSearch();
+    // Только `term.clear()` поверхности: агенту в pty ничего не уходит.
+    else if (id === 'terminal.clear') activeTerminalSurface()?.clear();
+  };
+  const runRef = useRef(run);
+  runRef.current = run;
+  const endMruCycleRef = useRef(endMruCycle);
+  endMruCycleRef.current = endMruCycle;
 
   useEffect(
     () =>
-      bridge.app.onMenu((action) => {
-        if (action === 'palette') setPaletteOpen(true);
-        else if (action === 'new-work') openNewWorkDialog();
-        else if (action === 'toggle-left-sidebar') setSidebar('left', { open: !useUiStore.getState().ui.leftSidebar.open });
-        else if (action.startsWith('work-')) selectWorkByNumber(Number(action.slice('work-'.length)));
-        else if (action === 'close-panel') closeActiveTab();
-        else if (action === 'reopen-tab') {
-          const key = useLayoutStore.getState().activeWorkKey;
-          if (key !== null) useLayoutStore.getState().apply(key, reopenClosed);
-        } else if (action === 'prev-panel') focusAdjacentGroup(-1);
-        else if (action === 'next-panel') focusAdjacentGroup(1);
-        else if (action === 'split-right') beginSplit('right');
-        else if (action === 'split-down') beginSplit('down');
-        else if (action === 'find') openSearch();
-        else if (action === 'history-back') useLayoutStore.getState().back();
-        else if (action === 'history-forward') useLayoutStore.getState().forward();
+      installKeyHandler({
+        run: (id) => runRef.current(id),
+        // Прежняя палитра строк по номеру не выбирает: `Palette` и её `pickRow` подключает 6.2.
+        pickPaletteRow: () => {},
+        context: () => focusContext(document.activeElement),
+        paletteOpen: () => useUiStore.getState().paletteOpen,
+        available,
+        endMruCycle: () => endMruCycleRef.current(),
+      }),
+    [],
+  );
+
+  // Клик мышью по пункту меню; клик сочетанием main не шлёт (`main/menu.ts`).
+  useEffect(
+    () =>
+      bridge.app.onMenu((id) => {
+        if (available(id)) runRef.current(id);
       }),
     [bridge],
   );

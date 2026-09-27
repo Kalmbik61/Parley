@@ -266,12 +266,12 @@ describe('WorkSidebar — размонтирование под указател
 });
 
 describe('WorkSidebar — верх (тесты 8, 16)', () => {
-  it('Search с подписью ⌘K открывает палитру; ⌘J нет', () => {
+  it('Search с подписью ⌘J открывает палитру; ⌘K нет (кусок 6.1b)', () => {
     setWorks([makeWork('w-1')]);
     render(<Harness />);
     const search = screen.getByRole('button', { name: /Search/ });
-    expect(within(search).getByText('⌘K')).toBeTruthy();
-    expect(screen.queryByText('⌘J')).toBeNull();
+    expect(within(search).getByText('⌘J')).toBeTruthy();
+    expect(screen.queryByText('⌘K')).toBeNull();
     fireEvent.click(search);
     expect(useUiStore.getState().paletteOpen).toBe(true);
   });

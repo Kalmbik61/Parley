@@ -14,7 +14,7 @@ describe('shouldForwardToTerminal', () => {
     expect(shouldForwardToTerminal(key({ metaKey: false, key: 'a' }))).toBe(true);
   });
 
-  // Тест 5 куска 2.4: ⌃Tab, ⌃1 — окну (layout/keys.ts), не xterm; ⌃C, ⌃A — обычные
+  // Тест 5 куска 2.4: ⌃Tab, ⌃1 — окну (keys/handler.ts), не xterm; ⌃C, ⌃A — обычные
   // терминальные сочетания, xterm получает их сам.
   it('⌃Tab — не для xterm (MRU вкладок)', () => {
     expect(shouldForwardToTerminal(key({ ctrlKey: true, key: 'Tab' }))).toBe(false);

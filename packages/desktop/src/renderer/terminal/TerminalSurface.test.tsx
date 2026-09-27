@@ -122,14 +122,16 @@ describe('TerminalSurface', () => {
     expect(bridge.notified.filter((n) => n.method === 'pty.input')).toEqual([]);
   });
 
-  it('⌘F в терминале открывает полосу своей поверхности', async () => {
+  // ⌘F ловит обработчик окна (кусок 6.1b): действие `find` в `AppShell` зовёт openSearch() ручки
+  // (тест 12 ниже и `AppShell.test.tsx`), своей ветки у xterm нет.
+  it('⌘F в xterm сам полосу не открывает', async () => {
     renderSurface();
     await act(async () => {
       await Promise.resolve();
     });
     const handler = xtermMock.terminals[0]?.keyHandler;
     act(() => void handler?.(new KeyboardEvent('keydown', { key: 'f', metaKey: true, cancelable: true })));
-    expect(document.activeElement).toBe(screen.getByPlaceholderText('Find…'));
+    expect(screen.queryByPlaceholderText('Find…')).toBeNull();
   });
 
   describe('ссылки (кусок 5.3)', () => {

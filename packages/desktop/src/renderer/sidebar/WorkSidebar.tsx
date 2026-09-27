@@ -212,7 +212,7 @@ export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail,
         >
           <Search className="size-4 shrink-0" aria-hidden="true" />
           <span className="flex-1 text-left">{S.sidebar.search}</span>
-          <kbd className="rounded border border-work-sidebar-border px-1 text-[10px] text-work-sidebar-muted-foreground">⌘K</kbd>
+          <kbd className="rounded border border-work-sidebar-border px-1 text-[10px] text-work-sidebar-muted-foreground">⌘J</kbd>
         </button>
         <button
           type="button"

@@ -2,7 +2,7 @@
  * Заголовок окна, 36px (кусок 2.3, спека 4.4, 5.1): светофор macOS слева
  * (отступ 80px под него держит `pl-20`, сама позиция — `trafficLightPosition`
  * в `main/window.ts`), дальше — сайдбар работ и история переходов; справа —
- * поиск (палитра ⌘K) и заглушка правого сайдбара (появится в 7.2).
+ * поиск (палитра ⌘J) и заглушка правого сайдбара (появится в 7.2).
  *
  * Слот `#titlebar-tabs` — сам он пуст всегда: строку вкладок в него портали­рует
  * `layout/TabStrip.tsx` (кусок 2.4), когда в активной работе ровно одна группа
@@ -82,7 +82,7 @@ export function Titlebar({ bridge }: TitlebarProps): JSX.Element {
         >
           <Search className="size-3.5" />
           {S.titlebar.search}
-          <kbd className="rounded border border-border px-1 text-[10px]">⌘K</kbd>
+          <kbd className="rounded border border-border px-1 text-[10px]">⌘J</kbd>
         </button>
         <Button type="button" variant="ghost" size="icon-xs" aria-label={S.titlebar.rightSidebar} disabled>
           <PanelRight className="size-3.5" />

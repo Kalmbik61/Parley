@@ -26,7 +26,7 @@ export function Landing(): JSX.Element {
         </Button>
         <Button type="button" variant="outline" onClick={() => setPaletteOpen(true)}>
           {S.landing.palette}
-          <kbd className="ml-1.5 rounded bg-black/10 px-1.5 py-0.5 text-[10px] dark:bg-white/10">⌘K</kbd>
+          <kbd className="ml-1.5 rounded bg-black/10 px-1.5 py-0.5 text-[10px] dark:bg-white/10">⌘J</kbd>
         </Button>
       </div>
     </div>

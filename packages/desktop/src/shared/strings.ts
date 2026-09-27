@@ -70,7 +70,7 @@ export const S = {
     addWorkspace: 'New workspace',
     /** Заголовок секции закреплённых работ (спека 6.1). */
     pinned: 'Pinned',
-    /** Верх сайдбара — палитра; подпись ⌘K до 6.2. */
+    /** Верх сайдбара — палитра; подпись ⌘J (кусок 6.1b), прежняя палитра до 6.2. */
     search: 'Search',
     /** `aria-label` «+» заголовка проекта. */
     newWorkspaceInProject: 'New workspace in project',
@@ -388,24 +388,17 @@ export const S = {
   /** Меню macOS — `main/menu.ts`; часть пунктов переиспользует палитра (`lib/commands.ts`). */
   menu: {
     edit: 'Edit',
-    session: 'Session',
     newSession: 'New session',
     newWork: 'New workspace',
     closePanel: 'Close panel',
-    reopenTab: 'Reopen closed tab',
     splitRight: 'Split right',
     splitDown: 'Split down',
-    prevPanel: 'Previous panel',
-    nextPanel: 'Next panel',
     commandPalette: 'Command palette',
     find: 'Find',
     settings: 'Settings',
-    workspaceNumber: (n: string): string => `Workspace ${n}`,
     view: 'View',
-    workspaceSidebar: 'Workspace sidebar',
-    back: 'Back',
-    forward: 'Forward',
-    // Меню реестра клавиш (кусок 6.1a, спека 9.6); прежние ключи выше читает `main/menu.ts` до 6.1b.
+    // Меню реестра клавиш (кусок 6.1a, спека 9.6). Ключи выше, кроме `edit` и `view`, читают
+    // `Tab.tsx`, меню терминала 5.3, `CommandPalette` и `lib/commands.ts` — до 6.2.
     workspace: 'Workspace',
     tab: 'Tab',
     terminal: 'Terminal',

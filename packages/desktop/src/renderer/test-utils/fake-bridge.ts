@@ -13,7 +13,8 @@ import type {
   Params,
   Result,
 } from '@harnas/protocol';
-import type { AppNote, FocusTarget, HarnasBridge, HostStatus, MenuAction } from '../../shared/bridge.js';
+import type { AppNote, FocusTarget, HarnasBridge, HostStatus } from '../../shared/bridge.js';
+import type { ActionId } from '../../shared/keybindings.js';
 import type { FileRoot, FileStat, Located } from '../../shared/files-types.js';
 import type { WorkLayout } from '../../shared/layout-types.js';
 import type { IpcErrorInfo } from '../../shared/ipc-error.js';
@@ -42,7 +43,7 @@ export interface FakeBridge extends HarnasBridge {
   setHostMethods(methods: string[] | null): void;
   /** Что вернёт `activitySnapshot` — будто main запомнил эти события до подписки. */
   setActivitySnapshot(entries: Array<EventData<'activity.changed'>>): void;
-  emitMenu(action: MenuAction): void;
+  emitMenu(id: ActionId): void;
   readonly appNotified: AppNote[];
   /** Клик по уведомлению: событие `app:focus-target` слушателям `onFocusTarget` (кусок 4.3). */
   emitFocusTarget(target: FocusTarget): void;
@@ -87,7 +88,7 @@ export function createFakeBridge(): FakeBridge {
   const handlers = new Map<MethodName, Handler>();
   const eventListeners = new Map<EventName, Set<(data: unknown) => void>>();
   const statusListeners = new Set<(status: HostStatus) => void>();
-  const menuListeners = new Set<(action: MenuAction) => void>();
+  const menuListeners = new Set<(id: ActionId) => void>();
   const appearanceListeners = new Set<(dark: boolean) => void>();
   const notified: Array<{ method: NotificationName; params: unknown }> = [];
   const calls: Array<{ method: MethodName; params: unknown }> = [];
@@ -280,8 +281,8 @@ export function createFakeBridge(): FakeBridge {
     setHostMethods: (methods) => {
       bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods });
     },
-    emitMenu: (action) => {
-      for (const listener of menuListeners) listener(action);
+    emitMenu: (id) => {
+      for (const listener of menuListeners) listener(id);
     },
     emitFocusTarget: (target) => {
       for (const listener of focusTargetListeners) listener(target);

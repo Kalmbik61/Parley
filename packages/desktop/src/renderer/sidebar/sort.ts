@@ -135,3 +135,14 @@ export function visibleWorkOrder(sections: SidebarSection[]): string[] {
     .filter((section) => !section.collapsed)
     .flatMap((section) => section.works.map((entry) => workKey(entry.projectPath, entry.map.work.id)));
 }
+
+/**
+ * Соседняя работа в порядке по кругу (⌘⇧↑↓, кусок 3.4; переехала сюда в 6.1b). Активной в
+ * порядке нет (её проект свёрнут, `done` скрыта) — вперёд первая, назад последняя; порядок пуст — `null`.
+ */
+export function neighborInOrder(order: readonly string[], current: string | null, step: 1 | -1): string | null {
+  if (order.length === 0) return null;
+  const index = current === null ? -1 : order.indexOf(current);
+  if (index === -1) return (step === 1 ? order[0] : order[order.length - 1]) ?? null;
+  return order[(((index + step) % order.length) + order.length) % order.length] ?? null;
+}

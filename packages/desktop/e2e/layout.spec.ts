@@ -115,7 +115,7 @@ test.describe('раскладка на работу переживает пер�
     // меню — действие шлётся тем же IPC, что и из меню.
     await window.locator(rowSel(keyA, a1)).click();
     await electronApp.evaluate(({ BrowserWindow }) => {
-      BrowserWindow.getAllWindows()[0]?.webContents.send('menu:action', 'split-right');
+      BrowserWindow.getAllWindows()[0]?.webContents.send('menu:action', 'group.splitRight');
     });
     await window.getByRole('dialog').getByText('S02 два').click();
     const layoutA = [[`terminal:${a1}`], [`terminal:${a2}`]];

@@ -64,9 +64,11 @@ describe('Titlebar (тест 7)', () => {
     expect(backButton().disabled).toBe(false);
   });
 
-  it('поиск «⌘K» открывает палитру, «правый сайдбар» неактивен (до 7.2)', () => {
+  it('поиск «⌘J» открывает палитру, ⌘K нет; «правый сайдбар» неактивен (до 7.2)', () => {
     render(<Titlebar bridge={bridge} />);
 
+    expect(screen.getByText('⌘J')).toBeTruthy();
+    expect(screen.queryByText('⌘K')).toBeNull();
     fireEvent.click(screen.getByText('Search'));
     expect(useUiStore.getState().paletteOpen).toBe(true);
 

@@ -177,7 +177,7 @@ for (const size of [
       problems.push(...(await footerProblemsOf(window, 'Delete')));
       await closeDialog(window);
 
-      await window.getByRole('button', { name: 'Search ⌘K' }).first().click();
+      await window.getByRole('button', { name: 'Search ⌘J' }).first().click();
       await expect(window.getByRole('dialog')).toContainText(LONG_TITLE);
       problems.push(...(await overflowOf(window, 'Palette')));
       await window.getByRole('dialog').getByRole('textbox').fill('Settings');

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ActionId, KeyLike } from '../../shared/keybindings.js';
 import type { FocusContext } from './focus-context.js';
-import { installKeyHandler, resolveAction } from './handler.js';
+import { IMPLEMENTED_ACTIONS, installKeyHandler, isActionAvailable, resolveAction } from './handler.js';
 
 /** ⌘-нажатие буквы или цифры; `extra` дописывает модификаторы и прочее. */
 function press(keyName: string, code: string, extra: Partial<KeyLike> = {}): KeyLike {
@@ -245,5 +245,24 @@ describe('installKeyHandler (тест 5)', () => {
     expect(error).toHaveBeenCalledTimes(1);
     expect(uncaught).not.toHaveBeenCalled();
     error.mockRestore();
+  });
+});
+
+describe('isActionAvailable (тест 2 куска 6.1b)', () => {
+  it('group.splitRight — да; works.showArchived, files.quickOpen, sidebar.right.toggle — нет (до 6.3 и этапов 7–9)', () => {
+    const methods = new Set<string>();
+    expect(isActionAvailable('group.splitRight', methods)).toBe(true);
+    expect(isActionAvailable('works.showArchived', methods)).toBe(false);
+    expect(isActionAvailable('files.quickOpen', methods)).toBe(false);
+    expect(isActionAvailable('sidebar.right.toggle', methods)).toBe(false);
+  });
+
+  it('ветки run 6.1b — все реализованы; browser.* и палитровые — нет', () => {
+    for (const id of ['palette.open', 'work.new', 'session.new', 'settings.open', 'sidebar.left.toggle', 'work.goto.1', 'work.goto.9', 'work.prev', 'work.next', 'history.back', 'history.forward', 'group.splitRight', 'group.splitDown', 'group.prev', 'group.next', 'tab.close', 'tab.reopen', 'tab.prev', 'tab.next', 'tab.goto.1', 'tab.goto.9', 'tab.mruNext', 'tab.mruPrev', 'find', 'terminal.clear'] as const) {
+      expect(IMPLEMENTED_ACTIONS.has(id)).toBe(true);
+    }
+    for (const id of ['browser.find', 'browser.newTab', 'wake.toggle', 'host.restart', 'attention.next', 'room.new', 'appearance.dark'] as const) {
+      expect(IMPLEMENTED_ACTIONS.has(id)).toBe(false);
+    }
   });
 });

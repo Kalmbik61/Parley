@@ -8,6 +8,7 @@ import type {
   SessionRef,
 } from '@harnas/protocol';
 import type { FileRoot, FileStat, Located } from './files-types.js';
+import type { ActionId } from './keybindings.js';
 import type { WorkLayout } from './layout-types.js';
 import type { Appearance, UiFile } from './ui-types.js';
 
@@ -38,24 +39,6 @@ export interface AppNote {
   silent: boolean;
 }
 
-/** Действия меню приложения, приходящие в рендерер через `window.harnas.app.onMenu`. */
-export type MenuAction =
-  | 'new-session'
-  | 'new-work'
-  | 'close-panel'
-  | 'reopen-tab'
-  | 'split-right'
-  | 'split-down'
-  | 'prev-panel'
-  | 'next-panel'
-  | 'palette'
-  | 'toggle-left-sidebar'
-  | 'find'
-  | 'settings'
-  | 'history-back'
-  | 'history-forward'
-  | `work-${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`;
-
 /**
  * Единственный мост между рендерером и хостом. Рендерер не видит ни Node, ни
  * Electron напрямую — только это, отданное прелоадом через `contextBridge`.
@@ -79,7 +62,8 @@ export interface HarnasBridge {
     setBadge(count: number): void;
     chooseFolder(): Promise<string | null>;
     restartHost(): Promise<void>;
-    onMenu(listener: (action: MenuAction) => void): () => void;
+    /** Клик мышью по пункту меню (кусок 6.1b): `ActionId` реестра, канал `menu:action` прежний. */
+    onMenu(listener: (id: ActionId) => void): () => void;
     /**
      * Раскладка работы в `layouts.json` (`main/layout-store.ts`, формат v2 —
      * по одной `WorkLayout` на `workKey`, спека 5.8). Файл пишет не только

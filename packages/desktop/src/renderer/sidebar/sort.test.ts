@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { WorkEntry, WorkStatus } from '@harnas/core';
 import type { Attention, WorkAttention } from '../attention/derive.js';
 import { workKey } from '../lib/tree-order.js';
-import { buildSections, compareWorks, visibleWorkOrder } from './sort.js';
+import { buildSections, compareWorks, neighborInOrder, visibleWorkOrder } from './sort.js';
 
 function att(level: Attention, lastEventAt = '2026-09-27T09:00:00.000Z'): WorkAttention {
   return { level, needsYou: 0, unseen: 0, humanUnread: 0, roomsUnread: {}, lastEventAt };
@@ -169,5 +169,17 @@ describe('visibleWorkOrder (8)', () => {
     const c1 = work('/p/c', 'c1');
     const sections = build([p, b1, bDone, a1, c1], {}, { pinned: [key(p)], collapsed: ['/p/c'], showDone: false });
     expect(visibleWorkOrder(sections)).toEqual([key(p), key(a1), key(b1)]);
+  });
+});
+
+// Перенос из временного модуля клавиш раскладки 2.4 (удалён в 6.1b): сосед по порядку живёт рядом с порядком.
+describe('neighborInOrder (тест 20 куска 3.4)', () => {
+  it('соседняя по кругу; активной нет в порядке — ↓ первая, ↑ последняя; пусто — null', () => {
+    expect(neighborInOrder(['a', 'b', 'c'], 'b', 1)).toBe('c');
+    expect(neighborInOrder(['a', 'b', 'c'], 'b', -1)).toBe('a');
+    expect(neighborInOrder(['a', 'b', 'c'], 'c', 1)).toBe('a');
+    expect(neighborInOrder(['a', 'b', 'c'], 'x', 1)).toBe('a');
+    expect(neighborInOrder(['a', 'b', 'c'], null, -1)).toBe('c');
+    expect(neighborInOrder([], 'a', 1)).toBeNull();
   });
 });

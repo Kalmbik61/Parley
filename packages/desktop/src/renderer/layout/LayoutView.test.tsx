@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import type { Room, WorkEntry, WorkSession } from '@harnas/core';
 import type { GroupNode, SplitNode } from '../../shared/layout-types.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
@@ -154,82 +154,10 @@ describe('LayoutView — тест 17', () => {
   });
 });
 
-describe('LayoutView — раунд исправлений 1: ⌃Tab держит зажатым ⌃ (VS Code/Orca)', () => {
-  function activeTabId(): string | null | undefined {
-    const root = useLayoutStore.getState().layouts[WORK_KEY]?.root;
-    return root?.type === 'group' ? root.activeTabId : undefined;
-  }
-
-  function setUpThreeTabs(): void {
-    // Три вкладки в одной группе, все — сессии из entry() плюс две добавочные.
-    const withThree: WorkEntry = {
-      ...entry(),
-      map: {
-        ...entry().map,
-        sessions: [session('a', ''), session('b', ''), session('c', '')],
-      },
-    };
-    useWorksStore.setState({ entries: [withThree], branches: {}, loading: false, error: null });
-
-    const group: GroupNode = {
-      type: 'group',
-      id: 'g1',
-      tabs: [
-        { kind: 'terminal', id: 'terminal:a', sessionId: 'a' },
-        { kind: 'terminal', id: 'terminal:b', sessionId: 'b' },
-        { kind: 'terminal', id: 'terminal:c', sessionId: 'c' },
-      ],
-      activeTabId: 'terminal:c',
-    };
-    useLayoutStore.setState({
-      activeWorkKey: WORK_KEY,
-      layouts: { [WORK_KEY]: { root: group, activeGroupId: 'g1', closedTabs: [] } },
-      hydrated: { [WORK_KEY]: true },
-      pending: {},
-      history: EMPTY_HISTORY,
-      // «Вкладки A,B,C открыты по порядку» → MRU (свежая первой): C,B,A.
-      mru: { [WORK_KEY]: ['terminal:c', 'terminal:b', 'terminal:a'] },
-      navigating: false,
-    });
-  }
-
-  it('⌃ удержан, Tab ×2 обходит MRU дальше двух последних; отпускание ⌃ фиксирует итог', async () => {
-    setUpThreeTabs();
-    render(<LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} />);
-    await flush();
-    expect(activeTabId()).toBe('terminal:c');
-
-    // ⌃ зажат — два Tab подряд, без keyup между ними.
-    fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true });
-    fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true });
-    expect(activeTabId()).toBe('terminal:a');
-    // Пока ⌃ зажат, живой MRU ещё не зафиксирован в ожидаемом порядке снимка —
-    // фиксация только на отпускании.
-    fireEvent.keyUp(window, { key: 'Control' });
-    expect(useLayoutStore.getState().mru[WORK_KEY]).toEqual(['terminal:a', 'terminal:c', 'terminal:b']);
-
-    // Одиночный ⌃Tab после фиксации — снимок берётся заново, из уже нового порядка.
-    fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true });
-    fireEvent.keyUp(window, { key: 'Control' });
-    expect(activeTabId()).toBe('terminal:c');
-  });
-
-  it('потеря фокуса окна во время удержания ⌃ тоже фиксирует итог цикла', async () => {
-    setUpThreeTabs();
-    render(<LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} />);
-    await flush();
-
-    fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true });
-    fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true });
-    expect(activeTabId()).toBe('terminal:a');
-
-    fireEvent(window, new FocusEvent('blur'));
-    expect(useLayoutStore.getState().mru[WORK_KEY]).toEqual(['terminal:a', 'terminal:c', 'terminal:b']);
-  });
-});
-
 describe('LayoutView — active: false (кусок 2.5)', () => {
-  it('неактивная работа не ловит клавиши 2.4 и не порталит строку вкладок в заголовок', async () => {
+  // Клавиши у `LayoutView` больше нет (кусок 6.1b): что они бьют только по активной работе,
+  // держит тест 6 куска 6.1b в `AppShell.test.tsx`.
+  it('неактивная работа не порталит строку вкладок в заголовок', async () => {
     const slot = document.createElement('div');
     slot.id = 'titlebar-tabs';
     document.body.appendChild(slot);
@@ -247,47 +175,9 @@ describe('LayoutView — active: false (кусок 2.5)', () => {
       render(<LayoutView workKey={WORK_KEY} active={false} bridge={bridge} fontFamily="Menlo" fontSize={13} />);
       await flush();
 
-      fireEvent.keyDown(window, { key: '1', ctrlKey: true });
-      const root = useLayoutStore.getState().layouts[WORK_KEY]?.root;
-      expect(root?.type === 'group' ? root.activeTabId : null).toBe('room:r-01');
       expect(slot.childElementCount).toBe(0);
     } finally {
       slot.remove();
     }
-  });
-});
-
-describe('LayoutView — work-step проходит мимо (тест 11 куска 3.4)', () => {
-  it('⌘⇧↓ не листает вкладки активной группы и не зовёт preventDefault; ⌘⇧] — листает', async () => {
-    const group: GroupNode = {
-      type: 'group',
-      id: 'g1',
-      tabs: [
-        { kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01' },
-        { kind: 'room', id: 'room:r-01', roomId: 'r-01' },
-      ],
-      activeTabId: 'terminal:s-01',
-    };
-    useLayoutStore.setState({ layouts: { [WORK_KEY]: { root: group, activeGroupId: 'g1', closedTabs: [] } } });
-    render(<LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} />);
-    await flush();
-    const activeTab = (): string | null => {
-      const root = useLayoutStore.getState().layouts[WORK_KEY]?.root;
-      return root?.type === 'group' ? root.activeTabId : null;
-    };
-
-    const step = new KeyboardEvent('keydown', { key: 'ArrowDown', metaKey: true, shiftKey: true, cancelable: true });
-    act(() => {
-      window.dispatchEvent(step);
-    });
-    expect(step.defaultPrevented).toBe(false);
-    expect(activeTab()).toBe('terminal:s-01');
-
-    const tabStep = new KeyboardEvent('keydown', { key: ']', metaKey: true, shiftKey: true, cancelable: true });
-    act(() => {
-      window.dispatchEvent(tabStep);
-    });
-    expect(tabStep.defaultPrevented).toBe(true);
-    expect(activeTab()).toBe('room:r-01');
   });
 });

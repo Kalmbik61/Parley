@@ -70,7 +70,7 @@ export interface TerminalSurfaceProps {
 
 /**
  * openSearch() — с 2.5, с 5.3 открывает SearchBar с фокусом в поле.
- * clear() — с 5.3: term.clear(), агенту ничего не уходит. Их зовут действия find и terminal.clear (6.3).
+ * clear() — с 5.3: term.clear(), агенту ничего не уходит. Их зовут действия find и terminal.clear (`AppShell#run`, 6.1b).
  */
 export interface TerminalSurfaceHandle {
   focus(): void;
@@ -265,7 +265,6 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
     visible,
     workKey: key,
     cwd,
-    onFind: openSearch,
     onLink,
   });
   const dark = useUiStore((state) => state.dark);

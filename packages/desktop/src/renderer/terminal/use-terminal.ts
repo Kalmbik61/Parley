@@ -53,11 +53,6 @@ export interface UseTerminalOptions {
   workKey: string;
   /** sessionCwd(сессия из useWorksStore, projectPath): от него относительные пути. */
   cwd: string;
-  /**
-   * ⌘F в терминале — openSearch() своей поверхности. Ветка временная: 6.1b переносит ⌘K и
-   * ⌘F в обработчик окна (спека 9.6) и убирает `onFind`.
-   */
-  onFind(): void;
   /** Клик по ссылке и по OSC 8; ⌘-клик или меню решает TerminalSurface. */
   onLink(link: TerminalLink, event: MouseEvent): void;
 }
@@ -106,8 +101,8 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
   // Провайдер ссылок и обработчик клавиш заведены один раз на создание xterm, а работа,
   // папка сессии (worktree появляется позже) и колбэки поверхности могут смениться —
   // читаются через ref.
-  const linkContextRef = useRef({ workKey: options.workKey, cwd: options.cwd, onFind: options.onFind, onLink: options.onLink });
-  linkContextRef.current = { workKey: options.workKey, cwd: options.cwd, onFind: options.onFind, onLink: options.onLink };
+  const linkContextRef = useRef({ workKey: options.workKey, cwd: options.cwd, onLink: options.onLink });
+  linkContextRef.current = { workKey: options.workKey, cwd: options.cwd, onLink: options.onLink };
 
   // Мост между эффектом создания xterm (ниже) и эффектом видимости (в конце
   // функции): подключение к хосту должно переживать переключение вкладок без
@@ -207,23 +202,8 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
     setTerminal(term);
 
     term.attachCustomKeyEventHandler((event) => {
-      // ⌘K и ⌘F терминал берёт себе. `preventDefault` обязателен: на macOS ⌘-сочетание
-      // сначала получает страница, пункт меню — только необработанное (`registerAccelerator:
-      // false` там не действует), и без него ⌘K заодно открыл бы палитру. Агенту ничего не
-      // уходит. Ветка временная — до обработчика окна 6.1b (спека 9.6).
-      if (event.type === 'keydown' && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
-        const key = event.key.toLowerCase();
-        if (key === 'k') {
-          event.preventDefault();
-          term.clear();
-          return false;
-        }
-        if (key === 'f') {
-          event.preventDefault();
-          linkContextRef.current.onFind();
-          return false;
-        }
-      }
+      // ⌘K и ⌘F сюда не доходят (кусок 6.1b): их ловит обработчик окна в capture-фазе со
+      // `stopPropagation` (`keys/handler.ts`) — `find` и `terminal.clear` в `AppShell`.
       // ⌘C при выделении — копия в буфер обмена; сама клавиша дальше не идёт
       // в pty.input, как и любое другое ⌘-сочетание (`lib/keys.ts`).
       if (event.type === 'keydown' && event.metaKey && event.key.toLowerCase() === 'c' && term.hasSelection()) {

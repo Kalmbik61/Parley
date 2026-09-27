@@ -19,7 +19,7 @@ import type { LayoutNode, TabSpec } from '../../shared/layout-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
-import { groups, openTab, splitGroup } from '../layout/tree.js';
+import { closeTab, focusTab, groups, openTab, splitGroup } from '../layout/tree.js';
 import { useActivityStore } from '../store/activity.js';
 import { useNoticesStore } from '../store/notices.js';
 import { useUiStore } from '../store/ui.js';
@@ -261,7 +261,7 @@ describe('AppShell — Landing и оболочка с работой (тест 6
 });
 
 describe('AppShell — меню и диалоги (тест 9)', () => {
-  it('на Landing: кнопка «Новая работа» и меню new-work открывают форму новой работы; меню palette — CommandPalette', async () => {
+  it('на Landing: кнопка «Новая работа» и меню work.new открывают форму новой работы; меню palette.open — CommandPalette', async () => {
     render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
     await flush();
 
@@ -271,24 +271,37 @@ describe('AppShell — меню и диалоги (тест 9)', () => {
     fireEvent.keyDown(dialog, { key: 'Escape' });
     await flush();
 
-    act(() => bridge.emitMenu('new-work'));
+    act(() => bridge.emitMenu('work.new'));
     expect(await screen.findByRole('dialog')).toBeTruthy();
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
     await flush();
 
-    act(() => bridge.emitMenu('palette'));
+    act(() => bridge.emitMenu('palette.open'));
     expect(await screen.findByText('Command palette')).toBeTruthy();
   });
 
-  it('подпись сочетания палитры — ⌘K и в заголовке, и на Landing; ⌘J нигде нет (до 6.2)', async () => {
+  it('подпись сочетания палитры — ⌘J и в заголовке, и на Landing; ⌘K нигде нет (тест 9 куска 6.1b)', async () => {
     render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
     await flush();
 
-    expect(screen.getAllByText('⌘K').length).toBeGreaterThanOrEqual(2);
-    expect(screen.queryByText('⌘J')).toBeNull();
+    expect(screen.getAllByText('⌘J').length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText('⌘K')).toBeNull();
   });
 
-  it('с работой: меню toggle-left-sidebar сворачивает сайдбар, «Поиск ⌘K» открывает палитру', async () => {
+  it('emitMenu(files.quickOpen) — действие ещё не реализовано: ничего не меняет и не бросает (тест 3 куска 6.1b)', async () => {
+    render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
+    await flush();
+    const before = { ui: useUiStore.getState(), layout: useLayoutStore.getState() };
+
+    expect(() => act(() => bridge.emitMenu('files.quickOpen'))).not.toThrow();
+    await flush();
+
+    expect(useUiStore.getState()).toBe(before.ui);
+    expect(useLayoutStore.getState()).toBe(before.layout);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('с работой: меню sidebar.left.toggle сворачивает сайдбар, «Поиск ⌘J» открывает палитру', async () => {
     const w1 = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'план')]);
     useWorksStore.setState({ entries: [w1], branches: {}, loading: false, error: null });
 
@@ -298,7 +311,7 @@ describe('AppShell — меню и диалоги (тест 9)', () => {
     // «Search» — две кнопки: в заголовке и вверху сайдбара карточек (кусок 3.3).
     expect(screen.getAllByText('Search')).toHaveLength(2);
 
-    act(() => bridge.emitMenu('toggle-left-sidebar'));
+    act(() => bridge.emitMenu('sidebar.left.toggle'));
     expect(screen.queryByText('Первая')).toBeNull();
     expect(useUiStore.getState().ui.leftSidebar.open).toBe(false);
 
@@ -343,7 +356,7 @@ describe('AppShell — сплит и палитра (тест 13 куска 2.4)
     // Одна группа — тест 1: её строка вкладок стоит в заголовке, не в теле.
     expect(document.getElementById('titlebar-tabs')?.querySelector('[data-tab-id]')).not.toBeNull();
 
-    act(() => bridge.emitMenu('split-right'));
+    act(() => bridge.emitMenu('group.splitRight'));
     await flush();
 
     const dialog = await screen.findByRole('dialog');
@@ -461,7 +474,7 @@ describe('AppShell — отказ сплита при 8 группах (тест
     if (eightGroups === undefined) throw new Error('раскладка пропала');
     expect(groups(eightGroups)).toHaveLength(8);
 
-    act(() => bridge.emitMenu('split-right'));
+    act(() => bridge.emitMenu('group.splitRight'));
     await flush();
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByText('S09 session 9'));
@@ -674,29 +687,74 @@ describe('AppShell — меню find (тест 15 куска 2.5)', () => {
   });
 });
 
-describe('AppShell — ⌘K в терминале (тест 10 куска 5.3)', () => {
-  it('⌘K в терминале чистит экран, палитра не открыта', async () => {
-    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
-    const key = keyOf('w-01');
-    act(() => useLayoutStore.getState().setActiveWork(key));
-    await waitFor(() => expect(useLayoutStore.getState().hydrated[key]).toBe(true));
-    act(() => useLayoutStore.getState().apply(key, (layout) => openTab(layout, term('s-01'))));
-    await flush();
+describe('AppShell — ⌘K в терминале (тест 10 куска 5.3, тест 8 куска 6.1b)', () => {
+  /** Фокус xterm — его помощник `textarea.xterm-helper-textarea` внутри `.xterm`, как у настоящего. */
+  function focusTerminal(element: HTMLElement | null): HTMLTextAreaElement {
+    const xterm = document.createElement('div');
+    xterm.className = 'xterm';
+    const helper = document.createElement('textarea');
+    helper.className = 'xterm-helper-textarea';
+    xterm.appendChild(helper);
+    (element ?? document.body).appendChild(xterm);
+    helper.focus();
+    return helper;
+  }
 
-    const terminal = xtermMock.terminals.at(-1);
-    const event = new KeyboardEvent('keydown', { key: 'k', metaKey: true, cancelable: true, bubbles: true });
-    // Нажатие получает xterm, а затем оно всплывает до окна; меню macOS в jsdom нет — его
-    // проверяет приёмка.
+  const cmdK = (target: EventTarget): KeyboardEvent => {
+    const event = new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', metaKey: true, cancelable: true, bubbles: true });
     act(() => {
-      terminal?.keyHandler?.(event);
-      window.dispatchEvent(event);
+      target.dispatchEvent(event);
     });
+    return event;
+  };
+
+  async function withTerminal(): Promise<void> {
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+    await activateWithTerminal(keyOf('w-01'), 's-01');
+  }
+
+  it('⌘K в терминале: clear() его поверхности, pty.input нет, палитра закрыта', async () => {
+    await withTerminal();
+    const terminal = xtermMock.terminals.at(-1);
+    const helper = focusTerminal(terminal?.element ?? null);
+
+    const event = cmdK(helper);
     await flush();
 
     expect(event.defaultPrevented).toBe(true);
     expect(xtermMock.callsOf('clear', terminal?.index)).toHaveLength(1);
+    expect(bridge.notified.filter((n) => n.method === 'pty.input')).toEqual([]);
     expect(useUiStore.getState().paletteOpen).toBe(false);
     expect(screen.queryByText('Command palette')).toBeNull();
+  });
+
+  it('⌘F в терминале: полоса поиска его поверхности с фокусом в поле', async () => {
+    await withTerminal();
+    const helper = focusTerminal(xtermMock.terminals.at(-1)?.element ?? null);
+
+    const event = new KeyboardEvent('keydown', { key: 'f', code: 'KeyF', metaKey: true, cancelable: true, bubbles: true });
+    act(() => {
+      helper.dispatchEvent(event);
+    });
+    await flush();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(screen.getByPlaceholderText('Find…'));
+  });
+
+  it('⌘K при фокусе в сайдбаре — clear() не вызван, событие не погашено', async () => {
+    await withTerminal();
+    const terminal = xtermMock.terminals.at(-1);
+    const card = document.querySelector<HTMLElement>('[data-work-key]');
+    if (card === null) throw new Error('нет карточки');
+    card.focus();
+
+    const event = cmdK(card);
+    await flush();
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(xtermMock.callsOf('clear', terminal?.index)).toHaveLength(0);
+    expect(useUiStore.getState().paletteOpen).toBe(false);
   });
 });
 
@@ -779,11 +837,11 @@ describe('AppShell — меню work-N по видимому порядку (т�
     await activateWithTerminal(keyOf('w-01'), 's-01');
     await activateWithTerminal(keyOf('w-02'), 's-02');
 
-    act(() => bridge.emitMenu('work-1'));
+    act(() => bridge.emitMenu('work.goto.1'));
     await flush();
     expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-03'));
 
-    act(() => bridge.emitMenu('work-2'));
+    act(() => bridge.emitMenu('work.goto.2'));
     await flush();
     expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
     const active = container(keyOf('w-01'));
@@ -791,13 +849,13 @@ describe('AppShell — меню work-N по видимому порядку (т�
     expect(active?.querySelector('[data-surface-layer] [data-tab-id="terminal:s-01"]')).not.toBeNull();
     expect(document.getElementById('titlebar-tabs')?.querySelector('[data-tab-id="terminal:s-01"]')).not.toBeNull();
 
-    act(() => bridge.emitMenu('work-9'));
+    act(() => bridge.emitMenu('work.goto.9'));
     await flush();
     expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
   });
 });
 
-describe('AppShell — ⌘⇧↑↓ по видимому порядку (тесты 11, 20 куска 3.4)', () => {
+describe('AppShell — ⌘⇧↑↓ по видимому порядку (тесты 11, 20 куска 3.4; тест 7 куска 6.1b)', () => {
   const press = (target: EventTarget, key: 'ArrowUp' | 'ArrowDown'): KeyboardEvent => {
     const event = new KeyboardEvent('keydown', { key, metaKey: true, shiftKey: true, bubbles: true, cancelable: true });
     act(() => {
@@ -818,8 +876,10 @@ describe('AppShell — ⌘⇧↑↓ по видимому порядку (тес
     act(() => useLayoutStore.getState().apply(keyOf('w-01'), (layout) => openTab(layout, term('s-01'))));
     expect(activeTab(keyOf('w-01'))).toBe(tabId.terminal('s-01'));
 
+    // Контекст фокуса обработчик окна берёт из `document.activeElement` (кусок 6.1b).
     const input = document.createElement('input');
     document.body.appendChild(input);
+    input.focus();
     const ignored = press(input, 'ArrowDown');
     expect(ignored.defaultPrevented).toBe(false);
     expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
@@ -831,6 +891,7 @@ describe('AppShell — ⌘⇧↑↓ по видимому порядку (тес
     helper.className = 'xterm-helper-textarea';
     xterm.appendChild(helper);
     document.body.appendChild(xterm);
+    helper.focus();
     const fromTerminal = press(helper, 'ArrowDown');
     expect(fromTerminal.defaultPrevented).toBe(true);
     expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
@@ -870,11 +931,11 @@ describe('AppShell — меню history-back / history-forward (кусок 2.7)'
     await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-02')]).toBe(true));
     await flush();
 
-    act(() => bridge.emitMenu('history-back'));
+    act(() => bridge.emitMenu('history.back'));
     await flush();
     expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
 
-    act(() => bridge.emitMenu('history-forward'));
+    act(() => bridge.emitMenu('history.forward'));
     await flush();
     expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
   });
@@ -906,7 +967,7 @@ describe('AppShell — сайдбар карточек (кусок 3.3)', () => 
     await flush();
     expect(useUiStore.getState().dialogs.newWork).toEqual({ open: false, projectPath: null });
 
-    act(() => bridge.emitMenu('new-work'));
+    act(() => bridge.emitMenu('work.new'));
     const again = await screen.findByRole('dialog');
     expect(within(again).getByRole('combobox', { name: 'Project' }).textContent).toBe('Choose a folder…');
   });
@@ -1147,5 +1208,132 @@ describe('AppShell — видимый порядок для persistence (реш�
     await flush();
 
     expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Кусок 6.1b: клавиши окна — один обработчик (`keys/handler.ts`) на активную работу.
+// ---------------------------------------------------------------------------
+
+function activeTabOf(key: string): string | null {
+  const layout = useLayoutStore.getState().layouts[key];
+  const group = layout === undefined ? undefined : groups(layout).find((candidate) => candidate.id === layout.activeGroupId);
+  return group?.activeTabId ?? null;
+}
+
+describe('AppShell — цикл ⌃Tab в окне (тест 5 куска 6.1b, перенос тестов LayoutView 2.4)', () => {
+  /** Три вкладки A, B, C открыты по порядку — MRU (свежая первой): C, B, A. */
+  async function threeTabs(): Promise<string> {
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('a', ''), session('b', ''), session('c', '')])]);
+    const key = keyOf('w-01');
+    await activateWithTerminal(key, 'a');
+    act(() => {
+      useLayoutStore.getState().apply(key, (layout) => openTab(layout, term('b')));
+      useLayoutStore.getState().apply(key, (layout) => openTab(layout, term('c')));
+    });
+    await flush();
+    expect(useLayoutStore.getState().mru[key]).toEqual(['terminal:c', 'terminal:b', 'terminal:a']);
+    return key;
+  }
+
+  it('⌃ удержан, Tab ×2 — активна A; keyup Control — mru [A, C, B]', async () => {
+    const key = await threeTabs();
+
+    fireEvent.keyDown(window, { key: 'Tab', code: 'Tab', ctrlKey: true });
+    fireEvent.keyDown(window, { key: 'Tab', code: 'Tab', ctrlKey: true });
+    expect(activeTabOf(key)).toBe('terminal:a');
+
+    fireEvent.keyUp(window, { key: 'Control' });
+    expect(useLayoutStore.getState().mru[key]).toEqual(['terminal:a', 'terminal:c', 'terminal:b']);
+
+    // Одиночный ⌃Tab после фиксации — снимок берётся заново, из нового порядка.
+    fireEvent.keyDown(window, { key: 'Tab', code: 'Tab', ctrlKey: true });
+    fireEvent.keyUp(window, { key: 'Control' });
+    expect(activeTabOf(key)).toBe('terminal:c');
+  });
+
+  it('то же с blur окна вместо keyup', async () => {
+    const key = await threeTabs();
+
+    fireEvent.keyDown(window, { key: 'Tab', code: 'Tab', ctrlKey: true });
+    fireEvent.keyDown(window, { key: 'Tab', code: 'Tab', ctrlKey: true });
+    expect(activeTabOf(key)).toBe('terminal:a');
+
+    fireEvent(window, new FocusEvent('blur'));
+    expect(useLayoutStore.getState().mru[key]).toEqual(['terminal:a', 'terminal:c', 'terminal:b']);
+  });
+
+  it('вкладку закрыли посреди цикла — фиксация не возвращает её в mru (решение контролёра 2)', async () => {
+    const key = await threeTabs();
+
+    fireEvent.keyDown(window, { key: 'Tab', code: 'Tab', ctrlKey: true });
+    fireEvent.keyDown(window, { key: 'Tab', code: 'Tab', ctrlKey: true });
+    expect(activeTabOf(key)).toBe('terminal:a');
+    act(() => {
+      useLayoutStore.getState().apply(key, (layout) => closeTab(layout, 'terminal:a'));
+    });
+    const live = useLayoutStore.getState().mru[key];
+
+    fireEvent.keyUp(window, { key: 'Control' });
+    const mru = useLayoutStore.getState().mru[key] ?? [];
+    expect(mru).not.toContain('terminal:a');
+    expect(mru).toEqual(live);
+    expect(mru[0]).toBe(activeTabOf(key));
+  });
+
+  it('шаг на закрытую посреди цикла вкладку снимка её пропускает', async () => {
+    const key = await threeTabs();
+
+    fireEvent.keyDown(window, { key: 'Tab', code: 'Tab', ctrlKey: true });
+    expect(activeTabOf(key)).toBe('terminal:b');
+    act(() => {
+      useLayoutStore.getState().apply(key, (layout) => closeTab(layout, 'terminal:a'));
+    });
+    act(() => {
+      useLayoutStore.getState().apply(key, (layout) => focusTab(layout, 'terminal:b'));
+    });
+
+    // Снимок [C, B, A]: следующий шаг — A, её нет — цикл идёт дальше, к C.
+    fireEvent.keyDown(window, { key: 'Tab', code: 'Tab', ctrlKey: true });
+    expect(activeTabOf(key)).toBe('terminal:c');
+    fireEvent.keyUp(window, { key: 'Control' });
+    expect(useLayoutStore.getState().mru[key]).toEqual(['terminal:c', 'terminal:b']);
+  });
+
+  it('закрыта не снятая, а другая вкладка снимка — фиксация без неё, снятая первой', async () => {
+    const key = await threeTabs();
+
+    fireEvent.keyDown(window, { key: 'Tab', code: 'Tab', ctrlKey: true });
+    expect(activeTabOf(key)).toBe('terminal:b');
+    act(() => {
+      useLayoutStore.getState().apply(key, (layout) => closeTab(layout, 'terminal:a'));
+    });
+
+    fireEvent.keyUp(window, { key: 'Control' });
+    expect(useLayoutStore.getState().mru[key]).toEqual(['terminal:b', 'terminal:c']);
+  });
+});
+
+describe('AppShell — клавиши только у активной работы (тест 6 куска 6.1b)', () => {
+  it('две работы в LRU: ⌃1 и ⌘⇧] меняют вкладку активной, раскладка скрытой — та же ссылка', async () => {
+    await renderShell(fourWorks().slice(0, 2));
+    const hidden = keyOf('w-01');
+    const active = keyOf('w-02');
+    await activateWithTerminal(hidden, 's-01');
+    act(() => useLayoutStore.getState().apply(hidden, (layout) => openTab(layout, { kind: 'mail', id: tabId.mail() })));
+    await activateWithTerminal(active, 's-02');
+    act(() => useLayoutStore.getState().apply(active, (layout) => openTab(layout, { kind: 'mail', id: tabId.mail() })));
+    await flush();
+    expect(container(hidden)).not.toBeNull();
+    const hiddenLayout = useLayoutStore.getState().layouts[hidden];
+    expect(activeTabOf(active)).toBe(tabId.mail());
+
+    fireEvent.keyDown(window, { key: '1', code: 'Digit1', ctrlKey: true });
+    expect(activeTabOf(active)).toBe(tabId.terminal('s-02'));
+
+    fireEvent.keyDown(window, { key: '}', code: 'BracketRight', metaKey: true, shiftKey: true });
+    expect(activeTabOf(active)).toBe(tabId.mail());
+
+    expect(useLayoutStore.getState().layouts[hidden]).toBe(hiddenLayout);
   });
 });

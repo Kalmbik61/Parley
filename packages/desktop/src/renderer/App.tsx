@@ -210,13 +210,9 @@ export function App(): JSX.Element {
         isTargetVisible,
         entries: () => useWorksStore.getState().entries,
       }),
+      // Меню и клавиши — одна точка `run(id)` в `AppShell` (кусок 6.1b), и `settings.open` с
+      // `session.new` тоже: своего `onMenu` у `App` нет.
       wireFocusTargets(bridge),
-      // Меню раскладки, палитры и сайдбара слушает `AppShell` (куски 2.3–2.7);
-      // здесь — только диалоги, которые монтирует сам `App`.
-      bridge.app.onMenu((action) => {
-        if (action === 'settings') openSettingsDialog();
-        if (action === 'new-session') openNewSessionDialog(selectedParentId());
-      }),
     ];
 
     bridge

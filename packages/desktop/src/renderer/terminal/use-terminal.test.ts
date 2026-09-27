@@ -88,10 +88,9 @@ class ResizeObserverStub {
 }
 
 /** Поля 5.3, которые даёт `TerminalSurface`: здесь — заглушки. */
-const surfaceOptions = (): Pick<UseTerminalOptions, 'workKey' | 'cwd' | 'onFind' | 'onLink'> => ({
+const surfaceOptions = (): Pick<UseTerminalOptions, 'workKey' | 'cwd' | 'onLink'> => ({
   workKey: '/tmp/proj\u0000w-01',
   cwd: '/tmp/proj',
-  onFind: () => {},
   onLink: () => {},
 });
 
@@ -245,28 +244,21 @@ describe('useTerminal — клавиши', () => {
   });
 });
 
-describe('тест 10: ⌘K и ⌘F в терминале (кусок 5.3)', () => {
-  it('⌘K — clear, defaultPrevented, pty.input нет; ⌘F — onFind, defaultPrevented', async () => {
+// Тест 10 куска 5.3 переехал в `keys/handler.test.ts` и `AppShell.test.tsx` (кусок 6.1b): ⌘K и ⌘F
+// ловит обработчик окна в capture-фазе, до xterm они не доходят. Здесь — что своих веток у
+// терминала больше нет: ⌘K сам не чистит экран и, как любое ⌘-сочетание, агенту не уходит.
+describe('⌘K и ⌘F терминал себе не берёт (кусок 6.1b)', () => {
+  it('⌘K — ни clear, ни preventDefault, pty.input нет', async () => {
     const bridge = createFakeBridge();
     bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
-    const onFind = vi.fn();
-    renderTerminal(bridge, ref, { onFind });
+    renderTerminal(bridge);
     await waitFor(() => expect(xtermMock.terminals[0]?.keyHandler).not.toBeNull());
     const handler = xtermMock.terminals[0]?.keyHandler;
 
     const clearKey = new KeyboardEvent('keydown', { key: 'k', metaKey: true, cancelable: true });
     expect(handler?.(clearKey)).toBe(false);
-    expect(clearKey.defaultPrevented).toBe(true);
-    expect(xtermMock.callsOf('clear', 0)).toHaveLength(1);
-
-    const findKey = new KeyboardEvent('keydown', { key: 'f', metaKey: true, cancelable: true });
-    expect(handler?.(findKey)).toBe(false);
-    expect(findKey.defaultPrevented).toBe(true);
-    expect(onFind).toHaveBeenCalledTimes(1);
-
-    // Отпускание ⌘K не чистит второй раз, обычная k идёт агенту как раньше.
-    handler?.(new KeyboardEvent('keyup', { key: 'k', metaKey: true, cancelable: true }));
-    expect(xtermMock.callsOf('clear', 0)).toHaveLength(1);
+    expect(clearKey.defaultPrevented).toBe(false);
+    expect(xtermMock.callsOf('clear', 0)).toHaveLength(0);
     expect(bridge.notified.filter((n) => n.method === 'pty.input')).toEqual([]);
   });
 });

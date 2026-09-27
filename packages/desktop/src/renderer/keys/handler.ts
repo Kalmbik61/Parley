@@ -1,13 +1,58 @@
 /**
  * Единый обработчик клавиш окна (кусок 6.1a, спека 9.6). `resolveAction` — чистое решение
- * «кому нажатие»: полю или окну; `installKeyHandler` вешает его на `window`. Подключает
- * 6.1b — до этого старые обработчики `LayoutView`/`AppShell`/`use-terminal` на месте.
+ * «кому нажатие»: полю или окну; `installKeyHandler` вешает его на `window`. С 6.1b его
+ * ставит `AppShell` — единственный владелец сочетаний окна: прежние обработчики `LayoutView`,
+ * `AppShell` и `use-terminal` ушли, а пункт меню — только запасной путь для клика мышью.
  */
 import { ACTIONS, matchesAccelerator } from '../../shared/keybindings.js';
 import type { ActionDef, ActionId, KeyLike } from '../../shared/keybindings.js';
 import type { FocusContext } from './focus-context.js';
 
 export type ResolvedKey = ActionId | { kind: 'palette.row'; index: number }; // index 0–8 — ⌘1–9
+
+/**
+ * Действия с исполнителем: в 6.1b — ветки `run` в `AppShell`; 6.3 и этапы 7–9 дописывают свои.
+ * Прочие действия реестра нажатие не гасит, а клик пункта меню ничего не делает.
+ */
+export const IMPLEMENTED_ACTIONS: ReadonlySet<ActionId> = new Set<ActionId>([
+  'palette.open',
+  'work.new',
+  'session.new',
+  'settings.open',
+  'sidebar.left.toggle',
+  ...ACTIONS.filter((action) => action.id.startsWith('work.goto.') || action.id.startsWith('tab.goto.')).map((action) => action.id),
+  'work.prev',
+  'work.next',
+  'history.back',
+  'history.forward',
+  'group.splitRight',
+  'group.splitDown',
+  'group.prev',
+  'group.next',
+  'tab.close',
+  'tab.reopen',
+  'tab.prev',
+  'tab.next',
+  'tab.mruNext',
+  'tab.mruPrev',
+  'find',
+  'terminal.clear',
+]);
+
+/** Действию нужны методы хоста: без них оно недоступно, даже когда реализовано. */
+const REQUIRED_HOST_METHODS: Partial<Record<ActionId, readonly string[]>> = {
+  'wake.toggle': ['wake.pause', 'wake.resume'],
+};
+
+/**
+ * Реализовано и поддержано хостом. methods — hostMethods(useHostStore.getState().status) в момент
+ * нажатия: хук useHostSupports обработчику клавиш не годится. Действию, которому нужен метод хоста,
+ * — ещё и methods.has(метод): wake.toggle — wake.pause и wake.resume.
+ */
+export function isActionAvailable(id: ActionId, methods: ReadonlySet<string>): boolean {
+  if (!IMPLEMENTED_ACTIONS.has(id)) return false;
+  return (REQUIRED_HOST_METHODS[id] ?? []).every((method) => methods.has(method));
+}
 
 /** Сочетания Monaco: в реестре те же заняты `group.*`, `sidebar.right.toggle`, `work.*` — в редакторе они уступают. */
 const MONACO_KEYS: readonly string[] = [

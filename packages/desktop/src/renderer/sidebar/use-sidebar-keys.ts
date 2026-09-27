@@ -21,7 +21,7 @@
 
 import { useEffect, useRef, type FocusEvent, type KeyboardEvent, type RefObject } from 'react';
 import { create } from 'zustand';
-import { isTextEntryTarget } from '../layout/keys.js';
+import { focusContext } from '../keys/focus-context.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { useSidebarSectionsStore } from './use-sidebar-sections.js';
 
@@ -238,7 +238,7 @@ export function useSidebarKeys({ listRef, activeWorkKey, onActivateWork, onShowC
           related instanceof Element &&
           !list.contains(related) &&
           related.closest('[role="menu"], [role="dialog"]') === null &&
-          !isTextEntryTarget(target));
+          !(target instanceof Element && focusContext(target) === 'input'));
       if (!entered) {
         if (own !== null) setCursor(own);
         return;
