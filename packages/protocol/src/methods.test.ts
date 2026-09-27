@@ -31,6 +31,23 @@ describe('works.rename', () => {
     expect(parse('😀'.repeat(120)).success).toBe(true);
     expect(parse('я'.repeat(121)).success).toBe(false);
   });
+
+  it('невидимые символы формата — как пробелы: пустое отвергается, края обрезаются', () => {
+    for (const invisible of ['\u200B\u200B\u200B', '\u200C', '\u200D', '\u2060', '\uFEFF', ' \u200B \u2060 ']) {
+      expect(parse(invisible).success).toBe(false);
+    }
+    expect(parse('\u200B Новая\u200Dx \u2060')).toMatchObject({
+      success: true,
+      data: { title: 'Новая\u200Dx' },
+    });
+  });
+
+  it('сырая строка длиннее 480 UTF-16 отвергается до подсчёта кодовых точек', () => {
+    // После обрезки в обоих случаях 120 эмодзи; решает сырая длина: 480 — да, 481 — нет.
+    expect(parse(' '.repeat(120) + '😀'.repeat(120) + ' '.repeat(120)).success).toBe(true);
+    expect(parse(' '.repeat(121) + '😀'.repeat(120) + ' '.repeat(120)).success).toBe(false);
+    expect(parse(' '.repeat(481)).success).toBe(false);
+  });
 });
 
 describe('works.setStatus', () => {

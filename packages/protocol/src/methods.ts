@@ -8,6 +8,9 @@ export const sessionRef = z.object({
   sessionId: z.string(),
 });
 
+/** Края названия работы: пробелы и невидимые символы формата (ZWSP, ZWNJ, ZWJ, WJ, BOM). */
+const TITLE_EDGES = /^[\s\u200B-\u200D\u2060\uFEFF]+|[\s\u200B-\u200D\u2060\uFEFF]+$/g;
+
 /** Схемы параметров запросов (с ответом, с числовым `id`). */
 export const METHODS = {
   hello: z.object({ token: z.string(), protocol: z.number().int(), client: z.string() }),
@@ -18,14 +21,23 @@ export const METHODS = {
   'works.create': z.object({ projectPath: z.string(), title: z.string(), goal: z.string() }),
   'works.delete': z.object({ projectPath: z.string(), workId: z.string() }),
   // Предел — по кодовым точкам: `.max(120)` zod считает UTF-16, эмодзи шло бы за два.
+  // Сырой предел 480 единиц UTF-16 (4 × 120) — `title.length`, O(1): отсекает
+  // заведомый мусор до обрезки и обхода по кодовым точкам. Обрезка — та же, что
+  // у `renameWork` в core: невидимые символы формата по краям считаются
+  // пробелами, иначе название из одних ZWSP прошло бы.
   'works.rename': z.object({
     projectPath: z.string(),
     workId: z.string(),
     title: z
       .string()
-      .trim()
-      .min(1)
-      .refine((title) => [...title].length <= 120),
+      .refine((title) => title.length <= 480, { abort: true })
+      .transform((title) => title.replace(TITLE_EDGES, ''))
+      .pipe(
+        z
+          .string()
+          .min(1)
+          .refine((title) => [...title].length <= 120),
+      ),
   }),
   'works.setStatus': z.object({
     projectPath: z.string(),
