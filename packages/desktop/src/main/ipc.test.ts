@@ -50,6 +50,7 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore; roots?
   showNotification: ReturnType<typeof vi.fn>;
   takeFocusTarget: ReturnType<typeof vi.fn>;
   openPath: ReturnType<typeof vi.fn>;
+  saveDropImage: ReturnType<typeof vi.fn>;
 } {
   const ipcMain = new FakeIpcMain();
   const connection = {
@@ -82,6 +83,8 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore; roots?
   // Настоящие shell.openPath/showItemInFolder тесты не зовут никогда: открыли бы приложения
   // и Finder на экране человека (решение контролёра 5.2).
   const openPath = vi.fn().mockResolvedValue('');
+  // Настоящий буфер обмена тесты не читают (решение контролёра 5.4): main отдаёт путь подмены.
+  const saveDropImage = vi.fn().mockResolvedValue('/h/drops/a.png');
   const roots: RootsRegistry =
     overrides.roots ??
     ({
@@ -107,6 +110,7 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore; roots?
     showItemInFolder,
     roots,
     openPath,
+    saveDropImage,
   });
 
   return {
@@ -120,6 +124,7 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore; roots?
     showNotification,
     takeFocusTarget,
     openPath,
+    saveDropImage,
   };
 }
 
@@ -305,6 +310,30 @@ describe('registerIpc', () => {
     const paste = vi.fn();
     ipcMain.invokeWithEvent('app:paste', { sender: { paste } });
     expect(paste).toHaveBeenCalledTimes(1);
+  });
+
+  it('тест 9 куска 5.4: app:save-drop-image с clipboard зовёт saveDropImage, другой источник — отказ', async () => {
+    const { ipcMain, saveDropImage } = setup();
+    expect(await ipcMain.invoke('app:save-drop-image', 'clipboard')).toBe('/h/drops/a.png');
+    expect(saveDropImage).toHaveBeenCalledTimes(1);
+
+    saveDropImage.mockClear();
+    for (const source of ['file', '/etc/passwd', undefined, 42]) {
+      await expect(ipcMain.invoke('app:save-drop-image', source)).rejects.toSatisfy((error: unknown) => {
+        expect(decodeIpcError(error).code).toBe('bad_request');
+        return true;
+      });
+    }
+    expect(saveDropImage).not.toHaveBeenCalled();
+  });
+
+  it('тест 9 куска 5.4: отказ saveDropImage доходит с кодом failed', async () => {
+    const { ipcMain, saveDropImage } = setup();
+    saveDropImage.mockRejectedValue(new Error('EACCES'));
+    await expect(ipcMain.invoke('app:save-drop-image', 'clipboard')).rejects.toSatisfy((error: unknown) => {
+      expect(decodeIpcError(error)).toEqual({ code: 'failed', message: 'EACCES' });
+      return true;
+    });
   });
 
   it('app:set-appearance с неверным режимом отвергается', async () => {

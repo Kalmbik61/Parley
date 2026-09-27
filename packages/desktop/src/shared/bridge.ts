@@ -118,6 +118,16 @@ export interface HarnasBridge {
      * событие paste, что у ⌘V; execCommand('paste') в песочнице не работает.
      */
     paste(): void;
+    /**
+     * Путь файла на диске, брошенного на терминал (кусок 5.4, спека 8.5): `webUtils.getPathForFile`
+     * прелоада — в песочнице рендерер пути `File` не видит. '' — у `File` нет пути (синтетический).
+     */
+    pathForFile(file: File): string;
+    /**
+     * Картинка буфера обмена → PNG в `~/.harnas/desktop/drops` (кусок 5.4). Источник — только
+     * 'clipboard'; null — картинки нет или в буфере есть текст.
+     */
+    saveDropImage(source: 'clipboard'): Promise<string | null>;
   };
   /** Файловый API main (спека 10.7); в этапе 5 — только `stat` и `locate`. */
   files: {

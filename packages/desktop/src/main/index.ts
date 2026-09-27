@@ -1,8 +1,9 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, shell, systemPreferences } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, nativeTheme, Notification, shell, systemPreferences } from 'electron';
 import type { WorksSnapshot } from '@harnas/protocol';
 import { S } from '../shared/strings.js';
+import { cleanupDrops, dropsDir, saveImage } from './drops.js';
 import { registerFilesIpc } from './files/ipc.js';
 import { HostConnection } from './host-connection.js';
 import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
@@ -22,6 +23,37 @@ import { createUiStore, desktopUiPath } from './ui-store.js';
 import { createMainWindow, titlebarDoubleClickAction } from './window.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/** Скриншоты в `drops/` живут 7 суток (план, «Числа»). */
+const DROPS_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Картинка 1×1 для E2E (`HARNAS_DROPS=fake`): тест не трогает настоящий буфер обмена
+ * человека — ни читать его, ни писать в него (решение контролёра 5.4).
+ */
+const FAKE_DROP_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+/**
+ * PNG картинки из буфера обмена; null — картинки нет. `clipboard` Electron 44 — асинхронный,
+ * по образцу W3C (`read()` и `ClipboardItem.types`), `readImage` в нём больше нет. Картинку
+ * не в PNG (TIFF скриншота macOS) пересобирает `nativeImage`.
+ */
+async function clipboardPng(): Promise<Buffer | null> {
+  for (const item of await clipboard.read()) {
+    const type = item.types.includes('image/png') ? 'image/png' : item.types.find((name) => name.startsWith('image/'));
+    if (type === undefined) continue;
+    const blob = await item.getType(type);
+    if (!(blob instanceof Blob)) continue;
+    const bytes = Buffer.from(await blob.arrayBuffer());
+    if (type === 'image/png') return bytes;
+    const image = nativeImage.createFromBuffer(bytes);
+    if (!image.isEmpty()) return image.toPNG();
+  }
+  return null;
+}
 
 // При своём HARNAS_HOME (тесты, второй дом) у окна свой userData: лок одного
 // экземпляра тогда привязан к дому так же, как хост, и чужой дом его не держит.
@@ -169,6 +201,11 @@ if (!gotLock) {
     // Реестр корней файлов (кусок 5.2, спека 10.8). `works.list` — на каждое (пере)подключение:
     // снимок работ новому клиенту хост не шлёт, а первый `connect()` выше мог упасть.
     // `onStatus` отдаёт текущий статус сразу при подписке — уже поднятая связь читается тут же.
+    // Старые скриншоты `drops/` (кусок 5.4): только обычные файлы и сами ссылки, по lstat.
+    // В фоне — старт окна их не ждёт.
+    void cleanupDrops(dropsDir(), DROPS_MAX_AGE_MS).catch((error: unknown) => console.warn('[harnas] cleanupDrops', error));
+    const fakeDrops = process.env.HARNAS_DROPS === 'fake';
+
     const rootsSource: RootsSource = {
       list: () => connection.call('works.list', {}) as Promise<WorksSnapshot>,
       onChange: (listener) =>
@@ -209,6 +246,12 @@ if (!gotLock) {
         if (!logShell) return shell.openPath(path);
         shellLog.push({ action: 'openPath', path });
         return '';
+      },
+      saveDropImage: async () => {
+        if (fakeDrops) return saveImage({ png: FAKE_DROP_PNG, dir: dropsDir() });
+        // Есть текст — вставляется текст (спека 8.5): рендерер это уже проверил, main — для надёжности.
+        if ((await clipboard.readText()) !== '') return null;
+        return saveImage({ png: await clipboardPng(), dir: dropsDir() });
       },
       chooseFolder: async () => {
         const window = mainWindow;

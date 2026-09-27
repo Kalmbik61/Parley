@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@harnas/protocol';
 import type { AppNote, FocusTarget, HarnasBridge, HostStatus, MenuAction } from '../shared/bridge.js';
 import type { FileRoot, FileStat, Located } from '../shared/files-types.js';
@@ -132,6 +132,9 @@ const bridge = {
     paste: () => {
       ipcRenderer.send('app:paste');
     },
+    pathForFile: (file: File) => webUtils.getPathForFile(file),
+    saveDropImage: (source: 'clipboard') =>
+      ipcRenderer.invoke('app:save-drop-image', source) as Promise<string | null>,
   },
   files: {
     stat: (root: FileRoot, paths: string[]) =>

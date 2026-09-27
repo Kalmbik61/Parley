@@ -16,6 +16,7 @@ import type {
 import type { AppNote, FocusTarget, HarnasBridge, HostStatus, MenuAction } from '../../shared/bridge.js';
 import type { FileRoot, FileStat, Located } from '../../shared/files-types.js';
 import type { WorkLayout } from '../../shared/layout-types.js';
+import type { IpcErrorInfo } from '../../shared/ipc-error.js';
 import { rootKey } from '../../shared/work-keys.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { DEFAULT_UI, normalizeUi, type UiFile } from '../../shared/ui-types.js';
@@ -77,6 +78,9 @@ export interface FakeBridge extends HarnasBridge {
   readonly externalOpened: string[];
   /** Вызовы `app.paste` — по записи на вызов (кусок 5.3). */
   readonly pastes: number[];
+  /** Ответ app.saveDropImage: путь, null (картинки нет) или отказ — объект с code, как отказы подставного моста (кусок 5.4). */
+  setSaveDropImage(answer: string | null | IpcErrorInfo): void;
+  readonly saveDropImageCalls: Array<'clipboard'>;
 }
 
 export function createFakeBridge(): FakeBridge {
@@ -105,6 +109,8 @@ export function createFakeBridge(): FakeBridge {
   const revealedPaths: string[] = [];
   const externalOpened: string[] = [];
   const pastes: number[] = [];
+  let saveDropImageAnswer: string | null | IpcErrorInfo = null;
+  const saveDropImageCalls: Array<'clipboard'> = [];
   const layouts = new Map<string, WorkLayout>();
   let status: HostStatus = {
     state: 'connected',
@@ -144,6 +150,10 @@ export function createFakeBridge(): FakeBridge {
     revealedPaths,
     externalOpened,
     pastes,
+    setSaveDropImage: (answer) => {
+      saveDropImageAnswer = answer;
+    },
+    saveDropImageCalls,
     files: {
       stat: async (root, paths) => paths.map((path) => fileStats.get(`${rootKey(root)}\n${path}`) ?? null),
       locate: async (workKey, absPaths) => {
@@ -249,6 +259,14 @@ export function createFakeBridge(): FakeBridge {
       },
       paste: () => {
         pastes.push(pastes.length);
+      },
+      // Подставной путь по имени файла: у `File` jsdom пути на диске нет (кусок 5.4).
+      pathForFile: (file) => (file.name === '' ? '' : `/fake/${file.name}`),
+      saveDropImage: async (source) => {
+        saveDropImageCalls.push(source);
+        const answer = saveDropImageAnswer;
+        if (answer !== null && typeof answer === 'object') throw answer;
+        return answer;
       },
     },
 

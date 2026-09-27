@@ -150,6 +150,8 @@ export interface RegisterIpcOptions {
   roots: RootsRegistry;
   /** `shell.openPath`: '' — успех, иначе текст ошибки. В тестах и E2E — подмена, настоящий открыл бы приложение. */
   openPath: (absPath: string) => Promise<string>;
+  /** Картинка буфера → drops/ (main/index.ts: clipboard и saveImage); null — картинки нет или в буфере есть текст. */
+  saveDropImage: () => Promise<string | null>;
 }
 
 /**
@@ -175,6 +177,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     showItemInFolder,
     roots,
     openPath,
+    saveDropImage,
   } = options;
 
   ipcMain.handle(
@@ -314,6 +317,16 @@ export function registerIpc(options: RegisterIpcOptions): void {
   ipcMain.on('app:paste', (event) => {
     event.sender.paste();
   });
+
+  // Скриншот из буфера (кусок 5.4, спека 8.5). Источник — только 'clipboard': путь или
+  // байты картинки рендерер не передаёт, main сам читает буфер и сам выбирает имя в drops/.
+  ipcMain.handle(
+    'app:save-drop-image',
+    withIpcError(async (_event, source: unknown) => {
+      if (source !== 'clipboard') throw new HostError('bad_request', `invalid drop image source: ${String(source)}`);
+      return saveDropImage();
+    }),
+  );
 
   ipcMain.handle(
     'app:reveal-work',
