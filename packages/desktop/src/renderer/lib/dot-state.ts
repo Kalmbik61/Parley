@@ -9,7 +9,7 @@
  * «S03 закончила ход») намеренно — то же состояние, тот же текст.
  */
 
-import type { Activity, SessionStatus, WorkSession } from '@harnas/core';
+import type { Activity, SessionLifecycle, SessionStatus, WorkSession } from '@harnas/core';
 
 /**
  * Прежний единый статус из двух осей карты v2 — копия `displayStatus` из
@@ -76,6 +76,35 @@ export const STATE_WORDS: Readonly<Record<DotState, string>> = {
   done: 'готово',
   failed: 'ошибка',
 };
+
+/**
+ * Слово состояния рядом со значком — колонка таблицы спеки 4.2 (кусок 1.2
+ * плана окна; используют куски 1.3 и 3.3). Отдельно от старого `STATE_WORDS`
+ * намеренно: тексты спеки 4.2 другие («ждёт тебя», не «ждёт ответа», и т. д.),
+ * а `STATE_WORDS`/`dotColorVar` — код прежней палитры `--h-*` (раздел 4.9
+ * спеки), который уходит только в 1.3. У `exited` слово решает `lifecycle`:
+ * «закрыта» для `closed`, иначе — «спит» (сессия жива, просто не выведена).
+ */
+export function stateWord(state: DotState, lifecycle: SessionLifecycle): string {
+  switch (state) {
+    case 'working':
+      return 'работает';
+    case 'blocked':
+      return 'ждёт тебя';
+    case 'unseen':
+      return 'закончил · не просмотрено';
+    case 'idle':
+      return 'простаивает';
+    case 'pending':
+      return 'ожидает запуска';
+    case 'exited':
+      return lifecycle === 'closed' ? 'закрыта' : 'спит';
+    case 'done':
+      return 'готово';
+    case 'failed':
+      return 'сбой';
+  }
+}
 
 /**
  * Цвет точки по палитре (CSS-переменные темы — `theme/palettes.ts`). Роли те

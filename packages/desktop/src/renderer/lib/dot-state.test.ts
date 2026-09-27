@@ -5,6 +5,7 @@ import {
   dotColorVar,
   dotState,
   maxDotState,
+  stateWord,
   STATE_WORDS,
   type DotState,
 } from './dot-state.js';
@@ -77,6 +78,47 @@ describe('STATE_WORDS', () => {
   it('blocked и unseen совпадают с заголовками уведомлений', () => {
     expect(STATE_WORDS.blocked).toBe('ждёт ответа');
     expect(STATE_WORDS.unseen).toBe('закончила ход');
+  });
+});
+
+describe('stateWord', () => {
+  // Тест 6 куска 1.2 плана: девять строк таблицы спеки 4.2 (`exited` даёт две
+  // строки — по `lifecycle`). Второй параметр для остальных состояний не
+  // влияет на результат, но обязателен по сигнатуре — передаём правдоподобный.
+  it('working → «работает»', () => {
+    expect(stateWord('working', 'active')).toBe('работает');
+  });
+
+  it('blocked → «ждёт тебя»', () => {
+    expect(stateWord('blocked', 'active')).toBe('ждёт тебя');
+  });
+
+  it('unseen → «закончил · не просмотрено»', () => {
+    expect(stateWord('unseen', 'active')).toBe('закончил · не просмотрено');
+  });
+
+  it('idle → «простаивает»', () => {
+    expect(stateWord('idle', 'active')).toBe('простаивает');
+  });
+
+  it('pending → «ожидает запуска»', () => {
+    expect(stateWord('pending', 'pending')).toBe('ожидает запуска');
+  });
+
+  it('exited + sleeping → «спит»', () => {
+    expect(stateWord('exited', 'sleeping')).toBe('спит');
+  });
+
+  it('exited + closed → «закрыта»', () => {
+    expect(stateWord('exited', 'closed')).toBe('закрыта');
+  });
+
+  it('done → «готово»', () => {
+    expect(stateWord('done', 'closed')).toBe('готово');
+  });
+
+  it('failed → «сбой»', () => {
+    expect(stateWord('failed', 'closed')).toBe('сбой');
   });
 });
 

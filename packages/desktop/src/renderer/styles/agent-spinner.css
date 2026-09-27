@@ -1,0 +1,27 @@
+/*
+ * Кольцо состояния `working` — дословная копия `.agent-working-spinner` и
+ * `@keyframes agent-spinner-rotate` из Orca
+ * (https://github.com/Kalmbik61/orca-harnas, коммит acf8e679),
+ * src/renderer/src/assets/main.css:1590-1604 (спека 4.2, 4.8).
+ * Copyright (c) 2026 Lovecast Inc. Лицензия MIT — полный текст в NOTICE в
+ * корне репозитория.
+ *
+ * Комментарий Orca: вращение держится на компоузиторе — точечная смена стиля
+ * из JS раз в секунду вызывала подвисания ввода. Один шаг в кадр даёт вид
+ * непрерывного вращения (12 шагов/с) без частых пересчётов.
+ */
+@keyframes agent-spinner-rotate {
+  to {
+    transform: rotate(86400turn);
+  }
+}
+
+.agent-working-spinner {
+  animation: agent-spinner-rotate 86400s steps(1036800, end) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-working-spinner {
+    animation: none;
+  }
+}

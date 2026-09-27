@@ -34,6 +34,15 @@ SOFTWARE.
 - packages/desktop/src/renderer/styles/scrollbars.css — класс `.scrollbar-sleek`
   из src/renderer/src/assets/main.css.
 
+Скопированные файлы (кусок 1.2 плана «окно как у Orca»):
+- packages/desktop/src/renderer/styles/agent-spinner.css — класс
+  `.agent-working-spinner` и `@keyframes agent-spinner-rotate` из
+  src/renderer/src/assets/main.css:1590-1604.
+- packages/desktop/src/renderer/components/AgentStateDot.tsx — адаптация
+  src/renderer/src/components/AgentStateDot.tsx.
+- packages/desktop/src/renderer/components/AgentWorkingSpinner.tsx —
+  адаптация src/renderer/src/components/AgentWorkingSpinner.tsx.
+
 ------------------------------------------------------------------------------
 Geist
 ------------------------------------------------------------------------------
