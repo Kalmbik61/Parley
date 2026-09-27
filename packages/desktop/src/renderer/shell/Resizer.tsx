@@ -4,9 +4,21 @@
  * (без ре-рендера React на каждый `pointermove`), а в `store/ui.ts` (`onCommit`)
  * уходит только на `pointerup` — так раскладка не пишет `ui.json` десятки раз
  * за одно движение мыши.
+ *
+ * Поверх центра во время перетаскивания — прозрачный оверлей (спека 5.1:
+ * «поверх `<webview>` и Monaco кладётся прозрачный оверлей, чтобы они не
+ * перехватывали мышь», раунд исправлений 1, Important A1): `setPointerCapture`
+ * самого `Resizer` держит `pointermove`/`pointerup` независимо от того, что
+ * физически под курсором, но гостевой процесс `<webview>` — не часть
+ * host-документа, и то, что он не перехватит мышь сам по себе, не гарантия
+ * Electron, а наблюдение сегодня (в центре пока только dockview/xterm).
+ * `position: fixed` — растягивается на весь экран независимо от места
+ * `Resizer` в дереве, `relative` на самой ручке не создаёт containing block
+ * для `fixed` (это делают только `transform`/`filter`/`contain` и т. п.,
+ * которых на предках нет).
  */
 
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export function clampWidth(width: number, min: number, max: number): number {
   return Math.min(Math.max(width, min), max);
@@ -30,6 +42,17 @@ export function Resizer({ side, width, min, max, target, onCommit }: ResizerProp
   const dragStart = useRef<{ pointerX: number; startWidth: number } | null>(null);
   const pendingWidth = useRef(width);
   const rafId = useRef<number | null>(null);
+  // Единственное состояние React в этом компоненте: только чтобы включить/
+  // выключить оверлей в разметке — сама ширина по-прежнему идёт через рефы
+  // выше и лишних рендеров на `pointermove` не просит.
+  const [dragging, setDragging] = useState(false);
+
+  useEffect(
+    () => () => {
+      if (rafId.current !== null) cancelAnimationFrame(rafId.current);
+    },
+    [],
+  );
 
   const applyWidth = (next: number): void => {
     pendingWidth.current = next;
@@ -47,6 +70,7 @@ export function Resizer({ side, width, min, max, target, onCommit }: ResizerProp
     event.currentTarget.setPointerCapture?.(event.pointerId);
     dragStart.current = { pointerX: event.clientX, startWidth: width };
     pendingWidth.current = width;
+    setDragging(true);
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>): void => {
@@ -62,6 +86,7 @@ export function Resizer({ side, width, min, max, target, onCommit }: ResizerProp
   const endDrag = (): void => {
     if (dragStart.current === null) return;
     dragStart.current = null;
+    setDragging(false);
     onCommit(pendingWidth.current);
   };
 
@@ -76,6 +101,14 @@ export function Resizer({ side, width, min, max, target, onCommit }: ResizerProp
       onPointerCancel={endDrag}
     >
       <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border group-hover:bg-ring/50" />
+      {dragging ? (
+        // На весь экран, не только на центр: сам `Resizer` уже держит
+        // `pointermove`/`pointerup` через `setPointerCapture`, оверлею
+        // достаточно просто существовать поверх всего остального, чтобы
+        // ничего под курсором (в первую очередь — гостевые поверхности) не
+        // перехватило мышь по пути.
+        <div data-testid="resize-overlay" className="fixed inset-0 z-40 cursor-col-resize" />
+      ) : null}
     </div>
   );
 }

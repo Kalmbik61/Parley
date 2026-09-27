@@ -11,7 +11,7 @@
  * из `@harnas/core` только типы (`import type`) — рантайм `model-badge.ts`
  * идёт через `providers.ts`, который на верхнем уровне модуля трогает
  * `node:fs`, а песочница окна (`contextIsolation`, `sandbox`, без
- * `nodeIntegration` — `main/security.ts`) рантайм core не пропускает. Тот же
+ * `nodeIntegration` — `main/window.ts`) рантайм core не пропускает. Тот же
  * приём — в `lib/participant.ts` (`sessionTag`) и `lib/dot-state.ts`
  * (`displayStatus`).
  */

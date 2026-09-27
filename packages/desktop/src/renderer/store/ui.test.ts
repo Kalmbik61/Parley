@@ -143,7 +143,7 @@ describe('useUiStore.init', () => {
 describe('useUiStore.patchUi / setAppearance / setSidebar (кусок 2.3, тест 8)', () => {
   it('два патча подряд — оба в зеркале, app.saveUi получил их порознь по одному ключу', () => {
     const bridge = createFakeBridge();
-    useUiStore.getState().init(bridge);
+    const dispose = useUiStore.getState().init(bridge);
     const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
 
     useUiStore.getState().patchUi({ pinnedWorks: ['a'] });
@@ -153,28 +153,31 @@ describe('useUiStore.patchUi / setAppearance / setSidebar (кусок 2.3, те�
     expect(useUiStore.getState().ui.collapsedProjects).toEqual(['/p']);
     expect(saveUiSpy).toHaveBeenNthCalledWith(1, { pinnedWorks: ['a'] });
     expect(saveUiSpy).toHaveBeenNthCalledWith(2, { collapsedProjects: ['/p'] });
+    dispose();
   });
 
   it('setSidebar сливает патч с зеркалом и сохраняет open (тест 8)', () => {
     const bridge = createFakeBridge();
-    useUiStore.getState().init(bridge);
+    const dispose = useUiStore.getState().init(bridge);
     const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
 
     useUiStore.getState().setSidebar('left', { width: 300 });
 
     expect(useUiStore.getState().ui.leftSidebar).toEqual({ open: true, width: 300 });
     expect(saveUiSpy).toHaveBeenCalledWith({ leftSidebar: { open: true, width: 300 } });
+    dispose();
   });
 
   it('setAppearance зовёт bridge.app.setAppearance и меняет зеркало', () => {
     const bridge = createFakeBridge();
-    useUiStore.getState().init(bridge);
+    const dispose = useUiStore.getState().init(bridge);
     const setAppearanceSpy = vi.spyOn(bridge.app, 'setAppearance');
 
     useUiStore.getState().setAppearance('dark');
 
     expect(useUiStore.getState().ui.appearance).toBe('dark');
     expect(setAppearanceSpy).toHaveBeenCalledWith('dark');
+    dispose();
   });
 });
 

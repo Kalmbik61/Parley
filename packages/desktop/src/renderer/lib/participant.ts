@@ -2,7 +2,7 @@
  * Подпись сессии в строке сайдбара и в уведомлениях: короткий номер (`s-03` →
  * `S03`) плюс ярлык. `sessionTag` перенесена из `@harnas/core`
  * (`work/thread.ts`) значением, а не импортом типа: рендерер в песочнице
- * (`contextIsolation`, `sandbox`, без `nodeIntegration` — `security.ts`) не
+ * (`contextIsolation`, `sandbox`, без `nodeIntegration` — `window.ts`) не
  * может тянуть рантайм core — тот на верхнем уровне модуля трогает `node:fs`
  * и `node:url` (`work/mcp-config.ts`). Импорт типов из `@harnas/core` стирается
  * сборкой и безопасен, импорт значений — нет.

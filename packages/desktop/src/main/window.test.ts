@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { WebContents } from 'electron';
-import { guardNavigation, mainWindowOptions } from './window.js';
+import { guardNavigation, mainWindowOptions, titlebarDoubleClickAction } from './window.js';
 
 describe('mainWindowOptions', () => {
   it('тёмная тема: hiddenInset, светофор, минимальный размер, песочница (тест 1)', () => {
@@ -69,5 +69,15 @@ describe('guardNavigation', () => {
     expect(triggerWillNavigate('file:///app/index.html').defaultPrevented).toBe(false);
     expect(openHandler()).toEqual({ action: 'deny' });
     expect(onSpy).toHaveBeenCalledWith('will-navigate', expect.any(Function));
+  });
+});
+
+describe('titlebarDoubleClickAction (раунд исправлений 1, Minor A2)', () => {
+  it('Maximize → maximize, Minimize → minimize, None/пустая строка/незнакомое значение → none', () => {
+    expect(titlebarDoubleClickAction('Maximize')).toBe('maximize');
+    expect(titlebarDoubleClickAction('Minimize')).toBe('minimize');
+    expect(titlebarDoubleClickAction('None')).toBe('none');
+    expect(titlebarDoubleClickAction('')).toBe('none');
+    expect(titlebarDoubleClickAction('Something else')).toBe('none');
   });
 });

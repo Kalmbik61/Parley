@@ -47,6 +47,22 @@ export function guardNavigation(
 }
 
 /**
+ * Действие двойного клика по пустому месту заголовка (спека 5.1) — трансляция
+ * `AppleActionOnDoubleClick` систем­ных настроек macOS в решение окна. Чистая
+ * функция, а не часть `titlebarDoubleClick` в `main/index.ts` — ради теста без
+ * мока всего `electron` (раунд исправлений 1, Minor A2): `'None'` и любое
+ * другое/отсутствующее значение (ключ не задан) — «ничего не делать», а не
+ * молчаливый maximize, как было раньше.
+ */
+export type TitlebarDoubleClickAction = 'maximize' | 'minimize' | 'none';
+
+export function titlebarDoubleClickAction(appleActionOnDoubleClick: string): TitlebarDoubleClickAction {
+  if (appleActionOnDoubleClick === 'Minimize') return 'minimize';
+  if (appleActionOnDoubleClick === 'Maximize') return 'maximize';
+  return 'none';
+}
+
+/**
  * Окно с прежней защитой: `contextIsolation`, `sandbox`, `guardNavigation`.
  * Заменяет `createSecureWindow` (`security.ts`, удалён этим куском) — сама
  * загрузка страницы теперь тоже здесь, а не в вызывающем `main/index.ts`:

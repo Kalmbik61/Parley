@@ -8,7 +8,7 @@ import { createLayoutStore, desktopLayoutsPath } from './layout-store.js';
 import { createAppMenu } from './menu.js';
 import { captureShellEnv } from './shell-env.js';
 import { createUiStore, desktopUiPath } from './ui-store.js';
-import { createMainWindow } from './window.js';
+import { createMainWindow, titlebarDoubleClickAction } from './window.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -136,14 +136,16 @@ if (!gotLock) {
         const window = mainWindow;
         if (window === null || window.isDestroyed()) return;
         // Как ведёт себя родной заголовок macOS на двойной клик — настройка
-        // системы, а не наша (спека 5.1).
-        const action = systemPreferences.getUserDefault('AppleActionOnDoubleClick', 'string');
-        if (action === 'Minimize') {
-          window.minimize();
-          return;
+        // системы, а не наша (спека 5.1). 'None' (или незнакомое значение) —
+        // ничего не делать, а не молчаливый maximize (раунд исправлений 1, Minor A2).
+        const action = titlebarDoubleClickAction(
+          systemPreferences.getUserDefault('AppleActionOnDoubleClick', 'string'),
+        );
+        if (action === 'minimize') window.minimize();
+        else if (action === 'maximize') {
+          if (window.isMaximized()) window.unmaximize();
+          else window.maximize();
         }
-        if (window.isMaximized()) window.unmaximize();
-        else window.maximize();
       },
     });
     createAppMenu(() => mainWindow);

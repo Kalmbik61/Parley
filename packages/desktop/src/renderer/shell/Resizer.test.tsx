@@ -6,7 +6,7 @@
 
 import { createRef } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { clampWidth, Resizer } from './Resizer.js';
 
 afterEach(cleanup);
@@ -60,5 +60,71 @@ describe('Resizer (тест 4)', () => {
 
     // Курсор ушёл влево на 50 — у правого сайдбара это расширение на 50.
     expect(onCommit).toHaveBeenCalledWith(400);
+  });
+
+  it('во время перетаскивания в DOM есть прозрачный оверлей поверх центра, после отпускания — нет (раунд исправлений 1, Important A1)', () => {
+    const target = createRef<HTMLDivElement>();
+    const onCommit = vi.fn();
+    const { container } = render(
+      <>
+        <div ref={target} style={{ width: 280 }} />
+        <Resizer side="left" width={280} min={220} max={500} target={target} onCommit={onCommit} />
+      </>,
+    );
+    const handle = container.querySelector('[role="separator"]');
+    if (handle === null) throw new Error('ручка ресайза не найдена');
+
+    expect(screen.queryByTestId('resize-overlay')).toBeNull();
+
+    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 0 });
+    // Оверлей нужен, чтобы <webview>/Monaco не перехватывали мышь во время
+    // перетаскивания (спека 5.1) — без него хват указателя самого `Resizer`
+    // не гарантирован над гостевым процессом `<webview>`.
+    expect(screen.getByTestId('resize-overlay')).toBeTruthy();
+
+    fireEvent.pointerUp(handle, { pointerId: 1, clientX: 50 });
+    expect(screen.queryByTestId('resize-overlay')).toBeNull();
+  });
+
+  it('pointercancel тоже снимает оверлей', () => {
+    const target = createRef<HTMLDivElement>();
+    const onCommit = vi.fn();
+    const { container } = render(
+      <>
+        <div ref={target} style={{ width: 280 }} />
+        <Resizer side="left" width={280} min={220} max={500} target={target} onCommit={onCommit} />
+      </>,
+    );
+    const handle = container.querySelector('[role="separator"]');
+    if (handle === null) throw new Error('ручка ресайза не найдена');
+
+    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 0 });
+    expect(screen.getByTestId('resize-overlay')).toBeTruthy();
+
+    fireEvent.pointerCancel(handle, { pointerId: 1 });
+    expect(screen.queryByTestId('resize-overlay')).toBeNull();
+  });
+
+  it('отменяет запланированный requestAnimationFrame при размонтировании (раунд исправлений 1, Minor A4)', () => {
+    const target = createRef<HTMLDivElement>();
+    const onCommit = vi.fn();
+    const { container, unmount } = render(
+      <>
+        <div ref={target} style={{ width: 280 }} />
+        <Resizer side="left" width={280} min={220} max={500} target={target} onCommit={onCommit} />
+      </>,
+    );
+    const handle = container.querySelector('[role="separator"]');
+    if (handle === null) throw new Error('ручка ресайза не найдена');
+
+    const cancelSpy = vi.spyOn(window, 'cancelAnimationFrame');
+    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 0 });
+    // Планирует rAF, который к размонтированию ещё не успел сработать.
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 50 });
+
+    unmount();
+
+    expect(cancelSpy).toHaveBeenCalled();
+    cancelSpy.mockRestore();
   });
 });
