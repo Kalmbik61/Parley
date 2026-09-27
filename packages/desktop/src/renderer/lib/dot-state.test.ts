@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Activity, SessionStatus } from '@harnas/core';
-import { displayStatus, dotState, maxDotState, stateWord, type DotState } from './dot-state.js';
+import { displayStatus, dotState, stateWord, type DotState } from './dot-state.js';
 
 const STATUSES: SessionStatus[] = ['pending', 'active', 'exited', 'done', 'failed'];
 const ACTIVITIES: Array<Activity | null> = ['working', 'blocked', 'unseen', 'idle', null];
@@ -41,20 +41,6 @@ describe('dotState', () => {
     expect(table['active/unseen']).toBe('unseen');
     expect(table['active/idle']).toBe('idle');
     expect(table['active/null']).toBe('idle');
-  });
-});
-
-describe('maxDotState', () => {
-  it('null — сессий нет', () => {
-    expect(maxDotState([])).toBeNull();
-  });
-
-  it('порядок важности: blocked выше working выше unseen выше failed выше idle/pending/exited выше done', () => {
-    expect(maxDotState(['done', 'idle', 'blocked'])).toBe('blocked');
-    expect(maxDotState(['done', 'working'])).toBe('working');
-    expect(maxDotState(['exited', 'unseen'])).toBe('unseen');
-    expect(maxDotState(['done', 'exited'])).toBe('exited');
-    expect(maxDotState(['done'])).toBe('done');
   });
 });
 

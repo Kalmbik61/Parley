@@ -89,7 +89,7 @@ export function App(): JSX.Element {
       }),
       // trust-wait (кусок 4.3 плана worktree, спека 8.3): сессия в своём
       // worktree не отвечает с запуска — вероятно, ждёт доверия к папке в
-      // терминале claude/codex. Пометка строки — `SessionTree.tsx` (тот же
+      // терминале claude/codex. Пометка строки — `sidebar/SessionRow.tsx` (тот же
       // стор уведомлений), здесь только macOS-уведомление.
       bridge.on('host.notice', (notice) => {
         if (notice.kind !== 'trust-wait') return;

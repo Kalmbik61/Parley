@@ -61,14 +61,12 @@ export const S = {
   },
 
   /**
-   * Сайдбар работ: прежний (`Sidebar.tsx`, `SessionTree.tsx`, `SessionMenu.tsx`) и
-   * карточки куска 3.3 (`sidebar/WorkSidebar.tsx`, `WorkCard.tsx`, `ProjectGroup.tsx`).
+   * Сайдбар карточек (куски 3.3–3.5): `sidebar/WorkSidebar.tsx`, `WorkCard.tsx`,
+   * `ProjectGroup.tsx`, `SessionRow.tsx` и меню строки `SessionRowMenu.tsx`.
    */
   sidebar: {
-    heading: 'Workspaces',
     /** Кнопка верха сайдбара; «+» рисует значок рядом, в тексте его нет (раунд 1 куска 3.3). */
     addWorkspace: 'New workspace',
-    empty: 'No workspaces yet',
     /** Заголовок секции закреплённых работ (спека 6.1). */
     pinned: 'Pinned',
     /** Верх сайдбара — палитра; подпись ⌘K до 6.2. */

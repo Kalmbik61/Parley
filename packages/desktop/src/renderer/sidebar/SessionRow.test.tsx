@@ -1,6 +1,6 @@
 /**
  * Тесты 4, 11, 12, 13 куска 3.3: строка сессии карточки. Тест 12 переехал сюда из
- * `components/sidebar/SessionTree.test.tsx` (контракт перетаскивания 2.6).
+ * тестов прежнего дерева сессий (контракт перетаскивания 2.6), удалённого в 3.5.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

@@ -35,7 +35,7 @@ const term = (sessionId: string): string => `terminal:${sessionId}`;
 const tabSel = (tabId: string): string => `[role="tab"][data-tab-id="${tabId}"]`;
 const surfaceSel = (tabId: string): string => `[data-tab-id="${tabId}"][data-mount-id]`;
 // `data-session-id` уникален только внутри работы (хост нумерует s-01… в каждой),
-// поэтому строка сессии ищется внутри обёртки своей работы (`WorkList.tsx`).
+// поэтому строка сессии ищется внутри карточки своей работы (`sidebar/WorkCard.tsx`).
 const rowSel = (workKey: string, sessionId: string): string => `[data-work-key="${workKey}"] [data-session-id="${sessionId}"]`;
 const containerSel = (workKey: string): string => `[data-work-container="${workKey}"]`;
 

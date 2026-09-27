@@ -24,9 +24,8 @@
  *
  * Кусок 3.3 (спека 6.1–6.4): слева — сайдбар карточек `WorkSidebar`. Секции и
  * внимание для него (и для ⌘1–9, строки статуса в 3.4) считает `SidebarSectionsWriter`,
- * смонтированный здесь, а не в сайдбаре: ⌘B прячет сайдбар, а порядок должен жить. Прежний `Sidebar`
- * доступен до 3.5 за флагом `?sidebar=old` (`HARNAS_DESKTOP_SIDEBAR=old` в main) — для
- * сравнения.
+ * смонтированный здесь, а не в сайдбаре: ⌘B прячет сайдбар, а порядок должен жить. Прежний
+ * сайдбар и его флаг сравнения ушли в 3.5.
  *
  * Кусок 2.6 (спека 5.4): один `DndContext` на всё окно — строка сессии живёт
  * в сайдбаре, строка вкладок одной группы — в заголовке, зоны броска — в
@@ -49,7 +48,7 @@ import {
 } from '@dnd-kit/core';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
-import { refKey, type SessionRef } from '@harnas/protocol';
+import { refKey } from '@harnas/protocol';
 import type { HarnasBridge, HostStatus } from '../../shared/bridge.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { noticeText, S } from '../../shared/strings.js';
@@ -58,7 +57,6 @@ import { InterruptedBanner } from '../components/InterruptedBanner.js';
 import { CommandPalette } from '../components/palette/CommandPalette.js';
 import { SessionPicker, sessionCandidates } from '../components/palette/SessionPicker.js';
 import { CreateRoomDialog, type RoomCandidate } from '../components/rooms/CreateRoomDialog.js';
-import { Sidebar } from '../components/sidebar/Sidebar.js';
 import { visibleWorkOrder } from '../sidebar/sort.js';
 import { SidebarSectionsWriter, useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
 import { NewWorkComposer } from '../sidebar/NewWorkComposer.js';
@@ -185,9 +183,6 @@ export interface AppShellProps {
 
 export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps): JSX.Element {
   const activeWorkKey = useLayoutStore((state) => state.activeWorkKey);
-  // Флаг прежнего сайдбара читается один раз: `main/index.ts` ставит его в `search` до
-  // загрузки окна, за время жизни окна он не меняется.
-  const [oldSidebar] = useState(() => new URLSearchParams(location.search).get('sidebar') === 'old');
 
   // LRU контейнеров работ (кусок 2.5). Касание — прямо в рендере: контейнер
   // новой активной работы должен появиться в том же кадре, что и смена
@@ -437,10 +432,6 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   // Входы сайдбара (кусок 2.5): сначала работа, по которой кликнули,
   // становится активной (id `mail` общий на раскладку), затем вкладка
   // открывается в её раскладке.
-  const handleOpenSession = (key: string, ref: SessionRef): void =>
-    openTabInWork(key, { kind: 'terminal', id: tabId.terminal(ref.sessionId), sessionId: ref.sessionId });
-  const handleOpenChanges = (key: string, ref: SessionRef): void =>
-    openTabInWork(key, { kind: 'diff', id: tabId.diff(ref.sessionId, null), sessionId: ref.sessionId, commit: null });
   const handleOpenMail = (key: string): void => openTabInWork(key, { kind: 'mail', id: tabId.mail() });
   const handleOpenRoom = (key: string, roomId: string): void => openTabInWork(key, { kind: 'room', id: tabId.room(roomId), roomId });
 
@@ -456,25 +447,15 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
             <>
               <div ref={leftSidebarRef} style={{ width: ui.leftSidebar.width }} className="h-full shrink-0 overflow-hidden">
                 <ErrorBoundary title={S.shell.sidebarError}>
-                  {oldSidebar ? (
-                    <Sidebar
-                      bridge={bridge}
-                      onOpenSession={handleOpenSession}
-                      onOpenMail={handleOpenMail}
-                      onOpenRoom={handleOpenRoom}
-                      onOpenChanges={handleOpenChanges}
-                    />
-                  ) : (
-                    <WorkSidebar
-                      bridge={bridge}
-                      onActivateWork={(key) => useLayoutStore.getState().setActiveWork(key)}
-                      onOpenSession={(key, sessionId) =>
-                        openTabInWork(key, { kind: 'terminal', id: tabId.terminal(sessionId), sessionId })
-                      }
-                      onOpenMail={handleOpenMail}
-                      onOpenRoom={handleOpenRoom}
-                    />
-                  )}
+                  <WorkSidebar
+                    bridge={bridge}
+                    onActivateWork={(key) => useLayoutStore.getState().setActiveWork(key)}
+                    onOpenSession={(key, sessionId) =>
+                      openTabInWork(key, { kind: 'terminal', id: tabId.terminal(sessionId), sessionId })
+                    }
+                    onOpenMail={handleOpenMail}
+                    onOpenRoom={handleOpenRoom}
+                  />
                 </ErrorBoundary>
               </div>
               <Resizer

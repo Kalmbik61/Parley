@@ -886,10 +886,6 @@ describe('AppShell — меню history-back / history-forward (кусок 2.7)'
 // ---------------------------------------------------------------------------
 
 describe('AppShell — сайдбар карточек (кусок 3.3)', () => {
-  afterEach(() => {
-    window.history.replaceState(null, '', '/');
-  });
-
   it('карточка работы с data-work-key; «New workspace» открывает форму новой работы (тест 8)', async () => {
     await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
     expect(document.querySelector(`[data-work-key="${keyOf('w-01')}"]`)).not.toBeNull();
@@ -933,13 +929,6 @@ describe('AppShell — сайдбар карточек (кусок 3.3)', () => 
     act(() => useLayoutStore.getState().setActiveWork(keyOf('w-01')));
     fireEvent.click(document.querySelector(`[data-work-key="${keyOf('w-02')}"]`) as HTMLElement);
     expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
-  });
-
-  it('?sidebar=old — прежний сайдбар для сравнения до 3.5', async () => {
-    window.history.replaceState(null, '', '/?sidebar=old');
-    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
-    expect(document.querySelector('[data-work-sidebar]')).toBeNull();
-    expect(screen.getByText('Workspaces')).toBeTruthy();
   });
 });
 
