@@ -11,19 +11,32 @@
  * `openSessionIds` — тоже здесь и один раз на всю строку: одинаков для всех
  * вкладок группы (кандидаты `SessionPicker` по всей раскладке работы, не по
  * одной группе).
+ *
+ * Раунд исправлений 1 (ревью A, Important №2): строка — `role="tablist"`, а
+ * стрелки ←/→ между вкладками — тут, а не в `Tab.tsx`, потому что только
+ * строка целиком видит весь список вкладок сразу (по кругу — `wrapIndex`, тот
+ * же приём, что и у `layout/keys.ts`/`LayoutView.tsx`). Активация (Enter/Space)
+ * остаётся в `Tab.tsx` — она про САМУ вкладку, не про список.
+ *
+ * Колесо мыши (ревью A, Minor №4) держится на РУЧНОМ `addEventListener` с
+ * `{ passive: false }`, а не на пропе `onWheel`: React с 17-й версии сам вешает
+ * `wheel` пассивным слушателем на корень, и `event.preventDefault()` из
+ * синтетического обработчика тогда молча ничего не делает (проверено —
+ * `dispatchEvent` всё равно возвращает `true`, будто отмены не было).
  */
 
+import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Plus } from 'lucide-react';
 import type { WorkEntry } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
-import type { GroupNode, WorkLayout } from '../../shared/layout-types.js';
+import type { GroupNode } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { displayStatus, dotState } from '../lib/dot-state.js';
 import { activityFor, useActivityStore } from '../store/activity.js';
 import { useUiStore } from '../store/ui.js';
 import { Tab } from './Tab.js';
-import { groups } from './tree.js';
+import { openTerminalSessionIds } from './tree.js';
 import { tabMeta } from './tab-meta.js';
 import { useLayoutStore } from './store.js';
 
@@ -35,10 +48,9 @@ export interface TabStripProps {
   portal: boolean;
 }
 
-/** Id сессий, у которых уже открыт терминал в раскладке работы — кандидаты `SessionPicker` при «Разделить» (спека 5.2). */
-function openTerminalSessionIds(layout: WorkLayout | undefined): string[] {
-  if (layout === undefined) return [];
-  return groups(layout).flatMap((g) => g.tabs.filter((t) => t.kind === 'terminal').map((t) => t.sessionId));
+/** Индекс по кругу — стрелки в конце строки уводят на начало и наоборот. */
+function wrapIndex(index: number, length: number): number {
+  return ((index % length) + length) % length;
 }
 
 export function TabStrip({ workKey, group, entry, portal }: TabStripProps): JSX.Element {
@@ -46,8 +58,30 @@ export function TabStrip({ workKey, group, entry, portal }: TabStripProps): JSX.
   const activityByRef = useActivityStore((state) => state.byRef);
   const openSessionIds = openTerminalSessionIds(layout);
 
+  const tablistRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = tablistRef.current;
+    if (el === null) return undefined;
+    const handleWheel = (event: WheelEvent): void => {
+      if (event.deltaY === 0) return;
+      // Строке нечего прокручивать (вкладки помещаются целиком) — событию
+      // лучше дойти дальше как обычно, а не глохнуть тут без дела (ревью A,
+      // Minor №4: без этой проверки возможный прокручиваемый предок в будущем
+      // получил бы двойной эффект).
+      if (el.scrollWidth <= el.clientWidth) return;
+      el.scrollLeft += event.deltaY;
+      event.preventDefault();
+    };
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, []);
+
   const content = (
     <div
+      ref={tablistRef}
+      role="tablist"
+      aria-label={S.tabs.tablist}
       className={
         portal
           ? 'flex h-full min-w-0 flex-1 items-center overflow-x-auto'
@@ -58,9 +92,14 @@ export function TabStrip({ workKey, group, entry, portal }: TabStripProps): JSX.
         WebkitMaskImage:
           'linear-gradient(to right, transparent, black 12px, black calc(100% - 12px), transparent)',
       }}
-      onWheel={(event) => {
-        if (event.deltaY === 0) return;
-        event.currentTarget.scrollLeft += event.deltaY;
+      onKeyDown={(event) => {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+        const tabEls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]'));
+        const currentIndex = tabEls.indexOf(document.activeElement as HTMLElement);
+        if (currentIndex === -1 || tabEls.length === 0) return;
+        const delta = event.key === 'ArrowRight' ? 1 : -1;
+        tabEls[wrapIndex(currentIndex + delta, tabEls.length)]?.focus();
+        event.preventDefault();
       }}
     >
       {group.tabs.map((tab) => {

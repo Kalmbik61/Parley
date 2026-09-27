@@ -30,7 +30,7 @@ import { toast } from 'sonner';
 import type { WorkSession } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge, HostStatus } from '../../shared/bridge.js';
-import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
+import type { TabSpec } from '../../shared/layout-types.js';
 import { noticeText, S } from '../../shared/strings.js';
 import { LEFT_SIDEBAR } from '../../shared/ui-types.js';
 import { InterruptedBanner } from '../components/InterruptedBanner.js';
@@ -47,7 +47,7 @@ import { tabId } from '../layout/ids.js';
 import { LayoutView } from '../layout/LayoutView.js';
 import { useLayoutPersistence } from '../layout/persistence.js';
 import { useLayoutStore } from '../layout/store.js';
-import { focusGroup, groups, openTab, reopenClosed, splitGroup, type GroupSizes } from '../layout/tree.js';
+import { focusGroup, groups, openTab, openTerminalSessionIds, reopenClosed, splitGroup, type GroupSizes } from '../layout/tree.js';
 import { useNoticesStore } from '../store/notices.js';
 import { useUiStore } from '../store/ui.js';
 import { orderedWorks, useWorksStore } from '../store/works.js';
@@ -56,11 +56,6 @@ import { Landing } from './Landing.js';
 import { Resizer } from './Resizer.js';
 import { StatusBar } from './StatusBar.js';
 import { Titlebar } from './Titlebar.js';
-
-/** Id сессий, у которых уже открыт терминал в раскладке работы — кандидаты `SessionPicker` при «Разделить» (спека 5.2). */
-function openTerminalSessionIds(layout: WorkLayout): string[] {
-  return groups(layout).flatMap((group) => group.tabs.filter((tab) => tab.kind === 'terminal').map((tab) => tab.sessionId));
-}
 
 /**
  * Пиксельные размеры всех групп текущей раскладки — `GroupView.tsx` метит

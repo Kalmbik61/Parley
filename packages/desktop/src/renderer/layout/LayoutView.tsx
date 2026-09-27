@@ -11,9 +11,19 @@
  * номеру в активной группе), ⌘⇧[/⌘⇧] (соседняя вкладка активной группы) —
  * висят тут: `LayoutView` монтирован, только пока его работа активна, поэтому
  * слушатель на `window` всегда бьёт по правильной работе без доп. проверки.
+ *
+ * Раунд исправлений 1 (ревью A, Important №1): ⌃Tab/⌃⇧Tab держат зажатым ⌃, как
+ * в VS Code/Orca — повторные `Tab` идут дальше по СНИМКУ MRU, сделанному на
+ * первое нажатие (`mruSessionRef`), а не по живому списку. Живой список
+ * (`layout/store.ts#updateMru`) всё равно переставляется на КАЖДЫЙ
+ * промежуточный `focusTab` (это не в этом кус­ке трогать `store.ts`) — но раз
+ * снимок держит СВОЙ порядок в замыкании, эти промежуточные перестановки на
+ * навигацию по снимку не влияют. Настоящая перестановка MRU фиксируется только
+ * на отпускании ⌃ (`keyup Control`) или при потере фокуса окна — тогда снимок
+ * записывается в стор напрямую (`setState`, тот же приём, что и у тестов).
  */
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { useWorksStore } from '../store/works.js';
@@ -35,13 +45,35 @@ function wrapIndex(index: number, length: number): number {
   return ((index % length) + length) % length;
 }
 
+/** Снимок MRU на первое ⌃Tab и текущая позиция курсора в нём — живёт, пока ⌃ зажат. */
+interface MruSession {
+  snapshot: readonly string[];
+  index: number;
+}
+
 export function LayoutView({ workKey, bridge, fontFamily, fontSize }: LayoutViewProps): JSX.Element | null {
   const layout = useLayoutStore((state) => state.layouts[workKey]);
   const entries = useWorksStore((state) => state.entries);
   const entry = entries.find((item) => workKeyOf(item.projectPath, item.map.work.id) === workKey);
 
+  const mruSessionRef = useRef<MruSession | null>(null);
+
   useEffect(() => {
-    const handler = (event: KeyboardEvent): void => {
+    // Отпускание ⌃ (или потеря фокуса окна) фиксирует итог цикла: снятая
+    // вкладка встаёт первой, остальные снимка — следом, в прежнем порядке
+    // между собой (та же форма, что `history.ts#touchMru`, только по индексу
+    // снимка, а не по живому списку).
+    const commitMruSession = (): void => {
+      const session = mruSessionRef.current;
+      if (session === null) return;
+      mruSessionRef.current = null;
+      const target = session.snapshot[session.index];
+      if (target === undefined) return;
+      const rest = session.snapshot.filter((_, index) => index !== session.index);
+      useLayoutStore.setState((state) => ({ mru: { ...state.mru, [workKey]: [target, ...rest] } }));
+    };
+
+    const handleKeyDown = (event: KeyboardEvent): void => {
       const action = layoutKeyAction(event);
       if (action === null) return;
 
@@ -50,12 +82,17 @@ export function LayoutView({ workKey, bridge, fontFamily, fontSize }: LayoutView
       const activeGroup = groups(current).find((candidate) => candidate.id === current.activeGroupId);
 
       if (action.kind === 'mru') {
-        const list = useLayoutStore.getState().mru[workKey] ?? [];
-        // 0 — сама текущая вкладка (MRU обновляется на каждый фокус, спека 5.7):
-        // «вперёд» — позиция 1 (предыдущая), «назад» — последняя, круг из двух и
-        // более записей.
-        if (list.length < 2) return;
-        const tabId = list[wrapIndex(action.step, list.length)];
+        let session = mruSessionRef.current;
+        if (session === null) {
+          const snapshot = useLayoutStore.getState().mru[workKey] ?? [];
+          // 0 — сама текущая вкладка (MRU обновляется на каждый фокус, спека
+          // 5.7): цикл имеет смысл от двух записей.
+          if (snapshot.length < 2) return;
+          session = { snapshot, index: 0 };
+        }
+        session = { snapshot: session.snapshot, index: wrapIndex(session.index + action.step, session.snapshot.length) };
+        mruSessionRef.current = session;
+        const tabId = session.snapshot[session.index];
         if (tabId !== undefined) useLayoutStore.getState().apply(workKey, (l) => focusTab(l, tabId));
       } else if (action.kind === 'tab-index') {
         const tab = activeGroup?.tabs[action.index];
@@ -69,8 +106,22 @@ export function LayoutView({ workKey, bridge, fontFamily, fontSize }: LayoutView
       event.preventDefault();
     };
 
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    const handleKeyUp = (event: KeyboardEvent): void => {
+      if (event.key === 'Control') commitMruSession();
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', commitMruSession);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', commitMruSession);
+      // Смена активной работы посреди удержания ⌃ — редкий, но реальный
+      // случай (клик по карточке сайдбара мышью, не отпуская клавиатуру):
+      // снимок следующей работе не принадлежит, отбрасываем его без commit.
+      mruSessionRef.current = null;
+    };
   }, [workKey]);
 
   // Раскладка ещё не гидрирована (`layout/persistence.ts`, доля кадра сразу

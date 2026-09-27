@@ -8,6 +8,13 @@
  * а не активную группу работы — иначе `openPicker`/`splitGroup`, вызванные
  * позже из `AppShell.tsx` по выбору в `SessionPicker`, резали бы чужую,
  * реально активную группу (спека 5.3, тест 14).
+ *
+ * Раунд исправлений 1 (ревью A, Important №2): паттерн ARIA tab — `aria-selected`
+ * (состояние для скринридера, `data-active` его не заменяет) и roving tabindex
+ * (`tabIndex` 0 только у активной вкладки, -1 у остальных — Tab переходит в
+ * строку один раз, а не по каждой вкладке подряд); стрелки ←/→ между вкладками
+ * строки — в `TabStrip.tsx` (там виден весь список), тут — только Enter/Space,
+ * которые активируют САМУ эту вкладку, как и клик.
  */
 
 import { toast } from 'sonner';
@@ -88,6 +95,10 @@ export function Tab({ workKey, group, tab, meta, dot, isActive, openSessionIds }
     useUiStore.getState().openPicker({ workKey, direction, openSessionIds: [...openSessionIds] });
   };
 
+  const activateThis = (): void => {
+    useLayoutStore.getState().apply(workKey, (layout) => focusTab(layout, tab.id));
+  };
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -95,7 +106,14 @@ export function Tab({ workKey, group, tab, meta, dot, isActive, openSessionIds }
           role="tab"
           data-tab-id={tab.id}
           data-active={isActive}
-          onClick={() => useLayoutStore.getState().apply(workKey, (layout) => focusTab(layout, tab.id))}
+          aria-selected={isActive}
+          tabIndex={isActive ? 0 : -1}
+          onClick={activateThis}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            event.preventDefault();
+            activateThis();
+          }}
           onAuxClick={(event) => {
             if (event.button === 1) closeThis();
           }}

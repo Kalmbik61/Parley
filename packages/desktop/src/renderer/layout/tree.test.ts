@@ -11,6 +11,7 @@ import {
   groups,
   moveTab,
   openTab,
+  openTerminalSessionIds,
   parseWorkLayout,
   pruneLayout,
   reopenClosed,
@@ -880,6 +881,24 @@ describe('groups', () => {
     // ребёнком (row-сплит кладёт её справа) — глубокий обход даёт тот же порядок,
     // что и порядок создания.
     expect(groups(layout).map((g) => g.id)).toEqual(groupIds);
+  });
+});
+
+describe('openTerminalSessionIds (раунд исправлений 1, Minor №6: единый экспорт вместо копий в AppShell.tsx/TabStrip.tsx)', () => {
+  it('собирает id сессий терминальных вкладок по ВСЕЙ раскладке, не только активной группы', () => {
+    const first = freshTab();
+    const second = freshTab();
+    const room: TabSpec = { kind: 'room', id: tabId.room('r-1'), roomId: 'r-1' };
+    let layout = openTab(emptyLayout(), first, 'active');
+    const group = soleGroup(layout);
+    layout = splitGroup(layout, group.id, 'row', second, { [group.id]: { width: 800, height: 600 } }).layout;
+    layout = openTab(layout, room, 'active');
+
+    expect(openTerminalSessionIds(layout).sort()).toEqual([first.sessionId, second.sessionId].sort());
+  });
+
+  it('раскладка не гидрирована (undefined) — пустой список, не бросок', () => {
+    expect(openTerminalSessionIds(undefined)).toEqual([]);
   });
 });
 

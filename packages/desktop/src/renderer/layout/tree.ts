@@ -42,6 +42,20 @@ export function groups(layout: WorkLayout): GroupNode[] {
   return flattenGroups(layout.root);
 }
 
+/**
+ * Id сессий, у которых уже открыт терминал в раскладке работы — кандидаты
+ * `SessionPicker` при «Разделить» (спека 5.2, кусок 2.4). Раунд исправлений 1
+ * (ревью A, Minor №6): раньше была почти дословно продублирована в
+ * `shell/AppShell.tsx` и `layout/TabStrip.tsx` — один экспорт вместо двух копий.
+ * `layout: undefined` (раскладка ещё не гидрирована) — пустой список, не бросок:
+ * оба вызывающих места читают `layout` прямо из стора, где он до гидрации
+ * именно `undefined`, а не отсутствующий аргумент.
+ */
+export function openTerminalSessionIds(layout: WorkLayout | undefined): string[] {
+  if (layout === undefined) return [];
+  return groups(layout).flatMap((group) => group.tabs.filter((tab) => tab.kind === 'terminal').map((tab) => tab.sessionId));
+}
+
 function findGroupById(node: LayoutNode, id: string): GroupNode | null {
   if (node.type === 'group') return node.id === id ? node : null;
   return findGroupById(node.children[0], id) ?? findGroupById(node.children[1], id);

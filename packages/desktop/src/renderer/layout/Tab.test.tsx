@@ -143,3 +143,41 @@ describe('Tab — тест 11', () => {
     expect(activeClose.className).not.toContain('opacity-0');
   });
 });
+
+describe('Tab — раунд исправлений 1: доступность (ревью A, Important №2)', () => {
+  it('активная — aria-selected="true", tabIndex 0; неактивная — "false", -1 (roving tabindex)', () => {
+    const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
+    setLayoutWithGroup(group);
+
+    render(<Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={meta('A')} dot={null} isActive openSessionIds={[]} />);
+    const active = screen.getByRole('tab');
+    expect(active.getAttribute('aria-selected')).toBe('true');
+    expect(active.tabIndex).toBe(0);
+    cleanup();
+
+    render(<Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive={false} openSessionIds={[]} />);
+    const inactive = screen.getByRole('tab');
+    expect(inactive.getAttribute('aria-selected')).toBe('false');
+    expect(inactive.tabIndex).toBe(-1);
+  });
+
+  it('Enter на неактивной вкладке фокусирует её (как клик)', async () => {
+    const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
+    setLayoutWithGroup(group);
+
+    render(<Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive={false} openSessionIds={[]} />);
+    fireEvent.keyDown(screen.getByRole('tab'), { key: 'Enter' });
+
+    await vi.waitFor(() => expect(useLayoutStore.getState().layouts[WORK_KEY]?.root).toMatchObject({ activeTabId: 'b' }));
+  });
+
+  it('Пробел на неактивной вкладке тоже фокусирует её', async () => {
+    const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
+    setLayoutWithGroup(group);
+
+    render(<Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive={false} openSessionIds={[]} />);
+    fireEvent.keyDown(screen.getByRole('tab'), { key: ' ' });
+
+    await vi.waitFor(() => expect(useLayoutStore.getState().layouts[WORK_KEY]?.root).toMatchObject({ activeTabId: 'b' }));
+  });
+});

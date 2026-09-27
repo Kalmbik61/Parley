@@ -230,6 +230,8 @@ export const S = {
 
   /** Раскладка: строка вкладок и тела вкладок — `layout/*` (кусок 2.4, спека 5.3, 5.8, 5.10). */
   tabs: {
+    /** `aria-label` строки вкладок (`role="tablist"`) — раунд исправлений 1 куска 2.4. */
+    tablist: 'Tabs',
     mail: 'Mail',
     /** `Changes S02` без коммита, `Changes S02 · a1b2c3d` — с ним (первые 7 hex, спека 5.2). */
     diffTitle: (sessionTag: string, shortHash: string | null): string =>

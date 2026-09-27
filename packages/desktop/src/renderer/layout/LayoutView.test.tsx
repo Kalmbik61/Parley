@@ -6,9 +6,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { Room, WorkEntry, WorkSession } from '@harnas/core';
-import type { SplitNode } from '../../shared/layout-types.js';
+import type { GroupNode, SplitNode } from '../../shared/layout-types.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { useWorksStore } from '../store/works.js';
 import { EMPTY_HISTORY } from './history.js';
@@ -164,5 +164,79 @@ describe('LayoutView — тест 17', () => {
     // «общая» видно и в самой вкладке (заголовок из `tabMeta`), и в шапке
     // `RoomPanel` — оба места означают, что `entry`/`bridge` дошли до тела.
     expect(screen.getAllByText('общая').length).toBeGreaterThan(0);
+  });
+});
+
+describe('LayoutView — раунд исправлений 1: ⌃Tab держит зажатым ⌃ (VS Code/Orca)', () => {
+  function activeTabId(): string | null | undefined {
+    const root = useLayoutStore.getState().layouts[WORK_KEY]?.root;
+    return root?.type === 'group' ? root.activeTabId : undefined;
+  }
+
+  function setUpThreeTabs(): void {
+    // Три вкладки в одной группе, все — сессии из entry() плюс две добавочные.
+    const withThree: WorkEntry = {
+      ...entry(),
+      map: {
+        ...entry().map,
+        sessions: [session('a', ''), session('b', ''), session('c', '')],
+      },
+    };
+    useWorksStore.setState({ entries: [withThree], branches: {}, loading: false, error: null });
+
+    const group: GroupNode = {
+      type: 'group',
+      id: 'g1',
+      tabs: [
+        { kind: 'terminal', id: 'terminal:a', sessionId: 'a' },
+        { kind: 'terminal', id: 'terminal:b', sessionId: 'b' },
+        { kind: 'terminal', id: 'terminal:c', sessionId: 'c' },
+      ],
+      activeTabId: 'terminal:c',
+    };
+    useLayoutStore.setState({
+      activeWorkKey: WORK_KEY,
+      layouts: { [WORK_KEY]: { root: group, activeGroupId: 'g1', closedTabs: [] } },
+      hydrated: { [WORK_KEY]: true },
+      pending: {},
+      history: EMPTY_HISTORY,
+      // «Вкладки A,B,C открыты по порядку» → MRU (свежая первой): C,B,A.
+      mru: { [WORK_KEY]: ['terminal:c', 'terminal:b', 'terminal:a'] },
+      navigating: false,
+    });
+  }
+
+  it('⌃ удержан, Tab ×2 обходит MRU дальше двух последних; отпускание ⌃ фиксирует итог', async () => {
+    setUpThreeTabs();
+    render(<LayoutView workKey={WORK_KEY} bridge={bridge} fontFamily="Menlo" fontSize={13} />);
+    await flush();
+    expect(activeTabId()).toBe('terminal:c');
+
+    // ⌃ зажат — два Tab подряд, без keyup между ними.
+    fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true });
+    fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true });
+    expect(activeTabId()).toBe('terminal:a');
+    // Пока ⌃ зажат, живой MRU ещё не зафиксирован в ожидаемом порядке снимка —
+    // фиксация только на отпускании.
+    fireEvent.keyUp(window, { key: 'Control' });
+    expect(useLayoutStore.getState().mru[WORK_KEY]).toEqual(['terminal:a', 'terminal:c', 'terminal:b']);
+
+    // Одиночный ⌃Tab после фиксации — снимок берётся заново, из уже нового порядка.
+    fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true });
+    fireEvent.keyUp(window, { key: 'Control' });
+    expect(activeTabId()).toBe('terminal:c');
+  });
+
+  it('потеря фокуса окна во время удержания ⌃ тоже фиксирует итог цикла', async () => {
+    setUpThreeTabs();
+    render(<LayoutView workKey={WORK_KEY} bridge={bridge} fontFamily="Menlo" fontSize={13} />);
+    await flush();
+
+    fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true });
+    fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true });
+    expect(activeTabId()).toBe('terminal:a');
+
+    fireEvent(window, new FocusEvent('blur'));
+    expect(useLayoutStore.getState().mru[WORK_KEY]).toEqual(['terminal:a', 'terminal:c', 'terminal:b']);
   });
 });
