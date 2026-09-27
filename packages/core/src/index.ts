@@ -62,7 +62,7 @@ export {
   transitionSession,
 } from './work/map.js';
 export { displayStatus, historyStatus } from './work/status-view.js';
-export { isUnreadFor, recipientsOf, unreadFor } from './work/letters.js';
+export { isUnreadFor, markHumanRead, recipientsOf, unreadFor } from './work/letters.js';
 export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';
 export { addRoom, isDescendant, isMember, joinNotice, nextRoomId } from './work/rooms.js';
 export type { NewRoom } from './work/rooms.js';
