@@ -5,6 +5,7 @@ import type { ActivityEntry } from '../store/activity.js';
 import {
   ATTENTION_RANK,
   humanUnreadLetters,
+  isHumanUnread,
   roomUnreadForHuman,
   sessionAttention,
   workAttention,
@@ -90,6 +91,27 @@ describe('sessionAttention (1)', () => {
 
   it('ранги 4..0', () => {
     expect(ATTENTION_RANK).toEqual({ 'needs-you': 4, unseen: 3, working: 2, idle: 1, off: 0 });
+  });
+});
+
+// Тест 7 куска 4.2: таблица случаев теста 1 куска 4.1 (`markHumanRead` в core) дословно —
+// рантайм core окну недоступен, общего модуля нет, и правило должно совпадать с хостом.
+describe('isHumanUnread (7 куска 4.2)', () => {
+  it('таблица случаев «непрочитано человеком» теста 1 куска 4.1', () => {
+    // письмо S01 человеку → непрочитано; после отметки — уже нет
+    expect(isHumanUnread(letter({ id: 'm1', from: 's-01', to: ['human'] }))).toBe(true);
+    expect(isHumanUnread(letter({ id: 'm1', from: 's-01', to: ['human'], readBy: { human: '2026-09-27T11:00:00.000Z' } }))).toBe(false);
+    // письмо S01 человеку и S02, прочитанное S02, но не человеком → непрочитано
+    expect(
+      isHumanUnread(letter({ id: 'm2', from: 's-01', to: ['human', 's-02'], readBy: { 's-02': '2026-09-27T11:00:00.000Z' } })),
+    ).toBe(true);
+    // письмо S01 агенту S02 → не человеку
+    expect(isHumanUnread(letter({ id: 'm3', from: 's-01', to: ['s-02'] }))).toBe(false);
+    // сообщение комнаты от S02 → непрочитано; от человека → нет
+    expect(isHumanUnread(letter({ id: 'm4', from: 's-02', to: [], roomId: 'r-01' }))).toBe(true);
+    expect(isHumanUnread(letter({ id: 'm5', from: 'human', to: [], roomId: 'r-01' }))).toBe(false);
+    // письмо человека агенту S01 → нет
+    expect(isHumanUnread(letter({ id: 'm6', from: 'human', to: ['s-01'] }))).toBe(false);
   });
 });
 

@@ -43,22 +43,27 @@ export function sessionAttention(session: WorkSession, live: SessionActivity | n
   }
 }
 
-/** Прямые письма человеку (roomId === null, to содержит 'human'), не от человека, без readBy.human. */
-export function humanUnreadLetters(map: WorkMap): Message[] {
-  return map.messages.filter(
-    (message) =>
-      message.roomId === null &&
-      message.from !== HUMAN &&
-      message.to.includes(HUMAN) &&
-      message.readBy[HUMAN] === undefined,
+/**
+ * Не прочитано человеком по правилам 3.2: письмо ему или сообщение комнаты, не от него, без
+ * readBy.human. То же правило, что `unreadForHuman` в `core/work/letters.ts` (`mail.markRead`
+ * хоста): иначе окно отправляло бы на отметку то, что хост не отметит, и наоборот.
+ */
+export function isHumanUnread(message: Message): boolean {
+  return (
+    message.from !== HUMAN &&
+    message.readBy[HUMAN] === undefined &&
+    (message.roomId !== null || message.to.includes(HUMAN))
   );
 }
 
-/** Сообщения комнаты не от человека без readBy.human: человек — участник любой комнаты. */
+/** Прямые письма человеку (roomId === null) с isHumanUnread. */
+export function humanUnreadLetters(map: WorkMap): Message[] {
+  return map.messages.filter((message) => message.roomId === null && isHumanUnread(message));
+}
+
+/** Сообщения комнаты с isHumanUnread: человек — участник любой комнаты. */
 export function roomUnreadForHuman(map: WorkMap, roomId: string): number {
-  return map.messages.filter(
-    (message) => message.roomId === roomId && message.from !== HUMAN && message.readBy[HUMAN] === undefined,
-  ).length;
+  return map.messages.filter((message) => message.roomId === roomId && isHumanUnread(message)).length;
 }
 
 export interface WorkAttention {

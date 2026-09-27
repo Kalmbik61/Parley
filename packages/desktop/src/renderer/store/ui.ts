@@ -59,7 +59,13 @@ export interface UiState {
    * до первого кадра React.
    */
   dark: boolean;
+  /** Флаг по событиям `focus`/`blur` окна; начальное — `document.hasFocus()`. */
   windowFocused: boolean;
+  /**
+   * Документ виден (`visibilitychange`, кусок 4.2): свёрнутое или скрытое окно при фокусе
+   * не показывает терминал, и «просмотрено» тогда не ставится (спека 7.2).
+   */
+  documentVisible: boolean;
   /** `null` — состояние будильника ещё не пришло с хоста. */
   wakePaused: boolean | null;
   dialogs: DialogsState;
@@ -153,6 +159,7 @@ export const useUiStore = create<UiState>((set, get) => {
     dark:
       typeof matchMedia === 'undefined' ? false : matchMedia('(prefers-color-scheme: dark)').matches,
     windowFocused: typeof document === 'undefined' ? true : document.hasFocus(),
+    documentVisible: typeof document === 'undefined' ? true : document.visibilityState === 'visible',
     wakePaused: null,
     dialogs: CLOSED_DIALOGS,
     visibleSessionRefs: {},
@@ -270,14 +277,17 @@ export const useUiStore = create<UiState>((set, get) => {
 
       const onFocus = (): void => set({ windowFocused: true });
       const onBlur = (): void => set({ windowFocused: false });
+      const onVisibility = (): void => set({ documentVisible: document.visibilityState === 'visible' });
       window.addEventListener('focus', onFocus);
       window.addEventListener('blur', onBlur);
+      document.addEventListener('visibilitychange', onVisibility);
 
       return () => {
         disposed = true;
         unsubscribeWake();
         window.removeEventListener('focus', onFocus);
         window.removeEventListener('blur', onBlur);
+        document.removeEventListener('visibilitychange', onVisibility);
       };
     },
   };

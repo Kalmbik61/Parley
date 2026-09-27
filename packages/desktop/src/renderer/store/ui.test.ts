@@ -212,3 +212,42 @@ describe('useUiStore — палитра, выбор сессии (⌘D) и «С�
     expect(useUiStore.getState().dialogs.createRoom).toBeNull();
   });
 });
+
+// Тест 16 куска 4.2: видимость документа и фокус окна для «просмотрено» (спека 7.2).
+describe('useUiStore — documentVisible и windowFocused (тест 16 куска 4.2)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('начальное documentVisible — по document.visibilityState', async () => {
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    vi.resetModules();
+    const fresh = await import('./ui.js');
+    expect(fresh.useUiStore.getState().documentVisible).toBe(false);
+  });
+
+  it('visibilitychange в hidden → false, обратно → true; blur → windowFocused: false без document.hasFocus()', () => {
+    const state = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    const bridge = createFakeBridge();
+    const dispose = useUiStore.getState().init(bridge);
+    const hasFocus = vi.spyOn(document, 'hasFocus');
+
+    state.mockReturnValue('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(useUiStore.getState().documentVisible).toBe(false);
+    state.mockReturnValue('visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(useUiStore.getState().documentVisible).toBe(true);
+
+    window.dispatchEvent(new Event('blur'));
+    expect(useUiStore.getState().windowFocused).toBe(false);
+    window.dispatchEvent(new Event('focus'));
+    expect(useUiStore.getState().windowFocused).toBe(true);
+    expect(hasFocus).not.toHaveBeenCalled();
+
+    dispose();
+    state.mockReturnValue('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(useUiStore.getState().documentVisible).toBe(true);
+  });
+});
