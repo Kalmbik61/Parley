@@ -64,7 +64,7 @@ test.describe('панель терминала: ввод стаба и восс�
 
     let app = await electron.launch({ args: [mainEntry], env });
     let window = await app.firstWindow();
-    await expect(window.getByText('Работ пока нет')).toBeVisible();
+    await expect(window.getByTestId('landing')).toBeVisible();
 
     if (!(await hostSupportsPty(window))) {
       await app.close();

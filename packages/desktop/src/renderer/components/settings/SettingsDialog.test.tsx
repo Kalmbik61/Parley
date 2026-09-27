@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createFakeBridge } from '../../test-utils/fake-bridge.js';
 import { DEFAULT_UI } from '../../../shared/ui-types.js';
+import { useUiStore } from '../../store/ui.js';
 import { SettingsDialog } from './SettingsDialog.js';
 
 const CONFIG = {
@@ -33,8 +34,16 @@ const CONFIG = {
 
 afterEach(cleanup);
 
+/**
+ * Стор `store/ui.ts` — общий на файл (кусок 2.3): «Вид»/«Уведомления» читают
+ * его зеркало вместо своего `loadUi()`, поэтому `init(bridge)` — тут же, а не
+ * в компоненте, и на своём зеркале сбрасывается перед каждым тестом, чтобы
+ * прошлый тест не оставил, например, `appearance: 'dark'`.
+ */
 function openSettings(bridge: ReturnType<typeof createFakeBridge>, locked: Record<string, string> = {}): void {
   bridge.setHandler('settings.get', () => ({ config: CONFIG, locked }));
+  useUiStore.setState({ ui: DEFAULT_UI, uiLoaded: false });
+  useUiStore.getState().init(bridge);
   render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
 }
 

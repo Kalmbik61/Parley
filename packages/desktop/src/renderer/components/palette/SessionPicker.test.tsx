@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import type { WorkEntry, WorkSession } from '@harnas/core';
-import { panelId } from '../../lib/panel-id.js';
 import { SessionPicker, sessionCandidates } from './SessionPicker.js';
 
 afterEach(cleanup);
@@ -44,20 +43,14 @@ const entry: WorkEntry = {
   },
 };
 
-describe('sessionCandidates', () => {
-  it('не показывает сессии, у которых уже есть панель (тест 5)', () => {
-    const openId = panelId({
-      kind: 'terminal',
-      ref: { projectPath: '/tmp/w-01', workId: 'w-01', sessionId: 's-02' },
-      workKey: '/tmp/w-01 w-01',
-    });
-
-    const candidates = sessionCandidates(entry, new Set([openId]));
+describe('sessionCandidates (кусок 2.3, тест 12)', () => {
+  it('не показывает сессии из openSessionIds — набор строится из id сессий, id панелей в нём нет', () => {
+    const candidates = sessionCandidates(entry, new Set(['s-02']));
 
     expect(candidates.map((candidate) => candidate.ref.sessionId)).toEqual(['s-01', 's-03']);
   });
 
-  it('без открытых панелей — все сессии работы', () => {
+  it('пустой набор — все сессии работы', () => {
     const candidates = sessionCandidates(entry, new Set());
     expect(candidates.map((candidate) => candidate.ref.sessionId)).toEqual(['s-01', 's-02', 's-03']);
   });

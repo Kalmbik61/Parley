@@ -62,7 +62,7 @@ beforeEach(() => {
     selectedWorkKey: null,
     windowFocused: true,
     wakePaused: null,
-    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null }, settings: false },
+    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null }, settings: false, createRoom: null },
     lastSessionByWork: {},
   });
 });
@@ -87,7 +87,7 @@ describe('Sidebar', () => {
       selectedWorkKey: '/tmp/w-02 w-02',
       windowFocused: true,
       wakePaused: null,
-      dialogs: { newWork: false, newSession: { open: false, parentSessionId: null }, settings: false },
+      dialogs: { newWork: false, newSession: { open: false, parentSessionId: null }, settings: false, createRoom: null },
       lastSessionByWork: {},
     });
 

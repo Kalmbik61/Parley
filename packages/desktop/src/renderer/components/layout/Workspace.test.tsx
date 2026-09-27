@@ -111,11 +111,12 @@ beforeEach(() => {
     selectedWorkKey: null,
     windowFocused: true,
     wakePaused: null,
-    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null }, settings: false },
+    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null }, settings: false, createRoom: null },
     lastSessionByWork: {},
     activePanelId: null,
     visibleSessionRefs: {},
     recentSessionRefs: [],
+    picker: null,
   });
 });
 
@@ -176,6 +177,31 @@ describe('Workspace.openSession', () => {
     expect(bridge.calls.filter((call) => call.method === 'pty.attach' && sameRef(call.params, refA))).toHaveLength(2);
     expect(bridge.calls.filter((call) => call.method === 'pty.detach' && sameRef(call.params, refB))).toHaveLength(1);
     expect(state.terminals).toHaveLength(2);
+  });
+});
+
+describe('Workspace — split-right (кусок 2.3, тест 10)', () => {
+  it('зовёт store/ui.ts#openPicker с работой активной панели и id сессий её открытых терминалов', async () => {
+    const ws = renderWorkspace();
+    act(() => ws.current?.openSession(refA, workKey, 'S01'));
+    await flush();
+
+    act(() => bridge.emitMenu('split-right'));
+    await flush();
+
+    expect(useUiStore.getState().picker).toEqual({ workKey, direction: 'right', openSessionIds: ['s-01'] });
+  });
+
+  it('openBeside открывает вторую сессию рядом с активной панелью', async () => {
+    const ws = renderWorkspace();
+    act(() => ws.current?.openSession(refA, workKey, 'S01'));
+    await flush();
+
+    act(() => ws.current?.openBeside(refB, workKey, 'S02', 'right'));
+    await flush();
+
+    expect(state.terminals).toHaveLength(2);
+    expect(bridge.calls.filter((call) => call.method === 'pty.attach' && sameRef(call.params, refB))).toHaveLength(1);
   });
 });
 

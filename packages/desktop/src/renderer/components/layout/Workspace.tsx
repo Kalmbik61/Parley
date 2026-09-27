@@ -5,11 +5,12 @@
  * «Открыть сессию» — фокус на уже существующую панель (тот же `panelId`) или
  * новая вкладка в активной группе. Перетаскивание строки сайдбара — деление
  * по краю панели или вкладка в её группе, в зависимости от того, куда упал
- * курсор (`api.onDidDrop`, dockview сам решает край/центр). ⌘D/⇧⌘D открывают
- * `SessionPicker` и вставляют выбранную сессию справа/снизу от активной
- * панели. ⌘W закрывает активную панель (`pty.detach` — в `use-terminal.ts`,
- * через размонтирование при `removePanel`, не здесь). ⌘[/⌘] — соседняя
- * панель по порядку `api.panels`.
+ * курсор (`api.onDidDrop`, dockview сам решает край/центр). ⌘D/⇧⌘D зовут
+ * `openPicker` стора `store/ui.ts` — сам `SessionPicker` и палитру ⌘K с куска
+ * 2.3 монтирует `shell/AppShell.tsx`, а не этот компонент: они нужны и на
+ * экране `Landing`, где `Workspace` вовсе не смонтирован. ⌘W закрывает
+ * активную панель (`pty.detach` — в `use-terminal.ts`, через размонтирование
+ * при `removePanel`, не здесь). ⌘[/⌘] — соседняя панель по порядку `api.panels`.
  *
  * Заведён как `dockview` в плане куска, но пакет `dockview` на деле (v8)
  * реэкспортирует только `dockview-core` без React — раскладка на React/Vue/…
@@ -33,7 +34,6 @@ import {
 import type { WorkEntry } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../../shared/bridge.js';
-import { buildCommands } from '../../lib/commands.js';
 import { sessionRowLabel } from '../../lib/participant.js';
 import { panelId, specFromPanelId, workKey, type PanelSpec } from '../../lib/panel-id.js';
 import { useUiStore } from '../../store/ui.js';
@@ -41,8 +41,6 @@ import { PANEL_COMPONENTS, PanelHostContext } from './panel-registry.js';
 import { readDragPayload } from './sidebar-drag.js';
 import { useLayoutPersistence } from './use-layout-persistence.js';
 import { useWorksStore } from '../../store/works.js';
-import { CommandPalette } from '../palette/CommandPalette.js';
-import { SessionPicker, sessionCandidates } from '../palette/SessionPicker.js';
 
 export interface WorkspaceHandle {
   /** Сайдбар (клик по строке сессии) — фокус на панель или новая вкладка (тест 2). */
@@ -53,6 +51,14 @@ export interface WorkspaceHandle {
   openRoom(sessionWorkKey: string, roomId: string, title: string): void;
   /** «Изменения» из меню сессии (кусок 4.3) — тот же принцип: фокус или новая вкладка. */
   openChanges(ref: SessionRef, sessionWorkKey: string, title: string): void;
+  /**
+   * Выбор в `SessionPicker` (кусок 2.3) — открыть сессию рядом с ПОКА ЕЩЁ
+   * активной панелью (диалог модальный, между `openPicker` в `Workspace` и
+   * выбором в `AppShell` активная панель dockview не меняется).
+   */
+  openBeside(ref: SessionRef, sessionWorkKey: string, title: string, direction: 'right' | 'down'): void;
+  /** Палитра ⌘K (кусок 2.3, «Закрыть панель») — та же логика, что у ⌘W. */
+  closeActivePanel(): void;
 }
 
 export interface WorkspaceProps {
@@ -165,21 +171,6 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
   const worksLoaded = useWorksStore((state) => !state.loading);
   useLayoutPersistence({ api, bridge, works, worksLoaded });
 
-  const [picker, setPicker] = useState<{
-    direction: 'right' | 'below';
-    workKey: string;
-    referencePanel: string;
-  } | null>(null);
-  const [paletteOpen, setPaletteOpen] = useState(false);
-
-  // Только для команд палитры (кусок 2.3): `buildCommands` не читает
-  // `useUiStore` сам (см. комментарий в `lib/commands.ts`), поэтому нужную
-  // часть его состояния забираем сюда селекторами, чтобы список команд
-  // пересобирался при их изменении (например, подпись «пауза будильника»).
-  const lastSessionByWork = useUiStore((state) => state.lastSessionByWork);
-  const wakePaused = useUiStore((state) => state.wakePaused);
-  const recentSessionRefs = useUiStore((state) => state.recentSessionRefs);
-
   useImperativeHandle(
     handleRef,
     () => ({
@@ -187,6 +178,17 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
       openMail: openMailInGrid,
       openRoom: openRoomInGrid,
       openChanges: openChangesInGrid,
+      openBeside: (sessionRef, sessionWorkKey, title, direction) => {
+        const api = apiRef.current;
+        if (api === null) return;
+        const active = api.activePanel;
+        const position: PanelPosition | undefined =
+          active === undefined ? undefined : { direction: direction === 'right' ? 'right' : 'below', referencePanel: active.id };
+        openOrFocus(api, { kind: 'terminal', ref: sessionRef, workKey: sessionWorkKey }, title, position);
+      },
+      closeActivePanel: () => {
+        apiRef.current?.activePanel?.api.close();
+      },
     }),
     [],
   );
@@ -227,13 +229,6 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
   useEffect(
     () =>
       bridge.app.onMenu((action) => {
-        // Палитра открывается и без готового dockview (например, самый первый
-        // кадр окна) — ей самой API сетки не нужен, только командам внутри.
-        if (action === 'palette') {
-          setPaletteOpen(true);
-          return;
-        }
-
         const api = apiRef.current;
         if (api === null) return;
 
@@ -252,39 +247,25 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
         if (action === 'split-right' || action === 'split-down') {
           const active = api.activePanel;
           if (active === undefined) return;
-          setPicker({
-            direction: action === 'split-right' ? 'right' : 'below',
-            workKey: specOf(active).workKey,
-            referencePanel: active.id,
+          const activeWorkKey = specOf(active).workKey;
+          // Сессии ЭТОЙ работы, у которых уже открыт терминал — остальные и
+          // есть кандидаты `SessionPicker` (спека 5.2). Панели других видов
+          // (почта, комната, изменения) тут ни при чём — они не «сессия».
+          const openSessionIds = api.panels
+            .map((panel) => specFromPanelId(panel.id))
+            .filter((spec): spec is PanelSpec & { ref: SessionRef } =>
+              spec !== null && spec.kind === 'terminal' && spec.workKey === activeWorkKey && spec.ref !== undefined,
+            )
+            .map((spec) => spec.ref.sessionId);
+          useUiStore.getState().openPicker({
+            workKey: activeWorkKey,
+            direction: action === 'split-right' ? 'right' : 'down',
+            openSessionIds,
           });
         }
       }),
     [bridge],
   );
-
-  const pickerEntry = picker === null ? undefined : findWork(works, picker.workKey);
-  const openPanelIds = new Set(apiRef.current?.panels.map((panel) => panel.id) ?? []);
-  const pickerCandidates = pickerEntry === undefined ? [] : sessionCandidates(pickerEntry, openPanelIds);
-
-  const commands = buildCommands({
-    works,
-    lastSessionByWork,
-    wakePaused,
-    recentSessionRefs,
-    actions: {
-      openSession: openSessionInGrid,
-      openMail: openMailInGrid,
-      openRoom: openRoomInGrid,
-      closeActivePanel: () => apiRef.current?.activePanel?.api.close(),
-      newSession: () => {
-        const ui = useUiStore.getState();
-        ui.openNewSessionDialog(ui.selectedRef?.sessionId ?? null);
-      },
-      newWork: () => useUiStore.getState().openNewWorkDialog(),
-      settings: () => useUiStore.getState().openSettingsDialog(),
-      toggleWake: () => void useUiStore.getState().toggleWake(bridge),
-    },
-  });
 
   return (
     <PanelHostContext.Provider value={{ bridge, fontFamily, fontSize }}>
@@ -296,31 +277,6 @@ export const Workspace = forwardRef<WorkspaceHandle, WorkspaceProps>(function Wo
           onReady={handleReady}
         />
       </div>
-      <SessionPicker
-        open={picker !== null}
-        candidates={pickerCandidates}
-        onOpenChange={(open) => {
-          if (!open) setPicker(null);
-        }}
-        onSelect={(sessionRef) => {
-          const api = apiRef.current;
-          if (api === null || picker === null) return;
-          const label = sessionRowLabel(
-            sessionRef.sessionId,
-            pickerEntry?.map.sessions.find((session) => session.id === sessionRef.sessionId)?.label ?? '',
-          );
-          openOrFocus(api, { kind: 'terminal', ref: sessionRef, workKey: picker.workKey }, label, {
-            direction: picker.direction === 'right' ? 'right' : 'below',
-            referencePanel: picker.referencePanel,
-          });
-          setPicker(null);
-        }}
-      />
-      <CommandPalette
-        open={paletteOpen}
-        commands={commands}
-        onOpenChange={(open) => setPaletteOpen(open)}
-      />
     </PanelHostContext.Provider>
   );
 });

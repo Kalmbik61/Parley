@@ -1,21 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { refKey } from '@harnas/protocol';
 import type { HarnasConfig } from '@harnas/core';
 import { getHostClient } from './host-client.js';
 import type { HostStatus } from '../shared/bridge.js';
-import { Sidebar } from './components/sidebar/Sidebar.js';
-import { StatusBar } from './components/StatusBar.js';
-import { Workspace, type WorkspaceHandle } from './components/layout/Workspace.js';
-import { InterruptedBanner } from './components/InterruptedBanner.js';
+import { AppShell } from './shell/AppShell.js';
 import { NewSessionDialog } from './components/dialogs/NewSessionDialog.js';
 import { SettingsDialog } from './components/settings/SettingsDialog.js';
-import { sessionRowLabel } from './lib/participant.js';
-import { workKey, treeOrder } from './lib/tree-order.js';
 import { wireNotifications } from './notifications.js';
 import { useActivityStore } from './store/activity.js';
 import { useNoticesStore } from './store/notices.js';
 import { useUiStore } from './store/ui.js';
-import { orderedWorks, useWorksStore } from './store/works.js';
+import { useWorksStore } from './store/works.js';
 import { Toaster } from './ui/sonner.js';
 
 /**
@@ -28,10 +23,10 @@ const DEFAULT_FONT_FAMILY = "'SF Mono', Menlo, monospace";
 const DEFAULT_FONT_SIZE = 14;
 
 /**
- * Оболочка окна: сайдбар слева, справа — сетка панелей `Workspace` (кусок 2.1
- * плана окна; до него здесь была одна панель терминала на выбранную в
- * сайдбаре сессию). Пока хост не подключён (или не совпала версия), сайдбара
- * нет вовсе — показывать список работ, которые ещё нечем наполнить, бессмысленно.
+ * Экраны связи с хостом и общие для всего окна диалоги (кусок 1.10 плана
+ * окна; сама рамка окна — `shell/AppShell.tsx` с куска 2.3). Пока хост не
+ * подключён (или не совпала версия), оболочки нет вовсе — показывать сайдбар
+ * и раскладку, которые ещё нечем наполнить, бессмысленно.
  */
 export function App(): JSX.Element {
   const bridge = getHostClient();
@@ -43,12 +38,7 @@ export function App(): JSX.Element {
   // палитра TUI, окно её с куска 1.4 не читает и не показывает (спека 4.9).
   const [config, setConfig] = useState<HarnasConfig | null>(null);
 
-  const workspaceRef = useRef<WorkspaceHandle>(null);
-  const entries = useWorksStore((state) => state.entries);
-
   const selectedRef = useUiStore((state) => state.selectedRef);
-  const wakePaused = useUiStore((state) => state.wakePaused);
-  const toggleWake = useUiStore((state) => state.toggleWake);
   const newSessionOpen = useUiStore((state) => state.dialogs.newSession.open);
   const newSessionParent = useUiStore((state) => state.dialogs.newSession.parentSessionId);
   const openNewSessionDialog = useUiStore((state) => state.openNewSessionDialog);
@@ -56,28 +46,6 @@ export function App(): JSX.Element {
   const settingsOpen = useUiStore((state) => state.dialogs.settings);
   const openSettingsDialog = useUiStore((state) => state.openSettingsDialog);
   const closeSettingsDialog = useUiStore((state) => state.closeSettingsDialog);
-  const notices = useNoticesStore((state) => state.notices);
-
-  // ⌘1…⌘9 — n-я по порядку создания работа и её последняя открытая сессия
-  // (`store/ui.ts#lastSessionByWork`), иначе первая по дереву. Нет работы под
-  // этим номером или в ней ещё нет сессий — нажатие без последствий. Открытие
-  // (фокус на панель или новая вкладка) — забота `Workspace` (кусок 2.1).
-  const selectWorkByNumber = (n: number): void => {
-    const work = orderedWorks(useWorksStore.getState().entries)[n - 1];
-    if (work === undefined) return;
-    const key = workKey(work.projectPath, work.map.work.id);
-    const lastSessionId = useUiStore.getState().lastSessionByWork[key];
-    const session =
-      work.map.sessions.find(
-        (item) => lastSessionId !== undefined && item.id === lastSessionId,
-      ) ?? treeOrder(work.map.sessions)[0]?.session;
-    if (session === undefined) return;
-    workspaceRef.current?.openSession(
-      { projectPath: work.projectPath, workId: work.map.work.id, sessionId: session.id },
-      key,
-      sessionRowLabel(session.id, session.label),
-    );
-  };
 
   useEffect(() => getHostClient().onStatus(setStatus), []);
 
@@ -114,13 +82,13 @@ export function App(): JSX.Element {
         if (notice.kind !== 'trust-wait') return;
         bridge.app.notify({ title: 'Ждёт доверия к папке', body: notice.text });
       }),
-      // 'close-panel'/'split-right'/'split-down'/'prev-panel'/'next-panel' — у
-      // `Workspace` своя подписка на те же события: только он знает про
-      // dockview (кусок 2.1 плана окна).
+      // 'palette'/'new-work'/'toggle-left-sidebar'/'work-1…9' слушает
+      // `AppShell` (кусок 2.3) — у него для них есть ручка `Workspace` и
+      // зеркало сайдбаров; 'close-panel'/'split-right'/'split-down'/…
+      // по-прежнему у самого `Workspace`: только он знает про dockview.
       bridge.app.onMenu((action) => {
         if (action === 'settings') openSettingsDialog();
         if (action === 'new-session') openNewSessionDialog(useUiStore.getState().selectedRef?.sessionId ?? null);
-        if (action.startsWith('work-')) selectWorkByNumber(Number(action.slice('work-'.length)));
       }),
     ];
 
@@ -168,33 +136,12 @@ export function App(): JSX.Element {
   const newSessionWork = selectedRef ?? null;
 
   return (
-    <div className="flex h-screen flex-col bg-background text-foreground">
-      <InterruptedBanner bridge={bridge} />
-      <div className="flex min-h-0 flex-1">
-        <Sidebar
-          bridge={bridge}
-          onOpenSession={(key, ref, session) =>
-            workspaceRef.current?.openSession(ref, key, sessionRowLabel(session.id, session.label))
-          }
-          onOpenMail={(key) => workspaceRef.current?.openMail(key)}
-          onOpenRoom={(key, roomId, title) => workspaceRef.current?.openRoom(key, roomId, title)}
-          onOpenChanges={(key, ref, session) =>
-            workspaceRef.current?.openChanges(ref, key, sessionRowLabel(session.id, session.label))
-          }
-        />
-        <Workspace
-          ref={workspaceRef}
-          bridge={bridge}
-          works={entries}
-          fontFamily={config?.fontFamily ?? DEFAULT_FONT_FAMILY}
-          fontSize={config?.fontSize ?? DEFAULT_FONT_SIZE}
-        />
-      </div>
-      <StatusBar
+    <>
+      <AppShell
+        bridge={bridge}
         status={status}
-        lastNotice={notices[0] ?? null}
-        wakePaused={wakePaused}
-        onToggleWake={() => void toggleWake(bridge)}
+        fontFamily={config?.fontFamily ?? DEFAULT_FONT_FAMILY}
+        fontSize={config?.fontSize ?? DEFAULT_FONT_SIZE}
       />
       <NewSessionDialog
         open={newSessionOpen}
@@ -211,6 +158,6 @@ export function App(): JSX.Element {
         onConfigChange={setConfig}
       />
       <Toaster />
-    </div>
+    </>
   );
 }

@@ -10,12 +10,18 @@
  * HARNAS_…»; поля терминала/агентов сохраняются по одному через
  * `settings.set`, ошибка — под полем — то же самое, что и раньше, только
  * разложено по вкладкам.
+ *
+ * «Вид» и «Уведомления» с куска 2.3 читают и пишут зеркало `store/ui.ts`
+ * (`setAppearance`/`patchUi`), а не грузят `ui.json` сами: то же зеркало,
+ * что и у заголовка окна и сайдбаров — без этого две копии в разных
+ * компонентах могли бы разойтись (см. комментарий у `patchUi`).
  */
 
 import { useEffect, useState, type ReactNode } from 'react';
 import type { HarnasConfig } from '@harnas/core';
 import type { HarnasBridge } from '../../../shared/bridge.js';
 import type { Appearance, UiFile } from '../../../shared/ui-types.js';
+import { useUiStore } from '../../store/ui.js';
 import { Button } from '../../ui/button.js';
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from '../../ui/dialog.js';
 import { Input } from '../../ui/input.js';
@@ -92,7 +98,11 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
   const [locked, setLocked] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<FieldErrors>({});
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [ui, setUi] = useState<UiFile | null>(null);
+
+  const ui = useUiStore((state) => state.ui);
+  const uiLoaded = useUiStore((state) => state.uiLoaded);
+  const setAppearance = useUiStore((state) => state.setAppearance);
+  const patchUi = useUiStore((state) => state.patchUi);
 
   useEffect(() => {
     if (!open) return;
@@ -105,12 +115,6 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
         setLoadError(null);
       })
       .catch((err: unknown) => setLoadError(err instanceof Error ? err.message : String(err)));
-    bridge.app
-      .loadUi()
-      .then(setUi)
-      .catch(() => {
-        // Без ui.json секции «Вид» и «Уведомления» просто не покажут значений — не повод падать.
-      });
   }, [open, bridge]);
 
   const save = async (key: keyof HarnasConfig, value: string): Promise<void> => {
@@ -130,21 +134,15 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
     }
   };
 
-  // Главный процесс сам пишет `ui.json` при `setAppearance` (кусок 1.1) —
-  // отдельного `saveUi` для вида нет (тест 1 куска 1.4: «Тёмная» зовёт только
-  // `app.setAppearance('dark')»).
+  // Стор сам пишет `ui.json` (`setAppearance` → `app.setAppearance`, кусок
+  // 2.3) — отдельного `saveUi` для вида нет (тест 1 куска 1.4/тест 11 куска
+  // 2.3: «Тёмная» зовёт только `setAppearance('dark')»).
   const changeAppearance = (mode: Appearance): void => {
-    setUi((prev) => (prev === null ? prev : { ...prev, appearance: mode }));
-    void bridge.app.setAppearance(mode);
+    setAppearance(mode);
   };
 
   const toggleNotification = (key: keyof UiFile['notifications'], value: boolean): void => {
-    if (ui === null) return;
-    const notifications = { ...ui.notifications, [key]: value };
-    setUi({ ...ui, notifications });
-    bridge.app.saveUi({ notifications }).then(setUi).catch(() => {
-      // Уведомления — не критичный путь (этап 4 их ещё не читает) — не повод падать.
-    });
+    patchUi({ notifications: { ...ui.notifications, [key]: value } });
   };
 
   return (
@@ -163,7 +161,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
           </TabsList>
 
           <TabsContent value="appearance">
-            {ui !== null ? (
+            {uiLoaded ? (
               <ToggleGroup
                 type="single"
                 variant="outline"
@@ -265,7 +263,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
           </TabsContent>
 
           <TabsContent value="notifications" className="flex flex-col gap-3">
-            {ui !== null ? (
+            {uiLoaded ? (
               <>
                 <NotificationRow
                   label="нужен ты"

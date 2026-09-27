@@ -4,12 +4,12 @@
  * держит собственную панель — «выбрать» и «открыть» одинаково просят
  * `Workspace` сфокусировать существующую панель или завести новую вкладку.
  *
- * «Создать комнату с…» (кусок 3.6) заведён здесь же, локальным состоянием, а
- * не в `store/ui.ts`: диалог нужен только сайдбару, палитра ⌘K его не
- * открывает (в отличие от «новой сессии») — так же, как `NewWorkDialog` внизу.
+ * «+ работа» и «Создать комнату с…» (кусок 3.6) с куска 2.3 открывают свои
+ * диалоги через `store/ui.ts`, а не монтируют их сами: `NewWorkDialog` и
+ * `CreateRoomDialog` теперь общие для всей оболочки (`shell/AppShell.tsx`) —
+ * им нужно жить и над `Landing`, где сайдбар вовсе не смонтирован.
  */
 
-import { useState } from 'react';
 import type { Room, WorkSession } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import { sessionRowLabel } from '../../lib/participant.js';
@@ -18,8 +18,6 @@ import type { HarnasBridge } from '../../../shared/bridge.js';
 import { useActivityStore } from '../../store/activity.js';
 import { useUiStore } from '../../store/ui.js';
 import { orderedWorks, useWorksStore } from '../../store/works.js';
-import { NewWorkDialog } from '../dialogs/NewWorkDialog.js';
-import { CreateRoomDialog, type RoomCandidate } from '../rooms/CreateRoomDialog.js';
 import { WorkList } from './WorkList.js';
 
 export interface SidebarProps {
@@ -41,11 +39,8 @@ export function Sidebar({ bridge, onOpenSession, onOpenMail, onOpenRoom, onOpenC
 
   const selectedWorkKey = useUiStore((state) => state.selectedWorkKey);
   const selectedRef = useUiStore((state) => state.selectedRef);
-  const newWorkOpen = useUiStore((state) => state.dialogs.newWork);
   const openNewWorkDialog = useUiStore((state) => state.openNewWorkDialog);
-  const closeNewWorkDialog = useUiStore((state) => state.closeNewWorkDialog);
-
-  const [createRoomFor, setCreateRoomFor] = useState<{ ref: SessionRef; label: string } | null>(null);
+  const openCreateRoomDialog = useUiStore((state) => state.openCreateRoomDialog);
 
   const ordered = orderedWorks(entries);
 
@@ -68,23 +63,6 @@ export function Sidebar({ bridge, onOpenSession, onOpenMail, onOpenRoom, onOpenC
   };
   const handleOpenRoom = (key: string, room: Room): void => onOpenRoom(key, room.id, room.title);
   const handleOpenChanges = (key: string, ref: SessionRef, session: WorkSession): void => onOpenChanges(key, ref, session);
-
-  // Кандидаты «Создать комнату с…» — остальные сессии той же работы, кроме
-  // той, с которой открыли пункт меню (она уже обязательный участник).
-  const roomCandidates: RoomCandidate[] =
-    createRoomFor === null
-      ? []
-      : (entries
-          .find(
-            (item) =>
-              item.projectPath === createRoomFor.ref.projectPath && item.map.work.id === createRoomFor.ref.workId,
-          )
-          ?.map.sessions.filter((session) => session.id !== createRoomFor.ref.sessionId)
-          .map((session) => ({
-            id: session.id,
-            label: sessionRowLabel(session.id, session.label),
-            closed: session.lifecycle === 'closed',
-          })) ?? []);
 
   return (
     <div className="flex h-full w-72 shrink-0 flex-col border-r border-border bg-work-sidebar">
@@ -114,31 +92,19 @@ export function Sidebar({ bridge, onOpenSession, onOpenMail, onOpenRoom, onOpenC
             onStop={(ref) => handleStop(ref)}
             onClose={(ref) => handleClose(ref)}
             onDelete={(ref) => handleDelete(ref)}
-            onCreateRoom={(ref, session) => setCreateRoomFor({ ref, label: sessionRowLabel(session.id, session.label) })}
+            onCreateRoom={(ref, session) =>
+              openCreateRoomDialog({
+                projectPath: ref.projectPath,
+                workId: ref.workId,
+                requiredMember: { id: ref.sessionId, label: sessionRowLabel(session.id, session.label) },
+              })
+            }
             onOpenMail={onOpenMail}
             onOpenRoom={handleOpenRoom}
             onOpenChanges={(ref, session) => handleOpenChanges(workKey(ref.projectPath, ref.workId), ref, session)}
           />
         )}
       </div>
-      <NewWorkDialog
-        open={newWorkOpen}
-        bridge={bridge}
-        onOpenChange={(open) => (open ? openNewWorkDialog() : closeNewWorkDialog())}
-      />
-      {createRoomFor !== null ? (
-        <CreateRoomDialog
-          open
-          bridge={bridge}
-          projectPath={createRoomFor.ref.projectPath}
-          workId={createRoomFor.ref.workId}
-          requiredMember={{ id: createRoomFor.ref.sessionId, label: createRoomFor.label }}
-          candidates={roomCandidates}
-          onOpenChange={(open) => {
-            if (!open) setCreateRoomFor(null);
-          }}
-        />
-      ) : null}
     </div>
   );
 }

@@ -42,7 +42,7 @@ test.describe('окно поднимает хост и переживает ег
     });
 
     const window = await app.firstWindow();
-    await expect(window.getByText('Работ пока нет')).toBeVisible();
+    await expect(window.getByTestId('landing')).toBeVisible();
     expect(existsSync(path.join(home, 'host', 'host.sock'))).toBe(true);
 
     const requireType = await window.evaluate(() => typeof (globalThis as { require?: unknown }).require);

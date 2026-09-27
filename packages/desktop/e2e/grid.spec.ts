@@ -53,7 +53,7 @@ test.describe('сетка панелей: три терминала рядом (
 
     const app = await electron.launch({ args: [mainEntry], env });
     const window = await app.firstWindow();
-    await expect(window.getByText('Работ пока нет')).toBeVisible();
+    await expect(window.getByTestId('landing')).toBeVisible();
 
     if (!(await hostSupportsPty(window))) {
       await app.close();

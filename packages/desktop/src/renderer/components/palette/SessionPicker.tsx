@@ -1,14 +1,19 @@
 /**
- * ⌘D/⇧⌘D (кусок 2.1 плана окна): список сессий ТЕКУЩЕЙ работы, у которых ещё
- * нет панели в сетке — выбранная встаёт справа/снизу от активной панели
- * (`Workspace.tsx`). Полноценная палитра команд ⌘K — кусок 2.3, тут только
- * список сессий одной работы, без нечёткого поиска.
+ * ⌘D/⇧⌘D (кусок 2.1 плана окна, сигнатура — кусок 2.3): список сессий
+ * ТЕКУЩЕЙ работы, у которых ещё нет открытого терминала — выбранная встаёт
+ * справа/снизу от активной панели (`Workspace.tsx#openBeside`, `AppShell.tsx`).
+ * Полноценная палитра команд ⌘K — кусок 2.3, тут только список сессий одной
+ * работы, без нечёткого поиска.
+ *
+ * `openSessionIds` — id САМИХ СЕССИЙ, не id панелей dockview: `lib/panel-id.ts`
+ * этому компоненту с куска 2.3 не нужен (он живёт до 2.7, ради него отдельную
+ * зависимость заводить незачем) — `Workspace.tsx` сам знает, что панель у
+ * терминала. Файл живёт до 6.2 (полноценная палитра ⌘K).
  */
 
 import * as Dialog from '@radix-ui/react-dialog';
 import type { WorkEntry } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
-import { panelId, workKey } from '../../lib/panel-id.js';
 import { sessionRowLabel } from '../../lib/participant.js';
 import { treeOrder } from '../../lib/tree-order.js';
 
@@ -17,16 +22,14 @@ export interface SessionCandidate {
   label: string;
 }
 
-/** Сессии работы без открытой панели — `openPanelIds` берётся из `api.panels` (тест 5). */
-export function sessionCandidates(entry: WorkEntry, openPanelIds: ReadonlySet<string>): SessionCandidate[] {
-  const key = workKey(entry.projectPath, entry.map.work.id);
+/** Сессии работы, которых нет в `openSessionIds` (тест 12). */
+export function sessionCandidates(entry: WorkEntry, openSessionIds: ReadonlySet<string>): SessionCandidate[] {
   return treeOrder(entry.map.sessions)
-    .map(({ session }): SessionCandidate & { id: string } => {
-      const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
-      return { ref, label: sessionRowLabel(session.id, session.label), id: panelId({ kind: 'terminal', ref, workKey: key }) };
-    })
-    .filter((candidate) => !openPanelIds.has(candidate.id))
-    .map(({ ref, label }) => ({ ref, label }));
+    .filter(({ session }) => !openSessionIds.has(session.id))
+    .map(({ session }): SessionCandidate => ({
+      ref: { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id },
+      label: sessionRowLabel(session.id, session.label),
+    }));
 }
 
 export interface SessionPickerProps {
