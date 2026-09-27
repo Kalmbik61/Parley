@@ -10,8 +10,11 @@
  */
 
 import { useLayoutEffect, useRef, useState } from 'react';
-import type { WorkEntry } from '@harnas/core';
+import type { Message, WorkEntry } from '@harnas/core';
+import type { HarnasBridge } from '../../../shared/bridge.js';
 import { S } from '../../../shared/strings.js';
+import { isHumanUnread } from '../../attention/derive.js';
+import { useMarkRead } from '../../attention/use-mark-read.js';
 import { mailView } from '../../lib/mail-view.js';
 import { Decisions } from './Decisions.js';
 import { Letter } from './Letter.js';
@@ -20,18 +23,28 @@ export interface MailPanelProps {
   entry: WorkEntry;
   providers: Array<{ id: string; label: string }>;
   models: Record<string, string | null>;
+  bridge: HarnasBridge;
+  /** Работа активна (`LayoutBodyContext.active`): письма скрытой работы LRU не отмечаются прочитанными. */
+  active: boolean;
   onOpenExternal: (url: string) => void;
 }
 
 /** Ушёл ли пользователь от хвоста ленты дальше, чем на пиксельный люфт округления. */
 const BOTTOM_SLACK = 8;
 
+/** Письмо из карты не прочитано человеком; пропавшее из карты — не кандидат. */
+function isUnreadForHuman(message: Message | undefined): boolean {
+  return message !== undefined && isHumanUnread(message);
+}
+
 function isAtBottom(container: HTMLDivElement): boolean {
   return container.scrollHeight - container.scrollTop - container.clientHeight <= BOTTOM_SLACK;
 }
 
-export function MailPanel({ entry, providers, models, onOpenExternal }: MailPanelProps): JSX.Element {
+export function MailPanel({ entry, providers, models, bridge, active, onOpenExternal }: MailPanelProps): JSX.Element {
   const view = mailView(entry, providers, models);
+  const markRead = useMarkRead({ bridge, projectPath: entry.projectPath, workId: entry.map.work.id, active });
+  const messages = new Map(entry.map.messages.map((message) => [message.id, message]));
   const containerRef = useRef<HTMLDivElement | null>(null);
   // У хвоста лента держится всегда, пока читатель сам не отступил прокруткой —
   // `ref`, а не состояние: значение нужно синхронно внутри layout-эффекта и
@@ -94,7 +107,12 @@ export function MailPanel({ entry, providers, models, onOpenExternal }: MailPane
       <Decisions decisions={view.decisions} />
       <div ref={containerRef} onScroll={handleScroll} className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
         {view.letters.map((letter) => (
-          <Letter key={letter.id} letter={letter} onOpenExternal={onOpenExternal} />
+          <Letter
+            key={letter.id}
+            letter={letter}
+            onOpenExternal={onOpenExternal}
+            observeRef={markRead(letter.id, isUnreadForHuman(messages.get(letter.id)))}
+          />
         ))}
       </div>
     </div>

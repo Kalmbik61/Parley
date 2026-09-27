@@ -14,9 +14,11 @@ import { activityFor, useActivityStore } from '../../store/activity.js';
 export interface MailBodyProps {
   bridge: HarnasBridge;
   entry: WorkEntry;
+  /** Работа активна — `LayoutBodyContext.active` из `GroupView` (кусок 4.2). */
+  active: boolean;
 }
 
-export function MailBody({ bridge, entry }: MailBodyProps): JSX.Element {
+export function MailBody({ bridge, entry, active }: MailBodyProps): JSX.Element {
   const activityByRef = useActivityStore((state) => state.byRef);
   const [providers, setProviders] = useState<Array<{ id: string; label: string }>>([]);
 
@@ -39,6 +41,8 @@ export function MailBody({ bridge, entry }: MailBodyProps): JSX.Element {
       entry={entry}
       providers={providers}
       models={models}
+      bridge={bridge}
+      active={active}
       onOpenExternal={(url) => void bridge.app.openExternal(url)}
     />
   );

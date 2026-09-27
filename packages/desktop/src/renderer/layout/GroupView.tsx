@@ -82,11 +82,11 @@ function TabBody({ tab, entry, host, onMissing }: TabBodyProps): JSX.Element {
       return <TerminalBody />;
     }
     case 'mail':
-      return <MailBody bridge={host.bridge} entry={entry} />;
+      return <MailBody bridge={host.bridge} entry={entry} active={host.active} />;
     case 'room': {
       const room = entry.map.rooms.find((candidate) => candidate.id === tab.roomId);
       if (room === undefined) return <MissingBody kind="room" onClose={onMissing} />;
-      return <RoomBody bridge={host.bridge} entry={entry} roomId={tab.roomId} />;
+      return <RoomBody bridge={host.bridge} entry={entry} roomId={tab.roomId} active={host.active} />;
     }
     case 'diff': {
       const session: WorkSession | undefined = entry.map.sessions.find((candidate) => candidate.id === tab.sessionId);

@@ -17,9 +17,11 @@ export interface RoomBodyProps {
   bridge: HarnasBridge;
   entry: WorkEntry;
   roomId: string;
+  /** Работа активна — `LayoutBodyContext.active` из `GroupView` (кусок 4.2). */
+  active: boolean;
 }
 
-export function RoomBody({ bridge, entry, roomId }: RoomBodyProps): JSX.Element {
+export function RoomBody({ bridge, entry, roomId, active }: RoomBodyProps): JSX.Element {
   const activityByRef = useActivityStore((state) => state.byRef);
   const [providers, setProviders] = useState<Array<{ id: string; label: string }>>([]);
 
@@ -43,6 +45,7 @@ export function RoomBody({ bridge, entry, roomId }: RoomBodyProps): JSX.Element 
       providers={providers}
       models={models}
       bridge={bridge}
+      active={active}
       onOpenExternal={(url) => void bridge.app.openExternal(url)}
     />
   );

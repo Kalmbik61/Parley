@@ -26,6 +26,8 @@ import type { LetterView } from '../../lib/mail-view.js';
 export interface LetterProps {
   letter: LetterView;
   onOpenExternal: (url: string) => void;
+  /** Ref корня письма — наблюдатель «прочитано» панели (`attention/use-mark-read.ts`, кусок 4.2). */
+  observeRef?: (el: HTMLElement | null) => void;
 }
 
 /** Вид письма суффиксом заголовка: у заметки его нет (перенос из `room-view.ts`). */
@@ -64,9 +66,9 @@ function markdownComponents(onOpenExternal: (url: string) => void): Components {
   };
 }
 
-export function Letter({ letter, onOpenExternal }: LetterProps): JSX.Element {
+export function Letter({ letter, onOpenExternal, observeRef }: LetterProps): JSX.Element {
   return (
-    <div data-letter-id={letter.id} className="py-2">
+    <div ref={observeRef} data-letter-id={letter.id} className="py-2">
       <div className="flex items-center gap-1 text-xs text-muted-foreground">
         {letter.unread ? (
           <span aria-label={S.mail.unreadAriaLabel} className="text-foreground">
