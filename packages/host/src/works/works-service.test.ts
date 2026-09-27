@@ -1,7 +1,7 @@
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addSession,
   createWork,
@@ -78,16 +78,27 @@ describe('источники', () => {
     expect(ids.sort()).toEqual([`${projectA}:${a.work.id}`, `${projectB}:${b.work.id}`].sort());
   });
 
-  it('новая работа появляется не позже debounceMs + 50 мс', async () => {
-    const s = service({ debounceMs: 50 });
+  // Ожидание по условию, а не фиксированные 100 мс: с 087d3c8 индекс пишется
+  // последним, и отсчёт начинается одновременно с его fs-событием — задержка
+  // наблюдателя под нагрузкой не укладывалась в фиксированное окно. Дебаунс
+  // проверяется числом рассылок: записи карты, .bak и индекса склеиваются в одну.
+  it('новая работа появляется одной рассылкой works.changed', async () => {
+    const debounceMs = 50;
+    const s = service({ debounceMs });
     await s.start();
     expect(s.snapshot().entries).toHaveLength(0);
+    const changes = (): number => broadcasts.filter((item) => item.event === 'works.changed').length;
+    const before = changes();
 
     const work = await createWork(projectA, { title: 'Свежая' });
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    const ids = s.snapshot().entries.map((entry) => entry.map.work.id);
-    expect(ids).toContain(work.work.id);
+    await vi.waitFor(
+      () => expect(s.snapshot().entries.map((entry) => entry.map.work.id)).toContain(work.work.id),
+      { timeout: 1000, interval: 5 },
+    );
+    // Ещё несколько окон дебаунса: запоздавшая вторая рассылка успела бы прийти.
+    await new Promise((resolve) => setTimeout(resolve, debounceMs * 3));
+    expect(changes() - before).toBe(1);
   });
 
   it('новый проект в индексе подхватывается', async () => {

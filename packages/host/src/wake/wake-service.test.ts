@@ -52,6 +52,7 @@ let project = '';
 let claudeRoot = '';
 let codexRoot = '';
 let broadcasts: Array<{ event: EventName; data: unknown }>;
+let logErrors: string[] = [];
 let stoppers: Array<() => Promise<void> | void> = [];
 let extraEnv: string[] = [];
 
@@ -65,7 +66,7 @@ function fakeHost(): HostContext {
     version: '0.0.0',
     startedAt: new Date().toISOString(),
     paths: { dir: '', socket: '', token: '', pid: '', log: '' },
-    log: { info: () => {}, warn: () => {}, error: () => {} },
+    log: { info: () => {}, warn: () => {}, error: (message: string) => logErrors.push(message) },
     clients: () => [],
     liveSessions: () => 0,
     broadcast: (event, data) => broadcasts.push({ event, data: data as EventData<EventName> }),
@@ -82,6 +83,7 @@ beforeEach(async () => {
   codexRoot = await mkdtemp(path.join(tmpdir(), 'harnas-codex-'));
   process.env['HARNAS_HOME'] = home;
   broadcasts = [];
+  logErrors = [];
 });
 
 afterEach(async () => {
@@ -292,6 +294,38 @@ describe('WakeService', () => {
     );
     expect(cancelled).toBeDefined();
     expect((cancelled?.data as { ref: SessionRef }).ref).toEqual(ref);
+  });
+});
+
+describe('WakeService: сбой Enter указателя (кусок 5.1, раунд исправлений 2)', () => {
+  it('запись Enter бросает — будильник не падает, пишет в лог, предохранитель срабатывает, новое письмо доставляется', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { stream, pty, wake, ref } = await rig(sessionId, workId, {}, { pointerTimeoutMs: 400 });
+
+    // PTY «умер» между проверкой pid и записью Enter: текст указателя пишется, \r — бросает.
+    const write = pty.write;
+    let failing = true;
+    pty.write = (target, data) => {
+      if (failing && data === '\r') throw new Error('EIO: pty закрыт');
+      write(target, data);
+    };
+
+    await sendLetter(workId, sessionId);
+    await waitFor(() => logErrors.includes('Enter указателя не записался'), 3000);
+    expect(wake.inFlight(ref)).toBe(false);
+    expect(stream()).not.toContain(`echo: ${pointer(1)}`);
+
+    // Дальше попытку ведёт предохранитель указателя — по своим правилам.
+    await waitFor(
+      () => broadcasts.some((b) => b.event === 'host.notice' && (b.data as { kind: string }).kind === 'pointer-timeout'),
+      2000,
+    );
+
+    // Хост жив: следующее письмо снова печатается указателем и уходит Enter.
+    failing = false;
+    pty.input(ref, '\x15');
+    await sendLetter(workId, sessionId, 'второе письмо');
+    await waitFor(() => /echo: .*Новые письма \(\d+\)\. Вызови check_inbox\./.test(stream()), 3000);
   });
 });
 
