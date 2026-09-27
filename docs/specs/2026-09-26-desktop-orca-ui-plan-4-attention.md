@@ -64,8 +64,8 @@
     `markSeen`, обработчик `activity.seen`, `works` в `PtyMethodDeps`. Тесты зовут
     фабрику с подставным `works`. Тест «`pty.attach` … помечает активность увиденной»
     (`pty.test.ts:124`) утверждает обратное новому поведению — его заменяет тест 2;
-  - `packages/host/src/methods/works.ts` — `requireWork` экспортируется: его зовёт
-    `mail.ts`;
+  - `packages/host/src/methods/works.ts` — `requireWork` и `notFoundOnGone`
+    экспортируются: их зовёт `mail.ts`;
   - `packages/host/src/methods/index.ts` — регистрация;
   - `packages/desktop/src/renderer/lib/capabilities.ts` — `REQUIRED_METHODS` +
     `activity.seen`, `mail.markRead`.
@@ -80,6 +80,7 @@
  * и сообщениям комнат, не от самого человека. Уже прочитанные и чужие id пропускаются.
  * Возвращает, сколько отметок поставлено. work.updatedAt не сдвигается.
  * Подходящих id нет — 0 без updateMap: карта, индекс и .bak не переписываются.
+ * Карты нет — WorkNotFoundError, как у updateMap.
  */
 export async function markHumanRead(projectPath: string, workId: string, messageIds: string[]): Promise<number>;
 
@@ -95,9 +96,11 @@ export interface PtyMethodDeps {
   works: WorksService;   // activity.seen: есть ли сессия в снимке работ хоста
 }
 
-// host/methods/works.ts — в 3.1 была приватной
-/** Работы нет — HostError('not_found'): updateMap бросил бы обычный Error, и хост отдал бы internal. */
+// host/methods/works.ts — в 3.1 были приватными
+/** Работы нет или карта битая — HostError('not_found'), а не internal. */
 export async function requireWork(projectPath: string, workId: string): Promise<void>;
+/** WorkNotFoundError core (работу удалили, пока запись ждала map.lock) → HostError('not_found'); прочее — как есть. */
+export function notFoundOnGone(error: unknown): never;
 ```
 
 **Поведение**
@@ -114,8 +117,9 @@ export async function requireWork(projectPath: string, workId: string): Promise<
   снимает 4.2.
 - **`mail.markRead`:**
   - пустой результат — не ошибка: `{ marked: 0 }`;
-  - работы нет — `not_found`: обработчик сперва зовёт `requireWork`, как `works.rename`
-    в 3.1;
+  - работы нет — `not_found`, как у `works.rename` в 3.1: обработчик сперва зовёт
+    `requireWork`, а `WorkNotFoundError` из `markHumanRead` (работу удалили, пока запись
+    ждала `map.lock`) переводит `notFoundOnGone`;
   - запись карты — одна, `updateMap` на все id сразу;
   - подходящих id нет — записи нет вовсе: `markHumanRead` сперва читает карту и без
     подходящих id `updateMap` не зовёт. `updateMap` пишет индекс, `.bak` и карту всегда,
@@ -142,8 +146,9 @@ export async function requireWork(projectPath: string, workId: string): Promise<
 3. Хост: `activity.seen` зовёт `markSeen` ровно этой сессии; неизвестная (подставной
    `works.entry` её не знает) — без исключения и без вызова `markSeen`, хост живёт (тот
    же приём, что в тесте `94c5f8c`).
-4. Хост: `mail.markRead` для несуществующей работы → `not_found`, а не `internal`; 501
-   id — `bad_request` на схеме.
+4. Хост: `mail.markRead` для несуществующей работы → `not_found`, а не `internal`; работа
+   удалена во время записи (`markHumanRead` бросил `WorkNotFoundError`) — тоже
+   `not_found`; 501 id — `bad_request` на схеме.
 
 **Приёмка**
 - [ ] Все тесты зелёные во всех пакетах.
