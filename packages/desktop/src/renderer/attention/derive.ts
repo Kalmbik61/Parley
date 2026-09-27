@@ -9,6 +9,7 @@
 
 import type { Message, SessionActivity, WorkEntry, WorkMap, WorkSession } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
+import { isoMs } from '../lib/iso-time.js';
 import type { ActivityEntry } from '../store/activity.js';
 
 // Тот же литерал, что и `HUMAN` в `core/work/types.ts`: из core рендерер берёт только типы.
@@ -68,13 +69,13 @@ export interface WorkAttention {
   lastEventAt: string;                  // max(lastEventAt сессий, work.updatedAt, at последнего письма)
 }
 
-/** Более позднее из двух времён; неразборное время не обгоняет ничего. */
+/** Более позднее из двух времён; не-ISO время не обгоняет ничего. */
 function later(a: string, b: string | null): string {
   if (b === null) return a;
-  const tb = Date.parse(b);
-  if (Number.isNaN(tb)) return a;
-  const ta = Date.parse(a);
-  return Number.isNaN(ta) || tb > ta ? b : a;
+  const tb = isoMs(b);
+  if (tb === null) return a;
+  const ta = isoMs(a);
+  return ta === null || tb > ta ? b : a;
 }
 
 export function workAttention(entry: WorkEntry, activity: Record<string, ActivityEntry>): WorkAttention {

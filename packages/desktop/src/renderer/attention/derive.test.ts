@@ -157,4 +157,19 @@ describe('workAttention (4)', () => {
     expect(workAttention(e, withLive).lastEventAt).toBe('2026-09-27T13:00:00.000Z');
     expect(workAttention(entry([]), {}).lastEventAt).toBe('2026-09-27T09:00:00.000Z');
   });
+
+  it('не-ISO время письма или сессии не становится lastEventAt', () => {
+    for (const bad of ['w-9999', 's-01', '', 'garbage']) {
+      const e = entry([session('s-01')], [letter({ id: 'm1', from: 's-01', to: ['s-02'], at: bad })]);
+      const withLive = activityOf(e, { 's-01': live('idle', bad) });
+      expect(workAttention(e, withLive).lastEventAt).toBe('2026-09-27T09:00:00.000Z');
+    }
+  });
+
+  it('битый updatedAt уступает любому ISO; ISO с +00:00 сравнивается как время', () => {
+    const e = entry([], [letter({ id: 'm1', from: 's-01', to: ['s-02'], at: '2026-09-27T08:00:00+00:00' })], 'w-9999');
+    expect(workAttention(e, {}).lastEventAt).toBe('2026-09-27T08:00:00+00:00');
+    const later = entry([], [letter({ id: 'm1', from: 's-01', to: ['s-02'], at: '2026-09-27T09:00:01+00:00' })]);
+    expect(workAttention(later, {}).lastEventAt).toBe('2026-09-27T09:00:01+00:00');
+  });
 });

@@ -56,6 +56,22 @@ describe('compareWorks (5)', () => {
     expect(compareWorks(at('idle', t, '2026-01-01T00:00:00.000Z'), at('idle', t, '2026-02-01T00:00:00.000Z'))).toBeLessThan(0);
     expect(compareWorks(at('idle', t, '2026-02-01T00:00:00.000Z'), at('idle', t, '2026-01-01T00:00:00.000Z'))).toBeGreaterThan(0);
   });
+
+  it('не-ISO время не обгоняет настоящее: самое старое', () => {
+    const real = at('idle', '2026-09-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+    for (const bad of ['w-9999', 's-01', '', 'garbage', '2026-09-01']) {
+      expect(compareWorks(real, at('idle', bad, '2026-01-01T00:00:00.000Z'))).toBeLessThan(0);
+      expect(compareWorks(at('idle', bad, '2026-01-01T00:00:00.000Z'), real)).toBeGreaterThan(0);
+    }
+  });
+
+  it('ISO с миллисекундами и без, с Z и +00:00 сравниваются как время', () => {
+    const c = '2026-01-01T00:00:00.000Z';
+    expect(compareWorks(at('idle', '2026-09-27T10:00:00Z', c), at('idle', '2026-09-27T09:59:59.999+00:00', c))).toBeLessThan(0);
+    expect(compareWorks(at('idle', '2026-09-27T10:00:00+00:00', c), at('idle', '2026-09-27T10:00:00.000Z', c))).toBe(0);
+    // +03:00 — на три часа раньше того же настенного времени в Z.
+    expect(compareWorks(at('idle', '2026-09-27T12:00:00+03:00', c), at('idle', '2026-09-27T10:00:00Z', c))).toBeGreaterThan(0);
+  });
 });
 
 describe('buildSections (6)', () => {
@@ -123,6 +139,18 @@ describe('buildSections (6)', () => {
     const levels = { hot: att('needs-you'), cold: att('idle'), warm: att('working') };
     const sections = build([hot, cold, warm], levels, { pinned: [key(hot)] });
     expect(sections.map((s) => s.title)).toEqual(['Pinned', 'alpha', 'zeta']);
+  });
+
+  it('равные ранг, время и создание: порядок не зависит от порядка entries', () => {
+    const x = work('/p/a', 'wx');
+    const y = work('/p/a', 'wy');
+    const pinX = work('/p/b', 'px');
+    const pinY = work('/p/b', 'py');
+    const pinned = { pinned: [key(pinX), key(pinY)] };
+    const forward = build([x, y, pinX, pinY], {}, pinned);
+    const backward = build([pinY, pinX, y, x], {}, pinned);
+    expect(forward.map((s) => keysOf(s.works))).toEqual([['px', 'py'], ['wx', 'wy']]);
+    expect(backward.map((s) => keysOf(s.works))).toEqual(forward.map((s) => keysOf(s.works)));
   });
 
   it('collapsed — по collapsedProjects, works — показанные', () => {

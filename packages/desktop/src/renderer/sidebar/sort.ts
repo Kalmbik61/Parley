@@ -7,6 +7,7 @@
 import type { WorkEntry } from '@harnas/core';
 import { S } from '../../shared/strings.js';
 import { ATTENTION_RANK, type WorkAttention } from '../attention/derive.js';
+import { isoMs } from '../lib/iso-time.js';
 import { workKey } from '../lib/tree-order.js';
 
 export interface SidebarSection {
@@ -20,11 +21,8 @@ export interface SidebarSection {
 
 const PINNED_KEY = 'pinned';
 
-/** Время в мс; неразборное — самое старое, чтобы битая дата не поднимала карточку. */
-const msOf = (value: string): number => {
-  const ms = Date.parse(value);
-  return Number.isNaN(ms) ? Number.NEGATIVE_INFINITY : ms;
-};
+/** Время в мс; не-ISO — самое старое, чтобы битая дата не поднимала карточку. */
+const msOf = (value: string): number => isoMs(value) ?? Number.NEGATIVE_INFINITY;
 
 export function compareWorks(a: { attention: WorkAttention; createdAt: string }, b: typeof a): number {
   const byRank = ATTENTION_RANK[b.attention.level] - ATTENTION_RANK[a.attention.level];
@@ -71,10 +69,15 @@ export function buildSections(input: {
       const aDone = a.map.work.status === 'done' ? 1 : 0;
       const bDone = b.map.work.status === 'done' ? 1 : 0;
       if (aDone !== bDone) return aDone - bDone;
-      return compareWorks(
+      const byAttention = compareWorks(
         { attention: attentionOf(a), createdAt: a.map.work.createdAt },
         { attention: attentionOf(b), createdAt: b.map.work.createdAt },
       );
+      if (byAttention !== 0) return byAttention;
+      // Последний ключ — workKey: иначе при полном равенстве порядок зависел бы от порядка entries.
+      const aKey = workKey(a.projectPath, a.map.work.id);
+      const bKey = workKey(b.projectPath, b.map.work.id);
+      return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
     });
 
   const shown = entries.filter(
@@ -95,26 +98,31 @@ export function buildSections(input: {
 
   // Ранг группы — по показанным в ней работам: закреплённая поднимает «Закреплённые»,
   // а не свой проект. Время на порядок групп не влияет, иначе группы прыгали бы (6.1).
+  // Считается один раз на группу, а не в каждом вызове компаратора.
   const groupRank = (works: WorkEntry[]): number =>
     Math.max(...works.map((entry) => ATTENTION_RANK[attentionOf(entry).level]));
 
   const projects: SidebarSection[] = [...byProject.entries()]
     .map(([projectPath, works]) => ({
-      kind: 'project' as const,
-      key: projectPath,
-      title: folderName(projectPath),
-      projectPath,
-      works: sortWorks(works),
-      collapsed: collapsed.has(projectPath),
+      rank: groupRank(works),
+      section: {
+        kind: 'project' as const,
+        key: projectPath,
+        title: folderName(projectPath),
+        projectPath,
+        works: sortWorks(works),
+        collapsed: collapsed.has(projectPath),
+      },
     }))
     .sort((a, b) => {
-      const byRank = groupRank(b.works) - groupRank(a.works);
+      const byRank = b.rank - a.rank;
       if (byRank !== 0) return byRank;
-      const byName = a.title.localeCompare(b.title, 'en-US');
+      const byName = a.section.title.localeCompare(b.section.title, 'en-US');
       if (byName !== 0) return byName;
       // Две папки с одним именем в разных местах — порядок всё равно устойчивый.
-      return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
-    });
+      return a.section.key < b.section.key ? -1 : a.section.key > b.section.key ? 1 : 0;
+    })
+    .map(({ section }) => section);
 
   if (pinnedWorks.length === 0) return projects;
   return [

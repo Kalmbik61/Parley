@@ -66,6 +66,34 @@ describe('useDeferredOrder (7)', () => {
     expect(shape(result.current)).toEqual([['/p/a', 'w2', 'w1']]);
   });
 
+  it('новые изменения под указателем не продлевают срок: порядок не позже maxDeferMs от первого расхождения', () => {
+    const ids = ['w1', 'w2', 'w3'];
+    const { result, rerender } = renderHook(
+      ({ sections }: { sections: SidebarSection[] }) => useDeferredOrder(sections, true),
+      { initialProps: { sections: [section('/p/a', ids.map((id) => work(id)))] } },
+    );
+    // Порядок меняется каждые 500 мс, ни разу не возвращаясь к исходному.
+    const orders = [['w2', 'w1', 'w3'], ['w3', 'w1', 'w2'], ['w2', 'w3', 'w1'], ['w3', 'w2', 'w1'], ['w1', 'w3', 'w2'], ['w2', 'w1', 'w3']];
+    for (const order of orders.slice(0, 5)) {
+      rerender({ sections: [section('/p/a', order.map((id) => work(id)))] });
+      expect(shape(result.current)).toEqual([['/p/a', 'w1', 'w2', 'w3']]);
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+    }
+    // 2500 мс от первого расхождения: ещё держим.
+    rerender({ sections: [section('/p/a', orders[5]!.map((id) => work(id)))] });
+    expect(shape(result.current)).toEqual([['/p/a', 'w1', 'w2', 'w3']]);
+    act(() => {
+      vi.advanceTimersByTime(499);
+    });
+    expect(shape(result.current)).toEqual([['/p/a', 'w1', 'w2', 'w3']]);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(shape(result.current)).toEqual([['/p/a', 'w2', 'w1', 'w3']]);
+  });
+
   it('новая работа под указателем — в конце секции, удалённая пропадает сразу', () => {
     const first = [section('/p/a', [work('w1'), work('w2'), work('w3')])];
     const { result, rerender } = renderHook(
