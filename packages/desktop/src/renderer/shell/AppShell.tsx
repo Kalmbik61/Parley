@@ -73,7 +73,8 @@ import { createLru, type Lru } from '../layout/lru.js';
 import { SurfaceLayer } from '../layout/SurfaceLayer.js';
 import { useLayoutPersistence } from '../layout/persistence.js';
 import { selectedSessionOf, useLayoutStore } from '../layout/store.js';
-import { focusGroup, groups, openTab, openTerminalSessionIds, reopenClosed, splitGroup, type GroupSizes } from '../layout/tree.js';
+import { measureGroupSizes } from '../layout/measure.js';
+import { focusGroup, groups, openTab, openTerminalSessionIds, reopenClosed, splitGroup } from '../layout/tree.js';
 import { terminalSurfaces } from '../terminal/TerminalSurface.js';
 import { useNoticesStore } from '../store/notices.js';
 import { useUiStore } from '../store/ui.js';
@@ -83,23 +84,6 @@ import { Landing } from './Landing.js';
 import { Resizer } from './Resizer.js';
 import { StatusBar } from './StatusBar.js';
 import { Titlebar } from './Titlebar.js';
-
-/**
- * Пиксельные размеры всех групп текущей раскладки — `GroupView.tsx` метит
- * каждую `data-group-id` (кусок 2.4). Нужны `splitGroup`/`moveTab` для отказа
- * «слишком мало места» (спека 5.2, «Числа»: минимум 240×160): в jsdom
- * (компонентные тесты) `getBoundingClientRect` без подмены дал бы одни нули.
- */
-function measureGroupSizes(): GroupSizes {
-  const sizes: GroupSizes = {};
-  for (const element of document.querySelectorAll<HTMLElement>('[data-group-id]')) {
-    const id = element.dataset.groupId;
-    if (id === undefined) continue;
-    const rect = element.getBoundingClientRect();
-    sizes[id] = { width: rect.width, height: rect.height };
-  }
-  return sizes;
-}
 
 /**
  * Ярлык предмета в `DragOverlay`: заголовок вкладки или строка сессии активной
@@ -395,12 +379,14 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
 
   // Кандидаты «Создать комнату с…» — остальные сессии той же работы, кроме
   // обязательного участника (сессии, с которой открыли пункт меню в сайдбаре).
+  // «New room» из меню карточки (кусок 3.4) обязательного не знает — кандидаты все.
+  const requiredMemberId = createRoom?.requiredMember?.id ?? null;
   const roomCandidates: RoomCandidate[] =
     createRoom === null
       ? []
       : (entries
           .find((item) => item.projectPath === createRoom.projectPath && item.map.work.id === createRoom.workId)
-          ?.map.sessions.filter((session) => session.id !== createRoom.requiredMember.id)
+          ?.map.sessions.filter((session) => session.id !== requiredMemberId)
           .map((session) => ({
             id: session.id,
             label: sessionRowLabel(session.id, session.label),
@@ -439,11 +425,13 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
                     />
                   ) : (
                     <WorkSidebar
+                      bridge={bridge}
                       onActivateWork={(key) => useLayoutStore.getState().setActiveWork(key)}
                       onOpenSession={(key, sessionId) =>
                         openTabInWork(key, { kind: 'terminal', id: tabId.terminal(sessionId), sessionId })
                       }
                       onOpenMail={handleOpenMail}
+                      onOpenRoom={handleOpenRoom}
                     />
                   )}
                 </ErrorBoundary>

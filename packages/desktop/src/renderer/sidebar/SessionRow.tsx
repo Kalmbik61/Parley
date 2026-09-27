@@ -8,11 +8,15 @@
  * остальных активатор выключен и курсор `not-allowed`. Атрибуты @dnd-kit (`role`,
  * `tabIndex`, `aria-*`) не ставятся: строка уже кнопка со своей ролью. HTML5-атрибута
  * `draggable` нет — тащит @dnd-kit по указателю.
+ *
+ * Меню по правой кнопке — `SessionRowMenu` (кусок 3.4): его триггер и триггер тултипа
+ * сливаются на одном узле строки.
  */
 
 import { memo, useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
 import { useDndContext, useDraggable } from '@dnd-kit/core';
 import type { WorkSession } from '@harnas/core';
+import type { HarnasBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { sessionAttention } from '../attention/derive.js';
 import { AgentIcon } from '../components/AgentIcon.js';
@@ -27,12 +31,17 @@ import { relativeTime } from '../lib/relative-time.js';
 import type { ActivityEntry } from '../store/activity.js';
 import { useNoticesStore } from '../store/notices.js';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '../ui/hover-card.js';
+import { SessionRowMenu } from './SessionRowMenu.js';
 
 /** Сколько символов задачи показывает тултип (план 3.3). */
 const TASK_PREVIEW = 300;
 
 export interface SessionRowProps {
   workKey: string;
+  /** Работа строки — для меню (кусок 3.4); строки, а не ref, чтобы `memo` не сбивался. */
+  projectPath: string;
+  workId: string;
+  bridge: HarnasBridge;
   session: WorkSession;
   depth: number;
   activity: ActivityEntry | null;
@@ -47,6 +56,9 @@ export interface SessionRowProps {
 // (стор активности заменяет лишь изменённую запись) или её флаги (раунд исправлений 1 куска 3.3).
 export const SessionRow = memo(function SessionRow({
   workKey,
+  projectPath,
+  workId,
+  bridge,
   session,
   depth,
   activity,
@@ -110,6 +122,7 @@ export const SessionRow = memo(function SessionRow({
 
   return (
     <HoverCard open={tooltipOpen && !dragging} onOpenChange={setTooltipOpen} openDelay={600} closeDelay={100}>
+      <SessionRowMenu workKey={workKey} projectPath={projectPath} workId={workId} session={session} bridge={bridge} onOpen={onOpen}>
       <HoverCardTrigger asChild>
         <div
           ref={setRowRef}
@@ -122,10 +135,13 @@ export const SessionRow = memo(function SessionRow({
           onClick={(event) => {
             // Клик по строке — не клик по карточке: карточка сделала бы только работу активной.
             event.stopPropagation();
-            onOpen();
+            // Клик и клавиши из порталов меню и диалогов строки всплывают по дереву React
+            // сюда же — это не клик по строке (кусок 3.4).
+            if (event.currentTarget.contains(event.target as Node)) onOpen();
           }}
           onKeyDown={(event) => {
             if (event.key !== 'Enter' && event.key !== ' ') return;
+            if (!event.currentTarget.contains(event.target as Node)) return;
             event.preventDefault();
             event.stopPropagation();
             onOpen();
@@ -155,6 +171,7 @@ export const SessionRow = memo(function SessionRow({
           {time !== '' ? <span className={cn('shrink-0 text-[10px] tabular-nums', secondary)}>{time}</span> : null}
         </div>
       </HoverCardTrigger>
+      </SessionRowMenu>
       <HoverCardContent side="right" align="start" className="w-72 space-y-1.5 p-3 text-xs">
         <SessionTooltip session={session} activity={activity} word={word} />
       </HoverCardContent>

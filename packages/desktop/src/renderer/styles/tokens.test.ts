@@ -118,3 +118,39 @@ describe('tokens.css — вторичный текст карточек сайд
     });
   }
 });
+
+/**
+ * Кусок 3.4, решение контролёра 4: пункты-«разрушители» меню сайдбара (Delete…, Archive)
+ * должны читаться и на подсветке фокуса. У прежнего `SessionMenu` фокус красил пункт в
+ * `--destructive` с `--destructive-foreground`, а в тёмной это 1.66:1. Поэтому у меню свой
+ * токен текста `--menu-destructive`; фон фокуса — общий `--accent` пункта (`ui/glass.ts`).
+ */
+describe('tokens.css — «разрушители» меню (кусок 3.4, решение 4)', () => {
+  const css = readFileSync(TOKENS_PATH, 'utf8');
+
+  function readHex(theme: 'light' | 'dark', name: string): Rgb {
+    const rootStart = css.indexOf(':root {');
+    const darkStart = css.indexOf('.dark {');
+    const block = theme === 'light' ? css.slice(rootStart, darkStart) : css.slice(darkStart, css.indexOf('}', darkStart));
+    const match = block.match(new RegExp(`--${name}:\\s*#([0-9a-fA-F]{6});`));
+    if (match === null) throw new Error(`tokens.css: --${name} не найден (${theme})`);
+    const hex = match[1] as string;
+    return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
+  }
+
+  // «Стекло» меню (`ui/glass.ts`): светлая — white/82%, тёмная — black/72% поверх того, что под меню.
+  const GLASS = { light: { color: [255, 255, 255] as Rgb, alpha: 0.82 }, dark: { color: [0, 0, 0] as Rgb, alpha: 0.72 } } as const;
+
+  for (const theme of ['light', 'dark'] as const) {
+    const text = readHex(theme, 'menu-destructive');
+    it(`${theme}: на подсветке фокуса (--accent) — не ниже 4.5:1`, () => {
+      expect(contrastOf(text, readHex(theme, 'accent'))).toBeGreaterThanOrEqual(WCAG_AA_SMALL_TEXT);
+    });
+    it(`${theme}: на стекле поверх сайдбара и центра (--editor-surface) — не ниже 4.5:1`, () => {
+      for (const under of ['work-sidebar', 'editor-surface']) {
+        const glass = compositeOver(GLASS[theme].color, GLASS[theme].alpha, readHex(theme, under));
+        expect(contrastOf(text, glass)).toBeGreaterThanOrEqual(WCAG_AA_SMALL_TEXT);
+      }
+    });
+  }
+});

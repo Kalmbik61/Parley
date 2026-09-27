@@ -13,17 +13,30 @@ import type { HarnasBridge } from '../../shared/bridge.js';
 import { applyDarkClass } from '../theme/appearance.js';
 import { DEFAULT_UI, normalizeUi, type Appearance, type UiFile } from '../../shared/ui-types.js';
 
+/** Работа, для которой открыт диалог (кусок 3.4). */
+export interface DialogWork {
+  projectPath: string;
+  workId: string;
+}
+
 export interface DialogsState {
   newWork: boolean;
-  newSession: { open: boolean; parentSessionId: string | null };
+  /**
+   * `work` — работа диалога: «New session» из меню карточки передаёт свою, и у неактивной
+   * карточки диалог не должен уйти в чужую работу; `null` — активная работа (⌘T).
+   */
+  newSession: { open: boolean; parentSessionId: string | null; work: DialogWork | null };
   settings: boolean;
-  /** «Создать комнату с…» (кусок 2.3, до 3.4 обязателен участник — сессия, с которой открыли пункт меню). */
-  createRoom: { projectPath: string; workId: string; requiredMember: { id: string; label: string } } | null;
+  /**
+   * «Создать комнату с…» (кусок 2.3). `requiredMember` — сессия, с которой открыли пункт
+   * меню строки; `null` — «New room» из меню карточки (кусок 3.4), обязательного нет.
+   */
+  createRoom: { projectPath: string; workId: string; requiredMember: { id: string; label: string } | null } | null;
 }
 
 const CLOSED_DIALOGS: DialogsState = {
   newWork: false,
-  newSession: { open: false, parentSessionId: null },
+  newSession: { open: false, parentSessionId: null, work: null },
   settings: false,
   createRoom: null,
 };
@@ -65,11 +78,17 @@ export interface UiState {
   /** `null` — `SessionPicker` закрыт. */
   picker: PickerState | null;
   /**
-   * Указатель над списком сайдбара (кусок 3.3, спека 6.2): пока он там, пересортировка
-   * ждёт (`sidebar/use-sidebar-sections.ts`). Ставит только `WorkSidebar`; меню и
-   * переименование, которые тоже держат порядок, добавит 3.4.
+   * Порядок сайдбара держится (кусок 3.3, спека 6.2): указатель над списком, открыто меню
+   * сайдбара или идёт переименование — пересортировка ждёт (`sidebar/use-sidebar-sections.ts`).
+   * Ставит только `WorkSidebar`, сводя указатель и `sidebarHolds`.
    */
   sidebarHovering: boolean;
+  /**
+   * Кто держит порядок помимо указателя (кусок 3.4): открытые меню карточки, строки,
+   * секции, комнат и `InlineRename` — по своему id (`sidebar/use-sidebar-hold.ts`). Уход
+   * указателя в портал меню — не уход с сайдбара.
+   */
+  sidebarHolds: Record<string, true>;
 
   /** Ставит/снимает `.dark` на `<html>` (`applyDarkClass`) и пишет в стор — единственная точка входа для обоих. */
   setDark: (dark: boolean) => void;
@@ -78,7 +97,7 @@ export interface UiState {
   setWindowFocused: (focused: boolean) => void;
   openNewWorkDialog: () => void;
   closeNewWorkDialog: () => void;
-  openNewSessionDialog: (parentSessionId: string | null) => void;
+  openNewSessionDialog: (parentSessionId: string | null, work?: DialogWork) => void;
   closeNewSessionDialog: () => void;
   openSettingsDialog: () => void;
   closeSettingsDialog: () => void;
@@ -104,6 +123,7 @@ export interface UiState {
   openPicker: (picker: PickerState) => void;
   closePicker: () => void;
   setSidebarHovering: (hovering: boolean) => void;
+  setSidebarHold: (id: string, on: boolean) => void;
 
   /**
    * Подписывается на фокус окна и `wake.changed`, спрашивает `wake.state`
@@ -140,6 +160,7 @@ export const useUiStore = create<UiState>((set, get) => {
     paletteOpen: false,
     picker: null,
     sidebarHovering: false,
+    sidebarHolds: {},
 
     setDark: (dark) => {
       applyDarkClass(dark);
@@ -162,13 +183,13 @@ export const useUiStore = create<UiState>((set, get) => {
 
     openNewWorkDialog: () => set((state) => ({ dialogs: { ...state.dialogs, newWork: true } })),
     closeNewWorkDialog: () => set((state) => ({ dialogs: { ...state.dialogs, newWork: false } })),
-    openNewSessionDialog: (parentSessionId) =>
+    openNewSessionDialog: (parentSessionId, work) =>
       set((state) => ({
-        dialogs: { ...state.dialogs, newSession: { open: true, parentSessionId } },
+        dialogs: { ...state.dialogs, newSession: { open: true, parentSessionId, work: work ?? null } },
       })),
     closeNewSessionDialog: () =>
       set((state) => ({
-        dialogs: { ...state.dialogs, newSession: { open: false, parentSessionId: null } },
+        dialogs: { ...state.dialogs, newSession: { open: false, parentSessionId: null, work: null } },
       })),
     openSettingsDialog: () => set((state) => ({ dialogs: { ...state.dialogs, settings: true } })),
     closeSettingsDialog: () => set((state) => ({ dialogs: { ...state.dialogs, settings: false } })),
@@ -214,6 +235,12 @@ export const useUiStore = create<UiState>((set, get) => {
     openPicker: (picker) => set({ picker }),
     closePicker: () => set({ picker: null }),
     setSidebarHovering: (hovering) => set({ sidebarHovering: hovering }),
+    setSidebarHold: (id, on) =>
+      set((state) => {
+        if (on === (id in state.sidebarHolds)) return state;
+        if (on) return { sidebarHolds: { ...state.sidebarHolds, [id]: true } };
+        return { sidebarHolds: Object.fromEntries(Object.entries(state.sidebarHolds).filter(([key]) => key !== id)) };
+      }),
 
     init: (bridge) => {
       bridgeRef = bridge;

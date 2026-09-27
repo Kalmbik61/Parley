@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { WorkEntry, WorkSession } from '@harnas/core';
 import { App } from './App.js';
 import type { NewSessionDialogProps } from './components/dialogs/NewSessionDialog.js';
@@ -54,7 +54,7 @@ beforeEach(() => {
   useUiStore.setState({
     windowFocused: true,
     wakePaused: null,
-    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null }, settings: false, createRoom: null },
+    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null },
     visibleSessionRefs: {},
   });
   useLayoutStore.setState({
@@ -244,5 +244,31 @@ describe('App — меню new-session (тест 6 куска 2.7)', () => {
       workId: 'w-02',
       selectedSessionId: 's-02',
     });
+  });
+});
+
+// Тест 15 куска 3.4: «New session» из меню карточки открывает диалог её работы, даже если
+// она не активна; ⌘T после этого — снова диалог активной работы.
+describe('App — «New session» из меню карточки (тест 15 куска 3.4)', () => {
+  it('диалог получает работу карточки; ⌘T после закрытия — активную работу', async () => {
+    const w1 = work('w-01', '2026-01-01', [session('s-01', 'план')]);
+    const w2 = work('w-02', '2026-01-02', [session('s-02', 'бэк')]);
+    useWorksStore.setState({ entries: [w1, w2], branches: {}, loading: false, error: null });
+    const key1 = '/tmp/w-01 w-01';
+    useLayoutStore.setState({ activeWorkKey: key1, layouts: { [key1]: emptyLayout() }, hydrated: { [key1]: true } });
+
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.contextMenu(document.querySelector('[data-work-key="/tmp/w-02 w-02"]') as HTMLElement);
+    fireEvent.click(screen.getByText('New session'));
+    expect(dialogProps.last).toMatchObject({ open: true, projectPath: '/tmp/w-02', workId: 'w-02', selectedSessionId: null });
+    expect(useLayoutStore.getState().activeWorkKey).toBe(key1);
+
+    act(() => dialogProps.last?.onOpenChange(false));
+    act(() => bridge.emitMenu('new-session'));
+    expect(dialogProps.last).toMatchObject({ open: true, projectPath: '/tmp/w-01', workId: 'w-01' });
   });
 });

@@ -52,6 +52,7 @@ describe('ProjectGroup', () => {
       />,
     );
     expect(screen.getByText('Pinned')).toBeTruthy();
-    expect(screen.queryByRole('button')).toBeNull();
+    // С куска 3.4 у каждого заголовка секции — только меню «⋯» (спека 6.1).
+    expect(screen.getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual([S.sidebar.sectionMenu]);
   });
 });

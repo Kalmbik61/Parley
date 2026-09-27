@@ -9,7 +9,7 @@ beforeEach(() => {
     wakePaused: null,
     dialogs: {
       newWork: false,
-      newSession: { open: false, parentSessionId: null },
+      newSession: { open: false, parentSessionId: null, work: null },
       settings: false,
       createRoom: null,
     },
@@ -33,12 +33,46 @@ describe('useUiStore диалоги', () => {
     expect(useUiStore.getState().dialogs.newSession).toEqual({
       open: true,
       parentSessionId: 's-01',
+      work: null,
     });
     useUiStore.getState().closeNewSessionDialog();
     expect(useUiStore.getState().dialogs.newSession).toEqual({
       open: false,
       parentSessionId: null,
+      work: null,
     });
+  });
+
+  it('новая сессия из меню карточки помнит свою работу; закрытие её забывает (кусок 3.4)', () => {
+    useUiStore.getState().openNewSessionDialog(null, { projectPath: '/tmp/p', workId: 'w-02' });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({
+      open: true,
+      parentSessionId: null,
+      work: { projectPath: '/tmp/p', workId: 'w-02' },
+    });
+    useUiStore.getState().closeNewSessionDialog();
+    expect(useUiStore.getState().dialogs.newSession.work).toBeNull();
+  });
+
+  it('«New room» из меню карточки — createRoom без обязательного участника (кусок 3.4)', () => {
+    useUiStore.getState().openCreateRoomDialog({ projectPath: '/tmp/p', workId: 'w-01', requiredMember: null });
+    expect(useUiStore.getState().dialogs.createRoom).toEqual({ projectPath: '/tmp/p', workId: 'w-01', requiredMember: null });
+  });
+});
+
+describe('useUiStore.setSidebarHold (кусок 3.4)', () => {
+  it('держатели порядка — по id; повторное снятие и повторная установка не меняют стор', () => {
+    useUiStore.setState({ sidebarHolds: {} });
+    useUiStore.getState().setSidebarHold('menu:a', true);
+    useUiStore.getState().setSidebarHold('rename:b', true);
+    const before = useUiStore.getState().sidebarHolds;
+    useUiStore.getState().setSidebarHold('menu:a', true);
+    expect(useUiStore.getState().sidebarHolds).toBe(before);
+    useUiStore.getState().setSidebarHold('menu:a', false);
+    expect(useUiStore.getState().sidebarHolds).toEqual({ 'rename:b': true });
+    useUiStore.getState().setSidebarHold('menu:a', false);
+    useUiStore.getState().setSidebarHold('rename:b', false);
+    expect(useUiStore.getState().sidebarHolds).toEqual({});
   });
 });
 

@@ -6,6 +6,10 @@
  * Создатель всегда `human` — комнату через окно заводит человек, а не агент
  * (спека 6.2 — `create_room` для агентов остаётся MCP-инструментом).
  *
+ * Кусок 3.4 (спека 6.4): «New room» из меню карточки открывает тот же диалог без
+ * обязательного участника (`requiredMember: null`) — заголовок «New room», и «Create»
+ * доступна, только когда выбран хотя бы один участник.
+ *
  * Кусок 1.4 плана «облик Orca»: примитивы `ui/dialog`, `ui/input`,
  * `ui/checkbox`, `ui/button` вместо голого Radix и токенов старой палитры —
  * список остальных участников многовыборный (не вкл/выкл одной настройки),
@@ -32,8 +36,8 @@ export interface CreateRoomDialogProps {
   bridge: HarnasBridge;
   projectPath: string;
   workId: string;
-  /** Сессия, с которой вызвали «Создать комнату с…» — обязательный участник. */
-  requiredMember: { id: string; label: string };
+  /** Сессия, с которой вызвали «Создать комнату с…» — обязательный участник; `null` — из меню карточки. */
+  requiredMember: { id: string; label: string } | null;
   /** Остальные сессии работы — необязательные участники; закрытые недоступны. */
   candidates: RoomCandidate[];
   onOpenChange: (open: boolean) => void;
@@ -80,7 +84,7 @@ export function CreateRoomDialog({
         projectPath,
         workId,
         title: trimmed,
-        members: [requiredMember.id, ...selected],
+        members: requiredMember === null ? [...selected] : [requiredMember.id, ...selected],
       });
       onOpenChange(false);
     } catch (err) {
@@ -92,7 +96,7 @@ export function CreateRoomDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent aria-describedby={undefined} className="w-96 max-w-96">
-        <DialogTitle>{S.rooms.createTitle(requiredMember.label)}</DialogTitle>
+        <DialogTitle>{requiredMember === null ? S.rooms.newRoomTitle : S.rooms.createTitle(requiredMember.label)}</DialogTitle>
         <div className="flex flex-col gap-3 text-sm">
           <label className="flex flex-col gap-1">
             {S.rooms.nameField}
@@ -126,7 +130,7 @@ export function CreateRoomDialog({
               {S.common.cancel}
             </Button>
           </DialogClose>
-          <Button type="button" onClick={() => void submit()}>
+          <Button type="button" disabled={requiredMember === null && selected.size === 0} onClick={() => void submit()}>
             {S.common.create}
           </Button>
         </DialogFooter>

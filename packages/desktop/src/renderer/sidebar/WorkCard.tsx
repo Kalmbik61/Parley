@@ -6,18 +6,26 @@
  * `memo` (раунд исправлений 1 куска 3.3, ревью A): `activity.changed` приходит на каждое
  * изменение метрик любой сессии, а `WorkSidebar` отдаёт карточке только срез её сессий,
  * прежний объект внимания и устойчивые колбэки — карточка чужой работы не перерисовывается.
+ *
+ * Кусок 3.4 (спека 6.4): меню карточки по правой кнопке (`CardMenu`), переименование на
+ * месте по двойному клику по заголовку (`InlineRename`), меню комнат по `#` (`RoomsMenu`).
  */
 
-import { memo, useRef } from 'react';
+import { memo, useRef, useState } from 'react';
 import { create } from 'zustand';
 import type { WorkEntry } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
+import type { HarnasBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import type { Attention, WorkAttention } from '../attention/derive.js';
+import { useHostSupports } from '../lib/capabilities.js';
 import { cn } from '../lib/cn.js';
 import { relativeTime } from '../lib/relative-time.js';
 import { treeOrder, workKey } from '../lib/tree-order.js';
 import type { ActivityEntry } from '../store/activity.js';
+import { CardMenu } from './CardMenu.js';
+import { InlineRename } from './InlineRename.js';
+import { RoomsMenu } from './RoomsMenu.js';
 import { SessionRow } from './SessionRow.js';
 
 export interface WorkCardProps {
@@ -32,8 +40,12 @@ export interface WorkCardProps {
   selectedSessionId: string | null;
   onActivate(): void;
   onOpenSession(sessionId: string): void;
-  /** Клик по ✉N; меню комнат по # — 3.4. */
+  /** Клик по ✉N и пункт «Open mail» меню карточки. */
   onOpenMail(): void;
+  /** Выбор в RoomsMenu — вкладка room (кусок 3.4). */
+  onOpenRoom(roomId: string): void;
+  /** Мост для меню карточки, строк и переименования; один на всё окно. */
+  bridge: HarnasBridge;
 }
 
 /** Полоса слева — по самому срочному состоянию (спека 6.3); при «простаивает» её нет. */
@@ -69,17 +81,27 @@ export const WorkCard = memo(function WorkCard({
   onActivate,
   onOpenSession,
   onOpenMail,
+  onOpenRoom,
+  bridge,
 }: WorkCardProps): JSX.Element {
   const { projectPath, map } = entry;
   const key = workKey(projectPath, map.work.id);
   const expanded = useExpandedClosed((state) => state.keys[key] === true);
   const expand = useExpandedClosed((state) => state.expand);
+  const [renaming, setRenaming] = useState(false);
+  // Без `works.rename` у хоста нет ни пункта меню, ни двойного клика (спека 3.2).
+  const canRename = useHostSupports('works.rename');
 
   // Колбэк строки — один на сессию на всё время жизни карточки (строка — `memo`), а зовёт
   // он всегда свежий `onOpenSession`.
   const openSession = useRef(onOpenSession);
   openSession.current = onOpenSession;
   const rowOpeners = useRef(new Map<string, () => void>());
+  // Колбэки ушедших из карты сессий не копятся (решение контролёра 3 куска 3.4).
+  const sessionIds = new Set(map.sessions.map((session) => session.id));
+  for (const id of rowOpeners.current.keys()) {
+    if (!sessionIds.has(id)) rowOpeners.current.delete(id);
+  }
   const openerFor = (sessionId: string): (() => void) => {
     let opener = rowOpeners.current.get(sessionId);
     if (opener === undefined) {
@@ -103,10 +125,15 @@ export const WorkCard = memo(function WorkCard({
   const secondary = 'text-work-sidebar-muted-foreground';
 
   return (
+    <CardMenu entry={entry} pinned={pinned} bridge={bridge} onRename={() => setRenaming(true)} onOpenMail={onOpenMail}>
     <div
       data-work-key={key}
       data-active={active}
-      onClick={onActivate}
+      onClick={(event) => {
+        // События меню и диалогов карточки идут из порталов, но всплывают по дереву React —
+        // выбор пункта меню не должен заодно активировать работу (кусок 3.4).
+        if (event.currentTarget.contains(event.target as Node)) onActivate();
+      }}
       className={cn(
         'relative mb-1.5 cursor-default overflow-hidden rounded-lg border py-1 pl-2.5 pr-1.5',
         active
@@ -119,10 +146,18 @@ export const WorkCard = memo(function WorkCard({
         <span data-attention-strip aria-hidden="true" className={cn('absolute inset-y-0 left-0 w-[3px]', strip)} />
       ) : null}
       <div className="flex h-5 min-w-0 items-center gap-1.5">
-        {/* Обрезает CSS, а не строка: браузер режет по графемам, в DOM название целиком. */}
-        <span className={cn('min-w-0 flex-1 truncate text-[13px] leading-5 text-work-sidebar-foreground', bold && 'font-semibold')}>
-          {map.work.title}
-        </span>
+        {renaming ? (
+          <InlineRename entry={entry} bridge={bridge} onDone={() => setRenaming(false)} />
+        ) : (
+          // Обрезает CSS, а не строка: браузер режет по графемам, в DOM название целиком.
+          <span
+            data-work-title
+            onDoubleClick={canRename ? () => setRenaming(true) : undefined}
+            className={cn('min-w-0 flex-1 truncate text-[13px] leading-5 text-work-sidebar-foreground', bold && 'font-semibold')}
+          >
+            {map.work.title}
+          </span>
+        )}
         {attention.humanUnread > 0 ? (
           <button
             type="button"
@@ -136,9 +171,18 @@ export const WorkCard = memo(function WorkCard({
           </button>
         ) : null}
         {map.rooms.length > 0 ? (
-          <span data-rooms className="shrink-0 text-[11px] text-work-sidebar-foreground">
-            {roomsWithUnread > 0 ? `#${roomsWithUnread}` : '#'}
-          </span>
+          <RoomsMenu map={map} onOpenRoom={onOpenRoom}>
+            <button
+              type="button"
+              data-rooms
+              aria-label={S.sidebar.roomsMenu}
+              // Клик по `#` — не клик по карточке: меню открывается, работа не переключается.
+              onClick={(event) => event.stopPropagation()}
+              className="shrink-0 rounded px-0.5 text-[11px] text-work-sidebar-foreground hover:bg-work-sidebar-accent"
+            >
+              {roomsWithUnread > 0 ? `#${roomsWithUnread}` : '#'}
+            </button>
+          </RoomsMenu>
         ) : null}
         {pinned ? <span className="shrink-0 text-[10px]">📌</span> : null}
         {time !== '' ? <span className={cn('shrink-0 text-[10px] tabular-nums', secondary)}>{time}</span> : null}
@@ -160,6 +204,9 @@ export const WorkCard = memo(function WorkCard({
             <SessionRow
               key={session.id}
               workKey={key}
+              projectPath={projectPath}
+              workId={map.work.id}
+              bridge={bridge}
               session={session}
               depth={depth}
               activity={activity[refKey({ projectPath, workId: map.work.id, sessionId: session.id })] ?? null}
@@ -184,5 +231,6 @@ export const WorkCard = memo(function WorkCard({
         </button>
       ) : null}
     </div>
+    </CardMenu>
   );
 });

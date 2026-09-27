@@ -163,7 +163,7 @@ beforeEach(() => {
     wakePaused: null,
     dialogs: {
       newWork: false,
-      newSession: { open: false, parentSessionId: null },
+      newSession: { open: false, parentSessionId: null, work: null },
       settings: false,
       createRoom: null,
     },

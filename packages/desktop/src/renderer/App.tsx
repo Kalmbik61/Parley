@@ -52,6 +52,7 @@ export function App(): JSX.Element {
   const entries = useWorksStore((state) => state.entries);
   const newSessionOpen = useUiStore((state) => state.dialogs.newSession.open);
   const newSessionParent = useUiStore((state) => state.dialogs.newSession.parentSessionId);
+  const newSessionFor = useUiStore((state) => state.dialogs.newSession.work);
   const openNewSessionDialog = useUiStore((state) => state.openNewSessionDialog);
   const closeNewSessionDialog = useUiStore((state) => state.closeNewSessionDialog);
   const settingsOpen = useUiStore((state) => state.dialogs.settings);
@@ -145,8 +146,11 @@ export function App(): JSX.Element {
   }
 
   // ⌘T (кусок 2.7): работа — активная, родитель — выбранная сессия
-  // (`selectedSessionOf`), если активна вкладка-терминал.
-  const newSessionWork = entries.find((entry) => workKey(entry.projectPath, entry.map.work.id) === activeWorkKey) ?? null;
+  // (`selectedSessionOf`), если активна вкладка-терминал. «New session» из меню карточки
+  // (кусок 3.4) передаёт свою работу: у неактивной карточки диалог иначе ушёл бы в чужую.
+  const newSessionKey =
+    newSessionFor === null ? activeWorkKey : workKey(newSessionFor.projectPath, newSessionFor.workId);
+  const newSessionWork = entries.find((entry) => workKey(entry.projectPath, entry.map.work.id) === newSessionKey) ?? null;
 
   return (
     <>

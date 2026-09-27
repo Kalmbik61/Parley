@@ -79,8 +79,20 @@ export const S = {
     /** Строка под сессиями карточки: сколько закрытых спрятано. */
     moreClosed: (n: number): string => `+${n} closed`,
     trustWaitTooltip: 'Not responding since launch — may be waiting for folder trust',
+    /** Переключатель меню «⋯» заголовка секции (спека 6.1, кусок 3.4). */
+    showDone: 'Show done',
+    /** `aria-label` кнопки «⋯» заголовка секции. */
+    sectionMenu: 'Section options',
+    /** `aria-label` кнопки `#`/`#N` карточки — меню комнат работы (спека 6.3). */
+    roomsMenu: 'Rooms',
+    /** `aria-label` поля переименования на месте (спека 6.4). */
+    renameField: 'Workspace name',
     sessionMenu: {
       open: 'Open',
+      /** Кусок 3.4: сплит вправо с вкладкой терминала сессии. */
+      openBeside: 'Open to the side',
+      /** Кусок 3.4: только у сессии со своим worktree. */
+      copyWorktreePath: 'Copy worktree path',
       resume: 'Resume',
       stop: 'Stop',
       closeEllipsis: 'Close…',
@@ -91,6 +103,26 @@ export const S = {
       closeConfirmDescription: 'Session will no longer receive mail',
       deleteConfirmTitle: (label: string): string => `Delete "${label}"?`,
     },
+  },
+
+  /** Меню карточки работы — `sidebar/CardMenu.tsx` (спека 6.4, кусок 3.4). */
+  cardMenu: {
+    pin: 'Pin',
+    unpin: 'Unpin',
+    newSession: 'New session',
+    newRoom: 'New room',
+    openMail: 'Open mail',
+    rename: 'Rename',
+    reveal: 'Reveal in Finder',
+    copyPath: 'Copy path',
+    markDone: 'Mark as done',
+    reopen: 'Reopen',
+    archive: 'Archive',
+    deleteEllipsis: 'Delete…',
+    archiveConfirmTitle: (title: string): string => `Archive "${title}"?`,
+    deleteConfirmTitle: (title: string): string => `Delete "${title}"?`,
+    deleteConfirmDescription: (sessions: number): string =>
+      `${sessions === 1 ? '1 session' : `${sessions} sessions`} will be deleted. Running agents will be stopped.`,
   },
 
   /** Относительное время карточек и строк сессий — `lib/relative-time.ts` (спека 6.3). */
@@ -161,6 +193,8 @@ export const S = {
     nameField: 'Name',
     moreParticipants: 'More participants',
     nameRequired: 'Name is required',
+    /** «Новая комната» из меню карточки — без обязательного участника (кусок 3.4). */
+    newRoomTitle: 'New room',
   },
 
   /** Настройки — `settings/SettingsDialog.tsx`. */
@@ -348,6 +382,12 @@ export const S = {
       createRoom: 'create room',
       loadSettings: 'load settings',
       saveSettings: 'save settings',
+      renameWorkspace: 'rename workspace',
+      markWorkspaceDone: 'mark workspace as done',
+      reopenWorkspace: 'reopen workspace',
+      archiveWorkspace: 'archive workspace',
+      deleteWorkspace: 'delete workspace',
+      revealWorkspace: 'reveal workspace in Finder',
     },
     noWorktree: 'This session has no worktree of its own',
   },

@@ -12,6 +12,7 @@ import { S } from '../../shared/strings.js';
 import { formatMetricsLine } from '../lib/metrics-line.js';
 import { workKey } from '../lib/tree-order.js';
 import { useNoticesStore } from '../store/notices.js';
+import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeActivity, makeSession } from '../test-utils/work-fixtures.js';
 import { SessionRow } from './SessionRow.js';
 
@@ -19,6 +20,7 @@ const PROJECT = '/tmp/proj';
 const WORK = 'w-01';
 const KEY = workKey(PROJECT, WORK);
 const NOW = new Date('2026-09-27T10:00:00.000Z');
+const BRIDGE = createFakeBridge();
 
 function renderRow(
   session: WorkSession,
@@ -33,6 +35,9 @@ function renderRow(
   return render(
     <SessionRow
       workKey={KEY}
+      projectPath={PROJECT}
+      workId={WORK}
+      bridge={BRIDGE}
       session={session}
       depth={0}
       activity={activity}
@@ -152,6 +157,9 @@ describe('SessionRow — тултип (тест 13)', () => {
     render(
       <SessionRow
         workKey={KEY}
+        projectPath={PROJECT}
+        workId={WORK}
+        bridge={BRIDGE}
         session={session}
         depth={0}
         activity={makeActivity({ projectPath: PROJECT, workId: WORK, sessionId: 's-01' }, 'idle', { metrics })}
@@ -187,6 +195,9 @@ function DndRows({ sessions }: { sessions: WorkSession[] }): JSX.Element {
         <SessionRow
           key={session.id}
           workKey={KEY}
+          projectPath={PROJECT}
+          workId={WORK}
+          bridge={BRIDGE}
           session={session}
           depth={0}
           activity={null}
@@ -237,5 +248,21 @@ describe('SessionRow — тултип и перетаскивание (раун�
     await waitFor(() => expect(tooltipText()).toContain('implementer task'));
     expect(tooltipText()).not.toContain('reviewer task');
     expect(document.querySelectorAll('[data-session-tooltip]')).toHaveLength(1);
+  });
+});
+
+describe('SessionRow — меню строки (кусок 3.4)', () => {
+  it('правая кнопка открывает меню строки; клики в меню и в подтверждении — не клик по строке', () => {
+    const onOpen = vi.fn();
+    renderRow(makeSession('s-01', 'plan'), { onOpen });
+    fireEvent.contextMenu(row());
+    expect(screen.getByText('Open to the side')).toBeTruthy();
+    fireEvent.click(screen.getByText('Stop'));
+    fireEvent.click(screen.getByText('Cancel'));
+    expect(onOpen).not.toHaveBeenCalled();
+
+    fireEvent.contextMenu(row());
+    fireEvent.click(screen.getByText('Open'));
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 });

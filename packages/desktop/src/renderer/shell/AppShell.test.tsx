@@ -28,6 +28,7 @@ import { refKey } from '@harnas/protocol';
 import { workKey } from '../lib/tree-order.js';
 import { AppShell } from './AppShell.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
+import { useHostStore } from '../store/host.js';
 
 // Тесты 10, 13, 14, 15 куска 2.4 зовут `toast` и из `AppShell.tsx`
 // (отказ сплита), и из `layout/Tab.tsx` (закрытие вкладки) — без смонтированного
@@ -176,7 +177,7 @@ beforeEach(() => {
   useUiStore.setState({
     windowFocused: true,
     wakePaused: null,
-    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null }, settings: false, createRoom: null },
+    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null },
     visibleSessionRefs: {},
     ui: DEFAULT_UI,
     uiLoaded: true,
@@ -704,6 +705,7 @@ describe('AppShell — фокус группы из поверхности те�
   // Поверхность живёт в слое, а не внутри `GroupView`, — его
   // `onPointerDownCapture` до неё не доходит; группу фокусирует сама поверхность.
   async function twoGroupsFocusedOnSecond(): Promise<string> {
+    vi.mocked(toast).mockClear();
     mockNonZeroRects();
     await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один'), session('s-02', 'два')])]);
     const key = keyOf('w-01');
@@ -897,3 +899,62 @@ describe('AppShell и активность (раунд исправлений 1 
     expect(cardOrder()[0]).toBe(workKey('/tmp/w-02', 'w-02'));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Кусок 3.4: меню карточки и строки в оболочке.
+// ---------------------------------------------------------------------------
+
+describe('AppShell — меню сайдбара (кусок 3.4)', () => {
+  // Пункты меню карточки прячутся без методов хоста — статус связи как в окне.
+  let disposeHost: () => void = () => {};
+  beforeEach(() => {
+    disposeHost = useHostStore.getState().init(bridge);
+  });
+  afterEach(() => disposeHost());
+
+  it('«Open to the side» (тест 12): размеры групп подставлены, у работы уже открыта вкладка — две группы, сессия справа', async () => {
+    mockNonZeroRects();
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один'), session('s-02', 'два')])]);
+    await activateWithTerminal(keyOf('w-01'), 's-01');
+
+    fireEvent.contextMenu(document.querySelector(`[data-work-key="${keyOf('w-01')}"] [data-session-id="s-02"]`) as HTMLElement);
+    fireEvent.click(screen.getByText('Open to the side'));
+
+    const layout = useLayoutStore.getState().layouts[keyOf('w-01')];
+    if (layout === undefined) throw new Error('раскладки нет');
+    const all = groups(layout);
+    expect(all.map((group) => group.tabs.map((tab) => tab.id))).toEqual([[tabId.terminal('s-01')], [tabId.terminal('s-02')]]);
+    expect(toast).not.toHaveBeenCalledWith(S_TOO_SMALL);
+  });
+
+  it('выбор комнаты в меню # (тест 4): работа активна, вкладка room в её раскладке', async () => {
+    const withRoom = work('w-02', '2026-01-02', 'Вторая', [session('s-02', 'два')]);
+    withRoom.map.rooms = [{ id: 'r-01', title: 'Design', creator: 'human', members: [], createdAt: '2026-01-02' }];
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')]), withRoom]);
+    act(() => useLayoutStore.getState().setActiveWork(keyOf('w-01')));
+
+    const card = document.querySelector(`[data-work-key="${keyOf('w-02')}"]`) as HTMLElement;
+    fireEvent.keyDown(within(card).getByRole('button', { name: 'Rooms' }), { key: 'Enter' });
+    fireEvent.click(screen.getByText('Design'));
+
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-02')]).toBe(true));
+    const layout = useLayoutStore.getState().layouts[keyOf('w-02')];
+    expect(layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id))).toEqual([tabId.room('r-01')]);
+  });
+
+  it('«New room» из меню карточки (тест 10): заголовок New room, кандидаты — все сессии работы, закрытая недоступна', async () => {
+    const closed = { ...session('s-03', 'три'), lifecycle: 'closed' as const };
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один'), session('s-02', 'два'), closed])]);
+    fireEvent.contextMenu(document.querySelector(`[data-work-key="${keyOf('w-01')}"]`) as HTMLElement);
+    fireEvent.click(screen.getByText('New room'));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 'New room' })).toBeTruthy();
+    const boxes = within(dialog).getAllByRole('checkbox') as HTMLButtonElement[];
+    expect(boxes.map((box) => box.closest('label')?.textContent)).toEqual(['S01 один', 'S02 два', 'S03 три']);
+    expect(boxes.map((box) => box.disabled)).toEqual([false, false, true]);
+  });
+});
+
+const S_TOO_SMALL = 'Not enough room for another group';

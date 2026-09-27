@@ -30,6 +30,7 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-menu-destructive: var(--menu-destructive);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -152,6 +153,9 @@
   --accent-foreground: #171717;
   --destructive: #e40014;
   --destructive-foreground: #fcf3f3;
+  /* Кусок 3.4 (не из Orca): текст пунктов-«разрушителей» меню (Delete…, Archive) — на стекле
+     и на подсветке фокуса --accent не ниже 4.5:1; --destructive на #f5f5f5 даёт 4.47. */
+  --menu-destructive: #c10007;
   --border: #e5e5e5;
   --input: #e5e5e5;
   --ring: #a1a1a1;
@@ -279,6 +283,8 @@
   --accent-foreground: #fafafa;
   --destructive: #ff6568;
   --destructive-foreground: #df2225;
+  /* Кусок 3.4: тёмная — --destructive на --accent (#404040) даёт 3.61. */
+  --menu-destructive: #ffa2a3;
   --border: rgb(255 255 255 / 0.07);
   --input: rgb(255 255 255 / 0.15);
   --ring: #737373;

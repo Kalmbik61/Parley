@@ -3,6 +3,8 @@
  * имя папки, число работ и «+»; «Закреплённые» — подпись без чипа и «+». Клик по
  * заголовку проекта сворачивает и разворачивает группу (`ui.json.collapsedProjects`).
  *
+ * Кусок 3.4: у каждого заголовка — меню «⋯» (`SectionMenu`, спека 6.1) с «Show done».
+ *
  * Карточки передаются детьми: при виртуализации (`WorkSidebar`) заголовок и карточки —
  * отдельные строки виртуального списка, и тогда детей нет.
  */
@@ -12,6 +14,7 @@ import { Plus } from 'lucide-react';
 import { S } from '../../shared/strings.js';
 import { cn } from '../lib/cn.js';
 import { projectColor } from '../lib/project-color.js';
+import { SectionMenu } from './SectionMenu.js';
 import type { SidebarSection } from './sort.js';
 
 export interface ProjectGroupProps {
@@ -28,9 +31,10 @@ export function ProjectGroup({ section, onToggleCollapsed, onNewWork, children }
       {section.kind === 'pinned' ? (
         <div
           data-section-key={section.key}
-          className="flex h-7 items-center px-2 text-[11px] font-semibold uppercase tracking-[.05em] text-work-sidebar-muted-foreground"
+          className="flex h-7 items-center gap-2 px-2 text-[11px] font-semibold uppercase tracking-[.05em] text-work-sidebar-muted-foreground"
         >
-          {section.title}
+          <span className="min-w-0 flex-1 truncate">{section.title}</span>
+          <SectionMenu sectionKey={section.key} />
         </div>
       ) : (
         <div
@@ -39,9 +43,13 @@ export function ProjectGroup({ section, onToggleCollapsed, onNewWork, children }
           aria-expanded={!section.collapsed}
           data-section-key={section.key}
           title={section.projectPath ?? undefined}
-          onClick={onToggleCollapsed}
+          onClick={(event) => {
+            // Пункты меню «⋯» — в портале, но их клик всплывает сюда по дереву React (кусок 3.4).
+            if (event.currentTarget.contains(event.target as Node)) onToggleCollapsed();
+          }}
           onKeyDown={(event) => {
             if (event.key !== 'Enter' && event.key !== ' ') return;
+            if (!event.currentTarget.contains(event.target as Node)) return;
             event.preventDefault();
             onToggleCollapsed();
           }}
@@ -54,6 +62,7 @@ export function ProjectGroup({ section, onToggleCollapsed, onNewWork, children }
           />
           <span className="min-w-0 flex-1 truncate">{section.title}</span>
           <span className="shrink-0 text-[11px] font-normal tabular-nums text-work-sidebar-muted-foreground">{section.works.length}</span>
+          <SectionMenu sectionKey={section.key} />
           <button
             type="button"
             aria-label={S.sidebar.newWorkspaceInProject}

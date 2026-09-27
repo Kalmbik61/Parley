@@ -4,18 +4,20 @@
  *
  * Секции и внимание сайдбар не считает: их пишет `SidebarSectionsWriter` под `AppShell`
  * (`use-sidebar-sections.ts`), здесь только чтение — тот же порядок видят ⌘1–9 и строка
- * статуса. Сайдбар лишь сообщает, что указатель над списком (`sidebarHovering`): тогда
- * пересортировка ждёт, чтобы карточка не уехала из-под курсора (спека 6.2).
+ * статуса. Сайдбар лишь сообщает, что порядок держится (`sidebarHovering`): указатель над
+ * списком, открыто меню сайдбара или идёт переименование (кусок 3.4) — тогда пересортировка
+ * ждёт, чтобы карточка не уехала из-под курсора (спека 6.2).
  *
  * Своей правой границы у сайдбара нет: шов с центром рисует `shell/Resizer.tsx` (1px),
  * вторая линия рядом читалась бы толще (находка 2.3).
  */
 
-import { useEffect, useRef, type RefObject } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Plus, Search } from 'lucide-react';
 import type { WorkEntry } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
+import type { HarnasBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { attentionOf } from '../attention/derive.js';
 import { selectedSessionOf, useLayoutStore } from '../layout/store.js';
@@ -30,12 +32,16 @@ import { useSidebarAttention, useSidebarSections } from './use-sidebar-sections.
 import { WorkCard } from './WorkCard.js';
 
 export interface WorkSidebarProps {
+  /** Мост для меню карточек и строк (кусок 3.4). */
+  bridge: HarnasBridge;
   /** Клик по карточке — работа становится активной (спека 6.4). */
   onActivateWork(workKey: string): void;
   /** Клик по строке сессии — работа активна, вкладка терминала открыта или в фокусе. */
   onOpenSession(workKey: string, sessionId: string): void;
   /** Клик по ✉N карточки — вкладка почты работы. */
   onOpenMail(workKey: string): void;
+  /** Выбор комнаты в меню `#` карточки — вкладка комнаты (кусок 3.4). */
+  onOpenRoom(workKey: string, roomId: string): void;
 }
 
 /** С какого числа карточек список виртуализируется (спека 6.1). */
@@ -93,9 +99,10 @@ interface CardHandlers {
   onActivate(): void;
   onOpenSession(sessionId: string): void;
   onOpenMail(): void;
+  onOpenRoom(roomId: string): void;
 }
 
-export function WorkSidebar({ onActivateWork, onOpenSession, onOpenMail }: WorkSidebarProps): JSX.Element {
+export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail, onOpenRoom }: WorkSidebarProps): JSX.Element {
   const sections = useSidebarSections();
   const attention = useSidebarAttention();
   const entries = useWorksStore((state) => state.entries);
@@ -110,17 +117,23 @@ export function WorkSidebar({ onActivateWork, onOpenSession, onOpenMail }: WorkS
   const setPaletteOpen = useUiStore((state) => state.setPaletteOpen);
   const openNewWorkDialog = useUiStore((state) => state.openNewWorkDialog);
   const setSidebarHovering = useUiStore((state) => state.setSidebarHovering);
+  const holding = useUiStore((state) => Object.keys(state.sidebarHolds).length > 0);
   const now = useNow(NOW_PERIOD_MS);
   const listRef = useRef<HTMLDivElement>(null);
 
+  // Порядок держат указатель над списком и открытые меню или переименование (кусок 3.4):
+  // уход указателя в портал меню — не уход с сайдбара.
+  const [pointerOver, setPointerOver] = useState(false);
+  const hovering = pointerOver || holding;
+  useEffect(() => setSidebarHovering(hovering), [hovering, setSidebarHovering]);
   // ⌘B прячет сайдбар под указателем без `pointerleave`: флаг залип бы, и каждая
   // пересортировка ждала бы 3 с.
   useEffect(() => () => setSidebarHovering(false), [setSidebarHovering]);
 
   // Колбэки карточек устойчивы (карточка — `memo`): один набор на работу, а зовёт он всегда
   // свежие пропсы сайдбара — `AppShell` передаёт их стрелками.
-  const props = useRef({ onActivateWork, onOpenSession, onOpenMail });
-  props.current = { onActivateWork, onOpenSession, onOpenMail };
+  const props = useRef({ onActivateWork, onOpenSession, onOpenMail, onOpenRoom });
+  props.current = { onActivateWork, onOpenSession, onOpenMail, onOpenRoom };
   const handlers = useRef(new Map<string, CardHandlers>());
   const handlersFor = (key: string): CardHandlers => {
     let found = handlers.current.get(key);
@@ -129,6 +142,7 @@ export function WorkSidebar({ onActivateWork, onOpenSession, onOpenMail }: WorkS
         onActivate: () => props.current.onActivateWork(key),
         onOpenSession: (sessionId) => props.current.onOpenSession(key, sessionId),
         onOpenMail: () => props.current.onOpenMail(key),
+        onOpenRoom: (roomId) => props.current.onOpenRoom(key, roomId),
       };
       handlers.current.set(key, found);
     }
@@ -136,6 +150,14 @@ export function WorkSidebar({ onActivateWork, onOpenSession, onOpenMail }: WorkS
   };
   // Срезы активности прошлого рендера — по workKey.
   const slices = useRef(new Map<string, Record<string, ActivityEntry>>());
+  // Записи работ, ушедших из снимка, не копятся (решение контролёра 3 куска 3.4): иначе
+  // кеши росли бы за всю жизнь окна, а вернувшаяся работа получила бы устаревший срез.
+  const liveKeys = new Set(entries.map((entry) => workKey(entry.projectPath, entry.map.work.id)));
+  for (const cache of [handlers.current, slices.current]) {
+    for (const key of cache.keys()) {
+      if (!liveKeys.has(key)) cache.delete(key);
+    }
+  }
 
   const pinned = new Set(pinnedWorks);
   const toggleCollapsed = (projectPath: string): void => {
@@ -164,6 +186,8 @@ export function WorkSidebar({ onActivateWork, onOpenSession, onOpenMail }: WorkS
         onActivate={cardHandlers.onActivate}
         onOpenSession={cardHandlers.onOpenSession}
         onOpenMail={cardHandlers.onOpenMail}
+        onOpenRoom={cardHandlers.onOpenRoom}
+        bridge={bridge}
       />
     );
   };
@@ -198,8 +222,8 @@ export function WorkSidebar({ onActivateWork, onOpenSession, onOpenMail }: WorkS
       <div
         ref={listRef}
         data-sidebar-list
-        onPointerEnter={() => setSidebarHovering(true)}
-        onPointerLeave={() => setSidebarHovering(false)}
+        onPointerEnter={() => setPointerOver(true)}
+        onPointerLeave={() => setPointerOver(false)}
         className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto px-2 pb-2"
       >
         {cardCount > VIRTUALIZE_ABOVE ? (

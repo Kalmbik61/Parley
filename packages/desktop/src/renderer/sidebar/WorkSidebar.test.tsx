@@ -13,6 +13,8 @@ import { useActivityStore } from '../store/activity.js';
 import { useNoticesStore } from '../store/notices.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
+import { useHostStore } from '../store/host.js';
+import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { useSidebarSectionsStore, useSidebarSectionsSync } from './use-sidebar-sections.js';
 import { WorkSidebar, type WorkSidebarProps } from './WorkSidebar.js';
@@ -22,7 +24,7 @@ import { WorkSidebar, type WorkSidebarProps } from './WorkSidebar.js';
  * настоящей карточки — подменяется только её внутренняя функция, сравнение пропсов
  * остаётся настоящим. Не `memo` — `type` нет, подсчёт пуст, и тест ниже падает.
  */
-const cardRenders = vi.hoisted(() => ({ ids: [] as string[] }));
+const cardRenders = vi.hoisted(() => ({ ids: [] as string[], props: [] as Array<import('./WorkCard.js').WorkCardProps> }));
 vi.mock('./WorkCard.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./WorkCard.js')>();
   const { Profiler, createElement } = await import('react');
@@ -33,12 +35,14 @@ vi.mock('./WorkCard.js', async (importOriginal) => {
     ...actual,
     WorkCard: {
       ...actual.WorkCard,
-      type: (props: import('./WorkCard.js').WorkCardProps) =>
-        createElement(
+      type: (props: import('./WorkCard.js').WorkCardProps) => {
+        cardRenders.props.push(props);
+        return createElement(
           Profiler,
           { id: props.entry.map.work.id, onRender: (id: string) => cardRenders.ids.push(id) },
           inner(props),
-        ),
+        );
+      },
     },
   };
 });
@@ -46,6 +50,8 @@ vi.mock('./WorkCard.js', async (importOriginal) => {
 const keyOf = (entry: WorkEntry): string => workKey(entry.projectPath, entry.map.work.id);
 
 let setShown: (shown: boolean) => void = () => {};
+let bridge: FakeBridge;
+let disposeHost: () => void = () => {};
 
 /** Как в окне: писатель секций — снаружи сайдбара (в `AppShell`), сайдбар можно спрятать (⌘B). */
 function Harness(props: Partial<WorkSidebarProps>): JSX.Element {
@@ -53,7 +59,13 @@ function Harness(props: Partial<WorkSidebarProps>): JSX.Element {
   const [shown, set] = useState(true);
   setShown = set;
   return shown ? (
-    <WorkSidebar onActivateWork={props.onActivateWork ?? (() => {})} onOpenSession={props.onOpenSession ?? (() => {})} onOpenMail={props.onOpenMail ?? (() => {})} />
+    <WorkSidebar
+      bridge={bridge}
+      onActivateWork={props.onActivateWork ?? (() => {})}
+      onOpenSession={props.onOpenSession ?? (() => {})}
+      onOpenMail={props.onOpenMail ?? (() => {})}
+      onOpenRoom={props.onOpenRoom ?? (() => {})}
+    />
   ) : (
     <></>
   );
@@ -73,14 +85,17 @@ const list = (): HTMLElement => {
 };
 
 beforeEach(() => {
+  bridge = createFakeBridge();
+  disposeHost = useHostStore.getState().init(bridge);
   setWorks([]);
   useActivityStore.setState({ byRef: {} });
   useNoticesStore.setState({ notices: [] });
   useUiStore.setState({
     ui: DEFAULT_UI,
     sidebarHovering: false,
+    sidebarHolds: {},
     paletteOpen: false,
-    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null }, settings: false, createRoom: null },
+    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null },
   });
   useLayoutStore.setState({ activeWorkKey: null, layouts: {}, hydrated: {}, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
   useSidebarSectionsStore.setState({ sections: [], attention: {} });
@@ -88,6 +103,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  disposeHost();
   vi.useRealTimers();
 });
 
@@ -304,5 +320,105 @@ describe('перерисовки карточек (раунд исправлен
     );
     expect(cardRenders.ids).toContain('w-a');
     expect(cardRenders.ids).not.toContain('w-b');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Кусок 3.4: меню, переименование и кеши сайдбара.
+// ---------------------------------------------------------------------------
+
+describe('WorkSidebar — SectionMenu (тест 8)', () => {
+  it('«⋯» заголовка секции: Show done зовёт patchUi({ showDoneWorks: false }), работы done пропадают', () => {
+    const open = makeWork('w-open', { projectPath: '/p/alpha', title: 'Open one' });
+    const done = makeWork('w-done', { projectPath: '/p/alpha', title: 'Done one', status: 'done' });
+    setWorks([open, done]);
+    useUiStore.getState().init(bridge);
+    // patchUi уходит в app.saveUi сырым патчем — по нему и видно, что позвали.
+    const saveUi = vi.spyOn(bridge.app, 'saveUi');
+    render(<Harness />);
+    expect(cardKeys()).toEqual([keyOf(open), keyOf(done)]);
+
+    const header = document.querySelector<HTMLElement>('[data-section-key="/p/alpha"]');
+    if (header === null) throw new Error('заголовка нет');
+    fireEvent.keyDown(within(header).getByRole('button', { name: S.sidebar.sectionMenu }), { key: 'Enter' });
+    const item = screen.getByRole('menuitemcheckbox', { name: 'Show done' });
+    expect(item.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(item);
+
+    expect(saveUi).toHaveBeenCalledWith({ showDoneWorks: false });
+    expect(useUiStore.getState().ui.showDoneWorks).toBe(false);
+    expect(cardKeys()).toEqual([keyOf(open)]);
+    // Меню не сворачивало группу.
+    expect(useUiStore.getState().ui.collapsedProjects).toEqual([]);
+  });
+});
+
+describe('WorkSidebar — меню и переименование держат порядок (тест 18)', () => {
+  const older = makeWork('w-old', { createdAt: '2026-09-27T07:00:00.000Z', title: 'Older', sessions: [makeSession('s-01', 'a')] });
+  const newer = makeWork('w-new', { createdAt: '2026-09-27T08:00:00.000Z', title: 'Newer', sessions: [makeSession('s-01', 'b')] });
+  const blockOlder = (): void =>
+    act(() =>
+      useActivityStore.setState({
+        byRef: activityMap([makeActivity({ projectPath: older.projectPath, workId: 'w-old', sessionId: 's-01' }, 'blocked')]),
+      }),
+    );
+
+  it('меню карточки открыто, указатель ушёл со списка — blocked порядок не меняет; меню закрыто — новый порядок', () => {
+    setWorks([older, newer]);
+    render(<Harness />);
+    expect(cardKeys()).toEqual([keyOf(newer), keyOf(older)]);
+
+    fireEvent.pointerEnter(list());
+    fireEvent.contextMenu(document.querySelector(`[data-work-key="${keyOf(newer)}"]`) as HTMLElement);
+    fireEvent.pointerLeave(list());
+    expect(useUiStore.getState().sidebarHovering).toBe(true);
+    blockOlder();
+    expect(cardKeys()).toEqual([keyOf(newer), keyOf(older)]);
+
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    expect(useUiStore.getState().sidebarHovering).toBe(false);
+    expect(cardKeys()).toEqual([keyOf(older), keyOf(newer)]);
+  });
+
+  it('во время InlineRename — так же', () => {
+    setWorks([older, newer]);
+    render(<Harness />);
+    fireEvent.pointerEnter(list());
+    fireEvent.doubleClick(screen.getByText('Newer'));
+    const input = screen.getByRole('textbox');
+    fireEvent.pointerLeave(list());
+    blockOlder();
+    expect(cardKeys()).toEqual([keyOf(newer), keyOf(older)]);
+
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(cardKeys()).toEqual([keyOf(older), keyOf(newer)]);
+  });
+});
+
+describe('WorkSidebar — кеши колбэков и срезов (решение контролёра 3)', () => {
+  it('работа удалена из снимка — её записей в кешах нет: вернувшаяся получает новые колбэки и срез', () => {
+    const a = makeWork('w-a', { sessions: [makeSession('s-01', 'a')] });
+    const b = makeWork('w-b', { sessions: [makeSession('s-01', 'b')] });
+    useActivityStore.setState({
+      byRef: activityMap([makeActivity({ projectPath: a.projectPath, workId: 'w-a', sessionId: 's-01' }, 'working')]),
+    });
+    setWorks([a, b]);
+    cardRenders.props = [];
+    render(<Harness />);
+    const lastProps = (id: string): import('./WorkCard.js').WorkCardProps | undefined =>
+      cardRenders.props.filter((props) => props.entry.map.work.id === id).at(-1);
+    const before = lastProps('w-a');
+
+    act(() => setWorks([b]));
+    act(() => setWorks([a, b]));
+    const after = lastProps('w-a');
+
+    expect(after?.onActivate).not.toBe(before?.onActivate);
+    expect(after?.onOpenRoom).not.toBe(before?.onOpenRoom);
+    expect(after?.activity).not.toBe(before?.activity);
+    expect(after?.activity).toEqual(before?.activity);
+    // Колбэки уцелевшей работы — прежние.
+    const bProps = cardRenders.props.filter((props) => props.entry.map.work.id === 'w-b');
+    expect(bProps.at(-1)?.onActivate).toBe(bProps[0]?.onActivate);
   });
 });
