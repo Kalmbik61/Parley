@@ -36,6 +36,7 @@ export function createAppMenu(getFocusedWindow: () => BrowserWindow | null): Men
       label: 'Сессия',
       submenu: [
         { label: 'Новая сессия', accelerator: 'CmdOrCtrl+T', click: () => send('new-session') },
+        { label: 'Новая работа', accelerator: 'CmdOrCtrl+N', click: () => send('new-work') },
         { label: 'Закрыть панель', accelerator: 'CmdOrCtrl+W', click: () => send('close-panel') },
         { label: 'Разделить справа', accelerator: 'CmdOrCtrl+D', click: () => send('split-right') },
         { label: 'Разделить снизу', accelerator: 'CmdOrCtrl+Shift+D', click: () => send('split-down') },
@@ -54,6 +55,12 @@ export function createAppMenu(getFocusedWindow: () => BrowserWindow | null): Men
             click: () => send(action),
           }),
         ),
+      ],
+    },
+    {
+      label: 'Вид',
+      submenu: [
+        { label: 'Сайдбар работ', accelerator: 'CmdOrCtrl+B', click: () => send('toggle-left-sidebar') },
       ],
     },
   ];

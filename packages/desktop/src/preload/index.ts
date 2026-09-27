@@ -83,6 +83,9 @@ const bridge = {
       menuListeners.add(listener);
       return () => menuListeners.delete(listener);
     },
+    titlebarDoubleClick: () => {
+      ipcRenderer.send('app:titlebar-double-click');
+    },
   },
 };
 

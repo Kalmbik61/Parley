@@ -18,12 +18,14 @@ export type HostStatus =
 /** Действия меню приложения, приходящие в рендерер через `window.harnas.app.onMenu`. */
 export type MenuAction =
   | 'new-session'
+  | 'new-work'
   | 'close-panel'
   | 'split-right'
   | 'split-down'
   | 'prev-panel'
   | 'next-panel'
   | 'palette'
+  | 'toggle-left-sidebar'
   | 'find'
   | 'settings'
   | `work-${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`;
@@ -63,6 +65,8 @@ export interface HarnasBridge {
     setAppearance(mode: Appearance): Promise<void>;
     /** Системная тёмность подхватывается при `nativeTheme.on('updated')` (спека 4.7). */
     onAppearance(listener: (dark: boolean) => void): () => void;
+    /** Двойной клик по пустому месту заголовка (кусок 2.3, спека 5.1). */
+    titlebarDoubleClick(): void;
   };
 }
 

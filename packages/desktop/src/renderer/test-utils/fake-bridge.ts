@@ -41,6 +41,8 @@ export interface FakeBridge extends HarnasBridge {
   readonly layoutRetains: string[][];
   /** Системная тёмность, будто бы её сообщил `nativeTheme.on('updated')` (кусок 1.1). */
   emitAppearance(dark: boolean): void;
+  /** Журнал вызовов `app.titlebarDoubleClick` (кусок 2.3) — по одной записи на вызов. */
+  readonly titlebarDoubleClicks: number[];
 }
 
 export function createFakeBridge(): FakeBridge {
@@ -56,6 +58,7 @@ export function createFakeBridge(): FakeBridge {
   const layoutSaves: Array<{ workKey: string; layout: unknown }> = [];
   const layoutRemovals: string[] = [];
   const layoutRetains: string[][] = [];
+  const titlebarDoubleClicks: number[] = [];
   const layouts = new Map<string, unknown>();
   let status: HostStatus = { state: 'connected', hostVersion: '0.0.0-test' };
   let ui: UiFile = DEFAULT_UI;
@@ -71,6 +74,7 @@ export function createFakeBridge(): FakeBridge {
     layoutSaves,
     layoutRemovals,
     layoutRetains,
+    titlebarDoubleClicks,
 
     call: async (method, params) => {
       calls.push({ method, params });
@@ -136,6 +140,9 @@ export function createFakeBridge(): FakeBridge {
       onMenu: (listener) => {
         menuListeners.add(listener);
         return () => menuListeners.delete(listener);
+      },
+      titlebarDoubleClick: () => {
+        titlebarDoubleClicks.push(titlebarDoubleClicks.length);
       },
     },
 

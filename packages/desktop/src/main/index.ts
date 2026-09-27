@@ -1,14 +1,14 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, shell, systemPreferences } from 'electron';
 import { HostConnection } from './host-connection.js';
 import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
 import { forwardAppearanceToWindow, forwardHostToWindow, registerIpc } from './ipc.js';
 import { createLayoutStore, desktopLayoutsPath } from './layout-store.js';
 import { createAppMenu } from './menu.js';
-import { createSecureWindow } from './security.js';
 import { captureShellEnv } from './shell-env.js';
 import { createUiStore, desktopUiPath } from './ui-store.js';
+import { createMainWindow } from './window.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -88,13 +88,15 @@ if (!gotLock) {
 
     const preloadPath = path.join(dirname, '../preload/index.js');
     const indexHtmlPath = path.join(dirname, '../renderer/index.html');
-    const indexHtmlUrl = `file://${indexHtmlPath}`;
 
     const openWindow = (): BrowserWindow => {
-      const window = createSecureWindow(preloadPath, indexHtmlUrl);
-      // Цвет фона — до первой загрузки страницы: иначе в тёмной теме мелькает
-      // белый холст Electron по умолчанию, пока не подгрузится CSS (спека 4.7).
-      window.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#0a0a0a' : '#ffffff');
+      const window = createMainWindow({
+        dark: nativeTheme.shouldUseDarkColors,
+        preloadPath,
+        indexHtmlPath,
+        // E2E читают текст экрана терминала — им нужен DOM-рендер xterm вместо WebGL.
+        ...(process.env.HARNAS_TERMINAL_RENDERER === 'dom' ? { search: 'renderer=dom' } : {}),
+      });
       // Раньше did-finish-load слать события в это окно бессмысленно и вредно:
       // прелоад ещё может не успеть навесить свои `ipcRenderer.on` (первая,
       // самая важная навигация — с about:blank на наш index.html), и самое
@@ -103,10 +105,6 @@ if (!gotLock) {
         forwardHostToWindow(connection, window);
         forwardAppearanceToWindow(nativeTheme, window);
       });
-      // E2E читают текст экрана терминала — им нужен DOM-рендер xterm вместо WebGL.
-      const search =
-        process.env.HARNAS_TERMINAL_RENDERER === 'dom' ? { search: 'renderer=dom' } : {};
-      void window.loadFile(indexHtmlPath, search);
       return window;
     };
 
@@ -133,6 +131,19 @@ if (!gotLock) {
       },
       setBadge: (count) => {
         app.dock?.setBadge(count > 0 ? String(count) : '');
+      },
+      titlebarDoubleClick: () => {
+        const window = mainWindow;
+        if (window === null || window.isDestroyed()) return;
+        // Как ведёт себя родной заголовок macOS на двойной клик — настройка
+        // системы, а не наша (спека 5.1).
+        const action = systemPreferences.getUserDefault('AppleActionOnDoubleClick', 'string');
+        if (action === 'Minimize') {
+          window.minimize();
+          return;
+        }
+        if (window.isMaximized()) window.unmaximize();
+        else window.maximize();
       },
     });
     createAppMenu(() => mainWindow);

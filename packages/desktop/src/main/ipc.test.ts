@@ -31,6 +31,7 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore } = {})
   layoutStore: LayoutStore;
   uiStore: UiStore;
   setAppearance: ReturnType<typeof vi.fn>;
+  titlebarDoubleClick: ReturnType<typeof vi.fn>;
 } {
   const ipcMain = new FakeIpcMain();
   const connection = {
@@ -55,6 +56,7 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore } = {})
       save: vi.fn().mockResolvedValue(DEFAULT_UI),
     } satisfies UiStore);
   const setAppearance = vi.fn();
+  const titlebarDoubleClick = vi.fn();
 
   registerIpc({
     ipcMain: ipcMain as unknown as IpcMain,
@@ -62,13 +64,14 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore } = {})
     layoutStore,
     uiStore,
     setAppearance,
+    titlebarDoubleClick,
     openExternal: vi.fn().mockResolvedValue(undefined),
     chooseFolder: vi.fn(),
     showNotification: vi.fn(),
     setBadge: vi.fn(),
   });
 
-  return { ipcMain, connection, layoutStore, uiStore, setAppearance };
+  return { ipcMain, connection, layoutStore, uiStore, setAppearance, titlebarDoubleClick };
 }
 
 describe('registerIpc', () => {
@@ -211,6 +214,12 @@ describe('registerIpc', () => {
 
     expect(setAppearance).toHaveBeenCalledWith('dark');
     expect(uiStore.save).toHaveBeenCalledWith({ appearance: 'dark' });
+  });
+
+  it('app:titlebar-double-click зовёт обработчик (кусок 2.3)', () => {
+    const { ipcMain, titlebarDoubleClick } = setup();
+    ipcMain.invoke('app:titlebar-double-click');
+    expect(titlebarDoubleClick).toHaveBeenCalled();
   });
 
   it('app:set-appearance с неверным режимом отвергается', async () => {

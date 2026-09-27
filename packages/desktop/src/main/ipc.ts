@@ -65,6 +65,8 @@ export interface RegisterIpcOptions {
   uiStore: UiStore;
   /** Меняет `nativeTheme.themeSource`; запись в `ui.json` — забота обработчика `app:set-appearance` ниже (спека 4.7). */
   setAppearance: (mode: Appearance) => void;
+  /** Двойной клик по пустому месту заголовка (кусок 2.3, спека 5.1) — системное действие macOS. */
+  titlebarDoubleClick: () => void;
 }
 
 /**
@@ -85,6 +87,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     layoutStore,
     uiStore,
     setAppearance,
+    titlebarDoubleClick,
   } = options;
 
   ipcMain.handle('host:call', async (_event, method: unknown, params: unknown) => {
@@ -178,6 +181,10 @@ export function registerIpc(options: RegisterIpcOptions): void {
     // на следующем запуске тема «откатилась» бы без действия пользователя.
     await uiStore.save({ appearance: mode });
     setAppearance(mode);
+  });
+
+  ipcMain.on('app:titlebar-double-click', () => {
+    titlebarDoubleClick();
   });
 }
 
