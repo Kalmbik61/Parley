@@ -669,6 +669,20 @@ describe('.harnas/ — не изменения проекта (тест 9)', () 
     expect((await git(project, ['rev-parse', 'HEAD'])).stdout).toBe(head);
   });
 
+  it('.harnas/ в .gitignore: коммит проходит, изменён только .harnas/ — NothingToCommitError', async () => {
+    await initProject();
+    await writeFile(path.join(project, '.gitignore'), '.harnas/\n', 'utf8');
+    await git(project, ['add', '.gitignore']);
+    await git(project, ['commit', '-m', 'игнор']);
+    await harnasLog(project);
+
+    await expect(commitProject(project, 'пусто')).rejects.toBeInstanceOf(NothingToCommitError);
+
+    await writeFile(path.join(project, 'a.txt'), 'a\n', 'utf8');
+    const { commit } = await commitProject(project, 'с игнором');
+    expect((await git(project, ['show', '--name-only', '--format=', commit])).stdout.trim()).toBe('a.txt');
+  });
+
   it('проект — подкаталог: подготовленное человеком вне него в коммит не попало и осталось подготовленным', async () => {
     await initProject();
     const sub = path.join(project, 'sub');

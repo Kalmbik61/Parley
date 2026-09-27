@@ -312,8 +312,12 @@ async function readGitBuffer(cwd: string, args: string[]): Promise<Buffer> {
 
 /** Код выхода и stdout без броска: у `--no-index` и `merge-tree` код 1 — ответ, а не сбой. */
 async function gitWithCode(cwd: string, args: string[]): Promise<{ code: number; stdout: string }> {
+  return exitCode([...READ_FLAGS, '-C', cwd, ...args]);
+}
+
+async function exitCode(args: string[]): Promise<{ code: number; stdout: string }> {
   try {
-    return { code: 0, stdout: await readGit(cwd, args) };
+    return { code: 0, stdout: (await run('git', args, { maxBuffer: MAX_BUFFER })).stdout };
   } catch (error) {
     const failed = error as { code?: unknown; stdout?: unknown };
     if (typeof failed.code === 'number' && typeof failed.stdout === 'string') {
@@ -607,7 +611,14 @@ export async function projectChanges(
  */
 export async function commitProject(projectPath: string, message: string): Promise<{ commit: string }> {
   return withGitState(projectPath, async () => {
-    await run('git', ['-C', projectPath, 'add', '-A', ...HARNAS_PATHSPEC]);
+    const added = await exitCode(['-C', projectPath, 'add', '-A', ...HARNAS_PATHSPEC]);
+    // Код 1 у `add` — и когда `.harnas/` в .gitignore: исключение в pathspec
+    // называет игнорируемый путь, остальное при этом подготовлено. Отличаем
+    // пробой `check-ignore`, а не по stderr — у человека git локализован.
+    if (added.code !== 0) {
+      const ignored = (await gitWithCode(projectPath, ['check-ignore', '-q', '--', '.harnas'])).code === 0;
+      if (added.code !== 1 || !ignored) throw new Error(`git add -A: код ${added.code}`);
+    }
     const { code } = await gitWithCode(projectPath, ['diff', '--cached', '--quiet', ...HARNAS_PATHSPEC]);
     if (code === 0) throw new NothingToCommitError(`в ${projectPath} нечего коммитить`);
     if (code !== 1) throw new Error(`git diff --cached --quiet: код ${code}`);
