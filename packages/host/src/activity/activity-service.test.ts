@@ -373,6 +373,57 @@ describe('createActivityService', () => {
     expect((notice?.data as { text: string }).text).toContain('доверия к папке');
   }, 20_000);
 
+  /** Сессия `ref` — в worktree: trust-wait ждут только такие (спека 8.2). */
+  async function intoWorktree(ref: SessionRef): Promise<void> {
+    await updateMap(project, ref.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session === undefined) return;
+      session.worktree = {
+        path: path.join(project, 'worktree'),
+        branch: 'harnas/w-0001/s-01',
+        base: 'main',
+        createdAt: new Date().toISOString(),
+      };
+    });
+  }
+
+  const trustWaitSent = (): boolean =>
+    broadcasts.some(
+      (entry) => entry.event === 'host.notice' && (entry.data as { kind: string }).kind === 'trust-wait',
+    );
+
+  // Раунд исправлений 1 куска 3.3 (ревью B, находка 2): каталог `events/` заводится при
+  // старте сессии, и журнал без событий читается пустым массивом, а не `null`. Прежняя
+  // проверка `!== null` считала пустой журнал «хук пришёл» — ⚠ не появлялся никогда.
+  it('trust-wait: журнал есть, но пуст (каталог events/ уже заведён) — уведомление приходит', async () => {
+    const { ref } = await activeSession();
+    await intoWorktree(ref);
+    const w = await works();
+    const a = activity(w, { trustWaitMs: 200 });
+    await a.start();
+
+    await waitFor(trustWaitSent, 5000);
+    const notice = broadcasts.find(
+      (entry) => entry.event === 'host.notice' && (entry.data as { kind: string }).kind === 'trust-wait',
+    );
+    expect((notice?.data as { ref: SessionRef }).ref).toEqual(ref);
+  }, 20_000);
+
+  it('trust-wait: в журнале есть событие — уведомления нет', async () => {
+    const { ref } = await activeSession();
+    await intoWorktree(ref);
+    await appendFile(
+      path.join(workPaths(project, ref.workId).events, `${ref.sessionId}.jsonl`),
+      hook('SessionStart'),
+    );
+    const w = await works();
+    const a = activity(w, { trustWaitMs: 200 });
+    await a.start();
+    await settle(600);
+
+    expect(trustWaitSent()).toBe(false);
+  }, 20_000);
+
   it('trust-wait: сессия не в worktree — уведомления нет, даже без хуков', async () => {
     await activeSession({ createEventsDir: false });
     const w = await works();

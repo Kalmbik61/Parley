@@ -249,8 +249,10 @@ export function createActivityService(
       key,
       setTimeout(() => {
         trustWaitTimers.delete(key);
-        // Хук успел прийти, пока таймер ждал, — журнал сейчас не пуст.
-        if ((journals.get(key) ?? null) !== null) return;
+        // Хук успел прийти, пока таймер ждал, — в журнале есть событие. Именно длина, а не
+        // `!== null`: каталог `events/` заводится при старте сессии, и журнал без событий
+        // читается пустым массивом (раунд исправлений 1 куска 3.3).
+        if ((journals.get(key)?.length ?? 0) > 0) return;
         trustWaitNotified.add(key);
         host.broadcast('host.notice', {
           kind: 'trust-wait',
