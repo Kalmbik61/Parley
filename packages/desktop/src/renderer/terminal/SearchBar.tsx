@@ -121,11 +121,14 @@ export const SearchBar = forwardRef<HTMLInputElement, SearchBarProps>(function S
       <button type="button" aria-label={S.terminal.useRegex} aria-pressed={regex} className={toggleClass(regex)} onClick={() => setRegex((v) => !v)}>
         <Regex className="h-4 w-4" />
       </button>
-      {counter === null ? null : (
-        <span data-testid="terminal-search-count" className="min-w-10 text-center text-xs tabular-nums text-muted-foreground">
-          {counter}
-        </span>
-      )}
+      {/* Живая область стоит всегда: появись она вместе с первым счётом, скринридер его не объявил бы. */}
+      <span
+        data-testid="terminal-search-count"
+        aria-live="polite"
+        className={cn('text-center text-xs tabular-nums text-muted-foreground', counter !== null && 'min-w-10')}
+      >
+        {counter ?? ''}
+      </span>
       <button type="button" aria-label={S.terminal.previousMatch} className={toggleClass(false)} onClick={() => run('previous')}>
         <ChevronUp className="h-4 w-4" />
       </button>

@@ -21,7 +21,7 @@ const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
 
 test.skip(!existsSync(hostEntry), `packages/host/dist/main.js не собран — сначала pnpm --filter @harnas/host build: ${hostEntry}`);
 
-type ShellEntry = { action: 'openPath' | 'showItemInFolder'; path: string };
+type ShellEntry = { action: 'openPath' | 'showItemInFolder'; path: string } | { action: 'openExternal'; url: string };
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
@@ -100,10 +100,14 @@ test.describe('файлы и корни main (кусок 5.2)', () => {
     const denied = await bridge(window, 'app', 'openPath', ['/etc/hosts']);
     expect('error' in denied && denied.error).toContain('"code":"files:denied"');
 
+    // Внешний адрес — тоже в журнал, а не в браузер человека (раунд fix-main-r1).
+    expect(await bridge(window, 'app', 'openExternal', ['https://example.com/docs'])).toEqual({ ok: undefined });
+
     expect(await shellLog(electronApp)).toEqual([
       { action: 'openPath', path: notes },
       { action: 'showItemInFolder', path: script },
       { action: 'showItemInFolder', path: notes },
+      { action: 'openExternal', url: 'https://example.com/docs' },
     ]);
   });
 });

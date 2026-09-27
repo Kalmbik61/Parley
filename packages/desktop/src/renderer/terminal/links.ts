@@ -150,24 +150,53 @@ export function createStatCache(
     return entry;
   };
 
+  // Запросы в полёте по ключу: пока указатель идёт по ещё не закэшированной строке, каждое
+  // наведение звало бы files.locate заново — второй и следующие ждут ответа первого.
+  const inflight = new Map<string, Promise<void>>();
+
   return {
     async lookup(workKey, absPaths) {
-      const missing = [...new Set(absPaths.filter((absPath) => fresh(keyOf(workKey, absPath)) === undefined))];
+      const waits: Array<Promise<void>> = [];
+      const missing: string[] = [];
+      for (const absPath of new Set(absPaths)) {
+        const key = keyOf(workKey, absPath);
+        if (fresh(key) !== undefined) continue;
+        const flying = inflight.get(key);
+        if (flying === undefined) missing.push(absPath);
+        else waits.push(flying);
+      }
+      // Пачки по-прежнему по очереди: следующая уходит после ответа на предыдущую.
+      let previous: Promise<void> = Promise.resolve();
       for (let i = 0; i < missing.length; i += LOCATE_BATCH) {
         const batch = missing.slice(i, i + LOCATE_BATCH);
-        const answers = await locate(workKey, batch);
-        const at = now();
-        batch.forEach((absPath, index) => {
-          const key = keyOf(workKey, absPath);
-          entries.delete(key);
-          entries.set(key, { value: answers[index] ?? null, at });
-          while (entries.size > max) {
-            const oldest = entries.keys().next().value;
-            if (oldest === undefined) break;
-            entries.delete(oldest);
+        const ask = async (): Promise<void> => {
+          const answers = await locate(workKey, batch);
+          const at = now();
+          batch.forEach((absPath, index) => {
+            const key = keyOf(workKey, absPath);
+            entries.delete(key);
+            entries.set(key, { value: answers[index] ?? null, at });
+            while (entries.size > max) {
+              const oldest = entries.keys().next().value;
+              if (oldest === undefined) break;
+              entries.delete(oldest);
+            }
+          });
+        };
+        // Первая пачка уходит сразу, в том же вызове lookup: следующий lookup уже её видит.
+        const request = i === 0 ? ask() : previous.then(ask);
+        const settle = (): void => {
+          for (const absPath of batch) {
+            const key = keyOf(workKey, absPath);
+            if (inflight.get(key) === request) inflight.delete(key);
           }
-        });
+        };
+        request.then(settle, settle);
+        for (const absPath of batch) inflight.set(keyOf(workKey, absPath), request);
+        waits.push(request);
+        previous = request;
       }
+      await Promise.all(waits);
       return absPaths.map((absPath) => entries.get(keyOf(workKey, absPath))?.value ?? null);
     },
   };

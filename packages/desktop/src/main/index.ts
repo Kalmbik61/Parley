@@ -219,10 +219,10 @@ if (!gotLock) {
     };
     const roots = createRootsRegistry(rootsSource);
 
-    // E2E (`HARNAS_SHELL=log`): «открыть в приложении» и «показать в Finder» — в журнал main,
-    // а не на экран человека (настоящие открыли бы приложение и Finder); тест читает журнал
-    // через `app.evaluate` (`globalThis.__harnasShell`).
-    const shellLog: Array<{ action: 'openPath' | 'showItemInFolder'; path: string }> = [];
+    // E2E (`HARNAS_SHELL=log`): «открыть в приложении», «показать в Finder» и внешний адрес —
+    // в журнал main, а не на экран человека (настоящие открыли бы приложение, Finder и браузер);
+    // тест читает журнал через `app.evaluate` (`globalThis.__harnasShell`).
+    const shellLog: Array<{ action: 'openPath' | 'showItemInFolder'; path: string } | { action: 'openExternal'; url: string }> = [];
     const logShell = process.env.HARNAS_SHELL === 'log';
     if (logShell) {
       (globalThis as { __harnasShell?: typeof shellLog }).__harnasShell = shellLog;
@@ -236,7 +236,10 @@ if (!gotLock) {
       setAppearance: (mode) => {
         nativeTheme.themeSource = mode;
       },
-      openExternal: (url) => shell.openExternal(url),
+      openExternal: async (url) => {
+        if (!logShell) return shell.openExternal(url);
+        shellLog.push({ action: 'openExternal', url });
+      },
       showItemInFolder: (path) => {
         if (logShell) shellLog.push({ action: 'showItemInFolder', path });
         else shell.showItemInFolder(path);

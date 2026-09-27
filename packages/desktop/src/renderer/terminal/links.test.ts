@@ -134,6 +134,44 @@ describe('тест 4: createStatCache', () => {
     expect(calls.at(-1)).toEqual({ workKey: 'w', absPaths: ['/f0'] });
   });
 
+  it('одновременные lookup тех же путей — один locate, остальные ждут его ответа (fix-main-r1)', async () => {
+    const calls: string[][] = [];
+    const answers: Array<() => void> = [];
+    const cache = createStatCache((workKey, absPaths) => {
+      calls.push([...absPaths]);
+      return new Promise((resolve) => {
+        answers.push(() => resolve(absPaths.map((p) => located(workKey, p.slice(1)))));
+      });
+    });
+    const first = cache.lookup('w', ['/a.ts', '/b.ts']);
+    const second = cache.lookup('w', ['/b.ts', '/a.ts']);
+    const third = cache.lookup('w', ['/a.ts', '/c.ts']);
+    await Promise.resolve();
+    // /a.ts и /b.ts уже в полёте: третий просит только /c.ts.
+    expect(calls).toEqual([['/a.ts', '/b.ts'], ['/c.ts']]);
+    for (const answer of answers) answer();
+    const [a, b, c] = await Promise.all([first, second, third]);
+    expect(a.map((x) => x?.relPath)).toEqual(['a.ts', 'b.ts']);
+    expect(b.map((x) => x?.relPath)).toEqual(['b.ts', 'a.ts']);
+    expect(c.map((x) => x?.relPath)).toEqual(['a.ts', 'c.ts']);
+  });
+
+  it('ошибка locate в полёте — все ждущие получают её, следующий lookup спрашивает заново', async () => {
+    let fail = true;
+    const calls: string[][] = [];
+    const cache = createStatCache(async (workKey, absPaths) => {
+      calls.push([...absPaths]);
+      if (fail) throw new Error('locate упал');
+      return absPaths.map((p) => located(workKey, p.slice(1)));
+    });
+    const results = await Promise.allSettled([cache.lookup('w', ['/a.ts']), cache.lookup('w', ['/a.ts'])]);
+    expect(results.map((r) => r.status)).toEqual(['rejected', 'rejected']);
+    expect(calls).toHaveLength(1);
+    fail = false;
+    expect((await cache.lookup('w', ['/a.ts']))[0]?.relPath).toBe('a.ts');
+    expect(calls).toHaveLength(2);
+  });
+
   it('тот же путь с другим workKey — отдельный вызов', async () => {
     const { cache, calls } = setup();
     await cache.lookup('w1', ['/a.ts']);

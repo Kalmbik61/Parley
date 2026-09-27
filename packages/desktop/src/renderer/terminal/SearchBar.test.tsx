@@ -74,8 +74,11 @@ describe('тест 8: SearchBar', () => {
   it('счётчик N/M, свыше 1000 — 1000+; исключение аддона — 0/0', () => {
     const { addon, search, fire } = fakeSearch();
     render(<SearchBar search={search} onClose={() => {}} />);
+    // Живая область есть до первого счёта: иначе скринридер не объявит первое N/M.
+    expect(screen.getByTestId('terminal-search-count').getAttribute('aria-live')).toBe('polite');
     act(() => fire({ resultIndex: 2, resultCount: 17 }));
     expect(screen.getByTestId('terminal-search-count').textContent).toBe('3/17');
+    expect(screen.getByTestId('terminal-search-count').getAttribute('aria-live')).toBe('polite');
     act(() => fire({ resultIndex: 0, resultCount: 1001 }));
     expect(screen.getByTestId('terminal-search-count').textContent).toBe('1/1000+');
 
