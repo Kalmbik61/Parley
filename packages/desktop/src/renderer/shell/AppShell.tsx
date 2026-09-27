@@ -59,7 +59,8 @@ import { CommandPalette } from '../components/palette/CommandPalette.js';
 import { SessionPicker, sessionCandidates } from '../components/palette/SessionPicker.js';
 import { CreateRoomDialog, type RoomCandidate } from '../components/rooms/CreateRoomDialog.js';
 import { Sidebar } from '../components/sidebar/Sidebar.js';
-import { SidebarSectionsWriter } from '../sidebar/use-sidebar-sections.js';
+import { visibleWorkOrder } from '../sidebar/sort.js';
+import { SidebarSectionsWriter, useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
 import { WorkSidebar } from '../sidebar/WorkSidebar.js';
 import { buildCommands, recentSessionsFromHistory } from '../lib/commands.js';
 import { sessionLabelFor, sessionRowLabel } from '../lib/participant.js';
@@ -68,6 +69,7 @@ import { applyDrop, centerOverlayOnCursor, dragItemOf, dropFromDragEnd, layoutCo
 import { setDropPreview } from '../layout/DropIndicator.js';
 import { tabId } from '../layout/ids.js';
 import { tabMeta } from '../layout/tab-meta.js';
+import { isTextEntryTarget, layoutKeyAction, neighborInOrder } from '../layout/keys.js';
 import { LayoutView } from '../layout/LayoutView.js';
 import { createLru, type Lru } from '../layout/lru.js';
 import { SurfaceLayer } from '../layout/SurfaceLayer.js';
@@ -271,13 +273,29 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     setDropPreview(null, null);
   };
 
-  // ⌘1…⌘9 — N-я по порядку создания работа становится активной и открывается
-  // своей раскладкой (кусок 2.7); порядок сайдбара придёт в 3.4.
+  // ⌘1…⌘9 — N-я работа видимого порядка сайдбара, «Pinned» первыми (кусок 3.4, спека 6.5).
+  // Порядок — из стора секций в момент нажатия: оболочка на активность не подписана.
   const selectWorkByNumber = (n: number): void => {
-    const work = orderedWorks(useWorksStore.getState().entries)[n - 1];
-    if (work === undefined) return;
-    useLayoutStore.getState().setActiveWork(workKey(work.projectPath, work.map.work.id));
+    const key = visibleWorkOrder(useSidebarSectionsStore.getState().sections)[n - 1];
+    if (key !== undefined) useLayoutStore.getState().setActiveWork(key);
   };
+
+  // ⌘⇧↑↓ — соседняя работа того же порядка (кусок 3.4). Один обработчик на окно: у
+  // `LayoutView` трёх работ LRU этот исход проходит мимо. В поле ввода сочетание остаётся
+  // выделению до края (спека 9.6); терминал полем не считается — ⌘-сочетания его идут окну.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      const action = layoutKeyAction(event);
+      if (action?.kind !== 'work-step' || isTextEntryTarget(event.target)) return;
+      const order = visibleWorkOrder(useSidebarSectionsStore.getState().sections);
+      const next = neighborInOrder(order, useLayoutStore.getState().activeWorkKey, action.step);
+      if (next === null) return;
+      event.preventDefault();
+      useLayoutStore.getState().setActiveWork(next);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Меню раскладки работает прямо через `layout/store.ts` на раскладке
   // активной работы (спека 5.3, п. «Клавиши»).

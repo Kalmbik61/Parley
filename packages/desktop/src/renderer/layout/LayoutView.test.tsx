@@ -277,3 +277,38 @@ describe('LayoutView — active: false (кусок 2.5)', () => {
     }
   });
 });
+
+describe('LayoutView — work-step проходит мимо (тест 11 куска 3.4)', () => {
+  it('⌘⇧↓ не листает вкладки активной группы и не зовёт preventDefault; ⌘⇧] — листает', async () => {
+    const group: GroupNode = {
+      type: 'group',
+      id: 'g1',
+      tabs: [
+        { kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01' },
+        { kind: 'room', id: 'room:r-01', roomId: 'r-01' },
+      ],
+      activeTabId: 'terminal:s-01',
+    };
+    useLayoutStore.setState({ layouts: { [WORK_KEY]: { root: group, activeGroupId: 'g1', closedTabs: [] } } });
+    render(<LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} />);
+    await flush();
+    const activeTab = (): string | null => {
+      const root = useLayoutStore.getState().layouts[WORK_KEY]?.root;
+      return root?.type === 'group' ? root.activeTabId : null;
+    };
+
+    const step = new KeyboardEvent('keydown', { key: 'ArrowDown', metaKey: true, shiftKey: true, cancelable: true });
+    act(() => {
+      window.dispatchEvent(step);
+    });
+    expect(step.defaultPrevented).toBe(false);
+    expect(activeTab()).toBe('terminal:s-01');
+
+    const tabStep = new KeyboardEvent('keydown', { key: ']', metaKey: true, shiftKey: true, cancelable: true });
+    act(() => {
+      window.dispatchEvent(tabStep);
+    });
+    expect(tabStep.defaultPrevented).toBe(true);
+    expect(activeTab()).toBe('room:r-01');
+  });
+});

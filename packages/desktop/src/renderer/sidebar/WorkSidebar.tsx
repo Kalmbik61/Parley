@@ -28,8 +28,9 @@ import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import { ProjectGroup } from './ProjectGroup.js';
 import type { SidebarSection } from './sort.js';
+import { useSidebarKeys } from './use-sidebar-keys.js';
 import { useSidebarAttention, useSidebarSections } from './use-sidebar-sections.js';
-import { WorkCard } from './WorkCard.js';
+import { showClosedSessions, WorkCard } from './WorkCard.js';
 
 export interface WorkSidebarProps {
   /** Мост для меню карточек и строк (кусок 3.4). */
@@ -159,6 +160,13 @@ export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail,
     }
   }
 
+  const keys = useSidebarKeys({
+    listRef,
+    activeWorkKey,
+    onActivateWork: (key) => props.current.onActivateWork(key),
+    onShowClosed: showClosedSessions,
+  });
+
   const pinned = new Set(pinnedWorks);
   const toggleCollapsed = (projectPath: string): void => {
     const next = collapsedProjects.includes(projectPath)
@@ -222,9 +230,15 @@ export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail,
       <div
         ref={listRef}
         data-sidebar-list
+        // Клик по пустому месту списка — фокус сайдбара (спека 6.5), курсор на активной карточке.
+        tabIndex={-1}
+        onFocus={keys.onFocus}
+        onKeyDown={keys.onKeyDown}
+        onPointerDown={keys.onPointerDown}
+        onPointerUp={keys.onPointerUp}
         onPointerEnter={() => setPointerOver(true)}
         onPointerLeave={() => setPointerOver(false)}
-        className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto px-2 pb-2"
+        className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto px-2 pb-2 outline-none"
       >
         {cardCount > VIRTUALIZE_ABOVE ? (
           <VirtualList

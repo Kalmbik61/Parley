@@ -81,7 +81,9 @@ export function LayoutView({ workKey, active, bridge, fontFamily, fontSize }: La
 
     const handleKeyDown = (event: KeyboardEvent): void => {
       const action = layoutKeyAction(event);
-      if (action === null) return;
+      // `work-step` (⌘⇧↑↓, кусок 3.4) — не этой раскладки: его разбирает `AppShell`, а тут он
+      // проходит мимо без `preventDefault` и не листает вкладки.
+      if (action === null || action.kind === 'work-step') return;
 
       const current = useLayoutStore.getState().layouts[workKey];
       if (current === undefined) return;
@@ -103,7 +105,7 @@ export function LayoutView({ workKey, active, bridge, fontFamily, fontSize }: La
       } else if (action.kind === 'tab-index') {
         const tab = activeGroup?.tabs[action.index];
         if (tab !== undefined) useLayoutStore.getState().apply(workKey, (l) => focusTab(l, tab.id));
-      } else {
+      } else if (action.kind === 'tab-step') {
         if (activeGroup === undefined || activeGroup.tabs.length === 0) return;
         const currentIndex = activeGroup.tabs.findIndex((tab) => tab.id === activeGroup.activeTabId);
         const tab = activeGroup.tabs[wrapIndex(currentIndex + action.step, activeGroup.tabs.length)];

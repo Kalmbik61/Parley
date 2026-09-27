@@ -769,25 +769,92 @@ describe('AppShell — фокус группы из поверхности те�
   });
 });
 
-describe('AppShell — меню work-2 (тест 7 куска 2.7)', () => {
-  it('делает активной вторую по порядку создания работу, в центре — её раскладка', async () => {
-    // Снимок нарочно не в порядке создания: ⌘2 считает по `createdAt`, а не по массиву.
+describe('AppShell — меню work-N по видимому порядку (тест 7 куска 2.7, тест 7 куска 3.4)', () => {
+  it('⌘1 — первая работа видимого порядка, включая Pinned; work-2 — вторая в нём, а не по созданию', async () => {
+    // Снимок нарочно не в порядке создания, а третья работа закреплена: видимый порядок —
+    // Pinned [w-03], затем проекты по имени папки [w-01], [w-02].
     const [w1, w2, w3] = fourWorks();
     await renderShell([w3!, w1!, w2!]);
-    await activateWithTerminal(keyOf('w-01'), 's-01');
+    act(() => useUiStore.getState().patchUi({ pinnedWorks: [keyOf('w-03')] }));
     await activateWithTerminal(keyOf('w-02'), 's-02');
     await activateWithTerminal(keyOf('w-01'), 's-01');
-    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
+    await activateWithTerminal(keyOf('w-02'), 's-02');
+
+    act(() => bridge.emitMenu('work-1'));
+    await flush();
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-03'));
 
     act(() => bridge.emitMenu('work-2'));
     await flush();
-
-    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
-    const active = container(keyOf('w-02'));
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
+    const active = container(keyOf('w-01'));
     expect(active?.style.visibility).not.toBe('hidden');
-    expect(active?.querySelector('[data-group-id]')).not.toBeNull();
-    expect(active?.querySelector('[data-surface-layer] [data-tab-id="terminal:s-02"]')).not.toBeNull();
-    expect(document.getElementById('titlebar-tabs')?.querySelector('[data-tab-id="terminal:s-02"]')).not.toBeNull();
+    expect(active?.querySelector('[data-surface-layer] [data-tab-id="terminal:s-01"]')).not.toBeNull();
+    expect(document.getElementById('titlebar-tabs')?.querySelector('[data-tab-id="terminal:s-01"]')).not.toBeNull();
+
+    act(() => bridge.emitMenu('work-9'));
+    await flush();
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
+  });
+});
+
+describe('AppShell — ⌘⇧↑↓ по видимому порядку (тесты 11, 20 куска 3.4)', () => {
+  const press = (target: EventTarget, key: 'ArrowUp' | 'ArrowDown'): KeyboardEvent => {
+    const event = new KeyboardEvent('keydown', { key, metaKey: true, shiftKey: true, bubbles: true, cancelable: true });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event;
+  };
+  const activeTab = (key: string): string | null => {
+    const layout = useLayoutStore.getState().layouts[key];
+    const group = layout === undefined ? undefined : groups(layout).find((candidate) => candidate.id === layout.activeGroupId);
+    return group?.activeTabId ?? null;
+  };
+
+  it('в поле ввода работу не меняет; в терминале и вне полей — соседняя, вкладки активной группы не листаются', async () => {
+    await renderShell(fourWorks().slice(0, 3));
+    await activateWithTerminal(keyOf('w-01'), 's-01');
+    act(() => useLayoutStore.getState().apply(keyOf('w-01'), (layout) => openTab(layout, { kind: 'mail', id: tabId.mail() })));
+    act(() => useLayoutStore.getState().apply(keyOf('w-01'), (layout) => openTab(layout, term('s-01'))));
+    expect(activeTab(keyOf('w-01'))).toBe(tabId.terminal('s-01'));
+
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    const ignored = press(input, 'ArrowDown');
+    expect(ignored.defaultPrevented).toBe(false);
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
+    input.remove();
+
+    const xterm = document.createElement('div');
+    xterm.className = 'xterm';
+    const helper = document.createElement('textarea');
+    helper.className = 'xterm-helper-textarea';
+    xterm.appendChild(helper);
+    document.body.appendChild(xterm);
+    const fromTerminal = press(helper, 'ArrowDown');
+    expect(fromTerminal.defaultPrevented).toBe(true);
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
+    expect(activeTab(keyOf('w-01'))).toBe(tabId.terminal('s-01'));
+    xterm.remove();
+
+    press(document.body, 'ArrowUp');
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
+    expect(activeTab(keyOf('w-01'))).toBe(tabId.terminal('s-01'));
+  });
+
+  it('проект активной работы свёрнут: ⌘⇧↓ — первая видимая работа, ⌘⇧↑ — последняя (тест 20)', async () => {
+    await renderShell(fourWorks().slice(0, 3));
+    act(() => useLayoutStore.getState().setActiveWork(keyOf('w-02')));
+    act(() => useUiStore.getState().patchUi({ collapsedProjects: ['/tmp/w-02'] }));
+    await flush();
+
+    press(document.body, 'ArrowDown');
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
+
+    act(() => useLayoutStore.getState().setActiveWork(keyOf('w-02')));
+    press(document.body, 'ArrowUp');
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-03'));
   });
 });
 

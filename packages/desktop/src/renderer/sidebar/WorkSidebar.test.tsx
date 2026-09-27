@@ -422,3 +422,52 @@ describe('WorkSidebar — кеши колбэков и срезов (решен�
     expect(bProps.at(-1)?.onActivate).toBe(bProps[0]?.onActivate);
   });
 });
+
+describe('WorkSidebar — клавиатура (спека 6.5, кусок 3.4)', () => {
+  it('фокус в список — курсор на активной карточке; ↑↓ по карточкам и строкам; Enter открывает', () => {
+    const onActivateWork = vi.fn();
+    const onOpenSession = vi.fn();
+    const a = makeWork('w-a', { createdAt: '2026-09-27T08:00:00.000Z', sessions: [makeSession('s-01', 'a')] });
+    const b = makeWork('w-b', { createdAt: '2026-09-27T07:00:00.000Z', sessions: [makeSession('s-01', 'b')] });
+    setWorks([a, b]);
+    useLayoutStore.setState({ activeWorkKey: keyOf(b) });
+    render(<Harness onActivateWork={onActivateWork} onOpenSession={onOpenSession} />);
+    expect(cardKeys()).toEqual([keyOf(a), keyOf(b)]);
+
+    // Tab из «New workspace» попадает в первый доступный элемент списка — курсор на активной.
+    const firstRow = document.querySelector<HTMLElement>(`[data-work-key="${keyOf(a)}"] [data-session-id="s-01"]`);
+    act(() => firstRow?.focus());
+    const cardB = document.querySelector<HTMLElement>(`[data-work-key="${keyOf(b)}"]`);
+    expect(document.activeElement).toBe(cardB);
+
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(firstRow);
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowUp' });
+    expect(document.activeElement?.getAttribute('data-work-key')).toBe(keyOf(a));
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Enter' });
+    expect(onActivateWork).toHaveBeenCalledWith(keyOf(a));
+
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowDown' });
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Enter' });
+    expect(onOpenSession).toHaveBeenCalledWith(keyOf(a), 's-01');
+  });
+
+  it('→ разворачивает закрытые сессии карточки, ← сворачивает; Shift+F10 — меню под курсором', () => {
+    const entry = makeWork('w-k', { sessions: [makeSession('s-01', 'open'), makeSession('s-02', 'old', { lifecycle: 'closed' })] });
+    setWorks([entry]);
+    useLayoutStore.setState({ activeWorkKey: keyOf(entry) });
+    render(<Harness />);
+    const card = document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"]`) as HTMLElement;
+    act(() => card.focus());
+    expect(card.querySelector('[data-session-id="s-02"]')).toBeNull();
+
+    fireEvent.keyDown(card, { key: 'ArrowRight' });
+    expect(card.querySelector('[data-session-id="s-02"]')).not.toBeNull();
+    fireEvent.keyDown(card, { key: 'ArrowLeft' });
+    expect(card.querySelector('[data-session-id="s-02"]')).toBeNull();
+
+    fireEvent.keyDown(card, { key: 'F10', shiftKey: true });
+    expect(screen.getByRole('menu')).toBeTruthy();
+    expect(screen.getByText('Pin')).toBeTruthy();
+  });
+});

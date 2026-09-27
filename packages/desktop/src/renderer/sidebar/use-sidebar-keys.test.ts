@@ -1,0 +1,31 @@
+/** Тест 6 куска 3.4: курсор клавиатуры сайдбара (спека 6.5). */
+
+import { describe, expect, it } from 'vitest';
+import { moveCursor, type SidebarCursor } from './use-sidebar-keys.js';
+
+const cardA: SidebarCursor = { workKey: 'a', sessionId: null };
+const rowA1: SidebarCursor = { workKey: 'a', sessionId: 's-01' };
+const rowA2: SidebarCursor = { workKey: 'a', sessionId: 's-02' };
+const cardB: SidebarCursor = { workKey: 'b', sessionId: null };
+const ORDER = [cardA, rowA1, rowA2, cardB];
+
+describe('moveCursor (тест 6)', () => {
+  it('↓ с последней строки остаётся на ней; ↑ с первой — на ней', () => {
+    expect(moveCursor(ORDER, cardB, 'ArrowDown')).toEqual(cardB);
+    expect(moveCursor(ORDER, cardA, 'ArrowUp')).toEqual(cardA);
+  });
+
+  it('переход между карточками идёт через строки сессий', () => {
+    expect(moveCursor(ORDER, cardA, 'ArrowDown')).toEqual(rowA1);
+    expect(moveCursor(ORDER, rowA1, 'ArrowDown')).toEqual(rowA2);
+    expect(moveCursor(ORDER, rowA2, 'ArrowDown')).toEqual(cardB);
+    expect(moveCursor(ORDER, cardB, 'ArrowUp')).toEqual(rowA2);
+  });
+
+  it('курсора нет или его элемент пропал — ↓ на первый, ↑ на последний; пустой порядок — null', () => {
+    expect(moveCursor(ORDER, null, 'ArrowDown')).toEqual(cardA);
+    expect(moveCursor(ORDER, null, 'ArrowUp')).toEqual(cardB);
+    expect(moveCursor(ORDER, { workKey: 'gone', sessionId: null }, 'ArrowDown')).toEqual(cardA);
+    expect(moveCursor([], cardA, 'ArrowDown')).toBeNull();
+  });
+});

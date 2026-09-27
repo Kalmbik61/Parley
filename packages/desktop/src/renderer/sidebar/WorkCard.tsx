@@ -64,6 +64,14 @@ const useExpandedClosed = create<{ keys: Record<string, true>; expand: (key: str
   expand: (key) => set((state) => ({ keys: { ...state.keys, [key]: true } })),
 }));
 
+/** → и ← клавиатуры сайдбара (кусок 3.4, спека 6.5): закрытые сессии карточки показать или спрятать. */
+export function showClosedSessions(key: string, shown: boolean): void {
+  useExpandedClosed.setState((state) => {
+    if (shown === (state.keys[key] === true)) return state;
+    return { keys: shown ? { ...state.keys, [key]: true } : Object.fromEntries(Object.entries(state.keys).filter(([item]) => item !== key)) };
+  });
+}
+
 /** Имя папки — последний сегмент пути (как заголовок группы, `sort.ts`). */
 function folderName(projectPath: string): string {
   return projectPath.split('/').filter((part) => part !== '').at(-1) ?? projectPath;
@@ -129,13 +137,15 @@ export const WorkCard = memo(function WorkCard({
     <div
       data-work-key={key}
       data-active={active}
+      // Курсор клавиатуры сайдбара — фокус (`use-sidebar-keys.ts`); в порядок Tab карточка не входит.
+      tabIndex={-1}
       onClick={(event) => {
         // События меню и диалогов карточки идут из порталов, но всплывают по дереву React —
         // выбор пункта меню не должен заодно активировать работу (кусок 3.4).
         if (event.currentTarget.contains(event.target as Node)) onActivate();
       }}
       className={cn(
-        'relative mb-1.5 cursor-default overflow-hidden rounded-lg border py-1 pl-2.5 pr-1.5',
+        'relative mb-1.5 cursor-default overflow-hidden rounded-lg border py-1 pl-2.5 pr-1.5 outline-none focus-visible:ring-1 focus-visible:ring-work-sidebar-ring',
         active
           ? 'border-work-sidebar-border bg-[color-mix(in_srgb,var(--work-sidebar-foreground)_8%,transparent)] shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:bg-[color-mix(in_srgb,var(--work-sidebar-foreground)_10%,transparent)]'
           : 'border-transparent hover:bg-work-sidebar-accent/40',
