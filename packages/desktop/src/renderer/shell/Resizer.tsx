@@ -23,6 +23,13 @@
  * окна состояние перетаскивания и оверлей застревали бы навсегда, а оверлей
  * (потомок ручки в DOM) ловил бы любой следующий клик где угодно и
  * запускал бы новое перетаскивание всплытием до `onPointerDown` ручки.
+ *
+ * Ручка не занимает места в раскладке (раунд исправлений 3, Important, спека
+ * 4.4: «зона ресайза — 12px над швом»): внешняя обёртка — нулевой ширины
+ * flex-элемент, ровно на шве между сайдбаром и центром; зона захвата (12px,
+ * все обработчики) — `absolute`, отцентрована на этой точке (`left-0
+ * -translate-x-1/2`), поэтому сосед слева и сосед справа стоят вплотную, а не
+ * раздвинуты на 12px, сквозь которые раньше просвечивал фон окна.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -123,17 +130,22 @@ export function Resizer({ side, width, min, max, target, onCommit }: ResizerProp
   }, [dragging, cancelDrag]);
 
   return (
-    <div
-      role="separator"
-      aria-orientation="vertical"
-      className="group relative w-3 shrink-0 cursor-col-resize touch-none select-none"
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={endDrag}
-      onPointerCancel={endDrag}
-      onLostPointerCapture={cancelDrag}
-    >
-      <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border group-hover:bg-ring/50" />
+    // Нулевая ширина: сам этот `div` — то, что стоит между сайдбаром и
+    // центром во flex-потоке, и стоять он должен ровно на шве, ничего не
+    // раздвигая. `relative` — для `absolute` зоны захвата внутри.
+    <div className="relative w-0 shrink-0">
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        className="group absolute inset-y-0 left-0 z-10 w-3 -translate-x-1/2 cursor-col-resize touch-none select-none"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        onLostPointerCapture={cancelDrag}
+      >
+        <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border group-hover:bg-ring/50" />
+      </div>
       {dragging ? (
         // На весь экран, не только на центр: сам `Resizer` уже держит
         // `pointermove`/`pointerup` через `setPointerCapture`, оверлею

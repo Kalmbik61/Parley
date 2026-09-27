@@ -19,6 +19,32 @@ describe('clampWidth (тест 3)', () => {
   });
 });
 
+describe('Resizer — ручка не занимает места в раскладке (раунд исправлений 3, Important)', () => {
+  it('обёртка нулевой ширины в потоке, зона захвата 12px абсолютным поверх шва', () => {
+    const target = createRef<HTMLDivElement>();
+    const { container } = render(
+      <>
+        <div ref={target} style={{ width: 280 }} />
+        <Resizer side="left" width={280} min={220} max={500} target={target} onCommit={() => {}} />
+      </>,
+    );
+    const handle = container.querySelector('[role="separator"]');
+    if (handle === null) throw new Error('ручка ресайза не найдена');
+
+    // Зона захвата — 12px, абсолютным позиционированием поверх шва, а не
+    // элементом потока (спека 4.4: «зона ресайза — 12px над швом»).
+    expect(handle.className).toMatch(/\babsolute\b/);
+    expect(handle.className).toMatch(/\bw-3\b/);
+
+    // Вклад в раскладку — нулевой: сосед слева (сайдбар) и сосед справа
+    // (центр) стоят вплотную друг к другу, шов у них общий, а не разведён на
+    // 12px тёмным просветом фона окна.
+    const wrapper = handle.parentElement;
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.className).toMatch(/\bw-0\b/);
+  });
+});
+
 describe('Resizer (тест 4)', () => {
   it('pointermove не зовёт onCommit; pointerup зовёт один раз с приведённой шириной', () => {
     const target = createRef<HTMLDivElement>();
