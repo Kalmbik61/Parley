@@ -1,5 +1,5 @@
 /**
- * Перетаскивание вкладок и строк сессий (кусок 2.6, спека 5.4) — чистая часть:
+ * Перетаскивание вкладок, строк сессий и файлов «Файлов» (куски 2.6, 7.2, спека 5.4) — чистая часть:
  * зона броска по точке, операция над раскладкой, разбор `onDragEnd` и
  * `collisionDetection` для единственного `DndContext` в `AppShell.tsx`.
  *
@@ -15,6 +15,7 @@ import type {
   DroppableContainer,
   Modifier,
 } from '@dnd-kit/core';
+import type { FileRoot } from '../../shared/files-types.js';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { tabId as tabIdOf } from './ids.js';
 import {
@@ -29,7 +30,11 @@ import {
   type OpResult,
 } from './tree.js';
 
-export type DragItem = { kind: 'tab'; tabId: string } | { kind: 'session'; sessionId: string };
+export type DragItem =
+  | { kind: 'tab'; tabId: string }
+  | { kind: 'session'; sessionId: string }
+  // Файл дерева «Файлов» (7.2): path относительный, от корня root.
+  | { kind: 'file'; root: FileRoot; path: string };
 export type DropZone =
   | { kind: 'strip'; groupId: string; index: number }
   | { kind: 'center'; groupId: string }
@@ -66,6 +71,8 @@ export const dndId = {
   terminal: (workKey: string, tabId: string): string => `terminal\u0000${workKey}\u0000${tabId}`,
   session: (workKey: string, sessionId: string): string =>
     `session\u0000${workKey}\u0000${sessionId}`,
+  // Ключ корня, а не работы: у проекта и worktree сессий одни и те же относительные пути.
+  file: (rootKey: string, path: string): string => `file\u0000${rootKey}\u0000${path}`,
 };
 
 /** Доля ширины или высоты тела, которую занимает зона края (спека 5.4). */
@@ -92,19 +99,33 @@ export function zoneForPoint(
   return best === null ? { kind: 'center', groupId } : { kind: 'edge', groupId, edge: best.edge };
 }
 
-/** Принимает ли терминал предмет: в этапе 2 — никакой (tab и session → false); 7.2 добавит file. */
+/**
+ * Принимает ли терминал предмет: только файл (7.2) — путь уходит агенту в поле ввода. Хост без
+ * `pty.send` отсекает `AppShell`: `layoutCollision(activeWorkKey, accepts)`.
+ */
 export function acceptsTerminal(item: DragItem): boolean {
   switch (item.kind) {
     case 'tab':
     case 'session':
       return false;
+    case 'file':
+      return true;
   }
+}
+
+function isFileRoot(value: unknown): value is FileRoot {
+  if (typeof value !== 'object' || value === null) return false;
+  const { workKey, spec } = value as { workKey?: unknown; spec?: unknown };
+  if (typeof workKey !== 'string' || typeof spec !== 'object' || spec === null) return false;
+  const { kind, sessionId } = spec as { kind?: unknown; sessionId?: unknown };
+  return kind === 'project' || (kind === 'worktree' && typeof sessionId === 'string');
 }
 
 function isDragItem(value: unknown): value is DragItem {
   if (typeof value !== 'object' || value === null) return false;
-  const kind = (value as { kind?: unknown }).kind;
-  return kind === 'tab' || kind === 'session';
+  const item = value as { kind?: unknown; root?: unknown; path?: unknown };
+  if (item.kind === 'file') return isFileRoot(item.root) && typeof item.path === 'string';
+  return item.kind === 'tab' || item.kind === 'session';
 }
 
 /** Предмет из `active.data.current`; у чужих тащимых его нет. */
@@ -135,10 +156,11 @@ function contains(rect: ClientRect, point: { x: number; y: number }): boolean {
 /**
  * collisionDetection DndContext. Контейнеры с чужим `data.workKey` отбрасываются: тела
  * скрытых работ LRU лежат на месте тела активной. Терминал под указателем и
- * acceptsTerminal(active) — зона терминала важнее центра и краёв тела группы; иначе
+ * accepts(active) — зона терминала важнее центра и краёв тела группы; иначе
  * droppable терминалов пропускаются.
  *
- * `accepts` — только для тестов: в этапе 2 предметов, которые терминал берёт, нет.
+ * `accepts` — `AppShell` сужает `acceptsTerminal` хостом без `pty.send` (7.2): иначе старый хост
+ * ответил бы `unknown_method`, а файл без зоны терминала падает в тело группы вкладкой.
  */
 export function layoutCollision(
   activeWorkKey: string | null,
@@ -150,8 +172,7 @@ export function layoutCollision(
       x: collisionRect.left + collisionRect.width / 2,
       y: collisionRect.top + collisionRect.height / 2,
     };
-    // Предмет читается без проверки вида: решать, берёт ли его терминал, —
-    // дело `accepts` (7.2 добавит `file`, которого `dragItemOf` пока не знает).
+    // Предмет читается без проверки формы: решать, берёт ли его терминал, — дело `accepts`.
     const raw: unknown = (active.data.current as { item?: unknown } | undefined)?.item;
     const item =
       typeof raw === 'object' &&
@@ -188,8 +209,10 @@ export function layoutCollision(
   };
 }
 
-function terminalTab(sessionId: string): TabSpec {
-  return { kind: 'terminal', id: tabIdOf.terminal(sessionId), sessionId };
+/** Вкладка, которую открывает брошенная строка сессии или файл. */
+function tabOfItem(item: Exclude<DragItem, { kind: 'tab' }>): TabSpec {
+  if (item.kind === 'session') return { kind: 'terminal', id: tabIdOf.terminal(item.sessionId), sessionId: item.sessionId };
+  return { kind: 'file', id: tabIdOf.file(item.root.spec, item.path), root: item.root.spec, path: item.path };
 }
 
 /** Перенос открытой вкладки; `strip.index` — место вставки в строке ДО переноса. */
@@ -227,8 +250,8 @@ export function applyDrop(
 ): OpResult {
   if (item.kind === 'tab') return moveOpenTab(layout, item.tabId, zone, sizes);
 
-  const tab = terminalTab(item.sessionId);
-  // Уже открытая сессия — тот же перенос, что и у вкладки.
+  const tab = tabOfItem(item);
+  // Уже открытая сессия или файл — тот же перенос, что и у вкладки.
   if (findTab(layout, tab.id) !== null) return moveOpenTab(layout, tab.id, zone, sizes);
 
   const target = groups(layout).find((group) => group.id === zone.groupId);
@@ -326,9 +349,3 @@ export function dropFromDragEnd(event: DragEndEvent): { item: DragItem; zone: Dr
     }
   }
 }
-
-/**
- * Бросок в зону `terminal`; раскладку не трогает. Зовёт её onDragEnd AppShell. В этапе 2
- * пустая — таких предметов нет; 7.2 кладёт путь файла в поле ввода агента.
- */
-export const onTerminalDrop: (item: DragItem, sessionId: string) => void = () => {};

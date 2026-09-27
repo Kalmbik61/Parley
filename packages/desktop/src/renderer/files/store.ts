@@ -54,3 +54,21 @@ export function filesRootSpec(
 ): FileRootSpec {
   return rootByWork[workKeyOf(entry.projectPath, entry.map.work.id)] ?? defaultRoot(entry, focusedSessionId);
 }
+
+/**
+ * Папка корня на диске по снимку работ: проект — `projectPath`, worktree — `worktree.path` сессии.
+ * null — сессии или её созданного worktree в снимке нет (корень исчез).
+ */
+export function rootDirOf(entry: WorkEntry, spec: FileRootSpec): string | null {
+  if (spec.kind === 'project') return entry.projectPath;
+  const worktree = entry.map.sessions.find((item) => item.id === spec.sessionId)?.worktree ?? null;
+  return worktree === null || worktree.createdAt === null ? null : worktree.path;
+}
+
+/** Абсолютный путь файла корня: папка корня плюс относительный путь ('' — сама папка). */
+export function absPathOf(entry: WorkEntry, spec: FileRootSpec, path: string): string | null {
+  const dir = rootDirOf(entry, spec);
+  if (dir === null) return null;
+  if (path === '') return dir;
+  return `${dir.endsWith('/') ? dir.slice(0, -1) : dir}/${path}`;
+}

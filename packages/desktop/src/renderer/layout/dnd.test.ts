@@ -12,6 +12,7 @@ import {
   applyDrop,
   centerOverlayOnCursor,
   dndId,
+  dragItemOf,
   dropFromDragEnd,
   layoutCollision,
   zoneForPoint,
@@ -334,9 +335,48 @@ describe('applyDrop — сессии (тесты 4, 5, 14)', () => {
 });
 
 describe('acceptsTerminal', () => {
-  it('в этапе 2 терминал не принимает ни вкладку, ни сессию', () => {
+  it('терминал не принимает ни вкладку, ни сессию; файл — принимает (7.2)', () => {
     expect(acceptsTerminal({ kind: 'tab', tabId: 'mail' })).toBe(false);
     expect(acceptsTerminal({ kind: 'session', sessionId: 's-1' })).toBe(false);
+    expect(acceptsTerminal(FILE)).toBe(true);
+  });
+});
+
+const FILE: DragItem = { kind: 'file', root: { workKey: '/p w-01', spec: { kind: 'worktree', sessionId: 's-02' } }, path: 'src/a.ts' };
+const FILE_TAB: TabSpec = { kind: 'file', id: 'file:w:s-02:src/a.ts', root: { kind: 'worktree', sessionId: 's-02' }, path: 'src/a.ts' };
+
+describe('файл из «Файлов» (кусок 7.2)', () => {
+  it('dndId.file — с ключом корня; dragItemOf узнаёт файл и отбрасывает неполный', () => {
+    expect(dndId.file('/p w-01 project', 'a.ts')).not.toBe(dndId.file('/p w-02 project', 'a.ts'));
+    expect(dragItemOf({ item: FILE })).toEqual(FILE);
+    expect(dragItemOf({ item: { kind: 'file', path: 'a.ts' } })).toBeNull();
+  });
+
+  it('в центр — вкладка файла последней в группе; уже открытая — переносится', () => {
+    const { layout, left, right } = twoGroups();
+    const opened = applyDrop(layout, FILE, { kind: 'center', groupId: left }, BIG);
+    expect(opened.error).toBeNull();
+    expect(groupById(opened.layout, left).tabs.map((tab) => tab.id)).toEqual([tabId.terminal('s-1'), tabId.terminal('s-2'), FILE_TAB.id]);
+    expect(groupById(opened.layout, left).tabs[2]).toEqual(FILE_TAB);
+    const moved = applyDrop(opened.layout, FILE, { kind: 'strip', groupId: right, index: 0 }, BIG);
+    expect(groupById(moved.layout, right).tabs.map((tab) => tab.id)).toEqual([FILE_TAB.id, tabId.terminal('s-3')]);
+    expect(groupById(moved.layout, left).tabs.map((tab) => tab.id)).not.toContain(FILE_TAB.id);
+  });
+
+  it('над терминалом файл берёт терминал; accepts без pty.send — тело группы', () => {
+    const body = container(dndId.body('A', 'g-a'), { workKey: 'A', kind: 'body', groupId: 'g-a' });
+    const surface = container(dndId.terminal('A', 'terminal:s-1'), { workKey: 'A', kind: 'terminal', sessionId: 's-1' });
+    const rects = { [body.id]: RECT, [surface.id]: RECT };
+    expect(collide('A', FILE, [body, surface], rects, { x: 500, y: 200 })[0]?.id).toBe(surface.id);
+    expect(collide('A', FILE, [body, surface], rects, { x: 500, y: 200 }, () => false)[0]?.id).toBe(body.id);
+  });
+
+  it('к краю — новый сплит с вкладкой файла', () => {
+    const { layout, right } = twoGroups();
+    const result = applyDrop(layout, FILE, { kind: 'edge', groupId: right, edge: 'bottom' }, BIG);
+    expect(result.error).toBeNull();
+    expect(groups(result.layout)).toHaveLength(3);
+    expect(groupById(result.layout, result.layout.activeGroupId).tabs).toEqual([FILE_TAB]);
   });
 });
 

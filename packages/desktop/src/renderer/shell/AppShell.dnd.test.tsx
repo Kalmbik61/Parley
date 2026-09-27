@@ -1,8 +1,10 @@
 /**
  * Кусок 2.6, тесты 8, 10, 11, 13: один `DndContext` в `AppShell` накрывает
  * сайдбар и центр; его `onDragEnd` раскладывает броски в раскладку активной
- * работы, бросок в терминал уходит в `onTerminalDrop`; клики под контекстом
- * работают, а перетаскивание начинается со сдвига больше 4 px.
+ * работы; клики под контекстом работают, а перетаскивание начинается со сдвига
+ * больше 4 px. Кусок 7.2, тесты 7 и 8: файл «Файлов» на терминал — `pty.send`
+ * с путём (`sendWithToast`), в тело — вкладка файла; без `pty.send` у хоста
+ * зоны терминала нет.
  *
  * `DndContext` обёрнут, чтобы достать его пропы (`onDragEnd`,
  * `collisionDetection`) и проверить, что строка сайдбара и тело группы — под
@@ -16,12 +18,14 @@ import type { WorkEntry, WorkSession } from '@harnas/core';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { xtermMock } from '../test-utils/xterm-mock.js';
 import type { TabSpec } from '../../shared/layout-types.js';
-import { onTerminalDrop, type DragSourceData, type DropTargetData } from '../layout/dnd.js';
+import { toast } from 'sonner';
+import type { DragItem, DragSourceData, DropTargetData } from '../layout/dnd.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
 import { groups, openTab } from '../layout/tree.js';
 import { useActivityStore } from '../store/activity.js';
+import { useHostStore } from '../store/host.js';
 import { useNoticesStore } from '../store/notices.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
@@ -29,7 +33,7 @@ import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { AppShell } from './AppShell.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 
-vi.mock('sonner', () => ({ toast: vi.fn() }));
+vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 
 const captured = vi.hoisted(() => ({ props: [] as unknown[] }));
 
@@ -47,11 +51,6 @@ vi.mock('@dnd-kit/core', async (importOriginal) => {
       );
     },
   };
-});
-
-vi.mock('../layout/dnd.js', async (importOriginal) => {
-  const mod = await importOriginal<typeof import('../layout/dnd.js')>();
-  return { ...mod, onTerminalDrop: vi.fn() };
 });
 
 vi.mock('@xterm/xterm', async () => (await import('../test-utils/xterm-mock.js')).xtermModule);
@@ -225,8 +224,12 @@ function soleGroupId(key: string): string {
 
 beforeEach(() => {
   captured.props = [];
-  vi.mocked(onTerminalDrop).mockClear();
+  vi.mocked(toast).mockClear();
+  vi.mocked(toast.error).mockClear();
+  useHostStore.getState().init(bridge);
 });
+
+afterEach(() => useHostStore.setState({ status: { state: 'connecting' } }));
 
 describe('AppShell — сессия из сайдбара в тело группы (тест 8)', () => {
   it('onDragEnd с active строки сессии и over тела открывает вкладку терминала; строка и тело под одним DndContext', async () => {
@@ -266,7 +269,7 @@ describe('AppShell — сессия из сайдбара в тело групп
 });
 
 describe('AppShell — бросок в терминал (тест 10)', () => {
-  it('зона terminal раскладку не меняет и зовёт onTerminalDrop(item, sessionId)', async () => {
+  it('вкладка в зоне terminal ничего не делает: раскладка та же, pty.send нет', async () => {
     await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
     const key = keyOf('w-01');
     await activate(key);
@@ -276,16 +279,91 @@ describe('AppShell — бросок в терминал (тест 10)', () => {
     await flush();
     const before = useLayoutStore.getState().layouts[key];
 
-    const item = { kind: 'tab', tabId: 'mail' } as const;
     act(() =>
       lastProps().onDragEnd?.(
-        endEvent({ item }, { workKey: key, kind: 'terminal', sessionId: 's-01' }),
+        endEvent({ item: { kind: 'tab', tabId: 'mail' } }, { workKey: key, kind: 'terminal', sessionId: 's-01' }),
       ),
     );
     await flush();
 
     expect(useLayoutStore.getState().layouts[key]).toBe(before);
-    expect(onTerminalDrop).toHaveBeenCalledWith(item, 's-01');
+    expect(bridge.calls.filter((call) => call.method === 'pty.send')).toEqual([]);
+  });
+});
+
+describe('AppShell — файл «Файлов» на терминал и в тело (тесты 7, 8 куска 7.2)', () => {
+  const WORKTREE = { path: "/wt/it's s02", branch: 'harnas/w-0001/s02', base: 'main', createdAt: '2026-01-01' };
+  const FILE_ITEM = (key: string): DragItem => ({ kind: 'file', root: { workKey: key, spec: { kind: 'worktree', sessionId: 's-02' } }, path: 'src/a b.ts' });
+  const REF = { projectPath: '/tmp/w-01', workId: 'w-01', sessionId: 's-02' };
+
+  async function setup(): Promise<string> {
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [{ ...session('s-02', 'два'), worktree: WORKTREE }])]);
+    const key = keyOf('w-01');
+    await activate(key);
+    act(() => {
+      useLayoutStore.getState().apply(key, (layout) => openTab(layout, term('s-02')));
+    });
+    await flush();
+    return key;
+  }
+
+  function collide(key: string, item: DragItem): string[] {
+    const groupId = soleGroupId(key);
+    const containers = [
+      { id: 'body', key: 'body', data: { current: { workKey: key, kind: 'body', groupId } }, disabled: false, node: { current: null }, rect: { current: null } },
+      { id: 'term', key: 'term', data: { current: { workKey: key, kind: 'terminal', sessionId: 's-02' } }, disabled: false, node: { current: null }, rect: { current: null } },
+    ] as DroppableContainer[];
+    const detect = lastProps().collisionDetection;
+    if (detect === undefined) throw new Error('нет collisionDetection');
+    return detect({
+      active: { id: 'drag', data: { current: { item } }, rect: { current: { initial: null, translated: null } } },
+      collisionRect: RECT,
+      droppableRects: new Map([['body', RECT], ['term', RECT]]),
+      droppableContainers: containers,
+      pointerCoordinates: { x: 400, y: 300 },
+    } as unknown as Parameters<typeof detect>[0]).map((hit) => String(hit.id));
+  }
+
+  it('тест 7: на терминал — pty.send с экранированным абсолютным путём и submit: false, раскладка та же; в центр тела — вкладка файла', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: false, reason: null }));
+    const key = await setup();
+    const item = FILE_ITEM(key);
+    expect(collide(key, item)[0]).toBe('term');
+    const before = useLayoutStore.getState().layouts[key];
+
+    act(() => lastProps().onDragEnd?.(endEvent({ item }, { workKey: key, kind: 'terminal', sessionId: 's-02' })));
+    await waitFor(() => expect(bridge.calls.filter((call) => call.method === 'pty.send')).toHaveLength(1));
+    expect(bridge.calls.find((call) => call.method === 'pty.send')?.params).toEqual({
+      ref: REF,
+      text: "'/wt/it'\\''s s02/src/a b.ts' ",
+      submit: false,
+    });
+    expect(useLayoutStore.getState().layouts[key]).toBe(before);
+
+    const groupId = soleGroupId(key);
+    act(() => lastProps().onDragEnd?.(endEvent({ item }, { workKey: key, kind: 'body', groupId })));
+    await flush();
+    const tabs = groups(useLayoutStore.getState().layouts[key]!)[0]?.tabs;
+    expect(tabs?.map((tab) => tab.id)).toEqual([tabId.terminal('s-02'), 'file:w:s-02:src/a b.ts']);
+  });
+
+  it('тест 8: ответ blocked — тост «S02 is waiting for your answer — text not inserted» с Copy; хост без pty.send — зоны терминала нет, файл вкладкой', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: false, submitted: false, reason: 'blocked' }));
+    const key = await setup();
+    const item = FILE_ITEM(key);
+    act(() => lastProps().onDragEnd?.(endEvent({ item }, { workKey: key, kind: 'terminal', sessionId: 's-02' })));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toBe('S02 is waiting for your answer — text not inserted');
+    expect(vi.mocked(toast.error).mock.calls[0]?.[1]).toMatchObject({ action: { label: 'Copy' } });
+
+    act(() => bridge.setHostMethods(REQUIRED_METHODS.filter((method) => method !== 'pty.send')));
+    await flush();
+    const hits = collide(key, item);
+    expect(hits).toEqual(['body']);
+    act(() => lastProps().onDragEnd?.(endEvent({ item }, { workKey: key, kind: 'body', groupId: soleGroupId(key) })));
+    await flush();
+    expect(groups(useLayoutStore.getState().layouts[key]!)[0]?.tabs.map((tab) => tab.id)).toContain('file:w:s-02:src/a b.ts');
+    expect(bridge.calls.filter((call) => call.method === 'pty.send')).toHaveLength(1);
   });
 });
 

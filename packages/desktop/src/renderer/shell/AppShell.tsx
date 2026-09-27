@@ -28,6 +28,9 @@
  * смонтированный здесь, а не в сайдбаре: ⌘B прячет сайдбар, а порядок должен жить. Прежний
  * сайдбар и его флаг сравнения ушли в 3.5.
  *
+ * Кусок 7.2 (спека 5.1, 10.1): справа — `RightSidebar` активной работы; файл из его дерева,
+ * брошенный на терминал, уходит агенту путём через `sendWithToast`, в раскладку — вкладкой.
+ *
  * Кусок 2.6 (спека 5.4): один `DndContext` на всё окно — строка сессии живёт
  * в сайдбаре, строка вкладок одной группы — в заголовке, зоны броска — в
  * центре, а `useDraggable` вне провайдера молча не тащит. `PointerSensor` — с
@@ -49,13 +52,15 @@ import {
 } from '@dnd-kit/core';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
-import { refKey } from '@harnas/protocol';
+import type { WorkSession } from '@harnas/core';
+import { refKey, type SessionRef } from '@harnas/protocol';
 import type { HarnasBridge, HostStatus } from '../../shared/bridge.js';
 import type { ActionId } from '../../shared/keybindings.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, noticeText, S } from '../../shared/strings.js';
 import { LEFT_SIDEBAR } from '../../shared/ui-types.js';
+import { applyFocusTarget, buildFocusTargetDeps } from '../attention/focus-target.js';
 import { openNextAttention } from '../attention/next.js';
 import { useAttentionTotals } from '../attention/store.js';
 import { InterruptedBanner } from '../components/InterruptedBanner.js';
@@ -66,7 +71,8 @@ import { NewWorkComposer } from '../sidebar/NewWorkComposer.js';
 import { WorkSidebar } from '../sidebar/WorkSidebar.js';
 import { sessionLabelFor, sessionRowLabel } from '../lib/participant.js';
 import { workKey } from '../lib/tree-order.js';
-import { applyDrop, centerOverlayOnCursor, dragItemOf, dropFromDragEnd, layoutCollision, onTerminalDrop, type DragItem } from '../layout/dnd.js';
+import { absPathOf } from '../files/store.js';
+import { acceptsTerminal, applyDrop, centerOverlayOnCursor, dragItemOf, dropFromDragEnd, layoutCollision, type DragItem } from '../layout/dnd.js';
 import { setDropPreview } from '../layout/DropIndicator.js';
 import { tabId } from '../layout/ids.js';
 import { tabMeta } from '../layout/tab-meta.js';
@@ -80,11 +86,13 @@ import { groups, openTab } from '../layout/tree.js';
 import { focusContext } from '../keys/focus-context.js';
 import { installKeyHandler, isActionAvailable } from '../keys/handler.js';
 import { createMruCycle, type MruCycle } from '../keys/mru-cycle.js';
-import { hostMethods } from '../lib/capabilities.js';
+import { hostMethods, useHostSupports } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
 import { runAction, type ActionContext, type ActionSource } from '../palette/actions.js';
 import { Palette } from '../palette/Palette.js';
 import { usePaletteStore } from '../palette/store.js';
+import { pathsToInput } from '../terminal/drop.js';
+import { sendWithToast, type SendWithToastDeps } from '../terminal/send.js';
 import { terminalSurfaces } from '../terminal/surface-registry.js';
 import { useNoticesStore } from '../store/notices.js';
 import { useUiStore } from '../store/ui.js';
@@ -92,6 +100,7 @@ import { orderedWorks, useWorksStore } from '../store/works.js';
 import { ErrorBoundary } from './ErrorBoundary.js';
 import { Landing } from './Landing.js';
 import { Resizer } from './Resizer.js';
+import { RightSidebar } from './RightSidebar.js';
 import { StatusBar } from './StatusBar.js';
 import { Titlebar } from './Titlebar.js';
 
@@ -100,6 +109,8 @@ import { Titlebar } from './Titlebar.js';
  * работы — тот же текст, что человек видел под курсором.
  */
 function dragLabel(item: DragItem, key: string | null): string {
+  // Имя файла, а не путь: путь из глубины дерева не влез бы в ярлык.
+  if (item.kind === 'file') return item.path.slice(item.path.lastIndexOf('/') + 1);
   const entry = useWorksStore.getState().entries.find((candidate) => workKey(candidate.projectPath, candidate.map.work.id) === key);
   if (item.kind === 'session') {
     const session = entry?.map.sessions.find((candidate) => candidate.id === item.sessionId);
@@ -108,6 +119,20 @@ function dragLabel(item: DragItem, key: string | null): string {
   const layout = key === null ? undefined : useLayoutStore.getState().layouts[key];
   const tab = layout === undefined ? undefined : groups(layout).flatMap((group) => group.tabs).find((candidate) => candidate.id === item.tabId);
   return tab === undefined ? item.tabId : tabMeta(tab, entry ?? null).title;
+}
+
+/** Сессия из снимка работ — для «Resume» тоста отправки; null — её уже нет. */
+function sessionOf(ref: SessionRef): WorkSession | null {
+  const entry = useWorksStore
+    .getState()
+    .entries.find((item) => item.projectPath === ref.projectPath && item.map.work.id === ref.workId);
+  return entry?.map.sessions.find((item) => item.id === ref.sessionId) ?? null;
+}
+
+/** «Open S02» тоста отправки: тот же переход, что клик по уведомлению (4.3), как у броска из Finder (5.4). */
+function openSessionTab(ref: SessionRef): void {
+  const applied = applyFocusTarget({ kind: 'session', ref }, buildFocusTargetDeps());
+  if (!applied) toast(S.notifications.targetGone);
 }
 
 /** Доступность — одна для нажатия и для `menu:action` (кусок 6.1b): методы хоста в момент действия. */
@@ -263,6 +288,10 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   // бросок, индикаторам сообщает `setDropPreview` — не состояние `AppShell`:
   // иначе каждая смена зоны перерисовывала бы всё окно (раунд исправлений 1).
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  // Зона терминала для файла — только у хоста с `pty.send` (кусок 7.2, как бросок из Finder в
+  // 5.4): старый хост ответил бы `unknown_method`, а без зоны файл падает в тело вкладкой.
+  const canSend = useHostSupports('pty.send');
+  const sendDeps: SendWithToastDeps = { bridge, session: sessionOf, openSession: openSessionTab };
   const [dragging, setDragging] = useState<string | null>(null);
 
   const handleDragStart = (event: DragStartEvent): void => {
@@ -287,7 +316,14 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     if (owner !== key) return;
     const { item, zone } = drop;
     if (zone.kind === 'terminal') {
-      onTerminalDrop(item, zone.sessionId);
+      // Раскладка не меняется: абсолютный путь — агенту в поле ввода, без Enter, с тостом по
+      // таблице 8.6 (`sendWithToast`); мимо `pty.send` в PTY ничего не пишется.
+      if (item.kind !== 'file') return;
+      const entry = useWorksStore.getState().entries.find((candidate) => workKey(candidate.projectPath, candidate.map.work.id) === key);
+      const abs = entry === undefined ? null : absPathOf(entry, item.root.spec, item.path);
+      if (entry === undefined || abs === null) return;
+      const ref = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: zone.sessionId };
+      void sendWithToast(sendDeps, ref, pathsToInput([abs]), false);
       return;
     }
     const error = useLayoutStore.getState().apply(key, (layout) => applyDrop(layout, item, zone, measureGroupSizes()));
@@ -508,6 +544,12 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
                 ))}
             </div>
           </ErrorBoundary>
+          {/* Правый сайдбар — только при активной работе (кусок 7.2); свёрнутый не монтируется. */}
+          {activeWorkKey !== null && ui.rightSidebar.open ? (
+            <ErrorBoundary title={S.shell.rightSidebarError}>
+              <RightSidebar bridge={bridge} workKey={activeWorkKey} />
+            </ErrorBoundary>
+          ) : null}
         </div>
       )}
       <StatusBar
@@ -558,7 +600,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={layoutCollision(activeWorkKey)}
+      collisionDetection={layoutCollision(activeWorkKey, (item) => canSend && acceptsTerminal(item))}
       onDragStart={handleDragStart}
       onDragMove={handleDragMove}
       onDragEnd={handleDragEnd}

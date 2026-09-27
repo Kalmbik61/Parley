@@ -22,13 +22,17 @@
  * наложения не создаёт, и индикатор встаёт над поверхностью терминала.
  */
 
-import { createContext, useCallback, useContext, useLayoutEffect, useRef } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useDroppable } from '@dnd-kit/core';
 import type { WorkEntry, WorkSession } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
 import type { HarnasBridge } from '../../shared/bridge.js';
-import { S } from '../../shared/strings.js';
+import type { FileRoot } from '../../shared/files-types.js';
+import { decodeIpcError } from '../../shared/ipc-error.js';
+import { errorText, S } from '../../shared/strings.js';
+import { rootKey } from '../../shared/work-keys.js';
+import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { ErrorBoundary } from '../shell/ErrorBoundary.js';
 import { DiffBody } from './bodies/DiffBody.js';
 import { MailBody } from './bodies/MailBody.js';
@@ -72,6 +76,49 @@ function refOf(entry: WorkEntry, sessionId: string): SessionRef {
   return { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId };
 }
 
+/**
+ * Больше стольких символов временное тело не показывает: `<pre>` на 20 МБ (предел `readText`)
+ * подвесил бы окно, а редактор с пределами спеки 10.4 придёт в 7.3b.
+ */
+const FILE_TEXT_LIMIT = 2 * 1024 * 1024;
+
+/**
+ * Временное тело вкладки `file` (кусок 7.2): текст `files.readText` только для чтения. 7.3b
+ * меняет его на `FileBody` с Monaco. Отказ — `errorText(code, S.errors.actions.openFile)`,
+ * `files:denied` — `S.files.denied`: кодов `files:*` `errorText` не знает.
+ */
+function FileTextBody({ bridge, root, path }: { bridge: HarnasBridge; root: FileRoot; path: string }): JSX.Element {
+  const [state, setState] = useState<{ text: string } | { error: string } | null>(null);
+  const key = `${rootKey(root)}\n${path}`;
+  useEffect(() => {
+    let alive = true;
+    setState(null);
+    bridge.files
+      .readText(root, path)
+      .then((file) => {
+        if (alive) setState({ text: file.text.length > FILE_TEXT_LIMIT ? file.text.slice(0, FILE_TEXT_LIMIT) : file.text });
+      })
+      .catch((error: unknown) => {
+        console.warn('[harnas] files.readText', error);
+        const { code } = decodeIpcError(error);
+        if (alive) setState({ error: code === 'files:denied' ? S.files.denied : errorText(code, S.errors.actions.openFile) });
+      });
+    return () => {
+      alive = false;
+    };
+    // Корень и путь — в `key`: объект `root` новый на каждую отрисовку группы.
+  }, [bridge, key]);
+  if (state === null) return <div className="h-full" />;
+  if ('error' in state) {
+    return <div className="flex h-full items-center justify-center px-4 text-center text-sm text-muted-foreground">{state.error}</div>;
+  }
+  return (
+    <pre data-testid="file-text" className="h-full overflow-auto whitespace-pre p-3 font-mono text-xs text-foreground">
+      {state.text}
+    </pre>
+  );
+}
+
 /** Отдельный компонент, а не просто функция в теле `GroupView`: бросок должен случиться ВНУТРИ дерева `ErrorBoundary`, иначе граница ошибки его не поймает. */
 function TabBody({ tab, entry, host, onMissing }: TabBodyProps): JSX.Element {
   switch (tab.kind) {
@@ -94,10 +141,16 @@ function TabBody({ tab, entry, host, onMissing }: TabBodyProps): JSX.Element {
       return <DiffBody bridge={host.bridge} sessionRef={refOf(entry, tab.sessionId)} session={session} />;
     }
     case 'file':
+      return (
+        <FileTextBody
+          bridge={host.bridge}
+          root={{ workKey: workKeyOf(entry.projectPath, entry.map.work.id), spec: tab.root }}
+          path={tab.path}
+        />
+      );
     case 'browser':
-      // Эти виды вкладок появятся в этапах 7 и 9 — открыть их пока неоткуда
-      // (`openTab` с таким `kind` этот кусок нигде не зовёт), сюда не дойти;
-      // `ErrorBoundary` вокруг ловит бросок, если это всё же случится.
+      // Вкладка браузера появится в этапе 9 — открыть её пока неоткуда, сюда не
+      // дойти; `ErrorBoundary` вокруг ловит бросок, если это всё же случится.
       throw new Error(`GroupView: tab kind "${tab.kind}" is not available yet`);
   }
 }

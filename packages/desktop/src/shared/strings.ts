@@ -528,6 +528,7 @@ export const S = {
   /** Оболочка окна (`shell/AppShell.tsx`) — заголовки `ErrorBoundary` вокруг сайдбара и раскладки. */
   shell: {
     sidebarError: "Couldn't show workspace sidebar",
+    rightSidebarError: "Couldn't show right sidebar",
     layoutError: "Couldn't show layout",
   },
 };
