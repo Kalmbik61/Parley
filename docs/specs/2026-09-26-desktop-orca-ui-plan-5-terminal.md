@@ -761,6 +761,10 @@ errors: { actions: { openFile: 'open file', revealInFinder: 'reveal in Finder' }
     у него `@platform linux,win32`.
   - Меню и `AppShell` не меняются: вне терминала ⌘K открывает палитру пунктом меню, ⌘F
     — полосу поиска активного терминала (`AppShell#openSearch`), как с 2.5. До 6.1.
+  - Ветки временные: 6.1b переносит ⌘K и ⌘F в обработчик окна (`terminal.clear` и
+    `find`, спека 9.6) и убирает их из `use-terminal.ts` вместе с `onFind`. Обработчик
+    окна в capture-фазе до xterm их не пустит. Тест 10 переезжает в
+    `keys/handler.test.ts` и `AppShell.test.tsx`.
 - **WebGL:**
   - `use-terminal` подписан на `webglPolicy`, ключ — `refKey` сессии: `update(key,
     visible)` на каждую смену видимости, `subscribe` — загрузить `WebglAddon` при

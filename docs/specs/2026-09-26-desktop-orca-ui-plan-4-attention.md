@@ -242,9 +242,13 @@ export function createSeenTracker(deps: {
 
 // attention/store.ts — поверх useSidebarAttention() (3.3): второго расчёта внимания нет
 export interface AttentionTotals { needsYou: number; unseen: number; humanUnread: number }
-/** Суммы по работам секций сайдбара: свёрнутые проекты входят, архивные и скрытые done — нет. */
-export function attentionTotals(byWork: Record<string, WorkAttention>): AttentionTotals;
-export function useAttentionTotals(): AttentionTotals;          // attentionTotals(useSidebarAttention())
+/**
+ * Суммы по работам секций сайдбара: свёрнутые проекты входят, скрытых done в секциях нет. Архивные
+ * пропускаются по status: с 6.3 временный показ кладёт их в секции. Домен задают секции, а не ключи
+ * byWork: useSidebarAttention() (3.3) посчитан по всем работам снимка.
+ */
+export function attentionTotals(sections: SidebarSection[], byWork: Record<string, WorkAttention>): AttentionTotals;
+export function useAttentionTotals(): AttentionTotals;          // attentionTotals(useSidebarSections(), useSidebarAttention())
 export function badgeCount(totals: AttentionTotals): number;   // needsYou + humanUnread
 
 // attention/use-mark-read.ts
@@ -267,7 +271,8 @@ active: boolean;          // GroupView → MailBody/RoomBody → панель
 // attention/next.ts
 /**
  * Следующая после current по кругу сессия уровня needs-you, затем unseen, в порядке сайдбара — sections
- * из useSidebarSections() (3.3). Работы свёрнутых проектов входят, как в счётчиках (attention/store.ts).
+ * из useSidebarSections() (3.3). Работы свёрнутых проектов входят, как в счётчиках (attention/store.ts);
+ * архивные пропускаются по status и при их временном показе (6.3).
  */
 export function nextAttentionTarget(
   sections: SidebarSection[], byWork: Record<string, WorkAttention>,
@@ -338,6 +343,11 @@ attention: (needsYou: number, unseen: number) => string,   // '2 need you · 1 u
   работы секций сайдбара: свёрнутые проекты входят, архивные и скрытые `done` — нет
   (спека 7.3). Тот же домен обходит `nextAttentionTarget`: иначе «2 ждут тебя» показывало
   бы сессию, до которой клик не дойдёт.
+  - Домен задают секции: `useSidebarAttention()` посчитан по всем работам снимка, с
+    архивными и скрытыми `done`.
+  - Архивные отсекаются по `status`, а не только отсутствием в секциях: с 6.3 временный
+    показ архивных (`works.showArchived`) кладёт их в секции, а в счётчики, бейдж и обход
+    «следующей» они не попадают и тогда (спека 6.7).
 - **Строка статуса.** «2 ждут тебя · 1 не просмотрено» (`S.statusBar.attention` —
   `2 need you · 1 unseen`). Нули не показываются, при двух нулях сегмента нет.
   - «N ждут тебя» — сессии (`totals.needsYou`). Письма в счёт не входят: они в бейдже
@@ -372,7 +382,8 @@ attention: (needsYou: number, unseen: number) => string,   // '2 need you · 1 u
 4. `badgeCount({ needsYou: 2, unseen: 5, humanUnread: 1 })` → 3.
 5. `nextAttentionTarget`: сначала `needs-you` по порядку сайдбара, по кругу после
    `current`; нет `needs-you` — первая `unseen`; нет обеих — `null`. Сессия работы
-   свёрнутого проекта находится, скрытой `done` — нет.
+   свёрнутого проекта находится, скрытой `done` — нет. Архивная работа в секциях (как при
+   показе архивных 6.3) — её сессия `needs-you` не выбирается.
 6. Вкладка терминала сессии в `needs-you`: `data-unread="true"` и значок вопроса — в том
    числе у сессии с `result: 'done'`, где точка показала бы `done`.
 7. `isHumanUnread` — таблица случаев теста 1 куска 4.1, дословно; `humanUnreadLetters` и
@@ -398,8 +409,9 @@ attention: (needsYou: number, unseen: number) => string,   // '2 need you · 1 u
 13. Трекер в `App`: хост без `activity.seen` (`setHostMethods` без него) —
     `bridge.notify` не зовётся; после `setHostMethods(REQUIRED_METHODS)` та же сессия в
     `unseen` уходит: метод проверяется в момент отправки.
-14. `attentionTotals` считает работы из `useSidebarAttention()`: работа свёрнутого
-    проекта входит, архивная и скрытая `done` — нет.
+14. `attentionTotals` считает работы секций по `useSidebarAttention()`: работа свёрнутого
+    проекта входит, скрытая `done` — нет; архивная — нет, даже когда она в секциях (как
+    при показе архивных 6.3).
 15. `openNextAttention`: выбрана первая сессия `needs-you` — переход ко второй: её работа
     активна, вкладка открыта; работа не гидрирована — вкладка открывается из очереди
     после `hydrate`. Идти некуда — `null`, активная работа прежняя.

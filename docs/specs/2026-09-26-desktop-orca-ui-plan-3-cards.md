@@ -617,7 +617,7 @@ time: {
 ## 3.4. Меню, переименование, клавиатура сайдбара
 
 **Зачем.** Всё, что делается с работой, — из карточки, мышью и с клавиатуры.
-**Зависит от:** 3.1, 3.3. **Спека:** 6.4, 6.5.
+**Зависит от:** 3.1, 3.3. **Спека:** 6.4, 6.5, 6.7 (`Reopen` у архивной).
 
 **Файлы**
 - Создать в `packages/desktop/src/renderer/sidebar/`:
@@ -726,11 +726,15 @@ errors: { actions: {
 | Переименовать (`Rename`) | `InlineRename` |
 | Показать в Finder (`Reveal in Finder`) | `app.revealWork(projectPath, workId)`: main проверяет по `works.list`, что такая работа есть, и зовёт `showItemInFolder(projectPath)`; нет — `not_found` |
 | Скопировать путь (`Copy path`) | `navigator.clipboard.writeText(projectPath)` |
-| Завершить (`Mark as done`); у `done` — Вернуть в работу (`Reopen`) | `works.setStatus('done')`; у `done` — `works.setStatus('active')` |
-| Архивировать (`Archive`) | `ConfirmDialog` (`archiveConfirmTitle`) → `works.setStatus('archived')` |
+| Завершить (`Mark as done`); у `done` и `archived` — Вернуть в работу (`Reopen`) | `works.setStatus('done')`; у `done` и `archived` — `works.setStatus('active')` |
+| Архивировать (`Archive`); у `archived` пункта нет | `ConfirmDialog` (`archiveConfirmTitle`) → `works.setStatus('archived')` |
 | Удалить… (`Delete…`) | `ConfirmDialog` (`deleteConfirmTitle`, `deleteConfirmDescription`: число сессий и «живые процессы остановятся») → `sessions.stop` живых сессий → `works.delete` → ключ уходит из `pinnedWorks` |
 
   Пункты с неподдерживаемыми методами спрятаны (`useHostSupports`).
+- **Архивная карточка** видна только при временном показе архивных (6.3, действие
+  `works.showArchived`, спека 6.7). У неё вместо `Mark as done` и `Archive` — `Reopen`:
+  иначе показанную работу нечем вернуть. В 3.4 архивных в сайдбаре нет, и пункт
+  безвреден.
 - **Ошибки хоста и main** на любом пункте — тост `errorText(decodeIpcError(err).code,
   S.errors.actions.<…>)`: `renameWorkspace`, `markWorkspaceDone`, `reopenWorkspace`,
   `archiveWorkspace`, `deleteWorkspace`, `revealWorkspace`. Например, `conflict` на
@@ -866,6 +870,8 @@ errors: { actions: {
 19. У работы `done` вместо `Mark as done` пункт `Reopen` → `works.setStatus('active')`.
 20. Проект активной работы свёрнут: ⌘⇧↓ делает активной первую видимую работу, ⌘⇧↑ —
     последнюю.
+21. У работы `archived` в меню карточки — `Reopen` → `works.setStatus('active')`, пунктов
+    `Mark as done` и `Archive` нет.
 
 **Приёмка**
 - [ ] Все тесты зелёные.
