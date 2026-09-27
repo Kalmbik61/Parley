@@ -1,8 +1,9 @@
+import { EventEmitter } from 'node:events';
 import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { IpcMain } from 'electron';
+import type { IpcMain, Session, WebContents } from 'electron';
 import type { WorksSnapshot } from '@harnas/protocol';
 import { decodeIpcError } from '../shared/ipc-error.js';
 import { workKey } from '../shared/work-keys.js';
@@ -39,7 +40,54 @@ class FakeIpcMain {
   }
 }
 
-function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore; roots?: RootsRegistry } = {}): {
+/** Сессия раздела браузера и чужая — мост сверяет гостя по `contents.session` (кусок 9.1). */
+const browserSession = {
+  clearStorageData: vi.fn().mockResolvedValue(undefined),
+  clearCache: vi.fn().mockResolvedValue(undefined),
+};
+const otherSession = { clearStorageData: vi.fn(), clearCache: vi.fn() };
+
+/** Подставной webContents для моста `browser:*`: EventEmitter плюс то, что трогает мост. */
+function fakeBrowserContents(
+  id: number,
+  type: 'window' | 'webview',
+  session: unknown = browserSession,
+): EventEmitter & {
+  id: number;
+  session: unknown;
+  getType: () => string;
+  isDestroyed: ReturnType<typeof vi.fn>;
+  openDevTools: ReturnType<typeof vi.fn>;
+  findInPage: ReturnType<typeof vi.fn>;
+  stopFindInPage: ReturnType<typeof vi.fn>;
+  getZoomLevel: ReturnType<typeof vi.fn>;
+  setZoomLevel: ReturnType<typeof vi.fn>;
+} {
+  let requestId = 0;
+  return Object.assign(new EventEmitter(), {
+    id,
+    session,
+    getType: () => type,
+    isDestroyed: vi.fn().mockReturnValue(false),
+    openDevTools: vi.fn(),
+    findInPage: vi.fn(() => {
+      requestId += 1;
+      return requestId;
+    }),
+    stopFindInPage: vi.fn(),
+    getZoomLevel: vi.fn().mockReturnValue(1),
+    setZoomLevel: vi.fn(),
+  });
+}
+
+function setup(
+  overrides: {
+    uiStore?: UiStore;
+    layoutStore?: LayoutStore;
+    roots?: RootsRegistry;
+    webContents?: Map<number, unknown>;
+  } = {},
+): {
   ipcMain: FakeIpcMain;
   connection: HostConnection;
   layoutStore: LayoutStore;
@@ -114,6 +162,10 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore; roots?
     roots,
     openPath,
     saveDropImage,
+    browser: {
+      fromId: (id) => (overrides.webContents?.get(id) as WebContents | undefined) ?? null,
+      session: browserSession as unknown as Pick<Session, 'clearStorageData' | 'clearCache'>,
+    },
   });
 
   return {
@@ -597,5 +649,150 @@ describe('app:open-path и app:show-in-finder (кусок 5.2, тест 13)', ()
     }
     expect(openPath).not.toHaveBeenCalled();
     expect(showItemInFolder).not.toHaveBeenCalled();
+  });
+});
+
+describe('мост browser:* (тест 8 куска 9.1)', () => {
+  const codeOf = async (promise: unknown): Promise<string> => {
+    try {
+      await promise;
+    } catch (error) {
+      return decodeIpcError(error).code;
+    }
+    return 'resolved';
+  };
+
+  function browserSetup() {
+    const window = fakeBrowserContents(1, 'window');
+    const guest = fakeBrowserContents(7, 'webview');
+    const foreignGuest = fakeBrowserContents(8, 'webview', otherSession);
+    const deadGuest = fakeBrowserContents(9, 'webview');
+    deadGuest.isDestroyed.mockReturnValue(true);
+    const { ipcMain } = setup({
+      webContents: new Map<number, unknown>([
+        [1, window],
+        [7, guest],
+        [8, foreignGuest],
+        [9, deadGuest],
+      ]),
+    });
+    return { ipcMain, window, guest, foreignGuest, deadGuest };
+  }
+
+  it('open-devtools: главное окно, несуществующий, чужой раздел, мёртвый, не целое — bad_request; гость раздела — openDevTools', async () => {
+    const { ipcMain, window, guest, foreignGuest } = browserSetup();
+
+    for (const id of [1, 404, 8, 9, 7.5, '7', null]) {
+      expect(await codeOf(ipcMain.invoke('browser:open-devtools', id)), String(id)).toBe('bad_request');
+    }
+    expect(window.openDevTools).not.toHaveBeenCalled();
+    expect(foreignGuest.openDevTools).not.toHaveBeenCalled();
+
+    await ipcMain.invoke('browser:open-devtools', 7);
+    expect(guest.openDevTools).toHaveBeenCalledTimes(1);
+  });
+
+  it('find: ответ по found-in-page своего requestId с finalUpdate; findNext — только у нового текста', async () => {
+    const { ipcMain, guest } = browserSetup();
+
+    const first = ipcMain.invoke('browser:find', 7, 'abc', true) as Promise<unknown>;
+    expect(guest.findInPage).toHaveBeenLastCalledWith('abc', { forward: true, findNext: true });
+    // Чужой requestId и промежуточный — не ответ.
+    guest.emit('found-in-page', {}, { requestId: 99, matches: 5, activeMatchOrdinal: 5, finalUpdate: true });
+    guest.emit('found-in-page', {}, { requestId: 1, matches: 2, activeMatchOrdinal: 1, finalUpdate: false });
+    guest.emit('found-in-page', {}, { requestId: 1, matches: 3, activeMatchOrdinal: 1, finalUpdate: true });
+    expect(await first).toEqual({ matches: 3, active: 1 });
+    expect(guest.listenerCount('found-in-page')).toBe(0);
+
+    const again = ipcMain.invoke('browser:find', 7, 'abc', false) as Promise<unknown>;
+    expect(guest.findInPage).toHaveBeenLastCalledWith('abc', { forward: false, findNext: false });
+    guest.emit('found-in-page', {}, { requestId: 2, matches: 3, activeMatchOrdinal: 3, finalUpdate: true });
+    expect(await again).toEqual({ matches: 3, active: 3 });
+
+    const other = ipcMain.invoke('browser:find', 7, 'abd', true) as Promise<unknown>;
+    expect(guest.findInPage).toHaveBeenLastCalledWith('abd', { forward: true, findNext: true });
+    guest.emit('found-in-page', {}, { requestId: 3, matches: 0, activeMatchOrdinal: 0, finalUpdate: true });
+    expect(await other).toEqual({ matches: 0, active: 0 });
+  });
+
+  it('find без finalUpdate: через 2 с — последний промежуточный, без событий — нули', async () => {
+    vi.useFakeTimers();
+    try {
+      const { ipcMain, guest } = browserSetup();
+
+      const partial = ipcMain.invoke('browser:find', 7, 'abc', true) as Promise<unknown>;
+      guest.emit('found-in-page', {}, { requestId: 1, matches: 4, activeMatchOrdinal: 2, finalUpdate: false });
+      await vi.advanceTimersByTimeAsync(1999);
+      let settled = false;
+      void partial.then(() => (settled = true));
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await partial).toEqual({ matches: 4, active: 2 });
+      expect(guest.listenerCount('found-in-page')).toBe(0);
+
+      const silent = ipcMain.invoke('browser:find', 7, 'zzz', true) as Promise<unknown>;
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(await silent).toEqual({ matches: 0, active: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('find: текст длиннее 1000, не строка и не булев forward — bad_request; пустой — нули без findInPage', async () => {
+    const { ipcMain, guest } = browserSetup();
+    expect(await codeOf(ipcMain.invoke('browser:find', 7, 'a'.repeat(1001), true))).toBe('bad_request');
+    expect(await codeOf(ipcMain.invoke('browser:find', 7, 42, true))).toBe('bad_request');
+    expect(await codeOf(ipcMain.invoke('browser:find', 7, 'abc', 'yes'))).toBe('bad_request');
+    expect(await codeOf(ipcMain.invoke('browser:find', 1, 'abc', true))).toBe('bad_request');
+    expect(await ipcMain.invoke('browser:find', 7, '', true)).toEqual({ matches: 0, active: 0 });
+    expect(guest.findInPage).not.toHaveBeenCalled();
+
+    const limit = ipcMain.invoke('browser:find', 7, 'a'.repeat(1000), true) as Promise<unknown>;
+    guest.emit('found-in-page', {}, { requestId: 1, matches: 1, activeMatchOrdinal: 1, finalUpdate: true });
+    expect(await limit).toEqual({ matches: 1, active: 1 });
+  });
+
+  it('stop-find — stopFindInPage(clearSelection), следующий find того же текста — снова новый поиск', async () => {
+    const { ipcMain, guest } = browserSetup();
+    const first = ipcMain.invoke('browser:find', 7, 'abc', true) as Promise<unknown>;
+    guest.emit('found-in-page', {}, { requestId: 1, matches: 1, activeMatchOrdinal: 1, finalUpdate: true });
+    await first;
+
+    await ipcMain.invoke('browser:stop-find', 7);
+    expect(guest.stopFindInPage).toHaveBeenCalledWith('clearSelection');
+
+    const next = ipcMain.invoke('browser:find', 7, 'abc', true) as Promise<unknown>;
+    expect(guest.findInPage).toHaveBeenLastCalledWith('abc', { forward: true, findNext: true });
+    guest.emit('found-in-page', {}, { requestId: 2, matches: 1, activeMatchOrdinal: 1, finalUpdate: true });
+    await next;
+
+    expect(await codeOf(ipcMain.invoke('browser:stop-find', 1))).toBe('bad_request');
+  });
+
+  it('zoom: 1 и -1 — шаг от текущего, 0 — исходный; step 2 и прочее — bad_request', async () => {
+    const { ipcMain, guest } = browserSetup();
+    await ipcMain.invoke('browser:zoom', 7, 1);
+    expect(guest.setZoomLevel).toHaveBeenLastCalledWith(2);
+    await ipcMain.invoke('browser:zoom', 7, -1);
+    expect(guest.setZoomLevel).toHaveBeenLastCalledWith(0);
+    await ipcMain.invoke('browser:zoom', 7, 0);
+    expect(guest.setZoomLevel).toHaveBeenLastCalledWith(0);
+    expect(guest.setZoomLevel).toHaveBeenCalledTimes(3);
+
+    for (const step of [2, 0.5, '1', null]) {
+      expect(await codeOf(ipcMain.invoke('browser:zoom', 7, step)), String(step)).toBe('bad_request');
+    }
+    expect(guest.setZoomLevel).toHaveBeenCalledTimes(3);
+  });
+
+  it('clear-data — clearStorageData() и clearCache() раздела', async () => {
+    browserSession.clearStorageData.mockClear();
+    browserSession.clearCache.mockClear();
+    const { ipcMain } = browserSetup();
+    await ipcMain.invoke('browser:clear-data');
+    expect(browserSession.clearStorageData).toHaveBeenCalledTimes(1);
+    expect(browserSession.clearCache).toHaveBeenCalledTimes(1);
+    expect(otherSession.clearStorageData).not.toHaveBeenCalled();
   });
 });

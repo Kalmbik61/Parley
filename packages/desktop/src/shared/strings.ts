@@ -224,6 +224,7 @@ export const S = {
       terminal: 'Terminal',
       agents: 'Agents',
       notifications: 'Notifications',
+      browser: 'Browser',
     },
     lockedBy: (value: string): string => `(set by ${value})`,
     appearanceSystem: 'System',
@@ -242,6 +243,8 @@ export const S = {
     notifySound: 'sound',
     /** Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */
     notificationsHint: 'Not getting notifications? System Settings → Notifications → Harnas',
+    /** Секция «Браузер» (кусок 9.1): куки, хранилища и кеш раздела встроенного браузера. */
+    clearBrowserData: 'Clear browser data',
   },
 
   /** ⌘K — `palette/CommandPalette.tsx`, часть команд в `lib/commands.ts`. */
@@ -509,6 +512,7 @@ export const S = {
       openFile: 'open file',
       revealInFinder: 'reveal in Finder',
       saveScreenshot: 'save screenshot',
+      clearBrowserData: 'clear browser data',
     },
     noWorktree: 'This session has no worktree of its own',
   },

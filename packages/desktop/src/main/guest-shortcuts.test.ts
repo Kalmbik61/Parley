@@ -96,6 +96,9 @@ describe('forwardGuestShortcuts (тест 7)', () => {
     expect(guest.input({ key: 'Tab', code: 'Tab', control: true })).toBe(false);
     expect(guest.input({ key: 'Tab', code: 'Tab', control: true, shift: true })).toBe(false);
     expect(send).not.toHaveBeenCalled();
+    // Тест 9 куска 9.1: рядом с ⌃Tab прочие сочетания окна уходят, как в 6.1a.
+    expect(guest.input({ key: 'j', code: 'KeyJ', meta: true })).toBe(true);
+    expect(send.mock.calls.map(([id]) => id)).toEqual(['palette.open']);
   });
 
   it('автоповтор: ⌘N удержан — один send, повторы погашены; ⌘= удержан — каждый шаг', () => {

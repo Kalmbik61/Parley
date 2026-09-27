@@ -14,6 +14,7 @@ import type {
   Result,
 } from '@harnas/protocol';
 import type { AppNote, FocusTarget, HarnasBridge, HostStatus, MenuAction } from '../../shared/bridge.js';
+import type { BrowserOpenTab } from '../../shared/browser-types.js';
 import type {
   DirEntry,
   FileChangedEvent,
@@ -119,6 +120,10 @@ export interface FakeBridge extends HarnasBridge {
   readonly unwatchCalls: string[];
   readonly lsFilesCalls: FileRoot[];
   readonly gitStatusCalls: FileRoot[];
+  /** Вызовы `browser.*` по порядку (кусок 9.1). */
+  readonly browserCalls: Array<{ method: string; args: unknown[] }>;
+  /** window.open страницы: событие `browser:open-tab` слушателям `browser.onOpenTab`. */
+  emitBrowserOpenTab(e: BrowserOpenTab): void;
 }
 
 export function createFakeBridge(): FakeBridge {
@@ -167,6 +172,8 @@ export function createFakeBridge(): FakeBridge {
   const unwatchCalls: string[] = [];
   const lsFilesCalls: FileRoot[] = [];
   const gitStatusCalls: FileRoot[] = [];
+  const browserCalls: Array<{ method: string; args: unknown[] }> = [];
+  const browserOpenTabListeners = new Set<(e: BrowserOpenTab) => void>();
   let watchSeq = 0;
   /** mtimeMs ответа write: растёт с каждой записью, как на диске. */
   let writeMtimeMs = 1_700_000_000_000;
@@ -253,6 +260,33 @@ export function createFakeBridge(): FakeBridge {
     unwatchCalls,
     lsFilesCalls,
     gitStatusCalls,
+    browserCalls,
+    emitBrowserOpenTab: (e) => {
+      for (const listener of browserOpenTabListeners) listener(e);
+    },
+    // Безвредные заглушки: поиск ничего не находит, остальное — успех.
+    browser: {
+      openDevTools: async (webContentsId) => {
+        browserCalls.push({ method: 'openDevTools', args: [webContentsId] });
+      },
+      find: async (webContentsId, text, forward) => {
+        browserCalls.push({ method: 'find', args: [webContentsId, text, forward] });
+        return { matches: 0, active: 0 };
+      },
+      stopFind: async (webContentsId) => {
+        browserCalls.push({ method: 'stopFind', args: [webContentsId] });
+      },
+      zoom: async (webContentsId, step) => {
+        browserCalls.push({ method: 'zoom', args: [webContentsId, step] });
+      },
+      clearData: async () => {
+        browserCalls.push({ method: 'clearData', args: [] });
+      },
+      onOpenTab: (listener) => {
+        browserOpenTabListeners.add(listener);
+        return () => browserOpenTabListeners.delete(listener);
+      },
+    },
     files: {
       stat: async (root, paths) => paths.map((path) => fileStats.get(`${rootKey(root)}\n${path}`) ?? null),
       locate: async (workKey, absPaths) => {

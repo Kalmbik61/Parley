@@ -1,5 +1,6 @@
 import { BrowserWindow } from 'electron';
 import type { BrowserWindowConstructorOptions, WebContents } from 'electron';
+import { guardWebviewAttach } from './browser/guard.js';
 
 /**
  * Опции главного окна (спека 5.1, 4.4): `hiddenInset` вместо прежнего окна без
@@ -26,6 +27,8 @@ export function mainWindowOptions(input: {
       sandbox: true,
       nodeIntegration: false,
       preload: input.preloadPath,
+      // Встроенный браузер (кусок 9.1, спека 12.2): каждый <webview> проходит guardWebviewAttach.
+      webviewTag: true,
     },
   };
 }
@@ -77,6 +80,8 @@ export function createMainWindow(input: {
   const window = new BrowserWindow(mainWindowOptions({ dark: input.dark, preloadPath: input.preloadPath }));
 
   guardNavigation(window.webContents, `file://${input.indexHtmlPath}`);
+  // До loadFile: страж позже первого <webview> пропустил бы его с preload из атрибутов (кусок 9.1).
+  guardWebviewAttach(window.webContents);
 
   void window.loadFile(input.indexHtmlPath, input.search !== undefined ? { search: input.search } : undefined);
   return window;

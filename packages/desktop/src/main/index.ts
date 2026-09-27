@@ -1,8 +1,23 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, nativeTheme, Notification, shell, systemPreferences } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  ipcMain,
+  nativeImage,
+  nativeTheme,
+  Notification,
+  session,
+  shell,
+  systemPreferences,
+  webContents,
+} from 'electron';
 import type { WorksSnapshot } from '@harnas/protocol';
+import { BROWSER_PARTITION } from '../shared/browser-types.js';
 import { S } from '../shared/strings.js';
+import { installBrowserGuard } from './browser/guard.js';
 import { cleanupDrops, dropsDir, saveImage } from './drops.js';
 import { createGitRunner } from './files/git-api.js';
 import createGrepWorker from './files/grep-worker?nodeWorker';
@@ -10,6 +25,7 @@ import { registerFilesIpc } from './files/ipc.js';
 import { HostConnection } from './host-connection.js';
 import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
 import { forwardAppearanceToWindow, forwardHostToWindow, registerIpc } from './ipc.js';
+import { forwardGuestShortcuts } from './guest-shortcuts.js';
 import { createLayoutStore, desktopLayoutsPath } from './layout-store.js';
 import { createAppMenu } from './menu.js';
 import {
@@ -166,6 +182,24 @@ if (!gotLock) {
       return window;
     };
 
+    // Клетка встроенного браузера (кусок 9.1, спека 12.2) — до первого окна: его
+    // web-contents-created приходит внутри new BrowserWindow, а session.fromPartition до ready бросает.
+    const browserSession = session.fromPartition(BROWSER_PARTITION);
+    installBrowserGuard({
+      app,
+      // К моменту will-attach-webview mainWindow уже присвоен — и у окна, пересозданного на activate.
+      isMainWindow: (contents) => contents === mainWindow?.webContents,
+      session: browserSession,
+      // Окну-хозяину открывателя; куда встаёт вкладка — решает окно (9.2b).
+      openTab: (e) => {
+        webContents.fromId(e.openerWebContentsId)?.hostWebContents?.send('browser:open-tab', e);
+      },
+      // hostWebContents читается в момент нажатия: окно пересоздаётся на activate, ссылка устарела бы.
+      forwardShortcuts: (contents) => {
+        forwardGuestShortcuts(contents, (id) => contents.hostWebContents?.send('menu:action', id));
+      },
+    });
+
     mainWindow = openWindow();
 
     // E2E (`HARNAS_NOTIFICATIONS=log`): уведомления — в журнал main, а не на экран
@@ -182,7 +216,25 @@ if (!gotLock) {
         const window = mainWindow;
         // После закрытия окна ссылка не обнуляется, а macOS держит приложение и без окон.
         if (window === null || window.isDestroyed()) {
-          mainWindow = openWindow();
+          // Клетка встроенного браузера (кусок 9.1, спека 12.2) — до первого окна: его
+    // web-contents-created приходит внутри new BrowserWindow, а session.fromPartition до ready бросает.
+    const browserSession = session.fromPartition(BROWSER_PARTITION);
+    installBrowserGuard({
+      app,
+      // К моменту will-attach-webview mainWindow уже присвоен — и у окна, пересозданного на activate.
+      isMainWindow: (contents) => contents === mainWindow?.webContents,
+      session: browserSession,
+      // Окну-хозяину открывателя; куда встаёт вкладка — решает окно (9.2b).
+      openTab: (e) => {
+        webContents.fromId(e.openerWebContentsId)?.hostWebContents?.send('browser:open-tab', e);
+      },
+      // hostWebContents читается в момент нажатия: окно пересоздаётся на activate, ссылка устарела бы.
+      forwardShortcuts: (contents) => {
+        forwardGuestShortcuts(contents, (id) => contents.hostWebContents?.send('menu:action', id));
+      },
+    });
+
+    mainWindow = openWindow();
           return;
         }
         if (window.isMinimized()) window.restore();
@@ -249,6 +301,10 @@ if (!gotLock) {
         shellLog.push({ action: 'openPath', path });
         return '';
       },
+      browser: {
+        fromId: (id) => webContents.fromId(id) ?? null,
+        session: browserSession,
+      },
       saveDropImage: async () => {
         if (fakeDrops) return saveImage({ png: FAKE_DROP_PNG, dir: dropsDir() });
         // Есть текст — вставляется текст (спека 8.5): рендерер это уже проверил, main — для надёжности.
@@ -298,7 +354,25 @@ if (!gotLock) {
     // тогда создаёт этот обработчик, а цель клика ждёт его загрузки в отложенных.
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
-        mainWindow = openWindow();
+        // Клетка встроенного браузера (кусок 9.1, спека 12.2) — до первого окна: его
+    // web-contents-created приходит внутри new BrowserWindow, а session.fromPartition до ready бросает.
+    const browserSession = session.fromPartition(BROWSER_PARTITION);
+    installBrowserGuard({
+      app,
+      // К моменту will-attach-webview mainWindow уже присвоен — и у окна, пересозданного на activate.
+      isMainWindow: (contents) => contents === mainWindow?.webContents,
+      session: browserSession,
+      // Окну-хозяину открывателя; куда встаёт вкладка — решает окно (9.2b).
+      openTab: (e) => {
+        webContents.fromId(e.openerWebContentsId)?.hostWebContents?.send('browser:open-tab', e);
+      },
+      // hostWebContents читается в момент нажатия: окно пересоздаётся на activate, ссылка устарела бы.
+      forwardShortcuts: (contents) => {
+        forwardGuestShortcuts(contents, (id) => contents.hostWebContents?.send('menu:action', id));
+      },
+    });
+
+    mainWindow = openWindow();
       }
     });
   });

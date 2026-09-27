@@ -7,6 +7,7 @@ import type {
   Result,
   SessionRef,
 } from '@harnas/protocol';
+import type { BrowserApi } from './browser-types.js';
 import type {
   DirEntry,
   FileChangedEvent,
@@ -177,6 +178,11 @@ export interface HarnasBridge {
     /** Пути от папки корня; не git — {}. */
     gitStatus(root: FileRoot): Promise<Record<string, GitStatusLetter>>;
   };
+  /**
+   * Встроенный браузер (кусок 9.1, спека 12.5): main пускает только живого гостя `<webview>`
+   * раздела `BROWSER_PARTITION`, иначе отказ `bad_request`.
+   */
+  browser: BrowserApi;
 }
 
 declare global {

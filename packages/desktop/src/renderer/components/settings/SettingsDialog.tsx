@@ -18,6 +18,7 @@
  */
 
 import { useEffect, useState, type ReactNode } from 'react';
+import { toast } from 'sonner';
 import type { HarnasConfig } from '@harnas/core';
 import type { HarnasBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
@@ -39,17 +40,18 @@ export interface SettingsDialogProps {
   onConfigChange?: (config: HarnasConfig) => void;
 }
 
-/** Четыре секции спеки 4.10, в порядке таблицы. */
-type SettingsSection = 'appearance' | 'terminal' | 'agents' | 'notifications';
+/** Четыре секции спеки 4.10, в порядке таблицы, и «Браузер» (кусок 9.1). */
+type SettingsSection = 'appearance' | 'terminal' | 'agents' | 'notifications' | 'browser';
 
 const SECTION_LABELS: Record<SettingsSection, string> = {
   appearance: S.settings.sections.appearance,
   terminal: S.settings.sections.terminal,
   agents: S.settings.sections.agents,
   notifications: S.settings.sections.notifications,
+  browser: S.settings.sections.browser,
 };
 
-const SECTION_ORDER: readonly SettingsSection[] = ['appearance', 'terminal', 'agents', 'notifications'];
+const SECTION_ORDER: readonly SettingsSection[] = ['appearance', 'terminal', 'agents', 'notifications', 'browser'];
 
 type FieldErrors = Partial<Record<keyof HarnasConfig, string>>;
 
@@ -152,9 +154,18 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
     patchUi({ notifications: { ...ui.notifications, [key]: value } });
   };
 
+  // Куки, хранилища и кеш раздела встроенного браузера (кусок 9.1); сообщение main — только в консоль.
+  const clearBrowserData = (): void => {
+    bridge.browser.clearData().catch((err: unknown) => {
+      console.warn('[harnas] browser.clearData', err);
+      toast(errorText(decodeIpcError(err).code, S.errors.actions.clearBrowserData));
+    });
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent aria-describedby={undefined} className="w-[26rem] max-w-[26rem]">
+      {/* 28rem: пятая секция «Browser» (кусок 9.1) в 26rem выходила за край диалога. */}
+      <DialogContent aria-describedby={undefined} className="w-[28rem] max-w-[28rem]">
         <DialogTitle>{S.settings.title}</DialogTitle>
         {loadError !== null ? <p className="text-xs text-destructive">{loadError}</p> : null}
 
@@ -296,6 +307,12 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
             ) : null}
             {/* Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */}
             <p className="text-xs text-muted-foreground">{S.settings.notificationsHint}</p>
+          </TabsContent>
+
+          <TabsContent value="browser" className="flex flex-col gap-3">
+            <Button type="button" variant="outline" className="self-start" onClick={clearBrowserData}>
+              {S.settings.clearBrowserData}
+            </Button>
           </TabsContent>
         </Tabs>
 
