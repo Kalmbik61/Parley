@@ -45,6 +45,11 @@ describe('capabilities', () => {
     );
   });
 
+  it('окну этапа 5 нужен pty.send (кусок 5.1)', () => {
+    expect(REQUIRED_METHODS).toContain('pty.send');
+    expect(missingMethods(connected(null))).toContain('pty.send');
+  });
+
   it('новый хост, отдавший ключи METHODS и NOTIFICATIONS протокола, — недостающих нет', () => {
     const all = [...Object.keys(METHODS), ...Object.keys(NOTIFICATIONS)].sort();
     expect(missingMethods(connected(all))).toEqual([]);

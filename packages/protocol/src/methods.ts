@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { HarnasConfig, MergeResult, WorktreeDiff } from '@harnas/core';
-import type { SessionRef, WorksSnapshot } from './types.js';
+import type { SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 export const sessionRef = z.object({
   projectPath: z.string(),
@@ -91,6 +91,9 @@ export const METHODS = {
     workId: z.string(),
     messageIds: z.array(z.string()).min(1).max(500),
   }),
+  // Предел 64 КиБ хост считает в байтах UTF-8 после очистки (спека 8.6, шаг 2): схема
+  // байтов не видит, поэтому здесь только «не пусто».
+  'pty.send': z.object({ ref: sessionRef, text: z.string().min(1), submit: z.boolean() }),
 } as const;
 
 // Уведомления клиента — без id и без ответа: их слишком много, чтобы ждать каждое.
@@ -134,6 +137,7 @@ export interface Results {
   'worktrees.merge': MergeResult;
   'worktrees.discard': { ok: true };
   'mail.markRead': { marked: number };
+  'pty.send': SendResult;
 }
 
 export type MethodName = keyof typeof METHODS;

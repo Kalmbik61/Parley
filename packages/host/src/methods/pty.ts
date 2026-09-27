@@ -13,17 +13,21 @@ import type { Client } from '../client.js';
 import type { Handler, NotificationHandler } from '../context.js';
 import { HostError } from '../errors.js';
 import type { PtyManager } from '../pty/pty-manager.js';
+import { createSender } from '../pty/send.js';
+import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
 
 export interface PtyMethodDeps {
   pty: PtyManager;
   activity: ActivityService;
   works: WorksService;   // activity.seen: есть ли сессия в снимке работ хоста
+  wake: Pick<WakeService, 'inFlight' | 'enterDelayMs'>;   // pty.send: busy и пауза Enter
 }
 
 export interface PtyHandlers {
   ptyAttach: Handler<'pty.attach'>;
   ptyDetach: Handler<'pty.detach'>;
+  ptySend: Handler<'pty.send'>;
   ptyInput: NotificationHandler<'pty.input'>;
   ptyResize: NotificationHandler<'pty.resize'>;
   activitySeen: NotificationHandler<'activity.seen'>;
@@ -37,6 +41,9 @@ export interface PtyHandlers {
  */
 export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
   const attached = new Map<string, Set<Client>>();
+  // Один отправитель на хост: «свой Enter в полёте» по сессии должен быть общим для всех
+  // клиентов, иначе два окна обошли бы busy.
+  const send = createSender(deps);
 
   deps.pty.on('output', (ref, data) => {
     const key = refKey(ref);
@@ -84,6 +91,9 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
       attached.get(refKey(params.ref))?.delete(request.client);
       return { ok: true };
     },
+
+    // Отвечает после ожидания своего Enter (около enterDelayMs), исход — в SendResult.
+    ptySend: (params) => send(params),
 
     ptyInput: (params) => {
       deps.pty.input(params.ref, params.data);

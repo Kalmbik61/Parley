@@ -12,14 +12,27 @@ import { refKey, type SessionRef } from '@harnas/protocol';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { TerminalSurface, terminalSurfaces } from './TerminalSurface.js';
 
-const state = vi.hoisted(() => ({ findNext: vi.fn(), focus: vi.fn(), scrollToBottom: vi.fn() }));
+const state = vi.hoisted(() => ({
+  findNext: vi.fn(),
+  focus: vi.fn(),
+  scrollToBottom: vi.fn(),
+  paste: vi.fn(),
+  xtermPaste: vi.fn(),
+}));
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: vi.fn().mockImplementation((initialOptions: Record<string, unknown>) => ({
     cols: 80,
     rows: 24,
     options: { ...initialOptions },
-    open: () => {},
+    // Как у настоящего xterm: скрытое поле ввода внутри контейнера со своим обработчиком paste.
+    open: (el: HTMLElement) => {
+      const textarea = document.createElement('textarea');
+      textarea.dataset.testid = 'xterm-textarea';
+      textarea.addEventListener('paste', state.xtermPaste);
+      el.appendChild(textarea);
+    },
+    paste: state.paste,
     loadAddon: () => {},
     write: () => {},
     reset: () => {},
@@ -55,6 +68,8 @@ beforeEach(() => {
   state.findNext.mockClear();
   state.focus.mockClear();
   state.scrollToBottom.mockClear();
+  state.paste.mockClear();
+  state.xtermPaste.mockClear();
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
   bridge = createFakeBridge();
   bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24 }));
@@ -108,5 +123,35 @@ describe('TerminalSurface', () => {
     expect(state.focus).toHaveBeenCalledTimes(1);
     expect(state.scrollToBottom).toHaveBeenCalledTimes(1);
     expect(handle.search).not.toBeNull();
+  });
+
+  describe('вставка в терминал (кусок 5.1, раунд исправлений 2)', () => {
+    async function pasteText(text: string): Promise<void> {
+      renderSurface();
+      await act(async () => {
+        await Promise.resolve();
+      });
+      const textarea = screen.getByTestId('xterm-textarea');
+      fireEvent.paste(textarea, { clipboardData: { getData: (type: string) => (type === 'text/plain' ? text : ''), files: [] } });
+    }
+
+    it('CSI (в т.ч. поддельный ESC[201~) и управляющие C0 вырезаются до xterm, сырой текст xterm не получает', async () => {
+      await pasteText('a\x1b[201~\x03b');
+      expect(state.paste).toHaveBeenCalledTimes(1);
+      expect(state.paste).toHaveBeenCalledWith('ab');
+      expect(state.xtermPaste).not.toHaveBeenCalled();
+    });
+
+    it('обычный текст с \\t, \\n, \\r уходит без изменений', async () => {
+      await pasteText('line 1\tx\r\nline 2\n');
+      expect(state.paste).toHaveBeenCalledWith('line 1\tx\r\nline 2\n');
+      expect(state.xtermPaste).not.toHaveBeenCalled();
+    });
+
+    it('пустой после чистки текст — ничего не вставляется', async () => {
+      await pasteText('\x1b\x07\x7f\x1b[200~');
+      expect(state.paste).not.toHaveBeenCalled();
+      expect(state.xtermPaste).not.toHaveBeenCalled();
+    });
   });
 });

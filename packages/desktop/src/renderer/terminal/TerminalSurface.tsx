@@ -70,6 +70,24 @@ export interface TerminalSurfaceHandle {
 /** Реестр живых поверхностей для фокуса, прокрутки и поиска (4.3, 5.3). */
 export const terminalSurfaces: Map<string /* refKey */, TerminalSurfaceHandle> = new Map();
 
+// ESC и управляющие байты в регулярках — ровно то, что вырезается из вставки.
+/* eslint-disable no-control-regex */
+const PASTE_CSI = /\x1b\[[0-?]*[ -/]*[@-~]/g;
+// C0 кроме \t, \n, \r (их xterm обработает сам) и DEL; остатки ESC — тоже здесь.
+const PASTE_CONTROL = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
+/* eslint-enable no-control-regex */
+
+/**
+ * Текст вставки без управляющих байтов (кусок 5.1, раунд исправлений 2). Хост
+ * разбирает вставку по маркерам ESC[200~/ESC[201~ и не может отличить маркер от
+ * таких же байтов в содержимом (скопированный сырой лог терминала): поддельный
+ * конец вставки сделал бы её хвост «вводом человека», и его \r снял бы черновик.
+ * CSI вырезается целиком, чтобы от маркера не оставался мусор «[201~».
+ */
+function sanitizePaste(text: string): string {
+  return text.replace(PASTE_CSI, '').replace(PASTE_CONTROL, '');
+}
+
 /** Случайный id монтирования — не `crypto.randomUUID`: тот требует защищённого контекста. */
 function newMountId(): string {
   return `m-${Math.random().toString(36).slice(2, 10)}`;
@@ -192,6 +210,25 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, visible, f
     }),
     [],
   );
+
+  // Вставка — через xterm, но уже чистым текстом (sanitizePaste): capture на
+  // контейнере срабатывает раньше обработчика paste скрытого поля xterm, а
+  // stopPropagation не даёт xterm вставить сырой текст второй раз. xterm.paste
+  // сам обернёт текст в bracketed paste и переведёт переводы строк. Вставка без
+  // текста (картинка) не трогается — её добавит кусок 5.4 сюда же.
+  useEffect(() => {
+    if (container === null || terminal === null) return;
+    const onPaste = (event: ClipboardEvent): void => {
+      const text = event.clipboardData?.getData('text/plain') ?? '';
+      if (text === '') return;
+      event.preventDefault();
+      event.stopPropagation();
+      const clean = sanitizePaste(text);
+      if (clean !== '') terminal.paste(clean);
+    };
+    container.addEventListener('paste', onPaste, true);
+    return () => container.removeEventListener('paste', onPaste, true);
+  }, [container, terminal]);
 
   const sessionKey = refKey(sessionRef);
   useEffect(() => {

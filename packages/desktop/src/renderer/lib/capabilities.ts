@@ -53,6 +53,7 @@ export const REQUIRED_METHODS: readonly string[] = [
   'works.setStatus',
   'activity.seen',
   'mail.markRead',
+  'pty.send',
 ];
 
 /** Методы хоста; без связи — пусто: звать всё равно некого. */
