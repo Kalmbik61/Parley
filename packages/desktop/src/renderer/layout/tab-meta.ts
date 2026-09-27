@@ -7,17 +7,33 @@
  */
 
 import type { WorkEntry, WorkSession } from '@harnas/core';
+import { refKey } from '@harnas/protocol';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
+import type { Attention } from '../attention/derive.js';
 import { sessionRowLabel, sessionTag } from '../lib/participant.js';
+
+/**
+ * Данные хранилищ для `tabMeta` одним входом (кусок 4.2): `tabMeta` остаётся чистой, а
+ * 7.3 и 9.2 наполняют свои поля, а не добавляют параметры. Собирает `useTabMetaExtras`.
+ */
+export interface TabMetaExtras {
+  attention: Record<string /* refKey */, Attention>;   // 4.2
+  dirtyTabIds: ReadonlySet<string>;                     // 7.3: вкладки file с несохранённым буфером; до него пусто
+  browser: Record<string /* tabId */, { title: string | null; favicon: string | null }>;  // 9.2; до него пусто
+}
+
+export const EMPTY_EXTRAS: TabMetaExtras = { attention: {}, dirtyTabIds: new Set(), browser: {} };
 
 export interface TabMeta {
   title: string;
   icon: 'terminal' | 'mail' | 'room' | 'diff' | 'file' | 'browser';
   /** Для точки состояния и значка агента (`Tab.tsx`, спека 4.2) — только у `terminal`. */
   session: WorkSession | null;
-  /** В этапе 2 всегда `false` — подключит этап 4. */
+  /** Сессия вкладки-терминала в `needs-you` или `unseen` (спека 7.3): подложка amber-500/10. */
   unread: boolean;
+  /** Сессия в `needs-you`: значок вопроса вместо точки — важнее точки (кусок 4.2). */
+  needsYou: boolean;
   /** В этапе 2 всегда `false` — подключит кусок 7.3. */
   dirty: boolean;
   /** В этапе 2 всегда `null` — подключит кусок 9.2. */
@@ -48,14 +64,25 @@ function fileBaseName(path: string): string {
   return slash === -1 ? path : path.slice(slash + 1);
 }
 
-export function tabMeta(tab: TabSpec, entry: WorkEntry | null): TabMeta {
-  const empty = { unread: false, dirty: false, favicon: null } as const;
+export function tabMeta(tab: TabSpec, entry: WorkEntry | null, extras: TabMetaExtras = EMPTY_EXTRAS): TabMeta {
+  const empty = { unread: false, needsYou: false, dirty: false, favicon: null } as const;
 
   switch (tab.kind) {
     case 'terminal': {
       const session = findSession(entry, tab.sessionId);
       const title = session === null ? sessionTag(tab.sessionId) : sessionRowLabel(session.id, session.label);
-      return { title: truncateTitle(title), icon: 'terminal', session, ...empty };
+      const attention =
+        entry === null
+          ? undefined
+          : extras.attention[refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: tab.sessionId })];
+      return {
+        title: truncateTitle(title),
+        icon: 'terminal',
+        session,
+        ...empty,
+        unread: attention === 'needs-you' || attention === 'unseen',
+        needsYou: attention === 'needs-you',
+      };
     }
     case 'mail':
       return { title: truncateTitle(S.tabs.mail), icon: 'mail', session: null, ...empty };

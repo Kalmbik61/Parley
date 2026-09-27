@@ -20,7 +20,7 @@ function tab(id: string): TabSpec {
 }
 
 function meta(title: string): TabMeta {
-  return { title, icon: 'terminal', session: null, unread: false, dirty: false, favicon: null };
+  return { title, icon: 'terminal', session: null, unread: false, needsYou: false, dirty: false, favicon: null };
 }
 
 function setLayoutWithGroup(group: GroupNode): void {
@@ -179,5 +179,39 @@ describe('Tab — раунд исправлений 1: доступность (�
     fireEvent.keyDown(screen.getByRole('tab'), { key: ' ' });
 
     await vi.waitFor(() => expect(useLayoutStore.getState().layouts[WORK_KEY]?.root).toMatchObject({ activeTabId: 'b' }));
+  });
+});
+
+// Кусок 4.2 (спека 7.3): отметки вкладки — data-unread и значок вопроса вместо точки.
+describe('Tab — отметки внимания (кусок 4.2)', () => {
+  it('needsYou: data-unread="true" и значок вопроса вместо точки done', () => {
+    const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
+    setLayoutWithGroup(group);
+    render(
+      <Tab
+        workKey={WORK_KEY}
+        group={group}
+        tab={tab('b')}
+        meta={{ ...meta('B'), unread: true, needsYou: true }}
+        dot={{ state: 'done', lifecycle: 'active' }}
+        isActive={false}
+        openSessionIds={[]}
+      />,
+    );
+    const el = screen.getByRole('tab');
+    expect(el.getAttribute('data-unread')).toBe('true');
+    expect(el.className).toContain('bg-amber-500/10');
+    expect(el.querySelector('[data-testid="agent-state-dot"]')?.getAttribute('data-state')).toBe('blocked');
+  });
+
+  it('без отметок — data-unread="false", точка как есть', () => {
+    const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a')], activeTabId: 'a' };
+    setLayoutWithGroup(group);
+    render(
+      <Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={meta('A')} dot={{ state: 'done', lifecycle: 'active' }} isActive openSessionIds={[]} />,
+    );
+    const el = screen.getByRole('tab');
+    expect(el.getAttribute('data-unread')).toBe('false');
+    expect(el.querySelector('[data-testid="agent-state-dot"]')?.getAttribute('data-state')).toBe('done');
   });
 });

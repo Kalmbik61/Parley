@@ -56,7 +56,12 @@ function TabIcon({ meta, dot }: Pick<TabProps, 'meta' | 'dot'>): JSX.Element {
       return (
         <span className="flex shrink-0 items-center gap-1">
           <AgentIcon provider={meta.session?.provider ?? '?'} />
-          {dot !== null ? <AgentStateDot state={dot.state} lifecycle={dot.lifecycle} size="sm" /> : null}
+          {/* «Нужен ты» важнее точки: при `result` точка показала бы done/failed (спека 7.3). */}
+          {meta.needsYou ? (
+            <AgentStateDot state="blocked" size="sm" />
+          ) : dot !== null ? (
+            <AgentStateDot state={dot.state} lifecycle={dot.lifecycle} size="sm" />
+          ) : null}
         </span>
       );
     case 'mail':
@@ -106,6 +111,7 @@ export function Tab({ workKey, group, tab, meta, dot, isActive, openSessionIds }
           role="tab"
           data-tab-id={tab.id}
           data-active={isActive}
+          data-unread={meta.unread}
           aria-selected={isActive}
           tabIndex={isActive ? 0 : -1}
           onClick={activateThis}

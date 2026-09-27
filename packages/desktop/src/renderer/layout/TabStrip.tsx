@@ -36,7 +36,8 @@ import { createPortal } from 'react-dom';
 import { useDroppable } from '@dnd-kit/core';
 import { horizontalListSortingStrategy, SortableContext, useSortable } from '@dnd-kit/sortable';
 import { Plus } from 'lucide-react';
-import type { WorkEntry } from '@harnas/core';
+import { useShallow } from 'zustand/react/shallow';
+import type { Activity, WorkEntry } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import type { GroupNode } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
@@ -49,6 +50,7 @@ import { Tab } from './Tab.js';
 import { openTerminalSessionIds } from './tree.js';
 import { tabMeta } from './tab-meta.js';
 import { useLayoutStore } from './store.js';
+import { useTabMetaExtras } from './use-tab-meta-extras.js';
 
 export interface TabStripProps {
   workKey: string;
@@ -98,7 +100,21 @@ function wrapIndex(index: number, length: number): number {
 
 export function TabStrip({ workKey, group, entry, portal, active }: TabStripProps): JSX.Element {
   const layout = useLayoutStore((state) => state.layouts[workKey]);
-  const activityByRef = useActivityStore((state) => state.byRef);
+  // Точке нужен только вид активности сессий этой строки, а не вся запись с метриками:
+  // поверхностное сравнение держит строку от перерисовки на каждое `activity.changed`
+  // (решение контролёра 2 куска 4.2) — как и `useTabMetaExtras`.
+  const liveActivity = useActivityStore(
+    useShallow((state) => {
+      const out: Record<string, Activity | null> = {};
+      for (const tab of group.tabs) {
+        if (tab.kind !== 'terminal') continue;
+        const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: tab.sessionId };
+        out[tab.sessionId] = activityFor(state.byRef, ref)?.activity.activity ?? null;
+      }
+      return out;
+    }),
+  );
+  const extras = useTabMetaExtras();
   const openSessionIds = openTerminalSessionIds(layout);
 
   const tablistRef = useRef<HTMLDivElement | null>(null);
@@ -158,16 +174,13 @@ export function TabStrip({ workKey, group, entry, portal, active }: TabStripProp
     >
       <SortableContext items={group.tabs.map((tab) => dndId.tab(workKey, tab.id))} strategy={horizontalListSortingStrategy}>
         {group.tabs.map((tab, index) => {
-          const meta = tabMeta(tab, entry);
+          const meta = tabMeta(tab, entry, extras);
           const dot =
             tab.kind === 'terminal' && meta.session !== null
-              ? (() => {
-                  const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: tab.sessionId };
-                  const activity = activityFor(activityByRef, ref);
-                  const session = meta.session;
-                  if (session === null) return null;
-                  return { state: dotState(displayStatus(session), activity?.activity.activity ?? null), lifecycle: session.lifecycle };
-                })()
+              ? {
+                  state: dotState(displayStatus(meta.session), liveActivity[tab.sessionId] ?? null),
+                  lifecycle: meta.session.lifecycle,
+                }
               : null;
           return (
             <SortableTab

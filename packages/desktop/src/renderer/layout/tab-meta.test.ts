@@ -5,7 +5,8 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Room, WorkEntry, WorkSession } from '@harnas/core';
-import { tabMeta, truncateTitle } from './tab-meta.js';
+import { refKey } from '@harnas/protocol';
+import { EMPTY_EXTRAS, tabMeta, truncateTitle, type TabMetaExtras } from './tab-meta.js';
 
 function session(id: string, label: string): WorkSession {
   return {
@@ -140,5 +141,34 @@ describe('truncateTitle — тест 7', () => {
     expect(codePoints[40]).toBe('…');
     // Ни один суррогат не остался в одиночестве: строка целиком — валидные code points.
     expect(result).toBe('🙂'.repeat(40) + '…');
+  });
+});
+
+// Тест 10 куска 4.2: отметки вкладки терминала из внимания (спека 7.3).
+describe('tabMeta — extras.attention (тест 10 куска 4.2)', () => {
+  const e = entry([session('s-02', 'исполнитель')]);
+  const tab = { kind: 'terminal', id: 'terminal:s-02', sessionId: 's-02' } as const;
+  const key = refKey({ projectPath: '/tmp/p', workId: 'w', sessionId: 's-02' });
+  const extras = (attention: TabMetaExtras['attention']): TabMetaExtras => ({ ...EMPTY_EXTRAS, attention });
+
+  it('needs-you → unread и needsYou', () => {
+    const meta = tabMeta(tab, e, extras({ [key]: 'needs-you' }));
+    expect(meta.unread).toBe(true);
+    expect(meta.needsYou).toBe(true);
+  });
+
+  it('unseen → unread, но не needsYou', () => {
+    const meta = tabMeta(tab, e, extras({ [key]: 'unseen' }));
+    expect(meta.unread).toBe(true);
+    expect(meta.needsYou).toBe(false);
+  });
+
+  it('working → ни того, ни другого; без extras — оба ложны, как в этапе 2', () => {
+    expect(tabMeta(tab, e, extras({ [key]: 'working' }))).toMatchObject({ unread: false, needsYou: false });
+    expect(tabMeta(tab, e)).toMatchObject({ unread: false, needsYou: false });
+  });
+
+  it('вкладка почты extras не трогают', () => {
+    expect(tabMeta({ kind: 'mail', id: 'mail' }, e, extras({ [key]: 'needs-you' }))).toMatchObject({ unread: false, needsYou: false });
   });
 });
