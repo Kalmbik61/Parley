@@ -96,6 +96,23 @@ describe('typeAndSubmit', () => {
     expect(pty.hostDraftCalls).toEqual([]);
   });
 
+  it('отложенный Enter бросил — done отклонён, а не исключение хоста', async () => {
+    const write = pty.manager.write;
+    pty.manager.write = (target, data) => {
+      if (data === '\r') throw new Error('PTY закрыт');
+      write(target, data);
+    };
+    const attempt = typeAndSubmit(deps(), ref, 'текст', true, { hostDraft: true });
+    const settled = attempt.done.then(
+      (outcome) => ({ outcome }),
+      (error: unknown) => ({ error: String(error) }),
+    );
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(settled).resolves.toEqual({ error: 'Error: PTY закрыт' });
+    // Enter не ушёл — черновик хоста не снимается.
+    expect(pty.hostDraftCalls).toEqual([true]);
+  });
+
   it('свои таймеры из deps', async () => {
     const setTimer = vi.fn(setTimeout);
     const attempt = typeAndSubmit({ ...deps(), setTimer: setTimer as unknown as typeof setTimeout }, ref, 'x', true);

@@ -303,6 +303,24 @@ describe('PtyManager: черновик хоста (кусок 5.1)', () => {
     await manager.stop(sessionRef, { graceMs: 200 });
   });
 
+  it('содержимое вставки (⌃C, ⌃U, поддельный ESC[201~, \\n в конце) черновики не снимает; Enter после — снимает', async () => {
+    const { manager, sessionRef, hostDrafts } = await started();
+    for (const chunk of [
+      '\x1b[200~a\x03b\x1b[201~',
+      '\x1b[200~a\x15b\x1b[201~',
+      '\x1b[200~text\x1b[201~\r\x1b[201~',
+      '\x1b[200~text\n\x1b[201~',
+    ]) {
+      manager.setHostDraft(sessionRef, true);
+      manager.input(sessionRef, chunk);
+      expect(manager.get(sessionRef)?.hasDraft()).toBe(true);
+      manager.input(sessionRef, '\r');
+      expect(manager.get(sessionRef)?.hasDraft()).toBe(false);
+    }
+    expect(hostDrafts).toEqual([true, true, true, true]);
+    await manager.stop(sessionRef, { graceMs: 200 });
+  });
+
   it('bracketedPaste() ручки — режим экрана: стаб его не включает', async () => {
     const { manager, sessionRef } = await started();
     expect(manager.get(sessionRef)?.bracketedPaste()).toBe(false);

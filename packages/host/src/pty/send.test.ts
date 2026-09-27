@@ -31,6 +31,11 @@ describe('sanitizeForSend', () => {
     expect(sanitizeForSend('a\x07b\x7fc\td\ne')).toBe('abc\td\ne');
   });
 
+  it('OSC 52 вырезается целиком, тело не остаётся мусором', () => {
+    expect(sanitizeForSend('\x1b]52;c;aGVsbG8=\x07rest')).toBe('rest');
+    expect(sanitizeForSend('a\x1b]0;title\x1b\\b')).toBe('ab');
+  });
+
   it('только ESC — bad_request', () => {
     expect(codeOf(() => sanitizeForSend('\x1b[31m\x1b'))).toBe('bad_request');
   });
@@ -145,6 +150,27 @@ describe('createSender', () => {
     pty.pid = 101;
     await vi.advanceTimersByTimeAsync(500);
     await expect(result).resolves.toEqual({ inserted: true, submitted: false, reason: 'restarted' });
+  });
+
+  it('запись Enter бросила — pty.send отклонён, следующий вызов не busy', async () => {
+    const write = pty.manager.write;
+    pty.manager.write = (target, data) => {
+      if (data === '\r') throw new Error('PTY закрыт');
+      write(target, data);
+    };
+    const send = sender();
+    const settled = send({ ref, text: 'hi', submit: true }).then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error: String(error) }),
+    );
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(settled).resolves.toEqual({ error: 'Error: PTY закрыт' });
+    pty.hostDraft = false;
+    await expect(send({ ref, text: 'x', submit: false })).resolves.toEqual({
+      inserted: true,
+      submitted: false,
+      reason: null,
+    });
   });
 
   it('всё чисто — submitted, последняя запись \\r, черновик хоста снят', async () => {

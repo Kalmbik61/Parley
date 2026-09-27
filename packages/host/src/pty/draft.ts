@@ -13,21 +13,23 @@
 // ESC (0x1b) в регулярках ниже — не опечатка и не забытый ввод: это ровно тот
 // управляющий байт, который вырезают правила черновика.
 /* eslint-disable no-control-regex */
+// OSC (заголовок окна, OSC 52 — буфер обмена и т.п.): тело до BEL или ST (ESC \\), без
+// терминатора — до конца строки. Иначе OTHER_ESCAPE снял бы только ESC ']', а тело
+// осталось бы печатным мусором в тексте pty.send.
+const OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\|$)/g;
 // ECMA-48 CSI: ESC '[' параметры (0x30–0x3F) intermediate (0x20–0x2F) финальный байт (0x40–0x7E).
 const CSI = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 // SS3 (клавиши F1-F4 в некоторых терминалах): ESC 'O' + один байт.
 const SS3 = /\x1bO./g;
 // Всё прочее ESC + один байт (Alt+клавиша, сброс терминала и т.п.).
 const OTHER_ESCAPE = /\x1b./g;
-// Маркеры bracketed paste — группой, чтобы `split` оставил их в выдаче.
-const PASTE_MARKERS = /(\x1b\[20[01]~)/;
 const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
 /* eslint-enable no-control-regex */
 
 /** Правила вырезания ESC-последовательностей; ими же чистит текст pty.send (спека 8.6, шаг 2). */
 export function stripEscapes(data: string): string {
-  return data.replace(CSI, '').replace(SS3, '').replace(OTHER_ESCAPE, '');
+  return data.replace(OSC, '').replace(CSI, '').replace(SS3, '').replace(OTHER_ESCAPE, '');
 }
 
 export class DraftTracker {
@@ -45,11 +47,42 @@ export class DraftTracker {
    */
   private inPaste = false;
 
+  /**
+   * xterm шлёт вставку одним куском onData, поэтому в куске её границы — первый
+   * ESC[200~ и ПОСЛЕДНИЙ ESC[201~: всё между ними — содержимое, даже если в нём самом
+   * есть такие же байты (скопированный сырой лог терминала). Иначе содержимое могло бы
+   * «закрыть» вставку раньше времени, и его \r или ⌃C сняли бы черновик хоста.
+   * Нет закрывающего маркера — вставка открыта до ESC[201~ следующих кусков.
+   */
   input(data: string): void {
-    for (const part of data.split(PASTE_MARKERS)) {
-      if (part === PASTE_START) this.inPaste = true;
-      else if (part === PASTE_END) this.inPaste = false;
-      else this.inputPlain(part);
+    let rest = data;
+    if (!this.inPaste) {
+      const start = rest.indexOf(PASTE_START);
+      if (start < 0) {
+        this.inputPlain(rest);
+        return;
+      }
+      this.inputPlain(rest.slice(0, start));
+      rest = rest.slice(start + PASTE_START.length);
+      this.inPaste = true;
+    }
+    const end = rest.lastIndexOf(PASTE_END);
+    if (end < 0) {
+      this.inputPasted(rest);
+      return;
+    }
+    this.inputPasted(rest.slice(0, end));
+    this.inPaste = false;
+    // После конца вставки в том же куске может начаться новая — её ищет рекурсия.
+    const tail = rest.slice(end + PASTE_END.length);
+    if (tail.length > 0) this.input(tail);
+  }
+
+  /** Содержимое вставки — только текст: переводы строк и ⌃C/⌃U в нём не клавиши. */
+  private inputPasted(data: string): void {
+    for (const char of Array.from(stripEscapes(data))) {
+      const code = char.codePointAt(0) ?? 0;
+      if (char === '\r' || char === '\n' || code >= 0x20) this.count += 1;
     }
   }
 
@@ -57,10 +90,7 @@ export class DraftTracker {
     for (const char of Array.from(stripEscapes(data))) {
       const code = char.codePointAt(0) ?? 0;
 
-      if ((char === '\r' || char === '\n') && this.inPaste) {
-        // Перевод строки внутри вставки — часть текста, а не Enter.
-        this.count += 1;
-      } else if (char === '\r' || char === '\n' || code === 0x03 || code === 0x15) {
+      if (char === '\r' || char === '\n' || code === 0x03 || code === 0x15) {
         // Enter, Ctrl+C, Ctrl+U — строка ушла или стёрта целиком.
         this.count = 0;
         this.host = false;

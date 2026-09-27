@@ -28,7 +28,8 @@ export interface TypeAndSubmitDeps {
  * enterDelayMs жмёт Enter тому же pid, если за это время не было события draft;
  * был ввод — 'input', сменился pid — 'restarted'. Без submit — 'typed' сразу.
  * hostDraft (pty.send): печать ставит черновик хоста, свой Enter его снимает.
- * Будильник зовёт без него — его поведение прежнее.
+ * Будильник зовёт без него — его поведение прежнее. Сбой отложенной записи Enter
+ * (PTY умер между проверкой pid и записью) — отказ done, а не исключение хоста.
  */
 export function typeAndSubmit(
   deps: TypeAndSubmitDeps,
@@ -49,8 +50,10 @@ export function typeAndSubmit(
   const key = refKey(ref);
   let sawInput = false;
   let settle: (outcome: AttemptOutcome) => void = () => {};
-  const done = new Promise<AttemptOutcome>((resolve) => {
+  let fail: (error: unknown) => void = () => {};
+  const done = new Promise<AttemptOutcome>((resolve, reject) => {
     settle = resolve;
+    fail = reject;
   });
 
   // Любое изменение черновика в окне ожидания — это ввод человека, даже если черновик
@@ -73,8 +76,15 @@ export function typeAndSubmit(
       settle('restarted');
       return;
     }
-    deps.pty.write(ref, '\r');
-    if (hostDraft) deps.pty.setHostDraft(ref, false);
+    // Колбэк таймера — вне цепочки промисов: брошенное здесь стало бы необработанным
+    // исключением хоста, поэтому сбой уходит отказом done тому, кто ждёт исход.
+    try {
+      deps.pty.write(ref, '\r');
+      if (hostDraft) deps.pty.setHostDraft(ref, false);
+    } catch (error) {
+      fail(error);
+      return;
+    }
     settle('submitted');
   }, deps.enterDelayMs);
 

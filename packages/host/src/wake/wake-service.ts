@@ -340,6 +340,11 @@ export function createWakeService(
         state.inFlight = false;
         notice('pointer-cancelled', ref, `указатель сессии ${ref.sessionId} отменён вводом человека`);
       }
+    }, (error: unknown) => {
+      // Enter указателя не записался (PTY умер в окне ожидания). Сессию дальше ведёт
+      // предохранитель указателя и выход процесса — здесь только след в логе.
+      if (state.typing === typing) state.typing = undefined;
+      host.log.error('Enter указателя не записался', { ref, error: String(error) });
     });
   }
 
