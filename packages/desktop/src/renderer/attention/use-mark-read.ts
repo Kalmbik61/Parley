@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 import type { HarnasBridge } from '../../shared/bridge.js';
+import { decodeIpcError } from '../../shared/ipc-error.js';
 import { hostMethods } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
 import { useUiStore } from '../store/ui.js';
@@ -19,6 +20,13 @@ const VISIBLE_MS = 1000;
 const BATCH_QUIET_MS = 500;
 /** Предел id за вызов — схема `mail.markRead` (план, «Числа»). */
 const BATCH_MAX = 500;
+/** Потолок отступа повтора после временной ошибки `mail.markRead`. */
+const RETRY_MAX_MS = 5000;
+/**
+ * Коды, на которых повтор бессмыслен: работы или писем уже нет (`not_found`) либо пачку не
+ * примет схема (`bad_request`) — те же id ответят так же.
+ */
+const PERMANENT_CODES = new Set(['not_found', 'bad_request']);
 /** Порог видимости письма (спека 7.2). */
 const THRESHOLD = 0.5;
 
@@ -50,6 +58,8 @@ class MarkReadEngine {
   private readonly sent = new Set<string>();
   private queue: string[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Временных ошибок подряд: отступ растёт, чтобы лежащий хост не получал вызов каждые 500 мс. */
+  private failures = 0;
   private stopped = false;
 
   constructor(input: Input) {
@@ -174,10 +184,12 @@ class MarkReadEngine {
 
   private scheduleFlush(): void {
     if (this.flushTimer !== null) clearTimeout(this.flushTimer);
+    // Во время отступа ждут и новые письма: иначе они сбили бы его обратно к 500 мс.
+    const delay = this.failures === 0 ? BATCH_QUIET_MS : Math.min(BATCH_QUIET_MS * 2 ** (this.failures - 1), RETRY_MAX_MS);
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null;
       this.flush();
-    }, BATCH_QUIET_MS);
+    }, delay);
   }
 
   private flush(): void {
@@ -194,16 +206,25 @@ class MarkReadEngine {
     const { bridge, projectPath, workId } = this.input;
     for (let start = 0; start < ids.length; start += BATCH_MAX) {
       const messageIds = ids.slice(start, start + BATCH_MAX);
-      bridge.call('mail.markRead', { projectPath, workId, messageIds }).catch(() => {
-        // id — обратно в очередь следующей пачкой: письмо не застревает до перемонтирования.
-        // Панель уже снята — письма снова кандидаты при её следующем монтировании.
-        if (this.stopped) {
-          for (const id of messageIds) this.sent.delete(id);
-          return;
-        }
-        this.queue.push(...messageIds);
-        this.scheduleFlush();
-      });
+      bridge
+        .call('mail.markRead', { projectPath, workId, messageIds })
+        .then(() => {
+          this.failures = 0;
+        })
+        .catch((err: unknown) => {
+          // Работа или письма исчезли — пачка выброшена; id остаются в `sent`, чтобы та же
+          // пачка не ушла снова при следующем появлении писем.
+          if (PERMANENT_CODES.has(decodeIpcError(err).code)) return;
+          // id — обратно в очередь следующей пачкой: письмо не застревает до перемонтирования.
+          // Панель уже снята — письма снова кандидаты при её следующем монтировании.
+          if (this.stopped) {
+            for (const id of messageIds) this.sent.delete(id);
+            return;
+          }
+          this.failures += 1;
+          this.queue.push(...messageIds);
+          this.scheduleFlush();
+        });
     }
   }
 }

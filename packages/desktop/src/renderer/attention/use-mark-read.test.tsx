@@ -217,6 +217,70 @@ describe('useMarkRead (тесты 3, 11, 12)', () => {
     ]);
   });
 
+  it('not_found и bad_request — пачка выброшена, повтора нет', async () => {
+    for (const code of ['not_found', 'bad_request']) {
+      calls = [];
+      bridge.setHandler('mail.markRead', (params) => {
+        calls.push([...params.messageIds]);
+        throw { code, message: 'работы нет' };
+      });
+      render(<Harness bridge={bridge} rows={rows('m1')} active />);
+      show('m1');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1500);
+      });
+      expect(markReadCalls()).toEqual([['m1']]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20_000);
+      });
+      expect(markReadCalls()).toEqual([['m1']]);
+      cleanup();
+    }
+  });
+
+  it('прочие ошибки — повтор с отступом 0.5, 1, 2, 4, 5, 5 с', async () => {
+    const at: number[] = [];
+    bridge.setHandler('mail.markRead', (params) => {
+      calls.push([...params.messageIds]);
+      at.push(Date.now());
+      throw { code: 'internal', message: 'сбой' };
+    });
+    render(<Harness bridge={bridge} rows={rows('m1')} active />);
+    show('m1');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500 + 500 + 1000 + 2000 + 4000 + 5000 + 5000);
+    });
+    expect(at.slice(1).map((time, i) => time - (at[i] ?? 0))).toEqual([500, 1000, 2000, 4000, 5000, 5000]);
+  });
+
+  it('после успеха отступ снова 0.5 с', async () => {
+    let failures = 2;
+    const at: number[] = [];
+    bridge.setHandler('mail.markRead', (params) => {
+      calls.push([...params.messageIds]);
+      at.push(Date.now());
+      if (failures > 0) {
+        failures -= 1;
+        throw { code: 'internal', message: 'сбой' };
+      }
+      return { marked: params.messageIds.length };
+    });
+    const { rerender } = render(<Harness bridge={bridge} rows={rows('m1')} active />);
+    show('m1');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500 + 500 + 1000);
+    });
+    expect(markReadCalls()).toEqual([['m1'], ['m1'], ['m1']]);
+    rerender(<Harness bridge={bridge} rows={rows('m1', 'm2')} active />);
+    failures = 1;
+    show('m2');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500 + 500);
+    });
+    expect(markReadCalls()).toEqual([['m1'], ['m1'], ['m1'], ['m2'], ['m2']]);
+    expect((at[4] ?? 0) - (at[3] ?? 0)).toBe(500);
+  });
+
   it('повторно одно письмо не отправляется, пока снимок его не обновит', async () => {
     const { rerender } = render(<Harness bridge={bridge} rows={rows('m1')} active />);
     show('m1');
