@@ -115,9 +115,14 @@ describe('installKeyHandler (тест 5)', () => {
   });
 
   function install(
-    overrides: Partial<{ context: FocusContext; paletteOpen: boolean; available: (id: ActionId) => boolean }> = {},
+    overrides: Partial<{
+      context: FocusContext;
+      paletteOpen: boolean;
+      available: (id: ActionId) => boolean;
+      run: (id: ActionId) => void;
+    }> = {},
   ) {
-    const run = vi.fn<(id: ActionId) => void>();
+    const run = vi.fn<(id: ActionId) => void>(overrides.run);
     const pickPaletteRow = vi.fn<(index: number) => void>();
     const endMruCycle = vi.fn<() => void>();
     uninstall = installKeyHandler({
@@ -202,5 +207,43 @@ describe('installKeyHandler (тест 5)', () => {
     expect(event.defaultPrevented).toBe(false);
     expect(run).not.toHaveBeenCalled();
     expect(endMruCycle).not.toHaveBeenCalled();
+  });
+
+  it('удержание ⌘N: автоповтор погашен, но run один (раунд исправлений 1)', () => {
+    const { run } = install();
+    const first = keydown({ key: 'n', code: 'KeyN', metaKey: true });
+    const repeats = [1, 2, 3].map(() => keydown({ key: 'n', code: 'KeyN', metaKey: true, repeat: true }));
+    expect(run.mock.calls).toEqual([['work.new']]);
+    // Погашен и повтор: иначе необработанное ⌘N сработало бы пунктом меню.
+    expect([first, ...repeats].every((event) => event.defaultPrevented)).toBe(true);
+  });
+
+  it('удержание ⌘⇧]: шаг навигации повторяется', () => {
+    const { run } = install();
+    keydown({ key: '}', code: 'BracketRight', metaKey: true, shiftKey: true });
+    keydown({ key: '}', code: 'BracketRight', metaKey: true, shiftKey: true, repeat: true });
+    keydown({ key: '}', code: 'BracketRight', metaKey: true, shiftKey: true, repeat: true });
+    expect(run.mock.calls).toEqual([['tab.next'], ['tab.next'], ['tab.next']]);
+  });
+
+  it('исключение действия ловится (console.error) и не ломает следующее нажатие', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const uncaught = vi.fn();
+    window.addEventListener('error', uncaught);
+    let calls = 0;
+    const { run } = install({
+      run: () => {
+        calls += 1;
+        if (calls === 1) throw new Error('boom from run()');
+      },
+    });
+    const first = keydown({ key: 'd', code: 'KeyD', metaKey: true });
+    const second = keydown({ key: 'd', code: 'KeyD', metaKey: true });
+    window.removeEventListener('error', uncaught);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(first.defaultPrevented && second.defaultPrevented).toBe(true);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(uncaught).not.toHaveBeenCalled();
+    error.mockRestore();
   });
 });

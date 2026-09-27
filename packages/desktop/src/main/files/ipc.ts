@@ -14,12 +14,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** `{ workKey, spec }`, где spec — `{ kind: 'project' }` или `{ kind: 'worktree', sessionId }` с непустым sessionId. */
+/** `{ workKey, spec }`, где spec — `{ kind: 'project' }` или `{ kind: 'worktree', sessionId }`. */
 export function isFileRoot(value: unknown): value is FileRoot {
   if (!isRecord(value) || !isValidWorkKey(value.workKey) || !isRecord(value.spec)) return false;
   const spec = value.spec;
   if (spec.kind === 'project') return true;
-  return spec.kind === 'worktree' && typeof spec.sessionId === 'string' && spec.sessionId.length > 0;
+  // Своей проверки id сессии в shared нет, а форма `s-NN` не обязательна (ручные и чужие
+  // сессии): те же правила, что у workKey — непустой, не длиннее предела, не имя прототипа.
+  return spec.kind === 'worktree' && isValidWorkKey(spec.sessionId);
 }
 
 function isPathList(value: unknown): value is string[] {

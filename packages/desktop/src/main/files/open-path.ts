@@ -7,14 +7,14 @@
  * список неполон по устройству, поэтому открывается только белый список; всё прочее
  * показывается в Finder. Цена — часть безобидных файлов не открывается отсюда.
  */
-import { stat } from 'node:fs/promises';
+import { lstat, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { FilesDeniedError, type RootsRegistry } from '../roots.js';
 
 /** Белый список «открыть в приложении» (спека 10.8): расширения без точки, в нижнем регистре. */
 export const OPENABLE_EXTENSIONS: ReadonlySet<string> = new Set([
-  // картинки
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'bmp', 'tiff', 'ico', 'svg',
+  // картинки; `svg` — нет: браузер по умолчанию исполнит его скрипты, а в окне его покажет превью (спека 10.6)
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'bmp', 'tiff', 'ico',
   'pdf',
   // простой текст и данные
   'txt', 'md', 'markdown', 'rtf', 'csv', 'tsv', 'json', 'yaml', 'yml', 'toml', 'xml', 'log',
@@ -66,6 +66,16 @@ export async function openOrReveal(absPath: string, deps: OpenPathDeps): Promise
     { name: path.basename(real), isDirectory: info.isDirectory(), mode: info.mode },
   ]);
   if (verdict === 'reveal') {
+    deps.showItemInFolder(expanded);
+    return 'revealed';
+  }
+  // TOCTOU: между stat и открытием агент мог подменить файл (например, симлинком на
+  // исполняемое снаружи). Перед самым openPath — снова realpath и проверка корней, lstat
+  // того же пути и тот же dev/ino. Остаток окна до shell.openPath закрыть нельзя: он
+  // принимает путь, а не дескриптор (спека 10.8).
+  const again = await deps.roots.insideAnyRoot(expanded);
+  const now = again === real ? await lstat(real).catch(() => null) : null;
+  if (now === null || now.isSymbolicLink() || now.dev !== info.dev || now.ino !== info.ino) {
     deps.showItemInFolder(expanded);
     return 'revealed';
   }
