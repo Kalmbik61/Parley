@@ -162,6 +162,16 @@ export const S = {
       titleField: 'Title',
       goalField: 'Goal',
       selectFolderRequired: 'Select a project folder',
+      /** Форма новой работы — `sidebar/NewWorkComposer.tsx` (кусок 3.5, спека 6.6). */
+      projectField: 'Project',
+      startSession: 'Start a session',
+      agentField: 'Agent',
+      createMore: 'Create more',
+      titleLength: 'Title: 1–120 characters',
+      goalTooLong: 'Goal: up to 4,000 characters',
+      labelTooLong: 'Label: up to 40 characters',
+      taskTooLong: 'Task: up to 20,000 characters',
+      agentRequired: 'Select an agent',
     },
   },
 

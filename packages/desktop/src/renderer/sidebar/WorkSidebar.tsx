@@ -216,7 +216,8 @@ export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail,
         </button>
         <button
           type="button"
-          onClick={openNewWorkDialog}
+          // Без проекта: обработчик напрямую получил бы событие клика вместо пути.
+          onClick={() => openNewWorkDialog()}
           className="flex h-8 items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-work-sidebar-accent"
         >
           <Plus className="size-4 shrink-0" aria-hidden="true" />
@@ -271,7 +272,7 @@ interface VirtualListProps {
   rows: Row[];
   renderCard(entry: WorkEntry): JSX.Element;
   onToggleCollapsed(projectPath: string): void;
-  onNewWork(): void;
+  onNewWork(projectPath: string): void;
 }
 
 /** Больше 50 карточек (спека 6.1): в DOM — только видимые строки и запас по краям. */

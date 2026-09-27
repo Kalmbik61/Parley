@@ -32,12 +32,14 @@ describe('ProjectGroup', () => {
     expect(header?.getAttribute('aria-expanded')).toBe('true');
   });
 
-  it('клик по заголовку — onToggleCollapsed; «+» — onNewWork без сворачивания', () => {
+  it('клик по заголовку — onToggleCollapsed; «+» — onNewWork(projectPath) без сворачивания', () => {
     const onToggleCollapsed = vi.fn();
     const onNewWork = vi.fn();
     render(<ProjectGroup section={project} onToggleCollapsed={onToggleCollapsed} onNewWork={onNewWork} />);
     fireEvent.click(screen.getByRole('button', { name: S.sidebar.newWorkspaceInProject }));
+    // Кусок 3.5: «+» передаёт свой проект — форма откроется с ним.
     expect(onNewWork).toHaveBeenCalledTimes(1);
+    expect(onNewWork).toHaveBeenCalledWith('/Users/me/VoiceStudio');
     expect(onToggleCollapsed).not.toHaveBeenCalled();
     fireEvent.click(document.querySelector('[data-section-key]') as HTMLElement);
     expect(onToggleCollapsed).toHaveBeenCalledTimes(1);

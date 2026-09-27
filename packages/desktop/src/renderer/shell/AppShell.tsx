@@ -4,8 +4,8 @@
  * активной работы (`LayoutView`); с куска 2.7 он единственный: прежний центр и
  * его флаг ушли.
  *
- * `CommandPalette`, `SessionPicker`, `NewWorkDialog` и `CreateRoomDialog`
- * монтируются здесь же (а не в `Sidebar`) — они нужны и над `Landing`, где
+ * `CommandPalette`, `SessionPicker`, `NewWorkComposer` и `CreateRoomDialog`
+ * монтируются здесь же (а не в сайдбаре) — они нужны и над `Landing`, где
  * сайдбара вовсе нет.
  *
  * `AppShell` обслуживает меню раскладки (`close-panel`, `reopen-tab`,
@@ -55,13 +55,13 @@ import type { TabSpec } from '../../shared/layout-types.js';
 import { noticeText, S } from '../../shared/strings.js';
 import { LEFT_SIDEBAR } from '../../shared/ui-types.js';
 import { InterruptedBanner } from '../components/InterruptedBanner.js';
-import { NewWorkDialog } from '../components/dialogs/NewWorkDialog.js';
 import { CommandPalette } from '../components/palette/CommandPalette.js';
 import { SessionPicker, sessionCandidates } from '../components/palette/SessionPicker.js';
 import { CreateRoomDialog, type RoomCandidate } from '../components/rooms/CreateRoomDialog.js';
 import { Sidebar } from '../components/sidebar/Sidebar.js';
 import { visibleWorkOrder } from '../sidebar/sort.js';
 import { SidebarSectionsWriter, useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
+import { NewWorkComposer } from '../sidebar/NewWorkComposer.js';
 import { WorkSidebar } from '../sidebar/WorkSidebar.js';
 import { buildCommands, recentSessionsFromHistory } from '../lib/commands.js';
 import { sessionLabelFor, sessionRowLabel } from '../lib/participant.js';
@@ -234,7 +234,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   const setPaletteOpen = useUiStore((state) => state.setPaletteOpen);
   const picker = useUiStore((state) => state.picker);
   const closePicker = useUiStore((state) => state.closePicker);
-  const newWorkOpen = useUiStore((state) => state.dialogs.newWork);
+  const newWork = useUiStore((state) => state.dialogs.newWork);
   const openNewWorkDialog = useUiStore((state) => state.openNewWorkDialog);
   const closeNewWorkDialog = useUiStore((state) => state.closeNewWorkDialog);
   const createRoom = useUiStore((state) => state.dialogs.createRoom);
@@ -540,10 +540,13 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
           closePicker();
         }}
       />
-      <NewWorkDialog
-        open={newWorkOpen}
+      <NewWorkComposer
+        open={newWork.open}
+        projectPath={newWork.projectPath}
         bridge={bridge}
-        onOpenChange={(open) => (open ? openNewWorkDialog() : closeNewWorkDialog())}
+        onOpenChange={(open) => {
+          if (!open) closeNewWorkDialog();
+        }}
       />
       {createRoom !== null ? (
         <CreateRoomDialog

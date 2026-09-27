@@ -21,11 +21,15 @@ beforeEach(() => {
 });
 
 describe('useUiStore диалоги', () => {
-  it('новая работа — открыть/закрыть', () => {
+  it('новая работа — открыть без проекта и с проектом «+» заголовка (кусок 3.5), закрыть', () => {
     useUiStore.getState().openNewWorkDialog();
-    expect(useUiStore.getState().dialogs.newWork).toBe(true);
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: null });
     useUiStore.getState().closeNewWorkDialog();
-    expect(useUiStore.getState().dialogs.newWork).toBe(false);
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: false, projectPath: null });
+    useUiStore.getState().openNewWorkDialog('/tmp/p');
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: '/tmp/p' });
+    useUiStore.getState().closeNewWorkDialog();
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: false, projectPath: null });
   });
 
   it('новая сессия — помнит родителя', () => {

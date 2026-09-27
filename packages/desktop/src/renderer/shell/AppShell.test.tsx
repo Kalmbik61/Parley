@@ -288,7 +288,7 @@ describe('AppShell — Landing и оболочка с работой (тест 6
 });
 
 describe('AppShell — меню и диалоги (тест 9)', () => {
-  it('на Landing: кнопка «Новая работа» и меню new-work открывают NewWorkDialog; меню palette — CommandPalette', async () => {
+  it('на Landing: кнопка «Новая работа» и меню new-work открывают форму новой работы; меню palette — CommandPalette', async () => {
     render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
     await flush();
 
@@ -890,7 +890,7 @@ describe('AppShell — сайдбар карточек (кусок 3.3)', () => 
     window.history.replaceState(null, '', '/');
   });
 
-  it('карточка работы с data-work-key; «New workspace» открывает NewWorkDialog (тест 8)', async () => {
+  it('карточка работы с data-work-key; «New workspace» открывает форму новой работы (тест 8)', async () => {
     await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
     expect(document.querySelector(`[data-work-key="${keyOf('w-01')}"]`)).not.toBeNull();
     expect(document.querySelector('[data-work-sidebar]')).not.toBeNull();
@@ -898,6 +898,22 @@ describe('AppShell — сайдбар карточек (кусок 3.3)', () => 
     fireEvent.click(screen.getByRole('button', { name: /^New workspace\s*⌘N$/ }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText('New workspace')).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'Create' })).toBeTruthy();
+  });
+
+  it('кусок 3.5, тест 7: «+» заголовка проекта — форма с этим проектом; меню new-work — без проекта', async () => {
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'New workspace in project' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('combobox', { name: 'Project' }).textContent).toBe('/tmp/w-01');
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await flush();
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: false, projectPath: null });
+
+    act(() => bridge.emitMenu('new-work'));
+    const again = await screen.findByRole('dialog');
+    expect(within(again).getByRole('combobox', { name: 'Project' }).textContent).toBe('Choose a folder…');
   });
 
   it('клик по строке сессии неактивной работы: работа активна, вкладка её терминала открыта', async () => {

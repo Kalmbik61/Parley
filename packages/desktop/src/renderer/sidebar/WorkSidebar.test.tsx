@@ -279,11 +279,12 @@ describe('WorkSidebar — верх (тесты 8, 16)', () => {
     setWorks([makeWork('w-1', { projectPath: '/p/one' })]);
     render(<Harness />);
     fireEvent.click(screen.getByRole('button', { name: /^New workspace\s*⌘N$/ }));
-    expect(useUiStore.getState().dialogs.newWork).toBe(true);
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: null });
 
     act(() => useUiStore.getState().closeNewWorkDialog());
     fireEvent.click(screen.getByRole('button', { name: S.sidebar.newWorkspaceInProject }));
-    expect(useUiStore.getState().dialogs.newWork).toBe(true);
+    // Кусок 3.5 (тест 7): «+» заголовка — с проектом этой группы.
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: '/p/one' });
     expect(useUiStore.getState().ui.collapsedProjects).toEqual([]);
   });
 

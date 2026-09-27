@@ -73,7 +73,7 @@ export function Sidebar({ bridge, onOpenSession, onOpenMail, onOpenRoom, onOpenC
         <span className="text-xs font-medium text-work-sidebar-foreground">{S.sidebar.heading}</span>
         <button
           type="button"
-          onClick={openNewWorkDialog}
+          onClick={() => openNewWorkDialog()}
           className="rounded px-2 py-1 text-xs text-work-sidebar-foreground hover:bg-work-sidebar-accent"
         >
           {S.sidebar.addWorkspace}

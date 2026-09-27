@@ -20,8 +20,8 @@ import type { SidebarSection } from './sort.js';
 export interface ProjectGroupProps {
   section: SidebarSection;
   onToggleCollapsed(): void;
-  /** «+» заголовка — форма новой работы в этом проекте (до 3.5 — прежний диалог без проекта). */
-  onNewWork(): void;
+  /** «+» заголовка — форма новой работы с проектом этой группы (кусок 3.5). */
+  onNewWork(projectPath: string): void;
   children?: ReactNode;
 }
 
@@ -70,7 +70,7 @@ export function ProjectGroup({ section, onToggleCollapsed, onNewWork, children }
             onClick={(event) => {
               // «+» — не клик по заголовку: группа не должна свернуться.
               event.stopPropagation();
-              onNewWork();
+              if (section.projectPath !== null) onNewWork(section.projectPath);
             }}
             className={cn(
               'inline-flex size-5 shrink-0 items-center justify-center rounded text-work-sidebar-muted-foreground',

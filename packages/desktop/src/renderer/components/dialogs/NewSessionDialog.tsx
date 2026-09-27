@@ -10,24 +10,23 @@
  * из сайдбара для этого не годится — при отсоединённой голове ветки нет и у
  * git-проекта, а `worktrees.available` смотрит именно на `git rev-parse
  * --is-inside-work-tree`, не на текущую ветку.
+ *
+ * Кусок 3.5: агент по умолчанию — то же правило, что у формы новой работы
+ * (`lib/default-provider.ts`), и созданная сессия запоминает его в `ui.json.lastProvider`.
  */
 
 import { useEffect, useState } from 'react';
 import type { HarnasBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, S } from '../../../shared/strings.js';
+import { defaultProvider, type ProviderOption } from '../../lib/default-provider.js';
+import { useUiStore } from '../../store/ui.js';
 import { Button } from '../../ui/button.js';
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from '../../ui/dialog.js';
 import { Input } from '../../ui/input.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select.js';
 import { Switch } from '../../ui/switch.js';
 import { Textarea } from '../../ui/textarea.js';
-
-interface ProviderOption {
-  id: string;
-  label: string;
-  available: boolean;
-}
 
 export interface NewSessionDialogProps {
   open: boolean;
@@ -62,8 +61,8 @@ export function NewSessionDialog({
       .call('providers.list', {})
       .then((result) => {
         setProviders(result.providers);
-        const firstAvailable = result.providers.find((item) => item.available);
-        setProvider((current) => (current !== '' ? current : (firstAvailable ?? result.providers[0])?.id ?? ''));
+        // Каждое открытие — заново по правилу: прошлый выбор уже лежит в `lastProvider`.
+        setProvider(defaultProvider(result.providers, useUiStore.getState().ui.lastProvider) ?? '');
       })
       .catch((err: unknown) => {
         console.warn('[harnas] providers.list', err);
@@ -99,6 +98,7 @@ export function NewSessionDialog({
         parent: childOfSelected ? selectedSessionId : null,
         worktree,
       });
+      useUiStore.getState().patchUi({ lastProvider: provider });
       onOpenChange(false);
       setLabel('');
       setTask('');

@@ -20,7 +20,8 @@ export interface DialogWork {
 }
 
 export interface DialogsState {
-  newWork: boolean;
+  /** `projectPath` — проект «+» заголовка группы (кусок 3.5): форма откроется с ним; `null` — ⌘N. */
+  newWork: { open: boolean; projectPath: string | null };
   /**
    * `work` — работа диалога: «New session» из меню карточки передаёт свою, и у неактивной
    * карточки диалог не должен уйти в чужую работу; `null` — активная работа (⌘T).
@@ -35,7 +36,7 @@ export interface DialogsState {
 }
 
 const CLOSED_DIALOGS: DialogsState = {
-  newWork: false,
+  newWork: { open: false, projectPath: null },
   newSession: { open: false, parentSessionId: null, work: null },
   settings: false,
   createRoom: null,
@@ -95,7 +96,7 @@ export interface UiState {
   /** `TerminalSurface.tsx` зовёт на каждую смену видимости и `false` при размонтировании. */
   setSessionVisible: (refKey: string, visible: boolean) => void;
   setWindowFocused: (focused: boolean) => void;
-  openNewWorkDialog: () => void;
+  openNewWorkDialog: (projectPath?: string) => void;
   closeNewWorkDialog: () => void;
   openNewSessionDialog: (parentSessionId: string | null, work?: DialogWork) => void;
   closeNewSessionDialog: () => void;
@@ -181,8 +182,10 @@ export const useUiStore = create<UiState>((set, get) => {
 
     setWindowFocused: (focused) => set({ windowFocused: focused }),
 
-    openNewWorkDialog: () => set((state) => ({ dialogs: { ...state.dialogs, newWork: true } })),
-    closeNewWorkDialog: () => set((state) => ({ dialogs: { ...state.dialogs, newWork: false } })),
+    openNewWorkDialog: (projectPath) =>
+      set((state) => ({ dialogs: { ...state.dialogs, newWork: { open: true, projectPath: projectPath ?? null } } })),
+    closeNewWorkDialog: () =>
+      set((state) => ({ dialogs: { ...state.dialogs, newWork: { open: false, projectPath: null } } })),
     openNewSessionDialog: (parentSessionId, work) =>
       set((state) => ({
         dialogs: { ...state.dialogs, newSession: { open: true, parentSessionId, work: work ?? null } },
