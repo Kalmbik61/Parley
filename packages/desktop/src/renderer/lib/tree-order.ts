@@ -5,11 +5,10 @@
  */
 
 import type { WorkEntry, WorkSession } from '@harnas/core';
+import { workKey } from '../../shared/work-keys.js';
 
-/** Ключ работы: id уникален только внутри проекта. */
-export function workKey(projectPath: string, workId: string): string {
-  return `${projectPath} ${workId}`;
-}
+// Формат ключа один на main и рендерер (кусок 5.2): прежние импорты отсюда остаются.
+export { workKey };
 
 /** Сессии деревом: корни по порядку создания, дети сразу под родителем. */
 export function treeOrder(
