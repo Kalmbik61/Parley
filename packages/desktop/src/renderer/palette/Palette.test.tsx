@@ -277,4 +277,26 @@ describe('Palette (тест 6)', () => {
     expect(titleNode?.className).toContain('truncate');
     expect(screen.getAllByRole('option')[0]?.className).toContain('min-w-0');
   });
+
+  it('длинные название, подпись и «Create workspace …» — полный текст в тултипе (title)', async () => {
+    const title = `layout-check-${'W'.repeat(107)}`;
+    const projectPath = `/private/var/folders/${'p'.repeat(120)}/project`;
+    const w = makeWork('w-01', { projectPath, title });
+    setup([w]);
+    act(() => usePaletteStore.getState().openWith('default'));
+    renderPalette();
+    await type('layout-check');
+
+    const row = screen.getAllByRole('option')[0];
+    const titleNode = screen.getAllByText(title)[0];
+    expect(titleNode?.getAttribute('title')).toBe(title);
+    const subtitleNode = row?.querySelector('span.text-muted-foreground');
+    expect(subtitleNode?.textContent).not.toBe('');
+    expect(subtitleNode?.getAttribute('title')).toBe(subtitleNode?.textContent);
+
+    const query = 'q'.repeat(120);
+    await type(query);
+    const create = screen.getByText(`Create workspace "${query}"`);
+    expect(create.getAttribute('title')).toBe(`Create workspace "${query}"`);
+  });
 });

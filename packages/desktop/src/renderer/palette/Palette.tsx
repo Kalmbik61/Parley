@@ -193,7 +193,9 @@ function PaletteBody({ bridge, run, onPick }: BodyProps): JSX.Element {
         {trimmed !== '' && ranked.length === 0 ? (
           <CommandItem value={CREATE_VALUE} onSelect={createWorkspace} className={ROW_CLASS}>
             <Plus className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-            <span className="min-w-0 flex-1 truncate text-[14px] font-semibold">{S.palette.createWorkspace(trimmed)}</span>
+            <span className="min-w-0 flex-1 truncate text-[14px] font-semibold" title={S.palette.createWorkspace(trimmed)}>
+              {S.palette.createWorkspace(trimmed)}
+            </span>
           </CommandItem>
         ) : null}
         {ranked.map((section) => (
@@ -206,9 +208,16 @@ function PaletteBody({ bridge, run, onPick }: BodyProps): JSX.Element {
                   <span className="flex size-4 shrink-0 items-center justify-center">
                     <RowIcon doc={doc} />
                   </span>
+                  {/* Обрезанное многоточием — целиком в тултипе, как у строк боковой панели. */}
                   <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate text-[14px] font-semibold">{doc.title}</span>
-                    {doc.subtitle === '' ? null : <span className="truncate text-[12px] text-muted-foreground">{doc.subtitle}</span>}
+                    <span className="truncate text-[14px] font-semibold" title={doc.title}>
+                      {doc.title}
+                    </span>
+                    {doc.subtitle === '' ? null : (
+                      <span className="truncate text-[12px] text-muted-foreground" title={doc.subtitle}>
+                        {doc.subtitle}
+                      </span>
+                    )}
                   </span>
                   {number === null ? null : <CommandShortcut className="shrink-0">⌘{number}</CommandShortcut>}
                 </CommandItem>
