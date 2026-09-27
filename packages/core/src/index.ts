@@ -90,6 +90,7 @@ export {
   renameWork,
   setWorkStatus,
   updateMap,
+  WorkNotFoundError,
   workPaths,
   worksIndexPath,
 } from './work/store.js';

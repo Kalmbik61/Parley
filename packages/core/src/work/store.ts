@@ -78,6 +78,18 @@ export class MapLockTimeoutError extends Error {
   }
 }
 
+/**
+ * Работы нет — отдельный класс, как `MapLockTimeoutError`: хосту нужно ответить
+ * `not_found`, а не `internal`, и в том числе когда каталог работы удалили
+ * (`works.delete` другого клиента), пока запись ждала `map.lock`.
+ */
+export class WorkNotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WorkNotFoundError';
+  }
+}
+
 /** Эксклюзивное создание файла — атомарная операция файловой системы. */
 async function acquireLock(lockFile: string, timeoutMs: number): Promise<FileHandle> {
   const deadline = Date.now() + timeoutMs;
@@ -334,9 +346,19 @@ export async function updateMap(
   const paths = workPaths(projectPath, workId);
   // Блокировка живёт в каталоге работы, поэтому про несуществующую работу первым
   // отчитался бы ENOENT про `map.lock` — не про тот файл, которого на самом деле нет.
-  if (!(await exists(paths.map))) {
-    throw new Error(`карты ${paths.map} нет — работы ${workId} не существует`);
-  }
+  const missing = (): WorkNotFoundError =>
+    new WorkNotFoundError(`карты ${paths.map} нет — работы ${workId} не существует`);
+  if (!(await exists(paths.map))) throw missing();
+
+  // Каталог могли удалить после проверки выше, пока ждали лок или уже под ним:
+  // тогда ENOENT про `map.lock` или `map.json` — это тоже «работы нет». Решает
+  // не код ошибки сам по себе, а то, что каталога работы больше нет.
+  const whenGone = async (error: unknown): Promise<never> => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !(await exists(paths.dir))) {
+      throw missing();
+    }
+    throw error;
+  };
 
   return withLock(paths.lock, lockTimeoutMs, async () => {
     const raw = await readFile(paths.map, 'utf8');
@@ -356,11 +378,19 @@ export async function updateMap(
     await writeFile(paths.bak, raw, 'utf8');
     await writeAtomic(paths.map, serialize(current));
     return current;
-  });
+  }).catch(whenGone);
 }
 
 /** Предел названия работы в кодовых точках: эмодзи — один символ, а не два UTF-16. */
 const WORK_TITLE_MAX = 120;
+
+/**
+ * `trim()` не считает пробелом невидимые символы формата (ZWSP, ZWNJ, ZWJ,
+ * WORD JOINER), и название из одних их выглядело бы пустой карточкой. Обрезаются
+ * только края: ZWJ внутри эмодзи-последовательности нужен. Та же регулярка — в
+ * схеме `works.rename` протокола.
+ */
+const TITLE_EDGES = /^[\s\u200B-\u200D\u2060\uFEFF]+|[\s\u200B-\u200D\u2060\uFEFF]+$/g;
 
 /**
  * Переименовывает работу. Не событие работы: `updatedAt` стоит на месте, иначе
@@ -371,7 +401,7 @@ export async function renameWork(
   workId: string,
   title: string,
 ): Promise<WorkMap> {
-  const trimmed = title.trim();
+  const trimmed = title.replace(TITLE_EDGES, '');
   const length = [...trimmed].length;
   if (length < 1 || length > WORK_TITLE_MAX) {
     throw new Error(`название работы: 1–${WORK_TITLE_MAX} символов`);

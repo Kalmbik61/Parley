@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -18,6 +18,7 @@ import {
   renameWork,
   setWorkStatus,
   updateMap,
+  WorkNotFoundError,
   workPaths,
   worksIndexPath,
 } from './store.js';
@@ -350,6 +351,29 @@ describe('updateMap: опция touch', () => {
   });
 });
 
+describe('updateMap: работы нет — WorkNotFoundError', () => {
+  it('работы нет с самого начала', async () => {
+    await expect(updateMap(project, 'w-9999', () => {})).rejects.toBeInstanceOf(WorkNotFoundError);
+  });
+
+  it('работа удалена, пока запись ждала map.lock (раунд исправлений 1, находка 2)', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, 'w-0001');
+    // Лок занят «другим писателем» — запись встанет в ожидание уже после проверки карты.
+    const held = await open(paths.lock, 'wx');
+    const pending = updateMap(project, 'w-0001', (map) => (map.work.goal = 'x'));
+    const outcome = pending.then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await held.close();
+    await rm(paths.dir, { recursive: true, force: true });
+
+    expect(await outcome).toBeInstanceOf(WorkNotFoundError);
+  });
+});
+
 describe('renameWork', () => {
   it('обрезает пробелы и не сдвигает work.updatedAt', async () => {
     await createWork(project, { title: 'Старая' });
@@ -377,6 +401,18 @@ describe('renameWork', () => {
       'название работы: 1–120 символов',
     );
     expect((await readMap(project, 'w-0001')).work.title).toBe('Старая');
+  });
+
+  it('невидимые символы формата (U+200B/C/D, U+2060, U+FEFF) — как пробелы: пустое отвергается, края обрезаются', async () => {
+    await createWork(project, { title: 'Старая' });
+    for (const invisible of ['\u200B\u200B\u200B', '\u200C', '\u200D', '\u2060', '\uFEFF', ' \u200B \u2060 ']) {
+      await expect(renameWork(project, 'w-0001', invisible)).rejects.toThrow(
+        'название работы: 1–120 символов',
+      );
+    }
+    const map = await renameWork(project, 'w-0001', '\u200B Новая\u200Dx \u2060');
+    // ZWJ внутри названия (эмодзи-последовательности) остаётся — обрезаются только края.
+    expect(map.work.title).toBe('Новая\u200Dx');
   });
 
   it('120 эмодзи принимаются: символы считаются по кодовым точкам', async () => {
