@@ -64,6 +64,12 @@ export interface UiState {
   paletteOpen: boolean;
   /** `null` — `SessionPicker` закрыт. */
   picker: PickerState | null;
+  /**
+   * Указатель над списком сайдбара (кусок 3.3, спека 6.2): пока он там, пересортировка
+   * ждёт (`sidebar/use-sidebar-sections.ts`). Ставит только `WorkSidebar`; меню и
+   * переименование, которые тоже держат порядок, добавит 3.4.
+   */
+  sidebarHovering: boolean;
 
   /** Ставит/снимает `.dark` на `<html>` (`applyDarkClass`) и пишет в стор — единственная точка входа для обоих. */
   setDark: (dark: boolean) => void;
@@ -97,6 +103,7 @@ export interface UiState {
   setPaletteOpen: (open: boolean) => void;
   openPicker: (picker: PickerState) => void;
   closePicker: () => void;
+  setSidebarHovering: (hovering: boolean) => void;
 
   /**
    * Подписывается на фокус окна и `wake.changed`, спрашивает `wake.state`
@@ -132,6 +139,7 @@ export const useUiStore = create<UiState>((set, get) => {
     uiLoaded: false,
     paletteOpen: false,
     picker: null,
+    sidebarHovering: false,
 
     setDark: (dark) => {
       applyDarkClass(dark);
@@ -205,6 +213,7 @@ export const useUiStore = create<UiState>((set, get) => {
     setPaletteOpen: (open) => set({ paletteOpen: open }),
     openPicker: (picker) => set({ picker }),
     closePicker: () => set({ picker: null }),
+    setSidebarHovering: (hovering) => set({ sidebarHovering: hovering }),
 
     init: (bridge) => {
       bridgeRef = bridge;

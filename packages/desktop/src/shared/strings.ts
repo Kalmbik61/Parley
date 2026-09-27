@@ -60,13 +60,23 @@ export const S = {
     rightSidebar: 'Right sidebar',
   },
 
-  /** Сайдбар работ и дерево сессий — `Sidebar.tsx`, `SessionTree.tsx`, `SessionMenu.tsx`. */
+  /**
+   * Сайдбар работ: прежний (`Sidebar.tsx`, `SessionTree.tsx`, `SessionMenu.tsx`) и
+   * карточки куска 3.3 (`sidebar/WorkSidebar.tsx`, `WorkCard.tsx`, `ProjectGroup.tsx`).
+   */
   sidebar: {
     heading: 'Workspaces',
     addWorkspace: '+ workspace',
     empty: 'No workspaces yet',
     /** Заголовок секции закреплённых работ (спека 6.1). */
     pinned: 'Pinned',
+    /** Верх сайдбара — палитра; подпись ⌘K до 6.2. */
+    search: 'Search',
+    /** `aria-label` «+» заголовка проекта. */
+    newWorkspaceInProject: 'New workspace in project',
+    sessionCount: (n: number): string => (n === 1 ? '1 session' : `${n} sessions`),
+    /** Строка под сессиями карточки: сколько закрытых спрятано. */
+    moreClosed: (n: number): string => `+${n} closed`,
     trustWaitTooltip: 'Not responding since launch — may be waiting for folder trust',
     sessionMenu: {
       open: 'Open',
@@ -80,6 +90,14 @@ export const S = {
       closeConfirmDescription: 'Session will no longer receive mail',
       deleteConfirmTitle: (label: string): string => `Delete "${label}"?`,
     },
+  },
+
+  /** Относительное время карточек и строк сессий — `lib/relative-time.ts` (спека 6.3). */
+  time: {
+    now: 'now',
+    yesterday: 'yesterday',
+    minutes: (n: number): string => `${n}m`,
+    hours: (n: number): string => `${n}h`,
   },
 
   /** Строка статуса — `shell/StatusBar.tsx`. */
