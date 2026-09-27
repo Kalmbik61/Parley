@@ -7,6 +7,7 @@ import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
 import type { WorktreesService } from '../worktrees/worktrees-service.js';
 import { hostInfo, hostShutdown } from './host.js';
+import { mailMarkRead } from './mail.js';
 import { createPtyHandlers } from './pty.js';
 import { providersList } from './providers.js';
 import { roomsCreate, roomsSend } from './rooms.js';
@@ -79,10 +80,12 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
       'worktrees.commit': worktrees.worktreesCommit as AnyHandler,
       'worktrees.merge': worktrees.worktreesMerge as AnyHandler,
       'worktrees.discard': worktrees.worktreesDiscard as AnyHandler,
+      'mail.markRead': mailMarkRead as AnyHandler,
     },
     notifications: {
       'pty.input': pty.ptyInput as AnyNotificationHandler,
       'pty.resize': pty.ptyResize as AnyNotificationHandler,
+      'activity.seen': pty.activitySeen as AnyNotificationHandler,
     },
   };
 }

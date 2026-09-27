@@ -41,12 +41,12 @@ export const worksDelete: Handler<'works.delete'> = async (params) => {
  * этой проверки (`works.delete` другого клиента во время ожидания `map.lock`),
  * core сообщает `WorkNotFoundError` из самой записи.
  */
-async function requireWork(projectPath: string, workId: string): Promise<void> {
+export async function requireWork(projectPath: string, workId: string): Promise<void> {
   const map = await readMap(projectPath, workId).catch(() => null);
   if (map === null) throw new HostError('not_found', `работы ${workId} нет`);
 }
 
-function notFoundOnGone(error: unknown): never {
+export function notFoundOnGone(error: unknown): never {
   if (error instanceof WorkNotFoundError) throw new HostError('not_found', error.message);
   throw error;
 }

@@ -135,6 +135,8 @@ describe('уведомления', () => {
     const ref = { projectPath: '/нет-такого', workId: 'w-01', sessionId: 's-01' };
     client.send({ method: 'pty.resize', params: { ref, cols: 80, rows: 24 } });
     client.send({ method: 'pty.input', params: { ref, data: 'x' } });
+    // activity.seen чужой сессии хост тихо пропускает (кусок 4.1).
+    client.send({ method: 'activity.seen', params: { ref } });
     client.send({ id: 300, method: 'host.info', params: {} });
 
     const response = await client.next();
