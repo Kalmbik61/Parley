@@ -83,7 +83,7 @@ import { hostMethods } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
 import { Palette } from '../palette/Palette.js';
 import { usePaletteStore } from '../palette/store.js';
-import { terminalSurfaces } from '../terminal/TerminalSurface.js';
+import { terminalSurfaces } from '../terminal/surface-registry.js';
 import { useNoticesStore } from '../store/notices.js';
 import { useUiStore } from '../store/ui.js';
 import { orderedWorks, useWorksStore } from '../store/works.js';

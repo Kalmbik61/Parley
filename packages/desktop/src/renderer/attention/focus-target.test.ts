@@ -3,11 +3,17 @@
  * вспышка и фокус терминала только когда вкладка показана.
  */
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import type { WorkEntry, WorkSession } from '@harnas/core';
 import type { FocusTarget } from '../../shared/bridge.js';
-import type { TerminalSurfaceHandle } from '../terminal/TerminalSurface.js';
-import { applyFocusTarget, type FocusTargetDeps } from './focus-target.js';
+import { refKey } from '@harnas/protocol';
+import { useLayoutStore } from '../layout/store.js';
+import { useWorksStore } from '../store/works.js';
+import { terminalSurfaces, type TerminalSurfaceHandle } from '../terminal/surface-registry.js';
+import { applyFocusTarget, buildFocusTargetDeps, type FocusTargetDeps } from './focus-target.js';
 
 function session(id: string): WorkSession {
   return {
@@ -114,5 +120,30 @@ describe('applyFocusTarget (тест 4 куска 4.3)', () => {
     expect(applyFocusTarget({ kind: 'room', projectPath: '/tmp/p', workId: 'w-01', roomId: 'r-1' }, r.deps)).toBe(true);
     await r.settle();
     expect(r.calls).toEqual([`setActiveWork ${key}`, `openTab ${key} room:r-1`, `flash ${key} room:r-1`]);
+  });
+});
+
+describe('buildFocusTargetDeps (раунд fix-main-r1, п.4)', () => {
+  it('works — из стора в момент сборки, surface — из реестра поверхностей, openTab — в раскладку работы', () => {
+    useWorksStore.setState({ entries: [work] });
+    const apply = vi.spyOn(useLayoutStore.getState(), 'apply');
+    const handle: TerminalSurfaceHandle = { focus: vi.fn(), scrollToBottom: vi.fn(), search: null, openSearch: vi.fn(), clear: vi.fn() };
+    const ref = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-02' };
+    terminalSurfaces.set(refKey(ref), handle);
+    try {
+      const built = buildFocusTargetDeps();
+      expect(built.works).toBe(useWorksStore.getState().entries);
+      expect(built.surface(ref)).toBe(handle);
+      built.openTab(key, { kind: 'mail', id: 'mail' });
+      expect(apply).toHaveBeenCalledWith(key, expect.any(Function));
+    } finally {
+      terminalSurfaces.delete(refKey(ref));
+      apply.mockRestore();
+    }
+  });
+
+  it('focus-target не импортирует TerminalSurface: цикла TerminalSurface ↔ focus-target нет', () => {
+    const source = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'focus-target.ts'), 'utf8');
+    expect(source).not.toMatch(/from '\.\.\/terminal\/TerminalSurface\.js'/);
   });
 });

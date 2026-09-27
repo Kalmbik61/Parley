@@ -10,11 +10,12 @@ import type { FocusTarget } from '../../shared/bridge.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
-import { groups } from '../layout/tree.js';
+import { groups, openTab } from '../layout/tree.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
-import { terminalSurfaces, type TerminalSurfaceHandle } from '../terminal/TerminalSurface.js';
+import { terminalSurfaces, type TerminalSurfaceHandle } from '../terminal/surface-registry.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
+import { flashTab } from './flash.js';
 
 /** Сколько ждём вкладку и поверхность (план, «Числа»). */
 const SHOWN_TIMEOUT_MS = 2000;
@@ -124,4 +125,22 @@ export function whenShown(workKey: string, tab: TabSpec): Promise<boolean> {
     const timeout = setTimeout(() => finish(false), SHOWN_TIMEOUT_MS);
     check();
   });
+}
+
+/**
+ * Зависимости перехода из сторов окна — одна сборка на клик по уведомлению (`App.tsx`) и на
+ * «Open S02» тоста отправки (`TerminalSurface.tsx`): поле, добавленное в `FocusTargetDeps`,
+ * меняется здесь, а не в двух литералах. `works` — снимок на момент вызова.
+ */
+export function buildFocusTargetDeps(): FocusTargetDeps {
+  return {
+    works: useWorksStore.getState().entries,
+    setActiveWork: (key) => useLayoutStore.getState().setActiveWork(key),
+    openTab: (key, tab) => {
+      useLayoutStore.getState().apply(key, (layout) => openTab(layout, tab));
+    },
+    whenShown,
+    surface: (ref) => terminalSurfaces.get(refKey(ref)),
+    flash: (key, id) => flashTab(key, id),
+  };
 }

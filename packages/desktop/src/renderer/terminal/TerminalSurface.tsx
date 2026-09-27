@@ -35,15 +35,14 @@ import type { HarnasBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { errorText, S } from '../../shared/strings.js';
-import { flashTab } from '../attention/flash.js';
-import { applyFocusTarget, whenShown } from '../attention/focus-target.js';
+import { applyFocusTarget, buildFocusTargetDeps } from '../attention/focus-target.js';
 import { useHostSupports } from '../lib/capabilities.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { dndId, type DropTargetData } from '../layout/dnd.js';
 import { useTerminalDropPreview } from '../layout/DropIndicator.js';
 import { useLayoutStore } from '../layout/store.js';
 import { tabMeta } from '../layout/tab-meta.js';
-import { focusTab, openTab } from '../layout/tree.js';
+import { focusTab } from '../layout/tree.js';
 import { usePaletteStore } from '../palette/store.js';
 import { ErrorBoundary } from '../shell/ErrorBoundary.js';
 import { useUiStore } from '../store/ui.js';
@@ -51,6 +50,7 @@ import { useWorksStore } from '../store/works.js';
 import { LinkMenu, openLinkPath, openLinkUrl, type LinkMenuState } from './LinkMenu.js';
 import { sessionCwd, type TerminalLink } from './links.js';
 import { SearchBar } from './SearchBar.js';
+import { terminalSurfaces, type TerminalSurfaceHandle } from './surface-registry.js';
 import { dragHasFiles, pasteHasOnlyImage, pathsToInput } from './drop.js';
 import { sendWithToast, type SendWithToastDeps } from './send.js';
 import { TerminalContextMenu } from './TerminalContextMenu.js';
@@ -68,21 +68,6 @@ export interface TerminalSurfaceProps {
   fontFamily: string;
   fontSize: number;
 }
-
-/**
- * openSearch() — с 2.5, с 5.3 открывает SearchBar с фокусом в поле.
- * clear() — с 5.3: term.clear(), агенту ничего не уходит. Их зовут действия find и terminal.clear (`AppShell#run`, 6.1b).
- */
-export interface TerminalSurfaceHandle {
-  focus(): void;
-  scrollToBottom(): void;
-  search: SearchAddon | null;
-  openSearch(): void;
-  clear(): void;
-}
-
-/** Реестр живых поверхностей для фокуса, прокрутки и поиска (4.3, 5.3). */
-export const terminalSurfaces: Map<string /* refKey */, TerminalSurfaceHandle> = new Map();
 
 // ESC и управляющие байты в регулярках — ровно то, что вырезается из вставки.
 /* eslint-disable no-control-regex */
@@ -115,19 +100,7 @@ function sessionOf(ref: SessionRef): WorkSession | null {
  * (4.3) — работа, вкладка сессии и фокус терминала. Цели нет — тот же тост.
  */
 function openSessionTab(ref: SessionRef): void {
-  const applied = applyFocusTarget(
-    { kind: 'session', ref },
-    {
-      works: useWorksStore.getState().entries,
-      setActiveWork: (key) => useLayoutStore.getState().setActiveWork(key),
-      openTab: (key, tab) => {
-        useLayoutStore.getState().apply(key, (layout) => openTab(layout, tab));
-      },
-      whenShown,
-      surface: (target) => terminalSurfaces.get(refKey(target)),
-      flash: (key, id) => flashTab(key, id),
-    },
-  );
+  const applied = applyFocusTarget({ kind: 'session', ref }, buildFocusTargetDeps());
   if (!applied) toast(S.notifications.targetGone);
 }
 

@@ -11,7 +11,7 @@ import type { WorkEntry, WorkSession } from '@harnas/core';
 import type { LayoutNode } from '../../shared/layout-types.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { xtermMock } from '../test-utils/xterm-mock.js';
-import { terminalSurfaces } from '../terminal/TerminalSurface.js';
+import { terminalSurfaces } from '../terminal/surface-registry.js';
 import { XTERM_LIGHT } from '../terminal/xterm-themes.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';

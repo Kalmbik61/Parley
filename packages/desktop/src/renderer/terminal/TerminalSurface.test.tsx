@@ -18,7 +18,8 @@ import { useWorksStore } from '../store/works.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { lineFromText, xtermMock } from '../test-utils/xterm-mock.js';
-import { TerminalSurface, terminalSurfaces } from './TerminalSurface.js';
+import { TerminalSurface } from './TerminalSurface.js';
+import { terminalSurfaces } from './surface-registry.js';
 
 const state = vi.hoisted(() => ({ xtermPaste: vi.fn() }));
 

@@ -24,7 +24,7 @@ import { useActivityStore } from '../store/activity.js';
 import { useNoticesStore } from '../store/notices.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
-import { terminalSurfaces } from '../terminal/TerminalSurface.js';
+import { terminalSurfaces } from '../terminal/surface-registry.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { xtermMock } from '../test-utils/xterm-mock.js';
 import { flashTab } from './flash.js';

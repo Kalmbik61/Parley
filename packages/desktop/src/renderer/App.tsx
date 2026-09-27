@@ -6,18 +6,15 @@ import { getHostClient } from './host-client.js';
 import { sessionAttention } from './attention/derive.js';
 import { createSeenTracker, visibleSessions } from './attention/seen.js';
 import { attentionTotals, badgeCount } from './attention/store.js';
-import { flashTab } from './attention/flash.js';
-import { applyFocusTarget, whenShown } from './attention/focus-target.js';
+import { applyFocusTarget, buildFocusTargetDeps } from './attention/focus-target.js';
 import { isTargetVisible, wireAttentionNotifications } from './attention/notify.js';
 import { hostMethods } from './lib/capabilities.js';
 import { useSidebarSectionsStore } from './sidebar/use-sidebar-sections.js';
 import { S } from '../shared/strings.js';
 import { selectedSessionOf, useLayoutStore } from './layout/store.js';
-import { openTab } from './layout/tree.js';
 import { AppShell } from './shell/AppShell.js';
 import { NewSessionDialog } from './components/dialogs/NewSessionDialog.js';
 import { SettingsDialog } from './components/settings/SettingsDialog.js';
-import { terminalSurfaces } from './terminal/TerminalSurface.js';
 import { useActivityStore } from './store/activity.js';
 import { useHostStore } from './store/host.js';
 import { useNoticesStore } from './store/notices.js';
@@ -131,16 +128,7 @@ function wireFocusTargets(bridge: HarnasBridge): () => void {
   let offWorks: (() => void) | null = null;
 
   const apply = (target: FocusTarget): void => {
-    const applied = applyFocusTarget(target, {
-      works: useWorksStore.getState().entries,
-      setActiveWork: (key) => useLayoutStore.getState().setActiveWork(key),
-      openTab: (key, tab) => {
-        useLayoutStore.getState().apply(key, (layout) => openTab(layout, tab));
-      },
-      whenShown,
-      surface: (ref) => terminalSurfaces.get(refKey(ref)),
-      flash: (key, id) => flashTab(key, id),
-    });
+    const applied = applyFocusTarget(target, buildFocusTargetDeps());
     if (!applied) toast(S.notifications.targetGone);
   };
 
