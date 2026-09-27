@@ -11,7 +11,7 @@ import {
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { bumpWorkId, nextWorkId, parseMap } from './map.js';
-import type { WorkIndexEntry, WorkMap, WorksIndex } from './types.js';
+import type { WorkIndexEntry, WorkMap, WorksIndex, WorkStatus } from './types.js';
 
 /** Домашняя папка харнесса. Переопределяется через окружение — этим живут тесты. */
 export function harnasHome(): string {
@@ -319,11 +319,17 @@ export async function createWork(
  * поэтому параллельные писатели не затирают друг друга. Прежняя версия уходит
  * в `map.json.bak`, новая появляется атомарным `rename`. Битую карту не трогаем.
  */
+/** Только у updateMap: createWork, deleteWorkFiles и pruneWorksIndex берут прежний WriteOptions. */
+export interface UpdateMapOptions extends WriteOptions {
+  /** false — `work.updatedAt` не сдвигается: правка не событие работы (порядок сайдбара, спека 6.2). */
+  touch?: boolean;
+}
+
 export async function updateMap(
   projectPath: string,
   workId: string,
   mutate: (map: WorkMap) => void,
-  { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS }: WriteOptions = {},
+  { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS, touch = true }: UpdateMapOptions = {},
 ): Promise<WorkMap> {
   const paths = workPaths(projectPath, workId);
   // Блокировка живёт в каталоге работы, поэтому про несуществующую работу первым
@@ -341,7 +347,7 @@ export async function updateMap(
       throw new Error(`карта ${paths.map} принадлежит работе ${current.work.id}, а не ${workId}`);
     }
     mutate(current);
-    current.work.updatedAt = new Date().toISOString();
+    if (touch) current.work.updatedAt = new Date().toISOString();
 
     // Индекс обновляем до записи карты и не отпуская `map.lock`: его отказ должен
     // означать «карта не переписана», иначе ретрай вызывающего продублирует мутацию.
@@ -351,4 +357,36 @@ export async function updateMap(
     await writeAtomic(paths.map, serialize(current));
     return current;
   });
+}
+
+/** Предел названия работы в кодовых точках: эмодзи — один символ, а не два UTF-16. */
+const WORK_TITLE_MAX = 120;
+
+/**
+ * Переименовывает работу. Не событие работы: `updatedAt` стоит на месте, иначе
+ * карточка всплыла бы в начало своего ранга в сайдбаре (спека 6.2).
+ */
+export async function renameWork(
+  projectPath: string,
+  workId: string,
+  title: string,
+): Promise<WorkMap> {
+  const trimmed = title.trim();
+  const length = [...trimmed].length;
+  if (length < 1 || length > WORK_TITLE_MAX) {
+    throw new Error(`название работы: 1–${WORK_TITLE_MAX} символов`);
+  }
+  return updateMap(projectPath, workId, (map) => (map.work.title = trimmed), { touch: false });
+}
+
+/**
+ * Меняет статус работы. Живые сессии архив не трогает — так же, как TUI; и это
+ * тоже не событие работы, поэтому `updatedAt` не сдвигается.
+ */
+export async function setWorkStatus(
+  projectPath: string,
+  workId: string,
+  status: WorkStatus,
+): Promise<WorkMap> {
+  return updateMap(projectPath, workId, (map) => (map.work.status = status), { touch: false });
 }

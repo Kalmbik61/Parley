@@ -15,6 +15,8 @@ import {
   pruneWorksIndex,
   readMap,
   readWorksIndex,
+  renameWork,
+  setWorkStatus,
   updateMap,
   workPaths,
   worksIndexPath,
@@ -320,6 +322,85 @@ describe('updateMap', () => {
     expect(index.works.map((work) => work.id).sort()).toEqual(['w-0001', 'w-0002']);
     expect(index.works.map((work) => work.title).sort()).toEqual(['вторая', 'первая']);
   }, 60_000);
+});
+
+/** Отодвигает `work.updatedAt` в прошлое прямо на диске: иначе «не сдвинулся» не отличить от той же миллисекунды. */
+async function ageWork(workId: string, at = '2020-01-01T00:00:00.000Z'): Promise<string> {
+  const file = workPaths(project, workId).map;
+  const raw = JSON.parse(await readFile(file, 'utf8')) as WorkMap;
+  raw.work.updatedAt = at;
+  await writeFile(file, JSON.stringify(raw), 'utf8');
+  return at;
+}
+
+describe('updateMap: опция touch', () => {
+  it('touch: false не меняет work.updatedAt, без опции — сдвигает', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const old = await ageWork('w-0001');
+
+    const quiet = await updateMap(project, 'w-0001', (map) => (map.work.goal = 'тихо'), {
+      touch: false,
+    });
+    expect(quiet.work.updatedAt).toBe(old);
+    expect((await readMap(project, 'w-0001')).work.updatedAt).toBe(old);
+    expect((await readWorksIndex()).works[0]?.updatedAt).toBe(old);
+
+    const loud = await updateMap(project, 'w-0001', (map) => (map.work.goal = 'громко'));
+    expect(loud.work.updatedAt).not.toBe(old);
+  });
+});
+
+describe('renameWork', () => {
+  it('обрезает пробелы и не сдвигает work.updatedAt', async () => {
+    await createWork(project, { title: 'Старая' });
+    const old = await ageWork('w-0001');
+
+    const map = await renameWork(project, 'w-0001', '  Новая  ');
+
+    expect(map.work.title).toBe('Новая');
+    const disk = await readMap(project, 'w-0001');
+    expect(disk.work.title).toBe('Новая');
+    expect(disk.work.updatedAt).toBe(old);
+    expect((await readWorksIndex()).works[0]?.title).toBe('Новая');
+  });
+
+  it('пустое название и 121 символ — ошибка, карта не меняется', async () => {
+    await createWork(project, { title: 'Старая' });
+
+    await expect(renameWork(project, 'w-0001', '')).rejects.toThrow(
+      'название работы: 1–120 символов',
+    );
+    await expect(renameWork(project, 'w-0001', '   ')).rejects.toThrow(
+      'название работы: 1–120 символов',
+    );
+    await expect(renameWork(project, 'w-0001', 'я'.repeat(121))).rejects.toThrow(
+      'название работы: 1–120 символов',
+    );
+    expect((await readMap(project, 'w-0001')).work.title).toBe('Старая');
+  });
+
+  it('120 эмодзи принимаются: символы считаются по кодовым точкам', async () => {
+    await createWork(project, { title: 'Старая' });
+    const title = '😀'.repeat(120);
+    expect(title.length).toBe(240);
+
+    const map = await renameWork(project, 'w-0001', title);
+    expect(map.work.title).toBe(title);
+  });
+});
+
+describe('setWorkStatus', () => {
+  it('archived пишет статус и не сдвигает work.updatedAt', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const old = await ageWork('w-0001');
+
+    await setWorkStatus(project, 'w-0001', 'archived');
+
+    const disk = await readMap(project, 'w-0001');
+    expect(disk.work.status).toBe('archived');
+    expect(disk.work.updatedAt).toBe(old);
+    expect((await readWorksIndex()).works[0]).toMatchObject({ status: 'archived', updatedAt: old });
+  });
 });
 
 describe('readWorksIndex', () => {

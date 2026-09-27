@@ -87,11 +87,13 @@ export {
   pruneWorksIndex,
   readMap,
   readWorksIndex,
+  renameWork,
+  setWorkStatus,
   updateMap,
   workPaths,
   worksIndexPath,
 } from './work/store.js';
-export type { NewWork, WorkPaths, WriteOptions } from './work/store.js';
+export type { NewWork, UpdateMapOptions, WorkPaths, WriteOptions } from './work/store.js';
 export {
   hostLeaseActive,
   readHostLease,
