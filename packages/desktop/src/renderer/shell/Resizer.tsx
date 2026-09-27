@@ -16,9 +16,16 @@
  * `Resizer` в дереве, `relative` на самой ручке не создаёт containing block
  * для `fixed` (это делают только `transform`/`filter`/`contain` и т. п.,
  * которых на предках нет).
+ *
+ * Захват указателя может пропасть и без `pointerup`/`pointercancel`
+ * (например, окно ушло из фокуса ОС посреди перетаскивания) — раунд
+ * исправлений 2, Important: без сброса на `lostpointercapture` и на `blur`
+ * окна состояние перетаскивания и оверлей застревали бы навсегда, а оверлей
+ * (потомок ручки в DOM) ловил бы любой следующий клик где угодно и
+ * запускал бы новое перетаскивание всплытием до `onPointerDown` ручки.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export function clampWidth(width: number, min: number, max: number): number {
   return Math.min(Math.max(width, min), max);
@@ -83,12 +90,37 @@ export function Resizer({ side, width, min, max, target, onCommit }: ResizerProp
     applyWidth(clampWidth(start.startWidth + delta, min, max));
   };
 
-  const endDrag = (): void => {
-    if (dragStart.current === null) return;
+  // Общий для завершения (commit) и отмены (без commit) сброс — обе стороны
+  // должны одинаково снять оверлей, забыть начало перетаскивания и не дать
+  // сработать уже запланированному rAF с устаревшей шириной.
+  const resetDragState = useCallback((): void => {
     dragStart.current = null;
     setDragging(false);
+    if (rafId.current !== null) {
+      cancelAnimationFrame(rafId.current);
+      rafId.current = null;
+    }
+  }, []);
+
+  const endDrag = (): void => {
+    if (dragStart.current === null) return;
+    resetDragState();
     onCommit(pendingWidth.current);
   };
+
+  // `onLostPointerCapture` и потеря фокуса окна — раунд исправлений 2:
+  // перетаскивание прервано не человеком (крестик/отпускание кнопки), а
+  // средой, поэтому commit не зовём — по интерфейсу он только на `pointerup`.
+  const cancelDrag = useCallback((): void => {
+    if (dragStart.current === null) return;
+    resetDragState();
+  }, [resetDragState]);
+
+  useEffect(() => {
+    if (!dragging) return undefined;
+    window.addEventListener('blur', cancelDrag);
+    return () => window.removeEventListener('blur', cancelDrag);
+  }, [dragging, cancelDrag]);
 
   return (
     <div
@@ -99,6 +131,7 @@ export function Resizer({ side, width, min, max, target, onCommit }: ResizerProp
       onPointerMove={handlePointerMove}
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
+      onLostPointerCapture={cancelDrag}
     >
       <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border group-hover:bg-ring/50" />
       {dragging ? (

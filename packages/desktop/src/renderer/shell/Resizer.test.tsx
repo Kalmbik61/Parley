@@ -127,4 +127,57 @@ describe('Resizer (тест 4)', () => {
     expect(cancelSpy).toHaveBeenCalled();
     cancelSpy.mockRestore();
   });
+
+  it('lostpointercapture без pointerup/pointercancel снимает оверлей без commit, и клик где угодно после этого не начинает перетаскивание заново (раунд исправлений 2, Important)', () => {
+    const target = createRef<HTMLDivElement>();
+    const onCommit = vi.fn();
+    const { container } = render(
+      <>
+        <div ref={target} data-testid="center" style={{ width: 280 }} />
+        <Resizer side="left" width={280} min={220} max={500} target={target} onCommit={onCommit} />
+      </>,
+    );
+    const handle = container.querySelector('[role="separator"]');
+    if (handle === null) throw new Error('ручка ресайза не найдена');
+
+    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 0 });
+    expect(screen.getByTestId('resize-overlay')).toBeTruthy();
+
+    // Захват потерян без обычного отпускания — например, окно ушло из
+    // фокуса ОС посреди перетаскивания.
+    fireEvent.lostPointerCapture(handle, { pointerId: 1 });
+
+    expect(screen.queryByTestId('resize-overlay')).toBeNull();
+    // Интерфейс требует commit только на pointerup — тут его не было.
+    expect(onCommit).not.toHaveBeenCalled();
+
+    // Оверлей был бы потомком ручки в DOM и без снятия ловил бы любой клик
+    // (всплытие до onPointerDown разделителя) — без оверлея обычный клик по
+    // центру ничего не запускает.
+    fireEvent.pointerDown(screen.getByTestId('center'), { pointerId: 2, clientX: 500 });
+    fireEvent.pointerMove(screen.getByTestId('center'), { pointerId: 2, clientX: 900 });
+    fireEvent.pointerUp(screen.getByTestId('center'), { pointerId: 2, clientX: 900 });
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it('потеря фокуса окна во время перетаскивания сбрасывает состояние без commit', () => {
+    const target = createRef<HTMLDivElement>();
+    const onCommit = vi.fn();
+    const { container } = render(
+      <>
+        <div ref={target} style={{ width: 280 }} />
+        <Resizer side="left" width={280} min={220} max={500} target={target} onCommit={onCommit} />
+      </>,
+    );
+    const handle = container.querySelector('[role="separator"]');
+    if (handle === null) throw new Error('ручка ресайза не найдена');
+
+    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 0 });
+    expect(screen.getByTestId('resize-overlay')).toBeTruthy();
+
+    fireEvent(window, new Event('blur'));
+
+    expect(screen.queryByTestId('resize-overlay')).toBeNull();
+    expect(onCommit).not.toHaveBeenCalled();
+  });
 });
