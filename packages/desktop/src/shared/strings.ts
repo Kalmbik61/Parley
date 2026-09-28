@@ -279,6 +279,8 @@ export const S = {
     /** Тело «Изменений» по `data.reason` ошибки git (кусок 8.2a, спека 13): `review/state.ts#changesErrorText`. */
     gitMissing: 'Git not found',
     notARepo: 'This folder is not a git repository',
+    /** `.git` worktree подменён — хост git в нём не запускает (раунд fix-final-a, C1). */
+    worktreeCorrupt: "This worktree's .git no longer points to the project — git isn't run here",
     /** Тост ответа `worktrees.merge` (спека 11.2) — `review/state.ts#mergeResultText`. */
     merged: (base: string): string => `Merged into ${base}`,
     mergeFailed: {

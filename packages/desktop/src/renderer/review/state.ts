@@ -74,13 +74,14 @@ export function askAgentText(branch: string, base: string, files: string[]): str
   return [S.changes.askAgentIntro(branch, base), ...files.map((file) => `- ${file}`), S.changes.askAgentInstruction(base)].join('\n');
 }
 
-/** Тело вкладки при отказе загрузки: git-missing — S.changes.gitMissing, not-a-repo — S.changes.notARepo, прочее — errorText(code, S.errors.actions.loadChanges). */
+/** Тело вкладки при отказе загрузки: git-missing — S.changes.gitMissing, not-a-repo — S.changes.notARepo, worktree-corrupt — S.changes.worktreeCorrupt, прочее — errorText(code, S.errors.actions.loadChanges). */
 export function changesErrorText(error: IpcErrorInfo): string {
   // Сообщение хоста — русский текст рантайма: человеку — только свой английский.
   console.warn('[harnas] changes', error.code, error.message);
   const reason = error.data?.['reason'];
   if (reason === HOST_ERROR_REASONS.gitMissing) return S.changes.gitMissing;
   if (reason === HOST_ERROR_REASONS.notARepo) return S.changes.notARepo;
+  if (reason === HOST_ERROR_REASONS.worktreeCorrupt) return S.changes.worktreeCorrupt;
   return errorText(error.code, S.errors.actions.loadChanges);
 }
 

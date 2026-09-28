@@ -10,7 +10,7 @@ import { lstat, mkdtemp, readdir, realpath, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Worker } from 'node:worker_threads';
-import { joinDiffFiles, parseNameStatusZ, parseNumstat } from '@harnas/core';
+import { checkoutGitDir, joinDiffFiles, parseNameStatusZ, parseNumstat } from '@harnas/core';
 import type { DiffFile, FileList, FileRoot, GitStatusLetter, GrepQuery, GrepResult, TextFile } from '../../shared/files-types.js';
 import { rootKey } from '../../shared/work-keys.js';
 import { HostError } from '../host-connection.js';
@@ -38,6 +38,19 @@ export interface GitRunner {
  * 2 с не берёт `index.lock` рядом с агентом и не переписывает индекс человека.
  */
 const READ_FLAGS = ['--no-optional-locks', '-c', 'diff.autoRefreshIndex=false'];
+/**
+ * Первыми в каждом вызове git main (раунд fix-final-a, C1): `core.fsmonitor` — программа из
+ * конфигурации репозитория, её исполняют `status` и `ls-files` фонового статуса.
+ */
+const NO_FSMONITOR = ['-c', 'core.fsmonitor=false'];
+/**
+ * `status` заходит в подмодули дочерним `git status`, а файл `.git` подмодуля лежит в копии
+ * агента: подложенный gitdir исполнил бы свои фильтры. `dirty` — только сдвиг коммита
+ * подмодуля, его git читает сам (как `NO_SUBMODULE_WALK` в core).
+ */
+const NO_SUBMODULE_WALK = '--ignore-submodules=dirty';
+/** Ключи фильтров, которые исполняют чтения (`filterOverrides`). */
+const FILTER_KEYS = '^filter\\..+\\.(clean|process)$';
 /** `.harnas/` проекта — карты, почта и журналы core: ни ⌘P, ни поиска, ни статуса (спека 10.1). */
 const PATHSPEC = ['--', '.', ':(exclude).harnas'];
 /** Обход не-git корня: до 50 000 файлов (таблица чисел). */
@@ -66,7 +79,11 @@ export function createGitRunner(env: NodeJS.ProcessEnv): GitRunner {
     run: (args, cwd, options = {}) =>
       new Promise((resolve, reject) => {
         const { signal, maxBytes, onStdout, stdin } = options;
-        const child = spawn('git', args, { cwd, env, stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
+        const child = spawn('git', [...NO_FSMONITOR, ...args], {
+          cwd,
+          env,
+          stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+        });
         const chunks: Buffer[] = [];
         let size = 0;
         let stderr = '';
@@ -124,18 +141,22 @@ export function createGitRunner(env: NodeJS.ProcessEnv): GitRunner {
 /** Кэш на раннер: подставной раннер теста не делит ответы с настоящим. */
 const rootCache = new WeakMap<GitRunner, Map<string, { prefix: string } | null>>();
 
-/** git rev-parse --show-prefix в cwd = rootPath; кэш на корень. null — не git: ENOENT или ненулевой выход. */
-export async function gitRootOf(git: GitRunner, rootPath: string): Promise<{ prefix: string } | null> {
+/**
+ * git rev-parse --show-prefix в cwd = rootPath; кэш на корень. null — не git: ENOENT или ненулевой выход.
+ * `pin` — закреплённый gitdir worktree (`--git-dir`/`--work-tree`), входит в ключ кэша.
+ */
+export async function gitRootOf(git: GitRunner, rootPath: string, pin: string[] = []): Promise<{ prefix: string } | null> {
   let cache = rootCache.get(git);
   if (cache === undefined) {
     cache = new Map();
     rootCache.set(git, cache);
   }
-  const key = await realpath(rootPath).catch(() => rootPath);
+  const real = await realpath(rootPath).catch(() => rootPath);
+  const key = [real, ...pin].join('\0');
   if (cache.has(key)) return cache.get(key) ?? null;
   let answer: { prefix: string } | null;
   try {
-    const result = await git.run(['rev-parse', '--show-prefix'], key);
+    const result = await git.run([...pin, 'rev-parse', '--show-prefix'], real);
     answer = result.code === 0 ? { prefix: result.stdout.toString('utf8').replace(/\n$/, '') } : null;
   } catch (error) {
     if (errorCode(error) !== 'ENOENT') {
@@ -147,6 +168,30 @@ export async function gitRootOf(git: GitRunner, rootPath: string): Promise<{ pre
   }
   cache.set(key, answer);
   return answer;
+}
+
+/**
+ * Clean- и process-фильтры исполняют `status` (файл со сдвинутым mtime) и `diff` против рабочего
+ * дерева, а к файлу их привязывает `.gitattributes` агента (C1). Имена драйверов берутся из той же
+ * конфигурации, что увидит чтение, и каждому ставится пустая команда; `required=false` — иначе пустой
+ * обязательный фильтр был бы отказом. Так же — `filterOverrides` в core.
+ */
+export async function filterOverrides(git: GitRunner, cwd: string, pin: string[] = []): Promise<string[]> {
+  const result = await git.run([...pin, 'config', '--null', '--name-only', '--get-regexp', FILTER_KEYS], cwd);
+  // Код 1 — таких ключей нет.
+  if (result.code === 1) return [];
+  if (result.code !== 0) throw new Error(`git config --get-regexp filter exited with code ${String(result.code)}`);
+  const drivers = new Set(
+    parseLsFiles(result.stdout).map((key) => key.slice('filter.'.length, key.lastIndexOf('.'))),
+  );
+  return [...drivers].flatMap((driver) => [
+    '-c',
+    `filter.${driver}.clean=`,
+    '-c',
+    `filter.${driver}.process=`,
+    '-c',
+    `filter.${driver}.required=false`,
+  ]);
 }
 
 export function parseLsFiles(stdout: Buffer): string[] {
@@ -449,17 +494,17 @@ export function isSafeRev(rev: string): boolean {
  * форма `<hash>^ <hash>` — те же стороны, что у `loadSides`. `--relative` — пути от папки корня,
  * как у `gitShow`; `-z` — кириллица без кавычек и восьмеричных кодов.
  */
-export async function gitCommitFiles(git: GitRunner, rootPath: string, hash: string): Promise<DiffFile[]> {
+export async function gitCommitFiles(git: GitRunner, rootPath: string, hash: string, flags: string[] = []): Promise<DiffFile[]> {
   // `--output=<файл>` из рендерера иначе заставил бы git писать вне корней.
   if (!isSafeRev(hash)) throw new HostError('bad_request', 'invalid revision');
-  const run = (args: string[]): ReturnType<GitRunner['run']> => git.run([...READ_FLAGS, ...args], rootPath);
+  const run = (args: string[]): ReturnType<GitRunner['run']> => git.run([...READ_FLAGS, ...flags, ...args], rootPath);
   // `rev-list --parents` одним вызовом: есть ли коммит (код выхода) и его родители («коммит
   // родитель…»). Родитель есть — двухдеревная форма; нет (корневой коммит) — `--root`.
   const listed = await run(['rev-list', '--parents', '-n', '1', '--end-of-options', hash]);
   if (listed.code !== 0) throw new HostError('not_found', `commit not found: ${hash}`);
   const hasParent = listed.stdout.toString('utf8').trim().split(' ').length > 1;
   const sides = hasParent ? ['--end-of-options', `${hash}^`, hash] : ['--root', '--no-commit-id', '--end-of-options', hash];
-  const common = ['diff-tree', '-r', '-M', '-z', '--relative', '--no-textconv'];
+  const common = ['diff-tree', '-r', '-M', '-z', '--relative', '--no-ext-diff', '--no-textconv'];
   const [status, numstat] = await Promise.all([run([...common, '--name-status', ...sides]), run([...common, '--numstat', ...sides])]);
   if (status.code !== 0 || numstat.code !== 0) {
     // Текст stderr локализован — только в консоль.
@@ -601,14 +646,74 @@ export function createGitApi(options: GitApiOptions): GitApi {
   let pcre: Promise<boolean> | null = null;
   const hasPcre = (): Promise<boolean> => (pcre ??= (options.probePcre ?? (() => probePcre(git)))());
 
+  /**
+   * Общий `.git` проекта (realpath) — опора проверки worktree; на путь проекта, пока жив main: это
+   * каталог человека, он не переезжает. Сбой не кэшируется.
+   */
+  const commonDirs = new Map<string, Promise<string | null>>();
+  const commonDirOf = (projectPath: string): Promise<string | null> => {
+    let found = commonDirs.get(projectPath);
+    if (found === undefined) {
+      found = git.run(['rev-parse', '--git-common-dir'], projectPath).then(async (result) => {
+        if (result.code !== 0) return null;
+        // Относительный ответ git — от cwd.
+        return realpath(path.resolve(projectPath, result.stdout.toString('utf8').trim()));
+      });
+      found.catch(() => commonDirs.delete(projectPath));
+      commonDirs.set(projectPath, found);
+    }
+    return found;
+  };
+  /** Корни с подменённым `.git`, о которых уже сказано: слежение спрашивает статус раз в 2 с. */
+  const corruptWarned = new Set<string>();
+
+  /**
+   * git корня: `null` — корень не-git (git нет, папка не под git) или worktree, чей `.git` не ведёт
+   * в зарегистрированный worktree проекта (C1, спека 10.8: агент кладёт в копию и файл `.git`) —
+   * тогда git в нём не запускается вовсе, окно обходит его без git. Проверка `.git` — на каждый
+   * вызов, без кэша: агент подменяет его когда угодно. Прошла — gitdir закреплён
+   * `--git-dir`/`--work-tree`, и подмена между проверкой и запуском git уже не касается. `flags` —
+   * закрепление и выключенные фильтры (`filterOverrides`), `prefix` — путь корня от корня копии.
+   */
+  const gitOf = async (root: FileRoot, rootPath: string): Promise<{ rootPath: string; prefix: string; flags: string[] } | null> => {
+    let pin: string[] = [];
+    if (root.spec.kind === 'worktree') {
+      let gitDir: string | null = null;
+      try {
+        const common = await commonDirOf(await roots.rootPath({ workKey: root.workKey, spec: { kind: 'project' } }));
+        if (common !== null) gitDir = await checkoutGitDir(common, rootPath);
+      } catch (error) {
+        console.warn('[harnas] files: worktree check failed', error);
+      }
+      if (gitDir === null) {
+        if (!corruptWarned.has(rootPath)) {
+          corruptWarned.add(rootPath);
+          console.warn(`[harnas] files: ${rootPath}: .git is not a worktree of the project, git is not run there`);
+        }
+        return null;
+      }
+      corruptWarned.delete(rootPath);
+      pin = ['--git-dir', gitDir, '--work-tree', rootPath];
+    }
+    const info = await gitRootOf(git, rootPath, pin);
+    if (info === null) return null;
+    try {
+      return { rootPath, prefix: info.prefix, flags: [...pin, ...(await filterOverrides(git, rootPath, pin))] };
+    } catch (error) {
+      // git пропал из PATH после пробы — как не-git корень.
+      if (errorCode(error) === 'ENOENT') return null;
+      throw error;
+    }
+  };
+
   /** Вызов git для корня; git пропал из PATH после пробы — null, как у не-git корня. */
   const read = async (
     args: string[],
-    cwd: string,
+    at: { rootPath: string; flags: string[] },
     extra: Parameters<GitRunner['run']>[2] = {},
   ): Promise<Awaited<ReturnType<GitRunner['run']>> | null> => {
     try {
-      return await git.run([...READ_FLAGS, ...args], cwd, extra);
+      return await git.run([...READ_FLAGS, ...at.flags, ...args], at.rootPath, extra);
     } catch (error) {
       if (errorCode(error) === 'ENOENT') return null;
       throw error;
@@ -624,8 +729,9 @@ export function createGitApi(options: GitApiOptions): GitApi {
    */
   const listFiles = async (root: FileRoot): Promise<FileList & { partial: boolean }> => {
     const rootPath = await roots.rootPath(root);
-    if ((await gitRootOf(git, rootPath)) !== null) {
-      const result = await read(['ls-files', '-co', '--exclude-standard', '-z', ...PATHSPEC], rootPath);
+    const at = await gitOf(root, rootPath);
+    if (at !== null) {
+      const result = await read(['ls-files', '-co', '--exclude-standard', '-z', ...PATHSPEC], at);
       if (result !== null && result.code === 0) {
         return { paths: await dropHiddenLinks(rootPath, parseLsFiles(result.stdout)), truncated: false, partial: false };
       }
@@ -656,7 +762,8 @@ export function createGitApi(options: GitApiOptions): GitApi {
       );
       return { files: found.files, truncated: found.truncated || walked.truncated };
     };
-    if ((await gitRootOf(git, rootPath)) === null) return walkAndGrep();
+    const at = await gitOf(root, rootPath);
+    if (at === null) return walkAndGrep();
     // Регулярка — PCRE (-P), если git её умеет: `\d`, `\w`, `\s` тогда работают, как у RegExp
     // не-git корня; иначе ERE (-E), и ответ говорит об этом панели.
     const posix = query.regex && !(await hasPcre());
@@ -670,7 +777,7 @@ export function createGitApi(options: GitApiOptions): GitApi {
     // Запрос — только сразу после -e: иначе `-f/путь/вне/корней` git прочёл бы файлом шаблонов.
     // --column — окно строки вокруг совпадения и курсор на нём (раунд fix-7.4, п. 2).
     const args = ['grep', '-n', '--column', '-I', '--no-color', '--null', ...flags, '--untracked', '-e', query.text, ...PATHSPEC];
-    const result = await read(args, rootPath, { signal, onStdout: (chunk) => parser.push(chunk) });
+    const result = await read(args, at, { signal, onStdout: (chunk) => parser.push(chunk) });
     if (result === null) return walkAndGrep();
     const found = parser.result();
     if (signal.aborted) return { files: found.files, truncated: true, ...dialect };
@@ -726,9 +833,11 @@ export function createGitApi(options: GitApiOptions): GitApi {
       if (!isSafeRev(rev)) throw new HostError('bad_request', 'invalid revision');
       const normal = lexicalPath(relPath);
       const rootPath = await roots.rootPath(root);
+      const at = await gitOf(root, rootPath);
+      if (at === null) return null;
       // `./` — путь от cwd, а не от корня репозитория: папка проекта бывает подкаталогом.
       // --no-textconv: сравнение показывает байты блоба, а не вывод фильтра из конфигурации.
-      const result = await read(['show', '--no-textconv', '--end-of-options', `${rev}:./${normal}`], rootPath, {
+      const result = await read(['show', '--no-textconv', '--end-of-options', `${rev}:./${normal}`], at, {
         maxBytes: showMaxBytes,
       });
       if (result === null) return null;
@@ -748,15 +857,19 @@ export function createGitApi(options: GitApiOptions): GitApi {
 
     gitCommitFiles: async (root, hash) => {
       if (!isSafeRev(hash)) throw new HostError('bad_request', 'invalid revision');
-      return gitCommitFiles(git, await roots.rootPath(root), hash);
+      const rootPath = await roots.rootPath(root);
+      const at = await gitOf(root, rootPath);
+      // Не-git корень или подменённый `.git` — коммита здесь нет, как у отказа `rev-list`.
+      if (at === null) throw new HostError('not_found', `commit not found: ${hash}`);
+      return gitCommitFiles(git, rootPath, hash, at.flags);
     },
 
     gitStatus: async (root) => {
       const rootPath = await roots.rootPath(root);
-      const info = await gitRootOf(git, rootPath);
+      const info = await gitOf(root, rootPath);
       if (info === null) return {};
       // -uall: новая папка иначе пришла бы одной строкой `?? dir/`, без U у файлов.
-      const result = await read(['status', '--porcelain=v1', '-z', '-uall', ...PATHSPEC], rootPath);
+      const result = await read(['status', '--porcelain=v1', '-z', '-uall', NO_SUBMODULE_WALK, ...PATHSPEC], info);
       if (result === null) return {};
       if (result.code !== 0) {
         console.warn(`[harnas] files: git status exited with code ${String(result.code)}`);
@@ -768,11 +881,12 @@ export function createGitApi(options: GitApiOptions): GitApi {
     checkIgnored: async (root, dir, names) => {
       if (names.length === 0) return new Set();
       const rootPath = await roots.rootPath(root);
-      if ((await gitRootOf(git, rootPath)) === null) return new Set();
       const rels = names.map((name) => path.posix.join(dir, name));
       let result: Awaited<ReturnType<GitRunner['run']>> | null;
       try {
-        result = await read(['check-ignore', '--stdin', '-z'], rootPath, { stdin: Buffer.from(`${rels.join('\0')}\0`) });
+        const at = await gitOf(root, rootPath);
+        if (at === null) return new Set();
+        result = await read(['check-ignore', '--stdin', '-z'], at, { stdin: Buffer.from(`${rels.join('\0')}\0`) });
       } catch (error) {
         console.warn('[harnas] files: git check-ignore failed', error);
         return new Set();

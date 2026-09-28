@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, unlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
@@ -215,7 +215,8 @@ describe('grep (тесты 3 и 4)', () => {
     await a.grep(ROOT, Q('foo'), 's');
     await a.gitStatus(ROOT);
     await a.lsFiles(ROOT);
-    const calls = spy.mock.calls.map(([args]) => args).filter((args) => !args.includes('rev-parse'));
+    // rev-parse и список фильтров (`filterOverrides`, fix-final-a) — не чтения файлов.
+    const calls = spy.mock.calls.map(([args]) => args).filter((args) => !args.includes('rev-parse') && !args.includes('config'));
     expect(calls).toHaveLength(3);
     for (const args of calls) expect(args.slice(0, 3)).toEqual(['--no-optional-locks', '-c', 'diff.autoRefreshIndex=false']);
   });
@@ -995,5 +996,87 @@ describe('диалект регулярки git: проба -P (раунд fix-7
     }
     // Настоящий git этой машины (2.53, с PCRE).
     expect(await probePcre(createGitRunner(process.env))).toBe(true);
+  });
+});
+
+describe('исполняемые ключи конфигурации и подложенный .git (раунд fix-final-a, C1)', () => {
+  /** Маркеры — безвредная запись файла-признака во временном каталоге теста. */
+  const fsmonMarker = (): string => path.join(dir, 'fsmonitor-ran');
+  const filterMarker = (): string => path.join(dir, 'filter-ran');
+
+  /** core.fsmonitor и обязательный clean-фильтр в конфигурации gitdir; после них тест git не зовёт. */
+  async function armConfig(gitDirArgs: string[]): Promise<void> {
+    const fsmon = path.join(dir, 'fsmon.sh');
+    const filter = path.join(dir, 'filter.sh');
+    await writeFile(fsmon, `#!/bin/sh\necho "$@" >> '${fsmonMarker()}'\nexit 1\n`, { mode: 0o755 });
+    await writeFile(filter, `#!/bin/sh\necho clean >> '${filterMarker()}'\nexec cat\n`, { mode: 0o755 });
+    git(dir, ...gitDirArgs, 'config', 'core.fsmonitor', fsmon);
+    git(dir, ...gitDirArgs, 'config', 'filter.m.clean', filter);
+    git(dir, ...gitDirArgs, 'config', 'filter.m.required', 'true');
+  }
+
+  /** Атрибут фильтра на всё, новый файл и сдвинутый mtime отслеживаемого: status перечитал бы его. */
+  async function arm(root: string): Promise<void> {
+    await writeFile(path.join(root, '.gitattributes'), '* filter=m\n');
+    await writeFile(path.join(root, 'new.md'), 'новое\n');
+    const past = new Date('2020-01-01T00:00:00Z');
+    await utimes(path.join(root, 'README.md'), past, past);
+  }
+
+  async function markersAbsent(): Promise<void> {
+    expect(existsSync(fsmonMarker())).toBe(false);
+    expect(existsSync(filterMarker())).toBe(false);
+  }
+
+  it('gitStatus, lsFiles, checkIgnored, grep, gitShow, gitCommitFiles не исполняют core.fsmonitor и filter.clean репозитория', async () => {
+    const repo = path.join(dir, 'repo');
+    await initRepo(repo);
+    await writeFile(path.join(repo, 'README.md'), 'старт\n');
+    const head = commitAll(repo);
+    await arm(repo);
+    await armConfig(['-C', repo]);
+    const a = api(repo);
+
+    expect(await a.gitStatus(ROOT)).toEqual({ '.gitattributes': 'U', 'new.md': 'U' });
+    expect((await a.lsFiles(ROOT)).paths.sort()).toEqual(['.gitattributes', 'README.md', 'new.md']);
+    expect(await a.checkIgnored(ROOT, '', ['README.md', 'new.md'])).toEqual(new Set());
+    expect((await a.grep(ROOT, Q('старт'), 's')).files.map((file) => file.path)).toEqual(['README.md']);
+    expect((await a.gitShow(ROOT, 'HEAD', 'README.md'))?.text).toBe('старт\n');
+    expect((await a.gitCommitFiles(ROOT, head)).map((file) => file.path)).toEqual(['README.md']);
+    await markersAbsent();
+  });
+
+  it('worktree с подложенным .git — корень не-git: git в нём не запущен; настоящий worktree — как прежде', async () => {
+    const project = path.join(dir, 'project');
+    const worktree = path.join(dir, 'wt');
+    await initRepo(project);
+    await writeFile(path.join(project, 'README.md'), 'старт\n');
+    const head = commitAll(project);
+    git(project, 'worktree', 'add', '-q', '-b', 'harnas/w-1/s-01', worktree);
+    const WT: FileRoot = { workKey: ROOT.workKey, spec: { kind: 'worktree', sessionId: 's-01' } };
+    const a = createGitApi({
+      git: createGitRunner(process.env),
+      roots: { rootPath: async (root) => (root.spec.kind === 'project' ? project : worktree) },
+      spawnWorker,
+    });
+
+    await writeFile(path.join(worktree, 'draft.md'), 'черновик\n');
+    expect(await a.gitStatus(WT)).toEqual({ 'draft.md': 'U' });
+
+    // Агент пишет только в свою копию: gitdir с исполняемыми ключами — внутри неё.
+    const planted = path.join(worktree, 'evil');
+    await initRepo(planted);
+    await armConfig(['-C', planted]);
+    await arm(worktree);
+    await writeFile(path.join(worktree, '.git'), `gitdir: ${path.join(planted, '.git')}\n`);
+
+    expect(await a.gitStatus(WT)).toEqual({});
+    expect((await a.lsFiles(WT)).paths).toContain('draft.md');
+    expect((await a.lsFiles(WT)).paths).not.toContain('.git');
+    expect(await a.checkIgnored(WT, '', ['draft.md'])).toEqual(new Set());
+    expect((await a.grep(WT, Q('черновик'), 's')).files.map((file) => file.path)).toEqual(['draft.md']);
+    expect(await a.gitShow(WT, 'HEAD', 'README.md')).toBeNull();
+    expect(await codeOf(a.gitCommitFiles(WT, head))).toBe('not_found');
+    await markersAbsent();
   });
 });

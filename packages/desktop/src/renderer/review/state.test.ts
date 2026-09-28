@@ -137,6 +137,10 @@ describe('changesErrorText (тест 5)', () => {
       "Couldn't load changes: invalid request.",
     );
     expect(changesErrorText({ code: 'bad_request', message: 'x' })).toBe("Couldn't load changes: invalid request.");
+    // Подменённый .git worktree (fix-final-a, C1) — своё состояние, а не «invalid request».
+    expect(changesErrorText({ code: 'bad_request', message: 'подменён', data: { reason: 'worktree-corrupt' } })).toBe(
+      "This worktree's .git no longer points to the project — git isn't run here",
+    );
     expect(warn).toHaveBeenCalled();
     expect(String(warn.mock.calls[0]?.join(' '))).toContain('git не найден');
   });
