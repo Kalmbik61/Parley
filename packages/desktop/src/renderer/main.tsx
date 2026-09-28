@@ -1,17 +1,17 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.js';
+import { getHostClient } from './host-client.js';
 import { useUiStore } from './store/ui.js';
-import { watchSystemDark } from './theme/appearance.js';
+import { followAppearance } from './theme/appearance.js';
 import { TOOLTIP_DELAY_MS, TooltipProvider } from './ui/tooltip.js';
 import './styles.css';
 
 // До первого кадра React — иначе первая отрисовка идёт в исходной светлой
-// теме и в тёмной системе на старте мелькает белый экран (спека 4.7). Сама
-// тёмность в сторе уже посчитана верно (`store/ui.ts`), здесь только
-// применяем её к DOM и дальше следим за сменой системной темы на лету.
-useUiStore.getState().setDark(useUiStore.getState().dark);
-watchSystemDark((dark) => useUiStore.getState().setDark(dark));
+// теме и в тёмной системе на старте мелькает белый экран (спека 4.7). Тёмность —
+// по `nativeTheme` main (раунд main-r2, п. 1): начальная синхронно, дальше — каждая
+// смена, в том числе выбор «Theme: …» в палитре и Settings.
+followAppearance(getHostClient(), (dark) => useUiStore.getState().setDark(dark));
 
 const container = document.getElementById('root');
 if (container === null) throw new Error('#root not found');

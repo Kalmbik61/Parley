@@ -146,6 +146,8 @@ const bridge = {
       appearanceListeners.add(listener);
       return () => appearanceListeners.delete(listener);
     },
+    // Синхронно: окно ставит `.dark` до первого кадра React, без белой вспышки (спека 4.7).
+    isDark: () => ipcRenderer.sendSync('app:is-dark') === true,
     onMenu: (listener: (id: ActionId) => void) => {
       menuListeners.add(listener);
       return () => menuListeners.delete(listener);

@@ -1,85 +1,104 @@
 /**
- * Тест 3 куска 1.4 плана «облик Orca» (спека 4.7): тема окна следует за
- * системной схемой ОС независимо от того, подключён ли хост и что на экране —
- * `body { background: var(--background) }` в `styles/base.css` красит документ
- * сразу по CSS, а `<html>.dark` рендерер выставляет из `matchMedia` ещё до
- * первого кадра React (`main.tsx`). `electron.launch({ colorScheme })`
- * эмулирует `prefers-color-scheme` на уровне Chromium (Playwright) — этого
- * достаточно, реальный хост и сессии тут не нужны, поэтому в отличие от
- * `smoke.spec.ts` не ждём никакого текста на экране, только вычисленный стиль.
+ * Тема окна (спека 4.7; раунд main-r2, п. 1 — ревью 6.3-B, Important 1). Источник истины —
+ * `nativeTheme` main: рендерер берёт начальную тёмность синхронно (`app:is-dark`) и следит за
+ * `app:appearance`. Выбор «Theme: dark» / «Theme: light» в палитре меняет `nativeTheme.themeSource`
+ * и `ui.json` — `.dark` на `<html>` должен смениться сразу и остаться тем же после перезапуска окна.
  *
- * Эмуляция применяется не мгновенно к моменту, когда `firstWindow()`
- * разрешается — гонка между стартовой загрузкой окна и подключением
- * CDP-сессии Playwright: `matchMedia(...).matches`, вызванный заново (как в
- * `waitForFunction` ниже), эмулированную схему уже видит, а вот однократное
- * чтение `dark` при загрузке модуля `store/ui.ts` могло случиться раньше, чем
- * подключилась эмуляция, — событие `change` у уже созданного `MediaQueryList`
- * при этом не приходит (опытным путём: без `reload()` тест то проходит, то
- * нет, в зависимости от того, кто в этой гонке успел раньше). Поэтому сперва
- * ждём, чтобы эмуляция точно была активна, и затем перезагружаем страницу —
- * `main.tsx` заново читает уже гарантированно верную схему до первого кадра.
+ * Запуск — без `colorScheme`: с ним Playwright подменяет `prefers-color-scheme` в обход
+ * `nativeTheme`, и тест проверял бы эмуляцию, а не окно. По той же причине ожидания не зависят
+ * от системной темы машины: сначала тема выбирается явно.
  */
 
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { _electron as electron, expect, test } from '@playwright/test';
+import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { stopHost } from './stop-host.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
-// Тот же защитный skip, что и в `smoke.spec.ts`: без сборки хоста окну нечего
-// поднимать при старте.
+// Без сборки хоста окну нечего поднимать при старте.
 const hostEntry = path.resolve(dirname, '../../host/dist/main.js');
-const hostReady = existsSync(hostEntry);
 
-test.skip(!hostReady, `packages/host/dist/main.js не собран — сначала pnpm --filter @harnas/host build: ${hostEntry}`);
+test.skip(!existsSync(hostEntry), `packages/host/dist/main.js не собран — сначала pnpm --filter @harnas/host build: ${hostEntry}`);
 
-test.describe('тема окна следует за системной схемой (кусок 1.4 плана «облик Orca», спека 4.7)', () => {
+const isDark = (window: Page): Promise<boolean> => window.evaluate(() => document.documentElement.classList.contains('dark'));
+const background = (window: Page): Promise<string> => window.evaluate(() => getComputedStyle(document.body).backgroundColor);
+
+test.describe('тема окна по nativeTheme main (спека 4.7, раунд main-r2)', () => {
   let home: string;
+  let app: ElectronApplication | null = null;
 
   test.beforeEach(async () => {
     home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-theme-'));
   });
 
   test.afterEach(async () => {
+    await app?.close().catch(() => {});
+    app = null;
     await stopHost(home);
     await rm(home, { recursive: true, force: true });
   });
 
-  test('тёмная схема ОС — фон body #0a0a0a', async () => {
-    const app = await electron.launch({
-      args: [mainEntry],
-      env: { ...process.env, HARNAS_HOME: home },
-      colorScheme: 'dark',
-    });
-
+  async function launch(): Promise<Page> {
+    app = await electron.launch({ args: [mainEntry], env: { ...process.env, HARNAS_HOME: home } });
     const window = await app.firstWindow();
-    await window.waitForFunction(() => matchMedia('(prefers-color-scheme: dark)').matches);
-    await window.reload();
-    await window.waitForFunction(() => matchMedia('(prefers-color-scheme: dark)').matches);
-    const background = await window.evaluate(() => getComputedStyle(document.body).backgroundColor);
-    expect(background).toBe('rgb(10, 10, 10)');
+    await expect(window.getByTestId('landing')).toBeVisible();
+    return window;
+  }
 
-    await app.close();
+  async function pickTheme(window: Page, label: 'Theme: dark' | 'Theme: light'): Promise<void> {
+    await window.keyboard.press('Meta+J');
+    await expect(window.locator('[data-palette] [cmdk-input]')).toBeFocused();
+    await window.keyboard.type(label);
+    await expect(window.locator('[data-palette] [role="option"]').first()).toContainText(label);
+    await window.keyboard.press('Enter');
+    await expect(window.locator('[data-palette]')).toHaveCount(0);
+  }
+
+  async function savedAppearance(): Promise<unknown> {
+    const file = JSON.parse(await readFile(path.join(home, 'desktop', 'ui.json'), 'utf8')) as { appearance?: unknown };
+    return file.appearance;
+  }
+
+  test('Theme: dark / Theme: light из палитры меняют .dark сразу', async () => {
+    const window = await launch();
+
+    await pickTheme(window, 'Theme: dark');
+    await expect.poll(() => isDark(window)).toBe(true);
+    expect(await background(window)).toBe('rgb(10, 10, 10)');
+
+    await pickTheme(window, 'Theme: light');
+    await expect.poll(() => isDark(window)).toBe(false);
+    expect(await background(window)).toBe('rgb(255, 255, 255)');
   });
 
-  test('светлая схема ОС — фон body #ffffff', async () => {
-    const app = await electron.launch({
-      args: [mainEntry],
-      env: { ...process.env, HARNAS_HOME: home },
-      colorScheme: 'light',
-    });
+  test('выбранная тема переживает перезапуск окна и перезагрузку страницы', async () => {
+    let window = await launch();
+    await pickTheme(window, 'Theme: dark');
+    await expect.poll(() => isDark(window)).toBe(true);
+    await expect.poll(savedAppearance).toBe('dark');
+    await app?.close();
 
-    const window = await app.firstWindow();
-    await window.waitForFunction(() => !matchMedia('(prefers-color-scheme: dark)').matches);
-    await window.reload();
-    await window.waitForFunction(() => !matchMedia('(prefers-color-scheme: dark)').matches);
-    const background = await window.evaluate(() => getComputedStyle(document.body).backgroundColor);
-    expect(background).toBe('rgb(255, 255, 255)');
+    window = await launch();
+    // С первого кадра — без ожидания события: начальная тёмность приходит синхронно.
+    expect(await isDark(window)).toBe(true);
+    expect(await background(window)).toBe('rgb(10, 10, 10)');
+    // Перезагрузка страницы: `.dark` ставит `main.tsx` до React, экран связи тут не важен.
+    await window.reload({ waitUntil: 'load' });
+    expect(await isDark(window)).toBe(true);
+    await app?.close();
 
-    await app.close();
+    window = await launch();
+    await pickTheme(window, 'Theme: light');
+    await expect.poll(() => isDark(window)).toBe(false);
+    await expect.poll(savedAppearance).toBe('light');
+    await app?.close();
+
+    window = await launch();
+    expect(await isDark(window)).toBe(false);
+    expect(await background(window)).toBe('rgb(255, 255, 255)');
   });
 });

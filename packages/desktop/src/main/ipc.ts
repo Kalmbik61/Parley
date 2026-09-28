@@ -144,6 +144,8 @@ export interface RegisterIpcOptions {
   uiStore: UiStore;
   /** Меняет `nativeTheme.themeSource`; запись в `ui.json` — забота обработчика `app:set-appearance` ниже (спека 4.7). */
   setAppearance: (mode: Appearance) => void;
+  /** `nativeTheme.shouldUseDarkColors` — источник истины темы окна (`app:is-dark`, раунд main-r2, п. 1). */
+  isDark: () => boolean;
   /** Двойной клик по пустому месту заголовка (кусок 2.3, спека 5.1) — системное действие macOS. */
   titlebarDoubleClick: () => void;
   /** «Reveal in Finder» карточки работы (кусок 3.4) — `shell.showItemInFolder`. */
@@ -179,6 +181,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     layoutStore,
     uiStore,
     setAppearance,
+    isDark,
     titlebarDoubleClick,
     showItemInFolder,
     roots,
@@ -314,6 +317,11 @@ export function registerIpc(options: RegisterIpcOptions): void {
       setAppearance(mode);
     }),
   );
+
+  // Начальная тёмность окна (раунд main-r2, п. 1): `sendSync` прелоада, до первого кадра.
+  ipcMain.on('app:is-dark', (event) => {
+    event.returnValue = isDark();
+  });
 
   ipcMain.on('app:titlebar-double-click', () => {
     titlebarDoubleClick();

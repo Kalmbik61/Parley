@@ -46,6 +46,7 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore; roots?
   layoutStore: LayoutStore;
   uiStore: UiStore;
   setAppearance: ReturnType<typeof vi.fn>;
+  isDark: ReturnType<typeof vi.fn>;
   titlebarDoubleClick: ReturnType<typeof vi.fn>;
   showItemInFolder: ReturnType<typeof vi.fn>;
   showNotification: ReturnType<typeof vi.fn>;
@@ -79,6 +80,7 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore; roots?
       save: vi.fn().mockResolvedValue(DEFAULT_UI),
     } satisfies UiStore);
   const setAppearance = vi.fn();
+  const isDark = vi.fn().mockReturnValue(false);
   const titlebarDoubleClick = vi.fn();
   const showItemInFolder = vi.fn();
   const showNotification = vi.fn();
@@ -109,6 +111,7 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore; roots?
     layoutStore,
     uiStore,
     setAppearance,
+    isDark,
     titlebarDoubleClick,
     openExternal: vi.fn().mockResolvedValue(undefined),
     chooseFolder: vi.fn(),
@@ -129,6 +132,7 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore; roots?
     layoutStore,
     uiStore,
     setAppearance,
+    isDark,
     titlebarDoubleClick,
     showItemInFolder,
     showNotification,
@@ -309,6 +313,17 @@ describe('registerIpc', () => {
 
     expect(setAppearance).toHaveBeenCalledWith('dark');
     expect(uiStore.save).toHaveBeenCalledWith({ appearance: 'dark' });
+  });
+
+  it('app:is-dark — синхронный ответ nativeTheme.shouldUseDarkColors (раунд main-r2, п. 1)', () => {
+    const { ipcMain, isDark } = setup();
+    const event: { returnValue?: unknown } = {};
+    isDark.mockReturnValue(true);
+    ipcMain.invokeWithEvent('app:is-dark', event);
+    expect(event.returnValue).toBe(true);
+    isDark.mockReturnValue(false);
+    ipcMain.invokeWithEvent('app:is-dark', event);
+    expect(event.returnValue).toBe(false);
   });
 
   it('app:titlebar-double-click зовёт обработчик (кусок 2.3)', () => {

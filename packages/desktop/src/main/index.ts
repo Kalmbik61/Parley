@@ -249,6 +249,7 @@ if (!gotLock) {
       setAppearance: (mode) => {
         nativeTheme.themeSource = mode;
       },
+      isDark: () => nativeTheme.shouldUseDarkColors,
       openExternal: async (url) => {
         if (!logShell) return shell.openExternal(url);
         shellLog.push({ action: 'openExternal', url });

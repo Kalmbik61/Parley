@@ -101,6 +101,11 @@ export interface HarnasBridge {
     setAppearance(mode: Appearance): Promise<void>;
     /** Системная тёмность подхватывается при `nativeTheme.on('updated')` (спека 4.7). */
     onAppearance(listener: (dark: boolean) => void): () => void;
+    /**
+     * `nativeTheme.shouldUseDarkColors` main — синхронно (`app:is-dark`), чтобы `.dark` встал до
+     * первого кадра и на каждой перезагрузке страницы (раунд main-r2, п. 1).
+     */
+    isDark(): boolean;
     /** Двойной клик по пустому месту заголовка (кусок 2.3, спека 5.1). */
     titlebarDoubleClick(): void;
     /**

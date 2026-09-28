@@ -69,6 +69,8 @@ export interface FakeBridge extends HarnasBridge {
   readonly layoutRetains: string[][];
   /** Системная тёмность, будто бы её сообщил `nativeTheme.on('updated')` (кусок 1.1). */
   emitAppearance(dark: boolean): void;
+  /** Ответ `app.isDark()` — тёмность `nativeTheme` main (раунд main-r2, п. 1). */
+  setDark(dark: boolean): void;
   /** Журнал вызовов `app.titlebarDoubleClick` (кусок 2.3) — по одной записи на вызов. */
   readonly titlebarDoubleClicks: number[];
   /** Журнал вызовов `app.revealWork` (кусок 3.4). */
@@ -134,6 +136,7 @@ export function createFakeBridge(): FakeBridge {
   const statusListeners = new Set<(status: HostStatus) => void>();
   const menuListeners = new Set<(id: ActionId) => void>();
   const appearanceListeners = new Set<(dark: boolean) => void>();
+  let dark = false;
   const notified: Array<{ method: NotificationName; params: unknown }> = [];
   const calls: Array<{ method: MethodName; params: unknown }> = [];
   const appNotified: AppNote[] = [];
@@ -419,6 +422,7 @@ export function createFakeBridge(): FakeBridge {
         appearanceListeners.add(listener);
         return () => appearanceListeners.delete(listener);
       },
+      isDark: () => dark,
       onMenu: (listener) => {
         menuListeners.add(listener);
         return () => menuListeners.delete(listener);
@@ -480,8 +484,11 @@ export function createFakeBridge(): FakeBridge {
     setPendingFocusTarget: (target) => {
       pendingFocusTarget = target;
     },
-    emitAppearance: (dark) => {
-      for (const listener of appearanceListeners) listener(dark);
+    emitAppearance: (next) => {
+      for (const listener of appearanceListeners) listener(next);
+    },
+    setDark: (next) => {
+      dark = next;
     },
   };
 
