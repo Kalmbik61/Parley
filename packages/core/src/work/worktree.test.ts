@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { access, chmod, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -173,7 +173,7 @@ describe('commitWorktree', () => {
     await createWorktree(project, info);
     await writeFile(path.join(info.path, 'draft.md'), 'черновик\n', 'utf8');
 
-    const sha = await commitWorktree(info, 'бэкенд: черновик');
+    const sha = await commitWorktree(project, info, 'бэкенд: черновик');
 
     expect(sha).toMatch(/^[0-9a-f]{40}$/);
     expect((await git(info.path, ['log', '-1', '--pretty=%s'])).stdout.trim()).toBe(
@@ -602,7 +602,7 @@ describe('mergeCheck — ревизии из карты и старый git (р�
     await mkdir(fakeBin);
     await writeFile(
       path.join(fakeBin, 'git'),
-      `#!/bin/sh\necho "$@" >> '${calls}'\nif [ "$1" = "--version" ]; then echo "git version 2.37.0"; exit 0; fi\nexec '${realGit}' "$@"\n`,
+      `#!/bin/sh\necho "$@" >> '${calls}'\ncase " $* " in *" --version "*) echo "git version 2.37.0"; exit 0;; esac\nexec '${realGit}' "$@"\n`,
       'utf8',
     );
     await chmod(path.join(fakeBin, 'git'), 0o755);
@@ -732,7 +732,7 @@ describe('вложенный репозиторий и .harnas в worktree (ра
     expect(diff.uncommittedPaths).toEqual(['a.txt']);
     expect(diff.patch).not.toContain('harnas');
 
-    const commit = await commitWorktree(info, 'прогресс');
+    const commit = await commitWorktree(project, info, 'прогресс');
     const names = (await git(info.path, ['show', '--name-only', '--format=', commit])).stdout.trim();
     expect(names).toBe('a.txt');
   });
@@ -928,5 +928,134 @@ describe('patch: false (тест 11)', () => {
     await writeFile(path.join(project, 'README.md'), 'старт\nи тут\n', 'utf8');
     expect((await projectChanges(project, { patch: false })).patch).toBe('');
     expect((await projectChanges(project)).patch).toContain('и тут');
+  });
+});
+
+describe('исполняемые ключи конфигурации и подложенный .git (раунд fix-final-a, C1)', () => {
+  const exists = (file: string): Promise<boolean> =>
+    access(file).then(
+      () => true,
+      () => false,
+    );
+  /** Маркеры — безвредная запись файла-признака во временном каталоге теста. */
+  const fsmonMarker = (): string => path.join(root, 'fsmonitor-ran');
+  const filterMarker = (): string => path.join(root, 'filter-ran');
+
+  /** Хук fsmonitor и clean-фильтр: пишут файл-признак; фильтр отдаёт вход как есть. */
+  async function markerScripts(): Promise<{ fsmon: string; filter: string }> {
+    const fsmon = path.join(root, 'fsmon.sh');
+    const filter = path.join(root, 'filter.sh');
+    await writeFile(fsmon, `#!/bin/sh\necho "$@" >> '${fsmonMarker()}'\nexit 1\n`, 'utf8');
+    await writeFile(filter, `#!/bin/sh\necho clean >> '${filterMarker()}'\nexec cat\n`, 'utf8');
+    await chmod(fsmon, 0o755);
+    await chmod(filter, 0o755);
+    return { fsmon, filter };
+  }
+
+  /** Ключи в конфигурации gitdir: после них тест git-помощником не зовёт — он бы сам их исполнил. */
+  async function armConfig(gitDirArgs: string[]): Promise<void> {
+    const { fsmon, filter } = await markerScripts();
+    await run('git', [...gitDirArgs, 'config', 'core.fsmonitor', fsmon]);
+    await run('git', [...gitDirArgs, 'config', 'filter.m.clean', filter]);
+    await run('git', [...gitDirArgs, 'config', 'filter.m.required', 'true']);
+  }
+
+  /** Атрибут фильтра на всё и сдвинутый mtime отслеживаемого файла: status и diff перечитали бы содержимое. */
+  async function arm(dir: string): Promise<void> {
+    await writeFile(path.join(dir, '.gitattributes'), '* filter=m\n', 'utf8');
+    await writeFile(path.join(dir, 'new.md'), 'новое\n', 'utf8');
+    const past = new Date('2020-01-01T00:00:00Z');
+    await utimes(path.join(dir, 'README.md'), past, past);
+  }
+
+  it('чтения worktreeDiff, projectChanges, mergeCheck не исполняют core.fsmonitor и filter.clean проекта', async () => {
+    await initProject();
+    const info = await freshWorktree();
+    await arm(project);
+    await arm(info.path);
+    await armConfig(['-C', project]);
+
+    const diff = await worktreeDiff(project, info);
+    const changes = await projectChanges(project);
+    await mergeCheck(project, info);
+
+    expect(await exists(fsmonMarker())).toBe(false);
+    expect(await exists(filterMarker())).toBe(false);
+    // Сдвинутый mtime без правки содержимого — не изменение; новые файлы — на месте.
+    expect(diff.files.map((file) => file.path).sort()).toEqual(['.gitattributes', 'new.md']);
+    expect(diff.baseDirty).toBe(true);
+    expect(changes.files.map((file) => file.path).sort()).toEqual(['.gitattributes', 'new.md']);
+  });
+
+  /** Подложенный gitdir внутри worktree: агент пишет только в свою копию. */
+  async function plantGitDir(dir: string): Promise<{ real: string; planted: string }> {
+    const real = await readFile(path.join(dir, '.git'), 'utf8');
+    const source = path.join(dir, 'evil');
+    await run('git', ['init', '-q', '-b', 'main', source]);
+    await armConfig(['-C', source]);
+    const planted = `gitdir: ${path.join(source, '.git')}\n`;
+    await arm(dir);
+    await writeFile(path.join(dir, '.git'), planted, 'utf8');
+    return { real, planted };
+  }
+
+  const corrupt = { reason: 'worktree-corrupt' };
+
+  it('подложенный .git в worktree: diff, commit, merge и discard отказывают worktree-corrupt, git в нём не запущен', async () => {
+    await initProject();
+    const info = await freshWorktree();
+    const { real } = await plantGitDir(info.path);
+
+    await expect(worktreeDiff(project, info)).rejects.toMatchObject(corrupt);
+    await expect(worktreeDiff(project, info)).rejects.toBeInstanceOf(GitStateError);
+    await expect(commitWorktree(project, info, 'сохранить')).rejects.toMatchObject(corrupt);
+    await expect(mergeWorktree(project, info, 'влить')).rejects.toMatchObject(corrupt);
+    await expect(discardWorktree(project, info)).rejects.toMatchObject(corrupt);
+    await expect(discardWorktree(project, info, { force: true })).rejects.toMatchObject(corrupt);
+
+    expect(await exists(fsmonMarker())).toBe(false);
+    expect(await exists(filterMarker())).toBe(false);
+    expect(await exists(info.path)).toBe(true);
+
+    // Настоящий .git вернулся — всё как прежде.
+    await writeFile(path.join(info.path, '.git'), real, 'utf8');
+    const diff = await worktreeDiff(project, info, { patch: false });
+    expect(diff.files.map((file) => file.path)).toContain('new.md');
+  });
+
+  it('.git worktree ведёт в gitdir чужого worktree проекта, стал каталогом или ссылкой — worktree-corrupt', async () => {
+    await initProject();
+    const info = await freshWorktree();
+    const other = plannedWorktree(project, 'w-0001', 's-03', 'main', worktreeRoot);
+    await createWorktree(project, other);
+    const dotGit = path.join(info.path, '.git');
+    const real = await readFile(dotGit, 'utf8');
+
+    await writeFile(dotGit, await readFile(path.join(other.path, '.git'), 'utf8'), 'utf8');
+    await expect(worktreeDiff(project, info)).rejects.toMatchObject(corrupt);
+
+    await rm(dotGit);
+    await symlink(real.replace(/^gitdir: /, '').trim(), dotGit);
+    await expect(worktreeDiff(project, info)).rejects.toMatchObject(corrupt);
+
+    await rm(dotGit);
+    await mkdir(dotGit);
+    await expect(worktreeDiff(project, info)).rejects.toMatchObject(corrupt);
+  });
+
+  it('подложенный .git в чекауте базы (worktree родителя) — ни isDirty, ни merge в нём не запускают git', async () => {
+    await initProject();
+    const parent = await freshWorktree();
+    const child = plannedWorktree(project, 'w-0001', 's-03', parent.branch, worktreeRoot);
+    await createWorktree(project, child);
+    await writeFile(path.join(child.path, 'feature.md'), 'фича\n', 'utf8');
+    await git(child.path, ['add', 'feature.md']);
+    await git(child.path, ['commit', '-m', 'фича']);
+    await plantGitDir(parent.path);
+
+    await expect(worktreeDiff(project, child)).rejects.toMatchObject(corrupt);
+    await expect(mergeWorktree(project, child, 'влить')).rejects.toMatchObject(corrupt);
+    expect(await exists(fsmonMarker())).toBe(false);
+    expect(await exists(filterMarker())).toBe(false);
   });
 });

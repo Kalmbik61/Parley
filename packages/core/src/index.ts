@@ -73,6 +73,7 @@ export {
   DirtyWorktreeError,
   isGitRepo,
   baseBranchOf,
+  checkoutGitDir,
   commitProject,
   gitStateReason,
   GitStateError,

@@ -10,7 +10,7 @@
 
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -18,6 +18,14 @@ import { mapLimited } from '../map-limited.js';
 import type { WorktreeInfo } from './types.js';
 
 const run = promisify(execFile);
+
+/**
+ * Во всех вызовах git здесь (раунд fix-final-a, C1): `core.fsmonitor` — программа из
+ * конфигурации репозитория, и её исполняют `status`, `diff` против рабочего дерева и
+ * `ls-files`. Ключ из командной строки главнее конфигурации и по `GIT_CONFIG_PARAMETERS`
+ * доходит до дочерних git (подмодули, проверка чистоты `worktree remove`).
+ */
+const NO_FSMONITOR = ['-c', 'core.fsmonitor=false'];
 
 /** Сколько знаков хэша пути проекта идёт в имя каталога — как короткий git-хэш. */
 const HASH_LENGTH = 6;
@@ -56,7 +64,7 @@ export function plannedWorktree(
 /** Проект (или его подкаталог) внутри рабочего дерева git — не голый и не отсутствующий репозиторий. */
 export async function isGitRepo(projectPath: string): Promise<boolean> {
   try {
-    const { stdout } = await run('git', ['-C', projectPath, 'rev-parse', '--is-inside-work-tree']);
+    const { stdout } = await run('git', [...NO_FSMONITOR, '-C', projectPath, 'rev-parse', '--is-inside-work-tree']);
     return stdout.trim() === 'true';
   } catch {
     return false;
@@ -68,10 +76,10 @@ export async function isGitRepo(projectPath: string): Promise<boolean> {
  * чтобы worktree всё равно мог отвестись от чего-то конкретного.
  */
 export async function baseBranchOf(checkoutPath: string): Promise<string> {
-  const { stdout } = await run('git', ['-C', checkoutPath, 'rev-parse', '--abbrev-ref', 'HEAD']);
+  const { stdout } = await run('git', [...NO_FSMONITOR, '-C', checkoutPath, 'rev-parse', '--abbrev-ref', 'HEAD']);
   const branch = stdout.trim();
   if (branch !== 'HEAD') return branch;
-  return (await run('git', ['-C', checkoutPath, 'rev-parse', 'HEAD'])).stdout.trim();
+  return (await run('git', [...NO_FSMONITOR, '-C', checkoutPath, 'rev-parse', 'HEAD'])).stdout.trim();
 }
 
 /**
@@ -83,6 +91,7 @@ export async function createWorktree(projectPath: string, info: WorktreeInfo): P
   await assertRevisions(projectPath, [info.base, info.branch]);
   await mkdir(path.dirname(info.path), { recursive: true });
   await run('git', [
+    ...NO_FSMONITOR,
     '-C',
     projectPath,
     'worktree',
@@ -255,7 +264,11 @@ export function parseMergeTree(code: number, stdout: string): MergeCheck | null 
   return null;
 }
 
-export type GitStateReason = 'git-missing' | 'not-a-repo' | 'no-commits';
+/**
+ * `worktree-corrupt` — файл `.git` рабочей копии не ведёт в зарегистрированный worktree
+ * проекта (`checkoutGitDir`): git в ней не запускается (раунд fix-final-a, C1).
+ */
+export type GitStateReason = 'git-missing' | 'not-a-repo' | 'no-commits' | 'worktree-corrupt';
 
 /** Отказ функций ниже, когда причина — состояние git папки; сообщение — для консоли. */
 export class GitStateError extends Error {
@@ -309,7 +322,7 @@ function supportsMergeTree(): Promise<boolean> {
   const key = process.env.PATH ?? '';
   let probe = mergeTreeSupport.get(key);
   if (probe === undefined) {
-    probe = run('git', ['--version']).then(({ stdout }) => {
+    probe = run('git', [...NO_FSMONITOR, '--version']).then(({ stdout }) => {
       const match = /(\d+)\.(\d+)/.exec(stdout);
       if (match === null) throw new Error(`git --version: ${stdout.trim()}`);
       const [major, minor] = [Number(match[1]), Number(match[2])];
@@ -333,13 +346,13 @@ function isSpawnMissing(error: unknown): boolean {
 export async function gitStateReason(projectPath: string, error: unknown): Promise<GitStateReason | null> {
   if (isSpawnMissing(error)) return 'git-missing';
   try {
-    const { stdout } = await run('git', ['-C', projectPath, 'rev-parse', '--is-inside-work-tree']);
+    const { stdout } = await run('git', [...NO_FSMONITOR, '-C', projectPath, 'rev-parse', '--is-inside-work-tree']);
     if (stdout.trim() !== 'true') return 'not-a-repo';
   } catch (probeError) {
     return isSpawnMissing(probeError) ? 'git-missing' : 'not-a-repo';
   }
   try {
-    await run('git', ['-C', projectPath, 'rev-parse', '--verify', '-q', 'HEAD']);
+    await run('git', [...NO_FSMONITOR, '-C', projectPath, 'rev-parse', '--verify', '-q', 'HEAD']);
   } catch (probeError) {
     return isSpawnMissing(probeError) ? 'git-missing' : 'no-commits';
   }
@@ -351,7 +364,9 @@ async function withGitState<T>(projectPath: string, action: () => Promise<T>): P
   try {
     return await action();
   } catch (error) {
-    if (error instanceof NothingToCommitError || error instanceof InvalidRevisionError) throw error;
+    if (error instanceof NothingToCommitError || error instanceof InvalidRevisionError || error instanceof GitStateError) {
+      throw error;
+    }
     const reason = await gitStateReason(projectPath, error);
     if (reason === null) throw error;
     const message = error instanceof Error ? error.message : String(error);
@@ -369,13 +384,77 @@ async function withGitState<T>(projectPath: string, action: () => Promise<T>): P
  */
 const READ_FLAGS = ['--no-optional-locks', '-c', 'diff.autoRefreshIndex=false'];
 
-async function readGit(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await run('git', [...READ_FLAGS, '-C', cwd, ...args], { maxBuffer: MAX_BUFFER });
+/**
+ * Дифф чтения показывает сами байты: внешний дифф (`diff.external`, `diff.<драйвер>.command`)
+ * и textconv — программы из конфигурации, а драйвер к файлу привязывает `.gitattributes`
+ * агента (C1).
+ */
+const DIFF_READ = ['--no-ext-diff', '--no-textconv'];
+
+/**
+ * `status` и `diff` против рабочего дерева заходят в подмодули дочерним `git status`, а
+ * файл `.git` подмодуля лежит в рабочей копии агента — подложенный gitdir исполнил бы свои
+ * фильтры (проба на git 2.53). `dirty` оставляет только сдвиг коммита подмодуля — его git
+ * читает сам, без дочернего процесса.
+ */
+const NO_SUBMODULE_WALK = '--ignore-submodules=dirty';
+
+/**
+ * Где читает git: `cwd` и глобальные флаги после `-C` — закреплённый gitdir рабочей копии
+ * (`pinnedCheckout`) и выключенные фильтры (`filterOverrides`).
+ */
+interface GitAt {
+  cwd: string;
+  flags: string[];
+}
+
+/**
+ * Clean- и process-фильтры исполняют `status` (файл со сдвинутым mtime), `diff` против
+ * рабочего дерева и `diff --no-index`, а к файлу их привязывает `.gitattributes` — его
+ * агент кладёт в свою копию (C1). Ключом без имени драйвера фильтр не выключить, поэтому
+ * имена берутся из той же конфигурации, что увидит чтение, и каждому ставится пустая
+ * команда; `required=false` — иначе пустой обязательный фильтр был бы отказом. Чтение без
+ * фильтра сравнивает сырые байты: у LFS файл со сдвинутым mtime покажется изменённым.
+ */
+async function filterOverrides(cwd: string, pin: string[]): Promise<string[]> {
+  const { code, stdout } = await exitCode([
+    '-C',
+    cwd,
+    ...pin,
+    'config',
+    '--null',
+    '--name-only',
+    '--get-regexp',
+    '^filter\\..+\\.(clean|process)$',
+  ]);
+  // Код 1 — таких ключей нет.
+  if (code === 1) return [];
+  if (code !== 0) throw new Error(`git config --get-regexp filter: код ${code}`);
+  const drivers = new Set(zFields(stdout).map((key) => key.slice('filter.'.length, key.lastIndexOf('.'))));
+  return [...drivers].flatMap((driver) => [
+    '-c',
+    `filter.${driver}.clean=`,
+    '-c',
+    `filter.${driver}.process=`,
+    '-c',
+    `filter.${driver}.required=false`,
+  ]);
+}
+
+/** Чтения одного каталога — с флагами, собранными один раз на операцию. */
+async function readerAt(cwd: string, pin: string[] = []): Promise<GitAt> {
+  return { cwd, flags: [...pin, ...(await filterOverrides(cwd, pin))] };
+}
+
+async function readGit(at: GitAt, args: string[]): Promise<string> {
+  const { stdout } = await run('git', [...NO_FSMONITOR, ...READ_FLAGS, '-C', at.cwd, ...at.flags, ...args], {
+    maxBuffer: MAX_BUFFER,
+  });
   return stdout;
 }
 
-async function readGitBuffer(cwd: string, args: string[]): Promise<Buffer> {
-  const { stdout } = await run('git', [...READ_FLAGS, '-C', cwd, ...args], {
+async function readGitBuffer(at: GitAt, args: string[]): Promise<Buffer> {
+  const { stdout } = await run('git', [...NO_FSMONITOR, ...READ_FLAGS, '-C', at.cwd, ...at.flags, ...args], {
     encoding: 'buffer',
     maxBuffer: MAX_BUFFER,
   });
@@ -383,13 +462,75 @@ async function readGitBuffer(cwd: string, args: string[]): Promise<Buffer> {
 }
 
 /** Код выхода и stdout без броска: у `--no-index` и `merge-tree` код 1 — ответ, а не сбой. */
-async function gitWithCode(cwd: string, args: string[]): Promise<{ code: number; stdout: string }> {
-  return exitCode([...READ_FLAGS, '-C', cwd, ...args]);
+async function gitWithCode(at: GitAt, args: string[]): Promise<{ code: number; stdout: string }> {
+  return exitCode([...READ_FLAGS, '-C', at.cwd, ...at.flags, ...args]);
+}
+
+/** Общий каталог git проекта (`.git` основной копии) по realpath — опора проверки worktree. */
+async function projectCommonDir(projectPath: string): Promise<string> {
+  const { stdout } = await run('git', [...NO_FSMONITOR, '-C', projectPath, 'rev-parse', '--git-common-dir']);
+  // Относительный ответ git — от cwd, то есть от `-C`.
+  return realpath(path.resolve(projectPath, stdout.trim()));
+}
+
+/**
+ * gitdir рабочей копии `checkoutPath`, если это настоящая копия репозитория с общим
+ * каталогом `commonDir` (realpath): у основной `.git` — каталог, и он и есть `commonDir`;
+ * у worktree `.git` — обычный файл `gitdir: <commonDir>/worktrees/<имя>`, а файл `gitdir`
+ * там ведёт обратно в эту же копию (так `git worktree` связывает их сам). Иначе — `null`:
+ * `.git` подменён (C1, спека 10.8 — агент кладёт в worktree что угодно, в том числе файл
+ * `.git`), и его конфигурация исполнила бы свои программы. Разбор без git: запуск git для
+ * проверки уже читал бы подложенную конфигурацию. Каталог `<commonDir>/worktrees` — в
+ * `.git` проекта, вне копии агента.
+ */
+export async function checkoutGitDir(commonDir: string, checkoutPath: string): Promise<string | null> {
+  try {
+    const dotGit = path.join(checkoutPath, '.git');
+    const kind = await lstat(dotGit);
+    if (kind.isDirectory()) {
+      const gitDir = await realpath(dotGit);
+      return gitDir === commonDir ? gitDir : null;
+    }
+    if (!kind.isFile()) return null;
+    const match = /^gitdir: ([^\r\n]+)\r?\n?$/.exec(await readFile(dotGit, 'utf8'));
+    if (match?.[1] === undefined) return null;
+    const gitDir = await realpath(path.resolve(checkoutPath, match[1]));
+    if (path.dirname(gitDir) !== path.join(commonDir, 'worktrees')) return null;
+    const back = (await readFile(path.join(gitDir, 'gitdir'), 'utf8')).trim();
+    const registered = await realpath(path.dirname(path.resolve(gitDir, back)));
+    return registered === (await realpath(checkoutPath)) ? gitDir : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Рабочая копия проекта для git: путь (от `projectPath`, как у `-C` проекта) и флаги —
+ * gitdir проверен `checkoutGitDir` и закреплён `--git-dir`/`--work-tree`: файл `.git`,
+ * подменённый агентом после проверки, git уже не читает. Не прошла проверку —
+ * `GitStateError('worktree-corrupt')`, git в ней не запускается. Проверка — на каждую
+ * операцию, без кэша: агент меняет `.git` когда угодно. Нет самого каталога — ошибка
+ * `stat` как есть: это не подмена.
+ */
+async function pinnedCheckout(projectPath: string, checkoutPath: string): Promise<{ cwd: string; pin: string[] }> {
+  const cwd = path.resolve(projectPath, checkoutPath);
+  await stat(cwd);
+  const gitDir = await checkoutGitDir(await projectCommonDir(projectPath), cwd);
+  if (gitDir === null) {
+    throw new GitStateError('worktree-corrupt', `${cwd}: .git не ведёт в worktree проекта ${projectPath}`);
+  }
+  return { cwd, pin: ['--git-dir', gitDir, '--work-tree', cwd] };
+}
+
+/** Чтения рабочей копии проекта — после проверки её `.git`. */
+async function checkoutReader(projectPath: string, checkoutPath: string): Promise<GitAt> {
+  const { cwd, pin } = await pinnedCheckout(projectPath, checkoutPath);
+  return readerAt(cwd, pin);
 }
 
 async function exitCode(args: string[]): Promise<{ code: number; stdout: string }> {
   try {
-    return { code: 0, stdout: (await run('git', args, { maxBuffer: MAX_BUFFER })).stdout };
+    return { code: 0, stdout: (await run('git', [...NO_FSMONITOR, ...args], { maxBuffer: MAX_BUFFER })).stdout };
   } catch (error) {
     const failed = error as { code?: unknown; stdout?: unknown };
     if (typeof failed.code === 'number' && typeof failed.stdout === 'string') {
@@ -400,16 +541,25 @@ async function exitCode(args: string[]): Promise<{ code: number; stdout: string 
 }
 
 /** Неотслеживаемые файлы от `cwd`; `pathspec` — у `changes.*` без `.harnas/`. */
-async function untrackedFiles(cwd: string, pathspec: string[] = []): Promise<string[]> {
-  return zFields(await readGitBuffer(cwd, ['ls-files', '--others', '--exclude-standard', '-z', ...pathspec]));
+async function untrackedFiles(at: GitAt, pathspec: string[] = []): Promise<string[]> {
+  return zFields(await readGitBuffer(at, ['ls-files', '--others', '--exclude-standard', '-z', ...pathspec]));
 }
 
 /**
  * Числа неотслеживаемого файла — `git diff --no-index` от пустоты, а не
  * `git add -N`: чтение индекс не трогает. Код 1 — «отличаются», не сбой.
  */
-async function untrackedCounts(cwd: string, filePath: string): Promise<DiffFile> {
-  const { code, stdout } = await gitWithCode(cwd, ['diff', '--no-index', '--numstat', '-z', '--', '/dev/null', filePath]);
+async function untrackedCounts(at: GitAt, filePath: string): Promise<DiffFile> {
+  const { code, stdout } = await gitWithCode(at, [
+    'diff',
+    ...DIFF_READ,
+    '--no-index',
+    '--numstat',
+    '-z',
+    '--',
+    '/dev/null',
+    filePath,
+  ]);
   if (code !== 0 && code !== 1) throw new Error(`git diff --no-index ${filePath}: код ${code}`);
   const entry = parseNumstat(Buffer.from(stdout, 'utf8'))[0];
   // Пустой новый файл: отличий от /dev/null нет, записи нет.
@@ -426,17 +576,17 @@ async function untrackedCounts(cwd: string, filePath: string): Promise<DiffFile>
  * Файлы сравнения `against` с рабочим деревом `cwd` плюс неотслеживаемые:
  * список и числа — по одной паре сторон.
  */
-async function workingTreeFiles(cwd: string, diffArgs: string[], untracked: string[]): Promise<DiffFile[]> {
+async function workingTreeFiles(at: GitAt, diffArgs: string[], untracked: string[]): Promise<DiffFile[]> {
   const [status, numstat] = await Promise.all([
-    readGitBuffer(cwd, ['diff', '-M', '--name-status', '-z', ...diffArgs]),
-    readGitBuffer(cwd, ['diff', '-M', '--numstat', '-z', ...diffArgs]),
+    readGitBuffer(at, ['diff', ...DIFF_READ, NO_SUBMODULE_WALK, '-M', '--name-status', '-z', ...diffArgs]),
+    readGitBuffer(at, ['diff', ...DIFF_READ, NO_SUBMODULE_WALK, '-M', '--numstat', '-z', ...diffArgs]),
   ]);
   const counts = parseNumstat(numstat);
   // Без пары в numstat — только сдвинутый stat без правки содержимого (см. READ_FLAGS).
   const counted = new Set(counts.map((entry) => entry.path));
   const changed = parseNameStatusZ(status).filter((entry) => counted.has(entry.path));
   const tracked = joinDiffFiles(changed, counts);
-  const fresh = await mapLimited(untracked, UNTRACKED_CONCURRENCY, (filePath) => untrackedCounts(cwd, filePath));
+  const fresh = await mapLimited(untracked, UNTRACKED_CONCURRENCY, (filePath) => untrackedCounts(at, filePath));
   return [...tracked, ...fresh];
 }
 
@@ -459,7 +609,7 @@ interface WorktreeListEntry {
 
 /** `git worktree list --porcelain`: все рабочие копии одного репозитория, включая основную. */
 async function listWorktrees(projectPath: string): Promise<WorktreeListEntry[]> {
-  const { stdout } = await run('git', ['-C', projectPath, 'worktree', 'list', '--porcelain']);
+  const { stdout } = await run('git', [...NO_FSMONITOR, '-C', projectPath, 'worktree', 'list', '--porcelain']);
   const entries: WorktreeListEntry[] = [];
   let current: WorktreeListEntry | null = null;
   for (const line of stdout.split('\n')) {
@@ -485,8 +635,8 @@ async function listWorktrees(projectPath: string): Promise<WorktreeListEntry[]> 
  * следом, а этого делать нельзя (только чтение). Код выхода 1 у `--no-index` —
  * «файлы отличаются», не сбой; `execFile` иначе принял бы его за ошибку.
  */
-async function untrackedPatch(cwd: string, filePath: string): Promise<string> {
-  const { code, stdout } = await gitWithCode(cwd, ['diff', '--no-index', '--', '/dev/null', filePath]);
+async function untrackedPatch(at: GitAt, filePath: string): Promise<string> {
+  const { code, stdout } = await gitWithCode(at, ['diff', ...DIFF_READ, '--no-index', '--', '/dev/null', filePath]);
   if (code !== 0 && code !== 1) throw new Error(`git diff --no-index ${filePath}: код ${code}`);
   return stdout;
 }
@@ -503,8 +653,8 @@ async function findBaseCheckout(projectPath: string, base: string): Promise<stri
  * проекта-подкаталога `.harnas/` лежит в `<sub>/.harnas`, а `isDirty` смотрит
  * от корня чекаута.
  */
-async function projectPrefix(projectPath: string): Promise<string> {
-  return (await readGit(projectPath, ['rev-parse', '--show-prefix'])).trim();
+async function projectPrefix(project: GitAt): Promise<string> {
+  return (await readGit(project, ['rev-parse', '--show-prefix'])).trim();
 }
 
 /**
@@ -514,8 +664,15 @@ async function projectPrefix(projectPath: string): Promise<string> {
  * всегда и слияние никогда бы не проходило. `prefix` — путь проекта от корня
  * рабочей копии (`projectPrefix`). Синтаксис exclude-пасспеки работает с git 1.9.
  */
-async function isDirty(checkoutPath: string, prefix: string): Promise<boolean> {
-  const stdout = await readGit(checkoutPath, ['status', '--porcelain', '--', '.', `:(exclude)${prefix}.harnas`]);
+async function isDirty(checkout: GitAt, prefix: string): Promise<boolean> {
+  const stdout = await readGit(checkout, [
+    'status',
+    '--porcelain',
+    NO_SUBMODULE_WALK,
+    '--',
+    '.',
+    `:(exclude)${prefix}.harnas`,
+  ]);
   return stdout.trim() !== '';
 }
 
@@ -550,26 +707,29 @@ export async function worktreeDiff(
 ): Promise<WorktreeDiff> {
   return withGitState(projectPath, async () => {
     await assertRevisions(projectPath, [info.base, info.branch]);
+    const worktree = await checkoutReader(projectPath, info.path);
+    const project = await readerAt(projectPath);
     const mergeBase = (
-      await readGit(projectPath, ['merge-base', '--end-of-options', info.base, info.branch])
+      await readGit(project, ['merge-base', '--end-of-options', info.base, info.branch])
     ).trim();
 
     // Список и числа — одной парой сторон: общий предок против рабочего дерева.
-    const untracked = await untrackedFiles(info.path, WORKTREE_PATHSPEC);
-    const files = await workingTreeFiles(info.path, [mergeBase, ...WORKTREE_PATHSPEC], untracked);
+    const untracked = await untrackedFiles(worktree, WORKTREE_PATHSPEC);
+    const files = await workingTreeFiles(worktree, [mergeBase, ...WORKTREE_PATHSPEC], untracked);
 
     const uncommittedPaths = parsePorcelainPaths(
-      await readGitBuffer(info.path, [
+      await readGitBuffer(worktree, [
         'status',
         '--porcelain=v1',
         '-z',
         '--untracked-files=all',
+        NO_SUBMODULE_WALK,
         ...WORKTREE_PATHSPEC,
       ]),
     );
 
     const commits = parseCommits(
-      await readGit(projectPath, [
+      await readGit(project, [
         'log',
         '-n',
         String(MAX_COMMITS),
@@ -581,22 +741,27 @@ export async function worktreeDiff(
 
     const baseCheckout = await findBaseCheckout(projectPath, info.base);
     const baseDirty =
-      baseCheckout === null ? false : await isDirty(baseCheckout, await projectPrefix(projectPath));
+      baseCheckout === null
+        ? false
+        : await isDirty(await checkoutReader(projectPath, baseCheckout), await projectPrefix(project));
 
     let patch = '';
     if (options.patch !== false) {
-      const committedPatch = await readGit(projectPath, [
+      const committedPatch = await readGit(project, [
         'diff',
+        ...DIFF_READ,
         '--end-of-options',
         `${mergeBase}..${info.branch}`,
       ]);
       const uncommittedPatch =
-        uncommittedPaths.length === 0 ? '' : await readGit(info.path, ['diff', 'HEAD', ...WORKTREE_PATHSPEC]);
+        uncommittedPaths.length === 0
+          ? ''
+          : await readGit(worktree, ['diff', ...DIFF_READ, NO_SUBMODULE_WALK, 'HEAD', ...WORKTREE_PATHSPEC]);
       // `git diff HEAD` untracked-файлы не показывает вовсе (их нет в индексе,
       // сравнивать нечего) — их содержимое дифф от пустоты добирает отдельно, файл
       // за файлом, не трогая сам индекс (EXTRA, кусок 4.2).
       const untrackedPatches = await mapLimited(untracked, UNTRACKED_CONCURRENCY, (filePath) =>
-        untrackedPatch(info.path, filePath),
+        untrackedPatch(worktree, filePath),
       );
       patch = `${committedPatch}${uncommittedPatch}${untrackedPatches.join('')}`;
     }
@@ -624,7 +789,7 @@ export async function mergeCheck(projectPath: string, info: WorktreeInfo): Promi
     await assertRevisions(projectPath, [info.base, info.branch]);
     // Старый git — по версии, не по коду 129: тот же код дал бы и флаг вместо ветки.
     if (!(await supportsMergeTree())) return { status: 'unsupported' };
-    const { code, stdout } = await gitWithCode(projectPath, [
+    const { code, stdout } = await gitWithCode(await readerAt(projectPath), [
       'merge-tree',
       '--write-tree',
       '--name-only',
@@ -660,16 +825,25 @@ export async function projectChanges(
   options: { patch?: boolean } = {},
 ): Promise<ProjectChanges> {
   return withGitState(projectPath, async () => {
-    const untracked = await untrackedFiles(projectPath, HARNAS_PATHSPEC);
-    const files = await workingTreeFiles(projectPath, ['--relative', 'HEAD', ...HARNAS_PATHSPEC], untracked);
+    const project = await readerAt(projectPath);
+    const untracked = await untrackedFiles(project, HARNAS_PATHSPEC);
+    const files = await workingTreeFiles(project, ['--relative', 'HEAD', ...HARNAS_PATHSPEC], untracked);
 
-    const head = (await readGit(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+    const head = (await readGit(project, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
 
     let patch = '';
     if (options.patch !== false) {
-      const trackedPatch = await readGit(projectPath, ['diff', '-M', '--relative', 'HEAD', ...HARNAS_PATHSPEC]);
+      const trackedPatch = await readGit(project, [
+        'diff',
+        ...DIFF_READ,
+        NO_SUBMODULE_WALK,
+        '-M',
+        '--relative',
+        'HEAD',
+        ...HARNAS_PATHSPEC,
+      ]);
       const untrackedPatches = await mapLimited(untracked, UNTRACKED_CONCURRENCY, (filePath) =>
-        untrackedPatch(projectPath, filePath),
+        untrackedPatch(project, filePath),
       );
       patch = `${trackedPatch}${untrackedPatches.join('')}`;
     }
@@ -686,27 +860,34 @@ export async function projectChanges(
  */
 export async function commitProject(projectPath: string, message: string): Promise<{ commit: string }> {
   return withGitState(projectPath, async () => {
+    const project = await readerAt(projectPath);
     const added = await exitCode(['-C', projectPath, 'add', '-A', ...HARNAS_PATHSPEC]);
     // Код 1 у `add` — и когда `.harnas/` в .gitignore: исключение в pathspec
     // называет игнорируемый путь, остальное при этом подготовлено. Отличаем
     // пробой `check-ignore`, а не по stderr — у человека git локализован.
     if (added.code !== 0) {
-      const ignored = (await gitWithCode(projectPath, ['check-ignore', '-q', '--', '.harnas'])).code === 0;
+      const ignored = (await gitWithCode(project, ['check-ignore', '-q', '--', '.harnas'])).code === 0;
       if (added.code !== 1 || !ignored) throw new Error(`git add -A: код ${added.code}`);
     }
-    const { code } = await gitWithCode(projectPath, ['diff', '--cached', '--quiet', ...HARNAS_PATHSPEC]);
+    const { code } = await gitWithCode(project, ['diff', ...DIFF_READ, '--cached', '--quiet', ...HARNAS_PATHSPEC]);
     if (code === 0) throw new NothingToCommitError(`в ${projectPath} нечего коммитить`);
     if (code !== 1) throw new Error(`git diff --cached --quiet: код ${code}`);
-    await run('git', ['-C', projectPath, 'commit', '-m', message, ...HARNAS_PATHSPEC]);
-    return { commit: (await readGit(projectPath, ['rev-parse', 'HEAD'])).trim() };
+    await run('git', [...NO_FSMONITOR, '-C', projectPath, 'commit', '-m', message, ...HARNAS_PATHSPEC]);
+    return { commit: (await readGit(project, ['rev-parse', 'HEAD'])).trim() };
   });
 }
 
-/** Коммитит всё незакоммиченное в worktree одной записью — «сохранить прогресс» из окна. */
-export async function commitWorktree(info: WorktreeInfo, message: string): Promise<string> {
-  await run('git', ['-C', info.path, 'add', '-A', ...WORKTREE_PATHSPEC]);
-  await run('git', ['-C', info.path, 'commit', '-m', message]);
-  return (await run('git', ['-C', info.path, 'rev-parse', 'HEAD'])).stdout.trim();
+/**
+ * Коммитит всё незакоммиченное в worktree одной записью — «сохранить прогресс» из окна.
+ * `projectPath` — опора проверки `.git` копии: хуки и `gpg.program` подложенного gitdir
+ * исполнил бы уже сам коммит.
+ */
+export async function commitWorktree(projectPath: string, info: WorktreeInfo, message: string): Promise<string> {
+  const { cwd, pin } = await pinnedCheckout(projectPath, info.path);
+  const inWorktree = [...NO_FSMONITOR, '-C', cwd, ...pin];
+  await run('git', [...inWorktree, 'add', '-A', ...WORKTREE_PATHSPEC]);
+  await run('git', [...inWorktree, 'commit', '-m', message]);
+  return (await run('git', [...inWorktree, 'rev-parse', 'HEAD'])).stdout.trim();
 }
 
 export type MergeResult =
@@ -733,25 +914,29 @@ export async function mergeWorktree(
   const baseCheckout = await findBaseCheckout(projectPath, info.base);
   if (baseCheckout === null) return { ok: false, reason: 'base_not_checked_out', files: [] };
 
-  const prefix = await projectPrefix(projectPath);
-  if (await isDirty(baseCheckout, prefix)) return { ok: false, reason: 'base_dirty', files: [] };
+  // Обе копии — до любого git в них: база бывает веткой родителя, то есть его worktree.
+  const own = await pinnedCheckout(projectPath, info.path);
+  const base = await pinnedCheckout(projectPath, baseCheckout);
+  const prefix = await projectPrefix(await readerAt(projectPath));
+  if (await isDirty(await readerAt(base.cwd, base.pin), prefix)) return { ok: false, reason: 'base_dirty', files: [] };
 
-  if (await isDirty(info.path, prefix)) return { ok: false, reason: 'uncommitted', files: [] };
+  if (await isDirty(await readerAt(own.cwd, own.pin), prefix)) return { ok: false, reason: 'uncommitted', files: [] };
 
+  const inBase = [...NO_FSMONITOR, '-C', base.cwd, ...base.pin];
   try {
-    await run('git', ['-C', baseCheckout, 'merge', '--no-ff', '-m', message, '--end-of-options', info.branch]);
+    await run('git', [...inBase, 'merge', '--no-ff', '-m', message, '--end-of-options', info.branch]);
   } catch {
     // Конфликт: список файлов из индекса, затем откат — база не остаётся
     // наполовину слитой ни при каком исходе (правило куска 4.1).
     // `-z`: без него путь с кириллицей пришёл бы в кавычках с восьмеричными кодами.
     const conflicted = zFields(
-      (await run('git', ['-C', baseCheckout, 'diff', '--name-only', '-z', '--diff-filter=U'])).stdout,
+      (await run('git', [...inBase, 'diff', '--no-ext-diff', '--name-only', '-z', '--diff-filter=U'])).stdout,
     );
-    await run('git', ['-C', baseCheckout, 'merge', '--abort']);
+    await run('git', [...inBase, 'merge', '--abort']);
     return { ok: false, reason: 'conflict', files: conflicted };
   }
 
-  const commit = (await run('git', ['-C', baseCheckout, 'rev-parse', 'HEAD'])).stdout.trim();
+  const commit = (await run('git', [...inBase, 'rev-parse', 'HEAD'])).stdout.trim();
   return { ok: true, commit };
 }
 
@@ -767,9 +952,12 @@ export async function discardWorktree(
   // Ветка из карты — проверка раньше `worktree remove`: иначе каталог уже
   // удалён, а `branch -D` с флагом вместо имени падает на полпути.
   await assertRevisions(projectPath, [info.branch]);
+  // Подменённый `.git` — не отбрасываем: `worktree remove` и так откажет, а проверка
+  // чистоты ниже запустила бы git в копии агента.
+  const own = await pinnedCheckout(projectPath, info.path);
   if (options.force !== true) {
-    const dirty =
-      (await run('git', ['-C', info.path, 'status', '--porcelain'])).stdout.trim() !== '';
+    const worktree = await readerAt(own.cwd, own.pin);
+    const dirty = (await readGit(worktree, ['status', '--porcelain', NO_SUBMODULE_WALK])).trim() !== '';
     if (dirty) {
       throw new DirtyWorktreeError(
         `worktree ${info.path} не отброшен: есть незакоммиченные изменения`,
@@ -782,6 +970,6 @@ export async function discardWorktree(
   // Путь из карты, как и ревизии, может переписать агент: «--» не даёт ему
   // стать опцией `worktree remove`.
   removeArgs.push('--', info.path);
-  await run('git', removeArgs);
-  await run('git', ['-C', projectPath, 'branch', '-D', '--end-of-options', info.branch]);
+  await run('git', [...NO_FSMONITOR, ...removeArgs]);
+  await run('git', [...NO_FSMONITOR, '-C', projectPath, 'branch', '-D', '--end-of-options', info.branch]);
 }

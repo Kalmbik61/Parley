@@ -150,7 +150,7 @@ export function createWorktreesService(
 
     async commit(ref, message) {
       const { worktree } = await requirePresentWorktree(ref);
-      return commitWorktree(worktree, message);
+      return commitWorktree(ref.projectPath, worktree, message);
     },
 
     async merge(ref) {
