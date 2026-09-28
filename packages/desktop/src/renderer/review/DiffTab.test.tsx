@@ -195,6 +195,41 @@ describe('DiffTab: ленивость и предел живых редакто�
   });
 });
 
+describe('DiffTab: свёрнутая секция слота не занимает (раунд 8, пункт 6)', () => {
+  it('30 файлов, 10 свёрнуты; прокрутка обратно к свёрнутым — все 20 слотов у развёрнутых видимых файлов', async () => {
+    const names = Array.from({ length: 30 }, (_, i) => `f${String(i).padStart(2, '0')}.ts`);
+    bridge.setHandler('worktrees.diff', () => diff(names.map((name) => file(name))));
+    for (const name of names) serve(WT, name);
+    renderTab();
+    await flush();
+
+    intersect(names.slice(0, 20));
+    await flush();
+    for (const name of names.slice(0, 10)) fireEvent.click(within(section(name)).getByRole('button', { name: 'Collapse' }));
+    await flush();
+    expect(live()).toHaveLength(10);
+
+    // Вниз: свёрнутые ушли из вида, пришли f20–f29 — живы f10–f29.
+    intersect(names.slice(0, 10), false);
+    intersect(names.slice(20));
+    await flush();
+    const expanded = names.slice(10);
+    for (const name of expanded) expect(liveFor(`${name}\n`)).toBeDefined();
+
+    // Обратно к свёрнутым (все 30 в зоне rootMargin): свёрнутые не вытесняют ни одного развёрнутого.
+    intersect(names.slice(0, 10));
+    await flush();
+    expect(live()).toHaveLength(20);
+    for (const name of expanded) expect(liveFor(`${name}\n`)).toBeDefined();
+
+    // Развернули свёрнутую в зоне — она получает слот как обычно.
+    fireEvent.click(within(section('f00.ts')).getByRole('button', { name: 'Expand' }));
+    await flush();
+    expect(liveFor('f00.ts\n')).toBeDefined();
+    expect(live().length).toBeLessThanOrEqual(20);
+  });
+});
+
 describe('DiffTab: панель (тест 3)', () => {
   it('переключатель колонок зовёт patchUi({ diffView }) и меняет renderSideBySide живых редакторов', async () => {
     bridge.setHandler('worktrees.diff', () => diff([file('a.ts'), file('b.ts')]));

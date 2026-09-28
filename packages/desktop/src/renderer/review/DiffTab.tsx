@@ -195,6 +195,8 @@ function DiffView({ bridge, workKey, tabId, root, files, mode, version, font }: 
   const indexRef = useRef(index);
   indexRef.current = index;
   const ready = status === 'ready';
+  const collapsedRef = useRef(collapsed);
+  collapsedRef.current = collapsed;
 
   const admit = useCallback((path: string) => {
     setLive((current) => {
@@ -230,7 +232,11 @@ function DiffView({ bridge, workKey, tabId, root, files, mode, version, font }: 
           if (path === null) continue;
           if (entry.isIntersecting) {
             visible.current.add(path);
-            admit(path);
+            // Свёрнутая секция слот живого редактора не занимает (раунд 8, пункт 6): иначе вытеснила бы
+            // видимый развёрнутый файл, ничего не показав. Наблюдение не снимаем — видимость нужна
+            // «Expand», чтобы сразу выдать слот; проверка здесь, а не в admit: reveal и Expand зовут
+            // admit раньше, чем collapsedRef увидит разворот.
+            if (!(path in collapsedRef.current)) admit(path);
           } else {
             visible.current.delete(path);
           }
@@ -268,8 +274,6 @@ function DiffView({ bridge, workKey, tabId, root, files, mode, version, font }: 
     elements.current.get(path)?.scrollIntoView({ block: 'start' });
   }, [ready, revealed, index, admit]);
 
-  const collapsedRef = useRef(collapsed);
-  collapsedRef.current = collapsed;
   const onToggle = useCallback(
     (path: string) => {
       if (path in collapsedRef.current) {
