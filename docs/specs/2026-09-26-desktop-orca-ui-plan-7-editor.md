@@ -256,7 +256,7 @@ watch(root: FileRoot, path: string): Promise<string>;       // id подписк
 unwatch(id: string): Promise<void>;
 onChanged(listener: (e: { id: string; path: string; mtimeMs: number | null; deleted: boolean }) => void): () => void;
 onTreeChanged(listener: (e: { rootKey: string; dirs: string[] }) => void): () => void;   // rootKey — shared/work-keys.ts
-lsFiles(root: FileRoot): Promise<string[]>;
+lsFiles(root: FileRoot): Promise<{ paths: string[]; truncated: boolean }>;   // спека 10.7, раунд lane-r2
 grep(root: FileRoot, query: GrepQuery, signalId: string): Promise<GrepResult>;
 cancel(signalId: string): Promise<void>;
 gitShow(root: FileRoot, rev: string, path: string): Promise<TextFile | null>;   // null — файла или ревизии нет
