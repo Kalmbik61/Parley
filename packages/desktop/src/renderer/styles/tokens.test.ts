@@ -312,3 +312,53 @@ describe('tokens.css — контраст текста предупрежден�
     expect(dimmedCss).toMatch(/\[data-dimmed\]\s+:is\([^)]*svg[^)]*\[data-attention-strip\][^)]*\)\s*\{\s*opacity:\s*0\.6;/);
   });
 });
+
+/**
+ * Раунд fix-live, D4: выбранный пункт переключателей (`ui/toggle.tsx`, `data-[state=on]`) отличался
+ * только заливкой `--accent` — в светлой теме #f5f5f5 на белом 1.1:1, в тёмной #404040 на #0a0a0a
+ * 1.9:1. WCAG 1.4.11 требует 3:1 для признака состояния. Признак — край `--toggle-on-edge`
+ * (inset-кольцо 1px) при прежней заливке: не ниже 3:1 к каждому фону, на котором стоят
+ * переключатели, к рамке `outline`-варианта и к самой заливке.
+ */
+describe('tokens.css — край выбранного пункта переключателей (раунд fix-live, D4)', () => {
+  const css = readFileSync(TOKENS_PATH, 'utf8');
+  const toggleSource = readFileSync(path.join(path.dirname(TOKENS_PATH), '..', 'ui', 'toggle.tsx'), 'utf8');
+
+  function readHex(theme: 'light' | 'dark', name: string): Rgb {
+    const rootStart = css.indexOf(':root {');
+    const darkStart = css.indexOf('.dark {');
+    const block = theme === 'light' ? css.slice(rootStart, darkStart) : css.slice(darkStart, css.indexOf('}', darkStart));
+    const match = block.match(new RegExp(`--${name}:\\s*#([0-9a-fA-F]{6}|[0-9a-fA-F]{3});`));
+    if (match === null) throw new Error(`tokens.css: --${name} не найден (${theme})`);
+    const short = match[1] as string;
+    const hex = short.length === 3 ? [...short].map((digit) => digit + digit).join('') : short;
+    return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
+  }
+
+  /** Фоны, на которых стоят переключатели: диалог настроек, панели вкладок, сайдбар; плюс заливка `on`. */
+  const SURFACES = ['background', 'editor-surface', 'card', 'popover', 'sidebar', 'muted', 'accent'] as const;
+
+  for (const theme of ['light', 'dark'] as const) {
+    it(`${theme}: край к фонам и к заливке выбранного пункта — не ниже 3:1`, () => {
+      const edge = readHex(theme, 'toggle-on-edge');
+      for (const surface of SURFACES) {
+        expect(contrastOf(edge, readHex(theme, surface)), `--toggle-on-edge / --${surface}`).toBeGreaterThanOrEqual(3);
+      }
+    });
+  }
+
+  it('светлая: край к рамке outline-варианта (--input) — не ниже 3:1', () => {
+    expect(contrastOf(readHex('light', 'toggle-on-edge'), readHex('light', 'input'))).toBeGreaterThanOrEqual(3);
+  });
+
+  it('тёмная: край к рамке outline-варианта (--input, 15 % белого поверх --popover) — не ниже 3:1', () => {
+    const input = compositeOver([255, 255, 255], 0.15, readHex('dark', 'popover'));
+    expect(contrastOf(readHex('dark', 'toggle-on-edge'), input)).toBeGreaterThanOrEqual(3);
+  });
+
+  it('toggle.tsx: край только у выбранного пункта — в одном месте, варианте toggle; hover края не даёт', () => {
+    expect(toggleSource).toContain('data-[state=on]:ring-toggle-on-edge');
+    expect(toggleSource).toContain('data-[state=on]:ring-inset');
+    expect(toggleSource).not.toMatch(/hover:ring/);
+  });
+});

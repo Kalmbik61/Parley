@@ -7,8 +7,8 @@
 
 import type { WorkEntry } from '@harnas/core';
 import { S } from '../../shared/strings.js';
-import { cn } from '../lib/cn.js';
 import { Button } from '../ui/button.js';
+import { Toggle } from '../ui/toggle.js';
 import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group.js';
 import { SendMenu } from './notes/SendMenu.js';
 
@@ -57,16 +57,11 @@ export function DiffToolbar(props: DiffToolbarProps): JSX.Element {
       <Button type="button" variant="ghost" size="sm" className={ITEM} onClick={props.onExpandAll}>
         {S.changes.expandAll}
       </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        aria-pressed={props.wrap}
-        className={cn(ITEM, props.wrap && 'bg-accent text-accent-foreground')}
-        onClick={() => props.onWrap(!props.wrap)}
-      >
+      {/* Тумблер `ui/toggle` (раунд fix-live, D4): включённый несёт тот же признак, что выбранный
+          пункт группы, — край к фону не ниже 3:1, а не одну заливку 1.1:1. */}
+      <Toggle size="sm" pressed={props.wrap} onPressedChange={props.onWrap} className={ITEM}>
         {S.changes.wrapLines}
-      </Button>
+      </Toggle>
       {props.sendAll === undefined || props.sendAll === null ? null : (
         // Не сжимается: на узкой панели кнопка уезжает на следующую строку целиком, а не обрезается.
         <div className="shrink-0">

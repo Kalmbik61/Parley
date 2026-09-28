@@ -2,6 +2,10 @@
  * Кнопка-переключатель shadcn/ui на `@radix-ui/react-toggle` (спека 4.5).
  * `toggleVariants` переиспользует `ui/toggle-group.tsx` — один набор размеров
  * и цветов на одиночный тумблер и на группу.
+ *
+ * Выбранный пункт — заливка `--accent` и край `--toggle-on-edge` (inset-кольцо 1px): одна заливка
+ * к фону 1.1–1.9:1, ниже 3:1 WCAG 1.4.11 (раунд fix-live, D4). Кольцо inset — чтобы край не
+ * обрезали панели с `overflow` и не сдвигалась раскладка; hover края не даёт.
  */
 
 import * as React from 'react';
@@ -10,7 +14,7 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '../lib/cn.js';
 
 export const toggleVariants = cva(
-  'inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium transition-colors hover:bg-muted hover:text-muted-foreground disabled:pointer-events-none disabled:opacity-50 data-[state=on]:bg-accent data-[state=on]:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0',
+  'inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium transition-colors hover:bg-muted hover:text-muted-foreground disabled:pointer-events-none disabled:opacity-50 data-[state=on]:bg-accent data-[state=on]:text-accent-foreground data-[state=on]:ring-1 data-[state=on]:ring-inset data-[state=on]:ring-toggle-on-edge [&_svg]:pointer-events-none [&_svg]:shrink-0',
   {
     variants: {
       variant: {

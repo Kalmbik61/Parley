@@ -56,6 +56,7 @@
   --color-palette-selected-foreground: var(--palette-selected-foreground);
   --color-palette-selected-muted: var(--palette-selected-muted);
   --color-palette-selected-edge: var(--palette-selected-edge);
+  --color-toggle-on-edge: var(--toggle-on-edge);
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
@@ -216,6 +217,10 @@
   --palette-selected-foreground: #0a0a0a;
   --palette-selected-muted: #595959;
   --palette-selected-edge: #737373;
+  /* Раунд fix-live, D4: край выбранного пункта переключателей (`ui/toggle.tsx`). Заливка --accent
+     к белому 1.1:1 — состояние несёт край: к фонам 4.4–4.7:1, к заливке 4.35:1, к рамке --input
+     3.8:1 (WCAG 1.4.11 ≥ 3:1, tokens.test.ts). Тот же тон, что край выделения палитры. */
+  --toggle-on-edge: #737373;
   --sidebar: #fafafa;
   --sidebar-foreground: #0a0a0a;
   --sidebar-primary: #171717;
@@ -349,6 +354,9 @@
   --palette-selected-muted: #bdbdbd;
   /* Раунд main-r2, п. 3: тёмная без изменений — край того же цвета, что заливка. */
   --palette-selected-edge: #404040;
+  /* Раунд fix-live, D4: тёмная — заливка #404040 к #0a0a0a 1.9:1; край к фонам 5.0–6.5:1, к
+     заливке 3.4:1. */
+  --toggle-on-edge: #949494;
   --sidebar: #171717;
   --sidebar-foreground: #fafafa;
   --sidebar-primary: #1447e6;
