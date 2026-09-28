@@ -232,6 +232,32 @@ describe('бриф: комнаты', () => {
   });
 });
 
+describe('бриф сессии: worktree', () => {
+  it('сессия со своим worktree: бриф называет ветку, базу, путь и отсылает к read_guide', () => {
+    const map = mapWithSessions();
+    const session = map.sessions.find((candidate) => candidate.id === 's-02');
+    if (session === undefined) throw new Error('нет s-02');
+    session.worktree = {
+      path: '/tmp/worktrees/proj-a1b2c3/w-0042-s-02',
+      branch: 'harnas/w-0042/s-02',
+      base: 'master',
+      createdAt: null,
+    };
+
+    const brief = buildBrief(map, 's-02');
+    expect(brief).toContain('Worktree: ветка `harnas/w-0042/s-02` от базы `master`, папка `/tmp/worktrees/proj-a1b2c3/w-0042-s-02`.');
+    expect(brief).toContain('Правила работы в worktree — в `read_guide`, раздел «Окно человека».');
+    // Строка стоит в разделе своей сессии, до контекста и правил.
+    expect(brief.indexOf('Worktree:')).toBeLessThan(brief.indexOf('## Контекст'));
+  });
+
+  it('сессия без worktree: бриф о worktree молчит', () => {
+    const brief = buildBrief(mapWithSessions(), 's-02');
+    expect(brief).not.toContain('Worktree');
+    expect(brief).not.toContain('Окно человека');
+  });
+});
+
 describe('writeBrief', () => {
   let home = '';
   let project = '';
