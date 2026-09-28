@@ -1,6 +1,8 @@
 /**
  * Превью CSV и TSV (кусок 7.5, спека 10.6): таблица по `parseCsv`, первая строка — заголовок,
- * первые 10 000 строк данных, виртуализация строк — в DOM только видимые. Ширина колонок
+ * первые 10 000 строк данных и первые 200 колонок, виртуализация строк — в DOM только видимые.
+ * Предел колонок (fix-7.5): по горизонтали виртуализации нет, и строка из сотен тысяч полей
+ * положила бы столько же узлов на каждую видимую строку. Ширина колонок
  * одинаковая, длинное значение обрезается многоточием и целиком видно в подсказке; широкая
  * таблица прокручивается внутри тела, а не раздвигает окно.
  */
@@ -12,6 +14,8 @@ import { parseCsv } from './csv.js';
 
 /** Предел строк данных (спека 10.6); заголовок сверх него. */
 const MAX_ROWS = 10_000;
+/** Предел видимых колонок (fix-7.5). */
+const MAX_COLUMNS = 200;
 const ROW_HEIGHT = 24;
 const COLUMN_WIDTH = 160;
 
@@ -35,11 +39,11 @@ function Cell({ value, header = false }: { value: string; header?: boolean }): J
 
 export function CsvPreview({ text, delimiter }: CsvPreviewProps): JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const { header, rows, truncated, columns } = useMemo(() => {
-    const parsed = parseCsv(text, delimiter, MAX_ROWS + 1);
+  const { header, rows, truncated, columnsTruncated, columns } = useMemo(() => {
+    const parsed = parseCsv(text, delimiter, MAX_ROWS + 1, MAX_COLUMNS);
     const [first = [], ...rest] = parsed.rows;
     const width = parsed.rows.reduce((max, row) => Math.max(max, row.length), 0);
-    return { header: first, rows: rest, truncated: parsed.truncated, columns: width };
+    return { header: first, rows: rest, truncated: parsed.truncated, columnsTruncated: parsed.columnsTruncated, columns: width };
   }, [text, delimiter]);
 
   const virtualizer = useVirtualizer({
@@ -55,6 +59,9 @@ export function CsvPreview({ text, delimiter }: CsvPreviewProps): JSX.Element {
     <div data-testid="csv-preview" className="flex h-full min-h-0 min-w-0 flex-col text-xs">
       {truncated ? (
         <div className="shrink-0 truncate border-b border-border px-3 py-1 text-muted-foreground">{S.files.rowsTruncated}</div>
+      ) : null}
+      {columnsTruncated ? (
+        <div className="shrink-0 truncate border-b border-border px-3 py-1 text-muted-foreground">{S.files.columnsTruncated}</div>
       ) : null}
       <div ref={scrollRef} role="table" className="min-h-0 flex-1 overflow-auto">
         <div role="row" className="sticky top-0 z-10 flex border-b border-border bg-background" style={{ width }}>

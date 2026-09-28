@@ -74,6 +74,12 @@ describe('MonacoEditor', () => {
     expect(editor.position).toEqual({ lineNumber: 3, column: 7 });
   });
 
+  it('reveal показывает саму колонку, а не начало строки: совпадение глубоко в длинной строке видно (раунд fix-7.4, п. 2)', async () => {
+    render(<MonacoEditor {...props({ reveal: { line: 1, col: 2_881_005 } })} />);
+    const editor = await mounted();
+    await waitFor(() => expect(editor.revealed).toEqual({ lineNumber: 1, column: 2_881_005 }));
+  });
+
   it('новый текст с диска — в модель, курсор прежний', async () => {
     const { rerender } = render(<MonacoEditor {...props({ reveal: { line: 2, col: 2 } })} />);
     const editor = await mounted();

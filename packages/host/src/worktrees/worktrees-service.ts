@@ -30,7 +30,8 @@ import {
   type WorktreeInfo,
   type WorkSession,
 } from '@harnas/core';
-import type { SessionRef } from '@harnas/protocol';
+import { HOST_ERROR_REASONS } from '@harnas/protocol';
+import type { HostErrorReason, SessionRef } from '@harnas/protocol';
 import { HostError } from '../errors.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 
@@ -61,8 +62,9 @@ export interface WorktreesService {
 export function gitFailure(error: unknown): HostError {
   if (error instanceof HostError) return error;
   if (error instanceof GitStateError) {
-    const code = error.reason === 'git-missing' ? 'internal' : 'bad_request';
-    return new HostError(code, error.message, { reason: error.reason });
+    const code = error.reason === HOST_ERROR_REASONS.gitMissing ? 'internal' : 'bad_request';
+    // satisfies — причина core обязана быть в общем списке протокола: новая причина git без него не соберётся.
+    return new HostError(code, error.message, { reason: error.reason satisfies HostErrorReason });
   }
   if (error instanceof NothingToCommitError) return new HostError('conflict', 'нет изменений для коммита');
   if (error instanceof InvalidRevisionError) return new HostError('bad_request', error.message);
@@ -120,7 +122,7 @@ async function requirePresentWorktree(
     );
     if (!present) {
       throw new HostError('bad_request', `worktree сессии ${ref.sessionId} отсутствует: ${found.worktree.path}`, {
-        reason: 'worktree-missing',
+        reason: HOST_ERROR_REASONS.worktreeMissing,
       });
     }
   }

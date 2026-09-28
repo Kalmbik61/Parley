@@ -64,6 +64,26 @@ export function resolveMarkdownLink(href: string, filePath: string): MarkdownLin
   return parts.length === 0 ? null : { kind: 'file', path: parts.join('/') };
 }
 
+/**
+ * `urlTransform` превью (fix-7.5): свой вместо штатного, но такой же запирающий — пропускает
+ * `http(s):`, относительные пути и `#якоря`, прочее (`javascript:`, `data:`, `file:`, `vbscript:`,
+ * `mailto:`, `//хост`) — пустая строка. Так опасный адрес не доходит даже до своих `a`/`img`, и
+ * их будущая правка (скажем, `href` для «открыть в новой вкладке») не откроет дорогу XSS.
+ * Табуляции, переводы строк и управляющие символы по краям браузер выбрасывает из адреса сам
+ * (`java\tscript:`), поэтому схема проверяется уже без них.
+ */
+export function safeUrlTransform(url: string): string {
+  // eslint-disable-next-line no-control-regex -- управляющие символы и есть то, что вычищается
+  const bare = url.replace(/[\t\n\r]/g, '').replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, '');
+  // `//хост` и `\\хост` браузер читает как адрес другого хоста.
+  if (/^[/\\]{2}/.test(bare)) return '';
+  const colon = bare.indexOf(':');
+  const end = bare.search(/[/?#]/);
+  // Двоеточие до первого `/`, `?`, `#` — это схема; двоеточие дальше — часть пути (`a/b:c.md`).
+  if (colon === -1 || (end !== -1 && end < colon)) return url;
+  return /^https?$/i.test(bare.slice(0, colon)) ? url : '';
+}
+
 /** id заголовка в духе GitHub: строчные, без знаков, пробелы — дефисы. Кириллица остаётся. */
 function slug(text: string): string {
   return text
@@ -125,7 +145,7 @@ export function MarkdownPreview({ bridge, root, filePath, text, onOpenFile }: Ma
     const follow = (href: string | undefined): void => {
       const link = resolveMarkdownLink(href ?? '', filePath);
       if (link === null) return;
-      if (link.kind === 'external') openPreviewUrl(bridge, link.url);
+      if (link.kind === 'external') openPreviewUrl(link.url);
       else if (link.kind === 'file') openFileRef.current(link.path);
       else {
         const target = [...(containerRef.current?.querySelectorAll<HTMLElement>('[id]') ?? [])].find((el) => el.id === link.id);
@@ -190,8 +210,8 @@ export function MarkdownPreview({ bridge, root, filePath, text, onOpenFile }: Ma
         '[&_hr]:my-4 [&_hr]:border-border',
       ].join(' ')}
     >
-      {/* Адреса как есть: безопасность решает `resolveMarkdownLink`, а не чистка react-markdown. */}
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={(url) => url}>
+      {/* Штатная чистка react-markdown пропустила бы `mailto:`, `irc:`, `xmpp:`; своя — только http(s), пути и якоря. */}
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={safeUrlTransform}>
         {text}
       </ReactMarkdown>
     </div>

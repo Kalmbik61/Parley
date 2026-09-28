@@ -26,8 +26,22 @@ export const HIT_TEXT_LIMIT = 1000;
 /** NUL в первых 8 КБ — двоичный, как `-I` у git. */
 const BINARY_PROBE_BYTES = 8192;
 
+/**
+ * Строка `git grep` до подсветки: `text` — окно до 64 КБ вокруг совпадения, `at` — начало
+ * совпадения в нём (UTF-16), найденное git по `--column`. По `at` окно показа центрируется, даже
+ * если `RegExp` JS совпадения не нашёл (диалекты разошлись).
+ */
+export interface RawGrepHit extends GrepHit {
+  at: number;
+}
+
+export interface RawGrepFile {
+  path: string;
+  hits: RawGrepHit[];
+}
+
 export type GrepJob =
-  | { kind: 'ranges'; query: GrepQuery; files: GrepResult['files'] }
+  | { kind: 'ranges'; query: GrepQuery; files: RawGrepFile[] }
   | { kind: 'walk'; query: GrepQuery; rootPath: string; paths: string[] };
 
 export type GrepWorkerMessage =
@@ -75,12 +89,13 @@ const isLow = (code: number): boolean => code >= 0xdc00 && code <= 0xdfff;
 
 /**
  * Окно строки не длиннее HIT_TEXT_LIMIT вокруг первого совпадения; ranges — от начала окна, у
- * края обрезаны. Совпадения нет (ERE git и RegExp JS разошлись, подсветка не успела) — начало
- * строки. Суррогатная пара на краю окна не режется: край сдвигается внутрь.
+ * края обрезаны. `at` — начало совпадения по git: окно — вокруг первого совпадения не раньше него,
+ * а без такого (регулярки git и JS разошлись, подсветка не успела) — вокруг самого `at`. Без `at` и
+ * совпадений — начало строки. Суррогатная пара на краю окна не режется: край сдвигается внутрь.
  */
-export function clipHit(line: string, ranges: [number, number][]): { text: string; ranges: [number, number][] } {
+export function clipHit(line: string, ranges: [number, number][], at?: number): { text: string; ranges: [number, number][] } {
   if (line.length <= HIT_TEXT_LIMIT) return { text: line, ranges };
-  const first = ranges[0];
+  const first: [number, number] | undefined = at === undefined ? ranges[0] : (ranges.find(([from]) => from >= at) ?? [at, at]);
   let start = 0;
   if (first !== undefined) {
     const [from, to] = first;
@@ -145,7 +160,7 @@ export function runJob(job: GrepJob, post: (message: GrepWorkerMessage) => void)
         type: 'file',
         file: {
           path: file.path,
-          hits: file.hits.map((hit) => ({ ...hit, ...clipHit(hit.text, re === null ? [] : rangesOf(re, hit.text)) })),
+          hits: file.hits.map((hit) => ({ line: hit.line, column: hit.column, ...clipHit(hit.text, re === null ? [] : rangesOf(re, hit.text), hit.at) })),
         },
       });
     }
@@ -174,7 +189,8 @@ export function runJob(job: GrepJob, post: (message: GrepWorkerMessage) => void)
         truncated = true;
         break;
       }
-      hits.push({ line: i + 1, ...clipHit(line, ranges) });
+      // Строка здесь целая: колонка — начало первого совпадения в ней.
+      hits.push({ line: i + 1, column: (ranges[0]?.[0] ?? 0) + 1, ...clipHit(line, ranges) });
       hitCount += 1;
     }
     if (hits.length > 0) {

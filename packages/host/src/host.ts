@@ -8,10 +8,12 @@ import type { HostContext } from './context.js';
 import { createHostServer } from './server.js';
 import { HostError } from './errors.js';
 import { createLog } from './log.js';
+import type { Log } from './log.js';
 import { watchIdle } from './idle.js';
 import { hostPaths, MAX_SOCKET_PATH_BYTES } from './paths.js';
 import type { HostPaths } from './paths.js';
-import { createHostHandlers, WORKS_UNREADABLE } from './methods/index.js';
+import { HOST_ERROR_REASONS } from '@harnas/protocol';
+import { createHostHandlers } from './methods/index.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
 import { createPtyManager } from './pty/pty-manager.js';
@@ -76,7 +78,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   //    пропускала медленный старт первого хоста (сокета ещё нет), и второй сносил его файлы.
   //    Замок живого pid — отказ без удалений; сокет — дополнительная проверка (хост без замка).
   //    Осколки упавшего (сокет, токен) подчищаются только под своим замком.
-  if (!(await acquirePidLock(paths.pid))) {
+  // Журнал заводится до замка: отказ захвата с потерей замка соседа пишет туда причину (fix-lane-post).
+  const log = createLog(paths.log);
+  if (!(await acquirePidLock(paths.pid, log))) {
     restoreHarnasHome(previousHarnasHome);
     throw new HostAlreadyRunning();
   }
@@ -93,7 +97,6 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   await writeFile(paths.token, token, { mode: 0o600 });
   await chmod(paths.token, 0o600);
 
-  const log = createLog(paths.log);
   const hostVersion = options.version ?? '0.0.0';
   const idleMs = options.idleMs ?? DEFAULT_IDLE_MS;
   const helloTimeoutMs = options.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
@@ -240,7 +243,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     await worksService.stop();
     failWorksReady(
       new HostError('internal', `работы не прочитаны на старте хоста: ${worksFailure}`, {
-        reason: WORKS_UNREADABLE,
+        reason: HOST_ERROR_REASONS.worksUnreadable,
       }),
     );
   }
@@ -320,9 +323,11 @@ async function socketIsAlive(socketPath: string): Promise<boolean> {
  * Занят живым держателем — отказ, ничего не удаляется (что считается живым — `isStaleLock`).
  * Осколок переименовывается в свой файл, и если в нём оказался не тот текст, что проверяли
  * (соседний старт успел снять осколок и взять замок), замок возвращается на место — чужой
- * живой замок не удаляется.
+ * живой замок не удаляется. Не вернулся (замок успел занять третий претендент) — отказ с
+ * причиной в журнале, а унесённая копия замка соседа остаётся на диске: стирать единственный след
+ * чужого живого замка нельзя (fix-lane-post, п. 1).
  */
-async function acquirePidLock(lockPath: string): Promise<boolean> {
+async function acquirePidLock(lockPath: string, log: Log): Promise<boolean> {
   const own = String(process.pid);
   const temp = `${lockPath}.${own}.${randomBytes(4).toString('hex')}`;
   await writeFile(temp, `${own}\n${(await processStartedAt(process.pid)) ?? ''}\n`, { mode: 0o600 });
@@ -348,8 +353,18 @@ async function acquirePidLock(lockPath: string): Promise<boolean> {
       }
       const moved = await readLock(stale);
       if (moved !== null && moved.text !== held.text) {
-        // Унесли живой замок соседа — вернуть; занят уже новым — сосед всё равно не один.
-        await link(stale, lockPath).catch(() => undefined);
+        // Унесли живой замок соседа — вернуть.
+        try {
+          await link(stale, lockPath);
+        } catch (error) {
+          log.error('замок соседа не возвращён: старт отказан', {
+            lock: lockPath,
+            stale,
+            neighbour: moved.text,
+            code: (error as NodeJS.ErrnoException).code ?? String(error),
+          });
+          return false;
+        }
         await rm(stale, { force: true });
         return false;
       }

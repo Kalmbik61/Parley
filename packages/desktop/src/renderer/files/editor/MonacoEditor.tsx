@@ -120,7 +120,9 @@ export function MonacoEditor(props: MonacoEditorProps): JSX.Element {
   useEffect(() => {
     if (editor === null || reveal === null) return;
     editor.setPosition({ lineNumber: reveal.line, column: reveal.col });
-    editor.revealLineInCenter(reveal.line);
+    // Позиция, а не строка (раунд fix-7.4, п. 2): совпадение глубоко в длинной (переносимой) строке
+    // иначе оставалось бы за краем — видно было бы только начало строки.
+    editor.revealPositionInCenter({ lineNumber: reveal.line, column: reveal.col });
     editor.focus();
     onRevealed();
   }, [editor, reveal, onRevealed]);

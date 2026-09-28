@@ -1,6 +1,6 @@
 /**
  * Стор вкладки «Файлы» правого сайдбара (кусок 7.2, спека 10.1): выбор корня человеком и
- * раскрытые папки; режим дерева или поиска (7.4). Содержимое папок здесь не хранится: его держит само
+ * раскрытые папки; режим дерева или поиска (7.4) — всё по работе или корню. Содержимое папок здесь не хранится: его держит само
  * дерево (`files/Tree.tsx`) — оно живёт, пока панель открыта, и перечитывает папки по событиям
  * слежения.
  *
@@ -45,16 +45,19 @@ export interface FilesState {
   setRoot(workKey: string, spec: FileRootSpec): void;
   toggleDir(rootKey: string, dir: string): void;
 
-  /** Что показывает вкладка «Файлы»: дерево или поиск в файлах (7.4). */
-  mode: 'tree' | 'search';
   /**
-   * Просьба ⌘⇧F дать фокус полю поиска. Флаг, а не вызов: панель поиска могла ещё не
-   * смонтироваться — сайдбар открывается тем же действием; её забирает `SearchPanel`.
+   * Что показывает вкладка «Файлы» по `workKey`: дерево или поиск в файлах (7.4). Нет записи —
+   * дерево. На работу, как корень (раунд fix-7.4, п. 1): поиск одной работы не тянется в другую.
    */
-  focusSearch: boolean;
-  /** ⌘⇧F: режим поиска с фокусом в поле. Сайдбар открывает ActionContext.ui.showRightTab('files'). */
-  openSearch(): void;
-  showTree(): void;
+  modeByWork: Record<string, 'tree' | 'search'>;
+  /**
+   * `workKey`, чьё поле поиска просит фокус ⌘⇧F. Просьба, а не вызов: панель поиска могла ещё
+   * не смонтироваться — сайдбар открывается тем же действием; её забирает `SearchPanel` своей работы.
+   */
+  focusSearch: string | null;
+  /** ⌘⇧F: режим поиска работы с фокусом в поле. Сайдбар открывает ActionContext.ui.showRightTab('files'). */
+  openSearch(workKey: string): void;
+  showTree(workKey: string): void;
 
   /** Буферы по `bufferKey` (7.3a). */
   buffers: Record<string, FileBuffer>;
@@ -106,10 +109,14 @@ export const useFilesStore = create<FilesState>((set, get) => {
         return { expanded: { ...state.expanded, [rootKey]: next } };
       }),
 
-    mode: 'tree',
-    focusSearch: false,
-    openSearch: () => set({ mode: 'search', focusSearch: true }),
-    showTree: () => set({ mode: 'tree', focusSearch: false }),
+    modeByWork: {},
+    focusSearch: null,
+    openSearch: (workKey) => set((state) => ({ modeByWork: { ...state.modeByWork, [workKey]: 'search' }, focusSearch: workKey })),
+    showTree: (workKey) =>
+      set((state) => ({
+        modeByWork: { ...state.modeByWork, [workKey]: 'tree' },
+        focusSearch: state.focusSearch === workKey ? null : state.focusSearch,
+      })),
 
     buffers: {},
     reveals: {},

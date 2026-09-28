@@ -272,3 +272,30 @@ describe('клик по файлу дерева (тест 6)', () => {
     expect(split.activeGroupId).toBe(groups(split)[1]?.id);
   });
 });
+
+// Раунд fix-7.4, п. 1 (ревью 7.4-A, Important 1): режим «Файлов» (дерево или поиск) — на
+// работу, как корень и раскрытые папки: ⌘⇧F одной работы не тянет поиск в другую.
+describe('режим «Файлов» на работу (раунд fix-7.4, п. 1)', () => {
+  beforeEach(() => useFilesStore.setState({ modeByWork: {}, focusSearch: null }));
+
+  it('⌘⇧F в работе A → работа B — дерево; назад в A — снова поиск', async () => {
+    const other = makeWork('w-02', { projectPath: '/tmp/proj', sessions: [makeSession('s-05', 'five')] });
+    const keyB = '/tmp/proj w-02';
+    bridge.setHandler('files.list', () => [dirEntry('a.ts')]);
+    await renderShell([ENTRY, other]);
+
+    act(() => press('f', true));
+    expect(await screen.findByPlaceholderText('Search in files')).toBeTruthy();
+
+    act(() => useLayoutStore.getState().setActiveWork(keyB));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyB]).toBe(true));
+    await flush();
+    expect(screen.queryByPlaceholderText('Search in files')).toBeNull();
+    expect(screen.getByLabelText('Find in files').getAttribute('aria-pressed')).toBe('false');
+
+    act(() => useLayoutStore.getState().setActiveWork(KEY));
+    await flush();
+    expect(await screen.findByPlaceholderText('Search in files')).toBeTruthy();
+    expect(screen.getByLabelText('Find in files').getAttribute('aria-pressed')).toBe('true');
+  });
+});

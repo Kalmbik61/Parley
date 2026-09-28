@@ -70,6 +70,11 @@ export interface GrepQuery {
 /** Совпадение поиска: номер строки с 1, текст строки и `[начало, конец)` совпадений в кодовых единицах. */
 export interface GrepHit {
   line: number;
+  /**
+   * Колонка первого совпадения в полной строке, с 1, в кодовых единицах UTF-16 — как у курсора
+   * Monaco (раунд fix-7.4, п. 2): `text` — лишь окно строки, по нему колонку не восстановить.
+   */
+  column: number;
   text: string;
   ranges: [number, number][];
 }
@@ -87,6 +92,11 @@ export interface FileList {
 export interface GrepResult {
   files: Array<{ path: string; hits: GrepHit[] }>;
   truncated: boolean;
+  /**
+   * Регулярка искалась как POSIX ERE (`git grep -E`): у git этой машины нет PCRE, и `\d`, `\w`,
+   * `\s` не работают. Панель показывает подсказку (раунд fix-7.4, п. 3). Иначе поля нет.
+   */
+  posixRegex?: true;
 }
 
 /** Событие слежения за файлом: id подписки из `watch`, путь как его назвал `watch`. */

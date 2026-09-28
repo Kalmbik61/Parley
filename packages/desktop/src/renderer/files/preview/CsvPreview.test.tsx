@@ -47,4 +47,18 @@ describe('CsvPreview', () => {
     const cell = screen.getByTitle(long);
     expect(cell.className).toContain('truncate');
   });
+
+  it('CSV в 100 000 колонок рисуется быстро: 200 колонок и строка об обрезке', () => {
+    const wide = Array.from({ length: 100_000 }, (_, index) => `c${index}`).join(',');
+    const data = Array.from({ length: 100_000 }, () => 'v').join(',');
+    const started = performance.now();
+    const { container } = render(<CsvPreview text={`${wide}\n${data}\n${data}`} delimiter="," />);
+    // Порог с запасом на загруженную машину: без предела здесь сотни тысяч узлов DOM и секунды.
+    expect(performance.now() - started).toBeLessThan(1500);
+    expect(screen.getAllByRole('columnheader')).toHaveLength(200);
+    expect(screen.getByText('Showing first 200 columns')).toBeTruthy();
+    const firstRow = container.querySelector('[role="row"]:not(.sticky)');
+    expect(firstRow?.querySelectorAll('[role="cell"]').length).toBe(200);
+  });
 });
+

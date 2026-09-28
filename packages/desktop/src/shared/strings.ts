@@ -715,6 +715,14 @@ export const S = {
     /** Ответ `bad_request` на запрос в режиме «.*»: ERE git или `RegExp` не разобрали регулярку. */
     invalidRegex: 'Invalid regular expression',
     noResults: 'No results',
+    /** Поиск идёт дольше порога показа (раунд fix-7.4, п. 5). */
+    searching: 'Searching…',
+    /**
+     * Git этой машины без PCRE: регулярка на git-корне искалась как POSIX ERE (раунд fix-7.4, п. 3).
+     * Подсказка — в `title` строки.
+     */
+    posixRegex: 'POSIX regex',
+    posixRegexHint: 'Git on this machine has no PCRE: \\d, \\w and \\s do not work here. Use [0-9], [[:alnum:]_] and [[:space:]].',
     /**
      * Превью (кусок 7.5, спека 10.6): переключатели шапки тела — «Code / Preview» у Markdown,
      * «Table / Code» у CSV и TSV; «Fit / 100%» картинки. Поиск ⌘F в PDF — строки полосы поиска
@@ -727,6 +735,7 @@ export const S = {
     actualSize: '100%',
     imageSize: (width: number, height: number): string => `${width} × ${height} px`,
     rowsTruncated: 'Showing first 10,000 rows',
+    columnsTruncated: 'Showing first 200 columns',
   },
 
   /** Оболочка окна (`shell/AppShell.tsx`) — заголовки `ErrorBoundary` вокруг сайдбара и раскладки. */

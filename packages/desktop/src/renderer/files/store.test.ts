@@ -54,12 +54,13 @@ describe('filesRootSpec (тест 11)', () => {
 });
 
 describe('режим tree | search (кусок 7.4)', () => {
-  it('openSearch — режим search и просьба о фокусе поля; showTree — назад к дереву', () => {
-    useFilesStore.setState({ mode: 'tree', focusSearch: false });
-    useFilesStore.getState().openSearch();
-    expect(useFilesStore.getState()).toMatchObject({ mode: 'search', focusSearch: true });
-    useFilesStore.getState().showTree();
-    expect(useFilesStore.getState().mode).toBe('tree');
+  it('openSearch — режим search работы и просьба о фокусе её поля; showTree — назад к дереву; другая работа не тронута (раунд fix-7.4, п. 1)', () => {
+    useFilesStore.setState({ modeByWork: {}, focusSearch: null });
+    useFilesStore.getState().openSearch(key);
+    expect(useFilesStore.getState()).toMatchObject({ modeByWork: { [key]: 'search' }, focusSearch: key });
+    expect(useFilesStore.getState().modeByWork['/tmp/proj w-02']).toBeUndefined();
+    useFilesStore.getState().showTree(key);
+    expect(useFilesStore.getState()).toMatchObject({ modeByWork: { [key]: 'tree' }, focusSearch: null });
   });
 });
 

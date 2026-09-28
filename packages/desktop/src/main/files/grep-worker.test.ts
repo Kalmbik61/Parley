@@ -67,10 +67,10 @@ describe('runJob', () => {
     const messages = collect({
       kind: 'ranges',
       query: Q('ab'),
-      files: [{ path: 'x', hits: [{ line: 1, text: 'ab ab', ranges: [] }] }],
+      files: [{ path: 'x', hits: [{ line: 1, column: 1, text: 'ab ab', ranges: [], at: 0 }] }],
     });
     expect(messages).toEqual([
-      { type: 'file', file: { path: 'x', hits: [{ line: 1, text: 'ab ab', ranges: [[0, 2], [3, 5]] }] } },
+      { type: 'file', file: { path: 'x', hits: [{ line: 1, column: 1, text: 'ab ab', ranges: [[0, 2], [3, 5]] }] } },
       { type: 'done', truncated: false },
     ]);
   });
@@ -84,7 +84,7 @@ describe('runJob', () => {
     const messages = collect({ kind: 'walk', query: Q('aaa'), rootPath: dir, paths: ['pipe', 'big.txt', 'bin', 'ok.txt'] });
     expect(Date.now() - started).toBeLessThan(1000);
     expect(messages).toEqual([
-      { type: 'file', file: { path: 'ok.txt', hits: [{ line: 2, text: 'aaa', ranges: [[0, 3]] }] } },
+      { type: 'file', file: { path: 'ok.txt', hits: [{ line: 2, column: 1, text: 'aaa', ranges: [[0, 3]] }] } },
       { type: 'done', truncated: false },
     ]);
   });
@@ -155,10 +155,24 @@ describe('clipHit: окно строки попадания (раунд fix-7.1b
     expect(clipped.ranges).toEqual([[0, 1000]]);
   });
 
+  it('ranges: RegExp JS совпадения не нашёл — окно вокруг at по колонке git, колонка как есть (раунд fix-7.4, п. 2)', () => {
+    const messages: GrepWorkerMessage[] = [];
+    const line = `${'q'.repeat(10_000)}[[:digit:]]7${'q'.repeat(10_000)}`;
+    runJob(
+      { kind: 'ranges', query: Q('zzz'), files: [{ path: 'a', hits: [{ line: 1, column: 4321, text: line, ranges: [], at: 10_011 }] }] },
+      (m) => messages.push(m),
+    );
+    const hit = messages[0]?.type === 'file' ? messages[0].file.hits[0] : undefined;
+    expect(hit?.column).toBe(4321);
+    expect(hit?.ranges).toEqual([]);
+    expect(hit?.text).toContain('[[:digit:]]7');
+    expect(hit).not.toHaveProperty('at');
+  });
+
   it('ranges: длинная строка уходит окном', () => {
     const messages: GrepWorkerMessage[] = [];
     const line = `${'q'.repeat(100_000)}needle${'q'.repeat(100_000)}`;
-    runJob({ kind: 'ranges', query: Q('needle'), files: [{ path: 'a', hits: [{ line: 1, text: line, ranges: [] }] }] }, (m) => messages.push(m));
+    runJob({ kind: 'ranges', query: Q('needle'), files: [{ path: 'a', hits: [{ line: 1, column: 100_001, text: line, ranges: [], at: 100_000 }] }] }, (m) => messages.push(m));
     const hit = messages[0]?.type === 'file' ? messages[0].file.hits[0] : undefined;
     expect(hit?.text.length).toBeLessThanOrEqual(1000);
     const [start, end] = hit?.ranges[0] ?? [0, 0];

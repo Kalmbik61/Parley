@@ -1,11 +1,13 @@
 /**
  * Кусок 7.5, тесты 5 и 6: PDF с подставным pdf.js (`pdf-runtime.ts`). Данные — байты
  * `files.readBytes`, не URL; eval и скрипты PDF выключены; ссылки аннотаций — только http(s) и
- * только через `app.openExternal`; ⌘F — своя полоса поиска по тексту страниц.
+ * только во вкладку встроенного браузера (fix-7.5); ⌘F — своя полоса поиска по тексту страниц.
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useLayoutStore } from '../../layout/store.js';
+import type { TabSpec } from '../../../shared/layout-types.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 
 interface FakeState {
@@ -86,7 +88,7 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 async function renderPdf(): Promise<ReturnType<typeof render>> {
-  const result = render(<PdfPreview bridge={bridge} bytes={new Uint8Array([37, 80, 68, 70])} />);
+  const result = render(<PdfPreview bytes={new Uint8Array([37, 80, 68, 70])} />);
   await waitFor(() => expect(fake.state.viewers[0]?.document).not.toBeNull());
   return result;
 }
@@ -110,16 +112,28 @@ describe('PdfPreview, подставной getDocument (тест 5)', () => {
     expect(String(params?.cMapUrl)).not.toMatch(/cdn|unpkg|jsdelivr/);
     expect(String(params?.standardFontDataUrl)).toMatch(/pdfjs\/standard_fonts\/$/);
     expect(params?.useWasm).toBe(false);
+    // Стандартные шрифты без встраивания — системные: Liberation в сборке нет (fix-7.5).
+    expect(params?.useSystemFonts).toBe(true);
   });
 
-  it('ссылка аннотации https — app.openExternal, переход окна погашен; file:///etc/passwd и javascript: — ничего', async () => {
+  it('ссылка аннотации https — вкладка встроенного браузера, переход окна погашен; file:///etc/passwd и javascript: — ничего', async () => {
+    const key = '/tmp/proj w-01';
+    useLayoutStore.setState({
+      activeWorkKey: key,
+      layouts: { [key]: { root: { type: 'group', id: 'g1', tabs: [], activeTabId: null }, activeGroupId: 'g1', closedTabs: [] } },
+      hydrated: { [key]: true },
+    });
+    const tabs = (): TabSpec[] => {
+      const layout = useLayoutStore.getState().layouts[key];
+      return layout?.root.type === 'group' ? layout.root.tabs : [];
+    };
     await renderPdf();
     const service = linkServiceOf();
     const https = document.createElement('a');
     service.addLinkAttributes(https, 'https://example.com/doc');
     expect(https.getAttribute('href')).toBeNull();
     expect(fireEvent.click(https)).toBe(false);
-    expect(bridge.externalOpened).toEqual(['https://example.com/doc']);
+    expect(tabs()).toMatchObject([{ kind: 'browser', url: 'https://example.com/doc' }]);
 
     for (const url of ['file:///etc/passwd', 'javascript:alert(1)']) {
       const link = document.createElement('a');
@@ -127,7 +141,8 @@ describe('PdfPreview, подставной getDocument (тест 5)', () => {
       expect(link.getAttribute('href')).toBeNull();
       expect(fireEvent.click(link)).toBe(false);
     }
-    expect(bridge.externalOpened).toEqual(['https://example.com/doc']);
+    expect(tabs()).toHaveLength(1);
+    expect(bridge.externalOpened).toEqual([]);
   });
 
   it('размонтирование уничтожает документ', async () => {

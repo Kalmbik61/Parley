@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MergeCheck, WorkEntry } from '@harnas/core';
-import { refKey, type SessionRef } from '@harnas/protocol';
+import { HOST_ERROR_REASONS, refKey, type SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { useActivityStore } from '../store/activity.js';
@@ -109,7 +109,7 @@ export function useChanges(input: {
         (err: unknown) => {
           if (!current()) return;
           const info = decodeIpcError(err);
-          if (info.data?.['reason'] === 'worktree-missing') {
+          if (info.data?.['reason'] === HOST_ERROR_REASONS.worktreeMissing) {
             // Папки worktree нет (отброшен не из этого окна или до перезапуска): признак в сторе —
             // вкладки показывают своё состояние и снимают загрузку, повторов нет (раунд 8, пункт 1).
             console.warn('[harnas] changes', info.code, info.message);

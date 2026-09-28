@@ -6,7 +6,8 @@
  * папка не под git) работает обходом `walkFiles` и поиском в воркере.
  */
 import { spawn } from 'node:child_process';
-import { lstat, readdir, realpath, stat } from 'node:fs/promises';
+import { lstat, mkdtemp, readdir, realpath, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Worker } from 'node:worker_threads';
 import { joinDiffFiles, parseNameStatusZ, parseNumstat } from '@harnas/core';
@@ -15,7 +16,7 @@ import { rootKey } from '../../shared/work-keys.js';
 import { HostError } from '../host-connection.js';
 import type { RootsRegistry } from '../roots.js';
 import { detectText, LIMITS } from './fs-api.js';
-import { clipHit, GREP_LIMITS, type GrepJob, type GrepWorkerMessage } from './grep-worker.js';
+import { clipHit, GREP_LIMITS, type GrepJob, type GrepWorkerMessage, type RawGrepFile, type RawGrepHit } from './grep-worker.js';
 
 export type { GrepJob } from './grep-worker.js';
 
@@ -45,8 +46,9 @@ export const WALK_LIMIT = 50_000;
 export const GREP_TIMEOUT_MS = 10_000;
 /**
  * Пределы сырого вывода git grep в main (решение по 7.1b): строка попадания держится до воркера
- * целиком, и без них пик памяти main при многомегабайтных строках ничем не ограничен. Хвост строки
- * сверх 64 КБ отбрасывается; весь вывод сверх 32 МБ — git гасится, ответ truncated.
+ * целиком, и без них пик памяти main при многомегабайтных строках ничем не ограничен. От строки
+ * остаётся окно 64 КБ вокруг совпадения (`--column`, раунд fix-7.4, п. 2); весь вывод сверх 32 МБ —
+ * git гасится, ответ truncated.
  */
 export const GREP_LINE_BYTES = 64 * 1024;
 export const GREP_TOTAL_BYTES = 32 * 1024 * 1024;
@@ -184,44 +186,132 @@ export function parseGitStatus(stdout: Buffer, prefix: string): Record<string, G
   return Object.fromEntries(out);
 }
 
-/** Заголовок записи `путь\0строка\0` сверх текста: путь длиннее на macOS и Linux не бывает. */
+/** Заголовок записи `путь\0строка\0колонка\0` сверх текста: путь длиннее на macOS и Linux не бывает. */
 const GREP_HEADER_BYTES = 8 * 1024;
 
+const isContinuation = (byte: number | undefined): boolean => byte !== undefined && (byte & 0xc0) === 0x80;
+
+/** Длина последовательности UTF-8 по первому байту; битый байт — 1. */
+function utf8Length(byte: number): number {
+  if (byte >= 0xf0 && byte <= 0xf7) return 4;
+  if (byte >= 0xe0) return 3;
+  if (byte >= 0xc0) return 2;
+  return 1;
+}
+
+/** Кодовых единиц UTF-16 в байтах UTF-8: начало символа — 1, четырёхбайтного — пара. */
+function utf16Units(bytes: Buffer): number {
+  let units = 0;
+  for (let i = 0; i < bytes.length; i++) {
+    const byte = bytes[i] ?? 0;
+    if ((byte & 0xc0) !== 0x80) units += byte >= 0xf0 ? 2 : 1;
+  }
+  return units;
+}
+
 /**
- * Разбор вывода git grep --null -n кусками; push → false на пределе. ranges пустые — их считает воркер.
- * Незаконченная запись держится не длиннее заголовка и `lineBytes` текста: остальное до перевода
- * строки отбрасывается сразу. Сверх `totalBytes` сырого вывода — стоп и truncated; начатая запись
- * на этой границе не отдаётся.
+ * Разбор вывода git grep --null -n --column кусками; push → false на пределе. ranges пустые — их
+ * считает воркер. Колонка git — смещение совпадения в байтах от начала строки (с 1, git 2.53);
+ * `column` ответа — в единицах UTF-16, как у курсора редактора: она считается по байтам до
+ * совпадения на лету, без их хранения.
+ *
+ * От строки держится не больше двух `lineBytes` вокруг совпадения, в ответ идёт окно `lineBytes`:
+ * вокруг совпадения, а у короткой строки — она вся. Край окна не режет символ UTF-8. Сверх
+ * `totalBytes` сырого вывода — стоп и truncated; начатая запись на этой границе не отдаётся.
  */
 export function createGrepParser(limits: { hits: number; files: number; lineBytes?: number; totalBytes?: number }): {
   push(chunk: Buffer): boolean;
-  result(): GrepResult;
+  result(): { files: RawGrepFile[]; truncated: boolean };
 } {
   const lineBytes = limits.lineBytes ?? GREP_LINE_BYTES;
   const totalBytes = limits.totalBytes ?? GREP_TOTAL_BYTES;
-  const recordBytes = GREP_HEADER_BYTES + lineBytes;
-  const files = new Map<string, GrepResult['files'][number]['hits']>();
+  const files = new Map<string, RawGrepHit[]>();
   let hits = 0;
   let seen = 0;
   let truncated = false;
   let stopped = false;
-  let tail = Buffer.alloc(0);
 
-  const take = (record: Buffer): boolean => {
-    const a = record.indexOf(0);
-    const b = a < 0 ? -1 : record.indexOf(0, a + 1);
-    if (b < 0) return true;
-    const file = record.subarray(0, a).toString('utf8');
-    const line = Number(record.subarray(a + 1, b).toString('utf8'));
-    let list = files.get(file);
+  // Текущая запись: заголовок, пока не пришли три NUL, затем текст строки.
+  let head = Buffer.alloc(0);
+  let header: { file: string; line: number; match: number } | null = null;
+  let broken = false;
+  let pos = 0;
+  let units = 0;
+  let kept: Buffer[] = [];
+
+  const reset = (): void => {
+    head = Buffer.alloc(0);
+    header = null;
+    broken = false;
+    pos = 0;
+    units = 0;
+    kept = [];
+  };
+
+  const feedText = (piece: Buffer, match: number): void => {
+    if (pos < match) units += utf16Units(piece.subarray(0, match - pos));
+    // Держится [совпадение − lineBytes, совпадение + lineBytes): из него окно выбирается в конце строки.
+    const from = Math.max(0, match - lineBytes - pos);
+    const to = Math.min(piece.length, match + lineBytes - pos);
+    // Копия, а не срез: срез держал бы в памяти весь кусок stdout.
+    if (to > from) kept.push(Buffer.from(piece.subarray(from, to)));
+    pos += piece.length;
+  };
+
+  const feed = (piece: Buffer): void => {
+    if (broken) return;
+    if (header !== null) {
+      feedText(piece, header.match);
+      return;
+    }
+    const before = head.length;
+    head = Buffer.concat([head, piece.subarray(0, GREP_HEADER_BYTES - before)]);
+    const a = head.indexOf(0);
+    const b = a < 0 ? -1 : head.indexOf(0, a + 1);
+    const c = b < 0 ? -1 : head.indexOf(0, b + 1);
+    if (c < 0) {
+      if (head.length >= GREP_HEADER_BYTES) broken = true;
+      return;
+    }
+    const column = Number(head.subarray(b + 1, c).toString('utf8'));
+    header = {
+      file: head.subarray(0, a).toString('utf8'),
+      line: Number(head.subarray(a + 1, b).toString('utf8')),
+      match: Number.isInteger(column) && column > 0 ? column - 1 : 0,
+    };
+    feedText(piece.subarray(c + 1 - before), header.match);
+  };
+
+  /** Конец строки: окно в ответ. false — предел файлов или совпадений. */
+  const finish = (): boolean => {
+    const current = header;
+    if (current === null) return true;
+    let list = files.get(current.file);
     if (list === undefined) {
       if (files.size >= limits.files) return false;
       list = [];
-      files.set(file, list);
+      files.set(current.file, list);
     }
     if (hits >= limits.hits) return false;
-    // Обрезка посреди символа UTF-8 даёт в конце U+FFFD — окно всё равно режет строку до 1000.
-    list.push({ line, text: record.subarray(b + 1, b + 1 + lineBytes).toString('utf8'), ranges: [] });
+    const length = pos;
+    const match = Math.min(current.match, length);
+    const keptFrom = Math.max(0, current.match - lineBytes);
+    const buffer = Buffer.concat(kept);
+    // Совпадение посередине окна; у конца строки окно прижимается к нему, короткая строка — вся.
+    let start = Math.max(0, Math.min(match - Math.floor(lineBytes / 2), length - lineBytes));
+    let end = Math.min(length, start + lineBytes);
+    const byteAt = (i: number): number | undefined => buffer[i - keptFrom];
+    if (start > 0) while (start < match && isContinuation(byteAt(start))) start += 1;
+    if (end < length) {
+      // Последний символ окна не влез целиком — окно кончается перед ним.
+      let lead = end - 1;
+      while (lead > start && end - lead < 4 && isContinuation(byteAt(lead))) lead -= 1;
+      const leadByte = byteAt(lead);
+      if (leadByte !== undefined && lead + utf8Length(leadByte) > end) end = lead;
+    }
+    const text = buffer.subarray(start - keptFrom, end - keptFrom).toString('utf8');
+    const at = buffer.subarray(start - keptFrom, Math.max(start, match) - keptFrom).toString('utf8').length;
+    list.push({ line: current.line, column: units + 1, text, ranges: [], at });
     hits += 1;
     return true;
   };
@@ -229,7 +319,7 @@ export function createGrepParser(limits: { hits: number; files: number; lineByte
   const stop = (): false => {
     stopped = true;
     truncated = true;
-    tail = Buffer.alloc(0);
+    reset();
     return false;
   };
 
@@ -240,16 +330,15 @@ export function createGrepParser(limits: { hits: number; files: number; lineByte
       const data = over ? chunk.subarray(0, totalBytes - seen) : chunk;
       seen += data.length;
       let start = 0;
-      for (let end = data.indexOf(0x0a, start); end >= 0; end = data.indexOf(0x0a, start)) {
-        const piece = data.subarray(start, Math.min(end, start + Math.max(0, recordBytes - tail.length)));
-        const ok = take(tail.length === 0 ? piece : Buffer.concat([tail, piece]));
-        tail = Buffer.alloc(0);
+      while (start < data.length) {
+        const end = data.indexOf(0x0a, start);
+        feed(data.subarray(start, end < 0 ? data.length : end));
+        if (end < 0) break;
+        const ok = finish();
+        reset();
         start = end + 1;
         if (!ok) return stop();
       }
-      // Копия, а не срез: срез держал бы в памяти весь кусок stdout.
-      const room = Math.max(0, recordBytes - tail.length);
-      if (room > 0 && start < data.length) tail = Buffer.concat([tail, data.subarray(start, start + room)]);
       return over ? stop() : true;
     },
     result: () => ({ files: [...files].map(([file, list]) => ({ path: file, hits: list })), truncated }),
@@ -380,6 +469,24 @@ export async function gitCommitFiles(git: GitRunner, rootPath: string, hash: str
   return joinDiffFiles(parseNameStatusZ(status.stdout), parseNumstat(numstat.stdout));
 }
 
+/**
+ * Понимает ли git этой машины `grep -P` (PCRE; git без libpcre выходит с 128 ещё до поиска).
+ * Проба — `--no-index` в пустой временной папке: ни репозиторий человека, ни его файлы не читаются
+ * и не пишутся; папка удаляется. Сбой запуска и ENOENT — «нет»: останется ERE.
+ */
+export async function probePcre(git: GitRunner): Promise<boolean> {
+  let dir: string | null = null;
+  try {
+    dir = await mkdtemp(path.join(tmpdir(), 'harnas-pcre-'));
+    const result = await git.run(['grep', '--no-index', '-P', '-e', 'x'], dir);
+    return result.code === 0 || result.code === 1;
+  } catch {
+    return false;
+  } finally {
+    if (dir !== null) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 /** Воркер с заданием; cancel и предел времени — worker.terminate(), ответ — найденное к этому моменту с truncated. */
 export function runGrepWorker(
   job: GrepJob,
@@ -399,11 +506,14 @@ export function runGrepWorker(
       if (settled) return;
       settle();
       // У `ranges` строки уже найдены git: неподсвеченные уходят с пустыми ranges — и тоже окном:
-      // регулярку в main не исполняем, поэтому окно с начала строки.
+      // регулярку в main не исполняем, поэтому окно вокруг совпадения по колонке git.
       const rest = job.kind === 'ranges' ? job.files.slice(done.length) : [];
       const files = [
         ...done,
-        ...rest.map((file) => ({ path: file.path, hits: file.hits.map((hit) => ({ ...hit, ...clipHit(hit.text, []) })) })),
+        ...rest.map((file) => ({
+          path: file.path,
+          hits: file.hits.map((hit) => ({ line: hit.line, column: hit.column, ...clipHit(hit.text, [], hit.at) })),
+        })),
       ];
       resolve({ files, truncated });
     };
@@ -459,6 +569,8 @@ export interface GitApiOptions {
   walkBudgetMs?: number;
   /** Предел вывода `gitShow`; по умолчанию 20 МБ. */
   showMaxBytes?: number;
+  /** Проба `git grep -P` (раунд fix-7.4, п. 3); по умолчанию `probePcre`. Зовётся не больше раза на api. */
+  probePcre?: () => Promise<boolean>;
 }
 
 /** Путь для gitShow лексически: относительный, без NUL и `..` после нормализации; на диске его может не быть. */
@@ -482,6 +594,12 @@ export function createGitApi(options: GitApiOptions): GitApi {
    * каждое раскрытие, и без этого лог main шумел бы на каждом `list`. Растёт не больше числа папок.
    */
   const ignoreWarned = new Set<string>();
+  /**
+   * Ответ пробы PCRE — один на api, то есть на жизнь main (api создаётся раз): git человека за это
+   * время не меняется, а проба — лишний процесс. Спрашивается при первой регулярке на git-корне.
+   */
+  let pcre: Promise<boolean> | null = null;
+  const hasPcre = (): Promise<boolean> => (pcre ??= (options.probePcre ?? (() => probePcre(git)))());
 
   /** Вызов git для корня; git пропал из PATH после пробы — null, как у не-git корня. */
   const read = async (
@@ -539,28 +657,33 @@ export function createGitApi(options: GitApiOptions): GitApi {
       return { files: found.files, truncated: found.truncated || walked.truncated };
     };
     if ((await gitRootOf(git, rootPath)) === null) return walkAndGrep();
+    // Регулярка — PCRE (-P), если git её умеет: `\d`, `\w`, `\s` тогда работают, как у RegExp
+    // не-git корня; иначе ERE (-E), и ответ говорит об этом панели.
+    const posix = query.regex && !(await hasPcre());
     const flags = [
       ...(query.caseSensitive ? [] : ['-i']),
       ...(query.wholeWord ? ['-w'] : []),
-      query.regex ? '-E' : '-F',
+      query.regex ? (posix ? '-E' : '-P') : '-F',
     ];
+    const dialect = posix ? { posixRegex: true as const } : {};
     const parser = createGrepParser(GREP_LIMITS);
     // Запрос — только сразу после -e: иначе `-f/путь/вне/корней` git прочёл бы файлом шаблонов.
-    const args = ['grep', '-n', '-I', '--no-color', '--null', ...flags, '--untracked', '-e', query.text, ...PATHSPEC];
+    // --column — окно строки вокруг совпадения и курсор на нём (раунд fix-7.4, п. 2).
+    const args = ['grep', '-n', '--column', '-I', '--no-color', '--null', ...flags, '--untracked', '-e', query.text, ...PATHSPEC];
     const result = await read(args, rootPath, { signal, onStdout: (chunk) => parser.push(chunk) });
     if (result === null) return walkAndGrep();
     const found = parser.result();
-    if (signal.aborted) return { files: found.files, truncated: true };
+    if (signal.aborted) return { files: found.files, truncated: true, ...dialect };
     // 0 — нашлось, 1 — нет; null — погашен на пределе. Прочее — ошибка git (битая регулярка и т.п.).
     if (result.code !== 0 && result.code !== 1 && !found.truncated) {
       throw new Error(`git grep exited with code ${String(result.code)}`);
     }
-    if (found.files.length === 0) return found;
+    if (found.files.length === 0) return { ...found, ...dialect };
     const ranged = await runGrepWorker(
       { kind: 'ranges', query, files: found.files },
       { signal, timeoutMs, spawn: options.spawnWorker },
     );
-    return { files: ranged.files, truncated: found.truncated || ranged.truncated };
+    return { files: ranged.files, truncated: found.truncated || ranged.truncated, ...dialect };
   };
 
   return {

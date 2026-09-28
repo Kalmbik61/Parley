@@ -86,7 +86,8 @@ export function RightSidebar({ bridge, workKey, width: shown, max, sendDeps }: R
         {entry === undefined ? null : current === 'changes' ? (
           <ChangesPanel bridge={bridge} workKey={workKey} entry={entry} sendDeps={sendDeps} />
         ) : (
-          <FilesPanel bridge={bridge} entry={entry} />
+          // `key` работы (раунд fix-7.4, п. 1): панель другой работы — свой экземпляр, без чужого поиска.
+          <FilesPanel key={workKey} bridge={bridge} entry={entry} />
         )}
       </div>
     </>

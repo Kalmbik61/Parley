@@ -11,7 +11,7 @@
  * - `useWasm: false`: без WebAssembly CSP не ослабляется (`'wasm-unsafe-eval'`) — ценой картинок
  *   JPX и JBIG2 и цветовых профилей ICC, их pdf.js тогда пропускает;
  * - ссылки аннотаций — свой `linkService`: без `href` (переход окна невозможен), клик открывает
- *   только `http(s)` и только через `openPreviewUrl`; прочие схемы — ничего;
+ *   только `http(s)` и только через `openPreviewUrl` (вкладка встроенного браузера); прочие схемы — ничего;
  * - `cMapUrl` и `standardFontDataUrl` — каталоги сборки; воркер их сам не тянет
  *   (`useWorkerFetch: false`): его `fetch` не умеет `file://`, окно читает их за него.
  *
@@ -22,7 +22,6 @@
 
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ChevronDown, ChevronUp, X } from 'lucide-react';
-import type { HarnasBridge } from '../../../shared/bridge.js';
 import { errorText, S } from '../../../shared/strings.js';
 import { Button } from '../../ui/button.js';
 import { openPreviewUrl, isWebUrl } from './open-external.js';
@@ -71,11 +70,10 @@ function createLinkService(runtime: PdfRuntime, eventBus: EventBus, openUrl: (ur
 }
 
 export interface PdfPreviewProps {
-  bridge: HarnasBridge;
   bytes: Uint8Array;
 }
 
-export function PdfPreview({ bridge, bytes }: PdfPreviewProps): JSX.Element {
+export function PdfPreview({ bytes }: PdfPreviewProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
@@ -96,7 +94,7 @@ export function PdfPreview({ bridge, bytes }: PdfPreviewProps): JSX.Element {
         const inner = viewerRef.current;
         if (disposed || container === null || inner === null) return;
         const eventBus = new runtime.viewer.EventBus();
-        const linkService = createLinkService(runtime, eventBus, (url) => openPreviewUrl(bridge, url));
+        const linkService = createLinkService(runtime, eventBus, openPreviewUrl);
         const findController = new runtime.viewer.PDFFindController({ eventBus, linkService });
         const viewer: Viewer = new runtime.viewer.PDFViewer({
           container,
@@ -131,6 +129,8 @@ export function PdfPreview({ bridge, bytes }: PdfPreviewProps): JSX.Element {
           cMapUrl: assetDirUrl('cmaps'),
           cMapPacked: true,
           standardFontDataUrl: assetDirUrl('standard_fonts'),
+          // Liberation в сборке нет (fix-7.5): Helvetica и Times без встраивания — системными шрифтами.
+          useSystemFonts: true,
           verbosity: runtime.pdfjs.VerbosityLevel.ERRORS,
         };
         const task = runtime.pdfjs.getDocument(params);
@@ -150,7 +150,7 @@ export function PdfPreview({ bridge, bytes }: PdfPreviewProps): JSX.Element {
       resizeObserver?.disconnect();
       destroy?.().catch((error: unknown) => console.warn('[harnas] pdf destroy', error));
     };
-  }, [bridge, bytes]);
+  }, [bytes]);
 
   const find = useCallback(
     (text: string, again: boolean, previous: boolean) => {

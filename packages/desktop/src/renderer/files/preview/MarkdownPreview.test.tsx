@@ -1,15 +1,69 @@
 /**
  * Кусок 7.5, тесты 2 и 3: ссылки превью Markdown и само превью — без сырого HTML, картинки только
- * через `files.readBytes`, http(s) — через `app.openExternal`, относительная ссылка — вкладка файла.
+ * через `files.readBytes`, http(s) — вкладка встроенного браузера (fix-7.5), относительная ссылка —
+ * вкладка файла.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FileRoot } from '../../../shared/files-types.js';
+import { useLayoutStore } from '../../layout/store.js';
+import type { TabSpec } from '../../../shared/layout-types.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
-import { MarkdownPreview, resolveMarkdownLink } from './MarkdownPreview.js';
+import { MarkdownPreview, resolveMarkdownLink, safeUrlTransform } from './MarkdownPreview.js';
 
 const ROOT: FileRoot = { workKey: '/tmp/proj w-01', spec: { kind: 'project' } };
+
+/** Активная работа с пустой группой — куда `openInBrowserTab` кладёт вкладку браузера. */
+function activeWork(): void {
+  useLayoutStore.setState({
+    activeWorkKey: ROOT.workKey,
+    layouts: { [ROOT.workKey]: { root: { type: 'group', id: 'g1', tabs: [], activeTabId: null }, activeGroupId: 'g1', closedTabs: [] } },
+    hydrated: { [ROOT.workKey]: true },
+  });
+}
+
+function workTabs(): TabSpec[] {
+  const layout = useLayoutStore.getState().layouts[ROOT.workKey];
+  return layout?.root.type === 'group' ? layout.root.tabs : [];
+}
+
+describe('safeUrlTransform (fix-7.5)', () => {
+  it('http(s), относительные пути и #якоря — как есть', () => {
+    expect(safeUrlTransform('https://example.com/a?b=1#c')).toBe('https://example.com/a?b=1#c');
+    expect(safeUrlTransform('HTTP://example.com')).toBe('HTTP://example.com');
+    expect(safeUrlTransform('./img/a.png')).toBe('./img/a.png');
+    expect(safeUrlTransform('../README.md#usage')).toBe('../README.md#usage');
+    expect(safeUrlTransform('/src/a.ts')).toBe('/src/a.ts');
+    expect(safeUrlTransform('notes/a:b.md')).toBe('notes/a:b.md');
+    expect(safeUrlTransform('my%20notes.md?raw=1')).toBe('my%20notes.md?raw=1');
+    expect(safeUrlTransform('#section')).toBe('#section');
+  });
+
+  it('javascript:, data:, file:, vbscript:, mailto: и прочие схемы — пустая строка', () => {
+    for (const url of [
+      'javascript:alert(1)',
+      'JavaScript:alert(1)',
+      ' javascript:alert(1)',
+      'java\tscript:alert(1)',
+      '\u0001javascript:alert(1)',
+      'data:text/html,<script>alert(1)</script>',
+      'data:image/png;base64,AAAA',
+      'file:///etc/passwd',
+      'vbscript:msgbox(1)',
+      'mailto:a@b.c',
+      'blob:https://example.com/x',
+    ]) {
+      expect(safeUrlTransform(url), url).toBe('');
+    }
+  });
+
+  it('адрес без схемы на другой хост (//хост, \\\\хост) — пустая строка', () => {
+    expect(safeUrlTransform('//evil.example/x')).toBe('');
+    expect(safeUrlTransform('\\\\evil.example/x')).toBe('');
+    expect(safeUrlTransform('/\\evil.example/x')).toBe('');
+  });
+});
 
 describe('resolveMarkdownLink (тест 2)', () => {
   it('https — external; ./img/a.png от docs/x.md — docs/img/a.png; #section — anchor; javascript: — null', () => {
@@ -90,17 +144,20 @@ describe('MarkdownPreview (тест 3)', () => {
     expect(bridge.readBytesCalls).toEqual([]);
   });
 
-  it('ссылка https — app.openExternal; относительная — вкладка файла; javascript: — ничего', () => {
-    renderPreview('[site](https://example.com) [other](../README.md) [bad](javascript:alert(1))');
+  it('ссылка https — вкладка встроенного браузера той же работы; относительная — вкладка файла; javascript: и file: — ничего', () => {
+    activeWork();
+    renderPreview('[site](https://example.com) [other](../README.md) [bad](javascript:alert(1)) [local](file:///etc/passwd)');
     fireEvent.click(screen.getByText('site'));
-    expect(bridge.externalOpened).toEqual(['https://example.com']);
+    expect(workTabs()).toMatchObject([{ kind: 'browser', url: 'https://example.com' }]);
     fireEvent.click(screen.getByText('other'));
     expect(onOpenFile).toHaveBeenCalledWith('README.md');
-    const bad = screen.getByText('bad');
     // Переход окна по ссылке погашен: клик не дошёл до браузерного действия.
-    expect(fireEvent.click(bad)).toBe(false);
-    expect(bridge.externalOpened).toEqual(['https://example.com']);
+    expect(fireEvent.click(screen.getByText('bad'))).toBe(false);
+    expect(fireEvent.click(screen.getByText('local'))).toBe(false);
+    expect(workTabs()).toHaveLength(1);
     expect(onOpenFile).toHaveBeenCalledTimes(1);
+    // Системный браузер не зовётся: он — только пунктом меню у ссылок терминала.
+    expect(bridge.externalOpened).toEqual([]);
   });
 
   it('#якорь прокручивает к заголовку с этим id', () => {

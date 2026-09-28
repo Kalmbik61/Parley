@@ -6,8 +6,9 @@
  * (`files.cancel`), а ответ отменённого не показывается. Отменённый поиск main отвечает
  * найденным к этому моменту с `truncated` — сверка по своему `signalId`, а не по времени ответа.
  *
- * Регулярки git (ERE) и JS различаются: у найденной git строки `ranges` может быть пустым —
- * строка показывается без подсветки.
+ * Регулярки git и JS различаются: у найденной git строки `ranges` может быть пустым — строка
+ * показывается без подсветки. Git без PCRE ищет регулярку как POSIX ERE — тогда над результатами
+ * подсказка «POSIX regex» (раунд fix-7.4, п. 3).
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -24,13 +25,13 @@ import { openFile } from './Tree.js';
 
 /** Запрос — через 250 мс тишины (план). */
 export const SEARCH_DEBOUNCE_MS = 250;
+/**
+ * «Searching…» — только если ответа нет дольше 300 мс после запроса (раунд fix-7.4, п. 5):
+ * обычный ответ git grep приходит раньше, и признак на нём мигал бы.
+ */
+export const SEARCHING_DELAY_MS = 300;
 /** Запрос — до 1000 символов: длиннее main отвечает `bad_request` (план). */
 const MAX_QUERY = 1000;
-/**
- * Окно текста попадания у main — до 1000 кодовых единиц (`HIT_TEXT_LIMIT`, 7.1b); у края пары
- * оно короче на одну. Текст короче — это вся строка, и колонка совпадения известна.
- */
-const WHOLE_LINE_BELOW = 999;
 /** Совпадение дальше от начала — строка показывается с него, иначе в узкой панели его не видно. */
 const LEAD_CONTEXT = 30;
 
@@ -42,12 +43,6 @@ function toggleClass(on: boolean): string {
     'flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-accent-foreground',
     on && 'bg-accent text-accent-foreground',
   );
-}
-
-/** Колонка курсора (с 1): начало первого совпадения, если окно — вся строка; иначе начало строки. */
-function hitColumn(hit: GrepHit): number {
-  const first = hit.ranges[0];
-  return first !== undefined && hit.text.length < WHOLE_LINE_BELOW ? first[0] + 1 : 1;
 }
 
 /** Текст строки с подсвеченными `ranges`; далёкое совпадение — с «…» и частью контекста перед ним. */
@@ -94,8 +89,12 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
   const [regex, setRegex] = useState(false);
   const [result, setResult] = useState<GrepResult | null>(null);
   const [invalid, setInvalid] = useState(false);
+  /** Последний ответ на регулярку — POSIX ERE (git без PCRE, раунд fix-7.4, п. 3). */
+  const [posix, setPosix] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const searchingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
-  const focusSearch = useFilesStore((state) => state.focusSearch);
+  const focusSearch = useFilesStore((state) => state.focusSearch === root.workKey);
   const input = useRef<HTMLInputElement>(null);
   /** `signalId` идущего поиска; ответ чужого id — отменённого — отбрасывается. */
   const running = useRef<string | null>(null);
@@ -107,10 +106,17 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
     if (!focusSearch) return;
     input.current?.focus();
     input.current?.select();
-    useFilesStore.setState({ focusSearch: false });
+    useFilesStore.setState({ focusSearch: null });
   }, [focusSearch]);
 
+  const stopSearching = (): void => {
+    if (searchingTimer.current !== null) clearTimeout(searchingTimer.current);
+    searchingTimer.current = null;
+    setSearching(false);
+  };
+
   const cancelRunning = (): void => {
+    stopSearching();
     const id = running.current;
     if (id === null) return;
     running.current = null;
@@ -123,6 +129,8 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
     if (text === '') {
       setResult(null);
       setInvalid(false);
+      // Подсказка «POSIX regex» — о последнем ответе; ответа на пустое поле нет (fix-lane-post, п. 5).
+      setPosix(false);
       return undefined;
     }
     const query = { text, caseSensitive, wholeWord, regex };
@@ -130,26 +138,36 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
       searchSeq += 1;
       const id = `files-search-${searchSeq}`;
       running.current = id;
+      searchingTimer.current = setTimeout(() => {
+        searchingTimer.current = null;
+        if (running.current === id) setSearching(true);
+      }, SEARCHING_DELAY_MS);
       bridge.files
         .grep(rootRef.current, query, id)
         .then((next) => {
           if (running.current !== id) return;
           running.current = null;
+          stopSearching();
           setResult(next);
           setInvalid(false);
+          setPosix(next.posixRegex === true);
           setCollapsed(new Set());
         })
         .catch((error: unknown) => {
           if (running.current !== id) return;
           running.current = null;
-          console.warn('[harnas] files.grep', error);
+          stopSearching();
+          // Отказ — тоже ответ, и диалекта в нём нет: прежняя подсказка «POSIX regex» к нему не относится.
+          setPosix(false);
           const { code } = decodeIpcError(error);
-          // Неверная регулярка — в панели, а не тостом: человек её ещё печатает.
+          // Неверная регулярка — в панели, а не тостом: человек её ещё печатает. Это ожидаемый
+          // ввод, а не сбой — и в консоль не идёт (раунд fix-7.4, п. 4).
           if (code === 'bad_request' && query.regex) {
             setResult(null);
             setInvalid(true);
             return;
           }
+          console.warn('[harnas] files.grep', error);
           toast(code === 'files:denied' ? S.files.denied : errorText(code, S.errors.actions.searchFiles));
         });
     }, SEARCH_DEBOUNCE_MS);
@@ -171,7 +189,8 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
   const openHit = (path: string, hit: GrepHit, beside: boolean): void => {
     const current = rootRef.current;
     openFile(current, path, beside);
-    useFilesStore.getState().revealAt(current.workKey, tabId.file(current.spec, path), hit.line, hitColumn(hit));
+    // Колонка — из ответа main (раунд fix-7.4, п. 2): `text` лишь окно строки.
+    useFilesStore.getState().revealAt(current.workKey, tabId.file(current.spec, path), hit.line, hit.column);
   };
 
   return (
@@ -201,9 +220,16 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
           <Regex className="size-4" />
         </button>
       </div>
+      {regex && posix ? (
+        <div title={S.files.posixRegexHint} className="shrink-0 truncate border-b border-border px-3 py-1 text-xs text-muted-foreground">
+          {S.files.posixRegex}
+        </div>
+      ) : null}
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-1 text-xs">
+        {searching ? <div className="px-3 py-1.5 text-muted-foreground">{S.files.searching}</div> : null}
         {invalid ? <div className="px-3 py-1.5 text-red-500">{S.files.invalidRegex}</div> : null}
-        {result !== null && result.files.length === 0 ? <div className="px-3 py-1.5 text-muted-foreground">{S.files.noResults}</div> : null}
+        {/* «No results» прежнего запроса рядом с «Searching…» противоречил бы ему. */}
+        {!searching && result !== null && result.files.length === 0 ? <div className="px-3 py-1.5 text-muted-foreground">{S.files.noResults}</div> : null}
         {result?.files.map((file) => {
           const open = !collapsed.has(file.path);
           return (

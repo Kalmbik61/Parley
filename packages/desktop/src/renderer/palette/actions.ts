@@ -228,7 +228,9 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
       return;
     case 'files.search':
       ctx.ui.showRightTab('files');
-      ctx.files.openSearch();
+      // null сюда не доходит (needsActiveWork выше), но TS этого не видит: проверка сужает тип
+      // вместо `!`, который промолчал бы, если действие уберут из needsActiveWork (fix-lane-post, п. 5).
+      if (ctx.layout.activeWorkKey !== null) ctx.files.openSearch(ctx.layout.activeWorkKey);
       return;
     case 'works.showArchived':
       ctx.ui.toggleShowArchived();

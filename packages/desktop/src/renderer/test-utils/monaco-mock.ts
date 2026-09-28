@@ -32,6 +32,8 @@ export interface FakeEditor {
   options: Record<string, unknown>;
   /** Последний `setPosition` (и строка `revealLineInCenter`). */
   position: Position | null;
+  /** Что показано последним `reveal…InCenter`: у `revealLineInCenter` колонки нет (раунд fix-7.4). */
+  revealed: { lineNumber: number; column: number | null } | null;
   /** Команда `addCommand` — как нажатие сочетания в редакторе. */
   press(keybinding: number): void;
   /** Текст модели — как его видит редактор. */
@@ -118,6 +120,7 @@ function fakeEditor(initial: string, options: Record<string, unknown>, setText: 
   const api: EditorApi = {
     options: { ...options },
     position: null,
+    revealed: null,
     disposed: false,
     zones: [],
     selection: null,
@@ -137,8 +140,11 @@ function fakeEditor(initial: string, options: Record<string, unknown>, setText: 
     },
     revealLineInCenter: (line) => {
       api.position = { lineNumber: line, column: api.position?.column ?? 1 };
+      api.revealed = { lineNumber: line, column: null };
     },
-    revealPositionInCenter: () => {},
+    revealPositionInCenter: (position) => {
+      api.revealed = { lineNumber: position.lineNumber, column: position.column };
+    },
     focus: () => {},
     getModel: () => ({
       getValue: () => api.text,

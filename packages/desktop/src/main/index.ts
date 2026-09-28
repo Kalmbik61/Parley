@@ -29,6 +29,7 @@ import { registerFilesIpc } from './files/ipc.js';
 import { HostConnection } from './host-connection.js';
 import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
 import { forwardAppearanceToWindow, forwardHostToPages, registerIpc } from './ipc.js';
+import { quietExpectedIpcRefusals } from './ipc-quiet.js';
 import { forwardGuestShortcuts } from './guest-shortcuts.js';
 import { createLayoutStore, desktopLayoutsPath } from './layout-store.js';
 import { createAppMenu } from './menu.js';
@@ -80,6 +81,10 @@ async function clipboardPng(): Promise<Buffer | null> {
   }
   return null;
 }
+
+// Ожидаемый отказ канала (неверная регулярка поиска и т. п.) — ответ окну, а не сбой main:
+// Electron не печатает его в stderr (fix-lane-post, п. 4).
+quietExpectedIpcRefusals(console);
 
 // При своём HARNAS_HOME (тесты, второй дом) у окна свой userData: лок одного
 // экземпляра тогда привязан к дому так же, как хост, и чужой дом его не держит.
