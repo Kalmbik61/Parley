@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, utimes, writeFile } from 'node:fs/promises';
+import { uptime } from 'node:os';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -82,6 +83,78 @@ describe('startHost', () => {
     client.close();
   });
 
+  it('два одновременных старта в одном доме — работает ровно один, второй HostAlreadyRunning, файлы первого нетронуты (lane-r4, п. 2)', async () => {
+    const home = await tempTrackedHome();
+    const results = await Promise.allSettled([startHost({ home }), startHost({ home })]);
+    const started = results.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
+    const refused = results.flatMap((r) => (r.status === 'rejected' ? [r.reason as unknown] : []));
+    hosts.push(...started);
+    expect(started).toHaveLength(1);
+    expect(refused).toHaveLength(1);
+    expect(refused[0]).toBeInstanceOf(HostAlreadyRunning);
+
+    const paths = hostPaths(home);
+    const token = await readFile(paths.token, 'utf8');
+    const client = connectRaw(paths.socket);
+    await waitConnected(client.socket);
+    const response = await hello(client, token);
+    expect(response.result).toMatchObject({ protocol: 1 });
+    client.close();
+    expect(await readFile(paths.pid, 'utf8')).toBe(String(process.pid));
+  });
+
+  it('замок живого pid без сокета (медленный старт первого) — HostAlreadyRunning, ничего не удалено (lane-r4, п. 2)', async () => {
+    const home = await tempTrackedHome();
+    const paths = hostPaths(home);
+    // Первый хост взял замок и ещё не дошёл до listen: сокета нет, токен уже лежит.
+    await mkdir(paths.dir, { recursive: true, mode: 0o700 });
+    await writeFile(paths.pid, String(process.ppid));
+    await writeFile(paths.token, 'first-token');
+
+    await expect(startHost({ home })).rejects.toBeInstanceOf(HostAlreadyRunning);
+
+    expect(await readFile(paths.pid, 'utf8')).toBe(String(process.ppid));
+    expect(await readFile(paths.token, 'utf8')).toBe('first-token');
+  });
+
+  it('осколок замка мёртвого pid — старт проходит, в замке свой pid (lane-r4, п. 2)', async () => {
+    const home = await tempTrackedHome();
+    const paths = hostPaths(home);
+    await mkdir(paths.dir, { recursive: true, mode: 0o700 });
+    await writeFile(paths.pid, '999999');
+
+    const running = await startHost({ home });
+    hosts.push(running);
+    expect(await readFile(paths.pid, 'utf8')).toBe(String(process.pid));
+  });
+
+  it('замок, записанный до перезагрузки системы, — осколок, даже если pid снова занят (lane-r4, п. 2)', async () => {
+    const home = await tempTrackedHome();
+    const paths = hostPaths(home);
+    await mkdir(paths.dir, { recursive: true, mode: 0o700 });
+    await writeFile(paths.pid, String(process.ppid));
+    const beforeBoot = new Date(Date.now() - (uptime() + 3600) * 1000);
+    await utimes(paths.pid, beforeBoot, beforeBoot);
+
+    const running = await startHost({ home });
+    hosts.push(running);
+    expect(await readFile(paths.pid, 'utf8')).toBe(String(process.pid));
+  });
+
+  it('остановка снимает замок; чужой замок не трогает (lane-r4, п. 2)', async () => {
+    const home = await tempTrackedHome();
+    const paths = hostPaths(home);
+    const running = await startHost({ home });
+    await running.context.shutdown('test');
+    expect(existsSync(paths.pid)).toBe(false);
+
+    const second = await startHost({ home });
+    // Замок подменён (так не бывает у живого хоста, но остановка не должна удалять чужой pid).
+    await writeFile(paths.pid, String(process.ppid));
+    await second.context.shutdown('test');
+    expect(await readFile(paths.pid, 'utf8')).toBe(String(process.ppid));
+  });
+
   it('путь сокета длиннее 103 байт — SocketPathTooLong, каталог не создан', async () => {
     const longHome = `/tmp/hh-${'x'.repeat(150)}`;
     await expect(startHost({ home: longHome })).rejects.toBeInstanceOf(SocketPathTooLong);
@@ -160,6 +233,47 @@ describe('процесс main.ts', () => {
         expect(existsSync(paths.pid)).toBe(false);
       } finally {
         if (first.exitCode === null && first.signalCode === null) first.kill('SIGKILL');
+      }
+    },
+    20_000,
+  );
+});
+
+describe('два процесса main.ts разом (lane-r4, п. 2)', () => {
+  it(
+    'одновременный запуск — один выходит с кодом 3, другой отвечает на hello',
+    async () => {
+      const home = await tempTrackedHome();
+      const paths = hostPaths(home);
+      const start = () =>
+        spawn(process.execPath, ['--import', tsxLoader, mainScript], {
+          env: { ...process.env, HARNAS_HOME: home },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      const children = [start(), start()];
+      try {
+        const loser = await Promise.race(
+          children.map(async (child) => {
+            const [code] = (await once(child, 'exit')) as [number | null];
+            return { child, code };
+          }),
+        );
+        expect(loser.code).toBe(3);
+        const survivor = children.find((child) => child !== loser.child);
+        expect(survivor?.exitCode).toBeNull();
+
+        await waitForFile(paths.socket, 10_000);
+        const token = await readFile(paths.token, 'utf8');
+        const client = connectRaw(paths.socket);
+        await waitConnected(client.socket);
+        const response = await hello(client, token);
+        expect(response.result).toMatchObject({ protocol: 1 });
+        client.close();
+        expect(await readFile(paths.pid, 'utf8')).toBe(String(survivor?.pid));
+      } finally {
+        for (const child of children) {
+          if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+        }
       }
     },
     20_000,

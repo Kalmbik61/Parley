@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, chmod, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, chmod, link, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
+import { uptime } from 'node:os';
 import { harnasHome } from '@harnas/core';
 import { createHostContext } from './context.js';
 import type { HostContext } from './context.js';
@@ -70,12 +71,20 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   await mkdir(paths.dir, { recursive: true, mode: 0o700 });
   await chmod(paths.dir, 0o700);
 
-  // 3. Живой хост на этом сокете — отказ; осколки упавшего — подчищаются.
-  if (await socketIsAlive(paths.socket)) {
+  // 3. Единственность — замок `host.pid` (спека 3.2, раунд lane-r4): проверка одного сокета
+  //    пропускала медленный старт первого хоста (сокета ещё нет), и второй сносил его файлы.
+  //    Замок живого pid — отказ без удалений; сокет — дополнительная проверка (хост без замка).
+  //    Осколки упавшего (сокет, токен) подчищаются только под своим замком.
+  if (!(await acquirePidLock(paths.pid))) {
     restoreHarnasHome(previousHarnasHome);
     throw new HostAlreadyRunning();
   }
-  await removeHostFiles(paths);
+  if (await socketIsAlive(paths.socket)) {
+    await releasePidLock(paths.pid);
+    restoreHarnasHome(previousHarnasHome);
+    throw new HostAlreadyRunning();
+  }
+  await Promise.all([paths.socket, paths.token].map((file) => rm(file, { force: true })));
 
   // 4. Токен рукопожатия — новый на каждый запуск, права 0600 гарантируются chmod,
   //    а не только `mode` у writeFile (тот режется umask).
@@ -183,15 +192,21 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
 
   // 5. `listen`, затем сокет переводится на 0600 (изначально его создаёт `listen`).
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(paths.socket, resolve);
-  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(paths.socket, resolve);
+    });
+  } catch (error) {
+    // Не поднялся — замок не держится до выхода процесса (в тестах процесс один на много хостов).
+    idleWatcher.stop();
+    await releasePidLock(paths.pid);
+    restoreHarnasHome(previousHarnasHome);
+    throw error;
+  }
   await chmod(paths.socket, 0o600);
 
-  // 6. pid-файл.
-  await writeFile(paths.pid, String(process.pid), { mode: 0o600 });
-  await chmod(paths.pid, 0o600);
+  // 6. pid-файл — уже замок из шага 3.
 
   // 7. Таймер простоя: ни клиентов, ни занятых ключей — отсчёт стартует сразу.
   idleWatcher.notify(true);
@@ -231,7 +246,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     // разрыва клиенты, которые сами не отключились, повесили бы остановку.
     for (const client of handle.context.clients()) client.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    await removeHostFiles(paths);
+    // Замок — последним: пока он держится, новый хост не стартует и не застанет сокет и токен
+    // уходящего (lane-r4).
+    await Promise.all([paths.socket, paths.token].map((file) => rm(file, { force: true })));
+    await releasePidLock(paths.pid);
     restoreHarnasHome(previousHarnasHome);
     log.info('хост остановлен', { reason });
     resolveClosed(reason);
@@ -267,8 +285,87 @@ async function socketIsAlive(socketPath: string): Promise<boolean> {
   });
 }
 
-async function removeHostFiles(paths: HostPaths): Promise<void> {
-  await Promise.all([paths.socket, paths.token, paths.pid].map((file) => rm(file, { force: true })));
+/**
+ * Замок единственности хоста — файл `host.pid` с pid держателя (раунд lane-r4). Создаётся ссылкой на
+ * уже записанный временный файл: `link` атомарен и падает на существующем, так что читатель никогда
+ * не видит пустой замок и не примет его за осколок. true — замок наш.
+ *
+ * Занят: pid жив — отказ, ничего не удаляется. pid мёртв, не читается или замок старше загрузки
+ * системы (pid мог достаться другому процессу) — осколок: переименовывается в свой файл, и если
+ * в нём оказался не тот pid, что проверяли (соседний старт успел снять осколок и взять замок),
+ * замок возвращается на место — чужой живой замок не удаляется.
+ */
+async function acquirePidLock(lockPath: string): Promise<boolean> {
+  const own = String(process.pid);
+  const temp = `${lockPath}.${own}.${randomBytes(4).toString('hex')}`;
+  await writeFile(temp, own, { mode: 0o600 });
+  await chmod(temp, 0o600);
+  try {
+    // Два круга: осколок снят — повтор; второй занятый круг значит соседа, успевшего раньше.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await link(temp, lockPath);
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      }
+      const held = await readLock(lockPath);
+      if (held === null) continue; // замок сняли между link и чтением
+      if (!isStaleLock(held)) return false;
+      const stale = `${lockPath}.stale.${own}`;
+      try {
+        await rename(lockPath, stale);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+      const moved = await readLock(stale);
+      if (moved !== null && moved.text !== held.text) {
+        // Унесли живой замок соседа — вернуть; занят уже новым — сосед всё равно не один.
+        await link(stale, lockPath).catch(() => undefined);
+        await rm(stale, { force: true });
+        return false;
+      }
+      await rm(stale, { force: true });
+    }
+    return false;
+  } finally {
+    await rm(temp, { force: true });
+  }
+}
+
+async function readLock(lockPath: string): Promise<{ text: string; mtimeMs: number } | null> {
+  try {
+    const [text, info] = await Promise.all([readFile(lockPath, 'utf8'), stat(lockPath)]);
+    return { text, mtimeMs: info.mtimeMs };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function isStaleLock(lock: { text: string; mtimeMs: number }): boolean {
+  const pid = Number(lock.text.trim());
+  if (!Number.isInteger(pid) || pid <= 0) return true;
+  // Записан до загрузки системы: держатель мёртв, даже если его pid достался другому процессу.
+  if (lock.mtimeMs < Date.now() - uptime() * 1000) return true;
+  return !pidAlive(pid);
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM — процесс есть, но чужой: жив.
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/** Снимает замок, только если он наш: чужой (новый хост уже взял) не трогается. */
+async function releasePidLock(lockPath: string): Promise<void> {
+  const held = await readLock(lockPath).catch(() => null);
+  if (held !== null && held.text.trim() === String(process.pid)) await rm(lockPath, { force: true });
 }
 
 /** Возвращает `HARNAS_HOME` к тому, чем оно было до `startHost` (см. там же). */
