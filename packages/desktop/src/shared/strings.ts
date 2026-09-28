@@ -381,6 +381,8 @@ export const S = {
     sideOriginal: 'Side: original',
     note: (body: string): string => `Note: ${body}`,
     corrupted: (name: string): string => `Session notes were damaged — saved as ${name}`,
+    /** Отказ чтения файла заметок (fix-8.4a, пункт 1): правки сессии живут в окне, файл не пишется. */
+    loadFailed: "Couldn't load review notes — changes to them won't be saved",
   },
 
   /**

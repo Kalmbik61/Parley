@@ -22,7 +22,11 @@ export function notesKey(workKey: string, sessionId: string): string {
 export interface NotesState {
   /** Заметки загруженных сессий по notesKey. */
   bySession: Record<string, DiffNote[]>;
-  /** Первый вызов — app.loadNotes (мост запоминается для записи); повтор — ничего. corruptedTo — тост S.notes.corrupted. */
+  /**
+   * Первый вызов — app.loadNotes (мост запоминается для записи); повтор после удачи — ничего.
+   * corruptedTo — тост S.notes.corrupted. Отказ чтения — тост S.notes.loadFailed, запись сессии
+   * запрещена до удачного чтения; следующий вызов (открытие вкладки диффа) читает снова.
+   */
   load(bridge: HarnasBridge, workKey: string, sessionId: string): Promise<void>;
   /** Новая заметка: id — 8 hex, createdAt и updatedAt — сейчас, anchor.text — строка startLine. */
   add(
@@ -44,6 +48,11 @@ const loads = new Map<string, Promise<void>>();
 /** Мост записи по notesKey — тот, через который сессию загрузили. */
 const bridges = new Map<string, HarnasBridge>();
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/**
+ * Сессии, чей файл заметок прочитать не удалось (EACCES и т. п. — не битый файл): писать их нельзя,
+ * иначе первая же правка затёрла бы заметки, которых окно не видело (fix-8.4a, пункт 1).
+ */
+const unreadable = new Set<string>();
 
 function newId(taken: DiffNote[]): string {
   for (;;) {
@@ -69,6 +78,8 @@ export const useNotesStore: UseBoundStore<StoreApi<NotesState>> = create<NotesSt
         // Запись — только после чтения: иначе ранняя правка затёрла бы файл до того, как его заметки
         // пришли в окно.
         void loading.then(() => {
+          // Файл не прочитан — правки живут только в окне, тост об этом уже показан при чтении.
+          if (unreadable.has(key)) return;
           const notes = get().bySession[key] ?? [];
           bridge.app.saveNotes(workKey, sessionId, { version: 1, notes }).catch((error: unknown) => {
             // Отказ main (форма, диск) — только в консоль: заметки остаются в окне, следующая правка
@@ -97,21 +108,33 @@ export const useNotesStore: UseBoundStore<StoreApi<NotesState>> = create<NotesSt
       const running = loads.get(key);
       if (running !== undefined) return running;
       bridges.set(key, bridge);
-      const loading = (async () => {
-        let loaded: DiffNote[] = [];
+      const read = (async (): Promise<boolean> => {
+        let loaded: DiffNote[];
         try {
           const { file, corruptedTo } = await bridge.app.loadNotes(workKey, sessionId);
           loaded = file.notes;
           if (corruptedTo !== null) toast.error(S.notes.corrupted(corruptedTo));
         } catch (error) {
-          // Спека 13 не даёт отказу чтения своего тоста: заметки сессии пустые, причина — в консоль.
+          // Файл есть, но не прочитан: писать поверх нельзя — человек узнаёт тостом, что его правки
+          // сессии останутся только в окне; причина — в консоль.
+          unreadable.add(key);
+          toast.error(S.notes.loadFailed);
           console.warn('[harnas] notes load failed', decodeIpcError(error).message);
+          return false;
         }
-        // Заметки, поставленные до ответа, не теряются: файловые — первыми, новые — за ними.
+        unreadable.delete(key);
+        // Заметки, поставленные до ответа (или за время неудачного чтения), не теряются: файловые —
+        // первыми, окна — за ними.
         const early = get().bySession[key] ?? [];
         set((state) => ({ bySession: { ...state.bySession, [key]: [...loaded, ...early] } }));
         if (early.length > 0) scheduleSave(workKey, sessionId);
+        return true;
       })();
+      // Неудача забывает загрузку: следующий load (открытие вкладки диффа сессии) прочитает снова.
+      // then — всегда позже loads.set ниже, даже если мост отказал синхронно.
+      const loading: Promise<void> = read.then((ok) => {
+        if (!ok && loads.get(key) === loading) loads.delete(key);
+      });
       loads.set(key, loading);
       return loading;
     },

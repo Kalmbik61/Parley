@@ -80,15 +80,42 @@ describe('стор заметок: load (тест 6)', () => {
     expect(notes()).toEqual([]);
   });
 
-  it('отказ loadNotes → пустые заметки и предупреждение в консоль, повтор не зовёт мост', async () => {
+  it('отказ loadNotes → пустые заметки, тост и предупреждение в консоль', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     bridge.setNotes(work, S2, { code: 'failed', message: 'EACCES' });
     await useNotesStore.getState().load(bridge, work, S2);
-    await useNotesStore.getState().load(bridge, work, S2);
     expect(notes()).toEqual([]);
-    expect(bridge.loadNotesCalls).toHaveLength(1);
+    expect(vi.mocked(toast.error).mock.calls).toEqual([["Couldn't load review notes — changes to them won't be saved"]]);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  it('отказ loadNotes → правка живёт в окне, а файл не пишется (fix-8.4a, пункт 1)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    bridge.setNotes(work, S2, { code: 'failed', message: 'EACCES' });
+    await useNotesStore.getState().load(bridge, work, S2);
+    useNotesStore.getState().add(work, S2, draft({ body: 'kept in memory' }), 'x');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(notes().map((n) => n.body)).toEqual(['kept in memory']);
+    expect(bridge.savedNotes).toEqual([]);
+    vi.mocked(console.warn).mockRestore();
+  });
+
+  it('после отказа следующий load читает снова; удача — файловые заметки первыми, правки окна за ними, запись', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    bridge.setNotes(work, S2, { code: 'failed', message: 'EACCES' });
+    await useNotesStore.getState().load(bridge, work, S2);
+    useNotesStore.getState().add(work, S2, draft({ body: 'while failed' }), 'x');
+    bridge.setNotes(work, S2, { file: { version: 1, notes: [existing()] }, corruptedTo: null });
+    await useNotesStore.getState().load(bridge, work, S2);
+    expect(bridge.loadNotesCalls).toHaveLength(2);
+    expect(notes().map((n) => n.body)).toEqual(['saved before', 'while failed']);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(bridge.savedNotes.map((s) => s.notes.notes.map((n) => n.body))).toEqual([['saved before', 'while failed']]);
+    // Удачное чтение — последнее: дальше load моста не зовёт.
+    await useNotesStore.getState().load(bridge, work, S2);
+    expect(bridge.loadNotesCalls).toHaveLength(2);
+    vi.mocked(console.warn).mockRestore();
   });
 });
 
