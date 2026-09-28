@@ -440,6 +440,113 @@ test.describe('редактор файла на собранном окне', ()
     expect(problems).toEqual([]);
   });
 
+  test('Compare и закрытие сравнения любым путём — ни pageerror, ни console.error; баннер, правка и undo на месте (fix-7-accept п. 1)', async () => {
+    test.setTimeout(120_000);
+    const { electronApp, window, problems } = await launch('compare-close');
+    const sidebar = window.getByTestId('right-sidebar');
+    await sidebar.getByText('src', { exact: true }).click();
+    await sidebar.getByText('a.ts', { exact: true }).click();
+    const tab = window.locator('[role="tab"][data-tab-id="file:p:src/a.ts"]');
+    const firstLines = window.locator('.monaco-editor:visible .view-lines').first();
+    await expect(firstLines).toContainText('export const a = 1;');
+    await firstLines.click();
+    await window.keyboard.press('Meta+ArrowDown');
+    await window.keyboard.type('// mine');
+    await expect(tab.locator('[data-dirty-dot]')).toBeVisible();
+    await writeFile(path.join(project, 'src', 'a.ts'), 'agent\n');
+    await expect(window.getByTestId('disk-change-banner')).toContainText('File changed on disk (probably by the agent)');
+    // Всё о файле — в теле с баннером: после переноса в сплит рядом второй редактор.
+    const body = window.locator('[data-group-body]').filter({ has: window.getByTestId('disk-change-banner') });
+    const banner = body.getByTestId('disk-change-banner');
+    const lines = body.locator('.monaco-editor:visible .view-lines').first();
+    const compare = body.getByTestId('file-compare');
+    const closeCompare = body.getByTestId('file-body').getByRole('button', { name: 'Close', exact: true });
+    const openCompare = async (): Promise<void> => {
+      await banner.getByRole('button', { name: 'Compare' }).click();
+      await expect(compare.locator('.monaco-diff-editor')).toBeVisible();
+      await expect(compare).toContainText('agent');
+    };
+    /** Сравнение закрыто: конфликт не решён — баннер виден, правка буфера на месте. */
+    const expectBack = async (): Promise<void> => {
+      await expect(compare).toHaveCount(0);
+      await expect(banner).toBeVisible();
+      await expect(lines).toContainText('// mine');
+      await expect(tab.locator('[data-dirty-dot]')).toBeVisible();
+    };
+    // Дать Monaco досказать ошибку размонтирования, если она будет.
+    const settle = (): Promise<void> => window.waitForTimeout(300);
+
+    // 1. Compare на баннере → Close в шапке тела.
+    await openCompare();
+    await closeCompare.click();
+    await expectBack();
+    await settle();
+    expect(problems).toEqual([]);
+
+    // Undo обычного редактора пережил сравнение: ⌘Z снимает правку, ⇧⌘Z возвращает.
+    await lines.click();
+    await window.keyboard.press('Meta+Z');
+    await expect(lines).not.toContainText('// mine');
+    await window.keyboard.press('Meta+Shift+Z');
+    await expect(lines).toContainText('// mine');
+
+    // 2. Повторный Compare того же файла → Close.
+    await openCompare();
+    await closeCompare.click();
+    await expectBack();
+
+    // 3. ⌘S → конфликт → диалог перезаписи → Compare → Close; снова диалог → Cancel.
+    await lines.click();
+    await window.keyboard.press('Meta+S');
+    const dialog = window.getByRole('dialog');
+    await expect(dialog).toContainText('Overwrite the changes on disk?');
+    await dialog.getByRole('button', { name: 'Compare' }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(compare.locator('.monaco-diff-editor')).toBeVisible();
+    await closeCompare.click();
+    await expectBack();
+    await settle();
+    expect(problems).toEqual([]);
+
+    // 4. Смена активной вкладки во время сравнения и обратно.
+    await openCompare();
+    await sidebar.getByText(CYRILLIC, { exact: true }).click();
+    await expect(window.locator('.monaco-editor:visible .view-lines').first()).toContainText('export const b = 2;');
+    await tab.click();
+    if ((await compare.count()) > 0) await closeCompare.click();
+    await expectBack();
+    await settle();
+    expect(problems).toEqual([]);
+
+    // 5. Перенос вкладки в другую группу во время сравнения (тело монтируется заново).
+    await openCompare();
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.send('menu:action', 'group.splitRight'));
+    await window.getByRole('dialog').getByRole('option', { name: /a\.ts/ }).first().click();
+    await expect.poll(() => window.locator('[data-group-id]').count()).toBe(2);
+    await tab.click();
+    if ((await compare.count()) > 0) await closeCompare.click();
+    await expectBack();
+    await settle();
+    expect(problems).toEqual([]);
+
+    // 6. Закрытие вкладки во время сравнения: вопрос → Cancel — вкладка и сравнение на месте; Don't save — закрыта.
+    await openCompare();
+    await tab.click();
+    await window.keyboard.press('Meta+W');
+    await expect(dialog).toContainText('Save changes to a.ts?');
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(tab).toHaveCount(1);
+    await expect(compare).toHaveCount(1);
+    await tab.click();
+    await window.keyboard.press('Meta+W');
+    await expect(dialog).toContainText('Save changes to a.ts?');
+    await dialog.getByRole('button', { name: "Don't save" }).click();
+    await expect(tab).toHaveCount(0);
+    await settle();
+    expect(await readFile(path.join(project, 'src', 'a.ts'), 'utf8')).toBe('agent\n');
+    expect(problems).toEqual([]);
+  });
+
   test('7.5 тест 11: .png и .pdf из дерева — превью; ⌘F в PDF, ссылка PDF — журнал shell; данные pdf.js локально; ни ошибок, ни CSP', async () => {
     test.setTimeout(90_000);
     const { electronApp, window, problems } = await launch('preview-bin');

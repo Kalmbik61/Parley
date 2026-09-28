@@ -16,6 +16,7 @@ import { DiffEditor, type DiffOnMount } from '@monaco-editor/react';
 import type { DiffFile, FileRoot } from '../../shared/files-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
+import { releaseDiffEditor } from '../lib/release-diff-editor.js';
 import { Button } from '../ui/button.js';
 import { loadSides, type DiffSides } from './diff-sides.js';
 
@@ -122,16 +123,10 @@ function LiveDiff({ sides, path, options, split, theme, language, onHeight }: Li
     () => () => {
       for (const listener of cleanup.current) listener.dispose();
       cleanup.current = [];
-      // `@monaco-editor/react` 4.7 при размонтировании диспозит модели раньше редактора — Monaco
-      // бросает «TextModel got disposed before DiffEditorWidget model got reset» (pageerror на
-      // собранном окне, e2e diff.spec). Эффект родителя снимается раньше эффекта `DiffEditor`:
-      // сначала отвязываем модели от редактора и диспозим их сами — библиотеке остаётся редактор.
+      // Модели — до эффекта `DiffEditor`, иначе pageerror (e2e diff.spec): `release-diff-editor.ts`.
       const editor = editorRef.current;
       editorRef.current = null;
-      const models = editor?.getModel() ?? null;
-      editor?.setModel(null);
-      models?.original.dispose();
-      models?.modified.dispose();
+      releaseDiffEditor(editor);
     },
     [],
   );

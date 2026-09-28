@@ -4,8 +4,9 @@
  * чтения: решение — кнопками баннера над ним («Reload», «Keep mine») или «Close» — назад к правке.
  */
 
-import { useMemo } from 'react';
-import { DiffEditor } from '@monaco-editor/react';
+import { useEffect, useMemo, useRef } from 'react';
+import { DiffEditor, type DiffOnMount } from '@monaco-editor/react';
+import { releaseDiffEditor } from '../../lib/release-diff-editor.js';
 import { useUiStore } from '../../store/ui.js';
 import { useMonacoReady } from './MonacoEditor.js';
 
@@ -26,6 +27,17 @@ export interface CompareViewProps {
 export function CompareView({ original, modified, modelPaths, fontFamily, fontSize }: CompareViewProps): JSX.Element {
   const status = useMonacoReady();
   const dark = useUiStore((state) => state.dark);
+  const editorRef = useRef<Parameters<DiffOnMount>[0] | null>(null);
+  // Закрытие сравнения любым путём («Close», решение баннера, закрытие и перенос вкладки) —
+  // размонтирование: модели сторон отвязываются раньше, чем их диспозит библиотека (fix-7-accept п. 1).
+  useEffect(
+    () => () => {
+      const editor = editorRef.current;
+      editorRef.current = null;
+      releaseDiffEditor(editor);
+    },
+    [],
+  );
   const options = useMemo(
     () => ({
       fontFamily,
@@ -52,6 +64,9 @@ export function CompareView({ original, modified, modelPaths, fontFamily, fontSi
         theme={dark ? 'harnas-dark' : 'harnas-light'}
         loading={null}
         options={options}
+        onMount={(editor) => {
+          editorRef.current = editor;
+        }}
       />
     </div>
   );
