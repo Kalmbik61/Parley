@@ -23,7 +23,9 @@ const browserGlobals = {
 };
 
 export default tseslint.config(
-  { ignores: ['**/dist/**', 'claude-export/**', 'packages/desktop/out/**'] },
+  // Прототип комнат — отдельное Vite-приложение со своим eslint.config.mjs (браузерные
+  // глобалы, JSX); корневые правила Node к нему не подходят.
+  { ignores: ['**/dist/**', 'claude-export/**', 'packages/desktop/out/**', 'packages/desktop/prototype/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   prettier,
