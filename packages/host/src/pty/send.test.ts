@@ -50,12 +50,15 @@ describe('sanitizeForSend', () => {
 describe('createSender', () => {
   let pty: FakePty;
   let activityState: string;
+  /** Последнее событие хуков; по умолчанию — после запуска процесса (fake: startedAt 0). */
+  let lastEventAt: string | null;
   let wakeInFlight: boolean;
 
   beforeEach(() => {
     vi.useFakeTimers();
     pty = fakePty();
     activityState = 'idle';
+    lastEventAt = new Date(1000).toISOString();
     wakeInFlight = false;
   });
 
@@ -65,7 +68,7 @@ describe('createSender', () => {
 
   function sender() {
     const activity = {
-      get: () => ({ activity: { activity: activityState } }),
+      get: () => ({ activity: { activity: activityState, lastEventAt } }),
     } as unknown as ActivityService;
     return createSender({
       pty: pty.manager,
@@ -87,6 +90,36 @@ describe('createSender', () => {
       reason: 'blocked',
     });
     expect(pty.writes).toEqual([]);
+  });
+
+  it('ни одного хука с запуска процесса (вопрос доверия к папке) — blocked, ни одной записи (fix-final-b)', async () => {
+    lastEventAt = null;
+    await expect(sender()({ ref, text: 'hi', submit: true })).resolves.toEqual({
+      inserted: false,
+      submitted: false,
+      reason: 'blocked',
+    });
+    // И без submit: вставленные символы прочитал бы сам диалог.
+    await expect(sender()({ ref, text: 'hi', submit: false })).resolves.toMatchObject({ reason: 'blocked' });
+    expect(pty.writes).toEqual([]);
+  });
+
+  it('хуки только прошлого процесса — blocked (fix-final-b)', async () => {
+    pty.startedAt = 5000;
+    lastEventAt = new Date(4999).toISOString();
+    await expect(sender()({ ref, text: 'hi', submit: true })).resolves.toMatchObject({ reason: 'blocked' });
+    expect(pty.writes).toEqual([]);
+  });
+
+  it('стал blocked в ожидании Enter — вставлен без Enter, blocked-before-enter, \\r нет (fix-final-b)', async () => {
+    const result = sender()({ ref, text: 'hi', submit: true });
+    await vi.advanceTimersByTimeAsync(300);
+    activityState = 'blocked';
+    await vi.advanceTimersByTimeAsync(200);
+    await expect(result).resolves.toEqual({ inserted: true, submitted: false, reason: 'blocked-before-enter' });
+    expect(pty.writes).toEqual(['hi']);
+    // Текст остался в поле ввода — черновик хоста держит будильник.
+    expect(pty.hostDraft).toBe(true);
   });
 
   it('будильник в полёте — busy, ни одной записи', async () => {

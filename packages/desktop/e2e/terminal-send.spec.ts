@@ -236,3 +236,65 @@ test.describe('отправка агенту из окна (кусок 5.4)', ()
     expect(await screenText(window)).not.toContain('echo:');
   });
 });
+
+/**
+ * Свежая сессия на вопросе доверия к папке (fix-final-b, C2): Claude Code хуков не шлёт, хост не
+ * знает, что на экране, — `pty.send` отвечает blocked и ничего не вставляет, окно показывает тост
+ * blocked. Stub с STUB_NO_HOOKS=1 не пишет ни одного хука.
+ */
+test.describe('отправка в сессию без хуков с запуска (fix-final-b)', () => {
+  let home: string;
+  let project: string;
+  let app: ElectronApplication;
+  let window: Page;
+
+  test.afterEach(async () => {
+    await stopApp(app ?? null);
+    await stopHost(home);
+    await rm(home, { recursive: true, force: true });
+    await rm(project, { recursive: true, force: true });
+  });
+
+  test('pty.send — blocked без вставки; бросок файла — тост «waiting for your answer», в терминале ничего', async () => {
+    home = await makeTempHome('send-nohooks');
+    project = await makeTempProject('terminal-send-nohooks');
+    const env = {
+      ...process.env,
+      HARNAS_HOME: home,
+      HARNAS_CLAUDE_BIN: stubAgent,
+      HARNAS_TERMINAL_RENDERER: 'dom',
+      STUB_BRACKETED: '1',
+      STUB_NO_HOOKS: '1',
+    };
+    app = await electron.launch({ args: [mainEntry], env });
+    window = await app.firstWindow();
+    await expect(window.getByTestId('landing')).toBeVisible();
+
+    const work = (await window.evaluate(
+      (projectPath: string) => (globalThis as unknown as Harnas).harnas.call('works.create', { projectPath, title: 'e2e-nohooks', goal: '' }),
+      project,
+    )) as { workId: string };
+    const session = (await window.evaluate(
+      ({ workId, projectPath }: { workId: string; projectPath: string }) =>
+        (globalThis as unknown as Harnas).harnas.call('sessions.create', { projectPath, workId, provider: 'claude', label: 'nohooks', task: '', parent: null }),
+      { workId: work.workId, projectPath: project },
+    )) as { ref: { sessionId: string } };
+    const ref: Ref = { projectPath: project, workId: work.workId, sessionId: session.ref.sessionId };
+
+    await window.locator(`[data-session-id="${ref.sessionId}"]`).click();
+    await expect.poll(() => screenText(window)).toContain('stub-echo готов');
+    await window.waitForTimeout(300);
+
+    expect(await sendToAgent(window, ref, 'hi', true)).toEqual({ inserted: false, submitted: false, reason: 'blocked' });
+
+    const dropped = path.join(project, 'file.txt');
+    await writeFile(dropped, 'x');
+    expect(await dropFile(window, dropped)).toEqual({ over: true, drop: true });
+    await expect(window.getByText('S01 is waiting for your answer — text not inserted')).toBeVisible();
+
+    await window.waitForTimeout(1000);
+    const screen = await screenText(window);
+    expect(screen).not.toContain('PASTE<<');
+    expect(screen).not.toContain('echo:');
+  });
+});

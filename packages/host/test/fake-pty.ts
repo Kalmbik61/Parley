@@ -12,6 +12,8 @@ export interface FakePty {
   writes: string[];
   hostDraftCalls: boolean[];
   pid: number;
+  /** Метка запуска процесса (`PtyHandle.startedAt`), мс. */
+  startedAt: number;
   live: boolean;
   humanDraft: boolean;
   hostDraft: boolean;
@@ -25,6 +27,7 @@ export function fakePty(): FakePty {
     writes: [],
     hostDraftCalls: [],
     pid: 100,
+    startedAt: 0,
     live: true,
     humanDraft: false,
     hostDraft: false,
@@ -38,7 +41,7 @@ export function fakePty(): FakePty {
   const handle = (ref: SessionRef): PtyHandle => ({
     ref,
     pid: state.pid,
-    startedAt: 0,
+    startedAt: state.startedAt,
     cols: 80,
     rows: 24,
     hasDraft: () => state.humanDraft || state.hostDraft,
