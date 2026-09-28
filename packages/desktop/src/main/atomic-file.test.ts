@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -33,6 +33,32 @@ describe('writeAtomic', () => {
 
     const finalText = await readFile(file, 'utf8');
     expect(['A', 'B']).toContain(finalText);
+  });
+
+  // Заметки, ui.json и layouts.json — текст и пути проектов человека: другие учётные записи Mac
+  // их не читают (ревью M8), как и drops/.
+  it('новые каталоги — 0700, файл — 0600', async () => {
+    const nested = path.join(dir, 'desktop', 'notes', 'abc', 'n.json');
+    await writeAtomic(nested, '{}');
+    expect((await stat(nested)).mode & 0o777).toBe(0o600);
+    for (const sub of ['desktop', 'desktop/notes', 'desktop/notes/abc']) {
+      expect((await stat(path.join(dir, sub))).mode & 0o777).toBe(0o700);
+    }
+  });
+
+  it('существующие файл 0644 и его каталог 0755 при записи приводятся к 0600 и 0700', async () => {
+    const sub = path.join(dir, 'desktop');
+    await mkdir(sub, { mode: 0o755 });
+    await chmod(sub, 0o755);
+    const target = path.join(sub, 'ui.json');
+    await writeFile(target, 'old', { mode: 0o644 });
+    await chmod(target, 0o644);
+
+    await writeAtomic(target, 'new');
+
+    expect((await stat(target)).mode & 0o777).toBe(0o600);
+    expect((await stat(sub)).mode & 0o777).toBe(0o700);
+    await expect(readFile(target, 'utf8')).resolves.toBe('new');
   });
 });
 

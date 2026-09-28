@@ -11,7 +11,7 @@
  * одновременно (см. `ui-store.ts`).
  */
 
-import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 /** Счётчик обеспечивает уникальность внутри процесса; PID — на случай двух процессов на одном `HARNAS_HOME` (тесты). */
@@ -29,9 +29,14 @@ export async function writeAtomic(
   text: string,
   doRename: typeof rename = rename,
 ): Promise<void> {
-  await mkdir(path.dirname(file), { recursive: true });
+  // Заметки, ui.json и layouts.json — текст и пути проектов человека (ревью M8): каталоги 0700,
+  // файлы 0600, как у drops/. Каталог, созданный раньше с 0755, приводится при каждой записи;
+  // файл — сам собой: rename ставит на место временный, созданный уже с 0600.
+  const dir = path.dirname(file);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await chmod(dir, 0o700);
   const tmp = `${file}.${process.pid}.${counter++}.tmp`;
-  await writeFile(tmp, text, 'utf8');
+  await writeFile(tmp, text, { encoding: 'utf8', mode: 0o600 });
   await doRename(tmp, file);
 }
 
