@@ -96,8 +96,8 @@ export function flattenTree(
   return rows;
 }
 
-/** Вкладка файла в активной группе; `beside` — в новой группе справа (⌘-клик, «Open to the side»). */
-function openFile(root: FileRoot, path: string, beside: boolean): void {
+/** Вкладка файла в активной группе; `beside` — в новой группе справа (⌘-клик, «Open to the side»). Её же берут ⌘P и поиск (7.4). */
+export function openFile(root: FileRoot, path: string, beside: boolean): void {
   const tab: TabSpec = { kind: 'file', id: tabId.file(root.spec, path), root: root.spec, path };
   const store = useLayoutStore.getState();
   if (!beside) {

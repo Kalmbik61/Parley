@@ -11,7 +11,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Eye, EyeOff, RefreshCw } from 'lucide-react';
+import { Eye, EyeOff, RefreshCw, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import type { WorkEntry } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
@@ -27,6 +27,7 @@ import { useActivityStore, type ActivityEntry } from '../store/activity.js';
 import { useUiStore } from '../store/ui.js';
 import { Button } from '../ui/button.js';
 import { RootPicker } from './RootPicker.js';
+import { SearchPanel } from './SearchPanel.js';
 import { filesRootSpec, rootDirOf, useFilesStore } from './store.js';
 import { Tree } from './Tree.js';
 
@@ -120,6 +121,7 @@ export function FilesPanel({ bridge, entry }: FilesPanelProps): JSX.Element {
   const key = rootKeyOf(root);
   const rootDir = rootDirOf(entry, spec);
   const showIgnored = useUiStore((state) => state.ui.filesShowIgnored);
+  const mode = useFilesStore((state) => state.mode);
   const patchUi = useUiStore((state) => state.patchUi);
   const [watchFailed, setWatchFailed] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
@@ -208,6 +210,21 @@ export function FilesPanel({ bridge, entry }: FilesPanelProps): JSX.Element {
             <RefreshCw className="size-3.5" />
           </Button>
         ) : null}
+        {/* Поиск в файлах (7.4) — режим этой же вкладки; повторный клик возвращает дерево. */}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={S.actions.findInFiles}
+          title={S.actions.findInFiles}
+          aria-pressed={mode === 'search'}
+          onClick={() => {
+            if (mode === 'search') useFilesStore.getState().showTree();
+            else useFilesStore.getState().openSearch();
+          }}
+        >
+          <Search className="size-3.5" />
+        </Button>
         <Button
           type="button"
           variant="ghost"
@@ -220,16 +237,21 @@ export function FilesPanel({ bridge, entry }: FilesPanelProps): JSX.Element {
           {showIgnored ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
         </Button>
       </div>
-      <Tree
-        key={key}
-        bridge={bridge}
-        root={root}
-        rootDir={rootDir}
-        status={status}
-        showIgnored={showIgnored}
-        reloadToken={reloadToken}
-        onRootGone={spec.kind === 'worktree' ? rootGone : () => {}}
-      />
+      {/* Корень поиска — корень дерева; новый корень монтирует панель поиска заново. */}
+      {mode === 'search' ? (
+        <SearchPanel key={key} bridge={bridge} root={root} />
+      ) : (
+        <Tree
+          key={key}
+          bridge={bridge}
+          root={root}
+          rootDir={rootDir}
+          status={status}
+          showIgnored={showIgnored}
+          reloadToken={reloadToken}
+          onRootGone={spec.kind === 'worktree' ? rootGone : () => {}}
+        />
+      )}
     </div>
   );
 }

@@ -16,16 +16,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { Command as CommandPrimitive } from 'cmdk';
+import { toast } from 'sonner';
 import { Command as CommandIcon, File as FileIcon, Folder, GitCompare, Globe, Hash, Mail, Plus, SquareTerminal } from 'lucide-react';
 import type { HarnasBridge } from '../../shared/bridge.js';
+import type { FileList, FileRoot } from '../../shared/files-types.js';
+import { decodeIpcError } from '../../shared/ipc-error.js';
 import { ACTIONS, type ActionId } from '../../shared/keybindings.js';
-import { S } from '../../shared/strings.js';
+import { errorText, S } from '../../shared/strings.js';
+import { rootKey as rootKeyOf } from '../../shared/work-keys.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
+import { fileDocuments } from '../files/quick-open.js';
+import { filesRootSpec, useFilesStore } from '../files/store.js';
+import { openFile } from '../files/Tree.js';
 import { isActionAvailable } from '../keys/handler.js';
 import { ensureHydrated } from '../layout/persistence.js';
-import { useLayoutStore } from '../layout/store.js';
+import { focusedSessionOf, useLayoutStore } from '../layout/store.js';
 import { hostMethods } from '../lib/capabilities.js';
 import { cn } from '../lib/cn.js';
+import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { visibleWorkOrder } from '../sidebar/sort.js';
 import { useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
 import { useActivityStore } from '../store/activity.js';
@@ -33,7 +41,7 @@ import { useHostStore } from '../store/host.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import { Command, CommandGroup, CommandItem, CommandList, CommandShortcut } from '../ui/command.js';
-import { buildDocuments, rankDocuments, type PaletteDoc, type PaletteIcon, type PaletteSection } from './documents.js';
+import { buildDocuments, filesQuery, rankDocuments, type PaletteDoc, type PaletteIcon, type PaletteSection } from './documents.js';
 import { registerRowPicker, usePaletteStore } from './store.js';
 
 export interface PaletteProps {
@@ -77,6 +85,58 @@ interface BodyProps extends PaletteProps {
   onPick(): void;
 }
 
+/** Строка-пояснение палитры: не выбирается, ⌘1–9 её не считают. */
+const NOTE_CLASS = 'px-3 py-1.5 text-[12px] text-muted-foreground';
+
+/**
+ * Список файлов для ⌘P и запроса с `/` (кусок 7.4, спека 10.2): корень — корень «Файлов» активной
+ * работы (`filesRootSpec`, 7.2). `lsFiles` зовётся раз на корень за открытие палитры, когда файлы
+ * впервые понадобились: обычный запрос без `/` main не трогает. `docs: null` — ответа ещё нет.
+ */
+function useQuickOpenFiles(
+  bridge: HarnasBridge,
+  wanted: boolean,
+  activeWorkKey: string | null,
+): { docs: PaletteDoc[] | null; list: FileList | null } {
+  const works = useWorksStore((state) => state.entries);
+  const rootByWork = useFilesStore((state) => state.rootByWork);
+  const focused = useLayoutStore((state) => (activeWorkKey === null ? null : focusedSessionOf(state, activeWorkKey)));
+  const entry = activeWorkKey === null ? undefined : works.find((item) => workKeyOf(item.projectPath, item.map.work.id) === activeWorkKey);
+  const spec = entry === undefined ? null : filesRootSpec(rootByWork, entry, focused);
+  const specKey = spec === null ? null : spec.kind === 'project' ? 'project' : spec.sessionId;
+  // Одна ссылка на корень, пока тот же ключ: от неё зависят запрос и документы.
+  const root = useMemo<FileRoot | null>(
+    () => (activeWorkKey === null || spec === null ? null : { workKey: activeWorkKey, spec }),
+    [activeWorkKey, specKey],
+  );
+  const key = root === null ? null : rootKeyOf(root);
+  const [loaded, setLoaded] = useState<{ key: string; list: FileList } | null>(null);
+  const requested = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!wanted || root === null || key === null || requested.current === key) return;
+    requested.current = key;
+    // Ответ пишется со своим ключом: ответ прежнего корня показан не будет — его ключ не совпадёт.
+    bridge.files
+      .lsFiles(root)
+      .then((list) => setLoaded({ key, list }))
+      .catch((error: unknown) => {
+        console.warn('[harnas] files.lsFiles', error);
+        const { code } = decodeIpcError(error);
+        toast(code === 'files:denied' ? S.files.denied : errorText(code, S.errors.actions.readFolder));
+        setLoaded({ key, list: { paths: [], truncated: false } });
+      });
+  }, [bridge, wanted, root, key]);
+
+  const list = loaded !== null && loaded.key === key ? loaded.list : null;
+  const docs = useMemo(() => {
+    if (root === null) return [];
+    if (list === null) return null;
+    return fileDocuments(root, list.paths, (path, split) => openFile(root, path, split));
+  }, [root, list]);
+  return { docs, list };
+}
+
 /** Содержимое открытой палитры: подписки и документы живут, только пока она открыта. */
 function PaletteBody({ bridge, run, onPick }: BodyProps): JSX.Element {
   const mode = usePaletteStore((state) => state.mode);
@@ -118,6 +178,10 @@ function PaletteBody({ bridge, run, onPick }: BodyProps): JSX.Element {
   // Раскрытые «ещё N» — до следующего запроса.
   useEffect(() => setExpanded(new Set()), [query]);
 
+  // ⌘P и префикс `/` (спека 9.1): только секция файлов, запрос — без `/`.
+  const fileQuery = filesQuery(mode, query);
+  const files = useQuickOpenFiles(bridge, fileQuery !== null, activeWorkKey);
+
   const docs = useMemo(() => {
     const methods = hostMethods(hostStatus);
     return buildDocuments({
@@ -132,13 +196,15 @@ function PaletteBody({ bridge, run, onPick }: BodyProps): JSX.Element {
       available: (id) => isActionAvailable(id, methods),
       wakePaused,
       providers,
-      mode,
+      mode: fileQuery === null ? mode : 'files',
       activeWorkKey,
+      files: files.docs,
       run,
     });
-  }, [works, activity, attention, branches, sections, layouts, history, hostStatus, wakePaused, providers, mode, activeWorkKey, run]);
+  }, [works, activity, attention, branches, sections, layouts, history, hostStatus, wakePaused, providers, mode, activeWorkKey, run, fileQuery === null, files.docs]);
 
-  const ranked = useMemo(() => rankDocuments(query, docs, Date.now(), expanded), [query, docs, expanded]);
+  const rankQuery = fileQuery ?? query;
+  const ranked = useMemo(() => rankDocuments(rankQuery, docs, Date.now(), expanded), [rankQuery, docs, expanded]);
   const rows = ranked.flatMap((section) => section.docs);
   const byId = new Map(rows.map((doc) => [doc.id, doc]));
   const trimmed = query.trim();
@@ -181,7 +247,7 @@ function PaletteBody({ bridge, run, onPick }: BodyProps): JSX.Element {
           <CommandPrimitive.Input
             value={query}
             onValueChange={(next) => usePaletteStore.getState().setQuery(next)}
-            placeholder={S.palette.placeholder}
+            placeholder={mode === 'files' ? S.actions.goToFile : S.palette.placeholder}
             className="h-12 w-full bg-transparent px-3 text-[14px] outline-none placeholder:text-muted-foreground"
             onKeyDown={(event) => {
               // cmdk 1.1.1 разбирает Enter в корне без модификаторов: ⌘Enter ушёл бы в обычный выбор.
@@ -194,7 +260,7 @@ function PaletteBody({ bridge, run, onPick }: BodyProps): JSX.Element {
         </div>
       </div>
       <CommandList className="max-h-[min(60vh,480px)] px-2 pb-2">
-        {trimmed !== '' && ranked.length === 0 ? (
+        {fileQuery === null && trimmed !== '' && ranked.length === 0 ? (
           <CommandItem value={CREATE_VALUE} onSelect={createWorkspace} className={ROW_CLASS}>
             <Plus className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             <span className="min-w-0 flex-1 truncate text-[14px] font-semibold" title={S.palette.createWorkspace(trimmed)}>
@@ -227,7 +293,9 @@ function PaletteBody({ bridge, run, onPick }: BodyProps): JSX.Element {
                 </CommandItem>
               );
             })}
-            {section.more > 0 ? (
+            {/* Секция файлов не раскрывается: 50 000 путей встали бы в cmdk (спека 10.2). */}
+            {section.more > 0 && section.section === 'files' ? <div className={NOTE_CLASS}>{S.files.refineQuery}</div> : null}
+            {section.more > 0 && section.section !== 'files' ? (
               <CommandItem
                 value={`${MORE_PREFIX}${section.section}`}
                 onSelect={() => setExpanded((current) => new Set([...current, section.section]))}
@@ -238,6 +306,12 @@ function PaletteBody({ bridge, run, onPick }: BodyProps): JSX.Element {
             ) : null}
           </CommandGroup>
         ))}
+        {fileQuery !== null && files.docs === null ? <div className={NOTE_CLASS}>{S.files.loadingFiles}</div> : null}
+        {fileQuery !== null && files.docs !== null && ranked.length === 0 ? <div className={NOTE_CLASS}>{S.files.noFiles}</div> : null}
+        {/* Обход не-git корня упёрся в предел или время (спека 10.7): файла за пределом в списке нет. */}
+        {fileQuery !== null && files.list?.truncated === true ? (
+          <div className={NOTE_CLASS}>{S.files.filesTruncated(files.list.paths.length)}</div>
+        ) : null}
       </CommandList>
       <div className="border-t border-border/55 px-3 py-2 text-[11px] text-muted-foreground">{S.palette.footer}</div>
     </Command>

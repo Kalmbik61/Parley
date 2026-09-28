@@ -17,6 +17,7 @@ import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { errorText, S } from '../../shared/strings.js';
 import type { Appearance } from '../../shared/ui-types.js';
 import type { MruCycle } from '../keys/mru-cycle.js';
+import type { FilesState } from '../files/store.js';
 import type { LayoutState } from '../layout/store.js';
 import { findTab, focusGroup, focusTab, groups, reopenClosed } from '../layout/tree.js';
 import { neighborInOrder } from '../sidebar/sort.js';
@@ -71,6 +72,8 @@ export interface ActionContext {
     active(): TerminalSurfaceHandle | null;
   };
   attention: { next(): SessionRef | null }; // openNextAttention (4.2)
+  /** useFilesStore.getState() (7.4): ⌘⇧F переводит «Файлы» в режим поиска. */
+  files: Pick<FilesState, 'openSearch'>;
   toast(text: string): void;
 }
 
@@ -136,12 +139,14 @@ function needsActiveWork(id: ActionId): boolean {
     id === 'room.new' ||
     id === 'sidebar.right.toggle' ||
     id === 'sidebar.files' ||
+    id === 'files.quickOpen' ||
+    id === 'files.search' ||
     id.startsWith('group.') ||
     id.startsWith('tab.')
   );
 }
 
-/** Одна ветка на каждый реализованный `ActionId`; действия будущих этапов (7.4, 8.2, 9.2) — без ветки. */
+/** Одна ветка на каждый реализованный `ActionId`; действия будущих этапов (8.2, 9.2) — без ветки. */
 export function runAction(id: ActionId, ctx: ActionContext): void {
   // Без активной работы — тост; активная есть, но её раскладка ещё читается с диска — ветки
   // вкладок и групп ниже просто ничего не делают.
@@ -193,6 +198,14 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
       return;
     case 'sidebar.files':
       ctx.ui.showRightTab('files');
+      return;
+    // Корень ⌘P и поиска — корень «Файлов» активной работы (`filesRootSpec`): его берут палитра и панель.
+    case 'files.quickOpen':
+      ctx.palette.openWith('files');
+      return;
+    case 'files.search':
+      ctx.ui.showRightTab('files');
+      ctx.files.openSearch();
       return;
     case 'works.showArchived':
       ctx.ui.toggleShowArchived();

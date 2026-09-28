@@ -47,6 +47,8 @@ export const IMPLEMENTED_ACTIONS: ReadonlySet<ActionId> = new Set<ActionId>([
   'appearance.dark',
   'appearance.light',
   'room.new',
+  'files.quickOpen',
+  'files.search',
 ]);
 
 /** Действию нужны методы хоста: без них оно недоступно, даже когда реализовано. */

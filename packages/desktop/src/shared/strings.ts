@@ -508,6 +508,7 @@ export const S = {
       restartHost: 'restart host',
       closeTab: 'close tab',
       readFolder: 'read folder',
+      searchFiles: 'search in files',
       resumeSession: 'resume session',
       saveFile: 'save file',
       clearBrowserData: 'clear browser data',
@@ -574,6 +575,22 @@ export const S = {
     saveAgain: 'Save again',
     overwrite: 'Overwrite',
     overwriteQuestion: 'File changed on disk after you opened it. Overwrite the changes on disk?',
+    /**
+     * ⌘P и поиск в файлах (кусок 7.4, спека 10.2, 10.3). «Aa» и «.*» — `S.terminal.matchCase` и
+     * `useRegex`; отказ `lsFiles` — `S.errors.actions.readFolder`, `grep` — `searchFiles`.
+     */
+    searchPlaceholder: 'Search in files',
+    matchWholeWord: 'Match whole word',
+    /** n — число совпадений в ответе `grep` с `truncated`. */
+    truncated: (n: number): string => `Showing first ${n} matches`,
+    /** n — число путей в ответе `lsFiles` с `truncated`. */
+    filesTruncated: (n: number): string => `Showing first ${n} files`,
+    refineQuery: 'Refine your query',
+    noFiles: 'No matching files',
+    loadingFiles: 'Loading files…',
+    /** Ответ `bad_request` на запрос в режиме «.*»: ERE git или `RegExp` не разобрали регулярку. */
+    invalidRegex: 'Invalid regular expression',
+    noResults: 'No results',
   },
 
   /** Оболочка окна (`shell/AppShell.tsx`) — заголовки `ErrorBoundary` вокруг сайдбара и раскладки. */

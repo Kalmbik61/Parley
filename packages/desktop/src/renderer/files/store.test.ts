@@ -53,6 +53,16 @@ describe('filesRootSpec (тест 11)', () => {
   });
 });
 
+describe('режим tree | search (кусок 7.4)', () => {
+  it('openSearch — режим search и просьба о фокусе поля; showTree — назад к дереву', () => {
+    useFilesStore.setState({ mode: 'tree', focusSearch: false });
+    useFilesStore.getState().openSearch();
+    expect(useFilesStore.getState()).toMatchObject({ mode: 'search', focusSearch: true });
+    useFilesStore.getState().showTree();
+    expect(useFilesStore.getState().mode).toBe('tree');
+  });
+});
+
 describe('toggleDir', () => {
   it('раскрывает и сворачивает папку своего корня, чужой корень не трогает; Set — новый', () => {
     const { toggleDir } = useFilesStore.getState();

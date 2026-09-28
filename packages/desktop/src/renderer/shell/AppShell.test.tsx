@@ -155,6 +155,8 @@ beforeEach(() => {
   useWorksStore.setState({ entries: [], branches: {}, loading: false, error: null });
   useActivityStore.setState({ byRef: {} });
   useNoticesStore.setState({ notices: [] });
+  // ⌘⇧F (7.4) оставляет «Файлы» в режиме поиска — поле поиска не должно доставаться следующим тестам.
+  useFilesStore.setState({ mode: 'tree', focusSearch: false });
   useUiStore.setState({
     windowFocused: true,
     wakePaused: null,
@@ -299,17 +301,34 @@ describe('AppShell — меню и диалоги (тест 9)', () => {
     expect(screen.queryByText('⌘K')).toBeNull();
   });
 
-  it('emitMenu(files.quickOpen) — действие ещё не реализовано: ничего не меняет и не бросает (тест 3 куска 6.1b)', async () => {
+  it('emitMenu(files.quickOpen) без активной работы — тост No active workspace, палитра закрыта (тест 3 куска 6.1b, тест 6 куска 7.4)', async () => {
+    vi.mocked(toast).mockClear();
     render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
     await flush();
-    const before = { ui: useUiStore.getState(), layout: useLayoutStore.getState() };
 
-    expect(() => act(() => bridge.emitMenu('files.quickOpen'))).not.toThrow();
+    act(() => bridge.emitMenu('files.quickOpen'));
     await flush();
 
-    expect(useUiStore.getState()).toBe(before.ui);
-    expect(useLayoutStore.getState()).toBe(before.layout);
+    expect(vi.mocked(toast)).toHaveBeenCalledWith('No active workspace');
+    expect(usePaletteStore.getState().open).toBe(false);
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('emitMenu(files.quickOpen) с работой — палитра в режиме files; files.search — сайдбар на Files в режиме поиска (тест 6 куска 7.4)', async () => {
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+
+    act(() => bridge.emitMenu('files.quickOpen'));
+    await flush();
+    expect(usePaletteStore.getState()).toMatchObject({ open: true, mode: 'files' });
+    act(() => usePaletteStore.getState().close());
+    await flush();
+
+    useFilesStore.setState({ mode: 'tree', focusSearch: false });
+    act(() => bridge.emitMenu('files.search'));
+    await flush();
+    expect(useUiStore.getState().ui.rightSidebar).toMatchObject({ open: true, tab: 'files' });
+    expect(useFilesStore.getState().mode).toBe('search');
+    expect(await screen.findByPlaceholderText('Search in files')).toBeTruthy();
   });
 
   it('с работой: меню sidebar.left.toggle сворачивает сайдбар, «Поиск ⌘J» открывает палитру', async () => {

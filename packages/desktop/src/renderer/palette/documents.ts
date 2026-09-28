@@ -54,6 +54,8 @@ export interface PaletteDoc {
   icon: PaletteIcon;
   /** Работы: последний переход к работе в истории — пустой запрос берёт по нему четыре последние. */
   visitedAt?: number | null;
+  /** Вес названия в очках; по умолчанию 1.5 (спека 9.2), имя файла — 2 (спека 10.2). */
+  titleWeight?: number;
   run(mode: 'default' | 'split'): void;
 }
 
@@ -76,11 +78,13 @@ export function buildDocuments(input: {
   mode: PaletteMode;
   /** Режимы разделения показывают только активную работу. */
   activeWorkKey: string | null;
+  /** Документы файлов корня «Файлов» активной работы (режим files или запрос с /); null — lsFiles ещё идёт. */
+  files: PaletteDoc[] | null;
   run(id: ActionId): void; // действия — run из AppShell (6.1b), в 6.3 — runAction
 }): PaletteDoc[] {
   const { works, activity, attention, branches, layouts, mode, activeWorkKey } = input;
-  // `files` — заготовка до 7.4: документов файлов ещё нет.
-  if (mode === 'files') return [];
+  // Файлы ищутся отдельно от прочего (спека 9.1): ⌘P и запрос с `/` показывают только их.
+  if (mode === 'files') return input.files ?? [];
   const split = mode === 'splitRight' || mode === 'splitDown';
   const direction = mode === 'splitDown' ? 'column' : 'row';
 
@@ -321,6 +325,16 @@ async function focusOpened(key: string, tab: TabSpec, entry: WorkEntry): Promise
     (element) => element.dataset.workKey === key && element.dataset.tabId === tab.id,
   );
   (field ?? tabElement)?.focus();
+}
+
+/**
+ * Запрос к файлам: в режиме `files` — весь запрос, в обычном — после префикса `/` (спека 9.1);
+ * `null` — палитра файлов не ищет. Режимы разделения выбирают содержимое группы — у них префикса нет.
+ */
+export function filesQuery(mode: PaletteMode, query: string): string | null {
+  if (mode === 'files') return query;
+  if (mode === 'default' && query.startsWith('/')) return query.slice(1);
+  return null;
 }
 
 export interface RankedSection {

@@ -12,7 +12,7 @@ import { tabId } from '../layout/ids.js';
 import { emptyLayout, openTab } from '../layout/tree.js';
 import { workKey } from '../lib/tree-order.js';
 import { makeLetter, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
-import { buildDocuments, rankDocuments, SECTION_LIMITS, type PaletteDoc, type PaletteSection } from './documents.js';
+import { buildDocuments, filesQuery, rankDocuments, SECTION_LIMITS, type PaletteDoc, type PaletteSection } from './documents.js';
 import type { PaletteMode } from './store.js';
 
 const NOW = Date.parse('2026-09-27T12:00:00.000Z');
@@ -42,6 +42,7 @@ interface Input {
   activeWorkKey?: string | null;
   available?: (id: ActionId) => boolean;
   wakePaused?: boolean | null;
+  files?: PaletteDoc[] | null;
 }
 
 function build(input: Input): PaletteDoc[] {
@@ -61,6 +62,7 @@ function build(input: Input): PaletteDoc[] {
     providers: [{ id: 'claude', label: 'Claude Code' }],
     mode: input.mode ?? 'default',
     activeWorkKey: input.activeWorkKey ?? null,
+    files: input.files === undefined ? null : input.files,
     run: () => {},
   });
 }
@@ -213,5 +215,41 @@ describe('rankDocuments (тест 4)', () => {
     const ranked = rankDocuments('', [doc('t', 'tabs'), doc('s2', 'sessions', { order: 2 }), doc('s1', 'sessions', { order: 1 })], NOW);
     expect(ranked.map((s) => s.section)).toEqual(['tabs', 'sessions']);
     expect(ranked[1]?.docs.map((d) => d.id)).toEqual(['s1', 's2']);
+  });
+});
+
+describe('секция files (кусок 7.4, спека 9.1, 10.2)', () => {
+  const fileDoc = (path: string): PaletteDoc => ({
+    id: `file:${path}`,
+    section: 'files',
+    title: path.slice(path.lastIndexOf('/') + 1),
+    subtitle: path,
+    fields: [path],
+    recencyAt: null,
+    order: 0,
+    icon: 'file',
+    titleWeight: 2,
+    run: () => {},
+  });
+  const works = [makeWork('w-01', { sessions: [makeSession('s-01', 'plan')] })];
+
+  it('filesQuery: режим files — запрос как есть; default с / — запрос без /; иначе null', () => {
+    expect(filesQuery('files', 'main')).toBe('main');
+    expect(filesQuery('files', '')).toBe('');
+    expect(filesQuery('default', '/main')).toBe('main');
+    expect(filesQuery('default', '/')).toBe('');
+    expect(filesQuery('default', 'main')).toBeNull();
+    expect(filesQuery('splitRight', '/main')).toBeNull();
+  });
+
+  it('режим files — только документы файлов, других секций нет; files: null — пусто', () => {
+    const files = [fileDoc('src/main.ts')];
+    expect(build({ works, mode: 'files', files })).toEqual(files);
+    expect(build({ works, mode: 'files', files: null })).toEqual([]);
+  });
+
+  it('обычный режим документов файлов не берёт', () => {
+    const docs = build({ works, files: [fileDoc('src/main.ts')] });
+    expect(docs.some((doc) => doc.section === 'files')).toBe(false);
   });
 });

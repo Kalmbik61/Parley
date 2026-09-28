@@ -437,6 +437,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
       active: () => activeTerminalSurface() ?? null,
     },
     attention: { next: openNextAttention },
+    files: useFilesStore.getState(),
     toast: (text) => toast(text),
   });
 

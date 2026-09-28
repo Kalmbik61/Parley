@@ -319,3 +319,109 @@ describe('Palette (тест 6)', () => {
     expect(create.getAttribute('title')).toBe(`Create workspace "${query}"`);
   });
 });
+
+describe('Palette — файлы: ⌘P и префикс / (тест 5 куска 7.4)', () => {
+  const w = makeWork('w-01', { projectPath: '/tmp/a', title: 'Первая', sessions: [makeSession('s-01', 'main')] });
+  const root = { workKey: keyOf(w), spec: { kind: 'project' as const } };
+
+  function headings(): string[] {
+    return [...document.querySelectorAll('[cmdk-group-heading]')].map((node) => node.textContent ?? '');
+  }
+
+  it('ввод /main — секция Files с src/main.ts, других секций нет', async () => {
+    setup([w]);
+    bridge.setLsFiles(root, { paths: ['docs/main-notes/x.md', 'src/main.ts', 'README.md'], truncated: false });
+    act(() => usePaletteStore.getState().openWith('default'));
+    renderPalette();
+    await type('/main');
+    await waitFor(() => expect(headings()).toEqual(['Files']));
+    const options = screen.getAllByRole('option');
+    expect(options[0]?.textContent).toContain('main.ts');
+    expect(options[0]?.textContent).toContain('src/main.ts');
+    expect(options).toHaveLength(2);
+    expect(bridge.lsFilesCalls).toEqual([root]);
+  });
+
+  it('/нетакого — No matching files, строки Create workspace нет', async () => {
+    setup([w]);
+    bridge.setLsFiles(root, { paths: ['src/main.ts'], truncated: false });
+    act(() => usePaletteStore.getState().openWith('default'));
+    renderPalette();
+    await type('/нетакого');
+    await waitFor(() => expect(screen.getByText('No matching files')).toBeTruthy());
+    expect(screen.queryByText(/Create workspace/)).toBeNull();
+  });
+
+  it('пока lsFiles не ответил — Loading files…', async () => {
+    setup([w]);
+    bridge.files.lsFiles = () => new Promise(() => {});
+    act(() => usePaletteStore.getState().openWith('files'));
+    renderPalette();
+    await act(async () => {});
+    expect(screen.getByText('Loading files…')).toBeTruthy();
+    expect(screen.queryByText('No matching files')).toBeNull();
+  });
+
+  it('truncated: true — строка Showing first N files; truncated: false — её нет', async () => {
+    setup([w]);
+    bridge.setLsFiles(root, { paths: ['a.ts', 'b.ts', 'c.ts'], truncated: true });
+    act(() => usePaletteStore.getState().openWith('files'));
+    renderPalette();
+    await waitFor(() => expect(screen.getByText('Showing first 3 files')).toBeTruthy());
+    cleanup();
+
+    bridge.setLsFiles(root, { paths: ['a.ts', 'b.ts', 'c.ts'], truncated: false });
+    act(() => usePaletteStore.getState().openWith('files'));
+    renderPalette();
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(3));
+    expect(screen.queryByText(/Showing first/)).toBeNull();
+  });
+
+  it('режим files: 60 путей — 50 строк и Refine your query вместо «ещё N»; шестидесятый — по имени', async () => {
+    setup([w]);
+    const paths = [...Array.from({ length: 59 }, (_, index) => `dir/file-${index}.ts`), 'deep/zeta-last.ts'];
+    bridge.setLsFiles(root, { paths, truncated: false });
+    act(() => usePaletteStore.getState().openWith('files'));
+    renderPalette();
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(50));
+    expect(screen.getByText('Refine your query')).toBeTruthy();
+    expect(screen.queryByText(/more$/)).toBeNull();
+    await type('zeta');
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([expect.stringContaining('zeta-last.ts')]);
+    expect(screen.queryByText('Refine your query')).toBeNull();
+  });
+
+  it('Enter открывает вкладку файла, палитра закрыта', async () => {
+    setup([w]);
+    bridge.setLsFiles(root, { paths: ['src/main.ts'], truncated: false });
+    act(() => usePaletteStore.getState().openWith('files'));
+    renderPalette();
+    await type('main');
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(1));
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    await act(async () => {});
+    expect(usePaletteStore.getState().open).toBe(false);
+    const layout = useLayoutStore.getState().layouts[keyOf(w)];
+    expect(layout && groups(layout)[0]?.activeTabId).toBe(tabId.file({ kind: 'project' }, 'src/main.ts'));
+  });
+
+  it('отказ lsFiles — тост Couldn’t read folder', async () => {
+    setup([w]);
+    bridge.setLsFiles(root, { code: 'failed', message: 'boom' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    act(() => usePaletteStore.getState().openWith('files'));
+    renderPalette();
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't read folder: failed."));
+    expect(screen.queryByText('Loading files…')).toBeNull();
+    warn.mockRestore();
+  });
+
+  it('обычный запрос без / файлов не ищет и lsFiles не зовёт', async () => {
+    setup([w]);
+    act(() => usePaletteStore.getState().openWith('default'));
+    renderPalette();
+    await type('main');
+    expect(bridge.lsFilesCalls).toEqual([]);
+    expect(headings()).not.toContain('Files');
+  });
+});

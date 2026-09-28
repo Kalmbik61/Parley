@@ -67,6 +67,7 @@ function makeContext(patch: { source?: ActionSource; activeWorkKey?: string | nu
   const palette = { open: false, mode: 'default' as const, openWith: vi.fn(), close: vi.fn() };
   const attention = { next: vi.fn(() => null) };
   const toast = vi.fn();
+  const files = { openSearch: vi.fn() };
   const mruCycle = createMruCycle();
   const step = vi.spyOn(mruCycle, 'step');
   const ctx: ActionContext = {
@@ -79,9 +80,10 @@ function makeContext(patch: { source?: ActionSource; activeWorkKey?: string | nu
     palette,
     terminals: { focused: () => (patch.focused === false ? null : focused), active: () => (patch.active === false ? null : active) },
     attention,
+    files,
     toast,
   };
-  return { ctx, layout, ui, palette, attention, toast, focused, active, step };
+  return { ctx, layout, ui, palette, attention, files, toast, focused, active, step };
 }
 
 /** Что должно случиться у каждого действия — по реестру, один случай на действие (тест 1). */
@@ -137,6 +139,11 @@ function expectation(id: ActionId): (spies: Spies) => void {
     'appearance.system': ({ ui }) => expect(ui.setAppearance).toHaveBeenCalledWith('system'),
     'appearance.dark': ({ ui }) => expect(ui.setAppearance).toHaveBeenCalledWith('dark'),
     'appearance.light': ({ ui }) => expect(ui.setAppearance).toHaveBeenCalledWith('light'),
+    'files.quickOpen': ({ palette }) => expect(palette.openWith).toHaveBeenCalledWith('files'),
+    'files.search': ({ ui, files }) => {
+      expect(ui.showRightTab).toHaveBeenCalledWith('files');
+      expect(files.openSearch).toHaveBeenCalledTimes(1);
+    },
   };
   const check = table[id];
   if (check === undefined) throw new Error(`нет ожидания для ${id}`);
@@ -153,7 +160,7 @@ describe('runAction — таблица по реестру (тест 1 куск�
 
   it('действия будущих этапов не реализованы и ничего не делают', () => {
     const spies = makeContext();
-    for (const id of ['files.quickOpen', 'sidebar.changes', 'browser.newTab'] as const) {
+    for (const id of ['sidebar.changes', 'browser.newTab'] as const) {
       expect(IMPLEMENTED_ACTIONS.has(id)).toBe(false);
       runAction(id, spies.ctx);
     }
@@ -164,6 +171,17 @@ describe('runAction — таблица по реестру (тест 1 куск�
 });
 
 describe('runAction — без активной работы (тест 2 куска 6.3)', () => {
+  it('files.quickOpen и files.search без активной работы — тост No active workspace, ничего не открыто (тест 6 куска 7.4)', () => {
+    for (const id of ['files.quickOpen', 'files.search'] as const) {
+      const spies = makeContext({ activeWorkKey: null });
+      runAction(id, spies.ctx);
+      expect(spies.toast).toHaveBeenCalledWith('No active workspace');
+      expect(spies.palette.openWith).not.toHaveBeenCalled();
+      expect(spies.ui.showRightTab).not.toHaveBeenCalled();
+      expect(spies.files.openSearch).not.toHaveBeenCalled();
+    }
+  });
+
   it('tab.close без активной работы — тост No active workspace, requestCloseTabs не вызван', () => {
     const spies = makeContext({ activeWorkKey: null });
     runAction('tab.close', spies.ctx);

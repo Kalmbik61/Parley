@@ -69,6 +69,16 @@ describe('scoreDocument (тест 2)', () => {
   });
 });
 
+describe('scoreDocument — вес названия из документа (тест 4 куска 7.4)', () => {
+  it('titleWeight 2 даёт больше очков, чем вес по умолчанию; без titleWeight — 1.5, как в 6.2', () => {
+    const heavy = scoreDocument(['main'], { title: 'main.ts', fields: ['src/main.ts'], titleWeight: 2 });
+    const plain = scoreDocument(['main'], { title: 'main.ts', fields: ['src/main.ts'] });
+    expect(heavy).toBe(160);
+    expect(plain).toBe(120);
+    expect(heavy!).toBeGreaterThan(plain!);
+  });
+});
+
 describe('recencyBucket (тест 3)', () => {
   it('30 мин → 0, 5 ч → 1, 3 сут → 2, 30 сут и null → 3', () => {
     expect(recencyBucket(30 * 60 * 1000)).toBe(0);

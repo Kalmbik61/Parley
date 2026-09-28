@@ -1,6 +1,6 @@
 /**
  * Стор вкладки «Файлы» правого сайдбара (кусок 7.2, спека 10.1): выбор корня человеком и
- * раскрытые папки; режим поиска — 7.4. Содержимое папок здесь не хранится: его держит само
+ * раскрытые папки; режим дерева или поиска (7.4). Содержимое папок здесь не хранится: его держит само
  * дерево (`files/Tree.tsx`) — оно живёт, пока панель открыта, и перечитывает папки по событиям
  * слежения.
  *
@@ -44,6 +44,17 @@ export interface FilesState {
   expanded: Record<string, Set<string>>;
   setRoot(workKey: string, spec: FileRootSpec): void;
   toggleDir(rootKey: string, dir: string): void;
+
+  /** Что показывает вкладка «Файлы»: дерево или поиск в файлах (7.4). */
+  mode: 'tree' | 'search';
+  /**
+   * Просьба ⌘⇧F дать фокус полю поиска. Флаг, а не вызов: панель поиска могла ещё не
+   * смонтироваться — сайдбар открывается тем же действием; её забирает `SearchPanel`.
+   */
+  focusSearch: boolean;
+  /** ⌘⇧F: режим поиска с фокусом в поле. Сайдбар открывает ActionContext.ui.showRightTab('files'). */
+  openSearch(): void;
+  showTree(): void;
 
   /** Буферы по `bufferKey` (7.3a). */
   buffers: Record<string, FileBuffer>;
@@ -94,6 +105,11 @@ export const useFilesStore = create<FilesState>((set, get) => {
         else next.add(dir);
         return { expanded: { ...state.expanded, [rootKey]: next } };
       }),
+
+    mode: 'tree',
+    focusSearch: false,
+    openSearch: () => set({ mode: 'search', focusSearch: true }),
+    showTree: () => set({ mode: 'tree', focusSearch: false }),
 
     buffers: {},
     reveals: {},

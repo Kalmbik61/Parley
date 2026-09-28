@@ -73,14 +73,15 @@ export function scoreToken(token: string, field: string): number {
   return inOrderScore(t, f);
 }
 
-/** Вес поля «название» (спека 9.2, п. 4). */
+/** Вес поля «название» по умолчанию (спека 9.2, п. 4); у файлов документ задаёт свой — 2 (спека 10.2). */
 const TITLE_WEIGHT = 1.5;
 
-/** Сумма очков токенов: у каждого — лучшее поле, название × 1.5; `null` — какой-то токен не совпал. */
-export function scoreDocument(tokens: string[], doc: Pick<PaletteDoc, 'title' | 'fields'>): number | null {
+/** Сумма очков токенов: у каждого — лучшее поле, название × вес документа; `null` — какой-то токен не совпал. */
+export function scoreDocument(tokens: string[], doc: Pick<PaletteDoc, 'title' | 'fields' | 'titleWeight'>): number | null {
+  const weight = doc.titleWeight ?? TITLE_WEIGHT;
   let total = 0;
   for (const token of tokens) {
-    let best = scoreToken(token, doc.title) * TITLE_WEIGHT;
+    let best = scoreToken(token, doc.title) * weight;
     for (const field of doc.fields) best = Math.max(best, scoreToken(token, field));
     if (best === 0) return null;
     total += best;
