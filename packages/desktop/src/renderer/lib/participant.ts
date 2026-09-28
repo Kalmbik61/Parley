@@ -23,7 +23,7 @@ export function sessionTag(id: string): string {
 
 /**
  * Тот же литерал, что `NEW_LABEL` в `core/work/launch.ts`: из core рендерер берёт только
- * типы. Core пишет его в карту по-русски (старые карты и TUI), окно показывает английский.
+ * типы. Core пишет его в карту по-русски, окно показывает английский.
  */
 const NEW_LABEL = 'новая сессия'; // cyrillic-ok: метка-страж core
 

@@ -124,7 +124,7 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
 
 /**
  * Сохраняет бриф в `briefs/<session-id>.md`. Файл можно прочитать и поправить
- * до запуска: TUI перечитывает его с диска при `Enter` на `pending`.
+ * до запуска: `planLaunch` перечитывает его с диска, когда `pending` запускают.
  */
 export async function writeBrief(
   projectPath: string,

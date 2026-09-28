@@ -370,8 +370,8 @@ export function createWakeService(
 
     if (handle === undefined) {
       // Без нашего PTY письмо поднимает только спящую: живая без него —
-      // сессия TUI со своим каналом звонка, `pending` поднимает autoLaunch,
-      // закрытая не поднимается ничем (спека 7.2).
+      // сессия, поднятая не хостом (CLI), со своим каналом звонка, `pending`
+      // поднимает autoLaunch, закрытая не поднимается ничем (спека 7.2).
       if (session.lifecycle !== 'sleeping' || state.resuming || state.resumeUnavailable) return;
       const input: DeliveryInput = {
         session,

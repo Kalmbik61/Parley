@@ -24,13 +24,7 @@ import { addSession, removeSession, transitionSession, type NewSession } from '.
 import { mcpConfigValue, writeMcpConfig } from './mcp-config.js';
 import { finishSession, linkProviderSession, type MetricsRoots } from './metrics.js';
 import { writeWorkSettings } from './settings-file.js';
-import {
-  createWork,
-  deleteSessionFiles,
-  readMap,
-  updateMap,
-  workPaths,
-} from './store.js';
+import { createWork, deleteSessionFiles, readMap, updateMap, workPaths } from './store.js';
 import type { LaunchedBy, WorkSession } from './types.js';
 
 /** Чего хочет запуск сверх самой сессии. */
@@ -276,7 +270,7 @@ export async function createNewSession(
 }
 
 /**
- * `prefix C`: дочерняя сессия выбранной, руками. Родитель и контекст — выбранная
+ * Дочерняя сессия выбранной, руками (окно, через хост). Родитель и контекст — выбранная
  * сессия, бриф собирается как у порождённых агентом (`spawn_session`): резюме и
  * артефакты родителя плюс правила. Задачи у неё нет: бриф уходит контекстом в
  * системный промпт, а запрос пишет пользователь первым сообщением (раздел B
@@ -338,10 +332,9 @@ export async function createPendingSession(
 }
 
 /**
- * `prefix d`: убрать сессию из карты и её файлы с диска (план от 2026-09-06,
- * раздел C). Сначала карта — она источник истины: не удалившийся журнал читатели
+ * Убрать сессию из карты и её файлы с диска (план от 2026-09-06, раздел C). Сначала карта — она источник истины: не удалившийся журнал читатели
  * всё равно не покажут, а запись без карты показывать было бы нечем. Процесс к
- * этому моменту уже вышел: его гасит панель.
+ * этому моменту уже вышел: его гасит хост.
  */
 export async function deleteSession(
   projectPath: string,

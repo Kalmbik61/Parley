@@ -121,7 +121,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     requestShutdown: (reason) => runShutdown(reason),
   });
 
-  // Работы стартуют и останавливаются вместе с хостом: TUI и окно узнают о них
+  // Работы стартуют и останавливаются вместе с хостом: окно узнаёт о них
   // через `works.list`/`works.changed`, а на остановке хост снимает свою аренду.
   const worksService = createWorksService(handle.context);
   handle.context.onShutdown(() => worksService.stop());
