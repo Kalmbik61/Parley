@@ -8,7 +8,7 @@ import type { Room, WorkEntry, WorkSession } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
 import type { FileRootSpec, TabSpec } from '../../shared/layout-types.js';
 import { bufferKey } from '../files/buffer.js';
-import { EMPTY_EXTRAS, fileTabTitles, tabMeta, truncateTitle, type TabMetaExtras } from './tab-meta.js';
+import { EMPTY_EXTRAS, fileTabHint, fileTabTitles, tabMeta, truncateTitle, type TabMetaExtras } from './tab-meta.js';
 
 function session(id: string, label: string): WorkSession {
   return {
@@ -204,6 +204,57 @@ describe('fileTabTitles (тест 9 куска 7.3a)', () => {
     const titles = fileTabTitles([fileTab('index.ts'), fileTab('a/b/c/index.ts')]);
     expect(titles.get('file:index.ts')).toBe('index.ts');
     expect(titles.get('file:a/b/c/index.ts')).toBe('c/index.ts');
+  });
+
+  // Раунд fix-live, D5: одинаковый путь из разных корней различает метка корня, а не папка.
+  const S01: FileRootSpec = { kind: 'worktree', sessionId: 's-01' };
+  const S02: FileRootSpec = { kind: 'worktree', sessionId: 's-02' };
+  const rootTab = (path: string, root: FileRootSpec): TabSpec => ({
+    kind: 'file',
+    id: `file:${root.kind === 'project' ? 'p' : `w:${root.sessionId}`}:${path}`,
+    root,
+    path,
+  });
+
+  it('один путь из двух worktree — имя и метка сессии: app.ts · S01 и app.ts · S02', () => {
+    const titles = fileTabTitles([rootTab('src/app.ts', S01), rootTab('src/app.ts', S02)]);
+    expect(titles.get('file:w:s-01:src/app.ts')).toBe('app.ts · S01');
+    expect(titles.get('file:w:s-02:src/app.ts')).toBe('app.ts · S02');
+  });
+
+  it('один путь из папки проекта и worktree — метка папки проекта: Project', () => {
+    const titles = fileTabTitles([rootTab('src/app.ts', { kind: 'project' }), rootTab('src/app.ts', S02)]);
+    expect(titles.get('file:p:src/app.ts')).toBe('app.ts · Project');
+    expect(titles.get('file:w:s-02:src/app.ts')).toBe('app.ts · S02');
+  });
+
+  it('одно имя в двух папках одного корня — только папка, метки корня нет', () => {
+    const titles = fileTabTitles([rootTab('src/index.ts', S01), rootTab('docs/index.ts', S01)]);
+    expect(titles.get('file:w:s-01:src/index.ts')).toBe('src/index.ts');
+    expect(titles.get('file:w:s-01:docs/index.ts')).toBe('docs/index.ts');
+  });
+
+  it('всё вместе: папка у тёзок в разных папках, метка — только у пути, открытого из двух корней', () => {
+    const titles = fileTabTitles([rootTab('src/app.ts', S01), rootTab('src/app.ts', S02), rootTab('lib/app.ts', S01), rootTab('b.ts', S02)]);
+    expect(titles.get('file:w:s-01:src/app.ts')).toBe('src/app.ts · S01');
+    expect(titles.get('file:w:s-02:src/app.ts')).toBe('src/app.ts · S02');
+    expect(titles.get('file:w:s-01:lib/app.ts')).toBe('lib/app.ts');
+    expect(titles.get('file:w:s-02:b.ts')).toBe('b.ts');
+  });
+
+  it('длинное имя обрезается, метка корня остаётся видна', () => {
+    const long = `${'x'.repeat(60)}.ts`;
+    const titles = fileTabTitles([rootTab(long, S01), rootTab(long, S02)]);
+    const title = titles.get(`file:w:s-02:${long}`) ?? '';
+    expect(title.endsWith('… · S02')).toBe(true);
+    expect(Array.from(title).length).toBeLessThanOrEqual(41);
+  });
+});
+
+describe('fileTabHint (раунд fix-live, D5)', () => {
+  it('подсказка файловой вкладки — всегда путь и метка корня', () => {
+    expect(fileTabHint({ kind: 'file', id: 'f', root: { kind: 'worktree', sessionId: 's-02' }, path: 'src/app.ts' })).toBe('src/app.ts · S02');
+    expect(fileTabHint({ kind: 'file', id: 'f', root: { kind: 'project' }, path: 'src/app.ts' })).toBe('src/app.ts · Project');
   });
 });
 

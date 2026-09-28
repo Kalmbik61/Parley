@@ -37,7 +37,7 @@ import {
 import { usePaletteStore } from '../palette/store.js';
 import { useLayoutStore } from './store.js';
 import { focusGroup, focusTab } from './tree.js';
-import type { TabMeta } from './tab-meta.js';
+import { fileTabHint, type TabMeta } from './tab-meta.js';
 
 export interface TabProps {
   workKey: string;
@@ -94,9 +94,12 @@ function TabIcon({ tab, meta, dot }: Pick<TabProps, 'tab' | 'meta' | 'dot'>): JS
   }
 }
 
-/** Полный текст подсказки: путь файла; у браузера — заголовок страницы и адрес целиком (9.2a). */
+/**
+ * Полный текст подсказки: путь файла с меткой корня (раунд fix-live, D5); у браузера — заголовок
+ * страницы и адрес целиком (9.2a).
+ */
 function fullTitle(tab: TabSpec, pageTitle: string | null): string | null {
-  if (tab.kind === 'file') return tab.path;
+  if (tab.kind === 'file') return fileTabHint(tab);
   if (tab.kind !== 'browser') return null;
   const text = [pageTitle ?? '', tab.url].filter((part) => part !== '').join('\n');
   return text === '' ? null : text;

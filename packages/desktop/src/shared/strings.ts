@@ -453,6 +453,11 @@ export const S = {
     closeToRight: 'Close to the right',
     /** `aria-label` точки «не сохранён» вкладки файла (кусок 7.3a). */
     unsaved: 'Unsaved changes',
+    /**
+     * Файл и метка корня (раунд fix-live, D5): `app.ts · S02`, `src/app.ts · Project`. Заголовок —
+     * когда один путь открыт из разных корней; подсказка и вопросы о файле — всегда так же.
+     */
+    fileWithRoot: (name: string, root: string): string => `${name} · ${root}`,
   },
 
   /**

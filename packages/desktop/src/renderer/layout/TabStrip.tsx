@@ -48,7 +48,7 @@ import { dndId, type DragSourceData, type DropTargetData } from './dnd.js';
 import { useStripDropSlot } from './DropIndicator.js';
 import { Tab } from './Tab.js';
 import { focusGroup } from './tree.js';
-import { fileTabTitles, tabMeta, truncateTitle } from './tab-meta.js';
+import { fileTabTitles, tabMeta } from './tab-meta.js';
 import { useLayoutStore } from './store.js';
 import { useTabMetaExtras } from './use-tab-meta-extras.js';
 
@@ -254,7 +254,8 @@ export function TabStrip({ workKey, group, entry, portal, active }: TabStripProp
         {group.tabs.map((tab, index) => {
           const base = tabMeta(tab, entry, extras);
           const fileTitle = fileTitles.get(tab.id);
-          const meta = fileTitle === undefined ? base : { ...base, title: truncateTitle(fileTitle) };
+          // `fileTabTitles` уже обрезал заголовок так, чтобы метка корня осталась видна.
+          const meta = fileTitle === undefined ? base : { ...base, title: fileTitle };
           const dot =
             tab.kind === 'terminal' && meta.session !== null
               ? {

@@ -8,7 +8,7 @@
 
 import type { WorkEntry, WorkSession } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
-import type { TabSpec } from '../../shared/layout-types.js';
+import type { FileRootSpec, TabSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { workKey as workKeyOf } from '../../shared/work-keys.js';
 import type { Attention } from '../attention/derive.js';
@@ -72,17 +72,57 @@ function withParent(path: string): string {
   return parts.length < 2 ? path : parts.slice(-2).join('/');
 }
 
-/** Заголовки вкладок file одной строки: имя; при совпадении имён — `папка/имя` (спека 5.3). */
-export function fileTabTitles(tabs: readonly TabSpec[]): ReadonlyMap<string /* tabId */, string> {
+/** Метка корня файла (раунд fix-live, D5): `S02` — worktree сессии, `Project` — папка проекта, как в выборе корня. */
+export function fileRootLabel(root: FileRootSpec): string {
+  return root.kind === 'project' ? S.files.project : sessionTag(root.sessionId);
+}
+
+/** Подсказка файловой вкладки: путь и метка корня — всегда, даже без тёзок (раунд fix-live, D5). */
+export function fileTabHint(tab: Extract<TabSpec, { kind: 'file' }>): string {
+  return S.tabs.fileWithRoot(tab.path, fileRootLabel(tab.root));
+}
+
+/**
+ * Имена вкладок file одной строки (спека 5.3): имя; при совпадении имён разных путей — `папка/имя`;
+ * один и тот же путь из разных корней — с меткой корня: `app.ts · S02` (раунд fix-live, D5). Без
+ * метки две вкладки `src/app.ts` двух worktree были неразличимы, и не было видно, чей буфер
+ * сохраняешь или закрываешь. `limit` — предел заголовка: обрезается имя, метка корня остаётся;
+ * без него — полные имена для вопросов о файле (диалог обрезает сам, полное — в `title`).
+ */
+function fileTabLabels(tabs: readonly TabSpec[], limit: number | null): ReadonlyMap<string /* tabId */, string> {
   const files = tabs.filter((tab): tab is Extract<TabSpec, { kind: 'file' }> => tab.kind === 'file');
-  const counts = new Map<string, number>();
-  for (const tab of files) counts.set(fileBaseName(tab.path), (counts.get(fileBaseName(tab.path)) ?? 0) + 1);
-  const titles = new Map<string, string>();
+  const pathsByName = new Map<string, Set<string>>();
+  const rootsByPath = new Map<string, Set<string>>();
   for (const tab of files) {
     const name = fileBaseName(tab.path);
-    titles.set(tab.id, (counts.get(name) ?? 0) > 1 ? withParent(tab.path) : name);
+    pathsByName.set(name, (pathsByName.get(name) ?? new Set()).add(tab.path));
+    rootsByPath.set(tab.path, (rootsByPath.get(tab.path) ?? new Set()).add(fileRootLabel(tab.root)));
   }
-  return titles;
+  const cut = (text: string, max: number): string => (limit === null ? text : truncateTitle(text, max));
+  const labels = new Map<string, string>();
+  for (const tab of files) {
+    const name = fileBaseName(tab.path);
+    // Папка — только если под этим именем открыты разные пути: одинаковый путь различает метка.
+    const shown = (pathsByName.get(name)?.size ?? 0) > 1 ? withParent(tab.path) : name;
+    if ((rootsByPath.get(tab.path)?.size ?? 0) > 1) {
+      const root = fileRootLabel(tab.root);
+      const suffixLength = Array.from(S.tabs.fileWithRoot('', root)).length;
+      labels.set(tab.id, S.tabs.fileWithRoot(cut(shown, (limit ?? 0) - suffixLength), root));
+    } else {
+      labels.set(tab.id, cut(shown, limit ?? 0));
+    }
+  }
+  return labels;
+}
+
+/** Заголовки вкладок file строки — уже обрезанные до предела, метка корня видна всегда. */
+export function fileTabTitles(tabs: readonly TabSpec[]): ReadonlyMap<string /* tabId */, string> {
+  return fileTabLabels(tabs, TITLE_MAX);
+}
+
+/** Те же имена без обрезки — для вопросов о файле (`files/store.ts`, `bufferName`). */
+export function fileTabNames(tabs: readonly TabSpec[]): ReadonlyMap<string /* tabId */, string> {
+  return fileTabLabels(tabs, null);
 }
 
 export function tabMeta(tab: TabSpec, entry: WorkEntry | null, extras: TabMetaExtras = EMPTY_EXTRAS): TabMeta {

@@ -15,7 +15,7 @@ import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js'
 import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { bufferKey } from './buffer.js';
 import { useNotesStore } from '../review/notes/store.js';
-import { bindBuffersToLayouts, defaultRoot, filesRootSpec, useFilesStore } from './store.js';
+import { bindBuffersToLayouts, bufferName, defaultRoot, filesRootSpec, useFilesStore } from './store.js';
 
 const worktree = (createdAt: string | null) => ({ path: '/wt/s02', branch: 'harnas/w-0003/s02', base: 'main', createdAt });
 
@@ -289,5 +289,45 @@ describe('save (тест 4)', () => {
     const failing = { ...bridge, files: { ...bridge.files, write: async () => Promise.reject({ code: 'files:denied', message: 'x' }) } };
     expect(await useFilesStore.getState().save(failing, W, tab)).toBe('failed');
     expect(useFilesStore.getState().buffers[key]?.model.status).toBe('dirty');
+  });
+});
+
+describe('bufferName — имя в вопросах о файле, как у вкладки (раунд fix-live, D5)', () => {
+  const W = '/tmp/proj w-01';
+  const wt = (sessionId: string, path: string): TabSpec => ({
+    kind: 'file',
+    id: tabId.file({ kind: 'worktree', sessionId }, path),
+    root: { kind: 'worktree', sessionId },
+    path,
+  });
+  const S01 = wt('s-01', 'src/app.ts');
+  const S02 = wt('s-02', 'src/app.ts');
+  const ONLY = wt('s-02', 'src/only.ts');
+
+  beforeEach(() => {
+    const group: GroupNode = { type: 'group', id: 'g1', tabs: [S01, S02, ONLY], activeTabId: S01.id };
+    useLayoutStore.setState({ activeWorkKey: W, layouts: { [W]: { root: group, activeGroupId: 'g1', closedTabs: [] } }, hydrated: { [W]: true }, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
+    useFilesStore.setState({ buffers: {}, reveals: {} });
+  });
+
+  it('один путь из двух worktree — вопрос называет файл с меткой корня, как заголовок вкладки', () => {
+    expect(bufferName(bufferKey(W, S01.id))).toBe('app.ts · S01');
+    expect(bufferName(bufferKey(W, S02.id))).toBe('app.ts · S02');
+    expect(bufferName(bufferKey(W, ONLY.id))).toBe('only.ts');
+  });
+
+  it('длинное имя — полностью, без обрезки заголовка вкладки: диалог обрезает сам, полное — в title', () => {
+    const long = `${'x'.repeat(60)}.ts`;
+    const a = wt('s-01', long);
+    const b = wt('s-02', long);
+    const group: GroupNode = { type: 'group', id: 'g1', tabs: [a, b], activeTabId: a.id };
+    useLayoutStore.setState({ layouts: { [W]: { root: group, activeGroupId: 'g1', closedTabs: [] } } });
+    expect(bufferName(bufferKey(W, b.id))).toBe(`${long} · S02`);
+  });
+
+  it('вкладки уже нет в раскладке — имя файла буфера', () => {
+    useLayoutStore.setState({ layouts: {} });
+    useFilesStore.setState({ buffers: { [bufferKey(W, S02.id)]: { path: 'src/app.ts' } as never } });
+    expect(bufferName(bufferKey(W, S02.id))).toBe('app.ts');
   });
 });

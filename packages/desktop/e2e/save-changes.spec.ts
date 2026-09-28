@@ -93,7 +93,8 @@ test.describe('несохранённые правки при закрытии �
     await window.keyboard.type('// edited');
     const tab = window.locator(`[role="tab"][data-tab-id="file:p:${LONG_FILE}"]`);
     await expect(tab.locator('[data-dirty-dot]')).toBeVisible();
-    await expect(tab.locator(`[title="${LONG_FILE}"]`)).toBeVisible();
+    // Подсказка — путь и метка корня (раунд fix-live, D5).
+    await expect(tab.locator(`[title="${LONG_FILE} · Project"]`)).toBeVisible();
 
     // Крестик окна: main отложил закрытие и спросил окно.
     await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.close());

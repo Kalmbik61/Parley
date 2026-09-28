@@ -250,7 +250,8 @@ describe('Tab — вкладка файла (тест 9 куска 7.3a)', () =>
     const el = screen.getByRole('tab');
     expect(el.querySelector('[data-dirty-dot]')).not.toBeNull();
     expect(el.querySelector('[data-file-kind]')?.getAttribute('data-file-kind')).toBe('markdown');
-    expect(el.querySelector(`[title="docs/${LONG}"]`)).not.toBeNull();
+    // Раунд fix-live, D5: в подсказке всегда видно, из какого корня файл.
+    expect(el.querySelector(`[title="docs/${LONG} · Project"]`)).not.toBeNull();
 
     rerender(<Tab workKey={WORK_KEY} group={group} tab={t} meta={fileMeta('x.md', false)} dot={null} isActive />);
     expect(screen.getByRole('tab').querySelector('[data-dirty-dot]')).toBeNull();

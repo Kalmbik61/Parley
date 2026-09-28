@@ -23,6 +23,7 @@ import type { FileRootSpec, WorkLayout } from '../../shared/layout-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { groups } from '../layout/tree.js';
 import { useLayoutStore } from '../layout/store.js';
+import { fileTabNames } from '../layout/tab-meta.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { useNotesStore } from '../review/notes/store.js';
 import { bufferKey, bufferReducer, initialBuffer, isBufferDirty, splitBufferKey, type BufferEvent, type BufferModel } from './buffer.js';
@@ -227,8 +228,18 @@ export function dirtyBufferKeys(buffers: Record<string, FileBuffer>): string[] {
   });
 }
 
-/** Имя файла буфера для вопроса «Save changes to …?». */
+/**
+ * Имя файла буфера для вопросов о файле («Save changes to …?», закрытие окна, «Discard worktree…») —
+ * так же, как заголовок его вкладки в строке (раунд fix-live, D5): у одного пути из двух корней —
+ * с меткой корня, иначе не видно, чей буфер сохраняешь или отбрасываешь. Вкладки уже нет в
+ * раскладке — имя файла буфера.
+ */
 export function bufferName(key: string): string {
+  const { workKey, tabId } = splitBufferKey(key);
+  const layout = useLayoutStore.getState().layouts[workKey];
+  const group = layout === undefined ? undefined : groups(layout).find((candidate) => candidate.tabs.some((tab) => tab.id === tabId));
+  const title = group === undefined ? undefined : fileTabNames(group.tabs).get(tabId);
+  if (title !== undefined) return title;
   const path = useFilesStore.getState().buffers[key]?.path ?? '';
   return path.slice(path.lastIndexOf('/') + 1);
 }

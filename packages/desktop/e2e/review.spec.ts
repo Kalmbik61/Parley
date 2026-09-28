@@ -423,6 +423,50 @@ test.describe('ревью изменений: заметки, коммит, сл
     expect(git(worktree, 'show', 'HEAD:src/base.ts')).toContain('// unsaved edit');
   });
 
+  test('fix-live D5: один файл из двух worktree — вкладки различает метка корня, подсказка называет корень', async () => {
+    test.setTimeout(120_000);
+    const { window, workId, sessionId } = await start();
+    // Вторая сессия со своим worktree — тот же src/base.ts в другом корне.
+    const second = await call<{ ref: { sessionId: string } }>(window, 'sessions.create', {
+      projectPath: project,
+      workId,
+      provider: 'claude',
+      label: 'second',
+      task: '',
+      parent: null,
+      worktree: true,
+    });
+    const otherId = second.ref.sessionId;
+    type Snapshot = { entries: Array<{ map: { work: { id: string }; sessions: Array<{ id: string; worktree: { createdAt: string | null } | null }> } }> };
+    const ready = async (): Promise<boolean> => {
+      const snapshot = await call<Snapshot>(window, 'works.list', {});
+      const info = snapshot.entries.find((entry) => entry.map.work.id === workId)?.map.sessions.find((s) => s.id === otherId)?.worktree;
+      return info !== undefined && info !== null && info.createdAt !== null;
+    };
+    await expect.poll(ready, { timeout: 10_000 }).toBe(true);
+    const tagOf = (id: string): string => `S${/^s-(\d+)$/.exec(id)?.[1] ?? ''}`;
+
+    const sidebar = window.getByTestId('right-sidebar');
+    const openFrom = async (id: string): Promise<void> => {
+      // Сессия в фокусе — корень «Files» по умолчанию её worktree.
+      await window.locator(`[data-session-id="${id}"]`).first().click();
+      await sidebar.getByRole('tab', { name: 'Files' }).click();
+      const src = sidebar.locator('[data-tree-path="src"]');
+      if ((await sidebar.locator('[data-tree-path="src/base.ts"]').count()) === 0) await src.click();
+      await sidebar.locator('[data-tree-path="src/base.ts"]').click();
+      await expect(window.locator(`[role="tab"][data-tab-id="file:w:${id}:src/base.ts"]`)).toBeVisible();
+    };
+    await openFrom(sessionId);
+    await openFrom(otherId);
+
+    const first = window.locator(`[role="tab"][data-tab-id="file:w:${sessionId}:src/base.ts"]`);
+    const other = window.locator(`[role="tab"][data-tab-id="file:w:${otherId}:src/base.ts"]`);
+    await expect(first).toContainText(`base.ts · ${tagOf(sessionId)}`);
+    await expect(other).toContainText(`base.ts · ${tagOf(otherId)}`);
+    await expect(first.locator(`[title="src/base.ts · ${tagOf(sessionId)}"]`)).toHaveCount(1);
+    await expect(other.locator(`[title="src/base.ts · ${tagOf(otherId)}"]`)).toHaveCount(1);
+  });
+
   test('правка одной строки в базе и в ветке → секция Conflicts с файлом до попытки слияния', async () => {
     test.setTimeout(120_000);
     const { window, worktree } = await start();
