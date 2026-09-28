@@ -353,6 +353,36 @@ describe('выбор прерван (тест 5 куска 9.3a)', () => {
     expect(guest.capturePage).not.toHaveBeenCalled();
   });
 
+  it('навигация главного фрейма — скрипт отмены в мир 1001: документ, который не сменился (скачивание), не держит оверлей (fix-9)', async () => {
+    const { guest, mode, scriptCalled } = setup();
+    const pending = mode.start(7);
+    await scriptCalled();
+    guest.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false, url: 'https://x.y/file.zip' });
+    expect(await pending).toBeNull();
+    const cancelCalls = guest.executeJavaScriptInIsolatedWorld.mock.calls.filter(
+      ([, sources]) => sources[0]?.code !== 'GUEST_SCRIPT',
+    );
+    expect(cancelCalls).toEqual([[PICK_WORLD_ID, [{ code: 'globalThis.__harnasPickCancel?.()' }]]]);
+  });
+
+  it('скрипт отмены упал (документ уже уничтожен) — тихо; мёртвому гостю не шлётся (fix-9)', async () => {
+    const { guest, mode, scriptCalled } = setup();
+    const pending = mode.start(7);
+    await scriptCalled();
+    guest.executeJavaScriptInIsolatedWorld.mockImplementationOnce(() => Promise.reject(new Error('Script failed to execute')));
+    guest.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false, url: 'https://x.y/b' });
+    expect(await pending).toBeNull();
+    await Promise.resolve();
+
+    const second = setup();
+    const next = second.mode.start(7);
+    await second.scriptCalled();
+    second.guest.isDestroyed.mockReturnValue(true);
+    second.guest.emit('destroyed');
+    expect(await next).toBeNull();
+    expect(second.guest.executeJavaScriptInIsolatedWorld).toHaveBeenCalledTimes(1);
+  });
+
   it('cancel без выбора и у неизвестного гостя — тихо', async () => {
     const { mode } = setup();
     await expect(mode.cancel(7)).resolves.toBeUndefined();

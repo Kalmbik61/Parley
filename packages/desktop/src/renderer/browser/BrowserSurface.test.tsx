@@ -450,6 +450,35 @@ describe('BrowserSurface — Design Mode (тест 3 куска 9.3b)', () => {
     expect(screen.queryByTestId('design-mode-card')).toBeNull();
   });
 
+  it('вкладка скрыта во время выбора — pickCancel, режим снят (fix-9)', async () => {
+    setBrowserTab('http://localhost:5173/');
+    // Вторая вкладка той же группы: её активация скрывает страницу.
+    act(() =>
+      useLayoutStore.getState().apply(WORK_KEY, (layout) => {
+        const root = layout.root as GroupNode;
+        return { ...layout, root: { ...root, tabs: [...root.tabs, { kind: 'browser', id: 'browser:other', url: '' }] } };
+      }),
+    );
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    bridge.browser.pickStart = async (webContentsId) => {
+      bridge.pickCalls.push({ method: 'pickStart', webContentsId });
+      return new Promise<PickResult | null>(() => {});
+    };
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Design Mode' }));
+    });
+    expect(pickOf()).toBe('picking');
+    await act(async () => {
+      useLayoutStore.getState().apply(WORK_KEY, (layout) => ({
+        ...layout,
+        root: { ...(layout.root as GroupNode), activeTabId: 'browser:other' },
+      }));
+    });
+    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart', 'pickCancel']);
+    expect(pickOf()).toBe('off');
+  });
+
   it('карточка: Pick again зовёт pickStart заново; did-navigate снимает карточку', async () => {
     setBrowserTab('http://localhost:5173/');
     renderWork();

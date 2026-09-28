@@ -250,6 +250,13 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
 
   const picking = state.pick === 'picking';
 
+  // Скрытую вкладку человек не видит: выбор в ней снимается, а не ест клики страницы до возврата.
+  const cancelPickRef = useRef(cancelPick);
+  cancelPickRef.current = cancelPick;
+  useEffect(() => {
+    if (!visible && picking) cancelPickRef.current();
+  }, [visible, picking]);
+
   // Поверхность — сосед тела группы, а не потомок: клик в строку сама делает свою вкладку активной.
   const focusOwnTab = (): void => {
     useLayoutStore.getState().apply(workKey, (layout) => focusTab(layout, tabId));

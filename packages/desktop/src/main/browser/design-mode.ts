@@ -137,6 +137,18 @@ export function captureRect(
   return { x, y, width: Math.ceil(right * zoomFactor) - x, height: Math.ceil(bottom * zoomFactor) - y };
 }
 
+/**
+ * Оверлей и перехватчики в странице снимает сам скрипт — командой в его мире. Мёртвому гостю не
+ * шлётся; ошибка (документ уже уничтожен или сменился) не важна.
+ */
+function dismissScript(contents: WebContents): Promise<void> {
+  if (contents.isDestroyed()) return Promise.resolve();
+  return contents
+    .executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, [{ code: CANCEL_SCRIPT }])
+    .then(() => undefined)
+    .catch(() => undefined);
+}
+
 export function createDesignMode(deps: {
   fromId(id: number): WebContents | null;
   saveImage(png: Buffer): Promise<string | null>;
@@ -179,7 +191,11 @@ export function createDesignMode(deps: {
     return new Promise((resolve) => {
       let done = false;
       const onNavigation = (details: { isMainFrame: boolean; isSameDocument: boolean }): void => {
-        if (details.isMainFrame && !details.isSameDocument) finish(null);
+        if (!details.isMainFrame || details.isSameDocument) return;
+        finish(null);
+        // Навигация может не смениться документом (скачивание, отменённый переход): тогда оверлей
+        // и перехватчики скрипта остались бы на живой странице. В новом документе вызов — пустой.
+        dismissScript(contents);
       };
       const onGone = (): void => finish(null);
       const finish = (result: PickResult | null): void => {
@@ -230,9 +246,8 @@ export function createDesignMode(deps: {
   async function cancel(id: number): Promise<void> {
     pending.get(id)?.(null);
     const contents = deps.fromId(id);
-    if (contents === null || contents.isDestroyed()) return;
-    // Оверлей и перехватчики в странице снимает сам скрипт; ошибка тут (страница уже ушла) не важна.
-    await contents.executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, [{ code: CANCEL_SCRIPT }]).catch(() => undefined);
+    if (contents === null) return;
+    await dismissScript(contents);
   }
 
   return { start, cancel };
