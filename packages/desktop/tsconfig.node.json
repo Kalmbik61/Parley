@@ -8,5 +8,5 @@
   },
   "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*"],
   "exclude": ["src/**/*.test.ts", "src/renderer/**/*"],
-  "references": [{ "path": "../protocol" }, { "path": "../host" }]
+  "references": [{ "path": "../protocol" }, { "path": "../host" }, { "path": "../core" }]
 }

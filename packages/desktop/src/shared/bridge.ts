@@ -9,6 +9,7 @@ import type {
 } from '@harnas/protocol';
 import type { BrowserApi } from './browser-types.js';
 import type {
+  DiffFile,
   DirEntry,
   FileChangedEvent,
   FileList,
@@ -180,6 +181,8 @@ export interface HarnasBridge {
     cancel(signalId: string): Promise<void>;
     /** rev — HEAD или 7–40 hex с ^; null — файла или ревизии нет. */
     gitShow(root: FileRoot, rev: string, path: string): Promise<TextFile | null>;
+    /** Файлы коммита от первого родителя (у merge-коммита тоже), у корневого — от пустого дерева (8.3). */
+    gitCommitFiles(root: FileRoot, hash: string): Promise<DiffFile[]>;
     /** Пути от папки корня; не git — {}. */
     gitStatus(root: FileRoot): Promise<Record<string, GitStatusLetter>>;
   };

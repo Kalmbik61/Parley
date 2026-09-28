@@ -1,33 +1,38 @@
 /**
- * Тело вкладки «Изменения» (кусок 2.4): нынешний `ChangesPanel` этапа 4 плана
- * worktree — до 8.3, когда его сменит панель, знающая про отдельный коммит
- * (`TabSpec` вида `diff` уже несёт `commit`, но открывать вкладку на конкретный
- * коммит пока неоткуда — `tabMeta` лишь готовит для него заголовок, спека 5.2).
- * Сессия без worktree — та же короткая заглушка, что раньше показывал
- * `panel-registry.tsx#ChangesPanelContent`: закрыть висящую вкладку решает
- * человек, а не эта заглушка сама.
+ * Тело вкладки диффа (кусок 2.4; с 8.3 — `review/DiffTab.tsx` на Monaco, спека 11.3). Заглушки
+ * «нет worktree» больше нет: у сессии без worktree вкладка показывает изменения папки проекта.
+ *
+ * `DiffTab` грузится лениво, как редактор вкладки файла (7.3b): он тянет Monaco, а окно без
+ * открытого диффа его не грузит. Сбой загрузки чанка — своя граница с «Retry», который грузит
+ * чанк заново (`lazyWithRetry`); граница `GroupView` — запасная.
  */
 
-import type { WorkSession } from '@harnas/core';
-import type { SessionRef } from '@harnas/protocol';
+import { Suspense } from 'react';
+import type { WorkEntry } from '@harnas/core';
 import type { HarnasBridge } from '../../../shared/bridge.js';
+import type { TabSpec } from '../../../shared/layout-types.js';
 import { S } from '../../../shared/strings.js';
-import { ChangesPanel } from '../../components/changes/ChangesPanel.js';
+import { lazyWithRetry } from '../../files/editor/retry-lazy.js';
+import { ErrorBoundary } from '../../shell/ErrorBoundary.js';
+
+const lazyDiffTab = lazyWithRetry(async () => (await import('../../review/DiffTab.js')).DiffTab);
 
 export interface DiffBodyProps {
   bridge: HarnasBridge;
-  sessionRef: SessionRef;
-  /** Сессия найдена в карте (иначе `GroupView` показал бы `MissingBody`) — worktree может всё ещё быть `null`. */
-  session: WorkSession;
+  workKey: string;
+  /** Сессия вкладки есть в карте — иначе `GroupView` показал бы `MissingBody`. */
+  entry: WorkEntry;
+  tab: Extract<TabSpec, { kind: 'diff' }>;
+  font?: { family: string; size: number };
 }
 
-export function DiffBody({ bridge, sessionRef, session }: DiffBodyProps): JSX.Element {
-  if (session.worktree === null) {
-    return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        {S.errors.noWorktree}
-      </div>
-    );
-  }
-  return <ChangesPanel bridge={bridge} sessionRef={sessionRef} base={session.worktree.base} />;
+export function DiffBody({ bridge, workKey, entry, tab, font }: DiffBodyProps): JSX.Element {
+  const { component: DiffTab, retry } = lazyDiffTab.use();
+  return (
+    <ErrorBoundary title={S.files.editorFailed} onRetry={retry}>
+      <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">{S.changes.loading}</div>}>
+        <DiffTab bridge={bridge} workKey={workKey} entry={entry} tab={tab} {...(font === undefined ? {} : { font })} />
+      </Suspense>
+    </ErrorBoundary>
+  );
 }

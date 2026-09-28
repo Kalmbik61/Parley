@@ -4,7 +4,14 @@
  * терминала (спека 8.3); `list`, `readText`, `readBytes` и `write` — с 7.1a,
  * остальное приходит в 7.1b и 8.3.
  */
+import type { DiffFile } from '@harnas/core';
 import type { FileRootSpec } from './layout-types.js';
+
+/**
+ * Файл диффа (8.1) — только тип: рантайм core в окно не собирается (кусок 8.3). Main и
+ * рендерер видят один тип: `tsconfig.node.json` ссылается на core с 8.3.
+ */
+export type { DiffFile };
 
 export interface FileRoot {
   workKey: string;

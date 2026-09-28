@@ -9,7 +9,8 @@ import { spawn } from 'node:child_process';
 import { lstat, readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { Worker } from 'node:worker_threads';
-import type { FileList, FileRoot, GitStatusLetter, GrepQuery, GrepResult, TextFile } from '../../shared/files-types.js';
+import { joinDiffFiles, parseNameStatusZ, parseNumstat } from '@harnas/core';
+import type { DiffFile, FileList, FileRoot, GitStatusLetter, GrepQuery, GrepResult, TextFile } from '../../shared/files-types.js';
 import { rootKey } from '../../shared/work-keys.js';
 import { HostError } from '../host-connection.js';
 import type { RootsRegistry } from '../roots.js';
@@ -352,6 +353,33 @@ export function isSafeRev(rev: string): boolean {
   return rev === 'HEAD' || /^[0-9a-f]{7,40}\^?$/.test(rev);
 }
 
+/**
+ * Файлы коммита для вкладки диффа (кусок 8.3, спека 11.3): от первого родителя, у корневого — от
+ * пустого дерева. Однокоммитный `diff-tree <hash>` у merge-коммита не печатает ничего, а они в ветке
+ * ожидаемы («Попросить агента разрешить» велит агенту `git merge <база>`): поэтому двухдеревная
+ * форма `<hash>^ <hash>` — те же стороны, что у `loadSides`. `--relative` — пути от папки корня,
+ * как у `gitShow`; `-z` — кириллица без кавычек и восьмеричных кодов.
+ */
+export async function gitCommitFiles(git: GitRunner, rootPath: string, hash: string): Promise<DiffFile[]> {
+  // `--output=<файл>` из рендерера иначе заставил бы git писать вне корней.
+  if (!isSafeRev(hash)) throw new HostError('bad_request', 'invalid revision');
+  const run = (args: string[]): ReturnType<GitRunner['run']> => git.run([...READ_FLAGS, ...args], rootPath);
+  // `rev-list --parents` одним вызовом: есть ли коммит (код выхода) и его родители («коммит
+  // родитель…»). Родитель есть — двухдеревная форма; нет (корневой коммит) — `--root`.
+  const listed = await run(['rev-list', '--parents', '-n', '1', '--end-of-options', hash]);
+  if (listed.code !== 0) throw new HostError('not_found', `commit not found: ${hash}`);
+  const hasParent = listed.stdout.toString('utf8').trim().split(' ').length > 1;
+  const sides = hasParent ? ['--end-of-options', `${hash}^`, hash] : ['--root', '--no-commit-id', '--end-of-options', hash];
+  const common = ['diff-tree', '-r', '-M', '-z', '--relative', '--no-textconv'];
+  const [status, numstat] = await Promise.all([run([...common, '--name-status', ...sides]), run([...common, '--numstat', ...sides])]);
+  if (status.code !== 0 || numstat.code !== 0) {
+    // Текст stderr локализован — только в консоль.
+    console.warn(`[harnas] files: git diff-tree exited with code ${String(status.code)}/${String(numstat.code)}`, status.stderr);
+    throw new Error(`git diff-tree exited with code ${String(status.code ?? numstat.code)}`);
+  }
+  return joinDiffFiles(parseNameStatusZ(status.stdout), parseNumstat(numstat.stdout));
+}
+
 /** Воркер с заданием; cancel и предел времени — worker.terminate(), ответ — найденное к этому моменту с truncated. */
 export function runGrepWorker(
   job: GrepJob,
@@ -408,6 +436,8 @@ export interface GitApi {
   grep(root: FileRoot, query: GrepQuery, signalId: string): Promise<GrepResult>;
   cancel(signalId: string): void;
   gitShow(root: FileRoot, rev: string, relPath: string): Promise<TextFile | null>;
+  /** Файлы коммита от первого родителя (кусок 8.3). */
+  gitCommitFiles(root: FileRoot, hash: string): Promise<DiffFile[]>;
   gitStatus(root: FileRoot): Promise<Record<string, GitStatusLetter>>;
   /** Имена папки dir, которые игнорирует git; не git или сбой — пустой набор. */
   checkIgnored(root: FileRoot, dir: string, names: string[]): Promise<Set<string>>;
@@ -591,6 +621,11 @@ export function createGitApi(options: GitApiOptions): GitApi {
         utf8,
         readOnlyReason: result.stdout.length > LIMITS.editableBytes ? 'too-large' : utf8 ? null : 'not-utf8',
       };
+    },
+
+    gitCommitFiles: async (root, hash) => {
+      if (!isSafeRev(hash)) throw new HostError('bad_request', 'invalid revision');
+      return gitCommitFiles(git, await roots.rootPath(root), hash);
     },
 
     gitStatus: async (root) => {

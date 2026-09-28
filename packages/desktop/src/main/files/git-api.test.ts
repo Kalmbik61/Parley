@@ -11,6 +11,7 @@ import {
   createGitApi,
   createGitRunner,
   createGrepParser,
+  gitCommitFiles,
   gitRootOf,
   GREP_LINE_BYTES,
   GREP_TOTAL_BYTES,
@@ -717,5 +718,99 @@ describe('lsFiles: ссылки в .git и .harnas (раунд fix-7.1b, п.6)',
       },
     };
     expect((await api(dir, enoent).lsFiles(ROOT)).paths.sort()).toEqual(['in-link.txt', 'real.txt']);
+  });
+});
+
+describe('gitCommitFiles (кусок 8.3, тест 5)', () => {
+  beforeEach(async () => {
+    await initRepo(dir);
+  });
+
+  it('коммит с переименованием → R, oldPath и числа; файл.txt — путь как есть', async () => {
+    await writeFile(path.join(dir, 'old.ts'), 'one\ntwo\nthree\nfour\nfive\n');
+    await writeFile(path.join(dir, 'keep.ts'), 'a\n');
+    commitAll(dir, 'first');
+    git(dir, 'mv', 'old.ts', 'new.ts');
+    await writeFile(path.join(dir, 'new.ts'), 'one\ntwo\nthree\nfour\nfive\nsix\n');
+    await writeFile(path.join(dir, 'файл.txt'), 'привет\n');
+    await writeFile(path.join(dir, 'keep.ts'), 'b\n');
+    const hash = commitAll(dir, 'second');
+    const files = await gitCommitFiles(createGitRunner(process.env), dir, hash);
+    expect([...files].sort((x, y) => x.path.localeCompare(y.path))).toEqual([
+      { path: 'keep.ts', status: 'M', oldPath: null, additions: 1, deletions: 1 },
+      { path: 'new.ts', status: 'R', oldPath: 'old.ts', additions: 1, deletions: 0 },
+      { path: 'файл.txt', status: 'A', oldPath: null, additions: 1, deletions: 0 },
+    ]);
+  });
+
+  it('корневой коммит → все A', async () => {
+    await writeFile(path.join(dir, 'a.ts'), 'a\n');
+    await mkdir(path.join(dir, 'sub'));
+    await writeFile(path.join(dir, 'sub', 'b.ts'), 'b\nb\n');
+    const hash = commitAll(dir, 'root');
+    const files = await gitCommitFiles(createGitRunner(process.env), dir, hash);
+    expect([...files].sort((x, y) => x.path.localeCompare(y.path))).toEqual([
+      { path: 'a.ts', status: 'A', oldPath: null, additions: 1, deletions: 0 },
+      { path: 'sub/b.ts', status: 'A', oldPath: null, additions: 2, deletions: 0 },
+    ]);
+  });
+
+  it('merge-коммит → файлы от первого родителя, список не пуст', async () => {
+    await writeFile(path.join(dir, 'a.ts'), 'a\n');
+    commitAll(dir, 'base');
+    git(dir, 'checkout', '-q', '-b', 'side');
+    await writeFile(path.join(dir, 'side.ts'), 's\n');
+    commitAll(dir, 'side');
+    git(dir, 'checkout', '-q', 'main');
+    await writeFile(path.join(dir, 'main.ts'), 'm\n');
+    commitAll(dir, 'main');
+    git(dir, 'merge', '-q', '--no-ff', '--no-edit', 'side');
+    const merge = git(dir, 'rev-parse', 'HEAD').trim();
+    const files = await gitCommitFiles(createGitRunner(process.env), dir, merge);
+    expect(files).toEqual([{ path: 'side.ts', status: 'A', oldPath: null, additions: 1, deletions: 0 }]);
+  });
+
+  it('папка проекта — подкаталог: пути от неё, изменения вне её не видны', async () => {
+    await mkdir(path.join(dir, 'sub'));
+    await writeFile(path.join(dir, 'sub', 'a.ts'), 'a\n');
+    await writeFile(path.join(dir, 'top.ts'), 't\n');
+    commitAll(dir, 'first');
+    await writeFile(path.join(dir, 'sub', 'a.ts'), 'a2\n');
+    await writeFile(path.join(dir, 'top.ts'), 't2\n');
+    const hash = commitAll(dir, 'second');
+    expect(await gitCommitFiles(createGitRunner(process.env), path.join(dir, 'sub'), hash)).toEqual([
+      { path: 'a.ts', status: 'M', oldPath: null, additions: 1, deletions: 1 },
+    ]);
+  });
+
+  it('hash --output=x → bad_request, git не зовётся; чтение — с --no-optional-locks и без обновления индекса', async () => {
+    await writeFile(path.join(dir, 'a.ts'), 'a\n');
+    commitAll(dir, 'first');
+    await writeFile(path.join(dir, 'a.ts'), 'b\n');
+    const hash = commitAll(dir, 'second');
+    const runner = createGitRunner(process.env);
+    const spy = vi.spyOn(runner, 'run');
+    const out = path.join(dir, 'x');
+    expect(await codeOf(gitCommitFiles(runner, dir, `--output=${out}`))).toBe('bad_request');
+    expect(spy).not.toHaveBeenCalled();
+    expect(existsSync(out)).toBe(false);
+    await gitCommitFiles(runner, dir, hash);
+    expect(spy).toHaveBeenCalled();
+    for (const [args] of spy.mock.calls) {
+      expect(args.slice(0, 3)).toEqual(['--no-optional-locks', '-c', 'diff.autoRefreshIndex=false']);
+      expect(args).toContain('--end-of-options');
+    }
+  });
+
+  it('нет такого коммита → not_found', async () => {
+    await writeFile(path.join(dir, 'a.ts'), 'a\n');
+    commitAll(dir, 'first');
+    expect(await codeOf(gitCommitFiles(createGitRunner(process.env), dir, 'f'.repeat(40)))).toBe('not_found');
+  });
+
+  it('через createGitApi: корень по rootPath', async () => {
+    await writeFile(path.join(dir, 'a.ts'), 'a\n');
+    const hash = commitAll(dir, 'first');
+    expect(await api(dir).gitCommitFiles(ROOT, hash)).toEqual([{ path: 'a.ts', status: 'A', oldPath: null, additions: 1, deletions: 0 }]);
   });
 });

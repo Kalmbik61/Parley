@@ -4,6 +4,7 @@ import type { AppNote, CloseAnswer, FocusTarget, HarnasBridge, HostStatus } from
 import type { BrowserOpenTab } from '../shared/browser-types.js';
 import type { ActionId } from '../shared/keybindings.js';
 import type {
+  DiffFile,
   DirEntry,
   FileChangedEvent,
   FileList,
@@ -210,6 +211,8 @@ const bridge = {
     cancel: (signalId: string) => ipcRenderer.invoke('files:cancel', signalId) as Promise<void>,
     gitShow: (root: FileRoot, rev: string, path: string) =>
       ipcRenderer.invoke('files:git-show', root, rev, path) as Promise<TextFile | null>,
+    gitCommitFiles: (root: FileRoot, hash: string) =>
+      ipcRenderer.invoke('files:git-commit-files', root, hash) as Promise<DiffFile[]>,
     gitStatus: (root: FileRoot) =>
       ipcRenderer.invoke('files:git-status', root) as Promise<Record<string, GitStatusLetter>>,
   },

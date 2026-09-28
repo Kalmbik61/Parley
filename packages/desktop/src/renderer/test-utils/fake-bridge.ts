@@ -17,6 +17,7 @@ import type { AppNote, CloseAnswer, FocusTarget, HarnasBridge, HostStatus } from
 import type { BrowserOpenTab } from '../../shared/browser-types.js';
 import type { ActionId } from '../../shared/keybindings.js';
 import type {
+  DiffFile,
   DirEntry,
   FileChangedEvent,
   FileList,
@@ -114,6 +115,12 @@ export interface FakeBridge extends HarnasBridge {
   setLsFiles(root: FileRoot, answer: FileList | IpcErrorInfo): void;
   /** Ответ следующих `files.grep`; по умолчанию пусто. */
   setGrepResult(result: GrepResult | IpcErrorInfo): void;
+  /** Ответ `files.gitShow` ревизии и пути; по умолчанию `null`. Отказ — объект с code (кусок 8.3). */
+  setGitShow(root: FileRoot, rev: string, path: string, answer: TextFile | null | IpcErrorInfo): void;
+  readonly gitShowCalls: Array<{ root: FileRoot; rev: string; path: string }>;
+  /** Ответ `files.gitCommitFiles` коммита; по умолчанию `[]`. Отказ — объект с code (кусок 8.3). */
+  setCommitFiles(root: FileRoot, hash: string, answer: DiffFile[] | IpcErrorInfo): void;
+  readonly gitCommitFilesCalls: Array<{ root: FileRoot; hash: string }>;
   /** Ответ `files.gitStatus` корня; по умолчанию `{}`. */
   setGitStatus(root: FileRoot, status: Record<string, GitStatusLetter>): void;
   /** `watch` корня → отказ `files:watch-failed`. */
@@ -177,6 +184,10 @@ export function createFakeBridge(): FakeBridge {
   const lsFilesAnswers = new Map<string, FileList | IpcErrorInfo>();
   let grepAnswer: GrepResult | IpcErrorInfo = { files: [], truncated: false };
   const gitStatuses = new Map<string, Record<string, GitStatusLetter>>();
+  const gitShows = new Map<string, TextFile | null | IpcErrorInfo>();
+  const gitShowCalls: Array<{ root: FileRoot; rev: string; path: string }> = [];
+  const commitFiles = new Map<string, DiffFile[] | IpcErrorInfo>();
+  const gitCommitFilesCalls: Array<{ root: FileRoot; hash: string }> = [];
   const watchFails = new Set<string>();
   const changedListeners = new Set<(e: FileChangedEvent) => void>();
   const treeListeners = new Set<(e: TreeChangedEvent) => void>();
@@ -260,6 +271,14 @@ export function createFakeBridge(): FakeBridge {
     setGrepResult: (result) => {
       grepAnswer = result;
     },
+    setGitShow: (root, rev, path, answer) => {
+      gitShows.set(`${rootKey(root)}\n${rev}\n${path}`, answer);
+    },
+    gitShowCalls,
+    setCommitFiles: (root, hash, answer) => {
+      commitFiles.set(`${rootKey(root)}\n${hash}`, answer);
+    },
+    gitCommitFilesCalls,
     setGitStatus: (root, status) => {
       gitStatuses.set(rootKey(root), status);
     },
@@ -379,7 +398,18 @@ export function createFakeBridge(): FakeBridge {
       cancel: async (signalId) => {
         cancelCalls.push(signalId);
       },
-      gitShow: async () => null,
+      gitShow: async (root, rev, path) => {
+        gitShowCalls.push({ root, rev, path });
+        const answer = gitShows.get(`${rootKey(root)}\n${rev}\n${path}`) ?? null;
+        if (answer !== null && 'code' in answer) throw answer;
+        return answer === null ? null : { ...answer };
+      },
+      gitCommitFiles: async (root, hash) => {
+        gitCommitFilesCalls.push({ root, hash });
+        const answer = commitFiles.get(`${rootKey(root)}\n${hash}`) ?? [];
+        if (!Array.isArray(answer)) throw answer;
+        return answer.map((file) => ({ ...file }));
+      },
       gitStatus: async (root) => {
         gitStatusCalls.push(root);
         return { ...(gitStatuses.get(rootKey(root)) ?? {}) };

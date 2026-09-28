@@ -120,10 +120,11 @@ async function code(promise: unknown): Promise<string> {
 }
 
 describe('files/ipc: каналы files:stat и files:locate (кусок 5.2)', () => {
-  it('регистрирует ровно каналы 5.2, 7.1a и 7.1b', () => {
+  it('регистрирует ровно каналы 5.2, 7.1a, 7.1b и 8.3', () => {
     const { ipcMain } = setup();
     expect([...ipcMain.handlers.keys()].sort()).toEqual([
       'files:cancel',
+      'files:git-commit-files',
       'files:git-show',
       'files:git-status',
       'files:grep',
@@ -286,6 +287,9 @@ describe('files/ipc: git, поиск и слежение (кусок 7.1b)', () 
       ['files:git-show', ROOT, 'HEAD', '../x'],
       ['files:git-show', ROOT, 'HEAD', '/etc/hosts'],
       ['files:git-show', null, 'HEAD', 'a.ts'],
+      ['files:git-commit-files', ROOT, '--output=/tmp/x'],
+      ['files:git-commit-files', ROOT, 42],
+      ['files:git-commit-files', null, 'a'.repeat(40)],
     ];
     for (const [channel, ...args] of bad) {
       expect(await code(ipcMain.invoke(channel, ...args)), `${channel} ${JSON.stringify(args).slice(0, 80)}`).toBe('bad_request');

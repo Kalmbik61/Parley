@@ -1,5 +1,5 @@
 /**
- * Каналы `files:*` (спека 10.7, куски 5.2, 7.1a и 7.1b). Все будущие каналы группы
+ * Каналы `files:*` (спека 10.7, 11.3, куски 5.2, 7.1a, 7.1b и 8.3). Все будущие каналы группы
  * регистрирует этот модуль. Аргументы проверяются до обращения к диску и к git:
  * рендереру путь, запрос и ревизию без проверки main не доверяется (спека 15.2).
  * Подписки слежения и поиски принадлежат окну: перезагрузка и закрытие их снимают.
@@ -265,6 +265,15 @@ export function registerFilesIpc({ ipcMain, roots, git, spawnGrepWorker, watchFs
       if (typeof rev !== 'string' || !isSafeRev(rev)) throw new HostError('bad_request', 'invalid revision');
       if (!isValidPathArg(relPath)) throw new HostError('bad_request', 'invalid path');
       return gitApi.gitShow(root, rev, relPath);
+    }),
+  );
+
+  ipcMain.handle(
+    'files:git-commit-files',
+    withIpcError(async (_event, root: unknown, hash: unknown) => {
+      if (!isFileRoot(root)) throw new HostError('bad_request', 'invalid file root');
+      if (typeof hash !== 'string' || !isSafeRev(hash)) throw new HostError('bad_request', 'invalid revision');
+      return gitApi.gitCommitFiles(root, hash);
     }),
   );
 

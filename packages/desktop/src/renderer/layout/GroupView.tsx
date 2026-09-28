@@ -25,7 +25,6 @@
 import { createContext, useCallback, useContext, useLayoutEffect, useRef } from 'react';
 import { useDroppable } from '@dnd-kit/core';
 import type { WorkEntry, WorkSession } from '@harnas/core';
-import type { SessionRef } from '@harnas/protocol';
 import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
@@ -70,10 +69,6 @@ interface TabBodyProps {
   onMissing: () => void;
 }
 
-function refOf(entry: WorkEntry, sessionId: string): SessionRef {
-  return { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId };
-}
-
 /** Отдельный компонент, а не просто функция в теле `GroupView`: бросок должен случиться ВНУТРИ дерева `ErrorBoundary`, иначе граница ошибки его не поймает. */
 function TabBody({ tab, entry, host, onMissing }: TabBodyProps): JSX.Element {
   switch (tab.kind) {
@@ -93,7 +88,15 @@ function TabBody({ tab, entry, host, onMissing }: TabBodyProps): JSX.Element {
     case 'diff': {
       const session: WorkSession | undefined = entry.map.sessions.find((candidate) => candidate.id === tab.sessionId);
       if (session === undefined) return <MissingBody kind="session" onClose={onMissing} />;
-      return <DiffBody bridge={host.bridge} sessionRef={refOf(entry, tab.sessionId)} session={session} />;
+      return (
+        <DiffBody
+          bridge={host.bridge}
+          workKey={workKeyOf(entry.projectPath, entry.map.work.id)}
+          entry={entry}
+          tab={tab}
+          font={{ family: host.fontFamily, size: host.fontSize }}
+        />
+      );
     }
     case 'file':
       return (

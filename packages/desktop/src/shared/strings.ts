@@ -2,12 +2,10 @@
  * Единственная таблица видимых текстов окна (кусок E.1, решение пользователя
  * 2026-09-27: интерфейс — только английский, как у Orca). И main, и рендерер
  * читают её отсюда — `shared/` входит в `tsconfig.node.json` и
- * `tsconfig.web.json` разом. `@harnas/protocol` — единственный пакет в
- * `references` ОБОИХ тсконфигов, поэтому типы `HostNotice`/`NoticeKind` (для
- * `noticeText`) взяты оттуда; `@harnas/core` main не резолвит вовсе — таблицы
- * вроде кодов слияния держат ключ обычной строкой, а не типом этого пакета,
- * тот же приём, что и у `STATUS_LABEL`/`MERGE_FAIL_TEXT` в `ChangesPanel.tsx`
- * до этого куска.
+ * `tsconfig.web.json` разом. Типы `HostNotice`/`NoticeKind` (для `noticeText`)
+ * берутся из `@harnas/protocol`. `@harnas/core` с куска 8.3 тоже в `references`
+ * обоих тсконфигов (`shared/files-types.ts` берёт оттуда `DiffFile`), но таблица
+ * его типов не тянет: ключи вроде букв статуса git — обычные строки.
  *
  * Перевод — по глоссарию индекса плана (`docs/specs/2026-09-26-desktop-orca-ui-plan.md`,
  * «Сквозные ограничения» → «Язык интерфейса»): работа → workspace, почта →
@@ -262,7 +260,7 @@ export const S = {
     footer: '↑↓ select · Enter open · ⌘Enter open to the side · Esc close',
   },
 
-  /** «Изменения» — `changes/ChangesPanel.tsx`, `changes/DiffView.tsx`. */
+  /** «Изменения» и вкладка диффа — `review/*` (куски 8.2a, 8.2b, 8.3). */
   changes: {
     /** Буква статуса git → слово; неизвестная буква печатается как есть (см. вызов). */
     fileStatus: {
@@ -271,38 +269,12 @@ export const S = {
       D: 'Deleted',
       R: 'Renamed',
     } as Record<string, string>,
-    mergeBlockedBaseDirty: 'Base is dirty: its working copy has uncommitted changes',
-    mergeBlockedUncommitted: 'Worktree has uncommitted changes — commit first',
-    /**
-     * Причина отказа `worktrees.merge()` — ключи те же четыре, что и в
-     * `Exclude<MergeResult, { ok: true }>['reason']` (`@harnas/core`), но без
-     * импорта самого типа (шапка файла: `shared/` не тянет типы пакетов,
-     * которых нет в `references` `tsconfig.node.json`). Без каста в
-     * `Record<string, string>` — доступ по известному ключу остаётся `string`,
-     * а не `string | undefined`, и `ChangesPanel.tsx` присваивает объект прямо
-     * в свой строго типизированный `MERGE_FAIL_TEXT` без доп. проверок.
-     */
-    mergeFailReason: {
-      base_not_checked_out: 'Base is not checked out anywhere',
-      base_dirty: 'Base is dirty',
-      uncommitted: 'Worktree has uncommitted changes',
-      conflict: 'Merge conflict',
-    },
     loading: 'Loading…',
-    noFiles: 'No files',
     commitMessagePlaceholder: 'Commit message',
-    commitAll: 'Commit all',
     mergeInto: (base: string): string => `Merge into ${base}`,
     discard: 'Discard',
-    conflictLabel: (files: string): string => `Conflict: ${files}`,
-    messageSent: 'Message sent',
-    assignToAgent: 'Assign to agent',
-    discardConfirmTitle: (label: string): string => `Discard "${label}"?`,
     discardAllConfirmTitle: 'Uncommitted changes will be lost',
     discardAllConfirm: 'Discard anyway',
-    mergeConflictMessage: (label: string, files: string): string =>
-      `Merge ${label} hit a conflict: ${files}. Resolve and commit.`,
-    binaryFile: 'Binary file',
     noChanges: 'No changes',
     /** Тело «Изменений» по `data.reason` ошибки git (кусок 8.2a, спека 13): `review/state.ts#changesErrorText`. */
     gitMissing: 'Git not found',
@@ -343,6 +315,21 @@ export const S = {
     discardWorktreeEllipsis: 'Discard worktree…',
     discardWorktreeTitle: (session: string): string => `Discard the worktree of ${session}?`,
     discardWorktreeDescription: 'The session will be stopped and closed. Its worktree folder and branch will be deleted.',
+    /**
+     * Вкладка диффа (кусок 8.3, спека 11.3) — `review/DiffTab.tsx` и соседи. Двоичный файл —
+     * `S.files.binary`, сбой Monaco — `S.files.editorFailed`, заголовок вкладки — `S.tabs.diffTitle`.
+     */
+    inline: 'Inline',
+    sideBySide: 'Side by side',
+    collapseAll: 'Collapse all',
+    expandAll: 'Expand all',
+    wrapLines: 'Wrap lines',
+    collapse: 'Collapse',
+    expand: 'Expand',
+    list: 'List',
+    tree: 'Tree',
+    fileTooLarge: 'File is larger than 1 MB',
+    showAnyway: 'Show anyway',
   },
 
   /** Поверхность терминала — `terminal/TerminalSurface.tsx`. */
@@ -530,10 +517,10 @@ export const S = {
       createSession: 'create session',
       createWorkspace: 'create workspace',
       loadChanges: 'load changes',
+      loadDiff: 'load diff',
       commit: 'commit',
       merge: 'merge',
       assignToAgent: 'send to agent',
-      discard: 'discard changes',
       createRoom: 'create room',
       loadSettings: 'load settings',
       saveSettings: 'save settings',
@@ -556,7 +543,6 @@ export const S = {
       clearBrowserData: 'clear browser data',
       discardWorktree: 'discard worktree',
     },
-    noWorktree: 'This session has no worktree of its own',
     /** Действие работы (⌘T, ⌘W, разделение…) без активной работы — тост (кусок 6.3). */
     noActiveWorkspace: 'No active workspace',
     /** ⌘L, ⌘⇧E или кнопка заголовка, когда правому сайдбару нет места рядом с центром (раунд main-r2). */

@@ -9,11 +9,13 @@
  *   vi.mock('../files/editor/monaco-setup.js', async () => (await import('../test-utils/monaco-mock.js')).monacoSetupMock);
  *
  * `Editor` — `textarea` внутри `div.monaco-editor`: по этому классу `focusContext` узнаёт
- * редактор (6.1a). `DiffEditor` — две такие `textarea`. Компоненты — обычные функции, а не
+ * редактор (6.1a). `DiffEditor` — две такие `textarea`; в `onMount` он отдаёт поддельный
+ * diff-редактор (8.3): `options` живут, как у настоящего `@monaco-editor/react` — новый объект
+ * `options` уходит в `updateOptions`. Компоненты — обычные функции, а не
  * `vi.fn`: `vi.restoreAllMocks()` в тестах не сотрёт их реализацию.
  */
 
-import { createElement, useEffect, useState, type ReactElement } from 'react';
+import { createElement, useEffect, useRef, useState, type ReactElement } from 'react';
 
 /** Значения — как у настоящего Monaco 0.52: тест сверяет число, а не имя. */
 export const KeyMod = { CtrlCmd: 2048, Shift: 1024, Alt: 512, WinCtrl: 256 } as const;
@@ -30,14 +32,22 @@ export interface FakeEditor {
   press(keybinding: number): void;
   /** Текст модели — как его видит редактор. */
   getValue(): string;
+  /** Текст модели (8.3): `getValue` / `setValue` модели. */
+  text: string;
+  /** Прокрутка (8.3): `getScrollTop` / `setScrollTop`. */
+  scrollTop: number;
   /** Размонтирован: тело вкладки ушло. */
   disposed: boolean;
 }
 
 export interface FakeDiffEditor {
+  /** Опции монтирования и `updateOptions` (renderSideBySide, wordWrap…). */
   options: Record<string, unknown>;
+  /** getOriginalEditor() */
   original: FakeEditor;
+  /** getModifiedEditor() */
   modified: FakeEditor;
+  /** dispose() — размонтирован. */
   disposed: boolean;
 }
 
@@ -52,6 +62,9 @@ interface EditorApi extends FakeEditor {
   saveViewState(): { position: Position | null } | null;
   restoreViewState(state: { position: Position | null } | null): void;
   getScrollTop(): number;
+  setScrollTop(top: number): void;
+  getContentHeight(): number;
+  onDidContentSizeChange(listener: () => void): { dispose(): void };
   dispose(): void;
 }
 
@@ -63,13 +76,14 @@ let renderError: Error | null = null;
 
 function fakeEditor(initial: string, options: Record<string, unknown>, setText: (text: string) => void): EditorApi {
   const commands = new Map<number, () => void>();
-  let text = initial;
   const api: EditorApi = {
     options: { ...options },
     position: null,
     disposed: false,
+    text: initial,
+    scrollTop: 0,
     press: (keybinding) => commands.get(keybinding)?.(),
-    getValue: () => text,
+    getValue: () => api.text,
     addCommand: (keybinding, handler) => {
       commands.set(keybinding, handler);
       return String(keybinding);
@@ -86,9 +100,9 @@ function fakeEditor(initial: string, options: Record<string, unknown>, setText: 
     revealPositionInCenter: () => {},
     focus: () => {},
     getModel: () => ({
-      getValue: () => text,
+      getValue: () => api.text,
       setValue: (next) => {
-        text = next;
+        api.text = next;
         setText(next);
       },
     }),
@@ -96,14 +110,19 @@ function fakeEditor(initial: string, options: Record<string, unknown>, setText: 
     restoreViewState: (state) => {
       api.position = state?.position ?? null;
     },
-    getScrollTop: () => 0,
+    getScrollTop: () => api.scrollTop,
+    setScrollTop: (top) => {
+      api.scrollTop = top;
+    },
+    getContentHeight: () => 0,
+    onDidContentSizeChange: () => ({ dispose: () => {} }),
     dispose: () => {
       api.disposed = true;
     },
   };
   /** Правка человеком в textarea — текст модели. */
   (api as EditorApi & { typed(next: string): void }).typed = (next) => {
-    text = next;
+    api.text = next;
   };
   return api;
 }
@@ -157,7 +176,9 @@ interface DiffEditorProps {
 }
 
 function DiffEditor(props: DiffEditorProps): ReactElement {
+  if (renderError !== null) throw renderError;
   const [diff] = useState(() => {
+    let attached = true;
     const original = fakeEditor(props.original ?? '', { readOnly: true }, () => {});
     const modified = fakeEditor(props.modified ?? '', props.options ?? {}, () => {});
     const api: FakeDiffEditor & Record<string, unknown> = {
@@ -167,6 +188,11 @@ function DiffEditor(props: DiffEditorProps): ReactElement {
       disposed: false,
       getOriginalEditor: () => original,
       getModifiedEditor: () => modified,
+      getModel: () => (attached ? { original: { ...original.getModel(), dispose: () => {} }, modified: { ...modified.getModel(), dispose: () => {} } } : null),
+      // `setModel(null)` — отвязка моделей перед размонтированием (FileDiffSection).
+      setModel: (next: unknown) => {
+        attached = next !== null;
+      },
       updateOptions: (next: Record<string, unknown>) => {
         api.options = { ...api.options, ...next };
       },
@@ -183,6 +209,15 @@ function DiffEditor(props: DiffEditorProps): ReactElement {
       diff.disposed = true;
     };
   }, []);
+  // Как у `@monaco-editor/react`: новый объект `options` после монтирования — `updateOptions`.
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    (diff.updateOptions as (next: Record<string, unknown>) => void)(props.options ?? {});
+  }, [props.options]);
   return createElement(
     'div',
     { className: 'monaco-editor', 'data-testid': 'monaco-diff-editor' },
@@ -206,7 +241,8 @@ const loader = {
 export const monacoReactMock: Record<string, unknown> = { default: Editor, Editor, DiffEditor, loader };
 
 export const monacoSetupMock: Record<string, unknown> = {
-  setupMonaco: () => ({ KeyMod, KeyCode }),
+  // `languages` — язык модели диффа по имени файла (8.3); у мока языков нет.
+  setupMonaco: () => ({ KeyMod, KeyCode, languages: { getLanguages: () => [] } }),
   applyEditorTheme: (dark: boolean) => {
     themes.push(dark);
   },
@@ -221,7 +257,7 @@ export const monacoMock = {
   rejectInit(error: Error): void {
     initError = error;
   },
-  /** Рендер `Editor` бросает синхронно — сбой самого редактора; `null` снимает. */
+  /** Рендер `Editor` и `DiffEditor` (8.3) бросает синхронно — сбой самого редактора; `null` снимает. */
   throwOnRender(error: Error | null): void {
     renderError = error;
   },
