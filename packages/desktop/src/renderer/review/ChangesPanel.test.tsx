@@ -551,6 +551,44 @@ describe('Discard worktree… (тест 8)', () => {
     expect(params('worktrees.discard')).toEqual([{ ref: REF, force: true }]);
   });
 
+  it('вкладки файлов worktree — через requestCloseTabs до discard (раунд fix-final-c, п. 3): Cancel — вызова нет, вкладки на месте; согласие — вкладки закрыты, discard идёт', async () => {
+    const own = (path: string): TabSpec => ({ kind: 'file', id: tabId.file({ kind: 'worktree', sessionId: 's-02' }, path), root: { kind: 'worktree', sessionId: 's-02' }, path });
+    const project = (path: string): TabSpec => ({ kind: 'file', id: tabId.file({ kind: 'project' }, path), root: { kind: 'project' }, path });
+    // Терминал сессии — последним: он в фокусе, и «Изменения» показывают S02.
+    const layout = [own('a.ts'), own('b.ts'), project('c.ts'), term('s-02')].reduce((acc, tab) => openTab(acc, tab), emptyLayout());
+    useLayoutStore.setState({ layouts: { [KEY]: layout } });
+    const asked: string[][] = [];
+    let answer = false;
+    useLayoutStore.getState().setCloseGuard(async (_workKey, tabIds) => {
+      asked.push(tabIds);
+      return answer;
+    });
+    try {
+      bridge.setHandler('worktrees.diff', () => diff({ commits: [COMMIT], files: [file('a.ts')] }));
+      renderPanel();
+      await screen.findByRole('button', { name: 'Merge into master' });
+      const tabs = (): string[] => groups(useLayoutStore.getState().layouts[KEY]!).flatMap((group) => group.tabs.map((tab) => tab.id));
+
+      await openDiscard();
+      fireEvent.click(within(dialog()).getByRole('button', { name: 'Discard' }));
+      await flush();
+      expect(asked).toEqual([[own('a.ts').id, own('b.ts').id]]);
+      expect(count('worktrees.discard')).toBe(0);
+      expect(tabs()).toContain(own('a.ts').id);
+
+      answer = true;
+      await openDiscard();
+      fireEvent.click(within(dialog()).getByRole('button', { name: 'Discard' }));
+      await flush();
+      expect(params('worktrees.discard')).toEqual([{ ref: REF, force: false }]);
+      expect(tabs()).not.toContain(own('a.ts').id);
+      expect(tabs()).not.toContain(own('b.ts').id);
+      expect(tabs()).toContain(project('c.ts').id);
+    } finally {
+      useLayoutStore.getState().setCloseGuard(null);
+    }
+  });
+
   it('у сессии без worktree и у pending пункта нет; Refresh — есть', async () => {
     focus('s-04');
     renderPanel();

@@ -22,6 +22,7 @@ import type { HarnasBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
 import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
+import { fileTabIds } from '../files/close-guard.js';
 import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
 import { openTab } from '../layout/tree.js';
@@ -151,6 +152,17 @@ export function ChangesPanel({ bridge, workKey, entry, sendDeps }: ChangesPanelP
   const canDiscard = ref !== null && worktree !== null && worktree.createdAt !== null && !discarded;
   const discard = (force: boolean): void => {
     if (ref === null || key === null) return;
+    // Вкладки файлов этого worktree — сначала, с вопросом о несохранённых (раунд fix-final-c, п. 3),
+    // как у «Delete» сессии: иначе папка уходит из-под буферов с правками молча. «Отмена» — worktree
+    // не отбрасывается.
+    const store = useLayoutStore.getState();
+    const own = fileTabIds(store.layouts[workKey], (root) => root.kind === 'worktree' && root.sessionId === ref.sessionId);
+    const closing = own.length === 0 ? Promise.resolve(true) : store.requestCloseTabs(workKey, own);
+    void closing.then((closed) => {
+      if (closed) callDiscard(ref, key, force);
+    });
+  };
+  const callDiscard = (ref: SessionRef, key: string, force: boolean): void => {
     bridge.call('worktrees.discard', { ref, force }).then(
       // Своё обновление не нужно: отброшенному worktree `worktrees.diff` отвечать нечем — состояние из стора.
       () => useReviewStore.getState().markDiscarded(key),
