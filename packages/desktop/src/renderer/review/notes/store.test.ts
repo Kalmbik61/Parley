@@ -198,6 +198,23 @@ describe('стор заметок: отказ записи (fix-8.4a, пункт
   });
 });
 
+describe('стор заметок: долгая загрузка (fix-8.4a, пункт 3)', () => {
+  it('правка до ответа loadNotes, ответ позже 300 мс → одна saveNotes с файловыми и ранними заметками', async () => {
+    let answer: (value: { file: NotesFile; corruptedTo: string | null }) => void = () => {};
+    vi.spyOn(bridge.app, 'loadNotes').mockImplementationOnce(
+      () => new Promise((resolve) => { answer = resolve; }),
+    );
+    const loading = useNotesStore.getState().load(bridge, work, S2);
+    useNotesStore.getState().add(work, S2, draft({ body: 'early' }), 'x');
+    await vi.advanceTimersByTimeAsync(500);
+    expect(bridge.savedNotes).toEqual([]);
+    answer({ file: { version: 1, notes: [existing()] }, corruptedTo: null });
+    await loading;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(bridge.savedNotes.map((s) => s.notes.notes.map((n) => n.body))).toEqual([['saved before', 'early']]);
+  });
+});
+
 describe('стор заметок: relocateFile', () => {
   it('двигает заметки файла и стороны; не найденная — stale; прочие не трогает', async () => {
     bridge.setNotes(work, S2, {

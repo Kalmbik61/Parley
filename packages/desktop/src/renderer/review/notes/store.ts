@@ -49,10 +49,11 @@ const loads = new Map<string, Promise<void>>();
 const bridges = new Map<string, HarnasBridge>();
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 /**
- * Сессии, чей файл заметок прочитать не удалось (EACCES и т. п. — не битый файл): писать их нельзя,
- * иначе первая же правка затёрла бы заметки, которых окно не видело (fix-8.4a, пункт 1).
+ * Сессии, чей файл заметок прочитан: писать можно только их. Пока чтение идёт, запись ждёт его конца
+ * (он сам перевзведёт таймер); отказ чтения (EACCES и т. п. — не битый файл) запрещает запись, иначе
+ * первая же правка затёрла бы заметки, которых окно не видело (fix-8.4a, пункты 1 и 3).
  */
-const unreadable = new Set<string>();
+const readable = new Set<string>();
 
 function newId(taken: DiffNote[]): string {
   for (;;) {
@@ -72,21 +73,16 @@ export const useNotesStore: UseBoundStore<StoreApi<NotesState>> = create<NotesSt
       setTimeout(() => {
         saveTimers.delete(key);
         const bridge = bridges.get(key);
-        const loading = loads.get(key);
-        // Сессию не загружали — моста нет: записать нечем, а писать поверх непрочитанного файла нельзя.
-        if (bridge === undefined || loading === undefined) return;
-        // Запись — только после чтения: иначе ранняя правка затёрла бы файл до того, как его заметки
-        // пришли в окно.
-        void loading.then(() => {
-          // Файл не прочитан — правки живут только в окне, тост об этом уже показан при чтении.
-          if (unreadable.has(key)) return;
-          const notes = get().bySession[key] ?? [];
-          bridge.app.saveNotes(workKey, sessionId, { version: 1, notes }).catch((error: unknown) => {
-            // Отказ main (форма, диск): человек видит тост, заметки остаются в окне, следующая правка
-            // попробует снова; причина — в консоль.
-            toast.error(S.notes.saveFailed);
-            console.warn('[harnas] notes save failed', decodeIpcError(error).message);
-          });
+        // Файл не прочитан — записи нет. Чтение ещё идёт: его конец перевзведёт таймер, если правки
+        // были, — так на сессию один отложенный save, а не второй, повешенный на загрузку. Чтение
+        // отказало или его не было: писать поверх непрочитанного файла нельзя.
+        if (bridge === undefined || !readable.has(key)) return;
+        const notes = get().bySession[key] ?? [];
+        bridge.app.saveNotes(workKey, sessionId, { version: 1, notes }).catch((error: unknown) => {
+          // Отказ main (форма, диск): человек видит тост, заметки остаются в окне, следующая правка
+          // попробует снова; причина — в консоль.
+          toast.error(S.notes.saveFailed);
+          console.warn('[harnas] notes save failed', decodeIpcError(error).message);
         });
       }, SAVE_DELAY_MS),
     );
@@ -118,12 +114,11 @@ export const useNotesStore: UseBoundStore<StoreApi<NotesState>> = create<NotesSt
         } catch (error) {
           // Файл есть, но не прочитан: писать поверх нельзя — человек узнаёт тостом, что его правки
           // сессии останутся только в окне; причина — в консоль.
-          unreadable.add(key);
           toast.error(S.notes.loadFailed);
           console.warn('[harnas] notes load failed', decodeIpcError(error).message);
           return false;
         }
-        unreadable.delete(key);
+        readable.add(key);
         // Заметки, поставленные до ответа (или за время неудачного чтения), не теряются: файловые —
         // первыми, окна — за ними.
         const early = get().bySession[key] ?? [];
