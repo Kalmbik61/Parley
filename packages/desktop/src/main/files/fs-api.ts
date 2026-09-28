@@ -91,6 +91,27 @@ async function readRegular(absPath: string, limit: number): Promise<{ buffer: Bu
   }
 }
 
+/** Предел имени в каталоге (APFS, ext4 — 255 байт UTF-8). */
+const NAME_MAX_BYTES = 255;
+
+/**
+ * Начало имени не длиннее `bytes` байт UTF-8, по целым символам: временное имя — имя цели плюс
+ * случайный хвост, и у цели с именем под предел оно вылезало бы за него — ENAMETOOLONG, файл с
+ * длинным именем не сохранить вовсе (fix-7-accept). Уникальность держит случайный хвост.
+ */
+function fitName(name: string, bytes: number): string {
+  if (Buffer.byteLength(name) <= bytes) return name;
+  let out = '';
+  let used = 0;
+  for (const char of name) {
+    const size = Buffer.byteLength(char);
+    if (used + size > bytes) break;
+    out += char;
+    used += size;
+  }
+  return out;
+}
+
 /** Цель, какой её видела сверка `write`: `null` — файла быть не должно. */
 export type CheckedTarget = { mtimeMs: number; size: number } | null;
 
@@ -114,7 +135,8 @@ export async function writeAtomicPreservingMode(
   checked?: CheckedTarget,
 ): Promise<WriteResult> {
   const folder = path.dirname(absPath);
-  const tmp = path.join(folder, `.${path.basename(absPath)}.${random()}.harnas-tmp`);
+  const suffix = `.${random()}.harnas-tmp`;
+  const tmp = path.join(folder, `.${fitName(path.basename(absPath), NAME_MAX_BYTES - 1 - Buffer.byteLength(suffix))}${suffix}`);
   let handle: FileHandle | null;
   try {
     // 'wx' — O_CREAT | O_EXCL: на занятом имени, в том числе симлинке, — EEXIST, по ссылке не идёт.

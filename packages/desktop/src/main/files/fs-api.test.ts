@@ -230,6 +230,20 @@ describe('files.write (тест 4)', () => {
     expect(await leftovers(path.join(project, 'src'))).toEqual([]);
   });
 
+  it('имя на 255 байт (предел APFS), латиница и кириллица — запись удалась, временного не осталось (fix-7-accept)', async () => {
+    // Временное имя — «.имя.xxxxxxxx.harnas-tmp»: с полным именем цели оно вылезало за 255 байт — ENAMETOOLONG.
+    for (const name of [`${'s'.repeat(252)}.ts`, `${'я'.repeat(126)}.ts`]) {
+      expect(Buffer.byteLength(name)).toBeLessThanOrEqual(255);
+      const target = path.join(project, 'src', name);
+      await writeFile(target, 'old');
+      const before = await stat(target);
+      const result = await createFsApi(registry).write(ROOT(), `src/${name}`, 'new', before.mtimeMs);
+      expect(result).toMatchObject({ ok: true });
+      expect(await readFile(target, 'utf8')).toBe('new');
+    }
+    expect(await leftovers(path.join(project, 'src'))).toEqual([]);
+  });
+
   it('устаревший mtime — conflict с mtime диска, файл не изменён', async () => {
     const target = path.join(project, 'src', 'a.ts');
     const before = await stat(target);
