@@ -43,15 +43,24 @@ export function primaryActionFor(source: ChangesSource): PrimaryAction {
  * `files` — всё отличие от `mergeBase`, а `uncommitted` — один флаг на весь дифф: секция из `files`
  * не пустела бы после коммита. Путь из `uncommittedPaths` без записи в `files` (правка вернула
  * файл к `mergeBase`) не показывается — кнопку держит `uncommitted`.
+ *
+ * `moreUntracked` (раунд fix-final-c, п. 1): неотслеживаемые сверх предела хоста —
+ * `uncountedUntracked` последних записей `files`, без чисел. Строк им нет: их заменяет одна строка
+ * «+N more untracked». Старый хост поля не шлёт — 0.
  */
-export function changesSections(source: ChangesSource): { uncommitted: DiffFile[]; branch: DiffFile[] } {
-  if (source.kind === 'pending') return { uncommitted: [], branch: [] };
-  if (source.kind === 'project') return { uncommitted: source.changes.files, branch: [] };
+export function changesSections(source: ChangesSource): { uncommitted: DiffFile[]; branch: DiffFile[]; moreUntracked: number } {
+  if (source.kind === 'pending') return { uncommitted: [], branch: [], moreUntracked: 0 };
+  if (source.kind === 'project') {
+    const more = Math.min(source.changes.uncountedUntracked ?? 0, source.changes.files.length);
+    return { uncommitted: source.changes.files.slice(0, source.changes.files.length - more), branch: [], moreUntracked: more };
+  }
   const dirty = new Set(source.diff.uncommittedPaths);
+  const more = Math.min(source.diff.uncountedUntracked ?? 0, source.diff.files.length);
+  const listed = source.diff.files.slice(0, source.diff.files.length - more);
   const uncommitted: DiffFile[] = [];
   const branch: DiffFile[] = [];
-  for (const file of source.diff.files) (dirty.has(file.path) ? uncommitted : branch).push(file);
-  return { uncommitted, branch };
+  for (const file of listed) (dirty.has(file.path) ? uncommitted : branch).push(file);
+  return { uncommitted, branch, moreUntracked: more };
 }
 
 /** Тост ответа worktrees.merge — таблица спеки 11.2; conflicts — файлы для секции «Конфликты». */

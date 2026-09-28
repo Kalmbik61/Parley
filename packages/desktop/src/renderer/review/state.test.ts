@@ -122,7 +122,24 @@ describe('changesSections (тест 4)', () => {
     const sections = changesSections({ kind: 'project', changes });
     expect(sections.uncommitted.map((f) => f.path)).toEqual(['a.ts', 'b.ts']);
     expect(sections.branch).toEqual([]);
-    expect(changesSections({ kind: 'pending' })).toEqual({ uncommitted: [], branch: [] });
+    expect(changesSections({ kind: 'pending' })).toEqual({ uncommitted: [], branch: [], moreUntracked: 0 });
+  });
+
+  it('uncountedUntracked (раунд fix-final-c, п. 1): последние записи files — не строки, а число; нет поля — 0', () => {
+    const nulls = (path: string): DiffFile => ({ path, status: 'A', oldPath: null, additions: null, deletions: null });
+    const d = diff({
+      files: [file('a.ts'), file('b.ts', 'A'), nulls('u1'), nulls('u2')],
+      uncommittedPaths: ['b.ts', 'u1', 'u2'],
+      uncommitted: true,
+      uncountedUntracked: 2,
+    });
+    const sections = changesSections(worktree(d));
+    expect(sections.uncommitted.map((f) => f.path)).toEqual(['b.ts']);
+    expect(sections.branch.map((f) => f.path)).toEqual(['a.ts']);
+    expect(sections.moreUntracked).toBe(2);
+    const changes = { patch: '', files: [file('a.ts'), nulls('u1')], stats: { additions: 1, deletions: 0 }, branch: null, uncountedUntracked: 1 };
+    expect(changesSections({ kind: 'project', changes })).toMatchObject({ uncommitted: [file('a.ts')], moreUntracked: 1 });
+    expect(changesSections(worktree(diff({ files: [file('a.ts')] }))).moreUntracked).toBe(0);
   });
 });
 

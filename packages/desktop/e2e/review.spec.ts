@@ -312,6 +312,40 @@ test.describe('ревью изменений: заметки, коммит, сл
     expect(existsSync(path.join(project, 'src', 'feature.ts'))).toBe(true);
   });
 
+  test('fix-final-c п. 1: 5000 неотслеживаемых — строки Uncommitted виртуализированы, «+4500 more untracked»; дифф — переход за предел секций и «Show 100 more»', async () => {
+    test.setTimeout(180_000);
+    const { window, worktree } = await start();
+    for (let d = 0; d < 100; d += 1) {
+      const dir = path.join(worktree, 'pkg', `d${d}`);
+      await mkdir(dir, { recursive: true });
+      await Promise.all(Array.from({ length: 50 }, (_, f) => writeFile(path.join(dir, `f${f}.js`), 'a\nb\n')));
+    }
+    // Порядок хоста — порядок `ls-files`: 500-й неотслеживаемый — последний с числами и строкой.
+    const untracked = git(worktree, 'ls-files', '--others', '--exclude-standard').trim().split('\n');
+    const lastListed = untracked[499] ?? '';
+
+    const panel = await openChanges(window);
+    const uncommitted = panel.getByRole('region', { name: 'Uncommitted' });
+    await expect(uncommitted.getByText('+4500 more untracked')).toBeVisible({ timeout: 30_000 });
+    await expect(uncommitted.getByRole('button', { name: /Uncommitted/ })).toContainText('5000');
+    const rows = await uncommitted.getByRole('button').count();
+    expect(rows).toBeLessThan(200);
+    // Прокрутка к концу — последняя строка с числами в DOM и видна.
+    await panel.locator('[data-rows-scroll]').evaluate((node) => {
+      node.scrollTop = node.scrollHeight;
+    });
+    await expect(uncommitted.getByTitle(lastListed, { exact: true })).toBeVisible();
+
+    // Переход к 500-му файлу — за пределом в 100 секций: вкладка дорисовала секции до него.
+    await uncommitted.getByTitle(lastListed, { exact: true }).click();
+    const diffTab = window.getByTestId('diff-tab');
+    await expect(diffTab).toBeVisible({ timeout: 30_000 });
+    await expect(diffTab.locator('[data-diff-path]')).toHaveCount(500, { timeout: 10_000 });
+    await expect(diffTab.locator(`[data-diff-path="${lastListed}"]`)).toBeInViewport();
+    await diffTab.getByRole('button', { name: 'Show 100 more' }).click();
+    await expect(diffTab.locator('[data-diff-path]')).toHaveCount(600);
+  });
+
   test('правка одной строки в базе и в ветке → секция Conflicts с файлом до попытки слияния', async () => {
     test.setTimeout(120_000);
     const { window, worktree } = await start();

@@ -111,6 +111,12 @@ function treeRows(files: DiffFile[]): Row[] {
   return rows;
 }
 
+/**
+ * Секций за раз (раунд fix-final-c, п. 1): тысячи неотслеживаемых давали тысячи секций с
+ * наблюдателем на каждую. Дальше — «Show N more»; переход к файлу за пределом дорисовывает до него.
+ */
+const SECTION_STEP = 100;
+
 function FileList({ files, mode, onOpen }: { files: DiffFile[]; mode: DiffListMode; onOpen(path: string): void }): JSX.Element {
   const rows: Row[] = mode === 'tree' ? treeRows(files) : files.map((file) => ({ kind: 'file', file, name: file.path, depth: 0 }));
   return (
@@ -219,6 +225,7 @@ function DiffView({ bridge, workKey, tabId, root, files, mode, version, font, no
   const [listMode, setListMode] = useState<DiffListMode>('list');
   const [collapsed, setCollapsed] = useState<Record<string, true>>({});
   const [live, setLive] = useState<string[]>([]);
+  const [shown, setShown] = useState(SECTION_STEP);
   const visible = useRef(new Set<string>());
   const elements = useRef(new Map<string, HTMLElement>());
   const io = useRef<IntersectionObserver | null>(null);
@@ -335,8 +342,15 @@ function DiffView({ bridge, workKey, tabId, root, files, mode, version, font, no
   const handled = useRef(0);
   useEffect(() => {
     if (!ready || revealed === undefined || revealed.nonce === handled.current || !index.has(revealed.path)) return;
-    handled.current = revealed.nonce;
     const path = revealed.path;
+    // Файл за пределом секций: сначала дорисовать до него (шагами предела), переход — на следующем
+    // проходе эффекта, когда секция уже в DOM.
+    const at = index.get(path) ?? 0;
+    if (at >= shown) {
+      setShown(Math.ceil((at + 1) / SECTION_STEP) * SECTION_STEP);
+      return;
+    }
+    handled.current = revealed.nonce;
     setCollapsed((current) => {
       if (!(path in current)) return current;
       const next = { ...current };
@@ -346,7 +360,7 @@ function DiffView({ bridge, workKey, tabId, root, files, mode, version, font, no
     admit(path);
     elements.current.get(path)?.scrollIntoView({ block: 'start' });
     hold(path);
-  }, [ready, revealed, index, admit, hold]);
+  }, [ready, revealed, index, admit, hold, shown]);
 
   const onToggle = useCallback(
     (path: string) => {
@@ -420,7 +434,7 @@ function DiffView({ bridge, workKey, tabId, root, files, mode, version, font, no
       />
       <FileList files={files} mode={listMode} onOpen={(path) => useReviewStore.getState().revealFile(workKey, tabId, path)} />
       <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto">
-        {files.map((file) => (
+        {files.slice(0, shown).map((file) => (
           <FileDiffSection
             key={file.path}
             file={file}
@@ -439,6 +453,13 @@ function DiffView({ bridge, workKey, tabId, root, files, mode, version, font, no
             notes={notes}
           />
         ))}
+        {files.length > shown ? (
+          <div className="flex justify-center p-2">
+            <Button type="button" variant="outline" size="sm" onClick={() => setShown((current) => current + SECTION_STEP)}>
+              {S.changes.showMore(Math.min(SECTION_STEP, files.length - shown))}
+            </Button>
+          </div>
+        ) : null}
       </div>
     </div>
   );

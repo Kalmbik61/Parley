@@ -542,3 +542,30 @@ describe('DiffTab: сессия без worktree (тест 11)', () => {
     expect(count('worktrees.diff')).toBe(0);
   });
 });
+
+describe('DiffTab: предел секций (раунд fix-final-c, п. 1)', () => {
+  const names = Array.from({ length: 250 }, (_, i) => `f${String(i).padStart(3, '0')}.ts`);
+  const sections = (): number => document.querySelectorAll('[data-diff-path]').length;
+
+  it('250 файлов — 100 секций и «Show 100 more»; нажатия добавляют 100, потом 50, кнопка уходит', async () => {
+    bridge.setHandler('worktrees.diff', () => diff(names.map((name) => file(name))));
+    renderTab();
+    await flush();
+    expect(sections()).toBe(100);
+    fireEvent.click(screen.getByRole('button', { name: 'Show 100 more' }));
+    expect(sections()).toBe(200);
+    fireEvent.click(screen.getByRole('button', { name: 'Show 50 more' }));
+    expect(sections()).toBe(250);
+    expect(screen.queryByRole('button', { name: /^Show \d+ more$/ })).toBeNull();
+  });
+
+  it('переход к файлу за пределом — секции дорисованы до него, секция прокручена', async () => {
+    bridge.setHandler('worktrees.diff', () => diff(names.map((name) => file(name))));
+    renderTab();
+    await flush();
+    act(() => useReviewStore.getState().revealFile(KEY, 'diff:s-02', 'f230.ts'));
+    await flush();
+    expect(sections()).toBe(250);
+    expect(scrolled).toContain(section('f230.ts'));
+  });
+});

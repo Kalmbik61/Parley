@@ -305,6 +305,9 @@ export const S = {
     /** Сессия, чей worktree отброшен из этого окна: `worktrees.diff` ей уже нечего отвечать. */
     worktreeDiscarded: 'The worktree was discarded',
     sections: { conflicts: 'Conflicts', uncommitted: 'Uncommitted', branchChanges: 'Branch changes', commits: 'Branch commits' },
+    /** Неотслеживаемые сверх предела хоста (раунд fix-final-c, п. 1): без строк и чисел. */
+    moreUntracked: (n: number): string => `+${n} more untracked`,
+    moreUntrackedHint: 'Too many untracked files to list. A commit still takes them.',
     commit: 'Commit',
     commitProject: 'Commit all in folder',
     askAgent: 'Ask agent to resolve',
@@ -324,6 +327,8 @@ export const S = {
     inline: 'Inline',
     sideBySide: 'Side by side',
     collapseAll: 'Collapse all',
+    /** Секций вкладки диффа больше предела (раунд fix-final-c, п. 1). */
+    showMore: (n: number): string => `Show ${n} more`,
     expandAll: 'Expand all',
     wrapLines: 'Wrap lines',
     collapse: 'Collapse',

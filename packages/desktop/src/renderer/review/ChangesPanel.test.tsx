@@ -100,7 +100,26 @@ function dialog(): HTMLElement {
   return screen.getByRole('dialog');
 }
 
+/**
+ * jsdom не считает раскладку: высота прокрутчика строк — 0, и виртуальный список после первого
+ * замера пуст. Прокрутчику `data-rows-scroll` — 600px, как экран (раунд fix-final-c, п. 1).
+ */
+function mockRowsScrollHeight(): () => void {
+  const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.hasAttribute('data-rows-scroll') ? 600 : 0;
+    },
+  });
+  return () => {
+    if (original !== undefined) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', original);
+  };
+}
+let restoreRowsScroll: () => void = () => {};
+
 beforeEach(() => {
+  restoreRowsScroll = mockRowsScrollHeight();
   bridge = createFakeBridge();
   sendDeps = { bridge, session: () => null, openSession: vi.fn() };
   bridge.setHandler('worktrees.diff', () => diff());
@@ -122,6 +141,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  restoreRowsScroll();
   cleanup();
   vi.restoreAllMocks();
   useHostStore.setState({ status: { state: 'connecting' } });
@@ -678,5 +698,33 @@ describe('Шапка (тест 10)', () => {
     expect(screen.getByText('Choose a session to see its changes')).toBeTruthy();
     expect(count('worktrees.diff')).toBe(0);
     expect(count('changes.project')).toBe(0);
+  });
+});
+
+describe('много неотслеживаемых (раунд fix-final-c, п. 1)', () => {
+  it('5000 файлов, 4500 без чисел: в «Uncommitted» строки виртуализированы, счётчик — все, строка «+4500 more untracked»', async () => {
+    const tracked = Array.from({ length: 500 }, (_, i) => ({ path: `pkg/c${i}.js`, status: 'A' as const, oldPath: null, additions: 2, deletions: 0 }));
+    const rest = Array.from({ length: 4500 }, (_, i) => ({ path: `pkg/u${i}.js`, status: 'A' as const, oldPath: null, additions: null, deletions: null }));
+    const files = [...tracked, ...rest];
+    bridge.setHandler('worktrees.diff', () =>
+      diff({ uncommitted: true, files, uncommittedPaths: files.map((f) => f.path), uncountedUntracked: 4500 }),
+    );
+    renderPanel();
+    const region = await screen.findByRole('region', { name: 'Uncommitted' });
+    expect(within(region).getByRole('button', { name: /Uncommitted/ }).textContent).toContain('5000');
+    const rows = within(region).getAllByRole('button').filter((button) => button.getAttribute('aria-expanded') === null);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.length).toBeLessThan(200);
+    expect(within(region).getByText('+4500 more untracked')).toBeTruthy();
+    // Строк без чисел в списке нет: их заменяет строка «+N more untracked».
+    expect(within(region).queryByTitle('pkg/u0.js')).toBeNull();
+  });
+
+  it('хост без uncountedUntracked — строки нет, все файлы в списке', async () => {
+    bridge.setHandler('worktrees.diff', () => diff({ uncommitted: true, files: [file('a.ts')], uncommittedPaths: ['a.ts'] }));
+    renderPanel();
+    const region = await screen.findByRole('region', { name: 'Uncommitted' });
+    expect(within(region).getByTitle('a.ts')).toBeTruthy();
+    expect(within(region).queryByText(/more untracked/)).toBeNull();
   });
 });

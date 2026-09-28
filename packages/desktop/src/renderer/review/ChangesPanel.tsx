@@ -13,7 +13,7 @@
  * помнит его в сторе ревью и показывает своё состояние, а не ошибку git (перенос 8.2b).
  */
 
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { MoreHorizontal } from 'lucide-react';
 import { toast } from 'sonner';
 import type { BranchCommit, DiffFile, WorkEntry } from '@harnas/core';
@@ -40,6 +40,7 @@ import { Section } from './Section.js';
 import { changesSections, type ChangesSource } from './state.js';
 import { changesSessionOf, useReviewStore } from './store.js';
 import { useChanges } from './use-changes.js';
+import { VirtualRows } from './VirtualRows.js';
 
 export interface ChangesPanelProps {
   bridge: HarnasBridge;
@@ -58,10 +59,13 @@ function Centered({ children }: { children: string }): JSX.Element {
   return <div className="flex flex-1 items-center justify-center p-4 text-center text-sm text-muted-foreground">{children}</div>;
 }
 
-function FileRow({ file, onOpen }: { file: DiffFile; onOpen(): void }): JSX.Element {
+/** Высота строки файла (`h-6`) — шаг виртуального списка. */
+const FILE_ROW_HEIGHT = 24;
+
+function FileRow({ file, onOpen, style }: { file: DiffFile; onOpen(): void; style?: CSSProperties }): JSX.Element {
   const title = file.oldPath === null ? file.path : `${file.oldPath} → ${file.path}`;
   return (
-    <li className="min-w-0">
+    <li className="min-w-0" {...(style === undefined ? null : { style })}>
       <button type="button" title={title} className="flex h-6 w-full min-w-0 items-center gap-2 px-3 text-left text-xs hover:bg-accent" onClick={onOpen}>
         <span className="w-3 shrink-0 font-mono text-muted-foreground" title={FILE_STATUS[file.status] ?? file.status}>
           {file.status}
@@ -115,6 +119,8 @@ export function ChangesPanel({ bridge, workKey, entry, sendDeps }: ChangesPanelP
   const [collapsed, setCollapsed] = useState<Partial<Record<SectionKey, boolean>>>({});
   const [discardFirst, setDiscardFirst] = useState(false);
   const [discardSecond, setDiscardSecond] = useState(false);
+  // Прокрутчик секций — элементом в состоянии: см. `VirtualRows`.
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
 
   if (connected && !supported) {
     return (
@@ -227,7 +233,16 @@ export function ChangesPanel({ bridge, workKey, entry, sendDeps }: ChangesPanelP
   else if (error !== null) body = <Centered>{error}</Centered>;
   else if (source === null) body = <Centered>{S.changes.loading}</Centered>;
   else {
-    const { uncommitted, branch } = changesSections(source);
+    const { uncommitted, branch, moreUntracked } = changesSections(source);
+    const fileRows = (files: DiffFile[]): JSX.Element => (
+      <VirtualRows
+        scroller={scroller}
+        items={files}
+        rowHeight={FILE_ROW_HEIGHT}
+        itemKey={(file) => file.path}
+        renderRow={(file, style) => <FileRow key={file.path} file={file} style={style} onOpen={() => openFile(file.path)} />}
+      />
+    );
     const conflicts =
       mergeConflicts !== null && mergeConflicts.source === source
         ? mergeConflicts.files
@@ -250,21 +265,27 @@ export function ChangesPanel({ bridge, workKey, entry, sendDeps }: ChangesPanelP
             setCollapsed((current) => ({ ...current, conflicts: false }));
           }}
         />
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto py-1">
+        <div ref={setScroller} data-rows-scroll className="flex min-h-0 flex-1 flex-col overflow-y-auto py-1">
           <ConflictsSection files={conflicts} open={isOpen('conflicts')} onToggle={() => toggle('conflicts')} onOpenFile={openFile} />
           {source.kind === 'pending' ? null : (
-            <Section title={S.changes.sections.uncommitted} count={uncommitted.length} open={isOpen('uncommitted')} onToggle={() => toggle('uncommitted')}>
-              {uncommitted.map((file) => (
-                <FileRow key={file.path} file={file} onOpen={() => openFile(file.path)} />
-              ))}
+            <Section
+              title={S.changes.sections.uncommitted}
+              count={uncommitted.length + moreUntracked}
+              open={isOpen('uncommitted')}
+              onToggle={() => toggle('uncommitted')}
+            >
+              {fileRows(uncommitted)}
+              {moreUntracked > 0 ? (
+                <li className="flex h-6 min-w-0 items-center px-3 text-xs text-muted-foreground" title={S.changes.moreUntrackedHint}>
+                  <span className="truncate">{S.changes.moreUntracked(moreUntracked)}</span>
+                </li>
+              ) : null}
             </Section>
           )}
           {source.kind === 'worktree' ? (
             <>
               <Section title={S.changes.sections.branchChanges} count={branch.length} open={isOpen('branch')} onToggle={() => toggle('branch')}>
-                {branch.map((file) => (
-                  <FileRow key={file.path} file={file} onOpen={() => openFile(file.path)} />
-                ))}
+                {fileRows(branch)}
               </Section>
               <Section title={S.changes.sections.commits} count={source.diff.commits.length} open={isOpen('commits')} onToggle={() => toggle('commits')}>
                 {source.diff.commits.map((commit) => (
