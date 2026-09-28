@@ -1,6 +1,6 @@
 /**
  * `TabMetaExtras` из хранилищ (кусок 4.2) — один хук на строку вкладок: `TabStrip` зовёт его
- * один раз и отдаёт каждому `tabMeta`. 7.3 и 9.2 дописывают сюда свои поля.
+ * один раз и отдаёт каждому `tabMeta`. 7.3a и 9.2 дописывают сюда свои поля.
  *
  * Структурное разделение (решение контролёра куска 4.2): хост шлёт `activity.changed` на
  * каждое изменение метрик сессии, а внимание от метрик не зависит. Селектор с поверхностным
@@ -13,6 +13,7 @@ import { useShallow } from 'zustand/react/shallow';
 import type { WorkEntry } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
 import { sessionAttention, type Attention } from '../attention/derive.js';
+import { dirtyBufferKeys, useFilesStore } from '../files/store.js';
 import { useActivityStore, type ActivityEntry } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
 import { EMPTY_EXTRAS, type TabMetaExtras } from './tab-meta.js';
@@ -28,9 +29,14 @@ function attentionBySession(entries: WorkEntry[], byRef: Record<string, Activity
   return out;
 }
 
-/** attention — sessionAttention (3.2) каждой сессии снимка по её активности. Зовёт TabStrip, один раз на строку. */
+/**
+ * attention — sessionAttention (3.2) каждой сессии снимка по её активности; dirtyTabIds — bufferKey
+ * грязных буферов (7.3a). Зовёт TabStrip, один раз на строку. Ключи — массивом с поверхностным
+ * сравнением: правка, которая не меняет «грязность», строки вкладок не перерисовывает.
+ */
 export function useTabMetaExtras(): TabMetaExtras {
   const entries = useWorksStore((state) => state.entries);
   const attention = useActivityStore(useShallow((state) => attentionBySession(entries, state.byRef)));
-  return useMemo(() => ({ ...EMPTY_EXTRAS, attention }), [attention]);
+  const dirtyKeys = useFilesStore(useShallow((state) => dirtyBufferKeys(state.buffers)));
+  return useMemo(() => ({ ...EMPTY_EXTRAS, attention, dirtyTabIds: new Set(dirtyKeys) }), [attention, dirtyKeys]);
 }

@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, nativeTheme, Notification, shell, systemPreferences } from 'electron';
+import type { WebContents } from 'electron';
 import type { WorksSnapshot } from '@harnas/protocol';
 import { S } from '../shared/strings.js';
 import { cleanupDrops, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
@@ -22,7 +23,7 @@ import {
 import { createRootsRegistry, type RootsSource } from './roots.js';
 import { captureShellEnv } from './shell-env.js';
 import { createUiStore, desktopUiPath } from './ui-store.js';
-import { createMainWindow, titlebarDoubleClickAction } from './window.js';
+import { createMainWindow, guardWindowClose, titlebarDoubleClickAction } from './window.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -148,6 +149,8 @@ if (!gotLock) {
     // раньше прелоад ещё не слушает. Перезагрузка страницы снимает признак до нового конца.
     const loadedWindows = new WeakSet<BrowserWindow>();
     const pendingFocusTarget = createPendingFocusTarget();
+    // Вопрос о несохранённых буферах при закрытии окна и ⌘Q (кусок 7.3a) — по окну-отправителю.
+    const closeGuards = new WeakMap<WebContents, ReturnType<typeof guardWindowClose>>();
 
     const openWindow = (): BrowserWindow => {
       const window = createMainWindow({
@@ -166,6 +169,11 @@ if (!gotLock) {
       });
       window.webContents.on('did-start-loading', () => loadedWindows.delete(window));
       window.webContents.on('did-finish-load', () => loadedWindows.add(window));
+      const closeGuard = guardWindowClose(window, app);
+      closeGuards.set(window.webContents, closeGuard);
+      window.webContents.on('did-start-loading', () => closeGuard.reset());
+      window.webContents.on('render-process-gone', () => closeGuard.reset());
+      window.on('closed', () => closeGuard.dispose());
       return window;
     };
 
@@ -261,6 +269,8 @@ if (!gotLock) {
         if ((await clipboard.readText()) !== '') return null;
         return saveImage({ png: await clipboardPng(), dir: dropsDir() });
       },
+      setDirtyBuffers: (sender, count) => closeGuards.get(sender)?.setDirtyCount(count),
+      answerClose: (sender, answer) => closeGuards.get(sender)?.answer(answer),
       chooseFolder: async () => {
         const window = mainWindow;
         const result = window

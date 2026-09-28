@@ -12,6 +12,7 @@ import { hostMethods } from './lib/capabilities.js';
 import { useSidebarSectionsStore } from './sidebar/use-sidebar-sections.js';
 import { S } from '../shared/strings.js';
 import { selectedSessionOf, useLayoutStore } from './layout/store.js';
+import { WindowCloseQuestion } from './files/SaveChangesDialog.js';
 import { AppShell } from './shell/AppShell.js';
 import { NewSessionDialog } from './components/dialogs/NewSessionDialog.js';
 import { SettingsDialog } from './components/settings/SettingsDialog.js';
@@ -221,6 +222,8 @@ export function App(): JSX.Element {
     void bridge.app.restartHost();
   };
 
+  // Экраны связи: буферы файлов (7.3a) переживают потерю связи, и вопрос при закрытии окна
+  // должен кто-то задать — в оболочке это делает `AppShell`.
   if (status.state === 'mismatch') {
     return (
       <div className="flex h-screen flex-col items-center justify-center gap-4 text-neutral-200">
@@ -228,18 +231,25 @@ export function App(): JSX.Element {
         <button type="button" className="rounded bg-neutral-700 px-4 py-2" onClick={handleRestart}>
           {S.connection.restart}
         </button>
+        <WindowCloseQuestion bridge={bridge} />
       </div>
     );
   }
 
   if (status.state === 'connecting') {
-    return <div className="flex h-screen items-center justify-center text-neutral-400">{S.connection.connectingScreen}</div>;
+    return (
+      <div className="flex h-screen items-center justify-center text-neutral-400">
+        {S.connection.connectingScreen}
+        <WindowCloseQuestion bridge={bridge} />
+      </div>
+    );
   }
 
   if (status.state === 'disconnected') {
     return (
       <div className="flex h-screen items-center justify-center text-neutral-400">
         {S.connection.disconnectedScreen(status.reason)}
+        <WindowCloseQuestion bridge={bridge} />
       </div>
     );
   }

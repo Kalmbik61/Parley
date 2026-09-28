@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@harnas/protocol';
-import type { AppNote, FocusTarget, HarnasBridge, HostStatus } from '../shared/bridge.js';
+import type { AppNote, CloseAnswer, FocusTarget, HarnasBridge, HostStatus } from '../shared/bridge.js';
 import type { ActionId } from '../shared/keybindings.js';
 import type {
   DirEntry,
@@ -25,6 +25,7 @@ const appearanceListeners = new Set<(dark: boolean) => void>();
 const focusTargetListeners = new Set<(target: FocusTarget) => void>();
 const fileChangedListeners = new Set<(e: FileChangedEvent) => void>();
 const treeChangedListeners = new Set<(e: TreeChangedEvent) => void>();
+const confirmCloseListeners = new Set<() => void>();
 /** Цель клика, пришедшая, пока у `onFocusTarget` не было слушателей (кусок 4.3). */
 let heldFocusTarget: FocusTarget | null = null;
 
@@ -61,6 +62,10 @@ ipcRenderer.on('app:appearance', (_event, dark: boolean) => {
 
 ipcRenderer.on('app:focus-target', (_event, target: FocusTarget) => {
   deliverFocusTarget(target);
+});
+
+ipcRenderer.on('app:confirm-close', () => {
+  for (const listener of confirmCloseListeners) listener();
 });
 
 ipcRenderer.on('files:changed', (_event, e: FileChangedEvent) => {
@@ -158,6 +163,16 @@ const bridge = {
     pathForFile: (file: File) => webUtils.getPathForFile(file),
     saveDropImage: (source: 'clipboard') =>
       ipcRenderer.invoke('app:save-drop-image', source) as Promise<string | null>,
+    setDirtyBuffers: (count: number) => {
+      ipcRenderer.send('app:dirty-buffers', count);
+    },
+    onConfirmClose: (listener: () => void) => {
+      confirmCloseListeners.add(listener);
+      return () => confirmCloseListeners.delete(listener);
+    },
+    answerClose: (answer: CloseAnswer) => {
+      ipcRenderer.send('app:close-answer', answer);
+    },
   },
   files: {
     stat: (root: FileRoot, paths: string[]) =>

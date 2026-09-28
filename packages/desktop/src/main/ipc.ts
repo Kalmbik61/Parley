@@ -1,8 +1,8 @@
 import { METHODS, NOTIFICATIONS } from '@harnas/protocol';
 import type { MethodName, NotificationName } from '@harnas/protocol';
-import type { BrowserWindow, IpcMain, NativeTheme } from 'electron';
+import type { BrowserWindow, IpcMain, NativeTheme, WebContents } from 'electron';
 import { clampNoteText } from '../shared/app-note.js';
-import type { AppNote, FocusTarget } from '../shared/bridge.js';
+import type { AppNote, CloseAnswer, FocusTarget } from '../shared/bridge.js';
 import { encodeIpcError } from '../shared/ipc-error.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 import { DropTooLargeError } from './drops.js';
@@ -154,6 +154,10 @@ export interface RegisterIpcOptions {
   openPath: (absPath: string) => Promise<string>;
   /** Картинка буфера → drops/ (main/index.ts: clipboard и saveImage); null — картинки нет или в буфере есть текст. */
   saveDropImage: () => Promise<string | null>;
+  /** Число грязных буферов окна-отправителя (`app:dirty-buffers`, кусок 7.3a): main/window.ts#guardWindowClose. */
+  setDirtyBuffers: (sender: WebContents, count: number) => void;
+  /** Ответ окна-отправителя на `app:confirm-close` (`app:close-answer`, кусок 7.3a). */
+  answerClose: (sender: WebContents, answer: CloseAnswer) => void;
 }
 
 /**
@@ -180,6 +184,8 @@ export function registerIpc(options: RegisterIpcOptions): void {
     roots,
     openPath,
     saveDropImage,
+    setDirtyBuffers,
+    answerClose,
   } = options;
 
   ipcMain.handle(
@@ -329,6 +335,18 @@ export function registerIpc(options: RegisterIpcOptions): void {
       return saveDropImage();
     }),
   );
+
+  // Вопрос при закрытии окна (кусок 7.3a). `send`, ответа не ждут: неверная форма — тихий отказ.
+  // Число — целое от нуля: иначе рендерер мог бы навсегда запереть окно дробным или NaN.
+  ipcMain.on('app:dirty-buffers', (event, count: unknown) => {
+    if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) return;
+    setDirtyBuffers(event.sender, count);
+  });
+
+  ipcMain.on('app:close-answer', (event, answer: unknown) => {
+    if (answer !== 'close' && answer !== 'cancel') return;
+    answerClose(event.sender, answer);
+  });
 
   ipcMain.handle(
     'app:reveal-work',

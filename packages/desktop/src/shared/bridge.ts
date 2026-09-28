@@ -52,6 +52,12 @@ export interface AppNote {
 }
 
 /**
+ * Ответ окна на `app:confirm-close` (кусок 7.3a): `close` — «Don't save» или «Save all», у
+ * которого удались все записи; `cancel` — «Cancel» или ошибка записи, окно остаётся.
+ */
+export type CloseAnswer = 'close' | 'cancel';
+
+/**
  * Единственный мост между рендерером и хостом. Рендерер не видит ни Node, ни
  * Electron напрямую — только это, отданное прелоадом через `contextBridge`.
  */
@@ -124,6 +130,15 @@ export interface HarnasBridge {
      * 'clipboard'; null — картинки нет или в буфере есть текст.
      */
     saveDropImage(source: 'clipboard'): Promise<string | null>;
+    /**
+     * Число несохранённых буферов редактора → main (`app:dirty-buffers`, кусок 7.3a) при каждом
+     * изменении: на закрытии окна и ⌘Q main спрашивает, только если оно больше нуля.
+     */
+    setDirtyBuffers(count: number): void;
+    /** Main отложил закрытие окна или выход (`app:confirm-close`): окно спрашивает и отвечает `answerClose`. */
+    onConfirmClose(listener: () => void): () => void;
+    /** Ответ на `app:confirm-close` (`app:close-answer`). */
+    answerClose(answer: CloseAnswer): void;
   };
   /**
    * Файловый API main (спека 10.7): `stat` и `locate` — с этапа 5, `list`, `readText`,

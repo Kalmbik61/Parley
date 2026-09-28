@@ -13,7 +13,7 @@ import type {
   Params,
   Result,
 } from '@harnas/protocol';
-import type { AppNote, FocusTarget, HarnasBridge, HostStatus } from '../../shared/bridge.js';
+import type { AppNote, CloseAnswer, FocusTarget, HarnasBridge, HostStatus } from '../../shared/bridge.js';
 import type { ActionId } from '../../shared/keybindings.js';
 import type {
   DirEntry,
@@ -120,6 +120,12 @@ export interface FakeBridge extends HarnasBridge {
   readonly unwatchCalls: string[];
   readonly lsFilesCalls: FileRoot[];
   readonly gitStatusCalls: FileRoot[];
+  /** Вызовы `app.setDirtyBuffers` — число грязных буферов, как его получил бы main (кусок 7.3a). */
+  readonly dirtyBufferCounts: number[];
+  /** Main отложил закрытие окна: событие `app:confirm-close` слушателям `onConfirmClose`. */
+  emitConfirmClose(): void;
+  /** Вызовы `app.answerClose`. */
+  readonly closeAnswers: CloseAnswer[];
 }
 
 export function createFakeBridge(): FakeBridge {
@@ -168,6 +174,9 @@ export function createFakeBridge(): FakeBridge {
   const unwatchCalls: string[] = [];
   const lsFilesCalls: FileRoot[] = [];
   const gitStatusCalls: FileRoot[] = [];
+  const dirtyBufferCounts: number[] = [];
+  const confirmCloseListeners = new Set<() => void>();
+  const closeAnswers: CloseAnswer[] = [];
   let watchSeq = 0;
   /** mtimeMs ответа write: растёт с каждой записью, как на диске. */
   let writeMtimeMs = 1_700_000_000_000;
@@ -254,6 +263,11 @@ export function createFakeBridge(): FakeBridge {
     unwatchCalls,
     lsFilesCalls,
     gitStatusCalls,
+    dirtyBufferCounts,
+    closeAnswers,
+    emitConfirmClose: () => {
+      for (const listener of confirmCloseListeners) listener();
+    },
     files: {
       stat: async (root, paths) => paths.map((path) => fileStats.get(`${rootKey(root)}\n${path}`) ?? null),
       locate: async (workKey, absPaths) => {
@@ -434,6 +448,16 @@ export function createFakeBridge(): FakeBridge {
         const answer = saveDropImageAnswer;
         if (answer !== null && typeof answer === 'object') throw answer;
         return answer;
+      },
+      setDirtyBuffers: (count) => {
+        dirtyBufferCounts.push(count);
+      },
+      onConfirmClose: (listener) => {
+        confirmCloseListeners.add(listener);
+        return () => confirmCloseListeners.delete(listener);
+      },
+      answerClose: (answer) => {
+        closeAnswers.push(answer);
       },
     },
 

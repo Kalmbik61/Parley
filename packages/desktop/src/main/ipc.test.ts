@@ -52,6 +52,8 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore; roots?
   takeFocusTarget: ReturnType<typeof vi.fn>;
   openPath: ReturnType<typeof vi.fn>;
   saveDropImage: ReturnType<typeof vi.fn>;
+  setDirtyBuffers: ReturnType<typeof vi.fn>;
+  answerClose: ReturnType<typeof vi.fn>;
 } {
   const ipcMain = new FakeIpcMain();
   const connection = {
@@ -86,6 +88,8 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore; roots?
   const openPath = vi.fn().mockResolvedValue('');
   // Настоящий буфер обмена тесты не читают (решение контролёра 5.4): main отдаёт путь подмены.
   const saveDropImage = vi.fn().mockResolvedValue('/h/drops/a.png');
+  const setDirtyBuffers = vi.fn();
+  const answerClose = vi.fn();
   const roots: RootsRegistry =
     overrides.roots ??
     ({
@@ -115,6 +119,8 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore; roots?
     roots,
     openPath,
     saveDropImage,
+    setDirtyBuffers,
+    answerClose,
   });
 
   return {
@@ -129,6 +135,8 @@ function setup(overrides: { uiStore?: UiStore; layoutStore?: LayoutStore; roots?
     takeFocusTarget,
     openPath,
     saveDropImage,
+    setDirtyBuffers,
+    answerClose,
   };
 }
 
@@ -307,6 +315,25 @@ describe('registerIpc', () => {
     const { ipcMain, titlebarDoubleClick } = setup();
     ipcMain.invoke('app:titlebar-double-click');
     expect(titlebarDoubleClick).toHaveBeenCalled();
+  });
+
+  it('тест 11 куска 7.3a: app:dirty-buffers и app:close-answer — с отправителем; неверные аргументы молча отброшены', () => {
+    const { ipcMain, setDirtyBuffers, answerClose } = setup();
+    const sender = { id: 1 };
+    ipcMain.invokeWithEvent('app:dirty-buffers', { sender }, 2);
+    ipcMain.invokeWithEvent('app:dirty-buffers', { sender }, 0);
+    for (const bad of [-1, 1.5, '2', null, Number.NaN, Number.POSITIVE_INFINITY]) ipcMain.invokeWithEvent('app:dirty-buffers', { sender }, bad);
+    expect(setDirtyBuffers.mock.calls).toEqual([
+      [sender, 2],
+      [sender, 0],
+    ]);
+    ipcMain.invokeWithEvent('app:close-answer', { sender }, 'close');
+    ipcMain.invokeWithEvent('app:close-answer', { sender }, 'cancel');
+    for (const bad of ['save', '', 1, undefined]) ipcMain.invokeWithEvent('app:close-answer', { sender }, bad);
+    expect(answerClose.mock.calls).toEqual([
+      [sender, 'close'],
+      [sender, 'cancel'],
+    ]);
   });
 
   it('тест 14 куска 5.3: app:paste зовёт paste() у event.sender', () => {

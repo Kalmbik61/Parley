@@ -236,3 +236,23 @@ describe('Tab — «Split right/down» (кусок 6.2)', () => {
     expect(usePaletteStore.getState()).toMatchObject({ open: true, mode: 'splitDown' });
   });
 });
+
+describe('Tab — вкладка файла (тест 9 куска 7.3a)', () => {
+  const LONG = `${'f'.repeat(252)}.md`;
+  const fileTab = (path: string): TabSpec => ({ kind: 'file', id: `file:p:${path}`, root: { kind: 'project' }, path });
+  const fileMeta = (title: string, dirty: boolean): TabMeta => ({ ...meta(title), icon: 'file', dirty });
+
+  it('точка «не сохранён» по meta.dirty; значок по виду файла; полный путь — в title', () => {
+    const t = fileTab(`docs/${LONG}`);
+    const group: GroupNode = { type: 'group', id: 'g1', tabs: [t], activeTabId: t.id };
+    setLayoutWithGroup(group);
+    const { rerender } = render(<Tab workKey={WORK_KEY} group={group} tab={t} meta={fileMeta('x.md', true)} dot={null} isActive />);
+    const el = screen.getByRole('tab');
+    expect(el.querySelector('[data-dirty-dot]')).not.toBeNull();
+    expect(el.querySelector('[data-file-kind]')?.getAttribute('data-file-kind')).toBe('markdown');
+    expect(el.querySelector(`[title="docs/${LONG}"]`)).not.toBeNull();
+
+    rerender(<Tab workKey={WORK_KEY} group={group} tab={t} meta={fileMeta('x.md', false)} dot={null} isActive />);
+    expect(screen.getByRole('tab').querySelector('[data-dirty-dot]')).toBeNull();
+  });
+});

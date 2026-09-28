@@ -10,7 +10,9 @@ import type { WorkEntry, WorkSession } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
+import { workKey as workKeyOf } from '../../shared/work-keys.js';
 import type { Attention } from '../attention/derive.js';
+import { bufferKey } from '../files/buffer.js';
 import { sessionRowLabel, sessionTag } from '../lib/participant.js';
 
 /**
@@ -19,7 +21,7 @@ import { sessionRowLabel, sessionTag } from '../lib/participant.js';
  */
 export interface TabMetaExtras {
   attention: Record<string /* refKey */, Attention>;   // 4.2
-  dirtyTabIds: ReadonlySet<string>;                     // 7.3: вкладки file с несохранённым буфером; до него пусто
+  dirtyTabIds: ReadonlySet<string>;                     // 7.3a: bufferKey грязных буферов — не голые id вкладок
   browser: Record<string /* tabId */, { title: string | null; favicon: string | null }>;  // 9.2; до него пусто
 }
 
@@ -34,7 +36,7 @@ export interface TabMeta {
   unread: boolean;
   /** Сессия в `needs-you`: значок вопроса вместо точки — важнее точки (кусок 4.2). */
   needsYou: boolean;
-  /** В этапе 2 всегда `false` — подключит кусок 7.3. */
+  /** Вкладка file с несохранённым буфером своей работы (кусок 7.3a). */
   dirty: boolean;
   /** В этапе 2 всегда `null` — подключит кусок 9.2. */
   favicon: string | null;
@@ -58,10 +60,29 @@ function findSession(entry: WorkEntry | null, sessionId: string): WorkSession | 
   return entry?.map.sessions.find((session) => session.id === sessionId) ?? null;
 }
 
-/** Имя файла из относительного пути вкладки — без учёта совпадений имён (папка добавится, когда вкладки `file` станут открываемыми, этап 7). */
+/** Имя файла из относительного пути вкладки — без учёта совпадений имён (их решает `fileTabTitles`). */
 function fileBaseName(path: string): string {
   const slash = path.lastIndexOf('/');
   return slash === -1 ? path : path.slice(slash + 1);
+}
+
+/** Ближняя папка и имя: `a/b/c/index.ts` → `c/index.ts`; файл в корне — только имя. */
+function withParent(path: string): string {
+  const parts = path.split('/');
+  return parts.length < 2 ? path : parts.slice(-2).join('/');
+}
+
+/** Заголовки вкладок file одной строки: имя; при совпадении имён — `папка/имя` (спека 5.3). */
+export function fileTabTitles(tabs: readonly TabSpec[]): ReadonlyMap<string /* tabId */, string> {
+  const files = tabs.filter((tab): tab is Extract<TabSpec, { kind: 'file' }> => tab.kind === 'file');
+  const counts = new Map<string, number>();
+  for (const tab of files) counts.set(fileBaseName(tab.path), (counts.get(fileBaseName(tab.path)) ?? 0) + 1);
+  const titles = new Map<string, string>();
+  for (const tab of files) {
+    const name = fileBaseName(tab.path);
+    titles.set(tab.id, (counts.get(name) ?? 0) > 1 ? withParent(tab.path) : name);
+  }
+  return titles;
 }
 
 export function tabMeta(tab: TabSpec, entry: WorkEntry | null, extras: TabMetaExtras = EMPTY_EXTRAS): TabMeta {
@@ -95,8 +116,12 @@ export function tabMeta(tab: TabSpec, entry: WorkEntry | null, extras: TabMetaEx
       const title = S.tabs.diffTitle(sessionTag(tab.sessionId), shortHash);
       return { title: truncateTitle(title), icon: 'diff', session: null, ...empty };
     }
-    case 'file':
-      return { title: truncateTitle(fileBaseName(tab.path)), icon: 'file', session: null, ...empty };
+    case 'file': {
+      // По ключу буфера, а не по id вкладки: у двух работ одного проекта id `file:p:…` одинаковый,
+      // и грязный буфер одной поставил бы точку на вкладке другой.
+      const dirty = entry !== null && extras.dirtyTabIds.has(bufferKey(workKeyOf(entry.projectPath, entry.map.work.id), tab.id));
+      return { title: truncateTitle(fileBaseName(tab.path)), icon: 'file', session: null, ...empty, dirty };
+    }
     case 'browser':
       return { title: truncateTitle(tab.url), icon: 'browser', session: null, ...empty };
   }

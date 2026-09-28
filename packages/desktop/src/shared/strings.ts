@@ -361,6 +361,8 @@ export const S = {
     missingRoom: 'Room deleted',
     closeOthers: 'Close others',
     closeToRight: 'Close to the right',
+    /** `aria-label` точки «не сохранён» вкладки файла (кусок 7.3a). */
+    unsaved: 'Unsaved changes',
   },
 
   /** Баннер прерванных сессий — `components/InterruptedBanner.tsx`. */
@@ -523,6 +525,14 @@ export const S = {
     refresh: 'Refresh',
     showIgnored: 'Show ignored files',
     copyRelativePath: 'Copy relative path',
+    /** Вопрос о несохранённом буфере (кусок 7.3a, спека 10.4); Cancel — `S.common.cancel`. */
+    saveChanges: (name: string): string => `Save changes to ${name}?`,
+    save: 'Save',
+    dontSave: "Don't save",
+    /** Тот же вопрос при закрытии окна и ⌘Q — по всем грязным буферам. */
+    saveChangesCount: (count: number): string => `Save changes to ${count} files?`,
+    saveAll: 'Save all',
+    saveAllFailed: "Couldn't save all files — the window stays open",
   },
 
   /** Оболочка окна (`shell/AppShell.tsx`) — заголовки `ErrorBoundary` вокруг сайдбара и раскладки. */

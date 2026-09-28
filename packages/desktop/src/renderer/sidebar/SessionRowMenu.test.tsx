@@ -144,3 +144,53 @@ describe('SessionRowMenu — двойной клик в подтверждени
     expect(bridge.calls.filter((call) => call.method === 'sessions.delete')).toHaveLength(2);
   });
 });
+
+describe('SessionRowMenu — Delete и несохранённые файлы worktree (тест 8 куска 7.3a)', () => {
+  const wt = { kind: 'worktree', sessionId: 's-01' } as const;
+  const own: TabSpec = { kind: 'file', id: tabId.file(wt, 'a.ts'), root: wt, path: 'a.ts' };
+  const project: TabSpec = { kind: 'file', id: tabId.file({ kind: 'project' }, 'a.ts'), root: { kind: 'project' }, path: 'a.ts' };
+  const other: TabSpec = { kind: 'file', id: tabId.file({ kind: 'worktree', sessionId: 's-02' }, 'a.ts'), root: { kind: 'worktree', sessionId: 's-02' }, path: 'a.ts' };
+
+  beforeEach(() => {
+    useLayoutStore.setState({
+      activeWorkKey: KEY,
+      layouts: { [KEY]: { root: { type: 'group', id: 'g1', tabs: [own, project, other], activeTabId: own.id }, activeGroupId: 'g1', closedTabs: [] } },
+      hydrated: { [KEY]: true },
+    });
+    bridge.setHandler('sessions.delete', () => ({ ok: true as const }));
+  });
+
+  afterEach(() => useLayoutStore.getState().setCloseGuard(null));
+
+  const tabIds = (): string[] => {
+    const root = useLayoutStore.getState().layouts[KEY]?.root;
+    return root?.type === 'group' ? root.tabs.map((tab) => tab.id) : [];
+  };
+
+  it('Cancel — sessions.delete нет, вкладки на месте; вопрос — только про файлы её worktree', async () => {
+    const guard = vi.fn(async () => false);
+    useLayoutStore.getState().setCloseGuard(guard);
+    renderMenu(makeSession('s-01', 'plan'));
+    fireEvent.click(screen.getByText('Delete'));
+    fireEvent.click(screen.getAllByText('Delete').at(-1) as HTMLElement);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(guard).toHaveBeenCalledWith(KEY, [own.id]);
+    expect(bridge.calls.filter((call) => call.method === 'sessions.delete')).toHaveLength(0);
+    expect(tabIds()).toEqual([own.id, project.id, other.id]);
+  });
+
+  it("Don't save — вкладка закрыта, sessions.delete вызван", async () => {
+    useLayoutStore.getState().setCloseGuard(async () => true);
+    renderMenu(makeSession('s-01', 'plan'));
+    fireEvent.click(screen.getByText('Delete'));
+    fireEvent.click(screen.getAllByText('Delete').at(-1) as HTMLElement);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(bridge.calls.filter((call) => call.method === 'sessions.delete')).toHaveLength(1);
+    expect(tabIds()).toEqual([project.id, other.id]);
+  });
+});

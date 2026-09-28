@@ -31,7 +31,7 @@
  * сдвигается — место вставки показывает линия 2px blue-500.
  */
 
-import { useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useDroppable } from '@dnd-kit/core';
 import { horizontalListSortingStrategy, SortableContext, useSortable } from '@dnd-kit/sortable';
@@ -48,7 +48,7 @@ import { dndId, type DragSourceData, type DropTargetData } from './dnd.js';
 import { useStripDropSlot } from './DropIndicator.js';
 import { Tab } from './Tab.js';
 import { focusGroup } from './tree.js';
-import { tabMeta } from './tab-meta.js';
+import { fileTabTitles, tabMeta, truncateTitle } from './tab-meta.js';
 import { useLayoutStore } from './store.js';
 import { useTabMetaExtras } from './use-tab-meta-extras.js';
 
@@ -114,6 +114,8 @@ export function TabStrip({ workKey, group, entry, portal, active }: TabStripProp
     }),
   );
   const extras = useTabMetaExtras();
+  // Совпадение имён файлов решается по всей строке (спека 5.3): `tabMeta` видит одну вкладку.
+  const fileTitles = useMemo(() => fileTabTitles(group.tabs), [group.tabs]);
 
   const tablistRef = useRef<HTMLDivElement | null>(null);
 
@@ -172,7 +174,9 @@ export function TabStrip({ workKey, group, entry, portal, active }: TabStripProp
     >
       <SortableContext items={group.tabs.map((tab) => dndId.tab(workKey, tab.id))} strategy={horizontalListSortingStrategy}>
         {group.tabs.map((tab, index) => {
-          const meta = tabMeta(tab, entry, extras);
+          const base = tabMeta(tab, entry, extras);
+          const fileTitle = fileTitles.get(tab.id);
+          const meta = fileTitle === undefined ? base : { ...base, title: truncateTitle(fileTitle) };
           const dot =
             tab.kind === 'terminal' && meta.session !== null
               ? {

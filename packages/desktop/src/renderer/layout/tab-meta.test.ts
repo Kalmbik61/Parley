@@ -6,7 +6,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Room, WorkEntry, WorkSession } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
-import { EMPTY_EXTRAS, tabMeta, truncateTitle, type TabMetaExtras } from './tab-meta.js';
+import type { FileRootSpec, TabSpec } from '../../shared/layout-types.js';
+import { bufferKey } from '../files/buffer.js';
+import { EMPTY_EXTRAS, fileTabTitles, tabMeta, truncateTitle, type TabMetaExtras } from './tab-meta.js';
 
 function session(id: string, label: string): WorkSession {
   return {
@@ -170,5 +172,37 @@ describe('tabMeta — extras.attention (тест 10 куска 4.2)', () => {
 
   it('вкладка почты extras не трогают', () => {
     expect(tabMeta({ kind: 'mail', id: 'mail' }, e, extras({ [key]: 'needs-you' }))).toMatchObject({ unread: false, needsYou: false });
+  });
+});
+
+// Тест 9 куска 7.3a: точка «не сохранён» по bufferKey и заголовки файлов строки.
+describe('tabMeta — dirty вкладки file (тест 9 куска 7.3a)', () => {
+  const tab = { kind: 'file', id: 'file:p:src/a.ts', root: { kind: 'project' }, path: 'src/a.ts' } as const;
+  const workA = entry([]);
+  const workB: WorkEntry = { ...workA, map: { ...workA.map, work: { ...workA.map.work, id: 'w-b' } } };
+
+  it('грязный буфер работы A — точка на её вкладке, на такой же вкладке работы B того же проекта — нет', () => {
+    const extras: TabMetaExtras = { ...EMPTY_EXTRAS, dirtyTabIds: new Set([bufferKey('/tmp/p w', tab.id)]) };
+    expect(tabMeta(tab, workA, extras).dirty).toBe(true);
+    expect(tabMeta(tab, workB, extras).dirty).toBe(false);
+    expect(tabMeta(tab, workA).dirty).toBe(false);
+  });
+});
+
+describe('fileTabTitles (тест 9 куска 7.3a)', () => {
+  const fileTab = (path: string, root: FileRootSpec = { kind: 'project' }): TabSpec => ({ kind: 'file', id: `file:${path}`, root, path });
+
+  it('src/index.ts и docs/index.ts — с папкой; одиночный a.ts — имя; не-файлы не входят', () => {
+    const titles = fileTabTitles([fileTab('src/index.ts'), fileTab('docs/index.ts'), fileTab('lib/a.ts'), { kind: 'mail', id: 'mail' }]);
+    expect(titles.get('file:src/index.ts')).toBe('src/index.ts');
+    expect(titles.get('file:docs/index.ts')).toBe('docs/index.ts');
+    expect(titles.get('file:lib/a.ts')).toBe('a.ts');
+    expect(titles.has('mail')).toBe(false);
+  });
+
+  it('файл в корне рядом с тёзкой в папке — имя без папки; глубокий путь — только ближняя папка', () => {
+    const titles = fileTabTitles([fileTab('index.ts'), fileTab('a/b/c/index.ts')]);
+    expect(titles.get('file:index.ts')).toBe('index.ts');
+    expect(titles.get('file:a/b/c/index.ts')).toBe('c/index.ts');
   });
 });

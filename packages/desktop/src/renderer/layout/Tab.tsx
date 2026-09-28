@@ -17,7 +17,7 @@
  */
 
 import { toast } from 'sonner';
-import { GitCompare, Globe, Hash, Mail as MailIcon, File as FileIcon, X } from 'lucide-react';
+import { FileCode, FileImage, FileSpreadsheet, FileText, FileType, GitCompare, Globe, Hash, Mail as MailIcon, X } from 'lucide-react';
 import type { SessionLifecycle } from '@harnas/core';
 import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
@@ -25,6 +25,7 @@ import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import type { DotState } from '../lib/dot-state.js';
 import { cn } from '../lib/cn.js';
+import { fileKind, type FileKind } from '../files/file-kind.js';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -47,7 +48,17 @@ export interface TabProps {
   isActive: boolean;
 }
 
-function TabIcon({ meta, dot }: Pick<TabProps, 'meta' | 'dot'>): JSX.Element {
+/** Значок вкладки файла по виду (спека 5.3): вид — по расширению, `files/file-kind.ts`. */
+const FILE_ICONS: Record<FileKind, typeof FileCode> = {
+  text: FileCode,
+  markdown: FileText,
+  csv: FileSpreadsheet,
+  tsv: FileSpreadsheet,
+  image: FileImage,
+  pdf: FileType,
+};
+
+function TabIcon({ tab, meta, dot }: Pick<TabProps, 'tab' | 'meta' | 'dot'>): JSX.Element {
   switch (meta.icon) {
     case 'terminal':
       return (
@@ -67,8 +78,11 @@ function TabIcon({ meta, dot }: Pick<TabProps, 'meta' | 'dot'>): JSX.Element {
       return <Hash className="size-3.5 shrink-0" aria-hidden="true" />;
     case 'diff':
       return <GitCompare className="size-3.5 shrink-0" aria-hidden="true" />;
-    case 'file':
-      return <FileIcon className="size-3.5 shrink-0" aria-hidden="true" />;
+    case 'file': {
+      const kind = tab.kind === 'file' ? fileKind(tab.path) : 'text';
+      const Icon = FILE_ICONS[kind];
+      return <Icon data-file-kind={kind} className="size-3.5 shrink-0" aria-hidden="true" />;
+    }
     case 'browser':
       return <Globe className="size-3.5 shrink-0" aria-hidden="true" />;
   }
@@ -135,8 +149,19 @@ export function Tab({ workKey, group, tab, meta, dot, isActive }: TabProps): JSX
             meta.unread && !isActive ? 'bg-amber-500/10' : '',
           )}
         >
-          <TabIcon meta={meta} dot={dot} />
-          <span className="min-w-0 max-w-40 flex-1 truncate">{meta.title}</span>
+          <TabIcon tab={tab} meta={meta} dot={dot} />
+          {/* Полный путь файла — в title: имя на 255 символов строка вкладок обрезает (спека 5.3). */}
+          <span className="min-w-0 max-w-40 flex-1 truncate" {...(tab.kind === 'file' ? { title: tab.path } : {})}>
+            {meta.title}
+          </span>
+          {meta.dirty ? (
+            <span
+              data-dirty-dot
+              role="img"
+              aria-label={S.tabs.unsaved}
+              className="size-2 shrink-0 rounded-full bg-foreground/70"
+            />
+          ) : null}
           <button
             type="button"
             aria-label={S.common.close}

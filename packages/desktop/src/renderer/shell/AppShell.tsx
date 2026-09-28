@@ -71,7 +71,10 @@ import { NewWorkComposer } from '../sidebar/NewWorkComposer.js';
 import { WorkSidebar } from '../sidebar/WorkSidebar.js';
 import { sessionLabelFor, sessionRowLabel } from '../lib/participant.js';
 import { workKey } from '../lib/tree-order.js';
-import { absPathOf } from '../files/store.js';
+import { bufferKey, isBufferDirty } from '../files/buffer.js';
+import { createCloseGuard } from '../files/close-guard.js';
+import { askSaveChanges, WindowCloseQuestion } from '../files/SaveChangesDialog.js';
+import { absPathOf, bindBuffersToLayouts, bufferName, useFilesStore } from '../files/store.js';
 import { acceptsTerminal, applyDrop, centerOverlayOnCursor, dragItemOf, dropFromDragEnd, layoutCollision, type DragItem } from '../layout/dnd.js';
 import { setDropPreview } from '../layout/DropIndicator.js';
 import { tabId } from '../layout/ids.js';
@@ -450,6 +453,26 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     [],
   );
 
+  // Буферы файлов (кусок 7.3a): живут, пока вкладка есть в раскладке; закрытие вкладки с правками
+  // спрашивает «Save changes to …?». Вопрос закрытия окна и ⌘Q — `WindowCloseQuestion` ниже.
+  useEffect(() => {
+    const unbind = bindBuffersToLayouts(bridge);
+    useLayoutStore.getState().setCloseGuard(
+      createCloseGuard({
+        isDirty: (key, tab) => {
+          const buffer = useFilesStore.getState().buffers[bufferKey(key, tab)];
+          return buffer !== undefined && isBufferDirty(buffer.model);
+        },
+        ask: (key, tab) => askSaveChanges('tab', [bufferName(bufferKey(key, tab))]),
+        save: async (key, tab) => (await useFilesStore.getState().save(bridge, key, tab)) === 'saved',
+      }),
+    );
+    return () => {
+      unbind();
+      useLayoutStore.getState().setCloseGuard(null);
+    };
+  }, [bridge]);
+
   // Клик мышью по пункту меню; клик сочетанием main не шлёт (`main/menu.ts`).
   useEffect(
     () =>
@@ -572,6 +595,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
         onNextAttention={openNextAttention}
       />
       <Palette bridge={bridge} run={stableRun} />
+      <WindowCloseQuestion bridge={bridge} />
       <NewWorkComposer
         open={newWork.open}
         projectPath={newWork.projectPath}

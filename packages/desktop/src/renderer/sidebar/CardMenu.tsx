@@ -8,7 +8,8 @@
  * консоль (сквозное правило E.1).
  *
  * «Delete…»: хост отвечает `conflict`, пока у работы есть живая сессия. Поэтому после
- * подтверждения окно останавливает живые сессии и только затем удаляет работу.
+ * подтверждения окно закрывает вкладки файлов работы (вопрос о правках, 7.3a), останавливает
+ * живые сессии и только затем удаляет работу.
  * Подтверждение — согласие человека на остановку (рамка 15.1); без него ни одного вызова.
  */
 
@@ -19,6 +20,8 @@ import type { HarnasBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
 import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
+import { fileTabIds } from '../files/close-guard.js';
+import { useLayoutStore } from '../layout/store.js';
 import { useHostSupports } from '../lib/capabilities.js';
 import { workKey } from '../lib/tree-order.js';
 import { useUiStore } from '../store/ui.js';
@@ -96,6 +99,10 @@ export function CardMenu({ entry, pinned, bridge, onRename, onOpenMail, children
   const focusCard = (event: Event): void => focusSidebarItem(event, { workKey: key, sessionId: null });
 
   const deleteWork = async (): Promise<void> => {
+    // Сначала вкладки файлов работы (кусок 7.3a): вопрос о несохранённых правках до остановки
+    // сессий. «Отмена» — ни `sessions.stop`, ни `works.delete`.
+    const fileTabs = fileTabIds(useLayoutStore.getState().layouts[key], () => true);
+    if (fileTabs.length > 0 && !(await useLayoutStore.getState().requestCloseTabs(key, fileTabs))) return;
     // Сессии — из свежего снимка: пока меню было открыто, какая-то могла запуститься.
     const fresh = useWorksStore.getState().entries.find((item) => workKey(item.projectPath, item.map.work.id) === key) ?? entry;
     for (const session of fresh.map.sessions) {

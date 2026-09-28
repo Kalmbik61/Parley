@@ -16,6 +16,7 @@ import type { HarnasBridge } from '../../shared/bridge.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
+import { fileTabIds } from '../files/close-guard.js';
 import { tabId } from '../layout/ids.js';
 import { measureGroupSizes } from '../layout/measure.js';
 import { useLayoutStore } from '../layout/store.js';
@@ -85,6 +86,21 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
     store.apply(workKey, (layout) => openTab(layout, { kind: 'diff', id: tabId.diff(session.id, null), sessionId: session.id, commit: null }));
   };
 
+  // «Delete» удаляет и worktree сессии (`sessions.delete` хоста): сначала её вкладки файлов
+  // `file:w:<id>:*` — с вопросом о правках (кусок 7.3a); «Отмена» — `sessions.delete` нет. Без
+  // таких вкладок — сразу, как раньше.
+  const deleteSession = (): void => {
+    const store = useLayoutStore.getState();
+    const own = fileTabIds(store.layouts[workKey], (root) => root.kind === 'worktree' && root.sessionId === session.id);
+    if (own.length === 0) {
+      call('sessions.delete');
+      return;
+    }
+    void store.requestCloseTabs(workKey, own).then((closed) => {
+      if (closed) call('sessions.delete');
+    });
+  };
+
   const worktree = session.worktree;
   // Подтверждение открыто пунктом меню, которого уже нет: фокус — строке (раунд 2).
   const focusRow = (event: Event): void => focusSidebarItem(event, { workKey, sessionId: session.id });
@@ -152,7 +168,7 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
         open={confirm === 'delete'}
         title={S.sidebar.sessionMenu.deleteConfirmTitle(label)}
         confirmLabel={S.common.delete}
-        onConfirm={() => call('sessions.delete')}
+        onConfirm={deleteSession}
         onOpenChange={(next) => setConfirm(next ? 'delete' : null)}
         onCloseAutoFocus={focusRow}
       />

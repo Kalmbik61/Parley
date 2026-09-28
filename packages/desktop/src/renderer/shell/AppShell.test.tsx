@@ -19,6 +19,7 @@ import type { LayoutNode, TabSpec } from '../../shared/layout-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
+import { useFilesStore } from '../files/store.js';
 import { closeTab, focusTab, groups, openTab, splitGroup } from '../layout/tree.js';
 import { useActivityStore } from '../store/activity.js';
 import { useNoticesStore } from '../store/notices.js';
@@ -1724,5 +1725,105 @@ describe('AppShell — фокус после выбора строки пали�
       expect(active === null || active === document.body).toBe(false);
       expect(active?.closest('[data-group-body]') !== null || active?.getAttribute('role') === 'tab').toBe(true);
     });
+  });
+});
+
+describe('AppShell — несохранённые файлы при закрытии вкладок и окна (тесты 6 и 11 куска 7.3a)', () => {
+  const W = keyOf('w-01');
+  const root = { workKey: W, spec: { kind: 'project' as const } };
+  const fileTab = (path: string): TabSpec => ({ kind: 'file', id: tabId.file({ kind: 'project' }, path), root: { kind: 'project' }, path });
+  const A = fileTab('src/a.ts');
+  const B = fileTab('src/b.ts');
+  const text = (value: string) => ({ text: value, mtimeMs: 1, size: value.length, binary: false, utf8: true, readOnlyReason: null });
+
+  // Буферы — модульный стор: предыдущий тест оставил бы свои (с его мостом).
+  beforeEach(() => useFilesStore.setState({ buffers: {}, reveals: {} }));
+
+  /** Открывает A и B (активна B), делает A грязной — её тело уже размонтировано. */
+  async function openDirtyA(): Promise<void> {
+    bridge.setFile(root, 'src/a.ts', text('a'));
+    bridge.setFile(root, 'src/b.ts', text('b'));
+    await renderShell([work('w-01', '2026-01-01', 'One', [session('s-01', 'one')])]);
+    act(() => useLayoutStore.getState().setActiveWork(W));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[W]).toBe(true));
+    act(() => {
+      useLayoutStore.getState().apply(W, (layout) => openTab(layout, A));
+    });
+    const editor = await screen.findByTestId('file-text');
+    await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe('a'));
+    fireEvent.change(editor, { target: { value: 'a2' } });
+    act(() => {
+      useLayoutStore.getState().apply(W, (layout) => openTab(layout, B));
+    });
+    await waitFor(() => expect((screen.getByTestId('file-text') as HTMLTextAreaElement).value).toBe('b'));
+  }
+
+  const tabEl = (tab: TabSpec): HTMLElement => document.querySelector<HTMLElement>(`[role="tab"][data-tab-id="${tab.id}"]`) as HTMLElement;
+  const openIds = (): string[] => {
+    const layout = useLayoutStore.getState().layouts[W];
+    return layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id));
+  };
+
+  it('точка «не сохранён» на грязной вкладке; крестик — вопрос, Cancel оставляет вкладку', async () => {
+    await openDirtyA();
+    expect(tabEl(A).querySelector('[data-dirty-dot]')).not.toBeNull();
+    expect(tabEl(B).querySelector('[data-dirty-dot]')).toBeNull();
+    fireEvent.click(within(tabEl(A)).getByRole('button', { name: 'Close' }));
+    expect(await screen.findByText('Save changes to a.ts?')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await flush();
+    expect(openIds()).toEqual([A.id, B.id]);
+    expect(bridge.writes).toEqual([]);
+  });
+
+  it("средняя кнопка — вопрос, Don't save закрывает без write", async () => {
+    await openDirtyA();
+    fireEvent(tabEl(A), new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    expect(await screen.findByText('Save changes to a.ts?')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: "Don't save" }));
+    await waitFor(() => expect(openIds()).toEqual([B.id]));
+    expect(bridge.writes).toEqual([]);
+    // Буфер A отпущен вместе со своим слежением; прочие подписки — дерева «Файлов».
+    const watchA = bridge.watchCalls.find((call) => call.path === 'src/a.ts')?.id;
+    await waitFor(() => expect(bridge.unwatchCalls).toContain(watchA));
+    expect(bridge.unwatchCalls).not.toContain(bridge.watchCalls.find((call) => call.path === 'src/b.ts')?.id);
+  });
+
+  it('Close others с активной B — вопрос про неактивную грязную A; Save пишет и закрывает', async () => {
+    await openDirtyA();
+    fireEvent.contextMenu(tabEl(B));
+    fireEvent.click(screen.getByText('Close others'));
+    expect(await screen.findByText('Save changes to a.ts?')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(openIds()).toEqual([B.id]));
+    expect(bridge.writes).toEqual([{ root, path: 'src/a.ts', text: 'a2', expectedMtimeMs: 1 }]);
+  });
+
+  it('app:confirm-close: вопрос по всем грязным буферам; Save all пишет и отвечает close; без грязных — close сразу', async () => {
+    await openDirtyA();
+    await waitFor(() => expect(bridge.dirtyBufferCounts.at(-1)).toBe(1));
+    act(() => bridge.emitConfirmClose());
+    expect(await screen.findByText('Save changes to a.ts?')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Save all' }));
+    await waitFor(() => expect(bridge.closeAnswers).toEqual(['close']));
+    expect(bridge.writes).toHaveLength(1);
+    await waitFor(() => expect(bridge.dirtyBufferCounts.at(-1)).toBe(0));
+
+    act(() => bridge.emitConfirmClose());
+    await waitFor(() => expect(bridge.closeAnswers).toEqual(['close', 'close']));
+  });
+
+  it("app:confirm-close: Cancel — cancel; ошибка записи Save all — cancel и тост", async () => {
+    await openDirtyA();
+    act(() => bridge.emitConfirmClose());
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(bridge.closeAnswers).toEqual(['cancel']));
+
+    bridge.setWriteConflict(root, 'src/a.ts', 99);
+    vi.mocked(toast).mockClear();
+    act(() => bridge.emitConfirmClose());
+    fireEvent.click(await screen.findByRole('button', { name: 'Save all' }));
+    await waitFor(() => expect(bridge.closeAnswers).toEqual(['cancel', 'cancel']));
+    expect(toast).toHaveBeenCalledWith("Couldn't save all files — the window stays open");
   });
 });

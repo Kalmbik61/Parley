@@ -13,6 +13,8 @@ import type { WorkEntry, WorkSession } from '@harnas/core';
 import { App } from './App.js';
 import type { NewSessionDialogProps } from './components/dialogs/NewSessionDialog.js';
 import { createFakeBridge, type FakeBridge } from './test-utils/fake-bridge.js';
+import { bufferKey, initialBuffer } from './files/buffer.js';
+import { useFilesStore } from './files/store.js';
 import { EMPTY_HISTORY } from './layout/history.js';
 import { tabId } from './layout/ids.js';
 import { useLayoutStore } from './layout/store.js';
@@ -393,5 +395,34 @@ describe('App — переход по цели уведомления (тест�
     expect(useLayoutStore.getState().activeWorkKey).toBe(key);
     expect(terminalTabs()).toContain('terminal:s-02');
     expect(toast).not.toHaveBeenCalled();
+  });
+});
+
+describe('App — вопрос при закрытии окна без связи с хостом (кусок 7.3a)', () => {
+  it('экран «нет связи»: грязный буфер — вопрос Save all, Cancel → cancel; без грязных — close сразу', async () => {
+    bridge.emitStatus({ state: 'disconnected', reason: 'gone' });
+    render(<App />);
+    await screen.findByText('No connection to host: gone');
+    // Буфер — после экрана связи: правки пережили потерю связи, оболочки уже нет.
+    const key = bufferKey('/tmp/p w', 'file:p:a.ts');
+    useFilesStore.setState({
+      buffers: {
+        [key]: {
+          root: { workKey: '/tmp/p w', spec: { kind: 'project' } },
+          path: 'a.ts',
+          watchId: null,
+          model: { ...initialBuffer(), status: 'dirty', text: 'mine', savedText: 'disk', mtimeMs: 1, diskMtimeMs: 1 },
+        },
+      },
+    });
+    act(() => bridge.emitConfirmClose());
+    expect(await screen.findByText('Save changes to a.ts?')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Save all' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await vi.waitFor(() => expect(bridge.closeAnswers).toEqual(['cancel']));
+
+    useFilesStore.setState({ buffers: {} });
+    act(() => bridge.emitConfirmClose());
+    await vi.waitFor(() => expect(bridge.closeAnswers).toEqual(['cancel', 'close']));
   });
 });

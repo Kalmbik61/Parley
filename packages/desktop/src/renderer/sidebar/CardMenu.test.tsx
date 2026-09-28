@@ -9,6 +9,8 @@ import { toast } from 'sonner';
 import type { WorkEntry } from '@harnas/core';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
+import { EMPTY_HISTORY } from '../layout/history.js';
+import { useLayoutStore } from '../layout/store.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { workKey } from '../lib/tree-order.js';
 import { useHostStore } from '../store/host.js';
@@ -289,5 +291,48 @@ describe('CardMenu — прочие пункты', () => {
     expect(Object.keys(useUiStore.getState().sidebarHolds)).toHaveLength(1);
     fireEvent.keyDown(screen.getByText('Pin'), { key: 'Escape' });
     expect(useUiStore.getState().sidebarHolds).toEqual({});
+  });
+});
+
+describe('CardMenu — «Delete…» и несохранённые файлы (тест 7 куска 7.3a)', () => {
+  const fileTab = { kind: 'file', id: 'file:p:a.ts', root: { kind: 'project' }, path: 'a.ts' } as const;
+
+  beforeEach(() => {
+    useLayoutStore.setState({
+      activeWorkKey: key,
+      layouts: { [key]: { root: { type: 'group', id: 'g1', tabs: [fileTab, { kind: 'mail', id: 'mail' }], activeTabId: fileTab.id }, activeGroupId: 'g1', closedTabs: [] } },
+      hydrated: { [key]: true },
+      pending: {},
+      history: EMPTY_HISTORY,
+      mru: {},
+      navigating: false,
+    });
+    bridge.setHandler('sessions.stop', () => ({ ok: true as const }));
+    bridge.setHandler('works.delete', () => ({ ok: true as const }));
+  });
+
+  afterEach(() => useLayoutStore.getState().setCloseGuard(null));
+
+  it('Cancel в вопросе о буфере — ни sessions.stop, ни works.delete; вопрос — только про вкладки file', async () => {
+    const guard = vi.fn(async () => false);
+    useLayoutStore.getState().setCloseGuard(guard);
+    renderMenu();
+    openMenu();
+    fireEvent.click(screen.getByText('Delete…'));
+    fireEvent.click(screen.getAllByText('Delete')[0] as HTMLElement);
+    await waitFor(() => expect(guard).toHaveBeenCalledWith(key, [fileTab.id]));
+    await flush();
+    expect(bridge.calls).toEqual([]);
+  });
+
+  it('вопрос пройден — вкладки файлов закрыты, затем stop и works.delete', async () => {
+    useLayoutStore.getState().setCloseGuard(async () => true);
+    renderMenu();
+    openMenu();
+    fireEvent.click(screen.getByText('Delete…'));
+    fireEvent.click(screen.getAllByText('Delete')[0] as HTMLElement);
+    await waitFor(() => expect(bridge.calls.map((call) => call.method)).toEqual(['sessions.stop', 'works.delete']));
+    const root = useLayoutStore.getState().layouts[key]?.root;
+    expect(root?.type === 'group' ? root.tabs.map((tab) => tab.id) : null).toEqual(['mail']);
   });
 });
