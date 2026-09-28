@@ -8,7 +8,7 @@ import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { tabId } from '../layout/ids.js';
 import type { LayoutOp } from '../layout/store.js';
 import { emptyLayout, groups, openTab } from '../layout/tree.js';
-import { BROWSER_LIMITS, browserTabCount, openBrowserTab, useBrowserStore } from './store.js';
+import { BROWSER_LIMITS, browserTabCount, openBrowserTab, useBrowserStore, wantsAddressFocus } from './store.js';
 
 const KEY = '/tmp/p\nw-01';
 
@@ -73,6 +73,15 @@ describe('openBrowserTab (тест 1)', () => {
     const one = deps(withBrowserTabs(0));
     expect(openBrowserTab('', one.deps)).toBe('opened');
     expect(groups(one.current() as WorkLayout)[0]?.tabs.at(-1)).toMatchObject({ kind: 'browser', url: '' });
+  });
+
+  it('открытая человеком вкладка просит фокус адресной строки (перенос 9.2a)', () => {
+    const one = deps(withBrowserTabs(0));
+    expect(openBrowserTab('', one.deps)).toBe('opened');
+    const opened = groups(one.current() as WorkLayout)[0]?.tabs.at(-1);
+    expect(opened?.kind).toBe('browser');
+    expect(wantsAddressFocus(opened?.id ?? '')).toBe(true);
+    expect(wantsAddressFocus('browser:ffffff')).toBe(false);
   });
 
   it('предел — 10', () => {

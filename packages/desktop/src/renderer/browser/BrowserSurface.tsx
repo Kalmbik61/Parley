@@ -25,7 +25,7 @@ import { useLayoutStore } from '../layout/store.js';
 import { focusTab, updateTab } from '../layout/tree.js';
 import { isHttpUrl } from '../terminal/links.js';
 import { BrowserChrome } from './BrowserChrome.js';
-import { useBrowserStore, type BrowserTabState } from './store.js';
+import { clearAddressFocus, useBrowserStore, wantsAddressFocus, type BrowserTabState } from './store.js';
 import { layoutUrl } from './url.js';
 
 /** Методы `<webview>` Electron, которые зовёт окно; до `dom-ready` они бросают. */
@@ -84,6 +84,11 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge }
   // адресом (раскладку правили руками) — заглушка: страж main отверг бы такой `src` (9.1).
   const [src, setSrc] = useState<string | null>(() => (isHttpUrl(url) ? url : null));
   if (src === null && isHttpUrl(url)) setSrc(url);
+
+  // Фокус адресной строки — только у вкладки, которую человек открыл сейчас (перенос 9.2a), а не у
+  // пустой вкладки восстановленной раскладки. Просьба читается при монтировании и снимается эффектом.
+  const [addressFocus] = useState(() => wantsAddressFocus(tabId));
+  useEffect(() => clearAddressFocus(tabId), [tabId]);
 
   // Якорные свойства — через `setProperty`, как у терминала: в `CSSProperties` @types/react 18 их нет.
   useLayoutEffect(() => {
@@ -223,7 +228,7 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge }
         canGoBack={state.canGoBack}
         canGoForward={state.canGoForward}
         live={live}
-        focusAddress={src === null && visible}
+        focusAddress={addressFocus && src === null && visible}
         onBack={() => onPage((view) => view.goBack())}
         onForward={() => onPage((view) => view.goForward())}
         onReload={reload}

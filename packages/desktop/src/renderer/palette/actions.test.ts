@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActionId } from '../../shared/keybindings.js';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
+import { wantsAddressFocus } from '../browser/store.js';
 import { IMPLEMENTED_ACTIONS } from '../keys/handler.js';
 import { createMruCycle } from '../keys/mru-cycle.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
@@ -370,6 +371,16 @@ describe('вкладки браузера и предел (тест 12 куск�
     runAction('tab.reopen', spies.ctx);
     expect(spies.toast).not.toHaveBeenCalled();
     expect(spies.layout.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it('⌘⇧T пустой вкладки браузера — действие человека: её адресная строка просит фокус (перенос 9.2a)', () => {
+    const spies = makeContext();
+    const closed: TabSpec = { kind: 'browser', id: 'browser:0000aa', url: '' };
+    spies.layout.layouts = { [KEY]: { ...nineTabs(), closedTabs: [closed] } };
+    expect(wantsAddressFocus(closed.id)).toBe(false);
+    runAction('tab.reopen', spies.ctx);
+    expect(spies.layout.apply).toHaveBeenCalledTimes(1);
+    expect(wantsAddressFocus(closed.id)).toBe(true);
   });
 
   it('browser.newTab при 10 вкладках браузера — тост, раскладка та же; без активной работы — No active workspace', () => {

@@ -397,4 +397,42 @@ describe('favicon гостя (тест 10 куска 9.2a)', () => {
     await flush();
     expect(guest.hostWebContents.send).not.toHaveBeenCalled();
   });
+
+  it('значок прежней страницы, пришедший после навигации, новой странице не уходит (перенос 9.2a)', async () => {
+    const guard = setupGuard();
+    let answerOld: (dataUrl: string | null) => void = () => {};
+    guard.fetchFavicon.mockImplementationOnce(() => new Promise((resolve) => (answerOld = resolve)));
+    const guest = fakeContents(44, 'webview');
+    guard.created(guest);
+
+    guest.emit('page-favicon-updated', fakeEvent(), ['http://127.0.0.1:5173/old.ico']);
+    guest.emit('did-navigate', fakeEvent(), 'http://127.0.0.1:5173/next');
+    answerOld('data:image/png;base64,OLD=');
+    await flush();
+    expect(guest.hostWebContents.send).not.toHaveBeenCalled();
+
+    guard.fetchFavicon.mockResolvedValueOnce('data:image/png;base64,NEW=');
+    guest.emit('page-favicon-updated', fakeEvent(), ['http://127.0.0.1:5173/new.ico']);
+    await flush();
+    expect(guest.hostWebContents.send).toHaveBeenCalledTimes(1);
+    expect(guest.hostWebContents.send).toHaveBeenCalledWith('browser:favicon', { webContentsId: 44, dataUrl: 'data:image/png;base64,NEW=' });
+  });
+
+  it('два запроса одной страницы: поздний ответ первого после второго отбрасывается', async () => {
+    const guard = setupGuard();
+    let answerFirst: (dataUrl: string | null) => void = () => {};
+    guard.fetchFavicon.mockImplementationOnce(() => new Promise((resolve) => (answerFirst = resolve)));
+    guard.fetchFavicon.mockResolvedValueOnce('data:image/png;base64,SECOND=');
+    const guest = fakeContents(45, 'webview');
+    guard.created(guest);
+
+    guest.emit('page-favicon-updated', fakeEvent(), ['http://127.0.0.1:5173/a.ico']);
+    guest.emit('page-favicon-updated', fakeEvent(), ['http://127.0.0.1:5173/b.ico']);
+    await flush();
+    answerFirst('data:image/png;base64,FIRST=');
+    await flush();
+    expect(guest.hostWebContents.send.mock.calls).toEqual([
+      ['browser:favicon', { webContentsId: 45, dataUrl: 'data:image/png;base64,SECOND=' }],
+    ]);
+  });
 });

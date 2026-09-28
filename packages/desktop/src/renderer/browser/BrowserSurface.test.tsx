@@ -19,7 +19,7 @@ import { LayoutView } from '../layout/LayoutView.js';
 import { useLayoutStore } from '../layout/store.js';
 import { SurfaceLayer } from '../layout/SurfaceLayer.js';
 import { findTab } from '../layout/tree.js';
-import { useBrowserStore } from './store.js';
+import { requestAddressFocus, useBrowserStore, wantsAddressFocus } from './store.js';
 
 class ResizeObserverStub {
   observe(): void {}
@@ -237,6 +237,7 @@ describe('BrowserSurface (тест 3)', () => {
 describe('BrowserSurface — новая вкладка (тест 5)', () => {
   it('без адреса: webview нет, фокус в адресной строке; Enter с localhost:5173 — updateTab и webview с этим src', () => {
     setBrowserTab('');
+    requestAddressFocus(TAB);
     renderWork();
     expect(webview()).toBeNull();
     const field = screen.getByRole('textbox', { name: 'Address' });
@@ -246,6 +247,20 @@ describe('BrowserSurface — новая вкладка (тест 5)', () => {
     fireEvent.keyDown(field, { key: 'Enter' });
     expect(layoutUrlOfTab()).toBe('http://localhost:5173');
     expect(webview()?.getAttribute('src')).toBe('http://localhost:5173');
+  });
+
+  it('пустая вкладка из восстановленной раскладки фокус не забирает (перенос 9.2a)', () => {
+    setBrowserTab('');
+    renderWork();
+    const field = screen.getByRole('textbox', { name: 'Address' });
+    expect(document.activeElement).not.toBe(field);
+  });
+
+  it('фокус адресной строки — один раз: после монтирования просьба снята', () => {
+    setBrowserTab('');
+    requestAddressFocus(TAB);
+    renderWork();
+    expect(wantsAddressFocus(TAB)).toBe(false);
   });
 
   it('восстановленная вкладка с about:blank — заглушка, webview нет', () => {

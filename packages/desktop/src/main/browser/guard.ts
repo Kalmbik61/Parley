@@ -116,11 +116,19 @@ function guardGuest(contents: WebContents, deps: Pick<BrowserGuardDeps, 'openTab
 
   // Favicon качает main (9.2a): CSP окна внешних картинок не пускает. Ответ — окну-хозяину гостя,
   // рендерер находит вкладку по webContentsId. Гость мог умереть, пока значок качался.
+  // id гостя у новой страницы тот же: ответ, пришедший после навигации или после более
+  // позднего запроса, достался бы не своей странице (перенос 9.2a). Номер запроса его отсекает.
+  let faviconSeq = 0;
+  contents.on('did-navigate', () => {
+    faviconSeq += 1;
+  });
   contents.on('page-favicon-updated', (_event, favicons) => {
     const [first] = favicons;
     if (first === undefined) return;
+    faviconSeq += 1;
+    const seq = faviconSeq;
     void deps.fetchFavicon(first, contents.getURL()).then((dataUrl) => {
-      if (dataUrl === null || contents.isDestroyed()) return;
+      if (dataUrl === null || seq !== faviconSeq || contents.isDestroyed()) return;
       contents.hostWebContents?.send('browser:favicon', { webContentsId: contents.id, dataUrl });
     });
   });

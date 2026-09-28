@@ -17,7 +17,7 @@ import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { errorText, S } from '../../shared/strings.js';
 import type { Appearance } from '../../shared/ui-types.js';
 import type { MruCycle } from '../keys/mru-cycle.js';
-import { BROWSER_LIMITS, browserTabCount, openBrowserTab } from '../browser/store.js';
+import { BROWSER_LIMITS, browserTabCount, openBrowserTab, requestAddressFocus } from '../browser/store.js';
 import type { LayoutState } from '../layout/store.js';
 import { findTab, focusGroup, focusTab, groups, reopenClosed } from '../layout/tree.js';
 import { neighborInOrder } from '../sidebar/sort.js';
@@ -266,6 +266,8 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
         ctx.toast(S.browser.tooManyTabs);
         return;
       }
+      // Вернул человек — адресная строка пустой вкладки снова берёт фокус (перенос 9.2a).
+      if (layout.closedTabs[0]?.kind === 'browser') requestAddressFocus(layout.closedTabs[0].id);
       ctx.layout.apply(key, reopenClosed);
       return;
     case 'tab.prev':

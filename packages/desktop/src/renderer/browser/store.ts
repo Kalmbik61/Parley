@@ -57,6 +57,25 @@ export const useBrowserStore: UseBoundStore<StoreApi<BrowserState>> = create<Bro
 
 export const BROWSER_LIMITS = { tabsPerWork: 10 } as const; // спека 12.4
 
+/**
+ * Вкладки, которые человек открыл только что: их адресная строка берёт фокус (спека 12.1). Пустая
+ * вкладка из раскладки, восстановленной на старте окна, фокус не забирает — его просит только
+ * действие человека (перенос 9.2a). Просьбу снимает смонтированная поверхность.
+ */
+const addressFocus = new Set<string>();
+
+export function requestAddressFocus(tabId: string): void {
+  addressFocus.add(tabId);
+}
+
+export function wantsAddressFocus(tabId: string): boolean {
+  return addressFocus.has(tabId);
+}
+
+export function clearAddressFocus(tabId: string): void {
+  addressFocus.delete(tabId);
+}
+
 /** Открытые вкладки браузера работы; закрытые (стек ⌘⇧T) в счёт не идут. */
 export function browserTabCount(layout: WorkLayout): number {
   return groups(layout).reduce((count, group) => count + group.tabs.filter((tab) => tab.kind === 'browser').length, 0);
@@ -85,8 +104,11 @@ export function openBrowserTab(
   }
   // Раскладка ещё читается с диска — операция ждёт гидрации в очереди (2.2), и предел
   // проверяется уже на ней: без тоста, зато и без одиннадцатой вкладки.
-  deps.apply(key, (current) =>
-    browserTabCount(current) >= BROWSER_LIMITS.tabsPerWork ? current : openTab(current, { kind: 'browser', id: tabId.browser(), url }),
-  );
+  deps.apply(key, (current) => {
+    if (browserTabCount(current) >= BROWSER_LIMITS.tabsPerWork) return current;
+    const id = tabId.browser();
+    requestAddressFocus(id);
+    return openTab(current, { kind: 'browser', id, url });
+  });
   return 'opened';
 }
