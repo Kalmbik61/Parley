@@ -3,6 +3,7 @@
  * раскрытые папки по ключу корня. Тесты 3 и 4 куска 7.3a: буферы живут с вкладкой, запись.
  */
 
+import { act } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { TextFile } from '../../shared/files-types.js';
 import type { GroupNode, TabSpec, WorkLayout } from '../../shared/layout-types.js';
@@ -13,6 +14,7 @@ import { moveTab, pruneLayout } from '../layout/tree.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { bufferKey } from './buffer.js';
+import { useNotesStore } from '../review/notes/store.js';
 import { bindBuffersToLayouts, defaultRoot, filesRootSpec, useFilesStore } from './store.js';
 
 const worktree = (createdAt: string | null) => ({ path: '/wt/s02', branch: 'harnas/w-0003/s02', base: 'main', createdAt });
@@ -207,6 +209,17 @@ describe('буферы: жизнь по раскладке (тест 3)', () => 
     dispatch(bufferKey(W, A.id), { type: 'edited', text: 'xy' });
     dispatch(bufferKey(W, A.id), { type: 'edited', text: 'a' });
     expect(bridge.dirtyBufferCounts).toEqual([1, 0]);
+  });
+
+  it('отложенная запись заметок держит закрытие окна, как грязный буфер (раунд fix-final-c, п. 2)', async () => {
+    const { openBuffer, dispatch } = useFilesStore.getState();
+    openBuffer(bridge, W, A.id, root, 'src/a.ts');
+    await settle();
+    act(() => useNotesStore.setState({ pendingSaves: 1 }));
+    dispatch(bufferKey(W, A.id), { type: 'edited', text: 'x' });
+    act(() => useNotesStore.setState({ pendingSaves: 0 }));
+    dispatch(bufferKey(W, A.id), { type: 'edited', text: 'a' });
+    expect(bridge.dirtyBufferCounts).toEqual([1, 2, 1, 0]);
   });
 });
 

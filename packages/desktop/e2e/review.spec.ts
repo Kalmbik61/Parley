@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
@@ -193,6 +193,42 @@ test.describe('ревью изменений: заметки, коммит, сл
     await expect.poll(() => screenText(window)).toContain('echo:');
     expect(await screenText(window)).toContain('File: src/note.ts');
     expect(problems).toEqual([]);
+  });
+
+  test('fix-final-c п. 2: заметка сохранена и окно тут же закрыто — файл заметок на диске с ней', async () => {
+    test.setTimeout(120_000);
+    const { app: electronApp, window, sessionId, worktree } = await start();
+    await writeFile(path.join(worktree, 'src', 'note.ts'), 'export const alpha = 1;\nexport const beta = 2;\n');
+    const panel = await openChanges(window);
+    const uncommitted = panel.getByRole('region', { name: 'Uncommitted' });
+    await uncommitted.getByRole('button', { name: /note\.ts/ }).click({ timeout: 10_000 });
+    const section = window.getByTestId('diff-tab').filter({ visible: true }).locator('[data-diff-path="src/note.ts"]');
+    const modified = section.locator('.monaco-diff-editor .editor.modified');
+    await expect(modified.locator('.lines-content > .view-lines')).toContainText('beta');
+    const strip = section.locator('[data-testid="gutter-add"][data-side="modified"]');
+    const number = modified.locator('.line-numbers').filter({ hasText: /^\s*2\s*$/ }).first();
+    const [stripBox, numberBox] = await Promise.all([strip.boundingBox(), number.boundingBox()]);
+    if (stripBox === null || numberBox === null) throw new Error('нет гаттера или номера строки');
+    await window.mouse.move(stripBox.x + stripBox.width / 2, numberBox.y + numberBox.height / 2);
+    await expect(strip.getByRole('button', { name: 'Add note' })).toBeVisible();
+    await window.mouse.down();
+    await window.mouse.up();
+    const field = section.getByPlaceholder('Note for the agent — ⌘Enter to save');
+    await field.fill('Saved before close');
+    await window.keyboard.press('Meta+Enter');
+    await expect(section.getByTestId('note-zone')).toContainText('Saved before close');
+    // Сразу — внутри 300 мс тишины записи: закрытие ждёт её.
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.close());
+
+    const notesDir = path.join(home, 'desktop', 'notes');
+    const read = async (): Promise<string> => {
+      for (const dir of existsSync(notesDir) ? await readdir(notesDir) : []) {
+        const file = path.join(notesDir, dir, `${sessionId}.json`);
+        if (existsSync(file)) return readFile(file, 'utf8');
+      }
+      return '';
+    };
+    await expect.poll(read, { timeout: 10_000 }).toContain('Saved before close');
   });
 
   test('fix-8.4b п. 2: свёрнутый регион разворачивается кнопкой Monaco «Show Unchanged Region» — гаттер заметок её не закрывает (обе стороны); «+» и протяжка работают', async () => {

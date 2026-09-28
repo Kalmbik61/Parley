@@ -23,6 +23,12 @@ export interface NotesState {
   /** Заметки загруженных сессий по notesKey. */
   bySession: Record<string, DiffNote[]>;
   /**
+   * Записи, которые ещё не дошли до main: отложенные (300 мс) и идущие (раунд fix-final-c, п. 2).
+   * Больше нуля — закрытие окна и перезагрузка ждут записи, как грязные буферы (`files/store.ts`
+   * шлёт их сумму в main, `WindowCloseQuestion` сбрасывает их через `flushNoteSaves`).
+   */
+  pendingSaves: number;
+  /**
    * Первый вызов — app.loadNotes (мост запоминается для записи); повтор после удачи — ничего.
    * corruptedTo — тост S.notes.corrupted. Отказ чтения — тост S.notes.loadFailed, запись сессии
    * запрещена до удачного чтения; следующий вызов (открытие вкладки диффа) читает снова.
@@ -54,6 +60,20 @@ const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
  * первая же правка затёрла бы заметки, которых окно не видело (fix-8.4a, пункты 1 и 3).
  */
 const readable = new Set<string>();
+/** Идущие записи: исход — удалась ли (отказ уже показан тостом). */
+const inFlight = new Set<Promise<boolean>>();
+/** Сброс отложенных записей — `flushNoteSaves`; его ставит стор при создании. */
+let flushAll: () => Promise<boolean> = () => Promise.resolve(true);
+
+/**
+ * Все отложенные записи заметок — сейчас, и ждать ответа main вместе с уже идущими (раунд
+ * fix-final-c, п. 2): закрытие окна, ⌘Q и перезагрузка в 300 мс тишины теряли заметку или отметку
+ * `sentAt` (заметку отправили бы снова). `false` — какая-то запись отказала: тост уже показан,
+ * закрытие не идёт.
+ */
+export function flushNoteSaves(): Promise<boolean> {
+  return flushAll();
+}
 
 function newId(taken: DiffNote[]): string {
   for (;;) {
@@ -64,6 +84,39 @@ function newId(taken: DiffNote[]): string {
 }
 
 export const useNotesStore: UseBoundStore<StoreApi<NotesState>> = create<NotesState>((set, get) => {
+  const countPending = (): void => {
+    const pendingSaves = saveTimers.size + inFlight.size;
+    if (get().pendingSaves !== pendingSaves) set({ pendingSaves });
+  };
+
+  /** Запись сессии сейчас; исход — удалась ли. */
+  const writeNow = (workKey: string, sessionId: string): Promise<boolean> => {
+    const key = notesKey(workKey, sessionId);
+    const bridge = bridges.get(key);
+    // Файл не прочитан — записи нет. Чтение ещё идёт: его конец перевзведёт таймер, если правки
+    // были, — так на сессию один отложенный save, а не второй, повешенный на загрузку. Чтение
+    // отказало или его не было: писать поверх непрочитанного файла нельзя.
+    if (bridge === undefined || !readable.has(key)) return Promise.resolve(true);
+    const notes = get().bySession[key] ?? [];
+    const write = bridge.app.saveNotes(workKey, sessionId, { version: 1, notes }).then(
+      () => true,
+      (error: unknown) => {
+        // Отказ main (форма, диск): человек видит тост, заметки остаются в окне, следующая правка
+        // попробует снова; причина — в консоль. id — один на сессию: частые отказы заменяют тост,
+        // а не копят стопку (добавка контролёра 8.4b).
+        toast.error(S.notes.saveFailed, { id: `notes-save:${key}` });
+        console.warn('[harnas] notes save failed', decodeIpcError(error).message);
+        return false;
+      },
+    );
+    inFlight.add(write);
+    void write.then(() => {
+      inFlight.delete(write);
+      countPending();
+    });
+    return write;
+  };
+
   const scheduleSave = (workKey: string, sessionId: string): void => {
     const key = notesKey(workKey, sessionId);
     const pending = saveTimers.get(key);
@@ -72,21 +125,24 @@ export const useNotesStore: UseBoundStore<StoreApi<NotesState>> = create<NotesSt
       key,
       setTimeout(() => {
         saveTimers.delete(key);
-        const bridge = bridges.get(key);
-        // Файл не прочитан — записи нет. Чтение ещё идёт: его конец перевзведёт таймер, если правки
-        // были, — так на сессию один отложенный save, а не второй, повешенный на загрузку. Чтение
-        // отказало или его не было: писать поверх непрочитанного файла нельзя.
-        if (bridge === undefined || !readable.has(key)) return;
-        const notes = get().bySession[key] ?? [];
-        bridge.app.saveNotes(workKey, sessionId, { version: 1, notes }).catch((error: unknown) => {
-          // Отказ main (форма, диск): человек видит тост, заметки остаются в окне, следующая правка
-          // попробует снова; причина — в консоль. id — один на сессию: частые отказы заменяют тост,
-          // а не копят стопку (добавка контролёра 8.4b).
-          toast.error(S.notes.saveFailed, { id: `notes-save:${key}` });
-          console.warn('[harnas] notes save failed', decodeIpcError(error).message);
-        });
+        void writeNow(workKey, sessionId);
+        countPending();
       }, SAVE_DELAY_MS),
     );
+    countPending();
+  };
+
+  flushAll = async () => {
+    for (const [key, timer] of [...saveTimers]) {
+      clearTimeout(timer);
+      saveTimers.delete(key);
+      // Ключ — `notesKey`: sessionId после последнего NUL.
+      const cut = key.lastIndexOf('\0');
+      void writeNow(key.slice(0, cut), key.slice(cut + 1));
+    }
+    countPending();
+    const results = await Promise.all([...inFlight]);
+    return results.every((ok) => ok);
   };
 
   /** Меняет заметки сессии; change вернул null — ни состояния, ни записи. */
@@ -100,6 +156,7 @@ export const useNotesStore: UseBoundStore<StoreApi<NotesState>> = create<NotesSt
 
   return {
     bySession: {},
+    pendingSaves: 0,
 
     load: (bridge, workKey, sessionId) => {
       const key = notesKey(workKey, sessionId);

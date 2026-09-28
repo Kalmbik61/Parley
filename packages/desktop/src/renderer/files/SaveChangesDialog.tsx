@@ -15,6 +15,7 @@ import type { HarnasBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { Button } from '../ui/button.js';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../ui/dialog.js';
+import { flushNoteSaves, useNotesStore } from '../review/notes/store.js';
 import { answerVanishedWork, answerWindowClose, type SaveAnswer } from './close-guard.js';
 import { dirtyBufferKeys, dirtyBufferRefs, useFilesStore, type FilesState } from './store.js';
 
@@ -143,24 +144,42 @@ export function WindowCloseQuestion({ bridge }: { bridge: HarnasBridge }): JSX.E
   useEffect(
     () =>
       bridge.app.onConfirmClose(() => {
-        void answerWindowClose({
-          dirty: dirtyBufferRefs,
-          ask: (names) => askSaveChanges('window', names),
-          save: async (workKey, tabId) => (await useFilesStore.getState().save(bridge, workKey, tabId)) === 'saved',
-          toast: (text) => toast(text),
-        }).then((answer) => {
-          approved.current = answer === 'close' ? useFilesStore.getState().buffers : null;
-          bridge.app.answerClose(answer);
-        });
+        // Заметки к диффу — сначала и без вопроса (раунд fix-final-c, п. 2): их запись отложена на
+        // 300 мс, и ответ «закрыть» до неё терял заметку или `sentAt`. Отказ записи — окно остаётся:
+        // тост уже показан, следующее закрытие пройдёт (ждущих записей больше нет).
+        void flushNoteSaves()
+          .then((notesSaved) =>
+            notesSaved
+              ? answerWindowClose({
+                  dirty: dirtyBufferRefs,
+                  ask: (names) => askSaveChanges('window', names),
+                  save: async (workKey, tabId) => (await useFilesStore.getState().save(bridge, workKey, tabId)) === 'saved',
+                  toast: (text) => toast(text),
+                })
+              : ('cancel' as const),
+          )
+          .then((answer) => {
+            approved.current = answer === 'close' ? useFilesStore.getState().buffers : null;
+            bridge.app.answerClose(answer);
+          });
       }),
     [bridge],
   );
+  // Выгрузка без вопроса main (он не знал о ждущих записях) — последний шанс: запись уходит сразу.
+  useEffect(() => {
+    const onPageHide = (): void => void flushNoteSaves();
+    window.addEventListener('pagehide', onPageHide);
+    return () => window.removeEventListener('pagehide', onPageHide);
+  }, []);
   // Перезагрузка страницы (fix-7.3 п. 4б) у main события не даёт: грязные буферы — выгрузка
   // отменяется, main узнаёт об этом (`will-prevent-unload`) и задаёт тот же вопрос, что при закрытии.
   useEffect(() => {
     const onBeforeUnload = (event: Event): void => {
       const { buffers } = useFilesStore.getState();
-      if (buffers !== approved.current && dirtyBufferKeys(buffers).length > 0) event.preventDefault();
+      // Ждущая запись заметок — тоже отмена: main спросит, ответ сбросит запись и повторит выгрузку.
+      if ((buffers !== approved.current && dirtyBufferKeys(buffers).length > 0) || useNotesStore.getState().pendingSaves > 0) {
+        event.preventDefault();
+      }
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);

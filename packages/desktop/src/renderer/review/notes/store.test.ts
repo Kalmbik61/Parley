@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 import type { SendOutcome } from '../../terminal/send.js';
 import type { DiffNote, NotesFile } from '../../../shared/notes-types.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
-import { notesKey, useNotesStore } from './store.js';
+import { flushNoteSaves, notesKey, useNotesStore } from './store.js';
 
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 
@@ -330,5 +330,47 @@ describe('стор заметок: applyOutcome (тест 5)', () => {
     expect(sent()[0]).toEqual({ id: '00000001', sentAt: SENT_AT, sentTo: S2 });
     await vi.advanceTimersByTimeAsync(300);
     expect(bridge.savedNotes.at(-1)?.notes.notes[0]).toMatchObject({ sentAt: SENT_AT, sentTo: S2 });
+  });
+});
+
+describe('сброс отложенной записи (раунд fix-final-c, п. 2)', () => {
+  it('flushNoteSaves пишет сразу, не дожидаясь 300 мс; pendingSaves — 1, пока запись ждёт, потом 0', async () => {
+    await useNotesStore.getState().load(bridge, work, S2);
+    useNotesStore.getState().add(work, S2, draft(), 'line 7');
+    expect(useNotesStore.getState().pendingSaves).toBe(1);
+    expect(bridge.savedNotes).toHaveLength(0);
+    await expect(flushNoteSaves()).resolves.toBe(true);
+    expect(bridge.savedNotes).toHaveLength(1);
+    expect(bridge.savedNotes[0]?.notes.notes.map((note) => note.body)).toEqual(['fix']);
+    expect(useNotesStore.getState().pendingSaves).toBe(0);
+    // Таймер снят: через 300 мс второй записи нет.
+    await vi.advanceTimersByTimeAsync(400);
+    expect(bridge.savedNotes).toHaveLength(1);
+  });
+
+  it('запись уже идёт — flushNoteSaves ждёт её ответа; отказ — false', async () => {
+    await useNotesStore.getState().load(bridge, work, S2);
+    let finish: (error?: Error) => void = () => {};
+    vi.spyOn(bridge.app, 'saveNotes').mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          finish = (error) => (error === undefined ? resolve() : reject(error));
+        }),
+    );
+    useNotesStore.getState().update(work, S2, 'none', 'x');
+    useNotesStore.getState().add(work, S2, draft(), 'line 7');
+    await vi.advanceTimersByTimeAsync(300);
+    expect(useNotesStore.getState().pendingSaves).toBe(1);
+    let settled: boolean | null = null;
+    void flushNoteSaves().then((ok) => {
+      settled = ok;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBeNull();
+    finish(new Error('EACCES'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    expect(useNotesStore.getState().pendingSaves).toBe(0);
+    expect(toast.error).toHaveBeenCalledWith("Couldn't save review notes", expect.anything());
   });
 });

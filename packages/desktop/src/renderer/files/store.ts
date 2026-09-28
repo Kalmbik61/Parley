@@ -24,6 +24,7 @@ import { decodeIpcError } from '../../shared/ipc-error.js';
 import { groups } from '../layout/tree.js';
 import { useLayoutStore } from '../layout/store.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
+import { useNotesStore } from '../review/notes/store.js';
 import { bufferKey, bufferReducer, initialBuffer, isBufferDirty, splitBufferKey, type BufferEvent, type BufferModel } from './buffer.js';
 import type { DirtyBufferRef } from './close-guard.js';
 
@@ -242,7 +243,9 @@ export function dirtyBufferRefs(): DirtyBufferRef[] {
  * pruneLayout), и буфер отпускается с files.unwatch; files.onChanged разводится по буферам.
  *
  * Тем же подписчиком main узнаёт число грязных буферов (`app:dirty-buffers`, решение контролёра
- * по сверке этапа 7): на закрытии окна и ⌘Q он спрашивает, только если оно больше нуля.
+ * по сверке этапа 7): на закрытии окна и ⌘Q он спрашивает, только если оно больше нуля. К нему
+ * прибавлены ждущие записи заметок (раунд fix-final-c, п. 2): закрытие ждёт и их — вопроса по ним
+ * нет, `WindowCloseQuestion` сбрасывает их и отвечает.
  */
 export function bindBuffersToLayouts(bridge: HarnasBridge): () => void {
   const release = (): void => {
@@ -289,6 +292,13 @@ export function bindBuffersToLayouts(bridge: HarnasBridge): () => void {
   };
 
   let sentDirty = 0;
+  const sendDirty = (): void => {
+    const dirty = dirtyBufferKeys(useFilesStore.getState().buffers).length + useNotesStore.getState().pendingSaves;
+    if (dirty !== sentDirty) {
+      sentDirty = dirty;
+      bridge.app.setDirtyBuffers(dirty);
+    }
+  };
   const unsubFiles = useFilesStore.subscribe((state, prev) => {
     if (state.buffers === prev.buffers) return;
     for (const [key, buffer] of Object.entries(state.buffers)) {
@@ -296,11 +306,10 @@ export function bindBuffersToLayouts(bridge: HarnasBridge): () => void {
       const before = prev.buffers[key]?.model;
       if (before?.status !== 'disk-changed-clean' || before.diskMtimeMs !== buffer.model.diskMtimeMs) reload(key, buffer);
     }
-    const dirty = dirtyBufferKeys(state.buffers).length;
-    if (dirty !== sentDirty) {
-      sentDirty = dirty;
-      bridge.app.setDirtyBuffers(dirty);
-    }
+    sendDirty();
+  });
+  const unsubNotes = useNotesStore.subscribe((state, prev) => {
+    if (state.pendingSaves !== prev.pendingSaves) sendDirty();
   });
 
   const unsubChanged = bridge.files.onChanged((event) => {
@@ -317,6 +326,7 @@ export function bindBuffersToLayouts(bridge: HarnasBridge): () => void {
   return () => {
     unsubLayout();
     unsubFiles();
+    unsubNotes();
     unsubChanged();
   };
 }

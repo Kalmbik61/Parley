@@ -467,8 +467,9 @@ describe('App — вопрос при закрытии окна без связ�
 
     useFilesStore.setState({ buffers: {} });
     act(() => bridge.emitConfirmClose());
-    await vi.waitFor(() => expect(bridge.closeAnswers.at(-1)).toBe('close'));
-    expect(bridge.closeAnswers).toHaveLength(3);
+    // Ответ идёт после сброса записей заметок (раунд fix-final-c, п. 2) — ждём сам третий ответ.
+    await vi.waitFor(() => expect(bridge.closeAnswers).toHaveLength(3));
+    expect(bridge.closeAnswers.at(-1)).toBe('close');
   });
 });
 
