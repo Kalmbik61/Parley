@@ -181,6 +181,23 @@ describe('стор заметок: правки и запись (тест 6)', (
   });
 });
 
+describe('стор заметок: отказ записи (fix-8.4a, пункт 2)', () => {
+  it('отказ saveNotes → тост, заметки в окне; следующая правка пишет снова', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await useNotesStore.getState().load(bridge, work, S2);
+    const save = vi.spyOn(bridge.app, 'saveNotes').mockRejectedValueOnce(new Error('EACCES'));
+    useNotesStore.getState().add(work, S2, draft({ body: 'first' }), 'x');
+    await vi.advanceTimersByTimeAsync(300);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(toast.error).mock.calls).toEqual([["Couldn't save review notes"]]);
+    expect(notes().map((n) => n.body)).toEqual(['first']);
+    useNotesStore.getState().add(work, S2, draft({ body: 'second' }), 'x');
+    await vi.advanceTimersByTimeAsync(300);
+    expect(bridge.savedNotes.map((s) => s.notes.notes.map((n) => n.body))).toEqual([['first', 'second']]);
+    vi.mocked(console.warn).mockRestore();
+  });
+});
+
 describe('стор заметок: relocateFile', () => {
   it('двигает заметки файла и стороны; не найденная — stale; прочие не трогает', async () => {
     bridge.setNotes(work, S2, {

@@ -82,8 +82,9 @@ export const useNotesStore: UseBoundStore<StoreApi<NotesState>> = create<NotesSt
           if (unreadable.has(key)) return;
           const notes = get().bySession[key] ?? [];
           bridge.app.saveNotes(workKey, sessionId, { version: 1, notes }).catch((error: unknown) => {
-            // Отказ main (форма, диск) — только в консоль: заметки остаются в окне, следующая правка
-            // попробует снова.
+            // Отказ main (форма, диск): человек видит тост, заметки остаются в окне, следующая правка
+            // попробует снова; причина — в консоль.
+            toast.error(S.notes.saveFailed);
             console.warn('[harnas] notes save failed', decodeIpcError(error).message);
           });
         });

@@ -383,6 +383,8 @@ export const S = {
     corrupted: (name: string): string => `Session notes were damaged — saved as ${name}`,
     /** Отказ чтения файла заметок (fix-8.4a, пункт 1): правки сессии живут в окне, файл не пишется. */
     loadFailed: "Couldn't load review notes — changes to them won't be saved",
+    /** Отказ записи файла заметок (fix-8.4a, пункт 2): заметки остаются в окне, следующая правка пишет снова. */
+    saveFailed: "Couldn't save review notes",
   },
 
   /**
