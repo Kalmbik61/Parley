@@ -221,6 +221,7 @@ beforeEach(() => {
   sendDeps = { bridge, session: () => null, openSession: vi.fn() };
   vi.mocked(toast).mockClear();
   vi.mocked(toast.error).mockClear();
+  vi.mocked(toast.dismiss).mockClear();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
@@ -436,6 +437,105 @@ describe('отправка (тест 4)', () => {
     release(SUBMITTED);
     await flush();
     expect(notesNow()[0]?.sentAt).not.toBeNull();
+  });
+});
+
+describe('повторная отправка после busy (раунд fix-8.4b, п. 3)', () => {
+  const BUSY: SendResult = { inserted: false, submitted: false, reason: 'busy' };
+  type ToastOptions = { id?: string; action?: { label: string; onClick(): void } } | undefined;
+  const lastError = (): ToastOptions => vi.mocked(toast.error).mock.calls.at(-1)?.[1] as ToastOptions;
+
+  it('busy → Send в карточке → Retry старого тоста: ровно один pty.send после busy; тосты — один id на набор', async () => {
+    serve('a.ts');
+    bridge.setNotes(KEY, 's-02', { file: { version: 1, notes: [note()] }, corruptedTo: null });
+    answers(BUSY, SUBMITTED);
+    renderTab();
+    await flush();
+    intersect(['a.ts']);
+    await flush();
+    const send = (): HTMLElement => within(card(liveFor('a.ts').modified.zones[0])).getByRole('button', { name: /^Send/ });
+    fireEvent.click(send());
+    await flush();
+    const first = lastError();
+    expect(first?.id).toEqual(expect.any(String));
+    const oldRetry = first?.action;
+    expect(oldRetry?.label).toBe('Retry');
+
+    // Новое явное намерение из карточки — тост того же набора заменяется исходом (тот же id), не снимается.
+    fireEvent.click(send());
+    await flush();
+    expect(count('pty.send')).toBe(2);
+    expect(vi.mocked(toast.dismiss)).not.toHaveBeenCalled();
+    const [, sentOptions] = vi.mocked(toast).mock.calls.at(-1) ?? [];
+    expect((sentOptions as ToastOptions)?.id).toBe(first?.id);
+    expect(notesNow()[0]?.sentAt).not.toBeNull();
+
+    // Кнопка старого тоста, если человек успел её нажать, — ничего не шлёт.
+    act(() => oldRetry?.onClick());
+    await flush();
+    expect(count('pty.send')).toBe(2);
+  });
+
+  it('busy → Retry в полёте → Send в карточке ничего не шлёт; Retry отвечает — один pty.send после busy', async () => {
+    serve('a.ts');
+    bridge.setNotes(KEY, 's-02', { file: { version: 1, notes: [note()] }, corruptedTo: null });
+    const queue: Array<SendResult | null> = [BUSY, null];
+    let release: (value: SendResult) => void = () => {};
+    bridge.setHandler('pty.send', (params) => {
+      sent.push(params.text);
+      const next = queue.shift();
+      if (next === undefined) throw new Error('лишний pty.send');
+      if (next !== null) return next;
+      return new Promise<SendResult>((resolve) => {
+        release = resolve;
+      });
+    });
+    renderTab();
+    await flush();
+    intersect(['a.ts']);
+    await flush();
+    const send = (): HTMLElement => within(card(liveFor('a.ts').modified.zones[0])).getByRole('button', { name: /^Send/ });
+    fireEvent.click(send());
+    await flush();
+    const retry = lastError()?.action;
+    act(() => retry?.onClick());
+    await flush();
+    expect(count('pty.send')).toBe(2);
+    fireEvent.click(send());
+    act(() => retry?.onClick());
+    await flush();
+    expect(count('pty.send')).toBe(2);
+    release(SUBMITTED);
+    await flush();
+    expect(notesNow()[0]?.sentAt).not.toBeNull();
+    expect(count('pty.send')).toBe(2);
+  });
+
+  it('busy одной заметки → Send all unsent (те же заметки и ещё) снимает её тост; её старый Retry ничего не шлёт', async () => {
+    serve('a.ts');
+    bridge.setNotes(KEY, 's-02', {
+      file: { version: 1, notes: [note({ id: '00000001', body: 'one' }), note({ id: '00000002', startLine: 12, endLine: 12, body: 'two', anchor: { text: 'line 12' } })] },
+      corruptedTo: null,
+    });
+    answers(BUSY, SUBMITTED);
+    renderTab();
+    await flush();
+    intersect(['a.ts']);
+    await flush();
+    const zones = liveFor('a.ts').modified.zones;
+    const one = zones.find((zone) => card(zone).textContent?.includes('one'));
+    fireEvent.click(within(card(one)).getByRole('button', { name: /^Send/ }));
+    await flush();
+    const first = lastError();
+    fireEvent.click(screen.getByRole('button', { name: /^Send all unsent/ }));
+    await flush();
+    expect(count('pty.send')).toBe(2);
+    expect(sent[1]).toContain('one');
+    expect(sent[1]).toContain('two');
+    expect(vi.mocked(toast.dismiss)).toHaveBeenCalledWith(first?.id);
+    act(() => first?.action?.onClick());
+    await flush();
+    expect(count('pty.send')).toBe(2);
   });
 });
 

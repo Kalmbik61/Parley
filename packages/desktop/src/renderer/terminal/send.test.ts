@@ -176,6 +176,16 @@ describe('sendWithToast (тест 8)', () => {
     expect(lastToast().text).toBe('Sent to S02');
   });
 
+  it('toastId — id тоста sonner; своя retry заменяет повтор тем же вызовом (раунд fix-8.4b, п. 3)', async () => {
+    bridge.setHandler('pty.send', () => ok(false, false, 'busy'));
+    const retry = vi.fn();
+    await sendWithToast({ ...deps, toastId: 'notes-send:x', retry }, ref, 'hi', true);
+    expect((vi.mocked(toast.error).mock.calls.at(-1)?.[1] as { id?: string } | undefined)?.id).toBe('notes-send:x');
+    button('Retry').onClick({});
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(bridge.calls.filter((call) => call.method === 'pty.send')).toHaveLength(1);
+  });
+
   it('not_found у сессии exited → Resume зовёт sessions.resume', async () => {
     bridge.setHandler('pty.send', () => {
       throw encodeIpcError({ code: 'not_found', message: 'm' });

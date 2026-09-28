@@ -84,6 +84,16 @@ export interface SendWithToastDeps {
    * по нему 8.4b ставит заметкам sentAt (сверка этапа 8, I2).
    */
   onOutcome?(outcome: SendOutcome): void;
+  /**
+   * Постоянный id тоста (sonner): следующая попытка того же набора заменяет прежний тост, а не
+   * добавляет второй со своим «Retry» (раунд fix-8.4b, п. 3).
+   */
+  toastId?: string;
+  /**
+   * Своя «Retry» вместо повтора тем же вызовом: вызывающий держит одну незавершённую отправку на
+   * набор и решает, жив ли ещё этот повтор (8.4b, заметки).
+   */
+  retry?(): void;
 }
 
 interface ToastButton {
@@ -113,7 +123,7 @@ export async function sendWithToast(deps: SendWithToastDeps, ref: SessionRef, te
     },
     open: { label: S.send.openSession(label), onClick: () => deps.openSession(ref) },
     // Повтор — тем же путём и с теми же deps: его исход тоже уходит в onOutcome.
-    retry: { label: S.common.retry, onClick: () => void sendWithToast(deps, ref, text, submit) },
+    retry: { label: S.common.retry, onClick: () => (deps.retry === undefined ? void sendWithToast(deps, ref, text, submit) : deps.retry()) },
     resume: {
       label: S.sidebar.sessionMenu.resume,
       onClick: () => {
@@ -124,6 +134,7 @@ export async function sendWithToast(deps: SendWithToastDeps, ref: SessionRef, te
   // У sonner две кнопки: `action` и `cancel` — таблице 8.6 больше двух не нужно.
   const [first, second] = shown.actions.map((action) => buttons[action]);
   const options = {
+    ...(deps.toastId === undefined ? {} : { id: deps.toastId }),
     ...(first === undefined ? {} : { action: first }),
     ...(second === undefined ? {} : { cancel: second }),
   };
