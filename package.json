@@ -11,7 +11,7 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "typecheck": "pnpm --filter \"@harnas/desktop^...\" build && pnpm --filter @harnas/desktop typecheck",
-    "dev": "pnpm --filter @harnas/tui dev",
+    "dev": "pnpm --filter @harnas/host build && pnpm --filter @harnas/desktop dev",
     "dev:desktop": "pnpm --filter @harnas/host build && pnpm --filter @harnas/desktop dev",
     "lint": "eslint packages tools",
     "format": "prettier --write .",
