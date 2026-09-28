@@ -152,6 +152,21 @@ describe('SearchPanel (тест 2)', () => {
     expect(toast).not.toHaveBeenCalled();
   });
 
+  it('неверная регулярка — ожидаемый ввод: ни console.warn, ни console.error (раунд fix-7.4, п. 4)', async () => {
+    bridge.setGrepResult({ code: 'bad_request', message: 'invalid regular expression' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(<SearchPanel bridge={bridge} root={ROOT} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Use regular expression' }));
+    await type('(');
+    await wait(250);
+    expect(screen.getByText('Invalid regular expression')).toBeTruthy();
+    expect(warn).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+    warn.mockRestore();
+    error.mockRestore();
+  });
+
   it('прочий отказ — тост Couldn’t search in files', async () => {
     bridge.setGrepResult({ code: 'failed', message: 'git died' });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -159,6 +174,8 @@ describe('SearchPanel (тест 2)', () => {
     await type('x');
     await wait(250);
     expect(toast).toHaveBeenCalledWith("Couldn't search in files: failed.");
+    // Прочие сбои — по-прежнему в консоль.
+    expect(warn).toHaveBeenCalledWith('[harnas] files.grep', expect.anything());
     warn.mockRestore();
   });
 

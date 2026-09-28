@@ -135,14 +135,15 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
         .catch((error: unknown) => {
           if (running.current !== id) return;
           running.current = null;
-          console.warn('[harnas] files.grep', error);
           const { code } = decodeIpcError(error);
-          // Неверная регулярка — в панели, а не тостом: человек её ещё печатает.
+          // Неверная регулярка — в панели, а не тостом: человек её ещё печатает. Это ожидаемый
+          // ввод, а не сбой — и в консоль не идёт (раунд fix-7.4, п. 4).
           if (code === 'bad_request' && query.regex) {
             setResult(null);
             setInvalid(true);
             return;
           }
+          console.warn('[harnas] files.grep', error);
           toast(code === 'files:denied' ? S.files.denied : errorText(code, S.errors.actions.searchFiles));
         });
     }, SEARCH_DEBOUNCE_MS);
