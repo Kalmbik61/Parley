@@ -8,7 +8,7 @@
  * не доходит (его забирает сам React).
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { SessionRef } from '@harnas/protocol';
 import { S } from '../../shared/strings.js';
@@ -31,17 +31,26 @@ export interface AskAgentDialogProps {
 
 export function AskAgentDialog({ open, sessionRef, initialText, sendDeps, onOpenChange }: AskAgentDialogProps): JSX.Element {
   const [text, setText] = useState(initialText);
+  // Одна отправка на одно открытие (раунд 8, пункт 3) — как `confirmed` у ConfirmDialog: «Send»
+  // остаётся в DOM на время анимации закрытия, а `pty.send` не идемпотентен — второй клик вставил
+  // бы агенту тот же текст ещё раз.
+  const sent = useRef(false);
   // Каждое открытие — свежий шаблон: список конфликтов мог смениться с прошлого раза.
   useEffect(() => {
-    if (open) setText(initialText);
+    if (open) {
+      setText(initialText);
+      sent.current = false;
+    }
   }, [open, initialText]);
 
   const send = (): void => {
+    if (sent.current) return;
     if (!fitsSendLimit(text)) {
       // Хост ответил бы bad_request, и тост сказал бы только «failed»: предел — до вызова.
       toast.error(S.send.tooLong);
       return;
     }
+    sent.current = true;
     onOpenChange(false);
     void sendWithToast(sendDeps, sessionRef, text, true);
   };

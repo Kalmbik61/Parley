@@ -10,7 +10,7 @@
  * После своего коммита и слияния — `onChanged()` (refresh мимо дросселя).
  */
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../shared/bridge.js';
@@ -51,19 +51,33 @@ export function PrimaryAction({ bridge, sessionRef, source, working, sendDeps, o
   const action = primaryActionFor(source);
   const agentLine = working ? S.changes.agentStillWorking : null;
 
+  // Одно нажатие — один коммит (раунд 8, пункт 2): два клика или ⌘Enter + клик до ответа хоста слали
+  // `worktrees.commit` дважды, второй получал отказ и ложный тост после успешного коммита. Ref гасит
+  // повтор ещё до перерисовки, флаг делает кнопку неактивной, пока запрос идёт.
+  const committing = useRef(false);
+  const [busy, setBusy] = useState(false);
+
   const commit = (): void => {
     const trimmed = message.trim();
-    if (trimmed === '') return;
+    if (trimmed === '' || committing.current) return;
+    committing.current = true;
+    setBusy(true);
+    const done = (): void => {
+      committing.current = false;
+      setBusy(false);
+    };
     const call =
       source.kind === 'project'
         ? bridge.call('changes.commitProject', { ref: sessionRef, message: trimmed })
         : bridge.call('worktrees.commit', { ref: sessionRef, message: trimmed });
     call.then(
       () => {
+        done();
         setMessage('');
         onChanged();
       },
       (error: unknown) => {
+        done();
         const info = decodeIpcError(error);
         // Сообщение хоста — русский текст рантайма: человеку — только свой английский.
         console.warn('[harnas] commit', info.code, info.message);
@@ -131,7 +145,7 @@ export function PrimaryAction({ bridge, sessionRef, source, working, sendDeps, o
           : action.kind === 'ask-agent'
             ? S.changes.askAgent
             : S.changes.noChanges;
-  const disabled = action.kind === 'nothing' || (withMessage && message.trim() === '');
+  const disabled = action.kind === 'nothing' || (withMessage && (message.trim() === '' || busy));
 
   const commitDescription = sentences(source.kind === 'project' ? S.changes.projectFolderWarning : null, agentLine);
   // Заголовок вопроса коммита: ветка worktree или «master (project folder)».

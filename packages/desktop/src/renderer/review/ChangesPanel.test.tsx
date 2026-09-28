@@ -169,6 +169,39 @@ describe('PrimaryAction (тест 1)', () => {
     expect(count('worktrees.commit')).toBe(1);
   });
 
+  it('двойной клик Commit (и ⌘Enter + клик) — один worktrees.commit, тоста ошибки нет; пока идёт запрос, кнопка неактивна (раунд 8, пункт 2)', async () => {
+    bridge.setHandler('worktrees.diff', () => diff({ uncommitted: true, files: [file('a.ts')], uncommittedPaths: ['a.ts'] }));
+    // Как хост: второй коммит на чистом дереве — conflict.
+    let commits = 0;
+    let release: () => void = () => {};
+    bridge.setHandler('worktrees.commit', async () => {
+      commits += 1;
+      if (commits > 1) throw { code: 'conflict', message: 'нет изменений для коммита' };
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { commit: 'c'.repeat(40) };
+    });
+    renderPanel();
+    const field = await screen.findByPlaceholderText('Commit message');
+    fireEvent.change(field, { target: { value: 'fix' } });
+    const button = screen.getByRole('button', { name: 'Commit' }) as HTMLButtonElement;
+    // Оба нажатия — в одном такте, до перерисовки: защита не должна зависеть от disabled.
+    act(() => {
+      button.click();
+      button.click();
+    });
+    fireEvent.keyDown(field, { key: 'Enter', metaKey: true });
+    expect(button.disabled).toBe(true);
+    await act(async () => {
+      release();
+      await Promise.resolve();
+    });
+    await flush();
+    expect(count('worktrees.commit')).toBe(1);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
   it('commit в working — вопрос со строкой про агента; коммит только после подтверждения', async () => {
     setWorking('s-02');
     bridge.setHandler('worktrees.diff', () => diff({ uncommitted: true, files: [file('a.ts')], uncommittedPaths: ['a.ts'] }));
@@ -274,6 +307,27 @@ describe('AskAgentDialog (тест 3)', () => {
     await flush();
     expect(params('pty.send')).toEqual([{ ref: { projectPath: '/tmp/proj', workId: 'w-a', sessionId: 's-02' }, text: 'please fix a.ts', submit: true }]);
     expect(toast).toHaveBeenCalledWith('Sent to S02', {});
+  });
+
+  it('двойной клик Send — один pty.send (раунд 8, пункт 3)', async () => {
+    conflicted();
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Ask agent to resolve' }));
+    const send = within(dialog()).getByRole('button', { name: 'Send' });
+    // Кнопка живёт в DOM на время анимации закрытия — второй клик до перерисовки.
+    act(() => {
+      send.click();
+      send.click();
+    });
+    await flush();
+    expect(count('pty.send')).toBe(1);
+
+    // Новое открытие — снова одна отправка.
+    fireEvent.click(screen.getByRole('button', { name: 'Ask agent to resolve' }));
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Send' }));
+    await flush();
+    expect(count('pty.send')).toBe(2);
   });
 
   it('ответ blocked — тост S02 is waiting for your answer', async () => {
