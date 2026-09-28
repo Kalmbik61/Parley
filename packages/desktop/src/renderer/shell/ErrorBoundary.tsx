@@ -14,6 +14,8 @@ import { Button } from '../ui/button.js';
 export interface ErrorBoundaryProps {
   title: string;
   onClose?: () => void;
+  /** До перемонтирования детей на «Повторить» (fix-7.3 п. 6): вкладка файла заводит новый ленивый редактор. */
+  onRetry?: () => void;
   /** Кнопки рядом с «Повторить» (кусок 7.3b): у вкладки файла — «Open in default app». */
   actions?: Array<{ label: string; onClick(): void }>;
   children: ReactNode;
@@ -33,6 +35,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   private readonly retry = (): void => {
+    this.props.onRetry?.();
     this.setState((state) => ({ error: null, attempt: state.attempt + 1 }));
   };
 

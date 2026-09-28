@@ -114,9 +114,15 @@ describe('⌘S и конфликт (тест 1)', () => {
     if (layout === undefined) throw new Error('нет раскладки');
     expect(groups(layout).flatMap((group) => group.tabs)).toHaveLength(1);
 
-    // Обратно к правке — Close сравнения; правка на месте.
+    // Редактор на время сравнения не размонтирован — его модель и undo живы (fix-7.3 п. 7).
+    const [before] = monacoMock.editors;
+    expect(monacoMock.editors).toHaveLength(1);
+    expect(before?.disposed).toBe(false);
+
+    // Обратно к правке — Close сравнения; правка на месте, редактор тот же.
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(((await screen.findByTestId('monaco-textarea')) as HTMLTextAreaElement).value).toBe('mine\n');
+    expect(monacoMock.editors).toEqual([before]);
   });
 
   it('Keep mine, затем ⌘S — сначала вопрос перезаписи, без записи; Cancel — записи нет', async () => {

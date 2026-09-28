@@ -14,6 +14,7 @@ import JsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
 import CssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
 import HtmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
 import TsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
+import { isMonacoCancel } from './monaco-cancel.js';
 
 let ready = false;
 
@@ -37,10 +38,11 @@ export function setupMonaco(): typeof import('monaco-editor') {
   loader.config({ monaco });
   // Monaco отменяет свои отложенные операции (подсветка слов, подсказки) при `dispose` редактора —
   // а тело вкладки размонтируется на каждой смене вкладки. Отмена приходит отклонённым промисом
-  // без обработчика («Canceled»): это не сбой, в консоль и в `pageerror` ей незачем.
+  // без обработчика («Canceled»): это не сбой, в консоль и в `pageerror` ей незачем. Только его
+  // отмена (fix-7.3 п. 7) — чужая `Canceled` окна остаётся видна.
+  const monacoUrl = import.meta.url;
   window.addEventListener('unhandledrejection', (event) => {
-    const reason: unknown = event.reason;
-    if (reason instanceof Error && reason.name === 'Canceled' && reason.message === 'Canceled') event.preventDefault();
+    if (isMonacoCancel(event.reason, monacoUrl)) event.preventDefault();
   });
   ready = true;
   applyEditorTheme(document.documentElement.classList.contains('dark'));

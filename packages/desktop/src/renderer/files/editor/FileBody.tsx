@@ -13,7 +13,7 @@
  * load», «Retry» и «Open in default app» (спека 13). Граница `GroupView` — запасная.
  */
 
-import { lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from 'react';
+import { Suspense, useCallback, useEffect, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { WorkEntry } from '@harnas/core';
 import type { HarnasBridge } from '../../../shared/bridge.js';
@@ -29,9 +29,11 @@ import { Dialog, DialogContent, DialogFooter, DialogTitle } from '../../ui/dialo
 import { bufferKey, bufferView, RELOADED_FLASH_MS, type BufferModel } from '../buffer.js';
 import { absPathOf, useFilesStore } from '../store.js';
 import { DiskChangeBanner } from './DiskChangeBanner.js';
+import { lazyWithRetry } from './retry-lazy.js';
 
-const MonacoEditor = lazy(async () => ({ default: (await import('./MonacoEditor.js')).MonacoEditor }));
-const CompareView = lazy(async () => ({ default: (await import('./CompareView.js')).CompareView }));
+// Retry границы ошибки грузит чанк заново (fix-7.3 п. 6): простой `lazy` повторял бы тот же отказ.
+const lazyMonacoEditor = lazyWithRetry(async () => (await import('./MonacoEditor.js')).MonacoEditor);
+const lazyCompareView = lazyWithRetry(async () => (await import('./CompareView.js')).CompareView);
 
 /** Запасной шрифт до конфигурации терминала — как у терминала в `App.tsx`. */
 const FALLBACK_FONT = { family: 'Menlo, monospace', size: 13 };
@@ -122,6 +124,8 @@ export function FileBody({ bridge, workKey, entry, tab, onClose, font = FALLBACK
   const [comparing, setComparing] = useState<{ disk: string } | null>(null);
   const [asking, setAsking] = useState(false);
   const reloadedFlash = useReloadedFlash(model);
+  const { component: MonacoEditor, retry: retryEditor } = lazyMonacoEditor.use();
+  const { component: CompareView, retry: retryCompare } = lazyCompareView.use();
 
   useEffect(() => {
     // Повтор для перемонтированного тела ничего не делает: буфер уже в сторе.
@@ -234,17 +238,19 @@ export function FileBody({ bridge, workKey, entry, tab, onClose, font = FALLBACK
         </div>
       )}
       <div className="relative min-h-0 flex-1">
-        <ErrorBoundary title={S.files.editorFailed} actions={[{ label: S.links.openInDefaultApp, onClick: openDefault }]}>
+        <ErrorBoundary
+          title={S.files.editorFailed}
+          actions={[{ label: S.links.openInDefaultApp, onClick: openDefault }]}
+          onRetry={() => {
+            // Какой из двух чанков отказал, граница не знает: удачная загрузка всё равно общая.
+            retryEditor();
+            retryCompare();
+          }}
+        >
           <Suspense fallback={fallback}>
-            {comparing !== null ? (
-              <CompareView
-                original={comparing.disk}
-                modified={model.text}
-                modelPaths={{ original: modelPath('disk', key, tab.path), modified: modelPath('compare', key, tab.path) }}
-                fontFamily={font.family}
-                fontSize={font.size}
-              />
-            ) : (
+            {/* Редактор на время сравнения скрыт, а не размонтирован (fix-7.3 п. 7): иначе его
+                модель диспозилась бы, и «Compare» и обратно терял бы историю undo. */}
+            <div className={comparing !== null ? 'invisible h-full' : 'h-full'} aria-hidden={comparing !== null ? true : undefined}>
               <MonacoEditor
                 viewStateKey={key}
                 modelPath={modelPath('buffer', key, tab.path)}
@@ -257,8 +263,22 @@ export function FileBody({ bridge, workKey, entry, tab, onClose, font = FALLBACK
                 onChange={onChange}
                 onSave={onSave}
               />
-            )}
+            </div>
           </Suspense>
+          {comparing === null ? null : (
+            // Своя граница ожидания: пока грузится чанк сравнения, редактор не прячется за запасным видом.
+            <Suspense fallback={null}>
+              <div className="absolute inset-0">
+                <CompareView
+                  original={comparing.disk}
+                  modified={model.text}
+                  modelPaths={{ original: modelPath('disk', key, tab.path), modified: modelPath('compare', key, tab.path) }}
+                  fontFamily={font.family}
+                  fontSize={font.size}
+                />
+              </div>
+            </Suspense>
+          )}
         </ErrorBoundary>
       </div>
       <Dialog open={asking} onOpenChange={(open) => (open ? undefined : setAsking(false))}>
