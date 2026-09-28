@@ -4,58 +4,77 @@
  * CRLF. Нестрогий, как у редакторов: кавычка без пары тянет поле до конца текста, а не бросает.
  *
  * Разбор останавливается на `maxRows`: таблице больше не нужно, а файл до 20 МБ на миллион строк
- * иначе держал бы поток окна.
+ * иначе держал бы поток окна. Поля строки сверх `maxColumns` не копятся (fix-7.5): строка из сотен
+ * тысяч полей от агента иначе дала бы такие же массивы и узлы DOM; её хвост дочитывается только
+ * ради кавычек и конца строки.
  */
 
-export function parseCsv(text: string, delimiter: ',' | '\t', maxRows: number): { rows: string[][]; truncated: boolean } {
+export function parseCsv(
+  text: string,
+  delimiter: ',' | '\t',
+  maxRows: number,
+  maxColumns = Number.POSITIVE_INFINITY,
+): { rows: string[][]; truncated: boolean; columnsTruncated: boolean } {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = '';
+  // Начато ли поле: у отброшенного поля `field` пуст всегда, а кавычка открывает только начало поля.
+  let started = false;
   let quoted = false;
+  let columnsTruncated = false;
   let index = 0;
   const length = text.length;
 
+  const endField = (): void => {
+    if (row.length < maxColumns) row.push(field);
+    else columnsTruncated = true;
+    field = '';
+    started = false;
+  };
   const endRow = (): void => {
-    row.push(field);
+    endField();
     rows.push(row);
     row = [];
-    field = '';
+  };
+  const keep = (char: string): void => {
+    started = true;
+    if (row.length < maxColumns) field += char;
   };
 
   while (index < length) {
-    const char = text[index];
+    const char = text[index] ?? '';
     if (quoted) {
       if (char === '"') {
         if (text[index + 1] === '"') {
-          field += '"';
+          keep('"');
           index += 2;
           continue;
         }
         quoted = false;
       } else {
-        field += char;
+        keep(char);
       }
       index += 1;
       continue;
     }
-    if (char === '"' && field === '') {
+    if (char === '"' && !started) {
       quoted = true;
+      started = true;
     } else if (char === delimiter) {
-      row.push(field);
-      field = '';
+      endField();
     } else if (char === '\n' || char === '\r') {
-      if (rows.length === maxRows) return { rows, truncated: true };
+      if (rows.length === maxRows) return { rows, truncated: true, columnsTruncated };
       endRow();
       if (char === '\r' && text[index + 1] === '\n') index += 1;
     } else {
-      field += char;
+      keep(char);
     }
     index += 1;
   }
   // Последняя строка без перевода в конце; пустой хвост после последнего перевода — не строка.
-  if (field !== '' || row.length > 0 || quoted) {
-    if (rows.length === maxRows) return { rows, truncated: true };
+  if (started || row.length > 0 || quoted) {
+    if (rows.length === maxRows) return { rows, truncated: true, columnsTruncated };
     endRow();
   }
-  return { rows, truncated: false };
+  return { rows, truncated: false, columnsTruncated };
 }

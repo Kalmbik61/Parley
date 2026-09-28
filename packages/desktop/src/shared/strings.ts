@@ -722,6 +722,7 @@ export const S = {
     actualSize: '100%',
     imageSize: (width: number, height: number): string => `${width} × ${height} px`,
     rowsTruncated: 'Showing first 10,000 rows',
+    columnsTruncated: 'Showing first 200 columns',
   },
 
   /** Оболочка окна (`shell/AppShell.tsx`) — заголовки `ErrorBoundary` вокруг сайдбара и раскладки. */

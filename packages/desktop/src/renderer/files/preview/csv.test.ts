@@ -5,7 +5,7 @@ import { parseCsv } from './csv.js';
 
 describe('parseCsv (тест 1)', () => {
   it('a,"b,c",d — три поля: запятая в кавычках поле не делит', () => {
-    expect(parseCsv('a,"b,c",d', ',', 10)).toEqual({ rows: [['a', 'b,c', 'd']], truncated: false });
+    expect(parseCsv('a,"b,c",d', ',', 10)).toEqual({ rows: [['a', 'b,c', 'd']], truncated: false, columnsTruncated: false });
   });
 
   it('"x""y" — x"y: удвоенная кавычка внутри поля', () => {
@@ -19,6 +19,7 @@ describe('parseCsv (тест 1)', () => {
         ['d', 'e', 'f'],
       ],
       truncated: false,
+      columnsTruncated: false,
     });
   });
 
@@ -41,7 +42,36 @@ describe('parseCsv (тест 1)', () => {
   });
 
   it('пустой текст — ни одной строки; кавычка без пары — поле до конца текста', () => {
-    expect(parseCsv('', ',', 10)).toEqual({ rows: [], truncated: false });
+    expect(parseCsv('', ',', 10)).toEqual({ rows: [], truncated: false, columnsTruncated: false });
     expect(parseCsv('a,"b\nc', ',', 10).rows).toEqual([['a', 'b\nc']]);
+  });
+
+  it('предел колонок: лишние поля отброшены, строка дочитана до конца, следующая строка цела', () => {
+    const wide = Array.from({ length: 100_000 }, (_, index) => `c${index}`).join(',');
+    const parsed = parseCsv(`${wide}\nx,y\n`, ',', 10, 200);
+    expect(parsed.rows[0]).toHaveLength(200);
+    expect(parsed.rows[0]?.at(-1)).toBe('c199');
+    expect(parsed.rows[1]).toEqual(['x', 'y']);
+    expect(parsed.columnsTruncated).toBe(true);
+  });
+
+  it('за пределом колонок кавычки по-прежнему держат разделитель и перевод строки', () => {
+    const parsed = parseCsv('a,b,"c\n,d",e\nf,g\n', ',', 10, 2);
+    expect(parsed.rows).toEqual([
+      ['a', 'b'],
+      ['f', 'g'],
+    ]);
+    expect(parsed.columnsTruncated).toBe(true);
+  });
+
+  it('ровно maxColumns полей — без columnsTruncated', () => {
+    expect(parseCsv('a,b\nc,d', ',', 10, 2)).toEqual({
+      rows: [
+        ['a', 'b'],
+        ['c', 'd'],
+      ],
+      truncated: false,
+      columnsTruncated: false,
+    });
   });
 });
