@@ -9,6 +9,8 @@ process.env.HARNAS_SHELL = 'log';
 // Скриншот из буфера — фиксированная картинка main (кусок 5.4): E2E не читают и не пишут
 // настоящий буфер обмена человека.
 process.env.HARNAS_DROPS = 'fake';
+// Загрузки встроенного браузера — без настоящего диалога сохранения и мимо Downloads человека (ревью 9.1).
+process.env.HARNAS_DOWNLOADS = 'log';
 
 export default defineConfig({
   testDir: './e2e',

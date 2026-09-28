@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { existsSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
@@ -33,6 +33,9 @@ const PAGES: Record<string, string> = {
     'setTimeout(() => { location.href = "file:///etc/hosts"; }, 300);' +
     '</script>',
   '/popup': '<!doctype html><title>popup</title>',
+  // Загрузка без жеста человека: страница сама жмёт ссылку с download.
+  '/download': '<!doctype html><title>download</title><a id="a" href="/download-file" download="evil.txt">x</a>' +
+    '<script>document.getElementById("a").click()</script>',
 };
 
 async function guestCount(app: ElectronApplication): Promise<number> {
@@ -78,6 +81,10 @@ test.describe('клетка встроенного браузера (кусок 
   test.beforeEach(async () => {
     home = await makeTempHome('browser');
     server = createServer((req, res) => {
+      if (req.url === '/download-file') {
+        res.writeHead(200, { 'content-type': 'application/octet-stream' }).end('payload');
+        return;
+      }
       const page = PAGES[new URL(req.url ?? '/', 'http://x').pathname];
       if (page === undefined) {
         res.writeHead(404).end();
@@ -188,6 +195,38 @@ test.describe('клетка встроенного браузера (кусок 
     });
     expect(denied).toContain('bad_request');
     await window.evaluate(() => window.harnas.browser.clearData());
+  });
+
+  /**
+   * Ревью 9.1, спека 12.2: загрузка — только по выбору человека в диалоге сохранения. Диалог
+   * подменён журналом (`HARNAS_DOWNLOADS=log`), папка загрузок — в доме теста.
+   */
+  test('загрузка страницы: «Отмена» в диалоге — файла нет; выбранный путь — файл там', async () => {
+    const app = await launch();
+    const window = await app.firstWindow();
+    await expect(window.getByTestId('landing')).toBeVisible();
+    const downloads = await app.evaluate(({ app: electronApp }) => electronApp.getPath('downloads'));
+    expect(downloads).toBe(path.join(home, 'desktop', 'downloads'));
+    await mkdir(downloads, { recursive: true });
+    const log = (): Promise<unknown[]> =>
+      app.evaluate(() => (globalThis as { __harnasDownloads?: unknown[] }).__harnasDownloads ?? []);
+
+    // Отмена: ответ диалога не задан.
+    await insertWebview(window, { partition: 'persist:harnas-browser', src: `${origin}/download` });
+    await expect.poll(log).toEqual([{ filename: 'evil.txt', url: `${origin}/download-file` }]);
+    await window.waitForTimeout(1000);
+    expect(await readdir(downloads)).toEqual([]);
+
+    // Положительный контроль: путь «выбран» — файл ровно там.
+    const chosen = path.join(downloads, 'chosen.txt');
+    await app.evaluate((_electron, answer) => {
+      (globalThis as { __harnasSaveAnswer?: string | null }).__harnasSaveAnswer = answer;
+    }, chosen);
+    await window.evaluate(() => document.querySelector('webview[data-e2e]')?.remove());
+    await insertWebview(window, { partition: 'persist:harnas-browser', src: `${origin}/download` });
+    await expect.poll(async () => (await log()).length).toBe(2);
+    await expect.poll(() => readdir(downloads)).toEqual(['chosen.txt']);
+    expect(await readFile(chosen, 'utf8')).toBe('payload');
   });
 
   /**

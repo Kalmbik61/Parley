@@ -2,7 +2,13 @@ import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import type { App, WebContents, WebPreferences } from 'electron';
 import { BROWSER_PARTITION } from '../../shared/browser-types.js';
-import { guardWebviewAttach, installBrowserGuard, navigationVerdict, sanitizeWebviewAttach } from './guard.js';
+import {
+  guardWebviewAttach,
+  installBrowserGuard,
+  navigationVerdict,
+  promptDownload,
+  sanitizeWebviewAttach,
+} from './guard.js';
 
 describe('navigationVerdict (тест 2)', () => {
   it('http(s) и about:blank — везде; about:srcdoc, data:, blob: — только подфрейм; прочее — deny', () => {
@@ -106,15 +112,16 @@ function setupGuard(isMainWindow: (c: WebContents) => boolean = () => false) {
   const app = new EventEmitter();
   let requestHandler: ((wc: unknown, permission: string, cb: (granted: boolean) => void) => void) | null = null;
   let checkHandler: ((...args: unknown[]) => boolean) | null = null;
-  const session = {
+  const session = Object.assign(new EventEmitter(), {
     setPermissionRequestHandler: vi.fn((handler: typeof requestHandler) => {
       requestHandler = handler;
     }),
     setPermissionCheckHandler: vi.fn((handler: typeof checkHandler) => {
       checkHandler = handler;
     }),
-  };
+  });
   const openTab = vi.fn();
+  const download = vi.fn();
   const unforward = vi.fn();
   const forwardShortcuts = vi.fn((): (() => void) => unforward);
   const isMain = vi.fn(isMainWindow);
@@ -125,6 +132,7 @@ function setupGuard(isMainWindow: (c: WebContents) => boolean = () => false) {
       session: session as unknown as Parameters<typeof installBrowserGuard>[0]['session'],
       openTab,
       forwardShortcuts,
+      download,
     });
   install();
   const created = (contents: ReturnType<typeof fakeContents>): void => {
@@ -132,6 +140,8 @@ function setupGuard(isMainWindow: (c: WebContents) => boolean = () => false) {
   };
   return {
     app,
+    session,
+    download,
     install,
     openTab,
     forwardShortcuts,
@@ -270,6 +280,30 @@ describe('installBrowserGuard (тест 4)', () => {
     expect(event.defaultPrevented).toBe(true);
     expect(callback).toHaveBeenCalledTimes(1);
     expect(callback.mock.calls[0]).toEqual([]);
+  });
+});
+
+describe('загрузки раздела (ревью 9.1, спека 12.2)', () => {
+  it('will-download сессии раздела — download(item); повторная установка второго не добавляет', () => {
+    const guard = setupGuard();
+    guard.install();
+    const item = { getFilename: () => 'evil.txt' };
+    guard.session.emit('will-download', fakeEvent(), item, {});
+    expect(guard.download).toHaveBeenCalledTimes(1);
+    expect(guard.download).toHaveBeenCalledWith(item);
+  });
+
+  it('promptDownload: стандартный диалог с папкой загрузок и именем — путь сам не ставит', () => {
+    const item = { getFilename: () => 'evil.txt', setSaveDialogOptions: vi.fn(), setSavePath: vi.fn() };
+    promptDownload(item, '/Users/me/Downloads');
+    expect(item.setSaveDialogOptions).toHaveBeenCalledWith({ defaultPath: '/Users/me/Downloads/evil.txt' });
+    expect(item.setSavePath).not.toHaveBeenCalled();
+  });
+
+  it('promptDownload: имя из сети с путём — в папке загрузок только базовое имя', () => {
+    const item = { getFilename: () => '../../etc/evil.txt', setSaveDialogOptions: vi.fn() };
+    promptDownload(item, '/Users/me/Downloads');
+    expect(item.setSaveDialogOptions).toHaveBeenCalledWith({ defaultPath: '/Users/me/Downloads/evil.txt' });
   });
 });
 
