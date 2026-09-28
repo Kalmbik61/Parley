@@ -12,6 +12,7 @@ import { decodeIpcError } from '../../shared/ipc-error.js';
 import { useActivityStore } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
 import { changesErrorText, type ChangesSource } from './state.js';
+import { useReviewStore } from './store.js';
 
 /** Спека 11.1: обновление не чаще раза в 2 с — кроме `refresh()`. */
 const THROTTLE_MS = 2000;
@@ -64,6 +65,7 @@ export function useChanges(input: {
     }
 
     const ref: SessionRef = { projectPath, workId, sessionId };
+    const key = refKey(ref);
     let disposed = false;
     let seq = 0;
     let lastAt = Number.NEGATIVE_INFINITY;
@@ -106,7 +108,16 @@ export function useChanges(input: {
         },
         (err: unknown) => {
           if (!current()) return;
-          setError(changesErrorText(decodeIpcError(err)));
+          const info = decodeIpcError(err);
+          if (info.data?.['reason'] === 'worktree-missing') {
+            // Папки worktree нет (отброшен не из этого окна или до перезапуска): признак в сторе —
+            // вкладки показывают своё состояние и снимают загрузку, повторов нет (раунд 8, пункт 1).
+            console.warn('[harnas] changes', info.code, info.message);
+            useReviewStore.getState().markDiscarded(key);
+            setLoading(false);
+            return;
+          }
+          setError(changesErrorText(info));
           setLoading(false);
         },
       );
@@ -131,7 +142,6 @@ export function useChanges(input: {
       request();
     });
 
-    const key = refKey(ref);
     const offActivity = useActivityStore.subscribe((state, prev) => {
       if (prev.byRef[key]?.activity.activity === 'working' && state.byRef[key]?.activity.activity !== 'working') request();
     });

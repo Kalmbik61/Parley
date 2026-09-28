@@ -5,11 +5,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import type { WorkEntry, WorktreeDiff } from '@harnas/core';
-import type { SessionRef } from '@harnas/protocol';
+import { refKey, type SessionRef } from '@harnas/protocol';
 import { useActivityStore } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { useReviewStore } from './store.js';
 import { useChanges } from './use-changes.js';
 
 const commit = { hash: 'b'.repeat(40), subject: 'feat', author: 'agent', at: '2026-09-27T09:00:00Z' };
@@ -193,6 +194,19 @@ describe('useChanges (кусок 8.2a, тест 8)', () => {
     const { result } = renderHook(() => useChanges({ bridge, entry: work(), sessionId: 's-02' }));
     await flush();
     expect(result.current.error).toBe('Git not found');
+    expect(result.current.loading).toBe(false);
+  });
+
+  it('отказ diff с причиной worktree-missing — признак discarded в сторе ревью, без текста ошибки (раунд 8, пункт 1)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    useReviewStore.setState({ discarded: {} });
+    bridge.setHandler('worktrees.diff', () => {
+      throw { code: 'bad_request', message: 'нет папки', data: { reason: 'worktree-missing' } };
+    });
+    const { result } = renderHook(() => useChanges({ bridge, entry: work(), sessionId: 's-02' }));
+    await flush();
+    expect(useReviewStore.getState().discarded[refKey(ref)]).toBe(true);
+    expect(result.current.error).toBeNull();
     expect(result.current.loading).toBe(false);
   });
 

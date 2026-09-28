@@ -8,6 +8,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MergeCheck, ProjectChanges, WorkEntry, WorktreeDiff } from '@harnas/core';
+import { refKey } from '@harnas/protocol';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { tabId } from '../layout/ids.js';
@@ -459,6 +460,27 @@ describe('Discard worktree… (тест 8)', () => {
     renderPanel(work([makeSession('s-02', 'two', { worktree: { ...WORKTREE, createdAt: null } })]));
     fireEvent.keyDown(await screen.findByRole('button', { name: 'Changes options' }), { key: 'Enter' });
     expect(within(screen.getByRole('menu')).queryByText('Discard worktree…')).toBeNull();
+  });
+
+  it('хост ответил причиной worktree-missing (перезапуск окна, отброшен не из окна) — worktreeDiscarded, без повторных запросов', async () => {
+    bridge.setHandler('worktrees.diff', () => {
+      throw { code: 'bad_request', message: 'worktree отсутствует', data: { reason: 'worktree-missing' } };
+    });
+    renderPanel();
+    expect(await screen.findByText('The worktree was discarded')).toBeTruthy();
+    expect(screen.queryByText(/Couldn't load changes/)).toBeNull();
+    expect(count('worktrees.diff')).toBe(1);
+    // Ни событие работы, ни Refresh меню больше не зовут хост: загрузки для этой сессии нет.
+    act(() => {
+      bridge.emit('works.changed', { entries: [work([makeSession('s-02', 'two!', { worktree: WORKTREE })])], branches: {} });
+    });
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Changes options' }), { key: 'Enter' });
+    const menu = screen.getByRole('menu');
+    expect(within(menu).queryByText('Discard worktree…')).toBeNull();
+    fireEvent.click(within(menu).getByText('Refresh'));
+    await flush();
+    expect(count('worktrees.diff')).toBe(1);
+    expect(useReviewStore.getState().discarded[refKey(REF)]).toBe(true);
   });
 
   it('отказ discard — тост Couldn\'t discard worktree: …', async () => {

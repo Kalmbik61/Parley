@@ -19,9 +19,10 @@ export interface ReviewState {
   revealed: Record<string, { path: string; nonce: number }>;
   revealFile(workKey: string, tabId: string, path: string): void;
   /**
-   * Сессии (refKey), чей worktree отброшен из этого окна (кусок 8.2b). Хост оставляет запись
-   * `worktree` в карте закрытой сессии, а папки и ветки уже нет: `worktrees.diff` ответил бы
-   * ошибкой git — вкладка показывает своё состояние и не зовёт его.
+   * Сессии (refKey), чей worktree отброшен (кусок 8.2b): своим «Discard worktree…» или по причине
+   * хоста `worktree-missing` (раунд 8, пункт 1 — отброшен не из окна или до его перезапуска). Хост
+   * оставляет запись `worktree` в карте закрытой сессии, а папки и ветки уже нет — вкладка
+   * показывает своё состояние и больше не зовёт `worktrees.diff`.
    */
   discarded: Record<string, true>;
   markDiscarded(refKey: string): void;
