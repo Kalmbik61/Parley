@@ -1,9 +1,11 @@
 /**
  * Favicon вкладки браузера (кусок 9.2a, спека 12.1). Адреса из `page-favicon-updated` — http(s),
- * а CSP окна пускает картинки только `'self' data: blob:`: качает main и отдаёт окну `data:`.
+ * а CSP окна пускает картинки только `'self' data:`: качает main и отдаёт окну `data:`.
  *
  * Адрес значка выбирает страница, поэтому здесь всё — пределы: чужой origin превратил бы main в
  * рассыльщика GET с куками раздела на любые адреса, а чтение без предела — в склад сотен мегабайт.
+ * Редирект — тот же чужой origin через свой сервер (fetch из main не подчиняется CORS): за ним
+ * не ходим вовсе.
  */
 
 export const FAVICON_LIMITS = { bytes: 65536, timeoutMs: 5000 } as const; // 64 КБ — спека; 5 с — план
@@ -38,12 +40,30 @@ async function readLimited(response: Response): Promise<Buffer | null> {
   return Buffer.concat(chunks);
 }
 
-async function download(
-  iconUrl: string,
-  signal: AbortSignal,
-  fetch: (url: string, init: { signal: AbortSignal }) => Promise<Response>,
-): Promise<string | null> {
-  const response = await fetch(iconUrl, { signal });
+/** Init запроса значка: `redirect: 'manual'` — ответ-редирект возвращается, а не проходится. */
+export interface FaviconInit {
+  signal: AbortSignal;
+  redirect: 'manual';
+}
+
+type FaviconFetch = (url: string, init: FaviconInit) => Promise<Response>;
+
+/** Ответ — редирект или пришёл не с адреса значка: тело не наше, отказ. */
+function redirected(response: Response, icon: URL): boolean {
+  if (response.type === 'opaqueredirect' || response.redirected) return true;
+  if (response.status >= 300 && response.status < 400) return true;
+  // Пустой url бывает у ответа, собранного не сетью; иначе итоговый адрес — того же origin.
+  if (response.url === '') return false;
+  const final = parse(response.url);
+  return final === null || final.origin !== icon.origin;
+}
+
+async function download(iconUrl: string, signal: AbortSignal, fetch: FaviconFetch): Promise<string | null> {
+  const response = await fetch(iconUrl, { signal, redirect: 'manual' });
+  if (redirected(response, new URL(iconUrl))) {
+    void response.body?.cancel().catch(() => {});
+    return null;
+  }
   const mime = (response.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
   const length = Number(response.headers.get('content-length') ?? '0');
   if (!response.ok || !mime.startsWith('image/') || length > FAVICON_LIMITS.bytes) {
@@ -58,14 +78,10 @@ async function download(
 
 /**
  * Favicon в data:. data:image/* до 64 КБ — как есть, без загрузки. http(s) — только того же origin, что
- * страница, Content-Type image/*; Content-Length больше 64 КБ — отказ без чтения, поток обрывается на
- * 64 КБ; всё — за 5 с. Иначе null.
+ * страница, без редиректов, Content-Type image/*; Content-Length больше 64 КБ — отказ без чтения, поток
+ * обрывается на 64 КБ; всё — за 5 с. Иначе null.
  */
-export async function fetchFavicon(
-  iconUrl: string,
-  pageUrl: string,
-  fetch: (url: string, init: { signal: AbortSignal }) => Promise<Response>,
-): Promise<string | null> {
+export async function fetchFavicon(iconUrl: string, pageUrl: string, fetch: FaviconFetch): Promise<string | null> {
   if (iconUrl.startsWith('data:')) {
     // Так favicon отдают dev-серверы; строка идёт в окно как есть — предел на её длину.
     return DATA_IMAGE.test(iconUrl) && iconUrl.length <= FAVICON_LIMITS.bytes ? iconUrl : null;

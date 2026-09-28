@@ -92,6 +92,35 @@ describe('fetchFavicon (тест 9)', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('редирект не проходится: fetch с redirect: manual, ответ-редирект → null (fix-9, SSRF)', async () => {
+    // Свой origin может ответить 302 на любой адрес (другой порт, метаданные облака): main идти
+    // за ним не должен — fetch из main не подчиняется CORS и несёт куки раздела.
+    const found = vi.fn<FetchFn>(async () =>
+      response(null, { location: 'http://127.0.0.1:9999/secret.png' }, 302),
+    );
+    expect(await fetchFavicon('http://127.0.0.1:5173/favicon.png', PAGE, found)).toBeNull();
+    expect(found.mock.calls[0]?.[1].redirect).toBe('manual');
+    // Непрозрачный редирект (как его отдаёт fetch по спецификации при redirect: 'manual').
+    const opaque = vi.fn<FetchFn>(async () => Response.redirect('http://127.0.0.1:9999/secret.png', 302));
+    expect(await fetchFavicon('http://127.0.0.1:5173/favicon.png', PAGE, opaque)).toBeNull();
+  });
+
+  it('итоговый адрес ответа чужого origin или ответ после редиректа → null (fix-9)', async () => {
+    const moved = vi.fn<FetchFn>(async () => {
+      const result = response(PNG_1K, { 'content-type': 'image/png' });
+      Object.defineProperty(result, 'url', { value: 'http://127.0.0.1:9999/secret.png' });
+      return result;
+    });
+    expect(await fetchFavicon('http://127.0.0.1:5173/favicon.png', PAGE, moved)).toBeNull();
+    const redirected = vi.fn<FetchFn>(async () => {
+      const result = response(PNG_1K, { 'content-type': 'image/png' });
+      Object.defineProperty(result, 'redirected', { value: true });
+      Object.defineProperty(result, 'url', { value: 'http://127.0.0.1:5173/other.png' });
+      return result;
+    });
+    expect(await fetchFavicon('http://127.0.0.1:5173/favicon.png', PAGE, redirected)).toBeNull();
+  });
+
   it('ответ дольше 5 с → null, запрос прерван', async () => {
     vi.useFakeTimers();
     let signal: AbortSignal | null = null;

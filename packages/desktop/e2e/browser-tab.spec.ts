@@ -34,6 +34,8 @@ const PNG = Buffer.from(
 const PAGES: Record<string, string> = {
   '/': '<!doctype html><title>Dev page</title><link rel="icon" href="/favicon.png"><p>dev page</p>',
   '/next': '<!doctype html><title>Next page</title><p>next</p>',
+  // Значок своего origin отвечает 302 на другой локальный сервер (fix-9, SSRF).
+  '/redir': '<!doctype html><title>Redirect page</title><link rel="icon" href="/redir-icon.png"><p>redir</p>',
 };
 
 let project = '';
@@ -60,12 +62,21 @@ test.describe('вкладка браузера (кусок 9.2a)', () => {
   let server: Server;
   let origin: string;
   let app: ElectronApplication | null = null;
+  // Второй сервер — «чужой локальный сервис»: обращений к нему быть не должно.
+  let other: Server;
+  let otherHits = 0;
+  let redirIconHits = 0;
 
   test.beforeEach(async () => {
     home = await makeTempHome('browser-tab');
     project = await makeTempProject('browser-tab');
     server = createServer((req, res) => {
       const pathname = new URL(req.url ?? '/', 'http://x').pathname;
+      if (pathname === '/redir-icon.png') {
+        redirIconHits += 1;
+        res.writeHead(302, { location: `http://127.0.0.1:${(other.address() as AddressInfo).port}/secret.png` }).end();
+        return;
+      }
       if (pathname === '/favicon.png') {
         res.writeHead(200, { 'content-type': 'image/png' }).end(PNG);
         return;
@@ -79,6 +90,13 @@ test.describe('вкладка браузера (кусок 9.2a)', () => {
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    otherHits = 0;
+    redirIconHits = 0;
+    other = createServer((_req, res) => {
+      otherHits += 1;
+      res.writeHead(200, { 'content-type': 'image/png' }).end(PNG);
+    });
+    await new Promise<void>((resolve) => other.listen(0, '127.0.0.1', resolve));
   });
 
   test.afterEach(async () => {
@@ -88,6 +106,7 @@ test.describe('вкладка браузера (кусок 9.2a)', () => {
     await rm(home, { recursive: true, force: true });
     await rm(project, { recursive: true, force: true });
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => other.close(() => resolve()));
   });
 
   test('«+» → New browser tab → адрес: страница в webview, заголовок и favicon во вкладке; переход — loadURL в том же узле', async () => {
@@ -148,5 +167,40 @@ test.describe('вкладка браузера (кусок 9.2a)', () => {
     await expect.poll(() => guestUrls(app as ElectronApplication)).toEqual([`${origin}/next`]);
     expect(await view.evaluate((node, handle) => node === handle, viewHandle)).toBe(true);
     await expect(address).toHaveValue(`${origin}/next`);
+  });
+
+  test('значок отвечает 302 на другой сервер: main за редиректом не идёт, значка нет (fix-9, SSRF)', async () => {
+    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    app = await electron.launch({ args: [mainEntry], env });
+    const window = await app.firstWindow();
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 1400, height: 900 }));
+    await expect(window.getByTestId('landing')).toBeVisible();
+
+    const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: 'e2e-browser', goal: '' });
+    const created = await call<{ ref: { sessionId: string } }>(window, 'sessions.create', {
+      projectPath: project,
+      workId,
+      provider: 'claude',
+      label: 'agent',
+      task: '',
+      parent: null,
+    });
+    const row = window.locator(`[data-work-key="${project} ${workId}"] [data-session-id="${created.ref.sessionId}"]`);
+    await expect(row).toBeVisible();
+    await row.click();
+    await window.getByRole('button', { name: 'Open…' }).first().click();
+    await window.locator('[data-palette] [role="option"]', { hasText: 'New browser tab' }).click();
+    const address = window.getByRole('textbox', { name: 'Address' });
+    await expect(address).toBeFocused();
+    await address.fill(`${origin}/redir`);
+    await address.press('Enter');
+
+    const browserTab = window.locator('[role="tab"][data-tab-id^="browser:"]');
+    await expect(browserTab).toContainText('Redirect page');
+    // main запросил значок своего origin (получил 302) — и дальше не пошёл.
+    await expect.poll(() => redirIconHits).toBeGreaterThanOrEqual(1);
+    await window.waitForTimeout(1000);
+    expect(otherHits).toBe(0);
+    await expect(browserTab.locator('img')).toHaveCount(0);
   });
 });
