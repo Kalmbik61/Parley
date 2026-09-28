@@ -853,6 +853,25 @@ export async function projectChanges(
 }
 
 /**
+ * Pathspec-исключения записей подмодулей (gitlink, режим 160000 в индексе) для `add -A` коммита
+ * из окна (раунд fix-final-c, п. 5). `add` заходит в изменённый подмодуль дочерним `git status`,
+ * а файл `.git` подмодуля лежит в копии агента: подложенный gitdir исполнил бы свои фильтры
+ * (проба на git 2.53). Выключателя у `add` нет — ни `--ignore-submodules`, ни
+ * `diff.ignoreSubmodules`, — поэтому пути подмодулей в `add` не попадают: их изменения человек
+ * коммитит сам (спека 10.8). `ls-files -s` читает только индекс — рабочую копию и подмодули не
+ * трогает. Пути — от `cwd`, как и pathspec `add`; `literal` — имя со `*` не глоб.
+ */
+async function submoduleExcludes(at: GitAt): Promise<string[]> {
+  const excludes: string[] = [];
+  for (const entry of zFields(await readGitBuffer(at, ['ls-files', '-s', '-z']))) {
+    // «<режим> <объект> <стадия>\t<путь>»
+    const tab = entry.indexOf('\t');
+    if (tab !== -1 && entry.startsWith('160000 ')) excludes.push(`:(exclude,literal)${entry.slice(tab + 1)}`);
+  }
+  return excludes;
+}
+
+/**
  * «Закоммитить всё в папке» — только по кнопке человека. Pathspec и у `add`, и
  * у `commit`: без него `git commit` взял бы весь индекс — подготовленное
  * человеком вне папки проекта и `.harnas/`, если его кто-то добавил; так чужое
@@ -861,7 +880,7 @@ export async function projectChanges(
 export async function commitProject(projectPath: string, message: string): Promise<{ commit: string }> {
   return withGitState(projectPath, async () => {
     const project = await readerAt(projectPath);
-    const added = await exitCode(['-C', projectPath, 'add', '-A', ...HARNAS_PATHSPEC]);
+    const added = await exitCode(['-C', projectPath, 'add', '-A', ...HARNAS_PATHSPEC, ...(await submoduleExcludes(project))]);
     // Код 1 у `add` — и когда `.harnas/` в .gitignore: исключение в pathspec
     // называет игнорируемый путь, остальное при этом подготовлено. Отличаем
     // пробой `check-ignore`, а не по stderr — у человека git локализован.
@@ -885,7 +904,8 @@ export async function commitProject(projectPath: string, message: string): Promi
 export async function commitWorktree(projectPath: string, info: WorktreeInfo, message: string): Promise<string> {
   const { cwd, pin } = await pinnedCheckout(projectPath, info.path);
   const inWorktree = [...NO_FSMONITOR, '-C', cwd, ...pin];
-  await run('git', [...inWorktree, 'add', '-A', ...WORKTREE_PATHSPEC]);
+  const excludes = await submoduleExcludes(await readerAt(cwd, pin));
+  await run('git', [...inWorktree, 'add', '-A', ...WORKTREE_PATHSPEC, ...excludes]);
   await run('git', [...inWorktree, 'commit', '-m', message]);
   return (await run('git', [...inWorktree, 'rev-parse', 'HEAD'])).stdout.trim();
 }

@@ -1059,3 +1059,79 @@ describe('исполняемые ключи конфигурации и подл
     expect(await exists(filterMarker())).toBe(false);
   });
 });
+
+describe('подмодуль с подложенным gitdir и Commit окна (раунд fix-final-c, п. 5)', () => {
+  const marker = (): string => path.join(root, 'sub-filter-ran');
+  const exists = (file: string): Promise<boolean> =>
+    access(file).then(
+      () => true,
+      () => false,
+    );
+
+  /** Репозиторий-источник подмодуля: один отслеживаемый файл. */
+  async function libRepo(): Promise<string> {
+    const lib = path.join(root, 'lib');
+    await run('git', ['init', '-q', '-b', 'main', lib]);
+    await setIdentity(lib);
+    await writeFile(path.join(lib, 'f.txt'), 'lib\n', 'utf8');
+    await git(lib, ['add', 'f.txt']);
+    await git(lib, ['commit', '-m', 'lib']);
+    return lib;
+  }
+
+  async function addSubmodule(dir: string, lib: string): Promise<void> {
+    await git(dir, ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', lib, 'sub']);
+    await git(dir, ['commit', '-m', 'подмодуль']);
+  }
+
+  /**
+   * Агент подкладывает `sub/.git` на свой клон с маркерным clean-фильтром и сдвигает mtime
+   * отслеживаемого файла подмодуля: дочерний `git status` в подмодуле перечитал бы его фильтром.
+   * После подкладки git-помощником теста в этой копии не зовём.
+   */
+  async function plantSubmoduleGitDir(dir: string, lib: string): Promise<void> {
+    const evil = path.join(root, 'evil-sub');
+    await run('git', ['clone', '-q', lib, evil]);
+    const filter = path.join(root, 'sub-filter.sh');
+    await writeFile(filter, `#!/bin/sh\necho clean >> '${marker()}'\nexec cat\n`, 'utf8');
+    await chmod(filter, 0o755);
+    await git(evil, ['config', 'filter.m.clean', filter]);
+    await writeFile(path.join(dir, 'sub', '.gitattributes'), '* filter=m\n', 'utf8');
+    await writeFile(path.join(dir, 'sub', '.git'), `gitdir: ${path.join(evil, '.git')}\n`, 'utf8');
+    const past = new Date('2020-01-01T00:00:00Z');
+    await utimes(path.join(dir, 'sub', 'f.txt'), past, past);
+  }
+
+  it('commitWorktree: фильтр подложенного gitdir подмодуля не исполняется, остальное закоммичено, подмодуль — нет', async () => {
+    await initProject();
+    const lib = await libRepo();
+    await addSubmodule(project, lib);
+    const info = await freshWorktree();
+    await git(info.path, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '-q']);
+    const subHead = (await git(info.path, ['ls-files', '-s', 'sub'])).stdout;
+    await plantSubmoduleGitDir(info.path, lib);
+    await writeFile(path.join(info.path, 'top.txt'), 'верх\n', 'utf8');
+
+    const commit = await commitWorktree(project, info, 'сохранить');
+
+    expect(await exists(marker())).toBe(false);
+    const names = (await git(project, ['show', '--name-only', '--format=', commit])).stdout.trim();
+    expect(names).toBe('top.txt');
+    // Запись подмодуля в индексе — прежняя: его изменения человек коммитит сам.
+    expect((await run('git', ['--git-dir', path.join(project, '.git', 'worktrees', path.basename(info.path)), 'ls-files', '-s', 'sub'])).stdout).toBe(subHead);
+  });
+
+  it('commitProject: фильтр подложенного gitdir подмодуля в папке проекта не исполняется', async () => {
+    await initProject();
+    const lib = await libRepo();
+    await addSubmodule(project, lib);
+    await plantSubmoduleGitDir(project, lib);
+    await writeFile(path.join(project, 'top.txt'), 'верх\n', 'utf8');
+
+    const { commit } = await commitProject(project, 'папка');
+
+    expect(await exists(marker())).toBe(false);
+    const names = (await run('git', ['--git-dir', path.join(project, '.git'), 'show', '--name-only', '--format=', commit])).stdout.trim();
+    expect(names).toBe('top.txt');
+  });
+});
