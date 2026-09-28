@@ -196,6 +196,31 @@ describe('ветка карты — не ревизия (раунд исправ
   });
 });
 
+describe('worktree отсутствует (раунд исправлений 8, пункт 1)', () => {
+  it('после discard diff/commit/merge/mergeCheck — bad_request с причиной worktree-missing', async () => {
+    const { ref } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+    await service.discard(ref, false);
+
+    const missing = { code: 'bad_request', data: { reason: 'worktree-missing' } };
+    await expect(service.diff(ref, false)).rejects.toMatchObject(missing);
+    await expect(service.commit(ref, 'm')).rejects.toMatchObject(missing);
+    await expect(service.merge(ref)).rejects.toMatchObject(missing);
+    await expect(service.mergeCheck(ref)).rejects.toMatchObject(missing);
+  });
+
+  it('папку worktree удалили мимо хоста (агент, TUI) — diff с той же причиной', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+    await rm(info.path, { recursive: true, force: true });
+
+    await expect(service.diff(ref, false)).rejects.toMatchObject({
+      code: 'bad_request',
+      data: { reason: 'worktree-missing' },
+    });
+  });
+});
+
 describe('без своего worktree', () => {
   it('diff/commit/merge/discard сессии без worktree — bad_request', async () => {
     const work = await createWork(project, { title: 'Работа', goal: '' });

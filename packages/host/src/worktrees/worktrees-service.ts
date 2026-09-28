@@ -5,6 +5,7 @@
  * протокола и правила отказа, которых у core нет (там нет понятия «сессии»).
  */
 
+import { stat } from 'node:fs/promises';
 import {
   commitProject,
   commitWorktree,
@@ -54,7 +55,8 @@ export interface WorktreesService {
  * Ошибка git → HostError с причиной в data: окно показывает свой английский текст по ней (8.2a), сообщение
  * хоста — только в консоль. GitStateError: git-missing — internal, not-a-repo и no-commits — bad_request,
  * data: { reason }; NothingToCommitError — conflict; InvalidRevisionError (база или ветка карты — не ревизия) —
- * bad_request без data; прочее — internal без data.
+ * bad_request без data; прочее — internal без data. Папки worktree нет — bad_request с причиной
+ * worktree-missing (requirePresentWorktree; discard её не проверяет — его поведение раунд 8 не менял).
  */
 export function gitFailure(error: unknown): HostError {
   if (error instanceof HostError) return error;
@@ -94,6 +96,31 @@ async function requireWorktree(
   return { label: session.label, worktree: session.worktree };
 }
 
+/**
+ * Worktree, который должен быть на диске, — его папки нет: отброшен (окном, агентом, TUI) или
+ * удалён руками. Хост оставляет запись `worktree` в карте закрытой сессии, и без этой проверки
+ * git отказал бы `internal` без причины — окно не отличило бы это от сбоя и показывало бы ошибку
+ * вместо «worktree отброшен» (раунд исправлений 8, пункт 1). Причина — по пути, не по тексту git.
+ * Заявка, ещё не созданная (`createdAt: null`), — не «отсутствует».
+ */
+async function requirePresentWorktree(
+  ref: SessionRef,
+): Promise<{ label: string; worktree: WorktreeInfo }> {
+  const found = await requireWorktree(ref);
+  if (found.worktree.createdAt !== null) {
+    const present = await stat(found.worktree.path).then(
+      (info) => info.isDirectory(),
+      () => false,
+    );
+    if (!present) {
+      throw new HostError('bad_request', `worktree сессии ${ref.sessionId} отсутствует: ${found.worktree.path}`, {
+        reason: 'worktree-missing',
+      });
+    }
+  }
+  return found;
+}
+
 /** `changes.*` — только у сессии, что работает прямо в папке проекта: у своей копии свой дифф. */
 async function requireNoWorktree(ref: SessionRef): Promise<void> {
   const session = await requireSession(ref);
@@ -109,17 +136,17 @@ export function createWorktreesService(
     available: (projectPath) => isGitRepo(projectPath),
 
     async diff(ref, patch) {
-      const { worktree } = await requireWorktree(ref);
+      const { worktree } = await requirePresentWorktree(ref);
       return viaGit(() => worktreeDiff(ref.projectPath, worktree, patch === undefined ? {} : { patch }));
     },
 
     async commit(ref, message) {
-      const { worktree } = await requireWorktree(ref);
+      const { worktree } = await requirePresentWorktree(ref);
       return commitWorktree(worktree, message);
     },
 
     async merge(ref) {
-      const { label, worktree } = await requireWorktree(ref);
+      const { label, worktree } = await requirePresentWorktree(ref);
       const message = `harnas: влить ${sessionTag(ref.sessionId)} (${label}) из ${worktree.branch}`;
       try {
         return await mergeWorktree(ref.projectPath, worktree, message);
@@ -153,7 +180,7 @@ export function createWorktreesService(
     },
 
     async mergeCheck(ref) {
-      const { worktree } = await requireWorktree(ref);
+      const { worktree } = await requirePresentWorktree(ref);
       return viaGit(() => mergeCheck(ref.projectPath, worktree));
     },
 
