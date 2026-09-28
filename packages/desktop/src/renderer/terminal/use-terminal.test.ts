@@ -14,6 +14,7 @@ import type { ILink } from '@xterm/xterm';
 import { refKey, type SessionRef } from '@harnas/protocol';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { lineFromText, xtermMock } from '../test-utils/xterm-mock.js';
+import { useHostStore } from '../store/host.js';
 import { useUiStore } from '../store/ui.js';
 import { minimumContrastRatio, xtermTheme } from './xterm-themes.js';
 import { useTerminal, type UseTerminalOptions } from './use-terminal.js';
@@ -576,5 +577,132 @@ describe('useTerminal — видимость и размер (куски 2.5, т
     expect(bridge.notified.filter((n) => n.method === 'pty.resize')).toEqual([
       { method: 'pty.resize', params: { ref, cols: 100, rows: 30 } },
     ]);
+  });
+});
+
+describe('useTerminal — связь с хостом оборвалась (раунд lane-r3, п. 2)', () => {
+  afterEach(() => {
+    useHostStore.setState({ status: { state: 'connecting' } });
+  });
+
+  it('без связи ввод не уходит и не копится; после переподключения — новый снимок и ввод снова идёт', async () => {
+    const bridge = createFakeBridge();
+    let snapshot = 'ПЕРВЫЙ';
+    bridge.setHandler('pty.attach', () => ({ snapshot, cols: 80, rows: 24 }));
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods: null } });
+    const { result } = renderTerminal(bridge);
+    await waitFor(() => expect(xtermMock.terminals[0]?.writes).toEqual(['ПЕРВЫЙ']));
+    const term = xtermMock.terminals[0]!;
+    expect(result.current.offline).toBe(false);
+
+    act(() => useHostStore.setState({ status: { state: 'disconnected', reason: 'Connection to host closed' } }));
+    expect(result.current.offline).toBe(true);
+    expect(term.options.disableStdin).toBe(true);
+    act(() => term.onDataHandler?.('потеряно'));
+    expect(bridge.notified.filter((n) => n.method === 'pty.input')).toEqual([]);
+
+    snapshot = 'ВТОРОЙ';
+    act(() => useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods: null } }));
+    await waitFor(() => expect(term.writes).toEqual(['ПЕРВЫЙ', 'ВТОРОЙ']));
+    expect(bridge.calls.filter((c) => c.method === 'pty.attach')).toHaveLength(2);
+    expect(result.current.offline).toBe(false);
+    expect(term.options.disableStdin).toBe(false);
+
+    act(() => term.onDataHandler?.('x'));
+    // Набранное без связи не воспроизводится: уходит только новое нажатие.
+    expect(bridge.notified.filter((n) => n.method === 'pty.input')).toEqual([{ method: 'pty.input', params: { ref, data: 'x' } }]);
+  });
+
+  it('невидимая вкладка после переподключения не цепляется к хосту', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('pty.attach', () => ({ snapshot: 'С', cols: 80, rows: 24 }));
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods: null } });
+    renderTerminal(bridge, ref, { visible: false });
+    act(() => useHostStore.setState({ status: { state: 'disconnected', reason: 'closed' } }));
+    act(() => useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods: null } }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(bridge.calls.filter((c) => c.method === 'pty.attach')).toHaveLength(0);
+  });
+});
+
+// Слияние lane-r3 и main-r2: у подключения вкладки три условия — видима, сессия жива (`running`)
+// и связь с хостом есть. Экран неживой сессии держит последний вывод и после обрыва связи, и
+// после «Restart host»: снимок пишется со сбросом, только когда он пришёл.
+describe('useTerminal — связь и жизнь сессии вместе (слияние lane-r3 и main-r2)', () => {
+  const online = { state: 'connected', hostVersion: '0.0.0-test', methods: null } as const;
+
+  afterEach(() => {
+    useHostStore.setState({ status: { state: 'connecting' } });
+  });
+
+  function renderWithRunning(bridge: FakeBridge, running: boolean) {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    return renderHook(
+      (props: { running: boolean }) =>
+        useTerminal({ bridge, ref, container, fontFamily: 'Menlo', fontSize: 13, running: props.running, ...surfaceOptions() }),
+      { initialProps: { running } },
+    );
+  }
+
+  const attaches = (bridge: FakeBridge): number => bridge.calls.filter((c) => c.method === 'pty.attach').length;
+  const detaches = (bridge: FakeBridge): number => bridge.calls.filter((c) => c.method === 'pty.detach').length;
+
+  it('агент вышел, потом связь оборвалась и вернулась — pty.attach нет, последний вывод на месте', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('pty.attach', () => ({ snapshot: 'ПОСЛЕДНИЙ ВЫВОД', cols: 80, rows: 24 }));
+    bridge.setHandler('pty.detach', () => ({ ok: true as const }));
+    useHostStore.setState({ status: online });
+    const { rerender } = renderWithRunning(bridge, true);
+    await waitFor(() => expect(xtermMock.terminals[0]?.writes).toEqual(['ПОСЛЕДНИЙ ВЫВОД']));
+    const term = xtermMock.terminals[0]!;
+
+    rerender({ running: false });
+    expect(detaches(bridge)).toBe(1);
+
+    act(() => useHostStore.setState({ status: { state: 'disconnected', reason: 'Connection to host closed' } }));
+    act(() => useHostStore.setState({ status: online }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(attaches(bridge)).toBe(1);
+    expect(term.resets).toBe(0);
+    expect(term.writes).toEqual(['ПОСЛЕДНИЙ ВЫВОД']);
+    expect(term.options.disableStdin).toBe(false);
+  });
+
+  it('новый хост после «Restart host»: снимок работ ещё прежний — not_found, экран цел; уснула — pty.detach; ожила — сброс и снимок нового процесса', async () => {
+    const bridge = createFakeBridge();
+    let ptyAlive = true;
+    let snapshot = 'ДО РЕСТАРТА';
+    bridge.setHandler('pty.attach', () => {
+      if (!ptyAlive) throw { code: 'not_found', message: 'нет живого PTY для сессии s-01' };
+      return { snapshot, cols: 80, rows: 24 };
+    });
+    bridge.setHandler('pty.detach', () => ({ ok: true as const }));
+    useHostStore.setState({ status: online });
+    const { rerender } = renderWithRunning(bridge, true);
+    await waitFor(() => expect(xtermMock.terminals[0]?.writes).toEqual(['ДО РЕСТАРТА']));
+    const term = xtermMock.terminals[0]!;
+
+    act(() => useHostStore.setState({ status: { state: 'disconnected', reason: 'Connection to host closed' } }));
+    ptyAlive = false;
+    act(() => useHostStore.setState({ status: online }));
+    await waitFor(() => expect(attaches(bridge)).toBe(2));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // Отказ attach экран не трогает: последний вывод виден, пока не придёт свежий снимок работ.
+    expect(term.resets).toBe(0);
+    expect(term.writes).toEqual(['ДО РЕСТАРТА']);
+
+    // Свежий снимок: сессия спит — отцепиться; Resume её оживил — новый процесс со сбросом экрана.
+    rerender({ running: false });
+    expect(detaches(bridge)).toBe(1);
+    ptyAlive = true;
+    snapshot = 'НОВЫЙ ПРОЦЕСС';
+    rerender({ running: true });
+    await waitFor(() => expect(term.writes).toEqual(['ДО РЕСТАРТА', 'НОВЫЙ ПРОЦЕСС']));
+    expect(term.resets).toBe(1);
+    expect(attaches(bridge)).toBe(3);
+    expect(xtermMock.terminals).toHaveLength(1);
   });
 });

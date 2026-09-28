@@ -319,6 +319,8 @@ export const S = {
     nextMatch: 'Next match',
     /** Картинка из буфера больше предела main (`drops.ts`, 20 МБ) — не сохранена и не отправлена. */
     imageTooLarge: 'Image is larger than 20 MB — not sent',
+    /** Связь окна с хостом оборвалась (раунд lane-r3, п. 2): терминал ввод не принимает. */
+    disconnected: 'Disconnected — reconnecting…',
   },
 
   /**

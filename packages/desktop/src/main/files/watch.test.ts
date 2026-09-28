@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, realpath, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FileChangedEvent, FileRoot, TreeChangedEvent } from '../../shared/files-types.js';
 import { rootKey } from '../../shared/work-keys.js';
 import { HostError } from '../host-connection.js';
-import { createFileWatch, type FileWatch, type WatchSink } from './watch.js';
+import { createGitApi, createGitRunner } from './git-api.js';
+import { createFileWatch, TREE_BATCH_MS, type FileWatch, type WatchSink } from './watch.js';
 
 const ROOT: FileRoot = { workKey: '/p w-1', spec: { kind: 'project' } };
 
@@ -167,5 +169,46 @@ describe('слежение не запустилось (тест 13)', () => {
     expect(warn).toHaveBeenCalled();
     expect(s.treeChanged).not.toHaveBeenCalled();
     warn.mockRestore();
+  });
+});
+
+describe('git checkout под слежением дерева (раунд lane-r3, п. 3; ревью 7.2-B)', () => {
+  const git = (...args: string[]): string =>
+    execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+
+  it('checkout ветки → treeChanged за ≤ 1 с и свежий gitStatus', async () => {
+    // Манёвр линзы B (`repro-checkout.mjs`): M и D в рабочем дереве, их коммит в другой
+    // ветке, возврат на исходную — файлы меняет сам git.
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 't@example.com');
+    git('config', 'user.name', 't');
+    git('config', 'commit.gpgsign', 'false');
+    await writeFile(path.join(dir, 'modified.txt'), 'original\n');
+    await writeFile(path.join(dir, 'deleted.txt'), 'will be deleted\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'baseline');
+    await writeFile(path.join(dir, 'modified.txt'), 'CHANGED\n');
+    await unlink(path.join(dir, 'deleted.txt'));
+
+    const gitApi = createGitApi({ git: createGitRunner(process.env), roots: roots(dir), spawnWorker: () => { throw new Error('не нужен'); } });
+    expect(await gitApi.gitStatus(ROOT)).toEqual({ 'modified.txt': 'M', 'deleted.txt': 'D' });
+
+    watch = createFileWatch({ roots: roots(dir) });
+    const s = sink();
+    await watch.watch(ROOT, '', s);
+    git('checkout', '-q', '-b', 'other');
+    git('add', 'modified.txt', 'deleted.txt');
+    git('commit', '-q', '-m', 'other');
+    // Пачки от коммита (если бы были) — до отсчёта.
+    await sleep(TREE_BATCH_MS + 200);
+    s.treeChanged.mockClear();
+
+    const started = Date.now();
+    git('checkout', '-q', 'main');
+    await vi.waitFor(() => expect(s.treeChanged).toHaveBeenCalled(), { timeout: 1000, interval: 20 });
+    expect(Date.now() - started).toBeLessThanOrEqual(1000);
+    expect(s.treeChanged.mock.calls[0]?.[0]).toMatchObject({ rootKey: rootKey(ROOT), dirs: [''] });
+    // Свежий статус: изменения ушли в ветку `other`, рабочее дерево чисто, deleted.txt вернулся.
+    expect(await gitApi.gitStatus(ROOT)).toEqual({});
   });
 });

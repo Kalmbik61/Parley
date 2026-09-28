@@ -162,6 +162,7 @@ export function App(): JSX.Element {
   const bridge = getHostClient();
   // Статус связи — в `store/host.ts`: его читает и `useHostSupports` (кусок 3.1).
   const status = useHostStore((state) => state.status);
+  const everConnected = useHostStore((state) => state.everConnected);
   // Конфигурация хранится здесь ради терминала — панелям нужны живые
   // `fontFamily`/`fontSize` как значения, а не как CSS-переменные: xterm
   // красит канвой. Тему окна (тёмная/светлая) панели берут из `useUiStore`
@@ -248,7 +249,10 @@ export function App(): JSX.Element {
     );
   }
 
-  if (status.state === 'disconnected') {
+  // Обрыв после связи — окно на месте (раунд lane-r3, п. 2): main переподключается сам, а
+  // терминалы на это время показывают «Disconnected — reconnecting…» и не принимают ввод.
+  // Экран — только если связи не было ни разу.
+  if (status.state === 'disconnected' && !everConnected) {
     return (
       <div className="flex h-screen items-center justify-center text-neutral-400">
         {S.connection.disconnectedScreen(status.reason)}

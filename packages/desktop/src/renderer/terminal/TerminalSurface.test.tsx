@@ -449,3 +449,116 @@ describe('TerminalSurface — оживление сессии (раунд main-r
     expect(screen.queryByTestId('terminal-not-running')).toBeNull();
   });
 });
+
+describe('TerminalSurface — без связи с хостом (раунд lane-r3, п. 2)', () => {
+  it('обрыв — «Disconnected — reconnecting…» поверх терминала; связь вернулась — надпись ушла', async () => {
+    renderSurface();
+    await waitFor(() => expect(xtermMock.terminals[0]).toBeDefined());
+    expect(screen.queryByTestId('terminal-offline')).toBeNull();
+
+    act(() => bridge.emitStatus({ state: 'disconnected', reason: 'Connection to host closed' }));
+    expect(screen.getByTestId('terminal-offline').textContent).toBe('Disconnected — reconnecting…');
+    expect(screen.getByRole('status').textContent).toBe('Disconnected — reconnecting…');
+
+    act(() => bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: [...REQUIRED_METHODS] }));
+    expect(screen.queryByTestId('terminal-offline')).toBeNull();
+  });
+});
+
+// Слияние lane-r3 и main-r2: «Restart host» — это обрыв связи и новый хост, у которого агента нет.
+// Вкладка говорит одно за раз: без связи — «Disconnected — reconnecting…», со связью и неживой
+// сессией — «S01 isn't running» с Resume над последним выводом.
+describe('TerminalSurface — связь и неживая сессия вместе (слияние lane-r3 и main-r2)', () => {
+  const put = (lifecycle: 'sleeping' | 'active'): void =>
+    useWorksStore.setState({
+      entries: [makeWork('w-01', { projectPath: '/tmp/proj', sessions: [makeSession('s-01', 'один', { lifecycle })] })],
+      branches: {},
+      loading: false,
+      error: null,
+    });
+  const online = (): void => bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: [...REQUIRED_METHODS] });
+  const offline = (): void => bridge.emitStatus({ state: 'disconnected', reason: 'Connection to host closed' });
+  const inputs = (): unknown[] => bridge.notified.filter((call) => call.method === 'pty.input');
+  const attaches = (): number => bridge.calls.filter((call) => call.method === 'pty.attach').length;
+  const mountIdOf = (container: HTMLElement): string | undefined =>
+    container.querySelector<HTMLElement>('[data-tab-id="terminal:s-01"]')?.dataset.mountId;
+
+  it('Restart host: без связи — только «Disconnected», ввод никуда; новый хост — «isn\'t running» над последним выводом, ввод — тост; Resume — новый процесс в той же поверхности', async () => {
+    let ptyAlive = true;
+    let snapshot = 'ДО РЕСТАРТА';
+    bridge.setHandler('pty.attach', () => {
+      if (!ptyAlive) throw { code: 'not_found', message: 'нет живого PTY для сессии s-01' };
+      return { snapshot, cols: 80, rows: 24 };
+    });
+    const resumes: unknown[] = [];
+    bridge.setHandler('sessions.resume', (params) => {
+      resumes.push(params);
+      return { ok: true as const };
+    });
+    put('active');
+    const { container } = renderSurface();
+    const mountId = mountIdOf(container);
+    await waitFor(() => expect(xtermMock.terminals[0]?.writes).toEqual(['ДО РЕСТАРТА']));
+    const term = xtermMock.terminals[0]!;
+
+    // Связь пропала: одна надпись, ввод не уходит и тоста нет.
+    act(() => offline());
+    expect(screen.getByTestId('terminal-offline').textContent).toBe('Disconnected — reconnecting…');
+    expect(screen.queryByTestId('terminal-not-running')).toBeNull();
+    act(() => term.onDataHandler?.('x'));
+    expect(inputs()).toEqual([]);
+    expect(toast.error).not.toHaveBeenCalled();
+
+    // Новый хост без агента; снимок работ в первый миг прежний — attach отказал, экран цел.
+    ptyAlive = false;
+    act(() => online());
+    expect(screen.queryByTestId('terminal-offline')).toBeNull();
+    await waitFor(() => expect(attaches()).toBe(2));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(term.resets).toBe(0);
+    expect(term.writes).toEqual(['ДО РЕСТАРТА']);
+
+    // Свежий снимок работ: сессия спит — полоса с Resume, «Disconnected» нет; ввод — тост.
+    act(() => put('sleeping'));
+    expect(screen.getByTestId('terminal-not-running').textContent).toContain("S01 isn't running");
+    expect(screen.queryByTestId('terminal-offline')).toBeNull();
+    act(() => term.onDataHandler?.('y'));
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      "S01 isn't running",
+      expect.objectContaining({ id: `not-running:${refKey(ref)}`, action: expect.objectContaining({ label: 'Resume' }) }),
+    );
+
+    // Resume → хост поднял агента → works.changed active → снимок нового процесса там же.
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await waitFor(() => expect(resumes).toEqual([{ ref }]));
+    ptyAlive = true;
+    snapshot = 'НОВЫЙ ПРОЦЕСС';
+    act(() => put('active'));
+    await waitFor(() => expect(term.writes).toEqual(['ДО РЕСТАРТА', 'НОВЫЙ ПРОЦЕСС']));
+    expect(term.resets).toBe(1);
+    expect(screen.queryByTestId('terminal-not-running')).toBeNull();
+    expect(xtermMock.terminals).toHaveLength(1);
+    expect(mountIdOf(container)).toBe(mountId);
+  });
+
+  it('сессия спала ещё до обрыва: без связи — только «Disconnected»; связь вернулась — снова полоса, pty.attach нет', async () => {
+    put('sleeping');
+    renderSurface();
+    await waitFor(() => expect(xtermMock.terminals[0]).toBeDefined());
+    expect(screen.getByTestId('terminal-not-running')).toBeTruthy();
+
+    act(() => offline());
+    expect(screen.getByTestId('terminal-offline')).toBeTruthy();
+    expect(screen.queryByTestId('terminal-not-running')).toBeNull();
+
+    act(() => online());
+    expect(screen.queryByTestId('terminal-offline')).toBeNull();
+    expect(screen.getByTestId('terminal-not-running').textContent).toContain("S01 isn't running");
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(attaches()).toBe(0);
+  });
+});

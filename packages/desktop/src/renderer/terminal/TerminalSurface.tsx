@@ -253,6 +253,7 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
 
   // Ввод в неживую вкладку хост молча отбрасывает — тост с Resume; один на сессию (`id`), а не
   // по тосту на каждую клавишу. Состояние читается в момент ввода, не из замыкания рендера.
+  // Без связи с хостом (lane-r3) сюда ввод не доходит вовсе: `use-terminal` его не пропускает.
   const onInput = useCallback(() => {
     const session = sessionOf(sessionRef);
     if (session === null || (session.lifecycle !== 'sleeping' && session.lifecycle !== 'closed')) return;
@@ -263,7 +264,7 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
     });
   }, [bridge, sessionRef]);
 
-  const { search, terminal } = useTerminal({
+  const { search, terminal, offline } = useTerminal({
     bridge,
     ref: sessionRef,
     container,
@@ -409,7 +410,10 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
       onDrop={onDrop}
       style={dropping ? { outline: '2px solid rgb(59,130,246)', outlineOffset: '-2px' } : undefined}
     >
-      {notRunning ? (
+      {/* Без связи вкладка говорит одно — «Disconnected — reconnecting…» (слой ниже): снимок
+          работ в это время прежний, а Resume звать некому. Полоса вернётся со связью, если
+          сессия и по свежему снимку неживая (после «Restart host» — так и будет). */}
+      {notRunning && !offline ? (
         <div
           data-testid="terminal-not-running"
           className="flex min-w-0 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-3 py-1.5 text-sm text-foreground"
@@ -447,6 +451,17 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
         </div>
       </TerminalContextMenu>
       {linkMenu === null ? null : <LinkMenu bridge={bridge} state={linkMenu} onClose={() => setLinkMenu(null)} />}
+      {/* Без связи с хостом ввод не уходит (`use-terminal.ts`) — человек должен это видеть, а не
+          печатать в пустоту (раунд lane-r3, п. 2). Слой ловит клики, экран под ним виден. */}
+      {offline ? (
+        <div
+          data-testid="terminal-offline"
+          role="status"
+          className="absolute inset-0 z-10 flex items-center justify-center bg-black/50 px-4 text-center text-sm text-neutral-100"
+        >
+          {S.terminal.disconnected}
+        </div>
+      ) : null}
     </div>
   );
 });

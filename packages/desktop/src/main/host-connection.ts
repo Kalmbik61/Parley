@@ -66,6 +66,8 @@ export class HostConnection {
   private closed = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelayMs = 500;
+  /** Уведомления, ушедшие без связи с хостом, — счётчик для журнала main (lane-r3, п. 2). */
+  private droppedNotifications = 0;
   /** Причина, по которой `spawn()` заведомо не поднимет хост (например, нет `node` в PATH). */
   private spawnFailure: string | null = null;
   /**
@@ -127,8 +129,12 @@ export class HostConnection {
     let spawned = false;
     for (;;) {
       try {
+        // Токен — до сокета (раунд lane-r3, п. 2): хост закрывает соединение без `hello`
+        // через 5 с после accept, и чтение файла под нагрузкой не должно тратить этот срок.
+        // Нет файла — хост ещё не поднят: та же ветка повтора, что и отказ сокета.
+        const token = (await readFile(this.paths.token, 'utf8')).trim();
         const socket = await this.tryConnectSocket();
-        await this.handshake(socket);
+        await this.handshake(socket, token);
         return;
       } catch (err) {
         if (this.closed) throw err instanceof Error ? err : new Error(String(err));
@@ -164,9 +170,7 @@ export class HostConnection {
     });
   }
 
-  private async handshake(socket: Socket): Promise<void> {
-    const token = (await readFile(this.paths.token, 'utf8')).trim();
-
+  private async handshake(socket: Socket, token: string): Promise<void> {
     this.socket = socket;
     this.decoder = new LineDecoder();
     // Новое подключение — новый повтор от хоста: записи прошлого хоста могли
@@ -284,7 +288,14 @@ export class HostConnection {
   }
 
   notify(method: NotificationName, params: unknown): void {
-    this.socket?.write(encodeLine({ method, params }));
+    if (this.socket === null) {
+      // Не молча (раунд lane-r3, п. 2): уведомление без связи пропадает, и в консоли main
+      // остаётся след для диагностики. Окно само не шлёт ввод, пока связи нет.
+      this.droppedNotifications += 1;
+      console.warn(`[harnas] host: ${method} dropped — no connection to host (dropped ${this.droppedNotifications})`);
+      return;
+    }
+    this.socket.write(encodeLine({ method, params }));
   }
 
   /** `host.shutdown` → новый процесс хоста → новое подключение. */

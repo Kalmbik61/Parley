@@ -20,6 +20,7 @@ import { tabId } from './layout/ids.js';
 import { useLayoutStore } from './layout/store.js';
 import { emptyLayout, openTab } from './layout/tree.js';
 import { useActivityStore } from './store/activity.js';
+import { useHostStore } from './store/host.js';
 import { useNoticesStore } from './store/notices.js';
 import { useUiStore } from './store/ui.js';
 import { useWorksStore } from './store/works.js';
@@ -79,6 +80,9 @@ beforeEach(() => {
   });
   dialogProps.last = null;
   useSidebarSectionsStore.setState({ sections: [], attention: {}, entries: null });
+  // Стор связи общий на файл: `everConnected` прошлого теста убрал бы экран «No connection»
+  // у теста, где связи ещё не было (слияние lane-r3).
+  useHostStore.setState({ status: { state: 'connecting' }, everConnected: false });
   // `getHostClient()` читает `window.harnas` лениво — подставляем вручную,
   // как и задумано (комментарий в `host-client.ts`).
   bridge = createFakeBridge();
@@ -453,5 +457,52 @@ describe('App — вопрос при закрытии окна без связ�
     useFilesStore.setState({ buffers: {} });
     act(() => bridge.emitConfirmClose());
     await vi.waitFor(() => expect(bridge.closeAnswers).toEqual(['cancel', 'close']));
+  });
+});
+
+describe('App — обрыв связи с хостом (раунд lane-r3, п. 2)', () => {
+  beforeEach(() => {
+    useHostStore.setState({ status: { state: 'connecting' }, everConnected: false });
+  });
+  afterEach(() => {
+    useHostStore.setState({ status: { state: 'connecting' }, everConnected: false });
+  });
+
+  it('связь была и оборвалась — окно остаётся на месте (терминалы говорят «Disconnected — reconnecting…»)', () => {
+    render(<App />);
+    expect(screen.getByTestId('titlebar')).toBeTruthy();
+
+    act(() => bridge.emitStatus({ state: 'disconnected', reason: 'Connection to host closed' }));
+    expect(screen.getByTestId('titlebar')).toBeTruthy();
+    expect(screen.queryByText('No connection to host: Connection to host closed')).toBeNull();
+  });
+
+  it('связи ещё не было — экран «No connection to host», как прежде', () => {
+    bridge.emitStatus({ state: 'disconnected', reason: 'node not found in login-shell PATH' });
+    render(<App />);
+    expect(screen.getByText('No connection to host: node not found in login-shell PATH')).toBeTruthy();
+    expect(screen.queryByTestId('titlebar')).toBeNull();
+  });
+});
+
+// Слияние lane-r3 и main-r2: «Restart host» и падение хоста — обрыв связи после неё. Оболочка
+// остаётся той же (не перемонтируется), а баннер прерванных сессий спрашивает уже новый хост.
+describe('App — связь вернулась (слияние lane-r3 и main-r2)', () => {
+  it('обрыв и возврат связи: заголовок — тот же узел, sessions.interrupted перезапрошен — баннер Interrupted', async () => {
+    let refs: SessionRef[] = [];
+    bridge.setHandler('sessions.interrupted', () => ({ refs }));
+    render(<App />);
+    const titlebar = screen.getByTestId('titlebar');
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/Interrupted mid-turn/)).toBeNull();
+
+    act(() => bridge.emitStatus({ state: 'disconnected', reason: 'Connection to host closed' }));
+    refs = [{ projectPath: '/tmp/w-01', workId: 'w-01', sessionId: 's-03' }];
+    act(() => bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: [...REQUIRED_METHODS] }));
+
+    expect(await screen.findByText('Interrupted mid-turn: S03')).toBeTruthy();
+    expect(screen.getByTestId('titlebar')).toBe(titlebar);
   });
 });

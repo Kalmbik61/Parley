@@ -12,6 +12,9 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * После перезапуска хоста процесс агента мёртв (lifecycle sleeping): вкладка терминала обязана
  * сказать «S01 isn't running» с кнопкой Resume, а не молчать пустым экраном; ввод в неё не
  * пропадает молча; после Resume новый вывод виден в той же вкладке без переключений.
+ * Со слиянием lane-r3 окно на время обрыва связи не перемонтируется: поверхность та же, под
+ * полосой — последний вывод агента, «Disconnected» после возврата связи нет; Resume — снимок
+ * нового процесса вместо прежнего экрана.
  * Агент — эхо-заглушка, настоящий `claude` не запускается.
  */
 
@@ -74,16 +77,24 @@ test.describe('перезапуск хоста из палитры (раунд m
     await input.click();
     await input.type('before\r');
     await expect.poll(() => screenText(window)).toContain('echo: before');
+    // Поверхность вкладки: после перезапуска хоста она та же (слияние lane-r3 — окно на время
+    // обрыва связи не перемонтируется).
+    const surface = window.locator(`[data-tab-id="terminal:${ref.sessionId}"][data-mount-id]`);
+    const mountId = await surface.getAttribute('data-mount-id');
 
     await window.keyboard.press('Meta+J');
     await window.keyboard.type('Restart host');
     await window.keyboard.press('Enter');
     await window.getByRole('button', { name: 'Restart', exact: true }).click();
 
-    // Хост вернулся, агент мёртв: вкладка говорит об этом, а не молчит.
+    // Хост вернулся, агент мёртв: вкладка говорит об этом, а не молчит. Связь уже есть —
+    // «Disconnected — reconnecting…» нет, а последний вывод агента виден под полосой.
     const notRunning = window.getByTestId('terminal-not-running');
     await expect(notRunning).toBeVisible({ timeout: 30_000 });
     await expect(notRunning).toContainText("S01 isn't running");
+    await expect(window.getByTestId('terminal-offline')).toHaveCount(0);
+    expect(await screenText(window)).toContain('echo: before');
+    expect(await surface.getAttribute('data-mount-id')).toBe(mountId);
 
     // Ввод в неживую вкладку — тост с тем же текстом, а не тишина. Полоса сдвинула экран вниз —
     // поле ввода xterm фокусируется напрямую, а не кликом по его старому месту.
@@ -93,11 +104,14 @@ test.describe('перезапуск хоста из палитры (раунд m
 
     await notRunning.getByRole('button', { name: 'Resume' }).click();
     await expect(notRunning).toHaveCount(0, { timeout: 30_000 });
+    // Снимок нового процесса заменил экран: прежнего вывода нет, приветствие — нового агента.
+    await expect.poll(() => screenText(window), { timeout: 30_000 }).not.toContain('echo: before');
     await expect.poll(() => screenText(window), { timeout: 30_000 }).toContain('stub-echo готов');
     await input.focus();
     await window.keyboard.type('after\r');
     await expect.poll(() => screenText(window)).toContain('echo: after');
-    // Та же вкладка сессии осталась выбранной — без переключений.
+    // Та же вкладка сессии осталась выбранной — без переключений, в той же поверхности.
     await expect(window.locator(`[role="tab"][aria-selected="true"][data-tab-id="terminal:${ref.sessionId}"]`)).toHaveCount(1);
+    expect(await surface.getAttribute('data-mount-id')).toBe(mountId);
   });
 });

@@ -20,6 +20,7 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { refKey, type SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { shouldForwardToTerminal } from '../lib/keys.js';
+import { useHostStore } from '../store/host.js';
 import { useUiStore } from '../store/ui.js';
 import { createLinkProvider, createStatCache, isHttpUrl, type TerminalLink } from './links.js';
 import { webglPolicy } from './webgl-policy.js';
@@ -75,6 +76,11 @@ export interface UseTerminalResult {
    * терминал не открыт.
    */
   terminal: Terminal | null;
+  /**
+   * Связь окна с хостом оборвалась (раунд lane-r3, п. 2): терминал ввод не принимает, а
+   * поверхность показывает «Disconnected — reconnecting…».
+   */
+  offline: boolean;
 }
 
 function sameRef(a: SessionRef, b: SessionRef): boolean {
@@ -96,6 +102,14 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
   // пересоздавать терминал, поэтому держит ссылку на уже созданный объект
   // вместо того, чтобы быть в зависимостях эффекта создания.
   const termRef = useRef<Terminal | null>(null);
+
+  // Без связи с хостом (раунд lane-r3, п. 2) ввод не уходит и не копится: `notify` main без
+  // сокета выбросил бы нажатия молча, а воспроизводить их после переподключения нельзя —
+  // состояние агента за это время могло измениться. `connecting` сюда не входит: до первого
+  // подключения окно показывает свой экран, а терминалов ещё нет.
+  const offline = useHostStore((state) => state.status.state === 'disconnected');
+  const offlineRef = useRef(offline);
+  offlineRef.current = offline;
 
   // `bridge` стабилен на весь жизненный цикл окна (один `window.harnas`, см.
   // `App.tsx`), но колбэки ниже заведены один раз на монтирование — читают
@@ -134,6 +148,7 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
       minimumContrastRatio: minimumContrastRatio(useUiStore.getState().dark),
       fontFamily,
       fontSize,
+      disableStdin: offlineRef.current,
       // screenReaderMode не включаем: в нём xterm игнорирует события
       // insertText, а через них приходят выбор эмодзи, диктовка и буквы с
       // диакритикой по долгому нажатию в macOS — ввод терялся бы.
@@ -252,13 +267,16 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
     // «просмотрено» (`markSeen` на хосте — побочный эффект `pty.attach`) не
     // должны доставаться невидимой вкладке (кусок 2.1, тест 5а).
     let connected = false;
-    // Экран сбрасывается перед КАЖДЫМ повторным подключением (пересинхрон,
-    // возврат видимости) — иначе новый снимок лёг бы поверх старого экрана.
-    // Самое первое подключение сбрасывать незачем: терминал и так пуст.
+    // Экран сбрасывается перед КАЖДЫМ повторным снимком (пересинхрон, возврат
+    // видимости, связь вернулась) — иначе новый снимок лёг бы поверх старого экрана.
+    // Самое первое подключение сбрасывать незачем: терминал и так пуст. Сброс — когда
+    // снимок уже пришёл (слияние lane-r3 и main-r2): отказ `pty.attach` (у хоста нет PTY —
+    // после «Restart host» агент мёртв) экран не трогает, последний вывод остаётся виден под
+    // полосой «isn't running». Вывод до снимка всё равно копится, а не пишется.
     let everConnected = false;
 
     const attach = async (): Promise<void> => {
-      if (everConnected) term.reset();
+      const resetBeforeSnapshot = everConnected;
       everConnected = true;
       connected = true;
       snapshotWritten = false;
@@ -266,6 +284,7 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
       try {
         const { snapshot, cols, rows } = await bridgeRef.current.call('pty.attach', { ref });
         if (disposed || !connected) return;
+        if (resetBeforeSnapshot) term.reset();
         term.resize(cols, rows);
         term.write(snapshot);
         snapshotWritten = true;
@@ -285,8 +304,8 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
           bridgeRef.current.notify('pty.resize', { ref, cols: term.cols, rows: term.rows });
         }
       } catch {
-        // Хост ещё не завёл `pty.attach` (куски 1.6/1.7) или сессии уже нет —
-        // терминал остаётся пустым вместо падения панели.
+        // Хост ещё не завёл `pty.attach` (куски 1.6/1.7) или живого PTY у сессии нет —
+        // экран остаётся как был (пустым или с последним выводом) вместо падения панели.
       }
     };
 
@@ -302,6 +321,8 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
     detachRef.current = detach;
 
     const dataDisposable = term.onData((data) => {
+      // `disableStdin` не держит вставку и программные `paste` — проверка и здесь.
+      if (offlineRef.current) return;
       bridgeRef.current.notify('pty.input', { ref, data });
       onInputRef.current?.(data);
     });
@@ -385,10 +406,28 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
   // зависимостей плюс `visible`, иначе после пересоздания терминала (эффект
   // выше) с тем же `visible` подключения бы не случилось вовсе.
   const running = options.running ?? true;
+  const runningRef = useRef(running);
+  runningRef.current = running;
   useEffect(() => {
-    if (visible && running) void attachRef.current?.();
+    // Без связи цепляться не к кому: переподключение ниже само подключит видимую вкладку.
+    if (visible && running && !offlineRef.current) void attachRef.current?.();
     return () => detachRef.current?.();
   }, [visible, running, container, ref.projectPath, ref.workId, ref.sessionId, generation]);
+
+  // Связь оборвалась и вернулась (раунд lane-r3, п. 2): новое подключение main хосту ничего
+  // не должно — прежний `pty.attach` жил на старом сокете. Видимая вкладка живой сессии
+  // цепляется заново свежим снимком; скрытая — при показе, эффектом выше. Неживой (main-r2)
+  // цепляться не к чему: экран держит последний вывод, оживёт — подключит тот же эффект выше.
+  // После «Restart host» снимок работ в первый миг ещё прежний (сессия «жива»): тогда
+  // `pty.attach` нового хоста отвечает not_found, и экран остаётся как был (`attach`).
+  const wasOffline = useRef(offline);
+  useEffect(() => {
+    const term = termRef.current;
+    if (term !== null) term.options.disableStdin = offline;
+    const reconnected = wasOffline.current && !offline;
+    wasOffline.current = offline;
+    if (reconnected && visibleRef.current && runningRef.current) void attachRef.current?.();
+  }, [offline]);
 
   // Видимость — политике WebGL (спека 8.1). Эффект после эффекта создания: подписка уже
   // есть, и после пересоздания xterm (там `forget`) видимость сообщается заново.
@@ -397,7 +436,7 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
     webglPolicy.update(refKey(ref), visible);
   }, [visible, container, ref.projectPath, ref.workId, ref.sessionId, generation]);
 
-  return { search, terminal };
+  return { search, terminal, offline };
 }
 
 /** Окно открыто с `?renderer=dom` — так его открывает main при HARNAS_TERMINAL_RENDERER=dom. */

@@ -20,7 +20,11 @@ export async function buildAllSessions({
   claudeRoot = defaultRoot(),
   codexRoot = defaultCodexRoot(),
 }: AllSessionsOptions = {}): Promise<SessionIndex[]> {
-  const [claude, codex] = await Promise.all([buildIndex(claudeRoot), buildCodexIndex(codexRoot)]);
+  // Источники — по очереди, а не `Promise.all`: у каждого свой предел в
+  // INDEX_READ_CONCURRENCY файлов, и вместе они держали бы вдвое больше чтений
+  // в пуле libuv хоста (раунд lane-r3, п. 1).
+  const claude = await buildIndex(claudeRoot);
+  const codex = await buildCodexIndex(codexRoot);
 
   return [...claude, ...codex].sort((a, b) =>
     String(b.endedAt ?? '').localeCompare(String(a.endedAt ?? '')),
