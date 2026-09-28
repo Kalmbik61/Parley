@@ -102,9 +102,17 @@ function isShown(workKey: string, tab: TabSpec): boolean {
   return useUiStore.getState().visibleSessionRefs[key] === true && terminalSurfaces.has(key);
 }
 
-/** `whenShown` для App: подписка на сторы раскладки и окна плюс опрос, не дольше 2 с. */
-export function whenShown(workKey: string, tab: TabSpec): Promise<boolean> {
+/**
+ * `whenShown` для App: подписка на сторы раскладки и окна плюс опрос, не дольше 2 с.
+ * `signal` — отмена при размонтировании App: иначе опрос DOM переживал окно (в тестах — среду
+ * jsdom: «document is not defined» из таймера после конца файла).
+ */
+export function whenShown(workKey: string, tab: TabSpec, signal?: AbortSignal): Promise<boolean> {
   return new Promise((resolve) => {
+    if (signal?.aborted === true) {
+      resolve(false);
+      return;
+    }
     let done = false;
     const finish = (shown: boolean): void => {
       if (done) return;
@@ -113,8 +121,10 @@ export function whenShown(workKey: string, tab: TabSpec): Promise<boolean> {
       offUi();
       clearInterval(poll);
       clearTimeout(timeout);
+      signal?.removeEventListener('abort', onAbort);
       resolve(shown);
     };
+    const onAbort = (): void => finish(false);
     const check = (): void => {
       if (isShown(workKey, tab)) finish(true);
     };
@@ -122,6 +132,7 @@ export function whenShown(workKey: string, tab: TabSpec): Promise<boolean> {
     const offUi = useUiStore.subscribe(check);
     const poll = setInterval(check, SHOWN_POLL_MS);
     const timeout = setTimeout(() => finish(false), SHOWN_TIMEOUT_MS);
+    signal?.addEventListener('abort', onAbort);
     check();
   });
 }
