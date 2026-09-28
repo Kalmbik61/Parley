@@ -214,6 +214,7 @@ export function CardMenu({ entry, pinned, bridge, onRename, onOpenMail, children
       <ConfirmDialog
         open={confirm === 'archive'}
         title={S.cardMenu.archiveConfirmTitle(map.work.title)}
+        description={S.cardMenu.archiveConfirmDescription}
         confirmLabel={S.cardMenu.archive}
         onConfirm={() => setStatus('archived', S.errors.actions.archiveWorkspace)}
         onOpenChange={(next) => setConfirm(next ? 'archive' : null)}

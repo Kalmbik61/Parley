@@ -197,12 +197,10 @@ test.describe('несохранённые правки при закрытии �
     await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.close());
     const dialog = window.getByTestId('save-changes-dialog');
     await expect(dialog).toBeVisible();
-    const started = Date.now();
     await dialog.getByRole('button', { name: 'Save', exact: true }).click();
     // Окно, а не процесс: на macOS приложение без окон живёт дальше (`window-all-closed`), и
     // событие `close` Playwright — выход процесса — после крестика не приходит вовсе.
     await expect.poll(() => windowCount(electronApp), { timeout: CLOSE_AFTER_SAVE_MS }).toBe(0);
-    console.log(`[fix-7-accept] крестик → Save → окно закрыто за ${Date.now() - started} мс`);
     expect(await readFile(path.join(project, 'a.ts'), 'utf8')).toBe('export const answer = 42;\n// edited');
     expect(problems).toEqual([]);
   });
@@ -225,10 +223,8 @@ test.describe('несохранённые правки при закрытии �
     await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.close());
     const dialog = window.getByTestId('save-changes-dialog');
     await expect(dialog.getByRole('heading')).toHaveText('Save changes to 2 files?');
-    const started = Date.now();
     await dialog.getByRole('button', { name: 'Save all' }).click();
     await expect.poll(() => windowCount(electronApp), { timeout: CLOSE_AFTER_SAVE_MS }).toBe(0);
-    console.log(`[fix-7-accept] Save all (2 файла) → окно закрыто за ${Date.now() - started} мс`);
     expect(await readFile(path.join(project, 'a.ts'), 'utf8')).toBe('export const answer = 42;\n// edited');
     expect(await readFile(path.join(project, 'locked', 'b.ts'), 'utf8')).toBe('export const answer = 42;\n// edited');
     expect(problems).toEqual([]);
@@ -262,10 +258,8 @@ test.describe('несохранённые правки при закрытии �
     // Каталог снова доступен: грязный остался один b.ts — «Save» пишет его и закрывает окно сразу.
     await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.close());
     await expect(dialog).toBeVisible();
-    const started = Date.now();
     await dialog.getByRole('button', { name: 'Save', exact: true }).click();
     await expect.poll(() => windowCount(electronApp), { timeout: CLOSE_AFTER_SAVE_MS }).toBe(0);
-    console.log(`[fix-7-accept] после ошибки Save → окно закрыто за ${Date.now() - started} мс`);
     expect(await readFile(path.join(project, 'a.ts'), 'utf8')).toBe('export const answer = 42;\n// edited');
     expect(await readFile(path.join(project, 'locked', 'b.ts'), 'utf8')).toBe('export const answer = 42;\n// edited');
   });
@@ -282,14 +276,12 @@ test.describe('несохранённые правки при закрытии �
     });
     const dialog = window.getByTestId('save-changes-dialog');
     await expect(dialog).toBeVisible();
-    const started = Date.now();
     await dialog.getByRole('button', { name: 'Save', exact: true }).click();
     await expect
       .poll(() => window.evaluate(() => (globalThis as { __harnasPageMark?: boolean }).__harnasPageMark === true).catch(() => true), {
         timeout: CLOSE_AFTER_SAVE_MS,
       })
       .toBe(false);
-    console.log(`[fix-7-accept] перезагрузка → Save → новая страница за ${Date.now() - started} мс`);
     await expect(window.getByTestId('app-shell')).toBeVisible();
     await expect(dialog).toHaveCount(0);
     expect(await readFile(path.join(project, 'a.ts'), 'utf8')).toBe('export const answer = 42;\n// edited');
@@ -317,7 +309,6 @@ test.describe('несохранённые правки при закрытии �
     await electronApp.evaluate(({ app: electronAppMain }) => electronAppMain.quit());
     const dialog = window.getByTestId('save-changes-dialog');
     await expect(dialog).toBeVisible();
-    const started = Date.now();
     await dialog.getByRole('button', { name: 'Save', exact: true }).click();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const late = new Promise<'late'>((resolve) => {
@@ -325,7 +316,6 @@ test.describe('несохранённые правки при закрытии �
     });
     expect(await Promise.race([quit.then(() => 'quit' as const), late])).toBe('quit');
     clearTimeout(timer);
-    console.log(`[fix-7-accept] выход → Save → quit за ${Date.now() - started} мс`);
     expect(await readFile(path.join(project, 'a.ts'), 'utf8')).toBe('export const answer = 42;\n// edited');
     expect(problems).toEqual([]);
   });
