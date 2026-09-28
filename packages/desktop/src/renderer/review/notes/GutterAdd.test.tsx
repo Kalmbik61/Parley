@@ -2,6 +2,9 @@
  * Кусок 8.4b, тест 1: «+» гаттера — свой оверлей над номерами строк. Строка под указателем — по
  * `getTopForLineNumber` поддельного редактора ((n − 1) × 20); протяжка — диапазон строк; ⌘⇧A —
  * заметка на выделение (действие редактора, `press`).
+ *
+ * Раунд fix-8.4b, п. 2: сам оверлей указатель не ловит (под ним — кнопки Monaco, «Show Unchanged
+ * Region»): «+» ставит движение мыши над DOM редактора, ловит указатель только кнопка «+».
  */
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -25,6 +28,14 @@ function mountDiff(): FakeDiffEditor {
 /** Середина строки n по шагу поддельного редактора. */
 const y = (line: number): number => (line - 1) * 20 + 10;
 
+/** Наведение мыши на строку n: движение над DOM стороны редактора (номер строки — у левого края). */
+function hover(diff: FakeDiffEditor, line: number, clientX = 10): void {
+  const dom = (diff.modified as unknown as { getDomNode(): HTMLElement }).getDomNode();
+  fireEvent.pointerMove(dom, { clientX, clientY: y(line) });
+}
+
+const plus = (): HTMLElement => screen.getByRole('button', { name: 'Add note' });
+
 beforeEach(() => {
   monacoMock.reset();
 });
@@ -38,16 +49,15 @@ describe('GutterAdd (тест 1 куска 8.4b)', () => {
     const diff = mountDiff();
     const onPick = vi.fn();
     render(<GutterAdd editor={diff.modified as never} lineCount={30} onPick={onPick} />);
-    const strip = screen.getByTestId('gutter-add');
 
-    fireEvent.pointerMove(strip, { clientY: y(7) });
-    const plus = screen.getByRole('button', { name: 'Add note' });
-    expect(plus.style.top).toBe('120px');
+    hover(diff, 7);
+    expect(plus().style.top).toBe('120px');
 
-    fireEvent.pointerDown(strip, { clientY: y(10), button: 0 });
-    fireEvent.pointerMove(strip, { clientY: y(12) });
-    fireEvent.pointerMove(strip, { clientY: y(14) });
-    fireEvent.pointerUp(strip, { clientY: y(14) });
+    hover(diff, 10);
+    fireEvent.pointerDown(plus(), { clientY: y(10), button: 0 });
+    fireEvent.pointerMove(plus(), { clientY: y(12) });
+    fireEvent.pointerMove(plus(), { clientY: y(14) });
+    fireEvent.pointerUp(plus(), { clientY: y(14) });
     expect(onPick).toHaveBeenCalledTimes(1);
     expect(onPick).toHaveBeenCalledWith(10, 14);
   });
@@ -56,27 +66,46 @@ describe('GutterAdd (тест 1 куска 8.4b)', () => {
     const diff = mountDiff();
     const onPick = vi.fn();
     render(<GutterAdd editor={diff.modified as never} lineCount={30} onPick={onPick} />);
-    const strip = screen.getByTestId('gutter-add');
-    fireEvent.pointerDown(strip, { clientY: y(14), button: 0 });
-    fireEvent.pointerMove(strip, { clientY: y(10) });
-    fireEvent.pointerUp(strip, { clientY: y(10) });
+    hover(diff, 14);
+    fireEvent.pointerDown(plus(), { clientY: y(14), button: 0 });
+    fireEvent.pointerMove(plus(), { clientY: y(10) });
+    fireEvent.pointerUp(plus(), { clientY: y(10) });
     expect(onPick).toHaveBeenLastCalledWith(10, 14);
 
-    fireEvent.pointerDown(strip, { clientY: y(3), button: 0 });
-    fireEvent.pointerUp(strip, { clientY: y(3) });
+    hover(diff, 3);
+    fireEvent.pointerDown(plus(), { clientY: y(3), button: 0 });
+    fireEvent.pointerUp(plus(), { clientY: y(3) });
     expect(onPick).toHaveBeenLastCalledWith(3, 3);
   });
 
-  it('за последней строкой «+» нет и протяжка ничего не ставит', () => {
+  it('за последней строкой «+» нет', () => {
     const diff = mountDiff();
     const onPick = vi.fn();
     render(<GutterAdd editor={diff.modified as never} lineCount={30} onPick={onPick} />);
-    const strip = screen.getByTestId('gutter-add');
-    fireEvent.pointerMove(strip, { clientY: y(40) });
+    hover(diff, 40);
     expect(screen.queryByRole('button', { name: 'Add note' })).toBeNull();
-    fireEvent.pointerDown(strip, { clientY: y(40), button: 0 });
-    fireEvent.pointerUp(strip, { clientY: y(40) });
     expect(onPick).not.toHaveBeenCalled();
+  });
+
+  it('оверлей указатель не перехватывает (кнопки Monaco под ним живы); «+» — только над номерами строк и пропадает с уходом мыши (fix-8.4b, п. 2)', () => {
+    const diff = mountDiff();
+    render(<GutterAdd editor={diff.modified as never} lineCount={30} onPick={vi.fn()} />);
+    const strip = screen.getByTestId('gutter-add');
+    expect(strip.className).toContain('pointer-events-none');
+
+    hover(diff, 5);
+    expect(plus().className).toContain('pointer-events-auto');
+    // Правее полосы номеров (текст строки) — «+» нет.
+    hover(diff, 5, 200);
+    expect(screen.queryByRole('button', { name: 'Add note' })).toBeNull();
+
+    hover(diff, 5);
+    const dom = (diff.modified as unknown as { getDomNode(): HTMLElement }).getDomNode();
+    // Мышь ушла с редактора на саму кнопку «+» — она остаётся; ушла совсем — пропадает.
+    fireEvent.pointerLeave(dom, { relatedTarget: plus() });
+    expect(plus()).toBeTruthy();
+    fireEvent.pointerLeave(plus(), { relatedTarget: document.body });
+    expect(screen.queryByRole('button', { name: 'Add note' })).toBeNull();
   });
 
   it('⌘⇧A — заметка на выделение редактора; без выделения — ничего', () => {

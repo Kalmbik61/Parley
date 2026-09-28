@@ -10,6 +10,11 @@
  *
  * Строка под указателем — по `getTopForLineNumber` и прокрутке редактора: между строкой и следующей
  * может стоять view zone (заметка, плашка скрытых строк) — над ней «+» нет.
+ *
+ * Сам оверлей указатель не ловит (раунд fix-8.4b, п. 2): растянутый на всю высоту, он закрывал
+ * кнопки Monaco в полосе номеров — «Show Unchanged Region» свёрнутого региона не нажималась.
+ * «+» ставит движение мыши над DOM редактора; указатель ловит только кнопка «+» — строка высотой в
+ * строку редактора и шириной в полосу номеров, с неё и начинается протяжка.
  * Оверлей только открывает поле: заметку сохраняет ⌘Enter, агенту её шлёт «Send» (рамка 15.1).
  */
 
@@ -131,27 +136,61 @@ export function GutterAdd({ editor, lineCount, side, onPick }: GutterAddProps): 
     return () => action.dispose();
   }, [editor]);
 
-  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
+  /** Строка под указателем над полосой номеров своей стороны; правее — текст строки, там «+» нет. */
+  const hit = (clientX: number, clientY: number): number | null => {
+    const left = strip.current?.getBoundingClientRect().left;
+    if (left === undefined || clientX < left || clientX >= left + box.width) return null;
+    return lineAt(clientY);
+  };
+  // Слушатели DOM редактора заводятся один раз — свежие размеры и строки через ref.
+  const hitRef = useRef(hit);
+  hitRef.current = hit;
+
+  /** Уход указателя на `to`: к своей кнопке или обратно в редактор — не уход. */
+  const leaves = (to: EventTarget | null, stay: Array<Element | null | undefined>): boolean =>
+    !(to instanceof Node && stay.some((element) => element?.contains(to) === true));
+
+  // Наведение — по движению мыши над DOM редактора: оверлей событий не получает.
+  useEffect(() => {
+    const dom = editor.getDomNode();
+    if (dom === null) return;
+    const onMove = (event: PointerEvent): void => {
+      if (dragRef.current !== null) return;
+      setHover(hitRef.current(event.clientX, event.clientY));
+    };
+    const onLeave = (event: PointerEvent): void => {
+      if (dragRef.current === null && leaves(event.relatedTarget, [strip.current])) setHover(null);
+    };
+    dom.addEventListener('pointermove', onMove);
+    dom.addEventListener('pointerleave', onLeave);
+    return () => {
+      dom.removeEventListener('pointermove', onMove);
+      dom.removeEventListener('pointerleave', onLeave);
+    };
+  }, [editor]);
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLElement>): void => {
     if (event.button !== 0) return;
     const line = lineAt(event.clientY);
     if (line === null) return;
-    // Мимо Monaco: иначе он начал бы выделение строк под оверлеем и забрал фокус.
+    // Мимо Monaco: иначе он начал бы выделение строк под кнопкой и забрал фокус.
     event.preventDefault();
     event.currentTarget.setPointerCapture?.(event.pointerId);
     setDrag({ from: line, to: line });
   };
 
-  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>): void => {
+  const onPointerMove = (event: ReactPointerEvent<HTMLElement>): void => {
     const line = lineAt(event.clientY);
     const current = dragRef.current;
     if (current !== null) {
       if (line !== null && line !== current.to) setDrag({ from: current.from, to: line });
       return;
     }
+    // Над самой кнопкой редактор движений не видит: строка — отсюда.
     setHover(line);
   };
 
-  const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>): void => {
+  const onPointerUp = (event: ReactPointerEvent<HTMLElement>): void => {
     const current = dragRef.current;
     if (current === null) return;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
@@ -172,14 +211,8 @@ export function GutterAdd({ editor, lineCount, side, onPick }: GutterAddProps): 
       ref={strip}
       data-testid="gutter-add"
       data-side={side}
-      className="absolute top-0 z-[5] cursor-pointer select-none"
+      className="pointer-events-none absolute top-0 z-[5] select-none"
       style={{ left: box.left, width: box.width, height: box.height }}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerLeave={() => {
-        if (dragRef.current === null) setHover(null);
-      }}
     >
       {band === null ? null : (
         <div
@@ -193,14 +226,26 @@ export function GutterAdd({ editor, lineCount, side, onPick }: GutterAddProps): 
           type="button"
           aria-label={S.notes.add}
           title={S.notes.add}
-          className="absolute right-0 flex items-center justify-center rounded-sm bg-primary text-primary-foreground shadow"
-          style={{ top: topOf(shown), width: lineHeight, height: lineHeight }}
+          className="pointer-events-auto absolute inset-x-0 flex cursor-pointer items-center justify-end"
+          style={{ top: topOf(shown), height: lineHeight }}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerLeave={(event) => {
+            if (dragRef.current === null && leaves(event.relatedTarget, [editor.getDomNode()])) setHover(null);
+          }}
           onClick={(event) => {
             // Мышь уже поставила заметку отпусканием; клик — только с клавиатуры (Enter, пробел).
             if (event.detail === 0) pickRef.current(shown, shown);
           }}
         >
-          <Plus className="size-3" aria-hidden="true" />
+          <span
+            aria-hidden="true"
+            className="flex items-center justify-center rounded-sm bg-primary text-primary-foreground shadow"
+            style={{ width: lineHeight, height: lineHeight }}
+          >
+            <Plus className="size-3" />
+          </span>
         </button>
       )}
     </div>

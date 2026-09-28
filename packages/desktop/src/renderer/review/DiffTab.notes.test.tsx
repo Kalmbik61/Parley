@@ -178,9 +178,15 @@ function renderTab(tab = branchTab(), entry = work()): ReturnType<typeof render>
 function drag(root: HTMLElement, side: 'modified' | 'original', from: number, to: number): void {
   const strip = root.querySelector<HTMLElement>(`[data-testid="gutter-add"][data-side="${side}"]`);
   if (strip === null) throw new Error(`нет гаттера ${side}`);
-  fireEvent.pointerDown(strip, { clientY: (from - 1) * 20 + 10, button: 0 });
-  fireEvent.pointerMove(strip, { clientY: (to - 1) * 20 + 10 });
-  fireEvent.pointerUp(strip, { clientY: (to - 1) * 20 + 10 });
+  // Наведение — над DOM стороны редактора (оверлей указатель не ловит, fix-8.4b п. 2), протяжка — с «+».
+  const dom = root.querySelector<HTMLElement>(`div[data-side="${side}"] > [data-testid="monaco-zone-host"]`);
+  if (dom === null) throw new Error(`нет редактора ${side}`);
+  fireEvent.pointerMove(dom, { clientX: 10, clientY: (from - 1) * 20 + 10 });
+  const plus = strip.querySelector<HTMLElement>('button');
+  if (plus === null) throw new Error(`нет «+» ${side}`);
+  fireEvent.pointerDown(plus, { clientY: (from - 1) * 20 + 10, button: 0 });
+  fireEvent.pointerMove(plus, { clientY: (to - 1) * 20 + 10 });
+  fireEvent.pointerUp(plus, { clientY: (to - 1) * 20 + 10 });
 }
 
 function answers(...results: SendResult[]): void {

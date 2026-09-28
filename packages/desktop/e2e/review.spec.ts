@@ -195,6 +195,95 @@ test.describe('ревью изменений: заметки, коммит, сл
     expect(problems).toEqual([]);
   });
 
+  test('fix-8.4b п. 2: свёрнутый регион разворачивается кнопкой Monaco «Show Unchanged Region» — гаттер заметок её не закрывает (обе стороны); «+» и протяжка работают', async () => {
+    test.setTimeout(120_000);
+    // Длинный файл в базе до создания сессии: правка одной строки в ветке — остальное свёрнуто.
+    const long = Array.from({ length: 60 }, (_, i) => `export const w${i + 1} = ${i + 1};`);
+    await writeFile(path.join(project, 'src', 'long.ts'), `${long.join('\n')}\n`);
+    git(project, 'add', '-A');
+    git(project, 'commit', '-q', '-m', 'long');
+    const { app: electronApp, window, sessionId, worktree } = await start();
+    // Две колонки: у узкого окна Monaco сам рисует одну (useInlineViewWhenSpaceIsLimited).
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 2000, height: 1000 }));
+    const problems: string[] = [];
+    window.on('pageerror', (error) => problems.push(`pageerror: ${error.message}`));
+    window.on('console', (message) => {
+      if (message.type() === 'error') problems.push(`console.error: ${message.text()}`);
+    });
+    await window.locator(`[data-session-id="${sessionId}"]`).first().click();
+    await expect.poll(() => screenText(window)).toContain('stub-echo готов');
+    await window.waitForTimeout(300);
+
+    const edited = [...long];
+    edited[2] = 'export const w3 = 333;';
+    await writeFile(path.join(worktree, 'src', 'long.ts'), `${edited.join('\n')}\n`);
+    const panel = await openChanges(window);
+    const uncommitted = panel.getByRole('region', { name: 'Uncommitted' });
+    await expect(uncommitted.getByRole('button', { name: /long\.ts/ })).toHaveCount(1, { timeout: 10_000 });
+    await uncommitted.getByRole('button', { name: /long\.ts/ }).click();
+
+    const tab = window.getByTestId('diff-tab').filter({ visible: true });
+    const section = tab.locator('[data-diff-path="src/long.ts"]');
+    const modified = section.locator('.monaco-diff-editor .editor.modified');
+    const original = section.locator('.monaco-diff-editor .editor.original');
+    await expect(modified.locator('.lines-content > .view-lines')).toContainText('333');
+    await expect(section.locator('[data-testid="gutter-add"][data-side="original"]')).toHaveCount(1);
+    const unfold = modified.locator('.diff-hidden-lines [title="Show Unchanged Region"]');
+    await expect(unfold.first()).toBeVisible();
+
+    // Ни одна кнопка плашек свёрнутых регионов (обе стороны) не накрыта гаттером заметок.
+    const covered = await section.evaluate((root) =>
+      Array.from(root.querySelectorAll<HTMLElement>('.diff-hidden-lines a, .diff-hidden-lines [role="button"], .diff-hidden-lines .center'))
+        .map((element) => {
+          const box = element.getBoundingClientRect();
+          const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+          return top?.closest('[data-testid="gutter-add"]') === null || top === null ? null : element.className || element.tagName;
+        })
+        .filter((name) => name !== null),
+    );
+    expect(covered).toEqual([]);
+
+    // Обычный клик по кнопке Monaco разворачивает регион: строка 30 (была свёрнута) видна, плашки нет.
+    await expect(modified.locator('.lines-content > .view-lines')).not.toContainText('export const w30 = 30;');
+    await unfold.first().click({ timeout: 5_000 });
+    await expect(modified.locator('.lines-content > .view-lines')).toContainText('export const w30 = 30;');
+    await expect(modified.locator('.diff-hidden-lines')).toHaveCount(0);
+
+    // «+» стороны original — наведением на номер строки.
+    const originalStrip = section.locator('[data-testid="gutter-add"][data-side="original"]');
+    const originalNumber = original.locator('.line-numbers').filter({ hasText: /^\s*5\s*$/ }).first();
+    const [originalStripBox, originalNumberBox] = await Promise.all([originalStrip.boundingBox(), originalNumber.boundingBox()]);
+    if (originalStripBox === null || originalNumberBox === null) throw new Error('нет гаттера или номера строки original');
+    await window.mouse.move(originalStripBox.x + originalStripBox.width / 2, originalNumberBox.y + originalNumberBox.height / 2);
+    await expect(originalStrip.getByRole('button', { name: 'Add note' })).toBeVisible();
+
+    // Протяжка по «+» стороны modified со строки 5 до 7 — заметка на диапазон.
+    const strip = section.locator('[data-testid="gutter-add"][data-side="modified"]');
+    const numberBox = async (line: number): Promise<{ x: number; y: number }> => {
+      const [stripBox, box] = await Promise.all([strip.boundingBox(), modified.locator('.line-numbers').filter({ hasText: new RegExp(`^\\s*${line}\\s*$`) }).first().boundingBox()]);
+      if (stripBox === null || box === null) throw new Error(`нет гаттера или номера строки ${line}`);
+      return { x: stripBox.x + stripBox.width / 2, y: box.y + box.height / 2 };
+    };
+    const from = await numberBox(5);
+    const to = await numberBox(7);
+    await window.mouse.move(from.x, from.y);
+    await expect(strip.getByRole('button', { name: 'Add note' })).toBeVisible();
+    await window.mouse.down();
+    await window.mouse.move(to.x, to.y, { steps: 4 });
+    await window.mouse.up();
+    const field = section.getByPlaceholder('Note for the agent — ⌘Enter to save');
+    await expect(field).toBeFocused();
+    await field.fill('Range note');
+    await window.keyboard.press('Meta+Enter');
+    const zone = section.getByTestId('note-zone');
+    await expect(zone).toContainText('Range note');
+    await zone.getByRole('button', { name: /^Send/ }).click();
+    await expect(zone).toContainText('Sent to S01 ·', { timeout: 10_000 });
+    await window.locator(`[role="tab"][data-tab-id="terminal:${sessionId}"]`).click();
+    await expect.poll(() => screenText(window), { timeout: 10_000 }).toContain('Lines: 5-7');
+    expect(problems).toEqual([]);
+  });
+
   test('коммит из Changes → Uncommitted пуст, файл в Branch changes; Merge into main с подтверждением → merge-коммит в базе', async () => {
     test.setTimeout(120_000);
     const { window, worktree, branch } = await start();
