@@ -230,6 +230,18 @@ describe('installBrowserGuard (тест 4)', () => {
     expect(guest.stop).toHaveBeenCalledTimes(1);
   });
 
+  it('did-start-navigation подфрейма на file: — stop() всей страницы; data: подфрейма — нет (ревью 9.1)', () => {
+    const guard = setupGuard();
+    const guest = fakeContents(42, 'webview');
+    guard.created(guest);
+
+    // Остановить один подфрейм Electron не умеет: stop() останавливает всю страницу — осознанно.
+    guest.emit('did-start-navigation', fakeEvent({ url: 'data:text/html,x', isMainFrame: false }));
+    expect(guest.stop).not.toHaveBeenCalled();
+    guest.emit('did-start-navigation', fakeEvent({ url: 'file:///etc/hosts', isMainFrame: false }));
+    expect(guest.stop).toHaveBeenCalledTimes(1);
+  });
+
   it('гость: setZoomMode(isolated), will-prevent-unload — preventDefault, forwardShortcuts с ним', () => {
     const guard = setupGuard();
     const guest = fakeContents(42, 'webview');
