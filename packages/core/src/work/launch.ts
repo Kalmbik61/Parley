@@ -27,7 +27,6 @@ import { writeWorkSettings } from './settings-file.js';
 import {
   createWork,
   deleteSessionFiles,
-  deleteWorkFiles,
   readMap,
   updateMap,
   workPaths,
@@ -324,33 +323,6 @@ export async function applyAutoTitle(
   });
 }
 
-/**
- * Возобновление из истории провайдера: сессия `~/.claude` регистрируется в
- * текущей работе (дизайн TUI v2, 5.3). Она уже жила, поэтому заводится сразу
- * `active`, и её история начинается с этого перехода — `pending` у неё не было.
- * Метрики считаются по всему транскрипту: `providerSessionId` указывает на весь
- * лог, включая часть до регистрации.
- */
-export async function registerResumed(
-  projectPath: string,
-  workId: string,
-  providerSessionId: string,
-  label: string,
-  at: string = new Date().toISOString(),
-): Promise<WorkSession> {
-  let created: WorkSession | undefined;
-  await updateMap(projectPath, workId, (map) => {
-    const session = addSession(map, { provider: 'claude', label, task: '' }, at);
-    session.lifecycle = 'active';
-    session.history = [{ event: 'active', at }];
-    session.startedAt = at;
-    session.providerSessionId = providerSessionId;
-    created = session;
-  });
-  if (created === undefined) throw new Error(`сессия в работе ${workId} не создана`);
-  return created;
-}
-
 /** Новая сессия работы: запись `pending` и бриф по общему шаблону (раздел 5). */
 export async function createPendingSession(
   projectPath: string,
@@ -381,10 +353,6 @@ export async function deleteSession(
   });
   await deleteSessionFiles(projectPath, workId, sessionId);
 }
-
-/** Работа целиком: каталог с артефактами и запись индекса; PTY закрывает панель. */
-export const deleteWork = (projectPath: string, workId: string): Promise<void> =>
-  deleteWorkFiles(projectPath, workId);
 
 /** Процесс, поднятый харнессом: по нему проверяется живость после перезапуска (5.4). */
 export interface StartedProcess {

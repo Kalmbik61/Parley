@@ -255,17 +255,6 @@ export function printCommand(
   };
 }
 
-/** Команда и аргументы для запуска сессии провайдера в PTY. */
-export function runnerCommand(
-  provider: Provider,
-  sessionId?: string,
-): { command: string; args: string[] } {
-  const entry = PROVIDERS[provider];
-  return sessionId === undefined
-    ? startCommand(entry)
-    : resumeCommand(entry, { providerSessionId: sessionId });
-}
-
 /**
  * Что именно запускается вместо команды провайдера. Оверрайд нужен
  * нестандартным установкам и тестам, где вместо настоящего агента стоит stub;

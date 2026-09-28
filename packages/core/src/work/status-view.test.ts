@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { displayStatus, historyStatus } from './status-view.js';
+import { displayStatus } from './status-view.js';
 import type { SessionLifecycle, SessionResult, SessionStatus } from './types.js';
 
 describe('displayStatus', () => {
@@ -21,18 +21,5 @@ describe('displayStatus', () => {
 
   it.each(table)('%s + %s → %s', (lifecycle, result, expected) => {
     expect(displayStatus({ lifecycle, result })).toBe(expected);
-  });
-});
-
-describe('historyStatus', () => {
-  it.each([
-    ['pending', 'pending'],
-    ['active', 'active'],
-    ['sleeping', 'exited'],
-    ['closed', 'exited'],
-    ['done', 'done'],
-    ['failed', 'failed'],
-  ] as const)('%s → %s', (event, expected) => {
-    expect(historyStatus({ event })).toBe(expected);
   });
 });
