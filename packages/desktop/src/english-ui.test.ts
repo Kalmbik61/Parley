@@ -122,6 +122,12 @@ describe('english-ui: страж кириллицы в интерфейсе ок
     const report = violations.map((v) => `${v.file}:${v.line} — ${v.text}`).join('\n');
     expect(violations, report).toEqual([]);
   });
+
+  // Язык документа читают экранный диктор и проверка орфографии полей (ревью M9): окно по-английски.
+  it('renderer/index.html объявляет lang="en"', () => {
+    const html = readFileSync(path.join(srcRoot, 'renderer', 'index.html'), 'utf8');
+    expect(html).toMatch(/<html\s+lang="en"\s*>/);
+  });
 });
 
 describe('scanDir: сам сканер (временный каталог)', () => {
