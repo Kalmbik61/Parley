@@ -1956,6 +1956,10 @@ interface DiffNote {
   Фоновое чтение раз в 2 с не берёт `index.lock` рядом с агентом и человеком и не трогает
   индекс: неотслеживаемые — `git ls-files --others --exclude-standard -z`, их числа —
   `git diff --no-index --numstat`, а не `git add -N`.
+  Чтения git для диффа — хоста (`worktrees.diff`, `changes.project`) и main
+  (`files.gitShow`, `files.gitCommitFiles`, `files.gitStatus`) — идут с
+  `-c diff.autoRefreshIndex=false` и `--no-optional-locks`: индекс человека не
+  переписывается.
 - **`worktreeDiff` в core** получает `mergeBase` (уже вычисляется). `files` строятся
   заново: `git diff -M --name-status -z mergeBase` и `--numstat -z` по рабочему дереву
   плюс неотслеживаемые. `uncommittedPaths` — `git status --porcelain=v1 -z`. Ещё
