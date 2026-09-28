@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
@@ -623,10 +623,15 @@ test.describe('редактор файла на собранном окне', ()
           request.onloadend = () => resolve((request.response as ArrayBuffer | null)?.byteLength ?? -1);
           request.send();
         });
-      return [await read('pdfjs/cmaps/UniJIS-UCS2-H.bcmap'), await read('pdfjs/standard_fonts/LiberationSans-Regular.ttf')];
+      return [await read('pdfjs/cmaps/UniJIS-UCS2-H.bcmap'), await read('pdfjs/standard_fonts/FoxitSymbol.pfb')];
     });
     expect(sizes[0]).toBeGreaterThan(0);
     expect(sizes[1]).toBeGreaterThan(0);
+    // Шрифтов Liberation (GPL) в сборке нет (fix-7.5): Helvetica без встраивания pdf.js рисует
+    // системным шрифтом — текст страницы выше виден, ни ошибок, ни предупреждений.
+    const fonts = await readdir(path.resolve(dirname, '../out/renderer/pdfjs/standard_fonts'));
+    expect(fonts.filter((name) => /liberation/i.test(name))).toEqual([]);
+    expect(fonts).toContain('LICENSE_FOXIT');
 
     await window.waitForTimeout(1000);
     expect(await cspViolations(window)).toEqual([]);

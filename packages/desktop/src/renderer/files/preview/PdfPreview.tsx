@@ -129,6 +129,8 @@ export function PdfPreview({ bytes }: PdfPreviewProps): JSX.Element {
           cMapUrl: assetDirUrl('cmaps'),
           cMapPacked: true,
           standardFontDataUrl: assetDirUrl('standard_fonts'),
+          // Liberation в сборке нет (fix-7.5): Helvetica и Times без встраивания — системными шрифтами.
+          useSystemFonts: true,
           verbosity: runtime.pdfjs.VerbosityLevel.ERRORS,
         };
         const task = runtime.pdfjs.getDocument(params);

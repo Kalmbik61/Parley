@@ -14,10 +14,16 @@ const dirname = fileURLToPath(new URL('.', import.meta.url));
  * `pdfjs-dist` — в сборку рендерера под `pdfjs/`, рядом с `index.html`. Без них CJK и стандартные
  * шрифты рисуются неверно, а CDN окно не использует. В `pnpm dev:desktop` те же файлы отдаёт
  * dev-сервер по тем же адресам.
+ *
+ * Шрифты Liberation (`LiberationSans-*`, GPLv2 с исключением для шрифтов) не копируются (fix-7.5):
+ * GPL в `.app` не берём, а pdf.js в окне их и не просит — с `useSystemFonts` Helvetica без
+ * встраивания он рисует системным шрифтом. Шрифты Foxit (BSD-3) нужны для Symbol и ZapfDingbats.
  */
 function pdfjsAssets(): Plugin {
   const root = dirOf(createRequire(import.meta.url).resolve('pdfjs-dist/package.json'));
   const dirs = ['cmaps', 'standard_fonts'];
+  const shipped = (dir: string): string[] =>
+    readdirSync(join(root, dir)).filter((name) => !/^(LiberationSans-|LICENSE_LIBERATION$)/.test(name));
   return {
     name: 'harnas-pdfjs-assets',
     configureServer(server) {
@@ -25,7 +31,7 @@ function pdfjsAssets(): Plugin {
         const match = /^\/pdfjs\/(cmaps|standard_fonts)\/([\w.-]+)$/.exec(request.url?.split('?')[0] ?? '');
         const dir = match?.[1];
         const name = match?.[2];
-        if (dir === undefined || name === undefined || !readdirSync(join(root, dir)).includes(name)) {
+        if (dir === undefined || name === undefined || !shipped(dir).includes(name)) {
           next();
           return;
         }
@@ -35,9 +41,8 @@ function pdfjsAssets(): Plugin {
     },
     generateBundle() {
       for (const dir of dirs) {
-        // Вместе с LICENSE* каталога: шрифты Liberation идут под GPLv2 с исключением для шрифтов,
-        // и её текст должен лежать рядом с ними (NOTICE).
-        for (const name of readdirSync(join(root, dir))) {
+        // Вместе с LICENSE* каталога: текст лицензии лежит рядом со своими файлами (NOTICE).
+        for (const name of shipped(dir)) {
           this.emitFile({ type: 'asset', fileName: `pdfjs/${dir}/${name}`, source: readFileSync(join(root, dir, name)) });
         }
       }

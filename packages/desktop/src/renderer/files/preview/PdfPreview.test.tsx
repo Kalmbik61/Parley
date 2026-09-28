@@ -112,6 +112,8 @@ describe('PdfPreview, подставной getDocument (тест 5)', () => {
     expect(String(params?.cMapUrl)).not.toMatch(/cdn|unpkg|jsdelivr/);
     expect(String(params?.standardFontDataUrl)).toMatch(/pdfjs\/standard_fonts\/$/);
     expect(params?.useWasm).toBe(false);
+    // Стандартные шрифты без встраивания — системные: Liberation в сборке нет (fix-7.5).
+    expect(params?.useSystemFonts).toBe(true);
   });
 
   it('ссылка аннотации https — вкладка встроенного браузера, переход окна погашен; file:///etc/passwd и javascript: — ничего', async () => {
