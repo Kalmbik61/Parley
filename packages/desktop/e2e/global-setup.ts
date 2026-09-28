@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { stopHost } from './stop-host.js';
@@ -14,6 +14,15 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   const dir = await mkdtemp(path.join(tmpdir(), 'harnas-e2e-run-'));
   const list = path.join(dir, 'homes');
   process.env[RUN_HOMES_ENV] = list;
+  // Хост каждого теста строит индекс истории агентов (раунд lane-r3, п. 1): пустые корни
+  // прогона вместо `~/.claude/projects` и `~/.codex/sessions` — тесты не читают историю
+  // человека, и хост не занят её гигабайтами в первые секунды теста.
+  const claudeHistory = path.join(dir, 'claude-projects');
+  const codexHistory = path.join(dir, 'codex-sessions');
+  await mkdir(claudeHistory);
+  await mkdir(codexHistory);
+  process.env.HARNAS_CLAUDE_PROJECTS_DIR = claudeHistory;
+  process.env.HARNAS_CODEX_SESSIONS_DIR = codexHistory;
 
   return async () => {
     const homes = (await readFile(list, 'utf8').catch(() => ''))

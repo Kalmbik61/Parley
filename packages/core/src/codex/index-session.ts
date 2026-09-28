@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { Counter, oneLine, tokenCount, type TokenTotals } from '../counters.js';
 import { forEachJsonlRecord, type RawRecord } from '../jsonl.js';
+import { INDEX_READ_CONCURRENCY, mapLimited } from '../map-limited.js';
 import type { SessionIndex } from '../session-index.js';
 import { defaultCodexRoot, discoverCodexSessions } from './discover.js';
 
@@ -173,7 +174,8 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
 /** Индекс всех сессий Codex, свежие первыми. */
 export async function buildCodexIndex(root: string = defaultCodexRoot()): Promise<SessionIndex[]> {
   const discovered = await discoverCodexSessions(root);
-  const index = await Promise.all(discovered.map((session) => indexCodexSession(session.file)));
+  // Не больше INDEX_READ_CONCURRENCY файлов разом — как у истории Claude (lane-r3, п. 1).
+  const index = await mapLimited(discovered, INDEX_READ_CONCURRENCY, (session) => indexCodexSession(session.file));
   index.sort((a, b) => String(b.endedAt ?? '').localeCompare(String(a.endedAt ?? '')));
   return index;
 }
