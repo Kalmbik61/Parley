@@ -166,8 +166,7 @@ export function App(): JSX.Element {
   // Конфигурация хранится здесь ради терминала — панелям нужны живые
   // `fontFamily`/`fontSize` как значения, а не как CSS-переменные: xterm
   // красит канвой. Тему окна (тёмная/светлая) панели берут из `useUiStore`
-  // напрямую (кусок 1.3 плана окна, спека 4.7); ключ `config.theme` — это
-  // палитра TUI, окно её с куска 1.4 не читает и не показывает (спека 4.9).
+  // напрямую (кусок 1.3 плана окна, спека 4.7).
   const [config, setConfig] = useState<HarnasConfig | null>(null);
 
   const activeWorkKey = useLayoutStore((state) => state.activeWorkKey);

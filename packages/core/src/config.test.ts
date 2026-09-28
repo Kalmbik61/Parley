@@ -1,4 +1,4 @@
-/** Чек-лист приёмки TUI v2, пункт 14: дефолты / файл / env и битый JSON. */
+/** Настройки: дефолты / файл / env, битый JSON и старые ключи ушедшего TUI. */
 
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -25,16 +25,11 @@ describe('loadConfig', () => {
     const loaded = await loadConfig(file(), {});
 
     expect(loaded.config).toEqual({
-      prefix: 'q',
-      sidebarWidth: 26,
-      mouseCapture: true,
-      ascii: false,
       silenceThresholdMs: 30_000,
       channelPush: true,
       messageRate: 20,
       resumeRate: 6,
       autoLaunch: true,
-      theme: 'mocha',
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/harnas/worktrees',
@@ -45,10 +40,6 @@ describe('loadConfig', () => {
 
   it('файл перекрывает дефолты, окружение — файл', async () => {
     await write({
-      prefix: 'w',
-      sidebarWidth: 18,
-      mouseCapture: false,
-      ascii: true,
       silenceThresholdMs: 5000,
       channelPush: false,
       messageRate: 5,
@@ -57,16 +48,11 @@ describe('loadConfig', () => {
 
     const fromFile = await loadConfig(file(), {});
     expect(fromFile.config).toEqual({
-      prefix: 'w',
-      sidebarWidth: 18,
-      mouseCapture: false,
-      ascii: true,
       silenceThresholdMs: 5000,
       channelPush: false,
       messageRate: 5,
       resumeRate: 6,
       autoLaunch: false,
-      theme: 'mocha',
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/harnas/worktrees',
@@ -74,26 +60,17 @@ describe('loadConfig', () => {
     expect(fromFile.warning).toBeNull();
 
     const fromEnv = await loadConfig(file(), {
-      HARNAS_PREFIX: 'a',
-      HARNAS_SIDEBAR_WIDTH: '30',
-      HARNAS_MOUSE: '1',
-      HARNAS_ASCII: '0',
       HARNAS_SILENCE_MS: '60000',
       HARNAS_CHANNEL_PUSH: '1',
       HARNAS_MESSAGE_RATE: '7',
       HARNAS_AUTO_LAUNCH: '1',
     });
     expect(fromEnv.config).toEqual({
-      prefix: 'a',
-      sidebarWidth: 30,
-      mouseCapture: true,
-      ascii: false,
       silenceThresholdMs: 60_000,
       channelPush: true,
       messageRate: 7,
       resumeRate: 6,
       autoLaunch: true,
-      theme: 'mocha',
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/harnas/worktrees',
@@ -145,9 +122,9 @@ describe('loadConfig', () => {
   });
 
   it('пустая переменная — то же, что незаданная', async () => {
-    await write({ prefix: 'w' });
+    await write({ messageRate: 5 });
 
-    expect((await loadConfig(file(), { HARNAS_PREFIX: '' })).config.prefix).toBe('w');
+    expect((await loadConfig(file(), { HARNAS_MESSAGE_RATE: '' })).config.messageRate).toBe(5);
   });
 
   it('битый JSON — дефолты и предупреждение', async () => {
@@ -167,25 +144,25 @@ describe('loadConfig', () => {
   });
 
   it('битое поле остаётся дефолтным, остальные читаются', async () => {
-    await write({ prefix: 'префикс', sidebarWidth: 0, ascii: true });
+    await write({ silenceThresholdMs: -1, fontSize: 99, autoLaunch: false });
     const loaded = await loadConfig(file(), {});
 
-    expect(loaded.config.prefix).toBe(DEFAULT_CONFIG.prefix);
-    expect(loaded.config.sidebarWidth).toBe(DEFAULT_CONFIG.sidebarWidth);
-    expect(loaded.config.ascii).toBe(true);
-    expect(loaded.warning).toContain('prefix');
-    expect(loaded.warning).toContain('sidebarWidth');
+    expect(loaded.config.silenceThresholdMs).toBe(DEFAULT_CONFIG.silenceThresholdMs);
+    expect(loaded.config.fontSize).toBe(DEFAULT_CONFIG.fontSize);
+    expect(loaded.config.autoLaunch).toBe(false);
+    expect(loaded.warning).toContain('silenceThresholdMs');
+    expect(loaded.warning).toContain('fontSize');
   });
 
   it('битая переменная окружения не отменяет остальные', async () => {
     const loaded = await loadConfig(file(), {
-      HARNAS_SIDEBAR_WIDTH: 'широкий',
-      HARNAS_MOUSE: 'off',
+      HARNAS_SILENCE_MS: 'долго',
+      HARNAS_AUTO_LAUNCH: 'off',
     });
 
-    expect(loaded.config.sidebarWidth).toBe(DEFAULT_CONFIG.sidebarWidth);
-    expect(loaded.config.mouseCapture).toBe(false);
-    expect(loaded.warning).toContain('HARNAS_SIDEBAR_WIDTH');
+    expect(loaded.config.silenceThresholdMs).toBe(DEFAULT_CONFIG.silenceThresholdMs);
+    expect(loaded.config.autoLaunch).toBe(false);
+    expect(loaded.warning).toContain('HARNAS_SILENCE_MS');
   });
 
   it('потолок писем меньше единицы — жалоба и дефолт, остальные поля целы', async () => {
@@ -211,8 +188,8 @@ describe('loadConfig', () => {
     expect(loaded.config).toEqual(DEFAULT_CONFIG);
     expect(loaded.warning).toBeNull();
 
-    await saveConfig({ prefix: 'a' }, file());
-    expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({ threadWidth: 20, prefix: 'a' });
+    await saveConfig({ messageRate: 5 }, file());
+    expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({ threadWidth: 20, messageRate: 5 });
   });
 
   it('устаревшая переменная HARNAS_THREAD_WIDTH не даёт жалобы (кусок 4: док ушёл)', async () => {
@@ -222,58 +199,66 @@ describe('loadConfig', () => {
     expect(loaded.fromEnv).toEqual([]);
   });
 
-  it('HARNAS_ESCAPE_KEY больше не читается', async () => {
-    const loaded = await loadConfig(file(), { HARNAS_ESCAPE_KEY: 'w' });
+  it('старый config.json с ключами TUI грузится как раньше: без жалобы, остальные поля целы', async () => {
+    // Файл, который писал TUI: его ключи окну не нужны, но и ломать запуск они не должны.
+    await write({
+      prefix: 'w',
+      sidebarWidth: 18,
+      mouseCapture: false,
+      ascii: true,
+      theme: 'nord',
+      messageRate: 5,
+      autoLaunch: false,
+    });
+    const loaded = await loadConfig(file(), {});
 
-    expect(loaded.config.prefix).toBe('q');
+    expect(loaded.config).toEqual({ ...DEFAULT_CONFIG, messageRate: 5, autoLaunch: false });
+    expect(loaded.warning).toBeNull();
+    expect(loaded.fromEnv).toEqual([]);
+  });
+
+  it('старые ключи TUI с битыми значениями тоже не дают жалобы', async () => {
+    // Раньше такие значения давали предупреждение; теперь ключи чужие и не проверяются.
+    await write({ prefix: 'префикс', sidebarWidth: 0, theme: 'неон', channelPush: false });
+    const loaded = await loadConfig(file(), {});
+
+    expect(loaded.config).toEqual({ ...DEFAULT_CONFIG, channelPush: false });
     expect(loaded.warning).toBeNull();
   });
 
-  it('theme: имя читается из файла', async () => {
-    await write({ theme: 'nord' });
-    const loaded = await loadConfig(file(), {});
+  it('переменные TUI (HARNAS_PREFIX, HARNAS_THEME и др.) больше не читаются и не дают жалобы', async () => {
+    const loaded = await loadConfig(file(), {
+      HARNAS_PREFIX: 'a',
+      HARNAS_SIDEBAR_WIDTH: 'широкий',
+      HARNAS_MOUSE: '0',
+      HARNAS_ASCII: 'мимо',
+      HARNAS_THEME: 'неон',
+      HARNAS_ESCAPE_KEY: 'w',
+    });
 
-    expect(loaded.config.theme).toBe('nord');
+    expect(loaded.config).toEqual(DEFAULT_CONFIG);
     expect(loaded.warning).toBeNull();
+    expect(loaded.fromEnv).toEqual([]);
   });
 
-  it('theme: HARNAS_THEME перекрывает файл и попадает в fromEnv', async () => {
-    await write({ theme: 'nord' });
-    const loaded = await loadConfig(file(), { HARNAS_THEME: 'gruvbox' });
+  it('saveConfig сохраняет старые ключи TUI в файле нетронутыми', async () => {
+    await write({ prefix: 'w', theme: 'nord', sidebarWidth: 18 });
+    await saveConfig({ autoLaunch: false }, file());
 
-    expect(loaded.config.theme).toBe('gruvbox');
-    expect(loaded.fromEnv).toContain('theme');
-  });
-
-  it('theme: неизвестное имя в файле — дефолт и жалоба, остальные поля целы', async () => {
-    await write({ theme: 'неон', prefix: 'w' });
-    const loaded = await loadConfig(file(), {});
-
-    expect(loaded.config.theme).toBe(DEFAULT_CONFIG.theme);
-    expect(loaded.config.prefix).toBe('w');
-    expect(loaded.warning).toContain('theme');
-  });
-
-  it('theme: неизвестное имя в HARNAS_THEME — дефолт и жалоба, ключа нет в fromEnv', async () => {
-    const loaded = await loadConfig(file(), { HARNAS_THEME: 'неон' });
-
-    expect(loaded.config.theme).toBe(DEFAULT_CONFIG.theme);
-    expect(loaded.warning).toContain('HARNAS_THEME');
-    expect(loaded.fromEnv).not.toContain('theme');
-  });
-
-  it('пустая HARNAS_THEME — то же самое, что незаданная', async () => {
-    await write({ theme: 'nord' });
-
-    expect((await loadConfig(file(), { HARNAS_THEME: '' })).config.theme).toBe('nord');
+    expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({
+      prefix: 'w',
+      theme: 'nord',
+      sidebarWidth: 18,
+      autoLaunch: false,
+    });
   });
 
   it('сообщает, какие ключи пришли из окружения', async () => {
-    await write({ prefix: 'w' });
-    const loaded = await loadConfig(file(), { HARNAS_MOUSE: '0', HARNAS_ASCII: 'мимо' });
+    await write({ messageRate: 5 });
+    const loaded = await loadConfig(file(), { HARNAS_AUTO_LAUNCH: '0', HARNAS_CHANNEL_PUSH: 'мимо' });
 
     // Битая переменная ключ не перекрывает — и в список не попадает.
-    expect(loaded.fromEnv).toEqual(['mouseCapture']);
+    expect(loaded.fromEnv).toEqual(['autoLaunch']);
   });
 
   it('без окружения список пуст', async () => {
@@ -293,17 +278,12 @@ describe('loadConfig', () => {
 });
 
 describe('parseSetting', () => {
-  it('prefix — один знак', () => {
-    expect(parseSetting('prefix', 'w')).toEqual({ value: 'w' });
-    expect(parseSetting('prefix', 'ww')).toEqual({ error: 'prefix: ожидается один знак' });
-  });
-
   it('числа — целое больше нуля', () => {
-    expect(parseSetting('sidebarWidth', '30')).toEqual({ value: 30 });
+    expect(parseSetting('silenceThresholdMs', '30')).toEqual({ value: 30 });
     expect(parseSetting('silenceThresholdMs', '0')).toEqual({
       error: 'silenceThresholdMs: ожидается целое больше нуля',
     });
-    expect(parseSetting('sidebarWidth', '2.5')).toMatchObject({ error: expect.any(String) });
+    expect(parseSetting('silenceThresholdMs', '2.5')).toMatchObject({ error: expect.any(String) });
   });
 
   it('messageRate — теми же правилами, что и у файла', () => {
@@ -329,13 +309,8 @@ describe('parseSetting', () => {
 
   it('булевы ключи — те же множества да/нет, что у окружения', () => {
     expect(parseSetting('autoLaunch', 'yes')).toEqual({ value: true });
-    expect(parseSetting('mouseCapture', '0')).toEqual({ value: false });
-    expect(parseSetting('ascii', 'мимо')).toEqual({ error: 'ascii: ожидается 0 или 1' });
-  });
-
-  it('theme — только из THEME_NAMES', () => {
-    expect(parseSetting('theme', 'nord')).toEqual({ value: 'nord' });
-    expect(parseSetting('theme', 'неон')).toMatchObject({ error: expect.any(String) });
+    expect(parseSetting('channelPush', '0')).toEqual({ value: false });
+    expect(parseSetting('channelPush', 'мимо')).toEqual({ error: 'channelPush: ожидается 0 или 1' });
   });
 
   it('fontFamily — непустая строка', () => {
@@ -362,16 +337,16 @@ describe('saveConfig', () => {
   });
 
   it('сохраняет чужие ключи и перекрывает свой', async () => {
-    await write({ prefix: 'w', comment: 'моё' });
-    await saveConfig({ prefix: 'a' }, file());
+    await write({ messageRate: 5, comment: 'моё' });
+    await saveConfig({ messageRate: 7 }, file());
 
-    expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({ prefix: 'a', comment: 'моё' });
+    expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({ messageRate: 7, comment: 'моё' });
   });
 
   it('битый файл перезаписывается целиком', async () => {
     await write('{ не json');
-    await saveConfig({ ascii: true }, file());
+    await saveConfig({ autoLaunch: true }, file());
 
-    expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({ ascii: true });
+    expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({ autoLaunch: true });
   });
 });

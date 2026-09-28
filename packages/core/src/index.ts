@@ -183,13 +183,12 @@ export type {
 export {
   DEFAULT_CONFIG,
   ENV_NAMES,
-  THEME_NAMES,
   configPath,
   loadConfig,
   parseSetting,
   saveConfig,
 } from './config.js';
-export type { HarnasConfig, LoadedConfig, TypedSettingKey } from './config.js';
+export type { HarnasConfig, LoadedConfig } from './config.js';
 export { activityOf, hookedSince } from './work/activity.js';
 export type {
   Activity,
