@@ -123,7 +123,7 @@ function renderWork(active = true): ReturnType<typeof render> {
   return render(
     <div data-testid="work-container">
       <LayoutView workKey={WORK_KEY} active={active} bridge={bridge} fontFamily="Menlo" fontSize={13} />
-      <SurfaceLayer workKey={WORK_KEY} active={active} bridge={bridge} fontFamily="Menlo" fontSize={13} />
+      <SurfaceLayer workKey={WORK_KEY} active={active} bridge={bridge} fontFamily="Menlo" fontSize={13} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />
     </div>,
   );
 }
@@ -299,7 +299,7 @@ describe('SurfaceLayer — стабильный sessionRef (раунд fix-main-
       view.rerender(
         <div data-testid="work-container">
           <LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} />
-          <SurfaceLayer workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} />
+          <SurfaceLayer workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />
         </div>,
       );
       await flush();

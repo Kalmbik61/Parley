@@ -204,10 +204,20 @@ describe('useBrowserStore', () => {
       crashed: false,
       webContentsId: null,
       findOpen: false,
+      pick: 'off',
     });
     useBrowserStore.getState().update('browser:a', { loading: true });
     expect(useBrowserStore.getState().tabs['browser:a']?.title).toBe('Page');
     useBrowserStore.getState().remove('browser:a');
     expect(useBrowserStore.getState().tabs['browser:a']).toBeUndefined();
+  });
+});
+
+describe('BrowserTabState.pick (кусок 9.3b)', () => {
+  it('новая вкладка — off; update меняет pick, прочие поля не трогает', () => {
+    useBrowserStore.getState().update('browser:1', { title: 'T' });
+    expect(useBrowserStore.getState().tabs['browser:1']?.pick).toBe('off');
+    useBrowserStore.getState().update('browser:1', { pick: 'picking' });
+    expect(useBrowserStore.getState().tabs['browser:1']).toMatchObject({ title: 'T', pick: 'picking' });
   });
 });

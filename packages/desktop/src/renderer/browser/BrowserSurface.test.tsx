@@ -20,6 +20,11 @@ import { useLayoutStore } from '../layout/store.js';
 import { SurfaceLayer } from '../layout/SurfaceLayer.js';
 import { findTab } from '../layout/tree.js';
 import { requestAddressFocus, useBrowserStore, wantsAddressFocus } from './store.js';
+import { toast } from 'sonner';
+import type { PickResult } from '../../shared/browser-types.js';
+import type { SendWithToastDeps } from '../terminal/send.js';
+
+vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 
 class ResizeObserverStub {
   observe(): void {}
@@ -59,11 +64,15 @@ function setBrowserTab(url: string): void {
 
 let bridge: FakeBridge;
 
+function sendDeps(): SendWithToastDeps {
+  return { bridge, session: () => null, openSession: vi.fn() };
+}
+
 function renderWork(): void {
   render(
     <div>
       <LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} />
-      <SurfaceLayer workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} />
+      <SurfaceLayer workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} sendDeps={sendDeps()} />
     </div>,
   );
 }
@@ -332,5 +341,130 @@ describe('BrowserSurface — поиск по странице (тест 3 кус
     expect(bridge.browserCalls.at(-1)).toEqual({ method: 'stopFind', args: [11] });
     expect(useBrowserStore.getState().tabs[TAB]?.findOpen).toBe(false);
     expect(screen.queryByRole('search', { name: 'Find in page' })).toBeNull();
+  });
+});
+
+const PICK: PickResult = {
+  url: 'http://localhost:5173/',
+  selector: 'body > button.save',
+  text: 'Save',
+  html: '<button class="save">Save</button>',
+  styles: { display: 'block' },
+  imagePath: null,
+  thumbnail: 'data:image/png;base64,AAAA',
+};
+
+function pickOf(): unknown {
+  return useBrowserStore.getState().tabs[TAB]?.pick;
+}
+
+describe('BrowserSurface — Design Mode (тест 3 куска 9.3b)', () => {
+  it('⌖ неактивна до dom-ready; результат pickStart — карточка поверх страницы', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const view = arm(webview(), 12);
+    const button = screen.getByRole('button', { name: 'Design Mode' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fire(view, 'dom-ready');
+    bridge.setPickResult(PICK);
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(bridge.pickCalls).toEqual([{ method: 'pickStart', webContentsId: 12 }]);
+    expect(pickOf()).toEqual({ result: PICK });
+    expect(screen.getByTestId('design-mode-card').textContent).toContain('body > button.save');
+    expect(bridge.calls.filter((call) => call.method === 'pty.send')).toEqual([]);
+  });
+
+  it('pickStart ответил null — режим снят, карточки нет', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Design Mode' }));
+    });
+    expect(pickOf()).toBe('off');
+    expect(screen.queryByTestId('design-mode-card')).toBeNull();
+  });
+
+  it('повторный ⌖ и Esc во время выбора — pickCancel, режим снят; кнопка подсвечена только в режиме', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    // Настоящий выбор ждёт клика человека: промис не разрешается сам.
+    bridge.browser.pickStart = async (webContentsId) => {
+      bridge.pickCalls.push({ method: 'pickStart', webContentsId });
+      return new Promise<PickResult | null>(() => {});
+    };
+    const button = screen.getByRole('button', { name: 'Design Mode' });
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(pickOf()).toBe('picking');
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart', 'pickCancel']);
+    expect(pickOf()).toBe('off');
+
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(pickOf()).toBe('picking');
+    await act(async () => {
+      fireEvent.keyDown(button, { key: 'Escape' });
+    });
+    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart', 'pickCancel', 'pickStart', 'pickCancel']);
+    expect(pickOf()).toBe('off');
+  });
+
+  it('отказ { code: failed } — тост Couldn\'t pick element: failed. и режим снят', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    bridge.setPickResult({ code: 'failed', message: 'boom' });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Design Mode' }));
+    });
+    expect(toast).toHaveBeenCalledWith("Couldn't pick element: failed.");
+    expect(pickOf()).toBe('off');
+  });
+
+  it('did-navigate во время выбора — pick снова off; поздний ответ прежнего выбора карточку не ставит', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const view = arm(webview(), 12);
+    fire(view, 'dom-ready');
+    let answer: (value: PickResult | null) => void = () => {};
+    bridge.browser.pickStart = () => new Promise<PickResult | null>((resolve) => (answer = resolve));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Design Mode' }));
+    });
+    expect(pickOf()).toBe('picking');
+    fire(view, 'did-navigate', { url: 'http://localhost:5173/other' });
+    expect(pickOf()).toBe('off');
+    await act(async () => answer(PICK));
+    expect(pickOf()).toBe('off');
+    expect(screen.queryByTestId('design-mode-card')).toBeNull();
+  });
+
+  it('карточка: Pick again зовёт pickStart заново; did-navigate снимает карточку', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const view = arm(webview(), 12);
+    fire(view, 'dom-ready');
+    bridge.setPickResult(PICK);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Design Mode' }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Pick again' }));
+    });
+    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart', 'pickStart']);
+    expect(screen.getByTestId('design-mode-card')).toBeTruthy();
+    fire(view, 'did-navigate', { url: 'http://localhost:5173/other' });
+    expect(screen.queryByTestId('design-mode-card')).toBeNull();
   });
 });

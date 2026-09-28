@@ -12,7 +12,7 @@ import { create } from 'zustand';
 import type { StoreApi, UseBoundStore } from 'zustand';
 import type { WorkLayout } from '../../shared/layout-types.js';
 import { toast } from 'sonner';
-import type { BrowserOpenTab } from '../../shared/browser-types.js';
+import type { BrowserOpenTab, PickResult } from '../../shared/browser-types.js';
 import { S } from '../../shared/strings.js';
 import { tabId } from '../layout/ids.js';
 import { useLayoutStore, type LayoutState } from '../layout/store.js';
@@ -28,7 +28,8 @@ export interface BrowserTabState {
   crashed: boolean;
   webContentsId: number | null; // с dom-ready: раньше getWebContentsId() бросает
   findOpen: boolean; // полоса поиска по странице (⌘F, 9.2b)
-} // адрес — только в раскладке (TabSpec.url); pick — 9.3b
+  pick: 'off' | 'picking' | { result: PickResult }; // Design Mode (9.3b): режим выбора или карточка результата
+} // адрес — только в раскладке (TabSpec.url)
 
 export interface BrowserState {
   tabs: Record<string /* tabId */, BrowserTabState>;
@@ -47,6 +48,7 @@ const INITIAL: BrowserTabState = {
   crashed: false,
   webContentsId: null,
   findOpen: false,
+  pick: 'off',
 };
 
 export const useBrowserStore: UseBoundStore<StoreApi<BrowserState>> = create<BrowserState>((set) => ({

@@ -22,6 +22,7 @@ import type { HarnasBridge } from '../../shared/bridge.js';
 import { BrowserSurface } from '../browser/BrowserSurface.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { useWorksStore } from '../store/works.js';
+import type { SendWithToastDeps } from '../terminal/send.js';
 import { TerminalSurface } from '../terminal/TerminalSurface.js';
 import { useLayoutStore } from './store.js';
 import { groups } from './tree.js';
@@ -32,13 +33,18 @@ export interface SurfaceLayerProps {
   bridge: HarnasBridge;
   fontFamily: string;
   fontSize: number;
+  /**
+   * Отправка агенту окна (7.2) — карточке Design Mode (9.3b). Слой — сосед `LayoutView`, контекст тел
+   * групп до него не доходит, поэтому пропом.
+   */
+  sendDeps: SendWithToastDeps;
 }
 
 type SurfaceSpec =
   | { kind: 'terminal'; tabId: string; sessionId: string; groupId: string; visible: boolean }
   | { kind: 'browser'; tabId: string; url: string; groupId: string; visible: boolean };
 
-export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize }: SurfaceLayerProps): JSX.Element {
+export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize, sendDeps }: SurfaceLayerProps): JSX.Element {
   const layout = useLayoutStore((state) => state.layouts[workKey]);
   const entry = useWorksStore((state) =>
     state.entries.find((item) => workKeyOf(item.projectPath, item.map.work.id) === workKey),
@@ -89,6 +95,8 @@ export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize }: 
                 groupId={surface.groupId}
                 visible={surface.visible}
                 bridge={bridge}
+                entry={entry}
+                sendDeps={sendDeps}
               />
             ) : (
               <TerminalSurface

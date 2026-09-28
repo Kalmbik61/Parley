@@ -1,12 +1,12 @@
 /**
  * Строка над страницей вкладки браузера (кусок 9.2a, спека 12.1), 36px: «назад», «вперёд»,
  * «перезагрузить» или «остановить», адресная строка, «DevTools» и полоса загрузки 2px под строкой.
- * ⌖ Design Mode встанет перед «DevTools» в 9.3b.
+ * ⌖ Design Mode (9.3b) — перед «DevTools», подсвечен, пока идёт выбор элемента.
  *
  * Страницей строка не управляет сама: всё — колбэками `BrowserSurface`, у которого `<webview>`.
  */
 
-import { ArrowLeft, ArrowRight, RotateCw, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Crosshair, RotateCw, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { S } from '../../shared/strings.js';
 import { AddressBar } from './AddressBar.js';
@@ -26,6 +26,9 @@ export interface BrowserChromeProps {
   onStop(): void;
   onNavigate(url: string): void;
   onDevTools(): void;
+  /** Идёт выбор элемента Design Mode: ⌖ подсвечен, повторное нажатие выбор снимает. */
+  picking: boolean;
+  onDesignMode(): void;
 }
 
 function IconButton({ label, disabled, onClick, children }: { label: string; disabled: boolean; onClick(): void; children: ReactNode }): JSX.Element {
@@ -63,6 +66,21 @@ export function BrowserChrome(props: BrowserChromeProps): JSX.Element {
         </IconButton>
       )}
       <AddressBar url={url} onNavigate={props.onNavigate} autoFocus={props.focusAddress} />
+      <button
+        type="button"
+        aria-label={S.browser.designMode}
+        title={S.browser.designMode}
+        aria-pressed={props.picking}
+        disabled={!live}
+        onClick={props.onDesignMode}
+        className={
+          props.picking
+            ? 'flex size-6 shrink-0 items-center justify-center rounded bg-blue-500/15 text-blue-600 dark:text-blue-400'
+            : 'flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-40'
+        }
+      >
+        <Crosshair className="size-3.5" aria-hidden="true" />
+      </button>
       <button
         type="button"
         disabled={!live}

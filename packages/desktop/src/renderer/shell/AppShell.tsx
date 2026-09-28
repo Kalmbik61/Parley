@@ -39,7 +39,7 @@
  * открываться по клику, а крестик — закрывать вкладку.
  */
 
-import { memo, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -162,6 +162,7 @@ interface WorkContainerProps {
   bridge: HarnasBridge;
   fontFamily: string;
   fontSize: number;
+  sendDeps: SendWithToastDeps; // карточке Design Mode через слой поверхностей (9.3b)
 }
 
 /**
@@ -173,7 +174,7 @@ interface WorkContainerProps {
  * шрифт, стабильны; начало и конец перетаскивания (`dragging` в `AppShell`)
  * иначе перерисовывали бы все тела групп и поверхности трёх работ.
  */
-const WorkContainer = memo(function WorkContainer({ workKey, active, bridge, fontFamily, fontSize }: WorkContainerProps): JSX.Element {
+const WorkContainer = memo(function WorkContainer({ workKey, active, bridge, fontFamily, fontSize, sendDeps }: WorkContainerProps): JSX.Element {
   const hasLayout = useLayoutStore((state) => state.layouts[workKey] !== undefined);
   const ref = useRef<HTMLDivElement>(null);
   // `inert` в React 18 — не булев проп, ставится руками.
@@ -190,7 +191,7 @@ const WorkContainer = memo(function WorkContainer({ workKey, active, bridge, fon
       {hasLayout ? (
         <>
           <LayoutView workKey={workKey} active={active} bridge={bridge} fontFamily={fontFamily} fontSize={fontSize} />
-          <SurfaceLayer workKey={workKey} active={active} bridge={bridge} fontFamily={fontFamily} fontSize={fontSize} />
+          <SurfaceLayer workKey={workKey} active={active} bridge={bridge} fontFamily={fontFamily} fontSize={fontSize} sendDeps={sendDeps} />
         </>
       ) : null}
     </div>
@@ -303,7 +304,8 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   // Зона терминала для файла — только у хоста с `pty.send` (кусок 7.2, как бросок из Finder в
   // 5.4): старый хост ответил бы `unknown_method`, а без зоны файл падает в тело вкладкой.
   const canSend = useHostSupports('pty.send');
-  const sendDeps: SendWithToastDeps = { bridge, session: sessionOf, openSession: openSessionTab };
+  // Один объект на мост: он уходит пропом в `memo`-контейнеры работ (9.3b), новый литерал на рендер их перерисовывал бы.
+  const sendDeps: SendWithToastDeps = useMemo(() => ({ bridge, session: sessionOf, openSession: openSessionTab }), [bridge]);
   const [dragging, setDragging] = useState<string | null>(null);
 
   const handleDragStart = (event: DragStartEvent): void => {
@@ -630,6 +632,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
                     bridge={bridge}
                     fontFamily={fontFamily}
                     fontSize={fontSize}
+                    sendDeps={sendDeps}
                   />
                 ))}
             </div>

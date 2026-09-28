@@ -137,7 +137,7 @@ describe('LayoutView — тест 17', () => {
     render(
       <>
         <LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={15} />
-        <SurfaceLayer workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={15} />
+        <SurfaceLayer workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={15} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />
       </>,
     );
     await flush();

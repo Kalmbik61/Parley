@@ -6,7 +6,8 @@
  *
  * Страница — недоверенная: мостов окна и Node в госте нет (страж main, 9.1), а рендерер зовёт
  * у `<webview>` только навигацию — `loadURL`, `goBack`, `goForward`, `reload`, `stop`.
- * Программный доступ к странице — только у main (спека 12.2).
+ * Программный доступ к странице — только у main (спека 12.2): Design Mode (9.3b) тоже идёт мостом —
+ * `pickStart` и `pickCancel`, а не `executeJavaScript` у `<webview>`.
  *
  * `src` ставится один раз, при монтировании `<webview>` (первый адрес http(s) вкладки). Гость сам
  * пишет в `src` адрес коммита, а любое присвоение `src` — новая загрузка: проп `src={url}`
@@ -17,6 +18,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import type { WorkEntry } from '@harnas/core';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { BROWSER_PARTITION } from '../../shared/browser-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
@@ -24,7 +26,9 @@ import { errorText, S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
 import { focusTab, updateTab } from '../layout/tree.js';
 import { isHttpUrl } from '../terminal/links.js';
+import type { SendWithToastDeps } from '../terminal/send.js';
 import { BrowserChrome } from './BrowserChrome.js';
+import { DesignModeCard } from './DesignModeCard.js';
 import { FindBar } from './FindBar.js';
 import { clearAddressFocus, useBrowserStore, wantsAddressFocus, type BrowserTabState } from './store.js';
 import { layoutUrl } from './url.js';
@@ -63,6 +67,9 @@ export interface BrowserSurfaceProps {
   groupId: string;
   visible: boolean;
   bridge: HarnasBridge;
+  /** Работа вкладки — сессии получателей карточки Design Mode (9.3b). */
+  entry: WorkEntry;
+  sendDeps: SendWithToastDeps;
 }
 
 const IDLE: BrowserTabState = {
@@ -74,12 +81,15 @@ const IDLE: BrowserTabState = {
   crashed: false,
   webContentsId: null,
   findOpen: false,
+  pick: 'off',
 };
 
-export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge }: BrowserSurfaceProps): JSX.Element {
+export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, entry, sendDeps }: BrowserSurfaceProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<WebviewElement | null>(null);
   const readyRef = useRef(false);
+  // Номер текущего выбора Design Mode: ответ выбора, который уже сняли (⌖, Esc, навигация), карточку не ставит.
+  const pickTokenRef = useRef(0);
   const state = useBrowserStore((store) => store.tabs[tabId]) ?? IDLE;
 
   // Первый адрес http(s) — и только он — становится `src`. Без адреса (новая вкладка) и с чужим
@@ -143,9 +153,11 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge }
       'did-stop-loading': () => update({ loading: false }),
       'page-title-updated': (event) => update({ title: event.title ?? null }),
       // Новый документ: заголовок и значок прежней страницы ему не принадлежат.
+      // Карточка и выбор прошлой страницы к новой не относятся; main и сам ответит выбору null (9.3a).
       'did-navigate': (event) => {
         saveUrl(event.url);
-        update({ title: null, favicon: null });
+        pickTokenRef.current += 1;
+        update({ title: null, favicon: null, pick: 'off' });
         history();
       },
       'did-navigate-in-page': (event) => {
@@ -208,6 +220,36 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge }
     });
   };
 
+  // Design Mode (спека 12.3): выбор — только по ⌖ или «Pick again» человека.
+  const startPick = (): void => {
+    const id = state.webContentsId;
+    if (id === null) return;
+    pickTokenRef.current += 1;
+    const token = pickTokenRef.current;
+    const update = (patch: Partial<BrowserTabState>): void => {
+      if (token === pickTokenRef.current) useBrowserStore.getState().update(tabId, patch);
+    };
+    update({ pick: 'picking' });
+    bridge.browser.pickStart(id).then(
+      (result) => update({ pick: result === null ? 'off' : { result } }),
+      (error: unknown) => {
+        if (token !== pickTokenRef.current) return;
+        console.error('[harnas] pickStart failed', error);
+        toast(errorText(decodeIpcError(error).code, S.errors.actions.pickElement));
+        update({ pick: 'off' });
+      },
+    );
+  };
+
+  const cancelPick = (): void => {
+    const id = state.webContentsId;
+    pickTokenRef.current += 1;
+    useBrowserStore.getState().update(tabId, { pick: 'off' });
+    if (id !== null) bridge.browser.pickCancel(id).catch((error: unknown) => console.warn('[harnas] pickCancel failed', error));
+  };
+
+  const picking = state.pick === 'picking';
+
   // Поверхность — сосед тела группы, а не потомок: клик в строку сама делает свою вкладку активной.
   const focusOwnTab = (): void => {
     useLayoutStore.getState().apply(workKey, (layout) => focusTab(layout, tabId));
@@ -223,6 +265,13 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge }
       style={{ visibility: visible ? 'visible' : 'hidden' }}
       onPointerDownCapture={focusOwnTab}
       onFocusCapture={focusOwnTab}
+      // Esc при фокусе в окне (после клика по ⌖ он на кнопке): в странице Esc ловит сам скрипт выбора.
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && picking) {
+          event.preventDefault();
+          cancelPick();
+        }
+      }}
     >
       <BrowserChrome
         url={url}
@@ -237,6 +286,8 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge }
         onStop={() => onPage((view) => view.stop())}
         onNavigate={navigate}
         onDevTools={openDevTools}
+        picking={picking}
+        onDesignMode={picking ? cancelPick : startPick}
       />
       <div className="relative min-h-0 flex-1">
         {src === null ? (
@@ -252,6 +303,9 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge }
             webContentsId={state.webContentsId}
             onClose={() => useBrowserStore.getState().update(tabId, { findOpen: false })}
           />
+        ) : null}
+        {typeof state.pick === 'object' ? (
+          <DesignModeCard workKey={workKey} entry={entry} result={state.pick.result} sendDeps={sendDeps} onPickAgain={startPick} />
         ) : null}
         {state.crashed ? (
           // Слой поверх страницы: тело группы лежит под поверхностью, и заглушка в нём была бы не видна.
