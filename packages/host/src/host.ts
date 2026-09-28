@@ -1,15 +1,17 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, chmod, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, chmod, link, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
-import { harnasHome } from '@harnas/core';
+import { uptime } from 'node:os';
+import { harnasHome, processStartedAt, START_TOLERANCE_MS } from '@harnas/core';
 import { createHostContext } from './context.js';
 import type { HostContext } from './context.js';
 import { createHostServer } from './server.js';
+import { HostError } from './errors.js';
 import { createLog } from './log.js';
 import { watchIdle } from './idle.js';
 import { hostPaths, MAX_SOCKET_PATH_BYTES } from './paths.js';
 import type { HostPaths } from './paths.js';
-import { createHostHandlers } from './methods/index.js';
+import { createHostHandlers, WORKS_UNREADABLE } from './methods/index.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
 import { createPtyManager } from './pty/pty-manager.js';
@@ -70,12 +72,20 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   await mkdir(paths.dir, { recursive: true, mode: 0o700 });
   await chmod(paths.dir, 0o700);
 
-  // 3. Живой хост на этом сокете — отказ; осколки упавшего — подчищаются.
-  if (await socketIsAlive(paths.socket)) {
+  // 3. Единственность — замок `host.pid` (спека 3.2, раунд lane-r4): проверка одного сокета
+  //    пропускала медленный старт первого хоста (сокета ещё нет), и второй сносил его файлы.
+  //    Замок живого pid — отказ без удалений; сокет — дополнительная проверка (хост без замка).
+  //    Осколки упавшего (сокет, токен) подчищаются только под своим замком.
+  if (!(await acquirePidLock(paths.pid))) {
     restoreHarnasHome(previousHarnasHome);
     throw new HostAlreadyRunning();
   }
-  await removeHostFiles(paths);
+  if (await socketIsAlive(paths.socket)) {
+    await releasePidLock(paths.pid);
+    restoreHarnasHome(previousHarnasHome);
+    throw new HostAlreadyRunning();
+  }
+  await Promise.all([paths.socket, paths.token].map((file) => rm(file, { force: true })));
 
   // 4. Токен рукопожатия — новый на каждый запуск, права 0600 гарантируются chmod,
   //    а не только `mode` у writeFile (тот режется umask).
@@ -149,7 +159,21 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // при отбрасывании она делит с обычным `sessions.stop`.
   const worktreesService = createWorktreesService(sessionsService);
 
+  // Сокет слушает раньше первого чтения работ (п. 5 ниже, затем `worksService.start()`):
+  // методы снимка работ (WORKS_GATED_* в methods/index.ts) ждут его, иначе окно, подключившееся
+  // в этот промежуток, видит недочитанный снимок. Отказ первого чтения ворота не держат вечно, а
+  // отказывают (раунд lane-r5): методы снимка отвечают ошибкой, а не висят.
+  let markWorksReady!: () => void;
+  let failWorksReady!: (error: HostError) => void;
+  const worksReady = new Promise<void>((resolve, reject) => {
+    markWorksReady = resolve;
+    failWorksReady = reject;
+  });
+  // Отказ читают только ожидающие методы; без них он не должен стать необработанным.
+  worksReady.catch(() => undefined);
+
   const handlers = createHostHandlers({
+    worksReady,
     works: worksService,
     activity: activityService,
     pty: ptyManager,
@@ -175,25 +199,51 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
 
   // 5. `listen`, затем сокет переводится на 0600 (изначально его создаёт `listen`).
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(paths.socket, resolve);
-  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(paths.socket, resolve);
+    });
+  } catch (error) {
+    // Не поднялся — замок не держится до выхода процесса (в тестах процесс один на много хостов).
+    idleWatcher.stop();
+    await releasePidLock(paths.pid);
+    restoreHarnasHome(previousHarnasHome);
+    throw error;
+  }
   await chmod(paths.socket, 0o600);
 
-  // 6. pid-файл.
-  await writeFile(paths.pid, String(process.pid), { mode: 0o600 });
-  await chmod(paths.pid, 0o600);
+  // 6. pid-файл — уже замок из шага 3.
 
   // 7. Таймер простоя: ни клиентов, ни занятых ключей — отсчёт стартует сразу.
   idleWatcher.notify(true);
 
-  await worksService.start();
-  // Сверка живости уже прошла на первом чтении работ: те, чей журнал оборван
-  // посреди хода, прерваны падением прошлого хоста (спека 10).
-  await sessionsService.collectInterrupted().catch((error: unknown) => {
-    log.error('список прерванных сессий не собрался', { error: String(error) });
-  });
+  const worksFailure = await worksService.start().then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error.message : String(error)),
+  );
+  if (worksFailure === null) {
+    // Сверка живости уже прошла на первом чтении работ: те, чей журнал оборван
+    // посреди хода, прерваны падением прошлого хоста (спека 10).
+    await sessionsService.collectInterrupted().catch((error: unknown) => {
+      log.error('список прерванных сессий не собрался', { error: String(error) });
+    });
+    // После сбора прерванных, а не сразу после чтения: sessions.interrupted тоже ждёт этих ворот
+    // (раунд lane-r4, п. 4) — иначе окно на старте получало пустой список и баннера не было.
+    markWorksReady();
+  } else {
+    // Первое чтение отказало (битый works-index.json — спека 10, «Карта повреждена»): сбой не
+    // фатален — хост остаётся, отказывается от снимка и показывает ошибку, а не падает в цикл
+    // перезапусков окна. Снимок замораживается пустым (наблюдатели закрыты): ответ методов снимка
+    // один и тот же до перезапуска хоста, окно не получит works.changed, противоречащий отказу.
+    log.error('первое чтение работ не удалось', { error: worksFailure });
+    await worksService.stop();
+    failWorksReady(
+      new HostError('internal', `работы не прочитаны на старте хоста: ${worksFailure}`, {
+        reason: WORKS_UNREADABLE,
+      }),
+    );
+  }
   await activityService.start();
   wakeService.start();
 
@@ -222,7 +272,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     // разрыва клиенты, которые сами не отключились, повесили бы остановку.
     for (const client of handle.context.clients()) client.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    await removeHostFiles(paths);
+    // Замок — последним: пока он держится, новый хост не стартует и не застанет сокет и токен
+    // уходящего (lane-r4).
+    await Promise.all([paths.socket, paths.token].map((file) => rm(file, { force: true })));
+    await releasePidLock(paths.pid);
     restoreHarnasHome(previousHarnasHome);
     log.info('хост остановлен', { reason });
     resolveClosed(reason);
@@ -258,8 +311,107 @@ async function socketIsAlive(socketPath: string): Promise<boolean> {
   });
 }
 
-async function removeHostFiles(paths: HostPaths): Promise<void> {
-  await Promise.all([paths.socket, paths.token, paths.pid].map((file) => rm(file, { force: true })));
+/**
+ * Замок единственности хоста — файл `host.pid` (раунд lane-r4): первая строка — pid держателя,
+ * вторая — время старта его процесса по ОС (раунд lane-r5; пусто, если ОС его не сообщила).
+ * Создаётся ссылкой на уже записанный временный файл: `link` атомарен и падает на существующем,
+ * так что читатель никогда не видит пустой замок и не примет его за осколок. true — замок наш.
+ *
+ * Занят живым держателем — отказ, ничего не удаляется (что считается живым — `isStaleLock`).
+ * Осколок переименовывается в свой файл, и если в нём оказался не тот текст, что проверяли
+ * (соседний старт успел снять осколок и взять замок), замок возвращается на место — чужой
+ * живой замок не удаляется.
+ */
+async function acquirePidLock(lockPath: string): Promise<boolean> {
+  const own = String(process.pid);
+  const temp = `${lockPath}.${own}.${randomBytes(4).toString('hex')}`;
+  await writeFile(temp, `${own}\n${(await processStartedAt(process.pid)) ?? ''}\n`, { mode: 0o600 });
+  await chmod(temp, 0o600);
+  try {
+    // Два круга: осколок снят — повтор; второй занятый круг значит соседа, успевшего раньше.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await link(temp, lockPath);
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      }
+      const held = await readLock(lockPath);
+      if (held === null) continue; // замок сняли между link и чтением
+      if (!(await isStaleLock(held))) return false;
+      const stale = `${lockPath}.stale.${own}`;
+      try {
+        await rename(lockPath, stale);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+      const moved = await readLock(stale);
+      if (moved !== null && moved.text !== held.text) {
+        // Унесли живой замок соседа — вернуть; занят уже новым — сосед всё равно не один.
+        await link(stale, lockPath).catch(() => undefined);
+        await rm(stale, { force: true });
+        return false;
+      }
+      await rm(stale, { force: true });
+    }
+    return false;
+  } finally {
+    await rm(temp, { force: true });
+  }
+}
+
+async function readLock(lockPath: string): Promise<{ text: string; mtimeMs: number } | null> {
+  try {
+    const [text, info] = await Promise.all([readFile(lockPath, 'utf8'), stat(lockPath)]);
+    return { text, mtimeMs: info.mtimeMs };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+/** pid и записанное время старта из текста замка; прежний формат (только pid) — время `null`. */
+function parseLock(text: string): { pid: number; startedAt: string | null } {
+  const [pidLine = '', startedLine = ''] = text.split('\n');
+  const startedAt = startedLine.trim();
+  return { pid: Number(pidLine.trim()), startedAt: startedAt === '' ? null : startedAt };
+}
+
+/**
+ * Осколок: pid не число или мёртв; замок записан до загрузки системы; или pid жив, но время старта
+ * его процесса не совпадает с записанным (раунд lane-r5) — хост упал, а pid до следующего старта
+ * достался чужому процессу. Сверка — как у аренды работы (`hostLeaseActive` в core): допуск
+ * START_TOLERANCE_MS; время неизвестно (замок прежнего формата или ОС не ответила) — прежнее правило,
+ * живой pid держит замок: без второго признака чужой процесс не отличить, а снять живой замок хуже.
+ */
+async function isStaleLock(lock: { text: string; mtimeMs: number }): Promise<boolean> {
+  const { pid, startedAt } = parseLock(lock.text);
+  if (!Number.isInteger(pid) || pid <= 0) return true;
+  // Записан до загрузки системы: держатель мёртв, даже если его pid достался другому процессу.
+  if (lock.mtimeMs < Date.now() - uptime() * 1000) return true;
+  if (!pidAlive(pid)) return true;
+  if (startedAt === null) return false;
+  const actual = await processStartedAt(pid);
+  if (actual === null) return false;
+  const diff = Math.abs(Date.parse(actual) - Date.parse(startedAt));
+  return !Number.isNaN(diff) && diff > START_TOLERANCE_MS;
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM — процесс есть, но чужой: жив.
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/** Снимает замок, только если он наш: чужой (новый хост уже взял) не трогается. */
+async function releasePidLock(lockPath: string): Promise<void> {
+  const held = await readLock(lockPath).catch(() => null);
+  if (held !== null && parseLock(held.text).pid === process.pid) await rm(lockPath, { force: true });
 }
 
 /** Возвращает `HARNAS_HOME` к тому, чем оно было до `startHost` (см. там же). */

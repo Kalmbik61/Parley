@@ -18,6 +18,9 @@ import type { WebContents } from 'electron';
 import type { WorksSnapshot } from '@harnas/protocol';
 import { BROWSER_PARTITION } from '../shared/browser-types.js';
 import { S } from '../shared/strings.js';
+import { createDesignMode } from './browser/design-mode.js';
+import { fetchFavicon } from './browser/favicon.js';
+import guestPickScript from './browser/guest-pick.js?raw';
 import { installBrowserGuard, promptDownload } from './browser/guard.js';
 import { cleanupDrops, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
 import { createGitRunner } from './files/git-api.js';
@@ -117,32 +120,32 @@ if (!gotLock) {
     const connection = new HostConnection({
       paths,
       env: shellEnv.env,
-      spawn: () => {
-        void (async () => {
-          // Системный node, не бинарь Electron: node-pty хоста собран под ABI
-          // системного Node и под Node самого Electron не загрузится (спека 3.2).
-          const nodeBin = await resolveNodeBin(shellEnv.env);
-          if (nodeBin === null) {
-            const reason = S.connection.reasonNodeNotFound;
-            console.error(`[harnas] ${reason}`);
-            connection.reportUnavailable(reason);
-            return;
-          }
-          try {
-            const entry = resolveHostEntry({
-              packaged: app.isPackaged,
-              resourcesPath: process.resourcesPath,
-            });
-            spawnHost({
-              env: shellEnv.env,
-              entry,
-              nodeBin,
-              stderrFile: path.join(paths.dir, 'host.err'),
-            });
-          } catch (err) {
-            console.error('[harnas] failed to start host', err);
-          }
-        })();
+      // Процесс хоста — соединению: пока он жив, второй не запускается (раунд lane-r4).
+      spawn: async () => {
+        // Системный node, не бинарь Electron: node-pty хоста собран под ABI
+        // системного Node и под Node самого Electron не загрузится (спека 3.2).
+        const nodeBin = await resolveNodeBin(shellEnv.env);
+        if (nodeBin === null) {
+          const reason = S.connection.reasonNodeNotFound;
+          console.error(`[harnas] ${reason}`);
+          connection.reportUnavailable(reason);
+          return null;
+        }
+        try {
+          const entry = resolveHostEntry({
+            packaged: app.isPackaged,
+            resourcesPath: process.resourcesPath,
+          });
+          return spawnHost({
+            env: shellEnv.env,
+            entry,
+            nodeBin,
+            stderrFile: path.join(paths.dir, 'host.err'),
+          });
+        } catch (err) {
+          console.error('[harnas] failed to start host', err);
+          return null;
+        }
       },
     });
 
@@ -222,6 +225,13 @@ if (!gotLock) {
       window.webContents.on('did-navigate', () => closeGuard.reset());
       window.webContents.on('render-process-gone', () => closeGuard.reset());
       window.on('closed', () => closeGuard.dispose());
+      // Фокус окна macOS (кусок 9.2b, спека 7.2): при фокусе в странице <webview> уход в другое
+      // приложение DOM окна не показывает, а focus и blur WebContents при смене окон не приходят.
+      const sendWindowFocus = (focused: boolean): void => {
+        if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send('app:window-focus', focused);
+      };
+      window.on('focus', () => sendWindowFocus(true));
+      window.on('blur', () => sendWindowFocus(false));
       return window;
     };
 
@@ -232,6 +242,13 @@ if (!gotLock) {
     const downloadLog: Array<{ filename: string; url: string }> = [];
     const testGlobals = globalThis as { __harnasDownloads?: typeof downloadLog; __harnasSaveAnswer?: string | null };
     if (logDownloads) testGlobals.__harnasDownloads = downloadLog;
+    // Снимок элемента Design Mode (кусок 9.3a) — в drops/, как скриншоты из буфера (5.4). Создаётся до
+    // стража: загрузка из гостя снимает его выбор (fix-9b).
+    const designMode = createDesignMode({
+      fromId: (id) => webContents.fromId(id) ?? null,
+      saveImage: (png) => saveImage({ png, dir: dropsDir() }),
+      guestScript: guestPickScript,
+    });
     installBrowserGuard({
       app,
       // К моменту will-attach-webview mainWindow уже присвоен — и у окна, пересозданного на activate.
@@ -244,7 +261,8 @@ if (!gotLock) {
       // hostWebContents читается в момент нажатия: окно пересоздаётся на activate, ссылка устарела бы.
       forwardShortcuts: (contents) =>
         forwardGuestShortcuts(contents, (id) => contents.hostWebContents?.send('menu:action', id)),
-      download: (item) => {
+      download: (item, source) => {
+        designMode.downloadStarted(source.id);
         if (!logDownloads) {
           promptDownload(item, app.getPath('downloads'));
           return;
@@ -254,6 +272,9 @@ if (!gotLock) {
         if (answer === null) item.cancel();
         else item.setSavePath(answer);
       },
+      // Сессией раздела браузера, а не окна: куки и прокси — страницы, а не приложения.
+      fetchFavicon: (iconUrl, pageUrl) =>
+        fetchFavicon(iconUrl, pageUrl, (url, init) => browserSession.fetch(url, init)),
     });
 
     mainWindow = openWindow();
@@ -347,6 +368,7 @@ if (!gotLock) {
       browser: {
         fromId: (id) => webContents.fromId(id) ?? null,
         session: browserSession,
+        designMode,
       },
       saveDropImage: async () => {
         if (fakeDrops) return saveImage({ png: FAKE_DROP_PNG, dir: dropsDir() });

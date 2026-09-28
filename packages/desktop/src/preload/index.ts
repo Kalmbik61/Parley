@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@harnas/protocol';
 import type { AppNote, CloseAnswer, FocusTarget, HarnasBridge, HostStatus } from '../shared/bridge.js';
-import type { BrowserOpenTab } from '../shared/browser-types.js';
+import type { BrowserFavicon, BrowserOpenTab, PickResult } from '../shared/browser-types.js';
 import type { ActionId } from '../shared/keybindings.js';
 import type {
   DiffFile,
@@ -31,6 +31,9 @@ const fileChangedListeners = new Set<(e: FileChangedEvent) => void>();
 const treeChangedListeners = new Set<(e: TreeChangedEvent) => void>();
 const confirmCloseListeners = new Set<() => void>();
 const browserOpenTabListeners = new Set<(e: BrowserOpenTab) => void>();
+const browserFaviconListeners = new Set<(e: BrowserFavicon) => void>();
+const browserFocusListeners = new Set<(e: { webContentsId: number }) => void>();
+const windowFocusListeners = new Set<(focused: boolean) => void>();
 /** Цель клика, пришедшая, пока у `onFocusTarget` не было слушателей (кусок 4.3). */
 let heldFocusTarget: FocusTarget | null = null;
 
@@ -83,6 +86,18 @@ ipcRenderer.on('files:tree-changed', (_event, e: TreeChangedEvent) => {
 
 ipcRenderer.on('browser:open-tab', (_event, e: BrowserOpenTab) => {
   for (const listener of browserOpenTabListeners) listener(e);
+});
+
+ipcRenderer.on('browser:favicon', (_event, e: BrowserFavicon) => {
+  for (const listener of browserFaviconListeners) listener(e);
+});
+
+ipcRenderer.on('browser:focus', (_event, e: { webContentsId: number }) => {
+  for (const listener of browserFocusListeners) listener(e);
+});
+
+ipcRenderer.on('app:window-focus', (_event, focused: boolean) => {
+  for (const listener of windowFocusListeners) listener(focused);
 });
 
 /**
@@ -165,6 +180,10 @@ const bridge = {
       menuListeners.add(listener);
       return () => menuListeners.delete(listener);
     },
+    onWindowFocus: (listener: (focused: boolean) => void) => {
+      windowFocusListeners.add(listener);
+      return () => windowFocusListeners.delete(listener);
+    },
     titlebarDoubleClick: () => {
       ipcRenderer.send('app:titlebar-double-click');
     },
@@ -229,9 +248,20 @@ const bridge = {
     zoom: (webContentsId: number, step: 1 | -1 | 0) =>
       ipcRenderer.invoke('browser:zoom', webContentsId, step) as Promise<void>,
     clearData: () => ipcRenderer.invoke('browser:clear-data') as Promise<void>,
+    pickStart: (webContentsId: number) =>
+      ipcRenderer.invoke('browser:pick-start', webContentsId) as Promise<PickResult | null>,
+    pickCancel: (webContentsId: number) => ipcRenderer.invoke('browser:pick-cancel', webContentsId) as Promise<void>,
     onOpenTab: (listener: (e: BrowserOpenTab) => void) => {
       browserOpenTabListeners.add(listener);
       return () => browserOpenTabListeners.delete(listener);
+    },
+    onFavicon: (listener: (e: BrowserFavicon) => void) => {
+      browserFaviconListeners.add(listener);
+      return () => browserFaviconListeners.delete(listener);
+    },
+    onFocus: (listener: (e: { webContentsId: number }) => void) => {
+      browserFocusListeners.add(listener);
+      return () => browserFocusListeners.delete(listener);
     },
   },
 };

@@ -30,6 +30,9 @@ import { REQUIRED_METHODS } from './lib/capabilities.js';
 import { useSidebarSectionsStore } from './sidebar/use-sidebar-sections.js';
 import { toast } from 'sonner';
 import { groups } from './layout/tree.js';
+import { S } from '../shared/strings.js';
+import type { TabSpec } from '../shared/layout-types.js';
+import { workKey } from '../shared/work-keys.js';
 
 // Тест 6 куска 2.7 читает пропсы диалога новой сессии, а не его разметку:
 // что именно диалог делает с `projectPath`/`workId`, проверяет его собственный тест.
@@ -513,5 +516,101 @@ describe('App — связь вернулась (слияние lane-r3 и main-
 
     expect(await screen.findByText('Interrupted mid-turn: S03')).toBeTruthy();
     expect(screen.getByTestId('titlebar')).toBe(titlebar);
+  });
+});
+
+// Раунд lane-r5, п. 1: хост не прочитал работы на старте (битый works-index.json) — works.list
+// отвечает internal с причиной works-unreadable. Пустой список не должен сойти за ответ хоста:
+// сохранённые вкладки не стираются, человек видит сбой, а не Landing.
+describe('App — works.list отказал на старте хоста (lane-r5)', () => {
+  // Причина — в `data.reason`, как у ошибок git 8.2a (одна форма ветки после слияния).
+  const unreadable = { code: 'internal', message: 'работы не прочитаны на старте хоста', data: { reason: 'works-unreadable' } };
+
+  it('первое подключение: раскладки не отсеиваются, Landing нет, видна причина по-английски', async () => {
+    useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
+    bridge.setHandler('works.list', () => {
+      throw unreadable;
+    });
+    render(<App />);
+    expect(await screen.findByText(S.works.unreadable)).toBeTruthy();
+    expect(screen.queryByTestId('landing')).toBeNull();
+    expect(bridge.layoutRetains).toEqual([]);
+    expect(screen.queryByText(/работы не прочитаны/)).toBeNull();
+  });
+
+  it('переподключение к хосту с отказом: работы и вкладки остаются, видна причина', async () => {
+    const w1 = work('w-01', '2026-01-01', [session('s-01', 'план')]);
+    bridge.setHandler('works.list', () => ({ entries: [w1], branches: {} }));
+    useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
+    render(<App />);
+    await screen.findAllByText('w-01');
+
+    act(() => bridge.emitStatus({ state: 'disconnected', reason: 'Connection to host closed' }));
+    bridge.setHandler('works.list', () => {
+      throw unreadable;
+    });
+    act(() => bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: [...REQUIRED_METHODS] }));
+
+    expect(await screen.findByText(S.works.unreadable)).toBeTruthy();
+    expect(useWorksStore.getState().entries).toEqual([w1]);
+    expect(bridge.layoutRemovals).toEqual([]);
+    expect(screen.getAllByText('w-01').length).toBeGreaterThan(0);
+  });
+
+  // Слияние с fix-7.3 (`settleVanishedWork`): работа, пропавшая из снимка, спрашивает Save/Discard о
+  // грязных буферах своих вкладок. Отказ works.list — не пропажа: вопроса нет, вкладки, буфер и
+  // раскладка на месте, записей нет.
+  it('переподключение с отказом при несохранённой правке файла работы: вопроса нет, вкладки и буфер целы (слияние с fix-7.3)', async () => {
+    const w1 = work('w-01', '2026-01-01', [session('s-01', 'план')]);
+    const W = workKey(w1.projectPath, 'w-01');
+    const fileTab: TabSpec = { kind: 'file', id: tabId.file({ kind: 'project' }, 'src/a.ts'), root: { kind: 'project' }, path: 'src/a.ts' };
+    const termTab: TabSpec = { kind: 'terminal', id: tabId.terminal('s-01'), sessionId: 's-01' };
+    const dirtyKey = bufferKey(W, fileTab.id);
+    const tabIds = (): string[] => {
+      const layout = useLayoutStore.getState().layouts[W];
+      return layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id));
+    };
+    bridge.setHandler('works.list', () => ({ entries: [w1], branches: {} }));
+    useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
+    render(<App />);
+    await screen.findAllByText('w-01');
+    await vi.waitFor(() => expect(useLayoutStore.getState().hydrated[W]).toBe(true));
+    // Вкладка файла — неактивная (активна терминальная): тело файла с Monaco тут не нужно, буферу
+    // хватает вкладки в раскладке — без неё `bindBuffersToLayouts` отпустил бы буфер сам.
+    act(() => {
+      useLayoutStore.getState().apply(W, (layout) => openTab(openTab(layout, fileTab), termTab));
+    });
+    act(() => {
+      useFilesStore.setState({
+        buffers: {
+          [dirtyKey]: {
+            root: { workKey: W, spec: { kind: 'project' } },
+            path: 'src/a.ts',
+            watchId: null,
+            model: { ...initialBuffer(), status: 'dirty', text: 'mine', savedText: 'disk', mtimeMs: 1, diskMtimeMs: 1 },
+          },
+        },
+      });
+    });
+    const tabsBefore = tabIds();
+    expect(tabsBefore).toEqual(expect.arrayContaining([fileTab.id, termTab.id]));
+
+    act(() => bridge.emitStatus({ state: 'disconnected', reason: 'Connection to host closed' }));
+    bridge.setHandler('works.list', () => {
+      throw unreadable;
+    });
+    act(() => bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: [...REQUIRED_METHODS] }));
+
+    expect(await screen.findByText(S.works.unreadable)).toBeTruthy();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId('save-changes-dialog')).toBeNull();
+    expect(screen.queryByText(/was deleted/)).toBeNull();
+    expect(tabIds()).toEqual(tabsBefore);
+    expect(useFilesStore.getState().buffers[dirtyKey]?.model.status).toBe('dirty');
+    expect(bridge.layoutRemovals).toEqual([]);
+    expect(bridge.writes).toEqual([]);
+    useFilesStore.setState({ buffers: {}, reveals: {} });
   });
 });

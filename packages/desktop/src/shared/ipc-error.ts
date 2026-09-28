@@ -10,7 +10,10 @@
 export interface IpcErrorInfo {
   code: string;
   message: string;
-  /** HostError.data хоста — машинные подробности: у ошибок git 8.1 это { reason }. Не объект — поля нет. */
+  /**
+   * HostError.data хоста — машинные подробности: у ошибок git 8.1 и отказа первого чтения работ
+   * (`works-unreadable`, lane-r5) это { reason }. Не объект — поля нет.
+   */
   data?: Record<string, unknown>;
 }
 

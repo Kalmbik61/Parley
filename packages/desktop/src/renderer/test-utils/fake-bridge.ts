@@ -14,7 +14,7 @@ import type {
   Result,
 } from '@harnas/protocol';
 import type { AppNote, CloseAnswer, FocusTarget, HarnasBridge, HostStatus } from '../../shared/bridge.js';
-import type { BrowserOpenTab } from '../../shared/browser-types.js';
+import type { BrowserFavicon, BrowserOpenTab, PickResult } from '../../shared/browser-types.js';
 import type { ActionId } from '../../shared/keybindings.js';
 import type {
   DiffFile,
@@ -149,6 +149,16 @@ export interface FakeBridge extends HarnasBridge {
   readonly browserCalls: Array<{ method: string; args: unknown[] }>;
   /** window.open страницы: событие `browser:open-tab` слушателям `browser.onOpenTab`. */
   emitBrowserOpenTab(e: BrowserOpenTab): void;
+  /** Favicon гостя: событие `browser:favicon` слушателям `browser.onFavicon` (кусок 9.2a). */
+  emitFavicon(e: BrowserFavicon): void;
+  /** Фокус гостя: событие `browser:focus` слушателям `browser.onFocus` (кусок 9.2b). */
+  emitBrowserFocus(e: { webContentsId: number }): void;
+  /** Фокус окна macOS: событие `app:window-focus` слушателям `app.onWindowFocus` (кусок 9.2b). */
+  emitWindowFocus(focused: boolean): void;
+  /** Ответ browser.pickStart; по умолчанию null. Отказ — объект с code, как у прочих отказов подставного моста. */
+  setPickResult(answer: PickResult | null | IpcErrorInfo): void;
+  /** Вызовы `browser.pickStart` и `browser.pickCancel` по порядку (кусок 9.3a). */
+  readonly pickCalls: Array<{ method: 'pickStart' | 'pickCancel'; webContentsId: number }>;
 }
 
 export function createFakeBridge(): FakeBridge {
@@ -208,6 +218,11 @@ export function createFakeBridge(): FakeBridge {
   const closeAnswers: CloseAnswer[] = [];
   const browserCalls: Array<{ method: string; args: unknown[] }> = [];
   const browserOpenTabListeners = new Set<(e: BrowserOpenTab) => void>();
+  const browserFaviconListeners = new Set<(e: BrowserFavicon) => void>();
+  const browserFocusListeners = new Set<(e: { webContentsId: number }) => void>();
+  const windowFocusListeners = new Set<(focused: boolean) => void>();
+  let pickAnswer: PickResult | null | IpcErrorInfo = null;
+  const pickCalls: Array<{ method: 'pickStart' | 'pickCancel'; webContentsId: number }> = [];
   let watchSeq = 0;
   /** mtimeMs ответа write: растёт с каждой записью, как на диске. */
   let writeMtimeMs = 1_700_000_000_000;
@@ -321,6 +336,19 @@ export function createFakeBridge(): FakeBridge {
     emitBrowserOpenTab: (e) => {
       for (const listener of browserOpenTabListeners) listener(e);
     },
+    emitFavicon: (e) => {
+      for (const listener of browserFaviconListeners) listener(e);
+    },
+    emitBrowserFocus: (e) => {
+      for (const listener of browserFocusListeners) listener(e);
+    },
+    emitWindowFocus: (focused) => {
+      for (const listener of windowFocusListeners) listener(focused);
+    },
+    setPickResult: (answer) => {
+      pickAnswer = answer;
+    },
+    pickCalls,
     // Безвредные заглушки: поиск ничего не находит, остальное — успех.
     browser: {
       openDevTools: async (webContentsId) => {
@@ -339,9 +367,26 @@ export function createFakeBridge(): FakeBridge {
       clearData: async () => {
         browserCalls.push({ method: 'clearData', args: [] });
       },
+      pickStart: async (webContentsId) => {
+        pickCalls.push({ method: 'pickStart', webContentsId });
+        const answer = pickAnswer;
+        if (answer !== null && 'code' in answer) throw answer;
+        return answer;
+      },
+      pickCancel: async (webContentsId) => {
+        pickCalls.push({ method: 'pickCancel', webContentsId });
+      },
       onOpenTab: (listener) => {
         browserOpenTabListeners.add(listener);
         return () => browserOpenTabListeners.delete(listener);
+      },
+      onFavicon: (listener) => {
+        browserFaviconListeners.add(listener);
+        return () => browserFaviconListeners.delete(listener);
+      },
+      onFocus: (listener) => {
+        browserFocusListeners.add(listener);
+        return () => browserFocusListeners.delete(listener);
       },
     },
     files: {
@@ -522,6 +567,10 @@ export function createFakeBridge(): FakeBridge {
       onMenu: (listener) => {
         menuListeners.add(listener);
         return () => menuListeners.delete(listener);
+      },
+      onWindowFocus: (listener) => {
+        windowFocusListeners.add(listener);
+        return () => windowFocusListeners.delete(listener);
       },
       titlebarDoubleClick: () => {
         titlebarDoubleClicks.push(titlebarDoubleClicks.length);

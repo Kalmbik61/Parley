@@ -41,7 +41,7 @@
  * открываться по клику, а крестик — закрывать вкладку.
  */
 
-import { memo, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -66,6 +66,7 @@ import { applyFocusTarget, buildFocusTargetDeps } from '../attention/focus-targe
 import { openNextAttention } from '../attention/next.js';
 import { useAttentionTotals } from '../attention/store.js';
 import { InterruptedBanner } from '../components/InterruptedBanner.js';
+import { WorksErrorBanner } from '../components/WorksErrorBanner.js';
 import { CreateRoomDialog, type RoomCandidate } from '../components/rooms/CreateRoomDialog.js';
 import { visibleWorkOrder } from '../sidebar/sort.js';
 import { SidebarSectionsWriter, useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
@@ -87,7 +88,8 @@ import { SurfaceLayer } from '../layout/SurfaceLayer.js';
 import { useLayoutPersistence } from '../layout/persistence.js';
 import { selectedSessionOf, useLayoutStore } from '../layout/store.js';
 import { measureGroupSizes } from '../layout/measure.js';
-import { groups, openTab } from '../layout/tree.js';
+import { findTab, focusTab, groups, openTab } from '../layout/tree.js';
+import { openBrowserTabFrom, useBrowserStore } from '../browser/store.js';
 import { focusContext } from '../keys/focus-context.js';
 import { installKeyHandler, isActionAvailable } from '../keys/handler.js';
 import { createMruCycle, type MruCycle } from '../keys/mru-cycle.js';
@@ -146,6 +148,12 @@ function available(id: ActionId): boolean {
   return isActionAvailable(id, hostMethods(useHostStore.getState().status));
 }
 
+/** Вкладка браузера по id гостя (`webContentsId` из `dom-ready`, 9.2a); нет — null. */
+function browserTabOf(webContentsId: number): string | null {
+  const found = Object.entries(useBrowserStore.getState().tabs).find(([, state]) => state.webContentsId === webContentsId);
+  return found === undefined ? null : found[0];
+}
+
 /** Слои поверхностей живут у трёх последних работ (план, «Числа»). */
 const SURFACE_WORKS = 3;
 
@@ -158,6 +166,7 @@ interface WorkContainerProps {
   bridge: HarnasBridge;
   fontFamily: string;
   fontSize: number;
+  sendDeps: SendWithToastDeps; // карточке Design Mode через слой поверхностей (9.3b)
 }
 
 /**
@@ -169,7 +178,7 @@ interface WorkContainerProps {
  * шрифт, стабильны; начало и конец перетаскивания (`dragging` в `AppShell`)
  * иначе перерисовывали бы все тела групп и поверхности трёх работ.
  */
-const WorkContainer = memo(function WorkContainer({ workKey, active, bridge, fontFamily, fontSize }: WorkContainerProps): JSX.Element {
+const WorkContainer = memo(function WorkContainer({ workKey, active, bridge, fontFamily, fontSize, sendDeps }: WorkContainerProps): JSX.Element {
   const hasLayout = useLayoutStore((state) => state.layouts[workKey] !== undefined);
   const ref = useRef<HTMLDivElement>(null);
   // `inert` в React 18 — не булев проп, ставится руками.
@@ -186,7 +195,7 @@ const WorkContainer = memo(function WorkContainer({ workKey, active, bridge, fon
       {hasLayout ? (
         <>
           <LayoutView workKey={workKey} active={active} bridge={bridge} fontFamily={fontFamily} fontSize={fontSize} />
-          <SurfaceLayer workKey={workKey} active={active} bridge={bridge} fontFamily={fontFamily} fontSize={fontSize} />
+          <SurfaceLayer workKey={workKey} active={active} bridge={bridge} fontFamily={fontFamily} fontSize={fontSize} sendDeps={sendDeps} />
         </>
       ) : null}
     </div>
@@ -299,7 +308,8 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   // Зона терминала для файла — только у хоста с `pty.send` (кусок 7.2, как бросок из Finder в
   // 5.4): старый хост ответил бы `unknown_method`, а без зоны файл падает в тело вкладкой.
   const canSend = useHostSupports('pty.send');
-  const sendDeps: SendWithToastDeps = { bridge, session: sessionOf, openSession: openSessionTab };
+  // Один объект на мост: он уходит пропом в `memo`-контейнеры работ (9.3b), новый литерал на рендер их перерисовывал бы.
+  const sendDeps: SendWithToastDeps = useMemo(() => ({ bridge, session: sessionOf, openSession: openSessionTab }), [bridge]);
   const [dragging, setDragging] = useState<string | null>(null);
 
   const handleDragStart = (event: DragStartEvent): void => {
@@ -357,6 +367,18 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     const entry = useWorksStore.getState().entries.find((item) => workKey(item.projectPath, item.map.work.id) === key);
     if (entry === undefined) return undefined;
     return terminalSurfaces.get(refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: tab.sessionId }));
+  };
+
+  /** Страница активной вкладки активной группы активной работы — цель ⌘F, ⌘+, ⌘−, ⌘0 из страницы (9.2b). */
+  const activeBrowserPage = (): { tabId: string; webContentsId: number } | null => {
+    const key = useLayoutStore.getState().activeWorkKey;
+    const layout = key === null ? undefined : useLayoutStore.getState().layouts[key];
+    if (layout === undefined) return null;
+    const activeGroup = groups(layout).find((group) => group.id === layout.activeGroupId);
+    const tab = activeGroup?.tabs.find((candidate) => candidate.id === activeGroup.activeTabId);
+    if (tab?.kind !== 'browser') return null;
+    const webContentsId = useBrowserStore.getState().tabs[tab.id]?.webContentsId ?? null;
+    return webContentsId === null ? null : { tabId: tab.id, webContentsId };
   };
 
   /**
@@ -442,6 +464,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     attention: { next: openNextAttention },
     files: useFilesStore.getState(),
     toast: (text) => toast(text),
+    browser: { active: activeBrowserPage },
   });
 
   /**
@@ -502,6 +525,40 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     [bridge],
   );
 
+  // Клик в страницу DOM окна не видит (9.2b, спека 7.2): группу делает активной фокус гостя из main.
+  // Только вкладке активной работы, которая видна в своей группе: скрытую вкладку человек кликнуть
+  // не мог, а вкладку скрытой работы LRU событие не трогает.
+  useEffect(
+    () =>
+      bridge.browser.onFocus(({ webContentsId }) => {
+        const id = browserTabOf(webContentsId);
+        const state = useLayoutStore.getState();
+        const key = state.activeWorkKey;
+        const layout = key === null ? undefined : state.layouts[key];
+        const found = id === null || layout === undefined ? null : findTab(layout, id);
+        if (key === null || id === null || found === null || found.group.activeTabId !== id) return;
+        if (layout?.activeGroupId === found.group.id) return;
+        state.apply(key, (l) => focusTab(l, id));
+      }),
+    [bridge],
+  );
+
+  // window.open страницы (9.2b, спека 12.2): вкладка — рядом с открывателем, в его работе и группе.
+  useEffect(
+    () =>
+      bridge.browser.onOpenTab((event) => {
+        const state = useLayoutStore.getState();
+        openBrowserTabFrom(event, {
+          apply: state.apply,
+          layouts: state.layouts,
+          activeWorkKey: state.activeWorkKey,
+          tabIdOf: browserTabOf,
+          toast: (text) => toast(text),
+        });
+      }),
+    [bridge],
+  );
+
   // Открывающие действия сайдбара: сессия/почта/комната могут
   // принадлежать НЕ активной сейчас работе (у каждой работы своя раскладка) —
   // сначала переключить работу, потом открыть вкладку в НЕЙ.
@@ -536,6 +593,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     <div className="flex h-screen flex-col bg-background text-foreground">
       <Titlebar bridge={bridge} />
       <InterruptedBanner bridge={bridge} />
+      <WorksErrorBanner />
       {showLanding ? (
         <Landing />
       ) : (
@@ -583,6 +641,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
                     bridge={bridge}
                     fontFamily={fontFamily}
                     fontSize={fontSize}
+                    sendDeps={sendDeps}
                   />
                 ))}
             </div>
@@ -662,6 +721,10 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
       <SidebarSectionsWriter />
       <LayoutPersistence bridge={bridge} />
       {shell}
+      {/* Над <webview> указатель до DOM окна не доходит, и зоны броска над группой со страницей молчали
+          бы. Как оверлей ресайзеров: прозрачный щит на время перетаскивания, под DragOverlay (9.2b).
+          layoutCollision считает зоны по прямоугольникам и точке указателя, щит ему не мешает. */}
+      {dragging === null ? null : <div data-testid="drag-shield" className="fixed inset-0 z-[998]" />}
       {/* Обёртка оверлея — размером с источник, её центр модификатор ставит
           под указатель; ярлык — по центру обёртки (раунд исправлений 1, ревью B). */}
       <DragOverlay dropAnimation={null} modifiers={OVERLAY_MODIFIERS}>

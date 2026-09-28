@@ -284,3 +284,37 @@ describe('useUiStore — documentVisible и windowFocused (тест 16 куск�
     expect(useUiStore.getState().documentVisible).toBe(true);
   });
 });
+
+describe('useUiStore — windowFocused при фокусе в странице (тест 2 куска 9.2b)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('DOM-blur при activeElement — webview флаг не снимает; обычный blur — снимает', () => {
+    const bridge = createFakeBridge();
+    const dispose = useUiStore.getState().init(bridge);
+    const webview = document.createElement('webview');
+    const active = vi.spyOn(document, 'activeElement', 'get').mockReturnValue(webview);
+    window.dispatchEvent(new Event('blur'));
+    expect(useUiStore.getState().windowFocused).toBe(true);
+    active.mockReturnValue(document.body);
+    window.dispatchEvent(new Event('blur'));
+    expect(useUiStore.getState().windowFocused).toBe(false);
+    dispose();
+  });
+
+  it('app:window-focus false/true и browser:focus ставят флаг; после отписки — нет', () => {
+    const bridge = createFakeBridge();
+    const dispose = useUiStore.getState().init(bridge);
+    bridge.emitWindowFocus(false);
+    expect(useUiStore.getState().windowFocused).toBe(false);
+    bridge.emitWindowFocus(true);
+    expect(useUiStore.getState().windowFocused).toBe(true);
+    bridge.emitWindowFocus(false);
+    bridge.emitBrowserFocus({ webContentsId: 7 });
+    expect(useUiStore.getState().windowFocused).toBe(true);
+    dispose();
+    bridge.emitWindowFocus(false);
+    expect(useUiStore.getState().windowFocused).toBe(true);
+  });
+});

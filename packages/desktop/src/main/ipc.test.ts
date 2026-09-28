@@ -49,6 +49,11 @@ const browserSession = {
   clearCache: vi.fn().mockResolvedValue(undefined),
 };
 const otherSession = { clearStorageData: vi.fn(), clearCache: vi.fn() };
+/** Design Mode моста (кусок 9.3a): выбор в госте подменён — мост только проверяет гостя. */
+const designMode = {
+  start: vi.fn().mockResolvedValue(null),
+  cancel: vi.fn().mockResolvedValue(undefined),
+};
 
 /** Подставной webContents для моста `browser:*`: EventEmitter плюс то, что трогает мост. */
 function fakeBrowserContents(
@@ -186,6 +191,7 @@ function setup(
     browser: {
       fromId: (id) => (overrides.webContents?.get(id) as WebContents | undefined) ?? null,
       session: browserSession as unknown as Pick<Session, 'clearStorageData' | 'clearCache'>,
+      designMode,
     },
   });
 
@@ -682,6 +688,30 @@ describe('withIpcError (кусок 5.2, тест 15)', () => {
   });
 });
 
+describe('withIpcError — причина ошибки хоста (lane-r5, п. 1)', () => {
+  // Слияние с 8.2a: одна форма — причина едет в `data.reason`, отдельного поля `reason` нет;
+  // не строку отбрасывает потребитель (`store/works.ts`, тест там же).
+  it('HostError с data.reason — причина доезжает до рендерера в data; поля reason вне data нет', async () => {
+    const decode = async (promise: unknown): Promise<unknown> => {
+      try {
+        await promise;
+      } catch (error) {
+        return decodeIpcError(error);
+      }
+      return null;
+    };
+    const unreadable = new HostError('internal', 'работы не прочитаны', { reason: 'works-unreadable' });
+    expect(await decode(withIpcError(() => Promise.reject(unreadable))({}))).toEqual({
+      code: 'internal',
+      message: 'работы не прочитаны',
+      data: { reason: 'works-unreadable' },
+    });
+    const odd = await decode(withIpcError(() => Promise.reject(new HostError('internal', 'x', { reason: 7 })))({}));
+    expect(odd).not.toHaveProperty('reason');
+    expect(odd).toMatchObject({ data: { reason: 7 } });
+  });
+});
+
 describe('app:open-path и app:show-in-finder (кусок 5.2, тест 13)', () => {
   let dir = '';
   let project = '';
@@ -967,6 +997,28 @@ describe('мост browser:* (тест 8 куска 9.1)', () => {
     expect(browserSession.clearStorageData).toHaveBeenCalledTimes(1);
     expect(browserSession.clearCache).toHaveBeenCalledTimes(1);
     expect(otherSession.clearStorageData).not.toHaveBeenCalled();
+  });
+
+  it('pick-start и pick-cancel (тест 6 куска 9.3a): не гость раздела — bad_request; гость — designMode', async () => {
+    designMode.start.mockClear();
+    designMode.cancel.mockClear();
+    const { ipcMain } = browserSetup();
+
+    for (const id of [1, 404, 8, 9, 7.5, '7', null]) {
+      expect(await codeOf(ipcMain.invoke('browser:pick-start', id)), String(id)).toBe('bad_request');
+      expect(await codeOf(ipcMain.invoke('browser:pick-cancel', id)), String(id)).toBe('bad_request');
+    }
+    expect(designMode.start).not.toHaveBeenCalled();
+    expect(designMode.cancel).not.toHaveBeenCalled();
+
+    const picked = { url: 'https://x.y/a', selector: 'body', text: '', html: '', styles: {}, imagePath: null, thumbnail: null };
+    designMode.start.mockResolvedValueOnce(picked);
+    expect(await ipcMain.invoke('browser:pick-start', 7)).toEqual(picked);
+    expect(designMode.start).toHaveBeenCalledWith(7);
+    expect(await ipcMain.invoke('browser:pick-start', 7)).toBeNull();
+
+    await ipcMain.invoke('browser:pick-cancel', 7);
+    expect(designMode.cancel).toHaveBeenCalledWith(7);
   });
 });
 

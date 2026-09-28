@@ -127,14 +127,16 @@ export function createWorksService(
       if (!hasLiveCandidate) continue;
 
       try {
-        const dead = await reconcileMap(work.projectPath, work.map.work.id, lockOptions);
-        if (dead.length > 0) {
-          const fresh = await readMap(work.projectPath, work.map.work.id);
-          entries.set(workKey(work.projectPath, work.map.work.id), {
-            projectPath: work.projectPath,
-            map: fresh,
-          });
-        }
+        await reconcileMap(work.projectPath, work.map.work.id, lockOptions);
+        // Карта перечитывается всегда, а не только когда эта сверка нашла мёртвых: список
+        // наблюдателя мог быть прочитан до записи прошлой сверки (sleeping уже на диске,
+        // мёртвых больше нет), и без перечитывания снимок откатился бы к active мёртвой
+        // сессии навсегда (fix-tests2, host-disconnect:127).
+        const fresh = await readMap(work.projectPath, work.map.work.id);
+        entries.set(workKey(work.projectPath, work.map.work.id), {
+          projectPath: work.projectPath,
+          map: fresh,
+        });
       } catch (error) {
         if (error instanceof MapLockTimeoutError) {
           notice('map-lock', error.message);
@@ -166,8 +168,9 @@ export function createWorksService(
     }
   }
 
-  function ensureWatcher(projectPath: string): void {
-    if (stopped || watchers.has(projectPath)) return;
+  /** `true` — наблюдатель проекта заведён только что. */
+  function ensureWatcher(projectPath: string): boolean {
+    if (stopped || watchers.has(projectPath)) return false;
     const watcher = watchWorks(
       (works, seq) => {
         // Наблюдателей несколько (дом и каждый проект), каждый читает список
@@ -190,6 +193,7 @@ export function createWorksService(
       },
     );
     watchers.set(projectPath, watcher);
+    return true;
   }
 
   function scheduleRefresh(): void {
@@ -200,6 +204,31 @@ export function createWorksService(
     }, debounceMs);
   }
 
+  /**
+   * Карты проекта, чей наблюдатель заведён только что, перечитываются (fix-tests2): список
+   * пришёл от наблюдателя дома, а `updateMap` пишет индекс раньше карты — запись карты,
+   * сделанная до наблюдателя проекта, иначе не видна никому (первая сессия нового проекта
+   * оставалась pending в снимке). Всё, что запишут после, увидит уже сам наблюдатель.
+   */
+  async function rereadNewlyWatched(
+    works: readonly WorkEntry[],
+    projects: ReadonlySet<string>,
+  ): Promise<void> {
+    if (projects.size === 0) return;
+    for (const work of works) {
+      if (!projects.has(work.projectPath)) continue;
+      try {
+        const fresh = await readMap(work.projectPath, work.map.work.id);
+        entries.set(workKey(work.projectPath, work.map.work.id), {
+          projectPath: work.projectPath,
+          map: fresh,
+        });
+      } catch {
+        // Карту удалили или переписывают — следующее чтение наблюдателя разберётся.
+      }
+    }
+  }
+
   async function refresh(works: readonly WorkEntry[]): Promise<void> {
     if (stopped) return;
     const previous = buildSnapshot();
@@ -208,13 +237,15 @@ export function createWorksService(
     // глобальный индекс заново, а не только изменившийся проект, поэтому карту
     // сервиса можно просто заменить целиком, слитую по ключу `projectPath+workId`.
     const seenKeys = new Set<string>();
+    const newlyWatched = new Set<string>();
     entries.clear();
     for (const work of works) {
       const key = workKey(work.projectPath, work.map.work.id);
       entries.set(key, work);
       seenKeys.add(key);
-      ensureWatcher(work.projectPath);
+      if (ensureWatcher(work.projectPath)) newlyWatched.add(work.projectPath);
     }
+    await rereadNewlyWatched(works, newlyWatched);
 
     const projects = new Set(works.map((work) => work.projectPath));
     await Promise.all(

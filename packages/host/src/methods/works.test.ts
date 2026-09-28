@@ -1,8 +1,9 @@
 import { chmod, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { addSession, readMap, readWorksIndex, transitionSession, updateMap, workPaths } from '@harnas/core';
+import { addSession, createWork, readMap, readWorksIndex, transitionSession, updateMap, workPaths } from '@harnas/core';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
@@ -331,6 +332,140 @@ describe('settings.get / settings.set', () => {
     const response = await client.next();
     expect((response.result as { config: { messageRate: number } }).config.messageRate).toBe(7);
 
+    client.close();
+  });
+});
+
+describe('works.list на старте хоста', () => {
+  it('отвечает снимком после первого чтения работ хостом, а не тем, что успело набраться до него', async () => {
+    // Окно подключается сразу после listen, а хост читает работы и сверяет живость уже после
+    // него. Прежде works.list в это окно отдавал недочитанный снимок (пустой — окно считало
+    // работы исчезнувшими и закрывало их вкладки; или с active мёртвой сессии): fix-tests2,
+    // restart-host. Сверку здесь держит чужой map.lock — ответ обязан её дождаться.
+    const home = await tempHome();
+    homes.push(home);
+    const dir = await project();
+    const previousHome = process.env['HARNAS_HOME'];
+    process.env['HARNAS_HOME'] = home;
+    const map = await createWork(dir, { title: 'Работа' });
+    await updateMap(dir, map.work.id, (current) => {
+      const session = addSession(current, { provider: 'claude', label: 'план', task: 't' });
+      session.launchedBy = 'host';
+      session.pid = 999_999;
+      transitionSession(current, session.id, 'active');
+    });
+    if (previousHome === undefined) delete process.env['HARNAS_HOME'];
+    else process.env['HARNAS_HOME'] = previousHome;
+
+    const lock = workPaths(dir, map.work.id).lock;
+    await writeFile(lock, '');
+    const starting = startHost({ home });
+    starting.then((running) => hosts.push(running)).catch(() => {});
+
+    const paths = hostPaths(home);
+    let token = '';
+    for (const deadline = Date.now() + 5000; Date.now() < deadline; ) {
+      token = await readFile(paths.token, 'utf8').catch(() => '');
+      if (token !== '' && existsSync(paths.socket)) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const client = connectRaw(paths.socket);
+    await waitConnected(client.socket);
+    await hello(client, token);
+    client.send({ id: 1, method: 'works.list', params: {} });
+    setTimeout(() => void rm(lock, { force: true }), 300);
+
+    // До ответа могут прийти события (works.changed первого чтения) — ищем ответ по id.
+    let response = await client.next();
+    while (response.id !== 1) response = await client.next();
+    const entries = (response.result as { entries: Array<{ map: { sessions: Array<{ lifecycle: string }> } }> }).entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.map.sessions[0]?.lifecycle).toBe('sleeping');
+    await starting;
+    client.close();
+  });
+});
+
+describe('sessions.* на старте хоста (lane-r4, п. 4)', () => {
+  it('sessions.interrupted до первого чтения работ отвечает по прочитанному снимку, а не пустым списком', async () => {
+    // Окно на старте спрашивает прерванные сессии (баннер): ответ до первого чтения работ и
+    // сбора прерванных был пустым, и баннер не появлялся. Чтение держит чужой map.lock.
+    const home = await tempHome();
+    homes.push(home);
+    const dir = await project();
+    const previousHome = process.env['HARNAS_HOME'];
+    process.env['HARNAS_HOME'] = home;
+    const map = await createWork(dir, { title: 'Работа' });
+    let sessionId = '';
+    await updateMap(dir, map.work.id, (current) => {
+      const session = addSession(current, { provider: 'claude', label: 'план', task: 't' });
+      session.launchedBy = 'host';
+      session.pid = 999_999;
+      sessionId = session.id;
+      transitionSession(current, session.id, 'active');
+    });
+    if (previousHome === undefined) delete process.env['HARNAS_HOME'];
+    else process.env['HARNAS_HOME'] = previousHome;
+    // Журнал оборван посреди хода: хост упал, пока агент работал.
+    const events = workPaths(dir, map.work.id).events;
+    await mkdir(events, { recursive: true });
+    await writeFile(path.join(events, `${sessionId}.jsonl`), `${JSON.stringify({ hook_event_name: 'UserPromptSubmit' })}\n`);
+
+    const lock = workPaths(dir, map.work.id).lock;
+    await writeFile(lock, '');
+    const starting = startHost({ home });
+    starting.then((running) => hosts.push(running)).catch(() => {});
+
+    const paths = hostPaths(home);
+    let token = '';
+    for (const deadline = Date.now() + 5000; Date.now() < deadline; ) {
+      token = await readFile(paths.token, 'utf8').catch(() => '');
+      if (token !== '' && existsSync(paths.socket)) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const client = connectRaw(paths.socket);
+    await waitConnected(client.socket);
+    await hello(client, token);
+    client.send({ id: 1, method: 'sessions.interrupted', params: {} });
+    setTimeout(() => void rm(lock, { force: true }), 300);
+
+    let response = await client.next();
+    while (response.id !== 1) response = await client.next();
+    expect(response.result).toEqual({ refs: [{ projectPath: dir, workId: map.work.id, sessionId }] });
+    await starting;
+    client.close();
+  });
+});
+
+describe('отказ первого чтения работ (lane-r5, п. 1)', () => {
+  it('битый works-index.json — хост поднят, методы снимка отвечают ошибкой с причиной, прочие методы работают', async () => {
+    // Прежде worksService.start() бросал уже после listen: ворота worksReady не открывались и не
+    // отказывали — works.list и остальные методы снимка висели навсегда (review-fix-tests2-A, I1).
+    const home = await tempHome();
+    homes.push(home);
+    await writeFile(path.join(home, 'works-index.json'), '{"schemaVersion": 7}');
+    const running = await startHost({ home });
+    hosts.push(running);
+
+    const paths = hostPaths(home);
+    const client = connectRaw(paths.socket);
+    await waitConnected(client.socket);
+    await hello(client, await readFile(paths.token, 'utf8'));
+    // Уведомление за теми же воротами не роняет хост отказом.
+    client.send({ method: 'activity.seen', params: { ref: { projectPath: '/tmp/x', workId: 'w-0001', sessionId: 'S01' } } });
+    client.send({ id: 1, method: 'works.list', params: {} });
+    client.send({ id: 2, method: 'sessions.interrupted', params: {} });
+    client.send({ id: 3, method: 'host.info', params: {} });
+
+    const byId = new Map<unknown, RawMessage>();
+    while (byId.size < 3) {
+      const message = await client.next();
+      if (message.id !== undefined) byId.set(message.id, message);
+    }
+    for (const id of [1, 2]) {
+      expect(byId.get(id)?.error).toMatchObject({ code: 'internal', data: { reason: 'works-unreadable' } });
+    }
+    expect(byId.get(3)?.result).toBeDefined();
     client.close();
   });
 });

@@ -34,7 +34,10 @@ interface Violation {
   text: string;
 }
 
-/** Обходит каталог рекурсивно и отдаёт `.ts`/`.tsx`, кроме тестов, `test-utils/` и самого стража. */
+/**
+ * Обходит каталог рекурсивно и отдаёт `.ts`/`.tsx`/`.js`, кроме тестов, `test-utils/` и самого стража.
+ * `.js` — с 9.3a: подпись оверлея Design Mode живёт в `main/browser/guest-pick.js`.
+ */
 function collectFiles(root: string): string[] {
   const out: string[] = [];
   const stack = [root];
@@ -48,7 +51,7 @@ function collectFiles(root: string): string[] {
         continue;
       }
       if (!entry.isFile()) continue;
-      if (!/\.(ts|tsx)$/.test(entry.name)) continue;
+      if (!/\.(ts|tsx|js)$/.test(entry.name)) continue;
       if (entry.name.includes('.test.')) continue;
       if (entry.name === OWN_FILE) continue;
       out.push(path.join(dir, entry.name));
@@ -66,7 +69,11 @@ function collectFiles(root: string): string[] {
  */
 function scanFile(absPath: string, relPath: string): Violation[] {
   const sourceText = readFileSync(absPath, 'utf8');
-  const scriptKind = absPath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  const scriptKind = absPath.endsWith('.tsx')
+    ? ts.ScriptKind.TSX
+    : absPath.endsWith('.js')
+      ? ts.ScriptKind.JS
+      : ts.ScriptKind.TS;
   const sourceFile = ts.createSourceFile(absPath, sourceText, ts.ScriptTarget.Latest, true, scriptKind);
   const lines = sourceText.split('\n');
   const exemptLines = new Set<number>();
@@ -131,5 +138,20 @@ describe('scanDir: сам сканер (временный каталог)', () 
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it('смотрит и .js (кусок 9.3a): кириллица в строке скрипта — находка; guest-pick.js проходит', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'english-ui-scan-js-'));
+    try {
+      await writeFile(path.join(dir, 'bad.js'), "const label = 'Кнопка';\n");
+      await writeFile(path.join(dir, 'ok.js'), "// Комментарий по-русски\nconst label = 'Button';\n");
+
+      expect(scanDir(dir).map((v) => v.file)).toEqual(['bad.js']);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    const guestPick = path.join(srcRoot, 'main', 'browser', 'guest-pick.js');
+    expect(scanFile(guestPick, 'guest-pick.js')).toEqual([]);
+    expect(collectFiles(srcRoot)).toContain(guestPick);
   });
 });

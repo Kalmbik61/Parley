@@ -61,7 +61,11 @@ export interface UiState {
    * `nativeTheme` main (`followAppearance`, раунд main-r2) и ставит `.dark` на `<html>`.
    */
   dark: boolean;
-  /** Флаг по событиям `focus`/`blur` окна; начальное — `document.hasFocus()`. */
+  /**
+   * Флаг по событиям `focus`/`blur` окна; начальное — `document.hasFocus()`. Фокус в странице
+   * вкладки браузера окно из фокуса не выводит (спека 7.2, кусок 9.2b): DOM-`blur` при
+   * `activeElement` — `<webview>` флаг не снимает, `browser:focus` и `app:window-focus` main — ставят.
+   */
   windowFocused: boolean;
   /**
    * Документ виден (`visibilitychange`, кусок 4.2): свёрнутое или скрытое окно при фокусе
@@ -289,15 +293,25 @@ export const useUiStore = create<UiState>((set, get) => {
         });
 
       const onFocus = (): void => set({ windowFocused: true });
-      const onBlur = (): void => set({ windowFocused: false });
+      // Фокус ушёл в страницу <webview>: DOM окна видит blur, а человек по-прежнему смотрит в окно.
+      const onBlur = (): void => {
+        if (document.activeElement?.tagName === 'WEBVIEW') return;
+        set({ windowFocused: false });
+      };
       const onVisibility = (): void => set({ documentVisible: document.visibilityState === 'visible' });
       window.addEventListener('focus', onFocus);
       window.addEventListener('blur', onBlur);
       document.addEventListener('visibilitychange', onVisibility);
+      // Уход из приложения при фокусе в странице DOM окна не показывает, а focus и blur WebContents
+      // на macOS при смене окон не приходят: его приносит main (BrowserWindow focus/blur).
+      const unsubscribeWindowFocus = bridge.app.onWindowFocus((focused) => set({ windowFocused: focused }));
+      const unsubscribeBrowserFocus = bridge.browser.onFocus(() => set({ windowFocused: true }));
 
       return () => {
         disposed = true;
         unsubscribeWake();
+        unsubscribeWindowFocus();
+        unsubscribeBrowserFocus();
         window.removeEventListener('focus', onFocus);
         window.removeEventListener('blur', onBlur);
         document.removeEventListener('visibilitychange', onVisibility);

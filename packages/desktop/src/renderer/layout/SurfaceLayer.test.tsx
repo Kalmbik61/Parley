@@ -123,7 +123,7 @@ function renderWork(active = true): ReturnType<typeof render> {
   return render(
     <div data-testid="work-container">
       <LayoutView workKey={WORK_KEY} active={active} bridge={bridge} fontFamily="Menlo" fontSize={13} />
-      <SurfaceLayer workKey={WORK_KEY} active={active} bridge={bridge} fontFamily="Menlo" fontSize={13} />
+      <SurfaceLayer workKey={WORK_KEY} active={active} bridge={bridge} fontFamily="Menlo" fontSize={13} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />
     </div>,
   );
 }
@@ -299,7 +299,7 @@ describe('SurfaceLayer — стабильный sessionRef (раунд fix-main-
       view.rerender(
         <div data-testid="work-container">
           <LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} />
-          <SurfaceLayer workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} />
+          <SurfaceLayer workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />
         </div>,
       );
       await flush();
@@ -378,5 +378,39 @@ describe('SurfaceLayer — граница ошибки поверхности (�
       spy.mockRestore();
       requestClose.mockRestore();
     }
+  });
+});
+
+describe('SurfaceLayer — вкладка браузера (тест 4 куска 9.2a)', () => {
+  it('перенос между группами: ключ и webview прежние, узлы слоя не переставлены, меняется только якорь', async () => {
+    const root = twoGroups();
+    if (root.type !== 'split' || root.children[0].type !== 'group') throw new Error('не та раскладка');
+    const browser = { kind: 'browser' as const, id: 'browser:0a0a0a', url: 'http://localhost:5173/' };
+    root.children[0] = { ...root.children[0], tabs: [...root.children[0].tabs, browser], activeTabId: browser.id };
+    setLayout(root, 'g1');
+    renderWork();
+    await flush();
+
+    const layer = document.querySelector('[data-surface-layer]');
+    const order = (): string[] => [...(layer?.children ?? [])].map((node) => (node as HTMLElement).dataset.tabId ?? '');
+    const before = surface(browser.id);
+    const view = before?.querySelector('webview');
+    if (before === null || view === null || view === undefined) throw new Error('нет поверхности браузера');
+    const orderBefore = order();
+    expect(orderBefore).toEqual([...orderBefore].sort());
+    expect(before.style.getPropertyValue('position-anchor')).toBe('--g-g1');
+
+    act(() => {
+      useLayoutStore.getState().apply(WORK_KEY, (layout) => moveTab(layout, browser.id, { groupId: 'g2', index: 0 }));
+    });
+    await flush();
+
+    const after = surface(browser.id);
+    expect(after).toBe(before);
+    expect(after?.querySelector('webview')).toBe(view);
+    expect(after?.style.getPropertyValue('position-anchor')).toBe('--g-g2');
+    expect(order()).toEqual(orderBefore);
+    // Тело группы с вкладкой браузера — без запасного вида ошибки.
+    expect(document.body.textContent).not.toContain("Couldn't show layout");
   });
 });

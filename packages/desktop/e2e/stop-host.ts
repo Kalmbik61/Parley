@@ -26,7 +26,8 @@ const hostEntry = path.resolve(dirname, '../../host/dist/main.js');
 export async function stopHost(home: string): Promise<void> {
   const dir = path.join(home, 'host');
   const pids = new Set(await pidsHolding(path.join(dir, 'host.err')));
-  const fromFile = Number((await readFile(path.join(dir, 'host.pid'), 'utf8').catch(() => '')).trim());
+  // Первая строка замка — pid, вторая — время старта процесса (раунд lane-r5).
+  const fromFile = Number((await readFile(path.join(dir, 'host.pid'), 'utf8').catch(() => '')).split('\n')[0]);
   if (Number.isInteger(fromFile) && fromFile > 0) pids.add(fromFile);
   await Promise.all(
     [...pids].map(async (pid) => {

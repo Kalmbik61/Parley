@@ -100,6 +100,10 @@ function fakeContents(id: number, type: 'window' | 'webview' | 'remote') {
     }),
     setZoomMode: vi.fn(),
     stop: vi.fn(),
+    // 9.2a: адрес страницы для fetchFavicon и окно-хозяин для browser:favicon.
+    getURL: vi.fn(() => 'http://127.0.0.1:5173/page'),
+    isDestroyed: vi.fn(() => false),
+    hostWebContents: { send: vi.fn() },
     openHandler: (url: string) => {
       if (openHandler === null) throw new Error('setWindowOpenHandler не позвали');
       return openHandler({ url });
@@ -125,6 +129,7 @@ function setupGuard(isMainWindow: (c: WebContents) => boolean = () => false) {
   const unforward = vi.fn();
   const forwardShortcuts = vi.fn((): (() => void) => unforward);
   const isMain = vi.fn(isMainWindow);
+  const fetchFavicon = vi.fn<(iconUrl: string, pageUrl: string) => Promise<string | null>>(async () => null);
   const install = (): void =>
     installBrowserGuard({
       app: app as unknown as Pick<App, 'on'>,
@@ -133,6 +138,7 @@ function setupGuard(isMainWindow: (c: WebContents) => boolean = () => false) {
       openTab,
       forwardShortcuts,
       download,
+      fetchFavicon,
     });
   install();
   const created = (contents: ReturnType<typeof fakeContents>): void => {
@@ -147,6 +153,7 @@ function setupGuard(isMainWindow: (c: WebContents) => boolean = () => false) {
     forwardShortcuts,
     unforward,
     isMain,
+    fetchFavicon,
     created,
     requestHandler: () => requestHandler,
     checkHandler: () => checkHandler,
@@ -300,9 +307,11 @@ describe('загрузки раздела (ревью 9.1, спека 12.2)', ()
     const guard = setupGuard();
     guard.install();
     const item = { getFilename: () => 'evil.txt' };
-    guard.session.emit('will-download', fakeEvent(), item, {});
+    // Третий аргумент — webContents гостя, начавшего загрузку: по нему main снимает Design Mode (fix-9b).
+    const source = { id: 7 };
+    guard.session.emit('will-download', fakeEvent(), item, source);
     expect(guard.download).toHaveBeenCalledTimes(1);
-    expect(guard.download).toHaveBeenCalledWith(item);
+    expect(guard.download).toHaveBeenCalledWith(item, source);
   });
 
   it('promptDownload: стандартный диалог с папкой загрузок и именем — путь сам не ставит', () => {
@@ -351,5 +360,99 @@ describe('главное окно решается в момент will-attach-w
     const other = fakeEvent();
     windowContents.emit('will-attach-webview', other, {}, { src: 'https://x' });
     expect(other.defaultPrevented).toBe(true);
+  });
+});
+
+describe('favicon гостя (тест 10 куска 9.2a)', () => {
+  const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('page-favicon-updated → fetchFavicon(первый адрес, адрес страницы) → browser:favicon окну-хозяину', async () => {
+    const guard = setupGuard();
+    guard.fetchFavicon.mockResolvedValue('data:image/png;base64,AA==');
+    const guest = fakeContents(42, 'webview');
+    guard.created(guest);
+
+    guest.emit('page-favicon-updated', fakeEvent(), ['http://127.0.0.1:5173/favicon.ico', 'http://127.0.0.1:5173/other.png']);
+    expect(guard.fetchFavicon).toHaveBeenCalledTimes(1);
+    expect(guard.fetchFavicon).toHaveBeenCalledWith('http://127.0.0.1:5173/favicon.ico', 'http://127.0.0.1:5173/page');
+    await flush();
+    expect(guest.hostWebContents.send).toHaveBeenCalledWith('browser:favicon', {
+      webContentsId: 42,
+      dataUrl: 'data:image/png;base64,AA==',
+    });
+  });
+
+  it('ответ null, пустой список и гость, умерший до ответа, — события нет', async () => {
+    const guard = setupGuard();
+    const guest = fakeContents(43, 'webview');
+    guard.created(guest);
+
+    guest.emit('page-favicon-updated', fakeEvent(), ['http://127.0.0.1:5173/favicon.ico']);
+    guest.emit('page-favicon-updated', fakeEvent(), []);
+    expect(guard.fetchFavicon).toHaveBeenCalledTimes(1);
+    await flush();
+    expect(guest.hostWebContents.send).not.toHaveBeenCalled();
+
+    guard.fetchFavicon.mockResolvedValue('data:image/png;base64,AA==');
+    guest.isDestroyed.mockReturnValue(true);
+    guest.emit('page-favicon-updated', fakeEvent(), ['http://127.0.0.1:5173/favicon.ico']);
+    await flush();
+    expect(guest.hostWebContents.send).not.toHaveBeenCalled();
+  });
+
+  it('значок прежней страницы, пришедший после навигации, новой странице не уходит (перенос 9.2a)', async () => {
+    const guard = setupGuard();
+    let answerOld: (dataUrl: string | null) => void = () => {};
+    guard.fetchFavicon.mockImplementationOnce(() => new Promise((resolve) => (answerOld = resolve)));
+    const guest = fakeContents(44, 'webview');
+    guard.created(guest);
+
+    guest.emit('page-favicon-updated', fakeEvent(), ['http://127.0.0.1:5173/old.ico']);
+    guest.emit('did-navigate', fakeEvent(), 'http://127.0.0.1:5173/next');
+    answerOld('data:image/png;base64,OLD=');
+    await flush();
+    expect(guest.hostWebContents.send).not.toHaveBeenCalled();
+
+    guard.fetchFavicon.mockResolvedValueOnce('data:image/png;base64,NEW=');
+    guest.emit('page-favicon-updated', fakeEvent(), ['http://127.0.0.1:5173/new.ico']);
+    await flush();
+    expect(guest.hostWebContents.send).toHaveBeenCalledTimes(1);
+    expect(guest.hostWebContents.send).toHaveBeenCalledWith('browser:favicon', { webContentsId: 44, dataUrl: 'data:image/png;base64,NEW=' });
+  });
+
+  it('два запроса одной страницы: поздний ответ первого после второго отбрасывается', async () => {
+    const guard = setupGuard();
+    let answerFirst: (dataUrl: string | null) => void = () => {};
+    guard.fetchFavicon.mockImplementationOnce(() => new Promise((resolve) => (answerFirst = resolve)));
+    guard.fetchFavicon.mockResolvedValueOnce('data:image/png;base64,SECOND=');
+    const guest = fakeContents(45, 'webview');
+    guard.created(guest);
+
+    guest.emit('page-favicon-updated', fakeEvent(), ['http://127.0.0.1:5173/a.ico']);
+    guest.emit('page-favicon-updated', fakeEvent(), ['http://127.0.0.1:5173/b.ico']);
+    await flush();
+    answerFirst('data:image/png;base64,FIRST=');
+    await flush();
+    expect(guest.hostWebContents.send.mock.calls).toEqual([
+      ['browser:favicon', { webContentsId: 45, dataUrl: 'data:image/png;base64,SECOND=' }],
+    ]);
+  });
+});
+
+describe('фокус гостя (тест 10 куска 9.2b)', () => {
+  it('focus гостя → browser:focus { webContentsId } окну-хозяину', () => {
+    const guard = setupGuard();
+    const guest = fakeContents(46, 'webview');
+    guard.created(guest);
+    guest.emit('focus');
+    expect(guest.hostWebContents.send).toHaveBeenCalledWith('browser:focus', { webContentsId: 46 });
+  });
+
+  it('не-гость (окно) browser:focus не шлёт', () => {
+    const guard = setupGuard();
+    const window = fakeContents(47, 'window');
+    guard.created(window);
+    window.emit('focus');
+    expect(window.hostWebContents.send).not.toHaveBeenCalled();
   });
 });

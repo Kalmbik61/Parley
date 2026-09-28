@@ -18,6 +18,7 @@ import { errorText, S } from '../../shared/strings.js';
 import type { Appearance } from '../../shared/ui-types.js';
 import type { MruCycle } from '../keys/mru-cycle.js';
 import type { FilesState } from '../files/store.js';
+import { BROWSER_LIMITS, browserTabCount, openBrowserTab, requestAddressFocus, useBrowserStore } from '../browser/store.js';
 import type { LayoutState } from '../layout/store.js';
 import { findTab, focusGroup, focusTab, groups, reopenClosed } from '../layout/tree.js';
 import { neighborInOrder } from '../sidebar/sort.js';
@@ -75,6 +76,8 @@ export interface ActionContext {
   /** useFilesStore.getState() (7.4): ⌘⇧F переводит «Файлы» в режим поиска. */
   files: Pick<FilesState, 'openSearch'>;
   toast(text: string): void;
+  /** Как terminals.active() (6.3): активная вкладка активной группы активной работы, если это браузер с webContentsId. */
+  browser: { active(): { tabId: string; webContentsId: number } | null };
 }
 
 const APPEARANCE: Partial<Record<ActionId, Appearance>> = {
@@ -132,6 +135,12 @@ function toastOnError(ctx: ActionContext, promise: Promise<unknown>, action: str
   });
 }
 
+const ZOOM_STEP: Partial<Record<ActionId, 1 | -1 | 0>> = {
+  'browser.zoomIn': 1,
+  'browser.zoomOut': -1,
+  'browser.zoomReset': 0,
+};
+
 /** Действия, которым нужна активная работа (бриф 6.3): без неё — тост. Правого сайдбара без неё нет (7.2). */
 function needsActiveWork(id: ActionId): boolean {
   return (
@@ -147,7 +156,7 @@ function needsActiveWork(id: ActionId): boolean {
   );
 }
 
-/** Одна ветка на каждый реализованный `ActionId`; действия будущих этапов (8.2, 9.2) — без ветки. */
+/** Одна ветка на каждый реализованный `ActionId`; действия будущих этапов — без ветки. */
 export function runAction(id: ActionId, ctx: ActionContext): void {
   // Без активной работы — тост; активная есть, но её раскладка ещё читается с диска — ветки
   // вкладок и групп ниже просто ничего не делают.
@@ -165,6 +174,16 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
   if (id.startsWith('work.goto.')) {
     const key = ctx.sidebar.order()[Number(id.slice('work.goto.'.length)) - 1];
     if (key !== undefined) ctx.layout.setActiveWork(key);
+    return;
+  }
+  // ⌘F, ⌘+, ⌘−, ⌘0 из страницы (9.2b): вкладку делает активной browser:focus. Отказ — в консоль, без
+  // тоста: вкладка могла закрыться между нажатием и ответом. Вкладки браузера нет — ничего.
+  const zoom = ZOOM_STEP[id];
+  if (zoom !== undefined || id === 'browser.find') {
+    const page = ctx.browser.active();
+    if (page === null) return;
+    if (zoom === undefined) useBrowserStore.getState().update(page.tabId, { findOpen: true });
+    else ctx.bridge.browser.zoom(page.webContentsId, zoom).catch((error: unknown) => console.warn('[harnas] browser zoom', error));
     return;
   }
   if (id.startsWith('tab.goto.') && active !== null) {
@@ -241,6 +260,15 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
     case 'terminal.clear':
       (ctx.source === 'palette' ? ctx.terminals.active() : ctx.terminals.focused())?.clear();
       return;
+    case 'browser.newTab':
+      // Без активной работы тост даёт сам openBrowserTab — как у действий 6.3.
+      openBrowserTab('', {
+        apply: ctx.layout.apply,
+        layouts: ctx.layout.layouts,
+        activeWorkKey: ctx.layout.activeWorkKey,
+        toast: ctx.toast,
+      });
+      return;
     default:
       break;
   }
@@ -268,6 +296,13 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
       return;
     }
     case 'tab.reopen':
+      // ⌘⇧T предел вкладок браузера не обходит (спека 12.4).
+      if (layout.closedTabs[0]?.kind === 'browser' && browserTabCount(layout) >= BROWSER_LIMITS.tabsPerWork) {
+        ctx.toast(S.browser.tooManyTabs);
+        return;
+      }
+      // Вернул человек — адресная строка пустой вкладки снова берёт фокус (перенос 9.2a).
+      if (layout.closedTabs[0]?.kind === 'browser') requestAddressFocus(layout.closedTabs[0].id);
       ctx.layout.apply(key, reopenClosed);
       return;
     case 'tab.prev':

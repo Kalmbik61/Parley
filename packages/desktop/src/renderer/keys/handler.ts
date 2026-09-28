@@ -50,6 +50,11 @@ export const IMPLEMENTED_ACTIONS: ReadonlySet<ActionId> = new Set<ActionId>([
   'room.new',
   'files.quickOpen',
   'files.search',
+  'browser.newTab',
+  'browser.find',
+  'browser.zoomIn',
+  'browser.zoomOut',
+  'browser.zoomReset',
 ]);
 
 /** Действию нужны методы хоста: без них оно недоступно, даже когда реализовано. */

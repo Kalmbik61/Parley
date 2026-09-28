@@ -214,6 +214,36 @@ describe('useTerminal — pty.resync', () => {
     expect(xtermMock.terminals[0]?.resets).toBe(1);
     expect(xtermMock.terminals[0]?.writes).toEqual(['СНИМОК-1', 'СНИМОК-2']);
   });
+
+  it('два attach вразнобой: ответ прежнего, пришедший последним, экран не дописывает', async () => {
+    // fix-tests2 (host-disconnect:127, «stub-echo готов» дважды): второй attach начался, пока
+    // первый ждал ответа, и его ответ пришёл раньше. Прежний ответ, дописанный следом без
+    // сброса, удваивал экран — поверх свежего снимка ложился тот же вывод ещё раз.
+    const bridge = createFakeBridge();
+    const pending: Array<(result: { snapshot: string; cols: number; rows: number }) => void> = [];
+    bridge.setHandler(
+      'pty.attach',
+      () =>
+        new Promise((resolve) => {
+          pending.push(resolve);
+        }),
+    );
+    renderTerminal(bridge);
+    await waitFor(() => expect(pending).toHaveLength(1));
+
+    bridge.emit('pty.resync', { ref });
+    await waitFor(() => expect(pending).toHaveLength(2));
+
+    pending[1]?.({ snapshot: 'СНИМОК-2', cols: 80, rows: 24 });
+    await waitFor(() => expect(xtermMock.terminals[0]?.writes).toEqual(['СНИМОК-2']));
+    pending[0]?.({ snapshot: 'СНИМОК-1', cols: 80, rows: 24 });
+    // Ответу прежнего дать дойти: микрозадачи промиса и эффекты.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    expect(xtermMock.terminals[0]?.writes).toEqual(['СНИМОК-2']);
+  });
 });
 
 describe('useTerminal — ресайз', () => {

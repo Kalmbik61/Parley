@@ -75,49 +75,70 @@ const isDirectory = async (dir: string): Promise<boolean> => {
  */
 export function openEvents(eventsDir: string): EventsLog {
   const journals = new Map<string, Journal>();
+  /**
+   * Чтения одной сессии идут по очереди (fix-tests2): состояние журнала общее, и чтение,
+   * снявшее размер до дописанной строки, но закончившее после соседнего, приняло бы его
+   * смещение за «журнал переписали» и отдало пустой список последним — потребитель
+   * откатил бы состояние сессии до следующего хука.
+   */
+  const queues = new Map<string, Promise<unknown>>();
+
+  const readOnce = async (sessionId: string): Promise<readonly EventRecord[] | null> => {
+    const file = path.join(eventsDir, `${sessionId}.jsonl`);
+    let handle;
+    try {
+      handle = await open(file, 'r');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      // Файла нет: либо хуки ещё не срабатывали, либо каталога нет вовсе.
+      journals.delete(sessionId);
+      return (await isDirectory(eventsDir)) ? [] : null;
+    }
+
+    try {
+      const info = await handle.stat();
+      let journal = journals.get(sessionId);
+      // Файл короче прочитанного — журнал переписали, читаем его заново.
+      if (journal === undefined || info.size < journal.offset) {
+        journal = { offset: 0, tail: Buffer.alloc(0), events: [] };
+        journals.set(sessionId, journal);
+      }
+      if (info.size === journal.offset) return journal.events.slice();
+
+      const chunk = Buffer.alloc(info.size - journal.offset);
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, journal.offset);
+      journal.offset += bytesRead;
+
+      const data = Buffer.concat([journal.tail, chunk.subarray(0, bytesRead)]);
+      const cut = data.lastIndexOf(NEWLINE);
+      journal.tail = cut === -1 ? data : data.subarray(cut + 1);
+      if (cut === -1) return journal.events.slice();
+
+      const at = info.mtime.toISOString();
+      for (const line of data.subarray(0, cut).toString('utf8').split('\n')) {
+        if (line.trim() === '') continue;
+        const event = parseEvent(line, at);
+        if (event !== null) journal.events.push(event);
+      }
+      return journal.events.slice();
+    } finally {
+      await handle.close();
+    }
+  };
 
   return {
-    async read(sessionId) {
-      const file = path.join(eventsDir, `${sessionId}.jsonl`);
-      let handle;
-      try {
-        handle = await open(file, 'r');
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        // Файла нет: либо хуки ещё не срабатывали, либо каталога нет вовсе.
-        journals.delete(sessionId);
-        return (await isDirectory(eventsDir)) ? [] : null;
-      }
-
-      try {
-        const info = await handle.stat();
-        let journal = journals.get(sessionId);
-        // Файл короче прочитанного — журнал переписали, читаем его заново.
-        if (journal === undefined || info.size < journal.offset) {
-          journal = { offset: 0, tail: Buffer.alloc(0), events: [] };
-          journals.set(sessionId, journal);
-        }
-        if (info.size === journal.offset) return journal.events.slice();
-
-        const chunk = Buffer.alloc(info.size - journal.offset);
-        const { bytesRead } = await handle.read(chunk, 0, chunk.length, journal.offset);
-        journal.offset += bytesRead;
-
-        const data = Buffer.concat([journal.tail, chunk.subarray(0, bytesRead)]);
-        const cut = data.lastIndexOf(NEWLINE);
-        journal.tail = cut === -1 ? data : data.subarray(cut + 1);
-        if (cut === -1) return journal.events.slice();
-
-        const at = info.mtime.toISOString();
-        for (const line of data.subarray(0, cut).toString('utf8').split('\n')) {
-          if (line.trim() === '') continue;
-          const event = parseEvent(line, at);
-          if (event !== null) journal.events.push(event);
-        }
-        return journal.events.slice();
-      } finally {
-        await handle.close();
-      }
+    read(sessionId) {
+      const previous = queues.get(sessionId) ?? Promise.resolve();
+      const next = previous.then(
+        () => readOnce(sessionId),
+        () => readOnce(sessionId),
+      );
+      queues.set(sessionId, next);
+      const forget = (): void => {
+        if (queues.get(sessionId) === next) queues.delete(sessionId);
+      };
+      next.then(forget, forget);
+      return next;
     },
   };
 }

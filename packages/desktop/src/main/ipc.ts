@@ -16,6 +16,7 @@ import { isSessionId } from '../shared/work-keys.js';
 import type { UiStore } from './ui-store.js';
 import { openOrReveal, revealInFinder } from './files/open-path.js';
 import { FilesDeniedError, type RootsRegistry } from './roots.js';
+import type { createDesignMode } from './browser/design-mode.js';
 
 /**
  * Оборачивает обработчик `ipcMain.handle`: сквозные правила плана («Окно»)
@@ -36,7 +37,8 @@ export function withIpcError(
       return await handler(event, ...args);
     } catch (error) {
       if (error instanceof HostError) {
-        // data — ради `reason` ошибок git (кусок 8.2a): по одному коду их не различить.
+        // data — ради `reason` (ошибки git куска 8.2a, `works-unreadable` lane-r5): по одному коду
+        // их не различить.
         throw encodeIpcError({
           code: error.code,
           message: error.message,
@@ -178,7 +180,9 @@ export interface RegisterIpcOptions {
     fromId(id: number): WebContents | null;
     /** Сессия раздела BROWSER_PARTITION: clearData и сверка раздела гостя. */
     session: Pick<Session, 'clearStorageData' | 'clearCache'>;
-  }; // designMode добавит 9.3a
+    /** Выбор элемента Design Mode (кусок 9.3a, спека 12.3): main/browser/design-mode.ts#createDesignMode. */
+    designMode: ReturnType<typeof createDesignMode>;
+  };
 }
 
 /** Запрос поиска по странице — до 1000 символов (план, «Числа»). */
@@ -522,6 +526,19 @@ export function registerIpc(options: RegisterIpcOptions): void {
       const guest = browserGuest(browser, id);
       if (step !== 1 && step !== -1 && step !== 0) throw new HostError('bad_request', `invalid zoom step: ${String(step)}`);
       guest.setZoomLevel(step === 0 ? 0 : guest.getZoomLevel() + step);
+    }),
+  );
+
+  // Design Mode (кусок 9.3a): тот же страж гостя — главное окно и чужой раздел не выбирают.
+  ipcMain.handle(
+    'browser:pick-start',
+    withIpcError(async (_event, id: unknown) => browser.designMode.start(browserGuest(browser, id).id)),
+  );
+
+  ipcMain.handle(
+    'browser:pick-cancel',
+    withIpcError(async (_event, id: unknown) => {
+      await browser.designMode.cancel(browserGuest(browser, id).id);
     }),
   );
 

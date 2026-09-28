@@ -488,3 +488,35 @@ describe('AppShell — клики под DndContext (тест 13)', () => {
     expect(document.querySelector('[data-drag-overlay]')).toBeNull();
   });
 });
+
+describe('AppShell — щит над страницами на время перетаскивания (тест 9 куска 9.2b)', () => {
+  async function startDrag(): Promise<HTMLElement> {
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+    await activate(keyOf('w-01'));
+    const row = document.querySelector<HTMLElement>('[data-session-id="s-01"]');
+    if (row === null) throw new Error('нет строки');
+    expect(screen.queryByTestId('drag-shield')).toBeNull();
+    fireEvent.pointerDown(row, { isPrimary: true, button: 0, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(document, { isPrimary: true, clientX: 20, clientY: 10 });
+    await flush();
+    return row;
+  }
+
+  it('во время перетаскивания щит есть, после броска — нет', async () => {
+    await startDrag();
+    const shield = screen.getByTestId('drag-shield');
+    expect(shield.className).toContain('fixed');
+    expect(shield.className).toContain('inset-0');
+    fireEvent.pointerUp(document, { isPrimary: true, clientX: 20, clientY: 10 });
+    await flush();
+    expect(screen.queryByTestId('drag-shield')).toBeNull();
+  });
+
+  it('после отмены (Esc) — нет', async () => {
+    await startDrag();
+    expect(screen.getByTestId('drag-shield')).toBeTruthy();
+    fireEvent.keyDown(document, { key: 'Escape', code: 'Escape' });
+    await flush();
+    expect(screen.queryByTestId('drag-shield')).toBeNull();
+  });
+});

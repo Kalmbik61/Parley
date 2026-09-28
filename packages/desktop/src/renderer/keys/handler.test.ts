@@ -275,13 +275,24 @@ describe('isActionAvailable (тест 2 куска 6.1b)', () => {
     expect(isActionAvailable('sidebar.changes', new Set<string>())).toBe(true);
   });
 
-  it('ветки run 6.1b — все реализованы; browser.* и палитровые — нет', () => {
+  // Прежняя вторая половина («browser.* — нет» основной, «files.*, sidebar.changes — нет» полосы)
+  // после слияния этапов 7–9 неверна у обеих сторон: всё это реализовано и проверено тестами выше и ниже.
+  it('ветки run 6.1b — все реализованы', () => {
     for (const id of ['palette.open', 'work.new', 'session.new', 'settings.open', 'sidebar.left.toggle', 'work.goto.1', 'work.goto.9', 'work.prev', 'work.next', 'history.back', 'history.forward', 'group.splitRight', 'group.splitDown', 'group.prev', 'group.next', 'tab.close', 'tab.reopen', 'tab.prev', 'tab.next', 'tab.goto.1', 'tab.goto.9', 'tab.mruNext', 'tab.mruPrev', 'find', 'terminal.clear'] as const) {
       expect(IMPLEMENTED_ACTIONS.has(id)).toBe(true);
     }
-    for (const id of ['browser.find', 'browser.newTab'] as const) {
-      expect(IMPLEMENTED_ACTIONS.has(id)).toBe(false);
+  });
+
+  it('поиск и масштаб страницы реализованы (9.2b) и доступны без методов хоста', () => {
+    for (const id of ['browser.find', 'browser.zoomIn', 'browser.zoomOut', 'browser.zoomReset'] as const) {
+      expect(IMPLEMENTED_ACTIONS.has(id)).toBe(true);
+      expect(isActionAvailable(id, new Set())).toBe(true);
     }
+  });
+
+  it('browser.newTab реализован (9.2a) и доступен без методов хоста', () => {
+    expect(IMPLEMENTED_ACTIONS.has('browser.newTab')).toBe(true);
+    expect(isActionAvailable('browser.newTab', new Set())).toBe(true);
   });
 
   it('действия 6.3 реализованы; wake.toggle доступен только с wake.pause и wake.resume хоста', () => {

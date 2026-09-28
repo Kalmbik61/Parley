@@ -87,7 +87,7 @@ export function guardWebviewAttach(contents: Pick<WebContents, 'on'>): void {
 }
 
 /** Обработчики гостя `<webview>`: окна, навигация, масштаб, уход со страницы, клавиши. */
-function guardGuest(contents: WebContents, deps: Pick<BrowserGuardDeps, 'openTab' | 'forwardShortcuts'>): void {
+function guardGuest(contents: WebContents, deps: Pick<BrowserGuardDeps, 'openTab' | 'forwardShortcuts' | 'fetchFavicon'>): void {
   contents.setWindowOpenHandler(({ url }) => {
     // about:blank вкладки не открывает: <webview> с таким src не прикрепится ни сразу, ни после перезапуска.
     if (isHttpUrl(url) && navigationVerdict(url, 'main') === 'allow') {
@@ -111,8 +111,32 @@ function guardGuest(contents: WebContents, deps: Pick<BrowserGuardDeps, 'openTab
   contents.setZoomMode('isolated');
   // Иначе beforeunload страницы молча держит её при закрытии вкладки и переходе.
   contents.on('will-prevent-unload', (event) => event.preventDefault());
+  // Клик в страницу DOM окна не видит: вкладку страницы активной делает окно по этому событию,
+  // оно же держит «окно в фокусе» (спека 7.2, 12.2). Ответ — окну-хозяину гостя.
+  contents.on('focus', () => {
+    contents.hostWebContents?.send('browser:focus', { webContentsId: contents.id });
+  });
   // Слушатель клавиш снимается вместе с гостем, а не ждёт сборки мусора.
   contents.once('destroyed', deps.forwardShortcuts(contents));
+
+  // Favicon качает main (9.2a): CSP окна внешних картинок не пускает. Ответ — окну-хозяину гостя,
+  // рендерер находит вкладку по webContentsId. Гость мог умереть, пока значок качался.
+  // id гостя у новой страницы тот же: ответ, пришедший после навигации или после более
+  // позднего запроса, достался бы не своей странице (перенос 9.2a). Номер запроса его отсекает.
+  let faviconSeq = 0;
+  contents.on('did-navigate', () => {
+    faviconSeq += 1;
+  });
+  contents.on('page-favicon-updated', (_event, favicons) => {
+    const [first] = favicons;
+    if (first === undefined) return;
+    faviconSeq += 1;
+    const seq = faviconSeq;
+    void deps.fetchFavicon(first, contents.getURL()).then((dataUrl) => {
+      if (dataUrl === null || seq !== faviconSeq || contents.isDestroyed()) return;
+      contents.hostWebContents?.send('browser:favicon', { webContentsId: contents.id, dataUrl });
+    });
+  });
 }
 
 interface BrowserGuardDeps {
@@ -122,8 +146,14 @@ interface BrowserGuardDeps {
   session: Pick<Session, 'setPermissionRequestHandler' | 'setPermissionCheckHandler' | 'on'>; // раздел BROWSER_PARTITION
   openTab(e: BrowserOpenTab): void; // → окну-хозяину открывателя, событие browser:open-tab
   forwardShortcuts(contents: WebContents): () => void; // адаптер к forwardGuestShortcuts (6.1a), вернёт отписку
-  /** will-download раздела, синхронно: путь загрузки задаётся только внутри события. promptDownload или подмена E2E. */
-  download(item: DownloadItem): void;
+  /**
+   * will-download раздела, синхронно: путь загрузки задаётся только внутри события. promptDownload или подмена E2E.
+   * `source` — гость, начавший загрузку: по нему index.ts снимает его выбор Design Mode (fix-9b) — страж
+   * о Design Mode не знает, связь идёт через эту зависимость, без импорта.
+   */
+  download(item: DownloadItem, source: WebContents): void;
+  /** Favicon гостя в data: (9.2a); index.ts — favicon.ts с fetch сессии раздела. null — значка нет. */
+  fetchFavicon(iconUrl: string, pageUrl: string): Promise<string | null>;
 }
 
 /**
@@ -158,7 +188,7 @@ export function installBrowserGuard(deps: BrowserGuardDeps): void {
   // Камера, микрофон, геолокация, уведомления, буфер обмена и прочее — отказ.
   deps.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   deps.session.setPermissionCheckHandler(() => false);
-  deps.session.on('will-download', (_event, item) => deps.download(item));
+  deps.session.on('will-download', (_event, item, source) => deps.download(item, source));
 
   // Событие app, а не разрешение: обработчики сессии его не видят. Без preventDefault Electron
   // отдал бы сайту с mTLS первый сертификат из хранилища — личность человека без вопроса.

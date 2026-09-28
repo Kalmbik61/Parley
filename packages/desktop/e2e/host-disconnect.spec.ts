@@ -1,5 +1,6 @@
-import { existsSync } from 'node:fs';
-import { readFile, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { constants, existsSync } from 'node:fs';
+import { open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
@@ -31,7 +32,43 @@ async function call<T>(window: Page, method: string, params: unknown): Promise<T
 type SessionRef = { projectPath: string; workId: string; sessionId: string };
 
 async function hostPid(home: string): Promise<number> {
-  return Number((await readFile(path.join(home, 'host', 'host.pid'), 'utf8')).trim());
+  // Первая строка замка — pid, вторая — время старта процесса (раунд lane-r5).
+  return Number((await readFile(path.join(home, 'host', 'host.pid'), 'utf8')).split('\n')[0]);
+}
+
+/**
+ * Держит переподключение окна (fix-tests2): без этого «Disconnected» живёт ~0,5 с до первой
+ * попытки переподключения, и проверка видимости с набором «lost» успевала или не успевала в
+ * это окно по нагрузке машины. `host.token` подменяется именованным каналом: окно читает токен
+ * перед каждым подключением (`HostConnection.connectOnce`), и чтение канала ждёт писателя —
+ * без отказа, без запуска второго хоста и без срока подключения. Живое соединение токен уже
+ * не читает. Возвращает отпускание: прежний токен уходит в канал, как только окно его читает,
+ * и файл возвращается на место одним `rename`.
+ */
+async function holdReconnect(home: string): Promise<() => Promise<void>> {
+  const tokenPath = path.join(home, 'host', 'host.token');
+  const token = await readFile(tokenPath, 'utf8');
+  await rm(tokenPath);
+  execFileSync('mkfifo', ['-m', '600', tokenPath]);
+  return async () => {
+    // Писатель открывается без блокировки: пока читателя нет, open отвечает ENXIO. Читатель —
+    // попытка переподключения окна, она приходит сама по таймеру.
+    const deadline = Date.now() + 15_000;
+    for (;;) {
+      try {
+        const writer = await open(tokenPath, constants.O_WRONLY | constants.O_NONBLOCK);
+        await writer.writeFile(token);
+        await writer.close();
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENXIO' || Date.now() > deadline) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+    const restored = `${tokenPath}.restored`;
+    await writeFile(restored, token, { mode: 0o600 });
+    await rename(restored, tokenPath);
+  };
 }
 
 /** Поверхность терминала сессии (корень с `data-mount-id`, не ярлык вкладки). */
@@ -95,6 +132,7 @@ test.describe('терминал без связи с хостом (раунд la
     await terminalInput.press('Enter');
     await expect(window.getByText('echo: one', { exact: true })).toBeVisible();
     const pid = await hostPid(home);
+    const release = await holdReconnect(home);
 
     // Хост сам рвёт соединение клиента, чья строка длиннее MAX_LINE_BYTES (8 МБ), — как и без
     // hello за 5 с. Агент при этом жив: после переподключения вкладка берёт его снимок.
@@ -111,7 +149,10 @@ test.describe('терминал без связи с хостом (раунд la
     await expect(offline).toHaveText('Disconnected — reconnecting…');
     // Фокус в поле xterm: нажатия доходят до терминала, но не уходят ни в main, ни в очередь.
     await window.keyboard.type('lost');
+    // Набор был без связи: окно так и не переподключилось, пока его не отпустили.
+    await expect(offline).toBeVisible();
 
+    await release();
     await expect(offline).toBeHidden({ timeout: 15_000 });
     expect(await hostPid(home)).toBe(pid);
     // Снимок того же агента после переподключения.

@@ -83,10 +83,23 @@ describe('тест 6: LinkMenu', () => {
     await waitFor(() => expect(clipboard).toEqual(['/p/src/a.ts']));
   });
 
-  it('меню URL: Open in browser — адрес в externalOpened; Copy link — в буфере', async () => {
+  it('меню URL: Open in browser — вкладка браузера (9.2b); Open in system browser — externalOpened; Copy link — в буфере', async () => {
+    const key = '/tmp/p w-01';
+    useLayoutStore.setState({
+      activeWorkKey: key,
+      layouts: { [key]: { root: { type: 'group', id: 'g1', tabs: [], activeTabId: null }, activeGroupId: 'g1', closedTabs: [] } },
+      hydrated: { [key]: true },
+      pending: {},
+    });
     open(urlLink);
     expect(screen.queryByRole('menuitem', { name: 'Reveal in Finder' })).toBeNull();
     fireEvent.click(screen.getByRole('menuitem', { name: 'Open in browser' }));
+    const layout = useLayoutStore.getState().layouts[key];
+    expect(layout === undefined ? [] : groups(layout)[0]?.tabs).toMatchObject([{ kind: 'browser', url: 'https://example.com/x' }]);
+    expect(bridge.externalOpened).toEqual([]);
+    cleanup();
+    open(urlLink);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open in system browser' }));
     expect(bridge.externalOpened).toEqual(['https://example.com/x']);
     cleanup();
     open(urlLink);

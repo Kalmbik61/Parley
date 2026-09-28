@@ -93,3 +93,11 @@ describe('GroupView — тест 12', () => {
     expect(screen.getByText('Open a session from the sidebar, ⌘T for a new session')).toBeTruthy();
   });
 });
+
+describe('GroupView — вкладка браузера (тест 4 куска 9.2a)', () => {
+  it('тело группы с вкладкой browser — BrowserBody, без Couldn\'t show layout', () => {
+    renderGroup({ type: 'group', id: 'g1', tabs: [{ kind: 'browser', id: 'browser:0b0b0b', url: '' }], activeTabId: 'browser:0b0b0b' });
+    expect(screen.getByTestId('browser-body')).toBeTruthy();
+    expect(screen.queryByText("Couldn't show layout")).toBeNull();
+  });
+});
