@@ -413,4 +413,62 @@ describe('HostConnection', () => {
     expect(String(warn.mock.calls[1]?.[0])).toContain('2');
     warn.mockRestore();
   });
+
+  it('неудачный первый connect — повторы идут сами; хост появился — окно подключается (fix-final-b, M4)', async () => {
+    await writeToken(paths);
+    const statuses: string[] = [];
+    // Хост не поднимается: запуск ничего не даёт, процесса нет.
+    const spawn = vi.fn(() => null);
+    const connection = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 300 });
+    connection.onStatus((status) => statuses.push(status.state));
+    await expect(connection.connect()).rejects.toThrow();
+    expect(statuses.at(-1)).toBe('disconnected');
+
+    // Хост появился позже (человек поднял его, прошлый запуск дошёл) — петля сама подключается.
+    const server = await startFakeServer(paths);
+    try {
+      await vi.waitFor(() => expect(statuses.at(-1)).toBe('connected'), { timeout: 5000 });
+    } finally {
+      connection.close();
+      server.close();
+    }
+  }, 10000);
+
+  it('неудачный restartHost — переподключение заведено: новый хост позже — связь есть (fix-final-b, M4)', async () => {
+    await writeToken(paths);
+    let server = await startFakeServer(paths);
+    const statuses: string[] = [];
+    const spawn = vi.fn(() => null);
+    const connection = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 300 });
+    await connection.connect();
+    connection.onStatus((status) => statuses.push(status.state));
+
+    // Старый хост ушёл, новый не поднялся в срок — restartHost отказал.
+    await expect(connection.restartHost()).rejects.toThrow();
+    expect(statuses.at(-1)).toBe('disconnected');
+
+    server = await startFakeServer(paths);
+    try {
+      await vi.waitFor(() => expect(statuses.at(-1)).toBe('connected'), { timeout: 5000 });
+    } finally {
+      connection.close();
+      server.close();
+    }
+  }, 10000);
+
+  it('после close повторов нет: неудачный connect и close — хост позже не подключается (fix-final-b, M4)', async () => {
+    await writeToken(paths);
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(() => null), connectTimeoutMs: 300 });
+    await expect(connection.connect()).rejects.toThrow();
+    connection.close();
+
+    const server = await startFakeServer(paths);
+    let accepted = 0;
+    server.on('connection', () => {
+      accepted += 1;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(accepted).toBe(0);
+    server.close();
+  }, 10000);
 });

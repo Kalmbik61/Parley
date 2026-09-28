@@ -506,6 +506,8 @@ export const S = {
       `Host is an older version. Restart? Live sessions: ${liveSessions ?? '—'}.`,
     restart: 'Restart',
     disconnectedScreen: (reason: string): string => `No connection to host: ${reason}`,
+    /** Кнопка экрана «No connection to host» (fix-final-b); «Retry» — `common.retry`. */
+    restartHost: 'Restart host',
     statusConnecting: 'Connecting…',
     statusConnected: (hostVersion: string): string => `Host ${hostVersion}`,
     statusMismatch: 'Host version mismatch',

@@ -84,6 +84,8 @@ export interface HarnasBridge {
     setBadge(count: number): void;
     chooseFolder(): Promise<string | null>;
     restartHost(): Promise<void>;
+    /** «Retry» экрана «No connection to host»: подключение заново, с короткой паузой (fix-final-b). */
+    reconnect(): Promise<void>;
     /** Клик мышью по пункту меню (кусок 6.1b): `ActionId` реестра, канал `menu:action` прежний. */
     onMenu(listener: (id: ActionId) => void): () => void;
     /** Фокус окна macOS (BrowserWindow focus/blur): при фокусе в странице DOM-события окна его не показывают. */
