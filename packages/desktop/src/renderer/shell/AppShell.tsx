@@ -579,7 +579,13 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
         status={status}
         noticeLine={noticeLine}
         wakePaused={wakePaused}
-        onToggleWake={() => void toggleWake(bridge)}
+        onToggleWake={() => {
+          // Отказ — тостом, как у действия палитры wake.toggle, а не необработанным отказом промиса.
+          toggleWake(bridge).catch((error: unknown) => {
+            console.error('[harnas] toggle wake failed', error);
+            toast(errorText(decodeIpcError(error).code, S.errors.actions.toggleAutoWake));
+          });
+        }}
         onRestartHost={() => {
           // app.restartHost — только после «Restart» подтверждения; отказ — тостом, не отказом промиса.
           bridge.app.restartHost().catch((error: unknown) => {

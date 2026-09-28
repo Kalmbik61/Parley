@@ -1652,6 +1652,26 @@ describe('AppShell — действия 6.3 из палитры (тесты 8, 9
     await waitFor(() => expect(vi.mocked(toast)).toHaveBeenCalledWith("Couldn't toggle auto-wake: host error."));
   });
 
+  it('кнопка будильника строки статуса: отказ wake.pause — тот же тост, без необработанного отказа', async () => {
+    vi.mocked(toast).mockClear();
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      bridge.setHandler('wake.state', () => ({ paused: false }));
+      bridge.setHandler('wake.pause', () => {
+        throw encodeIpcError({ code: 'internal', message: 'сбой' });
+      });
+      await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
+      act(() => useUiStore.setState({ wakePaused: false }));
+      fireEvent.click(screen.getByRole('button', { name: 'Auto-wake on' }));
+      await waitFor(() => expect(vi.mocked(toast)).toHaveBeenCalledWith("Couldn't toggle auto-wake: host error."));
+      await flush();
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+  });
+
   it('Theme: dark — setAppearance, app.saveUi не зовётся', async () => {
     const setAppearance = vi.spyOn(bridge.app, 'setAppearance');
     await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);

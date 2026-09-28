@@ -190,6 +190,21 @@ describe('runAction — без активной работы (тест 2 кус�
     },
   );
 
+  // Ревью 6.3-A, Minor 1: работа выбрана, а её раскладка ещё читается с диска — тихий no-op.
+  it.each([...IMPLEMENTED_ACTIONS].filter((id) => id.startsWith('tab.') || id.startsWith('group.')))(
+    '%s при активной работе без гидрированной раскладки — ничего не делает, без тоста',
+    (id) => {
+      const spies = makeContext();
+      spies.layout.layouts = {};
+      runAction(id, spies.ctx);
+      expect(spies.toast).not.toHaveBeenCalled();
+      expect(spies.layout.apply).not.toHaveBeenCalled();
+      expect(spies.layout.requestCloseTabs).not.toHaveBeenCalled();
+      expect(spies.palette.openWith).not.toHaveBeenCalled();
+      expect(spies.step).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(['sidebar.right.toggle', 'sidebar.files'] as const)('%s без активной работы — тост, сайдбар не трогается (7.2)', (id) => {
     const spies = makeContext({ activeWorkKey: null });
     runAction(id, spies.ctx);
