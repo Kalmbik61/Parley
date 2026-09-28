@@ -76,6 +76,8 @@ export type ErrorCode =
  * Строки — часть протокола, менять их нельзя без обеих сторон.
  * - `git-missing` (`internal`), `not-a-repo`, `no-commits` (`bad_request`) — `GitStateError` из core (8.2a);
  * - `worktree-missing` (`bad_request`) — папки worktree сессии нет (раунд 8, пункт 1);
+ * - `worktree-corrupt` (`bad_request`) — файл `.git` worktree не ведёт в зарегистрированный worktree
+ *   проекта (подменён агентом): git в нём не запускается (раунд fix-final-a, п. 1);
  * - `works-unreadable` (`internal`) — первое чтение работ хостом отказало, снимка нет до перезапуска
  *   хоста (раунд lane-r5).
  */
@@ -84,6 +86,7 @@ export const HOST_ERROR_REASONS = {
   notARepo: 'not-a-repo',
   noCommits: 'no-commits',
   worktreeMissing: 'worktree-missing',
+  worktreeCorrupt: 'worktree-corrupt',
   worksUnreadable: 'works-unreadable',
 } as const;
 

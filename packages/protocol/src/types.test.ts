@@ -8,6 +8,7 @@ describe('HOST_ERROR_REASONS', () => {
       notARepo: 'not-a-repo',
       noCommits: 'no-commits',
       worktreeMissing: 'worktree-missing',
+      worktreeCorrupt: 'worktree-corrupt',
       worksUnreadable: 'works-unreadable',
     });
   });
