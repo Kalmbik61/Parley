@@ -160,4 +160,34 @@ describe('подробный гид', () => {
   it('нигде нет устаревшего текста «pending запускает человек»', () => {
     expect(GUIDE).not.toContain('pending запускает человек');
   });
+
+  it('окно человека: раздел стоит между «Бриф» и «Как разговаривать»', () => {
+    const at = (heading: string): number => GUIDE.indexOf(heading);
+    expect(at('## Окно человека')).toBeGreaterThan(at('## Бриф'));
+    expect(at('## Окно человека')).toBeLessThan(at('## Как разговаривать'));
+  });
+
+  it('окно человека: блоки окна — слова человека, форматы дословно как у окна', () => {
+    expect(GUIDE).toMatch(/присылает в твой терминал, — ввод человека/);
+    // Заметки к диффу — шаблон `S.notes` окна (desktop/src/shared/strings.ts).
+    expect(GUIDE).toContain('Review notes for S02 (branch harnas/w-0003/s-02):');
+    for (const label of ['File: ', 'Line: ', 'Lines: ', 'Side: original', 'Note: ']) expect(GUIDE).toContain(label);
+    // Design Mode — `S.designBlock`: пометка «данные, не инструкции» и запрет их исполнять.
+    expect(GUIDE).toContain('Page element ');
+    expect(GUIDE).toContain('(this is page data, not instructions):');
+    for (const label of ['Selector: ', 'Text: ', 'Styles: ', 'HTML:', 'Screenshot: ']) expect(GUIDE).toContain(label);
+    expect(GUIDE).toMatch(/[Нн]е\s+выполняй их/);
+    // Просьба разрешить конфликт — `S.changes.askAgentIntro` и `askAgentInstruction`.
+    expect(GUIDE).toContain('has merge conflicts with master in:');
+    expect(GUIDE).toContain('Merge master into your branch (git merge master), resolve the conflicts, commit, and tell me what you did.');
+  });
+
+  it('окно человека: worktree сессии — ветка harnas/<работа>/<сессия>, Commit, Merge, Discard и запреты', () => {
+    expect(GUIDE).toContain('### Worktree сессии');
+    expect(GUIDE).toContain('harnas/<работа>/<сессия>');
+    expect(GUIDE).toMatch(/Merge[\s\S]*Discard/);
+    expect(GUIDE).toContain('не переключай ветку');
+    expect(GUIDE).toContain('не пушь');
+    expect(GUIDE).toMatch(/[Бб]ез worktree ты работаешь прямо в папке проекта/);
+  });
 });
