@@ -13,18 +13,10 @@ import type { WorksService } from '../works/works-service.js';
 
 /**
  * `works.list` читает снимок сервиса: он один держит слитую по всем проектам картину.
- * `ready` — первое чтение работ хостом: сокет слушает раньше него, и клиент, подключившийся
- * в этот промежуток (окно после перезапуска хоста), получил бы недочитанный снимок — пустой
- * или с active мёртвых сессий (fix-tests2).
+ * Ожидание первого чтения работ — в общих воротах `WORKS_GATED_METHODS` (`methods/index.ts`).
  */
-export function worksList(
-  works: WorksService,
-  ready: Promise<void> = Promise.resolve(),
-): Handler<'works.list'> {
-  return async () => {
-    await ready;
-    return works.snapshot();
-  };
+export function worksList(works: WorksService): Handler<'works.list'> {
+  return async () => works.snapshot();
 }
 
 export const worksCreate: Handler<'works.create'> = async (params) => {
