@@ -12,6 +12,8 @@ import {
   createGitRunner,
   createGrepParser,
   gitRootOf,
+  GREP_LINE_BYTES,
+  GREP_TOTAL_BYTES,
   isSafeRev,
   parseGitStatus,
   parseLsFiles,
@@ -238,6 +240,47 @@ describe('createGrepParser', () => {
     expect(parser.push(Buffer.from(lines))).toBe(false);
     expect(parser.result().files).toHaveLength(200);
     expect(parser.result().truncated).toBe(true);
+  });
+
+  it('строка 5 МБ кусками по 64 КБ → текст попадания ровно 64 КБ, следующая запись цела', () => {
+    expect(GREP_LINE_BYTES).toBe(64 * 1024);
+    const parser = createGrepParser({ hits: 2000, files: 200 });
+    const out = Buffer.concat([
+      Buffer.from('min.js\x002\x00'),
+      Buffer.alloc(5 * 1024 * 1024, 'x'),
+      Buffer.from('\nb.ts\x007\x00y\n'),
+    ]);
+    for (let at = 0; at < out.length; at += 64 * 1024) expect(parser.push(out.subarray(at, at + 64 * 1024))).toBe(true);
+    const { files, truncated } = parser.result();
+    expect(truncated).toBe(false);
+    expect(files.map((f) => f.path)).toEqual(['min.js', 'b.ts']);
+    expect(files[0]?.hits[0]?.line).toBe(2);
+    expect(Buffer.byteLength(files[0]?.hits[0]?.text ?? '')).toBe(GREP_LINE_BYTES);
+    expect(files[1]?.hits[0]?.text).toBe('y');
+  });
+
+  it('много длинных строк → остановка по 32 МБ сырого текста и truncated', () => {
+    expect(GREP_TOTAL_BYTES).toBe(32 * 1024 * 1024);
+    const parser = createGrepParser({ hits: 2000, files: 200 });
+    const line = Buffer.alloc(1024 * 1024, 'x');
+    let pushed = 0;
+    let stoppedAt = -1;
+    for (let i = 0; i < 40; i++) {
+      const record = Buffer.concat([Buffer.from(`f${i}\x001\x00`), line, Buffer.from('\n')]);
+      pushed += record.length;
+      if (!parser.push(record)) {
+        stoppedAt = pushed;
+        break;
+      }
+    }
+    expect(stoppedAt).toBeGreaterThan(GREP_TOTAL_BYTES);
+    expect(stoppedAt).toBeLessThan(GREP_TOTAL_BYTES + 2 * 1024 * 1024);
+    expect(parser.push(Buffer.from('late\x001\x00x\n'))).toBe(false);
+    const { files, truncated } = parser.result();
+    expect(truncated).toBe(true);
+    // Целиком в 32 МБ вошла 31 запись по 1 МБ с заголовком; начатая 32-я отброшена.
+    expect(files).toHaveLength(31);
+    for (const file of files) expect(Buffer.byteLength(file.hits[0]?.text ?? '')).toBe(GREP_LINE_BYTES);
   });
 });
 
@@ -580,18 +623,27 @@ describe('длинная строка попадания (раунд fix-7.1b, �
   const half = 'x'.repeat(2_500_000);
   const body = `head\n${half}NEEDLE${half}\ntail\n`;
 
-  for (const kind of ['git', 'не git'] as const) {
-    it(`${kind}: строка 5 МБ → text ≤ 1000, ranges на совпадении`, async () => {
-      if (kind === 'git') await initRepo(dir);
-      await writeFile(path.join(dir, 'min.js'), body);
-      const result = await api(dir).grep(ROOT, Q('NEEDLE'), 's');
-      const hit = result.files[0]?.hits[0];
-      expect(hit?.line).toBe(2);
-      expect(hit?.text.length).toBeLessThanOrEqual(1000);
-      const [start, end] = hit?.ranges[0] ?? [0, 0];
-      expect(hit?.text.slice(start, end)).toBe('NEEDLE');
-    });
-  }
+  it('не git: строка 5 МБ → text ≤ 1000, ranges на совпадении', async () => {
+    await writeFile(path.join(dir, 'min.js'), body);
+    const result = await api(dir).grep(ROOT, Q('NEEDLE'), 's');
+    const hit = result.files[0]?.hits[0];
+    expect(hit?.line).toBe(2);
+    expect(hit?.text.length).toBeLessThanOrEqual(1000);
+    const [start, end] = hit?.ranges[0] ?? [0, 0];
+    expect(hit?.text.slice(start, end)).toBe('NEEDLE');
+  });
+
+  it('git: строка 5 МБ → попадание есть, text ≤ 1000; совпадение за 64 КБ — без подсветки', async () => {
+    await initRepo(dir);
+    await writeFile(path.join(dir, 'min.js'), body);
+    const result = await api(dir).grep(ROOT, Q('NEEDLE'), 's');
+    const hit = result.files[0]?.hits[0];
+    expect(result.truncated).toBe(false);
+    expect(hit?.line).toBe(2);
+    expect(hit?.text.length).toBeLessThanOrEqual(1000);
+    // Парсер main держит не больше 64 КБ строки (решение по 7.1b): NEEDLE на 2,5 МБ в них не вошёл.
+    expect(hit?.ranges).toEqual([]);
+  });
 
   it('runGrepWorker ranges: отменён до подсветки — неподсвеченные тоже окном', async () => {
     const controller = new AbortController();

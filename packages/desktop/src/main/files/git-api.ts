@@ -42,6 +42,13 @@ const PATHSPEC = ['--', '.', ':(exclude).harnas'];
 export const WALK_LIMIT = 50_000;
 /** Предел воркера поиска (план). */
 export const GREP_TIMEOUT_MS = 10_000;
+/**
+ * Пределы сырого вывода git grep в main (решение по 7.1b): строка попадания держится до воркера
+ * целиком, и без них пик памяти main при многомегабайтных строках ничем не ограничен. Хвост строки
+ * сверх 64 КБ отбрасывается; весь вывод сверх 32 МБ — git гасится, ответ truncated.
+ */
+export const GREP_LINE_BYTES = 64 * 1024;
+export const GREP_TOTAL_BYTES = 32 * 1024 * 1024;
 /** stderr git нужен только для консоли — дальше не копим. */
 const STDERR_LIMIT = 64 * 1024;
 /** Каталоги, в которые обход не заходит: зависимости, git и карты core. */
@@ -176,13 +183,25 @@ export function parseGitStatus(stdout: Buffer, prefix: string): Record<string, G
   return Object.fromEntries(out);
 }
 
-/** Разбор вывода git grep --null -n кусками; push → false на пределе. ranges пустые — их считает воркер. */
-export function createGrepParser(limits: { hits: number; files: number }): {
+/** Заголовок записи `путь\0строка\0` сверх текста: путь длиннее на macOS и Linux не бывает. */
+const GREP_HEADER_BYTES = 8 * 1024;
+
+/**
+ * Разбор вывода git grep --null -n кусками; push → false на пределе. ranges пустые — их считает воркер.
+ * Незаконченная запись держится не длиннее заголовка и `lineBytes` текста: остальное до перевода
+ * строки отбрасывается сразу. Сверх `totalBytes` сырого вывода — стоп и truncated; начатая запись
+ * на этой границе не отдаётся.
+ */
+export function createGrepParser(limits: { hits: number; files: number; lineBytes?: number; totalBytes?: number }): {
   push(chunk: Buffer): boolean;
   result(): GrepResult;
 } {
+  const lineBytes = limits.lineBytes ?? GREP_LINE_BYTES;
+  const totalBytes = limits.totalBytes ?? GREP_TOTAL_BYTES;
+  const recordBytes = GREP_HEADER_BYTES + lineBytes;
   const files = new Map<string, GrepResult['files'][number]['hits']>();
   let hits = 0;
+  let seen = 0;
   let truncated = false;
   let stopped = false;
   let tail = Buffer.alloc(0);
@@ -200,28 +219,37 @@ export function createGrepParser(limits: { hits: number; files: number }): {
       files.set(file, list);
     }
     if (hits >= limits.hits) return false;
-    list.push({ line, text: record.subarray(b + 1).toString('utf8'), ranges: [] });
+    // Обрезка посреди символа UTF-8 даёт в конце U+FFFD — окно всё равно режет строку до 1000.
+    list.push({ line, text: record.subarray(b + 1, b + 1 + lineBytes).toString('utf8'), ranges: [] });
     hits += 1;
     return true;
+  };
+
+  const stop = (): false => {
+    stopped = true;
+    truncated = true;
+    tail = Buffer.alloc(0);
+    return false;
   };
 
   return {
     push: (chunk) => {
       if (stopped) return false;
-      const buffer = tail.length === 0 ? chunk : Buffer.concat([tail, chunk]);
+      const over = seen + chunk.length > totalBytes;
+      const data = over ? chunk.subarray(0, totalBytes - seen) : chunk;
+      seen += data.length;
       let start = 0;
-      for (let end = buffer.indexOf(0x0a, start); end >= 0; end = buffer.indexOf(0x0a, start)) {
-        const ok = take(buffer.subarray(start, end));
+      for (let end = data.indexOf(0x0a, start); end >= 0; end = data.indexOf(0x0a, start)) {
+        const piece = data.subarray(start, Math.min(end, start + Math.max(0, recordBytes - tail.length)));
+        const ok = take(tail.length === 0 ? piece : Buffer.concat([tail, piece]));
+        tail = Buffer.alloc(0);
         start = end + 1;
-        if (!ok) {
-          stopped = true;
-          truncated = true;
-          tail = Buffer.alloc(0);
-          return false;
-        }
+        if (!ok) return stop();
       }
-      tail = Buffer.from(buffer.subarray(start));
-      return true;
+      // Копия, а не срез: срез держал бы в памяти весь кусок stdout.
+      const room = Math.max(0, recordBytes - tail.length);
+      if (room > 0 && start < data.length) tail = Buffer.concat([tail, data.subarray(start, start + room)]);
+      return over ? stop() : true;
     },
     result: () => ({ files: [...files].map(([file, list]) => ({ path: file, hits: list })), truncated }),
   };
