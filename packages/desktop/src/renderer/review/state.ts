@@ -5,6 +5,7 @@
  */
 
 import type { DiffFile, MergeCheck, MergeResult, ProjectChanges, WorktreeDiff } from '@harnas/core';
+import { HOST_ERROR_REASONS } from '@harnas/protocol';
 import type { IpcErrorInfo } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
 
@@ -78,8 +79,8 @@ export function changesErrorText(error: IpcErrorInfo): string {
   // Сообщение хоста — русский текст рантайма: человеку — только свой английский.
   console.warn('[harnas] changes', error.code, error.message);
   const reason = error.data?.['reason'];
-  if (reason === 'git-missing') return S.changes.gitMissing;
-  if (reason === 'not-a-repo') return S.changes.notARepo;
+  if (reason === HOST_ERROR_REASONS.gitMissing) return S.changes.gitMissing;
+  if (reason === HOST_ERROR_REASONS.notARepo) return S.changes.notARepo;
   return errorText(error.code, S.errors.actions.loadChanges);
 }
 

@@ -12,7 +12,8 @@ import type { Log } from './log.js';
 import { watchIdle } from './idle.js';
 import { hostPaths, MAX_SOCKET_PATH_BYTES } from './paths.js';
 import type { HostPaths } from './paths.js';
-import { createHostHandlers, WORKS_UNREADABLE } from './methods/index.js';
+import { HOST_ERROR_REASONS } from '@harnas/protocol';
+import { createHostHandlers } from './methods/index.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
 import { createPtyManager } from './pty/pty-manager.js';
@@ -242,7 +243,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     await worksService.stop();
     failWorksReady(
       new HostError('internal', `работы не прочитаны на старте хоста: ${worksFailure}`, {
-        reason: WORKS_UNREADABLE,
+        reason: HOST_ERROR_REASONS.worksUnreadable,
       }),
     );
   }

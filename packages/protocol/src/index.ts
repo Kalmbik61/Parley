@@ -1,7 +1,8 @@
 export { PROTOCOL_VERSION } from './version.js';
-export { refKey } from './types.js';
+export { HOST_ERROR_REASONS, refKey } from './types.js';
 export type {
   ErrorCode,
+  HostErrorReason,
   HostNotice,
   LiveMetrics,
   NoticeKind,

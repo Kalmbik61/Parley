@@ -70,6 +70,25 @@ export type ErrorCode =
   | 'conflict'
   | 'internal';
 
+/**
+ * Причины ошибок хоста — `data.reason` рядом с кодом (fix-lane-post, п. 3): хост их пишет, окно по ним
+ * выбирает свой текст. Раньше строки жили отдельно в хосте и окне, и расхождение ловили только тесты.
+ * Строки — часть протокола, менять их нельзя без обеих сторон.
+ * - `git-missing` (`internal`), `not-a-repo`, `no-commits` (`bad_request`) — `GitStateError` из core (8.2a);
+ * - `worktree-missing` (`bad_request`) — папки worktree сессии нет (раунд 8, пункт 1);
+ * - `works-unreadable` (`internal`) — первое чтение работ хостом отказало, снимка нет до перезапуска
+ *   хоста (раунд lane-r5).
+ */
+export const HOST_ERROR_REASONS = {
+  gitMissing: 'git-missing',
+  notARepo: 'not-a-repo',
+  noCommits: 'no-commits',
+  worktreeMissing: 'worktree-missing',
+  worksUnreadable: 'works-unreadable',
+} as const;
+
+export type HostErrorReason = (typeof HOST_ERROR_REASONS)[keyof typeof HOST_ERROR_REASONS];
+
 /** `data` — машинные подробности: у `protocol_mismatch` это `{ hostVersion, liveSessions }`. */
 export interface ProtocolError {
   code: ErrorCode;

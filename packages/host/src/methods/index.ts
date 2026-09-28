@@ -51,12 +51,6 @@ export const WORKS_GATED_METHODS = [
   'pty.send',
 ] as const satisfies readonly MethodName[];
 
-/**
- * `data.reason` ошибки методов снимка, когда первое чтение работ хостом отказало (раунд lane-r5):
- * снимка нет до перезапуска хоста. Код — `internal`; окно по причине показывает свой текст.
- */
-export const WORKS_UNREADABLE = 'works-unreadable';
-
 /** Уведомления того же рода: activity.seen сверяет сессию со снимком работ. */
 export const WORKS_GATED_NOTIFICATIONS = ['activity.seen'] as const satisfies readonly NotificationName[];
 
