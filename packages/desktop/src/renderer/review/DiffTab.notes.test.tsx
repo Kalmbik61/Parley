@@ -627,6 +627,34 @@ describe('одна колонка (тест 7)', () => {
   });
 });
 
+describe('две колонки → одна (раунд fix-8.4b, п. 4)', () => {
+  it('зона и карточка стороны original снимаются без утечки view zone и overlay widget; полоса — Original · lines 10-14', async () => {
+    serve('a.ts');
+    bridge.setNotes(KEY, 's-02', {
+      file: { version: 1, notes: [note({ side: 'original', startLine: 10, endLine: 14, body: 'old range', anchor: { text: 'line 9' } })] },
+      corruptedTo: null,
+    });
+    renderTab();
+    await flush();
+    intersect(['a.ts']);
+    await flush();
+    const editor = liveFor('a.ts');
+    const originalDom = section('a.ts').querySelector<HTMLElement>('div[data-side="original"] > [data-testid="monaco-zone-host"]');
+    if (originalDom === null) throw new Error('нет редактора original');
+    expect(editor.original.zones.map((zone) => zone.afterLineNumber)).toEqual([14]);
+    expect(originalDom.querySelectorAll('[data-note-overlay]')).toHaveLength(1);
+
+    act(() => useUiStore.setState((state) => ({ ui: { ...state.ui, diffView: 'inline' } })));
+    await flush();
+    expect(editor.original.zones).toHaveLength(0);
+    expect(originalDom.querySelectorAll('[data-note-overlay]')).toHaveLength(0);
+    expect(originalDom.textContent).not.toContain('old range');
+    const strip = within(section('a.ts')).getByTestId('original-notes');
+    expect(strip.textContent).toContain('Original · lines 10-14');
+    expect(strip.textContent).toContain('old range');
+  });
+});
+
 describe('режим коммита (тест 8)', () => {
   it('«+» нет, ⌘⇧A заметку не ставит, zones пусты, заметки не грузятся', async () => {
     bridge.setCommitFiles(WT, HASH, [file('a.ts')]);
