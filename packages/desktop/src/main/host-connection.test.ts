@@ -253,4 +253,39 @@ describe('HostConnection', () => {
     connection.close();
     server.close();
   }, 10000);
+  it('токен читается до сокета: пока файла токена нет, соединений с хостом нет (lane-r3, п. 2)', async () => {
+    // Хост закрывает соединение без hello через 5 с после accept: чтение токена после connect
+    // тратило этот срок и под нагрузкой не укладывалось в него.
+    await mkdir(paths.dir, { recursive: true });
+    const server = await startFakeServer(paths);
+    let accepted = 0;
+    server.on('connection', () => {
+      accepted += 1;
+    });
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 3000 });
+    const connecting = connection.connect();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const beforeToken = accepted;
+    await writeToken(paths);
+    await connecting;
+
+    expect(beforeToken).toBe(0);
+    expect(accepted).toBe(1);
+    connection.close();
+    server.close();
+  }, 10000);
+
+  it('notify без связи — не молча: предупреждение в консоли main со счётчиком (lane-r3, п. 2)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000 });
+    const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
+
+    expect(() => connection.notify('pty.input', { ref, data: 'a' })).not.toThrow();
+    connection.notify('pty.input', { ref, data: 'b' });
+
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(String(warn.mock.calls[0]?.[0])).toContain('pty.input');
+    expect(String(warn.mock.calls[1]?.[0])).toContain('2');
+    warn.mockRestore();
+  });
 });

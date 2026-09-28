@@ -318,6 +318,8 @@ export const S = {
     useRegex: 'Use regular expression',
     previousMatch: 'Previous match',
     nextMatch: 'Next match',
+    /** Связь окна с хостом оборвалась (раунд lane-r3, п. 2): терминал ввод не принимает. */
+    disconnected: 'Disconnected — reconnecting…',
   },
 
   /**

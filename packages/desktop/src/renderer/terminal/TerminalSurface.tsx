@@ -256,7 +256,7 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
     [bridge],
   );
 
-  const { search, terminal } = useTerminal({
+  const { search, terminal, offline } = useTerminal({
     bridge,
     ref: sessionRef,
     container,
@@ -426,6 +426,17 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
         </div>
       </TerminalContextMenu>
       {linkMenu === null ? null : <LinkMenu bridge={bridge} state={linkMenu} onClose={() => setLinkMenu(null)} />}
+      {/* Без связи с хостом ввод не уходит (`use-terminal.ts`) — человек должен это видеть, а не
+          печатать в пустоту (раунд lane-r3, п. 2). Слой ловит клики, экран под ним виден. */}
+      {offline ? (
+        <div
+          data-testid="terminal-offline"
+          role="status"
+          className="absolute inset-0 z-10 flex items-center justify-center bg-black/50 px-4 text-center text-sm text-neutral-100"
+        >
+          {S.terminal.disconnected}
+        </div>
+      ) : null}
     </div>
   );
 });

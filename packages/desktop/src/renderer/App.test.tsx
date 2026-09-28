@@ -18,6 +18,7 @@ import { tabId } from './layout/ids.js';
 import { useLayoutStore } from './layout/store.js';
 import { emptyLayout, openTab } from './layout/tree.js';
 import { useActivityStore } from './store/activity.js';
+import { useHostStore } from './store/host.js';
 import { useNoticesStore } from './store/notices.js';
 import { useUiStore } from './store/ui.js';
 import { useWorksStore } from './store/works.js';
@@ -411,5 +412,30 @@ describe('App — переход по цели уведомления (тест�
     expect(useLayoutStore.getState().activeWorkKey).toBe(key);
     expect(terminalTabs()).toContain('terminal:s-02');
     expect(toast).not.toHaveBeenCalled();
+  });
+});
+
+describe('App — обрыв связи с хостом (раунд lane-r3, п. 2)', () => {
+  beforeEach(() => {
+    useHostStore.setState({ status: { state: 'connecting' }, everConnected: false });
+  });
+  afterEach(() => {
+    useHostStore.setState({ status: { state: 'connecting' }, everConnected: false });
+  });
+
+  it('связь была и оборвалась — окно остаётся на месте (терминалы говорят «Disconnected — reconnecting…»)', () => {
+    render(<App />);
+    expect(screen.getByTestId('titlebar')).toBeTruthy();
+
+    act(() => bridge.emitStatus({ state: 'disconnected', reason: 'Connection to host closed' }));
+    expect(screen.getByTestId('titlebar')).toBeTruthy();
+    expect(screen.queryByText('No connection to host: Connection to host closed')).toBeNull();
+  });
+
+  it('связи ещё не было — экран «No connection to host», как прежде', () => {
+    bridge.emitStatus({ state: 'disconnected', reason: 'node not found in login-shell PATH' });
+    render(<App />);
+    expect(screen.getByText('No connection to host: node not found in login-shell PATH')).toBeTruthy();
+    expect(screen.queryByTestId('titlebar')).toBeNull();
   });
 });

@@ -329,3 +329,18 @@ describe('TerminalSurface', () => {
     });
   });
 });
+
+describe('TerminalSurface — без связи с хостом (раунд lane-r3, п. 2)', () => {
+  it('обрыв — «Disconnected — reconnecting…» поверх терминала; связь вернулась — надпись ушла', async () => {
+    renderSurface();
+    await waitFor(() => expect(xtermMock.terminals[0]).toBeDefined());
+    expect(screen.queryByTestId('terminal-offline')).toBeNull();
+
+    act(() => bridge.emitStatus({ state: 'disconnected', reason: 'Connection to host closed' }));
+    expect(screen.getByTestId('terminal-offline').textContent).toBe('Disconnected — reconnecting…');
+    expect(screen.getByRole('status').textContent).toBe('Disconnected — reconnecting…');
+
+    act(() => bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: [...REQUIRED_METHODS] }));
+    expect(screen.queryByTestId('terminal-offline')).toBeNull();
+  });
+});

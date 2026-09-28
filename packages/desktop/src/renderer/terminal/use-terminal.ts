@@ -20,6 +20,7 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { refKey, type SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { shouldForwardToTerminal } from '../lib/keys.js';
+import { useHostStore } from '../store/host.js';
 import { useUiStore } from '../store/ui.js';
 import { createLinkProvider, createStatCache, isHttpUrl, type TerminalLink } from './links.js';
 import { webglPolicy } from './webgl-policy.js';
@@ -71,6 +72,11 @@ export interface UseTerminalResult {
    * терминал не открыт.
    */
   terminal: Terminal | null;
+  /**
+   * Связь окна с хостом оборвалась (раунд lane-r3, п. 2): терминал ввод не принимает, а
+   * поверхность показывает «Disconnected — reconnecting…».
+   */
+  offline: boolean;
 }
 
 function sameRef(a: SessionRef, b: SessionRef): boolean {
@@ -89,6 +95,14 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
   // пересоздавать терминал, поэтому держит ссылку на уже созданный объект
   // вместо того, чтобы быть в зависимостях эффекта создания.
   const termRef = useRef<Terminal | null>(null);
+
+  // Без связи с хостом (раунд lane-r3, п. 2) ввод не уходит и не копится: `notify` main без
+  // сокета выбросил бы нажатия молча, а воспроизводить их после переподключения нельзя —
+  // состояние агента за это время могло измениться. `connecting` сюда не входит: до первого
+  // подключения окно показывает свой экран, а терминалов ещё нет.
+  const offline = useHostStore((state) => state.status.state === 'disconnected');
+  const offlineRef = useRef(offline);
+  offlineRef.current = offline;
 
   // `bridge` стабилен на весь жизненный цикл окна (один `window.harnas`, см.
   // `App.tsx`), но колбэки ниже заведены один раз на монтирование — читают
@@ -125,6 +139,7 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
       minimumContrastRatio: minimumContrastRatio(useUiStore.getState().dark),
       fontFamily,
       fontSize,
+      disableStdin: offlineRef.current,
       // screenReaderMode не включаем: в нём xterm игнорирует события
       // insertText, а через них приходят выбор эмодзи, диктовка и буквы с
       // диакритикой по долгому нажатию в macOS — ввод терялся бы.
@@ -293,6 +308,8 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
     detachRef.current = detach;
 
     const dataDisposable = term.onData((data) => {
+      // `disableStdin` не держит вставку и программные `paste` — проверка и здесь.
+      if (offlineRef.current) return;
       bridgeRef.current.notify('pty.input', { ref, data });
     });
 
@@ -375,9 +392,22 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
   // зависимостей плюс `visible`, иначе после пересоздания терминала (эффект
   // выше) с тем же `visible` подключения бы не случилось вовсе.
   useEffect(() => {
-    if (visible) void attachRef.current?.();
+    // Без связи цепляться не к кому: переподключение ниже само подключит видимую вкладку.
+    if (visible && !offlineRef.current) void attachRef.current?.();
     return () => detachRef.current?.();
   }, [visible, container, ref.projectPath, ref.workId, ref.sessionId]);
+
+  // Связь оборвалась и вернулась (раунд lane-r3, п. 2): новое подключение main хосту ничего
+  // не должно — прежний `pty.attach` жил на старом сокете. Видимая вкладка цепляется заново
+  // свежим снимком; скрытая — при показе, эффектом выше.
+  const wasOffline = useRef(offline);
+  useEffect(() => {
+    const term = termRef.current;
+    if (term !== null) term.options.disableStdin = offline;
+    const reconnected = wasOffline.current && !offline;
+    wasOffline.current = offline;
+    if (reconnected && visibleRef.current) void attachRef.current?.();
+  }, [offline]);
 
   // Видимость — политике WebGL (спека 8.1). Эффект после эффекта создания: подписка уже
   // есть, и после пересоздания xterm (там `forget`) видимость сообщается заново.
@@ -386,7 +416,7 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
     webglPolicy.update(refKey(ref), visible);
   }, [visible, container, ref.projectPath, ref.workId, ref.sessionId]);
 
-  return { search, terminal };
+  return { search, terminal, offline };
 }
 
 /** Окно открыто с `?renderer=dom` — так его открывает main при HARNAS_TERMINAL_RENDERER=dom. */
