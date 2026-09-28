@@ -37,6 +37,8 @@ import type { TabSpec } from '../../shared/layout-types.js';
 import { errorText, S } from '../../shared/strings.js';
 import { applyFocusTarget, buildFocusTargetDeps } from '../attention/focus-target.js';
 import { useHostSupports } from '../lib/capabilities.js';
+import { sessionTag } from '../lib/participant.js';
+import { Button } from '../ui/button.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { dndId, type DropTargetData } from '../layout/dnd.js';
 import { useTerminalDropPreview } from '../layout/DropIndicator.js';
@@ -52,7 +54,7 @@ import { sessionCwd, type TerminalLink } from './links.js';
 import { SearchBar } from './SearchBar.js';
 import { terminalSurfaces, type TerminalSurfaceHandle } from './surface-registry.js';
 import { dragHasFiles, pasteHasOnlyImage, pathsToInput } from './drop.js';
-import { sendWithToast, type SendWithToastDeps } from './send.js';
+import { canResume, sendWithToast, type SendWithToastDeps } from './send.js';
 import { TerminalContextMenu } from './TerminalContextMenu.js';
 import { useTerminal } from './use-terminal.js';
 import { xtermTheme } from './xterm-themes.js';
@@ -88,10 +90,8 @@ function sanitizePaste(text: string): string {
 }
 
 /** Сессия из снимка работ — для «Resume» тоста отправки; null — её уже нет. */
-function sessionOf(ref: SessionRef): WorkSession | null {
-  const entry = useWorksStore
-    .getState()
-    .entries.find((item) => item.projectPath === ref.projectPath && item.map.work.id === ref.workId);
+function sessionOf(ref: SessionRef, entries = useWorksStore.getState().entries): WorkSession | null {
+  const entry = entries.find((item) => item.projectPath === ref.projectPath && item.map.work.id === ref.workId);
   return entry?.map.sessions.find((item) => item.id === ref.sessionId) ?? null;
 }
 
@@ -102,6 +102,15 @@ function sessionOf(ref: SessionRef): WorkSession | null {
 function openSessionTab(ref: SessionRef): void {
   const applied = applyFocusTarget({ kind: 'session', ref }, buildFocusTargetDeps());
   if (!applied) toast(S.notifications.targetGone);
+}
+
+/** «Resume» неживой сессии: отказ — тостом, а не молча (раунд main-r2, п. 2). */
+function resumeSession(bridge: HarnasBridge, ref: SessionRef): void {
+  bridge.call('sessions.resume', { ref }).catch((error: unknown) => {
+    const { code, message } = decodeIpcError(error);
+    console.warn('[harnas] sessions.resume', message);
+    toast.error(errorText(code, S.errors.actions.resumeSession));
+  });
 }
 
 /** Случайный id монтирования — не `crypto.randomUUID`: тот требует защищённого контекста. */
@@ -206,6 +215,17 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
     const session = entry?.map.sessions.find((item) => item.id === sessionRef.sessionId);
     return session === undefined ? sessionRef.projectPath : sessionCwd(session, sessionRef.projectPath);
   });
+  // Неживая сессия (раунд main-r2, п. 2): после «Restart host» или выхода агента PTY нет, и
+  // пустой экран молчал бы. sleeping и closed — «isn't running»; Resume — где он уместен.
+  const notRunning = useWorksStore((state) => {
+    const lifecycle = sessionOf(sessionRef, state.entries)?.lifecycle;
+    return lifecycle === 'sleeping' || lifecycle === 'closed';
+  });
+  const resumable = useWorksStore((state) => {
+    const session = sessionOf(sessionRef, state.entries);
+    return session !== null && canResume(session);
+  });
+  const label = sessionTag(sessionRef.sessionId);
   const [searchOpen, setSearchOpen] = useState(false);
   const [linkMenu, setLinkMenu] = useState<LinkMenuState | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -230,6 +250,18 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
     [bridge],
   );
 
+  // Ввод в неживую вкладку хост молча отбрасывает — тост с Resume; один на сессию (`id`), а не
+  // по тосту на каждую клавишу. Состояние читается в момент ввода, не из замыкания рендера.
+  const onInput = useCallback(() => {
+    const session = sessionOf(sessionRef);
+    if (session === null || (session.lifecycle !== 'sleeping' && session.lifecycle !== 'closed')) return;
+    const tag = sessionTag(sessionRef.sessionId);
+    toast.error(S.send.notRunning(tag), {
+      id: `not-running:${refKey(sessionRef)}`,
+      ...(canResume(session) ? { action: { label: S.sidebar.sessionMenu.resume, onClick: () => resumeSession(bridge, sessionRef) } } : {}),
+    });
+  }, [bridge, sessionRef]);
+
   const { search, terminal } = useTerminal({
     bridge,
     ref: sessionRef,
@@ -240,6 +272,8 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
     workKey: key,
     cwd,
     onLink,
+    onInput,
+    running: !notRunning,
   });
   const dark = useUiStore((state) => state.dark);
 
@@ -374,6 +408,19 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
       onDrop={onDrop}
       style={dropping ? { outline: '2px solid rgb(59,130,246)', outlineOffset: '-2px' } : undefined}
     >
+      {notRunning ? (
+        <div
+          data-testid="terminal-not-running"
+          className="flex min-w-0 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-3 py-1.5 text-sm text-foreground"
+        >
+          <span className="min-w-0 truncate">{S.send.notRunning(label)}</span>
+          {resumable ? (
+            <Button type="button" size="sm" className="shrink-0" onClick={() => resumeSession(bridge, sessionRef)}>
+              {S.sidebar.sessionMenu.resume}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       {searchOpen ? (
         <SearchBar
           ref={inputRef}

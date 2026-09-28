@@ -502,6 +502,7 @@ export const S = {
       restartHost: 'restart host',
       closeTab: 'close tab',
       readFolder: 'read folder',
+      resumeSession: 'resume session',
     },
     noWorktree: 'This session has no worktree of its own',
     /** Действие работы (⌘T, ⌘W, разделение…) без активной работы — тост (кусок 6.3). */

@@ -55,6 +55,15 @@ export interface UseTerminalOptions {
   cwd: string;
   /** Клик по ссылке и по OSC 8; ⌘-клик или меню решает TerminalSurface. */
   onLink(link: TerminalLink, event: MouseEvent): void;
+  /** Ввод человека, ушедший в `pty.input` (раунд main-r2): неживой сессии поверхность отвечает тостом. */
+  onInput?(data: string): void;
+  /**
+   * Процесс агента жив (lifecycle не sleeping/closed). По умолчанию `true`. Неживой сессии
+   * подключаться не к чему — экран держит последний вывод; ожила (Resume после «Restart host»,
+   * раунд main-r2) — видимая вкладка подключается сама: новый хост про прежнюю подписку не знает
+   * и `pty.resync` ей не пришлёт.
+   */
+  running?: boolean;
 }
 
 export interface UseTerminalResult {
@@ -106,6 +115,8 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
   // читаются через ref.
   const linkContextRef = useRef({ workKey: options.workKey, cwd: options.cwd, onLink: options.onLink });
   linkContextRef.current = { workKey: options.workKey, cwd: options.cwd, onLink: options.onLink };
+  const onInputRef = useRef(options.onInput);
+  onInputRef.current = options.onInput;
 
   // Мост между эффектом создания xterm (ниже) и эффектом видимости (в конце
   // функции): подключение к хосту должно переживать переключение вкладок без
@@ -292,6 +303,7 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
 
     const dataDisposable = term.onData((data) => {
       bridgeRef.current.notify('pty.input', { ref, data });
+      onInputRef.current?.(data);
     });
 
     const unsubscribeOutput = bridgeRef.current.on('pty.output', (event) => {
@@ -372,10 +384,11 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
   // сам обязан быть в паре с созданием терминала — тот же список
   // зависимостей плюс `visible`, иначе после пересоздания терминала (эффект
   // выше) с тем же `visible` подключения бы не случилось вовсе.
+  const running = options.running ?? true;
   useEffect(() => {
-    if (visible) void attachRef.current?.();
+    if (visible && running) void attachRef.current?.();
     return () => detachRef.current?.();
-  }, [visible, container, ref.projectPath, ref.workId, ref.sessionId, generation]);
+  }, [visible, running, container, ref.projectPath, ref.workId, ref.sessionId, generation]);
 
   // Видимость — политике WebGL (спека 8.1). Эффект после эффекта создания: подписка уже
   // есть, и после пересоздания xterm (там `forget`) видимость сообщается заново.

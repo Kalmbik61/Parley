@@ -1,6 +1,6 @@
 /**
- * Баннер упавших сессий (кусок 3.6 плана окна, спека 7.4): при подключении
- * спрашивает `sessions.interrupted`, и если список непуст — «Прерваны
+ * Баннер упавших сессий (кусок 3.6 плана окна, спека 7.4): при монтировании и
+ * каждом восстановлении связи с хостом спрашивает `sessions.interrupted`, и если список непуст — «Прерваны
  * посреди хода: S03, S05» с кнопкой «Поднять всех» (`sessions.resumeInterrupted`).
  * Сам себя прячет, когда список пуст — рендерится безусловно сразу после
  * заголовка в `shell/AppShell.tsx` (кусок 2.3), перед `Landing`/центром с
@@ -27,12 +27,31 @@ export function InterruptedBanner({ bridge }: InterruptedBannerProps): JSX.Eleme
   const [refs, setRefs] = useState<SessionRef[]>([]);
 
   useEffect(() => {
-    bridge
-      .call('sessions.interrupted', {})
-      .then((result) => setRefs(result.refs))
-      .catch(() => {
-        // Нет ответа — баннера просто не будет, не повод падать.
-      });
+    let alive = true;
+    const load = (): void => {
+      bridge
+        .call('sessions.interrupted', {})
+        .then((result) => {
+          if (alive) setRefs(result.refs);
+        })
+        .catch(() => {
+          // Нет ответа — баннера просто не будет, не повод падать.
+        });
+    };
+    load();
+    // Каждое восстановление связи (раунд main-r2, п. 2): «Restart host» и падение хоста окно не
+    // перемонтируют, а прерванные сессии появляются именно тогда. Первое «connected» после
+    // монтирования тоже перезапрашивает: запрос при монтировании мог уйти до связи.
+    let connected = false;
+    const unsubscribe = bridge.onStatus((status) => {
+      const now = status.state === 'connected';
+      if (now && !connected) load();
+      connected = now;
+    });
+    return () => {
+      alive = false;
+      unsubscribe();
+    };
   }, [bridge]);
 
   if (refs.length === 0) return null;

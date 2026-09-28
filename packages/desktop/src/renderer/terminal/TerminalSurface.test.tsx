@@ -341,3 +341,95 @@ describe('TerminalSurface', () => {
     });
   });
 });
+
+// Раунд main-r2, п. 2 (ревью 6.3-B, Important 2): после «Restart host» агент мёртв, а вкладка
+// молчала пустым экраном. Неживая сессия — полоса «S01 isn't running» с Resume; ввод — тост.
+describe('TerminalSurface — неживая сессия (раунд main-r2, п. 2)', () => {
+  function withSession(patch: Parameters<typeof makeSession>[2]): void {
+    useWorksStore.setState({
+      entries: [makeWork('w-01', { projectPath: '/tmp/proj', sessions: [makeSession('s-01', 'один', patch)] })],
+      branches: {},
+      loading: false,
+      error: null,
+    });
+  }
+
+  it('sleeping — «S01 isn\'t running» и Resume: sessions.resume с ref сессии', async () => {
+    withSession({ lifecycle: 'sleeping' });
+    const resumes: unknown[] = [];
+    bridge.setHandler('sessions.resume', (params) => {
+      resumes.push(params);
+      return { ok: true as const };
+    });
+    renderSurface();
+    const bar = screen.getByTestId('terminal-not-running');
+    expect(bar.textContent).toContain("S01 isn't running");
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await waitFor(() => expect(resumes).toEqual([{ ref }]));
+  });
+
+  it('отказ sessions.resume — тост Couldn\'t resume session: …', async () => {
+    withSession({ lifecycle: 'sleeping' });
+    bridge.setHandler('sessions.resume', () => {
+      throw { code: 'internal', message: 'сбой' };
+    });
+    renderSurface();
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await waitFor(() => expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't resume session: host error."));
+  });
+
+  it('active — полосы нет; closed — полоса без Resume', () => {
+    withSession({ lifecycle: 'active' });
+    const view = renderSurface();
+    expect(screen.queryByTestId('terminal-not-running')).toBeNull();
+    view.unmount();
+    withSession({ lifecycle: 'closed' });
+    renderSurface();
+    expect(screen.getByTestId('terminal-not-running').textContent).toContain("S01 isn't running");
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
+  });
+
+  it('ввод в неживую вкладку — тост с Resume одним экземпляром; в живую — без тоста', async () => {
+    withSession({ lifecycle: 'sleeping' });
+    renderSurface();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const terminal = xtermMock.terminals[0];
+    act(() => terminal?.onDataHandler?.('x'));
+    act(() => terminal?.onDataHandler?.('y'));
+    expect(vi.mocked(toast.error)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(toast.error)).toHaveBeenLastCalledWith(
+      "S01 isn't running",
+      expect.objectContaining({ id: `not-running:${refKey(ref)}`, action: expect.objectContaining({ label: 'Resume' }) }),
+    );
+
+    vi.mocked(toast.error).mockClear();
+    act(() => withSession({ lifecycle: 'active' }));
+    act(() => terminal?.onDataHandler?.('z'));
+    expect(vi.mocked(toast.error)).not.toHaveBeenCalled();
+  });
+});
+
+describe('TerminalSurface — оживление сессии (раунд main-r2, п. 2)', () => {
+  it('sleeping — pty.attach не зовётся; стала active — подключение без переключения вкладок', async () => {
+    const put = (lifecycle: 'sleeping' | 'active'): void =>
+      useWorksStore.setState({
+        entries: [makeWork('w-01', { projectPath: '/tmp/proj', sessions: [makeSession('s-01', 'один', { lifecycle })] })],
+        branches: {},
+        loading: false,
+        error: null,
+      });
+    put('sleeping');
+    renderSurface();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const attaches = (): number => bridge.calls.filter((entry) => entry.method === 'pty.attach').length;
+    expect(attaches()).toBe(0);
+
+    act(() => put('active'));
+    await waitFor(() => expect(attaches()).toBe(1));
+    expect(screen.queryByTestId('terminal-not-running')).toBeNull();
+  });
+});
