@@ -4,7 +4,7 @@
  * `portal` — на своём месте.
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Profiler } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { Room, WorkEntry, WorkSession } from '@harnas/core';
@@ -14,7 +14,7 @@ import { useWorksStore } from '../store/works.js';
 import { activityMap as keyed, makeActivity } from '../test-utils/work-fixtures.js';
 import { EMPTY_HISTORY } from './history.js';
 import { useLayoutStore } from './store.js';
-import { revealScrollLeft, TabStrip } from './TabStrip.js';
+import { keepActiveOnResize, revealScrollLeft, TabStrip } from './TabStrip.js';
 
 function session(id: string, label: string): WorkSession {
   return {
@@ -294,6 +294,88 @@ describe('TabStrip — активная вкладка в видимой час�
     rerender(<TabStrip workKey={WORK_KEY} group={{ ...group, activeTabId: 'terminal:d' }} entry={e} portal={false} active />);
     expect(tablist.scrollLeft).toBe(3 * 215 + 215 - 500 + 12);
     rerender(<TabStrip workKey={WORK_KEY} group={{ ...group, activeTabId: 'terminal:a' }} entry={e} portal={false} active />);
+    expect(tablist.scrollLeft).toBe(0);
+  });
+});
+
+describe('keepActiveOnResize (раунд 8, пункт 8)', () => {
+  const tab = { left: 3 * 215, width: 215 };
+  it('активная была видна — после сужения строки снова видна', () => {
+    // 1000px: вкладка [645, 860] видна при сдвиге 0; сузили до 500 — правый край у правого края строки.
+    expect(keepActiveOnResize(0, 1000, 500, tab)).toBe(645 + 215 - 500 + 12);
+  });
+  it('видна и после изменения — сдвиг прежний', () => {
+    expect(keepActiveOnResize(0, 1000, 900, tab)).toBe(0);
+  });
+  it('человек сам увёл активную из вида колесом — изменение ширины её не возвращает', () => {
+    expect(keepActiveOnResize(0, 500, 400, tab)).toBe(0);
+    expect(keepActiveOnResize(900, 500, 300, { left: 0, width: 215 })).toBe(900);
+  });
+});
+
+describe('TabStrip — изменение ширины строки (раунд 8, пункт 8)', () => {
+  class FakeRO {
+    static all: FakeRO[] = [];
+    constructor(readonly callback: ResizeObserverCallback) {
+      FakeRO.all.push(this);
+    }
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {
+      FakeRO.all = FakeRO.all.filter((ro) => ro !== this);
+    }
+  }
+
+  function setup(): { tablist: HTMLElement; resize(width: number): void } {
+    FakeRO.all = [];
+    vi.stubGlobal('ResizeObserver', FakeRO);
+    const tabs = ['a', 'b', 'c', 'd'].map((id) => ({ kind: 'terminal' as const, id: `terminal:${id}`, sessionId: id }));
+    const group: GroupNode = { type: 'group', id: 'g1', tabs, activeTabId: 'terminal:d' };
+    useLayoutStore.setState({
+      layouts: { [WORK_KEY]: { root: group, activeGroupId: 'g1', closedTabs: [] } },
+      hydrated: { [WORK_KEY]: true },
+    });
+    const e = entry(['a', 'b', 'c', 'd'].map((id) => session(id, id)));
+    const { rerender } = render(<TabStrip workKey={WORK_KEY} group={group} entry={e} portal={false} active />);
+    const tablist = screen.getByRole('tablist');
+    let width = 1000;
+    Object.defineProperty(tablist, 'clientWidth', { get: () => width, configurable: true });
+    tablist.getBoundingClientRect = () => ({ left: 100, width }) as DOMRect;
+    screen.getAllByRole('tab').forEach((tab, index) => {
+      tab.getBoundingClientRect = () => ({ left: 100 + index * 215 - tablist.scrollLeft, width: 215 }) as DOMRect;
+    });
+    // Перерисовка с прежней шириной — наблюдатель запоминает 1000px как «до».
+    rerender(<TabStrip workKey={WORK_KEY} group={{ ...group }} entry={e} portal={false} active />);
+    act(() => {
+      for (const ro of FakeRO.all) ro.callback([], ro as unknown as ResizeObserver);
+    });
+    return {
+      tablist,
+      resize(next: number) {
+        width = next;
+        act(() => {
+          for (const ro of FakeRO.all) ro.callback([], ro as unknown as ResizeObserver);
+        });
+      },
+    };
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('активная видна; строку сузили (открыли сайдбар) — она снова в видимой части', () => {
+    const { tablist, resize } = setup();
+    expect(tablist.scrollLeft).toBe(0);
+    resize(500);
+    expect(tablist.scrollLeft).toBe(3 * 215 + 215 - 500 + 12);
+  });
+
+  it('человек увёл активную из вида колесом — сужение её не возвращает', () => {
+    const { tablist, resize } = setup();
+    resize(500);
+    tablist.scrollLeft = 0;
+    resize(400);
     expect(tablist.scrollLeft).toBe(0);
   });
 });

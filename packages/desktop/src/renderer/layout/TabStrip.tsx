@@ -109,6 +109,22 @@ export function revealScrollLeft(view: { scrollLeft: number; width: number }, ta
   return view.scrollLeft;
 }
 
+/**
+ * Сдвиг строки после изменения её ширины (раунд исправлений 8, пункт 8): активная вкладка была видна
+ * целиком при прежней ширине — по правилу `revealScrollLeft` она снова в видимой части; не была —
+ * значит, человек сам увёл её колесом или жестом, и сдвиг прежний: изменение ширины прокрутку
+ * человека не перебивает.
+ */
+export function keepActiveOnResize(
+  scrollLeft: number,
+  widthBefore: number,
+  widthAfter: number,
+  tab: { left: number; width: number },
+): number {
+  if (revealScrollLeft({ scrollLeft, width: widthBefore }, tab) !== scrollLeft) return scrollLeft;
+  return revealScrollLeft({ scrollLeft, width: widthAfter }, tab);
+}
+
 /** Индекс по кругу — стрелки в конце строки уводят на начало и наоборот. */
 function wrapIndex(index: number, length: number): number {
   return ((index % length) + length) % length;
@@ -166,19 +182,46 @@ export function TabStrip({ workKey, group, entry, portal, active }: TabStripProp
   // Открытая или ставшая активной вкладка — любым путём: клик, ⌃1–9, ⌃Tab, дерево, ⌘P,
   // восстановление раскладки — в видимую часть строки. Без этого на узком окне она оставалась за
   // краем, и человек не видел, какой файл перед ним (приёмка этапа 7).
-  useLayoutEffect(() => {
-    const list = tablistRef.current;
-    if (list === null || group.activeTabId === null) return;
-    const tab = Array.from(list.querySelectorAll<HTMLElement>('[role="tab"]')).find((el) => el.dataset.tabId === group.activeTabId);
-    if (tab === undefined) return;
+  const activeTabIdRef = useRef(group.activeTabId);
+  activeTabIdRef.current = group.activeTabId;
+  /** Активная вкладка строки и её место от начала содержимого строки; нет — null. */
+  const activeTabBox = useCallback((list: HTMLElement): { left: number; width: number } | null => {
+    const id = activeTabIdRef.current;
+    if (id === null) return null;
+    const tab = Array.from(list.querySelectorAll<HTMLElement>('[role="tab"]')).find((el) => el.dataset.tabId === id);
+    if (tab === undefined) return null;
     const outer = list.getBoundingClientRect();
     const inner = tab.getBoundingClientRect();
-    const next = revealScrollLeft(
-      { scrollLeft: list.scrollLeft, width: list.clientWidth },
-      { left: inner.left - outer.left + list.scrollLeft, width: inner.width },
-    );
+    return { left: inner.left - outer.left + list.scrollLeft, width: inner.width };
+  }, []);
+
+  useLayoutEffect(() => {
+    const list = tablistRef.current;
+    if (list === null) return;
+    const box = activeTabBox(list);
+    if (box === null) return;
+    const next = revealScrollLeft({ scrollLeft: list.scrollLeft, width: list.clientWidth }, box);
     if (next !== list.scrollLeft) list.scrollLeft = next;
-  }, [group.activeTabId, group.tabs.length]);
+  }, [group.activeTabId, group.tabs.length, activeTabBox]);
+
+  // Ширина строки изменилась — открыли сайдбар, сузили окно, сдвинули разделитель сплита: видимая до
+  // этого активная вкладка остаётся в видимой части (правило — `keepActiveOnResize`).
+  useEffect(() => {
+    const list = tablistRef.current;
+    if (list === null || typeof ResizeObserver === 'undefined') return undefined;
+    let width = list.clientWidth;
+    const observer = new ResizeObserver(() => {
+      const before = width;
+      width = list.clientWidth;
+      if (width === before) return;
+      const box = activeTabBox(list);
+      if (box === null) return;
+      const next = keepActiveOnResize(list.scrollLeft, before, width, box);
+      if (next !== list.scrollLeft) list.scrollLeft = next;
+    });
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [activeTabBox]);
 
   const content = (
     <div

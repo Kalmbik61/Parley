@@ -139,4 +139,57 @@ test.describe('строка вкладок', () => {
     await expect(tabOf(window, FILES[3] ?? '')).toHaveAttribute('aria-selected', 'true');
     await expect.poll(() => activeTabPlacement(window)).toBe('visible q');
   });
+
+  test('800×500, две группы: активная у правого края строки; открыли правый сайдбар — строка сузилась, активная видна (раунд 8, пункт 8)', async () => {
+    test.setTimeout(120_000);
+    const { electronApp, window } = await launch();
+    await expect(window.getByTestId('landing')).toBeVisible();
+    await call(window, 'works.create', { projectPath: project, title: 'tab-strip', goal: '' });
+    await expect(window.getByTestId('app-shell')).toBeVisible();
+    await window.keyboard.press('Meta+B');
+    const sidebar = window.getByTestId('right-sidebar');
+    await expect(sidebar).toBeVisible();
+    for (const name of FILES) {
+      await sidebar.locator(`[data-tree-path="${name}"]`).click();
+      await expect(tabOf(window, name)).toHaveAttribute('aria-selected', 'true');
+    }
+    const problems: string[] = [];
+    window.on('pageerror', (error) => problems.push(`pageerror: ${error.message}`));
+
+    // Одна группа рисует строку в заголовке окна — её ширина от сайдбаров не зависит. Две группы
+    // одна под другой: строка верхней — во всю ширину центра, и правый сайдбар её сужает.
+    await window.keyboard.press('Meta+L');
+    await expect(sidebar).toBeHidden();
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.send('menu:action', 'group.splitDown'));
+    await window.getByRole('dialog').getByRole('option').first().click();
+    const q = FILES[3] ?? '';
+    const strip = window.locator('[role="tablist"]', { has: tabOf(window, q) });
+    await expect(strip).toHaveCount(1);
+
+    /** Вкладка q — активная в своей строке и целиком внутри её видимой рамки (±1 px). */
+    const placement = (): Promise<string> =>
+      strip.evaluate((list, id) => {
+        const tab = list.querySelector<HTMLElement>(`[role="tab"][data-tab-id="${id}"]`);
+        if (tab === null) return 'no tab';
+        if (tab.getAttribute('aria-selected') !== 'true') return 'not active';
+        const outer = list.getBoundingClientRect();
+        const inner = tab.getBoundingClientRect();
+        if (inner.left < outer.left - 1 || inner.right > outer.right + 1) {
+          return `at ${Math.round(inner.left)}..${Math.round(inner.right)} outside ${Math.round(outer.left)}..${Math.round(outer.right)} (scrollLeft ${list.scrollLeft})`;
+        }
+        return 'visible';
+      }, `file:p:${q}`);
+    const width = (): Promise<number> => strip.evaluate((list) => list.clientWidth);
+
+    await tabOf(window, q).click();
+    await expect.poll(placement).toBe('visible');
+    const wide = await width();
+
+    // Открыли правый сайдбар: строка уже, активная — по-прежнему целиком в видимой части.
+    await window.keyboard.press('Meta+L');
+    await expect(sidebar).toBeVisible();
+    await expect.poll(width).toBeLessThan(wide - 100);
+    await expect.poll(placement).toBe('visible');
+    expect(problems).toEqual([]);
+  });
 });
