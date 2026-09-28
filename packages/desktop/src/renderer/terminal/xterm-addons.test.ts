@@ -16,6 +16,7 @@ const require = createRequire(import.meta.url);
 interface Manifest {
   version: string;
   dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
 }
 
@@ -25,7 +26,8 @@ function manifest(path: string): Manifest {
 
 describe('аддоны xterm окна', () => {
   const own = manifest(new URL('../../../package.json', import.meta.url).pathname);
-  const addons = Object.keys(own.dependencies ?? {}).filter((name) => name.startsWith('@xterm/addon-'));
+  // Библиотеки рендерера с fix-7.5 — в devDependencies (их собирает Vite), смотрим оба списка.
+  const addons = Object.keys({ ...own.dependencies, ...own.devDependencies }).filter((name) => name.startsWith('@xterm/addon-'));
   const xtermMajor = manifest(require.resolve('@xterm/xterm/package.json')).version.split('.')[0];
 
   it('в зависимостях окна есть аддоны', () => {
