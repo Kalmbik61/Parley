@@ -176,6 +176,7 @@ export function PrimaryAction({ bridge, sessionRef, source, working, sendDeps, o
         title={S.changes.commitConfirmTitle(commitTarget)}
         {...(commitDescription === '' ? null : { description: commitDescription })}
         confirmLabel={label}
+        confirmVariant="default"
         onConfirm={commit}
         onOpenChange={(next) => setConfirm(next ? 'commit' : null)}
       />
@@ -194,6 +195,7 @@ export function PrimaryAction({ bridge, sessionRef, source, working, sendDeps, o
             agentLine,
           )}
           confirmLabel={label}
+        confirmVariant="default"
           onConfirm={merge}
           onOpenChange={(next) => setConfirm(next ? 'merge' : null)}
         />

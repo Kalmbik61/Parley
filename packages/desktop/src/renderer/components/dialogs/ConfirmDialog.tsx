@@ -3,9 +3,9 @@
  * Кусок 1.4 плана «облик Orca»: примитив `ui/dialog`, кнопка действия —
  * `variant="destructive"` (спека 4.5, поведение «Диалоги»: «удаление —
  * destructive») — все нынешние вызовы confirmLabel'ят необратимое или
- * прерывающее действие (остановить/закрыть/удалить/отбросить), отдельного
- * флажка «это не удаление» пока никто не просил (простота вместо
- * конфигурируемости, которую не заказывали).
+ * прерывающее действие (остановить/закрыть/удалить/отбросить). Коммит и
+ * слияние «Изменений» (этап 8) не разрушают — им `confirmVariant: 'default'`
+ * (раунд исправлений 8, пункт 4); по умолчанию кнопка по-прежнему красная.
  */
 
 import { useEffect, useRef } from 'react';
@@ -18,6 +18,8 @@ export interface ConfirmDialogProps {
   title: string;
   description?: string;
   confirmLabel: string;
+  /** Вид кнопки подтверждения: `destructive` (по умолчанию) — необратимое, `default` — обычное действие. */
+  confirmVariant?: 'destructive' | 'default';
   onConfirm: () => void;
   onOpenChange: (open: boolean) => void;
   /** Куда вернуть фокус после закрытия, если не туда, где он был при открытии (Radix). */
@@ -29,6 +31,7 @@ export function ConfirmDialog({
   title,
   description,
   confirmLabel,
+  confirmVariant = 'destructive',
   onConfirm,
   onOpenChange,
   onCloseAutoFocus,
@@ -63,7 +66,7 @@ export function ConfirmDialog({
           </DialogClose>
           <Button
             type="button"
-            variant="destructive"
+            variant={confirmVariant}
             onClick={() => {
               if (confirmed.current) return;
               confirmed.current = true;

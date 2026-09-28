@@ -552,6 +552,46 @@ describe('Discard worktree… (тест 8)', () => {
   });
 });
 
+describe('Вид кнопки подтверждения (раунд 8, пункт 4)', () => {
+  const primary = (name: string): string => within(dialog()).getByRole('button', { name }).className;
+
+  it('Commit, Commit all in folder и Merge into … — обычная главная кнопка; Discard и Discard anyway — красная', async () => {
+    setWorking('s-02');
+    bridge.setHandler('worktrees.diff', () => diff({ uncommitted: true, files: [file('a.ts')], uncommittedPaths: ['a.ts'] }));
+    renderPanel();
+    fireEvent.change(await screen.findByPlaceholderText('Commit message'), { target: { value: 'fix' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Commit' }));
+    expect(primary('Commit')).toContain('bg-primary');
+    expect(primary('Commit')).not.toContain('bg-destructive');
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Cancel' }));
+    await flush();
+
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Changes options' }), { key: 'Enter' });
+    fireEvent.click(within(screen.getByRole('menu')).getByText('Discard worktree…'));
+    expect(primary('Discard')).toContain('bg-destructive');
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Discard' }));
+    await flush();
+    expect(primary('Discard anyway')).toContain('bg-destructive');
+    cleanup();
+
+    useActivityStore.setState({ byRef: {} });
+    bridge.setHandler('worktrees.diff', () => diff({ commits: [COMMIT], files: [file('a.ts')] }));
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Merge into master' }));
+    expect(primary('Merge into master')).toContain('bg-primary');
+    expect(primary('Merge into master')).not.toContain('bg-destructive');
+    cleanup();
+
+    focus('s-04');
+    bridge.setHandler('changes.project', () => project({ files: [file('x.ts')] }));
+    renderPanel();
+    fireEvent.change(await screen.findByPlaceholderText('Commit message'), { target: { value: 'all' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Commit all in folder' }));
+    expect(primary('Commit all in folder')).toContain('bg-primary');
+    expect(primary('Commit all in folder')).not.toContain('bg-destructive');
+  });
+});
+
 describe('Шапка (тест 10)', () => {
   const picker = (): HTMLElement => screen.getByRole('combobox', { name: 'Session' });
 
