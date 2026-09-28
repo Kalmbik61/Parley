@@ -148,7 +148,7 @@ function expectation(id: ActionId): (spies: Spies) => void {
     'files.quickOpen': ({ palette }) => expect(palette.openWith).toHaveBeenCalledWith('files'),
     'files.search': ({ ui, files }) => {
       expect(ui.showRightTab).toHaveBeenCalledWith('files');
-      expect(files.openSearch).toHaveBeenCalledTimes(1);
+      expect(files.openSearch).toHaveBeenCalledWith(KEY);
     },
     // 9.2a: новая вкладка браузера без адреса в активной группе.
     'browser.newTab': ({ layout }) => {

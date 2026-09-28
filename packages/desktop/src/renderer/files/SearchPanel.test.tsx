@@ -28,7 +28,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   bridge = createFakeBridge();
   vi.mocked(toast).mockClear();
-  useFilesStore.setState({ mode: 'search', focusSearch: false, reveals: {} });
+  useFilesStore.setState({ modeByWork: { [KEY]: 'search' }, focusSearch: null, reveals: {} });
   useLayoutStore.setState({
     activeWorkKey: KEY,
     layouts: { [KEY]: emptyLayout() },
@@ -185,11 +185,19 @@ describe('SearchPanel (тест 2)', () => {
   });
 
   it('openSearch просит фокус — поле получает фокус', async () => {
-    useFilesStore.setState({ focusSearch: true });
+    useFilesStore.setState({ focusSearch: KEY });
     render(<SearchPanel bridge={bridge} root={ROOT} />);
     await act(async () => {});
     expect(document.activeElement).toBe(field());
-    expect(useFilesStore.getState().focusSearch).toBe(false);
+    expect(useFilesStore.getState().focusSearch).toBeNull();
+  });
+
+  it('просьба фокуса другой работы — поле её не забирает (раунд fix-7.4, п. 1)', async () => {
+    useFilesStore.setState({ focusSearch: '/tmp/proj\nw-02' });
+    render(<SearchPanel bridge={bridge} root={ROOT} />);
+    await act(async () => {});
+    expect(document.activeElement).not.toBe(field());
+    expect(useFilesStore.getState().focusSearch).toBe('/tmp/proj\nw-02');
   });
 });
 

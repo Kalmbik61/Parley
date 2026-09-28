@@ -95,7 +95,7 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
   const [result, setResult] = useState<GrepResult | null>(null);
   const [invalid, setInvalid] = useState(false);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
-  const focusSearch = useFilesStore((state) => state.focusSearch);
+  const focusSearch = useFilesStore((state) => state.focusSearch === root.workKey);
   const input = useRef<HTMLInputElement>(null);
   /** `signalId` идущего поиска; ответ чужого id — отменённого — отбрасывается. */
   const running = useRef<string | null>(null);
@@ -107,7 +107,7 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
     if (!focusSearch) return;
     input.current?.focus();
     input.current?.select();
-    useFilesStore.setState({ focusSearch: false });
+    useFilesStore.setState({ focusSearch: null });
   }, [focusSearch]);
 
   const cancelRunning = (): void => {

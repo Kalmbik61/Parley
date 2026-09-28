@@ -228,7 +228,7 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
       return;
     case 'files.search':
       ctx.ui.showRightTab('files');
-      ctx.files.openSearch();
+      if (ctx.layout.activeWorkKey !== null) ctx.files.openSearch(ctx.layout.activeWorkKey);
       return;
     case 'works.showArchived':
       ctx.ui.toggleShowArchived();

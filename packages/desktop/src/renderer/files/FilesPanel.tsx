@@ -121,7 +121,7 @@ export function FilesPanel({ bridge, entry }: FilesPanelProps): JSX.Element {
   const key = rootKeyOf(root);
   const rootDir = rootDirOf(entry, spec);
   const showIgnored = useUiStore((state) => state.ui.filesShowIgnored);
-  const mode = useFilesStore((state) => state.mode);
+  const mode = useFilesStore((state) => state.modeByWork[workKey] ?? 'tree');
   const patchUi = useUiStore((state) => state.patchUi);
   const [watchFailed, setWatchFailed] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
@@ -219,8 +219,8 @@ export function FilesPanel({ bridge, entry }: FilesPanelProps): JSX.Element {
           title={S.actions.findInFiles}
           aria-pressed={mode === 'search'}
           onClick={() => {
-            if (mode === 'search') useFilesStore.getState().showTree();
-            else useFilesStore.getState().openSearch();
+            if (mode === 'search') useFilesStore.getState().showTree(workKey);
+            else useFilesStore.getState().openSearch(workKey);
           }}
         >
           <Search className="size-3.5" />

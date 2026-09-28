@@ -158,7 +158,7 @@ beforeEach(() => {
   useActivityStore.setState({ byRef: {} });
   useNoticesStore.setState({ notices: [] });
   // ⌘⇧F (7.4) оставляет «Файлы» в режиме поиска — поле поиска не должно доставаться следующим тестам.
-  useFilesStore.setState({ mode: 'tree', focusSearch: false });
+  useFilesStore.setState({ modeByWork: {}, focusSearch: null });
   useUiStore.setState({
     windowFocused: true,
     wakePaused: null,
@@ -325,11 +325,11 @@ describe('AppShell — меню и диалоги (тест 9)', () => {
     act(() => usePaletteStore.getState().close());
     await flush();
 
-    useFilesStore.setState({ mode: 'tree', focusSearch: false });
+    useFilesStore.setState({ modeByWork: {}, focusSearch: null });
     act(() => bridge.emitMenu('files.search'));
     await flush();
     expect(useUiStore.getState().ui.rightSidebar).toMatchObject({ open: true, tab: 'files' });
-    expect(useFilesStore.getState().mode).toBe('search');
+    expect(useFilesStore.getState().modeByWork['/tmp/w-01 w-01']).toBe('search');
     expect(await screen.findByPlaceholderText('Search in files')).toBeTruthy();
   });
 
