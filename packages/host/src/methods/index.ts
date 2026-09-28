@@ -25,6 +25,8 @@ export interface MethodDeps {
   sessions: SessionsService;
   wake: WakeService;
   worktrees: WorktreesService;
+  /** Первое чтение работ хостом (`works.list` ждёт его); без него — сразу. */
+  worksReady?: Promise<void>;
 }
 
 export interface HostHandlers {
@@ -55,7 +57,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     methods: {
       'host.info': hostInfo as AnyHandler,
       'host.shutdown': hostShutdown as AnyHandler,
-      'works.list': worksList(deps.works) as AnyHandler,
+      'works.list': worksList(deps.works, deps.worksReady) as AnyHandler,
       'works.create': worksCreate as AnyHandler,
       'works.delete': worksDelete as AnyHandler,
       'works.rename': worksRename as AnyHandler,

@@ -24,7 +24,8 @@ vi.mock('@harnas/core', async (importOriginal) => {
   };
 });
 
-const { createWork, readWorks } = await import('@harnas/core');
+const { addSession, createWork, readWorks, transitionSession, updateMap } =
+  await import('@harnas/core');
 const { createWorksService } = await import('./works-service.js');
 
 let home = '';
@@ -89,5 +90,62 @@ describe('порядок чтений', () => {
 
     expect(s.snapshot().entries).toHaveLength(2);
     expect(s.snapshot().entries.map((entry) => entry.map.work.id)).toContain(a.work.id);
+  });
+
+  it('чтение, сделанное до сверки живости, не возвращает в снимок active мёртвой сессии', async () => {
+    // Хост после падения прежнего: в карте active с мёртвым pid. Сверка при старте пишет
+    // sleeping, а чтение наблюдателя, начатое до этой записи, приходит после неё — снимок
+    // не должен откатиться к active (сверка на диске уже сделана, мёртвых она не найдёт).
+    const map = await createWork(project, { title: 'A' });
+    await updateMap(project, map.work.id, (current) => {
+      const created = addSession(current, { provider: 'claude', label: 'план', task: 't' });
+      created.launchedBy = 'host';
+      created.pid = 999_999;
+      transitionSession(current, created.id, 'active');
+    });
+    const beforeReconcile = await readWorks(project);
+
+    const s = createWorksService(fakeHost(), { debounceMs: 20 });
+    service = s;
+    await s.start();
+    expect(s.entry(project, map.work.id)?.map.sessions[0]?.lifecycle).toBe('sleeping');
+
+    let refreshed = false;
+    s.onChange(() => {
+      refreshed = true;
+    });
+    deliver[0]?.(beforeReconcile, 1);
+    await waitFor(() => refreshed);
+
+    expect(s.entry(project, map.work.id)?.map.sessions[0]?.lifecycle).toBe('sleeping');
+  });
+
+  it('карта нового проекта, переписанная до его наблюдателя, попадает в снимок', async () => {
+    // Первая работа нового проекта: список приходит от наблюдателя дома (индекс), а индекс
+    // пишется раньше карты (`updateMap`). Запись карты, сделанная до наблюдателя проекта,
+    // иначе не видна никому — сессия навсегда pending в снимке (fix-tests2, attention:63).
+    const s = createWorksService(fakeHost(), { debounceMs: 20 });
+    service = s;
+    await s.start();
+    const map = await createWork(project, { title: 'A' });
+    let sessionId = '';
+    await updateMap(project, map.work.id, (current) => {
+      sessionId = addSession(current, { provider: 'claude', label: 'план', task: 't' }).id;
+    });
+    const beforeLaunch = await readWorks(home);
+    await updateMap(project, map.work.id, (current) => {
+      const session = current.sessions.find((candidate) => candidate.id === sessionId);
+      if (session !== undefined) session.pid = process.pid;
+      transitionSession(current, sessionId, 'active');
+    });
+
+    let refreshed = false;
+    s.onChange(() => {
+      refreshed = true;
+    });
+    deliver[0]?.(beforeLaunch, 100);
+    await waitFor(() => refreshed);
+
+    expect(s.entry(project, map.work.id)?.map.sessions[0]?.lifecycle).toBe('active');
   });
 });

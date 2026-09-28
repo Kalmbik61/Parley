@@ -149,7 +149,15 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // при отбрасывании она делит с обычным `sessions.stop`.
   const worktreesService = createWorktreesService(sessionsService);
 
+  // Сокет слушает раньше первого чтения работ (п. 5 ниже, затем `worksService.start()`):
+  // `works.list` ждёт его, иначе окно, подключившееся в этот промежуток, видит недочитанный снимок.
+  let markWorksReady!: () => void;
+  const worksReady = new Promise<void>((resolve) => {
+    markWorksReady = resolve;
+  });
+
   const handlers = createHostHandlers({
+    worksReady,
     works: worksService,
     activity: activityService,
     pty: ptyManager,
@@ -189,6 +197,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   idleWatcher.notify(true);
 
   await worksService.start();
+  markWorksReady();
   // Сверка живости уже прошла на первом чтении работ: те, чей журнал оборван
   // посреди хода, прерваны падением прошлого хоста (спека 10).
   await sessionsService.collectInterrupted().catch((error: unknown) => {

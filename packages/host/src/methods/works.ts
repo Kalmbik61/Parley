@@ -11,9 +11,20 @@ import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
 import type { WorksService } from '../works/works-service.js';
 
-/** `works.list` читает снимок сервиса: он один держит слитую по всем проектам картину. */
-export function worksList(works: WorksService): Handler<'works.list'> {
-  return async () => works.snapshot();
+/**
+ * `works.list` читает снимок сервиса: он один держит слитую по всем проектам картину.
+ * `ready` — первое чтение работ хостом: сокет слушает раньше него, и клиент, подключившийся
+ * в этот промежуток (окно после перезапуска хоста), получил бы недочитанный снимок — пустой
+ * или с active мёртвых сессий (fix-tests2).
+ */
+export function worksList(
+  works: WorksService,
+  ready: Promise<void> = Promise.resolve(),
+): Handler<'works.list'> {
+  return async () => {
+    await ready;
+    return works.snapshot();
+  };
 }
 
 export const worksCreate: Handler<'works.create'> = async (params) => {

@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from 'no
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { addSession, readMap, readWorksIndex, transitionSession, updateMap, workPaths } from '@harnas/core';
+import { addSession, createWork, readMap, readWorksIndex, transitionSession, updateMap, workPaths } from '@harnas/core';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
@@ -331,6 +331,56 @@ describe('settings.get / settings.set', () => {
     const response = await client.next();
     expect((response.result as { config: { messageRate: number } }).config.messageRate).toBe(7);
 
+    client.close();
+  });
+});
+
+describe('works.list на старте хоста', () => {
+  it('отвечает снимком после первого чтения работ хостом, а не тем, что успело набраться до него', async () => {
+    // Окно подключается сразу после listen, а хост читает работы и сверяет живость уже после
+    // него. Прежде works.list в это окно отдавал недочитанный снимок (пустой — окно считало
+    // работы исчезнувшими и закрывало их вкладки; или с active мёртвой сессии): fix-tests2,
+    // restart-host. Сверку здесь держит чужой map.lock — ответ обязан её дождаться.
+    const home = await tempHome();
+    homes.push(home);
+    const dir = await project();
+    const previousHome = process.env['HARNAS_HOME'];
+    process.env['HARNAS_HOME'] = home;
+    const map = await createWork(dir, { title: 'Работа' });
+    await updateMap(dir, map.work.id, (current) => {
+      const session = addSession(current, { provider: 'claude', label: 'план', task: 't' });
+      session.launchedBy = 'host';
+      session.pid = 999_999;
+      transitionSession(current, session.id, 'active');
+    });
+    if (previousHome === undefined) delete process.env['HARNAS_HOME'];
+    else process.env['HARNAS_HOME'] = previousHome;
+
+    const lock = workPaths(dir, map.work.id).lock;
+    await writeFile(lock, '');
+    const starting = startHost({ home });
+    starting.then((running) => hosts.push(running)).catch(() => {});
+
+    const paths = hostPaths(home);
+    let token = '';
+    for (const deadline = Date.now() + 5000; Date.now() < deadline; ) {
+      token = await readFile(paths.token, 'utf8').catch(() => '');
+      if (token !== '' && (await readFile(paths.pid, 'utf8').catch(() => '')) !== '') break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const client = connectRaw(paths.socket);
+    await waitConnected(client.socket);
+    await hello(client, token);
+    client.send({ id: 1, method: 'works.list', params: {} });
+    setTimeout(() => void rm(lock, { force: true }), 300);
+
+    // До ответа могут прийти события (works.changed первого чтения) — ищем ответ по id.
+    let response = await client.next();
+    while (response.id !== 1) response = await client.next();
+    const entries = (response.result as { entries: Array<{ map: { sessions: Array<{ lifecycle: string }> } }> }).entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.map.sessions[0]?.lifecycle).toBe('sleeping');
+    await starting;
     client.close();
   });
 });
