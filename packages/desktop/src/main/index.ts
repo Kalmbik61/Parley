@@ -25,7 +25,7 @@ import createGrepWorker from './files/grep-worker?nodeWorker';
 import { registerFilesIpc } from './files/ipc.js';
 import { HostConnection } from './host-connection.js';
 import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
-import { forwardAppearanceToWindow, forwardHostToWindow, registerIpc } from './ipc.js';
+import { forwardAppearanceToWindow, forwardHostToPages, registerIpc } from './ipc.js';
 import { forwardGuestShortcuts } from './guest-shortcuts.js';
 import { createLayoutStore, desktopLayoutsPath } from './layout-store.js';
 import { createAppMenu } from './menu.js';
@@ -168,6 +168,11 @@ if (!gotLock) {
       process.env.HARNAS_TERMINAL_RENDERER === 'dom' ? 'renderer=dom' : null,
     ].filter((flag): flag is string => flag !== null);
 
+    // Нативные вопросы main в E2E — в журнал (`globalThis.__harnasDialogs`), ответ «ждать».
+    const logDialogs = process.env.HARNAS_DIALOGS === 'log';
+    const dialogLog: string[] = [];
+    if (logDialogs) (globalThis as { __harnasDialogs?: string[] }).__harnasDialogs = dialogLog;
+
     // Окна, у которых был did-finish-load: только им событие `app:focus-target` дойдёт —
     // раньше прелоад ещё не слушает. Перезагрузка страницы снимает признак до нового конца.
     const loadedWindows = new WeakSet<BrowserWindow>();
@@ -185,16 +190,35 @@ if (!gotLock) {
       // Раньше did-finish-load слать события в это окно бессмысленно и вредно:
       // прелоад ещё может не успеть навесить свои `ipcRenderer.on` (первая,
       // самая важная навигация — с about:blank на наш index.html), и самое
-      // первое сообщение (обычно «хост подключён») уйдёт в пустоту.
+      // первое сообщение (обычно «хост подключён») уйдёт в пустоту. Статус хоста —
+      // каждой загрузке: после перезагрузки страница иначе осталась бы на «Connecting…».
+      forwardHostToPages(connection, window);
       window.webContents.once('did-finish-load', () => {
-        forwardHostToWindow(connection, window);
         forwardAppearanceToWindow(nativeTheme, window);
       });
       window.webContents.on('did-start-loading', () => loadedWindows.delete(window));
       window.webContents.on('did-finish-load', () => loadedWindows.add(window));
-      const closeGuard = guardWindowClose(window, app);
+      const closeGuard = guardWindowClose(window, app, {
+        askUnresponsive: async () => {
+          // E2E (`HARNAS_DIALOGS=log`): настоящий системный диалог на экране человека не встаёт.
+          if (logDialogs) {
+            dialogLog.push('unresponsive');
+            return 'wait';
+          }
+          const { response } = await dialog.showMessageBox(window, {
+            type: 'warning',
+            message: S.files.unresponsive,
+            buttons: [S.files.quitAnyway, S.files.wait],
+            defaultId: 1,
+            cancelId: 1,
+          });
+          return response === 0 ? 'quit' : 'wait';
+        },
+      });
       closeGuards.set(window.webContents, closeGuard);
-      window.webContents.on('did-start-loading', () => closeGuard.reset());
+      // Новая страница — по did-navigate, а не did-start-loading: тот приходит и перед
+      // перезагрузкой, которую потом отменит вопрос о правках (fix-7.3 п. 4б), и сбросил бы счёт.
+      window.webContents.on('did-navigate', () => closeGuard.reset());
       window.webContents.on('render-process-gone', () => closeGuard.reset());
       window.on('closed', () => closeGuard.dispose());
       return window;

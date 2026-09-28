@@ -125,6 +125,9 @@ function fakeCloseTargets() {
   const sent: string[] = [];
   let closed = 0;
   let quits = 0;
+  let reloads = 0;
+  let destroyed = 0;
+  const contentsListeners = new Map<string, Array<(event: { preventDefault: () => void }) => void>>();
   const emit = (listeners: typeof windowListeners): boolean => {
     let prevented = false;
     for (const listener of [...listeners]) listener({ preventDefault: () => (prevented = true) });
@@ -139,7 +142,18 @@ function fakeCloseTargets() {
       emit(windowListeners);
     },
     isDestroyed: () => false,
-    webContents: { send: (channel: string) => sent.push(channel) },
+    destroy: () => {
+      destroyed += 1;
+    },
+    webContents: {
+      send: (channel: string) => sent.push(channel),
+      on: (event: string, listener: (event: { preventDefault: () => void }) => void) => {
+        contentsListeners.set(event, [...(contentsListeners.get(event) ?? []), listener]);
+      },
+      reload: () => {
+        reloads += 1;
+      },
+    },
   };
   const app = {
     on: (_event: 'before-quit', listener: (event: { preventDefault: () => void }) => void) => {
@@ -162,6 +176,10 @@ function fakeCloseTargets() {
     closed: () => closed,
     quits: () => quits,
     quitListenerCount: () => quitListeners.length,
+    reloads: () => reloads,
+    destroyed: () => destroyed,
+    /** Событие webContents; true — обработчик позвал preventDefault. */
+    contents: (event: string): boolean => emit(contentsListeners.get(event) ?? []),
   };
 }
 
@@ -214,6 +232,65 @@ describe('guardWindowClose (тест 11 куска 7.3a)', () => {
     expect(t.quits()).toBe(1);
     expect(t.sent).toEqual(['app:confirm-close']);
     expect(t.closeWindow()).toBe(false);
+  });
+
+  it('перезагрузка с грязными (fix-7.3 п. 4б): выгрузка отменена, вопрос; close — reload, выгрузка пропущена; после загрузки снова спрашивает', () => {
+    const t = fakeCloseTargets();
+    const guard = guardWindowClose(t.window, t.app);
+    guard.setDirtyCount(1);
+    // `beforeunload` страницы отменил выгрузку: без preventDefault в main она и остаётся отменённой.
+    expect(t.contents('will-prevent-unload')).toBe(false);
+    expect(t.sent).toEqual(['app:confirm-close']);
+    guard.answer('cancel');
+    expect(t.reloads()).toBe(0);
+
+    expect(t.contents('will-prevent-unload')).toBe(false);
+    guard.answer('close');
+    expect(t.reloads()).toBe(1);
+    expect(t.closed()).toBe(0);
+    // «Don't save»: буферы всё ещё грязные — страница снова отменяет, main выгрузку пропускает.
+    expect(t.contents('will-prevent-unload')).toBe(true);
+    guard.reset();
+    guard.setDirtyCount(1);
+    expect(t.closeWindow()).toBe(true);
+    expect(t.sent).toEqual(['app:confirm-close', 'app:confirm-close', 'app:confirm-close']);
+  });
+
+  it('закрытие с ответом close: выгрузку, которую отменила страница, main пропускает', () => {
+    const t = fakeCloseTargets();
+    const guard = guardWindowClose(t.window, t.app);
+    guard.setDirtyCount(1);
+    t.closeWindow();
+    guard.answer('close');
+    expect(t.contents('will-prevent-unload')).toBe(true);
+    expect(t.reloads()).toBe(0);
+  });
+
+  it('вопрос о закрытии ждёт, а страница зависла — нативный вопрос; Wait — ждём, Quit anyway — окно уничтожено, выход (fix-7.3 п. 5)', async () => {
+    const t = fakeCloseTargets();
+    const answers: Array<'quit' | 'wait'> = ['wait', 'quit'];
+    let asked = 0;
+    const guard = guardWindowClose(t.window, t.app, {
+      askUnresponsive: async () => {
+        asked += 1;
+        return answers.shift() ?? 'wait';
+      },
+    });
+    guard.setDirtyCount(1);
+    // Зависла без вопроса о закрытии — ничего не спрашиваем.
+    t.contents('unresponsive');
+    expect(asked).toBe(0);
+    t.closeWindow();
+    await Promise.resolve();
+    expect(asked).toBe(1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(t.destroyed()).toBe(0);
+    t.contents('responsive');
+    t.contents('unresponsive');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(asked).toBe(2);
+    expect(t.destroyed()).toBe(1);
+    expect(t.quits()).toBe(1);
   });
 
   it('ответ без вопроса ничего не делает; dispose снимает слушатель before-quit', () => {

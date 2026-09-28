@@ -529,6 +529,23 @@ export function forwardHostToWindow(
 }
 
 /**
+ * `forwardHostToWindow` на каждую загрузку страницы окна (fix-7.3 п. 4а): перезагрузка — новая
+ * страница, её стор связи снова `connecting`, а статус хоста main слал только первой. Новая
+ * подписка отдаёт текущий статус сразу (`onStatus`), прежняя снимается — подписка одна.
+ */
+export function forwardHostToPages(connection: HostConnection, window: BrowserWindow): void {
+  let current: { dispose: () => void } | null = null;
+  window.webContents.on('did-finish-load', () => {
+    current?.dispose();
+    current = forwardHostToWindow(connection, window);
+  });
+  window.on('closed', () => {
+    current?.dispose();
+    current = null;
+  });
+}
+
+/**
  * Смена системной темы (спека 4.7): `nativeTheme.on('updated')` шлёт окну
  * текущую тёмность. Сам выбор темы (`system`/`dark`/`light`) уже осел в
  * `nativeTheme.themeSource` через `app:set-appearance` — рендереру остаётся

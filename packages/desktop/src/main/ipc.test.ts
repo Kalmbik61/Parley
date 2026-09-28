@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { IpcMain, Session, WebContents } from 'electron';
+import type { BrowserWindow, IpcMain, Session, WebContents } from 'electron';
 import type { WorksSnapshot } from '@harnas/protocol';
 import { decodeIpcError } from '../shared/ipc-error.js';
 import { workKey } from '../shared/work-keys.js';
@@ -12,7 +12,7 @@ import { DropTooLargeError, MAX_DROP_IMAGE_BYTES } from './drops.js';
 import { HostError, type HostConnection } from './host-connection.js';
 import { LayoutTooLargeError, type LayoutStore } from './layout-store.js';
 import type { UiStore } from './ui-store.js';
-import { registerIpc, withIpcError } from './ipc.js';
+import { forwardHostToPages, registerIpc, withIpcError } from './ipc.js';
 import { createRootsRegistry, FilesDeniedError, type RootsRegistry } from './roots.js';
 
 /** Подставной `ipcMain`: сохраняет обработчики и умеет их дёргать, как настоящий `invoke`. */
@@ -846,5 +846,41 @@ describe('мост browser:* (тест 8 куска 9.1)', () => {
     expect(browserSession.clearStorageData).toHaveBeenCalledTimes(1);
     expect(browserSession.clearCache).toHaveBeenCalledTimes(1);
     expect(otherSession.clearStorageData).not.toHaveBeenCalled();
+  });
+});
+
+describe('forwardHostToPages (fix-7.3 п. 4а)', () => {
+  it('каждая загрузка страницы получает текущий статус хоста: перезагрузка не остаётся на «Connecting…»', () => {
+    const statusListeners = new Set<(status: unknown) => void>();
+    let status: unknown = { state: 'connected' };
+    const connection = {
+      onEvent: () => () => {},
+      onStatus: (listener: (s: unknown) => void) => {
+        statusListeners.add(listener);
+        listener(status);
+        return () => statusListeners.delete(listener);
+      },
+    } as unknown as HostConnection;
+    const contents = new EventEmitter();
+    const windowEvents = new EventEmitter();
+    const sent: unknown[] = [];
+    const window = {
+      isDestroyed: () => false,
+      on: (event: string, listener: () => void) => windowEvents.on(event, listener),
+      webContents: Object.assign(contents, { send: (channel: string, data: unknown) => sent.push([channel, data]) }),
+    };
+    forwardHostToPages(connection, window as unknown as BrowserWindow);
+    expect(sent).toEqual([]);
+    contents.emit('did-finish-load');
+    expect(sent).toEqual([['host:status', { state: 'connected' }]]);
+    // Перезагрузка: новая страница — снова текущий статус; подписка одна, не копится.
+    contents.emit('did-finish-load');
+    expect(sent).toHaveLength(2);
+    expect(statusListeners.size).toBe(1);
+    status = { state: 'disconnected', reason: 'x' };
+    for (const listener of statusListeners) listener(status);
+    expect(sent).toHaveLength(3);
+    windowEvents.emit('closed');
+    expect(statusListeners.size).toBe(0);
   });
 });

@@ -549,6 +549,10 @@ export const S = {
       `Workspace “${title}” was deleted — unsaved changes in ${count} ${count === 1 ? 'file' : 'files'}`,
     discard: 'Discard',
     notSaved: (names: string): string => `Couldn't save: ${names}`,
+    /** Нативный вопрос main: вопрос о закрытии ждёт, а страница зависла (fix-7.3 п. 5). */
+    unresponsive: "Harnas isn't responding. Unsaved changes may be lost.",
+    quitAnyway: 'Quit anyway',
+    wait: 'Wait',
     /**
      * Тело вкладки файла (кусок 7.3b, спека 10.4, 10.5, 13): плашки только чтения — по коду
      * `readOnlyReason`, тела — по коду ошибки `readText`. «Open in default app» —

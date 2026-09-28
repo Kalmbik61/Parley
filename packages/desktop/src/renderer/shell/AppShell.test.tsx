@@ -19,6 +19,7 @@ import type { LayoutNode, TabSpec } from '../../shared/layout-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
+import { bufferKey } from '../files/buffer.js';
 import { useFilesStore } from '../files/store.js';
 import { closeTab, focusTab, groups, moveTab, openTab, splitGroup } from '../layout/tree.js';
 import { useActivityStore } from '../store/activity.js';
@@ -1850,6 +1851,26 @@ describe('AppShell — несохранённые файлы при закрыт
     await waitFor(() => expect(bridge.closeAnswers).toEqual(['close']));
     expect(toast).not.toHaveBeenCalledWith("Couldn't save all files — the window stays open");
     expect(bridge.writes).toHaveLength(1);
+  });
+
+  it('beforeunload: грязные буферы — страница отменяет выгрузку (main спросит), без них — нет (fix-7.3 п. 4б)', async () => {
+    await openDirtyA();
+    const unload = (): boolean => {
+      const event = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    expect(unload()).toBe(true);
+    // Ответ «Don't save» на вопрос окна: main закроет или повторит перезагрузку — страница не мешает.
+    act(() => bridge.emitConfirmClose());
+    fireEvent.click(await screen.findByRole('button', { name: "Don't save" }));
+    await waitFor(() => expect(bridge.closeAnswers).toEqual(['close']));
+    expect(unload()).toBe(false);
+    // Новая правка после ответа — снова отмена.
+    act(() => useFilesStore.getState().dispatch(bufferKey(W, A.id), { type: 'edited', text: 'a3' }));
+    expect(unload()).toBe(true);
+    useFilesStore.setState({ buffers: {} });
+    expect(unload()).toBe(false);
   });
 
   describe('работа исчезла из снимка не через меню окна (fix-7.3 п. 1)', () => {

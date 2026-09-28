@@ -8,7 +8,7 @@
  * Имена файлов — данные: длинное имя обрезано многоточием, полное — в `title`.
  */
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { create } from 'zustand';
 import type { HarnasBridge } from '../../shared/bridge.js';
@@ -16,7 +16,7 @@ import { S } from '../../shared/strings.js';
 import { Button } from '../ui/button.js';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../ui/dialog.js';
 import { answerVanishedWork, answerWindowClose, type SaveAnswer } from './close-guard.js';
-import { dirtyBufferRefs, useFilesStore } from './store.js';
+import { dirtyBufferKeys, dirtyBufferRefs, useFilesStore, type FilesState } from './store.js';
 
 interface SaveChangesRequest {
   /**
@@ -134,6 +134,12 @@ export function SaveChangesDialog(): JSX.Element | null {
  * переживают потерю связи с хостом, и main без ответа не закрыл бы окно вовсе.
  */
 export function WindowCloseQuestion({ bridge }: { bridge: HarnasBridge }): JSX.Element {
+  /**
+   * Буферы, по которым человек ответил «закрыть» («Don't save»): выгрузку с ними страница больше не
+   * отменяет — main закрывает окно или повторяет перезагрузку. Сверка по ссылке: любая правка после
+   * ответа — новый объект `buffers`, и выгрузка снова отменяется.
+   */
+  const approved = useRef<FilesState['buffers'] | null>(null);
   useEffect(
     () =>
       bridge.app.onConfirmClose(() => {
@@ -142,9 +148,22 @@ export function WindowCloseQuestion({ bridge }: { bridge: HarnasBridge }): JSX.E
           ask: (names) => askSaveChanges('window', names),
           save: async (workKey, tabId) => (await useFilesStore.getState().save(bridge, workKey, tabId)) === 'saved',
           toast: (text) => toast(text),
-        }).then((answer) => bridge.app.answerClose(answer));
+        }).then((answer) => {
+          approved.current = answer === 'close' ? useFilesStore.getState().buffers : null;
+          bridge.app.answerClose(answer);
+        });
       }),
     [bridge],
   );
+  // Перезагрузка страницы (fix-7.3 п. 4б) у main события не даёт: грязные буферы — выгрузка
+  // отменяется, main узнаёт об этом (`will-prevent-unload`) и задаёт тот же вопрос, что при закрытии.
+  useEffect(() => {
+    const onBeforeUnload = (event: Event): void => {
+      const { buffers } = useFilesStore.getState();
+      if (buffers !== approved.current && dirtyBufferKeys(buffers).length > 0) event.preventDefault();
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
   return <SaveChangesDialog />;
 }

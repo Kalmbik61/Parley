@@ -11,6 +11,8 @@ process.env.HARNAS_SHELL = 'log';
 process.env.HARNAS_DROPS = 'fake';
 // Загрузки встроенного браузера — без настоящего диалога сохранения и мимо Downloads человека (ревью 9.1).
 process.env.HARNAS_DOWNLOADS = 'log';
+// Нативный вопрос «страница зависла» (fix-7.3 п. 5) — в журнал main, без системного диалога.
+process.env.HARNAS_DIALOGS = 'log';
 
 export default defineConfig({
   testDir: './e2e',

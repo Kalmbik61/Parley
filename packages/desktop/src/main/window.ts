@@ -91,8 +91,13 @@ export function createMainWindow(input: {
 export interface ClosableWindow {
   on(event: 'close', listener: (event: { preventDefault(): void }) => void): unknown;
   close(): void;
+  destroy(): void;
   isDestroyed(): boolean;
-  webContents: { send(channel: string): void };
+  webContents: {
+    send(channel: string): void;
+    on(event: 'will-prevent-unload' | 'unresponsive' | 'responsive', listener: (event: { preventDefault(): void }) => void): unknown;
+    reload(): void;
+  };
 }
 
 /** Что `guardWindowClose` трогает у `app`. */
@@ -108,10 +113,20 @@ export interface QuittableApp {
  * а потеря правок молча недопустима. Рендерер держит main в курсе числа грязных буферов
  * (`setDirtyCount`); пока оно ноль, окно закрывается сразу, как раньше. Иначе `close` и
  * `before-quit` отменяются, окну уходит `app:confirm-close`, и решает ответ `answer`.
+ *
+ * Перезагрузка страницы (fix-7.3 п. 4б: DevTools, `webContents.reload()`) — тот же вопрос. У неё нет
+ * события до выгрузки, поэтому перехват — `beforeunload` рендерера: при грязных буферах он отменяет
+ * выгрузку, Electron сообщает об этом `will-prevent-unload`, и main задаёт вопрос вместо неё. Ответ
+ * «закрыть» повторяет перезагрузку, а отмену страницы main тогда пропускает (`preventDefault`) — как
+ * и у закрытия с ответом «закрыть». Падение рендерера не перехватить: остаточный риск спеки 10.5.
+ *
+ * Страница зависла, а вопрос ждёт ответа (fix-7.3 п. 5): по `unresponsive` — нативный вопрос
+ * `askUnresponsive`; «Quit anyway» уничтожает окно без `beforeunload` и продолжает выход.
  */
 export function guardWindowClose(
   window: ClosableWindow,
   app: QuittableApp,
+  options: { askUnresponsive?: () => Promise<'quit' | 'wait'> } = {},
 ): { setDirtyCount(count: number): void; answer(answer: 'close' | 'cancel'): void; reset(): void; dispose(): void } {
   let dirty = 0;
   /** Ответ «закрыть» получен: следующий `close` (и `before-quit`) пропускается без вопроса. */
@@ -120,19 +135,64 @@ export function guardWindowClose(
   let asking = false;
   /** Вопрос задан из-за ⌘Q: ответ «закрыть» продолжает выход, а не только закрывает окно. */
   let quitting = false;
+  /** Вопрос задан из-за крестика окна. */
+  let closing = false;
+  /** Вопрос задан из-за перезагрузки страницы: ответ «закрыть» — перезагрузка, если не ждут закрытия. */
+  let reloading = false;
+  /** Страница не отвечает (`unresponsive` без `responsive` после). */
+  let unresponsive = false;
+  /** Нативный вопрос о зависшей странице открыт. */
+  let promptingUnresponsive = false;
+
+  const promptIfHung = (): void => {
+    const ask = options.askUnresponsive;
+    if (ask === undefined || !unresponsive || !asking || promptingUnresponsive || window.isDestroyed()) return;
+    promptingUnresponsive = true;
+    void ask().then((answer) => {
+      promptingUnresponsive = false;
+      if (answer !== 'quit' || window.isDestroyed()) return;
+      allowed = true;
+      // destroy, а не close: зависшая страница не ответит и на `beforeunload`.
+      window.destroy();
+      app.quit();
+    });
+  };
+
+  const send = (): void => {
+    if (asking || window.isDestroyed()) return;
+    asking = true;
+    window.webContents.send('app:confirm-close');
+    promptIfHung();
+  };
 
   const hold = (event: { preventDefault(): void }, quit: boolean): void => {
     if (allowed || dirty === 0) return;
     event.preventDefault();
     if (quit) quitting = true;
-    if (asking || window.isDestroyed()) return;
-    asking = true;
-    window.webContents.send('app:confirm-close');
+    else closing = true;
+    send();
   };
 
   const onBeforeQuit = (event: { preventDefault(): void }): void => hold(event, true);
   window.on('close', (event) => hold(event, false));
   app.on('before-quit', onBeforeQuit);
+  window.webContents.on('will-prevent-unload', (event) => {
+    // Ответ «закрыть» уже есть — отмену страницы (её буферы ещё грязные после «Don't save») пропускаем.
+    if (allowed) {
+      event.preventDefault();
+      return;
+    }
+    // Выгрузку отменила страница, а вопроса не было — перезагрузка. Без preventDefault она отменена.
+    reloading = true;
+    send();
+  });
+  window.webContents.on('unresponsive', () => {
+    unresponsive = true;
+    promptIfHung();
+  });
+  window.webContents.on('responsive', () => {
+    unresponsive = false;
+  });
 
   return {
     setDirtyCount: (count) => {
@@ -141,19 +201,26 @@ export function guardWindowClose(
     answer: (answer) => {
       if (!asking) return;
       asking = false;
-      if (answer === 'cancel') {
-        quitting = false;
-        return;
-      }
+      const [quit, close, reload] = [quitting, closing, reloading];
+      quitting = false;
+      closing = false;
+      reloading = false;
+      if (answer === 'cancel') return;
       allowed = true;
-      if (quitting) app.quit();
-      else if (!window.isDestroyed()) window.close();
+      if (quit) app.quit();
+      else if (window.isDestroyed()) return;
+      else if (close || !reload) window.close();
+      else window.webContents.reload();
     },
     // Страница перезагрузилась или упала: её буферов больше нет, и вопрос ей уже не ответить.
+    // Разрешение тоже снимается: оно было на ту выгрузку, у новой страницы вопрос снова свой.
     reset: () => {
       dirty = 0;
+      allowed = false;
       asking = false;
       quitting = false;
+      closing = false;
+      reloading = false;
     },
     dispose: () => {
       app.removeListener('before-quit', onBeforeQuit);
