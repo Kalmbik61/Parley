@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -719,6 +719,41 @@ describe('worktree (план, кусок 4.2)', () => {
     const ref: SessionRef = { projectPath: project, workId: work.work.id, sessionId };
 
     await expect(service.delete(ref, true)).rejects.toMatchObject({ code: 'bad_request' });
+    expect(existsSync(info.path)).toBe(true);
+    expect((await readMap(project, work.work.id)).sessions.some((s) => s.id === sessionId)).toBe(true);
+  });
+
+  it('9: sessions.delete worktree с подложенным .git — bad_request worktree-corrupt; worktree и запись на месте (fix-final-a, C1)', async () => {
+    await initGitProject(project);
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const worktreeRootDir = await tempWorktreeRoot();
+
+    let sessionId = '';
+    let info!: WorktreeInfo;
+    await updateMap(project, work.work.id, (map) => {
+      const created = addSession(map, { provider: 'claude', label: 'a', task: 'т' });
+      sessionId = created.id;
+      created.worktree = plannedWorktree(project, work.work.id, created.id, 'main', worktreeRootDir);
+      info = created.worktree;
+    });
+    await createWorktree(project, info);
+    await updateMap(project, work.work.id, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === sessionId);
+      if (session?.worktree !== null && session?.worktree !== undefined) {
+        session.worktree.createdAt = new Date().toISOString();
+      }
+    });
+    // Агент заменил файл .git своей копии: gitdir — каталог внутри неё же.
+    await mkdir(path.join(info.path, 'evil', '.git'), { recursive: true });
+    await writeFile(path.join(info.path, '.git'), `gitdir: ${path.join(info.path, 'evil', '.git')}\n`, 'utf8');
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref: SessionRef = { projectPath: project, workId: work.work.id, sessionId };
+
+    await expect(service.delete(ref, true)).rejects.toMatchObject({
+      code: 'bad_request',
+      data: { reason: 'worktree-corrupt' },
+    });
     expect(existsSync(info.path)).toBe(true);
     expect((await readMap(project, work.work.id)).sessions.some((s) => s.id === sessionId)).toBe(true);
   });

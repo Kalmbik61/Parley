@@ -58,6 +58,8 @@ export interface WorktreesService {
  * data: { reason }; NothingToCommitError — conflict; InvalidRevisionError (база или ветка карты — не ревизия) —
  * bad_request без data; прочее — internal без data. Папки worktree нет — bad_request с причиной
  * worktree-missing (requirePresentWorktree; discard её не проверяет — его поведение раунд 8 не менял).
+ * Файл `.git` worktree подменён — GitStateError core с причиной worktree-corrupt (bad_request): её
+ * отдают и diff, и commit, merge, discard (раунд fix-final-a, C1).
  */
 export function gitFailure(error: unknown): HostError {
   if (error instanceof HostError) return error;
@@ -150,7 +152,13 @@ export function createWorktreesService(
 
     async commit(ref, message) {
       const { worktree } = await requirePresentWorktree(ref);
-      return commitWorktree(ref.projectPath, worktree, message);
+      // Только worktree-corrupt — с причиной; прочий сбой коммита идёт как раньше.
+      try {
+        return await commitWorktree(ref.projectPath, worktree, message);
+      } catch (error) {
+        if (error instanceof GitStateError) throw gitFailure(error);
+        throw error;
+      }
     },
 
     async merge(ref) {
@@ -159,8 +167,9 @@ export function createWorktreesService(
       try {
         return await mergeWorktree(ref.projectPath, worktree, message);
       } catch (error) {
-        // Только отказ по ревизии — bad_request; прочий сбой merge идёт как раньше (internal с логом сервера).
-        if (error instanceof InvalidRevisionError) throw gitFailure(error);
+        // Отказ по ревизии и подменённый .git — bad_request; прочий сбой merge идёт как раньше
+        // (internal с логом сервера).
+        if (error instanceof InvalidRevisionError || error instanceof GitStateError) throw gitFailure(error);
         throw error;
       }
     },
@@ -175,7 +184,7 @@ export function createWorktreesService(
           await discardWorktree(ref.projectPath, worktree, { force });
         } catch (error) {
           if (error instanceof DirtyWorktreeError) throw new HostError('conflict', error.message);
-          if (error instanceof InvalidRevisionError) throw gitFailure(error);
+          if (error instanceof InvalidRevisionError || error instanceof GitStateError) throw gitFailure(error);
           throw error;
         }
       }

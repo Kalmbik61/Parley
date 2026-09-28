@@ -261,6 +261,30 @@ describe('worktree отсутствует (раунд исправлений 8, 
   });
 });
 
+describe('подложенный .git в worktree (раунд fix-final-a, C1)', () => {
+  it('diff, commit, merge и discard — bad_request с причиной worktree-corrupt; программа подложенного gitdir не запущена', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+    // Агент пишет только в свою копию: gitdir с core.fsmonitor — внутри неё. Маркер — файл-признак
+    // во временном каталоге теста.
+    const marker = path.join(info.path, '..', 'fsmonitor-ran');
+    const hook = path.join(info.path, 'hook.sh');
+    await writeFile(hook, `#!/bin/sh\necho ran >> '${marker}'\nexit 1\n`, { mode: 0o755 });
+    const planted = path.join(info.path, 'evil');
+    await run('git', ['init', '-q', planted]);
+    await git(planted, ['config', 'core.fsmonitor', hook]);
+    await writeFile(path.join(info.path, '.git'), `gitdir: ${path.join(planted, '.git')}\n`, 'utf8');
+
+    const corrupt = { code: 'bad_request', data: { reason: 'worktree-corrupt' } };
+    await expect(service.diff(ref, false)).rejects.toMatchObject(corrupt);
+    await expect(service.commit(ref, 'm')).rejects.toMatchObject(corrupt);
+    await expect(service.merge(ref)).rejects.toMatchObject(corrupt);
+    await expect(service.discard(ref, true)).rejects.toMatchObject(corrupt);
+    expect(existsSync(marker)).toBe(false);
+    expect(existsSync(info.path)).toBe(true);
+  });
+});
+
 describe('без своего worktree', () => {
   it('diff/commit/merge/discard сессии без worktree — bad_request', async () => {
     const work = await createWork(project, { title: 'Работа', goal: '' });

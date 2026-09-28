@@ -25,6 +25,7 @@ import {
   discardWorktree,
   finishExited,
   findRunnerBinary,
+  GitStateError,
   InvalidRevisionError,
   isGitRepo,
   loadConfig,
@@ -387,8 +388,9 @@ export function createSessionsService(
         await discardWorktree(ref.projectPath, worktree, { force });
       } catch (error) {
         if (error instanceof DirtyWorktreeError) throw new HostError('conflict', error.message);
-        // Ветка из карты — не ревизия: тот же bad_request, что у worktrees.merge/discard.
-        if (error instanceof InvalidRevisionError) throw gitFailure(error);
+        // Ветка из карты — не ревизия, `.git` worktree подменён: тот же bad_request, что у
+        // worktrees.merge/discard.
+        if (error instanceof InvalidRevisionError || error instanceof GitStateError) throw gitFailure(error);
         throw error;
       }
     }
