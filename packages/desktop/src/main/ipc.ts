@@ -33,7 +33,15 @@ export function withIpcError(
     try {
       return await handler(event, ...args);
     } catch (error) {
-      if (error instanceof HostError) throw encodeIpcError({ code: error.code, message: error.message });
+      if (error instanceof HostError) {
+        // Причина хоста (`data.reason`) — окну: по ней оно показывает свой текст (lane-r5).
+        const reason = error.data?.['reason'];
+        throw encodeIpcError(
+          typeof reason === 'string'
+            ? { code: error.code, message: error.message, reason }
+            : { code: error.code, message: error.message },
+        );
+      }
       if (error instanceof FilesDeniedError) throw encodeIpcError({ code: error.code, message: error.message });
       if (error instanceof DropTooLargeError) throw encodeIpcError({ code: error.code, message: error.message });
       const message = error instanceof Error ? error.message : String(error);

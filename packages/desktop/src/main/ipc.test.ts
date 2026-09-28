@@ -567,6 +567,25 @@ describe('withIpcError (кусок 5.2, тест 15)', () => {
   });
 });
 
+describe('withIpcError — причина ошибки хоста (lane-r5, п. 1)', () => {
+  it('HostError с data.reason — причина доезжает до рендерера; без неё поля нет', async () => {
+    const decode = async (promise: unknown): Promise<unknown> => {
+      try {
+        await promise;
+      } catch (error) {
+        return decodeIpcError(error);
+      }
+      return null;
+    };
+    const unreadable = new HostError('internal', 'работы не прочитаны', { reason: 'works-unreadable' });
+    expect(await decode(withIpcError(() => Promise.reject(unreadable))({}))).toMatchObject({
+      code: 'internal',
+      reason: 'works-unreadable',
+    });
+    expect(await decode(withIpcError(() => Promise.reject(new HostError('internal', 'x', { reason: 7 })))({}))).not.toHaveProperty('reason');
+  });
+});
+
 describe('app:open-path и app:show-in-finder (кусок 5.2, тест 13)', () => {
   let dir = '';
   let project = '';

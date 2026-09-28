@@ -64,6 +64,7 @@ import { applyFocusTarget, buildFocusTargetDeps } from '../attention/focus-targe
 import { openNextAttention } from '../attention/next.js';
 import { useAttentionTotals } from '../attention/store.js';
 import { InterruptedBanner } from '../components/InterruptedBanner.js';
+import { WorksErrorBanner } from '../components/WorksErrorBanner.js';
 import { CreateRoomDialog, type RoomCandidate } from '../components/rooms/CreateRoomDialog.js';
 import { visibleWorkOrder } from '../sidebar/sort.js';
 import { SidebarSectionsWriter, useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
@@ -585,6 +586,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     <div className="flex h-screen flex-col bg-background text-foreground">
       <Titlebar bridge={bridge} />
       <InterruptedBanner bridge={bridge} />
+      <WorksErrorBanner />
       {showLanding ? (
         <Landing />
       ) : (

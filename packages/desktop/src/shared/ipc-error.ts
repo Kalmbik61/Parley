@@ -10,6 +10,8 @@
 export interface IpcErrorInfo {
   code: string;
   message: string;
+  /** `data.reason` ошибки хоста, если он её назвал (`works-unreadable`, раунд lane-r5). */
+  reason?: string;
 }
 
 const MARKER = 'harnas-error:';

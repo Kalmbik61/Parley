@@ -433,6 +433,14 @@ export const S = {
     resumeAll: 'Resume all',
   },
 
+  /**
+   * Отказ `works.list` — баннер `components/WorksErrorBanner.tsx` (раунд lane-r5). `unreadable` —
+   * причина хоста `works-unreadable`: первое чтение работ не удалось, снимка нет до перезапуска хоста.
+   */
+  works: {
+    unreadable: "Host couldn't read the workspace list (works-index.json may be damaged). Fix the file, then restart the host.",
+  },
+
   /** Экраны связи с хостом — `App.tsx`, короткие варианты — `shell/StatusBar.tsx`. */
   connection: {
     connectingScreen: 'Connecting to host…',
@@ -543,6 +551,7 @@ export const S = {
   errors: {
     actions: {
       loadProviders: 'load providers',
+      loadWorkspaces: 'load workspaces',
       createSession: 'create session',
       createWorkspace: 'create workspace',
       loadChanges: 'load changes',

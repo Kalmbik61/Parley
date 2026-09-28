@@ -8,12 +8,20 @@ import { create } from 'zustand';
 import type { WorkEntry } from '@harnas/core';
 import type { WorksSnapshot } from '@harnas/protocol';
 import type { HarnasBridge } from '../../shared/bridge.js';
+import { decodeIpcError } from '../../shared/ipc-error.js';
+
+/** Отказ `works.list`: код протокола и причина хоста (`works-unreadable`, раунд lane-r5). */
+export interface WorksLoadError {
+  code: string;
+  reason: string | null;
+}
 
 export interface WorksState {
   entries: WorkEntry[];
   branches: Record<string, string | null>;
+  /** Снимка работ ещё нет: `works.list` не ответил или отказал. */
   loading: boolean;
-  error: string | null;
+  error: WorksLoadError | null;
   /** Подписывается на бридж и один раз запрашивает `works.list`; возвращает отписку. */
   init: (bridge: HarnasBridge) => () => void;
 }
@@ -35,7 +43,12 @@ export const useWorksStore = create<WorksState>((set) => ({
       .then(apply)
       .catch((err: unknown) => {
         if (disposed) return;
-        set({ loading: false, error: err instanceof Error ? err.message : String(err) });
+        // `loading` не снимается и прежний снимок не трогается (lane-r5): отказ — не пустой список.
+        // Иначе «загружено, работ нет» стёрло бы сохранённые вкладки (retainLayouts первого снимка)
+        // или закрыло вкладки работ при переподключении. Текст хоста (русский) — только в консоль.
+        const info = decodeIpcError(err);
+        console.warn('[harnas] works.list failed', info.message);
+        set({ error: { code: info.code, reason: info.reason ?? null } });
       });
 
     const unsubscribe = bridge.on('works.changed', apply);

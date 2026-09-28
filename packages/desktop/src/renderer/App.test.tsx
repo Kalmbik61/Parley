@@ -30,6 +30,7 @@ import { REQUIRED_METHODS } from './lib/capabilities.js';
 import { useSidebarSectionsStore } from './sidebar/use-sidebar-sections.js';
 import { toast } from 'sonner';
 import { groups } from './layout/tree.js';
+import { S } from '../shared/strings.js';
 
 // Тест 6 куска 2.7 читает пропсы диалога новой сессии, а не его разметку:
 // что именно диалог делает с `projectPath`/`workId`, проверяет его собственный тест.
@@ -504,5 +505,43 @@ describe('App — связь вернулась (слияние lane-r3 и main-
 
     expect(await screen.findByText('Interrupted mid-turn: S03')).toBeTruthy();
     expect(screen.getByTestId('titlebar')).toBe(titlebar);
+  });
+});
+
+// Раунд lane-r5, п. 1: хост не прочитал работы на старте (битый works-index.json) — works.list
+// отвечает internal с причиной works-unreadable. Пустой список не должен сойти за ответ хоста:
+// сохранённые вкладки не стираются, человек видит сбой, а не Landing.
+describe('App — works.list отказал на старте хоста (lane-r5)', () => {
+  const unreadable = { code: 'internal', message: 'работы не прочитаны на старте хоста', reason: 'works-unreadable' };
+
+  it('первое подключение: раскладки не отсеиваются, Landing нет, видна причина по-английски', async () => {
+    useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
+    bridge.setHandler('works.list', () => {
+      throw unreadable;
+    });
+    render(<App />);
+    expect(await screen.findByText(S.works.unreadable)).toBeTruthy();
+    expect(screen.queryByTestId('landing')).toBeNull();
+    expect(bridge.layoutRetains).toEqual([]);
+    expect(screen.queryByText(/работы не прочитаны/)).toBeNull();
+  });
+
+  it('переподключение к хосту с отказом: работы и вкладки остаются, видна причина', async () => {
+    const w1 = work('w-01', '2026-01-01', [session('s-01', 'план')]);
+    bridge.setHandler('works.list', () => ({ entries: [w1], branches: {} }));
+    useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
+    render(<App />);
+    await screen.findAllByText('w-01');
+
+    act(() => bridge.emitStatus({ state: 'disconnected', reason: 'Connection to host closed' }));
+    bridge.setHandler('works.list', () => {
+      throw unreadable;
+    });
+    act(() => bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: [...REQUIRED_METHODS] }));
+
+    expect(await screen.findByText(S.works.unreadable)).toBeTruthy();
+    expect(useWorksStore.getState().entries).toEqual([w1]);
+    expect(bridge.layoutRemovals).toEqual([]);
+    expect(screen.getAllByText('w-01').length).toBeGreaterThan(0);
   });
 });
