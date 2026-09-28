@@ -14,7 +14,7 @@ import { useLayoutStore } from '../layout/store.js';
 import { emptyLayout, groups } from '../layout/tree.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { bufferKey } from './buffer.js';
-import { SearchPanel } from './SearchPanel.js';
+import { SEARCHING_DELAY_MS, SearchPanel } from './SearchPanel.js';
 import { useFilesStore } from './store.js';
 
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
@@ -120,7 +120,7 @@ describe('SearchPanel (тест 2)', () => {
   it('truncated — Showing first 2000 matches (n — число совпадений ответа)', async () => {
     const files = Array.from({ length: 200 }, (_, f) => ({
       path: `dir/f${f}.ts`,
-      hits: Array.from({ length: 10 }, (_, h) => ({ line: h + 1, text: 'needle', ranges: [[0, 6]] as [number, number][] })),
+      hits: Array.from({ length: 10 }, (_, h) => ({ line: h + 1, column: 1, text: 'needle', ranges: [[0, 6]] as [number, number][] })),
     }));
     bridge.setGrepResult(result(files, true));
     render(<SearchPanel bridge={bridge} root={ROOT} />);
@@ -268,5 +268,69 @@ describe('SearchPanel — подсказка POSIX regex (раунд fix-7.4, п
     await wait(250);
     expect(screen.getByText('No results')).toBeTruthy();
     expect(screen.queryByText('POSIX regex')).toBeNull();
+  });
+});
+
+// Раунд fix-7.4, п. 5 (ревью 7.4-A, Minor 1 и 2): признак идущего поиска и отмена при размонтировании.
+describe('SearchPanel — Searching… и размонтирование (раунд fix-7.4, п. 5)', () => {
+  function pendingGrep(): { grep: ReturnType<typeof vi.fn<(root: FileRoot, query: GrepQuery, signalId: string) => Promise<GrepResult>>>; answers: Array<(value: GrepResult) => void> } {
+    const answers: Array<(value: GrepResult) => void> = [];
+    const grep = vi.fn<(root: FileRoot, query: GrepQuery, signalId: string) => Promise<GrepResult>>(
+      () => new Promise<GrepResult>((resolve) => answers.push(resolve)),
+    );
+    bridge.files.grep = grep;
+    return { grep, answers };
+  }
+
+  it(`Searching… — только если ответа нет дольше ${SEARCHING_DELAY_MS} мс; ответ убирает`, async () => {
+    const { answers } = pendingGrep();
+    render(<SearchPanel bridge={bridge} root={ROOT} />);
+    await type('slow');
+    await wait(250);
+    await wait(SEARCHING_DELAY_MS - 1);
+    expect(screen.queryByText('Searching…')).toBeNull();
+    await wait(1);
+    expect(screen.getByText('Searching…')).toBeTruthy();
+    await act(async () => answers[0]?.(result([])));
+    expect(screen.queryByText('Searching…')).toBeNull();
+    expect(screen.getByText('No results')).toBeTruthy();
+  });
+
+  it('быстрый ответ — Searching… не мигает', async () => {
+    bridge.setGrepResult(result([]));
+    render(<SearchPanel bridge={bridge} root={ROOT} />);
+    await type('fast');
+    await wait(250);
+    await wait(SEARCHING_DELAY_MS * 2);
+    expect(screen.queryByText('Searching…')).toBeNull();
+    expect(screen.getByText('No results')).toBeTruthy();
+  });
+
+  it('размонтирование во время поиска — cancel его id', async () => {
+    const { grep } = pendingGrep();
+    const view = render(<SearchPanel bridge={bridge} root={ROOT} />);
+    await type('x');
+    await wait(250);
+    const id = grep.mock.calls[0]?.[2];
+    expect(bridge.cancelCalls).toEqual([]);
+    view.unmount();
+    expect(bridge.cancelCalls).toEqual([id]);
+  });
+
+  it('панель другой работы вместо идущей (смена key) — cancel, поздний ответ не показан', async () => {
+    const { grep, answers } = pendingGrep();
+    const other: FileRoot = { workKey: '/tmp/proj w-02', spec: { kind: 'project' } };
+    const error = vi.spyOn(console, 'error');
+    const view = render(<SearchPanel key="a" bridge={bridge} root={ROOT} />);
+    await type('x');
+    await wait(250);
+    const id = grep.mock.calls[0]?.[2];
+    view.rerender(<SearchPanel key="b" bridge={bridge} root={other} />);
+    expect(bridge.cancelCalls).toEqual([id]);
+    await act(async () => answers[0]?.(result([{ path: 'late.ts', hits: [{ line: 1, column: 1, text: 'x', ranges: [[0, 1]] }] }], true)));
+    expect(screen.queryByText('late.ts')).toBeNull();
+    expect(field().value).toBe('');
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
   });
 });

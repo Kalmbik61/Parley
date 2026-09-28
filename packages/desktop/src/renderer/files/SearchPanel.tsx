@@ -25,6 +25,11 @@ import { openFile } from './Tree.js';
 
 /** Запрос — через 250 мс тишины (план). */
 export const SEARCH_DEBOUNCE_MS = 250;
+/**
+ * «Searching…» — только если ответа нет дольше 300 мс после запроса (раунд fix-7.4, п. 5):
+ * обычный ответ git grep приходит раньше, и признак на нём мигал бы.
+ */
+export const SEARCHING_DELAY_MS = 300;
 /** Запрос — до 1000 символов: длиннее main отвечает `bad_request` (план). */
 const MAX_QUERY = 1000;
 /** Совпадение дальше от начала — строка показывается с него, иначе в узкой панели его не видно. */
@@ -86,6 +91,8 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
   const [invalid, setInvalid] = useState(false);
   /** Последний ответ на регулярку — POSIX ERE (git без PCRE, раунд fix-7.4, п. 3). */
   const [posix, setPosix] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const searchingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const focusSearch = useFilesStore((state) => state.focusSearch === root.workKey);
   const input = useRef<HTMLInputElement>(null);
@@ -102,7 +109,14 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
     useFilesStore.setState({ focusSearch: null });
   }, [focusSearch]);
 
+  const stopSearching = (): void => {
+    if (searchingTimer.current !== null) clearTimeout(searchingTimer.current);
+    searchingTimer.current = null;
+    setSearching(false);
+  };
+
   const cancelRunning = (): void => {
+    stopSearching();
     const id = running.current;
     if (id === null) return;
     running.current = null;
@@ -122,11 +136,16 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
       searchSeq += 1;
       const id = `files-search-${searchSeq}`;
       running.current = id;
+      searchingTimer.current = setTimeout(() => {
+        searchingTimer.current = null;
+        if (running.current === id) setSearching(true);
+      }, SEARCHING_DELAY_MS);
       bridge.files
         .grep(rootRef.current, query, id)
         .then((next) => {
           if (running.current !== id) return;
           running.current = null;
+          stopSearching();
           setResult(next);
           setInvalid(false);
           setPosix(next.posixRegex === true);
@@ -135,6 +154,7 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
         .catch((error: unknown) => {
           if (running.current !== id) return;
           running.current = null;
+          stopSearching();
           const { code } = decodeIpcError(error);
           // Неверная регулярка — в панели, а не тостом: человек её ещё печатает. Это ожидаемый
           // ввод, а не сбой — и в консоль не идёт (раунд fix-7.4, п. 4).
@@ -202,8 +222,10 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
         </div>
       ) : null}
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-1 text-xs">
+        {searching ? <div className="px-3 py-1.5 text-muted-foreground">{S.files.searching}</div> : null}
         {invalid ? <div className="px-3 py-1.5 text-red-500">{S.files.invalidRegex}</div> : null}
-        {result !== null && result.files.length === 0 ? <div className="px-3 py-1.5 text-muted-foreground">{S.files.noResults}</div> : null}
+        {/* «No results» прежнего запроса рядом с «Searching…» противоречил бы ему. */}
+        {!searching && result !== null && result.files.length === 0 ? <div className="px-3 py-1.5 text-muted-foreground">{S.files.noResults}</div> : null}
         {result?.files.map((file) => {
           const open = !collapsed.has(file.path);
           return (

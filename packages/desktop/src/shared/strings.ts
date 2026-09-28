@@ -702,6 +702,8 @@ export const S = {
     /** Ответ `bad_request` на запрос в режиме «.*»: ERE git или `RegExp` не разобрали регулярку. */
     invalidRegex: 'Invalid regular expression',
     noResults: 'No results',
+    /** Поиск идёт дольше порога показа (раунд fix-7.4, п. 5). */
+    searching: 'Searching…',
     /**
      * Git этой машины без PCRE: регулярка на git-корне искалась как POSIX ERE (раунд fix-7.4, п. 3).
      * Подсказка — в `title` строки.
