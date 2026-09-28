@@ -6,7 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FileRoot } from '../shared/files-types.js';
 import { workKey } from '../shared/work-keys.js';
 import { HostError } from './host-connection.js';
-import { createRootsRegistry, FilesDeniedError, relativeInside, type RootsRegistry, type RootsSource } from './roots.js';
+import {
+  createRootsRegistry,
+  FilesDeniedError,
+  relativeInside,
+  worktreeRootPolicy,
+  type RootsRegistry,
+  type RootsSource,
+} from './roots.js';
 
 /** Сессия фикстуры: `worktree` — путь созданного worktree, `planned` — запланированного (`createdAt: null`). */
 interface SessionFixture {
@@ -569,5 +576,81 @@ describe('промах реестра — пересборка по свежем
     const { registry, root, lists } = await stale();
     await Promise.all([registry.resolve(root, 'src/b.ts', 'read'), registry.resolve(root, 'src', 'read'), registry.rootPath(root)]);
     expect(lists()).toBe(1);
+  });
+});
+
+describe('корень worktree — только из каталога worktree харнесса или зарегистрированный (раунд fix-final-a, M6)', () => {
+  const WT = (sessionId: string): FileRoot => ({ workKey: KEY(), spec: { kind: 'worktree', sessionId } });
+
+  /** Реестр с политикой: корень worktree харнесса — `dir/worktrees`, зарегистрированные — `registered`. */
+  async function withPolicy(
+    sessions: SessionFixture[],
+    registered: string[] = [],
+  ): Promise<{ registry: RootsRegistry; warn: ReturnType<typeof vi.spyOn> }> {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const worktreesDir = path.join(dir, 'worktrees');
+    await mkdir(worktreesDir, { recursive: true });
+    const realRegistered = await Promise.all(registered.map((p) => realpath(p)));
+    const source = fakeSource(snapshot([{ projectPath: project, workId: WORK, sessions }]));
+    const registry = createRootsRegistry(source, {
+      home: dir,
+      acceptWorktree: worktreeRootPolicy({
+        home: dir,
+        worktreeRoot: async () => worktreesDir,
+        isRegistered: async (_projectPath, candidate) => realRegistered.includes(candidate),
+      }),
+    });
+    source.connect();
+    await vi.waitFor(() => expect(registry.roots(KEY()).length).toBeGreaterThan(0));
+    return { registry, warn };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('worktree.path вне корня харнесса (карту переписал агент: дом, папка рядом) — корня нет, files:denied, предупреждение main', async () => {
+    const outside = path.join(dir, 'outside');
+    await mkdir(outside);
+    await writeFile(path.join(outside, 'secret'), 's');
+    await writeFile(path.join(dir, 'home-file'), 'h');
+    const { registry, warn } = await withPolicy([
+      { id: 's-02', worktree: outside },
+      // Домашний каталог реестра (`home: dir`) — абсолютным путём, как его написал бы агент.
+      { id: 's-03', worktree: dir },
+    ]);
+
+    expect(registry.roots(KEY()).map((root) => root.spec)).toEqual([{ kind: 'project' }]);
+    await expect(registry.resolve(WT('s-02'), 'secret', 'read')).rejects.toBeInstanceOf(FilesDeniedError);
+    await expect(registry.resolve(WT('s-03'), 'home-file', 'read')).rejects.toBeInstanceOf(FilesDeniedError);
+    await expect(registry.rootPath(WT('s-02'))).rejects.toBeInstanceOf(FilesDeniedError);
+    expect(await registry.locate(KEY(), path.join(outside, 'secret'))).toBeNull();
+    expect(await registry.insideAnyRoot(path.join(outside, 'secret'))).toBeNull();
+    expect(warn.mock.calls.some((call) => String(call[0]).includes(outside))).toBe(true);
+  });
+
+  it('внутри корня харнесса — корень есть; сам корень харнесса — нет; вне корня, но зарегистрирован в git — есть', async () => {
+    const inside = path.join(dir, 'worktrees', 'proj-abc123', 'w-1-s-02');
+    await mkdir(inside, { recursive: true });
+    await writeFile(path.join(inside, 'a.ts'), 'a');
+    const registered = path.join(dir, 'elsewhere');
+    await mkdir(registered);
+    await writeFile(path.join(registered, 'b.ts'), 'b');
+    const { registry } = await withPolicy(
+      [
+        { id: 's-02', worktree: inside },
+        { id: 's-03', worktree: path.join(dir, 'worktrees') },
+        { id: 's-04', worktree: registered },
+      ],
+      [registered],
+    );
+
+    expect(registry.roots(KEY()).map((root) => root.spec)).toEqual([
+      { kind: 'project' },
+      { kind: 'worktree', sessionId: 's-02' },
+      { kind: 'worktree', sessionId: 's-04' },
+    ]);
+    expect(await registry.resolve(WT('s-02'), 'a.ts', 'read')).toBe(path.join(await realpath(inside), 'a.ts'));
+    expect(await registry.resolve(WT('s-04'), 'b.ts', 'read')).toBe(path.join(await realpath(registered), 'b.ts'));
   });
 });

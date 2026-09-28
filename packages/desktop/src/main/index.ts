@@ -1,3 +1,4 @@
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -15,6 +16,7 @@ import {
   webContents,
 } from 'electron';
 import type { WebContents } from 'electron';
+import { configPath, loadConfig } from '@harnas/core';
 import type { WorksSnapshot } from '@harnas/protocol';
 import { BROWSER_PARTITION } from '../shared/browser-types.js';
 import { S } from '../shared/strings.js';
@@ -23,7 +25,7 @@ import { fetchFavicon } from './browser/favicon.js';
 import guestPickScript from './browser/guest-pick.js?raw';
 import { installBrowserGuard, promptDownload } from './browser/guard.js';
 import { cleanupDrops, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
-import { createGitRunner } from './files/git-api.js';
+import { createGitRunner, isProjectWorktree } from './files/git-api.js';
 import createGrepWorker from './files/grep-worker?nodeWorker';
 import { registerFilesIpc } from './files/ipc.js';
 import { HostConnection } from './host-connection.js';
@@ -41,7 +43,7 @@ import {
   type LoggedNotification,
   type NotificationLike,
 } from './notifications.js';
-import { createRootsRegistry, type RootsSource } from './roots.js';
+import { createRootsRegistry, worktreeRootPolicy, type RootsSource } from './roots.js';
 import { captureShellEnv } from './shell-env.js';
 import { createUiStore, desktopUiPath } from './ui-store.js';
 import { createMainWindow, guardWindowClose, titlebarDoubleClickAction } from './window.js';
@@ -335,7 +337,17 @@ if (!gotLock) {
           if (status.state === 'connected') listener();
         }),
     };
-    const roots = createRootsRegistry(rootsSource);
+    // git — с PATH login-shell, как хост; один раннер у файлового API и проверки корней.
+    const gitRunner = createGitRunner(shellEnv.env);
+    // Корень worktree — только в каталоге worktree харнесса (настройки core с окружением хоста) или
+    // зарегистрированный worktree проекта: карту переписывает и агент (раунд fix-final-a, M6).
+    const roots = createRootsRegistry(rootsSource, {
+      acceptWorktree: worktreeRootPolicy({
+        home: os.homedir(),
+        worktreeRoot: async () => (await loadConfig(configPath(), shellEnv.env)).config.worktreeRoot,
+        isRegistered: (projectPath, dir) => isProjectWorktree(gitRunner, projectPath, dir),
+      }),
+    });
 
     // E2E (`HARNAS_SHELL=log`): «открыть в приложении», «показать в Finder» и внешний адрес —
     // в журнал main, а не на экран человека (настоящие открыли бы приложение, Finder и браузер);
@@ -412,12 +424,12 @@ if (!gotLock) {
         }
       },
     });
-    // git — с PATH login-shell, как хост; воркер поиска — отдельный бандл electron-vite.
-    // Слежение и поиски окна снимаются его перезагрузкой и закрытием (files/ipc.ts).
+    // Воркер поиска — отдельный бандл electron-vite. Слежение и поиски окна снимаются его
+    // перезагрузкой и закрытием (files/ipc.ts).
     registerFilesIpc({
       ipcMain,
       roots,
-      git: createGitRunner(shellEnv.env),
+      git: gitRunner,
       spawnGrepWorker: () => createGrepWorker({}),
     });
     createAppMenu(() => mainWindow);

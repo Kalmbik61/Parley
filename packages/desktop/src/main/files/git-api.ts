@@ -194,6 +194,31 @@ export async function filterOverrides(git: GitRunner, cwd: string, pin: string[]
   ]);
 }
 
+/** Общий `.git` проекта (realpath) — опора проверки worktree; не git — null. */
+export async function projectCommonDir(git: GitRunner, projectPath: string): Promise<string | null> {
+  const result = await git.run(['rev-parse', '--git-common-dir'], projectPath);
+  if (result.code !== 0) return null;
+  // Относительный ответ git — от cwd.
+  return realpath(path.resolve(projectPath, result.stdout.toString('utf8').trim()));
+}
+
+/**
+ * `dir` — связанный worktree проекта: его `.git` ведёт в `<общий .git>/worktrees/<имя>`, а тот —
+ * обратно в `dir` (ровно по этим файлам строит список `git worktree list`), проверка п. 1.2 —
+ * `checkoutGitDir` core. Основная копия проекта — нет: корень `project` у работы уже есть, а у
+ * проекта-подкаталога основная копия шире папки проекта. Сбой — нет (раунд fix-final-a, M6).
+ */
+export async function isProjectWorktree(git: GitRunner, projectPath: string, dir: string): Promise<boolean> {
+  try {
+    const common = await projectCommonDir(git, projectPath);
+    if (common === null) return false;
+    const gitDir = await checkoutGitDir(common, dir);
+    return gitDir !== null && gitDir !== common;
+  } catch {
+    return false;
+  }
+}
+
 export function parseLsFiles(stdout: Buffer): string[] {
   return stdout
     .toString('utf8')
@@ -654,11 +679,7 @@ export function createGitApi(options: GitApiOptions): GitApi {
   const commonDirOf = (projectPath: string): Promise<string | null> => {
     let found = commonDirs.get(projectPath);
     if (found === undefined) {
-      found = git.run(['rev-parse', '--git-common-dir'], projectPath).then(async (result) => {
-        if (result.code !== 0) return null;
-        // Относительный ответ git — от cwd.
-        return realpath(path.resolve(projectPath, result.stdout.toString('utf8').trim()));
-      });
+      found = projectCommonDir(git, projectPath);
       found.catch(() => commonDirs.delete(projectPath));
       commonDirs.set(projectPath, found);
     }

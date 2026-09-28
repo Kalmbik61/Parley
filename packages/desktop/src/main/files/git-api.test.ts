@@ -15,6 +15,7 @@ import {
   gitRootOf,
   GREP_LINE_BYTES,
   GREP_TOTAL_BYTES,
+  isProjectWorktree,
   isSafeRev,
   parseGitStatus,
   parseLsFiles,
@@ -1078,5 +1079,26 @@ describe('исполняемые ключи конфигурации и подл
     expect(await a.gitShow(WT, 'HEAD', 'README.md')).toBeNull();
     expect(await codeOf(a.gitCommitFiles(WT, head))).toBe('not_found');
     await markersAbsent();
+  });
+});
+
+describe('isProjectWorktree (раунд fix-final-a, M6)', () => {
+  it('зарегистрированный worktree проекта — да; основная копия, чужой каталог и подложенный .git — нет', async () => {
+    const project = path.join(dir, 'project');
+    const worktree = path.join(dir, 'wt');
+    const other = path.join(dir, 'other');
+    await initRepo(project);
+    await writeFile(path.join(project, 'README.md'), 'старт\n');
+    commitAll(project);
+    git(project, 'worktree', 'add', '-q', '-b', 'harnas/w-1/s-01', worktree);
+    await initRepo(other);
+    const runner = createGitRunner(process.env);
+
+    expect(await isProjectWorktree(runner, project, worktree)).toBe(true);
+    expect(await isProjectWorktree(runner, project, project)).toBe(false);
+    expect(await isProjectWorktree(runner, project, other)).toBe(false);
+    expect(await isProjectWorktree(runner, path.join(dir, 'нет'), worktree)).toBe(false);
+    await writeFile(path.join(worktree, '.git'), `gitdir: ${path.join(other, '.git')}\n`);
+    expect(await isProjectWorktree(runner, project, worktree)).toBe(false);
   });
 });

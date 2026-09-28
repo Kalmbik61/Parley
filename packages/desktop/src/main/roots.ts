@@ -127,8 +127,43 @@ async function realpathOrNull(p: string): Promise<string | null> {
   }
 }
 
-/** Корни снимка с realpath; корень, чей realpath не читается (worktree удалён), пропускается. */
-async function buildEntries(snapshot: WorksSnapshot): Promise<Map<string, RootEntry[]>> {
+/**
+ * Можно ли каталог `dir` (realpath) сделать корнем worktree работы в `projectPath`. `worktree.path`
+ * берётся из карты в `.harnas/` проекта, а её переписывает и агент без своего worktree — путь `~`
+ * иначе сделал бы корнем работы весь дом: дерево, ⌘P, поиск, запись из окна (раунд fix-final-a, M6).
+ */
+export type AcceptWorktree = (projectPath: string, dir: string) => Promise<boolean>;
+
+/**
+ * Политика main: каталог внутри каталога worktree харнесса (`worktreeRoot` настроек core — там их
+ * заводит хост, `plannedWorktree`), не сам он; иначе — только зарегистрированный worktree проекта
+ * (`isRegistered`: настройку могли сменить после создания). `worktreeRoot` читается на каждую
+ * проверку: его меняют в настройках на ходу.
+ */
+export function worktreeRootPolicy(options: {
+  home: string;
+  worktreeRoot: () => Promise<string>;
+  isRegistered: AcceptWorktree;
+}): AcceptWorktree {
+  return async (projectPath, dir) => {
+    const configured = await options.worktreeRoot();
+    const expanded =
+      configured === '~' ? options.home : configured.startsWith('~/') ? path.join(options.home, configured.slice(2)) : configured;
+    const root = await realpathOrNull(expanded);
+    const inside = root === null ? null : relativeInside({ absPath: root, caseInsensitive: false }, dir);
+    if (inside !== null && inside !== '') return true;
+    return options.isRegistered(projectPath, dir);
+  };
+}
+
+/** Отвергнутые корни worktree, о которых main уже сказал: реестр пересобирается на каждое `works.changed`. */
+const rejectedWarned = new Set<string>();
+
+/**
+ * Корни снимка с realpath; корень, чей realpath не читается (worktree удалён), пропускается. Корень
+ * worktree, который не принимает `accept`, не заводится — main пишет предупреждение.
+ */
+async function buildEntries(snapshot: WorksSnapshot, accept: AcceptWorktree | undefined): Promise<Map<string, RootEntry[]>> {
   const pending: Array<Promise<RootEntry | null>> = [];
   for (const entry of snapshot.entries) {
     const key = makeWorkKey(entry.projectPath, entry.map.work.id);
@@ -141,11 +176,18 @@ async function buildEntries(snapshot: WorksSnapshot): Promise<Map<string, RootEn
     }
     for (const candidate of candidates) {
       pending.push(
-        realpathOrNull(candidate.dir).then(async (absPath) =>
-          absPath === null
-            ? null
-            : { root: { workKey: key, spec: candidate.spec }, absPath, caseInsensitive: await probeCaseInsensitive(absPath) },
-        ),
+        realpathOrNull(candidate.dir).then(async (absPath) => {
+          if (absPath === null) return null;
+          if (candidate.spec.kind === 'worktree' && accept !== undefined && !(await accept(entry.projectPath, absPath))) {
+            const warned = `${key}\0${candidate.spec.sessionId}\0${absPath}`;
+            if (!rejectedWarned.has(warned)) {
+              rejectedWarned.add(warned);
+              console.warn(`[harnas] roots: worktree ${absPath} of ${key} is outside the worktree root and not registered — not a root`);
+            }
+            return null;
+          }
+          return { root: { workKey: key, spec: candidate.spec }, absPath, caseInsensitive: await probeCaseInsensitive(absPath) };
+        }),
       );
     }
   }
@@ -159,8 +201,15 @@ async function buildEntries(snapshot: WorksSnapshot): Promise<Map<string, RootEn
   return byWork;
 }
 
-/** `~` в locate и insideAnyRoot раскрывается по home (по умолчанию os.homedir()). */
-export function createRootsRegistry(source: RootsSource, options: { home?: string } = {}): RootsRegistry {
+/**
+ * `~` в locate и insideAnyRoot раскрывается по home (по умолчанию os.homedir()). `acceptWorktree` —
+ * политика корней worktree (`worktreeRootPolicy`, main); без неё — любой созданный worktree карты
+ * (тесты реестра).
+ */
+export function createRootsRegistry(
+  source: RootsSource,
+  options: { home?: string; acceptWorktree?: AcceptWorktree } = {},
+): RootsRegistry {
   const home = options.home ?? os.homedir();
   let entries = new Map<string, RootEntry[]>();
   /** Счётчик `works.changed`: ответ `list()`, за время которого пришло событие, устарел. */
@@ -180,7 +229,7 @@ export function createRootsRegistry(source: RootsSource, options: { home?: strin
 
   const apply = (snapshot: WorksSnapshot): Promise<void> => {
     const build = ++builds;
-    latest = buildEntries(snapshot).then((next) => {
+    latest = buildEntries(snapshot, options.acceptWorktree).then((next) => {
       if (build !== builds) return;
       for (const [key, list] of entries) if (!next.has(key)) retired.set(key, list);
       for (const key of next.keys()) retired.delete(key);
