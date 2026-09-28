@@ -400,6 +400,93 @@ describe('DiffTab: переход к файлу (тест 8)', () => {
   });
 });
 
+describe('DiffTab: переход удерживает цель, пока высоты над ней не осели (раунд fix-8b, пункт 1)', () => {
+  /** Подставной `ResizeObserver`: изменение размеров вызывает сам тест. */
+  class FakeRO {
+    static all: FakeRO[] = [];
+    readonly targets = new Set<Element>();
+    constructor(readonly callback: ResizeObserverCallback) {
+      FakeRO.all.push(this);
+    }
+    observe(target: Element): void {
+      this.targets.add(target);
+    }
+    unobserve(target: Element): void {
+      this.targets.delete(target);
+    }
+    disconnect(): void {
+      this.targets.clear();
+    }
+  }
+
+  function resized(): void {
+    act(() => {
+      for (const ro of FakeRO.all) if (ro.targets.size > 0) ro.callback([], ro as unknown as ResizeObserver);
+    });
+  }
+
+  /** Вкладка на трёх файлах, переход к последнему; экран прокрутки — с верхом на 100px. */
+  async function revealLast(): Promise<{ scroller: HTMLElement; place(top: number): void }> {
+    FakeRO.all = [];
+    vi.stubGlobal('ResizeObserver', FakeRO);
+    bridge.setHandler('worktrees.diff', () => diff([file('src/a.ts'), file('src/b.ts'), file('src/c.ts')]));
+    for (const name of ['src/a.ts', 'src/b.ts', 'src/c.ts']) serve(WT, name);
+    renderTab();
+    await flush();
+    const scroller = section('src/c.ts').parentElement as HTMLElement;
+    let targetTop = 100;
+    vi.spyOn(scroller, 'getBoundingClientRect').mockImplementation(() => ({ top: 100 }) as DOMRect);
+    vi.spyOn(section('src/c.ts'), 'getBoundingClientRect').mockImplementation(() => ({ top: targetTop }) as DOMRect);
+    act(() => useReviewStore.getState().revealFile(KEY, 'diff:s-02', 'src/c.ts'));
+    await flush();
+    return {
+      scroller,
+      place(top) {
+        targetTop = top;
+      },
+    };
+  }
+
+  it('секции над целью выросли после прокрутки — вкладка снова ставит цель к верхнему краю', async () => {
+    const { scroller, place } = await revealLast();
+    expect(scrolled).toEqual([section('src/c.ts')]);
+    scroller.scrollTop = 1000;
+    // Заглушки над целью сменились живыми редакторами — цель уехала на 300px вниз.
+    place(400);
+    resized();
+    expect(scroller.scrollTop).toBe(1300);
+    // Цель на месте — прокрутка не дёргается.
+    place(100);
+    resized();
+    expect(scroller.scrollTop).toBe(1300);
+  });
+
+  it('колесо человека после перехода снимает удержание — дальше вкладка его прокрутку не перебивает', async () => {
+    const { scroller, place } = await revealLast();
+    scroller.scrollTop = 1000;
+    fireEvent.wheel(scroller);
+    place(400);
+    resized();
+    expect(scroller.scrollTop).toBe(1000);
+  });
+
+  it('высоты осели (секунда без изменений) — удержание снято, наблюдатель отключён', async () => {
+    const { scroller, place } = await revealLast();
+    await flush(500);
+    place(250);
+    resized();
+    // Изменение продлевает удержание.
+    await flush(900);
+    expect(FakeRO.all.some((ro) => ro.targets.size > 0)).toBe(true);
+    await flush(200);
+    expect(FakeRO.all.every((ro) => ro.targets.size === 0)).toBe(true);
+    scroller.scrollTop = 1000;
+    place(400);
+    resized();
+    expect(scroller.scrollTop).toBe(1000);
+  });
+});
+
 describe('DiffTab: старый хост (тест 9)', () => {
   it('без worktrees.mergeCheck — «Host is outdated — restart», ни одного вызова', async () => {
     bridge.setHostMethods(REQUIRED_METHODS.filter((method) => method !== 'worktrees.mergeCheck'));

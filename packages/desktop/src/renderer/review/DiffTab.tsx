@@ -168,6 +168,18 @@ function farthest(live: string[], keep: string, index: Map<string, number>, visi
   return worst;
 }
 
+/**
+ * Удержание цели перехода (раунд fix-8b, пункт 1): после `scrollIntoView` секции над целью
+ * домонтируются — заглушка оценочной высоты сменяется живым редактором, — раскладка сдвигается, и
+ * цель уезжает из экрана (замер на 35 файлах: scrollTop 10023 → 9655 без участия человека).
+ * Пока высоты не осели (секунда без изменений), каждое изменение размера секции снова ставит цель
+ * к верхнему краю. Выбрано вместо точной оценки заглушки: высоту живого редактора (скрытые
+ * неизменённые строки, перенос, шрифт) до монтирования не узнать.
+ */
+const SETTLE_MS = 1000;
+/** Прокрутка человека — колесо, касание, мышь (ползунок) или клавиши — снимает удержание сразу. */
+const USER_SCROLL = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
+
 interface DiffViewProps {
   bridge: HarnasBridge;
   workKey: string;
@@ -258,6 +270,46 @@ function DiffView({ bridge, workKey, tabId, root, files, mode, version, font }: 
     for (const path of [...visible.current]) if (!index.has(path)) visible.current.delete(path);
   }, [index]);
 
+  const release = useRef<(() => void) | null>(null);
+
+  const hold = useCallback((path: string) => {
+    release.current?.();
+    const node = scroller.current;
+    // Без ResizeObserver (jsdom) — только первая прокрутка, как раньше.
+    if (node === null || typeof ResizeObserver === 'undefined') return;
+    const align = (): void => {
+      const target = elements.current.get(path);
+      if (target === undefined) return;
+      const delta = target.getBoundingClientRect().top - node.getBoundingClientRect().top;
+      // У последних файлов выше края не встать: браузер зажмёт scrollTop сам.
+      if (Math.abs(delta) >= 1) node.scrollTop += delta;
+    };
+    let timer = setTimeout(stop, SETTLE_MS);
+    const observer = new ResizeObserver(() => {
+      align();
+      clearTimeout(timer);
+      timer = setTimeout(stop, SETTLE_MS);
+    });
+    for (const element of elements.current.values()) observer.observe(element);
+    function stop(): void {
+      clearTimeout(timer);
+      observer.disconnect();
+      if (release.current === stop) release.current = null;
+    }
+    release.current = stop;
+  }, []);
+
+  useEffect(() => {
+    const node = scroller.current;
+    if (!ready || node === null) return undefined;
+    const onUser = (): void => release.current?.();
+    for (const type of USER_SCROLL) node.addEventListener(type, onUser, { capture: true, passive: true });
+    return () => {
+      for (const type of USER_SCROLL) node.removeEventListener(type, onUser, { capture: true });
+      release.current?.();
+    };
+  }, [ready]);
+
   const revealed = useReviewStore((state) => state.revealed[bufferKey(workKey, tabId)]);
   const handled = useRef(0);
   useEffect(() => {
@@ -272,7 +324,8 @@ function DiffView({ bridge, workKey, tabId, root, files, mode, version, font }: 
     });
     admit(path);
     elements.current.get(path)?.scrollIntoView({ block: 'start' });
-  }, [ready, revealed, index, admit]);
+    hold(path);
+  }, [ready, revealed, index, admit, hold]);
 
   const onToggle = useCallback(
     (path: string) => {
