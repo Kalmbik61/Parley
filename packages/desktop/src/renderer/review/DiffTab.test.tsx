@@ -244,6 +244,8 @@ describe('DiffTab: панель (тест 3)', () => {
     for (const editor of live()) {
       expect(editor.options).toMatchObject({
         renderSideBySide: true,
+        // Раунд fix-live, D1: выбор человека соблюдается при любой ширине — Monaco сам не сводит в одну колонку.
+        useInlineViewWhenSpaceIsLimited: false,
         readOnly: true,
         hideUnchangedRegions: { enabled: true, contextLineCount: 3 },
       });

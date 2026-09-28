@@ -235,9 +235,9 @@ test.describe('ревью изменений: заметки, коммит, сл
     await writeFile(path.join(project, 'src', 'long.ts'), `${long.join('\n')}\n`);
     git(project, 'add', '-A');
     git(project, 'commit', '-q', '-m', 'long');
-    const { app: electronApp, window, sessionId, worktree } = await start();
-    // Две колонки: у узкого окна Monaco сам рисует одну (useInlineViewWhenSpaceIsLimited).
-    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 2000, height: 1000 }));
+    const { window, sessionId, worktree } = await start();
+    // Две колонки при окне `start()` (1500×950, оба сайдбара): авто-одна колонка Monaco выключена
+    // (раунд fix-live, D1), расширять окно не нужно — ширина левой стороны сверяется ниже.
     const problems: string[] = [];
     window.on('pageerror', (error) => problems.push(`pageerror: ${error.message}`));
     window.on('console', (message) => {
@@ -261,6 +261,7 @@ test.describe('ревью изменений: заметки, коммит, сл
     const original = section.locator('.monaco-diff-editor .editor.original');
     await expect(modified.locator('.lines-content > .view-lines')).toContainText('333');
     await expect(section.locator('[data-testid="gutter-add"][data-side="original"]')).toHaveCount(1);
+    await expect.poll(async () => (await original.boundingBox())?.width ?? 0).toBeGreaterThan(200);
     const unfold = modified.locator('.diff-hidden-lines [title="Show Unchanged Region"]');
     await expect(unfold.first()).toBeVisible();
 

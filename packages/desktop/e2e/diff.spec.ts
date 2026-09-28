@@ -108,18 +108,31 @@ test.describe('вкладка диффа на собранном окне', () =
     const diffEditor = tab.locator('.monaco-diff-editor');
     await expect(diffEditor).toHaveCount(1);
     await expect(diffEditor.locator('.editor.modified .view-lines').last()).toContainText('"changed"');
-    // Неизменённое свёрнуто (`hideUnchangedRegions`): по 27 строк сверху и снизу — плашками.
-    await expect(diffEditor.getByText('27 hidden lines')).toHaveCount(2);
+    // Неизменённое свёрнуто (`hideUnchangedRegions`): по 27 строк сверху и снизу — плашками
+    // (у каждой стороны свои; в двух колонках сверяем правую).
+    await expect(diffEditor.locator('.editor.modified').getByText('27 hidden lines')).toHaveCount(2);
     await expect(window.getByText("Editor didn't load")).toHaveCount(0);
     const background = await diffEditor.locator('.editor.modified .monaco-editor-background').first().evaluate((el) => getComputedStyle(el).backgroundColor);
     expect(background).toBe('rgb(255, 255, 255)');
 
-    // «Inline» — выбор записан; редактор жив. Вкладка уже 900px: Monaco и в «Side by side» рисует
-    // одну колонку (`useInlineViewWhenSpaceIsLimited`), поэтому класс колонок не сверяется.
+    // Раунд fix-live, D1: окно 1400×900 с обоими сайдбарами — вкладка уже 900 px, порога Monaco
+    // `useInlineViewWhenSpaceIsLimited`. Опция выключена: «Side by side» — две колонки при любой
+    // ширине, левый редактор шире полосы номеров.
+    expect((await tab.boundingBox())?.width ?? Infinity).toBeLessThan(900);
+    const original = diffEditor.locator('.editor.original');
+    const sideBySide = tab.getByRole('radio', { name: 'Side by side' });
+    await expect(sideBySide).toHaveAttribute('aria-checked', 'true');
+    await expect.poll(async () => (await original.boundingBox())?.width ?? 0).toBeGreaterThan(200);
+
+    // «Inline» — выбор записан, одна колонка: левый редактор сжат до полосы номеров; редактор жив.
     const inline = tab.getByRole('radio', { name: 'Inline' });
     await inline.click();
     await expect(inline).toHaveAttribute('aria-checked', 'true');
+    await expect.poll(async () => (await original.boundingBox())?.width ?? 0).toBeLessThan(100);
     await expect(diffEditor.locator('.editor.modified .view-lines').last()).toContainText('"changed"');
+    // Снова «Side by side» — снова две колонки.
+    await sideBySide.click();
+    await expect.poll(async () => (await original.boundingBox())?.width ?? 0).toBeGreaterThan(200);
     // «Collapse all» освобождает редактор, «Expand all» возвращает.
     await tab.getByRole('button', { name: 'Collapse all' }).click();
     await expect(tab.locator('.monaco-diff-editor')).toHaveCount(0);

@@ -385,6 +385,9 @@ function DiffView({ bridge, workKey, tabId, root, files, mode, version, font, no
       readOnly: true,
       originalEditable: false,
       renderSideBySide: view === 'split',
+      // Раунд fix-live, D1: уже 900 px Monaco по умолчанию сам сводит «Side by side» в одну колонку,
+      // и переключатель выглядит сломанным. Выбор человека соблюдается при любой ширине.
+      useInlineViewWhenSpaceIsLimited: false,
       hideUnchangedRegions: { enabled: true, contextLineCount: 3 },
       wordWrap: wrap ? 'on' : 'off',
       diffWordWrap: wrap ? 'on' : 'off',
