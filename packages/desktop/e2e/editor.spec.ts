@@ -637,4 +637,68 @@ test.describe('редактор файла на собранном окне', ()
     expect(await cspViolations(window)).toEqual([]);
     expect(problems).toEqual([]);
   });
+
+  test('fix-8.4b п. 1: сплит двух разных файлов — ⌘S и ⌥Z действуют на редактор в фокусе, а не на последний смонтированный', async () => {
+    test.setTimeout(90_000);
+    // Длинная строка без переноса — ⌥Z видно по числу визуальных строк.
+    const long = `export const text = '${'word '.repeat(120)}';\n`;
+    await writeFile(path.join(project, 'src', 'alpha.ts'), long);
+    await writeFile(path.join(project, 'src', 'beta.ts'), long);
+    const { electronApp, window, problems } = await launch('editor-split');
+    const sidebar = window.getByTestId('right-sidebar');
+    await sidebar.getByText('src', { exact: true }).click();
+    // alpha, потом beta в той же группе (alpha уходит в фон), затем ⌘D с alpha: alpha монтируется
+    // заново и становится последним смонтированным, а фокус — у beta (как в пробе линзы B).
+    await sidebar.getByText('alpha.ts', { exact: true }).click();
+    await expect(window.locator('.monaco-editor[data-uri$="alpha.ts"] .view-lines')).toContainText('export const text');
+    await sidebar.getByText('beta.ts', { exact: true }).click();
+    await expect(window.locator('.monaco-editor[data-uri$="beta.ts"] .view-lines')).toContainText('export const text');
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.send('menu:action', 'group.splitRight'));
+    await window.getByRole('dialog').getByRole('option', { name: /alpha\.ts/ }).first().click();
+    await expect.poll(() => window.locator('[data-group-id]').count()).toBe(2);
+    const alpha = window.locator('.monaco-editor[data-uri$="alpha.ts"]');
+    const beta = window.locator('.monaco-editor[data-uri$="beta.ts"]');
+    await expect(alpha).toHaveCount(1);
+    await expect(beta).toHaveCount(1);
+    const alphaTab = window.locator('[role="tab"][data-tab-id="file:p:src/alpha.ts"]');
+    const betaTab = window.locator('[role="tab"][data-tab-id="file:p:src/beta.ts"]');
+    const wrapped = (editor: typeof alpha): Promise<number> => editor.locator('.view-line').count();
+    // `.view-lines` длинной строки шире группы: середина — под соседней, клик — у начала строки.
+
+    // ⌘S в beta — пишет beta, alpha на диске не тронут.
+    await beta.locator('.view-lines').click({ position: { x: 20, y: 5 } });
+    await window.keyboard.press('Meta+ArrowDown');
+    await window.keyboard.type('// beta');
+    await expect(betaTab.locator('[data-dirty-dot]')).toBeVisible();
+    await window.keyboard.press('Meta+S');
+    await expect(betaTab.locator('[data-dirty-dot]')).toHaveCount(0);
+    expect(await readFile(path.join(project, 'src', 'beta.ts'), 'utf8')).toBe(`${long}// beta`);
+    expect(await readFile(path.join(project, 'src', 'alpha.ts'), 'utf8')).toBe(long);
+
+    // ⌘S в alpha — пишет alpha.
+    await alpha.locator('.view-lines').click({ position: { x: 20, y: 5 } });
+    await window.keyboard.press('Meta+ArrowDown');
+    await window.keyboard.type('// alpha');
+    await expect(alphaTab.locator('[data-dirty-dot]')).toBeVisible();
+    await window.keyboard.press('Meta+S');
+    await expect(alphaTab.locator('[data-dirty-dot]')).toHaveCount(0);
+    expect(await readFile(path.join(project, 'src', 'alpha.ts'), 'utf8')).toBe(`${long}// alpha`);
+    expect(await readFile(path.join(project, 'src', 'beta.ts'), 'utf8')).toBe(`${long}// beta`);
+
+    // ⌥Z в beta — перенос у beta, у alpha прежний; потом ⌥Z в alpha — у alpha.
+    const alphaBefore = await wrapped(alpha);
+    const betaBefore = await wrapped(beta);
+    await beta.locator('.view-lines').click({ position: { x: 20, y: 5 } });
+    await window.keyboard.press('Alt+KeyZ');
+    await expect.poll(() => wrapped(beta)).toBeGreaterThan(betaBefore);
+    expect(await wrapped(alpha)).toBe(alphaBefore);
+    await alpha.locator('.view-lines').click({ position: { x: 20, y: 5 } });
+    await window.keyboard.press('Alt+KeyZ');
+    await expect.poll(() => wrapped(alpha)).toBeGreaterThan(alphaBefore);
+    // ⌥Z не напечатал «Ω» ни в одном файле.
+    await expect(alphaTab.locator('[data-dirty-dot]')).toHaveCount(0);
+    await expect(betaTab.locator('[data-dirty-dot]')).toHaveCount(0);
+
+    expect(problems).toEqual([]);
+  });
 });

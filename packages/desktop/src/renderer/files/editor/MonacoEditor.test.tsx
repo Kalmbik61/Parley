@@ -99,6 +99,31 @@ describe('MonacoEditor', () => {
     expect(monacoMock.editors[1]?.position).toEqual({ lineNumber: 4, column: 1 });
   });
 
+  it('⌘S и ⌥Z — у редактора в фокусе, не у последнего смонтированного; с размонтированием снимаются (fix-8.4b, п. 1)', async () => {
+    const saveA = vi.fn();
+    const saveB = vi.fn();
+    const a = render(<MonacoEditor {...props({ viewStateKey: 'a', modelPath: 'harnas://buffer/a/a.ts', onSave: saveA })} />);
+    await waitFor(() => expect(monacoMock.editors).toHaveLength(1));
+    render(<MonacoEditor {...props({ viewStateKey: 'b', modelPath: 'harnas://buffer/b/b.ts', onSave: saveB })} />);
+    await waitFor(() => expect(monacoMock.editors).toHaveLength(2));
+    const [first, second] = monacoMock.editors;
+    if (first === undefined || second === undefined) throw new Error('нет редакторов');
+
+    act(() => first.press(KeyMod.CtrlCmd | KeyCode.KeyS));
+    expect(saveA).toHaveBeenCalledTimes(1);
+    expect(saveB).not.toHaveBeenCalled();
+    act(() => first.press(KeyMod.Alt | KeyCode.KeyZ));
+    await waitFor(() => expect(first.options['wordWrap']).toBe('on'));
+    expect(second.options['wordWrap']).toBe('off');
+
+    a.unmount();
+    act(() => second.press(KeyMod.CtrlCmd | KeyCode.KeyS));
+    expect(saveB).toHaveBeenCalledTimes(1);
+    act(() => first.press(KeyMod.CtrlCmd | KeyCode.KeyS));
+    expect(saveA).toHaveBeenCalledTimes(1);
+    expect(saveB).toHaveBeenCalledTimes(1);
+  });
+
   it('тема — по .dark окна', async () => {
     render(<MonacoEditor {...props()} />);
     await mounted();

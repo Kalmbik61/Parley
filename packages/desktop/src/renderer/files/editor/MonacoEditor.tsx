@@ -11,6 +11,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Editor, loader, type OnMount } from '@monaco-editor/react';
+import { S } from '../../../shared/strings.js';
 import { useUiStore } from '../../store/ui.js';
 import { applyEditorTheme, setupMonaco } from './monaco-setup.js';
 
@@ -102,6 +103,15 @@ export function MonacoEditor(props: MonacoEditorProps): JSX.Element {
   // Команды Monaco заводятся один раз при монтировании — свежие обработчики через ref.
   const handlers = useRef(props);
   handlers.current = props;
+  // Действия редактора (⌘S, ⌥Z) — снимаются при размонтировании тела.
+  const actions = useRef<Array<{ dispose(): void }>>([]);
+  useEffect(
+    () => () => {
+      for (const action of actions.current) action.dispose();
+      actions.current = [];
+    },
+    [],
+  );
 
   useEffect(() => {
     editor?.updateOptions({ readOnly, fontFamily, fontSize: Math.max(1, fontSize - 1) });
@@ -146,14 +156,32 @@ export function MonacoEditor(props: MonacoEditorProps): JSX.Element {
 
   const onMount: OnMount = (mounted) => {
     const { KeyMod, KeyCode } = setupMonaco();
-    mounted.addCommand(KeyMod.CtrlCmd | KeyCode.KeyS, () => handlers.current.onSave());
-    // ⌥Z — перенос строк: своего такого сочетания у Monaco нет, а на macOS ⌥Z напечатал бы «Ω».
-    mounted.addCommand(KeyMod.Alt | KeyCode.KeyZ, () => {
-      const next = !wrapRef.current;
-      wrapRef.current = next;
-      mounted.updateOptions({ wordWrap: next ? 'on' : 'off' });
-      setWrap(next);
-    });
+    // Действия редактора, а не `addCommand` (раунд fix-8.4b, п. 1): у Monaco 0.52 `addCommand` общий на
+    // всё окно — в сплите двух файлов ⌘S и ⌥Z доставались последнему смонтированному. `addAction`
+    // привязан к своему редактору (editorId); `editorFocus` — и из его виджетов (поиск). Действия
+    // сами с редактором не снимаются (Monaco не привязывает их к `dispose`) — снимает размонтирование.
+    actions.current.push(
+      mounted.addAction({
+        id: 'harnas.file.save',
+        label: S.files.save,
+        keybindings: [KeyMod.CtrlCmd | KeyCode.KeyS],
+        keybindingContext: 'editorFocus',
+        run: () => handlers.current.onSave(),
+      }),
+      // ⌥Z — перенос строк: своего такого сочетания у Monaco нет, а на macOS ⌥Z напечатал бы «Ω».
+      mounted.addAction({
+        id: 'harnas.file.toggleWrap',
+        label: S.changes.wrapLines,
+        keybindings: [KeyMod.Alt | KeyCode.KeyZ],
+        keybindingContext: 'editorFocus',
+        run: () => {
+          const next = !wrapRef.current;
+          wrapRef.current = next;
+          mounted.updateOptions({ wordWrap: next ? 'on' : 'off' });
+          setWrap(next);
+        },
+      }),
+    );
     const saved = viewStates.get(viewStateKey);
     if (saved !== undefined && saved !== null) mounted.restoreViewState(saved);
     setEditor(mounted);

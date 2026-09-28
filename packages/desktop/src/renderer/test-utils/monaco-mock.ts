@@ -34,7 +34,10 @@ export interface FakeEditor {
   position: Position | null;
   /** Что показано последним `reveal…InCenter`: у `revealLineInCenter` колонки нет (раунд fix-7.4). */
   revealed: { lineNumber: number; column: number | null } | null;
-  /** Команда `addCommand` — как нажатие сочетания в редакторе. */
+  /**
+   * Нажатие сочетания в фокусе этого редактора: сперва его действия (`addAction`), потом команды
+   * `addCommand` — те, как у настоящего Monaco 0.52, общие на всё окно (fix-8.4b, п. 1).
+   */
   press(keybinding: number): void;
   /** Текст модели — как его видит редактор. */
   getValue(): string;
@@ -83,7 +86,7 @@ interface EditorApi extends FakeEditor {
   changeViewZones(callback: (accessor: ZoneAccessor) => void): void;
   getTopForLineNumber(line: number): number;
   getSelection(): { startLineNumber: number; endLineNumber: number; startColumn: number; endColumn: number } | null;
-  addAction(descriptor: { id: string; keybindings?: number[]; run(editor: unknown): void }): { dispose(): void };
+  addAction(descriptor: { id: string; label: string; keybindings?: number[]; keybindingContext?: string; run(editor: unknown): void }): { dispose(): void };
   getOption(id: number): unknown;
   getLayoutInfo(): { width: number; height: number; contentLeft: number; contentWidth: number; lineNumbersLeft: number; lineNumbersWidth: number };
   onDidLayoutChange(listener: () => void): { dispose(): void };
@@ -100,6 +103,11 @@ interface ZoneAccessor {
 }
 
 const editors: FakeEditor[] = [];
+/**
+ * Команды `addCommand` всех редакторов окна: у Monaco 0.52 они не привязаны к редактору — сочетание
+ * срабатывает в любом, побеждает последний добавивший, и не снимаются при `dispose` (fix-8.4b, п. 1).
+ */
+const globalCommands = new Map<number, () => void>();
 const diffEditors: FakeDiffEditor[] = [];
 const themes: boolean[] = [];
 let initError: Error | null = null;
@@ -126,10 +134,10 @@ function fakeEditor(initial: string, options: Record<string, unknown>, setText: 
     selection: null,
     text: initial,
     scrollTop: 0,
-    press: (keybinding) => commands.get(keybinding)?.(),
+    press: (keybinding) => (commands.get(keybinding) ?? globalCommands.get(keybinding))?.(),
     getValue: () => api.text,
     addCommand: (keybinding, handler) => {
-      commands.set(keybinding, handler);
+      globalCommands.set(keybinding, handler);
       return String(keybinding);
     },
     updateOptions: (next) => {
@@ -378,6 +386,7 @@ export const monacoMock = {
   },
   reset(): void {
     editors.length = 0;
+    globalCommands.clear();
     diffEditors.length = 0;
     themes.length = 0;
     initError = null;
