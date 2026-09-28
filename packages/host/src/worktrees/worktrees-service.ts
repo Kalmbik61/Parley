@@ -108,9 +108,15 @@ async function requirePresentWorktree(
 ): Promise<{ label: string; worktree: WorktreeInfo }> {
   const found = await requireWorktree(ref);
   if (found.worktree.createdAt !== null) {
+    // «Нет папки» — только ENOENT/ENOTDIR или не каталог: временный отказ (EACCES, EMFILE, сетевой
+    // том) идёт прежним путём ошибки хоста, иначе живой worktree на время выглядел бы отброшенным.
     const present = await stat(found.worktree.path).then(
       (info) => info.isDirectory(),
-      () => false,
+      (error: unknown) => {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+        throw error;
+      },
     );
     if (!present) {
       throw new HostError('bad_request', `worktree сессии ${ref.sessionId} отсутствует: ${found.worktree.path}`, {

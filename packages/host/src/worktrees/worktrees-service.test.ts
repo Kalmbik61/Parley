@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addSession,
   createWork,
@@ -22,6 +22,20 @@ import type { SessionRef } from '@harnas/protocol';
 import type { SessionsService } from '../sessions/sessions-service.js';
 import { HostError } from '../errors.js';
 import { createWorktreesService, gitFailure } from './worktrees-service.js';
+
+// Подставной stat: по умолчанию настоящий; тест «папка временно недоступна» велит отказать по пути
+// кодом EACCES — на настоящем диске такой отказ стабильно не воспроизвести.
+const statFailure = vi.hoisted(() => ({ path: '', code: '' }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    stat: (target: string, ...rest: []) =>
+      target === statFailure.path
+        ? Promise.reject(Object.assign(new Error(`${statFailure.code}: stat ${target}`), { code: statFailure.code }))
+        : actual.stat(target, ...rest),
+  };
+});
 
 const run = promisify(execFile);
 const git = (dir: string, args: string[]) => run('git', ['-C', dir, ...args]);
@@ -50,6 +64,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  statFailure.path = '';
   await rm(project, { recursive: true, force: true });
 });
 
@@ -213,6 +228,31 @@ describe('worktree отсутствует (раунд исправлений 8, 
     const { ref, info } = await sessionWithWorktree();
     const service = createWorktreesService(stubSessions());
     await rm(info.path, { recursive: true, force: true });
+
+    await expect(service.diff(ref, false)).rejects.toMatchObject({
+      code: 'bad_request',
+      data: { reason: 'worktree-missing' },
+    });
+  });
+
+  it('stat папки отказал не ENOENT (EACCES) — не worktree-missing, а прежняя ошибка хоста', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+    Object.assign(statFailure, { path: info.path, code: 'EACCES' });
+
+    const failure = await service.diff(ref, false).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(failure).not.toBeNull();
+    expect(failure).not.toMatchObject({ data: { reason: 'worktree-missing' } });
+  });
+
+  it('на месте папки worktree — файл: worktree-missing', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+    await rm(info.path, { recursive: true, force: true });
+    await writeFile(info.path, 'не каталог\n', 'utf8');
 
     await expect(service.diff(ref, false)).rejects.toMatchObject({
       code: 'bad_request',
