@@ -16,3 +16,12 @@ export function rootKey(root: FileRoot): string {
     ? `${root.workKey} project`
     : `${root.workKey} worktree ${root.spec.sessionId}`;
 }
+
+/**
+ * Формат id сессии core: `s-` и цифры (`core/work/map.ts#nextSessionId`, та же регулярка в
+ * `core/work/thread.ts`). Main пускает только его там, где id идёт в имя файла как есть
+ * (заметки, кусок 8.4a): иначе `../..` из рендерера вёл бы запись вне своего каталога.
+ */
+export function isSessionId(id: string): boolean {
+  return /^s-\d+$/.test(id);
+}

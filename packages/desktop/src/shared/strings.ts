@@ -369,6 +369,21 @@ export const S = {
   },
 
   /**
+   * Заметки к строкам диффа (кусок 8.4a, спека 11.4): шаблон текста агенту (`review/notes/format.ts`)
+   * и тост битого файла заметок (спека 13). Путь и текст заметки — данные, идут как есть.
+   */
+  notes: {
+    header: (session: string, branch: string | null): string =>
+      branch === null ? `Review notes for ${session}:` : `Review notes for ${session} (branch ${branch}):`,
+    file: (path: string): string => `File: ${path}`,
+    line: (n: number): string => `Line: ${n}`,
+    lines: (from: number, to: number): string => `Lines: ${from}-${to}`,
+    sideOriginal: 'Side: original',
+    note: (body: string): string => `Note: ${body}`,
+    corrupted: (name: string): string => `Session notes were damaged — saved as ${name}`,
+  },
+
+  /**
    * Меню ссылки терминала (кусок 5.3, спека 8.3): «Reveal in Finder» и «Copy path» —
    * `S.cardMenu.reveal` и `copyPath`; «Open in editor» — вкладка файла (кусок 7.3b).
    */

@@ -19,6 +19,7 @@ import type {
   WriteResult,
 } from '../shared/files-types.js';
 import type { WorkLayout } from '../shared/layout-types.js';
+import type { NotesFile } from '../shared/notes-types.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 
 const eventListeners = new Map<EventName, Set<(data: unknown) => void>>();
@@ -148,6 +149,10 @@ const bridge = {
     loadUi: () => ipcRenderer.invoke('app:load-ui') as Promise<UiFile>,
     saveUi: (patch: Partial<Omit<UiFile, 'version'>>) =>
       ipcRenderer.invoke('app:save-ui', patch) as Promise<UiFile>,
+    loadNotes: (workKey: string, sessionId: string) =>
+      ipcRenderer.invoke('app:load-notes', workKey, sessionId) as Promise<{ file: NotesFile; corruptedTo: string | null }>,
+    saveNotes: (workKey: string, sessionId: string, notes: NotesFile) =>
+      ipcRenderer.invoke('app:save-notes', workKey, sessionId, notes) as Promise<void>,
     setAppearance: (mode: Appearance) =>
       ipcRenderer.invoke('app:set-appearance', mode) as Promise<void>,
     onAppearance: (listener: (dark: boolean) => void) => {

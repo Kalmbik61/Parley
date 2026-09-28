@@ -25,6 +25,7 @@ import type {
 } from './files-types.js';
 import type { ActionId } from './keybindings.js';
 import type { WorkLayout } from './layout-types.js';
+import type { NotesFile } from './notes-types.js';
 import type { Appearance, UiFile } from './ui-types.js';
 
 /** Состояние связи окна с хостом — источник для диалогов и строки статуса. */
@@ -100,6 +101,13 @@ export interface HarnasBridge {
     /** `ui.json` (кусок 1.1 плана окна, спека 3.4) — хранилище в `main/ui-store.ts`. */
     loadUi(): Promise<UiFile>;
     saveUi(patch: Partial<Omit<UiFile, 'version'>>): Promise<UiFile>;
+    /**
+     * Заметки к диффу сессии (кусок 8.4a, спека 11.4), `main/notes-store.ts`. Битый файл — пустые
+     * заметки, а corruptedTo — имя, под которым его сохранили рядом: путь `notes/` лежит вне корней
+     * работы и в окно не уходит (спека 15.2).
+     */
+    loadNotes(workKey: string, sessionId: string): Promise<{ file: NotesFile; corruptedTo: string | null }>;
+    saveNotes(workKey: string, sessionId: string, notes: NotesFile): Promise<void>;
     /** Меняет `nativeTheme.themeSource` в главном процессе и пишет `ui.json` (спека 4.7). */
     setAppearance(mode: Appearance): Promise<void>;
     /** Системная тёмность подхватывается при `nativeTheme.on('updated')` (спека 4.7). */

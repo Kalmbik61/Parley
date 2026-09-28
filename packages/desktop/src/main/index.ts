@@ -29,6 +29,7 @@ import { forwardAppearanceToWindow, forwardHostToPages, registerIpc } from './ip
 import { forwardGuestShortcuts } from './guest-shortcuts.js';
 import { createLayoutStore, desktopLayoutsPath } from './layout-store.js';
 import { createAppMenu } from './menu.js';
+import { createNotesStore } from './notes-store.js';
 import {
   createLoggedNotification,
   createNotifier,
@@ -324,6 +325,7 @@ if (!gotLock) {
       connection,
       layoutStore: createLayoutStore(desktopLayoutsPath()),
       uiStore,
+      notesStore: createNotesStore(),
       setAppearance: (mode) => {
         nativeTheme.themeSource = mode;
       },

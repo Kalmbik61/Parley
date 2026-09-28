@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { workKey as treeOrderWorkKey } from '../renderer/lib/tree-order.js';
-import { rootKey, workKey } from './work-keys.js';
+import { isSessionId, rootKey, workKey } from './work-keys.js';
 
 describe('work-keys (кусок 5.2, тест 16)', () => {
   it('workKey — прежний формат «путь пробел id»', () => {
@@ -18,5 +18,17 @@ describe('work-keys (кусок 5.2, тест 16)', () => {
 
   it('lib/tree-order.ts#workKey — та же функция', () => {
     expect(treeOrderWorkKey).toBe(workKey);
+  });
+});
+
+describe('isSessionId (кусок 8.4a)', () => {
+  it('формат core: s- и цифры', () => {
+    for (const id of ['s-1', 's-02', 's-0003', 's-12345']) expect(isSessionId(id), id).toBe(true);
+  });
+
+  it('прочее — нет: sessionId идёт в имя файла заметок как есть', () => {
+    for (const id of ['', 's-', 'S-01', 's-01a', '../x', 's-1/../../x', ' s-1', 's-1\n', 's-1.json', '__proto__']) {
+      expect(isSessionId(id), id).toBe(false);
+    }
   });
 });

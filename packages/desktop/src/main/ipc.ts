@@ -10,6 +10,9 @@ import { HostError } from './host-connection.js';
 import type { HostConnection } from './host-connection.js';
 import { LayoutTooLargeError } from './layout-store.js';
 import type { LayoutStore } from './layout-store.js';
+import type { NotesStore } from './notes-store.js';
+import { isNotesFile } from '../shared/notes-types.js';
+import { isSessionId } from '../shared/work-keys.js';
 import type { UiStore } from './ui-store.js';
 import { openOrReveal, revealInFinder } from './files/open-path.js';
 import { FilesDeniedError, type RootsRegistry } from './roots.js';
@@ -149,6 +152,8 @@ export interface RegisterIpcOptions {
   layoutStore: LayoutStore;
   /** `ui.json` (кусок 1.1 плана окна, спека 3.4). */
   uiStore: UiStore;
+  /** Заметки к диффу, `notes/<sha1(workKey)>/<sessionId>.json` (кусок 8.4a, спека 11.4). */
+  notesStore: NotesStore;
   /** Меняет `nativeTheme.themeSource`; запись в `ui.json` — забота обработчика `app:set-appearance` ниже (спека 4.7). */
   setAppearance: (mode: Appearance) => void;
   /** `nativeTheme.shouldUseDarkColors` — источник истины темы окна (`app:is-dark`, раунд main-r2, п. 1). */
@@ -245,6 +250,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     setBadge,
     layoutStore,
     uiStore,
+    notesStore,
     setAppearance,
     isDark,
     titlebarDoubleClick,
@@ -350,6 +356,35 @@ export function registerIpc(options: RegisterIpcOptions): void {
         throw new Error(`invalid layout key list: ${String(workKeys)}`);
       }
       return layoutStore.retain(workKeys);
+    }),
+  );
+
+  /**
+   * Каналы заметок (кусок 8.4a, спека 11.4 и 15.2): sessionId идёт в имя файла как есть, поэтому
+   * только формат core — иначе `../..` из рендерера читал бы и писал JSON вне `notes/`. Отказ —
+   * `bad_request`, до диска дело не доходит.
+   */
+  const checkNotesKeys = (workKey: unknown, sessionId: unknown): void => {
+    if (!isValidWorkKey(workKey)) throw new HostError('bad_request', 'invalid notes work key');
+    if (typeof sessionId !== 'string' || !isSessionId(sessionId)) {
+      throw new HostError('bad_request', `invalid notes session id: ${String(sessionId)}`);
+    }
+  };
+
+  ipcMain.handle(
+    'app:load-notes',
+    withIpcError(async (_event, workKey: unknown, sessionId: unknown) => {
+      checkNotesKeys(workKey, sessionId);
+      return notesStore.load(workKey as string, sessionId as string);
+    }),
+  );
+
+  ipcMain.handle(
+    'app:save-notes',
+    withIpcError(async (_event, workKey: unknown, sessionId: unknown, notes: unknown) => {
+      checkNotesKeys(workKey, sessionId);
+      if (!isNotesFile(notes)) throw new HostError('bad_request', 'invalid notes file');
+      await notesStore.save(workKey as string, sessionId as string, notes);
     }),
   );
 

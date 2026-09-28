@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,6 +12,8 @@ import { DropTooLargeError, MAX_DROP_IMAGE_BYTES } from './drops.js';
 import { HostError, type HostConnection } from './host-connection.js';
 import { LayoutTooLargeError, type LayoutStore } from './layout-store.js';
 import type { UiStore } from './ui-store.js';
+import { createNotesStore, type NotesStore } from './notes-store.js';
+import type { NotesFile } from '../shared/notes-types.js';
 import { forwardHostToPages, registerIpc, withIpcError } from './ipc.js';
 import { createRootsRegistry, FilesDeniedError, type RootsRegistry } from './roots.js';
 
@@ -85,6 +87,7 @@ function setup(
   overrides: {
     uiStore?: UiStore;
     layoutStore?: LayoutStore;
+    notesStore?: NotesStore;
     roots?: RootsRegistry;
     webContents?: Map<number, unknown>;
   } = {},
@@ -93,6 +96,7 @@ function setup(
   connection: HostConnection;
   layoutStore: LayoutStore;
   uiStore: UiStore;
+  notesStore: NotesStore;
   setAppearance: ReturnType<typeof vi.fn>;
   isDark: ReturnType<typeof vi.fn>;
   titlebarDoubleClick: ReturnType<typeof vi.fn>;
@@ -127,6 +131,12 @@ function setup(
       load: vi.fn().mockResolvedValue(DEFAULT_UI),
       save: vi.fn().mockResolvedValue(DEFAULT_UI),
     } satisfies UiStore);
+  const notesStore: NotesStore =
+    overrides.notesStore ??
+    ({
+      load: vi.fn().mockResolvedValue({ file: { version: 1, notes: [] }, corruptedTo: null }),
+      save: vi.fn().mockResolvedValue(undefined),
+    } satisfies NotesStore);
   const setAppearance = vi.fn();
   const isDark = vi.fn().mockReturnValue(false);
   const titlebarDoubleClick = vi.fn();
@@ -158,6 +168,7 @@ function setup(
     connection,
     layoutStore,
     uiStore,
+    notesStore,
     setAppearance,
     isDark,
     titlebarDoubleClick,
@@ -183,6 +194,7 @@ function setup(
     connection,
     layoutStore,
     uiStore,
+    notesStore,
     setAppearance,
     isDark,
     titlebarDoubleClick,
@@ -488,6 +500,97 @@ describe('registerIpc', () => {
 
 // Тесты 8 и 12 куска 4.3: `app:notify` принимает только `AppNote` и режет тексты до 200
 // кодовых точек; `app:take-focus-target` отдаёт отложенную цель main.
+describe('app:load-notes и app:save-notes (кусок 8.4a, тест 7)', () => {
+  const WORK = '/tmp/proj w-0003';
+  const valid: NotesFile = {
+    version: 1,
+    notes: [
+      {
+        id: '0a1b2c3d',
+        path: 'src/a.ts',
+        side: 'modified',
+        startLine: 7,
+        endLine: 7,
+        body: 'note',
+        createdAt: '2026-09-27T14:05:01.000Z',
+        updatedAt: '2026-09-27T14:05:01.000Z',
+        sentAt: null,
+        sentTo: null,
+        anchor: { text: 'x' },
+        stale: false,
+      },
+    ],
+  };
+  let home: string;
+
+  beforeEach(async () => {
+    home = await mkdtemp(path.join(tmpdir(), 'hh-ipc-notes-'));
+  });
+
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true });
+  });
+
+  async function codeOf(promise: unknown): Promise<string> {
+    try {
+      await promise;
+      return 'ok';
+    } catch (error) {
+      return decodeIpcError(error).code;
+    }
+  }
+
+  /** Все файлы под домом — рекурсивно: отказ не должен оставить ни одного, в том числе вне notes/. */
+  async function filesUnder(dir: string): Promise<string[]> {
+    const entries = await readdir(dir, { recursive: true, withFileTypes: true });
+    return entries.filter((entry) => entry.isFile()).map((entry) => path.join(entry.parentPath, entry.name));
+  }
+
+  it('верные аргументы уходят в NotesStore туда и обратно', async () => {
+    const { ipcMain } = setup({ notesStore: createNotesStore(home) });
+    expect(await ipcMain.invoke('app:save-notes', WORK, 's-02', valid)).toBeUndefined();
+    expect(await ipcMain.invoke('app:load-notes', WORK, 's-02')).toEqual({ file: valid, corruptedTo: null });
+  });
+
+  it('sessionId ../x, s-1/../../x и S-01 → bad_request, файлов нет нигде', async () => {
+    const { ipcMain } = setup({ notesStore: createNotesStore(path.join(home, 'h')) });
+    for (const sessionId of ['../x', 's-1/../../x', 'S-01', 42, undefined]) {
+      expect(await codeOf(ipcMain.invoke('app:load-notes', WORK, sessionId)), String(sessionId)).toBe('bad_request');
+      expect(await codeOf(ipcMain.invoke('app:save-notes', WORK, sessionId, valid)), String(sessionId)).toBe('bad_request');
+    }
+    expect(await filesUnder(home)).toEqual([]);
+  });
+
+  it('workKey __proto__ и длиной 4097 → bad_request, стор не зовётся', async () => {
+    const { ipcMain, notesStore } = setup();
+    for (const workKey of ['__proto__', 'k'.repeat(4097), '', 7]) {
+      expect(await codeOf(ipcMain.invoke('app:load-notes', workKey, 's-01'))).toBe('bad_request');
+      expect(await codeOf(ipcMain.invoke('app:save-notes', workKey, 's-01', valid))).toBe('bad_request');
+    }
+    expect(notesStore.load).not.toHaveBeenCalled();
+    expect(notesStore.save).not.toHaveBeenCalled();
+  });
+
+  it('заметка без body, body из 4001 символа и 1001 заметка → bad_request, файл не записан', async () => {
+    const { ipcMain } = setup({ notesStore: createNotesStore(home) });
+    const [one] = valid.notes;
+    if (one === undefined) throw new Error('нет заметки');
+    const withoutBody: Record<string, unknown> = { ...one };
+    delete withoutBody.body;
+    const bad: unknown[] = [
+      { version: 1, notes: [withoutBody] },
+      { version: 1, notes: [{ ...one, body: 'b'.repeat(4001) }] },
+      { version: 1, notes: Array.from({ length: 1001 }, () => one) },
+      null,
+      'x',
+    ];
+    for (const notes of bad) {
+      expect(await codeOf(ipcMain.invoke('app:save-notes', WORK, 's-01', notes))).toBe('bad_request');
+    }
+    expect(await filesUnder(home)).toEqual([]);
+  });
+});
+
 describe('registerIpc — app:notify и app:take-focus-target (кусок 4.3)', () => {
   const target = { kind: 'session', ref: { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-02' } };
   const note = { title: 'Redesign · S02 executor — needs you', body: 'task', tag: 'session:x', target, silent: false };

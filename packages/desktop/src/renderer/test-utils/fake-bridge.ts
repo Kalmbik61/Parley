@@ -31,6 +31,7 @@ import type {
   TreeChangedEvent,
 } from '../../shared/files-types.js';
 import type { WorkLayout } from '../../shared/layout-types.js';
+import type { NotesFile } from '../../shared/notes-types.js';
 import type { IpcErrorInfo } from '../../shared/ipc-error.js';
 import { rootKey } from '../../shared/work-keys.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
@@ -70,6 +71,11 @@ export interface FakeBridge extends HarnasBridge {
   readonly layoutRemovals: string[];
   /** Вызовы `app.retainLayouts` — первый снимок после `worksLoaded` (кусок 2.2, тест 13). */
   readonly layoutRetains: string[][];
+  /** Ответ app.loadNotes этой сессии; по умолчанию { file: { version: 1, notes: [] }, corruptedTo: null } (кусок 8.4a). */
+  setNotes(workKey: string, sessionId: string, answer: { file: NotesFile; corruptedTo: string | null } | IpcErrorInfo): void;
+  readonly loadNotesCalls: Array<{ workKey: string; sessionId: string }>;
+  /** Вызовы `app.saveNotes`; записанное отдаёт и следующий loadNotes той же сессии. */
+  readonly savedNotes: Array<{ workKey: string; sessionId: string; notes: NotesFile }>;
   /** Системная тёмность, будто бы её сообщил `nativeTheme.on('updated')` (кусок 1.1). */
   emitAppearance(dark: boolean): void;
   /** Ответ `app.isDark()` — тёмность `nativeTheme` main (раунд main-r2, п. 1). */
@@ -208,6 +214,10 @@ export function createFakeBridge(): FakeBridge {
   const fileKey = (root: FileRoot, path: string): string => `${rootKey(root)}\n${path}`;
   const notFound = (path: string): IpcErrorInfo => ({ code: 'not_found', message: `fake-bridge: no file ${path}` });
   const layouts = new Map<string, WorkLayout>();
+  const notesAnswers = new Map<string, { file: NotesFile; corruptedTo: string | null } | IpcErrorInfo>();
+  const notesKey = (workKey: string, sessionId: string): string => `${workKey}\0${sessionId}`;
+  const loadNotesCalls: Array<{ workKey: string; sessionId: string }> = [];
+  const savedNotes: Array<{ workKey: string; sessionId: string; notes: NotesFile }> = [];
   let status: HostStatus = {
     state: 'connected',
     hostVersion: '0.0.0-test',
@@ -227,6 +237,11 @@ export function createFakeBridge(): FakeBridge {
     layoutSaves,
     layoutRemovals,
     layoutRetains,
+    setNotes: (workKey, sessionId, answer) => {
+      notesAnswers.set(notesKey(workKey, sessionId), answer);
+    },
+    loadNotesCalls,
+    savedNotes,
     titlebarDoubleClicks,
     revealedWorks,
     setRevealWorkError: (error) => {
@@ -484,6 +499,17 @@ export function createFakeBridge(): FakeBridge {
       saveUi: async (patch) => {
         ui = normalizeUi({ ...ui, ...patch });
         return ui;
+      },
+      loadNotes: async (workKey, sessionId) => {
+        loadNotesCalls.push({ workKey, sessionId });
+        const answer = notesAnswers.get(notesKey(workKey, sessionId)) ?? { file: { version: 1, notes: [] }, corruptedTo: null };
+        if ('code' in answer) throw answer;
+        return structuredClone(answer);
+      },
+      saveNotes: async (workKey, sessionId, notes) => {
+        const copy = structuredClone(notes);
+        savedNotes.push({ workKey, sessionId, notes: copy });
+        notesAnswers.set(notesKey(workKey, sessionId), { file: structuredClone(copy), corruptedTo: null });
       },
       setAppearance: async (mode) => {
         ui = { ...ui, appearance: mode };
