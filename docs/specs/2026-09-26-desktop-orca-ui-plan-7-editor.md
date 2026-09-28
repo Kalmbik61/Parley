@@ -1135,6 +1135,7 @@ files: {
   searchPlaceholder: 'Search in files',
   matchWholeWord: 'Match whole word',
   truncated: (n: number) => string,          // 'Showing first 2000 matches' — n совпадений в ответе
+  filesTruncated: (n: number) => string,     // 'Showing first 50000 files' — n путей в ответе lsFiles
   refineQuery: 'Refine your query',
   noFiles: 'No matching files',
   loadingFiles: 'Loading files…',
@@ -1148,6 +1149,9 @@ errors: { actions: { searchFiles: 'search in files' } },   // отказ lsFiles
   `S.errors.noActiveWorkspace` (6.3):
   - список `files.lsFiles`. Пока он идёт — строка «Loading files…» (`files: null`);
     отказ — тост `errorText(code, S.errors.actions.readFolder)`;
+  - ответ с `truncated: true` (обход не-git корня упёрся в предел 50 000 или во время,
+    спека 10.7) — под секцией строка «Showing first N files» (`S.files.filesTruncated(n)`,
+    n — число путей ответа): файла за пределом в списке нет, и человек должен это знать;
   - ранжирование — `scoreDocument` по всем путям: имя файла — название с весом 2, путь
     — поле. Документы — на все пути: 50 — предел секции после ранжирования (6.2), и
     файл за первыми 50 путями иначе не нашёлся бы;
@@ -1183,7 +1187,9 @@ errors: { actions: { searchFiles: 'search in files' } },   // отказ lsFiles
 5. Палитра:
    - ввод `/main` показывает секцию `Files` с `src/main.ts`, других секций нет;
    - `/нетакого` — `No matching files`, строки `Create workspace` нет;
-   - пока `lsFiles` не ответил — `Loading files…`.
+   - пока `lsFiles` не ответил — `Loading files…`;
+   - ответ `{ paths: [...], truncated: true }` — строка `Showing first N files`; при
+     `truncated: false` её нет.
 6. ⌘P и ⌘⇧F: `emitMenu('files.quickOpen')` открывает палитру в режиме `files`;
    `runAction('files.search')` открывает сайдбар на `Files` в режиме поиска; без
    активной работы — тост `No active workspace`; `isActionAvailable('files.quickOpen')`
