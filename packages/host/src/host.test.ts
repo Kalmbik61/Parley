@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, stat, utimes, writeFile } from 'node:fs/promises';
 import { uptime } from 'node:os';
 import { createRequire } from 'node:module';
+import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../test/helpers.js';
@@ -233,6 +234,50 @@ describe('процесс main.ts', () => {
         expect(existsSync(paths.pid)).toBe(false);
       } finally {
         if (first.exitCode === null && first.signalCode === null) first.kill('SIGKILL');
+      }
+    },
+    20_000,
+  );
+});
+
+describe('битый works-index.json на старте (lane-r5, п. 1)', () => {
+  it(
+    'методы снимка отвечают ошибкой с причиной works-unreadable, а не висят; SIGTERM гасит процесс чисто',
+    async () => {
+      const home = await tempTrackedHome();
+      const paths = hostPaths(home);
+      await writeFile(path.join(home, 'works-index.json'), '{ битый');
+
+      const child = spawn(process.execPath, ['--import', tsxLoader, mainScript], {
+        env: { ...process.env, HARNAS_HOME: home },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      try {
+        await waitForFile(paths.socket, 10_000);
+        const token = await readFile(paths.token, 'utf8');
+        const client = connectRaw(paths.socket);
+        await waitConnected(client.socket);
+        await hello(client, token);
+        client.send({ id: 1, method: 'works.list', params: {} });
+        // Ответ ищется по id: до него могут прийти события. Висящий метод — отказ по сроку.
+        const response = await Promise.race([
+          (async () => {
+            let message = await client.next();
+            while (message.id !== 1) message = await client.next();
+            return message;
+          })(),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('works.list не ответил')), 5000)),
+        ]);
+        expect(response.error).toMatchObject({ code: 'internal', data: { reason: 'works-unreadable' } });
+        client.close();
+
+        child.kill('SIGTERM');
+        const [code] = (await once(child, 'exit')) as [number | null];
+        expect(code).toBe(0);
+        expect(existsSync(paths.socket)).toBe(false);
+        expect(existsSync(paths.pid)).toBe(false);
+      } finally {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
       }
     },
     20_000,

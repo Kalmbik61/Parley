@@ -436,3 +436,36 @@ describe('sessions.* на старте хоста (lane-r4, п. 4)', () => {
     client.close();
   });
 });
+
+describe('отказ первого чтения работ (lane-r5, п. 1)', () => {
+  it('битый works-index.json — хост поднят, методы снимка отвечают ошибкой с причиной, прочие методы работают', async () => {
+    // Прежде worksService.start() бросал уже после listen: ворота worksReady не открывались и не
+    // отказывали — works.list и остальные методы снимка висели навсегда (review-fix-tests2-A, I1).
+    const home = await tempHome();
+    homes.push(home);
+    await writeFile(path.join(home, 'works-index.json'), '{"schemaVersion": 7}');
+    const running = await startHost({ home });
+    hosts.push(running);
+
+    const paths = hostPaths(home);
+    const client = connectRaw(paths.socket);
+    await waitConnected(client.socket);
+    await hello(client, await readFile(paths.token, 'utf8'));
+    // Уведомление за теми же воротами не роняет хост отказом.
+    client.send({ method: 'activity.seen', params: { ref: { projectPath: '/tmp/x', workId: 'w-0001', sessionId: 'S01' } } });
+    client.send({ id: 1, method: 'works.list', params: {} });
+    client.send({ id: 2, method: 'sessions.interrupted', params: {} });
+    client.send({ id: 3, method: 'host.info', params: {} });
+
+    const byId = new Map<unknown, RawMessage>();
+    while (byId.size < 3) {
+      const message = await client.next();
+      if (message.id !== undefined) byId.set(message.id, message);
+    }
+    for (const id of [1, 2]) {
+      expect(byId.get(id)?.error).toMatchObject({ code: 'internal', data: { reason: 'works-unreadable' } });
+    }
+    expect(byId.get(3)?.result).toBeDefined();
+    client.close();
+  });
+});

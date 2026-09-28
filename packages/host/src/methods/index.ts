@@ -51,6 +51,12 @@ export const WORKS_GATED_METHODS = [
   'pty.send',
 ] as const satisfies readonly MethodName[];
 
+/**
+ * `data.reason` ошибки методов снимка, когда первое чтение работ хостом отказало (раунд lane-r5):
+ * снимка нет до перезапуска хоста. Код — `internal`; окно по причине показывает свой текст.
+ */
+export const WORKS_UNREADABLE = 'works-unreadable';
+
 /** Уведомления того же рода: activity.seen сверяет сессию со снимком работ. */
 export const WORKS_GATED_NOTIFICATIONS = ['activity.seen'] as const satisfies readonly NotificationName[];
 
@@ -128,7 +134,18 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     }
     for (const name of WORKS_GATED_NOTIFICATIONS) {
       const handler = notifications[name];
-      if (handler !== undefined) notifications[name] = (params, request) => void ready.then(() => handler(params, request));
+      // Отказ ворот (lane-r5) уведомлению ответить нечем — оно просто не исполняется. Сбой самого
+      // обработчика после ворот уже не ловит try/catch сервера: без catch он стал бы необработанным
+      // отказом промиса и уронил хост.
+      if (handler !== undefined) {
+        notifications[name] = (params, request) => {
+          ready
+            .then(() => handler(params, request), () => undefined)
+            .catch((error: unknown) => {
+              request.host.log.warn('обработчик уведомления упал', { method: name, error: String(error) });
+            });
+        };
+      }
     }
   }
 

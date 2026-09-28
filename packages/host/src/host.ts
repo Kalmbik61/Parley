@@ -6,11 +6,12 @@ import { harnasHome } from '@harnas/core';
 import { createHostContext } from './context.js';
 import type { HostContext } from './context.js';
 import { createHostServer } from './server.js';
+import { HostError } from './errors.js';
 import { createLog } from './log.js';
 import { watchIdle } from './idle.js';
 import { hostPaths, MAX_SOCKET_PATH_BYTES } from './paths.js';
 import type { HostPaths } from './paths.js';
-import { createHostHandlers } from './methods/index.js';
+import { createHostHandlers, WORKS_UNREADABLE } from './methods/index.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
 import { createPtyManager } from './pty/pty-manager.js';
@@ -160,11 +161,16 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
   // Сокет слушает раньше первого чтения работ (п. 5 ниже, затем `worksService.start()`):
   // методы снимка работ (WORKS_GATED_* в methods/index.ts) ждут его, иначе окно, подключившееся
-  // в этот промежуток, видит недочитанный снимок.
+  // в этот промежуток, видит недочитанный снимок. Отказ первого чтения ворота не держат вечно, а
+  // отказывают (раунд lane-r5): методы снимка отвечают ошибкой, а не висят.
   let markWorksReady!: () => void;
-  const worksReady = new Promise<void>((resolve) => {
+  let failWorksReady!: (error: HostError) => void;
+  const worksReady = new Promise<void>((resolve, reject) => {
     markWorksReady = resolve;
+    failWorksReady = reject;
   });
+  // Отказ читают только ожидающие методы; без них он не должен стать необработанным.
+  worksReady.catch(() => undefined);
 
   const handlers = createHostHandlers({
     worksReady,
@@ -212,15 +218,32 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // 7. Таймер простоя: ни клиентов, ни занятых ключей — отсчёт стартует сразу.
   idleWatcher.notify(true);
 
-  await worksService.start();
-  // Сверка живости уже прошла на первом чтении работ: те, чей журнал оборван
-  // посреди хода, прерваны падением прошлого хоста (спека 10).
-  await sessionsService.collectInterrupted().catch((error: unknown) => {
-    log.error('список прерванных сессий не собрался', { error: String(error) });
-  });
-  // После сбора прерванных, а не сразу после чтения: sessions.interrupted тоже ждёт этих ворот
-  // (раунд lane-r4, п. 4) — иначе окно на старте получало пустой список и баннера не было.
-  markWorksReady();
+  const worksFailure = await worksService.start().then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error.message : String(error)),
+  );
+  if (worksFailure === null) {
+    // Сверка живости уже прошла на первом чтении работ: те, чей журнал оборван
+    // посреди хода, прерваны падением прошлого хоста (спека 10).
+    await sessionsService.collectInterrupted().catch((error: unknown) => {
+      log.error('список прерванных сессий не собрался', { error: String(error) });
+    });
+    // После сбора прерванных, а не сразу после чтения: sessions.interrupted тоже ждёт этих ворот
+    // (раунд lane-r4, п. 4) — иначе окно на старте получало пустой список и баннера не было.
+    markWorksReady();
+  } else {
+    // Первое чтение отказало (битый works-index.json — спека 10, «Карта повреждена»): сбой не
+    // фатален — хост остаётся, отказывается от снимка и показывает ошибку, а не падает в цикл
+    // перезапусков окна. Снимок замораживается пустым (наблюдатели закрыты): ответ методов снимка
+    // один и тот же до перезапуска хоста, окно не получит works.changed, противоречащий отказу.
+    log.error('первое чтение работ не удалось', { error: worksFailure });
+    await worksService.stop();
+    failWorksReady(
+      new HostError('internal', `работы не прочитаны на старте хоста: ${worksFailure}`, {
+        reason: WORKS_UNREADABLE,
+      }),
+    );
+  }
   await activityService.start();
   wakeService.start();
 
