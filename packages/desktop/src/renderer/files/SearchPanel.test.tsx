@@ -260,6 +260,43 @@ describe('SearchPanel — подсказка POSIX regex (раунд fix-7.4, п
     expect(screen.queryByText('POSIX regex')).toBeNull();
   });
 
+  // Ревью fix-7.4, Minor 1: подсказка — о последнем ответе, а не «залипает» от прежнего (fix-lane-post, п. 5).
+  it('запрос стёрт до пустого при включённой «.*» — подсказки нет', async () => {
+    bridge.setGrepResult({ files: [], truncated: false, posixRegex: true });
+    render(<SearchPanel bridge={bridge} root={ROOT} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Use regular expression' }));
+    await type('\\d+');
+    await wait(250);
+    expect(screen.getByText('POSIX regex')).toBeTruthy();
+    await type('');
+    expect(screen.queryByText('POSIX regex')).toBeNull();
+  });
+
+  it('следующий запрос отказан (неверная регулярка или сбой) — подсказки нет', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    bridge.setGrepResult({ files: [], truncated: false, posixRegex: true });
+    render(<SearchPanel bridge={bridge} root={ROOT} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Use regular expression' }));
+    await type('\\d+');
+    await wait(250);
+    expect(screen.getByText('POSIX regex')).toBeTruthy();
+    bridge.setGrepResult({ code: 'bad_request', message: 'invalid regex' });
+    await type('(unclosed');
+    await wait(250);
+    expect(screen.getByText('Invalid regular expression')).toBeTruthy();
+    expect(screen.queryByText('POSIX regex')).toBeNull();
+
+    bridge.setGrepResult({ files: [], truncated: false, posixRegex: true });
+    await type('\\w+');
+    await wait(250);
+    expect(screen.getByText('POSIX regex')).toBeTruthy();
+    bridge.setGrepResult({ code: 'failed', message: 'boom' });
+    await type('\\s+');
+    await wait(250);
+    expect(toast).toHaveBeenCalled();
+    expect(screen.queryByText('POSIX regex')).toBeNull();
+  });
+
   it('ответ без posixRegex (git с PCRE, не-git корень) — подсказки нет', async () => {
     bridge.setGrepResult(result([]));
     render(<SearchPanel bridge={bridge} root={ROOT} />);

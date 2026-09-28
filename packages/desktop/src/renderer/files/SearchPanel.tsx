@@ -129,6 +129,8 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
     if (text === '') {
       setResult(null);
       setInvalid(false);
+      // Подсказка «POSIX regex» — о последнем ответе; ответа на пустое поле нет (fix-lane-post, п. 5).
+      setPosix(false);
       return undefined;
     }
     const query = { text, caseSensitive, wholeWord, regex };
@@ -155,6 +157,8 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
           if (running.current !== id) return;
           running.current = null;
           stopSearching();
+          // Отказ — тоже ответ, и диалекта в нём нет: прежняя подсказка «POSIX regex» к нему не относится.
+          setPosix(false);
           const { code } = decodeIpcError(error);
           // Неверная регулярка — в панели, а не тостом: человек её ещё печатает. Это ожидаемый
           // ввод, а не сбой — и в консоль не идёт (раунд fix-7.4, п. 4).
