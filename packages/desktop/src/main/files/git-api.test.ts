@@ -236,6 +236,31 @@ describe('createGrepParser', () => {
     });
   });
 
+  // Ревью fix-7.4, Minor 3 (fix-lane-post, п. 5): кусок stdout может кончиться где угодно — внутри
+  // заголовка из трёх NUL, внутри многобайтового символа пути или текста, на самом \n.
+  it('разрез записи в любой точке (один и два разреза) — тот же ответ, что целиком', () => {
+    const out = Buffer.from('пап/😀.ts\x003\x0013\x00ab😀вгдNеё😀жз\nб.ts\x0012\x001\x00Ж\n');
+    for (const lineBytes of [undefined, 11]) {
+      const make = () => createGrepParser({ hits: 2000, files: 200, ...(lineBytes === undefined ? {} : { lineBytes }) });
+      const whole = make();
+      whole.push(out);
+      const expected = whole.result();
+      expect(expected.files.map((f) => f.path)).toEqual(['пап/😀.ts', 'б.ts']);
+      // Совпадение «N» — байт 13 строки (git, с 1): до него 7 единиц UTF-16 — колонка 8.
+      expect(expected.files[0]?.hits[0]?.column).toBe(8);
+      expect(expected.files[0]?.hits[0]?.text.slice(expected.files[0]?.hits[0]?.at)).toMatch(/^N/);
+      for (let a = 1; a < out.length; a++) {
+        for (let b = a; b < out.length; b++) {
+          const parser = make();
+          parser.push(out.subarray(0, a));
+          parser.push(out.subarray(a, b));
+          parser.push(out.subarray(b));
+          expect(parser.result(), `lineBytes ${lineBytes}, разрезы ${a} и ${b}`).toEqual(expected);
+        }
+      }
+    }
+  });
+
   it('предел файлов: 201-й файл — false и truncated', () => {
     const parser = createGrepParser({ hits: 2000, files: 200 });
     const lines = Array.from({ length: 201 }, (_, i) => `f${i}\x001\x001\x00x\n`).join('');
