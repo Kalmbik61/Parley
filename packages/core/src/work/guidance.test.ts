@@ -116,10 +116,14 @@ describe('подробный гид', () => {
   });
 
   it('запрещает удалять и переносить каталоги .harnas руками', () => {
-    // Агент без инструмента удаления не должен идти в shell: удаление сессии —
-    // только из TUI, удаления работы пока нет вовсе.
+    // Агент без инструмента удаления не должен идти в shell: удаляет человек —
+    // в окне (меню сессии и карточки работы), TUI заморожен и остался запасным путём.
     expect(GUIDE).toMatch(/[Нн]е удаля[^\n]*\.harnas/);
-    expect(GUIDE).toContain('из TUI');
+    expect(GUIDE).toMatch(/в окне[\s\S]*Delete[\s\S]*меню сессии/);
+    expect(GUIDE).toMatch(/Archive[\s\S]*карточки/);
+    expect(GUIDE).toContain('Discard worktree…');
+    expect(GUIDE).toMatch(/TUI[\s\S]*`prefix d`[\s\S]*`prefix D`/);
+    expect(GUIDE).not.toContain('работу — тоже из TUI');
   });
 
   it('комнаты: create_room для подчинённых, рассылка против адресного, read_room для контекста', () => {
