@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { lstat, readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { Worker } from 'node:worker_threads';
-import type { FileRoot, GitStatusLetter, GrepQuery, GrepResult, TextFile } from '../../shared/files-types.js';
+import type { FileList, FileRoot, GitStatusLetter, GrepQuery, GrepResult, TextFile } from '../../shared/files-types.js';
 import { rootKey } from '../../shared/work-keys.js';
 import { HostError } from '../host-connection.js';
 import type { RootsRegistry } from '../roots.js';
@@ -374,7 +374,8 @@ export function runGrepWorker(
 }
 
 export interface GitApi {
-  lsFiles(root: FileRoot): Promise<string[]>;
+  /** truncated — обход не-git корня неполон (предел, время, отмена); список git — всегда полный. */
+  lsFiles(root: FileRoot): Promise<FileList>;
   /** signalId — ключ отмены; новый grep с тем же ключом отменяет прежний. */
   grep(root: FileRoot, query: GrepQuery, signalId: string): Promise<GrepResult>;
   cancel(signalId: string): void;
@@ -416,7 +417,7 @@ export function createGitApi(options: GitApiOptions): GitApi {
   const { git, roots } = options;
   const timeoutMs = options.grepTimeoutMs ?? GREP_TIMEOUT_MS;
   const showMaxBytes = options.showMaxBytes ?? LIMITS.openableBytes;
-  const lsCache = new Map<string, Promise<string[]>>();
+  const lsCache = new Map<string, Promise<FileList>>();
   const signals = new Map<string, AbortController>();
   /**
    * Папки, о сбое `check-ignore` в которых уже сказано: за каталогом-ссылкой git выходит с 128 на
@@ -445,15 +446,17 @@ export function createGitApi(options: GitApiOptions): GitApi {
    * partial — список неполон из-за бюджета времени: такой не кэшируется, следующий ⌘P обойдёт
    * заново. Предел 50 000 — не partial: повтор дал бы тот же список.
    */
-  const listFiles = async (root: FileRoot): Promise<{ paths: string[]; partial: boolean }> => {
+  const listFiles = async (root: FileRoot): Promise<FileList & { partial: boolean }> => {
     const rootPath = roots.rootPath(root);
     if ((await gitRootOf(git, rootPath)) !== null) {
       const result = await read(['ls-files', '-co', '--exclude-standard', '-z', ...PATHSPEC], rootPath);
-      if (result !== null && result.code === 0) return { paths: await dropHiddenLinks(rootPath, parseLsFiles(result.stdout)), partial: false };
+      if (result !== null && result.code === 0) {
+        return { paths: await dropHiddenLinks(rootPath, parseLsFiles(result.stdout)), truncated: false, partial: false };
+      }
       console.warn(`[harnas] files: git ls-files exited with code ${String(result?.code)}, walking instead`);
     }
     const found = await walk(rootPath);
-    return { paths: found.paths, partial: found.truncated && found.paths.length < WALK_LIMIT };
+    return { paths: found.paths, truncated: found.truncated, partial: found.truncated && found.paths.length < WALK_LIMIT };
   };
 
   const grepIn = async (root: FileRoot, query: GrepQuery, signal: AbortSignal): Promise<GrepResult> => {
@@ -505,11 +508,12 @@ export function createGitApi(options: GitApiOptions): GitApi {
   return {
     lsFiles: (root) => {
       const key = rootKey(root);
-      if (options.isTreeWatched?.(key) !== true) return listFiles(root).then((found) => found.paths);
+      const answer = (found: FileList): FileList => ({ paths: found.paths, truncated: found.truncated });
+      if (options.isTreeWatched?.(key) !== true) return listFiles(root).then(answer);
       const cached = lsCache.get(key);
       if (cached !== undefined) return cached;
       const listed = listFiles(root);
-      const pending = listed.then((found) => found.paths);
+      const pending = listed.then(answer);
       lsCache.set(key, pending);
       const forget = (): void => {
         if (lsCache.get(key) === pending) lsCache.delete(key);

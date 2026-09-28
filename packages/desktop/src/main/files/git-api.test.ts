@@ -114,7 +114,8 @@ describe('lsFiles и parseLsFiles (тест 2)', () => {
     await mkdir(path.join(dir, '.harnas', 'works', 'w'), { recursive: true });
     await writeFile(path.join(dir, '.harnas', 'works', 'w', 'map.json'), '{}');
     const files = await api(dir).lsFiles(ROOT);
-    expect(files.sort()).toEqual(['.gitignore', 'new.ts', 'tracked.ts']);
+    expect(files.paths.sort()).toEqual(['.gitignore', 'new.ts', 'tracked.ts']);
+    expect(files.truncated).toBe(false);
   });
 
   it('parseLsFiles: -z, кириллица и пробелы как есть', () => {
@@ -130,7 +131,8 @@ describe('lsFiles и parseLsFiles (тест 2)', () => {
     await mkdir(path.join(dir, 'src'));
     await writeFile(path.join(dir, 'src', 'a.ts'), '');
     await writeFile(path.join(dir, 'b.md'), '');
-    expect((await api(dir).lsFiles(ROOT)).sort()).toEqual(['b.md', 'src/a.ts']);
+    expect(await api(dir).lsFiles(ROOT)).toEqual({ paths: expect.arrayContaining(['b.md', 'src/a.ts']), truncated: false });
+    expect((await api(dir).lsFiles(ROOT)).paths).toHaveLength(2);
   });
 });
 
@@ -412,7 +414,7 @@ describe('не git (тест 9)', () => {
       const a = api(dir, runner);
       expect(await a.gitStatus(ROOT)).toEqual({});
       expect(await a.checkIgnored(ROOT, '', ['a.txt'])).toEqual(new Set());
-      expect(await a.lsFiles(ROOT)).toEqual(['a.txt']);
+      expect(await a.lsFiles(ROOT)).toEqual({ paths: ['a.txt'], truncated: false });
       expect((await a.grep(ROOT, Q('needle'), 's')).files).toEqual([
         { path: 'a.txt', hits: [{ line: 1, text: 'needle', ranges: [[0, 6]] }] },
       ]);
@@ -549,9 +551,11 @@ describe('обход: отмена и бюджет времени (раунд fi
     // Тот же объект настроек: бюджет читается на каждом вызове.
     const options = { git: createGitRunner(process.env), roots: { rootPath: () => dir }, spawnWorker, walkBudgetMs: 0, isTreeWatched: () => true };
     const a = createGitApi(options);
-    expect(await a.lsFiles(ROOT)).toEqual(['top.txt']);
+    expect(await a.lsFiles(ROOT)).toEqual({ paths: ['top.txt'], truncated: true });
     options.walkBudgetMs = 10_000;
-    expect(await a.lsFiles(ROOT)).toHaveLength(81);
+    const full = await a.lsFiles(ROOT);
+    expect(full.paths).toHaveLength(81);
+    expect(full.truncated).toBe(false);
   });
 });
 
@@ -560,15 +564,15 @@ describe('кэш lsFiles (тест 14)', () => {
     await writeFile(path.join(dir, 'a.txt'), '');
     let watched = false;
     const a = api(dir, createGitRunner(process.env), { isTreeWatched: () => watched });
-    expect(await a.lsFiles(ROOT)).toEqual(['a.txt']);
+    expect(await a.lsFiles(ROOT)).toEqual({ paths: ['a.txt'], truncated: false });
     await writeFile(path.join(dir, 'b.txt'), '');
-    expect((await a.lsFiles(ROOT)).sort()).toEqual(['a.txt', 'b.txt']);
+    expect((await a.lsFiles(ROOT)).paths.sort()).toEqual(['a.txt', 'b.txt']);
     watched = true;
-    expect((await a.lsFiles(ROOT)).sort()).toEqual(['a.txt', 'b.txt']);
+    expect((await a.lsFiles(ROOT)).paths.sort()).toEqual(['a.txt', 'b.txt']);
     await writeFile(path.join(dir, 'c.txt'), '');
-    expect((await a.lsFiles(ROOT)).sort()).toEqual(['a.txt', 'b.txt']);
+    expect((await a.lsFiles(ROOT)).paths.sort()).toEqual(['a.txt', 'b.txt']);
     a.invalidate(rootKey(ROOT));
-    expect((await a.lsFiles(ROOT)).sort()).toEqual(['a.txt', 'b.txt', 'c.txt']);
+    expect((await a.lsFiles(ROOT)).paths.sort()).toEqual(['a.txt', 'b.txt', 'c.txt']);
   });
 });
 
@@ -647,7 +651,7 @@ describe('lsFiles: ссылки в .git и .harnas (раунд fix-7.1b, п.6)',
     commitAll(dir);
     await symlink('.git/config', path.join(dir, 'git-config'));
     await symlink('.harnas/works/w/map.json', path.join(dir, 'fresh-link.json'));
-    expect((await api(dir).lsFiles(ROOT)).sort()).toEqual(['in-link.txt', 'real.txt']);
+    expect((await api(dir).lsFiles(ROOT)).paths.sort()).toEqual(['in-link.txt', 'real.txt']);
   });
 
   it('не git: то же обходом', async () => {
@@ -660,6 +664,6 @@ describe('lsFiles: ссылки в .git и .harnas (раунд fix-7.1b, п.6)',
         throw Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' });
       },
     };
-    expect((await api(dir, enoent).lsFiles(ROOT)).sort()).toEqual(['in-link.txt', 'real.txt']);
+    expect((await api(dir, enoent).lsFiles(ROOT)).paths.sort()).toEqual(['in-link.txt', 'real.txt']);
   });
 });

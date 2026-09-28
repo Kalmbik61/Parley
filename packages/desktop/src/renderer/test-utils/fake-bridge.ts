@@ -18,6 +18,7 @@ import type { BrowserOpenTab } from '../../shared/browser-types.js';
 import type {
   DirEntry,
   FileChangedEvent,
+  FileList,
   FileRoot,
   FileStat,
   GitStatusLetter,
@@ -104,8 +105,8 @@ export interface FakeBridge extends HarnasBridge {
   /** Вызовы `files.write`, в том числе ответившие conflict. */
   readonly writes: Array<{ root: FileRoot; path: string; text: string; expectedMtimeMs: number | null }>;
   readonly readTextCalls: Array<{ root: FileRoot; path: string }>;
-  /** Ответ `files.lsFiles` корня; по умолчанию `[]`. Отказ — объект с code (кусок 7.1b). */
-  setLsFiles(root: FileRoot, paths: string[] | IpcErrorInfo): void;
+  /** Ответ `files.lsFiles` корня; по умолчанию пустой и полный. Отказ — объект с code (кусок 7.1b). */
+  setLsFiles(root: FileRoot, answer: FileList | IpcErrorInfo): void;
   /** Ответ следующих `files.grep`; по умолчанию пусто. */
   setGrepResult(result: GrepResult | IpcErrorInfo): void;
   /** Ответ `files.gitStatus` корня; по умолчанию `{}`. */
@@ -160,7 +161,7 @@ export function createFakeBridge(): FakeBridge {
   const writeConflicts = new Map<string, number>();
   const writes: Array<{ root: FileRoot; path: string; text: string; expectedMtimeMs: number | null }> = [];
   const readTextCalls: Array<{ root: FileRoot; path: string }> = [];
-  const lsFilesAnswers = new Map<string, string[] | IpcErrorInfo>();
+  const lsFilesAnswers = new Map<string, FileList | IpcErrorInfo>();
   let grepAnswer: GrepResult | IpcErrorInfo = { files: [], truncated: false };
   const gitStatuses = new Map<string, Record<string, GitStatusLetter>>();
   const watchFails = new Set<string>();
@@ -236,8 +237,8 @@ export function createFakeBridge(): FakeBridge {
     },
     writes,
     readTextCalls,
-    setLsFiles: (root, paths) => {
-      lsFilesAnswers.set(rootKey(root), paths);
+    setLsFiles: (root, answer) => {
+      lsFilesAnswers.set(rootKey(root), answer);
     },
     setGrepResult: (result) => {
       grepAnswer = result;
@@ -342,9 +343,9 @@ export function createFakeBridge(): FakeBridge {
       },
       lsFiles: async (root) => {
         lsFilesCalls.push(root);
-        const answer = lsFilesAnswers.get(rootKey(root)) ?? [];
-        if (!Array.isArray(answer)) throw answer;
-        return [...answer];
+        const answer = lsFilesAnswers.get(rootKey(root)) ?? { paths: [], truncated: false };
+        if ('code' in answer) throw answer;
+        return { paths: [...answer.paths], truncated: answer.truncated };
       },
       grep: async (root, query, signalId) => {
         grepCalls.push({ root, query: { ...query }, signalId });

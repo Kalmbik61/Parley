@@ -11,6 +11,7 @@ import type { BrowserApi } from './browser-types.js';
 import type {
   DirEntry,
   FileChangedEvent,
+  FileList,
   FileRoot,
   FileStat,
   GitStatusLetter,
@@ -169,7 +170,7 @@ export interface HarnasBridge {
     /** Пачка раз в 300 мс; rootKey — `shared/work-keys.ts`. */
     onTreeChanged(listener: (e: TreeChangedEvent) => void): () => void;
     /** Для ⌘P: git — отслеживаемые и новые без игнорируемых; не git — обход до 50 000. */
-    lsFiles(root: FileRoot): Promise<string[]>;
+    lsFiles(root: FileRoot): Promise<FileList>;
     /** До 2000 совпадений и 200 файлов; отменён, остановлен по пределу — найденное с truncated. */
     grep(root: FileRoot, query: GrepQuery, signalId: string): Promise<GrepResult>;
     cancel(signalId: string): Promise<void>;

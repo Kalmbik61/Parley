@@ -5,6 +5,7 @@ import type { BrowserOpenTab } from '../shared/browser-types.js';
 import type {
   DirEntry,
   FileChangedEvent,
+  FileList,
   FileRoot,
   FileStat,
   GitStatusLetter,
@@ -185,7 +186,7 @@ const bridge = {
       treeChangedListeners.add(listener);
       return () => treeChangedListeners.delete(listener);
     },
-    lsFiles: (root: FileRoot) => ipcRenderer.invoke('files:ls-files', root) as Promise<string[]>,
+    lsFiles: (root: FileRoot) => ipcRenderer.invoke('files:ls-files', root) as Promise<FileList>,
     grep: (root: FileRoot, query: GrepQuery, signalId: string) =>
       ipcRenderer.invoke('files:grep', root, query, signalId) as Promise<GrepResult>,
     cancel: (signalId: string) => ipcRenderer.invoke('files:cancel', signalId) as Promise<void>,

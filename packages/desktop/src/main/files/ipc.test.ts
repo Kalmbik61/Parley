@@ -383,3 +383,22 @@ describe('files/ipc: git, поиск и слежение (кусок 7.1b)', () 
     }
   });
 });
+
+describe('files/ipc: files:ls-files (решение по 7.1b)', () => {
+  it('ответ — { paths, truncated }, а не голый список', async () => {
+    const dir = await realpath(await mkdtemp(path.join(tmpdir(), 'harnas-filesipc-')));
+    try {
+      const git = fakeGit();
+      git.run.mockImplementation(async (args: string[]) => ({
+        code: 0,
+        stdout: Buffer.from(args.includes('rev-parse') ? '\n' : 'a.ts\0b.md\0'),
+        stderr: '',
+        truncated: false,
+      }));
+      const { ipcMain } = setup({ rootPath: dir, git });
+      expect(await ipcMain.invoke('files:ls-files', ROOT)).toEqual({ paths: ['a.ts', 'b.md'], truncated: false });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

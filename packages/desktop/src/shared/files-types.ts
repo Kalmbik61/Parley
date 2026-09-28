@@ -67,6 +67,15 @@ export interface GrepHit {
   ranges: [number, number][];
 }
 
+/**
+ * Ответ `lsFiles` (⌘P): `truncated` — список неполон: обход не-git корня упёрся в предел 50 000,
+ * в бюджет времени или отменён. Окно тогда говорит, что показано не всё (7.4).
+ */
+export interface FileList {
+  paths: string[];
+  truncated: boolean;
+}
+
 /** Ответ поиска: `truncated` — упёрся в предел, отменён или остановлен по времени. */
 export interface GrepResult {
   files: Array<{ path: string; hits: GrepHit[] }>;
