@@ -142,4 +142,57 @@ test.describe('вкладка диффа на собранном окне', () =
     expect(problems).toEqual([]);
     expect(await window.evaluate(() => (globalThis as unknown as { __cspViolations: string[] }).__cspViolations)).toEqual([]);
   });
+
+  test('fix-live D3: 800×500 — панель вкладки диффа переносится, а не прокручивается; ни одна кнопка не обрезана', async () => {
+    test.setTimeout(90_000);
+    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const electronApp = await electron.launch({ args: [mainEntry], env });
+    app = electronApp;
+    const window = await electronApp.firstWindow();
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 1400, height: 900 }));
+    await expect(window.getByTestId('landing')).toBeVisible();
+
+    const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: 'e2e-diff', goal: '' });
+    await call(window, 'sessions.create', { projectPath: project, workId, provider: 'claude', label: 'diff', task: '', parent: null });
+    const sidebar = window.getByTestId('right-sidebar');
+    await expect(sidebar).toBeVisible();
+    await sidebar.getByRole('tab', { name: 'Changes' }).click();
+    await sidebar.getByRole('combobox', { name: 'Session' }).click();
+    await window.getByRole('option', { name: /diff/ }).click();
+    await sidebar.getByRole('button', { name: /a\.ts/ }).first().click();
+
+    const tab = window.getByTestId('diff-tab');
+    await expect(tab.locator('.monaco-diff-editor')).toHaveCount(1);
+    // Вкладка открыта — сжимаем окно, как приёмка: 800×500, правый сайдбар остаётся.
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 800, height: 500 }));
+    await expect.poll(() => window.evaluate(() => window.innerWidth)).toBe(800);
+    // Узкая область, как у приёмки (450–520 px): все кнопки в одну строку не входят.
+    expect((await tab.boundingBox())?.width ?? Infinity).toBeLessThan(560);
+    // Панель — родитель группы «Inline / Side by side».
+    const toolbar = tab.getByRole('radio', { name: 'Inline' }).locator('xpath=../..');
+    const buttons = [
+      tab.getByRole('radio', { name: 'Inline' }),
+      tab.getByRole('radio', { name: 'Side by side' }),
+      tab.getByRole('button', { name: 'Collapse all' }),
+      tab.getByRole('button', { name: 'Expand all' }),
+      tab.getByRole('button', { name: 'Wrap lines' }),
+      tab.getByRole('button', { name: /^Send all unsent/ }),
+      tab.getByRole('button', { name: 'Choose recipient' }),
+      tab.getByRole('radio', { name: 'List' }),
+      tab.getByRole('radio', { name: 'Tree' }),
+    ];
+    const bar = await toolbar.boundingBox();
+    if (bar === null) throw new Error('нет панели');
+    for (const button of buttons) {
+      const box = await button.boundingBox();
+      if (box === null) throw new Error(`нет кнопки ${String(button)}`);
+      const inside = box.x >= bar.x - 0.5 && box.y >= bar.y - 0.5 && box.x + box.width <= bar.x + bar.width + 0.5 && box.y + box.height <= bar.y + bar.height + 0.5;
+      expect(inside, `${String(button)} ${JSON.stringify(box)} вне ${JSON.stringify(bar)}`).toBe(true);
+    }
+    // Прокрутки нет: всё видно без неё.
+    expect(await toolbar.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+    // List / Tree прижаты вправо и на второй строке.
+    const tree = await buttons[8]?.boundingBox();
+    expect(bar.x + bar.width - ((tree?.x ?? 0) + (tree?.width ?? 0))).toBeLessThan(16);
+  });
 });

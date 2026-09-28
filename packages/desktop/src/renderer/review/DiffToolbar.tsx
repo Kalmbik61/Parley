@@ -27,12 +27,16 @@ export interface DiffToolbarProps {
   sendAll?: { entry: WorkEntry; defaultSessionId: string; disabled: boolean; onSend(sessionId: string): void } | null;
 }
 
-// Без переноса: «Side by side» на узкой панели ломался в три строки; панель прокручивается.
+// Без переноса внутри кнопки: «Side by side» на узкой панели ломался в три строки. Переносится
+// панель целиком — кнопками на вторую строку.
 const ITEM = 'h-6 whitespace-nowrap px-2 text-xs';
 
 export function DiffToolbar(props: DiffToolbarProps): JSX.Element {
   return (
-    <div className="flex h-9 min-w-0 shrink-0 items-center gap-2 overflow-x-auto border-b border-border px-2">
+    // Раунд fix-live, D3: на 800 px панель прокручивалась, и «Send all unsent ▾» и List / Tree
+    // прятались за краем без признака. Теперь кнопки переносятся на вторую строку, высота — от
+    // содержимого; List / Tree остаются справа (`ml-auto`) и там.
+    <div className="flex min-h-9 min-w-0 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-2 py-1">
       <ToggleGroup
         type="single"
         size="sm"
@@ -64,7 +68,7 @@ export function DiffToolbar(props: DiffToolbarProps): JSX.Element {
         {S.changes.wrapLines}
       </Button>
       {props.sendAll === undefined || props.sendAll === null ? null : (
-        // Не сжимается: узкая панель прокручивается (`overflow-x-auto`), а не наезжает на «List».
+        // Не сжимается: на узкой панели кнопка уезжает на следующую строку целиком, а не обрезается.
         <div className="shrink-0">
           <SendMenu
             entry={props.sendAll.entry}
