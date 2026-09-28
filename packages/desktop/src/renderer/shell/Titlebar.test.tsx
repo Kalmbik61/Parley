@@ -6,6 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { toast } from 'sonner';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
@@ -14,6 +15,8 @@ import { emptyLayout, focusTab, openTab } from '../layout/tree.js';
 import { usePaletteStore } from '../palette/store.js';
 import { useUiStore } from '../store/ui.js';
 import { Titlebar } from './Titlebar.js';
+
+vi.mock('sonner', () => ({ toast: vi.fn() }));
 
 let bridge: FakeBridge;
 
@@ -91,6 +94,23 @@ describe('Titlebar (тест 7)', () => {
     expect(saveUiSpy).toHaveBeenLastCalledWith({ rightSidebar: { ...DEFAULT_UI.rightSidebar, open: false } });
     fireEvent.click(button());
     expect(useUiStore.getState().ui.rightSidebar.open).toBe(true);
+  });
+
+  it('«правый сайдбар» без места рядом с центром (800 px, левый открыт) — тост, open не меняется (раунд main-r2)', () => {
+    const width = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 800 });
+    try {
+      render(<Titlebar bridge={bridge} />);
+      act(() => {
+        useLayoutStore.getState().hydrate('w-01', emptyLayout());
+        useLayoutStore.getState().setActiveWork('w-01');
+      });
+      fireEvent.click(screen.getByLabelText('Right sidebar'));
+      expect(vi.mocked(toast)).toHaveBeenCalledWith('Not enough room for the right sidebar');
+      expect(useUiStore.getState().ui.rightSidebar.open).toBe(true);
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+    }
   });
 
   it('двойной клик по пустому месту заголовка зовёт app.titlebarDoubleClick', () => {

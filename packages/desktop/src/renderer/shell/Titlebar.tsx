@@ -12,12 +12,14 @@
  */
 
 import { ArrowLeft, ArrowRight, PanelLeft, PanelRight, Search } from 'lucide-react';
+import { toast } from 'sonner';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
 import { usePaletteStore } from '../palette/store.js';
 import { useUiStore } from '../store/ui.js';
 import { Button } from '../ui/button.js';
+import { rightSidebarHasRoom } from './RightSidebar.js';
 
 export interface TitlebarProps {
   bridge: HarnasBridge;
@@ -95,7 +97,11 @@ export function Titlebar({ bridge }: TitlebarProps): JSX.Element {
           aria-label={S.titlebar.rightSidebar}
           aria-pressed={hasActiveWork && rightOpen}
           disabled={!hasActiveWork}
-          onClick={() => setSidebar('right', { open: !rightOpen })}
+          onClick={() => {
+            // Нет места рядом с центром — тост, как у ⌘L (раунд main-r2, п. 7).
+            if (!rightSidebarHasRoom()) toast(S.errors.noRoomForRightSidebar);
+            else setSidebar('right', { open: !rightOpen });
+          }}
         >
           <PanelRight className="size-3.5" />
         </Button>

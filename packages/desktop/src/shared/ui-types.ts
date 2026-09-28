@@ -46,6 +46,18 @@ export const LEFT_SIDEBAR = { min: 220, max: 500, initial: 280 } as const;
  */
 export const RIGHT_SIDEBAR = { min: 220, initial: 350, reserveCenter: 320 } as const;
 
+/**
+ * Ширина правого сайдбара в окне (раунд main-r2, п. 7): центру остаётся не меньше
+ * `reserveCenter` — предел «окно − левый сайдбар − reserveCenter», сохранённая ширина
+ * ужимается до него. Не влезает и `min` — `null`: сайдбар скрыт на время, сохранённое
+ * `open` не трогается, при расширении окна он вернётся. `leftWidth` — 0, если левый закрыт.
+ */
+export function fitRightSidebar(saved: number, windowWidth: number, leftWidth: number): { width: number; max: number } | null {
+  const max = windowWidth - leftWidth - RIGHT_SIDEBAR.reserveCenter;
+  if (max < RIGHT_SIDEBAR.min) return null;
+  return { width: Math.min(Math.max(saved, RIGHT_SIDEBAR.min), max), max };
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 

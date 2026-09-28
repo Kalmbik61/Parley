@@ -59,7 +59,7 @@ import type { ActionId } from '../../shared/keybindings.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, noticeText, S } from '../../shared/strings.js';
-import { LEFT_SIDEBAR } from '../../shared/ui-types.js';
+import { fitRightSidebar, LEFT_SIDEBAR } from '../../shared/ui-types.js';
 import { applyFocusTarget, buildFocusTargetDeps } from '../attention/focus-target.js';
 import { openNextAttention } from '../attention/next.js';
 import { useAttentionTotals } from '../attention/store.js';
@@ -103,7 +103,7 @@ import { orderedWorks, useWorksStore } from '../store/works.js';
 import { ErrorBoundary } from './ErrorBoundary.js';
 import { Landing } from './Landing.js';
 import { Resizer } from './Resizer.js';
-import { RightSidebar } from './RightSidebar.js';
+import { RightSidebar, rightSidebarHasRoom, useWindowWidth } from './RightSidebar.js';
 import { StatusBar } from './StatusBar.js';
 import { Titlebar } from './Titlebar.js';
 
@@ -265,6 +265,8 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
 
 
   const ui = useUiStore((state) => state.ui);
+  // Правый сайдбар не оставляет центру меньше reserveCenter; не влезает — скрыт на время (раунд main-r2).
+  const rightFit = fitRightSidebar(ui.rightSidebar.width, useWindowWidth(), ui.leftSidebar.open ? ui.leftSidebar.width : 0);
   const setSidebar = useUiStore((state) => state.setSidebar);
   const newWork = useUiStore((state) => state.dialogs.newWork);
   const openNewWorkDialog = useUiStore((state) => state.openNewWorkDialog);
@@ -395,9 +397,20 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     ui: {
       toggleSidebar: (side) => {
         const current = useUiStore.getState().ui;
+        // Правому нет места рядом с центром — тост, а не переключение невидимого сайдбара.
+        if (side === 'right' && !rightSidebarHasRoom()) {
+          toast(S.errors.noRoomForRightSidebar);
+          return;
+        }
         setSidebar(side, { open: !(side === 'left' ? current.leftSidebar : current.rightSidebar).open });
       },
-      showRightTab: (tab) => setSidebar('right', { open: true, tab }),
+      showRightTab: (tab) => {
+        if (!rightSidebarHasRoom()) {
+          toast(S.errors.noRoomForRightSidebar);
+          return;
+        }
+        setSidebar('right', { open: true, tab });
+      },
       openNewWork: (title) => openNewWorkDialog(null, title),
       openNewSession: () => {
         // Родитель — выбранная сессия, как у ⌘T в `App.tsx`.
@@ -568,9 +581,9 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
             </div>
           </ErrorBoundary>
           {/* Правый сайдбар — только при активной работе (кусок 7.2); свёрнутый не монтируется. */}
-          {activeWorkKey !== null && ui.rightSidebar.open ? (
+          {activeWorkKey !== null && ui.rightSidebar.open && rightFit !== null ? (
             <ErrorBoundary title={S.shell.rightSidebarError}>
-              <RightSidebar bridge={bridge} workKey={activeWorkKey} />
+              <RightSidebar bridge={bridge} workKey={activeWorkKey} width={rightFit.width} max={rightFit.max} />
             </ErrorBoundary>
           ) : null}
         </div>

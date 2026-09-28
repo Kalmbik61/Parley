@@ -506,6 +506,8 @@ export const S = {
     noWorktree: 'This session has no worktree of its own',
     /** Действие работы (⌘T, ⌘W, разделение…) без активной работы — тост (кусок 6.3). */
     noActiveWorkspace: 'No active workspace',
+    /** ⌘L, ⌘⇧E или кнопка заголовка, когда правому сайдбару нет места рядом с центром (раунд main-r2). */
+    noRoomForRightSidebar: 'Not enough room for the right sidebar',
   },
 
   /**

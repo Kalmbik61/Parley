@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_UI, LEFT_SIDEBAR, normalizeUi, RIGHT_SIDEBAR } from './ui-types.js';
+import { DEFAULT_UI, fitRightSidebar, LEFT_SIDEBAR, normalizeUi, RIGHT_SIDEBAR } from './ui-types.js';
 
 describe('normalizeUi', () => {
   it('пустой объект → DEFAULT_UI', () => {
@@ -58,3 +58,23 @@ describe('normalizeUi', () => {
 interface UiFileWithMystery {
   mystery?: unknown;
 }
+
+// Раунд main-r2, п. 7 (ревью 7.2-A, Important 3): центр — не меньше reserveCenter.
+describe('fitRightSidebar', () => {
+  it('влезает — сохранённая ширина, предел — окно − левый − reserveCenter', () => {
+    expect(fitRightSidebar(350, 1400, 280)).toEqual({ width: 350, max: 800 });
+  });
+
+  it('не влезает сохранённая — ужимается до предела, но не ниже min', () => {
+    expect(fitRightSidebar(500, 900, 280)).toEqual({ width: 300, max: 300 });
+    expect(fitRightSidebar(350, 820, 280)).toEqual({ width: 220, max: 220 });
+  });
+
+  it('не влезает и min — null (скрыт на время): 800 px, левый 280', () => {
+    expect(fitRightSidebar(350, 800, 280)).toBeNull();
+  });
+
+  it('левый закрыт (0) — место есть и на 800 px', () => {
+    expect(fitRightSidebar(350, 800, 0)).toEqual({ width: 350, max: 480 });
+  });
+});

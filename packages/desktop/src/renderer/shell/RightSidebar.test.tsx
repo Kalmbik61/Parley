@@ -5,6 +5,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkEntry } from '@harnas/core';
 import type { DirEntry, FileRoot, TextFile } from '../../shared/files-types.js';
@@ -154,6 +155,52 @@ describe('RightSidebar (тест 9)', () => {
     expect(screen.getByTestId('landing')).toBeTruthy();
     expect(sidebar()).toBeNull();
     expect((screen.getByLabelText('Right sidebar') as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+// Раунд main-r2, п. 7 (ревью 7.2-A, Important 3): окно 800 px с обоими сайдбарами оставляло
+// центру ~170 px. Правый не оставляет центру меньше reserveCenter; не влезает — скрыт на время.
+describe('правый сайдбар и ширина окна (раунд main-r2, п. 7)', () => {
+  function resizeWindow(width: number): void {
+    act(() => {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+      window.dispatchEvent(new Event('resize'));
+    });
+  }
+
+  afterEach(() => resizeWindow(1024));
+
+  it('800 px, левый 280 — правый скрыт, open в ui.json прежний; окно шире — вернулся', async () => {
+    resizeWindow(800);
+    await renderShell([ENTRY]);
+    expect(sidebar()).toBeNull();
+    expect(useUiStore.getState().ui.rightSidebar.open).toBe(true);
+
+    resizeWindow(1400);
+    expect(sidebar()).not.toBeNull();
+    expect(sidebar()?.style.width).toBe('350px');
+  });
+
+  it('ширина ужимается до места: 900 px, сохранено 500 — показано 300', async () => {
+    useUiStore.setState({ ui: { ...DEFAULT_UI, rightSidebar: { open: true, width: 500, tab: 'files' } } });
+    resizeWindow(900);
+    await renderShell([ENTRY]);
+    expect(sidebar()?.style.width).toBe('300px');
+    expect(useUiStore.getState().ui.rightSidebar.width).toBe(500);
+  });
+
+  it('⌘L и ⌘⇧E без места — тост, open не меняется', async () => {
+    vi.mocked(toast).mockClear();
+    useUiStore.setState({ ui: { ...DEFAULT_UI, rightSidebar: { open: false, width: 350, tab: 'files' } } });
+    resizeWindow(800);
+    await renderShell([ENTRY]);
+    act(() => press('l'));
+    expect(vi.mocked(toast)).toHaveBeenCalledWith('Not enough room for the right sidebar');
+    expect(useUiStore.getState().ui.rightSidebar.open).toBe(false);
+    act(() => press('e', true));
+    expect(vi.mocked(toast)).toHaveBeenCalledTimes(2);
+    expect(useUiStore.getState().ui.rightSidebar.open).toBe(false);
+    expect(sidebar()).toBeNull();
   });
 });
 

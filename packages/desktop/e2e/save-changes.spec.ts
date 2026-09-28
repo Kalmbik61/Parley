@@ -77,6 +77,9 @@ test.describe('несохранённые правки при закрытии �
     await expect(window.getByTestId('landing')).toBeVisible();
 
     await call(window, 'works.create', { projectPath: project, title: 'save-changes', goal: '' });
+    // 800 px: рядом с левым сайдбаром правому нет места (раунд main-r2, п. 7) — левый прячем.
+    await expect(window.getByTestId('app-shell')).toBeVisible();
+    await window.keyboard.press('Meta+B');
     const sidebar = window.getByTestId('right-sidebar');
     await sidebar.locator(`[data-tree-path="${LONG_FILE}"]`).click();
     const editor = window.getByTestId('file-text');

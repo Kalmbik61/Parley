@@ -90,6 +90,11 @@ for (const size of [
       await expect(window.getByTestId('landing')).toBeVisible();
 
       await call(window, 'works.create', { projectPath: project, title: LONG_TITLE, goal: '' });
+      // 800 px: рядом с левым сайдбаром правому нет места (раунд main-r2, п. 7) — левый прячем.
+      if (size.width < 1000) {
+        await expect(window.getByTestId('app-shell')).toBeVisible();
+        await window.keyboard.press('Meta+B');
+      }
       const sidebar = window.getByTestId('right-sidebar');
       await expect(sidebar).toBeVisible();
       await expect(sidebar.getByRole('tab', { name: 'Files' })).toBeVisible();
@@ -114,3 +119,56 @@ for (const size of [
     });
   });
 }
+
+/** Ширина центра — видимого контейнера активной работы. */
+async function centerWidth(window: Page): Promise<number> {
+  return window.evaluate(() => {
+    const shown = [...document.querySelectorAll<HTMLElement>('[data-work-container]')].find((el) => el.style.visibility !== 'hidden');
+    return shown?.getBoundingClientRect().width ?? 0;
+  });
+}
+
+// Раунд main-r2, п. 7 (ревью 7.2-A, Important 3): оба сайдбара по умолчанию на 800 px оставляли
+// центру ~170 px. Правый не оставляет центру меньше reserveCenter; не влезает — скрыт на время.
+test.describe('правый сайдбар не отнимает центр, окно 800x500', () => {
+  let home: string;
+  let project: string;
+  let app: ElectronApplication | null = null;
+
+  test.beforeEach(async () => {
+    home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-files-sidebar-'));
+    project = await makeTempProject('files-sidebar-center');
+  });
+
+  test.afterEach(async () => {
+    await app?.close().catch(() => {});
+    app = null;
+    await stopHost(home);
+    await rm(home, { recursive: true, force: true });
+    await rm(project, { recursive: true, force: true });
+  });
+
+  test('центр ≥ 240 px, правый скрыт на время; ⌘L — тост; окно шире — сайдбар вернулся', async () => {
+    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const electronApp = await electron.launch({ args: [mainEntry], env });
+    app = electronApp;
+    const window = await electronApp.firstWindow();
+    const setSize = (width: number, height: number): Promise<unknown> =>
+      electronApp.evaluate(({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, ...bounds }), { width, height });
+    await setSize(800, 500);
+    await expect(window.getByTestId('landing')).toBeVisible();
+
+    await call(window, 'works.create', { projectPath: project, title: LONG_TITLE, goal: '' });
+    await expect(window.getByTestId('app-shell')).toBeVisible();
+    await expect.poll(() => centerWidth(window)).toBeGreaterThanOrEqual(240);
+    await expect(window.getByTestId('right-sidebar')).toHaveCount(0);
+
+    await window.keyboard.press('Meta+L');
+    await expect(window.getByText('Not enough room for the right sidebar')).toBeVisible();
+    await expect(window.getByTestId('right-sidebar')).toHaveCount(0);
+
+    await setSize(1400, 900);
+    await expect(window.getByTestId('right-sidebar')).toBeVisible();
+    expect(await centerWidth(window)).toBeGreaterThanOrEqual(320);
+  });
+});

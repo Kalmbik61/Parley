@@ -1,6 +1,7 @@
 /**
  * Правый сайдбар (кусок 7.2, спека 5.1, 10.1): есть только при активной работе, ширина —
- * `ui.rightSidebar` зеркала в пределах 220 … окно − 320, тот же `Resizer`, что у левого; в
+ * `ui.rightSidebar` зеркала в пределах 220 … окно − левый − 320 (`fitRightSidebar`, раунд
+ * main-r2: не влезает — `AppShell` его не показывает), тот же `Resizer`, что у левого; в
  * `ui.json` ширина уходит на `pointerup`. Сверху — полоса вкладок: «Files» (⌘⇧E); «Changes»
  * появится в 8.2, а `tab: 'changes'` из `ui.json` до неё показывает «Files».
  *
@@ -11,15 +12,15 @@
 import { useEffect, useRef, useState } from 'react';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
-import { RIGHT_SIDEBAR } from '../../shared/ui-types.js';
+import { fitRightSidebar, RIGHT_SIDEBAR } from '../../shared/ui-types.js';
 import { FilesPanel } from '../files/FilesPanel.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
-import { clampWidth, Resizer } from './Resizer.js';
+import { Resizer } from './Resizer.js';
 
 /** Ширина окна — для верхнего предела сайдбара; `normalizeUi` её не знает (`RIGHT_SIDEBAR`). */
-function useWindowWidth(): number {
+export function useWindowWidth(): number {
   const [width, setWidth] = useState(() => window.innerWidth);
   useEffect(() => {
     const onResize = (): void => setWidth(window.innerWidth);
@@ -29,20 +30,25 @@ function useWindowWidth(): number {
   return width;
 }
 
+/** Место для правого сайдбара сейчас — для ⌘L, ⌘⇧E и кнопки заголовка: без него — тост. */
+export function rightSidebarHasRoom(): boolean {
+  const { ui } = useUiStore.getState();
+  return fitRightSidebar(ui.rightSidebar.width, window.innerWidth, ui.leftSidebar.open ? ui.leftSidebar.width : 0) !== null;
+}
+
 export interface RightSidebarProps {
   bridge: HarnasBridge;
   /** Активная работа; без неё `AppShell` сайдбар не рисует. */
   workKey: string;
+  /** Показанная ширина и её верхний предел — `fitRightSidebar` в `AppShell`. */
+  width: number;
+  max: number;
 }
 
-export function RightSidebar({ bridge, workKey }: RightSidebarProps): JSX.Element {
-  const width = useUiStore((state) => state.ui.rightSidebar.width);
+export function RightSidebar({ bridge, workKey, width: shown, max }: RightSidebarProps): JSX.Element {
   const setSidebar = useUiStore((state) => state.setSidebar);
   const entry = useWorksStore((state) => state.entries.find((item) => workKeyOf(item.projectPath, item.map.work.id) === workKey));
   const ref = useRef<HTMLDivElement>(null);
-  // Верхний предел — окно минус центр; окно уже нижнего предела — держим нижний.
-  const max = Math.max(RIGHT_SIDEBAR.min, useWindowWidth() - RIGHT_SIDEBAR.reserveCenter);
-  const shown = clampWidth(width, RIGHT_SIDEBAR.min, max);
 
   return (
     <>
