@@ -568,6 +568,33 @@ describe('worktree (план, кусок 4.2)', () => {
     await service.stop(ref);
   });
 
+  it('1б: sessions.create({ worktree: true }) — бриф на диске называет ветку и базу worktree (fix-guide, п. 3)', async () => {
+    // Бриф пишется при создании записи, а план worktree — следом: без
+    // перезаписи агент получил бы бриф без строки о своей ветке.
+    await initGitProject(project);
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    setEnv('HARNAS_WORKTREE_ROOT', await tempWorktreeRoot());
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'сделай штуку',
+      parent: null,
+      worktree: true,
+    });
+
+    const map = await readMap(project, work.work.id);
+    const worktree = map.sessions.find((candidate) => candidate.id === ref.sessionId)?.worktree;
+    const brief = await readFile(path.join(workPaths(project, work.work.id).briefs, `${ref.sessionId}.md`), 'utf8');
+    expect(brief).toContain(`Worktree: ветка \`${worktree?.branch}\` от базы \`${worktree?.base}\``);
+
+    await service.stop(ref);
+  });
+
   it('2: дочерняя сессия со своим worktree, поднятая autoLaunch, — каталог заведён до запуска стаба', async () => {
     // Тест «autoLaunch: false в настройках» выше по файлу пишет флаг в общий
     // для процесса `config.json` (сандбокс-дом один на файл) и не возвращает
