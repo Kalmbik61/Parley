@@ -32,7 +32,8 @@ async function call<T>(window: Page, method: string, params: unknown): Promise<T
 type SessionRef = { projectPath: string; workId: string; sessionId: string };
 
 async function hostPid(home: string): Promise<number> {
-  return Number((await readFile(path.join(home, 'host', 'host.pid'), 'utf8')).trim());
+  // Первая строка замка — pid, вторая — время старта процесса (раунд lane-r5).
+  return Number((await readFile(path.join(home, 'host', 'host.pid'), 'utf8')).split('\n')[0]);
 }
 
 /**

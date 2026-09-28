@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, chmod, link, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { uptime } from 'node:os';
-import { harnasHome } from '@harnas/core';
+import { harnasHome, processStartedAt, START_TOLERANCE_MS } from '@harnas/core';
 import { createHostContext } from './context.js';
 import type { HostContext } from './context.js';
 import { createHostServer } from './server.js';
@@ -312,19 +312,20 @@ async function socketIsAlive(socketPath: string): Promise<boolean> {
 }
 
 /**
- * Замок единственности хоста — файл `host.pid` с pid держателя (раунд lane-r4). Создаётся ссылкой на
- * уже записанный временный файл: `link` атомарен и падает на существующем, так что читатель никогда
- * не видит пустой замок и не примет его за осколок. true — замок наш.
+ * Замок единственности хоста — файл `host.pid` (раунд lane-r4): первая строка — pid держателя,
+ * вторая — время старта его процесса по ОС (раунд lane-r5; пусто, если ОС его не сообщила).
+ * Создаётся ссылкой на уже записанный временный файл: `link` атомарен и падает на существующем,
+ * так что читатель никогда не видит пустой замок и не примет его за осколок. true — замок наш.
  *
- * Занят: pid жив — отказ, ничего не удаляется. pid мёртв, не читается или замок старше загрузки
- * системы (pid мог достаться другому процессу) — осколок: переименовывается в свой файл, и если
- * в нём оказался не тот pid, что проверяли (соседний старт успел снять осколок и взять замок),
- * замок возвращается на место — чужой живой замок не удаляется.
+ * Занят живым держателем — отказ, ничего не удаляется (что считается живым — `isStaleLock`).
+ * Осколок переименовывается в свой файл, и если в нём оказался не тот текст, что проверяли
+ * (соседний старт успел снять осколок и взять замок), замок возвращается на место — чужой
+ * живой замок не удаляется.
  */
 async function acquirePidLock(lockPath: string): Promise<boolean> {
   const own = String(process.pid);
   const temp = `${lockPath}.${own}.${randomBytes(4).toString('hex')}`;
-  await writeFile(temp, own, { mode: 0o600 });
+  await writeFile(temp, `${own}\n${(await processStartedAt(process.pid)) ?? ''}\n`, { mode: 0o600 });
   await chmod(temp, 0o600);
   try {
     // Два круга: осколок снят — повтор; второй занятый круг значит соседа, успевшего раньше.
@@ -337,7 +338,7 @@ async function acquirePidLock(lockPath: string): Promise<boolean> {
       }
       const held = await readLock(lockPath);
       if (held === null) continue; // замок сняли между link и чтением
-      if (!isStaleLock(held)) return false;
+      if (!(await isStaleLock(held))) return false;
       const stale = `${lockPath}.stale.${own}`;
       try {
         await rename(lockPath, stale);
@@ -370,12 +371,31 @@ async function readLock(lockPath: string): Promise<{ text: string; mtimeMs: numb
   }
 }
 
-function isStaleLock(lock: { text: string; mtimeMs: number }): boolean {
-  const pid = Number(lock.text.trim());
+/** pid и записанное время старта из текста замка; прежний формат (только pid) — время `null`. */
+function parseLock(text: string): { pid: number; startedAt: string | null } {
+  const [pidLine = '', startedLine = ''] = text.split('\n');
+  const startedAt = startedLine.trim();
+  return { pid: Number(pidLine.trim()), startedAt: startedAt === '' ? null : startedAt };
+}
+
+/**
+ * Осколок: pid не число или мёртв; замок записан до загрузки системы; или pid жив, но время старта
+ * его процесса не совпадает с записанным (раунд lane-r5) — хост упал, а pid до следующего старта
+ * достался чужому процессу. Сверка — как у аренды работы (`hostLeaseActive` в core): допуск
+ * START_TOLERANCE_MS; время неизвестно (замок прежнего формата или ОС не ответила) — прежнее правило,
+ * живой pid держит замок: без второго признака чужой процесс не отличить, а снять живой замок хуже.
+ */
+async function isStaleLock(lock: { text: string; mtimeMs: number }): Promise<boolean> {
+  const { pid, startedAt } = parseLock(lock.text);
   if (!Number.isInteger(pid) || pid <= 0) return true;
   // Записан до загрузки системы: держатель мёртв, даже если его pid достался другому процессу.
   if (lock.mtimeMs < Date.now() - uptime() * 1000) return true;
-  return !pidAlive(pid);
+  if (!pidAlive(pid)) return true;
+  if (startedAt === null) return false;
+  const actual = await processStartedAt(pid);
+  if (actual === null) return false;
+  const diff = Math.abs(Date.parse(actual) - Date.parse(startedAt));
+  return !Number.isNaN(diff) && diff > START_TOLERANCE_MS;
 }
 
 function pidAlive(pid: number): boolean {
@@ -391,7 +411,7 @@ function pidAlive(pid: number): boolean {
 /** Снимает замок, только если он наш: чужой (новый хост уже взял) не трогается. */
 async function releasePidLock(lockPath: string): Promise<void> {
   const held = await readLock(lockPath).catch(() => null);
-  if (held !== null && held.text.trim() === String(process.pid)) await rm(lockPath, { force: true });
+  if (held !== null && parseLock(held.text).pid === process.pid) await rm(lockPath, { force: true });
 }
 
 /** Возвращает `HARNAS_HOME` к тому, чем оно было до `startHost` (см. там же). */

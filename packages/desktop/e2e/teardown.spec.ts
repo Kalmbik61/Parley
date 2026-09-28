@@ -33,7 +33,8 @@ function isAlive(pid: number): boolean {
 async function hostPid(home: string): Promise<number> {
   const file = path.join(home, 'host', 'host.pid');
   await expect.poll(() => existsSync(file)).toBe(true);
-  return Number((await readFile(file, 'utf8')).trim());
+  // Первая строка замка — pid, вторая — время старта процесса (раунд lane-r5).
+  return Number((await readFile(file, 'utf8')).split('\n')[0]);
 }
 
 test.describe('уборка E2E: хост теста не переживает его падение', () => {

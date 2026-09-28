@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../test/helpers.js';
+import { processStartedAt } from '@harnas/core';
 import { HostAlreadyRunning, SocketPathTooLong, startHost } from './host.js';
 import type { RunningHost } from './host.js';
 import { hostPaths } from './paths.js';
@@ -46,7 +47,7 @@ describe('startHost', () => {
     const tokenStat = await stat(paths.token);
     expect(tokenStat.mode & 0o777).toBe(0o600);
     const pid = await readFile(paths.pid, 'utf8');
-    expect(pid).toBe(String(process.pid));
+    expect(lockPid(pid)).toBe(process.pid);
   });
 
   it('второй startHost с тем же домом — HostAlreadyRunning, первый продолжает отвечать', async () => {
@@ -101,7 +102,7 @@ describe('startHost', () => {
     const response = await hello(client, token);
     expect(response.result).toMatchObject({ protocol: 1 });
     client.close();
-    expect(await readFile(paths.pid, 'utf8')).toBe(String(process.pid));
+    expect(lockPid(await readFile(paths.pid, 'utf8'))).toBe(process.pid);
   });
 
   it('замок живого pid без сокета (медленный старт первого) — HostAlreadyRunning, ничего не удалено (lane-r4, п. 2)', async () => {
@@ -126,7 +127,7 @@ describe('startHost', () => {
 
     const running = await startHost({ home });
     hosts.push(running);
-    expect(await readFile(paths.pid, 'utf8')).toBe(String(process.pid));
+    expect(lockPid(await readFile(paths.pid, 'utf8'))).toBe(process.pid);
   });
 
   it('замок, записанный до перезагрузки системы, — осколок, даже если pid снова занят (lane-r4, п. 2)', async () => {
@@ -139,7 +140,41 @@ describe('startHost', () => {
 
     const running = await startHost({ home });
     hosts.push(running);
-    expect(await readFile(paths.pid, 'utf8')).toBe(String(process.pid));
+    expect(lockPid(await readFile(paths.pid, 'utf8'))).toBe(process.pid);
+  });
+
+  it('замок живого pid с другим временем старта — осколок (pid занял чужой процесс), старт проходит (lane-r5, п. 3)', async () => {
+    const home = await tempTrackedHome();
+    const paths = hostPaths(home);
+    await mkdir(paths.dir, { recursive: true, mode: 0o700 });
+    // Хост упал по SIGKILL, его pid до следующего старта достался другому процессу (здесь — живой
+    // родитель тестов): pid жив, но время старта не то, что записал хост.
+    await writeFile(paths.pid, `${process.ppid}\n2000-01-01T00:00:00.000Z\n`);
+
+    const running = await startHost({ home });
+    hosts.push(running);
+    expect(lockPid(await readFile(paths.pid, 'utf8'))).toBe(process.pid);
+  });
+
+  it('замок живого pid со своим временем старта — HostAlreadyRunning, замок не тронут (lane-r5, п. 3)', async () => {
+    const home = await tempTrackedHome();
+    const paths = hostPaths(home);
+    await mkdir(paths.dir, { recursive: true, mode: 0o700 });
+    const started = await processStartedAt(process.ppid);
+    const lock = `${process.ppid}\n${started ?? ''}\n`;
+    await writeFile(paths.pid, lock);
+
+    await expect(startHost({ home })).rejects.toBeInstanceOf(HostAlreadyRunning);
+    expect(await readFile(paths.pid, 'utf8')).toBe(lock);
+  });
+
+  it('замок хранит pid и время старта процесса хоста (lane-r5, п. 3)', async () => {
+    const home = await tempTrackedHome();
+    const running = await startHost({ home });
+    hosts.push(running);
+    const [pid, startedAt] = (await readFile(hostPaths(home).pid, 'utf8')).split('\n');
+    expect(pid).toBe(String(process.pid));
+    expect(startedAt).toBe((await processStartedAt(process.pid)) ?? '');
   });
 
   it('остановка снимает замок; чужой замок не трогает (lane-r4, п. 2)', async () => {
@@ -271,6 +306,9 @@ describe('битый works-index.json на старте (lane-r5, п. 1)', () =>
         expect(response.error).toMatchObject({ code: 'internal', data: { reason: 'works-unreadable' } });
         client.close();
 
+        // Ответ с отказом уходит раньше, чем хост ставит обработчик SIGTERM (шаг 8): сигнал ждёт
+        // строки «хост запущен» в журнале — старт дошёл до конца и после отказа первого чтения.
+        await waitFor(async () => (await readFile(paths.log, 'utf8').catch(() => '')).includes('"msg":"хост запущен"'), 10_000);
         child.kill('SIGTERM');
         const [code] = (await once(child, 'exit')) as [number | null];
         expect(code).toBe(0);
@@ -314,7 +352,7 @@ describe('два процесса main.ts разом (lane-r4, п. 2)', () => {
         const response = await hello(client, token);
         expect(response.result).toMatchObject({ protocol: 1 });
         client.close();
-        expect(await readFile(paths.pid, 'utf8')).toBe(String(survivor?.pid));
+        expect(lockPid(await readFile(paths.pid, 'utf8'))).toBe(survivor?.pid);
       } finally {
         for (const child of children) {
           if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
@@ -324,6 +362,19 @@ describe('два процесса main.ts разом (lane-r4, п. 2)', () => {
     20_000,
   );
 });
+
+/** pid держателя замка — первая строка `host.pid` (вторая — время старта процесса, lane-r5). */
+function lockPid(text: string): number {
+  return Number(text.split('\n')[0]);
+}
+
+async function waitFor(check: () => Promise<boolean>, timeoutMs: number): Promise<void> {
+  const start = Date.now();
+  while (!(await check())) {
+    if (Date.now() - start > timeoutMs) throw new Error('условие не наступило вовремя');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
 
 async function waitForFile(file: string, timeoutMs: number): Promise<void> {
   const start = Date.now();
