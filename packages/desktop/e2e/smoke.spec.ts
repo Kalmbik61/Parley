@@ -15,14 +15,6 @@ import { makeTempHome } from './tmp.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
-// Тест поднимает настоящий хост из собранного @harnas/host — без `pnpm --filter
-// @harnas/host build` (и `pnpm --filter @harnas/desktop build`) ему нечего
-// запускать. Защитный skip — на случай свежего клона без сборки, а не на
-// случай отсутствия самого пакета.
-const hostEntry = path.resolve(dirname, '../../host/dist/main.js');
-const hostReady = existsSync(hostEntry);
-
-test.skip(!hostReady, `packages/host/dist/main.js не собран — сначала pnpm --filter @harnas/host build: ${hostEntry}`);
 
 test.describe('окно поднимает хост и переживает его перезапуск', () => {
   let home: string;

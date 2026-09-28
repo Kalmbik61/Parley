@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,13 +8,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
-// Тот же защитный skip, что в `smoke.spec.ts`: без сборки @harnas/host этому
-// тесту нечего запускать.
-const hostEntry = path.resolve(dirname, '../../host/dist/main.js');
-const hostReady = existsSync(hostEntry);
 const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
-
-test.skip(!hostReady, `packages/host/dist/main.js не собран — сначала pnpm --filter @harnas/host build: ${hostEntry}`);
 
 /**
  * `sessions.create`/`pty.attach` — методы кусков 1.6/1.7 хоста

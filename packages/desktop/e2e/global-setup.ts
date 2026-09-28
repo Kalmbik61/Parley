@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { stopHost } from './stop-host.js';
 import { RUN_HOMES_ENV } from './tmp.js';
 
@@ -11,6 +12,12 @@ import { RUN_HOMES_ENV } from './tmp.js';
  * окружение, заданное здесь.
  */
 export default async function globalSetup(): Promise<() => Promise<void>> {
+  // Без собранного хоста окну нечего поднимать: раньше каждый спек молча пропускался по
+  // test.skip, и прогон выглядел зелёным из одних пропусков (ревью M10). Теперь — отказ сразу.
+  const hostEntry = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../host/dist/main.js');
+  if (!existsSync(hostEntry)) {
+    throw new Error(`E2E окна: не собран хост ${hostEntry} — сначала pnpm --filter @harnas/host build`);
+  }
   const dir = await mkdtemp(path.join(tmpdir(), 'harnas-e2e-run-'));
   const list = path.join(dir, 'homes');
   process.env[RUN_HOMES_ENV] = list;

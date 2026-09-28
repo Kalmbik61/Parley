@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,12 +18,9 @@ import { makeTempHome, makeTempProject } from './tmp.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
-const hostEntry = path.resolve(dirname, '../../host/dist/main.js');
 const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
 /** Свой каталог проекта у каждого теста (`makeTempProject`). */
 let project = '';
-
-test.skip(!existsSync(hostEntry), `packages/host/dist/main.js не собран — сначала pnpm --filter @harnas/host build: ${hostEntry}`);
 
 interface Rect {
   x: number;

@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,13 +15,10 @@ import { makeTempHome, makeTempProject } from './tmp.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
-const hostEntry = path.resolve(dirname, '../../host/dist/main.js');
 const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
 
 /** Четыре имени по 255 байт: вкладки шире видимой строки окна 800×500. */
 const FILES = ['m', 'p', 'c', 'q'].map((letter) => `${letter.repeat(252)}.ts`);
-
-test.skip(!existsSync(hostEntry), `packages/host/dist/main.js не собран — сначала pnpm --filter @harnas/host build: ${hostEntry}`);
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(

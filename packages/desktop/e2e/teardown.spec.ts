@@ -19,8 +19,6 @@ const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
 const hostEntry = path.resolve(dirname, '../../host/dist/main.js');
 
-test.skip(!existsSync(hostEntry), `packages/host/dist/main.js не собран — сначала pnpm --filter @harnas/host build: ${hostEntry}`);
-
 function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
