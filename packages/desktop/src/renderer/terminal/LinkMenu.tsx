@@ -1,7 +1,7 @@
 /**
  * Меню ссылки терминала у курсора (кусок 5.3, спека 8.3). Путь: «Open in editor» (у файла, не
  * у каталога — кусок 7.3b), «Open in default app», «Reveal in Finder», «Copy path». Адрес:
- * «Open in browser» и «Copy link».
+ * «Open in browser» — вкладка встроенного браузера (9.2b), «Open in system browser» и «Copy link».
  *
  * Действия вынесены функциями: ⌘-клик по ссылке (`TerminalSurface`) зовёт их сразу, без
  * меню. Отказ main показывается тостом по коду, текст ошибки (`shell.openPath` на русской
@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
+import { openInBrowserTab } from '../browser/store.js';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu.js';
 import { useFilesStore } from '../files/store.js';
 import { tabId } from '../layout/ids.js';
@@ -71,7 +72,7 @@ export function isFileLink(link: Extract<TerminalLink, { kind: 'path' }>): boole
   return link.located.stat.kind === 'file';
 }
 
-/** Наружу — только http(s): провайдер других ссылок не даёт, main проверяет ещё раз. */
+/** Системный браузер — только http(s): провайдер других ссылок не даёт, main проверяет ещё раз. */
 export function openLinkUrl(bridge: HarnasBridge, url: string): void {
   bridge.app.openExternal(url).catch((error: unknown) => console.warn('[harnas] openExternal', error));
 }
@@ -100,7 +101,8 @@ export function LinkMenu({ bridge, state, onClose }: LinkMenuProps): JSX.Element
           </>
         ) : (
           <>
-            <DropdownMenuItem onSelect={() => openLinkUrl(bridge, link.url)}>{S.links.openInBrowser}</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => openInBrowserTab(link.url)}>{S.links.openInBrowser}</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => openLinkUrl(bridge, link.url)}>{S.links.openInSystemBrowser}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => copy(link.url)}>{S.links.copyLink}</DropdownMenuItem>
           </>
         )}

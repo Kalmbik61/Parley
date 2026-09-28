@@ -33,6 +33,7 @@ import { AppShell } from './AppShell.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
 import { usePaletteStore } from '../palette/store.js';
+import { useBrowserStore } from '../browser/store.js';
 import { Profiler } from 'react';
 
 // Тесты 10, 13, 14, 15 куска 2.4 зовут `toast` и из `AppShell.tsx`
@@ -1932,3 +1933,92 @@ describe('AppShell — буфер файла переживает тело (те
   });
 });
 
+describe('AppShell — страница в окне (тесты 1 и 3 куска 9.2b, window.open)', () => {
+  const PAGE = 'browser:0000d1';
+
+  afterEach(() => {
+    useBrowserStore.setState({ tabs: {}, limitToasted: {} });
+  });
+
+  /** w-01: g1 — терминал s-01 (активная группа), g2 — терминал s-02 и страница PAGE (активная в g2) с id гостя 7. */
+  async function pageInSecondGroup(): Promise<{ key: string; g1: string; g2: string }> {
+    await renderShell([
+      work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один'), session('s-02', 'два')]),
+      work('w-02', '2026-01-02', 'Вторая', [session('s-03', 'три')]),
+    ]);
+    const key = keyOf('w-01');
+    act(() => useLayoutStore.getState().setActiveWork(key));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[key]).toBe(true));
+    act(() => {
+      useLayoutStore.getState().apply(key, (layout) => openTab(layout, term('s-01')));
+      const layout = useLayoutStore.getState().layouts[key];
+      if (layout === undefined) throw new Error('нет раскладки');
+      useLayoutStore.getState().apply(key, (l) => splitGroup(l, layout.activeGroupId, 'row', term('s-02'), { [layout.activeGroupId]: { width: 800, height: 600 } }));
+      useLayoutStore.getState().apply(key, (l) => openTab(l, { kind: 'browser', id: PAGE, url: 'http://127.0.0.1:5173/' }));
+    });
+    await flush();
+    act(() => useBrowserStore.getState().update(PAGE, { webContentsId: 7 }));
+    const layout = useLayoutStore.getState().layouts[key];
+    if (layout === undefined) throw new Error('нет раскладки');
+    const [g1, g2] = groups(layout).map((group) => group.id);
+    if (g1 === undefined || g2 === undefined) throw new Error('нет групп');
+    act(() => useLayoutStore.getState().apply(key, (l) => focusTab(l, tabId.terminal('s-01'))));
+    return { key, g1, g2 };
+  }
+
+  it('тест 1: browser:focus страницы неактивной группы активной работы — её группа и вкладка активны', async () => {
+    const { key, g2 } = await pageInSecondGroup();
+    act(() => bridge.emitBrowserFocus({ webContentsId: 7 }));
+    const layout = useLayoutStore.getState().layouts[key];
+    expect(layout?.activeGroupId).toBe(g2);
+    expect(groups(layout!).find((group) => group.id === g2)?.activeTabId).toBe(PAGE);
+  });
+
+  it('тест 1: вкладка скрытой работы LRU и неактивная вкладка своей группы — раскладка не меняется', async () => {
+    const { key } = await pageInSecondGroup();
+    act(() => useLayoutStore.getState().apply(key, (l) => focusTab(l, tabId.terminal('s-02'))));
+    act(() => useLayoutStore.getState().apply(key, (l) => focusTab(l, tabId.terminal('s-01'))));
+    const hiddenInGroup = useLayoutStore.getState().layouts[key];
+    act(() => bridge.emitBrowserFocus({ webContentsId: 7 }));
+    expect(useLayoutStore.getState().layouts[key]).toBe(hiddenInGroup);
+
+    act(() => useLayoutStore.getState().apply(key, (l) => focusTab(focusTab(l, PAGE), tabId.terminal('s-01'))));
+    await activateWithTerminal(keyOf('w-02'), 's-03');
+    const before = useLayoutStore.getState().layouts[key];
+    act(() => bridge.emitBrowserFocus({ webContentsId: 7 }));
+    expect(useLayoutStore.getState().layouts[key]).toBe(before);
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
+  });
+
+  it('тест 3: пункты browser.find и browser.zoomIn — у страницы активной вкладки активной группы', async () => {
+    const { key } = await pageInSecondGroup();
+    act(() => bridge.emitMenu('browser.zoomIn'));
+    expect(bridge.browserCalls).toEqual([]);
+    act(() => bridge.emitBrowserFocus({ webContentsId: 7 }));
+    act(() => bridge.emitMenu('browser.zoomIn'));
+    act(() => bridge.emitMenu('browser.find'));
+    await flush();
+    expect(bridge.browserCalls).toEqual([{ method: 'zoom', args: [7, 1] }]);
+    expect(useBrowserStore.getState().tabs[PAGE]?.findOpen).toBe(true);
+    expect(useLayoutStore.getState().layouts[key]).toBeDefined();
+  });
+
+  it('window.open страницы — вкладка сразу за открывателем в его группе; неизвестный открыватель — ничего', async () => {
+    const { key, g1, g2 } = await pageInSecondGroup();
+    act(() => bridge.emitBrowserOpenTab({ url: 'http://127.0.0.1:5173/popup', openerWebContentsId: 7 }));
+    await flush();
+    const layout = useLayoutStore.getState().layouts[key]!;
+    const group = groups(layout).find((candidate) => candidate.id === g2)!;
+    const index = group.tabs.findIndex((tab) => tab.id === PAGE);
+    expect(group.tabs[index + 1]).toMatchObject({ kind: 'browser', url: 'http://127.0.0.1:5173/popup' });
+    // Открыватель виден (активная вкладка своей группы в активной работе): новая вкладка — активная в g2,
+    // активная группа — его группа, как в браузере.
+    expect(group.activeTabId).toBe(group.tabs[index + 1]?.id);
+    expect(layout.activeGroupId).toBe(g2);
+    expect(layout.activeGroupId).not.toBe(g1);
+
+    const before = useLayoutStore.getState().layouts[key];
+    act(() => bridge.emitBrowserOpenTab({ url: 'http://127.0.0.1:5173/x', openerWebContentsId: 99 }));
+    expect(useLayoutStore.getState().layouts[key]).toBe(before);
+  });
+});

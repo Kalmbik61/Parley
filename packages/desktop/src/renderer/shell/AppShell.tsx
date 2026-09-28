@@ -85,7 +85,8 @@ import { SurfaceLayer } from '../layout/SurfaceLayer.js';
 import { useLayoutPersistence } from '../layout/persistence.js';
 import { selectedSessionOf, useLayoutStore } from '../layout/store.js';
 import { measureGroupSizes } from '../layout/measure.js';
-import { groups, openTab } from '../layout/tree.js';
+import { findTab, focusTab, groups, openTab } from '../layout/tree.js';
+import { openBrowserTabFrom, useBrowserStore } from '../browser/store.js';
 import { focusContext } from '../keys/focus-context.js';
 import { installKeyHandler, isActionAvailable } from '../keys/handler.js';
 import { createMruCycle, type MruCycle } from '../keys/mru-cycle.js';
@@ -141,6 +142,12 @@ function openSessionTab(ref: SessionRef): void {
 /** Доступность — одна для нажатия и для `menu:action` (кусок 6.1b): методы хоста в момент действия. */
 function available(id: ActionId): boolean {
   return isActionAvailable(id, hostMethods(useHostStore.getState().status));
+}
+
+/** Вкладка браузера по id гостя (`webContentsId` из `dom-ready`, 9.2a); нет — null. */
+function browserTabOf(webContentsId: number): string | null {
+  const found = Object.entries(useBrowserStore.getState().tabs).find(([, state]) => state.webContentsId === webContentsId);
+  return found === undefined ? null : found[0];
 }
 
 /** Слои поверхностей живут у трёх последних работ (план, «Числа»). */
@@ -356,6 +363,18 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     return terminalSurfaces.get(refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: tab.sessionId }));
   };
 
+  /** Страница активной вкладки активной группы активной работы — цель ⌘F, ⌘+, ⌘−, ⌘0 из страницы (9.2b). */
+  const activeBrowserPage = (): { tabId: string; webContentsId: number } | null => {
+    const key = useLayoutStore.getState().activeWorkKey;
+    const layout = key === null ? undefined : useLayoutStore.getState().layouts[key];
+    if (layout === undefined) return null;
+    const activeGroup = groups(layout).find((group) => group.id === layout.activeGroupId);
+    const tab = activeGroup?.tabs.find((candidate) => candidate.id === activeGroup.activeTabId);
+    if (tab?.kind !== 'browser') return null;
+    const webContentsId = useBrowserStore.getState().tabs[tab.id]?.webContentsId ?? null;
+    return webContentsId === null ? null : { tabId: tab.id, webContentsId };
+  };
+
   /**
    * Поверхность с фокусом ввода в xterm. `terminal.clear` по клавише и по пункту меню — только
    * сюда: гарантия «⌘K в сайдбаре не чистит терминал» не держится на одном `triggeredByAccelerator`
@@ -438,6 +457,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     },
     attention: { next: openNextAttention },
     toast: (text) => toast(text),
+    browser: { active: activeBrowserPage },
   });
 
   /**
@@ -491,6 +511,40 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     () =>
       bridge.app.onMenu((id) => {
         if (available(id)) runRef.current(id, 'menu');
+      }),
+    [bridge],
+  );
+
+  // Клик в страницу DOM окна не видит (9.2b, спека 7.2): группу делает активной фокус гостя из main.
+  // Только вкладке активной работы, которая видна в своей группе: скрытую вкладку человек кликнуть
+  // не мог, а вкладку скрытой работы LRU событие не трогает.
+  useEffect(
+    () =>
+      bridge.browser.onFocus(({ webContentsId }) => {
+        const id = browserTabOf(webContentsId);
+        const state = useLayoutStore.getState();
+        const key = state.activeWorkKey;
+        const layout = key === null ? undefined : state.layouts[key];
+        const found = id === null || layout === undefined ? null : findTab(layout, id);
+        if (key === null || id === null || found === null || found.group.activeTabId !== id) return;
+        if (layout?.activeGroupId === found.group.id) return;
+        state.apply(key, (l) => focusTab(l, id));
+      }),
+    [bridge],
+  );
+
+  // window.open страницы (9.2b, спека 12.2): вкладка — рядом с открывателем, в его работе и группе.
+  useEffect(
+    () =>
+      bridge.browser.onOpenTab((event) => {
+        const state = useLayoutStore.getState();
+        openBrowserTabFrom(event, {
+          apply: state.apply,
+          layouts: state.layouts,
+          activeWorkKey: state.activeWorkKey,
+          tabIdOf: browserTabOf,
+          toast: (text) => toast(text),
+        });
       }),
     [bridge],
   );
@@ -655,6 +709,10 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
       <SidebarSectionsWriter />
       <LayoutPersistence bridge={bridge} />
       {shell}
+      {/* Над <webview> указатель до DOM окна не доходит, и зоны броска над группой со страницей молчали
+          бы. Как оверлей ресайзеров: прозрачный щит на время перетаскивания, под DragOverlay (9.2b).
+          layoutCollision считает зоны по прямоугольникам и точке указателя, щит ему не мешает. */}
+      {dragging === null ? null : <div data-testid="drag-shield" className="fixed inset-0 z-[998]" />}
       {/* Обёртка оверлея — размером с источник, её центр модификатор ставит
           под указатель; ярлык — по центру обёртки (раунд исправлений 1, ревью B). */}
       <DragOverlay dropAnimation={null} modifiers={OVERLAY_MODIFIERS}>

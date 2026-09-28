@@ -126,7 +126,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
-  useBrowserStore.setState({ tabs: {} });
+  useBrowserStore.setState({ tabs: {}, limitToasted: {} });
   useLayoutStore.setState({
     activeWorkKey: null,
     layouts: {},
@@ -315,5 +315,22 @@ describe('BrowserSurface — атрибуты (тест 8)', () => {
     expect(view?.hasAttribute('allowpopups')).toBe(true);
     expect(view?.getAttribute('partition')).toBe(BROWSER_PARTITION);
     expect(view?.getAttribute('webpreferences')).toBe('contextIsolation=yes, sandbox=yes');
+  });
+});
+
+describe('BrowserSurface — поиск по странице (тест 3 куска 9.2b)', () => {
+  it('findOpen — FindBar поверх страницы с id гостя; Esc — stopFind и findOpen снят', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 11), 'dom-ready');
+    expect(screen.queryByRole('search', { name: 'Find in page' })).toBeNull();
+    act(() => useBrowserStore.getState().update(TAB, { findOpen: true }));
+    const field = screen.getByPlaceholderText('Find…');
+    fireEvent.change(field, { target: { value: 'abc' } });
+    expect(bridge.browserCalls).toContainEqual({ method: 'find', args: [11, 'abc', true] });
+    fireEvent.keyDown(field, { key: 'Escape' });
+    expect(bridge.browserCalls.at(-1)).toEqual({ method: 'stopFind', args: [11] });
+    expect(useBrowserStore.getState().tabs[TAB]?.findOpen).toBe(false);
+    expect(screen.queryByRole('search', { name: 'Find in page' })).toBeNull();
   });
 });

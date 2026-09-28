@@ -197,18 +197,25 @@ export function emptyLayout(random?: () => number): WorkLayout {
   return { root, activeGroupId: id, closedTabs: [] };
 }
 
-export function openTab(layout: WorkLayout, tab: TabSpec, where: Where = 'active'): WorkLayout {
+/**
+ * `focus: false` (9.2b) — вкладка встаёт на место, `activeTabId` группы и `activeGroupId` прежние; в
+ * пустой группе она — активная. Так `window.open` невидимой страницы не уводит человека. Уже открытую
+ * вкладку `focus: false` не трогает.
+ */
+export function openTab(layout: WorkLayout, tab: TabSpec, where: Where = 'active', options: { focus?: boolean } = {}): WorkLayout {
+  const focus = options.focus ?? true;
   const existing = findTab(layout, tab.id);
-  if (existing !== null) return focusTabInGroup(layout, existing.group, tab.id);
+  if (existing !== null) return focus ? focusTabInGroup(layout, existing.group, tab.id) : layout;
 
   const groupId = where === 'active' ? layout.activeGroupId : where.groupId;
   const targetGroup = findGroupById(layout.root, groupId);
   if (targetGroup === null) return layout;
 
   const index = where === 'active' || where.index === undefined ? targetGroup.tabs.length : where.index;
-  const newGroup: GroupNode = { ...targetGroup, tabs: insertAt(targetGroup.tabs, index, tab), activeTabId: tab.id };
+  const activeTabId = focus || targetGroup.activeTabId === null ? tab.id : targetGroup.activeTabId;
+  const newGroup: GroupNode = { ...targetGroup, tabs: insertAt(targetGroup.tabs, index, tab), activeTabId };
   const root = replaceNode(layout.root, targetGroup.id, () => newGroup);
-  return { ...layout, root, activeGroupId: targetGroup.id };
+  return { ...layout, root, activeGroupId: focus ? targetGroup.id : layout.activeGroupId };
 }
 
 /** Чистая операция дерева; человек закрывает вкладки только через `requestCloseTabs` стора (2.2). */

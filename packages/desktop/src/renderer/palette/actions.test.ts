@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActionId } from '../../shared/keybindings.js';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
-import { wantsAddressFocus } from '../browser/store.js';
+import { useBrowserStore, wantsAddressFocus } from '../browser/store.js';
 import { IMPLEMENTED_ACTIONS } from '../keys/handler.js';
 import { createMruCycle } from '../keys/mru-cycle.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
@@ -38,7 +38,9 @@ function surface(): TerminalSurfaceHandle & { openSearch: ReturnType<typeof vi.f
 
 type Spies = ReturnType<typeof makeContext>;
 
-function makeContext(patch: { source?: ActionSource; activeWorkKey?: string | null; focused?: boolean; active?: boolean } = {}) {
+const BROWSER_TAB = 'browser:0000c1';
+
+function makeContext(patch: { source?: ActionSource; activeWorkKey?: string | null; focused?: boolean; active?: boolean; browser?: boolean } = {}) {
   const layoutValue = nineTabs();
   const focused = surface();
   const active = surface();
@@ -70,9 +72,10 @@ function makeContext(patch: { source?: ActionSource; activeWorkKey?: string | nu
   const toast = vi.fn();
   const mruCycle = createMruCycle();
   const step = vi.spyOn(mruCycle, 'step');
+  const bridge = createFakeBridge();
   const ctx: ActionContext = {
     source: patch.source ?? 'key',
-    bridge: createFakeBridge(),
+    bridge,
     layout,
     mruCycle,
     sidebar: { order: () => ORDER },
@@ -81,8 +84,9 @@ function makeContext(patch: { source?: ActionSource; activeWorkKey?: string | nu
     terminals: { focused: () => (patch.focused === false ? null : focused), active: () => (patch.active === false ? null : active) },
     attention,
     toast,
+    browser: { active: () => (patch.browser === false ? null : { tabId: BROWSER_TAB, webContentsId: 7 }) },
   };
-  return { ctx, layout, ui, palette, attention, toast, focused, active, step };
+  return { ctx, layout, ui, palette, attention, toast, focused, active, step, bridge };
 }
 
 /** Что должно случиться у каждого действия — по реестру, один случай на действие (тест 1). */
@@ -145,6 +149,11 @@ function expectation(id: ActionId): (spies: Spies) => void {
       const next = op(layout.layouts[KEY] as WorkLayout);
       expect(groups(next)[0]?.tabs.at(-1)).toMatchObject({ kind: 'browser', url: '' });
     },
+    // 9.2b: цель — browser.active(), вкладка браузера активной группы.
+    'browser.find': () => expect(useBrowserStore.getState().tabs[BROWSER_TAB]?.findOpen).toBe(true),
+    'browser.zoomIn': ({ bridge }) => expect(bridge.browserCalls).toEqual([{ method: 'zoom', args: [7, 1] }]),
+    'browser.zoomOut': ({ bridge }) => expect(bridge.browserCalls).toEqual([{ method: 'zoom', args: [7, -1] }]),
+    'browser.zoomReset': ({ bridge }) => expect(bridge.browserCalls).toEqual([{ method: 'zoom', args: [7, 0] }]),
   };
   const check = table[id];
   if (check === undefined) throw new Error(`нет ожидания для ${id}`);
@@ -420,5 +429,37 @@ describe('вкладки браузера и предел (тест 12 куск�
     expect(target?.tabs.at(-1)).toMatchObject({ kind: 'browser', url: '' });
     expect(target?.activeTabId).toBe(target?.tabs.at(-1)?.id);
     expect(groups(after).find((group) => group.id === g1)?.tabs.some((tab) => tab.kind === 'browser')).toBe(false);
+  });
+});
+
+describe('действия страницы: поиск и масштаб (тест 3 куска 9.2b)', () => {
+  beforeEach(() => {
+    useBrowserStore.setState({ tabs: {}, limitToasted: {} });
+  });
+
+  afterEach(() => {
+    useBrowserStore.setState({ tabs: {}, limitToasted: {} });
+    vi.restoreAllMocks();
+  });
+
+  it('без вкладки браузера — ни вызовов, ни полосы, ни тоста', () => {
+    const spies = makeContext({ browser: false });
+    for (const id of ['browser.find', 'browser.zoomIn', 'browser.zoomOut', 'browser.zoomReset'] as const) runAction(id, spies.ctx);
+    expect(spies.bridge.browserCalls).toEqual([]);
+    expect(useBrowserStore.getState().tabs).toEqual({});
+    expect(spies.toast).not.toHaveBeenCalled();
+  });
+
+  it('отказ zoom — в консоль, без тоста', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const spies = makeContext();
+    spies.bridge.browser.zoom = vi.fn(async () => {
+      throw new Error('gone');
+    });
+    runAction('browser.zoomIn', spies.ctx);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(warn).toHaveBeenCalled();
+    expect(spies.toast).not.toHaveBeenCalled();
   });
 });

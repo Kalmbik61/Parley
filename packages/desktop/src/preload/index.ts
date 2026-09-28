@@ -30,6 +30,8 @@ const treeChangedListeners = new Set<(e: TreeChangedEvent) => void>();
 const confirmCloseListeners = new Set<() => void>();
 const browserOpenTabListeners = new Set<(e: BrowserOpenTab) => void>();
 const browserFaviconListeners = new Set<(e: BrowserFavicon) => void>();
+const browserFocusListeners = new Set<(e: { webContentsId: number }) => void>();
+const windowFocusListeners = new Set<(focused: boolean) => void>();
 /** Цель клика, пришедшая, пока у `onFocusTarget` не было слушателей (кусок 4.3). */
 let heldFocusTarget: FocusTarget | null = null;
 
@@ -86,6 +88,14 @@ ipcRenderer.on('browser:open-tab', (_event, e: BrowserOpenTab) => {
 
 ipcRenderer.on('browser:favicon', (_event, e: BrowserFavicon) => {
   for (const listener of browserFaviconListeners) listener(e);
+});
+
+ipcRenderer.on('browser:focus', (_event, e: { webContentsId: number }) => {
+  for (const listener of browserFocusListeners) listener(e);
+});
+
+ipcRenderer.on('app:window-focus', (_event, focused: boolean) => {
+  for (const listener of windowFocusListeners) listener(focused);
 });
 
 /**
@@ -164,6 +174,10 @@ const bridge = {
       menuListeners.add(listener);
       return () => menuListeners.delete(listener);
     },
+    onWindowFocus: (listener: (focused: boolean) => void) => {
+      windowFocusListeners.add(listener);
+      return () => windowFocusListeners.delete(listener);
+    },
     titlebarDoubleClick: () => {
       ipcRenderer.send('app:titlebar-double-click');
     },
@@ -233,6 +247,10 @@ const bridge = {
     onFavicon: (listener: (e: BrowserFavicon) => void) => {
       browserFaviconListeners.add(listener);
       return () => browserFaviconListeners.delete(listener);
+    },
+    onFocus: (listener: (e: { webContentsId: number }) => void) => {
+      browserFocusListeners.add(listener);
+      return () => browserFocusListeners.delete(listener);
     },
   },
 };

@@ -49,7 +49,8 @@ import { usePaletteStore } from '../palette/store.js';
 import { ErrorBoundary } from '../shell/ErrorBoundary.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
-import { isFileLink, LinkMenu, openLinkInEditor, openLinkPath, openLinkUrl, type LinkMenuState } from './LinkMenu.js';
+import { openInBrowserTab } from '../browser/store.js';
+import { isFileLink, LinkMenu, openLinkInEditor, openLinkPath, type LinkMenuState } from './LinkMenu.js';
 import { sessionCwd, type TerminalLink } from './links.js';
 import { SearchBar } from './SearchBar.js';
 import { terminalSurfaces, type TerminalSurfaceHandle } from './surface-registry.js';
@@ -237,13 +238,14 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
   }, []);
 
   // Обычный клик — меню у курсора; ⌘-клик — сразу действие: файл — вкладка редактора на строке и
-  // колонке (7.3b), каталог — приложение по умолчанию, адрес — системный браузер (встроенный — с 9.2).
+  // колонке (7.3b), каталог — приложение по умолчанию, адрес — вкладка встроенного браузера рядом (9.2b);
+  // системный браузер — пунктом меню.
   const onLink = useCallback(
     (link: TerminalLink, event: MouseEvent) => {
       if (event.metaKey) {
         if (link.kind === 'path' && isFileLink(link)) openLinkInEditor(link);
         else if (link.kind === 'path') void openLinkPath(bridge, link.absPath);
-        else openLinkUrl(bridge, link.url);
+        else openInBrowserTab(link.url);
         return;
       }
       setLinkMenu({ link, x: event.clientX, y: event.clientY });

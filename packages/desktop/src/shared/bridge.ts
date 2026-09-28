@@ -84,6 +84,8 @@ export interface HarnasBridge {
     restartHost(): Promise<void>;
     /** Клик мышью по пункту меню (кусок 6.1b): `ActionId` реестра, канал `menu:action` прежний. */
     onMenu(listener: (id: ActionId) => void): () => void;
+    /** Фокус окна macOS (BrowserWindow focus/blur): при фокусе в странице DOM-события окна его не показывают. */
+    onWindowFocus(listener: (focused: boolean) => void): () => void;
     /**
      * Раскладка работы в `layouts.json` (`main/layout-store.ts`, формат v2 —
      * по одной `WorkLayout` на `workKey`, спека 5.8). Файл пишет не только

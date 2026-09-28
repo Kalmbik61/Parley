@@ -111,6 +111,11 @@ function guardGuest(contents: WebContents, deps: Pick<BrowserGuardDeps, 'openTab
   contents.setZoomMode('isolated');
   // Иначе beforeunload страницы молча держит её при закрытии вкладки и переходе.
   contents.on('will-prevent-unload', (event) => event.preventDefault());
+  // Клик в страницу DOM окна не видит: вкладку страницы активной делает окно по этому событию,
+  // оно же держит «окно в фокусе» (спека 7.2, 12.2). Ответ — окну-хозяину гостя.
+  contents.on('focus', () => {
+    contents.hostWebContents?.send('browser:focus', { webContentsId: contents.id });
+  });
   // Слушатель клавиш снимается вместе с гостем, а не ждёт сборки мусора.
   contents.once('destroyed', deps.forwardShortcuts(contents));
 

@@ -436,3 +436,21 @@ describe('favicon гостя (тест 10 куска 9.2a)', () => {
     ]);
   });
 });
+
+describe('фокус гостя (тест 10 куска 9.2b)', () => {
+  it('focus гостя → browser:focus { webContentsId } окну-хозяину', () => {
+    const guard = setupGuard();
+    const guest = fakeContents(46, 'webview');
+    guard.created(guest);
+    guest.emit('focus');
+    expect(guest.hostWebContents.send).toHaveBeenCalledWith('browser:focus', { webContentsId: 46 });
+  });
+
+  it('не-гость (окно) browser:focus не шлёт', () => {
+    const guard = setupGuard();
+    const window = fakeContents(47, 'window');
+    guard.created(window);
+    window.emit('focus');
+    expect(window.hostWebContents.send).not.toHaveBeenCalled();
+  });
+});

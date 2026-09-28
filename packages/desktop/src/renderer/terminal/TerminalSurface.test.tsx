@@ -170,7 +170,7 @@ describe('TerminalSurface', () => {
       expect(link.text).toBe('src/a.ts:3');
     });
 
-    it('клик — меню у курсора; ⌘-клик по пути файла — вкладка на строке (кусок 7.3b), по адресу — openExternal', async () => {
+    it('клик — меню у курсора; ⌘-клик по пути файла — вкладка на строке (кусок 7.3b), по адресу — вкладка браузера (9.2b)', async () => {
       const key = workKey(ref.projectPath, ref.workId);
       useLayoutStore.setState({ activeWorkKey: key, layouts: { [key]: { root: { type: 'group', id: 'g1', tabs: [], activeTabId: null }, activeGroupId: 'g1', closedTabs: [] } }, hydrated: { [key]: true } });
       useFilesStore.setState({ buffers: {}, reveals: {} });
@@ -188,9 +188,13 @@ describe('TerminalSurface', () => {
       expect(bridge.openedPaths).toEqual([]);
 
       cleanup();
-      const url = await linkUnderPointer('go https://example.com/x', key);
+      const url = await linkUnderPointer('go http://localhost:5173', key);
       act(() => url.activate(new MouseEvent('click', { metaKey: true }), url.text));
-      expect(bridge.externalOpened).toEqual(['https://example.com/x']);
+      const after = useLayoutStore.getState().layouts[key];
+      const tabs = after?.root.type === 'group' ? after.root.tabs : [];
+      expect(tabs.at(-1)).toMatchObject({ kind: 'browser', url: 'http://localhost:5173' });
+      expect(after?.root.type === 'group' ? after.root.activeTabId : null).toBe(tabs.at(-1)?.id);
+      expect(bridge.externalOpened).toEqual([]);
     });
 
     it('⌘-клик по каталогу — как прежде, app.openPath', async () => {

@@ -270,12 +270,19 @@ describe('isActionAvailable (тест 2 куска 6.1b)', () => {
     expect(isActionAvailable('sidebar.files', methods)).toBe(true);
   });
 
-  it('ветки run 6.1b — все реализованы; browser.* и палитровые — нет', () => {
+  it('ветки run 6.1b — все реализованы; палитровые — нет', () => {
     for (const id of ['palette.open', 'work.new', 'session.new', 'settings.open', 'sidebar.left.toggle', 'work.goto.1', 'work.goto.9', 'work.prev', 'work.next', 'history.back', 'history.forward', 'group.splitRight', 'group.splitDown', 'group.prev', 'group.next', 'tab.close', 'tab.reopen', 'tab.prev', 'tab.next', 'tab.goto.1', 'tab.goto.9', 'tab.mruNext', 'tab.mruPrev', 'find', 'terminal.clear'] as const) {
       expect(IMPLEMENTED_ACTIONS.has(id)).toBe(true);
     }
-    for (const id of ['browser.find', 'files.quickOpen', 'files.search', 'sidebar.changes'] as const) {
+    for (const id of ['files.quickOpen', 'files.search', 'sidebar.changes'] as const) {
       expect(IMPLEMENTED_ACTIONS.has(id)).toBe(false);
+    }
+  });
+
+  it('поиск и масштаб страницы реализованы (9.2b) и доступны без методов хоста', () => {
+    for (const id of ['browser.find', 'browser.zoomIn', 'browser.zoomOut', 'browser.zoomReset'] as const) {
+      expect(IMPLEMENTED_ACTIONS.has(id)).toBe(true);
+      expect(isActionAvailable(id, new Set())).toBe(true);
     }
   });
 

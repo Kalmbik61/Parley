@@ -137,6 +137,36 @@ function duplicateNodeIdLayouts(): {
 }
 
 describe('openTab', () => {
+  // Тест 6 куска 9.2b.
+  it('{ focus: false }: вкладка на месте, activeTabId и activeGroupId прежние; в пустой группе — активная', () => {
+    const t1 = freshTab();
+    const t2 = freshTab();
+    let layout = openTab(emptyLayout(), t1, 'active');
+    const g1 = layout.activeGroupId;
+    layout = openTab(layout, t2, 'active');
+    const split = splitGroup(layout, g1, 'row', freshTab());
+    layout = split.layout;
+    const g2 = layout.activeGroupId;
+    expect(g2).not.toBe(g1);
+
+    const quiet = browserTab('http://localhost:5173/');
+    const next = openTab(layout, quiet, { groupId: g1, index: 1 }, { focus: false });
+    expect(groupById(next, g1).tabs.map((tab) => tab.id)).toEqual([t1.id, quiet.id, t2.id]);
+    expect(groupById(next, g1).activeTabId).toBe(t2.id);
+    expect(next.activeGroupId).toBe(g2);
+
+    const empty = openTab(emptyLayout(), quiet, 'active', { focus: false });
+    expect(soleGroup(empty).tabs.map((tab) => tab.id)).toEqual([quiet.id]);
+    expect(soleGroup(empty).activeTabId).toBe(quiet.id);
+  });
+
+  it('{ focus: false } уже открытой вкладки — раскладка та же', () => {
+    const t1 = freshTab();
+    const t2 = freshTab();
+    const layout = openTab(openTab(emptyLayout(), t1, 'active'), t2, 'active');
+    expect(openTab(layout, t1, 'active', { focus: false })).toBe(layout);
+  });
+
   // Тест 1.
   it('уже открытой вкладки из другой группы: групп и вкладок столько же, фокус на ней', () => {
     const tab = freshTab();

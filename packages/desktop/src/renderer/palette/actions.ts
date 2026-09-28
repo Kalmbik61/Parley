@@ -17,7 +17,7 @@ import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { errorText, S } from '../../shared/strings.js';
 import type { Appearance } from '../../shared/ui-types.js';
 import type { MruCycle } from '../keys/mru-cycle.js';
-import { BROWSER_LIMITS, browserTabCount, openBrowserTab, requestAddressFocus } from '../browser/store.js';
+import { BROWSER_LIMITS, browserTabCount, openBrowserTab, requestAddressFocus, useBrowserStore } from '../browser/store.js';
 import type { LayoutState } from '../layout/store.js';
 import { findTab, focusGroup, focusTab, groups, reopenClosed } from '../layout/tree.js';
 import { neighborInOrder } from '../sidebar/sort.js';
@@ -73,6 +73,8 @@ export interface ActionContext {
   };
   attention: { next(): SessionRef | null }; // openNextAttention (4.2)
   toast(text: string): void;
+  /** Как terminals.active() (6.3): активная вкладка активной группы активной работы, если это браузер с webContentsId. */
+  browser: { active(): { tabId: string; webContentsId: number } | null };
 }
 
 const APPEARANCE: Partial<Record<ActionId, Appearance>> = {
@@ -130,6 +132,12 @@ function toastOnError(ctx: ActionContext, promise: Promise<unknown>, action: str
   });
 }
 
+const ZOOM_STEP: Partial<Record<ActionId, 1 | -1 | 0>> = {
+  'browser.zoomIn': 1,
+  'browser.zoomOut': -1,
+  'browser.zoomReset': 0,
+};
+
 /** Действия, которым нужна активная работа (бриф 6.3): без неё — тост. Правого сайдбара без неё нет (7.2). */
 function needsActiveWork(id: ActionId): boolean {
   return (
@@ -142,7 +150,7 @@ function needsActiveWork(id: ActionId): boolean {
   );
 }
 
-/** Одна ветка на каждый реализованный `ActionId`; действия будущих этапов (7.4, 8.2, 9.2b) — без ветки. */
+/** Одна ветка на каждый реализованный `ActionId`; действия будущих этапов (7.4, 8.2) — без ветки. */
 export function runAction(id: ActionId, ctx: ActionContext): void {
   // Без активной работы — тост; активная есть, но её раскладка ещё читается с диска — ветки
   // вкладок и групп ниже просто ничего не делают.
@@ -160,6 +168,16 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
   if (id.startsWith('work.goto.')) {
     const key = ctx.sidebar.order()[Number(id.slice('work.goto.'.length)) - 1];
     if (key !== undefined) ctx.layout.setActiveWork(key);
+    return;
+  }
+  // ⌘F, ⌘+, ⌘−, ⌘0 из страницы (9.2b): вкладку делает активной browser:focus. Отказ — в консоль, без
+  // тоста: вкладка могла закрыться между нажатием и ответом. Вкладки браузера нет — ничего.
+  const zoom = ZOOM_STEP[id];
+  if (zoom !== undefined || id === 'browser.find') {
+    const page = ctx.browser.active();
+    if (page === null) return;
+    if (zoom === undefined) useBrowserStore.getState().update(page.tabId, { findOpen: true });
+    else ctx.bridge.browser.zoom(page.webContentsId, zoom).catch((error: unknown) => console.warn('[harnas] browser zoom', error));
     return;
   }
   if (id.startsWith('tab.goto.') && active !== null) {

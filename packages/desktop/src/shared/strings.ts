@@ -346,7 +346,9 @@ export const S = {
   links: {
     openInEditor: 'Open in editor',
     openInDefaultApp: 'Open in default app',
+    /** Вкладка встроенного браузера (с 9.2b; до него — системный браузер). */
     openInBrowser: 'Open in browser',
+    openInSystemBrowser: 'Open in system browser',
     copyLink: 'Copy link',
   },
 

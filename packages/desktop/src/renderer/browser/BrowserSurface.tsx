@@ -25,6 +25,7 @@ import { useLayoutStore } from '../layout/store.js';
 import { focusTab, updateTab } from '../layout/tree.js';
 import { isHttpUrl } from '../terminal/links.js';
 import { BrowserChrome } from './BrowserChrome.js';
+import { FindBar } from './FindBar.js';
 import { clearAddressFocus, useBrowserStore, wantsAddressFocus, type BrowserTabState } from './store.js';
 import { layoutUrl } from './url.js';
 
@@ -72,6 +73,7 @@ const IDLE: BrowserTabState = {
   canGoForward: false,
   crashed: false,
   webContentsId: null,
+  findOpen: false,
 };
 
 export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge }: BrowserSurfaceProps): JSX.Element {
@@ -243,6 +245,14 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge }
           // Белая подложка: гость прозрачен, и страница без своего фона легла бы на тёмную тему окна.
           <webview ref={setView} src={src} className="flex h-full w-full bg-white" {...WEBVIEW_ATTRIBUTES} />
         )}
+        {state.findOpen && state.webContentsId !== null ? (
+          // Полоса поиска (⌘F в странице, 9.2b) — поверх страницы, как у терминала.
+          <FindBar
+            bridge={bridge}
+            webContentsId={state.webContentsId}
+            onClose={() => useBrowserStore.getState().update(tabId, { findOpen: false })}
+          />
+        ) : null}
         {state.crashed ? (
           // Слой поверх страницы: тело группы лежит под поверхностью, и заглушка в нём была бы не видна.
           <div

@@ -136,6 +136,10 @@ export interface FakeBridge extends HarnasBridge {
   emitBrowserOpenTab(e: BrowserOpenTab): void;
   /** Favicon гостя: событие `browser:favicon` слушателям `browser.onFavicon` (кусок 9.2a). */
   emitFavicon(e: BrowserFavicon): void;
+  /** Фокус гостя: событие `browser:focus` слушателям `browser.onFocus` (кусок 9.2b). */
+  emitBrowserFocus(e: { webContentsId: number }): void;
+  /** Фокус окна macOS: событие `app:window-focus` слушателям `app.onWindowFocus` (кусок 9.2b). */
+  emitWindowFocus(focused: boolean): void;
 }
 
 export function createFakeBridge(): FakeBridge {
@@ -191,6 +195,8 @@ export function createFakeBridge(): FakeBridge {
   const browserCalls: Array<{ method: string; args: unknown[] }> = [];
   const browserOpenTabListeners = new Set<(e: BrowserOpenTab) => void>();
   const browserFaviconListeners = new Set<(e: BrowserFavicon) => void>();
+  const browserFocusListeners = new Set<(e: { webContentsId: number }) => void>();
+  const windowFocusListeners = new Set<(focused: boolean) => void>();
   let watchSeq = 0;
   /** mtimeMs ответа write: растёт с каждой записью, как на диске. */
   let writeMtimeMs = 1_700_000_000_000;
@@ -289,6 +295,12 @@ export function createFakeBridge(): FakeBridge {
     emitFavicon: (e) => {
       for (const listener of browserFaviconListeners) listener(e);
     },
+    emitBrowserFocus: (e) => {
+      for (const listener of browserFocusListeners) listener(e);
+    },
+    emitWindowFocus: (focused) => {
+      for (const listener of windowFocusListeners) listener(focused);
+    },
     // Безвредные заглушки: поиск ничего не находит, остальное — успех.
     browser: {
       openDevTools: async (webContentsId) => {
@@ -314,6 +326,10 @@ export function createFakeBridge(): FakeBridge {
       onFavicon: (listener) => {
         browserFaviconListeners.add(listener);
         return () => browserFaviconListeners.delete(listener);
+      },
+      onFocus: (listener) => {
+        browserFocusListeners.add(listener);
+        return () => browserFocusListeners.delete(listener);
       },
     },
     files: {
@@ -471,6 +487,10 @@ export function createFakeBridge(): FakeBridge {
       onMenu: (listener) => {
         menuListeners.add(listener);
         return () => menuListeners.delete(listener);
+      },
+      onWindowFocus: (listener) => {
+        windowFocusListeners.add(listener);
+        return () => windowFocusListeners.delete(listener);
       },
       titlebarDoubleClick: () => {
         titlebarDoubleClicks.push(titlebarDoubleClicks.length);

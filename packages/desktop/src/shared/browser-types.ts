@@ -28,7 +28,7 @@ export interface BrowserOpenTab {
   openerWebContentsId: number;
 }
 
-// Интерфейс растёт вместе с мостом: onFocus добавит 9.2b, pickStart и pickCancel — 9.3a.
+// Интерфейс растёт вместе с мостом: pickStart и pickCancel добавит 9.3a.
 // Объявленные заранее, они не дали бы прелоаду 9.1 пройти pnpm typecheck.
 export interface BrowserApi {
   openDevTools(webContentsId: number): Promise<void>;
@@ -39,4 +39,6 @@ export interface BrowserApi {
   clearData(): Promise<void>;
   onOpenTab(listener: (e: BrowserOpenTab) => void): () => void;
   onFavicon(listener: (e: BrowserFavicon) => void): () => void; // спека 12.1
+  /** Гость получил фокус (focus его WebContents): окно делает его вкладку активной — клик в страницу DOM окна не видит. */
+  onFocus(listener: (e: { webContentsId: number }) => void): () => void;
 }

@@ -198,6 +198,13 @@ if (!gotLock) {
       window.webContents.on('did-start-loading', () => closeGuard.reset());
       window.webContents.on('render-process-gone', () => closeGuard.reset());
       window.on('closed', () => closeGuard.dispose());
+      // Фокус окна macOS (кусок 9.2b, спека 7.2): при фокусе в странице <webview> уход в другое
+      // приложение DOM окна не показывает, а focus и blur WebContents при смене окон не приходят.
+      const sendWindowFocus = (focused: boolean): void => {
+        if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send('app:window-focus', focused);
+      };
+      window.on('focus', () => sendWindowFocus(true));
+      window.on('blur', () => sendWindowFocus(false));
       return window;
     };
 
