@@ -66,8 +66,12 @@ function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
   return next;
 }
 
-/** Идущие записи по `bufferKey`: второй ⌘S до ответа первого получает тот же исход, а не вторую запись. */
-const inFlightSaves = new Map<string, Promise<SaveResult>>();
+/**
+ * Идущие записи по `bufferKey`: второй ⌘S до ответа первого получает тот же исход, а не вторую запись.
+ * Запись принадлежит своему буферу (сверка по ссылке на `root`, как у `alive` в `openBuffer`): буфер
+ * той же вкладки, открытый заново, или сброс стора между тестами не получают чужую висящую запись.
+ */
+const inFlightSaves = new Map<string, { root: FileRoot; done: Promise<SaveResult> }>();
 
 export const useFilesStore = create<FilesState>((set, get) => {
   const patchModel = (key: string, event: BufferEvent): void =>
@@ -100,14 +104,17 @@ export const useFilesStore = create<FilesState>((set, get) => {
       const buffer: FileBuffer = { root, path, watchId: null, model: initialBuffer() };
       set((state) => ({ buffers: { ...state.buffers, [key]: buffer } }));
       // Ответ для уже отпущенного буфера (вкладку закрыли до ответа) никуда не пишется: сверка по
-      // ссылке — буфер той же вкладки, открытый заново, это уже другой объект.
+      // ссылке — буфер той же вкладки, открытый заново, это уже другой объект. Для чтения тоже:
+      // старый ответ, пришедший первым, дал бы открытому заново буферу устаревший текст как «сохранённый».
       const alive = (): boolean => get().buffers[key]?.root === root;
       bridge.files
         .readText(root, path)
-        .then((file) => patchModel(key, { type: 'loaded', file }))
+        .then((file) => {
+          if (alive()) patchModel(key, { type: 'loaded', file });
+        })
         .catch((error: unknown) => {
           console.warn('[harnas] files.readText', error);
-          patchModel(key, { type: 'failed', code: decodeIpcError(error).code });
+          if (alive()) patchModel(key, { type: 'failed', code: decodeIpcError(error).code });
         });
       bridge.files
         .watch(root, path)
@@ -130,34 +137,40 @@ export const useFilesStore = create<FilesState>((set, get) => {
 
     save: (bridge, workKey, tabId, options = {}) => {
       const key = bufferKey(workKey, tabId);
-      const running = inFlightSaves.get(key);
-      if (running !== undefined) return running;
       const buffer = get().buffers[key];
       if (buffer === undefined) return Promise.resolve('failed');
+      const running = inFlightSaves.get(key);
+      if (running !== undefined && running.root === buffer.root) return running.done;
       const { model } = buffer;
       if (model.status === 'loading' || model.status === 'error' || model.readOnlyReason !== null) return Promise.resolve('failed');
       // «Перезаписать» после конфликта — против mtime диска, который видел человек; иначе — против
       // открытого. У удалённого файла — null: запись создаёт его заново.
       const expected = options.overwrite === true ? model.diskMtimeMs : model.status === 'deleted' ? null : model.mtimeMs;
       const text = model.text;
+      // Исход записи — только своему буферу: у открытого заново свои запись и mtime.
+      const patchOwn = (event: BufferEvent): void => {
+        if (get().buffers[key]?.root === buffer.root) patchModel(key, event);
+      };
       patchModel(key, { type: 'save-started' });
       const done = bridge.files
         .write(buffer.root, buffer.path, text, expected)
         .then((result): SaveResult => {
           if (result.ok) {
-            patchModel(key, { type: 'saved', mtimeMs: result.mtimeMs });
+            patchOwn({ type: 'saved', mtimeMs: result.mtimeMs });
             return 'saved';
           }
-          patchModel(key, { type: 'save-conflict', mtimeMs: result.conflict.mtimeMs });
+          patchOwn({ type: 'save-conflict', mtimeMs: result.conflict.mtimeMs });
           return 'conflict';
         })
         .catch((error: unknown): SaveResult => {
           console.warn('[harnas] files.write', error);
-          patchModel(key, { type: 'failed', code: decodeIpcError(error).code });
+          patchOwn({ type: 'failed', code: decodeIpcError(error).code });
           return 'failed';
         })
-        .finally(() => inFlightSaves.delete(key));
-      inFlightSaves.set(key, done);
+        .finally(() => {
+          if (inFlightSaves.get(key)?.done === done) inFlightSaves.delete(key);
+        });
+      inFlightSaves.set(key, { root: buffer.root, done });
       return done;
     },
 

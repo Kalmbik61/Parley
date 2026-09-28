@@ -15,13 +15,18 @@ import type { HarnasBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { Button } from '../ui/button.js';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../ui/dialog.js';
-import { answerWindowClose, type SaveAnswer } from './close-guard.js';
+import { answerVanishedWork, answerWindowClose, type SaveAnswer } from './close-guard.js';
 import { dirtyBufferRefs, useFilesStore } from './store.js';
 
 interface SaveChangesRequest {
-  /** `tab` — одна вкладка («Save»); `window` — все грязные буферы окна («Save all»). */
-  mode: 'tab' | 'window';
+  /**
+   * `tab` — одна вкладка («Save»); `window` — все грязные буферы окна («Save all»); `vanished` —
+   * работа удалена не из этого окна: только «Save» и «Discard», закрыть мимо кнопок нельзя.
+   */
+  mode: 'tab' | 'window' | 'vanished';
   names: string[];
+  /** Название исчезнувшей работы — для `vanished`. */
+  work?: string;
   resolve: (answer: SaveAnswer) => void;
 }
 
@@ -41,7 +46,31 @@ function answerFirst(answer: SaveAnswer): void {
   first.resolve(answer);
 }
 
+/** Вопрос по работе, удалённой не из этого окна (fix-7.3 п. 1): отмены нет — «Save» или «Discard». */
+function askVanished(work: string, names: string[]): Promise<'save' | 'discard'> {
+  return new Promise((resolve) => {
+    const request: SaveChangesRequest = { mode: 'vanished', names, work, resolve: (answer) => resolve(answer === 'save' ? 'save' : 'discard') };
+    useSaveChangesStore.setState((state) => ({ queue: [...state.queue, request] }));
+  });
+}
+
+/**
+ * Работа ушла из снимка: есть грязные буферы её вкладок — вопрос, промис ответа (записи сделаны);
+ * нет — null, и раскладку можно снять сразу, как прежде.
+ */
+export function settleVanishedWork(bridge: HarnasBridge, workKey: string, title: string): Promise<void> | null {
+  const dirty = dirtyBufferRefs().filter((item) => item.workKey === workKey);
+  if (dirty.length === 0) return null;
+  return answerVanishedWork({
+    dirty,
+    ask: (names) => askVanished(title, names),
+    save: async (key, tabId) => (await useFilesStore.getState().save(bridge, key, tabId)) === 'saved',
+    toast: (text) => toast(text),
+  });
+}
+
 function titleOf(request: SaveChangesRequest): string {
+  if (request.mode === 'vanished') return S.files.workDeleted(request.work ?? '', request.names.length);
   if (request.names.length === 1) return S.files.saveChanges(request.names[0] ?? '');
   return S.files.saveChangesCount(request.names.length);
 }
@@ -54,19 +83,20 @@ export function SaveChangesDialog(): JSX.Element | null {
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open) answerFirst('cancel');
+        // Удаление работы не отменить: Esc и щелчок мимо не отбрасывают её правки молча.
+        if (!open && request.mode !== 'vanished') answerFirst('cancel');
       }}
     >
       <DialogContent
         data-testid="save-changes-dialog"
         // Описание — только список файлов окна; без него Radix не должен ждать `aria-describedby`.
-        {...(request.names.length > 1 ? null : { 'aria-describedby': undefined })}
+        {...(request.names.length > 1 || request.mode === 'vanished' ? null : { 'aria-describedby': undefined })}
         className="w-96 max-w-[calc(100vw-2rem)]"
       >
         <DialogTitle className="truncate pr-6" title={title}>
           {title}
         </DialogTitle>
-        {request.names.length > 1 ? (
+        {request.names.length > 1 || request.mode === 'vanished' ? (
           <DialogDescription asChild>
             <ul className="max-h-40 min-w-0 overflow-y-auto text-sm text-muted-foreground">
               {request.names.map((name, index) => (
@@ -79,14 +109,17 @@ export function SaveChangesDialog(): JSX.Element | null {
           </DialogDescription>
         ) : null}
         <DialogFooter>
-          <Button type="button" variant="ghost" onClick={() => answerFirst('cancel')}>
-            {S.common.cancel}
-          </Button>
+          {request.mode === 'vanished' ? null : (
+            <Button type="button" variant="ghost" onClick={() => answerFirst('cancel')}>
+              {S.common.cancel}
+            </Button>
+          )}
           <Button type="button" variant="outline" onClick={() => answerFirst('discard')}>
-            {S.files.dontSave}
+            {request.mode === 'vanished' ? S.files.discard : S.files.dontSave}
           </Button>
           <Button type="button" onClick={() => answerFirst('save')}>
-            {request.mode === 'window' ? S.files.saveAll : S.files.save}
+            {/* Один файл — единственное число и у кнопки (fix-7.3 п. 5). */}
+            {request.mode === 'window' && request.names.length > 1 ? S.files.saveAll : S.files.save}
           </Button>
         </DialogFooter>
       </DialogContent>

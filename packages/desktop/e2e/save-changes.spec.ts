@@ -107,7 +107,8 @@ test.describe('несохранённые правки при закрытии �
     const closed = electronApp.waitForEvent('close');
     await electronApp.evaluate(({ app: electronAppMain }) => electronAppMain.quit());
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByRole('button', { name: 'Save all' })).toBeVisible();
+    // Один файл — «Save», а не «Save all» (fix-7.3 п. 5).
+    await expect(dialog.getByRole('button', { name: 'Save', exact: true })).toBeVisible();
     await dialog.getByRole('button', { name: "Don't save" }).click();
     await closed;
     app = null;

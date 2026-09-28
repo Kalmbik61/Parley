@@ -64,13 +64,37 @@ export async function answerWindowClose(deps: {
   if (answer === 'cancel') return 'cancel';
   if (answer === 'discard') return 'close';
   let allSaved = true;
+  // Грязные — заново, после ответа: пока вопрос окна ждал в очереди за вопросом вкладки, тот мог
+  // сохранить или отбросить файл и отпустить буфер. Такой файл — не ошибка записи (fix-7.3 п. 3).
+  const still = new Set(deps.dirty().map((item) => `${item.workKey}\n${item.tabId}`));
   // Все записи по очереди, а не до первой ошибки: что сохранилось — сохранено.
-  for (const item of dirty) {
+  for (const item of dirty.filter((entry) => still.has(`${entry.workKey}\n${entry.tabId}`))) {
     if (!(await deps.save(item.workKey, item.tabId))) allSaved = false;
   }
   if (allSaved) return 'close';
   deps.toast(S.files.saveAllFailed);
   return 'cancel';
+}
+
+/**
+ * Работа исчезла из снимка не через меню этого окна (удалил другой клиент — fix-7.3 п. 1): отменить
+ * это нельзя, поэтому вопрос без «Отмены» — «Save» или «Discard», но не молча. «Save» пишет что
+ * может (папка проекта обычно цела); что не записалось (папки worktree больше нет, конфликт) —
+ * тостом по именам: правка теряется, но человек об этом знает.
+ */
+export async function answerVanishedWork(deps: {
+  dirty: DirtyBufferRef[];
+  ask(names: string[]): Promise<'save' | 'discard'>;
+  save(workKey: string, tabId: string): Promise<boolean>;
+  toast(text: string): void;
+}): Promise<void> {
+  if (deps.dirty.length === 0) return;
+  if ((await deps.ask(deps.dirty.map((item) => item.name))) === 'discard') return;
+  const failed: string[] = [];
+  for (const item of deps.dirty) {
+    if (!(await deps.save(item.workKey, item.tabId))) failed.push(item.name);
+  }
+  if (failed.length > 0) deps.toast(S.files.notSaved(failed.join(', ')));
 }
 
 /**

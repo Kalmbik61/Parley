@@ -171,10 +171,20 @@ export function createRootsRegistry(source: RootsSource, options: { home?: strin
   /** Последняя начатая пересборка: промах реестра дожидается её, а не отказывает раньше неё. */
   let latest: Promise<void> = Promise.resolve();
 
+  /**
+   * Корни работ, ушедших из снимка (fix-7.3 п. 1): только для записи. Работу удалил другой клиент,
+   * а в окне остались несохранённые правки её файлов — вопрос окна «Save» пишет их туда, где папка
+   * ещё есть. Правила записи те же; корнем здесь бывает только то, что было корнем снимка.
+   */
+  const retired = new Map<string, RootEntry[]>();
+
   const apply = (snapshot: WorksSnapshot): Promise<void> => {
     const build = ++builds;
     latest = buildEntries(snapshot).then((next) => {
-      if (build === builds) entries = next;
+      if (build !== builds) return;
+      for (const [key, list] of entries) if (!next.has(key)) retired.set(key, list);
+      for (const key of next.keys()) retired.delete(key);
+      entries = next;
     });
     return latest;
   };
@@ -246,19 +256,23 @@ export function createRootsRegistry(source: RootsSource, options: { home?: strin
     return entries.get(root.workKey)?.find((entry) => rootKey(entry.root) === key);
   };
 
-  /** Корень из реестра; промах — пересборка по свежему снимку и вторая проверка, затем отказ. */
-  const requireRoot = async (root: FileRoot): Promise<RootEntry> => {
+  /** Корень из реестра; промах — пересборка по свежему снимку и вторая проверка, затем отказ. Запись — и в ушедший корень. */
+  const requireRoot = async (root: FileRoot, mode: 'read' | 'write'): Promise<RootEntry> => {
     let entry = findRoot(root);
     if (entry === undefined) {
       await refresh();
       entry = findRoot(root);
+    }
+    if (entry === undefined && mode === 'write') {
+      const key = rootKey(root);
+      entry = retired.get(root.workKey)?.find((candidate) => rootKey(candidate.root) === key);
     }
     if (entry === undefined) throw new FilesDeniedError(`unknown root: ${rootKey(root)}`);
     return entry;
   };
 
   const resolve: RootsRegistry['resolve'] = async (root, relPath, mode) => {
-    const entry = await requireRoot(root);
+    const entry = await requireRoot(root, mode);
     if (relPath.includes('\0')) throw new FilesDeniedError('path contains NUL');
     if (path.isAbsolute(relPath)) throw new FilesDeniedError(`absolute path: ${relPath}`);
     const target = path.resolve(entry.absPath, relPath);
@@ -350,6 +364,6 @@ export function createRootsRegistry(source: RootsSource, options: { home?: strin
     insideAnyRoot,
     roots: (key) => (entries.get(key) ?? []).map((entry) => ({ spec: entry.root.spec, absPath: entry.absPath })),
     expandHome,
-    rootPath: async (root) => (await requireRoot(root)).absPath,
+    rootPath: async (root) => (await requireRoot(root, 'read')).absPath,
   };
 }

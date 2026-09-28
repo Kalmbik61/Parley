@@ -544,6 +544,11 @@ export const S = {
     saveChangesCount: (count: number): string => `Save changes to ${count} files?`,
     saveAll: 'Save all',
     saveAllFailed: "Couldn't save all files — the window stays open",
+    /** Работа удалена не из этого окна (другой клиент), а правки её файлов не сохранены (fix-7.3 п. 1). Название — данные. */
+    workDeleted: (title: string, count: number): string =>
+      `Workspace “${title}” was deleted — unsaved changes in ${count} ${count === 1 ? 'file' : 'files'}`,
+    discard: 'Discard',
+    notSaved: (names: string): string => `Couldn't save: ${names}`,
     /**
      * Тело вкладки файла (кусок 7.3b, спека 10.4, 10.5, 13): плашки только чтения — по коду
      * `readOnlyReason`, тела — по коду ошибки `readText`. «Open in default app» —

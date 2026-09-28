@@ -450,13 +450,22 @@ describe('App — вопрос при закрытии окна без связ�
     });
     act(() => bridge.emitConfirmClose());
     expect(await screen.findByText('Save changes to a.ts?')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Save all' })).toBeTruthy();
+    // Один файл — единственное число и у кнопки (fix-7.3 п. 5); «Save all» — от двух.
+    expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Save all' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     await vi.waitFor(() => expect(bridge.closeAnswers).toEqual(['cancel']));
 
+    const other = bufferKey('/tmp/p w', 'file:p:b.ts');
+    useFilesStore.setState((state) => ({ buffers: { ...state.buffers, [other]: { ...state.buffers[key]!, path: 'b.ts' } } }));
+    act(() => bridge.emitConfirmClose());
+    fireEvent.click(await screen.findByRole('button', { name: 'Save all' }));
+    await vi.waitFor(() => expect(bridge.closeAnswers).toHaveLength(2));
+
     useFilesStore.setState({ buffers: {} });
     act(() => bridge.emitConfirmClose());
-    await vi.waitFor(() => expect(bridge.closeAnswers).toEqual(['cancel', 'close']));
+    await vi.waitFor(() => expect(bridge.closeAnswers.at(-1)).toBe('close'));
+    expect(bridge.closeAnswers).toHaveLength(3);
   });
 });
 

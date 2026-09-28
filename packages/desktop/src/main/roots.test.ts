@@ -200,6 +200,22 @@ describe('works.changed (тест 5)', () => {
     await vi.waitFor(() => expect(registry.roots(KEY())).toEqual([]));
     await expect(registry.resolve(PROJECT_ROOT(), 'src/a.ts', 'read')).rejects.toBeInstanceOf(FilesDeniedError);
   });
+
+  it('запись в корень исчезнувшей работы — пока папка есть; удалённый worktree — not_found (fix-7.3 п. 1)', async () => {
+    const worktree = path.join(dir, 'wt');
+    await mkdir(worktree, { recursive: true });
+    const { registry, source } = await ready([{ id: 's-1', worktree }]);
+    source.auto = snapshot([]);
+    source.change(snapshot([]));
+    await vi.waitFor(() => expect(registry.roots(KEY())).toEqual([]));
+    await rm(worktree, { recursive: true, force: true });
+    // Вопрос окна «работа удалена — Save» пишет правки в папку, что осталась (проект).
+    expect(await registry.resolve(PROJECT_ROOT(), 'src/a.ts', 'write')).toBe(path.join(await realpath(project), 'src', 'a.ts'));
+    const wtRoot: FileRoot = { workKey: KEY(), spec: { kind: 'worktree', sessionId: 's-1' } };
+    await expect(registry.resolve(wtRoot, 'a.ts', 'write')).rejects.toMatchObject({ code: 'not_found' });
+    // Прежние правила записи на месте.
+    await expect(registry.resolve(PROJECT_ROOT(), '../x.ts', 'write')).rejects.toBeInstanceOf(FilesDeniedError);
+  });
 });
 
 describe('запись и симлинки (тест 7)', () => {

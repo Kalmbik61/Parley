@@ -4,6 +4,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { TextFile } from '../../shared/files-types.js';
 import type { GroupNode, TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { tabId } from '../layout/ids.js';
@@ -139,6 +140,24 @@ describe('буферы: жизнь по раскладке (тест 3)', () => 
     expect(bridge.unwatchCalls).toHaveLength(3);
   });
 
+  it('закрыть и открыть заново до ответа чтения: старый ответ не применяется к новому буферу (fix-7.3 п. 2)', async () => {
+    const reads: Array<(file: TextFile) => void> = [];
+    const slow = { ...bridge, files: { ...bridge.files, readText: () => new Promise<TextFile>((resolve) => reads.push(resolve)) } };
+    const file = (text: string, mtimeMs: number): TextFile => ({ text, mtimeMs, size: text.length, binary: false, utf8: true, readOnlyReason: null });
+    useFilesStore.getState().openBuffer(slow, W, A.id, root, 'src/a.ts');
+    await useLayoutStore.getState().requestCloseTabs(W, [A.id]);
+    useLayoutStore.setState({ layouts: { [W]: layoutWith(A, B) } });
+    // Тело вкладки создаёт `root` на каждый рендер — открытие заново приходит с новым объектом.
+    useFilesStore.getState().openBuffer(slow, W, A.id, { ...root }, 'src/a.ts');
+    expect(reads).toHaveLength(2);
+    reads[0]?.(file('old', 1));
+    await settle();
+    expect(useFilesStore.getState().buffers[bufferKey(W, A.id)]?.model.status).toBe('loading');
+    reads[1]?.(file('fresh', 2));
+    await settle();
+    expect(useFilesStore.getState().buffers[bufferKey(W, A.id)]?.model).toMatchObject({ status: 'clean', text: 'fresh', mtimeMs: 2 });
+  });
+
   it('files.onChanged: clean — тихая перезагрузка с плашкой; dirty — disk-changed-dirty; удалён — deleted', async () => {
     const { openBuffer, dispatch } = useFilesStore.getState();
     openBuffer(bridge, W, A.id, root, 'src/a.ts');
@@ -214,6 +233,24 @@ describe('save (тест 4)', () => {
     expect(await first).toBe('saved');
     expect(await second).toBe('saved');
     expect(bridge.writes).toHaveLength(1);
+  });
+
+  it('висящая запись отпущенного буфера не достаётся новому буферу того же ключа (fix-7.3 п. 5)', async () => {
+    let finishOld: (result: { ok: true; mtimeMs: number }) => void = () => {};
+    const hanging = { ...bridge, files: { ...bridge.files, write: () => new Promise<{ ok: true; mtimeMs: number }>((resolve) => (finishOld = resolve)) } };
+    const old = useFilesStore.getState().save(hanging, W, tab);
+    // Сброс стора (как между тестами) или закрытие и открытие вкладки заново — буфер другой.
+    useFilesStore.setState({ buffers: {}, reveals: {} });
+    useFilesStore.getState().openBuffer(bridge, W, tab, { ...root }, 'a.ts');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    useFilesStore.getState().dispatch(key, { type: 'edited', text: 'abc' });
+    expect(await useFilesStore.getState().save(bridge, W, tab)).toBe('saved');
+    expect(bridge.writes).toEqual([{ root: { ...root }, path: 'a.ts', text: 'abc', expectedMtimeMs: 1 }]);
+    // Поздний ответ старой записи не трогает новый буфер.
+    useFilesStore.getState().dispatch(key, { type: 'edited', text: 'abcd' });
+    finishOld({ ok: true, mtimeMs: 50 });
+    await old;
+    expect(useFilesStore.getState().buffers[key]?.model).toMatchObject({ status: 'dirty', text: 'abcd' });
   });
 
   it('conflict — disk-changed-dirty; overwrite — write с mtime диска', async () => {

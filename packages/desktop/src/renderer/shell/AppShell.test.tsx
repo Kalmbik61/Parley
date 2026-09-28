@@ -1763,10 +1763,10 @@ describe('AppShell — несохранённые файлы при закрыт
   beforeEach(() => useFilesStore.setState({ buffers: {}, reveals: {} }));
 
   /** Открывает A и B (активна B), делает A грязной — её тело уже размонтировано. */
-  async function openDirtyA(): Promise<void> {
+  async function openDirtyA(extra: WorkEntry[] = []): Promise<void> {
     bridge.setFile(root, 'src/a.ts', text('a'));
     bridge.setFile(root, 'src/b.ts', text('b'));
-    await renderShell([work('w-01', '2026-01-01', 'One', [session('s-01', 'one')])]);
+    await renderShell([work('w-01', '2026-01-01', 'One', [session('s-01', 'one')]), ...extra]);
     act(() => useLayoutStore.getState().setActiveWork(W));
     await waitFor(() => expect(useLayoutStore.getState().hydrated[W]).toBe(true));
     act(() => {
@@ -1827,13 +1827,78 @@ describe('AppShell — несохранённые файлы при закрыт
     await waitFor(() => expect(bridge.dirtyBufferCounts.at(-1)).toBe(1));
     act(() => bridge.emitConfirmClose());
     expect(await screen.findByText('Save changes to a.ts?')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Save all' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(bridge.closeAnswers).toEqual(['close']));
     expect(bridge.writes).toHaveLength(1);
     await waitFor(() => expect(bridge.dirtyBufferCounts.at(-1)).toBe(0));
 
     act(() => bridge.emitConfirmClose());
     await waitFor(() => expect(bridge.closeAnswers).toEqual(['close', 'close']));
+  });
+
+  it('вопрос вкладки и вопрос окна на один файл: Save вкладки, затем ответ окна — close без ложной ошибки (fix-7.3 п. 3)', async () => {
+    await openDirtyA();
+    fireEvent.click(within(tabEl(A)).getByRole('button', { name: 'Close' }));
+    expect(await screen.findByText('Save changes to a.ts?')).toBeTruthy();
+    // ⌘Q, пока открыт вопрос вкладки: вопрос окна встаёт в очередь вторым.
+    act(() => bridge.emitConfirmClose());
+    vi.mocked(toast).mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(openIds()).toEqual([B.id]));
+    // Вопрос окна по уже сохранённому и отпущенному буферу: «Save» не ошибка, окно закрывается.
+    fireEvent.click(await screen.findByRole('button', { name: /^Save/ }));
+    await waitFor(() => expect(bridge.closeAnswers).toEqual(['close']));
+    expect(toast).not.toHaveBeenCalledWith("Couldn't save all files — the window stays open");
+    expect(bridge.writes).toHaveLength(1);
+  });
+
+  describe('работа исчезла из снимка не через меню окна (fix-7.3 п. 1)', () => {
+    const other = (): WorkEntry => work('w-02', '2026-01-02', 'Two', [session('s-02', 'two')]);
+    const vanish = (): void => act(() => useWorksStore.setState({ entries: [other()] }));
+    const question = 'Workspace “One” was deleted — unsaved changes in 1 file';
+
+    it('грязный буфер — вопрос; раскладка ждёт ответа; Save пишет файл, затем раскладка уходит', async () => {
+      await openDirtyA([other()]);
+      vanish();
+      expect(await screen.findByText(question)).toBeTruthy();
+      expect(useLayoutStore.getState().layouts[W]).toBeDefined();
+      // Отменить удаление нельзя: Esc не отбрасывает правки молча.
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+      await flush();
+      expect(screen.getByText(question)).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(useLayoutStore.getState().layouts[W]).toBeUndefined());
+      expect(bridge.writes).toEqual([{ root, path: 'src/a.ts', text: 'a2', expectedMtimeMs: 1 }]);
+      expect(useFilesStore.getState().buffers).toEqual({});
+    });
+
+    it('Discard — без записи, буфер отпущен, раскладка ушла', async () => {
+      await openDirtyA([other()]);
+      vanish();
+      fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
+      await waitFor(() => expect(useLayoutStore.getState().layouts[W]).toBeUndefined());
+      expect(bridge.writes).toEqual([]);
+      expect(useFilesStore.getState().buffers).toEqual({});
+    });
+
+    it('запись не удалась (папки больше нет) — тост с именами несохранённых', async () => {
+      await openDirtyA([other()]);
+      bridge.files.write = async () => Promise.reject({ code: 'not_found', message: 'gone' });
+      vi.mocked(toast).mockClear();
+      vanish();
+      fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(useLayoutStore.getState().layouts[W]).toBeUndefined());
+      expect(toast).toHaveBeenCalledWith("Couldn't save: a.ts");
+    });
+
+    it('без грязных буферов — раскладка уходит сразу, без вопроса', async () => {
+      await renderShell([work('w-01', '2026-01-01', 'One', [session('s-01', 'one')]), other()]);
+      act(() => useLayoutStore.getState().setActiveWork(W));
+      await waitFor(() => expect(useLayoutStore.getState().hydrated[W]).toBe(true));
+      vanish();
+      expect(useLayoutStore.getState().layouts[W]).toBeUndefined();
+      expect(screen.queryByTestId('save-changes-dialog')).toBeNull();
+    });
   });
 
   it("app:confirm-close: Cancel — cancel; ошибка записи Save all — cancel и тост", async () => {
@@ -1845,7 +1910,7 @@ describe('AppShell — несохранённые файлы при закрыт
     bridge.setWriteConflict(root, 'src/a.ts', 99);
     vi.mocked(toast).mockClear();
     act(() => bridge.emitConfirmClose());
-    fireEvent.click(await screen.findByRole('button', { name: 'Save all' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
     await waitFor(() => expect(bridge.closeAnswers).toEqual(['cancel', 'cancel']));
     expect(toast).toHaveBeenCalledWith("Couldn't save all files — the window stays open");
   });

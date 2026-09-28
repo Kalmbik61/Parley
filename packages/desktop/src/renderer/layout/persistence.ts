@@ -11,6 +11,7 @@ import { useEffect, useRef } from 'react';
 import type { WorkEntry } from '@harnas/core';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import type { HarnasBridge } from '../../shared/bridge.js';
+import { settleVanishedWork } from '../files/SaveChangesDialog.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { emptyLayout, parseWorkLayout, pruneLayout } from './tree.js';
 import { useLayoutStore } from './store.js';
@@ -214,6 +215,12 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order, visibl
   /** Последний посчитанный видимый порядок — «прежний» для выбора соседа. */
   const lastVisibleRef = useRef<string[] | null>(null);
   const pendingRef = useRef<PendingChoice | null>(null);
+  /**
+   * Последние известные названия работ: вопрос об исчезнувшей работе называет её (fix-7.3 п. 1),
+   * а в свежем снимке её уже нет. Только растёт — по строке на работу за запуск.
+   */
+  const titlesRef = useRef(new Map<string, string>());
+  for (const entry of works) titlesRef.current.set(workKeyOf(entry.projectPath, entry.map.work.id), entry.map.work.title);
   /** `activeWorkKey` из `ui.json`; `undefined` — ответа ещё нет. */
   const fromDiskRef = useRef<string | null | undefined>(undefined);
   // Отменяет выбор по `ui.json` только размонтирование, а не перезапуск эффекта
@@ -297,8 +304,19 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order, visibl
       const missingKeys = prevOrder.filter((key) => !current.includes(key));
       for (const key of missingKeys) {
         drops.set(key, (drops.get(key) ?? 0) + 1);
-        useLayoutStore.getState().drop(key);
-        bridge.app.removeLayout(key).catch(() => {});
+        const remove = (): void => {
+          useLayoutStore.getState().drop(key);
+          bridge.app.removeLayout(key).catch(() => {});
+        };
+        // Работу удалили не из этого окна (fix-7.3 п. 1): `drop` отпустил бы грязные буферы её
+        // вкладок мимо вопроса. Есть такие — сначала вопрос, раскладка уходит после ответа; работа
+        // за это время вернулась в снимок — раскладка остаётся.
+        const settling = settleVanishedWork(bridge, key, titlesRef.current.get(key) ?? key);
+        if (settling === null) remove();
+        else
+          void settling.then(() => {
+            if (!orderRef.current.includes(key)) remove();
+          });
       }
       // Архивная остаётся в составе и с раскладкой, но активной быть перестаёт (спека 6.7).
       const becameArchived =
