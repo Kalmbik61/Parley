@@ -8,15 +8,23 @@
  * - `commit-project` — вопрос всегда: коммит заберёт всё в папке, не только правки этой сессии;
  * - `merge` — вопрос всегда; `baseCheckout: null` — сразу тост, слияние заведомо откажет.
  * После своего коммита и слияния — `onChanged()` (refresh мимо дросселя).
+ *
+ * Несохранённые буферы корня сессии (раунд fix-final-c, п. 4): правка во вкладке без ⌘S в коммит
+ * не попадала молча. Есть такие — коммит всегда с вопросом, он называет «N unsaved files» и даёт
+ * «Save all and commit» (запись, затем коммит; запись не удалась — коммита нет) и «Commit
+ * anyway». Слияние не коммитит — его вопрос прежний.
  */
 
 import { useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { toast } from 'sonner';
 import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
 import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
+import { dirtyBufferKeys, useFilesStore } from '../files/store.js';
+import { splitBufferKey } from '../files/buffer.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
 import { Button } from '../ui/button.js';
 import { Textarea } from '../ui/textarea.js';
@@ -25,6 +33,8 @@ import { askAgentText, mergeResultText, primaryActionFor, type ChangesSource } f
 
 export interface PrimaryActionProps {
   bridge: HarnasBridge;
+  /** Работа сессии: буферы файлов ищутся по её корням. */
+  workKey: string;
   sessionRef: SessionRef;
   source: ChangesSource;
   /** Сессия в `working`: подтверждения добавляют строку «агент ещё работает». */
@@ -44,12 +54,29 @@ function sentences(...parts: Array<string | null>): string {
     .join(' ');
 }
 
-export function PrimaryAction({ bridge, sessionRef, source, working, sendDeps, onChanged, onConflicts }: PrimaryActionProps): JSX.Element {
+/** Ключи грязных буферов корня, который коммитит источник: worktree сессии или папка проекта. */
+function useUnsavedKeys(workKey: string, sessionId: string, source: ChangesSource): string[] {
+  const worktree = source.kind === 'worktree';
+  return useFilesStore(
+    useShallow((state) =>
+      source.kind === 'pending'
+        ? []
+        : dirtyBufferKeys(state.buffers).filter((key) => {
+            const root = state.buffers[key]?.root;
+            if (root?.workKey !== workKey) return false;
+            return worktree ? root.spec.kind === 'worktree' && root.spec.sessionId === sessionId : root.spec.kind === 'project';
+          }),
+    ),
+  );
+}
+
+export function PrimaryAction({ bridge, workKey, sessionRef, source, working, sendDeps, onChanged, onConflicts }: PrimaryActionProps): JSX.Element {
   const [message, setMessage] = useState('');
   const [confirm, setConfirm] = useState<'commit' | 'merge' | null>(null);
   const [askOpen, setAskOpen] = useState(false);
   const action = primaryActionFor(source);
   const agentLine = working ? S.changes.agentStillWorking : null;
+  const unsaved = useUnsavedKeys(workKey, sessionRef.sessionId, source);
 
   // Одно нажатие — один коммит (раунд 8, пункт 2): два клика или ⌘Enter + клик до ответа хоста слали
   // `worktrees.commit` дважды, второй получал отказ и ложный тост после успешного коммита. Ref гасит
@@ -57,15 +84,45 @@ export function PrimaryAction({ bridge, sessionRef, source, working, sendDeps, o
   const committing = useRef(false);
   const [busy, setBusy] = useState(false);
 
-  const commit = (): void => {
+  const done = (): void => {
+    committing.current = false;
+    setBusy(false);
+  };
+
+  /** Начать коммит: `null` — пустое сообщение или коммит уже идёт. */
+  const begin = (): string | null => {
     const trimmed = message.trim();
-    if (trimmed === '' || committing.current) return;
+    if (trimmed === '' || committing.current) return null;
     committing.current = true;
     setBusy(true);
-    const done = (): void => {
-      committing.current = false;
-      setBusy(false);
-    };
+    return trimmed;
+  };
+
+  const commit = (): void => {
+    const trimmed = begin();
+    if (trimmed !== null) send(trimmed);
+  };
+
+  /** «Save all and commit»: буферы корня — по очереди; хоть одна запись не удалась — коммита нет. */
+  const saveAllAndCommit = (): void => {
+    const trimmed = begin();
+    if (trimmed === null) return;
+    void (async () => {
+      let saved = true;
+      for (const key of unsaved) {
+        const { workKey: bufferWork, tabId } = splitBufferKey(key);
+        if ((await useFilesStore.getState().save(bridge, bufferWork, tabId)) !== 'saved') saved = false;
+      }
+      if (saved) {
+        send(trimmed);
+        return;
+      }
+      done();
+      toast.error(S.changes.saveBeforeCommitFailed);
+    })();
+  };
+
+  const send = (trimmed: string): void => {
     const call =
       source.kind === 'project'
         ? bridge.call('changes.commitProject', { ref: sessionRef, message: trimmed })
@@ -112,7 +169,7 @@ export function PrimaryAction({ bridge, sessionRef, source, working, sendDeps, o
     switch (action.kind) {
       case 'commit':
         if (message.trim() === '') return;
-        if (working) setConfirm('commit');
+        if (working || unsaved.length > 0) setConfirm('commit');
         else commit();
         return;
       case 'commit-project':
@@ -147,7 +204,11 @@ export function PrimaryAction({ bridge, sessionRef, source, working, sendDeps, o
             : S.changes.noChanges;
   const disabled = action.kind === 'nothing' || (withMessage && (message.trim() === '' || busy));
 
-  const commitDescription = sentences(source.kind === 'project' ? S.changes.projectFolderWarning : null, agentLine);
+  const commitDescription = sentences(
+    source.kind === 'project' ? S.changes.projectFolderWarning : null,
+    agentLine,
+    unsaved.length > 0 ? S.changes.unsavedFiles(unsaved.length) : null,
+  );
   // Заголовок вопроса коммита: ветка worktree или «master (project folder)».
   const commitTarget = source.kind === 'worktree' ? source.branch : source.kind === 'project' ? S.changes.projectFolder(source.changes.branch) : '';
 
@@ -175,9 +236,10 @@ export function PrimaryAction({ bridge, sessionRef, source, working, sendDeps, o
         open={confirm === 'commit'}
         title={S.changes.commitConfirmTitle(commitTarget)}
         {...(commitDescription === '' ? null : { description: commitDescription })}
-        confirmLabel={label}
+        {...(unsaved.length === 0
+          ? { confirmLabel: label, onConfirm: commit }
+          : { confirmLabel: S.changes.saveAllAndCommit, onConfirm: saveAllAndCommit, secondary: { label: S.changes.commitAnyway, onSelect: commit } })}
         confirmVariant="default"
-        onConfirm={commit}
         onOpenChange={(next) => setConfirm(next ? 'commit' : null)}
       />
       {source.kind === 'worktree' ? (

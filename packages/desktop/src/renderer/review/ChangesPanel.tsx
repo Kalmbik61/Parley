@@ -267,6 +267,7 @@ export function ChangesPanel({ bridge, workKey, entry, sendDeps }: ChangesPanelP
           // Черновик сообщения — одной сессии: смена сессии в шапке начинает с пустого поля.
           key={key}
           bridge={bridge}
+          workKey={workKey}
           sessionRef={ref}
           source={source}
           working={working}

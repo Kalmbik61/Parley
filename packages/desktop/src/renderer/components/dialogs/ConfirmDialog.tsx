@@ -21,6 +21,11 @@ export interface ConfirmDialogProps {
   /** Вид кнопки подтверждения: `destructive` (по умолчанию) — необратимое, `default` — обычное действие. */
   confirmVariant?: 'destructive' | 'default';
   onConfirm: () => void;
+  /**
+   * Второе действие между «Отменой» и подтверждением (раунд fix-final-c, п. 4: «Commit anyway»
+   * рядом с «Save all and commit»). Одно нажатие на открытие — общее с подтверждением.
+   */
+  secondary?: { label: string; onSelect: () => void };
   onOpenChange: (open: boolean) => void;
   /** Куда вернуть фокус после закрытия, если не туда, где он был при открытии (Radix). */
   onCloseAutoFocus?: (event: Event) => void;
@@ -33,6 +38,7 @@ export function ConfirmDialog({
   confirmLabel,
   confirmVariant = 'destructive',
   onConfirm,
+  secondary,
   onOpenChange,
   onCloseAutoFocus,
 }: ConfirmDialogProps): JSX.Element {
@@ -54,7 +60,8 @@ export function ConfirmDialog({
       <DialogContent
         {...(description === undefined ? { 'aria-describedby': undefined } : null)}
         {...(onCloseAutoFocus === undefined ? null : { onCloseAutoFocus })}
-        className="w-80 max-w-80"
+        // Три кнопки в ряд не влезают в 320px: с вторым действием — шире, в пределах окна.
+        className={secondary === undefined ? 'w-80 max-w-80' : 'w-[30rem] max-w-[calc(100vw-2rem)]'}
       >
         <DialogTitle>{title}</DialogTitle>
         {description !== undefined ? <DialogDescription>{description}</DialogDescription> : null}
@@ -64,6 +71,20 @@ export function ConfirmDialog({
               {S.common.cancel}
             </Button>
           </DialogClose>
+          {secondary === undefined ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                if (confirmed.current) return;
+                confirmed.current = true;
+                secondary.onSelect();
+                onOpenChange(false);
+              }}
+            >
+              {secondary.label}
+            </Button>
+          )}
           <Button
             type="button"
             variant={confirmVariant}

@@ -382,6 +382,49 @@ test.describe('ревью изменений: заметки, коммит, сл
     await expect(diffTab.locator('[data-diff-path]')).toHaveCount(600);
   });
 
+  test('fix-final-c п. 4: несохранённая правка во вкладке worktree — Commit спрашивает; Save all and commit — правка в коммите; 800×500 без вылезания', async () => {
+    test.setTimeout(120_000);
+    const { app: electronApp, window, sessionId, worktree } = await start();
+    await writeFile(path.join(worktree, 'src', 'feature.ts'), 'export const feature = true;\n');
+    // Сессия в фокусе — корень «Files» по умолчанию её worktree.
+    await window.locator(`[data-session-id="${sessionId}"]`).first().click();
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 800, height: 500 }));
+    // 800 px: рядом с левым сайдбаром правому нет места — левый прячем.
+    await window.keyboard.press('Meta+B');
+    const sidebar = window.getByTestId('right-sidebar');
+    await sidebar.getByRole('tab', { name: 'Files' }).click();
+    await sidebar.locator('[data-tree-path="src"]').click();
+    await sidebar.locator('[data-tree-path="src/base.ts"]').click();
+    await expect(window.locator(`[role="tab"][data-tab-id="file:w:${sessionId}:src/base.ts"]`)).toBeVisible();
+    const lines = window.locator('.monaco-editor:visible .view-lines').first();
+    await expect(lines).toContainText('export const v0 = 0;');
+    await lines.click();
+    await window.keyboard.press('Meta+ArrowDown');
+    await window.keyboard.type('// unsaved edit');
+
+    const panel = await openChanges(window);
+    await panel.getByPlaceholder('Commit message').fill('with unsaved');
+    await panel.getByRole('button', { name: 'Commit', exact: true }).click();
+    const dialog = window.getByRole('dialog');
+    await expect(dialog).toContainText('1 unsaved file');
+    // Замер — после анимации появления: пока она идёт, диалог сдвинут.
+    const overflow = (): Promise<string[]> => dialog.evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      const problems: string[] = [];
+      if (box.left < 0 || box.right > window.innerWidth + 0.5) problems.push(`dialog ${Math.round(box.left)}..${Math.round(box.right)} vs ${window.innerWidth}`);
+      for (const node of el.querySelectorAll('h2, p, button')) {
+        const rect = node.getBoundingClientRect();
+        if (rect.width > 0 && rect.right > box.right + 0.5) problems.push(`${node.tagName.toLowerCase()} right ${Math.round(rect.right)} > ${Math.round(box.right)}`);
+      }
+      return problems;
+    });
+    await expect.poll(overflow).toEqual([]);
+    await dialog.getByRole('button', { name: 'Save all and commit' }).click();
+    await expect.poll(() => git(worktree, 'log', '-1', '--format=%s').trim(), { timeout: 10_000 }).toBe('with unsaved');
+    expect(git(worktree, 'show', '--name-only', '--format=', 'HEAD').trim().split('\n').sort()).toEqual(['src/base.ts', 'src/feature.ts']);
+    expect(git(worktree, 'show', 'HEAD:src/base.ts')).toContain('// unsaved edit');
+  });
+
   test('правка одной строки в базе и в ветке → секция Conflicts с файлом до попытки слияния', async () => {
     test.setTimeout(120_000);
     const { window, worktree } = await start();

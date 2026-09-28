@@ -21,6 +21,8 @@ import { useUiStore } from '../store/ui.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { bufferKey, initialBuffer } from '../files/buffer.js';
+import { useFilesStore } from '../files/store.js';
 import { ChangesPanel } from './ChangesPanel.js';
 import { useReviewStore } from './store.js';
 
@@ -764,5 +766,100 @@ describe('много неотслеживаемых (раунд fix-final-c, п.
     const region = await screen.findByRole('region', { name: 'Uncommitted' });
     expect(within(region).getByTitle('a.ts')).toBeTruthy();
     expect(within(region).queryByText(/more untracked/)).toBeNull();
+  });
+});
+
+describe('Commit и несохранённые буферы корня сессии (раунд fix-final-c, п. 4)', () => {
+  const WT_ROOT = { workKey: KEY, spec: { kind: 'worktree' as const, sessionId: 's-02' } };
+  const PROJECT_ROOT = { workKey: KEY, spec: { kind: 'project' as const } };
+
+  function dirty(root: typeof WT_ROOT | typeof PROJECT_ROOT, path: string): void {
+    const id = tabId.file(root.spec, path);
+    useFilesStore.setState((state) => ({
+      buffers: {
+        ...state.buffers,
+        [bufferKey(KEY, id)]: {
+          root,
+          path,
+          watchId: null,
+          model: { ...initialBuffer(), status: 'dirty', text: `mine ${path}`, savedText: 'disk', mtimeMs: 1, diskMtimeMs: 1 },
+        },
+      },
+    }));
+  }
+
+  beforeEach(() => {
+    useFilesStore.setState({ buffers: {}, reveals: {} });
+    bridge.setHandler('worktrees.diff', () => diff({ uncommitted: true, files: [file('a.ts')], uncommittedPaths: ['a.ts'] }));
+  });
+
+  afterEach(() => {
+    useFilesStore.setState({ buffers: {}, reveals: {} });
+  });
+
+  async function pressCommit(): Promise<void> {
+    renderPanel();
+    fireEvent.change(await screen.findByPlaceholderText('Commit message'), { target: { value: 'fix' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Commit' }));
+    await flush();
+  }
+
+  it('буфер worktree не сохранён — вопрос «1 unsaved file»; Commit anyway — коммит без записи', async () => {
+    dirty(WT_ROOT, 'a.ts');
+    // Буфер папки проекта — не корень этой сессии: в счёт не идёт.
+    dirty(PROJECT_ROOT, 'b.ts');
+    await pressCommit();
+    expect(count('worktrees.commit')).toBe(0);
+    expect(dialog().textContent).toContain('1 unsaved file');
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Commit anyway' }));
+    await flush();
+    expect(count('worktrees.commit')).toBe(1);
+    expect(bridge.writes).toHaveLength(0);
+  });
+
+  it('Save all and commit — сперва запись буферов корня, потом один коммит', async () => {
+    dirty(WT_ROOT, 'a.ts');
+    dirty(WT_ROOT, 'b.ts');
+    dirty(PROJECT_ROOT, 'c.ts');
+    const order: string[] = [];
+    bridge.setHandler('worktrees.commit', () => {
+      order.push(`commit after ${bridge.writes.length} writes`);
+      return { commit: 'c'.repeat(40) };
+    });
+    await pressCommit();
+    expect(dialog().textContent).toContain('2 unsaved files');
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Save all and commit' }));
+    await waitFor(() => expect(count('worktrees.commit')).toBe(1));
+    expect(order).toEqual(['commit after 2 writes']);
+    expect(bridge.writes.map((write) => write.path).sort()).toEqual(['a.ts', 'b.ts']);
+  });
+
+  it('запись не удалась — коммита нет, тост', async () => {
+    dirty(WT_ROOT, 'a.ts');
+    bridge.setWriteConflict(WT_ROOT, 'a.ts', 99);
+    await pressCommit();
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Save all and commit' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Couldn't save all files — nothing was committed"));
+    expect(count('worktrees.commit')).toBe(0);
+  });
+
+  it('папка проекта: вопрос коммита называет несохранённые файлы проекта', async () => {
+    focus('s-04');
+    bridge.setHandler('changes.project', () => project({ files: [file('a.ts')] }));
+    dirty(PROJECT_ROOT, 'a.ts');
+    renderPanel();
+    fireEvent.change(await screen.findByPlaceholderText('Commit message'), { target: { value: 'fix' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Commit all in folder' }));
+    await flush();
+    expect(dialog().textContent).toContain('1 unsaved file');
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Commit anyway' }));
+    await flush();
+    expect(count('changes.commitProject')).toBe(1);
+  });
+
+  it('несохранённых нет — как раньше: коммит без вопроса', async () => {
+    dirty(PROJECT_ROOT, 'b.ts');
+    await pressCommit();
+    expect(count('worktrees.commit')).toBe(1);
   });
 });

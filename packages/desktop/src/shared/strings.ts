@@ -312,6 +312,11 @@ export const S = {
     commitProject: 'Commit all in folder',
     askAgent: 'Ask agent to resolve',
     commitConfirmTitle: (branch: string): string => `Commit to ${branch}?`,
+    /** Несохранённые буферы корня сессии в вопросе коммита (раунд fix-final-c, п. 4). */
+    unsavedFiles: (n: number): string => `${n === 1 ? '1 unsaved file' : `${n} unsaved files`} — unsaved edits are not in the commit`,
+    saveAllAndCommit: 'Save all and commit',
+    commitAnyway: 'Commit anyway',
+    saveBeforeCommitFailed: "Couldn't save all files — nothing was committed",
     mergeConfirmTitle: (branch: string, base: string): string => `Merge ${branch} into ${base}?`,
     mergeConfirmDescription: (commits: number, additions: number, deletions: number, base: string, checkout: string): string =>
       `${commits === 1 ? '1 commit' : `${commits} commits`}, +${additions} −${deletions}. ${base} is checked out in ${checkout}.`,
