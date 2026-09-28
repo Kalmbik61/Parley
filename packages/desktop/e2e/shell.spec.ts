@@ -1,11 +1,11 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
-import { makeTempProject } from './tmp.js';
+import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
  * Каркас окна (кусок 2.7 плана каркаса, спека 14.3, строка этапа 2): сплит с
@@ -145,12 +145,12 @@ test.describe('каркас окна: сплиты, перенос вкладо�
   let app: ElectronApplication | null = null;
 
   test.beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-shell-'));
+    home = await makeTempHome('shell');
     project = await makeTempProject('shell');
   });
 
   test.afterEach(async () => {
-    await app?.close().catch(() => {});
+    await stopApp(app);
     app = null;
     await stopHost(home);
     await rm(home, { recursive: true, force: true });

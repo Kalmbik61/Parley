@@ -1,11 +1,11 @@
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { _electron as electron, expect, test, type Page } from '@playwright/test';
+import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { quitApp, stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
-import { makeTempProject } from './tmp.js';
+import { makeTempHome, makeTempProject } from './tmp.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
@@ -44,13 +44,17 @@ async function hostSupportsPty(window: Page): Promise<boolean> {
 test.describe('панель терминала: ввод стаба и восстановление после перезапуска', () => {
   let home: string;
   let project: string;
+  /** Окно теста — его гасит afterEach, и после упавшего теста тоже. */
+  let running: ElectronApplication | null = null;
 
   test.beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-term-'));
+    home = await makeTempHome('term');
     project = await makeTempProject('terminal');
   });
 
   test.afterEach(async () => {
+    await stopApp(running);
+    running = null;
     await stopHost(home);
     await rm(home, { recursive: true, force: true });
     await rm(project, { recursive: true, force: true });
@@ -63,6 +67,7 @@ test.describe('панель терминала: ввод стаба и восс�
     const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
 
     let app = await electron.launch({ args: [mainEntry], env });
+    running = app;
     let window = await app.firstWindow();
     await expect(window.getByTestId('landing')).toBeVisible();
 
@@ -106,16 +111,15 @@ test.describe('панель терминала: ввод стаба и восс�
 
     await expect(window.getByText('echo: hello', { exact: true })).toBeVisible();
 
-    await app.close();
+    await quitApp(app);
 
     app = await electron.launch({ args: [mainEntry], env });
+    running = app;
     window = await app.firstWindow();
     await window.locator(`[data-session-id="${session.ref.sessionId}"]`).click();
 
     // Экран восстановлен из снимка хоста — без нового ввода.
     await expect(window.getByText('echo: hello', { exact: true })).toBeVisible();
-
-    await app.close();
   });
 
   test('тест 15 (кусок 5.3): указатель по строкам с URL и путём — ни pageerror, ни ошибок console', async () => {
@@ -124,6 +128,7 @@ test.describe('панель терминала: ввод стаба и восс�
     await writeFile(path.join(project, 'src', 'a.ts'), 'export {};\n');
 
     const app = await electron.launch({ args: [mainEntry], env });
+    running = app;
     try {
       const window = await app.firstWindow();
       // Неперехваченное исключение (как SyntaxError `WebLinksAddon` на флагах `gg`) Playwright
@@ -174,13 +179,14 @@ test.describe('панель терминала: ввод стаба и восс�
 
       expect(errors).toEqual([]);
     } finally {
-      await app.close();
+      await stopApp(app);
     }
   });
 
   test('раунд fix-6.2: аддоны под xterm 5.5 — ⌘F считает совпадения N/M, FitAddon подгоняет строки под окно', async () => {
     const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
     const app = await electron.launch({ args: [mainEntry], env });
+    running = app;
     try {
       const window = await app.firstWindow();
       const errors: string[] = [];
@@ -240,7 +246,7 @@ test.describe('панель терминала: ввод стаба и восс�
 
       expect(errors).toEqual([]);
     } finally {
-      await app.close();
+      await stopApp(app);
     }
   });
 });

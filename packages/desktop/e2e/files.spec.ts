@@ -1,11 +1,11 @@
 import { existsSync } from 'node:fs';
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { chmod, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
-import { makeTempProject } from './tmp.js';
+import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
  * Реестр корней main, `files.locate`, `app.openPath` и `app.showInFinder` на собранном окне
@@ -55,12 +55,12 @@ test.describe('файлы и корни main (кусок 5.2)', () => {
   let app: ElectronApplication | null = null;
 
   test.beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-files-'));
+    home = await makeTempHome('files');
     project = await makeTempProject('files');
   });
 
   test.afterEach(async () => {
-    await app?.close().catch(() => {});
+    await stopApp(app);
     app = null;
     await stopHost(home);
     await rm(home, { recursive: true, force: true });

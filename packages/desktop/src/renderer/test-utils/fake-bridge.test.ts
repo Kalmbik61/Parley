@@ -77,9 +77,9 @@ describe('fake-bridge: git, поиск и слежение (кусок 7.1b)', (
       (error: { code?: string }) => error.code ?? 'no-code',
     );
 
-  it('по умолчанию: lsFiles [], grep пусто, gitStatus {}, gitShow null; журналы', async () => {
+  it('по умолчанию: lsFiles пусто, grep пусто, gitStatus {}, gitShow null; журналы', async () => {
     const bridge = createFakeBridge();
-    expect(await bridge.files.lsFiles(root)).toEqual([]);
+    expect(await bridge.files.lsFiles(root)).toEqual({ paths: [], truncated: false });
     expect(await bridge.files.grep(root, query, 's1')).toEqual({ files: [], truncated: false });
     expect(await bridge.files.gitStatus(root)).toEqual({});
     expect(await bridge.files.gitShow(root, 'HEAD', 'a.ts')).toBeNull();
@@ -96,11 +96,11 @@ describe('fake-bridge: git, поиск и слежение (кусок 7.1b)', (
 
   it('сеттеры, отказ слежения и эмиттеры событий', async () => {
     const bridge = createFakeBridge();
-    bridge.setLsFiles(root, ['a.ts']);
+    bridge.setLsFiles(root, { paths: ['a.ts'], truncated: true });
     bridge.setGitStatus(root, { 'a.ts': 'M' });
     const result = { files: [{ path: 'a.ts', hits: [{ line: 1, text: 'x', ranges: [[0, 1]] as [number, number][] }] }], truncated: true };
     bridge.setGrepResult(result);
-    expect(await bridge.files.lsFiles(root)).toEqual(['a.ts']);
+    expect(await bridge.files.lsFiles(root)).toEqual({ paths: ['a.ts'], truncated: true });
     expect(await bridge.files.gitStatus(root)).toEqual({ 'a.ts': 'M' });
     expect(await bridge.files.grep(root, query, 's')).toEqual(result);
     bridge.setGrepResult({ code: 'files:denied', message: 'x' });

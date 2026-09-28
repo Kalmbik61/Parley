@@ -10,12 +10,13 @@
  */
 
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { quitApp, stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
+import { makeTempHome } from './tmp.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
@@ -29,14 +30,15 @@ const background = (window: Page): Promise<string> => window.evaluate(() => getC
 
 test.describe('тема окна по nativeTheme main (спека 4.7, раунд main-r2)', () => {
   let home: string;
+  /** Окно теста — его гасит afterEach, и после упавшего теста тоже. */
   let app: ElectronApplication | null = null;
 
   test.beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-theme-'));
+    home = await makeTempHome('theme');
   });
 
   test.afterEach(async () => {
-    await app?.close().catch(() => {});
+    await stopApp(app);
     app = null;
     await stopHost(home);
     await rm(home, { recursive: true, force: true });
@@ -47,6 +49,12 @@ test.describe('тема окна по nativeTheme main (спека 4.7, раун
     const window = await app.firstWindow();
     await expect(window.getByTestId('landing')).toBeVisible();
     return window;
+  }
+
+  /** Штатный выход перед перезапуском с тем же домом: хвост разбора Chromium не ждётся (`quitApp`). */
+  async function quit(): Promise<void> {
+    if (app !== null) await quitApp(app);
+    app = null;
   }
 
   async function pickTheme(window: Page, label: 'Theme: dark' | 'Theme: light'): Promise<void> {
@@ -80,7 +88,7 @@ test.describe('тема окна по nativeTheme main (спека 4.7, раун
     await pickTheme(window, 'Theme: dark');
     await expect.poll(() => isDark(window)).toBe(true);
     await expect.poll(savedAppearance).toBe('dark');
-    await app?.close();
+    await quit();
 
     window = await launch();
     // С первого кадра — без ожидания события: начальная тёмность приходит синхронно.
@@ -89,13 +97,13 @@ test.describe('тема окна по nativeTheme main (спека 4.7, раун
     // Перезагрузка страницы: `.dark` ставит `main.tsx` до React, экран связи тут не важен.
     await window.reload({ waitUntil: 'load' });
     expect(await isDark(window)).toBe(true);
-    await app?.close();
+    await quit();
 
     window = await launch();
     await pickTheme(window, 'Theme: light');
     await expect.poll(() => isDark(window)).toBe(false);
     await expect.poll(savedAppearance).toBe('light');
-    await app?.close();
+    await quit();
 
     window = await launch();
     expect(await isDark(window)).toBe(false);

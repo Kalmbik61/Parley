@@ -127,9 +127,11 @@ function wireSeenTracker(bridge: HarnasBridge): () => void {
 function wireFocusTargets(bridge: HarnasBridge): () => void {
   let waiting: FocusTarget | null = null;
   let offWorks: (() => void) | null = null;
+  // Ожидания показа вкладки снимаются вместе с подписками — их опрос не переживает App.
+  const unmounted = new AbortController();
 
   const apply = (target: FocusTarget): void => {
-    const applied = applyFocusTarget(target, buildFocusTargetDeps());
+    const applied = applyFocusTarget(target, buildFocusTargetDeps(unmounted.signal));
     if (!applied) toast(S.notifications.targetGone);
   };
 
@@ -152,6 +154,7 @@ function wireFocusTargets(bridge: HarnasBridge): () => void {
   return () => {
     offTarget();
     offWorks?.();
+    unmounted.abort();
   };
 }
 

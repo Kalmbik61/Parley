@@ -1,11 +1,11 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
-import { makeTempProject } from './tmp.js';
+import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
  * Палитра ⌘J (кусок 6.3, тесты 10–12; спека 9, строка 6 таблицы 14.3) и перенос ревью 6.2-B
@@ -71,12 +71,12 @@ test.describe('палитра ⌘J: поиск, выбор, ⌘1–9, форма
   let app: ElectronApplication | null = null;
 
   test.beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-palette-'));
+    home = await makeTempHome('palette');
     project = await makeTempProject('palette');
   });
 
   test.afterEach(async () => {
-    await app?.close().catch(() => {});
+    await stopApp(app);
     app = null;
     await stopHost(home);
     await rm(home, { recursive: true, force: true });

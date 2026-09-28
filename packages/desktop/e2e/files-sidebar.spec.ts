@@ -1,11 +1,11 @@
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
-import { makeTempProject } from './tmp.js';
+import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
  * Правый сайдбар и вкладка «Файлы» на собранном окне (кусок 7.2): дерево корня проекта из
@@ -63,7 +63,7 @@ for (const size of [
     let app: ElectronApplication | null = null;
 
     test.beforeEach(async () => {
-      home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-files-sidebar-'));
+      home = await makeTempHome('files-sidebar');
       base = await makeTempProject('files-sidebar');
       project = path.join(base, 'a-rather-long-project-folder-name-for-files-sidebar');
       await mkdir(path.join(project, 'src'), { recursive: true });
@@ -73,7 +73,7 @@ for (const size of [
     });
 
     test.afterEach(async () => {
-      await app?.close().catch(() => {});
+      await stopApp(app);
       app = null;
       await stopHost(home);
       await rm(home, { recursive: true, force: true });
@@ -136,12 +136,12 @@ test.describe('правый сайдбар не отнимает центр, о�
   let app: ElectronApplication | null = null;
 
   test.beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-files-sidebar-'));
+    home = await makeTempHome('files-sidebar');
     project = await makeTempProject('files-sidebar-center');
   });
 
   test.afterEach(async () => {
-    await app?.close().catch(() => {});
+    await stopApp(app);
     app = null;
     await stopHost(home);
     await rm(home, { recursive: true, force: true });

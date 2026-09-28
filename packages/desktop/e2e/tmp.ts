@@ -1,4 +1,4 @@
-import { mkdtemp, realpath } from 'node:fs/promises';
+import { appendFile, mkdtemp, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -11,4 +11,19 @@ import path from 'node:path';
  */
 export async function makeTempProject(spec: string): Promise<string> {
   return realpath(await mkdtemp(path.join(tmpdir(), `harnas-e2e-${spec}-`)));
+}
+
+/** Список домов прогона — его читает уборка в конце (`global-setup.ts`). */
+export const RUN_HOMES_ENV = 'HARNAS_E2E_RUN_HOMES';
+
+/**
+ * Свой `HARNAS_HOME` на каждый тест. Дом записывается в список прогона: если afterEach
+ * упавшего теста не дошёл до `stopHost` (воркер снят по таймауту), хост этого дома погасит
+ * уборка в конце прогона — и только его, домов других прогонов на машине она не знает.
+ */
+export async function makeTempHome(spec: string): Promise<string> {
+  const home = await mkdtemp(path.join(tmpdir(), `hh-e2e-${spec}-`));
+  const list = process.env[RUN_HOMES_ENV];
+  if (list !== undefined) await appendFile(list, `${home}\n`);
+  return home;
 }

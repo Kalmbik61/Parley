@@ -1529,6 +1529,13 @@ interface ActionDef {
     регулярка человека по тексту агента в потоке main могла бы остановить окно.
 - **Пределы:** 2000 совпадений, 200 файлов, у воркера — время. При упоре — «показаны
   первые N».
+- **Регулярки git и JS различаются.** `git grep -E` понимает ERE, подсветку `ranges` строит
+  `RegExp` JS: у строки, найденной git, `ranges` может быть пустым (POSIX-классы, `\<`, `\>`
+  и т.п.) — строка всё равно показывается, без подсветки. Запрос в режиме «.*» сначала
+  проверяется `new RegExp` на обоих корнях: неверный — `bad_request`; прочий сбой git (код
+  не 0 и не 1) — `failed`.
+- **Текст строки** в ответе — окно до 1 000 символов (UTF-16) вокруг первого совпадения,
+  `ranges` — от начала окна: строка минифицированного файла бывает в мегабайты.
 - Результаты сгруппированы по файлам, в строке номер и подсвеченное совпадение. Клик
   открывает файл на строке.
 - Запрос отменяется новым запросом (`AbortSignal` на `child_process`, `terminate()`
@@ -1617,7 +1624,9 @@ interface ActionDef {
 `src/shared/files-types.ts`, реализация в `main/files/*`. Каждый вызов проходит
 проверку корня (раздел 10.8). Ошибки — коды `files:denied`, `files:too-large`,
 `files:watch-failed`, `not_found`, `bad_request`: текста для человека main не пишет,
-окно показывает свой по коду. `readOnlyReason` — тоже код.
+окно показывает свой по коду. `readOnlyReason` — тоже код. `lsFiles` отвечает списком
+с `truncated`: обход не-git корня упёрся в предел 50 000, в бюджет времени или отменён —
+окно говорит, что показано не всё; список git всегда полный.
 
 ```ts
 interface FileRoot { workKey: string; spec: FileRootSpec }   // spec: проект или worktree сессии
@@ -1636,7 +1645,7 @@ interface FilesApi {
   unwatch(id: string): Promise<void>;
   onChanged(listener: (e: { id: string; path: string; mtimeMs: number | null; deleted: boolean }) => void): () => void;
   onTreeChanged(listener: (e: { rootKey: string; dirs: string[] }) => void): () => void;   // rootKey — shared/work-keys.ts
-  lsFiles(root: FileRoot): Promise<string[]>;
+  lsFiles(root: FileRoot): Promise<FileList>;
   grep(root: FileRoot, query: GrepQuery, signalId: string): Promise<GrepResult>;
   cancel(signalId: string): Promise<void>;
   gitShow(root: FileRoot, rev: string, path: string): Promise<TextFile | null>;   // null — файла или ревизии нет
@@ -1650,6 +1659,7 @@ interface DirEntry {
 }
 interface FileStat { kind: 'file' | 'dir'; size: number; mtimeMs: number }
 interface TextFile { text: string; mtimeMs: number; size: number; binary: boolean; utf8: boolean; readOnlyReason: 'too-large' | 'not-utf8' | null }
+interface FileList { paths: string[]; truncated: boolean }
 interface GrepQuery { text: string; caseSensitive: boolean; wholeWord: boolean; regex: boolean }
 interface GrepResult { files: Array<{ path: string; hits: Array<{ line: number; text: string; ranges: [number, number][] }> }>; truncated: boolean }
 ```

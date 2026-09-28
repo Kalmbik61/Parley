@@ -12,6 +12,8 @@ import {
   createGitRunner,
   createGrepParser,
   gitRootOf,
+  GREP_LINE_BYTES,
+  GREP_TOTAL_BYTES,
   isSafeRev,
   parseGitStatus,
   parseLsFiles,
@@ -114,7 +116,8 @@ describe('lsFiles и parseLsFiles (тест 2)', () => {
     await mkdir(path.join(dir, '.harnas', 'works', 'w'), { recursive: true });
     await writeFile(path.join(dir, '.harnas', 'works', 'w', 'map.json'), '{}');
     const files = await api(dir).lsFiles(ROOT);
-    expect(files.sort()).toEqual(['.gitignore', 'new.ts', 'tracked.ts']);
+    expect(files.paths.sort()).toEqual(['.gitignore', 'new.ts', 'tracked.ts']);
+    expect(files.truncated).toBe(false);
   });
 
   it('parseLsFiles: -z, кириллица и пробелы как есть', () => {
@@ -130,7 +133,8 @@ describe('lsFiles и parseLsFiles (тест 2)', () => {
     await mkdir(path.join(dir, 'src'));
     await writeFile(path.join(dir, 'src', 'a.ts'), '');
     await writeFile(path.join(dir, 'b.md'), '');
-    expect((await api(dir).lsFiles(ROOT)).sort()).toEqual(['b.md', 'src/a.ts']);
+    expect(await api(dir).lsFiles(ROOT)).toEqual({ paths: expect.arrayContaining(['b.md', 'src/a.ts']), truncated: false });
+    expect((await api(dir).lsFiles(ROOT)).paths).toHaveLength(2);
   });
 });
 
@@ -236,6 +240,47 @@ describe('createGrepParser', () => {
     expect(parser.push(Buffer.from(lines))).toBe(false);
     expect(parser.result().files).toHaveLength(200);
     expect(parser.result().truncated).toBe(true);
+  });
+
+  it('строка 5 МБ кусками по 64 КБ → текст попадания ровно 64 КБ, следующая запись цела', () => {
+    expect(GREP_LINE_BYTES).toBe(64 * 1024);
+    const parser = createGrepParser({ hits: 2000, files: 200 });
+    const out = Buffer.concat([
+      Buffer.from('min.js\x002\x00'),
+      Buffer.alloc(5 * 1024 * 1024, 'x'),
+      Buffer.from('\nb.ts\x007\x00y\n'),
+    ]);
+    for (let at = 0; at < out.length; at += 64 * 1024) expect(parser.push(out.subarray(at, at + 64 * 1024))).toBe(true);
+    const { files, truncated } = parser.result();
+    expect(truncated).toBe(false);
+    expect(files.map((f) => f.path)).toEqual(['min.js', 'b.ts']);
+    expect(files[0]?.hits[0]?.line).toBe(2);
+    expect(Buffer.byteLength(files[0]?.hits[0]?.text ?? '')).toBe(GREP_LINE_BYTES);
+    expect(files[1]?.hits[0]?.text).toBe('y');
+  });
+
+  it('много длинных строк → остановка по 32 МБ сырого текста и truncated', () => {
+    expect(GREP_TOTAL_BYTES).toBe(32 * 1024 * 1024);
+    const parser = createGrepParser({ hits: 2000, files: 200 });
+    const line = Buffer.alloc(1024 * 1024, 'x');
+    let pushed = 0;
+    let stoppedAt = -1;
+    for (let i = 0; i < 40; i++) {
+      const record = Buffer.concat([Buffer.from(`f${i}\x001\x00`), line, Buffer.from('\n')]);
+      pushed += record.length;
+      if (!parser.push(record)) {
+        stoppedAt = pushed;
+        break;
+      }
+    }
+    expect(stoppedAt).toBeGreaterThan(GREP_TOTAL_BYTES);
+    expect(stoppedAt).toBeLessThan(GREP_TOTAL_BYTES + 2 * 1024 * 1024);
+    expect(parser.push(Buffer.from('late\x001\x00x\n'))).toBe(false);
+    const { files, truncated } = parser.result();
+    expect(truncated).toBe(true);
+    // Целиком в 32 МБ вошла 31 запись по 1 МБ с заголовком; начатая 32-я отброшена.
+    expect(files).toHaveLength(31);
+    for (const file of files) expect(Buffer.byteLength(file.hits[0]?.text ?? '')).toBe(GREP_LINE_BYTES);
   });
 });
 
@@ -412,7 +457,7 @@ describe('не git (тест 9)', () => {
       const a = api(dir, runner);
       expect(await a.gitStatus(ROOT)).toEqual({});
       expect(await a.checkIgnored(ROOT, '', ['a.txt'])).toEqual(new Set());
-      expect(await a.lsFiles(ROOT)).toEqual(['a.txt']);
+      expect(await a.lsFiles(ROOT)).toEqual({ paths: ['a.txt'], truncated: false });
       expect((await a.grep(ROOT, Q('needle'), 's')).files).toEqual([
         { path: 'a.txt', hits: [{ line: 1, text: 'needle', ranges: [[0, 6]] }] },
       ]);
@@ -438,6 +483,24 @@ describe('checkIgnored', () => {
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
+
+  it('папка за каталогом-ссылкой (git выходит с 128): предупреждение один раз на папку, ignored пусто (раунд fix-7.1b, п.4)', async () => {
+    await initRepo(dir);
+    await mkdir(path.join(dir, 'sub'));
+    await mkdir(path.join(dir, 'other'));
+    await symlink(path.join(dir, 'sub'), path.join(dir, 'lnk'));
+    await symlink(path.join(dir, 'other'), path.join(dir, 'lnk2'));
+    const a = api(dir);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      for (let i = 0; i < 3; i++) expect(await a.checkIgnored(ROOT, 'lnk', ['x.ts'])).toEqual(new Set());
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(await a.checkIgnored(ROOT, 'lnk2', ['y.ts'])).toEqual(new Set());
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
 
 describe('walkFiles и поиск без git (тест 11)', () => {
@@ -454,7 +517,7 @@ describe('walkFiles и поиск без git (тест 11)', () => {
       await writeFile(path.join(dir, '.harnas', 'map.json'), 'needle map\n');
       await symlink(path.join(dir, '.harnas', 'map.json'), path.join(dir, 'map-link.txt'));
       execFileSync('mkfifo', [path.join(dir, 'pipe')]);
-      expect((await walkFiles(dir, 50_000)).sort()).toEqual(['in-link.txt', 'real.txt']);
+      expect((await walkFiles(dir, 50_000)).paths.sort()).toEqual(['in-link.txt', 'real.txt']);
       const enoent: GitRunner = {
         run: async () => {
           throw Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' });
@@ -470,7 +533,72 @@ describe('walkFiles и поиск без git (тест 11)', () => {
 
   it('предел обхода', async () => {
     for (let i = 0; i < 5; i++) await writeFile(path.join(dir, `f${i}`), '');
-    expect(await walkFiles(dir, 3)).toHaveLength(3);
+    expect(await walkFiles(dir, 3)).toEqual({ paths: expect.any(Array), truncated: true });
+    expect((await walkFiles(dir, 3)).paths).toHaveLength(3);
+    expect(await walkFiles(dir, 5)).toEqual({ paths: expect.any(Array), truncated: false });
+  });
+});
+
+describe('обход: отмена и бюджет времени (раунд fix-7.1b, п.1)', () => {
+  /** 40 каталогов по 2 файла и файл в корне. */
+  async function tree(): Promise<void> {
+    await writeFile(path.join(dir, 'top.txt'), 'needle\n');
+    for (let i = 0; i < 40; i++) {
+      await mkdir(path.join(dir, `d${i}`));
+      await writeFile(path.join(dir, `d${i}`, 'a.txt'), 'needle\n');
+      await writeFile(path.join(dir, `d${i}`, 'b.txt'), 'needle\n');
+    }
+  }
+
+  it('отмена посреди обхода: найденное к этому моменту и truncated', async () => {
+    await tree();
+    const controller = new AbortController();
+    let dirs = 0;
+    // Часы спрашиваются на каждом каталоге: третий каталог отменяет обход.
+    const now = (): number => {
+      dirs += 1;
+      if (dirs === 3) controller.abort();
+      return 0;
+    };
+    const result = await walkFiles(dir, 50_000, { signal: controller.signal, budgetMs: 10_000, now });
+    expect(result.truncated).toBe(true);
+    expect(result.paths).toContain('top.txt');
+    expect(result.paths.length).toBeLessThan(81);
+  });
+
+  it('бюджет времени: обход останавливается с truncated', async () => {
+    await tree();
+    let clock = 0;
+    const result = await walkFiles(dir, 50_000, { budgetMs: 5, now: () => clock++ });
+    expect(result.truncated).toBe(true);
+    expect(result.paths).toContain('top.txt');
+    expect(result.paths.length).toBeLessThan(81);
+  });
+
+  it('без отмены и бюджета — всё дерево, truncated false', async () => {
+    await tree();
+    const result = await walkFiles(dir, 50_000);
+    expect(result).toEqual({ paths: expect.any(Array), truncated: false });
+    expect(result.paths).toHaveLength(81);
+  });
+
+  it('grep без git: бюджет обхода исчерпан — найденное в корне и truncated', async () => {
+    await tree();
+    const result = await api(dir, createGitRunner(process.env), { walkBudgetMs: 0 }).grep(ROOT, Q('needle'), 's');
+    expect(result.truncated).toBe(true);
+    expect(result.files.map((f) => f.path)).toEqual(['top.txt']);
+  });
+
+  it('lsFiles без git: частичный список по бюджету не кэшируется', async () => {
+    await tree();
+    // Тот же объект настроек: бюджет читается на каждом вызове.
+    const options = { git: createGitRunner(process.env), roots: { rootPath: () => dir }, spawnWorker, walkBudgetMs: 0, isTreeWatched: () => true };
+    const a = createGitApi(options);
+    expect(await a.lsFiles(ROOT)).toEqual({ paths: ['top.txt'], truncated: true });
+    options.walkBudgetMs = 10_000;
+    const full = await a.lsFiles(ROOT);
+    expect(full.paths).toHaveLength(81);
+    expect(full.truncated).toBe(false);
   });
 });
 
@@ -479,14 +607,115 @@ describe('кэш lsFiles (тест 14)', () => {
     await writeFile(path.join(dir, 'a.txt'), '');
     let watched = false;
     const a = api(dir, createGitRunner(process.env), { isTreeWatched: () => watched });
-    expect(await a.lsFiles(ROOT)).toEqual(['a.txt']);
+    expect(await a.lsFiles(ROOT)).toEqual({ paths: ['a.txt'], truncated: false });
     await writeFile(path.join(dir, 'b.txt'), '');
-    expect((await a.lsFiles(ROOT)).sort()).toEqual(['a.txt', 'b.txt']);
+    expect((await a.lsFiles(ROOT)).paths.sort()).toEqual(['a.txt', 'b.txt']);
     watched = true;
-    expect((await a.lsFiles(ROOT)).sort()).toEqual(['a.txt', 'b.txt']);
+    expect((await a.lsFiles(ROOT)).paths.sort()).toEqual(['a.txt', 'b.txt']);
     await writeFile(path.join(dir, 'c.txt'), '');
-    expect((await a.lsFiles(ROOT)).sort()).toEqual(['a.txt', 'b.txt']);
+    expect((await a.lsFiles(ROOT)).paths.sort()).toEqual(['a.txt', 'b.txt']);
     a.invalidate(rootKey(ROOT));
-    expect((await a.lsFiles(ROOT)).sort()).toEqual(['a.txt', 'b.txt', 'c.txt']);
+    expect((await a.lsFiles(ROOT)).paths.sort()).toEqual(['a.txt', 'b.txt', 'c.txt']);
+  });
+});
+
+describe('длинная строка попадания (раунд fix-7.1b, п.2)', () => {
+  const half = 'x'.repeat(2_500_000);
+  const body = `head\n${half}NEEDLE${half}\ntail\n`;
+
+  it('не git: строка 5 МБ → text ≤ 1000, ranges на совпадении', async () => {
+    await writeFile(path.join(dir, 'min.js'), body);
+    const result = await api(dir).grep(ROOT, Q('NEEDLE'), 's');
+    const hit = result.files[0]?.hits[0];
+    expect(hit?.line).toBe(2);
+    expect(hit?.text.length).toBeLessThanOrEqual(1000);
+    const [start, end] = hit?.ranges[0] ?? [0, 0];
+    expect(hit?.text.slice(start, end)).toBe('NEEDLE');
+  });
+
+  it('git: строка 5 МБ → попадание есть, text ≤ 1000; совпадение за 64 КБ — без подсветки', async () => {
+    await initRepo(dir);
+    await writeFile(path.join(dir, 'min.js'), body);
+    const result = await api(dir).grep(ROOT, Q('NEEDLE'), 's');
+    const hit = result.files[0]?.hits[0];
+    expect(result.truncated).toBe(false);
+    expect(hit?.line).toBe(2);
+    expect(hit?.text.length).toBeLessThanOrEqual(1000);
+    // Парсер main держит не больше 64 КБ строки (решение по 7.1b): NEEDLE на 2,5 МБ в них не вошёл.
+    expect(hit?.ranges).toEqual([]);
+  });
+
+  it('runGrepWorker ranges: отменён до подсветки — неподсвеченные тоже окном', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await runGrepWorker(
+      { kind: 'ranges', query: Q('NEEDLE'), files: [{ path: 'min.js', hits: [{ line: 2, text: `${half}NEEDLE${half}`, ranges: [] }] }] },
+      { signal: controller.signal, timeoutMs: 10_000, spawn: spawnWorker },
+    );
+    expect(result.truncated).toBe(true);
+    expect(result.files[0]?.hits[0]?.text.length).toBeLessThanOrEqual(1000);
+  });
+});
+
+describe('неверная регулярка (раунд fix-7.1b, п.3)', () => {
+  for (const kind of ['git', 'не git'] as const) {
+    it(`${kind}: неверная для RegExp → bad_request до запуска git и воркера`, async () => {
+      if (kind === 'git') await initRepo(dir);
+      await writeFile(path.join(dir, 'a.txt'), 'a(b\n');
+      const runner = createGitRunner(process.env);
+      const a = api(dir, runner);
+      const spy = vi.spyOn(runner, 'run');
+      let spawned = 0;
+      const counted = api(dir, runner, {
+        spawnWorker: () => {
+          spawned += 1;
+          return spawnWorker();
+        },
+      });
+      expect(await codeOf(counted.grep(ROOT, Q('a(', { regex: true }), 's'))).toBe('bad_request');
+      expect(spy.mock.calls.filter(([args]) => args.includes('grep'))).toHaveLength(0);
+      expect(spawned).toBe(0);
+      // Без режима регулярки тот же текст — просто текст.
+      expect((await a.grep(ROOT, Q('a('), 's')).files.map((f) => f.path)).toEqual(['a.txt']);
+    });
+  }
+
+  it('git: верная для RegExp, но не для ERE — прочий код git → failed', async () => {
+    await initRepo(dir);
+    await writeFile(path.join(dir, 'a.txt'), 'x\n');
+    expect(await codeOf(api(dir).grep(ROOT, Q('(?:x)', { regex: true }), 's'))).toBe('failed');
+  });
+});
+
+describe('lsFiles: ссылки в .git и .harnas (раунд fix-7.1b, п.6)', () => {
+  async function links(): Promise<void> {
+    await mkdir(path.join(dir, '.harnas', 'works', 'w'), { recursive: true });
+    await writeFile(path.join(dir, '.harnas', 'works', 'w', 'map.json'), '{}');
+    await writeFile(path.join(dir, 'real.txt'), 'x');
+    await symlink('real.txt', path.join(dir, 'in-link.txt'));
+    await symlink('.harnas/works/w/map.json', path.join(dir, 'link.json'));
+    await symlink('.harnas', path.join(dir, 'harnas-dir'));
+  }
+
+  it('git: отслеживаемая и новая ссылка в .harnas/.git не отдаются; обычная ссылка — да', async () => {
+    await initRepo(dir);
+    await links();
+    commitAll(dir);
+    await symlink('.git/config', path.join(dir, 'git-config'));
+    await symlink('.harnas/works/w/map.json', path.join(dir, 'fresh-link.json'));
+    expect((await api(dir).lsFiles(ROOT)).paths.sort()).toEqual(['in-link.txt', 'real.txt']);
+  });
+
+  it('не git: то же обходом', async () => {
+    await links();
+    await mkdir(path.join(dir, '.git'));
+    await writeFile(path.join(dir, '.git', 'config'), '');
+    await symlink('.git/config', path.join(dir, 'git-config'));
+    const enoent: GitRunner = {
+      run: async () => {
+        throw Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' });
+      },
+    };
+    expect((await api(dir, enoent).lsFiles(ROOT)).paths.sort()).toEqual(['in-link.txt', 'real.txt']);
   });
 });

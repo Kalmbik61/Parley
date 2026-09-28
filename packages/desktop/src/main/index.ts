@@ -1,9 +1,24 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, nativeTheme, Notification, shell, systemPreferences } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  ipcMain,
+  nativeImage,
+  nativeTheme,
+  Notification,
+  session,
+  shell,
+  systemPreferences,
+  webContents,
+} from 'electron';
 import type { WebContents } from 'electron';
 import type { WorksSnapshot } from '@harnas/protocol';
+import { BROWSER_PARTITION } from '../shared/browser-types.js';
 import { S } from '../shared/strings.js';
+import { installBrowserGuard, promptDownload } from './browser/guard.js';
 import { cleanupDrops, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
 import { createGitRunner } from './files/git-api.js';
 import createGrepWorker from './files/grep-worker?nodeWorker';
@@ -11,6 +26,7 @@ import { registerFilesIpc } from './files/ipc.js';
 import { HostConnection } from './host-connection.js';
 import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
 import { forwardAppearanceToWindow, forwardHostToWindow, registerIpc } from './ipc.js';
+import { forwardGuestShortcuts } from './guest-shortcuts.js';
 import { createLayoutStore, desktopLayoutsPath } from './layout-store.js';
 import { createAppMenu } from './menu.js';
 import {
@@ -65,6 +81,13 @@ async function clipboardPng(): Promise<Buffer | null> {
 // экземпляра тогда привязан к дому так же, как хост, и чужой дом его не держит.
 if (process.env.HARNAS_HOME) {
   app.setPath('userData', path.join(process.env.HARNAS_HOME, 'desktop', 'electron'));
+}
+
+// E2E (`HARNAS_DOWNLOADS=log`): диалог сохранения загрузок браузера подменён журналом main, а папка
+// загрузок — в доме теста: настоящий диалог не встаёт на экране человека, его Downloads не трогаются.
+const logDownloads = process.env.HARNAS_DOWNLOADS === 'log';
+if (logDownloads && process.env.HARNAS_HOME) {
+  app.setPath('downloads', path.join(process.env.HARNAS_HOME, 'desktop', 'downloads'));
 }
 
 // Второй экземпляр не поднимает второй хост и не открывает второе окно —
@@ -177,6 +200,37 @@ if (!gotLock) {
       return window;
     };
 
+    // Клетка встроенного браузера (кусок 9.1, спека 12.2) — до первого окна: его
+    // web-contents-created приходит внутри new BrowserWindow, а session.fromPartition до ready бросает.
+    const browserSession = session.fromPartition(BROWSER_PARTITION);
+    // Журнал загрузок E2E; ответ «диалога» тест кладёт в `__harnasSaveAnswer`: путь или null — «Отмена».
+    const downloadLog: Array<{ filename: string; url: string }> = [];
+    const testGlobals = globalThis as { __harnasDownloads?: typeof downloadLog; __harnasSaveAnswer?: string | null };
+    if (logDownloads) testGlobals.__harnasDownloads = downloadLog;
+    installBrowserGuard({
+      app,
+      // К моменту will-attach-webview mainWindow уже присвоен — и у окна, пересозданного на activate.
+      isMainWindow: (contents) => contents === mainWindow?.webContents,
+      session: browserSession,
+      // Окну-хозяину открывателя; куда встаёт вкладка — решает окно (9.2b).
+      openTab: (e) => {
+        webContents.fromId(e.openerWebContentsId)?.hostWebContents?.send('browser:open-tab', e);
+      },
+      // hostWebContents читается в момент нажатия: окно пересоздаётся на activate, ссылка устарела бы.
+      forwardShortcuts: (contents) =>
+        forwardGuestShortcuts(contents, (id) => contents.hostWebContents?.send('menu:action', id)),
+      download: (item) => {
+        if (!logDownloads) {
+          promptDownload(item, app.getPath('downloads'));
+          return;
+        }
+        downloadLog.push({ filename: item.getFilename(), url: item.getURL() });
+        const answer = testGlobals.__harnasSaveAnswer ?? null;
+        if (answer === null) item.cancel();
+        else item.setSavePath(answer);
+      },
+    });
+
     mainWindow = openWindow();
 
     // E2E (`HARNAS_NOTIFICATIONS=log`): уведомления — в журнал main, а не на экран
@@ -263,6 +317,10 @@ if (!gotLock) {
         if (!logShell) return shell.openPath(path);
         shellLog.push({ action: 'openPath', path });
         return '';
+      },
+      browser: {
+        fromId: (id) => webContents.fromId(id) ?? null,
+        session: browserSession,
       },
       saveDropImage: async () => {
         if (fakeDrops) return saveImage({ png: FAKE_DROP_PNG, dir: dropsDir() });

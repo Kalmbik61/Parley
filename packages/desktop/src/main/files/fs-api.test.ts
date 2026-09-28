@@ -364,6 +364,24 @@ describe('.git и .harnas (тест 10)', () => {
     expect(await codeOf(api.write(ROOT(), '.harnas/works/w/map.json', 'x', null))).toBe('files:denied');
     expect(await readFile(path.join(project, '.harnas', 'works', 'w', 'map.json'), 'utf8')).toBe('{}');
   });
+
+  it('list не показывает ссылки, чья цель в .git или .harnas корня; обычные ссылки — показывает (раунд fix-7.1b, п.6)', async () => {
+    await mkdir(path.join(project, '.harnas', 'works', 'w'), { recursive: true });
+    await writeFile(path.join(project, '.harnas', 'works', 'w', 'map.json'), '{}');
+    await mkdir(path.join(project, '.git'));
+    await writeFile(path.join(project, '.git', 'config'), '');
+    await symlink(path.join(project, '.harnas', 'works', 'w', 'map.json'), path.join(project, 'link.json'));
+    await symlink('.harnas', path.join(project, 'harnas-dir'));
+    await symlink('.git/config', path.join(project, 'git-config'));
+    await symlink('../.harnas/works/w/map.json', path.join(project, 'src', 'deep.json'));
+    await symlink('src/a.ts', path.join(project, 'linkfile'));
+    await symlink('a.ts', path.join(project, 'src', 'near.ts'));
+    const api = createFsApi(registry);
+    expect((await api.list(ROOT(), '')).map((e) => e.name).sort()).toEqual(['linkfile', 'src']);
+    expect((await api.list(ROOT(), 'src')).map((e) => e.name).sort()).toEqual(['a.ts', 'near.ts']);
+    // Чтение `.harnas` через files.* разрешено: скрытие навигационное (решение контролёра).
+    expect((await api.readText(ROOT(), 'link.json')).text).toBe('{}');
+  });
 });
 
 describe('раунд исправлений 1 (кусок 7.1a)', () => {

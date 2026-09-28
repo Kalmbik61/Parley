@@ -1,11 +1,11 @@
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
-import { makeTempProject } from './tmp.js';
+import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
  * Вопрос о несохранённых правках при закрытии окна и ⌘Q на собранном окне (кусок 7.3a, тест 11):
@@ -52,7 +52,7 @@ test.describe('несохранённые правки при закрытии �
   let app: ElectronApplication | null = null;
 
   test.beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-save-changes-'));
+    home = await makeTempHome('save-changes');
     base = await makeTempProject('save-changes');
     project = path.join(base, 'project');
     await mkdir(project, { recursive: true });
@@ -60,7 +60,7 @@ test.describe('несохранённые правки при закрытии �
   });
 
   test.afterEach(async () => {
-    await app?.close().catch(() => {});
+    await stopApp(app);
     app = null;
     await stopHost(home);
     await rm(home, { recursive: true, force: true });

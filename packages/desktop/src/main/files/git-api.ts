@@ -6,15 +6,15 @@
  * папка не под git) работает обходом `walkFiles` и поиском в воркере.
  */
 import { spawn } from 'node:child_process';
-import { readdir, realpath, stat } from 'node:fs/promises';
+import { lstat, readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { Worker } from 'node:worker_threads';
-import type { FileRoot, GitStatusLetter, GrepQuery, GrepResult, TextFile } from '../../shared/files-types.js';
+import type { FileList, FileRoot, GitStatusLetter, GrepQuery, GrepResult, TextFile } from '../../shared/files-types.js';
 import { rootKey } from '../../shared/work-keys.js';
 import { HostError } from '../host-connection.js';
 import type { RootsRegistry } from '../roots.js';
 import { detectText, LIMITS } from './fs-api.js';
-import { GREP_LIMITS, type GrepJob, type GrepWorkerMessage } from './grep-worker.js';
+import { clipHit, GREP_LIMITS, type GrepJob, type GrepWorkerMessage } from './grep-worker.js';
 
 export type { GrepJob } from './grep-worker.js';
 
@@ -42,6 +42,13 @@ const PATHSPEC = ['--', '.', ':(exclude).harnas'];
 export const WALK_LIMIT = 50_000;
 /** Предел воркера поиска (план). */
 export const GREP_TIMEOUT_MS = 10_000;
+/**
+ * Пределы сырого вывода git grep в main (решение по 7.1b): строка попадания держится до воркера
+ * целиком, и без них пик памяти main при многомегабайтных строках ничем не ограничен. Хвост строки
+ * сверх 64 КБ отбрасывается; весь вывод сверх 32 МБ — git гасится, ответ truncated.
+ */
+export const GREP_LINE_BYTES = 64 * 1024;
+export const GREP_TOTAL_BYTES = 32 * 1024 * 1024;
 /** stderr git нужен только для консоли — дальше не копим. */
 const STDERR_LIMIT = 64 * 1024;
 /** Каталоги, в которые обход не заходит: зависимости, git и карты core. */
@@ -176,13 +183,25 @@ export function parseGitStatus(stdout: Buffer, prefix: string): Record<string, G
   return Object.fromEntries(out);
 }
 
-/** Разбор вывода git grep --null -n кусками; push → false на пределе. ranges пустые — их считает воркер. */
-export function createGrepParser(limits: { hits: number; files: number }): {
+/** Заголовок записи `путь\0строка\0` сверх текста: путь длиннее на macOS и Linux не бывает. */
+const GREP_HEADER_BYTES = 8 * 1024;
+
+/**
+ * Разбор вывода git grep --null -n кусками; push → false на пределе. ranges пустые — их считает воркер.
+ * Незаконченная запись держится не длиннее заголовка и `lineBytes` текста: остальное до перевода
+ * строки отбрасывается сразу. Сверх `totalBytes` сырого вывода — стоп и truncated; начатая запись
+ * на этой границе не отдаётся.
+ */
+export function createGrepParser(limits: { hits: number; files: number; lineBytes?: number; totalBytes?: number }): {
   push(chunk: Buffer): boolean;
   result(): GrepResult;
 } {
+  const lineBytes = limits.lineBytes ?? GREP_LINE_BYTES;
+  const totalBytes = limits.totalBytes ?? GREP_TOTAL_BYTES;
+  const recordBytes = GREP_HEADER_BYTES + lineBytes;
   const files = new Map<string, GrepResult['files'][number]['hits']>();
   let hits = 0;
+  let seen = 0;
   let truncated = false;
   let stopped = false;
   let tail = Buffer.alloc(0);
@@ -200,28 +219,37 @@ export function createGrepParser(limits: { hits: number; files: number }): {
       files.set(file, list);
     }
     if (hits >= limits.hits) return false;
-    list.push({ line, text: record.subarray(b + 1).toString('utf8'), ranges: [] });
+    // Обрезка посреди символа UTF-8 даёт в конце U+FFFD — окно всё равно режет строку до 1000.
+    list.push({ line, text: record.subarray(b + 1, b + 1 + lineBytes).toString('utf8'), ranges: [] });
     hits += 1;
     return true;
+  };
+
+  const stop = (): false => {
+    stopped = true;
+    truncated = true;
+    tail = Buffer.alloc(0);
+    return false;
   };
 
   return {
     push: (chunk) => {
       if (stopped) return false;
-      const buffer = tail.length === 0 ? chunk : Buffer.concat([tail, chunk]);
+      const over = seen + chunk.length > totalBytes;
+      const data = over ? chunk.subarray(0, totalBytes - seen) : chunk;
+      seen += data.length;
       let start = 0;
-      for (let end = buffer.indexOf(0x0a, start); end >= 0; end = buffer.indexOf(0x0a, start)) {
-        const ok = take(buffer.subarray(start, end));
+      for (let end = data.indexOf(0x0a, start); end >= 0; end = data.indexOf(0x0a, start)) {
+        const piece = data.subarray(start, Math.min(end, start + Math.max(0, recordBytes - tail.length)));
+        const ok = take(tail.length === 0 ? piece : Buffer.concat([tail, piece]));
+        tail = Buffer.alloc(0);
         start = end + 1;
-        if (!ok) {
-          stopped = true;
-          truncated = true;
-          tail = Buffer.alloc(0);
-          return false;
-        }
+        if (!ok) return stop();
       }
-      tail = Buffer.from(buffer.subarray(start));
-      return true;
+      // Копия, а не срез: срез держал бы в памяти весь кусок stdout.
+      const room = Math.max(0, recordBytes - tail.length);
+      if (room > 0 && start < data.length) tail = Buffer.concat([tail, data.subarray(start, start + room)]);
+      return over ? stop() : true;
     },
     result: () => ({ files: [...files].map(([file, list]) => ({ path: file, hits: list })), truncated }),
   };
@@ -233,12 +261,28 @@ function insideReal(base: string, real: string): string | null {
   return real.startsWith(base + path.sep) ? real.slice(base.length + 1) : null;
 }
 
-/** Не-git корень: обход по lstat до 50 000 обычных файлов, без node_modules, .git и .harnas; симлинки — правила ниже. */
-export async function walkFiles(root: string, limit: number): Promise<string[]> {
+/**
+ * Не-git корень: обход по lstat до 50 000 обычных файлов, без node_modules, .git и .harnas; симлинки — правила ниже.
+ * Отмена и бюджет времени проверяются на каждом каталоге и у каждой ссылки (у ссылки — realpath и stat,
+ * их в одной папке бывают десятки тысяч): огромный корень иначе держал бы пул fs main без предела, а
+ * `cancel` и закрытие окна не останавливали бы начатый обход. Корень читается всегда — бюджет 0 даёт
+ * его файлы. truncated — остановлен отменой, временем или пределом числа файлов.
+ */
+export async function walkFiles(
+  root: string,
+  limit: number,
+  options: { signal?: AbortSignal; budgetMs?: number; now?: () => number } = {},
+): Promise<{ paths: string[]; truncated: boolean }> {
+  const now = options.now ?? Date.now;
+  const deadline = options.budgetMs === undefined ? Infinity : now() + options.budgetMs;
+  const stopped = (): boolean => options.signal?.aborted === true || now() >= deadline;
   const base = await realpath(root);
   const out: string[] = [];
   const stack = [''];
-  while (stack.length > 0 && out.length < limit) {
+  let first = true;
+  while (stack.length > 0) {
+    if (out.length >= limit || (!first && stopped())) return { paths: out, truncated: true };
+    first = false;
     const dir = stack.pop() ?? '';
     let entries;
     try {
@@ -248,12 +292,13 @@ export async function walkFiles(root: string, limit: number): Promise<string[]> 
       continue;
     }
     for (const entry of entries) {
-      if (out.length >= limit) break;
+      if (out.length >= limit) return { paths: out, truncated: true };
       if (WALK_SKIP.has(entry.name.toLowerCase())) continue;
       const rel = dir === '' ? entry.name : `${dir}/${entry.name}`;
       if (entry.isDirectory()) stack.push(rel);
       else if (entry.isFile()) out.push(rel);
       else if (entry.isSymbolicLink()) {
+        if (stopped()) return { paths: out, truncated: true };
         // Файл-ссылка — только если цель — обычный файл внутри корня и не в `.git`/`.harnas`:
         // ссылка `docs/home → ~` иначе отдала бы окну `~/.aws/credentials`.
         try {
@@ -268,7 +313,38 @@ export async function walkFiles(root: string, limit: number): Promise<string[]> 
       // FIFO, сокеты и устройства — не файлы: пропускаются.
     }
   }
-  return out;
+  return { paths: out, truncated: false };
+}
+
+/** Одновременных lstat у фильтра ссылок: 50 000 путей — около 0,2 с, пул fs main не забит целиком. */
+const LSTAT_CONCURRENCY = 16;
+
+/**
+ * Пути `git ls-files` без ссылок, чья цель (realpath) лежит в `.git` или `.harnas` корня: pathspec
+ * исключает саму папку, но не ссылку на неё, и ⌘P показывал бы `link.json → .harnas/…`, которую
+ * обход без git уже прячет (раунд fix-7.1b, п.6). Вид берётся с диска (lstat), а не из индекса:
+ * у новых файлов режима нет, а отслеживаемый файл агент мог заменить ссылкой.
+ */
+export async function dropHiddenLinks(root: string, paths: string[]): Promise<string[]> {
+  const base = await realpath(root);
+  const keep = paths.map(() => true);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (let i = next++; i < paths.length; i = next++) {
+      const abs = path.join(base, paths[i] ?? '');
+      try {
+        if (!(await lstat(abs)).isSymbolicLink()) continue;
+        const inside = insideReal(base, await realpath(abs));
+        if (inside !== null && inside.split(path.sep).some((s) => s.toLowerCase() === '.git' || s.toLowerCase() === '.harnas')) {
+          keep[i] = false;
+        }
+      } catch {
+        // Нет файла или висячая ссылка — как отдал git.
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(LSTAT_CONCURRENCY, paths.length) }, worker));
+  return paths.filter((_p, i) => keep[i]);
 }
 
 /** rev для gitShow: HEAD или 7–40 hex, в конце допустим ^. */
@@ -294,8 +370,13 @@ export function runGrepWorker(
     const finish = (truncated: boolean): void => {
       if (settled) return;
       settle();
-      // У `ranges` строки уже найдены git: неподсвеченные уходят с пустыми ranges.
-      const files = job.kind === 'ranges' ? [...done, ...job.files.slice(done.length)] : done;
+      // У `ranges` строки уже найдены git: неподсвеченные уходят с пустыми ranges — и тоже окном:
+      // регулярку в main не исполняем, поэтому окно с начала строки.
+      const rest = job.kind === 'ranges' ? job.files.slice(done.length) : [];
+      const files = [
+        ...done,
+        ...rest.map((file) => ({ path: file.path, hits: file.hits.map((hit) => ({ ...hit, ...clipHit(hit.text, []) })) })),
+      ];
       resolve({ files, truncated });
     };
     const stop = (): void => finish(true);
@@ -321,7 +402,8 @@ export function runGrepWorker(
 }
 
 export interface GitApi {
-  lsFiles(root: FileRoot): Promise<string[]>;
+  /** truncated — обход не-git корня неполон (предел, время, отмена); список git — всегда полный. */
+  lsFiles(root: FileRoot): Promise<FileList>;
   /** signalId — ключ отмены; новый grep с тем же ключом отменяет прежний. */
   grep(root: FileRoot, query: GrepQuery, signalId: string): Promise<GrepResult>;
   cancel(signalId: string): void;
@@ -340,6 +422,11 @@ export interface GitApiOptions {
   /** Кэш `lsFiles` — только у корня под слежением дерева: сбросить иначе нечем. */
   isTreeWatched?: (rootKey: string) => boolean;
   grepTimeoutMs?: number;
+  /**
+   * Бюджет обхода не-git корня (⌘P и поиск); по умолчанию 10 с, как у воркера поиска. Читается
+   * на каждом вызове: тест меняет его между вызовами.
+   */
+  walkBudgetMs?: number;
   /** Предел вывода `gitShow`; по умолчанию 20 МБ. */
   showMaxBytes?: number;
 }
@@ -358,8 +445,13 @@ export function createGitApi(options: GitApiOptions): GitApi {
   const { git, roots } = options;
   const timeoutMs = options.grepTimeoutMs ?? GREP_TIMEOUT_MS;
   const showMaxBytes = options.showMaxBytes ?? LIMITS.openableBytes;
-  const lsCache = new Map<string, Promise<string[]>>();
+  const lsCache = new Map<string, Promise<FileList>>();
   const signals = new Map<string, AbortController>();
+  /**
+   * Папки, о сбое `check-ignore` в которых уже сказано: за каталогом-ссылкой git выходит с 128 на
+   * каждое раскрытие, и без этого лог main шумел бы на каждом `list`. Растёт не больше числа папок.
+   */
+  const ignoreWarned = new Set<string>();
 
   /** Вызов git для корня; git пропал из PATH после пробы — null, как у не-git корня. */
   const read = async (
@@ -375,24 +467,48 @@ export function createGitApi(options: GitApiOptions): GitApi {
     }
   };
 
-  const listFiles = async (root: FileRoot): Promise<string[]> => {
+  const walk = (rootPath: string, signal?: AbortSignal): ReturnType<typeof walkFiles> =>
+    walkFiles(rootPath, WALK_LIMIT, { budgetMs: options.walkBudgetMs ?? GREP_TIMEOUT_MS, ...(signal === undefined ? {} : { signal }) });
+
+  /**
+   * partial — список неполон из-за бюджета времени: такой не кэшируется, следующий ⌘P обойдёт
+   * заново. Предел 50 000 — не partial: повтор дал бы тот же список.
+   */
+  const listFiles = async (root: FileRoot): Promise<FileList & { partial: boolean }> => {
     const rootPath = await roots.rootPath(root);
     if ((await gitRootOf(git, rootPath)) !== null) {
       const result = await read(['ls-files', '-co', '--exclude-standard', '-z', ...PATHSPEC], rootPath);
-      if (result !== null && result.code === 0) return parseLsFiles(result.stdout);
+      if (result !== null && result.code === 0) {
+        return { paths: await dropHiddenLinks(rootPath, parseLsFiles(result.stdout)), truncated: false, partial: false };
+      }
       console.warn(`[harnas] files: git ls-files exited with code ${String(result?.code)}, walking instead`);
     }
-    return walkFiles(rootPath, WALK_LIMIT);
+    const found = await walk(rootPath);
+    return { paths: found.paths, truncated: found.truncated, partial: found.truncated && found.paths.length < WALK_LIMIT };
   };
 
   const grepIn = async (root: FileRoot, query: GrepQuery, signal: AbortSignal): Promise<GrepResult> => {
+    // Неверная регулярка — одинаково на обоих корнях: воркер иначе молча не нашёл бы ничего, а git
+    // вышел бы с 128. Сборка RegExp не исполняет её — в main безопасна; прежний поиск уже отменён.
+    if (query.regex) {
+      try {
+        new RegExp(query.text);
+      } catch {
+        throw new HostError('bad_request', 'invalid regular expression');
+      }
+    }
     const rootPath = await roots.rootPath(root);
-    const walk = async (): Promise<GrepResult> => {
-      const paths = await walkFiles(rootPath, WALK_LIMIT);
+    const walkAndGrep = async (): Promise<GrepResult> => {
+      const walked = await walk(rootPath, signal);
       if (signal.aborted) return { files: [], truncated: true };
-      return runGrepWorker({ kind: 'walk', query, rootPath, paths }, { signal, timeoutMs, spawn: options.spawnWorker });
+      // Бюджет обхода исчерпан — ищем в найденном: у воркера свой предел времени.
+      const found = await runGrepWorker(
+        { kind: 'walk', query, rootPath, paths: walked.paths },
+        { signal, timeoutMs, spawn: options.spawnWorker },
+      );
+      return { files: found.files, truncated: found.truncated || walked.truncated };
     };
-    if ((await gitRootOf(git, rootPath)) === null) return walk();
+    if ((await gitRootOf(git, rootPath)) === null) return walkAndGrep();
     const flags = [
       ...(query.caseSensitive ? [] : ['-i']),
       ...(query.wholeWord ? ['-w'] : []),
@@ -402,7 +518,7 @@ export function createGitApi(options: GitApiOptions): GitApi {
     // Запрос — только сразу после -e: иначе `-f/путь/вне/корней` git прочёл бы файлом шаблонов.
     const args = ['grep', '-n', '-I', '--no-color', '--null', ...flags, '--untracked', '-e', query.text, ...PATHSPEC];
     const result = await read(args, rootPath, { signal, onStdout: (chunk) => parser.push(chunk) });
-    if (result === null) return walk();
+    if (result === null) return walkAndGrep();
     const found = parser.result();
     if (signal.aborted) return { files: found.files, truncated: true };
     // 0 — нашлось, 1 — нет; null — погашен на пределе. Прочее — ошибка git (битая регулярка и т.п.).
@@ -420,14 +536,19 @@ export function createGitApi(options: GitApiOptions): GitApi {
   return {
     lsFiles: (root) => {
       const key = rootKey(root);
-      if (options.isTreeWatched?.(key) !== true) return listFiles(root);
+      const answer = (found: FileList): FileList => ({ paths: found.paths, truncated: found.truncated });
+      if (options.isTreeWatched?.(key) !== true) return listFiles(root).then(answer);
       const cached = lsCache.get(key);
       if (cached !== undefined) return cached;
-      const pending = listFiles(root);
+      const listed = listFiles(root);
+      const pending = listed.then(answer);
       lsCache.set(key, pending);
-      pending.catch(() => {
+      const forget = (): void => {
         if (lsCache.get(key) === pending) lsCache.delete(key);
-      });
+      };
+      listed.then((found) => {
+        if (found.partial) forget();
+      }, forget);
       return pending;
     },
 
@@ -502,7 +623,11 @@ export function createGitApi(options: GitApiOptions): GitApi {
       // Выход 1 — «ничего не игнорируется», не ошибка.
       if (result.code === 1) return new Set();
       if (result.code !== 0) {
-        console.warn(`[harnas] files: git check-ignore exited with code ${String(result.code)}`);
+        const key = `${rootPath}\0${dir}`;
+        if (!ignoreWarned.has(key)) {
+          ignoreWarned.add(key);
+          console.warn(`[harnas] files: git check-ignore exited with code ${String(result.code)} in ${dir || '.'}`);
+        }
         return new Set();
       }
       const ignored = new Set(parseLsFiles(result.stdout));

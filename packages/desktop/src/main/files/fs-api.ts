@@ -13,7 +13,7 @@ import path from 'node:path';
 import type { DirEntry, FileRoot, FileStat, Located, TextFile, WriteResult } from '../../shared/files-types.js';
 import { createFileQueue } from '../atomic-file.js';
 import { HostError } from '../host-connection.js';
-import { FilesDeniedError, type RootsRegistry } from '../roots.js';
+import { FilesDeniedError, relativeInside, type RootsRegistry } from '../roots.js';
 
 /** Предел путей в одном вызове `files.stat` и `files.locate` (таблица чисел плана). */
 export const MAX_PATHS_PER_CALL = 200;
@@ -207,10 +207,19 @@ export function createFsApi(roots: RootsRegistry, options: FsApiOptions = {}): F
     }
   };
 
-  /** Вид цели симлинка, если её realpath внутри корня; иначе (наружу, висячая, не файл и не папка) — null. */
-  const linkTarget = async (root: FileRoot, relPath: string): Promise<'file' | 'dir' | null> => {
+  /**
+   * Вид цели симлинка, если её realpath внутри корня; иначе (наружу, висячая, не файл и не папка) — null.
+   * 'hidden' — цель в `.git` или `.harnas` корня: дерево прячет такую ссылку, как и сами папки, иначе
+   * `link.json → .harnas/…` вывела бы карты core в дерево (раунд fix-7.1b, п.6). Скрытие навигационное:
+   * чтение по пути остаётся, как у самой `.harnas`.
+   */
+  const linkTarget = async (root: FileRoot, relPath: string): Promise<'file' | 'dir' | 'hidden' | null> => {
     try {
-      return (await statReal(await roots.resolve(root, relPath, 'read')))?.kind ?? null;
+      const real = await roots.resolve(root, relPath, 'read');
+      // Регистр сглаживается всегда: для скрытия строже — лучше.
+      const inside = relativeInside({ absPath: await roots.rootPath(root), caseInsensitive: true }, real);
+      if (inside !== null && inside.split(path.sep).some((segment) => HIDDEN_NAMES.has(segment.toLowerCase()))) return 'hidden';
+      return (await statReal(real))?.kind ?? null;
     } catch {
       return null;
     }
@@ -291,7 +300,10 @@ export function createFsApi(roots: RootsRegistry, options: FsApiOptions = {}): F
             const base = { name, size: info.size, mtimeMs: info.mtimeMs, ignored: false };
             if (info.isFile()) return { ...base, kind: 'file', target: null };
             if (info.isDirectory()) return { ...base, kind: 'dir', target: null };
-            if (info.isSymbolicLink()) return { ...base, kind: 'symlink', target: await linkTarget(root, path.join(dir, name)) };
+            if (info.isSymbolicLink()) {
+              const target = await linkTarget(root, path.join(dir, name));
+              return target === 'hidden' ? null : { ...base, kind: 'symlink', target };
+            }
             // FIFO, сокеты и устройства дерево не показывает.
             return null;
           }),

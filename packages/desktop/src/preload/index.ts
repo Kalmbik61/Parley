@@ -1,10 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@harnas/protocol';
 import type { AppNote, CloseAnswer, FocusTarget, HarnasBridge, HostStatus } from '../shared/bridge.js';
+import type { BrowserOpenTab } from '../shared/browser-types.js';
 import type { ActionId } from '../shared/keybindings.js';
 import type {
   DirEntry,
   FileChangedEvent,
+  FileList,
   FileRoot,
   FileStat,
   GitStatusLetter,
@@ -26,6 +28,7 @@ const focusTargetListeners = new Set<(target: FocusTarget) => void>();
 const fileChangedListeners = new Set<(e: FileChangedEvent) => void>();
 const treeChangedListeners = new Set<(e: TreeChangedEvent) => void>();
 const confirmCloseListeners = new Set<() => void>();
+const browserOpenTabListeners = new Set<(e: BrowserOpenTab) => void>();
 /** Цель клика, пришедшая, пока у `onFocusTarget` не было слушателей (кусок 4.3). */
 let heldFocusTarget: FocusTarget | null = null;
 
@@ -74,6 +77,10 @@ ipcRenderer.on('files:changed', (_event, e: FileChangedEvent) => {
 
 ipcRenderer.on('files:tree-changed', (_event, e: TreeChangedEvent) => {
   for (const listener of treeChangedListeners) listener(e);
+});
+
+ipcRenderer.on('browser:open-tab', (_event, e: BrowserOpenTab) => {
+  for (const listener of browserOpenTabListeners) listener(e);
 });
 
 /**
@@ -197,7 +204,7 @@ const bridge = {
       treeChangedListeners.add(listener);
       return () => treeChangedListeners.delete(listener);
     },
-    lsFiles: (root: FileRoot) => ipcRenderer.invoke('files:ls-files', root) as Promise<string[]>,
+    lsFiles: (root: FileRoot) => ipcRenderer.invoke('files:ls-files', root) as Promise<FileList>,
     grep: (root: FileRoot, query: GrepQuery, signalId: string) =>
       ipcRenderer.invoke('files:grep', root, query, signalId) as Promise<GrepResult>,
     cancel: (signalId: string) => ipcRenderer.invoke('files:cancel', signalId) as Promise<void>,
@@ -205,6 +212,19 @@ const bridge = {
       ipcRenderer.invoke('files:git-show', root, rev, path) as Promise<TextFile | null>,
     gitStatus: (root: FileRoot) =>
       ipcRenderer.invoke('files:git-status', root) as Promise<Record<string, GitStatusLetter>>,
+  },
+  browser: {
+    openDevTools: (webContentsId: number) => ipcRenderer.invoke('browser:open-devtools', webContentsId) as Promise<void>,
+    find: (webContentsId: number, text: string, forward: boolean) =>
+      ipcRenderer.invoke('browser:find', webContentsId, text, forward) as Promise<{ matches: number; active: number }>,
+    stopFind: (webContentsId: number) => ipcRenderer.invoke('browser:stop-find', webContentsId) as Promise<void>,
+    zoom: (webContentsId: number, step: 1 | -1 | 0) =>
+      ipcRenderer.invoke('browser:zoom', webContentsId, step) as Promise<void>,
+    clearData: () => ipcRenderer.invoke('browser:clear-data') as Promise<void>,
+    onOpenTab: (listener: (e: BrowserOpenTab) => void) => {
+      browserOpenTabListeners.add(listener);
+      return () => browserOpenTabListeners.delete(listener);
+    },
   },
 };
 

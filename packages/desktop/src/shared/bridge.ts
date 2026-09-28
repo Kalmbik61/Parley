@@ -7,9 +7,11 @@ import type {
   Result,
   SessionRef,
 } from '@harnas/protocol';
+import type { BrowserApi } from './browser-types.js';
 import type {
   DirEntry,
   FileChangedEvent,
+  FileList,
   FileRoot,
   FileStat,
   GitStatusLetter,
@@ -172,7 +174,7 @@ export interface HarnasBridge {
     /** Пачка раз в 300 мс; rootKey — `shared/work-keys.ts`. */
     onTreeChanged(listener: (e: TreeChangedEvent) => void): () => void;
     /** Для ⌘P: git — отслеживаемые и новые без игнорируемых; не git — обход до 50 000. */
-    lsFiles(root: FileRoot): Promise<string[]>;
+    lsFiles(root: FileRoot): Promise<FileList>;
     /** До 2000 совпадений и 200 файлов; отменён, остановлен по пределу — найденное с truncated. */
     grep(root: FileRoot, query: GrepQuery, signalId: string): Promise<GrepResult>;
     cancel(signalId: string): Promise<void>;
@@ -181,6 +183,11 @@ export interface HarnasBridge {
     /** Пути от папки корня; не git — {}. */
     gitStatus(root: FileRoot): Promise<Record<string, GitStatusLetter>>;
   };
+  /**
+   * Встроенный браузер (кусок 9.1, спека 12.5): main пускает только живого гостя `<webview>`
+   * раздела `BROWSER_PARTITION`, иначе отказ `bad_request`.
+   */
+  browser: BrowserApi;
 }
 
 declare global {

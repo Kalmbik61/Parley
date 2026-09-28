@@ -1,6 +1,29 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { WebContents } from 'electron';
-import { guardNavigation, guardWindowClose, mainWindowOptions, titlebarDoubleClickAction } from './window.js';
+import { createMainWindow, guardNavigation, guardWindowClose, mainWindowOptions, titlebarDoubleClickAction } from './window.js';
+
+/**
+ * Подставной `BrowserWindow` (тест 7 куска 9.1): `createMainWindow` берёт его из `electron` сам,
+ * и порядок «подписка will-attach-webview → loadFile» виден только в общем журнале вызовов.
+ */
+const electronLog = vi.hoisted(() => [] as string[]);
+vi.mock('electron', () => {
+  class BrowserWindow {
+    webContents = {
+      on: (event: string) => {
+        electronLog.push(`on:${event}`);
+      },
+      setWindowOpenHandler: () => {
+        electronLog.push('setWindowOpenHandler');
+      },
+    };
+    loadFile(): Promise<void> {
+      electronLog.push('loadFile');
+      return Promise.resolve();
+    }
+  }
+  return { BrowserWindow };
+});
 
 describe('mainWindowOptions', () => {
   it('тёмная тема: hiddenInset, светофор, минимальный размер, песочница (тест 1)', () => {
@@ -15,8 +38,9 @@ describe('mainWindowOptions', () => {
     expect(options.webPreferences?.contextIsolation).toBe(true);
     expect(options.webPreferences?.nodeIntegration).toBe(false);
     expect(options.webPreferences?.preload).toBe('/tmp/preload.js');
-    // `webviewTag` — с этапа 9 (спека 5.1): пока не задан вовсе, а не `false`.
-    expect(options.webPreferences?.webviewTag).toBeUndefined();
+    // Встроенный браузер (кусок 9.1, спека 12.2): `<webview>` в окне включён, его стережёт
+    // `guardWebviewAttach` (тест 6 куска 9.1).
+    expect(options.webPreferences?.webviewTag).toBe(true);
   });
 
   it('светлая тема: белый фон', () => {
@@ -69,6 +93,18 @@ describe('guardNavigation', () => {
     expect(triggerWillNavigate('file:///app/index.html').defaultPrevented).toBe(false);
     expect(openHandler()).toEqual({ action: 'deny' });
     expect(onSpy).toHaveBeenCalledWith('will-navigate', expect.any(Function));
+  });
+});
+
+describe('createMainWindow (тест 7 куска 9.1)', () => {
+  it('will-attach-webview подписан раньше вызова loadFile', () => {
+    electronLog.length = 0;
+    createMainWindow({ dark: false, preloadPath: '/tmp/preload.js', indexHtmlPath: '/app/index.html' });
+
+    const attach = electronLog.indexOf('on:will-attach-webview');
+    const load = electronLog.indexOf('loadFile');
+    expect(attach).toBeGreaterThanOrEqual(0);
+    expect(load).toBeGreaterThan(attach);
   });
 });
 

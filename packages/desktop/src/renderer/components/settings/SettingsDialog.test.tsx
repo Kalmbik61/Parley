@@ -11,6 +11,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { toast } from 'sonner';
 import { createFakeBridge } from '../../test-utils/fake-bridge.js';
 import { DEFAULT_UI } from '../../../shared/ui-types.js';
 import { useUiStore } from '../../store/ui.js';
@@ -32,7 +33,13 @@ const CONFIG = {
   worktreeRoot: '~/.harnas/worktrees',
 };
 
-afterEach(cleanup);
+// Тест 10 куска 9.1 проверяет вызов тоста, а не его разметку.
+vi.mock('sonner', () => ({ toast: vi.fn() }));
+
+afterEach(() => {
+  cleanup();
+  vi.mocked(toast).mockClear();
+});
 
 /**
  * Стор `store/ui.ts` — общий на файл (кусок 2.3): «Вид»/«Уведомления» читают
@@ -167,5 +174,31 @@ describe('SettingsDialog — тест 3: ошибка хоста при сохр
     fireEvent.change(messageRate, { target: { value: '7' } });
     fireEvent.blur(messageRate);
     await waitFor(() => expect(screen.queryByText("Couldn't save settings: invalid request.")).toBeNull());
+  });
+});
+
+describe('SettingsDialog — тест 10 куска 9.1: секция Browser', () => {
+  it('«Clear browser data» зовёт browser.clearData', async () => {
+    const bridge = createFakeBridge();
+    openSettings(bridge);
+
+    switchTo('Browser');
+    fireEvent.click(await screen.findByRole('button', { name: 'Clear browser data' }));
+
+    await waitFor(() => expect(bridge.browserCalls).toEqual([{ method: 'clearData', args: [] }]));
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it('отказ — тост «Couldn\'t clear browser data: failed.»', async () => {
+    const bridge = createFakeBridge();
+    vi.spyOn(bridge.browser, 'clearData').mockRejectedValue({ code: 'failed', message: 'disk full' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    openSettings(bridge);
+
+    switchTo('Browser');
+    fireEvent.click(await screen.findByRole('button', { name: 'Clear browser data' }));
+
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't clear browser data: failed."));
+    warn.mockRestore();
   });
 });

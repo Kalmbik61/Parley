@@ -378,6 +378,35 @@ describe('App — переход по цели уведомления (тест�
     expect(toast).not.toHaveBeenCalled();
   });
 
+  // Раунд fix-tests, п. 3: опрос ожидания показа вкладки переживал размонтирование App и
+  // срабатывал уже без jsdom — «document is not defined» после конца файла тестов.
+  it('размонтирование App снимает ожидание показа вкладки: опрос DOM больше не срабатывает', async () => {
+    vi.useFakeTimers();
+    try {
+      const w2 = work('w-02', '2026-01-02', [session('s-02', 'бэк')]);
+      useWorksStore.setState({ entries: [w2], branches: {}, loading: false, error: null });
+      const { unmount } = render(<App />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const query = vi.spyOn(document, 'querySelectorAll');
+      act(() => bridge.emitFocusTarget(target));
+      // Поверхностей в этом файле нет (SurfaceLayer заглушён) — вкладка «не показана», идёт опрос.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(query).toHaveBeenCalled();
+
+      unmount();
+      query.mockClear();
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(query).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('тест 15: отложенная цель до ответа works.list ждёт его — без тоста; после ответа применена', async () => {
     const w2 = work('w-02', '2026-01-02', [session('s-02', 'бэк')]);
     let answer: (value: { entries: WorkEntry[]; branches: Record<string, string | null> }) => void = () => {};

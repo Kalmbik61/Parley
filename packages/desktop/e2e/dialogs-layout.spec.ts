@@ -1,11 +1,11 @@
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
-import { makeTempProject } from './tmp.js';
+import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
  * Вёрстка диалогов с длинными значениями (раунд исправлений 2 куска 3.5): длинный путь проекта
@@ -110,7 +110,7 @@ for (const size of [
     let app: ElectronApplication | null = null;
 
     test.beforeEach(async () => {
-      home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-dialogs-'));
+      home = await makeTempHome('dialogs');
       base = await makeTempProject('dialogs');
       // Путь из mkdtemp и ещё длинное имя папки — заведомо шире любого диалога.
       project = path.join(base, 'a-rather-long-project-folder-name-for-dialog-layout');
@@ -118,7 +118,7 @@ for (const size of [
     });
 
     test.afterEach(async () => {
-      await app?.close().catch(() => {});
+      await stopApp(app);
       app = null;
       await stopHost(home);
       await rm(home, { recursive: true, force: true });

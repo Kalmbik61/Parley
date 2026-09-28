@@ -1,6 +1,6 @@
 import { METHODS, NOTIFICATIONS } from '@harnas/protocol';
 import type { MethodName, NotificationName } from '@harnas/protocol';
-import type { BrowserWindow, IpcMain, NativeTheme, WebContents } from 'electron';
+import type { BrowserWindow, IpcMain, NativeTheme, Session, WebContents } from 'electron';
 import { clampNoteText } from '../shared/app-note.js';
 import type { AppNote, CloseAnswer, FocusTarget } from '../shared/bridge.js';
 import { encodeIpcError } from '../shared/ipc-error.js';
@@ -160,6 +160,64 @@ export interface RegisterIpcOptions {
   setDirtyBuffers: (sender: WebContents, count: number) => void;
   /** Ответ окна-отправителя на `app:confirm-close` (`app:close-answer`, кусок 7.3a). */
   answerClose: (sender: WebContents, answer: CloseAnswer) => void;
+  /** Мост встроенного браузера (кусок 9.1, спека 12.5). */
+  browser: {
+    /** webContents.fromId(id) ?? null; мост пускает только живого гостя webview раздела BROWSER_PARTITION. */
+    fromId(id: number): WebContents | null;
+    /** Сессия раздела BROWSER_PARTITION: clearData и сверка раздела гостя. */
+    session: Pick<Session, 'clearStorageData' | 'clearCache'>;
+  }; // designMode добавит 9.3a
+}
+
+/** Запрос поиска по странице — до 1000 символов (план, «Числа»). */
+const MAX_FIND_TEXT = 1000;
+/** Ответ browser.find — не дольше 2 с (план): found-in-page с finalUpdate может не прийти. */
+const FIND_TIMEOUT_MS = 2000;
+
+/**
+ * Гость моста `browser:*`: целый id, живой, тип `webview`, раздел — наша сессия. Иначе
+ * `bad_request`: DevTools главного окна и гостя чужого раздела рендерер не откроет.
+ */
+function browserGuest(browser: RegisterIpcOptions['browser'], id: unknown): WebContents {
+  const contents = Number.isInteger(id) ? browser.fromId(id as number) : null;
+  if (
+    contents === null ||
+    contents.isDestroyed() ||
+    contents.getType() !== 'webview' ||
+    contents.session !== (browser.session as unknown)
+  ) {
+    throw new HostError('bad_request', `not a browser guest: ${String(id)}`);
+  }
+  return contents;
+}
+
+/**
+ * findInPage и ответ по found-in-page своего requestId с finalUpdate; без него через 2 с —
+ * последний промежуточный результат или нули. Слушатель ставится до findInPage: событие может
+ * прийти сразу.
+ */
+function findInGuest(
+  guest: WebContents,
+  text: string,
+  options: { forward: boolean; findNext: boolean },
+): Promise<{ matches: number; active: number }> {
+  return new Promise((resolve) => {
+    let requestId: number | null = null;
+    let last = { matches: 0, active: 0 };
+    const finish = (): void => {
+      clearTimeout(timer);
+      guest.off('found-in-page', onFound);
+      resolve(last);
+    };
+    const onFound = (_event: unknown, result: Electron.Result): void => {
+      if (result.requestId !== requestId) return;
+      last = { matches: result.matches, active: result.activeMatchOrdinal };
+      if (result.finalUpdate) finish();
+    };
+    const timer = setTimeout(finish, FIND_TIMEOUT_MS);
+    guest.on('found-in-page', onFound);
+    requestId = guest.findInPage(text, options);
+  });
 }
 
 /**
@@ -189,6 +247,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     saveDropImage,
     setDirtyBuffers,
     answerClose,
+    browser,
   } = options;
 
   ipcMain.handle(
@@ -378,6 +437,58 @@ export function registerIpc(options: RegisterIpcOptions): void {
     withIpcError(async (_event, absPath: unknown) => {
       if (!isValidPathArg(absPath)) throw new HostError('bad_request', 'invalid path');
       return openOrReveal(absPath, { roots, openPath, showItemInFolder });
+    }),
+  );
+
+  // Мост браузера (кусок 9.1, спека 12.5). Прежний текст поиска гостя: findNext — только у нового
+  // текста. WeakMap — запись уходит вместе с гостем.
+  const lastFindText = new WeakMap<WebContents, string>();
+
+  ipcMain.handle(
+    'browser:open-devtools',
+    withIpcError(async (_event, id: unknown) => {
+      browserGuest(browser, id).openDevTools();
+    }),
+  );
+
+  ipcMain.handle(
+    'browser:find',
+    withIpcError(async (_event, id: unknown, text: unknown, forward: unknown) => {
+      const guest = browserGuest(browser, id);
+      if (typeof text !== 'string' || text.length > MAX_FIND_TEXT || typeof forward !== 'boolean') {
+        throw new HostError('bad_request', 'invalid find request');
+      }
+      // Пустой запрос Electron не ищет — ответ без поиска; сброс подсветки — stopFind.
+      if (text === '') return { matches: 0, active: 0 };
+      const findNext = lastFindText.get(guest) !== text;
+      lastFindText.set(guest, text);
+      return findInGuest(guest, text, { forward, findNext });
+    }),
+  );
+
+  ipcMain.handle(
+    'browser:stop-find',
+    withIpcError(async (_event, id: unknown) => {
+      const guest = browserGuest(browser, id);
+      lastFindText.delete(guest);
+      guest.stopFindInPage('clearSelection');
+    }),
+  );
+
+  ipcMain.handle(
+    'browser:zoom',
+    withIpcError(async (_event, id: unknown, step: unknown) => {
+      const guest = browserGuest(browser, id);
+      if (step !== 1 && step !== -1 && step !== 0) throw new HostError('bad_request', `invalid zoom step: ${String(step)}`);
+      guest.setZoomLevel(step === 0 ? 0 : guest.getZoomLevel() + step);
+    }),
+  );
+
+  ipcMain.handle(
+    'browser:clear-data',
+    withIpcError(async () => {
+      await browser.session.clearStorageData();
+      await browser.session.clearCache();
     }),
   );
 
