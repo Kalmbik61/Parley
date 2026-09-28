@@ -213,15 +213,29 @@ describe('tokens.css — выделенная строка палитры (ку�
     return compositeOver(readHex(theme, 'background'), 0.96, compositeOver([0, 0, 0], 0.55, page));
   }
 
-  it('светлая: фон выделенной строки к фону палитры — не ниже 3:1 (была смесь 13 %: 1.33:1)', () => {
-    const selected = readHex('light', 'palette-selected');
-    for (const page of [[0, 0, 0], [255, 255, 255]] as const) {
-      expect(contrastOf(selected, paletteBackground('light', page))).toBeGreaterThanOrEqual(3);
-    }
+  // Раунд main-r2, п. 3 (ревью 6.3-B, Minor 1): тёмный блок #262626 в светлой теме расходился
+  // с выделением остального окна. Заливка — светлая, как у сайдбара, а состояние несёт край.
+  it('светлая: заливка выделения светлая — тон фона строки сайдбара (--work-sidebar-accent)', () => {
+    expect(readHex('light', 'palette-selected')).toEqual(readHex('light', 'work-sidebar-accent'));
   });
 
-  it('тёмная не хуже прежней: фон выделения — прежний --accent', () => {
+  it('светлая: край выделения к фону палитры и к заливке — не ниже 3:1 (WCAG 1.4.11)', () => {
+    const edge = readHex('light', 'palette-selected-edge');
+    for (const page of [[0, 0, 0], [255, 255, 255]] as const) {
+      expect(contrastOf(edge, paletteBackground('light', page))).toBeGreaterThanOrEqual(3);
+    }
+    expect(contrastOf(edge, readHex('light', 'palette-selected'))).toBeGreaterThanOrEqual(3);
+  });
+
+  it('светлая: текст выделенной строки — обычный тёмный (--foreground)', () => {
+    expect(readHex('light', 'palette-selected-foreground')).toEqual(readHex('light', 'foreground'));
+  });
+
+  it('тёмная без изменений: фон выделения — прежний --accent, край сливается с заливкой', () => {
     expect(readHex('dark', 'palette-selected')).toEqual(readHex('dark', 'accent'));
+    expect(readHex('dark', 'palette-selected-edge')).toEqual(readHex('dark', 'palette-selected'));
+    expect(readHex('dark', 'palette-selected-foreground')).toEqual([0xfa, 0xfa, 0xfa]);
+    expect(readHex('dark', 'palette-selected-muted')).toEqual([0xbd, 0xbd, 0xbd]);
   });
 
   for (const theme of ['light', 'dark'] as const) {

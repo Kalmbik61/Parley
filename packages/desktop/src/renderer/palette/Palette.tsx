@@ -62,12 +62,14 @@ function RowIcon({ doc }: { doc: PaletteDoc }): JSX.Element {
   return <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />;
 }
 
-// Выделенная строка (спека 9.3): токены `--palette-selected*` (кусок 6.3) — в светлой теме тёмная
-// строка, ≥ 3:1 к фону палитры (было 1.33:1, ревью 6.2-B), в тёмной — прежний `--accent`.
-// Вторичный текст и значки строки (`text-muted-foreground`) на выделении берут свой светлый тон.
+// Выделенная строка (спека 9.3): токены `--palette-selected*` (кусок 6.3, раунд main-r2) — в
+// светлой теме светлая заливка как у сайдбара и край 1px ≥ 3:1 к фону палитры (заливка сама
+// почти не отличается от фона), в тёмной — прежний `--accent`, край того же цвета.
+// Вторичный текст и значки строки (`text-muted-foreground`) на выделении берут свой тон.
 const ROW_CLASS = cn(
   'min-w-0 gap-3 rounded-lg px-3 py-2.5',
   'data-[selected=true]:bg-palette-selected data-[selected=true]:text-palette-selected-foreground',
+  'data-[selected=true]:ring-1 data-[selected=true]:ring-inset data-[selected=true]:ring-palette-selected-edge',
   '[&[data-selected=true]_.text-muted-foreground]:text-palette-selected-muted',
 );
 

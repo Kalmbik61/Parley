@@ -128,6 +128,10 @@ describe('Palette (тест 6)', () => {
     const row = selectedOption();
     expect(row?.className).toContain('data-[selected=true]:bg-palette-selected');
     expect(row?.className).toContain('[&[data-selected=true]_.text-muted-foreground]:text-palette-selected-muted');
+    // Край выделения (раунд main-r2, п. 3): светлая заливка сама по себе не видна на фоне палитры.
+    expect(row?.className).toContain('data-[selected=true]:ring-palette-selected-edge');
+    expect(row?.className).toContain('data-[selected=true]:ring-1');
+    expect(row?.className).toContain('data-[selected=true]:ring-inset');
     expect(row?.className).not.toContain('bg-accent');
     expect(row?.className).not.toContain('13%');
   });
