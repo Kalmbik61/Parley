@@ -98,7 +98,7 @@ describe('fake-bridge: git, поиск и слежение (кусок 7.1b)', (
     const bridge = createFakeBridge();
     bridge.setLsFiles(root, { paths: ['a.ts'], truncated: true });
     bridge.setGitStatus(root, { 'a.ts': 'M' });
-    const result = { files: [{ path: 'a.ts', hits: [{ line: 1, text: 'x', ranges: [[0, 1]] as [number, number][] }] }], truncated: true };
+    const result = { files: [{ path: 'a.ts', hits: [{ line: 1, column: 1, text: 'x', ranges: [[0, 1]] as [number, number][] }] }], truncated: true };
     bridge.setGrepResult(result);
     expect(await bridge.files.lsFiles(root)).toEqual({ paths: ['a.ts'], truncated: true });
     expect(await bridge.files.gitStatus(root)).toEqual({ 'a.ts': 'M' });

@@ -155,8 +155,8 @@ describe('grep (тесты 3 и 4)', () => {
       {
         path: 'a.txt',
         hits: [
-          { line: 2, text: 'foo', ranges: [[0, 3]] },
-          { line: 3, text: 'foobar baz', ranges: [[0, 3]] },
+          { line: 2, column: 1, text: 'foo', ranges: [[0, 3]] },
+          { line: 3, column: 1, text: 'foobar baz', ranges: [[0, 3]] },
         ],
       },
     ]);
@@ -167,8 +167,8 @@ describe('grep (тесты 3 и 4)', () => {
     expect(word.files[0]?.hits.map((h) => h.line)).toEqual([2]);
     const regex = await a.grep(ROOT, Q('ba[rz]', { regex: true }), 's4');
     expect(regex.files[0]?.hits).toEqual([
-      { line: 1, text: 'Foo bar', ranges: [[4, 7]] },
-      { line: 3, text: 'foobar baz', ranges: [[3, 6], [7, 10]] },
+      { line: 1, column: 5, text: 'Foo bar', ranges: [[4, 7]] },
+      { line: 3, column: 4, text: 'foobar baz', ranges: [[3, 6], [7, 10]] },
     ]);
   });
 
@@ -193,10 +193,10 @@ describe('grep (тесты 3 и 4)', () => {
     const spy = vi.spyOn(runner, 'run');
     const a = api(dir, runner);
     const f = await a.grep(ROOT, Q('-f/etc/hosts'), 's1');
-    expect(f.files).toEqual([{ path: 'c.txt', hits: [{ line: 1, text: 'use -f/etc/hosts here', ranges: [[4, 16]] }] }]);
+    expect(f.files).toEqual([{ path: 'c.txt', hits: [{ line: 1, column: 5, text: 'use -f/etc/hosts here', ranges: [[4, 16]] }] }]);
     const pager = await a.grep(ROOT, Q('--open-files-in-pager=x'), 's2');
     expect(pager.files).toEqual([
-      { path: 'c.txt', hits: [{ line: 3, text: 'opt --open-files-in-pager=x', ranges: [[4, 27]] }] },
+      { path: 'c.txt', hits: [{ line: 3, column: 5, text: 'opt --open-files-in-pager=x', ranges: [[4, 27]] }] },
     ]);
     // Запрос — только сразу после -e.
     for (const [args] of spy.mock.calls.filter(([args]) => args.includes('grep'))) {
@@ -223,13 +223,13 @@ describe('grep (тесты 3 и 4)', () => {
 describe('createGrepParser', () => {
   it('кусками, с разрывом записи посреди; ranges пустые', () => {
     const parser = createGrepParser({ hits: 2000, files: 200 });
-    const out = Buffer.from('a.ts\x001\x00one\nпапка/б.ts\x0012\x00two\n');
+    const out = Buffer.from('a.ts\x001\x001\x00one\nпапка/б.ts\x0012\x002\x00two\n');
     expect(parser.push(out.subarray(0, 7))).toBe(true);
     expect(parser.push(out.subarray(7))).toBe(true);
     expect(parser.result()).toEqual({
       files: [
-        { path: 'a.ts', hits: [{ line: 1, text: 'one', ranges: [] }] },
-        { path: 'папка/б.ts', hits: [{ line: 12, text: 'two', ranges: [] }] },
+        { path: 'a.ts', hits: [{ line: 1, column: 1, text: 'one', ranges: [], at: 0 }] },
+        { path: 'папка/б.ts', hits: [{ line: 12, column: 2, text: 'two', ranges: [], at: 1 }] },
       ],
       truncated: false,
     });
@@ -237,7 +237,7 @@ describe('createGrepParser', () => {
 
   it('предел файлов: 201-й файл — false и truncated', () => {
     const parser = createGrepParser({ hits: 2000, files: 200 });
-    const lines = Array.from({ length: 201 }, (_, i) => `f${i}\x001\x00x\n`).join('');
+    const lines = Array.from({ length: 201 }, (_, i) => `f${i}\x001\x001\x00x\n`).join('');
     expect(parser.push(Buffer.from(lines))).toBe(false);
     expect(parser.result().files).toHaveLength(200);
     expect(parser.result().truncated).toBe(true);
@@ -247,9 +247,9 @@ describe('createGrepParser', () => {
     expect(GREP_LINE_BYTES).toBe(64 * 1024);
     const parser = createGrepParser({ hits: 2000, files: 200 });
     const out = Buffer.concat([
-      Buffer.from('min.js\x002\x00'),
+      Buffer.from('min.js\x002\x001\x00'),
       Buffer.alloc(5 * 1024 * 1024, 'x'),
-      Buffer.from('\nb.ts\x007\x00y\n'),
+      Buffer.from('\nb.ts\x007\x001\x00y\n'),
     ]);
     for (let at = 0; at < out.length; at += 64 * 1024) expect(parser.push(out.subarray(at, at + 64 * 1024))).toBe(true);
     const { files, truncated } = parser.result();
@@ -260,6 +260,38 @@ describe('createGrepParser', () => {
     expect(files[1]?.hits[0]?.text).toBe('y');
   });
 
+  it('--column: строка 5 МБ кусками по 64 КБ, совпадение на 3 МБ → окно 64 КБ вокруг него, at и колонка (раунд fix-7.4, п. 2)', () => {
+    const parser = createGrepParser({ hits: 2000, files: 200 });
+    const m = 3 * 1024 * 1024;
+    const out = Buffer.concat([
+      Buffer.from(`min.js\x002\x00${m + 1}\x00`),
+      Buffer.alloc(m, 'x'),
+      Buffer.from('NEEDLE'),
+      Buffer.alloc(2 * 1024 * 1024, 'y'),
+      Buffer.from('\nb.ts\x007\x001\x00y\n'),
+    ]);
+    for (let at = 0; at < out.length; at += 64 * 1024) expect(parser.push(out.subarray(at, at + 64 * 1024))).toBe(true);
+    const [first, second] = parser.result().files;
+    const hit = first?.hits[0];
+    expect(Buffer.byteLength(hit?.text ?? '')).toBe(GREP_LINE_BYTES);
+    expect(hit?.text.slice(hit.at, hit.at + 6)).toBe('NEEDLE');
+    expect(hit?.column).toBe(m + 1);
+    expect(second?.hits[0]).toEqual({ line: 7, column: 1, text: 'y', ranges: [], at: 0 });
+  });
+
+  it('--column: окно не режет символ UTF-8, колонка и at — в UTF-16 (раунд fix-7.4, п. 2)', () => {
+    // «😀» — 4 байта; совпадение «N» на байте 40, окно 11 байт: края 35 и 46 — посреди эмодзи.
+    const parser = createGrepParser({ hits: 2000, files: 200, lineBytes: 11 });
+    parser.push(Buffer.from(`a\x001\x0041\x00${'😀'.repeat(10)}N${'😀'.repeat(10)}\n`));
+    expect(parser.result().files[0]?.hits[0]).toEqual({ line: 1, column: 21, text: '😀N😀', ranges: [], at: 2 });
+  });
+
+  it('--column: короткая строка — вся, даже если совпадение дальше половины окна (раунд fix-7.4, п. 2)', () => {
+    const parser = createGrepParser({ hits: 2000, files: 200, lineBytes: 10 });
+    parser.push(Buffer.from('a\x001\x009\x00abcdefghXY\n'));
+    expect(parser.result().files[0]?.hits[0]).toEqual({ line: 1, column: 9, text: 'abcdefghXY', ranges: [], at: 8 });
+  });
+
   it('много длинных строк → остановка по 32 МБ сырого текста и truncated', () => {
     expect(GREP_TOTAL_BYTES).toBe(32 * 1024 * 1024);
     const parser = createGrepParser({ hits: 2000, files: 200 });
@@ -267,7 +299,7 @@ describe('createGrepParser', () => {
     let pushed = 0;
     let stoppedAt = -1;
     for (let i = 0; i < 40; i++) {
-      const record = Buffer.concat([Buffer.from(`f${i}\x001\x00`), line, Buffer.from('\n')]);
+      const record = Buffer.concat([Buffer.from(`f${i}\x001\x001\x00`), line, Buffer.from('\n')]);
       pushed += record.length;
       if (!parser.push(record)) {
         stoppedAt = pushed;
@@ -276,7 +308,7 @@ describe('createGrepParser', () => {
     }
     expect(stoppedAt).toBeGreaterThan(GREP_TOTAL_BYTES);
     expect(stoppedAt).toBeLessThan(GREP_TOTAL_BYTES + 2 * 1024 * 1024);
-    expect(parser.push(Buffer.from('late\x001\x00x\n'))).toBe(false);
+    expect(parser.push(Buffer.from('late\x001\x001\x00x\n'))).toBe(false);
     const { files, truncated } = parser.result();
     expect(truncated).toBe(true);
     // Целиком в 32 МБ вошла 31 запись по 1 МБ с заголовком; начатая 32-я отброшена.
@@ -320,7 +352,7 @@ describe('поиск без git (тест 5)', () => {
       { signal: new AbortController().signal, timeoutMs: 10_000, spawn: spawnWorker },
     );
     expect(result).toEqual({
-      files: [{ path: 'a.txt', hits: [{ line: 1, text: 'x needle y needle', ranges: [[2, 8], [11, 17]] }] }],
+      files: [{ path: 'a.txt', hits: [{ line: 1, column: 3, text: 'x needle y needle', ranges: [[2, 8], [11, 17]] }] }],
       truncated: false,
     });
   });
@@ -460,7 +492,7 @@ describe('не git (тест 9)', () => {
       expect(await a.checkIgnored(ROOT, '', ['a.txt'])).toEqual(new Set());
       expect(await a.lsFiles(ROOT)).toEqual({ paths: ['a.txt'], truncated: false });
       expect((await a.grep(ROOT, Q('needle'), 's')).files).toEqual([
-        { path: 'a.txt', hits: [{ line: 1, text: 'needle', ranges: [[0, 6]] }] },
+        { path: 'a.txt', hits: [{ line: 1, column: 1, text: 'needle', ranges: [[0, 6]] }] },
       ]);
     });
   }
@@ -634,7 +666,7 @@ describe('длинная строка попадания (раунд fix-7.1b, �
     expect(hit?.text.slice(start, end)).toBe('NEEDLE');
   });
 
-  it('git: строка 5 МБ → попадание есть, text ≤ 1000; совпадение за 64 КБ — без подсветки', async () => {
+  it('git: строка 5 МБ → попадание есть, text ≤ 1000; окно 64 КБ — вокруг совпадения, подсветка есть (раунд fix-7.4, п. 2)', async () => {
     await initRepo(dir);
     await writeFile(path.join(dir, 'min.js'), body);
     const result = await api(dir).grep(ROOT, Q('NEEDLE'), 's');
@@ -642,15 +674,42 @@ describe('длинная строка попадания (раунд fix-7.1b, �
     expect(result.truncated).toBe(false);
     expect(hit?.line).toBe(2);
     expect(hit?.text.length).toBeLessThanOrEqual(1000);
-    // Парсер main держит не больше 64 КБ строки (решение по 7.1b): NEEDLE на 2,5 МБ в них не вошёл.
-    expect(hit?.ranges).toEqual([]);
+    const [start, end] = hit?.ranges[0] ?? [0, 0];
+    expect(hit?.text.slice(start, end)).toBe('NEEDLE');
+    expect(hit?.column).toBe(half.length + 1);
+  });
+
+  it('git: строка 5 МБ, совпадение на ~3 МБ после кириллицы и эмодзи → подсветка и колонка в UTF-16 (раунд fix-7.4, п. 2)', async () => {
+    await initRepo(dir);
+    // Колонка git — в байтах: «я» — 2 байта и 1 единица UTF-16, «😀» — 4 байта и 2 единицы.
+    const prefix = `${'я'.repeat(1000)}😀${'x'.repeat(3_000_000)}`;
+    await writeFile(path.join(dir, 'min.js'), `${prefix}NEEDLE${'y'.repeat(2_000_000)}\n`);
+    const result = await api(dir).grep(ROOT, Q('NEEDLE'), 's');
+    const hit = result.files[0]?.hits[0];
+    expect(hit?.column).toBe(prefix.length + 1);
+    const [start, end] = hit?.ranges[0] ?? [0, 0];
+    expect(hit?.text.slice(start, end)).toBe('NEEDLE');
+    expect(hit?.text).not.toContain('\uFFFD');
+  });
+
+  it('git: короткая строка с кириллицей — колонка в символах, не в байтах (раунд fix-7.4, п. 2)', async () => {
+    await initRepo(dir);
+    await writeFile(path.join(dir, 'a.txt'), 'абв😀 foo\n');
+    const hit = (await api(dir).grep(ROOT, Q('foo'), 's')).files[0]?.hits[0];
+    expect(hit).toEqual({ line: 1, column: 7, text: 'абв😀 foo', ranges: [[6, 9]] });
+  });
+
+  it('не git: колонка — начало первого совпадения в UTF-16 (раунд fix-7.4, п. 2)', async () => {
+    await writeFile(path.join(dir, 'a.txt'), 'абв😀 foo foo\n');
+    const hit = (await api(dir).grep(ROOT, Q('foo'), 's')).files[0]?.hits[0];
+    expect(hit).toEqual({ line: 1, column: 7, text: 'абв😀 foo foo', ranges: [[6, 9], [10, 13]] });
   });
 
   it('runGrepWorker ranges: отменён до подсветки — неподсвеченные тоже окном', async () => {
     const controller = new AbortController();
     controller.abort();
     const result = await runGrepWorker(
-      { kind: 'ranges', query: Q('NEEDLE'), files: [{ path: 'min.js', hits: [{ line: 2, text: `${half}NEEDLE${half}`, ranges: [] }] }] },
+      { kind: 'ranges', query: Q('NEEDLE'), files: [{ path: 'min.js', hits: [{ line: 2, column: half.length + 1, text: `${half}NEEDLE${half}`, ranges: [], at: half.length }] }] },
       { signal: controller.signal, timeoutMs: 10_000, spawn: spawnWorker },
     );
     expect(result.truncated).toBe(true);

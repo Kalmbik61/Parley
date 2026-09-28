@@ -26,11 +26,6 @@ import { openFile } from './Tree.js';
 export const SEARCH_DEBOUNCE_MS = 250;
 /** Запрос — до 1000 символов: длиннее main отвечает `bad_request` (план). */
 const MAX_QUERY = 1000;
-/**
- * Окно текста попадания у main — до 1000 кодовых единиц (`HIT_TEXT_LIMIT`, 7.1b); у края пары
- * оно короче на одну. Текст короче — это вся строка, и колонка совпадения известна.
- */
-const WHOLE_LINE_BELOW = 999;
 /** Совпадение дальше от начала — строка показывается с него, иначе в узкой панели его не видно. */
 const LEAD_CONTEXT = 30;
 
@@ -42,12 +37,6 @@ function toggleClass(on: boolean): string {
     'flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-accent-foreground',
     on && 'bg-accent text-accent-foreground',
   );
-}
-
-/** Колонка курсора (с 1): начало первого совпадения, если окно — вся строка; иначе начало строки. */
-function hitColumn(hit: GrepHit): number {
-  const first = hit.ranges[0];
-  return first !== undefined && hit.text.length < WHOLE_LINE_BELOW ? first[0] + 1 : 1;
 }
 
 /** Текст строки с подсвеченными `ranges`; далёкое совпадение — с «…» и частью контекста перед ним. */
@@ -171,7 +160,8 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
   const openHit = (path: string, hit: GrepHit, beside: boolean): void => {
     const current = rootRef.current;
     openFile(current, path, beside);
-    useFilesStore.getState().revealAt(current.workKey, tabId.file(current.spec, path), hit.line, hitColumn(hit));
+    // Колонка — из ответа main (раунд fix-7.4, п. 2): `text` лишь окно строки.
+    useFilesStore.getState().revealAt(current.workKey, tabId.file(current.spec, path), hit.line, hit.column);
   };
 
   return (

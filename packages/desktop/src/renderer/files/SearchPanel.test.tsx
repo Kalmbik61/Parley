@@ -110,9 +110,9 @@ describe('SearchPanel (тест 2)', () => {
     expect(grep.mock.calls[1]?.[2]).not.toBe(firstId);
 
     // Отменённый поиск отвечает частью найденного — её не показываем.
-    await act(async () => answers[0]?.(result([{ path: 'stale.ts', hits: [{ line: 1, text: 'old', ranges: [[0, 3]] }] }], true)));
+    await act(async () => answers[0]?.(result([{ path: 'stale.ts', hits: [{ line: 1, column: 1, text: 'old', ranges: [[0, 3]] }] }], true)));
     expect(screen.queryByText('stale.ts')).toBeNull();
-    await act(async () => answers[1]?.(result([{ path: 'fresh.ts', hits: [{ line: 2, text: 'new', ranges: [[0, 3]] }] }])));
+    await act(async () => answers[1]?.(result([{ path: 'fresh.ts', hits: [{ line: 2, column: 1, text: 'new', ranges: [[0, 3]] }] }])));
     expect(screen.getByText('fresh.ts')).toBeTruthy();
     expect(screen.queryByText('stale.ts')).toBeNull();
   });
@@ -131,7 +131,7 @@ describe('SearchPanel (тест 2)', () => {
 
   it('без truncated строки о пределе нет; совпадение подсвечено, длинный путь целиком в title', async () => {
     const path = `very/${'long-directory-name/'.repeat(20)}file.ts`;
-    bridge.setGrepResult(result([{ path, hits: [{ line: 7, text: 'const foo = 1', ranges: [[6, 9]] }] }]));
+    bridge.setGrepResult(result([{ path, hits: [{ line: 7, column: 7, text: 'const foo = 1', ranges: [[6, 9]] }] }]));
     render(<SearchPanel bridge={bridge} root={ROOT} />);
     await type('foo');
     await wait(250);
@@ -163,7 +163,7 @@ describe('SearchPanel (тест 2)', () => {
   });
 
   it('пустой запрос grep не зовёт и прежние результаты убирает', async () => {
-    bridge.setGrepResult(result([{ path: 'a.ts', hits: [{ line: 1, text: 'x', ranges: [[0, 1]] }] }]));
+    bridge.setGrepResult(result([{ path: 'a.ts', hits: [{ line: 1, column: 1, text: 'x', ranges: [[0, 1]] }] }]));
     render(<SearchPanel bridge={bridge} root={ROOT} />);
     await type('x');
     await wait(250);
@@ -175,7 +175,7 @@ describe('SearchPanel (тест 2)', () => {
   });
 
   it('группа файла сворачивается по клику на заголовок', async () => {
-    bridge.setGrepResult(result([{ path: 'a.ts', hits: [{ line: 3, text: 'hit here', ranges: [[0, 3]] }] }]));
+    bridge.setGrepResult(result([{ path: 'a.ts', hits: [{ line: 3, column: 1, text: 'hit here', ranges: [[0, 3]] }] }]));
     render(<SearchPanel bridge={bridge} root={ROOT} />);
     await type('hit');
     await wait(250);
@@ -202,8 +202,19 @@ describe('SearchPanel (тест 2)', () => {
 });
 
 describe('SearchPanel — клик по совпадению (тест 3)', () => {
+  it('окно длинной строки — курсор на колонку совпадения из ответа, не в начало строки (раунд fix-7.4, п. 2)', async () => {
+    const text = `${'x'.repeat(497)}NEEDLE${'y'.repeat(497)}`;
+    bridge.setGrepResult(result([{ path: 'min.js', hits: [{ line: 1, column: 3_000_001, text, ranges: [[497, 503]] }] }]));
+    render(<SearchPanel bridge={bridge} root={ROOT} />);
+    await type('NEEDLE');
+    await wait(250);
+    fireEvent.click(screen.getByTitle(text));
+    const id = tabId.file(ROOT.spec, 'min.js');
+    expect(useFilesStore.getState().reveals[bufferKey(KEY, id)]).toEqual({ line: 1, col: 3_000_001 });
+  });
+
   it('открывает вкладку файла и ставит курсор на строку (revealAt стора)', async () => {
-    bridge.setGrepResult(result([{ path: 'src/a.ts', hits: [{ line: 12, text: 'const foo = 1', ranges: [[6, 9]] }] }]));
+    bridge.setGrepResult(result([{ path: 'src/a.ts', hits: [{ line: 12, column: 7, text: 'const foo = 1', ranges: [[6, 9]] }] }]));
     render(<SearchPanel bridge={bridge} root={ROOT} />);
     await type('foo');
     await wait(250);
