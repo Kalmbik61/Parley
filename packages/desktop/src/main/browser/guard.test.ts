@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
-import type { App, Session, WebContents, WebPreferences } from 'electron';
+import type { App, WebContents, WebPreferences } from 'electron';
 import { BROWSER_PARTITION } from '../../shared/browser-types.js';
 import { guardWebviewAttach, installBrowserGuard, navigationVerdict, sanitizeWebviewAttach } from './guard.js';
 
@@ -115,22 +115,27 @@ function setupGuard(isMainWindow: (c: WebContents) => boolean = () => false) {
     }),
   };
   const openTab = vi.fn();
-  const forwardShortcuts = vi.fn();
+  const unforward = vi.fn();
+  const forwardShortcuts = vi.fn((): (() => void) => unforward);
   const isMain = vi.fn(isMainWindow);
-  installBrowserGuard({
-    app: app as unknown as Pick<App, 'on'>,
-    isMainWindow: isMain,
-    session: session as unknown as Pick<Session, 'setPermissionRequestHandler' | 'setPermissionCheckHandler'>,
-    openTab,
-    forwardShortcuts,
-  });
+  const install = (): void =>
+    installBrowserGuard({
+      app: app as unknown as Pick<App, 'on'>,
+      isMainWindow: isMain,
+      session: session as unknown as Parameters<typeof installBrowserGuard>[0]['session'],
+      openTab,
+      forwardShortcuts,
+    });
+  install();
   const created = (contents: ReturnType<typeof fakeContents>): void => {
     app.emit('web-contents-created', fakeEvent(), contents);
   };
   return {
     app,
+    install,
     openTab,
     forwardShortcuts,
+    unforward,
     isMain,
     created,
     requestHandler: () => requestHandler,
@@ -225,6 +230,27 @@ describe('installBrowserGuard (тест 4)', () => {
     guest.emit('will-prevent-unload', unload);
     expect(unload.defaultPrevented).toBe(true);
     expect(guard.forwardShortcuts).toHaveBeenCalledWith(guest);
+  });
+
+  it('отписка forwardShortcuts — на destroyed гостя', () => {
+    const guard = setupGuard();
+    const guest = fakeContents(42, 'webview');
+    guard.created(guest);
+    expect(guard.unforward).not.toHaveBeenCalled();
+    guest.emit('destroyed');
+    expect(guard.unforward).toHaveBeenCalledTimes(1);
+  });
+
+  it('повторная установка на ту же сессию обработчиков app не добавляет (ревью 9.1)', () => {
+    const guard = setupGuard();
+    guard.install();
+    guard.install();
+    expect(guard.app.listenerCount('web-contents-created')).toBe(1);
+    expect(guard.app.listenerCount('select-client-certificate')).toBe(1);
+
+    const guest = fakeContents(42, 'webview');
+    guard.created(guest);
+    expect(guard.forwardShortcuts).toHaveBeenCalledTimes(1);
   });
 
   it('не-гость (окно, DevTools) обработчиков гостя не получает', () => {

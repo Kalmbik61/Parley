@@ -191,6 +191,51 @@ test.describe('клетка встроенного браузера (кусок 
   });
 
   /**
+   * Ревью 9.1: страж ставился заново при каждом открытии окна из нуля окон (activate, клик по
+   * уведомлению) — обработчики app копились, и одно нажатие в госте приходило окну N раз.
+   */
+  test('окно закрыто → activate → окно снова: одно ⌘J в госте — одно действие', async () => {
+    const app = await launch();
+    const first = await app.firstWindow();
+    await expect(first.getByTestId('landing')).toBeVisible();
+
+    for (let cycle = 0; cycle < 2; cycle++) {
+      await app.evaluate(({ BrowserWindow }) => {
+        for (const w of BrowserWindow.getAllWindows()) w.destroy();
+      });
+      await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(0);
+      const next = app.waitForEvent('window');
+      await app.evaluate(({ app: electronApp }) => {
+        electronApp.emit('activate');
+      });
+      await next;
+    }
+    const window = app.windows().find((page) => !page.isClosed());
+    if (window === undefined) throw new Error('окно не открылось заново');
+    await expect(window.getByTestId('landing')).toBeVisible();
+    await window.evaluate(() => {
+      const actions: string[] = [];
+      (globalThis as { __menu?: string[] }).__menu = actions;
+      window.harnas.app.onMenu((action) => actions.push(action));
+    });
+
+    await insertWebview(window, { partition: 'persist:harnas-browser', src: `${origin}/` });
+    await expect.poll(() => inGuest<string>(app, `${origin}/`, 'document.title').catch(() => '')).toBe('guest ok');
+    // Настоящий ввод в гостя — sendInputEvent: page.keyboard Playwright шлёт события окну, не гостю.
+    await app.evaluate(({ webContents }, prefix) => {
+      const guest = webContents.getAllWebContents().find((c) => c.getType() === 'webview' && c.getURL().startsWith(prefix));
+      guest?.sendInputEvent({ type: 'keyDown', keyCode: 'J', modifiers: ['meta'] });
+      guest?.sendInputEvent({ type: 'keyUp', keyCode: 'J', modifiers: ['meta'] });
+    }, `${origin}/`);
+    await expect.poll(() => window.evaluate(() => (globalThis as { __menu?: string[] }).__menu)).toEqual(['palette.open']);
+    await window.waitForTimeout(500);
+    expect(await window.evaluate(() => (globalThis as { __menu?: string[] }).__menu)).toEqual(['palette.open']);
+    expect(
+      await app.evaluate(({ app: electronApp }) => electronApp.listenerCount('web-contents-created')),
+    ).toBe(1);
+  });
+
+  /**
    * Перенос из 6.1a: ⌃Tab страница оставляет себе (спека 9.6), а keyUp ⌃ из гостя окну не
    * приходит. Цикл MRU, начатый в окне, всё равно кончается: фокус, ушедший в <webview>, даёт
    * окну `blur`, а его `installKeyHandler` слушает как конец цикла (endMruCycle).

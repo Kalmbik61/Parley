@@ -195,9 +195,8 @@ if (!gotLock) {
         webContents.fromId(e.openerWebContentsId)?.hostWebContents?.send('browser:open-tab', e);
       },
       // hostWebContents читается в момент нажатия: окно пересоздаётся на activate, ссылка устарела бы.
-      forwardShortcuts: (contents) => {
-        forwardGuestShortcuts(contents, (id) => contents.hostWebContents?.send('menu:action', id));
-      },
+      forwardShortcuts: (contents) =>
+        forwardGuestShortcuts(contents, (id) => contents.hostWebContents?.send('menu:action', id)),
     });
 
     mainWindow = openWindow();
@@ -216,25 +215,7 @@ if (!gotLock) {
         const window = mainWindow;
         // После закрытия окна ссылка не обнуляется, а macOS держит приложение и без окон.
         if (window === null || window.isDestroyed()) {
-          // Клетка встроенного браузера (кусок 9.1, спека 12.2) — до первого окна: его
-    // web-contents-created приходит внутри new BrowserWindow, а session.fromPartition до ready бросает.
-    const browserSession = session.fromPartition(BROWSER_PARTITION);
-    installBrowserGuard({
-      app,
-      // К моменту will-attach-webview mainWindow уже присвоен — и у окна, пересозданного на activate.
-      isMainWindow: (contents) => contents === mainWindow?.webContents,
-      session: browserSession,
-      // Окну-хозяину открывателя; куда встаёт вкладка — решает окно (9.2b).
-      openTab: (e) => {
-        webContents.fromId(e.openerWebContentsId)?.hostWebContents?.send('browser:open-tab', e);
-      },
-      // hostWebContents читается в момент нажатия: окно пересоздаётся на activate, ссылка устарела бы.
-      forwardShortcuts: (contents) => {
-        forwardGuestShortcuts(contents, (id) => contents.hostWebContents?.send('menu:action', id));
-      },
-    });
-
-    mainWindow = openWindow();
+          mainWindow = openWindow();
           return;
         }
         if (window.isMinimized()) window.restore();
@@ -354,25 +335,7 @@ if (!gotLock) {
     // тогда создаёт этот обработчик, а цель клика ждёт его загрузки в отложенных.
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
-        // Клетка встроенного браузера (кусок 9.1, спека 12.2) — до первого окна: его
-    // web-contents-created приходит внутри new BrowserWindow, а session.fromPartition до ready бросает.
-    const browserSession = session.fromPartition(BROWSER_PARTITION);
-    installBrowserGuard({
-      app,
-      // К моменту will-attach-webview mainWindow уже присвоен — и у окна, пересозданного на activate.
-      isMainWindow: (contents) => contents === mainWindow?.webContents,
-      session: browserSession,
-      // Окну-хозяину открывателя; куда встаёт вкладка — решает окно (9.2b).
-      openTab: (e) => {
-        webContents.fromId(e.openerWebContentsId)?.hostWebContents?.send('browser:open-tab', e);
-      },
-      // hostWebContents читается в момент нажатия: окно пересоздаётся на activate, ссылка устарела бы.
-      forwardShortcuts: (contents) => {
-        forwardGuestShortcuts(contents, (id) => contents.hostWebContents?.send('menu:action', id));
-      },
-    });
-
-    mainWindow = openWindow();
+        mainWindow = openWindow();
       }
     });
   });

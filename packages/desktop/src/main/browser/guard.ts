@@ -110,7 +110,8 @@ function guardGuest(contents: WebContents, deps: Pick<BrowserGuardDeps, 'openTab
   contents.setZoomMode('isolated');
   // Иначе beforeunload страницы молча держит её при закрытии вкладки и переходе.
   contents.on('will-prevent-unload', (event) => event.preventDefault());
-  deps.forwardShortcuts(contents);
+  // Слушатель клавиш снимается вместе с гостем, а не ждёт сборки мусора.
+  contents.once('destroyed', deps.forwardShortcuts(contents));
 }
 
 interface BrowserGuardDeps {
@@ -119,10 +120,19 @@ interface BrowserGuardDeps {
   isMainWindow(contents: WebContents): boolean;
   session: Pick<Session, 'setPermissionRequestHandler' | 'setPermissionCheckHandler'>; // раздел BROWSER_PARTITION
   openTab(e: BrowserOpenTab): void; // → окну-хозяину открывателя, событие browser:open-tab
-  forwardShortcuts(contents: WebContents): void; // адаптер к forwardGuestShortcuts (6.1a)
+  forwardShortcuts(contents: WebContents): () => void; // адаптер к forwardGuestShortcuts (6.1a), вернёт отписку
 }
 
+/**
+ * Сессии, на которые страж уже поставлен. Обработчики app копятся (`on`, не сеттер): второй вызов
+ * навесил бы второй набор, и одно нажатие в госте приходило бы окну дважды (ревью 9.1).
+ */
+const guardedSessions = new WeakSet<object>();
+
+/** Один раз на сессию раздела; повторный вызов с той же сессией ничего не делает. */
 export function installBrowserGuard(deps: BrowserGuardDeps): void {
+  if (guardedSessions.has(deps.session)) return;
+  guardedSessions.add(deps.session);
   deps.app.on('web-contents-created', (_event, contents) => {
     // «Главное окно или нет» — в момент события: web-contents-created окна приходит внутри
     // new BrowserWindow(...), до присвоения mainWindow. Проверка здесь отнесла бы окно к «другим»,
