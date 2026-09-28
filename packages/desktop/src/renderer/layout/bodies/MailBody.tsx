@@ -10,6 +10,7 @@ import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../../shared/bridge.js';
 import { MailPanel } from '../../components/mail/MailPanel.js';
 import { activityFor, useActivityStore } from '../../store/activity.js';
+import { useHostStore } from '../../store/host.js';
 
 export interface MailBodyProps {
   bridge: HarnasBridge;
@@ -21,6 +22,8 @@ export interface MailBodyProps {
 export function MailBody({ bridge, entry, active }: MailBodyProps): JSX.Element {
   const activityByRef = useActivityStore((state) => state.byRef);
   const [providers, setProviders] = useState<Array<{ id: string; label: string }>>([]);
+  // Связь вернулась — список заново: тело при обрыве не перемонтируется (fix-7.3).
+  const connections = useHostStore((state) => state.connections);
 
   useEffect(() => {
     // Список провайдеров почти не меняется за сеанс — одного запроса на монтирование достаточно.
@@ -28,7 +31,7 @@ export function MailBody({ bridge, entry, active }: MailBodyProps): JSX.Element 
       .call('providers.list', {})
       .then((result) => setProviders(result.providers))
       .catch(() => {});
-  }, [bridge]);
+  }, [bridge, connections]);
 
   const models: Record<string, string | null> = {};
   for (const session of entry.map.sessions) {

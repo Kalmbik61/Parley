@@ -7,7 +7,7 @@ import { useHostSupports } from '../lib/capabilities.js';
 import { useHostStore } from './host.js';
 
 afterEach(() => {
-  useHostStore.setState({ status: { state: 'connecting' } });
+  useHostStore.setState({ status: { state: 'connecting' }, connections: 0 });
 });
 
 describe('useHostStore', () => {
@@ -23,6 +23,18 @@ describe('useHostStore', () => {
     dispose();
     act(() => bridge.emitStatus({ state: 'connecting' }));
     expect(useHostStore.getState().status.state).toBe('disconnected');
+  });
+
+  it('connections растёт на каждый переход в connected, повтор connected не считается (fix-7.3)', () => {
+    const bridge = createFakeBridge();
+    const dispose = useHostStore.getState().init(bridge);
+    expect(useHostStore.getState().connections).toBe(1);
+    act(() => bridge.setHostMethods(null));
+    expect(useHostStore.getState().connections).toBe(1);
+    act(() => bridge.emitStatus({ state: 'disconnected', reason: 'closed' }));
+    act(() => bridge.setHostMethods(null));
+    expect(useHostStore.getState().connections).toBe(2);
+    dispose();
   });
 
   it('useHostSupports(works.rename): true по умолчанию моста, false после setHostMethods(null)', () => {

@@ -23,6 +23,7 @@ import type { HarnasBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, S } from '../../../shared/strings.js';
 import { sessionTag } from '../../lib/participant.js';
+import { useHostStore } from '../../store/host.js';
 import { ConfirmDialog } from '../dialogs/ConfirmDialog.js';
 import { DiffView } from './DiffView.js';
 
@@ -69,7 +70,9 @@ export function ChangesPanel({ bridge, sessionRef, base }: ChangesPanelProps): J
       });
   };
 
-  useEffect(load, [bridge, sessionRef.projectPath, sessionRef.workId, sessionRef.sessionId]);
+  // Связь вернулась — дифф заново: панель при обрыве не перемонтируется (fix-7.3).
+  const connections = useHostStore((state) => state.connections);
+  useEffect(load, [bridge, sessionRef.projectPath, sessionRef.workId, sessionRef.sessionId, connections]);
 
   const commit = async (): Promise<void> => {
     const trimmed = commitMessage.trim();

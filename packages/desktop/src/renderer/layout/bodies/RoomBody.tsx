@@ -12,6 +12,7 @@ import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../../shared/bridge.js';
 import { RoomPanel } from '../../components/rooms/RoomPanel.js';
 import { activityFor, useActivityStore } from '../../store/activity.js';
+import { useHostStore } from '../../store/host.js';
 
 export interface RoomBodyProps {
   bridge: HarnasBridge;
@@ -24,13 +25,15 @@ export interface RoomBodyProps {
 export function RoomBody({ bridge, entry, roomId, active }: RoomBodyProps): JSX.Element {
   const activityByRef = useActivityStore((state) => state.byRef);
   const [providers, setProviders] = useState<Array<{ id: string; label: string }>>([]);
+  // Связь вернулась — список заново: тело при обрыве не перемонтируется (fix-7.3).
+  const connections = useHostStore((state) => state.connections);
 
   useEffect(() => {
     bridge
       .call('providers.list', {})
       .then((result) => setProviders(result.providers))
       .catch(() => {});
-  }, [bridge]);
+  }, [bridge, connections]);
 
   const models: Record<string, string | null> = {};
   for (const session of entry.map.sessions) {

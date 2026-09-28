@@ -13,6 +13,8 @@ import type { Room, WorkEntry, WorkSession } from '@harnas/core';
 import type { GroupNode, SplitNode } from '../../shared/layout-types.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { xtermMock } from '../test-utils/xterm-mock.js';
+import { REQUIRED_METHODS } from '../lib/capabilities.js';
+import { useHostStore } from '../store/host.js';
 import { useWorksStore } from '../store/works.js';
 import { EMPTY_HISTORY } from './history.js';
 import { LayoutView } from './LayoutView.js';
@@ -151,6 +153,27 @@ describe('LayoutView — тест 17', () => {
     // «общая» видно и в самой вкладке (заголовок из `tabMeta`), и в шапке
     // `RoomPanel` — оба места означают, что `entry`/`bridge` дошли до тела.
     expect(screen.getAllByText('общая').length).toBeGreaterThan(0);
+  });
+});
+
+describe('LayoutView — возврат связи с хостом (fix-7.3)', () => {
+  it('тело комнаты перечитывает providers.list, когда связь вернулась: оболочка при обрыве не перемонтируется', async () => {
+    const dispose = useHostStore.getState().init(bridge);
+    try {
+      render(<LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={15} />);
+      await flush();
+      const lists = (): number => bridge.calls.filter((call) => call.method === 'providers.list').length;
+      const before = lists();
+      expect(before).toBeGreaterThan(0);
+      act(() => bridge.emitStatus({ state: 'disconnected', reason: 'closed' }));
+      await flush();
+      expect(lists()).toBe(before);
+      act(() => bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: [...REQUIRED_METHODS] }));
+      await flush();
+      expect(lists()).toBe(before + 1);
+    } finally {
+      dispose();
+    }
   });
 });
 
