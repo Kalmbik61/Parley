@@ -25,9 +25,34 @@ export interface MethodDeps {
   sessions: SessionsService;
   wake: WakeService;
   worktrees: WorktreesService;
-  /** Первое чтение работ хостом (`works.list` ждёт его); без него — сразу. */
+  /** Первое чтение работ хостом и сбор прерванных (их ждут WORKS_GATED_*); без него — сразу. */
   worksReady?: Promise<void>;
 }
+
+/**
+ * Методы, которым нужен снимок работ хоста (раунд lane-r4, п. 4): сокет слушает раньше первого
+ * чтения работ, и в этот промежуток они видели бы недочитанный снимок — пустой список, not_found
+ * по сессии, ещё не сверенную живость или пустой список прерванных. Ждут `worksReady`.
+ * Не ждут: pty.input/pty.resize (порядок ввода; до чтения PTY всё равно нет), чтение и запись
+ * карт с диска (works.create/delete/rename/setStatus, rooms.*, mail.*, worktrees.*), host.*,
+ * providers.*, settings.*, wake.* — снимка работ они не читают.
+ */
+export const WORKS_GATED_METHODS = [
+  'works.list',
+  'sessions.create',
+  'sessions.resume',
+  'sessions.stop',
+  'sessions.close',
+  'sessions.delete',
+  'sessions.interrupted',
+  'sessions.resumeInterrupted',
+  'pty.attach',
+  'pty.detach',
+  'pty.send',
+] as const satisfies readonly MethodName[];
+
+/** Уведомления того же рода: activity.seen сверяет сессию со снимком работ. */
+export const WORKS_GATED_NOTIFICATIONS = ['activity.seen'] as const satisfies readonly NotificationName[];
 
 export interface HostHandlers {
   methods: Partial<Record<MethodName, AnyHandler>>;
@@ -53,47 +78,59 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
   const worktrees = createWorktreesHandlers(deps);
   const changes = createChangesHandlers(deps);
 
-  return {
-    methods: {
-      'host.info': hostInfo as AnyHandler,
-      'host.shutdown': hostShutdown as AnyHandler,
-      'works.list': worksList(deps.works, deps.worksReady) as AnyHandler,
-      'works.create': worksCreate as AnyHandler,
-      'works.delete': worksDelete as AnyHandler,
-      'works.rename': worksRename as AnyHandler,
-      'works.setStatus': worksSetStatus as AnyHandler,
-      'providers.list': providersList as AnyHandler,
-      'settings.get': settingsGet as AnyHandler,
-      'settings.set': settingsSet as AnyHandler,
-      'pty.attach': pty.ptyAttach as AnyHandler,
-      'pty.detach': pty.ptyDetach as AnyHandler,
-      'pty.send': pty.ptySend as AnyHandler,
-      'sessions.create': sessions.sessionsCreate as AnyHandler,
-      'sessions.resume': sessions.sessionsResume as AnyHandler,
-      'sessions.stop': sessions.sessionsStop as AnyHandler,
-      'sessions.delete': sessions.sessionsDelete as AnyHandler,
-      'sessions.close': sessions.sessionsClose as AnyHandler,
-      'sessions.interrupted': sessions.sessionsInterrupted as AnyHandler,
-      'sessions.resumeInterrupted': sessions.sessionsResumeInterrupted as AnyHandler,
-      'wake.pause': wake.wakePause as AnyHandler,
-      'wake.resume': wake.wakeResume as AnyHandler,
-      'wake.state': wake.wakeState as AnyHandler,
-      'rooms.create': roomsCreate as AnyHandler,
-      'rooms.send': roomsSend as AnyHandler,
-      'worktrees.available': worktrees.worktreesAvailable as AnyHandler,
-      'worktrees.diff': worktrees.worktreesDiff as AnyHandler,
-      'worktrees.commit': worktrees.worktreesCommit as AnyHandler,
-      'worktrees.merge': worktrees.worktreesMerge as AnyHandler,
-      'worktrees.discard': worktrees.worktreesDiscard as AnyHandler,
-      'worktrees.mergeCheck': worktrees.worktreesMergeCheck as AnyHandler,
-      'changes.project': changes.changesProject as AnyHandler,
-      'changes.commitProject': changes.changesCommitProject as AnyHandler,
-      'mail.markRead': mailMarkRead as AnyHandler,
-    },
-    notifications: {
-      'pty.input': pty.ptyInput as AnyNotificationHandler,
-      'pty.resize': pty.ptyResize as AnyNotificationHandler,
-      'activity.seen': pty.activitySeen as AnyNotificationHandler,
-    },
+  const methods: Partial<Record<MethodName, AnyHandler>> = {
+    'host.info': hostInfo as AnyHandler,
+    'host.shutdown': hostShutdown as AnyHandler,
+    'works.list': worksList(deps.works) as AnyHandler,
+    'works.create': worksCreate as AnyHandler,
+    'works.delete': worksDelete as AnyHandler,
+    'works.rename': worksRename as AnyHandler,
+    'works.setStatus': worksSetStatus as AnyHandler,
+    'providers.list': providersList as AnyHandler,
+    'settings.get': settingsGet as AnyHandler,
+    'settings.set': settingsSet as AnyHandler,
+    'pty.attach': pty.ptyAttach as AnyHandler,
+    'pty.detach': pty.ptyDetach as AnyHandler,
+    'pty.send': pty.ptySend as AnyHandler,
+    'sessions.create': sessions.sessionsCreate as AnyHandler,
+    'sessions.resume': sessions.sessionsResume as AnyHandler,
+    'sessions.stop': sessions.sessionsStop as AnyHandler,
+    'sessions.delete': sessions.sessionsDelete as AnyHandler,
+    'sessions.close': sessions.sessionsClose as AnyHandler,
+    'sessions.interrupted': sessions.sessionsInterrupted as AnyHandler,
+    'sessions.resumeInterrupted': sessions.sessionsResumeInterrupted as AnyHandler,
+    'wake.pause': wake.wakePause as AnyHandler,
+    'wake.resume': wake.wakeResume as AnyHandler,
+    'wake.state': wake.wakeState as AnyHandler,
+    'rooms.create': roomsCreate as AnyHandler,
+    'rooms.send': roomsSend as AnyHandler,
+    'worktrees.available': worktrees.worktreesAvailable as AnyHandler,
+    'worktrees.diff': worktrees.worktreesDiff as AnyHandler,
+    'worktrees.commit': worktrees.worktreesCommit as AnyHandler,
+    'worktrees.merge': worktrees.worktreesMerge as AnyHandler,
+    'worktrees.discard': worktrees.worktreesDiscard as AnyHandler,
+    'worktrees.mergeCheck': worktrees.worktreesMergeCheck as AnyHandler,
+    'changes.project': changes.changesProject as AnyHandler,
+    'changes.commitProject': changes.changesCommitProject as AnyHandler,
+    'mail.markRead': mailMarkRead as AnyHandler,
   };
+  const notifications: Partial<Record<NotificationName, AnyNotificationHandler>> = {
+    'pty.input': pty.ptyInput as AnyNotificationHandler,
+    'pty.resize': pty.ptyResize as AnyNotificationHandler,
+    'activity.seen': pty.activitySeen as AnyNotificationHandler,
+  };
+
+  const ready = deps.worksReady;
+  if (ready !== undefined) {
+    for (const name of WORKS_GATED_METHODS) {
+      const handler = methods[name];
+      if (handler !== undefined) methods[name] = async (params, request) => ready.then(() => handler(params, request));
+    }
+    for (const name of WORKS_GATED_NOTIFICATIONS) {
+      const handler = notifications[name];
+      if (handler !== undefined) notifications[name] = (params, request) => void ready.then(() => handler(params, request));
+    }
+  }
+
+  return { methods, notifications };
 }

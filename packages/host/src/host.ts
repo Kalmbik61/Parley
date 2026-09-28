@@ -159,7 +159,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const worktreesService = createWorktreesService(sessionsService);
 
   // Сокет слушает раньше первого чтения работ (п. 5 ниже, затем `worksService.start()`):
-  // `works.list` ждёт его, иначе окно, подключившееся в этот промежуток, видит недочитанный снимок.
+  // методы снимка работ (WORKS_GATED_* в methods/index.ts) ждут его, иначе окно, подключившееся
+  // в этот промежуток, видит недочитанный снимок.
   let markWorksReady!: () => void;
   const worksReady = new Promise<void>((resolve) => {
     markWorksReady = resolve;
@@ -212,12 +213,14 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   idleWatcher.notify(true);
 
   await worksService.start();
-  markWorksReady();
   // Сверка живости уже прошла на первом чтении работ: те, чей журнал оборван
   // посреди хода, прерваны падением прошлого хоста (спека 10).
   await sessionsService.collectInterrupted().catch((error: unknown) => {
     log.error('список прерванных сессий не собрался', { error: String(error) });
   });
+  // После сбора прерванных, а не сразу после чтения: sessions.interrupted тоже ждёт этих ворот
+  // (раунд lane-r4, п. 4) — иначе окно на старте получало пустой список и баннера не было.
+  markWorksReady();
   await activityService.start();
   wakeService.start();
 
