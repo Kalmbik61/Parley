@@ -26,7 +26,6 @@ import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { useActivityStore, type ActivityEntry } from '../store/activity.js';
 import { useUiStore } from '../store/ui.js';
 import { Button } from '../ui/button.js';
-import { retryWhileDenied } from './retry.js';
 import { RootPicker } from './RootPicker.js';
 import { filesRootSpec, rootDirOf, useFilesStore } from './store.js';
 import { Tree } from './Tree.js';
@@ -56,7 +55,8 @@ function useGitStatus(bridge: HarnasBridge, root: FileRoot): { status: Status; r
     const run = (): void => {
       timer = null;
       last = Date.now();
-      retryWhileDenied(() => bridge.files.gitStatus(rootRef.current), () => !disposed)
+      bridge.files
+        .gitStatus(rootRef.current)
         .then((next) => {
           if (!disposed) setStatus(next);
         })
@@ -140,7 +140,8 @@ export function FilesPanel({ bridge, entry }: FilesPanelProps): JSX.Element {
     let disposed = false;
     let id: string | null = null;
     setWatchFailed(false);
-    retryWhileDenied(() => bridge.files.watch(root, ''), () => !disposed)
+    bridge.files
+      .watch(root, '')
       .then((got) => {
         if (disposed) void bridge.files.unwatch(got).catch(() => {});
         else id = got;

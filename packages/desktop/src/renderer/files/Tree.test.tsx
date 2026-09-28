@@ -95,19 +95,14 @@ describe('Tree (тест 3)', () => {
     await waitFor(() => expect(list).toHaveBeenCalledTimes(4));
   });
 
-  it('корень ещё не в реестре main (files:denied) — повтор, дерево появляется без тоста', async () => {
-    let calls = 0;
-    const list = bridge.files.list;
-    vi.spyOn(bridge.files, 'list').mockImplementation(async (root, dir) => {
-      calls += 1;
-      if (calls === 1) throw { code: 'files:denied', message: 'unknown root' };
-      return list(root, dir);
-    });
-    bridge.setDir(ROOT, '', [entry('a.ts')]);
+  // Раунд main-r2, п. 6: гонку реестра корней закрывает main (пересборка на промахе), и
+  // files:denied из main — окончательный отказ; окно его не повторяет.
+  it('files:denied — тост сразу, list без повторов', async () => {
+    const list = vi.spyOn(bridge.files, 'list').mockRejectedValue({ code: 'files:denied', message: 'unknown root' });
     renderTree();
-    await screen.findByText('a.ts', {}, { timeout: 2000 });
-    expect(calls).toBe(2);
-    expect(toast).not.toHaveBeenCalled();
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('Path is outside the workspace folders'));
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(list).toHaveBeenCalledTimes(1);
   });
 
   it('игнорируемые скрыты по умолчанию; с showIgnored — видны и приглушены', async () => {

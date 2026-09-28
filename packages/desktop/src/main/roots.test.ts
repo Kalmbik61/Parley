@@ -194,6 +194,8 @@ describe('/tmp и /private/tmp (тест 4)', () => {
 describe('works.changed (тест 5)', () => {
   it('после снимка без работы её корень исчезает — resolve отказывает', async () => {
     const { registry, source } = await ready();
+    // Хост на works.list отвечает тем же снимком, что и в событии: промах реестра перечитывает его.
+    source.auto = snapshot([]);
     source.change(snapshot([]));
     await vi.waitFor(() => expect(registry.roots(KEY())).toEqual([]));
     await expect(registry.resolve(PROJECT_ROOT(), 'src/a.ts', 'read')).rejects.toBeInstanceOf(FilesDeniedError);
@@ -457,8 +459,99 @@ describe('ошибки resolve (раунд исправлений 1)', () => {
 describe('rootPath (кусок 7.1a)', () => {
   it('realpath корня; неизвестный корень — FilesDeniedError', async () => {
     const { registry } = await ready();
-    expect(registry.rootPath(PROJECT_ROOT())).toBe(await realpath(project));
-    expect(() => registry.rootPath({ workKey: KEY(), spec: { kind: 'worktree', sessionId: 's-09' } })).toThrow(FilesDeniedError);
-    expect(() => registry.rootPath({ workKey: 'nope', spec: { kind: 'project' } })).toThrow(FilesDeniedError);
+    expect(await registry.rootPath(PROJECT_ROOT())).toBe(await realpath(project));
+    await expect(registry.rootPath({ workKey: KEY(), spec: { kind: 'worktree', sessionId: 's-09' } })).rejects.toBeInstanceOf(FilesDeniedError);
+    await expect(registry.rootPath({ workKey: 'nope', spec: { kind: 'project' } })).rejects.toBeInstanceOf(FilesDeniedError);
+  });
+});
+
+describe('промах реестра — пересборка по свежему works.list (раунд main-r2, п. 6)', () => {
+  /**
+   * Работа создана, `works.changed` до реестра ещё не дошёл, а окно уже спрашивает: реестр
+   * знает старый снимок, хост на `works.list` отвечает новым.
+   */
+  async function stale(): Promise<{ registry: RootsRegistry; source: ReturnType<typeof fakeSource>; lists: () => number; root: FileRoot; fresh: string }> {
+    const fresh = path.join(dir, 'fresh');
+    await mkdir(path.join(fresh, 'src'), { recursive: true });
+    await writeFile(path.join(fresh, 'src', 'b.ts'), 'b');
+    const source = fakeSource(snapshot([{ projectPath: project, workId: WORK }]));
+    let calls = 0;
+    const list = source.list;
+    source.list = () => {
+      calls += 1;
+      return list();
+    };
+    const registry = createRootsRegistry(source);
+    source.connect();
+    await vi.waitFor(() => expect(registry.roots(KEY())).toHaveLength(1));
+    source.auto = snapshot([
+      { projectPath: project, workId: WORK },
+      { projectPath: fresh, workId: 'w-new' },
+    ]);
+    calls = 0;
+    return { registry, source, lists: () => calls, root: { workKey: workKey(fresh, 'w-new'), spec: { kind: 'project' } }, fresh };
+  }
+
+  it('resolve (list/readText) нового корня проходит с первого раза', async () => {
+    const { registry, root, fresh } = await stale();
+    expect(await registry.resolve(root, 'src/b.ts', 'read')).toBe(path.join(await realpath(fresh), 'src', 'b.ts'));
+    expect(await registry.resolve(root, '', 'read')).toBe(await realpath(fresh));
+  });
+
+  it('locate и insideAnyRoot по пути нового корня проходят с первого раза', async () => {
+    const { registry, root, fresh } = await stale();
+    expect(await registry.locate(root.workKey, path.join(fresh, 'src', 'b.ts'))).toEqual({ root, relPath: path.join('src', 'b.ts') });
+    const again = await stale();
+    expect(await again.registry.insideAnyRoot(path.join(again.fresh, 'src', 'b.ts'))).toBe(
+      path.join(await realpath(again.fresh), 'src', 'b.ts'),
+    );
+  });
+
+  it('rootPath нового корня проходит с первого раза', async () => {
+    const { registry, root, fresh } = await stale();
+    expect(await registry.rootPath(root)).toBe(await realpath(fresh));
+  });
+
+  it('новый worktree сессии известной работы — корень находится', async () => {
+    const worktree = path.join(dir, 'wt-new');
+    await mkdir(worktree);
+    await writeFile(path.join(worktree, 'c.ts'), 'c');
+    const { registry, source } = await ready();
+    source.auto = snapshot([{ projectPath: project, workId: WORK, sessions: [{ id: 's-05', worktree }] }]);
+    const root: FileRoot = { workKey: KEY(), spec: { kind: 'worktree', sessionId: 's-05' } };
+    expect(await registry.resolve(root, 'c.ts', 'read')).toBe(path.join(await realpath(worktree), 'c.ts'));
+  });
+
+  it('корня нет и после пересборки — отказ, одна пересборка на промах, без задержки на повторы', async () => {
+    const { registry, lists } = await stale();
+    const started = Date.now();
+    await expect(registry.resolve({ workKey: 'nope', spec: { kind: 'project' } }, 'a', 'read')).rejects.toBeInstanceOf(FilesDeniedError);
+    await expect(registry.rootPath({ workKey: 'nope', spec: { kind: 'project' } })).rejects.toBeInstanceOf(FilesDeniedError);
+    expect(await registry.locate(KEY(), '/etc/hosts')).toBeNull();
+    expect(await registry.insideAnyRoot('/etc/hosts')).toBeNull();
+    expect(lists()).toBe(4);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it('путь вне известного корня — отказ сразу, без works.list', async () => {
+    const { registry, lists } = await stale();
+    await expect(registry.resolve(PROJECT_ROOT(), '../x', 'read')).rejects.toBeInstanceOf(FilesDeniedError);
+    await expect(registry.resolve(PROJECT_ROOT(), '/etc/passwd', 'read')).rejects.toBeInstanceOf(FilesDeniedError);
+    expect(lists()).toBe(0);
+  });
+
+  it('works.list отклонён на промахе — отказ, прежние корни целы', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { registry, source } = await ready();
+    source.list = () => Promise.reject(new Error('no connection to host'));
+    await expect(registry.resolve({ workKey: 'nope', spec: { kind: 'project' } }, 'a', 'read')).rejects.toBeInstanceOf(FilesDeniedError);
+    expect(registry.roots(KEY())).toHaveLength(1);
+    vi.restoreAllMocks();
+  });
+
+  it('одновременные промахи делят одну пересборку', async () => {
+    const { registry, root, lists } = await stale();
+    await Promise.all([registry.resolve(root, 'src/b.ts', 'read'), registry.resolve(root, 'src', 'read'), registry.rootPath(root)]);
+    expect(lists()).toBe(1);
   });
 });

@@ -120,11 +120,13 @@ export function createFileWatch(options: FileWatchOptions): FileWatch {
     for (const sink of new Set(tree.sinks.values())) sink.treeChanged({ rootKey: key, dirs });
   };
 
-  const watchTree = (root: FileRoot, sink: WatchSink): string => {
+  const watchTree = async (root: FileRoot, sink: WatchSink): Promise<string> => {
     const key = rootKey(root);
+    // Реестр отвечает асинхронно (промах — пересборка по works.list): trees читается после
+    // ответа, за это время наблюдение корня могли поставить или снять.
+    const rootPath = await options.roots.rootPath(root);
     let tree = trees.get(key);
     if (tree === undefined) {
-      const rootPath = options.roots.rootPath(root);
       const created: TreeWatch = { watcher: { close: () => undefined, on: () => undefined }, sinks: new Map(), dirs: new Set(), timer: null };
       created.watcher = start(rootPath, true, (filename) => {
         if (filename === null) {

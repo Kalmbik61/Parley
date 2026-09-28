@@ -376,7 +376,7 @@ export function createGitApi(options: GitApiOptions): GitApi {
   };
 
   const listFiles = async (root: FileRoot): Promise<string[]> => {
-    const rootPath = roots.rootPath(root);
+    const rootPath = await roots.rootPath(root);
     if ((await gitRootOf(git, rootPath)) !== null) {
       const result = await read(['ls-files', '-co', '--exclude-standard', '-z', ...PATHSPEC], rootPath);
       if (result !== null && result.code === 0) return parseLsFiles(result.stdout);
@@ -386,7 +386,7 @@ export function createGitApi(options: GitApiOptions): GitApi {
   };
 
   const grepIn = async (root: FileRoot, query: GrepQuery, signal: AbortSignal): Promise<GrepResult> => {
-    const rootPath = roots.rootPath(root);
+    const rootPath = await roots.rootPath(root);
     const walk = async (): Promise<GrepResult> => {
       const paths = await walkFiles(rootPath, WALK_LIMIT);
       if (signal.aborted) return { files: [], truncated: true };
@@ -451,7 +451,7 @@ export function createGitApi(options: GitApiOptions): GitApi {
       // `--output=<файл>` из рендерера иначе заставил бы git писать вне корней.
       if (!isSafeRev(rev)) throw new HostError('bad_request', 'invalid revision');
       const normal = lexicalPath(relPath);
-      const rootPath = roots.rootPath(root);
+      const rootPath = await roots.rootPath(root);
       // `./` — путь от cwd, а не от корня репозитория: папка проекта бывает подкаталогом.
       // --no-textconv: сравнение показывает байты блоба, а не вывод фильтра из конфигурации.
       const result = await read(['show', '--no-textconv', '--end-of-options', `${rev}:./${normal}`], rootPath, {
@@ -473,7 +473,7 @@ export function createGitApi(options: GitApiOptions): GitApi {
     },
 
     gitStatus: async (root) => {
-      const rootPath = roots.rootPath(root);
+      const rootPath = await roots.rootPath(root);
       const info = await gitRootOf(git, rootPath);
       if (info === null) return {};
       // -uall: новая папка иначе пришла бы одной строкой `?? dir/`, без U у файлов.
@@ -488,7 +488,7 @@ export function createGitApi(options: GitApiOptions): GitApi {
 
     checkIgnored: async (root, dir, names) => {
       if (names.length === 0) return new Set();
-      const rootPath = roots.rootPath(root);
+      const rootPath = await roots.rootPath(root);
       if ((await gitRootOf(git, rootPath)) === null) return new Set();
       const rels = names.map((name) => path.posix.join(dir, name));
       let result: Awaited<ReturnType<GitRunner['run']>> | null;

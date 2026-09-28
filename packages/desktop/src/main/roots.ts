@@ -47,7 +47,7 @@ export interface RootsRegistry {
    */
   expandHome(p: string): string;
   /** realpath корня — cwd для git (7.1b) и сверка каталога записи; нет корня — FilesDeniedError. */
-  rootPath(root: FileRoot): string;
+  rootPath(root: FileRoot): Promise<string>;
 }
 
 interface RootEntry extends RootPath {
@@ -168,16 +168,50 @@ export function createRootsRegistry(source: RootsSource, options: { home?: strin
   /** Счётчик пересборок: применяется только самая поздняя — realpath асинхронный, пересборки обгоняют друг друга. */
   let builds = 0;
 
-  const apply = async (snapshot: WorksSnapshot): Promise<void> => {
+  /** Последняя начатая пересборка: промах реестра дожидается её, а не отказывает раньше неё. */
+  let latest: Promise<void> = Promise.resolve();
+
+  const apply = (snapshot: WorksSnapshot): Promise<void> => {
     const build = ++builds;
-    const next = await buildEntries(snapshot);
-    if (build === builds) entries = next;
+    latest = buildEntries(snapshot).then((next) => {
+      if (build === builds) entries = next;
+    });
+    return latest;
   };
 
   source.onChange((snapshot) => {
     changes += 1;
     void apply(snapshot);
   });
+
+  /** Общая пересборка одновременных промахов: один `works.list` на пачку, не на каждый вызов. */
+  let refreshing: Promise<void> | null = null;
+
+  /**
+   * Промах реестра (ревью 7.2-A, п. 6): окно видит `works.changed` раньше, чем реестр
+   * пересоберётся (realpath асинхронный), и спрашивает про корень, которого реестр ещё не
+   * знает. Одна пересборка по свежему `works.list` перед отказом закрывает эту гонку для всех
+   * вызовов разом; отказ — только если корня нет и после неё. Повторов с паузами нет.
+   */
+  const refresh = (): Promise<void> => {
+    if (refreshing !== null) return refreshing;
+    const seen = changes;
+    const run = source.list().then(
+      (snapshot) => {
+        // `works.changed`, пришедший, пока `list()` был в пути, свежее его ответа — ждём его пересборку.
+        if (changes !== seen) return latest;
+        return apply(snapshot);
+      },
+      (error: unknown) => {
+        // Нет связи с хостом — отказ по прежним корням.
+        console.warn('[harnas] roots: works.list on miss failed', error);
+      },
+    );
+    refreshing = run.finally(() => {
+      refreshing = null;
+    });
+    return refreshing;
+  };
 
   source.onConnected(() => {
     const seen = changes;
@@ -212,9 +246,19 @@ export function createRootsRegistry(source: RootsSource, options: { home?: strin
     return entries.get(root.workKey)?.find((entry) => rootKey(entry.root) === key);
   };
 
-  const resolve: RootsRegistry['resolve'] = async (root, relPath, mode) => {
-    const entry = findRoot(root);
+  /** Корень из реестра; промах — пересборка по свежему снимку и вторая проверка, затем отказ. */
+  const requireRoot = async (root: FileRoot): Promise<RootEntry> => {
+    let entry = findRoot(root);
+    if (entry === undefined) {
+      await refresh();
+      entry = findRoot(root);
+    }
     if (entry === undefined) throw new FilesDeniedError(`unknown root: ${rootKey(root)}`);
+    return entry;
+  };
+
+  const resolve: RootsRegistry['resolve'] = async (root, relPath, mode) => {
+    const entry = await requireRoot(root);
     if (relPath.includes('\0')) throw new FilesDeniedError('path contains NUL');
     if (path.isAbsolute(relPath)) throw new FilesDeniedError(`absolute path: ${relPath}`);
     const target = path.resolve(entry.absPath, relPath);
@@ -263,9 +307,7 @@ export function createRootsRegistry(source: RootsSource, options: { home?: strin
     return real;
   };
 
-  const locate: RootsRegistry['locate'] = async (key, absPath) => {
-    const real = await realAbs(absPath);
-    if (real === null) return null;
+  const locateIn = (key: string, real: string): { root: FileRoot; relPath: string } | null => {
     // Только корни своей работы: у работ одного проекта корень `project` общий, и поиск
     // по всем отдал бы путь одной из них (спека 10.8).
     let best: { entry: RootEntry; relPath: string } | null = null;
@@ -277,13 +319,29 @@ export function createRootsRegistry(source: RootsSource, options: { home?: strin
     return best === null ? null : { root: best.entry.root, relPath: best.relPath };
   };
 
+  const locate: RootsRegistry['locate'] = async (key, absPath) => {
+    const real = await realAbs(absPath);
+    if (real === null) return null;
+    // Промах — возможно, корень (новая работа, новый worktree) ещё не дошёл до реестра.
+    const found = locateIn(key, real);
+    if (found !== null) return found;
+    await refresh();
+    return locateIn(key, real);
+  };
+
+  const insideAny = (real: string): boolean => {
+    for (const list of entries.values()) {
+      if (list.some((entry) => relativeInside(entry, real) !== null)) return true;
+    }
+    return false;
+  };
+
   const insideAnyRoot: RootsRegistry['insideAnyRoot'] = async (absPath) => {
     const real = await realAbs(absPath);
     if (real === null) return null;
-    for (const list of entries.values()) {
-      if (list.some((entry) => relativeInside(entry, real) !== null)) return real;
-    }
-    return null;
+    if (insideAny(real)) return real;
+    await refresh();
+    return insideAny(real) ? real : null;
   };
 
   return {
@@ -292,10 +350,6 @@ export function createRootsRegistry(source: RootsSource, options: { home?: strin
     insideAnyRoot,
     roots: (key) => (entries.get(key) ?? []).map((entry) => ({ spec: entry.root.spec, absPath: entry.absPath })),
     expandHome,
-    rootPath: (root) => {
-      const entry = findRoot(root);
-      if (entry === undefined) throw new FilesDeniedError(`unknown root: ${rootKey(root)}`);
-      return entry.absPath;
-    },
+    rootPath: async (root) => (await requireRoot(root)).absPath,
   };
 }

@@ -470,3 +470,36 @@ describe('files.list: ignored по git check-ignore (кусок 7.1b, тест 1
     warn.mockRestore();
   });
 });
+
+describe('работа создана, works.changed до реестра не дошёл (раунд main-r2, п. 6)', () => {
+  it('первый list, readText и locate нового корня проходят без отказа', async () => {
+    const fresh = path.join(dir, 'fresh');
+    await mkdir(fresh);
+    await writeFile(path.join(fresh, 'n.ts'), 'new');
+    let current = { branches: {}, entries: [{ projectPath: project, map: { work: { id: 'w-1' }, sessions: [] } }] } as unknown as WorksSnapshot;
+    const stale = createRootsRegistry({
+      list: async () => current,
+      onChange: () => () => {},
+      onConnected: (listener) => {
+        listener();
+        return () => {};
+      },
+    });
+    await vi.waitFor(() => expect(stale.roots(key)).toHaveLength(1));
+    // Хост уже знает новую работу; событие works.changed реестру ещё не пришло.
+    current = {
+      branches: {},
+      entries: [
+        { projectPath: project, map: { work: { id: 'w-1' }, sessions: [] } },
+        { projectPath: fresh, map: { work: { id: 'w-2' }, sessions: [] } },
+      ],
+    } as unknown as WorksSnapshot;
+    const freshKey = workKey(fresh, 'w-2');
+    const root: FileRoot = { workKey: freshKey, spec: { kind: 'project' } };
+    const api = createFsApi(stale);
+    expect((await api.list(root, '')).map((entry) => entry.name)).toEqual(['n.ts']);
+    expect((await api.readText(root, 'n.ts')).text).toBe('new');
+    const [located] = await api.locate(freshKey, [path.join(fresh, 'n.ts')]);
+    expect(located?.relPath).toBe('n.ts');
+  });
+});

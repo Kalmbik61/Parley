@@ -30,7 +30,6 @@ import { useLayoutStore } from '../layout/store.js';
 import { openTab, splitGroup } from '../layout/tree.js';
 import { cn } from '../lib/cn.js';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '../ui/context-menu.js';
-import { retryWhileDenied } from './retry.js';
 import { useFilesStore } from './store.js';
 
 /** Высота строки дерева, px. */
@@ -250,7 +249,8 @@ export function Tree({ bridge, root, rootDir, status, showIgnored, reloadToken, 
       return;
     }
     loading.current.add(dir);
-    retryWhileDenied(() => bridge.files.list(rootRef.current, dir), () => alive.current)
+    bridge.files
+      .list(rootRef.current, dir)
       .then((entries) => {
         if (dir === '') rootFailed.current = false;
         if (alive.current) setDirs((current) => ({ ...current, [dir]: entries }));
