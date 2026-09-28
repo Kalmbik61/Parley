@@ -38,6 +38,7 @@ export function fakePty(): FakePty {
   const handle = (ref: SessionRef): PtyHandle => ({
     ref,
     pid: state.pid,
+    startedAt: 0,
     cols: 80,
     rows: 24,
     hasDraft: () => state.humanDraft || state.hostDraft,

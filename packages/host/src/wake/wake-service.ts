@@ -15,6 +15,7 @@ import {
   addMessage,
   DEFAULT_CONFIG,
   deliveryAction,
+  hookedSince,
   HUMAN,
   loadConfig,
   loadProviders,
@@ -311,7 +312,10 @@ export function createWakeService(
     // Печать и Enter — общая механика с pty.send (кусок 5.1): Enter через паузу тому же
     // pid, отмена по вводу человека. Черновиком хоста свой указатель не помечается —
     // правила будильника (спека 7.3) прежние.
-    const typing = typeAndSubmit({ pty, enterDelayMs }, ref, action.text, true);
+    // Перед Enter — снова `blocked`: запрос разрешения мог появиться за паузу (fix-final-b).
+    const typing = typeAndSubmit({ pty, enterDelayMs }, ref, action.text, true, {
+      beforeEnter: () => activity.get(ref)?.activity.activity !== 'blocked',
+    });
     state.typing = typing;
     for (const id of action.letterIds) state.pointed.add(id);
     state.inFlight = true;
@@ -339,6 +343,12 @@ export function createWakeService(
         clearTimers(state);
         state.inFlight = false;
         notice('pointer-cancelled', ref, `указатель сессии ${ref.sessionId} отменён вводом человека`);
+      } else if (outcome === 'blocked') {
+        // Агент показал диалог за паузу перед Enter: отвечать на него нельзя (рамка 15.1).
+        // Указатель остаётся в поле ввода, письма — в `pointed`, как при вводе человека.
+        clearTimers(state);
+        state.inFlight = false;
+        notice('pointer-cancelled', ref, `указатель сессии ${ref.sessionId} без Enter — сессия ждёт ответа`);
       }
     }, (error: unknown) => {
       // Enter указателя не записался (PTY умер в окне ожидания). Сессию дальше ведёт
@@ -373,6 +383,8 @@ export function createWakeService(
         pointed: state.pointed,
         inFlight: false,
         resumeAllowed: true,
+        // Процесса нет: подъём заводит новый, хуки старого тут ни при чём.
+        hooked: false,
       };
       // Лимит берём только под настоящий подъём: каждый пересчёт без писем
       // иначе съедал бы его впустую.
@@ -404,6 +416,7 @@ export function createWakeService(
       pointed: state.pointed,
       inFlight: state.inFlight,
       resumeAllowed: false,
+      hooked: hookedSince(live?.activity, handle.startedAt),
     });
 
     if (action.kind === 'type-pointer') beginAttempt(ref, state, action);

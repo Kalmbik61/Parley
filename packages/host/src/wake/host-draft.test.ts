@@ -4,12 +4,12 @@
  * образцу `rig` из `wake-service.test.ts`; сам тот файл не меняется (тест 1 куска).
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { addMessage, addSession, createWork, transitionSession, unreadFor, updateMap } from '@harnas/core';
+import { addMessage, addSession, createWork, transitionSession, unreadFor, updateMap, workPaths } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import type { HostContext } from '../context.js';
 import { createActivityService } from '../activity/activity-service.js';
@@ -102,6 +102,9 @@ interface Rig {
 
 async function rig(enterDelayMs: number): Promise<Rig> {
   const { workId, sessionId } = await activeSession();
+  // `events/` — до старта наблюдателей, как при настоящем запуске: хук стаба должен дойти, иначе
+  // сессия «без хуков с запуска» и ни будильник, ни pty.send в неё не печатают (fix-final-b).
+  await mkdir(workPaths(project, workId).events, { recursive: true });
   const host = fakeHost();
   const works = createWorksService(host, { debounceMs: 20 });
   const activity = createActivityService(host, works, { claudeRoot, codexRoot });
@@ -114,7 +117,17 @@ async function rig(enterDelayMs: number): Promise<Rig> {
   wake.start();
 
   const ref: SessionRef = { projectPath: project, workId, sessionId };
-  const launch: PtyLaunch = { command: process.execPath, args: [STUB], cwd: project, env: { ...process.env } };
+  const launch: PtyLaunch = {
+    command: process.execPath,
+    args: [STUB],
+    cwd: project,
+    env: {
+      ...process.env,
+      HARNAS_WORK_DIR: path.join(project, '.harnas', 'works', workId),
+      HARNAS_SESSION_ID: sessionId,
+      STUB_READY_HOOK: '1',
+    },
+  };
   pty.start(ref, launch);
 
   let stream = '';
@@ -130,6 +143,7 @@ async function rig(enterDelayMs: number): Promise<Rig> {
   });
 
   await waitFor(() => stream.includes('STUB READY'));
+  await waitFor(() => (activity.get(ref)?.activity.lastEventAt ?? null) !== null);
   return { works, pty, wake, send, stream: () => stream, ref };
 }
 

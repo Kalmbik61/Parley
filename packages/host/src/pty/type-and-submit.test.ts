@@ -51,6 +51,34 @@ describe('typeAndSubmit', () => {
     await expect(attempt.done).resolves.toBe('submitted');
   });
 
+  it('beforeEnter спрашивается перед самым Enter: false — blocked, \\r нет, черновик хоста остаётся (fix-final-b)', async () => {
+    let blocked = false;
+    const asked: number[] = [];
+    const attempt = typeAndSubmit(deps(), ref, 'текст', true, {
+      hostDraft: true,
+      beforeEnter: () => {
+        asked.push(Date.now());
+        return !blocked;
+      },
+    });
+    await vi.advanceTimersByTimeAsync(300);
+    // Диалог появился за ожидание: до Enter предикат ещё не спрашивали.
+    expect(asked).toHaveLength(0);
+    blocked = true;
+    await vi.advanceTimersByTimeAsync(200);
+    await expect(attempt.done).resolves.toBe('blocked');
+    expect(asked).toHaveLength(1);
+    expect(pty.writes).toEqual(['текст']);
+    expect(pty.hostDraft).toBe(true);
+  });
+
+  it('beforeEnter true — Enter как обычно', async () => {
+    const attempt = typeAndSubmit(deps(), ref, 'текст', true, { beforeEnter: () => true });
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(attempt.done).resolves.toBe('submitted');
+    expect(pty.writes).toEqual(['текст', '\r']);
+  });
+
   it('смена pid — restarted, \\r нет', async () => {
     const attempt = typeAndSubmit(deps(), ref, 'текст', true);
     pty.pid = 101;

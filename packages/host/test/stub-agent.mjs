@@ -12,6 +12,11 @@
 //                                старте и UserPromptSubmit/Stop вокруг ответа
 //                                на каждую строку (как это делает хук Claude
 //                                Code, дизайн TUI v2, 4.2)
+//   STUB_READY_HOOK=1          — при старте пишет в журнал одно нейтральное
+//                                событие `StubReady`: состояния оно не меняет,
+//                                но хост видит, что хуки процесса доходят
+//                                (fix-final-b: без единого хука с запуска
+//                                pty.send и будильник в сессию не печатают)
 //   STUB_TURN_MS=<n>           — ход длится n мс между UserPromptSubmit и Stop
 //   STUB_ARGS_FILE=<путь>      — при старте пишет туда JSON
 //                                { argv, cwd, env: { HARNAS_WORK_DIR,
@@ -65,6 +70,7 @@ function handleLine(line) {
 }
 
 if (HOOKS) writeHookEvent('SessionStart');
+if (process.env.STUB_READY_HOOK === '1') writeHookEvent('StubReady');
 process.stdout.write('STUB READY\r\n');
 
 if (process.env.STUB_ARGS_FILE !== undefined) {

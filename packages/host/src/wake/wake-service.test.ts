@@ -145,11 +145,21 @@ async function rig(
   wake.start();
 
   const ref: SessionRef = { projectPath: project, workId, sessionId };
+  // Как при настоящем запуске: `events/` заводит запись настроек до старта процесса, а хук
+  // процесса доходит до журнала. Без единого хука с запуска будильник не печатает (fix-final-b);
+  // нейтральное `StubReady` состояния не меняет. Тест без хуков передаёт STUB_READY_HOOK: '0'.
+  await mkdir(workPaths(project, workId).events, { recursive: true });
   const launch: PtyLaunch = {
     command: process.execPath,
     args: [STUB],
     cwd: project,
-    env: { ...process.env, ...launchEnv },
+    env: {
+      ...process.env,
+      HARNAS_WORK_DIR: path.join(project, '.harnas', 'works', workId),
+      HARNAS_SESSION_ID: sessionId,
+      STUB_READY_HOOK: '1',
+      ...launchEnv,
+    },
   };
   pty.start(ref, launch);
 
@@ -294,6 +304,59 @@ describe('WakeService', () => {
     );
     expect(cancelled).toBeDefined();
     expect((cancelled?.data as { ref: SessionRef }).ref).toEqual(ref);
+  });
+});
+
+describe('WakeService: процесс без хуков и диалог перед Enter (fix-final-b)', () => {
+  it('ни одного хука с запуска — указатель не печатается; первый хук — уходит', async () => {
+    const { workId, sessionId } = await activeSession();
+    // Свежая сессия на вопросе доверия к папке: Claude Code хуков не шлёт, активность idle.
+    const { stream } = await rig(sessionId, workId, { STUB_READY_HOOK: '0' });
+
+    await sendLetter(workId, sessionId);
+    await settle(600);
+    expect(stream()).not.toContain(pointer(1));
+
+    // Доверие подтвердил человек — агент прислал первый хук, письмо уходит указателем.
+    await writeFile(
+      path.join(workPaths(project, workId).events, `${sessionId}.jsonl`),
+      `${JSON.stringify({ hook_event_name: 'SessionStart' })}\n${JSON.stringify({ hook_event_name: 'Stop' })}\n`,
+    );
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+  });
+
+  it('хуки прошлого процесса не в счёт: журнал до запуска — указатель не печатается', async () => {
+    const { workId, sessionId } = await activeSession();
+    await mkdir(workPaths(project, workId).events, { recursive: true });
+    await writeFile(
+      path.join(workPaths(project, workId).events, `${sessionId}.jsonl`),
+      `${JSON.stringify({ hook_event_name: 'Stop' })}\n`,
+    );
+    // mtime журнала — строго раньше запуска процесса.
+    await settle(50);
+    const { stream } = await rig(sessionId, workId, { STUB_READY_HOOK: '0' });
+
+    await sendLetter(workId, sessionId);
+    await settle(600);
+    expect(stream()).not.toContain(pointer(1));
+  });
+
+  it('стал blocked за ожидание Enter — Enter не жмётся, указатель остаётся в поле ввода', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { stream, activity, ref } = await rig(sessionId, workId, {}, { enterDelayMs: 600 });
+
+    await sendLetter(workId, sessionId);
+    await waitFor(() => stream().includes(pointer(1)), 3000);
+    // Запрос разрешения показан, хук дошёл до Enter.
+    await writeFile(
+      path.join(workPaths(project, workId).events, `${sessionId}.jsonl`),
+      `${JSON.stringify({ hook_event_name: 'PermissionRequest' })}\n`,
+      { flag: 'a' },
+    );
+    await waitFor(() => activity.get(ref)?.activity.activity === 'blocked', 3000);
+
+    await settle(800);
+    expect(stream()).not.toContain(`echo: ${pointer(1)}`);
   });
 });
 
@@ -565,7 +628,18 @@ async function trioRig(workId: string, ids: readonly string[]): Promise<Map<stri
   for (const sessionId of ids) {
     pty.start(
       { projectPath: project, workId, sessionId },
-      { command: process.execPath, args: [STUB], cwd: project, env: { ...process.env } },
+      {
+        command: process.execPath,
+        args: [STUB],
+        cwd: project,
+        // Хук процесса доходит до журнала — иначе будильник в сессию не печатает (fix-final-b).
+        env: {
+          ...process.env,
+          HARNAS_WORK_DIR: path.join(project, '.harnas', 'works', workId),
+          HARNAS_SESSION_ID: sessionId,
+          STUB_READY_HOOK: '1',
+        },
+      },
     );
   }
 
