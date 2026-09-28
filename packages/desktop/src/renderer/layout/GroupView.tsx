@@ -22,17 +22,14 @@
  * наложения не создаёт, и индикатор встаёт над поверхностью терминала.
  */
 
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef } from 'react';
+import { createContext, useCallback, useContext, useLayoutEffect, useRef } from 'react';
 import { useDroppable } from '@dnd-kit/core';
 import type { WorkEntry, WorkSession } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
 import type { HarnasBridge } from '../../shared/bridge.js';
-import type { FileRoot } from '../../shared/files-types.js';
-import { errorText, S } from '../../shared/strings.js';
-import { rootKey } from '../../shared/work-keys.js';
-import { bufferKey } from '../files/buffer.js';
-import { useFilesStore } from '../files/store.js';
+import { S } from '../../shared/strings.js';
+import { FileBody } from '../files/editor/FileBody.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { ErrorBoundary } from '../shell/ErrorBoundary.js';
 import { DiffBody } from './bodies/DiffBody.js';
@@ -77,56 +74,6 @@ function refOf(entry: WorkEntry, sessionId: string): SessionRef {
   return { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId };
 }
 
-/**
- * Больше стольких символов временное тело не показывает: `<pre>` на 20 МБ (предел `readText`)
- * подвесил бы окно, а редактор с пределами спеки 10.4 придёт в 7.3b.
- */
-const FILE_TEXT_LIMIT = 2 * 1024 * 1024;
-
-/**
- * Временное тело вкладки `file` (куски 7.2, 7.3a): буфер стора (`files/store.ts`) в простом поле
- * ввода, чтобы правка жила с вкладкой, а не с телом. 7.3b меняет его на `FileBody` с Monaco,
- * баннером и ⌘S. Только чтение (больше 2 МБ, не UTF-8) — `<pre>`. Отказ —
- * `errorText(code, S.errors.actions.openFile)`, `files:denied` — `S.files.denied`: кодов `files:*`
- * `errorText` не знает.
- */
-function FileTextBody({ bridge, workKey, tabId, root, path }: { bridge: HarnasBridge; workKey: string; tabId: string; root: FileRoot; path: string }): JSX.Element {
-  const key = bufferKey(workKey, tabId);
-  const model = useFilesStore((state) => state.buffers[key]?.model ?? null);
-  const rootId = rootKey(root);
-  useEffect(() => {
-    // Повтор для перемонтированного тела ничего не делает: буфер уже в сторе.
-    useFilesStore.getState().openBuffer(bridge, workKey, tabId, root, path);
-    // Корень — в `rootId`: объект `root` новый на каждую отрисовку группы.
-  }, [bridge, workKey, tabId, rootId, path]);
-  if (model === null || model.status === 'loading') return <div className="h-full" />;
-  if (model.status === 'error') {
-    const code = model.errorCode ?? 'failed';
-    return (
-      <div className="flex h-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
-        {code === 'files:denied' ? S.files.denied : errorText(code, S.errors.actions.openFile)}
-      </div>
-    );
-  }
-  if (model.readOnlyReason !== null) {
-    return (
-      <pre data-testid="file-text" className="h-full overflow-auto whitespace-pre p-3 font-mono text-xs text-foreground">
-        {model.text.length > FILE_TEXT_LIMIT ? model.text.slice(0, FILE_TEXT_LIMIT) : model.text}
-      </pre>
-    );
-  }
-  return (
-    <textarea
-      data-testid="file-text"
-      aria-label={path}
-      spellCheck={false}
-      value={model.text}
-      onChange={(event) => useFilesStore.getState().dispatch(key, { type: 'edited', text: event.target.value })}
-      className="h-full w-full resize-none whitespace-pre bg-transparent p-3 font-mono text-xs text-foreground outline-none"
-    />
-  );
-}
-
 /** Отдельный компонент, а не просто функция в теле `GroupView`: бросок должен случиться ВНУТРИ дерева `ErrorBoundary`, иначе граница ошибки его не поймает. */
 function TabBody({ tab, entry, host, onMissing }: TabBodyProps): JSX.Element {
   switch (tab.kind) {
@@ -148,10 +95,17 @@ function TabBody({ tab, entry, host, onMissing }: TabBodyProps): JSX.Element {
       if (session === undefined) return <MissingBody kind="session" onClose={onMissing} />;
       return <DiffBody bridge={host.bridge} sessionRef={refOf(entry, tab.sessionId)} session={session} />;
     }
-    case 'file': {
-      const key = workKeyOf(entry.projectPath, entry.map.work.id);
-      return <FileTextBody bridge={host.bridge} workKey={key} tabId={tab.id} root={{ workKey: key, spec: tab.root }} path={tab.path} />;
-    }
+    case 'file':
+      return (
+        <FileBody
+          bridge={host.bridge}
+          workKey={workKeyOf(entry.projectPath, entry.map.work.id)}
+          entry={entry}
+          tab={tab}
+          onClose={onMissing}
+          font={{ family: host.fontFamily, size: host.fontSize }}
+        />
+      );
     case 'browser':
       // Вкладка браузера появится в этапе 9 — открыть её пока неоткуда, сюда не
       // дойти; `ErrorBoundary` вокруг ловит бросок, если это всё же случится.

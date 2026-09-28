@@ -14,6 +14,8 @@ import { Button } from '../ui/button.js';
 export interface ErrorBoundaryProps {
   title: string;
   onClose?: () => void;
+  /** Кнопки рядом с «Повторить» (кусок 7.3b): у вкладки файла — «Open in default app». */
+  actions?: Array<{ label: string; onClick(): void }>;
   children: ReactNode;
 }
 
@@ -45,6 +47,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             <Button type="button" size="sm" onClick={this.retry}>
               {S.common.retry}
             </Button>
+            {this.props.actions?.map((action) => (
+              <Button key={action.label} type="button" size="sm" variant="outline" onClick={action.onClick}>
+                {action.label}
+              </Button>
+            ))}
             {this.props.onClose !== undefined ? (
               <Button type="button" size="sm" variant="ghost" onClick={this.props.onClose}>
                 {S.common.close}

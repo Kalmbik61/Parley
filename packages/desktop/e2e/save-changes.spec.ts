@@ -82,10 +82,11 @@ test.describe('несохранённые правки при закрытии �
     await window.keyboard.press('Meta+B');
     const sidebar = window.getByTestId('right-sidebar');
     await sidebar.locator(`[data-tree-path="${LONG_FILE}"]`).click();
-    const editor = window.getByTestId('file-text');
-    await expect(editor).toHaveValue('export const answer = 42;\n');
-    await editor.click();
-    await editor.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(el.value.length, el.value.length));
+    // Редактор — Monaco (кусок 7.3b): текст — в строках вида, ввод — через его поле.
+    const lines = window.locator('.monaco-editor .view-lines').first();
+    await expect(lines).toContainText('export const answer = 42;');
+    await lines.click();
+    await window.keyboard.press('Meta+ArrowDown');
     await window.keyboard.type('// edited');
     const tab = window.locator(`[role="tab"][data-tab-id="file:p:${LONG_FILE}"]`);
     await expect(tab.locator('[data-dirty-dot]')).toBeVisible();

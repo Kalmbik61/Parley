@@ -336,9 +336,10 @@ export const S = {
 
   /**
    * Меню ссылки терминала (кусок 5.3, спека 8.3): «Reveal in Finder» и «Copy path» —
-   * `S.cardMenu.reveal` и `copyPath`; «Open in editor» добавит 7.3.
+   * `S.cardMenu.reveal` и `copyPath`; «Open in editor» — вкладка файла (кусок 7.3b).
    */
   links: {
+    openInEditor: 'Open in editor',
     openInDefaultApp: 'Open in default app',
     openInBrowser: 'Open in browser',
     copyLink: 'Copy link',
@@ -503,6 +504,7 @@ export const S = {
       closeTab: 'close tab',
       readFolder: 'read folder',
       resumeSession: 'resume session',
+      saveFile: 'save file',
     },
     noWorktree: 'This session has no worktree of its own',
     /** Действие работы (⌘T, ⌘W, разделение…) без активной работы — тост (кусок 6.3). */
@@ -536,6 +538,27 @@ export const S = {
     saveChangesCount: (count: number): string => `Save changes to ${count} files?`,
     saveAll: 'Save all',
     saveAllFailed: "Couldn't save all files — the window stays open",
+    /**
+     * Тело вкладки файла (кусок 7.3b, спека 10.4, 10.5, 13): плашки только чтения — по коду
+     * `readOnlyReason`, тела — по коду ошибки `readText`. «Open in default app» —
+     * `S.links.openInDefaultApp`, «Reveal in Finder» — `S.cardMenu.reveal`, Close и Retry —
+     * `S.common`; «Session folder no longer exists» — `rootGone`.
+     */
+    readOnlyTooLarge: 'Large file — editing disabled',
+    readOnlyNotUtf8: 'Not UTF-8 — editing disabled',
+    tooLarge: 'File is larger than 20 MB',
+    binary: 'Binary file',
+    notFound: 'File not found',
+    editorFailed: "Editor didn't load",
+    reloadedFromDisk: 'Reloaded from disk',
+    changedOnDisk: 'File changed on disk (probably by the agent)',
+    deletedOnDisk: 'File deleted on disk',
+    reload: 'Reload',
+    compare: 'Compare',
+    keepMine: 'Keep mine',
+    saveAgain: 'Save again',
+    overwrite: 'Overwrite',
+    overwriteQuestion: 'File changed on disk after you opened it. Overwrite the changes on disk?',
   },
 
   /** Оболочка окна (`shell/AppShell.tsx`) — заголовки `ErrorBoundary` вокруг сайдбара и раскладки. */

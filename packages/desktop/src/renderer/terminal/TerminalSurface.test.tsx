@@ -11,6 +11,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import type { ILink } from '@xterm/xterm';
 import { refKey, type SessionRef } from '@harnas/protocol';
 import { toast } from 'sonner';
+import { bufferKey } from '../files/buffer.js';
+import { useFilesStore } from '../files/store.js';
+import { useLayoutStore } from '../layout/store.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { workKey } from '../lib/tree-order.js';
 import { useHostStore } from '../store/host.js';
@@ -167,22 +170,35 @@ describe('TerminalSurface', () => {
       expect(link.text).toBe('src/a.ts:3');
     });
 
-    it('клик — меню у курсора; ⌘-клик по пути — app.openPath, по адресу — openExternal', async () => {
+    it('клик — меню у курсора; ⌘-клик по пути файла — вкладка на строке (кусок 7.3b), по адресу — openExternal', async () => {
       const key = workKey(ref.projectPath, ref.workId);
+      useLayoutStore.setState({ activeWorkKey: key, layouts: { [key]: { root: { type: 'group', id: 'g1', tabs: [], activeTabId: null }, activeGroupId: 'g1', closedTabs: [] } }, hydrated: { [key]: true } });
+      useFilesStore.setState({ buffers: {}, reveals: {} });
       bridge.setLocated(key, '/tmp/proj/src/a.ts', { ...located, root: { workKey: key, spec: { kind: 'project' } } });
-      const link = await linkUnderPointer('at src/a.ts', key);
+      const link = await linkUnderPointer('at src/a.ts:12:3', key);
 
       act(() => link.activate(new MouseEvent('click', { clientX: 5, clientY: 6 }), link.text));
       expect(screen.getByRole('menuitem', { name: 'Open in default app' })).toBeTruthy();
       expect(bridge.openedPaths).toEqual([]);
 
       act(() => link.activate(new MouseEvent('click', { metaKey: true }), link.text));
-      await waitFor(() => expect(bridge.openedPaths).toEqual(['/tmp/proj/src/a.ts']));
+      const layout = useLayoutStore.getState().layouts[key];
+      expect(layout?.root.type === 'group' ? layout.root.activeTabId : null).toBe('file:p:src/a.ts');
+      expect(useFilesStore.getState().reveals[bufferKey(key, 'file:p:src/a.ts')]).toEqual({ line: 12, col: 3 });
+      expect(bridge.openedPaths).toEqual([]);
 
       cleanup();
       const url = await linkUnderPointer('go https://example.com/x', key);
       act(() => url.activate(new MouseEvent('click', { metaKey: true }), url.text));
       expect(bridge.externalOpened).toEqual(['https://example.com/x']);
+    });
+
+    it('⌘-клик по каталогу — как прежде, app.openPath', async () => {
+      const key = workKey(ref.projectPath, ref.workId);
+      bridge.setLocated(key, '/tmp/proj/src/lib', { root: { workKey: key, spec: { kind: 'project' } }, relPath: 'src/lib', stat: { kind: 'dir', size: 0, mtimeMs: 0 } });
+      const link = await linkUnderPointer('see ./src/lib', key);
+      act(() => link.activate(new MouseEvent('click', { metaKey: true }), link.text));
+      await waitFor(() => expect(bridge.openedPaths).toEqual(['/tmp/proj/src/lib']));
     });
   });
 

@@ -31,6 +31,8 @@ vi.mock('../layout/measure.js', () => ({
   measureGroupSizes: () => new Proxy({}, { get: () => ({ width: 2000, height: 2000 }) }),
 }));
 vi.mock('@xterm/xterm', async () => (await import('../test-utils/xterm-mock.js')).xtermModule);
+vi.mock('@monaco-editor/react', async () => (await import('../test-utils/monaco-mock.js')).monacoReactMock);
+vi.mock('../files/editor/monaco-setup.js', async () => (await import('../test-utils/monaco-mock.js')).monacoSetupMock);
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: vi.fn().mockImplementation(() => ({ fit: () => {} })) }));
 vi.mock('@xterm/addon-search', async () => (await import('../test-utils/xterm-mock.js')).searchModule);
 vi.mock('@xterm/addon-webgl', () => ({
@@ -220,7 +222,7 @@ describe('клик по файлу дерева (тест 6)', () => {
 
     fireEvent.click(await screen.findByText('src'));
     fireEvent.click(await screen.findByText('a.ts'));
-    await waitFor(() => expect(screen.getByTestId('file-text').textContent).toBe('export const a = 1;\n'));
+    await waitFor(() => expect((screen.getByTestId('monaco-textarea') as HTMLTextAreaElement).value).toBe('export const a = 1;\n'));
     expect(screen.queryByText("Couldn't show layout")).toBeNull();
     const layout = useLayoutStore.getState().layouts[KEY];
     if (layout === undefined) throw new Error('нет раскладки');

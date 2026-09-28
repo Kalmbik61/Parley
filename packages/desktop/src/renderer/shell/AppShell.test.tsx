@@ -20,7 +20,7 @@ import { EMPTY_HISTORY } from '../layout/history.js';
 import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
 import { useFilesStore } from '../files/store.js';
-import { closeTab, focusTab, groups, openTab, splitGroup } from '../layout/tree.js';
+import { closeTab, focusTab, groups, moveTab, openTab, splitGroup } from '../layout/tree.js';
 import { useActivityStore } from '../store/activity.js';
 import { useNoticesStore } from '../store/notices.js';
 import { useUiStore } from '../store/ui.js';
@@ -42,6 +42,9 @@ import { Profiler } from 'react';
 vi.mock('sonner', () => ({ toast: vi.fn() }));
 
 vi.mock('@xterm/xterm', async () => (await import('../test-utils/xterm-mock.js')).xtermModule);
+// Вкладка файла — Monaco (кусок 7.3b): в jsdom — подставной.
+vi.mock('@monaco-editor/react', async () => (await import('../test-utils/monaco-mock.js')).monacoReactMock);
+vi.mock('../files/editor/monaco-setup.js', async () => (await import('../test-utils/monaco-mock.js')).monacoSetupMock);
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: vi.fn().mockImplementation(() => ({ fit: () => {} })) }));
 vi.mock('@xterm/addon-search', async () => (await import('../test-utils/xterm-mock.js')).searchModule);
 vi.mock('@xterm/addon-webgl', () => ({
@@ -1769,13 +1772,13 @@ describe('AppShell — несохранённые файлы при закрыт
     act(() => {
       useLayoutStore.getState().apply(W, (layout) => openTab(layout, A));
     });
-    const editor = await screen.findByTestId('file-text');
+    const editor = await screen.findByTestId('monaco-textarea');
     await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe('a'));
     fireEvent.change(editor, { target: { value: 'a2' } });
     act(() => {
       useLayoutStore.getState().apply(W, (layout) => openTab(layout, B));
     });
-    await waitFor(() => expect((screen.getByTestId('file-text') as HTMLTextAreaElement).value).toBe('b'));
+    await waitFor(() => expect((screen.getByTestId('monaco-textarea') as HTMLTextAreaElement).value).toBe('b'));
   }
 
   const tabEl = (tab: TabSpec): HTMLElement => document.querySelector<HTMLElement>(`[role="tab"][data-tab-id="${tab.id}"]`) as HTMLElement;
@@ -1847,3 +1850,85 @@ describe('AppShell — несохранённые файлы при закрыт
     expect(toast).toHaveBeenCalledWith("Couldn't save all files — the window stays open");
   });
 });
+
+describe('AppShell — буфер файла переживает тело (тест 2 куска 7.3b) и ⌘D в Monaco (тест 7)', () => {
+  const fileTab = (path: string): TabSpec => ({ kind: 'file', id: tabId.file({ kind: 'project' }, path), root: { kind: 'project' }, path });
+  const A = fileTab('src/a.ts');
+  const text = (value: string) => ({ text: value, mtimeMs: 1, size: value.length, binary: false, utf8: true, readOnlyReason: null });
+  const W1 = keyOf('w-01');
+  const root = { workKey: W1, spec: { kind: 'project' as const } };
+  const textarea = (): HTMLTextAreaElement | null =>
+    container(W1)?.querySelector<HTMLTextAreaElement>('[data-testid="monaco-textarea"]') ?? null;
+  const readsOfA = (): number => bridge.readTextCalls.filter((call) => call.root.workKey === W1 && call.path === 'src/a.ts').length;
+
+  beforeEach(() => useFilesStore.setState({ buffers: {}, reveals: {} }));
+
+  async function editA(): Promise<void> {
+    bridge.setFile(root, 'src/a.ts', text('a'));
+    await renderShell(fourWorks());
+    await activateWithTerminal(W1, 's-01');
+    act(() => {
+      useLayoutStore.getState().apply(W1, (layout) => openTab(layout, A));
+    });
+    await waitFor(() => expect(textarea()?.value).toBe('a'));
+    fireEvent.change(textarea() as HTMLTextAreaElement, { target: { value: 'mine' } });
+  }
+
+  it('другая вкладка той же группы и обратно — текст прежний, readText один', async () => {
+    await editA();
+    act(() => {
+      useLayoutStore.getState().apply(W1, (layout) => openTab(layout, term('s-01')));
+    });
+    await waitFor(() => expect(textarea()).toBeNull());
+    act(() => {
+      useLayoutStore.getState().apply(W1, (layout) => openTab(layout, A));
+    });
+    await waitFor(() => expect(textarea()?.value).toBe('mine'));
+    expect(readsOfA()).toBe(1);
+  });
+
+  it('перенос вкладки в другую группу — текст прежний, readText один', async () => {
+    await editA();
+    const layout = useLayoutStore.getState().layouts[W1];
+    if (layout === undefined) throw new Error('нет раскладки');
+    act(() => {
+      useLayoutStore.getState().apply(W1, (l) => splitGroup(l, layout.activeGroupId, 'row', term('s-01'), { [layout.activeGroupId]: { width: 800, height: 600 } }));
+    });
+    const [first, second] = groups(useLayoutStore.getState().layouts[W1] as NonNullable<typeof layout>);
+    if (first === undefined || second === undefined) throw new Error('нет двух групп');
+    act(() => {
+      useLayoutStore.getState().apply(W1, (l) => moveTab(l, A.id, { groupId: second.id, index: 0 }));
+    });
+    await waitFor(() => expect(textarea()?.value).toBe('mine'));
+    expect(groups(useLayoutStore.getState().layouts[W1] as NonNullable<typeof layout>).find((group) => group.id === second.id)?.activeTabId).toBe(A.id);
+    expect(readsOfA()).toBe(1);
+  });
+
+  it('работа вытеснена из трёх последних LRU (четыре работы) и возвращена — текст прежний, readText один', async () => {
+    await editA();
+    await activateWithTerminal(keyOf('w-02'), 's-02');
+    await activateWithTerminal(keyOf('w-03'), 's-03');
+    await activateWithTerminal(keyOf('w-04'), 's-04');
+    expect(container(W1)).toBeNull();
+    act(() => useLayoutStore.getState().setActiveWork(W1));
+    await waitFor(() => expect(textarea()?.value).toBe('mine'));
+    expect(readsOfA()).toBe(1);
+  });
+
+  it('⌘D внутри .monaco-editor группу не делит (тест 7)', async () => {
+    await editA();
+    const field = textarea() as HTMLTextAreaElement;
+    field.focus();
+    expect(document.activeElement).toBe(field);
+    fireEvent.keyDown(field, { key: 'd', code: 'KeyD', metaKey: true });
+    await flush();
+    // ⌘D окна — выбор, что открыть справа (палитра в режиме splitRight): в редакторе его нет.
+    expect(usePaletteStore.getState().open).toBe(false);
+    // Положительный контроль: вне редактора то же ⌘D выбор открывает.
+    field.blur();
+    fireEvent.keyDown(document.body, { key: 'd', code: 'KeyD', metaKey: true });
+    await flush();
+    expect(usePaletteStore.getState()).toMatchObject({ open: true, mode: 'splitRight' });
+  });
+});
+

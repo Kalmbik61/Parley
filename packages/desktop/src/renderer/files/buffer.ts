@@ -41,8 +41,10 @@ export interface BufferModel {
   /** Событие, пришедшее во время saving. */
   pendingDiskMtimeMs: number | null;
   readOnlyReason: 'too-large' | 'not-utf8' | null;
+  /** NUL в первых 8 КБ (спека 10.4): тело — «Binary file», а не редактор (кусок 7.3b). */
+  binary: boolean;
   keepMine: boolean;
-  /** Код decodeIpcError; слова — у FileBody (7.3b). */
+  /** Код decodeIpcError: отказ чтения (status error) или последней записи; слова — у FileBody (7.3b). */
   errorCode: string | null;
   /** Тихая перезагрузка: плашка «Обновлён с диска» 2 с. */
   reloadedAt: number | null;
@@ -81,6 +83,7 @@ export function initialBuffer(): BufferModel {
     ownWriteMtimeMs: null,
     pendingDiskMtimeMs: null,
     readOnlyReason: null,
+    binary: false,
     keepMine: false,
     errorCode: null,
     reloadedAt: null,
@@ -103,6 +106,7 @@ function fromDisk(model: BufferModel, file: TextFile): BufferModel {
     diskMtimeMs: file.mtimeMs,
     pendingDiskMtimeMs: null,
     readOnlyReason: file.readOnlyReason,
+    binary: file.binary,
     keepMine: false,
     errorCode: null,
     savingText: null,
@@ -200,7 +204,8 @@ export function bufferReducer(model: BufferModel, event: BufferEvent): BufferMod
     case 'failed':
       if (model.status === 'loading') return { ...model, status: 'error', errorCode: event.code };
       if (model.status === 'saving') {
-        return afterSave({ ...model, status: 'dirty', savingText: null }, model.pendingDiskMtimeMs);
+        // Код остаётся в модели: тост записи (7.3b) говорит по нему.
+        return afterSave({ ...model, status: 'dirty', savingText: null, errorCode: event.code }, model.pendingDiskMtimeMs);
       }
       return model;
   }

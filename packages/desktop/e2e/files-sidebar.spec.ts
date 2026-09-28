@@ -11,7 +11,7 @@ import { makeTempProject } from './tmp.js';
  * Правый сайдбар и вкладка «Файлы» на собранном окне (кусок 7.2): дерево корня проекта из
  * `/private/var/folders/…`, имя файла и папки на 255 символов, название работы на 120 — в окне
  * 800×500 и в широком ничего не вылезает за край сайдбара, длинное обрезано многоточием. Клик по
- * файлу открывает вкладку с его текстом (временное тело до 7.3b), ⌘L прячет сайдбар.
+ * файлу открывает вкладку с его текстом (Monaco с 7.3b), ⌘L прячет сайдбар.
  */
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -108,7 +108,7 @@ for (const size of [
 
       await sidebar.getByText('src', { exact: true }).click();
       await sidebar.getByText('app.ts', { exact: true }).click();
-      await expect(window.getByTestId('file-text')).toHaveText('export const answer = 42;\n');
+      await expect(window.locator('.monaco-editor .view-lines').first()).toContainText('export const answer = 42;');
       await expect(window.getByText("Couldn't show layout")).toHaveCount(0);
       expect(await overflowOf(window)).toEqual([]);
 

@@ -1,7 +1,7 @@
 /**
- * Меню ссылки терминала у курсора (кусок 5.3, спека 8.3). Путь: «Open in default app»,
- * «Reveal in Finder», «Copy path» («Open in editor» добавит 7.3 по `located.root` и
- * `relPath`). Адрес: «Open in browser» и «Copy link».
+ * Меню ссылки терминала у курсора (кусок 5.3, спека 8.3). Путь: «Open in editor» (у файла, не
+ * у каталога — кусок 7.3b), «Open in default app», «Reveal in Finder», «Copy path». Адрес:
+ * «Open in browser» и «Copy link».
  *
  * Действия вынесены функциями: ⌘-клик по ссылке (`TerminalSurface`) зовёт их сразу, без
  * меню. Отказ main показывается тостом по коду, текст ошибки (`shell.openPath` на русской
@@ -13,6 +13,10 @@ import type { HarnasBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu.js';
+import { useFilesStore } from '../files/store.js';
+import { tabId } from '../layout/ids.js';
+import { useLayoutStore } from '../layout/store.js';
+import { openTab } from '../layout/tree.js';
 import type { TerminalLink } from './links.js';
 
 export interface LinkMenuState {
@@ -50,6 +54,23 @@ export async function revealLinkPath(bridge: HarnasBridge, absPath: string): Pro
   }
 }
 
+/**
+ * «Open in editor» (кусок 7.3b): вкладка `file` по корню и относительному пути из `files.locate`
+ * (5.3), затем курсор на строку и колонку. У `TabSpec` вида `file` строки нет, а `openTab` уже
+ * открытой вкладки её только фокусирует — позиция идёт разовой `revealAt`.
+ */
+export function openLinkInEditor(link: Extract<TerminalLink, { kind: 'path' }>): void {
+  const { root, relPath } = link.located;
+  const tab = { kind: 'file' as const, id: tabId.file(root.spec, relPath), root: root.spec, path: relPath };
+  useLayoutStore.getState().apply(root.workKey, (layout) => openTab(layout, tab));
+  if (link.line !== undefined) useFilesStore.getState().revealAt(root.workKey, tab.id, link.line, link.col ?? 1);
+}
+
+/** Путь ведёт на файл — его открывает редактор; каталог — приложение по умолчанию. */
+export function isFileLink(link: Extract<TerminalLink, { kind: 'path' }>): boolean {
+  return link.located.stat.kind === 'file';
+}
+
 /** Наружу — только http(s): провайдер других ссылок не даёт, main проверяет ещё раз. */
 export function openLinkUrl(bridge: HarnasBridge, url: string): void {
   bridge.app.openExternal(url).catch((error: unknown) => console.warn('[harnas] openExternal', error));
@@ -72,6 +93,7 @@ export function LinkMenu({ bridge, state, onClose }: LinkMenuProps): JSX.Element
       <DropdownMenuContent align="start" data-testid="terminal-link-menu">
         {link.kind === 'path' ? (
           <>
+            {isFileLink(link) ? <DropdownMenuItem onSelect={() => openLinkInEditor(link)}>{S.links.openInEditor}</DropdownMenuItem> : null}
             <DropdownMenuItem onSelect={() => void openLinkPath(bridge, link.absPath)}>{S.links.openInDefaultApp}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => void revealLinkPath(bridge, link.absPath)}>{S.cardMenu.reveal}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => copy(link.absPath)}>{S.cardMenu.copyPath}</DropdownMenuItem>

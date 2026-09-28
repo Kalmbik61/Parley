@@ -89,4 +89,17 @@ describe('ErrorBoundary (тест 5)', () => {
 
     errorSpy.mockRestore();
   });
+  it('actions — кнопки рядом с «Повторить» (кусок 7.3b); без них — только Retry', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const onOpen = vi.fn();
+    render(
+      <ErrorBoundary title="Ошибка" actions={[{ label: 'Open in default app', onClick: onOpen }]}>
+        <Bomb crash={true} onMount={() => {}} />
+      </ErrorBoundary>,
+    );
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Retry', 'Open in default app']);
+    fireEvent.click(screen.getByText('Open in default app'));
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    errorSpy.mockRestore();
+  });
 });
