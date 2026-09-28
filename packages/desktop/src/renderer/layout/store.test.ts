@@ -95,6 +95,28 @@ describe('apply/hydrate до и после гидрации (тест 10)', () =
   });
 });
 
+describe('первая вкладка гидрированной пустой работы (раунд lane-r3)', () => {
+  it('клик по сессии работы с пустой раскладкой — одна запись истории; «назад» ведёт в прежнюю работу', () => {
+    // Порядок «раскладка уже гидрирована → setActiveWork → openTab» — когда хост отвечает
+    // быстро; при медленном хосте гидрация приходила позже и дописывала запись (`hydrate`).
+    const a1 = terminalTab('a1');
+    useLayoutStore.getState().hydrate('w1', openTab(emptyLayout(), a1, 'active'));
+    useLayoutStore.getState().setActiveWork('w1');
+    useLayoutStore.getState().hydrate('w2', emptyLayout());
+
+    const b1 = terminalTab('b1');
+    useLayoutStore.getState().setActiveWork('w2');
+    useLayoutStore.getState().apply('w2', (l) => openTab(l, b1, 'active'));
+
+    expect(useLayoutStore.getState().entries().map((e) => [e.workKey, e.tabId])).toEqual([
+      ['w1', a1.id],
+      ['w2', b1.id],
+    ]);
+    useLayoutStore.getState().back();
+    expect(useLayoutStore.getState().activeWorkKey).toBe('w1');
+  });
+});
+
 describe('back()/forward() (тест 11)', () => {
   it('ходят по истории вкладок и не плодят новые записи', () => {
     const tab1 = terminalTab('s-01');

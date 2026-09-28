@@ -267,7 +267,13 @@ export const useLayoutStore: UseBoundStore<StoreApi<LayoutState>> = create<Layou
       if (!state.navigating && state.activeWorkKey === workKey) {
         const prevActive = activeTabOf(layout);
         const nextActive = activeTabOf(nextLayout);
-        if (nextActive !== prevActive) {
+        const current = history.entries[history.index];
+        if (nextActive !== prevActive && prevActive === null && current?.workKey === workKey && current.tabId === null) {
+          // Первая вкладка пустой работы дописывает запись `setActiveWork` с `tabId: null`, как
+          // `hydrate` (раунд lane-r3): иначе «назад» после клика по сессии такой работы стоял бы
+          // на её пустой записи, и порядок «гидрация до клика или после» менял бы историю.
+          history = amendLastTabId(history, nextActive);
+        } else if (nextActive !== prevActive) {
           history = pushHistory(history, { workKey, tabId: nextActive, at: Date.now() });
         }
       }
