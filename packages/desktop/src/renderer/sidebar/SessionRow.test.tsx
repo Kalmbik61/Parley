@@ -86,6 +86,17 @@ describe('SessionRow — девять состояний таблицы 4.2 (т�
     expect(pairs.size).toBe(9);
   });
 
+  // Ревью M12: закрытая строка приглушена data-dimmed (styles/dimmed.css), а не opacity-50 —
+  // та опускала текст строки ниже 4.5:1.
+  it('закрытая строка — data-dimmed без opacity, открытая — без приглушения', () => {
+    renderRow(makeSession('s-01', 'a', { lifecycle: 'closed' }));
+    expect(row().hasAttribute('data-dimmed')).toBe(true);
+    expect(row().className).not.toMatch(/opacity-/);
+    cleanup();
+    renderRow(makeSession('s-01', 'a'));
+    expect(row().hasAttribute('data-dimmed')).toBe(false);
+  });
+
   it('⎇ только у сессии со своим worktree, ветка — в title', () => {
     renderRow(makeSession('s-01', 'a'));
     expect(row().querySelector('[data-worktree]')).toBeNull();

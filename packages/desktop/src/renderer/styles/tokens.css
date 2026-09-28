@@ -87,6 +87,7 @@
   --color-status-warning: var(--status-warning);
   --color-status-warning-background: var(--status-warning-background);
   --color-status-warning-border: var(--status-warning-border);
+  --color-status-warning-text: var(--status-warning-text);
   --color-workspace-status-done: var(--workspace-status-done);
   --color-workspace-status-review: var(--workspace-status-review);
   --color-workspace-status-progress: var(--workspace-status-progress);
@@ -180,6 +181,9 @@
   --status-warning: #ca8a04;
   --status-warning-background: color-mix(in srgb, var(--status-warning) 10%, transparent);
   --status-warning-border: color-mix(in srgb, var(--status-warning) 25%, transparent);
+  /* Ревью M12 (не из Orca): текст предупреждения. --status-warning на белом — 2.94:1, он остаётся
+     значкам и подложкам; тексту — yellow-700: 4.92:1 на --card, 4.72:1 на --sidebar (tokens.test.ts). */
+  --status-warning-text: #a16207;
   /* Workspace PR-state tones: same hue in both themes so a status keeps its
      identity when the theme flips. */
   --workspace-status-done: #c7a594;
@@ -315,6 +319,8 @@
   --status-warning: #eab308;
   --status-warning-background: color-mix(in srgb, var(--status-warning) 10%, transparent);
   --status-warning-border: color-mix(in srgb, var(--status-warning) 25%, transparent);
+  /* Ревью M12: в тёмной сам --status-warning проходит — 9.35:1 на --card, 10.3:1 на --background. */
+  --status-warning-text: #eab308;
   --workspace-status-done: #c7a594;
   --workspace-status-review: #16a34a;
   --workspace-status-progress: #d4a300;

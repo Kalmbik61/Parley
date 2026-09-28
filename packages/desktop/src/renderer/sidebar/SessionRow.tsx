@@ -179,8 +179,9 @@ export const SessionRow = memo(function SessionRow({
             'flex h-6 min-w-0 items-center gap-1.5 rounded-md pr-1.5 text-[11px] text-work-sidebar-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-work-sidebar-focus-ring',
             draggable ? 'cursor-default' : 'cursor-not-allowed',
             selected ? 'bg-work-sidebar-accent' : highlighted ? 'bg-amber-500/10' : 'hover:bg-work-sidebar-accent/60',
-            closed && 'opacity-50',
           )}
+          // Закрытая строка приглушена цветом текста (styles/dimmed.css), не opacity (ревью M12).
+          {...(closed ? { 'data-dimmed': '' } : {})}
         >
           <AgentStateDot state={state} lifecycle={session.lifecycle} />
           <AgentIcon provider={session.provider} size={13} />

@@ -205,17 +205,21 @@ describe('WorkCard (тест 3)', () => {
 });
 
 describe('WorkCard — done и длинное название (тест 7)', () => {
-  it('status done — opacity-60, активная — без приглушения', () => {
+  // Ревью M12: приглушение — data-dimmed (цвет текста и прозрачность значков, styles/dimmed.css),
+  // а не opacity-60 всей карточки: та опускала текст ниже 4.5:1.
+  it('status done — data-dimmed без opacity всей карточки, активная — без приглушения', () => {
     renderCard(makeWork('w-01', { status: 'done' }));
-    expect(card().className).toContain('opacity-60');
+    expect(card().hasAttribute('data-dimmed')).toBe(true);
+    expect(card().className).not.toMatch(/opacity-/);
     cleanup();
     renderCard(makeWork('w-01'));
-    expect(card().className).not.toContain('opacity-60');
+    expect(card().hasAttribute('data-dimmed')).toBe(false);
   });
 
   it('status archived (показ архивных, тест 6 куска 6.3) — приглушена, как done', () => {
     renderCard(makeWork('w-01', { status: 'archived' }));
-    expect(card().className).toContain('opacity-60');
+    expect(card().hasAttribute('data-dimmed')).toBe(true);
+    expect(card().className).not.toMatch(/opacity-/);
   });
 
   it('название из 60 эмодзи в DOM целиком, у заголовка класс truncate', () => {

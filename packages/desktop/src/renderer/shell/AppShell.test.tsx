@@ -1589,7 +1589,8 @@ describe('AppShell — показ архивных (тесты 6, 7 куска 6
 
     await pickInPalette('Show archived', /^Show archived workspaces/);
     expect(card()).not.toBeNull();
-    expect(card()?.className).toContain('opacity-60');
+    // Приглушение — data-dimmed (styles/dimmed.css), не opacity-60 (ревью M12).
+    expect(card()?.hasAttribute('data-dimmed')).toBe(true);
     const keys = [...document.querySelectorAll<HTMLElement>('[data-work-key]')].map((element) => element.dataset.workKey);
     expect(keys.at(-1)).toBe(archKey);
 

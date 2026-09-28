@@ -388,7 +388,8 @@ describe('Секции (тест 4)', () => {
     expect(within(uncommitted).getByText('y.ts')).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Branch changes' })).toBeNull();
     expect(screen.getByText('master (project folder)')).toBeTruthy();
-    expect(screen.getByText("A commit takes every change in the folder, not only this session's")).toBeTruthy();
+    // Текст предупреждения — свой токен (ревью M12): --status-warning на белом давал 2.94:1.
+    expect(screen.getByText("A commit takes every change in the folder, not only this session's").className).toContain('text-status-warning-text');
   });
 
   it('клик по файлу — вкладка diff сессии в активной группе и revealFile; клик по коммиту — diff с commit', async () => {
