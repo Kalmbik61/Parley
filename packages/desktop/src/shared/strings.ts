@@ -303,6 +303,21 @@ export const S = {
       `Merge ${label} hit a conflict: ${files}. Resolve and commit.`,
     binaryFile: 'Binary file',
     noChanges: 'No changes',
+    /** Тело «Изменений» по `data.reason` ошибки git (кусок 8.2a, спека 13): `review/state.ts#changesErrorText`. */
+    gitMissing: 'Git not found',
+    notARepo: 'This folder is not a git repository',
+    /** Тост ответа `worktrees.merge` (спека 11.2) — `review/state.ts#mergeResultText`. */
+    merged: (base: string): string => `Merged into ${base}`,
+    mergeFailed: {
+      baseNotCheckedOut: (base: string): string => `${base} isn't checked out anywhere — check it out in the project folder`,
+      baseDirty: (base: string): string => `${base} has uncommitted changes — commit or stash them`,
+      uncommitted: 'The worktree has uncommitted changes — commit first',
+      conflict: (files: string): string => `Merge conflict in ${files}`,
+    },
+    /** Текст агенту «Попросить агента разрешить» (спека 11.2): между строками — `- <путь>` на файл. */
+    askAgentIntro: (branch: string, base: string): string => `Branch ${branch} has merge conflicts with ${base} in:`,
+    askAgentInstruction: (base: string): string =>
+      `Merge ${base} into your branch (git merge ${base}), resolve the conflicts, commit, and tell me what you did.`,
   },
 
   /** Поверхность терминала — `terminal/TerminalSurface.tsx`. */
@@ -337,6 +352,8 @@ export const S = {
     noPasteMode: (session: string): string => `${session} doesn't accept multi-line paste`,
     notRunning: (session: string): string => `${session} isn't running`,
     openSession: (session: string): string => `Open ${session}`,
+    /** Текст длиннее предела `pty.send` (64 КиБ UTF-8) окно не шлёт (кусок 8.2a, `review/state.ts#fitsSendLimit`). */
+    tooLong: 'Too long for one message to the agent — 64 KB max',
   },
 
   /**

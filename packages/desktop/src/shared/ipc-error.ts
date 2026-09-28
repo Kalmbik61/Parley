@@ -10,6 +10,8 @@
 export interface IpcErrorInfo {
   code: string;
   message: string;
+  /** HostError.data хоста — машинные подробности: у ошибок git 8.1 это { reason }. Не объект — поля нет. */
+  data?: Record<string, unknown>;
 }
 
 const MARKER = 'harnas-error:';
@@ -28,6 +30,20 @@ function isIpcErrorInfo(value: unknown): value is IpcErrorInfo {
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Код, сообщение и `data` — только если это объект (кусок 8.2a): по одному коду
+ * `internal`/`bad_request` «Git не найден» и «Папка не под git» не различить, а
+ * причину несёт `data.reason`. Прочие поля входа наружу не тянутся.
+ */
+function normalize(info: IpcErrorInfo): IpcErrorInfo {
+  const data: unknown = info.data;
+  return isRecord(data) ? { code: info.code, message: info.message, data } : { code: info.code, message: info.message };
+}
+
 /**
  * Рендерер: читает код и сообщение из чего угодно, что могло прилететь как
  * ошибка `bridge.call`/`ipcRenderer.invoke`:
@@ -41,14 +57,14 @@ function isIpcErrorInfo(value: unknown): value is IpcErrorInfo {
  *    её же текстом, только в консоль (`console.warn` у вызывающей стороны).
  */
 export function decodeIpcError(error: unknown): IpcErrorInfo {
-  if (isIpcErrorInfo(error)) return error;
+  if (isIpcErrorInfo(error)) return normalize(error);
 
   const raw = error instanceof Error ? error.message : String(error);
   const markerIndex = raw.indexOf(MARKER);
   if (markerIndex !== -1) {
     try {
       const parsed: unknown = JSON.parse(raw.slice(markerIndex + MARKER.length));
-      if (isIpcErrorInfo(parsed)) return parsed;
+      if (isIpcErrorInfo(parsed)) return normalize(parsed);
     } catch {
       // Не наш JSON после метки — падаем в общий разбор ниже.
     }

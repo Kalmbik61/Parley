@@ -32,7 +32,14 @@ export function withIpcError(
     try {
       return await handler(event, ...args);
     } catch (error) {
-      if (error instanceof HostError) throw encodeIpcError({ code: error.code, message: error.message });
+      if (error instanceof HostError) {
+        // data — ради `reason` ошибок git (кусок 8.2a): по одному коду их не различить.
+        throw encodeIpcError({
+          code: error.code,
+          message: error.message,
+          ...(error.data !== undefined ? { data: error.data } : {}),
+        });
+      }
       if (error instanceof FilesDeniedError) throw encodeIpcError({ code: error.code, message: error.message });
       if (error instanceof DropTooLargeError) throw encodeIpcError({ code: error.code, message: error.message });
       const message = error instanceof Error ? error.message : String(error);

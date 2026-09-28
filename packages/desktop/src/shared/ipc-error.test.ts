@@ -35,4 +35,23 @@ describe('encodeIpcError / decodeIpcError', () => {
     expect(result.code).toBe('failed');
     expect(result.message).toBe(broken.message);
   });
+
+  it('data туда и обратно (кусок 8.2a, тест 7); data не объект — поля нет', () => {
+    const x: IpcErrorInfo = { code: 'bad_request', message: 'm', data: { reason: 'not-a-repo' } };
+    expect(decodeIpcError(encodeIpcError(x))).toEqual(x);
+    const raw = new Error(`harnas-error:${JSON.stringify({ code: 'internal', message: 'm', data: 'строка' })}`);
+    expect(decodeIpcError(raw)).toEqual({ code: 'internal', message: 'm' });
+    expect('data' in decodeIpcError(raw)).toBe(false);
+    const arr = new Error(`harnas-error:${JSON.stringify({ code: 'internal', message: 'm', data: [1] })}`);
+    expect('data' in decodeIpcError(arr)).toBe(false);
+  });
+
+  it('подставной мост отказывает объектом { code, message, data } — берётся как есть', () => {
+    expect(decodeIpcError({ code: 'internal', message: 'm', data: { reason: 'git-missing' } })).toEqual({
+      code: 'internal',
+      message: 'm',
+      data: { reason: 'git-missing' },
+    });
+    expect('data' in decodeIpcError({ code: 'internal', message: 'm', data: null })).toBe(false);
+  });
 });

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, IpcMain, Session, WebContents } from 'electron';
 import type { WorksSnapshot } from '@harnas/protocol';
-import { decodeIpcError } from '../shared/ipc-error.js';
+import { decodeIpcError, type IpcErrorInfo } from '../shared/ipc-error.js';
 import { workKey } from '../shared/work-keys.js';
 import { DEFAULT_UI } from '../shared/ui-types.js';
 import { DropTooLargeError, MAX_DROP_IMAGE_BYTES } from './drops.js';
@@ -541,6 +541,15 @@ describe('registerIpc — app:notify и app:take-focus-target (кусок 4.3)',
 });
 
 /** Код ошибки канала, как его прочтёт рендерер; `resolved` — канал ответил успехом. */
+async function errorOf(promise: unknown): Promise<IpcErrorInfo> {
+  try {
+    await promise;
+  } catch (error) {
+    return decodeIpcError(error);
+  }
+  throw new Error('resolved');
+}
+
 async function codeOf(promise: unknown): Promise<string> {
   try {
     await promise;
@@ -558,6 +567,15 @@ describe('withIpcError (кусок 5.2, тест 15)', () => {
     expect(await codeOf(withIpcError(() => {
       throw new FilesDeniedError('sync');
     })({}))).toBe('files:denied');
+  });
+
+  it('HostError.data доходит до decodeIpcError (кусок 8.2a, тест 7); без data — поля нет', async () => {
+    const withData = await errorOf(withIpcError(() => Promise.reject(new HostError('bad_request', 'm', { reason: 'not-a-repo' })))({}));
+    expect(withData.code).toBe('bad_request');
+    expect(withData.data?.['reason']).toBe('not-a-repo');
+    const without = await errorOf(withIpcError(() => Promise.reject(new HostError('not_found', 'x')))({}));
+    expect(without).toEqual({ code: 'not_found', message: 'x' });
+    expect('data' in without).toBe(false);
   });
 });
 
