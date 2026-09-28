@@ -28,6 +28,7 @@ export interface BrowserTabState {
   crashed: boolean;
   webContentsId: number | null; // с dom-ready: раньше getWebContentsId() бросает
   findOpen: boolean; // полоса поиска по странице (⌘F, 9.2b)
+  loadFailed: boolean; // главный фрейм не загрузился (did-fail-load, fix-9)
   pick: 'off' | 'picking' | { result: PickResult }; // Design Mode (9.3b): режим выбора или карточка результата
 } // адрес — только в раскладке (TabSpec.url)
 
@@ -48,6 +49,7 @@ const INITIAL: BrowserTabState = {
   crashed: false,
   webContentsId: null,
   findOpen: false,
+  loadFailed: false,
   pick: 'off',
 };
 
@@ -113,9 +115,12 @@ export function openBrowserTab(
     return 'limit';
   }
   // Раскладка ещё читается с диска — операция ждёт гидрации в очереди (2.2), и предел
-  // проверяется уже на ней: без тоста, зато и без одиннадцатой вкладки.
+  // проверяется уже на ней: одиннадцатой вкладки нет, и человек узнаёт почему тем же тостом.
   deps.apply(key, (current) => {
-    if (browserTabCount(current) >= BROWSER_LIMITS.tabsPerWork) return current;
+    if (browserTabCount(current) >= BROWSER_LIMITS.tabsPerWork) {
+      deps.toast(S.browser.tooManyTabs);
+      return current;
+    }
     const id = tabId.browser();
     requestAddressFocus(id);
     return openTab(current, { kind: 'browser', id, url });
@@ -158,6 +163,15 @@ export function openBrowserTabFrom(
     }
     return 'limit';
   }
+  // Вкладок снова меньше предела: открыватели этой работы, упёршись ещё раз, снова получат тост.
+  const toasted = useBrowserStore.getState().limitToasted;
+  const kept = Object.fromEntries(
+    Object.entries(toasted).filter(([id]) => {
+      const tab = deps.tabIdOf(Number(id));
+      return tab === null || findTab(place.layout, tab) === null;
+    }),
+  ) as BrowserState['limitToasted'];
+  if (Object.keys(kept).length !== Object.keys(toasted).length) useBrowserStore.setState({ limitToasted: kept });
   const activeWork = place.key === deps.activeWorkKey;
   deps.apply(place.key, (current) => {
     const found = findTab(current, openerId);

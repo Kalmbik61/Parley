@@ -72,6 +72,14 @@ describe('validatePick (тест 1 куска 9.3a)', () => {
   });
 });
 
+describe('validatePick — предел длины селектора (fix-9)', () => {
+  it('одно звено длиннее предела — обрезано по PICK_LIMITS.selector, а не по пределу html', () => {
+    expect(PICK_LIMITS.selector).toBeLessThan(PICK_LIMITS.html);
+    const result = validatePick(rawPick({ selector: `div.${'x'.repeat(5000)}` }));
+    expect(result?.selector.length).toBe(PICK_LIMITS.selector);
+  });
+});
+
 describe('captureRect (тест 2 куска 9.3a)', () => {
   const viewport = { width: 800, height: 600 };
 

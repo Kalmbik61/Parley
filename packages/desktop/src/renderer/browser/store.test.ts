@@ -4,7 +4,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
+import type { GroupNode, TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { tabId } from '../layout/ids.js';
 import type { LayoutOp } from '../layout/store.js';
 import { emptyLayout, findTab, focusTab, groups, openTab, splitGroup } from '../layout/tree.js';
@@ -82,6 +82,21 @@ describe('openBrowserTab (тест 1)', () => {
     expect(opened?.kind).toBe('browser');
     expect(wantsAddressFocus(opened?.id ?? '')).toBe(true);
     expect(wantsAddressFocus('browser:ffffff')).toBe(false);
+  });
+
+  it('раскладка ещё не гидрирована — предел проверяется в очереди, одиннадцатая — тост, а не молчание (fix-9)', () => {
+    let queued: LayoutOp | null = null;
+    const apply = vi.fn((_key: string, op: LayoutOp) => {
+      queued = op;
+      return null;
+    });
+    const toast = vi.fn();
+    expect(openBrowserTab('', { apply, layouts: {}, activeWorkKey: KEY, toast })).toBe('opened');
+    expect(toast).not.toHaveBeenCalled();
+    const ten = withBrowserTabs(10);
+    const next = (queued as LayoutOp | null)?.(ten);
+    expect(next).toBe(ten);
+    expect(toast).toHaveBeenCalledWith('No more than 10 browser tabs per workspace');
   });
 
   it('предел — 10', () => {
@@ -192,6 +207,28 @@ describe('openBrowserTabFrom — предел (тест 5 куска 9.2b)', () 
   });
 });
 
+describe('openBrowserTabFrom — тост предела снова после освобождения (fix-9)', () => {
+  it('вкладок стало меньше предела — открыватель, упёршийся снова, получает тост ещё раз', () => {
+    let layout = withBrowserTabs(10);
+    layout = focusTab(layout, 'browser:000000');
+    const d = multiDeps({ [KEY]: layout }, KEY, { 7: 'browser:000000', 8: 'browser:000001' });
+    const open = (opener: number) => openBrowserTabFrom({ url: 'http://127.0.0.1:5173/', openerWebContentsId: opener }, d);
+    expect(open(7)).toBe('limit');
+    expect(open(8)).toBe('limit');
+    expect(d.toast).toHaveBeenCalledTimes(2);
+    // Человек закрыл одну вкладку: 9 из 10.
+    const current = d.layouts[KEY] as WorkLayout;
+    d.layouts[KEY] = {
+      ...current,
+      root: { ...(current.root as GroupNode), tabs: (current.root as GroupNode).tabs.filter((tab) => tab.id !== 'browser:000009') },
+    };
+    expect(open(7)).toBe('opened');
+    expect(open(7)).toBe('limit');
+    expect(open(8)).toBe('limit');
+    expect(d.toast).toHaveBeenCalledTimes(4);
+  });
+});
+
 describe('useBrowserStore', () => {
   it('update сливает поля с состоянием по умолчанию, remove убирает вкладку', () => {
     useBrowserStore.getState().update('browser:a', { title: 'Page' });
@@ -204,6 +241,7 @@ describe('useBrowserStore', () => {
       crashed: false,
       webContentsId: null,
       findOpen: false,
+      loadFailed: false,
       pick: 'off',
     });
     useBrowserStore.getState().update('browser:a', { loading: true });

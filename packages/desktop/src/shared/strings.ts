@@ -402,6 +402,8 @@ export const S = {
     stop: 'Stop',
     devTools: 'DevTools',
     pageCrashed: 'Page crashed',
+    /** Главный фрейм не загрузился (`did-fail-load`, fix-9). */
+    loadFailed: "Couldn't load page",
     tooManyTabs: 'No more than 10 browser tabs per workspace',
     /** ⌖ в строке над страницей (9.3b). */
     designMode: 'Design Mode',

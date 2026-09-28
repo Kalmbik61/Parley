@@ -12,8 +12,12 @@ import { S } from '../../shared/strings.js';
 /** Мир скрипта выбора: не 0 (мир страницы) и не занятые Electron. */
 export const PICK_WORLD_ID = 1001;
 
-/** Пределы данных элемента (спека 12.3, «Числа» плана). */
-export const PICK_LIMITS = { html: 4096, text: 500, selectorLinks: 12, thumbnailWidth: 320 } as const;
+/**
+ * Пределы данных элемента (спека 12.3, «Числа» плана). `selector` спека ограничивает только звеньями,
+ * а одно звено (класс или id) пишет страница — длина своя (fix-9): 12 звеньев обычной длины в неё
+ * входят с запасом.
+ */
+export const PICK_LIMITS = { html: 4096, text: 500, selectorLinks: 12, selector: 1024, thumbnailWidth: 320 } as const;
 
 /** Вычисленные стили, которые уходят агенту (таблица спеки 12.3); остальные ключи выкидываются. */
 const STYLE_KEYS = new Set([
@@ -89,8 +93,8 @@ export function validatePick(raw: unknown): ValidPick | null {
   const { width: viewWidth, height: viewHeight } = viewport;
   if (!finite(viewWidth) || !finite(viewHeight) || viewWidth <= 0 || viewHeight <= 0) return null;
 
-  // Значения стилей и длину селектора таблица спеки не ограничивает, а их пишет страница
-  // (font-family, имена классов): режем теми же пределами, что текст и HTML, — план этого не задал.
+  // Значения стилей таблица спеки не ограничивает, а их пишет страница (font-family): режем
+  // пределом текста — план этого не задал. Селектор — своим пределом (PICK_LIMITS.selector).
   const cleanStyles: Record<string, string> = {};
   for (const [key, value] of Object.entries(styles)) {
     if (STYLE_KEYS.has(key) && typeof value === 'string') cleanStyles[key] = cutCodePoints(value, PICK_LIMITS.text).text;
@@ -99,7 +103,7 @@ export function validatePick(raw: unknown): ValidPick | null {
   const cutHtml = cutCodePoints(html, PICK_LIMITS.html);
 
   return {
-    selector: cutCodePoints(links, PICK_LIMITS.html).text,
+    selector: cutCodePoints(links, PICK_LIMITS.selector).text,
     text: cutCodePoints(text, PICK_LIMITS.text).text,
     html: cutHtml.cut ? cutHtml.text + S.designBlock.truncated : cutHtml.text,
     styles: cleanStyles,

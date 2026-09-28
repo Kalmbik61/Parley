@@ -344,6 +344,51 @@ describe('BrowserSurface — поиск по странице (тест 3 кус
   });
 });
 
+describe('BrowserSurface — мелочи fix-9', () => {
+  it('падение страницы закрывает FindBar', () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const view = arm(webview(), 11);
+    fire(view, 'dom-ready');
+    act(() => useBrowserStore.getState().update(TAB, { findOpen: true }));
+    expect(screen.getByRole('search', { name: 'Find in page' })).toBeTruthy();
+    fire(view, 'render-process-gone', { details: { reason: 'crashed', exitCode: 1 } });
+    expect(screen.queryByRole('search', { name: 'Find in page' })).toBeNull();
+    expect(useBrowserStore.getState().tabs[TAB]?.findOpen).toBe(false);
+  });
+
+  it('Esc в FindBar возвращает фокус странице', () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const view = arm(webview(), 11);
+    const focus = vi.spyOn(view, 'focus');
+    fire(view, 'dom-ready');
+    act(() => useBrowserStore.getState().update(TAB, { findOpen: true }));
+    fireEvent.keyDown(screen.getByPlaceholderText('Find…'), { key: 'Escape' });
+    expect(focus).toHaveBeenCalled();
+  });
+
+  it("did-fail-load главного фрейма — Couldn't load page и Reload; отмена (-3) и подфрейм — нет", () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const view = arm(webview());
+    fire(view, 'dom-ready');
+    fire(view, 'did-fail-load', { errorCode: -3, isMainFrame: true, validatedURL: 'http://localhost:5173/' });
+    fire(view, 'did-fail-load', { errorCode: -105, isMainFrame: false, validatedURL: 'http://ads.test/' });
+    expect(screen.queryByText("Couldn't load page")).toBeNull();
+    fire(view, 'did-fail-load', { errorCode: -102, isMainFrame: true, validatedURL: 'http://localhost:5173/' });
+    const layer = screen.getByTestId('browser-load-failed');
+    expect(layer.textContent).toContain("Couldn't load page");
+    fireEvent.click(layer.querySelector('button') as HTMLButtonElement);
+    expect(view.reload).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('browser-load-failed')).toBeNull();
+    // Новая загрузка (адресная строка, ссылка) слой тоже снимает.
+    fire(view, 'did-fail-load', { errorCode: -102, isMainFrame: true, validatedURL: 'http://localhost:5173/' });
+    fire(view, 'did-start-loading');
+    expect(screen.queryByTestId('browser-load-failed')).toBeNull();
+  });
+});
+
 const PICK: PickResult = {
   url: 'http://localhost:5173/',
   selector: 'body > button.save',

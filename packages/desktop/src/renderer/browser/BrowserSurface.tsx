@@ -46,7 +46,10 @@ interface WebviewElement extends HTMLElement {
 }
 
 /** Поля событий `<webview>` лежат на самом событии (`Electron.*Event` у `WebviewTag`). */
-type WebviewEvent = Event & { url?: string; title?: string; isMainFrame?: boolean };
+type WebviewEvent = Event & { url?: string; title?: string; isMainFrame?: boolean; errorCode?: number };
+
+/** `net::ERR_ABORTED`: загрузку прервали (новый переход, Stop, скачивание) — это не ошибка страницы. */
+const ERR_ABORTED = -3;
 
 /**
  * Атрибуты `<webview>` строками: React 18 булев `allowpopups` у тега без дефиса не выводит, а
@@ -81,6 +84,7 @@ const IDLE: BrowserTabState = {
   crashed: false,
   webContentsId: null,
   findOpen: false,
+  loadFailed: false,
   pick: 'off',
 };
 
@@ -149,7 +153,7 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
         update({ webContentsId: view.getWebContentsId() });
         history();
       },
-      'did-start-loading': () => update({ loading: true, crashed: false }),
+      'did-start-loading': () => update({ loading: true, crashed: false, loadFailed: false }),
       'did-stop-loading': () => update({ loading: false }),
       'page-title-updated': (event) => update({ title: event.title ?? null }),
       // Новый документ: заголовок и значок прежней страницы ему не принадлежат.
@@ -164,7 +168,12 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
         if (event.isMainFrame === true) saveUrl(event.url);
         history();
       },
-      'render-process-gone': () => update({ crashed: true, loading: false }),
+      // Полоса поиска мёртвой страницы искать не может: закрывается вместе с падением.
+      'render-process-gone': () => update({ crashed: true, loading: false, findOpen: false }),
+      // Chromium в `<webview>` своей страницы ошибки не рисует — без слоя человек видел бы пустоту.
+      'did-fail-load': (event) => {
+        if (event.isMainFrame === true && event.errorCode !== ERR_ABORTED) update({ loadFailed: true });
+      },
     };
     for (const [type, listener] of Object.entries(listeners)) view.addEventListener(type, listener);
     return () => {
@@ -207,7 +216,7 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
   };
 
   const reload = (): void => {
-    useBrowserStore.getState().update(tabId, { crashed: false });
+    useBrowserStore.getState().update(tabId, { crashed: false, loadFailed: false });
     onPage((view) => view.reload());
   };
 
@@ -308,11 +317,30 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
           <FindBar
             bridge={bridge}
             webContentsId={state.webContentsId}
-            onClose={() => useBrowserStore.getState().update(tabId, { findOpen: false })}
+            onClose={() => {
+              useBrowserStore.getState().update(tabId, { findOpen: false });
+              // Поиск открыли из страницы (⌘F в ней) — туда и фокус, как у терминала с его SearchBar.
+              viewRef.current?.focus();
+            }}
           />
         ) : null}
         {typeof state.pick === 'object' ? (
           <DesignModeCard workKey={workKey} entry={entry} result={state.pick.result} sendDeps={sendDeps} onPickAgain={startPick} />
+        ) : null}
+        {state.loadFailed && !state.crashed ? (
+          <div
+            data-testid="browser-load-failed"
+            className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-background text-sm text-muted-foreground"
+          >
+            <span>{S.browser.loadFailed}</span>
+            <button
+              type="button"
+              onClick={reload}
+              className="rounded-md border border-border px-3 py-1 text-xs text-foreground hover:bg-accent"
+            >
+              {S.browser.reload}
+            </button>
+          </div>
         ) : null}
         {state.crashed ? (
           // Слой поверх страницы: тело группы лежит под поверхностью, и заглушка в нём была бы не видна.
