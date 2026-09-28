@@ -28,9 +28,11 @@ export interface BrowserOpenTab {
   openerWebContentsId: number;
 }
 
-// Интерфейс растёт вместе с мостом: pickStart и pickCancel добавит 9.3a.
-// Объявленные заранее, они не дали бы прелоаду 9.1 пройти pnpm typecheck.
+// Интерфейс растёт вместе с мостом: pickStart и pickCancel — с 9.3a.
 export interface BrowserApi {
+  /** null — выбор отменён: Esc, pickCancel, навигация главного фрейма, падение или закрытие страницы. */
+  pickStart(webContentsId: number): Promise<PickResult | null>;
+  pickCancel(webContentsId: number): Promise<void>;
   openDevTools(webContentsId: number): Promise<void>;
   /** Ответ — found-in-page своего requestId с finalUpdate, не дольше 2 с (план); иначе последний промежуточный. */
   find(webContentsId: number, text: string, forward: boolean): Promise<{ matches: number; active: number }>;

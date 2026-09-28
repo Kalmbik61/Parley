@@ -14,7 +14,7 @@ import type {
   Result,
 } from '@harnas/protocol';
 import type { AppNote, CloseAnswer, FocusTarget, HarnasBridge, HostStatus } from '../../shared/bridge.js';
-import type { BrowserFavicon, BrowserOpenTab } from '../../shared/browser-types.js';
+import type { BrowserFavicon, BrowserOpenTab, PickResult } from '../../shared/browser-types.js';
 import type { ActionId } from '../../shared/keybindings.js';
 import type {
   DirEntry,
@@ -140,6 +140,10 @@ export interface FakeBridge extends HarnasBridge {
   emitBrowserFocus(e: { webContentsId: number }): void;
   /** Фокус окна macOS: событие `app:window-focus` слушателям `app.onWindowFocus` (кусок 9.2b). */
   emitWindowFocus(focused: boolean): void;
+  /** Ответ browser.pickStart; по умолчанию null. Отказ — объект с code, как у прочих отказов подставного моста. */
+  setPickResult(answer: PickResult | null | IpcErrorInfo): void;
+  /** Вызовы `browser.pickStart` и `browser.pickCancel` по порядку (кусок 9.3a). */
+  readonly pickCalls: Array<{ method: 'pickStart' | 'pickCancel'; webContentsId: number }>;
 }
 
 export function createFakeBridge(): FakeBridge {
@@ -197,6 +201,8 @@ export function createFakeBridge(): FakeBridge {
   const browserFaviconListeners = new Set<(e: BrowserFavicon) => void>();
   const browserFocusListeners = new Set<(e: { webContentsId: number }) => void>();
   const windowFocusListeners = new Set<(focused: boolean) => void>();
+  let pickAnswer: PickResult | null | IpcErrorInfo = null;
+  const pickCalls: Array<{ method: 'pickStart' | 'pickCancel'; webContentsId: number }> = [];
   let watchSeq = 0;
   /** mtimeMs ответа write: растёт с каждой записью, как на диске. */
   let writeMtimeMs = 1_700_000_000_000;
@@ -301,6 +307,10 @@ export function createFakeBridge(): FakeBridge {
     emitWindowFocus: (focused) => {
       for (const listener of windowFocusListeners) listener(focused);
     },
+    setPickResult: (answer) => {
+      pickAnswer = answer;
+    },
+    pickCalls,
     // Безвредные заглушки: поиск ничего не находит, остальное — успех.
     browser: {
       openDevTools: async (webContentsId) => {
@@ -318,6 +328,15 @@ export function createFakeBridge(): FakeBridge {
       },
       clearData: async () => {
         browserCalls.push({ method: 'clearData', args: [] });
+      },
+      pickStart: async (webContentsId) => {
+        pickCalls.push({ method: 'pickStart', webContentsId });
+        const answer = pickAnswer;
+        if (answer !== null && 'code' in answer) throw answer;
+        return answer;
+      },
+      pickCancel: async (webContentsId) => {
+        pickCalls.push({ method: 'pickCancel', webContentsId });
       },
       onOpenTab: (listener) => {
         browserOpenTabListeners.add(listener);

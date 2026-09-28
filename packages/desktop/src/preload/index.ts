@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@harnas/protocol';
 import type { AppNote, CloseAnswer, FocusTarget, HarnasBridge, HostStatus } from '../shared/bridge.js';
-import type { BrowserFavicon, BrowserOpenTab } from '../shared/browser-types.js';
+import type { BrowserFavicon, BrowserOpenTab, PickResult } from '../shared/browser-types.js';
 import type { ActionId } from '../shared/keybindings.js';
 import type {
   DirEntry,
@@ -240,6 +240,9 @@ const bridge = {
     zoom: (webContentsId: number, step: 1 | -1 | 0) =>
       ipcRenderer.invoke('browser:zoom', webContentsId, step) as Promise<void>,
     clearData: () => ipcRenderer.invoke('browser:clear-data') as Promise<void>,
+    pickStart: (webContentsId: number) =>
+      ipcRenderer.invoke('browser:pick-start', webContentsId) as Promise<PickResult | null>,
+    pickCancel: (webContentsId: number) => ipcRenderer.invoke('browser:pick-cancel', webContentsId) as Promise<void>,
     onOpenTab: (listener: (e: BrowserOpenTab) => void) => {
       browserOpenTabListeners.add(listener);
       return () => browserOpenTabListeners.delete(listener);

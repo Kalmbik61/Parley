@@ -394,6 +394,14 @@ export const S = {
     tooManyTabs: 'No more than 10 browser tabs per workspace',
   },
 
+  /**
+   * Блок Design Mode для агента (спека 12.3, п. 8). 9.3a — только пометка обрезки HTML в
+   * `main/browser/design-mode.ts#validatePick`; остальной шаблон блока — 9.3b.
+   */
+  designBlock: {
+    truncated: '…(truncated)',
+  },
+
   /** Баннер прерванных сессий — `components/InterruptedBanner.tsx`. */
   banners: {
     interrupted: (labels: string): string => `Interrupted mid-turn: ${labels}`,

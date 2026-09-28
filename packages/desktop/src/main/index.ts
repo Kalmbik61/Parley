@@ -18,7 +18,9 @@ import type { WebContents } from 'electron';
 import type { WorksSnapshot } from '@harnas/protocol';
 import { BROWSER_PARTITION } from '../shared/browser-types.js';
 import { S } from '../shared/strings.js';
+import { createDesignMode } from './browser/design-mode.js';
 import { fetchFavicon } from './browser/favicon.js';
+import guestPickScript from './browser/guest-pick.js?raw';
 import { installBrowserGuard, promptDownload } from './browser/guard.js';
 import { cleanupDrops, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
 import { createGitRunner } from './files/git-api.js';
@@ -332,6 +334,12 @@ if (!gotLock) {
       browser: {
         fromId: (id) => webContents.fromId(id) ?? null,
         session: browserSession,
+        // Снимок элемента Design Mode (кусок 9.3a) — в drops/, как скриншоты из буфера (5.4).
+        designMode: createDesignMode({
+          fromId: (id) => webContents.fromId(id) ?? null,
+          saveImage: (png) => saveImage({ png, dir: dropsDir() }),
+          guestScript: guestPickScript,
+        }),
       },
       saveDropImage: async () => {
         if (fakeDrops) return saveImage({ png: FAKE_DROP_PNG, dir: dropsDir() });
