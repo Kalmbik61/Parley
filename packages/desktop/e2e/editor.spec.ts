@@ -1,4 +1,6 @@
 import { existsSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,8 +20,9 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  *
  * Превью (кусок 7.5, тесты 9–11): Markdown открывается превью, «Code» — Monaco того же буфера;
  * «Keep mine» и ⌘S — вопрос перезаписи; картинка и PDF из дерева — превью без ошибок `console`,
- * `pageerror` и нарушений CSP, ⌘F в PDF и его ссылка — через журнал `HARNAS_SHELL`, браузер
- * человека не открывается.
+ * `pageerror` и нарушений CSP, ⌘F в PDF. Ссылки превью `http(s)` — вкладка встроенного браузера
+ * (fix-7.5, спека 10.6) со страницей своего сервера на 127.0.0.1; журнал `HARNAS_SHELL` пуст —
+ * браузер человека не открывается.
  */
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -32,8 +35,8 @@ const CYRILLIC = 'мой файл с пробелами.ts';
 /** 255 байт — предел имени на APFS; без пробелов, переносить нечему. */
 const LONG_FILE = `${'e'.repeat(252)}.ts`;
 
-/** Markdown превью: заголовок, ссылка наружу и картинка из корня (Blob, `img-src blob:`). */
-const NOTES = '# Notes\n\nSee [site](https://example.com/notes).\n\n![logo](./logo.png)\n';
+/** Markdown превью: заголовок, ссылка наружу (свой сервер теста) и картинка из корня (Blob, `img-src blob:`). */
+const notesText = (origin: string): string => `# Notes\n\nSee [site](${origin}/notes).\n\n![logo](./logo.png)\n`;
 
 /** PNG 3×2 px: картинка превью и её размер «3 × 2 px». */
 function makePng(width: number, height: number): Buffer {
@@ -60,7 +63,7 @@ function makePng(width: number, height: number): Buffer {
 }
 
 /** PDF в одну страницу: текст Helvetica (стандартный шрифт без встраивания) и ссылка URI. */
-function makePdf(): Buffer {
+function makePdf(uri: string): Buffer {
   const content = 'BT /F1 24 Tf 72 700 Td (Hello harnas PDF) Tj ET';
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
@@ -68,7 +71,7 @@ function makePdf(): Buffer {
     '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R /Annots [6 0 R] >>',
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
     `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
-    '<< /Type /Annot /Subtype /Link /Rect [72 560 400 620] /Border [0 0 0] /A << /S /URI /URI (https://example.com/harnas) >> >>',
+    `<< /Type /Annot /Subtype /Link /Rect [72 560 400 620] /Border [0 0 0] /A << /S /URI /URI (${uri}) >> >>`,
   ];
   let out = '%PDF-1.4\n';
   const offsets: number[] = [];
@@ -97,8 +100,18 @@ test.describe('редактор файла на собранном окне', ()
   let base: string;
   let project: string;
   let app: ElectronApplication | null = null;
+  // Сервер страниц для ссылок превью: вкладка браузера грузит его, а не чужой сайт.
+  let server: Server;
+  let origin: string;
+  let notes: string;
 
   test.beforeEach(async () => {
+    server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end('<!doctype html><title>Linked page</title><p>linked</p>');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    notes = notesText(origin);
     home = await makeTempHome('editor');
     base = await makeTempProject('editor');
     project = path.join(base, 'project');
@@ -106,9 +119,9 @@ test.describe('редактор файла на собранном окне', ()
     await writeFile(path.join(project, 'src', 'a.ts'), 'export const a = 1;\n');
     await writeFile(path.join(project, 'src', CYRILLIC), 'export const b = 2;\n');
     await writeFile(path.join(project, LONG_FILE), 'long\n');
-    await writeFile(path.join(project, 'notes.md'), NOTES);
+    await writeFile(path.join(project, 'notes.md'), notes);
     await writeFile(path.join(project, 'logo.png'), makePng(3, 2));
-    await writeFile(path.join(project, 'doc.pdf'), makePdf());
+    await writeFile(path.join(project, 'doc.pdf'), makePdf(`${origin}/harnas`));
   });
 
   /** Окно 1400×900 с работой над проектом; с этого места — сборщик ошибок и нарушений CSP. */
@@ -149,7 +162,17 @@ test.describe('редактор файла на собранном окне', ()
     await stopHost(home);
     await rm(home, { recursive: true, force: true });
     await rm(base, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   });
+
+  /** Адреса страниц `<webview>` — гостей вкладок браузера. */
+  const guestUrls = (electronApp: ElectronApplication): Promise<string[]> =>
+    electronApp.evaluate(({ webContents }) =>
+      webContents
+        .getAllWebContents()
+        .filter((c) => c.getType() === 'webview')
+        .map((c) => c.getURL()),
+    );
 
   test('Files → a.ts: Monaco с текстом, воркеры без ошибок и нарушений CSP; ⌘S пишет; правка на диске — баннер', async () => {
     test.setTimeout(90_000);
@@ -367,7 +390,7 @@ test.describe('редактор файла на собранном окне', ()
     expect(problems).toEqual([]);
   });
 
-  test('7.5 тест 9: notes.md — превью; ссылка наружу — журнал shell; Code, правка, ⌘S — диск изменён, ни баннера, ни Reloaded from disk', async () => {
+  test('7.5 тест 9: notes.md — превью; ссылка наружу — вкладка браузера, журнал shell пуст; Code, правка, ⌘S — диск изменён, ни баннера, ни Reloaded from disk', async () => {
     test.setTimeout(90_000);
     const { electronApp, window, problems } = await launch('preview-md');
     const sidebar = window.getByTestId('right-sidebar');
@@ -381,10 +404,16 @@ test.describe('редактор файла на собранном окне', ()
     await expect(logo).toHaveAttribute('src', /^blob:/);
     await expect.poll(() => logo.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(3);
 
-    // http(s) — наружу через app.openExternal (журнал), окно на месте.
+    // http(s) — вкладка встроенного браузера рядом (fix-7.5), страница своего сервера; системный
+    // браузер не зовётся (журнал пуст), окно на месте.
     await preview.getByText('site', { exact: true }).click();
-    await expect.poll(() => shellLog(electronApp)).toContainEqual({ action: 'openExternal', url: 'https://example.com/notes' });
+    const browserTab = window.locator('[role="tab"][data-tab-id^="browser:"]');
+    await expect(browserTab).toHaveCount(1);
+    await expect.poll(() => guestUrls(electronApp)).toEqual([`${origin}/notes`]);
+    await expect(browserTab).toContainText('Linked page');
+    expect(await shellLog(electronApp)).toEqual([]);
     expect(await window.evaluate(() => location.protocol)).toBe('file:');
+    await tab.click();
 
     await window.getByRole('radio', { name: 'Code' }).click();
     const lines = window.locator('.monaco-editor .view-lines').first();
@@ -395,7 +424,7 @@ test.describe('редактор файла на собранном окне', ()
     await expect(tab.locator('[data-dirty-dot]')).toBeVisible();
     await window.keyboard.press('Meta+S');
     await expect(tab.locator('[data-dirty-dot]')).toHaveCount(0);
-    expect(await readFile(path.join(project, 'notes.md'), 'utf8')).toBe(`${NOTES}edited line`);
+    expect(await readFile(path.join(project, 'notes.md'), 'utf8')).toBe(`${notes}edited line`);
     // Своя запись — не «правка агента»: слежение её видит, но ни баннера, ни плашки.
     await window.waitForTimeout(1500);
     await expect(window.getByTestId('disk-change-banner')).toHaveCount(0);
@@ -547,7 +576,7 @@ test.describe('редактор файла на собранном окне', ()
     expect(problems).toEqual([]);
   });
 
-  test('7.5 тест 11: .png и .pdf из дерева — превью; ⌘F в PDF, ссылка PDF — журнал shell; данные pdf.js локально; ни ошибок, ни CSP', async () => {
+  test('7.5 тест 11: .png и .pdf из дерева — превью; ⌘F в PDF, ссылка PDF — вкладка браузера; данные pdf.js локально; ни ошибок, ни CSP', async () => {
     test.setTimeout(90_000);
     const { electronApp, window, problems } = await launch('preview-bin');
     const sidebar = window.getByTestId('right-sidebar');
@@ -574,11 +603,14 @@ test.describe('редактор файла на собранном окне', ()
     await window.keyboard.press('Escape');
     await expect(find).toHaveCount(0);
 
-    // Ссылка аннотации: без href, клик — app.openExternal (журнал), окно не уходит со своей страницы.
+    // Ссылка аннотации: без href, клик — вкладка встроенного браузера (fix-7.5), журнал shell пуст,
+    // окно не уходит со своей страницы.
     const link = pdf.locator('.annotationLayer .linkAnnotation a').first();
     await expect(link).not.toHaveAttribute('href', /./);
     await link.click();
-    await expect.poll(() => shellLog(electronApp)).toContainEqual({ action: 'openExternal', url: 'https://example.com/harnas' });
+    await expect(window.locator('[role="tab"][data-tab-id^="browser:"]')).toHaveCount(1);
+    await expect.poll(() => guestUrls(electronApp)).toEqual([`${origin}/harnas`]);
+    expect(await shellLog(electronApp)).toEqual([]);
     expect(await window.evaluate(() => location.protocol)).toBe('file:');
 
     // cMap и стандартный шрифт читаются окном из сборки по file:// — CSP `connect-src 'self'` пускает.

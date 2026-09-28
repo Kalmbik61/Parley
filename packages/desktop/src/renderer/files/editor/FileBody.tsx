@@ -167,7 +167,7 @@ function BytesBody({ bridge, workKey, entry, tab, onClose, kind }: FileBodyProps
   if ('code' in state) return <ErrorBody code={state.code} onClose={onClose} onReveal={revealInFinder} />;
   return (
     <div data-testid="file-body" className="h-full min-h-0 min-w-0">
-      {kind === 'image' ? <ImagePreview bytes={state.bytes} path={tab.path} /> : <PdfPreview bridge={bridge} bytes={state.bytes} />}
+      {kind === 'image' ? <ImagePreview bytes={state.bytes} path={tab.path} /> : <PdfPreview bytes={state.bytes} />}
     </div>
   );
 }

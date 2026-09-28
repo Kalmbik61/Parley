@@ -145,7 +145,7 @@ export function MarkdownPreview({ bridge, root, filePath, text, onOpenFile }: Ma
     const follow = (href: string | undefined): void => {
       const link = resolveMarkdownLink(href ?? '', filePath);
       if (link === null) return;
-      if (link.kind === 'external') openPreviewUrl(bridge, link.url);
+      if (link.kind === 'external') openPreviewUrl(link.url);
       else if (link.kind === 'file') openFileRef.current(link.path);
       else {
         const target = [...(containerRef.current?.querySelectorAll<HTMLElement>('[id]') ?? [])].find((el) => el.id === link.id);
