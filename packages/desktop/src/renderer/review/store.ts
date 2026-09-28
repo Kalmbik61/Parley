@@ -18,6 +18,13 @@ export interface ReviewState {
   /** Разовый переход вкладки диффа к файлу; ключ — bufferKey(workKey, tabId) (7.3a). */
   revealed: Record<string, { path: string; nonce: number }>;
   revealFile(workKey: string, tabId: string, path: string): void;
+  /**
+   * Сессии (refKey), чей worktree отброшен из этого окна (кусок 8.2b). Хост оставляет запись
+   * `worktree` в карте закрытой сессии, а папки и ветки уже нет: `worktrees.diff` ответил бы
+   * ошибкой git — вкладка показывает своё состояние и не зовёт его.
+   */
+  discarded: Record<string, true>;
+  markDiscarded(refKey: string): void;
 }
 
 export const useReviewStore: UseBoundStore<StoreApi<ReviewState>> = create<ReviewState>((set) => ({
@@ -33,6 +40,8 @@ export const useReviewStore: UseBoundStore<StoreApi<ReviewState>> = create<Revie
       const nonce = (state.revealed[key]?.nonce ?? 0) + 1;
       return { revealed: { ...state.revealed, [key]: { path, nonce } } };
     }),
+  discarded: {},
+  markDiscarded: (refKey) => set((state) => ({ discarded: { ...state.discarded, [refKey]: true } })),
 }));
 
 /** Сессия шапки «Изменений»: выбор человека, пока сессия в карте; иначе focusedSessionOf (7.2). */

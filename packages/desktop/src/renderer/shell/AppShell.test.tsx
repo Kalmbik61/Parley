@@ -22,6 +22,7 @@ import { useLayoutStore } from '../layout/store.js';
 import { bufferKey } from '../files/buffer.js';
 import { useFilesStore } from '../files/store.js';
 import { closeTab, focusTab, groups, moveTab, openTab, splitGroup } from '../layout/tree.js';
+import { useReviewStore } from '../review/store.js';
 import { useActivityStore } from '../store/activity.js';
 import { useNoticesStore } from '../store/notices.js';
 import { useUiStore } from '../store/ui.js';
@@ -594,6 +595,22 @@ async function renderShell(entries: WorkEntry[]): Promise<void> {
   // он не перебил выбор теста.
   await waitFor(() => expect(useLayoutStore.getState().activeWorkKey).not.toBeNull());
 }
+
+describe('AppShell — выбор сессии «Изменений» (кусок 8.2b)', () => {
+  it('смена активной работы стирает выбор той, с которой ушли; после размонтирования подписки нет', async () => {
+    useReviewStore.setState({ changesSession: {} });
+    await renderShell(fourWorks().slice(0, 2));
+    act(() => useLayoutStore.getState().setActiveWork(keyOf('w-01')));
+    act(() => useReviewStore.getState().selectChangesSession(keyOf('w-01'), 's-01'));
+    act(() => useLayoutStore.getState().setActiveWork(keyOf('w-02')));
+    expect(useReviewStore.getState().changesSession).toEqual({});
+
+    cleanup();
+    act(() => useReviewStore.getState().selectChangesSession(keyOf('w-02'), 's-02'));
+    act(() => useLayoutStore.getState().setActiveWork(keyOf('w-01')));
+    expect(useReviewStore.getState().changesSession).toEqual({ [keyOf('w-02')]: 's-02' });
+  });
+});
 
 describe('AppShell — LRU контейнеров работ (тест 4 куска 2.5)', () => {
   it('четыре работы подряд: контейнер первой размонтирован (dispose), возврат создаёт терминал заново и подключает', async () => {

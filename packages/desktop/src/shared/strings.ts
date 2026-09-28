@@ -26,6 +26,7 @@ export const S = {
     done: 'Done',
     retry: 'Retry',
     copy: 'Copy',
+    send: 'Send',
   },
 
   /**
@@ -318,6 +319,30 @@ export const S = {
     askAgentIntro: (branch: string, base: string): string => `Branch ${branch} has merge conflicts with ${base} in:`,
     askAgentInstruction: (base: string): string =>
       `Merge ${base} into your branch (git merge ${base}), resolve the conflicts, commit, and tell me what you did.`,
+    /** Вкладка «Изменения» правого сайдбара (кусок 8.2b, спека 11.1, 11.2) — `review/*.tsx`. */
+    panel: 'Changes',
+    headerMenu: 'Changes options',
+    sessionPicker: 'Session',
+    noSession: 'Choose a session to see its changes',
+    commitCount: (n: number): string => (n === 1 ? '1 commit' : `${n} commits`),
+    projectFolder: (branch: string | null): string => `${branch ?? 'Detached HEAD'} (project folder)`,
+    projectFolderWarning: "A commit takes every change in the folder, not only this session's",
+    worktreePending: 'The worktree will be created when the session starts',
+    /** Сессия, чей worktree отброшен из этого окна: `worktrees.diff` ей уже нечего отвечать. */
+    worktreeDiscarded: 'The worktree was discarded',
+    sections: { conflicts: 'Conflicts', uncommitted: 'Uncommitted', branchChanges: 'Branch changes', commits: 'Branch commits' },
+    commit: 'Commit',
+    commitProject: 'Commit all in folder',
+    askAgent: 'Ask agent to resolve',
+    commitConfirmTitle: (branch: string): string => `Commit to ${branch}?`,
+    mergeConfirmTitle: (branch: string, base: string): string => `Merge ${branch} into ${base}?`,
+    mergeConfirmDescription: (commits: number, additions: number, deletions: number, base: string, checkout: string): string =>
+      `${commits === 1 ? '1 commit' : `${commits} commits`}, +${additions} −${deletions}. ${base} is checked out in ${checkout}.`,
+    agentStillWorking: 'The agent is still working — changes may be incomplete',
+    askAgentTitle: (session: string): string => `Ask ${session} to resolve conflicts`,
+    discardWorktreeEllipsis: 'Discard worktree…',
+    discardWorktreeTitle: (session: string): string => `Discard the worktree of ${session}?`,
+    discardWorktreeDescription: 'The session will be stopped and closed. Its worktree folder and branch will be deleted.',
   },
 
   /** Поверхность терминала — `terminal/TerminalSurface.tsx`. */
@@ -529,6 +554,7 @@ export const S = {
       resumeSession: 'resume session',
       saveFile: 'save file',
       clearBrowserData: 'clear browser data',
+      discardWorktree: 'discard worktree',
     },
     noWorktree: 'This session has no worktree of its own',
     /** Действие работы (⌘T, ⌘W, разделение…) без активной работы — тост (кусок 6.3). */

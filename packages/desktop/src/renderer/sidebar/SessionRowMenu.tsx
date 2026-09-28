@@ -20,9 +20,10 @@ import { fileTabIds } from '../files/close-guard.js';
 import { tabId } from '../layout/ids.js';
 import { measureGroupSizes } from '../layout/measure.js';
 import { useLayoutStore } from '../layout/store.js';
-import { openTab, splitGroup } from '../layout/tree.js';
+import { splitGroup } from '../layout/tree.js';
 import { displayStatus } from '../lib/dot-state.js';
 import { sessionRowLabel } from '../lib/participant.js';
+import { useReviewStore } from '../review/store.js';
 import { useUiStore } from '../store/ui.js';
 import {
   ContextMenu,
@@ -80,10 +81,12 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
     });
   };
 
+  // «Изменения» — у каждой сессии (решение сверки M2): вкладка правого сайдбара умеет и папку
+  // проекта. Порядок важен: смена работы стирает выбор в шапке (bindReviewToLayout, 8.2a).
   const openChanges = (): void => {
-    const store = useLayoutStore.getState();
-    store.setActiveWork(workKey);
-    store.apply(workKey, (layout) => openTab(layout, { kind: 'diff', id: tabId.diff(session.id, null), sessionId: session.id, commit: null }));
+    useLayoutStore.getState().setActiveWork(workKey);
+    useReviewStore.getState().selectChangesSession(workKey, session.id);
+    useUiStore.getState().setSidebar('right', { open: true, tab: 'changes' });
   };
 
   // «Delete» удаляет и worktree сессии (`sessions.delete` хоста): сначала её вкладки файлов
@@ -128,17 +131,15 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
           >
             {S.sidebar.sessionMenu.createRoomWith}
           </ContextMenuItem>
+          <ContextMenuItem onSelect={openChanges}>{S.sidebar.sessionMenu.changes}</ContextMenuItem>
           {worktree !== null ? (
-            <>
-              <ContextMenuItem onSelect={openChanges}>{S.sidebar.sessionMenu.changes}</ContextMenuItem>
-              <ContextMenuItem
-                onSelect={() => {
-                  navigator.clipboard.writeText(worktree.path).catch((error: unknown) => console.warn('[harnas] clipboard', error));
-                }}
-              >
-                {S.sidebar.sessionMenu.copyWorktreePath}
-              </ContextMenuItem>
-            </>
+            <ContextMenuItem
+              onSelect={() => {
+                navigator.clipboard.writeText(worktree.path).catch((error: unknown) => console.warn('[harnas] clipboard', error));
+              }}
+            >
+              {S.sidebar.sessionMenu.copyWorktreePath}
+            </ContextMenuItem>
           ) : null}
           <ContextMenuSeparator />
           <ContextMenuItem className={DESTRUCTIVE_ITEM} onSelect={() => setConfirm('delete')}>

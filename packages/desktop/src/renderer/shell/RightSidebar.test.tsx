@@ -48,6 +48,17 @@ class ResizeObserverStub {
 const STATUS = { state: 'connected' as const, hostVersion: '0.0.0-test', methods: [...REQUIRED_METHODS] };
 const WORKTREE = { path: '/wt/s02', branch: 'harnas/w-0001/s02', base: 'main', createdAt: '2026-09-27T08:00:00.000Z' };
 const KEY = '/tmp/proj w-01';
+const DIFF = {
+  patch: '',
+  files: [],
+  uncommitted: false,
+  baseCheckout: '/tmp/proj',
+  baseDirty: false,
+  mergeBase: 'a'.repeat(40),
+  stats: { additions: 0, deletions: 0 },
+  commits: [],
+  uncommittedPaths: [],
+};
 const ENTRY: WorkEntry = makeWork('w-01', { projectPath: '/tmp/proj', sessions: [makeSession('s-02', 'two', { worktree: WORKTREE })] });
 
 function dirEntry(name: string, kind: DirEntry['kind'] = 'file'): DirEntry {
@@ -133,15 +144,20 @@ describe('RightSidebar (тест 9)', () => {
     expect(sidebar()).not.toBeNull();
   });
 
-  it('ширина уходит на pointerup целым rightSidebar; вкладка — setSidebar(tab); tab: changes показывает Files', async () => {
+  it('ширина уходит на pointerup целым rightSidebar; вкладка — setSidebar(tab); tab: changes показывает Changes (8.2b)', async () => {
     useUiStore.setState({ ui: { ...DEFAULT_UI, rightSidebar: { open: true, width: 350, tab: 'changes' } } });
+    bridge.setHandler('worktrees.diff', () => DIFF);
     const saveUi = vi.spyOn(bridge.app, 'saveUi');
     await renderShell([ENTRY]);
 
+    expect(screen.getByRole('tab', { name: 'Changes' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tab', { name: 'Files' }).getAttribute('aria-selected')).toBe('false');
+    expect(screen.getByTestId('changes-panel')).toBeTruthy();
     const tab = screen.getByRole('tab', { name: 'Files' });
-    expect(tab.getAttribute('aria-selected')).toBe('true');
     fireEvent.click(tab);
     expect(saveUi).toHaveBeenLastCalledWith({ rightSidebar: { open: true, width: 350, tab: 'files' } });
+    expect(screen.getByRole('tab', { name: 'Files' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.queryByTestId('changes-panel')).toBeNull();
 
     const handle = sidebar()?.previousElementSibling?.querySelector('[role="separator"]');
     if (handle === null || handle === undefined) throw new Error('нет ручки');
@@ -150,6 +166,22 @@ describe('RightSidebar (тест 9)', () => {
     expect(saveUi).toHaveBeenCalledTimes(1);
     fireEvent.pointerUp(handle, { clientX: 650, pointerId: 1 });
     expect(saveUi).toHaveBeenLastCalledWith({ rightSidebar: { open: true, width: 400, tab: 'files' } });
+  });
+
+  it('⌘⇧G открывает правый сайдбар на Changes; открытый не прячет (тест 11 куска 8.2b)', async () => {
+    useUiStore.setState({ ui: { ...DEFAULT_UI, rightSidebar: { open: false, width: 350, tab: 'files' } } });
+    bridge.setHandler('worktrees.diff', () => DIFF);
+    await renderShell([ENTRY]);
+    act(() => {
+      useLayoutStore.getState().apply(KEY, (layout) => openTab(layout, { kind: 'terminal', id: 'terminal:s-02', sessionId: 's-02' }));
+    });
+    expect(sidebar()).toBeNull();
+    act(() => press('g', true));
+    expect(useUiStore.getState().ui.rightSidebar).toMatchObject({ open: true, tab: 'changes' });
+    expect(screen.getByRole('tab', { name: 'Changes' }).getAttribute('aria-selected')).toBe('true');
+    act(() => press('g', true));
+    expect(useUiStore.getState().ui.rightSidebar.open).toBe(true);
+    await waitFor(() => expect(bridge.calls.some((call) => call.method === 'worktrees.diff')).toBe(true));
   });
 
   it('без активной работы сайдбара нет, Right sidebar в заголовке неактивна', async () => {

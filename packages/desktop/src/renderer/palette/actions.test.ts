@@ -110,6 +110,7 @@ function expectation(id: ActionId): (spies: Spies) => void {
     'sidebar.left.toggle': ({ ui }) => expect(ui.toggleSidebar).toHaveBeenCalledWith('left'),
     'sidebar.right.toggle': ({ ui }) => expect(ui.toggleSidebar).toHaveBeenCalledWith('right'),
     'sidebar.files': ({ ui }) => expect(ui.showRightTab).toHaveBeenCalledWith('files'),
+    'sidebar.changes': ({ ui }) => expect(ui.showRightTab).toHaveBeenCalledWith('changes'),
     'work.prev': ({ layout }) => expect(layout.setActiveWork).toHaveBeenCalledWith(ORDER[8]),
     'work.next': ({ layout }) => expect(layout.setActiveWork).toHaveBeenCalledWith(ORDER[1]),
     'works.showArchived': ({ ui }) => expect(ui.toggleShowArchived).toHaveBeenCalledTimes(1),
@@ -160,7 +161,7 @@ describe('runAction — таблица по реестру (тест 1 куск�
 
   it('действия будущих этапов не реализованы и ничего не делают', () => {
     const spies = makeContext();
-    for (const id of ['sidebar.changes', 'browser.newTab'] as const) {
+    for (const id of ['browser.newTab'] as const) {
       expect(IMPLEMENTED_ACTIONS.has(id)).toBe(false);
       runAction(id, spies.ctx);
     }
@@ -223,7 +224,7 @@ describe('runAction — без активной работы (тест 2 кус�
     },
   );
 
-  it.each(['sidebar.right.toggle', 'sidebar.files'] as const)('%s без активной работы — тост, сайдбар не трогается (7.2)', (id) => {
+  it.each(['sidebar.right.toggle', 'sidebar.files', 'sidebar.changes'] as const)('%s без активной работы — тост, сайдбар не трогается (7.2)', (id) => {
     const spies = makeContext({ activeWorkKey: null });
     runAction(id, spies.ctx);
     expect(spies.toast).toHaveBeenCalledWith('No active workspace');

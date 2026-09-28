@@ -139,6 +139,7 @@ function needsActiveWork(id: ActionId): boolean {
     id === 'room.new' ||
     id === 'sidebar.right.toggle' ||
     id === 'sidebar.files' ||
+    id === 'sidebar.changes' ||
     id === 'files.quickOpen' ||
     id === 'files.search' ||
     id.startsWith('group.') ||
@@ -198,6 +199,9 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
       return;
     case 'sidebar.files':
       ctx.ui.showRightTab('files');
+      return;
+    case 'sidebar.changes':
+      ctx.ui.showRightTab('changes');
       return;
     // Корень ⌘P и поиска — корень «Файлов» активной работы (`filesRootSpec`): его берут палитра и панель.
     case 'files.quickOpen':

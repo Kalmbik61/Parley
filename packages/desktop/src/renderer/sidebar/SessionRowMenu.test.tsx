@@ -13,6 +13,7 @@ import { EMPTY_HISTORY } from '../layout/history.js';
 import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
 import { emptyLayout, groups, LIMITS, openTab, splitGroup } from '../layout/tree.js';
+import { useReviewStore, bindReviewToLayout } from '../review/store.js';
 import { useUiStore } from '../store/ui.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { makeSession } from '../test-utils/work-fixtures.js';
@@ -56,7 +57,6 @@ describe('SessionRowMenu — пункты', () => {
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
     renderMenu(makeSession('s-01', 'plan'));
     expect(screen.queryByText('Copy worktree path')).toBeNull();
-    expect(screen.queryByText('Changes')).toBeNull();
     cleanup();
 
     renderMenu(makeSession('s-01', 'plan', { worktree: { path: '/tmp/wt/s01', branch: 'harnas/s01', base: 'main', createdAt: '2026-09-27T08:00:00.000Z' } }));
@@ -192,5 +192,39 @@ describe('SessionRowMenu — Delete и несохранённые файлы wor
     });
     expect(bridge.calls.filter((call) => call.method === 'sessions.delete')).toHaveLength(1);
     expect(tabIds()).toEqual([project.id, other.id]);
+  });
+});
+
+describe('SessionRowMenu — Changes (тест 9 куска 8.2b)', () => {
+  const WT = { path: '/tmp/wt/s01', branch: 'harnas/s01', base: 'main', createdAt: '2026-09-27T08:00:00.000Z' };
+
+  beforeEach(() => {
+    useReviewStore.setState({ changesSession: {}, revealed: {}, discarded: {} });
+    useUiStore.setState({ ui: { ...useUiStore.getState().ui, rightSidebar: { open: false, width: 350, tab: 'files' } } });
+  });
+
+  it.each([
+    ['с worktree', makeSession('s-01', 'plan', { worktree: WT })],
+    ['без worktree', makeSession('s-01', 'plan')],
+  ])('сессия %s: сайдбар открыт на changes, в шапке эта сессия, вкладки diff нет', (_name, session) => {
+    const setSidebar = vi.spyOn(useUiStore.getState(), 'setSidebar');
+    useLayoutStore.setState({ activeWorkKey: KEY, layouts: { [KEY]: openTab(emptyLayout(), term('s-02')) }, hydrated: { [KEY]: true } });
+    renderMenu(session);
+    fireEvent.click(screen.getByText('Changes'));
+    expect(setSidebar).toHaveBeenCalledWith('right', { open: true, tab: 'changes' });
+    expect(useReviewStore.getState().changesSession).toEqual({ [KEY]: 's-01' });
+    const layout = useLayoutStore.getState().layouts[KEY];
+    expect(groups(layout ?? emptyLayout()).flatMap((group) => group.tabs.map((tab) => tab.id))).toEqual([tabId.terminal('s-02')]);
+    setSidebar.mockRestore();
+  });
+
+  it('сессия неактивной работы: работа стала активной, выбор не стёрт', () => {
+    const unbind = bindReviewToLayout();
+    useLayoutStore.getState().setActiveWork('/tmp/other w-09');
+    renderMenu(makeSession('s-01', 'plan'));
+    fireEvent.click(screen.getByText('Changes'));
+    expect(useLayoutStore.getState().activeWorkKey).toBe(KEY);
+    expect(useReviewStore.getState().changesSession).toEqual({ [KEY]: 's-01' });
+    unbind();
   });
 });

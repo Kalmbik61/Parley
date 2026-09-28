@@ -271,11 +271,15 @@ describe('isActionAvailable (тест 2 куска 6.1b)', () => {
     expect(isActionAvailable('sidebar.files', methods)).toBe(true);
   });
 
+  it('sidebar.changes (8.2b) — да', () => {
+    expect(isActionAvailable('sidebar.changes', new Set<string>())).toBe(true);
+  });
+
   it('ветки run 6.1b — все реализованы; browser.* и палитровые — нет', () => {
     for (const id of ['palette.open', 'work.new', 'session.new', 'settings.open', 'sidebar.left.toggle', 'work.goto.1', 'work.goto.9', 'work.prev', 'work.next', 'history.back', 'history.forward', 'group.splitRight', 'group.splitDown', 'group.prev', 'group.next', 'tab.close', 'tab.reopen', 'tab.prev', 'tab.next', 'tab.goto.1', 'tab.goto.9', 'tab.mruNext', 'tab.mruPrev', 'find', 'terminal.clear'] as const) {
       expect(IMPLEMENTED_ACTIONS.has(id)).toBe(true);
     }
-    for (const id of ['browser.find', 'browser.newTab', 'sidebar.changes'] as const) {
+    for (const id of ['browser.find', 'browser.newTab'] as const) {
       expect(IMPLEMENTED_ACTIONS.has(id)).toBe(false);
     }
   });

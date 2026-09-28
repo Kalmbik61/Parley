@@ -30,6 +30,8 @@
  *
  * Кусок 7.2 (спека 5.1, 10.1): справа — `RightSidebar` активной работы; файл из его дерева,
  * брошенный на терминал, уходит агенту путём через `sendWithToast`, в раскладку — вкладкой.
+ * Кусок 8.2b: вкладка «Изменения» в нём получает те же `sendDeps` окна; выбор сессии её шапки
+ * стирается при уходе с работы — `bindReviewToLayout` на время жизни оболочки.
  *
  * Кусок 2.6 (спека 5.4): один `DndContext` на всё окно — строка сессии живёт
  * в сайдбаре, строка вкладок одной группы — в заголовке, зоны броска — в
@@ -94,6 +96,7 @@ import { useHostStore } from '../store/host.js';
 import { runAction, type ActionContext, type ActionSource } from '../palette/actions.js';
 import { Palette } from '../palette/Palette.js';
 import { usePaletteStore } from '../palette/store.js';
+import { bindReviewToLayout } from '../review/store.js';
 import { pathsToInput } from '../terminal/drop.js';
 import { sendWithToast, type SendWithToastDeps } from '../terminal/send.js';
 import { terminalSurfaces } from '../terminal/surface-registry.js';
@@ -467,6 +470,9 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     [],
   );
 
+  // Выбор сессии шапки «Изменений» живёт до смены работы (спека 11.1, кусок 8.2b).
+  useEffect(() => bindReviewToLayout(), []);
+
   // Буферы файлов (кусок 7.3a): живут, пока вкладка есть в раскладке; закрытие вкладки с правками
   // спрашивает «Save changes to …?». Вопрос закрытия окна и ⌘Q — `WindowCloseQuestion` ниже.
   useEffect(() => {
@@ -584,7 +590,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
           {/* Правый сайдбар — только при активной работе (кусок 7.2); свёрнутый не монтируется. */}
           {activeWorkKey !== null && ui.rightSidebar.open && rightFit !== null ? (
             <ErrorBoundary title={S.shell.rightSidebarError}>
-              <RightSidebar bridge={bridge} workKey={activeWorkKey} width={rightFit.width} max={rightFit.max} />
+              <RightSidebar bridge={bridge} workKey={activeWorkKey} width={rightFit.width} max={rightFit.max} sendDeps={sendDeps} />
             </ErrorBoundary>
           ) : null}
         </div>
