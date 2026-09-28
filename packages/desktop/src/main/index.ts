@@ -43,6 +43,7 @@ import {
 } from './notifications.js';
 import { createRootsRegistry, type RootsSource } from './roots.js';
 import { captureShellEnv } from './shell-env.js';
+import { testSwitches } from './test-switches.js';
 import { createUiStore, desktopUiPath } from './ui-store.js';
 import { createMainWindow, guardWindowClose, titlebarDoubleClickAction } from './window.js';
 
@@ -92,9 +93,12 @@ if (process.env.HARNAS_HOME) {
   app.setPath('userData', path.join(process.env.HARNAS_HOME, 'desktop', 'electron'));
 }
 
+// Тестовые переключатели E2E — только в неупакованном окне или при HARNAS_E2E=1 (ревью M5).
+const switches = testSwitches(process.env, app.isPackaged);
+
 // E2E (`HARNAS_DOWNLOADS=log`): диалог сохранения загрузок браузера подменён журналом main, а папка
 // загрузок — в доме теста: настоящий диалог не встаёт на экране человека, его Downloads не трогаются.
-const logDownloads = process.env.HARNAS_DOWNLOADS === 'log';
+const logDownloads = switches.downloads;
 if (logDownloads && process.env.HARNAS_HOME) {
   app.setPath('downloads', path.join(process.env.HARNAS_HOME, 'desktop', 'downloads'));
 }
@@ -178,7 +182,7 @@ if (!gotLock) {
     ].filter((flag): flag is string => flag !== null);
 
     // Нативные вопросы main в E2E — в журнал (`globalThis.__harnasDialogs`), ответ «ждать».
-    const logDialogs = process.env.HARNAS_DIALOGS === 'log';
+    const logDialogs = switches.dialogs;
     const dialogLog: string[] = [];
     if (logDialogs) (globalThis as { __harnasDialogs?: string[] }).__harnasDialogs = dialogLog;
 
@@ -287,7 +291,7 @@ if (!gotLock) {
     // E2E (`HARNAS_NOTIFICATIONS=log`): уведомления — в журнал main, а не на экран
     // человека; тест читает и кликает их через `app.evaluate` (`globalThis.__harnasNotifications`).
     const notificationLog: LoggedNotification[] = [];
-    const logNotifications = process.env.HARNAS_NOTIFICATIONS === 'log';
+    const logNotifications = switches.notifications;
     if (logNotifications) {
       (globalThis as { __harnasNotifications?: LoggedNotification[] }).__harnasNotifications = notificationLog;
     }
@@ -322,7 +326,7 @@ if (!gotLock) {
     // Старые скриншоты `drops/` (кусок 5.4): только обычные файлы и сами ссылки, по lstat.
     // В фоне — старт окна их не ждёт.
     void cleanupDrops(dropsDir(), DROPS_MAX_AGE_MS).catch((error: unknown) => console.warn('[harnas] cleanupDrops', error));
-    const fakeDrops = process.env.HARNAS_DROPS === 'fake';
+    const fakeDrops = switches.drops;
 
     const rootsSource: RootsSource = {
       list: () => connection.call('works.list', {}) as Promise<WorksSnapshot>,
@@ -341,7 +345,7 @@ if (!gotLock) {
     // в журнал main, а не на экран человека (настоящие открыли бы приложение, Finder и браузер);
     // тест читает журнал через `app.evaluate` (`globalThis.__harnasShell`).
     const shellLog: Array<{ action: 'openPath' | 'showItemInFolder'; path: string } | { action: 'openExternal'; url: string }> = [];
-    const logShell = process.env.HARNAS_SHELL === 'log';
+    const logShell = switches.shell;
     if (logShell) {
       (globalThis as { __harnasShell?: typeof shellLog }).__harnasShell = shellLog;
     }
