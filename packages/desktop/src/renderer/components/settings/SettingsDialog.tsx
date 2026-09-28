@@ -1,45 +1,112 @@
 /**
- * Настройки в окне (кусок 1.10 плана окна, `resumeRate` — кусок 3.6):
- * `silenceThresholdMs`, `messageRate`, `resumeRate`, `autoLaunch`, `theme`,
- * `fontFamily`, `fontSize`. Заблокированное переменной окружения поле
- * неактивно и подписано «задано HARNAS_…»; сохранение — по одному полю через
- * `settings.set`, ошибка — под полем.
+ * Настройки в окне (кусок 1.10 плана окна, `resumeRate` — кусок 3.6). Кусок
+ * 1.4 плана «облик Orca», спека 4.10 — четыре секции вместо плоского списка:
+ * «Вид» (`ui.json.appearance`, спека 4.7), «Терминал» и «Агенты» (прежние
+ * поля `config.json` через `settings.set`, как раньше), «Уведомления»
+ * (`ui.json.notifications`). Поле «Тема» (палитра TUI, `config.theme`) окно
+ * больше не читает и не показывает (спека 4.9 — её меняет только сам TUI).
+ *
+ * Заблокированное переменной окружения поле неактивно и подписано «задано
+ * HARNAS_…»; поля терминала/агентов сохраняются по одному через
+ * `settings.set`, ошибка — под полем — то же самое, что и раньше, только
+ * разложено по вкладкам.
+ *
+ * «Вид» и «Уведомления» с куска 2.3 читают и пишут зеркало `store/ui.ts`
+ * (`setAppearance`/`patchUi`), а не грузят `ui.json` сами: то же зеркало,
+ * что и у заголовка окна и сайдбаров — без этого две копии в разных
+ * компонентах могли бы разойтись (см. комментарий у `patchUi`).
  */
 
 import { useEffect, useState, type ReactNode } from 'react';
-import * as Dialog from '@radix-ui/react-dialog';
+import { toast } from 'sonner';
 import type { HarnasConfig } from '@harnas/core';
 import type { HarnasBridge } from '../../../shared/bridge.js';
-import { THEME_NAMES } from '../../theme/apply-theme.js';
+import { decodeIpcError } from '../../../shared/ipc-error.js';
+import { errorText, S } from '../../../shared/strings.js';
+import type { Appearance, UiFile } from '../../../shared/ui-types.js';
+import { useUiStore } from '../../store/ui.js';
+import { Button } from '../../ui/button.js';
+import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from '../../ui/dialog.js';
+import { Input } from '../../ui/input.js';
+import { Switch } from '../../ui/switch.js';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ui/tabs.js';
+import { ToggleGroup, ToggleGroupItem } from '../../ui/toggle-group.js';
 
 export interface SettingsDialogProps {
   open: boolean;
   bridge: HarnasBridge;
   onOpenChange: (open: boolean) => void;
-  /** Зовётся после каждого удачного сохранения — окно применяет тему сразу, без перезапуска. */
+  /** Зовётся после каждого удачного сохранения — окно применяет настройку сразу, без перезапуска. */
   onConfigChange?: (config: HarnasConfig) => void;
 }
 
+/** Четыре секции спеки 4.10, в порядке таблицы, и «Браузер» (кусок 9.1). */
+type SettingsSection = 'appearance' | 'terminal' | 'agents' | 'notifications' | 'browser';
+
+const SECTION_LABELS: Record<SettingsSection, string> = {
+  appearance: S.settings.sections.appearance,
+  terminal: S.settings.sections.terminal,
+  agents: S.settings.sections.agents,
+  notifications: S.settings.sections.notifications,
+  browser: S.settings.sections.browser,
+};
+
+const SECTION_ORDER: readonly SettingsSection[] = ['appearance', 'terminal', 'agents', 'notifications', 'browser'];
+
 type FieldErrors = Partial<Record<keyof HarnasConfig, string>>;
 
-function FieldRow({ label, lockedBy, error, children }: { label: string; lockedBy: string | null; error: string | undefined; children: ReactNode }): JSX.Element {
+function FieldRow({
+  label,
+  lockedBy,
+  error,
+  children,
+}: {
+  label: string;
+  lockedBy: string | null;
+  error: string | undefined;
+  children: ReactNode;
+}): JSX.Element {
   return (
     <label className="flex flex-col gap-1 text-sm">
       <span>
         {label}
-        {lockedBy !== null ? <span className="text-[var(--h-muted)]"> (задано {lockedBy})</span> : null}
+        {lockedBy !== null ? <span className="text-muted-foreground"> {S.settings.lockedBy(lockedBy)}</span> : null}
       </span>
       {children}
-      {error !== undefined ? <span className="text-xs text-[var(--h-red)]">{error}</span> : null}
+      {error !== undefined ? <span className="text-xs text-destructive">{error}</span> : null}
+    </label>
+  );
+}
+
+/** Строка-переключатель секции «Уведомления»: подпись слева, `ui/switch` справа. */
+function NotificationRow({
+  label,
+  checked,
+  onCheckedChange,
+}: {
+  label: string;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}): JSX.Element {
+  return (
+    <label className="flex items-center justify-between gap-2 text-sm">
+      <span>{label}</span>
+      <Switch checked={checked} onCheckedChange={onCheckedChange} />
     </label>
   );
 }
 
 export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: SettingsDialogProps): JSX.Element {
+  const [section, setSection] = useState<SettingsSection>('appearance');
   const [config, setConfig] = useState<HarnasConfig | null>(null);
   const [locked, setLocked] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<FieldErrors>({});
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  const ui = useUiStore((state) => state.ui);
+  const uiLoaded = useUiStore((state) => state.uiLoaded);
+  const setAppearance = useUiStore((state) => state.setAppearance);
+  const patchUi = useUiStore((state) => state.patchUi);
 
   useEffect(() => {
     if (!open) return;
@@ -51,7 +118,10 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
         setErrors({});
         setLoadError(null);
       })
-      .catch((err: unknown) => setLoadError(err instanceof Error ? err.message : String(err)));
+      .catch((err: unknown) => {
+        console.warn('[harnas] settings.get', err);
+        setLoadError(errorText(decodeIpcError(err).code, S.errors.actions.loadSettings));
+      });
   }, [open, bridge]);
 
   const save = async (key: keyof HarnasConfig, value: string): Promise<void> => {
@@ -67,107 +137,191 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
         return next;
       });
     } catch (err) {
-      setErrors((prev) => ({ ...prev, [key]: err instanceof Error ? err.message : String(err) }));
+      console.warn('[harnas] settings.set', key, err);
+      const message = errorText(decodeIpcError(err).code, S.errors.actions.saveSettings);
+      setErrors((prev) => ({ ...prev, [key]: message }));
     }
   };
 
+  // Стор сам пишет `ui.json` (`setAppearance` → `app.setAppearance`, кусок
+  // 2.3) — отдельного `saveUi` для вида нет (тест 1 куска 1.4/тест 11 куска
+  // 2.3: «Тёмная» зовёт только `setAppearance('dark')»).
+  const changeAppearance = (mode: Appearance): void => {
+    setAppearance(mode);
+  };
+
+  const toggleNotification = (key: keyof UiFile['notifications'], value: boolean): void => {
+    patchUi({ notifications: { ...ui.notifications, [key]: value } });
+  };
+
+  // Куки, хранилища и кеш раздела встроенного браузера (кусок 9.1); сообщение main — только в консоль.
+  const clearBrowserData = (): void => {
+    bridge.browser.clearData().catch((err: unknown) => {
+      console.warn('[harnas] browser.clearData', err);
+      toast(errorText(decodeIpcError(err).code, S.errors.actions.clearBrowserData));
+    });
+  };
+
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/50" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 w-96 -translate-x-1/2 -translate-y-1/2 rounded-lg bg-[var(--h-base)] p-4 text-[var(--h-text)] shadow-lg">
-          <Dialog.Title className="text-sm font-medium">Настройки</Dialog.Title>
-          {loadError !== null ? <p className="mt-2 text-xs text-[var(--h-red)]">{loadError}</p> : null}
-          {config !== null ? (
-            <div className="mt-3 flex flex-col gap-3">
-              <FieldRow label="Порог молчания, мс" lockedBy={locked.silenceThresholdMs ?? null} error={errors.silenceThresholdMs}>
-                <input
-                  className="rounded border border-[var(--h-overlay)] bg-transparent px-2 py-1 text-sm disabled:opacity-50"
-                  defaultValue={String(config.silenceThresholdMs)}
-                  disabled={locked.silenceThresholdMs !== undefined}
-                  onBlur={(event) => void save('silenceThresholdMs', event.target.value)}
-                />
-              </FieldRow>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      {/* 28rem: пятая секция «Browser» (кусок 9.1) в 26rem выходила за край диалога. */}
+      <DialogContent aria-describedby={undefined} className="w-[28rem] max-w-[28rem]">
+        <DialogTitle>{S.settings.title}</DialogTitle>
+        {loadError !== null ? <p className="text-xs text-destructive">{loadError}</p> : null}
 
-              <FieldRow label="Потолок писем в час" lockedBy={locked.messageRate ?? null} error={errors.messageRate}>
-                <input
-                  className="rounded border border-[var(--h-overlay)] bg-transparent px-2 py-1 text-sm disabled:opacity-50"
-                  defaultValue={String(config.messageRate)}
-                  disabled={locked.messageRate !== undefined}
-                  onBlur={(event) => void save('messageRate', event.target.value)}
-                />
-              </FieldRow>
+        <Tabs value={section} onValueChange={(value) => setSection(value as SettingsSection)}>
+          <TabsList>
+            {SECTION_ORDER.map((key) => (
+              <TabsTrigger key={key} value={key}>
+                {SECTION_LABELS[key]}
+              </TabsTrigger>
+            ))}
+          </TabsList>
 
-              <FieldRow label="Подъёмов сессии в час (0…60)" lockedBy={locked.resumeRate ?? null} error={errors.resumeRate}>
-                <input
-                  className="rounded border border-[var(--h-overlay)] bg-transparent px-2 py-1 text-sm disabled:opacity-50"
-                  defaultValue={String(config.resumeRate)}
-                  disabled={locked.resumeRate !== undefined}
-                  onBlur={(event) => void save('resumeRate', event.target.value)}
-                />
-              </FieldRow>
+          <TabsContent value="appearance">
+            {uiLoaded ? (
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                value={ui.appearance}
+                onValueChange={(value) => {
+                  if (value !== '') changeAppearance(value as Appearance);
+                }}
+              >
+                <ToggleGroupItem value="system">{S.settings.appearanceSystem}</ToggleGroupItem>
+                <ToggleGroupItem value="dark">{S.settings.appearanceDark}</ToggleGroupItem>
+                <ToggleGroupItem value="light">{S.settings.appearanceLight}</ToggleGroupItem>
+              </ToggleGroup>
+            ) : null}
+          </TabsContent>
 
-              <FieldRow label="Автозапуск pending-сессий" lockedBy={locked.autoLaunch ?? null} error={errors.autoLaunch}>
-                <input
-                  type="checkbox"
-                  defaultChecked={config.autoLaunch}
-                  disabled={locked.autoLaunch !== undefined}
-                  onChange={(event) => void save('autoLaunch', event.target.checked ? 'true' : 'false')}
-                />
-              </FieldRow>
+          <TabsContent value="terminal" className="flex flex-col gap-3">
+            {config !== null ? (
+              <>
+                <FieldRow label={S.settings.terminalFont} lockedBy={locked.fontFamily ?? null} error={errors.fontFamily}>
+                  <Input
+                    defaultValue={config.fontFamily}
+                    disabled={locked.fontFamily !== undefined}
+                    onBlur={(event) => void save('fontFamily', event.target.value)}
+                  />
+                </FieldRow>
 
-              <FieldRow label="Тема" lockedBy={locked.theme ?? null} error={errors.theme}>
-                <select
-                  className="rounded border border-[var(--h-overlay)] bg-transparent px-2 py-1 text-sm disabled:opacity-50"
-                  defaultValue={config.theme}
-                  disabled={locked.theme !== undefined}
-                  onChange={(event) => void save('theme', event.target.value)}
+                <FieldRow label={S.settings.terminalFontSize} lockedBy={locked.fontSize ?? null} error={errors.fontSize}>
+                  <Input
+                    defaultValue={String(config.fontSize)}
+                    disabled={locked.fontSize !== undefined}
+                    onBlur={(event) => void save('fontSize', event.target.value)}
+                  />
+                </FieldRow>
+              </>
+            ) : null}
+          </TabsContent>
+
+          <TabsContent value="agents" className="flex flex-col gap-3">
+            {config !== null ? (
+              <>
+                <FieldRow
+                  label={S.settings.silenceThreshold}
+                  lockedBy={locked.silenceThresholdMs ?? null}
+                  error={errors.silenceThresholdMs}
                 >
-                  {THEME_NAMES.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
-              </FieldRow>
+                  <Input
+                    defaultValue={String(config.silenceThresholdMs)}
+                    disabled={locked.silenceThresholdMs !== undefined}
+                    onBlur={(event) => void save('silenceThresholdMs', event.target.value)}
+                  />
+                </FieldRow>
 
-              <FieldRow label="Корень worktree" lockedBy={locked.worktreeRoot ?? null} error={errors.worktreeRoot}>
-                <input
-                  className="rounded border border-[var(--h-overlay)] bg-transparent px-2 py-1 text-sm disabled:opacity-50"
-                  defaultValue={config.worktreeRoot}
-                  disabled={locked.worktreeRoot !== undefined}
-                  onBlur={(event) => void save('worktreeRoot', event.target.value)}
-                />
-              </FieldRow>
+                <FieldRow label={S.settings.messageCap} lockedBy={locked.messageRate ?? null} error={errors.messageRate}>
+                  <Input
+                    defaultValue={String(config.messageRate)}
+                    disabled={locked.messageRate !== undefined}
+                    onBlur={(event) => void save('messageRate', event.target.value)}
+                  />
+                </FieldRow>
 
-              <FieldRow label="Шрифт терминала" lockedBy={locked.fontFamily ?? null} error={errors.fontFamily}>
-                <input
-                  className="rounded border border-[var(--h-overlay)] bg-transparent px-2 py-1 text-sm disabled:opacity-50"
-                  defaultValue={config.fontFamily}
-                  disabled={locked.fontFamily !== undefined}
-                  onBlur={(event) => void save('fontFamily', event.target.value)}
-                />
-              </FieldRow>
+                <FieldRow
+                  label={S.settings.resumeRate}
+                  lockedBy={locked.resumeRate ?? null}
+                  error={errors.resumeRate}
+                >
+                  <Input
+                    defaultValue={String(config.resumeRate)}
+                    disabled={locked.resumeRate !== undefined}
+                    onBlur={(event) => void save('resumeRate', event.target.value)}
+                  />
+                </FieldRow>
 
-              <FieldRow label="Кегль терминала (8…32)" lockedBy={locked.fontSize ?? null} error={errors.fontSize}>
-                <input
-                  className="rounded border border-[var(--h-overlay)] bg-transparent px-2 py-1 text-sm disabled:opacity-50"
-                  defaultValue={String(config.fontSize)}
-                  disabled={locked.fontSize !== undefined}
-                  onBlur={(event) => void save('fontSize', event.target.value)}
+                <label className="flex items-center justify-between gap-2 text-sm">
+                  <span>
+                    {S.settings.autoLaunchPending}
+                    {locked.autoLaunch !== undefined ? (
+                      <span className="text-muted-foreground"> {S.settings.lockedBy(locked.autoLaunch)}</span>
+                    ) : null}
+                  </span>
+                  <Switch
+                    checked={config.autoLaunch}
+                    disabled={locked.autoLaunch !== undefined}
+                    onCheckedChange={(checked) => void save('autoLaunch', checked ? 'true' : 'false')}
+                  />
+                </label>
+                {errors.autoLaunch !== undefined ? (
+                  <span className="text-xs text-destructive">{errors.autoLaunch}</span>
+                ) : null}
+
+                <FieldRow label={S.settings.worktreeRoot} lockedBy={locked.worktreeRoot ?? null} error={errors.worktreeRoot}>
+                  <Input
+                    defaultValue={config.worktreeRoot}
+                    disabled={locked.worktreeRoot !== undefined}
+                    onBlur={(event) => void save('worktreeRoot', event.target.value)}
+                  />
+                </FieldRow>
+              </>
+            ) : null}
+          </TabsContent>
+
+          <TabsContent value="notifications" className="flex flex-col gap-3">
+            {uiLoaded ? (
+              <>
+                <NotificationRow
+                  label={S.settings.notifyNeedsYou}
+                  checked={ui.notifications.needsYou}
+                  onCheckedChange={(checked) => toggleNotification('needsYou', checked)}
                 />
-              </FieldRow>
-            </div>
-          ) : null}
-          <div className="mt-4 flex justify-end">
-            <Dialog.Close asChild>
-              <button type="button" className="rounded bg-[var(--h-blue)] px-3 py-1 text-sm text-[var(--h-base)]">
-                Готово
-              </button>
-            </Dialog.Close>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+                <NotificationRow
+                  label={S.settings.notifyFinished}
+                  checked={ui.notifications.finished}
+                  onCheckedChange={(checked) => toggleNotification('finished', checked)}
+                />
+                <NotificationRow
+                  label={S.settings.notifyMail}
+                  checked={ui.notifications.mail}
+                  onCheckedChange={(checked) => toggleNotification('mail', checked)}
+                />
+                <NotificationRow
+                  label={S.settings.notifySound}
+                  checked={ui.notifications.sound}
+                  onCheckedChange={(checked) => toggleNotification('sound', checked)}
+                />
+              </>
+            ) : null}
+            {/* Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */}
+            <p className="text-xs text-muted-foreground">{S.settings.notificationsHint}</p>
+          </TabsContent>
+
+          <TabsContent value="browser" className="flex flex-col gap-3">
+            <Button type="button" variant="outline" className="self-start" onClick={clearBrowserData}>
+              {S.settings.clearBrowserData}
+            </Button>
+          </TabsContent>
+        </Tabs>
+
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button type="button">{S.common.done}</Button>
+          </DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

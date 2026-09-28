@@ -5,11 +5,25 @@
  * убирать некуда, комната без неё не тот пункт меню, который нажали).
  * Создатель всегда `human` — комнату через окно заводит человек, а не агент
  * (спека 6.2 — `create_room` для агентов остаётся MCP-инструментом).
+ *
+ * Кусок 3.4 (спека 6.4): «New room» из меню карточки открывает тот же диалог без
+ * обязательного участника (`requiredMember: null`) — заголовок «New room», и «Create»
+ * доступна, только когда выбран хотя бы один участник.
+ *
+ * Кусок 1.4 плана «облик Orca»: примитивы `ui/dialog`, `ui/input`,
+ * `ui/checkbox`, `ui/button` вместо голого Radix и токенов старой палитры —
+ * список остальных участников многовыборный (не вкл/выкл одной настройки),
+ * поэтому флажок, а не `ui/switch` (как у одиночных булевых полей диалогов).
  */
 
 import { useEffect, useState } from 'react';
-import * as Dialog from '@radix-ui/react-dialog';
 import type { HarnasBridge } from '../../../shared/bridge.js';
+import { decodeIpcError } from '../../../shared/ipc-error.js';
+import { errorText, S } from '../../../shared/strings.js';
+import { Button } from '../../ui/button.js';
+import { Checkbox } from '../../ui/checkbox.js';
+import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from '../../ui/dialog.js';
+import { Input } from '../../ui/input.js';
 
 export interface RoomCandidate {
   id: string;
@@ -22,8 +36,8 @@ export interface CreateRoomDialogProps {
   bridge: HarnasBridge;
   projectPath: string;
   workId: string;
-  /** Сессия, с которой вызвали «Создать комнату с…» — обязательный участник. */
-  requiredMember: { id: string; label: string };
+  /** Сессия, с которой вызвали «Создать комнату с…» — обязательный участник; `null` — из меню карточки. */
+  requiredMember: { id: string; label: string } | null;
   /** Остальные сессии работы — необязательные участники; закрытые недоступны. */
   candidates: RoomCandidate[];
   onOpenChange: (open: boolean) => void;
@@ -62,7 +76,7 @@ export function CreateRoomDialog({
   const submit = async (): Promise<void> => {
     const trimmed = title.trim();
     if (trimmed === '') {
-      setError('нужно название');
+      setError(S.rooms.nameRequired);
       return;
     }
     try {
@@ -70,61 +84,60 @@ export function CreateRoomDialog({
         projectPath,
         workId,
         title: trimmed,
-        members: [requiredMember.id, ...selected],
+        members: requiredMember === null ? [...selected] : [requiredMember.id, ...selected],
       });
       onOpenChange(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      console.warn('[harnas] rooms.create', err);
+      setError(errorText(decodeIpcError(err).code, S.errors.actions.createRoom));
     }
   };
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/50" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 w-96 -translate-x-1/2 -translate-y-1/2 rounded-lg bg-[var(--h-base)] p-4 text-[var(--h-text)] shadow-lg">
-          <Dialog.Title className="text-sm font-medium">Создать комнату с {requiredMember.label}</Dialog.Title>
-          <div className="mt-3 flex flex-col gap-3 text-sm">
-            <label className="flex flex-col gap-1">
-              Название
-              <input
-                className="rounded border border-[var(--h-overlay)] bg-transparent px-2 py-1"
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-              />
-            </label>
-            {candidates.length > 0 ? (
-              <div className="flex flex-col gap-1">
-                <span className="text-xs text-[var(--h-muted)]">Ещё участники</span>
-                <div className="flex flex-wrap gap-3 text-xs">
-                  {candidates.map((candidate) => (
-                    <label key={candidate.id} className={`flex items-center gap-1 ${candidate.closed ? 'opacity-50' : ''}`}>
-                      <input
-                        type="checkbox"
-                        checked={selected.has(candidate.id)}
-                        disabled={candidate.closed}
-                        onChange={() => toggle(candidate)}
-                      />
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent aria-describedby={undefined} className="w-96 max-w-96">
+        <DialogTitle>{requiredMember === null ? S.rooms.newRoomTitle : S.rooms.createTitle(requiredMember.label)}</DialogTitle>
+        <div className="flex flex-col gap-3 text-sm">
+          <label className="flex flex-col gap-1">
+            {S.rooms.nameField}
+            <Input value={title} onChange={(event) => setTitle(event.target.value)} />
+          </label>
+          {candidates.length > 0 ? (
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">{S.rooms.moreParticipants}</span>
+              <div className="flex flex-wrap gap-3 text-xs">
+                {candidates.map((candidate) => (
+                  <label
+                    key={candidate.id}
+                    className={`flex min-w-0 max-w-full items-center gap-1.5 ${candidate.closed ? 'opacity-50' : ''}`}
+                  >
+                    <Checkbox
+                      checked={selected.has(candidate.id)}
+                      disabled={candidate.closed}
+                      onCheckedChange={() => toggle(candidate)}
+                    />
+                    {/* Ярлык до 40 символов без пробелов шире диалога — обрезается (раунд исправлений 2 куска 3.5). */}
+                    <span className="min-w-0 truncate" title={candidate.label}>
                       {candidate.label}
-                    </label>
-                  ))}
-                </div>
+                    </span>
+                  </label>
+                ))}
               </div>
-            ) : null}
-            {error !== null ? <p className="text-[var(--h-red)]">{error}</p> : null}
-          </div>
-          <div className="mt-4 flex justify-end gap-2">
-            <Dialog.Close asChild>
-              <button type="button" className="rounded px-3 py-1 text-[var(--h-subtext)]">
-                Отмена
-              </button>
-            </Dialog.Close>
-            <button type="button" className="rounded bg-[var(--h-blue)] px-3 py-1 text-[var(--h-base)]" onClick={() => void submit()}>
-              Создать
-            </button>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+            </div>
+          ) : null}
+          {error !== null ? <p className="text-destructive">{error}</p> : null}
+        </div>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button type="button" variant="ghost">
+              {S.common.cancel}
+            </Button>
+          </DialogClose>
+          <Button type="button" disabled={requiredMember === null && selected.size === 0} onClick={() => void submit()}>
+            {S.common.create}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

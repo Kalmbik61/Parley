@@ -1,0 +1,43 @@
+/*
+ * Базовые правила документа (спека 4.1, 4.3). Шрифт интерфейса — Geist
+ * Variable, подключён здесь через `@font-face`; сама переменная `--font-sans`
+ * (со всеми фолбэками) уже объявлена в `tokens.css`, чтобы шрифт не дублировался
+ * в двух местах.
+ */
+
+@font-face {
+  font-family: 'Geist';
+  src: url('../assets/fonts/Geist-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  letter-spacing: 0.01em;
+  -webkit-font-smoothing: antialiased;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+/*
+ * Заголовок окна перетаскивает окно сам по себе (спека 5.1), а кнопки, поля и
+ * слот вкладок внутри него — нет, иначе клик по ним двигал бы окно вместо
+ * своего действия. Обычным классом Tailwind это свойство не выразить (нет
+ * готовой утилиты на вендорное `-webkit-app-region`), поэтому — простым CSS.
+ */
+.titlebar-drag {
+  -webkit-app-region: drag;
+}
+
+.titlebar-no-drag {
+  -webkit-app-region: no-drag;
+}

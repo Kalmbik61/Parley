@@ -1,0 +1,454 @@
+/**
+ * Протокольная обвязка одного xterm-терминала вокруг PTY-сессии (кусок 1.11
+ * плана окна, спека 5.2/5.3): подключение, пересинхронизация, поток вывода,
+ * ввод, ресайз с тишиной и отключение при размонтировании. Терминал живёт,
+ * пока есть контейнер в DOM — без него открывать нечего.
+ *
+ * Подключение к хосту (`pty.attach`/`pty.detach`) отдельно от жизни самого
+ * xterm-объекта (кусок 2.1 плана окна, «Видимость»): в сетке панель терминала
+ * может быть смонтирована, но не быть активной вкладкой своей группы —
+ * невидимая вкладка должна отцепиться от хоста, а видимая — подключиться со
+ * свежим снимком, без пересоздания xterm и потери его локального состояния.
+ * Поэтому подключение управляется отдельным эффектом по параметру `visible`.
+ */
+
+import { useEffect, useRef, useState } from 'react';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
+import { WebglAddon } from '@xterm/addon-webgl';
+import { refKey, type SessionRef } from '@harnas/protocol';
+import type { HarnasBridge } from '../../shared/bridge.js';
+import { shouldForwardToTerminal } from '../lib/keys.js';
+import { useHostStore } from '../store/host.js';
+import { useUiStore } from '../store/ui.js';
+import { createLinkProvider, createStatCache, isHttpUrl, type TerminalLink } from './links.js';
+import { webglPolicy } from './webgl-policy.js';
+import { minimumContrastRatio, XTERM_OPTIONS, xtermTheme } from './xterm-themes.js';
+
+/** Тишина после последнего ресайза, прежде чем уйдёт `pty.resize` (спека 5.2). */
+const RESIZE_SILENCE_MS = 50;
+/** Повтор WebGL после потери контекста (спека 8.1). */
+const WEBGL_RETRY_MS = 1_000;
+/**
+ * `SearchAddon` считает совпадения до `highlightLimit` включительно: на единицу больше
+ * предела счётчика, чтобы `SearchBar` отличил «ровно 1000» от «1000+» (спека 8.2).
+ */
+const SEARCH_HIGHLIGHT_LIMIT = 1_001;
+
+export interface UseTerminalOptions {
+  bridge: HarnasBridge;
+  ref: SessionRef;
+  /** `null`, пока контейнер ещё не смонтирован — терминал ждёт. */
+  container: HTMLDivElement | null;
+  fontFamily: string;
+  fontSize: number;
+  /**
+   * Видна ли панель сейчас (активная вкладка своей группы в сетке). По
+   * умолчанию `true` — вне `Workspace` (например, в тестах панели) терминал
+   * ведёт себя как раньше: подключается на монтировании, отключается на
+   * размонтировании.
+   */
+  visible?: boolean;
+  /** Работа терминала (из sessionRef): files.locate(workKey, …), сверка located.root.workKey. */
+  workKey: string;
+  /** sessionCwd(сессия из useWorksStore, projectPath): от него относительные пути. */
+  cwd: string;
+  /** Клик по ссылке и по OSC 8; ⌘-клик или меню решает TerminalSurface. */
+  onLink(link: TerminalLink, event: MouseEvent): void;
+  /** Ввод человека, ушедший в `pty.input` (раунд main-r2): неживой сессии поверхность отвечает тостом. */
+  onInput?(data: string): void;
+  /**
+   * Процесс агента жив (lifecycle не sleeping/closed). По умолчанию `true`. Неживой сессии
+   * подключаться не к чему — экран держит последний вывод; ожила (Resume после «Restart host»,
+   * раунд main-r2) — видимая вкладка подключается сама: новый хост про прежнюю подписку не знает
+   * и `pty.resync` ей не пришлёт.
+   */
+  running?: boolean;
+}
+
+export interface UseTerminalResult {
+  /** Для строки поиска панели (⌘F); `null`, пока терминал не открыт. */
+  search: SearchAddon | null;
+  /**
+   * Сам xterm — для ручки поверхности (`TerminalSurface.tsx`, кусок 2.5):
+   * `focus()` и `scrollToBottom()` из реестра `terminalSurfaces`. `null`, пока
+   * терминал не открыт.
+   */
+  terminal: Terminal | null;
+  /**
+   * Связь окна с хостом оборвалась (раунд lane-r3, п. 2): терминал ввод не принимает, а
+   * поверхность показывает «Disconnected — reconnecting…».
+   */
+  offline: boolean;
+}
+
+function sameRef(a: SessionRef, b: SessionRef): boolean {
+  return a.projectPath === b.projectPath && a.workId === b.workId && a.sessionId === b.sessionId;
+}
+
+export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
+  const { ref, container, fontFamily, fontSize, visible = true } = options;
+  const [search, setSearch] = useState<SearchAddon | null>(null);
+  const [terminal, setTerminal] = useState<Terminal | null>(null);
+  // Поколение xterm: растёт, когда освобождение WebGL бросило и рендерер xterm в неизвестном
+  // состоянии — тогда терминал пересоздаётся (уже на DOM) и переподключается к хосту со снимком.
+  const [generation, setGeneration] = useState(0);
+  // Тёмность — из общего стора (кусок 1.1), не проп: тема терминала должна
+  // меняться на лету при смене `.dark`, без пересоздания хука по цепочке
+  // App → Workspace → TerminalPanel (спека 4.7).
+  const dark = useUiStore((state) => state.dark);
+  // Текущий xterm — для отдельного эффекта смены темы ниже: он не должен
+  // пересоздавать терминал, поэтому держит ссылку на уже созданный объект
+  // вместо того, чтобы быть в зависимостях эффекта создания.
+  const termRef = useRef<Terminal | null>(null);
+
+  // Без связи с хостом (раунд lane-r3, п. 2) ввод не уходит и не копится: `notify` main без
+  // сокета выбросил бы нажатия молча, а воспроизводить их после переподключения нельзя —
+  // состояние агента за это время могло измениться. `connecting` сюда не входит: до первого
+  // подключения окно показывает свой экран, а терминалов ещё нет.
+  const offline = useHostStore((state) => state.status.state === 'disconnected');
+  const offlineRef = useRef(offline);
+  offlineRef.current = offline;
+
+  // `bridge` стабилен на весь жизненный цикл окна (один `window.harnas`, см.
+  // `App.tsx`), но колбэки ниже заведены один раз на монтирование — читают
+  // его через ref, а не через замыкание, из тех же соображений.
+  const bridgeRef = useRef(options.bridge);
+  bridgeRef.current = options.bridge;
+
+  // Видимость для `ResizeObserver` ниже (кусок 2.5): тот заведён один раз на
+  // создание терминала, а размер PTY задаёт только видимая поверхность —
+  // скрытая (в слое их много: все вкладки трёх работ) слала бы хосту чужой
+  // размер. Поэтому колбэк читает свежую видимость через ref.
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
+
+  // Провайдер ссылок и обработчик клавиш заведены один раз на создание xterm, а работа,
+  // папка сессии (worktree появляется позже) и колбэки поверхности могут смениться —
+  // читаются через ref.
+  const linkContextRef = useRef({ workKey: options.workKey, cwd: options.cwd, onLink: options.onLink });
+  linkContextRef.current = { workKey: options.workKey, cwd: options.cwd, onLink: options.onLink };
+  const onInputRef = useRef(options.onInput);
+  onInputRef.current = options.onInput;
+
+  // Мост между эффектом создания xterm (ниже) и эффектом видимости (в конце
+  // функции): подключение к хосту должно переживать переключение вкладок без
+  // пересоздания самого терминала, поэтому `attach`/`detach` живут в ref, а не
+  // вызываются напрямую из эффекта создания.
+  const attachRef = useRef<(() => Promise<void>) | null>(null);
+  const detachRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    if (container === null) return;
+
+    const term = new Terminal({
+      ...XTERM_OPTIONS,
+      theme: xtermTheme(useUiStore.getState().dark),
+      minimumContrastRatio: minimumContrastRatio(useUiStore.getState().dark),
+      fontFamily,
+      fontSize,
+      disableStdin: offlineRef.current,
+      // screenReaderMode не включаем: в нём xterm игнорирует события
+      // insertText, а через них приходят выбор эмодзи, диктовка и буквы с
+      // диакритикой по долгому нажатию в macOS — ввод терялся бы.
+      // Декорации совпадений `SearchAddon` 0.15 — предлагаемый API xterm 5.5
+      // (`registerDecoration`): без опции он бросает, и нет ни подсветки, ни счётчика.
+      allowProposedApi: true,
+      // Ссылки OSC 8: без своего обработчика xterm показал бы `confirm()` с текстом не из `S`
+      // и позвал бы `window.open`. Наружу — только http(s), прочие схемы — ничего.
+      linkHandler: {
+        activate: (event, text) => {
+          if (isHttpUrl(text)) linkContextRef.current.onLink({ kind: 'url', url: text }, event);
+        },
+      },
+    });
+    termRef.current = term;
+
+    const fit = new FitAddon();
+    const searchAddon = new SearchAddon({ highlightLimit: SEARCH_HIGHLIGHT_LIMIT });
+
+    term.loadAddon(fit);
+    term.loadAddon(searchAddon);
+
+    // Ссылки — свой провайдер (`links.ts`) вместо `WebLinksAddon`: тот на каждом наведении
+    // падал `SyntaxError` на флагах `gg`. Кэш `files.locate` — у каждого терминала свой.
+    const statCache = createStatCache((key, absPaths) => bridgeRef.current.files.locate(key, absPaths));
+    const linkProvider = term.registerLinkProvider(
+      createLinkProvider(term, {
+        workKey: () => linkContextRef.current.workKey,
+        cwd: () => linkContextRef.current.cwd,
+        cache: statCache,
+        onLink: (link, event) => linkContextRef.current.onLink(link, event),
+      }),
+    );
+
+    term.open(container);
+
+    // WebGL-аддон подключается только после open: до него у терминала нет
+    // элемента. E2E просят DOM-рендер (`?renderer=dom`), чтобы читать текст
+    // экрана, а не пиксели канвы — тогда подписки на политику нет совсем.
+    // Контекст держат только видимые и шесть последних скрытых (`webgl-policy.ts`).
+    const policyKey = refKey(ref);
+    let disposed = false;
+    let webgl: WebglAddon | null = null;
+    let wantWebgl = false;
+    let webglRetry: ReturnType<typeof setTimeout> | null = null;
+    const releaseWebgl = (): void => {
+      if (webglRetry !== null) clearTimeout(webglRetry);
+      webglRetry = null;
+      // Ссылка обнуляется до dispose: повторное освобождение (политика, потеря контекста,
+      // размонтирование) второй раз его не зовёт.
+      const addon = webgl;
+      webgl = null;
+      if (addon === null) return;
+      try {
+        addon.dispose();
+      } catch (error) {
+        // Наружу — никогда: исключение из подписчика политики всплыло бы в эффект другого
+        // терминала и до его ErrorBoundary. Так падал addon-webgl 0.19 (он для xterm 6: читает
+        // `_core._store`, которого в 5.5 нет); теперь стоит парный 5.5 выпуск 0.18, а здесь —
+        // страховка от любого другого сбоя освобождения.
+        // Рендерер после сорванного dispose мог остаться освобождённым без замены на DOM —
+        // этот xterm больше не рисует, поэтому он пересоздаётся на DOM (без WebGL для ключа).
+        console.warn('[harnas] webgl dispose', error);
+        webglPolicy.forceDom(policyKey);
+        if (!disposed) setGeneration((value) => value + 1);
+      }
+    };
+    const loadWebgl = (): void => {
+      if (webgl !== null) return;
+      try {
+        const addon = new WebglAddon();
+        term.loadAddon(addon);
+        webgl = addon;
+        addon.onContextLoss(() => {
+          releaseWebgl();
+          // Три потери за 60 с — DOM до перезагрузки окна: политика больше не даст want: true.
+          if (webglPolicy.onContextLoss(policyKey) === 'retry') {
+            webglRetry = setTimeout(() => {
+              webglRetry = null;
+              if (wantWebgl) loadWebgl();
+            }, WEBGL_RETRY_MS);
+          }
+        });
+      } catch {
+        // WebGL недоступен (старый драйвер GPU) — xterm остаётся на DOM-рендере.
+      }
+    };
+    const unsubscribeWebgl = domRendererRequested()
+      ? null
+      : webglPolicy.subscribe(policyKey, (want) => {
+          wantWebgl = want;
+          if (want) loadWebgl();
+          else releaseWebgl();
+        });
+    setSearch(searchAddon);
+    setTerminal(term);
+
+    term.attachCustomKeyEventHandler((event) => {
+      // ⌘K и ⌘F сюда не доходят (кусок 6.1b): их ловит обработчик окна в capture-фазе со
+      // `stopPropagation` (`keys/handler.ts`) — `find` и `terminal.clear` в `AppShell`.
+      // ⌘C при выделении — копия в буфер обмена; сама клавиша дальше не идёт
+      // в pty.input, как и любое другое ⌘-сочетание (`lib/keys.ts`).
+      if (event.type === 'keydown' && event.metaKey && event.key.toLowerCase() === 'c' && term.hasSelection()) {
+        void navigator.clipboard?.writeText(term.getSelection());
+      }
+      return shouldForwardToTerminal(event);
+    });
+
+    // Вывод, пришедший раньше снимка (гонка attach ⇄ pty.output), копится и
+    // дописывается следом — иначе на экране мог бы оказаться кусок вывода
+    // до снимка, которому он логически предшествует.
+    let snapshotWritten = false;
+    let pendingOutput: string[] = [];
+    // Подключены ли мы сейчас к выводу хоста — эффект видимости дальше по
+    // файлу включает и выключает это через `attach`/`detach`; вывод и
+    // «просмотрено» (`markSeen` на хосте — побочный эффект `pty.attach`) не
+    // должны доставаться невидимой вкладке (кусок 2.1, тест 5а).
+    let connected = false;
+    // Экран сбрасывается перед КАЖДЫМ повторным снимком (пересинхрон, возврат
+    // видимости, связь вернулась) — иначе новый снимок лёг бы поверх старого экрана.
+    // Самое первое подключение сбрасывать незачем: терминал и так пуст. Сброс — когда
+    // снимок уже пришёл (слияние lane-r3 и main-r2): отказ `pty.attach` (у хоста нет PTY —
+    // после «Restart host» агент мёртв) экран не трогает, последний вывод остаётся виден под
+    // полосой «isn't running». Вывод до снимка всё равно копится, а не пишется.
+    let everConnected = false;
+    // Номер последнего `attach`: два подключения могут идти разом (видимость, `pty.resync`,
+    // возврат связи), и ответ прежнего, пришедший позже, дописал бы свой снимок поверх
+    // свежего без сброса — экран удвоился бы (fix-tests2). Пишет только последний.
+    let attachSeq = 0;
+
+    const attach = async (): Promise<void> => {
+      const seq = ++attachSeq;
+      const resetBeforeSnapshot = everConnected;
+      everConnected = true;
+      connected = true;
+      snapshotWritten = false;
+      pendingOutput = [];
+      try {
+        const { snapshot, cols, rows } = await bridgeRef.current.call('pty.attach', { ref });
+        if (disposed || !connected || seq !== attachSeq) return;
+        if (resetBeforeSnapshot) term.reset();
+        term.resize(cols, rows);
+        term.write(snapshot);
+        snapshotWritten = true;
+        for (const chunk of pendingOutput) term.write(chunk);
+        pendingOutput = [];
+        // Размер окна главнее размера хоста (раунд исправлений 1, находка
+        // B№2): у только что созданного PTY хост ещё не получал ни одного
+        // pty.resize и отвечает своим DEFAULT_SIZE (packages/host/src/pty/
+        // pty-manager.ts) — тот не совпадает с реальным размером контейнера,
+        // и терминал недозаполняет панель до следующего ресайза окна. fit()
+        // после снимка подбирает актуальный размер по контейнеру; если он не
+        // совпал с тем, что применили выше, сообщаем хосту наш размер прямым
+        // pty.resize — не через debounce-таймер ниже, это разовая поправка
+        // сразу после attach, а не серия ресайзов контейнера.
+        fit.fit();
+        if (term.cols !== cols || term.rows !== rows) {
+          bridgeRef.current.notify('pty.resize', { ref, cols: term.cols, rows: term.rows });
+        }
+      } catch {
+        // Хост ещё не завёл `pty.attach` (куски 1.6/1.7) или живого PTY у сессии нет —
+        // экран остаётся как был (пустым или с последним выводом) вместо падения панели.
+      }
+    };
+
+    const detach = (): void => {
+      if (!connected) return;
+      connected = false;
+      bridgeRef.current.call('pty.detach', { ref }).catch(() => {
+        // Отключение — лучшее усилие: сокет мог уже закрыться раньше нас.
+      });
+    };
+
+    attachRef.current = attach;
+    detachRef.current = detach;
+
+    const dataDisposable = term.onData((data) => {
+      // `disableStdin` не держит вставку и программные `paste` — проверка и здесь.
+      if (offlineRef.current) return;
+      bridgeRef.current.notify('pty.input', { ref, data });
+      onInputRef.current?.(data);
+    });
+
+    const unsubscribeOutput = bridgeRef.current.on('pty.output', (event) => {
+      if (!sameRef(event.ref, ref) || !connected) return;
+      if (!snapshotWritten) {
+        pendingOutput.push(event.data);
+        return;
+      }
+      term.write(event.data);
+    });
+
+    const unsubscribeResync = bridgeRef.current.on('pty.resync', (event) => {
+      if (!sameRef(event.ref, ref)) return;
+      void attach();
+    });
+
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    const resizeObserver = new ResizeObserver(() => {
+      // Скрытая поверхность изменения размера пропускает: при появлении
+      // `attach()` сам сделает `fit()` и при расхождении с хостом один
+      // `pty.resize` (правило 1.3) — отдельный resize тут дал бы второй SIGWINCH.
+      if (!visibleRef.current) return;
+      fit.fit();
+      if (resizeTimer !== null) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        resizeTimer = null;
+        bridgeRef.current.notify('pty.resize', { ref, cols: term.cols, rows: term.rows });
+      }, RESIZE_SILENCE_MS);
+    });
+    resizeObserver.observe(container);
+    fit.fit();
+
+    return () => {
+      disposed = true;
+      if (resizeTimer !== null) clearTimeout(resizeTimer);
+      resizeObserver.disconnect();
+      dataDisposable.dispose();
+      unsubscribeOutput();
+      unsubscribeResync();
+      linkProvider.dispose();
+      unsubscribeWebgl?.();
+      if (unsubscribeWebgl !== null) webglPolicy.forget(policyKey);
+      releaseWebgl();
+      // Само отключение от хоста — забота эффекта видимости ниже: React чистит
+      // эффекты одного рендера в порядке их объявления (этот — первым), так
+      // что на размонтировании эффект видимости всё ещё дозвонится до
+      // `pty.detach` через `detachRef` следом за этой функцией — рефы нарочно
+      // не обнуляются здесь, иначе к его цепочке "если видима — отключиться"
+      // подключаться было бы уже не от чего, и на каждое закрытие панели
+      // осело бы на один `pty.detach` меньше, чем нужно.
+      setSearch(null);
+      setTerminal(null);
+      termRef.current = null;
+      term.dispose();
+    };
+    // Терминал заводится заново только при смене контейнера или сессии.
+    // Шрифт (`fontFamily`/`fontSize`) на лету не подхватывается: полей мало, а
+    // пересоздавать терминал на каждый ререндер `App`/`SettingsDialog` было бы
+    // заметнее пользователю, чем помощь от смены шрифта без реаттача. Тема —
+    // исключение (спека 4.7): её меняет отдельный эффект ниже через
+    // `term.options`, без пересоздания.
+  }, [container, ref.projectPath, ref.workId, ref.sessionId, generation]);
+
+  // Смена темы на лету при переключении `.dark`, без пересоздания терминала
+  // (спека 4.7): `dark` нарочно не входит в зависимости эффекта создания
+  // выше — иначе каждое переключение темы пересоздавало бы xterm и роняло
+  // его локальное состояние (скролл, выделение).
+  useEffect(() => {
+    const term = termRef.current;
+    if (term === null) return;
+    term.options.theme = xtermTheme(dark);
+    term.options.minimumContrastRatio = minimumContrastRatio(dark);
+  }, [dark]);
+
+  // Подключение к хосту следует видимости, а не монтированию: невидимая
+  // вкладка отцепляется (без потери самого xterm выше), видимая — цепляется
+  // заново со свежим снимком (спека 5.1, «Видимость», кусок 2.1). Эффект
+  // сам обязан быть в паре с созданием терминала — тот же список
+  // зависимостей плюс `visible`, иначе после пересоздания терминала (эффект
+  // выше) с тем же `visible` подключения бы не случилось вовсе.
+  const running = options.running ?? true;
+  const runningRef = useRef(running);
+  runningRef.current = running;
+  useEffect(() => {
+    // Без связи цепляться не к кому: переподключение ниже само подключит видимую вкладку.
+    if (visible && running && !offlineRef.current) void attachRef.current?.();
+    return () => detachRef.current?.();
+  }, [visible, running, container, ref.projectPath, ref.workId, ref.sessionId, generation]);
+
+  // Связь оборвалась и вернулась (раунд lane-r3, п. 2): новое подключение main хосту ничего
+  // не должно — прежний `pty.attach` жил на старом сокете. Видимая вкладка живой сессии
+  // цепляется заново свежим снимком; скрытая — при показе, эффектом выше. Неживой (main-r2)
+  // цепляться не к чему: экран держит последний вывод, оживёт — подключит тот же эффект выше.
+  // После «Restart host» снимок работ в первый миг ещё прежний (сессия «жива»): тогда
+  // `pty.attach` нового хоста отвечает not_found, и экран остаётся как был (`attach`).
+  const wasOffline = useRef(offline);
+  useEffect(() => {
+    const term = termRef.current;
+    if (term !== null) term.options.disableStdin = offline;
+    const reconnected = wasOffline.current && !offline;
+    wasOffline.current = offline;
+    if (reconnected && visibleRef.current && runningRef.current) void attachRef.current?.();
+  }, [offline]);
+
+  // Видимость — политике WebGL (спека 8.1). Эффект после эффекта создания: подписка уже
+  // есть, и после пересоздания xterm (там `forget`) видимость сообщается заново.
+  useEffect(() => {
+    if (container === null || domRendererRequested()) return;
+    webglPolicy.update(refKey(ref), visible);
+  }, [visible, container, ref.projectPath, ref.workId, ref.sessionId, generation]);
+
+  return { search, terminal, offline };
+}
+
+/** Окно открыто с `?renderer=dom` — так его открывает main при HARNAS_TERMINAL_RENDERER=dom. */
+function domRendererRequested(): boolean {
+  try {
+    return new URLSearchParams(globalThis.location?.search ?? '').get('renderer') === 'dom';
+  } catch {
+    return false;
+  }
+}

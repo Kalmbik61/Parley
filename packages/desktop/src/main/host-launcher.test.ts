@@ -1,11 +1,15 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
 
 const require = createRequire(import.meta.url);
+const run = promisify(execFile);
 
 /**
  * `resolveNodeBin` ищет `node` в PATH логин-шелла — не в `process.execPath`
@@ -106,6 +110,70 @@ describe('resolveHostEntry', () => {
 });
 
 /**
+ * `Resources/host` раскладывает `dist` через `pnpm deploy`: node-pty там — свежая копия из стора
+ * pnpm, где у `prebuilds/<платформа>/spawn-helper` нет бита исполнения (так он лежит в тарболе
+ * node-pty 1.1.0). Корневой postinstall чинил только копии дерева установки — и в собранном `.app`
+ * любой `sessions.create` падал: posix_spawn хелпера → EACCES, node-pty → «posix_spawnp failed.».
+ */
+describe('dist: spawn-helper node-pty у хоста .app исполняемый', () => {
+  const desktopDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+  const fixScript = path.resolve(desktopDir, '../../scripts/fix-node-pty-perms.mjs');
+  let home: string;
+
+  beforeEach(async () => {
+    home = await mkdtemp(path.join(tmpdir(), 'hl-'));
+  });
+
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it('dist чинит права копии хоста — после pnpm deploy и до electron-builder', async () => {
+    const pkg = JSON.parse(await readFile(path.join(desktopDir, 'package.json'), 'utf8')) as {
+      scripts: { dist: string };
+    };
+    const steps = pkg.scripts.dist.split('&&').map((step) => step.trim());
+
+    const deploy = steps.findIndex(
+      (step) => step.includes('@harnas/host deploy') && step.includes('out/host'),
+    );
+    const fix = steps.findIndex(
+      (step) => step.includes('scripts/fix-node-pty-perms.mjs') && step.includes('out/host'),
+    );
+    const pack = steps.findIndex((step) => step.startsWith('electron-builder'));
+
+    expect(deploy).toBeGreaterThanOrEqual(0);
+    expect(fix).toBeGreaterThan(deploy);
+    expect(pack).toBeGreaterThan(fix);
+  });
+
+  it('скрипт с каталогом ставит +x spawn-helper у node-pty этого каталога (раскладка pnpm deploy)', async () => {
+    const root = path.join(home, 'host');
+    const store = path.join('.pnpm', 'node-pty@1.1.0', 'node_modules', 'node-pty');
+    const nodePty = path.join(root, 'node_modules', store);
+    const helpers = ['darwin-arm64', 'darwin-x64'].map((platform) =>
+      path.join(nodePty, 'prebuilds', platform, 'spawn-helper'),
+    );
+    for (const helper of helpers) {
+      await mkdir(path.dirname(helper), { recursive: true });
+      await writeFile(helper, '');
+      await chmod(helper, 0o644);
+    }
+    await symlink(store, path.join(root, 'node_modules', 'node-pty'));
+
+    await run(process.execPath, [fixScript, root]);
+
+    for (const helper of helpers) {
+      expect((await stat(helper)).mode & 0o111).toBe(0o111);
+    }
+  });
+
+  it('каталог без node-pty — скрипт падает, а не пропускает молча', async () => {
+    await expect(run(process.execPath, [fixScript, home])).rejects.toMatchObject({ code: 1 });
+  });
+});
+
+/**
  * Хост отсоединён от окна, и раньше его stderr уходил в никуда: упавший хост
  * не оставлял ни строчки — ни в `host.log` (падение мимо логгера), ни где-то
  * ещё. Теперь трассировка падения дописывается в файл рядом с логом.
@@ -131,5 +199,16 @@ describe('spawnHost', () => {
     await expect
       .poll(async () => readFile(stderrFile, 'utf8').catch(() => ''), { timeout: 4000 })
       .toContain('хост упал');
+  });
+
+  it('возвращает признак жизни процесса: жив до выхода, после выхода — нет (lane-r4, п. 2)', async () => {
+    const entry = path.join(home, 'short.mjs');
+    await writeFile(entry, 'setTimeout(() => {}, 300);\n');
+    const stderrFile = path.join(home, 'host', 'host.err');
+
+    const spawned = spawnHost({ env: process.env, entry, nodeBin: process.execPath, stderrFile });
+
+    expect(spawned.isRunning()).toBe(true);
+    await expect.poll(() => spawned.isRunning(), { timeout: 4000 }).toBe(false);
   });
 });

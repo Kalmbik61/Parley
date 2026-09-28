@@ -1,64 +1,64 @@
 import { Menu, type BrowserWindow, type MenuItemConstructorOptions } from 'electron';
-import type { MenuAction } from '../shared/bridge.js';
-
-const WORK_ACCELERATORS: ReadonlyArray<readonly [MenuAction, string]> = [
-  ['work-1', 'CmdOrCtrl+1'],
-  ['work-2', 'CmdOrCtrl+2'],
-  ['work-3', 'CmdOrCtrl+3'],
-  ['work-4', 'CmdOrCtrl+4'],
-  ['work-5', 'CmdOrCtrl+5'],
-  ['work-6', 'CmdOrCtrl+6'],
-  ['work-7', 'CmdOrCtrl+7'],
-  ['work-8', 'CmdOrCtrl+8'],
-  ['work-9', 'CmdOrCtrl+9'],
-];
+import { ACTIONS, type ActionDef, type ActionId, type MenuName } from '../shared/keybindings.js';
+import { S } from '../shared/strings.js';
 
 /**
- * Системное меню — единственный способ дотянуться до рендерера с клавиатуры
- * вне фокуса терминала (тот сам ловит нажатия). Действия этапа 2 (⌘D, ⇧⌘D,
- * ⌘[, ⌘], ⌘K) уже висят на пунктах меню, но в этапе 1 рендерер их не слушает.
+ * Пункт реестра (кусок 6.1b, спека 9.6). Сочетание показывается, но сочетаниями владеет
+ * обработчик рендерера (`renderer/keys/handler.ts`). `registerAccelerator: false` на macOS
+ * не действует (`@platform linux,win32`): ⌘-сочетание сначала получает страница, а пункт —
+ * только необработанное ею, то есть отданное полю или не узнанное. Такой клик приходит с
+ * `triggeredByAccelerator` и ничего не шлёт: иначе ⌘K в сайдбаре чистил бы терминал в обход
+ * правил фокуса. Мышью — `menu:action`, как раньше.
  */
-export function createAppMenu(getFocusedWindow: () => BrowserWindow | null): Menu {
-  const send = (action: MenuAction): void => {
-    getFocusedWindow()?.webContents.send('menu:action', action);
+function registryItem(action: ActionDef, send: (id: ActionId) => void): MenuItemConstructorOptions {
+  return {
+    label: action.title,
+    ...(action.keys === null ? {} : { accelerator: action.keys }),
+    registerAccelerator: false,
+    click: (_item, _window, event) => {
+      if (event.triggeredByAccelerator !== true) send(action.id);
+    },
   };
+}
 
-  const template: MenuItemConstructorOptions[] = [
+function itemsOf(menu: MenuName, send: (id: ActionId) => void): MenuItemConstructorOptions[] {
+  return ACTIONS.filter((action) => action.menu === menu).map((action) => registryItem(action, send));
+}
+
+/** Системное меню из реестра: порядок пунктов — порядок `ACTIONS`. */
+export function buildMenuTemplate(send: (id: ActionId) => void): MenuItemConstructorOptions[] {
+  return [
     {
       label: 'Harnas',
-      submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'quit' }],
+      submenu: [{ role: 'about' }, { type: 'separator' }, ...itemsOf('app', send), { type: 'separator' }, { role: 'quit' }],
     },
     {
-      label: 'Правка',
-      submenu: [{ role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }],
-    },
-    {
-      label: 'Сессия',
+      label: S.menu.edit,
+      // Родные роли — с зарегистрированными сочетаниями: работают в любом сфокусированном поле.
       submenu: [
-        { label: 'Новая сессия', accelerator: 'CmdOrCtrl+T', click: () => send('new-session') },
-        { label: 'Закрыть панель', accelerator: 'CmdOrCtrl+W', click: () => send('close-panel') },
-        { label: 'Разделить справа', accelerator: 'CmdOrCtrl+D', click: () => send('split-right') },
-        { label: 'Разделить снизу', accelerator: 'CmdOrCtrl+Shift+D', click: () => send('split-down') },
+        { role: 'undo' },
+        { role: 'redo' },
         { type: 'separator' },
-        { label: 'Предыдущая панель', accelerator: 'CmdOrCtrl+[', click: () => send('prev-panel') },
-        { label: 'Следующая панель', accelerator: 'CmdOrCtrl+]', click: () => send('next-panel') },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
         { type: 'separator' },
-        { label: 'Палитра команд', accelerator: 'CmdOrCtrl+K', click: () => send('palette') },
-        { label: 'Найти', accelerator: 'CmdOrCtrl+F', click: () => send('find') },
-        { label: 'Настройки', accelerator: 'CmdOrCtrl+,', click: () => send('settings') },
-        { type: 'separator' },
-        ...WORK_ACCELERATORS.map(
-          ([action, accelerator]): MenuItemConstructorOptions => ({
-            label: `Работа ${action.slice(-1)}`,
-            accelerator,
-            click: () => send(action),
-          }),
-        ),
+        ...itemsOf('edit', send),
       ],
     },
+    { label: S.menu.view, submenu: itemsOf('view', send) },
+    { label: S.menu.workspace, submenu: itemsOf('workspace', send) },
+    { label: S.menu.tab, submenu: itemsOf('tab', send) },
+    { label: S.menu.terminal, submenu: itemsOf('terminal', send) },
   ];
+}
 
-  const menu = Menu.buildFromTemplate(template);
+export function createAppMenu(getFocusedWindow: () => BrowserWindow | null): Menu {
+  const send = (id: ActionId): void => {
+    getFocusedWindow()?.webContents.send('menu:action', id);
+  };
+  const menu = Menu.buildFromTemplate(buildMenuTemplate(send));
   Menu.setApplicationMenu(menu);
   return menu;
 }

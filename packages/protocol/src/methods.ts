@@ -1,12 +1,15 @@
 import { z } from 'zod';
-import type { HarnasConfig, MergeResult, WorktreeDiff } from '@harnas/core';
-import type { SessionRef, WorksSnapshot } from './types.js';
+import type { HarnasConfig, MergeCheck, MergeResult, ProjectChanges, WorktreeDiff } from '@harnas/core';
+import type { SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 export const sessionRef = z.object({
   projectPath: z.string(),
   workId: z.string(),
   sessionId: z.string(),
 });
+
+/** Края названия работы: пробелы и невидимые символы формата (ZWSP, ZWNJ, ZWJ, WJ, BOM). */
+const TITLE_EDGES = /^[\s\u200B-\u200D\u2060\uFEFF]+|[\s\u200B-\u200D\u2060\uFEFF]+$/g;
 
 /** Схемы параметров запросов (с ответом, с числовым `id`). */
 export const METHODS = {
@@ -17,6 +20,30 @@ export const METHODS = {
   'works.list': z.object({}),
   'works.create': z.object({ projectPath: z.string(), title: z.string(), goal: z.string() }),
   'works.delete': z.object({ projectPath: z.string(), workId: z.string() }),
+  // Предел — по кодовым точкам: `.max(120)` zod считает UTF-16, эмодзи шло бы за два.
+  // Сырой предел 480 единиц UTF-16 (4 × 120) — `title.length`, O(1): отсекает
+  // заведомый мусор до обрезки и обхода по кодовым точкам. Обрезка — та же, что
+  // у `renameWork` в core: невидимые символы формата по краям считаются
+  // пробелами, иначе название из одних ZWSP прошло бы.
+  'works.rename': z.object({
+    projectPath: z.string(),
+    workId: z.string(),
+    title: z
+      .string()
+      .refine((title) => title.length <= 480, { abort: true })
+      .transform((title) => title.replace(TITLE_EDGES, ''))
+      .pipe(
+        z
+          .string()
+          .min(1)
+          .refine((title) => [...title].length <= 120),
+      ),
+  }),
+  'works.setStatus': z.object({
+    projectPath: z.string(),
+    workId: z.string(),
+    status: z.enum(['active', 'done', 'archived']),
+  }),
   'sessions.create': z.object({
     projectPath: z.string(),
     workId: z.string().nullable(),
@@ -54,26 +81,45 @@ export const METHODS = {
     kind: z.enum(['note', 'question', 'decision']),
   }),
   'worktrees.available': z.object({ projectPath: z.string() }),
-  'worktrees.diff': z.object({ ref: sessionRef }),
+  // `patch` только добавлен: старый хост его отбросит, старое окно не шлёт. false — `patch: ''`.
+  'worktrees.diff': z.object({ ref: sessionRef, patch: z.boolean().optional() }),
   'worktrees.commit': z.object({ ref: sessionRef, message: z.string().min(1) }),
   'worktrees.merge': z.object({ ref: sessionRef }),
   'worktrees.discard': z.object({ ref: sessionRef, force: z.boolean() }),
+  // Этап 8: конфликты до слияния и изменения папки проекта для сессии без worktree (спека 3.2, 11.5).
+  'worktrees.mergeCheck': z.object({ ref: sessionRef }),
+  'changes.project': z.object({ ref: sessionRef, patch: z.boolean().optional() }),
+  'changes.commitProject': z.object({ ref: sessionRef, message: z.string().min(1).max(10000) }),
+  // Пачка окна — до 500 id (500 мс тишины); пустую слать незачем.
+  'mail.markRead': z.object({
+    projectPath: z.string(),
+    workId: z.string(),
+    messageIds: z.array(z.string()).min(1).max(500),
+  }),
+  // Предел 64 КиБ хост считает в байтах UTF-8 после очистки (спека 8.6, шаг 2): схема
+  // байтов не видит, поэтому здесь только «не пусто».
+  'pty.send': z.object({ ref: sessionRef, text: z.string().min(1), submit: z.boolean() }),
 } as const;
 
 // Уведомления клиента — без id и без ответа: их слишком много, чтобы ждать каждое.
 export const NOTIFICATIONS = {
   'pty.input': z.object({ ref: sessionRef, data: z.string() }),
   'pty.resize': z.object({ ref: sessionRef, cols: z.number().int().min(2), rows: z.number().int().min(2) }),
+  // Окно видит терминал сессии — «просмотрено» ставит видимость, а не подключение (спека 7.2).
+  'activity.seen': z.object({ ref: sessionRef }),
 } as const;
 
 export interface Results {
-  hello: { hostVersion: string; protocol: number; pid: number };
+  /** `methods` — все методы и уведомления хоста; нет поля — хост до этапа 3 (спека 3.2). */
+  hello: { hostVersion: string; protocol: number; pid: number; methods?: string[] };
   'host.info': { hostVersion: string; pid: number; startedAt: string; clients: number; liveSessions: number };
   'host.shutdown': { ok: true };
   'providers.list': { providers: Array<{ id: string; label: string; available: boolean }> };
   'works.list': WorksSnapshot;
   'works.create': { workId: string };
   'works.delete': { ok: true };
+  'works.rename': { ok: true };
+  'works.setStatus': { ok: true };
   'sessions.create': { ref: SessionRef };
   'sessions.resume': { ok: true };
   'sessions.stop': { ok: true };
@@ -95,6 +141,11 @@ export interface Results {
   'worktrees.commit': { commit: string };
   'worktrees.merge': MergeResult;
   'worktrees.discard': { ok: true };
+  'worktrees.mergeCheck': MergeCheck;
+  'changes.project': ProjectChanges;
+  'changes.commitProject': { commit: string };
+  'mail.markRead': { marked: number };
+  'pty.send': SendResult;
 }
 
 export type MethodName = keyof typeof METHODS;

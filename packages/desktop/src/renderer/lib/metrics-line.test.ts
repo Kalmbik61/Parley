@@ -19,9 +19,9 @@ describe('formatMetricsLine', () => {
     expect(formatMetricsLine(metrics())).toBe('— · —');
   });
 
-  it('тысячи — с «к», минуты — с «м»', () => {
+  it('тысячи — с «k», минуты — с «m»', () => {
     const line = formatMetricsLine(metrics({ tokensIn: 1200, tokensOut: 845, durationMs: 12 * 60_000 }));
-    expect(line).toBe('↑1.2к ↓845 · 12м');
+    expect(line).toBe('↑1.2k ↓845 · 12m');
   });
 
   it('нулевые ▤ и ⋮ не печатаются', () => {
@@ -34,6 +34,6 @@ describe('formatMetricsLine', () => {
     const line = formatMetricsLine(
       metrics({ tokensIn: 1200, tokensOut: 845, durationMs: 12 * 60_000, subagents: 1, unread: 1 }),
     );
-    expect(line).toBe('↑1.2к ↓845 · 12м · ▤1 · ⋮1');
+    expect(line).toBe('↑1.2k ↓845 · 12m · ▤1 · ⋮1');
   });
 });

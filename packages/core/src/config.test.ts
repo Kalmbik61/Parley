@@ -35,8 +35,8 @@ describe('loadConfig', () => {
       resumeRate: 6,
       autoLaunch: true,
       theme: 'mocha',
-      fontFamily: 'Menlo',
-      fontSize: 13,
+      fontFamily: "'SF Mono', Menlo, monospace",
+      fontSize: 14,
       worktreeRoot: '~/harnas/worktrees',
     });
     expect(loaded.config).toEqual(DEFAULT_CONFIG);
@@ -67,8 +67,8 @@ describe('loadConfig', () => {
       resumeRate: 6,
       autoLaunch: false,
       theme: 'mocha',
-      fontFamily: 'Menlo',
-      fontSize: 13,
+      fontFamily: "'SF Mono', Menlo, monospace",
+      fontSize: 14,
       worktreeRoot: '~/harnas/worktrees',
     });
     expect(fromFile.warning).toBeNull();
@@ -94,8 +94,8 @@ describe('loadConfig', () => {
       resumeRate: 6,
       autoLaunch: true,
       theme: 'mocha',
-      fontFamily: 'Menlo',
-      fontSize: 13,
+      fontFamily: "'SF Mono', Menlo, monospace",
+      fontSize: 14,
       worktreeRoot: '~/harnas/worktrees',
     });
     expect(fromEnv.warning).toBeNull();

@@ -18,6 +18,8 @@ export interface Screen {
   write(data: string): void;
   resize(cols: number, rows: number): void;
   snapshot(): string;
+  /** Агент включил bracketed paste (`ESC[?2004h`): многострочный pty.send идёт вставкой (спека 8.6). */
+  bracketedPaste(): boolean;
   dispose(): void;
 }
 
@@ -47,6 +49,10 @@ export function createScreen(cols: number, rows: number, scrollback = DEFAULT_SC
       // область, а переподключённый клиент должен получить всю прокрутку,
       // ограниченную буфером терминала (тест на потоке в десятки мегабайт).
       return serializer.serialize({ scrollback });
+    },
+
+    bracketedPaste() {
+      return terminal.modes.bracketedPasteMode;
     },
 
     dispose() {

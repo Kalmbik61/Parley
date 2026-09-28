@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -15,7 +15,10 @@ import {
   pruneWorksIndex,
   readMap,
   readWorksIndex,
+  renameWork,
+  setWorkStatus,
   updateMap,
+  WorkNotFoundError,
   workPaths,
   worksIndexPath,
 } from './store.js';
@@ -127,6 +130,19 @@ describe('createWork', () => {
     const first = await readMap(project, 'w-0001');
     expect(first.work.title).toBe('Первая');
     expect(first.sessions).toHaveLength(1);
+  });
+
+  it('запись в индексе появляется только вместе с картой: карта не записалась — индекс не тронут', async () => {
+    // Наблюдатель HARNAS_HOME читает список по записи индекса: запись без карты он
+    // пропустил бы, и первая работа нового проекта не появилась бы у хоста (кусок 3.5).
+    const lock = workPaths(project, 'w-0001').lock;
+    await mkdir(path.dirname(lock), { recursive: true });
+    await writeFile(lock, '');
+
+    await expect(createWork(project, { title: 'Первая' }, { lockTimeoutMs: 50 })).rejects.toThrow(
+      /не снята/,
+    );
+    expect((await readWorksIndex()).works).toEqual([]);
   });
 });
 
@@ -320,6 +336,120 @@ describe('updateMap', () => {
     expect(index.works.map((work) => work.id).sort()).toEqual(['w-0001', 'w-0002']);
     expect(index.works.map((work) => work.title).sort()).toEqual(['вторая', 'первая']);
   }, 60_000);
+});
+
+/** Отодвигает `work.updatedAt` в прошлое прямо на диске: иначе «не сдвинулся» не отличить от той же миллисекунды. */
+async function ageWork(workId: string, at = '2020-01-01T00:00:00.000Z'): Promise<string> {
+  const file = workPaths(project, workId).map;
+  const raw = JSON.parse(await readFile(file, 'utf8')) as WorkMap;
+  raw.work.updatedAt = at;
+  await writeFile(file, JSON.stringify(raw), 'utf8');
+  return at;
+}
+
+describe('updateMap: опция touch', () => {
+  it('touch: false не меняет work.updatedAt, без опции — сдвигает', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const old = await ageWork('w-0001');
+
+    const quiet = await updateMap(project, 'w-0001', (map) => (map.work.goal = 'тихо'), {
+      touch: false,
+    });
+    expect(quiet.work.updatedAt).toBe(old);
+    expect((await readMap(project, 'w-0001')).work.updatedAt).toBe(old);
+    expect((await readWorksIndex()).works[0]?.updatedAt).toBe(old);
+
+    const loud = await updateMap(project, 'w-0001', (map) => (map.work.goal = 'громко'));
+    expect(loud.work.updatedAt).not.toBe(old);
+  });
+});
+
+describe('updateMap: работы нет — WorkNotFoundError', () => {
+  it('работы нет с самого начала', async () => {
+    await expect(updateMap(project, 'w-9999', () => {})).rejects.toBeInstanceOf(WorkNotFoundError);
+  });
+
+  it('работа удалена, пока запись ждала map.lock (раунд исправлений 1, находка 2)', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, 'w-0001');
+    // Лок занят «другим писателем» — запись встанет в ожидание уже после проверки карты.
+    const held = await open(paths.lock, 'wx');
+    const pending = updateMap(project, 'w-0001', (map) => (map.work.goal = 'x'));
+    const outcome = pending.then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await held.close();
+    await rm(paths.dir, { recursive: true, force: true });
+
+    expect(await outcome).toBeInstanceOf(WorkNotFoundError);
+  });
+});
+
+describe('renameWork', () => {
+  it('обрезает пробелы и не сдвигает work.updatedAt', async () => {
+    await createWork(project, { title: 'Старая' });
+    const old = await ageWork('w-0001');
+
+    const map = await renameWork(project, 'w-0001', '  Новая  ');
+
+    expect(map.work.title).toBe('Новая');
+    const disk = await readMap(project, 'w-0001');
+    expect(disk.work.title).toBe('Новая');
+    expect(disk.work.updatedAt).toBe(old);
+    expect((await readWorksIndex()).works[0]?.title).toBe('Новая');
+  });
+
+  it('пустое название и 121 символ — ошибка, карта не меняется', async () => {
+    await createWork(project, { title: 'Старая' });
+
+    await expect(renameWork(project, 'w-0001', '')).rejects.toThrow(
+      'название работы: 1–120 символов',
+    );
+    await expect(renameWork(project, 'w-0001', '   ')).rejects.toThrow(
+      'название работы: 1–120 символов',
+    );
+    await expect(renameWork(project, 'w-0001', 'я'.repeat(121))).rejects.toThrow(
+      'название работы: 1–120 символов',
+    );
+    expect((await readMap(project, 'w-0001')).work.title).toBe('Старая');
+  });
+
+  it('невидимые символы формата (U+200B/C/D, U+2060, U+FEFF) — как пробелы: пустое отвергается, края обрезаются', async () => {
+    await createWork(project, { title: 'Старая' });
+    for (const invisible of ['\u200B\u200B\u200B', '\u200C', '\u200D', '\u2060', '\uFEFF', ' \u200B \u2060 ']) {
+      await expect(renameWork(project, 'w-0001', invisible)).rejects.toThrow(
+        'название работы: 1–120 символов',
+      );
+    }
+    const map = await renameWork(project, 'w-0001', '\u200B Новая\u200Dx \u2060');
+    // ZWJ внутри названия (эмодзи-последовательности) остаётся — обрезаются только края.
+    expect(map.work.title).toBe('Новая\u200Dx');
+  });
+
+  it('120 эмодзи принимаются: символы считаются по кодовым точкам', async () => {
+    await createWork(project, { title: 'Старая' });
+    const title = '😀'.repeat(120);
+    expect(title.length).toBe(240);
+
+    const map = await renameWork(project, 'w-0001', title);
+    expect(map.work.title).toBe(title);
+  });
+});
+
+describe('setWorkStatus', () => {
+  it('archived пишет статус и не сдвигает work.updatedAt', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const old = await ageWork('w-0001');
+
+    await setWorkStatus(project, 'w-0001', 'archived');
+
+    const disk = await readMap(project, 'w-0001');
+    expect(disk.work.status).toBe('archived');
+    expect(disk.work.updatedAt).toBe(old);
+    expect((await readWorksIndex()).works[0]).toMatchObject({ status: 'archived', updatedAt: old });
+  });
 });
 
 describe('readWorksIndex', () => {

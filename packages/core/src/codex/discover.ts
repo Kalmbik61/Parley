@@ -9,8 +9,13 @@ import path from 'node:path';
  * ровно как `~/.claude/.credentials.json`.
  */
 export function defaultCodexRoot(): string {
+  const override = process.env[CODEX_SESSIONS_DIR_ENV];
+  if (override !== undefined && override !== '') return override;
   return path.join(homedir(), '.codex', 'sessions');
 }
+
+/** Переопределение корня истории Codex — только для тестов, как `HARNAS_CLAUDE_PROJECTS_DIR` (lane-r3, п. 1). */
+export const CODEX_SESSIONS_DIR_ENV = 'HARNAS_CODEX_SESSIONS_DIR';
 
 export interface DiscoveredCodexSession {
   file: string;

@@ -42,6 +42,18 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
   // Тихий старт: задачи нет, и пустая строка «Задача:» только сбивала бы с
   // толку — её напишет пользователь первым сообщением (раздел B плана).
   if (session.task !== '') lines.push(`Задача: ${session.task}`, '');
+  // Без этой строки агент в worktree не знает, на какой он ветке и во что её
+  // вольют, а правила (не переключать ветку, не пушить) лежат только в гиде.
+  // Путь в плане есть всегда: `createdAt: null` значит лишь, что хост создаст
+  // папку перед запуском, — к чтению брифа агентом она уже на месте.
+  if (session.worktree !== null) {
+    const { branch, base, path: folder } = session.worktree;
+    lines.push(
+      `Worktree: ветка \`${branch}\` от базы \`${base}\`, папка \`${folder}\`.`,
+      'Правила работы в worktree — в `read_guide`, раздел «Окно человека».',
+      '',
+    );
+  }
 
   if (session.contextFrom.length > 0) {
     lines.push('## Контекст', '');

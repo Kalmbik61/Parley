@@ -115,7 +115,7 @@ describe('roomView — тест 3: ▤ снимается только посл�
     const view = roomView(entry, 'r-01', providers, {});
     expect(view?.letters.map((letter) => letter.id)).toEqual(['m-room']);
     expect(view?.title).toBe('Обсуждение');
-    expect(view?.participants).toEqual(['S01 (Claude)', 'S02 (Claude)', 'Вы']);
+    expect(view?.participants).toEqual(['S01 (Claude)', 'S02 (Claude)', 'You']);
   });
 
   it('комнаты с таким id нет — null', () => {

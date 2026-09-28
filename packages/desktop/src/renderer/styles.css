@@ -1,12 +1,8 @@
 @import 'tailwindcss';
-
-html,
-body,
-#root {
-  height: 100%;
-}
-
-body {
-  margin: 0;
-  background-color: #171717;
-}
+@import 'tw-animate-css';
+@import './styles/tokens.css';
+@import './styles/base.css';
+@import './styles/scrollbars.css';
+@import './styles/agent-spinner.css';
+@import './styles/attention-flash.css';
+@import './styles/dimmed.css';

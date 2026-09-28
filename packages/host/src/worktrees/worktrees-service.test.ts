@@ -4,11 +4,14 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addSession,
   createWork,
   createWorktree,
+  GitStateError,
+  InvalidRevisionError,
+  NothingToCommitError,
   plannedWorktree,
   readMap,
   sessionTag,
@@ -17,7 +20,22 @@ import {
 import type { WorktreeInfo } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import type { SessionsService } from '../sessions/sessions-service.js';
-import { createWorktreesService } from './worktrees-service.js';
+import { HostError } from '../errors.js';
+import { createWorktreesService, gitFailure } from './worktrees-service.js';
+
+// Подставной stat: по умолчанию настоящий; тест «папка временно недоступна» велит отказать по пути
+// кодом EACCES — на настоящем диске такой отказ стабильно не воспроизвести.
+const statFailure = vi.hoisted(() => ({ path: '', code: '' }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    stat: (target: string, ...rest: []) =>
+      target === statFailure.path
+        ? Promise.reject(Object.assign(new Error(`${statFailure.code}: stat ${target}`), { code: statFailure.code }))
+        : actual.stat(target, ...rest),
+  };
+});
 
 const run = promisify(execFile);
 const git = (dir: string, args: string[]) => run('git', ['-C', dir, ...args]);
@@ -46,6 +64,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  statFailure.path = '';
   await rm(project, { recursive: true, force: true });
 });
 
@@ -177,6 +196,95 @@ describe('discard (6)', () => {
   });
 });
 
+describe('ветка карты — не ревизия (раунд исправлений 2 куска 8.1)', () => {
+  it('merge и discard с веткой-флагом — bad_request, каталог worktree на месте', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    await updateMap(project, ref.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session?.worktree !== null && session?.worktree !== undefined) session.worktree.branch = '-c';
+    });
+    const service = createWorktreesService(stubSessions());
+
+    await expect(service.merge(ref)).rejects.toMatchObject({ code: 'bad_request' });
+    await expect(service.discard(ref, true)).rejects.toMatchObject({ code: 'bad_request' });
+    expect(existsSync(info.path)).toBe(true);
+  });
+});
+
+describe('worktree отсутствует (раунд исправлений 8, пункт 1)', () => {
+  it('после discard diff/commit/merge/mergeCheck — bad_request с причиной worktree-missing', async () => {
+    const { ref } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+    await service.discard(ref, false);
+
+    const missing = { code: 'bad_request', data: { reason: 'worktree-missing' } };
+    await expect(service.diff(ref, false)).rejects.toMatchObject(missing);
+    await expect(service.commit(ref, 'm')).rejects.toMatchObject(missing);
+    await expect(service.merge(ref)).rejects.toMatchObject(missing);
+    await expect(service.mergeCheck(ref)).rejects.toMatchObject(missing);
+  });
+
+  it('папку worktree удалили мимо хоста (агент, TUI) — diff с той же причиной', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+    await rm(info.path, { recursive: true, force: true });
+
+    await expect(service.diff(ref, false)).rejects.toMatchObject({
+      code: 'bad_request',
+      data: { reason: 'worktree-missing' },
+    });
+  });
+
+  it('stat папки отказал не ENOENT (EACCES) — не worktree-missing, а прежняя ошибка хоста', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+    Object.assign(statFailure, { path: info.path, code: 'EACCES' });
+
+    const failure = await service.diff(ref, false).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(failure).not.toBeNull();
+    expect(failure).not.toMatchObject({ data: { reason: 'worktree-missing' } });
+  });
+
+  it('на месте папки worktree — файл: worktree-missing', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+    await rm(info.path, { recursive: true, force: true });
+    await writeFile(info.path, 'не каталог\n', 'utf8');
+
+    await expect(service.diff(ref, false)).rejects.toMatchObject({
+      code: 'bad_request',
+      data: { reason: 'worktree-missing' },
+    });
+  });
+});
+
+describe('подложенный .git в worktree (раунд fix-final-a, C1)', () => {
+  it('diff, commit, merge и discard — bad_request с причиной worktree-corrupt; программа подложенного gitdir не запущена', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+    // Агент пишет только в свою копию: gitdir с core.fsmonitor — внутри неё. Маркер — файл-признак
+    // во временном каталоге теста.
+    const marker = path.join(info.path, '..', 'fsmonitor-ran');
+    const hook = path.join(info.path, 'hook.sh');
+    await writeFile(hook, `#!/bin/sh\necho ran >> '${marker}'\nexit 1\n`, { mode: 0o755 });
+    const planted = path.join(info.path, 'evil');
+    await run('git', ['init', '-q', planted]);
+    await git(planted, ['config', 'core.fsmonitor', hook]);
+    await writeFile(path.join(info.path, '.git'), `gitdir: ${path.join(planted, '.git')}\n`, 'utf8');
+
+    const corrupt = { code: 'bad_request', data: { reason: 'worktree-corrupt' } };
+    await expect(service.diff(ref, false)).rejects.toMatchObject(corrupt);
+    await expect(service.commit(ref, 'm')).rejects.toMatchObject(corrupt);
+    await expect(service.merge(ref)).rejects.toMatchObject(corrupt);
+    await expect(service.discard(ref, true)).rejects.toMatchObject(corrupt);
+    expect(existsSync(marker)).toBe(false);
+    expect(existsSync(info.path)).toBe(true);
+  });
+});
+
 describe('без своего worktree', () => {
   it('diff/commit/merge/discard сессии без worktree — bad_request', async () => {
     const work = await createWork(project, { title: 'Работа', goal: '' });
@@ -194,3 +302,104 @@ describe('без своего worktree', () => {
   });
 });
 
+
+/** Сессия без своего worktree — работает прямо в папке проекта. */
+async function plainSession(projectPath = project): Promise<SessionRef> {
+  const work = await createWork(projectPath, { title: 'Работа', goal: '' });
+  let sessionId = '';
+  await updateMap(projectPath, work.work.id, (map) => {
+    sessionId = addSession(map, { provider: 'claude', label: 'a', task: 'т' }).id;
+  });
+  return { projectPath, workId: work.work.id, sessionId };
+}
+
+describe('ревью изменений (кусок 8.1)', () => {
+  it('diff с patch: false — патч пуст, числа и файлы на месте', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+    await writeFile(path.join(info.path, 'draft.md'), 'черновик\n', 'utf8');
+
+    const bare = await service.diff(ref, false);
+    expect(bare.patch).toBe('');
+    expect(bare.files).toEqual([{ path: 'draft.md', status: 'A', oldPath: null, additions: 1, deletions: 0 }]);
+    expect(bare.stats).toEqual({ additions: 1, deletions: 0 });
+    expect((await service.diff(ref)).patch).toContain('черновик');
+  });
+
+  it('mergeCheck сессии с worktree — clean; без worktree — bad_request', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+    await writeFile(path.join(info.path, 'x.md'), 'x\n', 'utf8');
+    await git(info.path, ['add', 'x.md']);
+    await git(info.path, ['commit', '-m', 'x']);
+
+    expect(await service.mergeCheck(ref)).toEqual({ status: 'clean' });
+    await expect(service.mergeCheck(await plainSession())).rejects.toMatchObject({ code: 'bad_request' });
+  });
+
+  it('тест 12: changes.* для сессии с worktree — bad_request', async () => {
+    const { ref } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+
+    await expect(service.projectChanges(ref)).rejects.toMatchObject({ code: 'bad_request' });
+    await expect(service.commitProject(ref, 'm')).rejects.toMatchObject({ code: 'bad_request' });
+  });
+
+  it('тест 12: projectChanges и commitProject сессии без worktree; без изменений — conflict', async () => {
+    const ref = await plainSession();
+    const service = createWorktreesService(stubSessions());
+
+    await expect(service.commitProject(ref, 'пусто')).rejects.toMatchObject({ code: 'conflict' });
+
+    await writeFile(path.join(project, 'README.md'), 'старт\nещё\n', 'utf8');
+    const changes = await service.projectChanges(ref, false);
+    expect(changes).toMatchObject({
+      patch: '',
+      branch: 'main',
+      files: [{ path: 'README.md', status: 'M', oldPath: null, additions: 1, deletions: 0 }],
+    });
+
+    const { commit } = await service.commitProject(ref, 'папка');
+    expect((await git(project, ['rev-parse', 'HEAD'])).stdout.trim()).toBe(commit);
+  });
+
+  it('папка не под git — bad_request с причиной not-a-repo', async () => {
+    const plain = await mkdtemp(path.join(tmpdir(), 'harnas-worktrees-svc-plain-'));
+    try {
+      const ref = await plainSession(plain);
+      const service = createWorktreesService(stubSessions());
+      await expect(service.projectChanges(ref)).rejects.toMatchObject({
+        code: 'bad_request',
+        data: { reason: 'not-a-repo' },
+      });
+    } finally {
+      await rm(plain, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('gitFailure (тест 13)', () => {
+  it('git-missing — internal с причиной; not-a-repo и no-commits — bad_request', () => {
+    const missing = gitFailure(new GitStateError('git-missing', 'нет git'));
+    expect(missing).toBeInstanceOf(HostError);
+    expect(missing).toMatchObject({ code: 'internal', data: { reason: 'git-missing' } });
+    expect(gitFailure(new GitStateError('not-a-repo', 'x'))).toMatchObject({
+      code: 'bad_request',
+      data: { reason: 'not-a-repo' },
+    });
+    expect(gitFailure(new GitStateError('no-commits', 'x'))).toMatchObject({
+      code: 'bad_request',
+      data: { reason: 'no-commits' },
+    });
+  });
+
+  it('NothingToCommitError — conflict; прочее — internal без data', () => {
+    expect(gitFailure(new NothingToCommitError('пусто'))).toMatchObject({ code: 'conflict' });
+    const revision = gitFailure(new InvalidRevisionError('не имя ревизии: "-c"'));
+    expect(revision).toMatchObject({ code: 'bad_request' });
+    expect(revision.data).toBeUndefined();
+    const other = gitFailure(new Error('сбой'));
+    expect(other).toMatchObject({ code: 'internal', message: 'сбой' });
+    expect(other.data).toBeUndefined();
+  });
+});

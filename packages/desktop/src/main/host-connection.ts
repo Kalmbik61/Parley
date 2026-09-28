@@ -5,23 +5,37 @@ import {
   encodeLine,
   LineDecoder,
   PROTOCOL_VERSION,
+  refKey,
+  type EventData,
   type EventMessage,
   type MethodName,
   type NotificationName,
+  type Result,
 } from '@harnas/protocol';
 import type { HostStatus } from '../shared/bridge.js';
+import { S } from '../shared/strings.js';
 
 interface PendingCall {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
 }
 
+/** Процесс хоста, запущенный окном: жив ли он ещё (раунд lane-r4). */
+export interface SpawnedHost {
+  isRunning(): boolean;
+}
+
 export interface HostConnectionOptions {
   paths: HostPaths;
   env: NodeJS.ProcessEnv;
-  /** Поднимает хост (реальный процесс в проде, фейковый сервер в тестах). */
-  spawn: () => void;
+  /**
+   * Поднимает хост (реальный процесс в проде, фейковый сервер в тестах). Процесс — чтобы не
+   * запускать второй, пока первый жив; null — процесса нет (не запустился или подставной сервер).
+   */
+  spawn: () => SpawnedHost | null | Promise<SpawnedHost | null>;
   connectTimeoutMs?: number;
+  /** Сколько ждать сокета от живого запущенного процесса, прежде чем сказать человеку «не отвечает». */
+  hostStartTimeoutMs?: number;
 }
 
 /** Ошибка протокола, дошедшая от хоста в ответе на запрос. */
@@ -49,11 +63,23 @@ function delay(ms: number): Promise<void> {
  */
 export class HostConnection {
   private readonly paths: HostPaths;
-  private readonly spawnHostProcess: () => void;
+  private readonly spawnHostProcess: HostConnectionOptions['spawn'];
   private readonly connectTimeoutMs: number;
+  private readonly hostStartTimeoutMs: number;
+  /**
+   * Последний запущенный окном процесс хоста и время запуска (раунд lane-r4). Пока он жив или
+   * ещё запускается, второй не запускается: новый хост при медленном старте первого его и сносил.
+   */
+  private spawnedHost: SpawnedHost | null = null;
+  private spawning = false;
+  private spawnedAt = 0;
 
+  /** Текущий сокет — только после ответа на `hello` (раунд lane-r4, п. 3). */
   private socket: Socket | null = null;
-  private decoder = new LineDecoder();
+  /** Сокет посреди рукопожатия: его сообщения принимаются, его `close` текущий не трогает. */
+  private candidate: Socket | null = null;
+  /** Единственная петля подключения: `connect`, переподключение и `restartHost` делят её. */
+  private loop: Promise<void> | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, PendingCall>();
   private readonly eventListeners = new Set<(message: EventMessage) => void>();
@@ -62,18 +88,58 @@ export class HostConnection {
   private closed = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelayMs = 500;
+  /** Уведомления, ушедшие без связи с хостом, — счётчик для журнала main (lane-r3, п. 2). */
+  private droppedNotifications = 0;
   /** Причина, по которой `spawn()` заведомо не поднимет хост (например, нет `node` в PATH). */
   private spawnFailure: string | null = null;
+  /**
+   * Последнее `activity.changed` по каждой сессии текущего подключения. Хост
+   * повторяет активность новому клиенту сразу после `hello`, а рендерер
+   * подписывается на события позже (после статуса connected, после
+   * перезагрузки окна) — без этого кеша повтор уходил бы в пустоту, и ждущая
+   * разрешения сессия выглядела бы idle до следующего события.
+   */
+  private readonly activityCache = new Map<string, EventData<'activity.changed'>>();
 
   constructor(options: HostConnectionOptions) {
     this.paths = options.paths;
     this.spawnHostProcess = options.spawn;
     this.connectTimeoutMs = options.connectTimeoutMs ?? 5000;
+    this.hostStartTimeoutMs = options.hostStartTimeoutMs ?? 30_000;
+  }
+
+  /** Запущенный окном хост ещё запускается или жив. */
+  private hostStarting(): boolean {
+    return this.spawning || (this.spawnedHost?.isRunning() ?? false);
+  }
+
+  private startHostProcess(): void {
+    this.spawning = true;
+    this.spawnedHost = null;
+    this.spawnedAt = Date.now();
+    void Promise.resolve()
+      .then(() => this.spawnHostProcess())
+      .then(
+        (spawned) => {
+          this.spawnedHost = spawned;
+        },
+        (error: unknown) => {
+          console.error('[harnas] failed to start host', error);
+        },
+      )
+      .finally(() => {
+        this.spawning = false;
+      });
   }
 
   onEvent(listener: (message: EventMessage) => void): () => void {
     this.eventListeners.add(listener);
     return () => this.eventListeners.delete(listener);
+  }
+
+  /** Снимок кеша активности — окно берёт его, подписавшись на события (`host:activity-snapshot`). */
+  activitySnapshot(): Array<EventData<'activity.changed'>> {
+    return [...this.activityCache.values()];
   }
 
   onStatus(listener: (status: HostStatus) => void): () => void {
@@ -87,12 +153,49 @@ export class HostConnection {
     for (const listener of this.statusListeners) listener(status);
   }
 
-  /** Первое подключение. Резолвится и при удачном рукопожатии, и при mismatch — в обоих случаях связь с хостом установлена. */
+  /**
+   * Первое подключение и «Retry» экрана «No connection to host». Резолвится и при удачном
+   * рукопожатии, и при mismatch — в обоих случаях связь с хостом установлена. Отказ заводит
+   * петлю переподключения (fix-final-b, M4): без неё окно так и стояло бы на экране отказа.
+   */
   async connect(): Promise<void> {
     this.closed = false;
     this.spawnFailure = null;
+    // Повтор человека — с начала: короткая пауза, а не накопленная автоповторами.
+    this.clearReconnectTimer();
+    this.reconnectDelayMs = 500;
     this.setStatus({ state: 'connecting' });
-    await this.connectOnce();
+    await this.connectOrRetry();
+  }
+
+  /** Петля подключения; её отказ — повтор по таймеру с нарастающей паузой. */
+  private async connectOrRetry(): Promise<void> {
+    try {
+      await this.connectLoop();
+    } catch (err) {
+      this.scheduleReconnect();
+      throw err;
+    }
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer === null) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+  }
+
+  /**
+   * Петля подключения одна (раунд lane-r4, п. 3): вызов во время идущей возвращает её же. Иначе
+   * обрыв посреди рукопожатия заводил переподключение рядом с повтором самой петли — два
+   * соединения разом, и `close` осиротевшего обнулял живой.
+   */
+  private connectLoop(): Promise<void> {
+    if (this.loop !== null) return this.loop;
+    const loop = this.connectOnce().finally(() => {
+      if (this.loop === loop) this.loop = null;
+    });
+    this.loop = loop;
+    return loop;
   }
 
   /**
@@ -110,22 +213,35 @@ export class HostConnection {
     let spawned = false;
     for (;;) {
       try {
+        // Токен — до сокета (раунд lane-r3, п. 2): хост закрывает соединение без `hello`
+        // через 5 с после accept, и чтение файла под нагрузкой не должно тратить этот срок.
+        // Нет файла — хост ещё не поднят: та же ветка повтора, что и отказ сокета.
+        const token = (await readFile(this.paths.token, 'utf8')).trim();
         const socket = await this.tryConnectSocket();
-        await this.handshake(socket);
+        await this.handshake(socket, token);
         return;
       } catch (err) {
         if (this.closed) throw err instanceof Error ? err : new Error(String(err));
         if (this.spawnFailure !== null) {
           throw new Error(this.spawnFailure);
         }
-        if (Date.now() >= deadline) {
-          const message = err instanceof Error ? err.message : String(err);
+        const now = Date.now();
+        if (now >= deadline) {
+          // Запущенный процесс жив — ждём его сокета до срока старта, а не запускаем второй.
+          const starting = this.hostStarting();
+          if (starting && now < this.spawnedAt + this.hostStartTimeoutMs) {
+            await delay(150);
+            continue;
+          }
+          const message = starting ? S.connection.reasonHostNotAnswering : err instanceof Error ? err.message : String(err);
           this.setStatus({ state: 'disconnected', reason: message });
           throw err instanceof Error ? err : new Error(message);
         }
-        if (!spawned) {
+        // Процесс прошлой попытки ещё жив (петля переподключения, уходящий после host.shutdown) —
+        // второй не запускается; вышел — запуск на следующем круге.
+        if (!spawned && !this.hostStarting()) {
           spawned = true;
-          this.spawnHostProcess();
+          this.startHostProcess();
         }
         await delay(150);
       }
@@ -147,13 +263,15 @@ export class HostConnection {
     });
   }
 
-  private async handshake(socket: Socket): Promise<void> {
-    const token = (await readFile(this.paths.token, 'utf8')).trim();
-
-    this.socket = socket;
-    this.decoder = new LineDecoder();
-    socket.on('data', (chunk: Buffer) => this.handleChunk(chunk));
-    socket.on('close', () => this.handleClose());
+  private async handshake(socket: Socket, token: string): Promise<void> {
+    this.candidate = socket;
+    // Разбор строк — свой у каждого сокета: хвост прежнего не смешается с новым.
+    const decoder = new LineDecoder();
+    // Новое подключение — новый повтор от хоста: записи прошлого хоста могли
+    // пропасть вместе с ним. Чистим до `hello`, а не после ответа: повтор идёт
+    // в том же куске данных сразу за ответом и разобрался бы раньше продолжения.
+    this.activityCache.clear();
+    socket.on('data', (chunk: Buffer) => this.handleChunk(socket, decoder, chunk));
     // Ошибки сокета проявляются как 'close' — отдельный обработчик тут не нужен,
     // но слушатель обязателен, иначе неотловленная ошибка валит процесс.
     socket.on('error', () => {});
@@ -162,16 +280,26 @@ export class HostConnection {
     const pendingPromise = new Promise<unknown>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
     });
+    // Обрыв посреди рукопожатия — отказ только этого `hello`: повторяет сама петля, статус и
+    // текущий сокет не трогаются.
+    socket.on('close', () => this.handleClose(socket, id));
     socket.write(
       encodeLine({ id, method: 'hello', params: { token, protocol: PROTOCOL_VERSION, client: 'desktop' } }),
     );
 
     try {
-      const result = (await pendingPromise) as { hostVersion: string; protocol: number; pid: number };
+      const result = (await pendingPromise) as Result<'hello'>;
+      this.adopt(socket);
       this.reconnectDelayMs = 500;
-      this.setStatus({ state: 'connected', hostVersion: result.hostVersion });
+      this.setStatus({
+        state: 'connected',
+        hostVersion: result.hostVersion,
+        methods: result.methods ?? null,
+      });
     } catch (err) {
       if (err instanceof HostError && err.code === 'protocol_mismatch') {
+        // Текущим — и после mismatch: «Restart» шлёт по нему host.shutdown.
+        this.adopt(socket);
         const data = err.data ?? {};
         this.setStatus({
           state: 'mismatch',
@@ -180,17 +308,26 @@ export class HostConnection {
         });
         return;
       }
+      if (this.candidate === socket) this.candidate = null;
+      socket.destroy();
       throw err;
     }
   }
 
-  private handleChunk(chunk: Buffer): void {
+  private adopt(socket: Socket): void {
+    if (this.candidate === socket) this.candidate = null;
+    this.socket = socket;
+  }
+
+  private handleChunk(socket: Socket, decoder: LineDecoder, chunk: Buffer): void {
+    // Сокет, уже не текущий и не рукопожатный, — осиротевший: его сообщения не наши.
+    if (socket !== this.socket && socket !== this.candidate) return;
     let messages: unknown[];
     try {
-      messages = this.decoder.push(chunk);
+      messages = decoder.push(chunk);
     } catch {
       // Строка длиннее лимита — от такого соединения толку нет.
-      this.socket?.destroy();
+      socket.destroy();
       return;
     }
     for (const raw of messages) this.handleMessage(raw);
@@ -201,6 +338,10 @@ export class HostConnection {
     const obj = raw as Record<string, unknown>;
 
     if (typeof obj.event === 'string') {
+      if (obj.event === 'activity.changed') {
+        const data = obj.data as EventData<'activity.changed'>;
+        this.activityCache.set(refKey(data.ref), data);
+      }
       for (const listener of this.eventListeners) listener(obj as unknown as EventMessage);
       return;
     }
@@ -218,9 +359,18 @@ export class HostConnection {
     }
   }
 
-  private handleClose(): void {
+  private handleClose(socket: Socket, helloId: number): void {
+    if (socket === this.candidate) {
+      this.candidate = null;
+      const pending = this.pending.get(helloId);
+      this.pending.delete(helloId);
+      pending?.reject(new Error(S.connection.reasonClosed));
+      return;
+    }
+    // Чужой (не текущий) сокет текущий не трогает.
+    if (socket !== this.socket) return;
     this.socket = null;
-    const closedError = new Error('соединение с хостом закрыто');
+    const closedError = new Error(S.connection.reasonClosed);
     for (const pending of this.pending.values()) pending.reject(closedError);
     this.pending.clear();
 
@@ -233,19 +383,25 @@ export class HostConnection {
     this.scheduleReconnect();
   }
 
+  /**
+   * Повтор подключения: пауза 0,5 с, дальше вдвое до предела 5 с. Второй хост поверх живого
+   * петля не запускает (`connectOnce`, lane-r4): запуск — только когда прошлого процесса нет.
+   */
   private scheduleReconnect(): void {
-    if (this.reconnectTimer) return;
+    if (this.closed) return;
+    // Петля уже идёт (restartHost, первое подключение) — она и подключит; вторую не заводим.
+    if (this.reconnectTimer || this.loop !== null) return;
     const delayMs = this.reconnectDelayMs;
     this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, 5000);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (this.closed) return;
-      this.connectOnce().catch(() => this.scheduleReconnect());
+      this.connectLoop().catch(() => this.scheduleReconnect());
     }, delayMs);
   }
 
   async call(method: MethodName, params: unknown): Promise<unknown> {
-    if (!this.socket) throw new Error('нет соединения с хостом');
+    if (!this.socket) throw new Error('no connection to host');
     const id = this.nextId++;
     const promise = new Promise<unknown>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
@@ -255,22 +411,39 @@ export class HostConnection {
   }
 
   notify(method: NotificationName, params: unknown): void {
-    this.socket?.write(encodeLine({ method, params }));
+    if (this.socket === null) {
+      // Не молча (раунд lane-r3, п. 2): уведомление без связи пропадает, и в консоли main
+      // остаётся след для диагностики. Окно само не шлёт ввод, пока связи нет.
+      this.droppedNotifications += 1;
+      console.warn(`[harnas] host: ${method} dropped — no connection to host (dropped ${this.droppedNotifications})`);
+      return;
+    }
+    this.socket.write(encodeLine({ method, params }));
   }
 
   /** `host.shutdown` → новый процесс хоста → новое подключение. */
   async restartHost(): Promise<void> {
+    // Запуск хоста — заново: прошлая причина отказа (нет node) могла уйти (fix-final-b, M4).
+    this.spawnFailure = null;
+    // Подключаться — после того как уходящий хост закрыл наш сокет (он закрывает клиентов в конце
+    // остановки, до этого ещё слушает): иначе петля успела бы подключиться к нему же (lane-r4, п. 3).
+    const old = this.socket;
+    const oldClosed =
+      old === null || old.destroyed ? Promise.resolve() : new Promise<void>((resolve) => old.once('close', () => resolve()));
     try {
       await this.call('host.shutdown', {});
     } catch {
       // Хост мог закрыть соединение раньше, чем пришёл ответ, — это ожидаемо.
     }
+    // Хост завис на остановке — не ждём вечно: срок подключения, затем рвём сами.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([oldClosed, new Promise<void>((resolve) => (timer = setTimeout(resolve, this.connectTimeoutMs)))]);
+    clearTimeout(timer);
+    if (old !== null && this.socket === old) old.destroy();
     this.reconnectDelayMs = 500;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    await this.connectOnce();
+    this.clearReconnectTimer();
+    // Отказ — переподключение по таймеру (fix-final-b, M4): терминалы пишут «reconnecting…».
+    await this.connectOrRetry();
   }
 
   close(): void {
@@ -281,5 +454,7 @@ export class HostConnection {
     }
     this.socket?.destroy();
     this.socket = null;
+    this.candidate?.destroy();
+    this.candidate = null;
   }
 }

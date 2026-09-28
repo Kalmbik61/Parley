@@ -122,10 +122,28 @@ function handleHello(
   const registered = createClient(socket, hello.client);
   writeRaw(socket, {
     id,
-    result: { hostVersion: options.context.version, protocol: PROTOCOL_VERSION, pid: process.pid },
+    result: {
+      hostVersion: options.context.version,
+      protocol: PROTOCOL_VERSION,
+      pid: process.pid,
+      methods: supportedMethods(options),
+    },
   });
   options.registerClient(registered);
   return registered;
+}
+
+/**
+ * Всё, что понимает хост (спека 3.2): окно по списку прячет функции, которых у
+ * старого хоста нет. `hello` обрабатывается здесь, до таблиц обработчиков, —
+ * без него новый хост выглядел бы старым.
+ */
+function supportedMethods(options: ServerOptions): string[] {
+  return [
+    'hello',
+    ...Object.keys(options.methodHandlers),
+    ...Object.keys(options.notificationHandlers),
+  ].sort();
 }
 
 function handleMessage(raw: unknown, client: Client, options: ServerOptions): void {

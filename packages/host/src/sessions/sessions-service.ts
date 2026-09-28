@@ -25,6 +25,8 @@ import {
   discardWorktree,
   finishExited,
   findRunnerBinary,
+  GitStateError,
+  InvalidRevisionError,
   isGitRepo,
   loadConfig,
   openEvents,
@@ -40,6 +42,7 @@ import {
   transitionSession,
   updateMap,
   workPaths,
+  writeBrief,
   type WorkEntry,
 } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
@@ -49,6 +52,7 @@ import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { WorksService } from '../works/works-service.js';
+import { gitFailure } from '../worktrees/worktrees-service.js';
 import { autoLaunchCandidates } from './auto-launch.js';
 import { findInterrupted } from './interrupted.js';
 
@@ -284,11 +288,16 @@ export function createSessionsService(
   /**
    * План worktree пишется в карту сразу — тем же путём, что `spawn_session` в
    * core (кусок 4.1); каталог на диске заводит `launch()` перед первым запуском.
+   *
+   * `brief: true` — бриф сессии уже записан без плана (его пишет создание
+   * записи): переписываем его по карте с планом, иначе агент не узнает из
+   * брифа свою ветку и базу (fix-guide, п. 3). Быстрой сессии `new` бриф не
+   * пишется вовсе — ей и заводить его незачем.
    */
-  async function attachWorktreePlan(ref: SessionRef, parentId: string | null): Promise<void> {
+  async function attachWorktreePlan(ref: SessionRef, parentId: string | null, brief: boolean): Promise<void> {
     const base = await worktreeBaseFor(ref, parentId);
     const { config } = await loadConfig();
-    await updateMap(ref.projectPath, ref.workId, (map) => {
+    const updated = await updateMap(ref.projectPath, ref.workId, (map) => {
       const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
       if (session === undefined) return;
       session.worktree = plannedWorktree(
@@ -299,6 +308,9 @@ export function createSessionsService(
         config.worktreeRoot,
       );
     });
+    // Запись успели удалить — плана нет, и бриф собирать не по чему.
+    const planned = updated.sessions.some((candidate) => candidate.id === ref.sessionId);
+    if (brief && planned) await writeBrief(ref.projectPath, updated, ref.sessionId);
   }
 
   async function create(input: CreateSessionInput): Promise<SessionRef> {
@@ -314,7 +326,7 @@ export function createSessionsService(
       const created = await createNewSession(projectPath, null);
       const ref = { projectPath, workId: created.workId, sessionId: created.session.id };
       await applyChoice(ref, label, provider);
-      if (worktree === true) await attachWorktreePlan(ref, null);
+      if (worktree === true) await attachWorktreePlan(ref, null, false);
       return createInteractive(ref, 'new');
     }
 
@@ -322,7 +334,7 @@ export function createSessionsService(
       const created = await createNewSession(projectPath, workId);
       const ref = { projectPath, workId, sessionId: created.session.id };
       await applyChoice(ref, label, provider);
-      if (worktree === true) await attachWorktreePlan(ref, null);
+      if (worktree === true) await attachWorktreePlan(ref, null, false);
       return createInteractive(ref, 'new');
     }
 
@@ -330,7 +342,7 @@ export function createSessionsService(
       const created = await createChildSession(projectPath, workId, parent);
       const ref = { projectPath, workId, sessionId: created.session.id };
       await applyChoice(ref, label, provider);
-      if (worktree === true) await attachWorktreePlan(ref, parent);
+      if (worktree === true) await attachWorktreePlan(ref, parent, true);
       return createInteractive(ref, 'launch');
     }
 
@@ -342,7 +354,7 @@ export function createSessionsService(
       contextFrom: parent === null ? [] : [parent],
     });
     const ref = { projectPath, workId, sessionId };
-    if (worktree === true) await attachWorktreePlan(ref, parent);
+    if (worktree === true) await attachWorktreePlan(ref, parent, true);
     return createInteractive(ref, 'launch');
   }
 
@@ -385,6 +397,9 @@ export function createSessionsService(
         await discardWorktree(ref.projectPath, worktree, { force });
       } catch (error) {
         if (error instanceof DirtyWorktreeError) throw new HostError('conflict', error.message);
+        // Ветка из карты — не ревизия, `.git` worktree подменён: тот же bad_request, что у
+        // worktrees.merge/discard.
+        if (error instanceof InvalidRevisionError || error instanceof GitStateError) throw gitFailure(error);
         throw error;
       }
     }

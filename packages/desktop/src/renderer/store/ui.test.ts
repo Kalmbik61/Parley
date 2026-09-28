@@ -1,65 +1,122 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import type { SessionRef } from '@harnas/protocol';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
+import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { useUiStore } from './ui.js';
-
-const ref: SessionRef = { projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-01' };
 
 beforeEach(() => {
   useUiStore.setState({
-    selectedRef: null,
-    selectedWorkKey: null,
     windowFocused: true,
     wakePaused: null,
-    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null }, settings: false },
-    lastSessionByWork: {},
-    activePanelId: null,
-    recentSessionRefs: [],
-  });
-});
-
-describe('useUiStore.selectSession', () => {
-  it('запоминает выбор и последнюю сессию работы', () => {
-    useUiStore.getState().selectSession('/tmp/proj w-01', ref);
-
-    expect(useUiStore.getState().selectedRef).toEqual(ref);
-    expect(useUiStore.getState().lastSessionByWork['/tmp/proj w-01']).toBe('s-01');
-  });
-
-  it('копит недавние сессии, самая свежая первой, без повторов (для палитры ⌘K, кусок 2.3)', () => {
-    const other: SessionRef = { projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-02' };
-
-    useUiStore.getState().selectSession('/tmp/proj w-01', ref);
-    useUiStore.getState().selectSession('/tmp/proj w-01', other);
-    useUiStore.getState().selectSession('/tmp/proj w-01', ref);
-
-    expect(useUiStore.getState().recentSessionRefs).toEqual([ref, other]);
-  });
-});
-
-describe('useUiStore.setActivePanelId', () => {
-  it('запоминает id активной панели сетки; сброс — в null', () => {
-    useUiStore.getState().setActivePanelId('terminal:/tmp/proj\u0000w-01\u0000s-01');
-    expect(useUiStore.getState().activePanelId).toBe('terminal:/tmp/proj\u0000w-01\u0000s-01');
-
-    useUiStore.getState().setActivePanelId(null);
-    expect(useUiStore.getState().activePanelId).toBeNull();
+    dialogs: {
+      newWork: false,
+      newSession: { open: false, parentSessionId: null, work: null },
+      settings: false,
+      createRoom: null,
+      restartHost: false,
+    },
+    showArchived: false,
+    ui: DEFAULT_UI,
+    uiLoaded: false,
   });
 });
 
 describe('useUiStore диалоги', () => {
-  it('новая работа — открыть/закрыть', () => {
+  it('новая работа — открыть без проекта и с проектом «+» заголовка (кусок 3.5), закрыть', () => {
     useUiStore.getState().openNewWorkDialog();
-    expect(useUiStore.getState().dialogs.newWork).toBe(true);
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: null, title: '' });
     useUiStore.getState().closeNewWorkDialog();
-    expect(useUiStore.getState().dialogs.newWork).toBe(false);
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: false, projectPath: null, title: '' });
+    useUiStore.getState().openNewWorkDialog('/tmp/p');
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: '/tmp/p', title: '' });
+    useUiStore.getState().closeNewWorkDialog();
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: false, projectPath: null, title: '' });
   });
 
   it('новая сессия — помнит родителя', () => {
     useUiStore.getState().openNewSessionDialog('s-01');
-    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: true, parentSessionId: 's-01' });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({
+      open: true,
+      parentSessionId: 's-01',
+      work: null,
+    });
     useUiStore.getState().closeNewSessionDialog();
-    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: false, parentSessionId: null });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({
+      open: false,
+      parentSessionId: null,
+      work: null,
+    });
+  });
+
+  it('новая сессия из меню карточки помнит свою работу; закрытие её забывает (кусок 3.4)', () => {
+    useUiStore.getState().openNewSessionDialog(null, { projectPath: '/tmp/p', workId: 'w-02' });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({
+      open: true,
+      parentSessionId: null,
+      work: { projectPath: '/tmp/p', workId: 'w-02' },
+    });
+    useUiStore.getState().closeNewSessionDialog();
+    expect(useUiStore.getState().dialogs.newSession.work).toBeNull();
+  });
+
+  it('«New room» из меню карточки — createRoom без обязательного участника (кусок 3.4)', () => {
+    useUiStore.getState().openCreateRoomDialog({ projectPath: '/tmp/p', workId: 'w-01', requiredMember: null });
+    expect(useUiStore.getState().dialogs.createRoom).toEqual({ projectPath: '/tmp/p', workId: 'w-01', requiredMember: null });
+  });
+});
+
+describe('useUiStore — показ архивных и подтверждение перезапуска хоста (кусок 6.3)', () => {
+  it('showArchived — в памяти окна: переключается туда и обратно, app.saveUi не зовётся', async () => {
+    const bridge = createFakeBridge();
+    const dispose = useUiStore.getState().init(bridge);
+    await vi.waitFor(() => expect(useUiStore.getState().uiLoaded).toBe(true));
+    const saveUi = vi.spyOn(bridge.app, 'saveUi');
+    expect(useUiStore.getState().showArchived).toBe(false);
+    useUiStore.getState().toggleShowArchived();
+    expect(useUiStore.getState().showArchived).toBe(true);
+    useUiStore.getState().toggleShowArchived();
+    expect(useUiStore.getState().showArchived).toBe(false);
+    expect(saveUi).not.toHaveBeenCalled();
+    dispose();
+  });
+
+  it('dialogs.restartHost — confirmRestartHost открывает, closeRestartHostDialog закрывает', () => {
+    expect(useUiStore.getState().dialogs.restartHost).toBe(false);
+    useUiStore.getState().confirmRestartHost();
+    expect(useUiStore.getState().dialogs.restartHost).toBe(true);
+    useUiStore.getState().closeRestartHostDialog();
+    expect(useUiStore.getState().dialogs.restartHost).toBe(false);
+  });
+});
+
+describe('useUiStore.setSidebarHold (кусок 3.4)', () => {
+  it('держатели порядка — по id; повторное снятие и повторная установка не меняют стор', () => {
+    useUiStore.setState({ sidebarHolds: {} });
+    useUiStore.getState().setSidebarHold('menu:a', true);
+    useUiStore.getState().setSidebarHold('rename:b', true);
+    const before = useUiStore.getState().sidebarHolds;
+    useUiStore.getState().setSidebarHold('menu:a', true);
+    expect(useUiStore.getState().sidebarHolds).toBe(before);
+    useUiStore.getState().setSidebarHold('menu:a', false);
+    expect(useUiStore.getState().sidebarHolds).toEqual({ 'rename:b': true });
+    useUiStore.getState().setSidebarHold('menu:a', false);
+    useUiStore.getState().setSidebarHold('rename:b', false);
+    expect(useUiStore.getState().sidebarHolds).toEqual({});
+  });
+});
+
+describe('useUiStore.setDark', () => {
+  afterEach(() => {
+    document.documentElement.classList.remove('dark');
+  });
+
+  it('true ставит .dark на <html> и dark: true в сторе; false снимает и то, и другое (тест 7)', () => {
+    useUiStore.getState().setDark(true);
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
+    expect(useUiStore.getState().dark).toBe(true);
+
+    useUiStore.getState().setDark(false);
+    expect(document.documentElement.classList.contains('dark')).toBe(false);
+    expect(useUiStore.getState().dark).toBe(false);
   });
 });
 
@@ -93,5 +150,171 @@ describe('useUiStore.init', () => {
     await useUiStore.getState().toggleWake(bridge);
     expect(useUiStore.getState().wakePaused).toBe(false);
     dispose();
+  });
+
+  it('грузит ui.json в зеркало и ставит uiLoaded', async () => {
+    const bridge = createFakeBridge();
+    await bridge.app.saveUi({ pinnedWorks: ['a'] });
+    const dispose = useUiStore.getState().init(bridge);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useUiStore.getState().uiLoaded).toBe(true);
+    expect(useUiStore.getState().ui.pinnedWorks).toEqual(['a']);
+    dispose();
+  });
+});
+
+describe('useUiStore.patchUi / setAppearance / setSidebar (кусок 2.3, тест 8)', () => {
+  it('два патча подряд — оба в зеркале, app.saveUi получил их порознь по одному ключу', () => {
+    const bridge = createFakeBridge();
+    const dispose = useUiStore.getState().init(bridge);
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+
+    useUiStore.getState().patchUi({ pinnedWorks: ['a'] });
+    useUiStore.getState().patchUi({ collapsedProjects: ['/p'] });
+
+    expect(useUiStore.getState().ui.pinnedWorks).toEqual(['a']);
+    expect(useUiStore.getState().ui.collapsedProjects).toEqual(['/p']);
+    expect(saveUiSpy).toHaveBeenNthCalledWith(1, { pinnedWorks: ['a'] });
+    expect(saveUiSpy).toHaveBeenNthCalledWith(2, { collapsedProjects: ['/p'] });
+    dispose();
+  });
+
+  it('setSidebar сливает патч с зеркалом и сохраняет open (тест 8)', () => {
+    const bridge = createFakeBridge();
+    const dispose = useUiStore.getState().init(bridge);
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+
+    useUiStore.getState().setSidebar('left', { width: 300 });
+
+    expect(useUiStore.getState().ui.leftSidebar).toEqual({ open: true, width: 300 });
+    expect(saveUiSpy).toHaveBeenCalledWith({ leftSidebar: { open: true, width: 300 } });
+    dispose();
+  });
+
+  it('setSidebar правого — tab и width сливаются с зеркалом, app.saveUi получает целый rightSidebar (7.2)', () => {
+    const bridge = createFakeBridge();
+    const dispose = useUiStore.getState().init(bridge);
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+
+    useUiStore.getState().setSidebar('right', { tab: 'changes' });
+    useUiStore.getState().setSidebar('right', { width: 400 });
+
+    expect(useUiStore.getState().ui.rightSidebar).toEqual({ open: true, width: 400, tab: 'changes' });
+    expect(saveUiSpy).toHaveBeenNthCalledWith(1, { rightSidebar: { open: true, width: 350, tab: 'changes' } });
+    expect(saveUiSpy).toHaveBeenNthCalledWith(2, { rightSidebar: { open: true, width: 400, tab: 'changes' } });
+
+    // У левого вкладки нет: лишний ключ в ui.json не уходит.
+    useUiStore.getState().setSidebar('left', { open: false, tab: 'files' });
+    expect(saveUiSpy).toHaveBeenLastCalledWith({ leftSidebar: { open: false, width: 280 } });
+    dispose();
+  });
+
+  it('setAppearance зовёт bridge.app.setAppearance и меняет зеркало', () => {
+    const bridge = createFakeBridge();
+    const dispose = useUiStore.getState().init(bridge);
+    const setAppearanceSpy = vi.spyOn(bridge.app, 'setAppearance');
+
+    useUiStore.getState().setAppearance('dark');
+
+    expect(useUiStore.getState().ui.appearance).toBe('dark');
+    expect(setAppearanceSpy).toHaveBeenCalledWith('dark');
+    dispose();
+  });
+});
+
+describe('useUiStore — форма работы с названием и «Создать комнату с…» (куски 2.3, 6.2)', () => {
+  it('openNewWorkDialog(null, X) — форма с названием X («Create workspace …» палитры, кусок 6.2)', () => {
+    useUiStore.getState().openNewWorkDialog(null, 'X');
+    expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: null, title: 'X' });
+  });
+
+  it('openCreateRoomDialog/closeCreateRoomDialog', () => {
+    useUiStore.getState().openCreateRoomDialog({
+      projectPath: '/tmp/p',
+      workId: 'w-01',
+      requiredMember: { id: 's-01', label: 'S01 план' },
+    });
+    expect(useUiStore.getState().dialogs.createRoom).toEqual({
+      projectPath: '/tmp/p',
+      workId: 'w-01',
+      requiredMember: { id: 's-01', label: 'S01 план' },
+    });
+    useUiStore.getState().closeCreateRoomDialog();
+    expect(useUiStore.getState().dialogs.createRoom).toBeNull();
+  });
+});
+
+// Тест 16 куска 4.2: видимость документа и фокус окна для «просмотрено» (спека 7.2).
+describe('useUiStore — documentVisible и windowFocused (тест 16 куска 4.2)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('начальное documentVisible — по document.visibilityState', async () => {
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    vi.resetModules();
+    const fresh = await import('./ui.js');
+    expect(fresh.useUiStore.getState().documentVisible).toBe(false);
+  });
+
+  it('visibilitychange в hidden → false, обратно → true; blur → windowFocused: false без document.hasFocus()', () => {
+    const state = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    const bridge = createFakeBridge();
+    const dispose = useUiStore.getState().init(bridge);
+    const hasFocus = vi.spyOn(document, 'hasFocus');
+
+    state.mockReturnValue('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(useUiStore.getState().documentVisible).toBe(false);
+    state.mockReturnValue('visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(useUiStore.getState().documentVisible).toBe(true);
+
+    window.dispatchEvent(new Event('blur'));
+    expect(useUiStore.getState().windowFocused).toBe(false);
+    window.dispatchEvent(new Event('focus'));
+    expect(useUiStore.getState().windowFocused).toBe(true);
+    expect(hasFocus).not.toHaveBeenCalled();
+
+    dispose();
+    state.mockReturnValue('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(useUiStore.getState().documentVisible).toBe(true);
+  });
+});
+
+describe('useUiStore — windowFocused при фокусе в странице (тест 2 куска 9.2b)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('DOM-blur при activeElement — webview флаг не снимает; обычный blur — снимает', () => {
+    const bridge = createFakeBridge();
+    const dispose = useUiStore.getState().init(bridge);
+    const webview = document.createElement('webview');
+    const active = vi.spyOn(document, 'activeElement', 'get').mockReturnValue(webview);
+    window.dispatchEvent(new Event('blur'));
+    expect(useUiStore.getState().windowFocused).toBe(true);
+    active.mockReturnValue(document.body);
+    window.dispatchEvent(new Event('blur'));
+    expect(useUiStore.getState().windowFocused).toBe(false);
+    dispose();
+  });
+
+  it('app:window-focus false/true и browser:focus ставят флаг; после отписки — нет', () => {
+    const bridge = createFakeBridge();
+    const dispose = useUiStore.getState().init(bridge);
+    bridge.emitWindowFocus(false);
+    expect(useUiStore.getState().windowFocused).toBe(false);
+    bridge.emitWindowFocus(true);
+    expect(useUiStore.getState().windowFocused).toBe(true);
+    bridge.emitWindowFocus(false);
+    bridge.emitBrowserFocus({ webContentsId: 7 });
+    expect(useUiStore.getState().windowFocused).toBe(true);
+    dispose();
+    bridge.emitWindowFocus(false);
+    expect(useUiStore.getState().windowFocused).toBe(true);
   });
 });

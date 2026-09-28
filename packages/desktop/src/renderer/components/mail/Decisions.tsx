@@ -6,6 +6,7 @@
  * `older` из `tui/src/room-view.ts#roomView`).
  */
 
+import { S } from '../../../shared/strings.js';
 import type { LetterView } from '../../lib/mail-view.js';
 
 export interface DecisionsProps {
@@ -16,15 +17,17 @@ export function Decisions({ decisions }: DecisionsProps): JSX.Element | null {
   if (decisions.shown.length === 0) return null;
 
   return (
-    <div className="border-b border-[var(--h-overlay)] px-3 py-2">
-      <div className="mb-1 text-xs font-medium uppercase tracking-wide text-[var(--h-muted)]">Решения</div>
+    <div className="border-b border-border px-3 py-2">
+      <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        {S.mail.decisionsHeading}
+      </div>
       {decisions.earlier > 0 ? (
-        <div className="mb-1 text-xs text-[var(--h-muted)]">+{decisions.earlier} раньше</div>
+        <div className="mb-1 text-xs text-muted-foreground">{S.mail.decisionsEarlier(decisions.earlier)}</div>
       ) : null}
       <ul className="flex flex-col gap-1">
         {decisions.shown.map((decision) => (
-          <li key={decision.id} className="line-clamp-2 text-sm text-[var(--h-text)]">
-            <span className="text-[var(--h-muted)]">{decision.from}: </span>
+          <li key={decision.id} className="line-clamp-2 text-sm text-foreground">
+            <span className="text-muted-foreground">{decision.from}: </span>
             {decision.text}
           </li>
         ))}

@@ -1,13 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Activity, SessionStatus } from '@harnas/core';
-import {
-  displayStatus,
-  dotColorVar,
-  dotState,
-  maxDotState,
-  STATE_WORDS,
-  type DotState,
-} from './dot-state.js';
+import { displayStatus, dotState, stateWord, type DotState } from './dot-state.js';
 
 const STATUSES: SessionStatus[] = ['pending', 'active', 'exited', 'done', 'failed'];
 const ACTIVITIES: Array<Activity | null> = ['working', 'blocked', 'unseen', 'idle', null];
@@ -51,44 +44,43 @@ describe('dotState', () => {
   });
 });
 
-describe('maxDotState', () => {
-  it('null — сессий нет', () => {
-    expect(maxDotState([])).toBeNull();
+describe('stateWord', () => {
+  // Тест 6 куска 1.2 плана: девять строк таблицы спеки 4.2 (`exited` даёт две
+  // строки — по `lifecycle`). Второй параметр для остальных состояний не
+  // влияет на результат, но обязателен по сигнатуре — передаём правдоподобный.
+  it('working → «работает»', () => {
+    expect(stateWord('working', 'active')).toBe('Working');
   });
 
-  it('порядок важности: blocked выше working выше unseen выше failed выше idle/pending/exited выше done', () => {
-    expect(maxDotState(['done', 'idle', 'blocked'])).toBe('blocked');
-    expect(maxDotState(['done', 'working'])).toBe('working');
-    expect(maxDotState(['exited', 'unseen'])).toBe('unseen');
-    expect(maxDotState(['done', 'exited'])).toBe('exited');
-    expect(maxDotState(['done'])).toBe('done');
-  });
-});
-
-describe('STATE_WORDS', () => {
-  it('слово есть у каждого состояния', () => {
-    const states: DotState[] = ['working', 'blocked', 'unseen', 'idle', 'pending', 'exited', 'done', 'failed'];
-    for (const state of states) {
-      expect(STATE_WORDS[state]).toBeTypeOf('string');
-      expect(STATE_WORDS[state].length).toBeGreaterThan(0);
-    }
+  it('blocked → «ждёт тебя»', () => {
+    expect(stateWord('blocked', 'active')).toBe('Needs you');
   });
 
-  it('blocked и unseen совпадают с заголовками уведомлений', () => {
-    expect(STATE_WORDS.blocked).toBe('ждёт ответа');
-    expect(STATE_WORDS.unseen).toBe('закончила ход');
-  });
-});
-
-describe('dotColorVar', () => {
-  it('у done цвета нет', () => {
-    expect(dotColorVar('done')).toBeNull();
+  it('unseen → «закончил · не просмотрено»', () => {
+    expect(stateWord('unseen', 'active')).toBe('Done · unseen');
   });
 
-  it('у остальных состояний цвет есть', () => {
-    const states: DotState[] = ['working', 'blocked', 'unseen', 'idle', 'pending', 'exited', 'failed'];
-    for (const state of states) {
-      expect(dotColorVar(state)).not.toBeNull();
-    }
+  it('idle → «простаивает»', () => {
+    expect(stateWord('idle', 'active')).toBe('Idle');
+  });
+
+  it('pending → «ожидает запуска»', () => {
+    expect(stateWord('pending', 'pending')).toBe('Not started');
+  });
+
+  it('exited + sleeping → «спит»', () => {
+    expect(stateWord('exited', 'sleeping')).toBe('Asleep');
+  });
+
+  it('exited + closed → «закрыта»', () => {
+    expect(stateWord('exited', 'closed')).toBe('Closed');
+  });
+
+  it('done → «готово»', () => {
+    expect(stateWord('done', 'closed')).toBe('Done');
+  });
+
+  it('failed → «сбой»', () => {
+    expect(stateWord('failed', 'closed')).toBe('Failed');
   });
 });

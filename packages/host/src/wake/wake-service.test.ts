@@ -52,6 +52,7 @@ let project = '';
 let claudeRoot = '';
 let codexRoot = '';
 let broadcasts: Array<{ event: EventName; data: unknown }>;
+let logErrors: string[] = [];
 let stoppers: Array<() => Promise<void> | void> = [];
 let extraEnv: string[] = [];
 
@@ -65,7 +66,7 @@ function fakeHost(): HostContext {
     version: '0.0.0',
     startedAt: new Date().toISOString(),
     paths: { dir: '', socket: '', token: '', pid: '', log: '' },
-    log: { info: () => {}, warn: () => {}, error: () => {} },
+    log: { info: () => {}, warn: () => {}, error: (message: string) => logErrors.push(message) },
     clients: () => [],
     liveSessions: () => 0,
     broadcast: (event, data) => broadcasts.push({ event, data: data as EventData<EventName> }),
@@ -82,6 +83,7 @@ beforeEach(async () => {
   codexRoot = await mkdtemp(path.join(tmpdir(), 'harnas-codex-'));
   process.env['HARNAS_HOME'] = home;
   broadcasts = [];
+  logErrors = [];
 });
 
 afterEach(async () => {
@@ -143,11 +145,21 @@ async function rig(
   wake.start();
 
   const ref: SessionRef = { projectPath: project, workId, sessionId };
+  // Как при настоящем запуске: `events/` заводит запись настроек до старта процесса, а хук
+  // процесса доходит до журнала. Без единого хука с запуска будильник не печатает (fix-final-b);
+  // нейтральное `StubReady` состояния не меняет. Тест без хуков передаёт STUB_READY_HOOK: '0'.
+  await mkdir(workPaths(project, workId).events, { recursive: true });
   const launch: PtyLaunch = {
     command: process.execPath,
     args: [STUB],
     cwd: project,
-    env: { ...process.env, ...launchEnv },
+    env: {
+      ...process.env,
+      HARNAS_WORK_DIR: path.join(project, '.harnas', 'works', workId),
+      HARNAS_SESSION_ID: sessionId,
+      STUB_READY_HOOK: '1',
+      ...launchEnv,
+    },
   };
   pty.start(ref, launch);
 
@@ -292,6 +304,91 @@ describe('WakeService', () => {
     );
     expect(cancelled).toBeDefined();
     expect((cancelled?.data as { ref: SessionRef }).ref).toEqual(ref);
+  });
+});
+
+describe('WakeService: процесс без хуков и диалог перед Enter (fix-final-b)', () => {
+  it('ни одного хука с запуска — указатель не печатается; первый хук — уходит', async () => {
+    const { workId, sessionId } = await activeSession();
+    // Свежая сессия на вопросе доверия к папке: Claude Code хуков не шлёт, активность idle.
+    const { stream } = await rig(sessionId, workId, { STUB_READY_HOOK: '0' });
+
+    await sendLetter(workId, sessionId);
+    await settle(600);
+    expect(stream()).not.toContain(pointer(1));
+
+    // Доверие подтвердил человек — агент прислал первый хук, письмо уходит указателем.
+    await writeFile(
+      path.join(workPaths(project, workId).events, `${sessionId}.jsonl`),
+      `${JSON.stringify({ hook_event_name: 'SessionStart' })}\n${JSON.stringify({ hook_event_name: 'Stop' })}\n`,
+    );
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+  });
+
+  it('хуки прошлого процесса не в счёт: журнал до запуска — указатель не печатается', async () => {
+    const { workId, sessionId } = await activeSession();
+    await mkdir(workPaths(project, workId).events, { recursive: true });
+    await writeFile(
+      path.join(workPaths(project, workId).events, `${sessionId}.jsonl`),
+      `${JSON.stringify({ hook_event_name: 'Stop' })}\n`,
+    );
+    // mtime журнала — строго раньше запуска процесса.
+    await settle(50);
+    const { stream } = await rig(sessionId, workId, { STUB_READY_HOOK: '0' });
+
+    await sendLetter(workId, sessionId);
+    await settle(600);
+    expect(stream()).not.toContain(pointer(1));
+  });
+
+  it('стал blocked за ожидание Enter — Enter не жмётся, указатель остаётся в поле ввода', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { stream, activity, ref } = await rig(sessionId, workId, {}, { enterDelayMs: 600 });
+
+    await sendLetter(workId, sessionId);
+    await waitFor(() => stream().includes(pointer(1)), 3000);
+    // Запрос разрешения показан, хук дошёл до Enter.
+    await writeFile(
+      path.join(workPaths(project, workId).events, `${sessionId}.jsonl`),
+      `${JSON.stringify({ hook_event_name: 'PermissionRequest' })}\n`,
+      { flag: 'a' },
+    );
+    await waitFor(() => activity.get(ref)?.activity.activity === 'blocked', 3000);
+
+    await settle(800);
+    expect(stream()).not.toContain(`echo: ${pointer(1)}`);
+  });
+});
+
+describe('WakeService: сбой Enter указателя (кусок 5.1, раунд исправлений 2)', () => {
+  it('запись Enter бросает — будильник не падает, пишет в лог, предохранитель срабатывает, новое письмо доставляется', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { stream, pty, wake, ref } = await rig(sessionId, workId, {}, { pointerTimeoutMs: 400 });
+
+    // PTY «умер» между проверкой pid и записью Enter: текст указателя пишется, \r — бросает.
+    const write = pty.write;
+    let failing = true;
+    pty.write = (target, data) => {
+      if (failing && data === '\r') throw new Error('EIO: pty закрыт');
+      write(target, data);
+    };
+
+    await sendLetter(workId, sessionId);
+    await waitFor(() => logErrors.includes('Enter указателя не записался'), 3000);
+    expect(wake.inFlight(ref)).toBe(false);
+    expect(stream()).not.toContain(`echo: ${pointer(1)}`);
+
+    // Дальше попытку ведёт предохранитель указателя — по своим правилам.
+    await waitFor(
+      () => broadcasts.some((b) => b.event === 'host.notice' && (b.data as { kind: string }).kind === 'pointer-timeout'),
+      2000,
+    );
+
+    // Хост жив: следующее письмо снова печатается указателем и уходит Enter.
+    failing = false;
+    pty.input(ref, '\x15');
+    await sendLetter(workId, sessionId, 'второе письмо');
+    await waitFor(() => /echo: .*Новые письма \(\d+\)\. Вызови check_inbox\./.test(stream()), 3000);
   });
 });
 
@@ -531,7 +628,18 @@ async function trioRig(workId: string, ids: readonly string[]): Promise<Map<stri
   for (const sessionId of ids) {
     pty.start(
       { projectPath: project, workId, sessionId },
-      { command: process.execPath, args: [STUB], cwd: project, env: { ...process.env } },
+      {
+        command: process.execPath,
+        args: [STUB],
+        cwd: project,
+        // Хук процесса доходит до журнала — иначе будильник в сессию не печатает (fix-final-b).
+        env: {
+          ...process.env,
+          HARNAS_WORK_DIR: path.join(project, '.harnas', 'works', workId),
+          HARNAS_SESSION_ID: sessionId,
+          STUB_READY_HOOK: '1',
+        },
+      },
     );
   }
 

@@ -1,15 +1,14 @@
 /**
  * Состояние точки сессии/работы: activity живой сессии или её жизненный цикл.
- * `dotState` и `maxDotState` перенесены из
- * `tui/src/components/activity-dot.tsx` дословно (дизайн TUI v2, 4.1). Слова
- * состояний — новые: в TUI на них не было места (там точку подписывала одна
- * буква, `stateLetter`), в окне рядом с точкой есть колонка под слово (кусок
- * 1.10 плана окна, «строка: точка, S03, ярлык, слово состояния»). Тексты
- * `blocked`/`unseen` совпадают с заголовками уведомлений («S03 ждёт ответа» /
- * «S03 закончила ход») намеренно — то же состояние, тот же текст.
+ * `dotState` перенесён из
+ * `tui/src/components/activity-dot.tsx` дословно (дизайн TUI v2, 4.1). Слово
+ * состояния рядом с точкой — `stateWord` ниже (спека 4.2, кусок 1.2 плана
+ * окна): в TUI на него не было места (там точку подписывала одна буква,
+ * `stateLetter`).
  */
 
-import type { Activity, SessionStatus, WorkSession } from '@harnas/core';
+import type { Activity, SessionLifecycle, SessionStatus, WorkSession } from '@harnas/core';
+import { S } from '../../shared/strings.js';
 
 /**
  * Прежний единый статус из двух осей карты v2 — копия `displayStatus` из
@@ -39,64 +38,32 @@ export function dotState(status: SessionStatus, activity: Activity | null): DotS
   return activity ?? 'idle';
 }
 
-/** Порядок важности: точка работы — максимум по её сессиям (раздел 4.1). */
-const PRIORITY: readonly DotState[] = [
-  'blocked',
-  'working',
-  'unseen',
-  'failed',
-  'idle',
-  'pending',
-  'exited',
-  'done',
-];
-
-/** Максимум по сессиям работы; `null` — сессий нет и точка не рисуется (решение №6). */
-export function maxDotState(states: readonly DotState[]): DotState | null {
-  let best: DotState | null = null;
-  let bestRank = PRIORITY.length;
-  for (const state of states) {
-    const rank = PRIORITY.indexOf(state);
-    if (rank < bestRank) {
-      best = state;
-      bestRank = rank;
-    }
-  }
-  return best;
-}
-
-/** Слово состояния рядом с точкой в строке сайдбара. */
-export const STATE_WORDS: Readonly<Record<DotState, string>> = {
-  working: 'работает',
-  blocked: 'ждёт ответа',
-  unseen: 'закончила ход',
-  idle: 'простаивает',
-  pending: 'не запущена',
-  exited: 'вышла',
-  done: 'готово',
-  failed: 'ошибка',
-};
-
 /**
- * Цвет точки по палитре (CSS-переменные темы — `theme/palettes.ts`). Роли те
- * же, что и в `tui/src/theme/roles.ts`: `warn` — жёлтый, `unseen` — синий,
- * `fail` — красный. У `done` цвета нет (точка не рисуется).
+ * Слово состояния рядом со значком — колонка таблицы спеки 4.2 (кусок 1.2
+ * плана окна; используют куски 1.3 и 3.3). Заменяет прежние `STATE_WORDS`
+ * (тексты спеки 4.2 другие: «ждёт тебя», не «ждёт ответа», и т. д.) и
+ * `dotColorVar` — код прежней палитры темы окна (раздел 4.9 спеки), который
+ * ушёл в 1.3 вместе с их последними потребителями (прежние дерево сессий и
+ * точка статуса сайдбара). У `exited` слово решает `lifecycle`: «закрыта» для
+ * `closed`, иначе — «спит» (сессия жива, просто не выведена).
  */
-export function dotColorVar(state: DotState): string | null {
+export function stateWord(state: DotState, lifecycle: SessionLifecycle): string {
   switch (state) {
-    case 'blocked':
-      return 'var(--h-yellow)';
-    case 'unseen':
-      return 'var(--h-blue)';
-    case 'failed':
-      return 'var(--h-red)';
     case 'working':
+      return S.states.working;
+    case 'blocked':
+      return S.states.blocked;
+    case 'unseen':
+      return S.states.unseen;
     case 'idle':
+      return S.states.idle;
     case 'pending':
+      return S.states.pending;
     case 'exited':
-      return 'var(--h-muted)';
+      return lifecycle === 'closed' ? S.states.closed : S.states.asleep;
     case 'done':
-      // Работа закончена отчётом — цвет ей не нужен (перенос из TUI, макеты §6).
-      return null;
+      return S.states.done;
+    case 'failed':
+      return S.states.failed;
   }
 }

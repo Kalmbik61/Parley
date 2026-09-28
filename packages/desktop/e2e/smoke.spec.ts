@@ -1,36 +1,33 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { _electron as electron, expect, test } from '@playwright/test';
+import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test';
 // Требуется для второго теста: путь к самому бинарю Electron, не к
 // электронной обёртке API. Импорт `electron` вне рантайма Electron
 // возвращает именно этот путь строкой (тот же механизм, что использует
 // playwright-core внутри electron.launch()).
 import electronBinary from 'electron';
+import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
+import { makeTempHome } from './tmp.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
-// Тест поднимает настоящий хост из собранного @harnas/host — без `pnpm --filter
-// @harnas/host build` (и `pnpm --filter @harnas/desktop build`) ему нечего
-// запускать. Защитный skip — на случай свежего клона без сборки, а не на
-// случай отсутствия самого пакета.
-const hostEntry = path.resolve(dirname, '../../host/dist/main.js');
-const hostReady = existsSync(hostEntry);
-
-test.skip(!hostReady, `packages/host/dist/main.js не собран — сначала pnpm --filter @harnas/host build: ${hostEntry}`);
 
 test.describe('окно поднимает хост и переживает его перезапуск', () => {
   let home: string;
+  /** Окно теста — его гасит afterEach, и после упавшего теста тоже. */
+  let running: ElectronApplication | null = null;
 
   test.beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-'));
+    home = await makeTempHome('smoke');
   });
 
   test.afterEach(async () => {
+    await stopApp(running);
+    running = null;
     await stopHost(home);
     await rm(home, { recursive: true, force: true });
   });
@@ -40,9 +37,10 @@ test.describe('окно поднимает хост и переживает ег
       args: [mainEntry],
       env: { ...process.env, HARNAS_HOME: home },
     });
+    running = app;
 
     const window = await app.firstWindow();
-    await expect(window.getByText('Работ пока нет')).toBeVisible();
+    await expect(window.getByTestId('landing')).toBeVisible();
     expect(existsSync(path.join(home, 'host', 'host.sock'))).toBe(true);
 
     const requireType = await window.evaluate(() => typeof (globalThis as { require?: unknown }).require);
@@ -50,8 +48,39 @@ test.describe('окно поднимает хост и переживает ег
 
     const bridgeType = await window.evaluate(() => typeof (globalThis as { harnas?: unknown }).harnas);
     expect(bridgeType).not.toBe('undefined');
+  });
 
-    await app.close();
+  test('ожидаемый отказ канала не печатается в stderr main, сбой — печатается (fix-lane-post, п. 4)', async () => {
+    const app = await electron.launch({
+      args: [mainEntry],
+      env: { ...process.env, HARNAS_HOME: home },
+    });
+    running = app;
+    let mainLog = '';
+    app.process().stderr?.on('data', (chunk: Buffer) => {
+      mainLog += chunk.toString('utf8');
+    });
+    const window = await app.firstWindow();
+    await expect(window.getByTestId('landing')).toBeVisible();
+
+    const callCode = (method: string, params: unknown): Promise<string> =>
+      window.evaluate(
+        async ([m, p]) => {
+          const bridge = (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas;
+          return bridge.call(m, p).then(
+            () => 'ok',
+            (error: unknown) => String(error),
+          );
+        },
+        [method, params] as const,
+      );
+    // Неверные параметры — хост отвечает bad_request: окно покажет свой текст, это не сбой main.
+    expect(await callCode('works.create', {})).toContain('bad_request');
+    // Неизвестный метод — `failed`: такой отказ Electron по-прежнему печатает.
+    expect(await callCode('no.such.method', {})).toContain('failed');
+    await expect.poll(() => mainLog).toContain("Error occurred in handler for 'host:call'");
+    expect(mainLog).toContain('unknown method: no.such.method');
+    expect(mainLog).not.toContain('bad_request');
   });
 
   test('второй запуск фокусирует первое окно и завершается сам', async () => {
@@ -59,6 +88,7 @@ test.describe('окно поднимает хост и переживает ег
       args: [mainEntry],
       env: { ...process.env, HARNAS_HOME: home },
     });
+    running = first;
     await first.firstWindow();
 
     // Второй экземпляр обычно завершается (app.quit()) раньше, чем Playwright
@@ -75,6 +105,5 @@ test.describe('окно поднимает хост и переживает ег
     expect(secondExitCode).toBe(0);
 
     expect(first.windows().length).toBe(1);
-    await first.close();
   });
 });

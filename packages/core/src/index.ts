@@ -62,7 +62,7 @@ export {
   transitionSession,
 } from './work/map.js';
 export { displayStatus, historyStatus } from './work/status-view.js';
-export { isUnreadFor, recipientsOf, unreadFor } from './work/letters.js';
+export { isUnreadFor, markHumanRead, recipientsOf, unreadFor } from './work/letters.js';
 export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';
 export { addRoom, isDescendant, isMember, joinNotice, nextRoomId } from './work/rooms.js';
 export type { NewRoom } from './work/rooms.js';
@@ -73,11 +73,33 @@ export {
   DirtyWorktreeError,
   isGitRepo,
   baseBranchOf,
+  checkoutGitDir,
+  commitProject,
+  gitStateReason,
+  GitStateError,
+  InvalidRevisionError,
+  joinDiffFiles,
+  mergeCheck,
   mergeWorktree,
+  NothingToCommitError,
+  parseCommits,
+  parseMergeTree,
+  parseNameStatusZ,
+  parseNumstat,
+  parsePorcelainPaths,
   plannedWorktree,
+  projectChanges,
   worktreeDiff,
 } from './work/worktree.js';
-export type { MergeResult, WorktreeDiff } from './work/worktree.js';
+export type {
+  BranchCommit,
+  DiffFile,
+  GitStateReason,
+  MergeCheck,
+  MergeResult,
+  ProjectChanges,
+  WorktreeDiff,
+} from './work/worktree.js';
 export {
   createWork,
   deleteSessionFiles,
@@ -87,11 +109,14 @@ export {
   pruneWorksIndex,
   readMap,
   readWorksIndex,
+  renameWork,
+  setWorkStatus,
   updateMap,
+  WorkNotFoundError,
   workPaths,
   worksIndexPath,
 } from './work/store.js';
-export type { NewWork, WorkPaths, WriteOptions } from './work/store.js';
+export type { NewWork, UpdateMapOptions, WorkPaths, WriteOptions } from './work/store.js';
 export {
   hostLeaseActive,
   readHostLease,
@@ -165,7 +190,7 @@ export {
   saveConfig,
 } from './config.js';
 export type { HarnasConfig, LoadedConfig, TypedSettingKey } from './config.js';
-export { activityOf } from './work/activity.js';
+export { activityOf, hookedSince } from './work/activity.js';
 export type {
   Activity,
   ActivityLog,

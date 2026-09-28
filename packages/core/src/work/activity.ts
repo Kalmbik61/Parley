@@ -191,3 +191,18 @@ export function activityOf({
     hooksMissing: events === null,
   };
 }
+
+/**
+ * Были ли события хуков с момента `sinceMs` — старта процесса агента (fix-final-b, спека 8.6).
+ * Ни одного — хост не знает, что у агента на экране: на вопросе доверия к папке Claude Code
+ * хуков не шлёт, и активность такой сессии `idle`. Печать с Enter туда подтвердила бы диалог —
+ * автоответ, запрещённый рамкой (15.1). Время события — mtime журнала, он не раньше самой
+ * записи, а последнее событие — самое позднее: достаточно сравнить его.
+ */
+export function hookedSince(
+  activity: Pick<SessionActivity, 'lastEventAt'> | null | undefined,
+  sinceMs: number,
+): boolean {
+  const at = msOf(activity?.lastEventAt ?? null);
+  return !Number.isNaN(at) && at >= sinceMs;
+}

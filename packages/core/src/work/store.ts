@@ -11,7 +11,7 @@ import {
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { bumpWorkId, nextWorkId, parseMap } from './map.js';
-import type { WorkIndexEntry, WorkMap, WorksIndex } from './types.js';
+import type { WorkIndexEntry, WorkMap, WorksIndex, WorkStatus } from './types.js';
 
 /** Домашняя папка харнесса. Переопределяется через окружение — этим живут тесты. */
 export function harnasHome(): string {
@@ -75,6 +75,18 @@ export class MapLockTimeoutError extends Error {
   constructor(lockFile: string, timeoutMs: number) {
     super(`блокировка ${lockFile} не снята за ${timeoutMs} мс`);
     this.name = 'MapLockTimeoutError';
+  }
+}
+
+/**
+ * Работы нет — отдельный класс, как `MapLockTimeoutError`: хосту нужно ответить
+ * `not_found`, а не `internal`, и в том числе когда каталог работы удалили
+ * (`works.delete` другого клиента), пока запись ждала `map.lock`.
+ */
+export class WorkNotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WorkNotFoundError';
   }
 }
 
@@ -290,26 +302,31 @@ export async function createWork(
     rooms: [],
   };
 
+  // Карта пишется под блокировкой индекса и раньше самого индекса: наблюдатель
+  // HARNAS_HOME перечитывает список по записи индекса, и запись без карты он молча
+  // пропустил бы. За каталогом нового проекта ещё никто не следит, так что без
+  // этого порядка первая работа проекта не появилась бы в списке до следующей
+  // записи какой-нибудь карты. Сбой записи карты — и индекс не тронут.
   await withWorksIndex(lockTimeoutMs, async (index) => {
     let id = nextWorkId(index);
     while (await exists(workPaths(projectPath, id).map)) id = bumpWorkId(id);
     map.work.id = id;
-    index.works.push(entryOf(projectPath, map));
-  });
 
-  const paths = workPaths(projectPath, map.work.id);
-  await mkdir(paths.briefs, { recursive: true });
-  await mkdir(paths.artifacts, { recursive: true });
-  const text = serialize(map);
-  await withLock(paths.lock, lockTimeoutMs, async () => {
-    try {
-      await writeFile(paths.map, text, { encoding: 'utf8', flag: 'wx' });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      throw new Error(`карта ${paths.map} уже существует — работа не создана`);
-    }
-    // `.bak` с первой же записи: раздел 8 обещает предыдущую версию для любой карты.
-    await writeFile(paths.bak, text, 'utf8');
+    const paths = workPaths(projectPath, id);
+    await mkdir(paths.briefs, { recursive: true });
+    await mkdir(paths.artifacts, { recursive: true });
+    const text = serialize(map);
+    await withLock(paths.lock, lockTimeoutMs, async () => {
+      try {
+        await writeFile(paths.map, text, { encoding: 'utf8', flag: 'wx' });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        throw new Error(`карта ${paths.map} уже существует — работа не создана`);
+      }
+      // `.bak` с первой же записи: раздел 8 обещает предыдущую версию для любой карты.
+      await writeFile(paths.bak, text, 'utf8');
+    });
+    index.works.push(entryOf(projectPath, map));
   });
   return map;
 }
@@ -319,18 +336,34 @@ export async function createWork(
  * поэтому параллельные писатели не затирают друг друга. Прежняя версия уходит
  * в `map.json.bak`, новая появляется атомарным `rename`. Битую карту не трогаем.
  */
+/** Только у updateMap: createWork, deleteWorkFiles и pruneWorksIndex берут прежний WriteOptions. */
+export interface UpdateMapOptions extends WriteOptions {
+  /** false — `work.updatedAt` не сдвигается: правка не событие работы (порядок сайдбара, спека 6.2). */
+  touch?: boolean;
+}
+
 export async function updateMap(
   projectPath: string,
   workId: string,
   mutate: (map: WorkMap) => void,
-  { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS }: WriteOptions = {},
+  { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS, touch = true }: UpdateMapOptions = {},
 ): Promise<WorkMap> {
   const paths = workPaths(projectPath, workId);
   // Блокировка живёт в каталоге работы, поэтому про несуществующую работу первым
   // отчитался бы ENOENT про `map.lock` — не про тот файл, которого на самом деле нет.
-  if (!(await exists(paths.map))) {
-    throw new Error(`карты ${paths.map} нет — работы ${workId} не существует`);
-  }
+  const missing = (): WorkNotFoundError =>
+    new WorkNotFoundError(`карты ${paths.map} нет — работы ${workId} не существует`);
+  if (!(await exists(paths.map))) throw missing();
+
+  // Каталог могли удалить после проверки выше, пока ждали лок или уже под ним:
+  // тогда ENOENT про `map.lock` или `map.json` — это тоже «работы нет». Решает
+  // не код ошибки сам по себе, а то, что каталога работы больше нет.
+  const whenGone = async (error: unknown): Promise<never> => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !(await exists(paths.dir))) {
+      throw missing();
+    }
+    throw error;
+  };
 
   return withLock(paths.lock, lockTimeoutMs, async () => {
     const raw = await readFile(paths.map, 'utf8');
@@ -341,7 +374,7 @@ export async function updateMap(
       throw new Error(`карта ${paths.map} принадлежит работе ${current.work.id}, а не ${workId}`);
     }
     mutate(current);
-    current.work.updatedAt = new Date().toISOString();
+    if (touch) current.work.updatedAt = new Date().toISOString();
 
     // Индекс обновляем до записи карты и не отпуская `map.lock`: его отказ должен
     // означать «карта не переписана», иначе ретрай вызывающего продублирует мутацию.
@@ -350,5 +383,45 @@ export async function updateMap(
     await writeFile(paths.bak, raw, 'utf8');
     await writeAtomic(paths.map, serialize(current));
     return current;
-  });
+  }).catch(whenGone);
+}
+
+/** Предел названия работы в кодовых точках: эмодзи — один символ, а не два UTF-16. */
+const WORK_TITLE_MAX = 120;
+
+/**
+ * `trim()` не считает пробелом невидимые символы формата (ZWSP, ZWNJ, ZWJ,
+ * WORD JOINER), и название из одних их выглядело бы пустой карточкой. Обрезаются
+ * только края: ZWJ внутри эмодзи-последовательности нужен. Та же регулярка — в
+ * схеме `works.rename` протокола.
+ */
+const TITLE_EDGES = /^[\s\u200B-\u200D\u2060\uFEFF]+|[\s\u200B-\u200D\u2060\uFEFF]+$/g;
+
+/**
+ * Переименовывает работу. Не событие работы: `updatedAt` стоит на месте, иначе
+ * карточка всплыла бы в начало своего ранга в сайдбаре (спека 6.2).
+ */
+export async function renameWork(
+  projectPath: string,
+  workId: string,
+  title: string,
+): Promise<WorkMap> {
+  const trimmed = title.replace(TITLE_EDGES, '');
+  const length = [...trimmed].length;
+  if (length < 1 || length > WORK_TITLE_MAX) {
+    throw new Error(`название работы: 1–${WORK_TITLE_MAX} символов`);
+  }
+  return updateMap(projectPath, workId, (map) => (map.work.title = trimmed), { touch: false });
+}
+
+/**
+ * Меняет статус работы. Живые сессии архив не трогает — так же, как TUI; и это
+ * тоже не событие работы, поэтому `updatedAt` не сдвигается.
+ */
+export async function setWorkStatus(
+  projectPath: string,
+  workId: string,
+  status: WorkStatus,
+): Promise<WorkMap> {
+  return updateMap(projectPath, workId, (map) => (map.work.status = status), { touch: false });
 }

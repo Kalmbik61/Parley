@@ -68,8 +68,11 @@ export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
   resumeRate: 6,
   autoLaunch: true,
   theme: 'mocha',
-  fontFamily: 'Menlo',
-  fontSize: 13,
+  // Терминал окна (кусок 1.3 плана окна, спека 4.3) — TUI эти два ключа не
+  // читает (у него свой рендер, не xterm), так что смена дефолта его не
+  // касается.
+  fontFamily: "'SF Mono', Menlo, monospace",
+  fontSize: 14,
   worktreeRoot: '~/harnas/worktrees',
 };
 

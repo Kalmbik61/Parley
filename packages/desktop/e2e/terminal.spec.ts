@@ -1,20 +1,14 @@
-import { existsSync } from 'node:fs';
-import { mkdtemp, rm, mkdir } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { _electron as electron, expect, test, type Page } from '@playwright/test';
+import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { quitApp, stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
+import { makeTempHome, makeTempProject } from './tmp.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
-// Тот же защитный skip, что в `smoke.spec.ts`: без сборки @harnas/host этому
-// тесту нечего запускать.
-const hostEntry = path.resolve(dirname, '../../host/dist/main.js');
-const hostReady = existsSync(hostEntry);
 const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
-
-test.skip(!hostReady, `packages/host/dist/main.js не собран — сначала pnpm --filter @harnas/host build: ${hostEntry}`);
 
 /**
  * `sessions.create`/`pty.attach` — методы кусков 1.6/1.7 хоста
@@ -42,18 +36,21 @@ async function hostSupportsPty(window: Page): Promise<boolean> {
 
 test.describe('панель терминала: ввод стаба и восстановление после перезапуска', () => {
   let home: string;
+  let project: string;
+  /** Окно теста — его гасит afterEach, и после упавшего теста тоже. */
+  let running: ElectronApplication | null = null;
 
   test.beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-term-'));
-
-    // Проект общий между прогонами: без очистки в нём копятся работы прошлых запусков.
-    await rm('/tmp/harnas-e2e-terminal', { recursive: true, force: true });
-    await mkdir('/tmp/harnas-e2e-terminal', { recursive: true });
+    home = await makeTempHome('term');
+    project = await makeTempProject('terminal');
   });
 
   test.afterEach(async () => {
+    await stopApp(running);
+    running = null;
     await stopHost(home);
     await rm(home, { recursive: true, force: true });
+    await rm(project, { recursive: true, force: true });
   });
 
   test('ввод hello и Enter дают echo: hello; новый запуск восстанавливает экран из снимка', async () => {
@@ -63,8 +60,9 @@ test.describe('панель терминала: ввод стаба и восс�
     const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
 
     let app = await electron.launch({ args: [mainEntry], env });
+    running = app;
     let window = await app.firstWindow();
-    await expect(window.getByText('Работ пока нет')).toBeVisible();
+    await expect(window.getByTestId('landing')).toBeVisible();
 
     if (!(await hostSupportsPty(window))) {
       await app.close();
@@ -73,27 +71,28 @@ test.describe('панель терминала: ввод стаба и восс�
     }
 
     const work = await window.evaluate(
-      () =>
+      (projectPath: string) =>
         (globalThis as { harnas: { call: (m: string, p: unknown) => Promise<{ workId: string }> } }).harnas.call(
           'works.create',
-          { projectPath: '/tmp/harnas-e2e-terminal', title: 'e2e-terminal', goal: '' },
+          { projectPath, title: 'e2e-terminal', goal: '' },
         ),
+      project,
     );
     const session = await window.evaluate(
-      ({ workId }: { workId: string }) =>
+      ({ workId, projectPath }: { workId: string; projectPath: string }) =>
         (
           globalThis as {
             harnas: { call: (m: string, p: unknown) => Promise<{ ref: { sessionId: string } }> };
           }
         ).harnas.call('sessions.create', {
-          projectPath: '/tmp/harnas-e2e-terminal',
+          projectPath,
           workId,
           provider: 'claude',
           label: 'терминал',
           task: '',
           parent: null,
         }),
-      { workId: work.workId },
+      { workId: work.workId, projectPath: project },
     );
 
     await window.locator(`[data-session-id="${session.ref.sessionId}"]`).click();
@@ -105,15 +104,142 @@ test.describe('панель терминала: ввод стаба и восс�
 
     await expect(window.getByText('echo: hello', { exact: true })).toBeVisible();
 
-    await app.close();
+    await quitApp(app);
 
     app = await electron.launch({ args: [mainEntry], env });
+    running = app;
     window = await app.firstWindow();
     await window.locator(`[data-session-id="${session.ref.sessionId}"]`).click();
 
     // Экран восстановлен из снимка хоста — без нового ввода.
     await expect(window.getByText('echo: hello', { exact: true })).toBeVisible();
+  });
 
-    await app.close();
+  test('тест 15 (кусок 5.3): указатель по строкам с URL и путём — ни pageerror, ни ошибок console', async () => {
+    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    await mkdir(path.join(project, 'src'), { recursive: true });
+    await writeFile(path.join(project, 'src', 'a.ts'), 'export {};\n');
+
+    const app = await electron.launch({ args: [mainEntry], env });
+    running = app;
+    try {
+      const window = await app.firstWindow();
+      // Неперехваченное исключение (как SyntaxError `WebLinksAddon` на флагах `gg`) Playwright
+      // отдаёт событием `pageerror`, а не `console`: собираем оба.
+      const errors: string[] = [];
+      window.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`));
+      window.on('console', (message) => {
+        if (message.type() === 'error') errors.push(`console: ${message.text()}`);
+      });
+      await expect(window.getByTestId('landing')).toBeVisible();
+
+      const work = await window.evaluate(
+        (projectPath: string) =>
+          (globalThis as { harnas: { call: (m: string, p: unknown) => Promise<{ workId: string }> } }).harnas.call(
+            'works.create',
+            { projectPath, title: 'e2e-links', goal: '' },
+          ),
+        project,
+      );
+      const session = await window.evaluate(
+        ({ workId, projectPath }: { workId: string; projectPath: string }) =>
+          (
+            globalThis as {
+              harnas: { call: (m: string, p: unknown) => Promise<{ ref: { sessionId: string } }> };
+            }
+          ).harnas.call('sessions.create', { projectPath, workId, provider: 'claude', label: 'links', task: '', parent: null }),
+        { workId: work.workId, projectPath: project },
+      );
+
+      await window.locator(`[data-session-id="${session.ref.sessionId}"]`).click();
+      const terminalInput = window.locator('.xterm-helper-textarea');
+      await terminalInput.click();
+      await terminalInput.type('https://example.com/x ./src/a.ts:12');
+      await terminalInput.press('Enter');
+      await expect(window.getByText('echo: https://example.com/x ./src/a.ts:12', { exact: true })).toBeVisible();
+
+      // Указатель проходит по каждой строке экрана в нескольких точках: xterm зовёт
+      // провайдеры ссылок на строку под указателем.
+      const box = await window.locator('.xterm-screen').first().boundingBox();
+      if (box === null) throw new Error('нет .xterm-screen');
+      const rowHeight = 12;
+      for (let y = box.y + rowHeight / 2; y < box.y + Math.min(box.height, rowHeight * 12); y += rowHeight / 2) {
+        for (let x = box.x + 8; x < box.x + Math.min(box.width, 400); x += 24) {
+          await window.mouse.move(x, y);
+        }
+      }
+      await window.waitForTimeout(300);
+
+      expect(errors).toEqual([]);
+    } finally {
+      await stopApp(app);
+    }
+  });
+
+  test('раунд fix-6.2: аддоны под xterm 5.5 — ⌘F считает совпадения N/M, FitAddon подгоняет строки под окно', async () => {
+    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const app = await electron.launch({ args: [mainEntry], env });
+    running = app;
+    try {
+      const window = await app.firstWindow();
+      const errors: string[] = [];
+      window.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`));
+      window.on('console', (message) => {
+        if (message.type() === 'error') errors.push(`console: ${message.text()}`);
+      });
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 1200, height: 600 }));
+      await expect(window.getByTestId('landing')).toBeVisible();
+
+      const work = await window.evaluate(
+        (projectPath: string) =>
+          (globalThis as { harnas: { call: (m: string, p: unknown) => Promise<{ workId: string }> } }).harnas.call(
+            'works.create',
+            { projectPath, title: 'e2e-addons', goal: '' },
+          ),
+        project,
+      );
+      const session = await window.evaluate(
+        ({ workId, projectPath }: { workId: string; projectPath: string }) =>
+          (
+            globalThis as {
+              harnas: { call: (m: string, p: unknown) => Promise<{ ref: { sessionId: string } }> };
+            }
+          ).harnas.call('sessions.create', { projectPath, workId, provider: 'claude', label: 'addons', task: '', parent: null }),
+        { workId: work.workId, projectPath: project },
+      );
+
+      await window.locator(`[data-session-id="${session.ref.sessionId}"]`).click();
+      const terminalInput = window.locator('.xterm-helper-textarea');
+      await terminalInput.click();
+      for (let i = 0; i < 3; i += 1) {
+        await terminalInput.type('needle');
+        await terminalInput.press('Enter');
+      }
+      await expect(window.getByText('echo: needle', { exact: true })).toHaveCount(3);
+
+      // FitAddon: строк DOM-рендерера столько, сколько влезает; выше окно — больше строк.
+      const rows = window.locator('.xterm-rows > div');
+      const rowsBefore = await rows.count();
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 1200, height: 900 }));
+      await expect.poll(() => rows.count()).toBeGreaterThan(rowsBefore);
+
+      // Поиск: «echo: needle» печатает только stub — ровно три совпадения; ↓ переходит к другому.
+      await terminalInput.click();
+      await window.keyboard.press('Meta+F');
+      const field = window.getByTestId('terminal-search').getByRole('textbox');
+      await expect(field).toBeFocused();
+      await field.fill('echo: needle');
+      await field.press('Enter');
+      const count = window.getByTestId('terminal-search-count');
+      await expect(count).toHaveText(/^[1-3]\/3$/);
+      const first = await count.textContent();
+      await field.press('Enter');
+      await expect(count).toHaveText(/^[1-3]\/3$/);
+      expect(await count.textContent()).not.toBe(first);
+
+      expect(errors).toEqual([]);
+    } finally {
+      await stopApp(app);
+    }
   });
 });

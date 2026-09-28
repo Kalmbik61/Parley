@@ -1,25 +1,32 @@
 /**
  * Новая сессия (⌘T): провайдер из `providers.list` (недоступный — неактивен),
  * ярлык, задача (пустая — тихий старт) и «дочерняя выбранной» → `sessions.create`
- * (кусок 1.10 плана окна).
+ * (кусок 1.10 плана окна). Кусок 1.4 плана «облик Orca» — примитивы
+ * `ui/dialog`, `ui/select`, `ui/input`, `ui/textarea`, `ui/switch`, `ui/button`
+ * вместо голого Radix и токенов старой палитры.
  *
  * «В своём worktree» (кусок 4.3 плана worktree, спека 5.1): неактивен, пока
  * `worktrees.available` не подтвердит, что проект — git-репозиторий. `branches`
  * из сайдбара для этого не годится — при отсоединённой голове ветки нет и у
  * git-проекта, а `worktrees.available` смотрит именно на `git rev-parse
  * --is-inside-work-tree`, не на текущую ветку.
+ *
+ * Кусок 3.5: агент по умолчанию — то же правило, что у формы новой работы
+ * (`lib/default-provider.ts`), и созданная сессия запоминает его в `ui.json.lastProvider`.
  */
 
-import { useEffect, useState } from 'react';
-import * as Dialog from '@radix-ui/react-dialog';
-import * as Select from '@radix-ui/react-select';
+import { useEffect, useRef, useState } from 'react';
 import type { HarnasBridge } from '../../../shared/bridge.js';
-
-interface ProviderOption {
-  id: string;
-  label: string;
-  available: boolean;
-}
+import { decodeIpcError } from '../../../shared/ipc-error.js';
+import { errorText, S } from '../../../shared/strings.js';
+import { defaultProvider, type ProviderOption } from '../../lib/default-provider.js';
+import { useUiStore } from '../../store/ui.js';
+import { Button } from '../../ui/button.js';
+import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from '../../ui/dialog.js';
+import { Input } from '../../ui/input.js';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select.js';
+import { Switch } from '../../ui/switch.js';
+import { Textarea } from '../../ui/textarea.js';
 
 export interface NewSessionDialogProps {
   open: boolean;
@@ -47,17 +54,30 @@ export function NewSessionDialog({
   const [worktree, setWorktree] = useState(false);
   const [worktreeAvailable, setWorktreeAvailable] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Агент по умолчанию из `providers.list` этого открытия. Launch раньше ответа ждёт его —
+   * иначе ушёл бы пустой провайдер (раунд исправлений 2 куска 3.5, то же у формы новой работы).
+   */
+  const providerRef = useRef<Promise<string> | null>(null);
 
   useEffect(() => {
     if (!open) return;
-    bridge
+    // Каждое открытие — заново по правилу: прошлый выбор уже лежит в `lastProvider`.
+    setProvider('');
+    providerRef.current = bridge
       .call('providers.list', {})
       .then((result) => {
+        const chosen = defaultProvider(result.providers, useUiStore.getState().ui.lastProvider) ?? '';
         setProviders(result.providers);
-        const firstAvailable = result.providers.find((item) => item.available);
-        setProvider((current) => (current !== '' ? current : (firstAvailable ?? result.providers[0])?.id ?? ''));
+        // Выбор человека, сделанный до ответа, не затираем.
+        setProvider((current) => (current === '' ? chosen : current));
+        return chosen;
       })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+      .catch((err: unknown) => {
+        console.warn('[harnas] providers.list', err);
+        setError(errorText(decodeIpcError(err).code, S.errors.actions.loadProviders));
+        return '';
+      });
   }, [open, bridge]);
 
   useEffect(() => {
@@ -74,107 +94,88 @@ export function NewSessionDialog({
 
   const submit = async (): Promise<void> => {
     if (workId === null) {
-      setError('нет выбранной работы');
+      setError(S.dialogs.newSession.selectWorkRequired);
       return;
     }
     setError(null);
+    const loading = providerRef.current;
+    const chosen = provider === '' && loading !== null ? await loading : provider;
     try {
       await bridge.call('sessions.create', {
         projectPath,
         workId,
-        provider,
+        provider: chosen,
         label,
         task,
         parent: childOfSelected ? selectedSessionId : null,
         worktree,
       });
+      useUiStore.getState().patchUi({ lastProvider: chosen });
       onOpenChange(false);
       setLabel('');
       setTask('');
       setChildOfSelected(false);
       setWorktree(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      console.warn('[harnas] sessions.create', err);
+      setError(errorText(decodeIpcError(err).code, S.errors.actions.createSession));
     }
   };
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/50" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 w-96 -translate-x-1/2 -translate-y-1/2 rounded-lg bg-[var(--h-base)] p-4 text-[var(--h-text)] shadow-lg">
-          <Dialog.Title className="text-sm font-medium">Новая сессия</Dialog.Title>
-          <div className="mt-3 flex flex-col gap-3 text-sm">
-            <Select.Root value={provider} onValueChange={setProvider}>
-              <Select.Trigger className="flex items-center justify-between rounded border border-[var(--h-overlay)] px-2 py-1">
-                <Select.Value placeholder="провайдер…" />
-              </Select.Trigger>
-              <Select.Portal>
-                <Select.Content className="rounded-md bg-[var(--h-mantle)] p-1 shadow-lg">
-                  <Select.Viewport>
-                    {providers.map((item) => (
-                      <Select.Item
-                        key={item.id}
-                        value={item.id}
-                        disabled={!item.available}
-                        className="cursor-default rounded px-2 py-1 data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--h-selection)]"
-                      >
-                        <Select.ItemText>{item.label}</Select.ItemText>
-                      </Select.Item>
-                    ))}
-                  </Select.Viewport>
-                </Select.Content>
-              </Select.Portal>
-            </Select.Root>
-            <label className="flex flex-col gap-1">
-              Ярлык
-              <input
-                className="rounded border border-[var(--h-overlay)] bg-transparent px-2 py-1"
-                value={label}
-                onChange={(event) => setLabel(event.target.value)}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              Задача
-              <textarea
-                className="rounded border border-[var(--h-overlay)] bg-transparent px-2 py-1"
-                placeholder="пусто — тихий старт, задачу агент получит первым сообщением"
-                value={task}
-                onChange={(event) => setTask(event.target.value)}
-              />
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={childOfSelected}
-                disabled={selectedSessionId === null}
-                onChange={(event) => setChildOfSelected(event.target.checked)}
-              />
-              дочерняя выбранной
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={worktree}
-                disabled={!worktreeAvailable}
-                onChange={(event) => setWorktree(event.target.checked)}
-              />
-              в своём worktree
-            </label>
-            {error !== null ? <p className="text-[var(--h-red)]">{error}</p> : null}
-          </div>
-          <div className="mt-4 flex justify-end gap-2">
-            <Dialog.Close asChild>
-              <button type="button" className="rounded px-3 py-1 text-[var(--h-subtext)]">
-                Отмена
-              </button>
-            </Dialog.Close>
-            <button type="button" className="rounded bg-[var(--h-blue)] px-3 py-1 text-[var(--h-base)]" onClick={() => void submit()}>
-              Запустить
-            </button>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent aria-describedby={undefined} className="w-96 max-w-96">
+        <DialogTitle>{S.dialogs.newSession.title}</DialogTitle>
+        <div className="flex min-w-0 flex-col gap-3 text-sm">
+          <Select value={provider} onValueChange={setProvider}>
+            <SelectTrigger>
+              <SelectValue placeholder={S.dialogs.newSession.providerPlaceholder} />
+            </SelectTrigger>
+            <SelectContent>
+              {providers.map((item) => (
+                <SelectItem key={item.id} value={item.id} disabled={!item.available}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <label className="flex flex-col gap-1">
+            {S.dialogs.newSession.labelField}
+            <Input value={label} onChange={(event) => setLabel(event.target.value)} />
+          </label>
+          <label className="flex flex-col gap-1">
+            {S.dialogs.newSession.taskField}
+            <Textarea
+              placeholder={S.dialogs.newSession.taskPlaceholder}
+              value={task}
+              onChange={(event) => setTask(event.target.value)}
+            />
+          </label>
+          <label className="flex items-center gap-2">
+            <Switch
+              checked={childOfSelected}
+              disabled={selectedSessionId === null}
+              onCheckedChange={setChildOfSelected}
+            />
+            {S.dialogs.newSession.childOfSelected}
+          </label>
+          <label className="flex items-center gap-2">
+            <Switch checked={worktree} disabled={!worktreeAvailable} onCheckedChange={setWorktree} />
+            {S.dialogs.newSession.inOwnWorktree}
+          </label>
+          {error !== null ? <p className="text-destructive">{error}</p> : null}
+        </div>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button type="button" variant="ghost">
+              {S.common.cancel}
+            </Button>
+          </DialogClose>
+          <Button type="button" onClick={() => void submit()}>
+            {S.dialogs.newSession.submit}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

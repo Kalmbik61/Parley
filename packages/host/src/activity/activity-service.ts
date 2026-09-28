@@ -33,7 +33,13 @@ import {
   type WorkEntry,
   type WorkSession,
 } from '@harnas/core';
-import { refKey, type LiveMetrics, type SessionRef, type WorksSnapshot } from '@harnas/protocol';
+import {
+  refKey,
+  type EventData,
+  type LiveMetrics,
+  type SessionRef,
+  type WorksSnapshot,
+} from '@harnas/protocol';
 import type { HostContext } from '../context.js';
 import type { WorksService } from '../works/works-service.js';
 import { createLogIndex, type LogIndex } from './log-index.js';
@@ -62,6 +68,8 @@ export interface ActivityService {
   /** Пользователь смотрел на сессию: `pty.attach` и `pty.input` (1.6). */
   markSeen(ref: SessionRef, at?: string): void;
   onChange(listener: (ref: SessionRef, value: SessionLive) => void): () => void;
+  /** Текущая активность всех сессий, которые держит сервис, — повтор для нового клиента. */
+  current(): Array<EventData<'activity.changed'>>;
   stop(): Promise<void>;
 }
 
@@ -241,8 +249,10 @@ export function createActivityService(
       key,
       setTimeout(() => {
         trustWaitTimers.delete(key);
-        // Хук успел прийти, пока таймер ждал, — журнал сейчас не пуст.
-        if ((journals.get(key) ?? null) !== null) return;
+        // Хук успел прийти, пока таймер ждал, — в журнале есть событие. Именно длина, а не
+        // `!== null`: каталог `events/` заводится при старте сессии, и журнал без событий
+        // читается пустым массивом (раунд исправлений 1 куска 3.3).
+        if ((journals.get(key)?.length ?? 0) > 0) return;
         trustWaitNotified.add(key);
         host.broadcast('host.notice', {
           kind: 'trust-wait',
@@ -441,6 +451,23 @@ export function createActivityService(
     onChange(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+    current() {
+      // Идём по снимку работ, а не по ключам `live`: из ключа ref не собрать, а
+      // снимок и так единственный источник того, какие сессии существуют.
+      const result: Array<EventData<'activity.changed'>> = [];
+      for (const entry of works.snapshot().entries) {
+        for (const session of entry.map.sessions) {
+          const ref: SessionRef = {
+            projectPath: entry.projectPath,
+            workId: entry.map.work.id,
+            sessionId: session.id,
+          };
+          const value = live.get(refKey(ref));
+          if (value !== undefined) result.push({ ref, activity: value.activity, metrics: value.metrics });
+        }
+      }
+      return result;
     },
     async stop() {
       if (stopped) return;

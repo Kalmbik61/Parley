@@ -10,7 +10,11 @@
  */
 
 import { useLayoutEffect, useRef, useState } from 'react';
-import type { WorkEntry } from '@harnas/core';
+import type { Message, WorkEntry } from '@harnas/core';
+import type { HarnasBridge } from '../../../shared/bridge.js';
+import { S } from '../../../shared/strings.js';
+import { isHumanUnread } from '../../attention/derive.js';
+import { useMarkRead } from '../../attention/use-mark-read.js';
 import { mailView } from '../../lib/mail-view.js';
 import { Decisions } from './Decisions.js';
 import { Letter } from './Letter.js';
@@ -19,27 +23,28 @@ export interface MailPanelProps {
   entry: WorkEntry;
   providers: Array<{ id: string; label: string }>;
   models: Record<string, string | null>;
+  bridge: HarnasBridge;
+  /** Работа активна (`LayoutBodyContext.active`): письма скрытой работы LRU не отмечаются прочитанными. */
+  active: boolean;
   onOpenExternal: (url: string) => void;
-}
-
-/** Число писем словом: перенос `mailWord` из `tui/src/room-view.ts`. */
-function mailWord(count: number): string {
-  const mod10 = count % 10;
-  const mod100 = count % 100;
-  if (mod10 === 1 && mod100 !== 11) return 'письмо';
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'письма';
-  return 'писем';
 }
 
 /** Ушёл ли пользователь от хвоста ленты дальше, чем на пиксельный люфт округления. */
 const BOTTOM_SLACK = 8;
 
+/** Письмо из карты не прочитано человеком; пропавшее из карты — не кандидат. */
+function isUnreadForHuman(message: Message | undefined): boolean {
+  return message !== undefined && isHumanUnread(message);
+}
+
 function isAtBottom(container: HTMLDivElement): boolean {
   return container.scrollHeight - container.scrollTop - container.clientHeight <= BOTTOM_SLACK;
 }
 
-export function MailPanel({ entry, providers, models, onOpenExternal }: MailPanelProps): JSX.Element {
+export function MailPanel({ entry, providers, models, bridge, active, onOpenExternal }: MailPanelProps): JSX.Element {
   const view = mailView(entry, providers, models);
+  const markRead = useMarkRead({ bridge, projectPath: entry.projectPath, workId: entry.map.work.id, active });
+  const messages = new Map(entry.map.messages.map((message) => [message.id, message]));
   const containerRef = useRef<HTMLDivElement | null>(null);
   // У хвоста лента держится всегда, пока читатель сам не отступил прокруткой —
   // `ref`, а не состояние: значение нужно синхронно внутри layout-эффекта и
@@ -82,18 +87,18 @@ export function MailPanel({ entry, providers, models, onOpenExternal }: MailPane
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between gap-2 border-b border-[var(--h-overlay)] px-3 py-2">
+      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
         <div className="min-w-0">
-          <div className="text-sm font-medium text-[var(--h-text)]">
-            вся почта · {view.letters.length} {mailWord(view.letters.length)}
+          <div className="text-sm font-medium text-foreground">
+            {S.mail.headerPrefix} · {view.letters.length} {S.mail.messageWord(view.letters.length)}
           </div>
-          <div className="truncate text-xs text-[var(--h-muted)]">{view.participants.join(' · ')}</div>
+          <div className="truncate text-xs text-muted-foreground">{view.participants.join(' · ')}</div>
         </div>
         {below > 0 ? (
           <button
             type="button"
             onClick={scrollToBottom}
-            className="shrink-0 rounded bg-[var(--h-surface)] px-2 py-1 text-xs text-[var(--h-text)]"
+            className="shrink-0 rounded bg-muted px-2 py-1 text-xs text-foreground"
           >
             ↓{below}
           </button>
@@ -102,7 +107,12 @@ export function MailPanel({ entry, providers, models, onOpenExternal }: MailPane
       <Decisions decisions={view.decisions} />
       <div ref={containerRef} onScroll={handleScroll} className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
         {view.letters.map((letter) => (
-          <Letter key={letter.id} letter={letter} onOpenExternal={onOpenExternal} />
+          <Letter
+            key={letter.id}
+            letter={letter}
+            onOpenExternal={onOpenExternal}
+            observeRef={markRead(letter.id, isUnreadForHuman(messages.get(letter.id)))}
+          />
         ))}
       </div>
     </div>

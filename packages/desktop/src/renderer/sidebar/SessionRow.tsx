@@ -1,0 +1,230 @@
+/**
+ * Строка сессии в карточке работы (кусок 3.3, спека 4.2, 6.3): значок состояния, значок
+ * агента, `S02 исполнитель`, слово состояния, `⎇` своего worktree и время последнего
+ * события. Тултип — задача, сводка агента, итог, модель и метрики.
+ *
+ * Перетаскивание — контракт 2.6, как у строки прежнего дерева сессий: `DndContext`
+ * один на окно (`AppShell`), тащатся только строки активной работы (спека 6.4) — у
+ * остальных активатор выключен и курсор `not-allowed`. Атрибуты @dnd-kit (`role`,
+ * `tabIndex`, `aria-*`) не ставятся: строка уже кнопка со своей ролью. HTML5-атрибута
+ * `draggable` нет — тащит @dnd-kit по указателю.
+ *
+ * Меню по правой кнопке — `SessionRowMenu` (кусок 3.4): его триггер и триггер тултипа
+ * сливаются на одном узле строки.
+ */
+
+import { memo, useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
+import { useDndContext, useDraggable } from '@dnd-kit/core';
+import type { WorkSession } from '@harnas/core';
+import type { HarnasBridge } from '../../shared/bridge.js';
+import { S } from '../../shared/strings.js';
+import { sessionAttention } from '../attention/derive.js';
+import { AgentIcon } from '../components/AgentIcon.js';
+import { AgentStateDot } from '../components/AgentStateDot.js';
+import { dndId, type DragSourceData } from '../layout/dnd.js';
+import { cn } from '../lib/cn.js';
+import { displayStatus, dotState, stateWord } from '../lib/dot-state.js';
+import { formatMetricsLine } from '../lib/metrics-line.js';
+import { sessionRowLabel } from '../lib/participant.js';
+import { workKey as workKeyOf } from '../lib/tree-order.js';
+import { relativeTime } from '../lib/relative-time.js';
+import type { ActivityEntry } from '../store/activity.js';
+import { useNoticesStore } from '../store/notices.js';
+import { HoverCard, HoverCardContent, HoverCardTrigger } from '../ui/hover-card.js';
+import { SessionRowMenu } from './SessionRowMenu.js';
+import { useCursorStop } from './use-sidebar-keys.js';
+
+/** Сколько символов задачи показывает тултип (план 3.3). */
+const TASK_PREVIEW = 300;
+
+export interface SessionRowProps {
+  workKey: string;
+  /** Работа строки — для меню (кусок 3.4); строки, а не ref, чтобы `memo` не сбивался. */
+  projectPath: string;
+  workId: string;
+  bridge: HarnasBridge;
+  session: WorkSession;
+  depth: number;
+  activity: ActivityEntry | null;
+  now: Date;
+  /** Работа строки активна: только тогда строку можно тащить (спека 6.4). */
+  draggable: boolean;
+  selected: boolean;
+  onOpen(): void;
+}
+
+// `memo`: строка перерисовывается, только когда сменились её сессия, её запись активности
+// (стор активности заменяет лишь изменённую запись) или её флаги (раунд исправлений 1 куска 3.3).
+export const SessionRow = memo(function SessionRow({
+  workKey,
+  projectPath,
+  workId,
+  bridge,
+  session,
+  depth,
+  activity,
+  now,
+  draggable,
+  selected,
+  onOpen,
+}: SessionRowProps): JSX.Element {
+  const data: DragSourceData = { item: { kind: 'session', sessionId: session.id } };
+  const dragId = dndId.session(workKey, session.id);
+  const { setNodeRef, listeners } = useDraggable({ id: dragId, data, disabled: !draggable });
+  const stop = useCursorStop(workKey, session.id, false);
+
+  // Тултип под своим управлением (раунд исправлений 1 куска 3.3, ревью B, находка 1): после
+  // перетаскивания соседней строки наведение показывало тултип перетащенной. Строка —
+  // фокусируемая (`tabIndex`), pointerdown в браузере её фокусирует, а Radix открывает карточку и по
+  // фокусу; фокус остаётся на перетащенной строке и после броска, а открытая карточка
+  // держится после отпускания, если в документе есть выделение (`hasSelectionRef`).
+  // Поэтому во время любого перетаскивания тултипы строк закрыты, после броска тоже закрыты,
+  // а перетаскиваемая строка теряет фокус.
+  const { active } = useDndContext();
+  const dragging = active !== null;
+  const draggingThis = active?.id === dragId;
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const setRowRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      rowRef.current = node;
+      setNodeRef(node);
+    },
+    [setNodeRef],
+  );
+  // Раунд исправлений 2: таймер открытия Radix (openDelay) стартует на pointerenter ещё до
+  // порога перетаскивания, а pointerleave, который его отменил бы, глотает захват указателя
+  // @dnd-kit — таймер срабатывает уже после броска, когда указатель над соседней строкой.
+  // Поэтому запрос Radix открыть принимается, только если сейчас нет перетаскивания, после
+  // последнего перетаскивания указатель заново входил в строку (или её заново фокусировали),
+  // и строка действительно под указателем или в фокусе.
+  const staleRef = useRef(false);
+  useEffect(() => {
+    setTooltipOpen(false);
+    if (dragging) staleRef.current = true;
+    if (draggingThis && rowRef.current !== null && document.activeElement === rowRef.current) rowRef.current.blur();
+  }, [dragging, draggingThis]);
+  const onTooltipOpenChange = (open: boolean): void => {
+    if (!open) {
+      setTooltipOpen(false);
+      return;
+    }
+    const node = rowRef.current;
+    if (dragging || staleRef.current || node === null) return;
+    if (node.matches(':hover') || document.activeElement === node) setTooltipOpen(true);
+  };
+  const freshIntent = (): void => {
+    if (!dragging) staleRef.current = false;
+  };
+
+  // trust-wait (спека 8.3, план worktree 4.3) — то же правило, что было у прежнего дерева сессий:
+  // пометка держится, пока в последних уведомлениях есть trust-wait по этой сессии.
+  const trustWait = useNoticesStore((state) =>
+    state.notices.some(
+      (notice) =>
+        notice.kind === 'trust-wait' &&
+        notice.ref !== null &&
+        notice.ref.sessionId === session.id &&
+        workKeyOf(notice.ref.projectPath, notice.ref.workId) === workKey,
+    ),
+  );
+
+  const live = activity?.activity ?? null;
+  const state = dotState(displayStatus(session), live?.activity ?? null);
+  const word = stateWord(state, session.lifecycle);
+  const attention = sessionAttention(session, live);
+  const highlighted = attention === 'needs-you' || attention === 'unseen';
+  const closed = session.lifecycle === 'closed';
+  const label = sessionRowLabel(session.id, session.label);
+  const lastEventAt = live?.lastEventAt ?? session.resultAt ?? session.startedAt;
+  const time = lastEventAt === null ? '' : relativeTime(lastEventAt, now);
+  // Вторичный текст на подсвеченной и выбранной строке — свой токен: `--muted-foreground`
+  // там ниже 4.5:1 (tokens.test.ts, тест 14).
+  const secondary = 'text-work-sidebar-muted-foreground';
+
+  return (
+    <HoverCard open={tooltipOpen && !dragging} onOpenChange={onTooltipOpenChange} openDelay={600} closeDelay={100}>
+      <SessionRowMenu workKey={workKey} projectPath={projectPath} workId={workId} session={session} bridge={bridge} onOpen={onOpen}>
+      <HoverCardTrigger asChild>
+        <div
+          ref={setRowRef}
+          // Строка — узел дерева сайдбара; в порядке Tab — только под курсором (roving
+          // tabindex, раунд исправлений 1): иначе Tab шёл по всем строкам всех карточек.
+          role="treeitem"
+          aria-selected={stop}
+          tabIndex={stop ? 0 : -1}
+          data-session-id={session.id}
+          data-selected={selected}
+          {...(draggable ? { 'data-draggable': '' } : {})}
+          onPointerDown={listeners?.onPointerDown as ((event: PointerEvent<HTMLDivElement>) => void) | undefined}
+          onPointerEnter={freshIntent}
+          onFocus={freshIntent}
+          onClick={(event) => {
+            // Клик по строке — не клик по карточке: карточка сделала бы только работу активной.
+            event.stopPropagation();
+            // Клик и клавиши из порталов меню и диалогов строки всплывают по дереву React
+            // сюда же — это не клик по строке (кусок 3.4).
+            if (event.currentTarget.contains(event.target as Node)) onOpen();
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            if (!event.currentTarget.contains(event.target as Node)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            onOpen();
+          }}
+          style={{ paddingLeft: `${depth * 12 + 6}px` }}
+          className={cn(
+            // Кольцо внутрь: карточка режет выступающее (`overflow-hidden`).
+            'flex h-6 min-w-0 items-center gap-1.5 rounded-md pr-1.5 text-[11px] text-work-sidebar-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-work-sidebar-focus-ring',
+            draggable ? 'cursor-default' : 'cursor-not-allowed',
+            selected ? 'bg-work-sidebar-accent' : highlighted ? 'bg-amber-500/10' : 'hover:bg-work-sidebar-accent/60',
+          )}
+          // Закрытая строка приглушена цветом текста (styles/dimmed.css), не opacity (ревью M12).
+          {...(closed ? { 'data-dimmed': '' } : {})}
+        >
+          <AgentStateDot state={state} lifecycle={session.lifecycle} />
+          <AgentIcon provider={session.provider} size={13} />
+          <span className="min-w-0 flex-1 truncate">{label}</span>
+          {trustWait ? (
+            <span title={S.sidebar.trustWaitTooltip} className="shrink-0 text-yellow-600 dark:text-yellow-500">
+              ⚠
+            </span>
+          ) : null}
+          <span className={cn('shrink-0 truncate', secondary)}>{word}</span>
+          {session.worktree !== null ? (
+            <span data-worktree title={session.worktree.branch} className={cn('shrink-0', secondary)}>
+              ⎇
+            </span>
+          ) : null}
+          {time !== '' ? <span className={cn('shrink-0 text-[10px] tabular-nums', secondary)}>{time}</span> : null}
+        </div>
+      </HoverCardTrigger>
+      </SessionRowMenu>
+      <HoverCardContent side="right" align="start" className="w-72 space-y-1.5 p-3 text-xs">
+        <SessionTooltip session={session} activity={activity} word={word} />
+      </HoverCardContent>
+    </HoverCard>
+  );
+});
+
+function SessionTooltip({ session, activity, word }: { session: WorkSession; activity: ActivityEntry | null; word: string }): JSX.Element {
+  const task = session.task.length > TASK_PREVIEW ? `${session.task.slice(0, TASK_PREVIEW)}…` : session.task;
+  // Слово итога: у сессии с итогом — он сам (`result` — только 'done' | 'failed'), иначе
+  // текущее состояние строки.
+  const outcome = session.result === null ? word : stateWord(session.result, session.lifecycle);
+  const metrics = activity?.metrics ?? null;
+  return (
+    <div data-session-tooltip className="space-y-1.5">
+      <div className="font-medium">{sessionRowLabel(session.id, session.label)}</div>
+      {task !== '' ? <p className="whitespace-pre-wrap break-words">{task}</p> : null}
+      {session.summary !== null && session.summary !== '' ? (
+        <p className="whitespace-pre-wrap break-words text-muted-foreground">{session.summary}</p>
+      ) : null}
+      <div>{outcome}</div>
+      {metrics?.model !== null && metrics?.model !== undefined ? <div className="font-mono">{metrics.model}</div> : null}
+      {metrics !== null ? <div className="text-muted-foreground">{formatMetricsLine(metrics)}</div> : null}
+      {session.worktree !== null ? <div className="font-mono">⎇ {session.worktree.branch}</div> : null}
+    </div>
+  );
+}

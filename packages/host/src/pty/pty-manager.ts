@@ -21,9 +21,17 @@ import type { Screen } from './screen.js';
 export interface PtyHandle {
   ref: SessionRef;
   pid: number;
+  /**
+   * Когда хост запустил этот процесс (мс, до spawn). События хуков раньше него — прошлого
+   * процесса: без единого нового pty.send и будильник не печатают (fix-final-b).
+   */
+  startedAt: number;
   cols: number;
   rows: number;
+  /** Черновик человека или черновик хоста — поверх любого будильник не печатает. */
   hasDraft(): boolean;
+  /** Режим bracketed paste headless-экрана сессии. */
+  bracketedPaste(): boolean;
 }
 
 export interface PtyManager {
@@ -36,10 +44,16 @@ export interface PtyManager {
   input(ref: SessionRef, data: string): void;
   resize(ref: SessionRef, cols: number, rows: number): void;
   snapshot(ref: SessionRef): { snapshot: string; cols: number; rows: number };
+  /** Черновик хоста: текст, вставленный печатью хоста без Enter. Событие draft не шлёт; смена значения — host-draft. */
+  setHostDraft(ref: SessionRef, value: boolean): void;
   stop(ref: SessionRef, options?: { graceMs?: number }): Promise<ExitInfo>;
   on(event: 'output', listener: (ref: SessionRef, data: string) => void): () => void;
   on(event: 'exit', listener: (ref: SessionRef, exit: ExitInfo) => void): () => void;
+  /** Новый PTY на ref — и первый старт, и `sessions.resume` после выхода; ручка уже в `get()`. */
+  on(event: 'start', listener: (ref: SessionRef) => void): () => void;
   on(event: 'draft', listener: (ref: SessionRef, hasDraft: boolean) => void): () => void;
+  /** Черновик хоста поставлен или снят. Слушает будильник (пересчёт сессии); typeAndSubmit — нет. */
+  on(event: 'host-draft', listener: (ref: SessionRef, hasHostDraft: boolean) => void): () => void;
 }
 
 const DEFAULT_SIZE = { cols: 120, rows: 40 };
@@ -50,6 +64,7 @@ const BATCH_INTERVAL_MS = 16;
 interface Session {
   ref: SessionRef;
   process: PtyProcess;
+  startedAt: number;
   screen: Screen;
   draft: DraftTracker;
   batcher: OutputBatcher;
@@ -63,22 +78,28 @@ function toHandle(session: Session): PtyHandle {
   return {
     ref: session.ref,
     pid: session.process.pid,
+    startedAt: session.startedAt,
     cols: session.cols,
     rows: session.rows,
-    hasDraft: () => session.draft.hasDraft,
+    hasDraft: () => session.draft.hasDraft || session.draft.hasHostDraft,
+    bracketedPaste: () => session.screen.bracketedPaste(),
   };
 }
 
 type OutputListener = (ref: SessionRef, data: string) => void;
 type ExitListener = (ref: SessionRef, exit: ExitInfo) => void;
+type StartListener = (ref: SessionRef) => void;
 type DraftListener = (ref: SessionRef, hasDraft: boolean) => void;
-type PtyListener = OutputListener | ExitListener | DraftListener;
+type HostDraftListener = (ref: SessionRef, hasHostDraft: boolean) => void;
+type PtyListener = OutputListener | ExitListener | StartListener | DraftListener | HostDraftListener;
 
 export function createPtyManager(host: HostContext): PtyManager {
   const sessions = new Map<string, Session>();
   const outputListeners = new Set<OutputListener>();
   const exitListeners = new Set<ExitListener>();
+  const startListeners = new Set<StartListener>();
   const draftListeners = new Set<DraftListener>();
+  const hostDraftListeners = new Set<HostDraftListener>();
 
   function requireSession(ref: SessionRef): Session {
     const session = sessions.get(refKey(ref));
@@ -90,6 +111,8 @@ export function createPtyManager(host: HostContext): PtyManager {
 
   function start(ref: SessionRef, launch: PtyLaunch, size = DEFAULT_SIZE): PtyHandle {
     const key = refKey(ref);
+    // До spawn: хук процесса пишется в журнал только после, и его mtime не раньше этой метки.
+    const startedAt = Date.now();
     // Не `process`: имя затенило бы глобальный `process` до конца функции.
     const ptyProcess = spawnPty(launch, size);
     const screen = createScreen(size.cols, size.rows);
@@ -100,6 +123,7 @@ export function createPtyManager(host: HostContext): PtyManager {
     const session: Session = {
       ref,
       process: ptyProcess,
+      startedAt,
       screen,
       draft: new DraftTracker(),
       batcher,
@@ -126,6 +150,10 @@ export function createPtyManager(host: HostContext): PtyManager {
       for (const resolve of session.stopWaiters) resolve(exit);
     });
 
+    // Последним: слушатель (methods/pty.ts) шлёт окнам pty.resync, и их pty.attach должен
+    // уже застать ручку и обработчики процесса.
+    for (const listener of Array.from(startListeners)) listener(ref);
+
     return toHandle(session);
   }
 
@@ -134,9 +162,18 @@ export function createPtyManager(host: HostContext): PtyManager {
     return session === undefined ? undefined : toHandle(session);
   }
 
-  function forwardDraftChange(session: Session, before: boolean): void {
-    if (session.draft.hasDraft === before) return;
-    for (const listener of draftListeners) listener(session.ref, session.draft.hasDraft);
+  /**
+   * `draft` — только ввод человека: смена его черновика или снятие черновика хоста его
+   * Enter, ⌃C, ⌃U. Печать хоста его не шлёт — иначе ожидание Enter приняло бы
+   * собственную вставку за ввод человека.
+   */
+  function forwardDraftChange(session: Session, before: boolean, hostBefore: boolean): void {
+    if (session.draft.hasDraft === before && session.draft.hasHostDraft === hostBefore) return;
+    const hasDraft = session.draft.hasDraft || session.draft.hasHostDraft;
+    // По снимку подписчиков: будильник на этом же событии печатает указатель, и его
+    // `typeAndSubmit` подписывается на draft посреди рассылки — живой `Set` отдал бы
+    // ему то же событие, и собственный Enter отменился бы вводом, которого не было.
+    for (const listener of Array.from(draftListeners)) listener(session.ref, hasDraft);
   }
 
   // Настоящие перегрузки функции, а не одна сигнатура с объединением: у
@@ -145,8 +182,10 @@ export function createPtyManager(host: HostContext): PtyManager {
   // значению `event`, а не принимать все три формы сразу.
   function on(event: 'output', listener: OutputListener): () => void;
   function on(event: 'exit', listener: ExitListener): () => void;
+  function on(event: 'start', listener: StartListener): () => void;
   function on(event: 'draft', listener: DraftListener): () => void;
-  function on(event: 'output' | 'exit' | 'draft', listener: PtyListener): () => void {
+  function on(event: 'host-draft', listener: HostDraftListener): () => void;
+  function on(event: 'output' | 'exit' | 'start' | 'draft' | 'host-draft', listener: PtyListener): () => void {
     if (event === 'output') {
       const typed = listener as OutputListener;
       outputListeners.add(typed);
@@ -156,6 +195,16 @@ export function createPtyManager(host: HostContext): PtyManager {
       const typed = listener as ExitListener;
       exitListeners.add(typed);
       return () => exitListeners.delete(typed);
+    }
+    if (event === 'start') {
+      const typed = listener as StartListener;
+      startListeners.add(typed);
+      return () => startListeners.delete(typed);
+    }
+    if (event === 'host-draft') {
+      const typed = listener as HostDraftListener;
+      hostDraftListeners.add(typed);
+      return () => hostDraftListeners.delete(typed);
     }
     const typed = listener as DraftListener;
     draftListeners.add(typed);
@@ -174,9 +223,19 @@ export function createPtyManager(host: HostContext): PtyManager {
     input(ref, data) {
       const session = requireSession(ref);
       const before = session.draft.hasDraft;
+      const hostBefore = session.draft.hasHostDraft;
       session.draft.input(data);
       session.process.write(data);
-      forwardDraftChange(session, before);
+      forwardDraftChange(session, before, hostBefore);
+    },
+
+    setHostDraft(ref, value) {
+      // Процесса уже нет — снимать нечего: у нового процесса сессии черновик свой, пустой.
+      const session = sessions.get(refKey(ref));
+      if (session === undefined || session.draft.hasHostDraft === value) return;
+      if (value) session.draft.markHost();
+      else session.draft.clearHost();
+      for (const listener of Array.from(hostDraftListeners)) listener(ref, value);
     },
 
     resize(ref, cols, rows) {

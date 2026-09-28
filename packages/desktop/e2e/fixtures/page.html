@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <title>Design page</title>
+    <style>
+      body { font: 14px system-ui, sans-serif; margin: 24px; }
+      main { display: flex; flex-direction: column; gap: 16px; align-items: flex-start; }
+      .save { display: flex; padding: 8px 16px; background-color: rgb(20, 71, 230); color: #fff; border: 0; border-radius: 6px; }
+    </style>
+  </head>
+  <body>
+    <!-- Страница E2E куска 9.3b: кнопка для выбора Design Mode, форма с паролем и window.open. -->
+    <main>
+      <section class="settings">
+        <button id="save" class="save" type="button" onclick="document.body.dataset.saved = '1'">Сохранить</button>
+      </section>
+      <form id="login" onsubmit="return false">
+        <input type="text" name="user" value="demo" />
+        <input type="password" name="password" value="secret-e2e" />
+      </form>
+      <button id="popup" type="button" onclick="window.open('/popup')">Open popup</button>
+    </main>
+  </body>
+</html>

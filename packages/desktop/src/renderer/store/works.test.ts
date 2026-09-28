@@ -56,7 +56,40 @@ describe('useWorksStore.init', () => {
     await Promise.resolve();
 
     expect(useWorksStore.getState().error).not.toBeNull();
+    // Снимка нет — «загружено» не наступило (lane-r5): иначе пустой список сошёл бы за ответ хоста,
+    // и первый снимок раскладок (retainLayouts) стёр бы сохранённые вкладки всех работ.
+    expect(useWorksStore.getState().loading).toBe(true);
+    dispose();
+  });
+
+  it('отказ хоста с причиной — error несёт код и причину; прежний снимок не трогается (lane-r5)', async () => {
+    const bridge = createFakeBridge();
+    const kept = entry('w-01', '2026-01-01');
+    useWorksStore.setState({ entries: [kept], branches: {}, loading: false, error: null });
+    bridge.setHandler('works.list', () => {
+      // Причина — в `data.reason`, как у ошибок git 8.2a (форма ветки после слияния).
+      throw { code: 'internal', message: 'работы не прочитаны', data: { reason: 'works-unreadable' } };
+    });
+    const dispose = useWorksStore.getState().init(bridge);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useWorksStore.getState().error).toEqual({ code: 'internal', reason: 'works-unreadable' });
+    expect(useWorksStore.getState().entries).toEqual([kept]);
     expect(useWorksStore.getState().loading).toBe(false);
+    dispose();
+  });
+
+  it('data.reason не строкой — причины нет (reason: null), остаётся код (слияние с 8.2a)', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('works.list', () => {
+      throw { code: 'internal', message: 'x', data: { reason: 7 } };
+    });
+    const dispose = useWorksStore.getState().init(bridge);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useWorksStore.getState().error).toEqual({ code: 'internal', reason: null });
     dispose();
   });
 

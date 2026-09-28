@@ -9,6 +9,9 @@
 import { useLayoutEffect, useRef } from 'react';
 import type { WorkEntry, WorkMap } from '@harnas/core';
 import type { HarnasBridge } from '../../../shared/bridge.js';
+import { S } from '../../../shared/strings.js';
+import { isHumanUnread } from '../../attention/derive.js';
+import { useMarkRead } from '../../attention/use-mark-read.js';
 import { roomView } from '../../lib/room-view.js';
 import { participantTag } from '../../lib/participant-tag.js';
 import { Decisions } from '../mail/Decisions.js';
@@ -22,6 +25,8 @@ export interface RoomPanelProps {
   providers: Array<{ id: string; label: string }>;
   models: Record<string, string | null>;
   bridge: HarnasBridge;
+  /** Работа активна (`LayoutBodyContext.active`): сообщения скрытой работы LRU не отмечаются прочитанными. */
+  active: boolean;
   onOpenExternal: (url: string) => void;
 }
 
@@ -31,8 +36,16 @@ function isClosed(map: WorkMap, id: string): boolean {
   return session === undefined || session.lifecycle === 'closed';
 }
 
-export function RoomPanel({ entry, roomId, providers, models, bridge, onOpenExternal }: RoomPanelProps): JSX.Element {
+/** Сообщение карты не прочитано человеком; пропавшее из карты — не кандидат. */
+function isUnreadInMap(map: WorkMap, messageId: string): boolean {
+  const message = map.messages.find((candidate) => candidate.id === messageId);
+  return message !== undefined && isHumanUnread(message);
+}
+
+export function RoomPanel({ entry, roomId, providers, models, bridge, active, onOpenExternal }: RoomPanelProps): JSX.Element {
   const view = roomView(entry, roomId, providers, models);
+  // Хук — до раннего выхода «комнаты нет»: порядок хуков не должен зависеть от данных.
+  const markRead = useMarkRead({ bridge, projectPath: entry.projectPath, workId: entry.map.work.id, active });
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Хвост ленты держится всегда, как только приходит новое письмо — в отличие
@@ -45,7 +58,7 @@ export function RoomPanel({ entry, roomId, providers, models, bridge, onOpenExte
   }, [view?.letters.length]);
 
   if (view === null) {
-    return <div className="flex h-full items-center justify-center text-sm text-[var(--h-muted)]">Комната не найдена</div>;
+    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{S.rooms.notFound}</div>;
   }
 
   const members: ComposerMember[] = view.memberIds.map((id) => ({
@@ -77,7 +90,12 @@ export function RoomPanel({ entry, roomId, providers, models, bridge, onOpenExte
       <Decisions decisions={view.decisions} />
       <div ref={containerRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
         {view.letters.map((letter) => (
-          <Letter key={letter.id} letter={letter} onOpenExternal={onOpenExternal} />
+          <Letter
+            key={letter.id}
+            letter={letter}
+            onOpenExternal={onOpenExternal}
+            observeRef={markRead(letter.id, isUnreadInMap(entry.map, letter.id))}
+          />
         ))}
       </div>
       <Composer members={members} onSend={handleSend} />
