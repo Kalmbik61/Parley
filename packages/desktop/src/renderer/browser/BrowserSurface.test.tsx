@@ -71,7 +71,7 @@ function sendDeps(): SendWithToastDeps {
 function renderWork(): void {
   render(
     <div>
-      <LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} />
+      <LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />
       <SurfaceLayer workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} sendDeps={sendDeps()} />
     </div>,
   );

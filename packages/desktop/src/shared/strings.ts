@@ -390,6 +390,19 @@ export const S = {
     chooseRecipient: 'Choose recipient',
     /** Подпись неактивной сессии в `SendMenu`: lifecycle не `active`. */
     notRunning: 'not running',
+    /**
+     * Заметки во вкладке диффа (кусок 8.4b): «+» гаттера, поле, карточка и кнопки отправки. Автор —
+     * `S.participants.human`, Send — `S.common.send`, Save — `S.files.save`, Delete и Cancel — `S.common`.
+     */
+    add: 'Add note',
+    placeholder: 'Note for the agent — ⌘Enter to save',
+    edit: 'Edit',
+    sendFile: 'Send file notes',
+    sendAllUnsent: 'Send all unsent',
+    sent: (session: string, time: string): string => `Sent to ${session} · ${time}`,
+    stale: 'Outdated',
+    /** Полоса заметок старой стороны в одной колонке: `Original · line 7`, `Original · lines 10-14`. */
+    original: (from: number, to: number): string => (from === to ? `Original · line ${from}` : `Original · lines ${from}-${to}`),
   },
 
   /**

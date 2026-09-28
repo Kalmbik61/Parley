@@ -163,6 +163,7 @@ function renderWork(active = true): ReturnType<typeof render> {
         bridge={bridge}
         fontFamily="Menlo"
         fontSize={13}
+        sendDeps={{ bridge, session: () => null, openSession: () => {} }}
       />
       <SurfaceLayer
         workKey={WORK_KEY}
@@ -358,11 +359,11 @@ describe('превью броска перерисовывает только с
     render(
       <>
         <div data-work-container={WORK_KEY}>
-          <LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} />
+          <LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />
           <SurfaceLayer workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />
         </div>
         <div data-work-container={WORK_KEY_B}>
-          <LayoutView workKey={WORK_KEY_B} active={false} bridge={bridge} fontFamily="Menlo" fontSize={13} />
+          <LayoutView workKey={WORK_KEY_B} active={false} bridge={bridge} fontFamily="Menlo" fontSize={13} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />
           <SurfaceLayer workKey={WORK_KEY_B} active={false} bridge={bridge} fontFamily="Menlo" fontSize={13} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />
         </div>
       </>,

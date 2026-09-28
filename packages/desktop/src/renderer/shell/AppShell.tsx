@@ -194,7 +194,7 @@ const WorkContainer = memo(function WorkContainer({ workKey, active, bridge, fon
     >
       {hasLayout ? (
         <>
-          <LayoutView workKey={workKey} active={active} bridge={bridge} fontFamily={fontFamily} fontSize={fontSize} />
+          <LayoutView workKey={workKey} active={active} bridge={bridge} fontFamily={fontFamily} fontSize={fontSize} sendDeps={sendDeps} />
           <SurfaceLayer workKey={workKey} active={active} bridge={bridge} fontFamily={fontFamily} fontSize={fontSize} sendDeps={sendDeps} />
         </>
       ) : null}

@@ -85,9 +85,21 @@ describe('стор заметок: load (тест 6)', () => {
     bridge.setNotes(work, S2, { code: 'failed', message: 'EACCES' });
     await useNotesStore.getState().load(bridge, work, S2);
     expect(notes()).toEqual([]);
-    expect(vi.mocked(toast.error).mock.calls).toEqual([["Couldn't load review notes — changes to them won't be saved"]]);
+    expect(vi.mocked(toast.error).mock.calls).toEqual([["Couldn't load review notes — changes to them won't be saved", { id: `notes-load:${notesKey(work, S2)}` }]]);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  it('частые отказы чтения — тост с постоянным id на сессию: sonner заменяет его, а не копит (добавка контролёра 8.4b)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    bridge.setNotes(work, S2, { code: 'failed', message: 'EACCES' });
+    bridge.setNotes(work, 's-03', { code: 'failed', message: 'EACCES' });
+    await useNotesStore.getState().load(bridge, work, S2);
+    await useNotesStore.getState().load(bridge, work, S2);
+    await useNotesStore.getState().load(bridge, work, 's-03');
+    const ids = vi.mocked(toast.error).mock.calls.map((call) => (call[1] as { id?: unknown } | undefined)?.id);
+    expect(ids).toEqual([`notes-load:${notesKey(work, S2)}`, `notes-load:${notesKey(work, S2)}`, `notes-load:${notesKey(work, 's-03')}`]);
+    vi.mocked(console.warn).mockRestore();
   });
 
   it('отказ loadNotes → правка живёт в окне, а файл не пишется (fix-8.4a, пункт 1)', async () => {
@@ -189,11 +201,25 @@ describe('стор заметок: отказ записи (fix-8.4a, пункт
     useNotesStore.getState().add(work, S2, draft({ body: 'first' }), 'x');
     await vi.advanceTimersByTimeAsync(300);
     expect(save).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(toast.error).mock.calls).toEqual([["Couldn't save review notes"]]);
+    expect(vi.mocked(toast.error).mock.calls).toEqual([["Couldn't save review notes", { id: `notes-save:${notesKey(work, S2)}` }]]);
     expect(notes().map((n) => n.body)).toEqual(['first']);
     useNotesStore.getState().add(work, S2, draft({ body: 'second' }), 'x');
     await vi.advanceTimersByTimeAsync(300);
     expect(bridge.savedNotes.map((s) => s.notes.notes.map((n) => n.body))).toEqual([['first', 'second']]);
+    vi.mocked(console.warn).mockRestore();
+  });
+
+  it('частые отказы записи — один тост на сессию с постоянным id (добавка контролёра 8.4b)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await useNotesStore.getState().load(bridge, work, S2);
+    vi.spyOn(bridge.app, 'saveNotes').mockRejectedValue(new Error('EACCES'));
+    for (const body of ['one', 'two', 'three']) {
+      useNotesStore.getState().add(work, S2, draft({ body }), 'x');
+      await vi.advanceTimersByTimeAsync(300);
+    }
+    const calls = vi.mocked(toast.error).mock.calls;
+    expect(calls).toHaveLength(3);
+    for (const call of calls) expect(call).toEqual(["Couldn't save review notes", { id: `notes-save:${notesKey(work, S2)}` }]);
     vi.mocked(console.warn).mockRestore();
   });
 });

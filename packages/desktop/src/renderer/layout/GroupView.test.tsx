@@ -41,7 +41,7 @@ function renderGroup(group: GroupNode): void {
     navigating: false,
   });
   render(
-    <LayoutBodyContext.Provider value={{ bridge, fontFamily: 'Menlo', fontSize: 13, active: true }}>
+    <LayoutBodyContext.Provider value={{ bridge, fontFamily: 'Menlo', fontSize: 13, active: true, sendDeps: { bridge, session: () => null, openSession: () => {} } }}>
       <GroupView workKey={WORK_KEY} group={group} entry={entry()} singleGroup />
     </LayoutBodyContext.Provider>,
   );

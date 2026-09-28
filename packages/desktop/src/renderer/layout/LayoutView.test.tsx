@@ -138,7 +138,7 @@ describe('LayoutView — тест 17', () => {
   it('тело терминала создаёт Terminal с fontFamily/fontSize; тело комнаты получает тот же bridge', async () => {
     render(
       <>
-        <LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={15} />
+        <LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={15} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />
         <SurfaceLayer workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={15} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />
       </>,
     );
@@ -160,7 +160,7 @@ describe('LayoutView — возврат связи с хостом (fix-7.3)', (
   it('тело комнаты перечитывает providers.list, когда связь вернулась: оболочка при обрыве не перемонтируется', async () => {
     const dispose = useHostStore.getState().init(bridge);
     try {
-      render(<LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={15} />);
+      render(<LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={15} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />);
       await flush();
       const lists = (): number => bridge.calls.filter((call) => call.method === 'providers.list').length;
       const before = lists();
@@ -195,7 +195,7 @@ describe('LayoutView — active: false (кусок 2.5)', () => {
         activeTabId: 'room:r-01',
       };
       useLayoutStore.setState({ layouts: { [WORK_KEY]: { root: group, activeGroupId: 'g1', closedTabs: [] } } });
-      render(<LayoutView workKey={WORK_KEY} active={false} bridge={bridge} fontFamily="Menlo" fontSize={13} />);
+      render(<LayoutView workKey={WORK_KEY} active={false} bridge={bridge} fontFamily="Menlo" fontSize={13} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />);
       await flush();
 
       expect(slot.childElementCount).toBe(0);

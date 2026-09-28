@@ -122,7 +122,7 @@ let bridge: FakeBridge;
 function renderWork(active = true): ReturnType<typeof render> {
   return render(
     <div data-testid="work-container">
-      <LayoutView workKey={WORK_KEY} active={active} bridge={bridge} fontFamily="Menlo" fontSize={13} />
+      <LayoutView workKey={WORK_KEY} active={active} bridge={bridge} fontFamily="Menlo" fontSize={13} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />
       <SurfaceLayer workKey={WORK_KEY} active={active} bridge={bridge} fontFamily="Menlo" fontSize={13} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />
     </div>,
   );
@@ -298,7 +298,7 @@ describe('SurfaceLayer — стабильный sessionRef (раунд fix-main-
       act(() => useLayoutStore.getState().apply(WORK_KEY, (layout) => focusTab(layout, 'terminal:x')));
       view.rerender(
         <div data-testid="work-container">
-          <LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} />
+          <LayoutView workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />
           <SurfaceLayer workKey={WORK_KEY} active bridge={bridge} fontFamily="Menlo" fontSize={13} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />
         </div>,
       );

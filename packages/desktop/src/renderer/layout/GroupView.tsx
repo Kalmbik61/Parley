@@ -31,6 +31,7 @@ import { S } from '../../shared/strings.js';
 import { FileBody } from '../files/editor/FileBody.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { ErrorBoundary } from '../shell/ErrorBoundary.js';
+import type { SendWithToastDeps } from '../terminal/send.js';
 import { BrowserBody } from './bodies/BrowserBody.js';
 import { DiffBody } from './bodies/DiffBody.js';
 import { MailBody } from './bodies/MailBody.js';
@@ -53,6 +54,8 @@ export interface LayoutBodyContextValue {
    * активной работы.
    */
   active: boolean;
+  /** Отправка агенту окна (7.2): из `AppShell` через `LayoutView` — заметкам вкладки диффа (8.4b). */
+  sendDeps: SendWithToastDeps;
 }
 
 export const LayoutBodyContext = createContext<LayoutBodyContextValue | null>(null);
@@ -96,6 +99,7 @@ function TabBody({ tab, entry, host, onMissing }: TabBodyProps): JSX.Element {
           entry={entry}
           tab={tab}
           font={{ family: host.fontFamily, size: host.fontSize }}
+          sendDeps={host.sendDeps}
         />
       );
     }

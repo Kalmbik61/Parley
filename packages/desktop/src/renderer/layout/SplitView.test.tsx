@@ -49,7 +49,7 @@ function setLayout(root: SplitNode): void {
 function renderSplit(node: SplitNode): void {
   const bridge = createFakeBridge();
   render(
-    <LayoutBodyContext.Provider value={{ bridge, fontFamily: 'Menlo', fontSize: 13, active: true }}>
+    <LayoutBodyContext.Provider value={{ bridge, fontFamily: 'Menlo', fontSize: 13, active: true, sendDeps: { bridge, session: () => null, openSession: () => {} } }}>
       <SplitView workKey={WORK_KEY} node={node} entry={entry()} singleGroup={false} />
     </LayoutBodyContext.Provider>,
   );

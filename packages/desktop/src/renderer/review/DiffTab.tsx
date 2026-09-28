@@ -10,9 +10,14 @@
  *   «Изменений» (8.2b): старый `worktrees.diff` отвечает без `mergeBase`.
  * - Сбой Monaco — своя граница `S.files.editorFailed` с «Retry»; «Open in default app» здесь нет:
  *   файлов во вкладке много.
+ * - Заметки (8.4b, спека 11.4) — только в режиме ветки: открытие вкладки грузит заметки сессии
+ *   (стор читает файл один раз на удачу, после отказа — снова), секции ставят и показывают их,
+ *   «Send all unsent» панели шлёт неотправленные неустаревшие заметки файлов вкладки. Отправка —
+ *   `sendDeps` окна (7.2) и только по нажатию человека (рамка 15.1).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { DiffNote } from '../../shared/notes-types.js';
 import type { WorkEntry } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
 import type { HarnasBridge } from '../../shared/bridge.js';
@@ -27,10 +32,13 @@ import { useHostSupports } from '../lib/capabilities.js';
 import { ErrorBoundary } from '../shell/ErrorBoundary.js';
 import { useHostStore } from '../store/host.js';
 import { useUiStore } from '../store/ui.js';
+import type { SendWithToastDeps } from '../terminal/send.js';
 import { Button } from '../ui/button.js';
 import { DIFF_LIMITS } from './diff-sides.js';
 import { DiffToolbar, type DiffListMode } from './DiffToolbar.js';
-import { FileDiffSection, type DiffMode } from './FileDiffSection.js';
+import { FileDiffSection, type DiffMode, type SectionNotes } from './FileDiffSection.js';
+import { batchable, sendNotes } from './notes/send-notes.js';
+import { notesKey, useNotesStore } from './notes/store.js';
 import { useReviewStore } from './store.js';
 import { useChanges } from './use-changes.js';
 
@@ -41,6 +49,8 @@ export interface DiffTabProps {
   tab: Extract<TabSpec, { kind: 'diff' }>;
   /** Шрифт редактора из настроек, как у вкладки файла; сверх брифа — без него Monaco берёт свой. */
   font?: { family: string; size: number };
+  /** Отправка агенту окна (7.2): AppShell → LayoutView → LayoutBodyContext → DiffBody (8.4b). */
+  sendDeps: SendWithToastDeps;
 }
 
 const FILE_STATUS: Record<string, string> = S.changes.fileStatus;
@@ -189,9 +199,19 @@ interface DiffViewProps {
   mode: DiffMode;
   version: unknown;
   font: DiffTabProps['font'];
+  notes: SectionNotes | null;
 }
 
-function DiffView({ bridge, workKey, tabId, root, files, mode, version, font }: DiffViewProps): JSX.Element {
+/** Неотправленные неустаревшие заметки файлов вкладки: заметки ушедших из диффа файлов не видны — и не шлются. */
+function useUnsent(notes: SectionNotes | null, files: DiffFile[]): DiffNote[] {
+  const all = useNotesStore((state) => (notes === null ? undefined : state.bySession[notesKey(notes.workKey, notes.sessionId)]));
+  return useMemo(() => {
+    const paths = new Set(files.map((file) => file.path));
+    return batchable(all ?? []).filter((note) => paths.has(note.path));
+  }, [all, files]);
+}
+
+function DiffView({ bridge, workKey, tabId, root, files, mode, version, font, notes }: DiffViewProps): JSX.Element {
   const status = useMonacoReady();
   const view = useUiStore((state) => state.ui.diffView);
   const dark = useUiStore((state) => state.dark);
@@ -207,6 +227,7 @@ function DiffView({ bridge, workKey, tabId, root, files, mode, version, font }: 
   const indexRef = useRef(index);
   indexRef.current = index;
   const ready = status === 'ready';
+  const unsent = useUnsent(notes, files);
   const collapsedRef = useRef(collapsed);
   collapsedRef.current = collapsed;
 
@@ -391,6 +412,11 @@ function DiffView({ bridge, workKey, tabId, root, files, mode, version, font }: 
         }}
         listMode={listMode}
         onListMode={setListMode}
+        sendAll={
+          notes === null
+            ? null
+            : { entry: notes.entry, defaultSessionId: notes.sessionId, disabled: unsent.length === 0, onSend: (to) => notes.send(unsent, to) }
+        }
       />
       <FileList files={files} mode={listMode} onOpen={(path) => useReviewStore.getState().revealFile(workKey, tabId, path)} />
       <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto">
@@ -410,6 +436,7 @@ function DiffView({ bridge, workKey, tabId, root, files, mode, version, font }: 
             theme={theme}
             language={languages.get(file.path)}
             register={register}
+            notes={notes}
           />
         ))}
       </div>
@@ -417,7 +444,7 @@ function DiffView({ bridge, workKey, tabId, root, files, mode, version, font }: 
   );
 }
 
-export function DiffTab({ bridge, workKey, entry, tab, font }: DiffTabProps): JSX.Element {
+export function DiffTab({ bridge, workKey, entry, tab, font, sendDeps }: DiffTabProps): JSX.Element {
   const supported = useHostSupports('worktrees.mergeCheck');
   const connected = useHostStore((state) => state.status.state === 'connected');
   const sessionId = tab.sessionId;
@@ -436,6 +463,27 @@ export function DiffTab({ bridge, workKey, entry, tab, font }: DiffTabProps): JS
     [workKey, hasWorktree, sessionId],
   );
   const commitFiles = useCommitFiles(bridge.files, root, loadable ? commit : null);
+
+  // Каждое открытие вкладки диффа ветки — load: удачное чтение стор помнит и мост второй раз не
+  // зовёт, отказ забывает — следующее открытие прочитает снова (fix-8.4a). Коммиту заметки не нужны.
+  useEffect(() => {
+    if (commit === null) void useNotesStore.getState().load(bridge, workKey, sessionId);
+  }, [bridge, workKey, sessionId, commit]);
+
+  const branch = worktree?.branch ?? (changes.source?.kind === 'project' ? changes.source.changes.branch : null);
+  const notes = useMemo<SectionNotes | null>(
+    () =>
+      commit !== null
+        ? null
+        : {
+            workKey,
+            sessionId,
+            entry,
+            send: (list, to) =>
+              sendNotes({ deps: sendDeps, projectPath: entry.projectPath, workId: entry.map.work.id, workKey, sessionId, branch, notes: list, to }),
+          },
+    [commit, workKey, sessionId, entry, sendDeps, branch],
+  );
 
   const source = changes.source;
   const base = source?.kind === 'worktree' ? source.diff.mergeBase : source?.kind === 'project' ? 'HEAD' : null;
@@ -475,7 +523,7 @@ export function DiffTab({ bridge, workKey, entry, tab, font }: DiffTabProps): JS
   return (
     <div className="h-full min-h-0">
       <ErrorBoundary title={S.files.editorFailed}>
-        <DiffView bridge={bridge} workKey={workKey} tabId={tab.id} root={root} files={files} mode={mode} version={version} font={font} />
+        <DiffView bridge={bridge} workKey={workKey} tabId={tab.id} root={root} files={files} mode={mode} version={version} font={font} notes={notes} />
       </ErrorBoundary>
     </div>
   );

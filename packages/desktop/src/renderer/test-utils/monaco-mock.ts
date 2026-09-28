@@ -19,7 +19,11 @@ import { createElement, useEffect, useRef, useState, type ReactElement } from 'r
 
 /** Значения — как у настоящего Monaco 0.52: тест сверяет число, а не имя. */
 export const KeyMod = { CtrlCmd: 2048, Shift: 1024, Alt: 512, WinCtrl: 256 } as const;
-export const KeyCode = { KeyD: 34, KeyF: 36, KeyK: 41, KeyS: 49, KeyZ: 56, Slash: 90 } as const;
+export const KeyCode = { KeyA: 31, KeyD: 34, KeyF: 36, KeyK: 41, KeyS: 49, KeyZ: 56, Slash: 90 } as const;
+/** Номер опции не важен: `getOption` поддельного редактора на любой номер отвечает высотой строки (8.4b). */
+export const EditorOption = { lineHeight: 75 } as const;
+/** Высота строки поддельного редактора: `getTopForLineNumber(n)` — (n − 1) × 20 (8.4b). */
+export const FAKE_LINE_HEIGHT = 20;
 
 type Position = { lineNumber: number; column: number };
 
@@ -38,6 +42,14 @@ export interface FakeEditor {
   scrollTop: number;
   /** Размонтирован: тело вкладки ушло. */
   disposed: boolean;
+  /**
+   * View zones (8.4b): `changeViewZones` — `addZone` и `removeZone`. `domNode` зоны вставлен в DOM
+   * поддельного редактора; карточка заметки — overlay widget рядом (`[data-note-overlay]`), события из
+   * портала React доходят до корня, как у настоящего Monaco.
+   */
+  zones: Array<{ afterLineNumber: number; domNode: HTMLElement }>;
+  /** `getSelection` (8.4b): выделение строк; `null` — нет. */
+  selection: { startLineNumber: number; endLineNumber: number } | null;
 }
 
 export interface FakeDiffEditor {
@@ -66,6 +78,23 @@ interface EditorApi extends FakeEditor {
   getContentHeight(): number;
   onDidContentSizeChange(listener: () => void): { dispose(): void };
   dispose(): void;
+  changeViewZones(callback: (accessor: ZoneAccessor) => void): void;
+  getTopForLineNumber(line: number): number;
+  getSelection(): { startLineNumber: number; endLineNumber: number; startColumn: number; endColumn: number } | null;
+  addAction(descriptor: { id: string; keybindings?: number[]; run(editor: unknown): void }): { dispose(): void };
+  getOption(id: number): unknown;
+  getLayoutInfo(): { width: number; height: number; contentLeft: number; contentWidth: number; lineNumbersLeft: number; lineNumbersWidth: number };
+  onDidLayoutChange(listener: () => void): { dispose(): void };
+  onDidScrollChange(listener: () => void): { dispose(): void };
+  getDomNode(): HTMLElement;
+  addOverlayWidget(widget: { getDomNode(): HTMLElement }): void;
+  removeOverlayWidget(widget: { getDomNode(): HTMLElement }): void;
+}
+
+interface ZoneAccessor {
+  addZone(zone: { afterLineNumber: number; heightInPx?: number; domNode: HTMLElement }): string;
+  removeZone(id: string): void;
+  layoutZone(id: string): void;
 }
 
 const editors: FakeEditor[] = [];
@@ -74,12 +103,24 @@ const themes: boolean[] = [];
 let initError: Error | null = null;
 let renderError: Error | null = null;
 
-function fakeEditor(initial: string, options: Record<string, unknown>, setText: (text: string) => void): EditorApi {
+/**
+ * `width()` — ширина стороны: у настоящего diff-редактора в одной колонке левый редактор сжат до
+ * полосы номеров (`diffEditorWidget.js`), по ней 8.4b узнаёт, видна ли старая сторона.
+ */
+function fakeEditor(initial: string, options: Record<string, unknown>, setText: (text: string) => void, width: () => number = () => 400): EditorApi {
   const commands = new Map<number, () => void>();
+  const layoutListeners = new Set<() => void>();
+  // Хозяин зон — в DOM редактора: `DiffEditor` ниже вставляет его в свою разметку.
+  const domNode = document.createElement('div');
+  domNode.setAttribute('data-testid', 'monaco-zone-host');
+  const zoneIds = new Map<string, { afterLineNumber: number; domNode: HTMLElement }>();
+  let zoneSeq = 0;
   const api: EditorApi = {
     options: { ...options },
     position: null,
     disposed: false,
+    zones: [],
+    selection: null,
     text: initial,
     scrollTop: 0,
     press: (keybinding) => commands.get(keybinding)?.(),
@@ -119,6 +160,59 @@ function fakeEditor(initial: string, options: Record<string, unknown>, setText: 
     dispose: () => {
       api.disposed = true;
     },
+    changeViewZones: (callback) => {
+      callback({
+        addZone: (zone) => {
+          zoneSeq += 1;
+          const id = String(zoneSeq);
+          const entry = { afterLineNumber: zone.afterLineNumber, domNode: zone.domNode };
+          zoneIds.set(id, entry);
+          api.zones.push(entry);
+          domNode.appendChild(zone.domNode);
+          return id;
+        },
+        removeZone: (id) => {
+          const entry = zoneIds.get(id);
+          if (entry === undefined) return;
+          zoneIds.delete(id);
+          api.zones.splice(api.zones.indexOf(entry), 1);
+          entry.domNode.remove();
+        },
+        layoutZone: () => {},
+      });
+    },
+    getTopForLineNumber: (line) => (line - 1) * FAKE_LINE_HEIGHT,
+    getSelection: () =>
+      api.selection === null ? null : { ...api.selection, startColumn: 1, endColumn: 2 },
+    // Как у настоящего `addAction`: сочетания действия — те же команды, что `press` вызывает.
+    addAction: (descriptor) => {
+      const keys = descriptor.keybindings ?? [];
+      for (const key of keys) commands.set(key, () => descriptor.run(api));
+      return {
+        dispose: () => {
+          for (const key of keys) commands.delete(key);
+        },
+      };
+    },
+    getOption: () => FAKE_LINE_HEIGHT,
+    getLayoutInfo: () => ({ width: width(), height: 400, contentLeft: 50, contentWidth: Math.max(0, width() - 50), lineNumbersLeft: 0, lineNumbersWidth: 40 }),
+    onDidLayoutChange: (listener) => {
+      layoutListeners.add(listener);
+      return { dispose: () => layoutListeners.delete(listener) };
+    },
+    onDidScrollChange: () => ({ dispose: () => {} }),
+    getDomNode: () => domNode,
+    // Overlay widgets (8.4b: карточки заметок над view zones) — в тот же DOM редактора.
+    addOverlayWidget: (widget) => {
+      domNode.appendChild(widget.getDomNode());
+    },
+    removeOverlayWidget: (widget) => {
+      widget.getDomNode().remove();
+    },
+  };
+  /** Смена раскладки (одна колонка ↔ две): слушатели `onDidLayoutChange`. */
+  (api as EditorApi & { relayout(): void }).relayout = () => {
+    for (const listener of layoutListeners) listener();
   };
   /** Правка человеком в textarea — текст модели. */
   (api as EditorApi & { typed(next: string): void }).typed = (next) => {
@@ -179,7 +273,8 @@ function DiffEditor(props: DiffEditorProps): ReactElement {
   if (renderError !== null) throw renderError;
   const [diff] = useState(() => {
     let attached = true;
-    const original = fakeEditor(props.original ?? '', { readOnly: true }, () => {});
+    // Одна колонка — левый редактор сжат до полосы номеров, как у настоящего diff-редактора.
+    const original = fakeEditor(props.original ?? '', { readOnly: true }, () => {}, () => (api.options['renderSideBySide'] === false ? 5 : 400));
     const modified = fakeEditor(props.modified ?? '', props.options ?? {}, () => {});
     const api: FakeDiffEditor & Record<string, unknown> = {
       options: { ...props.options },
@@ -195,6 +290,7 @@ function DiffEditor(props: DiffEditorProps): ReactElement {
       },
       updateOptions: (next: Record<string, unknown>) => {
         api.options = { ...api.options, ...next };
+        for (const side of [original, modified]) (side as EditorApi & { relayout(): void }).relayout();
       },
       dispose: () => {
         api.disposed = true;
@@ -223,6 +319,19 @@ function DiffEditor(props: DiffEditorProps): ReactElement {
     { className: 'monaco-editor', 'data-testid': 'monaco-diff-editor' },
     createElement('textarea', { 'data-testid': 'monaco-diff-original', value: props.original ?? '', readOnly: true }),
     createElement('textarea', { 'data-testid': 'monaco-diff-modified', value: props.modified ?? '', readOnly: true }),
+    // Хозяева зон сторон (8.4b) — в DOM редактора; React их не пересоздаёт.
+    createElement('div', {
+      'data-side': 'original',
+      ref: (element: HTMLElement | null) => {
+        if (element !== null) element.appendChild((diff.original as EditorApi).getDomNode());
+      },
+    }),
+    createElement('div', {
+      'data-side': 'modified',
+      ref: (element: HTMLElement | null) => {
+        if (element !== null) element.appendChild((diff.modified as EditorApi).getDomNode());
+      },
+    }),
   );
 }
 
@@ -234,7 +343,7 @@ const loader = {
       initError = null;
       return Promise.reject(error);
     }
-    return Promise.resolve({ KeyMod, KeyCode });
+    return Promise.resolve({ KeyMod, KeyCode, editor: { EditorOption } });
   },
 };
 
@@ -242,7 +351,7 @@ export const monacoReactMock: Record<string, unknown> = { default: Editor, Edito
 
 export const monacoSetupMock: Record<string, unknown> = {
   // `languages` — язык модели диффа по имени файла (8.3); у мока языков нет.
-  setupMonaco: () => ({ KeyMod, KeyCode, languages: { getLanguages: () => [] } }),
+  setupMonaco: () => ({ KeyMod, KeyCode, languages: { getLanguages: () => [] }, editor: { EditorOption } }),
   applyEditorTheme: (dark: boolean) => {
     themes.push(dark);
   },

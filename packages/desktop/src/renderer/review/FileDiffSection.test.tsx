@@ -37,6 +37,7 @@ function props(file: DiffFile, extra: Partial<FileDiffSectionProps> = {}): FileD
     theme: 'harnas-light',
     language: undefined,
     register: () => {},
+    notes: null,
     ...extra,
   };
 }

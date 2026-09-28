@@ -8,22 +8,42 @@
  * «Изменений», 11.1): живой редактор получает новый текст через `setValue` модели, прокрутка —
  * прежняя. Иначе заметка 8.4b не переехала бы, а человек терял бы место в файле на каждом
  * сигнале агента.
+ *
+ * Заметки (кусок 8.4b, спека 11.4) — только в режиме ветки (`notes` не null): слой над живым
+ * редактором (`notes/DiffNotesLayer.tsx`), «Send file notes» в заголовке, полоса заметок старой
+ * стороны в одной колонке. Каждое чтение сторон — `relocateFile` заметок файла по обеим сторонам
+ * (решение сверки I7): агент сдвинул строки — заметка переехала, убрал — устарела.
  */
 
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { DiffEditor, type DiffOnMount } from '@monaco-editor/react';
+import type { WorkEntry } from '@harnas/core';
 import type { DiffFile, FileRoot } from '../../shared/files-types.js';
+import type { DiffNote } from '../../shared/notes-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
 import { releaseDiffEditor } from '../lib/release-diff-editor.js';
 import { Button } from '../ui/button.js';
 import { loadSides, type DiffSides } from './diff-sides.js';
+import { DiffNotesLayer, NoteBody, type NoteDraft, type NoteHandlers } from './notes/DiffNotesLayer.js';
+import { batchable } from './notes/send-notes.js';
+import { SendMenu } from './notes/SendMenu.js';
+import { notesKey, useNotesStore } from './notes/store.js';
 
 type DiffEditorApi = Parameters<DiffOnMount>[0];
 type SideEditor = ReturnType<DiffEditorApi['getModifiedEditor']>;
 
 export type DiffMode = { kind: 'branch'; base: string } | { kind: 'commit'; hash: string };
+
+/** Заметки секции (8.4b): чьи они и как их отправить. В режиме коммита — null. */
+export interface SectionNotes {
+  workKey: string;
+  /** Сессия диффа — владелец заметок и получатель по умолчанию. */
+  sessionId: string;
+  entry: WorkEntry;
+  send(notes: DiffNote[], to: string): void;
+}
 
 export interface FileDiffSectionProps {
   file: DiffFile;
@@ -43,6 +63,13 @@ export interface FileDiffSectionProps {
   language: string | undefined;
   /** Элемент секции для `IntersectionObserver` вкладки. */
   register(path: string, element: HTMLElement | null): void;
+  /** Заметки режима ветки; null — режим коммита: ни «+», ни ⌘⇧A, ни зон. */
+  notes: SectionNotes | null;
+}
+
+/** Строки стороны так, как их видит Monaco: `\r\n` — один перевод строки. */
+function sideLines(text: string | null): string[] {
+  return text === null ? [] : text.split(/\r?\n/);
 }
 
 /** Оценка высоты заглушки (план): 20px × (строк + 2), не больше 600px. */
@@ -81,9 +108,11 @@ interface LiveDiffProps {
   theme: string;
   language: string | undefined;
   onHeight(height: number): void;
+  /** Смонтированный редактор — слою заметок (8.4b); null — редактор уходит. */
+  onEditor(editor: DiffEditorApi | null): void;
 }
 
-function LiveDiff({ sides, path, options, split, theme, language, onHeight }: LiveDiffProps): JSX.Element {
+function LiveDiff({ sides, path, options, split, theme, language, onHeight, onEditor }: LiveDiffProps): JSX.Element {
   // Текст монтирования — один раз: дальше стороны идут через `setValue` модели. Проп `original` /
   // `modified` `@monaco-editor/react` тоже зовёт `setValue`, но без сохранения прокрутки.
   const [initial] = useState(sides);
@@ -95,6 +124,8 @@ function LiveDiff({ sides, path, options, split, theme, language, onHeight }: Li
   splitRef.current = split;
   const heightRef = useRef(onHeight);
   heightRef.current = onHeight;
+  const editorOut = useRef(onEditor);
+  editorOut.current = onEditor;
   const cleanup = useRef<Array<{ dispose(): void }>>([]);
 
   const apply = (editor: DiffEditorApi): void => {
@@ -126,6 +157,7 @@ function LiveDiff({ sides, path, options, split, theme, language, onHeight }: Li
       // Модели — до эффекта `DiffEditor`, иначе pageerror (e2e diff.spec): `release-diff-editor.ts`.
       const editor = editorRef.current;
       editorRef.current = null;
+      editorOut.current(null);
       releaseDiffEditor(editor);
     },
     [],
@@ -140,6 +172,7 @@ function LiveDiff({ sides, path, options, split, theme, language, onHeight }: Li
       editor.getOriginalEditor().onDidContentSizeChange(measure),
     );
     measure();
+    editorOut.current(editor);
   };
 
   return (
@@ -194,6 +227,72 @@ function FileDiffSectionImpl(props: FileDiffSectionProps): JSX.Element {
 
   const ref = useCallback((element: HTMLElement | null) => register(file.path, element), [register, file.path]);
 
+  // Заметки файла (8.4b). Подписка — на массив сессии: правки чужих сессий секцию не трогают.
+  const ctx = props.notes;
+  const sessionNotes = useNotesStore((state) => (ctx === null ? undefined : state.bySession[notesKey(ctx.workKey, ctx.sessionId)]));
+  const fileNotes = useMemo(() => (sessionNotes ?? []).filter((note) => note.path === file.path), [sessionNotes, file.path]);
+  const [draft, setDraft] = useState<NoteDraft | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editor, setEditor] = useState<{ api: DiffEditorApi; seq: number } | null>(null);
+  const editorSeq = useRef(0);
+  const onEditor = useCallback((api: DiffEditorApi | null) => {
+    editorSeq.current += 1;
+    setEditor(api === null ? null : { api, seq: editorSeq.current });
+  }, []);
+  const [layoutSplit, setLayoutSplit] = useState(true);
+  const sideBySide = props.split && layoutSplit;
+  const sides = loaded !== null && !('error' in loaded) ? loaded.sides : null;
+
+  // Переезд — на каждом чтении сторон и когда заметки файла пришли или сменились (загрузка стора
+  // бывает позже сторон). Правка текста заметки строк не двигает — подпись без тела.
+  const noteIds = fileNotes.map((note) => note.id).join(',');
+  useEffect(() => {
+    if (ctx === null || sides === null || sides.binary || noteIds === '') return;
+    const store = useNotesStore.getState();
+    for (const side of ['original', 'modified'] as const) {
+      const text = sides[side];
+      // Стороны нет (добавленный или удалённый файл) — сверять не с чем.
+      if (text !== null) store.relocateFile(ctx.workKey, ctx.sessionId, file.path, side, sideLines(text));
+    }
+  }, [ctx, sides, noteIds, file.path]);
+
+  const handlers: NoteHandlers | null =
+    ctx === null
+      ? null
+      : {
+          entry: ctx.entry,
+          defaultSessionId: ctx.sessionId,
+          editing,
+          onPick: (side, startLine, endLine) => {
+            setEditing(null);
+            setDraft({ side, startLine, endLine });
+          },
+          onSaveDraft: (body) => {
+            if (draft === null || sides === null) return;
+            const anchor = sideLines(sides[draft.side])[draft.startLine - 1] ?? '';
+            useNotesStore.getState().add(ctx.workKey, ctx.sessionId, { path: file.path, ...draft, body }, anchor);
+            setDraft(null);
+          },
+          onCancelDraft: () => setDraft(null),
+          onEdit: (id) => {
+            setDraft(null);
+            setEditing(id);
+          },
+          onSaveEdit: (id, body) => {
+            useNotesStore.getState().update(ctx.workKey, ctx.sessionId, id, body);
+            setEditing(null);
+          },
+          onCancelEdit: () => setEditing(null),
+          onDelete: (id) => {
+            if (editing === id) setEditing(null);
+            useNotesStore.getState().remove(ctx.workKey, ctx.sessionId, id);
+          },
+          onSend: (note, to) => ctx.send([note], to),
+        };
+  const unsent = batchable(fileNotes);
+  // Одна колонка: заметки старой стороны — полосой над редактором, их зоны не видны.
+  const originalStrip = handlers !== null && !sideBySide ? fileNotes.filter((note) => note.side === 'original') : [];
+
   const cap = Math.max(600, Math.round(window.innerHeight * 0.8));
   const boxHeight = Math.min(cap, height ?? placeholderHeight((file.additions ?? 0) + (file.deletions ?? 0)));
   const title = file.oldPath === null ? file.path : `${file.oldPath} → ${file.path}`;
@@ -227,17 +326,39 @@ function FileDiffSectionImpl(props: FileDiffSectionProps): JSX.Element {
       body = placeholder;
     } else {
       body = (
-        <div style={{ height: boxHeight }}>
-          <LiveDiff
-            sides={loaded.sides}
-            path={file.path}
-            options={props.options}
-            split={props.split}
-            theme={props.theme}
-            language={props.language}
-            onHeight={setHeight}
-          />
-        </div>
+        <>
+          {originalStrip.length === 0 || handlers === null ? null : (
+            <div data-testid="original-notes" className="flex flex-col gap-1.5 border-b border-border bg-muted/20 p-2">
+              {originalStrip.map((note) => (
+                <NoteBody key={note.id} note={note} handlers={handlers} caption={S.notes.original(note.startLine, note.endLine)} />
+              ))}
+            </div>
+          )}
+          <div style={{ height: boxHeight }} className="relative">
+            <LiveDiff
+              sides={loaded.sides}
+              path={file.path}
+              options={props.options}
+              split={props.split}
+              theme={props.theme}
+              language={props.language}
+              onHeight={setHeight}
+              onEditor={onEditor}
+            />
+            {handlers === null || editor === null ? null : (
+              <DiffNotesLayer
+                key={editor.seq}
+                {...handlers}
+                editor={editor.api}
+                sideBySide={sideBySide}
+                onSideBySide={setLayoutSplit}
+                notes={fileNotes}
+                draft={draft !== null && draft.side === 'original' && !sideBySide ? null : draft}
+                lineCount={{ original: sideLines(loaded.sides.original).length, modified: sideLines(loaded.sides.modified).length }}
+              />
+            )}
+          </div>
+        </>
       );
     }
   }
@@ -265,6 +386,12 @@ function FileDiffSectionImpl(props: FileDiffSectionProps): JSX.Element {
         {/* Двоичный файл чисел не имеет (numstat `-`). */}
         {file.additions === null ? null : <span className="shrink-0 tabular-nums text-status-success">{`+${file.additions}`}</span>}
         {file.deletions === null ? null : <span className="shrink-0 tabular-nums text-destructive">{`−${file.deletions}`}</span>}
+        {ctx === null || unsent.length === 0 ? null : (
+          // Сжимается путь, а не кнопка: длинный путь уходит в «…» с полным текстом в title.
+          <div className="shrink-0">
+            <SendMenu entry={ctx.entry} defaultSessionId={ctx.sessionId} label={S.notes.sendFile} onSend={(to) => ctx.send(unsent, to)} />
+          </div>
+        )}
       </header>
       {body}
     </section>

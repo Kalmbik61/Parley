@@ -80,8 +80,9 @@ export const useNotesStore: UseBoundStore<StoreApi<NotesState>> = create<NotesSt
         const notes = get().bySession[key] ?? [];
         bridge.app.saveNotes(workKey, sessionId, { version: 1, notes }).catch((error: unknown) => {
           // Отказ main (форма, диск): человек видит тост, заметки остаются в окне, следующая правка
-          // попробует снова; причина — в консоль.
-          toast.error(S.notes.saveFailed);
+          // попробует снова; причина — в консоль. id — один на сессию: частые отказы заменяют тост,
+          // а не копят стопку (добавка контролёра 8.4b).
+          toast.error(S.notes.saveFailed, { id: `notes-save:${key}` });
           console.warn('[harnas] notes save failed', decodeIpcError(error).message);
         });
       }, SAVE_DELAY_MS),
@@ -113,8 +114,9 @@ export const useNotesStore: UseBoundStore<StoreApi<NotesState>> = create<NotesSt
           if (corruptedTo !== null) toast.error(S.notes.corrupted(corruptedTo));
         } catch (error) {
           // Файл есть, но не прочитан: писать поверх нельзя — человек узнаёт тостом, что его правки
-          // сессии останутся только в окне; причина — в консоль.
-          toast.error(S.notes.loadFailed);
+          // сессии останутся только в окне; причина — в консоль. Чтение повторяется на каждом открытии
+          // вкладки диффа — id на сессию не даёт копиться тостам (добавка контролёра 8.4b).
+          toast.error(S.notes.loadFailed, { id: `notes-load:${key}` });
           console.warn('[harnas] notes load failed', decodeIpcError(error).message);
           return false;
         }

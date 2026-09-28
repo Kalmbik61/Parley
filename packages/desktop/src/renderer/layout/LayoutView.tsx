@@ -10,6 +10,7 @@
  */
 
 import type { HarnasBridge } from '../../shared/bridge.js';
+import type { SendWithToastDeps } from '../terminal/send.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { useWorksStore } from '../store/works.js';
 import { LayoutBodyContext } from './GroupView.js';
@@ -27,9 +28,11 @@ export interface LayoutViewProps {
   bridge: HarnasBridge;
   fontFamily: string;
   fontSize: number;
+  /** Отправка агенту окна (7.2) — телам вкладок через контекст: заметкам диффа (8.4b). */
+  sendDeps: SendWithToastDeps;
 }
 
-export function LayoutView({ workKey, active, bridge, fontFamily, fontSize }: LayoutViewProps): JSX.Element | null {
+export function LayoutView({ workKey, active, bridge, fontFamily, fontSize, sendDeps }: LayoutViewProps): JSX.Element | null {
   const layout = useLayoutStore((state) => state.layouts[workKey]);
   const entries = useWorksStore((state) => state.entries);
   const entry = entries.find((item) => workKeyOf(item.projectPath, item.map.work.id) === workKey);
@@ -44,7 +47,7 @@ export function LayoutView({ workKey, active, bridge, fontFamily, fontSize }: La
   const singleGroup = groups(layout).length === 1;
 
   return (
-    <LayoutBodyContext.Provider value={{ bridge, fontFamily, fontSize, active }}>
+    <LayoutBodyContext.Provider value={{ bridge, fontFamily, fontSize, active, sendDeps }}>
       <div className="flex h-full min-h-0 min-w-0 flex-1">
         <NodeView workKey={workKey} node={layout.root} entry={entry} singleGroup={singleGroup} />
       </div>

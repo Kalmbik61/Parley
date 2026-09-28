@@ -14,6 +14,7 @@ import type { TabSpec } from '../../../shared/layout-types.js';
 import { S } from '../../../shared/strings.js';
 import { lazyWithRetry } from '../../files/editor/retry-lazy.js';
 import { ErrorBoundary } from '../../shell/ErrorBoundary.js';
+import type { SendWithToastDeps } from '../../terminal/send.js';
 
 const lazyDiffTab = lazyWithRetry(async () => (await import('../../review/DiffTab.js')).DiffTab);
 
@@ -24,14 +25,16 @@ export interface DiffBodyProps {
   entry: WorkEntry;
   tab: Extract<TabSpec, { kind: 'diff' }>;
   font?: { family: string; size: number };
+  /** Отправка агенту окна (7.2) — заметкам диффа (8.4b). */
+  sendDeps: SendWithToastDeps;
 }
 
-export function DiffBody({ bridge, workKey, entry, tab, font }: DiffBodyProps): JSX.Element {
+export function DiffBody({ bridge, workKey, entry, tab, font, sendDeps }: DiffBodyProps): JSX.Element {
   const { component: DiffTab, retry } = lazyDiffTab.use();
   return (
     <ErrorBoundary title={S.files.editorFailed} onRetry={retry}>
       <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">{S.changes.loading}</div>}>
-        <DiffTab bridge={bridge} workKey={workKey} entry={entry} tab={tab} {...(font === undefined ? {} : { font })} />
+        <DiffTab bridge={bridge} workKey={workKey} entry={entry} tab={tab} sendDeps={sendDeps} {...(font === undefined ? {} : { font })} />
       </Suspense>
     </ErrorBoundary>
   );

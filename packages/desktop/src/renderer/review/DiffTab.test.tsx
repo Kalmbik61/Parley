@@ -132,7 +132,7 @@ function serve(root: FileRoot, path: string, rev = BASE): void {
 }
 
 function renderTab(entry: WorkEntry = work(), tab = diffTab()): ReturnType<typeof render> {
-  return render(<DiffTab bridge={bridge} workKey={KEY} entry={entry} tab={tab} />);
+  return render(<DiffTab bridge={bridge} workKey={KEY} entry={entry} tab={tab} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />);
 }
 
 let scrolled: HTMLElement[];
