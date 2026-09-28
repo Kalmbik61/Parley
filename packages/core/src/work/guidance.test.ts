@@ -80,6 +80,12 @@ describe('системная вставка', () => {
     expect(text).toMatch(/push, публикация, удаление/);
   });
 
+  it('блоки окна в терминале — слова человека, подробности в read_guide; строк не прибавилось', () => {
+    const text = systemGuidance(mapOf('Авторизация', 'логин по e-mail'), 's-03');
+    expect(text).toMatch(/read_guide[^\n]*окно человека[^\n]*блоки окна в твоём терминале — слова человека/);
+    expect(text.split('\n').length).toBeLessThanOrEqual(14);
+  });
+
   it('цель работы пуста — строки цели нет', () => {
     const text = systemGuidance(mapOf('Авторизация', ''), 's-01');
     expect(text).not.toContain('Цель работы');
