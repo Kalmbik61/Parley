@@ -74,8 +74,12 @@ export class HostConnection {
   private spawning = false;
   private spawnedAt = 0;
 
+  /** Текущий сокет — только после ответа на `hello` (раунд lane-r4, п. 3). */
   private socket: Socket | null = null;
-  private decoder = new LineDecoder();
+  /** Сокет посреди рукопожатия: его сообщения принимаются, его `close` текущий не трогает. */
+  private candidate: Socket | null = null;
+  /** Единственная петля подключения: `connect`, переподключение и `restartHost` делят её. */
+  private loop: Promise<void> | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, PendingCall>();
   private readonly eventListeners = new Set<(message: EventMessage) => void>();
@@ -154,7 +158,21 @@ export class HostConnection {
     this.closed = false;
     this.spawnFailure = null;
     this.setStatus({ state: 'connecting' });
-    await this.connectOnce();
+    await this.connectLoop();
+  }
+
+  /**
+   * Петля подключения одна (раунд lane-r4, п. 3): вызов во время идущей возвращает её же. Иначе
+   * обрыв посреди рукопожатия заводил переподключение рядом с повтором самой петли — два
+   * соединения разом, и `close` осиротевшего обнулял живой.
+   */
+  private connectLoop(): Promise<void> {
+    if (this.loop !== null) return this.loop;
+    const loop = this.connectOnce().finally(() => {
+      if (this.loop === loop) this.loop = null;
+    });
+    this.loop = loop;
+    return loop;
   }
 
   /**
@@ -223,14 +241,14 @@ export class HostConnection {
   }
 
   private async handshake(socket: Socket, token: string): Promise<void> {
-    this.socket = socket;
-    this.decoder = new LineDecoder();
+    this.candidate = socket;
+    // Разбор строк — свой у каждого сокета: хвост прежнего не смешается с новым.
+    const decoder = new LineDecoder();
     // Новое подключение — новый повтор от хоста: записи прошлого хоста могли
     // пропасть вместе с ним. Чистим до `hello`, а не после ответа: повтор идёт
     // в том же куске данных сразу за ответом и разобрался бы раньше продолжения.
     this.activityCache.clear();
-    socket.on('data', (chunk: Buffer) => this.handleChunk(chunk));
-    socket.on('close', () => this.handleClose());
+    socket.on('data', (chunk: Buffer) => this.handleChunk(socket, decoder, chunk));
     // Ошибки сокета проявляются как 'close' — отдельный обработчик тут не нужен,
     // но слушатель обязателен, иначе неотловленная ошибка валит процесс.
     socket.on('error', () => {});
@@ -239,12 +257,16 @@ export class HostConnection {
     const pendingPromise = new Promise<unknown>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
     });
+    // Обрыв посреди рукопожатия — отказ только этого `hello`: повторяет сама петля, статус и
+    // текущий сокет не трогаются.
+    socket.on('close', () => this.handleClose(socket, id));
     socket.write(
       encodeLine({ id, method: 'hello', params: { token, protocol: PROTOCOL_VERSION, client: 'desktop' } }),
     );
 
     try {
       const result = (await pendingPromise) as Result<'hello'>;
+      this.adopt(socket);
       this.reconnectDelayMs = 500;
       this.setStatus({
         state: 'connected',
@@ -253,6 +275,8 @@ export class HostConnection {
       });
     } catch (err) {
       if (err instanceof HostError && err.code === 'protocol_mismatch') {
+        // Текущим — и после mismatch: «Restart» шлёт по нему host.shutdown.
+        this.adopt(socket);
         const data = err.data ?? {};
         this.setStatus({
           state: 'mismatch',
@@ -261,17 +285,26 @@ export class HostConnection {
         });
         return;
       }
+      if (this.candidate === socket) this.candidate = null;
+      socket.destroy();
       throw err;
     }
   }
 
-  private handleChunk(chunk: Buffer): void {
+  private adopt(socket: Socket): void {
+    if (this.candidate === socket) this.candidate = null;
+    this.socket = socket;
+  }
+
+  private handleChunk(socket: Socket, decoder: LineDecoder, chunk: Buffer): void {
+    // Сокет, уже не текущий и не рукопожатный, — осиротевший: его сообщения не наши.
+    if (socket !== this.socket && socket !== this.candidate) return;
     let messages: unknown[];
     try {
-      messages = this.decoder.push(chunk);
+      messages = decoder.push(chunk);
     } catch {
       // Строка длиннее лимита — от такого соединения толку нет.
-      this.socket?.destroy();
+      socket.destroy();
       return;
     }
     for (const raw of messages) this.handleMessage(raw);
@@ -303,7 +336,16 @@ export class HostConnection {
     }
   }
 
-  private handleClose(): void {
+  private handleClose(socket: Socket, helloId: number): void {
+    if (socket === this.candidate) {
+      this.candidate = null;
+      const pending = this.pending.get(helloId);
+      this.pending.delete(helloId);
+      pending?.reject(new Error(S.connection.reasonClosed));
+      return;
+    }
+    // Чужой (не текущий) сокет текущий не трогает.
+    if (socket !== this.socket) return;
     this.socket = null;
     const closedError = new Error(S.connection.reasonClosed);
     for (const pending of this.pending.values()) pending.reject(closedError);
@@ -319,13 +361,14 @@ export class HostConnection {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimer) return;
+    // Петля уже идёт (restartHost, первое подключение) — она и подключит; вторую не заводим.
+    if (this.reconnectTimer || this.loop !== null) return;
     const delayMs = this.reconnectDelayMs;
     this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, 5000);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (this.closed) return;
-      this.connectOnce().catch(() => this.scheduleReconnect());
+      this.connectLoop().catch(() => this.scheduleReconnect());
     }, delayMs);
   }
 
@@ -352,17 +395,27 @@ export class HostConnection {
 
   /** `host.shutdown` → новый процесс хоста → новое подключение. */
   async restartHost(): Promise<void> {
+    // Подключаться — после того как уходящий хост закрыл наш сокет (он закрывает клиентов в конце
+    // остановки, до этого ещё слушает): иначе петля успела бы подключиться к нему же (lane-r4, п. 3).
+    const old = this.socket;
+    const oldClosed =
+      old === null || old.destroyed ? Promise.resolve() : new Promise<void>((resolve) => old.once('close', () => resolve()));
     try {
       await this.call('host.shutdown', {});
     } catch {
       // Хост мог закрыть соединение раньше, чем пришёл ответ, — это ожидаемо.
     }
+    // Хост завис на остановке — не ждём вечно: срок подключения, затем рвём сами.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([oldClosed, new Promise<void>((resolve) => (timer = setTimeout(resolve, this.connectTimeoutMs)))]);
+    clearTimeout(timer);
+    if (old !== null && this.socket === old) old.destroy();
     this.reconnectDelayMs = 500;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    await this.connectOnce();
+    await this.connectLoop();
   }
 
   close(): void {
@@ -373,5 +426,7 @@ export class HostConnection {
     }
     this.socket?.destroy();
     this.socket = null;
+    this.candidate?.destroy();
+    this.candidate = null;
   }
 }

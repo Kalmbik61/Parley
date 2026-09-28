@@ -356,6 +356,50 @@ describe('HostConnection', () => {
     server?.close();
   }, 10000);
 
+  it('обрыв посреди рукопожатия — одна петля, одно соединение, ввод доходит (lane-r4, п. 3)', async () => {
+    await writeToken(paths);
+    await mkdir(paths.dir, { recursive: true });
+    // Первое соединение хост рвёт, не ответив на hello; следующие — обычное рукопожатие.
+    const received: Array<{ connection: number; method: string }> = [];
+    let accepted = 0;
+    const server = createServer((socket: Socket) => {
+      accepted += 1;
+      const connection = accepted;
+      const decoder = new LineDecoder();
+      socket.on('data', (chunk: Buffer) => {
+        for (const raw of decoder.push(chunk)) {
+          const message = raw as { id?: number; method?: string };
+          if (message.method === 'hello' && typeof message.id === 'number') {
+            if (connection === 1) {
+              socket.destroy();
+              return;
+            }
+            socket.write(encodeLine({ id: message.id, result: { hostVersion: '0.0.0-test', protocol: PROTOCOL_VERSION, pid: process.pid } }));
+            continue;
+          }
+          if (typeof message.method === 'string') received.push({ connection, method: message.method });
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(paths.socket, resolve));
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(() => null), connectTimeoutMs: 3000 });
+    const states: string[] = [];
+    connection.onStatus((status) => states.push(status.state));
+
+    await connection.connect();
+    // Петля переподключения (500 мс) успела бы завести третье соединение.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(accepted).toBe(2);
+    expect(states.at(-1)).toBe('connected');
+    // Рукопожатие не закончено — «нет связи» окну не показывается.
+    expect(states).not.toContain('disconnected');
+
+    connection.notify('pty.input', { ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-01' }, data: 'a' });
+    await vi.waitFor(() => expect(received).toEqual([{ connection: 2, method: 'pty.input' }]));
+    connection.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }, 10000);
+
   it('notify без связи — не молча: предупреждение в консоли main со счётчиком (lane-r3, п. 2)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000 });
