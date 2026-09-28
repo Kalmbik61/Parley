@@ -167,4 +167,112 @@ test.describe('редактор файла на собранном окне', ()
     await banner.getByRole('button', { name: 'Reload' }).click();
     await expect(banner).toHaveCount(0);
   });
+
+  // Раунд fix-7.3b (ревью 7.3b-B, Critical): сборка сжимала `#ffffff` в `#fff`, Monaco не принимал
+  // короткий hex в `editor.background` — в светлой теме редактор не открывался вовсе. Тема — из
+  // палитры (nativeTheme main), без эмуляции colorScheme; системная тема машины не влияет.
+  test('светлая тема: Monaco с текстом; смена темы при открытом файле; ⌘S, ⌘D и ⌘W на живом окне', async () => {
+    test.setTimeout(90_000);
+    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const electronApp = await electron.launch({ args: [mainEntry], env });
+    app = electronApp;
+    const window = await electronApp.firstWindow();
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 1400, height: 900 }));
+    await expect(window.getByTestId('landing')).toBeVisible();
+
+    const problems: string[] = [];
+    window.on('pageerror', (error) => problems.push(`pageerror: ${error.message}`));
+    window.on('console', (message) => {
+      if (message.type() === 'error' || message.type() === 'warning') problems.push(`console.${message.type()}: ${message.text()}`);
+    });
+    const isDark = (): Promise<boolean> => window.evaluate(() => document.documentElement.classList.contains('dark'));
+    const pickTheme = async (label: 'Theme: dark' | 'Theme: light'): Promise<void> => {
+      await window.keyboard.press('Meta+J');
+      await expect(window.locator('[data-palette] [cmdk-input]')).toBeFocused();
+      await window.keyboard.type(label);
+      await expect(window.locator('[data-palette] [role="option"]').first()).toContainText(label);
+      await window.keyboard.press('Enter');
+      await expect(window.locator('[data-palette]')).toHaveCount(0);
+    };
+    /** Фон редактора — фон токена `--editor-surface` текущей темы. */
+    const editorBackground = (): Promise<string> =>
+      window.locator('.monaco-editor .monaco-editor-background').first().evaluate((el) => getComputedStyle(el).backgroundColor);
+
+    await pickTheme('Theme: light');
+    await expect.poll(isDark).toBe(false);
+
+    await call(window, 'works.create', { projectPath: project, title: 'editor-light', goal: '' });
+    const sidebar = window.getByTestId('right-sidebar');
+    await expect(sidebar).toBeVisible();
+    await sidebar.getByText('src', { exact: true }).click();
+    await sidebar.getByText('a.ts', { exact: true }).click();
+    const lines = window.locator('.monaco-editor .view-lines').first();
+    await expect(lines).toContainText('export const a = 1;');
+    await expect(window.getByText("Editor didn't load")).toHaveCount(0);
+    expect(await editorBackground()).toBe('rgb(255, 255, 255)');
+
+    // Смена темы при открытом файле — в обе стороны: редактор следует, текст на месте.
+    await pickTheme('Theme: dark');
+    await expect.poll(isDark).toBe(true);
+    await expect.poll(editorBackground).toBe('rgb(30, 30, 30)');
+    await expect(lines).toContainText('export const a = 1;');
+    await pickTheme('Theme: light');
+    await expect.poll(isDark).toBe(false);
+    await expect.poll(editorBackground).toBe('rgb(255, 255, 255)');
+    await expect(lines).toContainText('export const a = 1;');
+    await expect(window.getByText("Editor didn't load")).toHaveCount(0);
+
+    // Правка → ⌘S пишет.
+    await lines.click();
+    await window.keyboard.press('Meta+ArrowDown');
+    await window.keyboard.type('// saved\n');
+    const tabSel = '[role="tab"][data-tab-id="file:p:src/a.ts"]';
+    const tabs = window.locator(tabSel);
+    await expect(tabs.first().locator('[data-dirty-dot]')).toBeVisible();
+    await window.keyboard.press('Meta+S');
+    await expect(tabs.first().locator('[data-dirty-dot]')).toHaveCount(0);
+    expect(await readFile(path.join(project, 'src', 'a.ts'), 'utf8')).toBe('export const a = 1;\n// saved\n');
+
+    // Несохранённая правка, вторая вкладка файла рядом, затем ⌘D с вкладкой a.ts (в редакторе ⌘D —
+    // Monaco, поэтому через меню, как `shell.spec`). Вкладка файла в работе одна (id по пути), и
+    // ⌘D переносит её в новую группу: тело монтируется заново, правка — из буфера стора.
+    await window.keyboard.type('// mine');
+    await expect(tabs.first().locator('[data-dirty-dot]')).toBeVisible();
+    await sidebar.getByText(CYRILLIC, { exact: true }).click();
+    await expect(lines).toContainText('export const b = 2;');
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.send('menu:action', 'group.splitRight'));
+    await window.getByRole('dialog').getByRole('option', { name: /a\.ts/ }).first().click();
+    await expect.poll(() => window.locator('[data-group-id]').count()).toBe(2);
+    await expect(tabs).toHaveCount(1);
+    const bodies = window.locator('.monaco-editor .view-lines');
+    await expect(bodies).toHaveCount(2);
+    await expect(bodies.filter({ hasText: '// mine' })).toHaveCount(1);
+    await expect(tabs.locator('[data-dirty-dot]')).toBeVisible();
+
+    // Закрытие другой группы (её чистый файл, ⌘W) — без вопроса, сплит схлопнулся, правка жива.
+    const dialog = window.getByRole('dialog');
+    await window.locator(`[role="tab"][data-tab-id="file:p:src/${CYRILLIC}"]`).click();
+    await window.keyboard.press('Meta+W');
+    await expect(window.locator(`[role="tab"][data-tab-id="file:p:src/${CYRILLIC}"]`)).toHaveCount(0);
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => window.locator('[data-group-id]').count()).toBe(1);
+    await expect(tabs.locator('[data-dirty-dot]')).toBeVisible();
+    await expect(window.locator('.monaco-editor .view-lines').first()).toContainText('// mine');
+
+    // ⌘W последней вкладки с правкой — вопрос; Cancel оставляет, Don't save закрывает, диск прежний.
+    await window.locator('.monaco-editor .view-lines').first().click();
+    await window.keyboard.press('Meta+W');
+    await expect(dialog).toContainText('Save changes to a.ts?');
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(tabs).toHaveCount(1);
+    await window.locator('.monaco-editor .view-lines').first().click();
+    await window.keyboard.press('Meta+W');
+    await expect(dialog).toContainText('Save changes to a.ts?');
+    await dialog.getByRole('button', { name: "Don't save" }).click();
+    await expect(tabs).toHaveCount(0);
+    expect(await readFile(path.join(project, 'src', 'a.ts'), 'utf8')).toBe('export const a = 1;\n// saved\n');
+
+    expect(problems).toEqual([]);
+  });
 });

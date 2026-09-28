@@ -15,6 +15,7 @@ import CssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
 import HtmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
 import TsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
 import { isMonacoCancel } from './monaco-cancel.js';
+import { applyTheme } from './editor-theme.js';
 
 let ready = false;
 
@@ -49,33 +50,7 @@ export function setupMonaco(): typeof import('monaco-editor') {
   return monaco;
 }
 
-/** Цвет токена, если он в hex (Monaco понимает только hex); иначе — запасной. */
-function tokenColor(style: CSSStyleDeclaration, name: string, fallback: string): string {
-  const value = style.getPropertyValue(name).trim();
-  return /^#[0-9a-f]{3,8}$/i.test(value) ? value : fallback;
-}
-
-/**
- * Темы `harnas-dark` и `harnas-light` из токенов окна (фон `--editor-surface`). Токены читаются
- * в момент вызова: его зовут после смены `.dark` на `<html>`, и переменные уже нужной темы.
- */
+/** Тема Monaco по тёмности окна — из токенов `<html>` в момент вызова (`editor-theme.ts`). */
 export function applyEditorTheme(dark: boolean): void {
-  const style = getComputedStyle(document.documentElement);
-  const name = dark ? 'harnas-dark' : 'harnas-light';
-  const background = tokenColor(style, '--editor-surface', dark ? '#1e1e1e' : '#ffffff');
-  const foreground = tokenColor(style, '--foreground', dark ? '#fafafa' : '#0a0a0a');
-  monaco.editor.defineTheme(name, {
-    base: dark ? 'vs-dark' : 'vs',
-    inherit: true,
-    rules: [],
-    colors: {
-      'editor.background': background,
-      'editor.foreground': foreground,
-      'editorCursor.foreground': foreground,
-      'editorGutter.background': background,
-      // Выделение — полупрозрачный синий палитры окна (как у Orca): читается на обоих фонах.
-      'editor.selectionBackground': dark ? '#264f78' : '#add6ff',
-    },
-  });
-  monaco.editor.setTheme(name);
+  applyTheme(monaco.editor, dark, getComputedStyle(document.documentElement));
 }
