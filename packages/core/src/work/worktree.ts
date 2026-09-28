@@ -128,6 +128,14 @@ const MAX_COMMITS = 200;
 /** Сколько `git diff --no-index` по неотслеживаемым идёт одновременно: сотня новых файлов не порождает сотню процессов разом. */
 const UNTRACKED_CONCURRENCY = 8;
 
+/**
+ * У скольких неотслеживаемых считаются числа и патч (раунд fix-final-c, п. 1): каждый — свой
+ * процесс `git diff --no-index` (спека 11.5 — не `git add -N`), и `npm install` без `.gitignore`
+ * давал десятки тысяч процессов на одно обновление раз в 2 с (3000 файлов — 4,7 с). Остальные
+ * идут в `files` без чисел (`null`), их число — `uncountedUntracked`.
+ */
+export const UNTRACKED_COUNTED = 500;
+
 /** Предел вывода git: у `execFile` по умолчанию 1 МБ, а патч с lock-файлами больше. */
 const MAX_BUFFER = 256 * 1024 * 1024;
 
@@ -574,7 +582,8 @@ async function untrackedCounts(at: GitAt, filePath: string): Promise<DiffFile> {
 
 /**
  * Файлы сравнения `against` с рабочим деревом `cwd` плюс неотслеживаемые:
- * список и числа — по одной паре сторон.
+ * список и числа — по одной паре сторон. Числа неотслеживаемых — у первых
+ * `UNTRACKED_COUNTED`, остальные — без чисел.
  */
 async function workingTreeFiles(at: GitAt, diffArgs: string[], untracked: string[]): Promise<DiffFile[]> {
   const [status, numstat] = await Promise.all([
@@ -586,8 +595,18 @@ async function workingTreeFiles(at: GitAt, diffArgs: string[], untracked: string
   const counted = new Set(counts.map((entry) => entry.path));
   const changed = parseNameStatusZ(status).filter((entry) => counted.has(entry.path));
   const tracked = joinDiffFiles(changed, counts);
-  const fresh = await mapLimited(untracked, UNTRACKED_CONCURRENCY, (filePath) => untrackedCounts(at, filePath));
-  return [...tracked, ...fresh];
+  const fresh = await mapLimited(untracked.slice(0, UNTRACKED_COUNTED), UNTRACKED_CONCURRENCY, (filePath) =>
+    untrackedCounts(at, filePath),
+  );
+  const uncounted = untracked.slice(UNTRACKED_COUNTED).map(
+    (filePath): DiffFile => ({ path: filePath, status: 'A', oldPath: null, additions: null, deletions: null }),
+  );
+  return [...tracked, ...fresh, ...uncounted];
+}
+
+/** Сколько неотслеживаемых осталось без чисел и патча. */
+function uncountedOf(untracked: string[]): number {
+  return Math.max(0, untracked.length - UNTRACKED_COUNTED);
 }
 
 function sumStats(files: DiffFile[]): { additions: number; deletions: number } {
@@ -693,6 +712,11 @@ export interface WorktreeDiff {
   commits: BranchCommit[];
   /** Пути с незакоммиченным в рабочем дереве worktree (porcelain -z, у R — новый путь): секция «Незакоммиченные». */
   uncommittedPaths: string[];
+  /**
+   * Неотслеживаемые сверх `UNTRACKED_COUNTED`: в `files` без чисел, в патче их нет. Нет поля —
+   * хост старее раунда fix-final-c, считать 0.
+   */
+  uncountedUntracked?: number;
 }
 
 /**
@@ -760,7 +784,7 @@ export async function worktreeDiff(
       // `git diff HEAD` untracked-файлы не показывает вовсе (их нет в индексе,
       // сравнивать нечего) — их содержимое дифф от пустоты добирает отдельно, файл
       // за файлом, не трогая сам индекс (EXTRA, кусок 4.2).
-      const untrackedPatches = await mapLimited(untracked, UNTRACKED_CONCURRENCY, (filePath) =>
+      const untrackedPatches = await mapLimited(untracked.slice(0, UNTRACKED_COUNTED), UNTRACKED_CONCURRENCY, (filePath) =>
         untrackedPatch(worktree, filePath),
       );
       patch = `${committedPatch}${uncommittedPatch}${untrackedPatches.join('')}`;
@@ -776,6 +800,7 @@ export async function worktreeDiff(
       stats: sumStats(files),
       commits,
       uncommittedPaths,
+      uncountedUntracked: uncountedOf(untracked),
     };
   });
 }
@@ -813,6 +838,8 @@ export interface ProjectChanges {
   stats: { additions: number; deletions: number };
   /** Текущая ветка папки проекта; `null` — отсоединённая голова. */
   branch: string | null;
+  /** Как у `WorktreeDiff.uncountedUntracked`. */
+  uncountedUntracked?: number;
 }
 
 /**
@@ -842,13 +869,19 @@ export async function projectChanges(
         'HEAD',
         ...HARNAS_PATHSPEC,
       ]);
-      const untrackedPatches = await mapLimited(untracked, UNTRACKED_CONCURRENCY, (filePath) =>
+      const untrackedPatches = await mapLimited(untracked.slice(0, UNTRACKED_COUNTED), UNTRACKED_CONCURRENCY, (filePath) =>
         untrackedPatch(project, filePath),
       );
       patch = `${trackedPatch}${untrackedPatches.join('')}`;
     }
 
-    return { patch, files, stats: sumStats(files), branch: head === 'HEAD' ? null : head };
+    return {
+      patch,
+      files,
+      stats: sumStats(files),
+      branch: head === 'HEAD' ? null : head,
+      uncountedUntracked: uncountedOf(untracked),
+    };
   });
 }
 

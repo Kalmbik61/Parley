@@ -2003,7 +2003,9 @@ interface DiffNote {
   приходит в кавычках с восьмеричными кодами и не совпадает ни с файлом, ни с `gitShow`.
   Фоновое чтение раз в 2 с не берёт `index.lock` рядом с агентом и человеком и не трогает
   индекс: неотслеживаемые — `git ls-files --others --exclude-standard -z`, их числа —
-  `git diff --no-index --numstat`, а не `git add -N`.
+  `git diff --no-index --numstat`, а не `git add -N`. Процесс на файл, поэтому числа и
+  патч — только у первых 500 неотслеживаемых (раунд fix-final-c): остальные идут в `files`
+  без чисел (`null`), последними, их число — `uncountedUntracked` ответа.
   Чтения git для диффа — хоста (`worktrees.diff`, `changes.project`) и main
   (`files.gitShow`, `files.gitCommitFiles`, `files.gitStatus`) — идут с
   `-c diff.autoRefreshIndex=false` и `--no-optional-locks`: индекс человека не

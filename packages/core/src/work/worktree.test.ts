@@ -1135,3 +1135,76 @@ describe('подмодуль с подложенным gitdir и Commit окна
     expect(names).toBe('top.txt');
   });
 });
+
+describe('много неотслеживаемых (раунд fix-final-c, п. 1)', () => {
+  const MANY = 5000;
+
+  /** 5000 новых файлов по 50 в каталоге — как `npm install` без `.gitignore`, только меньше. */
+  async function manyUntracked(dir: string): Promise<void> {
+    for (let d = 0; d < MANY / 50; d += 1) {
+      const sub = path.join(dir, 'pkg', `d${d}`);
+      await mkdir(sub, { recursive: true });
+      await Promise.all(Array.from({ length: 50 }, (_, f) => writeFile(path.join(sub, `f${f}.js`), `a\nb\n`, 'utf8')));
+    }
+  }
+
+  /**
+   * git через обёртку в PATH, которая считает запуски: число процессов на одно обновление.
+   * Обёртка — во временном каталоге теста; настоящий git — тот, что нашёлся в PATH до неё.
+   */
+  async function countingGit<T>(action: () => Promise<T>): Promise<{ result: T; calls: number; ms: number }> {
+    const real = (await run('sh', ['-c', 'command -v git'])).stdout.trim();
+    const bin = path.join(root, 'counting-bin');
+    const log = path.join(root, 'git-calls');
+    await mkdir(bin, { recursive: true });
+    await writeFile(path.join(bin, 'git'), `#!/bin/sh\necho x >> '${log}'\nexec '${real}' "$@"\n`, 'utf8');
+    await chmod(path.join(bin, 'git'), 0o755);
+    await writeFile(log, '', 'utf8');
+    const saved = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${saved ?? ''}`;
+    const started = performance.now();
+    try {
+      const result = await action();
+      const ms = performance.now() - started;
+      const calls = (await readFile(log, 'utf8')).split('\n').filter((line) => line !== '').length;
+      return { result, calls, ms };
+    } finally {
+      process.env.PATH = saved;
+    }
+  }
+
+  it('worktreeDiff: числа — у первых 500, остальным null и счёт в uncountedUntracked; вызовов git не больше 520, быстрее 5 с', async () => {
+    await initProject();
+    const info = await freshWorktree();
+    await manyUntracked(info.path);
+
+    const { result: diff, calls, ms } = await countingGit(() => worktreeDiff(project, info, { patch: false }));
+    console.info(`[замер] worktreeDiff, ${MANY} неотслеживаемых: ${Math.round(ms)} мс, ${calls} вызовов git`);
+
+    expect(diff.files).toHaveLength(MANY);
+    expect(diff.files.filter((file) => file.additions !== null)).toHaveLength(500);
+    expect(diff.files.slice(0, 500).every((file) => file.additions === 2 && file.deletions === 0)).toBe(true);
+    expect(diff.files.slice(500).every((file) => file.status === 'A' && file.additions === null && file.deletions === null)).toBe(true);
+    expect(diff.uncountedUntracked).toBe(MANY - 500);
+    expect(diff.stats).toEqual({ additions: 1000, deletions: 0 });
+    expect(diff.uncommittedPaths).toHaveLength(MANY);
+    expect(calls).toBeLessThanOrEqual(520);
+    expect(ms).toBeLessThan(5000);
+  }, 60_000);
+
+  it('projectChanges: тот же предел; меньше 500 неотслеживаемых — все с числами, uncountedUntracked 0', async () => {
+    await initProject();
+    await manyUntracked(project);
+
+    const { result: changes, calls } = await countingGit(() => projectChanges(project, { patch: false }));
+    expect(changes.files.filter((file) => file.additions !== null)).toHaveLength(500);
+    expect(changes.uncountedUntracked).toBe(MANY - 500);
+    expect(calls).toBeLessThanOrEqual(520);
+
+    await rm(path.join(project, 'pkg'), { recursive: true });
+    await writeFile(path.join(project, 'one.txt'), 'x\n', 'utf8');
+    const small = await projectChanges(project, { patch: false });
+    expect(small.files).toEqual([{ path: 'one.txt', status: 'A', oldPath: null, additions: 1, deletions: 0 }]);
+    expect(small.uncountedUntracked).toBe(0);
+  }, 60_000);
+});
