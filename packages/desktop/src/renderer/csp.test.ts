@@ -1,6 +1,6 @@
 /**
- * Кусок 7.3b, тест 10: CSP окна (`index.html`) совпадает со строкой спеки 15.2 — кроме `blob:` в
- * `img-src`: его добавит превью картинок (7.5). Любое ослабление CSP сначала меняет спеку.
+ * Куски 7.3b (тест 10) и 7.5 (тест 8): CSP окна (`index.html`) — строка спеки 15.2 целиком, вместе с
+ * `blob:` в `img-src` для картинок превью. Любое ослабление CSP сначала меняет спеку.
  */
 
 import { readFileSync } from 'node:fs';
@@ -19,8 +19,8 @@ function directives(csp: string): Record<string, string> {
   return result;
 }
 
-describe('CSP окна (тест 10)', () => {
-  it('index.html — строка спеки 15.2 без blob: в img-src', () => {
+describe('CSP окна (7.3b тест 10, 7.5 тест 8)', () => {
+  it('index.html — строка спеки 15.2 целиком', () => {
     const html = read('./index.html');
     const meta = /http-equiv="Content-Security-Policy"\s+content="([^"]+)"/.exec(html);
     expect(meta).not.toBeNull();
@@ -29,8 +29,13 @@ describe('CSP окна (тест 10)', () => {
     const line = /`(default-src[^`]+)`/.exec(section.replace(/\n\s*/g, ' '));
     expect(line).not.toBeNull();
     const expected = directives(line?.[1] ?? '');
-    expected['img-src'] = (expected['img-src'] ?? '').replace(/\s*blob:/, '');
     expect(directives(meta?.[1] ?? '')).toEqual(expected);
+    // И как строка, в том же порядке: сверка глазами со спекой — один к одному.
+    const squeeze = (text: string): string => text.replace(/\s+/g, ' ').trim();
+    expect(squeeze(meta?.[1] ?? '')).toBe(squeeze(line?.[1] ?? ''));
     expect(expected['worker-src']).toBe("'self'");
+    expect(expected['img-src']).toBe("'self' data: blob:");
+    // Без WebAssembly: pdf.js идёт с `useWasm: false` (`PdfPreview.tsx`).
+    expect(expected['script-src']).toBe("'self'");
   });
 });

@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { crc32, deflateSync } from 'node:zlib';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
@@ -14,7 +15,11 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * предупреждений `console`, ни `pageerror`, ни нарушений CSP (`securitypolicyviolation`), ни
  * «Could not create web worker» (Monaco молча ушёл бы в главный поток). Дальше — ⌘S пишет файл, а
  * правка «агента» на диске при несохранённых правках даёт баннер, а не перетирается.
- * Сценарии превью дописывает 7.5.
+ *
+ * Превью (кусок 7.5, тесты 9–11): Markdown открывается превью, «Code» — Monaco того же буфера;
+ * «Keep mine» и ⌘S — вопрос перезаписи; картинка и PDF из дерева — превью без ошибок `console`,
+ * `pageerror` и нарушений CSP, ⌘F в PDF и его ссылка — через журнал `HARNAS_SHELL`, браузер
+ * человека не открывается.
  */
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -26,6 +31,57 @@ const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
 const CYRILLIC = 'мой файл с пробелами.ts';
 /** 255 байт — предел имени на APFS; без пробелов, переносить нечему. */
 const LONG_FILE = `${'e'.repeat(252)}.ts`;
+
+/** Markdown превью: заголовок, ссылка наружу и картинка из корня (Blob, `img-src blob:`). */
+const NOTES = '# Notes\n\nSee [site](https://example.com/notes).\n\n![logo](./logo.png)\n';
+
+/** PNG 3×2 px: картинка превью и её размер «3 × 2 px». */
+function makePng(width: number, height: number): Buffer {
+  const chunk = (type: string, data: Buffer): Buffer => {
+    const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, crc]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header.set([8, 2, 0, 0, 0], 8);
+  // Строка: байт фильтра и RGB на пиксель.
+  const raw = Buffer.concat(Array.from({ length: height }, () => Buffer.from([0, ...Array.from({ length: width * 3 }, () => 200)])));
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk('IHDR', header),
+    chunk('IDAT', deflateSync(raw)),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+/** PDF в одну страницу: текст Helvetica (стандартный шрифт без встраивания) и ссылка URI. */
+function makePdf(): Buffer {
+  const content = 'BT /F1 24 Tf 72 700 Td (Hello harnas PDF) Tj ET';
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R /Annots [6 0 R] >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+    '<< /Type /Annot /Subtype /Link /Rect [72 560 400 620] /Border [0 0 0] /A << /S /URI /URI (https://example.com/harnas) >> >>',
+  ];
+  let out = '%PDF-1.4\n';
+  const offsets: number[] = [];
+  objects.forEach((body, index) => {
+    offsets.push(out.length);
+    out += `${index + 1} 0 obj\n${body}\nendobj\n`;
+  });
+  const xref = out.length;
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  out += offsets.map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`).join('');
+  out += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, 'latin1');
+}
 
 test.skip(!existsSync(hostEntry), `packages/host/dist/main.js не собран — сначала pnpm --filter @harnas/host build: ${hostEntry}`);
 
@@ -50,7 +106,42 @@ test.describe('редактор файла на собранном окне', ()
     await writeFile(path.join(project, 'src', 'a.ts'), 'export const a = 1;\n');
     await writeFile(path.join(project, 'src', CYRILLIC), 'export const b = 2;\n');
     await writeFile(path.join(project, LONG_FILE), 'long\n');
+    await writeFile(path.join(project, 'notes.md'), NOTES);
+    await writeFile(path.join(project, 'logo.png'), makePng(3, 2));
+    await writeFile(path.join(project, 'doc.pdf'), makePdf());
   });
+
+  /** Окно 1400×900 с работой над проектом; с этого места — сборщик ошибок и нарушений CSP. */
+  async function launch(title: string): Promise<{ electronApp: ElectronApplication; window: Page; problems: string[] }> {
+    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const electronApp = await electron.launch({ args: [mainEntry], env });
+    app = electronApp;
+    const window = await electronApp.firstWindow();
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 1400, height: 900 }));
+    await expect(window.getByTestId('landing')).toBeVisible();
+    expect(await window.evaluate(() => location.protocol)).toBe('file:');
+    await call(window, 'works.create', { projectPath: project, title, goal: '' });
+    await expect(window.getByTestId('right-sidebar')).toBeVisible();
+    const problems: string[] = [];
+    window.on('pageerror', (error) => problems.push(`pageerror: ${error.message}`));
+    window.on('console', (message) => {
+      if (message.type() === 'error' || message.type() === 'warning') problems.push(`console.${message.type()}: ${message.text()}`);
+    });
+    await window.evaluate(() => {
+      const store = globalThis as unknown as { __cspViolations: string[] };
+      store.__cspViolations = [];
+      document.addEventListener('securitypolicyviolation', (event) => {
+        store.__cspViolations.push(`${event.violatedDirective} ${event.blockedURI}`);
+      });
+    });
+    return { electronApp, window, problems };
+  }
+
+  const cspViolations = (window: Page): Promise<string[]> =>
+    window.evaluate(() => (globalThis as unknown as { __cspViolations: string[] }).__cspViolations);
+
+  const shellLog = (electronApp: ElectronApplication): Promise<unknown[]> =>
+    electronApp.evaluate(() => [...((globalThis as { __harnasShell?: unknown[] }).__harnasShell ?? [])]);
 
   test.afterEach(async () => {
     await stopApp(app);
@@ -273,6 +364,133 @@ test.describe('редактор файла на собранном окне', ()
     await expect(tabs).toHaveCount(0);
     expect(await readFile(path.join(project, 'src', 'a.ts'), 'utf8')).toBe('export const a = 1;\n// saved\n');
 
+    expect(problems).toEqual([]);
+  });
+
+  test('7.5 тест 9: notes.md — превью; ссылка наружу — журнал shell; Code, правка, ⌘S — диск изменён, ни баннера, ни Reloaded from disk', async () => {
+    test.setTimeout(90_000);
+    const { electronApp, window, problems } = await launch('preview-md');
+    const sidebar = window.getByTestId('right-sidebar');
+    await sidebar.getByText('notes.md', { exact: true }).click();
+    const tab = window.locator('[role="tab"][data-tab-id="file:p:notes.md"]');
+    await expect(tab).toBeVisible();
+    const preview = window.getByTestId('markdown-preview');
+    await expect(preview.getByRole('heading', { name: 'Notes' })).toBeVisible();
+    // Картинка из корня — Blob, CSP `img-src blob:` её пускает.
+    const logo = preview.locator('img[alt="logo"]');
+    await expect(logo).toHaveAttribute('src', /^blob:/);
+    await expect.poll(() => logo.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(3);
+
+    // http(s) — наружу через app.openExternal (журнал), окно на месте.
+    await preview.getByText('site', { exact: true }).click();
+    await expect.poll(() => shellLog(electronApp)).toContainEqual({ action: 'openExternal', url: 'https://example.com/notes' });
+    expect(await window.evaluate(() => location.protocol)).toBe('file:');
+
+    await window.getByRole('radio', { name: 'Code' }).click();
+    const lines = window.locator('.monaco-editor .view-lines').first();
+    await expect(lines).toContainText('# Notes');
+    await lines.click();
+    await window.keyboard.press('Meta+ArrowDown');
+    await window.keyboard.type('edited line');
+    await expect(tab.locator('[data-dirty-dot]')).toBeVisible();
+    await window.keyboard.press('Meta+S');
+    await expect(tab.locator('[data-dirty-dot]')).toHaveCount(0);
+    expect(await readFile(path.join(project, 'notes.md'), 'utf8')).toBe(`${NOTES}edited line`);
+    // Своя запись — не «правка агента»: слежение её видит, но ни баннера, ни плашки.
+    await window.waitForTimeout(1500);
+    await expect(window.getByTestId('disk-change-banner')).toHaveCount(0);
+    await expect(window.getByText('Reloaded from disk')).toHaveCount(0);
+
+    await window.getByRole('radio', { name: 'Preview' }).click();
+    await expect(preview.getByText('edited line')).toBeVisible();
+
+    expect(await cspViolations(window)).toEqual([]);
+    expect(problems).toEqual([]);
+  });
+
+  test('7.5 тест 10: правка без сохранения, запись на диск — баннер; Keep mine и ⌘S — вопрос; Overwrite — на диске буфер', async () => {
+    test.setTimeout(90_000);
+    const { window, problems } = await launch('preview-keep');
+    const sidebar = window.getByTestId('right-sidebar');
+    await sidebar.getByText('src', { exact: true }).click();
+    await sidebar.getByText('a.ts', { exact: true }).click();
+    const lines = window.locator('.monaco-editor .view-lines').first();
+    await expect(lines).toContainText('export const a = 1;');
+    await lines.click();
+    await window.keyboard.press('Meta+ArrowDown');
+    await window.keyboard.type('// mine');
+    const tab = window.locator('[role="tab"][data-tab-id="file:p:src/a.ts"]');
+    await expect(tab.locator('[data-dirty-dot]')).toBeVisible();
+
+    await writeFile(path.join(project, 'src', 'a.ts'), 'agent\n');
+    const banner = window.getByTestId('disk-change-banner');
+    await expect(banner).toContainText('File changed on disk (probably by the agent)');
+    await banner.getByRole('button', { name: 'Keep mine' }).click();
+    await expect(banner).toHaveCount(0);
+
+    await lines.click();
+    await window.keyboard.press('Meta+S');
+    const dialog = window.getByRole('dialog');
+    await expect(dialog).toContainText('File changed on disk after you opened it. Overwrite the changes on disk?');
+    expect(await readFile(path.join(project, 'src', 'a.ts'), 'utf8')).toBe('agent\n');
+    await dialog.getByRole('button', { name: 'Overwrite' }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(tab.locator('[data-dirty-dot]')).toHaveCount(0);
+    expect(await readFile(path.join(project, 'src', 'a.ts'), 'utf8')).toBe('export const a = 1;\n// mine');
+    expect(problems).toEqual([]);
+  });
+
+  test('7.5 тест 11: .png и .pdf из дерева — превью; ⌘F в PDF, ссылка PDF — журнал shell; данные pdf.js локально; ни ошибок, ни CSP', async () => {
+    test.setTimeout(90_000);
+    const { electronApp, window, problems } = await launch('preview-bin');
+    const sidebar = window.getByTestId('right-sidebar');
+
+    await sidebar.getByText('logo.png', { exact: true }).click();
+    const image = window.getByTestId('image-preview');
+    await expect(image.locator('img')).toHaveAttribute('src', /^blob:/);
+    await expect(image.getByText('3 × 2 px')).toBeVisible();
+    await image.getByRole('radio', { name: '100%' }).click();
+    await expect(image.getByText('3 × 2 px')).toBeVisible();
+
+    await sidebar.getByText('doc.pdf', { exact: true }).click();
+    const pdf = window.getByTestId('pdf-preview');
+    await expect(pdf.locator('.page canvas').first()).toBeVisible();
+    await expect(pdf.locator('.textLayer').first()).toContainText('Hello harnas PDF');
+
+    // ⌘F — своя полоса поиска превью; подсветка совпадения в слое текста; Esc закрывает.
+    await pdf.click({ position: { x: 20, y: 20 } });
+    await window.keyboard.press('Meta+F');
+    const find = pdf.getByPlaceholder('Find…');
+    await expect(find).toBeFocused();
+    await window.keyboard.type('harnas');
+    await expect(pdf.locator('.textLayer .highlight').first()).toBeVisible();
+    await window.keyboard.press('Escape');
+    await expect(find).toHaveCount(0);
+
+    // Ссылка аннотации: без href, клик — app.openExternal (журнал), окно не уходит со своей страницы.
+    const link = pdf.locator('.annotationLayer .linkAnnotation a').first();
+    await expect(link).not.toHaveAttribute('href', /./);
+    await link.click();
+    await expect.poll(() => shellLog(electronApp)).toContainEqual({ action: 'openExternal', url: 'https://example.com/harnas' });
+    expect(await window.evaluate(() => location.protocol)).toBe('file:');
+
+    // cMap и стандартный шрифт читаются окном из сборки по file:// — CSP `connect-src 'self'` пускает.
+    const sizes = await window.evaluate(async () => {
+      const read = (relative: string): Promise<number> =>
+        new Promise((resolve) => {
+          const request = new XMLHttpRequest();
+          request.open('GET', new URL(relative, document.baseURI).href);
+          request.responseType = 'arraybuffer';
+          request.onloadend = () => resolve((request.response as ArrayBuffer | null)?.byteLength ?? -1);
+          request.send();
+        });
+      return [await read('pdfjs/cmaps/UniJIS-UCS2-H.bcmap'), await read('pdfjs/standard_fonts/LiberationSans-Regular.ttf')];
+    });
+    expect(sizes[0]).toBeGreaterThan(0);
+    expect(sizes[1]).toBeGreaterThan(0);
+
+    await window.waitForTimeout(1000);
+    expect(await cspViolations(window)).toEqual([]);
     expect(problems).toEqual([]);
   });
 });

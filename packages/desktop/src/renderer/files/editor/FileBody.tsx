@@ -11,6 +11,11 @@
  * Monaco грузится лениво (`lazy`): окно без открытых файлов его не тянет, а сбой загрузки чанка
  * ловит та же граница ошибки, что и отказ `loader.init()` и бросок редактора: «Editor didn't
  * load», «Retry» и «Open in default app» (спека 13). Граница `GroupView` — запасная.
+ *
+ * Тело — по виду файла (кусок 7.5, спека 10.6): картинки (и `svg`) и PDF сразу читаются
+ * `files.readBytes` — без буфера и `readText`: файл не читается дважды, а `svg`, текст, спека
+ * показывает картинкой. Markdown — превью по умолчанию, CSV и TSV — таблица; «Code» в шапке тела
+ * — Monaco того же буфера.
  */
 
 import { Suspense, useCallback, useEffect, useState, type ReactNode } from 'react';
@@ -26,8 +31,15 @@ import { ErrorBoundary } from '../../shell/ErrorBoundary.js';
 import { openLinkPath, revealLinkPath } from '../../terminal/LinkMenu.js';
 import { Button } from '../../ui/button.js';
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from '../../ui/dialog.js';
+import { ToggleGroup, ToggleGroupItem } from '../../ui/toggle-group.js';
 import { bufferKey, bufferView, RELOADED_FLASH_MS, type BufferModel } from '../buffer.js';
+import { fileKind, type FileKind } from '../file-kind.js';
+import { CsvPreview } from '../preview/CsvPreview.js';
+import { ImagePreview } from '../preview/ImagePreview.js';
+import { MarkdownPreview } from '../preview/MarkdownPreview.js';
+import { PdfPreview } from '../preview/PdfPreview.js';
 import { absPathOf, useFilesStore } from '../store.js';
+import { openFile } from '../Tree.js';
 import { DiskChangeBanner } from './DiskChangeBanner.js';
 import { lazyWithRetry } from './retry-lazy.js';
 
@@ -115,7 +127,55 @@ function useReloadedFlash(model: BufferModel | null): boolean {
   return model !== null && bufferView(model, Date.now()).reloadedFlash;
 }
 
-export function FileBody({ bridge, workKey, entry, tab, onClose, font = FALLBACK_FONT }: FileBodyProps): JSX.Element {
+export function FileBody(props: FileBodyProps): JSX.Element {
+  // Вид файла у вкладки постоянен (id вкладки — по пути): разные тела — разные компоненты, а не
+  // ветви одного, иначе хуки шли бы в разном порядке.
+  const kind = fileKind(props.tab.path);
+  if (kind === 'image' || kind === 'pdf') return <BytesBody {...props} kind={kind} />;
+  return <TextBody {...props} kind={kind} />;
+}
+
+/** Картинка или PDF: байты `files.readBytes`, без буфера и слежения. */
+function BytesBody({ bridge, workKey, entry, tab, onClose, kind }: FileBodyProps & { kind: 'image' | 'pdf' }): JSX.Element {
+  const [state, setState] = useState<{ bytes: Uint8Array } | { code: string } | null>(null);
+  const rootId = rootKey({ workKey, spec: tab.root });
+
+  useEffect(() => {
+    let alive = true;
+    setState(null);
+    bridge.files
+      .readBytes({ workKey, spec: tab.root }, tab.path)
+      .then((bytes) => {
+        if (alive) setState({ bytes });
+      })
+      .catch((error: unknown) => {
+        console.warn('[harnas] files.readBytes', error);
+        if (alive) setState({ code: decodeIpcError(error).code });
+      });
+    return () => {
+      alive = false;
+    };
+    // Корень — в `rootId`: объект `tab.root` новый у каждой копии раскладки.
+  }, [bridge, rootId, tab.path]);
+
+  const absPath = absPathOf(entry, tab.root, tab.path);
+  const revealInFinder = (): void => {
+    if (absPath !== null) void revealLinkPath(bridge, absPath);
+  };
+
+  if (state === null) return <div className="h-full" />;
+  if ('code' in state) return <ErrorBody code={state.code} onClose={onClose} onReveal={revealInFinder} />;
+  return (
+    <div data-testid="file-body" className="h-full min-h-0 min-w-0">
+      {kind === 'image' ? <ImagePreview bytes={state.bytes} path={tab.path} /> : <PdfPreview bridge={bridge} bytes={state.bytes} />}
+    </div>
+  );
+}
+
+/** Вид тела текстового файла с превью: Markdown — «Preview / Code», CSV и TSV — «Table / Code». */
+type TextView = 'preview' | 'code';
+
+function TextBody({ bridge, workKey, entry, tab, onClose, font = FALLBACK_FONT, kind }: FileBodyProps & { kind: Exclude<FileKind, 'image' | 'pdf'> }): JSX.Element {
   const key = bufferKey(workKey, tab.id);
   const root: FileRoot = { workKey, spec: tab.root };
   const rootId = rootKey(root);
@@ -124,6 +184,10 @@ export function FileBody({ bridge, workKey, entry, tab, onClose, font = FALLBACK
   const [comparing, setComparing] = useState<{ disk: string } | null>(null);
   const [asking, setAsking] = useState(false);
   const reloadedFlash = useReloadedFlash(model);
+  const previewable = kind !== 'text';
+  const [view, setView] = useState<TextView>(previewable ? 'preview' : 'code');
+  // Monaco монтируется при первом «Code» и дальше живёт скрытым: «Preview» и обратно не теряет undo.
+  const [codeMounted, setCodeMounted] = useState(!previewable);
   const { component: MonacoEditor, retry: retryEditor } = lazyMonacoEditor.use();
   const { component: CompareView, retry: retryCompare } = lazyCompareView.use();
 
@@ -195,6 +259,13 @@ export function FileBody({ bridge, workKey, entry, tab, onClose, font = FALLBACK
   const onRevealed = useCallback(() => void useFilesStore.getState().takeReveal(key), [key]);
   const onChange = useCallback((text: string) => useFilesStore.getState().dispatch(key, { type: 'edited', text }), [key]);
   const onSave = useCallback(() => void save(false), [save]);
+  const onOpenFile = useCallback((path: string) => openFile({ workKey, spec: tab.root }, path, false), [workKey, tab.root]);
+  const showView = (next: string): void => {
+    // Повторный клик по выбранному снял бы выбор: пустое значение пропускаем.
+    if (next !== 'preview' && next !== 'code') return;
+    setView(next);
+    if (next === 'code') setCodeMounted(true);
+  };
 
   if (model === null || model.status === 'loading') return <div className="h-full" />;
   if (model.status === 'error') return <ErrorBody code={model.errorCode ?? 'failed'} onClose={onClose} onReveal={revealInFinder} />;
@@ -214,8 +285,30 @@ export function FileBody({ bridge, workKey, entry, tab, onClose, font = FALLBACK
   const plaque = reloadedFlash ? S.files.reloadedFromDisk : readOnlyText;
   const fallback = <div className="h-full" />;
 
+  const previewing = previewable && view === 'preview';
+  const hideEditor = comparing !== null || previewing;
+  const previewLabel = kind === 'markdown' ? S.files.preview : S.files.table;
+  const previewItem = (
+    <ToggleGroupItem key="preview" value="preview" className="h-6 px-2 text-xs">
+      {previewLabel}
+    </ToggleGroupItem>
+  );
+  const codeItem = (
+    <ToggleGroupItem key="code" value="code" className="h-6 px-2 text-xs">
+      {S.files.code}
+    </ToggleGroupItem>
+  );
+
   return (
     <div data-testid="file-body" className="flex h-full min-h-0 min-w-0 flex-col">
+      {previewable ? (
+        // Шапка тела вкладки (спека 10.6): у Markdown «Code / Preview», у таблиц «Table / Code».
+        <div className="flex shrink-0 items-center border-b border-border px-2 py-1">
+          <ToggleGroup type="single" size="sm" value={view} onValueChange={showView}>
+            {kind === 'markdown' ? [codeItem, previewItem] : [previewItem, codeItem]}
+          </ToggleGroup>
+        </div>
+      ) : null}
       {plaque === null ? null : (
         <div data-testid="file-plaque" className="shrink-0 truncate border-b border-border px-3 py-1 text-xs text-muted-foreground" title={plaque}>
           {plaque}
@@ -248,23 +341,34 @@ export function FileBody({ bridge, workKey, entry, tab, onClose, font = FALLBACK
           }}
         >
           <Suspense fallback={fallback}>
-            {/* Редактор на время сравнения скрыт, а не размонтирован (fix-7.3 п. 7): иначе его
-                модель диспозилась бы, и «Compare» и обратно терял бы историю undo. */}
-            <div className={comparing !== null ? 'invisible h-full' : 'h-full'} aria-hidden={comparing !== null ? true : undefined}>
-              <MonacoEditor
-                viewStateKey={key}
-                modelPath={modelPath('buffer', key, tab.path)}
-                text={model.text}
-                readOnly={model.readOnlyReason !== null}
-                fontFamily={font.family}
-                fontSize={font.size}
-                reveal={reveal}
-                onRevealed={onRevealed}
-                onChange={onChange}
-                onSave={onSave}
-              />
-            </div>
+            {/* Редактор на время сравнения и превью скрыт, а не размонтирован (fix-7.3 п. 7): иначе
+                его модель диспозилась бы, и «Compare» и обратно терял бы историю undo. */}
+            {codeMounted ? (
+              <div className={hideEditor ? 'invisible h-full' : 'h-full'} aria-hidden={hideEditor ? true : undefined}>
+                <MonacoEditor
+                  viewStateKey={key}
+                  modelPath={modelPath('buffer', key, tab.path)}
+                  text={model.text}
+                  readOnly={model.readOnlyReason !== null}
+                  fontFamily={font.family}
+                  fontSize={font.size}
+                  reveal={reveal}
+                  onRevealed={onRevealed}
+                  onChange={onChange}
+                  onSave={onSave}
+                />
+              </div>
+            ) : null}
           </Suspense>
+          {previewing && comparing === null ? (
+            <div className="absolute inset-0">
+              {kind === 'markdown' ? (
+                <MarkdownPreview bridge={bridge} root={root} filePath={tab.path} text={model.text} onOpenFile={onOpenFile} />
+              ) : (
+                <CsvPreview text={model.text} delimiter={kind === 'tsv' ? '\t' : ','} />
+              )}
+            </div>
+          ) : null}
           {comparing === null ? null : (
             // Своя граница ожидания: пока грузится чанк сравнения, редактор не прячется за запасным видом.
             <Suspense fallback={null}>

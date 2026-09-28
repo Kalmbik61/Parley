@@ -22,6 +22,8 @@ import { FileBody } from './FileBody.js';
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 vi.mock('@monaco-editor/react', async () => (await import('../../test-utils/monaco-mock.js')).monacoReactMock);
 vi.mock('./monaco-setup.js', async () => (await import('../../test-utils/monaco-mock.js')).monacoSetupMock);
+// pdf.js в jsdom не работает (нет DOMMatrix и canvas): тело PDF здесь — только чтение байтов.
+vi.mock('../preview/pdf-runtime.js', () => ({ loadPdfRuntime: () => new Promise(() => undefined) }));
 
 const W = '/tmp/proj w-01';
 const WORKTREE = { path: '/wt/s02', branch: 'harnas/w-0001/s02', base: 'main', createdAt: '2026-09-27T08:00:00.000Z' };
@@ -299,5 +301,81 @@ describe('изменение на диске', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reload' }));
     await waitFor(() => expect(textarea.value).toBe('agent 2\n'));
     expect(screen.queryByTestId('disk-change-banner')).toBeNull();
+  });
+});
+
+describe('тело по виду файла (кусок 7.5, тест 7)', () => {
+  beforeEach(() => {
+    URL.createObjectURL = vi.fn(() => 'blob:harnas/1');
+    URL.revokeObjectURL = vi.fn();
+  });
+
+  function show(path: string): Extract<TabSpec, { kind: 'file' }> {
+    const tab = fileTab(path);
+    useLayoutStore.setState({ layouts: { [W]: layoutWith(tab) } });
+    renderBody(tab);
+    return tab;
+  }
+
+  it('.png, logo.svg и .pdf — readBytes без readText, без буфера и слежения', async () => {
+    for (const path of ['img/a.png', 'logo.svg', 'docs/a.pdf']) bridge.setBytes(ROOT, path, new Uint8Array([1, 2]));
+    show('img/a.png');
+    await waitFor(() => expect(screen.getByRole('img')).toBeTruthy());
+    cleanup();
+    show('logo.svg');
+    await waitFor(() => expect(screen.getByRole('img')).toBeTruthy());
+    cleanup();
+    show('docs/a.pdf');
+    await screen.findByTestId('pdf-preview');
+    await waitFor(() => expect(bridge.readBytesCalls).toHaveLength(3));
+    expect(bridge.readBytesCalls.map((call) => call.path)).toEqual(['img/a.png', 'logo.svg', 'docs/a.pdf']);
+    expect(bridge.readTextCalls).toEqual([]);
+    expect(bridge.watchCalls).toEqual([]);
+    expect(useFilesStore.getState().buffers).toEqual({});
+    expect(monacoMock.editors).toHaveLength(0);
+  });
+
+  it('отказ readBytes — тело по коду: not_found — File not found', async () => {
+    show('img/gone.png');
+    expect(await screen.findByText('File not found')).toBeTruthy();
+  });
+
+  it('.md — превью по умолчанию; Code — редактор буфера, правка видна в превью', async () => {
+    bridge.setFile(ROOT, 'docs/notes.md', textFile('# Notes\n\nhello\n'));
+    show('docs/notes.md');
+    expect(await screen.findByRole('heading', { name: 'Notes' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Preview' }).getAttribute('aria-checked')).toBe('true');
+    expect(monacoMock.editors).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Code' }));
+    const textarea = (await screen.findByTestId('monaco-textarea')) as HTMLTextAreaElement;
+    expect(textarea.value).toBe('# Notes\n\nhello\n');
+    fireEvent.change(textarea, { target: { value: '# Changed\n' } });
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Preview' }));
+    expect(await screen.findByRole('heading', { name: 'Changed' })).toBeTruthy();
+    // Редактор скрыт, а не размонтирован: undo правки переживает «Preview» и обратно.
+    expect(monacoMock.editors).toHaveLength(1);
+    expect(monacoMock.editors[0]?.disposed).toBe(false);
+  });
+
+  it('.csv — таблица; Code — редактор; .tsv — таблица по табуляции', async () => {
+    bridge.setFile(ROOT, 'data/t.csv', textFile('a,b\n1,2\n'));
+    show('data/t.csv');
+    expect((await screen.findAllByRole('columnheader')).map((cell) => cell.textContent)).toEqual(['a', 'b']);
+    expect(screen.getByRole('radio', { name: 'Table' }).getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByRole('radio', { name: 'Code' }));
+    expect(((await screen.findByTestId('monaco-textarea')) as HTMLTextAreaElement).value).toBe('a,b\n1,2\n');
+    cleanup();
+    bridge.setFile(ROOT, 'data/t.tsv', textFile('x\ty\n'));
+    show('data/t.tsv');
+    expect((await screen.findAllByRole('columnheader')).map((cell) => cell.textContent)).toEqual(['x', 'y']);
+  });
+
+  it('обычный текст — без переключателей', async () => {
+    bridge.setFile(ROOT, 'src/a.ts', textFile('a\n'));
+    renderBody();
+    await screen.findByTestId('monaco-textarea');
+    expect(screen.queryByRole('radio')).toBeNull();
   });
 });

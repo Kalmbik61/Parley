@@ -1,10 +1,49 @@
-import { resolve } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname as dirOf, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
+import type { Plugin } from 'vite';
 
 const dirname = fileURLToPath(new URL('.', import.meta.url));
+
+/**
+ * Данные pdf.js для превью PDF (кусок 7.5, спека 10.6): `cmaps/` (CJK) и `standard_fonts/` из
+ * `pdfjs-dist` — в сборку рендерера под `pdfjs/`, рядом с `index.html`. Без них CJK и стандартные
+ * шрифты рисуются неверно, а CDN окно не использует. В `pnpm dev:desktop` те же файлы отдаёт
+ * dev-сервер по тем же адресам.
+ */
+function pdfjsAssets(): Plugin {
+  const root = dirOf(createRequire(import.meta.url).resolve('pdfjs-dist/package.json'));
+  const dirs = ['cmaps', 'standard_fonts'];
+  return {
+    name: 'harnas-pdfjs-assets',
+    configureServer(server) {
+      server.middlewares.use((request, response, next) => {
+        const match = /^\/pdfjs\/(cmaps|standard_fonts)\/([\w.-]+)$/.exec(request.url?.split('?')[0] ?? '');
+        const dir = match?.[1];
+        const name = match?.[2];
+        if (dir === undefined || name === undefined || !readdirSync(join(root, dir)).includes(name)) {
+          next();
+          return;
+        }
+        response.setHeader('Content-Type', 'application/octet-stream');
+        response.end(readFileSync(join(root, dir, name)));
+      });
+    },
+    generateBundle() {
+      for (const dir of dirs) {
+        // Вместе с LICENSE* каталога: шрифты Liberation идут под GPLv2 с исключением для шрифтов,
+        // и её текст должен лежать рядом с ними (NOTICE).
+        for (const name of readdirSync(join(root, dir))) {
+          this.emitFile({ type: 'asset', fileName: `pdfjs/${dir}/${name}`, source: readFileSync(join(root, dir, name)) });
+        }
+      }
+    },
+  };
+}
 
 export default defineConfig({
   main: {
@@ -27,7 +66,7 @@ export default defineConfig({
   },
   renderer: {
     root: 'src/renderer',
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), pdfjsAssets()],
     build: {
       rollupOptions: {
         input: resolve(dirname, 'src/renderer/index.html'),

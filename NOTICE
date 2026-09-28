@@ -54,3 +54,36 @@ https://github.com/vercel/geist-font.
 Copyright (c) 2023 Vercel, in collaboration with basement.studio.
 Лицензия: SIL Open Font License, Version 1.1. Полный текст —
 packages/desktop/src/renderer/assets/fonts/OFL.txt.
+
+------------------------------------------------------------------------------
+Monaco Editor
+------------------------------------------------------------------------------
+
+Редактор файлов окна (этап 7 плана «окно как у Orca») собран из пакета npm
+`monaco-editor` (https://github.com/microsoft/monaco-editor) и входит в сборку
+рендерера packages/desktop/out/renderer.
+
+Copyright (c) 2016 - present Microsoft Corporation.
+Лицензия: MIT. Полный текст — в пакете, node_modules/monaco-editor/LICENSE.
+
+------------------------------------------------------------------------------
+PDF.js
+------------------------------------------------------------------------------
+
+Превью PDF (кусок 7.5) собрано из пакета npm `pdfjs-dist`
+(https://github.com/mozilla/pdf.js): библиотека, её воркер и `web/pdf_viewer`.
+
+Copyright Mozilla Foundation and PDF.js contributors.
+Лицензия: Apache License, Version 2.0. Полный текст — в пакете,
+node_modules/pdfjs-dist/LICENSE.
+
+Вместе с pdf.js в сборку рендерера (packages/desktop/out/renderer/pdfjs/)
+копируются его данные — каждый каталог со своими файлами LICENSE*:
+- cmaps/ — CMap-файлы Adobe: Copyright 1990-2009 Adobe Systems Incorporated,
+  лицензия BSD 3-Clause (cmaps/LICENSE);
+- standard_fonts/Foxit*.pfb — шрифты PDFium: Copyright 2014 PDFium Authors,
+  лицензия BSD 3-Clause (standard_fonts/LICENSE_FOXIT);
+- standard_fonts/LiberationSans-*.ttf — шрифты Liberation: Copyright 2007-2011
+  Red Hat, Inc., лицензия GNU GPL v2 с исключением для шрифтов
+  (standard_fonts/LICENSE_LIBERATION). Шрифты лежат отдельными файлами и не
+  изменены; pdf.js берёт их только для рисования PDF без встроенных шрифтов.

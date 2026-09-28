@@ -591,6 +591,18 @@ export const S = {
     /** Ответ `bad_request` на запрос в режиме «.*»: ERE git или `RegExp` не разобрали регулярку. */
     invalidRegex: 'Invalid regular expression',
     noResults: 'No results',
+    /**
+     * Превью (кусок 7.5, спека 10.6): переключатели шапки тела — «Code / Preview» у Markdown,
+     * «Table / Code» у CSV и TSV; «Fit / 100%» картинки. Поиск ⌘F в PDF — строки полосы поиска
+     * терминала (`S.terminal.findPlaceholder`, `previousMatch`, `nextMatch`), × — `S.common.close`.
+     */
+    code: 'Code',
+    preview: 'Preview',
+    table: 'Table',
+    fit: 'Fit',
+    actualSize: '100%',
+    imageSize: (width: number, height: number): string => `${width} × ${height} px`,
+    rowsTruncated: 'Showing first 10,000 rows',
   },
 
   /** Оболочка окна (`shell/AppShell.tsx`) — заголовки `ErrorBoundary` вокруг сайдбара и раскладки. */
