@@ -146,8 +146,12 @@ interface BrowserGuardDeps {
   session: Pick<Session, 'setPermissionRequestHandler' | 'setPermissionCheckHandler' | 'on'>; // раздел BROWSER_PARTITION
   openTab(e: BrowserOpenTab): void; // → окну-хозяину открывателя, событие browser:open-tab
   forwardShortcuts(contents: WebContents): () => void; // адаптер к forwardGuestShortcuts (6.1a), вернёт отписку
-  /** will-download раздела, синхронно: путь загрузки задаётся только внутри события. promptDownload или подмена E2E. */
-  download(item: DownloadItem): void;
+  /**
+   * will-download раздела, синхронно: путь загрузки задаётся только внутри события. promptDownload или подмена E2E.
+   * `source` — гость, начавший загрузку: по нему index.ts снимает его выбор Design Mode (fix-9b) — страж
+   * о Design Mode не знает, связь идёт через эту зависимость, без импорта.
+   */
+  download(item: DownloadItem, source: WebContents): void;
   /** Favicon гостя в data: (9.2a); index.ts — favicon.ts с fetch сессии раздела. null — значка нет. */
   fetchFavicon(iconUrl: string, pageUrl: string): Promise<string | null>;
 }
@@ -184,7 +188,7 @@ export function installBrowserGuard(deps: BrowserGuardDeps): void {
   // Камера, микрофон, геолокация, уведомления, буфер обмена и прочее — отказ.
   deps.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   deps.session.setPermissionCheckHandler(() => false);
-  deps.session.on('will-download', (_event, item) => deps.download(item));
+  deps.session.on('will-download', (_event, item, source) => deps.download(item, source));
 
   // Событие app, а не разрешение: обработчики сессии его не видят. Без preventDefault Electron
   // отдал бы сайту с mTLS первый сертификат из хранилища — личность человека без вопроса.

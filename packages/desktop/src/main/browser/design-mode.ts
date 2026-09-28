@@ -157,7 +157,11 @@ export function createDesignMode(deps: {
   fromId(id: number): WebContents | null;
   saveImage(png: Buffer): Promise<string | null>;
   guestScript: string;
-}): { start(id: number): Promise<PickResult | null>; cancel(id: number): Promise<void> } {
+}): {
+  start(id: number): Promise<PickResult | null>;
+  cancel(id: number): Promise<void>;
+  downloadStarted(id: number): void;
+} {
   // Незавершённый выбор гостя: навигация, падение или закрытие страницы могут оставить промис
   // скрипта навсегда без ответа — тогда отвечает main, иначе карточка зависла бы в «выбираю».
   const pending = new Map<number, (result: PickResult | null) => void>();
@@ -254,5 +258,18 @@ export function createDesignMode(deps: {
     await dismissScript(contents);
   }
 
-  return { start, cancel };
+  /**
+   * Загрузка из гостя (will-download раздела, fix-9b). `<a download>` уходит в загрузку без
+   * did-start-navigation — выбор снимается здесь тем же путём, что навигация: итог null, скрипт отмены
+   * в мир выбора (документ жив). Гость без выбора не трогается — скрипт ему не шлётся.
+   */
+  function downloadStarted(id: number): void {
+    const finish = pending.get(id);
+    if (finish === undefined) return;
+    finish(null);
+    const contents = deps.fromId(id);
+    if (contents !== null) void dismissScript(contents);
+  }
+
+  return { start, cancel, downloadStarted };
 }

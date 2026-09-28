@@ -113,6 +113,11 @@ test.describe('браузер и Design Mode (кусок 9.3b)', () => {
     project = await makeTempProject('browser');
     server = createServer((req, res) => {
       const pathname = new URL(req.url ?? '/', 'http://x').pathname;
+      // Файл для `<a download>` (fix-9b): тело неважно, загрузку журналирует main (HARNAS_DOWNLOADS=log).
+      if (pathname === '/file') {
+        res.writeHead(200, { 'content-type': 'text/plain' }).end('file');
+        return;
+      }
       const page = pathname === '/' ? PAGE : pathname === '/popup' ? POPUP : undefined;
       if (page === undefined) {
         res.writeHead(404).end();
@@ -134,8 +139,8 @@ test.describe('браузер и Design Mode (кусок 9.3b)', () => {
   });
 
   /** Окно, работа с сессией S01 (терминал открыт, stub готов) и вкладка браузера на странице фикстуры. */
-  async function openPage(): Promise<{ electronApp: ElectronApplication; window: Page; sessionId: string }> {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom', STUB_BRACKETED: '1' };
+  async function openPage(extraEnv: Record<string, string> = {}): Promise<{ electronApp: ElectronApplication; window: Page; sessionId: string }> {
+    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom', STUB_BRACKETED: '1', ...extraEnv };
     app = await electron.launch({ args: [mainEntry], env });
     const electronApp = app;
     // Гость со страницы может позвать alert/confirm: автообработчик Playwright тогда ложно
@@ -211,6 +216,33 @@ test.describe('браузер и Design Mode (кусок 9.3b)', () => {
     expect(text).toContain('/desktop/drops/');
     // Enter ушёл следом: stub повторил строку.
     await expect.poll(() => screenText(window)).toContain('echo: ');
+  });
+
+  test('fix-9b: <a download>, нажатая страницей во время выбора, — ⌖ отжата, следующий клик доходит до страницы', async () => {
+    // Журнал загрузок вместо диалога сохранения: ответа нет — загрузка отменена, диск не тронут.
+    const { electronApp, window } = await openPage({ HARNAS_DOWNLOADS: 'log' });
+    const designMode = window.getByRole('button', { name: 'Design Mode' });
+    await designMode.click();
+    await expect(designMode).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(() => pickArmed(electronApp, `${origin}/`)).toBe(true);
+
+    // Страница сама жмёт ссылку с download: навигации нет, только will-download раздела.
+    await electronApp.evaluate(async ({ webContents }, u) => {
+      const guest = webContents.getAllWebContents().find((c) => c.getType() === 'webview' && c.getURL() === u);
+      await guest?.executeJavaScript(
+        "(() => { const a = document.createElement('a'); a.href = '/file'; a.download = 'evil.txt'; document.body.append(a); a.click(); })()",
+      );
+    }, `${origin}/`);
+    await expect
+      .poll(() => electronApp.evaluate(() => (globalThis as { __harnasDownloads?: Array<{ filename: string }> }).__harnasDownloads ?? []))
+      .toEqual([{ filename: 'evil.txt', url: `${origin}/file` }]);
+
+    await expect(designMode).toHaveAttribute('aria-pressed', 'false');
+    await expect.poll(() => pickArmed(electronApp, `${origin}/`)).toBe(false);
+    await expect(window.getByTestId('design-mode-card')).toHaveCount(0);
+    // Перехватчик снят: доверенный клик человека доходит до кнопки страницы.
+    await clickInGuest(electronApp, `${origin}/`, '#save');
+    await expect.poll(() => guestSaved(electronApp, `${origin}/`)).toBe('1');
   });
 
   test('тест 5: кнопка с window.open — вторая вкладка браузера рядом, окон Electron по-прежнему одно', async () => {

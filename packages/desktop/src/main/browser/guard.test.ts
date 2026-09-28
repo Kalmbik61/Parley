@@ -307,9 +307,11 @@ describe('загрузки раздела (ревью 9.1, спека 12.2)', ()
     const guard = setupGuard();
     guard.install();
     const item = { getFilename: () => 'evil.txt' };
-    guard.session.emit('will-download', fakeEvent(), item, {});
+    // Третий аргумент — webContents гостя, начавшего загрузку: по нему main снимает Design Mode (fix-9b).
+    const source = { id: 7 };
+    guard.session.emit('will-download', fakeEvent(), item, source);
     expect(guard.download).toHaveBeenCalledTimes(1);
-    expect(guard.download).toHaveBeenCalledWith(item);
+    expect(guard.download).toHaveBeenCalledWith(item, source);
   });
 
   it('promptDownload: стандартный диалог с папкой загрузок и именем — путь сам не ставит', () => {

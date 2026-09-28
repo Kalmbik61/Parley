@@ -217,6 +217,13 @@ if (!gotLock) {
     const downloadLog: Array<{ filename: string; url: string }> = [];
     const testGlobals = globalThis as { __harnasDownloads?: typeof downloadLog; __harnasSaveAnswer?: string | null };
     if (logDownloads) testGlobals.__harnasDownloads = downloadLog;
+    // Снимок элемента Design Mode (кусок 9.3a) — в drops/, как скриншоты из буфера (5.4). Создаётся до
+    // стража: загрузка из гостя снимает его выбор (fix-9b).
+    const designMode = createDesignMode({
+      fromId: (id) => webContents.fromId(id) ?? null,
+      saveImage: (png) => saveImage({ png, dir: dropsDir() }),
+      guestScript: guestPickScript,
+    });
     installBrowserGuard({
       app,
       // К моменту will-attach-webview mainWindow уже присвоен — и у окна, пересозданного на activate.
@@ -229,7 +236,8 @@ if (!gotLock) {
       // hostWebContents читается в момент нажатия: окно пересоздаётся на activate, ссылка устарела бы.
       forwardShortcuts: (contents) =>
         forwardGuestShortcuts(contents, (id) => contents.hostWebContents?.send('menu:action', id)),
-      download: (item) => {
+      download: (item, source) => {
+        designMode.downloadStarted(source.id);
         if (!logDownloads) {
           promptDownload(item, app.getPath('downloads'));
           return;
@@ -334,12 +342,7 @@ if (!gotLock) {
       browser: {
         fromId: (id) => webContents.fromId(id) ?? null,
         session: browserSession,
-        // Снимок элемента Design Mode (кусок 9.3a) — в drops/, как скриншоты из буфера (5.4).
-        designMode: createDesignMode({
-          fromId: (id) => webContents.fromId(id) ?? null,
-          saveImage: (png) => saveImage({ png, dir: dropsDir() }),
-          guestScript: guestPickScript,
-        }),
+        designMode,
       },
       saveDropImage: async () => {
         if (fakeDrops) return saveImage({ png: FAKE_DROP_PNG, dir: dropsDir() });

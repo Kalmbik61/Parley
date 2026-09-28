@@ -391,6 +391,34 @@ describe('выбор прерван (тест 5 куска 9.3a)', () => {
     expect(second.guest.executeJavaScriptInIsolatedWorld).toHaveBeenCalledTimes(1);
   });
 
+  it('загрузка из гостя с активным выбором — null и скрипт отмены в мир 1001; от другого гостя — выбор не тронут (fix-9b)', async () => {
+    const { guest, mode, scriptCalled } = setup();
+    const pending = mode.start(7);
+    await scriptCalled();
+    const cancelCalls = () =>
+      guest.executeJavaScriptInIsolatedWorld.mock.calls.filter(([, sources]) => sources[0]?.code !== 'GUEST_SCRIPT');
+
+    // Чужой гость: ни итога, ни скрипта отмены.
+    mode.downloadStarted(404);
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(cancelCalls()).toEqual([]);
+
+    mode.downloadStarted(7);
+    expect(await pending).toBeNull();
+    expect(cancelCalls()).toEqual([[PICK_WORLD_ID, [{ code: 'globalThis.__harnasPickCancel?.()' }]]]);
+  });
+
+  it('загрузка из гостя без выбора — скрипт не шлётся (fix-9b)', async () => {
+    const { guest, mode } = setup();
+    mode.downloadStarted(7);
+    expect(guest.executeJavaScriptInIsolatedWorld).not.toHaveBeenCalled();
+  });
+
   it('cancel без выбора и у неизвестного гостя — тихо', async () => {
     const { mode } = setup();
     await expect(mode.cancel(7)).resolves.toBeUndefined();
