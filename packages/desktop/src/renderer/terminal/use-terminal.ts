@@ -274,8 +274,13 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
     // после «Restart host» агент мёртв) экран не трогает, последний вывод остаётся виден под
     // полосой «isn't running». Вывод до снимка всё равно копится, а не пишется.
     let everConnected = false;
+    // Номер последнего `attach`: два подключения могут идти разом (видимость, `pty.resync`,
+    // возврат связи), и ответ прежнего, пришедший позже, дописал бы свой снимок поверх
+    // свежего без сброса — экран удвоился бы (fix-tests2). Пишет только последний.
+    let attachSeq = 0;
 
     const attach = async (): Promise<void> => {
+      const seq = ++attachSeq;
       const resetBeforeSnapshot = everConnected;
       everConnected = true;
       connected = true;
@@ -283,7 +288,7 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
       pendingOutput = [];
       try {
         const { snapshot, cols, rows } = await bridgeRef.current.call('pty.attach', { ref });
-        if (disposed || !connected) return;
+        if (disposed || !connected || seq !== attachSeq) return;
         if (resetBeforeSnapshot) term.reset();
         term.resize(cols, rows);
         term.write(snapshot);
