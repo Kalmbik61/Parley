@@ -14,7 +14,7 @@ import type {
   Result,
 } from '@harnas/protocol';
 import type { AppNote, CloseAnswer, FocusTarget, HarnasBridge, HostStatus } from '../../shared/bridge.js';
-import type { BrowserOpenTab } from '../../shared/browser-types.js';
+import type { BrowserFavicon, BrowserOpenTab } from '../../shared/browser-types.js';
 import type { ActionId } from '../../shared/keybindings.js';
 import type {
   DirEntry,
@@ -134,6 +134,8 @@ export interface FakeBridge extends HarnasBridge {
   readonly browserCalls: Array<{ method: string; args: unknown[] }>;
   /** window.open страницы: событие `browser:open-tab` слушателям `browser.onOpenTab`. */
   emitBrowserOpenTab(e: BrowserOpenTab): void;
+  /** Favicon гостя: событие `browser:favicon` слушателям `browser.onFavicon` (кусок 9.2a). */
+  emitFavicon(e: BrowserFavicon): void;
 }
 
 export function createFakeBridge(): FakeBridge {
@@ -188,6 +190,7 @@ export function createFakeBridge(): FakeBridge {
   const closeAnswers: CloseAnswer[] = [];
   const browserCalls: Array<{ method: string; args: unknown[] }> = [];
   const browserOpenTabListeners = new Set<(e: BrowserOpenTab) => void>();
+  const browserFaviconListeners = new Set<(e: BrowserFavicon) => void>();
   let watchSeq = 0;
   /** mtimeMs ответа write: растёт с каждой записью, как на диске. */
   let writeMtimeMs = 1_700_000_000_000;
@@ -283,6 +286,9 @@ export function createFakeBridge(): FakeBridge {
     emitBrowserOpenTab: (e) => {
       for (const listener of browserOpenTabListeners) listener(e);
     },
+    emitFavicon: (e) => {
+      for (const listener of browserFaviconListeners) listener(e);
+    },
     // Безвредные заглушки: поиск ничего не находит, остальное — успех.
     browser: {
       openDevTools: async (webContentsId) => {
@@ -304,6 +310,10 @@ export function createFakeBridge(): FakeBridge {
       onOpenTab: (listener) => {
         browserOpenTabListeners.add(listener);
         return () => browserOpenTabListeners.delete(listener);
+      },
+      onFavicon: (listener) => {
+        browserFaviconListeners.add(listener);
+        return () => browserFaviconListeners.delete(listener);
       },
     },
     files: {

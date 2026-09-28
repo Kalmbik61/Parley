@@ -21,6 +21,7 @@ import { FileCode, FileImage, FileSpreadsheet, FileText, FileType, GitCompare, G
 import type { SessionLifecycle } from '@harnas/core';
 import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
+import { useBrowserStore } from '../browser/store.js';
 import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import type { DotState } from '../lib/dot-state.js';
@@ -84,11 +85,26 @@ function TabIcon({ tab, meta, dot }: Pick<TabProps, 'tab' | 'meta' | 'dot'>): JS
       return <Icon data-file-kind={kind} className="size-3.5 shrink-0" aria-hidden="true" />;
     }
     case 'browser':
-      return <Globe className="size-3.5 shrink-0" aria-hidden="true" />;
+      // Favicon — data: из main (9.2a): CSP окна внешних картинок не пускает.
+      return meta.favicon === null ? (
+        <Globe className="size-3.5 shrink-0" aria-hidden="true" />
+      ) : (
+        <img src={meta.favicon} alt="" className="size-3.5 shrink-0 object-contain" draggable={false} />
+      );
   }
 }
 
+/** Полный текст подсказки: путь файла; у браузера — заголовок страницы и адрес целиком (9.2a). */
+function fullTitle(tab: TabSpec, pageTitle: string | null): string | null {
+  if (tab.kind === 'file') return tab.path;
+  if (tab.kind !== 'browser') return null;
+  const text = [pageTitle ?? '', tab.url].filter((part) => part !== '').join('\n');
+  return text === '' ? null : text;
+}
+
 export function Tab({ workKey, group, tab, meta, dot, isActive }: TabProps): JSX.Element {
+  const pageTitle = useBrowserStore((state) => (tab.kind === 'browser' ? (state.tabs[tab.id]?.title ?? null) : null));
+  const hint = fullTitle(tab, pageTitle);
   const closeIds = (ids: readonly string[]): void => {
     if (ids.length === 0) return;
     void useLayoutStore
@@ -150,8 +166,8 @@ export function Tab({ workKey, group, tab, meta, dot, isActive }: TabProps): JSX
           )}
         >
           <TabIcon tab={tab} meta={meta} dot={dot} />
-          {/* Полный путь файла — в title: имя на 255 символов строка вкладок обрезает (спека 5.3). */}
-          <span className="min-w-0 max-w-40 flex-1 truncate" {...(tab.kind === 'file' ? { title: tab.path } : {})}>
+          {/* Полный путь файла, заголовок страницы и адрес — в title: строка вкладок их обрезает (спека 5.3). */}
+          <span className="min-w-0 max-w-40 flex-1 truncate" {...(hint === null ? {} : { title: hint })}>
             {meta.title}
           </span>
           {meta.dirty ? (

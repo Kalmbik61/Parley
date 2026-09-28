@@ -32,6 +32,7 @@ import { S } from '../../shared/strings.js';
 import { FileBody } from '../files/editor/FileBody.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { ErrorBoundary } from '../shell/ErrorBoundary.js';
+import { BrowserBody } from './bodies/BrowserBody.js';
 import { DiffBody } from './bodies/DiffBody.js';
 import { MailBody } from './bodies/MailBody.js';
 import { MissingBody } from './bodies/MissingBody.js';
@@ -107,9 +108,8 @@ function TabBody({ tab, entry, host, onMissing }: TabBodyProps): JSX.Element {
         />
       );
     case 'browser':
-      // Вкладка браузера появится в этапе 9 — открыть её пока неоткуда, сюда не
-      // дойти; `ErrorBoundary` вокруг ловит бросок, если это всё же случится.
-      throw new Error(`GroupView: tab kind "${tab.kind}" is not available yet`);
+      // Страница и её строка — в слое поверхностей (`BrowserSurface.tsx`, кусок 9.2a).
+      return <BrowserBody />;
   }
 }
 

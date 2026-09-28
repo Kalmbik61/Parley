@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeUrl } from './url.js';
+import { layoutUrl, normalizeUrl } from './url.js';
 
 describe('normalizeUrl — таблица спеки 12.1 (тест 1 куска 9.1)', () => {
   it('localhost, 127.0.0.1 и [::1] — http://; прочее с точкой — https://; http(s) — как есть', () => {
@@ -32,5 +32,19 @@ describe('normalizeUrl — таблица спеки 12.1 (тест 1 куска
   it('file: — local-file', () => {
     expect(normalizeUrl('file:///etc/passwd')).toEqual({ ok: false, error: 'local-file' });
     expect(normalizeUrl('FILE:///etc/passwd')).toEqual({ ok: false, error: 'local-file' });
+  });
+});
+
+describe('layoutUrl (тест 7 куска 9.2a)', () => {
+  it('http(s) без user:pass@; прочее — null', () => {
+    expect(layoutUrl('https://u:p@x.y/a')).toBe('https://x.y/a');
+    expect(layoutUrl('http://u@localhost:5173/x?y#z')).toBe('http://localhost:5173/x?y#z');
+    expect(layoutUrl('http://localhost:5173')).toBe('http://localhost:5173');
+    expect(layoutUrl('https://a.b/c?d')).toBe('https://a.b/c?d');
+    expect(layoutUrl('about:blank')).toBeNull();
+    expect(layoutUrl('data:text/html,<b>x</b>')).toBeNull();
+    expect(layoutUrl('file:///etc/hosts')).toBeNull();
+    expect(layoutUrl('javascript:alert(1)')).toBeNull();
+    expect(layoutUrl('')).toBeNull();
   });
 });

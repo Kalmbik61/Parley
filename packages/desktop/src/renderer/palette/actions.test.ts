@@ -12,7 +12,7 @@ import { createMruCycle } from '../keys/mru-cycle.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
-import { emptyLayout, groups, openTab } from '../layout/tree.js';
+import { emptyLayout, focusGroup, groups, openTab, splitGroup } from '../layout/tree.js';
 import type { TerminalSurfaceHandle } from '../terminal/surface-registry.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { runAction, type ActionContext, type ActionSource } from './actions.js';
@@ -137,6 +137,13 @@ function expectation(id: ActionId): (spies: Spies) => void {
     'appearance.system': ({ ui }) => expect(ui.setAppearance).toHaveBeenCalledWith('system'),
     'appearance.dark': ({ ui }) => expect(ui.setAppearance).toHaveBeenCalledWith('dark'),
     'appearance.light': ({ ui }) => expect(ui.setAppearance).toHaveBeenCalledWith('light'),
+    // 9.2a: новая вкладка браузера без адреса в активной группе.
+    'browser.newTab': ({ layout }) => {
+      expect(layout.apply).toHaveBeenCalledTimes(1);
+      const op = layout.apply.mock.calls[0]?.[1] as unknown as (l: WorkLayout) => WorkLayout;
+      const next = op(layout.layouts[KEY] as WorkLayout);
+      expect(groups(next)[0]?.tabs.at(-1)).toMatchObject({ kind: 'browser', url: '' });
+    },
   };
   const check = table[id];
   if (check === undefined) throw new Error(`нет ожидания для ${id}`);
@@ -153,7 +160,7 @@ describe('runAction — таблица по реестру (тест 1 куск�
 
   it('действия будущих этапов не реализованы и ничего не делают', () => {
     const spies = makeContext();
-    for (const id of ['files.quickOpen', 'sidebar.changes', 'browser.newTab'] as const) {
+    for (const id of ['files.quickOpen', 'sidebar.changes'] as const) {
       expect(IMPLEMENTED_ACTIONS.has(id)).toBe(false);
       runAction(id, spies.ctx);
     }
@@ -330,5 +337,77 @@ describe('runAction — будильник (тест 9 куска 6.3)', () => {
     split.ctx.palette = { ...split.palette, open: true, mode: 'splitRight' };
     runAction('palette.open', split.ctx);
     expect(split.palette.openWith).toHaveBeenCalledWith('default');
+  });
+});
+
+describe('вкладки браузера и предел (тест 12 куска 9.2a)', () => {
+  afterEach(() => {
+    useLayoutStore.setState({ activeWorkKey: null, layouts: {}, hydrated: {}, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
+  });
+
+  function browserTab(n: number): TabSpec {
+    return { kind: 'browser', id: `browser:00000${n.toString(16)}`, url: `http://localhost:${5170 + n}` };
+  }
+
+  /** Десять вкладок браузера и закрытая вкладка сверху стека. */
+  function tenBrowserTabs(closedTop: TabSpec): WorkLayout {
+    let layout = nineTabs();
+    for (let n = 0; n < 10; n += 1) layout = openTab(layout, browserTab(n));
+    return { ...layout, closedTabs: [closedTop, term('s-77')] };
+  }
+
+  it('⌘⇧T при 10 вкладках браузера и закрытой вкладке браузера сверху — тост, раскладка та же', () => {
+    const spies = makeContext();
+    spies.layout.layouts = { [KEY]: tenBrowserTabs(browserTab(11)) };
+    runAction('tab.reopen', spies.ctx);
+    expect(spies.toast).toHaveBeenCalledWith('No more than 10 browser tabs per workspace');
+    expect(spies.layout.apply).not.toHaveBeenCalled();
+  });
+
+  it('⌘⇧T при 10 вкладках браузера, сверху терминал — возвращает его', () => {
+    const spies = makeContext();
+    spies.layout.layouts = { [KEY]: tenBrowserTabs(term('s-88')) };
+    runAction('tab.reopen', spies.ctx);
+    expect(spies.toast).not.toHaveBeenCalled();
+    expect(spies.layout.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it('browser.newTab при 10 вкладках браузера — тост, раскладка та же; без активной работы — No active workspace', () => {
+    const spies = makeContext();
+    spies.layout.layouts = { [KEY]: tenBrowserTabs(term('s-88')) };
+    runAction('browser.newTab', spies.ctx);
+    expect(spies.toast).toHaveBeenCalledWith('No more than 10 browser tabs per workspace');
+    expect(spies.layout.apply).not.toHaveBeenCalled();
+
+    const none = makeContext({ activeWorkKey: null });
+    runAction('browser.newTab', none.ctx);
+    expect(none.toast).toHaveBeenCalledWith('No active workspace');
+    expect(none.layout.apply).not.toHaveBeenCalled();
+  });
+
+  it('«+» неактивной группы, затем browser.newTab — вкладка браузера встаёт в эту группу', () => {
+    let layout = openTab(emptyLayout(), term('s-01'));
+    const g1 = layout.activeGroupId;
+    layout = splitGroup(layout, g1, 'row', term('s-02'), { [g1]: { width: 1200, height: 800 } }).layout;
+    const g2 = layout.activeGroupId;
+    layout = focusGroup(layout, g1);
+    useLayoutStore.setState({ activeWorkKey: KEY, layouts: { [KEY]: layout }, hydrated: { [KEY]: true }, pending: {} });
+
+    // «+» строки вкладок g2 (TabStrip, 6.2): focusGroup своей группы и палитра в режиме open.
+    useLayoutStore.getState().apply(KEY, (current) => focusGroup(current, g2));
+    const spies = makeContext();
+    const store = useLayoutStore.getState();
+    const ctx: ActionContext = {
+      ...spies.ctx,
+      source: 'palette',
+      layout: { ...spies.ctx.layout, activeWorkKey: store.activeWorkKey, layouts: store.layouts, apply: store.apply },
+    };
+    runAction('browser.newTab', ctx);
+
+    const after = useLayoutStore.getState().layouts[KEY] as WorkLayout;
+    const target = groups(after).find((group) => group.id === g2);
+    expect(target?.tabs.at(-1)).toMatchObject({ kind: 'browser', url: '' });
+    expect(target?.activeTabId).toBe(target?.tabs.at(-1)?.id);
+    expect(groups(after).find((group) => group.id === g1)?.tabs.some((tab) => tab.kind === 'browser')).toBe(false);
   });
 });

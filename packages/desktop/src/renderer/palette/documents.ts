@@ -54,6 +54,8 @@ export interface PaletteDoc {
   icon: PaletteIcon;
   /** Работы: последний переход к работе в истории — пустой запрос берёт по нему четыре последние. */
   visitedAt?: number | null;
+  /** Виден и в пустом запросе палитры «Открыть…»: «+» без набора иначе бесполезен (9.2a). */
+  pinned?: true;
   run(mode: 'default' | 'split'): void;
 }
 
@@ -246,6 +248,24 @@ export function buildDocuments(input: {
     });
   }
 
+  // «+» строки вкладок открывает палитру «Открыть…» (спека 5.3, 12.1): из действий в ней — новая
+  // вкладка браузера. Она встаёт в активную группу, а «+» её уже сделал активной.
+  const newBrowserTab = input.actions.find((action) => action.id === 'browser.newTab');
+  if (mode === 'open' && newBrowserTab !== undefined && input.available(newBrowserTab.id)) {
+    docs.push({
+      id: `action:${newBrowserTab.id}`,
+      section: 'actions',
+      title: newBrowserTab.title,
+      subtitle: '',
+      fields: newBrowserTab.keywords,
+      recencyAt: null,
+      order: 0,
+      icon: 'browser',
+      pinned: true,
+      run: () => input.run(newBrowserTab.id),
+    });
+  }
+
   return docs;
 }
 
@@ -280,8 +300,9 @@ const PALETTE_GONE_POLL_MS = 16;
 /**
  * Палитра ушла из DOM. Пока она смонтирована, ловушка фокуса Radix возвращает фокус в её поле:
  * фокус, отданный терминалу раньше, пропал бы вместе с палитрой, и `activeElement` стал бы `body`.
+ * Экспорт — для адресной строки новой вкладки браузера (9.2a): её открывает действие палитры.
  */
-function paletteGone(): Promise<boolean> {
+export function paletteGone(): Promise<boolean> {
   return new Promise((resolve) => {
     const started = Date.now();
     const check = (): void => {
@@ -340,7 +361,8 @@ function takeSection(section: PaletteSection, sorted: PaletteDoc[], expanded: Re
 
 /**
  * Пустой запрос. Общая палитра (есть секция работ) — шесть последних вкладок и четыре
- * последние работы из истории, свежие первыми. Палитра одной работы (режимы разделения) —
+ * последние работы из истории, свежие первыми, и закреплённые действия («Открыть…», 9.2a). Палитра
+ * одной работы (режимы разделения) —
  * все её секции по свежести и порядку: там выбирают содержимое новой группы, и пустой список
  * без набора был бы бесполезен.
  */
@@ -354,9 +376,11 @@ function browse(docs: PaletteDoc[], now: number, expanded: ReadonlySet<PaletteSe
       .filter((doc): doc is PaletteDoc & { visitedAt: number } => doc.section === 'works' && typeof doc.visitedAt === 'number')
       .sort((a, b) => b.visitedAt - a.visitedAt)
       .slice(0, RECENT_WORKS);
+    const pinned = docs.filter((doc) => doc.pinned === true);
     const result: RankedSection[] = [];
     if (tabs.length > 0) result.push({ section: 'tabs', docs: tabs, more: 0 });
     if (works.length > 0) result.push({ section: 'works', docs: works, more: 0 });
+    if (pinned.length > 0) result.push({ section: 'actions', docs: pinned, more: 0 });
     return result;
   }
   const bucket = (doc: PaletteDoc): number => recencyBucket(doc.recencyAt === null ? null : now - doc.recencyAt);

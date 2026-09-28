@@ -110,9 +110,34 @@ describe('buildDocuments (тест 5)', () => {
     expect(titles(docs, 'rooms')).toEqual(['обзор']);
   });
 
-  it('open: без действий', () => {
+  it('open: из действий — только New browser tab (9.2a), выбор зовёт run(browser.newTab); недоступное — нет', () => {
     const a = makeWork('w-01', { projectPath: '/tmp/a', title: 'A' });
-    expect(build({ works: [a], mode: 'open' }).filter((d) => d.section === 'actions')).toEqual([]);
+    const ran: ActionId[] = [];
+    const docs = buildDocuments({
+      works: [a],
+      activity: {},
+      attention: { [keyOf(a)]: workAttention(a, {}) },
+      branches: {},
+      order: [keyOf(a)],
+      layouts: {},
+      history: [],
+      actions: ACTIONS,
+      available: () => true,
+      wakePaused: false,
+      providers: [],
+      mode: 'open',
+      activeWorkKey: keyOf(a),
+      run: (id) => ran.push(id),
+    });
+    const actions = docs.filter((d) => d.section === 'actions');
+    expect(actions.map((d) => d.title)).toEqual(['New browser tab']);
+    actions[0]?.run('default');
+    expect(ran).toEqual(['browser.newTab']);
+    // Пустой запрос палитры «Открыть…» показывает документ сразу — иначе «+» без набора бесполезен.
+    expect(rankDocuments('', docs, NOW).flatMap((s) => s.docs).map((d) => d.title)).toContain('New browser tab');
+    expect(build({ works: [a], mode: 'open', available: (id) => id !== 'browser.newTab' }).filter((d) => d.section === 'actions')).toEqual([]);
+    // Обычный режим пустым запросом действий по-прежнему не показывает.
+    expect(rankDocuments('', build({ works: [a] }), NOW).some((s) => s.section === 'actions')).toBe(false);
   });
 
   it('свежесть вкладки — самое позднее at её записей истории, без записей — null; работа — lastEventAt внимания, ветка в полях', () => {

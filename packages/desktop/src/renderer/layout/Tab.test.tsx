@@ -256,3 +256,24 @@ describe('Tab — вкладка файла (тест 9 куска 7.3a)', () =>
     expect(screen.getByRole('tab').querySelector('[data-dirty-dot]')).toBeNull();
   });
 });
+
+describe('Tab — favicon вкладки браузера (тест 11 куска 9.2a)', () => {
+  const browserTab: TabSpec = { kind: 'browser', id: 'browser:abc123', url: `https://example.com/${'a'.repeat(200)}` };
+  const browserMeta = (favicon: string | null): TabMeta => ({ ...meta('Example'), icon: 'browser', favicon });
+
+  it('favicon есть — <img> с data:, без него — значок Globe; адрес целиком в title', () => {
+    const group: GroupNode = { type: 'group', id: 'g1', tabs: [browserTab], activeTabId: browserTab.id };
+    setLayoutWithGroup(group);
+    const { rerender } = render(
+      <Tab workKey={WORK_KEY} group={group} tab={browserTab} meta={browserMeta('data:image/png;base64,AA==')} dot={null} isActive />,
+    );
+    const element = screen.getByRole('tab');
+    expect(element.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,AA==');
+    expect(element.querySelector('svg')?.classList.contains('lucide-globe')).not.toBe(true);
+    expect(screen.getByText('Example').getAttribute('title')).toBe(browserTab.kind === 'browser' ? browserTab.url : '');
+
+    rerender(<Tab workKey={WORK_KEY} group={group} tab={browserTab} meta={browserMeta(null)} dot={null} isActive />);
+    expect(screen.getByRole('tab').querySelector('img')).toBeNull();
+    expect(screen.getByRole('tab').querySelector('svg.lucide-globe')).not.toBeNull();
+  });
+});

@@ -371,6 +371,27 @@ export const S = {
     unsaved: 'Unsaved changes',
   },
 
+  /**
+   * Вкладка браузера — `renderer/browser/*` (кусок 9.2a, спека 12.1, 12.4). Назад и вперёд —
+   * `S.actions.back` и `forward`; «Новая вкладка браузера» — `S.actions.newBrowserTab`. Адрес и
+   * заголовок страницы — данные, идут как есть.
+   */
+  browser: {
+    /** Заголовок вкладки без адреса. */
+    newTab: 'New tab',
+    /** `aria-label` адресной строки. */
+    address: 'Address',
+    /** Ошибка `'not-an-address'` у `normalizeUrl`. */
+    notAnAddress: "Enter an address — search isn't supported",
+    /** Ошибка `'local-file'` у `normalizeUrl`. */
+    localFile: "Local files can't be opened here",
+    reload: 'Reload',
+    stop: 'Stop',
+    devTools: 'DevTools',
+    pageCrashed: 'Page crashed',
+    tooManyTabs: 'No more than 10 browser tabs per workspace',
+  },
+
   /** Баннер прерванных сессий — `components/InterruptedBanner.tsx`. */
   banners: {
     interrupted: (labels: string): string => `Interrupted mid-turn: ${labels}`,
@@ -511,6 +532,7 @@ export const S = {
       resumeSession: 'resume session',
       saveFile: 'save file',
       clearBrowserData: 'clear browser data',
+      openDevTools: 'open DevTools',
     },
     noWorktree: 'This session has no worktree of its own',
     /** Действие работы (⌘T, ⌘W, разделение…) без активной работы — тост (кусок 6.3). */

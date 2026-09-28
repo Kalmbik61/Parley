@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@harnas/protocol';
 import type { AppNote, CloseAnswer, FocusTarget, HarnasBridge, HostStatus } from '../shared/bridge.js';
-import type { BrowserOpenTab } from '../shared/browser-types.js';
+import type { BrowserFavicon, BrowserOpenTab } from '../shared/browser-types.js';
 import type { ActionId } from '../shared/keybindings.js';
 import type {
   DirEntry,
@@ -29,6 +29,7 @@ const fileChangedListeners = new Set<(e: FileChangedEvent) => void>();
 const treeChangedListeners = new Set<(e: TreeChangedEvent) => void>();
 const confirmCloseListeners = new Set<() => void>();
 const browserOpenTabListeners = new Set<(e: BrowserOpenTab) => void>();
+const browserFaviconListeners = new Set<(e: BrowserFavicon) => void>();
 /** Цель клика, пришедшая, пока у `onFocusTarget` не было слушателей (кусок 4.3). */
 let heldFocusTarget: FocusTarget | null = null;
 
@@ -81,6 +82,10 @@ ipcRenderer.on('files:tree-changed', (_event, e: TreeChangedEvent) => {
 
 ipcRenderer.on('browser:open-tab', (_event, e: BrowserOpenTab) => {
   for (const listener of browserOpenTabListeners) listener(e);
+});
+
+ipcRenderer.on('browser:favicon', (_event, e: BrowserFavicon) => {
+  for (const listener of browserFaviconListeners) listener(e);
 });
 
 /**
@@ -224,6 +229,10 @@ const bridge = {
     onOpenTab: (listener: (e: BrowserOpenTab) => void) => {
       browserOpenTabListeners.add(listener);
       return () => browserOpenTabListeners.delete(listener);
+    },
+    onFavicon: (listener: (e: BrowserFavicon) => void) => {
+      browserFaviconListeners.add(listener);
+      return () => browserFaviconListeners.delete(listener);
     },
   },
 };

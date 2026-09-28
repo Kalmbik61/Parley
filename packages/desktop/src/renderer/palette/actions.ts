@@ -17,6 +17,7 @@ import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { errorText, S } from '../../shared/strings.js';
 import type { Appearance } from '../../shared/ui-types.js';
 import type { MruCycle } from '../keys/mru-cycle.js';
+import { BROWSER_LIMITS, browserTabCount, openBrowserTab } from '../browser/store.js';
 import type { LayoutState } from '../layout/store.js';
 import { findTab, focusGroup, focusTab, groups, reopenClosed } from '../layout/tree.js';
 import { neighborInOrder } from '../sidebar/sort.js';
@@ -141,7 +142,7 @@ function needsActiveWork(id: ActionId): boolean {
   );
 }
 
-/** Одна ветка на каждый реализованный `ActionId`; действия будущих этапов (7.4, 8.2, 9.2) — без ветки. */
+/** Одна ветка на каждый реализованный `ActionId`; действия будущих этапов (7.4, 8.2, 9.2b) — без ветки. */
 export function runAction(id: ActionId, ctx: ActionContext): void {
   // Без активной работы — тост; активная есть, но её раскладка ещё читается с диска — ветки
   // вкладок и групп ниже просто ничего не делают.
@@ -224,6 +225,15 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
     case 'terminal.clear':
       (ctx.source === 'palette' ? ctx.terminals.active() : ctx.terminals.focused())?.clear();
       return;
+    case 'browser.newTab':
+      // Без активной работы тост даёт сам openBrowserTab — как у действий 6.3.
+      openBrowserTab('', {
+        apply: ctx.layout.apply,
+        layouts: ctx.layout.layouts,
+        activeWorkKey: ctx.layout.activeWorkKey,
+        toast: ctx.toast,
+      });
+      return;
     default:
       break;
   }
@@ -251,6 +261,11 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
       return;
     }
     case 'tab.reopen':
+      // ⌘⇧T предел вкладок браузера не обходит (спека 12.4).
+      if (layout.closedTabs[0]?.kind === 'browser' && browserTabCount(layout) >= BROWSER_LIMITS.tabsPerWork) {
+        ctx.toast(S.browser.tooManyTabs);
+        return;
+      }
       ctx.layout.apply(key, reopenClosed);
       return;
     case 'tab.prev':

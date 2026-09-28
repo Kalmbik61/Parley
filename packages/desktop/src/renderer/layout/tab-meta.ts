@@ -22,7 +22,7 @@ import { sessionRowLabel, sessionTag } from '../lib/participant.js';
 export interface TabMetaExtras {
   attention: Record<string /* refKey */, Attention>;   // 4.2
   dirtyTabIds: ReadonlySet<string>;                     // 7.3a: bufferKey грязных буферов — не голые id вкладок
-  browser: Record<string /* tabId */, { title: string | null; favicon: string | null }>;  // 9.2; до него пусто
+  browser: Record<string /* tabId */, { title: string | null; favicon: string | null }>;  // 9.2a: browser/store.ts
 }
 
 export const EMPTY_EXTRAS: TabMetaExtras = { attention: {}, dirtyTabIds: new Set(), browser: {} };
@@ -38,7 +38,7 @@ export interface TabMeta {
   needsYou: boolean;
   /** Вкладка file с несохранённым буфером своей работы (кусок 7.3a). */
   dirty: boolean;
-  /** В этапе 2 всегда `null` — подключит кусок 9.2. */
+  /** Favicon вкладки браузера — `data:` из main (9.2a); у прочих видов `null`. */
   favicon: string | null;
 }
 
@@ -122,7 +122,17 @@ export function tabMeta(tab: TabSpec, entry: WorkEntry | null, extras: TabMetaEx
       const dirty = entry !== null && extras.dirtyTabIds.has(bufferKey(workKeyOf(entry.projectPath, entry.map.work.id), tab.id));
       return { title: truncateTitle(fileBaseName(tab.path)), icon: 'file', session: null, ...empty, dirty };
     }
-    case 'browser':
-      return { title: truncateTitle(tab.url), icon: 'browser', session: null, ...empty };
+    case 'browser': {
+      // Заголовок страницы, иначе адрес, без адреса — «Новая вкладка» (спека 5.3, 12.1).
+      const page = extras.browser[tab.id];
+      const title = page?.title !== null && page?.title !== undefined && page.title !== '' ? page.title : tab.url;
+      return {
+        title: truncateTitle(title === '' ? S.browser.newTab : title),
+        icon: 'browser',
+        session: null,
+        ...empty,
+        favicon: page?.favicon ?? null,
+      };
+    }
   }
 }

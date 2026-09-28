@@ -18,6 +18,7 @@ import type { WebContents } from 'electron';
 import type { WorksSnapshot } from '@harnas/protocol';
 import { BROWSER_PARTITION } from '../shared/browser-types.js';
 import { S } from '../shared/strings.js';
+import { fetchFavicon } from './browser/favicon.js';
 import { installBrowserGuard, promptDownload } from './browser/guard.js';
 import { cleanupDrops, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
 import { createGitRunner } from './files/git-api.js';
@@ -229,6 +230,9 @@ if (!gotLock) {
         if (answer === null) item.cancel();
         else item.setSavePath(answer);
       },
+      // Сессией раздела браузера, а не окна: куки и прокси — страницы, а не приложения.
+      fetchFavicon: (iconUrl, pageUrl) =>
+        fetchFavicon(iconUrl, pageUrl, (url, init) => browserSession.fetch(url, init)),
     });
 
     mainWindow = openWindow();

@@ -87,7 +87,7 @@ export function guardWebviewAttach(contents: Pick<WebContents, 'on'>): void {
 }
 
 /** Обработчики гостя `<webview>`: окна, навигация, масштаб, уход со страницы, клавиши. */
-function guardGuest(contents: WebContents, deps: Pick<BrowserGuardDeps, 'openTab' | 'forwardShortcuts'>): void {
+function guardGuest(contents: WebContents, deps: Pick<BrowserGuardDeps, 'openTab' | 'forwardShortcuts' | 'fetchFavicon'>): void {
   contents.setWindowOpenHandler(({ url }) => {
     // about:blank вкладки не открывает: <webview> с таким src не прикрепится ни сразу, ни после перезапуска.
     if (isHttpUrl(url) && navigationVerdict(url, 'main') === 'allow') {
@@ -113,6 +113,17 @@ function guardGuest(contents: WebContents, deps: Pick<BrowserGuardDeps, 'openTab
   contents.on('will-prevent-unload', (event) => event.preventDefault());
   // Слушатель клавиш снимается вместе с гостем, а не ждёт сборки мусора.
   contents.once('destroyed', deps.forwardShortcuts(contents));
+
+  // Favicon качает main (9.2a): CSP окна внешних картинок не пускает. Ответ — окну-хозяину гостя,
+  // рендерер находит вкладку по webContentsId. Гость мог умереть, пока значок качался.
+  contents.on('page-favicon-updated', (_event, favicons) => {
+    const [first] = favicons;
+    if (first === undefined) return;
+    void deps.fetchFavicon(first, contents.getURL()).then((dataUrl) => {
+      if (dataUrl === null || contents.isDestroyed()) return;
+      contents.hostWebContents?.send('browser:favicon', { webContentsId: contents.id, dataUrl });
+    });
+  });
 }
 
 interface BrowserGuardDeps {
@@ -124,6 +135,8 @@ interface BrowserGuardDeps {
   forwardShortcuts(contents: WebContents): () => void; // адаптер к forwardGuestShortcuts (6.1a), вернёт отписку
   /** will-download раздела, синхронно: путь загрузки задаётся только внутри события. promptDownload или подмена E2E. */
   download(item: DownloadItem): void;
+  /** Favicon гостя в data: (9.2a); index.ts — favicon.ts с fetch сессии раздела. null — значка нет. */
+  fetchFavicon(iconUrl: string, pageUrl: string): Promise<string | null>;
 }
 
 /**

@@ -100,6 +100,10 @@ function fakeContents(id: number, type: 'window' | 'webview' | 'remote') {
     }),
     setZoomMode: vi.fn(),
     stop: vi.fn(),
+    // 9.2a: адрес страницы для fetchFavicon и окно-хозяин для browser:favicon.
+    getURL: vi.fn(() => 'http://127.0.0.1:5173/page'),
+    isDestroyed: vi.fn(() => false),
+    hostWebContents: { send: vi.fn() },
     openHandler: (url: string) => {
       if (openHandler === null) throw new Error('setWindowOpenHandler не позвали');
       return openHandler({ url });
@@ -125,6 +129,7 @@ function setupGuard(isMainWindow: (c: WebContents) => boolean = () => false) {
   const unforward = vi.fn();
   const forwardShortcuts = vi.fn((): (() => void) => unforward);
   const isMain = vi.fn(isMainWindow);
+  const fetchFavicon = vi.fn<(iconUrl: string, pageUrl: string) => Promise<string | null>>(async () => null);
   const install = (): void =>
     installBrowserGuard({
       app: app as unknown as Pick<App, 'on'>,
@@ -133,6 +138,7 @@ function setupGuard(isMainWindow: (c: WebContents) => boolean = () => false) {
       openTab,
       forwardShortcuts,
       download,
+      fetchFavicon,
     });
   install();
   const created = (contents: ReturnType<typeof fakeContents>): void => {
@@ -147,6 +153,7 @@ function setupGuard(isMainWindow: (c: WebContents) => boolean = () => false) {
     forwardShortcuts,
     unforward,
     isMain,
+    fetchFavicon,
     created,
     requestHandler: () => requestHandler,
     checkHandler: () => checkHandler,
@@ -351,5 +358,43 @@ describe('главное окно решается в момент will-attach-w
     const other = fakeEvent();
     windowContents.emit('will-attach-webview', other, {}, { src: 'https://x' });
     expect(other.defaultPrevented).toBe(true);
+  });
+});
+
+describe('favicon гостя (тест 10 куска 9.2a)', () => {
+  const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('page-favicon-updated → fetchFavicon(первый адрес, адрес страницы) → browser:favicon окну-хозяину', async () => {
+    const guard = setupGuard();
+    guard.fetchFavicon.mockResolvedValue('data:image/png;base64,AA==');
+    const guest = fakeContents(42, 'webview');
+    guard.created(guest);
+
+    guest.emit('page-favicon-updated', fakeEvent(), ['http://127.0.0.1:5173/favicon.ico', 'http://127.0.0.1:5173/other.png']);
+    expect(guard.fetchFavicon).toHaveBeenCalledTimes(1);
+    expect(guard.fetchFavicon).toHaveBeenCalledWith('http://127.0.0.1:5173/favicon.ico', 'http://127.0.0.1:5173/page');
+    await flush();
+    expect(guest.hostWebContents.send).toHaveBeenCalledWith('browser:favicon', {
+      webContentsId: 42,
+      dataUrl: 'data:image/png;base64,AA==',
+    });
+  });
+
+  it('ответ null, пустой список и гость, умерший до ответа, — события нет', async () => {
+    const guard = setupGuard();
+    const guest = fakeContents(43, 'webview');
+    guard.created(guest);
+
+    guest.emit('page-favicon-updated', fakeEvent(), ['http://127.0.0.1:5173/favicon.ico']);
+    guest.emit('page-favicon-updated', fakeEvent(), []);
+    expect(guard.fetchFavicon).toHaveBeenCalledTimes(1);
+    await flush();
+    expect(guest.hostWebContents.send).not.toHaveBeenCalled();
+
+    guard.fetchFavicon.mockResolvedValue('data:image/png;base64,AA==');
+    guest.isDestroyed.mockReturnValue(true);
+    guest.emit('page-favicon-updated', fakeEvent(), ['http://127.0.0.1:5173/favicon.ico']);
+    await flush();
+    expect(guest.hostWebContents.send).not.toHaveBeenCalled();
   });
 });

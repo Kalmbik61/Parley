@@ -44,3 +44,22 @@ export function normalizeUrl(input: string): NormalizedUrl {
   if (!/\s/.test(text) && text.includes('.')) return checked(`https://${text}`);
   return NOT_AN_ADDRESS;
 }
+
+/**
+ * Адрес для раскладки (9.2a, спека 12.1): http(s) без user:pass@; иначе null — раскладка его не
+ * сохраняет. Пароль из адреса в layouts.json не пишется. Без учётных данных адрес идёт как есть:
+ * `href` дописал бы `/` к `http://localhost:5173`, и раскладка разошлась бы с введённым.
+ */
+export function layoutUrl(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+  if (parsed.username === '' && parsed.password === '') return url;
+  parsed.username = '';
+  parsed.password = '';
+  return parsed.href;
+}

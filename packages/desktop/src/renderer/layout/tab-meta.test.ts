@@ -206,3 +206,26 @@ describe('fileTabTitles (тест 9 куска 7.3a)', () => {
     expect(titles.get('file:a/b/c/index.ts')).toBe('c/index.ts');
   });
 });
+
+describe('tabMeta — вкладка браузера (тест 11 куска 9.2a)', () => {
+  const tab: TabSpec = { kind: 'browser', id: 'browser:abc123', url: 'http://localhost:5173/' };
+  const extras = (title: string | null, favicon: string | null): TabMetaExtras => ({
+    ...EMPTY_EXTRAS,
+    browser: { [tab.id]: { title, favicon } },
+  });
+
+  it('заголовок страницы и favicon из extras.browser', () => {
+    const meta = tabMeta(tab, null, extras('Dev server', 'data:image/png;base64,AA=='));
+    expect(meta.title).toBe('Dev server');
+    expect(meta.favicon).toBe('data:image/png;base64,AA==');
+    expect(meta.icon).toBe('browser');
+  });
+
+  it('без заголовка (и с пустым) — адрес; без адреса — New tab; длинный заголовок обрезан', () => {
+    expect(tabMeta(tab, null).title).toBe('http://localhost:5173/');
+    expect(tabMeta(tab, null, extras('', null)).title).toBe('http://localhost:5173/');
+    expect(tabMeta({ ...tab, url: '' }, null).title).toBe('New tab');
+    expect(tabMeta(tab, null, extras('x'.repeat(100), null)).title).toBe(`${'x'.repeat(40)}…`);
+    expect(tabMeta(tab, null).favicon).toBeNull();
+  });
+});

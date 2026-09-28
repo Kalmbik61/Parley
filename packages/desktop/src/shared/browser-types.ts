@@ -16,13 +16,19 @@ export interface PickResult {
   thumbnail: string | null; // 9.3a: уменьшенный data:image/png для карточки
 }
 
+/** Favicon гостя (событие browser:favicon, 9.2a): main скачал значок и отдаёт его окну как data:. */
+export interface BrowserFavicon {
+  webContentsId: number;
+  dataUrl: string;
+}
+
 /** window.open страницы (событие browser:open-tab): вкладка встаёт рядом с открывателем (9.2b). */
 export interface BrowserOpenTab {
   url: string;
   openerWebContentsId: number;
 }
 
-// Интерфейс растёт вместе с мостом: onFavicon добавит 9.2a, onFocus — 9.2b, pickStart и pickCancel — 9.3a.
+// Интерфейс растёт вместе с мостом: onFocus добавит 9.2b, pickStart и pickCancel — 9.3a.
 // Объявленные заранее, они не дали бы прелоаду 9.1 пройти pnpm typecheck.
 export interface BrowserApi {
   openDevTools(webContentsId: number): Promise<void>;
@@ -32,4 +38,5 @@ export interface BrowserApi {
   zoom(webContentsId: number, step: 1 | -1 | 0): Promise<void>;
   clearData(): Promise<void>;
   onOpenTab(listener: (e: BrowserOpenTab) => void): () => void;
+  onFavicon(listener: (e: BrowserFavicon) => void): () => void; // спека 12.1
 }
