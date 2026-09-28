@@ -252,7 +252,7 @@ describe('TabStrip — внимание (кусок 4.2)', () => {
 });
 
 // Раунд fix-7-accept, п. 3: активная вкладка — в видимую часть строки, к ближайшему краю, с полем
-// под затухание краёв строки (12px).
+// под затухание краёв строки (24px с раунда fix-live, O1).
 describe('revealScrollLeft', () => {
   const view = { scrollLeft: 0, width: 500 };
   it('вкладка уже видна целиком — сдвиг прежний', () => {
@@ -260,16 +260,16 @@ describe('revealScrollLeft', () => {
     expect(revealScrollLeft({ scrollLeft: 50, width: 500 }, { left: 200, width: 200 })).toBe(50);
   });
   it('за правым краем — правый край вкладки у правого края строки', () => {
-    expect(revealScrollLeft(view, { left: 430, width: 215 })).toBe(430 + 215 - 500 + 12);
+    expect(revealScrollLeft(view, { left: 430, width: 215 })).toBe(430 + 215 - 500 + 24);
   });
   it('за левым краем — левый край вкладки у левого края строки', () => {
-    expect(revealScrollLeft({ scrollLeft: 400, width: 500 }, { left: 215, width: 215 })).toBe(215 - 12);
+    expect(revealScrollLeft({ scrollLeft: 400, width: 500 }, { left: 215, width: 215 })).toBe(215 - 24);
   });
   it('в зоне затухания края — тоже сдвиг', () => {
-    expect(revealScrollLeft(view, { left: 280, width: 215 })).toBe(280 + 215 - 500 + 12);
+    expect(revealScrollLeft(view, { left: 280, width: 215 })).toBe(280 + 215 - 500 + 24);
   });
   it('вкладка шире строки — к её началу; сдвиг не меньше нуля', () => {
-    expect(revealScrollLeft({ scrollLeft: 0, width: 100 }, { left: 300, width: 215 })).toBe(300 - 12);
+    expect(revealScrollLeft({ scrollLeft: 0, width: 100 }, { left: 300, width: 215 })).toBe(300 - 24);
     expect(revealScrollLeft({ scrollLeft: 40, width: 500 }, { left: 0, width: 215 })).toBe(0);
   });
 });
@@ -292,7 +292,7 @@ describe('TabStrip — активная вкладка в видимой час�
       tab.getBoundingClientRect = () => ({ left: 100 + index * 215 - tablist.scrollLeft, width: 215 }) as DOMRect;
     });
     rerender(<TabStrip workKey={WORK_KEY} group={{ ...group, activeTabId: 'terminal:d' }} entry={e} portal={false} active />);
-    expect(tablist.scrollLeft).toBe(3 * 215 + 215 - 500 + 12);
+    expect(tablist.scrollLeft).toBe(3 * 215 + 215 - 500 + 24);
     rerender(<TabStrip workKey={WORK_KEY} group={{ ...group, activeTabId: 'terminal:a' }} entry={e} portal={false} active />);
     expect(tablist.scrollLeft).toBe(0);
   });
@@ -302,7 +302,7 @@ describe('keepActiveOnResize (раунд 8, пункт 8)', () => {
   const tab = { left: 3 * 215, width: 215 };
   it('активная была видна — после сужения строки снова видна', () => {
     // 1000px: вкладка [645, 860] видна при сдвиге 0; сузили до 500 — правый край у правого края строки.
-    expect(keepActiveOnResize(0, 1000, 500, tab)).toBe(645 + 215 - 500 + 12);
+    expect(keepActiveOnResize(0, 1000, 500, tab)).toBe(645 + 215 - 500 + 24);
   });
   it('видна и после изменения — сдвиг прежний', () => {
     expect(keepActiveOnResize(0, 1000, 900, tab)).toBe(0);
@@ -368,7 +368,7 @@ describe('TabStrip — изменение ширины строки (раунд 
     const { tablist, resize } = setup();
     expect(tablist.scrollLeft).toBe(0);
     resize(500);
-    expect(tablist.scrollLeft).toBe(3 * 215 + 215 - 500 + 12);
+    expect(tablist.scrollLeft).toBe(3 * 215 + 215 - 500 + 24);
   });
 
   it('человек увёл активную из вида колесом — сужение её не возвращает', () => {
@@ -377,5 +377,50 @@ describe('TabStrip — изменение ширины строки (раунд 
     tablist.scrollLeft = 0;
     resize(400);
     expect(tablist.scrollLeft).toBe(0);
+  });
+});
+
+// Раунд fix-live, O1 (спека 5.3, «у краёв — затухание»): затухание — признак «есть ещё вкладки»,
+// поэтому оно только у того края, за которым действительно есть скрытое, и нет без переполнения.
+describe('TabStrip — затухание краёв только со стороны скрытых вкладок (fix-live O1)', () => {
+  function setup(): { tablist: HTMLElement; layout(scrollWidth: number, clientWidth: number, scrollLeft: number): void } {
+    const tabs = ['a', 'b', 'c'].map((id) => ({ kind: 'terminal' as const, id: `terminal:${id}`, sessionId: id }));
+    const group: GroupNode = { type: 'group', id: 'g1', tabs, activeTabId: 'terminal:a' };
+    useLayoutStore.setState({
+      layouts: { [WORK_KEY]: { root: group, activeGroupId: 'g1', closedTabs: [] } },
+      hydrated: { [WORK_KEY]: true },
+    });
+    render(<TabStrip workKey={WORK_KEY} group={group} entry={entry(['a', 'b', 'c'].map((id) => session(id, id)))} portal={false} active />);
+    const tablist = screen.getByRole('tablist');
+    return {
+      tablist,
+      layout(scrollWidth, clientWidth, scrollLeft) {
+        Object.defineProperty(tablist, 'scrollWidth', { value: scrollWidth, configurable: true });
+        Object.defineProperty(tablist, 'clientWidth', { value: clientWidth, configurable: true });
+        tablist.scrollLeft = scrollLeft;
+        fireEvent.scroll(tablist);
+      },
+    };
+  }
+  const fades = (el: HTMLElement): [string | undefined, string | undefined] => [el.dataset['fadeStart'], el.dataset['fadeEnd']];
+
+  it('без переполнения — затухания нет ни у одного края', () => {
+    const { tablist, layout } = setup();
+    layout(400, 500, 0);
+    expect(fades(tablist)).toEqual([undefined, undefined]);
+  });
+
+  it('переполнение, строка в начале — затухание только справа', () => {
+    const { tablist, layout } = setup();
+    layout(1200, 500, 0);
+    expect(fades(tablist)).toEqual([undefined, '']);
+  });
+
+  it('строка в середине — у обоих краёв; в конце — только слева', () => {
+    const { tablist, layout } = setup();
+    layout(1200, 500, 300);
+    expect(fades(tablist)).toEqual(['', '']);
+    layout(1200, 500, 700);
+    expect(fades(tablist)).toEqual(['', undefined]);
   });
 });

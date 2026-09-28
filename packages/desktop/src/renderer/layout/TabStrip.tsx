@@ -31,7 +31,7 @@
  * сдвигается — место вставки показывает линия 2px blue-500.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useDroppable } from '@dnd-kit/core';
 import { horizontalListSortingStrategy, SortableContext, useSortable } from '@dnd-kit/sortable';
@@ -93,8 +93,20 @@ function SortableTab({ workKey, groupId, tabId, index, active, lineBefore, child
   );
 }
 
-/** Затухание краёв строки (`maskImage` ниже): вкладка под ним видна не целиком. */
-const EDGE_FADE_PX = 12;
+/**
+ * Затухание краёв строки (`edgeFadeMask`): вкладка под ним видна не целиком. Раунд fix-live, O1: 12 px
+ * на обоих краях всегда приёмка не заметила — оно не отличало «есть ещё» от «всё видно». Теперь
+ * шире и только у края, за которым есть скрытые вкладки.
+ */
+const EDGE_FADE_PX = 24;
+
+/** Маска строки: затухание только у краёв со скрытыми вкладками; скрытого нет — маски нет. */
+export function edgeFadeMask(start: boolean, end: boolean): string | undefined {
+  if (!start && !end) return undefined;
+  const from = start ? `transparent, black ${EDGE_FADE_PX}px` : 'black';
+  const to = end ? `black calc(100% - ${EDGE_FADE_PX}px), transparent` : 'black';
+  return `linear-gradient(to right, ${from}, ${to})`;
+}
 
 /**
  * Сдвиг строки, при котором вкладка видна целиком (раунд fix-7-accept, п. 3): к ближайшему краю, с
@@ -150,6 +162,15 @@ export function TabStrip({ workKey, group, entry, portal, active }: TabStripProp
   const fileTitles = useMemo(() => fileTabTitles(group.tabs), [group.tabs]);
 
   const tablistRef = useRef<HTMLDivElement | null>(null);
+  // Есть ли скрытые вкладки слева и справа (fix-live, O1): от них — затухание краёв.
+  const [fade, setFade] = useState({ start: false, end: false });
+  const updateFade = useCallback(() => {
+    const el = tablistRef.current;
+    if (el === null) return;
+    const start = el.scrollLeft > 1;
+    const end = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+    setFade((current) => (current.start === start && current.end === end ? current : { start, end }));
+  }, []);
 
   const tailData: DropTargetData = { workKey, kind: 'strip', groupId: group.id, index: group.tabs.length };
   const { setNodeRef } = useDroppable({ id: dndId.strip(workKey, group.id), data: tailData, disabled: !active });
@@ -211,6 +232,7 @@ export function TabStrip({ workKey, group, entry, portal, active }: TabStripProp
     if (list === null || typeof ResizeObserver === 'undefined') return undefined;
     let width = list.clientWidth;
     const observer = new ResizeObserver(() => {
+      updateFade();
       const before = width;
       width = list.clientWidth;
       if (width === before) return;
@@ -221,7 +243,12 @@ export function TabStrip({ workKey, group, entry, portal, active }: TabStripProp
     });
     observer.observe(list);
     return () => observer.disconnect();
-  }, [activeTabBox]);
+  }, [activeTabBox, updateFade]);
+
+  // Вкладки добавились, ушли или сменили заголовок — ширина содержимого другая, строка та же.
+  useLayoutEffect(updateFade, [group.tabs, fileTitles, updateFade]);
+
+  const mask = edgeFadeMask(fade.start, fade.end);
 
   const content = (
     <div
@@ -235,11 +262,10 @@ export function TabStrip({ workKey, group, entry, portal, active }: TabStripProp
           ? 'flex h-full min-w-0 flex-1 items-center overflow-x-auto [scrollbar-width:none]'
           : 'flex h-8 min-w-0 shrink-0 items-center overflow-x-auto border-b border-border bg-card [scrollbar-width:none]'
       }
-      style={{
-        maskImage: 'linear-gradient(to right, transparent, black 12px, black calc(100% - 12px), transparent)',
-        WebkitMaskImage:
-          'linear-gradient(to right, transparent, black 12px, black calc(100% - 12px), transparent)',
-      }}
+      {...(fade.start ? { 'data-fade-start': '' } : {})}
+      {...(fade.end ? { 'data-fade-end': '' } : {})}
+      style={mask === undefined ? undefined : { maskImage: mask, WebkitMaskImage: mask }}
+      onScroll={updateFade}
       onKeyDown={(event) => {
         if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
         const tabEls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]'));
