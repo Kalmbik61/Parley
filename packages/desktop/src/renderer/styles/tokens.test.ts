@@ -246,3 +246,69 @@ describe('tokens.css — выделенная строка палитры (ку�
     });
   }
 });
+
+/**
+ * Ревью M12 и живая приёмка MVP: текст WCAG AA в обеих темах.
+ * 1. Предупреждение «Изменений» (`projectFolderWarning`) было `--status-warning` — `#ca8a04` на белом
+ *    2.94:1. Спека 4.1 держит `--status-warning` для значков и подложек, тексту — свой токен.
+ * 2. done/archived-карточки и закрытые строки были приглушены opacity всей карточки (/60, /50):
+ *    текст падал до 2.4–3.8:1. Теперь текст приглушается цветом (`styles/dimmed.css`: основной
+ *    текст сайдбара → вторичный), а прозрачность остаётся только у значков и полосы внимания.
+ */
+describe('tokens.css — контраст текста предупреждения и приглушённых карточек (ревью M12)', () => {
+  const css = readFileSync(TOKENS_PATH, 'utf8');
+  const dimmedCss = readFileSync(path.join(path.dirname(TOKENS_PATH), 'dimmed.css'), 'utf8');
+
+  function readHex(theme: 'light' | 'dark', name: string): Rgb {
+    const rootStart = css.indexOf(':root {');
+    const darkStart = css.indexOf('.dark {');
+    const block = theme === 'light' ? css.slice(rootStart, darkStart) : css.slice(darkStart, css.indexOf('}', darkStart));
+    const match = block.match(new RegExp(`--${name}:\\s*#([0-9a-fA-F]{6}|[0-9a-fA-F]{3});`));
+    if (match === null) throw new Error(`tokens.css: --${name} не найден (${theme})`);
+    const short = match[1] as string;
+    const hex = short.length === 3 ? [...short].map((digit) => digit + digit).join('') : short;
+    return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
+  }
+
+  const AMBER_500: Rgb = [254, 154, 0];
+  const CARD_MIX = { light: 0.08, dark: 0.1 } as const;
+
+  for (const theme of ['light', 'dark'] as const) {
+    it(`${theme}: текст предупреждения (--status-warning-text) на --card, --background, --sidebar, --editor-surface — не ниже 4.5:1`, () => {
+      const text = readHex(theme, 'status-warning-text');
+      for (const under of ['card', 'background', 'sidebar', 'editor-surface']) {
+        expect(contrastOf(text, readHex(theme, under)), under).toBeGreaterThanOrEqual(WCAG_AA_SMALL_TEXT);
+      }
+    });
+
+    it(`${theme}: текст приглушённой карточки и строки — не ниже 4.5:1 на всех фонах сайдбара`, () => {
+      // В приглушённой карточке основной текст сайдбара равен вторичному (dimmed.css), и заливка
+      // активной карточки считается от него же — color-mix берёт переопределённую переменную.
+      const text = readHex(theme, 'work-sidebar-muted-foreground');
+      const sidebar = readHex(theme, 'work-sidebar');
+      const accent = readHex(theme, 'work-sidebar-accent');
+      const unders: Record<string, Rgb> = {
+        sidebar,
+        hover: compositeOver(accent, 0.4, sidebar),
+        selected: accent,
+        activeDimmed: compositeOver(text, CARD_MIX[theme], sidebar),
+        activeNormal: compositeOver(readHex(theme, 'work-sidebar-foreground'), CARD_MIX[theme], sidebar),
+      };
+      unders.amberOnActive = compositeOver(AMBER_500, 0.1, unders.activeDimmed as Rgb);
+      unders.amberOnSidebar = compositeOver(AMBER_500, 0.1, sidebar);
+      for (const [name, under] of Object.entries(unders)) {
+        expect(contrastOf(text, under), name).toBeGreaterThanOrEqual(WCAG_AA_SMALL_TEXT);
+      }
+    });
+  }
+
+  it('dimmed.css: основной текст сайдбара в [data-dimmed] — вторичный токен, без opacity у самого узла', () => {
+    const rule = dimmedCss.match(/\[data-dimmed\]\s*\{([^}]*)\}/);
+    expect(rule?.[1]).toMatch(/--work-sidebar-foreground:\s*var\(--work-sidebar-muted-foreground\);/);
+    expect(rule?.[1]).not.toMatch(/opacity/);
+  });
+
+  it('dimmed.css: значки и полоса внимания приглушены прозрачностью 0.6 — облик done сохраняется', () => {
+    expect(dimmedCss).toMatch(/\[data-dimmed\]\s+:is\([^)]*svg[^)]*\[data-attention-strip\][^)]*\)\s*\{\s*opacity:\s*0\.6;/);
+  });
+});

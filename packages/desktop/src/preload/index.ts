@@ -154,6 +154,7 @@ const bridge = {
     },
     chooseFolder: () => ipcRenderer.invoke('app:choose-folder') as Promise<string | null>,
     restartHost: () => ipcRenderer.invoke('app:restart-host') as Promise<void>,
+    reconnect: () => ipcRenderer.invoke('app:reconnect') as Promise<void>,
     loadLayout: (workKey: string) =>
       ipcRenderer.invoke('app:load-layout', workKey) as Promise<WorkLayout | null>,
     saveLayout: (workKey: string, layout: WorkLayout) =>

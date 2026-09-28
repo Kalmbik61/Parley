@@ -9,7 +9,7 @@ import { refKey } from '@harnas/protocol';
 import type { SessionRef } from '@harnas/protocol';
 import type { PtyManager } from './pty-manager.js';
 
-export type AttemptOutcome = 'submitted' | 'input' | 'restarted' | 'cancelled' | 'typed';
+export type AttemptOutcome = 'submitted' | 'input' | 'restarted' | 'cancelled' | 'typed' | 'blocked';
 
 export interface Attempt {
   cancel(): void;
@@ -30,13 +30,15 @@ export interface TypeAndSubmitDeps {
  * hostDraft (pty.send): печать ставит черновик хоста, свой Enter его снимает.
  * Будильник зовёт без него — его поведение прежнее. Сбой отложенной записи Enter
  * (PTY умер между проверкой pid и записью) — отказ done, а не исключение хоста.
+ * beforeEnter вернул false — Enter не жмётся, исход 'blocked': за ожидание агент показал
+ * диалог (fix-final-b), и Enter его подтвердил бы. Черновик хоста тогда остаётся — текст в поле.
  */
 export function typeAndSubmit(
   deps: TypeAndSubmitDeps,
   ref: SessionRef,
   text: string,
   submit: boolean,
-  options: { hostDraft?: boolean } = {},
+  options: { hostDraft?: boolean; beforeEnter?: () => boolean } = {},
 ): Attempt {
   const setTimer = deps.setTimer ?? setTimeout;
   const clearTimer = deps.clearTimer ?? clearTimeout;
@@ -74,6 +76,12 @@ export function typeAndSubmit(
     // процесса черновика хоста нет — снимать нечего.
     if (deps.pty.get(ref)?.pid !== pid) {
       settle('restarted');
+      return;
+    }
+    // Проверка вызывающего прямо перед Enter: `blocked` приходит хуком позже вставки
+    // (запрос разрешения за 500 мс ожидания), а Enter в диалог — автоответ (рамка 15.1).
+    if (options.beforeEnter !== undefined && !options.beforeEnter()) {
+      settle('blocked');
       return;
     }
     // Колбэк таймера — вне цепочки промисов: брошенное здесь стало бы необработанным

@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { activityOf, type ActivityLog } from './activity.js';
+import { activityOf, hookedSince, type ActivityLog } from './activity.js';
 import type { EventRecord } from './events.js';
 
 const AT = '2026-09-05T10:00:00.000Z';
@@ -276,5 +276,24 @@ describe('activityOf: страховка по логу (4.3)', () => {
     expect(result.hooksMissing).toBe(true);
     expect(result.source).toBe('none');
     expect(result.activity).toBe('idle');
+  });
+});
+
+describe('hookedSince: события хуков с запуска процесса (fix-final-b)', () => {
+  const START = Date.parse(AT);
+
+  it('событий нет — false', () => {
+    expect(hookedSince(activity([]), START)).toBe(false);
+    expect(hookedSince(null, START)).toBe(false);
+    expect(hookedSince(undefined, START)).toBe(false);
+  });
+
+  it('последнее событие раньше запуска (журнал прошлого процесса) — false', () => {
+    expect(hookedSince(activity([event('Stop', null, '2026-09-05T09:59:59.999Z')]), START)).toBe(false);
+  });
+
+  it('событие в момент запуска или позже — true', () => {
+    expect(hookedSince(activity([event('SessionStart', null, AT)]), START)).toBe(true);
+    expect(hookedSince(activity([event('Stop', null, '2026-09-05T10:00:05.000Z')]), START)).toBe(true);
   });
 });

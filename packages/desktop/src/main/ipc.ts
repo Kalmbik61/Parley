@@ -313,6 +313,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
   ipcMain.handle('app:choose-folder', withIpcError(() => chooseFolder()));
 
   ipcMain.handle('app:restart-host', withIpcError(() => connection.restartHost()));
+  ipcMain.handle('app:reconnect', withIpcError(() => connection.connect()));
 
   ipcMain.handle(
     'app:load-layout',

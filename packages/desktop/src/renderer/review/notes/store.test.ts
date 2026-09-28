@@ -307,6 +307,17 @@ describe('стор заметок: applyOutcome (тест 5)', () => {
     ]);
   });
 
+  it("вставка без Enter с reason: 'blocked-before-enter' → sentAt и sentTo: текст уже в поле агента (fix-final-b)", async () => {
+    await withTwoNotes();
+    useNotesStore
+      .getState()
+      .applyOutcome(work, S2, ['00000001'], S2, { inserted: true, submitted: false, reason: 'blocked-before-enter' });
+    expect(sent()).toEqual([
+      { id: '00000001', sentAt: SENT_AT, sentTo: S2 },
+      { id: '00000002', sentAt: null, sentTo: null },
+    ]);
+  });
+
   it('blocked, busy, no-paste-mode и { error: not_found } → sentAt: null, записи нет', async () => {
     await withTwoNotes();
     const outcomes: SendOutcome[] = [

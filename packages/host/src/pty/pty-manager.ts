@@ -21,6 +21,11 @@ import type { Screen } from './screen.js';
 export interface PtyHandle {
   ref: SessionRef;
   pid: number;
+  /**
+   * Когда хост запустил этот процесс (мс, до spawn). События хуков раньше него — прошлого
+   * процесса: без единого нового pty.send и будильник не печатают (fix-final-b).
+   */
+  startedAt: number;
   cols: number;
   rows: number;
   /** Черновик человека или черновик хоста — поверх любого будильник не печатает. */
@@ -59,6 +64,7 @@ const BATCH_INTERVAL_MS = 16;
 interface Session {
   ref: SessionRef;
   process: PtyProcess;
+  startedAt: number;
   screen: Screen;
   draft: DraftTracker;
   batcher: OutputBatcher;
@@ -72,6 +78,7 @@ function toHandle(session: Session): PtyHandle {
   return {
     ref: session.ref,
     pid: session.process.pid,
+    startedAt: session.startedAt,
     cols: session.cols,
     rows: session.rows,
     hasDraft: () => session.draft.hasDraft || session.draft.hasHostDraft,
@@ -104,6 +111,8 @@ export function createPtyManager(host: HostContext): PtyManager {
 
   function start(ref: SessionRef, launch: PtyLaunch, size = DEFAULT_SIZE): PtyHandle {
     const key = refKey(ref);
+    // До spawn: хук процесса пишется в журнал только после, и его mtime не раньше этой метки.
+    const startedAt = Date.now();
     // Не `process`: имя затенило бы глобальный `process` до конца функции.
     const ptyProcess = spawnPty(launch, size);
     const screen = createScreen(size.cols, size.rows);
@@ -114,6 +123,7 @@ export function createPtyManager(host: HostContext): PtyManager {
     const session: Session = {
       ref,
       process: ptyProcess,
+      startedAt,
       screen,
       draft: new DraftTracker(),
       batcher,

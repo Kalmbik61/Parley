@@ -153,12 +153,35 @@ export class HostConnection {
     for (const listener of this.statusListeners) listener(status);
   }
 
-  /** Первое подключение. Резолвится и при удачном рукопожатии, и при mismatch — в обоих случаях связь с хостом установлена. */
+  /**
+   * Первое подключение и «Retry» экрана «No connection to host». Резолвится и при удачном
+   * рукопожатии, и при mismatch — в обоих случаях связь с хостом установлена. Отказ заводит
+   * петлю переподключения (fix-final-b, M4): без неё окно так и стояло бы на экране отказа.
+   */
   async connect(): Promise<void> {
     this.closed = false;
     this.spawnFailure = null;
+    // Повтор человека — с начала: короткая пауза, а не накопленная автоповторами.
+    this.clearReconnectTimer();
+    this.reconnectDelayMs = 500;
     this.setStatus({ state: 'connecting' });
-    await this.connectLoop();
+    await this.connectOrRetry();
+  }
+
+  /** Петля подключения; её отказ — повтор по таймеру с нарастающей паузой. */
+  private async connectOrRetry(): Promise<void> {
+    try {
+      await this.connectLoop();
+    } catch (err) {
+      this.scheduleReconnect();
+      throw err;
+    }
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer === null) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
   }
 
   /**
@@ -360,7 +383,12 @@ export class HostConnection {
     this.scheduleReconnect();
   }
 
+  /**
+   * Повтор подключения: пауза 0,5 с, дальше вдвое до предела 5 с. Второй хост поверх живого
+   * петля не запускает (`connectOnce`, lane-r4): запуск — только когда прошлого процесса нет.
+   */
   private scheduleReconnect(): void {
+    if (this.closed) return;
     // Петля уже идёт (restartHost, первое подключение) — она и подключит; вторую не заводим.
     if (this.reconnectTimer || this.loop !== null) return;
     const delayMs = this.reconnectDelayMs;
@@ -395,6 +423,8 @@ export class HostConnection {
 
   /** `host.shutdown` → новый процесс хоста → новое подключение. */
   async restartHost(): Promise<void> {
+    // Запуск хоста — заново: прошлая причина отказа (нет node) могла уйти (fix-final-b, M4).
+    this.spawnFailure = null;
     // Подключаться — после того как уходящий хост закрыл наш сокет (он закрывает клиентов в конце
     // остановки, до этого ещё слушает): иначе петля успела бы подключиться к нему же (lane-r4, п. 3).
     const old = this.socket;
@@ -411,11 +441,9 @@ export class HostConnection {
     clearTimeout(timer);
     if (old !== null && this.socket === old) old.destroy();
     this.reconnectDelayMs = 500;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    await this.connectLoop();
+    this.clearReconnectTimer();
+    // Отказ — переподключение по таймеру (fix-final-b, M4): терминалы пишут «reconnecting…».
+    await this.connectOrRetry();
   }
 
   close(): void {

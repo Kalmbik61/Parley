@@ -10,6 +10,20 @@
 // Копит символы до `\r`/`\n` и печатает `echo: <строка>\r\n` — построчный
 // эхо-отклик, которого ждёт `e2e/terminal.spec.ts`.
 
+import { appendFileSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
+
+// Хук при старте (fix-final-b): настоящий Claude Code в доверенной папке шлёт SessionStart, и
+// хост узнаёт, что хуки процесса доходят; без единого хука с запуска pty.send отвечает blocked
+// (вопрос доверия к папке хуков не шлёт). Нейтральное `StubReady` состояния не меняет — точка
+// сессии остаётся прежней. STUB_NO_HOOKS=1 — сессия «на вопросе доверия»: хуков нет вовсе.
+// Адрес журнала — из окружения процесса, как у команды хука (core/work/settings-file.ts).
+if (process.env.STUB_NO_HOOKS !== '1' && process.env.HARNAS_WORK_DIR !== undefined && process.env.HARNAS_SESSION_ID !== undefined) {
+  const events = path.join(process.env.HARNAS_WORK_DIR, 'events');
+  mkdirSync(events, { recursive: true });
+  appendFileSync(path.join(events, `${process.env.HARNAS_SESSION_ID}.jsonl`), `${JSON.stringify({ hook_event_name: 'StubReady' })}\n`);
+}
+
 process.stdout.write('stub-echo готов\r\n');
 
 let buffer = '';

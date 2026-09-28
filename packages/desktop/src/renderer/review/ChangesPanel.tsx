@@ -232,7 +232,7 @@ export function ChangesPanel({ bridge, workKey, entry, sendDeps }: ChangesPanelP
         <span className="truncate font-mono" title={folder}>
           {folder}
         </span>
-        <span className="text-status-warning">{S.changes.projectFolderWarning}</span>
+        <span className="text-status-warning-text">{S.changes.projectFolderWarning}</span>
       </div>
     );
   } else if (source?.kind === 'pending') {

@@ -72,7 +72,7 @@ function fakePtyManager() {
     },
     get: (ref) =>
       live.has(refKey(ref))
-        ? { ref, pid: 1, cols: 80, rows: 24, hasDraft: () => false, bracketedPaste: () => false }
+        ? { ref, pid: 1, startedAt: 0, cols: 80, rows: 24, hasDraft: () => false, bracketedPaste: () => false }
         : undefined,
     list: () => [],
     write: vi.fn(),

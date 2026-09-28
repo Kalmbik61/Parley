@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,14 +22,11 @@ import { makeTempHome, makeTempProject } from './tmp.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
-const hostEntry = path.resolve(dirname, '../../host/dist/main.js');
 const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
 const PAGE = readFileSync(path.join(dirname, 'fixtures/page.html'), 'utf8');
 const POPUP = '<!doctype html><title>Popup page</title><p>popup</p>';
 /** Изолированный мир скрипта выбора — `PICK_WORLD_ID` в `main/browser/design-mode.ts` (9.3a). */
 const PICK_WORLD_ID = 1001;
-
-test.skip(!existsSync(hostEntry), `packages/host/dist/main.js не собран — сначала pnpm --filter @harnas/host build: ${hostEntry}`);
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(

@@ -154,9 +154,10 @@ export const WorkCard = memo(function WorkCard({
         active
           ? 'border-work-sidebar-border bg-[color-mix(in_srgb,var(--work-sidebar-foreground)_8%,transparent)] shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:bg-[color-mix(in_srgb,var(--work-sidebar-foreground)_10%,transparent)]'
           : 'border-transparent hover:bg-work-sidebar-accent/40',
-        // Показанная архивная (кусок 6.3, спека 6.7) приглушена, как done.
-        (map.work.status === 'done' || map.work.status === 'archived') && 'opacity-60',
       )}
+      // Показанная архивная (кусок 6.3, спека 6.7) приглушена, как done. Приглушение — styles/dimmed.css:
+      // цветом текста, а не opacity всей карточки (ревью M12, WCAG AA).
+      {...(map.work.status === 'done' || map.work.status === 'archived' ? { 'data-dimmed': '' } : {})}
     >
       {strip !== undefined ? (
         <span data-attention-strip aria-hidden="true" className={cn('absolute inset-y-0 left-0 w-[3px]', strip)} />

@@ -65,6 +65,8 @@ export interface FakeBridge extends HarnasBridge {
   /** Отложенная цель main: первый подписчик onFocusTarget получает её сразу, как через app:take-focus-target. */
   setPendingFocusTarget(target: FocusTarget | null): void;
   readonly badges: number[];
+  /** Вызовы `app.reconnect` и `app.restartHost` по порядку (экран «No connection to host», fix-final-b). */
+  readonly hostActions: Array<'reconnect' | 'restartHost'>;
   /** Вызовы `app.saveLayout` — для теста тишины 500 мс (кусок 2.2). */
   readonly layoutSaves: Array<{ workKey: string; layout: WorkLayout }>;
   /** Вызовы `app.removeLayout` — работа пропала из снимка (кусок 2.2, тест 6). */
@@ -174,6 +176,7 @@ export function createFakeBridge(): FakeBridge {
   const focusTargetListeners = new Set<(target: FocusTarget) => void>();
   let pendingFocusTarget: FocusTarget | null = null;
   const badges: number[] = [];
+  const hostActions: Array<'reconnect' | 'restartHost'> = [];
   const layoutSaves: Array<{ workKey: string; layout: WorkLayout }> = [];
   const layoutRemovals: string[] = [];
   const layoutRetains: string[][] = [];
@@ -249,6 +252,7 @@ export function createFakeBridge(): FakeBridge {
     calls,
     appNotified,
     badges,
+    hostActions,
     layoutSaves,
     layoutRemovals,
     layoutRetains,
@@ -523,7 +527,12 @@ export function createFakeBridge(): FakeBridge {
         badges.push(count);
       },
       chooseFolder: async () => null,
-      restartHost: async () => {},
+      restartHost: async () => {
+        hostActions.push('restartHost');
+      },
+      reconnect: async () => {
+        hostActions.push('reconnect');
+      },
       loadLayout: async (workKey) => layouts.get(workKey) ?? null,
       saveLayout: async (workKey, layout) => {
         layouts.set(workKey, layout);

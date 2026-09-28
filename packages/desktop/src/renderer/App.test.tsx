@@ -496,6 +496,15 @@ describe('App — обрыв связи с хостом (раунд lane-r3, п.
     expect(screen.getByText('No connection to host: node not found in login-shell PATH')).toBeTruthy();
     expect(screen.queryByTestId('titlebar')).toBeNull();
   });
+
+  it('экран «No connection to host» — Retry зовёт app.reconnect, Restart host — app.restartHost (fix-final-b, M4)', async () => {
+    bridge.emitStatus({ state: 'disconnected', reason: 'Host is not answering' });
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await vi.waitFor(() => expect(bridge.hostActions).toEqual(['reconnect']));
+    fireEvent.click(screen.getByRole('button', { name: 'Restart host' }));
+    await vi.waitFor(() => expect(bridge.hostActions).toEqual(['reconnect', 'restartHost']));
+  });
 });
 
 // Слияние lane-r3 и main-r2: «Restart host» и падение хоста — обрыв связи после неё. Оболочка

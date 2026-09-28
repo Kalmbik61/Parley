@@ -100,6 +100,7 @@ describe('deliveryAction', () => {
     pointed: new Set<string>(),
     inFlight: false,
     resumeAllowed: true,
+    hooked: true,
   };
 
   it('1. пауза — none(paused), даже если остальные условия тоже нарушены', () => {
@@ -184,6 +185,20 @@ describe('deliveryAction', () => {
       kind: 'none',
       reason: 'busy',
     });
+  });
+
+  it('4в. живой процесс без единого хука с запуска — none(no-hooks), idle и unseen тоже (fix-final-b)', () => {
+    // Свежая сессия на вопросе доверия к папке хуков не шлёт, и активность у неё idle:
+    // указатель с Enter подтвердил бы диалог (рамка 15.1).
+    expect(deliveryAction({ ...base, hooked: false })).toEqual({ kind: 'none', reason: 'no-hooks' });
+    expect(deliveryAction({ ...base, hooked: false, activity: activityOf('idle') })).toEqual({
+      kind: 'none',
+      reason: 'no-hooks',
+    });
+    // Спящую поднимает новый процесс — хуки старого тут ни при чём.
+    expect(
+      deliveryAction({ ...base, hooked: false, session: sessionOf({ lifecycle: 'sleeping' }), activity: null }).kind,
+    ).toBe('resume');
   });
 
   it('5. черновик человека — none(draft)', () => {

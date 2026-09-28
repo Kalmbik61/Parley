@@ -190,7 +190,7 @@ export {
   saveConfig,
 } from './config.js';
 export type { HarnasConfig, LoadedConfig, TypedSettingKey } from './config.js';
-export { activityOf } from './work/activity.js';
+export { activityOf, hookedSince } from './work/activity.js';
 export type {
   Activity,
   ActivityLog,

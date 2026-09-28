@@ -120,6 +120,7 @@ export const S = {
     archive: 'Archive',
     deleteEllipsis: 'Delete…',
     archiveConfirmTitle: (title: string): string => `Archive "${title}"?`,
+    archiveConfirmDescription: 'Live sessions keep running while it is hidden. Bring it back with "Show archived workspaces" in the palette.',
     deleteConfirmTitle: (title: string): string => `Delete "${title}"?`,
     deleteConfirmDescription: (sessions: number): string =>
       `${sessions === 1 ? '1 session' : `${sessions} sessions`} will be deleted. Running agents will be stopped.`,
@@ -371,6 +372,9 @@ export const S = {
     insertedDraft: (session: string): string => `Inserted into ${session} without Enter — your draft is in the input`,
     insertedInput: (session: string): string => `Inserted into ${session} without Enter — you were typing in the terminal`,
     insertedRestarted: (session: string): string => `Inserted into ${session} without Enter — the session restarted`,
+    /** Агент показал диалог за паузу перед Enter — Enter в него не жмём (fix-final-b, спека 8.6). */
+    insertedBlocked: (session: string): string =>
+      `Inserted into ${session} without Enter — ${session} is waiting for your answer in the terminal`,
     blocked: (session: string): string => `${session} is waiting for your answer — text not inserted`,
     busy: (session: string): string => `${session} is busy with another message — retry in a second`,
     noPasteMode: (session: string): string => `${session} doesn't accept multi-line paste`,
@@ -515,6 +519,8 @@ export const S = {
       `Host is an older version. Restart? Live sessions: ${liveSessions ?? '—'}.`,
     restart: 'Restart',
     disconnectedScreen: (reason: string): string => `No connection to host: ${reason}`,
+    /** Кнопка экрана «No connection to host» (fix-final-b); «Retry» — `common.retry`. */
+    restartHost: 'Restart host',
     statusConnecting: 'Connecting…',
     statusConnected: (hostVersion: string): string => `Host ${hostVersion}`,
     statusMismatch: 'Host version mismatch',

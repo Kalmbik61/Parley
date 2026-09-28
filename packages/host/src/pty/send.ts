@@ -5,6 +5,7 @@
  * одновременно с будильником (`busy`). Автоповторов нет: исход решает человек.
  */
 
+import { hookedSince } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
 import type { SendResult, SessionRef } from '@harnas/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -59,7 +60,12 @@ export function createSender(deps: {
     // указатель между проверками и вставкой.
     // Пока агент показывает диалог, вставленные символы может прочитать сам диалог —
     // это был бы автоответ, запрещённый рамкой.
-    if (deps.activity.get(ref)?.activity.activity === 'blocked') return refused('blocked');
+    const live = deps.activity.get(ref)?.activity;
+    if (live?.activity === 'blocked') return refused('blocked');
+    // Ни одного хука с запуска процесса — хост не знает, что у агента на экране: у свежей
+    // сессии это может быть вопрос доверия к папке, где Enter выбрал бы «Yes, proceed»
+    // (fix-final-b). Отвечаем как на blocked: человек смотрит в терминал сам.
+    if (!hookedSince(live, handle.startedAt)) return refused('blocked');
     const key = refKey(ref);
     if (deps.wake.inFlight(ref) || waiting.has(key)) return refused('busy');
     const paste = handle.bracketedPaste();
@@ -73,7 +79,11 @@ export function createSender(deps: {
       ref,
       payload,
       submit && !hadDraft,
-      { hostDraft: true },
+      {
+        hostDraft: true,
+        // blocked приходит хуком с задержкой: запрос разрешения мог появиться за паузу.
+        beforeEnter: () => deps.activity.get(ref)?.activity.activity !== 'blocked',
+      },
     );
 
     if (!submit) return { inserted: true, submitted: false, reason: null };
@@ -84,6 +94,7 @@ export function createSender(deps: {
       const outcome = await attempt.done;
       if (outcome === 'submitted') return { inserted: true, submitted: true, reason: null };
       if (outcome === 'input') return { inserted: true, submitted: false, reason: 'input' };
+      if (outcome === 'blocked') return { inserted: true, submitted: false, reason: 'blocked-before-enter' };
       // Остаётся restarted: попытку отправителя никто не отменяет, а typed бывает только без submit.
       return { inserted: true, submitted: false, reason: 'restarted' };
     } finally {

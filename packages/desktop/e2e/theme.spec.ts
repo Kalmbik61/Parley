@@ -9,7 +9,6 @@
  * от системной темы машины: сначала тема выбирается явно.
  */
 
-import { existsSync } from 'node:fs';
 import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,10 +19,6 @@ import { makeTempHome } from './tmp.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
-// Без сборки хоста окну нечего поднимать при старте.
-const hostEntry = path.resolve(dirname, '../../host/dist/main.js');
-
-test.skip(!existsSync(hostEntry), `packages/host/dist/main.js не собран — сначала pnpm --filter @harnas/host build: ${hostEntry}`);
 
 const isDark = (window: Page): Promise<boolean> => window.evaluate(() => document.documentElement.classList.contains('dark'));
 const background = (window: Page): Promise<string> => window.evaluate(() => getComputedStyle(document.body).backgroundColor);

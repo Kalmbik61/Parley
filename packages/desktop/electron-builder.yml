@@ -30,6 +30,13 @@ extraResources:
   # отдельной записью, где он уже не верхний уровень своего `from`.
   - from: out/host/node_modules
     to: host/node_modules
+  # NOTICE и лицензия шрифта Geist — в Contents/Resources (ревью M7): MIT Orca и shadcn/ui
+  # требует уведомления в копиях, OFL — текста лицензии рядом со шрифтом, а `files` берёт
+  # только out/** и package.json.
+  - from: ../../NOTICE
+    to: NOTICE
+  - from: src/renderer/assets/fonts/OFL.txt
+    to: licenses/Geist-OFL.txt
 mac:
   target: dir
   identity: null

@@ -252,10 +252,28 @@ export function App(): JSX.Element {
   // Обрыв после связи — окно на месте (раунд lane-r3, п. 2): main переподключается сам, а
   // терминалы на это время показывают «Disconnected — reconnecting…» и не принимают ввод.
   // Экран — только если связи не было ни разу.
+  // Main и сам повторяет подключение с нарастающей паузой (fix-final-b, M4); кнопки — не ждать.
+  // Отказ кнопки — только в консоль: причину показывает сам экран.
   if (status.state === 'disconnected' && !everConnected) {
     return (
-      <div className="flex h-screen items-center justify-center text-neutral-400">
-        {S.connection.disconnectedScreen(status.reason)}
+      <div className="flex h-screen flex-col items-center justify-center gap-4 text-neutral-400">
+        <p>{S.connection.disconnectedScreen(status.reason)}</p>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className="rounded bg-neutral-700 px-4 py-2 text-neutral-200"
+            onClick={() => void bridge.app.reconnect().catch((error: unknown) => console.warn('[harnas] reconnect', error))}
+          >
+            {S.common.retry}
+          </button>
+          <button
+            type="button"
+            className="rounded bg-neutral-700 px-4 py-2 text-neutral-200"
+            onClick={() => void bridge.app.restartHost().catch((error: unknown) => console.warn('[harnas] restart host', error))}
+          >
+            {S.connection.restartHost}
+          </button>
+        </div>
         <WindowCloseQuestion bridge={bridge} />
       </div>
     );
