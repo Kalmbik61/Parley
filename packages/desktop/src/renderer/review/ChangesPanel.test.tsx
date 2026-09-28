@@ -404,6 +404,36 @@ describe('Секции (тест 4)', () => {
     expect(groups(layout ?? emptyLayout())[0]?.activeTabId).toBe(`diff:s-02:${COMMIT.hash}`);
   });
 
+  it('длинный путь (200+ символов) — truncate и полный путь в title; переименование — «old → new»; то же в Conflicts (раунд 8, пункт 5)', async () => {
+    const dir = `src/${'very-long-directory-name/'.repeat(9)}`;
+    const long = `${dir}component-with-a-long-name.tsx`;
+    const renamedFrom = `${dir}old-name-of-the-component.tsx`;
+    expect(long.length).toBeGreaterThan(200);
+    bridge.setHandler('worktrees.diff', () =>
+      diff({
+        uncommitted: true,
+        commits: [COMMIT],
+        files: [file(long), { path: `${dir}renamed.tsx`, status: 'R', oldPath: renamedFrom, additions: 0, deletions: 0 }],
+        uncommittedPaths: [long],
+      }),
+    );
+    bridge.setHandler('worktrees.mergeCheck', (): MergeCheck => ({ status: 'conflicts', files: [long] }));
+    renderPanel();
+
+    const check = (sectionName: string, title: string, shown: string): void => {
+      const section = screen.getByRole('region', { name: sectionName });
+      const row = within(section).getByTitle(title);
+      expect(row.tagName).toBe('BUTTON');
+      expect(row.className).toContain('min-w-0');
+      const text = within(row).getByText(shown);
+      expect(text.className).toContain('truncate');
+    };
+    await screen.findByRole('region', { name: 'Uncommitted' });
+    check('Uncommitted', long, long);
+    check('Branch changes', `${renamedFrom} → ${dir}renamed.tsx`, `${dir}renamed.tsx`);
+    check('Conflicts', long, long);
+  });
+
   it('секция сворачивается заголовком', async () => {
     bridge.setHandler('worktrees.diff', () => diff({ files: [file('b.ts')], commits: [COMMIT] }));
     renderPanel();
