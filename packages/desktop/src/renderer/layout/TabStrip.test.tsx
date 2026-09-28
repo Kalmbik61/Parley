@@ -14,7 +14,7 @@ import { useWorksStore } from '../store/works.js';
 import { activityMap as keyed, makeActivity } from '../test-utils/work-fixtures.js';
 import { EMPTY_HISTORY } from './history.js';
 import { useLayoutStore } from './store.js';
-import { TabStrip } from './TabStrip.js';
+import { revealScrollLeft, TabStrip } from './TabStrip.js';
 
 function session(id: string, label: string): WorkSession {
   return {
@@ -248,5 +248,52 @@ describe('TabStrip — внимание (кусок 4.2)', () => {
     });
     expect(renders).toBeGreaterThan(before);
     expect(tabEl('terminal:s-02').querySelector('[data-testid="agent-state-dot"]')?.getAttribute('data-state')).toBe('blocked');
+  });
+});
+
+// Раунд fix-7-accept, п. 3: активная вкладка — в видимую часть строки, к ближайшему краю, с полем
+// под затухание краёв строки (12px).
+describe('revealScrollLeft', () => {
+  const view = { scrollLeft: 0, width: 500 };
+  it('вкладка уже видна целиком — сдвиг прежний', () => {
+    expect(revealScrollLeft(view, { left: 100, width: 200 })).toBe(0);
+    expect(revealScrollLeft({ scrollLeft: 50, width: 500 }, { left: 200, width: 200 })).toBe(50);
+  });
+  it('за правым краем — правый край вкладки у правого края строки', () => {
+    expect(revealScrollLeft(view, { left: 430, width: 215 })).toBe(430 + 215 - 500 + 12);
+  });
+  it('за левым краем — левый край вкладки у левого края строки', () => {
+    expect(revealScrollLeft({ scrollLeft: 400, width: 500 }, { left: 215, width: 215 })).toBe(215 - 12);
+  });
+  it('в зоне затухания края — тоже сдвиг', () => {
+    expect(revealScrollLeft(view, { left: 280, width: 215 })).toBe(280 + 215 - 500 + 12);
+  });
+  it('вкладка шире строки — к её началу; сдвиг не меньше нуля', () => {
+    expect(revealScrollLeft({ scrollLeft: 0, width: 100 }, { left: 300, width: 215 })).toBe(300 - 12);
+    expect(revealScrollLeft({ scrollLeft: 40, width: 500 }, { left: 0, width: 215 })).toBe(0);
+  });
+});
+
+describe('TabStrip — активная вкладка в видимой части строки (fix-7-accept п. 3)', () => {
+  it('смена активной вкладки сдвигает строку к ней', () => {
+    const tabs = ['a', 'b', 'c', 'd'].map((id) => ({ kind: 'terminal' as const, id: `terminal:${id}`, sessionId: id }));
+    const group: GroupNode = { type: 'group', id: 'g1', tabs, activeTabId: 'terminal:a' };
+    useLayoutStore.setState({
+      layouts: { [WORK_KEY]: { root: group, activeGroupId: 'g1', closedTabs: [] } },
+      hydrated: { [WORK_KEY]: true },
+    });
+    const e = entry(['a', 'b', 'c', 'd'].map((id) => session(id, id)));
+    const { rerender } = render(<TabStrip workKey={WORK_KEY} group={group} entry={e} portal={false} active />);
+    const tablist = screen.getByRole('tablist');
+    // Раскладка jsdom — вручную: строка 500px с x=100, вкладки по 215px подряд.
+    Object.defineProperty(tablist, 'clientWidth', { value: 500, configurable: true });
+    tablist.getBoundingClientRect = () => ({ left: 100, width: 500 }) as DOMRect;
+    screen.getAllByRole('tab').forEach((tab, index) => {
+      tab.getBoundingClientRect = () => ({ left: 100 + index * 215 - tablist.scrollLeft, width: 215 }) as DOMRect;
+    });
+    rerender(<TabStrip workKey={WORK_KEY} group={{ ...group, activeTabId: 'terminal:d' }} entry={e} portal={false} active />);
+    expect(tablist.scrollLeft).toBe(3 * 215 + 215 - 500 + 12);
+    rerender(<TabStrip workKey={WORK_KEY} group={{ ...group, activeTabId: 'terminal:a' }} entry={e} portal={false} active />);
+    expect(tablist.scrollLeft).toBe(0);
   });
 });

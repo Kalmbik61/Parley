@@ -31,7 +31,7 @@
  * сдвигается — место вставки показывает линия 2px blue-500.
  */
 
-import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useDroppable } from '@dnd-kit/core';
 import { horizontalListSortingStrategy, SortableContext, useSortable } from '@dnd-kit/sortable';
@@ -93,6 +93,22 @@ function SortableTab({ workKey, groupId, tabId, index, active, lineBefore, child
   );
 }
 
+/** Затухание краёв строки (`maskImage` ниже): вкладка под ним видна не целиком. */
+const EDGE_FADE_PX = 12;
+
+/**
+ * Сдвиг строки, при котором вкладка видна целиком (раунд fix-7-accept, п. 3): к ближайшему краю, с
+ * полем под затухание; уже видна — сдвиг прежний, шире строки — к её началу. `tab.left` — от начала
+ * содержимого строки, не от видимой части.
+ */
+export function revealScrollLeft(view: { scrollLeft: number; width: number }, tab: { left: number; width: number }): number {
+  const start = tab.left - EDGE_FADE_PX;
+  const end = tab.left + tab.width + EDGE_FADE_PX;
+  if (end - start > view.width || start < view.scrollLeft) return Math.max(0, start);
+  if (end > view.scrollLeft + view.width) return end - view.width;
+  return view.scrollLeft;
+}
+
 /** Индекс по кругу — стрелки в конце строки уводят на начало и наоборот. */
 function wrapIndex(index: number, length: number): number {
   return ((index % length) + length) % length;
@@ -147,15 +163,34 @@ export function TabStrip({ workKey, group, entry, portal, active }: TabStripProp
     return () => el.removeEventListener('wheel', handleWheel);
   }, []);
 
+  // Открытая или ставшая активной вкладка — любым путём: клик, ⌃1–9, ⌃Tab, дерево, ⌘P,
+  // восстановление раскладки — в видимую часть строки. Без этого на узком окне она оставалась за
+  // краем, и человек не видел, какой файл перед ним (приёмка этапа 7).
+  useLayoutEffect(() => {
+    const list = tablistRef.current;
+    if (list === null || group.activeTabId === null) return;
+    const tab = Array.from(list.querySelectorAll<HTMLElement>('[role="tab"]')).find((el) => el.dataset.tabId === group.activeTabId);
+    if (tab === undefined) return;
+    const outer = list.getBoundingClientRect();
+    const inner = tab.getBoundingClientRect();
+    const next = revealScrollLeft(
+      { scrollLeft: list.scrollLeft, width: list.clientWidth },
+      { left: inner.left - outer.left + list.scrollLeft, width: inner.width },
+    );
+    if (next !== list.scrollLeft) list.scrollLeft = next;
+  }, [group.activeTabId, group.tabs.length]);
+
   const content = (
     <div
       ref={setTablist}
       role="tablist"
       aria-label={S.tabs.tablist}
+      // Полоса прокрутки скрыта (fix-7-accept, п. 3): на macOS она накладная и после прокрутки
+      // перехватывала клики по нижней половине вкладок. Строку крутят колесо, жест и выбор вкладки.
       className={
         portal
-          ? 'flex h-full min-w-0 flex-1 items-center overflow-x-auto'
-          : 'flex h-8 min-w-0 shrink-0 items-center overflow-x-auto border-b border-border bg-card'
+          ? 'flex h-full min-w-0 flex-1 items-center overflow-x-auto [scrollbar-width:none]'
+          : 'flex h-8 min-w-0 shrink-0 items-center overflow-x-auto border-b border-border bg-card [scrollbar-width:none]'
       }
       style={{
         maskImage: 'linear-gradient(to right, transparent, black 12px, black calc(100% - 12px), transparent)',
