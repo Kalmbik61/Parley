@@ -2722,5 +2722,7 @@ dockview пока остаётся, его вкладки получают то�
   (MIT).
 - `TODOS.md`: закрыть «Хвосты окна», которые снимает этот дизайн (глобальный ключ
   раскладки `window` уходит вместе с v1); перенести туда раздел 17.
+- `core/work/guide.ts` и `brief.ts` — окно человека, блоки из окна, worktree сессии
+  (fix-guide).
 - План: `2026-09-26-desktop-orca-ui-plan.md` (индекс) и
   `2026-09-26-desktop-orca-ui-plan-{1-look,2-shell,3-cards,4-attention,5-terminal,6-palette,7-editor,8-review,9-browser}.md`.
