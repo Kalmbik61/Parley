@@ -6,8 +6,9 @@
  * (`files.cancel`), а ответ отменённого не показывается. Отменённый поиск main отвечает
  * найденным к этому моменту с `truncated` — сверка по своему `signalId`, а не по времени ответа.
  *
- * Регулярки git (ERE) и JS различаются: у найденной git строки `ranges` может быть пустым —
- * строка показывается без подсветки.
+ * Регулярки git и JS различаются: у найденной git строки `ranges` может быть пустым — строка
+ * показывается без подсветки. Git без PCRE ищет регулярку как POSIX ERE — тогда над результатами
+ * подсказка «POSIX regex» (раунд fix-7.4, п. 3).
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -83,6 +84,8 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
   const [regex, setRegex] = useState(false);
   const [result, setResult] = useState<GrepResult | null>(null);
   const [invalid, setInvalid] = useState(false);
+  /** Последний ответ на регулярку — POSIX ERE (git без PCRE, раунд fix-7.4, п. 3). */
+  const [posix, setPosix] = useState(false);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const focusSearch = useFilesStore((state) => state.focusSearch === root.workKey);
   const input = useRef<HTMLInputElement>(null);
@@ -126,6 +129,7 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
           running.current = null;
           setResult(next);
           setInvalid(false);
+          setPosix(next.posixRegex === true);
           setCollapsed(new Set());
         })
         .catch((error: unknown) => {
@@ -191,6 +195,11 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
           <Regex className="size-4" />
         </button>
       </div>
+      {regex && posix ? (
+        <div title={S.files.posixRegexHint} className="shrink-0 truncate border-b border-border px-3 py-1 text-xs text-muted-foreground">
+          {S.files.posixRegex}
+        </div>
+      ) : null}
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-1 text-xs">
         {invalid ? <div className="px-3 py-1.5 text-red-500">{S.files.invalidRegex}</div> : null}
         {result !== null && result.files.length === 0 ? <div className="px-3 py-1.5 text-muted-foreground">{S.files.noResults}</div> : null}

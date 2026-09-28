@@ -226,3 +226,30 @@ describe('SearchPanel — клик по совпадению (тест 3)', () =
     expect(useFilesStore.getState().reveals[bufferKey(KEY, id)]).toEqual({ line: 12, col: 7 });
   });
 });
+
+// Раунд fix-7.4, п. 3: git без PCRE ищет регулярку как POSIX ERE — панель говорит об этом.
+describe('SearchPanel — подсказка POSIX regex (раунд fix-7.4, п. 3)', () => {
+  it('ответ с posixRegex при «.*» — подсказка видна; «.*» выключена — не видна', async () => {
+    bridge.setGrepResult({ files: [], truncated: false, posixRegex: true });
+    render(<SearchPanel bridge={bridge} root={ROOT} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Use regular expression' }));
+    await type('\\d+');
+    expect(screen.queryByText('POSIX regex')).toBeNull();
+    await wait(250);
+    expect(screen.getByText('POSIX regex')).toBeTruthy();
+    bridge.setGrepResult(result([]));
+    fireEvent.click(screen.getByRole('button', { name: 'Use regular expression' }));
+    await wait(250);
+    expect(screen.queryByText('POSIX regex')).toBeNull();
+  });
+
+  it('ответ без posixRegex (git с PCRE, не-git корень) — подсказки нет', async () => {
+    bridge.setGrepResult(result([]));
+    render(<SearchPanel bridge={bridge} root={ROOT} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Use regular expression' }));
+    await type('\\d+');
+    await wait(250);
+    expect(screen.getByText('No results')).toBeTruthy();
+    expect(screen.queryByText('POSIX regex')).toBeNull();
+  });
+});

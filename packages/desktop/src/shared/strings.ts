@@ -703,6 +703,12 @@ export const S = {
     invalidRegex: 'Invalid regular expression',
     noResults: 'No results',
     /**
+     * Git этой машины без PCRE: регулярка на git-корне искалась как POSIX ERE (раунд fix-7.4, п. 3).
+     * Подсказка — в `title` строки.
+     */
+    posixRegex: 'POSIX regex',
+    posixRegexHint: 'Git on this machine has no PCRE: \\d, \\w and \\s do not work here. Use [0-9], [[:alnum:]_] and [[:space:]].',
+    /**
      * Превью (кусок 7.5, спека 10.6): переключатели шапки тела — «Code / Preview» у Markdown,
      * «Table / Code» у CSV и TSV; «Fit / 100%» картинки. Поиск ⌘F в PDF — строки полосы поиска
      * терминала (`S.terminal.findPlaceholder`, `previousMatch`, `nextMatch`), × — `S.common.close`.

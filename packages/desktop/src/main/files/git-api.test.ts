@@ -18,6 +18,7 @@ import {
   isSafeRev,
   parseGitStatus,
   parseLsFiles,
+  probePcre,
   runGrepWorker,
   walkFiles,
   type GitRunner,
@@ -743,7 +744,8 @@ describe('неверная регулярка (раунд fix-7.1b, п.3)', () =
   it('git: верная для RegExp, но не для ERE — прочий код git → failed', async () => {
     await initRepo(dir);
     await writeFile(path.join(dir, 'a.txt'), 'x\n');
-    expect(await codeOf(api(dir).grep(ROOT, Q('(?:x)', { regex: true }), 's'))).toBe('failed');
+    // ERE — у git без PCRE (раунд fix-7.4, п. 3); с PCRE `(?:x)` верна и находит.
+    expect(await codeOf(api(dir, createGitRunner(process.env), { probePcre: async () => false }).grep(ROOT, Q('(?:x)', { regex: true }), 's'))).toBe('failed');
   });
 });
 
@@ -871,5 +873,102 @@ describe('gitCommitFiles (кусок 8.3, тест 5)', () => {
     await writeFile(path.join(dir, 'a.ts'), 'a\n');
     const hash = commitAll(dir, 'first');
     expect(await api(dir).gitCommitFiles(ROOT, hash)).toEqual([{ path: 'a.ts', status: 'A', oldPath: null, additions: 1, deletions: 0 }]);
+  });
+});
+
+// Раунд fix-7.4, п. 3 (ревью 7.4-B, Minor 2): ERE не знает `\d`, `\w`, `\s` — git с PCRE ищет
+// регулярку через -P, как её понимает человек и RegExp не-git корня; без PCRE — -E и подсказка.
+describe('диалект регулярки git: проба -P (раунд fix-7.4, п. 3)', () => {
+  beforeEach(async () => {
+    await initRepo(dir);
+    await writeFile(path.join(dir, 'a.txt'), '// TODO(123) fix\n// TODO(x) no\n');
+  });
+
+  const grepArgs = (spy: ReturnType<typeof vi.spyOn>): string[][] =>
+    (spy.mock.calls as [string[]][]).map(([args]) => args).filter((args) => args.includes('grep') && !args.includes('--no-index'));
+
+  it('проба «есть» → -P, \\d+ находит; posixRegex нет; проба одна на api', async () => {
+    const runner = createGitRunner(process.env);
+    const spy = vi.spyOn(runner, 'run');
+    let probes = 0;
+    const a = api(dir, runner, {
+      probePcre: async () => {
+        probes += 1;
+        return true;
+      },
+    });
+    const result = await a.grep(ROOT, Q('TODO\\(\\d+\\)', { regex: true }), 's1');
+    expect(result.files[0]?.hits.map((hit) => hit.line)).toEqual([1]);
+    expect(result.posixRegex).toBeUndefined();
+    await a.grep(ROOT, Q('\\w+', { regex: true }), 's2');
+    expect(probes).toBe(1);
+    for (const args of grepArgs(spy)) {
+      expect(args).toContain('-P');
+      expect(args).not.toContain('-E');
+    }
+  });
+
+  it('проба «нет» → -E и posixRegex: true; без режима «.*» — -F, пробы нет', async () => {
+    const runner = createGitRunner(process.env);
+    const spy = vi.spyOn(runner, 'run');
+    let probes = 0;
+    const a = api(dir, runner, {
+      probePcre: async () => {
+        probes += 1;
+        return false;
+      },
+    });
+    const plain = await a.grep(ROOT, Q('TODO'), 's0');
+    expect(probes).toBe(0);
+    expect(plain.posixRegex).toBeUndefined();
+    const result = await a.grep(ROOT, Q('TODO\\([0-9]+\\)', { regex: true }), 's1');
+    expect(result.files[0]?.hits.map((hit) => hit.line)).toEqual([1]);
+    expect(result.posixRegex).toBe(true);
+    const [first, second] = grepArgs(spy);
+    expect(first).toContain('-F');
+    expect(second).toContain('-E');
+    expect(second).not.toContain('-P');
+  });
+
+  it('не-git корень пробу не зовёт и posixRegex не ставит', async () => {
+    await rm(path.join(dir, '.git'), { recursive: true, force: true });
+    let probes = 0;
+    const a = api(dir, createGitRunner(process.env), {
+      probePcre: async () => {
+        probes += 1;
+        return false;
+      },
+    });
+    const result = await a.grep(ROOT, Q('TODO\\(\\d+\\)', { regex: true }), 's');
+    expect(result.files[0]?.hits.map((hit) => hit.line)).toEqual([1]);
+    expect(result.posixRegex).toBeUndefined();
+    expect(probes).toBe(0);
+  });
+
+  it('probePcre: git grep --no-index -P во временной папке, не в корне; 0/1 — есть, 128 и ENOENT — нет; папка удалена', async () => {
+    const seen: Array<{ args: string[]; cwd: string }> = [];
+    const answer = (code: number | null): GitRunner => ({
+      run: async (args, cwd) => {
+        seen.push({ args, cwd });
+        expect(existsSync(cwd)).toBe(true);
+        return { code, stdout: Buffer.alloc(0), stderr: '', truncated: false };
+      },
+    });
+    expect(await probePcre(answer(1))).toBe(true);
+    expect(await probePcre(answer(0))).toBe(true);
+    expect(await probePcre(answer(128))).toBe(false);
+    const enoent: GitRunner = {
+      run: async () => {
+        throw Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' });
+      },
+    };
+    expect(await probePcre(enoent)).toBe(false);
+    for (const { args, cwd } of seen) {
+      expect(args).toEqual(['grep', '--no-index', '-P', '-e', 'x']);
+      expect(cwd.startsWith(tmpdir()) || cwd.startsWith(await realpath(tmpdir()))).toBe(true);
+      expect(existsSync(cwd)).toBe(false);
+    }
+    // Настоящий git этой машины (2.53, с PCRE).
+    expect(await probePcre(createGitRunner(process.env))).toBe(true);
   });
 });

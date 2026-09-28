@@ -92,6 +92,11 @@ export interface FileList {
 export interface GrepResult {
   files: Array<{ path: string; hits: GrepHit[] }>;
   truncated: boolean;
+  /**
+   * Регулярка искалась как POSIX ERE (`git grep -E`): у git этой машины нет PCRE, и `\d`, `\w`,
+   * `\s` не работают. Панель показывает подсказку (раунд fix-7.4, п. 3). Иначе поля нет.
+   */
+  posixRegex?: true;
 }
 
 /** Событие слежения за файлом: id подписки из `watch`, путь как его назвал `watch`. */

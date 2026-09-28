@@ -6,7 +6,8 @@
  * папка не под git) работает обходом `walkFiles` и поиском в воркере.
  */
 import { spawn } from 'node:child_process';
-import { lstat, readdir, realpath, stat } from 'node:fs/promises';
+import { lstat, mkdtemp, readdir, realpath, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Worker } from 'node:worker_threads';
 import { joinDiffFiles, parseNameStatusZ, parseNumstat } from '@harnas/core';
@@ -468,6 +469,24 @@ export async function gitCommitFiles(git: GitRunner, rootPath: string, hash: str
   return joinDiffFiles(parseNameStatusZ(status.stdout), parseNumstat(numstat.stdout));
 }
 
+/**
+ * Понимает ли git этой машины `grep -P` (PCRE; git без libpcre выходит с 128 ещё до поиска).
+ * Проба — `--no-index` в пустой временной папке: ни репозиторий человека, ни его файлы не читаются
+ * и не пишутся; папка удаляется. Сбой запуска и ENOENT — «нет»: останется ERE.
+ */
+export async function probePcre(git: GitRunner): Promise<boolean> {
+  let dir: string | null = null;
+  try {
+    dir = await mkdtemp(path.join(tmpdir(), 'harnas-pcre-'));
+    const result = await git.run(['grep', '--no-index', '-P', '-e', 'x'], dir);
+    return result.code === 0 || result.code === 1;
+  } catch {
+    return false;
+  } finally {
+    if (dir !== null) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 /** Воркер с заданием; cancel и предел времени — worker.terminate(), ответ — найденное к этому моменту с truncated. */
 export function runGrepWorker(
   job: GrepJob,
@@ -550,6 +569,8 @@ export interface GitApiOptions {
   walkBudgetMs?: number;
   /** Предел вывода `gitShow`; по умолчанию 20 МБ. */
   showMaxBytes?: number;
+  /** Проба `git grep -P` (раунд fix-7.4, п. 3); по умолчанию `probePcre`. Зовётся не больше раза на api. */
+  probePcre?: () => Promise<boolean>;
 }
 
 /** Путь для gitShow лексически: относительный, без NUL и `..` после нормализации; на диске его может не быть. */
@@ -573,6 +594,12 @@ export function createGitApi(options: GitApiOptions): GitApi {
    * каждое раскрытие, и без этого лог main шумел бы на каждом `list`. Растёт не больше числа папок.
    */
   const ignoreWarned = new Set<string>();
+  /**
+   * Ответ пробы PCRE — один на api, то есть на жизнь main (api создаётся раз): git человека за это
+   * время не меняется, а проба — лишний процесс. Спрашивается при первой регулярке на git-корне.
+   */
+  let pcre: Promise<boolean> | null = null;
+  const hasPcre = (): Promise<boolean> => (pcre ??= (options.probePcre ?? (() => probePcre(git)))());
 
   /** Вызов git для корня; git пропал из PATH после пробы — null, как у не-git корня. */
   const read = async (
@@ -630,11 +657,15 @@ export function createGitApi(options: GitApiOptions): GitApi {
       return { files: found.files, truncated: found.truncated || walked.truncated };
     };
     if ((await gitRootOf(git, rootPath)) === null) return walkAndGrep();
+    // Регулярка — PCRE (-P), если git её умеет: `\d`, `\w`, `\s` тогда работают, как у RegExp
+    // не-git корня; иначе ERE (-E), и ответ говорит об этом панели.
+    const posix = query.regex && !(await hasPcre());
     const flags = [
       ...(query.caseSensitive ? [] : ['-i']),
       ...(query.wholeWord ? ['-w'] : []),
-      query.regex ? '-E' : '-F',
+      query.regex ? (posix ? '-E' : '-P') : '-F',
     ];
+    const dialect = posix ? { posixRegex: true as const } : {};
     const parser = createGrepParser(GREP_LIMITS);
     // Запрос — только сразу после -e: иначе `-f/путь/вне/корней` git прочёл бы файлом шаблонов.
     // --column — окно строки вокруг совпадения и курсор на нём (раунд fix-7.4, п. 2).
@@ -642,17 +673,17 @@ export function createGitApi(options: GitApiOptions): GitApi {
     const result = await read(args, rootPath, { signal, onStdout: (chunk) => parser.push(chunk) });
     if (result === null) return walkAndGrep();
     const found = parser.result();
-    if (signal.aborted) return { files: found.files, truncated: true };
+    if (signal.aborted) return { files: found.files, truncated: true, ...dialect };
     // 0 — нашлось, 1 — нет; null — погашен на пределе. Прочее — ошибка git (битая регулярка и т.п.).
     if (result.code !== 0 && result.code !== 1 && !found.truncated) {
       throw new Error(`git grep exited with code ${String(result.code)}`);
     }
-    if (found.files.length === 0) return found;
+    if (found.files.length === 0) return { ...found, ...dialect };
     const ranged = await runGrepWorker(
       { kind: 'ranges', query, files: found.files },
       { signal, timeoutMs, spawn: options.spawnWorker },
     );
-    return { files: ranged.files, truncated: found.truncated || ranged.truncated };
+    return { files: ranged.files, truncated: found.truncated || ranged.truncated, ...dialect };
   };
 
   return {
