@@ -58,6 +58,39 @@ test.describe('окно поднимает хост и переживает ег
     expect(bridgeType).not.toBe('undefined');
   });
 
+  test('ожидаемый отказ канала не печатается в stderr main, сбой — печатается (fix-lane-post, п. 4)', async () => {
+    const app = await electron.launch({
+      args: [mainEntry],
+      env: { ...process.env, HARNAS_HOME: home },
+    });
+    running = app;
+    let mainLog = '';
+    app.process().stderr?.on('data', (chunk: Buffer) => {
+      mainLog += chunk.toString('utf8');
+    });
+    const window = await app.firstWindow();
+    await expect(window.getByTestId('landing')).toBeVisible();
+
+    const callCode = (method: string, params: unknown): Promise<string> =>
+      window.evaluate(
+        async ([m, p]) => {
+          const bridge = (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas;
+          return bridge.call(m, p).then(
+            () => 'ok',
+            (error: unknown) => String(error),
+          );
+        },
+        [method, params] as const,
+      );
+    // Неверные параметры — хост отвечает bad_request: окно покажет свой текст, это не сбой main.
+    expect(await callCode('works.create', {})).toContain('bad_request');
+    // Неизвестный метод — `failed`: такой отказ Electron по-прежнему печатает.
+    expect(await callCode('no.such.method', {})).toContain('failed');
+    await expect.poll(() => mainLog).toContain("Error occurred in handler for 'host:call'");
+    expect(mainLog).toContain('unknown method: no.such.method');
+    expect(mainLog).not.toContain('bad_request');
+  });
+
   test('второй запуск фокусирует первое окно и завершается сам', async () => {
     const first = await electron.launch({
       args: [mainEntry],
