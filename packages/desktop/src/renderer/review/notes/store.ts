@@ -188,8 +188,8 @@ export const useNotesStore: UseBoundStore<StoreApi<NotesState>> = create<NotesSt
       }),
 
     applyOutcome: (workKey, sessionId, ids, sentTo, outcome) => {
-      // Отправленным считается и вставка без Enter (`draft`, `input`, `restarted`): текст уже у
-      // агента, повторная отправка его задвоила бы. `blocked`, `busy`, `no-paste-mode` и отказ
+      // Отправленным считается и вставка без Enter (`draft`, `input`, `restarted`,
+      // `blocked-before-enter`): текст уже у агента, повторная отправка его задвоила бы. `blocked`, `busy`, `no-paste-mode` и отказ
       // вызова — без изменений: Retry тоста придёт сюда же своим исходом (решение сверки I2).
       if ('error' in outcome || !(outcome.inserted || outcome.submitted)) return;
       const wanted = new Set(ids);

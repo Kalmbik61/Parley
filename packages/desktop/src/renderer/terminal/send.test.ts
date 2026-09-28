@@ -27,6 +27,12 @@ describe('sendToast (тест 4): таблица 8.6', () => {
     ['draft', ok(true, false, 'draft'), false, { text: 'Inserted into S02 without Enter — your draft is in the input', actions: [], error: false }],
     ['input', ok(true, false, 'input'), false, { text: 'Inserted into S02 without Enter — you were typing in the terminal', actions: [], error: false }],
     ['restarted', ok(true, false, 'restarted'), false, { text: 'Inserted into S02 without Enter — the session restarted', actions: [], error: false }],
+    [
+      'blocked-before-enter (fix-final-b)',
+      ok(true, false, 'blocked-before-enter'),
+      false,
+      { text: 'Inserted into S02 without Enter — S02 is waiting for your answer in the terminal', actions: ['open'], error: false },
+    ],
     ['blocked', ok(false, false, 'blocked'), false, { text: 'S02 is waiting for your answer — text not inserted', actions: ['copy', 'open'], error: true }],
     ['busy', ok(false, false, 'busy'), false, { text: 'S02 is busy with another message — retry in a second', actions: ['retry'], error: true }],
     ['no-paste-mode', ok(false, false, 'no-paste-mode'), false, { text: "S02 doesn't accept multi-line paste", actions: ['copy'], error: true }],

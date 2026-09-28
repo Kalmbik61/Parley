@@ -101,7 +101,7 @@ describe('pty.send', () => {
     expectTypeOf<Result<'pty.send'>>().toEqualTypeOf<{
       inserted: boolean;
       submitted: boolean;
-      reason: 'blocked' | 'busy' | 'no-paste-mode' | 'draft' | 'input' | 'restarted' | null;
+      reason: 'blocked' | 'busy' | 'no-paste-mode' | 'draft' | 'input' | 'restarted' | 'blocked-before-enter' | null;
     }>();
   });
 });

@@ -61,6 +61,9 @@ export function sendToast(outcome: SendOutcome, label: string, resumable: boolea
       return { text: S.send.insertedInput(label), actions: [], error: false };
     case 'restarted':
       return { text: S.send.insertedRestarted(label), actions: [], error: false };
+    case 'blocked-before-enter':
+      // Текст уже в поле ввода; ответить на диалог человек может только в терминале — туда «Open».
+      return { text: S.send.insertedBlocked(label), actions: ['open'], error: false };
     case 'blocked':
       return { text: S.send.blocked(label), actions: ['copy', 'open'], error: true };
     case 'busy':

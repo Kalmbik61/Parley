@@ -53,7 +53,8 @@ export type SendReason =
   | 'no-paste-mode' // многострочный текст, а агент не включил bracketed paste: не вставлен
   | 'draft' // вставлен без Enter: в поле ввода черновик
   | 'input' // вставлен без Enter: человек печатал в окне ожидания Enter
-  | 'restarted'; // вставлен без Enter: процесс сессии сменился за ожидание
+  | 'restarted' // вставлен без Enter: процесс сессии сменился за ожидание
+  | 'blocked-before-enter'; // вставлен без Enter: за ожидание агент показал диалог (fix-final-b)
 
 export interface SendResult {
   inserted: boolean;

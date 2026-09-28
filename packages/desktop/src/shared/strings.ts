@@ -359,6 +359,9 @@ export const S = {
     insertedDraft: (session: string): string => `Inserted into ${session} without Enter — your draft is in the input`,
     insertedInput: (session: string): string => `Inserted into ${session} without Enter — you were typing in the terminal`,
     insertedRestarted: (session: string): string => `Inserted into ${session} without Enter — the session restarted`,
+    /** Агент показал диалог за паузу перед Enter — Enter в него не жмём (fix-final-b, спека 8.6). */
+    insertedBlocked: (session: string): string =>
+      `Inserted into ${session} without Enter — ${session} is waiting for your answer in the terminal`,
     blocked: (session: string): string => `${session} is waiting for your answer — text not inserted`,
     busy: (session: string): string => `${session} is busy with another message — retry in a second`,
     noPasteMode: (session: string): string => `${session} doesn't accept multi-line paste`,
