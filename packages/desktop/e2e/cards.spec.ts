@@ -1,11 +1,11 @@
 import { existsSync } from 'node:fs';
-import { appendFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { appendFile, mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
-import { makeTempProject } from './tmp.js';
+import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
  * Карточки сайдбара (кусок 3.5, приёмка этапа 3, спека 6.2 и 6.6): порядок по вниманию, а не
@@ -77,12 +77,12 @@ test.describe('карточки сайдбара и форма новой раб
   let app: ElectronApplication | null = null;
 
   test.beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-cards-'));
+    home = await makeTempHome('cards');
     project = await makeTempProject('cards');
   });
 
   test.afterEach(async () => {
-    await app?.close().catch(() => {});
+    await stopApp(app);
     app = null;
     await stopHost(home);
     await rm(home, { recursive: true, force: true });

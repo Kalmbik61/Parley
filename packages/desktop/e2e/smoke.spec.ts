@@ -1,16 +1,17 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { _electron as electron, expect, test } from '@playwright/test';
+import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test';
 // Требуется для второго теста: путь к самому бинарю Electron, не к
 // электронной обёртке API. Импорт `electron` вне рантайма Electron
 // возвращает именно этот путь строкой (тот же механизм, что использует
 // playwright-core внутри electron.launch()).
 import electronBinary from 'electron';
+import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
+import { makeTempHome } from './tmp.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
@@ -25,12 +26,16 @@ test.skip(!hostReady, `packages/host/dist/main.js не собран — снач
 
 test.describe('окно поднимает хост и переживает его перезапуск', () => {
   let home: string;
+  /** Окно теста — его гасит afterEach, и после упавшего теста тоже. */
+  let running: ElectronApplication | null = null;
 
   test.beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-'));
+    home = await makeTempHome('smoke');
   });
 
   test.afterEach(async () => {
+    await stopApp(running);
+    running = null;
     await stopHost(home);
     await rm(home, { recursive: true, force: true });
   });
@@ -40,6 +45,7 @@ test.describe('окно поднимает хост и переживает ег
       args: [mainEntry],
       env: { ...process.env, HARNAS_HOME: home },
     });
+    running = app;
 
     const window = await app.firstWindow();
     await expect(window.getByTestId('landing')).toBeVisible();
@@ -50,8 +56,6 @@ test.describe('окно поднимает хост и переживает ег
 
     const bridgeType = await window.evaluate(() => typeof (globalThis as { harnas?: unknown }).harnas);
     expect(bridgeType).not.toBe('undefined');
-
-    await app.close();
   });
 
   test('второй запуск фокусирует первое окно и завершается сам', async () => {
@@ -59,6 +63,7 @@ test.describe('окно поднимает хост и переживает ег
       args: [mainEntry],
       env: { ...process.env, HARNAS_HOME: home },
     });
+    running = first;
     await first.firstWindow();
 
     // Второй экземпляр обычно завершается (app.quit()) раньше, чем Playwright
@@ -75,6 +80,5 @@ test.describe('окно поднимает хост и переживает ег
     expect(secondExitCode).toBe(0);
 
     expect(first.windows().length).toBe(1);
-    await first.close();
   });
 });

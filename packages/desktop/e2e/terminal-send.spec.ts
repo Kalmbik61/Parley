@@ -1,11 +1,11 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
-import { makeTempProject } from './tmp.js';
+import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
  * Отправка из окна агенту (кусок 5.4, тест 10; спека 8.5, 8.6). Агент — stub в режиме
@@ -81,7 +81,7 @@ test.describe('отправка агенту из окна (кусок 5.4)', ()
   let ref: Ref;
 
   test.beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-send-'));
+    home = await makeTempHome('send');
     project = await makeTempProject('terminal-send');
     const env = {
       ...process.env,
@@ -121,7 +121,8 @@ test.describe('отправка агенту из окна (кусок 5.4)', ()
   });
 
   test.afterEach(async () => {
-    await app.close();
+    // beforeEach мог упасть раньше запуска — тогда здесь окно прошлого теста, уже погашенное.
+    await stopApp(app ?? null);
     await stopHost(home);
     await rm(home, { recursive: true, force: true });
     await rm(project, { recursive: true, force: true });

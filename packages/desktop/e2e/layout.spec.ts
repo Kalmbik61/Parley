@@ -1,11 +1,11 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rm, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { quitApp, stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
-import { makeTempProject } from './tmp.js';
+import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
  * Раскладка на работу переживает перезапуск окна (кусок 2.7 плана каркаса,
@@ -76,12 +76,12 @@ test.describe('раскладка на работу переживает пер�
   let app: ElectronApplication | null = null;
 
   test.beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-layout-'));
+    home = await makeTempHome('layout');
     project = await makeTempProject('layout');
   });
 
   test.afterEach(async () => {
-    await app?.close().catch(() => {});
+    await stopApp(app);
     app = null;
     await stopHost(home);
     await rm(home, { recursive: true, force: true });
@@ -150,7 +150,7 @@ test.describe('раскладка на работу переживает пер�
       )
       .toEqual({ a: layoutA, b: layoutB, active: keyB });
 
-    await electronApp.close();
+    await quitApp(electronApp);
     app = null;
 
     ({ electronApp, window } = await launch());

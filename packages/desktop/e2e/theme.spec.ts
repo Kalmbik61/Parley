@@ -21,12 +21,13 @@
  */
 
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { _electron as electron, expect, test } from '@playwright/test';
+import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test';
+import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
+import { makeTempHome } from './tmp.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
@@ -39,12 +40,16 @@ test.skip(!hostReady, `packages/host/dist/main.js не собран — снач
 
 test.describe('тема окна следует за системной схемой (кусок 1.4 плана «облик Orca», спека 4.7)', () => {
   let home: string;
+  /** Окно теста — его гасит afterEach, и после упавшего теста тоже. */
+  let running: ElectronApplication | null = null;
 
   test.beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-theme-'));
+    home = await makeTempHome('theme');
   });
 
   test.afterEach(async () => {
+    await stopApp(running);
+    running = null;
     await stopHost(home);
     await rm(home, { recursive: true, force: true });
   });
@@ -55,6 +60,7 @@ test.describe('тема окна следует за системной схем
       env: { ...process.env, HARNAS_HOME: home },
       colorScheme: 'dark',
     });
+    running = app;
 
     const window = await app.firstWindow();
     await window.waitForFunction(() => matchMedia('(prefers-color-scheme: dark)').matches);
@@ -62,8 +68,6 @@ test.describe('тема окна следует за системной схем
     await window.waitForFunction(() => matchMedia('(prefers-color-scheme: dark)').matches);
     const background = await window.evaluate(() => getComputedStyle(document.body).backgroundColor);
     expect(background).toBe('rgb(10, 10, 10)');
-
-    await app.close();
   });
 
   test('светлая схема ОС — фон body #ffffff', async () => {
@@ -72,6 +76,7 @@ test.describe('тема окна следует за системной схем
       env: { ...process.env, HARNAS_HOME: home },
       colorScheme: 'light',
     });
+    running = app;
 
     const window = await app.firstWindow();
     await window.waitForFunction(() => !matchMedia('(prefers-color-scheme: dark)').matches);
@@ -79,7 +84,5 @@ test.describe('тема окна следует за системной схем
     await window.waitForFunction(() => !matchMedia('(prefers-color-scheme: dark)').matches);
     const background = await window.evaluate(() => getComputedStyle(document.body).backgroundColor);
     expect(background).toBe('rgb(255, 255, 255)');
-
-    await app.close();
   });
 });

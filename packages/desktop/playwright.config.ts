@@ -12,6 +12,8 @@ process.env.HARNAS_DROPS = 'fake';
 
 export default defineConfig({
   testDir: './e2e',
+  // Список домов прогона и уборка хостов по нему в конце (e2e/global-setup.ts).
+  globalSetup: './e2e/global-setup.ts',
   timeout: 30_000,
   fullyParallel: false,
   retries: 0,

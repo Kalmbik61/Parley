@@ -1,11 +1,11 @@
 import { existsSync } from 'node:fs';
-import { appendFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { appendFile, mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
-import { makeTempProject } from './tmp.js';
+import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
  * Внимание в строке статуса (кусок 4.2, спека 7.3, 7.6): сессия, ждущая разрешения, даёт
@@ -48,12 +48,12 @@ test.describe('внимание в строке статуса (кусок 4.2)'
   let app: ElectronApplication | null = null;
 
   test.beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-attention-'));
+    home = await makeTempHome('attention');
     project = await makeTempProject('attention');
   });
 
   test.afterEach(async () => {
-    await app?.close().catch(() => {});
+    await stopApp(app);
     app = null;
     await stopHost(home);
     await rm(home, { recursive: true, force: true });
@@ -140,12 +140,12 @@ test.describe('переход по уведомлению и «просмотр�
   let app: ElectronApplication | null = null;
 
   test.beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-attention-'));
+    home = await makeTempHome('attention');
     project = await makeTempProject('attention');
   });
 
   test.afterEach(async () => {
-    await app?.close().catch(() => {});
+    await stopApp(app);
     app = null;
     await stopHost(home);
     await rm(home, { recursive: true, force: true });

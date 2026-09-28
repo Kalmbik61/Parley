@@ -1,12 +1,13 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
+import { makeTempHome } from './tmp.js';
 
 /**
  * Спайк куска 9.1 (спека 12.2) — постоянным тестом. Внешних сайтов нет: только свой сервер на
@@ -75,7 +76,7 @@ test.describe('клетка встроенного браузера (кусок 
   };
 
   test.beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'hh-e2e-browser-'));
+    home = await makeTempHome('browser');
     server = createServer((req, res) => {
       const page = PAGES[new URL(req.url ?? '/', 'http://x').pathname];
       if (page === undefined) {
@@ -89,13 +90,9 @@ test.describe('клетка встроенного браузера (кусок 
   });
 
   test.afterEach(async () => {
-    if (app !== null) {
-      // Хост поднимается параллельно окну: без pid-файла stopHost его не найдёт, и хост переживёт
-      // тест. Закрытие — и после упавшего теста.
-      await expect.poll(() => existsSync(path.join(home, 'host', 'host.pid')), { timeout: 15_000 }).toBe(true);
-      await app.close();
-      app = null;
-    }
+    // Хост без pid-файла (ещё стартует) stopHost тоже находит — ждать его не нужно.
+    await stopApp(app);
+    app = null;
     await stopHost(home);
     await rm(home, { recursive: true, force: true });
     await new Promise<void>((resolve) => server.close(() => resolve()));
