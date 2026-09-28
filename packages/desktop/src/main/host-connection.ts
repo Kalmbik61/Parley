@@ -20,12 +20,22 @@ interface PendingCall {
   reject: (error: Error) => void;
 }
 
+/** Процесс хоста, запущенный окном: жив ли он ещё (раунд lane-r4). */
+export interface SpawnedHost {
+  isRunning(): boolean;
+}
+
 export interface HostConnectionOptions {
   paths: HostPaths;
   env: NodeJS.ProcessEnv;
-  /** Поднимает хост (реальный процесс в проде, фейковый сервер в тестах). */
-  spawn: () => void;
+  /**
+   * Поднимает хост (реальный процесс в проде, фейковый сервер в тестах). Процесс — чтобы не
+   * запускать второй, пока первый жив; null — процесса нет (не запустился или подставной сервер).
+   */
+  spawn: () => SpawnedHost | null | Promise<SpawnedHost | null>;
   connectTimeoutMs?: number;
+  /** Сколько ждать сокета от живого запущенного процесса, прежде чем сказать человеку «не отвечает». */
+  hostStartTimeoutMs?: number;
 }
 
 /** Ошибка протокола, дошедшая от хоста в ответе на запрос. */
@@ -53,8 +63,16 @@ function delay(ms: number): Promise<void> {
  */
 export class HostConnection {
   private readonly paths: HostPaths;
-  private readonly spawnHostProcess: () => void;
+  private readonly spawnHostProcess: HostConnectionOptions['spawn'];
   private readonly connectTimeoutMs: number;
+  private readonly hostStartTimeoutMs: number;
+  /**
+   * Последний запущенный окном процесс хоста и время запуска (раунд lane-r4). Пока он жив или
+   * ещё запускается, второй не запускается: новый хост при медленном старте первого его и сносил.
+   */
+  private spawnedHost: SpawnedHost | null = null;
+  private spawning = false;
+  private spawnedAt = 0;
 
   private socket: Socket | null = null;
   private decoder = new LineDecoder();
@@ -83,6 +101,31 @@ export class HostConnection {
     this.paths = options.paths;
     this.spawnHostProcess = options.spawn;
     this.connectTimeoutMs = options.connectTimeoutMs ?? 5000;
+    this.hostStartTimeoutMs = options.hostStartTimeoutMs ?? 30_000;
+  }
+
+  /** Запущенный окном хост ещё запускается или жив. */
+  private hostStarting(): boolean {
+    return this.spawning || (this.spawnedHost?.isRunning() ?? false);
+  }
+
+  private startHostProcess(): void {
+    this.spawning = true;
+    this.spawnedHost = null;
+    this.spawnedAt = Date.now();
+    void Promise.resolve()
+      .then(() => this.spawnHostProcess())
+      .then(
+        (spawned) => {
+          this.spawnedHost = spawned;
+        },
+        (error: unknown) => {
+          console.error('[harnas] failed to start host', error);
+        },
+      )
+      .finally(() => {
+        this.spawning = false;
+      });
   }
 
   onEvent(listener: (message: EventMessage) => void): () => void {
@@ -141,14 +184,23 @@ export class HostConnection {
         if (this.spawnFailure !== null) {
           throw new Error(this.spawnFailure);
         }
-        if (Date.now() >= deadline) {
-          const message = err instanceof Error ? err.message : String(err);
+        const now = Date.now();
+        if (now >= deadline) {
+          // Запущенный процесс жив — ждём его сокета до срока старта, а не запускаем второй.
+          const starting = this.hostStarting();
+          if (starting && now < this.spawnedAt + this.hostStartTimeoutMs) {
+            await delay(150);
+            continue;
+          }
+          const message = starting ? S.connection.reasonHostNotAnswering : err instanceof Error ? err.message : String(err);
           this.setStatus({ state: 'disconnected', reason: message });
           throw err instanceof Error ? err : new Error(message);
         }
-        if (!spawned) {
+        // Процесс прошлой попытки ещё жив (петля переподключения, уходящий после host.shutdown) —
+        // второй не запускается; вышел — запуск на следующем круге.
+        if (!spawned && !this.hostStarting()) {
           spawned = true;
-          this.spawnHostProcess();
+          this.startHostProcess();
         }
         await delay(150);
       }

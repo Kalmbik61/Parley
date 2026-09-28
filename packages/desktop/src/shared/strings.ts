@@ -448,6 +448,8 @@ export const S = {
     reasonNodeNotFound: 'node not found in login-shell PATH',
     /** `main/host-connection.ts` — сокет закрылся, ждём переподключения. */
     reasonClosed: 'Connection to host closed',
+    /** `main/host-connection.ts` — запущенный процесс хоста жив, а сокета нет дольше срока старта (lane-r4). */
+    reasonHostNotAnswering: 'Host process is running but not answering',
   },
 
   /**

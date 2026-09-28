@@ -119,32 +119,32 @@ if (!gotLock) {
     const connection = new HostConnection({
       paths,
       env: shellEnv.env,
-      spawn: () => {
-        void (async () => {
-          // Системный node, не бинарь Electron: node-pty хоста собран под ABI
-          // системного Node и под Node самого Electron не загрузится (спека 3.2).
-          const nodeBin = await resolveNodeBin(shellEnv.env);
-          if (nodeBin === null) {
-            const reason = S.connection.reasonNodeNotFound;
-            console.error(`[harnas] ${reason}`);
-            connection.reportUnavailable(reason);
-            return;
-          }
-          try {
-            const entry = resolveHostEntry({
-              packaged: app.isPackaged,
-              resourcesPath: process.resourcesPath,
-            });
-            spawnHost({
-              env: shellEnv.env,
-              entry,
-              nodeBin,
-              stderrFile: path.join(paths.dir, 'host.err'),
-            });
-          } catch (err) {
-            console.error('[harnas] failed to start host', err);
-          }
-        })();
+      // Процесс хоста — соединению: пока он жив, второй не запускается (раунд lane-r4).
+      spawn: async () => {
+        // Системный node, не бинарь Electron: node-pty хоста собран под ABI
+        // системного Node и под Node самого Electron не загрузится (спека 3.2).
+        const nodeBin = await resolveNodeBin(shellEnv.env);
+        if (nodeBin === null) {
+          const reason = S.connection.reasonNodeNotFound;
+          console.error(`[harnas] ${reason}`);
+          connection.reportUnavailable(reason);
+          return null;
+        }
+        try {
+          const entry = resolveHostEntry({
+            packaged: app.isPackaged,
+            resourcesPath: process.resourcesPath,
+          });
+          return spawnHost({
+            env: shellEnv.env,
+            entry,
+            nodeBin,
+            stderrFile: path.join(paths.dir, 'host.err'),
+          });
+        } catch (err) {
+          console.error('[harnas] failed to start host', err);
+          return null;
+        }
       },
     });
 

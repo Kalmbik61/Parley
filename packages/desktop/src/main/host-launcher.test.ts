@@ -132,4 +132,15 @@ describe('spawnHost', () => {
       .poll(async () => readFile(stderrFile, 'utf8').catch(() => ''), { timeout: 4000 })
       .toContain('хост упал');
   });
+
+  it('возвращает признак жизни процесса: жив до выхода, после выхода — нет (lane-r4, п. 2)', async () => {
+    const entry = path.join(home, 'short.mjs');
+    await writeFile(entry, 'setTimeout(() => {}, 300);\n');
+    const stderrFile = path.join(home, 'host', 'host.err');
+
+    const spawned = spawnHost({ env: process.env, entry, nodeBin: process.execPath, stderrFile });
+
+    expect(spawned.isRunning()).toBe(true);
+    await expect.poll(() => spawned.isRunning(), { timeout: 4000 }).toBe(false);
+  });
 });

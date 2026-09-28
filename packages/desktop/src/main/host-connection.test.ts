@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { HostPaths } from '@harnas/host';
 import { encodeLine, LineDecoder, PROTOCOL_VERSION } from '@harnas/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { S } from '../shared/strings.js';
 import { HostConnection } from './host-connection.js';
 
 interface FakeServerOptions {
@@ -128,6 +129,7 @@ describe('HostConnection', () => {
       void startFakeServer(paths).then((s) => {
         server = s;
       });
+      return null;
     });
     const connection = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 2000 });
 
@@ -149,6 +151,7 @@ describe('HostConnection', () => {
       void startFakeServer(paths).then((s) => {
         server = s;
       });
+      return null;
     });
     const connection = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 2000 });
 
@@ -242,6 +245,7 @@ describe('HostConnection', () => {
       void startFakeServer(paths).then((s) => {
         server = s;
       });
+      return null;
     });
     const connection = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 2000 });
     await connection.connect();
@@ -273,6 +277,83 @@ describe('HostConnection', () => {
     expect(accepted).toBe(1);
     connection.close();
     server.close();
+  }, 10000);
+
+  it('медленный хост: сокет через 8 с после запуска, процесс жив — один запуск, связь есть (lane-r4, п. 2)', async () => {
+    await writeToken(paths);
+    let server: Server | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const spawn = vi.fn(() => {
+      timer = setTimeout(() => {
+        void startFakeServer(paths).then((s) => {
+          server = s;
+        });
+      }, 8000);
+      return { isRunning: () => true };
+    });
+    const connection = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 5000 });
+    try {
+      await connection.connect();
+      expect(spawn).toHaveBeenCalledTimes(1);
+    } finally {
+      clearTimeout(timer);
+      connection.close();
+      server?.close();
+    }
+  }, 15000);
+
+  it('запущенный процесс жив, а сокета нет дольше срока старта — отказ человеку, второго запуска нет (lane-r4, п. 2)', async () => {
+    await writeToken(paths);
+    const statuses: string[] = [];
+    const spawn = vi.fn(() => ({ isRunning: () => true }));
+    const connection = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 300, hostStartTimeoutMs: 800 });
+    connection.onStatus((status) => {
+      if (status.state === 'disconnected') statuses.push(status.reason);
+    });
+    await expect(connection.connect()).rejects.toThrow();
+    expect(statuses.at(-1)).toBe(S.connection.reasonHostNotAnswering);
+    // Повторная попытка (петля переподключения) при живом процессе хост не запускает.
+    await expect(connection.restartHost()).rejects.toThrow();
+    expect(spawn).toHaveBeenCalledTimes(1);
+    connection.close();
+  }, 10000);
+
+  it('запущенный процесс вышел (например, код 3 — «уже запущен») — обычный срок, без ожидания старта (lane-r4, п. 2)', async () => {
+    await writeToken(paths);
+    const spawn = vi.fn(() => ({ isRunning: () => false }));
+    const connection = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 300, hostStartTimeoutMs: 60_000 });
+    const started = Date.now();
+    await expect(connection.connect()).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(5000);
+    connection.close();
+  }, 10000);
+
+  it('прежний запущенный процесс ещё жив (уходит после host.shutdown) — новый запуск только после его выхода (lane-r4, п. 2)', async () => {
+    await writeToken(paths);
+    let running = true;
+    let server: Server | undefined;
+    const spawn = vi.fn(() => {
+      // Первый запуск — процесс без сокета; второй поднимает сервер.
+      if (spawn.mock.calls.length > 1) {
+        void startFakeServer(paths).then((s) => {
+          server = s;
+        });
+      }
+      return { isRunning: () => running };
+    });
+    const connection = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 1000, hostStartTimeoutMs: 500 });
+    await expect(connection.connect()).rejects.toThrow();
+    expect(spawn).toHaveBeenCalledTimes(1);
+
+    // Следующая попытка при живом процессе не запускает; процесс вышел — запуск в той же попытке.
+    const retry = connection.connect();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(spawn).toHaveBeenCalledTimes(1);
+    running = false;
+    await retry;
+    expect(spawn).toHaveBeenCalledTimes(2);
+    connection.close();
+    server?.close();
   }, 10000);
 
   it('notify без связи — не молча: предупреждение в консоли main со счётчиком (lane-r3, п. 2)', () => {

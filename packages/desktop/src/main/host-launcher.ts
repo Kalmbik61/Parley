@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { harnasHome } from '@harnas/core';
 import type { HostPaths } from '@harnas/host';
+import type { SpawnedHost } from './host-connection.js';
 
 const require = createRequire(import.meta.url);
 
@@ -81,7 +82,7 @@ export function spawnHost(options: {
   entry: string;
   nodeBin: string;
   stderrFile: string;
-}): void {
+}): SpawnedHost {
   // Каталог хоста при первом запуске ещё не создан — его права хост потом выставит сам.
   mkdirSync(path.dirname(options.stderrFile), { recursive: true, mode: 0o700 });
   const stderr = openSync(options.stderrFile, 'a', 0o600);
@@ -92,6 +93,16 @@ export function spawnHost(options: {
       stdio: ['ignore', 'ignore', stderr],
     });
     child.unref();
+    // Окно не запускает второй хост, пока этот жив (раунд lane-r4). 'exit' приходит и у
+    // отвязанного процесса, пока жив main; 'error' — не запустился вовсе.
+    let running = true;
+    child.once('exit', () => {
+      running = false;
+    });
+    child.once('error', () => {
+      running = false;
+    });
+    return { isRunning: () => running };
   } finally {
     closeSync(stderr);
   }
