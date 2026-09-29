@@ -7,16 +7,21 @@
  */
 
 import { useLayoutEffect, useRef } from 'react';
+import { toast } from 'sonner';
 import type { WorkEntry, WorkMap } from '@harnas/core';
 import type { HarnasBridge } from '../../../shared/bridge.js';
-import { S } from '../../../shared/strings.js';
+import { decodeIpcError } from '../../../shared/ipc-error.js';
+import { S, errorText } from '../../../shared/strings.js';
 import { isHumanUnread } from '../../attention/derive.js';
 import { useMarkRead } from '../../attention/use-mark-read.js';
 import { roomView } from '../../lib/room-view.js';
-import { participantTag } from '../../lib/participant-tag.js';
+import { workKey } from '../../lib/tree-order.js';
+import type { ActivityEntry } from '../../store/activity.js';
+import { composerDraftKey } from '../../store/ui.js';
 import { Decisions } from '../mail/Decisions.js';
 import { Letter } from '../mail/Letter.js';
-import { Composer, type ComposerMember, type ComposerSubmission } from './Composer.js';
+import { Composer, type ComposerSubmission } from './Composer.js';
+import { buildRoomModel } from './feed-model.js';
 import { RoomHeader } from './RoomHeader.js';
 
 export interface RoomPanelProps {
@@ -24,16 +29,12 @@ export interface RoomPanelProps {
   roomId: string;
   providers: Array<{ id: string; label: string }>;
   models: Record<string, string | null>;
+  /** Живая активность сессий (`useActivityStore.byRef`): слово состояния в меню упоминаний. */
+  activity: Record<string, ActivityEntry>;
   bridge: HarnasBridge;
   /** Работа активна (`LayoutBodyContext.active`): сообщения скрытой работы LRU не отмечаются прочитанными. */
   active: boolean;
   onOpenExternal: (url: string) => void;
-}
-
-/** Закрытая сессия или уже удалённая — недоступна как адресат (спека 6.3). */
-function isClosed(map: WorkMap, id: string): boolean {
-  const session = map.sessions.find((candidate) => candidate.id === id);
-  return session === undefined || session.lifecycle === 'closed';
 }
 
 /** Сообщение карты не прочитано человеком; пропавшее из карты — не кандидат. */
@@ -42,7 +43,7 @@ function isUnreadInMap(map: WorkMap, messageId: string): boolean {
   return message !== undefined && isHumanUnread(message);
 }
 
-export function RoomPanel({ entry, roomId, providers, models, bridge, active, onOpenExternal }: RoomPanelProps): JSX.Element {
+export function RoomPanel({ entry, roomId, providers, models, activity, bridge, active, onOpenExternal }: RoomPanelProps): JSX.Element {
   const view = roomView(entry, roomId, providers, models);
   // Хук — до раннего выхода «комнаты нет»: порядок хуков не должен зависеть от данных.
   const markRead = useMarkRead({ bridge, projectPath: entry.projectPath, workId: entry.map.work.id, active });
@@ -61,13 +62,11 @@ export function RoomPanel({ entry, roomId, providers, models, bridge, active, on
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{S.rooms.notFound}</div>;
   }
 
-  const members: ComposerMember[] = view.memberIds.map((id) => ({
-    id,
-    label: participantTag(entry.map, id, models[id] ?? null, providers),
-    closed: isClosed(entry.map, id),
-  }));
+  // Упомянуть можно живую сессию комнаты: закрытая письма не получит.
+  const members = (buildRoomModel({ entry, roomId, providers, activity })?.participants ?? []).filter((participant) => !participant.closed);
+  const draftKey = composerDraftKey(workKey(entry.projectPath, entry.map.work.id), roomId);
 
-  const handleSend = (submission: ComposerSubmission): void => {
+  const handleSend = (submission: ComposerSubmission): Promise<void> =>
     bridge
       .call('rooms.send', {
         projectPath: entry.projectPath,
@@ -75,14 +74,16 @@ export function RoomPanel({ entry, roomId, providers, models, bridge, active, on
         roomId,
         to: submission.to,
         text: submission.text,
-        kind: submission.kind,
+        kind: 'note',
       })
-      .catch(() => {
-        // Ошибку (лимит `messageRate`, не участник и т. п.) поле ввода пока не
-        // показывает — сообщение просто не уходит, так же, как терминал не
-        // показывает ответ хоста построчно.
-      });
-  };
+      .then(
+        () => undefined,
+        (error: unknown) => {
+          // Не ушло (не участник, хост недоступен…): человек узнаёт об этом, а поле ввода вернёт текст.
+          toast(errorText(decodeIpcError(error).code, S.rooms.sendAction));
+          throw error;
+        },
+      );
 
   return (
     <div className="flex h-full flex-col">
@@ -98,7 +99,7 @@ export function RoomPanel({ entry, roomId, providers, models, bridge, active, on
           />
         ))}
       </div>
-      <Composer members={members} onSend={handleSend} />
+      <Composer key={draftKey} members={members} draftKey={draftKey} onSend={handleSend} />
     </div>
   );
 }

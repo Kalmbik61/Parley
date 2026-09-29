@@ -214,12 +214,6 @@ export const S = {
     fallbackTitle: 'Room',
     notFound: 'Room not found',
     everyone: 'everyone',
-    kindLabels: {
-      note: 'Note',
-      question: 'Question',
-      decision: 'Decision',
-    },
-    composerPlaceholder: '⌘Enter to send',
     send: 'Send',
     createTitle: (label: string): string => `Create room with ${label}`,
     nameField: 'Name',
@@ -236,6 +230,18 @@ export const S = {
     leadIs: (tag: string): string => `lead ${tag}`,
     /** `→ all` в мете сообщения: письмо всем участникам. */
     toAll: 'all',
+    /** Тултип карточки участника и мета пункта меню упоминаний: провайдер и слово состояния. Модели и усилия карта не хранит. */
+    providerState: (provider: string, word: string): string => `${provider} · ${word}`,
+    /** Поле ввода: подпись над ним, плейсхолдер, имя для скринридера. */
+    toEveryone: 'To everyone',
+    toList: (tags: string): string => `To ${tags}`,
+    composerPlaceholder: 'Write to everyone · type @ to mention an agent',
+    messageField: 'Message',
+    /** Меню упоминаний. */
+    mentionHeading: 'Agents in this room',
+    mentionEmpty: 'No agents match',
+    /** «Couldn't <действие>: …» — `errorText`. */
+    sendAction: 'send the message',
   },
 
   /** Настройки — `settings/SettingsDialog.tsx`. */

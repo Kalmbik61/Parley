@@ -47,6 +47,7 @@ export function RoomBody({ bridge, entry, roomId, active }: RoomBodyProps): JSX.
       roomId={roomId}
       providers={providers}
       models={models}
+      activity={activityByRef}
       bridge={bridge}
       active={active}
       onOpenExternal={(url) => void bridge.app.openExternal(url)}
