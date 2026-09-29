@@ -549,4 +549,17 @@ describe('deleteSessionFiles', () => {
 
     await expect(deleteSessionFiles(project, map.work.id, 's-01')).resolves.toBeUndefined();
   });
+
+  it('27: файл лимитов строки статуса уходит вместе с сессией, соседний остаётся', async () => {
+    const map = await createWork(project, { title: 'Авторизация' });
+    const { limits } = workPaths(project, map.work.id);
+    await mkdir(limits, { recursive: true });
+    await writeFile(path.join(limits, 's-01.json'), '{}\n', 'utf8');
+    await writeFile(path.join(limits, 's-02.json'), '{}\n', 'utf8');
+
+    await deleteSessionFiles(project, map.work.id, 's-01');
+
+    expect(await exists(path.join(limits, 's-01.json'))).toBe(false);
+    expect(await exists(path.join(limits, 's-02.json'))).toBe(true);
+  });
 });
