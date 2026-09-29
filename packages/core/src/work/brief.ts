@@ -130,7 +130,14 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
     return [`${head}ведущий — ${name}. ${memberRole(sessionMention(session.id))}`];
   });
   if (roles.length > 0) {
-    lines.push('## Роль в комнате', '', ...roles, '', 'Подробности — в `read_guide`, раздел «Комнаты».', '');
+    lines.push(
+      '## Роль в комнате',
+      '',
+      ...roles,
+      '',
+      'Подробности — в `read_guide`, раздел «Комнаты».',
+      '',
+    );
   }
 
   const decisions = decisionsOf(thread);

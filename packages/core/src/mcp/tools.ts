@@ -642,7 +642,12 @@ async function createRoom(
     // (в handoff «Created by S01 · lead S01»). Правило «первый из members» (дизайн комнат, 3.1) — для
     // `rooms.create` окна и старых карт, здесь оно отдало бы комнату подчинённому. Ведущего не из круга
     // комнаты `addRoom` отвергает до выдачи номера: комнаты нет, номер не потрачен.
-    const room = addRoom(current, { title, creator: sessionId, members, lead: leadInput ?? sessionId });
+    const room = addRoom(current, {
+      title,
+      creator: sessionId,
+      members,
+      lead: leadInput ?? sessionId,
+    });
     roomId = room.id;
     const notice = joinNotice(room, current);
     for (const memberId of members) {

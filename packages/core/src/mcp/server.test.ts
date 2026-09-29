@@ -235,8 +235,9 @@ describe('список инструментов', () => {
     expect(propose?.description).toMatch(/заменя/);
     expect(propose?.description).toMatch(/письм/);
     // Предел текста в схеме — та же константа, что держит setProposal.
-    const textSchema = propose?.inputSchema.properties?.['text'] as { description?: string } | undefined;
-    expect(textSchema?.description).toContain(String(PROPOSAL_TEXT_MAX));
+    expect(JSON.stringify(propose?.inputSchema.properties?.['text'])).toContain(
+      String(PROPOSAL_TEXT_MAX),
+    );
   });
 
   it('create_room: lead необязателен, описание называет ведущего по умолчанию', async () => {
@@ -868,7 +869,11 @@ describe('create_room: ведущий', () => {
 
   it('lead из members — ведущий он, создатель остаётся создателем', async () => {
     const client = await withColleagues();
-    await callOk(client, 'create_room', { title: 'бэкенд', members: ['s-02', 's-03'], lead: 's-03' });
+    await callOk(client, 'create_room', {
+      title: 'бэкенд',
+      members: ['s-02', 's-03'],
+      lead: 's-03',
+    });
 
     const room = (await readMapFile()).rooms[0];
     expect(room?.lead).toBe('s-03');
@@ -887,7 +892,11 @@ describe('create_room: ведущий', () => {
 
     // s-03 есть в работе, но в комнату не входит; человек ведущим быть не может; s-77 нет вовсе.
     for (const lead of ['s-03', HUMAN, 's-77']) {
-      const refused = await call(client, 'create_room', { title: 'бэкенд', members: ['s-02'], lead });
+      const refused = await call(client, 'create_room', {
+        title: 'бэкенд',
+        members: ['s-02'],
+        lead,
+      });
       expect(refused.isError, lead).toBe(true);
       expect(refused.text, lead).toContain(lead);
     }
@@ -919,11 +928,19 @@ describe('propose_decision', () => {
 
   it('ведущий: { proposalId, rev: 0 }, решение лежит в слоте комнаты', async () => {
     const { lead } = await leadRoom();
-    const result = await callOk(lead, 'propose_decision', { room: 'r-01', text: 'Делаем через очередь.' });
+    const result = await callOk(lead, 'propose_decision', {
+      room: 'r-01',
+      text: 'Делаем через очередь.',
+    });
 
     expect(result).toEqual({ proposalId: 'p-01', rev: 0 });
     const proposal = (await readMapFile()).rooms[0]?.proposal;
-    expect(proposal).toMatchObject({ id: 'p-01', from: 's-01', text: 'Делаем через очередь.', rev: 0 });
+    expect(proposal).toMatchObject({
+      id: 'p-01',
+      from: 's-01',
+      text: 'Делаем через очередь.',
+      rev: 0,
+    });
   });
 
   it('повтор до ответа человека — тот же proposalId, rev 1, текст заменён', async () => {
@@ -987,8 +1004,10 @@ describe('propose_decision', () => {
     const { lead, a, b } = await leadRoom();
     await callOk(lead, 'close_session', { target: 's-01' });
 
-    expect((await call(lead, 'propose_decision', { room: 'r-01', text: 'из могилы' })).isError).toBe(true);
-    expect((await call(b, 'propose_decision', { room: 'r-01', text: 'я третий' })).isError).toBe(true);
+    const closedLead = await call(lead, 'propose_decision', { room: 'r-01', text: 'из могилы' });
+    expect(closedLead.isError).toBe(true);
+    const thirdInLine = await call(b, 'propose_decision', { room: 'r-01', text: 'я третий' });
+    expect(thirdInLine.isError).toBe(true);
     expect(await callOk(a, 'propose_decision', { room: 'r-01', text: 'веду я' })).toEqual({
       proposalId: 'p-01',
       rev: 0,
