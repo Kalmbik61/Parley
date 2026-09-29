@@ -8,7 +8,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
-import { GUIDE } from '../work/guide.js';
+import { GUIDE, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import {
   addMessage,
   addSession,
@@ -248,6 +248,18 @@ describe('список инструментов', () => {
     expect(guide?.description).toMatch(/комнаты и роли в них \(ведущий, участник\)/);
   });
 
+  it('read_guide: topic необязателен, enum — темы гида, описание перечисляет их', async () => {
+    const client = await connect('s-01');
+    const { tools } = await client.listTools();
+    const guide = tools.find((tool) => tool.name === 'read_guide');
+    const names = GUIDE_TOPICS.map((item) => item.topic);
+
+    expect(guide?.inputSchema.required ?? []).toEqual([]);
+    expect(Object.keys(guide?.inputSchema.properties ?? {})).toEqual(['topic']);
+    expect(guide?.inputSchema.properties?.['topic']).toMatchObject({ type: 'string', enum: names });
+    for (const name of names) expect(guide?.description).toContain(name);
+  });
+
   it('create_room: lead необязателен, описание называет ведущего по умолчанию', async () => {
     const client = await connect('s-01');
     const { tools } = await client.listTools();
@@ -313,6 +325,59 @@ describe('read_guide', () => {
 
     expect(result.isError, result.text).toBe(false);
     expect(result.text).toBe(GUIDE);
+  });
+
+  it('с темой отдаёт один раздел — каждая тема гида отвечает своим текстом', async () => {
+    const client = await connect('s-01');
+
+    for (const { topic } of GUIDE_TOPICS) {
+      const result = await call(client, 'read_guide', { topic });
+      expect(result.isError, `${topic}: ${result.text}`).toBe(false);
+      expect(result.text, topic).toBe(guideTopic(topic));
+      // Раздел короче всего гида: тема не отдаёт лишнего.
+      expect(result.text.length, topic).toBeLessThan(GUIDE.length);
+    }
+  });
+
+  it('тема работает и без HARNAS_SESSION_ID', async () => {
+    const client = await connect(null);
+    const result = await call(client, 'read_guide', { topic: 'rooms' });
+
+    expect(result.isError, result.text).toBe(false);
+    expect(result.text).toBe(guideTopic('rooms'));
+  });
+
+  it('пустая тема — как её отсутствие: весь гид', async () => {
+    const client = await connect('s-01');
+    const result = await call(client, 'read_guide', { topic: '' });
+
+    expect(result.isError, result.text).toBe(false);
+    expect(result.text).toBe(GUIDE);
+  });
+
+  it('регистр и пробелы по краям темы не мешают', async () => {
+    const client = await connect('s-01');
+    const result = await call(client, 'read_guide', { topic: ' Lead ' });
+
+    expect(result.isError, result.text).toBe(false);
+    expect(result.text).toBe(guideTopic('lead'));
+  });
+
+  it('неизвестная тема — ошибка со списком тем', async () => {
+    const client = await connect('s-01');
+    const result = await call(client, 'read_guide', { topic: 'нет-такой' });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('нет-такой');
+    for (const { topic } of GUIDE_TOPICS) expect(result.text).toContain(topic);
+  });
+
+  it('тема не строкой — ошибка с именем аргумента', async () => {
+    const client = await connect('s-01');
+    const result = await call(client, 'read_guide', { topic: 7 });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('topic');
   });
 });
 

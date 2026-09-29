@@ -11,7 +11,7 @@ import { DEFAULT_CONFIG } from '../config.js';
 import { commandInPath, loadProviders } from '../providers.js';
 import { agentDirs, assertAgent } from '../work/agents.js';
 import { writeBrief } from '../work/brief.js';
-import { GUIDE } from '../work/guide.js';
+import { GUIDE, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import { unreadFor } from '../work/letters.js';
 import { addMessage, addSession, transitionSession } from '../work/map.js';
 import { finishSession } from '../work/metrics.js';
@@ -367,9 +367,18 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'read_guide',
-    description:
-      'Подробный гид по харнессу: сущности, жизненный цикл сессии, комнаты и роли в них (ведущий, участник), что класть в отчёт и артефакты, как ждать подчинённую сессию, чего не делать. Читай, когда коротких описаний не хватило.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    description: `Подробный гид по харнессу: сущности, жизненный цикл сессии, комнаты и роли в них (ведущий, участник), что класть в отчёт и артефакты, как ждать подчинённую сессию, чего не делать. Читай, когда коротких описаний не хватило. Без topic — весь гид, с topic — один раздел: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        topic: {
+          type: 'string',
+          enum: GUIDE_TOPICS.map((item) => item.topic),
+          description: 'Раздел гида; без него — весь гид.',
+        },
+      },
+      additionalProperties: false,
+    },
   },
 ];
 
@@ -696,6 +705,24 @@ async function proposeDecision(
   return proposed;
 }
 
+/**
+ * Гид: без темы — весь, с темой — один раздел. Пустая тема (`""`) — то же, что её отсутствие: агенты
+ * нередко шлют пустую строку на необязательный параметр. Неизвестная — ошибка со списком тем, чтобы
+ * агент поправил вызов сам.
+ */
+function readGuide(args: Record<string, unknown>): string {
+  const raw = args['topic'];
+  if (raw === undefined || raw === '') return GUIDE;
+  if (typeof raw !== 'string') throw new Error('аргумент topic: ожидалась строка');
+  const text = guideTopic(raw.trim().toLowerCase());
+  if (text === null) {
+    throw new Error(
+      `неизвестная тема гида «${raw}»; темы: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}`,
+    );
+  }
+  return text;
+}
+
 async function closeSession(
   context: McpContext,
   sessionId: string,
@@ -725,7 +752,7 @@ async function dispatch(
 ): Promise<unknown> {
   if (name === 'get_map') return getMap(context);
   // Гид не про конкретную сессию: он доступен и без `HARNAS_SESSION_ID`.
-  if (name === 'read_guide') return GUIDE;
+  if (name === 'read_guide') return readGuide(args);
 
   const { sessionId } = context;
   if (sessionId === null) throw new Error(NO_SESSION);
