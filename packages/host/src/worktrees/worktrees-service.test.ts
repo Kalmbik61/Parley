@@ -224,7 +224,7 @@ describe('worktree отсутствует (раунд исправлений 8, 
     await expect(service.mergeCheck(ref)).rejects.toMatchObject(missing);
   });
 
-  it('папку worktree удалили мимо хоста (агент, TUI) — diff с той же причиной', async () => {
+  it('папку worktree удалили мимо хоста (агент, руками) — diff с той же причиной', async () => {
     const { ref, info } = await sessionWithWorktree();
     const service = createWorktreesService(stubSessions());
     await rm(info.path, { recursive: true, force: true });

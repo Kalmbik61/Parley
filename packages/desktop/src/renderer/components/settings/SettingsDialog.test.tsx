@@ -18,16 +18,11 @@ import { useUiStore } from '../../store/ui.js';
 import { SettingsDialog } from './SettingsDialog.js';
 
 const CONFIG = {
-  prefix: 'q',
-  sidebarWidth: 26,
-  mouseCapture: true,
-  ascii: false,
   silenceThresholdMs: 30_000,
   channelPush: true,
   messageRate: 20,
   resumeRate: 6,
   autoLaunch: true,
-  theme: 'mocha',
   fontFamily: 'Menlo',
   fontSize: 13,
   worktreeRoot: '~/.harnas/worktrees',

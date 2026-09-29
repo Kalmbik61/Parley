@@ -31,7 +31,6 @@ export {
   providersFile,
   providersWithHistory,
   resumeCommand,
-  runnerCommand,
   startCommand,
   substituteArgs,
 } from './providers.js';
@@ -61,7 +60,7 @@ export {
   setResult,
   transitionSession,
 } from './work/map.js';
-export { displayStatus, historyStatus } from './work/status-view.js';
+export { displayStatus } from './work/status-view.js';
 export { isUnreadFor, markHumanRead, recipientsOf, unreadFor } from './work/letters.js';
 export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';
 export { addRoom, isDescendant, isMember, joinNotice, nextRoomId } from './work/rooms.js';
@@ -133,7 +132,6 @@ export {
   createNewSession,
   createPendingSession,
   deleteSession,
-  deleteWork,
   finishExited,
   linkSession,
   NEW_LABEL,
@@ -141,7 +139,6 @@ export {
   planNew,
   planResume,
   readBrief,
-  registerResumed,
   startSession,
   UNTITLED_WORK,
 } from './work/launch.js';
@@ -183,13 +180,12 @@ export type {
 export {
   DEFAULT_CONFIG,
   ENV_NAMES,
-  THEME_NAMES,
   configPath,
   loadConfig,
   parseSetting,
   saveConfig,
 } from './config.js';
-export type { HarnasConfig, LoadedConfig, TypedSettingKey } from './config.js';
+export type { HarnasConfig, LoadedConfig } from './config.js';
 export { activityOf, hookedSince } from './work/activity.js';
 export type {
   Activity,

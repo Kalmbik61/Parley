@@ -255,17 +255,6 @@ export function printCommand(
   };
 }
 
-/** Команда и аргументы для запуска сессии провайдера в PTY. */
-export function runnerCommand(
-  provider: Provider,
-  sessionId?: string,
-): { command: string; args: string[] } {
-  const entry = PROVIDERS[provider];
-  return sessionId === undefined
-    ? startCommand(entry)
-    : resumeCommand(entry, { providerSessionId: sessionId });
-}
-
 /**
  * Что именно запускается вместо команды провайдера. Оверрайд нужен
  * нестандартным установкам и тестам, где вместо настоящего агента стоит stub;
@@ -277,8 +266,8 @@ export function commandBinary(command: string, env: NodeJS.ProcessEnv = process.
 
 /**
  * Метки родительской сессии: Claude Code ставит их своим дочерним процессам, а
- * харнесс — никогда. Значит, значение в окружении — наследство: TUI запущен из
- * сессии Claude Code. Агент с такой меткой считает себя вложенным в чужую
+ * харнесс — никогда. Значит, значение в окружении — наследство: хост или CLI
+ * запущен из сессии Claude Code. Агент с такой меткой считает себя вложенным в чужую
  * сессию, а интерактивный вдобавок перестаёт писать транскрипт (claude 2.1.283:
  * «Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker») —
  * тот самый, по которому харнесс строит индекс сессий, метрики и страховку

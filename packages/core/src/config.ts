@@ -1,11 +1,14 @@
 /**
  * Настройки харнесса: необязательный `HARNAS_HOME/config.json`, поверх него —
- * переменные окружения `HARNAS_*` (дизайн TUI v2, раздел 3.4).
+ * переменные окружения `HARNAS_*`.
  *
- * Загрузчик один и живёт в core: настройки читает и TUI, и CLI. Ни один битый
+ * Загрузчик один и живёт в core: настройки читают хост и CLI. Ни один битый
  * файл не должен мешать запуску, поэтому вместо ошибки возвращается пара
- * «дефолты + текст предупреждения», которое строка статуса покажет как `⚑`
- * (раздел 10). `HARNAS_ESCAPE_KEY` больше не читается: его заменил `prefix`.
+ * «дефолты + текст предупреждения».
+ *
+ * Ключи ушедшего TUI (`prefix`, `sidebarWidth`, `mouseCapture`, `ascii`,
+ * `theme`) не читаются: в старом файле они остаются как чужие — загрузчик их
+ * молча пропускает, `saveConfig` сохраняет нетронутыми.
  */
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -13,13 +16,6 @@ import path from 'node:path';
 import { harnasHome } from './work/store.js';
 
 export interface HarnasConfig {
-  /** Буква префикса: `q` значит `Ctrl+Q` (раздел 3.1). */
-  prefix: string;
-  sidebarWidth: number;
-  /** Ловит ли харнесс мышь сам; выключенная мышь остаётся у гостя (3.3). */
-  mouseCapture: boolean;
-  /** Запасной набор глифов вместо Unicode (раздел 7). */
-  ascii: boolean;
   /** Порог молчания лога для страховочной `activity` (раздел 4.3). */
   silenceThresholdMs: number;
   /**
@@ -39,8 +35,6 @@ export interface HarnasConfig {
   resumeRate: number;
   /** Запускать ли `pending` от агента самим, в фоне, без диалога (раздел 5.2). */
   autoLaunch: boolean;
-  /** Имя темы: пять палитр плюс `terminal` (дизайн темы `2026-09-22-tui-theme-design.md`, раздел 6). */
-  theme: string;
   /** Шрифт панели терминала в окне (кусок 1.10 плана окна). */
   fontFamily: string;
   /** Кегль панели терминала в пунктах: 8…32 (кусок 1.10 плана окна). */
@@ -54,23 +48,13 @@ export interface HarnasConfig {
   worktreeRoot: string;
 }
 
-/** Шесть имён тем: пять палитр плюс явный отказ от них (дизайн темы, раздел 3.3). */
-export const THEME_NAMES = ['mocha', 'latte', 'gruvbox', 'nord', 'tokyo-night', 'terminal'] as const;
-
 export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
-  prefix: 'q',
-  sidebarWidth: 26,
-  mouseCapture: true,
-  ascii: false,
   silenceThresholdMs: 30_000,
   channelPush: true,
   messageRate: 20,
   resumeRate: 6,
   autoLaunch: true,
-  theme: 'mocha',
-  // Терминал окна (кусок 1.3 плана окна, спека 4.3) — TUI эти два ключа не
-  // читает (у него свой рендер, не xterm), так что смена дефолта его не
-  // касается.
+  // Терминал окна (кусок 1.3 плана окна, спека 4.3).
   fontFamily: "'SF Mono', Menlo, monospace",
   fontSize: 14,
   worktreeRoot: '~/harnas/worktrees',
@@ -78,16 +62,11 @@ export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
 
 /** Имя переменной окружения для каждого ключа — один источник для загрузчика и оверлея. */
 export const ENV_NAMES: Readonly<Record<keyof HarnasConfig, string>> = {
-  prefix: 'HARNAS_PREFIX',
-  sidebarWidth: 'HARNAS_SIDEBAR_WIDTH',
-  mouseCapture: 'HARNAS_MOUSE',
-  ascii: 'HARNAS_ASCII',
   silenceThresholdMs: 'HARNAS_SILENCE_MS',
   channelPush: 'HARNAS_CHANNEL_PUSH',
   messageRate: 'HARNAS_MESSAGE_RATE',
   resumeRate: 'HARNAS_RESUME_RATE',
   autoLaunch: 'HARNAS_AUTO_LAUNCH',
-  theme: 'HARNAS_THEME',
   fontFamily: 'HARNAS_FONT_FAMILY',
   fontSize: 'HARNAS_FONT_SIZE',
   worktreeRoot: 'HARNAS_WORKTREE_ROOT',
@@ -115,15 +94,8 @@ type ConfigPatch = Partial<HarnasConfig>;
 /** Собирает жалобы, чтобы показать их одной строкой: битых полей может быть несколько. */
 type Complain = (message: string) => void;
 
-const isPrefix = (value: unknown): value is string =>
-  typeof value === 'string' && [...value].length === 1;
-
 const isPositiveInt = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value > 0;
-
-const isThemeName = (value: unknown): value is string =>
-  typeof value === 'string' && (THEME_NAMES as readonly string[]).includes(value);
-const THEME_EXPECTED = `одно из ${THEME_NAMES.join(', ')}`;
 
 const isFontFamily = (value: unknown): value is string =>
   typeof value === 'string' && value.trim() !== '';
@@ -168,16 +140,11 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
     patch[key] = value as HarnasConfig[K];
   };
 
-  take('prefix', isPrefix, 'один знак');
-  take('sidebarWidth', isPositiveInt, 'целое больше нуля');
-  take('mouseCapture', (value) => typeof value === 'boolean', 'true или false');
-  take('ascii', (value) => typeof value === 'boolean', 'true или false');
   take('silenceThresholdMs', isPositiveInt, 'целое больше нуля');
   take('channelPush', (value) => typeof value === 'boolean', 'true или false');
   take('messageRate', isPositiveInt, 'целое больше нуля');
   take('resumeRate', isResumeRate, RESUME_RATE_EXPECTED);
   take('autoLaunch', (value) => typeof value === 'boolean', 'true или false');
-  take('theme', isThemeName, THEME_EXPECTED);
   take('fontFamily', isFontFamily, 'непустая строка');
   take('fontSize', isFontSize, FONT_SIZE_EXPECTED);
   take('worktreeRoot', isWorktreeRoot, 'непустая строка');
@@ -197,7 +164,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
     return value === undefined || value === '' ? undefined : value;
   };
 
-  const flag = (key: 'mouseCapture' | 'ascii' | 'channelPush' | 'autoLaunch'): void => {
+  const flag = (key: 'channelPush' | 'autoLaunch'): void => {
     const name = ENV_NAMES[key];
     const value = text(name);
     if (value === undefined) return;
@@ -207,7 +174,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
     else complain(`${name}: ожидается 0 или 1`);
   };
 
-  const count = (key: 'sidebarWidth' | 'silenceThresholdMs' | 'messageRate'): void => {
+  const count = (key: 'silenceThresholdMs' | 'messageRate'): void => {
     const name = ENV_NAMES[key];
     const value = text(name);
     if (value === undefined) return;
@@ -216,19 +183,6 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
     else complain(`${name}: ожидается целое больше нуля`);
   };
 
-  const prefix = text(ENV_NAMES.prefix);
-  if (prefix !== undefined) {
-    if (isPrefix(prefix)) patch.prefix = prefix;
-    else complain(`${ENV_NAMES.prefix}: ожидается один знак`);
-  }
-  const theme = text(ENV_NAMES.theme);
-  if (theme !== undefined) {
-    if (isThemeName(theme)) patch.theme = theme;
-    else complain(`${ENV_NAMES.theme}: ожидается ${THEME_EXPECTED}`);
-  }
-  count('sidebarWidth');
-  flag('mouseCapture');
-  flag('ascii');
   count('silenceThresholdMs');
   flag('channelPush');
   count('messageRate');
@@ -306,16 +260,8 @@ export async function loadConfig(
   };
 }
 
-/** Ключи, значение которых вводится текстом; булевы переключаются без ввода. */
-export type TypedSettingKey = 'prefix' | 'sidebarWidth' | 'silenceThresholdMs' | 'messageRate';
-
 /** Булевы ключи настроек — те же множества «да/нет», что у загрузчика окружения. */
-const BOOLEAN_KEYS: ReadonlySet<keyof HarnasConfig> = new Set([
-  'mouseCapture',
-  'ascii',
-  'channelPush',
-  'autoLaunch',
-]);
+const BOOLEAN_KEYS: ReadonlySet<keyof HarnasConfig> = new Set(['channelPush', 'autoLaunch']);
 
 /**
  * Разбор введённого значения теми же правилами, что и у файла и у окружения:
@@ -326,14 +272,6 @@ export function parseSetting<K extends keyof HarnasConfig>(
   key: K,
   text: string,
 ): { value: HarnasConfig[K] } | { error: string } {
-  if (key === 'prefix') {
-    if (isPrefix(text)) return { value: text as HarnasConfig[K] };
-    return { error: `${key}: ожидается один знак` };
-  }
-  if (key === 'theme') {
-    if (isThemeName(text)) return { value: text as HarnasConfig[K] };
-    return { error: `${key}: ожидается ${THEME_EXPECTED}` };
-  }
   if (key === 'fontFamily') {
     if (isFontFamily(text)) return { value: text as HarnasConfig[K] };
     return { error: `${key}: ожидается непустая строка` };

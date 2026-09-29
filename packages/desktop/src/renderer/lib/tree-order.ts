@@ -1,7 +1,7 @@
 /**
  * Порядок сессий работы: дерево по `parent`, в порядке создания. Перенесено из
- * `tui/src/work-rows.ts` (`treeOrder`, `sessionSequence`) дословно — окну и
- * TUI один и тот же порядок нужен по одной и той же причине (дизайн TUI v2, 2.1).
+ * ушедшего `tui/src/work-rows.ts` (`treeOrder`, `sessionSequence`) дословно
+ * (дизайн TUI v2, 2.1).
  */
 
 import type { WorkEntry, WorkSession } from '@harnas/core';

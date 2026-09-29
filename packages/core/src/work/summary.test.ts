@@ -279,7 +279,7 @@ describe('дозаказ резюме', () => {
   it('метки родительской сессии Claude Code до суммаризатора не доезжают', async () => {
     await claudeLog(ID, [claudeSay('user', 'почини сборку')]);
     const { workId, sessionId } = await exited('claude');
-    // TUI, запущенный из сессии Claude Code, наследует её метки; соседняя
+    // Харнесс, запущенный из сессии Claude Code, наследует её метки; соседняя
     // настройка пользователя при этом доезжает как есть.
     setEnv('CLAUDE_CODE_CHILD_SESSION', '1');
     setEnv('CLAUDE_CODE_SESSION_ID', 'сессия-родителя');
