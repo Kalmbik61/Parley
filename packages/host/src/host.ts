@@ -16,6 +16,8 @@ import { HOST_ERROR_REASONS } from '@harnas/protocol';
 import { createHostHandlers } from './methods/index.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
+import { createLimitsService } from './limits/limits-service.js';
+import type { LimitsServiceOptions } from './limits/limits-service.js';
 import { startProviderVersions } from './providers/versions.js';
 import type { VersionProbe } from './providers/versions.js';
 import { createPtyManager } from './pty/pty-manager.js';
@@ -35,6 +37,11 @@ export interface HostOptions {
    * пробы или с подменой.
    */
   probeVersion?: VersionProbe;
+  /**
+   * Лимиты подписок (спека комнат Organic, 3.5): корень логов Codex, часы и период опроса. Боевой хост
+   * не задаёт ничего — опрос раз в 30 секунд, логи в `~/.codex/sessions`; тесты и E2E окна — свои.
+   */
+  limits?: LimitsServiceOptions;
 }
 
 export interface RunningHost {
@@ -187,9 +194,16 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Версии CLI пробуются один раз на старте, пока остальное поднимается; `providers.list` их ждёт.
   const providerVersions = startProviderVersions(options.probeVersion, log);
 
+  // Лимиты подписок (спека комнат Organic, 3.5): файлы строки статуса Claude Code и логи Codex, раз в
+  // 30 секунд; окну — в `providers.list` и событием `providers.limitsChanged`. Запускается в конце
+  // старта, когда снимок работ уже прочитан.
+  const limitsService = createLimitsService(handle.context, worksService, options.limits);
+  handle.context.onShutdown(async () => limitsService.stop());
+
   const handlers = createHostHandlers({
     worksReady,
     providerVersions,
+    limits: limitsService,
     works: worksService,
     activity: activityService,
     pty: ptyManager,
@@ -262,6 +276,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   }
   await activityService.start();
   wakeService.start();
+  // Первое чтение лимитов — после чтения работ: файлы сессий ищутся по их картам. Окно, подключившееся
+  // раньше, получит лимиты событием.
+  await limitsService.start();
 
   // 8. SIGTERM/SIGINT — обычная остановка.
   const onSignal = (): void => {
