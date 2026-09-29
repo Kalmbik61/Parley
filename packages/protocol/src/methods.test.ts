@@ -175,3 +175,43 @@ describe('комнаты: ведущий и решение (дизайн ком�
     expectTypeOf<Result<'rooms.resolveProposal'>>().toEqualTypeOf<{ messageId: string }>();
   });
 });
+
+describe('модель, усилие и поля providers.list (дизайн комнат, 3.2)', () => {
+  const create = { projectPath: '/p', workId: 'w-0001', provider: 'claude', label: '', task: '', parent: null };
+  const parse = (extra: Record<string, unknown>) => METHODS['sessions.create'].safeParse({ ...create, ...extra });
+
+  it('sessions.create: model и effort необязательны — старое окно их не шлёт', () => {
+    expect(parse({}).success).toBe(true);
+    expect(parse({ model: 'opus', effort: 'high' }).success).toBe(true);
+    expectTypeOf<Params<'sessions.create'>['model']>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<Params<'sessions.create'>['effort']>().toEqualTypeOf<'low' | 'medium' | 'high' | undefined>();
+  });
+
+  it('effort — low, medium или high; уровни, которых нет у обоих CLI, схема не пропускает', () => {
+    for (const effort of ['low', 'medium', 'high']) expect(parse({ effort }).success).toBe(true);
+    for (const effort of ['xhigh', 'max', 'minimal', 'HIGH', '', 3]) expect(parse({ effort }).success).toBe(false);
+  });
+
+  it('model — одно слово: алиас или полное имя, без пробелов и не похожее на флаг', () => {
+    for (const model of ['opus', 'claude-sonnet-5', 'sonnet[1m]', 'gpt-5.5', 'o3']) {
+      expect(parse({ model }).success).toBe(true);
+    }
+    // Значение с дефисом впереди CLI принял бы за флаг, а пустое или с пробелом — не модель.
+    for (const model of ['', ' opus', 'два слова', '--dangerously-skip-permissions', '-m', 'а\nб']) {
+      expect(parse({ model }).success).toBe(false);
+    }
+    expect(parse({ model: 'м'.repeat(200) }).success).toBe(true);
+    expect(parse({ model: 'м'.repeat(201) }).success).toBe(false);
+  });
+
+  it('providers.list: у каждого провайдера models, effort и version', () => {
+    expectTypeOf<Result<'providers.list'>['providers'][number]>().toEqualTypeOf<{
+      id: string;
+      label: string;
+      available: boolean;
+      models: string[] | null;
+      effort: boolean;
+      version: string | null;
+    }>();
+  });
+});

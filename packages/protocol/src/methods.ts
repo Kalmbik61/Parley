@@ -52,6 +52,16 @@ export const METHODS = {
     task: z.string(),
     parent: z.string().nullable(),
     worktree: z.boolean().optional(),
+    // Модель и усилие из диалога запуска (дизайн комнат, 3.2). Провайдер без флага их отбрасывает
+    // — окно узнаёт об этом из `providers.list`. Модель — одно слово: алиас или полное имя,
+    // без пробелов и не с дефиса (CLI принял бы её за флаг); усилие — общий для обоих CLI набор.
+    model: z
+      .string()
+      .min(1)
+      .max(200)
+      .regex(/^[^\s-]\S*$/)
+      .optional(),
+    effort: z.enum(['low', 'medium', 'high']).optional(),
   }),
   'sessions.resume': z.object({ ref: sessionRef }),
   'sessions.stop': z.object({ ref: sessionRef }),
@@ -134,7 +144,22 @@ export interface Results {
   hello: { hostVersion: string; protocol: number; pid: number; methods?: string[] };
   'host.info': { hostVersion: string; pid: number; startedAt: string; clients: number; liveSessions: number };
   'host.shutdown': { ok: true };
-  'providers.list': { providers: Array<{ id: string; label: string; available: boolean }> };
+  'providers.list': {
+    providers: Array<{
+      id: string;
+      label: string;
+      available: boolean;
+      /**
+       * Закрытый список моделей. `null` — списка нет: у Claude Code и Codex документация его не
+       * даёт (`--model` принимает и алиас, и полное имя), а провайдер без флага модель не принимает.
+       */
+      models: string[] | null;
+      /** Принимает ли провайдер усилие при запуске: нет — окно прячет контрол. */
+      effort: boolean;
+      /** Версия CLI из пробы на старте хоста; `null` — не узнали. */
+      version: string | null;
+    }>;
+  };
   'works.list': WorksSnapshot;
   'works.create': { workId: string };
   'works.delete': { ok: true };

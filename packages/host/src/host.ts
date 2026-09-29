@@ -16,6 +16,8 @@ import { HOST_ERROR_REASONS } from '@harnas/protocol';
 import { createHostHandlers } from './methods/index.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
+import { startProviderVersions } from './providers/versions.js';
+import type { VersionProbe } from './providers/versions.js';
 import { createPtyManager } from './pty/pty-manager.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { createWakeService } from './wake/wake-service.js';
@@ -26,6 +28,13 @@ export interface HostOptions {
   idleMs?: number;
   helloTimeoutMs?: number;
   version?: string;
+  /**
+   * Проба версии CLI провайдеров на старте (`<команда> --version`, одна на команду). Без неё
+   * ничего не запускается и `providers.list` отдаёт `version: null`: подключает её только
+   * `main.ts`, а тесты, где настоящие claude и codex запускать нельзя, зовут `startHost` без
+   * пробы или с подменой.
+   */
+  probeVersion?: VersionProbe;
 }
 
 export interface RunningHost {
@@ -175,8 +184,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Отказ читают только ожидающие методы; без них он не должен стать необработанным.
   worksReady.catch(() => undefined);
 
+  // Версии CLI пробуются один раз на старте, пока остальное поднимается; `providers.list` их ждёт.
+  const providerVersions = startProviderVersions(options.probeVersion, log);
+
   const handlers = createHostHandlers({
     worksReady,
+    providerVersions,
     works: worksService,
     activity: activityService,
     pty: ptyManager,
