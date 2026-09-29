@@ -740,3 +740,139 @@ describe('dimmed.css — правило приглушения на новых �
     });
   }
 });
+
+// ── Строка комнаты в сайдбаре (кусок 5 плана «Organic», спека окна 2026-09-29, 1.2) ───────────────────────────────
+
+/**
+ * Строка комнаты лежит внутри карточки, поэтому её заливки — прозрачные `text N %` поверх фона карточки: активная
+ * (`neutral-100`), неактивная (`surface`) и неактивная под курсором (`surface` + `--card-hover`: указатель над
+ * строкой всегда над и её карточкой). Заливки: решение ждёт — `accent-200` (сплошная), выбрана — `text 9 %` (только в
+ * активной карточке), развёрнута — `text 4 %` (hover 6 %), свёрнутая на hover — `text 9 %`. Внутри развёрнутой
+ * комнаты строка участника кладёт свои `text 9 %` (выбрана, hover) поверх заливки комнаты.
+ *
+ * Что берёт цвет: время, Hash и шеврон шапки, слово и время участников — `--work-sidebar-muted-foreground`
+ * (`neutral-700`); слово «N new» — `neutral-800`; «decision» — `accent-800`; `★` ведущего — `accent-700`; число в
+ * кружке-счётчике — основной текст на `neutral-300`. Пары, где `neutral-700` не держит порог, решаются так:
+ *  — свёрнутая на hover: заливка `text 9 %` поверх неактивной карточки под курсором — 3.86:1 в светлой; на hover
+ *    вторичный и основной цвет строки — `--color-text` (как у строки сессии);
+ *  — развёрнутая (`text 4 %`) в неактивной карточке под курсором — 4.25:1 в светлой, а с заливкой строки участника
+ *    — 3.60; внутри развёрнутой комнаты вторичный цвет — `neutral-800` (ступень темнее, брифа куска 5).
+ */
+describe('строка комнаты — контраст на заливках (кусок 5)', () => {
+  const CARDS: Record<string, (theme: Theme) => Rgb> = {
+    'активная карточка (--card)': (theme) => solid(theme, '--card'),
+    'неактивная карточка (--background)': (theme) => solid(theme, '--background'),
+    'неактивная карточка под курсором (--background + --card-hover)': (theme) => on(theme, '--card-hover', solid(theme, '--background')),
+  };
+  const ACTIVE_CARD = 'активная карточка (--card)';
+  /** `--foreground` (`text`) с прозрачностью `alpha` поверх `base`: `bg-foreground/N` в классах. */
+  const text = (theme: Theme, alpha: number, base: Rgb): Rgb => compositeOver(solid(theme, '--foreground'), alpha, base);
+  const member = (theme: Theme, base: Rgb): Rgb => on(theme, '--work-sidebar-accent', base);
+
+  /** Заливки строки комнаты без участников: card → заливка. */
+  const ROOM_FILLS: Record<string, { cards: string[]; fill: (theme: Theme, card: Rgb) => Rgb }> = {
+    'в покое, без заливки': { cards: Object.keys(CARDS), fill: (_theme, card) => card },
+    'выбрана (text 9 %)': { cards: [ACTIVE_CARD], fill: (theme, card) => on(theme, '--work-sidebar-accent', card) },
+    'развёрнута (text 4 %)': { cards: Object.keys(CARDS), fill: (theme, card) => text(theme, 0.04, card) },
+    'hover развёрнутой (text 6 %)': { cards: Object.keys(CARDS), fill: (theme, card) => text(theme, 0.06, card) },
+    'hover свёрнутой (text 9 %)': { cards: Object.keys(CARDS), fill: (theme, card) => text(theme, 0.09, card) },
+  };
+
+  for (const theme of THEMES) {
+    describe(theme, () => {
+      it('«решение ждёт» (accent-200): вторичный текст, «decision» (accent-800) и значок вопроса читаются', () => {
+        const fill = solid(theme, '--color-accent-200');
+        expect(contrastRatio(solid(theme, '--work-sidebar-muted-foreground'), fill)).toBeGreaterThanOrEqual(TEXT);
+        expect(contrastRatio(solid(theme, '--color-accent-800'), fill)).toBeGreaterThanOrEqual(TEXT);
+        expect(contrastRatio(solid(theme, '--agent-question'), fill)).toBeGreaterThanOrEqual(NON_TEXT);
+      });
+
+      for (const [name, { cards, fill }] of Object.entries(ROOM_FILLS)) {
+        for (const card of cards) {
+          it(`«${name}» на «${card}»: слово «N new» (neutral-800) и основной текст ≥ 4.5:1, значки (neutral-800) ≥ 3:1`, () => {
+            const under = fill(theme, (CARDS[card] as (theme: Theme) => Rgb)(theme));
+            expect(contrastRatio(solid(theme, '--color-neutral-800'), under)).toBeGreaterThanOrEqual(TEXT);
+            expect(contrastRatio(solid(theme, '--foreground'), under)).toBeGreaterThanOrEqual(TEXT);
+          });
+        }
+      }
+
+      it('в покое (без заливки, выбрана, ждёт решения) вторичный текст neutral-700 держит 4.5:1: время, Hash и шеврон шапки', () => {
+        const muted = solid(theme, '--work-sidebar-muted-foreground');
+        for (const card of Object.values(CARDS)) expect(contrastRatio(muted, card(theme))).toBeGreaterThanOrEqual(TEXT);
+        expect(contrastRatio(muted, on(theme, '--work-sidebar-accent', solid(theme, '--card')))).toBeGreaterThanOrEqual(TEXT);
+      });
+
+      it('свёрнутая на hover — основной текст (--color-text) держит 4.5:1 на text 9 % поверх любой карточки', () => {
+        for (const card of Object.values(CARDS)) {
+          expect(contrastRatio(solid(theme, '--color-text'), text(theme, 0.09, card(theme)))).toBeGreaterThanOrEqual(TEXT);
+        }
+      });
+
+      it('развёрнутая: вторичный цвет neutral-800 держит 4.5:1 на заливках комнаты и на заливках строки участника поверх них', () => {
+        const ink = solid(theme, '--color-neutral-800');
+        for (const card of Object.values(CARDS)) {
+          const base = card(theme);
+          for (const room of [text(theme, 0.04, base), text(theme, 0.06, base)]) {
+            expect(contrastRatio(ink, room)).toBeGreaterThanOrEqual(TEXT);
+            expect(contrastRatio(ink, member(theme, room))).toBeGreaterThanOrEqual(TEXT);
+          }
+        }
+        // Выбранная комната (только в активной карточке) и решение, ждущее ответа: заливка + строка участника.
+        const selected = on(theme, '--work-sidebar-accent', solid(theme, '--card'));
+        expect(contrastRatio(ink, selected)).toBeGreaterThanOrEqual(TEXT);
+        expect(contrastRatio(ink, member(theme, selected))).toBeGreaterThanOrEqual(TEXT);
+        const pending = solid(theme, '--color-accent-200');
+        expect(contrastRatio(ink, pending)).toBeGreaterThanOrEqual(TEXT);
+        expect(contrastRatio(ink, member(theme, pending))).toBeGreaterThanOrEqual(TEXT);
+      });
+
+      it('участник на hover внутри комнаты — основной текст (--color-text) держит 4.5:1 на заливке комнаты + hover строки', () => {
+        for (const card of Object.values(CARDS)) {
+          const base = card(theme);
+          for (const room of [text(theme, 0.04, base), text(theme, 0.06, base)]) {
+            expect(contrastRatio(solid(theme, '--color-text'), member(theme, room))).toBeGreaterThanOrEqual(TEXT);
+          }
+        }
+        expect(contrastRatio(solid(theme, '--color-text'), member(theme, solid(theme, '--color-accent-200')))).toBeGreaterThanOrEqual(TEXT);
+      });
+
+      it('★ ведущего (accent-700, 11px, признак состояния) — не ниже 3:1 на заливках комнаты и строки участника; подкраски blocked и unseen — с запасом', () => {
+        const star = solid(theme, '--color-accent-700');
+        for (const card of Object.values(CARDS)) {
+          const base = card(theme);
+          for (const room of [base, text(theme, 0.04, base), text(theme, 0.06, base)]) {
+            expect(contrastRatio(star, room)).toBeGreaterThanOrEqual(NON_TEXT);
+            expect(contrastRatio(star, member(theme, room))).toBeGreaterThanOrEqual(NON_TEXT);
+          }
+        }
+        const selected = on(theme, '--work-sidebar-accent', solid(theme, '--card'));
+        expect(contrastRatio(star, selected)).toBeGreaterThanOrEqual(NON_TEXT);
+        expect(contrastRatio(star, member(theme, selected))).toBeGreaterThanOrEqual(NON_TEXT);
+        for (const tint of ['--color-accent-200', '--color-accent-2-200']) {
+          expect(contrastRatio(star, solid(theme, tint)), tint).toBeGreaterThanOrEqual(TEXT);
+        }
+        expect(contrastRatio(star, member(theme, solid(theme, '--color-accent-200')))).toBeGreaterThanOrEqual(NON_TEXT);
+      });
+
+      it('число в кружке-счётчике — основной текст на neutral-300 — не ниже 4.5:1', () => {
+        expect(contrastRatio(solid(theme, '--color-text'), solid(theme, '--color-neutral-300'))).toBeGreaterThanOrEqual(TEXT);
+      });
+
+      it('строка «New session or room» под строками активной карточки: вторичный текст на карточке и основной на hover (text 6 %) — не ниже 4.5:1', () => {
+        const card = solid(theme, '--card');
+        expect(contrastRatio(solid(theme, '--work-sidebar-muted-foreground'), card)).toBeGreaterThanOrEqual(TEXT);
+        expect(contrastRatio(solid(theme, '--color-text'), text(theme, 0.06, card))).toBeGreaterThanOrEqual(TEXT);
+      });
+    });
+  }
+
+  // Ступень темнее нужна там, где neutral-700 не держит: без неё пары ниже порога (светлая).
+  it('светлая: neutral-700 на hover свёрнутой (3.86) и внутри развёрнутой в неактивной карточке под курсором (4.25, с строкой участника 3.60) ниже 4.5 — потому основной текст и neutral-800', () => {
+    const muted = solid('light', '--work-sidebar-muted-foreground');
+    const hovered = on('light', '--card-hover', solid('light', '--background'));
+    expect(contrastRatio(muted, text('light', 0.09, hovered))).toBeLessThan(TEXT);
+    expect(contrastRatio(muted, text('light', 0.04, hovered))).toBeLessThan(TEXT);
+    expect(contrastRatio(muted, member('light', text('light', 0.04, hovered)))).toBeLessThan(TEXT);
+  });
+});
