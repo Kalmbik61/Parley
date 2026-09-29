@@ -232,6 +232,92 @@ describe('бриф: комнаты', () => {
   });
 });
 
+describe('бриф: роль в комнате', () => {
+  /** Тред с s-01 (план), s-02 (бэкенд), s-03 (ревью); комната создана s-01, ведущий — s-02. */
+  function mapWithRoom(lead: string | null = 's-02'): WorkMap {
+    const map = mapWithThread();
+    addRoom(map, { title: 'Бэкенд', creator: 's-01', members: ['s-02', 's-03'], lead });
+    return map;
+  }
+
+  it('ведущему: собрать позиции, propose_decision, до принятия не начинать, части — упоминаниями', () => {
+    const brief = buildBrief(mapWithRoom(), 's-02');
+
+    expect(brief).toContain('## Роль в комнате');
+    expect(brief).toContain('- r-01 «Бэкенд»: ты ведущий.');
+    expect(brief).toMatch(/собери позиции участников \(каждый отвечает в комнате одним сообщением\)/);
+    expect(brief).toContain('`propose_decision`');
+    expect(brief).toContain('до принятия работу не начинай');
+    expect(brief).toMatch(/Принято — раздай части упоминаниями[^\n]*возврат — переделай и предложи снова/);
+    // Про ведущего другого в его брифе речи нет.
+    expect(brief).not.toContain('ведущий —');
+  });
+
+  it('участнику: высказаться одним сообщением, ждать свою часть, отчитаться ведущему; ведущий назван', () => {
+    const brief = buildBrief(mapWithRoom(), 's-03');
+
+    expect(brief).toContain('## Роль в комнате');
+    expect(brief).toContain('- r-01 «Бэкенд»: ведущий — s-02 (бэкенд).');
+    expect(brief).toMatch(/выскажись одним сообщением в комнату/);
+    expect(brief).toContain('работу не начинай, пока ведущий не назвал твою часть');
+    // Свой токен упоминания — по нему участник узнаёт свою часть.
+    expect(brief).toContain('твоё — `@s03`');
+    expect(brief).toMatch(/отчитайся в комнате ведущему/);
+    expect(brief).not.toContain('ты ведущий');
+  });
+
+  it('создатель-сессия, не назначенный ведущим, — тоже участник', () => {
+    const brief = buildBrief(mapWithRoom(), 's-01');
+
+    expect(brief).toContain('- r-01 «Бэкенд»: ведущий — s-02 (бэкенд).');
+    expect(brief).not.toContain('ты ведущий');
+  });
+
+  it('карта до 2026-09-29 (lead: null): ведущий — первый из участников', () => {
+    const map = mapWithRoom(null);
+
+    expect(buildBrief(map, 's-02')).toContain('- r-01 «Бэкенд»: ты ведущий.');
+    expect(buildBrief(map, 's-03')).toContain('ведущий — s-02 (бэкенд)');
+  });
+
+  it('назначенный ведущий закрыт — ведёт первый живой участник, в брифе он и назван', () => {
+    const map = mapWithRoom('s-02');
+    const closed = map.sessions.find((candidate) => candidate.id === 's-02');
+    if (closed === undefined) throw new Error('нет s-02');
+    closed.lifecycle = 'closed';
+
+    // Сам он — «ты ведущий», остальным его называет бриф.
+    expect(buildBrief(map, 's-03')).toContain('- r-01 «Бэкенд»: ты ведущий.');
+    expect(buildBrief(map, 's-01')).toContain('- r-01 «Бэкенд»: ведущий — s-03 (ревью).');
+  });
+
+  it('роль отсылает к разделу «Комнаты» гида один раз, сколько бы комнат ни было', () => {
+    const map = mapWithRoom();
+    addRoom(map, { title: 'Ревью', creator: 'human', members: ['s-02', 's-03'], lead: 's-03' });
+
+    const brief = buildBrief(map, 's-02');
+    expect(brief.match(/раздел «Комнаты»/g)).toHaveLength(1);
+    expect(brief).toContain('- r-01 «Бэкенд»: ты ведущий.');
+    expect(brief).toContain('- r-02 «Ревью»: ведущий — s-03 (ревью).');
+  });
+
+  it('без комнат раздела роли нет, бриф остался коротким', () => {
+    const brief = buildBrief(mapWithThread(), 's-02');
+
+    expect(brief).not.toContain('## Роль в комнате');
+    expect(brief).not.toContain('propose_decision');
+    expect(brief.split('\n').length).toBeLessThan(40);
+  });
+
+  it('состав комнаты в «Коллегах» на месте, роль идёт следом', () => {
+    const brief = buildBrief(mapWithRoom(), 's-03');
+
+    expect(brief).toContain('- r-01 «Бэкенд»: план, бэкенд');
+    expect(brief.indexOf('## Коллеги')).toBeLessThan(brief.indexOf('## Роль в комнате'));
+    expect(brief.indexOf('## Роль в комнате')).toBeLessThan(brief.indexOf('## Правила'));
+  });
+});
+
 describe('бриф сессии: worktree', () => {
   it('сессия со своим worktree: бриф называет ветку, базу, путь и отсылает к read_guide', () => {
     const map = mapWithSessions();
