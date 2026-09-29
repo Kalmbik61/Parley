@@ -582,7 +582,7 @@ describe('WorkCard — строка «New session or room» (1.2, «Под ст�
   const newRow = (): HTMLElement | null => screen.queryByText(S.sidebar.newSessionOrRoom)?.closest('button') ?? null;
 
   beforeEach(() => {
-    useUiStore.setState({ dialogs: { ...useUiStore.getState().dialogs, newSession: { open: false, parentSessionId: null, work: null } } });
+    useUiStore.setState({ dialogs: { ...useUiStore.getState().dialogs, newSession: { open: false, work: null, room: false } } });
     showClosedSessions(workKey('/tmp/proj', 'w-01'), false);
   });
 
@@ -617,22 +617,16 @@ describe('WorkCard — строка «New session or room» (1.2, «Под ст�
     expect(card().querySelector('[data-session-id="s-01"]')?.compareDocumentPosition(more)).toBeTruthy();
   });
 
-  it('клик открывает существующий диалог ⌘T этой работы; родитель — выбранная сессия; карточку не переключает', () => {
+  it('клик открывает диалог 1.5 этой работы одним агентом; карточку не переключает', () => {
     const onActivate = vi.fn();
     renderCard(entry, { active: true, selectedSessionId: 's-02', onActivate });
     fireEvent.click(newRow() as HTMLElement);
     expect(useUiStore.getState().dialogs.newSession).toEqual({
       open: true,
-      parentSessionId: 's-02',
       work: { projectPath: '/tmp/proj', workId: 'w-01' },
+      room: false,
     });
     expect(onActivate).not.toHaveBeenCalled();
-  });
-
-  it('выбранной сессии нет — родителя нет', () => {
-    renderCard(entry, { active: true, selectedSessionId: null });
-    fireEvent.click(newRow() as HTMLElement);
-    expect(useUiStore.getState().dialogs.newSession).toMatchObject({ open: true, parentSessionId: null });
   });
 
   it('работа без сессий — строка всё равно есть: с неё и начинается', () => {

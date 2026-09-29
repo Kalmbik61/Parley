@@ -40,7 +40,7 @@ beforeEach(() => {
   bridge = createFakeBridge();
   useUiStore.setState({
     sidebarHolds: {},
-    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null },
+    dialogs: { newWork: false, newSession: { open: false, work: null, room: false }, settings: false, mergeRoom: null },
   });
   vi.mocked(toast).mockClear();
   useLayoutStore.setState({ activeWorkKey: null, layouts: {}, hydrated: {}, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
@@ -64,7 +64,7 @@ describe('SessionRowMenu — пункты', () => {
     expect(writeText).toHaveBeenCalledWith('/tmp/wt/s01');
   });
 
-  it('Stop — только после подтверждения; Create room with… — диалог с обязательным участником', () => {
+  it('Stop — только после подтверждения; пункта «Create room with…» больше нет: комнату из сессий собирает бросок (диалог 1.6)', () => {
     bridge.setHandler('sessions.stop', () => ({ ok: true as const }));
     renderMenu(makeSession('s-01', 'plan'));
     fireEvent.click(screen.getByText('Stop'));
@@ -73,12 +73,7 @@ describe('SessionRowMenu — пункты', () => {
     expect(bridge.calls).toEqual([{ method: 'sessions.stop', params: { ref: { projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-01' } } }]);
 
     fireEvent.contextMenu(screen.getByText('row'));
-    fireEvent.click(screen.getByText('Create room with…'));
-    expect(useUiStore.getState().dialogs.createRoom).toEqual({
-      projectPath: '/tmp/proj',
-      workId: 'w-01',
-      requiredMember: { id: 's-01', label: 'S01 plan' },
-    });
+    expect(screen.queryByText('Create room with…')).toBeNull();
   });
 
   it('Open — колбэк строки; открытое меню держит порядок сайдбара', () => {

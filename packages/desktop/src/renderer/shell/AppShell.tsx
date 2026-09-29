@@ -4,8 +4,8 @@
  * активной работы (`LayoutView`); с куска 2.7 он единственный: прежний центр и
  * его флаг ушли.
  *
- * Палитра ⌘J (`palette/Palette.tsx`, кусок 6.2), `NewWorkComposer` и `CreateRoomDialog`
- * монтируются здесь же (а не в сайдбаре) — они нужны и над `Landing`, где
+ * Палитра ⌘J (`palette/Palette.tsx`, кусок 6.2), `NewWorkComposer` (1.7), `NewSessionOrRoomDialog` (1.5) и
+ * `MergeRoomDialog` (1.6) монтируются здесь же (а не в сайдбаре) — они нужны и над `Landing`, где
  * сайдбара вовсе нет. На историю переходов оболочка не подписана: её читает сама
  * открытая палитра.
  *
@@ -67,7 +67,8 @@ import { openNextAttention } from '../attention/next.js';
 import { useAttentionTotals } from '../attention/store.js';
 import { InterruptedBanner } from '../components/InterruptedBanner.js';
 import { WorksErrorBanner } from '../components/WorksErrorBanner.js';
-import { CreateRoomDialog, type RoomCandidate } from '../components/rooms/CreateRoomDialog.js';
+import { MergeRoomDialog } from '../components/dialogs/MergeRoomDialog.js';
+import { NewSessionOrRoomDialog } from '../components/dialogs/NewSessionOrRoomDialog.js';
 import { visibleWorkOrder } from '../sidebar/sort.js';
 import { SidebarSectionsWriter, useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
 import { NewWorkComposer } from '../sidebar/NewWorkComposer.js';
@@ -87,7 +88,7 @@ import { LayoutView } from '../layout/LayoutView.js';
 import { createLru, type Lru } from '../layout/lru.js';
 import { SurfaceLayer } from '../layout/SurfaceLayer.js';
 import { useLayoutPersistence } from '../layout/persistence.js';
-import { selectedSessionOf, useLayoutStore } from '../layout/store.js';
+import { useLayoutStore } from '../layout/store.js';
 import { measureGroupSizes } from '../layout/measure.js';
 import { findTab, focusTab, groups, openTab } from '../layout/tree.js';
 import { openBrowserTabFrom, useBrowserStore } from '../browser/store.js';
@@ -284,8 +285,14 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   const newWork = useUiStore((state) => state.dialogs.newWork);
   const openNewWorkDialog = useUiStore((state) => state.openNewWorkDialog);
   const closeNewWorkDialog = useUiStore((state) => state.closeNewWorkDialog);
-  const createRoom = useUiStore((state) => state.dialogs.createRoom);
-  const closeCreateRoomDialog = useUiStore((state) => state.closeCreateRoomDialog);
+  const newSession = useUiStore((state) => state.dialogs.newSession);
+  const closeNewSessionDialog = useUiStore((state) => state.closeNewSessionDialog);
+  const mergeRoom = useUiStore((state) => state.dialogs.mergeRoom);
+  const closeMergeRoomDialog = useUiStore((state) => state.closeMergeRoomDialog);
+  // Последний открытый диалог 1.6: закрытый, он не должен размонтироваться (см. разметку ниже).
+  const lastMergeRef = useRef(mergeRoom);
+  if (mergeRoom !== null) lastMergeRef.current = mergeRoom;
+  const lastMerge = lastMergeRef.current;
   const restartHostOpen = useUiStore((state) => state.dialogs.restartHost);
   const wakePaused = useUiStore((state) => state.wakePaused);
   const toggleWake = useUiStore((state) => state.toggleWake);
@@ -438,19 +445,9 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
         setSidebar('right', { open: true, tab });
       },
       openNewWork: (title) => openNewWorkDialog(null, title),
-      openNewSession: () => {
-        // Родитель — выбранная сессия, как у ⌘T в `App.tsx`.
-        const selected = selectedSessionOf(useLayoutStore.getState(), useWorksStore.getState().entries);
-        useUiStore.getState().openNewSessionDialog(selected?.ref.sessionId ?? null);
-      },
-      openNewRoom: () => {
-        // Как «New room» меню карточки (3.4): активная работа, обязательного участника нет.
-        const key = useLayoutStore.getState().activeWorkKey;
-        const entry = useWorksStore.getState().entries.find((item) => workKey(item.projectPath, item.map.work.id) === key);
-        if (entry !== undefined) {
-          useUiStore.getState().openCreateRoomDialog({ projectPath: entry.projectPath, workId: entry.map.work.id, requiredMember: null });
-        }
-      },
+      // Работа диалога — активная (`work: null`); «New room» — тот же диалог, открытый сразу с двумя агентами.
+      openNewSession: () => useUiStore.getState().openNewSessionDialog(),
+      openNewRoom: () => useUiStore.getState().openNewSessionDialog(undefined, { room: true }),
       openSettings: () => useUiStore.getState().openSettingsDialog(),
       setAppearance: (mode) => useUiStore.getState().setAppearance(mode),
       toggleShowArchived: () => useUiStore.getState().toggleShowArchived(),
@@ -568,22 +565,6 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     useLayoutStore.getState().apply(key, (layout) => openTab(layout, tab));
   };
 
-  // Кандидаты «Создать комнату с…» — остальные сессии той же работы, кроме
-  // обязательного участника (сессии, с которой открыли пункт меню в сайдбаре).
-  // «New room» из меню карточки (кусок 3.4) обязательного не знает — кандидаты все.
-  const requiredMemberId = createRoom?.requiredMember?.id ?? null;
-  const roomCandidates: RoomCandidate[] =
-    createRoom === null
-      ? []
-      : (entries
-          .find((item) => item.projectPath === createRoom.projectPath && item.map.work.id === createRoom.workId)
-          ?.map.sessions.filter((session) => session.id !== requiredMemberId)
-          .map((session) => ({
-            id: session.id,
-            label: sessionRowLabel(session.id, session.label),
-            closed: session.lifecycle === 'closed',
-          })) ?? []);
-
   // Входы сайдбара (кусок 2.5): сначала работа, по которой кликнули,
   // становится активной (id `mail` общий на раскладку), затем вкладка
   // открывается в её раскладке.
@@ -698,16 +679,27 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
           if (!open) closeNewWorkDialog();
         }}
       />
-      {createRoom !== null ? (
-        <CreateRoomDialog
-          open
+      <NewSessionOrRoomDialog
+        open={newSession.open}
+        bridge={bridge}
+        work={newSession.work}
+        room={newSession.room}
+        onOpenChange={(open) => {
+          if (!open) closeNewSessionDialog();
+        }}
+      />
+      {/* Диалог 1.6 остаётся смонтированным и после закрытия (`open={false}`): комнату он открывает вкладкой, когда снимок
+          её принёс, и это ожидание живёт в самом диалоге — размонтирование при закрытии его бы отменило. */}
+      {lastMerge !== null ? (
+        <MergeRoomDialog
+          open={mergeRoom !== null}
           bridge={bridge}
-          projectPath={createRoom.projectPath}
-          workId={createRoom.workId}
-          requiredMember={createRoom.requiredMember}
-          candidates={roomCandidates}
+          projectPath={lastMerge.projectPath}
+          workId={lastMerge.workId}
+          dragged={lastMerge.dragged}
+          target={lastMerge.target}
           onOpenChange={(open) => {
-            if (!open) closeCreateRoomDialog();
+            if (!open) closeMergeRoomDialog();
           }}
         />
       ) : null}

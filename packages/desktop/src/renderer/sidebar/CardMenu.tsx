@@ -136,7 +136,7 @@ export function CardMenu({ entry, pinned, bridge, onRename, onOpenMail, children
           {canCreateSession ? (
             <ContextMenuItem
               data-card-action="new-session"
-              onSelect={() => useUiStore.getState().openNewSessionDialog(null, { projectPath, workId })}
+              onSelect={() => useUiStore.getState().openNewSessionDialog({ projectPath, workId })}
             >
               {S.cardMenu.newSession}
             </ContextMenuItem>
@@ -144,7 +144,7 @@ export function CardMenu({ entry, pinned, bridge, onRename, onOpenMail, children
           {canCreateRoom ? (
             <ContextMenuItem
               data-card-action="new-room"
-              onSelect={() => useUiStore.getState().openCreateRoomDialog({ projectPath, workId, requiredMember: null })}
+              onSelect={() => useUiStore.getState().openNewSessionDialog({ projectPath, workId }, { room: true })}
             >
               {S.cardMenu.newRoom}
             </ContextMenuItem>

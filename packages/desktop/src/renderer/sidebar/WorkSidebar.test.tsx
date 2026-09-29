@@ -96,7 +96,7 @@ beforeEach(() => {
     ui: DEFAULT_UI,
     sidebarHovering: false,
     sidebarHolds: {},
-    dialogs: { newWork: { open: false, projectPath: null, title: '' }, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null },
+    dialogs: { newWork: { open: false, projectPath: null, title: '' }, newSession: { open: false, work: null, room: false }, settings: false, mergeRoom: null },
   });
   useLayoutStore.setState({ activeWorkKey: null, layouts: {}, hydrated: {}, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
   useSidebarSectionsStore.setState({ sections: [], attention: {} });

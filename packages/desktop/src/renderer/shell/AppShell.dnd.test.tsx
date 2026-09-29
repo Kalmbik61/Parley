@@ -131,9 +131,9 @@ beforeEach(() => {
     wakePaused: null,
     dialogs: {
       newWork: false,
-      newSession: { open: false, parentSessionId: null, work: null },
+      newSession: { open: false, work: null, room: false },
       settings: false,
-      createRoom: null,
+      mergeRoom: null,
       restartHost: false,
     },
     visibleSessionRefs: {},

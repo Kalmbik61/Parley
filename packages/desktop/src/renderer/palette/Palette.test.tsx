@@ -79,9 +79,9 @@ beforeEach(() => {
   useUiStore.setState({
     dialogs: {
       newWork: { open: false, projectPath: null, title: '' },
-      newSession: { open: false, parentSessionId: null, work: null },
+      newSession: { open: false, work: null, room: false },
       settings: false,
-      createRoom: null,
+      mergeRoom: null,
       restartHost: false,
     },
   });

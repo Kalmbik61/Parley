@@ -1,0 +1,631 @@
+/**
+ * Диалог «New session or room» (кусок 7 плана «Organic», спека окна 2026-09-29, 1.5, 2.1): один агент — один
+ * `sessions.create` без `rooms.create`; N агентов — N `sessions.create` (тихий старт) и `rooms.create` с `lead` и
+ * `quiet: true`; частичный сбой — итог по агентам и «Retry» только упавшим; контролы модели и усилия по `models` и
+ * `effort` провайдера; «In its own worktree»; агент по умолчанию; работа диалога.
+ */
+
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { toast } from 'sonner';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { S } from '../../../shared/strings.js';
+import { DEFAULT_UI } from '../../../shared/ui-types.js';
+import { EMPTY_HISTORY } from '../../layout/history.js';
+import { tabId } from '../../layout/ids.js';
+import { useLayoutStore } from '../../layout/store.js';
+import { groups } from '../../layout/tree.js';
+import { roomKey } from '../../lib/room-view.js';
+import { workKey } from '../../lib/tree-order.js';
+import { useUiStore } from '../../store/ui.js';
+import { useWorksStore } from '../../store/works.js';
+import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
+import { chooseOption, installRadixSelectPolyfills } from '../../test-utils/radix-select.js';
+import { makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
+import { NewSessionOrRoomDialog } from './NewSessionOrRoomDialog.js';
+
+vi.mock('sonner', () => ({ toast: vi.fn() }));
+
+installRadixSelectPolyfills();
+
+const PROJECT = '/tmp/proj';
+const KEY = workKey(PROJECT, 'w-01');
+
+const PROVIDERS = [
+  {
+    id: 'claude',
+    label: 'Claude',
+    available: true,
+    models: [
+      { id: 'opus', label: 'Opus' },
+      { id: 'sonnet', label: 'Sonnet' },
+    ],
+    effort: true,
+  },
+  { id: 'codex', label: 'Codex', available: true, models: [{ id: 'gpt-6-astra', label: 'GPT-6 Astra' }], effort: true },
+  { id: 'glm', label: 'GLM', available: true },
+  { id: 'cursor', label: 'Cursor', available: false },
+];
+
+let bridge: FakeBridge;
+/** Номер следующей сессии, которую вернёт `sessions.create`: s-01, s-02, … */
+let nextSession = 1;
+
+const callsOf = (method: string): Array<Record<string, unknown>> =>
+  bridge.calls.filter((call) => call.method === method).map((call) => call.params as Record<string, unknown>);
+
+function stubHost(): void {
+  bridge.setHandler('providers.list', async () => ({ providers: PROVIDERS }));
+  bridge.setHandler('worktrees.available', async () => ({ available: true }));
+  bridge.setHandler('sessions.create', async (params) => ({
+    ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: `s-${String(nextSession++).padStart(2, '0')}` },
+  }));
+  bridge.setHandler('rooms.create', async () => ({ roomId: 'r-01' }));
+}
+
+beforeEach(() => {
+  nextSession = 1;
+  bridge = createFakeBridge();
+  stubHost();
+  useWorksStore.setState({
+    entries: [makeWork('w-01', { projectPath: PROJECT, title: 'Payments' }), makeWork('w-02', { projectPath: '/tmp/other', title: 'Auth' })],
+    branches: {},
+    loading: false,
+    error: null,
+  });
+  useLayoutStore.setState({
+    activeWorkKey: KEY,
+    layouts: {},
+    hydrated: {},
+    pending: {},
+    history: EMPTY_HISTORY,
+    mru: {},
+    navigating: false,
+  });
+  // Без `init`: его `loadUi` затёр бы `lastProvider`, заданный тестом; `patchUi` пишет зеркало и так.
+  useUiStore.setState({ ui: DEFAULT_UI, uiLoaded: true, roomExpanded: {} });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.mocked(toast).mockClear();
+});
+
+interface Rendered {
+  onOpenChange: ReturnType<typeof vi.fn>;
+}
+
+/** Диалог открыт; `providers.list` этого открытия уже ответил. */
+async function renderDialog(
+  props: { work?: { projectPath: string; workId: string } | null; room?: boolean } = {},
+): Promise<Rendered> {
+  const onOpenChange = vi.fn();
+  render(
+    <NewSessionOrRoomDialog open bridge={bridge} work={props.work ?? null} room={props.room ?? false} onOpenChange={onOpenChange} />,
+  );
+  await waitFor(() => expect(callsOf('providers.list')).toHaveLength(1));
+  await act(async () => {});
+  return { onOpenChange };
+}
+
+const dialog = (): HTMLElement => screen.getByRole('dialog');
+const rows = (): HTMLElement[] => [...dialog().querySelectorAll<HTMLElement>('[data-agent-row]')];
+const button = (name: string | RegExp): HTMLButtonElement => screen.getByRole('button', { name }) as HTMLButtonElement;
+const providerRadio = (row: number, name: string): HTMLElement =>
+  within(within(rows()[row] as HTMLElement).getByRole('radiogroup', { name: `Agent ${row + 1}` })).getByRole('radio', { name });
+/** Сегмент усилия строки: у Radix ToggleGroup единственного выбора роль — radiogroup. */
+const effortGroup = (row: number): HTMLElement => within(rows()[row] as HTMLElement).getByRole('radiogroup', { name: 'Effort' });
+const isChecked = (element: HTMLElement): boolean => element.getAttribute('aria-checked') === 'true';
+
+async function addAgent(times = 1): Promise<void> {
+  for (let i = 0; i < times; i += 1) fireEvent.click(button(S.dialogs.newSession.addAgent));
+  await act(async () => {});
+}
+
+describe('NewSessionOrRoomDialog — вид и состав (1.5)', () => {
+  it('один агент: заголовок New session, подсказка, сводка, Start session; звезды ведущего нет', async () => {
+    await renderDialog();
+    expect(screen.getByRole('heading', { name: 'New session' })).toBeTruthy();
+    expect(screen.getByText('Add another agent to make it a room.')).toBeTruthy();
+    expect(screen.getByText('One session in Payments')).toBeTruthy();
+    expect(button('Start session').disabled).toBe(false);
+    expect(rows()).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: /^(Lead|Make lead)$/ })).toBeNull();
+    // Название — Session name, необязательное.
+    expect(screen.getByPlaceholderText('Optional')).toBeTruthy();
+  });
+
+  it('два и больше: заголовок New room, подсказка, Room with 3 agents in …, Create room, у каждого звезда; ведущий — первый', async () => {
+    await renderDialog();
+    await addAgent(2);
+    expect(screen.getByRole('heading', { name: 'New room' })).toBeTruthy();
+    expect(screen.getByText('The agents discuss the task you write in the room. The lead brings you a decision.')).toBeTruthy();
+    expect(screen.getByText('Room with 3 agents in Payments')).toBeTruthy();
+    expect(button('Create room')).toBeTruthy();
+    expect(screen.getByPlaceholderText('What the agents will discuss')).toBeTruthy();
+    const stars = screen.getAllByRole('button', { name: /^(Lead|Make lead)$/ });
+    expect(stars.map((star) => star.getAttribute('aria-pressed'))).toEqual(['true', 'false', 'false']);
+    expect(stars.map((star) => star.textContent)).toEqual(['★', '☆', '☆']);
+  });
+
+  it('«New room» (room) открывает сразу два агента — комнату', async () => {
+    await renderDialog({ room: true });
+    expect(screen.getByRole('heading', { name: 'New room' })).toBeTruthy();
+    expect(rows()).toHaveLength(2);
+  });
+
+  it('провайдеры — пилюли: доступные выбираются, недоступный неактивен; по умолчанию Claude', async () => {
+    await renderDialog();
+    expect(isChecked(providerRadio(0, 'Claude'))).toBe(true);
+    expect(isChecked(providerRadio(0, 'Codex'))).toBe(false);
+    expect((providerRadio(0, 'Cursor') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(providerRadio(0, 'Codex'));
+    expect(isChecked(providerRadio(0, 'Codex'))).toBe(true);
+    expect(isChecked(providerRadio(0, 'Claude'))).toBe(false);
+  });
+
+  it('провайдеры — радиогруппа с клавиатуры: Tab берёт выбранного, стрелки переходят на соседнего доступного по кругу и выбирают его', async () => {
+    await renderDialog();
+    const claude = providerRadio(0, 'Claude');
+    const codex = providerRadio(0, 'Codex');
+    expect([claude.getAttribute('tabindex'), codex.getAttribute('tabindex')]).toEqual(['0', '-1']);
+    act(() => claude.focus());
+    fireEvent.keyDown(claude, { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(codex);
+    expect(isChecked(codex)).toBe(true);
+    expect([claude.getAttribute('tabindex'), codex.getAttribute('tabindex')]).toEqual(['-1', '0']);
+    fireEvent.keyDown(codex, { key: 'ArrowRight' });
+    expect(isChecked(providerRadio(0, 'GLM'))).toBe(true);
+    // Дальше недоступный Cursor: стрелка его пропускает и уходит по кругу на Claude; назад — обратно на GLM.
+    fireEvent.keyDown(providerRadio(0, 'GLM'), { key: 'ArrowDown' });
+    expect(isChecked(claude)).toBe(true);
+    fireEvent.keyDown(claude, { key: 'ArrowLeft' });
+    expect(isChecked(providerRadio(0, 'GLM'))).toBe(true);
+    // Не стрелка — ничего.
+    fireEvent.keyDown(providerRadio(0, 'GLM'), { key: 'a' });
+    expect(isChecked(providerRadio(0, 'GLM'))).toBe(true);
+  });
+
+  it('ui.lastProvider — агент по умолчанию, как у диалога новой работы', async () => {
+    useUiStore.setState({ ui: { ...DEFAULT_UI, lastProvider: 'codex' } });
+    await renderDialog();
+    expect(isChecked(providerRadio(0, 'Codex'))).toBe(true);
+  });
+
+  it('«+ Add agent»: провайдер последней строки, модель Default, усилие Medium', async () => {
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Codex'));
+    await addAgent();
+    expect(rows()).toHaveLength(2);
+    expect(isChecked(providerRadio(1, 'Codex'))).toBe(true);
+    const model = within(rows()[1] as HTMLElement).getByRole('combobox', { name: 'Model' });
+    expect(model.textContent).toBe('Default');
+    expect(within(effortGroup(1)).getByRole('radio', { name: 'Medium' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('удалить агента: недоступно при одном; удаление возвращает заголовок New session; ведущий, которого убрали, — первый', async () => {
+    await renderDialog();
+    const remove = (): HTMLButtonElement[] => screen.getAllByRole('button', { name: 'Remove agent' }) as HTMLButtonElement[];
+    expect(remove()[0]?.disabled).toBe(true);
+    await addAgent(2);
+    // Звезда — у второго, и его убирают: ведущим становится первый оставшийся.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Make lead' })[0] as HTMLElement);
+    expect(screen.getAllByRole('button', { name: /^(Lead|Make lead)$/ }).map((star) => star.getAttribute('aria-pressed'))).toEqual(['false', 'true', 'false']);
+    fireEvent.click(remove()[1] as HTMLElement);
+    expect(rows()).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: /^(Lead|Make lead)$/ }).map((star) => star.getAttribute('aria-pressed'))).toEqual(['true', 'false']);
+    fireEvent.click(remove()[1] as HTMLElement);
+    expect(screen.getByRole('heading', { name: 'New session' })).toBeTruthy();
+    expect(remove()[0]?.disabled).toBe(true);
+  });
+
+  it('каждое открытие — с чистой формой: один агент, пустое название', async () => {
+    const onOpenChange = vi.fn();
+    const view = render(<NewSessionOrRoomDialog open bridge={bridge} work={null} room={false} onOpenChange={onOpenChange} />);
+    await act(async () => {});
+    await addAgent();
+    fireEvent.change(screen.getByPlaceholderText('What the agents will discuss'), { target: { value: 'Sync' } });
+    view.rerender(<NewSessionOrRoomDialog open={false} bridge={bridge} work={null} room={false} onOpenChange={onOpenChange} />);
+    view.rerender(<NewSessionOrRoomDialog open bridge={bridge} work={null} room={false} onOpenChange={onOpenChange} />);
+    await act(async () => {});
+    expect(rows()).toHaveLength(1);
+    expect((screen.getByPlaceholderText('Optional') as HTMLInputElement).value).toBe('');
+  });
+});
+
+describe('NewSessionOrRoomDialog — один агент (2.1)', () => {
+  it('один sessions.create с model и effort, без rooms.create; lastProvider запоминается; диалог закрывается', async () => {
+    const { onOpenChange } = await renderDialog();
+    fireEvent.click(providerRadio(0, 'Codex'));
+    await chooseOption(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Model' }), 'GPT-6 Astra');
+    fireEvent.click(within(effortGroup(0)).getByRole('radio', { name: 'High' }));
+    fireEvent.change(screen.getByPlaceholderText('Optional'), { target: { value: '  Auth work ' } });
+    fireEvent.click(button('Start session'));
+
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create')).toEqual([
+      {
+        projectPath: PROJECT,
+        workId: 'w-01',
+        provider: 'codex',
+        label: 'Auth work',
+        task: '',
+        parent: null,
+        worktree: false,
+        model: 'gpt-6-astra',
+        effort: 'high',
+      },
+    ]);
+    expect(callsOf('rooms.create')).toEqual([]);
+    expect(useUiStore.getState().ui.lastProvider).toBe('codex');
+  });
+
+  it('модель Default и усилие по умолчанию: model не уходит, effort — medium', async () => {
+    await renderDialog();
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    const params = callsOf('sessions.create')[0] as Record<string, unknown>;
+    expect(params).not.toHaveProperty('model');
+    expect(params).toMatchObject({ provider: 'claude', effort: 'medium', label: '', task: '' });
+  });
+
+  it('терминал открывается, когда снимок работ принёс сессию — не раньше', async () => {
+    useLayoutStore.setState({ layouts: { [KEY]: { root: { type: 'group', id: 'g-1', tabs: [], activeTabId: null }, activeGroupId: 'g-1', closedTabs: [] } }, hydrated: { [KEY]: true } });
+    await renderDialog();
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    await act(async () => {});
+    const tabs = (): string[] => {
+      const layout = useLayoutStore.getState().layouts[KEY];
+      return layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id));
+    };
+    // Снимка ещё нет — вкладка не открыта вслепую: иначе мелькнуло бы «Session deleted».
+    expect(tabs()).toEqual([]);
+    act(() =>
+      useWorksStore.setState({
+        entries: [makeWork('w-01', { projectPath: PROJECT, title: 'Payments', sessions: [makeSession('s-01', '')] }), makeWork('w-02', { projectPath: '/tmp/other' })],
+      }),
+    );
+    expect(tabs()).toEqual([tabId.terminal('s-01')]);
+    expect(useLayoutStore.getState().activeWorkKey).toBe(KEY);
+  });
+
+  it('отказ sessions.create — итог по агенту, Retry вместо Start session, диалог открыт', async () => {
+    bridge.setHandler('sessions.create', async () => {
+      throw { code: 'conflict', message: 'хост против' };
+    });
+    const { onOpenChange } = await renderDialog();
+    fireEvent.click(button('Start session'));
+    expect(await screen.findByText("Couldn't create session: conflicting state.")).toBeTruthy();
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(button('Retry')).toBeTruthy();
+  });
+});
+
+describe('NewSessionOrRoomDialog — контролы модели и усилия по providers.list (решение 5)', () => {
+  it('есть список — select с пунктом Default первым, дальше подписи списка', async () => {
+    await renderDialog();
+    const model = within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Model' });
+    expect(model.textContent).toBe('Default');
+    fireEvent.keyDown(model, { key: 'ArrowDown' });
+    const options = await screen.findAllByRole('option');
+    expect(options.map((option) => option.textContent)).toEqual(['Default', 'Opus', 'Sonnet']);
+  });
+
+  it('выбранная модель уходит id; смена провайдера возвращает Default и model не уходит', async () => {
+    await renderDialog();
+    await chooseOption(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Model' }), 'Opus');
+    expect(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Model' }).textContent).toBe('Opus');
+    fireEvent.click(providerRadio(0, 'Codex'));
+    expect(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Model' }).textContent).toBe('Default');
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).not.toHaveProperty('model');
+  });
+
+  it.each([
+    ['models: null', { id: 'claude', label: 'Claude', available: true, models: null, effort: false }],
+    ['models: []', { id: 'claude', label: 'Claude', available: true, models: [], effort: false }],
+    ['поля models нет — старый хост', { id: 'claude', label: 'Claude', available: true }],
+  ])('%s — контрола модели и усилия нет, sessions.create без model и effort', async (_name, provider) => {
+    bridge.setHandler('providers.list', async () => ({ providers: [provider] }));
+    await renderDialog();
+    expect(within(rows()[0] as HTMLElement).queryByRole('combobox', { name: 'Model' })).toBeNull();
+    expect(within(rows()[0] as HTMLElement).queryByRole('radiogroup', { name: 'Effort' })).toBeNull();
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    const params = callsOf('sessions.create')[0] as Record<string, unknown>;
+    expect(params).not.toHaveProperty('model');
+    expect(params).not.toHaveProperty('effort');
+  });
+
+  it('effort: false при непустом списке — модель есть, усилия нет; effort: true при models: null — наоборот', async () => {
+    bridge.setHandler('providers.list', async () => ({
+      providers: [
+        { id: 'claude', label: 'Claude', available: true, models: [{ id: 'opus', label: 'Opus' }], effort: false },
+        { id: 'codex', label: 'Codex', available: true, models: null, effort: true },
+      ],
+    }));
+    await renderDialog();
+    expect(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Model' })).toBeTruthy();
+    expect(within(rows()[0] as HTMLElement).queryByRole('radiogroup', { name: 'Effort' })).toBeNull();
+    fireEvent.click(providerRadio(0, 'Codex'));
+    expect(within(rows()[0] as HTMLElement).queryByRole('combobox', { name: 'Model' })).toBeNull();
+    expect(effortGroup(0)).toBeTruthy();
+  });
+
+  it('повторный клик по выбранному усилию его не снимает', async () => {
+    await renderDialog();
+    const effort = effortGroup(0);
+    fireEvent.click(within(effort).getByRole('radio', { name: 'Medium' }));
+    expect(within(effort).getByRole('radio', { name: 'Medium' }).getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(within(effort).getByRole('radio', { name: 'Low' }));
+    expect(within(effort).getByRole('radio', { name: 'Low' }).getAttribute('aria-checked')).toBe('true');
+    expect(within(effort).getByRole('radio', { name: 'Medium' }).getAttribute('aria-checked')).toBe('false');
+  });
+});
+
+describe('NewSessionOrRoomDialog — несколько агентов: комната (2.1)', () => {
+  it('три агента — три sessions.create (тихий старт) и rooms.create с lead, quiet и названием Room {n}', async () => {
+    const { onOpenChange } = await renderDialog();
+    await addAgent(2);
+    fireEvent.click(providerRadio(1, 'Codex'));
+    await chooseOption(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Model' }), 'Sonnet');
+    // Ведущий — третий.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Make lead' })[1] as HTMLElement);
+    fireEvent.click(button('Create room'));
+
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create')).toEqual([
+      { projectPath: PROJECT, workId: 'w-01', provider: 'claude', label: '', task: '', parent: null, worktree: false, model: 'sonnet', effort: 'medium' },
+      { projectPath: PROJECT, workId: 'w-01', provider: 'codex', label: '', task: '', parent: null, worktree: false, effort: 'medium' },
+      { projectPath: PROJECT, workId: 'w-01', provider: 'claude', label: '', task: '', parent: null, worktree: false, effort: 'medium' },
+    ]);
+    expect(callsOf('rooms.create')).toEqual([
+      { projectPath: PROJECT, workId: 'w-01', title: 'Room 1', members: ['s-01', 's-02', 's-03'], lead: 's-03', quiet: true },
+    ]);
+    // Комната создана после всех сессий: порядок вызовов.
+    const order = bridge.calls.map((call) => call.method).filter((method) => method === 'sessions.create' || method === 'rooms.create');
+    expect(order).toEqual(['sessions.create', 'sessions.create', 'sessions.create', 'rooms.create']);
+  });
+
+  it('название по умолчанию — по числу комнат работы; введённое (без пробелов по краям) — как есть', async () => {
+    useWorksStore.setState({
+      entries: [makeWork('w-01', { projectPath: PROJECT, title: 'Payments', rooms: [makeRoom('r-01', 'A'), makeRoom('r-02', 'B')] })],
+    });
+    await renderDialog({ room: true });
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(callsOf('rooms.create')).toHaveLength(1));
+    expect(callsOf('rooms.create')[0]).toMatchObject({ title: 'Room 3' });
+
+    cleanup();
+    bridge.calls.length = 0;
+    nextSession = 1;
+    await renderDialog({ room: true });
+    fireEvent.change(screen.getByPlaceholderText('What the agents will discuss'), { target: { value: '  Refunds  ' } });
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(callsOf('rooms.create')).toHaveLength(1));
+    expect(callsOf('rooms.create')[0]).toMatchObject({ title: 'Refunds' });
+    // Название — у комнаты, а не у сессий: их ярлык пуст, строка сайдбара покажет S01, S02.
+    expect(callsOf('sessions.create').map((params) => params['label'])).toEqual(['', '']);
+  });
+
+  it('вкладка комнаты открывается, а её строка разворачивается, когда снимок принёс комнату', async () => {
+    useLayoutStore.setState({ layouts: { [KEY]: { root: { type: 'group', id: 'g-1', tabs: [], activeTabId: null }, activeGroupId: 'g-1', closedTabs: [] } }, hydrated: { [KEY]: true } });
+    await renderDialog({ room: true });
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(callsOf('rooms.create')).toHaveLength(1));
+    await act(async () => {});
+    expect(useUiStore.getState().roomExpanded[roomKey(KEY, 'r-01')]).toBeUndefined();
+
+    const room = { ...makeRoom('r-01', 'Room 1'), members: ['s-01', 's-02'], lead: 's-01' };
+    act(() =>
+      useWorksStore.setState({
+        entries: [
+          makeWork('w-01', { projectPath: PROJECT, title: 'Payments', sessions: [makeSession('s-01', ''), makeSession('s-02', '')], rooms: [room] }),
+          makeWork('w-02', { projectPath: '/tmp/other' }),
+        ],
+      }),
+    );
+    const layout = useLayoutStore.getState().layouts[KEY];
+    expect(layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id))).toEqual([tabId.room('r-01')]);
+    expect(useUiStore.getState().roomExpanded[roomKey(KEY, 'r-01')]).toBe(true);
+  });
+
+  it('lastProvider — провайдер последней строки', async () => {
+    await renderDialog({ room: true });
+    fireEvent.click(providerRadio(1, 'Codex'));
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(callsOf('rooms.create')).toHaveLength(1));
+    expect(useUiStore.getState().ui.lastProvider).toBe('codex');
+  });
+
+  it('двойной клик по «Create room» — одна комната и по одной сессии на агента', async () => {
+    await renderDialog({ room: true });
+    const create = button('Create room');
+    fireEvent.click(create);
+    fireEvent.click(create);
+    await waitFor(() => expect(callsOf('rooms.create')).toHaveLength(1));
+    await act(async () => {});
+    expect(callsOf('sessions.create')).toHaveLength(2);
+    expect(callsOf('rooms.create')).toHaveLength(1);
+  });
+});
+
+describe('NewSessionOrRoomDialog — частичный сбой запуска', () => {
+  /** Второй вызов `sessions.create` падает, пока `fail` включён. */
+  function failSecond(state: { fail: boolean }): void {
+    let call = 0;
+    bridge.setHandler('sessions.create', async (params) => {
+      call += 1;
+      if (call === 2 && state.fail) throw { code: 'internal', message: 'сбой' };
+      return { ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: `s-${String(nextSession++).padStart(2, '0')}` } };
+    });
+  }
+
+  it('комнаты нет до успеха всех; итог по каждому агенту; Retry вместо Create room; диалог открыт', async () => {
+    failSecond({ fail: true });
+    const { onOpenChange } = await renderDialog();
+    await addAgent(2);
+    fireEvent.click(button('Create room'));
+
+    expect(await screen.findByText("Couldn't create session: host error.")).toBeTruthy();
+    expect(callsOf('sessions.create')).toHaveLength(3);
+    expect(callsOf('rooms.create')).toEqual([]);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    const results = screen.getAllByRole('status').map((line) => line.textContent);
+    expect(results).toEqual(['S01 started', "Couldn't create session: host error.", 'S02 started']);
+    expect(button('Retry')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Create room' })).toBeNull();
+  });
+
+  it('Retry повторяет только упавших; комната — после успеха всех, с участниками в порядке строк', async () => {
+    const state = { fail: true };
+    failSecond(state);
+    const { onOpenChange } = await renderDialog();
+    await addAgent(2);
+    fireEvent.click(providerRadio(1, 'Codex'));
+    await screen.findByRole('button', { name: 'Create room' });
+    fireEvent.click(button('Create room'));
+    await screen.findByText("Couldn't create session: host error.");
+
+    state.fail = false;
+    fireEvent.click(button('Retry'));
+    await waitFor(() => expect(callsOf('rooms.create')).toHaveLength(1));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    // Три вызова первой попытки и один повтор — не четыре новых.
+    expect(callsOf('sessions.create')).toHaveLength(4);
+    expect(callsOf('sessions.create')[3]).toMatchObject({ provider: 'codex' });
+    expect(callsOf('rooms.create')[0]).toMatchObject({ members: ['s-01', 's-03', 's-02'], lead: 's-01', quiet: true });
+  });
+
+  it('запущенные строки после первой попытки заперты, общие поля тоже; упавшая строка — доступна', async () => {
+    failSecond({ fail: true });
+    await renderDialog();
+    await addAgent();
+    fireEvent.click(button('Create room'));
+    await screen.findByText("Couldn't create session: host error.");
+    expect((providerRadio(0, 'Codex') as HTMLButtonElement).disabled).toBe(true);
+    expect((providerRadio(1, 'Codex') as HTMLButtonElement).disabled).toBe(false);
+    expect(button(S.dialogs.newSession.addAgent).disabled).toBe(true);
+    expect((screen.getByPlaceholderText('What the agents will discuss') as HTMLInputElement).disabled).toBe(true);
+    for (const remove of screen.getAllByRole('button', { name: 'Remove agent' })) expect((remove as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('Cancel после частичного сбоя: диалог закрыт, rooms.create не звали, запущенные сессии остались', async () => {
+    failSecond({ fail: true });
+    const { onOpenChange } = await renderDialog();
+    await addAgent();
+    fireEvent.click(button('Create room'));
+    await screen.findByText("Couldn't create session: host error.");
+    fireEvent.click(button('Cancel'));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(callsOf('rooms.create')).toEqual([]);
+  });
+
+  it('rooms.create упал после запуска всех — ошибка комнаты, Retry зовёт только rooms.create', async () => {
+    let fail = true;
+    bridge.setHandler('rooms.create', async () => {
+      if (fail) throw { code: 'internal', message: 'сбой' };
+      return { roomId: 'r-01' };
+    });
+    const { onOpenChange } = await renderDialog({ room: true });
+    fireEvent.click(button('Create room'));
+    expect(await screen.findByText("Couldn't create room: host error.")).toBeTruthy();
+    expect(callsOf('sessions.create')).toHaveLength(2);
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    fail = false;
+    fireEvent.click(button('Retry'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create')).toHaveLength(2);
+    expect(callsOf('rooms.create')).toHaveLength(2);
+  });
+});
+
+describe('NewSessionOrRoomDialog — «In its own worktree»', () => {
+  const switchOf = (): HTMLButtonElement => screen.getByRole('switch', { name: 'In its own worktree' }) as HTMLButtonElement;
+
+  it('не-git проект — флажок неактивен; git-проект (worktrees.available) — активен', async () => {
+    bridge.setHandler('worktrees.available', async () => ({ available: false }));
+    await renderDialog();
+    expect(switchOf().disabled).toBe(true);
+    cleanup();
+    bridge.calls.length = 0;
+    bridge.setHandler('worktrees.available', async () => ({ available: true }));
+    await renderDialog();
+    expect(switchOf().disabled).toBe(false);
+  });
+
+  it('включённый — worktree: true у каждой сессии комнаты', async () => {
+    await renderDialog({ room: true });
+    fireEvent.click(switchOf());
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(callsOf('rooms.create')).toHaveLength(1));
+    expect(callsOf('sessions.create').map((params) => params['worktree'])).toEqual([true, true]);
+  });
+});
+
+describe('NewSessionOrRoomDialog — работа диалога и ответ providers.list', () => {
+  it('работа по умолчанию — активная (не первая в списке); выбор человека — его; done и archived в списке нет', async () => {
+    useWorksStore.setState({
+      entries: [
+        makeWork('w-01', { projectPath: PROJECT, title: 'Payments' }),
+        makeWork('w-02', { projectPath: '/tmp/other', title: 'Auth' }),
+        makeWork('w-03', { projectPath: '/tmp/third', title: 'Old', status: 'done' }),
+      ],
+    });
+    useLayoutStore.setState({ activeWorkKey: workKey('/tmp/other', 'w-02') });
+    await renderDialog();
+    const select = (): HTMLElement => screen.getByRole('combobox', { name: 'Workspace' });
+    expect(select().textContent).toBe('Auth · other');
+    fireEvent.keyDown(select(), { key: 'ArrowDown' });
+    expect((await screen.findAllByRole('option')).map((option) => option.textContent)).toEqual(['Payments · proj', 'Auth · other']);
+    fireEvent.click(screen.getByRole('option', { name: 'Payments · proj' }));
+    expect(select().textContent).toBe('Payments · proj');
+
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ projectPath: PROJECT, workId: 'w-01' });
+    // Диалог другой работы проверяет её git.
+    expect(callsOf('worktrees.available').map((params) => params['projectPath'])).toContain(PROJECT);
+  });
+
+  it('работа из меню карточки неактивной карточки — диалог на ней, а не на активной', async () => {
+    await renderDialog({ work: { projectPath: '/tmp/other', workId: 'w-02' } });
+    expect(screen.getByRole('combobox', { name: 'Workspace' }).textContent).toBe('Auth · other');
+    expect(screen.getByText('One session in Auth')).toBeTruthy();
+  });
+
+  it('Start session раньше ответа providers.list — кнопка неактивна; после ответа — агент по умолчанию, а не пустой', async () => {
+    let release: () => void = () => {};
+    bridge.setHandler('providers.list', () => new Promise((resolve) => (release = () => resolve({ providers: PROVIDERS }))));
+    render(<NewSessionOrRoomDialog open bridge={bridge} work={null} room={false} onOpenChange={() => {}} />);
+    await waitFor(() => expect(callsOf('providers.list')).toHaveLength(1));
+    expect(button('Start session').disabled).toBe(true);
+    fireEvent.click(button('Start session'));
+    await act(async () => {});
+    expect(callsOf('sessions.create')).toEqual([]);
+
+    await act(async () => release());
+    expect(button('Start session').disabled).toBe(false);
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'claude' });
+  });
+
+  it('отказ providers.list — текст ошибки, кнопка неактивна', async () => {
+    bridge.setHandler('providers.list', async () => {
+      throw { code: 'internal', message: 'сбой' };
+    });
+    render(<NewSessionOrRoomDialog open bridge={bridge} work={null} room={false} onOpenChange={() => {}} />);
+    expect(await screen.findByText("Couldn't load providers: host error.")).toBeTruthy();
+    expect(button('Start session').disabled).toBe(true);
+  });
+
+  it('Cancel закрывает диалог, ничего не создав', async () => {
+    const { onOpenChange } = await renderDialog();
+    fireEvent.click(button('Cancel'));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(callsOf('sessions.create')).toEqual([]);
+  });
+});
