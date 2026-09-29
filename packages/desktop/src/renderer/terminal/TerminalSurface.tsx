@@ -459,7 +459,7 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
         <div
           data-testid="terminal-offline"
           role="status"
-          className="absolute inset-0 z-10 flex items-center justify-center bg-black/50 px-4 text-center text-sm text-neutral-100"
+          className="absolute inset-0 z-10 flex items-center justify-center bg-black/50 px-4 text-center text-sm text-white"
         >
           {S.terminal.disconnected}
         </div>

@@ -113,7 +113,8 @@ test.describe('вкладка диффа на собранном окне', () =
     await expect(diffEditor.locator('.editor.modified').getByText('27 hidden lines')).toHaveCount(2);
     await expect(window.getByText("Editor didn't load")).toHaveCount(0);
     const background = await diffEditor.locator('.editor.modified .monaco-editor-background').first().evaluate((el) => getComputedStyle(el).backgroundColor);
-    expect(background).toBe('rgb(255, 255, 255)');
+    // Фон редактора — лист центра `--sheet` светлой темы (#f9f4ed).
+    expect(background).toBe('rgb(249, 244, 237)');
 
     // Раунд fix-live, D1: окно 1400×900 с обоими сайдбарами — вкладка уже 900 px, порога Monaco
     // `useInlineViewWhenSpaceIsLimited`. Опция выключена: «Side by side» — две колонки при любой

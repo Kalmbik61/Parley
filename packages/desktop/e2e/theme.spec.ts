@@ -22,6 +22,9 @@ const mainEntry = path.resolve(dirname, '../out/main/index.js');
 
 const isDark = (window: Page): Promise<boolean> => window.evaluate(() => document.documentElement.classList.contains('dark'));
 const background = (window: Page): Promise<string> => window.evaluate(() => getComputedStyle(document.body).backgroundColor);
+/** Фон окна — `--background` = `surface` палитры Organic (спека окна 2026-09-29, раздел 4): светлая #ebddc5, тёмная #161513. */
+const LIGHT_BACKGROUND = 'rgb(235, 221, 197)';
+const DARK_BACKGROUND = 'rgb(22, 21, 19)';
 
 test.describe('тема окна по nativeTheme main (спека 4.7, раунд main-r2)', () => {
   let home: string;
@@ -71,11 +74,11 @@ test.describe('тема окна по nativeTheme main (спека 4.7, раун
 
     await pickTheme(window, 'Theme: dark');
     await expect.poll(() => isDark(window)).toBe(true);
-    expect(await background(window)).toBe('rgb(10, 10, 10)');
+    expect(await background(window)).toBe(DARK_BACKGROUND);
 
     await pickTheme(window, 'Theme: light');
     await expect.poll(() => isDark(window)).toBe(false);
-    expect(await background(window)).toBe('rgb(255, 255, 255)');
+    expect(await background(window)).toBe(LIGHT_BACKGROUND);
   });
 
   test('выбранная тема переживает перезапуск окна и перезагрузку страницы', async () => {
@@ -88,7 +91,7 @@ test.describe('тема окна по nativeTheme main (спека 4.7, раун
     window = await launch();
     // С первого кадра — без ожидания события: начальная тёмность приходит синхронно.
     expect(await isDark(window)).toBe(true);
-    expect(await background(window)).toBe('rgb(10, 10, 10)');
+    expect(await background(window)).toBe(DARK_BACKGROUND);
     // Перезагрузка страницы: `.dark` ставит `main.tsx` до React, экран связи тут не важен.
     await window.reload({ waitUntil: 'load' });
     expect(await isDark(window)).toBe(true);
@@ -102,6 +105,6 @@ test.describe('тема окна по nativeTheme main (спека 4.7, раун
 
     window = await launch();
     expect(await isDark(window)).toBe(false);
-    expect(await background(window)).toBe('rgb(255, 255, 255)');
+    expect(await background(window)).toBe(LIGHT_BACKGROUND);
   });
 });

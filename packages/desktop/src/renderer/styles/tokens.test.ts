@@ -1,364 +1,468 @@
 /**
- * Раунд исправлений 1 куска 1.3, находка B№1 (линза B, живой рендер): в
- * светлой теме `--muted-foreground` (`#737373`) даёт 3.94:1 на
- * `--work-sidebar-accent` (`#eaeaea`) при тексте 11px (строки сессий,
- * прежнего сайдбара, теперь `sidebar/SessionRow.tsx`) — 11px не «крупный»
- * текст по WCAG (порог начинается с 18.66px жирным/24px обычным), так что
- * нужные 4.5:1 не снижаются до 3:1. Тест читает значения из самого tokens.css
- * (а не полагается на память о них) и считает контраст по формуле WCAG 2.x,
- * чтобы дефект не вернулся тихо, если кто-то поправит цвет обратно.
+ * Токены Organic (кусок 1 плана «Organic», спека окна 2026-09-29, раздел 4).
+ *
+ * Переменные shadcn выражены через палитру — `var()` и `color-mix()`, — а не держат hex, поэтому
+ * тест разворачивает их сам (`test-utils/css-tokens.ts`) так же, как браузер: палитра одна, в CSS,
+ * без второй копии в тестах. Контраст — по формуле WCAG 2.x, прозрачные заливки (`text 9%`,
+ * `text 4%`) кладутся на свой фон и округляются до пикселя. Пороги: вторичный текст — 4.5:1 в обеих
+ * темах, признак состояния (заливка выбранного, кольцо фокуса, разделитель) — 3:1.
+ *
+ * Что здесь держится:
+ *  1. палитра и тени — дословно по разделу 4 спеки (сам блок читается из спеки);
+ *  2. переменные shadcn — строка в строку по таблице раздела 4 и по решениям 1 и 2;
+ *  3. контраст пар из брифа куска: `neutral-700` на всех фонах, главная кнопка, hover карточки;
+ *  4. прежние имена (`--status-warning-text`, `--agent-question`, `--work-sidebar*`…) живы —
+ *     значения новые, имена прежние — и ссылки в коде ни на одну пропавшую переменную не смотрят;
+ *  5. правило приглушения `dimmed.css` — текст цветом, значки прозрачностью — на новых токенах.
  */
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { compositeOver, contrastRatio as contrastOf, type Rgb } from '../test-utils/contrast.js';
+import { compositeOver, contrastRatio, type Rgb } from '../test-utils/contrast.js';
+import {
+  colorOver,
+  parseThemeInline,
+  parseTokens,
+  rawValue,
+  resolveColor,
+  substituted,
+  type Theme,
+} from '../test-utils/css-tokens.js';
 
-const TOKENS_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'tokens.css');
+const dirname = path.dirname(fileURLToPath(import.meta.url));
+const css = readFileSync(path.join(dirname, 'tokens.css'), 'utf8');
+const dimmedCss = readFileSync(path.join(dirname, 'dimmed.css'), 'utf8');
+const tokens = parseTokens(css);
+const THEMES: readonly Theme[] = ['light', 'dark'];
 
-/** Значение переменной из светлого блока `:root { … }` — до первого `.dark {`, где те же имена переопределены под тёмную тему. */
-function readLightVar(css: string, name: string): string {
-  const start = css.indexOf(':root {');
-  const end = css.indexOf('.dark {');
-  if (start === -1 || end === -1 || end <= start) {
-    throw new Error('tokens.css: не нашёл границы блоков :root/.dark');
-  }
-  const lightBlock = css.slice(start, end);
-  const match = lightBlock.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6});`));
-  if (match === null) throw new Error(`tokens.css: токен --${name} не найден в :root`);
-  return match[1] as string;
+const TEXT = 4.5;
+const NON_TEXT = 3;
+
+/** Сплошной цвет токена; прозрачный — ошибка: его контраст зависит от фона и считается через `on`. */
+function solid(theme: Theme, name: string): Rgb {
+  const { rgb, alpha } = resolveColor(tokens, theme, name);
+  if (alpha !== 1) throw new Error(`${name} (${theme}) прозрачный: alpha ${alpha}`);
+  return rgb;
 }
 
-function srgbChannelToLinear(channel255: number): number {
-  const c = channel255 / 255;
-  return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-}
+/** Токен поверх сплошного фона `backdrop`. */
+const on = (theme: Theme, name: string, backdrop: Rgb): Rgb => colorOver(tokens, theme, name, backdrop);
 
-/** Относительная яркость по WCAG 2.x (sRGB, без гаммы дисплея). */
-function relativeLuminance(hex: string): number {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return 0.2126 * srgbChannelToLinear(r) + 0.7152 * srgbChannelToLinear(g) + 0.0722 * srgbChannelToLinear(b);
-}
+const same = (theme: Theme, a: string, b: string): void =>
+  expect(resolveColor(tokens, theme, a), `${a} = ${b} (${theme})`).toEqual(resolveColor(tokens, theme, b));
 
-/** Контраст WCAG 2.x: (L1+0.05)/(L2+0.05), где L1 — более светлый цвет. */
-function contrastRatio(hexA: string, hexB: string): number {
-  const [lighter, darker] = [relativeLuminance(hexA), relativeLuminance(hexB)].sort((a, b) => b - a);
-  return (lighter + 0.05) / (darker + 0.05);
-}
+/**
+ * Фоны, на которых стоит вторичный текст окна (спека 4: замеры в конце таблицы shadcn). Функции, а
+ * не готовые цвета: пропавший токен роняет один тест с его именем, а не весь файл при сборе.
+ */
+const TEXT_BACKGROUNDS: Record<string, (theme: Theme) => Rgb> = {
+  'фон окна (--background)': (theme) => solid(theme, '--background'),
+  'активная карточка, вкладка, меню (--card)': (theme) => solid(theme, '--card'),
+  'лист центра (--sheet)': (theme) => solid(theme, '--sheet'),
+  'заливка --secondary и --muted': (theme) => solid(theme, '--secondary'),
+  'выбранная строка активной карточки (--card + --accent)': (theme) => on(theme, '--accent', solid(theme, '--card')),
+  'hover неактивной карточки (--background + --card-hover)': (theme) => on(theme, '--card-hover', solid(theme, '--background')),
+  'подкраска blocked (accent-200)': (theme) => solid(theme, '--color-accent-200'),
+  'подкраска unseen (accent-2-200)': (theme) => solid(theme, '--color-accent-2-200'),
+};
 
-const WCAG_AA_SMALL_TEXT = 4.5;
+// ── 1. Спека: палитра и тени дословно ────────────────────────────────────────────────────────
 
-describe('tokens.css — контраст --muted-foreground в светлой теме (раунд исправлений 1, находка B№1)', () => {
-  const css = readFileSync(TOKENS_PATH, 'utf8');
-  const mutedForeground = readLightVar(css, 'muted-foreground');
-  const workSidebar = readLightVar(css, 'work-sidebar');
-  const workSidebarAccent = readLightVar(css, 'work-sidebar-accent');
+describe('палитра Organic — раздел 4 спеки дословно', () => {
+  const spec = readFileSync(
+    path.resolve(dirname, '../../../../../docs/specs/2026-09-29-desktop-rooms-organic-design.md'),
+    'utf8',
+  );
+  const section = spec.slice(spec.indexOf('## 4. Токены'), spec.indexOf('## 5. Ассеты'));
+  const block = /```css\n([\s\S]*?)```/.exec(section)?.[1];
+  const fromSpec = parseTokens(block ?? '');
 
-  it('на --work-sidebar-accent (самый тёмный фон строки сайдбара) — не ниже 4.5:1', () => {
-    expect(contrastRatio(mutedForeground, workSidebarAccent)).toBeGreaterThanOrEqual(WCAG_AA_SMALL_TEXT);
+  it('в спеке нашёлся блок :root/.dark: по 38 переменных — 6 базовых, 27 ступеней рамп, 3 тени, --sheet и --scrim', () => {
+    expect(fromSpec.light.size).toBeGreaterThanOrEqual(38);
+    expect(fromSpec.darkOverrides.size).toBeGreaterThanOrEqual(38);
   });
 
-  it('на --work-sidebar — не ниже 4.5:1', () => {
-    expect(contrastRatio(mutedForeground, workSidebar)).toBeGreaterThanOrEqual(WCAG_AA_SMALL_TEXT);
+  it('каждая переменная светлой темы из спеки совпадает с tokens.css', () => {
+    for (const [name, value] of fromSpec.light) expect(rawValue(tokens, 'light', name), name).toBe(value);
   });
 
-  it('на белом (--card/--background/--popover светлой темы) — не ниже 4.5:1', () => {
-    expect(contrastRatio(mutedForeground, '#ffffff')).toBeGreaterThanOrEqual(WCAG_AA_SMALL_TEXT);
+  it('каждая переменная тёмной темы из спеки совпадает с tokens.css', () => {
+    for (const [name, value] of fromSpec.darkOverrides) expect(rawValue(tokens, 'dark', name), name).toBe(value);
   });
 });
 
-/**
- * Тест 14 куска 3.3: самый тёмный фон сайдбара теперь — активная карточка
- * (`color-mix` 8% `--work-sidebar-foreground`, в тёмной 10%, спека 6.3), а поверх
- * неё — подсветка amber-500/10 строки «ждёт тебя» и «не просмотрено». На ней
- * `--muted-foreground` ниже 4.5:1 (светлая 4.44, тёмная 4.09), поэтому вторичный
- * текст карточек — свой токен `--work-sidebar-muted-foreground`.
- */
-describe('tokens.css — вторичный текст карточек сайдбара (кусок 3.3, тест 14)', () => {
-  const css = readFileSync(TOKENS_PATH, 'utf8');
+// ── 2. Переменные shadcn через палитру ───────────────────────────────────────────────────────
 
-  /** Значение `--name` в блоке темы: светлая — `:root { … }` до `.dark {`, тёмная — `.dark { … }`. */
-  function readHex(theme: 'light' | 'dark', name: string): Rgb {
-    const rootStart = css.indexOf(':root {');
-    const darkStart = css.indexOf('.dark {');
-    if (rootStart === -1 || darkStart === -1 || darkStart <= rootStart) throw new Error('tokens.css: нет блоков :root/.dark');
-    const block = theme === 'light' ? css.slice(rootStart, darkStart) : css.slice(darkStart, css.indexOf('}', darkStart));
-    const match = block.match(new RegExp(`--${name}:\\s*#([0-9a-fA-F]{6});`));
-    if (match === null) throw new Error(`tokens.css: --${name} не найден (${theme})`);
-    const hex = match[1] as string;
-    return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
-  }
-
-  // amber-500 Tailwind 4 — oklch(76.9% 0.188 70.08), в sRGB ≈ #fe9a00.
-  const AMBER_500: Rgb = [254, 154, 0];
-  const CARD_MIX = { light: 0.08, dark: 0.1 } as const;
-
-  for (const theme of ['light', 'dark'] as const) {
-    const text = readHex(theme, 'work-sidebar-muted-foreground');
-    const sidebar = readHex(theme, 'work-sidebar');
-    const activeCard = compositeOver(readHex(theme, 'work-sidebar-foreground'), CARD_MIX[theme], sidebar);
-    const amberOnCard = compositeOver(AMBER_500, 0.1, activeCard);
-    const selectedRow = readHex(theme, 'work-sidebar-accent');
-
-    it(`${theme}: на активной карточке — не ниже 4.5:1`, () => {
-      expect(contrastOf(text, activeCard)).toBeGreaterThanOrEqual(WCAG_AA_SMALL_TEXT);
+describe('переменные shadcn — таблица раздела 4 спеки', () => {
+  for (const theme of THEMES) {
+    it(`${theme}: фон, текст, карточки, вторичные, рамки, кольцо`, () => {
+      same(theme, '--background', '--color-surface');
+      same(theme, '--foreground', '--color-text');
+      same(theme, '--card', '--color-neutral-100');
+      same(theme, '--popover', '--color-neutral-100');
+      same(theme, '--card-foreground', '--color-text');
+      same(theme, '--popover-foreground', '--color-text');
+      same(theme, '--secondary', '--color-neutral-200');
+      same(theme, '--muted', '--color-neutral-200');
+      same(theme, '--muted-foreground', '--color-neutral-700');
+      same(theme, '--destructive', '--color-accent-700');
+      same(theme, '--border', '--color-divider');
+      same(theme, '--input', '--color-divider');
+      same(theme, '--ring', '--color-accent');
     });
 
-    it(`${theme}: на amber-500/10 поверх активной карточки — не ниже 4.5:1`, () => {
-      expect(contrastOf(text, amberOnCard)).toBeGreaterThanOrEqual(WCAG_AA_SMALL_TEXT);
+    it(`${theme}: --accent — выбранная строка, text 9 % (не терракотовый accent палитры)`, () => {
+      const accent = resolveColor(tokens, theme, '--accent');
+      expect(accent.rgb).toEqual(resolveColor(tokens, theme, '--color-text').rgb);
+      expect(accent.alpha).toBeCloseTo(0.09, 10);
+      same(theme, '--accent-foreground', '--color-text');
     });
 
-    it(`${theme}: на выбранной строке (--work-sidebar-accent) и на фоне сайдбара — не ниже 4.5:1`, () => {
-      expect(contrastOf(text, selectedRow)).toBeGreaterThanOrEqual(WCAG_AA_SMALL_TEXT);
-      expect(contrastOf(text, sidebar)).toBeGreaterThanOrEqual(WCAG_AA_SMALL_TEXT);
-      expect(contrastOf(text, compositeOver(AMBER_500, 0.1, sidebar))).toBeGreaterThanOrEqual(WCAG_AA_SMALL_TEXT);
+    it(`${theme}: сайдбары без своего фона, выбранная строка — text 9 %`, () => {
+      same(theme, '--work-sidebar', '--color-surface');
+      same(theme, '--sidebar', '--color-surface');
+      same(theme, '--work-sidebar-accent', '--accent');
+    });
+
+    it(`${theme}: --agent-question — accent-600, --status-success — accent-2-600`, () => {
+      same(theme, '--agent-question', '--color-accent-600');
+      same(theme, '--status-success', '--color-accent-2-600');
     });
   }
+
+  it('--radius — 16px', () => {
+    expect(rawValue(tokens, 'light', '--radius')).toBe('16px');
+  });
+
+  it('радиусы: sm 8, md 16, lg 28, диалоги и карточки 32 (раздел 4)', () => {
+    const theme = parseThemeInline(css);
+    expect(theme.get('--radius-sm')).toBe('8px');
+    expect(theme.get('--radius-md')).toBe('16px');
+    expect(theme.get('--radius-lg')).toBe('28px');
+    expect(theme.get('--radius-xl')).toBe('32px');
+  });
 });
 
-/**
- * Кусок 3.4, решение контролёра 4: пункты-«разрушители» меню сайдбара (Delete…, Archive)
- * должны читаться и на подсветке фокуса. У прежнего `SessionMenu` фокус красил пункт в
- * `--destructive` с `--destructive-foreground`, а в тёмной это 1.66:1. Поэтому у меню свой
- * токен текста `--menu-destructive`; фон фокуса — общий `--accent` пункта (`ui/glass.ts`).
- */
-describe('tokens.css — «разрушители» меню (кусок 3.4, решение 4)', () => {
-  const css = readFileSync(TOKENS_PATH, 'utf8');
+describe('решение 1: главная кнопка', () => {
+  it('светлая: фон accent-700, hover accent-800, active accent-900, текст bg', () => {
+    same('light', '--primary', '--color-accent-700');
+    same('light', '--primary-hover', '--color-accent-800');
+    same('light', '--primary-active', '--color-accent-900');
+    same('light', '--primary-foreground', '--color-bg');
+  });
 
-  function readHex(theme: 'light' | 'dark', name: string): Rgb {
-    const rootStart = css.indexOf(':root {');
-    const darkStart = css.indexOf('.dark {');
-    const block = theme === 'light' ? css.slice(rootStart, darkStart) : css.slice(darkStart, css.indexOf('}', darkStart));
-    const match = block.match(new RegExp(`--${name}:\\s*#([0-9a-fA-F]{6});`));
-    if (match === null) throw new Error(`tokens.css: --${name} не найден (${theme})`);
-    const hex = match[1] as string;
-    return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
-  }
+  it('тёмная: фон accent, hover accent-600, active accent-700, текст bg', () => {
+    same('dark', '--primary', '--color-accent');
+    same('dark', '--primary-hover', '--color-accent-600');
+    same('dark', '--primary-active', '--color-accent-700');
+    same('dark', '--primary-foreground', '--color-bg');
+  });
 
-  // «Стекло» меню (`ui/glass.ts`): светлая — white/82%, тёмная — black/72% поверх того, что под меню.
-  const GLASS = { light: { color: [255, 255, 255] as Rgb, alpha: 0.82 }, dark: { color: [0, 0, 0] as Rgb, alpha: 0.72 } } as const;
-
-  for (const theme of ['light', 'dark'] as const) {
-    const text = readHex(theme, 'menu-destructive');
-    it(`${theme}: на подсветке фокуса (--accent) — не ниже 4.5:1`, () => {
-      expect(contrastOf(text, readHex(theme, 'accent'))).toBeGreaterThanOrEqual(WCAG_AA_SMALL_TEXT);
-    });
-    it(`${theme}: на стекле поверх сайдбара и центра (--editor-surface) — не ниже 4.5:1`, () => {
-      for (const under of ['work-sidebar', 'editor-surface']) {
-        const glass = compositeOver(GLASS[theme].color, GLASS[theme].alpha, readHex(theme, under));
-        expect(contrastOf(text, glass)).toBeGreaterThanOrEqual(WCAG_AA_SMALL_TEXT);
+  for (const theme of THEMES) {
+    it(`${theme}: текст на главной кнопке во всех состояниях — не ниже 4.5:1`, () => {
+      const text = solid(theme, '--primary-foreground');
+      for (const fill of ['--primary', '--primary-hover', '--primary-active']) {
+        expect(contrastRatio(text, solid(theme, fill)), fill).toBeGreaterThanOrEqual(TEXT);
       }
     });
-  }
-});
 
-/**
- * Раунд исправлений 1 куска 3.4, находка 7: кольцо фокуса карточки и строки сессии —
- * не-текстовый контраст WCAG 1.4.11, ≥ 3:1 к каждому фону, на котором оно рисуется.
- */
-describe('tokens.css — кольцо фокуса сайдбара (кусок 3.4, раунд 1)', () => {
-  const css = readFileSync(TOKENS_PATH, 'utf8');
+    it(`${theme}: destructive-кнопка — текст на заливке и на её hover (90 %) не ниже 4.5:1`, () => {
+      const text = solid(theme, '--destructive-foreground');
+      expect(contrastRatio(text, solid(theme, '--destructive'))).toBeGreaterThanOrEqual(TEXT);
+      // `hover:bg-destructive/90` — 90 % заливки поверх фона окна.
+      const hover = compositeOver(solid(theme, '--destructive'), 0.9, solid(theme, '--background'));
+      expect(contrastRatio(text, hover)).toBeGreaterThanOrEqual(TEXT);
+    });
 
-  function readHex(theme: 'light' | 'dark', name: string): Rgb {
-    const rootStart = css.indexOf(':root {');
-    const darkStart = css.indexOf('.dark {');
-    const block = theme === 'light' ? css.slice(rootStart, darkStart) : css.slice(darkStart, css.indexOf('}', darkStart));
-    const match = block.match(new RegExp(`--${name}:\\s*#([0-9a-fA-F]{6});`));
-    if (match === null) throw new Error(`tokens.css: --${name} не найден (${theme})`);
-    const hex = match[1] as string;
-    return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
-  }
-
-  const AMBER_500: Rgb = [254, 154, 0];
-  const CARD_MIX = { light: 0.08, dark: 0.1 } as const;
-
-  for (const theme of ['light', 'dark'] as const) {
-    it(`${theme}: к фону сайдбара, активной карточке, выбранной и подсвеченной строке — не ниже 3:1`, () => {
-      const ring = readHex(theme, 'work-sidebar-focus-ring');
-      const sidebar = readHex(theme, 'work-sidebar');
-      const activeCard = compositeOver(readHex(theme, 'work-sidebar-foreground'), CARD_MIX[theme], sidebar);
-      for (const under of [sidebar, activeCard, readHex(theme, 'work-sidebar-accent'), compositeOver(AMBER_500, 0.1, activeCard)]) {
-        expect(contrastOf(ring, under)).toBeGreaterThanOrEqual(3);
-      }
+    it(`${theme}: заливка выбранного пункта сегмента (--primary) — признак состояния, не ниже 3:1 к фону окна и карточки`, () => {
+      const fill = solid(theme, '--primary');
+      expect(contrastRatio(fill, solid(theme, '--background'))).toBeGreaterThanOrEqual(NON_TEXT);
+      expect(contrastRatio(fill, solid(theme, '--card'))).toBeGreaterThanOrEqual(NON_TEXT);
     });
   }
 });
 
-/**
- * Перенос ревью 6.2-B (Minor 1) в кусок 6.3: выделенная строка палитры. В светлой теме смесь
- * 13 % `--foreground` давала к фону палитры 1.33:1 — ниже ориентира WCAG 1.4.11 (3:1) для
- * не-текстового элемента. Фон палитры — `bg-background/96` поверх затемнения `bg-black/55`, под
- * которым что угодно от чёрного до белого: проверяются обе крайности. Текст строки — ≥ 4.5:1.
- */
-describe('tokens.css — выделенная строка палитры (кусок 6.3, перенос ревью 6.2-B)', () => {
-  const css = readFileSync(TOKENS_PATH, 'utf8');
-
-  function readHex(theme: 'light' | 'dark', name: string): Rgb {
-    const rootStart = css.indexOf(':root {');
-    const darkStart = css.indexOf('.dark {');
-    const block = theme === 'light' ? css.slice(rootStart, darkStart) : css.slice(darkStart, css.indexOf('}', darkStart));
-    // `--background` светлой темы записан коротко (`#fff`) — трёхзначный разворачивается.
-    const match = block.match(new RegExp(`--${name}:\\s*#([0-9a-fA-F]{6}|[0-9a-fA-F]{3});`));
-    if (match === null) throw new Error(`tokens.css: --${name} не найден (${theme})`);
-    const short = match[1] as string;
-    const hex = short.length === 3 ? [...short].map((digit) => digit + digit).join('') : short;
-    return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
-  }
-
-  /** Фон палитры над страницей `page`: затемнение 55 % чёрного, поверх — 96 % `--background`. */
-  function paletteBackground(theme: 'light' | 'dark', page: Rgb): Rgb {
-    return compositeOver(readHex(theme, 'background'), 0.96, compositeOver([0, 0, 0], 0.55, page));
-  }
-
-  // Раунд main-r2, п. 3 (ревью 6.3-B, Minor 1): тёмный блок #262626 в светлой теме расходился
-  // с выделением остального окна. Заливка — светлая, как у сайдбара, а состояние несёт край.
-  it('светлая: заливка выделения светлая — тон фона строки сайдбара (--work-sidebar-accent)', () => {
-    expect(readHex('light', 'palette-selected')).toEqual(readHex('light', 'work-sidebar-accent'));
-  });
-
-  it('светлая: край выделения к фону палитры и к заливке — не ниже 3:1 (WCAG 1.4.11)', () => {
-    const edge = readHex('light', 'palette-selected-edge');
-    for (const page of [[0, 0, 0], [255, 255, 255]] as const) {
-      expect(contrastOf(edge, paletteBackground('light', page))).toBeGreaterThanOrEqual(3);
+describe('решение 2: hover неактивной карточки', () => {
+  it('--card-hover — text в единицах процента, не выше 5 % спеки', () => {
+    for (const theme of THEMES) {
+      const hover = resolveColor(tokens, theme, '--card-hover');
+      expect(hover.rgb).toEqual(resolveColor(tokens, theme, '--color-text').rgb);
+      // Ровно 5 % даёт neutral-700 на surface 4.48:1 — ниже порога; 4 % — 4.56:1.
+      expect(hover.alpha).toBeGreaterThan(0.03);
+      expect(hover.alpha).toBeLessThanOrEqual(0.05);
     }
-    expect(contrastOf(edge, readHex('light', 'palette-selected'))).toBeGreaterThanOrEqual(3);
   });
 
-  it('светлая: текст выделенной строки — обычный тёмный (--foreground)', () => {
-    expect(readHex('light', 'palette-selected-foreground')).toEqual(readHex('light', 'foreground'));
+  it('hover заметнее фона окна, но слабее выбранной строки (text 9 %)', () => {
+    for (const theme of THEMES) {
+      expect(resolveColor(tokens, theme, '--card-hover').alpha).toBeLessThan(resolveColor(tokens, theme, '--accent').alpha);
+    }
   });
+});
 
-  it('тёмная без изменений: фон выделения — прежний --accent, край сливается с заливкой', () => {
-    expect(readHex('dark', 'palette-selected')).toEqual(readHex('dark', 'accent'));
-    expect(readHex('dark', 'palette-selected-edge')).toEqual(readHex('dark', 'palette-selected'));
-    expect(readHex('dark', 'palette-selected-foreground')).toEqual([0xfa, 0xfa, 0xfa]);
-    expect(readHex('dark', 'palette-selected-muted')).toEqual([0xbd, 0xbd, 0xbd]);
-  });
+// ── 3. Контраст вторичного текста ────────────────────────────────────────────────────────────
 
-  for (const theme of ['light', 'dark'] as const) {
-    it(`${theme}: заголовок и вторичный текст выделенной строки — не ниже 4.5:1`, () => {
-      const selected = readHex(theme, 'palette-selected');
-      expect(contrastOf(readHex(theme, 'palette-selected-foreground'), selected)).toBeGreaterThanOrEqual(4.5);
-      expect(contrastOf(readHex(theme, 'palette-selected-muted'), selected)).toBeGreaterThanOrEqual(4.5);
+describe('вторичный текст — не ниже 4.5:1 в обеих темах (замеры спеки, раздел 4)', () => {
+  for (const theme of THEMES) {
+    for (const [background, backdrop] of Object.entries(TEXT_BACKGROUNDS)) {
+      it(`${theme}: --muted-foreground (neutral-700) на «${background}»`, () => {
+        expect(contrastRatio(solid(theme, '--muted-foreground'), backdrop(theme))).toBeGreaterThanOrEqual(TEXT);
+      });
+
+      it(`${theme}: --work-sidebar-muted-foreground (текст приглушённых карточек) на «${background}»`, () => {
+        expect(contrastRatio(solid(theme, '--work-sidebar-muted-foreground'), backdrop(theme))).toBeGreaterThanOrEqual(TEXT);
+      });
+    }
+
+    it(`${theme}: основной текст на фоне окна, карточке и листе — не ниже 4.5:1`, () => {
+      for (const under of ['--background', '--card', '--sheet']) {
+        expect(contrastRatio(solid(theme, '--foreground'), solid(theme, under)), under).toBeGreaterThanOrEqual(TEXT);
+      }
+    });
+  }
+});
+
+// ── 4. Прежние имена, новые значения ────────────────────────────────────────────────────────
+
+describe('прежние переменные — значения на токенах Organic', () => {
+  for (const theme of THEMES) {
+    it(`${theme}: предупреждение — accent-700; текст предупреждения на --card, --background, --sidebar, --editor-surface не ниже 4.5:1`, () => {
+      same(theme, '--status-warning', '--color-accent-700');
+      same(theme, '--status-warning-text', '--color-accent-700');
+      const text = solid(theme, '--status-warning-text');
+      for (const under of ['--card', '--background', '--sidebar', '--editor-surface']) {
+        expect(contrastRatio(text, solid(theme, under)), under).toBeGreaterThanOrEqual(TEXT);
+      }
+    });
+
+    it(`${theme}: --agent-question-text — accent-700, читается на подкраске blocked`, () => {
+      same(theme, '--agent-question-text', '--color-accent-700');
+      expect(contrastRatio(solid(theme, '--agent-question-text'), solid(theme, '--color-accent-200'))).toBeGreaterThanOrEqual(TEXT);
+    });
+
+    it(`${theme}: пункты-«разрушители» меню (--menu-destructive) на --popover и на подсветке фокуса не ниже 4.5:1`, () => {
+      const text = solid(theme, '--menu-destructive');
+      const popover = solid(theme, '--popover');
+      expect(contrastRatio(text, popover)).toBeGreaterThanOrEqual(TEXT);
+      expect(contrastRatio(text, on(theme, '--accent', popover))).toBeGreaterThanOrEqual(TEXT);
+    });
+
+    it(`${theme}: кольцо фокуса сайдбара (--work-sidebar-focus-ring) — не ниже 3:1 к каждому его фону`, () => {
+      const ring = solid(theme, '--work-sidebar-focus-ring');
+      const surface = solid(theme, '--work-sidebar');
+      const card = solid(theme, '--card');
+      const unders = {
+        сайдбар: surface,
+        'активная карточка': card,
+        'выбранная строка': on(theme, '--work-sidebar-accent', card),
+        'hover карточки': on(theme, '--card-hover', surface),
+        blocked: solid(theme, '--color-accent-200'),
+        unseen: solid(theme, '--color-accent-2-200'),
+      };
+      for (const [name, under] of Object.entries(unders)) {
+        expect(contrastRatio(ring, under), name).toBeGreaterThanOrEqual(NON_TEXT);
+      }
+    });
+
+    it(`${theme}: разделитель панелей (--split-divider) — не ниже 3:1 к --card, --background и листу; активный — не слабее`, () => {
+      const line = solid(theme, '--split-divider');
+      const strong = solid(theme, '--split-divider-strong');
+      for (const under of ['--card', '--background', '--sheet']) {
+        const bg = solid(theme, under);
+        expect(contrastRatio(line, bg), under).toBeGreaterThanOrEqual(NON_TEXT);
+        expect(contrastRatio(strong, bg), `${under} (strong)`).toBeGreaterThanOrEqual(contrastRatio(line, bg));
+      }
+    });
+
+    it(`${theme}: фон редактора — лист центра`, () => {
+      same(theme, '--editor-surface', '--sheet');
     });
   }
 });
 
 /**
- * Ревью M12 и живая приёмка MVP: текст WCAG AA в обеих темах.
- * 1. Предупреждение «Изменений» (`projectFolderWarning`) было `--status-warning` — `#ca8a04` на белом
- *    2.94:1. Спека 4.1 держит `--status-warning` для значков и подложек, тексту — свой токен.
- * 2. done/archived-карточки и закрытые строки были приглушены opacity всей карточки (/60, /50):
- *    текст падал до 2.4–3.8:1. Теперь текст приглушается цветом (`styles/dimmed.css`: основной
- *    текст сайдбара → вторичный), а прозрачность остаётся только у значков и полосы внимания.
+ * Выделенная строка палитры ⌘J (Palette.tsx, спека 9.3): заливка — тон выбранной строки сайдбара,
+ * а состояние несёт ещё и край (`ring-palette-selected-edge`): заливка `text 9 %` к фону панели
+ * 1.2:1. Фон панели — `bg-background/96` поверх затемнения `bg-black/55`, под которым что угодно
+ * от чёрного до белого: проверяются обе крайности. Панель станет `neutral-100` в куске 2 — пары
+ * от этого только выигрывают.
  */
-describe('tokens.css — контраст текста предупреждения и приглушённых карточек (ревью M12)', () => {
-  const css = readFileSync(TOKENS_PATH, 'utf8');
-  const dimmedCss = readFileSync(path.join(path.dirname(TOKENS_PATH), 'dimmed.css'), 'utf8');
+describe('выделенная строка палитры', () => {
+  const paletteBackground = (theme: Theme, page: Rgb): Rgb =>
+    compositeOver(solid(theme, '--background'), 0.96, compositeOver([0, 0, 0], 0.55, page));
 
-  function readHex(theme: 'light' | 'dark', name: string): Rgb {
-    const rootStart = css.indexOf(':root {');
-    const darkStart = css.indexOf('.dark {');
-    const block = theme === 'light' ? css.slice(rootStart, darkStart) : css.slice(darkStart, css.indexOf('}', darkStart));
-    const match = block.match(new RegExp(`--${name}:\\s*#([0-9a-fA-F]{6}|[0-9a-fA-F]{3});`));
-    if (match === null) throw new Error(`tokens.css: --${name} не найден (${theme})`);
-    const short = match[1] as string;
-    const hex = short.length === 3 ? [...short].map((digit) => digit + digit).join('') : short;
-    return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
-  }
-
-  const AMBER_500: Rgb = [254, 154, 0];
-  const CARD_MIX = { light: 0.08, dark: 0.1 } as const;
-
-  for (const theme of ['light', 'dark'] as const) {
-    it(`${theme}: текст предупреждения (--status-warning-text) на --card, --background, --sidebar, --editor-surface — не ниже 4.5:1`, () => {
-      const text = readHex(theme, 'status-warning-text');
-      for (const under of ['card', 'background', 'sidebar', 'editor-surface']) {
-        expect(contrastOf(text, readHex(theme, under)), under).toBeGreaterThanOrEqual(WCAG_AA_SMALL_TEXT);
+  for (const theme of THEMES) {
+    it(`${theme}: заливка — тон строки сайдбара, текст — обычный, вторичный не ниже 4.5:1`, () => {
+      same(theme, '--palette-selected', '--work-sidebar-accent');
+      same(theme, '--palette-selected-foreground', '--foreground');
+      for (const page of [[0, 0, 0], [255, 255, 255]] as const) {
+        const panel = paletteBackground(theme, page);
+        const fill = compositeOver(resolveColor(tokens, theme, '--palette-selected').rgb, resolveColor(tokens, theme, '--palette-selected').alpha, panel);
+        expect(contrastRatio(solid(theme, '--palette-selected-foreground'), fill)).toBeGreaterThanOrEqual(TEXT);
+        expect(contrastRatio(solid(theme, '--palette-selected-muted'), fill)).toBeGreaterThanOrEqual(TEXT);
       }
     });
 
-    it(`${theme}: текст приглушённой карточки и строки — не ниже 4.5:1 на всех фонах сайдбара`, () => {
-      // В приглушённой карточке основной текст сайдбара равен вторичному (dimmed.css), и заливка
-      // активной карточки считается от него же — color-mix берёт переопределённую переменную.
-      const text = readHex(theme, 'work-sidebar-muted-foreground');
-      const sidebar = readHex(theme, 'work-sidebar');
-      const accent = readHex(theme, 'work-sidebar-accent');
-      const unders: Record<string, Rgb> = {
-        sidebar,
-        hover: compositeOver(accent, 0.4, sidebar),
-        selected: accent,
-        activeDimmed: compositeOver(text, CARD_MIX[theme], sidebar),
-        activeNormal: compositeOver(readHex(theme, 'work-sidebar-foreground'), CARD_MIX[theme], sidebar),
-      };
-      unders.amberOnActive = compositeOver(AMBER_500, 0.1, unders.activeDimmed as Rgb);
-      unders.amberOnSidebar = compositeOver(AMBER_500, 0.1, sidebar);
-      for (const [name, under] of Object.entries(unders)) {
-        expect(contrastOf(text, under), name).toBeGreaterThanOrEqual(WCAG_AA_SMALL_TEXT);
+    it(`${theme}: край выделения — не ниже 3:1 к фону панели и к заливке`, () => {
+      const edge = solid(theme, '--palette-selected-edge');
+      const { rgb, alpha } = resolveColor(tokens, theme, '--palette-selected');
+      for (const page of [[0, 0, 0], [255, 255, 255]] as const) {
+        const panel = paletteBackground(theme, page);
+        expect(contrastRatio(edge, panel)).toBeGreaterThanOrEqual(NON_TEXT);
+        expect(contrastRatio(edge, compositeOver(rgb, alpha, panel))).toBeGreaterThanOrEqual(NON_TEXT);
       }
     });
   }
+});
 
-  it('dimmed.css: основной текст сайдбара в [data-dimmed] — вторичный токен, без opacity у самого узла', () => {
+/**
+ * Monaco принимает в `editor.background` только полный hex, а тему берёт из `getPropertyValue`
+ * на `<html>` (`files/editor/editor-theme.ts`): после подстановки `var()` обе переменные обязаны
+ * остаться hex, иначе редактор тихо возьмёт запасные цвета старой темы.
+ */
+describe('переменные, которые читает Monaco', () => {
+  for (const theme of THEMES) {
+    it(`${theme}: --editor-surface и --foreground после подстановки — hex`, () => {
+      for (const name of ['--editor-surface', '--foreground']) {
+        expect(substituted(tokens, theme, name), name).toMatch(/^#([0-9a-f]{6}|[0-9a-f]{3})$/i);
+      }
+    });
+  }
+});
+
+// ── Целостность: ни одной потерянной переменной ─────────────────────────────────────────────
+
+/** Файлы рендерера, кроме тестов и самих токенов. */
+function rendererFiles(extensions: RegExp): string[] {
+  const out: string[] = [];
+  const stack = [path.resolve(dirname, '..')];
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    if (dir === undefined) continue;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== 'test-utils') stack.push(full);
+      } else if (extensions.test(entry.name) && !/\.test\./.test(entry.name) && entry.name !== 'tokens.css') {
+        out.push(full);
+      }
+    }
+  }
+  return out;
+}
+
+describe('целостность токенов', () => {
+  it('каждая утилита @theme inline смотрит на существующую переменную', () => {
+    const missing: string[] = [];
+    for (const [utility, expression] of parseThemeInline(css)) {
+      for (const match of expression.matchAll(/var\((--[\w-]+)/g)) {
+        const target = match[1] as string;
+        // Радиусы и тени в этом блоке — значения; `--shadow-*` смотрят на одноимённую переменную :root.
+        if (!tokens.light.has(target)) missing.push(`${utility} → ${target}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  it('ни одна ссылка var(--…) в коде и CSS окна не смотрит на переменную, которой нет в tokens.css', () => {
+    const dangling: string[] = [];
+    for (const file of rendererFiles(/\.(tsx?|css)$/)) {
+      for (const match of readFileSync(file, 'utf8').matchAll(/var\((--[\w-]+)/g)) {
+        const name = match[1] as string;
+        if (name.startsWith('--radix-') || name.startsWith('--tw-')) continue;
+        if (!tokens.light.has(name) && !tokens.darkOverrides.has(name)) {
+          dangling.push(`${path.relative(dirname, file)}: ${name}`);
+        }
+      }
+    }
+    expect(dangling).toEqual([]);
+  });
+
+  it('имена, которые зовёт код, остались: значения на палитре, обе темы читаются', () => {
+    const called = [
+      '--status-warning-text',
+      '--status-warning',
+      '--status-warning-background',
+      '--status-warning-border',
+      '--status-success',
+      '--status-success-background',
+      '--status-success-border',
+      '--agent-question',
+      '--agent-question-text',
+      '--work-sidebar',
+      '--work-sidebar-foreground',
+      '--work-sidebar-accent',
+      '--work-sidebar-accent-foreground',
+      '--work-sidebar-border',
+      '--work-sidebar-ring',
+      '--work-sidebar-focus-ring',
+      '--work-sidebar-muted-foreground',
+      '--muted-foreground',
+      '--split-divider',
+      '--split-divider-strong',
+      '--git-decoration-added',
+      '--git-decoration-modified',
+      '--git-decoration-deleted',
+      '--git-decoration-renamed',
+      '--git-decoration-untracked',
+      '--git-decoration-copied',
+      '--git-decoration-ignored',
+      '--menu-destructive',
+      '--palette-selected',
+      '--palette-selected-foreground',
+      '--palette-selected-muted',
+      '--palette-selected-edge',
+      '--editor-surface',
+    ];
+    for (const theme of THEMES) {
+      for (const name of called) expect(() => resolveColor(tokens, theme, name), `${name} (${theme})`).not.toThrow();
+    }
+  });
+
+  it('git-декорации читаются на листе и на фоне окна — не ниже 4.5:1, кроме «ignored» (намеренно тусклая, 3:1)', () => {
+    for (const theme of THEMES) {
+      for (const kind of ['added', 'modified', 'deleted', 'renamed', 'untracked', 'copied']) {
+        const color = solid(theme, `--git-decoration-${kind}`);
+        for (const under of ['--sheet', '--card', '--background']) {
+          expect(contrastRatio(color, solid(theme, under)), `${kind} на ${under} (${theme})`).toBeGreaterThanOrEqual(TEXT);
+        }
+      }
+      for (const under of ['--sheet', '--card', '--background']) {
+        expect(contrastRatio(solid(theme, '--git-decoration-ignored'), solid(theme, under))).toBeGreaterThanOrEqual(NON_TEXT);
+      }
+    }
+  });
+});
+
+// ── 5. Приглушение dimmed.css ───────────────────────────────────────────────────────────────
+
+/**
+ * Ревью M12: done- и архивные карточки и закрытые строки приглушаются не opacity всей карточки
+ * (текст падал до 2.4–3.8:1), а цветом текста — основной текст сайдбара становится вторичным, — и
+ * прозрачностью 0.6 у того, что не текст: значков и полосы внимания. Правило то же, токены новые:
+ * контраст вторичного текста на фонах карточки выше, в разделе 3.
+ */
+describe('dimmed.css — правило приглушения на новых токенах', () => {
+  it('основной текст сайдбара в [data-dimmed] — вторичный токен, без opacity у самого узла', () => {
     const rule = dimmedCss.match(/\[data-dimmed\]\s*\{([^}]*)\}/);
     expect(rule?.[1]).toMatch(/--work-sidebar-foreground:\s*var\(--work-sidebar-muted-foreground\);/);
     expect(rule?.[1]).not.toMatch(/opacity/);
   });
 
-  it('dimmed.css: значки и полоса внимания приглушены прозрачностью 0.6 — облик done сохраняется', () => {
+  it('значки и полоса внимания приглушены прозрачностью 0.6 — облик done сохраняется', () => {
     expect(dimmedCss).toMatch(/\[data-dimmed\]\s+:is\([^)]*svg[^)]*\[data-attention-strip\][^)]*\)\s*\{\s*opacity:\s*0\.6;/);
   });
-});
 
-/**
- * Раунд fix-live, D4: выбранный пункт переключателей (`ui/toggle.tsx`, `data-[state=on]`) отличался
- * только заливкой `--accent` — в светлой теме #f5f5f5 на белом 1.1:1, в тёмной #404040 на #0a0a0a
- * 1.9:1. WCAG 1.4.11 требует 3:1 для признака состояния. Признак — край `--toggle-on-edge`
- * (inset-кольцо 1px) при прежней заливке: не ниже 3:1 к каждому фону, на котором стоят
- * переключатели, к рамке `outline`-варианта и к самой заливке.
- */
-describe('tokens.css — край выбранного пункта переключателей (раунд fix-live, D4)', () => {
-  const css = readFileSync(TOKENS_PATH, 'utf8');
-  const toggleSource = readFileSync(path.join(path.dirname(TOKENS_PATH), '..', 'ui', 'toggle.tsx'), 'utf8');
-
-  function readHex(theme: 'light' | 'dark', name: string): Rgb {
-    const rootStart = css.indexOf(':root {');
-    const darkStart = css.indexOf('.dark {');
-    const block = theme === 'light' ? css.slice(rootStart, darkStart) : css.slice(darkStart, css.indexOf('}', darkStart));
-    const match = block.match(new RegExp(`--${name}:\\s*#([0-9a-fA-F]{6}|[0-9a-fA-F]{3});`));
-    if (match === null) throw new Error(`tokens.css: --${name} не найден (${theme})`);
-    const short = match[1] as string;
-    const hex = short.length === 3 ? [...short].map((digit) => digit + digit).join('') : short;
-    return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
-  }
-
-  /** Фоны, на которых стоят переключатели: диалог настроек, панели вкладок, сайдбар; плюс заливка `on`. */
-  const SURFACES = ['background', 'editor-surface', 'card', 'popover', 'sidebar', 'muted', 'accent'] as const;
-
-  for (const theme of ['light', 'dark'] as const) {
-    it(`${theme}: край к фонам и к заливке выбранного пункта — не ниже 3:1`, () => {
-      const edge = readHex(theme, 'toggle-on-edge');
-      for (const surface of SURFACES) {
-        expect(contrastOf(edge, readHex(theme, surface)), `--toggle-on-edge / --${surface}`).toBeGreaterThanOrEqual(3);
+  for (const theme of THEMES) {
+    it(`${theme}: приглушённый основной текст (= --work-sidebar-muted-foreground) читается на активной карточке, выбранной строке и hover`, () => {
+      const text = solid(theme, '--work-sidebar-muted-foreground');
+      const card = solid(theme, '--card');
+      const surface = solid(theme, '--work-sidebar');
+      for (const under of [card, on(theme, '--work-sidebar-accent', card), on(theme, '--card-hover', surface), surface]) {
+        expect(contrastRatio(text, under)).toBeGreaterThanOrEqual(TEXT);
       }
     });
   }
-
-  it('светлая: край к рамке outline-варианта (--input) — не ниже 3:1', () => {
-    expect(contrastOf(readHex('light', 'toggle-on-edge'), readHex('light', 'input'))).toBeGreaterThanOrEqual(3);
-  });
-
-  it('тёмная: край к рамке outline-варианта (--input, 15 % белого поверх --popover) — не ниже 3:1', () => {
-    const input = compositeOver([255, 255, 255], 0.15, readHex('dark', 'popover'));
-    expect(contrastOf(readHex('dark', 'toggle-on-edge'), input)).toBeGreaterThanOrEqual(3);
-  });
-
-  it('toggle.tsx: край только у выбранного пункта — в одном месте, варианте toggle; hover края не даёт', () => {
-    expect(toggleSource).toContain('data-[state=on]:ring-toggle-on-edge');
-    expect(toggleSource).toContain('data-[state=on]:ring-inset');
-    expect(toggleSource).not.toMatch(/hover:ring/);
-  });
 });

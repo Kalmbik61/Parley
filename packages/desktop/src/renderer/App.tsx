@@ -229,9 +229,9 @@ export function App(): JSX.Element {
   // должен кто-то задать — в оболочке это делает `AppShell`.
   if (status.state === 'mismatch') {
     return (
-      <div className="flex h-screen flex-col items-center justify-center gap-4 text-neutral-200">
+      <div className="flex h-screen flex-col items-center justify-center gap-4 text-foreground">
         <p>{S.connection.mismatchScreen(status.liveSessions)}</p>
-        <button type="button" className="rounded bg-neutral-700 px-4 py-2" onClick={handleRestart}>
+        <button type="button" className="rounded bg-secondary px-4 py-2 text-secondary-foreground" onClick={handleRestart}>
           {S.connection.restart}
         </button>
         <WindowCloseQuestion bridge={bridge} />
@@ -241,7 +241,7 @@ export function App(): JSX.Element {
 
   if (status.state === 'connecting') {
     return (
-      <div className="flex h-screen items-center justify-center text-neutral-400">
+      <div className="flex h-screen items-center justify-center text-muted-foreground">
         {S.connection.connectingScreen}
         <WindowCloseQuestion bridge={bridge} />
       </div>
@@ -255,19 +255,19 @@ export function App(): JSX.Element {
   // Отказ кнопки — только в консоль: причину показывает сам экран.
   if (status.state === 'disconnected' && !everConnected) {
     return (
-      <div className="flex h-screen flex-col items-center justify-center gap-4 text-neutral-400">
+      <div className="flex h-screen flex-col items-center justify-center gap-4 text-muted-foreground">
         <p>{S.connection.disconnectedScreen(status.reason)}</p>
         <div className="flex gap-2">
           <button
             type="button"
-            className="rounded bg-neutral-700 px-4 py-2 text-neutral-200"
+            className="rounded bg-secondary px-4 py-2 text-secondary-foreground"
             onClick={() => void bridge.app.reconnect().catch((error: unknown) => console.warn('[harnas] reconnect', error))}
           >
             {S.common.retry}
           </button>
           <button
             type="button"
-            className="rounded bg-neutral-700 px-4 py-2 text-neutral-200"
+            className="rounded bg-secondary px-4 py-2 text-secondary-foreground"
             onClick={() => void bridge.app.restartHost().catch((error: unknown) => console.warn('[harnas] restart host', error))}
           >
             {S.connection.restartHost}

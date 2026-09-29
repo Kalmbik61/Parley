@@ -1,11 +1,27 @@
 /*
- * Токены темы — дословная копия блоков `@theme inline`, `:root` и `.dark` из
- * Orca (https://github.com/Kalmbik61/orca-harnas, коммит acf8e679),
- * src/renderer/src/assets/main.css (спека 4.1). Переименовано:
+ * Токены окна — облик Organic (спека окна 2026-09-29, раздел 4; исходник — hi-fi handoff
+ * `docs/design/2026-09-29-rooms-organic/`): песочный фон, терракотовый и шалфейный акценты, рампы
+ * neutral / accent / accent-2 на одной шкале светлоты (в тёмной темы перевёрнуты: 100 — самый
+ * тёмный). Переменные shadcn выражены через палитру (`var()` и `color-mix()`), а не держат свои
+ * hex-значения; имена, которые уже зовёт код, остались прежними — сменились только значения.
+ * Контраст держит `tokens.test.ts`: тест разворачивает `var()` и `color-mix()` сам.
+ *
+ * Блок `@theme inline` и сами имена переменных — из Orca (https://github.com/Kalmbik61/orca-harnas,
+ * коммит acf8e679), src/renderer/src/assets/main.css (спека Orca-UI 4.1). Переименовано:
  * `--worktree-sidebar*` → `--work-sidebar*` (у нас сайдбар работ, не worktree),
  * `--tab-group-split-divider*` → `--split-divider*`.
- * Copyright (c) 2026 Lovecast Inc. Лицензия MIT — полный текст в NOTICE в
- * корне репозитория.
+ * Copyright (c) 2026 Lovecast Inc. Лицензия MIT — полный текст в NOTICE в корне репозитория.
+ *
+ * Как звать палитру из классов (Tailwind 4):
+ *  — рампы: `bg-neutral-100`, `text-neutral-700`, `bg-accent-200`, `text-accent-2-800`,
+ *    `border-neutral-300` — они объявлены ниже в `@theme static`, `.dark` переопределяет те же имена;
+ *  — базовые цвета и их доли — через переменную: `bg-(--color-surface)`, `border-(--color-accent)`,
+ *    `bg-[color-mix(in_srgb,var(--color-text)_14%,transparent)]` (в спеке это «text 14%»);
+ *  — тени — `shadow-sm`, `shadow-md`, `shadow-lg`: утилиты смотрят на переменные Organic;
+ *  — семантика shadcn — `bg-background`, `bg-card`, `text-muted-foreground`, `bg-primary`.
+ * Ловушка имён: `bg-accent` — это НЕ терракотовый `accent` палитры, а выбранная строка (`text 9%`,
+ * переменная shadcn `--accent`): на этом имени держится весь прежний код. Терракотовый — только
+ * `var(--color-accent)`, `--ring` и, в тёмной теме, `--primary`.
  */
 
 /* Без этой строки утилиты `dark:` компилируются по `prefers-color-scheme`
@@ -104,87 +120,154 @@
   --color-git-graph-lane-5: var(--git-graph-lane-5);
   --color-annotation-highlight: var(--annotation-highlight);
   --shadow-floating: 0 10px 24px rgb(0 0 0 / 0.18);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
+  /* Organic: главная кнопка (решение 1 спеки), hover неактивной карточки (решение 2), лист центра
+     и затемнение под диалогами. */
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-active: var(--primary-active);
+  --color-card-hover: var(--card-hover);
+  --color-sheet: var(--sheet);
+  --color-scrim: var(--scrim);
+  /* Тени Organic: имя утилиты (`shadow-sm/md/lg`) совпадает с именем переменной `:root`/`.dark`, в
+     которой лежит само значение — в тёмной там тонкая рамка вместо мягкой тени. Круговая запись
+     сознательна: она лишь заводит утилиту, а объявление слоя `theme` проигрывает обычному `:root`
+     (без слоя побеждает всегда) — переменная всегда берёт значение из него. */
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+  /* Радиусы Organic (спека 4): sm — мелкие элементы, md — карточки работ и пункты палитры, lg — лист
+     центра и палитра, xl — диалоги и карточки (28 × 1.15). Кнопки, поля, теги и сегменты — `rounded-full`. */
+  --radius-sm: 8px;
+  --radius-md: 16px;
+  --radius-lg: 28px;
+  --radius-xl: 32px;
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* ── Палитра Organic, светлая — рампы (спека 4, дословно) ────────────────────────────────
+   `static`: переменные нужны всегда, а не только когда их назвал класс, — их читают и стили в
+   JS (`var(--color-accent-200)`), и `color-mix()` в CSS. Тёмная переопределяет те же имена ниже. */
+
+@theme static {
+  --color-neutral-100: #f9f4ed;
+  --color-neutral-200: #eee7db;
+  --color-neutral-300: #dcd3c4;
+  --color-neutral-400: #c0b6a5;
+  --color-neutral-500: #a19786;
+  --color-neutral-600: #82796a;
+  --color-neutral-700: #645c50;
+  --color-neutral-800: #474238;
+  --color-neutral-900: #2e2b25;
+  --color-accent-100: #fff2eb;
+  --color-accent-200: #ffe1d0;
+  --color-accent-300: #ffc6a5;
+  --color-accent-400: #f6a06b;
+  --color-accent-500: #d67f48;
+  --color-accent-600: #b2622d;
+  --color-accent-700: #8c491a;
+  --color-accent-800: #643312;
+  --color-accent-900: #402310;
+  --color-accent-2-100: #f0fae1;
+  --color-accent-2-200: #e1eecc;
+  --color-accent-2-300: #ccdbb2;
+  --color-accent-2-400: #aebf92;
+  --color-accent-2-500: #8fa073;
+  --color-accent-2-600: #728157;
+  --color-accent-2-700: #56633f;
+  --color-accent-2-800: #3d472b;
+  --color-accent-2-900: #272e1b;
+}
+
 /* ── Light Mode ──────────────────────────────────────── */
 
 :root {
+  /* Палитра Organic: базовые цвета, тени, лист центра и затемнение (спека 4, дословно). Рампы —
+     в `@theme static` выше. */
+  --color-bg: #f5ead8;
+  --color-surface: #ebddc5;
+  --color-text: #201e1d;
+  /* Терракотовый акцент. Одноимённая утилита `bg-accent` — выбранная строка shadcn (см. шапку). */
+  --color-accent: #c67139;
+  --color-accent-2: #7a8a5e;
+  --color-divider: color-mix(in srgb, #201e1d 16%, transparent);
+  --shadow-sm: 0 1px 2px color-mix(in srgb, #2e2b25 14%, transparent);
+  --shadow-md: 0 3px 10px color-mix(in srgb, #2e2b25 16%, transparent);
+  --shadow-lg: 0 12px 32px color-mix(in srgb, #2e2b25 22%, transparent);
+  --sheet: #f9f4ed;
+  --scrim: color-mix(in srgb, #2e2b25 50%, transparent);
+  /* Отступы Organic, плотность 1.1× (спека 4). */
+  --space-1: 4.4px;
+  --space-2: 8.8px;
+  --space-3: 13.2px;
+  --space-4: 17.6px;
+  --space-6: 26.4px;
+  --space-8: 35.2px;
   --app-font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-sans: var(--app-font-family);
   --font-mono:
     'SF Mono', SFMono-Regular, ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Liberation Mono',
     monospace;
-  --radius: 0.625rem;
-  --orca-security-background: #fff;
-  --orca-security-foreground: #0a0a0a;
-  --orca-security-card: #fff;
-  --orca-security-card-foreground: #0a0a0a;
-  --orca-security-popover: #fff;
-  --orca-security-popover-foreground: #0a0a0a;
-  --orca-security-primary: #171717;
-  --orca-security-primary-foreground: #fafafa;
-  --orca-security-secondary: #f5f5f5;
-  --orca-security-secondary-foreground: #171717;
-  --orca-security-muted: #f5f5f5;
-  --orca-security-muted-foreground: #737373;
-  --orca-security-accent: #f5f5f5;
-  --orca-security-accent-foreground: #171717;
-  --orca-security-border: #e5e5e5;
-  --orca-security-input: #e5e5e5;
-  --orca-security-ring: #a1a1a1;
-  --background: #fff;
-  --editor-surface: #ffffff;
-  --foreground: #0a0a0a;
-  --card: #fff;
-  --card-foreground: #0a0a0a;
-  --popover: #fff;
-  --popover-foreground: #0a0a0a;
-  --primary: #171717;
-  --primary-foreground: #fafafa;
-  --secondary: #f5f5f5;
-  --secondary-foreground: #171717;
-  --muted: #f5f5f5;
-  /* Why: Orca's own value (#737373) fails WCAG AA at the 11px sidebar row
-     size — 3.94:1 on --work-sidebar-accent (#eaeaea), needs 4.5:1 (round of
-     fixes 1, piece 1.3). #666666 clears it there (4.77:1) and everywhere
-     else muted-foreground sits on a light-theme sidebar surface. */
-  --muted-foreground: #666666;
-  --accent: #f5f5f5;
-  --accent-foreground: #171717;
-  --destructive: #e40014;
-  --destructive-foreground: #fcf3f3;
-  /* Кусок 3.4 (не из Orca): текст пунктов-«разрушителей» меню (Delete…, Archive) — на стекле
-     и на подсветке фокуса --accent не ниже 4.5:1; --destructive на #f5f5f5 даёт 4.47. */
-  --menu-destructive: #c10007;
-  --border: #e5e5e5;
-  --input: #e5e5e5;
-  --ring: #a1a1a1;
+  --radius: 16px;
+  --background: var(--color-surface);
+  /* Фон редактора — лист центра. Monaco читает эту переменную и `--foreground` через
+     getPropertyValue и принимает только hex: после подстановки `var()` обе остаются hex
+     (`tokens.test.ts`). */
+  --editor-surface: var(--sheet);
+  --foreground: var(--color-text);
+  --card: var(--color-neutral-100);
+  --card-foreground: var(--color-text);
+  --popover: var(--color-neutral-100);
+  --popover-foreground: var(--color-text);
+  /* Главная кнопка, светлая тема (решение 1 спеки): светлый текст `bg` на `accent` — 3.0:1, для
+     текста 14px ниже AA, поэтому фон — accent-700 (5.7:1), hover — 800, active — 900. В тёмной —
+     как в прототипе: accent на `bg`, 6.5:1. */
+  --primary: var(--color-accent-700);
+  --primary-foreground: var(--color-bg);
+  --primary-hover: var(--color-accent-800);
+  --primary-active: var(--color-accent-900);
+  --secondary: var(--color-neutral-200);
+  --secondary-foreground: var(--color-text);
+  --muted: var(--color-neutral-200);
+  /* neutral-700: 4.9:1 на фоне окна, 6.0 на карточке, 5.1 на выбранной строке активной карточки
+     (замеры спеки, раздел 4; сверка — `tokens.test.ts`). */
+  --muted-foreground: var(--color-neutral-700);
+  /* Выбранная строка и подсветка пунктов меню — text 9%. Имя занято shadcn; терракотовый акцент
+     палитры — `--color-accent`. */
+  --accent: color-mix(in srgb, var(--color-text) 9%, transparent);
+  --accent-foreground: var(--color-text);
+  --destructive: var(--color-accent-700);
+  /* Текст на заливке --destructive и на главной кнопке — `bg`: 5.7:1 в светлой, 9.4:1 в тёмной. */
+  --destructive-foreground: var(--color-bg);
+  /* Кусок 3.4 (не из Orca): текст пунктов-«разрушителей» меню (Delete…, Archive) — на --popover и на
+     подсветке фокуса --accent не ниже 4.5:1. */
+  --menu-destructive: var(--color-accent-700);
+  --border: var(--color-divider);
+  --input: var(--color-divider);
+  /* Фокус — обводка 2px этого цвета со смещением 2px (`base.css`). К фону окна в светлой теме
+     2.7:1 — ниже 3:1 признака состояния; кольцо сайдбара (--work-sidebar-focus-ring) темнее и
+     держит 3:1 на всех его фонах. */
+  --ring: var(--color-accent);
+  /* Hover неактивной карточки (решение 2 спеки): text 5% давал neutral-700 на surface 4.48:1 —
+     ниже порога AA; ближайшее целое, при котором 4.5:1 держится, — 4% (4.56:1). */
+  --card-hover: color-mix(in srgb, var(--color-text) 4%, transparent);
   --terminal-pane-locate: var(--color-blue-600);
   --ai-action-accent: var(--color-violet-500);
-  /* "An agent is asking you something" — one hue for every surface that shows
-     it (sidebar, tabs, dashboard, kanban). Orange, not amber: it has to stay
-     separable from working-yellow at a glance. */
-  --agent-question: var(--color-orange-600);
-  /* Legible weight for text/glyphs on a tinted --agent-question surface. */
-  --agent-question-text: var(--color-orange-700);
-  --status-success: #15803d;
+  /* "An agent is asking you something" — one hue for every surface that shows it (sidebar, tabs,
+     dashboard, kanban). Терракотовый accent-600; текст и значки на его подкраске — accent-700. */
+  --agent-question: var(--color-accent-600);
+  --agent-question-text: var(--color-accent-700);
+  --status-success: var(--color-accent-2-600);
   --status-success-background: color-mix(in srgb, var(--status-success) 10%, transparent);
   --status-success-border: color-mix(in srgb, var(--status-success) 25%, transparent);
   /* Needs-attention state that is not an error: a resume that did not carry on, an update that
-     failed. Yellow, so it stays apart from destructive red and from the orange working state. */
-  --status-warning: #ca8a04;
+     failed. В палитре Organic — accent-700: читается и значком, и текстом (6.2:1 на карточке). */
+  --status-warning: var(--color-accent-700);
   --status-warning-background: color-mix(in srgb, var(--status-warning) 10%, transparent);
   --status-warning-border: color-mix(in srgb, var(--status-warning) 25%, transparent);
-  /* Ревью M12 (не из Orca): текст предупреждения. --status-warning на белом — 2.94:1, он остаётся
-     значкам и подложкам; тексту — yellow-700: 4.92:1 на --card, 4.72:1 на --sidebar (tokens.test.ts). */
-  --status-warning-text: #a16207;
+  /* Ревью M12 (не из Orca): текст предупреждения — свой токен, не ниже 4.5:1 на --card,
+     --background, --sidebar и --editor-surface (tokens.test.ts). */
+  --status-warning-text: var(--color-accent-700);
   /* Workspace PR-state tones: same hue in both themes so a status keeps its
      identity when the theme flips. */
   --workspace-status-done: #c7a594;
@@ -195,40 +278,40 @@
   --chart-3: var(--color-blue-600);
   --chart-4: var(--color-blue-700);
   --chart-5: var(--color-blue-800);
-  --work-sidebar: #f5f5f5;
-  --work-sidebar-foreground: #0a0a0a;
-  --work-sidebar-accent: #eaeaea;
-  --work-sidebar-accent-foreground: #171717;
-  --work-sidebar-border: #e5e5e5;
-  --work-sidebar-ring: #a1a1a1;
+  /* У сайдбаров нет своего фона: работы и строки лежат прямо на фоне окна (спека 4). */
+  --work-sidebar: var(--color-surface);
+  --work-sidebar-foreground: var(--color-text);
+  --work-sidebar-accent: color-mix(in srgb, var(--color-text) 9%, transparent);
+  --work-sidebar-accent-foreground: var(--color-text);
+  --work-sidebar-border: var(--color-divider);
+  --work-sidebar-ring: var(--color-accent);
   /* Раунд исправлений 1 куска 3.4: кольцо фокуса карточек и строк — ≥ 3:1 к любому фону
-     сайдбара (tokens.test.ts); Orca-вский --work-sidebar-ring даёт 2.4:1. */
-  --work-sidebar-focus-ring: #737373;
-  /* Кусок 3.3 (не из Orca): вторичный текст карточек. Самый тёмный фон сайдбара —
-     активная карточка (8% --work-sidebar-foreground), а на ней и на amber-500/10
-     поверх неё --muted-foreground ниже 4.5:1 (tokens.test.ts, тест 14). */
-  --work-sidebar-muted-foreground: #595959;
-  /* Кусок 6.3 (не из Orca, перенос ревью 6.2-B), раунд main-r2, п. 3: выделенная строка
-     палитры ⌘J. Заливка — светлая, тон строки сайдбара (--work-sidebar-accent), как выделяет
-     остальное окно; сама она к фону палитры 1.1:1, поэтому состояние несёт край 1px — к фону
-     палитры 4.3–4.5:1, к заливке 3.9:1 (WCAG 1.4.11 ≥ 3:1, tokens.test.ts). Текст — обычный
-     тёмный: 16.5:1 на заливке, вторичный 5.8:1. */
-  --palette-selected: #eaeaea;
-  --palette-selected-foreground: #0a0a0a;
-  --palette-selected-muted: #595959;
-  --palette-selected-edge: #737373;
-  /* Раунд fix-live, D4: край выбранного пункта переключателей (`ui/toggle.tsx`). Заливка --accent
-     к белому 1.1:1 — состояние несёт край: к фонам 4.4–4.7:1, к заливке 4.35:1, к рамке --input
-     3.8:1 (WCAG 1.4.11 ≥ 3:1, tokens.test.ts). Тот же тон, что край выделения палитры. */
-  --toggle-on-edge: #737373;
-  --sidebar: #fafafa;
-  --sidebar-foreground: #0a0a0a;
-  --sidebar-primary: #171717;
-  --sidebar-primary-foreground: #fafafa;
-  --sidebar-accent: #f5f5f5;
-  --sidebar-accent-foreground: #171717;
-  --sidebar-border: #e5e5e5;
-  --sidebar-ring: #a1a1a1;
+     сайдбара (tokens.test.ts). accent-700, а не `--ring`: терракотовый accent на фоне окна светлой
+     темы даёт 2.7:1. */
+  --work-sidebar-focus-ring: var(--color-accent-700);
+  /* Кусок 3.3 (не из Orca): вторичный текст карточек и приглушённых (dimmed.css) — neutral-700,
+     не ниже 4.5:1 на всех фонах сайдбара (tokens.test.ts). */
+  --work-sidebar-muted-foreground: var(--color-neutral-700);
+  /* Кусок 6.3 (не из Orca, перенос ревью 6.2-B), раунд main-r2, п. 3: выделенная строка палитры
+     ⌘J. Заливка — тон выбранной строки сайдбара; сама она к фону палитры 1.2:1, поэтому состояние
+     несёт ещё и край 1px (neutral-700) — к фону палитры и к заливке не ниже 3:1 (WCAG 1.4.11).
+     Вторичный текст — neutral-800: держит 4.5:1 и на нынешней панели (фон окна), и на будущей
+     (neutral-100, кусок 2). */
+  --palette-selected: var(--work-sidebar-accent);
+  --palette-selected-foreground: var(--color-text);
+  --palette-selected-muted: var(--color-neutral-800);
+  --palette-selected-edge: var(--color-neutral-700);
+  /* Раунд fix-live, D4: край выбранного пункта переключателей (`ui/toggle.tsx`) — состояние несёт
+     не одна заливка. */
+  --toggle-on-edge: var(--color-neutral-700);
+  --sidebar: var(--color-surface);
+  --sidebar-foreground: var(--color-text);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--accent-foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
   --terminal-pane-title-on-dark-fg: rgb(255 255 255 / 0.52);
   --terminal-pane-title-on-dark-input-fg: rgb(255 255 255 / 0.7);
   --terminal-pane-title-on-dark-placeholder: rgb(255 255 255 / 0.38);
@@ -243,13 +326,15 @@
   --terminal-pane-title-on-light-button-hover-fg: rgb(24 24 27);
   --terminal-pane-title-on-light-input-bg: rgb(24 24 27 / 0.05);
   --terminal-pane-title-on-light-separator: rgb(24 24 27 / 0.1);
-  --git-decoration-added: #587c0c;
-  --git-decoration-modified: #895503;
-  --git-decoration-deleted: #ad0707;
-  --git-decoration-renamed: #007acc;
-  --git-decoration-untracked: #007100;
-  --git-decoration-copied: #007acc;
-  --git-decoration-ignored: #8c8c8c;
+  /* Статусы файлов git на палитре Organic (подобраны по смыслу; на листе и на фоне окна — не ниже
+     4.5:1, «ignored» — намеренно тусклый, 3:1; tokens.test.ts). */
+  --git-decoration-added: var(--color-accent-2-700);
+  --git-decoration-modified: var(--color-accent-700);
+  --git-decoration-deleted: var(--color-accent-800);
+  --git-decoration-renamed: var(--color-neutral-700);
+  --git-decoration-untracked: var(--color-accent-2-700);
+  --git-decoration-copied: var(--color-neutral-700);
+  --git-decoration-ignored: var(--color-neutral-600);
   --diff-added-ground: color-mix(in srgb, var(--git-decoration-added) 13%, transparent);
   --diff-added-gutter: color-mix(in srgb, var(--git-decoration-added) 26%, transparent);
   --diff-removed-ground: color-mix(in srgb, var(--git-decoration-deleted) 11%, transparent);
@@ -265,67 +350,63 @@
   --annotation-highlight: #f59e0b;
   --markdown-search-match: #facc15;
   --markdown-search-match-active: #fb923c;
-  /* Why: tab-group splits use a dedicated divider — `--border` is too faint on
-     card/editor surfaces when panes are side-by-side or stacked. Default must
-     meet >=3:1 against `--card`, not only the hover/drag strong state. */
-  --split-divider: #868690;
-  --split-divider-strong: #71717a;
+  /* Why: tab-group splits use a dedicated divider — `--border` is too faint on card/editor
+     surfaces when panes are side-by-side or stacked. Не ниже 3:1 к --card, --background и листу,
+     а не только в hover-состоянии (tokens.test.ts): neutral-600, активный — neutral-700. */
+  --split-divider: var(--color-neutral-600);
+  --split-divider-strong: var(--color-neutral-700);
 }
 
 /* ── Dark Mode ───────────────────────────────────────── */
 
 .dark {
-  --orca-security-background: #0a0a0a;
-  --orca-security-foreground: #fafafa;
-  --orca-security-card: #171717;
-  --orca-security-card-foreground: #fafafa;
-  --orca-security-popover: #171717;
-  --orca-security-popover-foreground: #fafafa;
-  --orca-security-primary: #e5e5e5;
-  --orca-security-primary-foreground: #171717;
-  --orca-security-secondary: #262626;
-  --orca-security-secondary-foreground: #fafafa;
-  --orca-security-muted: #262626;
-  --orca-security-muted-foreground: #a1a1a1;
-  --orca-security-accent: #404040;
-  --orca-security-accent-foreground: #fafafa;
-  --orca-security-border: rgb(255 255 255 / 0.07);
-  --orca-security-input: rgb(255 255 255 / 0.15);
-  --orca-security-ring: #737373;
-  --background: #0a0a0a;
-  --editor-surface: #1e1e1e;
-  --foreground: #fafafa;
-  --card: #171717;
-  --card-foreground: #fafafa;
-  --popover: #171717;
-  --popover-foreground: #fafafa;
-  --primary: #e5e5e5;
-  --primary-foreground: #171717;
-  --secondary: #262626;
-  --secondary-foreground: #fafafa;
-  --muted: #262626;
-  --muted-foreground: #a1a1a1;
-  --accent: #404040;
-  --accent-foreground: #fafafa;
-  --destructive: #ff6568;
-  --destructive-foreground: #df2225;
-  /* Кусок 3.4: тёмная — --destructive на --accent (#404040) даёт 3.61. */
-  --menu-destructive: #ffa2a3;
-  --border: rgb(255 255 255 / 0.07);
-  --input: rgb(255 255 255 / 0.15);
-  --ring: #737373;
+  /* Палитра Organic, тёмная: рампы перевёрнуты — 100 самый тёмный (спека 4, дословно). Переменные
+     shadcn выше выражены через палитру и подхватывают её сами — здесь только то, что в тёмной
+     значит другое. */
+  --color-bg: #0e0d0c;
+  --color-surface: #161513;
+  --color-text: #ece6dc;
+  --color-accent: #d67f48;
+  --color-accent-2: #8fa073;
+  --color-divider: color-mix(in srgb, #ece6dc 14%, transparent);
+  --color-neutral-100: #23211e;
+  --color-neutral-200: #2c2926;
+  --color-neutral-300: #3b3732;
+  --color-neutral-400: #524d46;
+  --color-neutral-500: #6e675e;
+  --color-neutral-600: #8b8479;
+  --color-neutral-700: #a8a095;
+  --color-neutral-800: #cbc4b9;
+  --color-neutral-900: #e9e3d9;
+  --color-accent-100: #2a1a10;
+  --color-accent-200: #3a2314;
+  --color-accent-300: #58341c;
+  --color-accent-400: #8f5529;
+  --color-accent-500: #c46d37;
+  --color-accent-600: #dc8753;
+  --color-accent-700: #eea373;
+  --color-accent-800: #f8c39f;
+  --color-accent-900: #fde2cf;
+  --color-accent-2-100: #1b2014;
+  --color-accent-2-200: #242b1a;
+  --color-accent-2-300: #343e25;
+  --color-accent-2-400: #52603b;
+  --color-accent-2-500: #7d8f5f;
+  --color-accent-2-600: #9aad7b;
+  --color-accent-2-700: #b5c697;
+  --color-accent-2-800: #d0ddb7;
+  --color-accent-2-900: #e7efd8;
+  --shadow-sm: 0 0 0 1px color-mix(in srgb, #ece6dc 9%, transparent), 0 1px 2px rgb(0 0 0 / .5);
+  --shadow-md: 0 0 0 1px color-mix(in srgb, #ece6dc 9%, transparent), 0 4px 12px rgb(0 0 0 / .5);
+  --shadow-lg: 0 0 0 1px color-mix(in srgb, #ece6dc 10%, transparent), 0 12px 32px rgb(0 0 0 / .6);
+  --sheet: #0b0a09;
+  --scrim: rgb(0 0 0 / .6);
+  /* Главная кнопка, тёмная тема: accent на `bg` — 6.5:1, hover — accent-600, active — accent-700. */
+  --primary: var(--color-accent);
+  --primary-hover: var(--color-accent-600);
+  --primary-active: var(--color-accent-700);
   --terminal-pane-locate: var(--color-blue-400);
   --ai-action-accent: var(--color-violet-400);
-  --agent-question: var(--color-orange-500);
-  --agent-question-text: var(--color-orange-300);
-  --status-success: #86efac;
-  --status-success-background: color-mix(in srgb, var(--status-success) 10%, transparent);
-  --status-success-border: color-mix(in srgb, var(--status-success) 25%, transparent);
-  --status-warning: #eab308;
-  --status-warning-background: color-mix(in srgb, var(--status-warning) 10%, transparent);
-  --status-warning-border: color-mix(in srgb, var(--status-warning) 25%, transparent);
-  /* Ревью M12: в тёмной сам --status-warning проходит — 9.35:1 на --card, 10.3:1 на --background. */
-  --status-warning-text: #eab308;
   --workspace-status-done: #c7a594;
   --workspace-status-review: #16a34a;
   --workspace-status-progress: #d4a300;
@@ -334,37 +415,6 @@
   --chart-3: var(--color-blue-600);
   --chart-4: var(--color-blue-700);
   --chart-5: var(--color-blue-800);
-  /* Why: light mode sets work-sidebar to secondary (#f5f5f5); mirror that
-     lift in dark mode so the panel reads clearly above #0a0a0a canvas. */
-  --work-sidebar: #2a2a2a;
-  --work-sidebar-foreground: #fafafa;
-  --work-sidebar-accent: #353535;
-  --work-sidebar-accent-foreground: #fafafa;
-  /* Match --border / --sidebar-border (7%) so the left sidebar's divider lines
-     aren't brighter than the rest of the UI in dark mode (#5906). */
-  --work-sidebar-border: rgb(255 255 255 / 0.07);
-  --work-sidebar-ring: #737373;
-  --work-sidebar-focus-ring: #a1a1a1;
-  /* Кусок 3.3: то же для тёмной — активная карточка 10% --work-sidebar-foreground. */
-  --work-sidebar-muted-foreground: #bdbdbd;
-  /* Кусок 6.3: тёмная — прежний --accent (1.91:1 к фону палитры), вторичный текст светлее
-     --muted-foreground: тот на #404040 даёт 4.0:1, этот — 5.5:1. */
-  --palette-selected: #404040;
-  --palette-selected-foreground: #fafafa;
-  --palette-selected-muted: #bdbdbd;
-  /* Раунд main-r2, п. 3: тёмная без изменений — край того же цвета, что заливка. */
-  --palette-selected-edge: #404040;
-  /* Раунд fix-live, D4: тёмная — заливка #404040 к #0a0a0a 1.9:1; край к фонам 5.0–6.5:1, к
-     заливке 3.4:1. */
-  --toggle-on-edge: #949494;
-  --sidebar: #171717;
-  --sidebar-foreground: #fafafa;
-  --sidebar-primary: #1447e6;
-  --sidebar-primary-foreground: #fafafa;
-  --sidebar-accent: #262626;
-  --sidebar-accent-foreground: #fafafa;
-  --sidebar-border: rgb(255 255 255 / 0.07);
-  --sidebar-ring: #525252;
   --terminal-pane-title-on-dark-fg: rgb(255 255 255 / 0.52);
   --terminal-pane-title-on-dark-input-fg: rgb(255 255 255 / 0.7);
   --terminal-pane-title-on-dark-placeholder: rgb(255 255 255 / 0.38);
@@ -379,13 +429,6 @@
   --terminal-pane-title-on-light-button-hover-fg: rgb(24 24 27);
   --terminal-pane-title-on-light-input-bg: rgb(24 24 27 / 0.05);
   --terminal-pane-title-on-light-separator: rgb(24 24 27 / 0.1);
-  --git-decoration-added: #81b88b;
-  --git-decoration-modified: #e2c08d;
-  --git-decoration-deleted: #c74e39;
-  --git-decoration-renamed: #73c991;
-  --git-decoration-untracked: #73c991;
-  --git-decoration-copied: #73c991;
-  --git-decoration-ignored: #6e6e6e;
   --diff-added-ground: color-mix(in srgb, var(--git-decoration-added) 16%, transparent);
   --diff-added-gutter: color-mix(in srgb, var(--git-decoration-added) 30%, transparent);
   --diff-removed-ground: color-mix(in srgb, var(--git-decoration-deleted) 18%, transparent);
@@ -401,7 +444,4 @@
   --annotation-highlight: #fbbf24;
   --markdown-search-match: #facc15;
   --markdown-search-match-active: #fb923c;
-  /* Brighter than terminal defaults so the always-visible line clears 3:1 on `--card`. */
-  --split-divider: #71717a;
-  --split-divider-strong: #a1a1aa;
 }
