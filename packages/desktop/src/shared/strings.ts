@@ -718,6 +718,17 @@ export const S = {
       `${workspace} · ${kind === 'question' ? 'question' : kind === 'decision' ? 'decision' : 'message'} from ${from}`,
     /** Тост: клик по уведомлению, чью работу или сессию успели удалить (спека 7.5). */
     targetGone: 'Workspace or session no longer exists',
+    /**
+     * Решение ведущего ждёт человека (спека окна 2026-09-29, 1.10). Один заголовок на оба случая — новое решение и
+     * переделанное; различает их тело. `lead` — короткий ярлык ведущего (`S01`), как в подписях `lead S01` окна.
+     */
+    decisionTitle: 'Decision waiting for you',
+    decisionNew: (room: string, lead: string): string => `${room} · ${lead} collected positions`,
+    /** Ведущий заменил текст, пока человек не ответил (`rev` вырос). */
+    decisionRevised: (room: string, lead: string): string => `${room} · ${lead} revised the decision`,
+    /** Кнопки уведомления в самом окне (1.10): вкладка комнаты или скрыть. */
+    open: 'Open',
+    later: 'Later',
   },
 
   /** Тексты общих участников переписки — `lib/participant-tag.ts`. */
