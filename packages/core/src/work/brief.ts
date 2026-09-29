@@ -63,11 +63,13 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
   // вольют, а правила (не переключать ветку, не пушить) лежат только в гиде.
   // Путь в плане есть всегда: `createdAt: null` значит лишь, что хост создаст
   // папку перед запуском, — к чтению брифа агентом она уже на месте.
+  // Указатель на гид — по имени темы (`topic` у `read_guide`), а не по заголовку раздела:
+  // заголовок агент в `read_guide` передать не может, а тема и раздел не совпадают.
   if (session.worktree !== null) {
     const { branch, base, path: folder } = session.worktree;
     lines.push(
       `Worktree: ветка \`${branch}\` от базы \`${base}\`, папка \`${folder}\`.`,
-      'Правила работы в worktree — в `read_guide`, раздел «Окно человека».',
+      'Правила работы в worktree — в `read_guide`, тема `worktrees`.',
       '',
     );
   }
@@ -140,7 +142,7 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
       '',
       ...roles,
       '',
-      'Подробности — в `read_guide`, раздел «Комнаты».',
+      'Подробности — в `read_guide`, темы `lead` и `member`.',
       '',
     );
   }

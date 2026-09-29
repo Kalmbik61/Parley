@@ -279,6 +279,18 @@ describe('список инструментов', () => {
     expect(JSON.stringify(spawn?.inputSchema.properties?.['effort'])).toContain('get_map');
   });
 
+  it('гид называет в подписи spawn_session все параметры инструмента, в том же порядке', async () => {
+    const client = await connect('s-01');
+    const { tools } = await client.listTools();
+    const spawn = tools.find((tool) => tool.name === 'spawn_session');
+    const signature = /`spawn_session\(([^)]*)\)`/.exec(guideTopic('tools') ?? '')?.[1];
+
+    // Подпись в теме `tools` — то, что агент читает вместо схемы: параметр, которого в ней нет, он не найдёт.
+    expect(signature?.split(',').map((name) => name.trim())).toEqual(
+      Object.keys(spawn?.inputSchema.properties ?? {}),
+    );
+  });
+
   it('read_guide: topic необязателен, enum — темы гида, описание перечисляет их', async () => {
     const client = await connect('s-01');
     const { tools } = await client.listTools();

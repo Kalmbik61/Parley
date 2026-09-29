@@ -58,3 +58,47 @@ describe('темы гида', () => {
     expect(guideTopic('Rooms')).toBeNull();
   });
 });
+
+describe('ссылки между темами гида', () => {
+  const names = GUIDE_TOPICS.map((item) => item.topic);
+
+  /** Заголовки (`##`, `###`) всех разделов гида вместе с темой, в которой заголовок стоит. */
+  const headings = (): { topic: string; heading: string }[] =>
+    GUIDE_TOPICS.flatMap(({ topic }) =>
+      (guideTopic(topic) ?? '').split('\n').flatMap((line) => {
+        const heading = /^#{2,3} (.+)$/.exec(line)?.[1];
+        return heading === undefined ? [] : [{ topic, heading }];
+      }),
+    );
+
+  it('отсылка «тема `x`» называет существующую тему: в read_guide уйдёт то, что написано', () => {
+    for (const { topic } of GUIDE_TOPICS) {
+      for (const match of (guideTopic(topic) ?? '').matchAll(/тем[аеыу] `([a-z]+)`/g)) {
+        expect(names, `${topic}: ${match[0]}`).toContain(match[1]);
+      }
+    }
+  });
+
+  it('заголовки чужих разделов в кавычках не цитируются: по заголовку read_guide темы не найдёт', () => {
+    for (const { topic } of GUIDE_TOPICS) {
+      const text = guideTopic(topic) ?? '';
+      for (const other of headings().filter((item) => item.topic !== topic)) {
+        expect(text, `${topic} → «${other.heading}»`).not.toContain(`«${other.heading}»`);
+      }
+    }
+  });
+
+  /** Текст темы с пробелами, схлопнутыми в один: гид набран в столбик, переносы строк проверкам не важны. */
+  const flat = (topic: string): string => (guideTopic(topic) ?? '').replace(/\s+/g, ' ');
+
+  it('«Инструменты» отсылают за этикетом писем к теме `letters`, «Комнаты» — к ведущему в теме `lead`', () => {
+    expect(flat('tools')).toContain('этикет и виды писем — в теме `letters`.');
+    expect(flat('rooms')).toContain('`add_to_room(room, session)` (тема `lead`).');
+  });
+
+  it('«Инструменты» отсылают за правилами worktree к теме `worktrees`, а та лежит отдельно от `window`', () => {
+    expect(flat('tools')).toContain('Правила работы в нём — тема `worktrees`.');
+    expect(guideTopic('worktrees')).toContain('не переключай ветку');
+    expect(guideTopic('window')).not.toContain('не переключай ветку');
+  });
+});

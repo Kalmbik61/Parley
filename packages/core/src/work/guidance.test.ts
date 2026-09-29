@@ -177,8 +177,21 @@ describe('подробный гид', () => {
   });
 
   it('описывает роль-агента у spawn_session', () => {
-    expect(GUIDE).toContain('spawn_session(provider, label, task, contextFrom, agent, model, effort)');
+    expect(GUIDE).toContain(
+      'spawn_session(provider, label, task, contextFrom, agent, worktree, model, effort)',
+    );
     expect(GUIDE).toContain('.claude/agents/');
+  });
+
+  it('spawn_session: worktree — своя копия git на отдельной ветке, только в проекте с git, правила — тема worktrees', () => {
+    const tools = sectionOf('## Инструменты', '## Комнаты');
+
+    expect(tools).toMatch(/`worktree` необязателен: `true` — сессия работает в своём git worktree/);
+    expect(tools).toMatch(
+      /её правки не трогают рабочую копию проекта, пока человек не вольёт ветку/,
+    );
+    expect(tools).toMatch(/Только в проекте с git; worktree заводит сам харнесс перед запуском/);
+    expect(tools).toContain('Правила работы в нём — тема `worktrees`.');
   });
 
   it('spawn_session: model — id из models провайдера в get_map, не из списка — ошибка; effort — три уровня', () => {
