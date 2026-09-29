@@ -32,7 +32,9 @@ export interface RunnerConfig {
    * Аргументы запуска новой сессии координации. Подстановки: `{sessionUuid}` —
    * uuid, сгенерированный харнессом, `{mcpConfig}`, `{settingsFile}` — файл
    * настроек работы с хуками, `{systemPrompt}` — системная вставка гида,
-   * `{channel}` — канал звонка, `{agent}` — роль, `{prompt}` — стартовый бриф.
+   * `{channel}` — канал звонка, `{agent}` — роль, `{model}` и `{effort}` — выбор
+   * из диалога окна (по `{model}` и `{effort}` в этом шаблоне окно узнаёт, что провайдер
+   * их принимает: `supportsModel`, `supportsEffort`), `{prompt}` — стартовый бриф.
    * undefined — новая сессия запускается без аргументов.
    */
   args?: string[];
@@ -66,6 +68,13 @@ export interface ProviderEntry {
   hasHistory: boolean;
   linkBy: SessionLink;
   runner: RunnerConfig;
+  /**
+   * Закрытый список моделей, из которого окно предлагает выбрать (`selectableModels`).
+   * Встроенные записи его не задают: документация Claude Code и Codex такого списка не
+   * даёт — `--model` принимает и алиас, и полное имя. Список приходит только из
+   * `providers.json`, то есть от самого человека.
+   */
+  models?: string[];
 }
 
 /** Запись встроенного реестра: id из закрытого списка, всё остальное как у `ProviderEntry`. */
@@ -107,6 +116,15 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         // целиком, как у `--mcp-config`, — тогда сессия живёт по pull.
         '--dangerously-load-development-channels',
         '{channel}',
+        // Модель и усилие новой сессии из диалога окна. Оба флага документированы
+        // (code.claude.com/docs/en/cli-reference: `--model`, `--effort`), а без выбора пара
+        // выпадает целиком, и сессия живёт на модели и усилии по умолчанию. В `resumeArgs`
+        // их нет: возобновлённая сессия остаётся на прежней модели (docs/en/sessions
+        // того же сайта), а выбор в карте не хранится.
+        '--model',
+        '{model}',
+        '--effort',
+        '{effort}',
         '--agent',
         '{agent}',
         '{prompt}',
@@ -150,7 +168,21 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
       // глобальным `-c mcp_servers.harnas=<inline table>`, не трогая файл
       // пользователя. Файла-конфига MCP, как у claude, у codex нет.
       command: 'codex',
-      args: ['-c', '{mcpConfig}', '{prompt}'],
+      // Модель — `--model` (`-m`), усилие — переопределением конфига: выделенного флага у
+      // Codex нет, а ключ `model_reasoning_effort` есть в справочнике конфига. `-c key=value`
+      // разбирает значение как TOML (справочник CLI Codex, флаг `--config`), поэтому строка
+      // в кавычках; так же передаёт усилие SDK самого Codex (openai/codex,
+      // sdk/typescript/src/exec.ts). Как и у claude, без выбора обе пары выпадают, а при
+      // `resume` не передаются.
+      args: [
+        '-c',
+        '{mcpConfig}',
+        '--model',
+        '{model}',
+        '-c',
+        'model_reasoning_effort="{effort}"',
+        '{prompt}',
+      ],
       // `codex resume <SESSION_ID>` — id или имя сессии, см. CLI самого Codex.
       resumeArgs: ['resume', '{providerSessionId}', '-c', '{mcpConfig}'],
       mcpConfig: 'codex-override',
@@ -171,6 +203,14 @@ export function providersWithHistory(): ProviderInfo[] {
   return Object.values(PROVIDERS).filter((provider) => provider.hasHistory);
 }
 
+/**
+ * Усилие рассуждений, которое окно предлагает при запуске. Три уровня — общее подмножество
+ * того, что документируют Claude Code (`low`…`max`) и Codex (`low`…`ultra`, набор зависит от
+ * модели). Уровень, которого модель Claude не знает, Claude Code сам опускает до ближайшего
+ * ниже (code.claude.com/docs/en/model-config); про Codex документация этого не говорит.
+ */
+export type EffortLevel = 'low' | 'medium' | 'high';
+
 /** Значения подстановок в шаблоны аргументов реестра. */
 export interface RunnerSubstitutions {
   sessionUuid?: string;
@@ -185,13 +225,30 @@ export interface RunnerSubstitutions {
   channel?: string;
   /** Имя роли для `claude --agent` (спецификация 2026-09-08, 4.4). */
   agent?: string;
+  /** Модель новой сессии из диалога окна: `--model` у claude и codex. */
+  model?: string;
+  /**
+   * Усилие новой сессии: `--effort` у claude, `-c model_reasoning_effort` у codex. Тип — закрытый
+   * набор, потому что у codex значение встаёт в кавычки строки шаблона без экранирования.
+   */
+  effort?: EffortLevel;
 }
 
 const PLACEHOLDER =
-  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|prompt|providerSessionId|channel|agent)\}$/;
+  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|prompt|providerSessionId|channel|agent|model|effort)\}$/;
 
 /**
- * Подставляет значения в шаблон аргументов.
+ * Усилие можно подставить и внутрь строки шаблона (`model_reasoning_effort="{effort}"`):
+ * Codex принимает его только значением TOML в `-c`. Остальным подстановкам это не нужно —
+ * и не позволено: усилие берётся из закрытого набора, и его можно вставить в кавычки без
+ * экранирования, а модель — произвольная строка.
+ */
+const INLINE_EFFORT = /\{effort\}/g;
+
+/**
+ * Подставляет значения в шаблон аргументов. Подстановка — целым элементом массива; внутри строки
+ * шаблона умеет встать только `{effort}` (`model_reasoning_effort="{effort}"`), так что
+ * `--model={model}` остаётся буквальной строкой (`supportsModel` такой шаблон не считает).
  *
  * Подстановка без значения выпадает вместе с флагом, который её вводит, —
  * предыдущим аргументом, если он пришёл из шаблона литералом и начинается с
@@ -202,21 +259,37 @@ export function substituteArgs(template: readonly string[], subs: RunnerSubstitu
   const args: string[] = [];
   const fromTemplate: boolean[] = [];
 
+  /** Пропавшая подстановка уносит флаг, который стоял перед ней литералом шаблона. */
+  const dropWithFlag = (): void => {
+    const last = args.length - 1;
+    if (last >= 0 && fromTemplate[last] === true && args[last]?.startsWith('-') === true) {
+      args.pop();
+      fromTemplate.pop();
+    }
+  };
+
   for (const item of template) {
     const match = PLACEHOLDER.exec(item);
     if (match === null) {
-      args.push(item);
-      fromTemplate.push(true);
+      if (!item.includes('{effort}')) {
+        args.push(item);
+        fromTemplate.push(true);
+        continue;
+      }
+      // Значения нет — выпадает вся строка вместе с её `-c`; есть — оно встаёт на место.
+      if (subs.effort === undefined) {
+        dropWithFlag();
+        continue;
+      }
+      const effort = subs.effort;
+      args.push(item.replace(INLINE_EFFORT, () => effort));
+      fromTemplate.push(false);
       continue;
     }
 
     const value = subs[match[1] as keyof RunnerSubstitutions];
     if (value === undefined) {
-      const last = args.length - 1;
-      if (last >= 0 && fromTemplate[last] === true && args[last]?.startsWith('-') === true) {
-        args.pop();
-        fromTemplate.pop();
-      }
+      dropWithFlag();
       continue;
     }
     args.push(value);
@@ -253,6 +326,37 @@ export function printCommand(
     command: entry.runner.command,
     args: substituteArgs(entry.runner.printArgs ?? [], subs),
   };
+}
+
+/**
+ * Принимает ли провайдер модель при запуске. Решает шаблон, а не отдельный признак реестра:
+ * флаг подтверждён документацией CLI ровно там, где он стоит в `args`, а оверрайд
+ * `providers.json` без `{model}` честно его выключает. Не принимает — выбор молча
+ * отбрасывается (`substituteArgs`), а окно контрол прячет.
+ *
+ * Считается только `{model}` целым элементом, как его и подставляет `substituteArgs`: внутри
+ * строки (`--model={model}`) он не подставился бы, и окно показало бы контрол, а в команду ушёл
+ * бы буквальный `--model={model}`.
+ */
+export const supportsModel = (entry: ProviderEntry): boolean =>
+  (entry.runner.args ?? []).some((item) => item === '{model}');
+
+/**
+ * Принимает ли провайдер усилие при запуске — по тому же правилу, что и модель, но `{effort}`
+ * подставляется и внутри строки шаблона (`model_reasoning_effort="{effort}"`), поэтому годится
+ * любой элемент с ним.
+ */
+export const supportsEffort = (entry: ProviderEntry): boolean =>
+  (entry.runner.args ?? []).some((item) => item.includes('{effort}'));
+
+/**
+ * Закрытый список моделей для окна: только из записи реестра (то есть из `providers.json`) и
+ * только если шаблон запуска вообще принимает модель. `null` — списка нет: документация
+ * Claude Code и Codex его не даёт, `--model` принимает и алиас, и полное имя.
+ */
+export function selectableModels(entry: ProviderEntry): string[] | null {
+  if (!supportsModel(entry) || entry.models === undefined || entry.models.length === 0) return null;
+  return [...entry.models];
 }
 
 /**
@@ -336,6 +440,7 @@ export interface ProviderOverride {
   resumeArgs?: string[];
   printArgs?: string[];
   mcpConfig?: McpConfigKind;
+  models?: string[];
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -356,6 +461,7 @@ function checkShape(id: string, file: string, patch: Record<string, unknown>): v
     (patch['args'] !== undefined && !isStrings(patch['args'])) ||
     (patch['resumeArgs'] !== undefined && !isStrings(patch['resumeArgs'])) ||
     (patch['printArgs'] !== undefined && !isStrings(patch['printArgs'])) ||
+    (patch['models'] !== undefined && !isStrings(patch['models'])) ||
     (patch['mcpConfig'] !== undefined &&
       patch['mcpConfig'] !== 'json-file' &&
       patch['mcpConfig'] !== 'codex-override');
@@ -385,6 +491,7 @@ function applyOverride(
   if (printArgs !== undefined) runner.printArgs = printArgs;
   if (mcpConfig !== undefined) runner.mcpConfig = mcpConfig;
 
+  const models = patch.models ?? base?.models;
   return {
     id,
     label,
@@ -392,6 +499,7 @@ function applyOverride(
     hasHistory: patch.hasHistory ?? base?.hasHistory ?? false,
     linkBy: patch.linkBy ?? base?.linkBy ?? 'cwd+time',
     runner,
+    ...(models === undefined ? {} : { models }),
   };
 }
 

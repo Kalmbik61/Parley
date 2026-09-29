@@ -43,6 +43,7 @@ import {
   updateMap,
   workPaths,
   writeBrief,
+  type EffortLevel,
   type WorkEntry,
 } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
@@ -65,14 +66,28 @@ export interface CreateSessionInput {
   parent: string | null;
   /** Своя рабочая копия git — план пишется сразу, каталог заводит `launch()` (спека 8.1). */
   worktree?: boolean;
+  /**
+   * Модель и усилие из диалога запуска (дизайн комнат, 3.2). До команды они доезжают через
+   * реестр провайдеров: тот, у кого в шаблоне нет их подстановок, выбор молча отбрасывает.
+   */
+  model?: string;
+  effort?: EffortLevel;
 }
 
 export type LaunchMode = 'launch' | 'resume' | 'new';
 
+/** Что `launch()` передаёт плану запуска сверх самой сессии. */
+export interface LaunchChoice {
+  /** Указатель первым ходом `resume`, если провайдер его принимает. */
+  prompt?: string;
+  model?: string;
+  effort?: EffortLevel;
+}
+
 export interface SessionsService {
   create(input: CreateSessionInput): Promise<SessionRef>;
-  /** `prompt` — указатель первым ходом `resume`, если провайдер его принимает. */
-  launch(ref: SessionRef, mode: LaunchMode, options?: { prompt?: string }): Promise<void>;
+  /** `prompt` — указатель первым ходом `resume`; `model` и `effort` — только у новой сессии. */
+  launch(ref: SessionRef, mode: LaunchMode, options?: LaunchChoice): Promise<void>;
   stop(ref: SessionRef): Promise<void>;
   /** Насовсем: `closed` в карте и остановка PTY, если он жив. */
   close(ref: SessionRef): Promise<void>;
@@ -148,7 +163,7 @@ export function createSessionsService(
   async function launch(
     ref: SessionRef,
     mode: LaunchMode,
-    options: { prompt?: string } = {},
+    options: LaunchChoice = {},
   ): Promise<void> {
     const key = refKey(ref);
     if (launching.has(key) || closing.has(key) || pty.get(ref) !== undefined) return;
@@ -209,6 +224,8 @@ export function createSessionsService(
       const plan = await planFn(ref.projectPath, ref.workId, session, {
         channel: false,
         ...(options.prompt === undefined ? {} : { prompt: options.prompt }),
+        ...(options.model === undefined ? {} : { model: options.model }),
+        ...(options.effort === undefined ? {} : { effort: options.effort }),
       });
 
       let command: string;
@@ -253,8 +270,12 @@ export function createSessionsService(
    * отличие от той, что фоном поднял autoLaunch, отмечаем её увиденной сразу,
    * чтобы до первого `pty.attach` она не мигала непрочитанной.
    */
-  async function createInteractive(ref: SessionRef, mode: LaunchMode): Promise<SessionRef> {
-    await launch(ref, mode);
+  async function createInteractive(
+    ref: SessionRef,
+    mode: LaunchMode,
+    choice: LaunchChoice,
+  ): Promise<SessionRef> {
+    await launch(ref, mode, choice);
     activity.markSeen(ref);
     return ref;
   }
@@ -314,7 +335,12 @@ export function createSessionsService(
   }
 
   async function create(input: CreateSessionInput): Promise<SessionRef> {
-    const { projectPath, workId, provider, label, task, parent, worktree } = input;
+    const { projectPath, workId, provider, label, task, parent, worktree, model, effort } = input;
+    // `exactOptionalPropertyTypes`: явный `undefined` ключом в `LaunchChoice` не проходит.
+    const choice: LaunchChoice = {
+      ...(model === undefined ? {} : { model }),
+      ...(effort === undefined ? {} : { effort }),
+    };
 
     // Проверка до создания сессии, а не после (как и в `spawn_session` core,
     // кусок 4.1) — иначе в карте осталась бы pending-сессия, которую нечем завести.
@@ -327,7 +353,7 @@ export function createSessionsService(
       const ref = { projectPath, workId: created.workId, sessionId: created.session.id };
       await applyChoice(ref, label, provider);
       if (worktree === true) await attachWorktreePlan(ref, null, false);
-      return createInteractive(ref, 'new');
+      return createInteractive(ref, 'new', choice);
     }
 
     if (task === '' && parent === null) {
@@ -335,7 +361,7 @@ export function createSessionsService(
       const ref = { projectPath, workId, sessionId: created.session.id };
       await applyChoice(ref, label, provider);
       if (worktree === true) await attachWorktreePlan(ref, null, false);
-      return createInteractive(ref, 'new');
+      return createInteractive(ref, 'new', choice);
     }
 
     if (task === '' && parent !== null) {
@@ -343,7 +369,7 @@ export function createSessionsService(
       const ref = { projectPath, workId, sessionId: created.session.id };
       await applyChoice(ref, label, provider);
       if (worktree === true) await attachWorktreePlan(ref, parent, true);
-      return createInteractive(ref, 'launch');
+      return createInteractive(ref, 'launch', choice);
     }
 
     const sessionId = await createPendingSession(projectPath, workId, {
@@ -355,7 +381,7 @@ export function createSessionsService(
     });
     const ref = { projectPath, workId, sessionId };
     if (worktree === true) await attachWorktreePlan(ref, parent, true);
-    return createInteractive(ref, 'launch');
+    return createInteractive(ref, 'launch', choice);
   }
 
   async function stop(ref: SessionRef): Promise<void> {

@@ -294,16 +294,26 @@ interface Proposal {
 ### 3.2 protocol: методы
 
 ```ts
-'rooms.create':          { /* как сейчас */ lead?: string }   // по умолчанию members[0]
+'rooms.create':          { /* как сейчас */ lead?: string;                  // по умолчанию members[0]
+                           origin?: [string, string]; quiet?: boolean }
+                         // origin — две сессии, из которых собрана комната (диалог 1.6): хост пишет
+                         // системную строку `Room created from @s03 and @s02`; обе — из members
+                         // quiet — тихий старт (диалог 1.5): без писем-приглашений, лента пуста
 'rooms.addMember':       { projectPath; workId; roomId; sessionId } → { messageId }
-                         // сессия уходит из прочих комнат работы; системное сообщение
+                         // сессия уходит из прочих комнат работы; системное сообщение. Уже участник
+                         // и нигде больше — bad_request; состоящая и в других комнатах (старая карта)
+                         // остаётся в этой одной
 'rooms.resolveProposal': { projectPath; workId; roomId; proposalId;
-                           action: 'accept' | 'return'; note?: string /* 0..4000 */ } → { messageId }
-                         // conflict, если proposalId устарел
+                           action: 'accept' | 'return'; note?: string /* 0..4000 */;
+                           rev?: number } → { messageId }
+                         // conflict, если proposalId устарел или rev (версия показанной карточки,
+                         // Proposal.rev) не совпал: ведущий успел заменить текст. Окно шлёт rev
 'sessions.create':       { /* как сейчас */ model?: string; effort?: 'low' | 'medium' | 'high' }
 ```
 
 `model` и `effort` передаются через реестр провайдеров (`core/src/providers.ts`). Если провайдер их не поддерживает, поле отбрасывается, а окно прячет контрол: `providers.list` отдаёт `models: string[] | null` и `effort: boolean`. Какой флаг CLI несёт усилие — решить по документации провайдера, не угадывать.
+
+Поля `models`, `effort` и `version` у элемента `providers.list` необязательны, как `hello.methods`: хост переживает окно, и новое окно может получить элементы без них. Нет поля — «контрола нет», «версии нет». Ведущим считается назначенный `lead` (или первый из `members`), пока он жив; закрытого или удалённого подменяет первый живой участник (`liveLead` в `work/rooms.ts`). Комната закрыта, когда в ней нет ни одного живого участника: тогда нет и ведущего.
 
 ### 3.3 MCP
 

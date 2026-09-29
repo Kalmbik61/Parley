@@ -31,10 +31,14 @@ export {
   providersFile,
   providersWithHistory,
   resumeCommand,
+  selectableModels,
   startCommand,
   substituteArgs,
+  supportsEffort,
+  supportsModel,
 } from './providers.js';
 export type {
+  EffortLevel,
   McpConfigKind,
   ProviderEntry,
   ProviderInfo,
@@ -63,8 +67,31 @@ export {
 export { displayStatus } from './work/status-view.js';
 export { isUnreadFor, markHumanRead, recipientsOf, unreadFor } from './work/letters.js';
 export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';
-export { addRoom, isDescendant, isMember, joinNotice, nextRoomId } from './work/rooms.js';
+export {
+  addMember,
+  addRoom,
+  addRoomOriginMessage,
+  addSystemMessage,
+  isDescendant,
+  isMember,
+  isRoomClosed,
+  joinNotice,
+  leaveOtherRooms,
+  liveLead,
+  nextRoomId,
+  roomLead,
+  RoomRuleError,
+} from './work/rooms.js';
 export type { NewRoom } from './work/rooms.js';
+export {
+  ACCEPTED_LETTER,
+  ACCEPTED_LINE,
+  PROPOSAL_TEXT_MAX,
+  ProposalConflictError,
+  resolveProposal,
+  RETURNED_LETTER,
+  setProposal,
+} from './work/proposals.js';
 export {
   commitWorktree,
   createWorktree,
@@ -123,7 +150,7 @@ export {
   writeHostLease,
 } from './work/lease.js';
 export type { HostLease } from './work/lease.js';
-export { decisionsOf, participantLabel, sessionTag, threadOf } from './work/thread.js';
+export { decisionsOf, participantLabel, sessionMention, sessionTag, threadOf } from './work/thread.js';
 export type { Thread } from './work/thread.js';
 export { buildBrief, writeBrief } from './work/brief.js';
 export {
@@ -248,6 +275,7 @@ export type {
   LaunchedBy,
   Message,
   MessageKind,
+  Proposal,
   Room,
   SessionLifecycle,
   SessionMetrics,

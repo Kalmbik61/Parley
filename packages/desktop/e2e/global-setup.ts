@@ -30,6 +30,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   await mkdir(codexHistory);
   process.env.HARNAS_CLAUDE_PROJECTS_DIR = claudeHistory;
   process.env.HARNAS_CODEX_SESSIONS_DIR = codexHistory;
+  // Хост на старте спрашивает версию CLI (`<команда> --version`). В E2E настоящие claude и codex
+  // запускать нельзя, а подменён у спеков только claude (и не у всех): пробу отключаем целиком.
+  process.env.HARNAS_SKIP_VERSION_PROBE = '1';
 
   return async () => {
     const homes = (await readFile(list, 'utf8').catch(() => ''))

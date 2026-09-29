@@ -141,3 +141,106 @@ describe('ревью изменений (кусок 8.1)', () => {
     expectTypeOf<Result<'worktrees.diff'>['uncommittedPaths']>().toEqualTypeOf<string[]>();
   });
 });
+
+describe('комнаты: ведущий и решение (дизайн комнат, 3.2)', () => {
+  const room = { projectPath: '/p', workId: 'w-0001', roomId: 'r-01' };
+
+  it('rooms.create: ведущий необязателен, но строка', () => {
+    const base = { projectPath: '/p', workId: 'w-0001', title: 'Возвраты', members: ['s-01', 's-02'] };
+    expect(METHODS['rooms.create'].safeParse(base).success).toBe(true);
+    expect(METHODS['rooms.create'].safeParse({ ...base, lead: 's-02' }).success).toBe(true);
+    expect(METHODS['rooms.create'].safeParse({ ...base, lead: 2 }).success).toBe(false);
+    expectTypeOf<Params<'rooms.create'>['lead']>().toEqualTypeOf<string | undefined>();
+  });
+
+  it('rooms.create: origin — пара строк, quiet — булево; оба необязательны, старое окно их не шлёт', () => {
+    const base = { projectPath: '/p', workId: 'w-0001', title: 'Возвраты', members: ['s-02', 's-03'] };
+    const parse = (extra: Record<string, unknown>) => METHODS['rooms.create'].safeParse({ ...base, ...extra });
+
+    expect(parse({ origin: ['s-03', 's-02'] }).success).toBe(true);
+    expect(parse({ quiet: true }).success).toBe(true);
+    expect(parse({ quiet: false, origin: ['s-03', 's-02'], lead: 's-03' }).success).toBe(true);
+    // origin — ровно две сессии, из которых собрана комната (диалог 1.6), и ничего иного.
+    for (const origin of [[], ['s-03'], ['s-03', 's-02', 's-01'], 's-03', [3, 2], null]) {
+      expect(parse({ origin }).success).toBe(false);
+    }
+    for (const quiet of ['yes', 1, null]) expect(parse({ quiet }).success).toBe(false);
+    expectTypeOf<Params<'rooms.create'>['origin']>().toEqualTypeOf<[string, string] | undefined>();
+    expectTypeOf<Params<'rooms.create'>['quiet']>().toEqualTypeOf<boolean | undefined>();
+  });
+
+  it('rooms.addMember: комната и сессия обязательны', () => {
+    expect(METHODS['rooms.addMember'].safeParse({ ...room, sessionId: 's-04' }).success).toBe(true);
+    expect(METHODS['rooms.addMember'].safeParse(room).success).toBe(false);
+    expect(METHODS['rooms.addMember'].safeParse({ projectPath: '/p', workId: 'w-0001', sessionId: 's-04' }).success).toBe(
+      false,
+    );
+    expectTypeOf<Result<'rooms.addMember'>>().toEqualTypeOf<{ messageId: string }>();
+  });
+
+  it('rooms.resolveProposal: accept или return, заметка необязательна и до 4000 знаков', () => {
+    const accept = { ...room, proposalId: 'p-01', action: 'accept' };
+    expect(METHODS['rooms.resolveProposal'].safeParse(accept).success).toBe(true);
+    expect(METHODS['rooms.resolveProposal'].safeParse({ ...accept, action: 'return', note: 'мало' }).success).toBe(true);
+    expect(METHODS['rooms.resolveProposal'].safeParse({ ...accept, action: 'return', note: '' }).success).toBe(true);
+    expect(METHODS['rooms.resolveProposal'].safeParse({ ...accept, note: 'я'.repeat(4000) }).success).toBe(true);
+    expect(METHODS['rooms.resolveProposal'].safeParse({ ...accept, note: 'я'.repeat(4001) }).success).toBe(false);
+    expect(METHODS['rooms.resolveProposal'].safeParse({ ...accept, action: 'reject' }).success).toBe(false);
+    expect(METHODS['rooms.resolveProposal'].safeParse({ ...room, action: 'accept' }).success).toBe(false);
+    expectTypeOf<Params<'rooms.resolveProposal'>['action']>().toEqualTypeOf<'accept' | 'return'>();
+    expectTypeOf<Result<'rooms.resolveProposal'>>().toEqualTypeOf<{ messageId: string }>();
+  });
+
+  it('rooms.resolveProposal: rev — версия показанной карточки, целое от 0; без него — как раньше', () => {
+    const accept = { ...room, proposalId: 'p-01', action: 'accept' };
+    const parse = (extra: Record<string, unknown>) => METHODS['rooms.resolveProposal'].safeParse({ ...accept, ...extra });
+
+    expect(parse({}).success).toBe(true);
+    for (const rev of [0, 1, 7]) expect(parse({ rev }).success).toBe(true);
+    for (const rev of [-1, 1.5, '1', null]) expect(parse({ rev }).success).toBe(false);
+    expectTypeOf<Params<'rooms.resolveProposal'>['rev']>().toEqualTypeOf<number | undefined>();
+  });
+});
+
+describe('модель, усилие и поля providers.list (дизайн комнат, 3.2)', () => {
+  const create = { projectPath: '/p', workId: 'w-0001', provider: 'claude', label: '', task: '', parent: null };
+  const parse = (extra: Record<string, unknown>) => METHODS['sessions.create'].safeParse({ ...create, ...extra });
+
+  it('sessions.create: model и effort необязательны — старое окно их не шлёт', () => {
+    expect(parse({}).success).toBe(true);
+    expect(parse({ model: 'opus', effort: 'high' }).success).toBe(true);
+    expectTypeOf<Params<'sessions.create'>['model']>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<Params<'sessions.create'>['effort']>().toEqualTypeOf<'low' | 'medium' | 'high' | undefined>();
+  });
+
+  it('effort — low, medium или high; уровни, которых нет у обоих CLI, схема не пропускает', () => {
+    for (const effort of ['low', 'medium', 'high']) expect(parse({ effort }).success).toBe(true);
+    for (const effort of ['xhigh', 'max', 'minimal', 'HIGH', '', 3]) expect(parse({ effort }).success).toBe(false);
+  });
+
+  it('model — одно слово: алиас или полное имя, без пробелов и не похожее на флаг', () => {
+    for (const model of ['opus', 'claude-sonnet-5', 'sonnet[1m]', 'gpt-5.5', 'o3']) {
+      expect(parse({ model }).success).toBe(true);
+    }
+    // Значение с дефисом впереди CLI принял бы за флаг, а пустое или с пробелом — не модель.
+    for (const model of ['', ' opus', 'два слова', '--dangerously-skip-permissions', '-m', 'а\nб']) {
+      expect(parse({ model }).success).toBe(false);
+    }
+    expect(parse({ model: 'м'.repeat(200) }).success).toBe(true);
+    expect(parse({ model: 'м'.repeat(201) }).success).toBe(false);
+  });
+
+  it('providers.list: models, effort и version необязательны — хост, переживший окно, их не знает', () => {
+    expectTypeOf<Result<'providers.list'>['providers'][number]>().toEqualTypeOf<{
+      id: string;
+      label: string;
+      available: boolean;
+      models?: string[] | null;
+      effort?: boolean;
+      version?: string | null;
+    }>();
+    // Хост до дизайна комнат отдаёт элементы без новых полей — тип обязан это допускать.
+    const legacy: Result<'providers.list'> = { providers: [{ id: 'claude', label: 'Claude', available: true }] };
+    expect(legacy.providers[0]).not.toHaveProperty('effort');
+  });
+});

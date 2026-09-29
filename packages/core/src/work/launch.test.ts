@@ -243,6 +243,82 @@ describe('план запуска', () => {
   });
 });
 
+describe('модель и усилие в плане запуска (дизайн комнат, 3.2)', () => {
+  it('claude: выбор из диалога уезжает флагами --model и --effort', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId), {
+      model: 'opus',
+      effort: 'high',
+    });
+
+    expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('opus');
+    expect(plan.args[plan.args.indexOf('--effort') + 1]).toBe('high');
+    // Бриф по-прежнему последним аргументом: позиционный промпт флагами не сдвигается.
+    expect(plan.args.at(-1)).toContain('прогнать e2e');
+  });
+
+  it('быстрая сессия new несёт выбор так же', async () => {
+    const created = await createNewSession(project, null);
+    const plan = await planNew(project, created.workId, created.session, { effort: 'low' });
+
+    expect(plan.args[plan.args.indexOf('--effort') + 1]).toBe('low');
+    expect(plan.args).not.toContain('--model');
+  });
+
+  it('codex: --model и -c model_reasoning_effort рядом с MCP-переопределением', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId), {
+      model: 'gpt-5.5',
+      effort: 'medium',
+    });
+
+    expect(plan.args[0]).toBe('-c');
+    expect(plan.args[1]).toContain('mcp_servers.harnas=');
+    expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('gpt-5.5');
+    expect(plan.args).toContain('model_reasoning_effort="medium"');
+  });
+
+  it('без выбора флагов нет: сессия живёт на модели и усилии по умолчанию', async () => {
+    for (const provider of ['claude', 'codex']) {
+      const { workId, sessionId } = await pending(provider);
+      const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
+      expect(plan.args).not.toContain('--model');
+      expect(plan.args).not.toContain('--effort');
+      expect(plan.args.join(' ')).not.toContain('model_reasoning_effort');
+    }
+  });
+
+  it('провайдер без флага в шаблоне выбор не получает — ни отказа, ни висячего значения', async () => {
+    await writeFile(
+      path.join(home, 'providers.json'),
+      JSON.stringify({ claude: { args: ['--session-id', '{sessionUuid}', '{prompt}'] } }),
+      'utf8',
+    );
+    const { workId, sessionId } = await pending('claude');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId), {
+      model: 'opus',
+      effort: 'high',
+    });
+
+    expect(plan.args).toEqual(['--session-id', plan.providerSessionId, plan.args.at(-1)]);
+  });
+
+  it('возобновление выбор не несёт: модель Claude Code возвращает сам', async () => {
+    const { workId, sessionId } = await pending('claude');
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((item) => item.id === sessionId);
+      if (session !== undefined) session.providerSessionId = 'c0ffee00-1111-2222-3333-444455556666';
+    });
+    const plan = await planResume(project, workId, await sessionOf(workId, sessionId), {
+      model: 'opus',
+      effort: 'high',
+    });
+
+    expect(plan.args).not.toContain('--model');
+    expect(plan.args).not.toContain('--effort');
+  });
+});
+
 describe('план возобновления', () => {
   it('идёт resumeArgs с id сессии у провайдера', async () => {
     const { workId, sessionId } = await pending('codex');

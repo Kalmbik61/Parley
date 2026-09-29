@@ -6,3 +6,5 @@ export type { Handler, HostContext, NotificationHandler, RequestInfo } from './c
 export type { Client } from './client.js';
 export { createLog } from './log.js';
 export type { Log } from './log.js';
+export { probeCliVersion } from './providers/versions.js';
+export type { VersionProbe } from './providers/versions.js';

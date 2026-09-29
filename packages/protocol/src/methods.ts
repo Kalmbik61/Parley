@@ -52,6 +52,16 @@ export const METHODS = {
     task: z.string(),
     parent: z.string().nullable(),
     worktree: z.boolean().optional(),
+    // Модель и усилие из диалога запуска (дизайн комнат, 3.2). Провайдер без флага их отбрасывает
+    // — окно узнаёт об этом из `providers.list`. Модель — одно слово: алиас или полное имя,
+    // без пробелов и не с дефиса (CLI принял бы её за флаг); усилие — общий для обоих CLI набор.
+    model: z
+      .string()
+      .min(1)
+      .max(200)
+      .regex(/^[^\s-]\S*$/)
+      .optional(),
+    effort: z.enum(['low', 'medium', 'high']).optional(),
   }),
   'sessions.resume': z.object({ ref: sessionRef }),
   'sessions.stop': z.object({ ref: sessionRef }),
@@ -71,6 +81,40 @@ export const METHODS = {
     workId: z.string(),
     title: z.string().min(1),
     members: z.array(z.string()).min(1),
+    // Ведущий — один из `members`; без него хост берёт первого (дизайн комнат, 3.2). Старый хост
+    // поле отбросит, старое окно его не шлёт.
+    lead: z.string().optional(),
+    // Две сессии, из которых комнату собрали, — диалог 1.6 (дизайн комнат, 2.5): хост пишет системную
+    // строку «Room created from @s03 and @s02» в порядке пары. Писать её может только хост, окно
+    // такой строки не отправит. Обе — из `members`. Старый хост поле отбросит: строки не будет.
+    origin: z.tuple([z.string(), z.string()]).optional(),
+    // Тихий старт (дизайн комнат, 2.1, диалог 1.5): участникам не пишутся письма-приглашения, лента
+    // комнаты пуста, пока человек не напишет в неё задачу. Без флага приглашения уходят, как прежде:
+    // сессии уже работают и о комнате иначе не узнают. Старый хост поле отбросит.
+    quiet: z.boolean().optional(),
+  }),
+  // Дизайн комнат, 3.2: человек вводит сессию в комнату; она уходит из прочих комнат работы. Уже
+  // участник и нигде больше — `bad_request`; состоящая и в других комнатах (старая карта, решение 4)
+  // остаётся в этой одной.
+  'rooms.addMember': z.object({
+    projectPath: z.string(),
+    workId: z.string(),
+    roomId: z.string(),
+    sessionId: z.string(),
+  }),
+  // Ответ человека на решение ведущего. Устаревший `proposalId` хост отвергает как `conflict`;
+  // заметка возврата — до 4000 знаков, длиннее не проходит схему. `rev` — версия карточки, которую
+  // человек видел (`Proposal.rev`): пока карточка висела, ведущий мог заменить текст (`id` тот же, `rev`
+  // больше), и без `rev` `Accept` принял бы текст, которого человек не видел. Не совпал — `conflict`.
+  // Старый хост поле отбросит, старое окно его не шлёт: тогда сверяется один `proposalId`.
+  'rooms.resolveProposal': z.object({
+    projectPath: z.string(),
+    workId: z.string(),
+    roomId: z.string(),
+    proposalId: z.string(),
+    action: z.enum(['accept', 'return']),
+    note: z.string().max(4000).optional(),
+    rev: z.number().int().min(0).optional(),
   }),
   'rooms.send': z.object({
     projectPath: z.string(),
@@ -114,7 +158,25 @@ export interface Results {
   hello: { hostVersion: string; protocol: number; pid: number; methods?: string[] };
   'host.info': { hostVersion: string; pid: number; startedAt: string; clients: number; liveSessions: number };
   'host.shutdown': { ok: true };
-  'providers.list': { providers: Array<{ id: string; label: string; available: boolean }> };
+  'providers.list': {
+    providers: Array<{
+      id: string;
+      label: string;
+      available: boolean;
+      // Три поля ниже необязательны, как `hello.methods`: хост переживает окно, а `PROTOCOL_VERSION`
+      // остаётся 1, поэтому новое окно с хостом, оставшимся с живыми сессиями, получит элементы без
+      // них. Нынешний хост отдаёт их всегда; нет поля — окно читает «контрола нет» и «версии нет».
+      /**
+       * Закрытый список моделей. `null` — списка нет: у Claude Code и Codex документация его не
+       * даёт (`--model` принимает и алиас, и полное имя), а провайдер без флага модель не принимает.
+       */
+      models?: string[] | null;
+      /** Принимает ли провайдер усилие при запуске: нет — окно прячет контрол. */
+      effort?: boolean;
+      /** Версия CLI из пробы на старте хоста; `null` — не узнали. */
+      version?: string | null;
+    }>;
+  };
   'works.list': WorksSnapshot;
   'works.create': { workId: string };
   'works.delete': { ok: true };
@@ -135,6 +197,10 @@ export interface Results {
   'settings.get': { config: HarnasConfig; locked: Record<string, string> };
   'settings.set': { config: HarnasConfig };
   'rooms.create': { roomId: string };
+  /** `messageId` — системная строка ленты «@s04 joined the room». */
+  'rooms.addMember': { messageId: string };
+  /** `messageId` — сообщение `decision` при `accept`, письмо ведущему при `return`. */
+  'rooms.resolveProposal': { messageId: string };
   'rooms.send': { messageId: string };
   'worktrees.available': { available: boolean };
   'worktrees.diff': WorktreeDiff;

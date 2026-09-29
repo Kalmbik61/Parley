@@ -252,6 +252,69 @@ describe('create() + launch(): argv и окружение процесса', () 
   });
 });
 
+describe('create(): модель и усилие из диалога (дизайн комнат, 3.2)', () => {
+  /** Запускает сессию провайдера и отдаёт argv стаба; `task: ''` — тихий старт, как у комнат. */
+  async function launched(
+    provider: string,
+    choice: { model?: string; effort?: 'low' | 'medium' | 'high' },
+    task = '',
+  ): Promise<string[]> {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider,
+      label: '',
+      task,
+      parent: null,
+      ...choice,
+    });
+    const { argv } = await readArgs(argsFile);
+    await service.stop(ref);
+    return argv;
+  }
+
+  it('claude: --model и --effort доезжают до команды', async () => {
+    const argv = await launched('claude', { model: 'opus', effort: 'high' });
+
+    expect(argv[argv.indexOf('--model') + 1]).toBe('opus');
+    expect(argv[argv.indexOf('--effort') + 1]).toBe('high');
+  });
+
+  it('claude с задачей: бриф по-прежнему последним аргументом, флаги перед ним', async () => {
+    const argv = await launched('claude', { model: 'sonnet', effort: 'low' }, 'сделай штуку');
+
+    expect(argv[argv.indexOf('--model') + 1]).toBe('sonnet');
+    expect(argv[argv.indexOf('--effort') + 1]).toBe('low');
+    expect(argv.at(-1)).toContain('сделай штуку');
+  });
+
+  it('без выбора флагов нет: сессия живёт на модели и усилии по умолчанию', async () => {
+    const argv = await launched('claude', {});
+
+    expect(argv).not.toContain('--model');
+    expect(argv).not.toContain('--effort');
+  });
+
+  it('codex: --model и -c model_reasoning_effort в аргументах', async () => {
+    setEnv('HARNAS_CODEX_BIN', STUB);
+    const argv = await launched('codex', { model: 'gpt-5.5', effort: 'medium' });
+
+    expect(argv[argv.indexOf('--model') + 1]).toBe('gpt-5.5');
+    expect(argv).toContain('model_reasoning_effort="medium"');
+  });
+
+  it('провайдер без флагов (glm) выбор не получает: поле отбрасывается', async () => {
+    setEnv('HARNAS_GLM_BIN', STUB);
+    const argv = await launched('glm', { model: 'glm-4', effort: 'high' });
+
+    expect(argv.slice(2)).toEqual([]);
+  });
+});
+
 describe('create(): карта после старта', () => {
   it('active, pid стаба, launchedBy host, providerSessionId — uuid из --session-id', async () => {
     const work = await createWork(project, { title: 'Работа', goal: '' });
