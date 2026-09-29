@@ -16,6 +16,10 @@
  * все вкладки трёх работ, и ⌘F открыл бы полосу во всех; полосу открывает
  * `openSearch()` ручки, его зовёт `AppShell`.
  *
+ * Неживая сессия (раунд main-r2, п. 2) и ещё не запущенная (Organic, 1.8) — карточка над терминалом:
+ * кикер `asleep`, `closed` или `not started`, текст «S01 isn't running» и, где уместно, Resume. Терминал под
+ * ней прежний: xterm держит последний вывод.
+ *
  * Кусок 2.6 (спека 5.4): корень — droppable `terminal` с `sessionId`, только
  * пока поверхность видима: скрытые терминалы группы лежат на месте видимого,
  * и бросок ушёл бы в чужую вкладку. В этапе 2 терминал ничего не принимает
@@ -39,6 +43,7 @@ import { applyFocusTarget, buildFocusTargetDeps } from '../attention/focus-targe
 import { useHostSupports } from '../lib/capabilities.js';
 import { sessionTag } from '../lib/participant.js';
 import { Button } from '../ui/button.js';
+import { Card, CardKicker } from '../ui/card.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { dndId, type DropTargetData } from '../layout/dnd.js';
 import { useTerminalDropPreview } from '../layout/DropIndicator.js';
@@ -225,6 +230,13 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
   const resumable = useWorksStore((state) => {
     const session = sessionOf(sessionRef, state.entries);
     return session !== null && canResume(session);
+  });
+  // Карточка над терминалом (Organic, 1.8): «asleep», «closed» — процесса нет; «not started» — его ещё не
+  // было. У pending подключаться тоже не к чему, но поведение терминала прежнее: `notRunning` (ввод-тост,
+  // `running`) его не считает — только вид.
+  const stateKicker = useWorksStore((state) => {
+    const lifecycle = sessionOf(sessionRef, state.entries)?.lifecycle;
+    return lifecycle === 'sleeping' ? S.states.asleep : lifecycle === 'closed' ? S.states.closed : lifecycle === 'pending' ? S.states.pending : null;
   });
   const label = sessionTag(sessionRef.sessionId);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -415,18 +427,23 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
       {/* Без связи вкладка говорит одно — «Disconnected — reconnecting…» (слой ниже): снимок
           работ в это время прежний, а Resume звать некому. Полоса вернётся со связью, если
           сессия и по свежему снимку неживая (после «Restart host» — так и будет). */}
-      {notRunning && !offline ? (
-        <div
+      {stateKicker !== null && !offline ? (
+        <Card
           data-testid="terminal-not-running"
-          className="flex min-w-0 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-3 py-1.5 text-sm text-foreground"
+          className="m-3 mb-0 shrink-0 flex-row items-center gap-3 rounded-md py-2.5 pl-4 pr-2.5 text-foreground"
         >
-          <span className="min-w-0 truncate">{S.send.notRunning(label)}</span>
+          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <CardKicker data-kicker className={notRunning ? 'text-neutral-700' : undefined}>
+              {stateKicker}
+            </CardKicker>
+            <span className="truncate text-sm">{S.send.notRunning(label)}</span>
+          </span>
           {resumable ? (
             <Button type="button" size="sm" className="shrink-0" onClick={() => resumeSession(bridge, sessionRef)}>
               {S.sidebar.sessionMenu.resume}
             </Button>
           ) : null}
-        </div>
+        </Card>
       ) : null}
       {searchOpen ? (
         <SearchBar

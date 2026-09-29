@@ -86,11 +86,21 @@ describe('GroupView — тест 8', () => {
 });
 
 describe('GroupView — тест 12', () => {
-  it('пустая корневая группа показывает подсказку', () => {
+  // Спека окна 2026-09-29, 1.8: «No open tabs» заголовком Caprasimo и подсказка под ним.
+  it('пустая корневая группа: заголовок No open tabs и подсказка про сайдбар и ⌘J', () => {
     const group: GroupNode = { type: 'group', id: 'g1', tabs: [], activeTabId: null };
     renderGroup(group);
 
-    expect(screen.getByText('Open a session from the sidebar, ⌘T for a new session')).toBeTruthy();
+    const heading = screen.getByRole('heading', { name: 'No open tabs' });
+    expect(heading.className).toContain('font-heading');
+    expect(heading.className).toContain('text-[25px]');
+    const hint = screen.getByText('Open a session from the sidebar, or find anything with ⌘J.');
+    expect(hint.className).toContain('text-muted-foreground');
+    expect(hint.className).toContain('text-sm');
+    const box = heading.parentElement as HTMLElement;
+    expect(box.className).toMatch(/\bpy-14\b/);
+    expect(box.className).toMatch(/\bpx-12\b/);
+    expect(box.className).toMatch(/\bgap-2\b/);
   });
 });
 

@@ -452,7 +452,9 @@ export const S = {
     diffTitle: (sessionTag: string, shortHash: string | null): string =>
       shortHash === null ? `Changes ${sessionTag}` : `Changes ${sessionTag} · ${shortHash}`,
     openTab: 'Open…',
-    emptyGroup: 'Open a session from the sidebar, ⌘T for a new session',
+    /** Пустая группа (спека окна 2026-09-29, 1.8): заголовок и подсказка под ним. */
+    noOpenTabs: 'No open tabs',
+    emptyGroup: 'Open a session from the sidebar, or find anything with ⌘J.',
     closedToast: 'Tab closed — ⌘⇧T to reopen',
     tooSmall: 'Not enough room for another group',
     tooManyGroups: 'No more than 8 groups per workspace',

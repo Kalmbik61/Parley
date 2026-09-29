@@ -388,6 +388,46 @@ describe('TerminalSurface — неживая сессия (раунд main-r2, �
     await waitFor(() => expect(resumes).toEqual([{ ref }]));
   });
 
+  // Облик Organic (спека окна 2026-09-29, 1.8): полоса неживой сессии — карточка на фоне окна с кикером
+  // (`asleep`, `closed`, `not started` — капсом), текстом и главной кнопкой Resume.
+  it('sleeping и closed: кикер asleep / closed (10px капсом, neutral-700), карточка на фоне окна, Resume — главная кнопка', () => {
+    withSession({ lifecycle: 'sleeping' });
+    const view = renderSurface();
+    const bar = screen.getByTestId('terminal-not-running');
+    const kicker = bar.querySelector('[data-kicker]');
+    expect(kicker?.textContent).toBe('asleep');
+    expect(kicker?.className).toContain('uppercase');
+    expect(kicker?.className).toContain('text-neutral-700');
+    expect(kicker?.className).not.toContain('text-accent-700');
+    expect(bar.className).toContain('bg-background');
+    expect(bar.className).toMatch(/\brounded-md\b/);
+    expect(bar.className).not.toMatch(/\bborder-b\b/);
+    expect(bar.className).not.toMatch(/\bbg-card\b/);
+    expect(screen.getByRole('button', { name: 'Resume' }).className).toContain('bg-primary');
+    view.unmount();
+    withSession({ lifecycle: 'closed' });
+    renderSurface();
+    expect(screen.getByTestId('terminal-not-running').querySelector('[data-kicker]')?.textContent).toBe('closed');
+  });
+
+  it('pending: та же карточка с кикером not started, без Resume — процесса ещё не было, поднимать нечего', () => {
+    withSession({ lifecycle: 'pending' });
+    renderSurface();
+    const bar = screen.getByTestId('terminal-not-running');
+    expect(bar.querySelector('[data-kicker]')?.textContent).toBe('not started');
+    expect(bar.querySelector('[data-kicker]')?.className).toContain('text-accent-700');
+    expect(bar.textContent).toContain("S01 isn't running");
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
+  });
+
+  it('длинный ярлык не выталкивает Resume: текст сжимается многоточием', () => {
+    withSession({ lifecycle: 'sleeping', label: 'я'.repeat(80) });
+    renderSurface();
+    const bar = screen.getByTestId('terminal-not-running');
+    expect(bar.querySelector('[data-kicker] + span')?.className).toContain('truncate');
+    expect(screen.getByRole('button', { name: 'Resume' }).className).toContain('shrink-0');
+  });
+
   it('отказ sessions.resume — тост Couldn\'t resume session: …', async () => {
     withSession({ lifecycle: 'sleeping' });
     bridge.setHandler('sessions.resume', () => {
