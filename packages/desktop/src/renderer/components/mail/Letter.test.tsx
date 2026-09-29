@@ -48,16 +48,8 @@ describe('Letter (тест 5)', () => {
 });
 
 describe('Letter — карточка Organic (1.8)', () => {
-  it('без variant — лента комнаты прежней разметкой: без карточки, с ▤ у непрочитанного', () => {
-    const { container } = render(<Letter letter={letter({ unread: true, kind: 'question' })} onOpenExternal={() => {}} />);
-    const root = container.querySelector('[data-letter-id]') as HTMLElement;
-    expect(root.className).not.toContain('max-w-[640px]');
-    expect(container.textContent).toContain('▤');
-    expect(container.textContent).toContain('· question');
-  });
-
   it('карточка до 640px на фоне окна: радиус 32, отступ 18 20', () => {
-    const { container } = render(<Letter variant="card" letter={letter({ text: 'привет' })} onOpenExternal={() => {}} />);
+    const { container } = render(<Letter letter={letter({ text: 'привет' })} onOpenExternal={() => {}} />);
     const card = container.querySelector('[data-letter-id]') as HTMLElement;
     expect(card.className).toContain('max-w-[640px]');
     expect(card.className).toContain('bg-background');
@@ -72,7 +64,7 @@ describe('Letter — карточка Organic (1.8)', () => {
       ['decision', 'bg-accent-2-100'],
       ['note', 'bg-neutral-100'],
     ] as const) {
-      render(<Letter variant="card" letter={letter({ kind })} onOpenExternal={() => {}} />);
+      render(<Letter letter={letter({ kind })} onOpenExternal={() => {}} />);
       const tag = screen.getByText(kind);
       expect(tag.className, kind).toContain(cls);
       expect(tag.className, kind).toMatch(/\brounded-full\b/);
@@ -81,7 +73,7 @@ describe('Letter — карточка Organic (1.8)', () => {
   });
 
   it('мета: отправитель вес 600 основным цветом → адресат, время; текст письма 14px', () => {
-    const { container } = render(<Letter variant="card" letter={letter({ from: 'S03 ревью', to: 'You', time: '10:05', text: 'текст' })} onOpenExternal={() => {}} />);
+    const { container } = render(<Letter letter={letter({ from: 'S03 ревью', to: 'You', time: '10:05', text: 'текст' })} onOpenExternal={() => {}} />);
     const sender = screen.getByText('S03 ревью');
     expect(sender.className).toContain('font-semibold');
     expect(sender.className).toContain('text-foreground');
@@ -91,18 +83,18 @@ describe('Letter — карточка Organic (1.8)', () => {
   });
 
   it('непрочитанное — точка 8px accent-600 с подписью unread; прочитанное — без точки и без прежнего ▤', () => {
-    const { container, rerender } = render(<Letter variant="card" letter={letter({ unread: true })} onOpenExternal={() => {}} />);
+    const { container, rerender } = render(<Letter letter={letter({ unread: true })} onOpenExternal={() => {}} />);
     const dot = screen.getByLabelText('unread');
     expect(dot.className).toContain('size-2');
     expect(dot.className).toContain('rounded-full');
     expect(dot.className).toContain('bg-accent-600');
     expect(container.textContent).not.toContain('▤');
-    rerender(<Letter variant="card" letter={letter({ unread: false })} onOpenExternal={() => {}} />);
+    rerender(<Letter letter={letter({ unread: false })} onOpenExternal={() => {}} />);
     expect(screen.queryByLabelText('unread')).toBeNull();
   });
 
   it('длинное имя отправителя и адресатов переносится, а не выталкивает карточку', () => {
-    const { container } = render(<Letter variant="card" letter={letter({ from: 'я'.repeat(120), to: 'x'.repeat(120) })} onOpenExternal={() => {}} />);
+    const { container } = render(<Letter letter={letter({ from: 'я'.repeat(120), to: 'x'.repeat(120) })} onOpenExternal={() => {}} />);
     const card = container.querySelector('[data-letter-id]') as HTMLElement;
     expect(card.className).toContain('min-w-0');
     expect(container.querySelector('[data-letter-meta]')?.className).toContain('flex-wrap');

@@ -113,7 +113,6 @@ export function MailPanel({ entry, providers, models, bridge, active, onOpenExte
           <Letter
             key={letter.id}
             letter={letter}
-            variant="card"
             onOpenExternal={onOpenExternal}
             observeRef={markRead(letter.id, isUnreadForHuman(messages.get(letter.id)))}
           />

@@ -205,8 +205,6 @@ export const S = {
     unreadAriaLabel: 'unread',
     /** Тег вида письма в карточке почты (1.8): строчными, как в handoff. */
     kindTag: { note: 'note', question: 'question', decision: 'decision' } as const,
-    kindSuffixQuestion: ' · question',
-    kindSuffixDecision: ' · decision',
   },
 
   /** Комнаты — `rooms/*`. */
