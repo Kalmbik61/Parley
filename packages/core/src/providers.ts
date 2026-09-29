@@ -246,7 +246,9 @@ const PLACEHOLDER =
 const INLINE_EFFORT = /\{effort\}/g;
 
 /**
- * Подставляет значения в шаблон аргументов.
+ * Подставляет значения в шаблон аргументов. Подстановка — целым элементом массива; внутри строки
+ * шаблона умеет встать только `{effort}` (`model_reasoning_effort="{effort}"`), так что
+ * `--model={model}` остаётся буквальной строкой (`supportsModel` такой шаблон не считает).
  *
  * Подстановка без значения выпадает вместе с флагом, который её вводит, —
  * предыдущим аргументом, если он пришёл из шаблона литералом и начинается с
@@ -326,20 +328,26 @@ export function printCommand(
   };
 }
 
-/** Стоит ли подстановка в шаблоне запуска новой сессии — значит, провайдер принимает её флаг. */
-const startTemplateHas = (entry: ProviderEntry, placeholder: string): boolean =>
-  (entry.runner.args ?? []).some((item) => item.includes(placeholder));
-
 /**
  * Принимает ли провайдер модель при запуске. Решает шаблон, а не отдельный признак реестра:
  * флаг подтверждён документацией CLI ровно там, где он стоит в `args`, а оверрайд
  * `providers.json` без `{model}` честно его выключает. Не принимает — выбор молча
  * отбрасывается (`substituteArgs`), а окно контрол прячет.
+ *
+ * Считается только `{model}` целым элементом, как его и подставляет `substituteArgs`: внутри
+ * строки (`--model={model}`) он не подставился бы, и окно показало бы контрол, а в команду ушёл
+ * бы буквальный `--model={model}`.
  */
-export const supportsModel = (entry: ProviderEntry): boolean => startTemplateHas(entry, '{model}');
+export const supportsModel = (entry: ProviderEntry): boolean =>
+  (entry.runner.args ?? []).some((item) => item === '{model}');
 
-/** Принимает ли провайдер усилие при запуске — по тому же правилу, что и модель. */
-export const supportsEffort = (entry: ProviderEntry): boolean => startTemplateHas(entry, '{effort}');
+/**
+ * Принимает ли провайдер усилие при запуске — по тому же правилу, что и модель, но `{effort}`
+ * подставляется и внутри строки шаблона (`model_reasoning_effort="{effort}"`), поэтому годится
+ * любой элемент с ним.
+ */
+export const supportsEffort = (entry: ProviderEntry): boolean =>
+  (entry.runner.args ?? []).some((item) => item.includes('{effort}'));
 
 /**
  * Закрытый список моделей для окна: только из записи реестра (то есть из `providers.json`) и

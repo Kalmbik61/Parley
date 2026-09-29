@@ -371,6 +371,41 @@ describe('модель и усилие новой сессии (дизайн к�
     expect(selectableModels(custom(['--model', '{model}'], []))).toBeNull();
     expect(selectableModels(custom(['--model', '{model}']))).toBeNull();
   });
+
+  describe('подстановка внутри строки шаблона', () => {
+    const custom = (args: string[]): ProviderEntry => ({
+      id: 'мой',
+      label: 'Мой',
+      mark: 'Мо',
+      hasHistory: false,
+      linkBy: 'cwd+time',
+      runner: { command: 'мой', args },
+      models: ['a', 'b'],
+    });
+
+    it('{model} — только целым элементом: «--model={model}» модель не принимает и списка не даёт', () => {
+      const inline = custom(['--model={model}', '{prompt}']);
+
+      // Иначе окно показало бы контрол, а в команду ушёл бы буквальный «--model={model}».
+      expect(substituteArgs(inline.runner.args ?? [], { model: 'a', prompt: 'p' })).toEqual([
+        '--model={model}',
+        'p',
+      ]);
+      expect(supportsModel(inline)).toBe(false);
+      expect(selectableModels(inline)).toBeNull();
+      // Целым элементом — принимает, и список отдаётся.
+      expect(supportsModel(custom(['--model', '{model}']))).toBe(true);
+      expect(selectableModels(custom(['--model', '{model}']))).toEqual(['a', 'b']);
+    });
+
+    it('{effort} можно и внутри строки: его там подставляют, поэтому усилие провайдер принимает', () => {
+      const inline = custom(['--effort={effort}', '{prompt}']);
+
+      expect(supportsEffort(inline)).toBe(true);
+      expect(startCommand(inline, { effort: 'high', prompt: 'p' }).args).toEqual(['--effort=high', 'p']);
+      expect(startCommand(inline, { prompt: 'p' }).args).toEqual(['p']);
+    });
+  });
 });
 
 describe('режим одного ответа', () => {

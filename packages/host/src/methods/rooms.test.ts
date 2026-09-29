@@ -273,6 +273,92 @@ describe('rooms.create: ведущий и правило одной комнат
     expect(unreadFor(map, a)).toHaveLength(1);
     expect(unreadFor(map, b)).toHaveLength(1);
   });
+
+  it('origin: первой строкой ленты — системное «Room created from @s02 and @s01», следом приглашения', async () => {
+    const { client, dir, workId, ids } = await setup();
+    const [a, b] = ids as [string, string];
+
+    const response = await call(client, 'rooms.create', {
+      projectPath: dir,
+      workId,
+      title: 'Двое',
+      members: [a, b],
+      lead: b,
+      origin: [b, a],
+    });
+
+    expect(response.error).toBeUndefined();
+    const map = await readMap(dir, workId);
+    const feed = map.messages.filter((message) => message.roomId === 'r-01');
+    expect(feed[0]).toMatchObject({ from: SYSTEM, to: [HUMAN], kind: 'note', text: 'Room created from @s02 and @s01' });
+    expect(feed.slice(1).map((message) => [message.from, message.to])).toEqual([
+      [HUMAN, [a]],
+      [HUMAN, [b]],
+    ]);
+    // Строка никого не будит: у сессий непрочитанным остаётся одно приглашение.
+    expect(unreadFor(map, a)).toHaveLength(1);
+    expect(unreadFor(map, b)).toHaveLength(1);
+  });
+
+  it('origin не из участников, из одной сессии дважды или с человеком — bad_request, комнаты нет', async () => {
+    const { client, dir, workId, ids } = await setup();
+    const [a, b, outsider] = ids as [string, string, string];
+
+    for (const origin of [[a, outsider], [a, a], [a, HUMAN], ['s-99', b]]) {
+      const response = await call(client, 'rooms.create', {
+        projectPath: dir,
+        workId,
+        title: 'Двое',
+        members: [a, b],
+        origin,
+      });
+      expect(response.error?.code).toBe('bad_request');
+    }
+    const map = await readMap(dir, workId);
+    expect(map.rooms).toEqual([]);
+    expect(map.messages).toEqual([]);
+  });
+
+  it('quiet: приглашений нет, лента комнаты пуста, участникам читать нечего — тихий старт', async () => {
+    const { client, dir, workId, ids } = await setup();
+    const [a, b] = ids as [string, string];
+
+    const response = await call(client, 'rooms.create', {
+      projectPath: dir,
+      workId,
+      title: 'Двое',
+      members: [a, b],
+      quiet: true,
+    });
+
+    expect(response.result).toEqual({ roomId: 'r-01' });
+    const map = await readMap(dir, workId);
+    expect(map.rooms[0]).toMatchObject({ id: 'r-01', members: [a, b], lead: a });
+    expect(map.messages.filter((message) => message.roomId === 'r-01')).toEqual([]);
+    expect(unreadFor(map, a)).toEqual([]);
+    expect(unreadFor(map, b)).toEqual([]);
+
+    // Комната работает и без приглашений: задача «всем» доходит до каждого.
+    await call(client, 'rooms.send', { projectPath: dir, workId, roomId: 'r-01', to: [], text: 'задача', kind: 'note' });
+    const after = await readMap(dir, workId);
+    expect(unreadFor(after, a)).toHaveLength(1);
+    expect(unreadFor(after, b)).toHaveLength(1);
+  });
+
+  it('quiet вместе с origin: строка происхождения есть, приглашений нет; quiet: false — приглашения как прежде', async () => {
+    const { client, dir, workId, ids } = await setup();
+    const [a, b, c] = ids as [string, string, string];
+
+    await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Тихая', members: [a, b], origin: [a, b], quiet: true });
+    let map = await readMap(dir, workId);
+    expect(map.messages.map((message) => [message.roomId, message.from, message.text])).toEqual([
+      ['r-01', SYSTEM, 'Room created from @s01 and @s02'],
+    ]);
+
+    await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Громкая', members: [b, c], quiet: false });
+    map = await readMap(dir, workId);
+    expect(map.messages.filter((message) => message.roomId === 'r-02').map((message) => message.to)).toEqual([[b], [c]]);
+  });
 });
 
 describe('rooms.addMember', () => {
@@ -386,6 +472,35 @@ describe('rooms.addMember', () => {
     expect(map.rooms[0]?.members).toEqual([b]);
     expect(map.rooms[1]?.members).toEqual([b]);
     expect(map.rooms[2]?.members).toEqual([c, a]);
+  });
+
+  it('старая карта: бросок на позднюю комнату, где сессия тоже участница, лечит карту; повтор — уже участник', async () => {
+    const { client, dir, workId, ids } = await setup();
+    const [a, b] = ids as [string, string];
+    // Сайдбар ставит `a` в раннюю комнату (самый ранний createdAt); бросок на позднюю, где она
+    // по записи тоже участница, — единственный способ оставить её в одной.
+    await updateMap(dir, workId, (map) => {
+      for (const title of ['Ранняя', 'Поздняя']) {
+        const room = addRoom(map, { title, creator: HUMAN, members: [a, b] });
+        delete (room as unknown as Record<string, unknown>)['lead'];
+        delete (room as unknown as Record<string, unknown>)['proposal'];
+      }
+    });
+
+    const response = await call(client, 'rooms.addMember', { projectPath: dir, workId, roomId: 'r-02', sessionId: a });
+
+    expect(response.error).toBeUndefined();
+    const map = await readMap(dir, workId);
+    expect(map.rooms[0]?.members).toEqual([b]);
+    // В целевой комнате запись одна, а не две.
+    expect(map.rooms[1]?.members).toEqual([a, b]);
+    expect(map.rooms.filter((room) => room.members.includes(a)).map((room) => room.id)).toEqual(['r-02']);
+    expect(map.messages.at(-1)).toMatchObject({ roomId: 'r-02', from: SYSTEM, text: '@s01 joined the room' });
+    expect(response.result).toEqual({ messageId: map.messages.at(-1)?.id });
+
+    // Теперь она нигде больше не состоит: тот же бросок — «уже участник».
+    const again = await call(client, 'rooms.addMember', { projectPath: dir, workId, roomId: 'r-02', sessionId: a });
+    expect(again.error?.code).toBe('bad_request');
   });
 });
 
@@ -517,6 +632,51 @@ describe('rooms.resolveProposal', () => {
     expect((await readMap(dir, workId)).rooms[0]?.proposal).toEqual(before);
     const accepted = await call(client, 'rooms.resolveProposal', { ...base, action: 'accept' });
     expect(accepted.error).toBeUndefined();
+  });
+
+  it('rev: карточка прежней версии — conflict, свежей — проходит; без rev — как раньше', async () => {
+    const { client, dir, workId, ids, base } = await withProposal();
+    const [a] = ids as [string];
+    // Ведущий заменил текст, пока человек смотрел на карточку rev 0: id тот же, rev 1.
+    await updateMap(dir, workId, (map) => {
+      setProposal(map, 'r-01', a, 'Итог, версия 2.');
+    });
+    const before = JSON.stringify(await readMap(dir, workId));
+
+    const stale = await call(client, 'rooms.resolveProposal', { ...base, action: 'accept', rev: 0 });
+    const staleReturn = await call(client, 'rooms.resolveProposal', { ...base, action: 'return', note: 'x', rev: 0 });
+    expect([stale.error?.code, staleReturn.error?.code]).toEqual(['conflict', 'conflict']);
+    expect(JSON.stringify(await readMap(dir, workId))).toBe(before);
+
+    const fresh = await call(client, 'rooms.resolveProposal', { ...base, action: 'accept', rev: 1 });
+    expect(fresh.error).toBeUndefined();
+    const map = await readMap(dir, workId);
+    expect(map.messages.find((message) => message.kind === 'decision')?.text).toBe('Итог, версия 2.');
+  });
+
+  it('rev не число или отрицательный — bad_request (схема), а не conflict', async () => {
+    const { client, dir, workId, base } = await withProposal();
+    const before = JSON.stringify(await readMap(dir, workId));
+
+    for (const rev of [-1, 1.5, '0']) {
+      const response = await call(client, 'rooms.resolveProposal', { ...base, action: 'accept', rev });
+      expect(response.error?.code).toBe('bad_request');
+    }
+    expect(JSON.stringify(await readMap(dir, workId))).toBe(before);
+  });
+
+  it('ведущий закрылся, пока решение ждало: письмо о принятии уходит живому ведущему', async () => {
+    const { client, dir, workId, ids, base } = await withProposal();
+    const [a, b] = ids as [string, string];
+    await updateMap(dir, workId, (map) => transitionSession(map, a, 'closed'));
+
+    const response = await call(client, 'rooms.resolveProposal', { ...base, action: 'accept' });
+
+    expect(response.error).toBeUndefined();
+    const map = await readMap(dir, workId);
+    expect(map.messages.find((message) => message.kind === 'decision')?.from).toBe(a);
+    // Последним в ленте — письмо о принятии; приглашения при создании комнаты шли раньше.
+    expect(map.messages.at(-1)).toMatchObject({ from: HUMAN, to: [b], text: 'Decision accepted.' });
   });
 
   it('нет решения в слоте — conflict, а нет комнаты, работы или заметка длиннее 4000 — bad_request', async () => {

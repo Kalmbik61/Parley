@@ -4,11 +4,13 @@ import { addSession, removeSession, setResult, transitionSession } from './map.j
 import {
   addMember,
   addRoom,
+  addRoomOriginMessage,
   isDescendant,
   isMember,
   isRoomClosed,
   joinNotice,
   leaveOtherRooms,
+  liveLead,
   nextRoomId,
   roomLead,
   RoomRuleError,
@@ -201,6 +203,81 @@ describe('roomLead', () => {
   });
 });
 
+describe('liveLead', () => {
+  /** Три сессии и комната человека r-01 {s-01, s-02, s-03}. */
+  function trio(lead: string | null = null): WorkMap {
+    const map = emptyMap();
+    for (const label of ['архитектор', 'бэкенд', 'ревью']) {
+      addSession(map, { provider: 'claude', label, task: 'x' });
+    }
+    addRoom(map, { title: 'Возвраты', creator: HUMAN, members: ['s-01', 's-02', 's-03'], lead });
+    return map;
+  }
+  const first = (map: WorkMap): Room => map.rooms[0] as Room;
+
+  it('ведущий жив — им и остаётся: и явный, и первый из members', () => {
+    const explicit = trio('s-03');
+    expect(liveLead(explicit, first(explicit))).toBe('s-03');
+    const byDefault = trio();
+    expect(liveLead(byDefault, first(byDefault))).toBe('s-01');
+  });
+
+  it('спящая и ещё не запущенная сессия жива и ведущего не теряет', () => {
+    const map = trio('s-02');
+    transitionSession(map, 's-02', 'active');
+    transitionSession(map, 's-02', 'sleeping');
+    expect(liveLead(map, first(map))).toBe('s-02');
+    expect(map.sessions.find((session) => session.id === 's-03')?.lifecycle).toBe('pending');
+  });
+
+  it('явный ведущий закрыт — ведущим становится первый живой из members', () => {
+    const map = trio('s-02');
+    transitionSession(map, 's-02', 'closed');
+    expect(liveLead(map, first(map))).toBe('s-01');
+    // Запись комнаты при этом не переписывается: `roomLead` по-прежнему отдаёт назначенного.
+    expect(roomLead(first(map))).toBe('s-02');
+    expect(first(map).lead).toBe('s-02');
+  });
+
+  it('первый из members закрыт, ведущий не назначен — следующий живой', () => {
+    const map = trio();
+    transitionSession(map, 's-01', 'closed');
+    expect(liveLead(map, first(map))).toBe('s-02');
+    transitionSession(map, 's-02', 'closed');
+    expect(liveLead(map, first(map))).toBe('s-03');
+  });
+
+  it('удалённая из карты сессия тоже пропускается: removeSession оставляет id в members', () => {
+    const map = trio('s-01');
+    removeSession(map, 's-01');
+    expect(first(map).members).toContain('s-01');
+    expect(liveLead(map, first(map))).toBe('s-02');
+  });
+
+  it('members никого не оставили — создатель-сессия; создатель-человек не ведущий', () => {
+    const map = emptyMap();
+    for (const label of ['a', 'b']) addSession(map, { provider: 'claude', label, task: 'x' });
+    addRoom(map, { title: 'агентская', creator: 's-01', members: ['s-02'], lead: 's-02' });
+    transitionSession(map, 's-02', 'closed');
+    expect(liveLead(map, first(map))).toBe('s-01');
+
+    const human = trio();
+    for (const id of ['s-01', 's-02', 's-03']) transitionSession(human, id, 'closed');
+    expect(liveLead(human, first(human))).toBeNull();
+  });
+
+  it('ведущего нет ровно тогда, когда комната закрыта (isRoomClosed): круг тот же', () => {
+    const map = trio('s-02');
+    const ids = ['s-01', 's-02', 's-03'];
+    for (let closed = 0; closed <= ids.length; closed += 1) {
+      expect(liveLead(map, first(map)) === null).toBe(isRoomClosed(map, first(map)));
+      const next = ids[closed];
+      if (next !== undefined) transitionSession(map, next, 'closed');
+    }
+    expect(isRoomClosed(map, first(map))).toBe(true);
+  });
+});
+
 describe('isRoomClosed', () => {
   it('открыта, пока жива хотя бы одна сессия участника или создателя', () => {
     const map = twoRooms();
@@ -283,6 +360,44 @@ describe('addMember', () => {
     expect(map.rooms[1]?.members).toEqual(['s-03', 's-02']);
   });
 
+  it('старая карта: сессия в двух комнатах, бросок на позднюю, где она тоже участница, — уходит из ранней', () => {
+    const map = twoRooms();
+    // Карта до правила одной комнаты: s-01 состоит и в r-01 (ведущий), и в r-02.
+    (map.rooms[1] as Room).members.push('s-01');
+    const message = addMember(map, 'r-02', 's-01', NOW);
+
+    // В целевой комнате запись одна, а не две: `members` не дублируется.
+    expect(map.rooms[1]?.members).toEqual(['s-03', 's-01']);
+    // Из ранней ушла вместе с ролью ведущего.
+    expect(map.rooms[0]).toMatchObject({ members: ['s-02'], lead: null });
+    expect(map.rooms.filter((room) => isMember(room, 's-01')).map((room) => room.id)).toEqual(['r-02']);
+    expect(message).toMatchObject({ roomId: 'r-02', from: SYSTEM, text: '@s01 joined the room', at: NOW });
+  });
+
+  it('создатель-сессия целевой комнаты, состоящая ещё и в другой, — уходит из другой, в members не пишется', () => {
+    const map = emptyMap();
+    for (const label of ['a', 'b', 'c']) addSession(map, { provider: 'claude', label, task: 'x' });
+    addRoom(map, { title: 'своя', creator: 's-01', members: ['s-02'], lead: 's-01' });
+    addRoom(map, { title: 'чужая', creator: HUMAN, members: ['s-01', 's-03'] });
+
+    const message = addMember(map, 'r-01', 's-01');
+
+    expect(map.rooms[0]).toMatchObject({ creator: 's-01', members: ['s-02'], lead: 's-01' });
+    expect(map.rooms[1]?.members).toEqual(['s-03']);
+    expect(message.text).toBe('@s01 joined the room');
+  });
+
+  it('участник только этой комнаты — «уже участник», а с ним и создатель-сессия: карта не тронута', () => {
+    const map = emptyMap();
+    for (const label of ['a', 'b']) addSession(map, { provider: 'claude', label, task: 'x' });
+    addRoom(map, { title: 'своя', creator: 's-01', members: ['s-02'] });
+    const before = JSON.stringify(map);
+
+    expect(() => addMember(map, 'r-01', 's-02')).toThrow(/уже участник/);
+    expect(() => addMember(map, 'r-01', 's-01')).toThrow(/уже участник/);
+    expect(JSON.stringify(map)).toBe(before);
+  });
+
   it('системная запись не будит сессии и не считается непрочитанной человеком', () => {
     const map = twoRooms();
     const message = addMember(map, 'r-01', 's-04', NOW);
@@ -314,5 +429,32 @@ describe('addMember', () => {
     const map = twoRooms();
     setResult(map, 's-04', 'done');
     expect(() => addMember(map, 'r-01', 's-04')).not.toThrow();
+  });
+});
+
+describe('addRoomOriginMessage', () => {
+  const NOW = '2026-09-29T12:00:00.000Z';
+
+  it('системная строка «Room created from @s03 and @s02» — в порядке origin, для человека', () => {
+    const map = twoRooms();
+    const line = addRoomOriginMessage(map, 'r-01', ['s-03', 's-02'], NOW);
+
+    expect(line).toMatchObject({
+      roomId: 'r-01',
+      from: SYSTEM,
+      to: [HUMAN],
+      kind: 'note',
+      text: 'Room created from @s03 and @s02',
+      at: NOW,
+    });
+    expect(map.messages).toEqual([line]);
+  });
+
+  it('строка никого не будит и человеку непрочитанной не значится, как и «joined the room»', () => {
+    const map = twoRooms();
+    const line = addRoomOriginMessage(map, 'r-01', ['s-01', 's-02'], NOW);
+
+    for (const id of ['s-01', 's-02', 's-03', 's-04']) expect(unreadFor(map, id)).toEqual([]);
+    expect(line.readBy).toEqual({ [HUMAN]: NOW });
   });
 });

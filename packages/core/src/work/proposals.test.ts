@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { recipientsOf, unreadFor } from './letters.js';
-import { addSession, transitionSession } from './map.js';
+import { addSession, removeSession, transitionSession } from './map.js';
 import {
   ACCEPTED_LETTER,
   ACCEPTED_LINE,
@@ -83,7 +83,7 @@ describe('setProposal', () => {
   it('после ответа человека — новый id, а не старый: p-<n> не переиспользуется', () => {
     const map = threeInRoom();
     setProposal(map, 'r-01', 's-01', 'раз');
-    resolveProposal(map, 'r-01', 'p-01', 'return', 'мало');
+    resolveProposal(map, 'r-01', 'p-01', 'return', { note: 'мало' });
     const next = setProposal(map, 'r-01', 's-01', 'два');
     expect(next).toEqual({ proposalId: 'p-02', rev: 0 });
 
@@ -127,10 +127,35 @@ describe('setProposal', () => {
     expect(room(map).proposal).toBeNull();
   });
 
-  it('закрытая сессия-ведущий решения не приносит, хотя комната жива', () => {
+  it('ведущий закрыт, комната жива: он решения не приносит, а следующий живой — приносит', () => {
     const map = threeInRoom();
     transitionSession(map, 's-01', 'closed');
-    expect(() => setProposal(map, 'r-01', 's-01', 'x')).toThrow(/закрыта/);
+
+    expect(() => setProposal(map, 'r-01', 's-01', 'x')).toThrow(RoomRuleError);
+    expect(room(map).proposal).toBeNull();
+    // Комната не остаётся без права на решение: ведущим стал первый живой из members.
+    expect(setProposal(map, 'r-01', 's-02', 'x')).toEqual({ proposalId: 'p-01', rev: 0 });
+    expect(() => setProposal(map, 'r-01', 's-03', 'x')).toThrow(/не ведущий/);
+  });
+
+  it('назначенный ведущий удалён из карты (id остался в members) — право у следующего живого', () => {
+    const map = threeInRoom('s-02');
+    removeSession(map, 's-02');
+
+    expect(room(map).members).toContain('s-02');
+    expect(() => setProposal(map, 'r-01', 's-02', 'x')).toThrow(/не ведущий/);
+    expect(() => setProposal(map, 'r-01', 's-03', 'x')).toThrow(/не ведущий/);
+    expect(setProposal(map, 'r-01', 's-01', 'x').proposalId).toBe('p-01');
+  });
+
+  it('решение ушедшего ведущего живёт до ответа человека, а новое приносит уже нынешний ведущий', () => {
+    const map = threeInRoom();
+    setProposal(map, 'r-01', 's-01', 'от первого');
+    transitionSession(map, 's-01', 'closed');
+
+    // Замена до ответа — тот же слот: id остаётся, rev растёт, автором становится нынешний ведущий.
+    expect(setProposal(map, 'r-01', 's-02', 'от второго')).toEqual({ proposalId: 'p-01', rev: 1 });
+    expect(room(map).proposal).toMatchObject({ id: 'p-01', from: 's-02', text: 'от второго', rev: 1 });
   });
 
   it('нет комнаты — ошибка', () => {
@@ -237,6 +262,15 @@ describe('resolveProposal: accept', () => {
     expect(map.messages.find((message) => message.kind === 'decision')?.from).toBe('s-01');
     expect(map.messages.find((message) => message.from === HUMAN)?.to).toEqual(['s-02']);
   });
+
+  it('ведущий закрылся, пока решение ждало: письмо о принятии — живому ведущему, а не в закрытую сессию', () => {
+    const map = proposed();
+    transitionSession(map, 's-01', 'closed');
+    resolveProposal(map, 'r-01', 'p-01', 'accept');
+
+    expect(map.messages.find((message) => message.kind === 'decision')?.from).toBe('s-01');
+    expect(map.messages.find((message) => message.from === HUMAN)?.to).toEqual(['s-02']);
+  });
 });
 
 describe('resolveProposal: return', () => {
@@ -250,7 +284,7 @@ describe('resolveProposal: return', () => {
 
   it('письмо человека ведущему «Returned for rework: {заметка}»; слот очищен', () => {
     const map = proposed();
-    const { messageId } = resolveProposal(map, 'r-01', 'p-01', 'return', 'Контракт первым.', AT);
+    const { messageId } = resolveProposal(map, 'r-01', 'p-01', 'return', { note: 'Контракт первым.' }, AT);
 
     expect(map.messages).toHaveLength(1);
     expect(map.messages[0]).toMatchObject({
@@ -269,7 +303,7 @@ describe('resolveProposal: return', () => {
   it('заметки нет или она из одних пробелов — «Returned for rework.»', () => {
     for (const note of [undefined, '', '  \n ']) {
       const map = proposed();
-      resolveProposal(map, 'r-01', 'p-01', 'return', note);
+      resolveProposal(map, 'r-01', 'p-01', 'return', { note });
       expect(map.messages[0]?.text).toBe('Returned for rework.');
     }
     expect(RETURNED_LETTER).toBe('Returned for rework');
@@ -277,20 +311,28 @@ describe('resolveProposal: return', () => {
 
   it('пробелы вокруг заметки обрезаются, внутри остаются', () => {
     const map = proposed();
-    resolveProposal(map, 'r-01', 'p-01', 'return', '  сначала\nконтракт  ');
+    resolveProposal(map, 'r-01', 'p-01', 'return', { note: '  сначала\nконтракт  ' });
     expect(map.messages[0]?.text).toBe('Returned for rework: сначала\nконтракт');
   });
 
   it('возврат не пишет ни decision, ни системной строки', () => {
     const map = proposed();
-    resolveProposal(map, 'r-01', 'p-01', 'return', 'x');
+    resolveProposal(map, 'r-01', 'p-01', 'return', { note: 'x' });
     expect(map.messages.some((message) => message.kind === 'decision' || message.from === SYSTEM)).toBe(false);
   });
 
   it('после возврата ведущий предлагает заново — новый id', () => {
     const map = proposed();
-    resolveProposal(map, 'r-01', 'p-01', 'return', 'x');
+    resolveProposal(map, 'r-01', 'p-01', 'return', { note: 'x' });
     expect(setProposal(map, 'r-01', 's-01', 'переделал').proposalId).toBe('p-02');
+  });
+
+  it('ведущий закрылся, пока решение ждало: письмо о возврате идёт живому ведущему', () => {
+    const map = proposed();
+    transitionSession(map, 's-01', 'closed');
+    resolveProposal(map, 'r-01', 'p-01', 'return', { note: 'x' });
+
+    expect(map.messages[0]?.to).toEqual(['s-02']);
   });
 });
 
@@ -306,7 +348,7 @@ describe('resolveProposal: гонка', () => {
     const before = JSON.stringify(map);
 
     expect(() => resolveProposal(map, 'r-01', 'p-99', 'accept')).toThrow(ProposalConflictError);
-    expect(() => resolveProposal(map, 'r-01', 'p-99', 'return', 'x')).toThrow(ProposalConflictError);
+    expect(() => resolveProposal(map, 'r-01', 'p-99', 'return', { note: 'x' })).toThrow(ProposalConflictError);
     expect(JSON.stringify(map)).toBe(before);
   });
 
@@ -316,7 +358,7 @@ describe('resolveProposal: гонка', () => {
     const after = JSON.stringify(map);
 
     expect(() => resolveProposal(map, 'r-01', 'p-01', 'accept')).toThrow(ProposalConflictError);
-    expect(() => resolveProposal(map, 'r-01', 'p-01', 'return', 'x')).toThrow(ProposalConflictError);
+    expect(() => resolveProposal(map, 'r-01', 'p-01', 'return', { note: 'x' })).toThrow(ProposalConflictError);
     expect(JSON.stringify(map)).toBe(after);
     expect(map.messages).toHaveLength(3);
   });
@@ -335,7 +377,7 @@ describe('resolveProposal: гонка', () => {
 
   it('старый id после нового решения — conflict: карточка успела устареть', () => {
     const map = proposed();
-    resolveProposal(map, 'r-01', 'p-01', 'return', 'x');
+    resolveProposal(map, 'r-01', 'p-01', 'return', { note: 'x' });
     setProposal(map, 'r-01', 's-01', 'переделал');
     expect(() => resolveProposal(map, 'r-01', 'p-01', 'accept')).toThrow(ProposalConflictError);
     expect(room(map).proposal?.id).toBe('p-02');
@@ -343,5 +385,51 @@ describe('resolveProposal: гонка', () => {
 
   it('нет комнаты — RoomRuleError (запрос неверен), не конфликт', () => {
     expect(() => resolveProposal(proposed(), 'r-09', 'p-01', 'accept')).toThrow(RoomRuleError);
+  });
+});
+
+describe('resolveProposal: версия карточки (rev)', () => {
+  /** p-01 с двумя редакциями: человек мог смотреть на rev 0, а в слоте уже rev 1. */
+  function replaced(): WorkMap {
+    const map = threeInRoom();
+    setProposal(map, 'r-01', 's-01', 'решение, версия 1');
+    setProposal(map, 'r-01', 's-01', 'решение, версия 2');
+    return map;
+  }
+
+  it('Accept по карточке прежней версии — conflict: принять текст, которого человек не видел, нельзя', () => {
+    const map = replaced();
+    const before = JSON.stringify(map);
+
+    expect(() => resolveProposal(map, 'r-01', 'p-01', 'accept', { rev: 0 })).toThrow(ProposalConflictError);
+    expect(() => resolveProposal(map, 'r-01', 'p-01', 'return', { rev: 0, note: 'x' })).toThrow(
+      ProposalConflictError,
+    );
+    expect(JSON.stringify(map)).toBe(before);
+    expect(room(map).proposal).toMatchObject({ id: 'p-01', rev: 1 });
+  });
+
+  it('карточка свежей версии проходит и принимает ровно тот текст, который человек видел', () => {
+    const map = replaced();
+    resolveProposal(map, 'r-01', 'p-01', 'accept', { rev: 1 });
+
+    expect(map.messages.find((message) => message.kind === 'decision')?.text).toBe('решение, версия 2');
+    expect(room(map).proposal).toBeNull();
+  });
+
+  it('rev больше нынешнего — тоже conflict: карточка не с этой карты', () => {
+    const map = replaced();
+    expect(() => resolveProposal(map, 'r-01', 'p-01', 'accept', { rev: 2 })).toThrow(ProposalConflictError);
+  });
+
+  it('rev не передан — как прежде, проверяется только proposalId (окно до этой правки его не шлёт)', () => {
+    const map = replaced();
+    resolveProposal(map, 'r-01', 'p-01', 'accept');
+    expect(map.messages.find((message) => message.kind === 'decision')?.text).toBe('решение, версия 2');
+  });
+
+  it('устаревший proposalId с верным rev — по-прежнему conflict', () => {
+    const map = replaced();
+    expect(() => resolveProposal(map, 'r-01', 'p-99', 'accept', { rev: 1 })).toThrow(ProposalConflictError);
   });
 });

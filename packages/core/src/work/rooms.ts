@@ -66,12 +66,18 @@ export function addRoom(map: WorkMap, init: NewRoom, at = new Date().toISOString
 }
 
 /**
- * Ведущий комнаты: явный `lead`, а у комнат без него — первый из `members`. Так читаются
+ * Ведущий комнаты по записи: явный `lead`, а у комнат без него — первый из `members`. Так читаются
  * карты до 2026-09-29, и так же считается ведущий, когда назначенный ушёл из комнаты
- * (`leaveOtherRooms` сбрасывает `lead` в `null`). Ни одного участника — ведущего нет.
+ * (`leaveOtherRooms` сбрасывает `lead` в `null`). Ни одного участника — ведущего нет. Это только
+ * запись: кто может действовать, когда назначенный закрыт, решает `liveLead`.
  */
 export function roomLead(room: Room): string | null {
   return room.lead ?? room.members[0] ?? null;
+}
+
+/** Жива ли сессия: есть в карте и не закрыта. Закрытая и удалённая из карты — нет; человек не сессия. */
+function isAlive(map: WorkMap, id: string): boolean {
+  return map.sessions.some((session) => session.id === id && session.lifecycle !== 'closed');
 }
 
 /**
@@ -81,9 +87,21 @@ export function roomLead(room: Room): string | null {
  * сессиями, и решение в такую комнату приносить некому.
  */
 export function isRoomClosed(map: WorkMap, room: Room): boolean {
-  const alive = (id: string): boolean =>
-    map.sessions.some((session) => session.id === id && session.lifecycle !== 'closed');
-  return ![room.creator, ...room.members].some(alive);
+  return ![room.creator, ...room.members].some((id) => isAlive(map, id));
+}
+
+/**
+ * Ведущий, который может действовать: `roomLead`, если он жив, а иначе первый живой из `members`
+ * и за ним создатель-сессия. `closed` из карты не откатывается, а `removeSession` не убирает id
+ * из `members` — и сменить ведущего нечем. Без подмены комната с ушедшим ведущим осталась бы без
+ * права на решение навсегда: `setProposal` не пустил бы никого. Ведущего нет ровно тогда, когда
+ * комната закрыта (`isRoomClosed`): круг тот же — создатель и `members`. Запись комнаты
+ * (`lead`, `members`) подмена не переписывает.
+ */
+export function liveLead(map: WorkMap, room: Room): string | null {
+  const declared = roomLead(room);
+  if (declared !== null && isAlive(map, declared)) return declared;
+  return [...room.members, room.creator].find((id) => isAlive(map, id)) ?? null;
 }
 
 /**
@@ -126,7 +144,13 @@ export function addSystemMessage(
  * Человек вводит сессию в комнату (`rooms.addMember`): она уходит из прочих комнат работы
  * (`leaveOtherRooms`), встаёт последней в `members`, а в ленту ложится системная строка
  * «@s04 joined the room». Возвращает эту строку. Закрытая сессия писем не получает и в
- * комнату не входит; уже участник — отказ: окно такой бросок не допускает.
+ * комнату не входит.
+ *
+ * Отказ «уже участник» — только если сессия состоит в этой комнате и больше нигде: окно такой
+ * бросок не допускает. В старой карте (решение 4) она может состоять в нескольких комнатах, а
+ * сайдбар ставит её в самую раннюю. Бросок на позднюю, где она по записи тоже участница, — как
+ * раз лекарство: из прочих комнат она уходит, а в этой остаётся одной записью, не двумя
+ * (создатель-сессия в `members` не пишется вовсе: он и так участник).
  */
 export function addMember(
   map: WorkMap,
@@ -139,13 +163,33 @@ export function addMember(
   const session = map.sessions.find((candidate) => candidate.id === sessionId);
   if (session === undefined) throw new RoomRuleError(`сессии ${sessionId} нет в карте`);
   if (session.lifecycle === 'closed') throw new RoomRuleError(`сессия ${sessionId} закрыта`);
-  if (isMember(room, sessionId)) {
+
+  const inRoom = isMember(room, sessionId);
+  const elsewhere = map.rooms.some((other) => other.id !== roomId && isMember(other, sessionId));
+  if (inRoom && !elsewhere) {
     throw new RoomRuleError(`сессия ${sessionId} уже участник комнаты ${roomId}`);
   }
 
   leaveOtherRooms(map, sessionId, roomId);
-  room.members.push(sessionId);
+  if (!inRoom) room.members.push(sessionId);
   return addSystemMessage(map, roomId, `${sessionMention(sessionId)} joined the room`, at);
+}
+
+/**
+ * Системная строка «Room created from @s03 and @s02»: комнату собрали из двух сессий, уже
+ * идущих в работе (дизайн комнат, 2.5, диалог 1.6). Писать её может только хост, поэтому окно
+ * присылает пару в `rooms.create.origin`. Порядок пары — порядок в строке. Как и прочие системные
+ * строки, никого не будит и человеку непрочитанной не значится (`addSystemMessage`).
+ */
+export function addRoomOriginMessage(
+  map: WorkMap,
+  roomId: string,
+  origin: readonly [string, string],
+  at = new Date().toISOString(),
+): Message {
+  const [first, second] = origin;
+  const text = `Room created from ${sessionMention(first)} and ${sessionMention(second)}`;
+  return addSystemMessage(map, roomId, text, at);
 }
 
 /**

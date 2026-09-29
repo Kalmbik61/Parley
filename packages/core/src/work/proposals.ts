@@ -6,7 +6,7 @@
  */
 
 import { addMessage, maxNumber } from './map.js';
-import { addSystemMessage, isRoomClosed, roomLead, RoomRuleError } from './rooms.js';
+import { addSystemMessage, isRoomClosed, liveLead, RoomRuleError } from './rooms.js';
 import { HUMAN, type Room, type WorkMap } from './types.js';
 
 /** Предел текста решения в знаках (дизайн комнат, 3.1). */
@@ -55,11 +55,12 @@ function nextProposalId(map: WorkMap): string {
 }
 
 /**
- * Ведущий приносит решение. Приносить может только он (`roomLead`), и только в живую
- * комнату. Пока человек не ответил, повторный вызов заменяет текст: тот же `id`, `rev + 1`
- * — окно обновит карточку, а `Accept` по ней останется верным. После ответа слот пуст, и
- * новое решение получает новый `id`. Письма решение не создаёт: лента остаётся лентой
- * фактов, факты пишет `resolveProposal`.
+ * Ведущий приносит решение. Приносить может только он (`liveLead`: назначенный, а закрытого
+ * или удалённого подменяет первый живой участник), и только в живую комнату. Пока человек не
+ * ответил, повторный вызов заменяет текст: тот же `id`, `rev + 1` — окно обновит карточку, а
+ * `Accept` по ней остаётся верным, если человек показал `rev`. После ответа слот пуст, и новое
+ * решение получает новый `id`. Письма решение не создаёт: лента остаётся лентой фактов, факты
+ * пишет `resolveProposal`.
  */
 export function setProposal(
   map: WorkMap,
@@ -72,14 +73,11 @@ export function setProposal(
   if (isRoomClosed(map, room)) {
     throw new RoomRuleError(`комната ${roomId} закрыта: в ней нет живых участников`);
   }
-  if (roomLead(room) !== from) {
+  // Ведущий из `liveLead` жив по построению: отдельной проверки «сессия закрыта» не нужно.
+  if (liveLead(map, room) !== from) {
     throw new RoomRuleError(
       `сессия ${from} не ведущий комнаты ${roomId}: решение приносит только ведущий`,
     );
-  }
-  const session = map.sessions.find((candidate) => candidate.id === from);
-  if (session === undefined || session.lifecycle === 'closed') {
-    throw new RoomRuleError(`сессия ${from} закрыта: решение не принято`);
   }
   if (text.trim() === '' || text.length > PROPOSAL_TEXT_MAX) {
     throw new RoomRuleError(`текст решения: 1–${PROPOSAL_TEXT_MAX} знаков`);
@@ -94,6 +92,19 @@ export function setProposal(
   return { proposalId: current.id, rev: current.rev + 1 };
 }
 
+/** Что человек добавляет к ответу на решение. */
+export interface ResolveOptions {
+  /** Заметка возврата (`return`); пустая и из одних пробелов — как без неё. */
+  note?: string | undefined;
+  /**
+   * Версия карточки, на которую человек отвечает (`Proposal.rev`). Не совпала с нынешней — ведущий
+   * успел заменить текст, пока карточка висела на экране, и ответ на неё — `ProposalConflictError`:
+   * `id` при замене сохраняется, и одним `proposalId` принять текст, которого человек не видел,
+   * не остановить. Нет — проверяется только `proposalId` (окно, которое версию не шлёт).
+   */
+  rev?: number | undefined;
+}
+
 /**
  * Человек отвечает на решение. Слот очищается в обоих случаях, а факты дописываются в ленту:
  *  - `accept` — сообщение `decision` от ведущего с текстом решения (всей комнате, как
@@ -102,16 +113,17 @@ export function setProposal(
  *  - `return` — письмо человека ведущему `Returned for rework: {заметка}` (без заметки —
  *    `Returned for rework.`); возвращается его id.
  * Решение в слоте — не то, на которое отвечают (`proposalId` устарел, решения уже нет,
- * ответ повторён), — `ProposalConflictError`, и карта не меняется: дублей сообщений нет.
- * Письмо идёт нынешнему ведущему, а не автору решения: если автор успел уйти из комнаты,
- * доработку принимает тот, кто ведёт её сейчас.
+ * ответ повторён, `rev` показанной карточки не совпал с нынешним), — `ProposalConflictError`, и
+ * карта не меняется: дублей сообщений нет. Письмо идёт нынешнему живому ведущему (`liveLead`),
+ * а не автору решения: если автор успел уйти из комнаты или закрыться, доработку принимает тот,
+ * кто ведёт её сейчас; живых нет — автору.
  */
 export function resolveProposal(
   map: WorkMap,
   roomId: string,
   proposalId: string,
   action: 'accept' | 'return',
-  note?: string,
+  options: ResolveOptions = {},
   at = new Date().toISOString(),
 ): { messageId: string } {
   const room = roomOf(map, roomId);
@@ -121,11 +133,16 @@ export function resolveProposal(
       `решение ${proposalId} комнаты ${roomId} не ждёт ответа: его уже приняли, вернули или заменили новым`,
     );
   }
-  const lead = roomLead(room) ?? proposal.from;
+  if (options.rev !== undefined && options.rev !== proposal.rev) {
+    throw new ProposalConflictError(
+      `решение ${proposalId} комнаты ${roomId} заменили: ждёт версия ${proposal.rev}, а ответ дан на версию ${options.rev}`,
+    );
+  }
+  const lead = liveLead(map, room) ?? proposal.from;
   room.proposal = null;
 
   if (action === 'return') {
-    const remark = (note ?? '').trim();
+    const remark = (options.note ?? '').trim();
     const text = remark === '' ? `${RETURNED_LETTER}.` : `${RETURNED_LETTER}: ${remark}`;
     const letter = addMessage(map, { from: HUMAN, to: [lead], roomId, kind: 'note', text }, at);
     return { messageId: letter.id };
