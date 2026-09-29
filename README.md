@@ -82,8 +82,11 @@ unix-сокетом со своим токеном рукопожатия; се�
 Окно (`packages/desktop`) и его хост добавляют к рамке ещё пять правил
 (спека `docs/specs/2026-09-26-desktop-design.md`, раздел 9.1):
 
-- Keychain `Claude Code-credentials` не читается; запросов к API Anthropic и
-  OpenAI нет, лимиты подписки окно не показывает;
+- Keychain `Claude Code-credentials`, `~/.claude/.credentials.json` и
+  `~/.codex/auth.json` не читаются; запросов к API Anthropic и OpenAI нет.
+  Лимиты подписки окно берёт только из того, что отдают сами CLI: поле
+  `rate_limits` строки статуса Claude Code (скрипт `statusLine` в файле
+  настроек `--settings`, как хуки) и `rate_limits` в логах сессий Codex;
 - в `~/.claude.json` ничего не пишется, включая доверие к папкам;
 - скрытых запусков нет: каждый процесс агента виден в окне как сессия;
 - хост не отвечает на диалоги агента: сам он печатает только указатель на
