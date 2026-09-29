@@ -73,14 +73,23 @@ const weekday = (iso: string): string => new Date(iso).toLocaleDateString('en-US
  * которые есть, и когда CLI отдал эти числа.
  *
  * Нехватка места (решение контролёра 3): сначала сжимаются блоки лимитов, и в них текст (многоточие); полоска не
- * сжимается, а меньше трека с зазором (44 + 7) блок не бывает. Потом версии, и только последними — имена провайдеров.
- * Порядок держат веса `flex-shrink`: 10⁹ у блока лимитов, 10⁵ у версии, 1 у имени. Нехватка делится пропорционально
- * весу × ширине, поэтому вес должен быть больше на порядки: при 100 против 10 имя получало бы свою долю сразу, и
- * многоточие вылезало бы на «Claude Code» при нехватке в пару пикселей, пока текст лимитов ещё широк.
+ * сжимается, а меньше трека (44) блок не бывает. Потом версии, и только последними — имена провайдеров. Порядок
+ * держат веса `flex-shrink`: 10⁹ у блока лимитов, 10⁵ у версии, 1 у имени; потолков ширины у имени и версии нет —
+ * потолок резал бы длинное имя и при свободном месте. Нехватка делится пропорционально весу × ширине, поэтому вес
+ * должен быть больше на порядки: при 100 против 10 имя получало бы свою долю сразу, и многоточие вылезало бы на
+ * «Claude Code» при нехватке в пару пикселей, пока текст лимитов ещё широк.
  *
  * Порядок общий на всех провайдеров: части сегмента — прямые элементы строки (сегмент — `display: contents`). Пока
  * каждый сегмент сжимался целиком, доля нехватки доставалась и тому, у кого лимитов нет (GLM), и его имя
  * усекалось, хотя у соседей текст лимитов ещё широк.
+ *
+ * Текст не бывает обрывком. Chromium при `text-overflow: ellipsis` оставляет первый знак и тогда, когда многоточие
+ * рядом с ним не помещается: в узком блоке от «85% 5h» была видна одна «8» (Figtree 12px: цифра 6.9 px, многоточие
+ * 7.4 px). Поэтому блок переносит строки, а у текста основа — «58%» и многоточие (4.5ch ≈ 35 px: `ch` — «0» табличной
+ * ширины, 7.7 px). Когда блок уже полоски, зазора и этой основы, текст переносится на вторую строку, а блок высотой в
+ * одну строку её обрезает: текст пропадает целиком, полоска остаётся. Иначе текст занимает всё, что осталось от блока,
+ * — целиком или с многоточием. Поля у полоски (`my-1.5`) доводят её до высоты строки: без текста на первой строке
+ * блока полоска стояла бы у верхнего края, а не посередине.
  */
 function ProviderLimitsMeter({ limits }: { limits: ProviderLimits | null }): JSX.Element | null {
   const fiveHourLimit = limits?.fiveHour ?? null;
@@ -96,15 +105,21 @@ function ProviderLimitsMeter({ limits }: { limits: ProviderLimits | null }): JSX
     clock(limits.at),
   );
   return (
-    <span data-limits title={tooltip} className="-ml-[3px] flex min-w-[51px] shrink-[1000000000] items-center gap-[7px]">
-      <span aria-hidden className="h-1 w-11 shrink-0 overflow-hidden rounded-full bg-current/18">
+    <span
+      data-limits
+      title={tooltip}
+      className="-ml-[3px] flex h-4 min-w-11 shrink-[1000000000] flex-wrap content-start items-center gap-x-[7px] overflow-hidden"
+    >
+      <span aria-hidden className="my-1.5 h-1 w-11 shrink-0 overflow-hidden rounded-full bg-current/18">
         <span
           data-limits-fill
           className={cn('block h-full rounded-full', warning ? 'bg-accent-700' : 'bg-neutral-800')}
           style={{ width: `${bar}%` }}
         />
       </span>
-      <span className={cn('min-w-0 truncate tabular-nums', warning && 'text-accent-700')}>{S.statusBar.limitsText(fiveHour, week)}</span>
+      <span className={cn('min-w-0 grow basis-[4.5ch] truncate tabular-nums', warning && 'text-accent-700')}>
+        {S.statusBar.limitsText(fiveHour, week)}
+      </span>
     </span>
   );
 }
@@ -128,14 +143,15 @@ export function StatusBar({
     <div className="flex h-7 shrink-0 items-center gap-3.5 pb-0.5 pl-[18px] pr-3.5 text-xs text-neutral-800">
       {/* Сегмент провайдера — `display: contents`: его части сжимаются вместе со всей строкой, длинные имя и версия
           не растягивают её за край окна, правый блок не уезжает. Зазор строки 14 — между сегментами; внутри сегмента
-          нужно 7, поэтому у имени и версии −7, а у блока лимитов −3 (4 + 7 от версии до полоски). Ширина имени и версии
-          ограничена (160 и 80): без предела безмерная метка забирала бы место у соседей, у которых всё в меру. */}
+          нужно 7, поэтому у имени и версии −7, а у блока лимитов −3 (4 + 7 от версии до полоски). Потолков ширины у
+          имени и версии нет: длинная метка показывается целиком, пока в строке есть место, а когда его нет, порядок
+          сжатия (лимиты, версия, имя) держат веса `flex-shrink`. */}
       {providers.map((provider) => (
         <span key={provider.id} data-provider-segment={provider.id} className="contents">
           <AgentIcon provider={provider.id} size={14} />
-          <span className="-ml-[7px] min-w-0 max-w-40 truncate">{providerName(provider.id, provider.label)}</span>
+          <span className="-ml-[7px] min-w-0 truncate">{providerName(provider.id, provider.label)}</span>
           {provider.version === null ? null : (
-            <span className="-ml-[7px] min-w-0 max-w-20 shrink-[100000] truncate font-mono text-[11px] text-neutral-700">
+            <span className="-ml-[7px] min-w-0 shrink-[100000] truncate font-mono text-[11px] text-neutral-700">
               {provider.version}
             </span>
           )}

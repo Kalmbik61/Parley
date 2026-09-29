@@ -349,11 +349,15 @@ describe('StatusBar — лимиты подписок: сегмент прова
     });
     const { container } = renderPlain();
     const block = limitsIn(container) as HTMLElement;
-    // От версии до полоски 4 + 7 = 11: зазор строки 14 и −3 у блока. Внутри блока зазор 7.
+    // От версии до полоски 4 + 7 = 11: зазор строки 14 и −3 у блока. Внутри блока зазор 7 — по горизонтали: блок переносит
+    // строки, и зазор между строками ему не нужен.
     expect(block.className).toContain('-ml-[3px]');
-    expect(block.className).toContain('gap-[7px]');
+    expect(block.className).toContain('gap-x-[7px]');
+    expect(block.className).not.toMatch(/\bgap-\[/);
     const track = block.firstElementChild as HTMLElement;
     for (const cls of ['h-1', 'w-11', 'shrink-0', 'rounded-full', 'overflow-hidden', 'bg-current/18']) expect(track.className, cls).toContain(cls);
+    // Полоска посреди строки в 16: без текста в первой строке (он ушёл на вторую) строка блока всё равно в высоту текста.
+    expect(track.className).toContain('my-1.5');
     expect(track.getAttribute('aria-hidden')).toBe('true');
     expect(fillIn(container).className).toContain('h-full');
     expect(fillIn(container).className).toContain('rounded-full');
@@ -612,11 +616,15 @@ describe('StatusBar — длинные значения (кусок 9b)', () => 
     expect(limitsWeight).toBeGreaterThanOrEqual(versionWeight * 10_000);
   });
 
-  it('имя и версия не растут без предела: одна безмерная метка не отнимает место у соседей (имя не шире 160, версия — 80)', () => {
+  it('у имени и версии нет потолков ширины: длинная метка показывается целиком, пока место есть; порядок сжатия держат веса и min-w-0', () => {
     useProvidersStore.setState({ providers: [provider({ ...long, limits: both })] });
     renderPlain();
-    expect(screen.getByText(long.label).className).toContain('max-w-40');
-    expect(screen.getByText(long.version).className).toContain('max-w-20');
+    for (const el of [screen.getByText(long.label), screen.getByText(long.version)]) {
+      // Потолок резал бы имя и в широком окне, при свободном месте; сжимать — дело `flex-shrink`.
+      expect(el.className).not.toMatch(/\bmax-w-/);
+      expect(el.className).toContain('min-w-0');
+      expect(el.className).toContain('truncate');
+    }
   });
 
   it('лимиты: сжимается блок с текстом (многоточие); полоска не сжимается и остаётся даже при нулевом тексте', () => {
@@ -624,12 +632,31 @@ describe('StatusBar — длинные значения (кусок 9b)', () => 
     const { container } = renderPlain();
     const block = limitsIn(container, 'zeta') as HTMLElement;
     expect(block.className).toMatch(/\bshrink-\[\d+\]/);
-    // Трек 44 + зазор 7: меньше блок не бывает, полоска не вылезает за него.
-    expect(block.className).toContain('min-w-[51px]');
+    // Меньше полоски (трека 44) блок не бывает: полоска остаётся, даже когда текст спрятан целиком.
+    expect(block.className).toContain('min-w-11');
+    expect(block.className).not.toContain('min-w-[51px]');
     const [bar, text] = [...block.children] as HTMLElement[];
     expect(bar?.className).toContain('shrink-0');
     expect(text?.className).toContain('min-w-0');
     expect(text?.className).toContain('truncate');
+  });
+
+  // Chromium при `text-overflow: ellipsis` всегда оставляет первый знак, даже если многоточие рядом с ним не помещается:
+  // от «85% 5h» в узком блоке оставалась одна цифра «8» (Figtree 12px: цифра 6.9 px, многоточие 7.4 px). Вёрстка блока
+  // не даёт тексту стать обрывком: текст с основой «58% и многоточие» (4.5ch ≈ 35 px) не помещается в первую строку блока,
+  // когда блок уже, и переносится на вторую, а блок высотой в одну строку её обрезает — текст пропадает целиком, полоска
+  // остаётся. Перенос считает настоящая вёрстка, jsdom её не видит — поведение проверяет E2E `limits.spec.ts`.
+  it('текст лимитов не бывает обрывком: блок переносит строки, вторая обрезана; у текста основа под «58%» и многоточие', () => {
+    useProvidersStore.setState({ providers: [provider({ ...long, limits: both })] });
+    const { container } = renderPlain();
+    const block = limitsIn(container, 'zeta') as HTMLElement;
+    for (const cls of ['flex-wrap', 'content-start', 'h-4', 'overflow-hidden']) expect(block.className, cls).toMatch(new RegExp(`(^|\\s)${cls}(\\s|$)`));
+    const text = block.lastElementChild as HTMLElement;
+    // Основа — в переносе строк вместо самого текста: на первой строке текст занимает не меньше основы, дальше растёт.
+    expect(text.className).toContain('basis-[4.5ch]');
+    expect(text.className).toMatch(/(^|\s)grow(\s|$)/);
+    expect(text.className).toContain('min-w-0');
+    expect(text.className).toContain('truncate');
   });
 
   it('правые сегменты — одним блоком, который не сжимается и не уезжает: внимание, связь с хостом, «Host is outdated», будильник', () => {

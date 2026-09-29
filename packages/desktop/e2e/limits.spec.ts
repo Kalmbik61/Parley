@@ -23,7 +23,7 @@ const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
 /** Свой каталог проекта у каждого теста (`makeTempProject`). */
 let project = '';
 
-/** Метка провайдера, которой нечем уместиться в 800×500: ширину имени строка статуса ограничивает. */
+/** Метка провайдера, которой нечем уместиться в 800×500 (около 400 px): потолков ширины у имени нет, урезает её только нехватка места. */
 const LONG_LABEL = 'Extremely Long Provider Label For The Status Bar Layout Check';
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
@@ -217,6 +217,72 @@ test.describe('лимиты подписок в строке статуса (к�
       }),
     );
     expect(clipped.some(Boolean)).toBe(true);
+  });
+
+  test('800×500 и любая нехватка места: текст лимитов — целиком, с многоточием или спрятан; обрывка первой цифры нет, полоски целы', async () => {
+    // Claude — по файлу данных, Codex — по логу и стабу: два текста лимитов разной длины («58% 5h · 41% wk» и «85% 5h»).
+    const codexRoot = path.join(home, 'codex-sessions');
+    await writeCodexLimits(codexRoot, 85.4);
+    const window = await launch({ width: 800, height: 500 }, { HARNAS_CODEX_BIN: stubAgent, HARNAS_CODEX_SESSIONS_DIR: codexRoot });
+    const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: 'e2e-limits-sweep', goal: '' });
+    const claude = await newSession(window, workId, 'claude', 'один');
+    await expect(window.getByTestId('app-shell')).toBeVisible();
+    await writeLimits(workId, claude, 58.7, 41.9);
+    await expect(window.locator('[data-provider-segment="claude"] [data-limits]')).toHaveText('58% 5h · 41% wk', { timeout: 15_000 });
+    await expect(window.locator('[data-provider-segment="codex"] [data-limits]')).toHaveText('85% 5h', { timeout: 15_000 });
+
+    // Обход нехватки: правое поле строки растёт на пиксель за шаг, и места на тексты убывает от «всё помещается» до «остались
+    // одни полоски». Chromium при `text-overflow: ellipsis` оставляет первый знак и тогда, когда многоточие рядом с ним не
+    // помещается: у Codex на 800×500 от «85% 5h» была видна одна «8». Обрывок — текст на виду, обрезанный и уже, чем три знака
+    // и многоточие (28 px в Figtree 12px: три цифры по 6.9 и многоточие 7.4). Нулевой ширины текст не рисуется: он не на виду.
+    const sweep = await window.evaluate(() => {
+      const row = document.querySelector('[data-provider-segment]')?.parentElement as HTMLElement;
+      const MIN_SHOWN = 28;
+      const stubs: string[] = [];
+      const states: Record<string, Set<string>> = {};
+      const bars: number[] = [];
+      for (let extra = 0; extra <= 260; extra += 1) {
+        row.style.paddingRight = `${14 + extra}px`;
+        document.querySelectorAll<HTMLElement>('[data-limits]').forEach((block, index) => {
+          const text = block.lastElementChild as HTMLElement;
+          const box = text.getBoundingClientRect();
+          const frame = block.getBoundingClientRect();
+          const bar = (block.firstElementChild as HTMLElement).getBoundingClientRect();
+          bars.push(bar.width);
+          const shown = box.width >= 0.5 && box.top < frame.bottom - 0.5;
+          const cut = text.scrollWidth > text.clientWidth;
+          const state = !shown ? 'hidden' : cut ? 'cut' : 'full';
+          (states[String(index)] ??= new Set()).add(state);
+          if (state === 'cut' && box.width < MIN_SHOWN) stubs.push(`extra ${extra}, блок ${index}: ${box.width.toFixed(1)} px`);
+        });
+      }
+      row.style.paddingRight = '';
+      return { stubs, states: Object.fromEntries(Object.entries(states).map(([key, set]) => [key, [...set].sort()])), bars };
+    });
+    // Обрывков нет; при провале — число шагов обхода и первые три, а не сотни строк.
+    expect({ count: sweep.stubs.length, first: sweep.stubs.slice(0, 3) }).toEqual({ count: 0, first: [] });
+    // Обход прошёл все три состояния у обоих: иначе он ничего не проверил.
+    expect(sweep.states).toEqual({ '0': ['cut', 'full', 'hidden'], '1': ['cut', 'full', 'hidden'] });
+    // Полоска — 44 при любой нехватке: пропадает текст, а не она.
+    expect(Math.min(...sweep.bars)).toBeCloseTo(44, 0);
+    expect(Math.max(...sweep.bars)).toBeCloseTo(44, 0);
+  });
+
+  test('1400×900 и провайдер с очень длинной меткой: имя показано целиком — потолка ширины у имени нет', async () => {
+    await writeFile(
+      path.join(home, 'providers.json'),
+      JSON.stringify({ 'zeta-agent': { badge: LONG_LABEL, mark: 'Ze', command: stubAgent, linkBy: 'cwd+time' } }),
+    );
+    const window = await launch({ width: 1400, height: 900 });
+    const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: 'e2e-limits-wide', goal: '' });
+    await newSession(window, workId, 'zeta-agent', 'один');
+    await expect(window.getByTestId('app-shell')).toBeVisible();
+    const name = window.locator('[data-provider-segment="zeta-agent"]').getByText(LONG_LABEL);
+    await expect(name).toBeVisible();
+    // Места в строке хватает с запасом (1400): длинное имя — целиком, а не обрезано на жёсткой ширине 160.
+    const measured = await name.evaluate((el) => ({ width: el.getBoundingClientRect().width, cut: el.scrollWidth > el.clientWidth }));
+    expect(measured.cut).toBe(false);
+    expect(measured.width).toBeGreaterThan(160);
   });
 
   test('800×500, Claude Code, Codex и GLM: сжимается только текст лимитов — имена и полоски целы, правые сегменты на месте', async () => {
