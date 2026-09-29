@@ -22,6 +22,7 @@ import { emptyLayout, openTab } from './layout/tree.js';
 import { useActivityStore } from './store/activity.js';
 import { useHostStore } from './store/host.js';
 import { useNoticesStore } from './store/notices.js';
+import { useProvidersStore } from './store/providers.js';
 import { useUiStore } from './store/ui.js';
 import { useWorksStore } from './store/works.js';
 import { refKey, type SessionRef } from '@harnas/protocol';
@@ -66,6 +67,7 @@ beforeEach(() => {
   useWorksStore.setState({ entries: [], branches: {}, loading: false, error: null });
   useActivityStore.setState({ byRef: {} });
   useNoticesStore.setState({ notices: [] });
+  useProvidersStore.setState({ providers: [] });
   useUiStore.setState({
     windowFocused: true,
     wakePaused: null,
@@ -104,6 +106,59 @@ describe('App — корневая обёртка окна (раунд испр�
     expect(root).not.toBeNull();
     expect(root?.className).toContain('text-foreground');
     expect(root?.className ?? '').not.toMatch(/var\(--/);
+  });
+});
+
+// Спека окна 2026-09-29, 1.1: провайдеры строки статуса — `providers.list` при подключении к хосту и
+// после переподключения, а не на каждый рендер.
+describe('App — провайдеры строки статуса (Organic, 1.1)', () => {
+  const answer = { providers: [{ id: 'claude', label: 'Claude', available: true, version: '2.1.276' }] };
+  const settle = async (): Promise<void> => {
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  };
+
+  it('providers.list зовётся один раз при подключении; событие работ и перерисовка его не повторяют', async () => {
+    const handler = vi.fn(() => answer);
+    bridge.setHandler('providers.list', handler);
+    render(<App />);
+    await settle();
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    act(() => bridge.emit('works.changed', { entries: [], branches: {} }));
+    await settle();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Claude Code')).toBeTruthy();
+    expect(screen.getByText('2.1.276')).toBeTruthy();
+  });
+
+  it('после переподключения — снова один вызов, свежая версия на месте', async () => {
+    let version = '2.1.276';
+    const handler = vi.fn(() => ({ providers: [{ id: 'claude', label: 'Claude', available: true, version }] }));
+    bridge.setHandler('providers.list', handler);
+    render(<App />);
+    await settle();
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    act(() => bridge.emitStatus({ state: 'disconnected', reason: 'Connection to host closed' }));
+    version = '2.2.0';
+    act(() => bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: [...REQUIRED_METHODS] }));
+    await settle();
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('2.2.0')).toBeTruthy();
+  });
+
+  it('отказ providers.list — окно живёт, сегментов провайдеров нет', async () => {
+    bridge.setHandler('providers.list', () => {
+      throw new Error('нет метода');
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(<App />);
+    await settle();
+    expect(screen.queryByText('Claude Code')).toBeNull();
+    expect(screen.getByText('Host 0.0.0-test')).toBeTruthy();
   });
 });
 

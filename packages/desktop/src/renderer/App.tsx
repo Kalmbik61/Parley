@@ -19,6 +19,7 @@ import { SettingsDialog } from './components/settings/SettingsDialog.js';
 import { useActivityStore } from './store/activity.js';
 import { useHostStore } from './store/host.js';
 import { useNoticesStore } from './store/notices.js';
+import { useProvidersStore } from './store/providers.js';
 import { useUiStore } from './store/ui.js';
 import { useWorksStore } from './store/works.js';
 import { workKey } from './lib/tree-order.js';
@@ -192,6 +193,9 @@ export function App(): JSX.Element {
       useActivityStore.getState().init(bridge),
       useUiStore.getState().init(bridge),
       useNoticesStore.getState().init(bridge),
+      // Провайдеры строки статуса (Organic, 1.1): один `providers.list` на подключение, а после
+      // обрыва этот эффект заводится заново — список и версии CLI перечитываются.
+      useProvidersStore.getState().init(bridge),
       // Бейдж и «просмотрено» (кусок 4.2) — рядом, оба по вниманию.
       wireBadge(bridge),
       wireSeenTracker(bridge),
