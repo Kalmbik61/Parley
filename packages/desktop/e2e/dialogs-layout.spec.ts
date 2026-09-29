@@ -1,7 +1,7 @@
 import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
@@ -9,9 +9,11 @@ import { makeTempHome, makeTempProject } from './tmp.js';
 /**
  * Вёрстка диалогов с длинными значениями (раунд исправлений 2 куска 3.5; диалоги 1.5–1.7 — кусок 7 плана «Organic»):
  * длинный путь проекта (`mkdtemp` на macOS — `/private/var/folders/…`), название работы в 120 символов и ярлык в 40,
- * пять агентов в диалоге «New session or room». Прежде путь в Select задавал минимальную ширину формы, и поля с
+ * пять агентов в диалоге «New session or room», две сессии с длинными ярлыками и задачами в диалоге «New room» из двух
+ * сессий (1.6; правка по ревью куска 7). Прежде путь в Select задавал минимальную ширину формы, и поля с
  * кнопкой Create выходили за правый край диалога New workspace. Проверка — геометрия: правый край каждого поля и
- * кнопки не правее правого края диалога, и у самого диалога нет горизонтальной прокрутки.
+ * кнопки не правее правого края диалога, у самого диалога нет горизонтальной прокрутки, а содержимое пилюль выбора
+ * (провайдер 1.5, ведущий 1.6) не торчит за их рамку.
  */
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -21,6 +23,10 @@ const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
 /** 120 символов без пробелов — худший случай: переносить нечему. */
 const LONG_TITLE = `layout-check-${'W'.repeat(107)}`;
 const LONG_LABEL = `label-${'L'.repeat(34)}`;
+/** Ярлыки и задача сессий для диалога 1.6: в его пилюлях ведущего задача идёт вторым, приглушённым текстом. */
+const LONG_LABEL_DRAGGED = `label-${'M'.repeat(34)}`;
+const LONG_LABEL_TARGET = `label-${'N'.repeat(34)}`;
+const LONG_TASK = `task-${'T'.repeat(200)}`;
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
@@ -45,6 +51,11 @@ async function overflowOf(window: Page, name: string): Promise<string[]> {
       if (rect.right > box.right + 0.5) {
         const what = (node.getAttribute('aria-label') ?? node.textContent ?? '').slice(0, 30);
         problems.push(`${dialogName}: ${node.tagName.toLowerCase()} «${what}» right ${Math.round(rect.right)} > ${Math.round(box.right)}`);
+      }
+      // Пилюля выбора (провайдер 1.5, ведущий 1.6) с длинным ярлыком: рамка в диалоге, а текст не вылезает из неё —
+      // `scrollWidth` шире `clientWidth`, когда содержимое кнопки торчит за её край (рамка при этом не растёт).
+      if (node.getAttribute('role') === 'radio' && node.scrollWidth > node.clientWidth + 1) {
+        problems.push(`${dialogName}: radio «${(node.textContent ?? '').slice(0, 30)}» content ${node.scrollWidth} > box ${node.clientWidth}`);
       }
     }
     return problems;
@@ -90,6 +101,19 @@ async function footerProblemsOf(window: Page, name: string): Promise<string[]> {
   return problems;
 }
 
+/** Тащит строку `from` к строке `to` и держит указатель там; отпустить — `mouse.up()` из вызывающего кода. */
+async function dragOver(window: Page, from: Locator, to: Locator): Promise<void> {
+  const a = await from.boundingBox();
+  const b = await to.boundingBox();
+  if (a === null || b === null) throw new Error('строки для броска не найдены');
+  await window.mouse.move(a.x + 40, a.y + a.height / 2);
+  await window.mouse.down();
+  // Порог перетаскивания — 4 px; затем указатель идёт к цели и стоит на ней (droppable включается после старта).
+  await window.mouse.move(a.x + 60, a.y + a.height / 2 + 6, { steps: 3 });
+  await window.mouse.move(b.x + 60, b.y + b.height / 2, { steps: 10 });
+  await window.mouse.move(b.x + 62, b.y + b.height / 2, { steps: 2 });
+}
+
 async function closeDialog(window: Page): Promise<void> {
   await window.keyboard.press('Escape');
   await expect(window.getByRole('dialog')).toBeHidden();
@@ -121,8 +145,8 @@ for (const size of [
       await rm(base, { recursive: true, force: true });
     });
 
-    test('ничего не выходит за правый край, подвал в окне: New workspace, New session, New room (пять агентов), Delete, палитра, Settings', async () => {
-      test.setTimeout(90_000);
+    test('ничего не выходит за правый край, подвал в окне: New workspace, New session, New room (пять агентов), New room из двух сессий, Delete, палитра, Settings', async () => {
+      test.setTimeout(120_000);
       const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
       const electronApp = await electron.launch({ args: [mainEntry], env });
       app = electronApp;
@@ -171,6 +195,25 @@ for (const size of [
       await room.getByPlaceholder('What the agents will discuss').fill(LONG_TITLE);
       problems.push(...(await overflowOf(window, 'New room')));
       problems.push(...(await footerProblemsOf(window, 'New room')));
+      await closeDialog(window);
+
+      // «New room» из двух сессий (1.6): бросок сессии на сессию той же работы; ярлыки в 40 знаков и задачи в 200+.
+      const create = (label: string): Promise<{ ref: { sessionId: string } }> =>
+        call(window, 'sessions.create', { projectPath: project, workId, provider: 'claude', label, task: LONG_TASK, parent: null });
+      const dragged = (await create(LONG_LABEL_DRAGGED)).ref.sessionId;
+      const target = (await create(LONG_LABEL_TARGET)).ref.sessionId;
+      const draggedRow = card.locator(`[data-session-id="${dragged}"]`);
+      const targetRow = card.locator(`[data-session-id="${target}"]`);
+      await expect(draggedRow).toBeVisible();
+      await expect(targetRow).toBeVisible();
+      await dragOver(window, draggedRow, targetRow);
+      await expect(targetRow).toHaveAttribute('data-drop-over', '');
+      await window.mouse.up();
+      const merge = window.getByRole('dialog');
+      await expect(merge.getByRole('heading', { name: 'New room' })).toBeVisible();
+      await expect(merge.getByRole('radio')).toHaveCount(2);
+      problems.push(...(await overflowOf(window, 'New room from two')));
+      problems.push(...(await footerProblemsOf(window, 'New room from two')));
       await closeDialog(window);
 
       await cardAction('delete');

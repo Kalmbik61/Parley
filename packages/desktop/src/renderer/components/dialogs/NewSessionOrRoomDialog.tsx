@@ -5,14 +5,31 @@
  * ведущим (N раз `sessions.create` и `rooms.create` с `lead` и `quiet: true`, открывается вкладка комнаты, строка
  * комнаты в сайдбаре разворачивается).
  *
- * Сессии комнаты стартуют сразу и без задачи (тихий старт: `task: ''`, ярлык пустой — строка сайдбара показывает
- * `S05`): задачу человек пишет в комнату один раз для всех, поэтому и письма-приглашения не нужны (`quiet`).
- * Одиночная сессия тоже стартует без задачи — её человек пишет в терминале.
+ * Сессии комнаты стартуют сразу и без задачи (тихий старт: `task: ''`, ярлык пустой): задачу человек пишет в комнату
+ * один раз для всех, поэтому и письма-приглашения не нужны (`quiet`). Одиночная сессия тоже стартует без задачи — её
+ * человек пишет в терминале.
+ *
+ * Пустой ярлык хост пустым не оставляет: сессиям без задачи он ставит метку «новая сессия» (`NEW_LABEL` core,
+ * `applyChoice` в `host/sessions/sessions-service.ts`), чтобы её переименовал заголовок Claude Code (автозаголовок). Поэтому
+ * строка сайдбара, вкладка и упоминания показывают `S05 New session` до автозаголовка (у Codex его нет), а не голый `S05`,
+ * как обещает спека 2.1. Расхождение и варианты — в отчёте куска 7, «Правки по ревью»: голый `S05` требует правки хоста и
+ * решения, нужен ли автозаголовок таким сессиям.
  *
  * Частичный сбой запуска. Комната создаётся, только когда запущены все агенты. Если часть `sessions.create`
  * упала, диалог остаётся открытым и показывает итог по каждому агенту, а «Retry» повторяет только упавших;
  * комнаты нет до успеха всех. «Cancel» оставляет уже запущенные сессии обычными сессиями работы — они и так видны
  * в сайдбаре. Запущенные строки после первой попытки заперты: их провайдер, модель и усилие уже ушли в хост.
+ * Провайдер «по умолчанию» при запуске фиксируется в строке: `ui.lastProvider` меняется, когда все агенты запущены, и
+ * пилюля под итогом «запущена» не должна перескочить на провайдера последней строки, если `rooms.create` упал.
+ *
+ * Закрытие диалога (Cancel, Esc, ×, клик мимо) отменяет идущий запуск: остальные агенты, комната и вкладка не создаются,
+ * а форму, которую успели открыть заново (в том числе ⌘T поверх открытого диалога), запуск не трогает и не закрывает.
+ * Отправленный запрос отменить нельзя — его сессия останется обычной сессией работы, как после частичного сбоя.
+ *
+ * Упавший `sessions.create` следа в окне не оставляет, но хост пишет запись сессии в карту до запуска и при сбое запуска
+ * её не откатывает, а ответ об ошибке id не несёт: окно запись удалить не может. «Retry» заводит новую запись, запись
+ * упавшей остаётся в сайдбаре не запущенной сессией (её убирает «Delete» меню строки) — при сбое worktree так осиротеют
+ * все агенты. Откат записи — на стороне хоста; предложение для TODOS — в отчёте куска 7.
  *
  * Модель — только из списка провайдера (`providers.list.models`, решение 5 спеки): первый пункт `Default` — без
  * флага, модель CLI по умолчанию, дальше подписи списка, в `sessions.create.model` уходит `id`. Нет списка, `null`
@@ -142,6 +159,11 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
   const nextKey = useRef(room ? 3 : 2);
   /** Снятия ожиданий снимка (`openWhenListed`) — все гасятся при размонтировании. */
   const pendingRef = useRef(new Set<() => void>());
+  /**
+   * Идущий запуск. Закрытие диалога или новое открытие (форма сбрасывается) ставит ему `cancelled`: дальше он ничего не
+   * делает — не создаёт остальных агентов, комнату и вкладку, не трогает форму и не закрывает диалог второй раз.
+   */
+  const launchRef = useRef<{ cancelled: boolean } | null>(null);
 
   useEffect(() => {
     const pending = pendingRef.current;
@@ -149,6 +171,12 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
       for (const cancel of [...pending]) cancel();
     };
   }, []);
+
+  // Диалог закрыли (Cancel, Esc, ×, клик мимо), открыли заново или открыли с другой работой / как «New room» (⌘T поверх
+  // открытого): форма начинается заново, и запуск прежней, если он ещё идёт, больше не нужен.
+  useEffect(() => {
+    if (launchRef.current !== null) launchRef.current.cancelled = true;
+  }, [open, room, work]);
 
   // Каждое открытие — с чистой формой и составом по умолчанию: один агент, а «New room» — два.
   useEffect(() => {
@@ -249,6 +277,8 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
       return;
     }
     if (providers === null) return;
+    const launch = { cancelled: false };
+    launchRef.current = launch;
     setBusy(true);
     setError(null);
     try {
@@ -264,6 +294,9 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
           setError(S.dialogs.newWork.agentRequired);
           return;
         }
+        // «По умолчанию» становится явным выбором: `lastProvider` сменится, когда запустятся все, и строка не должна
+        // за ним перескочить — под итогом «запущена» стояла бы пилюля не того провайдера.
+        if (row.provider === null) updateAgent(row.key, { provider: providerId });
         try {
           const { ref } = await bridge.call('sessions.create', {
             ...target,
@@ -283,6 +316,8 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
           done[row.key] = { status: 'failed', message: errorText(decodeIpcError(err).code, S.errors.actions.createSession) };
           allStarted = false;
         }
+        // Диалог закрыли, пока шёл этот агент, — следующих не запускаем и итог в форму не пишем.
+        if (launch.cancelled) return;
         setResults({ ...done });
       }
       if (!allStarted) return;
@@ -310,14 +345,18 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
           lead: leadResult?.status === 'started' ? leadResult.sessionId : (sessionIds[0] ?? ''),
           quiet: true,
         });
+        if (launch.cancelled) return;
         openWhenListed(target.projectPath, target.workId, { kind: 'room', roomId }, pendingRef.current);
         finish();
       } catch (err) {
         console.warn('[harnas] rooms.create', err);
+        if (launch.cancelled) return;
         setError(errorText(decodeIpcError(err).code, S.errors.actions.createRoom));
       }
     } finally {
-      setBusy(false);
+      if (launchRef.current === launch) launchRef.current = null;
+      // Отменённый запуск форму не трогает: диалог закрыт, а если открыт заново — там уже свой запуск.
+      if (!launch.cancelled) setBusy(false);
     }
   };
 
@@ -493,12 +532,19 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
             <Switch checked={worktree} disabled={!worktreeAvailable || groupLocked} onCheckedChange={setWorktree} />
             {text.inOwnWorktree}
           </label>
-          {error !== null ? <p className="text-destructive">{error}</p> : null}
         </div>
         <DialogFooter className="items-center">
-          <span className="min-w-0 flex-1 truncate text-xs text-neutral-700" title={summary}>
-            {summary}
-          </span>
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-xs">
+            {/* Ошибка диалога — в подвале: он не прокручивается, а тело с пятью агентами в окне 800×500 уходит за край. */}
+            {error !== null ? (
+              <p role="alert" className="break-words text-destructive">
+                {error}
+              </p>
+            ) : null}
+            <span className="truncate text-neutral-700" title={summary}>
+              {summary}
+            </span>
+          </div>
           <DialogClose asChild>
             <Button type="button" variant="outline">
               {S.common.cancel}

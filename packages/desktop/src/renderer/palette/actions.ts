@@ -53,8 +53,8 @@ export interface ActionContext {
     /** Правый сайдбар на этой вкладке; открытый не прячет. */
     showRightTab(tab: 'files' | 'changes'): void; // setSidebar('right', { open: true, tab })
     openNewWork(title?: string): void; // openNewWorkDialog(null, title)
-    openNewSession(): void; // родитель — выбранная сессия, как у ⌘T
-    openNewRoom(): void; // CreateRoomDialog активной работы без участника (3.4)
+    openNewSession(): void; // диалог 1.5 активной работы одним агентом (⌘T)
+    openNewRoom(): void; // тот же диалог, открытый комнатой (два агента)
     openSettings(): void;
     setAppearance(mode: Appearance): void; // store/ui.ts: app.setAppearance, ui.json пишет main
     toggleShowArchived(): void;

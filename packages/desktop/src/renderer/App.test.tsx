@@ -220,9 +220,8 @@ function work(id: string, createdAt: string, sessions: WorkSession[]): WorkEntry
   };
 }
 
-// Кусок 2.7: выбор сессии больше не хранится в `store/ui.ts` — ⌘T берёт
-// работу из `activeWorkKey`, родителя — из активной вкладки-терминала её
-// активной группы (`selectedSessionOf`).
+// Кусок 2.7: выбор сессии больше не хранится в `store/ui.ts` (его выводит `selectedSessionOf`). С куска 7 плана
+// «Organic» ⌘T родителя не берёт вовсе: диалог 1.5 открывается на `activeWorkKey`.
 describe('App — меню session.new (тест 6 куска 2.7, тест 4 куска 6.1b)', () => {
   it('settings.open открывает настройки — ветка run в AppShell, у App своего onMenu нет', async () => {
     useWorksStore.setState({ entries: [work('w-01', '2026-01-01', [session('s-01', 'план')])], branches: {}, loading: false, error: null });

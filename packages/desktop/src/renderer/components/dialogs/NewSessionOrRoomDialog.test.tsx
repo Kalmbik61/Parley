@@ -405,7 +405,8 @@ describe('NewSessionOrRoomDialog — несколько агентов: комн
     fireEvent.click(button('Create room'));
     await waitFor(() => expect(callsOf('rooms.create')).toHaveLength(1));
     expect(callsOf('rooms.create')[0]).toMatchObject({ title: 'Refunds' });
-    // Название — у комнаты, а не у сессий: их ярлык пуст, строка сайдбара покажет S01, S02.
+    // Название — у комнаты, а не у сессий: окно шлёт им пустой ярлык (хост поставит «новую сессию», и строка сайдбара
+    // покажет S01 New session, S02 New session — до автозаголовка).
     expect(callsOf('sessions.create').map((params) => params['label'])).toEqual(['', '']);
   });
 
@@ -627,5 +628,276 @@ describe('NewSessionOrRoomDialog — работа диалога и ответ p
     fireEvent.click(button('Cancel'));
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(callsOf('sessions.create')).toEqual([]);
+  });
+});
+
+// Правки по ревью куска 7 (находки 2, 5, 6).
+
+/** Раскладка работы с пустой группой: вкладка, открытая диалогом, попадёт в неё. */
+function emptyWorkLayout(): void {
+  useLayoutStore.setState({
+    layouts: { [KEY]: { root: { type: 'group', id: 'g-1', tabs: [], activeTabId: null }, activeGroupId: 'g-1', closedTabs: [] } },
+    hydrated: { [KEY]: true },
+  });
+}
+
+const openTabIds = (): string[] => {
+  const layout = useLayoutStore.getState().layouts[KEY];
+  return layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id));
+};
+
+/** Снимок работ уже принёс созданное: вкладка, которую диалог решит открыть, открылась бы сразу — не «когда-нибудь». */
+function listCreatedInSnapshot(): void {
+  const room = { ...makeRoom('r-01', 'Room 1'), members: ['s-01', 's-02'], lead: 's-01' };
+  useWorksStore.setState({
+    entries: [
+      makeWork('w-01', { projectPath: PROJECT, title: 'Payments', sessions: [makeSession('s-01', ''), makeSession('s-02', '')], rooms: [room] }),
+      makeWork('w-02', { projectPath: '/tmp/other', title: 'Auth' }),
+    ],
+  });
+}
+
+describe('NewSessionOrRoomDialog — закрытие во время запуска (находка 2 ревью)', () => {
+  /** `sessions.create` отвечает, когда тест его отпустит: `release(n)` — ответ на n-й вызов (с нуля). */
+  function holdSessions(): { count: () => number; release: (index: number) => Promise<void> } {
+    const pending: Array<() => void> = [];
+    bridge.setHandler(
+      'sessions.create',
+      (params) =>
+        new Promise((resolve) => {
+          pending.push(() =>
+            resolve({ ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: `s-${String(nextSession++).padStart(2, '0')}` } }),
+          );
+        }),
+    );
+    return {
+      count: () => pending.length,
+      release: async (index) => {
+        await act(async () => pending[index]?.());
+      },
+    };
+  }
+
+  /** Диалог открыт на «мосте» теста; `view.rerender` — то, что делает родитель, когда закрывает или открывает его. */
+  async function openDialog(room: boolean): Promise<{ view: ReturnType<typeof render>; onOpenChange: ReturnType<typeof vi.fn>; set: (open: boolean) => void }> {
+    const onOpenChange = vi.fn();
+    const element = (open: boolean): JSX.Element => (
+      <NewSessionOrRoomDialog open={open} bridge={bridge} work={null} room={room} onOpenChange={onOpenChange} />
+    );
+    const view = render(element(true));
+    await waitFor(() => expect(callsOf('providers.list')).toHaveLength(1));
+    await act(async () => {});
+    return { view, onOpenChange, set: (open) => view.rerender(element(open)) };
+  }
+
+  it('Cancel, пока стартует первый агент комнаты: остальные агенты, комната и вкладка не создаются, диалог второй раз не закрывается', async () => {
+    emptyWorkLayout();
+    listCreatedInSnapshot();
+    const held = holdSessions();
+    const { onOpenChange, set } = await openDialog(true);
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(held.count()).toBe(1));
+
+    fireEvent.click(button('Cancel'));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    set(false);
+    await held.release(0);
+    await act(async () => {});
+
+    expect(held.count()).toBe(1);
+    expect(callsOf('sessions.create')).toHaveLength(1);
+    expect(callsOf('rooms.create')).toEqual([]);
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
+    expect(openTabIds()).toEqual([]);
+    // Человек отменил — «последний агент» не запоминается.
+    expect(useUiStore.getState().ui.lastProvider).toBe(DEFAULT_UI.lastProvider);
+  });
+
+  it('закрыли и открыли заново, пока запуск шёл: старый запуск не идёт дальше, не закрывает новый диалог и не освобождает его кнопку', async () => {
+    emptyWorkLayout();
+    listCreatedInSnapshot();
+    const held = holdSessions();
+    const { onOpenChange, set } = await openDialog(true);
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(held.count()).toBe(1));
+
+    set(false);
+    set(true);
+    // Новое открытие — заново `providers.list`, чистая форма, кнопка не занята прежним запуском.
+    await waitFor(() => expect(callsOf('providers.list')).toHaveLength(2));
+    await waitFor(() => expect(button('Create room').disabled).toBe(false));
+    expect(rows()).toHaveLength(2);
+
+    // Новый запуск начался, а старый ещё ждёт ответа своего агента.
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(held.count()).toBe(2));
+    await held.release(0);
+    await act(async () => {});
+    // Старый запуск ничего не сделал: не пошёл ко второму агенту, не закрыл диалог, не снял «занято» с нового запуска.
+    expect(held.count()).toBe(2);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(button('Create room').disabled).toBe(true);
+
+    // Новый запуск идёт своим чередом: свои две сессии и комната.
+    await held.release(1);
+    await waitFor(() => expect(held.count()).toBe(3));
+    await held.release(2);
+    await waitFor(() => expect(callsOf('rooms.create')).toHaveLength(1));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledTimes(1));
+    expect(callsOf('sessions.create')).toHaveLength(3);
+    expect(callsOf('rooms.create')[0]).toMatchObject({ members: ['s-02', 's-03'] });
+  });
+
+  it('старый запуск закончился, пока шёл новый: следующее закрытие отменяет уже новый запуск', async () => {
+    emptyWorkLayout();
+    listCreatedInSnapshot();
+    const held = holdSessions();
+    const { set } = await openDialog(true);
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(held.count()).toBe(1));
+    set(false);
+    set(true);
+    await waitFor(() => expect(button('Create room').disabled).toBe(false));
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(held.count()).toBe(2));
+    await held.release(0);
+    await act(async () => {});
+
+    set(false);
+    await held.release(1);
+    await act(async () => {});
+    expect(held.count()).toBe(2);
+    expect(callsOf('rooms.create')).toEqual([]);
+    expect(openTabIds()).toEqual([]);
+  });
+
+  it('⌘T поверх открытого диалога (он уже как «New session»): форма начинается заново, запуск прежней формы отменяется', async () => {
+    emptyWorkLayout();
+    listCreatedInSnapshot();
+    const held = holdSessions();
+    const onOpenChange = vi.fn();
+    const element = (room: boolean): JSX.Element => (
+      <NewSessionOrRoomDialog open bridge={bridge} work={null} room={room} onOpenChange={onOpenChange} />
+    );
+    const view = render(element(true));
+    await waitFor(() => expect(callsOf('providers.list')).toHaveLength(1));
+    await act(async () => {});
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(held.count()).toBe(1));
+
+    view.rerender(element(false));
+    await waitFor(() => expect(button('Start session').disabled).toBe(false));
+    expect(rows()).toHaveLength(1);
+    await held.release(0);
+    await act(async () => {});
+
+    expect(held.count()).toBe(1);
+    expect(callsOf('rooms.create')).toEqual([]);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(button('Start session').disabled).toBe(false);
+    expect(openTabIds()).toEqual([]);
+  });
+
+  it('Cancel, пока создаётся комната: вкладка комнаты не открывается, диалог второй раз не закрывается', async () => {
+    emptyWorkLayout();
+    listCreatedInSnapshot();
+    let releaseRoom: () => void = () => {};
+    bridge.setHandler('rooms.create', () => new Promise((resolve) => (releaseRoom = () => resolve({ roomId: 'r-01' }))));
+    const { onOpenChange, set } = await openDialog(true);
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(callsOf('rooms.create')).toHaveLength(1));
+
+    fireEvent.click(button('Cancel'));
+    set(false);
+    await act(async () => releaseRoom());
+    await act(async () => {});
+
+    expect(openTabIds()).toEqual([]);
+    expect(useUiStore.getState().roomExpanded).toEqual({});
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
+  });
+
+  it('закрыли и открыли заново, пока создаётся комната, и она упала: ошибка в новую форму не попадает', async () => {
+    let rejectRoom: () => void = () => {};
+    bridge.setHandler('rooms.create', () => new Promise((_resolve, reject) => (rejectRoom = () => reject({ code: 'internal', message: 'сбой' }))));
+    const { set } = await openDialog(true);
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(callsOf('rooms.create')).toHaveLength(1));
+
+    set(false);
+    set(true);
+    await waitFor(() => expect(button('Create room').disabled).toBe(false));
+    await act(async () => rejectRoom());
+    await act(async () => {});
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText("Couldn't create room: host error.")).toBeNull();
+  });
+
+  it('Cancel у одиночной сессии, пока она стартует: терминал не открывается, lastProvider не запоминается', async () => {
+    emptyWorkLayout();
+    listCreatedInSnapshot();
+    const held = holdSessions();
+    const { onOpenChange, set } = await openDialog(false);
+    fireEvent.click(providerRadio(0, 'Codex'));
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(held.count()).toBe(1));
+
+    fireEvent.click(button('Cancel'));
+    set(false);
+    await held.release(0);
+    await act(async () => {});
+
+    expect(openTabIds()).toEqual([]);
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
+    expect(useUiStore.getState().ui.lastProvider).toBe(DEFAULT_UI.lastProvider);
+  });
+});
+
+describe('NewSessionOrRoomDialog — «по умолчанию» фиксируется при запуске (находка 6 ревью)', () => {
+  it('rooms.create упал: пилюли остаются теми, с которыми агенты запущены, а не прыгают на lastProvider', async () => {
+    bridge.setHandler('rooms.create', async () => {
+      throw { code: 'internal', message: 'сбой' };
+    });
+    await renderDialog({ room: true });
+    // Первая строка — агент по умолчанию (Claude), вторая — Codex явно: по её провайдеру запишется lastProvider.
+    fireEvent.click(providerRadio(1, 'Codex'));
+    expect(isChecked(providerRadio(0, 'Claude'))).toBe(true);
+    fireEvent.click(button('Create room'));
+    expect(await screen.findByText("Couldn't create room: host error.")).toBeTruthy();
+
+    expect(useUiStore.getState().ui.lastProvider).toBe('codex');
+    expect(isChecked(providerRadio(0, 'Claude'))).toBe(true);
+    expect(isChecked(providerRadio(0, 'Codex'))).toBe(false);
+    expect(isChecked(providerRadio(1, 'Codex'))).toBe(true);
+    expect(screen.getAllByRole('status').map((line) => line.textContent)).toEqual(['S01 started', 'S02 started']);
+  });
+});
+
+describe('NewSessionOrRoomDialog — ошибка диалога в подвале (находка 5 ревью)', () => {
+  it('rooms.create упал: ошибка — role=alert в подвале, а не внизу прокручиваемого тела', async () => {
+    bridge.setHandler('rooms.create', async () => {
+      throw { code: 'internal', message: 'сбой' };
+    });
+    await renderDialog({ room: true });
+    fireEvent.click(button('Create room'));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe("Couldn't create room: host error.");
+    expect(alert.closest('[data-dialog-footer]')).not.toBeNull();
+  });
+
+  it('отказ providers.list: ошибка тоже в подвале', async () => {
+    bridge.setHandler('providers.list', async () => {
+      throw { code: 'internal', message: 'сбой' };
+    });
+    render(<NewSessionOrRoomDialog open bridge={bridge} work={null} room={false} onOpenChange={() => {}} />);
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe("Couldn't load providers: host error.");
+    expect(alert.closest('[data-dialog-footer]')).not.toBeNull();
+  });
+
+  it('без ошибки role=alert нет', async () => {
+    await renderDialog();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
