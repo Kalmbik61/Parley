@@ -356,15 +356,23 @@ interface Proposal {
 - **Codex — логи сессий.** В `~/.codex/sessions/**/rollout-*.jsonl` событие
   `event_msg` с `payload.type: 'token_count'` несёт `rate_limits.primary` и
   `rate_limits.secondary`: `used_percent`, `window_minutes` (300 — 5 часов, 10080 —
-  неделя), `resets_at`. Хост берёт последнее такое событие самого свежего лога. Только
-  чтение, как остальные логи Codex.
+  неделя), `resets_at`. Хост берёт последнее такое событие самого свежего лога; записи с
+  `limit_id`, отличным от `codex` (чужая корзина лимитов), пропускаются. Только чтение,
+  как остальные логи Codex.
 - **Хост.**
-  - Держит последнее значение на провайдера: у Claude — самое свежее по `at` среди
-    сессий, у Codex — по логу.
+  - Держит последнее значение на провайдера: у Claude — свод по сессиям, окно от окна
+    (при равном `resetsAt` — большее `usedPercent`, при разном — окно с более поздним
+    `resetsAt`; `at` — самое позднее: «самое свежее по `at`» дало бы устаревшим числам
+    простаивающей сессии перебить свежие), у Codex — по логу.
   - Отдаёт окну добавлением в протокол: у элемента `providers.list` новое поле
     `limits: { fiveHour: LimitWindow | null, week: LimitWindow | null, at: string } | null`,
     где `LimitWindow = { usedPercent: number, resetsAt: string }`. Плюс событие
     `providers.limitsChanged`.
+  - Решения контролёра (кусок 9a): поле `limits` у элемента `providers.list`
+    необязательное (`limits?: ProviderLimits | null`, как `models`, `effort` и
+    `version`: старый хост его не шлёт, окно читает отсутствие как `null`); событие
+    `providers.limitsChanged` несёт `{ id, limits }` — одно событие на провайдера, чьи
+    лимиты изменились, `limits: null`, когда данные пропали.
   - Окно с прошедшим `resetsAt` не отдаётся.
 - **Окно — строка статуса (1.1).**
   - В сегменте провайдера после версии: полоска — пятичасовое окно, текст
