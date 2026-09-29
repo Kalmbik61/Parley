@@ -14,6 +14,7 @@ import {
   loadProviders,
   resumeCommand,
   startCommand,
+  type EffortLevel,
   type ProviderEntry,
   type RunnerSubstitutions,
 } from '../providers.js';
@@ -41,6 +42,14 @@ export interface LaunchOptions {
    * печатает указатель сам после первого простоя.
    */
   prompt?: string;
+  /**
+   * Модель и усилие новой сессии из диалога окна. Доезжают только до провайдера, у которого
+   * в шаблоне запуска есть их подстановки (`supportsModel`, `supportsEffort`), и только при
+   * запуске: `resumeArgs` их не содержат — Claude Code возвращает модель сам, а выбор в
+   * карте не хранится.
+   */
+  model?: string;
+  effort?: EffortLevel;
 }
 
 /** Чем и как поднимать процесс сессии в правой панели. */
@@ -191,6 +200,8 @@ async function plan(
     // через MCP, бриф ей не пишется (5.1). Тихая — тоже: её бриф уже уехал
     // системным промптом.
     if (mode !== 'new' && !quiet) subs.prompt = await readBrief(projectPath, workId, session.id);
+    if (options.model !== undefined) subs.model = options.model;
+    if (options.effort !== undefined) subs.effort = options.effort;
     if (entry.linkBy === 'session-id') {
       providerSessionId = session.providerSessionId ?? randomUUID();
       subs.sessionUuid = providerSessionId;

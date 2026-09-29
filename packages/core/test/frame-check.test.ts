@@ -163,7 +163,7 @@ describe('рамочный тест репозитория (тест 6)', () => 
         'packages/core/src/codex/discover.ts:8',
         'packages/core/src/codex/discover.ts:9',
         'packages/core/src/providers.ts:13',
-        'packages/core/src/providers.ts:149',
+        'packages/core/src/providers.ts:167',
         'packages/core/src/work/mcp-config.ts:89',
       ].sort(),
     );

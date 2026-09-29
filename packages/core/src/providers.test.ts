@@ -11,8 +11,11 @@ import {
   providersFile,
   providersWithHistory,
   resumeCommand,
+  selectableModels,
   startCommand,
   substituteArgs,
+  supportsEffort,
+  supportsModel,
   type ProviderEntry,
 } from './providers.js';
 
@@ -234,6 +237,142 @@ describe('подстановка аргументов запуска', () => {
   });
 });
 
+describe('модель и усилие новой сессии (дизайн комнат, 3.2)', () => {
+  it('claude: --model и --effort — парами перед промптом', () => {
+    expect(
+      startCommand(PROVIDERS.claude, {
+        sessionUuid: 'uuid-1',
+        model: 'opus',
+        effort: 'high',
+        prompt: 'бриф',
+      }).args,
+    ).toEqual(['--session-id', 'uuid-1', '--model', 'opus', '--effort', 'high', 'бриф']);
+  });
+
+  it('claude: без выбора — ни флагов, ни висячих значений; выбрана одна из двух — идёт она', () => {
+    const base = { sessionUuid: 'uuid-1', prompt: 'бриф' };
+    expect(startCommand(PROVIDERS.claude, base).args).toEqual(['--session-id', 'uuid-1', 'бриф']);
+    expect(startCommand(PROVIDERS.claude, { ...base, model: 'sonnet' }).args).toEqual([
+      '--session-id',
+      'uuid-1',
+      '--model',
+      'sonnet',
+      'бриф',
+    ]);
+    expect(startCommand(PROVIDERS.claude, { ...base, effort: 'low' }).args).toEqual([
+      '--session-id',
+      'uuid-1',
+      '--effort',
+      'low',
+      'бриф',
+    ]);
+  });
+
+  it('claude при возобновлении модель и усилие не несёт: модель CLI возвращает сам', () => {
+    expect(
+      resumeCommand(PROVIDERS.claude, { providerSessionId: 'bb2137cb', model: 'opus', effort: 'high' })
+        .args,
+    ).toEqual(['--resume', 'bb2137cb']);
+  });
+
+  it('codex: модель — флагом --model, усилие — переопределением конфига -c model_reasoning_effort', () => {
+    expect(
+      startCommand(PROVIDERS.codex, {
+        mcpConfig: 'mcp_servers.harnas={command="harnas-mcp"}',
+        model: 'gpt-5.5',
+        effort: 'high',
+        prompt: 'бриф',
+      }).args,
+    ).toEqual([
+      '-c',
+      'mcp_servers.harnas={command="harnas-mcp"}',
+      '--model',
+      'gpt-5.5',
+      '-c',
+      'model_reasoning_effort="high"',
+      'бриф',
+    ]);
+  });
+
+  it('codex: без усилия строка -c выпадает вместе со своим флагом, MCP-пара остаётся', () => {
+    expect(
+      startCommand(PROVIDERS.codex, { mcpConfig: 'mcp_servers.harnas={}', model: 'gpt-5.5', prompt: 'бриф' })
+        .args,
+    ).toEqual(['-c', 'mcp_servers.harnas={}', '--model', 'gpt-5.5', 'бриф']);
+    expect(startCommand(PROVIDERS.codex, { prompt: 'бриф' }).args).toEqual(['бриф']);
+  });
+
+  it('codex при возобновлении модель и усилие тоже не несёт', () => {
+    expect(
+      resumeCommand(PROVIDERS.codex, {
+        providerSessionId: 'uuid-1',
+        mcpConfig: 'mcp_servers.harnas={}',
+        model: 'gpt-5.5',
+        effort: 'low',
+      }).args,
+    ).toEqual(['resume', 'uuid-1', '-c', 'mcp_servers.harnas={}']);
+  });
+
+  it('glm флагов не знает: выбор молча отбрасывается', () => {
+    expect(startCommand(PROVIDERS.glm, { model: 'x', effort: 'high' })).toEqual({
+      command: 'glm',
+      args: [],
+    });
+  });
+
+  it('значение внутри строки шаблона подставляется в неё; пропавшее уносит строку и её флаг', () => {
+    const template = ['-c', '{mcpConfig}', '-c', 'model_reasoning_effort="{effort}"', '{prompt}'];
+    expect(substituteArgs(template, { mcpConfig: 'm', effort: 'medium', prompt: 'p' })).toEqual([
+      '-c',
+      'm',
+      '-c',
+      'model_reasoning_effort="medium"',
+      'p',
+    ]);
+    expect(substituteArgs(template, { mcpConfig: 'm', prompt: 'p' })).toEqual(['-c', 'm', 'p']);
+  });
+
+  it('строка с фигурными скобками без известной подстановки остаётся как есть', () => {
+    expect(substituteArgs(['--json', '{"a":1}', '{prompt}'], { prompt: 'p' })).toEqual([
+      '--json',
+      '{"a":1}',
+      'p',
+    ]);
+  });
+
+  it('поддержка решается шаблоном запуска: claude и codex умеют оба флага, glm — ни одного', () => {
+    for (const entry of [PROVIDERS.claude, PROVIDERS.codex]) {
+      expect(supportsModel(entry)).toBe(true);
+      expect(supportsEffort(entry)).toBe(true);
+    }
+    expect(supportsModel(PROVIDERS.glm)).toBe(false);
+    expect(supportsEffort(PROVIDERS.glm)).toBe(false);
+  });
+
+  it('закрытого списка моделей у встроенных провайдеров нет: документация его не даёт', () => {
+    for (const entry of Object.values(PROVIDERS)) expect(selectableModels(entry)).toBeNull();
+  });
+
+  it('список из providers.json отдаётся, только если шаблон запуска принимает модель', () => {
+    const custom = (args: string[], models?: string[]): ProviderEntry => ({
+      id: 'мой',
+      label: 'Мой',
+      mark: 'Мо',
+      hasHistory: false,
+      linkBy: 'cwd+time',
+      runner: { command: 'мой', args },
+      ...(models === undefined ? {} : { models }),
+    });
+
+    expect(selectableModels(custom(['--model', '{model}', '{prompt}'], ['a', 'b']))).toEqual(['a', 'b']);
+    // Список без флага в шаблоне окну не нужен: выбранная модель до команды не доехала бы.
+    expect(selectableModels(custom(['{prompt}'], ['a', 'b']))).toBeNull();
+    // Пустой список — не список.
+    expect(selectableModels(custom(['--model', '{model}'], []))).toBeNull();
+    expect(selectableModels(custom(['--model', '{model}']))).toBeNull();
+  });
+});
+
 describe('режим одного ответа', () => {
   it('claude отвечает одним ответом на промпт: claude -p', () => {
     expect(printCommand(PROVIDERS.claude, { prompt: 'сожми транскрипт' })).toEqual({
@@ -375,6 +514,24 @@ describe('переопределения из HARNAS_HOME/providers.json', () =>
       command: 'claude',
       args: ['--print', 'сожми'],
     });
+  });
+
+  it('models — список строк: ложится в запись, переживает merge и не мутирует встроенный реестр', async () => {
+    await write({ codex: { models: ['gpt-5.5', 'gpt-5.5-mini'] } });
+    const registry = await loadProviders();
+
+    expect(registry['codex']?.models).toEqual(['gpt-5.5', 'gpt-5.5-mini']);
+    expect(selectableModels(registry['codex'] as ProviderEntry)).toEqual(['gpt-5.5', 'gpt-5.5-mini']);
+    expect(registry['codex']?.runner.args).toEqual(PROVIDERS.codex.runner.args);
+    expect(PROVIDERS.codex.models).toBeUndefined();
+    expect(registry['claude']?.models).toBeUndefined();
+  });
+
+  it('models не списком строк — ошибка', async () => {
+    await write({ claude: { models: 'opus' } });
+    await expect(loadProviders()).rejects.toThrow(/claude/);
+    await write({ claude: { models: ['opus', 1] } });
+    await expect(loadProviders()).rejects.toThrow(/claude/);
   });
 
   it('чужая форма записи — ошибка', async () => {

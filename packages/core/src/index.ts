@@ -31,10 +31,14 @@ export {
   providersFile,
   providersWithHistory,
   resumeCommand,
+  selectableModels,
   startCommand,
   substituteArgs,
+  supportsEffort,
+  supportsModel,
 } from './providers.js';
 export type {
+  EffortLevel,
   McpConfigKind,
   ProviderEntry,
   ProviderInfo,
