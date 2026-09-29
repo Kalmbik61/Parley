@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,7 @@ import {
   plannedWorktree,
   readMap,
   saveConfig,
+  SKILL_MD,
   SYSTEM,
   transitionSession,
   updateMap,
@@ -914,5 +915,127 @@ describe('worktree (план, кусок 4.2)', () => {
     });
     expect(existsSync(info.path)).toBe(true);
     expect((await readMap(project, work.work.id)).sessions.some((s) => s.id === sessionId)).toBe(true);
+  });
+});
+
+describe('скилл harnas при запуске сессии (кусок 10 плана комнат)', () => {
+  const skillIn = (dir: string): string => path.join(dir, '.agents', 'skills', 'harnas', 'SKILL.md');
+  const aliasIn = (dir: string): string => path.join(dir, '.claude', 'skills', 'harnas');
+  const porcelain = async (dir: string): Promise<string> =>
+    (await runGit('git', ['-C', dir, 'status', '--porcelain', '-uall'])).stdout;
+
+  it('создание сессии кладёт скилл в проект: канонная копия, симлинк для Claude Code, строки в info/exclude', async () => {
+    await initGitProject(project);
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'бэкенд',
+      task: '',
+      parent: null,
+    });
+
+    expect(await readFile(skillIn(project), 'utf8')).toBe(SKILL_MD);
+    expect((await lstat(aliasIn(project))).isSymbolicLink()).toBe(true);
+    expect(await readlink(aliasIn(project))).toBe(path.join('..', '..', '.agents', 'skills', 'harnas'));
+    const status = await porcelain(project);
+    expect(status).not.toContain('.agents');
+    expect(status).not.toContain('.claude');
+
+    await service.stop(ref);
+  });
+
+  it('сессия со своим worktree: скилл и в worktree, где стартует стаб, и в проекте; git status обоих чист', async () => {
+    await initGitProject(project);
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    setEnv('HARNAS_WORKTREE_ROOT', await tempWorktreeRoot());
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'сделай штуку',
+      parent: null,
+      worktree: true,
+    });
+
+    const args = await readArgs(argsFile);
+    const worktree = (await readMap(project, work.work.id)).sessions.find((item) => item.id === ref.sessionId)
+      ?.worktree?.path as string;
+    expect(await realpath(args.cwd)).toBe(await realpath(worktree));
+    // Скилл лежит уже к моменту старта процесса: агент видит его с первого хода.
+    expect(await readFile(skillIn(worktree), 'utf8')).toBe(SKILL_MD);
+    expect((await lstat(aliasIn(worktree))).isSymbolicLink()).toBe(true);
+    expect(await readFile(skillIn(project), 'utf8')).toBe(SKILL_MD);
+    for (const dir of [project, worktree]) {
+      const status = await porcelain(dir);
+      expect(status, dir).not.toContain('.agents');
+      expect(status, dir).not.toContain('.claude');
+    }
+
+    await service.stop(ref);
+  });
+
+  it('agentSkills выключена: ни файла, ни учёта, сессия всё равно запускается', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    setEnv('HARNAS_AGENT_SKILLS', '0');
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'сделай штуку',
+      parent: null,
+    });
+
+    await readArgs(argsFile);
+    expect(existsSync(path.join(project, '.agents'))).toBe(false);
+    expect(existsSync(path.join(project, '.claude'))).toBe(false);
+    expect(existsSync(path.join(project, '.harnas', 'skills-receipt.json'))).toBe(false);
+
+    await service.stop(ref);
+  });
+
+  it('чужой скилл в проекте не тронут; сессия стартует, окно получает одно host.notice на два запуска', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    await mkdir(path.dirname(skillIn(project)), { recursive: true });
+    await writeFile(skillIn(project), 'скилл команды\n', 'utf8');
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const create = (label: string) =>
+      service.create({
+        projectPath: project,
+        workId: work.work.id,
+        provider: 'claude',
+        label,
+        task: 'сделай штуку',
+        parent: null,
+      });
+    const first = await create('один');
+    await readArgs(argsFile);
+    const second = await create('два');
+
+    expect(await readFile(skillIn(project), 'utf8')).toBe('скилл команды\n');
+    expect(existsSync(aliasIn(project))).toBe(false);
+    const notices = broadcasts.filter((item) => item.event === 'host.notice');
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.data).toMatchObject({ kind: 'skill-foreign', ref: null });
+
+    await service.stop(first);
+    await service.stop(second);
   });
 });
