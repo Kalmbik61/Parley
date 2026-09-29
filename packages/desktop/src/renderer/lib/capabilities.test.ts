@@ -61,6 +61,21 @@ describe('capabilities', () => {
     expect(missingMethods(connected(all))).toEqual([]);
   });
 
+  it('методы комнат дизайна Organic: у хоста без них окно их не видит и прячет функции, у нового — видит', () => {
+    const rooms = ['rooms.addMember', 'rooms.resolveProposal'];
+    // Хост до этого дизайна: то, что было в протоколе, но без вступления в комнату и решений.
+    const older = connected([...BASELINE_METHODS, 'works.rename', 'mail.markRead']);
+    for (const method of rooms) expect(hostMethods(older).has(method)).toBe(false);
+    expect(hostMethods(connected(null)).has('rooms.addMember')).toBe(false);
+
+    useHostStore.setState({ status: older });
+    const { result } = renderHook(() => rooms.map((method) => useHostSupports(method)));
+    expect(result.current).toEqual([false, false]);
+
+    const all = [...Object.keys(METHODS), ...Object.keys(NOTIFICATIONS)];
+    for (const method of rooms) expect(hostMethods(connected(all)).has(method)).toBe(true);
+  });
+
   it.each<HostStatus>([
     { state: 'connecting' },
     { state: 'mismatch', hostVersion: '9.9.9', liveSessions: 1 },
