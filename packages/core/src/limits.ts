@@ -123,6 +123,39 @@ export async function readWorkLimits(workDir: string): Promise<Map<string, Provi
 }
 
 /**
+ * Одно окно из двух записей. Один и тот же сброс (`resetsAt` равен) — это одно окно, а расход в
+ * окне не убывает, поэтому берётся большее `usedPercent`. Разный сброс — окно сменилось, берётся то,
+ * что кончается позже.
+ */
+function laterWindow(a: LimitWindow | null, b: LimitWindow | null): LimitWindow | null {
+  if (a === null || b === null) return a ?? b;
+  const byReset = Date.parse(a.resetsAt) - Date.parse(b.resetsAt);
+  if (byReset !== 0) return byReset > 0 ? a : b;
+  return b.usedPercent > a.usedPercent ? b : a;
+}
+
+/**
+ * Сводит лимиты нескольких сессий одного провайдера в одно значение. «Самое свежее по `at`» не
+ * годится: простаивающую сессию Claude Code зовёт по другим поводам (смена режима, `/compact`) с
+ * прежними числами, и её свежий `at` перебил бы числа той, что действительно работала. Поэтому
+ * каждое окно сводится отдельно (`laterWindow`), а `at` сводного значения — самое позднее из всех.
+ * Пусто — `null`.
+ */
+export function mergeLimits(all: readonly ProviderLimits[]): ProviderLimits | null {
+  const [first, ...rest] = all;
+  if (first === undefined) return null;
+  return rest.reduce<ProviderLimits>(
+    (merged, next) => ({
+      fiveHour: laterWindow(merged.fiveHour, next.fiveHour),
+      week: laterWindow(merged.week, next.week),
+      // `at` — ISO с миллисекундами в UTC: строки сравниваются как времена.
+      at: next.at > merged.at ? next.at : merged.at,
+    }),
+    first,
+  );
+}
+
+/**
  * Окно, чей сброс уже прошёл, не отдаётся: за сбросом числа уже неверны. Прошли оба окна —
  * лимитов нет вовсе (`null`). Момент сброса считается прошедшим.
  */

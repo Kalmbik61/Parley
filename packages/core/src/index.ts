@@ -22,7 +22,7 @@ export { defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
 export type { DiscoveredCodexSession } from './codex/discover.js';
 export { buildCodexIndex, indexCodexSession } from './codex/index-session.js';
 export { readCodexLimits } from './codex/limits.js';
-export { dropExpiredWindows, readWorkLimits } from './limits.js';
+export { dropExpiredWindows, mergeLimits, readWorkLimits } from './limits.js';
 export type { LimitWindow, ProviderLimits } from './limits.js';
 export {
   PROVIDERS,
@@ -146,14 +146,15 @@ export {
   worksIndexPath,
 } from './work/store.js';
 export type { NewWork, UpdateMapOptions, WorkPaths, WriteOptions } from './work/store.js';
-export {
-  hostLeaseActive,
-  readHostLease,
-  removeHostLease,
-  writeHostLease,
-} from './work/lease.js';
+export { hostLeaseActive, readHostLease, removeHostLease, writeHostLease } from './work/lease.js';
 export type { HostLease } from './work/lease.js';
-export { decisionsOf, participantLabel, sessionMention, sessionTag, threadOf } from './work/thread.js';
+export {
+  decisionsOf,
+  participantLabel,
+  sessionMention,
+  sessionTag,
+  threadOf,
+} from './work/thread.js';
 export type { Thread } from './work/thread.js';
 export { buildBrief, writeBrief } from './work/brief.js';
 export {

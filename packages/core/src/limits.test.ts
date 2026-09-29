@@ -15,6 +15,7 @@ import {
   isFileSafeId,
   limitsFile,
   limitWindow,
+  mergeLimits,
   parseLimitsFile,
   readWorkLimits,
   type ProviderLimits,
@@ -127,6 +128,97 @@ describe('dropExpiredWindows: прошедшее окно не отдаётся'
   it('оба окна прошли — limits: null; и null остаётся null', () => {
     expect(dropExpiredWindows(both, Date.parse('2026-10-05T00:00:00.000Z'))).toBeNull();
     expect(dropExpiredWindows(null, NOW_MS)).toBeNull();
+  });
+});
+
+describe('mergeLimits: свод лимитов нескольких сессий одного провайдера', () => {
+  const R5 = '2026-09-29T13:00:00.000Z';
+  const R5_NEXT = '2026-09-29T18:00:00.000Z';
+  const RW = '2026-09-30T12:00:00.000Z';
+  const RW_NEXT = '2026-10-07T12:00:00.000Z';
+
+  const limits = (
+    at: string,
+    fiveHour: [number, string] | null,
+    week: [number, string] | null,
+  ): ProviderLimits => ({
+    fiveHour: fiveHour === null ? null : { usedPercent: fiveHour[0], resetsAt: fiveHour[1] },
+    week: week === null ? null : { usedPercent: week[0], resetsAt: week[1] },
+    at,
+  });
+
+  it('пусто — null; одна запись — она же', () => {
+    expect(mergeLimits([])).toBeNull();
+    const only = limits(AT, [58, R5], [41, RW]);
+    expect(mergeLimits([only])).toEqual(only);
+  });
+
+  it('равный resetsAt — большее usedPercent, а не запись с более поздним at', () => {
+    // Простаивающая сессия: Claude Code зовёт скрипт по другим поводам (смена режима, /compact)
+    // с прежними числами, и её `at` свежее, а числа — устаревшие.
+    const idleButFresh = limits('2026-09-29T11:59:00.000Z', [58, R5], [41, RW]);
+    const worked = limits('2026-09-29T11:00:00.000Z', [61, R5], [43, RW]);
+
+    for (const list of [
+      [idleButFresh, worked],
+      [worked, idleButFresh],
+    ]) {
+      const merged = mergeLimits(list);
+      expect(merged?.fiveHour?.usedPercent).toBe(61);
+      expect(merged?.week?.usedPercent).toBe(43);
+    }
+  });
+
+  it('разный resetsAt — окно с более поздним сбросом, даже если оно меньше и старше по at', () => {
+    const oldWindow = limits('2026-09-29T12:30:00.000Z', [90, R5], [80, RW]);
+    const newWindow = limits('2026-09-29T12:00:00.000Z', [3, R5_NEXT], [1, RW_NEXT]);
+
+    for (const list of [
+      [oldWindow, newWindow],
+      [newWindow, oldWindow],
+    ]) {
+      const merged = mergeLimits(list);
+      expect(merged?.fiveHour).toEqual({ usedPercent: 3, resetsAt: R5_NEXT });
+      expect(merged?.week).toEqual({ usedPercent: 1, resetsAt: RW_NEXT });
+    }
+  });
+
+  it('каждое окно сводится отдельно: пятичасовое от одной сессии, недельное — от другой', () => {
+    // Пятичасовое окно началось заново (сессия A), недельное у той же недели, но у B расход больше.
+    const a = limits('2026-09-29T12:00:00.000Z', [3, R5_NEXT], [40, RW]);
+    const b = limits('2026-09-29T11:00:00.000Z', [70, R5], [45, RW]);
+
+    const merged = mergeLimits([a, b]);
+    expect(merged?.fiveHour).toEqual({ usedPercent: 3, resetsAt: R5_NEXT });
+    expect(merged?.week).toEqual({ usedPercent: 45, resetsAt: RW });
+  });
+
+  it('окно есть только у одной сессии — берётся оно; нет ни у кого — null', () => {
+    const onlyFive = limits('2026-09-29T12:00:00.000Z', [58, R5], null);
+    const onlyWeek = limits('2026-09-29T11:00:00.000Z', null, [41, RW]);
+
+    const merged = mergeLimits([onlyFive, onlyWeek]);
+    expect(merged?.fiveHour?.usedPercent).toBe(58);
+    expect(merged?.week?.usedPercent).toBe(41);
+    expect(mergeLimits([onlyFive, onlyFive])?.week).toBeNull();
+  });
+
+  it('at сводного значения — самое позднее из всех, в каком бы порядке ни пришли записи', () => {
+    const early = limits('2026-09-29T10:00:00.000Z', [61, R5], [43, RW]);
+    const late = limits('2026-09-29T12:00:00.000Z', [58, R5], [41, RW]);
+    const middle = limits('2026-09-29T11:00:00.000Z', [50, R5], [40, RW]);
+
+    for (const list of [
+      [early, late, middle],
+      [late, middle, early],
+      [middle, early, late],
+    ]) {
+      expect(mergeLimits(list)).toEqual({
+        fiveHour: { usedPercent: 61, resetsAt: R5 },
+        week: { usedPercent: 43, resetsAt: RW },
+        at: '2026-09-29T12:00:00.000Z',
+      });
+    }
   });
 });
 

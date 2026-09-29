@@ -4,7 +4,9 @@
  * - Claude Code (и любой провайдер, чей запуск несёт `--settings` работы) — файлы
  *   `limits/<сессия>.json` в каталогах работ, которые пишет скрипт строки статуса. Провайдер файла —
  *   провайдер сессии по карте работы, а не имя файла или его свежесть: файл сессии GLM не может
- *   стать лимитами Claude. Из файлов провайдера берётся самый свежий по `at`;
+ *   стать лимитами Claude. Файлы провайдера сводятся по окнам (`mergeLimits`), а не «берётся самый
+ *   свежий по `at`»: простаивающая сессия со свежим `at` и прежними числами не должна перебить
+ *   числа той, что работала;
  * - Codex — хвост самого свежего rollout-лога (`readCodexLimits`).
  * Учётные данные не читаются, к API никто не ходит.
  *
@@ -19,6 +21,7 @@
 
 import {
   dropExpiredWindows,
+  mergeLimits,
   readCodexLimits,
   readWorkLimits,
   workPaths,
@@ -105,13 +108,13 @@ export function createLimitsService(
   let cancelTimer: (() => void) | null = null;
   let stopped = false;
 
-  /** Самое свежее по `at` на провайдера — из файлов всех работ и из лога Codex. */
+  /** Свод на провайдера — из файлов всех работ и из лога Codex; окна сводятся по отдельности. */
   async function collect(): Promise<Map<string, ProviderLimits>> {
-    const freshest = new Map<string, ProviderLimits>();
+    const found = new Map<string, ProviderLimits[]>();
     const consider = (provider: string, limits: ProviderLimits): void => {
-      const known = freshest.get(provider);
-      // `at` — ISO с миллисекундами в UTC: строки сравниваются как времена.
-      if (known === undefined || limits.at > known.at) freshest.set(provider, limits);
+      const list = found.get(provider);
+      if (list === undefined) found.set(provider, [limits]);
+      else list.push(limits);
     };
 
     for (const entry of works.snapshot().entries) {
@@ -126,7 +129,13 @@ export function createLimitsService(
     }
     const codex = await readCodexLimits(options.codexRoot).catch(() => null);
     if (codex !== null) consider('codex', codex);
-    return freshest;
+
+    const merged = new Map<string, ProviderLimits>();
+    for (const [provider, list] of found) {
+      const limits = mergeLimits(list);
+      if (limits !== null) merged.set(provider, limits);
+    }
+    return merged;
   }
 
   async function read(): Promise<void> {

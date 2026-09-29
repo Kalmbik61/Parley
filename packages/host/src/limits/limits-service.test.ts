@@ -138,7 +138,7 @@ const limitsEvents = (): Array<EventData<'providers.limitsChanged'>> =>
     .map((item) => item.data as EventData<'providers.limitsChanged'>);
 
 describe('Claude: файлы строки статуса', () => {
-  it('самое свежее по at среди файлов всех работ и проектов', async () => {
+  it('свод по файлам всех работ и проектов: числа окна — большие при том же сбросе, at — самое позднее', async () => {
     const a = await work(projectA, ['claude', 'claude']);
     const b = await work(projectB, ['claude']);
     await putLimits(projectA, a.map, a.ids[0]!, T0 - 600_000, 10, 5);
@@ -156,6 +156,66 @@ describe('Claude: файлы строки статуса', () => {
       week: { usedPercent: 41, resetsAt: new Date((sec(T0) + 86_400) * 1000).toISOString() },
       at: new Date(T0 - 60_000).toISOString(),
     });
+  });
+
+  // Спека 3.5 и решение контролёра 9a: «самое свежее по `at`» даёт устаревшим числам простаивающей
+  // сессии перебить свежие, поэтому каждое окно сводится отдельно (`mergeLimits`).
+  it('простаивающая сессия со свежим at, но устаревшими числами не перебивает числа той, что работала', async () => {
+    const a = await work(projectA, ['claude', 'claude']);
+    // Claude Code зовёт скрипт и по другим поводам (смена режима, /compact): `at` свежий, числа прежние.
+    await putLimits(projectA, a.map, a.ids[0]!, T0 - 1000, 58, 41);
+    await putLimits(projectA, a.map, a.ids[1]!, T0 - 600_000, 61, 43);
+    const { limits } = service([{ project: projectA, map: a.map }]);
+
+    await limits.start();
+
+    expect(limits.get('claude')).toEqual({
+      fiveHour: { usedPercent: 61, resetsAt: new Date((sec(T0) + 3600) * 1000).toISOString() },
+      week: { usedPercent: 43, resetsAt: new Date((sec(T0) + 86_400) * 1000).toISOString() },
+      at: new Date(T0 - 1000).toISOString(),
+    });
+  });
+
+  it('окно началось заново: побеждает окно с более поздним сбросом, а не сессия со свежим at', async () => {
+    const a = await work(projectA, ['claude', 'claude']);
+    // Старое окно: расход большой, файл свежее по at (сессию потрогали уже после сброса других).
+    await putLimits(projectA, a.map, a.ids[0]!, T0 - 1000, 90, 80, {
+      fiveHour: sec(T0) + 1800,
+      week: sec(T0) + 7200,
+    });
+    // Новое окно: расход маленький, сброс позже.
+    await putLimits(projectA, a.map, a.ids[1]!, T0 - 600_000, 3, 1, {
+      fiveHour: sec(T0) + 18_000,
+      week: sec(T0) + 604_800,
+    });
+    const { limits } = service([{ project: projectA, map: a.map }]);
+
+    await limits.start();
+
+    expect(limits.get('claude')?.fiveHour).toEqual({
+      usedPercent: 3,
+      resetsAt: new Date((sec(T0) + 18_000) * 1000).toISOString(),
+    });
+    expect(limits.get('claude')?.week?.usedPercent).toBe(1);
+  });
+
+  it('окна сводятся по отдельности: пятичасовое от одной сессии, недельное — от другой', async () => {
+    const a = await work(projectA, ['claude', 'claude']);
+    await putLimits(projectA, a.map, a.ids[0]!, T0 - 1000, 3, 40, {
+      fiveHour: sec(T0) + 18_000,
+      week: sec(T0) + 86_400,
+    });
+    await putLimits(projectA, a.map, a.ids[1]!, T0 - 600_000, 70, 45, {
+      fiveHour: sec(T0) + 1800,
+      week: sec(T0) + 86_400,
+    });
+    const { limits } = service([{ project: projectA, map: a.map }]);
+
+    await limits.start();
+
+    // Пятичасовое — новое окно первой сессии; недельное — то же окно, где расход больше у второй.
+    expect(limits.get('claude')?.fiveHour?.usedPercent).toBe(3);
+    expect(limits.get('claude')?.week?.usedPercent).toBe(45);
   });
 
   it('файл сессии GLM не становится лимитами Claude: провайдер — по сессии из карты работы', async () => {
