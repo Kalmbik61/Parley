@@ -227,6 +227,15 @@ export const S = {
     nameRequired: 'Name is required',
     /** «Новая комната» из меню карточки — без обязательного участника (кусок 3.4). */
     newRoomTitle: 'New room',
+
+    // ── Вкладка комнаты (спека окна 2026-09-29, 1.3, 2.2–2.4) ──
+    /** Подзаголовок шапки: `Created by you · 4 agents · lead S01 · {работа}`. */
+    createdByYou: 'Created by you',
+    createdBy: (who: string): string => `Created by ${who}`,
+    agentCount: (n: number): string => (n === 1 ? '1 agent' : `${n} agents`),
+    leadIs: (tag: string): string => `lead ${tag}`,
+    /** `→ all` в мете сообщения: письмо всем участникам. */
+    toAll: 'all',
   },
 
   /** Настройки — `settings/SettingsDialog.tsx`. */
