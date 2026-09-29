@@ -70,6 +70,13 @@ const TEXT_BACKGROUNDS: Record<string, (theme: Theme) => Rgb> = {
     compositeOver(solid(theme, '--color-accent-2-500'), 0.14, solid(theme, '--sheet')),
 };
 
+/**
+ * Заливка тега заметки на листе центра — вид `neutral-sheet` в `ui/badge.tsx` (`bg-neutral-200
+ * dark:bg-neutral-100`): в светлой теме `neutral-100` — сам лист, там 200; в тёмной 100, как на снимке
+ * handoff `dark-08`.
+ */
+const SHEET_NOTE_FILL: Record<Theme, string> = { light: '--color-neutral-200', dark: '--color-neutral-100' };
+
 // ── 1. Спека: палитра и тени дословно ────────────────────────────────────────────────────────
 
 describe('палитра Organic — раздел 4 спеки дословно', () => {
@@ -403,6 +410,23 @@ describe('примитивы Organic — текст на своём фоне н�
         ).toBeGreaterThanOrEqual(TEXT);
       }
     });
+
+    it(`${theme}: тег заметки на листе (вид neutral-sheet) — текст neutral-800 на его заливке не ниже 4.5:1`, () => {
+      expect(contrastRatio(solid(theme, '--color-neutral-800'), solid(theme, SHEET_NOTE_FILL[theme]))).toBeGreaterThanOrEqual(TEXT);
+    });
+
+    it(`${theme}: заливка тега заметки на листе отличима от листа — читается плашкой, а не «на единицу RGB» (не ниже 1.1:1)`, () => {
+      const sheet = solid(theme, '--sheet');
+      const fill = solid(theme, SHEET_NOTE_FILL[theme]);
+      expect(fill).not.toEqual(sheet);
+      expect(contrastRatio(fill, sheet)).toBeGreaterThanOrEqual(1.1);
+    });
+
+    if (theme === 'light') {
+      it('светлая: neutral-100 — это и есть лист (--sheet), поэтому обычный тег neutral на листе невидим и заметке там нужна заливка 200', () => {
+        expect(solid('light', '--color-neutral-100')).toEqual(solid('light', '--sheet'));
+      });
+    }
 
     it(`${theme}: kicker карточки (accent-700) на фоне карточки Organic (surface) и на листе`, () => {
       const kicker = solid(theme, '--color-accent-700');

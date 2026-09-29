@@ -7,11 +7,14 @@
  */
 
 import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
 import type { WorkEntry } from '@harnas/core';
 import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../../shared/bridge.js';
+import { S } from '../../../shared/strings.js';
+import { applyFocusTarget, buildFocusTargetDeps } from '../../attention/focus-target.js';
 import { RoomPanel } from '../../components/rooms/RoomPanel.js';
-import { activityFor, useActivityStore } from '../../store/activity.js';
+import { useActivityStore } from '../../store/activity.js';
 import { useHostStore } from '../../store/host.js';
 
 export interface RoomBodyProps {
@@ -35,21 +38,22 @@ export function RoomBody({ bridge, entry, roomId, active }: RoomBodyProps): JSX.
       .catch(() => {});
   }, [bridge, connections]);
 
-  const models: Record<string, string | null> = {};
-  for (const session of entry.map.sessions) {
-    const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
-    models[session.id] = activityFor(activityByRef, ref)?.metrics?.model ?? null;
-  }
+  // Клик по карточке участника: тот же переход, что клик по уведомлению (4.3) — вкладка терминала, вспышка, фокус.
+  const openSession = (sessionId: string): void => {
+    const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId };
+    if (!applyFocusTarget({ kind: 'session', ref }, buildFocusTargetDeps())) toast(S.notifications.targetGone);
+  };
 
   return (
     <RoomPanel
       entry={entry}
       roomId={roomId}
       providers={providers}
-      models={models}
+      activity={activityByRef}
       bridge={bridge}
       active={active}
       onOpenExternal={(url) => void bridge.app.openExternal(url)}
+      onOpenSession={openSession}
     />
   );
 }

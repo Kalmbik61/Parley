@@ -223,8 +223,6 @@ export const S = {
     unreadAriaLabel: 'unread',
     /** Тег вида письма в карточке почты (1.8): строчными, как в handoff. */
     kindTag: { note: 'note', question: 'question', decision: 'decision' } as const,
-    kindSuffixQuestion: ' · question',
-    kindSuffixDecision: ' · decision',
   },
 
   /** Комнаты — `rooms/*`. */
@@ -232,12 +230,6 @@ export const S = {
     fallbackTitle: 'Room',
     notFound: 'Room not found',
     everyone: 'everyone',
-    kindLabels: {
-      note: 'Note',
-      question: 'Question',
-      decision: 'Decision',
-    },
-    composerPlaceholder: '⌘Enter to send',
     send: 'Send',
     createTitle: (label: string): string => `Create room with ${label}`,
     nameField: 'Name',
@@ -245,6 +237,49 @@ export const S = {
     nameRequired: 'Name is required',
     /** «Новая комната» из меню карточки — без обязательного участника (кусок 3.4). */
     newRoomTitle: 'New room',
+
+    // ── Вкладка комнаты (спека окна 2026-09-29, 1.3, 2.2–2.4) ──
+    /** Подзаголовок шапки: `Created by you · 4 agents · lead S01 · {работа}`. */
+    createdByYou: 'Created by you',
+    createdBy: (who: string): string => `Created by ${who}`,
+    agentCount: (n: number): string => (n === 1 ? '1 agent' : `${n} agents`),
+    leadIs: (tag: string): string => `lead ${tag}`,
+    /** `→ all` в мете сообщения: письмо всем участникам. */
+    toAll: 'all',
+    /** `aria-label` ленты участников и тултип `★` у ведущего. */
+    participants: 'Participants',
+    lead: 'Lead',
+    /** Пустая комната. */
+    emptyFeed: 'Write the task for everyone below. The lead collects positions and brings you a decision.',
+    notPickedUp: (tags: string): string => `▤ Not picked up yet by ${tags}`,
+    /** Подпись точки «непрочитано» у сообщения. */
+    newMessage: 'New',
+    /** Карточка решения. */
+    decisionWaiting: 'decision · waiting for you',
+    accept: 'Accept',
+    returnForRework: 'Return for rework',
+    returnPlaceholder: 'What should the lead change?',
+    sendToLead: 'Send to lead',
+    /** Тост на `conflict`: ведущий заменил текст или решение уже закрыто — живая карточка на месте. */
+    decisionChanged: 'The decision changed — review the latest version.',
+    /**
+     * Тултип карточки участника: `Claude Code · Opus 5.5`; модель неизвестна — только провайдер. Усилие не
+     * показывается: его никто не хранит.
+     */
+    participantTooltip: (provider: string, model: string | null): string => (model === null ? provider : `${provider} · ${model}`),
+    /** Мета пункта меню упоминаний: `Opus 5.5 · idle`; модель неизвестна — только состояние. */
+    mentionMeta: (model: string | null, word: string): string => (model === null ? word : `${model} · ${word}`),
+    /** Поле ввода: подпись над ним, плейсхолдер, имя для скринридера. */
+    toEveryone: 'To everyone',
+    toList: (tags: string): string => `To ${tags}`,
+    composerPlaceholder: 'Write to everyone · type @ to mention an agent',
+    messageField: 'Message',
+    /** Меню упоминаний. */
+    mentionHeading: 'Agents in this room',
+    mentionEmpty: 'No agents match',
+    /** «Couldn't <действие>: …» — `errorText`. */
+    sendAction: 'send the message',
+    resolveAction: 'answer the decision',
   },
 
   /** Настройки — `settings/SettingsDialog.tsx`. */
@@ -667,7 +702,8 @@ export const S = {
   /** Тексты общих участников переписки — `lib/participant-tag.ts`. */
   participants: {
     human: 'You',
-    system: 'System',
+    /** Так хост подписывает свои строки в комнате и почте — как на снимке handoff `dark-08`. */
+    system: 'harnas',
     deletedSuffix: '(deleted)',
     /** Ярлык сессии, созданной без названия (`NEW_LABEL` core) — `lib/participant.ts`. */
     newSession: 'New session',

@@ -2,7 +2,7 @@
  * Панель «вся почта работы» (кусок 2.4 плана окна, спека 5.1, 6.3, 6.4):
  * шапка, блок решений, лента писем. Облик Organic (спека окна 2026-09-29, 1.8): шапка — `Mail` Caprasimo 25
  * и подзаголовок `{работа} · {n} unread` / `all read` (n — письма с точкой), блок решений — плашка в колонке
- * ленты (`Decisions variant="card"`, 1.3), лента — колонка карточек до
+ * ленты (`Decisions`, 1.3), лента — колонка карточек до
  * 640px с зазором 14 и отступами `32 36`. Держит
  * хвост ленты, пока пользователь не ушёл прокруткой вверх — тогда позицию не
  * трогает, а в шапке растёт `↓N` (столько писем пришло, пока он читал историю).
@@ -107,13 +107,12 @@ export function MailPanel({ entry, providers, models, bridge, active, onOpenExte
           </button>
         ) : null}
       </div>
-      <Decisions decisions={view.decisions} variant="card" />
+      <Decisions decisions={view.decisions} className="mx-9 mb-3.5 max-w-[640px]" />
       <div ref={containerRef} onScroll={handleScroll} className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-9 pb-8">
         {view.letters.map((letter) => (
           <Letter
             key={letter.id}
             letter={letter}
-            variant="card"
             onOpenExternal={onOpenExternal}
             observeRef={markRead(letter.id, isUnreadForHuman(messages.get(letter.id)))}
           />

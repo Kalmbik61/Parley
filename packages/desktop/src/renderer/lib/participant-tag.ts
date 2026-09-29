@@ -49,9 +49,10 @@ function versionOf(rest: string): string {
  * (значением, по той же причине, что и выше). `modelBadge` (короткий бейдж
  * без версии) сюда не переносится: он рендереру не нужен, а версия в подписи
  * участника нужна — иначе `S01 (Opus)` и `S03 (Opus)` разных версий было бы
- * не различить.
+ * не различить. Экспортирована для вкладки комнаты: тултип участника и мета меню упоминаний
+ * (`components/rooms/feed-model.ts`).
  */
-function modelName(model: string | null): string | null {
+export function modelName(model: string | null): string | null {
   if (model === null || model === SYNTHETIC_MODEL) return null;
 
   const normalized = model.toLowerCase();
