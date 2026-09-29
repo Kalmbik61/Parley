@@ -268,6 +268,29 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                   <span className="text-xs text-destructive">{errors.autoLaunch}</span>
                 ) : null}
 
+                {/* Ключа нет у хоста, оставшегося от прежней версии: переключатель врал бы — ни поставить, ни
+                    отключить скилл такой хост не умеет. */}
+                {config.agentSkills !== undefined ? (
+                  <>
+                    <label className="flex items-center justify-between gap-2 text-sm">
+                      <span>
+                        {S.settings.agentSkills}
+                        {locked.agentSkills !== undefined ? (
+                          <span className="text-muted-foreground"> {S.settings.lockedBy(locked.agentSkills)}</span>
+                        ) : null}
+                      </span>
+                      <Switch
+                        checked={config.agentSkills}
+                        disabled={locked.agentSkills !== undefined}
+                        onCheckedChange={(checked) => void save('agentSkills', checked ? 'true' : 'false')}
+                      />
+                    </label>
+                    {errors.agentSkills !== undefined ? (
+                      <span className="text-xs text-destructive">{errors.agentSkills}</span>
+                    ) : null}
+                  </>
+                ) : null}
+
                 <FieldRow label={S.settings.worktreeRoot} lockedBy={locked.worktreeRoot ?? null} error={errors.worktreeRoot}>
                   <Input
                     defaultValue={config.worktreeRoot}

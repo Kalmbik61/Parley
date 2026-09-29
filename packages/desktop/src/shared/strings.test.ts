@@ -15,7 +15,7 @@ const PROTOCOL_CODES: ErrorCode[] = [
   'internal',
 ];
 
-/** Все девять видов `NoticeKind` (`packages/protocol/src/types.ts`). */
+/** Все десять видов `NoticeKind` (`packages/protocol/src/types.ts`). */
 const NOTICE_KINDS: NoticeKind[] = [
   'map-lock',
   'map-corrupt',
@@ -26,6 +26,7 @@ const NOTICE_KINDS: NoticeKind[] = [
   'resume-failed',
   'resume-limit',
   'trust-wait',
+  'skill-foreign',
 ];
 
 /** `notice.text` — заведомо русский, как у хоста (раунд исправлений 1 куска E.1) — чтобы поймать случайную подстановку. */
@@ -184,6 +185,12 @@ describe('noticeText', () => {
     const text = noticeText(hostNotice('trust-wait', ref), 'S03 backend');
     expect(text).toBe('S03 backend: not responding since launch — may be waiting for folder trust.');
     expect(text).not.toMatch(CYRILLIC);
+  });
+
+  it('skill-foreign (ref: null) — английский смысл: скилл не поставлен, путь чужой', () => {
+    expect(noticeText(hostNotice('skill-foreign'))).toBe(
+      "Agent skill not installed — that path already exists and wasn't created by harnas.",
+    );
   });
 
   it('map-lock и map-corrupt (ref: null, без сессии) тоже дают английский текст', () => {
