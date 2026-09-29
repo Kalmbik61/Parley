@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   addSession,
+  createPendingSession,
   createWork,
   createWorktree,
   NEW_LABEL,
@@ -1037,5 +1038,31 @@ describe('скилл harnas при запуске сессии (кусок 10 п
 
     await service.stop(first);
     await service.stop(second);
+  });
+});
+
+describe('модель и усилие из карты: сессия, заведённая spawn_session', () => {
+  it('pending от spawn_session запускается с записанными моделью и усилием: флаги в argv стаба', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    // Так `spawn_session` агента заводит запись: выбор лежит в карте, а поднимает её хост позже и без диалога.
+    const sessionId = await createPendingSession(project, work.work.id, {
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'сделай штуку',
+      model: 'opus',
+      effort: 'high',
+    });
+    const ref: SessionRef = { projectPath: project, workId: work.work.id, sessionId };
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    await service.launch(ref, 'launch');
+
+    const args = await readArgs(argsFile);
+    expect(args.argv[args.argv.indexOf('--model') + 1]).toBe('opus');
+    expect(args.argv[args.argv.indexOf('--effort') + 1]).toBe('high');
+
+    await service.stop(ref);
   });
 });
