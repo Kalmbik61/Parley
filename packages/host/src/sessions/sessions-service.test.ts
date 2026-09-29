@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -301,10 +301,78 @@ describe('create(): модель и усилие из диалога (дизай
 
   it('codex: --model и -c model_reasoning_effort в аргументах', async () => {
     setEnv('HARNAS_CODEX_BIN', STUB);
-    const argv = await launched('codex', { model: 'gpt-5.5', effort: 'medium' });
+    const argv = await launched('codex', { model: 'gpt-6.1-sol', effort: 'medium' });
 
-    expect(argv[argv.indexOf('--model') + 1]).toBe('gpt-5.5');
+    expect(argv[argv.indexOf('--model') + 1]).toBe('gpt-6.1-sol');
     expect(argv).toContain('model_reasoning_effort="medium"');
+  });
+
+  it('claude: значение списка со скобками доезжает до команды как есть, одним аргументом', async () => {
+    const argv = await launched('claude', { model: 'sonnet[1m]' });
+
+    expect(argv[argv.indexOf('--model') + 1]).toBe('sonnet[1m]');
+  });
+
+  it('пустая model — «по умолчанию»: флага нет, как без выбора', async () => {
+    const argv = await launched('claude', { model: '', effort: 'low' });
+
+    expect(argv).not.toContain('--model');
+    // Усилие — отдельный выбор и от пустой модели не зависит.
+    expect(argv[argv.indexOf('--effort') + 1]).toBe('low');
+  });
+
+  it('модель не из списка провайдера — bad_request: процесс не запускается, записей в карте не появляется', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    setEnv('HARNAS_CODEX_BIN', STUB);
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const worksDir = path.join(project, '.harnas', 'works');
+    const worksBefore = await readdir(worksDir);
+
+    const create = (workId: string | null, provider: string, task: string, model: string) =>
+      service.create({ projectPath: project, workId, provider, label: '', task, parent: null, model });
+    // Все три пути создания: тихий старт, сессия с задачей (`pending`) и новая работа под быструю сессию.
+    for (const attempt of [
+      create(work.work.id, 'claude', '', 'gpt-6-sol'),
+      create(work.work.id, 'claude', 'сделай штуку', 'sonnet[1M]'),
+      create(null, 'codex', '', 'opus'),
+    ]) {
+      await expect(attempt).rejects.toMatchObject({ name: 'HostError', code: 'bad_request' });
+    }
+
+    expect(existsSync(argsFile)).toBe(false);
+    expect((await readMap(project, work.work.id)).sessions).toEqual([]);
+    // Отказ раньше первой записи: новой работы под `workId: null` тоже не завели.
+    expect(await readdir(worksDir)).toEqual(worksBefore);
+  });
+
+  describe('свои списки моделей из providers.json', () => {
+    /** Свой дом харнесса с `providers.json`: реестр читается оттуда же, откуда и хост в бою. */
+    async function withProviders(data: unknown): Promise<void> {
+      const home = path.join(project, 'свой-дом-харнесса');
+      await mkdir(home, { recursive: true });
+      await writeFile(path.join(home, 'providers.json'), JSON.stringify(data), 'utf8');
+      setEnv('HARNAS_HOME', home);
+    }
+
+    it('модель из своего списка доезжает до команды, а из встроенного, которого в нём нет, — bad_request', async () => {
+      await withProviders({ claude: { models: [{ id: 'my-new-model', label: 'Моя новая' }] } });
+
+      const argv = await launched('claude', { model: 'my-new-model' });
+      expect(argv[argv.indexOf('--model') + 1]).toBe('my-new-model');
+      await expect(launched('claude', { model: 'opus' })).rejects.toMatchObject({ code: 'bad_request' });
+    });
+
+    it('провайдер без списка — прежнее правило: любое значение идёт в команду, где шаблон принимает {model}', async () => {
+      await withProviders({
+        smart: { badge: 'Smart', command: 'smart', args: ['--m', '{model}', '{prompt}'] },
+      });
+      setEnv('HARNAS_SMART_BIN', STUB);
+
+      const argv = await launched('smart', { model: 'что-то-своё' });
+      expect(argv[argv.indexOf('--m') + 1]).toBe('что-то-своё');
+    });
   });
 
   it('провайдер без флагов (glm) выбор не получает: поле отбрасывается', async () => {

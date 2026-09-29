@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { HarnasConfig, MergeCheck, MergeResult, ProjectChanges, WorktreeDiff } from '@harnas/core';
-import type { ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
+import type { ModelOption, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 export const sessionRef = z.object({
   projectPath: z.string(),
@@ -53,13 +53,15 @@ export const METHODS = {
     parent: z.string().nullable(),
     worktree: z.boolean().optional(),
     // Модель и усилие из диалога запуска (дизайн комнат, 3.2). Провайдер без флага их отбрасывает
-    // — окно узнаёт об этом из `providers.list`. Модель — одно слово: алиас или полное имя,
-    // без пробелов и не с дефиса (CLI принял бы её за флаг); усилие — общий для обоих CLI набор.
+    // — окно узнаёт об этом из `providers.list`. Модель — `id` из списка провайдера
+    // (`providers.list.models`): одно слово, без пробелов и не с дефиса (CLI принял бы её за флаг);
+    // принадлежность списку проверяет хост (`bad_request`), схема — только вид. Пустая строка, как
+    // и отсутствие поля, — «по умолчанию»: без флага, модель CLI по умолчанию. Усилие — общий для
+    // обоих CLI набор.
     model: z
       .string()
-      .min(1)
       .max(200)
-      .regex(/^[^\s-]\S*$/)
+      .regex(/^(?:[^\s-]\S*)?$/)
       .optional(),
     effort: z.enum(['low', 'medium', 'high']).optional(),
   }),
@@ -167,10 +169,13 @@ export interface Results {
       // остаётся 1, поэтому новое окно с хостом, оставшимся с живыми сессиями, получит элементы без
       // них. Нынешний хост отдаёт их всегда; нет поля — окно читает «контрола нет» и «версии нет».
       /**
-       * Закрытый список моделей. `null` — списка нет: у Claude Code и Codex документация его не
-       * даёт (`--model` принимает и алиас, и полное имя), а провайдер без флага модель не принимает.
+       * Модели для выбора при запуске — пары `id` (значение `--model`) и `label` (подпись окна),
+       * в порядке документации провайдера. «По умолчанию» в списке нет: это отсутствие выбора
+       * (`sessions.create` без `model` или с пустой). `null` — списка нет: окно контрол не
+       * показывает; хост тогда принимает любую модель, а провайдер без `{model}` в шаблоне
+       * запуска отбрасывает её сам.
        */
-      models?: string[] | null;
+      models?: ModelOption[] | null;
       /** Принимает ли провайдер усилие при запуске: нет — окно прячет контрол. */
       effort?: boolean;
       /** Версия CLI из пробы на старте хоста; `null` — не узнали. */

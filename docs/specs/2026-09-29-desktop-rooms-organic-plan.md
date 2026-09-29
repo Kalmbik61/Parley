@@ -217,8 +217,9 @@
    - Устаревший `proposalId` — ошибка `conflict`.
 2. **protocol:** `rooms.create.lead?`, `rooms.addMember`, `rooms.resolveProposal`,
    `sessions.create.model?` и `effort?` (`'low' | 'medium' | 'high'`). У `providers.list`
-   новые поля `models: string[] | null`, `effort: boolean`, `version: string | null`. Всё
-   — в `hello.methods`.
+   новые поля `models: Array<{ id: string; label: string }> | null`, `effort: boolean`,
+   `version: string | null` (форма `models` — по решению 5 спеки и куску 3b). Всё — в
+   `hello.methods`.
 3. **host:**
    - методы; правило одной комнаты на сессию (решение 4);
    - проброс `model` и `effort` через реестр провайдеров;
@@ -226,8 +227,9 @@
      учётные данные не читает.
 4. **Флаги модели и effort** у Claude Code и Codex — **по документации CLI** (Context7 или
    официальные страницы; источник — в отчёт).
-   - Не подтверждено — `models: null` и `effort: false`, поле в команду не идёт.
-   - Список моделей не выдумывать: только из документации или конфигурации провайдера.
+   - Не подтверждено — `effort: false`, поле в команду не идёт.
+   - Модели — списком из открытой документации провайдера (решение 5, кусок 3b); нет списка —
+     `models: null`. Список не выдумывать: только из документации или конфигурации провайдера.
 
 **Тесты:**
 - юнит-тесты core, protocol и host;

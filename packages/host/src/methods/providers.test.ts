@@ -29,7 +29,7 @@ interface ProviderItem {
   id: string;
   label: string;
   available: boolean;
-  models: string[] | null;
+  models: Array<{ id: string; label: string }> | null;
   effort: boolean;
   version: string | null;
   limits: { fiveHour: { usedPercent: number } | null; week: { usedPercent: number } | null; at: string } | null;
@@ -92,8 +92,8 @@ describe('providers.list: модели, усилие и версия CLI (диз
     });
     const providers = await list(client);
 
-    expect(byId(providers, 'claude')).toMatchObject({ label: 'Claude', effort: true, models: null, version: '2.1.276' });
-    expect(byId(providers, 'codex')).toMatchObject({ label: 'Codex', effort: true, models: null, version: '0.44.0' });
+    expect(byId(providers, 'claude')).toMatchObject({ label: 'Claude', effort: true, version: '2.1.276' });
+    expect(byId(providers, 'codex')).toMatchObject({ label: 'Codex', effort: true, version: '0.44.0' });
     expect(byId(providers, 'glm')).toMatchObject({ label: 'GLM', effort: false, models: null, version: null });
     expect(typeof byId(providers, 'claude').available).toBe('boolean');
   });
@@ -139,22 +139,56 @@ describe('providers.list: модели, усилие и версия CLI (диз
     expect(byId(await list(client), 'claude').version).toBe('2.1.276');
   });
 
-  it('список моделей из providers.json отдаётся, если шаблон запуска принимает модель', async () => {
+  it('окну уходят списки из документации: claude — алиасы, codex — GPT-6; порядок и подписи как в реестре', async () => {
+    const providers = await list(await boot());
+
+    expect(byId(providers, 'claude').models).toEqual([
+      { id: 'best', label: 'Best' },
+      { id: 'fable', label: 'Fable' },
+      { id: 'sonnet', label: 'Sonnet' },
+      { id: 'opus', label: 'Opus' },
+      { id: 'haiku', label: 'Haiku' },
+      { id: 'sonnet[1m]', label: 'Sonnet (1M context)' },
+      { id: 'opus[1m]', label: 'Opus (1M context)' },
+      { id: 'opusplan', label: 'Opus Plan' },
+      { id: 'opusplan[1m]', label: 'Opus Plan (1M context)' },
+    ]);
+    expect(byId(providers, 'codex').models).toEqual([
+      { id: 'gpt-6-astra', label: 'GPT-6 Astra' },
+      { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' },
+      { id: 'gpt-6-sol', label: 'GPT-6 Sol' },
+      { id: 'gpt-6-luna', label: 'GPT-6 Luna' },
+    ]);
+  });
+
+  it('свой список моделей из providers.json заменяет встроенный, если шаблон запуска принимает модель', async () => {
     const providers = await list(
       await boot({
         providersJson: {
-          codex: { models: ['gpt-5.5', 'gpt-5.5-mini'] },
+          codex: { models: [{ id: 'my-new-model', label: 'Моя новая' }] },
           // Свой провайдер без {model} в шаблоне: список окну не нужен — модель до команды не доедет.
-          opencode: { badge: 'OpenCode', command: 'opencode', args: ['{prompt}'], models: ['a', 'b'] },
+          opencode: {
+            badge: 'OpenCode',
+            command: 'opencode',
+            args: ['{prompt}'],
+            models: [{ id: 'a', label: 'А' }],
+          },
           // …а с {model} и {effort} в шаблоне провайдер их принимает.
-          smart: { badge: 'Smart', command: 'smart', args: ['--m', '{model}', '--e', '{effort}'], models: ['fast'] },
+          smart: {
+            badge: 'Smart',
+            command: 'smart',
+            args: ['--m', '{model}', '--e', '{effort}'],
+            models: [{ id: 'fast', label: 'Быстрая' }],
+          },
+          // Пустой список убирает встроенный: у claude списка больше нет.
+          claude: { models: [] },
         },
       }),
     );
 
-    expect(byId(providers, 'codex').models).toEqual(['gpt-5.5', 'gpt-5.5-mini']);
+    expect(byId(providers, 'codex').models).toEqual([{ id: 'my-new-model', label: 'Моя новая' }]);
     expect(byId(providers, 'opencode')).toMatchObject({ models: null, effort: false });
-    expect(byId(providers, 'smart')).toMatchObject({ models: ['fast'], effort: true });
+    expect(byId(providers, 'smart')).toMatchObject({ models: [{ id: 'fast', label: 'Быстрая' }], effort: true });
     expect(byId(providers, 'claude').models).toBeNull();
   });
 
@@ -171,6 +205,39 @@ describe('providers.list: модели, усилие и версия CLI (диз
     expect(byId(providers, 'claude').available).toBe(true);
     expect(byId(providers, 'codex').available).toBe(false);
     await rm(dir, { recursive: true, force: true });
+  });
+});
+
+describe('sessions.create по проводу: модель вне списка провайдера — bad_request (дизайн комнат, 3.2)', () => {
+  /** `sessions.create` с несуществующим проектом: отказ по модели идёт раньше любой записи на диск. */
+  async function create(client: TestClient, provider: string, model: string): Promise<RawMessage> {
+    const id = nextId;
+    nextId += 1;
+    client.send({
+      id,
+      method: 'sessions.create',
+      params: { projectPath: '/не/существует', workId: null, provider, label: '', task: '', parent: null, model },
+    });
+    for (;;) {
+      const message: RawMessage = await client.next();
+      if (message.id === id) return message;
+    }
+  }
+
+  it('значение чужого списка и значение вне списка отвергаются, ответ называет провайдера и допустимое', async () => {
+    const client = await boot();
+
+    const wrongProvider = await create(client, 'claude', 'gpt-6-sol');
+    expect(wrongProvider.error?.code).toBe('bad_request');
+    expect(wrongProvider.error?.message).toContain('claude');
+    expect(wrongProvider.error?.message).toContain('opusplan');
+    expect((await create(client, 'codex', 'opus')).error?.code).toBe('bad_request');
+  });
+
+  it('вид значения проверяет схема раньше хоста: с дефисом впереди — bad_request и без списка провайдера', async () => {
+    const client = await boot();
+
+    expect((await create(client, 'glm', '--dangerously-skip-permissions')).error?.code).toBe('bad_request');
   });
 });
 

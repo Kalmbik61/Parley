@@ -1,6 +1,7 @@
 import { access, readFile, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
+import { CLAUDE_MODELS, CODEX_MODELS, type ModelOption } from './provider-models.js';
 import type { Provider } from './session-index.js';
 import { overrideVariable } from './work/find-binary.js';
 import { harnasHome } from './work/store.js';
@@ -69,12 +70,13 @@ export interface ProviderEntry {
   linkBy: SessionLink;
   runner: RunnerConfig;
   /**
-   * Закрытый список моделей, из которого окно предлагает выбрать (`selectableModels`).
-   * Встроенные записи его не задают: документация Claude Code и Codex такого списка не
-   * даёт — `--model` принимает и алиас, и полное имя. Список приходит только из
-   * `providers.json`, то есть от самого человека.
+   * Модели, из которых окно предлагает выбрать (`selectableModels`): значение `--model` и подпись.
+   * У встроенных `claude` и `codex` список взят из открытой документации (`provider-models.ts`), у
+   * прочих — из `providers.json`. Нет списка (`null` или поля нет — одно и то же, как и на проводе) —
+   * окно контрол не показывает, а хост принимает любое значение, как и прежде. «По умолчанию» в
+   * списке не хранится: это отсутствие выбора, без флага.
    */
-  models?: string[];
+  models?: readonly ModelOption[] | null;
 }
 
 /** Запись встроенного реестра: id из закрытого списка, всё остальное как у `ProviderEntry`. */
@@ -98,6 +100,8 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
     // `--session-id <uuid>` задаёт имя jsonl-файла заранее: угадывать по времени
     // создания не нужно.
     linkBy: 'session-id',
+    // Алиасы `--model` из документации Claude Code (`provider-models.ts`).
+    models: CLAUDE_MODELS,
     runner: {
       command: 'claude',
       // `--settings` — документированный флаг Claude Code: файл мержится с
@@ -162,6 +166,8 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
     // новой сессии снаружи нет. Значит, запись карты связывается с rollout-логом
     // по cwd и времени запуска (спецификация, раздел 5).
     linkBy: 'cwd+time',
+    // Рекомендуемые модели из документации Codex (`provider-models.ts`).
+    models: CODEX_MODELS,
     runner: {
       // `codex [OPTIONS] [PROMPT]`: стартовый промпт — позиционный аргумент.
       // MCP-серверы codex берёт из `~/.codex/config.toml`; свой сервер добавляем
@@ -350,13 +356,17 @@ export const supportsEffort = (entry: ProviderEntry): boolean =>
   (entry.runner.args ?? []).some((item) => item.includes('{effort}'));
 
 /**
- * Закрытый список моделей для окна: только из записи реестра (то есть из `providers.json`) и
- * только если шаблон запуска вообще принимает модель. `null` — списка нет: документация
- * Claude Code и Codex его не даёт, `--model` принимает и алиас, и полное имя.
+ * Список моделей для окна: из записи реестра (встроенный или из `providers.json`) и только если
+ * шаблон запуска вообще принимает модель. `null` — списка нет: окно контрол не показывает, а хост
+ * принимает любое значение по прежнему правилу. Отдаётся копия: ответ уходит по проводу, и правка
+ * получателем не должна доходить до реестра.
  */
-export function selectableModels(entry: ProviderEntry): string[] | null {
-  if (!supportsModel(entry) || entry.models === undefined || entry.models.length === 0) return null;
-  return [...entry.models];
+export function selectableModels(entry: ProviderEntry): ModelOption[] | null {
+  const list = entry.models;
+  if (!supportsModel(entry) || list === undefined || list === null || list.length === 0) {
+    return null;
+  }
+  return list.map((model) => ({ ...model }));
 }
 
 /**
@@ -440,7 +450,11 @@ export interface ProviderOverride {
   resumeArgs?: string[];
   printArgs?: string[];
   mcpConfig?: McpConfigKind;
-  models?: string[];
+  /**
+   * Свой список моделей вместо встроенного, целиком (как `args`); `[]` убирает список. Элемент —
+   * пара `{ id, label }`; `id` — одно слово, не с дефиса, до 200 знаков, и в списке не повторяется.
+   */
+  models?: ModelOption[];
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -448,6 +462,29 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const isStrings = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((item) => typeof item === 'string');
+
+const isNonEmptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value !== '';
+
+/**
+ * Значение `--model`: одно слово, не с дефиса (CLI принял бы его за флаг) и не длиннее 200 знаков —
+ * то же правило, что у `sessions.create.model` в protocol (тест хоста сверяет их между собой).
+ * Слабее нельзя: список с таким значением загрузился бы, окно его показало бы, а `sessions.create`
+ * с ним всегда падал бы на схеме.
+ */
+const MODEL_ID = /^[^\s-]\S*$/;
+const MODEL_ID_MAX_LENGTH = 200;
+const isModelId = (value: unknown): value is string =>
+  typeof value === 'string' && value.length <= MODEL_ID_MAX_LENGTH && MODEL_ID.test(value);
+
+const isModelEntry = (value: unknown): value is ModelOption =>
+  isRecord(value) && isModelId(value['id']) && isNonEmptyString(value['label']);
+
+/** Список пар без повторов `id`: два одинаковых окну не различить, а хост принял бы любое из них. */
+const isModelList = (value: unknown): value is ModelOption[] =>
+  Array.isArray(value) &&
+  value.every(isModelEntry) &&
+  new Set(value.map((model) => model.id)).size === value.length;
 
 function checkShape(id: string, file: string, patch: Record<string, unknown>): void {
   const wrong =
@@ -461,7 +498,7 @@ function checkShape(id: string, file: string, patch: Record<string, unknown>): v
     (patch['args'] !== undefined && !isStrings(patch['args'])) ||
     (patch['resumeArgs'] !== undefined && !isStrings(patch['resumeArgs'])) ||
     (patch['printArgs'] !== undefined && !isStrings(patch['printArgs'])) ||
-    (patch['models'] !== undefined && !isStrings(patch['models'])) ||
+    (patch['models'] !== undefined && !isModelList(patch['models'])) ||
     (patch['mcpConfig'] !== undefined &&
       patch['mcpConfig'] !== 'json-file' &&
       patch['mcpConfig'] !== 'codex-override');
@@ -491,7 +528,11 @@ function applyOverride(
   if (printArgs !== undefined) runner.printArgs = printArgs;
   if (mcpConfig !== undefined) runner.mcpConfig = mcpConfig;
 
-  const models = patch.models ?? base?.models;
+  // Из файла в запись ложатся свои копии пар, а не объекты разобранного JSON.
+  const models =
+    patch.models === undefined
+      ? base?.models
+      : patch.models.map((model) => ({ id: model.id, label: model.label }));
   return {
     id,
     label,

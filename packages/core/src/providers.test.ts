@@ -349,26 +349,102 @@ describe('модель и усилие новой сессии (дизайн к�
     expect(supportsEffort(PROVIDERS.glm)).toBe(false);
   });
 
-  it('закрытого списка моделей у встроенных провайдеров нет: документация его не даёт', () => {
-    for (const entry of Object.values(PROVIDERS)) expect(selectableModels(entry)).toBeNull();
+  describe('списки моделей встроенных провайдеров (открытая документация, проверено 2026-09-29)', () => {
+    // Литералы, а не импорт констант: тест держит таблицу из отчёта куска 3b. Порядок — как в источнике.
+    const CLAUDE = [
+      { id: 'best', label: 'Best' },
+      { id: 'fable', label: 'Fable' },
+      { id: 'sonnet', label: 'Sonnet' },
+      { id: 'opus', label: 'Opus' },
+      { id: 'haiku', label: 'Haiku' },
+      { id: 'sonnet[1m]', label: 'Sonnet (1M context)' },
+      { id: 'opus[1m]', label: 'Opus (1M context)' },
+      { id: 'opusplan', label: 'Opus Plan' },
+      { id: 'opusplan[1m]', label: 'Opus Plan (1M context)' },
+    ];
+    const CODEX = [
+      { id: 'gpt-6-astra', label: 'GPT-6 Astra' },
+      { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' },
+      { id: 'gpt-6-sol', label: 'GPT-6 Sol' },
+      { id: 'gpt-6-luna', label: 'GPT-6 Luna' },
+    ];
+
+    it('у claude и codex списки непустые и совпадают с таблицей отчёта; у glm списка нет', () => {
+      expect(selectableModels(PROVIDERS.claude)).toEqual(CLAUDE);
+      expect(selectableModels(PROVIDERS.codex)).toEqual(CODEX);
+      expect(selectableModels(PROVIDERS.glm)).toBeNull();
+    });
+
+    /** Список провайдера; его отсутствие — провал теста, а не пустой обход, который прошёл бы впустую. */
+    const listOf = (entry: ProviderEntry): NonNullable<ReturnType<typeof selectableModels>> => {
+      const list = selectableModels(entry);
+      if (list === null) throw new Error(`у ${entry.id} нет списка моделей`);
+      return list;
+    };
+
+    it('«по умолчанию» — не запись списка, а отсутствие выбора: значения default там нет', () => {
+      // `default` у Claude Code — «сбросить выбор», документация сама говорит, что это не модель.
+      for (const entry of [PROVIDERS.claude, PROVIDERS.codex]) {
+        const ids = listOf(entry).map((model) => model.id);
+        expect(ids).not.toContain('default');
+        expect(ids).not.toContain('');
+      }
+    });
+
+    it('id — одно слово без дефиса впереди (иначе CLI принял бы его за флаг), id и подписи не повторяются', () => {
+      for (const entry of [PROVIDERS.claude, PROVIDERS.codex]) {
+        const list = listOf(entry);
+        for (const model of list) {
+          expect(model.id).toMatch(/^[^\s-]\S*$/);
+          expect(model.label).not.toBe('');
+        }
+        expect(new Set(list.map((model) => model.id)).size).toBe(list.length);
+        expect(new Set(list.map((model) => model.label)).size).toBe(list.length);
+      }
+    });
+
+    it('каждое значение списка доезжает до команды парой --model <id>', () => {
+      for (const entry of [PROVIDERS.claude, PROVIDERS.codex]) {
+        for (const model of listOf(entry)) {
+          const { args } = startCommand(entry, { model: model.id, prompt: 'бриф' });
+          expect(args[args.indexOf('--model') + 1]).toBe(model.id);
+          expect(args.filter((arg) => arg === '--model')).toHaveLength(1);
+        }
+      }
+    });
+
+    it('окну отдаётся копия: правка ответа встроенный реестр не меняет', () => {
+      const list = selectableModels(PROVIDERS.claude);
+      if (list === null || list[0] === undefined) throw new Error('у claude нет списка');
+      list[0].label = 'испорчено';
+      list.pop();
+
+      expect(selectableModels(PROVIDERS.claude)).toEqual(CLAUDE);
+    });
   });
 
-  it('список из providers.json отдаётся, только если шаблон запуска принимает модель', () => {
-    const custom = (args: string[], models?: string[]): ProviderEntry => ({
+  it('список из записи реестра отдаётся, только если шаблон запуска принимает модель', () => {
+    const models = [
+      { id: 'a', label: 'А' },
+      { id: 'b', label: 'Б' },
+    ];
+    const custom = (args: string[], list?: typeof models | null): ProviderEntry => ({
       id: 'мой',
       label: 'Мой',
       mark: 'Мо',
       hasHistory: false,
       linkBy: 'cwd+time',
       runner: { command: 'мой', args },
-      ...(models === undefined ? {} : { models }),
+      ...(list === undefined ? {} : { models: list }),
     });
 
-    expect(selectableModels(custom(['--model', '{model}', '{prompt}'], ['a', 'b']))).toEqual(['a', 'b']);
+    expect(selectableModels(custom(['--model', '{model}', '{prompt}'], models))).toEqual(models);
     // Список без флага в шаблоне окну не нужен: выбранная модель до команды не доехала бы.
-    expect(selectableModels(custom(['{prompt}'], ['a', 'b']))).toBeNull();
+    expect(selectableModels(custom(['{prompt}'], models))).toBeNull();
     // Пустой список — не список.
     expect(selectableModels(custom(['--model', '{model}'], []))).toBeNull();
+    // `null` и отсутствие поля — одно и то же: списка нет.
+    expect(selectableModels(custom(['--model', '{model}'], null))).toBeNull();
     expect(selectableModels(custom(['--model', '{model}']))).toBeNull();
   });
 
@@ -380,7 +456,10 @@ describe('модель и усилие новой сессии (дизайн к�
       hasHistory: false,
       linkBy: 'cwd+time',
       runner: { command: 'мой', args },
-      models: ['a', 'b'],
+      models: [
+        { id: 'a', label: 'А' },
+        { id: 'b', label: 'Б' },
+      ],
     });
 
     it('{model} — только целым элементом: «--model={model}» модель не принимает и списка не даёт', () => {
@@ -395,7 +474,10 @@ describe('модель и усилие новой сессии (дизайн к�
       expect(selectableModels(inline)).toBeNull();
       // Целым элементом — принимает, и список отдаётся.
       expect(supportsModel(custom(['--model', '{model}']))).toBe(true);
-      expect(selectableModels(custom(['--model', '{model}']))).toEqual(['a', 'b']);
+      expect(selectableModels(custom(['--model', '{model}']))).toEqual([
+        { id: 'a', label: 'А' },
+        { id: 'b', label: 'Б' },
+      ]);
     });
 
     it('{effort} можно и внутри строки: его там подставляют, поэтому усилие провайдер принимает', () => {
@@ -551,22 +633,107 @@ describe('переопределения из HARNAS_HOME/providers.json', () =>
     });
   });
 
-  it('models — список строк: ложится в запись, переживает merge и не мутирует встроенный реестр', async () => {
-    await write({ codex: { models: ['gpt-5.5', 'gpt-5.5-mini'] } });
-    const registry = await loadProviders();
+  describe('models: свой список моделей для окна', () => {
+    const NEW = [
+      { id: 'my-new-model', label: 'Моя новая' },
+      { id: 'gpt-6-sol', label: 'Sol, как назвал я' },
+    ];
 
-    expect(registry['codex']?.models).toEqual(['gpt-5.5', 'gpt-5.5-mini']);
-    expect(selectableModels(registry['codex'] as ProviderEntry)).toEqual(['gpt-5.5', 'gpt-5.5-mini']);
-    expect(registry['codex']?.runner.args).toEqual(PROVIDERS.codex.runner.args);
-    expect(PROVIDERS.codex.models).toBeUndefined();
-    expect(registry['claude']?.models).toBeUndefined();
-  });
+    it('список из пар id и label заменяет встроенный целиком, а не дополняет его', async () => {
+      await write({ codex: { models: NEW } });
+      const registry = await loadProviders();
 
-  it('models не списком строк — ошибка', async () => {
-    await write({ claude: { models: 'opus' } });
-    await expect(loadProviders()).rejects.toThrow(/claude/);
-    await write({ claude: { models: ['opus', 1] } });
-    await expect(loadProviders()).rejects.toThrow(/claude/);
+      expect(selectableModels(registry['codex'] as ProviderEntry)).toEqual(NEW);
+      // Прочее у записи не тронуто, а встроенный реестр и соседи остались при своих списках.
+      expect(registry['codex']?.runner.args).toEqual(PROVIDERS.codex.runner.args);
+      expect(selectableModels(PROVIDERS.codex)?.map((model) => model.id)).toEqual([
+        'gpt-6-astra',
+        'gpt-6.1-sol',
+        'gpt-6-sol',
+        'gpt-6-luna',
+      ]);
+      expect(selectableModels(registry['claude'] as ProviderEntry)).toEqual(selectableModels(PROVIDERS.claude));
+    });
+
+    it('без поля models встроенный список остаётся: другие правки записи его не трогают', async () => {
+      await write({ claude: { command: '/opt/claude/bin/claude' } });
+      const registry = await loadProviders();
+
+      expect(selectableModels(registry['claude'] as ProviderEntry)).toEqual(selectableModels(PROVIDERS.claude));
+    });
+
+    it('пустой список убирает встроенный: у провайдера списка больше нет', async () => {
+      await write({ claude: { models: [] } });
+      const registry = await loadProviders();
+
+      expect(selectableModels(registry['claude'] as ProviderEntry)).toBeNull();
+      expect(selectableModels(PROVIDERS.claude)).not.toBeNull();
+    });
+
+    it('свой провайдер приходит со списком пар', async () => {
+      const models = [
+        { id: 'fast', label: 'Быстрая' },
+        { id: 'slow', label: 'Медленная' },
+      ];
+      await write({
+        smart: { badge: 'Smart', command: 'smart', args: ['--m', '{model}', '{prompt}'], models },
+      });
+      const registry = await loadProviders();
+
+      expect(selectableModels(registry['smart'] as ProviderEntry)).toEqual(models);
+    });
+
+    it('форма записи: не список пар, пустой id или подпись, чужие типы — ошибка; строки вместо пар нет', async () => {
+      const wrong: unknown[] = [
+        'opus',
+        { id: 'opus', label: 'Opus' },
+        ['opus'],
+        ['opus', { id: 'slow', label: 'Медленная' }],
+        ['opus', 1],
+        [null],
+        [''],
+        [{ id: 'a' }],
+        [{ label: 'А' }],
+        [{ id: '', label: 'А' }],
+        [{ id: 'a', label: '' }],
+        [{ id: 'a', label: 3 }],
+        [['a', 'А']],
+      ];
+      for (const models of wrong) {
+        await write({ claude: { models } });
+        await expect(loadProviders(), JSON.stringify(models)).rejects.toThrow(/claude/);
+      }
+    });
+
+    it('id проверяется правилом схемы sessions.create: одно слово, не с дефиса, до 200 знаков', async () => {
+      // Иначе список загрузился бы, окно показало бы значение, а `sessions.create` с ним падал бы на схеме.
+      const wrongIds = ['my model', 'my\tmodel', ' opus', 'opus ', '-opus', '--model', 'x'.repeat(201)];
+      for (const id of wrongIds) {
+        await write({ claude: { models: [{ id, label: 'Х' }] } });
+        await expect(loadProviders(), JSON.stringify(id)).rejects.toThrow(
+          /claude.*неожиданная форма записи/,
+        );
+      }
+
+      // Границы допустимого: скобки и точка внутри значения, дефис не впереди, ровно 200 знаков.
+      const rightIds = ['sonnet[1m]', 'gpt-6.1-sol', 'a-b', 'x'.repeat(200)];
+      await write({ claude: { models: rightIds.map((id) => ({ id, label: 'Х' })) } });
+      const registry = await loadProviders();
+      expect(registry['claude']?.models?.map((model) => model.id)).toEqual(rightIds);
+    });
+
+    it('повтор id в одном списке — ошибка: окно не различило бы две строки, а хост принял бы любую', async () => {
+      await write({
+        codex: {
+          models: [
+            { id: 'a', label: 'А' },
+            { id: 'b', label: 'Б' },
+            { id: 'a', label: 'Ещё А' },
+          ],
+        },
+      });
+      await expect(loadProviders()).rejects.toThrow(/codex.*неожиданная форма записи/);
+    });
   });
 
   it('чужая форма записи — ошибка', async () => {
