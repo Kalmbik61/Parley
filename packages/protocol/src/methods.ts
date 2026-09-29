@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { HarnasConfig, MergeCheck, MergeResult, ProjectChanges, WorktreeDiff } from '@harnas/core';
-import type { SendResult, SessionRef, WorksSnapshot } from './types.js';
+import type { ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 export const sessionRef = z.object({
   projectPath: z.string(),
@@ -175,6 +175,12 @@ export interface Results {
       effort?: boolean;
       /** Версия CLI из пробы на старте хоста; `null` — не узнали. */
       version?: string | null;
+      /**
+       * Лимиты подписки провайдера (спека комнат Organic, 3.5) — только из того, что отдают сами CLI.
+       * `null` — данных нет или окна уже сбросились. Необязательно, как три поля выше, по той же причине.
+       * Дальше числа приходят событием `providers.limitsChanged`.
+       */
+      limits?: ProviderLimits | null;
     }>;
   };
   'works.list': WorksSnapshot;

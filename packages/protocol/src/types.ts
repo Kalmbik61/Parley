@@ -1,5 +1,11 @@
 import type { WorkEntry } from '@harnas/core';
 
+/**
+ * Лимиты подписки провайдера (спека комнат Organic, 3.5): пятичасовое и недельное окна и время, когда
+ * CLI отдал числа. Типы живут в core — их же разбирают читатели логов, — а по проводу ходят как есть.
+ */
+export type { LimitWindow, ProviderLimits } from '@harnas/core';
+
 /** Адрес сессии: без него не различить два «work-01» в разных проектах. */
 export interface SessionRef {
   projectPath: string;

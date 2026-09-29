@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { METHODS, NOTIFICATIONS } from './methods.js';
 import type { Params, Result } from './methods.js';
+import type { ProviderLimits } from './types.js';
 
 describe('типы методов', () => {
   it('у Params<sessions.create> поле workId имеет тип string | null', () => {
@@ -230,7 +231,7 @@ describe('модель, усилие и поля providers.list (дизайн к
     expect(parse({ model: 'м'.repeat(201) }).success).toBe(false);
   });
 
-  it('providers.list: models, effort и version необязательны — хост, переживший окно, их не знает', () => {
+  it('providers.list: models, effort, version и limits необязательны — хост, переживший окно, их не знает', () => {
     expectTypeOf<Result<'providers.list'>['providers'][number]>().toEqualTypeOf<{
       id: string;
       label: string;
@@ -238,6 +239,7 @@ describe('модель, усилие и поля providers.list (дизайн к
       models?: string[] | null;
       effort?: boolean;
       version?: string | null;
+      limits?: ProviderLimits | null;
     }>();
     // Хост до дизайна комнат отдаёт элементы без новых полей — тип обязан это допускать.
     const legacy: Result<'providers.list'> = { providers: [{ id: 'claude', label: 'Claude', available: true }] };
