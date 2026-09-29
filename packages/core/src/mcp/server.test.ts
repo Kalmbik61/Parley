@@ -16,10 +16,11 @@ import {
   setResult,
   transitionSession,
 } from '../work/map.js';
+import { PROPOSAL_TEXT_MAX, resolveProposal } from '../work/proposals.js';
 import { addRoom } from '../work/rooms.js';
 import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
 import { decisionsOf, threadOf } from '../work/thread.js';
-import type { WorkMap } from '../work/types.js';
+import { HUMAN, type WorkMap } from '../work/types.js';
 import { contextFromEnv } from './context.js';
 import type { Ring } from './inbox-watch.js';
 import {
@@ -201,7 +202,7 @@ describe('contextFromEnv', () => {
 });
 
 describe('список инструментов', () => {
-  it('ровно десять инструментов спецификации', async () => {
+  it('ровно одиннадцать инструментов спецификации', async () => {
     const client = await connect('s-01');
     const { tools } = await client.listTools();
 
@@ -210,6 +211,7 @@ describe('список инструментов', () => {
       'close_session',
       'create_room',
       'get_map',
+      'propose_decision',
       'read_guide',
       'read_room',
       'report',
@@ -218,6 +220,46 @@ describe('список инструментов', () => {
       'wait_for',
     ]);
     expect(tools.every((tool) => (tool.description ?? '') !== '')).toBe(true);
+  });
+
+  it('propose_decision: room и text обязательны, описание — про ведущего, ожидание человека и повтор', async () => {
+    const client = await connect('s-01');
+    const { tools } = await client.listTools();
+    const propose = tools.find((tool) => tool.name === 'propose_decision');
+
+    expect(propose?.inputSchema.required).toEqual(['room', 'text']);
+    expect(Object.keys(propose?.inputSchema.properties ?? {}).sort()).toEqual(['room', 'text']);
+    // Тон соседних описаний: только ведущий, решение ждёт человека, повтор заменяет, ответ — письмом.
+    expect(propose?.description).toMatch(/только ведущий/i);
+    expect(propose?.description).toMatch(/ждёт (ответа )?человека/);
+    expect(propose?.description).toMatch(/заменя/);
+    expect(propose?.description).toMatch(/письм/);
+    // Предел текста в схеме — та же константа, что держит setProposal.
+    expect(JSON.stringify(propose?.inputSchema.properties?.['text'])).toContain(
+      String(PROPOSAL_TEXT_MAX),
+    );
+  });
+
+  it('read_guide: описание называет комнаты и роли ведущего и участника', async () => {
+    const client = await connect('s-01');
+    const { tools } = await client.listTools();
+    const guide = tools.find((tool) => tool.name === 'read_guide');
+
+    expect(guide?.description).toMatch(/комнаты и роли в них \(ведущий, участник\)/);
+  });
+
+  it('create_room: lead необязателен, описание называет ведущего по умолчанию', async () => {
+    const client = await connect('s-01');
+    const { tools } = await client.listTools();
+    const createRoom = tools.find((tool) => tool.name === 'create_room');
+
+    expect(createRoom?.inputSchema.required).toEqual(['title', 'members']);
+    expect(Object.keys(createRoom?.inputSchema.properties ?? {}).sort()).toEqual([
+      'lead',
+      'members',
+      'title',
+    ]);
+    expect(createRoom?.description).toMatch(/ведущ/);
   });
 
   it('описание get_map отсылает ко второму слою гида', async () => {
@@ -312,6 +354,7 @@ describe('без HARNAS_SESSION_ID', () => {
       call(client, 'check_inbox'),
       call(client, 'create_room', { title: 'x', members: ['s-01'] }),
       call(client, 'read_room', { room: 'r-01' }),
+      call(client, 'propose_decision', { room: 'r-01', text: 'решение' }),
       call(client, 'close_session', { target: 's-01' }),
     ];
 
@@ -810,6 +853,238 @@ describe('create_room', () => {
     expect(result.isError).toBe(true);
     expect(result.text).toContain('s-02');
     expect((await readMapFile()).rooms).toEqual([]);
+  });
+});
+
+describe('create_room: ведущий', () => {
+  /** s-01 — вызывающий; s-02 и s-03 заведены заранее. */
+  async function withColleagues(): Promise<Client> {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
+    return client;
+  }
+
+  it('без lead ведущий — сам вызывающий, а не первый из members', async () => {
+    const client = await withColleagues();
+    await callOk(client, 'create_room', { title: 'бэкенд', members: ['s-02', 's-03'] });
+
+    const room = (await readMapFile()).rooms[0];
+    expect(room?.lead).toBe('s-01');
+    expect(room?.creator).toBe('s-01');
+    expect(room?.members).toEqual(['s-02', 's-03']);
+  });
+
+  it('lead из members — ведущий он, создатель остаётся создателем', async () => {
+    const client = await withColleagues();
+    await callOk(client, 'create_room', {
+      title: 'бэкенд',
+      members: ['s-02', 's-03'],
+      lead: 's-03',
+    });
+
+    const room = (await readMapFile()).rooms[0];
+    expect(room?.lead).toBe('s-03');
+    expect(room?.creator).toBe('s-01');
+  });
+
+  it('lead — сам вызывающий, названный явно', async () => {
+    const client = await withColleagues();
+    await callOk(client, 'create_room', { title: 'бэкенд', members: ['s-02'], lead: 's-01' });
+
+    expect((await readMapFile()).rooms[0]?.lead).toBe('s-01');
+  });
+
+  it('lead не из круга комнаты — ошибка, комнаты и писем нет, номер комнаты не потрачен', async () => {
+    const client = await withColleagues();
+
+    // s-03 есть в работе, но в комнату не входит; человек ведущим быть не может; s-77 нет вовсе.
+    for (const lead of ['s-03', HUMAN, 's-77']) {
+      const refused = await call(client, 'create_room', {
+        title: 'бэкенд',
+        members: ['s-02'],
+        lead,
+      });
+      expect(refused.isError, lead).toBe(true);
+      expect(refused.text, lead).toContain(lead);
+    }
+    const map = await readMapFile();
+    expect(map.rooms).toEqual([]);
+    expect(map.messages).toEqual([]);
+    expect(await callOk(client, 'create_room', { title: 'бэкенд', members: ['s-02'] })).toEqual({
+      roomId: 'r-01',
+    });
+  });
+});
+
+describe('propose_decision', () => {
+  /** Комната r-01 создана s-01 (ведущий по умолчанию) с s-02 и s-03; приглашения забраны. */
+  async function leadRoom(): Promise<{ lead: Client; a: Client; b: Client }> {
+    const lead = await connect('s-01');
+    await callOk(lead, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await callOk(lead, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
+    await callOk(lead, 'create_room', { title: 'комната', members: ['s-02', 's-03'] });
+    const a = await connect('s-02');
+    const b = await connect('s-03');
+    await callOk(a, 'check_inbox');
+    await callOk(b, 'check_inbox');
+    return { lead, a, b };
+  }
+
+  /** Карта как есть на диске: после отказа она должна совпасть байт в байт. */
+  const rawMap = (): Promise<string> => readFile(workPaths(project, workId).map, 'utf8');
+
+  it('ведущий: { proposalId, rev: 0 }, решение лежит в слоте комнаты', async () => {
+    const { lead } = await leadRoom();
+    const result = await callOk(lead, 'propose_decision', {
+      room: 'r-01',
+      text: 'Делаем через очередь.',
+    });
+
+    expect(result).toEqual({ proposalId: 'p-01', rev: 0 });
+    const proposal = (await readMapFile()).rooms[0]?.proposal;
+    expect(proposal).toMatchObject({
+      id: 'p-01',
+      from: 's-01',
+      text: 'Делаем через очередь.',
+      rev: 0,
+    });
+  });
+
+  it('повтор до ответа человека — тот же proposalId, rev 1, текст заменён', async () => {
+    const { lead } = await leadRoom();
+    await callOk(lead, 'propose_decision', { room: 'r-01', text: 'первая редакция' });
+    const again = await callOk(lead, 'propose_decision', { room: 'r-01', text: 'вторая редакция' });
+
+    expect(again).toEqual({ proposalId: 'p-01', rev: 1 });
+    const proposal = (await readMapFile()).rooms[0]?.proposal;
+    expect(proposal).toMatchObject({ id: 'p-01', text: 'вторая редакция', rev: 1 });
+  });
+
+  it('после ответа человека новое решение — новый proposalId и rev 0', async () => {
+    const { lead } = await leadRoom();
+    await callOk(lead, 'propose_decision', { room: 'r-01', text: 'раз' });
+    await updateMap(project, workId, (map) => {
+      resolveProposal(map, 'r-01', 'p-01', 'return', { note: 'мало' });
+    });
+
+    expect(await callOk(lead, 'propose_decision', { room: 'r-01', text: 'два' })).toEqual({
+      proposalId: 'p-02',
+      rev: 0,
+    });
+  });
+
+  it('не ведущий — ошибка, карта не изменилась', async () => {
+    const { a } = await leadRoom();
+    const before = await rawMap();
+
+    const refused = await call(a, 'propose_decision', { room: 'r-01', text: 'я тоже хочу' });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toMatch(/не ведущий/);
+    expect(await rawMap()).toBe(before);
+  });
+
+  it('сессия не из комнаты — тоже не ведущий', async () => {
+    const { lead } = await leadRoom();
+    await callOk(lead, 'spawn_session', { provider: 'claude', label: 'сторонний', task: 'делать' }); // s-04
+    const stranger = await connect('s-04');
+    const before = await rawMap();
+
+    const refused = await call(stranger, 'propose_decision', { room: 'r-01', text: 'а можно?' });
+    expect(refused.isError).toBe(true);
+    expect(await rawMap()).toBe(before);
+  });
+
+  it('закрытая комната (нет живых участников) — ошибка, карта не изменилась', async () => {
+    const { lead } = await leadRoom();
+    await callOk(lead, 'close_session', { target: 's-02' });
+    await callOk(lead, 'close_session', { target: 's-03' });
+    await callOk(lead, 'close_session', { target: 's-01' });
+    const before = await rawMap();
+
+    const refused = await call(lead, 'propose_decision', { room: 'r-01', text: 'решение' });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toMatch(/закрыта/);
+    expect(await rawMap()).toBe(before);
+  });
+
+  it('ведущий — живой ведущий: ушёл назначенный — решение приносит первый живой участник', async () => {
+    const { lead, a, b } = await leadRoom();
+    await callOk(lead, 'close_session', { target: 's-01' });
+
+    const closedLead = await call(lead, 'propose_decision', { room: 'r-01', text: 'из могилы' });
+    expect(closedLead.isError).toBe(true);
+    const thirdInLine = await call(b, 'propose_decision', { room: 'r-01', text: 'я третий' });
+    expect(thirdInLine.isError).toBe(true);
+    expect(await callOk(a, 'propose_decision', { room: 'r-01', text: 'веду я' })).toEqual({
+      proposalId: 'p-01',
+      rev: 0,
+    });
+  });
+
+  it('комната человека: ведущий — назначенный, ни создатель-человек, ни первый участник', async () => {
+    const { a, b } = await leadRoom();
+    await updateMap(project, workId, (map) => {
+      addRoom(map, { title: 'штаб', creator: HUMAN, members: ['s-02', 's-03'], lead: 's-03' });
+    });
+
+    const refused = await call(a, 'propose_decision', { room: 'r-02', text: 'первый участник' });
+    expect(refused.isError).toBe(true);
+    expect(await callOk(b, 'propose_decision', { room: 'r-02', text: 'назначенный' })).toEqual({
+      proposalId: 'p-01',
+      rev: 0,
+    });
+  });
+
+  it('комната старой карты (lead: null): ведущий — первый из участников', async () => {
+    const { lead, a } = await leadRoom();
+    await updateMap(project, workId, (map) => {
+      addRoom(map, { title: 'старая', creator: HUMAN, members: ['s-02', 's-03'] });
+    });
+
+    expect((await call(lead, 'propose_decision', { room: 'r-02', text: 'x' })).isError).toBe(true);
+    expect(await callOk(a, 'propose_decision', { room: 'r-02', text: 'x' })).toEqual({
+      proposalId: 'p-01',
+      rev: 0,
+    });
+  });
+
+  it('пустой и слишком длинный текст — ошибка, карта не изменилась', async () => {
+    const { lead } = await leadRoom();
+    const before = await rawMap();
+
+    for (const text of ['', '   \n ', 'я'.repeat(PROPOSAL_TEXT_MAX + 1)]) {
+      const refused = await call(lead, 'propose_decision', { room: 'r-01', text });
+      expect(refused.isError, JSON.stringify(text.slice(0, 8))).toBe(true);
+    }
+    expect(await rawMap()).toBe(before);
+  });
+
+  it('комнаты нет — ошибка; без room или text — ошибка с именем аргумента', async () => {
+    const { lead } = await leadRoom();
+    const before = await rawMap();
+
+    const missingRoom = await call(lead, 'propose_decision', { room: 'r-77', text: 'решение' });
+    expect(missingRoom.isError).toBe(true);
+    expect(missingRoom.text).toContain('r-77');
+
+    const noRoom = await call(lead, 'propose_decision', { text: 'решение' });
+    expect(noRoom.isError).toBe(true);
+    expect(noRoom.text).toContain('room');
+    const noText = await call(lead, 'propose_decision', { room: 'r-01' });
+    expect(noText.isError).toBe(true);
+    expect(noText.text).toContain('text');
+    expect(await rawMap()).toBe(before);
+  });
+
+  it('решение — слот, а не письмо: лента не растёт, участникам ничего не приходит', async () => {
+    const { lead, a } = await leadRoom();
+    const messagesBefore = (await readMapFile()).messages.length;
+
+    await callOk(lead, 'propose_decision', { room: 'r-01', text: 'решение' });
+
+    expect((await readMapFile()).messages).toHaveLength(messagesBefore);
+    expect(await callOk(a, 'check_inbox')).toEqual({ messages: [] });
   });
 });
 

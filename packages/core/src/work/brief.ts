@@ -1,9 +1,9 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { isMember } from './rooms.js';
+import { isMember, liveLead } from './rooms.js';
 import { displayStatus } from './status-view.js';
 import { workPaths } from './store.js';
-import { decisionsOf, participantLabel, threadOf } from './thread.js';
+import { decisionsOf, participantLabel, sessionMention, threadOf } from './thread.js';
 import { HUMAN, type WorkMap, type WorkSession } from './types.js';
 
 /**
@@ -15,6 +15,23 @@ const RULES = [
   'Письма коллег приходят сами; на `question` отвечай тому, кто спросил, через `send_message`, и не заканчивай ход с неотвеченным вопросом; на `note` и `decision` не отвечай; договорённость помечай одним письмом `kind: decision`.',
   'Перед завершением обязательно вызови `report` — иначе результат никуда не попадёт.',
 ];
+
+/**
+ * Роль в комнате (дизайн комнат, 2.4 и 3.3): ведущему — собрать позиции, предложить решение и не
+ * начинать работу до принятия; участнику — высказаться, ждать свою часть и отчитаться ведущему. Пока
+ * решение ждёт, новое сообщение человека всем цикл не перезапускает: ни позиции заново, ни сбор заново;
+ * ведущий читает его как поправку к решению (меняет суть — повторный `propose_decision`, иначе ничего).
+ * Здесь только суть, подробности — в гиде: бриф нарочно короткий.
+ */
+const LEAD_ROLE =
+  'ты ведущий. Человек ставит в комнате задачу всем — собери позиции участников (каждый отвечает в комнате одним сообщением), предложи решение через `propose_decision` и до принятия работу не начинай. Пока решение ждёт (у комнаты в `get_map` `proposal` не `null`), новое сообщение человека всем — не новая задача: позиции заново не собирай. Такое сообщение — поправка к ждущему решению: если оно меняет суть, учти его и замени текст повторным `propose_decision`, иначе ничего не делай. Принято — раздай части упоминаниями вида `@s07`, возврат — переделай и предложи снова.';
+
+/**
+ * Участнику нужен его токен: по нему в раздаче частей он находит своё. Задача человека — не реплика
+ * коллеги: ответ нужен и на письмо вида `note`, иначе правило брифа «на `note` не отвечай» с ней спорит.
+ */
+const memberRole = (mention: string): string =>
+  `Человек ставит в комнате задачу всем — выскажись одним сообщением в комнату (отвечай, даже если его письмо — \`note\`), работу не начинай, пока ведущий не назвал твою часть (он раздаёт части упоминаниями, твоё — \`${mention}\`), сделав — отчитайся в комнате ведущему. Пока решение ждёт (у комнаты в \`get_map\` \`proposal\` не \`null\`), новое сообщение человека всем — не новая задача: позиции заново не пиши.`;
 
 /**
  * Время решения — местное и короткое: бриф читают рядом с человеком, которому
@@ -104,6 +121,28 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
       lines.push(`- ${room.id} «${room.title}»${composition}`);
     }
     lines.push('');
+  }
+
+  // Роль в комнате: состав выше говорит, кто рядом, но не кто собирает решение. Ведущий — `liveLead`, тот
+  // же, кому `setProposal` разрешит `propose_decision`: назначенный, пока жив, иначе первый живой участник.
+  // Закрытая комната (ведущего нет) роли не получает.
+  const roles = rooms.flatMap((room) => {
+    const lead = liveLead(map, room);
+    if (lead === null) return [];
+    const head = `- ${room.id} «${room.title}»: `;
+    if (lead === session.id) return [`${head}${LEAD_ROLE}`];
+    const name = `${lead} (${participantLabel(map, lead)})`;
+    return [`${head}ведущий — ${name}. ${memberRole(sessionMention(session.id))}`];
+  });
+  if (roles.length > 0) {
+    lines.push(
+      '## Роль в комнате',
+      '',
+      ...roles,
+      '',
+      'Подробности — в `read_guide`, раздел «Комнаты».',
+      '',
+    );
   }
 
   const decisions = decisionsOf(thread);

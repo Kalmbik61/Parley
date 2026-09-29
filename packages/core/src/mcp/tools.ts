@@ -15,6 +15,7 @@ import { GUIDE } from '../work/guide.js';
 import { unreadFor } from '../work/letters.js';
 import { addMessage, addSession, transitionSession } from '../work/map.js';
 import { finishSession } from '../work/metrics.js';
+import { PROPOSAL_TEXT_MAX, setProposal } from '../work/proposals.js';
 import { addRoom, isDescendant, isMember, joinNotice } from '../work/rooms.js';
 import { displayStatus } from '../work/status-view.js';
 import { readMap, updateMap, workPaths } from '../work/store.js';
@@ -304,7 +305,7 @@ const TOOLS: Tool[] = [
   {
     name: 'create_room',
     description:
-      'Заводит комнату — постоянный круг переписки для нескольких сессий, обычно своих подчинённых. Вызывающий становится создателем и участником; остальным участникам уходит письмо о добавлении.',
+      'Заводит комнату — постоянный круг переписки для нескольких сессий, обычно своих подчинённых. Вызывающий становится создателем и участником; остальным участникам уходит письмо о добавлении. Ведущий комнаты собирает позиции участников и приносит человеку решение (propose_decision): без lead ведущий — ты сам.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -313,6 +314,11 @@ const TOOLS: Tool[] = [
           type: 'array',
           description: 'Id сессий-участников из get_map; себя указывать не нужно.',
           items: { type: 'string' },
+        },
+        lead: {
+          type: 'string',
+          description:
+            'Id ведущего: твой или одного из members. Без него ведущий — ты; не из круга комнаты — ошибка, комната не создаётся.',
         },
       },
       required: ['title', 'members'],
@@ -332,6 +338,22 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'propose_decision',
+    description:
+      'Ведущий комнаты предлагает решение: оно ложится карточкой в окне и ждёт ответа человека — принять или вернуть на доработку. Только ведущий (get_map, поле lead комнаты); в закрытой комнате — ошибка. Зови, когда позиции участников собраны; работу до принятия не начинай. Повтор до ответа человека заменяет текст (тот же proposalId, rev + 1). Ответ придёт тебе письмом: принято — раздавай части, возврат — переделай и предложи снова.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        room: { type: 'string', description: 'Id комнаты из get_map.' },
+        text: {
+          type: 'string',
+          description: `Решение целиком, до ${PROPOSAL_TEXT_MAX} знаков: что делаем и какую часть берёт каждый; участников называй упоминаниями @s02.`,
+        },
+      },
+      required: ['room', 'text'],
+    },
+  },
+  {
     name: 'close_session',
     description:
       'Закрывает сессию насовсем: письма ей больше не приходят, будильник её не поднимает. Цель — сама сессия или её потомок. Зови только после явного согласия человека.',
@@ -346,7 +368,7 @@ const TOOLS: Tool[] = [
   {
     name: 'read_guide',
     description:
-      'Подробный гид по харнессу: сущности, жизненный цикл сессии, что класть в отчёт и артефакты, как ждать подчинённую сессию, чего не делать. Читай, когда коротких описаний не хватило.',
+      'Подробный гид по харнессу: сущности, жизненный цикл сессии, комнаты и роли в них (ведущий, участник), что класть в отчёт и артефакты, как ждать подчинённую сессию, чего не делать. Читай, когда коротких описаний не хватило.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
 ];
@@ -601,6 +623,7 @@ async function createRoom(
 ): Promise<unknown> {
   const title = stringArg(args, 'title');
   const membersInput = stringsArg(args, 'members');
+  const leadInput = optionalStringArg(args, 'lead');
 
   let roomId = '';
   await updateMap(context.projectPath, context.workId, (current) => {
@@ -615,7 +638,16 @@ async function createRoom(
       }
     }
 
-    const room = addRoom(current, { title, creator: sessionId, members });
+    // Без `lead` ведущий — вызывающий: агент заводит комнату для своих подчинённых и ведёт её сам
+    // (в handoff «Created by S01 · lead S01»). Правило «первый из members» (дизайн комнат, 3.1) — для
+    // `rooms.create` окна и старых карт, здесь оно отдало бы комнату подчинённому. Ведущего не из круга
+    // комнаты `addRoom` отвергает до выдачи номера: комнаты нет, номер не потрачен.
+    const room = addRoom(current, {
+      title,
+      creator: sessionId,
+      members,
+      lead: leadInput ?? sessionId,
+    });
     roomId = room.id;
     const notice = joinNotice(room, current);
     for (const memberId of members) {
@@ -644,6 +676,24 @@ async function readRoom(
     .sort((a, b) => a.at.localeCompare(b.at))
     .slice(-limit);
   return { messages: inRoom.map((message) => messageView(message, map)) };
+}
+
+async function proposeDecision(
+  context: McpContext,
+  sessionId: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const roomId = stringArg(args, 'room');
+  const text = stringArg(args, 'text');
+
+  let proposed = { proposalId: '', rev: 0 };
+  await updateMap(context.projectPath, context.workId, (current) => {
+    // Правила решения — ведущий, живая комната, длина текста — держит `setProposal`, здесь их не
+    // повторяем. Его `RoomRuleError` уходит агенту текстом ошибки, как у соседних инструментов, а
+    // исключение из мутатора не даёт `updateMap` записать карту: после отказа она не меняется.
+    proposed = setProposal(current, roomId, sessionId, text);
+  });
+  return proposed;
 }
 
 async function closeSession(
@@ -687,6 +737,7 @@ async function dispatch(
   if (name === 'check_inbox') return checkInbox(context, sessionId);
   if (name === 'create_room') return createRoom(context, sessionId, args);
   if (name === 'read_room') return readRoom(context, sessionId, args);
+  if (name === 'propose_decision') return proposeDecision(context, sessionId, args);
   if (name === 'close_session') return closeSession(context, sessionId, args);
   throw new Error(`неизвестный инструмент ${name}`);
 }
