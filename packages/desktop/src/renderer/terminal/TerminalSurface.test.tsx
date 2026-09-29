@@ -85,6 +85,14 @@ describe('TerminalSurface', () => {
     expect(root?.style.getPropertyValue('position-anchor')).toBe('--g-g-1');
   });
 
+  it('отступ терминала — как в прототипе (22 24 16 24): скругление листа 28 не срезает первые и последние ячейки', () => {
+    renderSurface();
+    // Отступ на обёртке, а не на контейнере xterm: FitAddon меряет родителя терминала.
+    const pad = screen.getByTestId('terminal-surface-pad');
+    for (const token of ['pt-[22px]', 'pr-6', 'pb-4', 'pl-6']) expect(pad.classList.contains(token), token).toBe(true);
+    expect(pad.classList.contains('p-1')).toBe(false);
+  });
+
   it('меню find само полосу не открывает', () => {
     renderSurface();
     act(() => bridge.emitMenu('find'));

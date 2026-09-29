@@ -455,9 +455,10 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
           }}
         />
       ) : null}
-      {/* Отступ 4px — на обёртке, а не на контейнере xterm: FitAddon меряет
-          родителя терминала и падинг контейнера не заметил бы (как в
-          `TerminalPanel.tsx`). Фон — фон темы xterm, а не `--card`. */}
+      {/* Отступ 22 24 16 24, как у терминала прототипа (Organic, 1.1): лист центра скруглён на 28 и режет
+          всё, что лежит у его углов, — при 4px первая строка и её рамки срезались бы дугой. Отступ — на
+          обёртке, а не на контейнере xterm: FitAddon меряет родителя терминала и падинг контейнера не
+          заметил бы (как в `TerminalPanel.tsx`). Фон — фон темы xterm, а не `--card`. */}
       <TerminalContextMenu
         bridge={bridge}
         terminal={terminal}
@@ -465,7 +466,7 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
         onFind={openSearch}
         onSplit={beginSplit}
       >
-        <div data-testid="terminal-surface-pad" className="min-h-0 flex-1 p-1" style={{ backgroundColor: xtermTheme(dark).background }}>
+        <div data-testid="terminal-surface-pad" className="min-h-0 flex-1 pb-4 pl-6 pr-6 pt-[22px]" style={{ backgroundColor: xtermTheme(dark).background }}>
           <div ref={setContainer} className="h-full w-full" />
         </div>
       </TerminalContextMenu>
