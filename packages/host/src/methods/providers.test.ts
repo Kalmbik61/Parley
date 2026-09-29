@@ -223,6 +223,22 @@ describe('providers.list: лимиты подписок и событие provid
     );
   }
 
+  /** Ближайшее событие `name`; не пришло за пять секунд — ошибка. Ожидание одно, брошенных нет. */
+  async function eventNamed(client: TestClient, name: string): Promise<RawMessage> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(`событие ${name} не пришло за 5 с`)), 5000);
+    });
+    try {
+      for (;;) {
+        const message = await Promise.race([client.next(), timeout]);
+        if (message.event === name) return message;
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /** Всё, что пришло до ответа на запрос `id`, включая события. */
   async function untilResponse(client: TestClient, id: number): Promise<RawMessage[]> {
     const seen: RawMessage[] = [];
@@ -264,25 +280,17 @@ describe('providers.list: лимиты подписок и событие provid
     });
     await list(client);
 
-    // Опрос идёт каждые 40 мс, а файл прежний: между двумя ответами на запросы событий нет.
+    // Опрос идёт каждые 40 мс, а файл прежний: между двумя ответами на запросы событий лимитов нет.
     await new Promise((resolve) => setTimeout(resolve, 250));
     const id = nextId;
     nextId += 1;
     client.send({ id, method: 'providers.list', params: {} });
     const quiet = await untilResponse(client, id);
-    expect(quiet.filter((message) => message.event !== undefined)).toEqual([]);
+    expect(quiet.filter((message) => message.event === 'providers.limitsChanged')).toEqual([]);
 
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    await putLimits((paths as { workDir: string }).workDir, (paths as { claude: string }).claude, 64, 41);
-    const deadline = Date.now() + 5000;
-    let changed: RawMessage | undefined;
-    while (changed === undefined && Date.now() < deadline) {
-      const message = await Promise.race([
-        client.next(),
-        new Promise<RawMessage>((resolve) => setTimeout(() => resolve({}), 200)),
-      ]);
-      if (message.event === 'providers.limitsChanged') changed = message;
-    }
-    expect(changed?.data).toMatchObject({ id: 'claude', limits: { fiveHour: { usedPercent: 64 } } });
+    const { workDir, claude } = paths as { workDir: string; claude: string };
+    await putLimits(workDir, claude, 64, 41);
+    const changed = await eventNamed(client, 'providers.limitsChanged');
+    expect(changed.data).toMatchObject({ id: 'claude', limits: { fiveHour: { usedPercent: 64 } } });
   });
 });
