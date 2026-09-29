@@ -27,6 +27,8 @@ const mapWithRoom = (): WorkMap => ({
       creator: 's-01',
       members: ['s-02', 's-03'],
       createdAt: '2026-09-26T10:00:00.000Z',
+      lead: null,
+      proposal: null,
     },
   ],
 });
@@ -116,7 +118,15 @@ describe('markHumanRead', () => {
   async function seed(): Promise<void> {
     await createWork(project, { title: 'почта' });
     await updateMap(project, 'w-0001', (map) => {
-      map.rooms.push({ id: 'r-01', title: 'r', creator: 's-01', members: ['s-02'], createdAt: OLD });
+      map.rooms.push({
+        id: 'r-01',
+        title: 'r',
+        creator: 's-01',
+        members: ['s-02'],
+        createdAt: OLD,
+        lead: null,
+        proposal: null,
+      });
       addMessage(map, { from: 's-01', to: [HUMAN], text: 'человеку' }); // m-01
       const both = addMessage(map, { from: 's-01', to: [HUMAN, 's-02'], text: 'обоим' }); // m-02
       both.readBy['s-02'] = OLD;
