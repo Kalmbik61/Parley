@@ -42,21 +42,23 @@ const message = (id: string, at: string, patch: Partial<Message> = {}): Message 
   ...patch,
 });
 
-/** Строка комнаты из настоящего `cardRows`: тесты берут ту же форму данных, что даёт карточка. */
-function roomRowOf(entry: WorkEntry, showClosed = false): CardRoomRow {
-  const found = cardRows(entry.map, showClosed).find((row): row is CardRoomRow => row.kind === 'room');
+/** Строка комнаты из настоящего `cardRows`: тесты берут ту же форму данных, что даёт карточка. Без `roomId` — первая. */
+function roomRowOf(entry: WorkEntry, showClosed = false, roomId?: string): CardRoomRow {
+  const found = cardRows(entry.map, showClosed).find((row): row is CardRoomRow => row.kind === 'room' && (roomId === undefined || row.room.id === roomId));
   if (found === undefined) throw new Error('строки комнаты нет');
   return found;
 }
 
 interface Options extends Partial<Omit<RoomRowProps, 'row'>> {
   showClosed?: boolean;
+  /** Какая из комнат карты — строка (по умолчанию первая). */
+  roomId?: string;
   /** Обработчик клика предка — карточки: строка комнаты не должна отдавать ему клики шеврона и участников. */
   onParentClick?: () => void;
 }
 
 function renderRow(entry: WorkEntry, options: Options = {}) {
-  const { showClosed, onParentClick, ...props } = options;
+  const { showClosed, roomId, onParentClick, ...props } = options;
   return render(
     <div onClick={onParentClick}>
       <RoomRow
@@ -64,7 +66,7 @@ function renderRow(entry: WorkEntry, options: Options = {}) {
         projectPath={PROJECT}
         workId={WORK}
         bridge={BRIDGE}
-        row={roomRowOf(entry, showClosed)}
+        row={roomRowOf(entry, showClosed, roomId)}
         unread={0}
         activity={{}}
         now={NOW}
@@ -117,6 +119,20 @@ const fourAgents = (roomPatch: Partial<Room> = {}, extra: { messages?: Message[]
     sessions: extra.sessions ?? sessions('s-01', 's-02', 's-03', 's-04'),
     rooms: [room(roomPatch)],
     messages: extra.messages ?? [],
+  });
+
+/**
+ * Старая карта (решение 4): s-02 числится в двух комнатах — в ранней r-01 и в поздней r-02, — а сайдбар ставит её в
+ * самую раннюю; у поздней «своя» только s-03.
+ */
+const oldMapTwoRooms = (): WorkEntry =>
+  makeWork(WORK, {
+    projectPath: PROJECT,
+    sessions: sessions('s-01', 's-02', 's-03'),
+    rooms: [
+      room({ id: 'r-02', members: ['s-02', 's-03'], lead: 's-03', createdAt: '2026-09-29T09:00:00.000Z' }),
+      room({ id: 'r-01', members: ['s-01', 's-02'], lead: 's-01', createdAt: '2026-09-29T08:00:00.000Z' }),
+    ],
   });
 
 describe('RoomRow — свёрнутая (1.2)', () => {
@@ -238,6 +254,21 @@ describe('RoomRow — свёрнутая (1.2)', () => {
     const closed = fourAgents({ members: ['s-01', 's-02'] }, { sessions: [makeSession('s-01', 'a', { lifecycle: 'closed' }), makeSession('s-02', 'b', { lifecycle: 'closed' })] });
     renderRow(closed);
     expect(header().getAttribute('title')).toBe('Room · S01, S02');
+  });
+
+  // Решение 4: агент старой карты, числящийся в двух комнатах, стоит в самой ранней — в бейдже и тултипе позднейшей
+  // его нет, иначе один и тот же агент считался бы в двух комнатах.
+  it('старая карта, сессия в двух комнатах: бейдж и тултип позднейшей комнаты считают только поставленных в неё', () => {
+    const entry = oldMapTwoRooms();
+    renderRow(entry, { roomId: 'r-01' });
+    expect(badges()[0]?.querySelector('[data-provider-count]')?.textContent).toBe('2');
+    expect(badges()[0]?.getAttribute('title')).toBe('2 Claude Code agents');
+    expect(header().getAttribute('title')).toBe('Room · lead S01 · S01, S02');
+    cleanup();
+    renderRow(entry, { roomId: 'r-02' });
+    expect(badges()[0]?.querySelector('[data-provider-count]')?.textContent).toBe('1');
+    expect(badges()[0]?.getAttribute('title')).toBe('1 Claude Code agent');
+    expect(header().getAttribute('title')).toBe('Room · lead S03 · S03');
   });
 
   it('у корня роль treeitem, aria-expanded и data-room-row; шеврон — настоящая кнопка', () => {
@@ -409,6 +440,17 @@ describe('RoomRow — фон и слово состояния (1.2)', () => {
     expect(rowEl().className).not.toContain('hover:[--work-sidebar-muted-foreground');
   });
 
+  it('развёрнутая — значок «нет процесса» участников на neutral-700 вместо --state-inactive (на стопках заливок в тёмной он ниже 3:1); свёрнутая токен не трогает', () => {
+    renderRow(fourAgents());
+    expect(rowEl().className).not.toContain('--state-inactive');
+    cleanup();
+    useUiStore.getState().setRoomExpanded(roomKey(KEY, 'r-01'), true);
+    renderRow(fourAgents());
+    expect(rowEl().className).toContain('[--state-inactive:var(--color-neutral-700)]');
+    // Подмена — на корне строки: её наследуют значки состояний строк участников (`bg-state-inactive` и родня).
+    expect(rowEl().querySelector('[role="group"] [data-testid="agent-state-dot"]')).not.toBeNull();
+  });
+
   it('вторичный текст шапки — токен сайдбара (`--work-sidebar-muted-foreground`), приглушаемый dimmed.css вместе с карточкой', () => {
     renderRow(fourAgents({}, { messages: [message('m-1', '2026-09-29T09:57:00.000Z')] }));
     const time = [...header().querySelectorAll<HTMLElement>('span')].find((span) => span.textContent === '3m');
@@ -442,6 +484,16 @@ describe('RoomRow — правило развёртывания 2.6', () => {
     showLayout(layoutOf([{ kind: 'room', id: 'room:r-02', roomId: 'r-02' }], 'room:r-02'));
     renderRow(fourAgents(), { active: true });
     expect(rowEl().getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('терминал сессии, что по старой карте числится и в этой комнате, но стоит в другой, эту не разворачивает', () => {
+    const entry = oldMapTwoRooms();
+    showLayout(layoutOf([terminalTab('s-02')], 'terminal:s-02'));
+    renderRow(entry, { active: true, roomId: 'r-02' });
+    expect(rowEl().getAttribute('aria-expanded')).toBe('false');
+    cleanup();
+    renderRow(entry, { active: true, roomId: 'r-01' });
+    expect(rowEl().getAttribute('aria-expanded')).toBe('true');
   });
 
   it('работа не активна — свёрнута, даже если в её раскладке открыта вкладка комнаты', () => {

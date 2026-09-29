@@ -1698,6 +1698,38 @@ describe('AppShell — показ архивных (тесты 6, 7 куска 6
     const layout = useLayoutStore.getState().layouts[keyOf('w-01')];
     expect(layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id))).toEqual([tabId.room('r-01')]);
   });
+
+  // Цели «следующей» — один список blocked → комната с решением → unseen по кругу от текущей вкладки (2.7): пока в
+  // работах есть blocked-сессия, клик не застревает на ней, а доходит до комнаты с решением (сцена dark-04).
+  it('blocked-сессия и комната с решением: «2 need you»; клики по счётчику идут терминал → комната → снова терминал', async () => {
+    const [waiting, other] = waitingWorks() as [WorkEntry, WorkEntry];
+    const ref = { projectPath: other.projectPath, workId: 'w-02', sessionId: 's-01' };
+    useActivityStore.setState({
+      byRef: {
+        [refKey(ref)]: {
+          ref,
+          activity: { activity: 'blocked', subagents: 0, turnEndedAt: null, lastEventAt: '2026-01-05T00:00:00.000Z', source: 'hooks', exited: false, hooksMissing: false },
+          metrics: null,
+        },
+      },
+    });
+    await renderShell([waiting, other]);
+    const segment = (): HTMLElement => document.querySelector('[data-attention-segment]') as HTMLElement;
+    expect(segment().textContent).toBe('2 need you');
+
+    fireEvent.click(segment());
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-02')]).toBe(true));
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
+    expect(activeTabOf(keyOf('w-02'))).toBe(tabId.terminal('s-01'));
+
+    fireEvent.click(segment());
+    await waitFor(() => expect(activeTabOf(keyOf('w-01'))).toBe(tabId.room('r-01')));
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
+
+    fireEvent.click(segment());
+    await waitFor(() => expect(activeTabOf(keyOf('w-02'))).toBe(tabId.terminal('s-01')));
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
+  });
 });
 
 describe('AppShell — действия 6.3 из палитры (тесты 8, 9 куска 6.3)', () => {

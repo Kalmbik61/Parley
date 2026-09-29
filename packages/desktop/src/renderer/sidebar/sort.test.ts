@@ -353,13 +353,35 @@ describe('cardRows — состав строк карточки (1.2)', () => {
       expect(shape(cardRows(map(list, [late]), false))).toEqual(['s-01', 'r-02[s-02,s-03]']);
     });
 
-    it('комната, где не осталось «своих» участников, стоит в конце; её значки и тултип по-прежнему считают запись', () => {
+    // Значки-счётчики свёрнутой комнаты, её тултип и правило развёртывания читают `sessions`: агент, что стоит в самой
+    // ранней комнате, не считается в бейдже и тултипе позднейшей — иначе один и тот же агент шёл бы в двух комнатах.
+    it('sessions — только те, что стоят в этой комнате: сессия из двух комнат числится лишь в самой ранней', () => {
+      const late = room('r-02', ['s-02', 's-03'], { createdAt: '2026-09-29T09:00:00.000Z' });
+      const early = room('r-01', ['s-01', 's-02'], { createdAt: '2026-09-29T08:00:00.000Z' });
+      const rows = cardRows(map(list, [late, early]), false);
+      const ids = (row: CardRow | undefined): string[] => (row?.kind === 'room' ? row.sessions.map((member) => member.id) : []);
+      expect(ids(rows.find((row) => row.kind === 'room' && row.room.id === 'r-01'))).toEqual(['s-01', 's-02']);
+      expect(ids(rows.find((row) => row.kind === 'room' && row.room.id === 'r-02'))).toEqual(['s-03']);
+    });
+
+    it('закрытая сессия из двух комнат: считается только в самой ранней — и там, и в её sessions она остаётся (закрытые входят)', () => {
+      const closed = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'closed' }), makeSession('s-03', 'c')];
+      const early = room('r-01', ['s-01', 's-02'], { createdAt: '2026-09-29T08:00:00.000Z' });
+      const late = room('r-02', ['s-02', 's-03'], { createdAt: '2026-09-29T09:00:00.000Z' });
+      const rows = cardRows(map(closed, [early, late]), false);
+      const byId = (id: string) => rows.find((row): row is Extract<CardRow, { kind: 'room' }> => row.kind === 'room' && row.room.id === id);
+      expect(byId('r-01')?.sessions.map((member) => member.id)).toEqual(['s-01', 's-02']);
+      expect(byId('r-01')?.members.map((member) => member.id)).toEqual(['s-01']);
+      expect(byId('r-02')?.sessions.map((member) => member.id)).toEqual(['s-03']);
+    });
+
+    it('комната, где не осталось «своих» участников, стоит в конце; её значков и тултипа участников нет — сессия стоит в ранней', () => {
       const first = room('r-01', ['s-01', 's-02'], { createdAt: '2026-09-29T08:00:00.000Z' });
       const second = room('r-02', ['s-02'], { createdAt: '2026-09-29T09:00:00.000Z' });
       const rows = cardRows(map(list, [first, second]), false);
       expect(shape(rows)).toEqual(['r-01[s-01,s-02]', 's-03', 'r-02[]']);
       const last = rows[2];
-      expect(last?.kind === 'room' ? last.sessions.map((member) => member.id) : []).toEqual(['s-02']);
+      expect(last?.kind === 'room' ? last.sessions.map((member) => member.id) : ['нет строки комнаты']).toEqual([]);
     });
 
     it('равные createdAt — первая в массиве; битая дата проигрывает настоящей', () => {

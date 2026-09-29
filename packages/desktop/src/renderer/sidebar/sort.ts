@@ -177,7 +177,11 @@ export interface CardRoomRow {
   lead: string | null;
   /** Участники, что стоят в этой комнате и показаны строками развёрнутой комнаты: закрытые — при `showClosed`. */
   members: WorkSession[];
-  /** Все участники-сессии по записи, закрытые тоже: значки-счётчики свёрнутой комнаты и тултип считают всех. */
+  /**
+   * Все участники-сессии, что стоят в этой комнате, закрытые тоже: значки-счётчики свёрнутой комнаты, тултип и правило
+   * развёртывания считают всех. Сессия старой карты, числящаяся в нескольких комнатах (решение 4), стоит в самой
+   * ранней и в `sessions` остальных не входит: иначе один агент считался бы в бейджах двух комнат.
+   */
   sessions: WorkSession[];
   /** Время последнего события комнаты — справа в её строке. */
   lastAt: string;
@@ -220,13 +224,14 @@ export function cardRows(map: WorkMap, showClosed: boolean): CardRow[] {
   const rows: CardRow[] = [];
   const emitted = new Set<string>();
   const roomRow = (room: Room, depth: number): CardRoomRow => {
-    const sessions = roomSessions(map, room);
+    // Только те, кого сайдбар поставил в эту комнату: запись `room.members` старой карты может числить сессию и в другой.
+    const sessions = roomSessions(map, room).filter((session) => home.get(session.id) === room);
     return {
       kind: 'room',
       room,
       depth,
       lead: roomLiveLead(map, room),
-      members: sessions.filter((session) => home.get(session.id) === room && (showClosed || session.lifecycle !== 'closed')),
+      members: sessions.filter((session) => showClosed || session.lifecycle !== 'closed'),
       sessions,
       lastAt: roomLastAt(map, room),
     };

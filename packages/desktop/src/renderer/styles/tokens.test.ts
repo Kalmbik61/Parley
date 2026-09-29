@@ -757,6 +757,11 @@ describe('dimmed.css — правило приглушения на новых �
  *    вторичный и основной цвет строки — `--color-text` (как у строки сессии);
  *  — развёрнутая (`text 4 %`) в неактивной карточке под курсором — 4.25:1 в светлой, а с заливкой строки участника
  *    — 3.60; внутри развёрнутой комнаты вторичный цвет — `neutral-800` (ступень темнее, брифа куска 5).
+ *
+ * Значки состояний участников (правки ревью куска 5) — признак состояния, порог 3:1 на всех стопках «основание
+ * карточки → заливка комнаты → заливка строки участника»; сами по себе значки сайдбара проверены выше, на заливках
+ * без комнаты. Значок «нет процесса» (`--state-inactive`) в тёмной на двух стопках активной карточки ниже порога
+ * (2.67 и 2.92:1), поэтому внутри развёрнутой комнаты `RoomRow` подменяет токен на `neutral-700` (запись в отчёте).
  */
 describe('строка комнаты — контраст на заливках (кусок 5)', () => {
   const CARDS: Record<string, (theme: Theme) => Rgb> = {
@@ -777,6 +782,46 @@ describe('строка комнаты — контраст на заливках
     'hover развёрнутой (text 6 %)': { cards: Object.keys(CARDS), fill: (theme, card) => text(theme, 0.06, card) },
     'hover свёрнутой (text 9 %)': { cards: Object.keys(CARDS), fill: (theme, card) => text(theme, 0.09, card) },
   };
+
+  /**
+   * Значок состояния участника развёрнутой комнаты стоит на стопке: основание карточки → заливка комнаты (развёрнута
+   * 4 %, hover 6 %; выбрана 9 % — только в активной карточке; решение ждёт — `accent-200`) → заливка самой строки
+   * участника (выбран или под курсором — `text 9 %`) либо её отсутствие. Указатель над строкой участника — над и её
+   * комнатой, и её карточкой, поэтому hover складывается на всех трёх этажах. Блокировка (`--agent-question`) сюда не
+   * входит: строка blocked всегда на своей подкраске `accent-200` — она сплошная и от стопки не зависит.
+   */
+  const memberStacks = (theme: Theme): Array<[name: string, backdrop: Rgb]> => {
+    const out: Array<[string, Rgb]> = [];
+    for (const [cardName, card] of Object.entries(CARDS)) {
+      const base = card(theme);
+      const rooms: Array<[string, Rgb]> = [
+        ['развёрнута 4 %', text(theme, 0.04, base)],
+        ['hover развёрнутой 6 %', text(theme, 0.06, base)],
+        ...(cardName === ACTIVE_CARD ? [['выбрана 9 %', member(theme, base)] as [string, Rgb]] : []),
+      ];
+      for (const [roomName, room] of rooms) {
+        out.push([`«${cardName}» → ${roomName}`, room]);
+        out.push([`«${cardName}» → ${roomName} → участник (выбран или hover, text 9 %)`, member(theme, room)]);
+      }
+    }
+    const pending = solid(theme, '--color-accent-200');
+    out.push(['решение ждёт (accent-200)', pending]);
+    out.push(['решение ждёт (accent-200) → участник (выбран или hover, text 9 %)', member(theme, pending)]);
+    return out;
+  };
+  /**
+   * Значок «нет процесса»: idle, pending, «спит» и «закрыта». Токен `--state-inactive` тёмной темы — `neutral-600` —
+   * на стопках «выбрана 9 % → hover участника» и «hover развёрнутой 6 % → hover участника» активной карточки даёт
+   * 2.67 и 2.92:1, ниже порога; внутри развёрнутой комнаты `RoomRow` подменяет его на ступень темнее — `neutral-700`
+   * (3.8:1 на самой тёмной стопке). В светлой эта ступень и есть `--state-inactive`.
+   */
+  const IN_ROOM_INACTIVE = '--color-neutral-700';
+  const MEMBER_ICONS: Array<[name: string, token: string]> = [
+    ['idle, pending, спит, закрыта (значок «нет процесса» в комнате)', IN_ROOM_INACTIVE],
+    ['working (neutral-700)', '--color-neutral-700'],
+    ['unseen и done (--state-done)', '--state-done'],
+    ['failed (accent-700)', '--color-accent-700'],
+  ];
 
   for (const theme of THEMES) {
     describe(theme, () => {
@@ -855,6 +900,18 @@ describe('строка комнаты — контраст на заливках
         expect(contrastRatio(star, member(theme, solid(theme, '--color-accent-200')))).toBeGreaterThanOrEqual(NON_TEXT);
       });
 
+      it('значки состояний участников развёрнутой комнаты — не ниже 3:1 на стопках «заливка комнаты + заливка строки участника» на всех трёх основаниях карточки', () => {
+        // Все пары разом, а не первая упавшая: список показывает, какие стопки не держат порог.
+        const below: string[] = [];
+        for (const [stack, backdrop] of memberStacks(theme)) {
+          for (const [icon, token] of MEMBER_ICONS) {
+            const ratio = contrastRatio(solid(theme, token), backdrop);
+            if (ratio < NON_TEXT) below.push(`${icon} на ${stack}: ${ratio.toFixed(2)}:1`);
+          }
+        }
+        expect(below).toEqual([]);
+      });
+
       it('число в кружке-счётчике — основной текст на neutral-300 — не ниже 4.5:1', () => {
         expect(contrastRatio(solid(theme, '--color-text'), solid(theme, '--color-neutral-300'))).toBeGreaterThanOrEqual(TEXT);
       });
@@ -866,6 +923,20 @@ describe('строка комнаты — контраст на заливках
       });
     });
   }
+
+  // Ступень темнее нужна там, где токен не держит: без неё пары ниже порога (тёмная).
+  it('тёмная: --state-inactive (neutral-600) на выбранной комнате и на hover развёрнутой активной карточки со строкой участника — 2.67 и 2.92:1, ниже 3:1; neutral-700 в комнате держит; в светлой токен и есть neutral-700', () => {
+    const card = solid('dark', '--card');
+    const plain = solid('dark', '--state-inactive');
+    const stronger = solid('dark', IN_ROOM_INACTIVE);
+    // Выбранная комната (text 9 %) и развёрнутая под курсором (text 6 %) в активной карточке, поверх — строка участника.
+    for (const room of [member('dark', card), text('dark', 0.06, card)]) {
+      const under = member('dark', room);
+      expect(contrastRatio(plain, under)).toBeLessThan(NON_TEXT);
+      expect(contrastRatio(stronger, under)).toBeGreaterThanOrEqual(NON_TEXT);
+    }
+    same('light', '--state-inactive', IN_ROOM_INACTIVE);
+  });
 
   // Ступень темнее нужна там, где neutral-700 не держит: без неё пары ниже порога (светлая).
   it('светлая: neutral-700 на hover свёрнутой (3.86) и внутри развёрнутой в неактивной карточке под курсором (4.25, с строкой участника 3.60) ниже 4.5 — потому основной текст и neutral-800', () => {

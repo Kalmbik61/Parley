@@ -1,4 +1,4 @@
-import { rm } from 'node:fs/promises';
+import { appendFile, mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
@@ -28,6 +28,13 @@ async function call<T>(window: Page, method: string, params: unknown): Promise<T
     ([m, p]) => (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas.call(m, p),
     [method, params] as const,
   ) as Promise<T>;
+}
+
+/** Строка в журнал событий сессии — то, что дописал бы хук Claude Code (как в `attention.spec.ts`). */
+async function hookEvent(workId: string, sessionId: string, event: Record<string, string>): Promise<void> {
+  const dir = path.join(project, '.harnas', 'works', workId, 'events');
+  await mkdir(dir, { recursive: true });
+  await appendFile(path.join(dir, `${sessionId}.jsonl`), `${JSON.stringify(event)}\n`);
 }
 
 async function createSession(window: Page, workId: string, label: string): Promise<string> {
@@ -152,5 +159,18 @@ test.describe('строка комнаты в карточке (кусок 5)', 
     await expect(row.locator('[data-session-id]')).toHaveCount(3);
     await row.locator('> div').first().click();
     await expect(row).toHaveAttribute('aria-expanded', 'false');
+
+    // Blocked-сессия рядом с решением (сцена dark-04): «2 need you», а клики по счётчику идут по кругу — цели одного списка
+    // blocked → комната с решением, а не застревают на первой blocked (2.7). Текущая вкладка — комната, после неё — blocked.
+    await hookEvent(workId, solo, { hook_event_name: 'Notification', notification_type: 'permission_prompt' });
+    const both = window.getByRole('button', { name: '2 need you' });
+    await expect(both).toBeVisible({ timeout: 5_000 });
+    const soloTab = window.locator(`[role="tab"][data-tab-id="terminal:${solo}"]`);
+    await both.click();
+    await expect(soloTab).toHaveAttribute('data-active', 'true');
+    await both.click();
+    await expect(tab).toHaveAttribute('data-active', 'true');
+    await both.click();
+    await expect(soloTab).toHaveAttribute('data-active', 'true');
   });
 });

@@ -31,7 +31,7 @@ import type { SessionLifecycle, WorkEntry } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
-import type { WorkAttention } from '../attention/derive.js';
+import { roomAwaitsDecision, type WorkAttention } from '../attention/derive.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import { useHostSupports } from '../lib/capabilities.js';
 import { cn } from '../lib/cn.js';
@@ -164,8 +164,8 @@ export const WorkCard = memo(function WorkCard({
   const time = relativeTime(attention.lastEventAt, now);
   // Вторичный текст — свой токен: на активной карточке `--muted-foreground` ниже 4.5:1.
   const secondary = 'text-work-sidebar-muted-foreground';
-  // Решение ждёт человека (у комнаты старой карты поля `proposal` нет) — значок вопроса, как у blocked.
-  const awaitingDecision = map.rooms.some((room) => (room.proposal ?? null) !== null);
+  // Решение ждёт человека — значок вопроса, как у blocked; правило то же, что у строки комнаты и ранга работы.
+  const awaitingDecision = map.rooms.some(roomAwaitsDecision);
   const glyph = awaitingDecision ? { state: 'blocked' as const, lifecycle: 'active' as const } : urgentGlyph(entry, activity);
 
   return (

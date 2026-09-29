@@ -55,9 +55,9 @@ describe('nextAttentionTarget (тест 5)', () => {
     const byWork = byWorkOf([w1, w2], activity);
     expect(nextAttentionTarget(sections, byWork, activity, null)).toEqual(session(w1, 's-02'));
     expect(nextAttentionTarget(sections, byWork, activity, session(w1, 's-02'))).toEqual(session(w2, 's-01'));
-    // По кругу: после последней — снова первая.
-    expect(nextAttentionTarget(sections, byWork, activity, session(w2, 's-01'))).toEqual(session(w1, 's-02'));
-    // current не из списка needs-you — ближайшая после него.
+    // Единый список blocked → unseen: после последней blocked — unseen (она не пропадает, пока blocked есть),
+    // после неё по кругу — снова первая blocked.
+    expect(nextAttentionTarget(sections, byWork, activity, session(w2, 's-01'))).toEqual(session(w1, 's-01'));
     expect(nextAttentionTarget(sections, byWork, activity, session(w1, 's-01'))).toEqual(session(w1, 's-02'));
   });
 
@@ -154,14 +154,72 @@ describe('nextAttentionTarget — комнаты с решением (2.7, ку�
     expect(nextAttentionTarget([section('/tmp/b', [archived])], byWork, {}, null)).toBeNull();
   });
 
-  it('решение и blocked-сессия одной работы: сначала сессия; после неё — снова она, пока blocked есть (ярус не меняется от current)', () => {
+  // Цели сходятся в один список — blocked, комнаты с решением, unseen — и «следующая» берёт элемент после текущей
+  // вкладки по кругу (`nextAttention()` прототипа handoff): ярус не выбирается по наличию целей, иначе пока в
+  // работах есть хоть одна blocked-сессия, до комнаты с решением клик по счётчику не доходил бы никогда.
+  it('решение и blocked-сессия одной работы (сцена dark-04): blocked → комната → снова blocked, счётчик «2 need you» проходит обе цели', () => {
     const entry = withRoom('w-01', '/tmp/a', { proposal });
     const activity = activityMap([makeActivity(refOf(entry, 's-04'), 'blocked')]);
     const sections = sectionsOf(entry);
     const byWork = byWorkOf([entry], activity);
+    expect(byWork[keyOf(entry)]?.needsYou).toBe(2);
     expect(nextAttentionTarget(sections, byWork, activity, null)).toEqual(session(entry, 's-04'));
-    expect(nextAttentionTarget(sections, byWork, activity, session(entry, 's-04'))).toEqual(session(entry, 's-04'));
+    expect(nextAttentionTarget(sections, byWork, activity, session(entry, 's-04'))).toEqual(roomOf(entry, 'r-01'));
     expect(nextAttentionTarget(sections, byWork, activity, roomOf(entry, 'r-01'))).toEqual(session(entry, 's-04'));
+  });
+
+  it('три яруса по кругу: blocked → комната с решением → unseen → снова blocked', () => {
+    // Порядок карточки: s-01, r-01 {s-02, s-03}, s-02, s-03, s-04. Цели: s-04 (blocked), r-01 (решение), s-01 (unseen).
+    const entry = withRoom('w-01', '/tmp/a', { proposal });
+    const activity = activityMap([makeActivity(refOf(entry, 's-04'), 'blocked'), makeActivity(refOf(entry, 's-01'), 'unseen')]);
+    const sections = sectionsOf(entry);
+    const byWork = byWorkOf([entry], activity);
+    const next = (current: AttentionTarget | null): AttentionTarget | null => nextAttentionTarget(sections, byWork, activity, current);
+    expect(next(null)).toEqual(session(entry, 's-04'));
+    expect(next(session(entry, 's-04'))).toEqual(roomOf(entry, 'r-01'));
+    expect(next(roomOf(entry, 'r-01'))).toEqual(session(entry, 's-01'));
+    expect(next(session(entry, 's-01'))).toEqual(session(entry, 's-04'));
+  });
+
+  it('несколько работ: круг проходит все blocked, потом все комнаты с решением, потом unseen — и возвращается к первой blocked', () => {
+    const a = withRoom('w-01', '/tmp/a', { proposal });
+    const b = makeWork('w-02', { projectPath: '/tmp/b', sessions: sessions('s-01', 's-02') });
+    const c = withRoom('w-03', '/tmp/c', { proposal });
+    const activity = activityMap([
+      makeActivity(refOf(a, 's-04'), 'blocked'),
+      makeActivity(refOf(b, 's-02'), 'blocked'),
+      makeActivity(refOf(c, 's-01'), 'unseen'),
+    ]);
+    const sections = sectionsOf(a, b, c);
+    const byWork = byWorkOf([a, b, c], activity);
+    const visited: AttentionTarget[] = [];
+    let current: AttentionTarget | null = null;
+    for (let step = 0; step < 6; step += 1) {
+      current = nextAttentionTarget(sections, byWork, activity, current);
+      if (current !== null) visited.push(current);
+    }
+    expect(visited).toEqual([
+      session(a, 's-04'),
+      session(b, 's-02'),
+      roomOf(a, 'r-01'),
+      roomOf(c, 'r-01'),
+      session(c, 's-01'),
+      // Круг замкнулся.
+      session(a, 's-04'),
+    ]);
+  });
+
+  it('текущая вкладка — не цель: ближайшая после неё по порядку сайдбара в первом непустом ярусе (blocked, даже если комната ближе)', () => {
+    const entry = withRoom('w-01', '/tmp/a', { proposal });
+    const activity = activityMap([makeActivity(refOf(entry, 's-04'), 'blocked')]);
+    const sections = sectionsOf(entry);
+    const byWork = byWorkOf([entry], activity);
+    // s-01 стоит выше строки комнаты и s-04, s-02 — внутри комнаты; ни одна не цель: первым идёт ярус blocked.
+    expect(nextAttentionTarget(sections, byWork, activity, session(entry, 's-01'))).toEqual(session(entry, 's-04'));
+    expect(nextAttentionTarget(sections, byWork, activity, session(entry, 's-02'))).toEqual(session(entry, 's-04'));
+    // Ярус blocked пуст — ярус комнат: после текущей по порядку, по кругу внутри яруса.
+    const calm = byWorkOf([entry], {});
+    expect(nextAttentionTarget(sections, calm, {}, session(entry, 's-04'))).toEqual(roomOf(entry, 'r-01'));
   });
 });
 
@@ -266,10 +324,29 @@ describe('openNextAttention (тест 15)', () => {
       expect(useLayoutStore.getState().activeWorkKey).toBe(key2);
     });
 
-    it('в активной работе сначала blocked-сессия, даже если комната с решением ближе', () => {
+    it('выбрана blocked-сессия, а комната с решением есть: следующая — комната, а не снова та же сессия (ярусы идут по кругу)', () => {
       setup(activityMap([makeActivity(refOf(w1, 's-01'), 'blocked')]), [w1, decision]);
-      // Выбрана та же blocked-сессия w1/s-01: она единственная в первом ярусе — цель она.
-      expect(openNextAttention()).toEqual(session(w1, 's-01'));
+      // Выбрана blocked-сессия w1/s-01 (единственная в ярусе blocked): после неё в едином списке — комната с решением.
+      expect(selectedSessionOf(useLayoutStore.getState(), [w1, decision])?.ref).toEqual(refOf(w1, 's-01'));
+      expect(openNextAttention()).toEqual(roomOf(decision, 'r-01'));
+    });
+
+    it('blocked-сессия и комната с решением в одной работе: два клика по счётчику доходят до комнаты, третий возвращает к blocked', () => {
+      const both = makeWork('w-02', {
+        projectPath: '/tmp/b',
+        sessions: sessions('s-01', 's-02', 's-03'),
+        rooms: [room('r-01', ['s-01', 's-02'], { proposal })],
+      });
+      const key2 = keyOf(both);
+      setup(activityMap([makeActivity(refOf(both, 's-03'), 'blocked')]), [w1, both]);
+      useLayoutStore.setState((state) => ({ layouts: { ...state.layouts, [key2]: emptyLayout() }, hydrated: { ...state.hydrated, [key2]: true } }));
+      // Активна работа w1 с терминалом s-01: он не цель — первым идёт ярус blocked.
+      expect(openNextAttention()).toEqual(session(both, 's-03'));
+      expect(activeTab(key2)).toBe(tabId.terminal('s-03'));
+      expect(openNextAttention()).toEqual(roomOf(both, 'r-01'));
+      expect(activeTab(key2)).toBe(tabId.room('r-01'));
+      expect(openNextAttention()).toEqual(session(both, 's-03'));
+      expect(activeTab(key2)).toBe(tabId.terminal('s-03'));
     });
   });
 });
