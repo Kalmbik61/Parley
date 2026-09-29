@@ -1865,6 +1865,10 @@ describe('AppShell — несохранённые файлы при закрыт
     await openDirtyA();
     expect(tabEl(A).querySelector('[data-dirty-dot]')).not.toBeNull();
     expect(tabEl(B).querySelector('[data-dirty-dot]')).toBeNull();
+    // Крестик — только у активной вкладки (Organic, 1.1): фоновую A сначала активируем, а её закрытие
+    // без активации — средней кнопкой, тест ниже.
+    expect(within(tabEl(A)).queryByRole('button', { name: 'Close' })).toBeNull();
+    fireEvent.click(tabEl(A));
     fireEvent.click(within(tabEl(A)).getByRole('button', { name: 'Close' }));
     expect(await screen.findByText('Save changes to a.ts?')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -1912,6 +1916,7 @@ describe('AppShell — несохранённые файлы при закрыт
 
   it('вопрос вкладки и вопрос окна на один файл: Save вкладки, затем ответ окна — close без ложной ошибки (fix-7.3 п. 3)', async () => {
     await openDirtyA();
+    fireEvent.click(tabEl(A));
     fireEvent.click(within(tabEl(A)).getByRole('button', { name: 'Close' }));
     expect(await screen.findByText('Save changes to a.ts?')).toBeTruthy();
     // ⌘Q, пока открыт вопрос вкладки: вопрос окна встаёт в очередь вторым.

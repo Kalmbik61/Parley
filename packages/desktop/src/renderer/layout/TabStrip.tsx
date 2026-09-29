@@ -24,6 +24,12 @@
  * синтетического обработчика тогда молча ничего не делает (проверено —
  * `dispatchEvent` всё равно возвращает `true`, будто отмены не было).
  *
+ * Облик Organic (спека окна 2026-09-29, 1.1): вкладки — пилюли 28px с зазором 4 между ними; обёртка
+ * каждой (`SortableTab`) держит ширину `flex: 0 1 200px`, не уже 72px — вкладки делят строку и
+ * сужаются, пока не упрутся в минимум, а уже потом строка прокручивается. «+» — кнопка 28px.
+ * В заголовке строка лежит прямо на фоне окна; над телом группы (несколько групп) — на листе, с линией
+ * снизу.
+ *
  * Кусок 2.6 (спека 5.4): вкладки — sortable @dnd-kit, сама строка — droppable
  * «хвост» с индексом после последней вкладки. Своего `DndContext` нет — он
  * один, в `AppShell.tsx`. У неактивной работы зоны выключены: её строка
@@ -86,7 +92,7 @@ function SortableTab({ workKey, groupId, tabId, index, active, lineBefore, child
   const data: DropTargetData & DragSourceData = { workKey, kind: 'strip', groupId, index, item: { kind: 'tab', tabId } };
   const { setNodeRef, listeners } = useSortable({ id: dndId.tab(workKey, tabId), data, disabled: !active });
   return (
-    <div ref={setNodeRef} role="presentation" className="relative flex shrink-0 items-center" {...listeners}>
+    <div ref={setNodeRef} role="presentation" className="relative flex min-w-[72px] flex-[0_1_200px] items-center" {...listeners}>
       {lineBefore ? <DropLine /> : null}
       {children}
     </div>
@@ -259,8 +265,8 @@ export function TabStrip({ workKey, group, entry, portal, active }: TabStripProp
       // перехватывала клики по нижней половине вкладок. Строку крутят колесо, жест и выбор вкладки.
       className={
         portal
-          ? 'flex h-full min-w-0 flex-1 items-center overflow-x-auto [scrollbar-width:none]'
-          : 'flex h-8 min-w-0 shrink-0 items-center overflow-x-auto border-b border-border bg-card [scrollbar-width:none]'
+          ? 'flex h-full min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]'
+          : 'flex h-9 min-w-0 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2 [scrollbar-width:none]'
       }
       {...(fade.start ? { 'data-fade-start': '' } : {})}
       {...(fade.end ? { 'data-fade-end': '' } : {})}
@@ -312,7 +318,7 @@ export function TabStrip({ workKey, group, entry, portal, active }: TabStripProp
         })}
       </SortableContext>
       {slot === group.tabs.length ? (
-        <span className="relative h-8 w-0 shrink-0">
+        <span className="relative h-7 w-0 shrink-0">
           <DropLine />
         </span>
       ) : null}
@@ -323,7 +329,7 @@ export function TabStrip({ workKey, group, entry, portal, active }: TabStripProp
           useLayoutStore.getState().apply(workKey, (layout) => focusGroup(layout, group.id));
           usePaletteStore.getState().openWith('open');
         }}
-        className="flex size-7 shrink-0 items-center justify-center text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+        className="flex size-7 shrink-0 items-center justify-center rounded-full text-neutral-800 transition-colors hover:bg-foreground/8 active:bg-foreground/14"
       >
         <Plus className="size-3.5" aria-hidden="true" />
       </button>

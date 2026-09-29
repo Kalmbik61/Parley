@@ -4,6 +4,14 @@
  * `TabMeta` и (для терминала) точку состояния — сам компонент только рисует
  * их и переводит клики/меню в вызовы `layout/store.ts` и стора палитры.
  *
+ * Облик Organic (спека окна 2026-09-29, 1.1): вкладка — пилюля 28px с зазором 7 и текстом 12px, отступ
+ * слева 11, справа 11 (у активной 5 — под крестик). Активная — фон `neutral-100`, `shadow-sm`, вес
+ * 600 и крестик 18×18 со значком 10; у неактивных крестика нет — закрытие средней кнопкой
+ * (`onAuxClick`) и ⌘W. Подкраска (`meta.tint`) бьёт и фон активной: `blocked` и комната с ждущим
+ * решением, почта с непрочитанным — `accent-200`, `unseen` — `accent-2-200`. У вкладки терминала —
+ * только значок состояния 12px, значка провайдера, как на снимках handoff, нет. Ширину — до 200,
+ * не уже 72 — держит обёртка в `TabStrip.tsx` (`SortableTab`), пилюля занимает её целиком.
+ *
  * «Разделить вправо/вниз» сначала фокусирует ГРУППУ ЭТОЙ вкладки (`focusGroup`),
  * а не активную группу работы — иначе палитра в режиме разделения (кусок 6.2)
  * по выбору резала бы чужую, реально активную группу (спека 5.3, тест 14).
@@ -22,7 +30,6 @@ import type { SessionLifecycle } from '@harnas/core';
 import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { useBrowserStore } from '../browser/store.js';
-import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import type { DotState } from '../lib/dot-state.js';
 import { cn } from '../lib/cn.js';
@@ -37,7 +44,7 @@ import {
 import { usePaletteStore } from '../palette/store.js';
 import { useLayoutStore } from './store.js';
 import { focusGroup, focusTab } from './tree.js';
-import { fileTabHint, type TabMeta } from './tab-meta.js';
+import { fileTabHint, type TabMeta, type TabTint } from './tab-meta.js';
 
 export interface TabProps {
   workKey: string;
@@ -59,37 +66,38 @@ const FILE_ICONS: Record<FileKind, typeof FileCode> = {
   pdf: FileType,
 };
 
-function TabIcon({ tab, meta, dot }: Pick<TabProps, 'tab' | 'meta' | 'dot'>): JSX.Element {
+/** Цвет значков вкладок не терминального вида — `neutral-800`, как кнопки заголовка (1.1). */
+const ICON = 'size-3 shrink-0 text-neutral-800';
+
+/** Подкраска бьёт фон вкладки и её hover: тот же цвет, что видел человек до наведения. */
+const TINT: Record<TabTint, string> = {
+  accent: 'bg-accent-200 hover:bg-accent-200',
+  'accent-2': 'bg-accent-2-200 hover:bg-accent-2-200',
+};
+
+function TabIcon({ tab, meta, dot }: Pick<TabProps, 'tab' | 'meta' | 'dot'>): JSX.Element | null {
   switch (meta.icon) {
     case 'terminal':
-      return (
-        <span className="flex shrink-0 items-center gap-1">
-          <AgentIcon provider={meta.session?.provider ?? '?'} />
-          {/* «Нужен ты» важнее точки: при `result` точка показала бы done/failed (спека 7.3). */}
-          {meta.needsYou ? (
-            <AgentStateDot state="blocked" size="sm" />
-          ) : dot !== null ? (
-            <AgentStateDot state={dot.state} lifecycle={dot.lifecycle} size="sm" />
-          ) : null}
-        </span>
-      );
+      // «Нужен ты» важнее точки: при `result` точка показала бы done/failed (спека 7.3).
+      if (meta.needsYou) return <AgentStateDot state="blocked" />;
+      return dot === null ? null : <AgentStateDot state={dot.state} lifecycle={dot.lifecycle} />;
     case 'mail':
-      return <MailIcon className="size-3.5 shrink-0" aria-hidden="true" />;
+      return <MailIcon className={ICON} aria-hidden="true" />;
     case 'room':
-      return <Hash className="size-3.5 shrink-0" aria-hidden="true" />;
+      return <Hash className={ICON} aria-hidden="true" />;
     case 'diff':
-      return <GitCompare className="size-3.5 shrink-0" aria-hidden="true" />;
+      return <GitCompare className={ICON} aria-hidden="true" />;
     case 'file': {
       const kind = tab.kind === 'file' ? fileKind(tab.path) : 'text';
       const Icon = FILE_ICONS[kind];
-      return <Icon data-file-kind={kind} className="size-3.5 shrink-0" aria-hidden="true" />;
+      return <Icon data-file-kind={kind} className={ICON} aria-hidden="true" />;
     }
     case 'browser':
       // Favicon — data: из main (9.2a): CSP окна внешних картинок не пускает.
       return meta.favicon === null ? (
-        <Globe className="size-3.5 shrink-0" aria-hidden="true" />
+        <Globe className={ICON} aria-hidden="true" />
       ) : (
-        <img src={meta.favicon} alt="" className="size-3.5 shrink-0 object-contain" draggable={false} />
+        <img src={meta.favicon} alt="" className="size-3 shrink-0 object-contain" draggable={false} />
       );
   }
 }
@@ -154,23 +162,15 @@ export function Tab({ workKey, group, tab, meta, dot, isActive }: TabProps): JSX
           onAuxClick={(event) => {
             if (event.button === 1) closeThis();
           }}
-          style={
-            isActive
-              ? {
-                  backgroundColor: 'color-mix(in srgb, var(--foreground) 6%, var(--card))',
-                  borderBottom: '2px solid color-mix(in srgb, var(--foreground) 60%, var(--card))',
-                }
-              : undefined
-          }
           className={cn(
-            'group flex h-8 shrink-0 cursor-default items-center gap-1.5 border-r border-border px-1.5 text-xs',
-            isActive ? 'text-foreground' : 'bg-card text-muted-foreground',
-            meta.unread && !isActive ? 'bg-amber-500/10' : '',
+            'flex h-7 w-full min-w-0 cursor-default select-none items-center gap-[7px] rounded-full pl-[11px] text-xs text-foreground',
+            isActive ? 'bg-neutral-100 pr-[5px] font-semibold shadow-sm' : 'pr-[11px] hover:bg-foreground/7',
+            meta.tint !== null && TINT[meta.tint],
           )}
         >
           <TabIcon tab={tab} meta={meta} dot={dot} />
           {/* Полный путь файла, заголовок страницы и адрес — в title: строка вкладок их обрезает (спека 5.3). */}
-          <span className="min-w-0 max-w-40 flex-1 truncate" {...(hint === null ? {} : { title: hint })}>
+          <span className="min-w-0 flex-1 truncate" {...(hint === null ? {} : { title: hint })}>
             {meta.title}
           </span>
           {meta.dirty ? (
@@ -181,20 +181,19 @@ export function Tab({ workKey, group, tab, meta, dot, isActive }: TabProps): JSX
               className="size-2 shrink-0 rounded-full bg-foreground/70"
             />
           ) : null}
-          <button
-            type="button"
-            aria-label={S.common.close}
-            onClick={(event) => {
-              event.stopPropagation();
-              closeThis();
-            }}
-            className={cn(
-              'flex size-4 shrink-0 items-center justify-center rounded hover:bg-accent',
-              isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
-            )}
-          >
-            <X className="size-3" aria-hidden="true" />
-          </button>
+          {isActive ? (
+            <button
+              type="button"
+              aria-label={S.common.close}
+              onClick={(event) => {
+                event.stopPropagation();
+                closeThis();
+              }}
+              className="flex size-[18px] shrink-0 items-center justify-center rounded-full text-neutral-800 transition-colors hover:bg-foreground/12"
+            >
+              <X className="size-2.5" aria-hidden="true" />
+            </button>
+          ) : null}
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>

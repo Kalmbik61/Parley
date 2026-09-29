@@ -1,14 +1,17 @@
 /**
- * Тесты 2, 3, 11 куска 2.4: активная вкладка (`data-active`, нижняя полоса),
- * крестик/средняя кнопка закрывают вкладку, «Закрыть остальные»/«Закрыть
- * справа» — одним вызовом `requestCloseTabs`, крестик неактивной вкладки
- * скрыт до hover.
+ * Тесты 2, 3, 11 куска 2.4: активная вкладка (`data-active`), крестик/средняя кнопка закрывают
+ * вкладку, «Закрыть остальные»/«Закрыть справа» — одним вызовом `requestCloseTabs`.
+ *
+ * Облик Organic (спека окна 2026-09-29, 1.1): вкладка — пилюля 28px; активная — фон `neutral-100`,
+ * `shadow-sm`, вес 600, крестик 18×18 (значок 10); у неактивных крестика нет — закрытие средней
+ * кнопкой; подкраска `blocked` — `accent-200`, `unseen` — `accent-2-200`.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
 import { usePaletteStore } from '../palette/store.js';
+import { makeSession } from '../test-utils/work-fixtures.js';
 import { EMPTY_HISTORY } from './history.js';
 import { useLayoutStore } from './store.js';
 import { Tab } from './Tab.js';
@@ -21,7 +24,7 @@ function tab(id: string): TabSpec {
 }
 
 function meta(title: string): TabMeta {
-  return { title, icon: 'terminal', session: null, unread: false, needsYou: false, dirty: false, favicon: null };
+  return { title, icon: 'terminal', session: null, unread: false, needsYou: false, tint: null, dirty: false, favicon: null };
 }
 
 function setLayoutWithGroup(group: GroupNode): void {
@@ -55,24 +58,50 @@ afterEach(() => {
 });
 
 describe('Tab — тест 2', () => {
-  it('активная вкладка: data-active="true" и нижняя полоса', () => {
+  it('активная вкладка — пилюля: data-active="true", фон neutral-100, shadow-sm, вес 600, справа 5px, без нижней полосы', () => {
     const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
     setLayoutWithGroup(group);
 
     render(<Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={meta('A')} dot={null} isActive />);
     const el = screen.getByRole('tab');
     expect(el.getAttribute('data-active')).toBe('true');
-    expect(el.style.borderBottom).toContain('color-mix');
+    expect(el.className).toMatch(/\bh-7\b/);
+    expect(el.className).toMatch(/\brounded-full\b/);
+    expect(el.className).toMatch(/\bbg-neutral-100\b/);
+    expect(el.className).toMatch(/\bshadow-sm\b/);
+    expect(el.className).toMatch(/\bfont-semibold\b/);
+    expect(el.className).toContain('pr-[5px]');
+    expect(el.style.borderBottom).toBe('');
+    expect(el.className).not.toMatch(/\bborder-r\b/);
   });
 
-  it('неактивная вкладка: data-active="false", без нижней полосы', () => {
+  it('неактивная вкладка: data-active="false", прозрачная, справа 11px, hover text 7%', () => {
     const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
     setLayoutWithGroup(group);
 
     render(<Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive={false} />);
     const el = screen.getByRole('tab');
     expect(el.getAttribute('data-active')).toBe('false');
+    expect(el.className).toMatch(/\brounded-full\b/);
+    expect(el.className).not.toMatch(/\bbg-neutral-100\b/);
+    expect(el.className).not.toMatch(/\bshadow-sm\b/);
+    expect(el.className).not.toMatch(/\bfont-semibold\b/);
+    expect(el.className).toContain('pr-[11px]');
+    expect(el.className).toContain('hover:bg-foreground/7');
     expect(el.style.borderBottom).toBe('');
+  });
+
+  it('размеры пилюли: до 200px, не уже 72px, зазор 7, 12px; заголовок с многоточием, а не за краем', () => {
+    const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a')], activeTabId: 'a' };
+    setLayoutWithGroup(group);
+
+    render(<Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={meta('A' + 'я'.repeat(60))} dot={null} isActive />);
+    const el = screen.getByRole('tab');
+    expect(el.className).toContain('w-full');
+    expect(el.className).toContain('gap-[7px]');
+    expect(el.className).toMatch(/\btext-xs\b/);
+    expect(el.querySelector('span.truncate')?.className).toContain('min-w-0');
+    expect(el.className).not.toContain('max-w-40');
   });
 
   it('крестик зовёт requestCloseTabs с id вкладки — она закрыта', async () => {
@@ -127,21 +156,30 @@ describe('Tab — тест 3', () => {
 });
 
 describe('Tab — тест 11', () => {
-  it('крестик неактивной вкладки скрыт до hover, у активной — виден', () => {
+  it('крестик — только у активной вкладки: 18×18, значок 10; у неактивной его нет (закрытие средней кнопкой)', () => {
     const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
     setLayoutWithGroup(group);
 
     const { rerender } = render(
       <Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive={false} />,
     );
-    const inactiveClose = screen.getByLabelText('Close');
-    expect(inactiveClose.className).toContain('opacity-0');
-    expect(inactiveClose.className).toContain('group-hover:opacity-100');
+    expect(screen.queryByLabelText('Close')).toBeNull();
 
     rerender(<Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={meta('A')} dot={null} isActive />);
     const activeClose = screen.getByLabelText('Close');
-    expect(activeClose.className).toContain('opacity-100');
-    expect(activeClose.className).not.toContain('opacity-0');
+    expect(activeClose.className).toContain('size-[18px]');
+    expect(activeClose.className).toContain('rounded-full');
+    expect(activeClose.querySelector('svg')?.classList.contains('size-2.5')).toBe(true);
+  });
+
+  it('неактивную вкладку закрывает средняя кнопка (auxclick) — вместо прежнего крестика при hover', async () => {
+    const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
+    setLayoutWithGroup(group);
+
+    render(<Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive={false} />);
+    fireEvent(screen.getByRole('tab'), new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+
+    await vi.waitFor(() => expect(remainingIds()).toEqual(['a']));
   });
 });
 
@@ -185,7 +223,7 @@ describe('Tab — раунд исправлений 1: доступность (�
 
 // Кусок 4.2 (спека 7.3): отметки вкладки — data-unread и значок вопроса вместо точки.
 describe('Tab — отметки внимания (кусок 4.2)', () => {
-  it('needsYou: data-unread="true" и значок вопроса вместо точки done', () => {
+  it('needsYou: data-unread="true", подкраска accent-200 (и на hover) и значок вопроса вместо точки done', () => {
     const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
     setLayoutWithGroup(group);
     render(
@@ -193,7 +231,7 @@ describe('Tab — отметки внимания (кусок 4.2)', () => {
         workKey={WORK_KEY}
         group={group}
         tab={tab('b')}
-        meta={{ ...meta('B'), unread: true, needsYou: true }}
+        meta={{ ...meta('B'), unread: true, needsYou: true, tint: 'accent' }}
         dot={{ state: 'done', lifecycle: 'active' }}
         isActive={false}
        
@@ -201,8 +239,60 @@ describe('Tab — отметки внимания (кусок 4.2)', () => {
     );
     const el = screen.getByRole('tab');
     expect(el.getAttribute('data-unread')).toBe('true');
-    expect(el.className).toContain('bg-amber-500/10');
+    expect(el.className).toContain('bg-accent-200');
+    expect(el.className).toContain('hover:bg-accent-200');
+    expect(el.className).not.toContain('amber');
     expect(el.querySelector('[data-testid="agent-state-dot"]')?.getAttribute('data-state')).toBe('blocked');
+  });
+
+  it('unseen: подкраска accent-2-200; без подкраски — прозрачная вкладка', () => {
+    const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
+    setLayoutWithGroup(group);
+    render(<Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={{ ...meta('B'), unread: true, tint: 'accent-2' }} dot={null} isActive={false} />);
+    expect(screen.getByRole('tab').className).toContain('bg-accent-2-200');
+    expect(screen.getByRole('tab').className).toContain('hover:bg-accent-2-200');
+    cleanup();
+    render(<Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive={false} />);
+    expect(screen.getByRole('tab').className).not.toMatch(/bg-accent(-2)?-200/);
+  });
+
+  it('подкраска бьёт фон активной вкладки: активная с needsYou — accent-200, а не neutral-100', () => {
+    const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a')], activeTabId: 'a' };
+    setLayoutWithGroup(group);
+    render(<Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={{ ...meta('A'), unread: true, needsYou: true, tint: 'accent' }} dot={null} isActive />);
+    const el = screen.getByRole('tab');
+    expect(el.className).toContain('bg-accent-200');
+    expect(el.className).not.toContain('bg-neutral-100');
+    expect(el.className).toContain('shadow-sm');
+  });
+
+  it('у вкладки терминала — только значок состояния, значка провайдера нет (снимки handoff)', () => {
+    const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a')], activeTabId: 'a' };
+    setLayoutWithGroup(group);
+    render(
+      <Tab
+        workKey={WORK_KEY}
+        group={group}
+        tab={tab('a')}
+        meta={{ ...meta('A'), session: makeSession('a', 'x') }}
+        dot={{ state: 'working', lifecycle: 'active' }}
+        isActive
+      />,
+    );
+    const el = screen.getByRole('tab');
+    expect(el.querySelector('img')).toBeNull();
+    // Коробка значка состояния — 12px (`size-3`), а не прежние 10 у вкладки.
+    expect(el.querySelector('[data-testid="agent-state-dot"]')?.classList.contains('size-3')).toBe(true);
+  });
+
+  it('значки вкладок других видов — 12px: почта, комната, дифф', () => {
+    const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a')], activeTabId: 'a' };
+    setLayoutWithGroup(group);
+    for (const icon of ['mail', 'room', 'diff'] as const) {
+      render(<Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={{ ...meta('A'), icon }} dot={null} isActive />);
+      expect(screen.getByRole('tab').querySelector('svg')?.classList.contains('size-3'), icon).toBe(true);
+      cleanup();
+    }
   });
 
   it('без отметок — data-unread="false", точка как есть', () => {
