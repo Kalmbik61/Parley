@@ -240,6 +240,14 @@ describe('список инструментов', () => {
     );
   });
 
+  it('read_guide: описание называет комнаты и роли ведущего и участника', async () => {
+    const client = await connect('s-01');
+    const { tools } = await client.listTools();
+    const guide = tools.find((tool) => tool.name === 'read_guide');
+
+    expect(guide?.description).toMatch(/комнаты и роли в них \(ведущий, участник\)/);
+  });
+
   it('create_room: lead необязателен, описание называет ведущего по умолчанию', async () => {
     const client = await connect('s-01');
     const { tools } = await client.listTools();
