@@ -223,12 +223,18 @@ describe('модель, усилие и поля providers.list (дизайн к
     for (const model of ['opus', 'claude-sonnet-5', 'sonnet[1m]', 'gpt-6-sol', 'o3']) {
       expect(parse({ model }).success).toBe(true);
     }
-    // Значение с дефисом впереди CLI принял бы за флаг, а пустое или с пробелом — не модель.
-    for (const model of ['', ' opus', 'два слова', '--dangerously-skip-permissions', '-m', 'а\nб']) {
+    // Значение с дефисом впереди CLI принял бы за флаг, а с пробелом — не модель.
+    for (const model of [' opus', 'два слова', '--dangerously-skip-permissions', '-m', 'а\nб']) {
       expect(parse({ model }).success).toBe(false);
     }
     expect(parse({ model: 'м'.repeat(200) }).success).toBe(true);
     expect(parse({ model: 'м'.repeat(201) }).success).toBe(false);
+  });
+
+  it('пустая model — не ошибка схемы: «по умолчанию», без флага (решает хост)', () => {
+    // Окно с выбранным «по умолчанию» может прислать пустую строку вместо пропуска поля.
+    expect(parse({ model: '' }).success).toBe(true);
+    expect(parse({ model: '', effort: 'high' }).success).toBe(true);
   });
 
   it('providers.list: models, effort, version и limits необязательны — хост, переживший окно, их не знает', () => {

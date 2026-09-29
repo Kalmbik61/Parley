@@ -206,6 +206,39 @@ describe('providers.list: модели, усилие и версия CLI (диз
   });
 });
 
+describe('sessions.create по проводу: модель вне списка провайдера — bad_request (дизайн комнат, 3.2)', () => {
+  /** `sessions.create` с несуществующим проектом: отказ по модели идёт раньше любой записи на диск. */
+  async function create(client: TestClient, provider: string, model: string): Promise<RawMessage> {
+    const id = nextId;
+    nextId += 1;
+    client.send({
+      id,
+      method: 'sessions.create',
+      params: { projectPath: '/не/существует', workId: null, provider, label: '', task: '', parent: null, model },
+    });
+    for (;;) {
+      const message: RawMessage = await client.next();
+      if (message.id === id) return message;
+    }
+  }
+
+  it('значение чужого списка и значение вне списка отвергаются, ответ называет провайдера и допустимое', async () => {
+    const client = await boot();
+
+    const wrongProvider = await create(client, 'claude', 'gpt-6-sol');
+    expect(wrongProvider.error?.code).toBe('bad_request');
+    expect(wrongProvider.error?.message).toContain('claude');
+    expect(wrongProvider.error?.message).toContain('opusplan');
+    expect((await create(client, 'codex', 'opus')).error?.code).toBe('bad_request');
+  });
+
+  it('вид значения проверяет схема раньше хоста: с дефисом впереди — bad_request и без списка провайдера', async () => {
+    const client = await boot();
+
+    expect((await create(client, 'glm', '--dangerously-skip-permissions')).error?.code).toBe('bad_request');
+  });
+});
+
 describe('providers.list: лимиты подписок и событие providers.limitsChanged (спека комнат, 3.5)', () => {
   const inHour = (): number => Math.floor(Date.now() / 1000) + 3600;
   const inDay = (): number => Math.floor(Date.now() / 1000) + 86_400;

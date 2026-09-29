@@ -56,6 +56,7 @@ import type { WorksService } from '../works/works-service.js';
 import { gitFailure } from '../worktrees/worktrees-service.js';
 import { autoLaunchCandidates } from './auto-launch.js';
 import { findInterrupted } from './interrupted.js';
+import { resolveModelChoice } from './model-choice.js';
 
 export interface CreateSessionInput {
   projectPath: string;
@@ -69,6 +70,8 @@ export interface CreateSessionInput {
   /**
    * Модель и усилие из диалога запуска (дизайн комнат, 3.2). До команды они доезжают через
    * реестр провайдеров: тот, у кого в шаблоне нет их подстановок, выбор молча отбрасывает.
+   * Модель — значение из списка провайдера, если список есть (`resolveModelChoice`: вне списка —
+   * `bad_request`); пустая — «по умолчанию», без флага.
    */
   model?: string;
   effort?: EffortLevel;
@@ -335,7 +338,10 @@ export function createSessionsService(
   }
 
   async function create(input: CreateSessionInput): Promise<SessionRef> {
-    const { projectPath, workId, provider, label, task, parent, worktree, model, effort } = input;
+    const { projectPath, workId, provider, label, task, parent, worktree, effort } = input;
+    // Модель — раньше всего: значение не из списка провайдера отвергается до первой записи в карте
+    // (иначе осталась бы `pending`-сессия, которую нечем запустить), а пустое — «по умолчанию».
+    const model = await resolveModelChoice(provider, input.model);
     // `exactOptionalPropertyTypes`: явный `undefined` ключом в `LaunchChoice` не проходит.
     const choice: LaunchChoice = {
       ...(model === undefined ? {} : { model }),
