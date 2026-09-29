@@ -693,7 +693,9 @@ describe('Шапка (тест 10)', () => {
     const heading = await screen.findByText(`${long} → master`);
     expect(heading.getAttribute('title')).toBe(`${long} → master`);
     expect(heading.className).toContain('truncate');
-    expect(screen.getByText('+120 −34')).toBeTruthy();
+    // Числа — двумя цветами (спека окна 2026-09-29, 1.8): `+N` accent-2-700, `−N` accent-700.
+    expect(screen.getByText('+120')).toBeTruthy();
+    expect(screen.getByText('−34')).toBeTruthy();
     expect(screen.getByText('2 commits')).toBeTruthy();
   });
 
@@ -862,5 +864,57 @@ describe('Commit и несохранённые буферы корня сесс�
     dirty(PROJECT_ROOT, 'b.ts');
     await pressCommit();
     expect(count('worktrees.commit')).toBe(1);
+  });
+});
+
+// Облик Organic (спека окна 2026-09-29, 1.8): правый сайдбар лежит на фоне окна; в «Изменениях» `+N` —
+// accent-2-700, `−N` — accent-700, файлы — пилюли от 30px, линий между блоками нет. Вторичный текст на
+// hover-заливке — основной цвет (наследство куска 1: `neutral-700` на заливке hover ниже 4.5:1).
+describe('ChangesPanel — облик Organic (1.8)', () => {
+  it('сводка: +N — accent-2-700 (status-success-text), −N — accent-700 (не --destructive: он в светлой accent-800); без плашки bg-muted', async () => {
+    bridge.setHandler('worktrees.diff', () => diff({ commits: [COMMIT], files: [file('a.ts')], stats: { additions: 120, deletions: 34 } }));
+    renderPanel();
+    const plus = await screen.findByText('+120');
+    const minus = screen.getByText('−34');
+    expect(plus.className).toContain('text-status-success-text');
+    expect(minus.className).toContain('text-accent-700');
+    expect(minus.className).not.toContain('text-destructive');
+    // Числа жирные и без плашки: оба в одном span на фоне сводки.
+    expect(plus.parentElement).toBe(minus.parentElement);
+    expect(plus.parentElement?.className).toContain('font-bold');
+    expect(plus.parentElement?.className).not.toContain('bg-muted');
+  });
+
+  it('строка файла: пилюля 30px, hover text 6 %, счётчики +N accent-2-700 и −N accent-700', async () => {
+    bridge.setHandler('worktrees.diff', () => diff({ files: [file('src/a.ts', 3, 2)] }));
+    renderPanel();
+    await screen.findByRole('region', { name: 'Branch changes' });
+    const row = within(screen.getByRole('region', { name: 'Branch changes' })).getByTitle('src/a.ts');
+    expect(row.className).toMatch(/\bh-\[30px\]/);
+    expect(row.className).toMatch(/\brounded-full\b/);
+    expect(row.className).toContain('hover:bg-foreground/6');
+    expect(row.className).toContain('hover:[--muted-foreground:var(--foreground)]');
+    expect(within(row).getByText('+3').className).toContain('text-status-success-text');
+    expect(within(row).getByText('−2').className).toContain('text-accent-700');
+  });
+
+  it('строка коммита — пилюля с основным цветом на hover; линий между шапкой, сводкой и кнопкой нет', async () => {
+    bridge.setHandler('worktrees.diff', () => diff({ commits: [COMMIT], files: [file('a.ts')] }));
+    const { container } = renderPanel();
+    await screen.findByRole('region', { name: 'Branch commits' });
+    const commit = within(screen.getByRole('region', { name: 'Branch commits' })).getByText('feat: add a').closest('button') as HTMLElement;
+    expect(commit.className).toMatch(/\brounded-3xl\b|\brounded-2xl\b|\brounded-full\b/);
+    expect(commit.className).toContain('hover:bg-foreground/6');
+    expect(commit.className).toContain('hover:[--muted-foreground:var(--foreground)]');
+    expect(container.querySelector('[data-testid="changes-panel"] .border-b')).toBeNull();
+  });
+
+  it('заголовок секции — пилюля, на hover текст основной (hover:text-accent-foreground), а не muted', async () => {
+    bridge.setHandler('worktrees.diff', () => diff({ files: [file('a.ts')] }));
+    renderPanel();
+    const header = within(await screen.findByRole('region', { name: 'Branch changes' })).getByRole('button', { name: /Branch changes/ });
+    expect(header.className).toMatch(/\brounded-full\b/);
+    expect(header.className).toContain('hover:bg-foreground/6');
+    expect(header.className).toContain('hover:text-accent-foreground');
   });
 });

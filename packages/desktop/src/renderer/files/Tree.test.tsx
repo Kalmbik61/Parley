@@ -185,3 +185,28 @@ describe('Tree — git-статус (тест 4)', () => {
     expect(plain.style.color).toBe('');
   });
 });
+
+// Облик Organic (спека окна 2026-09-29, 1.8, правый сайдбар): строки файлов — пилюли 28px, hover text 6 %;
+// вторичный текст строки на hover — основной цвет (наследство куска 1).
+describe('Tree — облик Organic (1.8)', () => {
+  it('строка — пилюля 28px с hover text 6 %; вторичный текст на hover — основной цвет', async () => {
+    bridge.setDir(ROOT, '', [entry('a.ts')]);
+    renderTree({ status: { 'a.ts': 'M' } });
+    const row = (await screen.findByText('a.ts')).closest('[data-tree-path]') as HTMLElement;
+    expect(row.style.height).toBe('28px');
+    expect(row.className).toMatch(/\brounded-full\b/);
+    expect(row.className).toContain('hover:bg-foreground/6');
+    expect(row.className).toContain('hover:[--muted-foreground:var(--foreground)]');
+    expect(row.className).not.toContain('hover:bg-accent');
+    expect(row.querySelector('[data-git-status]')?.className).toContain('font-bold');
+  });
+
+  it('вложенная строка сохраняет отступ по глубине: 8 + 18 на уровень слева', async () => {
+    bridge.setDir(ROOT, '', [entry('src', { kind: 'dir' })]);
+    bridge.setDir(ROOT, 'src', [entry('lib.ts')]);
+    renderTree();
+    fireEvent.click(await screen.findByText('src'));
+    const nested = (await screen.findByText('lib.ts')).closest('[data-tree-path]') as HTMLElement;
+    expect(nested.style.paddingLeft).toBe('26px');
+  });
+});

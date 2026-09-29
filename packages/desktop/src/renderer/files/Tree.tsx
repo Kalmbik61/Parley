@@ -32,8 +32,8 @@ import { cn } from '../lib/cn.js';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '../ui/context-menu.js';
 import { useFilesStore } from './store.js';
 
-/** Высота строки дерева, px. */
-const ROW_HEIGHT = 22;
+/** Высота строки дерева, px: пилюли 28 (спека окна 2026-09-29, 1.8, правый сайдбар). */
+const ROW_HEIGHT = 28;
 /** Отступ на уровень вложенности (спека 10.1). */
 const INDENT = 18;
 /** До стольких строк — обычный список: в маленьком дереве виртуализация только мешала бы. */
@@ -160,7 +160,9 @@ const Row = memo(function Row({ row, root, rootKey, rootDir, expanded, letter, b
           title={row.path}
           style={{ ...style, paddingLeft: 8 + row.depth * INDENT, height: ROW_HEIGHT }}
           className={cn(
-            'flex min-w-0 cursor-default select-none items-center gap-1 pr-2 text-xs hover:bg-accent/60',
+            // Пилюля с заливкой hover `text 6 %`; вторичный текст (шеврон, буква git) на ней — основной цвет
+            // (наследство куска 1: `--muted-foreground` на заливке ниже 4.5:1).
+            'flex min-w-0 cursor-default select-none items-center gap-1.5 rounded-full pr-3 text-xs transition-colors hover:bg-foreground/6 hover:[--muted-foreground:var(--foreground)]',
             (row.entry.ignored || dead) && 'opacity-50',
           )}
           onClick={onClick}
@@ -178,7 +180,7 @@ const Row = memo(function Row({ row, root, rootKey, rootDir, expanded, letter, b
             {row.name}
           </span>
           {letter === undefined ? null : (
-            <span data-git-status className="shrink-0 font-mono text-[10px]" style={{ color: GIT_COLOR[letter] }}>
+            <span data-git-status className="shrink-0 font-mono text-[11px] font-bold" style={{ color: GIT_COLOR[letter] }}>
               {letter}
             </span>
           )}

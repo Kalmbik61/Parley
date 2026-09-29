@@ -213,7 +213,7 @@ export function PrimaryAction({ bridge, workKey, sessionRef, source, working, se
   const commitTarget = source.kind === 'worktree' ? source.branch : source.kind === 'project' ? S.changes.projectFolder(source.changes.branch) : '';
 
   return (
-    <div className="flex shrink-0 flex-col gap-2 border-b border-border p-2">
+    <div className="flex shrink-0 flex-col gap-2 px-1 pb-2 pt-1">
       {withMessage ? (
         <Textarea
           className="min-h-[52px] resize-y text-xs"

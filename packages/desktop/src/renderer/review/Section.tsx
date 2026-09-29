@@ -1,6 +1,10 @@
 /**
  * Сворачиваемая секция «Изменений» (кусок 8.2b, спека 11.1): заголовок-кнопка с числом, под ним
  * строки. `section` с `aria-label` — область, которую находит и чтение с экрана, и тест.
+ *
+ * Облик Organic (спека окна 2026-09-29, 1.8): заголовок — пилюля с заливкой hover `text 6 %`; правый
+ * сайдбар лежит на фоне окна, а `--muted-foreground` на этой заливке ниже 4.5:1 (наследство куска 1), поэтому на
+ * hover текст заголовка — основной цвет (`hover:text-accent-foreground`).
  */
 
 import type { ReactNode } from 'react';
@@ -20,7 +24,7 @@ export function Section({ title, count, open, onToggle, children }: SectionProps
       <button
         type="button"
         aria-expanded={open}
-        className="flex h-7 w-full min-w-0 items-center gap-1 px-2 text-left text-xs font-medium text-muted-foreground hover:bg-accent"
+        className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-full px-3 text-left text-xs font-semibold text-muted-foreground transition-colors hover:bg-foreground/6 hover:text-accent-foreground"
         onClick={onToggle}
       >
         {open ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
