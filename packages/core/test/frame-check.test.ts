@@ -5,11 +5,12 @@
  * следующих кусков плана окна, а не только для core.
  */
 
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { runStatusline } from '../src/work/statusline.js';
 import { collectSourceFiles, FRAME_RULES, scanSource, type FrameHit } from './frame-scan.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -167,5 +168,73 @@ describe('рамочный тест репозитория (тест 6)', () => 
         'packages/core/src/work/mcp-config.ts:89',
       ].sort(),
     );
+  });
+});
+
+/**
+ * Всё, что лежит под `dir`: путь, вид, размер, время изменения и содержимое файлов. Два снимка
+ * равны, только если под каталогом ничего не появилось, не пропало и не изменилось.
+ */
+async function snapshot(dir: string, base: string = dir): Promise<string[]> {
+  const lines: string[] = [];
+  const entries = (await readdir(dir, { withFileTypes: true })).sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    const info = await stat(full);
+    const content = entry.isDirectory() ? '' : await readFile(full, 'utf8');
+    const kind = entry.isDirectory() ? 'dir' : 'file';
+    lines.push(`${path.relative(base, full)}|${kind}|${info.size}|${info.mtimeMs}|${content}`);
+    if (entry.isDirectory()) lines.push(...(await snapshot(full, base)));
+  }
+  return lines;
+}
+
+describe('строка статуса не пишет в каталоги агента (спека комнат, 3.5)', () => {
+  // Скрипт строки статуса читает настройки Claude Code — своя строка статуса человека лежит
+  // там — и только читает: рамка «в `~/.claude` не пишем ничего» остаётся в силе. Данные лимитов
+  // ложатся в каталог работы, а не в каталог агента.
+  it('домашняя папка и проект человека после прогона скрипта не изменились ни на байт', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'frame-statusline-'));
+    try {
+      const home = path.join(root, 'home');
+      const project = path.join(root, 'project');
+      const workDir = path.join(root, 'work');
+      const human = (command: string): string =>
+        JSON.stringify({ statusLine: { type: 'command', command } });
+      await mkdir(path.join(home, '.claude'), { recursive: true });
+      await mkdir(path.join(home, '.codex', 'sessions'), { recursive: true });
+      await mkdir(path.join(project, '.claude'), { recursive: true });
+      await mkdir(workDir);
+      await writeFile(path.join(home, '.claude', 'settings.json'), human("printf 'user'"));
+      await writeFile(path.join(home, '.claude', 'history.jsonl'), '{}\n');
+      await writeFile(path.join(project, '.claude', 'settings.json'), human("printf 'shared'"));
+      await writeFile(
+        path.join(project, '.claude', 'settings.local.json'),
+        human("printf 'local'"),
+      );
+      const before = { home: await snapshot(home), project: await snapshot(project) };
+
+      const input = JSON.stringify({
+        model: { display_name: 'Opus' },
+        workspace: { current_dir: project, project_dir: project },
+        rate_limits: { five_hour: { used_percentage: 58, resets_at: 4_102_444_800 } },
+      });
+      const env = {
+        PATH: process.env['PATH'],
+        HARNAS_WORK_DIR: workDir,
+        HARNAS_SESSION_ID: 's-01',
+      };
+      const printed = await runStatusline(input, { env, home });
+
+      // Настройки прочитаны (вывод — от команды человека), а не переписаны.
+      expect(printed.toString()).toBe('local');
+      expect({ home: await snapshot(home), project: await snapshot(project) }).toEqual(before);
+      // Данные лимитов — в каталоге работы, и только там.
+      expect(await readdir(path.join(workDir, 'limits'))).toEqual(['s-01.json']);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

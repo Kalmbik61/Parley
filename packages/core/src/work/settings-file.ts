@@ -6,9 +6,15 @@
  * Хук не содержит логики: stdin-JSON от Claude Code дописывается в журнал
  * сессии как есть, состояние выводят читатели. В `~/.claude` при этом ничего не
  * пишется — юридическая граница проекта.
+ *
+ * Рядом с хуками — `statusLine`: скрипт строки статуса, который забирает лимиты подписки из
+ * того, что Claude Code сам присылает (спека комнат Organic, 3.5). Как и хуки, он лежит в этом
+ * файле, а не в настройках человека.
  */
 
 import { mkdir, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { STATUSLINE_BIN } from './statusline.js';
 import { workPaths } from './store.js';
 
 /**
@@ -48,9 +54,32 @@ export interface HookMatcher {
   hooks: HookCommand[];
 }
 
+export interface StatusLineSetting {
+  type: 'command';
+  command: string;
+}
+
 export interface SettingsFile {
   hooks: Record<string, HookMatcher[]>;
+  statusLine: StatusLineSetting;
 }
+
+/**
+ * Скрипт строки статуса лежит рядом с этим модулем, в `work/`: тем же способом, что и сервер MCP
+ * (`mcp-config.ts`), — абсолютный путь к собранному файлу, а не имя из PATH.
+ */
+export const STATUSLINE_ENTRY = fileURLToPath(new URL(`./${STATUSLINE_BIN}.js`, import.meta.url));
+
+/** Строка для оболочки: Claude Code запускает команду через неё, а в путях бывают пробелы. */
+const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
+
+/**
+ * Команда строки статуса: node текущего процесса (хост запущен системным node, и тот же стоит у
+ * агента) и скрипт по абсолютному пути — без надежды на PATH, как у сервера MCP. Адрес работы и
+ * сессии скрипт берёт из окружения агента, как хуки.
+ */
+export const statusLineCommand = (): string =>
+  `${shellQuote(process.execPath)} ${shellQuote(STATUSLINE_ENTRY)}`;
 
 /**
  * Содержимое `settings.json` работы. Чужие хуки пользователя не трогаются:
@@ -64,7 +93,7 @@ export function workSettings(): SettingsFile {
     if (timeout !== undefined) command.timeout = timeout;
     hooks[event] = [{ hooks: [command] }];
   }
-  return { hooks };
+  return { hooks, statusLine: { type: 'command', command: statusLineCommand() } };
 }
 
 export function workSettingsJson(): string {
