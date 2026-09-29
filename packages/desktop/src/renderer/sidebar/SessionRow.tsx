@@ -20,6 +20,10 @@
  *
  * Меню по правой кнопке — `SessionRowMenu` (кусок 3.4): его триггер и триггер тултипа
  * сливаются на одном узле строки.
+ *
+ * Участник развёрнутой комнаты (кусок 5, спека окна 2026-09-29, 1.2) — та же строка, но с отступом слева 18 и без
+ * правого поля (его даёт строка комнаты, `RoomRow.tsx`); у ведущего после названия `★` 11px `accent-700`,
+ * тултип `Lead`.
  */
 
 import { memo, useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
@@ -61,6 +65,10 @@ export interface SessionRowProps {
   draggable: boolean;
   selected: boolean;
   onOpen(): void;
+  /** Строка участника комнаты: отступ слева 18 вместо `8 + 12·depth`, без правого поля. */
+  inRoom?: boolean;
+  /** Ведущий комнаты — `★` после названия; только у участника комнаты. */
+  lead?: boolean;
 }
 
 // `memo`: строка перерисовывается, только когда сменились её сессия, её запись активности
@@ -77,6 +85,8 @@ export const SessionRow = memo(function SessionRow({
   draggable,
   selected,
   onOpen,
+  inRoom = false,
+  lead = false,
 }: SessionRowProps): JSX.Element {
   const data: DragSourceData = { item: { kind: 'session', sessionId: session.id } };
   const dragId = dndId.session(workKey, session.id);
@@ -184,10 +194,11 @@ export const SessionRow = memo(function SessionRow({
             event.stopPropagation();
             onOpen();
           }}
-          style={{ paddingLeft: `${8 + depth * 12}px` }}
+          style={{ paddingLeft: inRoom ? '18px' : `${8 + depth * 12}px` }}
           className={cn(
             // Кольцо внутрь: карточка режет выступающее (`overflow-hidden`).
-            'flex h-[26px] min-w-0 items-center gap-1.5 rounded-full pr-1.5 text-xs text-work-sidebar-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-work-sidebar-focus-ring',
+            'flex h-[26px] min-w-0 items-center gap-1.5 rounded-full text-xs text-work-sidebar-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-work-sidebar-focus-ring',
+            inRoom ? 'pr-0' : 'pr-1.5',
             // Текст строки на hover — основной цвет: `neutral-700` на заливке hover ниже 4.5:1. Явный `--color-text`, а не
             // подмена одной переменной другой: внутри `[data-dimmed]` они равны, а на самой закрытой строке
             // неслойное правило `dimmed.css` бьёт утилиту по `--work-sidebar-foreground` и сводит его к
@@ -209,6 +220,11 @@ export const SessionRow = memo(function SessionRow({
           <AgentStateDot state={state} lifecycle={session.lifecycle} />
           <AgentIcon provider={session.provider} size={13} />
           <span className={cn('min-w-0 flex-1 truncate', selected && 'font-bold')}>{label}</span>
+          {lead ? (
+            <span data-lead title={S.sidebar.lead} className="shrink-0 text-[11px] text-accent-700">
+              ★
+            </span>
+          ) : null}
           {trustWait ? (
             <span title={S.sidebar.trustWaitTooltip} className="shrink-0 text-status-warning-text">
               ⚠

@@ -26,6 +26,7 @@ import { S } from '../../shared/strings.js';
 import { attentionOf } from '../attention/derive.js';
 import { selectedSessionOf, useLayoutStore } from '../layout/store.js';
 import { cn } from '../lib/cn.js';
+import { roomKey } from '../lib/room-view.js';
 import { workKey } from '../lib/tree-order.js';
 import { useNow } from '../lib/use-now.js';
 import { useActivityStore, type ActivityEntry } from '../store/activity.js';
@@ -181,6 +182,8 @@ export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail,
     activeWorkKey,
     onActivateWork: (key) => props.current.onActivateWork(key),
     onShowClosed: showClosedSessions,
+    // → и ← на строке комнаты — тот же ручной шеврон, что и клик по нему (правило 2.6 уступает).
+    onExpandRoom: (key, roomId, expanded) => useUiStore.getState().setRoomExpanded(roomKey(key, roomId), expanded),
   });
 
   const pinned = new Set(pinnedWorks);

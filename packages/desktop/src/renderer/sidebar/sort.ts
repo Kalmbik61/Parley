@@ -1,14 +1,17 @@
 /**
  * Порядок сайдбара (спека 6.1, 6.2): «Закреплённые», затем группы проектов;
  * внутри — где нужен человек, выше. Функции чистые: пересортировку под
- * указателем держит `use-deferred-order.ts`, а не этот модуль.
+ * указателем держит `use-deferred-order.ts`, а не этот модуль. Там же — состав строк одной
+ * карточки (`cardRows`, спека окна 2026-09-29, 1.2): сессии и комнаты на месте своих участников.
  */
 
-import type { WorkEntry } from '@harnas/core';
+import type { Room, WorkEntry, WorkMap, WorkSession } from '@harnas/core';
 import { S } from '../../shared/strings.js';
 import { ATTENTION_RANK, attentionOf as attentionIn, type WorkAttention } from '../attention/derive.js';
 import { isoMs } from '../lib/iso-time.js';
-import { workKey } from '../lib/tree-order.js';
+import { roomLiveLead } from '../lib/room-lead.js';
+import { roomLastAt, roomSessions } from '../lib/room-view.js';
+import { treeOrder, workKey } from '../lib/tree-order.js';
 
 export interface SidebarSection {
   kind: 'pinned' | 'project';
@@ -155,4 +158,97 @@ export function neighborInOrder(order: readonly string[], current: string | null
   const index = current === null ? -1 : order.indexOf(current);
   if (index === -1) return (step === 1 ? order[0] : order[order.length - 1]) ?? null;
   return order[(((index + step) % order.length) + order.length) % order.length] ?? null;
+}
+
+/** Строка карточки — сессия сама по себе. */
+export interface CardSessionRow {
+  kind: 'session';
+  session: WorkSession;
+  depth: number;
+}
+
+/** Строка карточки — комната; участники, что стоят в ней, отдельными строками карточки не выводятся. */
+export interface CardRoomRow {
+  kind: 'room';
+  room: Room;
+  /** Глубина её первого живого участника в дереве сессий (отступ `8 + 12·depth`); комната в конце — 0. */
+  depth: number;
+  /** Ведущий (`roomLiveLead`), `★` — у него; `null` — живых участников нет, комната закрыта. */
+  lead: string | null;
+  /** Участники, что стоят в этой комнате и показаны строками развёрнутой комнаты: закрытые — при `showClosed`. */
+  members: WorkSession[];
+  /**
+   * Все участники-сессии, что стоят в этой комнате, закрытые тоже: значки-счётчики свёрнутой комнаты, тултип и правило
+   * развёртывания считают всех. Сессия старой карты, числящаяся в нескольких комнатах (решение 4), стоит в самой
+   * ранней и в `sessions` остальных не входит: иначе один агент считался бы в бейджах двух комнат.
+   */
+  sessions: WorkSession[];
+  /** Время последнего события комнаты — справа в её строке. */
+  lastAt: string;
+}
+
+export type CardRow = CardSessionRow | CardRoomRow;
+
+/** Время создания комнаты для порядка «самая ранняя»; битая дата — самая поздняя: настоящая её всегда обходит. */
+const createdMs = (room: Room): number => isoMs(room.createdAt) ?? Number.POSITIVE_INFINITY;
+
+/**
+ * Комната, в которой сессия стоит в сайдбаре (решение 4 спеки окна): хост с 2026-09-29 держит сессию не
+ * больше чем в одной комнате, но старая карта может числить её в нескольких — тогда она стоит в комнате с
+ * самым ранним `createdAt` (равные и битые даты — в порядке карты), а в остальных её строки нет.
+ */
+function homeRooms(map: WorkMap): Map<string, Room> {
+  const home = new Map<string, Room>();
+  const byCreation = [...map.rooms].sort((a, b) => {
+    const left = createdMs(a);
+    const right = createdMs(b);
+    return left === right ? 0 : left < right ? -1 : 1;
+  });
+  for (const room of byCreation) {
+    for (const session of roomSessions(map, room)) {
+      if (!home.has(session.id)) home.set(session.id, room);
+    }
+  }
+  return home;
+}
+
+/**
+ * Строки карточки (спека окна 2026-09-29, 1.2, «Состав строк карточки»): сессии в порядке `treeOrder`;
+ * участник комнаты отдельной строкой не выводится — на месте первого встреченного участника стоит строка
+ * его комнаты; комнаты без живых участников — в конце, в порядке карты. Место комнаты задаёт её первый ЖИВОЙ
+ * участник, а не первый показанный: закрытые скрыты за «N more closed», и от этого переключателя комната
+ * не прыгала бы по карточке. Закрытая сессия вне комнаты — строкой, только при `showClosed`.
+ */
+export function cardRows(map: WorkMap, showClosed: boolean): CardRow[] {
+  const home = homeRooms(map);
+  const rows: CardRow[] = [];
+  const emitted = new Set<string>();
+  const roomRow = (room: Room, depth: number): CardRoomRow => {
+    // Только те, кого сайдбар поставил в эту комнату: запись `room.members` старой карты может числить сессию и в другой.
+    const sessions = roomSessions(map, room).filter((session) => home.get(session.id) === room);
+    return {
+      kind: 'room',
+      room,
+      depth,
+      lead: roomLiveLead(map, room),
+      members: sessions.filter((session) => showClosed || session.lifecycle !== 'closed'),
+      sessions,
+      lastAt: roomLastAt(map, room),
+    };
+  };
+
+  for (const { session, depth } of treeOrder(map.sessions)) {
+    const live = session.lifecycle !== 'closed';
+    const room = home.get(session.id);
+    if (room === undefined) {
+      if (live || showClosed) rows.push({ kind: 'session', session, depth });
+    } else if (live && !emitted.has(room.id)) {
+      emitted.add(room.id);
+      rows.push(roomRow(room, depth));
+    }
+  }
+  for (const room of map.rooms) {
+    if (!emitted.has(room.id)) rows.push(roomRow(room, 0));
+  }
+  return rows;
 }

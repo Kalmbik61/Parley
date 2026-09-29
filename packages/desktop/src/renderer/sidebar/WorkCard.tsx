@@ -17,16 +17,21 @@
  *
  * Кусок 3.4 (спека 6.4): меню карточки по правой кнопке (`CardMenu`), переименование на
  * месте по двойному клику по заголовку (`InlineRename`), меню комнат по `#` (`RoomsMenu`).
+ *
+ * Кусок 5 плана «Organic» (спека окна 2026-09-29, 1.2): состав строк — `sort.ts#cardRows`: участник комнаты
+ * отдельной строкой не выводится, на его месте стоит строка комнаты (`RoomRow`), комнаты без живых участников — в
+ * конце. Под строками активной карточки со статусом `active` — `+ New session or room`: пока диалога 1.5 нет
+ * (кусок 7), она открывает прежний диалог ⌘T этой работы, как пункт палитры.
  */
 
 import { memo, useRef, useState } from 'react';
 import { create } from 'zustand';
-import { Hash, Mail } from 'lucide-react';
+import { Hash, Mail, Plus } from 'lucide-react';
 import type { SessionLifecycle, WorkEntry } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
-import type { WorkAttention } from '../attention/derive.js';
+import { roomAwaitsDecision, type WorkAttention } from '../attention/derive.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import { useHostSupports } from '../lib/capabilities.js';
 import { cn } from '../lib/cn.js';
@@ -34,10 +39,13 @@ import { displayStatus, dotState, type DotState } from '../lib/dot-state.js';
 import { relativeTime } from '../lib/relative-time.js';
 import { treeOrder, workKey } from '../lib/tree-order.js';
 import type { ActivityEntry } from '../store/activity.js';
+import { useUiStore } from '../store/ui.js';
 import { CardMenu } from './CardMenu.js';
 import { InlineRename } from './InlineRename.js';
+import { RoomRow } from './RoomRow.js';
 import { RoomsMenu } from './RoomsMenu.js';
 import { SessionRow } from './SessionRow.js';
+import { cardRows } from './sort.js';
 import { useCursorStop } from './use-sidebar-keys.js';
 
 export interface WorkCardProps {
@@ -144,19 +152,20 @@ export const WorkCard = memo(function WorkCard({
     return opener;
   };
 
-  const rows = treeOrder(map.sessions);
-  const closedCount = rows.filter(({ session }) => session.lifecycle === 'closed').length;
-  const shownRows = expanded ? rows : rows.filter(({ session }) => session.lifecycle !== 'closed');
+  const tree = treeOrder(map.sessions);
+  const closedCount = tree.filter(({ session }) => session.lifecycle === 'closed').length;
+  // Строки карточки: сессии и комнаты на месте своих участников; закрытые — только при раскрытом «N more closed».
+  const rows = cardRows(map, expanded);
   // «N сессий» — открытые, как в макете спеки 6.3: закрытые считает строка «+N closed».
-  const openCount = rows.length - closedCount;
+  const openCount = tree.length - closedCount;
 
   const bold = attention.unseen > 0 || attention.humanUnread > 0;
   const roomsWithUnread = Object.keys(attention.roomsUnread).length;
   const time = relativeTime(attention.lastEventAt, now);
   // Вторичный текст — свой токен: на активной карточке `--muted-foreground` ниже 4.5:1.
   const secondary = 'text-work-sidebar-muted-foreground';
-  // Решение ждёт человека (у комнаты старой карты поля `proposal` нет) — значок вопроса, как у blocked.
-  const awaitingDecision = map.rooms.some((room) => (room.proposal ?? null) !== null);
+  // Решение ждёт человека — значок вопроса, как у blocked; правило то же, что у строки комнаты и ранга работы.
+  const awaitingDecision = map.rooms.some(roomAwaitsDecision);
   const glyph = awaitingDecision ? { state: 'blocked' as const, lifecycle: 'active' as const } : urgentGlyph(entry, activity);
 
   return (
@@ -248,24 +257,42 @@ export const WorkCard = memo(function WorkCard({
           </>
         ) : null}
       </div>
-      {shownRows.length > 0 ? (
+      {rows.length > 0 ? (
         <div role="group" className="mt-1.5 flex flex-col gap-px">
-          {shownRows.map(({ session, depth }) => (
-            <SessionRow
-              key={session.id}
-              workKey={key}
-              projectPath={projectPath}
-              workId={map.work.id}
-              bridge={bridge}
-              session={session}
-              depth={depth}
-              activity={activity[refKey({ projectPath, workId: map.work.id, sessionId: session.id })] ?? null}
-              now={now}
-              draggable={active}
-              selected={session.id === selectedSessionId}
-              onOpen={openerFor(session.id)}
-            />
-          ))}
+          {rows.map((row) =>
+            row.kind === 'session' ? (
+              <SessionRow
+                key={row.session.id}
+                workKey={key}
+                projectPath={projectPath}
+                workId={map.work.id}
+                bridge={bridge}
+                session={row.session}
+                depth={row.depth}
+                activity={activity[refKey({ projectPath, workId: map.work.id, sessionId: row.session.id })] ?? null}
+                now={now}
+                draggable={active}
+                selected={row.session.id === selectedSessionId}
+                onOpen={openerFor(row.session.id)}
+              />
+            ) : (
+              <RoomRow
+                key={`room ${row.room.id}`}
+                workKey={key}
+                projectPath={projectPath}
+                workId={map.work.id}
+                bridge={bridge}
+                row={row}
+                unread={attention.roomsUnread[row.room.id] ?? 0}
+                activity={activity}
+                now={now}
+                active={active}
+                selectedSessionId={selectedSessionId}
+                onOpen={() => onOpenRoom(row.room.id)}
+                openerFor={openerFor}
+              />
+            ),
+          )}
         </div>
       ) : null}
       {closedCount > 0 ? (
@@ -278,11 +305,32 @@ export const WorkCard = memo(function WorkCard({
           className={cn(
             // Основной цвет на hover — явно: в done-карточке `--work-sidebar-foreground` равен вторичному (dimmed.css).
             'flex h-6 w-full items-center rounded-full pl-7 text-left text-[11px] hover:bg-foreground/6 hover:text-(--color-text)',
-            shownRows.length > 0 ? 'mt-px' : 'mt-1.5',
+            rows.length > 0 ? 'mt-px' : 'mt-1.5',
             secondary,
           )}
         >
           {expanded ? S.sidebar.hideClosed : S.sidebar.moreClosed(closedCount)}
+        </button>
+      ) : null}
+      {active && map.work.status === 'active' ? (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            // Как ⌘T (`AppShell`, `session.new`): родитель — выбранная сессия; работа — эта, она же активная.
+            useUiStore.getState().openNewSessionDialog(selectedSessionId, { projectPath, workId: map.work.id });
+          }}
+          className={cn(
+            // Основной цвет на hover — явно, как у «N more closed» выше: в приглушённом поддереве он равен вторичному.
+            'flex h-6 w-full items-center gap-1.5 rounded-full pl-[26px] text-left text-[11px] hover:bg-foreground/6 hover:text-(--color-text)',
+            rows.length > 0 || closedCount > 0 ? 'mt-px' : 'mt-1.5',
+            secondary,
+          )}
+        >
+          <span className="inline-flex w-[13px] shrink-0 justify-center">
+            <Plus className="size-[11px]" aria-hidden="true" />
+          </span>
+          {S.sidebar.newSessionOrRoom}
         </button>
       ) : null}
     </div>

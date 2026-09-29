@@ -11,7 +11,7 @@ import { refKey } from '@harnas/protocol';
 import type { FileRootSpec, TabSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { workKey as workKeyOf } from '../../shared/work-keys.js';
-import { humanUnreadLetters, type Attention } from '../attention/derive.js';
+import { humanUnreadLetters, roomAwaitsDecision, type Attention } from '../attention/derive.js';
 import { bufferKey } from '../files/buffer.js';
 import { sessionRowLabel, sessionTag } from '../lib/participant.js';
 
@@ -161,8 +161,8 @@ export function tabMeta(tab: TabSpec, entry: WorkEntry | null, extras: TabMetaEx
     }
     case 'room': {
       const room = entry?.map.rooms.find((candidate) => candidate.id === tab.roomId) ?? null;
-      // Решение ждёт человека (`Room.proposal`); у комнаты старой карты поля нет — подкраски тоже.
-      const awaiting = room !== null && (room.proposal ?? null) !== null;
+      // Решение ждёт человека — то же правило, что у строки комнаты и карточки (`roomAwaitsDecision`).
+      const awaiting = room !== null && roomAwaitsDecision(room);
       return { title: truncateTitle(room?.title ?? S.rooms.fallbackTitle), icon: 'room', session: null, ...empty, tint: awaiting ? 'accent' : null };
     }
     case 'diff': {

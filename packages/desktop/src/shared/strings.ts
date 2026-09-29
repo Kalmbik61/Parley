@@ -96,6 +96,24 @@ export const S = {
     renameField: 'Workspace name',
     /** aria-label списка карточек — дерево «работа → сессии» для клавиатуры (спека 6.5). */
     workspaceList: 'Workspaces',
+    /** Шеврон строки комнаты (спека окна 2026-09-29, 1.2) — `sidebar/RoomRow.tsx`. */
+    showAgents: 'Show agents',
+    hideAgents: 'Hide agents',
+    /** Слово строки комнаты, пока решение ждёт человека; `{n} new` — сообщения комнаты, не прочитанные человеком. */
+    roomDecision: 'decision',
+    roomNew: (n: number): string => `${n} new`,
+    /** Тултип значка провайдера свёрнутой комнаты: `2 Claude Code agents`; имя провайдера — `providerName`. */
+    roomAgents: (n: number, provider: string): string => `${n} ${provider} ${n === 1 ? 'agent' : 'agents'}`,
+    /** Тултип `★` у ведущего в строке участника развёрнутой комнаты. */
+    lead: 'Lead',
+    /**
+     * Тултип строки комнаты: `Room · lead S01 · S01, S02, S03, S04`. Ведущего нет (в комнате не осталось
+     * живых участников) — без его части; участники — короткие номера сессий.
+     */
+    roomTooltip: (lead: string | null, members: readonly string[]): string =>
+      ['Room', ...(lead === null ? [] : [`lead ${lead}`]), ...(members.length === 0 ? [] : [members.join(', ')])].join(' · '),
+    /** Строка под строками активной карточки: открывает диалог новой сессии (⌘T); «+» рисует значок. */
+    newSessionOrRoom: 'New session or room',
     sessionMenu: {
       open: 'Open',
       /** Кусок 3.4: сплит вправо с вкладкой терминала сессии. */

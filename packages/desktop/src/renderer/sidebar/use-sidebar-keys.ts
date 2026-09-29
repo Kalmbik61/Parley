@@ -7,6 +7,9 @@
  * - Tab в сайдбар (или клик по пустому месту списка) ставит курсор на активную карточку.
  * - ↑↓ идут по карточкам и строкам сессий в порядке на экране; Enter открывает.
  * - → на карточке разворачивает закрытые сессии, ← сворачивает; ← на строке — к карточке.
+ * - Строка комнаты (кусок 5, `[data-room-row]`) — тоже элемент курсора: → разворачивает её, ← сворачивает, а на
+ *   свёрнутой уходит к карточке; Enter и пробел открывают комнату (обработчик самой строки). Без этого сессии
+ *   свёрнутых комнат и сами комнаты были бы недоступны стрелкам.
  * - Shift+F10 — контекстное меню элемента под курсором.
  *
  * Порядок берётся из DOM, а не из секций: курсор ходит ровно по тому, что нарисовано, — с
@@ -28,9 +31,12 @@ import { useSidebarSectionsStore } from './use-sidebar-sections.js';
 export interface SidebarCursor {
   workKey: string;
   sessionId: string | null;
+  /** Строка комнаты карточки (кусок 5): `sessionId` у неё `null`, курсор стоит на самой комнате; нет поля — не комната. */
+  roomId?: string | null;
 }
 
-const sameCursor = (a: SidebarCursor, b: SidebarCursor): boolean => a.workKey === b.workKey && a.sessionId === b.sessionId;
+const sameCursor = (a: SidebarCursor, b: SidebarCursor): boolean =>
+  a.workKey === b.workKey && a.sessionId === b.sessionId && (a.roomId ?? null) === (b.roomId ?? null);
 
 /**
  * Следующая позиция курсора. У краёв курсор стоит на месте; курсора нет или его элемент
@@ -48,9 +54,14 @@ export function moveCursor(
   return order[next] ?? null;
 }
 
-/** Позиция курсора элемента — только сама карточка или сама строка, не их потомки. */
+/** Позиция курсора элемента — только сама карточка, сама строка сессии или комнаты, не их потомки. */
 function cursorOf(element: Element): SidebarCursor | null {
   if (!(element instanceof HTMLElement)) return null;
+  const roomId = element.dataset.roomRow;
+  if (roomId !== undefined) {
+    const workKey = element.closest<HTMLElement>('[data-work-key]')?.dataset.workKey;
+    return workKey === undefined ? null : { workKey, sessionId: null, roomId };
+  }
   const sessionId = element.dataset.sessionId;
   if (sessionId !== undefined) {
     const card = element.closest<HTMLElement>('[data-work-key]');
@@ -62,7 +73,7 @@ function cursorOf(element: Element): SidebarCursor | null {
 }
 
 function cursorElements(list: HTMLElement): HTMLElement[] {
-  return [...list.querySelectorAll<HTMLElement>('[data-work-key], [data-work-key] [data-session-id]')];
+  return [...list.querySelectorAll<HTMLElement>('[data-work-key], [data-work-key] [data-room-row], [data-work-key] [data-session-id]')];
 }
 
 function elementOf(list: HTMLElement, cursor: SidebarCursor): HTMLElement | null {
@@ -96,16 +107,16 @@ const setCursor = (cursor: SidebarCursor | null): void => {
  * карточка. Элемент под курсором ушёл из DOM (сессия закрыта, работа удалена, карточка
  * уехала за край виртуального списка) — курсор сбрасывается, иначе в список не войти Tab.
  */
-export function useCursorStop(workKey: string, sessionId: string | null, active: boolean): boolean {
+export function useCursorStop(workKey: string, sessionId: string | null, active: boolean, roomId: string | null = null): boolean {
   const stop = useSidebarCursorStore((state) =>
-    state.cursor === null ? sessionId === null && active : state.cursor.workKey === workKey && state.cursor.sessionId === sessionId,
+    state.cursor === null ? sessionId === null && roomId === null && active : sameCursor(state.cursor, { workKey, sessionId, roomId }),
   );
   useEffect(
     () => () => {
       const cursor = useSidebarCursorStore.getState().cursor;
-      if (cursor !== null && cursor.workKey === workKey && cursor.sessionId === sessionId) setCursor(null);
+      if (cursor !== null && sameCursor(cursor, { workKey, sessionId, roomId })) setCursor(null);
     },
-    [workKey, sessionId],
+    [workKey, sessionId, roomId],
   );
   return stop;
 }
@@ -157,6 +168,8 @@ export interface SidebarKeysInput {
   onActivateWork(workKey: string): void;
   /** → и ← на карточке: закрытые сессии развернуть или свернуть. */
   onShowClosed(workKey: string, shown: boolean): void;
+  /** → и ← на строке комнаты (кусок 5): развернуть или свернуть её — то же, что шеврон. */
+  onExpandRoom(workKey: string, roomId: string, expanded: boolean): void;
 }
 
 export interface SidebarKeyHandlers {
@@ -166,7 +179,7 @@ export interface SidebarKeyHandlers {
   onPointerUp(): void;
 }
 
-export function useSidebarKeys({ listRef, activeWorkKey, onActivateWork, onShowClosed }: SidebarKeysInput): SidebarKeyHandlers {
+export function useSidebarKeys({ listRef, activeWorkKey, onActivateWork, onShowClosed, onExpandRoom }: SidebarKeysInput): SidebarKeyHandlers {
   // Фокус от указателя остаётся там, куда кликнули: курсор на активную карточку ставит
   // только вход с клавиатуры (или клик по пустому месту списка).
   const pointer = useRef(false);
@@ -261,9 +274,12 @@ export function useSidebarKeys({ listRef, activeWorkKey, onActivateWork, onShowC
       pointer.current = false;
       const current = cursorOf(event.target as Element);
       if (current === null) return;
+      const roomId = current.roomId ?? null;
       const element = event.target as HTMLElement;
 
       if (event.key === 'F10' && event.shiftKey) {
+        // У строки комнаты меню нет: `menuReturn` остался бы висеть, и закрытие чужого меню вернуло бы фокус ей.
+        if (roomId !== null) return;
         event.preventDefault();
         useSidebarCursorStore.setState({ menuReturn: current });
         const rect = element.getBoundingClientRect();
@@ -280,6 +296,21 @@ export function useSidebarKeys({ listRef, activeWorkKey, onActivateWork, onShowC
         if (next !== null) {
           setCursor(next);
           elementOf(list, next)?.focus();
+        }
+      } else if (roomId !== null) {
+        // Строка комнаты: Enter и пробел — её собственный обработчик (он же гасит событие раньше этого).
+        if (event.key === 'ArrowRight') {
+          event.preventDefault();
+          onExpandRoom(current.workKey, roomId, true);
+        } else if (event.key === 'ArrowLeft') {
+          event.preventDefault();
+          if (element.getAttribute('aria-expanded') === 'true') {
+            onExpandRoom(current.workKey, roomId, false);
+          } else {
+            const card = { workKey: current.workKey, sessionId: null };
+            setCursor(card);
+            elementOf(list, card)?.focus();
+          }
         }
       } else if (current.sessionId === null && event.key === 'Enter') {
         event.preventDefault();

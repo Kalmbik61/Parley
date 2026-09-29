@@ -7,7 +7,7 @@
  * поэтому считается здесь своими функциями, а не через `recipientsOf`.
  */
 
-import type { Message, SessionActivity, WorkEntry, WorkMap, WorkSession } from '@harnas/core';
+import type { Message, Room, SessionActivity, WorkEntry, WorkMap, WorkSession } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
 import { isoMs } from '../lib/iso-time.js';
 import { workKey } from '../lib/tree-order.js';
@@ -25,6 +25,16 @@ export const ATTENTION_RANK: Record<Attention, 4 | 3 | 2 | 1 | 0> = {
   idle: 1,
   off: 0,
 };
+
+/**
+ * Ждёт ли комната решения человека (спека окна 2026-09-29, 2.7): в слоте `Room.proposal` лежит решение
+ * ведущего. У комнаты карты до 2026-09-29 поля `proposal` нет вовсе — это «не ждёт», а не ошибка. Одно
+ * правило на карточку (значок вопроса), строку комнаты, вкладку комнаты (`layout/tab-meta.ts`), ранг работы и
+ * «следующую, где нужен ты»: своего выражения `proposal ?? null` рядом с ним писать не надо.
+ */
+export function roomAwaitsDecision(room: Room): boolean {
+  return (room.proposal ?? null) !== null;
+}
 
 /** Таблица спеки 7.1. */
 export function sessionAttention(session: WorkSession, live: SessionActivity | null): Attention {
@@ -68,7 +78,7 @@ export function roomUnreadForHuman(map: WorkMap, roomId: string): number {
 
 export interface WorkAttention {
   level: Attention;
-  needsYou: number;                     // сессии в 'needs-you'
+  needsYou: number;                     // сессии в 'needs-you' и комнаты с ждущим решением (2.7)
   unseen: number;
   humanUnread: number;
   roomsUnread: Record<string, number>;  // только комнаты с непрочитанным
@@ -102,9 +112,20 @@ export function workAttention(entry: WorkEntry, activity: Record<string, Activit
 
   for (const message of map.messages) lastEventAt = later(lastEventAt, message.at);
 
+  // Комната с ждущим решением — «нужен ты», ранг 4, как blocked (спека окна 2026-09-29, 2.7): в счёт
+  // «нужен ты» она входит наравне с сессией, иначе строка статуса молчала бы, а «следующая, где нужен
+  // ты» вела бы туда, куда счётчик не зовёт.
+  const decisions = map.rooms.filter(roomAwaitsDecision).length;
+  if (decisions > 0) {
+    needsYou += decisions;
+    level = 'needs-you';
+  }
+
   const humanUnread = humanUnreadLetters(map).length;
-  // Письмо человеку — вызов, а комнаты — фон: уровень поднимает только первое (спека 7.1).
-  if (humanUnread > 0) level = 'needs-you';
+  // Письмо человеку — ранг 3 (2.7, как `workRank` прототипа): выше работающей и простаивающей работы,
+  // ниже blocked и решения. Прежде оно поднимало работу до needs-you (спека Orca-UI 7.1). Комнаты — фон,
+  // а не вызов: их непрочитанное уровень не поднимает.
+  if (humanUnread > 0 && ATTENTION_RANK[level] < ATTENTION_RANK.unseen) level = 'unseen';
 
   const roomsUnread: Record<string, number> = {};
   for (const room of map.rooms) {

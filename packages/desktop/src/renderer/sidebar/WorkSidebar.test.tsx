@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
-import type { WorkEntry } from '@harnas/core';
+import type { Room, WorkEntry } from '@harnas/core';
 import { S } from '../../shared/strings.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
@@ -15,7 +15,7 @@ import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import { useHostStore } from '../store/host.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
-import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { activityMap, makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { useSidebarSectionsStore, useSidebarSectionsSync } from './use-sidebar-sections.js';
 import { Palette } from '../palette/Palette.js';
 import { usePaletteStore } from '../palette/store.js';
@@ -694,5 +694,128 @@ describe('WorkSidebar — возврат фокуса после подтвер�
     fireEvent.keyDown(input, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(search));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Кусок 5 плана «Organic»: комнаты в сайдбаре — клавиатура, ранги, строка «New session or room» (спека окна 2026-09-29).
+// ---------------------------------------------------------------------------
+
+describe('WorkSidebar — комнаты (кусок 5)', () => {
+  const proposal = { id: 'p-01', from: 's-01', text: 'Решение', rev: 0, at: '2026-09-29T10:00:00.000Z' };
+  const room = (patch: Partial<Room> = {}): Room => ({ ...makeRoom('r-01', 'Возвраты'), members: ['s-01', 's-02'], lead: 's-01', ...patch });
+  const withRoom = (id: string, patch: Partial<Room> = {}, createdAt = '2026-09-27T08:00:00.000Z'): WorkEntry =>
+    makeWork(id, { createdAt, sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b'), makeSession('s-03', 'c')], rooms: [room(patch)] });
+  const cardOf = (entry: WorkEntry): HTMLElement => document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"]`) as HTMLElement;
+  const roomOf = (entry: WorkEntry): HTMLElement => document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"] [data-room-row]`) as HTMLElement;
+  const rowOf = (entry: WorkEntry, id: string): HTMLElement =>
+    document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"] [data-session-id="${id}"]`) as HTMLElement;
+  const roomExpanded = (entry: WorkEntry): boolean | undefined => useUiStore.getState().roomExpanded[`${keyOf(entry)}/r-01`];
+  const stops = (): HTMLElement[] =>
+    [...list().querySelectorAll<HTMLElement>('[data-work-key], [data-room-row], [data-session-id]')].filter((element) => element.tabIndex === 0);
+
+  beforeEach(() => useUiStore.setState({ roomExpanded: {} }));
+
+  it('карточка → строка комнаты → (свёрнутая: участников нет) следующая сессия карточки; Enter на комнате открывает её', () => {
+    const onOpenRoom = vi.fn();
+    const entry = withRoom('w-r');
+    setWorks([entry]);
+    useLayoutStore.setState({ activeWorkKey: keyOf(entry) });
+    render(<Harness onOpenRoom={onOpenRoom} />);
+    // Участники свёрнутой комнаты в DOM не выводятся; отдельная строка — только s-03.
+    expect(rowOf(entry, 's-01')).toBeNull();
+    act(() => cardOf(entry).focus());
+    fireEvent.keyDown(cardOf(entry), { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(roomOf(entry));
+    expect(roomOf(entry).getAttribute('aria-selected')).toBe('true');
+    expect(stops()).toEqual([roomOf(entry)]);
+    // Свёрнутая комната участников не показывает — следующая по стрелке строка карточки это s-03.
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(rowOf(entry, 's-03'));
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(roomOf(entry));
+    // Enter — как клик: комната открыта и развёрнута (правило 2.6 для клика).
+    fireEvent.keyDown(roomOf(entry), { key: 'Enter' });
+    expect(onOpenRoom).toHaveBeenCalledWith(keyOf(entry), 'r-01');
+    expect(roomExpanded(entry)).toBe(true);
+  });
+
+  it('→ на комнате разворачивает (ручное перекрытие правила), ↓ идёт к участнику, ← на участнике — к карточке; ← на развёрнутой комнате сворачивает, на свёрнутой — к карточке', () => {
+    const entry = withRoom('w-r');
+    setWorks([entry]);
+    useLayoutStore.setState({ activeWorkKey: keyOf(entry) });
+    render(<Harness />);
+    act(() => cardOf(entry).focus());
+    fireEvent.keyDown(cardOf(entry), { key: 'ArrowDown' });
+    fireEvent.keyDown(roomOf(entry), { key: 'ArrowRight' });
+    expect(roomExpanded(entry)).toBe(true);
+    expect(roomOf(entry).getAttribute('aria-expanded')).toBe('true');
+    expect(roomOf(entry).querySelectorAll('[data-session-id]')).toHaveLength(2);
+
+    fireEvent.keyDown(roomOf(entry), { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(rowOf(entry, 's-01'));
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowLeft' });
+    expect(document.activeElement).toBe(cardOf(entry));
+
+    fireEvent.keyDown(cardOf(entry), { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(roomOf(entry));
+    fireEvent.keyDown(roomOf(entry), { key: 'ArrowLeft' });
+    expect(roomExpanded(entry)).toBe(false);
+    expect(roomOf(entry).getAttribute('aria-expanded')).toBe('false');
+    fireEvent.keyDown(roomOf(entry), { key: 'ArrowLeft' });
+    expect(document.activeElement).toBe(cardOf(entry));
+  });
+
+  it('Shift+F10 на строке комнаты меню не открывает и курсор для чужого меню не запоминает', () => {
+    const entry = withRoom('w-r');
+    setWorks([entry]);
+    useLayoutStore.setState({ activeWorkKey: keyOf(entry) });
+    render(<Harness />);
+    act(() => roomOf(entry).focus());
+    fireEvent.keyDown(roomOf(entry), { key: 'F10', shiftKey: true });
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('клик по строке комнаты — onOpenRoom с ключом работы; шеврон комнату не открывает', () => {
+    const onOpenRoom = vi.fn();
+    const entry = withRoom('w-r');
+    setWorks([entry]);
+    useLayoutStore.setState({ activeWorkKey: keyOf(entry) });
+    render(<Harness onOpenRoom={onOpenRoom} />);
+    fireEvent.click(within(roomOf(entry)).getByRole('button', { name: S.sidebar.showAgents }));
+    expect(onOpenRoom).not.toHaveBeenCalled();
+    fireEvent.click(roomOf(entry));
+    expect(onOpenRoom).toHaveBeenCalledWith(keyOf(entry), 'r-01');
+  });
+
+  it('порядок карточек: работа с ждущим решением выше работы с письмом человеку, та выше просто работающей; значок карточки — вопрос', () => {
+    const decision = withRoom('w-decision', { proposal }, '2026-09-27T08:00:00.000Z');
+    const letter = makeWork('w-mail', {
+      createdAt: '2026-09-27T07:00:00.000Z',
+      sessions: [makeSession('s-01', 'a')],
+      messages: [{ id: 'm-1', roomId: null, from: 's-01', to: ['human'], at: '2026-09-27T09:00:00.000Z', text: 'письмо', kind: 'note', readBy: {} }],
+    });
+    const busy = makeWork('w-busy', { createdAt: '2026-09-27T06:00:00.000Z', sessions: [makeSession('s-01', 'a')] });
+    setWorks([busy, letter, decision]);
+    useActivityStore.setState({
+      byRef: activityMap([makeActivity({ projectPath: busy.projectPath, workId: 'w-busy', sessionId: 's-01' }, 'working')]),
+    });
+    render(<Harness />);
+    expect(cardKeys()).toEqual([keyOf(decision), keyOf(letter), keyOf(busy)]);
+    expect(cardOf(decision).querySelector('[data-work-glyph] [data-testid="agent-state-dot"]')?.getAttribute('data-state')).toBe('blocked');
+    expect(cardOf(decision).querySelector('[data-room-row]')?.className).toContain('bg-accent-200');
+  });
+
+  it('«New session or room» — только у активной карточки со статусом active', () => {
+    const first = withRoom('w-1', {}, '2026-09-27T08:00:00.000Z');
+    const second = withRoom('w-2', {}, '2026-09-27T07:00:00.000Z');
+    setWorks([first, second]);
+    useLayoutStore.setState({ activeWorkKey: keyOf(second) });
+    render(<Harness />);
+    const rows = screen.getAllByText(S.sidebar.newSessionOrRoom);
+    expect(rows).toHaveLength(1);
+    expect(cardOf(second).contains(rows[0] as HTMLElement)).toBe(true);
+    fireEvent.click(rows[0] as HTMLElement);
+    expect(useUiStore.getState().dialogs.newSession).toMatchObject({ open: true, work: { projectPath: second.projectPath, workId: 'w-2' } });
   });
 });
