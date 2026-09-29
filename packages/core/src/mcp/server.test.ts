@@ -234,6 +234,9 @@ describe('список инструментов', () => {
     expect(propose?.description).toMatch(/ждёт (ответа )?человека/);
     expect(propose?.description).toMatch(/заменя/);
     expect(propose?.description).toMatch(/письм/);
+    // Предел текста в схеме — та же константа, что держит setProposal.
+    const textSchema = propose?.inputSchema.properties?.['text'] as { description?: string } | undefined;
+    expect(textSchema?.description).toContain(String(PROPOSAL_TEXT_MAX));
   });
 
   it('create_room: lead необязателен, описание называет ведущего по умолчанию', async () => {

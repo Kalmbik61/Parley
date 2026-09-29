@@ -15,7 +15,7 @@ import { GUIDE } from '../work/guide.js';
 import { unreadFor } from '../work/letters.js';
 import { addMessage, addSession, transitionSession } from '../work/map.js';
 import { finishSession } from '../work/metrics.js';
-import { setProposal } from '../work/proposals.js';
+import { PROPOSAL_TEXT_MAX, setProposal } from '../work/proposals.js';
 import { addRoom, isDescendant, isMember, joinNotice } from '../work/rooms.js';
 import { displayStatus } from '../work/status-view.js';
 import { readMap, updateMap, workPaths } from '../work/store.js';
@@ -347,8 +347,7 @@ const TOOLS: Tool[] = [
         room: { type: 'string', description: 'Id комнаты из get_map.' },
         text: {
           type: 'string',
-          description:
-            'Решение целиком, до 10000 знаков: что делаем и какую часть берёт каждый; участников называй упоминаниями @s02.',
+          description: `Решение целиком, до ${PROPOSAL_TEXT_MAX} знаков: что делаем и какую часть берёт каждый; участников называй упоминаниями @s02.`,
         },
       },
       required: ['room', 'text'],
