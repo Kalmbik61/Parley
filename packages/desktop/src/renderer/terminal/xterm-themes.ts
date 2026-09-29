@@ -2,6 +2,11 @@
  * Палитры терминала по системной теме (кусок 1.3 плана окна, спека 4.7 —
  * значения таблицы дословно; сама таблица — из Orca
  * `src/renderer/src/lib/terminal-themes/defaults.ts`, коммит acf8e679).
+ * Кусок 1 плана «Organic» (спека окна 2026-09-29, раздел 4 «Терминал»): фон, текст, курсор и
+ * выделение — с листа окна, а 16 ANSI-цветов остались как есть. Терминал сидит на листе центра
+ * (`--sheet`), и своего цвета у него нет: фон — `--sheet`, текст и курсор — `--color-text`, выделение —
+ * `--color-accent` в 30 %. xterm не читает CSS-переменные, поэтому значения здесь — hex и `rgba()` тех
+ * токенов; что они не разошлись с `styles/tokens.css`, держит `xterm-themes.test.ts`.
  * В отличие от прежней `xterm-theme.ts` (палитра TUI на восемь имён,
  * `config.theme`), тут ровно два варианта — тёмный и светлый — и переключение
  * идёт по `.dark` (`useUiStore`, кусок 1.1), а не по теме TUI: у окна теперь
@@ -10,18 +15,18 @@
  * `cursorAccent` в таблице спеки не расписан отдельной строкой (там только
  * фон/текст/курсор), но в первоисточнике Orca он есть и равен фону — без
  * него курсор-блок рисуется с нечитаемым символом поверх себя же. Тут это
- * оставлено, как в первоисточнике.
+ * оставлено, как в первоисточнике: символ под курсором — цвета листа.
  */
 
 import type { ITerminalOptions, ITheme } from '@xterm/xterm';
 
-/** Ghostty Default Style Dark — спека 4.7. */
+/** ANSI — Ghostty Default Style Dark (спека Orca-UI 4.7); остальное — лист тёмной темы Organic. */
 export const XTERM_DARK: ITheme = {
-  background: '#282c34',
-  foreground: '#ffffff',
-  cursor: '#ffffff',
-  cursorAccent: '#282c34',
-  selectionBackground: '#5a7898',
+  background: '#0b0a09',
+  foreground: '#ece6dc',
+  cursor: '#ece6dc',
+  cursorAccent: '#0b0a09',
+  selectionBackground: 'rgba(214, 127, 72, 0.3)',
   black: '#1d1f21',
   red: '#cc6666',
   green: '#b5bd68',
@@ -40,13 +45,13 @@ export const XTERM_DARK: ITheme = {
   brightWhite: '#eaeaea',
 };
 
-/** Builtin Tango Light — спека 4.7. */
+/** ANSI — Builtin Tango Light (спека Orca-UI 4.7); остальное — лист светлой темы Organic. */
 export const XTERM_LIGHT: ITheme = {
-  background: '#ffffff',
-  foreground: '#2e3434',
-  cursor: '#2e3434',
-  cursorAccent: '#ffffff',
-  selectionBackground: '#accef7',
+  background: '#f9f4ed',
+  foreground: '#201e1d',
+  cursor: '#201e1d',
+  cursorAccent: '#f9f4ed',
+  selectionBackground: 'rgba(198, 113, 57, 0.3)',
   black: '#2e3436',
   red: '#cc0000',
   green: '#4e9a06',
