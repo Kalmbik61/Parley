@@ -1393,7 +1393,8 @@ describe('AppShell — меню сайдбара (кусок 3.4)', () => {
     const errors = vi.spyOn(console, 'error');
     const card = document.querySelector(`[data-work-key="${keyOf('w-02')}"]`) as HTMLElement;
     fireEvent.keyDown(within(card).getByRole('button', { name: 'Rooms' }), { key: 'Enter' });
-    fireEvent.click(screen.getByText('Design'));
+    // Название комнаты видно и строкой самой карточки (кусок 5): пункт ищем внутри меню.
+    fireEvent.click(within(screen.getByRole('menu')).getByText('Design'));
     const overflow = errors.mock.calls.filter((args) => args.some((arg) => String(arg).includes('Maximum call stack')));
     errors.mockRestore();
     expect(overflow).toEqual([]);
@@ -1610,6 +1611,24 @@ function archivedWork(id: string, projectPath: string, sessions: WorkSession[]):
   return { projectPath, map: { ...base.map, work: { ...base.map.work, status: 'archived' } } };
 }
 
+
+/** Две работы; в первой комната r-01 {s-01, s-02} с решением, ждущим человека (кусок 5, спека окна 2026-09-29, 2.7). */
+function waitingWorks(): WorkEntry[] {
+  const waiting = work('w-01', '2026-01-01', 'Возвраты', [session('s-01', 'один'), session('s-02', 'два')]);
+  waiting.map.rooms = [
+    {
+      id: 'r-01',
+      title: 'Возвраты',
+      creator: 'human',
+      members: ['s-01', 's-02'],
+      createdAt: '2026-01-01',
+      lead: 's-01',
+      proposal: { id: 'p-01', from: 's-01', text: 'Решение', rev: 0, at: '2026-01-02T00:00:00.000Z' },
+    },
+  ];
+  return [waiting, work('w-02', '2026-01-02', 'Вторая', [session('s-01', 'три')])];
+}
+
 describe('AppShell — показ архивных (тесты 6, 7 куска 6.3)', () => {
   beforeEach(() => useUiStore.setState({ showArchived: false }));
   afterEach(() => useUiStore.setState({ showArchived: false }));
@@ -1655,6 +1674,20 @@ describe('AppShell — показ архивных (тесты 6, 7 куска 6
 
     await pickInPalette('Next session', /^Next session that needs you/);
     expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
+  });
+
+  // Кусок 5 плана «Organic», спека окна 2026-09-29, 2.7: комната с ждущим решением — «нужен ты», как blocked.
+  it('комната с ждущим решением: строка статуса «1 needs you», карточка со значком вопроса и подкрашенной строкой комнаты', async () => {
+    await renderShell(waitingWorks());
+
+    expect(document.querySelector('[data-attention-segment]')?.textContent).toBe('1 needs you');
+    const card = document.querySelector(`[data-work-key="${CSS.escape(keyOf('w-01'))}"]`) as HTMLElement;
+    expect(card.querySelector('[data-work-glyph] [data-testid="agent-state-dot"]')?.getAttribute('data-state')).toBe('blocked');
+    // Участники комнаты отдельными строками не выводятся; строка комнаты подкрашена и подписана.
+    expect(card.querySelector('[data-session-id="s-01"]')).toBeNull();
+    const row = card.querySelector('[data-room-row="r-01"]') as HTMLElement;
+    expect(row.textContent).toContain('decision');
+    expect(row.className).toContain('bg-accent-200');
   });
 });
 

@@ -8,9 +8,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@harnas/core';
+import type { Room, WorkEntry } from '@harnas/core';
 import { S } from '../../shared/strings.js';
 import type { WorkAttention } from '../attention/derive.js';
+import { roomKey } from '../lib/room-view.js';
 import { workKey } from '../lib/tree-order.js';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
@@ -18,7 +19,7 @@ import { useHostStore } from '../store/host.js';
 import { useUiStore } from '../store/ui.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeLetter, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
-import { WorkCard, type WorkCardProps } from './WorkCard.js';
+import { showClosedSessions, WorkCard, type WorkCardProps } from './WorkCard.js';
 
 vi.mock('sonner', () => ({ toast: vi.fn() }));
 
@@ -424,7 +425,8 @@ describe('WorkCard — меню комнат по # (тест 4)', () => {
     renderCard(withRooms, { attention: attention({ roomsUnread: { 'r-01': 1 } }), onOpenRoom, onActivate });
     fireEvent.keyDown(screen.getByRole('button', { name: 'Rooms' }), { key: 'Enter' });
     expect(within(screen.getByRole('menu')).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Design1', 'Backend']);
-    fireEvent.click(screen.getByText('Backend'));
+    // Названия комнат видны и строками самой карточки (кусок 5): пункт ищем внутри меню.
+    fireEvent.click(within(screen.getByRole('menu')).getByText('Backend'));
     expect(onOpenRoom).toHaveBeenCalledWith('r-02');
     cleanup();
 
@@ -434,7 +436,7 @@ describe('WorkCard — меню комнат по # (тест 4)', () => {
     expect(trigger.textContent).toBe('');
     fireEvent.click(trigger);
     fireEvent.keyDown(trigger, { key: 'Enter' });
-    fireEvent.click(screen.getByText('Design'));
+    fireEvent.click(within(screen.getByRole('menu')).getByText('Design'));
     expect(onOpenRoom).toHaveBeenLastCalledWith('r-01');
     expect(onActivate).not.toHaveBeenCalled();
   });
@@ -469,5 +471,172 @@ describe('WorkCard — кеш колбэков строк (решение кон
 
     expect(lastOpen('s-02')).not.toBe(before.s2);
     expect(lastOpen('s-01')).toBe(before.s1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Кусок 5 плана «Organic»: комнаты в карточке и строка «New session or room» (спека окна 2026-09-29, 1.2, 2.6).
+// ---------------------------------------------------------------------------
+
+describe('WorkCard — комнаты на месте участников (1.2)', () => {
+  const room = (id: string, members: string[], patch: Partial<Room> = {}): Room => ({ ...makeRoom(id, `Room ${id}`), members, lead: members[0] ?? null, ...patch });
+  const four = (rooms: Room[], patch: Partial<Parameters<typeof makeWork>[1]> = {}) =>
+    makeWork('w-01', { sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b'), makeSession('s-03', 'c'), makeSession('s-04', 'd')], rooms, ...patch });
+  const rowsOfCard = (): string[] =>
+    [...card().querySelectorAll<HTMLElement>('[data-session-id], [data-room-row]')].map((element) => element.getAttribute('data-room-row') ?? (element.getAttribute('data-session-id') as string));
+
+  beforeEach(() => {
+    useUiStore.setState({ roomExpanded: {} });
+    showClosedSessions(workKey('/tmp/proj', 'w-01'), false);
+  });
+
+  it('участник комнаты отдельной строкой не выводится: на месте первого участника — строка комнаты, остальные — вокруг', () => {
+    renderCard(four([room('r-01', ['s-02', 's-03'])]));
+    // Свёрнутая комната: участников в DOM нет, есть строка комнаты между s-01 и s-04.
+    expect(rowsOfCard()).toEqual(['s-01', 'r-01', 's-04']);
+    expect(screen.getByText('Room r-01')).toBeTruthy();
+  });
+
+  it('развёрнутая комната показывает участников внутри себя, а не рядом; число сессий в мете считает и их', () => {
+    useUiStore.getState().setRoomExpanded(roomKey(workKey('/tmp/proj', 'w-01'), 'r-01'), true);
+    renderCard(four([room('r-01', ['s-02', 's-03'])]));
+    expect(rowsOfCard()).toEqual(['s-01', 'r-01', 's-02', 's-03', 's-04']);
+    const inside = [...card().querySelectorAll('[data-room-row] [data-session-id]')].map((element) => element.getAttribute('data-session-id'));
+    expect(inside).toEqual(['s-02', 's-03']);
+    expect(card().querySelector('[data-work-meta]')?.textContent).toContain('4 sessions');
+  });
+
+  it('комната без живых участников — в конце карточки; закрытые участники — «N more closed» считает их, строками они видны только внутри развёрнутой комнаты', () => {
+    const entry = makeWork('w-01', {
+      sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'closed' })],
+      rooms: [room('r-01', ['s-02'])],
+    });
+    renderCard(entry);
+    expect(rowsOfCard()).toEqual(['s-01', 'r-01']);
+    expect(card().querySelector('[data-work-meta]')?.textContent).toContain('1 session');
+    // «1 more closed»: клик показывает закрытые — участник появляется в развёрнутой комнате, а не отдельной строкой.
+    useUiStore.getState().setRoomExpanded(roomKey(workKey('/tmp/proj', 'w-01'), 'r-01'), true);
+    fireEvent.click(screen.getByText('1 more closed'));
+    expect(rowsOfCard()).toEqual(['s-01', 'r-01', 's-02']);
+    expect(card().querySelector('[data-room-row] [data-session-id="s-02"]')).not.toBeNull();
+  });
+
+  it('старая карта: сессия в нескольких комнатах стоит в самой ранней по createdAt, в другой её строки нет (решение 4)', () => {
+    const early = room('r-01', ['s-01', 's-02'], { createdAt: '2026-09-27T08:00:00.000Z' });
+    const late = room('r-02', ['s-02', 's-03'], { createdAt: '2026-09-27T09:00:00.000Z' });
+    useUiStore.getState().setRoomExpanded(roomKey(workKey('/tmp/proj', 'w-01'), 'r-01'), true);
+    useUiStore.getState().setRoomExpanded(roomKey(workKey('/tmp/proj', 'w-01'), 'r-02'), true);
+    renderCard(four([late, early]));
+    expect(rowsOfCard()).toEqual(['r-01', 's-01', 's-02', 'r-02', 's-03', 's-04']);
+    // s-02 ровно один раз — в ранней комнате.
+    expect(card().querySelectorAll('[data-session-id="s-02"]')).toHaveLength(1);
+    expect(card().querySelector('[data-room-row="r-01"] [data-session-id="s-02"]')).not.toBeNull();
+  });
+
+  it('счётчик непрочитанного идёт строке комнаты из расчёта внимания работы (roomsUnread), решение — из карты', () => {
+    const proposal = { id: 'p-1', from: 's-02', text: 'Решение', rev: 0, at: '2026-09-29T10:00:00.000Z' };
+    renderCard(four([room('r-01', ['s-02', 's-03'], { proposal })]), { attention: attention({ roomsUnread: { 'r-01': 4 } }) });
+    // Решение важнее слова «N new».
+    expect(card().querySelector('[data-room-row]')?.textContent).toContain('decision');
+    cleanup();
+    renderCard(four([room('r-01', ['s-02', 's-03'])]), { attention: attention({ roomsUnread: { 'r-01': 4 } }) });
+    expect(card().querySelector('[data-room-row]')?.textContent).toContain('4 new');
+  });
+
+  it('клик по строке комнаты — onOpenRoom с её id, а не onActivate; клик по участнику развёрнутой комнаты — onOpenSession', () => {
+    const onOpenRoom = vi.fn();
+    const onOpenSession = vi.fn();
+    const onActivate = vi.fn();
+    useUiStore.getState().setRoomExpanded(roomKey(workKey('/tmp/proj', 'w-01'), 'r-01'), true);
+    renderCard(four([room('r-01', ['s-02', 's-03'])]), { onOpenRoom, onOpenSession, onActivate });
+    fireEvent.click(card().querySelector('[data-room-row]') as HTMLElement);
+    expect(onOpenRoom).toHaveBeenCalledWith('r-01');
+    fireEvent.click(card().querySelector('[data-room-row] [data-session-id="s-03"]') as HTMLElement);
+    expect(onOpenSession).toHaveBeenCalledWith('s-03');
+    expect(onActivate).not.toHaveBeenCalled();
+  });
+
+  it('карточка без комнат — как прежде: строки сессий по treeOrder, ни одной строки комнаты', () => {
+    renderCard(makeWork('w-01', { sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b')] }));
+    expect(rowsOfCard()).toEqual(['s-01', 's-02']);
+    expect(card().querySelector('[data-room-row]')).toBeNull();
+  });
+
+  it('строки комнаты и сессий — в одном блоке строк карточки (role=group, зазор 1)', () => {
+    renderCard(four([room('r-01', ['s-02', 's-03'])]));
+    const group = card().querySelector('[role="group"]') as HTMLElement;
+    expect(group.querySelector('[data-room-row]')).not.toBeNull();
+    expect(group.querySelector('[data-session-id="s-01"]')).not.toBeNull();
+  });
+
+  it('срез активности идёт и участникам комнаты: строка участника берёт состояние из activity работы', () => {
+    useUiStore.getState().setRoomExpanded(roomKey(workKey('/tmp/proj', 'w-01'), 'r-01'), true);
+    const entry = four([room('r-01', ['s-02', 's-03'])]);
+    renderCard(entry, { activity: activityMap([makeActivity({ projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-03' }, 'blocked')]) });
+    expect(card().querySelector('[data-room-row] [data-session-id="s-03"] [data-state="blocked"]')).not.toBeNull();
+  });
+});
+
+describe('WorkCard — строка «New session or room» (1.2, «Под строками»)', () => {
+  const entry = makeWork('w-01', { projectPath: '/tmp/proj', sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b')] });
+  const newRow = (): HTMLElement | null => screen.queryByText(S.sidebar.newSessionOrRoom)?.closest('button') ?? null;
+
+  beforeEach(() => {
+    useUiStore.setState({ dialogs: { ...useUiStore.getState().dialogs, newSession: { open: false, parentSessionId: null, work: null } } });
+    showClosedSessions(workKey('/tmp/proj', 'w-01'), false);
+  });
+
+  it('у активной карточки со статусом active — есть; 24px, 11px, отступ слева 26, Plus 11', () => {
+    renderCard(entry, { active: true });
+    const button = newRow() as HTMLElement;
+    expect(button).not.toBeNull();
+    for (const cls of ['h-6', 'pl-[26px]', 'text-[11px]', 'rounded-full', 'gap-1.5']) expect(button.className, cls).toContain(cls);
+    expect(button.querySelector('svg.lucide-plus')?.classList.contains('size-[11px]')).toBe(true);
+    expect(button.className).toContain('text-work-sidebar-muted-foreground');
+    expect(button.className).toContain('hover:bg-foreground/6');
+    expect(button.className).toContain('hover:text-(--color-text)');
+  });
+
+  it('у неактивной карточки, у done и у архивной — нет', () => {
+    renderCard(entry, { active: false });
+    expect(newRow()).toBeNull();
+    cleanup();
+    renderCard(makeWork('w-01', { status: 'done' }), { active: true });
+    expect(newRow()).toBeNull();
+    cleanup();
+    renderCard(makeWork('w-01', { status: 'archived' }), { active: true });
+    expect(newRow()).toBeNull();
+  });
+
+  it('стоит под строками и под «N more closed»', () => {
+    const withClosed = makeWork('w-01', { sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'closed' })] });
+    renderCard(withClosed, { active: true });
+    const more = screen.getByText('1 more closed');
+    const button = newRow() as HTMLElement;
+    expect(more.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(card().querySelector('[data-session-id="s-01"]')?.compareDocumentPosition(more)).toBeTruthy();
+  });
+
+  it('клик открывает существующий диалог ⌘T этой работы; родитель — выбранная сессия; карточку не переключает', () => {
+    const onActivate = vi.fn();
+    renderCard(entry, { active: true, selectedSessionId: 's-02', onActivate });
+    fireEvent.click(newRow() as HTMLElement);
+    expect(useUiStore.getState().dialogs.newSession).toEqual({
+      open: true,
+      parentSessionId: 's-02',
+      work: { projectPath: '/tmp/proj', workId: 'w-01' },
+    });
+    expect(onActivate).not.toHaveBeenCalled();
+  });
+
+  it('выбранной сессии нет — родителя нет', () => {
+    renderCard(entry, { active: true, selectedSessionId: null });
+    fireEvent.click(newRow() as HTMLElement);
+    expect(useUiStore.getState().dialogs.newSession).toMatchObject({ open: true, parentSessionId: null });
+  });
+
+  it('работа без сессий — строка всё равно есть: с неё и начинается', () => {
+    renderCard(makeWork('w-01', { title: 'Empty' }), { active: true });
+    expect(newRow()).not.toBeNull();
   });
 });
