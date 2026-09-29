@@ -71,6 +71,10 @@ const weekday = (iso: string): string => new Date(iso).toLocaleDateString('en-US
  * Ширины и отступы — по прототипу handoff: трек 44×4, зазор 7, слева ещё 4. Нет данных (`null`, оба окна
  * отсутствуют) — ничего не рисуется, сегмент остаётся значком, именем и версией. Тултип — когда сбросятся окна,
  * которые есть, и когда CLI отдал эти числа.
+ *
+ * Нехватка места (решение контролёра 3): сначала сжимается блок лимитов — вес `shrink` 100 — и в нём текст
+ * (многоточие); полоска не сжимается, а меньше трека с зазором (44 + 7) блок не бывает. Потом версия (10), и только
+ * последним — имя провайдера (1).
  */
 function ProviderLimitsMeter({ limits }: { limits: ProviderLimits | null }): JSX.Element | null {
   const fiveHourLimit = limits?.fiveHour ?? null;
@@ -86,7 +90,7 @@ function ProviderLimitsMeter({ limits }: { limits: ProviderLimits | null }): JSX
     clock(limits.at),
   );
   return (
-    <span data-limits title={tooltip} className="ml-1 flex min-w-0 items-center gap-[7px]">
+    <span data-limits title={tooltip} className="ml-1 flex min-w-[51px] shrink-[100] items-center gap-[7px]">
       <span aria-hidden className="h-1 w-11 shrink-0 overflow-hidden rounded-full bg-current/18">
         <span
           data-limits-fill
@@ -116,16 +120,22 @@ export function StatusBar({
   const attentionText = S.statusBar.attention(attention.needsYou, attention.unseen);
   return (
     <div className="flex h-7 shrink-0 items-center gap-3.5 pb-0.5 pl-[18px] pr-3.5 text-xs text-neutral-800">
+      {/* Сегмент провайдера сжимаем: длинные имя и версия не растягивают строку за край окна, правый блок не уезжает.
+          Ширина имени и версии ограничена (160 и 80): нехватка места делится между сегментами по их ширине, и
+          безмерная метка иначе отбирала бы место у соседей, у которых всё в меру. */}
       {providers.map((provider) => (
-        <span key={provider.id} data-provider-segment={provider.id} className="inline-flex shrink-0 items-center gap-[7px]">
+        <span key={provider.id} data-provider-segment={provider.id} className="inline-flex min-w-0 items-center gap-[7px]">
           <AgentIcon provider={provider.id} size={14} />
-          <span>{providerName(provider.id, provider.label)}</span>
-          {provider.version === null ? null : <span className="font-mono text-[11px] text-neutral-700">{provider.version}</span>}
+          <span className="min-w-0 max-w-40 truncate">{providerName(provider.id, provider.label)}</span>
+          {provider.version === null ? null : (
+            <span className="min-w-0 max-w-20 shrink-[10] truncate font-mono text-[11px] text-neutral-700">{provider.version}</span>
+          )}
           <ProviderLimitsMeter limits={provider.limits} />
         </span>
       ))}
-      <div className="flex min-w-0 flex-1 items-center justify-end gap-3.5">
-        <span className="min-w-0 truncate">{noticeLine}</span>
+      {/* Уведомление хоста — заполнитель: берёт то, что осталось, и уступает первым. */}
+      <span className="min-w-0 flex-1 truncate text-right">{noticeLine}</span>
+      <div className="flex shrink-0 items-center gap-3.5">
         {attentionText === '' ? null : (
           <button type="button" data-attention-segment onClick={onNextAttention} className={SEGMENT_BUTTON}>
             {attentionText}

@@ -262,10 +262,11 @@ describe('StatusBar — провайдеры слева (Organic, 1.1)', () => {
   it('длинное уведомление хоста обрезается многоточием и не выталкивает провайдеров и будильник', () => {
     useProvidersStore.setState({ providers: [provider({ id: 'claude', label: 'Claude', version: '2.1.276' })] });
     const long = 'очень длинное уведомление '.repeat(20);
-    const { container } = renderPlain({ noticeLine: long });
+    renderPlain({ noticeLine: long });
     expect(screen.getByText(long.trim()).className).toContain('truncate');
     expect(screen.getByText(long.trim()).className).toContain('min-w-0');
-    expect(segments(container)[0]?.className).toContain('shrink-0');
+    // Уведомление — заполнитель между провайдерами и правыми сегментами: берёт только то, что осталось.
+    expect(screen.getByText(long.trim()).className).toContain('flex-1');
     expect(screen.getByRole('button', { name: 'Auto-wake on' }).className).toContain('shrink-0');
   });
 
@@ -557,5 +558,79 @@ describe('StatusBar — лимиты подписок: тултип (кусок 
     expect(titleOf(container, 'claude')).toBe('5-hour window resets at 9:30 PM · Weekly window resets Sat 9:05 AM · Updated 7:41 PM');
     expect(titleOf(container, 'codex')).toBe('5-hour window resets at 10:00 PM · Updated 6:25 PM');
     dispose();
+  });
+});
+
+// Длинные значения (кусок 9b, решение контролёра 3): в 800×500 имя и версия провайдера не выталкивают лимиты, при
+// нехватке места первым сжимается текст лимитов (многоточие), полоска остаётся, правые сегменты не уезжают. Вёрстку
+// jsdom не считает — здесь классы; геометрию в живом окне проверяют E2E `limits.spec.ts`.
+describe('StatusBar — длинные значения (кусок 9b)', () => {
+  const both = limitsOf({ fiveHour: limitWindow(58), week: limitWindow(41) });
+  const long = { id: 'zeta', label: 'Extremely Long Provider Label For The Status Bar Layout Check', version: '123456789.987654321.123456789' };
+
+  it('сегмент провайдера сжимаем (min-w-0, не shrink-0): длинные значения не растягивают строку за край окна', () => {
+    useProvidersStore.setState({ providers: [provider({ ...long, limits: both })] });
+    const { container } = renderPlain();
+    const segment = segments(container)[0] as HTMLElement;
+    expect(segment.className).toContain('min-w-0');
+    expect(segment.className).not.toContain('shrink-0');
+  });
+
+  it('имя и версия — с многоточием (min-w-0 truncate), значок не сжимается', () => {
+    useProvidersStore.setState({ providers: [provider({ ...long, limits: both })] });
+    const { container } = renderPlain();
+    const segment = segments(container)[0] as HTMLElement;
+    for (const el of [screen.getByText(long.label), screen.getByText(long.version)]) {
+      expect(el.className).toContain('min-w-0');
+      expect(el.className).toContain('truncate');
+    }
+    expect(segment.querySelector('[data-agent-icon]')?.className).toContain('shrink-0');
+  });
+
+  it('порядок сжатия: лимиты (вес 100), затем версия (10), затем имя (1) — имя провайдера теряется последним', () => {
+    useProvidersStore.setState({ providers: [provider({ ...long, limits: both })] });
+    renderPlain();
+    expect(screen.getByText(long.version).className).toMatch(/\bshrink-\[10\]/);
+    expect(screen.getByText(long.label).className).not.toMatch(/\bshrink-/);
+  });
+
+  it('имя и версия не растут без предела: одна безмерная метка не отнимает место у соседей (имя не шире 160, версия — 80)', () => {
+    useProvidersStore.setState({ providers: [provider({ ...long, limits: both })] });
+    renderPlain();
+    expect(screen.getByText(long.label).className).toContain('max-w-40');
+    expect(screen.getByText(long.version).className).toContain('max-w-20');
+  });
+
+  it('лимиты: текст сжимается первым (вес shrink больше, чем у имени и версии), многоточие; полоска не сжимается и остаётся даже при нулевом тексте', () => {
+    useProvidersStore.setState({ providers: [provider({ ...long, limits: both })] });
+    const { container } = renderPlain();
+    const block = limitsIn(container, 'zeta') as HTMLElement;
+    expect(block.className).toMatch(/\bshrink-\[100\]/);
+    // Трек 44 + зазор 7: меньше блок не бывает, полоска не вылезает за него.
+    expect(block.className).toContain('min-w-[51px]');
+    const [bar, text] = [...block.children] as HTMLElement[];
+    expect(bar?.className).toContain('shrink-0');
+    expect(text?.className).toContain('min-w-0');
+    expect(text?.className).toContain('truncate');
+  });
+
+  it('правые сегменты — одним блоком, который не сжимается и не уезжает: внимание, связь с хостом, «Host is outdated», будильник', () => {
+    useProvidersStore.setState({ providers: [provider({ ...long, limits: both })] });
+    renderPlain({ attention: { needsYou: 2, unseen: 1 } });
+    const cluster = screen.getByRole('button', { name: 'Auto-wake on' }).parentElement as HTMLElement;
+    expect(cluster.className).toContain('shrink-0');
+    expect(screen.getByRole('button', { name: '2 need you · 1 unseen' }).parentElement).toBe(cluster);
+    expect(screen.getByText('Host 1.0.0').parentElement).toBe(cluster);
+  });
+
+  it('уведомление — заполнитель между провайдерами и правым блоком: то же общее место в строке, а не внутри блока', () => {
+    useProvidersStore.setState({ providers: [provider({ ...long, limits: both })] });
+    const { container } = renderPlain({ noticeLine: 'Что-то случилось' });
+    const bar = container.firstElementChild as HTMLElement;
+    const notice = screen.getByText('Что-то случилось');
+    expect(notice.parentElement).toBe(bar);
+    expect(notice.className).toContain('flex-1');
+    expect(notice.className).toContain('text-right');
+    expect(notice.nextElementSibling).toBe(screen.getByRole('button', { name: 'Auto-wake on' }).parentElement);
   });
 });
