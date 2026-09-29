@@ -150,8 +150,7 @@ const MAX_FILES = 5;
  * Лимиты Codex: последнее событие `token_count` с `rate_limits` корзины `codex` из самого свежего
  * rollout-лога (по времени изменения файла: `codex resume` дописывает старый лог, а каталог дня
  * остаётся прежним). Записи чужих корзин пропускаются. Нет корня, логов или подходящих событий —
- * `null`. Окна с прошедшим сбросом здесь
- * ещё есть: их снимает хост (`dropExpiredWindows`).
+ * `null`. Окна с прошедшим сбросом здесь ещё есть: их снимает хост (`dropExpiredWindows`).
  */
 export async function readCodexLimits(
   root: string = defaultCodexRoot(),
