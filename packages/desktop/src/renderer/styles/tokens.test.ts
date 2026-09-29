@@ -272,6 +272,56 @@ describe('вторичный текст — не ниже 4.5:1 в обеих т
   }
 });
 
+// ── Значки состояний (таблица 1.2 спеки, наследство куска 1) ────────────────────────────────
+
+/**
+ * Значок состояния — признак состояния, порог 3:1 (WCAG 1.4.11) к фонам, на которых он стоит в
+ * сайдбаре: фон окна (`surface`, неактивные карточки), активная карточка (`neutral-100`) и её выбранная
+ * строка (`neutral-100` + `text 9%`). Ступени таблицы 1.2 для idle (`neutral-400`), pending и «закрыта»
+ * (`neutral-500`) после смены рамп держали 1.5–2.2:1; решение контролёра куска 2 — ближайшая ступень
+ * рампы `neutral-*`, которая держит все три фона в обеих темах. Это `neutral-600`, одна на четыре
+ * состояния (idle, pending, «спит», «закрыта»): различает их форма — точка, кольцо, луна, тире. Тот же
+ * цвет — в `components/AgentStateDot.tsx` (`AgentStateDot.test.tsx` сверяет классы).
+ */
+const STATE_ICON_BACKGROUNDS: Record<string, (theme: Theme) => Rgb> = {
+  'фон окна (--background)': (theme) => solid(theme, '--background'),
+  'активная карточка (--card)': (theme) => solid(theme, '--card'),
+  'выбранная строка активной карточки (--card + --accent)': (theme) => on(theme, '--accent', solid(theme, '--card')),
+};
+
+describe('значки состояний — не ниже 3:1 к фонам сайдбара в обеих темах', () => {
+  const ICONS: Record<string, string> = {
+    'idle, pending, спит, закрыта (neutral-600)': '--color-neutral-600',
+    'working (neutral-700)': '--color-neutral-700',
+    'blocked (--agent-question)': '--agent-question',
+    'unseen и done (accent-2-600)': '--color-accent-2-600',
+    'failed (accent-700)': '--color-accent-700',
+  };
+
+  for (const theme of THEMES) {
+    for (const [icon, name] of Object.entries(ICONS)) {
+      for (const [background, backdrop] of Object.entries(STATE_ICON_BACKGROUNDS)) {
+        it(`${theme}: ${icon} на «${background}»`, () => {
+          expect(contrastRatio(solid(theme, name), backdrop(theme))).toBeGreaterThanOrEqual(NON_TEXT);
+        });
+      }
+    }
+
+    it(`${theme}: idle, pending, спит и закрыта читаются и на подкрасках строк комнаты и сессии (accent-200, accent-2-200)`, () => {
+      const icon = solid(theme, '--color-neutral-600');
+      for (const tint of ['--color-accent-200', '--color-accent-2-200']) {
+        expect(contrastRatio(icon, solid(theme, tint)), tint).toBeGreaterThanOrEqual(NON_TEXT);
+      }
+    });
+
+    it(`${theme}: neutral-600 — ближайшая ступень: neutral-500 не держит хотя бы один из трёх фонов`, () => {
+      const weaker = solid(theme, '--color-neutral-500');
+      const worst = Math.min(...Object.values(STATE_ICON_BACKGROUNDS).map((backdrop) => contrastRatio(weaker, backdrop(theme))));
+      expect(worst).toBeLessThan(NON_TEXT);
+    });
+  }
+});
+
 // ── Пары, на которых стоят примитивы `ui/*` ─────────────────────────────────────────────────
 
 describe('примитивы Organic — текст на своём фоне не ниже 4.5:1', () => {

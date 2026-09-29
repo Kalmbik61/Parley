@@ -10,6 +10,14 @@
  * Copyright (c) 2026 Lovecast Inc. Лицензия MIT — полный текст в NOTICE в
  * корне репозитория.
  *
+ * Цвета — таблица 1.2 спеки окна 2026-09-29 (облик Organic): working — кольцо `neutral-700`, blocked —
+ * MessageCircleQuestion `accent-600`, unseen — точка `accent-2-600`, done — CircleCheck `accent-2-600`,
+ * failed — CircleX `accent-700`. Idle, pending, «спит» и «закрыта» — `neutral-600` вместо ступеней
+ * таблицы (`neutral-400` и `neutral-500`, они после смены рамп держат 1.5–2.2:1): решение контролёра
+ * куска 2, `neutral-600` — ближайшая ступень, что держит не ниже 3:1 к фону окна, активной карточке и
+ * её выбранной строке в обеих темах (`styles/tokens.test.ts`). Одна ступень у четырёх состояний — форма
+ * разная: точка, кольцо, луна, тире.
+ *
  * Раунд исправлений 1 (находка ревью B №3): рядом со значком не всегда есть
  * текст-дублёр (на вкладке терминала, спека 5.3, его нет вовсе) — значок
  * должен быть самодостаточен для скринридера. Внешний `span` несёт
@@ -17,7 +25,7 @@
  * внутренние глифы (включая кольцо `working`) помечены `aria-hidden`.
  */
 
-import { CircleCheck, MessageCircleQuestion, Moon } from 'lucide-react';
+import { CircleCheck, CircleX, MessageCircleQuestion, Moon } from 'lucide-react';
 import type { SessionLifecycle } from '@harnas/core';
 import { stateWord, type DotState } from '../lib/dot-state.js';
 import { cn } from '../lib/cn.js';
@@ -85,39 +93,39 @@ function renderGlyph(
       );
 
     case 'done':
-      return <CircleCheck className={cn(ICON[size], 'text-emerald-500')} aria-hidden="true" />;
+      return <CircleCheck className={cn(ICON[size], 'text-accent-2-600')} aria-hidden="true" />;
 
     case 'exited':
       if (exitedLifecycle === 'closed') {
         // Тире, не lucide-значок: «закрыта» — это отсутствие сессии, а не её состояние.
         return (
-          <span className="text-neutral-500/40" aria-hidden="true">
+          <span className="text-neutral-600" aria-hidden="true">
             –
           </span>
         );
       }
-      return <Moon className={cn(ICON[size], 'text-neutral-500')} aria-hidden="true" />;
+      return <Moon className={cn(ICON[size], 'text-neutral-600')} aria-hidden="true" />;
 
     case 'pending':
       return (
         <span
-          className={cn('block rounded-full border-2 border-neutral-500/60', DOT[size])}
+          className={cn('block rounded-full border-2 border-neutral-600', DOT[size])}
           aria-hidden="true"
         />
       );
 
     case 'unseen':
       return (
-        <span className={cn('block rounded-full bg-emerald-500', DOT[size])} aria-hidden="true" />
+        <span className={cn('block rounded-full bg-accent-2-600', DOT[size])} aria-hidden="true" />
       );
 
     case 'failed':
-      return <span className={cn('block rounded-full bg-red-500', DOT[size])} aria-hidden="true" />;
+      return <CircleX className={cn(ICON[size], 'text-accent-700')} aria-hidden="true" />;
 
     case 'idle':
       return (
         <span
-          className={cn('block rounded-full bg-neutral-500/40', DOT[size])}
+          className={cn('block rounded-full bg-neutral-600', DOT[size])}
           aria-hidden="true"
         />
       );
