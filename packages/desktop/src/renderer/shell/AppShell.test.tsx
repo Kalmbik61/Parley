@@ -1689,6 +1689,15 @@ describe('AppShell — показ архивных (тесты 6, 7 куска 6
     expect(row.textContent).toContain('decision');
     expect(row.className).toContain('bg-accent-200');
   });
+
+  it('клик по счётчику строки статуса при ждущем решении открывает вкладку комнаты (яруса blocked нет)', async () => {
+    await renderShell(waitingWorks());
+    fireEvent.click(document.querySelector('[data-attention-segment]') as HTMLElement);
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-01')]).toBe(true));
+    const layout = useLayoutStore.getState().layouts[keyOf('w-01')];
+    expect(layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id))).toEqual([tabId.room('r-01')]);
+  });
 });
 
 describe('AppShell — действия 6.3 из палитры (тесты 8, 9 куска 6.3)', () => {
