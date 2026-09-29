@@ -1,0 +1,190 @@
+import { appendFile, mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
+import { stopApp } from './stop-app.js';
+import { stopHost } from './stop-host.js';
+import { makeTempHome, makeTempProject } from './tmp.js';
+
+/**
+ * Лимиты подписок в строке статуса (кусок 9b, спека комнат Organic, 3.5). Данные — как у настоящего
+ * `claude`: тест кладёт файл `limits/<сессия>.json` в каталог работы так, как его пишет скрипт строки статуса
+ * (`{ at, rateLimits }`, `resets_at` в Unix-секундах, атомарно), а хост, запущенный с малым
+ * `HARNAS_LIMITS_POLL_MS`, подхватывает его и шлёт окну `providers.limitsChanged`. Настоящий `claude` не
+ * запускается никогда — только стаб `HARNAS_CLAUDE_BIN`; `resets_at` — в будущем, чтобы хост не отбросил окно.
+ */
+
+const dirname = path.dirname(fileURLToPath(import.meta.url));
+const mainEntry = path.resolve(dirname, '../out/main/index.js');
+const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
+/** Свой каталог проекта у каждого теста (`makeTempProject`). */
+let project = '';
+
+/** Метка провайдера, которой нечем уместиться в 800×500: ширину имени строка статуса ограничивает. */
+const LONG_LABEL = 'Extremely Long Provider Label For The Status Bar Layout Check';
+
+async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
+  return window.evaluate(
+    ([m, p]) => (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas.call(m, p),
+    [method, params] as const,
+  ) as Promise<T>;
+}
+
+async function newSession(window: Page, workId: string, provider: string, label: string): Promise<string> {
+  const created = await call<{ ref: { sessionId: string } }>(window, 'sessions.create', {
+    projectPath: project,
+    workId,
+    provider,
+    label,
+    task: '',
+    parent: null,
+  });
+  return created.ref.sessionId;
+}
+
+/**
+ * Файл лимитов сессии — то, что пишет скрипт строки статуса (`core/src/work/statusline.ts`): `{ at, rateLimits }`
+ * во временный файл рядом и `rename`, чтобы хост не прочитал недописанное. Окна — как в `rate_limits` Claude Code:
+ * `five_hour` и `seven_day`, `used_percentage` и `resets_at` в Unix-секундах; сбросы — впереди.
+ */
+async function writeLimits(workId: string, sessionId: string, fiveHour: number | null, week: number | null): Promise<void> {
+  const dir = path.join(project, '.harnas', 'works', workId, 'limits');
+  await mkdir(dir, { recursive: true });
+  const nowSec = Math.floor(Date.now() / 1000);
+  const rateLimits: Record<string, { used_percentage: number; resets_at: number }> = {};
+  if (fiveHour !== null) rateLimits['five_hour'] = { used_percentage: fiveHour, resets_at: nowSec + 2 * 3600 };
+  if (week !== null) rateLimits['seven_day'] = { used_percentage: week, resets_at: nowSec + 3 * 86_400 };
+  const file = path.join(dir, `${sessionId}.json`);
+  await writeFile(`${file}.tmp`, `${JSON.stringify({ at: new Date().toISOString(), rateLimits })}\n`);
+  await rename(`${file}.tmp`, file);
+}
+
+/** Строка в журнал событий сессии — то, что дописал бы хук Claude Code. */
+async function hookEvent(workId: string, sessionId: string, event: Record<string, string>): Promise<void> {
+  const dir = path.join(project, '.harnas', 'works', workId, 'events');
+  await mkdir(dir, { recursive: true });
+  await appendFile(path.join(dir, `${sessionId}.jsonl`), `${JSON.stringify(event)}\n`);
+}
+
+interface Box {
+  left: number;
+  right: number;
+  width: number;
+}
+
+test.describe('лимиты подписок в строке статуса (кусок 9b)', () => {
+  let home: string;
+  let app: ElectronApplication | null = null;
+
+  test.beforeEach(async () => {
+    home = await makeTempHome('limits');
+    project = await makeTempProject('limits');
+  });
+
+  test.afterEach(async () => {
+    await stopApp(app);
+    app = null;
+    await stopHost(home);
+    await rm(home, { recursive: true, force: true });
+    await rm(project, { recursive: true, force: true });
+  });
+
+  async function launch(size: { width: number; height: number }): Promise<Page> {
+    // Малый период опроса — иначе числа появились бы через полминуты (`HARNAS_LIMITS_POLL_MS`, зажат в [200, 2^31−1]).
+    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom', HARNAS_LIMITS_POLL_MS: '200' };
+    const electronApp = await electron.launch({ args: [mainEntry], env });
+    app = electronApp;
+    const window = await electronApp.firstWindow();
+    await electronApp.evaluate(({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, ...bounds }), size);
+    await expect(window.getByTestId('landing')).toBeVisible();
+    return window;
+  }
+
+  test('файл данных строки статуса — «58% 5h · 41% wk» в сегменте Claude Code; новый файл меняет числа на месте, от 80 % — accent-700', async () => {
+    const window = await launch({ width: 1400, height: 900 });
+    const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: 'e2e-limits', goal: '' });
+    const sessionId = await newSession(window, workId, 'claude', 'один');
+    await expect(window.getByTestId('app-shell')).toBeVisible();
+    const segment = window.locator('[data-provider-segment="claude"]');
+    await expect(segment).toBeVisible();
+    // Данных ещё нет — сегмент как был: значок и имя.
+    await expect(segment.locator('[data-limits]')).toHaveCount(0);
+
+    await writeLimits(workId, sessionId, 58.7, 41.9);
+    const limits = segment.locator('[data-limits]');
+    // 58.7 → 58, 41.9 → 41: проценты целые, округление вниз.
+    await expect(limits).toHaveText('58% 5h · 41% wk', { timeout: 15_000 });
+    await expect(limits).toHaveAttribute('title', /^5-hour window resets at .+ · Weekly window resets [A-Z][a-z]{2} .+ · Updated .+$/);
+    // До порога — обычные цвета: заливка полоски neutral-800, текст без accent-700.
+    await expect(limits.locator('[data-limits-fill]')).toHaveClass(/\bbg-neutral-800\b/);
+    // Заливка — пятичасовое окно, целые проценты: 58 % трека.
+    await expect(limits.locator('[data-limits-fill]')).toHaveAttribute('style', /width:\s*58%/);
+    await expect(segment.getByText('58% 5h · 41% wk')).not.toHaveClass(/text-accent-700/);
+
+    // Новые числа: пятичасовое окно перешло 80 % — то же событие меняет текст и красит его и полоску.
+    await writeLimits(workId, sessionId, 85.2, 41.9);
+    await expect(limits).toHaveText('85% 5h · 41% wk', { timeout: 15_000 });
+    await expect(segment.getByText('85% 5h · 41% wk')).toHaveClass(/text-accent-700/);
+    await expect(limits.locator('[data-limits-fill]')).toHaveClass(/\bbg-accent-700\b/);
+
+    // Одно окно остаётся одним: недельного нет — «70% 5h», без «wk».
+    await writeLimits(workId, sessionId, 70, null);
+    await expect(limits).toHaveText('70% 5h', { timeout: 15_000 });
+    await expect(limits).toHaveAttribute('title', /^5-hour window resets at .+ · Updated .+$/);
+  });
+
+  test('800×500 и провайдер с очень длинной меткой: правые сегменты в окне, полоски целые, сжимается текст лимитов', async () => {
+    // Свой провайдер в реестре дома — `providers.json` (спека 5): метка длиннее, чем помещается в строке. Команда —
+    // тот же стаб: агент в тесте не настоящий.
+    await writeFile(
+      path.join(home, 'providers.json'),
+      JSON.stringify({ 'zeta-agent': { badge: LONG_LABEL, mark: 'Ze', command: stubAgent, linkBy: 'cwd+time' } }),
+    );
+    const window = await launch({ width: 800, height: 500 });
+    const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: 'e2e-limits-long', goal: '' });
+    const claude = await newSession(window, workId, 'claude', 'один');
+    const zeta = await newSession(window, workId, 'zeta-agent', 'два');
+    await expect(window.getByTestId('app-shell')).toBeVisible();
+    // Сегмент внимания — самый широкий из правых: «1 needs you».
+    await hookEvent(workId, claude, { hook_event_name: 'Notification', notification_type: 'permission_prompt' });
+    await writeLimits(workId, claude, 58.7, 41.9);
+    await writeLimits(workId, zeta, 12, 97);
+
+    const claudeLimits = window.locator('[data-provider-segment="claude"] [data-limits]');
+    const zetaLimits = window.locator('[data-provider-segment="zeta-agent"] [data-limits]');
+    await expect(claudeLimits).toBeVisible({ timeout: 15_000 });
+    await expect(zetaLimits).toBeVisible({ timeout: 15_000 });
+    const attention = window.getByRole('button', { name: '1 needs you' });
+    await expect(attention).toBeVisible({ timeout: 15_000 });
+    const wake = window.getByRole('button', { name: 'Auto-wake on' });
+
+    const box = async (locator: Locator): Promise<Box> =>
+      locator.evaluate((el) => {
+        const rect = el.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, width: rect.width };
+      });
+    const viewport = await window.evaluate(() => window.innerWidth);
+
+    // Правый блок целиком в окне и не наезжает на провайдеров: внимание, связь с хостом, будильник не уехали.
+    await expect
+      .poll(async () => {
+        const [att, wk, seg] = [await box(attention), await box(wake), await box(window.locator('[data-provider-segment="zeta-agent"]'))];
+        return att.left >= seg.right && wk.right <= viewport && wk.left >= att.right;
+      })
+      .toBe(true);
+
+    // Полоска — 44 в каждом блоке: сжимается текст, а не она.
+    for (const limits of [claudeLimits, zetaLimits]) {
+      const bar = await box(limits.locator(':scope > span').first());
+      expect(bar.width).toBeCloseTo(44, 0);
+    }
+    // Текст лимитов обрезан многоточием хотя бы у одного провайдера: места на оба целиком нет.
+    const clipped = await window.evaluate(() =>
+      [...document.querySelectorAll('[data-limits]')].map((block) => {
+        const text = block.lastElementChild as HTMLElement;
+        return text.scrollWidth > text.clientWidth;
+      }),
+    );
+    expect(clipped.some(Boolean)).toBe(true);
+  });
+});
