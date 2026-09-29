@@ -1,6 +1,6 @@
 /**
- * Карточка при наведении shadcn/ui на `@radix-ui/react-hover-card`, поверх —
- * облик Orca «стекло» (спека 4.5) — та же подложка, что у popover/меню.
+ * Карточка при наведении shadcn/ui на `@radix-ui/react-hover-card`, поверх — та же подложка Organic
+ * (`ui/glass.ts`), что у popover и меню (спека 4.5).
  */
 
 import * as React from 'react';

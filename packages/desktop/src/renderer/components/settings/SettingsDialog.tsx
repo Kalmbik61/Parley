@@ -182,7 +182,6 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
             {uiLoaded ? (
               <ToggleGroup
                 type="single"
-                variant="outline"
                 value={ui.appearance}
                 onValueChange={(value) => {
                   if (value !== '') changeAppearance(value as Appearance);

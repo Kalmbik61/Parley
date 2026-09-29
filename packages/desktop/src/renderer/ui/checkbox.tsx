@@ -1,5 +1,6 @@
 /**
- * Флажок shadcn/ui на `@radix-ui/react-checkbox` (спека 4.5).
+ * Флажок shadcn/ui на `@radix-ui/react-checkbox` (спека 4.5). Радиус — 5px, а не `rounded-sm`: в шкале
+ * Organic `sm` — 8px, и квадрат 16px стал бы кругом, неотличимым от радио-кнопки.
  */
 
 import * as React from 'react';
@@ -14,7 +15,7 @@ export const Checkbox = React.forwardRef<
   <CheckboxPrimitive.Root
     ref={ref}
     className={cn(
-      'peer size-4 shrink-0 rounded-sm border border-primary shadow focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground',
+      'peer size-4 shrink-0 rounded-[5px] border border-primary shadow focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground',
       className,
     )}
     {...props}

@@ -1,6 +1,7 @@
 /**
- * Выпадающий список shadcn/ui на `@radix-ui/react-select`, поверх — облик
- * Orca «стекло» для списка вариантов, тот же, что у меню (спека 4.5).
+ * Выпадающий список shadcn/ui на `@radix-ui/react-select` (спека 4.5). Кнопка — то же поле Organic,
+ * что `Input` (пилюля, surface, рамка divider; рамка accent на фокусе и пока список открыт), список
+ * вариантов — общая подложка меню (`ui/glass.ts`).
  *
  * Длинное значение (путь проекта) не распирает родителя: у кнопки `min-w-0`, значение
  * обрезается многоточием (раунд исправлений 2 куска 3.5). `line-clamp-1` прежде по ширине
@@ -25,7 +26,7 @@ export const SelectTrigger = React.forwardRef<
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
-      'flex h-9 w-full min-w-0 items-center justify-between whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50 [&>span]:min-w-0 [&>span]:truncate',
+      'flex h-9 w-full min-w-0 items-center justify-between whitespace-nowrap rounded-full border border-input bg-background px-[14px] py-[6px] text-sm transition-colors placeholder:text-muted-foreground hover:border-foreground/45 focus:border-ring data-[state=open]:border-ring focus-visible:outline-offset-0 disabled:cursor-not-allowed disabled:opacity-50 [&>span]:min-w-0 [&>span]:truncate',
       className,
     )}
     {...props}

@@ -72,7 +72,6 @@
   --color-palette-selected-foreground: var(--palette-selected-foreground);
   --color-palette-selected-muted: var(--palette-selected-muted);
   --color-palette-selected-edge: var(--palette-selected-edge);
-  --color-toggle-on-edge: var(--toggle-on-edge);
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
@@ -302,9 +301,6 @@
   --palette-selected-foreground: var(--color-text);
   --palette-selected-muted: var(--color-neutral-800);
   --palette-selected-edge: var(--color-neutral-700);
-  /* Раунд fix-live, D4: край выбранного пункта переключателей (`ui/toggle.tsx`) — состояние несёт
-     не одна заливка. */
-  --toggle-on-edge: var(--color-neutral-700);
   --sidebar: var(--color-surface);
   --sidebar-foreground: var(--color-text);
   --sidebar-primary: var(--primary);

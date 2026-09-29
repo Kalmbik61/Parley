@@ -1,9 +1,9 @@
 /**
- * Диалог shadcn/ui на `@radix-ui/react-dialog`. Тень — таблица 4.4 (отдельная
- * от «стекла» меню: сплошная подложка `--card`, диалог не должен просвечивать
- * содержимое под затемнением). Заголовок — 14px 600 (кусок 1.4, поведение
- * «Диалоги»): все диалоги окна на этом примитиве, менять кегль в каждом месте
- * использования не нужно.
+ * Диалог shadcn/ui на `@radix-ui/react-dialog`, облик Organic (спека окна 2026-09-29, раздел 4
+ * «Компоненты Organic»): фон `surface` (`--background`), радиус 32 (`rounded-xl`), отступ 17.6, зазор
+ * 13.2, тень `--shadow-lg` (в тёмной — с тонкой рамкой из самой тени), затемнение — токен `--scrim`.
+ * Заголовок — Caprasimo 20px, кнопки справа с зазором 8.8 и отступом сверху 8.8. Все диалоги окна на
+ * этом примитиве, менять вид в каждом месте использования не нужно.
  *
  * Раунд исправлений 2 куска 3.5: сетка содержимого — `grid-cols-1` (`minmax(0, 1fr)`), а
  * заголовок и описание переносят длинные слова. Иначе минимальная ширина содержимого
@@ -37,7 +37,7 @@ export const DialogOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      'fixed inset-0 z-50 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+      'fixed inset-0 z-50 bg-scrim data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
       className,
     )}
     {...props}
@@ -54,7 +54,7 @@ export const DialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        'fixed left-[50%] top-[50%] z-50 flex w-full flex-col max-h-[calc(100dvh-2rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 rounded-xl border border-border bg-card p-6 shadow-[0_20px_60px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.08)] duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] dark:shadow-[0_24px_72px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.08)]',
+        'fixed left-[50%] top-[50%] z-50 flex w-full flex-col max-h-[calc(100dvh-2rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-(--space-3) rounded-xl bg-background p-(--space-4) shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]',
         // Тело — прямой потомок, кроме заголовка, подвала и корня палитры. Классы — буквально: Tailwind ищет их в тексте.
         '[&>:not(h2,[data-dialog-footer],[cmdk-root])]:min-h-0 [&>:not(h2,[data-dialog-footer],[cmdk-root])]:overflow-y-auto [&>:not(h2,[data-dialog-footer],[cmdk-root])]:-m-1 [&>:not(h2,[data-dialog-footer],[cmdk-root])]:p-1',
         className,
@@ -62,7 +62,7 @@ export const DialogContent = React.forwardRef<
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none">
+      <DialogPrimitive.Close className="absolute right-(--space-4) top-(--space-4) rounded-full opacity-70 transition-opacity hover:opacity-100 disabled:pointer-events-none">
         <X className="size-4" />
         <span className="sr-only">{S.common.close}</span>
       </DialogPrimitive.Close>
@@ -90,7 +90,7 @@ export function DialogFooter({
   return (
     <div
       data-dialog-footer=""
-      className={cn('flex shrink-0 flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2', className)}
+      className={cn('mt-(--space-2) flex shrink-0 flex-col-reverse gap-(--space-2) sm:flex-row sm:justify-end', className)}
       {...props}
     />
   );
@@ -102,7 +102,7 @@ export const DialogTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn('shrink-0 text-sm font-semibold leading-none tracking-tight break-words', className)}
+    className={cn('shrink-0 font-heading text-xl font-normal leading-[1.2] break-words', className)}
     {...props}
   />
 ));

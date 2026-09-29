@@ -224,6 +224,36 @@ describe('вторичный текст — не ниже 4.5:1 в обеих т
   }
 });
 
+// ── Пары, на которых стоят примитивы `ui/*` ─────────────────────────────────────────────────
+
+describe('примитивы Organic — текст на своём фоне не ниже 4.5:1', () => {
+  for (const theme of THEMES) {
+    it(`${theme}: теги — текст 800 на фоне 100 каждого вида (accent, accent-2, neutral)`, () => {
+      for (const ramp of ['accent', 'accent-2', 'neutral']) {
+        expect(
+          contrastRatio(solid(theme, `--color-${ramp}-800`), solid(theme, `--color-${ramp}-100`)),
+          `тег ${ramp}`,
+        ).toBeGreaterThanOrEqual(TEXT);
+      }
+    });
+
+    it(`${theme}: kicker карточки (accent-700) на фоне карточки Organic (surface) и на листе`, () => {
+      const kicker = solid(theme, '--color-accent-700');
+      expect(contrastRatio(kicker, solid(theme, '--background'))).toBeGreaterThanOrEqual(TEXT);
+      expect(contrastRatio(kicker, solid(theme, '--sheet'))).toBeGreaterThanOrEqual(TEXT);
+    });
+
+    it(`${theme}: placeholder полей (--muted-foreground) на фоне поля (surface) не ниже 4.5:1`, () => {
+      expect(contrastRatio(solid(theme, '--muted-foreground'), solid(theme, '--background'))).toBeGreaterThanOrEqual(TEXT);
+    });
+  }
+
+  it('затемнение под диалогами — токен --scrim: в светлой 50 % neutral-900, в тёмной чёрное 60 %', () => {
+    expect(resolveColor(tokens, 'light', '--scrim')).toEqual({ rgb: resolveColor(tokens, 'light', '--color-neutral-900').rgb, alpha: 0.5 });
+    expect(resolveColor(tokens, 'dark', '--scrim')).toEqual({ rgb: [0, 0, 0], alpha: 0.6 });
+  });
+});
+
 // ── 4. Прежние имена, новые значения ────────────────────────────────────────────────────────
 
 describe('прежние переменные — значения на токенах Organic', () => {
