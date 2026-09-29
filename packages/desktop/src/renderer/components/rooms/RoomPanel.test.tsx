@@ -1,7 +1,8 @@
 /**
  * Вкладка комнаты (спека окна 2026-09-29, 1.3, 2.2–2.4; кусок 6 плана): шапка и лента участников, лента
  * сообщений с чипами, тегами видов и строкой ожидания по `readBy`, блок `Decisions`, пустая комната,
- * отправка из поля ввода, прочтение и прокрутка. Ответ на решение — `DecisionCard.test.tsx`.
+ * отправка из поля ввода, карточка решения и ответ на неё (`rooms.resolveProposal` с `proposalId`, `rev`,
+ * `action`, `note`; `conflict` — тост; двойное нажатие — один вызов), прочтение и прокрутка.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -533,5 +534,255 @@ describe('RoomPanel — прочтение существующим механи
     renderPanel(entryOf({ messages: [message('m-1', { from: 's-02', readBy: {}, text: 'Ы'.repeat(2000) })] }));
     const observed = FakeIntersectionObserver.all.flatMap((observer) => Array.from(observer.targets));
     expect(observed).toEqual([document.querySelector('[data-message-meta="m-1"]')]);
+  });
+});
+
+describe('RoomPanel — карточка решения (1.3, 2.4)', () => {
+  const PROPOSAL = {
+    id: 'p-01',
+    from: 's-01',
+    text: 'Возврат больше суммы — ошибка. Части: @s02 — код, @s03 — ревью. Жду твоего решения.',
+    rev: 0,
+    at: '2026-09-27T09:10:00.000Z',
+  };
+
+  const withProposal = (patch: Partial<typeof PROPOSAL> = {}, extra: { messages?: Message[] } = {}): WorkEntry =>
+    entryOf({ room: room({ proposal: { ...PROPOSAL, ...patch } }), ...extra });
+
+  const card = (): HTMLElement => document.querySelector('[data-decision-card]') as HTMLElement;
+  const button = (name: string): HTMLButtonElement => screen.getByRole('button', { name }) as HTMLButtonElement;
+  const resolveCalls = () => bridge.calls.filter((call) => call.method === 'rooms.resolveProposal');
+
+  beforeEach(() => {
+    bridge.setHandler('rooms.resolveProposal', () => ({ messageId: 'm-decision' }));
+  });
+
+  it('последней в ленте, после сообщений: ведущий, тег «decision · waiting for you», время, текст с чипами', () => {
+    renderPanel(withProposal({}, { messages: [message('m-1', { text: 'Задача' })] }));
+    expect(feed().lastElementChild).toBe(card());
+    expect(card().getAttribute('data-proposal-id')).toBe('p-01');
+    expect(within(card()).getByText('S01 архитектор')).toBeTruthy();
+    expect(within(card()).getByText('decision · waiting for you').className).toContain('bg-accent-100');
+    expect(card().querySelectorAll('[data-mention]')).toHaveLength(2);
+    expect(card().textContent).toContain('@S02 бэкенд');
+    expect(card().textContent).toContain('@S03 ревью');
+    expect(within(card()).getByRole('button', { name: 'Accept' })).toBeTruthy();
+    expect(within(card()).getByRole('button', { name: 'Return for rework' })).toBeTruthy();
+  });
+
+  it('рамка 1.5px accent и фон accent 9%, до 680px', () => {
+    renderPanel(withProposal());
+    expect(card().className).toContain('border-[1.5px]');
+    expect(card().className).toContain('border-(--color-accent)');
+    expect(card().className).toContain('bg-[color-mix(in_srgb,var(--color-accent)_9%,transparent)]');
+    expect(card().className).toContain('max-w-[680px]');
+  });
+
+  it('решение одно ждёт — комната не «пустая»: подсказки нет; решения нет — нет и карточки', () => {
+    renderPanel(withProposal());
+    expect(screen.queryByText(/Write the task for everyone below/)).toBeNull();
+    cleanup();
+    renderPanel(entryOf());
+    expect(document.querySelector('[data-decision-card]')).toBeNull();
+  });
+
+  it('новая версия (rev вырос) заменяет текст на месте: карточка одна', () => {
+    const { update } = renderPanel(withProposal({ text: 'Версия один' }));
+    expect(card().textContent).toContain('Версия один');
+    update(withProposal({ text: 'Версия два, с учётом замечания', rev: 1 }));
+    expect(document.querySelectorAll('[data-decision-card]')).toHaveLength(1);
+    expect(card().textContent).toContain('Версия два, с учётом замечания');
+    expect(card().textContent).not.toContain('Версия один');
+    expect(card().getAttribute('data-proposal-rev')).toBe('1');
+  });
+
+  it('Accept зовёт rooms.resolveProposal с proposalId, rev и action; заметки в принятии нет', async () => {
+    renderPanel(withProposal({ rev: 2 }));
+    fireEvent.click(button('Accept'));
+    await waitFor(() => expect(resolveCalls()).toHaveLength(1));
+    expect(resolveCalls()[0]?.params).toEqual({
+      projectPath: PROJECT,
+      workId: WORK_ID,
+      roomId: 'r-01',
+      proposalId: 'p-01',
+      rev: 2,
+      action: 'accept',
+    });
+  });
+
+  it('Return for rework → поле заметки и Send to lead / Cancel; кнопки Accept на время заметки нет', () => {
+    renderPanel(withProposal());
+    fireEvent.click(button('Return for rework'));
+    expect(screen.getByPlaceholderText('What should the lead change?')).toBeTruthy();
+    expect(button('Send to lead')).toBeTruthy();
+    expect(button('Cancel')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Return for rework' })).toBeNull();
+  });
+
+  it('Send to lead зовёт rooms.resolveProposal с proposalId, rev, action и note (без пробелов по краям)', async () => {
+    renderPanel(withProposal({ id: 'p-07', rev: 3 }));
+    fireEvent.click(button('Return for rework'));
+    fireEvent.change(screen.getByPlaceholderText('What should the lead change?'), { target: { value: '  Добавь тесты на границы  ' } });
+    fireEvent.click(button('Send to lead'));
+    await waitFor(() => expect(resolveCalls()).toHaveLength(1));
+    expect(resolveCalls()[0]?.params).toEqual({
+      projectPath: PROJECT,
+      workId: WORK_ID,
+      roomId: 'r-01',
+      proposalId: 'p-07',
+      rev: 3,
+      action: 'return',
+      note: 'Добавь тесты на границы',
+    });
+  });
+
+  it('пустая заметка допустима (2.4): note — пустая строка', async () => {
+    renderPanel(withProposal());
+    fireEvent.click(button('Return for rework'));
+    fireEvent.click(button('Send to lead'));
+    await waitFor(() => expect(resolveCalls()).toHaveLength(1));
+    expect(resolveCalls()[0]?.params).toMatchObject({ action: 'return', note: '' });
+  });
+
+  it('Cancel возвращает две кнопки, ничего не отправляя; заметка при этом не теряется', () => {
+    renderPanel(withProposal());
+    fireEvent.click(button('Return for rework'));
+    fireEvent.change(screen.getByPlaceholderText('What should the lead change?'), { target: { value: 'черновик заметки' } });
+    fireEvent.click(button('Cancel'));
+    expect(button('Accept')).toBeTruthy();
+    expect(resolveCalls()).toHaveLength(0);
+    fireEvent.click(button('Return for rework'));
+    expect((screen.getByPlaceholderText('What should the lead change?') as HTMLTextAreaElement).value).toBe('черновик заметки');
+  });
+
+  it('уходит rev показанной карточки: пришла новая версия — следующий ответ на неё', async () => {
+    const { update } = renderPanel(withProposal({ rev: 0 }));
+    update(withProposal({ rev: 1, text: 'Новый текст' }));
+    fireEvent.click(button('Accept'));
+    await waitFor(() => expect(resolveCalls()).toHaveLength(1));
+    expect(resolveCalls()[0]?.params).toMatchObject({ proposalId: 'p-01', rev: 1 });
+  });
+
+  it('форма возврата переживает новую версию текста: заметка на месте', () => {
+    const { update } = renderPanel(withProposal({ rev: 0 }));
+    fireEvent.click(button('Return for rework'));
+    fireEvent.change(screen.getByPlaceholderText('What should the lead change?'), { target: { value: 'заметка' } });
+    update(withProposal({ rev: 1, text: 'Новый текст' }));
+    expect((screen.getByPlaceholderText('What should the lead change?') as HTMLTextAreaElement).value).toBe('заметка');
+    expect(card().textContent).toContain('Новый текст');
+  });
+
+  it('conflict: тост, карточка на месте, кнопки снова доступны; новая версия приходит событием карты', async () => {
+    let attempts = 0;
+    bridge.setHandler('rooms.resolveProposal', () => {
+      attempts += 1;
+      if (attempts === 1) throw Object.assign(new Error('устарело'), { code: 'conflict', message: 'устарело' });
+      return { messageId: 'm-decision' };
+    });
+    const { update } = renderPanel(withProposal({ rev: 0 }));
+    fireEvent.click(button('Accept'));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('The decision changed — review the latest version.'));
+    await waitFor(() => expect(button('Accept').disabled).toBe(false));
+    expect(button('Return for rework').disabled).toBe(false);
+    expect(document.querySelectorAll('[data-decision-card]')).toHaveLength(1);
+
+    update(withProposal({ rev: 1, text: 'Текст после замены' }));
+    fireEvent.click(button('Accept'));
+    await waitFor(() => expect(resolveCalls()).toHaveLength(2));
+    expect(resolveCalls()[1]?.params).toMatchObject({ rev: 1 });
+    expect(toast).toHaveBeenCalledTimes(1);
+  });
+
+  it('прочая ошибка: тост с причиной, кнопки снова доступны', async () => {
+    bridge.setHandler('rooms.resolveProposal', () => {
+      throw Object.assign(new Error('нет'), { code: 'not_found', message: 'нет' });
+    });
+    renderPanel(withProposal());
+    fireEvent.click(button('Accept'));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't answer the decision: not found."));
+    await waitFor(() => expect(button('Accept').disabled).toBe(false));
+  });
+
+  it('двойное нажатие Accept — один вызов; кнопки заняты, пока ответа нет', async () => {
+    let finish: () => void = () => {};
+    bridge.setHandler(
+      'rooms.resolveProposal',
+      () => new Promise<{ messageId: string }>((resolve) => (finish = () => resolve({ messageId: 'm-decision' }))),
+    );
+    renderPanel(withProposal());
+    const accept = button('Accept');
+    fireEvent.click(accept);
+    fireEvent.click(accept);
+    fireEvent.click(accept);
+    expect(resolveCalls()).toHaveLength(1);
+    expect(button('Accept').disabled).toBe(true);
+    expect(button('Return for rework').disabled).toBe(true);
+    await act(async () => {
+      finish();
+    });
+    expect(resolveCalls()).toHaveLength(1);
+  });
+
+  it('два клика в один тик, до перерисовки, тоже дают один вызов', async () => {
+    renderPanel(withProposal());
+    const accept = button('Accept');
+    await act(async () => {
+      accept.click();
+      accept.click();
+    });
+    expect(resolveCalls()).toHaveLength(1);
+  });
+
+  it('после успеха кнопки остаются занятыми, пока карточка не сменилась; новое решение — снова отвечаемо', async () => {
+    const { update } = renderPanel(withProposal({ id: 'p-01' }));
+    fireEvent.click(button('Accept'));
+    await waitFor(() => expect(resolveCalls()).toHaveLength(1));
+    expect(button('Accept').disabled).toBe(true);
+    fireEvent.click(button('Accept'));
+    expect(resolveCalls()).toHaveLength(1);
+
+    update(entryOf({ messages: [message('m-9', { from: 's-01', kind: 'decision', text: 'Принято' })] }));
+    expect(document.querySelector('[data-decision-card]')).toBeNull();
+    update(withProposal({ id: 'p-02', text: 'Новое решение' }));
+    expect(button('Accept').disabled).toBe(false);
+  });
+
+  it('новое решение (другой id) — чистая карточка: форма возврата и заметка прежнего не переезжают', () => {
+    const { update } = renderPanel(withProposal({ id: 'p-01' }));
+    fireEvent.click(button('Return for rework'));
+    fireEvent.change(screen.getByPlaceholderText('What should the lead change?'), { target: { value: 'заметка к первому' } });
+    update(withProposal({ id: 'p-02', text: 'Второе решение' }));
+    expect(screen.queryByPlaceholderText('What should the lead change?')).toBeNull();
+    expect(button('Accept')).toBeTruthy();
+    expect(card().getAttribute('data-proposal-id')).toBe('p-02');
+  });
+
+  it('хост не знает rooms.resolveProposal — карточка с текстом, но без кнопок', () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'old', methods: [...REQUIRED_METHODS] } });
+    renderPanel(withProposal());
+    expect(card().textContent).toContain('Возврат больше суммы');
+    expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Return for rework' })).toBeNull();
+  });
+
+  it('форма возврата меняет высоту карточки — лента снова прижата к низу', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(300);
+    try {
+      renderPanel(withProposal());
+      feed().scrollTop = 0;
+      fireEvent.click(button('Return for rework'));
+      expect(feed().scrollTop).toBe(300);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('длинный текст решения переносится внутри карточки', () => {
+    renderPanel(withProposal({ text: 'Ж'.repeat(2000) }));
+    const body = card().querySelector('.whitespace-pre-wrap') as HTMLElement;
+    expect(body.textContent).toBe('Ж'.repeat(2000));
+    expect(body.className).toContain('[overflow-wrap:anywhere]');
+    expect(card().className).toContain('max-w-[680px]');
   });
 });

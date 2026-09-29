@@ -3,6 +3,11 @@
  * лента сообщений с блоком `Decisions` первым, поле ввода с упоминаниями. Данные — `buildRoomModel`
  * (`feed-model.ts`), рисуют `RoomHeader`, `RoomMessage` и `Composer`.
  *
+ * Карточка решения — последней в ленте, пока `Room.proposal` не `null`. Кнопки зовут
+ * `rooms.resolveProposal` с `proposalId` и `rev` показанной карточки: человек не примет текст, которого не
+ * видел. `conflict` — тост, карточка не ломается, живая версия приходит событием карты. Метода нет у
+ * хоста — кнопок нет.
+ *
  * Прочтение — существующий механизм писем человеку (`attention/use-mark-read.ts`): сообщение, чья
  * строка меты видна ≥1 с при активной работе, фокусе окна и видимом документе, уходит в `mail.markRead`
  * (пачка через 500 мс тишины); карта отвечает, точка гаснет. Прокрутка — к низу при открытии и при каждом
@@ -10,20 +15,23 @@
  * читается по ходу переписки.
  */
 
-import { useLayoutEffect, useRef } from 'react';
+import { useCallback, useLayoutEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import type { WorkEntry } from '@harnas/core';
 import type { HarnasBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { S, errorText } from '../../../shared/strings.js';
 import { useMarkRead } from '../../attention/use-mark-read.js';
+import { useHostSupports } from '../../lib/capabilities.js';
 import { sessionRowLabel } from '../../lib/participant.js';
+import { relativeTime } from '../../lib/relative-time.js';
 import { workKey } from '../../lib/tree-order.js';
 import { useNow } from '../../lib/use-now.js';
 import type { ActivityEntry } from '../../store/activity.js';
 import { composerDraftKey } from '../../store/ui.js';
 import { Decisions } from '../mail/Decisions.js';
 import { Composer, type ComposerSubmission } from './Composer.js';
+import { DecisionCard } from './DecisionCard.js';
 import { buildRoomModel } from './feed-model.js';
 import { RoomHeader } from './RoomHeader.js';
 import { RoomMessage } from './RoomMessage.js';
@@ -50,13 +58,17 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   // Хуки — до раннего выхода «комнаты нет»: порядок хуков не должен зависеть от данных.
   const markRead = useMarkRead({ bridge, projectPath: entry.projectPath, workId: entry.map.work.id, active });
   const now = useNow(NOW_PERIOD_MS);
+  const canResolve = useHostSupports('rooms.resolveProposal');
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  // Лента прижата к низу при открытии и когда приходит новое сообщение.
-  useLayoutEffect(() => {
+  const pinToBottom = useCallback((): void => {
     const container = containerRef.current;
     if (container !== null) container.scrollTop = container.scrollHeight;
-  }, [model?.messages.length]);
+  }, []);
+
+  // Лента прижата к низу при открытии, когда приходит новое сообщение и когда решение появилось или
+  // его текст заменили (карточка — последняя в ленте).
+  useLayoutEffect(pinToBottom, [pinToBottom, model?.messages.length, model?.proposal?.id, model?.proposal?.rev]);
 
   if (model === null) {
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{S.rooms.notFound}</div>;
@@ -91,6 +103,29 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
         },
       );
 
+  /** Ответ человека на решение. `true` — хост принял; `false` — отказ, причина уже показана тостом. */
+  const handleResolve = async (action: 'accept' | 'return', note: string): Promise<boolean> => {
+    const proposal = model.proposal;
+    if (proposal === null) return false;
+    try {
+      await bridge.call('rooms.resolveProposal', {
+        projectPath: entry.projectPath,
+        workId: entry.map.work.id,
+        roomId,
+        proposalId: proposal.id,
+        rev: proposal.rev,
+        action,
+        ...(action === 'return' ? { note } : {}),
+      });
+      return true;
+    } catch (error) {
+      const { code } = decodeIpcError(error);
+      // `conflict`: карточку успели принять, вернуть или заменить — она остаётся, кнопки снова доступны.
+      toast(code === 'conflict' ? S.rooms.decisionChanged : errorText(code, S.rooms.resolveAction));
+      return false;
+    }
+  };
+
   return (
     <div data-room-panel="" className="flex h-full min-h-0 min-w-0 flex-col">
       <RoomHeader title={model.title} subtitle={model.subtitle} participants={model.participants} onOpenSession={onOpenSession} />
@@ -107,6 +142,18 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
             observeRef={markRead(message.id, message.needsRead)}
           />
         ))}
+        {model.proposal === null ? null : (
+          <DecisionCard
+            key={model.proposal.id}
+            proposal={model.proposal}
+            time={relativeTime(model.proposal.at, now)}
+            labelOf={labelOf}
+            onOpenExternal={onOpenExternal}
+            canResolve={canResolve}
+            onResolve={handleResolve}
+            onLayout={pinToBottom}
+          />
+        )}
       </div>
       <Composer key={draftKey} members={members} draftKey={draftKey} onSend={handleSend} />
     </div>
