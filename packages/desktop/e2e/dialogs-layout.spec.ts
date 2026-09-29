@@ -7,11 +7,11 @@ import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
- * Вёрстка диалогов с длинными значениями (раунд исправлений 2 куска 3.5): длинный путь проекта
- * (`mkdtemp` на macOS — `/private/var/folders/…`), название работы в 120 символов и ярлык в 40.
- * Прежде путь в Select задавал минимальную ширину формы, и поля с кнопкой Create выходили за
- * правый край диалога New workspace. Проверка — геометрия: правый край каждого поля и кнопки
- * не правее правого края диалога, и у самого диалога нет горизонтальной прокрутки.
+ * Вёрстка диалогов с длинными значениями (раунд исправлений 2 куска 3.5; диалоги 1.5–1.7 — кусок 7 плана «Organic»):
+ * длинный путь проекта (`mkdtemp` на macOS — `/private/var/folders/…`), название работы в 120 символов и ярлык в 40,
+ * пять агентов в диалоге «New session or room». Прежде путь в Select задавал минимальную ширину формы, и поля с
+ * кнопкой Create выходили за правый край диалога New workspace. Проверка — геометрия: правый край каждого поля и
+ * кнопки не правее правого края диалога, и у самого диалога нет горизонтальной прокрутки.
  */
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -39,7 +39,7 @@ async function overflowOf(window: Page, name: string): Promise<string[]> {
     const box = el.getBoundingClientRect();
     const problems: string[] = [];
     if (el.scrollWidth > el.clientWidth) problems.push(`${dialogName}: scrollWidth ${el.scrollWidth} > clientWidth ${el.clientWidth}`);
-    for (const node of el.querySelectorAll('input, textarea, button, [role="combobox"], [role="option"], h2')) {
+    for (const node of el.querySelectorAll('input, textarea, button, [role="combobox"], [role="option"], [role="radio"], h2')) {
       const rect = node.getBoundingClientRect();
       if (rect.width === 0) continue;
       if (rect.right > box.right + 0.5) {
@@ -52,7 +52,7 @@ async function overflowOf(window: Page, name: string): Promise<string[]> {
 }
 
 /** Кнопки подвала диалогов окна (и крестик заголовка): они обязаны быть видны при любой высоте окна. */
-const FOOTER_BUTTON = /^(Cancel|Create|Retry|Done|Close|Delete.*)$/;
+const FOOTER_BUTTON = /^(Cancel|Create|Create workspace|Create room|Start session|Retry|Done|Close|Delete.*)$/;
 
 /**
  * Высота диалогов (находка живой проверки review-3.5-rr2): диалог целиком в окне, а каждая
@@ -78,7 +78,7 @@ async function footerProblemsOf(window: Page, name: string): Promise<string[]> {
           out.push(`${dialogName}: «${label}» bottom ${Math.round(rect.bottom)} > ${height}`);
           continue;
         }
-        // Выключенная кнопка (New room без участников) пропускает указатель — проверять нечего.
+        // Выключенная кнопка пропускает указатель — проверять нечего.
         if (button.disabled) continue;
         const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
         if (hit === null || !button.contains(hit)) out.push(`${dialogName}: «${label}» covered or not clickable`);
@@ -121,7 +121,7 @@ for (const size of [
       await rm(base, { recursive: true, force: true });
     });
 
-    test('ничего не выходит за правый край, подвал в окне: New workspace, New session, New room, Delete, палитра, Settings', async () => {
+    test('ничего не выходит за правый край, подвал в окне: New workspace, New session, New room (пять агентов), Delete, палитра, Settings', async () => {
       test.setTimeout(90_000);
       const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
       const electronApp = await electron.launch({ args: [mainEntry], env });
@@ -141,9 +141,9 @@ for (const size of [
       // New workspace от «+» заголовка проекта: проект выбран, поля заполнены длинными значениями.
       await window.getByRole('button', { name: /^New workspace in / }).click();
       const composer = window.getByRole('dialog');
-      await expect(composer.getByRole('combobox', { name: 'Project' })).toHaveAttribute('title', project);
-      await composer.getByLabel('Title').fill(LONG_TITLE);
-      await composer.getByLabel('Label').fill(LONG_LABEL);
+      await expect(composer.getByRole('radiogroup', { name: 'Project' }).getByRole('radio', { checked: true })).toHaveAttribute('title', project);
+      await composer.getByLabel(/^Title/).fill(LONG_TITLE);
+      await composer.getByLabel(/^First prompt/).fill(`${LONG_LABEL} ${'long prompt '.repeat(80)}`);
       problems.push(...(await overflowOf(window, 'New workspace')));
       problems.push(...(await footerProblemsOf(window, 'New workspace')));
       // Кнопка подвала нажимается мышью и при окне 800×500.
@@ -156,13 +156,19 @@ for (const size of [
       };
 
       await cardAction('new-session');
-      await window.getByRole('dialog').getByLabel('Label').fill(LONG_LABEL);
+      await expect(window.getByRole('dialog').getByRole('heading', { name: 'New session' })).toBeVisible();
+      await window.getByRole('dialog').getByPlaceholder('Optional').fill(LONG_LABEL);
       problems.push(...(await overflowOf(window, 'New session')));
       problems.push(...(await footerProblemsOf(window, 'New session')));
       await closeDialog(window);
 
+      // «New room» — тот же диалог, открытый комнатой; пять агентов и название комнаты в 120 символов.
       await cardAction('new-room');
-      await expect(window.getByRole('dialog')).toContainText(LONG_LABEL);
+      const room = window.getByRole('dialog');
+      await expect(room.getByRole('heading', { name: 'New room' })).toBeVisible();
+      for (let i = 0; i < 3; i += 1) await room.getByRole('button', { name: 'Add agent' }).click();
+      await expect(room.locator('[data-agent-row]')).toHaveCount(5);
+      await room.getByPlaceholder('What the agents will discuss').fill(LONG_TITLE);
       problems.push(...(await overflowOf(window, 'New room')));
       problems.push(...(await footerProblemsOf(window, 'New room')));
       await closeDialog(window);
