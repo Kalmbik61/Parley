@@ -433,7 +433,7 @@ interface Proposal {
 | `--secondary`, `--muted` | `neutral-200` |
 | `--muted-foreground` | `neutral-700` |
 | `--accent` / `--accent-foreground` | `text 9%` / `text` — выбранная строка |
-| `--destructive` | `accent-700` |
+| `--destructive` | тёмная — `accent-700`, светлая — `accent-800`: по решению 1 главная кнопка светлой темы — `accent-700`, и кнопка удаления на нём слилась бы с ней, а `Discard` и `Delete` должны от неё отличаться |
 | `--border`, `--input` | `divider` |
 | `--ring` | тёмная — `accent`, светлая — `accent-600`: чистый `accent` к фону окна 2.69:1, ниже 3:1 для признака состояния, `accent-600` — 3.35:1. Фокус — `outline: 2px solid; outline-offset: 2px` |
 | `--work-sidebar`, `--sidebar` | `surface` (у сайдбаров нет своего фона) |

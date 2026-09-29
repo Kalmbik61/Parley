@@ -107,7 +107,6 @@ describe('переменные shadcn — таблица раздела 4 спе
       same(theme, '--secondary', '--color-neutral-200');
       same(theme, '--muted', '--color-neutral-200');
       same(theme, '--muted-foreground', '--color-neutral-700');
-      same(theme, '--destructive', '--color-accent-700');
       same(theme, '--border', '--color-divider');
       same(theme, '--input', '--color-divider');
     });
@@ -201,18 +200,36 @@ describe('решение 1: главная кнопка', () => {
       }
     });
 
-    it(`${theme}: destructive-кнопка — текст на заливке и на её hover (90 %) не ниже 4.5:1`, () => {
-      const text = solid(theme, '--destructive-foreground');
-      expect(contrastRatio(text, solid(theme, '--destructive'))).toBeGreaterThanOrEqual(TEXT);
-      // `hover:bg-destructive/90` — 90 % заливки поверх фона окна.
-      const hover = compositeOver(solid(theme, '--destructive'), 0.9, solid(theme, '--background'));
-      expect(contrastRatio(text, hover)).toBeGreaterThanOrEqual(TEXT);
-    });
-
     it(`${theme}: заливка выбранного пункта сегмента (--primary) — признак состояния, не ниже 3:1 к фону окна и карточки`, () => {
       const fill = solid(theme, '--primary');
       expect(contrastRatio(fill, solid(theme, '--background'))).toBeGreaterThanOrEqual(NON_TEXT);
       expect(contrastRatio(fill, solid(theme, '--card'))).toBeGreaterThanOrEqual(NON_TEXT);
+    });
+  }
+});
+
+/**
+ * Решение контролёра куска 2 по `--destructive`: по решению 1 главная кнопка светлой темы — accent-700,
+ * и кнопка удаления на том же accent-700 слилась бы с ней, а контракт окна (`ConfirmDialog`, тест «Вид
+ * кнопки подтверждения» в `review/ChangesPanel.test.tsx`) требует, чтобы `Discard` и `Delete`
+ * отличались от главной. Светлая берёт accent-800, тёмная остаётся на accent-700 (как в таблице спеки).
+ */
+describe('--destructive — кнопка удаления не сливается с главной', () => {
+  it('светлая — accent-800, тёмная — accent-700', () => {
+    same('light', '--destructive', '--color-accent-800');
+    same('dark', '--destructive', '--color-accent-700');
+  });
+
+  for (const theme of THEMES) {
+    it(`${theme}: --destructive отличается от --primary`, () => {
+      expect(resolveColor(tokens, theme, '--destructive')).not.toEqual(resolveColor(tokens, theme, '--primary'));
+    });
+
+    it(`${theme}: текст на заливке --destructive и на её hover (bg-destructive/90 поверх фона окна) не ниже 4.5:1`, () => {
+      const text = solid(theme, '--destructive-foreground');
+      expect(contrastRatio(text, solid(theme, '--destructive'))).toBeGreaterThanOrEqual(TEXT);
+      const hover = compositeOver(solid(theme, '--destructive'), 0.9, solid(theme, '--background'));
+      expect(contrastRatio(text, hover)).toBeGreaterThanOrEqual(TEXT);
     });
   }
 });

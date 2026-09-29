@@ -237,8 +237,13 @@
      палитры — `--color-accent`. */
   --accent: color-mix(in srgb, var(--color-text) 9%, transparent);
   --accent-foreground: var(--color-text);
-  --destructive: var(--color-accent-700);
-  /* Текст на заливке --destructive и на главной кнопке — `bg`: 5.7:1 в светлой, 9.4:1 в тёмной. */
+  /* Светлая — accent-800, а не accent-700 из таблицы спеки: по решению 1 главная кнопка светлой темы
+     теперь accent-700, и кнопка удаления на нём слилась бы с ней, а контракт окна требует, чтобы
+     `Discard` и `Delete` отличались от главной (решение контролёра куска 2). Тёмная — accent-700
+     (`.dark` ниже), там главная на чистом accent. */
+  --destructive: var(--color-accent-800);
+  /* Текст на заливке --destructive и на главной кнопке — `bg`: 8.7:1 на destructive светлой, 5.7:1 на
+     главной светлой, 9.4:1 на destructive тёмной. */
   --destructive-foreground: var(--color-bg);
   /* Кусок 3.4 (не из Orca): текст пунктов-«разрушителей» меню (Delete…, Archive) — на --popover и на
      подсветке фокуса --accent не ниже 4.5:1. */
@@ -414,6 +419,8 @@
   --primary: var(--color-accent);
   --primary-hover: var(--color-accent-600);
   --primary-active: var(--color-accent-700);
+  /* Кнопка удаления, тёмная тема: accent-700, как в таблице спеки; от главной (accent) отличается. */
+  --destructive: var(--color-accent-700);
   /* Кольцо фокуса, тёмная тема: `accent`, как в таблице спеки, — 6.07:1 к фону окна. */
   --ring: var(--color-accent);
   --terminal-pane-locate: var(--color-blue-400);
