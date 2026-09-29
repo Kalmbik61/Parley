@@ -5,7 +5,7 @@
  * «команда человека» здесь — обычные `printf`, `cat` и `sleep`.
  */
 
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -70,6 +70,52 @@ const run = async (
   options: Parameters<typeof runStatusline>[1] = {},
 ): Promise<string> =>
   (await runStatusline(raw, { env, home, now: () => NOW, ...options })).toString('utf8');
+
+/** Жив ли процесс: убитый, но не подобранный родителем (зомби) считается мёртвым. */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  try {
+    const state = execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' });
+    return !state.trim().startsWith('Z');
+  } catch {
+    return false;
+  }
+}
+
+/** Ждёт, пока условие не выполнится; иначе — ошибка теста, а не зависание. */
+async function until(
+  condition: () => boolean | Promise<boolean>,
+  what: string,
+  timeoutMs = 5000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await condition())) {
+    if (Date.now() > deadline) throw new Error(`не дождались: ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+/** pid из файла, который записал внутренний `sh` составной команды (см. `compound`). */
+async function sleeperPid(file: string): Promise<number> {
+  let pid = 0;
+  await until(async () => {
+    pid = Number((await readFile(file, 'utf8').catch(() => '')).trim());
+    return pid > 0;
+  }, 'pid внутреннего процесса команды человека');
+  return pid;
+}
+
+/**
+ * Составная команда человека: внешняя оболочка (её запускает скрипт) порождает внутренний `sh`,
+ * тот записывает свой pid и становится `sleep`. Убить одну внешнюю оболочку мало: `sleep`
+ * переживёт её и продолжит держать унаследованные stdout и stderr.
+ */
+const compound = (pidFile: string): string =>
+  `sh -c 'echo $$ > "${pidFile}"; exec sleep 30'; echo x`;
 
 const limitsFile = path.join('limits', 's-01.json');
 const exists = async (file: string): Promise<boolean> =>
@@ -266,25 +312,74 @@ describe('строка терминала', () => {
     // Файл лимитов записан до вызова команды: и зависшая, и убитая Claude Code строка его не теряет.
     expect(await exists(path.join(workDir, limitsFile))).toBe(true);
   });
+
+  it('составная команда зависла: по таймауту убивается вся группа процессов, а не только оболочка', async () => {
+    const pidFile = path.join(root, 'sleeper.pid');
+    await putStatusLine(home, 'settings.json', compound(pidFile));
+
+    const started = Date.now();
+    const running = run(input(), { humanTimeoutMs: 1000 });
+    const pid = await sleeperPid(pidFile);
+    try {
+      expect(await running).toBe('Opus · ctx 8%\n');
+      expect(Date.now() - started).toBeLessThan(4000);
+      // Внутренний процесс — не сама оболочка: без группы он пережил бы её и держал stderr.
+      await until(() => !alive(pid), 'процесс команды человека убит вместе с группой', 3000);
+    } finally {
+      if (alive(pid)) process.kill(pid, 'SIGKILL');
+    }
+  });
+
+  it('отмена (signal): команда человека убивается с группой, строка короткая; отменено до запуска — команда не стартует', async () => {
+    const pidFile = path.join(root, 'sleeper.pid');
+    await putStatusLine(home, 'settings.json', compound(pidFile));
+
+    const cancel = new AbortController();
+    const running = run(input(), { signal: cancel.signal });
+    const pid = await sleeperPid(pidFile);
+    try {
+      cancel.abort();
+      expect(await running).toBe('Opus · ctx 8%\n');
+      await until(() => !alive(pid), 'процесс команды человека убит вместе с группой', 3000);
+    } finally {
+      if (alive(pid)) process.kill(pid, 'SIGKILL');
+    }
+
+    const marker = path.join(root, 'started');
+    await putStatusLine(home, 'settings.json', `touch '${marker}'`);
+    expect(await run(input(), { signal: AbortSignal.abort() })).toBe('Opus · ctx 8%\n');
+    expect(await exists(marker)).toBe(false);
+  });
 });
 
 /** Настоящий процесс скрипта: код выхода и stdout, как их видит Claude Code. */
-function spawnScript(
+function startScript(
   stdin: string,
   extraEnv: NodeJS.ProcessEnv,
-): Promise<{ code: number | null; out: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['--import', tsxLoader, binScript], {
-      env: { ...env, ...extraEnv },
-      stdio: ['pipe', 'pipe', 'inherit'],
-    });
-    let out = '';
-    child.stdout.on('data', (chunk: Buffer) => (out += chunk.toString('utf8')));
-    child.on('error', reject);
-    child.on('close', (code) => resolve({ code, out }));
-    child.stdin.end(stdin);
+): {
+  child: ChildProcess;
+  result: Promise<{ code: number | null; signal: NodeJS.Signals | null; out: string }>;
+} {
+  const child = spawn(process.execPath, ['--import', tsxLoader, binScript], {
+    env: { ...env, ...extraEnv },
+    stdio: ['pipe', 'pipe', 'inherit'],
   });
+  const result = new Promise<{ code: number | null; signal: NodeJS.Signals | null; out: string }>(
+    (resolve, reject) => {
+      let out = '';
+      child.stdout?.on('data', (chunk: Buffer) => (out += chunk.toString('utf8')));
+      child.on('error', reject);
+      child.on('close', (code, signal) => resolve({ code, signal, out }));
+    },
+  );
+  child.stdin?.end(stdin);
+  return { child, result };
 }
+
+const spawnScript = (
+  stdin: string,
+  extraEnv: NodeJS.ProcessEnv,
+): Promise<{ code: number | null; out: string }> => startScript(stdin, extraEnv).result;
 
 describe('процесс скрипта', () => {
   it('битый stdin: код выхода 0 и непустая строка', async () => {
@@ -303,4 +398,47 @@ describe('процесс скрипта', () => {
     expect(result.out).toBe('человек');
     expect(await exists(path.join(workDir, limitsFile))).toBe(true);
   }, 30_000);
+
+  it('составная команда зависла: по настоящему таймауту — короткая строка, код 0, процессов группы не осталось', async () => {
+    const pidFile = path.join(root, 'sleeper.pid');
+    await putStatusLine(home, 'settings.json', compound(pidFile));
+
+    const { child, result } = startScript(input(), { HOME: home });
+    let pid = 0;
+    try {
+      pid = await sleeperPid(pidFile);
+      const done = await result;
+
+      expect(done).toEqual({ code: 0, signal: null, out: 'Opus · ctx 8%\n' });
+      await until(() => !alive(pid), 'процесс команды человека убит вместе с группой', 3000);
+    } finally {
+      if (pid > 0 && alive(pid)) process.kill(pid, 'SIGKILL');
+      child.kill('SIGKILL');
+    }
+  }, 30_000);
+
+  // Claude Code отменяет идущий вызов, когда его вытесняет новый (документация statusline): скрипт
+  // получает сигнал. Команда человека живёт в своей группе процессов и сама сигнала не получит.
+  it.each(['SIGTERM', 'SIGINT'] as const)(
+    '%s посреди команды человека: группа убита, код выхода 0',
+    async (name) => {
+      const pidFile = path.join(root, 'sleeper.pid');
+      await putStatusLine(home, 'settings.json', compound(pidFile));
+
+      const { child, result } = startScript(input(), { HOME: home });
+      let pid = 0;
+      try {
+        pid = await sleeperPid(pidFile);
+        child.kill(name);
+        const done = await result;
+
+        expect({ code: done.code, signal: done.signal }).toEqual({ code: 0, signal: null });
+        await until(() => !alive(pid), 'процесс команды человека убит вместе с группой', 3000);
+      } finally {
+        if (pid > 0 && alive(pid)) process.kill(pid, 'SIGKILL');
+        child.kill('SIGKILL');
+      }
+    },
+    30_000,
+  );
 });

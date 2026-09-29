@@ -16,9 +16,20 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+// Claude Code отменяет идущий вызов, когда его вытесняет новый (docs/en/statusline), — скрипт
+// получает SIGTERM; Ctrl-C в терминале — SIGINT. Команда человека живёт в своей группе процессов и
+// сигнала сама не получит: убиваем её здесь и выходим с кодом 0.
+const cancel = new AbortController();
+const onCancel = (): void => {
+  cancel.abort();
+  process.exit(0);
+};
+process.once('SIGTERM', onCancel);
+process.once('SIGINT', onCancel);
+
 let output: Buffer = Buffer.from('Claude\n', 'utf8');
 try {
-  output = await runStatusline(await readStdin());
+  output = await runStatusline(await readStdin(), { signal: cancel.signal });
 } catch {
   // Остаётся запасная строка.
 }

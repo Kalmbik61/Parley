@@ -17,6 +17,10 @@
  * тянет только встроенные модули и лист `../limits.js`. Любая ошибка (битый stdin, нет
  * каталога, упала команда человека) даёт строку и код выхода 0: при ненулевом коде или пустом
  * выводе Claude Code гасит строку статуса совсем.
+ *
+ * Команда человека запускается в своей группе процессов. По таймауту и по отмене (Claude Code
+ * вытесняет идущий вызов новым — точка входа получает SIGTERM) убивается вся группа: у составной
+ * команды `sleep` пережил бы одну убитую оболочку и держал бы унаследованный stderr.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -49,6 +53,11 @@ export interface StatuslineOptions {
   home?: string;
   now?: () => number;
   humanTimeoutMs?: number;
+  /**
+   * Отмена: Claude Code вытесняет идущий вызов новым, и точка входа получает SIGTERM. По отмене
+   * команда человека убивается вместе со своей группой процессов, строка остаётся короткой.
+   */
+  signal?: AbortSignal;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -159,34 +168,63 @@ async function humanCommand(
 }
 
 /**
+ * Убивает команду человека вместе с её группой процессов. Одной оболочки мало: у составной
+ * команды (`sleep 12; echo hi`) убитую оболочку пережил бы `sleep`, а он держит унаследованные
+ * stdout и stderr, и Claude Code ждёт их закрытия. Группа своя — команда запущена с `detached`,
+ * и её id равен pid оболочки.
+ */
+function killGroup(child: ChildProcess): void {
+  try {
+    if (child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    // Группа уже ушла (или платформа без групп) — хотя бы оболочку.
+    child.kill('SIGKILL');
+  }
+}
+
+/**
  * Запускает команду человека так же, как Claude Code: оболочкой, с тем же stdin и окружением.
- * Вывод — как есть. Не ответила за `timeoutMs`, упала или не запустилась — `null`, строку
- * тогда печатает сам скрипт.
+ * Вывод — как есть. Не ответила за `timeoutMs`, отменена `signal`, упала или не запустилась —
+ * `null`, строку тогда печатает сам скрипт. По таймауту и по отмене убивается вся группа команды.
  */
 function runHuman(
   command: string,
   stdin: string,
   env: NodeJS.ProcessEnv,
   timeoutMs: number,
+  signal: AbortSignal | undefined,
 ): Promise<Buffer | null> {
   return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve(null);
+      return;
+    }
     const chunks: Buffer[] = [];
     let child: ChildProcess | undefined;
     let done = false;
-    const timer = setTimeout(() => {
-      child?.kill('SIGKILL');
-      finish(null);
-    }, timeoutMs);
     const finish = (result: Buffer | null): void => {
       if (done) return;
       done = true;
       clearTimeout(timer);
+      signal?.removeEventListener('abort', stop);
       resolve(result);
     };
+    // Таймаут и отмена — одно и то же: убить команду с группой и отдать короткую строку.
+    const stop = (): void => {
+      if (child !== undefined && !done) killGroup(child);
+      finish(null);
+    };
+    const timer = setTimeout(stop, timeoutMs);
+    signal?.addEventListener('abort', stop, { once: true });
 
     try {
       // stderr команды идёт в наш stderr: `claude --debug` показывает его человеку.
-      child = spawn(command, { shell: true, env, stdio: ['pipe', 'pipe', 'inherit'] });
+      child = spawn(command, {
+        shell: true,
+        detached: true,
+        env,
+        stdio: ['pipe', 'pipe', 'inherit'],
+      });
     } catch {
       finish(null);
       return;
@@ -226,6 +264,12 @@ export async function runStatusline(raw: string, options: StatuslineOptions = {}
   const human =
     command === null
       ? null
-      : await runHuman(command, raw, env, options.humanTimeoutMs ?? HUMAN_TIMEOUT_MS);
+      : await runHuman(
+          command,
+          raw,
+          env,
+          options.humanTimeoutMs ?? HUMAN_TIMEOUT_MS,
+          options.signal,
+        );
   return human ?? Buffer.from(shortLine(input), 'utf8');
 }
