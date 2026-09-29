@@ -11,7 +11,7 @@ import { hostInfo, hostShutdown } from './host.js';
 import { mailMarkRead } from './mail.js';
 import { createPtyHandlers } from './pty.js';
 import { providersList } from './providers.js';
-import { roomsCreate, roomsSend } from './rooms.js';
+import { roomsAddMember, roomsCreate, roomsResolveProposal, roomsSend } from './rooms.js';
 import { createSessionHandlers } from './sessions.js';
 import { settingsGet, settingsSet } from './settings.js';
 import { createWakeHandlers } from './wake.js';
@@ -103,6 +103,8 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'wake.resume': wake.wakeResume as AnyHandler,
     'wake.state': wake.wakeState as AnyHandler,
     'rooms.create': roomsCreate as AnyHandler,
+    'rooms.addMember': roomsAddMember as AnyHandler,
+    'rooms.resolveProposal': roomsResolveProposal as AnyHandler,
     'rooms.send': roomsSend as AnyHandler,
     'worktrees.available': worktrees.worktreesAvailable as AnyHandler,
     'worktrees.diff': worktrees.worktreesDiff as AnyHandler,

@@ -141,3 +141,37 @@ describe('ревью изменений (кусок 8.1)', () => {
     expectTypeOf<Result<'worktrees.diff'>['uncommittedPaths']>().toEqualTypeOf<string[]>();
   });
 });
+
+describe('комнаты: ведущий и решение (дизайн комнат, 3.2)', () => {
+  const room = { projectPath: '/p', workId: 'w-0001', roomId: 'r-01' };
+
+  it('rooms.create: ведущий необязателен, но строка', () => {
+    const base = { projectPath: '/p', workId: 'w-0001', title: 'Возвраты', members: ['s-01', 's-02'] };
+    expect(METHODS['rooms.create'].safeParse(base).success).toBe(true);
+    expect(METHODS['rooms.create'].safeParse({ ...base, lead: 's-02' }).success).toBe(true);
+    expect(METHODS['rooms.create'].safeParse({ ...base, lead: 2 }).success).toBe(false);
+    expectTypeOf<Params<'rooms.create'>['lead']>().toEqualTypeOf<string | undefined>();
+  });
+
+  it('rooms.addMember: комната и сессия обязательны', () => {
+    expect(METHODS['rooms.addMember'].safeParse({ ...room, sessionId: 's-04' }).success).toBe(true);
+    expect(METHODS['rooms.addMember'].safeParse(room).success).toBe(false);
+    expect(METHODS['rooms.addMember'].safeParse({ projectPath: '/p', workId: 'w-0001', sessionId: 's-04' }).success).toBe(
+      false,
+    );
+    expectTypeOf<Result<'rooms.addMember'>>().toEqualTypeOf<{ messageId: string }>();
+  });
+
+  it('rooms.resolveProposal: accept или return, заметка необязательна и до 4000 знаков', () => {
+    const accept = { ...room, proposalId: 'p-01', action: 'accept' };
+    expect(METHODS['rooms.resolveProposal'].safeParse(accept).success).toBe(true);
+    expect(METHODS['rooms.resolveProposal'].safeParse({ ...accept, action: 'return', note: 'мало' }).success).toBe(true);
+    expect(METHODS['rooms.resolveProposal'].safeParse({ ...accept, action: 'return', note: '' }).success).toBe(true);
+    expect(METHODS['rooms.resolveProposal'].safeParse({ ...accept, note: 'я'.repeat(4000) }).success).toBe(true);
+    expect(METHODS['rooms.resolveProposal'].safeParse({ ...accept, note: 'я'.repeat(4001) }).success).toBe(false);
+    expect(METHODS['rooms.resolveProposal'].safeParse({ ...accept, action: 'reject' }).success).toBe(false);
+    expect(METHODS['rooms.resolveProposal'].safeParse({ ...room, action: 'accept' }).success).toBe(false);
+    expectTypeOf<Params<'rooms.resolveProposal'>['action']>().toEqualTypeOf<'accept' | 'return'>();
+    expectTypeOf<Result<'rooms.resolveProposal'>>().toEqualTypeOf<{ messageId: string }>();
+  });
+});

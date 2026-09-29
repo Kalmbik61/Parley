@@ -71,6 +71,26 @@ export const METHODS = {
     workId: z.string(),
     title: z.string().min(1),
     members: z.array(z.string()).min(1),
+    // Ведущий — один из `members`; без него хост берёт первого (дизайн комнат, 3.2). Старый хост
+    // поле отбросит, старое окно его не шлёт.
+    lead: z.string().optional(),
+  }),
+  // Дизайн комнат, 3.2: человек вводит сессию в комнату; она уходит из прочих комнат работы.
+  'rooms.addMember': z.object({
+    projectPath: z.string(),
+    workId: z.string(),
+    roomId: z.string(),
+    sessionId: z.string(),
+  }),
+  // Ответ человека на решение ведущего. Устаревший `proposalId` хост отвергает как `conflict`;
+  // заметка возврата — до 4000 знаков, длиннее не проходит схему.
+  'rooms.resolveProposal': z.object({
+    projectPath: z.string(),
+    workId: z.string(),
+    roomId: z.string(),
+    proposalId: z.string(),
+    action: z.enum(['accept', 'return']),
+    note: z.string().max(4000).optional(),
   }),
   'rooms.send': z.object({
     projectPath: z.string(),
@@ -135,6 +155,10 @@ export interface Results {
   'settings.get': { config: HarnasConfig; locked: Record<string, string> };
   'settings.set': { config: HarnasConfig };
   'rooms.create': { roomId: string };
+  /** `messageId` — системная строка ленты «@s04 joined the room». */
+  'rooms.addMember': { messageId: string };
+  /** `messageId` — сообщение `decision` при `accept`, письмо ведущему при `return`. */
+  'rooms.resolveProposal': { messageId: string };
   'rooms.send': { messageId: string };
   'worktrees.available': { available: boolean };
   'worktrees.diff': WorktreeDiff;
