@@ -8,6 +8,8 @@ import {
   readlink,
   realpath,
   rename,
+  rm,
+  stat,
   symlink,
   writeFile,
 } from 'node:fs/promises';
@@ -120,10 +122,15 @@ async function readOrNull(file: string): Promise<Buffer | null> {
   }
 }
 
-/** Временный файл и `rename`: агент, стартующий в этот миг, читает либо старый файл, либо новый целиком. */
+/**
+ * Временный файл и `rename`: агент, стартующий в этот миг, читает либо старый файл, либо новый целиком.
+ * Временный файл создаётся эксклюзивно (`wx`) после удаления прежнего с этим именем: остаток прерванной
+ * записи или подложенная в чужом репозитории ссылка уходит сама, и запись не идёт туда, куда она вела.
+ */
 async function writeAtomic(file: string, text: string): Promise<void> {
   const temp = `${file}.tmp`;
-  await writeFile(temp, text, 'utf8');
+  await rm(temp, { force: true });
+  await writeFile(temp, text, { encoding: 'utf8', flag: 'wx' });
   await rename(temp, file);
 }
 
@@ -408,7 +415,9 @@ async function installNow(
   const roots: string[] = [];
   for (const root of [options.projectPath, options.worktreePath]) {
     if (root === undefined) continue;
-    const info = await lstatOrNull(root);
+    // Сам корень — по `stat`, за ссылкой: путь проекта, который человек задал ссылкой на каталог, годится.
+    // Ссылки ниже корня — другое дело, там их не пропускает `parentsAreSafe`.
+    const info = await stat(root).catch(() => null);
     if (info === null || !info.isDirectory()) continue;
     if (await isAgentHome(root)) continue;
     roots.push(root);

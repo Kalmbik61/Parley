@@ -341,7 +341,49 @@ describe('чужое и правленное не трогается', () => {
   });
 });
 
+describe('корень — ссылка на каталог', () => {
+  it('путь проекта, заданный симлинком на каталог, годится: скилл ложится в каталог за ссылкой', async () => {
+    const real = path.join(root, 'настоящий');
+    const link = path.join(root, 'ссылка');
+    await mkdir(real);
+    await symlink(real, link);
+
+    const result = await installAgentSkill({ projectPath: link });
+
+    expect(result.skipped).toEqual([]);
+    expect(result.written).toEqual([canonical(link), alias(link)]);
+    expect(await readFile(path.join(real, '.agents', 'skills', 'harnas', 'SKILL.md'), 'utf8')).toBe(
+      SKILL_MD,
+    );
+    expect(await installAgentSkill({ projectPath: link })).toEqual({ skipped: [], written: [] });
+  });
+});
+
 describe('запись за симлинк не идёт', () => {
+  it('подложенная ссылка на месте временного файла не уводит запись: ни SKILL.md.tmp, ни учёта', async () => {
+    await installAgentSkill({ projectPath: project });
+    const victim = path.join(root, 'жертва.txt');
+    await writeFile(victim, 'не трогать\n', 'utf8');
+    // Обновление своего файла и записи учёта пойдут через временные файлы — оба на месте занимают ссылки.
+    const receipt = await readReceipt(project);
+    receipt.entries[canonical(project)] = { kind: 'dir', sha256: sha256('старая заглушка\n') };
+    await writeFile(path.join(canonical(project), 'SKILL.md'), 'старая заглушка\n', 'utf8');
+    await writeFile(receiptFile(project), JSON.stringify(receipt), 'utf8');
+    await symlink(victim, path.join(canonical(project), 'SKILL.md.tmp'));
+    await symlink(victim, `${receiptFile(project)}.tmp`);
+
+    const result = await installAgentSkill({ projectPath: project });
+
+    expect(result.written).toEqual([canonical(project)]);
+    expect(await readFile(victim, 'utf8')).toBe('не трогать\n');
+    expect(await readFile(path.join(canonical(project), 'SKILL.md'), 'utf8')).toBe(SKILL_MD);
+    expect(await readdir(canonical(project))).toEqual(['SKILL.md']);
+    expect((await readReceipt(project)).entries[canonical(project)]).toEqual({
+      kind: 'dir',
+      sha256: sha256(SKILL_MD),
+    });
+  });
+
   it('.claude — ссылка на другой каталог: в него ничего не пишется, канонная копия ставится', async () => {
     const elsewhere = path.join(root, 'elsewhere');
     await mkdir(elsewhere);
