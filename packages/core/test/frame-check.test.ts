@@ -16,8 +16,11 @@ import {
   FRAME_EXCEPTIONS,
   FRAME_RULES,
   isFrameException,
+  PINNED_USES,
+  pinDrift,
   scanSource,
   type FrameHit,
+  type PinnedUses,
 } from './frame-scan.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -175,6 +178,80 @@ describe('исключение для чтения settings.json в скрипт
       const same = source.split('\n').filter((line) => line.trim() === exception.line);
       expect(same, `${exception.file}: ${exception.line}`).toHaveLength(1);
     }
+  });
+});
+
+/**
+ * Закрепление использований константы пути (спека комнат Organic, 3.5). Исключение выше снимает
+ * правило только со СТРОКИ ОБЪЯВЛЕНИЯ `SETTINGS_FILE`, а запись через константу сканер не видит: в
+ * `writeFile(path.join(home, SETTINGS_FILE), …)` самого пути уже нет. Поэтому строки, где названа
+ * константа, закреплены поимённо: новая ссылка краснит тест, пока человек осознанно не обновит
+ * `PINNED_USES` в `frame-scan.ts`.
+ */
+describe('закрепление использований констант путей настроек (спека комнат, 3.5)', () => {
+  const STATUSLINE = 'packages/core/src/work/statusline.ts';
+  const NO_DRIFT = { added: [], removed: [] };
+  const pinned = (): PinnedUses => {
+    const [pin] = PINNED_USES;
+    if (pin === undefined) throw new Error('в PINNED_USES нет закрепления');
+    return pin;
+  };
+  const readStatusline = (): Promise<string> => readFile(path.join(repoRoot, STATUSLINE), 'utf8');
+  // Мутации правят копию, а не настоящий файл: чистая копия — ровно закреплённые строки, поэтому
+  // тесты с мутациями не зависят от того, что сейчас лежит в statusline.ts (его сверяет отдельный
+  // тест).
+  const cleanCopy = (): string => [...pinned().declarations, ...pinned().reads].join('\n');
+
+  it('закрепление одно: statusline.ts, SETTINGS_FILE, два объявления и две строки чтения', () => {
+    expect(PINNED_USES).toHaveLength(1);
+    expect(pinned()).toMatchObject({ file: STATUSLINE, name: 'SETTINGS_FILE' });
+    expect(pinned().declarations).toEqual([
+      "const SETTINGS_FILE = '.claude/settings.json';",
+      "const LOCAL_SETTINGS_FILE = '.claude/settings.local.json';",
+    ]);
+    // Объявление, снятое с правила исключением, закреплено вместе с остальными.
+    expect(pinned().declarations).toContain(FRAME_EXCEPTIONS[0]?.line);
+    expect(pinned().reads).toHaveLength(2);
+  });
+
+  it('в statusline.ts имя константы встречается только в закреплённых строках', async () => {
+    expect(
+      pinDrift(await readStatusline(), pinned()),
+      'новая ссылка на константу пути настроек Claude Code: если она только читает, допишите ' +
+        'строку в PINNED_USES (test/frame-scan.ts); запись в каталог агента — нарушение рамки 15.1',
+    ).toEqual(NO_DRIFT);
+  });
+
+  // В чистую копию дописана строка записи через константу. Правило рамки такую строку не видит —
+  // пути в ней нет, — а закрепление видит каждую; без мутации копия зелёная.
+  it('запись через константу в копии файла краснит закрепление', () => {
+    expect(pinDrift(cleanCopy(), pinned())).toEqual(NO_DRIFT);
+    for (const write of [
+      'await writeFile(path.join(home, SETTINGS_FILE), text);',
+      'await rename(temp, SETTINGS_FILE);',
+      "const backup = SETTINGS_FILE + '.bak';",
+      'await writeFile(path.join(dir, LOCAL_SETTINGS_FILE), text);',
+      // Комментарии не пропускаются: упоминание имени — такая же ссылка.
+      '// SETTINGS_FILE',
+    ]) {
+      const drift = pinDrift(`${cleanCopy()}\n  ${write}\n`, pinned());
+      expect(drift, write).toEqual({ added: [write], removed: [] });
+    }
+  });
+
+  it('пропавшая закреплённая строка и лишняя копия закреплённой — тоже расхождение', () => {
+    const read = 'return [...project, path.join(home, SETTINGS_FILE)];';
+    expect(pinned().reads).toContain(read);
+    // Строка чтения пропала — закрепление устарело.
+    expect(pinDrift(cleanCopy().replace(read, '// убрано'), pinned())).toEqual({
+      added: [],
+      removed: [read],
+    });
+    // Строка продублирована: считаются строки, а не принадлежность к множеству.
+    expect(pinDrift(`${cleanCopy()}\n  ${read}\n`, pinned())).toEqual({
+      added: [read],
+      removed: [],
+    });
   });
 });
 
