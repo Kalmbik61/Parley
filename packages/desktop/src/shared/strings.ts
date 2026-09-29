@@ -263,13 +263,24 @@ export const S = {
    * скринридера — `S.actions.commandPalette`, «Open mail» — `S.cardMenu.openMail`.
    */
   palette: {
-    placeholder: 'Search tabs, workspaces, sessions, rooms, and actions…',
+    // Подсказка поля — дословно по handoff (спека окна 2026-09-29, 1.9).
+    placeholder: 'Search workspaces, sessions, tabs and actions',
     /** Заголовок режимов splitRight и splitDown. */
     splitTitle: 'Open in new group',
     sections: { tabs: 'Tabs', works: 'Workspaces', sessions: 'Sessions', rooms: 'Rooms', actions: 'Actions', files: 'Files' },
+    /** Без запроса секция вкладок называется «Open tabs» (1.9): это последние открытые, а не найденные. */
+    openTabs: 'Open tabs',
     more: (n: number): string => `${n} more`,
-    createWorkspace: (query: string): string => `Create workspace "${query}"`,
-    footer: '↑↓ select · Enter open · ⌘Enter open to the side · Esc close',
+    createWorkspace: (query: string): string => `Create workspace “${query}”`,
+    /** Подвал: подсказки клавиш по одной, разделённые зазором; «⌘Enter» — открыть сбоку (спека 9.3). */
+    footerHints: ['↑↓ select', 'Enter open', '⌘Enter open to the side', '⌘1–9 pick', 'Esc close'],
+    /** Подписи строк (снимок dark-03): вид строки и работа, слово состояния и провайдер у сессии. */
+    tabSubtitle: (work: string): string => `Tab · ${work}`,
+    roomSubtitle: (work: string): string => `Room · ${work}`,
+    sessionSubtitle: (work: string, word: string, provider: string): string => `${work} · ${word} · ${provider}`,
+    workSubtitle: (project: string, sessions: number, branch: string | null): string =>
+      `${project} · ${sessions === 1 ? '1 session' : `${sessions} sessions`}${branch === null ? '' : ` · ${branch}`}`,
+    actionSubtitle: 'Action',
   },
 
   /** «Изменения» и вкладка диффа — `review/*` (куски 8.2a, 8.2b, 8.3). */
@@ -569,7 +580,9 @@ export const S = {
     goToFile: 'Go to file',
     findInFiles: 'Find in files',
     newWorkspace: 'New workspace',
-    newSession: 'New session',
+    // «New session or room» (спека окна 2026-09-29, 1.9): пока диалога 1.5 нет (кусок 7), пункт открывает
+    // прежний диалог ⌘T; «New room» остаётся отдельным пунктом палитры до куска 7.
+    newSession: 'New session or room',
     newRoom: 'New room',
     workspaceNumber: (n: number): string => `Workspace ${n}`,
     previousWorkspace: 'Previous workspace',

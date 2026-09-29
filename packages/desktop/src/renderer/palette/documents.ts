@@ -6,6 +6,10 @@
  * Рамка (спека 9.4, 15.1): `run` не создаёт работ и сессий и ничего не пишет в терминал —
  * только открывает вкладку, делает работу активной или зовёт действие реестра, а создание
  * идёт своей формой или диалогом.
+ *
+ * Подписи строк — по снимку handoff (спека окна 2026-09-29, 1.9): вид строки и работа («Tab · Платежи»),
+ * у сессии работа, слово состояния и провайдер, у работы проект, число сессий и ветка, у действия
+ * «Action». Поле поиска подписи не читает (`fields`), поэтому ранжирование прежнее.
  */
 
 import type { WorkEntry, WorkSession } from '@harnas/core';
@@ -13,7 +17,7 @@ import { refKey } from '@harnas/protocol';
 import { toast } from 'sonner';
 import type { ActionDef, ActionId } from '../../shared/keybindings.js';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
-import { S } from '../../shared/strings.js';
+import { providerName, S } from '../../shared/strings.js';
 import type { WorkAttention } from '../attention/derive.js';
 import type { HistoryEntry } from '../layout/history.js';
 import { whenShown } from '../attention/focus-target.js';
@@ -22,7 +26,7 @@ import { measureGroupSizes } from '../layout/measure.js';
 import { useLayoutStore } from '../layout/store.js';
 import { tabMeta, type TabMeta } from '../layout/tab-meta.js';
 import { groups, openTab, openTerminalSessionIds, splitGroup } from '../layout/tree.js';
-import { displayStatus, dotState, type DotState } from '../lib/dot-state.js';
+import { displayStatus, dotState, stateWord, type DotState } from '../lib/dot-state.js';
 import { isoMs } from '../lib/iso-time.js';
 import { sessionLabelText, sessionRowLabel, sessionTag } from '../lib/participant.js';
 import { treeOrder, workKey } from '../lib/tree-order.js';
@@ -141,7 +145,7 @@ export function buildDocuments(input: {
             id: `tab:${key}\n${tab.id}`,
             section: 'tabs',
             title: meta.title,
-            subtitle: workTitle,
+            subtitle: meta.icon === 'room' ? S.palette.roomSubtitle(workTitle) : S.palette.tabSubtitle(workTitle),
             fields: [tab.kind, workTitle],
             recencyAt: tabAt.get(`${key}\n${tab.id}`) ?? null,
             order: base + index,
@@ -161,7 +165,7 @@ export function buildDocuments(input: {
         id: `work:${key}`,
         section: 'works',
         title: workTitle,
-        subtitle: branch === null ? projectName : `${projectName} · ${branch}`,
+        subtitle: S.palette.workSubtitle(projectName, entry.map.sessions.filter((session) => session.lifecycle !== 'closed').length, branch),
         fields: [projectName, entry.projectPath, entry.map.work.id, ...(branch === null ? [] : [branch])],
         recencyAt: lastEventAt === undefined ? null : isoMs(lastEventAt),
         order: base,
@@ -197,7 +201,11 @@ export function buildDocuments(input: {
         id: `session:${key}\n${session.id}`,
         section: 'sessions',
         title: sessionRowLabel(session.id, session.label),
-        subtitle: workTitle,
+        subtitle: S.palette.sessionSubtitle(
+          workTitle,
+          stateWord(sessionState(session), session.lifecycle),
+          providerName(session.provider, provider ?? session.provider),
+        ),
         fields: [
           sessionTag(session.id),
           sessionLabelText(session.label),
@@ -224,7 +232,7 @@ export function buildDocuments(input: {
         id: `room:${key}\n${room.id}`,
         section: 'rooms',
         title: room.title,
-        subtitle: workTitle,
+        subtitle: S.palette.roomSubtitle(workTitle),
         fields: [...members, workTitle],
         recencyAt: null,
         order: base + index,
@@ -242,7 +250,7 @@ export function buildDocuments(input: {
         id: `action:${action.id}`,
         section: 'actions',
         title: action.id === 'wake.toggle' && input.wakePaused === true ? S.actions.resumeAutoWake : action.title,
-        subtitle: '',
+        subtitle: S.palette.actionSubtitle,
         fields: action.keywords,
         recencyAt: null,
         order: index,
@@ -260,7 +268,7 @@ export function buildDocuments(input: {
       id: `action:${newBrowserTab.id}`,
       section: 'actions',
       title: newBrowserTab.title,
-      subtitle: '',
+      subtitle: S.palette.actionSubtitle,
       fields: newBrowserTab.keywords,
       recencyAt: null,
       order: 0,

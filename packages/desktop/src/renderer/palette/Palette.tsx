@@ -7,6 +7,10 @@
  * раскладки, историю и секции живут в нём, а оболочка (`AppShell`) на историю и поток
  * активности не подписана (решение по куску 3.3).
  *
+ * Облик Organic (спека окна 2026-09-29, 1.9): затемнение `neutral-900` 45 % (в тёмной — `--scrim`) с blur 2px; панель
+ * 720px, радиус 28, фон `neutral-100`, `shadow-lg`; поле — пилюля 48px на фоне окна; секции — 11px капсом
+ * (без запроса вкладки — «Open tabs»); пункт — радиус 16, отступ `9 12`, ⌘1…⌘9 пилюлей; подвал на `bg`.
+ *
  * Выбор (Enter, ⌘Enter, ⌘1–9, клик) сначала закрывает палитру, потом зовёт `run` документа:
  * действие может открыть палитру снова (разделение), и закрытие после него закрыло бы её. Enter
  * гасит сам cmdk, ⌘Enter — своё поле, ⌘1–9 — обработчик окна: `run` переводит фокус в
@@ -17,7 +21,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { Command as CommandPrimitive } from 'cmdk';
 import { toast } from 'sonner';
-import { Command as CommandIcon, File as FileIcon, Folder, GitCompare, Globe, Hash, Mail, Plus, SquareTerminal } from 'lucide-react';
+import { Command as CommandIcon, File as FileIcon, Folder, GitCompare, Globe, Hash, Mail, Plus, Search, SquareTerminal } from 'lucide-react';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import type { FileList, FileRoot } from '../../shared/files-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
@@ -75,7 +79,7 @@ function RowIcon({ doc }: { doc: PaletteDoc }): JSX.Element {
 // почти не отличается от фона), в тёмной — прежний `--accent`, край того же цвета.
 // Вторичный текст и значки строки (`text-muted-foreground`) на выделении берут свой тон.
 const ROW_CLASS = cn(
-  'min-w-0 gap-3 rounded-lg px-3 py-2.5',
+  'min-w-0 gap-3 rounded-md px-3 py-[9px]',
   'data-[selected=true]:bg-palette-selected data-[selected=true]:text-palette-selected-foreground',
   'data-[selected=true]:ring-1 data-[selected=true]:ring-inset data-[selected=true]:ring-palette-selected-edge',
   '[&[data-selected=true]_.text-muted-foreground]:text-palette-selected-muted',
@@ -84,6 +88,16 @@ const ROW_CLASS = cn(
 interface BodyProps extends PaletteProps {
   onPick(): void;
 }
+
+/** Секция (1.9): заголовок 11px капсом с отступом `10 12 4 12`, пункты колонкой с зазором 2. */
+const GROUP_CLASS = cn(
+  'p-0 [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:pt-2.5',
+  '[&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[.06em]',
+  '[&_[cmdk-group-items]]:flex [&_[cmdk-group-items]]:flex-col [&_[cmdk-group-items]]:gap-0.5',
+);
+
+/** Подсказка ⌘1…⌘9 — пилюля 10px на `neutral-200`, текст `neutral-800`; без прозрачности `CommandShortcut`. */
+const SHORTCUT_CLASS = 'shrink-0 rounded-full bg-neutral-200 px-[7px] py-0.5 tracking-normal text-neutral-800 opacity-100';
 
 /** Строка-пояснение палитры: не выбирается, ⌘1–9 её не считают. */
 const NOTE_CLASS = 'px-3 py-1.5 text-[12px] text-muted-foreground';
@@ -242,13 +256,14 @@ function PaletteBody({ bridge, run, onPick }: BodyProps): JSX.Element {
       {mode === 'splitRight' || mode === 'splitDown' ? (
         <div className="px-4 pt-3 text-xs font-medium text-muted-foreground">{S.palette.splitTitle}</div>
       ) : null}
-      <div className="p-2">
-        <div className="rounded-lg border border-border/55 bg-muted/28">
+      <div className="px-3.5 pb-1.5 pt-3.5">
+        <div className="flex h-12 items-center gap-2.5 rounded-full bg-background px-[18px]">
+          <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           <CommandPrimitive.Input
             value={query}
             onValueChange={(next) => usePaletteStore.getState().setQuery(next)}
             placeholder={mode === 'files' ? S.actions.goToFile : S.palette.placeholder}
-            className="h-12 w-full bg-transparent px-3 text-[14px] outline-none placeholder:text-muted-foreground"
+            className="min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-muted-foreground"
             onKeyDown={(event) => {
               // cmdk 1.1.1 разбирает Enter в корне без модификаторов: ⌘Enter ушёл бы в обычный выбор.
               if (event.key !== 'Enter' || !event.metaKey || event.nativeEvent.isComposing) return;
@@ -259,7 +274,7 @@ function PaletteBody({ bridge, run, onPick }: BodyProps): JSX.Element {
           />
         </div>
       </div>
-      <CommandList className="max-h-[min(60vh,480px)] px-2 pb-2">
+      <CommandList className="max-h-[min(60vh,480px)] px-2.5 pb-2.5 pt-1">
         {fileQuery === null && trimmed !== '' && ranked.length === 0 ? (
           <CommandItem value={CREATE_VALUE} onSelect={createWorkspace} className={ROW_CLASS}>
             <Plus className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -269,7 +284,11 @@ function PaletteBody({ bridge, run, onPick }: BodyProps): JSX.Element {
           </CommandItem>
         ) : null}
         {ranked.map((section) => (
-          <CommandGroup key={section.section} heading={S.palette.sections[section.section]}>
+          <CommandGroup
+            key={section.section}
+            heading={section.section === 'tabs' && trimmed === '' && fileQuery === null ? S.palette.openTabs : S.palette.sections[section.section]}
+            className={GROUP_CLASS}
+          >
             {section.docs.map((doc) => {
               const number = rowNumber < NUMBERED_ROWS ? rowNumber + 1 : null;
               rowNumber += 1;
@@ -289,7 +308,7 @@ function PaletteBody({ bridge, run, onPick }: BodyProps): JSX.Element {
                       </span>
                     )}
                   </span>
-                  {number === null ? null : <CommandShortcut className="shrink-0">⌘{number}</CommandShortcut>}
+                  {number === null ? null : <CommandShortcut className={SHORTCUT_CLASS}>⌘{number}</CommandShortcut>}
                 </CommandItem>
               );
             })}
@@ -313,7 +332,11 @@ function PaletteBody({ bridge, run, onPick }: BodyProps): JSX.Element {
           <div className={NOTE_CLASS}>{S.files.filesTruncated(files.list.paths.length)}</div>
         ) : null}
       </CommandList>
-      <div className="border-t border-border/55 px-3 py-2 text-[11px] text-muted-foreground">{S.palette.footer}</div>
+      <div className="flex gap-[18px] bg-(--color-bg) px-6 py-2.5 text-[11px] text-muted-foreground">
+        {S.palette.footerHints.map((hint) => (
+          <span key={hint}>{hint}</span>
+        ))}
+      </div>
     </Command>
   );
 }
@@ -333,11 +356,11 @@ export function Palette({ bridge, run }: PaletteProps): JSX.Element {
       }}
     >
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/55 backdrop-blur-[2px]" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-[color-mix(in_srgb,var(--color-neutral-900)_45%,transparent)] backdrop-blur-[2px] dark:bg-scrim" />
         <DialogPrimitive.Content
           data-palette
           aria-describedby={undefined}
-          className="fixed left-1/2 top-[min(10%,4rem)] z-50 flex w-[900px] max-w-[calc(100vw-32px)] -translate-x-1/2 flex-col overflow-hidden rounded-xl border border-border/70 bg-background/96 text-foreground shadow-[0_20px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl"
+          className="fixed left-1/2 top-[min(10%,4rem)] z-50 flex w-[720px] max-w-[calc(100vw-32px)] -translate-x-1/2 flex-col overflow-hidden rounded-lg bg-popover text-popover-foreground shadow-lg"
           onOpenAutoFocus={() => {
             opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
             picked.current = false;

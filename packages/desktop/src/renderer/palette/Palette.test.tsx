@@ -196,7 +196,7 @@ describe('Palette (тест 6)', () => {
     renderPalette();
     await type('zzqq');
 
-    fireEvent.click(screen.getByRole('option', { name: 'Create workspace "zzqq"' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Create workspace “zzqq”' }));
     await act(async () => {});
 
     expect(usePaletteStore.getState().open).toBe(false);
@@ -292,7 +292,8 @@ describe('Palette (тест 6)', () => {
     renderPalette();
     await type('план');
 
-    const titleNode = screen.getAllByText(title)[0];
+    // Подпись сессии — «работа · слово · провайдер» (1.9): длинное название стоит в её начале.
+    const titleNode = screen.getAllByText((text) => text.startsWith(title))[0];
     expect(titleNode?.className).toContain('truncate');
     expect(screen.getAllByRole('option')[0]?.className).toContain('min-w-0');
   });
@@ -315,8 +316,109 @@ describe('Palette (тест 6)', () => {
 
     const query = 'q'.repeat(120);
     await type(query);
-    const create = screen.getByText(`Create workspace "${query}"`);
-    expect(create.getAttribute('title')).toBe(`Create workspace "${query}"`);
+    const create = screen.getByText(`Create workspace “${query}”`);
+    expect(create.getAttribute('title')).toBe(`Create workspace “${query}”`);
+  });
+});
+
+// Облик Organic (спека окна 2026-09-29, 1.9): затемнение neutral-900 45 % (тёмная — --scrim) и blur 2px; панель 720,
+// радиус 28, фон neutral-100, shadow-lg; поле — пилюля 48px на фоне окна; секции — 11px капсом; пункты — радиус 16;
+// ⌘1…⌘9 — пилюли; подвал на `bg`.
+describe('Palette — облик Organic (1.9)', () => {
+  const open = async (query = ''): Promise<void> => {
+    const w = makeWork('w-01', { projectPath: '/tmp/a', title: 'Первая', sessions: [makeSession('s-01', 'план'), makeSession('s-02', 'бэкенд')] });
+    setup([w], openTab(emptyLayout(), term('s-01')));
+    // Без запроса палитра показывает последние вкладки и работы из истории переходов.
+    useLayoutStore.setState({
+      history: { entries: [{ workKey: keyOf(w), tabId: tabId.terminal('s-01'), at: Date.now() }], index: 0 },
+    });
+    act(() => usePaletteStore.getState().openWith('default'));
+    renderPalette();
+    if (query !== '') await type(query);
+    await act(async () => {});
+  };
+
+  it('затемнение — neutral-900 45 %, в тёмной --scrim, blur 2px', async () => {
+    await open();
+    const overlay = document.querySelector('[data-palette]')?.previousElementSibling as HTMLElement;
+    expect(overlay.className).toContain('color-mix(in_srgb,var(--color-neutral-900)_45%,transparent)');
+    expect(overlay.className).toContain('dark:bg-scrim');
+    expect(overlay.className).toContain('backdrop-blur-[2px]');
+    expect(overlay.className).not.toContain('bg-black/55');
+  });
+
+  it('панель: 720px, радиус 28, фон neutral-100 (popover), shadow-lg, без рамки и полупрозрачности', async () => {
+    await open();
+    const panel = document.querySelector('[data-palette]') as HTMLElement;
+    expect(panel.className).toContain('w-[720px]');
+    expect(panel.className).toMatch(/\brounded-lg\b/);
+    expect(panel.className).toMatch(/\bbg-popover\b/);
+    expect(panel.className).toMatch(/\bshadow-lg\b/);
+    expect(panel.className).toContain('top-[min(10%,4rem)]');
+    expect(panel.className).not.toMatch(/\bborder\b/);
+    expect(panel.className).not.toContain('backdrop-blur-xl');
+    expect(panel.className).not.toContain('/96');
+  });
+
+  it('поле — пилюля 48px на фоне окна с значком поиска 16 и подсказкой по handoff', async () => {
+    await open();
+    const field = input();
+    expect(field.getAttribute('placeholder')).toBe('Search workspaces, sessions, tabs and actions');
+    expect(field.className).toContain('text-[15px]');
+    const pill = field.parentElement as HTMLElement;
+    expect(pill.className).toMatch(/\bh-12\b/);
+    expect(pill.className).toMatch(/\brounded-full\b/);
+    expect(pill.className).toMatch(/\bbg-background\b/);
+    expect(pill.querySelector('svg')?.classList.contains('size-4')).toBe(true);
+  });
+
+  it('без запроса секция вкладок — «Open tabs», с запросом — «Tabs»; заголовок 11px капсом', async () => {
+    await open();
+    const heading = document.querySelector('[cmdk-group-heading]') as HTMLElement;
+    expect(heading.textContent).toBe('Open tabs');
+    expect(heading.parentElement?.className).toContain('[&_[cmdk-group-heading]]:uppercase');
+    expect(heading.parentElement?.className).toContain('[&_[cmdk-group-heading]]:text-[11px]');
+    await type('S01');
+    expect([...document.querySelectorAll('[cmdk-group-heading]')].map((node) => node.textContent)).toContain('Tabs');
+    expect([...document.querySelectorAll('[cmdk-group-heading]')].map((node) => node.textContent)).not.toContain('Open tabs');
+  });
+
+  it('пункт — радиус 16, отступ 9 12; ⌘1…⌘9 — пилюля 10px на neutral-200', async () => {
+    await open();
+    const row = screen.getAllByRole('option')[0] as HTMLElement;
+    expect(row.className).toMatch(/\brounded-md\b/);
+    expect(row.className).toContain('py-[9px]');
+    expect(row.className).toMatch(/\bpx-3\b/);
+    const shortcut = [...row.querySelectorAll('span')].find((node) => node.textContent === '⌘1') as HTMLElement;
+    expect(shortcut.className).toMatch(/\brounded-full\b/);
+    expect(shortcut.className).toContain('bg-neutral-200');
+    expect(shortcut.className).toContain('text-neutral-800');
+    expect(shortcut.className).toContain('text-[10px]');
+    expect(shortcut.className).not.toContain('opacity-60');
+  });
+
+  it('подвал 11px на фоне bg: ↑↓ select, Enter open, ⌘Enter open to the side, ⌘1–9 pick, Esc close', async () => {
+    await open();
+    const footer = screen.getByText('↑↓ select').parentElement as HTMLElement;
+    expect(footer.className).toContain('text-[11px]');
+    expect(footer.className).toContain('bg-(--color-bg)');
+    expect([...footer.children].map((node) => node.textContent)).toEqual(['↑↓ select', 'Enter open', '⌘Enter open to the side', '⌘1–9 pick', 'Esc close']);
+    expect(footer.className).not.toMatch(/\bborder-t\b/);
+  });
+
+  it('пункт «New session or room» — есть среди действий палитры и открывает диалог ⌘T (run(session.new))', async () => {
+    const ran: string[] = [];
+    const w = makeWork('w-01', { projectPath: '/tmp/a', title: 'Первая', sessions: [makeSession('s-01', 'план')] });
+    setup([w], openTab(emptyLayout(), term('s-01')));
+    act(() => usePaletteStore.getState().openWith('default'));
+    render(<Palette bridge={bridge} run={(id) => ran.push(id)} />);
+    await type('new session');
+
+    const row = screen.getByRole('option', { name: /New session or room/ });
+    expect(row).toBeTruthy();
+    fireEvent.click(row);
+    await act(async () => {});
+    expect(ran).toEqual(['session.new']);
   });
 });
 

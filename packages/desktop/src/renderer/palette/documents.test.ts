@@ -75,6 +75,49 @@ function doc(id: string, section: PaletteSection, patch: Partial<PaletteDoc> = {
   return { id, section, title: id, subtitle: '', fields: [], recencyAt: null, order: 0, icon: 'action', run: () => {}, ...patch };
 }
 
+// Подписи строк (спека окна 2026-09-29, 1.9 и снимок dark-03): вид строки и работа — «Tab · Платежи»,
+// «Room · Платежи», у сессии — работа, слово состояния и провайдер, у работы — проект, число сессий и ветка,
+// у действия — «Action». Поле поиска подпись не читает: ранжирование не меняется.
+describe('buildDocuments — подписи строк (Organic, 1.9)', () => {
+  const w = makeWork('w-01', {
+    projectPath: '/tmp/shop',
+    title: 'Платежи',
+    sessions: [makeSession('s-01', 'план'), makeSession('s-02', 'бэкенд'), makeSession('s-03', 'старая', { lifecycle: 'closed' })],
+    rooms: [makeRoom('r-01', 'Возвраты')],
+  });
+  const layout = openTab(openTab(layoutWith('s-01'), { kind: 'room', id: 'room:r-01', roomId: 'r-01' }), { kind: 'mail', id: 'mail' });
+  const docs = build({ works: [w], layouts: { [keyOf(w)]: layout }, branches: { '/tmp/shop': 'main' } });
+  const subtitleOf = (id: string): string | undefined => docs.find((doc) => doc.id === id)?.subtitle;
+
+  it('вкладки: терминал и почта — «Tab · работа», комната — «Room · работа»', () => {
+    expect(subtitleOf(`tab:${keyOf(w)}\n${tabId.terminal('s-01')}`)).toBe('Tab · Платежи');
+    expect(subtitleOf(`tab:${keyOf(w)}\nmail`)).toBe('Tab · Платежи');
+    expect(subtitleOf(`tab:${keyOf(w)}\nroom:r-01`)).toBe('Room · Платежи');
+  });
+
+  it('комната из секции комнат — «Room · работа»', () => {
+    expect(subtitleOf(`room:${keyOf(w)}\nr-01`)).toBe('Room · Платежи');
+  });
+
+  it('сессия — «работа · слово состояния · провайдер»; работа — «проект · 2 sessions · ветка» (закрытые не в счёт)', () => {
+    expect(subtitleOf(`session:${keyOf(w)}\ns-02`)).toBe('Платежи · idle · Claude Code');
+    expect(subtitleOf(`work:${keyOf(w)}`)).toBe('shop · 2 sessions · main');
+  });
+
+  it('работа без ветки — без хвоста; одна сессия — «1 session»', () => {
+    const solo = makeWork('w-02', { projectPath: '/tmp/solo', title: 'Соло', sessions: [makeSession('s-01', 'a')] });
+    const soloDocs = build({ works: [solo] });
+    expect(soloDocs.find((doc) => doc.id === `work:${keyOf(solo)}`)?.subtitle).toBe('solo · 1 session');
+  });
+
+  it('действие — «Action»; строка «New session or room» — среди действий, открывает то же, что ⌘T', () => {
+    const action = docs.find((doc) => doc.id === 'action:session.new');
+    expect(action?.title).toBe('New session or room');
+    expect(action?.subtitle).toBe('Action');
+    expect(action?.fields).toContain('room');
+  });
+});
+
 describe('buildDocuments (тест 5)', () => {
   it('нет архивной работы, закрытой сессии, недоступного действия и служебных палитры, работы и вкладки по номеру', () => {
     const live = makeWork('w-01', {

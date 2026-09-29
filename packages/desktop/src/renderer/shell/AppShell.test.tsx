@@ -326,7 +326,7 @@ describe('AppShell — меню и диалоги (тест 9)', () => {
     act(() => bridge.emitMenu('palette.open'));
     expect(await screen.findByText('Command palette')).toBeTruthy();
     expect(usePaletteStore.getState()).toMatchObject({ open: true, mode: 'default' });
-    expect(screen.getByPlaceholderText('Search tabs, workspaces, sessions, rooms, and actions…')).toBeTruthy();
+    expect(screen.getByPlaceholderText('Search workspaces, sessions, tabs and actions')).toBeTruthy();
   });
 
   it('подпись сочетания палитры — ⌘J и в заголовке, и на Landing; ⌘K нигде нет (тест 9 куска 6.1b)', async () => {

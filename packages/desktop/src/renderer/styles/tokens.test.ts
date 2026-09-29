@@ -422,36 +422,36 @@ describe('прежние переменные — значения на токе
 });
 
 /**
- * Выделенная строка палитры ⌘J (Palette.tsx, спека 9.3): заливка — тон выбранной строки сайдбара,
- * а состояние несёт ещё и край (`ring-palette-selected-edge`): заливка `text 9 %` к фону панели
- * 1.2:1. Фон панели — `bg-background/96` поверх затемнения `bg-black/55`, под которым что угодно
- * от чёрного до белого: проверяются обе крайности. Панель станет `neutral-100` в куске 2 — пары
- * от этого только выигрывают.
+ * Выделенная строка палитры ⌘J (Palette.tsx, спека 9.3): заливка — тон выбранной строки сайдбара, а
+ * состояние несёт ещё и край (`ring-palette-selected-edge`): заливка `text 9 %` к фону панели 1.2:1. С
+ * куска 2 панель — непрозрачный `--popover` (`neutral-100`, спека окна 2026-09-29, 1.9), а не стекло над
+ * затемнением, поэтому пары считаются от неё без разбега по фону страницы.
  */
 describe('выделенная строка палитры', () => {
-  const paletteBackground = (theme: Theme, page: Rgb): Rgb =>
-    compositeOver(solid(theme, '--background'), 0.96, compositeOver([0, 0, 0], 0.55, page));
-
   for (const theme of THEMES) {
     it(`${theme}: заливка — тон строки сайдбара, текст — обычный, вторичный не ниже 4.5:1`, () => {
       same(theme, '--palette-selected', '--work-sidebar-accent');
       same(theme, '--palette-selected-foreground', '--foreground');
-      for (const page of [[0, 0, 0], [255, 255, 255]] as const) {
-        const panel = paletteBackground(theme, page);
-        const fill = compositeOver(resolveColor(tokens, theme, '--palette-selected').rgb, resolveColor(tokens, theme, '--palette-selected').alpha, panel);
-        expect(contrastRatio(solid(theme, '--palette-selected-foreground'), fill)).toBeGreaterThanOrEqual(TEXT);
-        expect(contrastRatio(solid(theme, '--palette-selected-muted'), fill)).toBeGreaterThanOrEqual(TEXT);
-      }
+      const fill = on(theme, '--palette-selected', solid(theme, '--popover'));
+      expect(contrastRatio(solid(theme, '--palette-selected-foreground'), fill)).toBeGreaterThanOrEqual(TEXT);
+      expect(contrastRatio(solid(theme, '--palette-selected-muted'), fill)).toBeGreaterThanOrEqual(TEXT);
+      // Вторичный текст невыбранных строк — на панели: подпись, заголовок секции, подвал (на `bg`).
+      expect(contrastRatio(solid(theme, '--muted-foreground'), solid(theme, '--popover'))).toBeGreaterThanOrEqual(TEXT);
+      expect(contrastRatio(solid(theme, '--muted-foreground'), solid(theme, '--color-bg'))).toBeGreaterThanOrEqual(TEXT);
     });
 
     it(`${theme}: край выделения — не ниже 3:1 к фону панели и к заливке`, () => {
       const edge = solid(theme, '--palette-selected-edge');
-      const { rgb, alpha } = resolveColor(tokens, theme, '--palette-selected');
-      for (const page of [[0, 0, 0], [255, 255, 255]] as const) {
-        const panel = paletteBackground(theme, page);
-        expect(contrastRatio(edge, panel)).toBeGreaterThanOrEqual(NON_TEXT);
-        expect(contrastRatio(edge, compositeOver(rgb, alpha, panel))).toBeGreaterThanOrEqual(NON_TEXT);
-      }
+      const panel = solid(theme, '--popover');
+      expect(contrastRatio(edge, panel)).toBeGreaterThanOrEqual(NON_TEXT);
+      expect(contrastRatio(edge, on(theme, '--palette-selected', panel))).toBeGreaterThanOrEqual(NON_TEXT);
+    });
+
+    it(`${theme}: подсказка ⌘1…⌘9 (neutral-800 на neutral-200) читается на панели и на выбранной строке`, () => {
+      const pill = solid(theme, '--color-neutral-200');
+      expect(contrastRatio(solid(theme, '--color-neutral-800'), pill)).toBeGreaterThanOrEqual(TEXT);
+      // Пилюля лежит на панели и на заливке выбранной строки — её границу видно: не слабее 1.05:1.
+      expect(contrastRatio(pill, solid(theme, '--popover'))).toBeGreaterThanOrEqual(1.05);
     });
   }
 });

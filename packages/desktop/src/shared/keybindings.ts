@@ -66,7 +66,7 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: 'sidebar.changes', title: S.actions.showChanges, keywords: ['git', 'diff', 'changes'], keys: 'CmdOrCtrl+Shift+G', menu: 'view', when: 'always', inPalette: true },
 
   { id: 'work.new', title: S.actions.newWorkspace, keywords: ['create', 'workspace'], keys: 'CmdOrCtrl+N', menu: 'workspace', when: 'always', inPalette: true },
-  { id: 'session.new', title: S.actions.newSession, keywords: ['create', 'agent', 'session'], keys: 'CmdOrCtrl+T', menu: 'workspace', when: 'always', inPalette: true },
+  { id: 'session.new', title: S.actions.newSession, keywords: ['create', 'agent', 'session', 'room'], keys: 'CmdOrCtrl+T', menu: 'workspace', when: 'always', inPalette: true },
   ...DIGITS.map(
     (n): ActionDef => ({ id: `work.goto.${n}`, title: S.actions.workspaceNumber(n), keywords: ['workspace'], keys: `CmdOrCtrl+${n}`, menu: 'workspace', when: 'always', inPalette: false }),
   ),
