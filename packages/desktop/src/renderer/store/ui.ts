@@ -52,6 +52,14 @@ const CLOSED_DIALOGS: DialogsState = {
   restartHost: false,
 };
 
+/**
+ * Ключ черновика комнаты (дизайн комнат, 3.4) — `{workKey}/{roomId}`: `workKey` берёт проект и
+ * работу, потому что id комнат (`r-01`) повторяются от работы к работе.
+ */
+export function composerDraftKey(workKey: string, roomId: string): string {
+  return `${workKey}/${roomId}`;
+}
+
 export interface UiState {
   /**
    * Единственный источник тёмности в рендерере (спека 4.7, раунд исправлений 1
@@ -82,6 +90,13 @@ export interface UiState {
    * Пишет только `terminal/TerminalSurface.tsx` (кусок 2.5).
    */
   visibleSessionRefs: Record<string, true>;
+  /**
+   * Черновики полей ввода комнат (дизайн комнат, 3.4): ключ — `composerDraftKey`, значение — текст
+   * поля с токенами `@s02`. Только в памяти окна, в `ui.json` не пишутся: переживают смену вкладок
+   * и работ (тело комнаты при этом размонтируется), но не перезапуск окна. Пустого черновика в
+   * записи нет.
+   */
+  composerDrafts: Record<string, string>;
 
   /** Зеркало `ui.json` (кусок 2.3, спека 3.4): до `app.loadUi()` — значения по умолчанию. */
   ui: UiFile;
@@ -110,6 +125,8 @@ export interface UiState {
   /** `TerminalSurface.tsx` зовёт на каждую смену видимости и `false` при размонтировании. */
   setSessionVisible: (refKey: string, visible: boolean) => void;
   setWindowFocused: (focused: boolean) => void;
+  /** Поле ввода комнаты зовёт на каждую правку; пустой текст убирает запись. */
+  setComposerDraft: (draftKey: string, draft: string) => void;
   openNewWorkDialog: (projectPath?: string | null, title?: string) => void;
   closeNewWorkDialog: () => void;
   openNewSessionDialog: (parentSessionId: string | null, work?: DialogWork) => void;
@@ -174,6 +191,7 @@ export const useUiStore = create<UiState>((set, get) => {
     wakePaused: null,
     dialogs: CLOSED_DIALOGS,
     visibleSessionRefs: {},
+    composerDrafts: {},
     ui: DEFAULT_UI,
     uiLoaded: false,
     sidebarHovering: false,
@@ -198,6 +216,17 @@ export const useUiStore = create<UiState>((set, get) => {
       }),
 
     setWindowFocused: (focused) => set({ windowFocused: focused }),
+
+    setComposerDraft: (draftKey, draft) =>
+      set((state) => {
+        // Тот же текст — тот же стор: поле ввода зовёт это на каждый `input`, а подписчики не должны
+        // перерисовываться зря.
+        if ((state.composerDrafts[draftKey] ?? '') === draft) return state;
+        if (draft === '') {
+          return { composerDrafts: Object.fromEntries(Object.entries(state.composerDrafts).filter(([key]) => key !== draftKey)) };
+        }
+        return { composerDrafts: { ...state.composerDrafts, [draftKey]: draft } };
+      }),
 
     openNewWorkDialog: (projectPath, title) =>
       set((state) => ({
