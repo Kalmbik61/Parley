@@ -23,9 +23,11 @@ export const FRAME_RULES: ReadonlyArray<{ rule: string; pattern: RegExp }> = [
   },
   {
     // Срабатывает и при чтении того же пути, не только при записи (план куска
-    // 1.1, тест 5): рамка 15.1 не предполагает чтения этих файлов вовсе, а
-    // регэксп не может надёжно отличить вызов записи от чтения во всех формах
-    // (`writeFile`, `fs.writeFileSync`, шаблонные строки и т.д.).
+    // 1.1, тест 5): регэксп не может надёжно отличить вызов записи от чтения во
+    // всех формах (`writeFile`, `fs.writeFileSync`, шаблонные строки и т.д.), а
+    // чтения этих файлов рамка 15.1 не предполагает — кроме одного явного
+    // исключения из `FRAME_EXCEPTIONS`: скрипт строки статуса читает
+    // `settings.json` человека и проекта (спека комнат Organic, 3.5).
     rule: 'запись в каталоги агентов',
     pattern: /\.claude\/settings\.json|\.claude\.json|\.codex\/config\.toml/,
   },
@@ -41,7 +43,44 @@ export const FRAME_RULES: ReadonlyArray<{ rule: string; pattern: RegExp }> = [
 ];
 
 /**
- * Проверяет исходник построчно; строки-комментарии пропускаются.
+ * Явное исключение из правила: узкое — один файл, одно правило, одна строка целиком. Любая другая
+ * строка того же файла (в том числе запись в каталог агента) ловится по-прежнему, а то же
+ * объявление в другом файле — тоже. Новое исключение — решение контролёра, а не удобство: рамка 15.1
+ * и так пропускает только то, что названо здесь.
+ */
+export interface FrameException {
+  /** Путь от корня репозитория, через `/`. */
+  file: string;
+  /** Правило из `FRAME_RULES`, которое исключение снимает; остальные правила в файле действуют. */
+  rule: string;
+  /** Строка исходника целиком, после `trim`. */
+  line: string;
+  /** Одной строкой: почему можно и на какой пункт спеки опирается. */
+  reason: string;
+}
+
+export const FRAME_EXCEPTIONS: readonly FrameException[] = [
+  {
+    file: 'packages/core/src/work/statusline.ts',
+    rule: 'запись в каталоги агентов',
+    line: "const SETTINGS_FILE = '.claude/settings.json';",
+    reason:
+      'спека комнат Organic 3.5: скрипт строки статуса только читает settings.json человека и проекта, чтобы вызвать их statusLine',
+  },
+];
+
+/** Снимает ли явное исключение эту находку: файл, правило и строка (после `trim`) совпадают. */
+export function isFrameException(file: string, rule: string, text: string): boolean {
+  const relative = file.split(path.sep).join('/');
+  return FRAME_EXCEPTIONS.some(
+    (exception) =>
+      exception.file === relative && exception.rule === rule && exception.line === text.trim(),
+  );
+}
+
+/**
+ * Проверяет исходник построчно; строки-комментарии пропускаются. Явные исключения
+ * (`FRAME_EXCEPTIONS`) находкой не считаются.
  *
  * Блочный комментарий (`/* … *`+`/`) отслеживается СОСТОЯНИЕМ между строками,
  * а не только видом текущей строки (раунд исправлений 1, находка I5/тест 15):
@@ -79,7 +118,9 @@ export function scanSource(file: string, source: string): FrameHit[] {
     }
 
     for (const { rule, pattern } of FRAME_RULES) {
-      if (pattern.test(line)) hits.push({ file, line: index + 1, rule, text: trimmed });
+      if (pattern.test(line) && !isFrameException(file, rule, line)) {
+        hits.push({ file, line: index + 1, rule, text: trimmed });
+      }
     }
   }
   return hits;

@@ -67,8 +67,13 @@ export function isOwnCommand(command: string): boolean {
  */
 export const HUMAN_TIMEOUT_MS = 5000;
 
-/** Каталог настроек Claude Code — и в проекте, и в домашней папке. Только чтение. */
-const AGENT_DIR = '.claude';
+/**
+ * Файлы настроек Claude Code, где лежит строка статуса человека, — пути от корня проекта или
+ * домашней папки. Только чтение (спека комнат Organic, 3.5): это единственное место в исходниках, где
+ * названы такие пути, и рамочный тест снимает с него правило явным исключением (`test/frame-scan.ts`).
+ */
+const SETTINGS_FILE = '.claude/settings.json';
+const LOCAL_SETTINGS_FILE = '.claude/settings.local.json';
 
 export interface StatuslineOptions {
   /** Окружение процесса агента: адрес работы и сессии; то же уходит команде человека. */
@@ -158,13 +163,8 @@ function projectDir(input: Record<string, unknown> | null): string | null {
 function settingsFiles(input: Record<string, unknown> | null, home: string): string[] {
   const dir = projectDir(input);
   const project =
-    dir === null
-      ? []
-      : [
-          path.join(dir, AGENT_DIR, 'settings.local.json'),
-          path.join(dir, AGENT_DIR, 'settings.json'),
-        ];
-  return [...project, path.join(home, AGENT_DIR, 'settings.json')];
+    dir === null ? [] : [path.join(dir, LOCAL_SETTINGS_FILE), path.join(dir, SETTINGS_FILE)];
+  return [...project, path.join(home, SETTINGS_FILE)];
 }
 
 /**

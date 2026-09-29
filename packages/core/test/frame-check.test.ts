@@ -11,7 +11,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { runStatusline } from '../src/work/statusline.js';
-import { collectSourceFiles, FRAME_RULES, scanSource, type FrameHit } from './frame-scan.js';
+import {
+  collectSourceFiles,
+  FRAME_EXCEPTIONS,
+  FRAME_RULES,
+  isFrameException,
+  scanSource,
+  type FrameHit,
+} from './frame-scan.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(dirname, '../../..');
@@ -97,6 +104,80 @@ describe('scanSource', () => {
   });
 });
 
+/**
+ * Явное исключение из правила «запись в каталоги агентов» (спека комнат Organic, 3.5): скрипт строки
+ * статуса читает `settings.json` человека и проекта, чтобы строка в терминале осталась прежней.
+ * Исключение узкое: один файл, одно правило, одна строка целиком.
+ */
+describe('исключение для чтения settings.json в скрипте строки статуса (спека комнат, 3.5)', () => {
+  const STATUSLINE = 'packages/core/src/work/statusline.ts';
+  const DECLARATION = "const SETTINGS_FILE = '.claude/settings.json';";
+
+  it('исключение ровно одно: statusline.ts, правило записи в каталоги агентов, причина — ссылка на 3.5', () => {
+    expect(FRAME_EXCEPTIONS).toHaveLength(1);
+    expect(FRAME_EXCEPTIONS[0]).toMatchObject({
+      file: STATUSLINE,
+      rule: 'запись в каталоги агентов',
+      line: DECLARATION,
+    });
+    expect(FRAME_EXCEPTIONS[0]?.reason).toContain('3.5');
+    expect(FRAME_EXCEPTIONS[0]?.reason).not.toContain('\n');
+  });
+
+  it('объявление пути настроек в statusline.ts не находка', () => {
+    expect(scanSource(STATUSLINE, `  ${DECLARATION}`)).toEqual([]);
+    expect(isFrameException(STATUSLINE, 'запись в каталоги агентов', DECLARATION)).toBe(true);
+  });
+
+  it('запись в каталоги агента из того же файла по-прежнему ловится', () => {
+    for (const write of [
+      "await writeFile(path.join(home, '.claude/settings.json'), text);",
+      "await writeFile(path.join(home, '.claude.json'), text);",
+      "await writeFile(path.join(home, '.codex/config.toml'), text);",
+      // Та же строка объявления, но с дописанным кодом, — уже не исключение.
+      `${DECLARATION} await writeFile(SETTINGS_FILE, text);`,
+      "const OTHER_FILE = '.claude/settings.json';",
+    ]) {
+      const hits = scanSource(STATUSLINE, write);
+      expect(hits, write).toHaveLength(1);
+      expect(hits[0]?.rule, write).toBe('запись в каталоги агентов');
+    }
+  });
+
+  it('то же объявление в любом другом файле — находка', () => {
+    expect(scanSource('packages/core/src/work/other.ts', DECLARATION)).toHaveLength(1);
+    expect(scanSource('packages/host/src/statusline.ts', DECLARATION)).toHaveLength(1);
+  });
+
+  it('исключение снимает только своё правило: для других правил та же строка не исключена', () => {
+    for (const { rule } of FRAME_RULES.filter(
+      (item) => item.rule !== 'запись в каталоги агентов',
+    )) {
+      expect(isFrameException(STATUSLINE, rule, DECLARATION), rule).toBe(false);
+    }
+  });
+
+  it('другие правила в этом файле действуют: учётные данные, API, YOLO-флаги', () => {
+    for (const [line, rule] of [
+      ["readFile(home + '/.claude/.credentials.json')", 'учётные данные агентов'],
+      ["fetch('https://api.anthropic.com/v1/messages')", 'API провайдеров'],
+      ["const args = ['--dangerously-skip-permissions'];", 'YOLO-флаги'],
+    ] as const) {
+      const hits = scanSource(STATUSLINE, line);
+      expect(hits, line).toHaveLength(1);
+      expect(hits[0]?.rule, line).toBe(rule);
+    }
+  });
+
+  it('исключение не устарело: его строка есть в файле ровно один раз', async () => {
+    for (const exception of FRAME_EXCEPTIONS) {
+      const source = await readFile(path.join(repoRoot, exception.file), 'utf8');
+      const same = source.split('\n').filter((line) => line.trim() === exception.line);
+      expect(same, `${exception.file}: ${exception.line}`).toHaveLength(1);
+    }
+  });
+});
+
 describe('collectSourceFiles', () => {
   it('берёт .ts, пропускает .test.ts/.json/каталоги с точкой/node_modules (тест 10)', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'frame-scan-collect-'));
@@ -151,7 +232,8 @@ describe('рамочный тест репозитория (тест 6)', () => 
         const relative = path.relative(repoRoot, file);
         source.split('\n').forEach((line, index) => {
           for (const { rule, pattern } of FRAME_RULES) {
-            if (pattern.test(line))
+            // Явные исключения (`FRAME_EXCEPTIONS`) — код, а не комментарии; они проверены отдельно.
+            if (pattern.test(line) && !isFrameException(relative, rule, line))
               rawHits.push({ file: relative, line: index + 1, rule, text: line.trim() });
           }
         });
