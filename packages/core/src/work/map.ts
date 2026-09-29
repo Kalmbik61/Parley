@@ -339,6 +339,9 @@ export function parseMap(raw: string, file: string): WorkMap {
   for (const message of map.messages) {
     migrateMessage(message as unknown as Record<string, unknown>);
   }
+  for (const room of map.rooms) {
+    migrateRoom(room as unknown);
+  }
   return map;
 }
 
@@ -390,6 +393,17 @@ function migrateMessageV1(message: Record<string, unknown>): void {
  */
 function migrateMessage(message: Record<string, unknown>): void {
   message['kind'] ??= 'note';
+}
+
+/**
+ * Ведущего и решения в комнатах до 2026-09-29 не было: подставляется `null`, а ведущим
+ * такой комнаты считается первый из `members` (`roomLead`). Запись, которая не объект,
+ * не трогаем — как и прежде, её форму проверять некому.
+ */
+function migrateRoom(room: unknown): void {
+  if (!isRecord(room)) return;
+  room['lead'] ??= null;
+  room['proposal'] ??= null;
 }
 
 /** Полей процесса в старых картах просто не было. */

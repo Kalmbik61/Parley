@@ -76,7 +76,7 @@ export function makeLetter(id: string, patch: Partial<Message> = {}): Message {
 }
 
 export function makeRoom(id: string, title: string): Room {
-  return { id, title, creator: 'human', members: [], createdAt: '2026-09-27T08:00:00.000Z' };
+  return { id, title, creator: 'human', members: [], createdAt: '2026-09-27T08:00:00.000Z', lead: null, proposal: null };
 }
 
 /** Живая активность сессии для `useActivityStore.byRef` (ключ — `refKey(ref)`). */
