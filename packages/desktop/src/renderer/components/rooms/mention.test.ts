@@ -105,11 +105,11 @@ describe('findMentionQuery — когда открывается меню (2.3)'
   });
 });
 
-describe('filterMentions — фильтр меню по «S02 s02 {ярлык} {провайдер}»', () => {
+describe('filterMentions — фильтр меню по «S02 s02 {ярлык} {провайдер} {модель}»', () => {
   const items = [
-    { id: 's-01', rawLabel: 'архитектор', providerName: 'Claude Code' },
-    { id: 's-02', rawLabel: 'бэкенд', providerName: 'Claude Code' },
-    { id: 's-03', rawLabel: 'ревью', providerName: 'Codex' },
+    { id: 's-01', rawLabel: 'архитектор', providerName: 'Claude Code', model: 'Opus 5.5' },
+    { id: 's-02', rawLabel: 'бэкенд', providerName: 'Claude Code', model: null },
+    { id: 's-03', rawLabel: 'ревью', providerName: 'Codex', model: 'GPT-5.5' },
   ];
 
   it('пустой запрос — все', () => {
@@ -128,6 +128,13 @@ describe('filterMentions — фильтр меню по «S02 s02 {ярлык} {
   it('по имени провайдера', () => {
     expect(filterMentions(items, 'codex').map((item) => item.id)).toEqual(['s-03']);
     expect(filterMentions(items, 'claude').map((item) => item.id)).toEqual(['s-01', 's-02']);
+  });
+
+  it('по модели — подстрока без учёта регистра; у сессии без модели «null» в поиск не попадает', () => {
+    expect(filterMentions(items, 'opus').map((item) => item.id)).toEqual(['s-01']);
+    expect(filterMentions(items, 'gpt-5').map((item) => item.id)).toEqual(['s-03']);
+    expect(filterMentions(items, '5.5').map((item) => item.id)).toEqual(['s-01', 's-03']);
+    expect(filterMentions(items, 'null')).toEqual([]);
   });
 
   it('ничего не подошло — пусто', () => {

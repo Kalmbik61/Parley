@@ -155,6 +155,39 @@ describe('buildRoomModel — лента участников', () => {
   });
 });
 
+describe('buildRoomModel — модель участника из живых метрик', () => {
+  const metrics = (model: string | null) => ({ tokensIn: null, tokensOut: null, durationMs: null, unread: 0, subagents: 0, model });
+  const withModels = (models: Record<string, string | null>) =>
+    activityMap(Object.entries(models).map(([id, model]) => makeActivity(REF(id), 'working', { metrics: metrics(model) })));
+
+  it('короткое имя с версией: claude-opus-5-5 → Opus 5.5, gpt-5.5 → GPT-5.5', () => {
+    const activity = withModels({ 's-01': 'claude-opus-5-5-20260101', 's-03': 'gpt-5.5' });
+    expect(build(entryOf(), activity).participants.map((participant) => participant.model)).toEqual(['Opus 5.5', null, 'GPT-5.5']);
+  });
+
+  it('модель неизвестна — null: нет активности, нет метрик, метрики без модели, служебная <synthetic>', () => {
+    const noMetrics = activityMap([makeActivity(REF('s-01'), 'working')]);
+    expect(build(entryOf(), noMetrics).participants.map((participant) => participant.model)).toEqual([null, null, null]);
+    const synthetic = withModels({ 's-01': null, 's-02': '<synthetic>' });
+    expect(build(entryOf(), synthetic).participants.map((participant) => participant.model)).toEqual([null, null, null]);
+    expect(build(entryOf()).participants.map((participant) => participant.model)).toEqual([null, null, null]);
+  });
+
+  it('имя, которое лишь повторяет провайдера (gpt-5.2-codex у Codex), моделью не считается: «Codex · Codex» не нужно', () => {
+    const activity = withModels({ 's-03': 'gpt-5.2-codex', 's-01': 'claude-sonnet-5' });
+    expect(build(entryOf(), activity).participants.map((participant) => participant.model)).toEqual(['Sonnet 5', null, null]);
+  });
+
+  it('модель берётся у своей сессии: чужая активность не подмешивается', () => {
+    const activity = withModels({ 's-02': 'claude-haiku-4-5' });
+    expect(build(entryOf(), activity).participants.map((participant) => [participant.id, participant.model])).toEqual([
+      ['s-01', null],
+      ['s-02', 'Haiku 4.5'],
+      ['s-03', null],
+    ]);
+  });
+});
+
 describe('buildRoomModel — сообщения', () => {
   it('по времени; отправитель и адресаты подписаны ярлыками', () => {
     const entry = entryOf({
@@ -200,7 +233,7 @@ describe('buildRoomModel — сообщения', () => {
     const [line] = build(entry).messages;
     expect(line?.to).toBeNull();
     expect(line?.unread).toBe(false);
-    expect(line?.from).toBe('System');
+    expect(line?.from).toBe('harnas');
   });
 
   it('удалённый отправитель — «S05 (deleted)», неизвестный id — как есть; провайдера у них нет', () => {

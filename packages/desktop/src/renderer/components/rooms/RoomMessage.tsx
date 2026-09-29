@@ -19,8 +19,12 @@ import type { MessageModel } from './feed-model.js';
 import { MentionText } from './MentionText.js';
 import { SenderAvatar } from './SenderAvatar.js';
 
-/** Вид сообщения → вид тега: вопрос — accent, решение — accent-2, заметка — neutral (1.3). */
-const TAG_VARIANT = { question: 'accent', decision: 'accent-2', note: 'neutral' } as const;
+/**
+ * Вид сообщения → вид тега: вопрос — accent, решение — accent-2, заметка — neutral (1.3). Лента стоит на
+ * листе, где `neutral-100` светлой темы — сам лист, поэтому заметке — `neutral-sheet` (в светлой заливка
+ * 200, в тёмной прежняя 100).
+ */
+const TAG_VARIANT = { question: 'accent', decision: 'accent-2', note: 'neutral-sheet' } as const;
 
 export interface RoomMessageProps {
   message: MessageModel;

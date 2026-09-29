@@ -244,8 +244,13 @@ export const S = {
     sendToLead: 'Send to lead',
     /** Тост на `conflict`: ведущий заменил текст или решение уже закрыто — живая карточка на месте. */
     decisionChanged: 'The decision changed — review the latest version.',
-    /** Тултип карточки участника и мета пункта меню упоминаний: провайдер и слово состояния. Модели и усилия карта не хранит. */
-    providerState: (provider: string, word: string): string => `${provider} · ${word}`,
+    /**
+     * Тултип карточки участника: `Claude Code · Opus 5.5`; модель неизвестна — только провайдер. Усилие не
+     * показывается: его никто не хранит.
+     */
+    participantTooltip: (provider: string, model: string | null): string => (model === null ? provider : `${provider} · ${model}`),
+    /** Мета пункта меню упоминаний: `Opus 5.5 · idle`; модель неизвестна — только состояние. */
+    mentionMeta: (model: string | null, word: string): string => (model === null ? word : `${model} · ${word}`),
     /** Поле ввода: подпись над ним, плейсхолдер, имя для скринридера. */
     toEveryone: 'To everyone',
     toList: (tags: string): string => `To ${tags}`,
@@ -679,7 +684,8 @@ export const S = {
   /** Тексты общих участников переписки — `lib/participant-tag.ts`. */
   participants: {
     human: 'You',
-    system: 'System',
+    /** Так хост подписывает свои строки в комнате и почте — как на снимке handoff `dark-08`. */
+    system: 'harnas',
     deletedSuffix: '(deleted)',
     /** Ярлык сессии, созданной без названия (`NEW_LABEL` core) — `lib/participant.ts`. */
     newSession: 'New session',

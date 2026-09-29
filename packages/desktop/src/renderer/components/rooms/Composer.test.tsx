@@ -8,20 +8,34 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useUiStore } from '../../store/ui.js';
 import { Composer, type ComposerMember, type ComposerSubmission } from './Composer.js';
 
 const MEMBERS: ComposerMember[] = [
-  { id: 's-01', label: 'S01 архитектор', rawLabel: 'архитектор', provider: 'claude', providerName: 'Claude Code', word: 'working', lead: true },
-  { id: 's-02', label: 'S02 бэкенд', rawLabel: 'бэкенд', provider: 'claude', providerName: 'Claude Code', word: 'needs you', lead: false },
-  { id: 's-03', label: 'S03 ревью', rawLabel: 'ревью', provider: 'codex', providerName: 'Codex', word: 'idle', lead: false },
+  { id: 's-01', label: 'S01 архитектор', rawLabel: 'архитектор', provider: 'claude', providerName: 'Claude Code', model: 'Opus 5.5', word: 'working', lead: true },
+  { id: 's-02', label: 'S02 бэкенд', rawLabel: 'бэкенд', provider: 'claude', providerName: 'Claude Code', model: null, word: 'needs you', lead: false },
+  { id: 's-03', label: 'S03 ревью', rawLabel: 'ревью', provider: 'codex', providerName: 'Codex', model: 'GPT-5.5', word: 'idle', lead: false },
 ];
+
+/** Восемь агентов: список меню (max-height 260) с ними длиннее окна и прокручивается. */
+const MANY: ComposerMember[] = Array.from({ length: 8 }, (_, index) => ({
+  id: `s-0${index + 1}`,
+  label: `S0${index + 1} агент`,
+  rawLabel: 'агент',
+  provider: 'claude',
+  providerName: 'Claude Code',
+  model: null,
+  word: 'idle',
+  lead: index === 0,
+}));
 
 const KEY = '/tmp/p w-01/r-01';
 
 type SendResult = Promise<void> | void;
 let execCommand: ReturnType<typeof vi.fn>;
+/** Вызовы `scrollIntoView`: какой пункт меню и с какими параметрами просили показать. */
+let scrolled: Array<{ id: string | null; options: boolean | ScrollIntoViewOptions | undefined }>;
 
 beforeEach(() => {
   useUiStore.setState({ composerDrafts: {} });
@@ -47,15 +61,26 @@ beforeEach(() => {
     return true;
   });
   document.execCommand = execCommand as unknown as typeof document.execCommand;
+  // Меню прокручивает выбранный пункт в видимую область; в jsdom `scrollIntoView` нет.
+  scrolled = [];
+  Element.prototype.scrollIntoView = function scrollIntoView(this: Element, options?: boolean | ScrollIntoViewOptions) {
+    scrolled.push({ id: this.getAttribute('data-mention-item'), options });
+  };
 });
 
 afterEach(() => {
   cleanup();
   Reflect.deleteProperty(document, 'execCommand');
+  Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
+  Reflect.deleteProperty(document, 'caretRangeFromPoint');
 });
 
-function renderComposer(onSend: (submission: ComposerSubmission) => SendResult = vi.fn(), draftKey = KEY) {
-  const view = render(<Composer members={MEMBERS} draftKey={draftKey} onSend={onSend} />);
+function renderComposer(
+  onSend: (submission: ComposerSubmission) => SendResult = vi.fn(),
+  draftKey = KEY,
+  members: ComposerMember[] = MEMBERS,
+) {
+  const view = render(<Composer members={members} draftKey={draftKey} onSend={onSend} />);
   return { ...view, onSend };
 }
 
@@ -126,16 +151,26 @@ describe('Composer — поле и подпись', () => {
   });
 });
 
+describe('Composer — признак фокуса (спека, раздел 4)', () => {
+  it('фокус — контур --ring 2px с отступом 2px из base.css: поле его не гасит, каретка цвета ring', () => {
+    renderComposer();
+    // `outline-none` перекрыл бы правило `:focus-visible` слоя base (см. `styles/fonts.test.ts`).
+    expect(editor().className).not.toMatch(/outline-(none|hidden|0)\b/);
+    expect(editor().className).toContain('caret-ring');
+  });
+});
+
 describe('Composer — когда открывается меню упоминаний (2.3)', () => {
   it('@ в начале строки: все участники комнаты и заголовок', () => {
     renderComposer();
     type('@');
     expect(screen.getByRole('listbox')).toBeTruthy();
     expect(screen.getByText('Agents in this room')).toBeTruthy();
+    // Мета пункта: `{модель} · {состояние}`; модель неизвестна — только состояние.
     expect(options().map((item) => item.textContent)).toEqual([
-      'S01 архитектор★Claude Code · working',
-      'S02 бэкендClaude Code · needs you',
-      'S03 ревьюCodex · idle',
+      'S01 архитектор★Opus 5.5 · working',
+      'S02 бэкендneeds you',
+      'S03 ревьюGPT-5.5 · idle',
     ]);
   });
 
@@ -203,6 +238,17 @@ describe('Composer — когда открывается меню упомина
     type('9');
     expect(options()).toHaveLength(0);
     expect(screen.getByText('No agents match')).toBeTruthy();
+  });
+
+  it('фильтр ищет и по модели: «S02 s02 ярлык провайдер модель» (2.3)', () => {
+    renderComposer();
+    type('@opus');
+    expect(options().map((item) => item.getAttribute('data-mention-item'))).toEqual(['s-01']);
+    fresh();
+
+    renderComposer();
+    type('@GPT-5');
+    expect(options().map((item) => item.getAttribute('data-mention-item'))).toEqual(['s-03']);
   });
 });
 
@@ -306,6 +352,68 @@ describe('Composer — клавиши меню', () => {
     expect(options()).toHaveLength(0);
     press('Enter');
     expect(onSend).toHaveBeenCalledWith({ to: [], text: '@нету' });
+  });
+});
+
+describe('Composer — меню при 7+ агентах: выбранный пункт в видимой части списка', () => {
+  const lastScrolled = (): string | null | undefined => scrolled[scrolled.length - 1]?.id;
+
+  it('↓ прокручивает выбранный пункт в видимую область: scrollIntoView({ block: nearest })', () => {
+    renderComposer(vi.fn(), KEY, MANY);
+    type('@');
+    scrolled = [];
+    press('ArrowDown');
+    expect(scrolled).toEqual([{ id: 's-02', options: { block: 'nearest' } }]);
+    press('ArrowDown');
+    press('ArrowDown');
+    expect(lastScrolled()).toBe('s-04');
+  });
+
+  it('↑ с первого пункта по кругу уходит на последний, и он показан', () => {
+    renderComposer(vi.fn(), KEY, MANY);
+    type('@');
+    press('ArrowUp');
+    expect(lastScrolled()).toBe('s-08');
+    press('ArrowDown');
+    expect(lastScrolled()).toBe('s-01');
+  });
+
+  it('открытие меню показывает первый пункт', () => {
+    renderComposer(vi.fn(), KEY, MANY);
+    type('@');
+    expect(scrolled.map((call) => call.id)).toEqual(['s-01']);
+  });
+
+  it('наведение мыши список не прокручивает: пункт под курсором и так виден, иначе список бежал бы из-под мыши', () => {
+    renderComposer(vi.fn(), KEY, MANY);
+    type('@');
+    scrolled = [];
+    fireEvent.mouseMove(options()[5] as HTMLElement);
+    expect(options()[5]?.getAttribute('aria-selected')).toBe('true');
+    expect(scrolled).toEqual([]);
+    // Клавиша после наведения снова ведёт выбор и прокручивает.
+    press('ArrowDown');
+    expect(lastScrolled()).toBe('s-07');
+  });
+
+  it('запрос сменился — выбор вернулся на первый пункт, и он показан, хотя список был прокручен вниз', () => {
+    renderComposer(vi.fn(), KEY, MANY);
+    type('@');
+    for (let i = 0; i < 6; i += 1) press('ArrowDown');
+    expect(lastScrolled()).toBe('s-07');
+    type('а');
+    expect(options()).toHaveLength(8);
+    expect(options()[0]?.getAttribute('aria-selected')).toBe('true');
+    expect(lastScrolled()).toBe('s-01');
+  });
+
+  it('перерисовка при том же выборе (keyup стрелки) заново не прокручивает', () => {
+    renderComposer(vi.fn(), KEY, MANY);
+    type('@');
+    press('ArrowDown');
+    const before = scrolled.length;
+    fireEvent.keyUp(editor(), { key: 'ArrowDown' });
+    expect(scrolled).toHaveLength(before);
   });
 });
 
@@ -511,6 +619,115 @@ describe('Composer — вставка только текстом (2.2)', () => 
     fireEvent.paste(editor(), clipboard('', '<i>html</i>'));
     expect(execCommand).not.toHaveBeenCalled();
     expect(editor().childNodes).toHaveLength(0);
+  });
+});
+
+describe('Composer — перетаскивание в поле: только текст, как вставка (2.2)', () => {
+  /**
+   * `drop` с данными перетаскивания и координатами. jsdom не знает `DragEvent`, и `clientX/Y` из параметров
+   * события пропадают, поэтому они доклеиваются на событие. `false` — событие погашено.
+   */
+  const drop = (plain: string, html: string, point = { x: 40, y: 12 }): boolean => {
+    const event = createEvent.drop(editor(), {
+      dataTransfer: {
+        files: [],
+        getData: (format: string) => (format === 'text/plain' ? plain : format === 'text/html' ? html : ''),
+      },
+    });
+    Object.defineProperties(event, { clientX: { value: point.x }, clientY: { value: point.y } });
+    return fireEvent(editor(), event);
+  };
+
+  it('выделение из ленты приносит HTML с data-mention: берётся text/plain, чипа нет, адресата в to нет', () => {
+    const { onSend } = renderComposer();
+    caret(editor(), 0);
+    const notPrevented = drop('@S02 бэкенд, проверь границы', '<span data-mention="s-02" class="chip">@S02 бэкенд</span>, проверь границы');
+    // Событие погашено: разметку браузер сам не вставит.
+    expect(notPrevented).toBe(false);
+    expect(execCommand).toHaveBeenCalledWith('insertText', false, '@S02 бэкенд, проверь границы');
+    expect(chips()).toHaveLength(0);
+    expect(editor().querySelector('span')).toBeNull();
+    expect(screen.getByText('To everyone')).toBeTruthy();
+    press('Enter');
+    expect(onSend).toHaveBeenCalledWith({ to: [], text: '@S02 бэкенд, проверь границы' });
+  });
+
+  it('чип из меню при этом остаётся чипом: упоминание бывает только из меню', () => {
+    const { onSend } = renderComposer();
+    pickByKeys(2);
+    caret(editor(), editor().childNodes.length);
+    drop('@S01 архитектор', '<span data-mention="s-01">@S01 архитектор</span>');
+    press('Enter');
+    expect(onSend).toHaveBeenCalledWith({ to: ['s-03'], text: '@s03 @S01 архитектор' });
+  });
+
+  it('без text/plain (только разметка или файл) ничего не вставляется, но и браузер разметку не вставит', () => {
+    renderComposer();
+    caret(editor(), 0);
+    const notPrevented = drop('', '<span data-mention="s-02">@S02 бэкенд</span>');
+    expect(notPrevented).toBe(false);
+    expect(execCommand).not.toHaveBeenCalled();
+    expect(editor().childNodes).toHaveLength(0);
+  });
+
+  it('текст вставляется в точку сброса, а не туда, где стоял курсор', () => {
+    renderComposer();
+    const text = document.createTextNode('абвг');
+    editor().append(text);
+    caret(text, 4);
+    const point = vi.fn(() => {
+      const range = document.createRange();
+      range.setStart(text, 2);
+      range.collapse(true);
+      return range;
+    });
+    document.caretRangeFromPoint = point;
+    drop('XY', '');
+    expect(point).toHaveBeenCalledWith(40, 12);
+    expect(editor().textContent).toBe('абXYвг');
+  });
+
+  it('сброс на чип вставляет текст после чипа, а не внутрь него', () => {
+    renderComposer();
+    pickByKeys(1);
+    const chip = chips()[0] as HTMLElement;
+    document.caretRangeFromPoint = () => {
+      const range = document.createRange();
+      range.setStart(chip.firstChild as Text, 3);
+      range.collapse(true);
+      return range;
+    };
+    drop('X', '');
+    expect(chip.textContent).toBe('@S02 бэкенд');
+    expect(chip.nextSibling?.textContent).toBe('X');
+    expect(chips()).toHaveLength(1);
+  });
+
+  it('точку сброса браузер назвать не может: в конец поля, если курсор вне его', () => {
+    renderComposer();
+    const text = document.createTextNode('начало');
+    editor().append(text);
+    caret(document.body, 0);
+    drop('X', '');
+    expect(editor().textContent).toBe('началоX');
+  });
+
+  it('выделенное в поле сбросом не заменяется: текст встаёт рядом, за концом выделения', () => {
+    renderComposer();
+    const text = document.createTextNode('абвг');
+    editor().append(text);
+    document.getSelection()?.setBaseAndExtent(text, 0, text, 3);
+    drop('X', '');
+    expect(editor().textContent).toBe('абвXг');
+  });
+
+  it('текст из сброса попадает в черновик и отправляется как обычный', () => {
+    const { onSend } = renderComposer();
+    caret(editor(), 0);
+    drop('перетащено', '<b>перетащено</b>');
+    expect(useUiStore.getState().composerDrafts[KEY]).toBe('перетащено');
+    press('Enter');
+    expect(onSend).toHaveBeenCalledWith({ to: [], text: 'перетащено' });
   });
 });
 

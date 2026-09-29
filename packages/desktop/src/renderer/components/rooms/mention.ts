@@ -111,17 +111,17 @@ export interface MentionCandidate {
   rawLabel: string;
   /** Имя провайдера (`Claude Code`). */
   providerName: string;
+  /** Модель сессии (`Opus 5.5`); `null` — неизвестна, в поиск не попадает. */
+  model: string | null;
 }
 
-/**
- * Фильтр меню — подстрока без учёта регистра в `S02 s02 {ярлык} {провайдер}` (2.3; модель из
- * спеки в фильтр не входит: карта её не хранит, решение контролёра куска 6).
- */
+/** Фильтр меню — подстрока без учёта регистра в `S02 s02 {ярлык} {провайдер} {модель}` (2.3). */
 export function filterMentions<T extends MentionCandidate>(candidates: readonly T[], query: string): T[] {
   const needle = query.toLowerCase();
   if (needle === '') return [...candidates];
   return candidates.filter((candidate) =>
-    `${sessionTag(candidate.id)} ${candidate.id.replace('-', '')} ${candidate.rawLabel} ${candidate.providerName}`
+    [sessionTag(candidate.id), candidate.id.replace('-', ''), candidate.rawLabel, candidate.providerName, candidate.model ?? '']
+      .join(' ')
       .toLowerCase()
       .includes(needle),
   );

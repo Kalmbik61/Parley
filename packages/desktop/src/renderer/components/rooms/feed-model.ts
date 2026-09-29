@@ -8,8 +8,9 @@
  * `★` ведущего, адресаты без человека, ожидающие агенты. Правило ведущего — `roomLiveLead`
  * (`lib/room-lead.ts`), общая копия `liveLead` из core; своей здесь нет (решение контролёра 1).
  *
- * Модель и усилие агента не показываются: карта их не хранит (решение контролёра 3) — только
- * провайдер и слово состояния.
+ * Модель участника — из живых метрик (`activity.changed`, `metrics.model`), как её брал `RoomBody` до этого
+ * куска: короткое имя с версией (`Opus 5.5`). Усилие не показывается — его никто не хранит. Пока сессия
+ * ничего не написала и модель неизвестна, у участника её нет (`null`).
  */
 
 import type { MessageKind, SessionLifecycle, WorkEntry, WorkMap } from '@harnas/core';
@@ -19,6 +20,7 @@ import { isHumanUnread, sessionAttention, type Attention } from '../../attention
 import { displayStatus, dotState, stateWord, type DotState } from '../../lib/dot-state.js';
 import { DECISIONS_SHOWN, recipientsOf } from '../../lib/mail-view.js';
 import { sessionLabelText, sessionRowLabel, sessionTag } from '../../lib/participant.js';
+import { modelName } from '../../lib/participant-tag.js';
 import { roomLiveLead } from '../../lib/room-lead.js';
 import type { ActivityEntry } from '../../store/activity.js';
 
@@ -38,6 +40,11 @@ export interface ParticipantModel {
   provider: string;
   /** `Claude Code`. */
   providerName: string;
+  /**
+   * Модель сессии из живых метрик — `Opus 5.5`, `GPT-5.5`. `null`: модель неизвестна или имя лишь повторяет
+   * провайдера (`gpt-5.2-codex` у Codex — «Codex · Codex» ничего не добавило бы).
+   */
+  model: string | null;
   state: DotState;
   lifecycle: SessionLifecycle;
   /** Слово состояния: `working`, `needs you`… */
@@ -144,15 +151,18 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
     const session = map.sessions.find((candidate) => candidate.id === id);
     // Удалённая сессия в ленте участников не выводится: показать о ней нечего.
     if (session === undefined) continue;
-    const live =
-      activity[refKey({ projectPath: entry.projectPath, workId: map.work.id, sessionId: id })]?.activity ?? null;
+    const liveEntry = activity[refKey({ projectPath: entry.projectPath, workId: map.work.id, sessionId: id })];
+    const live = liveEntry?.activity ?? null;
     const state = dotState(displayStatus(session), live?.activity ?? null);
+    const providerDisplay = providerName(session.provider, providers.find((entryProvider) => entryProvider.id === session.provider)?.label ?? session.provider);
+    const model = modelName(liveEntry?.metrics?.model ?? null);
     participants.push({
       id,
       label: sessionRowLabel(id, session.label),
       rawLabel: sessionLabelText(session.label),
       provider: session.provider,
-      providerName: providerName(session.provider, providers.find((entryProvider) => entryProvider.id === session.provider)?.label ?? session.provider),
+      providerName: providerDisplay,
+      model: model !== null && model.toLowerCase() !== providerDisplay.toLowerCase() ? model : null,
       state,
       lifecycle: session.lifecycle,
       word: stateWord(state, session.lifecycle),

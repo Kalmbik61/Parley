@@ -59,12 +59,15 @@ beforeEach(() => {
   useUiStore.setState({ composerDrafts: {}, windowFocused: true, documentVisible: true });
   useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS, 'rooms.resolveProposal'] } });
   vi.mocked(toast).mockClear();
+  // Меню упоминаний прокручивает выбранный пункт в видимую область; в jsdom `scrollIntoView` нет.
+  Element.prototype.scrollIntoView = vi.fn();
 });
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
 });
 
 function props(entry: WorkEntry, patch: Partial<RoomPanelProps> = {}): RoomPanelProps {
@@ -86,6 +89,16 @@ function renderPanel(entry: WorkEntry, patch: Partial<RoomPanelProps> = {}) {
   const view = render(<RoomPanel {...initial} />);
   return { ...view, initial, update: (next: WorkEntry) => view.rerender(<RoomPanel {...initial} entry={next} />) };
 }
+
+/** Живая активность с моделью сессии: `metrics.model` — то, что раньше `RoomBody` собирал в `models`. */
+const withModels = (models: Record<string, string | null>, activity: Parameters<typeof makeActivity>[1] = 'idle') =>
+  activityMap(
+    Object.entries(models).map(([sessionId, model]) =>
+      makeActivity({ projectPath: PROJECT, workId: WORK_ID, sessionId }, activity, {
+        metrics: { tokensIn: null, tokensOut: null, durationMs: null, unread: 0, subagents: 0, model },
+      }),
+    ),
+  );
 
 const feed = (): HTMLElement => document.querySelector('[data-room-feed]') as HTMLElement;
 const messageRow = (id: string): HTMLElement => document.querySelector(`[data-message-id="${id}"]`) as HTMLElement;
@@ -114,7 +127,7 @@ describe('RoomPanel — шапка (1.3)', () => {
 });
 
 describe('RoomPanel — лента участников (1.3)', () => {
-  it('карточка на участника: ярлык, слово состояния, задача; тултип — провайдер и слово, без модели', () => {
+  it('карточка на участника: ярлык, слово состояния, задача', () => {
     const activity = activityMap([makeActivity(REF('s-02'), 'blocked'), makeActivity(REF('s-01'), 'working')]);
     renderPanel(entryOf(), { activity });
     const cards = Array.from(document.querySelectorAll<HTMLElement>('[data-participant]'));
@@ -123,9 +136,20 @@ describe('RoomPanel — лента участников (1.3)', () => {
     expect(within(second).getByText('S02 бэкенд')).toBeTruthy();
     expect(within(second).getByText('needs you')).toBeTruthy();
     expect(within(second).getByText('Частичный возврат')).toBeTruthy();
-    expect(second.getAttribute('title')).toBe('Claude Code · needs you');
-    expect(cards[0]?.getAttribute('title')).toBe('Claude Code · working');
-    expect(cards[2]?.getAttribute('title')).toBe('Codex · idle');
+  });
+
+  it('тултип — «провайдер · модель» из живых метрик; модель неизвестна — только провайдер', () => {
+    const activity = withModels({ 's-01': 'claude-opus-5-5', 's-03': 'gpt-5.5' });
+    renderPanel(entryOf(), { activity });
+    const cards = Array.from(document.querySelectorAll<HTMLElement>('[data-participant]'));
+    expect(cards.map((card) => card.getAttribute('title'))).toEqual(['Claude Code · Opus 5.5', 'Claude Code', 'Codex · GPT-5.5']);
+  });
+
+  it('пришла модель — тултип обновился; нет метрик вовсе — только провайдер, без «null» и без слова состояния', () => {
+    const { rerender, initial } = renderPanel(entryOf());
+    expect(document.querySelector('[data-participant="s-01"]')?.getAttribute('title')).toBe('Claude Code');
+    rerender(<RoomPanel {...initial} activity={withModels({ 's-01': 'claude-sonnet-5' }, 'working')} />);
+    expect(document.querySelector('[data-participant="s-01"]')?.getAttribute('title')).toBe('Claude Code · Sonnet 5');
   });
 
   it('карточка 230px; подкраска: ждёт человека — accent-200, прочитайте — accent-2-200, иначе нейтральный фон', () => {
@@ -207,7 +231,11 @@ describe('RoomPanel — сообщения (1.3)', () => {
     renderPanel(entry);
     expect(messageRow('m-1').textContent).toContain('You');
     expect(messageRow('m-1').textContent).toContain('→ all');
-    expect(within(messageRow('m-1')).getByText('note').className).toContain('bg-neutral-100');
+    // На листе центра `neutral-100` светлой темы — сам лист: заливка тега `note` там 200, в тёмной прежняя 100.
+    const noteClasses = within(messageRow('m-1')).getByText('note').className.split(/\s+/);
+    expect(noteClasses).toContain('bg-neutral-200');
+    expect(noteClasses).toContain('dark:bg-neutral-100');
+    expect(noteClasses).not.toContain('bg-neutral-100');
     expect(messageRow('m-2').textContent).toContain('S03 ревью');
     expect(messageRow('m-2').textContent).toContain('→ S01 архитектор');
     expect(within(messageRow('m-2')).getByText('question').className).toContain('bg-accent-100');
@@ -286,7 +314,9 @@ describe('RoomPanel — сообщения (1.3)', () => {
     renderPanel(entry);
     const row = messageRow('m-1');
     expect(row.getAttribute('data-sender')).toBe('system');
-    expect(within(row).getByTitle('System')).toBeTruthy();
+    expect(within(row).getByTitle('harnas')).toBeTruthy();
+    expect(row.textContent).toContain('harnas');
+    expect(row.textContent).not.toContain('System');
     expect(row.textContent).toContain('You accepted the decision');
     expect(row.textContent).not.toContain('→');
     expect(within(row).queryByRole('img', { name: 'New' })).toBeNull();
@@ -379,6 +409,27 @@ describe('RoomPanel — поле ввода и отправка (2.2)', () => {
     fireEvent.input(editor());
     const starred = screen.getAllByRole('option').filter((item) => within(item).queryByTitle('Lead') !== null);
     expect(starred.map((item) => item.getAttribute('data-mention-item'))).toEqual(['s-01']);
+  });
+
+  it('мета пункта меню — «модель · состояние» из живых метрик; модель неизвестна — только состояние', () => {
+    const activity = withModels({ 's-01': 'claude-opus-5-5', 's-03': 'gpt-5.5' }, 'working');
+    renderPanel(entryOf(), { activity });
+    const node = document.createTextNode('@');
+    editor().append(node);
+    document.getSelection()?.collapse(node, 1);
+    fireEvent.input(editor());
+    const meta = screen.getAllByRole('option').map((item) => item.lastElementChild?.textContent);
+    expect(meta).toEqual(['Opus 5.5 · working', 'idle', 'GPT-5.5 · working']);
+  });
+
+  it('фильтр меню ищет и по модели', () => {
+    const activity = withModels({ 's-01': 'claude-opus-5-5', 's-03': 'gpt-5.5' });
+    renderPanel(entryOf(), { activity });
+    const node = document.createTextNode('@opus');
+    editor().append(node);
+    document.getSelection()?.collapse(node, node.data.length);
+    fireEvent.input(editor());
+    expect(screen.getAllByRole('option').map((item) => item.getAttribute('data-mention-item'))).toEqual(['s-01']);
   });
 
   it('в меню упоминаний — живые участники; закрытый не предлагается', () => {

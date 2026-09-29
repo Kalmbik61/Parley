@@ -11,9 +11,16 @@
  *
  * Поле ведёт браузер, компонент читает его после каждого события (`refresh`) и правит только
  * через `mention-editor.ts`. Условия меню, фильтр и токены — `mention.ts`.
+ *
+ * Вставка и перетаскивание берут только `text/plain`: выделение из ленты приносит HTML с `data-mention`, а
+ * читатель поля считает чипом любой такой узел; чипы рождает только меню упоминаний.
+ *
+ * Фокус — контур `--ring` 2px с отступом 2px: правило `:focus-visible` слоя base (`styles/base.css`,
+ * спека 4), поле его не перекрывает; каретка цвета ring. Контур и при клике мышью — как у прочих полей окна:
+ * у текстовых полей `:focus-visible` срабатывает всегда.
  */
 
-import { useCallback, useLayoutEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react';
 import { S } from '../../../shared/strings.js';
 import { sessionTag } from '../../lib/participant.js';
 import { useUiStore } from '../../store/ui.js';
@@ -22,6 +29,7 @@ import { MentionMenu } from './MentionMenu.js';
 import { filterMentions } from './mention.js';
 import {
   fillEditor,
+  insertDroppedText,
   insertLineBreak,
   insertMention,
   insertPlainText,
@@ -41,6 +49,8 @@ export interface ComposerMember {
   rawLabel: string;
   provider: string;
   providerName: string;
+  /** Модель сессии из живых метрик (`Opus 5.5`); `null` — неизвестна. Мета пункта меню и фильтр. */
+  model: string | null;
   /** Слово состояния: `idle`, `working`… */
   word: string;
   /** Ведущий комнаты: в меню у него `★`, как в ленте участников. */
@@ -67,6 +77,8 @@ export interface ComposerProps {
 interface MenuState {
   context: MentionContext;
   selected: number;
+  /** Выбор сдвинули клавиши или новый запрос, а не мышь: пункт надо показать в видимой части списка. */
+  reveal: boolean;
 }
 
 function sameList(a: readonly string[], b: readonly string[]): boolean {
@@ -107,8 +119,10 @@ export function Composer({ members, draftKey, onSend }: ComposerProps): JSX.Elem
     else if (dismissed !== null && dismissed.node === context.node && dismissed.start === context.start) context = null;
     setMenu((previous) => {
       if (context === null) return null;
-      // Запрос сменился — выбор снова на первом пункте; тот же — держится (стрелки сдвигают его сами).
-      return { context, selected: previous !== null && previous.context.query === context.query ? previous.selected : 0 };
+      // Запрос сменился — выбор снова на первом пункте, и его надо показать; тот же — всё держится
+      // (стрелки сдвигают выбор сами).
+      const same = previous !== null && previous.context.query === context.query;
+      return { context, selected: same ? previous.selected : 0, reveal: same ? previous.reveal : true };
     });
   }, [draftKey]);
 
@@ -159,7 +173,7 @@ export function Composer({ members, draftKey, onSend }: ComposerProps): JSX.Elem
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault();
         const step = event.key === 'ArrowDown' ? 1 : -1;
-        setMenu({ ...menu, selected: (selected + step + items.length) % items.length });
+        setMenu({ ...menu, selected: (selected + step + items.length) % items.length, reveal: true });
         return;
       }
       if (event.key === 'Enter' || event.key === 'Tab') {
@@ -199,14 +213,23 @@ export function Composer({ members, draftKey, onSend }: ComposerProps): JSX.Elem
     if (text !== '') insertPlainText(event.currentTarget.ownerDocument, text);
   };
 
+  const onDrop = (event: DragEvent<HTMLDivElement>): void => {
+    // Перетаскивание — то же, что вставка: выделение из ленты приносит HTML с `data-mention`, а читатель
+    // поля считает чипом любой такой узел — в `to[]` попал бы чужой адресат. Чипы рождает только меню.
+    event.preventDefault();
+    const text = event.dataTransfer.getData('text/plain');
+    if (text !== '') insertDroppedText(event.currentTarget, text, { x: event.clientX, y: event.clientY });
+  };
+
   return (
     <div className="relative flex shrink-0 flex-col gap-1.5 border-t border-[color-mix(in_srgb,currentColor_12%,transparent)] px-9 pb-[18px] pt-2.5">
       {menu === null ? null : (
         <MentionMenu
           items={items}
           selected={selected}
+          reveal={menu.reveal}
           onPick={pick}
-          onHover={(index) => setMenu({ ...menu, selected: index })}
+          onHover={(index) => setMenu({ ...menu, selected: index, reveal: false })}
         />
       )}
       <span className="truncate text-xs text-muted-foreground">
@@ -231,11 +254,12 @@ export function Composer({ members, draftKey, onSend }: ComposerProps): JSX.Elem
             onKeyUp={refresh}
             onClick={refresh}
             onPaste={onPaste}
+            onDrop={onDrop}
             onBlur={() => {
               dismissedRef.current = null;
               setMenu(null);
             }}
-            className="box-border max-h-[140px] min-h-[38px] overflow-y-auto whitespace-pre-wrap rounded-[19px] border border-[color-mix(in_srgb,currentColor_22%,transparent)] bg-[color-mix(in_srgb,currentColor_5%,transparent)] px-4 py-2 text-sm leading-5 caret-ring outline-none [overflow-wrap:anywhere]"
+            className="box-border max-h-[140px] min-h-[38px] overflow-y-auto whitespace-pre-wrap rounded-[19px] border border-[color-mix(in_srgb,currentColor_22%,transparent)] bg-[color-mix(in_srgb,currentColor_5%,transparent)] px-4 py-2 text-sm leading-5 caret-ring [overflow-wrap:anywhere]"
           />
         </div>
         <Button type="button" onClick={submit}>

@@ -3,8 +3,9 @@
  * радиус 14, padding `9 12`. Строка 1 (12px): значок состояния, значок агента 14, `S02 бэкенд` (600),
  * `★` у ведущего, слово состояния 11px; строка 2 — задача 12px в одну строку. Фон по состоянию:
  * `blocked` — `accent-200`, `unseen` — `accent-2-200`, иначе `currentColor 6%`; наведение — рамка внутри
- * `currentColor 28%`. Тултип — провайдер и слово состояния: модели и усилия карта не хранит (решение
- * контролёра 3 куска 6). Клик открывает терминал участника.
+ * `currentColor 28%`. Тултип — `Claude Code · Opus 5.5`: провайдер и модель из живых метрик, а пока
+ * модель неизвестна — один провайдер; усилие не показывается, его никто не хранит. Клик открывает терминал
+ * участника.
  */
 
 import { S } from '../../../shared/strings.js';
@@ -31,7 +32,7 @@ export function ParticipantStrip({ participants, onOpenSession }: ParticipantStr
           key={participant.id}
           type="button"
           data-participant={participant.id}
-          title={S.rooms.providerState(participant.providerName, participant.word)}
+          title={S.rooms.participantTooltip(participant.providerName, participant.model)}
           onClick={() => onOpenSession(participant.id)}
           className={cn(
             'flex w-[230px] shrink-0 flex-col gap-1 rounded-[14px] px-3 py-[9px] text-left text-foreground hover:shadow-[inset_0_0_0_1px_color-mix(in_srgb,currentColor_28%,transparent)]',
