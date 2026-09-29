@@ -7,10 +7,11 @@
  *
  * Провайдер без списка (у `glm`, у своего в `providers.json` без поля `models`) — прежнее правило:
  * значение идёт в команду, если шаблон запуска принимает `{model}`, иначе шаблон отбрасывает его
- * сам. Неизвестный провайдер здесь не ловится: об этом скажет сам запуск.
+ * сам. Неизвестный провайдер здесь не ловится: об этом скажет сам запуск. Саму проверку ведёт core
+ * (`modelChoiceError`): её же зовёт `spawn_session` агента, и два входа не расходятся.
  */
 
-import { loadProviders, selectableModels } from '@harnas/core';
+import { loadProviders, modelChoiceError } from '@harnas/core';
 import { HostError } from '../errors.js';
 
 /**
@@ -24,13 +25,9 @@ export async function resolveModelChoice(
   if (model === undefined || model === '') return undefined;
 
   const entry = (await loadProviders())[provider];
-  const list = entry === undefined ? null : selectableModels(entry);
-  if (list !== null && !list.some((option) => option.id === model)) {
-    const allowed = list.map((option) => option.id).join(', ');
-    throw new HostError(
-      'bad_request',
-      `модель ${model} не из списка провайдера ${provider}; допустимы: ${allowed}`,
-    );
-  }
+  if (entry === undefined) return model;
+  // Правило одно с `spawn_session` MCP: оно живёт в core рядом со списками (`modelChoiceError`).
+  const refusal = modelChoiceError(entry, model);
+  if (refusal !== null) throw new HostError('bad_request', refusal);
   return model;
 }
