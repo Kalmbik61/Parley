@@ -92,6 +92,16 @@ function alive(pid: number): boolean {
   }
 }
 
+/** Есть ли процесс с такой командной строкой (`pgrep -f`). */
+function running(pattern: string): boolean {
+  try {
+    execFileSync('pgrep', ['-f', pattern], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Ждёт, пока условие не выполнится; иначе — ошибка теста, а не зависание. */
 async function until(
   condition: () => boolean | Promise<boolean>,
@@ -344,6 +354,18 @@ describe('строка терминала', () => {
     } finally {
       if (alive(pid)) process.kill(pid, 'SIGKILL');
     }
+  });
+
+  it('составная `sleep 5; echo x` с малым таймаутом: строка короткая, а `sleep` из группы не остаётся', async () => {
+    // Своя длительность, чтобы `pgrep` не спутал этот `sleep` с чужим.
+    const sleeping = 'sleep 5.317';
+    await putStatusLine(home, 'settings.json', `${sleeping}; echo x`);
+
+    const line = run(input(), { humanTimeoutMs: 700 });
+    await until(() => running(sleeping), 'sleep запущен');
+
+    expect(await line).toBe('Opus · ctx 8%\n');
+    await until(() => !running(sleeping), 'sleep убит вместе с группой', 3000);
   });
 
   it('отмена (signal): команда человека убивается с группой, строка короткая; отменено до запуска — команда не стартует', async () => {
