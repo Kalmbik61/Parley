@@ -16,6 +16,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * подложенные тестом (в `room-row.spec.ts` решение клал ядром сам тест). Строку в терминал агента тест отправляет так
  * же, как набрал бы человек, — уведомлением `pty.input` хоста.
  *
+ * Третий — клик по уведомлению macOS (запись журнала) ведёт во вкладку комнаты: цель `FocusTarget { kind: 'room' }`.
  * Второй тест — «то же решение второй раз не уведомляет»: ни после перезапуска окна (хост переживает окно, решение
  * в карте ждёт), ни после переподключения к хосту («Restart host»). Замену решения после каждого из событий он кладёт
  * сам и видит по журналу, что уведомитель жив и молчал именно из-за базы, а не потому, что сломан.
@@ -325,5 +326,29 @@ test.describe('решение ведущего: настоящий harnas-mcp, �
         { title: NOTE_TITLE, body: 'e2e-room · S01 revised the decision', silent: false, closed: true },
         { title: NOTE_TITLE, body: 'e2e-room · S01 revised the decision', silent: false, closed: false },
       ]);
+  });
+
+  test('клик по уведомлению macOS о решении открывает вкладку комнаты с карточкой', async () => {
+    test.setTimeout(90_000);
+    const { electronApp, window } = await launch();
+    const { workId, second, roomId, leadRef } = await setupRoom(window);
+    const roomTab = window.locator(`[role="tab"][data-tab-id="room:${roomId}"]`);
+    // На виду терминал второго агента, вкладки комнаты в раскладке ещё нет.
+    await sendFocusTarget(electronApp, { kind: 'session', ref: { projectPath: project, workId, sessionId: second } });
+    await expect(window.locator(`[role="tab"][data-tab-id="terminal:${second}"]`)).toHaveAttribute('data-active', 'true');
+    await expect(roomTab).toHaveCount(0);
+
+    await window.evaluate(() => globalThis.dispatchEvent(new Event('blur')));
+    await agentCalls(window, leadRef, 'propose_decision', { room: roomId, text: PROPOSAL });
+    await expect.poll(() => decisionNotes(electronApp), { timeout: 20_000 }).toHaveLength(1);
+
+    // Клик по записи журнала делает то же, что клик по настоящему уведомлению: main поднимает окно и шлёт ему цель.
+    await electronApp.evaluate(() => {
+      const log = (globalThis as { __harnasNotifications?: Array<{ title: string; click(): void }> }).__harnasNotifications ?? [];
+      log.filter((entry) => entry.title === 'Decision waiting for you').at(-1)?.click();
+    });
+    await expect(roomTab).toHaveAttribute('data-active', 'true');
+    await expect(window.locator('[data-decision-card]')).toHaveAttribute('data-proposal-id', 'p-01');
+    await expect(window.locator('[data-decision-card]')).toContainText('Contract first, then code');
   });
 });
