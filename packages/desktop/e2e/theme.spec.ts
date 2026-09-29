@@ -107,4 +107,32 @@ test.describe('тема окна по nativeTheme main (спека 4.7, раун
     expect(await isDark(window)).toBe(false);
     expect(await background(window)).toBe(LIGHT_BACKGROUND);
   });
+
+  // Облик Organic вживую (кусок 1 плана «Organic»): jsdom стилей не считает, поэтому то, что держат
+  // `fonts.test.ts` и `lucide-stroke.test.tsx` по тексту CSS, здесь сверяется с настоящим окном.
+  test('шрифты Figtree и Caprasimo грузятся из сборки, база окна 13px, значки lucide — 2.75', async () => {
+    const window = await launch();
+    const facts = await window.evaluate(async () => {
+      // `load()` тянет файл из @font-face и отдаёт подошедшие начертания: запасной системный шрифт
+      // дал бы пустой список, а не `loaded`.
+      const loaded = async (font: string): Promise<string[]> =>
+        (await document.fonts.load(font)).map((face) => `${face.family.replace(/"/g, '')}:${face.status}`);
+      const body = getComputedStyle(document.body);
+      const icon = document.querySelector('svg.lucide');
+      return {
+        family: body.fontFamily,
+        size: body.fontSize,
+        figtree: await loaded('500 13px Figtree'),
+        caprasimo: await loaded('14px Caprasimo'),
+        stroke: icon === null ? null : getComputedStyle(icon).strokeWidth,
+      };
+    });
+
+    expect(facts.family.startsWith('Figtree')).toBe(true);
+    expect(facts.size).toBe('13px');
+    expect(facts.figtree).toEqual(['Figtree:loaded']);
+    expect(facts.caprasimo).toEqual(['Caprasimo:loaded']);
+    expect(facts.stroke, 'в окне нет ни одного значка lucide (svg.lucide)').not.toBeNull();
+    expect(parseFloat(facts.stroke ?? '')).toBe(2.75);
+  });
 });
