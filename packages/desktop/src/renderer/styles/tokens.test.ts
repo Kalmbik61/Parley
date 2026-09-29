@@ -445,6 +445,30 @@ describe('примитивы Organic — текст на своём фоне н�
   });
 });
 
+// ── Строка статуса: лимиты подписок (кусок 9b) ───────────────────────────────────────────────
+
+/**
+ * Лимиты в сегменте провайдера (`shell/StatusBar.tsx`, спека комнат Organic, 3.5): текст — `neutral-800`, как вся строка
+ * статуса, полоска — `neutral-800` на треке «текущий цвет 18 %»; от 80 % в любом окне текст и полоска — `accent-700`.
+ * Строка стоит прямо на фоне окна (`--background`). Текст — не ниже 4.5:1, полоска — признак состояния — не ниже 3:1
+ * к своему треку.
+ */
+describe('строка статуса — лимиты подписок: обычный вид и от 80 %', () => {
+  for (const theme of THEMES) {
+    it(`${theme}: текст лимитов (neutral-800) и предупреждающий (accent-700) на фоне окна не ниже 4.5:1`, () => {
+      const background = solid(theme, '--background');
+      expect(contrastRatio(solid(theme, '--color-neutral-800'), background), 'обычный').toBeGreaterThanOrEqual(TEXT);
+      expect(contrastRatio(solid(theme, '--color-accent-700'), background), 'от 80 %').toBeGreaterThanOrEqual(TEXT);
+    });
+
+    it(`${theme}: заливка полоски (neutral-800 и accent-700) к треку — текущему цвету строки в 18 % на фоне окна — не ниже 3:1`, () => {
+      const track = compositeOver(solid(theme, '--color-neutral-800'), 0.18, solid(theme, '--background'));
+      expect(contrastRatio(solid(theme, '--color-neutral-800'), track), 'обычная').toBeGreaterThanOrEqual(NON_TEXT);
+      expect(contrastRatio(solid(theme, '--color-accent-700'), track), 'от 80 %').toBeGreaterThanOrEqual(NON_TEXT);
+    });
+  }
+});
+
 // ── 4. Прежние имена, новые значения ────────────────────────────────────────────────────────
 
 describe('прежние переменные — значения на токенах Organic', () => {
