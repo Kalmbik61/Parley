@@ -499,6 +499,26 @@ describe('rooms.resolveProposal', () => {
     expect(map.messages.filter((message) => message.kind === 'decision')).toHaveLength(1);
   });
 
+  it('новое письмо человека всем, пока решение ждёт, слот не трогает: тот же id и rev, Accept по нему проходит', async () => {
+    const { client, dir, workId, base } = await withProposal();
+    const before = (await readMap(dir, workId)).rooms[0]?.proposal;
+    expect(before).toMatchObject({ id: 'p-01', rev: 0 });
+
+    const sent = await call(client, 'rooms.send', {
+      projectPath: dir,
+      workId,
+      roomId: 'r-01',
+      to: [],
+      text: 'ещё вопрос всем',
+      kind: 'note',
+    });
+
+    expect(sent.error).toBeUndefined();
+    expect((await readMap(dir, workId)).rooms[0]?.proposal).toEqual(before);
+    const accepted = await call(client, 'rooms.resolveProposal', { ...base, action: 'accept' });
+    expect(accepted.error).toBeUndefined();
+  });
+
   it('нет решения в слоте — conflict, а нет комнаты, работы или заметка длиннее 4000 — bad_request', async () => {
     const { client, dir, workId, base } = await withProposal();
     await call(client, 'rooms.resolveProposal', { ...base, action: 'accept' });
