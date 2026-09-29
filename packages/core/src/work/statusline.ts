@@ -47,8 +47,6 @@ export interface StatuslineOptions {
   env?: NodeJS.ProcessEnv;
   /** Домашняя папка человека; по умолчанию `os.homedir()`. */
   home?: string;
-  /** Каталог процесса — последняя надежда найти проект, если вход его не назвал. */
-  cwd?: string;
   now?: () => number;
   humanTimeoutMs?: number;
 }
@@ -103,25 +101,37 @@ async function saveLimits(
 }
 
 /**
+ * Каталог проекта — `project_dir` из входа: куда запущен Claude Code и где он сам ищет настройки
+ * проекта, после того как человек принял доверие к этой папке. `current_dir` (куда агент ушёл
+ * потом) не годится: там может оказаться чужой репозиторий, клон или пакет со своей строкой
+ * статуса, и мы исполнили бы её в обход доверия. Он берётся только у старого Claude Code без
+ * `project_dir`, где совпадает с каталогом запуска; как и верхнее поле `cwd`.
+ */
+function projectDir(input: Record<string, unknown> | null): string | null {
+  const workspace = isRecord(input?.['workspace']) ? input['workspace'] : null;
+  const candidates = [workspace?.['project_dir'], workspace?.['current_dir'], input?.['cwd']];
+  for (const dir of candidates) {
+    if (typeof dir === 'string' && path.isAbsolute(dir)) return dir;
+  }
+  return null;
+}
+
+/**
  * Файлы настроек Claude Code, где может лежать строка статуса человека, в порядке старшинства
  * (docs/en/settings): локальные настройки проекта, общие настройки проекта, настройки
- * пользователя. Проект — `current_dir` из входа; следом `project_dir` (где запущен Claude Code):
- * агент мог уйти в подкаталог, а настройки проекта лежат там, откуда его запустили. Нет ни того
- * ни другого — каталог процесса.
+ * пользователя. Каталога проекта во входе нет — только настройки пользователя: каталог самого
+ * процесса не угадывается.
  */
-function settingsFiles(input: Record<string, unknown> | null, home: string, cwd: string): string[] {
-  const workspace = isRecord(input?.['workspace']) ? input['workspace'] : null;
-  const dirs = [workspace?.['current_dir'], workspace?.['project_dir'], input?.['cwd']].filter(
-    (dir): dir is string => typeof dir === 'string' && path.isAbsolute(dir),
-  );
-  if (dirs.length === 0) dirs.push(cwd);
-  return [
-    ...[...new Set(dirs)].flatMap((dir) => [
-      path.join(dir, AGENT_DIR, 'settings.local.json'),
-      path.join(dir, AGENT_DIR, 'settings.json'),
-    ]),
-    path.join(home, AGENT_DIR, 'settings.json'),
-  ];
+function settingsFiles(input: Record<string, unknown> | null, home: string): string[] {
+  const dir = projectDir(input);
+  const project =
+    dir === null
+      ? []
+      : [
+          path.join(dir, AGENT_DIR, 'settings.local.json'),
+          path.join(dir, AGENT_DIR, 'settings.json'),
+        ];
+  return [...project, path.join(home, AGENT_DIR, 'settings.json')];
 }
 
 /**
@@ -131,9 +141,8 @@ function settingsFiles(input: Record<string, unknown> | null, home: string, cwd:
 async function humanCommand(
   input: Record<string, unknown> | null,
   home: string,
-  cwd: string,
 ): Promise<string | null> {
-  for (const file of settingsFiles(input, home, cwd)) {
+  for (const file of settingsFiles(input, home)) {
     let settings: unknown;
     try {
       settings = JSON.parse(await readFile(file, 'utf8'));
@@ -213,11 +222,7 @@ export async function runStatusline(raw: string, options: StatuslineOptions = {}
   // Файл — до команды человека: строку, убитую Claude Code на полуслове, данные не теряют.
   await saveLimits(input, env, options.now ?? Date.now).catch(() => undefined);
 
-  const command = await humanCommand(
-    input,
-    options.home ?? homedir(),
-    options.cwd ?? process.cwd(),
-  ).catch(() => null);
+  const command = await humanCommand(input, options.home ?? homedir()).catch(() => null);
   const human =
     command === null
       ? null

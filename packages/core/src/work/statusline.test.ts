@@ -205,24 +205,33 @@ describe('строка терминала', () => {
     expect(await run(input())).toBe('пользовательская');
   });
 
-  it('проект — current_dir, а следом project_dir: агент ушёл в подкаталог, настройки лежат там, откуда его запустили', async () => {
+  it('проект — project_dir, куда запущен Claude Code; настройки каталога, куда ушёл агент, не берутся', async () => {
     const inner = path.join(project, 'src');
     await mkdir(inner);
+    const marker = path.join(root, 'чужая-команда-вызвана');
     await putStatusLine(project, 'settings.json', "printf 'проектная'");
+    // Чужой репозиторий внутри проекта (клон, vendored-пакет) со своей строкой статуса: Claude Code её
+    // не читает, значит, и нам исполнять её нельзя — это обход доверия к папке.
+    await putStatusLine(inner, 'settings.json', `touch '${marker}'; printf 'подкаталог'`);
+    const drifted = { workspace: { current_dir: inner, project_dir: project } };
 
-    expect(await run(input({ workspace: { current_dir: inner, project_dir: project } }))).toBe(
-      'проектная',
-    );
-    // Свои настройки и в подкаталоге: current_dir первый, project_dir — запасной.
-    await putStatusLine(inner, 'settings.json', "printf 'подкаталог'");
-    expect(await run(input({ workspace: { current_dir: inner, project_dir: project } }))).toBe(
-      'подкаталог',
-    );
-    await rm(path.join(inner, '.claude'), { recursive: true });
-    // Старый Claude Code без project_dir: берётся current_dir.
+    expect(await run(input(drifted))).toBe('проектная');
+    // В проекте своей строки нет — настройки подкаталога всё равно не берутся, дальше пользователь.
+    await rm(path.join(project, '.claude'), { recursive: true });
+    await putStatusLine(home, 'settings.json', "printf 'пользовательская'");
+    expect(await run(input(drifted))).toBe('пользовательская');
+    expect(await exists(marker)).toBe(false);
+  });
+
+  it('старый Claude Code без project_dir: проект — current_dir; нет ни того ни другого — только настройки пользователя', async () => {
+    await putStatusLine(project, 'settings.json', "printf 'проектная'");
+    await putStatusLine(home, 'settings.json', "printf 'пользовательская'");
+
     expect(await run(input({ workspace: { current_dir: project } }))).toBe('проектная');
-    // Ни того ни другого во входе — каталог самого процесса: Claude Code зовёт скрипт из своего cwd.
-    expect(await run(input({ workspace: undefined }), { cwd: project })).toBe('проектная');
+    expect(await run(input({ workspace: undefined, cwd: project }))).toBe('проектная');
+    // Каталога проекта во входе нет (битый вход): каталог процесса не угадывается, проект не читается.
+    expect(await run(input({ workspace: undefined }))).toBe('пользовательская');
+    expect(await run('не json')).toBe('пользовательская');
   });
 
   it('наш же скрипт в настройках человека не зовётся: короткая строка вместо рекурсии', async () => {
