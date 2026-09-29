@@ -193,7 +193,7 @@ export function RoomRow({
         </span>
       </div>
       {!expanded && badges.length > 0 ? (
-        <div className="flex items-center gap-3.5 pl-[37px]">
+        <div title={tooltip} className="flex items-center gap-3.5 pl-[37px]">
           {badges.map((badge) => (
             <span key={badge.id} data-provider-badge={badge.id} title={badge.tip} className="relative inline-flex size-[14px] shrink-0">
               <AgentIcon provider={badge.id} size={14} label={badge.tip} />

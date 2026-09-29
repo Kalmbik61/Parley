@@ -229,6 +229,11 @@ describe('RoomRow — свёрнутая (1.2)', () => {
   it('тултип шапки: «Room · lead S01 · S01, S02, S03, S04»; комната без живых участников — без ведущего', () => {
     renderRow(fourAgents());
     expect(header().getAttribute('title')).toBe('Room · lead S01 · S01, S02, S03, S04');
+    // Полоса значков свёрнутой комнаты — тот же тултип (в прототипе он на всей строке); у самих значков свой.
+    expect(badges()[0]?.parentElement?.getAttribute('title')).toBe('Room · lead S01 · S01, S02, S03, S04');
+    expect(badges()[0]?.getAttribute('title')).toBe('4 Claude Code agents');
+    // Тултип не на корне: у строк участников развёрнутой комнаты свои карточки, второй тултип поверх них не нужен.
+    expect(rowEl().hasAttribute('title')).toBe(false);
     cleanup();
     const closed = fourAgents({ members: ['s-01', 's-02'] }, { sessions: [makeSession('s-01', 'a', { lifecycle: 'closed' }), makeSession('s-02', 'b', { lifecycle: 'closed' })] });
     renderRow(closed);
