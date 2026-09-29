@@ -202,7 +202,11 @@ describe('StatusBar — провайдеры слева (Organic, 1.1)', () => {
     expect(version.className).toContain('font-mono');
     expect(version.className).toContain('text-[11px]');
     expect(version.className).toContain('text-neutral-700');
-    expect(claude?.className).toContain('gap-[7px]');
+    // Сегмент — `display: contents`: значок, имя, версия и лимиты — элементы общей строки (порядок сжатия общий на всех
+    // провайдеров). Зазор строки 14 между сегментами; внутри сегмента 7 — имя и версия сдвинуты на −7.
+    expect(claude?.className).toBe('contents');
+    expect(version.className).toContain('-ml-[7px]');
+    expect(screen.getByText('Claude Code').className).toContain('-ml-[7px]');
   });
 
   it('версия null или нет поля (хост, переживший окно) — только значок и имя', () => {
@@ -345,7 +349,8 @@ describe('StatusBar — лимиты подписок: сегмент прова
     });
     const { container } = renderPlain();
     const block = limitsIn(container) as HTMLElement;
-    expect(block.className).toContain('ml-1');
+    // От версии до полоски 4 + 7 = 11: зазор строки 14 и −3 у блока. Внутри блока зазор 7.
+    expect(block.className).toContain('-ml-[3px]');
     expect(block.className).toContain('gap-[7px]');
     const track = block.firstElementChild as HTMLElement;
     for (const cls of ['h-1', 'w-11', 'shrink-0', 'rounded-full', 'overflow-hidden', 'bg-current/18']) expect(track.className, cls).toContain(cls);
@@ -568,12 +573,18 @@ describe('StatusBar — длинные значения (кусок 9b)', () => 
   const both = limitsOf({ fiveHour: limitWindow(58), week: limitWindow(41) });
   const long = { id: 'zeta', label: 'Extremely Long Provider Label For The Status Bar Layout Check', version: '123456789.987654321.123456789' };
 
-  it('сегмент провайдера сжимаем (min-w-0, не shrink-0): длинные значения не растягивают строку за край окна', () => {
-    useProvidersStore.setState({ providers: [provider({ ...long, limits: both })] });
+  it('сегмент провайдера — display: contents: его части сжимаются в общей строке, а не каждый сегмент целиком', () => {
+    useProvidersStore.setState({ providers: [provider({ ...long, limits: both }), provider({ id: 'codex', label: 'Codex' })] });
     const { container } = renderPlain();
-    const segment = segments(container)[0] as HTMLElement;
-    expect(segment.className).toContain('min-w-0');
-    expect(segment.className).not.toContain('shrink-0');
+    const [zeta, codex] = segments(container) as HTMLElement[];
+    expect(zeta?.className).toBe('contents');
+    expect(codex?.className).toBe('contents');
+    // В DOM части — дети сегмента, а `display: contents` делает их элементами flex-строки: значок, имя, версия, блок лимитов.
+    const bar = container.firstElementChild as HTMLElement;
+    expect(zeta?.parentElement).toBe(bar);
+    expect(zeta?.children).toHaveLength(4);
+    // У провайдера без данных лимитов сжимать нечего: значок и имя, без блока лимитов.
+    expect(codex?.children).toHaveLength(2);
   });
 
   it('имя и версия — с многоточием (min-w-0 truncate), значок не сжимается', () => {

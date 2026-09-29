@@ -12,6 +12,9 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * (`{ at, rateLimits }`, `resets_at` в Unix-секундах, атомарно), а хост, запущенный с малым
  * `HARNAS_LIMITS_POLL_MS`, подхватывает его и шлёт окну `providers.limitsChanged`. Настоящий `claude` не
  * запускается никогда — только стаб `HARNAS_CLAUDE_BIN`; `resets_at` — в будущем, чтобы хост не отбросил окно.
+ *
+ * Codex — так же по данным, а не по запуску: `HARNAS_CODEX_BIN` указывает на стаб (проба версии в E2E выключена,
+ * команда только должна найтись), а rollout-лог с `token_count` лежит в корне логов Codex этого теста.
  */
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -59,6 +62,25 @@ async function writeLimits(workId: string, sessionId: string, fiveHour: number |
   await rename(`${file}.tmp`, file);
 }
 
+/**
+ * rollout-лог Codex с одним `token_count` (`core/src/codex/limits.ts`): окно 300 минут — пять часов, второго нет.
+ * Раскладка каталогов — ровно `<год>/<месяц>/<день>/rollout-*-<uuid>.jsonl`.
+ */
+async function writeCodexLimits(root: string, usedPercent: number): Promise<void> {
+  const now = new Date();
+  const dir = path.join(root, String(now.getFullYear()), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
+  await mkdir(dir, { recursive: true });
+  const record = {
+    timestamp: now.toISOString(),
+    type: 'event_msg',
+    payload: {
+      type: 'token_count',
+      rate_limits: { primary: { used_percent: usedPercent, window_minutes: 300, resets_at: Math.floor(now.getTime() / 1000) + 3 * 3600 } },
+    },
+  };
+  await writeFile(path.join(dir, 'rollout-2026-09-29T18-00-00-01234567-89ab-cdef-0123-456789abcdef.jsonl'), `${JSON.stringify(record)}\n`);
+}
+
 /** Строка в журнал событий сессии — то, что дописал бы хук Claude Code. */
 async function hookEvent(workId: string, sessionId: string, event: Record<string, string>): Promise<void> {
   const dir = path.join(project, '.harnas', 'works', workId, 'events');
@@ -89,9 +111,16 @@ test.describe('лимиты подписок в строке статуса (к�
     await rm(project, { recursive: true, force: true });
   });
 
-  async function launch(size: { width: number; height: number }): Promise<Page> {
+  async function launch(size: { width: number; height: number }, extraEnv: Record<string, string> = {}): Promise<Page> {
     // Малый период опроса — иначе числа появились бы через полминуты (`HARNAS_LIMITS_POLL_MS`, зажат в [200, 2^31−1]).
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom', HARNAS_LIMITS_POLL_MS: '200' };
+    const env = {
+      ...process.env,
+      HARNAS_HOME: home,
+      HARNAS_CLAUDE_BIN: stubAgent,
+      HARNAS_TERMINAL_RENDERER: 'dom',
+      HARNAS_LIMITS_POLL_MS: '200',
+      ...extraEnv,
+    };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();
@@ -105,8 +134,9 @@ test.describe('лимиты подписок в строке статуса (к�
     const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: 'e2e-limits', goal: '' });
     const sessionId = await newSession(window, workId, 'claude', 'один');
     await expect(window.getByTestId('app-shell')).toBeVisible();
+    // Сегмент — `display: contents`, своей рамки у него нет: смотрим на его имя.
     const segment = window.locator('[data-provider-segment="claude"]');
-    await expect(segment).toBeVisible();
+    await expect(segment.getByText('Claude Code')).toBeVisible();
     // Данных ещё нет — сегмент как был: значок и имя.
     await expect(segment.locator('[data-limits]')).toHaveCount(0);
 
@@ -165,11 +195,12 @@ test.describe('лимиты подписок в строке статуса (к�
       });
     const viewport = await window.evaluate(() => window.innerWidth);
 
-    // Правый блок целиком в окне и не наезжает на провайдеров: внимание, связь с хостом, будильник не уехали.
+    // Правый блок целиком в окне и не наезжает на провайдеров: внимание, связь с хостом, будильник не уехали. Провайдеры
+    // идут слева направо, последний — zeta-agent, и его блок лимитов — последний элемент его сегмента.
     await expect
       .poll(async () => {
-        const [att, wk, seg] = [await box(attention), await box(wake), await box(window.locator('[data-provider-segment="zeta-agent"]'))];
-        return att.left >= seg.right && wk.right <= viewport && wk.left >= att.right;
+        const [att, wk, lim] = [await box(attention), await box(wake), await box(zetaLimits)];
+        return att.left >= lim.right && wk.right <= viewport && wk.left >= att.right;
       })
       .toBe(true);
 
@@ -186,5 +217,68 @@ test.describe('лимиты подписок в строке статуса (к�
       }),
     );
     expect(clipped.some(Boolean)).toBe(true);
+  });
+
+  test('800×500, Claude Code, Codex и GLM: сжимается только текст лимитов — имена и полоски целы, правые сегменты на месте', async () => {
+    // Codex — по логу и стабу: команда `codex` находится (`HARNAS_CODEX_BIN`), но не запускается — пробы версий в E2E нет.
+    // GLM — встроенный провайдер без источника лимитов: сегмент из значка и имени, сжимать в нём нечего.
+    const codexRoot = path.join(home, 'codex-sessions');
+    await writeCodexLimits(codexRoot, 85.4);
+    const window = await launch(
+      { width: 800, height: 500 },
+      { HARNAS_CODEX_BIN: stubAgent, HARNAS_GLM_BIN: stubAgent, HARNAS_CODEX_SESSIONS_DIR: codexRoot },
+    );
+    const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: 'e2e-limits-both', goal: '' });
+    const claude = await newSession(window, workId, 'claude', 'один');
+    const done = await newSession(window, workId, 'claude', 'два');
+    await expect(window.getByTestId('app-shell')).toBeVisible();
+    // Правый блок пошире: «1 needs you · 1 unseen» — без версий CLI (в E2E проба выключена) обе строки иначе поместились бы.
+    await hookEvent(workId, claude, { hook_event_name: 'Notification', notification_type: 'permission_prompt' });
+    await hookEvent(workId, done, { hook_event_name: 'UserPromptSubmit' });
+    await hookEvent(workId, done, { hook_event_name: 'Stop' });
+    await writeLimits(workId, claude, 58.7, 41.9);
+
+    const claudeSegment = window.locator('[data-provider-segment="claude"]');
+    const codexSegment = window.locator('[data-provider-segment="codex"]');
+    await expect(claudeSegment.locator('[data-limits]')).toHaveText('58% 5h · 41% wk', { timeout: 15_000 });
+    // Codex: окно 300 минут — пятичасовое, недельного нет; 85.4 → 85, и это уже предупреждение.
+    await expect(codexSegment.locator('[data-limits]')).toHaveText('85% 5h', { timeout: 15_000 });
+    await expect(codexSegment.getByText('85% 5h')).toHaveClass(/text-accent-700/);
+    await expect(window.getByRole('button', { name: '1 needs you · 1 unseen' })).toBeVisible({ timeout: 15_000 });
+
+    await expect(window.locator('[data-provider-segment="glm"]')).toContainText('GLM');
+
+    // Обычные значения при самом узком окне: места на все тексты целиком нет — обрезаются они, и только они. Имя — второй
+    // элемент сегмента (после значка), у сегмента с лимитами последний — блок лимитов, а в нём полоска и текст.
+    const measured = await window.evaluate(() => {
+      const one = (id: string) => {
+        const segment = document.querySelector(`[data-provider-segment="${id}"]`) as HTMLElement;
+        const name = segment.children[1] as HTMLElement;
+        const block = segment.querySelector('[data-limits]') as HTMLElement | null;
+        const text = block?.lastElementChild as HTMLElement | undefined;
+        return {
+          name: name.textContent,
+          nameCut: name.scrollWidth > name.clientWidth,
+          bar: block === null ? null : (block.firstElementChild as HTMLElement).getBoundingClientRect().width,
+          textCut: text === undefined ? false : text.scrollWidth > text.clientWidth,
+        };
+      };
+      const wake = [...document.querySelectorAll('button')].find((el) => el.textContent === 'Auto-wake on');
+      return {
+        claude: one('claude'),
+        codex: one('codex'),
+        glm: one('glm'),
+        wakeRight: wake?.getBoundingClientRect().right ?? Infinity,
+        viewport: window.innerWidth,
+      };
+    });
+    expect([measured.claude.name, measured.codex.name, measured.glm.name]).toEqual(['Claude Code', 'Codex', 'GLM']);
+    // Порядок сжатия: имена всех трёх не тронуты (у GLM лимитов нет, и его доля нехватки не должна съесть имя), текст лимитов
+    // обрезан хотя бы у одного, полоски целые (44).
+    expect([measured.claude.nameCut, measured.codex.nameCut, measured.glm.nameCut]).toEqual([false, false, false]);
+    expect(measured.claude.textCut || measured.codex.textCut).toBe(true);
+    expect(measured.claude.bar).toBeCloseTo(44, 0);
+    expect(measured.codex.bar).toBeCloseTo(44, 0);
+    expect(measured.wakeRight).toBeLessThanOrEqual(measured.viewport);
   });
 });
