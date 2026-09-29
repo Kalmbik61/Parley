@@ -151,9 +151,11 @@ describe('providers.list: модели, усилие и версия CLI (диз
       { id: 'sonnet[1m]', label: 'Sonnet (1M context)' },
       { id: 'opus[1m]', label: 'Opus (1M context)' },
       { id: 'opusplan', label: 'Opus Plan' },
+      { id: 'opusplan[1m]', label: 'Opus Plan (1M context)' },
     ]);
     expect(byId(providers, 'codex').models).toEqual([
       { id: 'gpt-6-astra', label: 'GPT-6 Astra' },
+      { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' },
       { id: 'gpt-6-sol', label: 'GPT-6 Sol' },
       { id: 'gpt-6-luna', label: 'GPT-6 Luna' },
     ]);
@@ -171,12 +173,12 @@ describe('providers.list: модели, усилие и версия CLI (диз
             args: ['{prompt}'],
             models: [{ id: 'a', label: 'А' }],
           },
-          // …а с {model} и {effort} в шаблоне провайдер их принимает; строка — короткая запись.
+          // …а с {model} и {effort} в шаблоне провайдер их принимает.
           smart: {
             badge: 'Smart',
             command: 'smart',
             args: ['--m', '{model}', '--e', '{effort}'],
-            models: ['fast'],
+            models: [{ id: 'fast', label: 'Быстрая' }],
           },
           // Пустой список убирает встроенный: у claude списка больше нет.
           claude: { models: [] },
@@ -186,7 +188,7 @@ describe('providers.list: модели, усилие и версия CLI (диз
 
     expect(byId(providers, 'codex').models).toEqual([{ id: 'my-new-model', label: 'Моя новая' }]);
     expect(byId(providers, 'opencode')).toMatchObject({ models: null, effort: false });
-    expect(byId(providers, 'smart')).toMatchObject({ models: [{ id: 'fast', label: 'fast' }], effort: true });
+    expect(byId(providers, 'smart')).toMatchObject({ models: [{ id: 'fast', label: 'Быстрая' }], effort: true });
     expect(byId(providers, 'claude').models).toBeNull();
   });
 

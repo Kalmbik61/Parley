@@ -72,10 +72,11 @@ export interface ProviderEntry {
   /**
    * Модели, из которых окно предлагает выбрать (`selectableModels`): значение `--model` и подпись.
    * У встроенных `claude` и `codex` список взят из открытой документации (`provider-models.ts`), у
-   * прочих — из `providers.json`. Нет списка — окно контрол не показывает, а хост принимает любое
-   * значение, как и прежде. «По умолчанию» в списке не хранится: это отсутствие выбора, без флага.
+   * прочих — из `providers.json`. Нет списка (`null` или поля нет — одно и то же, как и на проводе) —
+   * окно контрол не показывает, а хост принимает любое значение, как и прежде. «По умолчанию» в
+   * списке не хранится: это отсутствие выбора, без флага.
    */
-  models?: readonly ModelOption[];
+  models?: readonly ModelOption[] | null;
 }
 
 /** Запись встроенного реестра: id из закрытого списка, всё остальное как у `ProviderEntry`. */
@@ -361,8 +362,11 @@ export const supportsEffort = (entry: ProviderEntry): boolean =>
  * получателем не должна доходить до реестра.
  */
 export function selectableModels(entry: ProviderEntry): ModelOption[] | null {
-  if (!supportsModel(entry) || entry.models === undefined || entry.models.length === 0) return null;
-  return entry.models.map((model) => ({ ...model }));
+  const list = entry.models;
+  if (!supportsModel(entry) || list === undefined || list === null || list.length === 0) {
+    return null;
+  }
+  return list.map((model) => ({ ...model }));
 }
 
 /**
@@ -448,9 +452,9 @@ export interface ProviderOverride {
   mcpConfig?: McpConfigKind;
   /**
    * Свой список моделей вместо встроенного, целиком (как `args`); `[]` убирает список. Элемент —
-   * пара `{ id, label }` или строка: короткая запись, где подпись равна id.
+   * пара `{ id, label }`; `id` — одно слово, не с дефиса, до 200 знаков, и в списке не повторяется.
    */
-  models?: Array<ModelOption | string>;
+  models?: ModelOption[];
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -462,9 +466,25 @@ const isStrings = (value: unknown): value is string[] =>
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === 'string' && value !== '';
 
-const isModelEntry = (value: unknown): value is ModelOption | string =>
-  isNonEmptyString(value) ||
-  (isRecord(value) && isNonEmptyString(value['id']) && isNonEmptyString(value['label']));
+/**
+ * Значение `--model`: одно слово, не с дефиса (CLI принял бы его за флаг) и не длиннее 200 знаков —
+ * то же правило, что у `sessions.create.model` в protocol (тест хоста сверяет их между собой).
+ * Слабее нельзя: список с таким значением загрузился бы, окно его показало бы, а `sessions.create`
+ * с ним всегда падал бы на схеме.
+ */
+const MODEL_ID = /^[^\s-]\S*$/;
+const MODEL_ID_MAX_LENGTH = 200;
+const isModelId = (value: unknown): value is string =>
+  typeof value === 'string' && value.length <= MODEL_ID_MAX_LENGTH && MODEL_ID.test(value);
+
+const isModelEntry = (value: unknown): value is ModelOption =>
+  isRecord(value) && isModelId(value['id']) && isNonEmptyString(value['label']);
+
+/** Список пар без повторов `id`: два одинаковых окну не различить, а хост принял бы любое из них. */
+const isModelList = (value: unknown): value is ModelOption[] =>
+  Array.isArray(value) &&
+  value.every(isModelEntry) &&
+  new Set(value.map((model) => model.id)).size === value.length;
 
 function checkShape(id: string, file: string, patch: Record<string, unknown>): void {
   const wrong =
@@ -478,8 +498,7 @@ function checkShape(id: string, file: string, patch: Record<string, unknown>): v
     (patch['args'] !== undefined && !isStrings(patch['args'])) ||
     (patch['resumeArgs'] !== undefined && !isStrings(patch['resumeArgs'])) ||
     (patch['printArgs'] !== undefined && !isStrings(patch['printArgs'])) ||
-    (patch['models'] !== undefined &&
-      !(Array.isArray(patch['models']) && patch['models'].every(isModelEntry))) ||
+    (patch['models'] !== undefined && !isModelList(patch['models'])) ||
     (patch['mcpConfig'] !== undefined &&
       patch['mcpConfig'] !== 'json-file' &&
       patch['mcpConfig'] !== 'codex-override');
@@ -509,15 +528,11 @@ function applyOverride(
   if (printArgs !== undefined) runner.printArgs = printArgs;
   if (mcpConfig !== undefined) runner.mcpConfig = mcpConfig;
 
-  // Из файла в запись ложатся свои копии пар: короткая запись-строка становится парой с подписью id.
+  // Из файла в запись ложатся свои копии пар, а не объекты разобранного JSON.
   const models =
     patch.models === undefined
       ? base?.models
-      : patch.models.map((model) =>
-          typeof model === 'string'
-            ? { id: model, label: model }
-            : { id: model.id, label: model.label },
-        );
+      : patch.models.map((model) => ({ id: model.id, label: model.label }));
   return {
     id,
     label,

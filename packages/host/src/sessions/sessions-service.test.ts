@@ -301,9 +301,9 @@ describe('create(): модель и усилие из диалога (дизай
 
   it('codex: --model и -c model_reasoning_effort в аргументах', async () => {
     setEnv('HARNAS_CODEX_BIN', STUB);
-    const argv = await launched('codex', { model: 'gpt-6-sol', effort: 'medium' });
+    const argv = await launched('codex', { model: 'gpt-6.1-sol', effort: 'medium' });
 
-    expect(argv[argv.indexOf('--model') + 1]).toBe('gpt-6-sol');
+    expect(argv[argv.indexOf('--model') + 1]).toBe('gpt-6.1-sol');
     expect(argv).toContain('model_reasoning_effort="medium"');
   });
 

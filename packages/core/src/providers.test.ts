@@ -360,9 +360,11 @@ describe('модель и усилие новой сессии (дизайн к�
       { id: 'sonnet[1m]', label: 'Sonnet (1M context)' },
       { id: 'opus[1m]', label: 'Opus (1M context)' },
       { id: 'opusplan', label: 'Opus Plan' },
+      { id: 'opusplan[1m]', label: 'Opus Plan (1M context)' },
     ];
     const CODEX = [
       { id: 'gpt-6-astra', label: 'GPT-6 Astra' },
+      { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' },
       { id: 'gpt-6-sol', label: 'GPT-6 Sol' },
       { id: 'gpt-6-luna', label: 'GPT-6 Luna' },
     ];
@@ -426,7 +428,7 @@ describe('модель и усилие новой сессии (дизайн к�
       { id: 'a', label: 'А' },
       { id: 'b', label: 'Б' },
     ];
-    const custom = (args: string[], list?: typeof models): ProviderEntry => ({
+    const custom = (args: string[], list?: typeof models | null): ProviderEntry => ({
       id: 'мой',
       label: 'Мой',
       mark: 'Мо',
@@ -441,6 +443,8 @@ describe('модель и усилие новой сессии (дизайн к�
     expect(selectableModels(custom(['{prompt}'], models))).toBeNull();
     // Пустой список — не список.
     expect(selectableModels(custom(['--model', '{model}'], []))).toBeNull();
+    // `null` и отсутствие поля — одно и то же: списка нет.
+    expect(selectableModels(custom(['--model', '{model}'], null))).toBeNull();
     expect(selectableModels(custom(['--model', '{model}']))).toBeNull();
   });
 
@@ -644,6 +648,7 @@ describe('переопределения из HARNAS_HOME/providers.json', () =>
       expect(registry['codex']?.runner.args).toEqual(PROVIDERS.codex.runner.args);
       expect(selectableModels(PROVIDERS.codex)?.map((model) => model.id)).toEqual([
         'gpt-6-astra',
+        'gpt-6.1-sol',
         'gpt-6-sol',
         'gpt-6-luna',
       ]);
@@ -665,27 +670,25 @@ describe('переопределения из HARNAS_HOME/providers.json', () =>
       expect(selectableModels(PROVIDERS.claude)).not.toBeNull();
     });
 
-    it('свой провайдер приходит со списком; строка вместо пары — короткая запись, где подпись равна id', async () => {
+    it('свой провайдер приходит со списком пар', async () => {
+      const models = [
+        { id: 'fast', label: 'Быстрая' },
+        { id: 'slow', label: 'Медленная' },
+      ];
       await write({
-        smart: {
-          badge: 'Smart',
-          command: 'smart',
-          args: ['--m', '{model}', '{prompt}'],
-          models: ['fast', { id: 'slow', label: 'Медленная' }],
-        },
+        smart: { badge: 'Smart', command: 'smart', args: ['--m', '{model}', '{prompt}'], models },
       });
       const registry = await loadProviders();
 
-      expect(selectableModels(registry['smart'] as ProviderEntry)).toEqual([
-        { id: 'fast', label: 'fast' },
-        { id: 'slow', label: 'Медленная' },
-      ]);
+      expect(selectableModels(registry['smart'] as ProviderEntry)).toEqual(models);
     });
 
-    it('форма записи: не список пар или строк, пустой id или подпись, чужие типы — ошибка', async () => {
+    it('форма записи: не список пар, пустой id или подпись, чужие типы — ошибка; строки вместо пар нет', async () => {
       const wrong: unknown[] = [
         'opus',
         { id: 'opus', label: 'Opus' },
+        ['opus'],
+        ['opus', { id: 'slow', label: 'Медленная' }],
         ['opus', 1],
         [null],
         [''],
@@ -700,6 +703,36 @@ describe('переопределения из HARNAS_HOME/providers.json', () =>
         await write({ claude: { models } });
         await expect(loadProviders(), JSON.stringify(models)).rejects.toThrow(/claude/);
       }
+    });
+
+    it('id проверяется правилом схемы sessions.create: одно слово, не с дефиса, до 200 знаков', async () => {
+      // Иначе список загрузился бы, окно показало бы значение, а `sessions.create` с ним падал бы на схеме.
+      const wrongIds = ['my model', 'my\tmodel', ' opus', 'opus ', '-opus', '--model', 'x'.repeat(201)];
+      for (const id of wrongIds) {
+        await write({ claude: { models: [{ id, label: 'Х' }] } });
+        await expect(loadProviders(), JSON.stringify(id)).rejects.toThrow(
+          /claude.*неожиданная форма записи/,
+        );
+      }
+
+      // Границы допустимого: скобки и точка внутри значения, дефис не впереди, ровно 200 знаков.
+      const rightIds = ['sonnet[1m]', 'gpt-6.1-sol', 'a-b', 'x'.repeat(200)];
+      await write({ claude: { models: rightIds.map((id) => ({ id, label: 'Х' })) } });
+      const registry = await loadProviders();
+      expect(registry['claude']?.models?.map((model) => model.id)).toEqual(rightIds);
+    });
+
+    it('повтор id в одном списке — ошибка: окно не различило бы две строки, а хост принял бы любую', async () => {
+      await write({
+        codex: {
+          models: [
+            { id: 'a', label: 'А' },
+            { id: 'b', label: 'Б' },
+            { id: 'a', label: 'Ещё А' },
+          ],
+        },
+      });
+      await expect(loadProviders()).rejects.toThrow(/codex.*неожиданная форма записи/);
     });
   });
 

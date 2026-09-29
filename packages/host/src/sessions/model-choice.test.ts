@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PROVIDERS, selectableModels } from '@harnas/core';
+import { PROVIDERS, loadProviders, selectableModels } from '@harnas/core';
 import { METHODS } from '@harnas/protocol';
 import { resolveModelChoice } from './model-choice.js';
 
@@ -53,6 +53,43 @@ describe('resolveModelChoice: модель из диалога запуска п
         });
         expect(parsed.success, `${entry.id}: ${id}`).toBe(true);
       }
+    }
+  });
+
+  it('providers.json принимает в id ровно то, что примет схема sessions.create: список не пропустит значение, на котором create упадёт', async () => {
+    const schemaAccepts = (model: string): boolean =>
+      METHODS['sessions.create'].safeParse({
+        projectPath: '/p',
+        workId: 'w-0001',
+        provider: 'claude',
+        label: '',
+        task: '',
+        parent: null,
+        model,
+      }).success;
+    // Пустое значение схема принимает как «по умолчанию»; в списке его нет, поэтому среди образцов его тоже нет.
+    const samples = [
+      'opus',
+      'sonnet[1m]',
+      'gpt-6.1-sol',
+      'a-b',
+      'ключ',
+      'x'.repeat(200),
+      'x'.repeat(201),
+      ' opus',
+      'op us',
+      'op\tus',
+      '-opus',
+      '--model',
+    ];
+
+    for (const id of samples) {
+      await writeProviders({ claude: { models: [{ id, label: 'Х' }] } });
+      const loads = await loadProviders().then(
+        () => true,
+        () => false,
+      );
+      expect(loads, JSON.stringify(id)).toBe(schemaAccepts(id));
     }
   });
 
