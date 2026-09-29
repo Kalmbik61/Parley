@@ -21,6 +21,7 @@ export type { AllSessionsOptions } from './all-sessions.js';
 export { defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
 export type { DiscoveredCodexSession } from './codex/discover.js';
 export { buildCodexIndex, indexCodexSession } from './codex/index-session.js';
+export { readCodexLimits } from './codex/limits.js';
 export { dropExpiredWindows, readWorkLimits } from './limits.js';
 export type { LimitWindow, ProviderLimits } from './limits.js';
 export {
