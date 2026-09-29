@@ -306,6 +306,22 @@ describe('S.statusBar.limitsText', () => {
   });
 });
 
+describe('S.statusBar.limitsTooltip', () => {
+  it('«5-hour window resets at {time} · Weekly window resets {day} {time} · Updated {time}»', () => {
+    expect(S.statusBar.limitsTooltip('9:30 PM', { day: 'Sat', time: '9:05 AM' }, '6:20 PM')).toBe(
+      '5-hour window resets at 9:30 PM · Weekly window resets Sat 9:05 AM · Updated 6:20 PM',
+    );
+  });
+
+  it('только для окон, которые есть; «Updated» — всегда', () => {
+    expect(S.statusBar.limitsTooltip('9:30 PM', null, '6:20 PM')).toBe('5-hour window resets at 9:30 PM · Updated 6:20 PM');
+    expect(S.statusBar.limitsTooltip(null, { day: 'Sat', time: '9:05 AM' }, '6:20 PM')).toBe(
+      'Weekly window resets Sat 9:05 AM · Updated 6:20 PM',
+    );
+    expect(S.statusBar.limitsTooltip(null, null, '6:20 PM')).toBe('Updated 6:20 PM');
+  });
+});
+
 describe('StatusBar — лимиты подписок: сегмент провайдера (кусок 9b)', () => {
   it('два окна: после версии полоска и «58% 5h · 41% wk»', () => {
     useProvidersStore.setState({
@@ -476,6 +492,70 @@ describe('StatusBar — лимиты подписок: сегмент прова
     act(() => bridge.emit('providers.limitsChanged', { id: 'claude', limits: null }));
     expect(limitsIn(container)).toBeNull();
     expect(segments(container)[0]?.textContent).toBe('Claude Code2.1.276');
+    dispose();
+  });
+});
+
+// Тултип лимитов (кусок 9b): время локальное и короткое, «день» — день недели сброса недельного окна.
+describe('StatusBar — лимиты подписок: тултип (кусок 9b)', () => {
+  /** Момент по местному времени, как ISO: тест не зависит от часового пояса машины (`toISOString` — UTC, окно вернёт местное). */
+  const local = (month: number, day: number, hour: number, minute: number): string => new Date(2026, month - 1, day, hour, minute).toISOString();
+  /** Пробел перед AM/PM в зависимости от ICU бывает узким неразрывным — тест его не различает. */
+  const spaced = (text: string | null | undefined): string => (text ?? '').replace(/\s/g, ' ');
+  const titleOf = (container: HTMLElement, id = 'claude'): string => spaced(limitsIn(container, id)?.getAttribute('title'));
+
+  const fiveHour = limitWindow(58, local(9, 29, 21, 30));
+  // Суббота, 3 октября 2026.
+  const week = limitWindow(41, local(10, 3, 9, 5));
+  const at = local(9, 29, 18, 20);
+
+  it('оба окна: «5-hour window resets at 9:30 PM · Weekly window resets Sat 9:05 AM · Updated 6:20 PM»', () => {
+    useProvidersStore.setState({ providers: [provider({ id: 'claude', label: 'Claude', limits: { fiveHour, week, at } })] });
+    const { container } = renderPlain();
+    expect(titleOf(container)).toBe('5-hour window resets at 9:30 PM · Weekly window resets Sat 9:05 AM · Updated 6:20 PM');
+  });
+
+  it('только пятичасовое — без недельной части', () => {
+    useProvidersStore.setState({ providers: [provider({ id: 'claude', label: 'Claude', limits: { fiveHour, week: null, at } })] });
+    const { container } = renderPlain();
+    expect(titleOf(container)).toBe('5-hour window resets at 9:30 PM · Updated 6:20 PM');
+  });
+
+  it('только недельное — без пятичасовой части', () => {
+    useProvidersStore.setState({ providers: [provider({ id: 'claude', label: 'Claude', limits: { fiveHour: null, week, at } })] });
+    const { container } = renderPlain();
+    expect(titleOf(container)).toBe('Weekly window resets Sat 9:05 AM · Updated 6:20 PM');
+  });
+
+  it('время — местное, а не UTC: полночь и полдень пишутся 12:05 AM и 12:00 PM', () => {
+    useProvidersStore.setState({
+      providers: [
+        provider({ id: 'claude', label: 'Claude', limits: { fiveHour: limitWindow(58, local(9, 30, 0, 5)), week: limitWindow(41, local(10, 4, 12, 0)), at } }),
+      ],
+    });
+    const { container } = renderPlain();
+    expect(titleOf(container)).toBe('5-hour window resets at 12:05 AM · Weekly window resets Sun 12:00 PM · Updated 6:20 PM');
+  });
+
+  it('у каждого провайдера свой тултип; событие обновляет и его: «Updated» — по новому at', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => ({
+      providers: [
+        { id: 'claude', label: 'Claude', available: true, version: null, limits: { fiveHour, week, at } },
+        { id: 'codex', label: 'Codex', available: true, version: null, limits: { fiveHour: limitWindow(85, local(9, 29, 22, 0)), week: null, at: local(9, 29, 18, 25) } },
+      ],
+    }));
+    const dispose = useProvidersStore.getState().init(bridge);
+    const { container } = renderPlain();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(titleOf(container, 'codex')).toBe('5-hour window resets at 10:00 PM · Updated 6:25 PM');
+
+    act(() => bridge.emit('providers.limitsChanged', { id: 'claude', limits: { fiveHour, week, at: local(9, 29, 19, 41) } }));
+    expect(titleOf(container, 'claude')).toBe('5-hour window resets at 9:30 PM · Weekly window resets Sat 9:05 AM · Updated 7:41 PM');
+    expect(titleOf(container, 'codex')).toBe('5-hour window resets at 10:00 PM · Updated 6:25 PM');
     dispose();
   });
 });

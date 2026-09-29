@@ -166,6 +166,19 @@ export const S = {
       [fiveHour === null ? '' : `${fiveHour}% 5h`, week === null ? '' : `${week}% wk`]
         .filter((part) => part !== '')
         .join(' · '),
+    /**
+     * Тултип лимитов: «5-hour window resets at 9:30 PM · Weekly window resets Sat 9:05 AM · Updated 6:20 PM».
+     * Окон, которых нет, в нём нет; «Updated» — всегда: числа обновляются, только пока агент работает
+     * (спека 3.5, «Свежесть»). Время и день приходят уже местными и короткими — форматирует вызывающий.
+     */
+    limitsTooltip: (fiveHourResets: string | null, weekResets: { day: string; time: string } | null, updated: string): string =>
+      [
+        fiveHourResets === null ? '' : `5-hour window resets at ${fiveHourResets}`,
+        weekResets === null ? '' : `Weekly window resets ${weekResets.day} ${weekResets.time}`,
+        `Updated ${updated}`,
+      ]
+        .filter((part) => part !== '')
+        .join(' · '),
   },
 
   /** Общие диалоги, не привязанные к своей области (mail/rooms/settings/…). */

@@ -62,19 +62,31 @@ const LIMIT_WARNING_PERCENT = 80;
 /** Целые проценты окна, округление вниз (решение контролёра куска 9b); окна нет — `null`. */
 const wholePercent = (limit: LimitWindow | null): number | null => (limit === null ? null : Math.floor(limit.usedPercent));
 
+// Время в тултипе — местное и короткое, по-английски, как в `review/notes/NoteZone.tsx`: «9:30 PM», день — «Sat».
+const clock = (iso: string): string => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+const weekday = (iso: string): string => new Date(iso).toLocaleDateString('en-US', { weekday: 'short' });
+
 /**
  * Лимиты подписки провайдера: полоска (пятичасовое окно, нет его — недельное) и «58% 5h · 41% wk» после версии.
  * Ширины и отступы — по прототипу handoff: трек 44×4, зазор 7, слева ещё 4. Нет данных (`null`, оба окна
- * отсутствуют) — ничего не рисуется, сегмент остаётся значком, именем и версией.
+ * отсутствуют) — ничего не рисуется, сегмент остаётся значком, именем и версией. Тултип — когда сбросятся окна,
+ * которые есть, и когда CLI отдал эти числа.
  */
 function ProviderLimitsMeter({ limits }: { limits: ProviderLimits | null }): JSX.Element | null {
-  const fiveHour = wholePercent(limits?.fiveHour ?? null);
-  const week = wholePercent(limits?.week ?? null);
+  const fiveHourLimit = limits?.fiveHour ?? null;
+  const weekLimit = limits?.week ?? null;
+  const fiveHour = wholePercent(fiveHourLimit);
+  const week = wholePercent(weekLimit);
   const bar = fiveHour ?? week;
-  if (bar === null) return null;
+  if (limits === null || bar === null) return null;
   const warning = (fiveHour ?? 0) >= LIMIT_WARNING_PERCENT || (week ?? 0) >= LIMIT_WARNING_PERCENT;
+  const tooltip = S.statusBar.limitsTooltip(
+    fiveHourLimit === null ? null : clock(fiveHourLimit.resetsAt),
+    weekLimit === null ? null : { day: weekday(weekLimit.resetsAt), time: clock(weekLimit.resetsAt) },
+    clock(limits.at),
+  );
   return (
-    <span data-limits className="ml-1 flex min-w-0 items-center gap-[7px]">
+    <span data-limits title={tooltip} className="ml-1 flex min-w-0 items-center gap-[7px]">
       <span aria-hidden className="h-1 w-11 shrink-0 overflow-hidden rounded-full bg-current/18">
         <span
           data-limits-fill
