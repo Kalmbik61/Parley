@@ -37,4 +37,12 @@ describe('RootPicker', () => {
     expect(trigger.textContent).toContain(`⎇ S02 · ${long}`);
     expect(trigger.getAttribute('title')).toBe(`⎇ S02 · ${long}`);
   });
+
+  it('триггер — заголовок панели: Caprasimo 17px без рамки (спека окна 2026-09-29, 1.8)', () => {
+    render(<RootPicker entry={ENTRY} value={{ kind: 'project' }} onChange={() => {}} />);
+    const trigger = screen.getByRole('combobox');
+    for (const token of ['font-heading', 'text-[17px]', 'border-transparent']) expect(trigger.classList.contains(token), token).toBe(true);
+    // Рамка вернётся на фокусе и пока список открыт: заголовок остаётся управляемым с клавиатуры.
+    expect(trigger.classList.contains('focus:border-ring')).toBe(true);
+  });
 });

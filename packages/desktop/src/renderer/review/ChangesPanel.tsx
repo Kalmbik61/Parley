@@ -192,7 +192,8 @@ export function ChangesPanel({ bridge, workKey, entry, sendDeps }: ChangesPanelP
       <Select value={sessionId ?? ''} onValueChange={(next) => useReviewStore.getState().selectChangesSession(workKey, next)}>
         <SelectTrigger
           aria-label={S.changes.sessionPicker}
-          className="h-7 min-w-0 flex-1 px-2 text-xs"
+          // Выбор сессии — заголовок панели (спека окна 2026-09-29, 1.8: Caprasimo 17px), как в «Файлах».
+          className="h-8 min-w-0 flex-1 border-transparent bg-transparent px-2 font-heading text-[17px] leading-[1.2] hover:border-transparent hover:bg-foreground/6"
           title={session === undefined ? S.changes.sessionPicker : sessionRowLabel(session.id, session.label)}
         >
           <SelectValue placeholder={S.changes.sessionPicker} />
@@ -230,7 +231,7 @@ export function ChangesPanel({ bridge, workKey, entry, sendDeps }: ChangesPanelP
   if (source?.kind === 'worktree') {
     const heading = `${source.branch} → ${source.base}`;
     summary = (
-      <div className="flex min-w-0 shrink-0 items-center gap-2 px-2 py-1 text-xs">
+      <div className="flex min-w-0 shrink-0 items-center gap-2 px-3 py-1 text-xs">
         <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground" title={heading}>
           {heading}
         </span>
@@ -245,15 +246,15 @@ export function ChangesPanel({ bridge, workKey, entry, sendDeps }: ChangesPanelP
   } else if (source?.kind === 'project') {
     const folder = S.changes.projectFolder(source.changes.branch);
     summary = (
-      <div className="flex min-w-0 shrink-0 flex-col gap-0.5 px-2 py-1 text-xs">
-        <span className="truncate font-mono" title={folder}>
+      <div className="flex min-w-0 shrink-0 flex-col gap-0.5 px-3 py-1 text-xs">
+        <span className="truncate font-mono text-[11px] text-muted-foreground" title={folder}>
           {folder}
         </span>
         <span className="text-status-warning-text">{S.changes.projectFolderWarning}</span>
       </div>
     );
   } else if (source?.kind === 'pending') {
-    summary = <div className="shrink-0 px-2 py-1 text-xs text-muted-foreground">{S.changes.worktreePending}</div>;
+    summary = <div className="shrink-0 px-3 py-1 text-xs text-muted-foreground">{S.changes.worktreePending}</div>;
   }
 
   let body: JSX.Element;

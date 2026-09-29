@@ -699,6 +699,18 @@ describe('Шапка (тест 10)', () => {
     expect(screen.getByText('2 commits')).toBeTruthy();
   });
 
+  it('выбор сессии — заголовок панели Caprasimo 17px; папка проекта под ним — моноширинная 11px (спека окна 2026-09-29, 1.8)', async () => {
+    focus('s-04');
+    bridge.setHandler('changes.project', () => project({ files: [file('x.ts')] }));
+    renderPanel();
+    await screen.findByRole('region', { name: 'Uncommitted' });
+    for (const token of ['font-heading', 'text-[17px]', 'border-transparent']) expect(picker().classList.contains(token), token).toBe(true);
+    const folder = screen.getByText('master (project folder)');
+    expect(folder.className).toContain('font-mono');
+    expect(folder.className).toContain('text-[11px]');
+    expect(folder.className).toContain('text-muted-foreground');
+  });
+
   it('активна вкладка почты — сессия последней записи entries() этой работы с вкладкой терминала', async () => {
     const mail: TabSpec = { kind: 'mail', id: 'mail' };
     useLayoutStore.setState({
