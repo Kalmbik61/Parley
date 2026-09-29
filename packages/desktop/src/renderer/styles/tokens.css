@@ -127,6 +127,8 @@
   --color-card-hover: var(--card-hover);
   --color-sheet: var(--sheet);
   --color-scrim: var(--scrim);
+  /* Заголовки диалогов и карточек, кнопки, имя проекта: Caprasimo 400 (утилита `font-heading`). */
+  --font-heading: 'Caprasimo', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   /* Тени Organic: имя утилиты (`shadow-sm/md/lg`) совпадает с именем переменной `:root`/`.dark`, в
      которой лежит само значение — в тёмной там тонкая рамка вместо мягкой тени. Круговая запись
      сознательна: она лишь заводит утилиту, а объявление слоя `theme` проигрывает обычному `:root`
@@ -203,11 +205,10 @@
   --space-4: 17.6px;
   --space-6: 26.4px;
   --space-8: 35.2px;
-  --app-font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  /* Кириллицы в Figtree и Caprasimo нет: русский текст рисует запасной системный шрифт. */
+  --app-font-family: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-sans: var(--app-font-family);
-  --font-mono:
-    'SF Mono', SFMono-Regular, ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Liberation Mono',
-    monospace;
+  --font-mono: 'SF Mono', SFMono-Regular, ui-monospace, Menlo, monospace;
   --radius: 16px;
   --background: var(--color-surface);
   /* Фон редактора — лист центра. Monaco читает эту переменную и `--foreground` через

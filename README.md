@@ -143,7 +143,8 @@ pnpm --filter @harnas/desktop dist
 Результат — `packages/desktop/dist/mac-arm64/harnas.app`: без подписи и
 нотаризации, только для этой машины (`identity: null` в
 `electron-builder.yml`). Внутри — `Contents/Resources/host` (хост со своими
-`node_modules`), `NOTICE` и `licenses/Geist-OFL.txt`. Для запуска собранному
+`node_modules`), `NOTICE`, `licenses/Figtree-OFL.txt` и
+`licenses/Caprasimo-OFL.txt`. Для запуска собранному
 окну, как и в разработке, нужны системный `node` и `claude` (и/или `codex`) в
 `PATH` вашей login-shell; без `node` окно пишет «node not found in login-shell
 PATH».
@@ -159,8 +160,9 @@ PTY агентов, карту, будильник и комнаты. Он жи�
 `host.pid`. Хост уходит сам через 5 минут без окон и живых сессий. Второй
 запуск окна фокусирует первое.
 
-Облик окна — в стиле Orca: шрифт Geist, примитивы shadcn/ui, палитра терминала
-Ghostty Dark / Tango Light. Тема (тёмная/светлая) следует за системной темой
+Облик окна — Organic: песочный фон, терракотовый и шалфейный акценты, шрифты
+Figtree и Caprasimo, примитивы shadcn/ui; палитра терминала — Ghostty Dark /
+Tango Light. Тема (тёмная/светлая) следует за системной темой
 macOS и переключается на лету, без перезапуска окна; «System», «Dark» или
 «Light» выбираются в настройках (⌘,) на вкладке «Appearance» — там же (и из
 палитры: «Theme: system», «Theme: dark», «Theme: light») её можно сменить.
@@ -742,8 +744,8 @@ node packages/core/dist/cli.js work session new \
   `2026-09-26-desktop-orca-ui-plan*.md`.
 - `.ralph/specs/` — спецификации v0–v2: слой данных, старый UI, PTY, раннеры.
 - `docs/schema/` — снимки реальных схем обоих провайдеров, по которым сверяется парсер.
-- `NOTICE` — лицензии стороннего кода в окне: Orca и shadcn/ui (MIT), Geist
-  (OFL 1.1), Monaco Editor (MIT), PDF.js (Apache-2.0; его cmaps и шрифты Foxit
+- `NOTICE` — лицензии стороннего кода в окне: Orca и shadcn/ui (MIT), Figtree
+  и Caprasimo (OFL 1.1), Monaco Editor (MIT), PDF.js (Apache-2.0; его cmaps и шрифты Foxit
   — BSD-3-Clause).
 - `TODOS.md` — отложенная работа (прогоны по важности).
 

@@ -1,7 +1,8 @@
 /**
- * Страж лицензий сборки (ревью M7, аудит приёмки MVP): NOTICE и лицензия шрифта Geist едут в
- * `.app` (`extraResources` electron-builder), а NOTICE называет каждый файл, адаптированный
- * из shadcn/ui, и таблицу палитр терминала из Orca.
+ * Страж лицензий сборки (ревью M7, аудит приёмки MVP): NOTICE и лицензии шрифтов Figtree и
+ * Caprasimo едут в `.app` (`extraResources` electron-builder), а NOTICE называет каждый файл,
+ * адаптированный из shadcn/ui, и таблицу палитр терминала из Orca, и оба шрифта — с правообладателями
+ * из их OFL-файлов и происхождением (Google Fonts).
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -31,10 +32,36 @@ function shadcnFiles(): string[] {
   return out.sort();
 }
 
+const fontsDir = path.join(desktopRoot, 'src', 'renderer', 'assets', 'fonts');
+const firstLine = (file: string): string => readFileSync(path.join(fontsDir, file), 'utf8').split('\n')[0] ?? '';
+
 describe('NOTICE и лицензии в сборке (ревью M7)', () => {
-  it('electron-builder кладёт NOTICE и OFL шрифта Geist в Contents/Resources', () => {
+  it('electron-builder кладёт NOTICE и OFL шрифтов Figtree и Caprasimo в Contents/Resources', () => {
     expect(builder).toMatch(/- from: \.\.\/\.\.\/NOTICE\n\s+to: NOTICE\n/);
-    expect(builder).toMatch(/- from: src\/renderer\/assets\/fonts\/OFL\.txt\n\s+to: licenses\/Geist-OFL\.txt\n/);
+    expect(builder).toMatch(/- from: src\/renderer\/assets\/fonts\/Figtree-OFL\.txt\n\s+to: licenses\/Figtree-OFL\.txt\n/);
+    expect(builder).toMatch(/- from: src\/renderer\/assets\/fonts\/Caprasimo-OFL\.txt\n\s+to: licenses\/Caprasimo-OFL\.txt\n/);
+  });
+
+  it('Geist ушёл: ни из electron-builder, ни из NOTICE', () => {
+    expect(builder).not.toMatch(/geist/i);
+    expect(notice).not.toMatch(/geist/i);
+  });
+
+  it('NOTICE: Figtree и Caprasimo — файлы, правообладатели из OFL-файлов, происхождение Google Fonts, лицензия рядом', () => {
+    for (const [name, file, license] of [
+      ['Figtree', 'Figtree-Variable.ttf', 'Figtree-OFL.txt'],
+      ['Caprasimo', 'Caprasimo.ttf', 'Caprasimo-OFL.txt'],
+    ] as const) {
+      expect(notice, name).toContain(`\n${name}\n`);
+      expect(notice, `${name}: файл`).toContain(`packages/desktop/src/renderer/assets/fonts/${file}`);
+      // Строка «Copyright …» — та самая, что первой стоит в OFL-файле: правится лицензия — правится и NOTICE.
+      expect(firstLine(license), `${name}: первая строка OFL`).toMatch(/^Copyright \d{4} The \w+ Project Authors/);
+      expect(notice, `${name}: правообладатель`).toContain(firstLine(license));
+      expect(notice, `${name}: лицензия в .app`).toContain(`Contents/Resources/licenses/${license}`);
+      expect(notice, `${name}: текст лицензии`).toContain(`packages/desktop/src/renderer/assets/fonts/${license}`);
+    }
+    expect(notice).toContain('SIL Open Font License, Version 1.1');
+    expect(notice).toMatch(/Google Fonts/);
   });
 
   it('NOTICE называет shadcn/ui с его лицензией MIT и каждый адаптированный файл', () => {

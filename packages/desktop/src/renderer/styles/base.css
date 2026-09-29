@@ -1,14 +1,25 @@
 /*
- * Базовые правила документа (спека 4.1, 4.3). Шрифт интерфейса — Geist
- * Variable, подключён здесь через `@font-face`; сама переменная `--font-sans`
- * (со всеми фолбэками) уже объявлена в `tokens.css`, чтобы шрифт не дублировался
- * в двух местах.
+ * Базовые правила документа (спека Orca-UI 4.1, 4.3; облик Organic — спека окна 2026-09-29, раздел 4).
+ * Шрифты лежат в `assets/fonts/` вместе с лицензиями OFL 1.1 и подключаются здесь через
+ * `@font-face`: окно не ходит в сеть, из Google Fonts ничего не грузится. Figtree (variable, веса
+ * 400–700) — текст, Caprasimo (один вес 400) — заголовки и кнопки. Сами семейства со всеми
+ * запасными — переменные `--font-sans`, `--font-heading` и `--font-mono` в `tokens.css`. Кириллицы
+ * в обоих шрифтах нет: русские названия работ и сессий рисует запасной системный шрифт из тех же
+ * стеков.
  */
 
 @font-face {
-  font-family: 'Geist';
-  src: url('../assets/fonts/Geist-Variable.woff2') format('woff2');
-  font-weight: 100 900;
+  font-family: 'Figtree';
+  src: url('../assets/fonts/Figtree-Variable.ttf') format('truetype');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Caprasimo';
+  src: url('../assets/fonts/Caprasimo.ttf') format('truetype');
+  font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
@@ -22,10 +33,27 @@ body,
 body {
   margin: 0;
   font-family: var(--font-sans);
-  letter-spacing: 0.01em;
+  font-size: 13px;
+  line-height: 1.4;
   -webkit-font-smoothing: antialiased;
   background: var(--background);
   color: var(--foreground);
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+}
+
+/*
+ * Фокус с клавиатуры — обводка 2px цвета `--ring` со смещением 2px (спека 4, таблица shadcn). Правило
+ * в слое `base`: утилиты (`outline-none`, `focus-visible:outline-*`) лежат выше и перекрывают его там,
+ * где у элемента свой вид фокуса; без слоя оно бы перебило их все.
+ */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
 }
 
 /*
