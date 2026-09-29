@@ -105,12 +105,13 @@ async function saveLimits(
 /**
  * Файлы настроек Claude Code, где может лежать строка статуса человека, в порядке старшинства
  * (docs/en/settings): локальные настройки проекта, общие настройки проекта, настройки
- * пользователя. Проект — `project_dir` (где запущен Claude Code: агент мог уйти в подкаталог) и
- * `current_dir`; нет ни того ни другого — каталог процесса.
+ * пользователя. Проект — `current_dir` из входа; следом `project_dir` (где запущен Claude Code):
+ * агент мог уйти в подкаталог, а настройки проекта лежат там, откуда его запустили. Нет ни того
+ * ни другого — каталог процесса.
  */
 function settingsFiles(input: Record<string, unknown> | null, home: string, cwd: string): string[] {
   const workspace = isRecord(input?.['workspace']) ? input['workspace'] : null;
-  const dirs = [workspace?.['project_dir'], workspace?.['current_dir'], input?.['cwd']].filter(
+  const dirs = [workspace?.['current_dir'], workspace?.['project_dir'], input?.['cwd']].filter(
     (dir): dir is string => typeof dir === 'string' && path.isAbsolute(dir),
   );
   if (dirs.length === 0) dirs.push(cwd);

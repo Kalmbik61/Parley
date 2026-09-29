@@ -205,7 +205,7 @@ describe('строка терминала', () => {
     expect(await run(input())).toBe('пользовательская');
   });
 
-  it('проект — по project_dir (куда запущен Claude Code), даже если агент ушёл в подкаталог', async () => {
+  it('проект — current_dir, а следом project_dir: агент ушёл в подкаталог, настройки лежат там, откуда его запустили', async () => {
     const inner = path.join(project, 'src');
     await mkdir(inner);
     await putStatusLine(project, 'settings.json', "printf 'проектная'");
@@ -213,6 +213,12 @@ describe('строка терминала', () => {
     expect(await run(input({ workspace: { current_dir: inner, project_dir: project } }))).toBe(
       'проектная',
     );
+    // Свои настройки и в подкаталоге: current_dir первый, project_dir — запасной.
+    await putStatusLine(inner, 'settings.json', "printf 'подкаталог'");
+    expect(await run(input({ workspace: { current_dir: inner, project_dir: project } }))).toBe(
+      'подкаталог',
+    );
+    await rm(path.join(inner, '.claude'), { recursive: true });
     // Старый Claude Code без project_dir: берётся current_dir.
     expect(await run(input({ workspace: { current_dir: project } }))).toBe('проектная');
     // Ни того ни другого во входе — каталог самого процесса: Claude Code зовёт скрипт из своего cwd.
