@@ -2453,8 +2453,9 @@ interface PickResult {
 Правила `README.md` и спеки окна 9.1 действуют, и для функций Orca уточняются:
 
 1. Учётные данные агентов не читаем: Keychain «Claude Code-credentials»,
-   `~/.claude/.credentials.json`, `~/.codex/auth.json`. Значит, нет строки расхода
-   лимитов подписки и нет переключателя аккаунтов.
+   `~/.claude/.credentials.json`, `~/.codex/auth.json`. Значит, нет переключателя
+   аккаунтов. Лимиты подписки окно берёт только из того, что отдают сами CLI (спека
+   `2026-09-29-desktop-rooms-organic-design.md`, раздел 3.5).
 2. В `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.cursor` не пишем: ни хуков, ни
    statusLine, ни записей доверия к папке, ни скиллов, ни удаления сессий. Хуки — только
    через `--settings` запуска (как сейчас в `core/work/settings-file.ts`).
