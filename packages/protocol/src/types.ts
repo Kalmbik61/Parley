@@ -6,6 +6,12 @@ import type { WorkEntry } from '@harnas/core';
  */
 export type { LimitWindow, ProviderLimits } from '@harnas/core';
 
+/**
+ * Модель в списке провайдера (`providers.list`, дизайн комнат, 3.2): `id` — значение `--model`,
+ * `label` — подпись для окна. Тип живёт в core рядом с реестром, откуда список и берётся.
+ */
+export type { ModelOption } from '@harnas/core';
+
 /** Адрес сессии: без него не различить два «work-01» в разных проектах. */
 export interface SessionRef {
   projectPath: string;

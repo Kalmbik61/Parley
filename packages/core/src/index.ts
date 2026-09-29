@@ -40,6 +40,7 @@ export {
   supportsEffort,
   supportsModel,
 } from './providers.js';
+export type { ModelOption } from './provider-models.js';
 export type {
   EffortLevel,
   McpConfigKind,

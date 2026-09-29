@@ -1,6 +1,7 @@
 import { access, readFile, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
+import { CLAUDE_MODELS, CODEX_MODELS, type ModelOption } from './provider-models.js';
 import type { Provider } from './session-index.js';
 import { overrideVariable } from './work/find-binary.js';
 import { harnasHome } from './work/store.js';
@@ -69,12 +70,12 @@ export interface ProviderEntry {
   linkBy: SessionLink;
   runner: RunnerConfig;
   /**
-   * Закрытый список моделей, из которого окно предлагает выбрать (`selectableModels`).
-   * Встроенные записи его не задают: документация Claude Code и Codex такого списка не
-   * даёт — `--model` принимает и алиас, и полное имя. Список приходит только из
-   * `providers.json`, то есть от самого человека.
+   * Модели, из которых окно предлагает выбрать (`selectableModels`): значение `--model` и подпись.
+   * У встроенных `claude` и `codex` список взят из открытой документации (`provider-models.ts`), у
+   * прочих — из `providers.json`. Нет списка — окно контрол не показывает, а хост принимает любое
+   * значение, как и прежде. «По умолчанию» в списке не хранится: это отсутствие выбора, без флага.
    */
-  models?: string[];
+  models?: readonly ModelOption[];
 }
 
 /** Запись встроенного реестра: id из закрытого списка, всё остальное как у `ProviderEntry`. */
@@ -98,6 +99,8 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
     // `--session-id <uuid>` задаёт имя jsonl-файла заранее: угадывать по времени
     // создания не нужно.
     linkBy: 'session-id',
+    // Алиасы `--model` из документации Claude Code (`provider-models.ts`).
+    models: CLAUDE_MODELS,
     runner: {
       command: 'claude',
       // `--settings` — документированный флаг Claude Code: файл мержится с
@@ -162,6 +165,8 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
     // новой сессии снаружи нет. Значит, запись карты связывается с rollout-логом
     // по cwd и времени запуска (спецификация, раздел 5).
     linkBy: 'cwd+time',
+    // Рекомендуемые модели из документации Codex (`provider-models.ts`).
+    models: CODEX_MODELS,
     runner: {
       // `codex [OPTIONS] [PROMPT]`: стартовый промпт — позиционный аргумент.
       // MCP-серверы codex берёт из `~/.codex/config.toml`; свой сервер добавляем
@@ -350,13 +355,14 @@ export const supportsEffort = (entry: ProviderEntry): boolean =>
   (entry.runner.args ?? []).some((item) => item.includes('{effort}'));
 
 /**
- * Закрытый список моделей для окна: только из записи реестра (то есть из `providers.json`) и
- * только если шаблон запуска вообще принимает модель. `null` — списка нет: документация
- * Claude Code и Codex его не даёт, `--model` принимает и алиас, и полное имя.
+ * Список моделей для окна: из записи реестра (встроенный или из `providers.json`) и только если
+ * шаблон запуска вообще принимает модель. `null` — списка нет: окно контрол не показывает, а хост
+ * принимает любое значение по прежнему правилу. Отдаётся копия: ответ уходит по проводу, и правка
+ * получателем не должна доходить до реестра.
  */
-export function selectableModels(entry: ProviderEntry): string[] | null {
+export function selectableModels(entry: ProviderEntry): ModelOption[] | null {
   if (!supportsModel(entry) || entry.models === undefined || entry.models.length === 0) return null;
-  return [...entry.models];
+  return entry.models.map((model) => ({ ...model }));
 }
 
 /**
@@ -440,7 +446,11 @@ export interface ProviderOverride {
   resumeArgs?: string[];
   printArgs?: string[];
   mcpConfig?: McpConfigKind;
-  models?: string[];
+  /**
+   * Свой список моделей вместо встроенного, целиком (как `args`); `[]` убирает список. Элемент —
+   * пара `{ id, label }` или строка: короткая запись, где подпись равна id.
+   */
+  models?: Array<ModelOption | string>;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -448,6 +458,13 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const isStrings = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((item) => typeof item === 'string');
+
+const isNonEmptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value !== '';
+
+const isModelEntry = (value: unknown): value is ModelOption | string =>
+  isNonEmptyString(value) ||
+  (isRecord(value) && isNonEmptyString(value['id']) && isNonEmptyString(value['label']));
 
 function checkShape(id: string, file: string, patch: Record<string, unknown>): void {
   const wrong =
@@ -461,7 +478,8 @@ function checkShape(id: string, file: string, patch: Record<string, unknown>): v
     (patch['args'] !== undefined && !isStrings(patch['args'])) ||
     (patch['resumeArgs'] !== undefined && !isStrings(patch['resumeArgs'])) ||
     (patch['printArgs'] !== undefined && !isStrings(patch['printArgs'])) ||
-    (patch['models'] !== undefined && !isStrings(patch['models'])) ||
+    (patch['models'] !== undefined &&
+      !(Array.isArray(patch['models']) && patch['models'].every(isModelEntry))) ||
     (patch['mcpConfig'] !== undefined &&
       patch['mcpConfig'] !== 'json-file' &&
       patch['mcpConfig'] !== 'codex-override');
@@ -491,7 +509,15 @@ function applyOverride(
   if (printArgs !== undefined) runner.printArgs = printArgs;
   if (mcpConfig !== undefined) runner.mcpConfig = mcpConfig;
 
-  const models = patch.models ?? base?.models;
+  // Из файла в запись ложатся свои копии пар: короткая запись-строка становится парой с подписью id.
+  const models =
+    patch.models === undefined
+      ? base?.models
+      : patch.models.map((model) =>
+          typeof model === 'string'
+            ? { id: model, label: model }
+            : { id: model.id, label: model.label },
+        );
   return {
     id,
     label,

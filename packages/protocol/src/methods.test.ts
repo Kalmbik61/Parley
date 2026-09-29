@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { METHODS, NOTIFICATIONS } from './methods.js';
 import type { Params, Result } from './methods.js';
-import type { ProviderLimits } from './types.js';
+import type { ModelOption, ProviderLimits } from './types.js';
 
 describe('типы методов', () => {
   it('у Params<sessions.create> поле workId имеет тип string | null', () => {
@@ -220,7 +220,7 @@ describe('модель, усилие и поля providers.list (дизайн к
   });
 
   it('model — одно слово: алиас или полное имя, без пробелов и не похожее на флаг', () => {
-    for (const model of ['opus', 'claude-sonnet-5', 'sonnet[1m]', 'gpt-5.5', 'o3']) {
+    for (const model of ['opus', 'claude-sonnet-5', 'sonnet[1m]', 'gpt-6-sol', 'o3']) {
       expect(parse({ model }).success).toBe(true);
     }
     // Значение с дефисом впереди CLI принял бы за флаг, а пустое или с пробелом — не модель.
@@ -236,7 +236,7 @@ describe('модель, усилие и поля providers.list (дизайн к
       id: string;
       label: string;
       available: boolean;
-      models?: string[] | null;
+      models?: Array<{ id: string; label: string }> | null;
       effort?: boolean;
       version?: string | null;
       limits?: ProviderLimits | null;
@@ -244,5 +244,22 @@ describe('модель, усилие и поля providers.list (дизайн к
     // Хост до дизайна комнат отдаёт элементы без новых полей — тип обязан это допускать.
     const legacy: Result<'providers.list'> = { providers: [{ id: 'claude', label: 'Claude', available: true }] };
     expect(legacy.providers[0]).not.toHaveProperty('effort');
+  });
+
+  it('providers.list: models — пары id и label; «списка нет» — null, а у хоста без поля его вовсе нет', () => {
+    expectTypeOf<ModelOption>().toEqualTypeOf<{ id: string; label: string }>();
+    const shapes: Result<'providers.list'> = {
+      providers: [
+        { id: 'claude', label: 'Claude', available: true, models: [{ id: 'opus', label: 'Opus' }] },
+        { id: 'glm', label: 'GLM', available: true, models: null },
+        { id: 'old', label: 'Old', available: true },
+      ],
+    };
+    // Окно читает отсутствие поля так же, как null: контрола модели нет.
+    expect(shapes.providers.map((provider) => provider.models ?? null)).toEqual([
+      [{ id: 'opus', label: 'Opus' }],
+      null,
+      null,
+    ]);
   });
 });

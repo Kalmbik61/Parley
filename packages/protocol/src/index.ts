@@ -6,6 +6,7 @@ export type {
   HostNotice,
   LimitWindow,
   LiveMetrics,
+  ModelOption,
   NoticeKind,
   ProtocolError,
   ProviderLimits,

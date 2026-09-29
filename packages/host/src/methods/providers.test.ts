@@ -29,7 +29,7 @@ interface ProviderItem {
   id: string;
   label: string;
   available: boolean;
-  models: string[] | null;
+  models: Array<{ id: string; label: string }> | null;
   effort: boolean;
   version: string | null;
   limits: { fiveHour: { usedPercent: number } | null; week: { usedPercent: number } | null; at: string } | null;
@@ -92,8 +92,8 @@ describe('providers.list: модели, усилие и версия CLI (диз
     });
     const providers = await list(client);
 
-    expect(byId(providers, 'claude')).toMatchObject({ label: 'Claude', effort: true, models: null, version: '2.1.276' });
-    expect(byId(providers, 'codex')).toMatchObject({ label: 'Codex', effort: true, models: null, version: '0.44.0' });
+    expect(byId(providers, 'claude')).toMatchObject({ label: 'Claude', effort: true, version: '2.1.276' });
+    expect(byId(providers, 'codex')).toMatchObject({ label: 'Codex', effort: true, version: '0.44.0' });
     expect(byId(providers, 'glm')).toMatchObject({ label: 'GLM', effort: false, models: null, version: null });
     expect(typeof byId(providers, 'claude').available).toBe('boolean');
   });
@@ -139,22 +139,54 @@ describe('providers.list: модели, усилие и версия CLI (диз
     expect(byId(await list(client), 'claude').version).toBe('2.1.276');
   });
 
-  it('список моделей из providers.json отдаётся, если шаблон запуска принимает модель', async () => {
+  it('окну уходят списки из документации: claude — алиасы, codex — GPT-6; порядок и подписи как в реестре', async () => {
+    const providers = await list(await boot());
+
+    expect(byId(providers, 'claude').models).toEqual([
+      { id: 'best', label: 'Best' },
+      { id: 'fable', label: 'Fable' },
+      { id: 'sonnet', label: 'Sonnet' },
+      { id: 'opus', label: 'Opus' },
+      { id: 'haiku', label: 'Haiku' },
+      { id: 'sonnet[1m]', label: 'Sonnet (1M context)' },
+      { id: 'opus[1m]', label: 'Opus (1M context)' },
+      { id: 'opusplan', label: 'Opus Plan' },
+    ]);
+    expect(byId(providers, 'codex').models).toEqual([
+      { id: 'gpt-6-astra', label: 'GPT-6 Astra' },
+      { id: 'gpt-6-sol', label: 'GPT-6 Sol' },
+      { id: 'gpt-6-luna', label: 'GPT-6 Luna' },
+    ]);
+  });
+
+  it('свой список моделей из providers.json заменяет встроенный, если шаблон запуска принимает модель', async () => {
     const providers = await list(
       await boot({
         providersJson: {
-          codex: { models: ['gpt-5.5', 'gpt-5.5-mini'] },
+          codex: { models: [{ id: 'my-new-model', label: 'Моя новая' }] },
           // Свой провайдер без {model} в шаблоне: список окну не нужен — модель до команды не доедет.
-          opencode: { badge: 'OpenCode', command: 'opencode', args: ['{prompt}'], models: ['a', 'b'] },
-          // …а с {model} и {effort} в шаблоне провайдер их принимает.
-          smart: { badge: 'Smart', command: 'smart', args: ['--m', '{model}', '--e', '{effort}'], models: ['fast'] },
+          opencode: {
+            badge: 'OpenCode',
+            command: 'opencode',
+            args: ['{prompt}'],
+            models: [{ id: 'a', label: 'А' }],
+          },
+          // …а с {model} и {effort} в шаблоне провайдер их принимает; строка — короткая запись.
+          smart: {
+            badge: 'Smart',
+            command: 'smart',
+            args: ['--m', '{model}', '--e', '{effort}'],
+            models: ['fast'],
+          },
+          // Пустой список убирает встроенный: у claude списка больше нет.
+          claude: { models: [] },
         },
       }),
     );
 
-    expect(byId(providers, 'codex').models).toEqual(['gpt-5.5', 'gpt-5.5-mini']);
+    expect(byId(providers, 'codex').models).toEqual([{ id: 'my-new-model', label: 'Моя новая' }]);
     expect(byId(providers, 'opencode')).toMatchObject({ models: null, effort: false });
-    expect(byId(providers, 'smart')).toMatchObject({ models: ['fast'], effort: true });
+    expect(byId(providers, 'smart')).toMatchObject({ models: [{ id: 'fast', label: 'fast' }], effort: true });
     expect(byId(providers, 'claude').models).toBeNull();
   });
 
