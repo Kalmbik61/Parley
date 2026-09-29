@@ -30,7 +30,8 @@ describe('mainWindowOptions', () => {
     const options = mainWindowOptions({ dark: true, preloadPath: '/tmp/preload.js' });
 
     expect(options.titleBarStyle).toBe('hiddenInset');
-    expect(options.trafficLightPosition).toEqual({ x: 16, y: 12 });
+    // Заголовок 40px (спека окна 2026-09-29, 1.1): светофор по вертикали в середине — y 13.
+    expect(options.trafficLightPosition).toEqual({ x: 16, y: 13 });
     expect(options.minWidth).toBe(800);
     expect(options.minHeight).toBe(500);
     expect(options.backgroundColor).toBe('#161513');

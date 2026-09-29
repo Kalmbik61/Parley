@@ -58,7 +58,7 @@ const NOW_PERIOD_MS = 30_000;
  * Высота списка до первого замера: первый кадр уже с карточками, а не пустой. Сразу после
  * монтирования virtual-core берёт настоящий `offsetHeight` списка.
  */
-const INITIAL_LIST_RECT = { width: 280, height: 800 };
+const INITIAL_LIST_RECT = { width: 288, height: 800 };
 
 type Row = { kind: 'header'; section: SidebarSection } | { kind: 'card'; section: SidebarSection; entry: WorkEntry };
 

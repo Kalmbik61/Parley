@@ -72,6 +72,7 @@ import { visibleWorkOrder } from '../sidebar/sort.js';
 import { SidebarSectionsWriter, useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
 import { NewWorkComposer } from '../sidebar/NewWorkComposer.js';
 import { WorkSidebar } from '../sidebar/WorkSidebar.js';
+import { cn } from '../lib/cn.js';
 import { sessionLabelFor, sessionRowLabel } from '../lib/participant.js';
 import { workKey } from '../lib/tree-order.js';
 import { bufferKey, isBufferDirty } from '../files/buffer.js';
@@ -591,7 +592,8 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
 
   const shell = (
     <div className="flex h-screen flex-col bg-background text-foreground">
-      <Titlebar bridge={bridge} />
+      {/* Поиск в заголовке — только пока сайдбара со строкой `Search` нет на экране. */}
+      <Titlebar bridge={bridge} showSearch={!ui.leftSidebar.open || showLanding} />
       <InterruptedBanner bridge={bridge} />
       <WorksErrorBanner />
       {showLanding ? (
@@ -624,26 +626,32 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
             </>
           ) : null}
           <ErrorBoundary title={S.shell.layoutError}>
-            {/* Активной работы ещё нет (`layout/persistence.ts` её не выбрал) —
+            {/* Центр — лист Organic (спека окна 2026-09-29, 1.1): `--sheet`, радиус 28, `shadow-sm`,
+                `overflow: hidden`, отступ `0 8 8 0` вокруг; сайдбар скрыт — слева тоже 8. Лист —
+                `relative`, но containing block поверхностей остаётся контейнер работы ниже (спека
+                5.5): якоря `anchor()` считаются от него.
+                Активной работы ещё нет (`layout/persistence.ts` её не выбрал) —
                 LRU пуст, центр пуст: ни групп, ни строки вкладок в
                 `#titlebar-tabs` (спека 5.3, тест 15). Контейнеры — в порядке
                 ключей, а не LRU: смена активной работы не должна переставлять
                 узлы DOM с живыми xterm. */}
-            <div className="relative min-h-0 min-w-0 flex-1">
-              {lru
-                .keys()
-                .sort()
-                .map((key) => (
-                  <WorkContainer
-                    key={key}
-                    workKey={key}
-                    active={key === activeWorkKey}
-                    bridge={bridge}
-                    fontFamily={fontFamily}
-                    fontSize={fontSize}
-                    sendDeps={sendDeps}
-                  />
-                ))}
+            <div className={cn('flex min-h-0 min-w-0 flex-1 pb-2 pr-2', !ui.leftSidebar.open && 'pl-2')}>
+              <div data-testid="center-sheet" className="relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg bg-sheet shadow-sm">
+                {lru
+                  .keys()
+                  .sort()
+                  .map((key) => (
+                    <WorkContainer
+                      key={key}
+                      workKey={key}
+                      active={key === activeWorkKey}
+                      bridge={bridge}
+                      fontFamily={fontFamily}
+                      fontSize={fontSize}
+                      sendDeps={sendDeps}
+                    />
+                  ))}
+              </div>
             </div>
           </ErrorBoundary>
           {/* Правый сайдбар — только при активной работе (кусок 7.2); свёрнутый не монтируется. */}

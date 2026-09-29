@@ -21,7 +21,8 @@ export function mainWindowOptions(input: {
     minWidth: 800,
     minHeight: 500,
     titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 12 },
+    // Заголовок 40px (спека окна 2026-09-29, 1.1): кнопки светофора по вертикали в середине — y 13.
+    trafficLightPosition: { x: 16, y: 13 },
     backgroundColor: input.dark ? '#161513' : '#ebddc5',
     webPreferences: {
       contextIsolation: true,

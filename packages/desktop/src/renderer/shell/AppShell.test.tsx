@@ -228,6 +228,40 @@ describe('AppShell — Landing и оболочка с работой (тест 6
     expect(screen.getByText('Первая')).toBeTruthy();
   });
 
+  // Геометрия Organic (спека окна 2026-09-29, 1.1): центр — лист `--sheet` с радиусом 28 и `shadow-sm`,
+  // отступ `0 8 8 0`; сайдбар скрыт — слева тоже 8. Контейнеры работ лежат внутри листа.
+  it('центр — лист: --sheet, радиус 28, shadow-sm, отступ 0 8 8 0; левый сайдбар скрыт — слева 8', async () => {
+    const w1 = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'план')]);
+    useWorksStore.setState({ entries: [w1], branches: {}, loading: false, error: null });
+
+    render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
+    await flush();
+
+    const sheet = screen.getByTestId('center-sheet');
+    expect(sheet.className).toMatch(/\bbg-sheet\b/);
+    expect(sheet.className).toMatch(/\brounded-lg\b/);
+    expect(sheet.className).toMatch(/\bshadow-sm\b/);
+    expect(sheet.className).toMatch(/\boverflow-hidden\b/);
+    const frame = sheet.parentElement as HTMLElement;
+    expect(frame.className).toMatch(/\bpr-2\b/);
+    expect(frame.className).toMatch(/\bpb-2\b/);
+    expect(frame.className).not.toMatch(/\bpl-2\b/);
+
+    act(() => useUiStore.getState().setSidebar('left', { open: false }));
+    expect((screen.getByTestId('center-sheet').parentElement as HTMLElement).className).toMatch(/\bpl-2\b/);
+  });
+
+  it('контейнер работы — внутри листа, у неактивной работы — тоже', async () => {
+    const w1 = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'план')]);
+    useWorksStore.setState({ entries: [w1], branches: {}, loading: false, error: null });
+
+    render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
+    await waitFor(() => expect(document.querySelector('[data-work-container]')).not.toBeNull());
+
+    const container = document.querySelector('[data-work-container]') as HTMLElement;
+    expect(screen.getByTestId('center-sheet').contains(container)).toBe(true);
+  });
+
   // Раунд исправлений 1 куска E.1 (ревью линза A, Critical): HostNotice.text
   // хост пишет по-русски и не переводит (сквозное правило) — строка статуса
   // обязана показывать noticeText(notice, label) по коду, а не notice.text.
@@ -340,13 +374,14 @@ describe('AppShell — меню и диалоги (тест 9)', () => {
     render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
     await flush();
     expect(screen.getByText('Первая')).toBeTruthy();
-    // «Search» — две кнопки: в заголовке и вверху сайдбара карточек (кусок 3.3).
-    expect(screen.getAllByText('Search')).toHaveLength(2);
+    // «Search» — одна кнопка, вверху сайдбара карточек (кусок 3.3): в заголовке при открытом сайдбаре её нет.
+    expect(screen.getAllByText('Search')).toHaveLength(1);
 
     act(() => bridge.emitMenu('sidebar.left.toggle'));
     expect(screen.queryByText('Первая')).toBeNull();
     expect(useUiStore.getState().ui.leftSidebar.open).toBe(false);
 
+    // Сайдбара нет — поиск переехал в заголовок.
     fireEvent.click(screen.getByText('Search'));
     expect(usePaletteStore.getState()).toMatchObject({ open: true, mode: 'default' });
   });

@@ -202,12 +202,12 @@ describe('useUiStore.patchUi / setAppearance / setSidebar (кусок 2.3, те�
     useUiStore.getState().setSidebar('right', { width: 400 });
 
     expect(useUiStore.getState().ui.rightSidebar).toEqual({ open: true, width: 400, tab: 'changes' });
-    expect(saveUiSpy).toHaveBeenNthCalledWith(1, { rightSidebar: { open: true, width: 350, tab: 'changes' } });
+    expect(saveUiSpy).toHaveBeenNthCalledWith(1, { rightSidebar: { open: true, width: DEFAULT_UI.rightSidebar.width, tab: 'changes' } });
     expect(saveUiSpy).toHaveBeenNthCalledWith(2, { rightSidebar: { open: true, width: 400, tab: 'changes' } });
 
     // У левого вкладки нет: лишний ключ в ui.json не уходит.
     useUiStore.getState().setSidebar('left', { open: false, tab: 'files' });
-    expect(saveUiSpy).toHaveBeenLastCalledWith({ leftSidebar: { open: false, width: 280 } });
+    expect(saveUiSpy).toHaveBeenLastCalledWith({ leftSidebar: { open: false, width: DEFAULT_UI.leftSidebar.width } });
     dispose();
   });
 

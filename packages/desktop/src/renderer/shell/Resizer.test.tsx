@@ -45,6 +45,24 @@ describe('Resizer — ручка не занимает места в раскл�
   });
 });
 
+describe('Resizer — шов без линии (Organic, 1.1)', () => {
+  // Сайдбары лежат на фоне окна, центр — лист со своей тенью: линия шва рядом с его краем читалась бы
+  // границей листа. Ручка остаётся, а линия проявляется только под указателем.
+  it('линия шва прозрачна, пока указатель не над ручкой; под ним — кольцо фокуса', () => {
+    const target = createRef<HTMLDivElement>();
+    const { container } = render(
+      <>
+        <div ref={target} style={{ width: 280 }} />
+        <Resizer side="left" width={280} min={220} max={500} target={target} onCommit={() => {}} />
+      </>,
+    );
+    const line = container.querySelector('[role="separator"] > div');
+    expect(line?.className).toContain('bg-transparent');
+    expect(line?.className).not.toMatch(/\bbg-border\b/);
+    expect(line?.className).toContain('group-hover:bg-ring/50');
+  });
+});
+
 describe('Resizer (тест 4)', () => {
   it('pointermove не зовёт onCommit; pointerup зовёт один раз с приведённой шириной', () => {
     const target = createRef<HTMLDivElement>();

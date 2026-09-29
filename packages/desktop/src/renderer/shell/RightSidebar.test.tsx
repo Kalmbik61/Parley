@@ -124,6 +124,37 @@ function press(key: string, shift = false): void {
 
 const sidebar = (): HTMLElement | null => document.querySelector('[data-testid="right-sidebar"]');
 
+describe('RightSidebar — геометрия 1.8 (Organic)', () => {
+  it('320 по умолчанию, без подложки и линии: лежит на фоне окна, отступ 2 12 8 4, зазор 14', async () => {
+    await renderShell([ENTRY]);
+    const root = sidebar() as HTMLElement;
+    expect(root.style.width).toBe('320px');
+    expect(root.className).not.toMatch(/\bbg-card\b/);
+    expect(root.className).not.toMatch(/\bborder-l\b/);
+    expect(root.className).toMatch(/\bpt-0\.5\b/);
+    expect(root.className).toMatch(/\bpb-2\b/);
+    expect(root.className).toMatch(/\bpl-1\b/);
+    expect(root.className).toMatch(/\bpr-3\b/);
+    expect(root.className).toMatch(/\bgap-3\.5\b/);
+  });
+
+  it('сегмент Files / Changes: пилюля с рамкой, выбранная опция — на --primary, невыбранная — основной цвет и hover text 7%', async () => {
+    await renderShell([ENTRY]);
+    const tablist = screen.getByRole('tablist', { name: 'Right sidebar' });
+    expect(tablist.className).toMatch(/\brounded-full\b/);
+    expect(tablist.className).toMatch(/\bborder-border\b/);
+    const files = screen.getByRole('tab', { name: 'Files' });
+    const changes = screen.getByRole('tab', { name: 'Changes' });
+    expect(files.className).toContain('aria-selected:bg-primary');
+    expect(files.className).toContain('aria-selected:text-primary-foreground');
+    expect(changes.className).toContain('hover:bg-foreground/7');
+    // Наследство куска 1: на фоне окна невыбранная опция — основной цвет, а не приглушённый
+    // (`--muted-foreground` на заливке hover 4.2:1), и на hover тоже.
+    expect(changes.className).not.toContain('text-muted-foreground');
+    expect(changes.className).toContain('text-foreground');
+  });
+});
+
 describe('RightSidebar (тест 9)', () => {
   it('⌘L открывает и закрывает; ⌘⇧E при закрытом открывает на Files, при открытом — не прячет', async () => {
     await renderShell([ENTRY]);
@@ -204,7 +235,7 @@ describe('правый сайдбар и ширина окна (раунд main-
 
   afterEach(() => resizeWindow(1024));
 
-  it('800 px, левый 280 — правый скрыт, open в ui.json прежний; окно шире — вернулся', async () => {
+  it('800 px, левый открыт — правый скрыт, open в ui.json прежний; окно шире — вернулся', async () => {
     resizeWindow(800);
     await renderShell([ENTRY]);
     expect(sidebar()).toBeNull();
@@ -212,14 +243,14 @@ describe('правый сайдбар и ширина окна (раунд main-
 
     resizeWindow(1400);
     expect(sidebar()).not.toBeNull();
-    expect(sidebar()?.style.width).toBe('350px');
+    expect(sidebar()?.style.width).toBe(`${DEFAULT_UI.rightSidebar.width}px`);
   });
 
-  it('ширина ужимается до места: 900 px, сохранено 500 — показано 300', async () => {
+  it('ширина ужимается до места: 900 px, левый 288, сохранено 500 — показано 292 (окно − левый − 320 центру)', async () => {
     useUiStore.setState({ ui: { ...DEFAULT_UI, rightSidebar: { open: true, width: 500, tab: 'files' } } });
     resizeWindow(900);
     await renderShell([ENTRY]);
-    expect(sidebar()?.style.width).toBe('300px');
+    expect(sidebar()?.style.width).toBe('292px');
     expect(useUiStore.getState().ui.rightSidebar.width).toBe(500);
   });
 
