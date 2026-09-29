@@ -183,6 +183,14 @@ export {
   overrideVariable,
 } from './work/find-binary.js';
 export { GUIDE } from './work/guide.js';
+export { SKILL_MD, SKILL_NAME } from './work/skill.js';
+export { installAgentSkill } from './work/skill-install.js';
+export type {
+  SkillInstallOptions,
+  SkillInstallResult,
+  SkillSkip,
+  SkillSkipReason,
+} from './work/skill-install.js';
 export { systemGuidance } from './work/guidance.js';
 export {
   SUMMARIZER,
