@@ -587,11 +587,18 @@ describe('StatusBar — длинные значения (кусок 9b)', () => 
     expect(segment.querySelector('[data-agent-icon]')?.className).toContain('shrink-0');
   });
 
-  it('порядок сжатия: лимиты (вес 100), затем версия (10), затем имя (1) — имя провайдера теряется последним', () => {
+  it('порядок сжатия строгий: веса на порядки — сначала лимиты, потом версия, имя провайдера теряется последним', () => {
     useProvidersStore.setState({ providers: [provider({ ...long, limits: both })] });
-    renderPlain();
-    expect(screen.getByText(long.version).className).toMatch(/\bshrink-\[10\]/);
-    expect(screen.getByText(long.label).className).not.toMatch(/\bshrink-/);
+    const { container } = renderPlain();
+    // Вес `flex-shrink`: нет класса — 1. Доли нехватки делятся пропорционально вес × ширина, поэтому «первым» значит «на
+    // порядки больше»: при малом разрыве (вес 100 против 10) многоточие на имени вылезало бы уже при нехватке в пару пикселей.
+    const weight = (el: Element): number => Number(/\bshrink-\[(\d+)\]/.exec(el.className)?.[1] ?? 1);
+    const limitsWeight = weight(limitsIn(container, 'zeta') as HTMLElement);
+    const versionWeight = weight(screen.getByText(long.version));
+    const nameWeight = weight(screen.getByText(long.label));
+    expect(nameWeight).toBe(1);
+    expect(versionWeight).toBeGreaterThanOrEqual(nameWeight * 10_000);
+    expect(limitsWeight).toBeGreaterThanOrEqual(versionWeight * 10_000);
   });
 
   it('имя и версия не растут без предела: одна безмерная метка не отнимает место у соседей (имя не шире 160, версия — 80)', () => {
@@ -601,11 +608,11 @@ describe('StatusBar — длинные значения (кусок 9b)', () => 
     expect(screen.getByText(long.version).className).toContain('max-w-20');
   });
 
-  it('лимиты: текст сжимается первым (вес shrink больше, чем у имени и версии), многоточие; полоска не сжимается и остаётся даже при нулевом тексте', () => {
+  it('лимиты: сжимается блок с текстом (многоточие); полоска не сжимается и остаётся даже при нулевом тексте', () => {
     useProvidersStore.setState({ providers: [provider({ ...long, limits: both })] });
     const { container } = renderPlain();
     const block = limitsIn(container, 'zeta') as HTMLElement;
-    expect(block.className).toMatch(/\bshrink-\[100\]/);
+    expect(block.className).toMatch(/\bshrink-\[\d+\]/);
     // Трек 44 + зазор 7: меньше блок не бывает, полоска не вылезает за него.
     expect(block.className).toContain('min-w-[51px]');
     const [bar, text] = [...block.children] as HTMLElement[];
