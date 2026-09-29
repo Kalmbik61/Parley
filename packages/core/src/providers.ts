@@ -169,9 +169,11 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
       // пользователя. Файла-конфига MCP, как у claude, у codex нет.
       command: 'codex',
       // Модель — `--model` (`-m`), усилие — переопределением конфига: выделенного флага у
-      // Codex нет, документация советует `--config model_reasoning_effort="high"`
-      // (значение — TOML, поэтому строка в кавычках). Как и у claude, без выбора обе пары
-      // выпадают, а при `resume` не передаются.
+      // Codex нет, а ключ `model_reasoning_effort` есть в справочнике конфига. `-c key=value`
+      // разбирает значение как TOML (справочник CLI Codex, флаг `--config`), поэтому строка
+      // в кавычках; так же передаёт усилие SDK самого Codex (openai/codex,
+      // sdk/typescript/src/exec.ts). Как и у claude, без выбора обе пары выпадают, а при
+      // `resume` не передаются.
       args: [
         '-c',
         '{mcpConfig}',
@@ -203,8 +205,9 @@ export function providersWithHistory(): ProviderInfo[] {
 
 /**
  * Усилие рассуждений, которое окно предлагает при запуске. Три уровня — общее подмножество
- * того, что документируют Claude Code (`low`…`max`) и Codex (`minimal`…`xhigh`): уровень,
- * которого модель не знает, Claude Code сам опускает до ближайшего ниже.
+ * того, что документируют Claude Code (`low`…`max`) и Codex (`low`…`ultra`, набор зависит от
+ * модели). Уровень, которого модель Claude не знает, Claude Code сам опускает до ближайшего
+ * ниже (code.claude.com/docs/en/model-config); про Codex документация этого не говорит.
  */
 export type EffortLevel = 'low' | 'medium' | 'high';
 
@@ -224,8 +227,11 @@ export interface RunnerSubstitutions {
   agent?: string;
   /** Модель новой сессии из диалога окна: `--model` у claude и codex. */
   model?: string;
-  /** Усилие новой сессии (`EffortLevel`): `--effort` у claude, `-c model_reasoning_effort` у codex. */
-  effort?: string;
+  /**
+   * Усилие новой сессии: `--effort` у claude, `-c model_reasoning_effort` у codex. Тип — закрытый
+   * набор, потому что у codex значение встаёт в кавычки строки шаблона без экранирования.
+   */
+  effort?: EffortLevel;
 }
 
 const PLACEHOLDER =
