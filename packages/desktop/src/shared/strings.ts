@@ -212,25 +212,32 @@ export const S = {
       selectWorkRequired: 'No workspace selected',
       submit: 'Launch',
     },
+    /** Диалог «New workspace» (1.7) — `sidebar/NewWorkComposer.tsx` (спека Orca-UI 6.6 — поведение, 1.7 — поля). */
     newWork: {
       title: 'New workspace',
-      chooseFolderPlaceholder: 'Choose a folder…',
+      chooseFolder: 'Choose a folder…',
       titleField: 'Title',
-      goalField: 'Goal',
+      titlePlaceholder: 'Taken from the first prompt if empty',
+      promptField: 'First prompt',
+      promptPlaceholder: 'What should the agent do?',
+      submit: 'Create workspace',
       selectFolderRequired: 'Select a project folder',
-      /** Форма новой работы — `sidebar/NewWorkComposer.tsx` (кусок 3.5, спека 6.6). */
       projectField: 'Project',
-      startSession: 'Start a session',
       agentField: 'Agent',
-      createMore: 'Create more',
       titleLength: 'Title: 1–120 characters',
-      goalTooLong: 'Goal: up to 4,000 characters',
-      labelTooLong: 'Label: up to 40 characters',
-      taskTooLong: 'Task: up to 20,000 characters',
+      /** Ни названия, ни первого промпта: названию не из чего взяться. */
+      titleOrPromptRequired: 'Enter a title or a first prompt',
+      promptTooLong: 'First prompt: up to 20,000 characters',
       agentRequired: 'Select an agent',
-      agentPlaceholder: 'Agent…',
-      /** Снимок работ не принёс новую работу за 10 с — вкладка не открыта вслепую. */
-      notListedYet: 'Workspace created — it will appear in the sidebar shortly',
+    },
+    /**
+     * Снимок работ не принёс созданное за 10 с — вкладка не открыта вслепую (`lib/open-when-listed.ts`):
+     * по виду того, что создали.
+     */
+    notListedYet: {
+      work: 'Workspace created — it will appear in the sidebar shortly',
+      session: 'Session started — it will appear in the sidebar shortly',
+      room: 'Room created — it will appear in the sidebar shortly',
     },
   },
 

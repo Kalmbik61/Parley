@@ -1125,22 +1125,24 @@ describe('AppShell — сайдбар карточек (кусок 3.3)', () => 
     fireEvent.click(screen.getByRole('button', { name: /^New workspace\s*⌘N$/ }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText('New workspace')).toBeTruthy();
-    expect(within(dialog).getByRole('button', { name: 'Create' })).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'Create workspace' })).toBeTruthy();
   });
 
-  it('кусок 3.5, тест 7: «+» заголовка проекта — форма с этим проектом; меню new-work — без проекта', async () => {
+  it('кусок 3.5, тест 7: «+» заголовка проекта — диалог 1.7 с этим проектом; меню new-work — с проектом активной работы (кусок 7)', async () => {
     await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
 
     fireEvent.click(screen.getByRole('button', { name: /^New workspace in / }));
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByRole('combobox', { name: 'Project' }).getAttribute('title')).toBe('/tmp/w-01');
+    const chosen = within(dialog).getByRole('radio', { name: 'w-01' });
+    expect(chosen.getAttribute('title')).toBe('/tmp/w-01');
+    expect(chosen.getAttribute('aria-checked')).toBe('true');
     fireEvent.keyDown(dialog, { key: 'Escape' });
     await flush();
     expect(useUiStore.getState().dialogs.newWork).toEqual({ open: false, projectPath: null, title: '' });
 
     act(() => bridge.emitMenu('work.new'));
     const again = await screen.findByRole('dialog');
-    expect(within(again).getByRole('combobox', { name: 'Project' }).textContent).toBe('Choose a folder…');
+    expect(within(again).getByRole('radio', { name: 'w-01' }).getAttribute('aria-checked')).toBe('true');
   });
 
   it('клик по строке сессии неактивной работы: работа активна, вкладка её терминала открыта', async () => {
