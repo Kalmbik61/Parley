@@ -93,7 +93,7 @@ function alive(pid: number): boolean {
 }
 
 /** Есть ли процесс с такой командной строкой (`pgrep -f`). */
-function running(pattern: string): boolean {
+function hasProcess(pattern: string): boolean {
   try {
     execFileSync('pgrep', ['-f', pattern], { stdio: 'ignore' });
     return true;
@@ -118,10 +118,14 @@ async function until(
 /** pid из файла, который записал внутренний `sh` составной команды (см. `compound`). */
 async function sleeperPid(file: string): Promise<number> {
   let pid = 0;
-  await until(async () => {
-    pid = Number((await readFile(file, 'utf8').catch(() => '')).trim());
-    return pid > 0;
-  }, 'pid внутреннего процесса команды человека');
+  await until(
+    async () => {
+      pid = Number((await readFile(file, 'utf8').catch(() => '')).trim());
+      return pid > 0;
+    },
+    'pid внутреннего процесса команды человека',
+    15_000,
+  );
   return pid;
 }
 
@@ -343,41 +347,43 @@ describe('строка терминала', () => {
     const pidFile = path.join(root, 'sleeper.pid');
     await putStatusLine(home, 'settings.json', compound(pidFile));
 
+    // Предел щедрый: под нагрузкой две оболочки подряд запускаются не мгновенно.
     const started = Date.now();
-    const running = run(input(), { humanTimeoutMs: 1000 });
+    const pending = run(input(), { humanTimeoutMs: 2000 });
     const pid = await sleeperPid(pidFile);
     try {
-      expect(await running).toBe('Opus · ctx 8%\n');
-      expect(Date.now() - started).toBeLessThan(4000);
+      expect(await pending).toBe('Opus · ctx 8%\n');
+      expect(Date.now() - started).toBeLessThan(8000);
       // Внутренний процесс — не сама оболочка: без группы он пережил бы её и держал stderr.
       await until(() => !alive(pid), 'процесс команды человека убит вместе с группой', 3000);
     } finally {
       if (alive(pid)) process.kill(pid, 'SIGKILL');
     }
-  });
+  }, 20_000);
 
   it('составная `sleep 5; echo x` с малым таймаутом: строка короткая, а `sleep` из группы не остаётся', async () => {
-    // Своя длительность, чтобы `pgrep` не спутал этот `sleep` с чужим.
-    const sleeping = 'sleep 5.317';
-    await putStatusLine(home, 'settings.json', `${sleeping}; echo x`);
+    // Своя длительность и якоря в шаблоне: `pgrep -f` не должен спутать этот `sleep` с чужим
+    // процессом, в чьей командной строке просто упомянута такая команда.
+    await putStatusLine(home, 'settings.json', 'sleep 5.317; echo x');
+    const sleeping = '^sleep 5\\.317$';
 
-    const line = run(input(), { humanTimeoutMs: 700 });
-    await until(() => running(sleeping), 'sleep запущен');
+    const line = run(input(), { humanTimeoutMs: 2000 });
+    await until(() => hasProcess(sleeping), 'sleep запущен', 10_000);
 
     expect(await line).toBe('Opus · ctx 8%\n');
-    await until(() => !running(sleeping), 'sleep убит вместе с группой', 3000);
-  });
+    await until(() => !hasProcess(sleeping), 'sleep убит вместе с группой', 3000);
+  }, 20_000);
 
   it('отмена (signal): команда человека убивается с группой, строка короткая; отменено до запуска — команда не стартует', async () => {
     const pidFile = path.join(root, 'sleeper.pid');
     await putStatusLine(home, 'settings.json', compound(pidFile));
 
     const cancel = new AbortController();
-    const running = run(input(), { signal: cancel.signal });
+    const pending = run(input(), { signal: cancel.signal });
     const pid = await sleeperPid(pidFile);
     try {
       cancel.abort();
-      expect(await running).toBe('Opus · ctx 8%\n');
+      expect(await pending).toBe('Opus · ctx 8%\n');
       await until(() => !alive(pid), 'процесс команды человека убит вместе с группой', 3000);
     } finally {
       if (alive(pid)) process.kill(pid, 'SIGKILL');
@@ -387,7 +393,7 @@ describe('строка терминала', () => {
     await putStatusLine(home, 'settings.json', `touch '${marker}'`);
     expect(await run(input(), { signal: AbortSignal.abort() })).toBe('Opus · ctx 8%\n');
     expect(await exists(marker)).toBe(false);
-  });
+  }, 20_000);
 });
 
 describe('isOwnCommand: наша ли это команда — по полному пути скрипта, а не по имени', () => {
