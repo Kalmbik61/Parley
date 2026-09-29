@@ -53,13 +53,25 @@ export interface LimitsService {
 }
 
 /**
- * Рычаг E2E окна: `HARNAS_LIMITS_POLL_MS` — период опроса в миллисекундах. Годится только целое
- * положительное число; всё прочее (пусто, мусор, ноль, дробь) рычага не даёт, и опрос идёт раз в
- * 30 секунд: `setInterval` с `NaN` крутился бы каждую миллисекунду.
+ * Пределы периода опроса из окружения, мс. Не чаще 200 мс: короче незачем и опасно для машины.
+ * Не больше 2147483647: длиннее `setInterval` не умеет и срабатывал бы каждую миллисекунду.
+ */
+const MIN_POLL_MS = 200;
+const MAX_POLL_MS = 2_147_483_647;
+
+/**
+ * Рычаг E2E окна: `HARNAS_LIMITS_POLL_MS` — период опроса в миллисекундах, зажатый в
+ * `[MIN_POLL_MS, MAX_POLL_MS]` (`1` даёт 200, `99999999999` — 2147483647). Нечисловое значение
+ * (пусто, мусор, `NaN`, `Infinity`) рычага не даёт, и опрос идёт раз в 30 секунд: `setInterval` с
+ * `NaN` крутился бы каждую миллисекунду.
  */
 export function limitsOptionsFromEnv(env: NodeJS.ProcessEnv): LimitsServiceOptions | undefined {
-  const value = Number(env['HARNAS_LIMITS_POLL_MS']);
-  return Number.isInteger(value) && value > 0 ? { intervalMs: value } : undefined;
+  const raw = env['HARNAS_LIMITS_POLL_MS']?.trim();
+  // Пустая строка — не число, хотя `Number('')` равно нулю.
+  if (raw === undefined || raw === '') return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return undefined;
+  return { intervalMs: Math.min(MAX_POLL_MS, Math.max(MIN_POLL_MS, Math.trunc(value))) };
 }
 
 const defaultSchedule = (tick: () => void, everyMs: number): (() => void) => {

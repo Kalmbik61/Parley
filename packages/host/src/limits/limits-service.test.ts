@@ -388,13 +388,33 @@ describe('опрос', () => {
 });
 
 describe('HARNAS_LIMITS_POLL_MS: рычаг E2E окна', () => {
-  it('целое положительное число миллисекунд — период опроса', () => {
+  it('число миллисекунд в допустимых пределах — период опроса', () => {
     expect(limitsOptionsFromEnv({ HARNAS_LIMITS_POLL_MS: '200' })).toEqual({ intervalMs: 200 });
+    expect(limitsOptionsFromEnv({ HARNAS_LIMITS_POLL_MS: '250' })).toEqual({ intervalMs: 250 });
+    expect(limitsOptionsFromEnv({ HARNAS_LIMITS_POLL_MS: ' 1500 ' })).toEqual({ intervalMs: 1500 });
+    expect(limitsOptionsFromEnv({ HARNAS_LIMITS_POLL_MS: '2147483647' })).toEqual({
+      intervalMs: 2_147_483_647,
+    });
   });
 
-  it('пусто, мусор, ноль, минус и дробь — рычага нет: опрос остаётся раз в 30 секунд', () => {
-    for (const value of [undefined, '', 'часто', '0', '-5', '1.5', 'NaN', 'Infinity']) {
-      expect(limitsOptionsFromEnv({ HARNAS_LIMITS_POLL_MS: value })).toBeUndefined();
+  it('границы: меньше 200 мс — 200, больше 2147483647 — 2147483647', () => {
+    expect(limitsOptionsFromEnv({ HARNAS_LIMITS_POLL_MS: '1' })).toEqual({ intervalMs: 200 });
+    for (const value of ['0', '-5', '199', '1.5']) {
+      expect(limitsOptionsFromEnv({ HARNAS_LIMITS_POLL_MS: value }), value).toEqual({
+        intervalMs: 200,
+      });
+    }
+    // Больше предела `setInterval` таймер сработал бы каждую миллисекунду.
+    for (const value of ['2147483648', '99999999999', '1e12']) {
+      expect(limitsOptionsFromEnv({ HARNAS_LIMITS_POLL_MS: value }), value).toEqual({
+        intervalMs: 2_147_483_647,
+      });
+    }
+  });
+
+  it('нечисловое значение — рычага нет: опрос остаётся раз в 30 секунд', () => {
+    for (const value of [undefined, '', '   ', 'часто', '10s', 'NaN', 'Infinity', '-Infinity']) {
+      expect(limitsOptionsFromEnv({ HARNAS_LIMITS_POLL_MS: value }), String(value)).toBeUndefined();
     }
   });
 });
