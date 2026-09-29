@@ -201,6 +201,18 @@ describe('Tree — облик Organic (1.8)', () => {
     expect(row.querySelector('[data-git-status]')?.className).toContain('font-bold');
   });
 
+  // Правки ревью куска 2: имя и буква added, untracked (accent-2-700) и renamed (neutral-700) на hover-заливке
+  // text 6 % в светлой — 4.31 и 4.40:1. Цвет идёт токеном git, поэтому подмена `--muted-foreground` его не
+  // трогает: на hover строка берёт ступень 800 тех же рамп (`styles/tokens.test.ts`).
+  it('на hover цвета git added, untracked и renamed — ступень 800 своей рампы (иначе на заливке text 6 % ниже 4.5:1)', async () => {
+    bridge.setDir(ROOT, '', [entry('a.ts')]);
+    renderTree({ status: { 'a.ts': 'A' } });
+    const row = (await screen.findByText('a.ts')).closest('[data-tree-path]') as HTMLElement;
+    expect(row.className).toContain('hover:[--git-decoration-added:var(--color-accent-2-800)]');
+    expect(row.className).toContain('hover:[--git-decoration-untracked:var(--color-accent-2-800)]');
+    expect(row.className).toContain('hover:[--git-decoration-renamed:var(--color-neutral-800)]');
+  });
+
   it('вложенная строка сохраняет отступ по глубине: 8 + 18 на уровень слева', async () => {
     bridge.setDir(ROOT, '', [entry('src', { kind: 'dir' })]);
     bridge.setDir(ROOT, 'src', [entry('lib.ts')]);

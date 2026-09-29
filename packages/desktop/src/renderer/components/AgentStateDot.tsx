@@ -11,12 +11,14 @@
  * корне репозитория.
  *
  * Цвета — таблица 1.2 спеки окна 2026-09-29 (облик Organic): working — кольцо `neutral-700`, blocked —
- * MessageCircleQuestion `accent-600`, unseen — точка `accent-2-600`, done — CircleCheck `accent-2-600`,
- * failed — CircleX `accent-700`. Idle, pending, «спит» и «закрыта» — `neutral-600` вместо ступеней
- * таблицы (`neutral-400` и `neutral-500`, они после смены рамп держат 1.5–2.2:1): решение контролёра
- * куска 2, `neutral-600` — ближайшая ступень, что держит не ниже 3:1 к фону окна, активной карточке и
- * её выбранной строке в обеих темах (`styles/tokens.test.ts`). Одна ступень у четырёх состояний — форма
- * разная: точка, кольцо, луна, тире.
+ * MessageCircleQuestion `accent-600`, failed — CircleX `accent-700`. Idle, pending, «спит» и «закрыта» — токен
+ * `--state-inactive` вместо ступеней таблицы (`neutral-400` и `neutral-500` после смены рамп держат 1.5–2.2:1), а
+ * unseen (точка) и done (CircleCheck) — `--state-done` вместо `accent-2-600`. Оба токена — свои на тему:
+ * светлая берёт `neutral-700` и `accent-2-700`, тёмная — `neutral-600` и `accent-2-600`; так значок держит не
+ * ниже 3:1 ко всем фонам сайдбара, включая hover-заливки, где `neutral-600` и `accent-2-600` светлой опускались
+ * до 2.5–3.0:1 (решение контролёра куска 2 и правки ревью; пары — `styles/tokens.test.ts`). Одна ступень у
+ * четырёх состояний — форма разная: точка, кольцо, луна, тире. Приглушённые значки (закрытая строка .5,
+ * done-карточка .6) — исключение: этого требует спека 1.2, а состояние там несёт и слово рядом.
  *
  * Раунд исправлений 1 (находка ревью B №3): рядом со значком не всегда есть
  * текст-дублёр (на вкладке терминала, спека 5.3, его нет вовсе) — значок
@@ -93,30 +95,30 @@ function renderGlyph(
       );
 
     case 'done':
-      return <CircleCheck className={cn(ICON[size], 'text-accent-2-600')} aria-hidden="true" />;
+      return <CircleCheck className={cn(ICON[size], 'text-state-done')} aria-hidden="true" />;
 
     case 'exited':
       if (exitedLifecycle === 'closed') {
         // Тире, не lucide-значок: «закрыта» — это отсутствие сессии, а не её состояние.
         return (
-          <span className="text-neutral-600" aria-hidden="true">
+          <span className="text-state-inactive" aria-hidden="true">
             –
           </span>
         );
       }
-      return <Moon className={cn(ICON[size], 'text-neutral-600')} aria-hidden="true" />;
+      return <Moon className={cn(ICON[size], 'text-state-inactive')} aria-hidden="true" />;
 
     case 'pending':
       return (
         <span
-          className={cn('block rounded-full border-2 border-neutral-600', DOT[size])}
+          className={cn('block rounded-full border-2 border-state-inactive', DOT[size])}
           aria-hidden="true"
         />
       );
 
     case 'unseen':
       return (
-        <span className={cn('block rounded-full bg-accent-2-600', DOT[size])} aria-hidden="true" />
+        <span className={cn('block rounded-full bg-state-done', DOT[size])} aria-hidden="true" />
       );
 
     case 'failed':
@@ -125,7 +127,7 @@ function renderGlyph(
     case 'idle':
       return (
         <span
-          className={cn('block rounded-full bg-neutral-600', DOT[size])}
+          className={cn('block rounded-full bg-state-inactive', DOT[size])}
           aria-hidden="true"
         />
       );

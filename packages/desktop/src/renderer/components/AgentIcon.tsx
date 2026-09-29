@@ -7,6 +7,10 @@
  * Значок — картинка `<img>`: окно не ходит в сеть, файлы лежат в сборке (CSP `img-src 'self'`).
  * Рядом со значком почти всегда стоит название — тогда `alt` пустой, а там, где значок стоит один
  * (свёрнутая комната), подпись передаёт вызывающий (`label`).
+ *
+ * `data-agent-icon` — на обоих видах (картинка и буква): за него держится приглушение `styles/dimmed.css`
+ * (значки .6 у done-карточки, .5 у закрытой строки). Правило брало только `svg` и точку состояния, а значок
+ * провайдера — `<img>`, и брендовый значок оставался при opacity 1 (правки ревью куска 2).
  */
 
 import claudeUrl from '../assets/providers/claude.svg';
@@ -57,6 +61,7 @@ export function AgentIcon({ provider, size = 12, label }: AgentIconProps): JSX.E
         width={size}
         height={size}
         draggable={false}
+        data-agent-icon=""
         className="block shrink-0"
         style={{ width: size, height: size }}
       />
@@ -64,6 +69,7 @@ export function AgentIcon({ provider, size = 12, label }: AgentIconProps): JSX.E
   }
   return (
     <span
+      data-agent-icon=""
       className="inline-flex shrink-0 items-center justify-center rounded-[4px] bg-muted font-medium leading-none text-muted-foreground"
       style={{ width: size, height: size, fontSize: Math.round(size * 0.6) }}
     >

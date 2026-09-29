@@ -67,9 +67,12 @@ const FILE_ROW_HEIGHT = 30;
 /**
  * Строка правого сайдбара — пилюля с заливкой hover `text 6 %`. Вторичный текст внутри (буква статуса, автор
  * коммита) на этой заливке ниже 4.5:1 (наследство куска 1), поэтому на hover его цвет — основной: класс
- * подменяет переменную вторичного цвета для всего поддерева строки.
+ * подменяет переменную вторичного цвета для всего поддерева строки. Так же цвет текста успеха (`+N`,
+ * accent-2-700: 4.31:1 на этой заливке в светлой теме): токен подменяется ступенью 800 (правки ревью куска 2);
+ * `−N` (accent-700, 4.55:1) порог держит сам.
  */
-const ROW_HOVER = 'transition-colors hover:bg-foreground/6 hover:[--muted-foreground:var(--foreground)]';
+const ROW_HOVER =
+  'transition-colors hover:bg-foreground/6 hover:[--muted-foreground:var(--foreground)] hover:[--status-success-text:var(--color-accent-2-800)]';
 
 function FileRow({ file, onOpen, style }: { file: DiffFile; onOpen(): void; style?: CSSProperties }): JSX.Element {
   const title = file.oldPath === null ? file.path : `${file.oldPath} → ${file.path}`;

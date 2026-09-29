@@ -9,10 +9,11 @@ import { makeTempHome, makeTempProject } from './tmp.js';
 /**
  * «Restart host» из палитры посреди работы (раунд main-r2, п. 2 — ревью 6.3-B, Important 2).
  * После перезапуска хоста процесс агента мёртв (lifecycle sleeping): вкладка терминала обязана
- * сказать «S01 isn't running» с кнопкой Resume, а не молчать пустым экраном; ввод в неё не
- * пропадает молча; после Resume новый вывод виден в той же вкладке без переключений.
+ * показать карточку «asleep» (кикер и название `S01 restart · e2e-restart`) с кнопкой Resume, а не
+ * молчать пустым экраном; ввод в неё не пропадает молча (тост «S01 isn't running»); после Resume
+ * новый вывод виден в той же вкладке без переключений.
  * Со слиянием lane-r3 окно на время обрыва связи не перемонтируется: поверхность та же, под
- * полосой — последний вывод агента, «Disconnected» после возврата связи нет; Resume — снимок
+ * карточкой — последний вывод агента, «Disconnected» после возврата связи нет; Resume — снимок
  * нового процесса вместо прежнего экрана.
  * Агент — эхо-заглушка, настоящий `claude` не запускается.
  */
@@ -84,15 +85,16 @@ test.describe('перезапуск хоста из палитры (раунд m
     await window.getByRole('button', { name: 'Restart', exact: true }).click();
 
     // Хост вернулся, агент мёртв: вкладка говорит об этом, а не молчит. Связь уже есть —
-    // «Disconnected — reconnecting…» нет, а последний вывод агента виден под полосой.
+    // «Disconnected — reconnecting…» нет, а последний вывод агента виден под карточкой.
     const notRunning = window.getByTestId('terminal-not-running');
     await expect(notRunning).toBeVisible({ timeout: 30_000 });
-    await expect(notRunning).toContainText("S01 isn't running");
+    await expect(notRunning).toContainText('asleep');
+    await expect(notRunning).toContainText('S01 restart · e2e-restart');
     await expect(window.getByTestId('terminal-offline')).toHaveCount(0);
     expect(await screenText(window)).toContain('echo: before');
     expect(await surface.getAttribute('data-mount-id')).toBe(mountId);
 
-    // Ввод в неживую вкладку — тост с тем же текстом, а не тишина. Полоса сдвинула экран вниз —
+    // Ввод в неживую вкладку — тост «S01 isn't running», а не тишина. Карточка сдвинула экран вниз —
     // поле ввода xterm фокусируется напрямую, а не кликом по его старому месту.
     await input.focus();
     await window.keyboard.type('lost');

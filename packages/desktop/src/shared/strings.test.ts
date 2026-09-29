@@ -77,6 +77,13 @@ describe('S.sidebar — тексты карточки и строк (Organic, 1.
   });
 });
 
+describe('S.terminal — карточка неживой сессии (Organic, 1.8)', () => {
+  it('последнее событие и суффикс «ago»', () => {
+    expect(S.terminal.lastEvent('3h ago')).toBe('last event 3h ago');
+    expect(S.time.ago('3h')).toBe('3h ago');
+  });
+});
+
 describe('providerName', () => {
   it('claude — «Claude Code», codex — «Codex», независимо от метки хоста', () => {
     expect(providerName('claude', 'Claude')).toBe('Claude Code');

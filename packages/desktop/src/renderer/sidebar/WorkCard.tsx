@@ -242,7 +242,9 @@ export const WorkCard = memo(function WorkCard({
         {branch !== null ? (
           <>
             <span className="shrink-0">·</span>
-            <span className="min-w-0 truncate font-mono">{branch}</span>
+            {/* Ветка держит своё место (потолок — половина строки): имя папки то же, что заголовок группы над
+                карточкой, и при длинном имени сжимается оно, а не ветка (`main` не должна становиться `m…`). */}
+            <span className="max-w-[50%] shrink-0 truncate font-mono">{branch}</span>
           </>
         ) : null}
       </div>
@@ -274,7 +276,8 @@ export const WorkCard = memo(function WorkCard({
             showClosedSessions(key, !expanded);
           }}
           className={cn(
-            'flex h-6 w-full items-center rounded-full pl-7 text-left text-[11px] hover:bg-foreground/6 hover:text-work-sidebar-foreground',
+            // Основной цвет на hover — явно: в done-карточке `--work-sidebar-foreground` равен вторичному (dimmed.css).
+            'flex h-6 w-full items-center rounded-full pl-7 text-left text-[11px] hover:bg-foreground/6 hover:text-(--color-text)',
             shownRows.length > 0 ? 'mt-px' : 'mt-1.5',
             secondary,
           )}

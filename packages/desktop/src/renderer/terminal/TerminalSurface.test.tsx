@@ -17,6 +17,7 @@ import { useLayoutStore } from '../layout/store.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { workKey } from '../lib/tree-order.js';
 import { useHostStore } from '../store/host.js';
+import { useProvidersStore } from '../store/providers.js';
 import { useWorksStore } from '../store/works.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
@@ -371,18 +372,18 @@ describe('TerminalSurface', () => {
 });
 
 // Раунд main-r2, п. 2 (ревью 6.3-B, Important 2): после «Restart host» агент мёртв, а вкладка
-// молчала пустым экраном. Неживая сессия — полоса «S01 isn't running» с Resume; ввод — тост.
+// молчала пустым экраном. Неживая сессия — карточка «asleep» с Resume; ввод — тост.
 describe('TerminalSurface — неживая сессия (раунд main-r2, п. 2)', () => {
-  function withSession(patch: Parameters<typeof makeSession>[2]): void {
+  function withSession(patch: Parameters<typeof makeSession>[2], title = 'w-01', label = 'один'): void {
     useWorksStore.setState({
-      entries: [makeWork('w-01', { projectPath: '/tmp/proj', sessions: [makeSession('s-01', 'один', patch)] })],
+      entries: [makeWork('w-01', { projectPath: '/tmp/proj', title, sessions: [makeSession('s-01', label, patch)] })],
       branches: {},
       loading: false,
       error: null,
     });
   }
 
-  it('sleeping — «S01 isn\'t running» и Resume: sessions.resume с ref сессии', async () => {
+  it('sleeping — карточка asleep «S01 один · w-01» и Resume: sessions.resume с ref сессии', async () => {
     withSession({ lifecycle: 'sleeping' });
     const resumes: unknown[] = [];
     bridge.setHandler('sessions.resume', (params) => {
@@ -391,13 +392,14 @@ describe('TerminalSurface — неживая сессия (раунд main-r2, �
     });
     renderSurface();
     const bar = screen.getByTestId('terminal-not-running');
-    expect(bar.textContent).toContain("S01 isn't running");
+    expect(bar.querySelector('[data-kicker]')?.textContent).toBe('asleep');
+    expect(bar.textContent).toContain('S01 один · w-01');
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
     await waitFor(() => expect(resumes).toEqual([{ ref }]));
   });
 
-  // Облик Organic (спека окна 2026-09-29, 1.8): полоса неживой сессии — карточка на фоне окна с кикером
-  // (`asleep`, `closed`, `not started` — капсом), текстом и главной кнопкой Resume.
+  // Облик Organic (спека окна 2026-09-29, 1.8): неживая сессия — карточка на фоне окна с кикером
+  // (`asleep`, `closed`, `not started` — капсом), названием, текстом, метой и главной кнопкой Resume.
   it('sleeping и closed: кикер asleep / closed (10px капсом, neutral-700), карточка на фоне окна, Resume — главная кнопка', () => {
     withSession({ lifecycle: 'sleeping' });
     const view = renderSurface();
@@ -408,7 +410,8 @@ describe('TerminalSurface — неживая сессия (раунд main-r2, �
     expect(kicker?.className).toContain('text-neutral-700');
     expect(kicker?.className).not.toContain('text-accent-700');
     expect(bar.className).toContain('bg-background');
-    expect(bar.className).toMatch(/\brounded-md\b/);
+    expect(bar.className).toMatch(/\brounded-xl\b/);
+    expect(bar.className).not.toMatch(/\brounded-md\b/);
     expect(bar.className).not.toMatch(/\bborder-b\b/);
     expect(bar.className).not.toMatch(/\bbg-card\b/);
     expect(screen.getByRole('button', { name: 'Resume' }).className).toContain('bg-primary');
@@ -418,22 +421,97 @@ describe('TerminalSurface — неживая сессия (раунд main-r2, �
     expect(screen.getByTestId('terminal-not-running').querySelector('[data-kicker]')?.textContent).toBe('closed');
   });
 
-  it('pending: та же карточка с кикером not started, без Resume — процесса ещё не было, поднимать нечего', () => {
-    withSession({ lifecycle: 'pending' });
-    renderSurface();
-    const bar = screen.getByTestId('terminal-not-running');
-    expect(bar.querySelector('[data-kicker]')?.textContent).toBe('not started');
-    expect(bar.querySelector('[data-kicker]')?.className).toContain('text-accent-700');
-    expect(bar.textContent).toContain("S01 isn't running");
-    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
-  });
+  // Правки ревью куска 2 (находка 2): полоса с кикером и «S01 isn't running» — не карточка из 1.8. Карточка:
+  // до 520px, padding 24, gap 12; кикер, название Caprasimo 20px `S04 тесты · Платежи`, задача 14px, мета.
+  describe('карточка 1.8 — состав и геометрия', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-09-27T10:00:00.000Z'));
+    });
+    afterEach(() => vi.useRealTimers());
 
-  it('длинный ярлык не выталкивает Resume: текст сжимается многоточием', () => {
-    withSession({ lifecycle: 'sleeping', label: 'я'.repeat(80) });
-    renderSurface();
-    const bar = screen.getByTestId('terminal-not-running');
-    expect(bar.querySelector('[data-kicker] + span')?.className).toContain('truncate');
-    expect(screen.getByRole('button', { name: 'Resume' }).className).toContain('shrink-0');
+    it('геометрия: до 520px, padding 24, gap 12, radius 32 (Card), не сжимается', () => {
+      withSession({ lifecycle: 'pending', task: 'Написать тесты' }, 'Платежи', 'тесты');
+      renderSurface();
+      const bar = screen.getByTestId('terminal-not-running');
+      for (const token of ['max-w-[520px]', 'p-6', 'gap-3', 'shrink-0', 'rounded-xl']) expect(bar.classList.contains(token), token).toBe(true);
+    });
+
+    it('название — Caprasimo 20px «S01 тесты · Платежи»; задача — 14px', () => {
+      withSession({ lifecycle: 'pending', task: 'Написать тесты для платежей' }, 'Платежи', 'тесты');
+      renderSurface();
+      const title = screen.getByText('S01 тесты · Платежи');
+      expect(title.className).toContain('font-heading');
+      expect(title.className).toContain('text-xl');
+      const task = screen.getByText('Написать тесты для платежей');
+      expect(task.className).toContain('text-sm');
+    });
+
+    it('not started: кикер accent-700, мета — провайдер и путь брифа моноширинным, кнопки нет (метода запуска в протоколе нет)', () => {
+      withSession({ lifecycle: 'pending', task: 'Написать тесты' }, 'Платежи', 'тесты');
+      renderSurface();
+      const bar = screen.getByTestId('terminal-not-running');
+      expect(bar.querySelector('[data-kicker]')?.textContent).toBe('not started');
+      expect(bar.querySelector('[data-kicker]')?.className).toContain('text-accent-700');
+      const meta = screen.getByText('Claude Code · .harnas/works/w-01/briefs/s-01.md');
+      expect(meta.className).toContain('font-mono');
+      expect(meta.className).toContain('text-neutral-700');
+      expect(screen.queryByRole('button')).toBeNull();
+      expect(bar.textContent).not.toContain("isn't running");
+    });
+
+    it('asleep: текст — резюме агента, а не задача; мета «Claude Code · last event 3h ago» по последнему событию', () => {
+      withSession({ lifecycle: 'sleeping', task: 'Написать тесты', summary: 'Готово: тесты зелёные', startedAt: '2026-09-27T07:00:00.000Z' }, 'Платежи', 'тесты');
+      renderSurface();
+      const bar = screen.getByTestId('terminal-not-running');
+      expect(screen.getByText('Готово: тесты зелёные').className).toContain('text-sm');
+      expect(bar.textContent).not.toContain('Написать тесты');
+      const meta = screen.getByText('Claude Code · last event 3h ago');
+      expect(meta.className).toContain('text-neutral-700');
+      expect(meta.className).not.toContain('font-mono');
+    });
+
+    it('asleep без резюме — задача; событие только что — «now» без «ago»; провайдер из списка хоста — по его метке', () => {
+      withSession({ lifecycle: 'sleeping', task: 'Написать тесты', resultAt: '2026-09-27T10:00:00.000Z', provider: 'gemini' }, 'Платежи', 'тесты');
+      useProvidersStore.setState({ providers: [{ id: 'gemini', label: 'Gemini CLI', available: true, version: null }] });
+      renderSurface();
+      expect(screen.getByText('Написать тесты')).toBeTruthy();
+      expect(screen.getByText('Gemini CLI · last event now')).toBeTruthy();
+      useProvidersStore.setState({ providers: [] });
+    });
+
+    it('closed: кикер closed, текст и мета последнего события, без Resume', () => {
+      withSession({ lifecycle: 'closed', task: 'Написать тесты', resultAt: '2026-09-27T09:57:00.000Z' }, 'Платежи', 'тесты');
+      renderSurface();
+      const bar = screen.getByTestId('terminal-not-running');
+      expect(bar.querySelector('[data-kicker]')?.textContent).toBe('closed');
+      expect(screen.getByText('Claude Code · last event 3m ago')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
+    });
+
+    it('нет ни задачи, ни времени — только название и провайдер: пустого абзаца нет', () => {
+      withSession({ lifecycle: 'sleeping' }, 'Платежи', 'тесты');
+      renderSurface();
+      const bar = screen.getByTestId('terminal-not-running');
+      expect(bar.querySelectorAll('p')).toHaveLength(0);
+      expect(screen.getByText('Claude Code')).toBeTruthy();
+    });
+
+    // Review Focus 1: длинные значения не выталкивают карточку и кнопку за край.
+    it('длинные название работы (120), метка (40) и задача: название переносится по словам, задача обрезается по строкам, Resume не сжимается', () => {
+      const work = 'р'.repeat(120);
+      const label = 'я'.repeat(40);
+      withSession({ lifecycle: 'sleeping', task: 'т'.repeat(2000) }, work, label);
+      renderSurface();
+      const title = screen.getByText(`S01 ${label} · ${work}`);
+      expect(title.className).toContain('break-words');
+      expect(title.className).toContain('line-clamp-3');
+      const task = screen.getByText('т'.repeat(2000));
+      expect(task.className).toContain('line-clamp-4');
+      expect(task.className).toContain('break-words');
+      expect(task.getAttribute('title')).toBe('т'.repeat(2000));
+      expect(screen.getByRole('button', { name: 'Resume' }).className).toContain('shrink-0');
+    });
   });
 
   it('отказ sessions.resume — тост Couldn\'t resume session: …', async () => {
@@ -446,14 +524,14 @@ describe('TerminalSurface — неживая сессия (раунд main-r2, �
     await waitFor(() => expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't resume session: host error."));
   });
 
-  it('active — полосы нет; closed — полоса без Resume', () => {
+  it('active — карточки нет; closed — карточка без Resume', () => {
     withSession({ lifecycle: 'active' });
     const view = renderSurface();
     expect(screen.queryByTestId('terminal-not-running')).toBeNull();
     view.unmount();
     withSession({ lifecycle: 'closed' });
     renderSurface();
-    expect(screen.getByTestId('terminal-not-running').textContent).toContain("S01 isn't running");
+    expect(screen.getByTestId('terminal-not-running').querySelector('[data-kicker]')?.textContent).toBe('closed');
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
   });
 
@@ -519,7 +597,7 @@ describe('TerminalSurface — без связи с хостом (раунд lane
 
 // Слияние lane-r3 и main-r2: «Restart host» — это обрыв связи и новый хост, у которого агента нет.
 // Вкладка говорит одно за раз: без связи — «Disconnected — reconnecting…», со связью и неживой
-// сессией — «S01 isn't running» с Resume над последним выводом.
+// сессией — карточка «asleep» с Resume над последним выводом.
 describe('TerminalSurface — связь и неживая сессия вместе (слияние lane-r3 и main-r2)', () => {
   const put = (lifecycle: 'sleeping' | 'active'): void =>
     useWorksStore.setState({
@@ -574,7 +652,7 @@ describe('TerminalSurface — связь и неживая сессия вмес
 
     // Свежий снимок работ: сессия спит — полоса с Resume, «Disconnected» нет; ввод — тост.
     act(() => put('sleeping'));
-    expect(screen.getByTestId('terminal-not-running').textContent).toContain("S01 isn't running");
+    expect(screen.getByTestId('terminal-not-running').querySelector('[data-kicker]')?.textContent).toBe('asleep');
     expect(screen.queryByTestId('terminal-offline')).toBeNull();
     act(() => term.onDataHandler?.('y'));
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
@@ -607,7 +685,7 @@ describe('TerminalSurface — связь и неживая сессия вмес
 
     act(() => online());
     expect(screen.queryByTestId('terminal-offline')).toBeNull();
-    expect(screen.getByTestId('terminal-not-running').textContent).toContain("S01 isn't running");
+    expect(screen.getByTestId('terminal-not-running').querySelector('[data-kicker]')?.textContent).toBe('asleep');
     await act(async () => {
       await Promise.resolve();
     });

@@ -66,6 +66,8 @@ const TEXT_BACKGROUNDS: Record<string, (theme: Theme) => Rgb> = {
   'hover неактивной карточки (--background + --card-hover)': (theme) => on(theme, '--card-hover', solid(theme, '--background')),
   'подкраска blocked (accent-200)': (theme) => solid(theme, '--color-accent-200'),
   'подкраска unseen (accent-2-200)': (theme) => solid(theme, '--color-accent-2-200'),
+  'плашка решений вкладки «Почта» (accent-2-500 14 % на листе)': (theme) =>
+    compositeOver(solid(theme, '--color-accent-2-500'), 0.14, solid(theme, '--sheet')),
 };
 
 // ── 1. Спека: палитра и тени дословно ────────────────────────────────────────────────────────
@@ -275,51 +277,118 @@ describe('вторичный текст — не ниже 4.5:1 в обеих т
 // ── Значки состояний (таблица 1.2 спеки, наследство куска 1) ────────────────────────────────
 
 /**
- * Значок состояния — признак состояния, порог 3:1 (WCAG 1.4.11) к фонам, на которых он стоит в
- * сайдбаре: фон окна (`surface`, неактивные карточки), активная карточка (`neutral-100`) и её выбранная
- * строка (`neutral-100` + `text 9%`). Ступени таблицы 1.2 для idle (`neutral-400`), pending и «закрыта»
- * (`neutral-500`) после смены рамп держали 1.5–2.2:1; решение контролёра куска 2 — ближайшая ступень
- * рампы `neutral-*`, которая держит все три фона в обеих темах. Это `neutral-600`, одна на четыре
- * состояния (idle, pending, «спит», «закрыта»): различает их форма — точка, кольцо, луна, тире. Тот же
- * цвет — в `components/AgentStateDot.tsx` (`AgentStateDot.test.tsx` сверяет классы).
+ * Значок состояния — признак состояния, порог 3:1 (WCAG 1.4.11) к каждому фону, на котором он стоит в
+ * сайдбаре. Фоны — все заливки сайдбара, а не только три из брифа куска 2 (правки ревью: под курсором
+ * заливка темнее, и значок терял контраст):
+ *  — `surface` — неактивная карточка и её строки, фон окна;
+ *  — hover неактивной карточки — `surface` + `text 4 %` (значок в заголовке карточки);
+ *  — hover строки внутри неё — ещё `text 9 %`: самый тёмный фон сайдбара в светлой теме;
+ *  — активная карточка (`neutral-100`), её выбранная строка и hover строки — `neutral-100` + `text 9 %`.
+ * Ступени таблицы 1.2 для idle (`neutral-400`), pending и «закрыта» (`neutral-500`) держали 1.5–2.2:1;
+ * ближайшая ступень рампы `neutral-*`, что держит все эти фоны, — `neutral-700` в светлой и `neutral-600`
+ * в тёмной (рампы перевёрнуты), поэтому цвет — токен на тему `--state-inactive`; одна ступень на четыре
+ * состояния (idle, pending, «спит», «закрыта») допустима: различает форма — точка, кольцо, луна, тире.
+ * Так же и `--state-done` у unseen и done: `accent-2-600` таблицы в светлой теме на hover — 2.9 и 2.5:1,
+ * ближайшая держащая ступень — `accent-2-700`; тёмная остаётся на `accent-2-600`, как в таблице.
+ * Токены зовёт `components/AgentStateDot.tsx` (`AgentStateDot.test.tsx` сверяет классы).
+ *
+ * Исключение: закрытая строка (`data-dimmed="row"`, .5) и `done`-карточка (.6) приглушают значки
+ * прозрачностью — этого требует спека 1.2, и эффективный контраст там ниже 3:1 (тире «закрыта» — 1.7:1
+ * в светлой). Два требования — «.5» и «3:1» — вместе невыполнимы; спека сильнее. Состояние там несёт и
+ * слово рядом (`closed`, `done`: вторичный текст ≥ 4.5:1, приглушается цветом, а не прозрачностью), так
+ * что значок не единственный признак.
  */
+const ROW_HOVER_BACKGROUND = 'hover строки неактивной карточки (--background + --card-hover + --accent)';
 const STATE_ICON_BACKGROUNDS: Record<string, (theme: Theme) => Rgb> = {
   'фон окна (--background)': (theme) => solid(theme, '--background'),
+  'hover неактивной карточки (--background + --card-hover)': (theme) => on(theme, '--card-hover', solid(theme, '--background')),
+  [ROW_HOVER_BACKGROUND]: (theme) => on(theme, '--accent', on(theme, '--card-hover', solid(theme, '--background'))),
   'активная карточка (--card)': (theme) => solid(theme, '--card'),
   'выбранная строка активной карточки (--card + --accent)': (theme) => on(theme, '--accent', solid(theme, '--card')),
 };
 
-describe('значки состояний — не ниже 3:1 к фонам сайдбара в обеих темах', () => {
-  const ICONS: Record<string, string> = {
-    'idle, pending, спит, закрыта (neutral-600)': '--color-neutral-600',
-    'working (neutral-700)': '--color-neutral-700',
-    'blocked (--agent-question)': '--agent-question',
-    'unseen и done (accent-2-600)': '--color-accent-2-600',
-    'failed (accent-700)': '--color-accent-700',
-  };
+describe('значки состояний — не ниже 3:1 к фонам сайдбара в обеих темах, включая hover', () => {
+  const ICONS: Array<{ name: string; token: string; skip?: readonly string[] }> = [
+    { name: 'idle, pending, спит, закрыта (--state-inactive)', token: '--state-inactive' },
+    { name: 'working (neutral-700)', token: '--color-neutral-700' },
+    // Строка blocked всегда на подкраске accent-200 (hover её не меняет): на заливке hover строки значок
+    // blocked не стоит, а в заголовке карточки — стоит (проверяется на остальных фонах).
+    { name: 'blocked (--agent-question)', token: '--agent-question', skip: [ROW_HOVER_BACKGROUND] },
+    { name: 'unseen и done (--state-done)', token: '--state-done' },
+    { name: 'failed (accent-700)', token: '--color-accent-700' },
+  ];
 
   for (const theme of THEMES) {
-    for (const [icon, name] of Object.entries(ICONS)) {
+    for (const { name, token, skip } of ICONS) {
       for (const [background, backdrop] of Object.entries(STATE_ICON_BACKGROUNDS)) {
-        it(`${theme}: ${icon} на «${background}»`, () => {
-          expect(contrastRatio(solid(theme, name), backdrop(theme))).toBeGreaterThanOrEqual(NON_TEXT);
+        if (skip?.includes(background) === true) continue;
+        it(`${theme}: ${name} на «${background}»`, () => {
+          expect(contrastRatio(solid(theme, token), backdrop(theme))).toBeGreaterThanOrEqual(NON_TEXT);
         });
       }
     }
 
     it(`${theme}: idle, pending, спит и закрыта читаются и на подкрасках строк комнаты и сессии (accent-200, accent-2-200)`, () => {
-      const icon = solid(theme, '--color-neutral-600');
+      const icon = solid(theme, '--state-inactive');
       for (const tint of ['--color-accent-200', '--color-accent-2-200']) {
         expect(contrastRatio(icon, solid(theme, tint)), tint).toBeGreaterThanOrEqual(NON_TEXT);
       }
     });
 
-    it(`${theme}: neutral-600 — ближайшая ступень: neutral-500 не держит хотя бы один из трёх фонов`, () => {
-      const weaker = solid(theme, '--color-neutral-500');
-      const worst = Math.min(...Object.values(STATE_ICON_BACKGROUNDS).map((backdrop) => contrastRatio(weaker, backdrop(theme))));
+    it(`${theme}: blocked читается на подкраске accent-200, unseen — на accent-2-200 (своя строка всегда на подкраске)`, () => {
+      expect(contrastRatio(solid(theme, '--agent-question'), solid(theme, '--color-accent-200'))).toBeGreaterThanOrEqual(NON_TEXT);
+      expect(contrastRatio(solid(theme, '--state-done'), solid(theme, '--color-accent-2-200'))).toBeGreaterThanOrEqual(NON_TEXT);
+    });
+  }
+
+  it('--state-inactive: светлая — neutral-700, тёмная — neutral-600; --state-done: светлая — accent-2-700, тёмная — accent-2-600', () => {
+    same('light', '--state-inactive', '--color-neutral-700');
+    same('dark', '--state-inactive', '--color-neutral-600');
+    same('light', '--state-done', '--color-accent-2-700');
+    same('dark', '--state-done', '--color-accent-2-600');
+  });
+
+  // «Ближайшая ступень»: ступень слабее не держит хотя бы один из фонов — иначе токен можно было бы ослабить.
+  for (const { theme, weaker, token } of [
+    { theme: 'light' as const, weaker: '--color-neutral-600', token: '--state-inactive' },
+    { theme: 'dark' as const, weaker: '--color-neutral-500', token: '--state-inactive' },
+    { theme: 'light' as const, weaker: '--color-accent-2-600', token: '--state-done' },
+  ]) {
+    it(`${theme}: ${token} — ближайшая ступень: ${weaker} не держит хотя бы один из фонов сайдбара`, () => {
+      const worst = Math.min(...Object.values(STATE_ICON_BACKGROUNDS).map((backdrop) => contrastRatio(solid(theme, weaker), backdrop(theme))));
       expect(worst).toBeLessThan(NON_TEXT);
     });
   }
+});
+
+// ── Цветной текст на hover-заливке правого сайдбара (правки ревью куска 2) ───────────────────
+
+/**
+ * Строки правого сайдбара (Files, Changes) лежат на фоне окна, а их hover-заливка — `text 6 %`
+ * (`hover:bg-foreground/6`). Цветные счётчики и имена файлов на ней: `+N` и имена added и untracked —
+ * `accent-2-700` (4.31:1 в светлой), renamed — `neutral-700` (4.40). Вторичный цвет на hover строки
+ * подменяется на основной, но эти цвета идут токенами `--status-success-text` и `--git-decoration-*`, и
+ * подмена их не касается: на hover строка берёт ступень 800 тех же рамп. `−N` (`accent-700`, 4.55:1) и
+ * modified держат порог сами, deleted — `accent-800`.
+ */
+describe('правый сайдбар — цветные счётчики и имена файлов на hover-заливке text 6 % не ниже 4.5:1', () => {
+  const hoverFill = (theme: Theme): Rgb => compositeOver(solid(theme, '--foreground'), 0.06, solid(theme, '--background'));
+
+  for (const theme of THEMES) {
+    it(`${theme}: цвета на hover (accent-2-800, neutral-800) и цвета без подмены (−N accent-700, modified accent-700, deleted accent-800)`, () => {
+      const fill = hoverFill(theme);
+      for (const name of ['--color-accent-2-800', '--color-neutral-800', '--color-accent-700', '--color-accent-800']) {
+        expect(contrastRatio(solid(theme, name), fill), name).toBeGreaterThanOrEqual(TEXT);
+      }
+    });
+  }
+
+  it('светлая: без подмены `+N` и added, untracked (accent-2-700) и renamed (neutral-700) на этой заливке ниже 4.5:1', () => {
+    const fill = hoverFill('light');
+    for (const name of ['--status-success-text', '--git-decoration-added', '--git-decoration-untracked', '--git-decoration-renamed']) {
+      expect(contrastRatio(solid('light', name), fill), name).toBeLessThan(TEXT);
+    }
+  });
 });
 
 // ── Пары, на которых стоят примитивы `ui/*` ─────────────────────────────────────────────────
@@ -629,8 +698,35 @@ describe('dimmed.css — правило приглушения на новых �
     expect(dimmedCss).not.toContain('data-attention-strip');
   });
 
+  // Правки ревью куска 2: значок провайдера — `<img>` (брендовый SVG), а не `svg`, и правило его не брало:
+  // в done-карточке и в закрытой строке звезда Claude оставалась при opacity 1. `AgentIcon` несёт
+  // `data-agent-icon` на обоих видах (картинка и буква), правило берёт его в оба списка.
+  it('значок провайдера (`[data-agent-icon]`, `<img>`) приглушается тем же .6 и .5, что значки-svg', () => {
+    expect(dimmedCss).toMatch(/\[data-dimmed\]\s+:is\([^)]*\[data-agent-icon\][^)]*\)[^{]*\{\s*opacity:\s*0\.6;/);
+    expect(dimmedCss).toMatch(/\[data-dimmed='row'\]\s+:is\([^)]*\[data-agent-icon\][^)]*\)[^{]*\{\s*opacity:\s*0\.5;/);
+  });
+
   it('прозрачность значка состояния не перемножается с прозрачностью его внутреннего значка (.6 × .6)', () => {
     expect(dimmedCss).toContain(":not([data-testid='agent-state-dot'] svg)");
+  });
+
+  // Правки ревью куска 2: на hover строки в приглушённом поддереве (done-карточка, закрытая строка) текст
+  // оставался вторичным (`neutral-700`): подмена вторичной переменной внутри `[data-dimmed]` ничего не
+  // меняет — основная там уже равна вторичной. На самой тёмной заливке hover (`surface` + `text 4 %` карточки
+  // + `text 9 %` строки) вторичный в светлой — 3.86:1, ниже 4.5; поэтому строка на hover берёт основной
+  // цвет текста явно (`hover:[--work-sidebar-foreground:var(--color-text)]`, `SessionRow.tsx`).
+  for (const theme of THEMES) {
+    it(`${theme}: основной текст на hover строки внутри hover неактивной карточки (surface + text 4 % + text 9 %) не ниже 4.5:1`, () => {
+      const surface = solid(theme, '--work-sidebar');
+      const hovered = on(theme, '--work-sidebar-accent', on(theme, '--card-hover', surface));
+      expect(contrastRatio(solid(theme, '--color-text'), hovered)).toBeGreaterThanOrEqual(TEXT);
+    });
+  }
+
+  it('светлая: вторичный текст на этой заливке ниже 4.5:1 — потому строка и меняет цвет на hover', () => {
+    const surface = solid('light', '--work-sidebar');
+    const hovered = on('light', '--work-sidebar-accent', on('light', '--card-hover', surface));
+    expect(contrastRatio(solid('light', '--work-sidebar-muted-foreground'), hovered)).toBeLessThan(TEXT);
   });
 
   for (const theme of THEMES) {

@@ -61,6 +61,21 @@ describe('AgentIcon — брендовые значки (решение 6)', () 
   });
 });
 
+// Правки ревью куска 2: значок провайдера — `<img>`, и правило приглушения `dimmed.css` (значки .6 у done-карточки,
+// .5 у закрытой строки) брало только `svg` и точку состояния — брендовый значок оставался при opacity 1. Правило
+// берёт `[data-agent-icon]`: он на обоих видах значка (картинка и буква неизвестного провайдера).
+describe('AgentIcon — метка для приглушения dimmed.css', () => {
+  it('брендовая картинка несёт data-agent-icon', () => {
+    const { container } = render(<AgentIcon provider="claude" />);
+    expect(imageOf(container)?.hasAttribute('data-agent-icon')).toBe(true);
+  });
+
+  it('буква неизвестного провайдера несёт data-agent-icon', () => {
+    const { container } = render(<AgentIcon provider="gemini" />);
+    expect(container.querySelector('[data-agent-icon]')?.textContent).toBe('G');
+  });
+});
+
 describe('AgentIcon — прочие провайдеры: буква (спека 4.6, решение 6)', () => {
   it('gemini → G, значка-картинки нет', () => {
     const { container } = render(<AgentIcon provider="gemini" />);

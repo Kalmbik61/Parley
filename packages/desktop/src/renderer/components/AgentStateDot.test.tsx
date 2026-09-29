@@ -36,45 +36,48 @@ describe('AgentStateDot — тест 2, таблица спеки 4.2', () => {
     expect(icon?.getAttribute('class')).toContain('text-agent-question');
   });
 
-  it('unseen — точка accent-2-600', () => {
+  // Правки ревью куска 2: unseen и done — токен `--state-done` (светлая — accent-2-700, тёмная — accent-2-600):
+  // `accent-2-600` таблицы 1.2 в светлой на hover заливках ниже 3:1 (`styles/tokens.test.ts`).
+  it('unseen — точка --state-done', () => {
     const { getByTestId } = render(<AgentStateDot state="unseen" />);
     const root = getByTestId('agent-state-dot');
     expect(root.getAttribute('data-state')).toBe('unseen');
     expect(root.querySelector('svg')).toBeNull();
-    expect(root.innerHTML).toContain('bg-accent-2-600');
+    expect(root.innerHTML).toContain('bg-state-done');
+    expect(root.innerHTML).not.toContain('accent-2-600');
     expect(root.innerHTML).not.toContain('emerald');
   });
 
-  // Значки idle, pending, «спит» и «закрыта» — neutral-600 в обеих темах (решение контролёра куска 2):
-  // ступени таблицы 1.2 (neutral-400 и neutral-500) к фону сайдбара 1.5–2.2:1, а neutral-600 держит
-  // не ниже 3:1 к фону окна, активной карточке и выбранной строке (`styles/tokens.test.ts`). Одна
-  // ступень у четырёх состояний допустима: их различает форма.
-  it('idle — точка neutral-600, без прозрачности', () => {
+  // Значки idle, pending, «спит» и «закрыта» — токен `--state-inactive` (светлая — neutral-700, тёмная —
+  // neutral-600): ступени таблицы 1.2 (neutral-400 и neutral-500) к фону сайдбара 1.5–2.2:1, а neutral-600 в
+  // светлой на hover заливках — 2.5–3.0:1; выбранный токен держит не ниже 3:1 ко всем фонам сайдбара
+  // (`styles/tokens.test.ts`). Одна ступень у четырёх состояний допустима: их различает форма.
+  it('idle — точка --state-inactive, без прозрачности', () => {
     const { getByTestId } = render(<AgentStateDot state="idle" />);
     const root = getByTestId('agent-state-dot');
     expect(root.getAttribute('data-state')).toBe('idle');
-    expect(root.innerHTML).toContain('bg-neutral-600');
-    expect(root.innerHTML).not.toMatch(/neutral-[45]00/);
-    expect(root.innerHTML).not.toContain('bg-neutral-600/');
+    expect(root.innerHTML).toContain('bg-state-inactive');
+    expect(root.innerHTML).not.toMatch(/neutral-\d00/);
+    expect(root.innerHTML).not.toContain('bg-state-inactive/');
   });
 
-  it('pending — полое кольцо 2px neutral-600, без прозрачности', () => {
+  it('pending — полое кольцо 2px --state-inactive, без прозрачности', () => {
     const { getByTestId } = render(<AgentStateDot state="pending" />);
     const root = getByTestId('agent-state-dot');
     expect(root.getAttribute('data-state')).toBe('pending');
     expect(root.innerHTML).toContain('border-2');
-    expect(root.innerHTML).toContain('border-neutral-600');
-    expect(root.innerHTML).not.toContain('border-neutral-600/');
+    expect(root.innerHTML).toContain('border-state-inactive');
+    expect(root.innerHTML).not.toContain('border-state-inactive/');
     expect(root.innerHTML).toContain('rounded-full');
   });
 
-  it('exited + sleeping — Moon neutral-600, data-lifecycle="sleeping"', () => {
+  it('exited + sleeping — Moon --state-inactive, data-lifecycle="sleeping"', () => {
     const { getByTestId } = render(<AgentStateDot state="exited" lifecycle="sleeping" />);
     const root = getByTestId('agent-state-dot');
     expect(root.getAttribute('data-state')).toBe('exited');
     expect(root.getAttribute('data-lifecycle')).toBe('sleeping');
     expect(root.querySelector('svg')?.getAttribute('class')).toContain('lucide-moon');
-    expect(root.querySelector('svg')?.getAttribute('class')).toContain('text-neutral-600');
+    expect(root.querySelector('svg')?.getAttribute('class')).toContain('text-state-inactive');
   });
 
   it('exited без lifecycle — тоже «спит» (значение по умолчанию)', () => {
@@ -84,22 +87,22 @@ describe('AgentStateDot — тест 2, таблица спеки 4.2', () => {
     expect(root.querySelector('svg')?.getAttribute('class')).toContain('lucide-moon');
   });
 
-  it('exited + closed — тире neutral-600, без значка', () => {
+  it('exited + closed — тире --state-inactive, без значка', () => {
     const { getByTestId } = render(<AgentStateDot state="exited" lifecycle="closed" />);
     const root = getByTestId('agent-state-dot');
     expect(root.getAttribute('data-lifecycle')).toBe('closed');
     expect(root.querySelector('svg')).toBeNull();
     expect(root.textContent).toContain('–');
-    expect(root.innerHTML).toContain('text-neutral-600');
-    expect(root.innerHTML).not.toContain('text-neutral-600/');
+    expect(root.innerHTML).toContain('text-state-inactive');
+    expect(root.innerHTML).not.toContain('text-state-inactive/');
   });
 
-  it('done — CircleCheck accent-2-600', () => {
+  it('done — CircleCheck --state-done', () => {
     const { getByTestId } = render(<AgentStateDot state="done" />);
     const root = getByTestId('agent-state-dot');
     const icon = root.querySelector('svg');
     expect(icon?.getAttribute('class')).toContain('lucide-circle-check');
-    expect(icon?.getAttribute('class')).toContain('text-accent-2-600');
+    expect(icon?.getAttribute('class')).toContain('text-state-done');
   });
 
   it('failed — CircleX accent-700 (таблица 1.2), а не красная точка', () => {

@@ -8,7 +8,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { Message, WorkEntry, WorkSession } from '@harnas/core';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { useHostStore } from '../../store/host.js';
@@ -200,6 +200,33 @@ describe('MailPanel — облик Organic (1.8)', () => {
     expect(scroller.className).toMatch(/\bpx-9\b/);
     expect(scroller.className).toMatch(/\bpb-8\b/);
     expect(container.querySelector('h3')?.closest('[data-mail-header]')?.className).toContain('shrink-0');
+  });
+
+  // Правки ревью куска 2: блок решений остался прежним (`border-b px-3 py-2`) и в перекрашенной вкладке стоял на
+  // 24px левее шапки и карточек, а сквозная линия резала лист. Во вкладке «Почта» он — плашка Organic (1.3):
+  // в колонке ленты (отступ 36, до 640px), radius 16, фон `accent-2-500 14 %`, без линии.
+  it('блок решений — плашка в колонке ленты: отступ 36 как у шапки и карточек, до 640px, radius 16, фон accent-2 14 %, без сквозной линии', () => {
+    const decision: Message = { ...message('m-d', '2026-01-01T10:00:00.000Z'), kind: 'decision', text: 'ship it' };
+    const { container } = mount([decision, message('m-1', '2026-01-01T10:01:00.000Z')]);
+    const heading = screen.getByText('Decisions');
+    const block = heading.parentElement as HTMLElement;
+    expect(block.className).toMatch(/\bmx-9\b/);
+    expect(block.className).toMatch(/\bmax-w-\[640px\]/);
+    expect(block.className).toMatch(/\brounded-md\b/);
+    expect(block.className).toContain('accent-2-500');
+    expect(block.className).not.toMatch(/\bborder-b\b/);
+    expect(block.className).not.toMatch(/\bpx-3\b/);
+    // Подпись — 11px/600 капсом с разрядкой .06em, вторичным цветом; пункт — 13px, «текст · отправитель».
+    expect(heading.className).toContain('text-[11px]');
+    expect(heading.className).toContain('font-semibold');
+    expect(heading.className).toContain('uppercase');
+    expect(heading.className).toContain('tracking-[0.06em]');
+    expect(heading.className).toContain('text-muted-foreground');
+    const item = block.querySelector('li') as HTMLElement;
+    expect(item.textContent).toBe('ship it · S01 (claude)');
+    expect(item.className).toContain('text-[13px]');
+    // Блок лежит между шапкой и лентой, а не внутри колонки писем.
+    expect(block.parentElement).toBe(container.firstElementChild);
   });
 
   it('↓N — пилюля', () => {

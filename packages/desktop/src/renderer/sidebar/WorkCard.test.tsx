@@ -236,6 +236,40 @@ describe('WorkCard (тест 3)', () => {
     expect(card().textContent).toContain('3m');
   });
 
+  // Правки ревью куска 2: при длинном имени проекта оба поля делили остаток поровну, и ветка `main` на 800×500
+  // превращалась в «m…». Имя папки в карточке — то же, что заголовок группы над ней; ветка важнее: она держит
+  // своё место (`shrink-0`) с потолком в половину строки, сжимается многоточием имя папки.
+  it('мета: длинное имя проекта сжимается многоточием, ветка держит своё место (shrink-0, потолок 50 %)', () => {
+    const long = makeWork('w-01', {
+      projectPath: `/Users/me/${'p'.repeat(120)}`,
+      sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b')],
+    });
+    renderCard(long, { branch: 'main' });
+    const meta = card().querySelector('[data-work-meta]') as HTMLElement;
+    const folder = meta.firstElementChild as HTMLElement;
+    expect(folder.textContent).toBe('p'.repeat(120));
+    expect(folder.className).toContain('min-w-0');
+    expect(folder.className).toContain('truncate');
+    expect(folder.className).not.toContain('shrink-0');
+    const branch = screen.getByText('main');
+    expect(branch.className).toContain('shrink-0');
+    expect(branch.className).toContain('max-w-[50%]');
+    expect(branch.className).toContain('truncate');
+    expect(branch.className).toContain('font-mono');
+  });
+
+  // Правки ревью куска 2: в done-карточке основной цвет сайдбара — вторичный (dimmed.css), а на hover
+  // кнопки заливка text 4 % карточки + text 6 % кнопки — вторичный на ней ниже 4.5:1: цвет на hover — явно основной.
+  it('«N more closed» на hover — основной текст (--color-text), а не --work-sidebar-foreground: тот в done-карточке вторичный', () => {
+    const mixed = makeWork('w-closed', {
+      sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'closed' })],
+    });
+    renderCard(mixed);
+    const more = screen.getByText('1 more closed');
+    expect(more.className).toContain('hover:text-(--color-text)');
+    expect(more.className).not.toContain('hover:text-work-sidebar-foreground');
+  });
+
   it('закрытые спрятаны за «2 more closed», клик раскрывает их, «Hide closed» прячет снова (и не активирует карточку)', () => {
     const onActivate = vi.fn();
     const mixed = makeWork('w-closed', {

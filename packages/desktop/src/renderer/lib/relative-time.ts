@@ -34,3 +34,12 @@ export function relativeTime(iso: string, now: Date): string {
   }
   return at.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
+
+/**
+ * `relativeTime` для фразы «last event …» карточки неживой сессии: минуты и часы — с «ago» (`3m ago`, `2h ago`),
+ * «now», «yesterday» и дата — как есть (`last event yesterday`, `last event Sep 26`).
+ */
+export function relativeTimeAgo(iso: string, now: Date): string {
+  const when = relativeTime(iso, now);
+  return /^\d+[mh]$/.test(when) ? S.time.ago(when) : when;
+}

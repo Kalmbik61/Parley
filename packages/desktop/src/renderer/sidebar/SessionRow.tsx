@@ -7,8 +7,10 @@
  * значок состояния 12, значок агента 13, слово 11px строчными, GitBranch 11 (тултип `Own worktree ·
  * {branch}`), время 10px шириной 22. Фон: `blocked` — `accent-200` (слово `accent-800`), `unseen` —
  * `accent-2-200` (слово `accent-2-800`), иначе выбранная и hover — `text 9%`; подкраска бьёт выбор. Выбранная —
- * вес 700. Закрытая — `data-dimmed="row"`: значки .5 при правиле `dimmed.css`. На hover вторичный текст
- * строки — основной цвет (наследство куска 1: `neutral-700` на заливке hover ниже 4.5:1).
+ * вес 700. Закрытая — `data-dimmed="row"`: значки .5 при правиле `dimmed.css`. На hover весь текст строки —
+ * основной цвет (наследство куска 1: `neutral-700` на заливке hover ниже 4.5:1). Оба цвета задаются явно
+ * (`--color-text`): в приглушённом поддереве (done-карточка, закрытая строка) основной цвет сайдбара уже
+ * равен вторичному, и подмена «вторичный := основной» на hover ничего не меняла (правки ревью куска 2).
  *
  * Перетаскивание — контракт 2.6, как у строки прежнего дерева сессий: `DndContext`
  * один на окно (`AppShell`), тащатся только строки активной работы (спека 6.4) — у
@@ -186,8 +188,11 @@ export const SessionRow = memo(function SessionRow({
           className={cn(
             // Кольцо внутрь: карточка режет выступающее (`overflow-hidden`).
             'flex h-[26px] min-w-0 items-center gap-1.5 rounded-full pr-1.5 text-xs text-work-sidebar-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-work-sidebar-focus-ring',
-            // Вторичный текст строки на hover — основной цвет: `neutral-700` на заливке hover ниже 4.5:1.
-            'hover:[--work-sidebar-muted-foreground:var(--work-sidebar-foreground)]',
+            // Текст строки на hover — основной цвет: `neutral-700` на заливке hover ниже 4.5:1. Явный `--color-text`, а не
+            // подмена одной переменной другой: внутри `[data-dimmed]` они равны, а на самой закрытой строке
+            // неслойное правило `dimmed.css` бьёт утилиту по `--work-sidebar-foreground` и сводит его к
+            // вторичному, который на hover — основной текст (цепочка без петли).
+            'hover:[--work-sidebar-foreground:var(--color-text)] hover:[--work-sidebar-muted-foreground:var(--color-text)]',
             draggable ? 'cursor-default' : 'cursor-not-allowed',
             // Подкраска бьёт выбор и hover: строка, где нужен человек, не бледнеет под курсором.
             blocked

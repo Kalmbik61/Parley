@@ -92,6 +92,22 @@ describe('NOTICE и лицензии в сборке (ревью M7)', () => {
     expect(section).not.toMatch(/licen[sc]|лиценз/i);
   });
 
+  // Правки ревью куска 2: раздел говорил, что окно рисует значки «на вкладках», хотя `AgentIcon` со вкладок
+  // убран — их нет на снимках handoff. Места, названные в NOTICE, должны совпадать с теми, где он есть.
+  it('NOTICE: значки провайдеров — только там, где окно их рисует (строка статуса, сайдбар), не на вкладках', () => {
+    const rule = `\n${'-'.repeat(78)}`;
+    const underline = notice.indexOf(rule, notice.indexOf('\nЗначки провайдеров\n'));
+    const next = notice.indexOf(rule, underline + 1);
+    const section = notice.slice(underline, next === -1 ? undefined : next);
+    const usedIn = (file: string): boolean => readFileSync(path.join(desktopRoot, 'src', 'renderer', file), 'utf8').includes('<AgentIcon');
+    expect(section).toMatch(/строке статуса/);
+    expect(usedIn('shell/StatusBar.tsx')).toBe(true);
+    expect(section).toMatch(/сайдбаре/);
+    expect(usedIn('sidebar/SessionRow.tsx')).toBe(true);
+    expect(section).not.toMatch(/вкладк/);
+    expect(usedIn('layout/Tab.tsx')).toBe(false);
+  });
+
   it('NOTICE называет таблицу палитр терминала из Orca', () => {
     expect(notice).toContain('packages/desktop/src/renderer/terminal/xterm-themes.ts');
   });

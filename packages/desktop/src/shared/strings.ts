@@ -141,6 +141,8 @@ export const S = {
     yesterday: 'yesterday',
     minutes: (n: number): string => `${n}m`,
     hours: (n: number): string => `${n}h`,
+    /** `3h` → `3h ago` во фразе «last event …» (`lib/relative-time.ts#relativeTimeAgo`). */
+    ago: (relative: string): string => `${relative} ago`,
   },
 
   /** Строка статуса — `shell/StatusBar.tsx`. */
@@ -383,6 +385,8 @@ export const S = {
     imageTooLarge: 'Image is larger than 20 MB — not sent',
     /** Связь окна с хостом оборвалась (раунд lane-r3, п. 2): терминал ввод не принимает. */
     disconnected: 'Disconnected — reconnecting…',
+    /** Мета карточки неживой сессии (спека окна 2026-09-29, 1.8): `Claude Code · last event 3h ago`. */
+    lastEvent: (when: string): string => `last event ${when}`,
   },
 
   /**

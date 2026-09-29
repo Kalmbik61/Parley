@@ -6,6 +6,9 @@
  * прозрачность остаётся у того, что не текст: значков состояния. Спека окна 2026-09-29, 1.2:
  * у `done`-карточки значки .6 (`data-dimmed`), у закрытой строки — .5 (`data-dimmed="row"`).
  * Полосы внимания слева у карточки Organic нет — состояние несёт значок в строке заголовка.
+ * Значки — это `svg` (lucide), точка состояния и значок провайдера (`<img>` брендовый или буква, метка
+ * `data-agent-icon`): `<img>` правило раньше не брало, и звезда Claude в done-карточке и закрытой строке
+ * оставалась при opacity 1 (правки ревью куска 2).
  * color-mix заливки активной карточки берёт переопределённую переменную — заливка чуть светлее
  * (тёмная — темнее), контраст от этого только растёт; тест считает оба варианта.
  */
@@ -17,11 +20,11 @@
  * Значок внутри значка состояния (Moon, CircleCheck…) отдельно не приглушается: прозрачность ложится
  * на коробку значка один раз, иначе она перемножалась бы (.6 × .6).
  */
-[data-dimmed] :is(svg, [data-testid='agent-state-dot']):not([data-testid='agent-state-dot'] svg) {
+[data-dimmed] :is(svg, [data-agent-icon], [data-testid='agent-state-dot']):not([data-testid='agent-state-dot'] svg) {
   opacity: 0.6;
 }
 
 /* Закрытая строка — .5; идёт после общего правила и перебивает его у своих значков. */
-[data-dimmed='row'] :is(svg, [data-testid='agent-state-dot']):not([data-testid='agent-state-dot'] svg) {
+[data-dimmed='row'] :is(svg, [data-agent-icon], [data-testid='agent-state-dot']):not([data-testid='agent-state-dot'] svg) {
   opacity: 0.5;
 }

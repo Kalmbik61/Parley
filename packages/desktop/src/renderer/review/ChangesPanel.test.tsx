@@ -906,6 +906,9 @@ describe('ChangesPanel — облик Organic (1.8)', () => {
     expect(row.className).toMatch(/\brounded-full\b/);
     expect(row.className).toContain('hover:bg-foreground/6');
     expect(row.className).toContain('hover:[--muted-foreground:var(--foreground)]');
+    // Правки ревью куска 2: `+N` (accent-2-700) на hover-заливке text 6 % в светлой — 4.31:1; на hover строка
+    // подменяет токен текста успеха на accent-2-800 (`styles/tokens.test.ts`).
+    expect(row.className).toContain('hover:[--status-success-text:var(--color-accent-2-800)]');
     expect(within(row).getByText('+3').className).toContain('text-status-success-text');
     expect(within(row).getByText('−2').className).toContain('text-accent-700');
   });

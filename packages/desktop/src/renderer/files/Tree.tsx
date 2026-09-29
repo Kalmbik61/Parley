@@ -161,8 +161,11 @@ const Row = memo(function Row({ row, root, rootKey, rootDir, expanded, letter, b
           style={{ ...style, paddingLeft: 8 + row.depth * INDENT, height: ROW_HEIGHT }}
           className={cn(
             // Пилюля с заливкой hover `text 6 %`; вторичный текст (шеврон, буква git) на ней — основной цвет
-            // (наследство куска 1: `--muted-foreground` на заливке ниже 4.5:1).
-            'flex min-w-0 cursor-default select-none items-center gap-1.5 rounded-full pr-3 text-xs transition-colors hover:bg-foreground/6 hover:[--muted-foreground:var(--foreground)]',
+            // (наследство куска 1: `--muted-foreground` на заливке ниже 4.5:1). Цвета git идут своими токенами,
+            // подмена `--muted-foreground` их не касается: added и untracked (accent-2-700) на этой заливке в
+            // светлой — 4.31:1, renamed (neutral-700) — 4.40; на hover — ступень 800 тех же рамп (правки ревью
+            // куска 2). Modified (accent-700, 4.55:1) и deleted (accent-800) порог держат сами.
+            'flex min-w-0 cursor-default select-none items-center gap-1.5 rounded-full pr-3 text-xs transition-colors hover:bg-foreground/6 hover:[--muted-foreground:var(--foreground)] hover:[--git-decoration-added:var(--color-accent-2-800)] hover:[--git-decoration-untracked:var(--color-accent-2-800)] hover:[--git-decoration-renamed:var(--color-neutral-800)]',
             (row.entry.ignored || dead) && 'opacity-50',
           )}
           onClick={onClick}

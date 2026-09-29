@@ -151,6 +151,18 @@ describe('SessionRow — девять состояний таблицы 4.2 (т�
     expect(row().className).not.toMatch(/\bbg-work-sidebar-accent\b/);
   });
 
+  // Правки ревью куска 2: в приглушённом поддереве (done-карточка, закрытая строка) основной цвет сайдбара уже
+  // равен вторичному, поэтому подмена «вторичный := основной» на hover ничего не меняла и текст оставался
+  // `neutral-700` на заливке hover (3.86:1 в светлой). Строка на hover задаёт оба цвета явно — основным текстом.
+  // Закрытая строка несёт `data-dimmed` сама: там неслойное правило `dimmed.css` бьёт утилиту по основному
+  // цвету, и он сводится к вторичному, а вторичный на hover — основной текст (цепочка без петли).
+  it('hover: основной и вторичный цвет строки — явно --color-text (в приглушённом поддереве подмена одной другой не работает)', () => {
+    renderRow(makeSession('s-01', 'a'));
+    expect(row().className).toContain('hover:[--work-sidebar-foreground:var(--color-text)]');
+    expect(row().className).toContain('hover:[--work-sidebar-muted-foreground:var(--color-text)]');
+    expect(row().className).not.toContain('hover:[--work-sidebar-muted-foreground:var(--work-sidebar-foreground)]');
+  });
+
   it('значок состояния 12, значок агента 13, время 10px шириной 22, слово 11px', () => {
     renderRow(makeSession('s-01', 'a'), { activity: 'working' });
     expect(row().querySelector('[data-testid="agent-state-dot"]')?.classList.contains('size-3')).toBe(true);

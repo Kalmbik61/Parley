@@ -97,6 +97,9 @@
   --color-terminal-pane-title-on-light-input-bg: var(--terminal-pane-title-on-light-input-bg);
   --color-terminal-pane-title-on-light-separator: var(--terminal-pane-title-on-light-separator);
   --color-ai-action-accent: var(--ai-action-accent);
+  /* Значки состояний сессии (`components/AgentStateDot.tsx`): свои токены на тему — см. `:root` ниже. */
+  --color-state-inactive: var(--state-inactive);
+  --color-state-done: var(--state-done);
   --color-status-success: var(--status-success);
   --color-status-success-background: var(--status-success-background);
   --color-status-success-border: var(--status-success-border);
@@ -267,6 +270,14 @@
      dashboard, kanban). Терракотовый accent-600; текст и значки на его подкраске — accent-700. */
   --agent-question: var(--color-accent-600);
   --agent-question-text: var(--color-accent-700);
+  /* Значки состояний сессии (таблица 1.2 спеки; правки ревью куска 2): признак состояния — не ниже 3:1 к каждому
+     фону сайдбара, включая hover-заливки (`styles/tokens.test.ts`). Ступени таблицы для idle (neutral-400),
+     pending и «закрыта» (neutral-500) держали 1.5–2.2:1, а neutral-600 в светлой на hover — 2.5–3.0:1; unseen и
+     done (accent-2-600) на hover — 2.5–2.9:1. Светлая берёт ступень темнее, тёмная (рампы перевёрнуты) остаётся на
+     ступени таблицы или ближайшей к ней. Одна ступень у idle, pending, «спит» и «закрыта» допустима: различает
+     форма. Приглушённые значки (.5 у закрытой строки, .6 у done-карточки) — исключение, см. тест. */
+  --state-inactive: var(--color-neutral-700);
+  --state-done: var(--color-accent-2-700);
   /* Заливка и значок успеха. Цветом текста он даёт 3.14:1 на фоне окна светлой темы — для текста есть
      `--status-success-text` (ревью куска 1). */
   --status-success: var(--color-accent-2-600);
@@ -423,6 +434,9 @@
   --destructive: var(--color-accent-700);
   /* Кольцо фокуса, тёмная тема: `accent`, как в таблице спеки, — 6.07:1 к фону окна. */
   --ring: var(--color-accent);
+  /* Значки состояний, тёмная тема: рампы перевёрнуты, ступени 600 держат 3:1 ко всем фонам сайдбара (3.4–7.5:1). */
+  --state-inactive: var(--color-neutral-600);
+  --state-done: var(--color-accent-2-600);
   --terminal-pane-locate: var(--color-blue-400);
   --ai-action-accent: var(--color-violet-400);
   --workspace-status-done: #c7a594;

@@ -16,9 +16,9 @@
  * все вкладки трёх работ, и ⌘F открыл бы полосу во всех; полосу открывает
  * `openSearch()` ручки, его зовёт `AppShell`.
  *
- * Неживая сессия (раунд main-r2, п. 2) и ещё не запущенная (Organic, 1.8) — карточка над терминалом:
- * кикер `asleep`, `closed` или `not started`, текст «S01 isn't running» и, где уместно, Resume. Терминал под
- * ней прежний: xterm держит последний вывод.
+ * Неживая сессия (раунд main-r2, п. 2) и ещё не запущенная (Organic, 1.8) — карточка над терминалом
+ * (`NotRunningCard.tsx`): кикер `asleep`, `closed` или `not started`, название, текст, мета и, где уместно,
+ * Resume. Терминал под ней прежний: xterm держит последний вывод.
  *
  * Кусок 2.6 (спека 5.4): корень — droppable `terminal` с `sessionId`, только
  * пока поверхность видима: скрытые терминалы группы лежат на месте видимого,
@@ -42,8 +42,6 @@ import { errorText, S } from '../../shared/strings.js';
 import { applyFocusTarget, buildFocusTargetDeps } from '../attention/focus-target.js';
 import { useHostSupports } from '../lib/capabilities.js';
 import { sessionTag } from '../lib/participant.js';
-import { Button } from '../ui/button.js';
-import { Card, CardKicker } from '../ui/card.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { dndId, type DropTargetData } from '../layout/dnd.js';
 import { useTerminalDropPreview } from '../layout/DropIndicator.js';
@@ -57,6 +55,7 @@ import { useWorksStore } from '../store/works.js';
 import { openInBrowserTab } from '../browser/store.js';
 import { isFileLink, LinkMenu, openLinkInEditor, openLinkPath, type LinkMenuState } from './LinkMenu.js';
 import { sessionCwd, type TerminalLink } from './links.js';
+import { NotRunningCard } from './NotRunningCard.js';
 import { SearchBar } from './SearchBar.js';
 import { terminalSurfaces, type TerminalSurfaceHandle } from './surface-registry.js';
 import { dragHasFiles, pasteHasOnlyImage, pathsToInput } from './drop.js';
@@ -227,18 +226,13 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
     const lifecycle = sessionOf(sessionRef, state.entries)?.lifecycle;
     return lifecycle === 'sleeping' || lifecycle === 'closed';
   });
-  const resumable = useWorksStore((state) => {
-    const session = sessionOf(sessionRef, state.entries);
-    return session !== null && canResume(session);
-  });
   // Карточка над терминалом (Organic, 1.8): «asleep», «closed» — процесса нет; «not started» — его ещё не
   // было. У pending подключаться тоже не к чему, но поведение терминала прежнее: `notRunning` (ввод-тост,
   // `running`) его не считает — только вид.
-  const stateKicker = useWorksStore((state) => {
+  const showCard = useWorksStore((state) => {
     const lifecycle = sessionOf(sessionRef, state.entries)?.lifecycle;
-    return lifecycle === 'sleeping' ? S.states.asleep : lifecycle === 'closed' ? S.states.closed : lifecycle === 'pending' ? S.states.pending : null;
+    return lifecycle === 'sleeping' || lifecycle === 'closed' || lifecycle === 'pending';
   });
-  const label = sessionTag(sessionRef.sessionId);
   const [searchOpen, setSearchOpen] = useState(false);
   const [linkMenu, setLinkMenu] = useState<LinkMenuState | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -425,26 +419,9 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
       style={dropping ? { outline: '2px solid rgb(59,130,246)', outlineOffset: '-2px' } : undefined}
     >
       {/* Без связи вкладка говорит одно — «Disconnected — reconnecting…» (слой ниже): снимок
-          работ в это время прежний, а Resume звать некому. Полоса вернётся со связью, если
+          работ в это время прежний, а Resume звать некому. Карточка вернётся со связью, если
           сессия и по свежему снимку неживая (после «Restart host» — так и будет). */}
-      {stateKicker !== null && !offline ? (
-        <Card
-          data-testid="terminal-not-running"
-          className="m-3 mb-0 shrink-0 flex-row items-center gap-3 rounded-md py-2.5 pl-4 pr-2.5 text-foreground"
-        >
-          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <CardKicker data-kicker className={notRunning ? 'text-neutral-700' : undefined}>
-              {stateKicker}
-            </CardKicker>
-            <span className="truncate text-sm">{S.send.notRunning(label)}</span>
-          </span>
-          {resumable ? (
-            <Button type="button" size="sm" className="shrink-0" onClick={() => resumeSession(bridge, sessionRef)}>
-              {S.sidebar.sessionMenu.resume}
-            </Button>
-          ) : null}
-        </Card>
-      ) : null}
+      {showCard && !offline ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
       {searchOpen ? (
         <SearchBar
           ref={inputRef}
