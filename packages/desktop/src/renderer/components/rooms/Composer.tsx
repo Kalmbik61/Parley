@@ -233,7 +233,7 @@ export function Composer({ members, draftKey, onSend }: ComposerProps): JSX.Elem
               dismissedRef.current = null;
               setMenu(null);
             }}
-            className="box-border max-h-[140px] min-h-[38px] overflow-y-auto whitespace-pre-wrap rounded-[19px] border border-[color-mix(in_srgb,currentColor_22%,transparent)] bg-[color-mix(in_srgb,currentColor_5%,transparent)] px-4 py-2 text-sm leading-5 caret-ring outline-none [overflow-wrap:anywhere] hover:border-foreground/45 focus-visible:border-ring"
+            className="box-border max-h-[140px] min-h-[38px] overflow-y-auto whitespace-pre-wrap rounded-[19px] border border-[color-mix(in_srgb,currentColor_22%,transparent)] bg-[color-mix(in_srgb,currentColor_5%,transparent)] px-4 py-2 text-sm leading-5 caret-ring outline-none [overflow-wrap:anywhere]"
           />
         </div>
         <Button type="button" onClick={submit}>

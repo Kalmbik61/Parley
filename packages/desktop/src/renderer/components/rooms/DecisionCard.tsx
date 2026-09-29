@@ -87,7 +87,6 @@ export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResol
             placeholder={S.rooms.returnPlaceholder}
             aria-label={S.rooms.returnPlaceholder}
             maxLength={NOTE_MAX}
-            autoFocus
             className="min-h-16 rounded-[14px] border-[color-mix(in_srgb,currentColor_22%,transparent)] bg-[color-mix(in_srgb,currentColor_5%,transparent)]"
           />
           <div className="flex flex-wrap gap-2">
