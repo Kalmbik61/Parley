@@ -9,15 +9,8 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  HOOK_COMMAND,
-  HOOK_EVENTS,
-  STATUSLINE_ENTRY,
-  statusLineCommand,
-  workSettings,
-  writeWorkSettings,
-} from './settings-file.js';
-import { STATUSLINE_BIN } from './statusline.js';
+import { HOOK_COMMAND, HOOK_EVENTS, workSettings, writeWorkSettings } from './settings-file.js';
+import { STATUSLINE_BIN, STATUSLINE_ENTRY, statusLineCommand } from './statusline.js';
 import { createWork, workPaths } from './store.js';
 
 describe('workSettings', () => {

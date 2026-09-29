@@ -12,7 +12,13 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { STATUSLINE_BIN, runStatusline } from './statusline.js';
+import {
+  STATUSLINE_BIN,
+  STATUSLINE_ENTRY,
+  isOwnCommand,
+  runStatusline,
+  statusLineCommand,
+} from './statusline.js';
 
 const require = createRequire(import.meta.url);
 const tsxLoader = pathToFileURL(require.resolve('tsx')).href;
@@ -282,15 +288,25 @@ describe('строка терминала', () => {
 
   it('наш же скрипт в настройках человека не зовётся: короткая строка вместо рекурсии', async () => {
     const marker = path.join(root, 'called');
-    // Команда с именем нашего скрипта, оставляющая след, если её всё-таки вызвали.
-    await putStatusLine(
-      home,
-      'settings.json',
-      `touch '${marker}'; echo /x/work/${STATUSLINE_BIN}.js`,
-    );
+    // Команда с полным путём нашего скрипта, оставляющая след, если её всё-таки вызвали.
+    await putStatusLine(home, 'settings.json', `touch '${marker}'; echo '${STATUSLINE_ENTRY}'`);
 
     expect(await run(input())).toBe('Opus · ctx 8%\n');
     expect(await exists(marker)).toBe(false);
+  });
+
+  it('чужой скрипт с похожим именем — не наш: вызывается, а не заменяется короткой строкой', async () => {
+    // Свой скрипт человека, названный `statusline-bin`, — не повод его пропускать.
+    const script = path.join(home, 'bin', STATUSLINE_BIN);
+    await mkdir(path.dirname(script), { recursive: true });
+    await writeFile(script, "#!/bin/sh\nprintf 'мой скрипт'\n", { mode: 0o755 });
+    await putStatusLine(home, 'settings.json', script);
+    expect(await run(input())).toBe('мой скрипт');
+
+    await putStatusLine(home, 'settings.json', `echo /x/work/${STATUSLINE_BIN}.js`);
+    expect(await run(input())).toBe(`/x/work/${STATUSLINE_BIN}.js\n`);
+    await putStatusLine(home, 'settings.json', `printf 'заметки-${STATUSLINE_BIN}'`);
+    expect(await run(input())).toBe(`заметки-${STATUSLINE_BIN}`);
   });
 
   it('команда человека упала — короткая строка, а не пустота', async () => {
@@ -349,6 +365,30 @@ describe('строка терминала', () => {
     await putStatusLine(home, 'settings.json', `touch '${marker}'`);
     expect(await run(input(), { signal: AbortSignal.abort() })).toBe('Opus · ctx 8%\n');
     expect(await exists(marker)).toBe(false);
+  });
+});
+
+describe('isOwnCommand: наша ли это команда — по полному пути скрипта, а не по имени', () => {
+  const quote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
+
+  it('полная команда харнесса и любая команда с полным путём нашего скрипта — наши', () => {
+    expect(isOwnCommand(statusLineCommand())).toBe(true);
+    expect(isOwnCommand(`/opt/node/bin/node ${STATUSLINE_ENTRY}`)).toBe(true);
+    expect(isOwnCommand(`node ${quote(STATUSLINE_ENTRY)} --x`)).toBe(true);
+    expect(isOwnCommand(STATUSLINE_ENTRY)).toBe(true);
+  });
+
+  it('то же имя файла в другом месте, обрывок имени и пустая команда — не наши', () => {
+    for (const command of [
+      `node /home/me/${STATUSLINE_BIN}.js`,
+      `/home/me/bin/${STATUSLINE_BIN}`,
+      `printf '${STATUSLINE_BIN}'`,
+      `cat ${STATUSLINE_BIN}-notes.txt`,
+      path.dirname(STATUSLINE_ENTRY),
+      '',
+    ]) {
+      expect(isOwnCommand(command)).toBe(false);
+    }
   });
 });
 

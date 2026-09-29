@@ -13,8 +13,7 @@
  */
 
 import { mkdir, writeFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-import { STATUSLINE_BIN } from './statusline.js';
+import { statusLineCommand } from './statusline.js';
 import { workPaths } from './store.js';
 
 /**
@@ -63,23 +62,6 @@ export interface SettingsFile {
   hooks: Record<string, HookMatcher[]>;
   statusLine: StatusLineSetting;
 }
-
-/**
- * Скрипт строки статуса лежит рядом с этим модулем, в `work/`: тем же способом, что и сервер MCP
- * (`mcp-config.ts`), — абсолютный путь к собранному файлу, а не имя из PATH.
- */
-export const STATUSLINE_ENTRY = fileURLToPath(new URL(`./${STATUSLINE_BIN}.js`, import.meta.url));
-
-/** Строка для оболочки: Claude Code запускает команду через неё, а в путях бывают пробелы. */
-const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
-
-/**
- * Команда строки статуса: node текущего процесса (хост запущен системным node, и тот же стоит у
- * агента) и скрипт по абсолютному пути — без надежды на PATH, как у сервера MCP. Адрес работы и
- * сессии скрипт берёт из окружения агента, как хуки.
- */
-export const statusLineCommand = (): string =>
-  `${shellQuote(process.execPath)} ${shellQuote(STATUSLINE_ENTRY)}`;
 
 /**
  * Содержимое `settings.json` работы. Чужие хуки пользователя не трогаются:

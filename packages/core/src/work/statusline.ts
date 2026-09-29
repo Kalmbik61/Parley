@@ -27,13 +27,37 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { claudeLimits, isFileSafeId, LIMITS_DIR, limitsFile } from '../limits.js';
 
-/**
- * Имя файла точки входа без расширения (`statusline-bin.js` рядом с этим модулем). По нему
- * скрипт узнаёт себя в настройках человека и не зовёт сам себя, а `settings-file.ts` строит путь.
- */
+/** Имя файла точки входа без расширения: `statusline-bin.js` лежит рядом с этим модулем. */
 export const STATUSLINE_BIN = 'statusline-bin';
+
+/**
+ * Скрипт строки статуса — абсолютный путь к собранному файлу рядом с этим модулем, в `work/`, тем
+ * же способом, что и сервер MCP (`mcp-config.ts`), а не имя из PATH.
+ */
+export const STATUSLINE_ENTRY = fileURLToPath(new URL(`./${STATUSLINE_BIN}.js`, import.meta.url));
+
+/** Строка для оболочки: Claude Code запускает команду через неё, а в путях бывают пробелы. */
+const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
+
+/**
+ * Команда строки статуса: node текущего процесса (хост запущен системным node, и тот же стоит у
+ * агента) и скрипт по абсолютному пути — без надежды на PATH, как у сервера MCP. Адрес работы и
+ * сессии скрипт берёт из окружения агента, как хуки.
+ */
+export const statusLineCommand = (): string =>
+  `${shellQuote(process.execPath)} ${shellQuote(STATUSLINE_ENTRY)}`;
+
+/**
+ * Наша ли это команда: в ней стоит полный путь нашего скрипта — как есть или в кавычках для
+ * оболочки. По имени файла нельзя: свой скрипт человека тоже может зваться `statusline-bin`, и
+ * его строку мы бы молча подменили короткой.
+ */
+export function isOwnCommand(command: string): boolean {
+  return command.includes(STATUSLINE_ENTRY) || command.includes(shellQuote(STATUSLINE_ENTRY));
+}
 
 /**
  * Сколько ждём команду человека. В документации Claude Code предела у строки статуса нет
@@ -162,7 +186,7 @@ async function humanCommand(
     if (!isRecord(line) || line['type'] !== 'command') continue;
     const command = text(line['command']);
     if (command === null) continue;
-    return command.includes(STATUSLINE_BIN) ? null : command;
+    return isOwnCommand(command) ? null : command;
   }
   return null;
 }
