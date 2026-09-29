@@ -144,7 +144,7 @@ function FileList({ files, mode, onOpen }: { files: DiffFile[]; mode: DiffListMo
                 {row.file.status}
               </span>
               <span className="min-w-0 flex-1 truncate">{row.name}</span>
-              {row.file.additions === null ? null : <span className="shrink-0 tabular-nums text-status-success">{`+${row.file.additions}`}</span>}
+              {row.file.additions === null ? null : <span className="shrink-0 tabular-nums text-status-success-text">{`+${row.file.additions}`}</span>}
               {row.file.deletions === null ? null : <span className="shrink-0 tabular-nums text-destructive">{`−${row.file.deletions}`}</span>}
             </button>
           </li>

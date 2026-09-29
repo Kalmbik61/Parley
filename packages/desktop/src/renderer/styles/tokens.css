@@ -21,7 +21,7 @@
  *  — семантика shadcn — `bg-background`, `bg-card`, `text-muted-foreground`, `bg-primary`.
  * Ловушка имён: `bg-accent` — это НЕ терракотовый `accent` палитры, а выбранная строка (`text 9%`,
  * переменная shadcn `--accent`): на этом имени держится весь прежний код. Терракотовый — только
- * `var(--color-accent)`, `--ring` и, в тёмной теме, `--primary`.
+ * `var(--color-accent)`, `--ring` (в светлой теме — accent-600) и, в тёмной теме, `--primary`.
  */
 
 /* Без этой строки утилиты `dark:` компилируются по `prefers-color-scheme`
@@ -100,6 +100,7 @@
   --color-status-success: var(--status-success);
   --color-status-success-background: var(--status-success-background);
   --color-status-success-border: var(--status-success-border);
+  --color-status-success-text: var(--status-success-text);
   --color-status-warning: var(--status-warning);
   --color-status-warning-background: var(--status-warning-background);
   --color-status-warning-border: var(--status-warning-border);
@@ -244,12 +245,16 @@
   --menu-destructive: var(--color-accent-700);
   --border: var(--color-divider);
   --input: var(--color-divider);
-  /* Фокус — обводка 2px этого цвета со смещением 2px (`base.css`). К фону окна в светлой теме
-     2.7:1 — ниже 3:1 признака состояния; кольцо сайдбара (--work-sidebar-focus-ring) темнее и
-     держит 3:1 на всех его фонах. */
-  --ring: var(--color-accent);
-  /* Hover неактивной карточки (решение 2 спеки): text 5% давал neutral-700 на surface 4.48:1 —
-     ниже порога AA; ближайшее целое, при котором 4.5:1 держится, — 4% (4.56:1). */
+  /* Фокус — обводка 2px этого цвета со смещением 2px (`base.css`), рамка полей, вспышка вкладки
+     (`attention-flash.css`). Признак состояния — не ниже 3:1. Строка таблицы спеки — `accent`, но в
+     светлой теме он к фону окна 2.69:1, поэтому светлая берёт `accent-600` (тот же терракотовый тон:
+     3.35:1 к фону окна, 4.10 к карточке и листу); тёмная — `accent`, как в таблице (`.dark` ниже,
+     6.07:1). Кольцо карточек и строк сайдбара (--work-sidebar-focus-ring) темнее и держит 3:1 на
+     всех его фонах, включая выбранную строку. */
+  --ring: var(--color-accent-600);
+  /* Hover неактивной карточки (решение 2 спеки): text 5% давал neutral-700 на surface 4.47:1 —
+     ниже порога AA (5% и 4.5:1 вместе невыполнимы); ближайшее целое, при котором 4.5:1 держится, —
+     4% (4.56:1). Спека и план поправлены на 4%. */
   --card-hover: color-mix(in srgb, var(--color-text) 4%, transparent);
   --terminal-pane-locate: var(--color-blue-600);
   --ai-action-accent: var(--color-violet-500);
@@ -257,7 +262,13 @@
      dashboard, kanban). Терракотовый accent-600; текст и значки на его подкраске — accent-700. */
   --agent-question: var(--color-accent-600);
   --agent-question-text: var(--color-accent-700);
+  /* Заливка и значок успеха. Цветом текста он даёт 3.14:1 на фоне окна светлой темы — для текста есть
+     `--status-success-text` (ревью куска 1). */
   --status-success: var(--color-accent-2-600);
+  /* Текст успеха (счётчики «+N» в ревью), не ниже 4.5:1 на --card, --background, --sheet и
+     --editor-surface: accent-2-700 — 4.82:1 на фоне окна светлой, 5.90 на карточке и листе, 8.8 и
+     выше в тёмной (`tokens.test.ts`). Свой токен, как `--status-warning-text` (ревью M12). */
+  --status-success-text: var(--color-accent-2-700);
   --status-success-background: color-mix(in srgb, var(--status-success) 10%, transparent);
   --status-success-border: color-mix(in srgb, var(--status-success) 25%, transparent);
   /* Needs-attention state that is not an error: a resume that did not carry on, an update that
@@ -284,10 +295,11 @@
   --work-sidebar-accent: color-mix(in srgb, var(--color-text) 9%, transparent);
   --work-sidebar-accent-foreground: var(--color-text);
   --work-sidebar-border: var(--color-divider);
-  --work-sidebar-ring: var(--color-accent);
+  /* Рамка переименования в сайдбаре (`InlineRename`) — то же кольцо, что общее `--ring`. */
+  --work-sidebar-ring: var(--ring);
   /* Раунд исправлений 1 куска 3.4: кольцо фокуса карточек и строк — ≥ 3:1 к любому фону
-     сайдбара (tokens.test.ts). accent-700, а не `--ring`: терракотовый accent на фоне окна светлой
-     темы даёт 2.7:1. */
+     сайдбара (tokens.test.ts). accent-700, а не `--ring` (accent-600): запас больше — 5.1:1 к фону
+     окна светлой темы против 3.35:1 у `--ring`. */
   --work-sidebar-focus-ring: var(--color-accent-700);
   /* Кусок 3.3 (не из Orca): вторичный текст карточек и приглушённых (dimmed.css) — neutral-700,
      не ниже 4.5:1 на всех фонах сайдбара (tokens.test.ts). */
@@ -402,6 +414,8 @@
   --primary: var(--color-accent);
   --primary-hover: var(--color-accent-600);
   --primary-active: var(--color-accent-700);
+  /* Кольцо фокуса, тёмная тема: `accent`, как в таблице спеки, — 6.07:1 к фону окна. */
+  --ring: var(--color-accent);
   --terminal-pane-locate: var(--color-blue-400);
   --ai-action-accent: var(--color-violet-400);
   --workspace-status-done: #c7a594;

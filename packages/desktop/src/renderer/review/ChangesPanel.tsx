@@ -73,7 +73,7 @@ function FileRow({ file, onOpen, style }: { file: DiffFile; onOpen(): void; styl
         </span>
         <span className="min-w-0 flex-1 truncate">{file.path}</span>
         {/* Двоичный файл чисел не имеет (numstat `-`). */}
-        {file.additions === null ? null : <span className="shrink-0 tabular-nums text-status-success">{`+${file.additions}`}</span>}
+        {file.additions === null ? null : <span className="shrink-0 tabular-nums text-status-success-text">{`+${file.additions}`}</span>}
         {file.deletions === null ? null : <span className="shrink-0 tabular-nums text-destructive">{`−${file.deletions}`}</span>}
       </button>
     </li>

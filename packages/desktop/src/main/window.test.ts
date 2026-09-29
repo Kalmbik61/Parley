@@ -33,7 +33,7 @@ describe('mainWindowOptions', () => {
     expect(options.trafficLightPosition).toEqual({ x: 16, y: 12 });
     expect(options.minWidth).toBe(800);
     expect(options.minHeight).toBe(500);
-    expect(options.backgroundColor).toBe('#0a0a0a');
+    expect(options.backgroundColor).toBe('#161513');
     expect(options.webPreferences?.sandbox).toBe(true);
     expect(options.webPreferences?.contextIsolation).toBe(true);
     expect(options.webPreferences?.nodeIntegration).toBe(false);
@@ -43,9 +43,9 @@ describe('mainWindowOptions', () => {
     expect(options.webPreferences?.webviewTag).toBe(true);
   });
 
-  it('светлая тема: белый фон', () => {
+  it('светлая тема: песочный фон окна (--background)', () => {
     const options = mainWindowOptions({ dark: false, preloadPath: '/tmp/preload.js' });
-    expect(options.backgroundColor).toBe('#ffffff');
+    expect(options.backgroundColor).toBe('#ebddc5');
   });
 });
 

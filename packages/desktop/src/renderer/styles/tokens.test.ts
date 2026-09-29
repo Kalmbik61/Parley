@@ -110,7 +110,6 @@ describe('переменные shadcn — таблица раздела 4 спе
       same(theme, '--destructive', '--color-accent-700');
       same(theme, '--border', '--color-divider');
       same(theme, '--input', '--color-divider');
-      same(theme, '--ring', '--color-accent');
     });
 
     it(`${theme}: --accent — выбранная строка, text 9 % (не терракотовый accent палитры)`, () => {
@@ -143,6 +142,40 @@ describe('переменные shadcn — таблица раздела 4 спе
     expect(theme.get('--radius-lg')).toBe('28px');
     expect(theme.get('--radius-xl')).toBe('32px');
   });
+});
+
+/**
+ * Кольцо фокуса — признак состояния, порог 3:1 (WCAG 1.4.11). Чистый `accent` (таблица спеки) к фону
+ * окна в светлой теме — 2.69:1, поэтому светлая берёт `accent-600` (3.35:1 к фону окна, 4.10 к
+ * карточке и листу); тёмная — `accent`, как в таблице (6.07:1). Кольцо рисуется снаружи элемента
+ * (`outline-offset: 2px`, `ring-1`) или на самой вкладке (вспышка `attention-flash.css`), то есть на
+ * фоне окна, карточки, листа или подкраски blocked / unseen.
+ */
+describe('кольцо фокуса --ring — признак состояния, не ниже 3:1', () => {
+  it('тёмная — accent (таблица спеки), светлая — accent-600', () => {
+    same('dark', '--ring', '--color-accent');
+    same('light', '--ring', '--color-accent-600');
+  });
+
+  for (const theme of THEMES) {
+    it(`${theme}: --ring к фону окна, карточке, листу и подкраскам blocked и unseen — не ниже 3:1`, () => {
+      const ring = solid(theme, '--ring');
+      const unders = {
+        'фон окна': solid(theme, '--background'),
+        карточка: solid(theme, '--card'),
+        лист: solid(theme, '--sheet'),
+        blocked: solid(theme, '--color-accent-200'),
+        unseen: solid(theme, '--color-accent-2-200'),
+      };
+      for (const [name, under] of Object.entries(unders)) {
+        expect(contrastRatio(ring, under), name).toBeGreaterThanOrEqual(NON_TEXT);
+      }
+    });
+
+    it(`${theme}: рамка переименования в сайдбаре (--work-sidebar-ring) — то же кольцо, что --ring`, () => {
+      same(theme, '--work-sidebar-ring', '--ring');
+    });
+  }
 });
 
 describe('решение 1: главная кнопка', () => {
@@ -185,13 +218,11 @@ describe('решение 1: главная кнопка', () => {
 });
 
 describe('решение 2: hover неактивной карточки', () => {
-  it('--card-hover — text в единицах процента, не выше 5 % спеки', () => {
+  it('--card-hover — text 4 %: на 5 % neutral-700 на surface 4.47:1, ниже порога 4.5, на 4 % — 4.56:1', () => {
     for (const theme of THEMES) {
       const hover = resolveColor(tokens, theme, '--card-hover');
       expect(hover.rgb).toEqual(resolveColor(tokens, theme, '--color-text').rgb);
-      // Ровно 5 % даёт neutral-700 на surface 4.48:1 — ниже порога; 4 % — 4.56:1.
-      expect(hover.alpha).toBeGreaterThan(0.03);
-      expect(hover.alpha).toBeLessThanOrEqual(0.05);
+      expect(hover.alpha).toBeCloseTo(0.04, 10);
     }
   });
 
@@ -263,6 +294,17 @@ describe('прежние переменные — значения на токе
       same(theme, '--status-warning-text', '--color-accent-700');
       const text = solid(theme, '--status-warning-text');
       for (const under of ['--card', '--background', '--sidebar', '--editor-surface']) {
+        expect(contrastRatio(text, solid(theme, under)), under).toBeGreaterThanOrEqual(TEXT);
+      }
+    });
+
+    // Ревью куска 1: `--status-success` (accent-2-600) — заливка и значок, а цветом текста (счётчики
+    // «+N» в трёх видах ревью) он даёт 3.14:1 на фоне окна светлой темы. Текст — свой токен, как
+    // `--status-warning-text` (ревью M12): accent-2-700, 4.82:1 на фоне окна, 5.90 на карточке и листе.
+    it(`${theme}: текст успеха (--status-success-text) — accent-2-700, на --card, --background, --sheet, --editor-surface не ниже 4.5:1`, () => {
+      same(theme, '--status-success-text', '--color-accent-2-700');
+      const text = solid(theme, '--status-success-text');
+      for (const under of ['--card', '--background', '--sheet', '--editor-surface']) {
         expect(contrastRatio(text, solid(theme, under)), under).toBeGreaterThanOrEqual(TEXT);
       }
     });
@@ -362,6 +404,28 @@ describe('переменные, которые читает Monaco', () => {
   }
 });
 
+/**
+ * Нативное окно (`main/window.ts`) красится по теме в конструкторе — это цвет первой отрисовки и
+ * полосы при ресайзе, пока рендерер не нарисовал свой фон. Фон рендерера — `--background`: если
+ * цвет окна разойдётся с ним, при старте и ресайзе мелькает чужой фон (ревью куска 1: остались
+ * прежние `#0a0a0a` и `#ffffff`). Hex в `window.ts` — вторая копия токена, и держит её этот тест.
+ */
+describe('цвет нативного окна — --background каждой темы', () => {
+  const source = readFileSync(path.resolve(dirname, '../../main/window.ts'), 'utf8');
+  const match = /backgroundColor:\s*input\.dark\s*\?\s*'(#[0-9a-fA-F]{6})'\s*:\s*'(#[0-9a-fA-F]{6})'/.exec(source);
+
+  it('main/window.ts задаёт backgroundColor парой hex: `input.dark ? тёмный : светлый`', () => {
+    expect(match, 'backgroundColor: input.dark ? \'#…\' : \'#…\'').not.toBeNull();
+  });
+
+  for (const theme of THEMES) {
+    it(`${theme}: цвет окна совпадает с --background`, () => {
+      const hex = theme === 'dark' ? match?.[1] : match?.[2];
+      expect(hex?.toLowerCase()).toBe(substituted(tokens, theme, '--background').toLowerCase());
+    });
+  }
+});
+
 // ── Целостность: ни одной потерянной переменной ─────────────────────────────────────────────
 
 /** Файлы рендерера, кроме тестов и самих токенов. */
@@ -410,6 +474,14 @@ describe('целостность токенов', () => {
     expect(dangling).toEqual([]);
   });
 
+  it('цвет текста «успех» — утилита text-status-success-text; заливочный text-status-success в коде не звать', () => {
+    expect(parseThemeInline(css).get('--color-status-success-text')).toBe('var(--status-success-text)');
+    const offenders = rendererFiles(/\.tsx?$/)
+      .filter((file) => /\btext-status-success(?![\w-])/.test(readFileSync(file, 'utf8')))
+      .map((file) => path.relative(dirname, file));
+    expect(offenders).toEqual([]);
+  });
+
   it('имена, которые зовёт код, остались: значения на палитре, обе темы читаются', () => {
     const called = [
       '--status-warning-text',
@@ -419,6 +491,7 @@ describe('целостность токенов', () => {
       '--status-success',
       '--status-success-background',
       '--status-success-border',
+      '--status-success-text',
       '--agent-question',
       '--agent-question-text',
       '--work-sidebar',

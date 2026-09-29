@@ -26,8 +26,11 @@ Orca-UI `docs/specs/2026-09-26-desktop-orca-ui-design.md`, а также раз�
      AA. Поэтому в светлой теме фон главной кнопки — `accent-700` (5.7:1), hover —
      `accent-800`, active — `accent-900`.
    - В тёмной теме — как в прототипе: фон `accent`, текст `bg` (6.5:1).
-2. **Hover неактивной карточки** — `text 5%` вместо 6%: `neutral-700` на нём держит
-   4.5:1.
+2. **Hover неактивной карточки** — `text 4%` вместо 6%.
+   - `text 5%` (первое решение) вместе с порогом 4.5:1 невыполнимо: `neutral-700` на
+     `surface` даёт 4.47:1, при 6% — 4.41:1.
+   - Порог сквозной, поэтому взято ближайшее целое, где он держится: 4% — 4.56:1
+     (тёмная 6.50:1).
 3. **Строка статуса.**
    - Слева — сегменты провайдеров: значок, имя, версия CLI.
    - Справа — сегменты спеки Orca-UI 5.9: связь с хостом, счётчики внимания,
@@ -368,14 +371,14 @@ interface Proposal {
 | `--accent` / `--accent-foreground` | `text 9%` / `text` — выбранная строка |
 | `--destructive` | `accent-700` |
 | `--border`, `--input` | `divider` |
-| `--ring` | `accent`: фокус — `outline: 2px solid; outline-offset: 2px` |
+| `--ring` | тёмная — `accent`, светлая — `accent-600`: чистый `accent` к фону окна 2.69:1, ниже 3:1 для признака состояния, `accent-600` — 3.35:1. Фокус — `outline: 2px solid; outline-offset: 2px` |
 | `--work-sidebar`, `--sidebar` | `surface` (у сайдбаров нет своего фона) |
 | `--work-sidebar-accent` | `text 9%` |
 | `--agent-question` | `accent-600` |
-| `--status-success` | `accent-2-600` |
+| `--status-success` | `accent-2-600` — значки и заливки; цвет текста — `--status-success-text` = `accent-2-700` (`accent-2-600` даёт 3.14:1 на фоне окна светлой, `accent-2-700` — 4.82:1) |
 | `--radius` | 16px |
 
-`tokens.test.ts` читает hex из `tokens.css`: либо писать hex прямо в переменные shadcn, либо научить тест разворачивать `var()` и `color-mix()`. Порог 4.5:1 для вторичного текста остаётся. Замеры: `neutral-700` на `surface` 4.9:1, на `neutral-100` 6.0, на `accent-200` 5.3, на `accent-2-200` 5.4, на выбранной строке активной карточки 5.1; тёмная тема — от 6.2.
+`tokens.test.ts` читает hex из `tokens.css`: либо писать hex прямо в переменные shadcn, либо научить тест разворачивать `var()` и `color-mix()`. Порог 4.5:1 для вторичного текста остаётся. Замеры: `neutral-700` на `surface` 4.9:1, на `neutral-100` 6.0, на `accent-200` 5.3, на `accent-2-200` 5.4, на выбранной строке активной карточки 5.1; тёмная тема — от 4.88 (выбранная строка активной карточки; на `surface` 7.1, на `neutral-100` 6.2).
 
 **Цвет проекта** — хеш `projectPath` по ступеням 400: `accent-400`, `accent-2-400`, `neutral-400` (прототип показывает первые два).
 
@@ -385,9 +388,9 @@ interface Proposal {
 
 **Компоненты Organic** (перенести в примитивы `renderer/ui/`):
 - `button`: Caprasimo 14px/1.2, padding `8.8px 15.84px`, пилюля, gap 6. Primary — фон `accent`, текст `bg`. Secondary — рамка `divider`, hover `text 7%`, active `text 14%`. Disabled — opacity .45.
-- `input` / `textarea`: min-height 36, padding `6px 14px`, 14px, фон `surface`, рамка `divider`, пилюля (textarea — radius 16, от 90px); hover рамка `text 45%`, фокус рамка `accent`, caret `accent`.
+- `input` / `textarea`: min-height 36, padding `6px 14px`, 14px, фон `surface`, рамка `divider`, пилюля (textarea — radius 16, от 90px); hover рамка `text 45%`, фокус рамка и caret — `--ring`.
 - `field label`: 12px, `text 70%`, отступ снизу 5.
-- сегмент: рамка `divider`, пилюля; опция padding `7px 12px`, 13px, разделитель `divider`; выбранная — фон `accent`, текст `bg`; hover `text 7%`.
+- сегмент: рамка `divider`, пилюля; опция padding `7px 12px`, 13px, разделитель `divider`; выбранная — фон `--primary` (светлая — `accent-700`, тёмная — `accent`; текст `bg` на чистом `accent` светлой 3.03:1, ниже порога, решение 1), текст `bg`; hover `text 7%`.
 - `tag`: 11px, letter-spacing .02em, padding `3px 10px`, пилюля; `accent` — фон `accent-100`, текст `accent-800`; `accent-2` — `accent-2-100` / `accent-2-800`; `neutral` — `neutral-100` / `neutral-800`.
 - `card`: фон `surface`, radius 32, padding 13.2, gap 8.8; kicker 10px uppercase .1em; title Caprasimo 17px/1.2 (в пустых состояниях 20px).
 - `dialog`: фон `surface`, radius 32, padding 17.6, gap 13.2, `shadow-lg`; заголовок Caprasimo 20px; кнопки справа, gap 8.8, отступ сверху 8.8; затемнение `--scrim`.
@@ -410,7 +413,7 @@ interface Proposal {
 ## 6. Открытые вопросы
 
 1. **Контраст главной кнопки.** Текст `bg` на `accent` — 3.0:1 (система допускает 3:1 для крупного текста и хрома). Для 4.5:1 нужен фон `accent-700`. По умолчанию — как в прототипе.
-2. **Hover неактивной карточки** (`text 6%` на `surface`) даёт `neutral-700` 4.4:1. Взять `text 5%` или принять как временное состояние.
+2. **Hover неактивной карточки** (`text 6%` на `surface`) даёт `neutral-700` 4.4:1; `text 5%` — 4.47:1, тоже ниже порога. Решено: `text 4%` (4.56:1), см. решение 2.
 3. **Строка статуса.** Прототип рисует только провайдеров. Сегменты спеки Orca-UI 5.9 (связь с хостом, счётчики внимания, `host.notice`, будильник) по умолчанию оставить справа от провайдеров.
 4. **Одна комната на сессию.** Сайдбар держится на этом правиле; core сейчас его не требует. `rooms.addMember` и `rooms.create` проводят его на хосте.
 5. **Флаг усилия** у Claude Code и Codex — по документации CLI; пока нет подтверждения, контрол скрыт.
