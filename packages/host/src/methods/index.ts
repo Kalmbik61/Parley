@@ -1,6 +1,7 @@
 import type { MethodName, NotificationName } from '@harnas/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { AnyHandler, AnyNotificationHandler } from '../context.js';
+import type { LimitsService } from '../limits/limits-service.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
@@ -30,6 +31,8 @@ export interface MethodDeps {
   worksReady?: Promise<void>;
   /** Версии CLI из пробы на старте хоста (`providers.list`); без них у провайдеров `version: null`. */
   providerVersions?: ProviderVersions;
+  /** Лимиты подписок (`providers.list`); без них у провайдеров `limits: null`. */
+  limits?: LimitsService;
 }
 
 /**
@@ -89,7 +92,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'works.delete': worksDelete as AnyHandler,
     'works.rename': worksRename as AnyHandler,
     'works.setStatus': worksSetStatus as AnyHandler,
-    'providers.list': createProvidersList(deps.providerVersions) as AnyHandler,
+    'providers.list': createProvidersList(deps.providerVersions, deps.limits) as AnyHandler,
     'settings.get': settingsGet as AnyHandler,
     'settings.set': settingsSet as AnyHandler,
     'pty.attach': pty.ptyAttach as AnyHandler,

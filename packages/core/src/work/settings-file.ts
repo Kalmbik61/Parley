@@ -6,9 +6,14 @@
  * Хук не содержит логики: stdin-JSON от Claude Code дописывается в журнал
  * сессии как есть, состояние выводят читатели. В `~/.claude` при этом ничего не
  * пишется — юридическая граница проекта.
+ *
+ * Рядом с хуками — `statusLine`: скрипт строки статуса, который забирает лимиты подписки из
+ * того, что Claude Code сам присылает (спека комнат Organic, 3.5). Как и хуки, он лежит в этом
+ * файле, а не в настройках человека.
  */
 
 import { mkdir, writeFile } from 'node:fs/promises';
+import { statusLineCommand } from './statusline.js';
 import { workPaths } from './store.js';
 
 /**
@@ -48,8 +53,14 @@ export interface HookMatcher {
   hooks: HookCommand[];
 }
 
+export interface StatusLineSetting {
+  type: 'command';
+  command: string;
+}
+
 export interface SettingsFile {
   hooks: Record<string, HookMatcher[]>;
+  statusLine: StatusLineSetting;
 }
 
 /**
@@ -64,7 +75,7 @@ export function workSettings(): SettingsFile {
     if (timeout !== undefined) command.timeout = timeout;
     hooks[event] = [{ hooks: [command] }];
   }
-  return { hooks };
+  return { hooks, statusLine: { type: 'command', command: statusLineCommand() } };
 }
 
 export function workSettingsJson(): string {

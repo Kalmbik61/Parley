@@ -5,12 +5,23 @@
  * следующих кусков плана окна, а не только для core.
  */
 
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { collectSourceFiles, FRAME_RULES, scanSource, type FrameHit } from './frame-scan.js';
+import { runStatusline } from '../src/work/statusline.js';
+import {
+  collectSourceFiles,
+  FRAME_EXCEPTIONS,
+  FRAME_RULES,
+  isFrameException,
+  PINNED_USES,
+  pinDrift,
+  scanSource,
+  type FrameHit,
+  type PinnedUses,
+} from './frame-scan.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(dirname, '../../..');
@@ -96,6 +107,154 @@ describe('scanSource', () => {
   });
 });
 
+/**
+ * Явное исключение из правила «запись в каталоги агентов» (спека комнат Organic, 3.5): скрипт
+ * строки статуса читает `settings.json` человека и проекта, чтобы строка в терминале осталась
+ * прежней. Исключение узкое: один файл, одно правило, одна строка целиком.
+ */
+describe('исключение для чтения settings.json в скрипте строки статуса (спека комнат, 3.5)', () => {
+  const STATUSLINE = 'packages/core/src/work/statusline.ts';
+  const DECLARATION = "const SETTINGS_FILE = '.claude/settings.json';";
+
+  it('исключение ровно одно: statusline.ts, правило записи в каталоги агентов, причина — ссылка на 3.5', () => {
+    expect(FRAME_EXCEPTIONS).toHaveLength(1);
+    expect(FRAME_EXCEPTIONS[0]).toMatchObject({
+      file: STATUSLINE,
+      rule: 'запись в каталоги агентов',
+      line: DECLARATION,
+    });
+    expect(FRAME_EXCEPTIONS[0]?.reason).toContain('3.5');
+    expect(FRAME_EXCEPTIONS[0]?.reason).not.toContain('\n');
+  });
+
+  it('объявление пути настроек в statusline.ts не находка', () => {
+    expect(scanSource(STATUSLINE, `  ${DECLARATION}`)).toEqual([]);
+    expect(isFrameException(STATUSLINE, 'запись в каталоги агентов', DECLARATION)).toBe(true);
+  });
+
+  it('запись в каталоги агента из того же файла по-прежнему ловится', () => {
+    for (const write of [
+      "await writeFile(path.join(home, '.claude/settings.json'), text);",
+      "await writeFile(path.join(home, '.claude.json'), text);",
+      "await writeFile(path.join(home, '.codex/config.toml'), text);",
+      // Та же строка объявления, но с дописанным кодом, — уже не исключение.
+      `${DECLARATION} await writeFile(SETTINGS_FILE, text);`,
+      "const OTHER_FILE = '.claude/settings.json';",
+    ]) {
+      const hits = scanSource(STATUSLINE, write);
+      expect(hits, write).toHaveLength(1);
+      expect(hits[0]?.rule, write).toBe('запись в каталоги агентов');
+    }
+  });
+
+  it('то же объявление в любом другом файле — находка', () => {
+    expect(scanSource('packages/core/src/work/other.ts', DECLARATION)).toHaveLength(1);
+    expect(scanSource('packages/host/src/statusline.ts', DECLARATION)).toHaveLength(1);
+  });
+
+  it('исключение снимает только своё правило: для других правил та же строка не исключена', () => {
+    for (const { rule } of FRAME_RULES.filter(
+      (item) => item.rule !== 'запись в каталоги агентов',
+    )) {
+      expect(isFrameException(STATUSLINE, rule, DECLARATION), rule).toBe(false);
+    }
+  });
+
+  it('другие правила в этом файле действуют: учётные данные, API, YOLO-флаги', () => {
+    for (const [line, rule] of [
+      ["readFile(home + '/.claude/.credentials.json')", 'учётные данные агентов'],
+      ["fetch('https://api.anthropic.com/v1/messages')", 'API провайдеров'],
+      ["const args = ['--dangerously-skip-permissions'];", 'YOLO-флаги'],
+    ] as const) {
+      const hits = scanSource(STATUSLINE, line);
+      expect(hits, line).toHaveLength(1);
+      expect(hits[0]?.rule, line).toBe(rule);
+    }
+  });
+
+  it('исключение не устарело: его строка есть в файле ровно один раз', async () => {
+    for (const exception of FRAME_EXCEPTIONS) {
+      const source = await readFile(path.join(repoRoot, exception.file), 'utf8');
+      const same = source.split('\n').filter((line) => line.trim() === exception.line);
+      expect(same, `${exception.file}: ${exception.line}`).toHaveLength(1);
+    }
+  });
+});
+
+/**
+ * Закрепление использований константы пути (спека комнат Organic, 3.5). Исключение выше снимает
+ * правило только со СТРОКИ ОБЪЯВЛЕНИЯ `SETTINGS_FILE`, а запись через константу сканер не видит: в
+ * `writeFile(path.join(home, SETTINGS_FILE), …)` самого пути уже нет. Поэтому строки, где названа
+ * константа, закреплены поимённо: новая ссылка краснит тест, пока человек осознанно не обновит
+ * `PINNED_USES` в `frame-scan.ts`.
+ */
+describe('закрепление использований констант путей настроек (спека комнат, 3.5)', () => {
+  const STATUSLINE = 'packages/core/src/work/statusline.ts';
+  const NO_DRIFT = { added: [], removed: [] };
+  const pinned = (): PinnedUses => {
+    const [pin] = PINNED_USES;
+    if (pin === undefined) throw new Error('в PINNED_USES нет закрепления');
+    return pin;
+  };
+  const readStatusline = (): Promise<string> => readFile(path.join(repoRoot, STATUSLINE), 'utf8');
+  // Мутации правят копию, а не настоящий файл: чистая копия — ровно закреплённые строки, поэтому
+  // тесты с мутациями не зависят от того, что сейчас лежит в statusline.ts (его сверяет отдельный
+  // тест).
+  const cleanCopy = (): string => [...pinned().declarations, ...pinned().reads].join('\n');
+
+  it('закрепление одно: statusline.ts, SETTINGS_FILE, два объявления и две строки чтения', () => {
+    expect(PINNED_USES).toHaveLength(1);
+    expect(pinned()).toMatchObject({ file: STATUSLINE, name: 'SETTINGS_FILE' });
+    expect(pinned().declarations).toEqual([
+      "const SETTINGS_FILE = '.claude/settings.json';",
+      "const LOCAL_SETTINGS_FILE = '.claude/settings.local.json';",
+    ]);
+    // Объявление, снятое с правила исключением, закреплено вместе с остальными.
+    expect(pinned().declarations).toContain(FRAME_EXCEPTIONS[0]?.line);
+    expect(pinned().reads).toHaveLength(2);
+  });
+
+  it('в statusline.ts имя константы встречается только в закреплённых строках', async () => {
+    expect(
+      pinDrift(await readStatusline(), pinned()),
+      'новая ссылка на константу пути настроек Claude Code: если она только читает, допишите ' +
+        'строку в PINNED_USES (test/frame-scan.ts); запись в каталог агента — нарушение рамки 15.1',
+    ).toEqual(NO_DRIFT);
+  });
+
+  // В чистую копию дописана строка записи через константу. Правило рамки такую строку не видит —
+  // пути в ней нет, — а закрепление видит каждую; без мутации копия зелёная.
+  it('запись через константу в копии файла краснит закрепление', () => {
+    expect(pinDrift(cleanCopy(), pinned())).toEqual(NO_DRIFT);
+    for (const write of [
+      'await writeFile(path.join(home, SETTINGS_FILE), text);',
+      'await rename(temp, SETTINGS_FILE);',
+      "const backup = SETTINGS_FILE + '.bak';",
+      'await writeFile(path.join(dir, LOCAL_SETTINGS_FILE), text);',
+      // Комментарии не пропускаются: упоминание имени — такая же ссылка.
+      '// SETTINGS_FILE',
+    ]) {
+      const drift = pinDrift(`${cleanCopy()}\n  ${write}\n`, pinned());
+      expect(drift, write).toEqual({ added: [write], removed: [] });
+    }
+  });
+
+  it('пропавшая закреплённая строка и лишняя копия закреплённой — тоже расхождение', () => {
+    const read = 'return [...project, path.join(home, SETTINGS_FILE)];';
+    expect(pinned().reads).toContain(read);
+    // Строка чтения пропала — закрепление устарело.
+    expect(pinDrift(cleanCopy().replace(read, '// убрано'), pinned())).toEqual({
+      added: [],
+      removed: [read],
+    });
+    // Строка продублирована: считаются строки, а не принадлежность к множеству.
+    expect(pinDrift(`${cleanCopy()}\n  ${read}\n`, pinned())).toEqual({
+      added: [read],
+      removed: [],
+    });
+  });
+});
+
 describe('collectSourceFiles', () => {
   it('берёт .ts, пропускает .test.ts/.json/каталоги с точкой/node_modules (тест 10)', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'frame-scan-collect-'));
@@ -150,7 +309,8 @@ describe('рамочный тест репозитория (тест 6)', () => 
         const relative = path.relative(repoRoot, file);
         source.split('\n').forEach((line, index) => {
           for (const { rule, pattern } of FRAME_RULES) {
-            if (pattern.test(line))
+            // Явные исключения (`FRAME_EXCEPTIONS`) — код, а не комментарии: проверены отдельно.
+            if (pattern.test(line) && !isFrameException(relative, rule, line))
               rawHits.push({ file: relative, line: index + 1, rule, text: line.trim() });
           }
         });
@@ -167,5 +327,73 @@ describe('рамочный тест репозитория (тест 6)', () => 
         'packages/core/src/work/mcp-config.ts:89',
       ].sort(),
     );
+  });
+});
+
+/**
+ * Всё, что лежит под `dir`: путь, вид, размер, время изменения и содержимое файлов. Два снимка
+ * равны, только если под каталогом ничего не появилось, не пропало и не изменилось.
+ */
+async function snapshot(dir: string, base: string = dir): Promise<string[]> {
+  const lines: string[] = [];
+  const entries = (await readdir(dir, { withFileTypes: true })).sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    const info = await stat(full);
+    const content = entry.isDirectory() ? '' : await readFile(full, 'utf8');
+    const kind = entry.isDirectory() ? 'dir' : 'file';
+    lines.push(`${path.relative(base, full)}|${kind}|${info.size}|${info.mtimeMs}|${content}`);
+    if (entry.isDirectory()) lines.push(...(await snapshot(full, base)));
+  }
+  return lines;
+}
+
+describe('строка статуса не пишет в каталоги агента (спека комнат, 3.5)', () => {
+  // Скрипт строки статуса читает настройки Claude Code — своя строка статуса человека лежит
+  // там — и только читает: рамка «в `~/.claude` не пишем ничего» остаётся в силе. Данные лимитов
+  // ложатся в каталог работы, а не в каталог агента.
+  it('домашняя папка и проект человека после прогона скрипта не изменились ни на байт', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'frame-statusline-'));
+    try {
+      const home = path.join(root, 'home');
+      const project = path.join(root, 'project');
+      const workDir = path.join(root, 'work');
+      const human = (command: string): string =>
+        JSON.stringify({ statusLine: { type: 'command', command } });
+      await mkdir(path.join(home, '.claude'), { recursive: true });
+      await mkdir(path.join(home, '.codex', 'sessions'), { recursive: true });
+      await mkdir(path.join(project, '.claude'), { recursive: true });
+      await mkdir(workDir);
+      await writeFile(path.join(home, '.claude', 'settings.json'), human("printf 'user'"));
+      await writeFile(path.join(home, '.claude', 'history.jsonl'), '{}\n');
+      await writeFile(path.join(project, '.claude', 'settings.json'), human("printf 'shared'"));
+      await writeFile(
+        path.join(project, '.claude', 'settings.local.json'),
+        human("printf 'local'"),
+      );
+      const before = { home: await snapshot(home), project: await snapshot(project) };
+
+      const input = JSON.stringify({
+        model: { display_name: 'Opus' },
+        workspace: { current_dir: project, project_dir: project },
+        rate_limits: { five_hour: { used_percentage: 58, resets_at: 4_102_444_800 } },
+      });
+      const env = {
+        PATH: process.env['PATH'],
+        HARNAS_WORK_DIR: workDir,
+        HARNAS_SESSION_ID: 's-01',
+      };
+      const printed = await runStatusline(input, { env, home });
+
+      // Настройки прочитаны (вывод — от команды человека), а не переписаны.
+      expect(printed.toString()).toBe('local');
+      expect({ home: await snapshot(home), project: await snapshot(project) }).toEqual(before);
+      // Данные лимитов — в каталоге работы, и только там.
+      expect(await readdir(path.join(workDir, 'limits'))).toEqual(['s-01.json']);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
