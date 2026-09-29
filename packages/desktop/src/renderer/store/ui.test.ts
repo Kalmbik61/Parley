@@ -104,6 +104,41 @@ describe('useUiStore.setSidebarHold (кусок 3.4)', () => {
   });
 });
 
+// Кусок 5 плана «Organic», спека окна 2026-09-29, 2.6 и 3.4: развёрнутость строк комнат сайдбара — только в памяти окна.
+describe('useUiStore.roomExpanded (кусок 5)', () => {
+  beforeEach(() => useUiStore.setState({ roomExpanded: {} }));
+
+  it('по умолчанию пусто: развёрнутость решает правило 2.6, а не стор', () => {
+    expect(useUiStore.getState().roomExpanded).toEqual({});
+  });
+
+  it('setRoomExpanded пишет и перекрывает значение по ключу комнаты; другие ключи не трогает', () => {
+    useUiStore.getState().setRoomExpanded('/p w-01/r-01', true);
+    useUiStore.getState().setRoomExpanded('/p w-01/r-02', false);
+    expect(useUiStore.getState().roomExpanded).toEqual({ '/p w-01/r-01': true, '/p w-01/r-02': false });
+    useUiStore.getState().setRoomExpanded('/p w-01/r-01', false);
+    expect(useUiStore.getState().roomExpanded).toEqual({ '/p w-01/r-01': false, '/p w-01/r-02': false });
+  });
+
+  it('повторная запись того же значения не меняет объект стора — подписчики не перерисовываются', () => {
+    useUiStore.getState().setRoomExpanded('/p w-01/r-01', true);
+    const before = useUiStore.getState().roomExpanded;
+    useUiStore.getState().setRoomExpanded('/p w-01/r-01', true);
+    expect(useUiStore.getState().roomExpanded).toBe(before);
+  });
+
+  it('только в памяти: в ui.json (app.saveUi) не пишется и в зеркало ui не попадает', async () => {
+    const bridge = createFakeBridge();
+    const dispose = useUiStore.getState().init(bridge);
+    await vi.waitFor(() => expect(useUiStore.getState().uiLoaded).toBe(true));
+    const saveUi = vi.spyOn(bridge.app, 'saveUi');
+    useUiStore.getState().setRoomExpanded('/p w-01/r-01', true);
+    expect(saveUi).not.toHaveBeenCalled();
+    expect(Object.keys(useUiStore.getState().ui)).not.toContain('roomExpanded');
+    dispose();
+  });
+});
+
 describe('useUiStore.setDark', () => {
   afterEach(() => {
     document.documentElement.classList.remove('dark');

@@ -104,6 +104,13 @@ export interface UiState {
    * `ui.json`. Счётчики, бейдж, `attention.next` и выбор соседа архивные не берут и при нём.
    */
   showArchived: boolean;
+  /**
+   * Развёрнутость строк комнат в карточках сайдбара (кусок 5 плана «Organic», спека окна 2026-09-29, 2.6 и 3.4):
+   * ручной шеврон и клик по строке комнаты перекрывают правило «развёрнута, пока открыта вкладка комнаты или её
+   * участника» до перезапуска окна. Ключ — `lib/room-view.ts#roomKey`; нет ключа — решает правило. Только в
+   * памяти: в `ui.json` не пишется.
+   */
+  roomExpanded: Record<string, boolean>;
 
   /** Ставит/снимает `.dark` на `<html>` (`applyDarkClass`) и пишет в стор — единственная точка входа для обоих. */
   setDark: (dark: boolean) => void;
@@ -121,6 +128,7 @@ export interface UiState {
   confirmRestartHost: () => void;
   closeRestartHostDialog: () => void;
   toggleShowArchived: () => void;
+  setRoomExpanded: (key: string, expanded: boolean) => void;
   toggleWake: (bridge: HarnasBridge) => Promise<void>;
 
   /**
@@ -179,6 +187,7 @@ export const useUiStore = create<UiState>((set, get) => {
     sidebarHovering: false,
     sidebarHolds: {},
     showArchived: false,
+    roomExpanded: {},
 
     setDark: (dark) => {
       applyDarkClass(dark);
@@ -220,6 +229,8 @@ export const useUiStore = create<UiState>((set, get) => {
     confirmRestartHost: () => set((state) => ({ dialogs: { ...state.dialogs, restartHost: true } })),
     closeRestartHostDialog: () => set((state) => ({ dialogs: { ...state.dialogs, restartHost: false } })),
     toggleShowArchived: () => set((state) => ({ showArchived: !state.showArchived })),
+    setRoomExpanded: (key, expanded) =>
+      set((state) => (state.roomExpanded[key] === expanded ? state : { roomExpanded: { ...state.roomExpanded, [key]: expanded } })),
 
     toggleWake: async (bridge) => {
       const paused = get().wakePaused;

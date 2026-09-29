@@ -75,6 +75,29 @@ describe('S.sidebar — тексты карточки и строк (Organic, 1.
     expect(S.sidebar.moreClosed(2)).toBe('2 more closed');
     expect(S.sidebar.hideClosed).toBe('Hide closed');
   });
+
+  // Кусок 5 плана «Organic»: строка комнаты (1.2) и строка «New session or room» под строками карточки.
+  it('строка комнаты: шеврон, слова состояния, `★` ведущего', () => {
+    expect(S.sidebar.showAgents).toBe('Show agents');
+    expect(S.sidebar.hideAgents).toBe('Hide agents');
+    expect(S.sidebar.roomDecision).toBe('decision');
+    expect(S.sidebar.roomNew(3)).toBe('3 new');
+    expect(S.sidebar.lead).toBe('Lead');
+    expect(S.sidebar.newSessionOrRoom).toBe('New session or room');
+  });
+
+  it('тултип значка провайдера свёрнутой комнаты — число и имя провайдера, единственное число при одном', () => {
+    expect(S.sidebar.roomAgents(2, providerName('claude', 'Claude'))).toBe('2 Claude Code agents');
+    expect(S.sidebar.roomAgents(1, providerName('claude', 'Claude'))).toBe('1 Claude Code agent');
+    expect(S.sidebar.roomAgents(3, providerName('codex', 'OpenAI Codex'))).toBe('3 Codex agents');
+    expect(S.sidebar.roomAgents(1, providerName('gemini', 'Gemini CLI'))).toBe('1 Gemini CLI agent');
+  });
+
+  it('тултип строки комнаты: ведущий и участники; комната без живых участников — без ведущего', () => {
+    expect(S.sidebar.roomTooltip('S01', ['S01', 'S02', 'S03', 'S04'])).toBe('Room · lead S01 · S01, S02, S03, S04');
+    expect(S.sidebar.roomTooltip(null, ['S01'])).toBe('Room · S01');
+    expect(S.sidebar.roomTooltip(null, [])).toBe('Room');
+  });
 });
 
 describe('S.terminal — карточка неживой сессии (Organic, 1.8)', () => {
