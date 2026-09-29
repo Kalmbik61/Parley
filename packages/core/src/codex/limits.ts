@@ -3,8 +3,9 @@
  * сессий»). В `~/.codex/sessions/<год>/<месяц>/<день>/rollout-*.jsonl` Codex после хода пишет
  * `event_msg` с `payload.type: 'token_count'`, а в нём `rate_limits.primary` и `secondary`:
  * `used_percent`, `window_minutes`, `resets_at` (Unix-секунды) — `RateLimitWindow` из
- * `codex-rs/protocol/src/protocol.rs` репозитория openai/codex. Только чтение, как остальные
- * логи Codex. Учётные данные соседнего каталога не открываются, к API никто не ходит.
+ * `codex-rs/protocol/src/protocol.rs` репозитория openai/codex; там же `RateLimitSnapshot` с
+ * `limit_id` — берётся только корзина `codex`. Только чтение, как остальные логи Codex. Учётные
+ * данные соседнего каталога не открываются, к API никто не ходит.
  *
  * Лог человека — это его переписка, и большой: гигабайты за годы, мегабайты на сессию. Поэтому
  * читаются не все файлы и не файл целиком, а хвост самых свежих (`readCodexLimits`).
@@ -34,10 +35,19 @@ const asRecord = (value: unknown): Record<string, unknown> | null =>
     : null;
 
 /**
- * Лимиты из одной записи лога; не `token_count`, без `rate_limits` или без времени — `null`.
- * Окно определяется по `window_minutes`, а не по имени поля: на некоторых тарифах в `primary`
- * лежит недельное окно, а пятичасового нет. Окно без длины или без времени сброса не
- * показывается: по нему не понять ни что это за окно, ни когда оно кончится.
+ * Корзина лимитов подписки Codex по умолчанию. У `RateLimitSnapshot` в свежих исходниках
+ * openai/codex есть `limit_id` (и `limit_name`): без него и с `codex` — сама подписка, любой другой
+ * (например, отдельная квота модели) — чужая корзина со своими окнами
+ * (`codex-rs/codex-api/src/rate_limits.rs`: `parse_rate_limit_for_limit`).
+ */
+const DEFAULT_LIMIT_ID = 'codex';
+
+/**
+ * Лимиты из одной записи лога; не `token_count`, без `rate_limits`, без времени или из чужой
+ * корзины (`limit_id` задан и не `codex`) — `null`. Окно определяется по `window_minutes`, а не по
+ * имени поля: на некоторых тарифах в `primary` лежит недельное окно, а пятичасового нет. Окно без
+ * длины или без времени сброса не показывается: по нему не понять ни что это за окно, ни когда оно
+ * кончится.
  */
 export function codexLimitsOf(record: unknown): ProviderLimits | null {
   const entry = asRecord(record);
@@ -46,6 +56,9 @@ export function codexLimitsOf(record: unknown): ProviderLimits | null {
   if (payload === null || payload['type'] !== 'token_count') return null;
   const limits = asRecord(payload['rate_limits']);
   if (limits === null) return null;
+  // Записи чужой корзины не подписка: читатель идёт к более ранней записи.
+  const limitId = limits['limit_id'];
+  if (limitId !== undefined && limitId !== null && limitId !== DEFAULT_LIMIT_ID) return null;
   if (typeof entry['timestamp'] !== 'string') return null;
   const at = new Date(entry['timestamp']);
   if (Number.isNaN(at.getTime())) return null;
@@ -134,9 +147,10 @@ async function tailLimits(file: string): Promise<ProviderLimits | null> {
 const MAX_FILES = 5;
 
 /**
- * Лимиты Codex: последнее событие `token_count` с `rate_limits` из самого свежего rollout-лога
- * (по времени изменения файла: `codex resume` дописывает старый лог, а каталог дня остаётся
- * прежним). Нет корня, логов или событий с лимитами — `null`. Окна с прошедшим сбросом здесь
+ * Лимиты Codex: последнее событие `token_count` с `rate_limits` корзины `codex` из самого свежего
+ * rollout-лога (по времени изменения файла: `codex resume` дописывает старый лог, а каталог дня
+ * остаётся прежним). Записи чужих корзин пропускаются. Нет корня, логов или подходящих событий —
+ * `null`. Окна с прошедшим сбросом здесь
  * ещё есть: их снимает хост (`dropExpiredWindows`).
  */
 export async function readCodexLimits(

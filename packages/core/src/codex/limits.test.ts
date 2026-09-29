@@ -3,8 +3,11 @@
  * `rate_limits` самого свежего rollout-лога. Формат — по исходникам `openai/codex`
  * (`codex-rs/protocol/src/protocol.rs`: `TokenCountEvent { info, rate_limits }`,
  * `RateLimitWindow { used_percent, window_minutes, resets_at }`, `resets_at` в Unix-секундах) и
- * по снимку схемы `docs/schema/codex-schema-report.json`. Тесты — на выдуманных логах во
- * временном каталоге: настоящие логи человека (там его переписка) не читаются.
+ * по снимку схемы `docs/schema/codex-schema-report.json`. У `RateLimitSnapshot` в свежих
+ * исходниках есть `limit_id` и `limit_name`: корзина по умолчанию — `codex`, у других (например,
+ * модельных квот) свой `limit_id` (`codex-rs/codex-api/src/rate_limits.rs`: `parse_rate_limit_for_limit`,
+ * `normalize_limit_id`). Тесты — на выдуманных логах во временном каталоге: настоящие логи
+ * человека (там его переписка) не читаются.
  */
 
 import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
@@ -27,6 +30,16 @@ const window = (
 });
 
 const both = { primary: window(58, 300), secondary: window(41.2, 10_080, NOW_SEC + 86_400) };
+
+/** Снимок лимитов с корзиной, как в свежих openai/codex: `limit_id` и `limit_name` у `RateLimitSnapshot`. */
+const snapshot = (limitId: string | null, primary: number, secondary: number) => ({
+  limit_id: limitId,
+  limit_name: limitId === 'codex' ? null : limitId,
+  primary: window(primary, 300),
+  secondary: window(secondary, 10_080, NOW_SEC + 86_400),
+  credits: null,
+  plan_type: 'pro',
+});
 
 /** Запись `token_count`, как её пишет Codex в rollout-лог. */
 const tokenCount = (rateLimits: unknown, at: string = AT, info: unknown = null) => ({
@@ -98,6 +111,21 @@ describe('codexLimitsOf: одна запись лога', () => {
     expect(codexLimitsOf({ type: 'event_msg', payload: tokenCount(both).payload })).toBeNull();
     expect(codexLimitsOf('строка')).toBeNull();
     expect(codexLimitsOf(null)).toBeNull();
+  });
+});
+
+describe('codexLimitsOf: корзина лимитов — limit_id', () => {
+  it('корзина codex и запись без limit_id (старые логи, null) — подписка Codex', () => {
+    expect(codexLimitsOf(tokenCount(snapshot('codex', 58, 41)))?.fiveHour?.usedPercent).toBe(58);
+    expect(codexLimitsOf(tokenCount(snapshot(null, 58, 41)))?.fiveHour?.usedPercent).toBe(58);
+    expect(codexLimitsOf(tokenCount(both))?.fiveHour?.usedPercent).toBe(58);
+  });
+
+  it('limit_id задан и не codex — запись пропускается: это не пятичасовое и недельное окна подписки', () => {
+    expect(codexLimitsOf(tokenCount(snapshot('codex_bengalfox', 3, 1)))).toBeNull();
+    expect(codexLimitsOf(tokenCount(snapshot('other', 3, 1)))).toBeNull();
+    // Не строка — тоже задан и не равен codex.
+    expect(codexLimitsOf(tokenCount({ ...snapshot('codex', 3, 1), limit_id: 7 }))).toBeNull();
   });
 });
 
@@ -220,6 +248,78 @@ describe('readCodexLimits: самый свежий rollout-лог', () => {
     );
 
     expect((await readCodexLimits(root))?.at).toBe(AT);
+  });
+
+  describe('две корзины лимитов (limit_id): берётся только codex', () => {
+    const OTHER_AT = '2026-09-29T11:59:00.000Z';
+    const CODEX_AT = '2026-09-29T11:00:00.000Z';
+
+    it('последняя запись чужой корзины пропускается, берётся более ранняя запись codex', async () => {
+      await rollout(
+        '2026-09-29',
+        '019a0000-0000-7000-8000-00000000000a',
+        line(tokenCount(snapshot('codex', 58, 41), CODEX_AT)) +
+          line(tokenCount(snapshot('codex_bengalfox', 3, 1), '2026-09-29T11:30:00.000Z')) +
+          chat('ход') +
+          line(tokenCount(snapshot('codex_bengalfox', 4, 2), OTHER_AT)),
+      );
+
+      const limits = await readCodexLimits(root);
+      expect(limits?.fiveHour?.usedPercent).toBe(58);
+      expect(limits?.week?.usedPercent).toBe(41);
+      expect(limits?.at).toBe(CODEX_AT);
+    });
+
+    it('запись codex после чужой корзины — последняя, она и берётся', async () => {
+      await rollout(
+        '2026-09-29',
+        '019a0000-0000-7000-8000-00000000000b',
+        line(tokenCount(snapshot('codex_bengalfox', 3, 1), CODEX_AT)) +
+          line(tokenCount(snapshot('codex', 60, 42), OTHER_AT)),
+      );
+
+      expect((await readCodexLimits(root))?.fiveHour?.usedPercent).toBe(60);
+    });
+
+    it('в самом свежем логе только чужая корзина — берётся следующий по свежести лог с codex', async () => {
+      await rollout(
+        '2026-09-29',
+        '019a0000-0000-7000-8000-00000000000c',
+        line(tokenCount(snapshot('codex_bengalfox', 3, 1), OTHER_AT)),
+        '2026-09-29T11:59:30.000Z',
+      );
+      await rollout(
+        '2026-09-29',
+        '019a0000-0000-7000-8000-00000000000d',
+        line(tokenCount(snapshot('codex', 58, 41), CODEX_AT)),
+        '2026-09-29T11:00:00.000Z',
+      );
+
+      expect((await readCodexLimits(root))?.at).toBe(CODEX_AT);
+    });
+
+    it('только чужая корзина во всех логах — лимитов нет', async () => {
+      await rollout(
+        '2026-09-29',
+        '019a0000-0000-7000-8000-00000000000e',
+        line(tokenCount(snapshot('codex_bengalfox', 3, 1), OTHER_AT)),
+      );
+
+      expect(await readCodexLimits(root)).toBeNull();
+    });
+
+    it('запись codex глубже первого хвоста (64 КиБ), а поверх неё — только чужая корзина: находится при росте хвоста', async () => {
+      const filler = chat('вода '.repeat(200)).repeat(100);
+      await rollout(
+        '2026-09-29',
+        '019a0000-0000-7000-8000-00000000000f',
+        line(tokenCount(snapshot('codex', 58, 41), CODEX_AT)) +
+          filler +
+          line(tokenCount(snapshot('codex_bengalfox', 3, 1), OTHER_AT)),
+      );
+
+      expect((await readCodexLimits(root))?.at).toBe(CODEX_AT);
+    });
   });
 
   describe('большой лог: читается хвост, а не файл целиком', () => {
