@@ -1,0 +1,136 @@
+/**
+ * Чистая часть упоминаний (дизайн комнат, 1.4, 2.2, 2.3): токены `@s02` в тексте, условия открытия
+ * меню и его фильтр. DOM-часть редактора проверяет `Composer.test.tsx`.
+ */
+
+import { describe, expect, it } from 'vitest';
+import {
+  MENTION_QUERY_MAX,
+  filterMentions,
+  findMentionQuery,
+  mentionToken,
+  segmentText,
+  type TextSegment,
+} from './mention.js';
+
+describe('mentionToken', () => {
+  it('id сессии → токен письма: s-02 → @s02', () => {
+    expect(mentionToken('s-02')).toBe('@s02');
+    expect(mentionToken('s-12')).toBe('@s12');
+    expect(mentionToken('s-100')).toBe('@s100');
+  });
+});
+
+describe('segmentText — токены и ссылки в тексте ленты', () => {
+  const mention = (sessionId: string, raw: string): TextSegment => ({ kind: 'mention', sessionId, raw });
+  const text = (value: string): TextSegment => ({ kind: 'text', text: value });
+
+  it('@s02 и @s-02 — упоминание сессии s-02; номер добивается нулём слева', () => {
+    expect(segmentText('привет @s02, как дела')).toEqual([text('привет '), mention('s-02', '@s02'), text(', как дела')]);
+    expect(segmentText('@s-02')).toEqual([mention('s-02', '@s-02')]);
+    expect(segmentText('@s2 и @S03')).toEqual([mention('s-02', '@s2'), text(' и '), mention('s-03', '@S03')]);
+  });
+
+  it('текст без токенов — один текстовый сегмент, пустой текст — ни одного', () => {
+    expect(segmentText('просто текст')).toEqual([text('просто текст')]);
+    expect(segmentText('')).toEqual([]);
+  });
+
+  it('@ внутри слова и email токеном не считается', () => {
+    expect(segmentText('user@s02.example.com')).toEqual([text('user@s02.example.com')]);
+    expect(segmentText('a@s02')).toEqual([text('a@s02')]);
+    // За номером сразу буква — это уже не токен, а слово.
+    expect(segmentText('@s02бэкенд')).toEqual([text('@s02бэкенд')]);
+  });
+
+  it('токен в начале, в конце строки, после скобки и переноса', () => {
+    expect(segmentText('(@s02)')).toEqual([text('('), mention('s-02', '@s02'), text(')')]);
+    expect(segmentText('раз\n@s03')).toEqual([text('раз\n'), mention('s-03', '@s03')]);
+  });
+
+  it('http(s)-ссылка — отдельный сегмент без хвостовой пунктуации', () => {
+    expect(segmentText('см. https://example.com/a?b=1.')).toEqual([
+      text('см. '),
+      { kind: 'link', url: 'https://example.com/a?b=1', text: 'https://example.com/a?b=1' },
+      text('.'),
+    ]);
+    expect(segmentText('(http://localhost:3000/x)')).toEqual([
+      text('('),
+      { kind: 'link', url: 'http://localhost:3000/x', text: 'http://localhost:3000/x' },
+      text(')'),
+    ]);
+  });
+
+  it('прочие схемы ссылкой не становятся', () => {
+    expect(segmentText('javascript:alert(1) и ftp://host/file')).toEqual([text('javascript:alert(1) и ftp://host/file')]);
+  });
+
+  it('@s02 внутри ссылки остаётся её частью', () => {
+    expect(segmentText('https://x.example/@s02 и @s03')).toEqual([
+      { kind: 'link', url: 'https://x.example/@s02', text: 'https://x.example/@s02' },
+      text(' и '),
+      mention('s-03', '@s03'),
+    ]);
+  });
+});
+
+describe('findMentionQuery — когда открывается меню (2.3)', () => {
+  it('@ в начале строки: запрос пуст', () => {
+    expect(findMentionQuery('@')).toEqual({ start: 0, query: '' });
+  });
+
+  it('@ после пробела, неразрывного пробела и переноса; запрос — до курсора', () => {
+    expect(findMentionQuery('привет @s')).toEqual({ start: 7, query: 's' });
+    expect(findMentionQuery('привет @бэ')).toEqual({ start: 7, query: 'бэ' });
+    expect(findMentionQuery('раз\n@')).toEqual({ start: 4, query: '' });
+  });
+
+  it('@ в середине слова и в email меню не открывает', () => {
+    expect(findMentionQuery('a@')).toBeNull();
+    expect(findMentionQuery('user@example')).toBeNull();
+    expect(findMentionQuery('mail me at user@example.com')).toBeNull();
+    expect(findMentionQuery('@@')).toBeNull();
+  });
+
+  it('до 24 знаков запроса; на 25-м меню закрывается', () => {
+    expect(MENTION_QUERY_MAX).toBe(24);
+    expect(findMentionQuery(`@${'x'.repeat(24)}`)).toEqual({ start: 0, query: 'x'.repeat(24) });
+    expect(findMentionQuery(`@${'x'.repeat(25)}`)).toBeNull();
+  });
+
+  it('пробел в запросе закрывает меню; берётся последняя @', () => {
+    expect(findMentionQuery('@s02 текст')).toBeNull();
+    expect(findMentionQuery('@a @b')).toEqual({ start: 3, query: 'b' });
+    expect(findMentionQuery('нет собаки')).toBeNull();
+  });
+});
+
+describe('filterMentions — фильтр меню по «S02 s02 {ярлык} {провайдер}»', () => {
+  const items = [
+    { id: 's-01', rawLabel: 'архитектор', providerName: 'Claude Code' },
+    { id: 's-02', rawLabel: 'бэкенд', providerName: 'Claude Code' },
+    { id: 's-03', rawLabel: 'ревью', providerName: 'Codex' },
+  ];
+
+  it('пустой запрос — все', () => {
+    expect(filterMentions(items, '')).toEqual(items);
+  });
+
+  it('по номеру: S02 и s02 без учёта регистра', () => {
+    expect(filterMentions(items, 'S02').map((item) => item.id)).toEqual(['s-02']);
+    expect(filterMentions(items, 's03').map((item) => item.id)).toEqual(['s-03']);
+  });
+
+  it('по ярлыку — подстрока без учёта регистра', () => {
+    expect(filterMentions(items, 'ЭКЕН').map((item) => item.id)).toEqual(['s-02']);
+  });
+
+  it('по имени провайдера', () => {
+    expect(filterMentions(items, 'codex').map((item) => item.id)).toEqual(['s-03']);
+    expect(filterMentions(items, 'claude').map((item) => item.id)).toEqual(['s-01', 's-02']);
+  });
+
+  it('ничего не подошло — пусто', () => {
+    expect(filterMentions(items, 'нету')).toEqual([]);
+  });
+});
