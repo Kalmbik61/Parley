@@ -198,14 +198,14 @@ test.describe('переход по уведомлению и «просмотр�
     await hookEvent(workId, sessionId, { hook_event_name: 'UserPromptSubmit' });
     await hookEvent(workId, sessionId, { hook_event_name: 'Stop' });
     const title = window.locator(`[data-work-key="${keyOf(workId)}"]:not([role="tab"]) [data-work-title]`);
-    await expect(title).toHaveClass(/font-semibold/, { timeout: 5_000 });
+    await expect(title).toHaveClass(/font-bold/, { timeout: 5_000 });
 
     // Окно без фокуса: трекер 4.2 читает флаг из событий окна рендерера.
     await window.evaluate(() => window.dispatchEvent(new Event('blur')));
     await sendFocusTarget(electronApp, { kind: 'session', ref: { projectPath: project, workId, sessionId } });
     await expect(window.locator(`[role="tab"][data-tab-id="terminal:${sessionId}"]`)).toHaveAttribute('data-active', 'true');
     await window.waitForTimeout(2_000);
-    await expect(title).toHaveClass(/font-semibold/);
+    await expect(title).toHaveClass(/font-bold/);
 
     await electronApp.evaluate(({ app: electron, BrowserWindow }) => {
       electron.focus({ steal: true });
@@ -213,7 +213,7 @@ test.describe('переход по уведомлению и «просмотр�
     });
     // Под Playwright `document.hasFocus()` бывает ложным — фокус эмулируется событием окна.
     await window.evaluate(() => window.dispatchEvent(new Event('focus')));
-    await expect(title).not.toHaveClass(/font-semibold/, { timeout: 3_000 });
+    await expect(title).not.toHaveClass(/font-bold/, { timeout: 3_000 });
   });
 
   test('ход закончен при невидимой вкладке — уведомление в журнале; его клик ведёт в терминал сессии', async () => {

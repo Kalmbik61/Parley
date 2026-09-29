@@ -125,7 +125,7 @@ test.describe('карточки сайдбара и форма новой раб
     await createWork(window, 'e2e-cards-seed');
     await expect(window.getByTestId('app-shell')).toBeVisible();
 
-    await window.getByRole('button', { name: 'New workspace in project', exact: true }).click();
+    await window.getByRole('button', { name: /^New workspace in / }).click();
     const dialog = window.getByRole('dialog');
     await expect(dialog.getByRole('combobox', { name: 'Project' })).toHaveAttribute('title', project);
     await dialog.getByRole('checkbox', { name: 'Create more' }).click();

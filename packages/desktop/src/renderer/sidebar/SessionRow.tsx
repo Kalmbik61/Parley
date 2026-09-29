@@ -1,7 +1,14 @@
 /**
  * Строка сессии в карточке работы (кусок 3.3, спека 4.2, 6.3): значок состояния, значок
- * агента, `S02 исполнитель`, слово состояния, `⎇` своего worktree и время последнего
+ * агента, `S02 исполнитель`, слово состояния, значок ветки своего worktree и время последнего
  * события. Тултип — задача, сводка агента, итог, модель и метрики.
+ *
+ * Облик Organic (спека окна 2026-09-29, 1.2): пилюля 26px, отступ слева `8 + 12·depth`, зазор 6, 12px;
+ * значок состояния 12, значок агента 13, слово 11px строчными, GitBranch 11 (тултип `Own worktree ·
+ * {branch}`), время 10px шириной 22. Фон: `blocked` — `accent-200` (слово `accent-800`), `unseen` —
+ * `accent-2-200` (слово `accent-2-800`), иначе выбранная и hover — `text 9%`; подкраска бьёт выбор. Выбранная —
+ * вес 700. Закрытая — `data-dimmed="row"`: значки .5 при правиле `dimmed.css`. На hover вторичный текст
+ * строки — основной цвет (наследство куска 1: `neutral-700` на заливке hover ниже 4.5:1).
  *
  * Перетаскивание — контракт 2.6, как у строки прежнего дерева сессий: `DndContext`
  * один на окно (`AppShell`), тащатся только строки активной работы (спека 6.4) — у
@@ -14,6 +21,7 @@
  */
 
 import { memo, useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
+import { GitBranch } from 'lucide-react';
 import { useDndContext, useDraggable } from '@dnd-kit/core';
 import type { WorkSession } from '@harnas/core';
 import type { HarnasBridge } from '../../shared/bridge.js';
@@ -133,7 +141,6 @@ export const SessionRow = memo(function SessionRow({
   const state = dotState(displayStatus(session), live?.activity ?? null);
   const word = stateWord(state, session.lifecycle);
   const attention = sessionAttention(session, live);
-  const highlighted = attention === 'needs-you' || attention === 'unseen';
   const closed = session.lifecycle === 'closed';
   const label = sessionRowLabel(session.id, session.label);
   const lastEventAt = live?.lastEventAt ?? session.resultAt ?? session.startedAt;
@@ -141,6 +148,8 @@ export const SessionRow = memo(function SessionRow({
   // Вторичный текст на подсвеченной и выбранной строке — свой токен: `--muted-foreground`
   // там ниже 4.5:1 (tokens.test.ts, тест 14).
   const secondary = 'text-work-sidebar-muted-foreground';
+  const blocked = attention === 'needs-you';
+  const unseen = attention === 'unseen';
 
   return (
     <HoverCard open={tooltipOpen && !dragging} onOpenChange={onTooltipOpenChange} openDelay={600} closeDelay={100}>
@@ -173,31 +182,47 @@ export const SessionRow = memo(function SessionRow({
             event.stopPropagation();
             onOpen();
           }}
-          style={{ paddingLeft: `${depth * 12 + 6}px` }}
+          style={{ paddingLeft: `${8 + depth * 12}px` }}
           className={cn(
             // Кольцо внутрь: карточка режет выступающее (`overflow-hidden`).
-            'flex h-6 min-w-0 items-center gap-1.5 rounded-md pr-1.5 text-[11px] text-work-sidebar-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-work-sidebar-focus-ring',
+            'flex h-[26px] min-w-0 items-center gap-1.5 rounded-full pr-1.5 text-xs text-work-sidebar-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-work-sidebar-focus-ring',
+            // Вторичный текст строки на hover — основной цвет: `neutral-700` на заливке hover ниже 4.5:1.
+            'hover:[--work-sidebar-muted-foreground:var(--work-sidebar-foreground)]',
             draggable ? 'cursor-default' : 'cursor-not-allowed',
-            selected ? 'bg-work-sidebar-accent' : highlighted ? 'bg-amber-500/10' : 'hover:bg-work-sidebar-accent/60',
+            // Подкраска бьёт выбор и hover: строка, где нужен человек, не бледнеет под курсором.
+            blocked
+              ? 'bg-accent-200 hover:bg-accent-200'
+              : unseen
+                ? 'bg-accent-2-200 hover:bg-accent-2-200'
+                : selected
+                  ? 'bg-work-sidebar-accent'
+                  : 'hover:bg-work-sidebar-accent',
           )}
           // Закрытая строка приглушена цветом текста (styles/dimmed.css), не opacity (ревью M12).
-          {...(closed ? { 'data-dimmed': '' } : {})}
+          {...(closed ? { 'data-dimmed': 'row' } : {})}
         >
           <AgentStateDot state={state} lifecycle={session.lifecycle} />
           <AgentIcon provider={session.provider} size={13} />
-          <span className="min-w-0 flex-1 truncate">{label}</span>
+          <span className={cn('min-w-0 flex-1 truncate', selected && 'font-bold')}>{label}</span>
           {trustWait ? (
-            <span title={S.sidebar.trustWaitTooltip} className="shrink-0 text-yellow-600 dark:text-yellow-500">
+            <span title={S.sidebar.trustWaitTooltip} className="shrink-0 text-status-warning-text">
               ⚠
             </span>
           ) : null}
-          <span className={cn('shrink-0 truncate', secondary)}>{word}</span>
+          <span
+            className={cn(
+              'shrink-0 truncate text-[11px]',
+              blocked ? 'text-accent-800' : unseen ? 'text-accent-2-800' : secondary,
+            )}
+          >
+            {word}
+          </span>
           {session.worktree !== null ? (
-            <span data-worktree title={session.worktree.branch} className={cn('shrink-0', secondary)}>
-              ⎇
+            <span data-worktree title={S.sidebar.ownWorktree(session.worktree.branch)} className={cn('inline-flex shrink-0', secondary)}>
+              <GitBranch className="size-[11px]" aria-hidden="true" />
             </span>
           ) : null}
-          {time !== '' ? <span className={cn('shrink-0 text-[10px] tabular-nums', secondary)}>{time}</span> : null}
+          <span className={cn('w-[22px] shrink-0 text-right text-[10px] tabular-nums', secondary)}>{time}</span>
         </div>
       </HoverCardTrigger>
       </SessionRowMenu>

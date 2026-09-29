@@ -1,6 +1,12 @@
 /**
  * Тесты 4, 11, 12, 13 куска 3.3: строка сессии карточки. Тест 12 переехал сюда из
  * тестов прежнего дерева сессий (контракт перетаскивания 2.6), удалённого в 3.5.
+ *
+ * Облик Organic (спека окна 2026-09-29, 1.2): пилюля 26px, отступ слева 8 + 12 на уровень, зазор 6,
+ * 12px; значок состояния 12, значок агента 13, слово состояния 11px строчными, ветка своего worktree —
+ * значок GitBranch 11, время 10px шириной 22. Подкраска: `blocked` — `accent-200` (слово `accent-800`),
+ * `unseen` — `accent-2-200` (слово `accent-2-800`), выбранная и hover — `text 9%`; закрытая — .5 при
+ * правиле `dimmed.css`.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -87,34 +93,94 @@ describe('SessionRow — девять состояний таблицы 4.2 (т�
   });
 
   // Ревью M12: закрытая строка приглушена data-dimmed (styles/dimmed.css), а не opacity-50 —
-  // та опускала текст строки ниже 4.5:1.
-  it('закрытая строка — data-dimmed без opacity, открытая — без приглушения', () => {
+  // та опускала текст строки ниже 4.5:1. Значение `row` — значки .5 (у done-карточки .6).
+  it('закрытая строка — data-dimmed="row" без opacity, открытая — без приглушения', () => {
     renderRow(makeSession('s-01', 'a', { lifecycle: 'closed' }));
     expect(row().hasAttribute('data-dimmed')).toBe(true);
+    expect(row().getAttribute('data-dimmed')).toBe('row');
     expect(row().className).not.toMatch(/opacity-/);
     cleanup();
     renderRow(makeSession('s-01', 'a'));
     expect(row().hasAttribute('data-dimmed')).toBe(false);
   });
 
-  it('⎇ только у сессии со своим worktree, ветка — в title', () => {
+  it('GitBranch 11px только у сессии со своим worktree, тултип «Own worktree · ветка»', () => {
     renderRow(makeSession('s-01', 'a'));
     expect(row().querySelector('[data-worktree]')).toBeNull();
     cleanup();
     renderRow(makeSession('s-01', 'a', { worktree: { path: '/tmp/wt', branch: 'harnas/s-01', base: 'main', createdAt: null } }));
-    expect(row().querySelector('[data-worktree]')?.getAttribute('title')).toBe('harnas/s-01');
+    const branch = row().querySelector('[data-worktree]');
+    expect(branch?.getAttribute('title')).toBe('Own worktree · harnas/s-01');
+    expect(branch?.querySelector('svg.lucide-git-branch')?.classList.contains('size-[11px]')).toBe(true);
+    expect(row().textContent).not.toContain('⎇');
   });
 
-  it('подсветка amber при needs-you и unseen, у работающей — нет; на строке data-session-id', () => {
+  it('подкраска: needs-you — accent-200 (слово accent-800), unseen — accent-2-200 (слово accent-2-800), у работающей — нет; на строке data-session-id', () => {
     renderRow(makeSession('s-01', 'a'), { activity: 'blocked' });
-    expect(row().className).toContain('bg-amber-500/10');
+    expect(row().className).toContain('bg-accent-200');
+    expect(row().className).toContain('hover:bg-accent-200');
+    expect(row().className).not.toContain('amber');
+    expect(screen.getByText(S.states.blocked).className).toContain('text-accent-800');
     cleanup();
     renderRow(makeSession('s-01', 'a'), { activity: 'unseen' });
-    expect(row().className).toContain('bg-amber-500/10');
+    expect(row().className).toContain('bg-accent-2-200');
+    expect(row().className).toContain('hover:bg-accent-2-200');
+    expect(screen.getByText(S.states.unseen).className).toContain('text-accent-2-800');
     cleanup();
     renderRow(makeSession('s-01', 'a'), { activity: 'working' });
-    expect(row().className).not.toContain('bg-amber-500/10');
+    expect(row().className).not.toMatch(/bg-accent(-2)?-200/);
+    expect(screen.getByText(S.states.working).className).toContain('text-work-sidebar-muted-foreground');
     expect(row().getAttribute('data-session-id')).toBe('s-01');
+  });
+
+  it('пилюля 26px, 12px, зазор 6; выбранная и hover — text 9%, выбранная — вес 700; подкраска бьёт выбранную', () => {
+    renderRow(makeSession('s-01', 'исполнитель'));
+    expect(row().className).toMatch(/\bh-\[26px\]/);
+    expect(row().className).toMatch(/\brounded-full\b/);
+    expect(row().className).toMatch(/\bgap-1\.5\b/);
+    expect(row().className).toMatch(/\btext-xs\b/);
+    expect(row().className).toContain('hover:bg-work-sidebar-accent');
+    expect(screen.getByText('S01 исполнитель').className).not.toContain('font-bold');
+    cleanup();
+    renderRow(makeSession('s-01', 'исполнитель'), { selected: true });
+    expect(row().className).toMatch(/\bbg-work-sidebar-accent\b/);
+    expect(screen.getByText('S01 исполнитель').className).toContain('font-bold');
+    cleanup();
+    renderRow(makeSession('s-01', 'исполнитель'), { selected: true, activity: 'blocked' });
+    expect(row().className).toContain('bg-accent-200');
+    expect(row().className).not.toMatch(/\bbg-work-sidebar-accent\b/);
+  });
+
+  it('значок состояния 12, значок агента 13, время 10px шириной 22, слово 11px', () => {
+    renderRow(makeSession('s-01', 'a'), { activity: 'working' });
+    expect(row().querySelector('[data-testid="agent-state-dot"]')?.classList.contains('size-3')).toBe(true);
+    expect(row().querySelector('img')?.getAttribute('width')).toBe('13');
+    const time = screen.getByText('3m');
+    expect(time.className).toContain('w-[22px]');
+    expect(time.className).toContain('text-[10px]');
+    expect(time.className).toContain('text-right');
+    expect(screen.getByText(S.states.working).className).toContain('text-[11px]');
+  });
+
+  it('отступ слева — 8 + 12 на уровень', () => {
+    render(
+      <SessionRow workKey={KEY} projectPath={PROJECT} workId={WORK} bridge={BRIDGE} session={makeSession('s-02', 'b')} depth={2} activity={null} now={NOW} draggable selected={false} onOpen={() => {}} />,
+    );
+    expect(row('s-02').style.paddingLeft).toBe('32px');
+    cleanup();
+    renderRow(makeSession('s-01', 'a'));
+    expect(row('s-01').style.paddingLeft).toBe('8px');
+  });
+
+  it('длинная метка (40 знаков) не выталкивает слово и время: метка сжимается многоточием', () => {
+    const label = 'я'.repeat(40);
+    renderRow(makeSession('s-01', label), { activity: 'working' });
+    const name = screen.getByText(`S01 ${label}`);
+    expect(name.className).toContain('min-w-0');
+    expect(name.className).toContain('flex-1');
+    expect(name.className).toContain('truncate');
+    expect(screen.getByText(S.states.working).className).toContain('shrink-0');
+    expect(screen.getByText('3m').className).toContain('shrink-0');
   });
 
   it('подпись S01 и время последнего события; клик зовёт onOpen', () => {

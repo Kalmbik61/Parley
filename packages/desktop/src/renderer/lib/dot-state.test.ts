@@ -49,38 +49,38 @@ describe('stateWord', () => {
   // строки — по `lifecycle`). Второй параметр для остальных состояний не
   // влияет на результат, но обязателен по сигнатуре — передаём правдоподобный.
   it('working → «работает»', () => {
-    expect(stateWord('working', 'active')).toBe('Working');
+    expect(stateWord('working', 'active')).toBe('working');
   });
 
   it('blocked → «ждёт тебя»', () => {
-    expect(stateWord('blocked', 'active')).toBe('Needs you');
+    expect(stateWord('blocked', 'active')).toBe('needs you');
   });
 
   it('unseen → «закончил · не просмотрено»', () => {
-    expect(stateWord('unseen', 'active')).toBe('Done · unseen');
+    expect(stateWord('unseen', 'active')).toBe('done · unseen');
   });
 
   it('idle → «простаивает»', () => {
-    expect(stateWord('idle', 'active')).toBe('Idle');
+    expect(stateWord('idle', 'active')).toBe('idle');
   });
 
   it('pending → «ожидает запуска»', () => {
-    expect(stateWord('pending', 'pending')).toBe('Not started');
+    expect(stateWord('pending', 'pending')).toBe('not started');
   });
 
   it('exited + sleeping → «спит»', () => {
-    expect(stateWord('exited', 'sleeping')).toBe('Asleep');
+    expect(stateWord('exited', 'sleeping')).toBe('asleep');
   });
 
   it('exited + closed → «закрыта»', () => {
-    expect(stateWord('exited', 'closed')).toBe('Closed');
+    expect(stateWord('exited', 'closed')).toBe('closed');
   });
 
   it('done → «готово»', () => {
-    expect(stateWord('done', 'closed')).toBe('Done');
+    expect(stateWord('done', 'closed')).toBe('done');
   });
 
   it('failed → «сбой»', () => {
-    expect(stateWord('failed', 'closed')).toBe('Failed');
+    expect(stateWord('failed', 'closed')).toBe('failed');
   });
 });

@@ -765,7 +765,7 @@ describe('AppShell — вход «Почта» сайдбара (тест 10 к�
     act(() => useLayoutStore.getState().setActiveWork(keyOf('w-01')));
     await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-01')]).toBe(true));
 
-    fireEvent.click(screen.getByText('✉1'));
+    fireEvent.click(screen.getByRole('button', { name: '1 unread message to you' }));
     await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-02')]).toBe(true));
 
     expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
@@ -1131,7 +1131,7 @@ describe('AppShell — сайдбар карточек (кусок 3.3)', () => 
   it('кусок 3.5, тест 7: «+» заголовка проекта — форма с этим проектом; меню new-work — без проекта', async () => {
     await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'New workspace in project' }));
+    fireEvent.click(screen.getByRole('button', { name: /^New workspace in / }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByRole('combobox', { name: 'Project' }).getAttribute('title')).toBe('/tmp/w-01');
     fireEvent.keyDown(dialog, { key: 'Escape' });

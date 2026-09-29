@@ -30,18 +30,20 @@ export const S = {
   /**
    * Девять слов состояния сессии (спека 4.2): ключи — те же, что отдаёт
    * `dot-state.ts#stateWord` (`exited` расщеплён на `asleep`/`closed` по
-   * `lifecycle`, как и в прежней русской таблице).
+   * `lifecycle`, как и в прежней русской таблице). Строчными — так их пишет строка сессии
+   * (спека окна 2026-09-29, 1.2): `working`, `needs you`, `done · unseen`…; те же слова — имена
+   * значков для скринридера и слово итога в тултипе.
    */
   states: {
-    working: 'Working',
-    blocked: 'Needs you',
-    unseen: 'Done · unseen',
-    idle: 'Idle',
-    pending: 'Not started',
-    asleep: 'Asleep',
-    closed: 'Closed',
-    done: 'Done',
-    failed: 'Failed',
+    working: 'working',
+    blocked: 'needs you',
+    unseen: 'done · unseen',
+    idle: 'idle',
+    pending: 'not started',
+    asleep: 'asleep',
+    closed: 'closed',
+    done: 'done',
+    failed: 'failed',
   },
 
   /** Экран пустого окна (нет ни одной работы) — `shell/Landing.tsx`. */
@@ -71,11 +73,18 @@ export const S = {
     pinned: 'Pinned',
     /** Верх сайдбара — палитра; подпись ⌘J (кусок 6.1b), прежняя палитра до 6.2. */
     search: 'Search',
-    /** `aria-label` «+» заголовка проекта. */
-    newWorkspaceInProject: 'New workspace in project',
+    /** `aria-label` и тултип «+» заголовка проекта: проект называется (спека окна 2026-09-29, 1.2). */
+    newWorkspaceInProject: (project: string): string => `New workspace in ${project}`,
     sessionCount: (n: number): string => (n === 1 ? '1 session' : `${n} sessions`),
-    /** Строка под сессиями карточки: сколько закрытых спрятано. */
-    moreClosed: (n: number): string => `+${n} closed`,
+    /** Строка под сессиями карточки: сколько закрытых спрятано; «Hide closed» — прячет раскрытые. */
+    moreClosed: (n: number): string => `${n} more closed`,
+    hideClosed: 'Hide closed',
+    /** Тултип `✉N` карточки: непрочитанные человеком письма работы. */
+    unreadMail: (n: number): string => (n === 1 ? '1 unread message to you' : `${n} unread messages to you`),
+    /** Тултип `#N` карточки: комнаты с непрочитанным сообщением. */
+    roomsWithUnread: (n: number): string => (n === 1 ? '1 room with unread messages' : `${n} rooms with unread messages`),
+    /** Тултип значка ветки в строке сессии со своим worktree; ветка — данные, идёт как есть. */
+    ownWorktree: (branch: string): string => `Own worktree · ${branch}`,
     trustWaitTooltip: 'Not responding since launch — may be waiting for folder trust',
     /** Переключатель меню «⋯» заголовка секции (спека 6.1, кусок 3.4). */
     showDone: 'Show done',

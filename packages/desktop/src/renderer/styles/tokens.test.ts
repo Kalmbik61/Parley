@@ -621,8 +621,16 @@ describe('dimmed.css — правило приглушения на новых �
     expect(rule?.[1]).not.toMatch(/opacity/);
   });
 
-  it('значки и полоса внимания приглушены прозрачностью 0.6 — облик done сохраняется', () => {
-    expect(dimmedCss).toMatch(/\[data-dimmed\]\s+:is\([^)]*svg[^)]*\[data-attention-strip\][^)]*\)\s*\{\s*opacity:\s*0\.6;/);
+  // Спека окна 2026-09-29, 1.2: `done`-карточка — .6, закрытая строка — .5, при правиле dimmed.css: цвет
+  // текста меняется, а прозрачность ложится только на значки (полосы внимания слева у карточки больше нет).
+  it('значки приглушены прозрачностью: 0.6 у done-карточки, 0.5 у закрытой строки (data-dimmed="row")', () => {
+    expect(dimmedCss).toMatch(/\[data-dimmed\]\s+:is\([^)]*svg[^)]*\)[^{]*\{\s*opacity:\s*0\.6;/);
+    expect(dimmedCss).toMatch(/\[data-dimmed='row'\]\s+:is\([^)]*svg[^)]*\)[^{]*\{\s*opacity:\s*0\.5;/);
+    expect(dimmedCss).not.toContain('data-attention-strip');
+  });
+
+  it('прозрачность значка состояния не перемножается с прозрачностью его внутреннего значка (.6 × .6)', () => {
+    expect(dimmedCss).toContain(":not([data-testid='agent-state-dot'] svg)");
   });
 
   for (const theme of THEMES) {

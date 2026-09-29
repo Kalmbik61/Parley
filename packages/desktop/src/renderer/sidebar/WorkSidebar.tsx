@@ -8,8 +8,12 @@
  * списком, открыто меню сайдбара или идёт переименование (кусок 3.4) — тогда пересортировка
  * ждёт, чтобы карточка не уехала из-под курсора (спека 6.2).
  *
- * Своей правой границы у сайдбара нет: шов с центром рисует `shell/Resizer.tsx` (1px),
- * вторая линия рядом читалась бы толще (находка 2.3).
+ * Своей правой границы у сайдбара нет: шов с центром — ручка `shell/Resizer.tsx` (в облике Organic линия
+ * шва проявляется только под указателем).
+ *
+ * Облик Organic (спека окна 2026-09-29, 1.2): навигация — отступ `4 10 10 10`, зазор 2, строки 32px
+ * пилюлями (отступ `0 8 0 12`, зазор 10, 13px, hover `text 7%`), сочетание — пилюля 10px на `neutral-200`;
+ * список — отступ `0 10 14 10`, между проектами 16, между карточками 6.
  */
 
 import { useEffect, useRef, useState, type RefObject } from 'react';
@@ -21,6 +25,7 @@ import type { HarnasBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { attentionOf } from '../attention/derive.js';
 import { selectedSessionOf, useLayoutStore } from '../layout/store.js';
+import { cn } from '../lib/cn.js';
 import { workKey } from '../lib/tree-order.js';
 import { useNow } from '../lib/use-now.js';
 import { useActivityStore, type ActivityEntry } from '../store/activity.js';
@@ -48,10 +53,14 @@ export interface WorkSidebarProps {
 
 /** С какого числа карточек список виртуализируется (спека 6.1). */
 const VIRTUALIZE_ABOVE = 50;
-/** Оценка высоты для виртуализатора (план 3.3): карточка 44px плюс 24px на строку сессии. */
-const HEADER_HEIGHT = 28;
-const CARD_HEIGHT = 44;
-const SESSION_ROW_HEIGHT = 24;
+/**
+ * Оценка высоты для виртуализатора (план 3.3), под Organic: заголовок проекта 30px и зазор 16 до него;
+ * карточка — 8 + 22 (название) + 16 (мета) + 8 и зазор 6 сверху; строка сессии 26px и зазор 1.
+ * Настоящую высоту виртуализатор всё равно замеряет по узлу.
+ */
+const HEADER_HEIGHT = 46;
+const CARD_HEIGHT = 60;
+const SESSION_ROW_HEIGHT = 27;
 /** Раз в сколько обновляется относительное время (план 3.3). */
 const NOW_PERIOD_MS = 30_000;
 /**
@@ -61,6 +70,12 @@ const NOW_PERIOD_MS = 30_000;
 const INITIAL_LIST_RECT = { width: 288, height: 800 };
 
 type Row = { kind: 'header'; section: SidebarSection } | { kind: 'card'; section: SidebarSection; entry: WorkEntry };
+
+/** Строка навигации (1.2): пилюля 32px, значок 14, сочетание справа; hover — `text 7%`. */
+const NAV_ROW =
+  'flex h-8 w-full cursor-default items-center gap-2.5 rounded-full pl-3 pr-2 text-[13px] hover:bg-foreground/7';
+/** Сочетание клавиш — пилюля 10px на `neutral-200`, текст `neutral-800`. */
+const SHORTCUT = 'rounded-full bg-neutral-200 px-[7px] py-0.5 font-sans text-[10px] text-neutral-800';
 
 function rowsOf(sections: SidebarSection[]): Row[] {
   return sections.flatMap((section) => [
@@ -205,25 +220,21 @@ export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail,
 
   return (
     <div data-work-sidebar className="flex h-full w-full min-w-0 flex-col bg-work-sidebar text-work-sidebar-foreground">
-      <div className="flex shrink-0 flex-col gap-0.5 p-2">
-        <button
-          type="button"
-          onClick={() => openPalette('default')}
-          className="flex h-8 items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-work-sidebar-accent"
-        >
-          <Search className="size-4 shrink-0" aria-hidden="true" />
+      <div data-sidebar-nav className="flex shrink-0 flex-col gap-0.5 px-2.5 pb-2.5 pt-1">
+        <button type="button" onClick={() => openPalette('default')} className={NAV_ROW}>
+          <Search className="size-3.5 shrink-0" aria-hidden="true" />
           <span className="flex-1 text-left">{S.sidebar.search}</span>
-          <kbd className="rounded border border-work-sidebar-border px-1 text-[10px] text-work-sidebar-muted-foreground">⌘J</kbd>
+          <kbd className={SHORTCUT}>⌘J</kbd>
         </button>
         <button
           type="button"
           // Без проекта: обработчик напрямую получил бы событие клика вместо пути.
           onClick={() => openNewWorkDialog()}
-          className="flex h-8 items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-work-sidebar-accent"
+          className={NAV_ROW}
         >
-          <Plus className="size-4 shrink-0" aria-hidden="true" />
+          <Plus className="size-3.5 shrink-0" aria-hidden="true" />
           <span className="flex-1 text-left">{S.sidebar.addWorkspace}</span>
-          <kbd className="rounded border border-work-sidebar-border px-1 text-[10px] text-work-sidebar-muted-foreground">⌘N</kbd>
+          <kbd className={SHORTCUT}>⌘N</kbd>
         </button>
       </div>
       {/* Один и тот же узел списка по обе стороны порога виртуализации: иначе при переходе
@@ -243,7 +254,7 @@ export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail,
         onPointerUp={keys.onPointerUp}
         onPointerEnter={() => setPointerOver(true)}
         onPointerLeave={() => setPointerOver(false)}
-        className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto px-2 pb-2 outline-none"
+        className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto px-2.5 pb-3.5 outline-none"
       >
         {cardCount > VIRTUALIZE_ABOVE ? (
           <VirtualList
@@ -254,16 +265,19 @@ export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail,
             onNewWork={openNewWorkDialog}
           />
         ) : (
-          sections.map((section) => (
-            <ProjectGroup
-              key={section.key}
-              section={section}
-              onToggleCollapsed={() => toggleCollapsed(section.key)}
-              onNewWork={openNewWorkDialog}
-            >
-              {section.collapsed ? null : <div className="pt-0.5">{section.works.map(renderCard)}</div>}
-            </ProjectGroup>
-          ))
+          // Между проектами 16 (спека 1.2); зазор между карточками — верхний отступ самой карточки.
+          <div data-projects className="flex flex-col gap-4">
+            {sections.map((section) => (
+              <ProjectGroup
+                key={section.key}
+                section={section}
+                onToggleCollapsed={() => toggleCollapsed(section.key)}
+                onNewWork={openNewWorkDialog}
+              >
+                {section.collapsed ? null : section.works.map(renderCard)}
+              </ProjectGroup>
+            ))}
+          </div>
         )}
       </div>
     </div>
@@ -307,7 +321,8 @@ function VirtualList({ scrollRef, rows, renderCard, onToggleCollapsed, onNewWork
             key={item.key}
             data-index={item.index}
             ref={virtualizer.measureElement}
-            className="absolute left-0 top-0 w-full"
+            // Между проектами 16: у виртуальных строк зазор — верхний отступ заголовка (кроме первого).
+            className={cn('absolute left-0 top-0 w-full', row.kind === 'header' && item.index > 0 && 'pt-4')}
             style={{ transform: `translateY(${item.start}px)` }}
           >
             {row.kind === 'header' ? (

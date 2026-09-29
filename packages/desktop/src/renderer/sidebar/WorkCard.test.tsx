@@ -1,4 +1,9 @@
-/** Тесты 3 и 7 куска 3.3: карточка работы (спека 6.3). */
+/**
+ * Тесты 3 и 7 куска 3.3: карточка работы (спека 6.3). Облик Organic (спека окна 2026-09-29, 1.2): радиус
+ * 16, отступ 8 8 8 10; активная — фон `neutral-100` и `shadow-sm`, неактивная под курсором — `text 4%`
+ * (токен `--card-hover`); в строке заголовка — значок самого срочного состояния, название, `✉N`, `#N`,
+ * время; полосы внимания слева нет.
+ */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -12,7 +17,7 @@ import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
 import { useUiStore } from '../store/ui.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
-import { makeLetter, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { activityMap, makeActivity, makeLetter, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { WorkCard, type WorkCardProps } from './WorkCard.js';
 
 vi.mock('sonner', () => ({ toast: vi.fn() }));
@@ -91,51 +96,121 @@ describe('WorkCard (тест 3)', () => {
     expect(card().getAttribute('data-work-key')).toBe(workKey('/Users/me/VoiceStudio', 'w-01'));
   });
 
-  it('полоса orange при needs-you, yellow при working, emerald при unseen, без полосы при idle', () => {
-    const strip = (): Element | null => card().querySelector('[data-attention-strip]');
-    renderCard(entry, { attention: attention({ level: 'needs-you' }) });
-    expect(strip()?.className).toContain('bg-orange-500');
-    cleanup();
-    renderCard(entry, { attention: attention({ level: 'working' }) });
-    expect(strip()?.className).toContain('bg-yellow-500');
-    cleanup();
-    renderCard(entry, { attention: attention({ level: 'unseen' }) });
-    expect(strip()?.className).toContain('bg-emerald-500');
-    cleanup();
-    renderCard(entry, { attention: attention({ level: 'idle' }) });
-    expect(strip()).toBeNull();
+  it('полосы внимания слева нет: состояние несёт значок в строке заголовка', () => {
+    for (const level of ['needs-you', 'working', 'unseen', 'idle'] as const) {
+      renderCard(entry, { attention: attention({ level }) });
+      expect(card().querySelector('[data-attention-strip]'), level).toBeNull();
+      cleanup();
+    }
   });
 
-  it('жирный заголовок при unseen и при письме человеку, обычный без них', () => {
+  it('карточка: радиус 16, отступ 8 8 8 10, зазор 6 сверху; активная — neutral-100 и shadow-sm, прочая — hover --card-hover', () => {
+    renderCard(entry);
+    expect(card().className).toMatch(/\brounded-md\b/);
+    expect(card().className).toMatch(/\bpy-2\b/);
+    expect(card().className).toMatch(/\bpl-2\.5\b/);
+    expect(card().className).toMatch(/\bpr-2\b/);
+    expect(card().className).toMatch(/\bmt-1\.5\b/);
+    expect(card().className).toContain('hover:bg-card-hover');
+    expect(card().className).not.toMatch(/\bbg-neutral-100\b/);
+    expect(card().className).not.toMatch(/\bshadow-sm\b/);
+    expect(card().className).not.toMatch(/\bborder\b/);
+    cleanup();
+    renderCard(entry, { active: true });
+    expect(card().className).toMatch(/\bbg-neutral-100\b/);
+    expect(card().className).toMatch(/\bshadow-sm\b/);
+    expect(card().className).not.toContain('hover:bg-card-hover');
+  });
+
+  it('жирный (700) заголовок при unseen и при письме человеку, иначе 500', () => {
     renderCard(entry, { attention: attention({ unseen: 1 }) });
-    expect(screen.getByText('Редизайн окна').className).toContain('font-semibold');
+    expect(screen.getByText('Редизайн окна').className).toContain('font-bold');
     cleanup();
     renderCard(entry, { attention: attention({ humanUnread: 1 }) });
-    expect(screen.getByText('Редизайн окна').className).toContain('font-semibold');
+    expect(screen.getByText('Редизайн окна').className).toContain('font-bold');
     cleanup();
     renderCard(entry);
-    expect(screen.getByText('Редизайн окна').className).not.toContain('font-semibold');
+    expect(screen.getByText('Редизайн окна').className).toContain('font-medium');
+    expect(screen.getByText('Редизайн окна').className).not.toContain('font-bold');
+    expect(screen.getByText('Редизайн окна').className).toContain('text-[13px]');
   });
 
-  it('✉2 при двух письмах, клик по нему — onOpenMail, а не onActivate', () => {
+  it('✉N: значок Mail, число, accent-700, тултип «N unread messages to you»; клик — onOpenMail, а не onActivate', () => {
     const onOpenMail = vi.fn();
     const onActivate = vi.fn();
     renderCard(entry, { attention: attention({ humanUnread: 2 }), onOpenMail, onActivate });
-    fireEvent.click(screen.getByText('✉2'));
+    const mail = screen.getByRole('button', { name: '2 unread messages to you' });
+    expect(mail.getAttribute('title')).toBe('2 unread messages to you');
+    expect(mail.textContent).toBe('2');
+    expect(mail.querySelector('svg.lucide-mail')?.classList.contains('size-3')).toBe(true);
+    expect(mail.className).toContain('text-accent-700');
+    expect(mail.className).toContain('font-semibold');
+    fireEvent.click(mail);
     expect(onOpenMail).toHaveBeenCalledTimes(1);
     expect(onActivate).not.toHaveBeenCalled();
   });
 
-  it('#1 при комнате с непрочитанным; у работы с комнатами без непрочитанного — # без числа; без комнат — ничего', () => {
+  it('#N: значок Hash, число комнат с непрочитанным, neutral-700; у работы с комнатами без непрочитанного — значок без числа; без комнат — ничего', () => {
     const withRooms = makeWork('w-01', { title: 'T', rooms: [makeRoom('r-01', 'one'), makeRoom('r-02', 'two')] });
     renderCard(withRooms, { attention: attention({ roomsUnread: { 'r-01': 4 } }) });
-    expect(screen.getByText('#1')).toBeTruthy();
+    const rooms = screen.getByRole('button', { name: 'Rooms' });
+    expect(rooms.textContent).toBe('1');
+    expect(rooms.getAttribute('title')).toBe('1 room with unread messages');
+    expect(rooms.querySelector('svg.lucide-hash')?.classList.contains('size-3')).toBe(true);
+    expect(rooms.className).toContain('text-work-sidebar-muted-foreground');
     cleanup();
     renderCard(withRooms);
-    expect(screen.getByText('#')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Rooms' }).textContent).toBe('');
     cleanup();
     renderCard(makeWork('w-01', { title: 'T' }));
     expect(card().querySelector('[data-rooms]')).toBeNull();
+  });
+
+  describe('значок самого срочного состояния в строке заголовка (порядок прототипа)', () => {
+    const ref = (id: string) => ({ projectPath: '/tmp/proj', workId: 'w-01', sessionId: id });
+    const glyph = (): string | null => card().querySelector('[data-work-glyph] [data-testid="agent-state-dot"]')?.getAttribute('data-state') ?? null;
+    const cases: Array<[string, Array<[string, 'blocked' | 'working' | 'unseen' | 'idle' | null]>, string | null]> = [
+      ['blocked бьёт working', [['s-01', 'working'], ['s-02', 'blocked']], 'blocked'],
+      ['working бьёт unseen', [['s-01', 'unseen'], ['s-02', 'working']], 'working'],
+      ['unseen бьёт idle', [['s-01', 'idle'], ['s-02', 'unseen']], 'unseen'],
+      ['одна живая без activity — idle', [['s-01', null]], 'idle'],
+    ];
+    for (const [name, states, expected] of cases) {
+      it(name, () => {
+        const work = makeWork('w-01', { sessions: states.map(([id]) => makeSession(id, id)) });
+        const live = activityMap(states.flatMap(([id, state]) => (state === null ? [] : [makeActivity(ref(id), state)])));
+        renderCard(work, { activity: live });
+        expect(glyph()).toBe(expected);
+      });
+    }
+
+    it('failed бьёт idle, done — последним; pending — «не запущена»', () => {
+      renderCard(makeWork('w-01', { sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b', { result: 'failed' })] }));
+      expect(glyph()).toBe('failed');
+      cleanup();
+      renderCard(makeWork('w-01', { sessions: [makeSession('s-01', 'a', { result: 'done' })] }));
+      expect(glyph()).toBe('done');
+      cleanup();
+      renderCard(makeWork('w-01', { sessions: [makeSession('s-01', 'a', { lifecycle: 'pending' })] }));
+      expect(glyph()).toBe('pending');
+    });
+
+    it('закрытые сессии значок не задают; без живых — пустое место 12px', () => {
+      renderCard(makeWork('w-01', { sessions: [makeSession('s-01', 'a', { lifecycle: 'closed' })] }));
+      expect(glyph()).toBeNull();
+      expect(card().querySelector('[data-work-glyph]')?.className).toMatch(/\bw-3\b/);
+    });
+
+    it('в работе ждёт решение (Room.proposal) — значок вопроса, даже если срочнее нечего; у старой карты без proposal — как обычно', () => {
+      const proposal = { id: 'p-1', from: 's-01', text: 'Решение', rev: 0, at: '2026-09-29T10:00:00.000Z' };
+      const waiting = makeWork('w-01', { sessions: [makeSession('s-01', 'a')], rooms: [{ ...makeRoom('r-01', 'Возвраты'), proposal }] });
+      renderCard(waiting, { activity: activityMap([makeActivity(ref('s-01'), 'working')]) });
+      expect(glyph()).toBe('blocked');
+      cleanup();
+      const old = makeWork('w-01', { sessions: [makeSession('s-01', 'a')], rooms: [{ id: 'r-01', title: 'Старая', creator: 'human', members: [], createdAt: '2026-01-01T00:00:00.000Z' } as never] });
+      renderCard(old, { activity: activityMap([makeActivity(ref('s-01'), 'working')]) });
+      expect(glyph()).toBe('working');
+    });
   });
 
   it('📌 при pinned', () => {
@@ -155,11 +230,13 @@ describe('WorkCard (тест 3)', () => {
     const meta = card().querySelector('[data-work-meta]');
     expect(meta?.textContent).toContain('VoiceStudio');
     expect(meta?.textContent).toContain('3 sessions');
+    expect(meta?.className).toContain('pl-5');
+    expect(meta?.className).toContain('text-[11px]');
     expect(screen.getByText('main').className).toContain('font-mono');
     expect(card().textContent).toContain('3m');
   });
 
-  it('закрытые спрятаны за «+2 closed», клик раскрывает их (и не активирует карточку)', () => {
+  it('закрытые спрятаны за «2 more closed», клик раскрывает их, «Hide closed» прячет снова (и не активирует карточку)', () => {
     const onActivate = vi.fn();
     const mixed = makeWork('w-closed', {
       sessions: [
@@ -171,10 +248,28 @@ describe('WorkCard (тест 3)', () => {
     renderCard(mixed, { onActivate });
     expect(card().querySelectorAll('[data-session-id]')).toHaveLength(1);
     expect(card().querySelector('[data-work-meta]')?.textContent).toContain('1 session');
-    fireEvent.click(screen.getByText('+2 closed'));
+    const more = screen.getByText('2 more closed');
+    expect(more.className).toContain('h-6');
+    expect(more.className).toContain('pl-7');
+    expect(more.className).toContain('text-[11px]');
+    expect(more.className).toContain('rounded-full');
+    fireEvent.click(more);
     expect(card().querySelectorAll('[data-session-id]')).toHaveLength(3);
-    expect(screen.queryByText('+2 closed')).toBeNull();
+    expect(screen.queryByText('2 more closed')).toBeNull();
     expect(onActivate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Hide closed'));
+    expect(card().querySelectorAll('[data-session-id]')).toHaveLength(1);
+    expect(screen.getByText('2 more closed')).toBeTruthy();
+    expect(screen.queryByText('Hide closed')).toBeNull();
+    expect(onActivate).not.toHaveBeenCalled();
+  });
+
+  it('блок строк: отступ сверху 6, зазор 1', () => {
+    renderCard(makeWork('w-01', { sessions: [makeSession('s-01', 'a')] }));
+    const group = card().querySelector('[role="group"]');
+    expect(group?.className).toContain('mt-1.5');
+    expect(group?.className).toContain('gap-px');
+    expect(group?.className).toContain('flex-col');
   });
 
   it('строки сессий по treeOrder с отступом 12px на уровень; клик по строке — onOpenSession', () => {
@@ -207,9 +302,10 @@ describe('WorkCard (тест 3)', () => {
 describe('WorkCard — done и длинное название (тест 7)', () => {
   // Ревью M12: приглушение — data-dimmed (цвет текста и прозрачность значков, styles/dimmed.css),
   // а не opacity-60 всей карточки: та опускала текст ниже 4.5:1.
-  it('status done — data-dimmed без opacity всей карточки, активная — без приглушения', () => {
+  it('status done — data-dimmed без opacity всей карточки (значки .6 — dimmed.css), активная — без приглушения', () => {
     renderCard(makeWork('w-01', { status: 'done' }));
     expect(card().hasAttribute('data-dimmed')).toBe(true);
+    expect(card().getAttribute('data-dimmed')).toBe('');
     expect(card().className).not.toMatch(/opacity-/);
     cleanup();
     renderCard(makeWork('w-01'));
@@ -235,7 +331,7 @@ describe('WorkCard — строки S (английский интерфейс)'
   it('sessionCount и moreClosed', () => {
     expect(S.sidebar.sessionCount(1)).toBe('1 session');
     expect(S.sidebar.sessionCount(3)).toBe('3 sessions');
-    expect(S.sidebar.moreClosed(2)).toBe('+2 closed');
+    expect(S.sidebar.moreClosed(2)).toBe('2 more closed');
   });
 });
 
@@ -283,7 +379,7 @@ describe('WorkCard — переименование на месте (тесты 
 });
 
 describe('WorkCard — меню комнат по # (тест 4)', () => {
-  it('#N и # без числа открывают меню всех комнат; выбор — onOpenRoom, карточка не активируется', () => {
+  it('#N и значок # без числа открывают меню всех комнат; выбор — onOpenRoom, карточка не активируется', () => {
     const withRooms = makeWork('w-01', {
       title: 'T',
       rooms: [makeRoom('r-01', 'Design'), makeRoom('r-02', 'Backend')],
@@ -301,7 +397,7 @@ describe('WorkCard — меню комнат по # (тест 4)', () => {
     const quiet = makeWork('w-01', { title: 'T', rooms: [makeRoom('r-01', 'Design')] });
     renderCard(quiet, { onOpenRoom, onActivate });
     const trigger = screen.getByRole('button', { name: 'Rooms' });
-    expect(trigger.textContent).toBe('#');
+    expect(trigger.textContent).toBe('');
     fireEvent.click(trigger);
     fireEvent.keyDown(trigger, { key: 'Enter' });
     fireEvent.click(screen.getByText('Design'));

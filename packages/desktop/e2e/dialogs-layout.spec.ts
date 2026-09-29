@@ -139,7 +139,7 @@ for (const size of [
       const problems: string[] = [];
 
       // New workspace от «+» заголовка проекта: проект выбран, поля заполнены длинными значениями.
-      await window.getByRole('button', { name: 'New workspace in project', exact: true }).click();
+      await window.getByRole('button', { name: /^New workspace in / }).click();
       const composer = window.getByRole('dialog');
       await expect(composer.getByRole('combobox', { name: 'Project' })).toHaveAttribute('title', project);
       await composer.getByLabel('Title').fill(LONG_TITLE);

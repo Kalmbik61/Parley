@@ -215,7 +215,7 @@ describe('WorkSidebar — состав (тест 5)', () => {
     expect(onActivateWork).toHaveBeenCalledWith(keyOf(entry));
     fireEvent.click(document.querySelector('[data-session-id="s-01"]') as HTMLElement);
     expect(onOpenSession).toHaveBeenCalledWith(keyOf(entry), 's-01');
-    fireEvent.click(screen.getByText('✉1'));
+    fireEvent.click(screen.getByRole('button', { name: '1 unread message to you' }));
     expect(onOpenMail).toHaveBeenCalledWith(keyOf(entry));
   });
 });
@@ -284,10 +284,45 @@ describe('WorkSidebar — верх (тесты 8, 16)', () => {
     expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: null, title: '' });
 
     act(() => useUiStore.getState().closeNewWorkDialog());
-    fireEvent.click(screen.getByRole('button', { name: S.sidebar.newWorkspaceInProject }));
+    fireEvent.click(screen.getByRole('button', { name: S.sidebar.newWorkspaceInProject('one') }));
     // Кусок 3.5 (тест 7): «+» заголовка — с проектом этой группы.
     expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: '/p/one', title: '' });
     expect(useUiStore.getState().ui.collapsedProjects).toEqual([]);
+  });
+
+  it('навигация: строки Search и New workspace — пилюли 32px, значок 14, сочетание — пилюля 10px на neutral-200', () => {
+    setWorks([makeWork('w-1')]);
+    render(<Harness />);
+    for (const name of [/Search/, /^New workspace\s*⌘N$/]) {
+      const row = screen.getByRole('button', { name });
+      expect(row.className).toMatch(/\bh-8\b/);
+      expect(row.className).toMatch(/\brounded-full\b/);
+      expect(row.className).toMatch(/\bgap-2\.5\b/);
+      expect(row.className).toMatch(/\bpl-3\b/);
+      expect(row.className).toMatch(/\bpr-2\b/);
+      expect(row.className).toContain('text-[13px]');
+      expect(row.className).toContain('hover:bg-foreground/7');
+      expect(row.querySelector('svg')?.classList.contains('size-3.5')).toBe(true);
+      const kbd = row.querySelector('kbd');
+      expect(kbd?.className).toContain('rounded-full');
+      expect(kbd?.className).toContain('bg-neutral-200');
+      expect(kbd?.className).toContain('text-neutral-800');
+      expect(kbd?.className).toContain('text-[10px]');
+    }
+  });
+
+  it('список: отступ 0 10 14 10, между проектами 16, между карточками 6', () => {
+    setWorks([makeWork('w-1', { projectPath: '/p/one' }), makeWork('w-2', { projectPath: '/p/two' })]);
+    render(<Harness />);
+    const listEl = list();
+    expect(listEl.className).toMatch(/\bpx-2\.5\b/);
+    expect(listEl.className).toMatch(/\bpb-3\.5\b/);
+    expect(listEl.querySelector('[data-projects]')?.className).toMatch(/\bgap-4\b/);
+    const nav = document.querySelector('[data-sidebar-nav]');
+    expect(nav?.className).toMatch(/\bgap-0\.5\b/);
+    expect(nav?.className).toMatch(/\bpx-2\.5\b/);
+    expect(nav?.className).toMatch(/\bpt-1\b/);
+    expect(nav?.className).toMatch(/\bpb-2\.5\b/);
   });
 
   it('у корня сайдбара нет своей правой границы — шов рисует Resizer', () => {

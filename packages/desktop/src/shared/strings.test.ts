@@ -34,17 +34,18 @@ function hostNotice(kind: NoticeKind, ref: HostNotice['ref'] = null): HostNotice
 }
 
 describe('S.states', () => {
-  it('содержит девять слов глоссария (спека 4.2)', () => {
+  // Слова состояний — строчными (спека окна 2026-09-29, 1.2): `working`, `needs you`, `done · unseen`…
+  it('содержит девять слов глоссария (спека 4.2), строчными (спека 1.2 Organic)', () => {
     expect(S.states).toEqual({
-      working: 'Working',
-      blocked: 'Needs you',
-      unseen: 'Done · unseen',
-      idle: 'Idle',
-      pending: 'Not started',
-      asleep: 'Asleep',
-      closed: 'Closed',
-      done: 'Done',
-      failed: 'Failed',
+      working: 'working',
+      blocked: 'needs you',
+      unseen: 'done · unseen',
+      idle: 'idle',
+      pending: 'not started',
+      asleep: 'asleep',
+      closed: 'closed',
+      done: 'done',
+      failed: 'failed',
     });
   });
 
@@ -57,6 +58,25 @@ describe('S.states', () => {
 
 // Имя провайдера для строки статуса и тултипов окна (спека 1.1, решение 3): по handoff — «Claude Code» и
 // «Codex», прочим — метка хоста. Одна функция: ту же берёт тултип свёрнутой комнаты «2 Claude Code agents».
+describe('S.sidebar — тексты карточки и строк (Organic, 1.2)', () => {
+  it('тултип «+» заголовка проекта называет проект', () => {
+    expect(S.sidebar.newWorkspaceInProject('shop')).toBe('New workspace in shop');
+  });
+
+  it('тултипы ✉N и #N — с числом и единственным числом при одном', () => {
+    expect(S.sidebar.unreadMail(1)).toBe('1 unread message to you');
+    expect(S.sidebar.unreadMail(3)).toBe('3 unread messages to you');
+    expect(S.sidebar.roomsWithUnread(1)).toBe('1 room with unread messages');
+    expect(S.sidebar.roomsWithUnread(2)).toBe('2 rooms with unread messages');
+  });
+
+  it('тултип ветки своего worktree, «N more closed» и «Hide closed»', () => {
+    expect(S.sidebar.ownWorktree('harnas/s-01')).toBe('Own worktree · harnas/s-01');
+    expect(S.sidebar.moreClosed(2)).toBe('2 more closed');
+    expect(S.sidebar.hideClosed).toBe('Hide closed');
+  });
+});
+
 describe('providerName', () => {
   it('claude — «Claude Code», codex — «Codex», независимо от метки хоста', () => {
     expect(providerName('claude', 'Claude')).toBe('Claude Code');
