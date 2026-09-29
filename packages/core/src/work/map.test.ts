@@ -48,6 +48,26 @@ describe('addSession', () => {
     expect(roled.agent).toBe('reviewer');
   });
 
+  it('модель и усилие запуска (spawn_session) пишутся, когда заданы; без них ключей в записи нет', () => {
+    const map = emptyMap();
+    const plain = addSession(map, { provider: 'claude', label: 'план', task: 'план' });
+    const chosen = addSession(map, {
+      provider: 'claude',
+      label: 'ревью',
+      task: 'проверить',
+      model: 'opus',
+      effort: 'high',
+    });
+
+    expect('model' in plain).toBe(false);
+    expect('effort' in plain).toBe(false);
+    expect(chosen).toMatchObject({ model: 'opus', effort: 'high' });
+    // Через JSON — как на диске: запись с выбором читается парсером карты без правок.
+    const again = parseMap(JSON.stringify(map), 'map.json');
+    expect(again.sessions[1]).toMatchObject({ model: 'opus', effort: 'high' });
+    expect('model' in (again.sessions[0] ?? {})).toBe(false);
+  });
+
   it('нумерует сессии s-NN по порядку и создаёт запись pending', () => {
     const map = emptyMap();
     const first = addSession(map, { provider: 'claude', label: 'план', task: 'составить план' });

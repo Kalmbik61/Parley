@@ -1,4 +1,5 @@
 import type { TokenTotals } from '../counters.js';
+import type { EffortLevel } from '../providers.js';
 
 /** Статус работы. `archived` в списке не показывается (дизайн TUI, раздел 8). */
 export type WorkStatus = 'active' | 'done' | 'archived';
@@ -131,6 +132,14 @@ export interface WorkSession {
    * `null` (кусок 4.1 плана worktree).
    */
   worktree: WorktreeInfo | null;
+  /**
+   * Модель и усилие, с которыми запускается новая сессия, — их задаёт `spawn_session` (`model`, `effort`).
+   * Запускает такую сессию хост позже и без диалога, поэтому выбор ложится в карту, а `planLaunch` берёт
+   * его оттуда; выбор из диалога окна в карте не хранится и перекрывает эти поля. Нет поля — модель и
+   * усилие по умолчанию, без флагов. На диске поля может не быть: `parseMap` их не подставляет.
+   */
+  model?: string;
+  effort?: EffortLevel;
 }
 
 /**

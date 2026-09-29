@@ -177,8 +177,33 @@ describe('подробный гид', () => {
   });
 
   it('описывает роль-агента у spawn_session', () => {
-    expect(GUIDE).toContain('spawn_session(provider, label, task, contextFrom, agent)');
+    expect(GUIDE).toContain('spawn_session(provider, label, task, contextFrom, agent, model, effort)');
     expect(GUIDE).toContain('.claude/agents/');
+  });
+
+  it('spawn_session: model — id из models провайдера в get_map, не из списка — ошибка; effort — три уровня', () => {
+    const tools = sectionOf('## Инструменты', '## Комнаты');
+
+    expect(tools).toMatch(/`model` — `id` из поля `models` нужного провайдера в `get_map`/);
+    expect(tools).toMatch(/значение не из списка — ошибка, и сессия не создаётся/);
+    expect(tools).toMatch(/`models: null` списка нет/);
+    expect(tools).toMatch(/`low`, `medium` или `high`/);
+    expect(tools).toMatch(/`effort: false` в `get_map` его не принимает, и значение отбрасывается/);
+    expect(tools).toMatch(/спящую, поднятую письмом, он не меняет/);
+  });
+
+  it('комнаты: add_to_room — только ведущий, одна комната на сессию, строка «joined the room», письма новому нет', () => {
+    const lead = sectionOf('### Ведущий и решение', '### Участник комнаты');
+
+    expect(lead).toContain('`add_to_room(room, session)`');
+    expect(lead).toMatch(/только что порождённого\s+`spawn_session` исполнителя/);
+    expect(lead).toMatch(/одна комната на сессию/);
+    expect(lead).toContain('`@s04 joined the room`');
+    expect(lead).toMatch(/Письма о добавлении новый участник не получает/);
+    expect(lead).toMatch(/Не ведущий, закрытая комната, чужая или закрытая сессия и уже участник — ошибка/);
+    // Её называет и вводная комнат, и участнику: его могут ввести по ходу дела.
+    expect(sectionOf('## Комнаты', '### Ведущий и решение')).toContain('`add_to_room(room, session)`');
+    expect(sectionOf('### Участник комнаты', '## Бриф')).toMatch(/ведущий зовёт `add_to_room`/);
   });
 
   it('запрещает удалять и переносить каталоги .harnas руками', () => {

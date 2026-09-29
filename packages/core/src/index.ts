@@ -30,6 +30,7 @@ export {
   commandBinary,
   commandInPath,
   loadProviders,
+  modelChoiceError,
   printCommand,
   providersFile,
   providersWithHistory,
@@ -73,6 +74,7 @@ export { isUnreadFor, markHumanRead, recipientsOf, unreadFor } from './work/lett
 export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';
 export {
   addMember,
+  addMemberByLead,
   addRoom,
   addRoomOriginMessage,
   addSystemMessage,

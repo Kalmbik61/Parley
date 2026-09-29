@@ -124,7 +124,7 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         // (code.claude.com/docs/en/cli-reference: `--model`, `--effort`), а без выбора пара
         // выпадает целиком, и сессия живёт на модели и усилии по умолчанию. В `resumeArgs`
         // их нет: возобновлённая сессия остаётся на прежней модели (docs/en/sessions
-        // того же сайта), а выбор в карте не хранится.
+        // того же сайта), а выбор из диалога в карте не хранится.
         '--model',
         '{model}',
         '--effort',
@@ -216,6 +216,9 @@ export function providersWithHistory(): ProviderInfo[] {
  * ниже (code.claude.com/docs/en/model-config); про Codex документация этого не говорит.
  */
 export type EffortLevel = 'low' | 'medium' | 'high';
+
+/** Те же уровни списком: по нему проверяет `effort` `spawn_session`, а схема окна держит свой набор. */
+export const EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high'];
 
 /** Значения подстановок в шаблоны аргументов реестра. */
 export interface RunnerSubstitutions {
@@ -476,6 +479,25 @@ const MODEL_ID = /^[^\s-]\S*$/;
 const MODEL_ID_MAX_LENGTH = 200;
 const isModelId = (value: unknown): value is string =>
   typeof value === 'string' && value.length <= MODEL_ID_MAX_LENGTH && MODEL_ID.test(value);
+
+/**
+ * Выбор модели против записи реестра: `null` — значение годится, иначе текст отказа. Одно правило на
+ * два входа, `sessions.create` хоста и `spawn_session` MCP, чтобы они не разошлись: одно слово, не с
+ * дефиса (CLI принял бы его за флаг), и — если у провайдера есть список (`selectableModels`) — из списка.
+ * Пустое значение — «по умолчанию», без флага: его сюда не пускают, решает вызывающий. Провайдер без
+ * списка принимает любое значение прежней формы: дойдёт ли оно до команды, решает шаблон запуска.
+ */
+export function modelChoiceError(entry: ProviderEntry, model: string): string | null {
+  if (!isModelId(model)) {
+    return `модель ${JSON.stringify(model)}: одно слово, не с дефиса и не длиннее ${MODEL_ID_MAX_LENGTH} знаков`;
+  }
+  const list = selectableModels(entry);
+  if (list !== null && !list.some((option) => option.id === model)) {
+    const allowed = list.map((option) => option.id).join(', ');
+    return `модель ${model} не из списка провайдера ${entry.id}; допустимы: ${allowed}`;
+  }
+  return null;
+}
 
 const isModelEntry = (value: unknown): value is ModelOption =>
   isRecord(value) && isModelId(value['id']) && isNonEmptyString(value['label']);

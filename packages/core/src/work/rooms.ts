@@ -176,6 +176,34 @@ export function addMember(
 }
 
 /**
+ * Ведущий вводит сессию в свою комнату (MCP `add_to_room`). Правила `addMember` те же — закрытая,
+ * чужая (нет в карте этой работы) сессия, уже участник, одна комната на сессию, системная строка
+ * «@s04 joined the room», — плюс два своих: комната живая и вводит тот, кто ведёт её сейчас
+ * (`liveLead`: назначенный, пока жив, иначе первый живой участник). Порядок проверок как у
+ * `setProposal`: у закрытой комнаты ведущего нет вовсе, и отказ «закрыта» точнее, чем «не ведущий».
+ * Письма о добавлении новому участнику `addMember` не пишет — как и при `rooms.addMember` из окна.
+ */
+export function addMemberByLead(
+  map: WorkMap,
+  roomId: string,
+  leadId: string,
+  sessionId: string,
+  at = new Date().toISOString(),
+): Message {
+  const room = map.rooms.find((candidate) => candidate.id === roomId);
+  if (room === undefined) throw new RoomRuleError(`комнаты ${roomId} нет в карте`);
+  if (isRoomClosed(map, room)) {
+    throw new RoomRuleError(`комната ${roomId} закрыта: в ней нет живых участников`);
+  }
+  if (liveLead(map, room) !== leadId) {
+    throw new RoomRuleError(
+      `сессия ${leadId} не ведущий комнаты ${roomId}: вводить в комнату сессии может только ведущий`,
+    );
+  }
+  return addMember(map, roomId, sessionId, at);
+}
+
+/**
  * Системная строка «Room created from @s03 and @s02»: комнату собрали из двух сессий, уже
  * идущих в работе (дизайн комнат, 2.5, диалог 1.6). Писать её может только хост, поэтому окно
  * присылает пару в `rooms.create.origin`. Порядок пары — порядок в строке. Как и прочие системные

@@ -45,8 +45,9 @@ export interface LaunchOptions {
   /**
    * Модель и усилие новой сессии из диалога окна. Доезжают только до провайдера, у которого
    * в шаблоне запуска есть их подстановки (`supportsModel`, `supportsEffort`), и только при
-   * запуске: `resumeArgs` их не содержат — Claude Code возвращает модель сам, а выбор в
-   * карте не хранится.
+   * запуске: `resumeArgs` их не содержат — Claude Code возвращает модель сам, а выбор из диалога
+   * в карте не хранится. Перекрывают выбор, записанный в сессию `spawn_session`ом
+   * (`WorkSession.model`, `.effort`): его хост подставляет сам, когда поднимает `pending`.
    */
   model?: string;
   effort?: EffortLevel;
@@ -200,8 +201,10 @@ async function plan(
     // через MCP, бриф ей не пишется (5.1). Тихая — тоже: её бриф уже уехал
     // системным промптом.
     if (mode !== 'new' && !quiet) subs.prompt = await readBrief(projectPath, workId, session.id);
-    if (options.model !== undefined) subs.model = options.model;
-    if (options.effort !== undefined) subs.effort = options.effort;
+    const model = options.model ?? session.model;
+    if (model !== undefined) subs.model = model;
+    const effort = options.effort ?? session.effort;
+    if (effort !== undefined) subs.effort = effort;
     if (entry.linkBy === 'session-id') {
       providerSessionId = session.providerSessionId ?? randomUUID();
       subs.sessionUuid = providerSessionId;
