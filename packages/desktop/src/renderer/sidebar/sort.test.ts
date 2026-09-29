@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { WorkEntry, WorkStatus } from '@harnas/core';
-import type { Attention, WorkAttention } from '../attention/derive.js';
+import type { Message, Proposal, Room, WorkEntry, WorkMap, WorkSession, WorkStatus } from '@harnas/core';
+import { workAttention, type Attention, type WorkAttention } from '../attention/derive.js';
 import { workKey } from '../lib/tree-order.js';
-import { buildSections, compareWorks, neighborInOrder, visibleWorkOrder } from './sort.js';
+import { activityMap, makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { buildSections, cardRows, compareWorks, neighborInOrder, visibleWorkOrder, type CardRow } from './sort.js';
 
 function att(level: Attention, lastEventAt = '2026-09-27T09:00:00.000Z'): WorkAttention {
   return { level, needsYou: 0, unseen: 0, humanUnread: 0, roomsUnread: {}, lastEventAt };
@@ -222,5 +223,177 @@ describe('neighborInOrder (тест 20 куска 3.4)', () => {
     expect(neighborInOrder(['a', 'b', 'c'], 'x', 1)).toBe('a');
     expect(neighborInOrder(['a', 'b', 'c'], null, -1)).toBe('c');
     expect(neighborInOrder([], 'a', 1)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Кусок 5 плана «Organic»: ранги 2.7 в порядке сайдбара и состав строк карточки (спека окна 2026-09-29, 1.2).
+// ---------------------------------------------------------------------------
+
+describe('порядок сайдбара по рангам 2.7 (расчёт — attention/derive.ts, порядок — buildSections)', () => {
+  const proposal: Proposal = { id: 'p-01', from: 's-01', text: 'Решение', rev: 0, at: '2026-09-29T10:00:00.000Z' };
+  const mail: Message = {
+    id: 'm-1',
+    roomId: null,
+    from: 's-01',
+    to: ['human'],
+    at: '2026-09-29T09:00:00.000Z',
+    text: 'письмо',
+    kind: 'note',
+    readBy: {},
+  };
+  const ref = (entry: WorkEntry, sessionId: string) => ({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId });
+
+  /** Пять работ одного проекта: решение, письмо, работающая, простаивающая и done с решением. */
+  function fixtures() {
+    const decision = makeWork('w-decision', { sessions: [makeSession('s-01', 'a')], rooms: [{ ...makeRoom('r-01', 'R'), members: ['s-01'], proposal }] });
+    const letter = makeWork('w-mail', { sessions: [makeSession('s-01', 'a')], messages: [mail] });
+    const busy = makeWork('w-busy', { sessions: [makeSession('s-01', 'a')] });
+    const calm = makeWork('w-calm', { sessions: [makeSession('s-01', 'a')] });
+    const done = makeWork('w-done', { status: 'done', sessions: [makeSession('s-01', 'a')], rooms: [{ ...makeRoom('r-01', 'R'), members: ['s-01'], proposal }] });
+    const activity = activityMap([makeActivity(ref(busy, 's-01'), 'working')]);
+    const entries = [calm, busy, letter, decision, done];
+    const attention: Record<string, WorkAttention> = Object.fromEntries(entries.map((entry) => [key(entry), workAttention(entry, activity)]));
+    return { entries, attention };
+  }
+
+  it('в группе: решение (ранг 4) выше письма человеку (3), выше работающей (2), выше простаивающей (1); done — внизу даже с решением', () => {
+    const { entries, attention } = fixtures();
+    const sections = buildSections({ entries, attention, pinned: [], collapsed: [], showDone: true, showArchived: false });
+    expect(keysOf(sections[0]!.works)).toEqual(['w-decision', 'w-mail', 'w-busy', 'w-calm', 'w-done']);
+  });
+
+  it('группы — по высшему рангу: проект с ждущим решением выше проекта с письмом, тот выше работающего и простаивающего', () => {
+    const { entries: base } = fixtures();
+    const move = (entry: WorkEntry, projectPath: string): WorkEntry => ({ ...entry, projectPath });
+    const [calm, busy, letter, decision] = base;
+    const entries = [move(calm!, '/p/a-calm'), move(busy!, '/p/b-busy'), move(letter!, '/p/c-mail'), move(decision!, '/p/d-decision')];
+    const activity = activityMap([makeActivity({ projectPath: '/p/b-busy', workId: 'w-busy', sessionId: 's-01' }, 'working')]);
+    const attention = Object.fromEntries(entries.map((entry) => [key(entry), workAttention(entry, activity)]));
+    const sections = buildSections({ entries, attention, pinned: [], collapsed: [], showDone: true, showArchived: false });
+    // По имени папки было бы a, b, c, d — порядок задают только ранги.
+    expect(sections.map((section) => section.title)).toEqual(['d-decision', 'c-mail', 'b-busy', 'a-calm']);
+  });
+});
+
+describe('cardRows — состав строк карточки (1.2)', () => {
+  const NOW = '2026-09-29T10:00:00.000Z';
+  const sessions = (...ids: string[]): WorkSession[] => ids.map((id) => makeSession(id, id));
+  const room = (id: string, members: string[], patch: Partial<Room> = {}): Room => ({ ...makeRoom(id, id), members, ...patch });
+  const map = (list: WorkSession[], rooms: Room[] = [], messages: Message[] = []): WorkMap => makeWork('w-01', { sessions: list, rooms, messages }).map;
+  /** `s-01` — сессия отдельной строкой, `r-01[s-02,s-03]` — комната с показанными участниками. */
+  const shape = (rows: CardRow[]): string[] =>
+    rows.map((row) => (row.kind === 'session' ? row.session.id : `${row.room.id}[${row.members.map((member) => member.id).join(',')}]`));
+
+  it('комнат нет — строки сессий по treeOrder с глубиной; закрытые спрятаны, при showClosed стоят на своих местах', () => {
+    const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'closed' }), makeSession('s-03', 'c', { parent: 's-01' })];
+    const rows = cardRows(map(list), false);
+    expect(shape(rows)).toEqual(['s-01', 's-03']);
+    expect(rows.map((row) => (row.kind === 'session' ? row.depth : -1))).toEqual([0, 1]);
+    expect(shape(cardRows(map(list), true))).toEqual(['s-01', 's-03', 's-02']);
+  });
+
+  it('участник комнаты отдельной строкой не выводится: на месте первого участника стоит строка его комнаты', () => {
+    const rows = cardRows(map(sessions('s-01', 's-02', 's-03', 's-04'), [room('r-01', ['s-02', 's-03'])]), false);
+    expect(shape(rows)).toEqual(['s-01', 'r-01[s-02,s-03]', 's-04']);
+  });
+
+  it('место комнаты — первый её участник в порядке treeOrder, а не в порядке записи members', () => {
+    const rows = cardRows(map(sessions('s-01', 's-02', 's-03', 's-04'), [room('r-01', ['s-04', 's-02'])]), false);
+    expect(shape(rows)).toEqual(['s-01', 'r-01[s-04,s-02]', 's-03']);
+  });
+
+  it('участники в строке комнаты — в порядке записи: создатель-сессия, затем members', () => {
+    const rows = cardRows(map(sessions('s-01', 's-02', 's-03'), [room('r-01', ['s-03', 's-01'], { creator: 's-02' })]), false);
+    expect(shape(rows)).toEqual(['r-01[s-02,s-03,s-01]']);
+    expect(rows[0]).toMatchObject({ kind: 'room', sessions: expect.arrayContaining([expect.objectContaining({ id: 's-02' })]) });
+  });
+
+  it('комнаты без живых участников — в конце, в порядке карты: все участники закрыты или участников нет вовсе', () => {
+    const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'closed' }), makeSession('s-03', 'c')];
+    const rooms = [room('r-01', ['s-02']), room('r-02', []), room('r-03', ['s-03'])];
+    expect(shape(cardRows(map(list, rooms), false))).toEqual(['s-01', 'r-03[s-03]', 'r-01[]', 'r-02[]']);
+  });
+
+  it('закрытые участники: не в строках развёрнутой комнаты (members), но в sessions — значки-счётчики считают всех; при showClosed — и в members', () => {
+    const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'closed' })];
+    const [row] = cardRows(map(list, [room('r-01', ['s-01', 's-02'])]), false);
+    expect(row).toMatchObject({ kind: 'room' });
+    if (row?.kind !== 'room') throw new Error('строки комнаты нет');
+    expect(row.members.map((member) => member.id)).toEqual(['s-01']);
+    expect(row.sessions.map((member) => member.id)).toEqual(['s-01', 's-02']);
+    const [shown] = cardRows(map(list, [room('r-01', ['s-01', 's-02'])]), true);
+    expect(shown?.kind === 'room' ? shown.members.map((member) => member.id) : []).toEqual(['s-01', 's-02']);
+  });
+
+  it('место комнаты не прыгает от «N more closed»: первый по порядку участник закрыт — комната всё равно на месте первого живого', () => {
+    const list = [makeSession('s-01', 'a', { lifecycle: 'closed' }), makeSession('s-02', 'b'), makeSession('s-03', 'c')];
+    const rooms = [room('r-01', ['s-01', 's-03'])];
+    expect(shape(cardRows(map(list, rooms), false))).toEqual(['s-02', 'r-01[s-03]']);
+    expect(shape(cardRows(map(list, rooms), true))).toEqual(['s-02', 'r-01[s-01,s-03]']);
+  });
+
+  it('глубина строки комнаты — глубина её первого живого участника; комната в конце — 0', () => {
+    const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { parent: 's-01' }), makeSession('s-03', 'c', { lifecycle: 'closed' })];
+    const rows = cardRows(map(list, [room('r-01', ['s-02']), room('r-02', ['s-03'])]), false);
+    expect(shape(rows)).toEqual(['s-01', 'r-01[s-02]', 'r-02[]']);
+    expect(rows.map((row) => (row.kind === 'room' ? row.depth : -1))).toEqual([-1, 1, 0]);
+  });
+
+  describe('старая карта: сессия в нескольких комнатах (решение 4)', () => {
+    const list = sessions('s-01', 's-02', 's-03');
+
+    it('стоит в комнате с самым ранним createdAt — не по порядку в массиве, — в остальных её строки нет', () => {
+      const late = room('r-02', ['s-02', 's-03'], { createdAt: '2026-09-29T09:00:00.000Z' });
+      const early = room('r-01', ['s-01', 's-02'], { createdAt: '2026-09-29T08:00:00.000Z' });
+      // Поздняя комната лежит в массиве первой — порядок массива на выбор не влияет: s-02 стоит в ранней.
+      const rows = cardRows(map(list, [late, early]), false);
+      expect(shape(rows)).toEqual(['r-01[s-01,s-02]', 'r-02[s-03]']);
+      // Без ранней комнаты в массиве s-02 стоял бы в поздней.
+      expect(shape(cardRows(map(list, [late]), false))).toEqual(['s-01', 'r-02[s-02,s-03]']);
+    });
+
+    it('комната, где не осталось «своих» участников, стоит в конце; её значки и тултип по-прежнему считают запись', () => {
+      const first = room('r-01', ['s-01', 's-02'], { createdAt: '2026-09-29T08:00:00.000Z' });
+      const second = room('r-02', ['s-02'], { createdAt: '2026-09-29T09:00:00.000Z' });
+      const rows = cardRows(map(list, [first, second]), false);
+      expect(shape(rows)).toEqual(['r-01[s-01,s-02]', 's-03', 'r-02[]']);
+      const last = rows[2];
+      expect(last?.kind === 'room' ? last.sessions.map((member) => member.id) : []).toEqual(['s-02']);
+    });
+
+    it('равные createdAt — первая в массиве; битая дата проигрывает настоящей', () => {
+      const a = room('r-01', ['s-01'], { createdAt: '2026-09-29T08:00:00.000Z' });
+      const b = room('r-02', ['s-01'], { createdAt: '2026-09-29T08:00:00.000Z' });
+      expect(shape(cardRows(map(list, [b, a]), false))).toEqual(['r-02[s-01]', 's-02', 's-03', 'r-01[]']);
+      const bad = room('r-03', ['s-01'], { createdAt: 'garbage' });
+      const good = room('r-04', ['s-01'], { createdAt: '2026-09-30T00:00:00.000Z' });
+      expect(shape(cardRows(map(list, [bad, good]), false))).toEqual(['r-04[s-01]', 's-02', 's-03', 'r-03[]']);
+    });
+
+    it('создатель-сессия одной комнаты и участник другой — тоже в одной', () => {
+      const created = room('r-01', ['s-02'], { creator: 's-01', createdAt: '2026-09-29T08:00:00.000Z' });
+      const other = room('r-02', ['s-01', 's-03'], { createdAt: '2026-09-29T09:00:00.000Z' });
+      expect(shape(cardRows(map(list, [created, other]), false))).toEqual(['r-01[s-01,s-02]', 'r-02[s-03]']);
+    });
+  });
+
+  it('ведущий — roomLiveLead: назначенный, пока жив; закрытого подменяет первый живой; у старой карты без lead — первый из members', () => {
+    const list = [makeSession('s-01', 'a', { lifecycle: 'closed' }), makeSession('s-02', 'b'), makeSession('s-03', 'c')];
+    const lead = (rooms: Room[]) => {
+      const [row] = cardRows(map(list, rooms), false);
+      return row?.kind === 'room' ? row.lead : 'нет строки комнаты';
+    };
+    expect(lead([room('r-01', ['s-01', 's-02', 's-03'], { lead: 's-03' })])).toBe('s-03');
+    expect(lead([room('r-01', ['s-01', 's-02', 's-03'], { lead: 's-01' })])).toBe('s-02');
+    expect(lead([room('r-01', ['s-03', 's-02'], { lead: null })])).toBe('s-03');
+  });
+
+  it('время строки — время последнего события комнаты (сообщение или решение); решение и lead у старой карты не обязательны', () => {
+    const message: Message = { id: 'm-1', roomId: 'r-01', from: 's-01', to: [], at: NOW, text: 't', kind: 'note', readBy: {} };
+    const old = { id: 'r-01', title: 'Старая', creator: 'human', members: ['s-01'], createdAt: '2026-01-01T00:00:00.000Z' } as unknown as Room;
+    const [row] = cardRows(map(sessions('s-01'), [old], [message]), false);
+    expect(row).toMatchObject({ kind: 'room', lastAt: NOW });
+    expect(row?.kind === 'room' ? row.lead : 'нет строки комнаты').toBe('s-01');
   });
 });
