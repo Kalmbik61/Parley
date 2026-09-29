@@ -222,6 +222,20 @@ describe('buildRoomModel — сообщения', () => {
     expect(build(entry).messages.map((item) => item.unread)).toEqual([true, false, false]);
   });
 
+  it('needsRead — кандидат в mail.markRead: и системная строка без отметки человека, у неё точки нет', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', { from: 's-02' }),
+        message('m-2', { from: 'system', to: ['human'], readBy: {} }),
+        message('m-3', { from: 'system', to: ['human'], readBy: { human: '2026-09-27T09:00:00.000Z' } }),
+        message('m-4', { from: 'human' }),
+      ],
+    });
+    const messages = build(entry).messages;
+    expect(messages.map((item) => item.needsRead)).toEqual([true, true, false, false]);
+    expect(messages.map((item) => item.unread)).toEqual([true, false, false, false]);
+  });
+
   it('письма других комнат и без комнаты в ленту не попадают', () => {
     const entry = entryOf({ messages: [message('m-1'), message('m-2', { roomId: 'r-02' }), message('m-3', { roomId: null })] });
     expect(build(entry).messages.map((item) => item.id)).toEqual(['m-1']);

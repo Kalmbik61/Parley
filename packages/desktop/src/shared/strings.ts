@@ -230,6 +230,22 @@ export const S = {
     leadIs: (tag: string): string => `lead ${tag}`,
     /** `→ all` в мете сообщения: письмо всем участникам. */
     toAll: 'all',
+    /** `aria-label` ленты участников и тултип `★` у ведущего. */
+    participants: 'Participants',
+    lead: 'Lead',
+    /** Пустая комната. */
+    emptyFeed: 'Write the task for everyone below. The lead collects positions and brings you a decision.',
+    notPickedUp: (tags: string): string => `▤ Not picked up yet by ${tags}`,
+    /** Подпись точки «непрочитано» у сообщения. */
+    newMessage: 'New',
+    /** Карточка решения. */
+    decisionWaiting: 'decision · waiting for you',
+    accept: 'Accept',
+    returnForRework: 'Return for rework',
+    returnPlaceholder: 'What should the lead change?',
+    sendToLead: 'Send to lead',
+    /** Тост на `conflict`: ведущий заменил текст или решение уже закрыто — живая карточка на месте. */
+    decisionChanged: 'The decision changed — review the latest version.',
     /** Тултип карточки участника и мета пункта меню упоминаний: провайдер и слово состояния. Модели и усилия карта не хранит. */
     providerState: (provider: string, word: string): string => `${provider} · ${word}`,
     /** Поле ввода: подпись над ним, плейсхолдер, имя для скринридера. */
@@ -242,6 +258,7 @@ export const S = {
     mentionEmpty: 'No agents match',
     /** «Couldn't <действие>: …» — `errorText`. */
     sendAction: 'send the message',
+    resolveAction: 'answer the decision',
   },
 
   /** Настройки — `settings/SettingsDialog.tsx`. */

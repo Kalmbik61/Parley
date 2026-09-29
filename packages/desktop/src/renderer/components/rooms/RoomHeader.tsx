@@ -1,23 +1,35 @@
 /**
- * Шапка ленты комнаты (кусок 3.6 плана окна, спека 6.3): название и
- * участники — `S01 (Opus 5.5) · S03 (Codex) · Вы`. В отличие от шапки «всей
- * почты работы» (`MailPanel.tsx`) счёта писем тут нет — состав участников
- * комнаты фиксирован (`Room.creator`/`Room.members`), а не собирается по
- * переписке.
- *
- * Кусок 1.4 плана «облик Orca»: токены вместо старой палитры темы окна.
+ * Шапка вкладки комнаты (спека окна 2026-09-29, 1.3): название — Caprasimo 25px/1.12, подзаголовок 13px
+ * вторичным цветом (`Created by you · 4 agents · lead S01 · {работа}`), ниже лента участников; снизу
+ * линия 1px `currentColor 12%`. Название и подзаголовок — в одну строку с многоточием и полным текстом в
+ * тултипе: название в 120 знаков в невысоком окне иначе съело бы ленту.
  */
+
+import type { ParticipantModel } from './feed-model.js';
+import { ParticipantStrip } from './ParticipantStrip.js';
 
 export interface RoomHeaderProps {
   title: string;
-  participants: string[];
+  subtitle: string;
+  participants: readonly ParticipantModel[];
+  onOpenSession: (sessionId: string) => void;
 }
 
-export function RoomHeader({ title, participants }: RoomHeaderProps): JSX.Element {
+export function RoomHeader({ title, subtitle, participants, onOpenSession }: RoomHeaderProps): JSX.Element {
   return (
-    <div className="border-b border-border px-3 py-2">
-      <div className="truncate text-sm font-medium text-foreground">{title}</div>
-      <div className="truncate text-xs text-muted-foreground">{participants.join(' · ')}</div>
+    <div
+      data-room-header=""
+      className="flex shrink-0 flex-col gap-3 border-b border-[color-mix(in_srgb,currentColor_12%,transparent)] px-9 pb-3.5 pt-6"
+    >
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <h3 title={title} className="m-0 truncate font-heading text-[25px] leading-[1.12] tracking-[-0.015em]">
+          {title}
+        </h3>
+        <span title={subtitle} className="truncate text-[13px] text-muted-foreground">
+          {subtitle}
+        </span>
+      </div>
+      <ParticipantStrip participants={participants} onOpenSession={onOpenSession} />
     </div>
   );
 }

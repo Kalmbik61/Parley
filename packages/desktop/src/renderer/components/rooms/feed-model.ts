@@ -65,6 +65,11 @@ export interface MessageModel {
   text: string;
   /** Точка «непрочитано» — по человеку; у системной строки её нет. */
   unread: boolean;
+  /**
+   * Человек это сообщение ещё не прочёл (`isHumanUnread`) — кандидат в `mail.markRead`. От `unread`
+   * отличается системной строкой: точки у неё нет, а счётчик сайдбара, пока она не отмечена, — есть.
+   */
+  needsRead: boolean;
   /** Теги (`S02`) живых адресатов-агентов, которые ещё не подхватили сообщение (`readBy`). */
   waiting: string[];
 }
@@ -182,6 +187,7 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
         at: message.at,
         text: message.text,
         unread: kind !== 'system' && isHumanUnread(message),
+        needsRead: isHumanUnread(message),
         waiting: recipientsOf(message, map)
           .filter((id) => id !== HUMAN && id !== SYSTEM && isAlive(map, id) && message.readBy[id] === undefined)
           .map(sessionTag),
