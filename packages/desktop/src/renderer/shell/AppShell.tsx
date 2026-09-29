@@ -75,12 +75,24 @@ import { NewWorkComposer } from '../sidebar/NewWorkComposer.js';
 import { WorkSidebar } from '../sidebar/WorkSidebar.js';
 import { cn } from '../lib/cn.js';
 import { sessionLabelFor, sessionRowLabel } from '../lib/participant.js';
+import { roomKey } from '../lib/room-view.js';
 import { workKey } from '../lib/tree-order.js';
 import { bufferKey, isBufferDirty } from '../files/buffer.js';
 import { createCloseGuard } from '../files/close-guard.js';
 import { askSaveChanges, WindowCloseQuestion } from '../files/SaveChangesDialog.js';
 import { absPathOf, bindBuffersToLayouts, bufferName, useFilesStore } from '../files/store.js';
-import { acceptsTerminal, applyDrop, centerOverlayOnCursor, dragItemOf, dropFromDragEnd, layoutCollision, type DragItem } from '../layout/dnd.js';
+import {
+  acceptsTerminal,
+  applyDrop,
+  centerOverlayOnCursor,
+  dragItemOf,
+  dropFromDragEnd,
+  layoutCollision,
+  sidebarDropFromDragEnd,
+  type DragItem,
+  type SidebarTarget,
+} from '../layout/dnd.js';
+import { resolveSidebarDrop } from '../layout/dnd-sidebar.js';
 import { setDropPreview } from '../layout/DropIndicator.js';
 import { tabId } from '../layout/ids.js';
 import { tabMeta } from '../layout/tab-meta.js';
@@ -143,6 +155,33 @@ function sessionOf(ref: SessionRef): WorkSession | null {
 function openSessionTab(ref: SessionRef): void {
   const applied = applyFocusTarget({ kind: 'session', ref }, buildFocusTargetDeps());
   if (!applied) toast(S.notifications.targetGone);
+}
+
+/**
+ * Бросок сессии на строку сайдбара (кусок 7 плана «Organic», спека окна 2026-09-29, 2.5): сессия на сессию — диалог «New room»
+ * из двух сессий (1.6), сессия на строку комнаты — `rooms.addMember`, и строка комнаты разворачивается. Что бросок значит и можно
+ * ли его — `resolveSidebarDrop`; нельзя — ничего не происходит (цель и не подсвечивалась). Метода нет у хоста — тоже ничего:
+ * окно прячет функцию, если метода нет (спека Orca-UI 3.2).
+ */
+function dropOnSidebar(bridge: HarnasBridge, key: string, sessionId: string, target: SidebarTarget): void {
+  const entry = useWorksStore.getState().entries.find((candidate) => workKey(candidate.projectPath, candidate.map.work.id) === key);
+  if (entry === undefined) return;
+  const drop = resolveSidebarDrop(entry.map, sessionId, target);
+  if (drop === null) return;
+  const methods = hostMethods(useHostStore.getState().status);
+  const work = { projectPath: entry.projectPath, workId: entry.map.work.id };
+  if (drop.kind === 'merge') {
+    if (methods.has('rooms.create')) useUiStore.getState().openMergeRoomDialog({ ...work, dragged: drop.dragged, target: drop.target });
+    return;
+  }
+  if (!methods.has('rooms.addMember')) return;
+  bridge
+    .call('rooms.addMember', { ...work, roomId: drop.roomId, sessionId: drop.sessionId })
+    .then(() => useUiStore.getState().setRoomExpanded(roomKey(key, drop.roomId), true))
+    .catch((error: unknown) => {
+      console.warn('[harnas] rooms.addMember', error);
+      toast(errorText(decodeIpcError(error).code, S.sidebar.addToRoomAction));
+    });
 }
 
 /** Доступность — одна для нажатия и для `menu:action` (кусок 6.1b): методы хоста в момент действия. */
@@ -333,8 +372,15 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   const handleDragEnd = (event: DragEndEvent): void => {
     setDragging(null);
     setDropPreview(null, null);
-    const drop = dropFromDragEnd(event);
     const key = useLayoutStore.getState().activeWorkKey;
+    // Бросок на строку сайдбара — не в раскладку (2.5). Цель чужой работы сюда не доходит (`layoutCollision`), но и здесь
+    // берём только работу, чей ключ совпал с активной: сессия тащится из строки активной карточки.
+    const onSidebar = sidebarDropFromDragEnd(event);
+    if (onSidebar !== null) {
+      if (key !== null && onSidebar.workKey === key) dropOnSidebar(bridge, key, onSidebar.sessionId, onSidebar.target);
+      return;
+    }
+    const drop = dropFromDragEnd(event);
     if (drop === null || key === null) return;
     // Зона чужой работы сюда не доходит (`layoutCollision`), но раскладку
     // меняем только у той работы, чья зона под указателем.

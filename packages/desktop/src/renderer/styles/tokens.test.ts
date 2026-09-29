@@ -995,3 +995,66 @@ describe('строка комнаты — контраст на заливках
     expect(contrastRatio(muted, member('light', text('light', 0.04, hovered)))).toBeLessThan(TEXT);
   });
 });
+
+/**
+ * Диалоги «New session or room» (1.5), «New room» (1.6) и «New workspace» (1.7), цели броска сессии в сайдбаре (2.5) —
+ * кусок 7 плана «Organic». Цвет выбранного в диалогах — `--ring`, а не чистый `accent` из спеки: в светлой теме `accent`
+ * к фону диалога 2.69:1 (ниже 3:1 для признака состояния), `--ring` там accent-600 (3.35:1), в тёмной это и есть `accent`.
+ * Рамка цели броска — `--primary` (в светлой accent-700, в тёмной `accent`): на неактивной карточке светлой темы
+ * accent-600 к заливке цели давал 2.95:1.
+ */
+describe('диалоги 1.5–1.7 и цели броска в сайдбаре — контраст (кусок 7)', () => {
+  /** Основания цели броска: активная карточка и неактивная (щит броска снимает hover, `text 4 %` не бывает). */
+  const CARDS: Record<string, (theme: Theme) => Rgb> = {
+    'активная карточка (--card)': (theme) => solid(theme, '--card'),
+    'неактивная карточка (--background)': (theme) => solid(theme, '--background'),
+  };
+  /** Заливка цели — `accent 14 %` поверх основания (`DROP_TARGET_FILL`). */
+  const dropFill = (theme: Theme, base: Rgb): Rgb => compositeOver(solid(theme, '--color-accent'), 0.14, base);
+
+  for (const theme of THEMES) {
+    describe(theme, () => {
+      for (const [name, card] of Object.entries(CARDS)) {
+        it(`цель броска на «${name}»: основной текст ≥ 4.5:1 на заливке, рамка --primary ≥ 3:1 к заливке и к основанию`, () => {
+          const base = card(theme);
+          const fill = dropFill(theme, base);
+          expect(contrastRatio(solid(theme, '--color-text'), fill)).toBeGreaterThanOrEqual(TEXT);
+          const ring = solid(theme, '--primary');
+          expect(contrastRatio(ring, fill)).toBeGreaterThanOrEqual(NON_TEXT);
+          expect(contrastRatio(ring, base)).toBeGreaterThanOrEqual(NON_TEXT);
+        });
+      }
+
+      it('вторичный цвет (neutral-700) на заливке цели держит порог не везде — потому `DROP_TARGET_INK` ставит основной текст (в светлой на неактивной карточке ниже 4.5:1)', () => {
+        if (theme === 'light') {
+          const fill = dropFill(theme, solid(theme, '--background'));
+          expect(contrastRatio(solid(theme, '--color-neutral-700'), fill)).toBeLessThan(TEXT);
+        }
+        for (const card of Object.values(CARDS)) {
+          expect(contrastRatio(solid(theme, '--color-text'), dropFill(theme, card(theme)))).toBeGreaterThanOrEqual(TEXT);
+        }
+      });
+
+      it('пилюля провайдера и ведущего: выбранная — рамка --ring ≥ 3:1 к заливке neutral-100 и к фону диалога; текст и задача (neutral-700) на заливке ≥ 4.5:1', () => {
+        const pill = solid(theme, '--color-neutral-100');
+        const dialog = solid(theme, '--background');
+        expect(contrastRatio(solid(theme, '--ring'), pill)).toBeGreaterThanOrEqual(NON_TEXT);
+        expect(contrastRatio(solid(theme, '--ring'), dialog)).toBeGreaterThanOrEqual(NON_TEXT);
+        expect(contrastRatio(solid(theme, '--foreground'), pill)).toBeGreaterThanOrEqual(TEXT);
+        expect(contrastRatio(solid(theme, '--color-neutral-700'), pill)).toBeGreaterThanOrEqual(TEXT);
+      });
+
+      it('звезда ведущего: ★ (--ring) и ☆ (neutral-600) на фоне диалога — признак состояния, не ниже 3:1', () => {
+        const dialog = solid(theme, '--background');
+        expect(contrastRatio(solid(theme, '--ring'), dialog)).toBeGreaterThanOrEqual(NON_TEXT);
+        expect(contrastRatio(solid(theme, '--color-neutral-600'), dialog)).toBeGreaterThanOrEqual(NON_TEXT);
+      });
+
+      it('подсказка, сводка и итог запуска по агенту (neutral-700, ошибка — --destructive) на фоне диалога — не ниже 4.5:1', () => {
+        const dialog = solid(theme, '--background');
+        expect(contrastRatio(solid(theme, '--color-neutral-700'), dialog)).toBeGreaterThanOrEqual(TEXT);
+        expect(contrastRatio(solid(theme, '--destructive'), dialog)).toBeGreaterThanOrEqual(TEXT);
+      });
+    });
+  }
+});

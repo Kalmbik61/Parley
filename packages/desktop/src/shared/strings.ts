@@ -114,6 +114,8 @@ export const S = {
       ['Room', ...(lead === null ? [] : [`lead ${lead}`]), ...(members.length === 0 ? [] : [members.join(', ')])].join(' · '),
     /** Строка под строками активной карточки: открывает диалог «New session or room» (⌘T); «+» рисует значок. */
     newSessionOrRoom: 'New session or room',
+    /** «Couldn't <действие>: …» тоста, когда бросок сессии на строку комнаты (`rooms.addMember`) не удался. */
+    addToRoomAction: 'add the session to the room',
     sessionMenu: {
       open: 'Open',
       /** Кусок 3.4: сплит вправо с вкладкой терминала сессии. */

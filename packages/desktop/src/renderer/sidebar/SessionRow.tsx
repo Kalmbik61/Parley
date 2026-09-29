@@ -21,6 +21,10 @@
  * Меню по правой кнопке — `SessionRowMenu` (кусок 3.4): его триггер и триггер тултипа
  * сливаются на одном узле строки.
  *
+ * Строка вне комнаты — ещё и цель броска другой сессии (кусок 7, 2.5): сессия на сессию — диалог «New room» из двух
+ * сессий. Цель подсвечивается, только если бросок возможен (`use-drop-target.ts`); участника комнаты принимает строка
+ * комнаты целиком.
+ *
  * Участник развёрнутой комнаты (кусок 5, спека окна 2026-09-29, 1.2) — та же строка, но с отступом слева 18 и без
  * правого поля (его даёт строка комнаты, `RoomRow.tsx`); у ведущего после названия `★` 11px `accent-700`,
  * тултип `Lead`.
@@ -46,6 +50,7 @@ import type { ActivityEntry } from '../store/activity.js';
 import { useNoticesStore } from '../store/notices.js';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '../ui/hover-card.js';
 import { SessionRowMenu } from './SessionRowMenu.js';
+import { DROP_TARGET_FILL, DROP_TARGET_INK, useSidebarDropTarget } from './use-drop-target.js';
 import { useCursorStop } from './use-sidebar-keys.js';
 
 /** Сколько символов задачи показывает тултип (план 3.3). */
@@ -91,6 +96,8 @@ export const SessionRow = memo(function SessionRow({
   const data: DragSourceData = { item: { kind: 'session', sessionId: session.id } };
   const dragId = dndId.session(workKey, session.id);
   const { setNodeRef, listeners } = useDraggable({ id: dragId, data, disabled: !draggable });
+  // Цель броска другой сессии (2.5, диалог 1.6): только строка вне комнаты — участника принимает строка комнаты целиком.
+  const { setNodeRef: setDropRef, over } = useSidebarDropTarget(workKey, { kind: 'session-row', sessionId: session.id }, !inRoom);
   const stop = useCursorStop(workKey, session.id, false);
 
   // Тултип под своим управлением (раунд исправлений 1 куска 3.3, ревью B, находка 1): после
@@ -109,8 +116,9 @@ export const SessionRow = memo(function SessionRow({
     (node: HTMLDivElement | null) => {
       rowRef.current = node;
       setNodeRef(node);
+      setDropRef(node);
     },
-    [setNodeRef],
+    [setNodeRef, setDropRef],
   );
   // Раунд исправлений 2: таймер открытия Radix (openDelay) стартует на pointerenter ещё до
   // порога перетаскивания, а pointerleave, который его отменил бы, глотает захват указателя
@@ -177,6 +185,7 @@ export const SessionRow = memo(function SessionRow({
           data-session-id={session.id}
           data-selected={selected}
           {...(draggable ? { 'data-draggable': '' } : {})}
+          {...(over ? { 'data-drop-over': '' } : {})}
           onPointerDown={listeners?.onPointerDown as ((event: PointerEvent<HTMLDivElement>) => void) | undefined}
           onPointerEnter={freshIntent}
           onFocus={freshIntent}
@@ -205,14 +214,18 @@ export const SessionRow = memo(function SessionRow({
             // вторичному, который на hover — основной текст (цепочка без петли).
             'hover:[--work-sidebar-foreground:var(--color-text)] hover:[--work-sidebar-muted-foreground:var(--color-text)]',
             draggable ? 'cursor-default' : 'cursor-not-allowed',
-            // Подкраска бьёт выбор и hover: строка, где нужен человек, не бледнеет под курсором.
-            blocked
-              ? 'bg-accent-200 hover:bg-accent-200'
-              : unseen
-                ? 'bg-accent-2-200 hover:bg-accent-2-200'
-                : selected
-                  ? 'bg-work-sidebar-accent'
-                  : 'hover:bg-work-sidebar-accent',
+            // Цель броска (2.5) бьёт всё: человек видит, куда сессия ляжет. Подкраска бьёт выбор и hover: строка,
+            // где нужен человек, не бледнеет под курсором.
+            over
+              ? DROP_TARGET_FILL
+              : blocked
+                ? 'bg-accent-200 hover:bg-accent-200'
+                : unseen
+                  ? 'bg-accent-2-200 hover:bg-accent-2-200'
+                  : selected
+                    ? 'bg-work-sidebar-accent'
+                    : 'hover:bg-work-sidebar-accent',
+            over && DROP_TARGET_INK,
           )}
           // Закрытая строка приглушена цветом текста (styles/dimmed.css), не opacity (ревью M12).
           {...(closed ? { 'data-dimmed': 'row' } : {})}

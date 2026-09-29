@@ -27,6 +27,9 @@
  * работе) и ручной шеврон поверх него в `store/ui.ts#roomExpanded`, только в памяти. Клик по строке открывает комнату;
  * клик по уже открытой развёрнутой сворачивает. Строка — узел дерева сайдбара, её берёт курсор клавиатуры
  * (`use-sidebar-keys.ts`): ↑↓, → и ← разворачивают и сворачивают, Enter и пробел открывают.
+ *
+ * Строка — цель броска сессии (кусок 7, 2.5): сессию, которой в комнате нет, бросают на строку — `rooms.addMember`, комната
+ * разворачивается. Подсветка — только у цели, на которую бросить можно (`use-drop-target.ts`): в свою комнату нельзя.
  */
 
 import { ChevronDown, Hash } from 'lucide-react';
@@ -47,6 +50,7 @@ import { useProvidersStore } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
 import { SessionRow } from './SessionRow.js';
 import type { CardRoomRow } from './sort.js';
+import { DROP_TARGET_FILL, DROP_TARGET_INK, useSidebarDropTarget } from './use-drop-target.js';
 import { useCursorStop } from './use-sidebar-keys.js';
 
 export interface RoomRowProps {
@@ -115,6 +119,8 @@ export function RoomRow({
   const sessionIds = row.sessions.map((session) => session.id);
   const tab = useLayoutStore((state) => (state.activeWorkKey === workKey ? roomTabState(state.layouts[workKey], room.id, sessionIds) : null));
   const stop = useCursorStop(workKey, null, false, room.id);
+  // Цель броска сессии (кусок 7, 2.5, `rooms.addMember`): вся строка, вместе со строками участников.
+  const { setNodeRef: setDropRef, over } = useSidebarDropTarget(workKey, { kind: 'room-row', roomId: room.id });
 
   const selected = tab === 'selected';
   const expanded = override ?? tab !== null;
@@ -138,12 +144,14 @@ export function RoomRow({
 
   return (
     <div
+      ref={setDropRef}
       role="treeitem"
       aria-expanded={expanded}
       aria-selected={stop}
       tabIndex={stop ? 0 : -1}
       data-room-row={room.id}
       data-selected={selected}
+      {...(over ? { 'data-drop-over': '' } : {})}
       onClick={(event) => {
         // Клик по строке — не клик по карточке: карточка сделала бы только работу активной. Клики из порталов меню
         // участников всплывают сюда по дереву React — это не клик по строке комнаты.
@@ -161,14 +169,17 @@ export function RoomRow({
       className={cn(
         // Кольцо внутрь: карточка режет выступающее (`overflow-hidden`).
         'flex min-w-0 cursor-default flex-col gap-1 rounded-[14px] pb-[7px] pr-1.5 pt-1 text-xs text-work-sidebar-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-work-sidebar-focus-ring',
-        // Подкраска бьёт выбор и развёрнутость и не бледнеет под курсором — как у строки сессии.
-        pending
-          ? 'bg-accent-200 hover:bg-accent-200'
-          : selected
-            ? 'bg-work-sidebar-accent hover:bg-work-sidebar-accent'
-            : expanded
-              ? 'bg-foreground/4 hover:bg-foreground/6'
-              : 'hover:bg-work-sidebar-accent',
+        // Цель броска (2.5) бьёт всё, даже подкраску решения. Подкраска бьёт выбор и развёрнутость и не бледнеет
+        // под курсором — как у строки сессии.
+        over
+          ? DROP_TARGET_FILL
+          : pending
+            ? 'bg-accent-200 hover:bg-accent-200'
+            : selected
+              ? 'bg-work-sidebar-accent hover:bg-work-sidebar-accent'
+              : expanded
+                ? 'bg-foreground/4 hover:bg-foreground/6'
+                : 'hover:bg-work-sidebar-accent',
         // Развёрнутая: вторичный текст — neutral-800, значок «нет процесса» (idle, pending, спит, закрыта) — neutral-700
         // вместо `--state-inactive`: на стопках «заливка комнаты + заливка участника» тёмная neutral-600 даёт 2.67–2.92:1.
         expanded
@@ -176,6 +187,7 @@ export function RoomRow({
           : !pending &&
               !selected &&
               'hover:[--work-sidebar-foreground:var(--color-text)] hover:[--work-sidebar-muted-foreground:var(--color-text)]',
+        over && DROP_TARGET_INK,
       )}
     >
       <div title={tooltip} className="flex h-[18px] items-center gap-1.5">
