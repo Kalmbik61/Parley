@@ -769,6 +769,24 @@ export const S = {
   },
 };
 
+/**
+ * Имя провайдера для строки статуса и тултипов (спека окна 2026-09-29, 1.1, 1.2): по handoff — «Claude
+ * Code» для `claude` и «Codex» для `codex`, прочим провайдерам — метка, которую отдал хост
+ * (`providers.list`). Id сравнивается без учёта регистра, как у значка (`components/AgentIcon.tsx`);
+ * пустая метка — сам id, а не пустая строка. Одна функция на строку статуса и тултип свёрнутой
+ * комнаты («2 Claude Code agents»).
+ */
+export function providerName(id: string, label: string): string {
+  switch (id.toLowerCase()) {
+    case 'claude':
+      return 'Claude Code';
+    case 'codex':
+      return 'Codex';
+    default:
+      return label === '' ? id : label;
+  }
+}
+
 /** Английский текст по коду ошибки протокола (`ErrorCode` из `@harnas/protocol`, плюс наш `'failed'`). */
 const ERROR_REASON: Record<string, string> = {
   unauthorized: 'not authorized',

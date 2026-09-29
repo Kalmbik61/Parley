@@ -1,34 +1,71 @@
 /**
- * Тест 5 куска 1.2 плана: буква провайдера — `claude` → C, `codex` → X, у
- * остальных провайдеров — первая буква id в верхнем регистре (спека 4.6;
- * логотипы вендоров решаются в куске 3.3).
+ * Значок провайдера агента (спека окна 2026-09-29, решение 6): у claude и codex — брендовые SVG из
+ * `assets/providers/` (`codex-light.svg` — в тёмной теме), у прочих провайдеров — прежний буквенный
+ * значок: первая буква id в верхнем регистре, `X`/`C` больше не подменяются.
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, render } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { act, cleanup, render } from '@testing-library/react';
+import { useUiStore } from '../store/ui.js';
 import { AgentIcon } from './AgentIcon.js';
 
+beforeEach(() => useUiStore.setState({ dark: false }));
 afterEach(cleanup);
 
-describe('AgentIcon — тест 5', () => {
-  it.each([
-    ['claude', 'C'],
-    ['codex', 'X'],
-    ['gemini', 'G'],
-  ] as const)('%s → %s', (provider, letter) => {
-    const { container } = render(<AgentIcon provider={provider} />);
-    expect(container.textContent).toBe(letter);
+const imageOf = (container: HTMLElement): HTMLImageElement | null => container.querySelector('img');
+
+describe('AgentIcon — брендовые значки (решение 6)', () => {
+  it('claude — claude.svg, без буквы', () => {
+    const { container } = render(<AgentIcon provider="claude" />);
+    expect(imageOf(container)?.getAttribute('src')).toMatch(/claude\.svg$/);
+    expect(container.textContent).toBe('');
+  });
+
+  it('codex — codex.svg в светлой теме и codex-light.svg в тёмной, тема переключается на лету', () => {
+    const { container } = render(<AgentIcon provider="codex" />);
+    expect(imageOf(container)?.getAttribute('src')).toMatch(/codex\.svg$/);
+    act(() => useUiStore.setState({ dark: true }));
+    expect(imageOf(container)?.getAttribute('src')).toMatch(/codex-light\.svg$/);
+  });
+
+  it('claude одинаков в обеих темах', () => {
+    useUiStore.setState({ dark: true });
+    const { container } = render(<AgentIcon provider="claude" />);
+    expect(imageOf(container)?.getAttribute('src')).toMatch(/claude\.svg$/);
+  });
+
+  it('регистр id не важен: Codex, CLAUDE — тоже брендовые', () => {
+    const codex = render(<AgentIcon provider="Codex" />);
+    expect(imageOf(codex.container)?.getAttribute('src')).toMatch(/codex\.svg$/);
+    codex.unmount();
+    const claude = render(<AgentIcon provider="CLAUDE" />);
+    expect(imageOf(claude.container)?.getAttribute('src')).toMatch(/claude\.svg$/);
+  });
+
+  it('размер — квадрат size на самом img (12 по умолчанию, 14 и 13 в строках), перетаскивать нельзя', () => {
+    const small = render(<AgentIcon provider="claude" />);
+    expect(imageOf(small.container)?.getAttribute('width')).toBe('12');
+    expect(imageOf(small.container)?.getAttribute('height')).toBe('12');
+    small.unmount();
+    const large = render(<AgentIcon provider="claude" size={14} />);
+    expect(imageOf(large.container)?.getAttribute('width')).toBe('14');
+    expect(imageOf(large.container)?.getAttribute('draggable')).toBe('false');
+  });
+
+  it('подпись — только если её передали: рядом с названием значок декоративный (alt пустой)', () => {
+    const plain = render(<AgentIcon provider="claude" />);
+    expect(imageOf(plain.container)?.getAttribute('alt')).toBe('');
+    plain.unmount();
+    const labelled = render(<AgentIcon provider="claude" label="Claude Code" />);
+    expect(imageOf(labelled.container)?.getAttribute('alt')).toBe('Claude Code');
   });
 });
 
-describe('AgentIcon — раунд исправлений 1 (находки B №2 и №5)', () => {
-  it('оверрайд не зависит от регистра: Codex → X, CLAUDE → C', () => {
-    const codex = render(<AgentIcon provider="Codex" />);
-    expect(codex.container.textContent).toBe('X');
-    codex.unmount();
-
-    const claude = render(<AgentIcon provider="CLAUDE" />);
-    expect(claude.container.textContent).toBe('C');
+describe('AgentIcon — прочие провайдеры: буква (спека 4.6, решение 6)', () => {
+  it('gemini → G, значка-картинки нет', () => {
+    const { container } = render(<AgentIcon provider="gemini" />);
+    expect(container.textContent).toBe('G');
+    expect(imageOf(container)).toBeNull();
   });
 
   it('провайдер с ведущим символом вне BMP — берёт весь code point, не половину суррогатной пары', () => {

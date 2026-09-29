@@ -72,6 +72,26 @@ describe('NOTICE и лицензии в сборке (ревью M7)', () => {
     for (const file of files) expect(notice, file).toContain(file);
   });
 
+  // Решение 6 спеки окна: брендовые значки — решение пользователя для личной неподписанной сборки, а не
+  // лицензия. NOTICE называет файлы, откуда они и чьи это знаки, и не говорит о лицензии, которой нет.
+  it('NOTICE: значки провайдеров — файлы, происхождение, знаки Anthropic и OpenAI, без слов о лицензии', () => {
+    const rule = `\n${'-'.repeat(78)}`;
+    const start = notice.indexOf('\nЗначки провайдеров\n');
+    expect(start, 'раздел «Значки провайдеров»').toBeGreaterThan(-1);
+    // Под названием стоит своя линия, за телом — линия следующего раздела.
+    const underline = notice.indexOf(rule, start);
+    const next = notice.indexOf(rule, underline + 1);
+    const section = notice.slice(underline, next === -1 ? undefined : next);
+    for (const file of ['claude.svg', 'codex.svg', 'codex-light.svg']) {
+      expect(section, file).toContain(`packages/desktop/src/renderer/assets/providers/${file}`);
+      expect(readFileSync(path.join(desktopRoot, 'src', 'renderer', 'assets', 'providers', file), 'utf8'), `${file} лежит в assets`).toContain('<svg');
+    }
+    expect(section).toContain('docs/design/2026-09-29-rooms-organic/prototype/assets');
+    expect(section).toMatch(/Anthropic[^\n]*Claude/);
+    expect(section).toMatch(/OpenAI[^\n]*Codex/);
+    expect(section).not.toMatch(/licen[sc]|лиценз/i);
+  });
+
   it('NOTICE называет таблицу палитр терминала из Orca', () => {
     expect(notice).toContain('packages/desktop/src/renderer/terminal/xterm-themes.ts');
   });

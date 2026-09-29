@@ -129,6 +129,21 @@ packages/desktop/src/renderer/assets/fonts/Caprasimo-OFL.txt, в собранн�
 Contents/Resources/licenses/Caprasimo-OFL.txt (рядом с этим NOTICE).
 
 ------------------------------------------------------------------------------
+Значки провайдеров
+------------------------------------------------------------------------------
+
+Файлы packages/desktop/src/renderer/assets/providers/claude.svg,
+packages/desktop/src/renderer/assets/providers/codex.svg и
+packages/desktop/src/renderer/assets/providers/codex-light.svg (Codex для тёмной
+темы) — значки провайдеров агентов. Скопированы без правок из
+docs/design/2026-09-29-rooms-organic/prototype/assets: это hi-fi handoff, который
+передал пользователь 2026-09-29. Окно рисует их в строке статуса, сайдбаре и на
+вкладках, чтобы отличать агентов друг от друга.
+
+Знаки принадлежат их владельцам: Anthropic — Claude, OpenAI — Codex. Проект их
+не изменял и не выдаёт за свои.
+
+------------------------------------------------------------------------------
 Monaco Editor
 ------------------------------------------------------------------------------
 

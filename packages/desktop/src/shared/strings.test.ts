@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ErrorCode, HostNotice, NoticeKind } from '@harnas/protocol';
-import { errorText, noticeText, S } from './strings.js';
+import { errorText, noticeText, providerName, S } from './strings.js';
 
 const CYRILLIC = /[Ѐ-ӿ]/;
 
@@ -52,6 +52,28 @@ describe('S.states', () => {
     for (const word of Object.values(S.states)) {
       expect(word).not.toMatch(CYRILLIC);
     }
+  });
+});
+
+// Имя провайдера для строки статуса и тултипов окна (спека 1.1, решение 3): по handoff — «Claude Code» и
+// «Codex», прочим — метка хоста. Одна функция: ту же берёт тултип свёрнутой комнаты «2 Claude Code agents».
+describe('providerName', () => {
+  it('claude — «Claude Code», codex — «Codex», независимо от метки хоста', () => {
+    expect(providerName('claude', 'Claude')).toBe('Claude Code');
+    expect(providerName('codex', 'OpenAI Codex')).toBe('Codex');
+  });
+
+  it('регистр id не важен, как и у значка провайдера', () => {
+    expect(providerName('Claude', 'x')).toBe('Claude Code');
+    expect(providerName('CODEX', 'x')).toBe('Codex');
+  });
+
+  it('прочим провайдерам — метка, которую отдал хост', () => {
+    expect(providerName('gemini', 'Gemini CLI')).toBe('Gemini CLI');
+  });
+
+  it('пустая метка — сам id, а не пустая строка', () => {
+    expect(providerName('gemini', '')).toBe('gemini');
   });
 });
 
