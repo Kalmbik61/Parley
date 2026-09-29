@@ -205,6 +205,48 @@ describe('SessionRow — девять состояний таблицы 4.2 (т�
   });
 });
 
+// Кусок 5 плана «Organic», спека окна 2026-09-29, 1.2: участник развёрнутой комнаты — та же строка, но с отступом слева
+// 18 и без правого поля (его даёт строка комнаты), а у ведущего после названия `★`.
+describe('SessionRow — участник комнаты (кусок 5)', () => {
+  const inRoom = (session: WorkSession, lead: boolean) =>
+    render(
+      <SessionRow workKey={KEY} projectPath={PROJECT} workId={WORK} bridge={BRIDGE} session={session} depth={3} activity={null} now={NOW} draggable selected={false} onOpen={() => {}} inRoom lead={lead} />,
+    );
+
+  it('отступ слева 18 (глубина не в счёт), правое поле 0; обычная строка держит 8 + 12·depth и 6', () => {
+    inRoom(makeSession('s-01', 'a'), false);
+    expect(row().style.paddingLeft).toBe('18px');
+    expect(row().className).toMatch(/\bpr-0\b/);
+    expect(row().className).not.toMatch(/\bpr-1\.5\b/);
+    expect(row().className).toMatch(/\bh-\[26px\]/);
+    cleanup();
+    renderRow(makeSession('s-01', 'a'));
+    expect(row().style.paddingLeft).toBe('8px');
+    expect(row().className).toMatch(/\bpr-1\.5\b/);
+  });
+
+  it('★ у ведущего: после названия и перед словом состояния, 11px, accent-700, тултип «Lead»; у прочих её нет', () => {
+    inRoom(makeSession('s-01', 'исполнитель'), true);
+    const star = row().querySelector<HTMLElement>('[data-lead]') as HTMLElement;
+    expect(star.textContent).toBe('★');
+    expect(star.getAttribute('title')).toBe('Lead');
+    expect(star.className).toContain('text-[11px]');
+    expect(star.className).toContain('text-accent-700');
+    expect(star.className).toContain('shrink-0');
+    const label = screen.getByText('S01 исполнитель');
+    expect(label.compareDocumentPosition(star) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(star.compareDocumentPosition(screen.getByText(S.states.idle)) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    cleanup();
+    inRoom(makeSession('s-01', 'исполнитель'), false);
+    expect(row().querySelector('[data-lead]')).toBeNull();
+  });
+
+  it('обычная строка сессии звезды не знает: lead без комнаты не рисуется, если его не просили', () => {
+    renderRow(makeSession('s-01', 'a'));
+    expect(row().querySelector('[data-lead]')).toBeNull();
+  });
+});
+
 describe('SessionRow — пометка trust-wait (тест 11)', () => {
   it('host.notice trust-wait по ref строки — ⚠ с тултипом; у строки другой сессии пометки нет', () => {
     const notice: HostNotice = {
