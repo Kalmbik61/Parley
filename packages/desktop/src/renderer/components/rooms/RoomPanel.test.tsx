@@ -273,6 +273,8 @@ describe('RoomPanel — сообщения (1.3)', () => {
     });
     renderPanel(entry);
     expect(within(messageRow('m-1')).queryByRole('img', { name: 'New' })).not.toBeNull();
+    // Токен состояния, а не accent-2-500: тот к листу светлой темы ниже порога 3:1.
+    expect(within(messageRow('m-1')).getByRole('img', { name: 'New' }).className).toContain('bg-state-done');
     expect(within(messageRow('m-2')).queryByRole('img', { name: 'New' })).toBeNull();
     expect(within(messageRow('m-3')).queryByRole('img', { name: 'New' })).toBeNull();
   });
@@ -367,6 +369,16 @@ describe('RoomPanel — поле ввода и отправка (2.2)', () => {
     document.getSelection()?.collapse(node, node.data.length);
     fireEvent.input(editor());
     expect(useUiStore.getState().composerDrafts).toEqual({ [`${PROJECT} ${WORK_ID}/r-01`]: 'недописано' });
+  });
+
+  it('в меню упоминаний ★ у ведущего комнаты', () => {
+    renderPanel(entryOf());
+    const node = document.createTextNode('@');
+    editor().append(node);
+    document.getSelection()?.collapse(node, 1);
+    fireEvent.input(editor());
+    const starred = screen.getAllByRole('option').filter((item) => within(item).queryByTitle('Lead') !== null);
+    expect(starred.map((item) => item.getAttribute('data-mention-item'))).toEqual(['s-01']);
   });
 
   it('в меню упоминаний — живые участники; закрытый не предлагается', () => {

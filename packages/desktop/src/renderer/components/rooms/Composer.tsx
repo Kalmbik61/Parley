@@ -43,6 +43,8 @@ export interface ComposerMember {
   providerName: string;
   /** Слово состояния: `idle`, `working`… */
   word: string;
+  /** Ведущий комнаты: в меню у него `★`, как в ленте участников. */
+  lead: boolean;
 }
 
 export interface ComposerSubmission {

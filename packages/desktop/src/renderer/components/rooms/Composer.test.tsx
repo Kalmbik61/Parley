@@ -13,9 +13,9 @@ import { useUiStore } from '../../store/ui.js';
 import { Composer, type ComposerMember, type ComposerSubmission } from './Composer.js';
 
 const MEMBERS: ComposerMember[] = [
-  { id: 's-01', label: 'S01 архитектор', rawLabel: 'архитектор', provider: 'claude', providerName: 'Claude Code', word: 'working' },
-  { id: 's-02', label: 'S02 бэкенд', rawLabel: 'бэкенд', provider: 'claude', providerName: 'Claude Code', word: 'needs you' },
-  { id: 's-03', label: 'S03 ревью', rawLabel: 'ревью', provider: 'codex', providerName: 'Codex', word: 'idle' },
+  { id: 's-01', label: 'S01 архитектор', rawLabel: 'архитектор', provider: 'claude', providerName: 'Claude Code', word: 'working', lead: true },
+  { id: 's-02', label: 'S02 бэкенд', rawLabel: 'бэкенд', provider: 'claude', providerName: 'Claude Code', word: 'needs you', lead: false },
+  { id: 's-03', label: 'S03 ревью', rawLabel: 'ревью', provider: 'codex', providerName: 'Codex', word: 'idle', lead: false },
 ];
 
 const KEY = '/tmp/p w-01/r-01';
@@ -133,10 +133,18 @@ describe('Composer — когда открывается меню упомина
     expect(screen.getByRole('listbox')).toBeTruthy();
     expect(screen.getByText('Agents in this room')).toBeTruthy();
     expect(options().map((item) => item.textContent)).toEqual([
-      'S01 архитекторClaude Code · working',
+      'S01 архитектор★Claude Code · working',
       'S02 бэкендClaude Code · needs you',
       'S03 ревьюCodex · idle',
     ]);
+  });
+
+  it('у ведущего в меню ★ с подписью Lead, у прочих её нет', () => {
+    renderComposer();
+    type('@');
+    const stars = screen.getAllByTitle('Lead');
+    expect(stars).toHaveLength(1);
+    expect(stars[0]?.closest('[role="option"]')?.getAttribute('data-mention-item')).toBe('s-01');
   });
 
   it('@ после пробела, неразрывного пробела и переноса', () => {

@@ -1,9 +1,10 @@
 /**
  * Меню упоминаний над полем ввода комнаты (спека окна 2026-09-29, 1.3, 2.3): участники комнаты, что
  * подошли под `@запрос`. Радиус 16, фон `neutral-100`, `shadow-lg`, до 260px высоты. Пункт — значок
- * агента 16, `S02 бэкенд` (600) и мета `Claude Code · idle`: провайдер и слово состояния, а модели и
- * усилия, как в handoff, тут нет — карта их не хранит (решение контролёра куска 6). Клик — на
- * `mousedown` с `preventDefault`, чтобы поле не теряло фокус и курсор.
+ * агента 16, `S02 бэкенд` (600), `★` у ведущего (решение контролёра 1 куска 6; в снимке handoff его нет) и
+ * мета `Claude Code · idle`: провайдер и слово состояния, а модели и усилия, как в handoff, тут нет — карта
+ * их не хранит (решение контролёра 3). Клик — на `mousedown` с `preventDefault`, чтобы поле не теряло фокус
+ * и курсор.
  */
 
 import { S } from '../../../shared/strings.js';
@@ -49,6 +50,11 @@ export function MentionMenu({ items, selected, onPick, onHover }: MentionMenuPro
         >
           <AgentIcon provider={member.provider} size={16} />
           <span className="min-w-0 max-w-[70%] truncate font-semibold">{member.label}</span>
+          {member.lead ? (
+            <span title={S.rooms.lead} className="shrink-0 text-[11px] text-accent-700">
+              ★
+            </span>
+          ) : null}
           <span className="min-w-0 flex-1 truncate text-xs text-neutral-700">{S.rooms.providerState(member.providerName, member.word)}</span>
         </div>
       ))}
