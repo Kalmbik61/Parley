@@ -7,18 +7,29 @@ import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
- * Строка вкладок на узком окне (раунд fix-7-accept, п. 3): 800×500, правый сайдбар открыт, четыре
- * вкладки с именами по 255 байт — шире видимой строки. Открытая или ставшая активной вкладка любым
+ * Строка вкладок на узком окне (раунд fix-7-accept, п. 3): 800×500, правый сайдбар открыт, девять
+ * вкладок с именами по 255 байт — шире видимой строки. Открытая или ставшая активной вкладка любым
  * путём (дерево, клик, ⌃1–9, ⌃Tab, ⌘P, восстановление раскладки) — целиком в видимой части строки,
  * а обычный клик Playwright по любой вкладке активирует её: полоса прокрутки строки его не перехватывает.
+ *
+ * Девять, а не четыре: с облика Organic (спека окна 2026-09-29, 1.1) пилюли вкладок делят строку и
+ * сжимаются до 72 px, и четыре вкладки на 800×500 влезали целиком — строка не прокручивалась, а
+ * проверка «активная видна» ничего не проверяла. Девять сжатых не влезают и в узкую строку рядом с
+ * правым сайдбаром.
  */
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
 const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
 
-/** Четыре имени по 255 байт: вкладки шире видимой строки окна 800×500. */
-const FILES = ['m', 'p', 'c', 'q'].map((letter) => `${letter.repeat(252)}.ts`);
+/**
+ * Девять имён по 255 байт: даже сжатые до 72 px вкладки шире видимой строки окна 800×500. Первые буквы
+ * разные — по ней тест узнаёт вкладку (`visible m`); порядок первых четырёх (m, p, c, q) — тот, что
+ * ждут ⌃1, ⌃4 и ⌘P ниже.
+ */
+const FILES = ['m', 'p', 'c', 'q', 'a', 'b', 'd', 'e', 'f'].map((letter) => `${letter.repeat(252)}.ts`);
+/** Последняя вкладка строки — правый край прокрутки, самый трудный случай для «активная видна». */
+const LAST = FILES[FILES.length - 1] ?? '';
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
@@ -75,7 +86,7 @@ test.describe('строка вкладок', () => {
 
   const tabOf = (window: Page, name: string) => window.locator(`[role="tab"][data-tab-id="file:p:${name}"]`);
 
-  test('800×500, четыре длинных имени: дерево, клик, ⌃1–9, ⌃Tab, ⌘P и восстановление — активная вкладка видна целиком', async () => {
+  test('800×500, девять длинных имён: дерево, клик, ⌃1–9, ⌃Tab, ⌘P и восстановление — активная вкладка видна целиком', async () => {
     test.setTimeout(120_000);
     const first = await launch();
     let { window } = first;
@@ -126,14 +137,14 @@ test.describe('строка вкладок', () => {
     expect(problems).toEqual([]);
 
     // Восстановление раскладки: активная — последняя вкладка, её и видно после перезапуска.
-    await tabOf(window, FILES[3] ?? '').click();
-    await expect.poll(() => activeTabPlacement(window)).toBe('visible q');
+    await tabOf(window, LAST).click();
+    await expect.poll(() => activeTabPlacement(window)).toBe(`visible ${LAST.slice(0, 1)}`);
     // Раскладка пишется с тишиной 500 мс (спека 5.8).
     await window.waitForTimeout(1_000);
     await quitApp(first.electronApp);
     ({ window } = await launch());
-    await expect(tabOf(window, FILES[3] ?? '')).toHaveAttribute('aria-selected', 'true');
-    await expect.poll(() => activeTabPlacement(window)).toBe('visible q');
+    await expect(tabOf(window, LAST)).toHaveAttribute('aria-selected', 'true');
+    await expect.poll(() => activeTabPlacement(window)).toBe(`visible ${LAST.slice(0, 1)}`);
   });
 
   test('800×500, две группы: активная у правого края строки; открыли правый сайдбар — строка сузилась, активная видна (раунд 8, пункт 8)', async () => {
@@ -158,11 +169,11 @@ test.describe('строка вкладок', () => {
     await expect(sidebar).toBeHidden();
     await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.send('menu:action', 'group.splitDown'));
     await window.getByRole('dialog').getByRole('option').first().click();
-    const q = FILES[3] ?? '';
-    const strip = window.locator('[role="tablist"]', { has: tabOf(window, q) });
+    // Последняя вкладка — у правого края строки: при сужении строки её обязана дотянуть прокрутка.
+    const strip = window.locator('[role="tablist"]', { has: tabOf(window, LAST) });
     await expect(strip).toHaveCount(1);
 
-    /** Вкладка q — активная в своей строке и целиком внутри её видимой рамки (±1 px). */
+    /** Последняя вкладка — активная в своей строке и целиком внутри её видимой рамки (±1 px). */
     const placement = (): Promise<string> =>
       strip.evaluate((list, id) => {
         const tab = list.querySelector<HTMLElement>(`[role="tab"][data-tab-id="${id}"]`);
@@ -174,10 +185,10 @@ test.describe('строка вкладок', () => {
           return `at ${Math.round(inner.left)}..${Math.round(inner.right)} outside ${Math.round(outer.left)}..${Math.round(outer.right)} (scrollLeft ${list.scrollLeft})`;
         }
         return 'visible';
-      }, `file:p:${q}`);
+      }, `file:p:${LAST}`);
     const width = (): Promise<number> => strip.evaluate((list) => list.clientWidth);
 
-    await tabOf(window, q).click();
+    await tabOf(window, LAST).click();
     await expect.poll(placement).toBe('visible');
     const wide = await width();
 
