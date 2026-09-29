@@ -196,13 +196,15 @@ export const S = {
   /** «Вся почта работы» и лента писем — `mail/*`, строка сайдбара, вкладка панели, палитра. */
   mail: {
     allWorkspaceMail: 'All workspace mail',
-    headerPrefix: 'All mail',
+    /** Подзаголовок вкладки почты (спека окна 2026-09-29, 1.8): работа и число непрочитанных или «all read». */
+    subtitle: (workspace: string, unread: number): string => `${workspace} · ${unread === 0 ? 'all read' : `${unread} unread`}`,
     decisionsHeading: 'Decisions',
     decisionsEarlier: (count: number): string => `+${count} earlier`,
     unreadAriaLabel: 'unread',
+    /** Тег вида письма в карточке почты (1.8): строчными, как в handoff. */
+    kindTag: { note: 'note', question: 'question', decision: 'decision' } as const,
     kindSuffixQuestion: ' · question',
     kindSuffixDecision: ' · decision',
-    messageWord: (count: number): string => (count === 1 ? 'message' : 'messages'),
   },
 
   /** Комнаты — `rooms/*`. */

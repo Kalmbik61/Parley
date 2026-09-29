@@ -165,3 +165,51 @@ describe('MailPanel — отметка прочитанного (тест 7 ку
     expect(batches).toEqual([['m-1']]);
   });
 });
+
+// Облик Organic (спека окна 2026-09-29, 1.8, «Почта»): заголовок `Mail` Caprasimo и подзаголовок
+// `{workspace} · {n} unread` / `all read`; карточки писем до 640px в колонке с зазором 14.
+describe('MailPanel — облик Organic (1.8)', () => {
+  const mount = (messages: Message[]) =>
+    render(<MailPanel entry={entryWith(messages)} providers={[]} models={{}} bridge={bridge} active onOpenExternal={() => {}} />);
+
+  it('заголовок Mail (Caprasimo 25) и подзаголовок «Работа · 2 unread» — по числу писем с точкой', () => {
+    const { container } = mount([message('m-1', '2026-01-01T10:00:00.000Z'), message('m-2', '2026-01-01T10:01:00.000Z')]);
+    const heading = container.querySelector('h3');
+    expect(heading?.textContent).toBe('Mail');
+    expect(heading?.className).toContain('font-heading');
+    expect(heading?.className).toContain('text-[25px]');
+    const subtitle = heading?.nextElementSibling;
+    expect(subtitle?.textContent).toBe('Работа · 2 unread');
+    expect(subtitle?.className).toContain('text-muted-foreground');
+    expect(subtitle?.className).toContain('text-[13px]');
+  });
+
+  it('все прочитаны адресатом — «all read»; писем нет — тоже', () => {
+    const at = '2026-01-01T10:00:00.000Z';
+    const read: Message = { id: 'm-1', roomId: null, from: 's-01', to: ['s-02'], at, text: 'a', kind: 'note', readBy: { 's-02': at } };
+    expect(mount([read]).container.querySelector('h3')?.nextElementSibling?.textContent).toBe('Работа · all read');
+    cleanup();
+    expect(mount([]).container.querySelector('h3')?.nextElementSibling?.textContent).toBe('Работа · all read');
+  });
+
+  it('лента — колонка с зазором 14 и отступами 32 36; шапка не сжимается', () => {
+    const { container } = mount([message('m-1', '2026-01-01T10:00:00.000Z')]);
+    const scroller = container.querySelector('[data-letter-id]')?.parentElement as HTMLElement;
+    expect(scroller.className).toMatch(/\bflex-col\b/);
+    expect(scroller.className).toMatch(/\bgap-3\.5\b/);
+    expect(scroller.className).toMatch(/\bpx-9\b/);
+    expect(scroller.className).toMatch(/\bpb-8\b/);
+    expect(container.querySelector('h3')?.closest('[data-mail-header]')?.className).toContain('shrink-0');
+  });
+
+  it('↓N — пилюля', () => {
+    const initial = [message('m-1', '2026-01-01T10:00:00.000Z'), message('m-2', '2026-01-01T10:01:00.000Z')];
+    const { container, rerender } = mount(initial);
+    const scroller = container.querySelector('[data-letter-id]')?.parentElement as HTMLDivElement;
+    setScrollMetrics(scroller, { scrollTop: 100, scrollHeight: 1000, clientHeight: 300 });
+    fireEvent.scroll(scroller);
+    rerender(<MailPanel entry={entryWith([...initial, message('m-3', '2026-01-01T10:02:00.000Z')])} providers={[]} models={{}} bridge={bridge} active onOpenExternal={() => {}} />);
+    const chip = [...container.querySelectorAll('button')].find((button) => button.textContent === '↓1');
+    expect(chip?.className).toMatch(/\brounded-full\b/);
+  });
+});
