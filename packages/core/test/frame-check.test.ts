@@ -105,9 +105,9 @@ describe('scanSource', () => {
 });
 
 /**
- * Явное исключение из правила «запись в каталоги агентов» (спека комнат Organic, 3.5): скрипт строки
- * статуса читает `settings.json` человека и проекта, чтобы строка в терминале осталась прежней.
- * Исключение узкое: один файл, одно правило, одна строка целиком.
+ * Явное исключение из правила «запись в каталоги агентов» (спека комнат Organic, 3.5): скрипт
+ * строки статуса читает `settings.json` человека и проекта, чтобы строка в терминале осталась
+ * прежней. Исключение узкое: один файл, одно правило, одна строка целиком.
  */
 describe('исключение для чтения settings.json в скрипте строки статуса (спека комнат, 3.5)', () => {
   const STATUSLINE = 'packages/core/src/work/statusline.ts';
@@ -232,7 +232,7 @@ describe('рамочный тест репозитория (тест 6)', () => 
         const relative = path.relative(repoRoot, file);
         source.split('\n').forEach((line, index) => {
           for (const { rule, pattern } of FRAME_RULES) {
-            // Явные исключения (`FRAME_EXCEPTIONS`) — код, а не комментарии; они проверены отдельно.
+            // Явные исключения (`FRAME_EXCEPTIONS`) — код, а не комментарии: проверены отдельно.
             if (pattern.test(line) && !isFrameException(relative, rule, line))
               rawHits.push({ file: relative, line: index + 1, rule, text: line.trim() });
           }

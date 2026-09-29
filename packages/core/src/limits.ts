@@ -124,8 +124,8 @@ export async function readWorkLimits(workDir: string): Promise<Map<string, Provi
 
 /**
  * Одно окно из двух записей. Один и тот же сброс (`resetsAt` равен) — это одно окно, а расход в
- * окне не убывает, поэтому берётся большее `usedPercent`. Разный сброс — окно сменилось, берётся то,
- * что кончается позже.
+ * окне не убывает, поэтому берётся большее `usedPercent`. Разный сброс — окно сменилось, берётся
+ * то, что кончается позже.
  */
 function laterWindow(a: LimitWindow | null, b: LimitWindow | null): LimitWindow | null {
   if (a === null || b === null) return a ?? b;

@@ -5,9 +5,9 @@
  * `RateLimitWindow { used_percent, window_minutes, resets_at }`, `resets_at` в Unix-секундах) и
  * по снимку схемы `docs/schema/codex-schema-report.json`. У `RateLimitSnapshot` в свежих
  * исходниках есть `limit_id` и `limit_name`: корзина по умолчанию — `codex`, у других (например,
- * модельных квот) свой `limit_id` (`codex-rs/codex-api/src/rate_limits.rs`: `parse_rate_limit_for_limit`,
- * `normalize_limit_id`). Тесты — на выдуманных логах во временном каталоге: настоящие логи
- * человека (там его переписка) не читаются.
+ * модельных квот) свой `limit_id` (`codex-rs/codex-api/src/rate_limits.rs`:
+ * `parse_rate_limit_for_limit`, `normalize_limit_id`). Тесты — на выдуманных логах во временном
+ * каталоге: настоящие логи человека (там его переписка) не читаются.
  */
 
 import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
@@ -31,7 +31,7 @@ const window = (
 
 const both = { primary: window(58, 300), secondary: window(41.2, 10_080, NOW_SEC + 86_400) };
 
-/** Снимок лимитов с корзиной, как в свежих openai/codex: `limit_id` и `limit_name` у `RateLimitSnapshot`. */
+/** Снимок лимитов с корзиной, как в свежих openai/codex: у `RateLimitSnapshot` есть `limit_id`. */
 const snapshot = (limitId: string | null, primary: number, secondary: number) => ({
   limit_id: limitId,
   limit_name: limitId === 'codex' ? null : limitId,

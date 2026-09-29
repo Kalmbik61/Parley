@@ -162,7 +162,8 @@ describe('Claude: файлы строки статуса', () => {
   // сессии перебить свежие, поэтому каждое окно сводится отдельно (`mergeLimits`).
   it('простаивающая сессия со свежим at, но устаревшими числами не перебивает числа той, что работала', async () => {
     const a = await work(projectA, ['claude', 'claude']);
-    // Claude Code зовёт скрипт и по другим поводам (смена режима, /compact): `at` свежий, числа прежние.
+    // Claude Code зовёт скрипт и по другим поводам (смена режима, /compact): `at` свежий,
+    // числа прежние.
     await putLimits(projectA, a.map, a.ids[0]!, T0 - 1000, 58, 41);
     await putLimits(projectA, a.map, a.ids[1]!, T0 - 600_000, 61, 43);
     const { limits } = service([{ project: projectA, map: a.map }]);
