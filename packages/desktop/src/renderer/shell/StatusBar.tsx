@@ -8,18 +8,23 @@
  * отступ `0 14 2 18`, зазор 14, 12px `neutral-800`. Слева — сегмент на провайдера: значок 14, имя и версия
  * CLI моноширинным 11px `neutral-700` (`store/providers.ts`: только `available`, в порядке хоста;
  * нет версии — только значок и имя). Справа — сегменты спеки Orca-UI 5.9: последнее уведомление хоста
- * (сжимается многоточием), счётчики внимания, связь с хостом, «Host is outdated», будильник. Лимиты
- * подписки — кусок 9.
+ * (сжимается многоточием), счётчики внимания, связь с хостом, «Host is outdated», будильник.
+ *
+ * Лимиты подписки (кусок 9b, спека комнат Organic, 3.5) — после версии: полоска пятичасового окна (нет
+ * его — недельного) и «58% 5h · 41% wk». Нет данных — сегмент прежний. Проценты целые, округление вниз:
+ * не завышать расход и не прыгать при каждом обновлении. От 80 % в любом окне текст и полоска — `accent-700`.
  *
  * `noticeLine` приходит уже переведённым текстом (`shared/strings.ts#noticeText`,
  * раунд исправлений 1 куска E.1) — сам компонент `HostNotice` больше не
  * видит и русский `notice.text` показать не может, даже случайно.
  */
 
+import type { LimitWindow, ProviderLimits } from '@harnas/protocol';
 import type { HostStatus } from '../../shared/bridge.js';
 import { providerName, S } from '../../shared/strings.js';
 import { AgentIcon } from '../components/AgentIcon.js';
 import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
+import { cn } from '../lib/cn.js';
 import { missingMethods } from '../lib/capabilities.js';
 import { useProvidersStore } from '../store/providers.js';
 
@@ -51,6 +56,37 @@ export interface StatusBarProps {
 /** Кнопка-сегмент справа: пилюля, основной цвет и на hover — вторичный текст на заливке ниже 4.5:1. */
 const SEGMENT_BUTTON = 'shrink-0 rounded-full px-2 py-0.5 text-foreground transition-colors hover:bg-foreground/8';
 
+/** От скольки процентов лимит в любом окне считается на исходе: текст и полоска — `accent-700` (спека 3.5). */
+const LIMIT_WARNING_PERCENT = 80;
+
+/** Целые проценты окна, округление вниз (решение контролёра куска 9b); окна нет — `null`. */
+const wholePercent = (limit: LimitWindow | null): number | null => (limit === null ? null : Math.floor(limit.usedPercent));
+
+/**
+ * Лимиты подписки провайдера: полоска (пятичасовое окно, нет его — недельное) и «58% 5h · 41% wk» после версии.
+ * Ширины и отступы — по прототипу handoff: трек 44×4, зазор 7, слева ещё 4. Нет данных (`null`, оба окна
+ * отсутствуют) — ничего не рисуется, сегмент остаётся значком, именем и версией.
+ */
+function ProviderLimitsMeter({ limits }: { limits: ProviderLimits | null }): JSX.Element | null {
+  const fiveHour = wholePercent(limits?.fiveHour ?? null);
+  const week = wholePercent(limits?.week ?? null);
+  const bar = fiveHour ?? week;
+  if (bar === null) return null;
+  const warning = (fiveHour ?? 0) >= LIMIT_WARNING_PERCENT || (week ?? 0) >= LIMIT_WARNING_PERCENT;
+  return (
+    <span data-limits className="ml-1 flex min-w-0 items-center gap-[7px]">
+      <span aria-hidden className="h-1 w-11 shrink-0 overflow-hidden rounded-full bg-current/18">
+        <span
+          data-limits-fill
+          className={cn('block h-full rounded-full', warning ? 'bg-accent-700' : 'bg-neutral-800')}
+          style={{ width: `${bar}%` }}
+        />
+      </span>
+      <span className={cn('min-w-0 truncate tabular-nums', warning && 'text-accent-700')}>{S.statusBar.limitsText(fiveHour, week)}</span>
+    </span>
+  );
+}
+
 export function StatusBar({
   status,
   noticeLine,
@@ -73,6 +109,7 @@ export function StatusBar({
           <AgentIcon provider={provider.id} size={14} />
           <span>{providerName(provider.id, provider.label)}</span>
           {provider.version === null ? null : <span className="font-mono text-[11px] text-neutral-700">{provider.version}</span>}
+          <ProviderLimitsMeter limits={provider.limits} />
         </span>
       ))}
       <div className="flex min-w-0 flex-1 items-center justify-end gap-3.5">

@@ -158,6 +158,14 @@ export const S = {
       [needsYou > 0 ? `${needsYou} ${needsYou === 1 ? 'needs' : 'need'} you` : '', unseen > 0 ? `${unseen} unseen` : '']
         .filter((part) => part !== '')
         .join(' · '),
+    /**
+     * Лимиты подписки в сегменте провайдера (спека комнат Organic, 3.5): «58% 5h · 41% wk». Окна, которого нет,
+     * в тексте нет; проценты приходят уже целыми — округляет вызывающий.
+     */
+    limitsText: (fiveHour: number | null, week: number | null): string =>
+      [fiveHour === null ? '' : `${fiveHour}% 5h`, week === null ? '' : `${week}% wk`]
+        .filter((part) => part !== '')
+        .join(' · '),
   },
 
   /** Общие диалоги, не привязанные к своей области (mail/rooms/settings/…). */
