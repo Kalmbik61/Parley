@@ -65,7 +65,7 @@ export interface ComposerSubmission {
 
 export interface ComposerProps {
   members: readonly ComposerMember[];
-  /** Ключ черновика — `composerDraftKey(workKey, roomId)`. Другая комната — другой ключ и заново смонтированное поле. */
+  /** Ключ черновика — `roomKey(workKey, roomId)` (`lib/room-view.ts`). Другая комната — другой ключ и заново смонтированное поле. */
   draftKey: string;
   /**
    * Отправка. Отказ (промис отклонён) возвращает текст в поле, если оно ещё пусто: письмо не должно

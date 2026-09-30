@@ -54,14 +54,6 @@ const CLOSED_DIALOGS: DialogsState = {
   restartHost: false,
 };
 
-/**
- * Ключ черновика комнаты (дизайн комнат, 3.4) — `{workKey}/{roomId}`: `workKey` берёт проект и
- * работу, потому что id комнат (`r-01`) повторяются от работы к работе.
- */
-export function composerDraftKey(workKey: string, roomId: string): string {
-  return `${workKey}/${roomId}`;
-}
-
 export interface UiState {
   /**
    * Единственный источник тёмности в рендерере (спека 4.7, раунд исправлений 1
@@ -93,7 +85,7 @@ export interface UiState {
    */
   visibleSessionRefs: Record<string, true>;
   /**
-   * Черновики полей ввода комнат (дизайн комнат, 3.4): ключ — `composerDraftKey`, значение — текст
+   * Черновики полей ввода комнат (дизайн комнат, 3.4): ключ — `lib/room-view.ts#roomKey`, значение — текст
    * поля с токенами `@s02`. Только в памяти окна, в `ui.json` не пишутся: переживают смену вкладок
    * и работ (тело комнаты при этом размонтируется), но не перезапуск окна. Пустого черновика в
    * записи нет.

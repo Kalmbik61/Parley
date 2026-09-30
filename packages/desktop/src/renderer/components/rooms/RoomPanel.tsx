@@ -25,10 +25,10 @@ import { useMarkRead } from '../../attention/use-mark-read.js';
 import { useHostSupports } from '../../lib/capabilities.js';
 import { sessionRowLabel } from '../../lib/participant.js';
 import { relativeTime } from '../../lib/relative-time.js';
+import { roomKey } from '../../lib/room-view.js';
 import { workKey } from '../../lib/tree-order.js';
 import { useNow } from '../../lib/use-now.js';
 import type { ActivityEntry } from '../../store/activity.js';
-import { composerDraftKey } from '../../store/ui.js';
 import { Decisions } from '../mail/Decisions.js';
 import { Composer, type ComposerSubmission } from './Composer.js';
 import { DecisionCard } from './DecisionCard.js';
@@ -82,7 +82,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
 
   // Упомянуть можно живую сессию комнаты: закрытая письма не получит.
   const members = model.participants.filter((participant) => !participant.closed);
-  const draftKey = composerDraftKey(workKey(entry.projectPath, entry.map.work.id), roomId);
+  const draftKey = roomKey(workKey(entry.projectPath, entry.map.work.id), roomId);
 
   const handleSend = (submission: ComposerSubmission): Promise<void> =>
     bridge

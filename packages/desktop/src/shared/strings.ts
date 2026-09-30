@@ -18,7 +18,6 @@ export const S = {
   /** Общие подписи кнопок, переиспользуемые в нескольких диалогах. */
   common: {
     cancel: 'Cancel',
-    create: 'Create',
     close: 'Close',
     delete: 'Delete',
     done: 'Done',
