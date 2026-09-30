@@ -124,13 +124,6 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
           {!closed ? (
             <ContextMenuItem onSelect={() => setConfirm('close')}>{S.sidebar.sessionMenu.closeEllipsis}</ContextMenuItem>
           ) : null}
-          <ContextMenuItem
-            onSelect={() =>
-              useUiStore.getState().openCreateRoomDialog({ projectPath, workId, requiredMember: { id: session.id, label } })
-            }
-          >
-            {S.sidebar.sessionMenu.createRoomWith}
-          </ContextMenuItem>
           <ContextMenuItem onSelect={openChanges}>{S.sidebar.sessionMenu.changes}</ContextMenuItem>
           {worktree !== null ? (
             <ContextMenuItem

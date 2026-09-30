@@ -11,7 +11,7 @@
  * одним контекстом. Сам контекст настоящий.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ClientRect, DndContextProps, DragEndEvent, DroppableContainer } from '@dnd-kit/core';
 import type { WorkEntry, WorkSession } from '@harnas/core';
@@ -32,6 +32,8 @@ import { useWorksStore } from '../store/works.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { AppShell } from './AppShell.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
+import { roomKey } from '../lib/room-view.js';
+import { makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 
@@ -131,9 +133,9 @@ beforeEach(() => {
     wakePaused: null,
     dialogs: {
       newWork: false,
-      newSession: { open: false, parentSessionId: null, work: null },
+      newSession: { open: false, work: null, room: false },
       settings: false,
-      createRoom: null,
+      mergeRoom: null,
       restartHost: false,
     },
     visibleSessionRefs: {},
@@ -518,5 +520,214 @@ describe('AppShell — щит над страницами на время пер
     fireEvent.keyDown(document, { key: 'Escape', code: 'Escape' });
     await flush();
     expect(screen.queryByTestId('drag-shield')).toBeNull();
+  });
+});
+
+describe('AppShell — бросок сессии на строки сайдбара (кусок 7 плана «Organic», спека окна 2026-09-29, 2.5)', () => {
+  const PROJECT = '/tmp/w-01';
+  const key = keyOf('w-01');
+  const other = keyOf('w-02');
+
+  // Развёрнутость строк комнат живёт в сторе окна и переходит из теста в тест — каждый начинает со свёрнутых.
+  beforeEach(() => useUiStore.setState({ roomExpanded: {} }));
+
+  /** s-01 и s-02 вне комнат; s-03 и s-04 — в комнате r-01; s-05 закрыта. Вторая работа w-02 — чужая. */
+  const entries = (): WorkEntry[] => [
+    makeWork('w-01', {
+      projectPath: PROJECT,
+      title: 'Первая',
+      sessions: [
+        makeSession('s-01', 'один'),
+        makeSession('s-02', 'два'),
+        makeSession('s-03', 'три'),
+        makeSession('s-04', 'четыре'),
+        makeSession('s-05', 'пять', { lifecycle: 'closed' }),
+      ],
+      rooms: [{ ...makeRoom('r-01', 'Возвраты'), members: ['s-03', 's-04'], lead: 's-03' }],
+    }),
+    makeWork('w-02', {
+      projectPath: '/tmp/w-02',
+      title: 'Вторая',
+      sessions: [makeSession('s-01', 'один'), makeSession('s-02', 'два')],
+      rooms: [{ ...makeRoom('r-01', 'Чужая'), members: ['s-02'], lead: 's-02' }],
+    }),
+  ];
+
+  async function setup(): Promise<void> {
+    bridge.setHandler('rooms.addMember', () => ({ messageId: 'm-1' }));
+    bridge.setHandler('rooms.create', () => ({ roomId: 'r-02' }));
+    await renderShell(entries());
+    await activate(key);
+    act(() => bridge.setHostMethods([...REQUIRED_METHODS, 'rooms.addMember']));
+  }
+
+  const drop = (sessionId: string, target: DropTargetData): void =>
+    act(() => lastProps().onDragEnd?.(endEvent({ item: { kind: 'session', sessionId } }, target)));
+  const callsOf = (method: string): unknown[] => bridge.calls.filter((call) => call.method === method).map((call) => call.params);
+
+  it('сессия на сессию — диалог «New room» из двух сессий: ведущая — та, на которую бросили; комнаты и вызовов ещё нет', async () => {
+    await setup();
+    drop('s-01', { workKey: key, kind: 'session-row', sessionId: 's-02' });
+    expect(useUiStore.getState().dialogs.mergeRoom).toEqual({ projectPath: PROJECT, workId: 'w-01', dragged: 's-01', target: 's-02' });
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 'New room' })).toBeTruthy();
+    expect(within(dialog).getByText('S02 два and S01 один move into the room.')).toBeTruthy();
+    expect(callsOf('rooms.create')).toEqual([]);
+    expect(callsOf('rooms.addMember')).toEqual([]);
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create room' }));
+    await waitFor(() => expect(callsOf('rooms.create')).toHaveLength(1));
+    expect(callsOf('rooms.create')[0]).toEqual({
+      projectPath: PROJECT,
+      workId: 'w-01',
+      title: 'Room 2',
+      members: ['s-02', 's-01'],
+      lead: 's-02',
+      origin: ['s-01', 's-02'],
+      quiet: true,
+    });
+  });
+
+  it('после «Create room» диалога 1.6 вкладка комнаты открывается, когда снимок принёс комнату: диалог к тому времени закрыт, ожидание живо', async () => {
+    await setup();
+    drop('s-01', { workKey: key, kind: 'session-row', sessionId: 's-02' });
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Create room' }));
+    await waitFor(() => expect(useUiStore.getState().dialogs.mergeRoom).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    const tabIds = (): string[] => {
+      const layout = useLayoutStore.getState().layouts[key];
+      return layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id));
+    };
+    // Снимка с комнатой ещё нет — вкладки нет; пришёл — открыта, строка развёрнута.
+    expect(tabIds()).not.toContain(tabId.room('r-02'));
+    const [first, ...rest] = entries();
+    if (first === undefined) throw new Error('нет работы');
+    const withRoom: WorkEntry = {
+      ...first,
+      map: { ...first.map, rooms: [...first.map.rooms, { ...makeRoom('r-02', 'Room 2'), members: ['s-02', 's-01'], lead: 's-02' }] },
+    };
+    act(() => useWorksStore.setState({ entries: [withRoom, ...rest] }));
+    await waitFor(() => expect(tabIds()).toContain(tabId.room('r-02')));
+    expect(useUiStore.getState().roomExpanded[roomKey(key, 'r-02')]).toBe(true);
+  });
+
+  it('сессия на строку комнаты — rooms.addMember, строка комнаты разворачивается; диалога нет', async () => {
+    await setup();
+    drop('s-01', { workKey: key, kind: 'room-row', roomId: 'r-01' });
+    await waitFor(() => expect(callsOf('rooms.addMember')).toHaveLength(1));
+    expect(callsOf('rooms.addMember')[0]).toEqual({ projectPath: PROJECT, workId: 'w-01', roomId: 'r-01', sessionId: 's-01' });
+    await waitFor(() => expect(useUiStore.getState().roomExpanded[roomKey(key, 'r-01')]).toBe(true));
+    expect(useUiStore.getState().dialogs.mergeRoom).toBeNull();
+    expect(callsOf('rooms.create')).toEqual([]);
+  });
+
+  it('из одной комнаты в другую — тоже rooms.addMember (правило одной комнаты — у хоста)', async () => {
+    await setup();
+    act(() =>
+      useWorksStore.setState({
+        entries: [
+          makeWork('w-01', {
+            projectPath: PROJECT,
+            title: 'Первая',
+            sessions: [makeSession('s-01', 'один'), makeSession('s-03', 'три')],
+            rooms: [
+              { ...makeRoom('r-01', 'Возвраты'), members: ['s-03'], lead: 's-03' },
+              { ...makeRoom('r-02', 'Отчёты'), members: ['s-01'], lead: 's-01' },
+            ],
+          }),
+        ],
+      }),
+    );
+    drop('s-03', { workKey: key, kind: 'room-row', roomId: 'r-02' });
+    await waitFor(() => expect(callsOf('rooms.addMember')).toHaveLength(1));
+    expect(callsOf('rooms.addMember')[0]).toMatchObject({ roomId: 'r-02', sessionId: 's-03' });
+  });
+
+  it('отказ rooms.addMember — тост «Couldn\'t add the session to the room: …», строка не разворачивается', async () => {
+    vi.mocked(toast).mockClear();
+    bridge.setHandler('rooms.addMember', () => {
+      throw { code: 'bad_request', message: 'сессия закрыта' };
+    });
+    await renderShell(entries());
+    await activate(key);
+    act(() => bridge.setHostMethods([...REQUIRED_METHODS, 'rooms.addMember']));
+    drop('s-01', { workKey: key, kind: 'room-row', roomId: 'r-01' });
+    await waitFor(() => expect(vi.mocked(toast)).toHaveBeenCalledWith("Couldn't add the session to the room: invalid request."));
+    expect(useUiStore.getState().roomExpanded[roomKey(key, 'r-01')]).toBeUndefined();
+  });
+
+  it('нельзя — ни вызова, ни диалога: на себя, в свою комнату, на закрытую, закрытую сессию, вкладку', async () => {
+    await setup();
+    drop('s-01', { workKey: key, kind: 'session-row', sessionId: 's-01' }); // на себя
+    drop('s-03', { workKey: key, kind: 'room-row', roomId: 'r-01' }); // в свою комнату
+    drop('s-01', { workKey: key, kind: 'session-row', sessionId: 's-05' }); // на закрытую
+    drop('s-05', { workKey: key, kind: 'session-row', sessionId: 's-01' }); // закрытую сессию
+    drop('s-05', { workKey: key, kind: 'room-row', roomId: 'r-01' });
+    drop('s-01', { workKey: key, kind: 'session-row', sessionId: 's-99' }); // цели уже нет
+    drop('s-01', { workKey: key, kind: 'room-row', roomId: 'r-99' });
+    act(() => lastProps().onDragEnd?.(endEvent({ item: { kind: 'tab', tabId: 'mail' } }, { workKey: key, kind: 'room-row', roomId: 'r-01' })));
+    await flush();
+    expect(callsOf('rooms.addMember')).toEqual([]);
+    expect(callsOf('rooms.create')).toEqual([]);
+    expect(useUiStore.getState().dialogs.mergeRoom).toBeNull();
+  });
+
+  it('чужая работа — отказ: цель другой работы (не активной) ничего не открывает и не зовёт', async () => {
+    await setup();
+    // s-01 тащат из активной работы, а строка комнаты и сессии — в w-02: `layoutCollision` их не отдаёт, а если бы отдал — бросок отклонён.
+    drop('s-01', { workKey: other, kind: 'room-row', roomId: 'r-01' });
+    drop('s-01', { workKey: other, kind: 'session-row', sessionId: 's-02' });
+    await flush();
+    expect(callsOf('rooms.addMember')).toEqual([]);
+    expect(useUiStore.getState().dialogs.mergeRoom).toBeNull();
+    // Раскладка чужой работы не тронута, активная не сменилась.
+    expect(useLayoutStore.getState().activeWorkKey).toBe(key);
+  });
+
+  it('и collisionDetection не отдаёт строки чужой работы; строки активной — отдаёт только сессии', async () => {
+    await setup();
+    const detect = lastProps().collisionDetection;
+    if (detect === undefined) throw new Error('нет collisionDetection');
+    const containers = [
+      { id: 'mine', key: 'mine', data: { current: { workKey: key, kind: 'room-row', roomId: 'r-01' } }, disabled: false, node: { current: null }, rect: { current: null } },
+      { id: 'theirs', key: 'theirs', data: { current: { workKey: other, kind: 'room-row', roomId: 'r-01' } }, disabled: false, node: { current: null }, rect: { current: null } },
+    ] as DroppableContainer[];
+    const around = (item: DragItem): string[] =>
+      detect({
+        active: { id: 'drag', data: { current: { item } }, rect: { current: { initial: null, translated: null } } },
+        collisionRect: RECT,
+        droppableRects: new Map([['mine', RECT], ['theirs', RECT]]),
+        droppableContainers: containers,
+        pointerCoordinates: { x: 400, y: 300 },
+      } as unknown as Parameters<typeof detect>[0]).map((hit) => String(hit.id));
+    expect(around({ kind: 'session', sessionId: 's-01' })).toEqual(['mine']);
+    expect(around({ kind: 'tab', tabId: 'mail' })).toEqual([]);
+  });
+
+  it('хост без rooms.addMember — на строку комнаты бросать нечем: вызова нет; без rooms.create — диалога 1.6 нет', async () => {
+    bridge.setHandler('rooms.addMember', () => ({ messageId: 'm-1' }));
+    await renderShell(entries());
+    await activate(key);
+    // Методы этого хоста — без `rooms.addMember`.
+    drop('s-01', { workKey: key, kind: 'room-row', roomId: 'r-01' });
+    await flush();
+    expect(callsOf('rooms.addMember')).toEqual([]);
+
+    act(() => bridge.setHostMethods(REQUIRED_METHODS.filter((method) => method !== 'rooms.create')));
+    drop('s-01', { workKey: key, kind: 'session-row', sessionId: 's-02' });
+    await flush();
+    expect(useUiStore.getState().dialogs.mergeRoom).toBeNull();
+  });
+
+  it('бросок в раскладку работает как раньше: сессия в тело группы — вкладка терминала, ни диалога, ни rooms.*', async () => {
+    await setup();
+    const groupId = soleGroupId(key);
+    act(() => lastProps().onDragEnd?.(endEvent({ item: { kind: 'session', sessionId: 's-01' } }, { workKey: key, kind: 'body', groupId })));
+    await flush();
+    const layout = useLayoutStore.getState().layouts[key];
+    if (layout === undefined) throw new Error('нет раскладки');
+    expect(groups(layout).find((group) => group.id === groupId)?.tabs.map((tab) => tab.id)).toEqual([tabId.terminal('s-01')]);
+    expect(useUiStore.getState().dialogs.mergeRoom).toBeNull();
+    expect(callsOf('rooms.addMember')).toEqual([]);
   });
 });

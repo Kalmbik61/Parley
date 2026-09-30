@@ -67,7 +67,7 @@ beforeEach(() => {
   useUiStore.setState({
     ui: DEFAULT_UI,
     sidebarHolds: {},
-    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null },
+    dialogs: { newWork: false, newSession: { open: false, work: null, room: false }, settings: false, mergeRoom: null },
   });
   useUiStore.getState().init(bridge);
   // Журнал — только вызовы меню: init стора ui спрашивает wake.state.
@@ -232,19 +232,24 @@ describe('CardMenu — статус (тесты 16, 19, решение 2)', () =
 });
 
 describe('CardMenu — прочие пункты', () => {
-  it('New session — диалог этой работы, без родителя (тест 15); New room — без обязательного участника', () => {
+  it('New session — диалог 1.5 этой работы одним агентом (тест 15); New room — тот же диалог, открытый комнатой (два агента)', () => {
     renderMenu();
     openMenu();
     fireEvent.click(screen.getByText('New session'));
     expect(useUiStore.getState().dialogs.newSession).toEqual({
       open: true,
-      parentSessionId: null,
       work: { projectPath: '/tmp/proj', workId: 'w-01' },
+      room: false,
     });
+    act(() => useUiStore.getState().closeNewSessionDialog());
 
     openMenu();
     fireEvent.click(screen.getByText('New room'));
-    expect(useUiStore.getState().dialogs.createRoom).toEqual({ projectPath: '/tmp/proj', workId: 'w-01', requiredMember: null });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({
+      open: true,
+      work: { projectPath: '/tmp/proj', workId: 'w-01' },
+      room: true,
+    });
   });
 
   it('Open mail и Rename — колбэки карточки; Copy path — путь проекта в буфер', () => {

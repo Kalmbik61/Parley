@@ -11,7 +11,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { WorkEntry, WorkSession } from '@harnas/core';
 import { App } from './App.js';
-import type { NewSessionDialogProps } from './components/dialogs/NewSessionDialog.js';
 import { createFakeBridge, type FakeBridge } from './test-utils/fake-bridge.js';
 import { bufferKey, initialBuffer } from './files/buffer.js';
 import { useFilesStore } from './files/store.js';
@@ -34,16 +33,6 @@ import { groups } from './layout/tree.js';
 import { S } from '../shared/strings.js';
 import type { TabSpec } from '../shared/layout-types.js';
 import { workKey } from '../shared/work-keys.js';
-
-// Тест 6 куска 2.7 читает пропсы диалога новой сессии, а не его разметку:
-// что именно диалог делает с `projectPath`/`workId`, проверяет его собственный тест.
-const dialogProps = vi.hoisted(() => ({ last: null as NewSessionDialogProps | null }));
-vi.mock('./components/dialogs/NewSessionDialog.js', () => ({
-  NewSessionDialog: (props: NewSessionDialogProps) => {
-    dialogProps.last = props;
-    return null;
-  },
-}));
 
 // Тест 4 куска 4.3 проверяет вызов тоста, а не его разметку; `Toaster` остаётся настоящим.
 vi.mock('sonner', async (importOriginal) => ({ ...(await importOriginal<typeof import('sonner')>()), toast: vi.fn() }));
@@ -71,7 +60,7 @@ beforeEach(() => {
   useUiStore.setState({
     windowFocused: true,
     wakePaused: null,
-    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null, restartHost: false },
+    dialogs: { newWork: false, newSession: { open: false, work: null, room: false }, settings: false, mergeRoom: null, restartHost: false },
     visibleSessionRefs: {},
   });
   useLayoutStore.setState({
@@ -83,7 +72,6 @@ beforeEach(() => {
     mru: {},
     navigating: false,
   });
-  dialogProps.last = null;
   useSidebarSectionsStore.setState({ sections: [], attention: {}, entries: null });
   // Стор связи общий на файл: `everConnected` прошлого теста убрал бы экран «No connection»
   // у теста, где связи ещё не было (слияние lane-r3).
@@ -232,9 +220,8 @@ function work(id: string, createdAt: string, sessions: WorkSession[]): WorkEntry
   };
 }
 
-// Кусок 2.7: выбор сессии больше не хранится в `store/ui.ts` — ⌘T берёт
-// работу из `activeWorkKey`, родителя — из активной вкладки-терминала её
-// активной группы (`selectedSessionOf`).
+// Кусок 2.7: выбор сессии больше не хранится в `store/ui.ts` (его выводит `selectedSessionOf`). С куска 7 плана
+// «Organic» ⌘T родителя не берёт вовсе: диалог 1.5 открывается на `activeWorkKey`.
 describe('App — меню session.new (тест 6 куска 2.7, тест 4 куска 6.1b)', () => {
   it('settings.open открывает настройки — ветка run в AppShell, у App своего onMenu нет', async () => {
     useWorksStore.setState({ entries: [work('w-01', '2026-01-01', [session('s-01', 'план')])], branches: {}, loading: false, error: null });
@@ -247,7 +234,7 @@ describe('App — меню session.new (тест 6 куска 2.7, тест 4 к
     expect(useUiStore.getState().dialogs.settings).toBe(true);
   });
 
-  it('диалог получает projectPath и workId активной работы и родителя из selectedSessionOf', async () => {
+  it('⌘T — диалог 1.5 открывается на активной работе одним агентом (кусок 7: родителя больше нет)', async () => {
     const w1 = work('w-01', '2026-01-01', [session('s-01', 'план')]);
     const w2 = work('w-02', '2026-01-02', [session('s-01', 'бэк'), session('s-02', 'фронт')]);
     useWorksStore.setState({ entries: [w1, w2], branches: {}, loading: false, error: null });
@@ -266,12 +253,9 @@ describe('App — меню session.new (тест 6 куска 2.7, тест 4 к
 
     act(() => bridge.emitMenu('session.new'));
 
-    expect(dialogProps.last).toMatchObject({
-      open: true,
-      projectPath: '/tmp/w-02',
-      workId: 'w-02',
-      selectedSessionId: 's-02',
-    });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: true, work: null, room: false });
+    // Диалог берёт активную работу сам: в его поле «Workspace» — она.
+    expect(await screen.findByRole('combobox', { name: 'Workspace' })).toHaveProperty('textContent', 'w-02 · w-02');
   });
 });
 
@@ -292,12 +276,14 @@ describe('App — «New session» из меню карточки (тест 15 к
 
     fireEvent.contextMenu(document.querySelector('[data-work-key="/tmp/w-02 w-02"]') as HTMLElement);
     fireEvent.click(screen.getByText('New session'));
-    expect(dialogProps.last).toMatchObject({ open: true, projectPath: '/tmp/w-02', workId: 'w-02', selectedSessionId: null });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: true, work: { projectPath: '/tmp/w-02', workId: 'w-02' }, room: false });
     expect(useLayoutStore.getState().activeWorkKey).toBe(key1);
+    expect(await screen.findByRole('combobox', { name: 'Workspace' })).toHaveProperty('textContent', 'w-02 · w-02');
 
-    act(() => dialogProps.last?.onOpenChange(false));
+    act(() => useUiStore.getState().closeNewSessionDialog());
     act(() => bridge.emitMenu('session.new'));
-    expect(dialogProps.last).toMatchObject({ open: true, projectPath: '/tmp/w-01', workId: 'w-01' });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: true, work: null, room: false });
+    expect(await screen.findByRole('combobox', { name: 'Workspace' })).toHaveProperty('textContent', 'w-01 · w-01');
   });
 });
 

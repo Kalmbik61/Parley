@@ -162,7 +162,7 @@ beforeEach(() => {
   useUiStore.setState({
     windowFocused: true,
     wakePaused: null,
-    dialogs: { newWork: { open: false, projectPath: null, title: '' }, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null, restartHost: false },
+    dialogs: { newWork: { open: false, projectPath: null, title: '' }, newSession: { open: false, work: null, room: false }, settings: false, mergeRoom: null, restartHost: false },
     visibleSessionRefs: {},
     ui: DEFAULT_UI,
     uiLoaded: true,
@@ -1125,22 +1125,24 @@ describe('AppShell — сайдбар карточек (кусок 3.3)', () => 
     fireEvent.click(screen.getByRole('button', { name: /^New workspace\s*⌘N$/ }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText('New workspace')).toBeTruthy();
-    expect(within(dialog).getByRole('button', { name: 'Create' })).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'Create workspace' })).toBeTruthy();
   });
 
-  it('кусок 3.5, тест 7: «+» заголовка проекта — форма с этим проектом; меню new-work — без проекта', async () => {
+  it('кусок 3.5, тест 7: «+» заголовка проекта — диалог 1.7 с этим проектом; меню new-work — с проектом активной работы (кусок 7)', async () => {
     await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
 
     fireEvent.click(screen.getByRole('button', { name: /^New workspace in / }));
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByRole('combobox', { name: 'Project' }).getAttribute('title')).toBe('/tmp/w-01');
+    const chosen = within(dialog).getByRole('radio', { name: 'w-01' });
+    expect(chosen.getAttribute('title')).toBe('/tmp/w-01');
+    expect(chosen.getAttribute('aria-checked')).toBe('true');
     fireEvent.keyDown(dialog, { key: 'Escape' });
     await flush();
     expect(useUiStore.getState().dialogs.newWork).toEqual({ open: false, projectPath: null, title: '' });
 
     act(() => bridge.emitMenu('work.new'));
     const again = await screen.findByRole('dialog');
-    expect(within(again).getByRole('combobox', { name: 'Project' }).textContent).toBe('Choose a folder…');
+    expect(within(again).getByRole('radio', { name: 'w-01' }).getAttribute('aria-checked')).toBe('true');
   });
 
   it('клик по строке сессии неактивной работы: работа активна, вкладка её терминала открыта', async () => {
@@ -1405,17 +1407,16 @@ describe('AppShell — меню сайдбара (кусок 3.4)', () => {
     expect(layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id))).toEqual([tabId.room('r-01')]);
   });
 
-  it('«New room» из меню карточки (тест 10): заголовок New room, кандидаты — все сессии работы, закрытая недоступна', async () => {
-    const closed = { ...session('s-03', 'три'), lifecycle: 'closed' as const };
-    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один'), session('s-02', 'два'), closed])]);
+  it('«New room» из меню карточки (кусок 7): диалог 1.5 открыт комнатой — заголовок New room и два агента', async () => {
+    bridge.setHandler('providers.list', async () => ({ providers: [{ id: 'claude', label: 'Claude', available: true }] }));
+    bridge.setHandler('worktrees.available', async () => ({ available: false }));
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один'), session('s-02', 'два')])]);
     fireEvent.contextMenu(document.querySelector(`[data-work-key="${keyOf('w-01')}"]`) as HTMLElement);
     fireEvent.click(screen.getByText('New room'));
 
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByRole('heading', { name: 'New room' })).toBeTruthy();
-    const boxes = within(dialog).getAllByRole('checkbox') as HTMLButtonElement[];
-    expect(boxes.map((box) => box.closest('label')?.textContent)).toEqual(['S01 один', 'S02 два', 'S03 три']);
-    expect(boxes.map((box) => box.disabled)).toEqual([false, false, true]);
+    expect(dialog.querySelectorAll('[data-agent-row]')).toHaveLength(2);
   });
 });
 
@@ -1767,17 +1768,17 @@ describe('AppShell — действия 6.3 из палитры (тесты 8, 9
     await waitFor(() => expect(vi.mocked(toast)).toHaveBeenCalledWith("Couldn't restart host: host error."));
   });
 
-  it('New session — диалог с родителем, выбранной сессией (как ⌘T)', async () => {
+  it('New session or room — диалог 1.5 активной работы одним агентом (как ⌘T)', async () => {
     await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
     await activateWithTerminal(keyOf('w-01'), 's-01');
     await pickInPalette('New session', /^New session/);
-    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: true, parentSessionId: 's-01', work: null });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: true, work: null, room: false });
   });
 
-  it('New room — «Создать комнату» активной работы без обязательного участника', async () => {
+  it('New room — тот же диалог активной работы, открытый комнатой (два агента)', async () => {
     await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
     await pickInPalette('New room', /^New room/);
-    expect(useUiStore.getState().dialogs.createRoom).toEqual({ projectPath: '/tmp/w-01', workId: 'w-01', requiredMember: null });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: true, work: null, room: true });
   });
 
   it('Pause auto-wake — wake.pause; отказ — тост Couldn\'t toggle auto-wake: …', async () => {

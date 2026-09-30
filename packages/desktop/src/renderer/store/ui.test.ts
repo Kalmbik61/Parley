@@ -9,9 +9,9 @@ beforeEach(() => {
     wakePaused: null,
     dialogs: {
       newWork: false,
-      newSession: { open: false, parentSessionId: null, work: null },
+      newSession: { open: false, work: null, room: false },
       settings: false,
-      createRoom: null,
+      mergeRoom: null,
       restartHost: false,
     },
     showArchived: false,
@@ -32,35 +32,35 @@ describe('useUiStore диалоги', () => {
     expect(useUiStore.getState().dialogs.newWork).toEqual({ open: false, projectPath: null, title: '' });
   });
 
-  it('новая сессия — помнит родителя', () => {
-    useUiStore.getState().openNewSessionDialog('s-01');
-    expect(useUiStore.getState().dialogs.newSession).toEqual({
-      open: true,
-      parentSessionId: 's-01',
-      work: null,
-    });
+  it('новая сессия — диалог 1.5 открывается на активной работе, одним агентом; закрытие его сбрасывает', () => {
+    useUiStore.getState().openNewSessionDialog();
+    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: true, work: null, room: false });
     useUiStore.getState().closeNewSessionDialog();
-    expect(useUiStore.getState().dialogs.newSession).toEqual({
-      open: false,
-      parentSessionId: null,
-      work: null,
-    });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: false, work: null, room: false });
   });
 
   it('новая сессия из меню карточки помнит свою работу; закрытие её забывает (кусок 3.4)', () => {
-    useUiStore.getState().openNewSessionDialog(null, { projectPath: '/tmp/p', workId: 'w-02' });
+    useUiStore.getState().openNewSessionDialog({ projectPath: '/tmp/p', workId: 'w-02' });
     expect(useUiStore.getState().dialogs.newSession).toEqual({
       open: true,
-      parentSessionId: null,
       work: { projectPath: '/tmp/p', workId: 'w-02' },
+      room: false,
     });
     useUiStore.getState().closeNewSessionDialog();
     expect(useUiStore.getState().dialogs.newSession.work).toBeNull();
   });
 
-  it('«New room» из меню карточки — createRoom без обязательного участника (кусок 3.4)', () => {
-    useUiStore.getState().openCreateRoomDialog({ projectPath: '/tmp/p', workId: 'w-01', requiredMember: null });
-    expect(useUiStore.getState().dialogs.createRoom).toEqual({ projectPath: '/tmp/p', workId: 'w-01', requiredMember: null });
+  it('«New room» (меню карточки, палитра) — тот же диалог, открытый комнатой; закрытие сбрасывает и это', () => {
+    useUiStore.getState().openNewSessionDialog({ projectPath: '/tmp/p', workId: 'w-01' }, { room: true });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({
+      open: true,
+      work: { projectPath: '/tmp/p', workId: 'w-01' },
+      room: true,
+    });
+    useUiStore.getState().closeNewSessionDialog();
+    expect(useUiStore.getState().dialogs.newSession.room).toBe(false);
+    useUiStore.getState().openNewSessionDialog(undefined, { room: true });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: true, work: null, room: true });
   });
 });
 
@@ -259,25 +259,17 @@ describe('useUiStore.patchUi / setAppearance / setSidebar (кусок 2.3, те�
   });
 });
 
-describe('useUiStore — форма работы с названием и «Создать комнату с…» (куски 2.3, 6.2)', () => {
+describe('useUiStore — форма работы с названием (кусок 6.2) и диалог 1.6 (кусок 7)', () => {
   it('openNewWorkDialog(null, X) — форма с названием X («Create workspace …» палитры, кусок 6.2)', () => {
     useUiStore.getState().openNewWorkDialog(null, 'X');
     expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: null, title: 'X' });
   });
 
-  it('openCreateRoomDialog/closeCreateRoomDialog', () => {
-    useUiStore.getState().openCreateRoomDialog({
-      projectPath: '/tmp/p',
-      workId: 'w-01',
-      requiredMember: { id: 's-01', label: 'S01 план' },
-    });
-    expect(useUiStore.getState().dialogs.createRoom).toEqual({
-      projectPath: '/tmp/p',
-      workId: 'w-01',
-      requiredMember: { id: 's-01', label: 'S01 план' },
-    });
-    useUiStore.getState().closeCreateRoomDialog();
-    expect(useUiStore.getState().dialogs.createRoom).toBeNull();
+  it('openMergeRoomDialog/closeMergeRoomDialog — бросили одну сессию на другую (диалог 1.6)', () => {
+    useUiStore.getState().openMergeRoomDialog({ projectPath: '/tmp/p', workId: 'w-01', dragged: 's-03', target: 's-02' });
+    expect(useUiStore.getState().dialogs.mergeRoom).toEqual({ projectPath: '/tmp/p', workId: 'w-01', dragged: 's-03', target: 's-02' });
+    useUiStore.getState().closeMergeRoomDialog();
+    expect(useUiStore.getState().dialogs.mergeRoom).toBeNull();
   });
 });
 

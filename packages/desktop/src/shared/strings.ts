@@ -112,8 +112,10 @@ export const S = {
      */
     roomTooltip: (lead: string | null, members: readonly string[]): string =>
       ['Room', ...(lead === null ? [] : [`lead ${lead}`]), ...(members.length === 0 ? [] : [members.join(', ')])].join(' · '),
-    /** Строка под строками активной карточки: открывает диалог новой сессии (⌘T); «+» рисует значок. */
+    /** Строка под строками активной карточки: открывает диалог «New session or room» (⌘T); «+» рисует значок. */
     newSessionOrRoom: 'New session or room',
+    /** «Couldn't <действие>: …» тоста, когда бросок сессии на строку комнаты (`rooms.addMember`) не удался. */
+    addToRoomAction: 'add the session to the room',
     sessionMenu: {
       open: 'Open',
       /** Кусок 3.4: сплит вправо с вкладкой терминала сессии. */
@@ -123,7 +125,6 @@ export const S = {
       resume: 'Resume',
       stop: 'Stop',
       closeEllipsis: 'Close…',
-      createRoomWith: 'Create room with…',
       changes: 'Changes',
       stopConfirmTitle: (label: string): string => `Stop "${label}"?`,
       closeConfirmTitle: (label: string): string => `Close "${label}"?`,
@@ -201,36 +202,85 @@ export const S = {
 
   /** Общие диалоги, не привязанные к своей области (mail/rooms/settings/…). */
   dialogs: {
+    /** Название комнаты, если человек его не ввёл (диалоги 1.5 и 1.6, 2.1): по числу комнат работы. */
+    defaultRoomTitle: (n: number): string => `Room ${n}`,
+    /**
+     * Диалог «New session or room» (кусок 7 плана «Organic», спека окна 2026-09-29, 1.5) —
+     * `components/dialogs/NewSessionOrRoomDialog.tsx`: один агент — сессия, два и больше — комната с ведущим.
+     */
     newSession: {
-      title: 'New session',
-      providerPlaceholder: 'Provider…',
-      labelField: 'Label',
-      taskField: 'Task',
-      taskPlaceholder: 'Empty — quiet start; the agent gets the task as its first message',
-      childOfSelected: 'Child of selected',
+      titleSession: 'New session',
+      titleRoom: 'New room',
+      hintSession: 'Add another agent to make it a room.',
+      hintRoom: 'The agents discuss the task you write in the room. The lead brings you a decision.',
+      workspaceField: 'Workspace',
+      /** Пункт списка работ: название работы и папка проекта — данные, идут как есть. */
+      workspaceOption: (title: string, project: string): string => `${title} · ${project}`,
+      noWorkspaces: 'No active workspaces',
+      sessionNameField: 'Session name',
+      sessionNamePlaceholder: 'Optional',
+      roomNameField: 'Room name',
+      roomNamePlaceholder: 'What the agents will discuss',
+      agentsField: 'Agents',
+      /** Имя для скринридера группы провайдеров одной строки агента: `Agent 2`. */
+      agentGroup: (n: number): string => `Agent ${n}`,
+      modelField: 'Model',
+      /** Первый пункт списка моделей: без флага `--model`, модель CLI по умолчанию (решение 5). */
+      modelDefault: 'Default',
+      effortField: 'Effort',
+      effortLow: 'Low',
+      effortMedium: 'Medium',
+      effortHigh: 'High',
+      /** Тултип звезды: `Lead` у ведущего, `Make lead` у прочих. */
+      lead: 'Lead',
+      makeLead: 'Make lead',
+      removeAgent: 'Remove agent',
+      addAgent: 'Add agent',
       inOwnWorktree: 'In its own worktree',
+      summarySession: (work: string): string => `One session in ${work}`,
+      summaryRoom: (agents: number, work: string): string => `Room with ${agents} agents in ${work}`,
+      submitSession: 'Start session',
+      submitRoom: 'Create room',
       selectWorkRequired: 'No workspace selected',
-      submit: 'Launch',
+      /** Итог запуска по агенту при частичном сбое; тег — короткий номер сессии `S05`. */
+      agentStarted: (tag: string): string => `${tag} started`,
     },
+    /** Диалог «New room» из двух сессий (1.6) — `components/dialogs/MergeRoomDialog.tsx`. */
+    mergeRoom: {
+      title: 'New room',
+      /** `S02 бэкенд and S03 ревью move into the room.` — ярлыки сессий идут как есть. */
+      movingInto: (first: string, second: string): string => `${first} and ${second} move into the room.`,
+      nameField: 'Name',
+      namePlaceholder: 'What the agents will discuss',
+      leadField: 'Lead',
+      submit: 'Create room',
+    },
+    /** Диалог «New workspace» (1.7) — `sidebar/NewWorkComposer.tsx` (спека Orca-UI 6.6 — поведение, 1.7 — поля). */
     newWork: {
       title: 'New workspace',
-      chooseFolderPlaceholder: 'Choose a folder…',
+      chooseFolder: 'Choose a folder…',
       titleField: 'Title',
-      goalField: 'Goal',
+      titlePlaceholder: 'Taken from the first prompt if empty',
+      promptField: 'First prompt',
+      promptPlaceholder: 'What should the agent do?',
+      submit: 'Create workspace',
       selectFolderRequired: 'Select a project folder',
-      /** Форма новой работы — `sidebar/NewWorkComposer.tsx` (кусок 3.5, спека 6.6). */
       projectField: 'Project',
-      startSession: 'Start a session',
       agentField: 'Agent',
-      createMore: 'Create more',
       titleLength: 'Title: 1–120 characters',
-      goalTooLong: 'Goal: up to 4,000 characters',
-      labelTooLong: 'Label: up to 40 characters',
-      taskTooLong: 'Task: up to 20,000 characters',
+      /** Ни названия, ни первого промпта: названию не из чего взяться. */
+      titleOrPromptRequired: 'Enter a title or a first prompt',
+      promptTooLong: 'First prompt: up to 20,000 characters',
       agentRequired: 'Select an agent',
-      agentPlaceholder: 'Agent…',
-      /** Снимок работ не принёс новую работу за 10 с — вкладка не открыта вслепую. */
-      notListedYet: 'Workspace created — it will appear in the sidebar shortly',
+    },
+    /**
+     * Снимок работ не принёс созданное за 10 с — вкладка не открыта вслепую (`lib/open-when-listed.ts`):
+     * по виду того, что создали.
+     */
+    notListedYet: {
+      work: 'Workspace created — it will appear in the sidebar shortly',
+      session: 'Session started — it will appear in the sidebar shortly',
+      room: 'Room created — it will appear in the sidebar shortly',
     },
   },
 
@@ -252,12 +302,6 @@ export const S = {
     notFound: 'Room not found',
     everyone: 'everyone',
     send: 'Send',
-    createTitle: (label: string): string => `Create room with ${label}`,
-    nameField: 'Name',
-    moreParticipants: 'More participants',
-    nameRequired: 'Name is required',
-    /** «Новая комната» из меню карточки — без обязательного участника (кусок 3.4). */
-    newRoomTitle: 'New room',
 
     // ── Вкладка комнаты (спека окна 2026-09-29, 1.3, 2.2–2.4) ──
     /** Подзаголовок шапки: `Created by you · 4 agents · lead S01 · {работа}`. */
@@ -658,8 +702,8 @@ export const S = {
     goToFile: 'Go to file',
     findInFiles: 'Find in files',
     newWorkspace: 'New workspace',
-    // «New session or room» (спека окна 2026-09-29, 1.9): пока диалога 1.5 нет (кусок 7), пункт открывает
-    // прежний диалог ⌘T; «New room» остаётся отдельным пунктом палитры до куска 7.
+    // «New session or room» (спека окна 2026-09-29, 1.9): диалог 1.5, как ⌘T; «New room» — тот же диалог, открытый
+    // сразу с двумя агентами (комнатой).
     newSession: 'New session or room',
     newRoom: 'New room',
     workspaceNumber: (n: number): string => `Workspace ${n}`,

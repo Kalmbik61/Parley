@@ -6,6 +6,11 @@
  * Компоненты раскладки только объявляют droppable и sortable с `data` вида
  * `DropTargetData`, а тащимые — `DragSourceData`; что куда бросили, решает
  * этот модуль.
+ *
+ * Кусок 7 плана «Organic» (спека окна 2026-09-29, 2.5): строки сайдбара тоже цели броска — сессию бросают на другую
+ * сессию (диалог 1.6) или на строку комнаты (`rooms.addMember`). Такой бросок разбирает `sidebarDropFromDragEnd`,
+ * а что он значит для карты работы и можно ли его сделать — `dnd-sidebar.ts`; в раскладку он не попадает
+ * (`dropFromDragEnd` для него `null`).
  */
 
 import type {
@@ -52,11 +57,15 @@ export interface DragSourceData {
   item: DragItem;
 }
 
-/** `data` каждого droppable и sortable раскладки; `workKey` — работа-владелец. */
+/** Строка сайдбара, на которую можно бросить сессию (2.5): строка сессии вне комнат или строка комнаты. */
+export type SidebarTarget = { kind: 'session-row'; sessionId: string } | { kind: 'room-row'; roomId: string };
+
+/** `data` каждого droppable и sortable раскладки и сайдбара; `workKey` — работа-владелец. */
 export type DropTargetData = { workKey: string } & (
   | { kind: 'strip'; groupId: string; index: number } // вкладка строки или хвост строки
   | { kind: 'body'; groupId: string } // центр или край — по zoneForPoint
   | { kind: 'terminal'; sessionId: string } // поверхность терминала
+  | SidebarTarget // строка сессии или комнаты в сайдбаре
 );
 
 /**
@@ -71,6 +80,10 @@ export const dndId = {
   terminal: (workKey: string, tabId: string): string => `terminal\u0000${workKey}\u0000${tabId}`,
   session: (workKey: string, sessionId: string): string =>
     `session\u0000${workKey}\u0000${sessionId}`,
+  // Цели броска в сайдбаре (2.5): тот же ключ работы — `s-01` есть у каждой работы.
+  sessionRow: (workKey: string, sessionId: string): string =>
+    `session-row\u0000${workKey}\u0000${sessionId}`,
+  roomRow: (workKey: string, roomId: string): string => `room-row\u0000${workKey}\u0000${roomId}`,
   // Ключ корня, а не работы: у проекта и worktree сессий одни и те же относительные пути.
   file: (rootKey: string, path: string): string => `file\u0000${rootKey}\u0000${path}`,
 };
@@ -140,7 +153,11 @@ function isDropTarget(data: unknown): data is DropTargetData {
   const value = data as { workKey?: unknown; kind?: unknown };
   return (
     typeof value.workKey === 'string' &&
-    (value.kind === 'strip' || value.kind === 'body' || value.kind === 'terminal')
+    (value.kind === 'strip' ||
+      value.kind === 'body' ||
+      value.kind === 'terminal' ||
+      value.kind === 'session-row' ||
+      value.kind === 'room-row')
   );
 }
 
@@ -181,6 +198,8 @@ export function layoutCollision(
         ? (raw as DragItem)
         : null;
     const takesTerminal = item !== null && accepts(item);
+    // Строки сайдбара (2.5) берут только сессию: вкладка и файл на сессию или комнату не значат ничего.
+    const takesSidebar = item?.kind === 'session';
 
     const hits: { container: DroppableContainer; data: DropTargetData; area: number }[] = [];
     for (const container of droppableContainers) {
@@ -188,6 +207,7 @@ export function layoutCollision(
       const data: unknown = container.data.current;
       if (!isDropTarget(data) || data.workKey !== activeWorkKey) continue;
       if (data.kind === 'terminal' && !takesTerminal) continue;
+      if ((data.kind === 'session-row' || data.kind === 'room-row') && !takesSidebar) continue;
       const rect = droppableRects.get(container.id);
       if (rect === undefined || !contains(rect, point)) continue;
       hits.push({ container, data, area: rect.width * rect.height });
@@ -327,6 +347,10 @@ export function dropFromDragEnd(event: DragEndEvent): { item: DragItem; zone: Dr
   if (!isDropTarget(data)) return null;
   const point = pointerOf(event);
   switch (data.kind) {
+    case 'session-row':
+    case 'room-row':
+      // Бросок в сайдбар — не в раскладку: его разбирает `sidebarDropFromDragEnd`.
+      return null;
     case 'terminal':
       return { item, zone: { kind: 'terminal', sessionId: data.sessionId } };
     case 'body':
@@ -347,5 +371,26 @@ export function dropFromDragEnd(event: DragEndEvent): { item: DragItem; zone: Dr
         zone: { kind: 'strip', groupId: data.groupId, index: data.index + (after ? 1 : 0) },
       };
     }
+  }
+}
+
+/**
+ * Бросок сессии на строку сайдбара (2.5): какая сессия, на какую строку и в какой работе (`workKey` строки-цели).
+ * `null` — бросок не сессии или не на строку сайдбара. Можно ли такой бросок и что он значит, решает
+ * `resolveSidebarDrop` (`dnd-sidebar.ts`): здесь только разбор события.
+ */
+export function sidebarDropFromDragEnd(
+  event: DragEndEvent,
+): { workKey: string; sessionId: string; target: SidebarTarget } | null {
+  const item = dragItemOf(event.active.data.current);
+  const over: unknown = event.over?.data.current;
+  if (item?.kind !== 'session' || !isDropTarget(over)) return null;
+  switch (over.kind) {
+    case 'session-row':
+      return { workKey: over.workKey, sessionId: item.sessionId, target: { kind: 'session-row', sessionId: over.sessionId } };
+    case 'room-row':
+      return { workKey: over.workKey, sessionId: item.sessionId, target: { kind: 'room-row', roomId: over.roomId } };
+    default:
+      return null;
   }
 }

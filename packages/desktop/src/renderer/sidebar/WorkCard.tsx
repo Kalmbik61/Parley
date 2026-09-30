@@ -20,8 +20,8 @@
  *
  * Кусок 5 плана «Organic» (спека окна 2026-09-29, 1.2): состав строк — `sort.ts#cardRows`: участник комнаты
  * отдельной строкой не выводится, на его месте стоит строка комнаты (`RoomRow`), комнаты без живых участников — в
- * конце. Под строками активной карточки со статусом `active` — `+ New session or room`: пока диалога 1.5 нет
- * (кусок 7), она открывает прежний диалог ⌘T этой работы, как пункт палитры.
+ * конце. Под строками активной карточки со статусом `active` — `+ New session or room`: она открывает диалог 1.5
+ * (кусок 7) этой работы, как ⌘T и пункт палитры.
  */
 
 import { memo, useRef, useState } from 'react';
@@ -317,8 +317,8 @@ export const WorkCard = memo(function WorkCard({
           type="button"
           onClick={(event) => {
             event.stopPropagation();
-            // Как ⌘T (`AppShell`, `session.new`): родитель — выбранная сессия; работа — эта, она же активная.
-            useUiStore.getState().openNewSessionDialog(selectedSessionId, { projectPath, workId: map.work.id });
+            // Как ⌘T (`AppShell`, `session.new`): диалог 1.5; работа — эта, она же активная.
+            useUiStore.getState().openNewSessionDialog({ projectPath, workId: map.work.id });
           }}
           className={cn(
             // Основной цвет на hover — явно, как у «N more closed» выше: в приглушённом поддереве он равен вторичному.

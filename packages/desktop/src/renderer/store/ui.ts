@@ -26,16 +26,18 @@ export interface DialogsState {
    */
   newWork: { open: boolean; projectPath: string | null; title: string };
   /**
-   * `work` — работа диалога: «New session» из меню карточки передаёт свою, и у неактивной
-   * карточки диалог не должен уйти в чужую работу; `null` — активная работа (⌘T).
+   * Диалог «New session or room» (кусок 7 плана «Organic», спека окна 2026-09-29, 1.5). `work` — работа диалога:
+   * «New session» из меню карточки передаёт свою, и у неактивной карточки диалог не должен уйти в чужую работу;
+   * `null` — активная работа (⌘T). `room` — «New room» (меню карточки, палитра): диалог открывается сразу с двумя
+   * агентами, то есть комнатой.
    */
-  newSession: { open: boolean; parentSessionId: string | null; work: DialogWork | null };
+  newSession: { open: boolean; work: DialogWork | null; room: boolean };
   settings: boolean;
   /**
-   * «Создать комнату с…» (кусок 2.3). `requiredMember` — сессия, с которой открыли пункт
-   * меню строки; `null` — «New room» из меню карточки (кусок 3.4), обязательного нет.
+   * Диалог «New room» из двух сессий (1.6): сессию `dragged` бросили на сессию `target` той же работы; `null` — диалог
+   * закрыт. Название и ведущий — состояние самого диалога: в стор попадает только то, что нужно, чтобы его открыть.
    */
-  createRoom: { projectPath: string; workId: string; requiredMember: { id: string; label: string } | null } | null;
+  mergeRoom: (DialogWork & { dragged: string; target: string }) | null;
   /**
    * Подтверждение перезапуска хоста (кусок 6.3): одно на «Host is outdated — restart» строки
    * статуса и действие палитры `host.restart`. Строка статуса с 4.2 работает на пропах —
@@ -46,9 +48,9 @@ export interface DialogsState {
 
 const CLOSED_DIALOGS: DialogsState = {
   newWork: { open: false, projectPath: null, title: '' },
-  newSession: { open: false, parentSessionId: null, work: null },
+  newSession: { open: false, work: null, room: false },
   settings: false,
-  createRoom: null,
+  mergeRoom: null,
   restartHost: false,
 };
 
@@ -136,12 +138,13 @@ export interface UiState {
   setComposerDraft: (draftKey: string, draft: string) => void;
   openNewWorkDialog: (projectPath?: string | null, title?: string) => void;
   closeNewWorkDialog: () => void;
-  openNewSessionDialog: (parentSessionId: string | null, work?: DialogWork) => void;
+  /** `work` — работа диалога (`null` — активная); `room` — открыть сразу комнатой, с двумя агентами. */
+  openNewSessionDialog: (work?: DialogWork, options?: { room?: boolean }) => void;
   closeNewSessionDialog: () => void;
   openSettingsDialog: () => void;
   closeSettingsDialog: () => void;
-  openCreateRoomDialog: (input: NonNullable<DialogsState['createRoom']>) => void;
-  closeCreateRoomDialog: () => void;
+  openMergeRoomDialog: (input: NonNullable<DialogsState['mergeRoom']>) => void;
+  closeMergeRoomDialog: () => void;
   confirmRestartHost: () => void;
   closeRestartHostDialog: () => void;
   toggleShowArchived: () => void;
@@ -243,18 +246,18 @@ export const useUiStore = create<UiState>((set, get) => {
       })),
     closeNewWorkDialog: () =>
       set((state) => ({ dialogs: { ...state.dialogs, newWork: { open: false, projectPath: null, title: '' } } })),
-    openNewSessionDialog: (parentSessionId, work) =>
+    openNewSessionDialog: (work, options) =>
       set((state) => ({
-        dialogs: { ...state.dialogs, newSession: { open: true, parentSessionId, work: work ?? null } },
+        dialogs: { ...state.dialogs, newSession: { open: true, work: work ?? null, room: options?.room === true } },
       })),
     closeNewSessionDialog: () =>
       set((state) => ({
-        dialogs: { ...state.dialogs, newSession: { open: false, parentSessionId: null, work: null } },
+        dialogs: { ...state.dialogs, newSession: { open: false, work: null, room: false } },
       })),
     openSettingsDialog: () => set((state) => ({ dialogs: { ...state.dialogs, settings: true } })),
     closeSettingsDialog: () => set((state) => ({ dialogs: { ...state.dialogs, settings: false } })),
-    openCreateRoomDialog: (input) => set((state) => ({ dialogs: { ...state.dialogs, createRoom: input } })),
-    closeCreateRoomDialog: () => set((state) => ({ dialogs: { ...state.dialogs, createRoom: null } })),
+    openMergeRoomDialog: (input) => set((state) => ({ dialogs: { ...state.dialogs, mergeRoom: input } })),
+    closeMergeRoomDialog: () => set((state) => ({ dialogs: { ...state.dialogs, mergeRoom: null } })),
     confirmRestartHost: () => set((state) => ({ dialogs: { ...state.dialogs, restartHost: true } })),
     closeRestartHostDialog: () => set((state) => ({ dialogs: { ...state.dialogs, restartHost: false } })),
     toggleShowArchived: () => set((state) => ({ showArchived: !state.showArchived })),

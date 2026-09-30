@@ -12,10 +12,8 @@ import { WindowNotes } from './attention/WindowNotes.js';
 import { hostMethods } from './lib/capabilities.js';
 import { useSidebarSectionsStore } from './sidebar/use-sidebar-sections.js';
 import { S } from '../shared/strings.js';
-import { selectedSessionOf, useLayoutStore } from './layout/store.js';
 import { WindowCloseQuestion } from './files/SaveChangesDialog.js';
 import { AppShell } from './shell/AppShell.js';
-import { NewSessionDialog } from './components/dialogs/NewSessionDialog.js';
 import { SettingsDialog } from './components/settings/SettingsDialog.js';
 import { useActivityStore } from './store/activity.js';
 import { useHostStore } from './store/host.js';
@@ -23,7 +21,6 @@ import { useNoticesStore } from './store/notices.js';
 import { useProvidersStore } from './store/providers.js';
 import { useUiStore } from './store/ui.js';
 import { useWorksStore } from './store/works.js';
-import { workKey } from './lib/tree-order.js';
 import { Toaster } from './ui/sonner.js';
 import { toast } from 'sonner';
 
@@ -42,11 +39,6 @@ const DEFAULT_FONT_SIZE = 14;
  * подключён (или не совпала версия), оболочки нет вовсе — показывать сайдбар
  * и раскладку, которые ещё нечем наполнить, бессмысленно.
  */
-/** Родитель новой сессии — выбранная сессия активной работы, читается в момент вызова. */
-function selectedParentId(): string | null {
-  return selectedSessionOf(useLayoutStore.getState(), useWorksStore.getState().entries)?.ref.sessionId ?? null;
-}
-
 /**
  * Бейдж Dock (кусок 4.2, спека 7.3): `badgeCount` по итогам секций сайдбара, в `app.setBadge`
  * только когда число сменилось. Подписка на стор, а не хук: `App` не должен перерисовываться
@@ -171,13 +163,6 @@ export function App(): JSX.Element {
   // напрямую (кусок 1.3 плана окна, спека 4.7).
   const [config, setConfig] = useState<HarnasConfig | null>(null);
 
-  const activeWorkKey = useLayoutStore((state) => state.activeWorkKey);
-  const entries = useWorksStore((state) => state.entries);
-  const newSessionOpen = useUiStore((state) => state.dialogs.newSession.open);
-  const newSessionParent = useUiStore((state) => state.dialogs.newSession.parentSessionId);
-  const newSessionFor = useUiStore((state) => state.dialogs.newSession.work);
-  const openNewSessionDialog = useUiStore((state) => state.openNewSessionDialog);
-  const closeNewSessionDialog = useUiStore((state) => state.closeNewSessionDialog);
   const settingsOpen = useUiStore((state) => state.dialogs.settings);
   const openSettingsDialog = useUiStore((state) => state.openSettingsDialog);
   const closeSettingsDialog = useUiStore((state) => state.closeSettingsDialog);
@@ -283,13 +268,6 @@ export function App(): JSX.Element {
     );
   }
 
-  // ⌘T (кусок 2.7): работа — активная, родитель — выбранная сессия
-  // (`selectedSessionOf`), если активна вкладка-терминал. «New session» из меню карточки
-  // (кусок 3.4) передаёт свою работу: у неактивной карточки диалог иначе ушёл бы в чужую.
-  const newSessionKey =
-    newSessionFor === null ? activeWorkKey : workKey(newSessionFor.projectPath, newSessionFor.workId);
-  const newSessionWork = entries.find((entry) => workKey(entry.projectPath, entry.map.work.id) === newSessionKey) ?? null;
-
   return (
     <>
       <AppShell
@@ -297,14 +275,6 @@ export function App(): JSX.Element {
         status={status}
         fontFamily={config?.fontFamily ?? DEFAULT_FONT_FAMILY}
         fontSize={config?.fontSize ?? DEFAULT_FONT_SIZE}
-      />
-      <NewSessionDialog
-        open={newSessionOpen}
-        bridge={bridge}
-        projectPath={newSessionWork?.projectPath ?? ''}
-        workId={newSessionWork?.map.work.id ?? null}
-        selectedSessionId={newSessionParent}
-        onOpenChange={(open) => (open ? openNewSessionDialog(selectedParentId()) : closeNewSessionDialog())}
       />
       <SettingsDialog
         open={settingsOpen}
