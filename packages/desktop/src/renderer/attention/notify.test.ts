@@ -334,6 +334,72 @@ describe('createAttentionNotifier.onWorks — решение ведущего в
     ]);
   });
 
+  /** Ответ человека на решение комнаты `r-01`, как его пишет `resolveProposal` core: письмо ведущему `s-01`. */
+  const answer = (id: string, text: string): Message =>
+    letter(id, { roomId: 'r-01', from: 'human', to: ['s-01'], text, at: '2026-01-01T00:05:00.000Z' });
+  const RETURNED = 'Returned for rework: add the tests';
+  const roomWith = (decision: Proposal | null, messages: Message[]): WorkEntry => {
+    const base = roomsEntry([room('r-01', 'Возвраты', decision)]);
+    return { ...base, map: { ...base.map, messages } };
+  };
+
+  it('после возврата на доработку новое решение (новый id) — «revised the decision», а не «collected positions»', () => {
+    const h = started();
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))])]);
+    h.notifier.onWorks([roomWith(null, [answer('m-1', RETURNED)])]);
+    h.notifier.onWorks([roomWith(proposal('p-02'), [answer('m-1', RETURNED)])]);
+    expect(h.notes.map((note) => [note.body, note.tag])).toEqual([
+      ['Возвраты · S01 collected positions', TAG],
+      ['Возвраты · S01 revised the decision', TAG],
+    ]);
+  });
+
+  it('возврат без заметки («Returned for rework.») тоже возврат', () => {
+    const h = started();
+    h.notifier.onWorks([roomWith(null, [answer('m-1', 'Returned for rework.')])]);
+    h.notifier.onWorks([roomWith(proposal('p-02'), [answer('m-1', 'Returned for rework.')])]);
+    expect(h.notes.map((note) => note.body)).toEqual(['Возвраты · S01 revised the decision']);
+  });
+
+  it('после принятия новое решение — снова «collected positions»: прежний возврат в ленте его не делает «revised»', () => {
+    const h = started();
+    // p-01 вернули, p-02 принял человек (письмо «Decision accepted.» новее возврата), ведущий принёс p-03.
+    const history = [answer('m-1', RETURNED), answer('m-2', 'Decision accepted.')];
+    h.notifier.onWorks([roomWith(proposal('p-02'), [answer('m-1', RETURNED)])]);
+    h.notifier.onWorks([roomWith(null, history)]);
+    h.notifier.onWorks([roomWith(proposal('p-03'), history)]);
+    expect(h.notes.map((note) => note.body)).toEqual([
+      'Возвраты · S01 revised the decision',
+      'Возвраты · S01 collected positions',
+    ]);
+  });
+
+  it('возврат в другой комнате «revised» не даёт: признак — возврат в ленте этой комнаты', () => {
+    const h = harness([]);
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', null), room('r-02', 'Отчёты', null)])]);
+    const base = roomsEntry([room('r-01', 'Возвраты', null), room('r-02', 'Отчёты', proposal('p-01'))]);
+    h.notifier.onWorks([{ ...base, map: { ...base.map, messages: [answer('m-1', RETURNED)] } }]);
+    expect(h.notes.map((note) => note.body)).toEqual(['Отчёты · S01 collected positions']);
+  });
+
+  it('окно открыли между возвратом и новым решением (возврат уже в базовом снимке) — «revised» всё равно', () => {
+    const h = harness([]);
+    h.notifier.onWorks([roomWith(null, [answer('m-1', RETURNED)])]);
+    h.notifier.onWorks([roomWith(proposal('p-02'), [answer('m-1', RETURNED)])]);
+    expect(h.notes.map((note) => note.body)).toEqual(['Возвраты · S01 revised the decision']);
+  });
+
+  it('«revised» после возврата — и карточкой в окне, с тем же тегом', () => {
+    const h = started();
+    h.active = true;
+    h.notifier.onWorks([roomWith(null, [answer('m-1', RETURNED)])]);
+    h.notifier.onWorks([roomWith(proposal('p-02'), [answer('m-1', RETURNED)])]);
+    expect(h.windowNotes).toEqual([
+      { tag: TAG, title: 'Decision waiting for you', body: 'Возвраты · S01 revised the decision', target: TARGET },
+    ]);
+    expect(h.notes).toEqual([]);
+  });
+
   it('работа на миг выпала из снимка и вернулась с тем же решением — второго уведомления нет', () => {
     const h = started();
     const waiting = roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))]);

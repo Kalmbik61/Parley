@@ -21,10 +21,10 @@ import { SenderAvatar } from './SenderAvatar.js';
 
 /**
  * Вид сообщения → вид тега: вопрос — accent, решение — accent-2, заметка — neutral (1.3). Лента стоит на
- * листе, где `neutral-100` светлой темы — сам лист, поэтому заметке — `neutral-sheet` (в светлой заливка
- * 200, в тёмной прежняя 100).
+ * листе, где `neutral-100` светлой темы — сам лист, а `accent-100` и `accent-2-100` от него неотличимы, поэтому
+ * все три — виды `*-sheet` (в светлой заливка 200, в тёмной прежняя 100).
  */
-const TAG_VARIANT = { question: 'accent', decision: 'accent-2', note: 'neutral-sheet' } as const;
+const TAG_VARIANT = { question: 'accent-sheet', decision: 'accent-2-sheet', note: 'neutral-sheet' } as const;
 
 export interface RoomMessageProps {
   message: MessageModel;

@@ -7,6 +7,7 @@ import {
   humanUnreadLetters,
   isHumanUnread,
   roomAwaitsDecision,
+  roomDecisionReturned,
   roomUnreadForHuman,
   sessionAttention,
   workAttention,
@@ -212,6 +213,35 @@ describe('roomAwaitsDecision (2.7)', () => {
   it('у комнаты карты до 2026-09-29 поля proposal нет вовсе — это «не ждёт»', () => {
     const old = { id: 'r-01', title: 'R', creator: 'human', members: [], createdAt: '2026-01-01T00:00:00.000Z' } as unknown as Room;
     expect(roomAwaitsDecision(old)).toBe(false);
+  });
+});
+
+// Спека окна 2026-09-29, 1.10: после `Return for rework` ведущий приносит новое решение с новым `id`, и уведомление
+// говорит «revised». Признак — последний ответ человека в ленте комнаты: письмо возврата или письмо принятия.
+describe('roomDecisionReturned (1.10)', () => {
+  const answer = (id: string, text: string, roomId = 'r-01'): Message =>
+    letter({ id, from: 'human', to: ['s-01'], roomId, text });
+  const mapOf = (messages: Message[]) => entry([session('s-01')], messages).map;
+
+  it('письмо «Returned for rework: …» и «Returned for rework.» — возврат', () => {
+    expect(roomDecisionReturned(mapOf([answer('m-1', 'Returned for rework: add the tests')]), 'r-01')).toBe(true);
+    expect(roomDecisionReturned(mapOf([answer('m-1', 'Returned for rework.')]), 'r-01')).toBe(true);
+  });
+
+  it('ответов человека ещё не было или последний — принятие («Decision accepted.») — не возврат', () => {
+    expect(roomDecisionReturned(mapOf([]), 'r-01')).toBe(false);
+    expect(roomDecisionReturned(mapOf([answer('m-1', 'Decision accepted.')]), 'r-01')).toBe(false);
+    // Возврат был, потом принято следующее решение: решает последний ответ.
+    expect(roomDecisionReturned(mapOf([answer('m-1', 'Returned for rework.'), answer('m-2', 'Decision accepted.')]), 'r-01')).toBe(false);
+    // И наоборот: принято, потом вернули следующее.
+    expect(roomDecisionReturned(mapOf([answer('m-1', 'Decision accepted.'), answer('m-2', 'Returned for rework.')]), 'r-01')).toBe(true);
+  });
+
+  it('обычные сообщения человека, чужие комнаты и письма агентов возврата не делают', () => {
+    expect(roomDecisionReturned(mapOf([answer('m-1', 'Returned for rework: x', 'r-02')]), 'r-01')).toBe(false);
+    expect(roomDecisionReturned(mapOf([letter({ id: 'm-1', from: 's-01', to: [], roomId: 'r-01', text: 'Returned for rework' })]), 'r-01')).toBe(false);
+    // Возврат, за которым человек написал в комнату что-то своё, остаётся возвратом.
+    expect(roomDecisionReturned(mapOf([answer('m-1', 'Returned for rework.'), answer('m-2', 'Also cover refunds')]), 'r-01')).toBe(true);
   });
 });
 

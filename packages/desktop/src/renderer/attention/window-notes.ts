@@ -13,9 +13,11 @@ export const WINDOW_NOTE_MS = 8_000;
 
 /**
  * Сколько карточек стоит разом. Решения ждут в разных комнатах, и каждая — своя карточка (тег, как у системных
- * уведомлений), но столбец выше трёх закрыл бы полокна: старшая уходит.
+ * уведомлений), но карточка с длинным названием комнаты выше 170px, и три подряд в окне 800×500 выходили за верх:
+ * `Open` и `Later` старшей уезжали за край. Две помещаются с запасом и вместе с тостом. Пришла третья — самая старая
+ * уходит: решение и так видно строкой комнаты, вкладкой и счётчиком «нужен ты», а карточка — только оклик.
  */
-const SHOWN_MAX = 3;
+const SHOWN_MAX = 2;
 
 export interface WindowNote {
   /** Один тег — одна карточка: новое уведомление той же комнаты заменяет прежнее, как у macOS (`main/notifications.ts`). */
@@ -33,7 +35,10 @@ export interface ShownWindowNote extends WindowNote {
 
 export interface WindowNotesState {
   notes: ShownWindowNote[];
-  /** Показывает карточку; с тем же тегом заменяет прежнюю и ставит её последней (самой нижней). */
+  /**
+   * Показывает карточку; с тем же тегом заменяет прежнюю. Новая — первая в списке, то есть самая верхняя: столбец
+   * прижат к низу и растёт вверх, стоящие карточки не сдвигаются, а старейшая (последняя) при переполнении уходит.
+   */
   show: (note: WindowNote) => void;
   /**
    * Скрывает карточку с тегом. `seq` — номер показа, который скрывает вызывающий: таймер заменённой карточки
@@ -49,7 +54,7 @@ export const useWindowNotesStore = create<WindowNotesState>((set) => ({
   show: (note) => {
     lastSeq += 1;
     const shown: ShownWindowNote = { ...note, seq: lastSeq };
-    set((state) => ({ notes: [...state.notes.filter((item) => item.tag !== note.tag), shown].slice(-SHOWN_MAX) }));
+    set((state) => ({ notes: [shown, ...state.notes.filter((item) => item.tag !== note.tag)].slice(0, SHOWN_MAX) }));
   },
   dismiss: (tag, seq) =>
     set((state) => {

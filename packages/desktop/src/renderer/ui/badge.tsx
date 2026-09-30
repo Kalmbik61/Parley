@@ -4,9 +4,11 @@
  * (фон accent-100, текст accent-800) — вопрос, `accent-2` — решение, `neutral` — заметка; текст на
  * фоне — не ниже 4.5:1 в обеих темах (`styles/tokens.test.ts`).
  *
- * `neutral-sheet` — заметка на листе центра (лента комнаты): в светлой теме `neutral-100` — это сам лист
- * (`--sheet` = #f9f4ed), и обычный `neutral` слился бы с ним; там заливка — `neutral-200`. В тёмной лист
- * `#0b0a09`, и `neutral-100` на нём виден, как на снимке handoff `dark-08`, — она и остаётся. Текст 800.
+ * `neutral-sheet`, `accent-sheet`, `accent-2-sheet` — теги заметки, вопроса и решения на листе центра (лента
+ * комнаты): в светлой теме `neutral-100` — это сам лист (`--sheet` = #f9f4ed), а `accent-100` и `accent-2-100` от него
+ * на 1.00–1.01:1, и обычный тег слился бы с ним; там заливка — 200 своей рампы (от листа на 1.11–1.13:1, текст 800 на
+ * ней не ниже 8:1). В тёмной лист `#0b0a09`, и 100 на нём видна, как на снимке handoff `dark-08`, — она и остаётся.
+ * Ступени и пары держит `styles/tokens.test.ts`, читая их из этих классов.
  */
 
 import type { HTMLAttributes } from 'react';
@@ -20,6 +22,8 @@ const badgeVariants = cva('inline-flex items-center rounded-full px-2.5 py-[3px]
       'accent-2': 'bg-accent-2-100 text-accent-2-800',
       neutral: 'bg-neutral-100 text-neutral-800',
       'neutral-sheet': 'bg-neutral-200 text-neutral-800 dark:bg-neutral-100',
+      'accent-sheet': 'bg-accent-200 text-accent-800 dark:bg-accent-100',
+      'accent-2-sheet': 'bg-accent-2-200 text-accent-2-800 dark:bg-accent-2-100',
     },
   },
   defaultVariants: { variant: 'neutral' },

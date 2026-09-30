@@ -2,7 +2,7 @@ import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { setProposal, updateMap } from '@harnas/core';
+import { addRoom, addSession, HUMAN, setProposal, updateMap } from '@harnas/core';
 import { quitApp, stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
@@ -16,11 +16,13 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * подложенные тестом (в `room-row.spec.ts` решение клал ядром сам тест). Строку в терминал агента тест отправляет так
  * же, как набрал бы человек, — уведомлением `pty.input` хоста.
  *
- * Первый тест — весь сценарий: карточка, подкраска, уведомления, замена, `Accept`, новое решение, возврат с заметкой.
- * Второй — «то же решение второй раз не уведомляет»: ни после перезапуска окна (хост переживает окно, решение в карте
- * ждёт), ни после переподключения к хосту («Restart host»). Замену решения после каждого из событий он кладёт сам и
- * видит по журналу, что уведомитель жив и молчал именно из-за базы, а не потому, что сломан. Третий — клик по
- * уведомлению macOS (запись журнала) ведёт во вкладку комнаты: цель `FocusTarget { kind: 'room' }`.
+ * Первый тест — весь сценарий: карточка, подкраска, уведомления, замена, `Accept`, новое решение, возврат с заметкой и
+ * исправленное решение после него («revised», а не «collected positions»). Второй — «то же решение второй раз не
+ * уведомляет»: ни после перезапуска окна (хост переживает окно, решение в карте ждёт), ни после переподключения к
+ * хосту («Restart host»). Замену решения после каждого из событий он кладёт сам и видит по журналу, что уведомитель
+ * жив и молчал именно из-за базы, а не потому, что сломан. Третий — клик по уведомлению macOS (запись журнала) ведёт
+ * во вкладку комнаты: цель `FocusTarget { kind: 'room' }`. Четвёртый — стопка карточек в окне 800×500: не больше двух,
+ * новая сверху, кнопки в окне, а тост sonner встаёт над ними, не на кнопки (раскладку считает только настоящий Chromium).
  *
  * Уведомления main пишет в журнал (`HARNAS_NOTIFICATIONS=log`, `playwright.config.ts`): настоящее всплыло бы на экране
  * человека. Окно в фокусе или без него тест задаёт событиями `focus` / `blur` — фокус ОС между окнами гуляет
@@ -36,6 +38,7 @@ let project = '';
 const PROPOSAL = 'Contract first, then code: @s02 writes the tests, I take the API.';
 const PROPOSAL_REVISED = 'Contract first, then code: @s02 writes the tests and the review, I take the API.';
 const PROPOSAL_SECOND = 'Roll out behind a flag: @s02 checks the refund edge cases.';
+const PROPOSAL_REWORKED = 'Roll out behind a flag with a rollback step: @s02 checks the refund edge cases.';
 const RETURN_NOTE = 'Add a rollback step';
 const NOTE_TITLE = 'Decision waiting for you';
 
@@ -285,6 +288,16 @@ test.describe('решение ведущего: настоящий harnas-mcp, �
     await agentCalls(window, leadRef, 'check_inbox', {});
     await sendFocusTarget(electronApp, { kind: 'session', ref: leadRef });
     await expect.poll(() => screenText(window), { timeout: 20_000 }).toContain(`Returned for rework: ${RETURN_NOTE}`);
+
+    // 6. Ведущий переделал и предлагает снова: решение новое (новый id), но после возврата уведомление говорит «revised»
+    // (спека 1.10), а не «collected positions». Окно в фокусе, на виду терминал ведущего — карточка в окне.
+    await agentCalls(window, leadRef, 'propose_decision', { room: roomId, text: PROPOSAL_REWORKED });
+    await expect(note).toHaveCount(1, { timeout: 20_000 });
+    await expect(note).toContainText(NOTE_TITLE);
+    await expect(note).toContainText('e2e-room · S01 revised the decision');
+    await expect(note).not.toContainText('collected positions');
+    expect((await workMap(window, workId)).rooms.find((item) => item.id === roomId)?.proposal).toMatchObject({ id: 'p-03', rev: 0 });
+    expect(await decisionNotes(electronApp)).toHaveLength(2);
   });
 
   test('решение, что уже ждёт, не уведомляет заново — ни после перезапуска окна, ни после переподключения к хосту', async () => {
@@ -351,5 +364,87 @@ test.describe('решение ведущего: настоящий harnas-mcp, �
     await expect(roomTab).toHaveAttribute('data-active', 'true');
     await expect(window.locator('[data-decision-card]')).toHaveAttribute('data-proposal-id', 'p-01');
     await expect(window.locator('[data-decision-card]')).toContainText('Contract first, then code');
+  });
+
+  test('стопка карточек в окне 800×500: не больше двух, новая сверху, кнопки в окне; тост встаёт над ними, а не на кнопки', async () => {
+    test.setTimeout(90_000);
+    const { electronApp, window } = await launch();
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 800, height: 500 }));
+    await expect(window.getByTestId('landing')).toBeVisible();
+
+    // Три комнаты с длинными названиями (самая высокая карточка — 6–7 строк текста) кладёт тест ядром: сессии не
+    // запускаются, процессов агентов нет; решения ляжут по одному — каждое отдельным снимком, а не базой.
+    const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: 'e2e-notes-stack', goal: '' });
+    const rooms: Array<{ id: string; lead: string }> = [];
+    await updateMap(project, workId, (map) => {
+      rooms.length = 0;
+      for (const letter of ['R', 'Q', 'T']) {
+        const lead = addSession(map, { provider: 'claude', label: `lead-${letter}`, task: '' }).id;
+        const member = addSession(map, { provider: 'claude', label: `member-${letter}`, task: '' }).id;
+        const room = addRoom(map, { title: `Room-${letter.repeat(110)}`, creator: HUMAN, members: [lead, member], lead });
+        rooms.push({ id: room.id, lead });
+      }
+    });
+    await expect(window.locator('[data-room-row]')).toHaveCount(3, { timeout: 20_000 });
+
+    // Окно в фокусе, ни одна вкладка комнаты не открыта: решения показываются карточками в окне.
+    await window.evaluate(() => globalThis.dispatchEvent(new Event('focus')));
+    const cards = window.locator('[data-window-note]');
+    for (const room of rooms) {
+      await updateMap(project, workId, (map) => {
+        setProposal(map, room.id, room.lead, 'Roll out behind a flag: the refund edge cases first.');
+      });
+      // По одному: каждое решение — свой снимок карты и своя карточка.
+      await expect(window.locator(`[data-window-note$=":${room.id}"]`)).toHaveCount(1, { timeout: 20_000 });
+    }
+
+    // Не больше двух: самая старая (первая комната) ушла; новая — сверху.
+    await expect(cards).toHaveCount(2);
+    await expect(cards.nth(0)).toHaveAttribute('data-window-note', new RegExp(`:${rooms[2]?.id}$`));
+    await expect(cards.nth(1)).toHaveAttribute('data-window-note', new RegExp(`:${rooms[1]?.id}$`));
+
+    const inside = async (locator: ReturnType<Page['locator']>): Promise<boolean> => {
+      const box = await locator.boundingBox();
+      return box !== null && box.x >= 0 && box.y >= 0 && box.x + box.width <= 800 && box.y + box.height <= 500;
+    };
+    // Обе карточки целиком и их кнопки — в окне 800×500 (три такие карточки выходили за верх).
+    for (const index of [0, 1]) {
+      const card = cards.nth(index);
+      expect(await inside(card), `карточка ${index}`).toBe(true);
+      expect(await inside(card.getByRole('button', { name: 'Open', exact: true })), `Open ${index}`).toBe(true);
+      expect(await inside(card.getByRole('button', { name: 'Later', exact: true })), `Later ${index}`).toBe(true);
+    }
+
+    // Тост в том же углу: закрытие вкладки мышью. Вкладка комнаты первой (её карточку уже вытеснили) — не цель карточек.
+    await sendFocusTarget(electronApp, { kind: 'room', projectPath: project, workId, roomId: rooms[0]?.id });
+    const tab = window.locator(`[role="tab"][data-tab-id="room:${rooms[0]?.id}"]`);
+    await expect(tab).toHaveAttribute('data-active', 'true');
+    await tab.click({ button: 'middle' });
+    const toast = window.locator('[data-sonner-toast]').filter({ hasText: 'Tab closed' });
+    await expect(toast).toBeVisible();
+    await expect(cards).toHaveCount(2);
+
+    // Тост целиком в окне и не задевает ни одной карточки: он стоит над стопкой. Высоту стопки тостам отдаёт
+    // `ResizeObserver`, поэтому раскладка устаканивается за кадр-другой — ждём её, а не сравниваем сразу.
+    const overlaps = async (): Promise<boolean> => {
+      const toastBox = await toast.boundingBox();
+      if (toastBox === null) return true;
+      for (const index of [0, 1]) {
+        const box = await cards.nth(index).boundingBox();
+        if (box === null) return true;
+        const apart = toastBox.x + toastBox.width <= box.x || box.x + box.width <= toastBox.x || toastBox.y + toastBox.height <= box.y || box.y + box.height <= toastBox.y;
+        if (!apart) return true;
+      }
+      return false;
+    };
+    await expect.poll(overlaps, { timeout: 5_000 }).toBe(false);
+    expect(await inside(toast), 'тост в окне').toBe(true);
+    // Переменная жива, пока столбец стоит, и снята вместе с ним: «Later» на обеих карточках.
+    const inset = (): Promise<string> => window.evaluate(() => document.documentElement.style.getPropertyValue('--toast-inset-bottom'));
+    expect(await inset()).toMatch(/^\d+(\.\d+)?px$/);
+    await cards.nth(0).getByRole('button', { name: 'Later', exact: true }).click();
+    await cards.nth(0).getByRole('button', { name: 'Later', exact: true }).click();
+    await expect(cards).toHaveCount(0);
+    await expect.poll(inset).toBe('');
   });
 });
