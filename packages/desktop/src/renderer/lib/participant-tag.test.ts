@@ -86,6 +86,6 @@ describe('participantTag', () => {
   it('человек — «You», системное письмо — «System»', () => {
     const map = mapWith([]);
     expect(participantTag(map, 'human', null, providers)).toBe('You');
-    expect(participantTag(map, 'system', null, providers)).toBe('harnas');
+    expect(participantTag(map, 'system', null, providers)).toBe('Parley');
   });
 });

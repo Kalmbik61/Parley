@@ -6,7 +6,7 @@
  */
 import { S } from './strings.js';
 
-/** Системные меню; подписи — S.menu.edit/view/workspace/tab/terminal, у app — «Harnas», как сейчас. */
+/** Системные меню; подписи — S.menu.edit/view/workspace/tab/terminal, у app — «Parley», как сейчас. */
 export type MenuName = 'app' | 'edit' | 'view' | 'workspace' | 'tab' | 'terminal';
 export type ActionId =
   | 'palette.open' | 'files.quickOpen' | 'files.search'

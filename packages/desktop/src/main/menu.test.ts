@@ -25,9 +25,9 @@ function click(item: MenuItemConstructorOptions | undefined, event: KeyboardEven
 }
 
 describe('buildMenuTemplate (тест 1)', () => {
-  it('подписи меню — Harnas, Edit, View, Workspace, Tab, Terminal; кириллицы нет', () => {
+  it('подписи меню — Parley, Edit, View, Workspace, Tab, Terminal; кириллицы нет', () => {
     const template = buildMenuTemplate(() => {});
-    expect(template.map((item) => item.label)).toEqual(['Harnas', 'Edit', 'View', 'Workspace', 'Tab', 'Terminal']);
+    expect(template.map((item) => item.label)).toEqual(['Parley', 'Edit', 'View', 'Workspace', 'Tab', 'Terminal']);
     const labels = [...template, ...allItems(template)].map((item) => item.label ?? '');
     expect(labels.filter((label) => /[Ѐ-ӿ]/.test(label))).toEqual([]);
   });
@@ -46,10 +46,11 @@ describe('buildMenuTemplate (тест 1)', () => {
     expect(items.filter((item) => item.role === undefined).map((item) => item.label)).toEqual(['Find']);
   });
 
-  it('Harnas — about, Settings, quit', () => {
-    const app = buildMenuTemplate(() => {}).find((item) => item.label === 'Harnas');
+  it('Parley — about, Settings, quit; у about и quit явные подписи с именем продукта', () => {
+    const app = buildMenuTemplate(() => {}).find((item) => item.label === 'Parley');
     const items = app === undefined ? [] : submenuOf(app).filter((item) => item.type !== 'separator');
     expect(items.map((item) => item.role ?? item.label)).toEqual(['about', 'Settings', 'quit']);
+    expect(items.filter((item) => item.role !== undefined).map((item) => item.label)).toEqual(['About Parley', 'Quit Parley']);
   });
 
   it('клик по Command palette с triggeredByAccelerator не шлёт, мышью — шлёт palette.open', () => {

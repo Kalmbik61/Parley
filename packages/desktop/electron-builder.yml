@@ -1,7 +1,7 @@
 # Неподписанный .app для владельца (план 1.13, спека §3.2, §13): без identity,
 # без нотаризации — раздача другим не входит в v1 (спека §13).
 appId: dev.harnas.desktop
-productName: harnas
+productName: Parley
 directories:
   output: dist
 # electron-vite (`pnpm build`) кладёт готовые бандлы в out/main, out/preload,

@@ -376,7 +376,7 @@ export const S = {
     notifyMail: 'mail to you',
     notifySound: 'sound',
     /** Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */
-    notificationsHint: 'Not getting notifications? System Settings → Notifications → Harnas',
+    notificationsHint: 'Not getting notifications? System Settings → Notifications → Parley',
     /** Секция «Браузер» (кусок 9.1): куки, хранилища и кеш раздела встроенного браузера. */
     clearBrowserData: 'Clear browser data',
   },
@@ -782,7 +782,7 @@ export const S = {
   participants: {
     human: 'You',
     /** Так хост подписывает свои строки в комнате и почте — как на снимке handoff `dark-08`. */
-    system: 'harnas',
+    system: 'Parley',
     deletedSuffix: '(deleted)',
     /** Ярлык сессии, созданной без названия (`NEW_LABEL` core) — `lib/participant.ts`. */
     newSession: 'New session',
@@ -861,7 +861,7 @@ export const S = {
     discard: 'Discard',
     notSaved: (names: string): string => `Couldn't save: ${names}`,
     /** Нативный вопрос main: вопрос о закрытии ждёт, а страница зависла (fix-7.3 п. 5). */
-    unresponsive: "Harnas isn't responding. Unsaved changes may be lost.",
+    unresponsive: "Parley isn't responding. Unsaved changes may be lost.",
     quitAnyway: 'Quit anyway',
     wait: 'Wait',
     /**
@@ -999,7 +999,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'resume-limit': 'hourly resume limit reached — mail is waiting',
   'trust-wait': 'not responding since launch — may be waiting for folder trust',
   'startup-wait': 'waiting at startup — Codex may need sign-in or folder trust in its terminal',
-  'skill-foreign': "agent skill not installed — that path already exists and wasn't created by harnas",
+  'skill-foreign': "agent skill not installed — that path already exists and wasn't created by Parley",
 };
 
 /**
