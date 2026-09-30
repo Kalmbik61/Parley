@@ -4,12 +4,12 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseTomlAssignment, parseTomlValue, type TomlValue } from '../../test/toml-mini.js';
 import { MAX_TIMEOUT_SEC } from '../mcp/tools.js';
+import { MCP_SERVER_NAME } from '../names.js';
 import { CODEX_NOTIFY_ENTRY } from './codex-notify.js';
 import {
   CODEX_MCP_STARTUP_TIMEOUT_SEC,
   CODEX_MCP_TOOL_TIMEOUT_SEC,
   MCP_SERVER_ENTRY,
-  MCP_SERVER_NAME,
   codexMcpOverride,
   codexNotifyOverride,
   mcpConfig,
@@ -71,7 +71,7 @@ describe('конфиг MCP-сервера на сессию', () => {
 
   it('codex получает тот же сервер инлайн-таблицей TOML для -c', () => {
     expect(codexMcpOverride(params)).toBe(
-      `mcp_servers.harnas={command=${JSON.stringify(process.execPath)},` +
+      `mcp_servers.parley={command=${JSON.stringify(process.execPath)},` +
         `args=[${JSON.stringify(MCP_SERVER_ENTRY)}],` +
         'env={PARLEY_WORK_DIR="/project/.parley/works/w-0042",PARLEY_SESSION_ID="s-02",' +
         'HARNAS_WORK_DIR="/project/.parley/works/w-0042",HARNAS_SESSION_ID="s-02"},' +
@@ -81,7 +81,7 @@ describe('конфиг MCP-сервера на сессию', () => {
 
   it('таблица сервера — настоящий TOML: Codex не примет её за обычную строку', () => {
     const { key, value } = parseTomlAssignment(codexMcpOverride(params));
-    expect(key).toEqual(['mcp_servers', 'harnas']);
+    expect(key).toEqual(['mcp_servers', 'parley']);
     expect(value).toEqual({
       command: process.execPath,
       args: [MCP_SERVER_ENTRY],

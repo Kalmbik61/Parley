@@ -15,7 +15,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  *
  * Подготовка (решение сверки I11): stub в режиме `STUB_BRACKETED=1` печатает вставку как
  * `PASTE<<…>>`; `PARLEY_HOME` и `PARLEY_WORKTREE_ROOT` — внутри временного каталога теста:
- * корень worktree по умолчанию — `~/harnas/worktrees` настоящего дома, `PARLEY_HOME` его не
+ * корень worktree по умолчанию — `~/parley/worktrees` настоящего дома, `PARLEY_HOME` его не
  * переносит. Каждый сценарий проверяет, что worktree сессии лежит под этим корнем.
  * Git-репозитории — только во временных каталогах; буфер обмена человека не трогается.
  */
@@ -115,7 +115,7 @@ test.describe('ревью изменений: заметки, коммит, сл
     };
     await expect.poll(worktreeOf, { timeout: 10_000 }).not.toBeNull();
     const worktree = (await worktreeOf()) as { path: string; branch: string };
-    // Worktree — под корнем теста, а не в `~/harnas/worktrees` настоящего дома.
+    // Worktree — под корнем теста, а не в `~/parley/worktrees` настоящего дома.
     expect(worktree.path.startsWith(`${root}${path.sep}`)).toBe(true);
     return { app: electronApp, window, workId, sessionId, worktree: worktree.path, branch: worktree.branch };
   }

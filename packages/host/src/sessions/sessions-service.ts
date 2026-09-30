@@ -137,7 +137,7 @@ export function createSessionsService(
   // без процесса. Выход дожидается записи старта.
   const starting = new Map<string, Promise<void>>();
 
-  // Скилл `harnas` в проект и в worktree сессии перед каждым запуском (`agent-skills.ts`).
+  // Скилл `parley` в проект и в worktree сессии перед каждым запуском (`agent-skills.ts`).
   const installSkill = createSkillInstaller(host);
 
   // Закрываемые сейчас: между остановкой PTY и записью `closed` сессия успевает

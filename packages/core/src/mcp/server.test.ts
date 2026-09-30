@@ -8,6 +8,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
+import { BRANCH_PREFIX, MCP_SERVER_NAME } from '../names.js';
 import { PROVIDERS, selectableModels } from '../providers.js';
 import { GUIDE, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import {
@@ -222,6 +223,19 @@ describe('список инструментов', () => {
       'wait_for',
     ]);
     expect(tools.every((tool) => (tool.description ?? '') !== '')).toBe(true);
+  });
+
+  it('сервер называется parley (R8): так же, как его ключ в конфиге MCP, — под ним агент видит mcp__parley__*', async () => {
+    const client = await connect('s-01');
+    const { tools } = await client.listTools();
+
+    expect(client.getServerVersion()?.name).toBe(MCP_SERVER_NAME);
+    expect(client.getServerVersion()?.name).toBe('parley');
+    // Оговорка у `agent` называет тот же префикс: роль с урезанным `tools` без него ни письма, ни отчёта.
+    const spawn = tools.find((tool) => tool.name === 'spawn_session');
+    const agent = (spawn?.inputSchema.properties?.['agent'] ?? {}) as { description?: string };
+    expect(agent.description).toContain(`mcp__${MCP_SERVER_NAME}__*`);
+    expect(agent.description).not.toContain('mcp__harnas__');
   });
 
   it('propose_decision: room и text обязательны, описание — про ведущего, ожидание человека и повтор', async () => {
@@ -751,7 +765,8 @@ describe('spawn_session worktree', () => {
 
     const stored = session(await readMapFile(), 's-02');
     expect(stored.worktree).not.toBeNull();
-    expect(stored.worktree?.branch).toBe(`harnas/${workId}/s-02`);
+    expect(stored.worktree?.branch).toBe(`${BRANCH_PREFIX}${workId}/s-02`);
+    expect(stored.worktree?.branch).toBe(`parley/${workId}/s-02`);
     expect(stored.worktree?.base).toBe('main');
     expect(stored.worktree?.createdAt).toBeNull();
     expect(path.dirname(stored.worktree?.path ?? '')).toContain(worktreeRoot);
@@ -1917,7 +1932,8 @@ describe('channel: звонок про письмо (разговор агент
 
     expect(client.getServerCapabilities()?.experimental).toEqual({ 'claude/channel': {} });
     const instructions = client.getInstructions() ?? '';
-    expect(instructions).toContain('source="harnas"');
+    expect(instructions).toContain(`source="${MCP_SERVER_NAME}"`);
+    expect(instructions).toContain('source="parley"');
     expect(instructions).toContain('только на `question`');
     expect(instructions).toContain('check_inbox');
   });

@@ -368,7 +368,7 @@ export const S = {
     messageCap: 'Message cap per hour',
     resumeRate: 'Session wake-ups per hour (0…60)',
     autoLaunchPending: 'Auto-launch pending sessions',
-    /** Скилл `harnas` в папку проекта и в worktree сессий при запуске (кусок 10 плана комнат). */
+    /** Скилл `parley` в папку проекта и в worktree сессий при запуске (кусок 10 плана комнат). */
     agentSkills: 'Install agent skills into projects',
     worktreeRoot: 'Worktree root',
     notifyNeedsYou: 'needs you',

@@ -1,7 +1,7 @@
 /**
- * Скилл `harnas` при запуске сессии (кусок 10 плана комнат): хост зовёт установку из core перед
+ * Скилл `parley` при запуске сессии (кусок 10 плана комнат): хост зовёт установку из core перед
  * каждым запуском, включая `resume` и фоновый autoLaunch, — установка идемпотентна и быстра, а
- * устаревший свой скилл она заодно обновляет.
+ * устаревший свой скилл она заодно обновляет и убирает свою прежнюю установку под именем `harnas`.
  *
  * Скилл — удобство, а не условие работы агента: сбой установки запуск сессии не останавливает, он
  * пишется в `host.log`. Настройка `agentSkills` выключена — не делается ничего, ни установки, ни
@@ -12,6 +12,7 @@
 import path from 'node:path';
 import {
   installAgentSkill,
+  LEGACY_SKILL_NAME,
   loadConfig,
   SKILL_NAME,
   type SkillInstallOptions,
@@ -28,9 +29,9 @@ type Install = (options: SkillInstallOptions) => Promise<SkillInstallResult>;
 
 /** Что сказать в лог про каждый вид «не тронуто»; текст хоста — по-русски, как остальные его записи. */
 const LOG_TEXT: Record<SkillSkip['reason'], string> = {
-  foreign: 'скилл harnas не поставлен: путь уже есть, а создан не харнессом — оставлен как есть',
-  edited: 'скилл harnas не обновлён: файл правили вручную — оставлен как есть',
-  unsafe: 'скилл harnas не поставлен: по дороге к пути симлинк или файл вместо каталога',
+  foreign: 'скилл parley не поставлен: путь уже есть, а создан не харнессом — оставлен как есть',
+  edited: 'скилл parley не обновлён: файл правили вручную — оставлен как есть',
+  unsafe: 'скилл parley не поставлен: по дороге к пути симлинк или файл вместо каталога',
 };
 
 export function createSkillInstaller(
@@ -68,11 +69,14 @@ export function createSkillInstaller(
         ...(worktreePath === null ? {} : { worktreePath }),
       });
       if (result.written.length > 0) {
-        host.log.info('скилл harnas установлен или обновлён', { ref, paths: result.written });
+        host.log.info('скилл parley установлен или обновлён', { ref, paths: result.written });
+      }
+      if (result.removed.length > 0) {
+        host.log.info(`прежний скилл ${LEGACY_SKILL_NAME} убран`, { ref, paths: result.removed });
       }
       for (const skip of result.skipped) report(ref, skip);
     } catch (error) {
-      host.log.error('скилл harnas не поставлен: сбой записи, сессия запускается без него', {
+      host.log.error('скилл parley не поставлен: сбой записи, сессия запускается без него', {
         ref,
         skill: SKILL_NAME,
         error: String(error),

@@ -59,7 +59,7 @@ function fakeInstall(result: Partial<SkillInstallResult> = {}) {
   const calls: SkillInstallOptions[] = [];
   const install = async (options: SkillInstallOptions): Promise<SkillInstallResult> => {
     calls.push(options);
-    return { skipped: [], written: [], ...result };
+    return { skipped: [], written: [], removed: [], ...result };
   };
   return { calls, install };
 }
@@ -121,7 +121,7 @@ describe('установщик скилла: настройка agentSkills', ()
 
 describe('установщик скилла: что не тронуто', () => {
   it('чужой путь в проекте: строка в host.log и одно host.notice без сессии', async () => {
-    const skipped = [{ path: `${PROJECT}/.agents/skills/harnas`, reason: 'foreign' as const }];
+    const skipped = [{ path: `${PROJECT}/.agents/skills/parley`, reason: 'foreign' as const }];
     const { install } = fakeInstall({ skipped });
 
     await createSkillInstaller(fakeHost(), install)(REF, null);
@@ -139,7 +139,7 @@ describe('установщик скилла: что не тронуто', () => 
   });
 
   it('тот же путь при следующих запусках больше не шумит: ни в логе, ни в окне', async () => {
-    const skipped = [{ path: `${PROJECT}/.agents/skills/harnas`, reason: 'foreign' as const }];
+    const skipped = [{ path: `${PROJECT}/.agents/skills/parley`, reason: 'foreign' as const }];
     const { install } = fakeInstall({ skipped });
     const installer = createSkillInstaller(fakeHost(), install);
 
@@ -153,7 +153,7 @@ describe('установщик скилла: что не тронуто', () => 
 
   it('небезопасный путь (симлинк по дороге) — тоже в окно: скилла в проекте не будет', async () => {
     const { install } = fakeInstall({
-      skipped: [{ path: `${PROJECT}/.claude/skills/harnas`, reason: 'unsafe' }],
+      skipped: [{ path: `${PROJECT}/.claude/skills/parley`, reason: 'unsafe' }],
     });
 
     await createSkillInstaller(fakeHost(), install)(REF, null);
@@ -163,7 +163,7 @@ describe('установщик скилла: что не тронуто', () => 
 
   it('правка человека — только в лог: он сделал её сам, окну сообщать нечего', async () => {
     const { install } = fakeInstall({
-      skipped: [{ path: `${PROJECT}/.agents/skills/harnas`, reason: 'edited' }],
+      skipped: [{ path: `${PROJECT}/.agents/skills/parley`, reason: 'edited' }],
     });
 
     await createSkillInstaller(fakeHost(), install)(REF, null);
@@ -175,7 +175,7 @@ describe('установщик скилла: что не тронуто', () => 
   it('чужое только в worktree (копия из репозитория) — в лог, но окну не про проект', async () => {
     const worktree = '/worktrees/магазин-a1b2c3/w-0001-s-01';
     const { install } = fakeInstall({
-      skipped: [{ path: `${worktree}/.agents/skills/harnas`, reason: 'foreign' }],
+      skipped: [{ path: `${worktree}/.agents/skills/parley`, reason: 'foreign' }],
     });
 
     await createSkillInstaller(fakeHost(), install)(REF, worktree);
@@ -185,7 +185,7 @@ describe('установщик скилла: что не тронуто', () => 
   });
 
   it('поставленное — строкой info с путями, без уведомления окну', async () => {
-    const { install } = fakeInstall({ written: [`${PROJECT}/.agents/skills/harnas`] });
+    const { install } = fakeInstall({ written: [`${PROJECT}/.agents/skills/parley`] });
 
     await createSkillInstaller(fakeHost(), install)(REF, null);
 
@@ -193,10 +193,32 @@ describe('установщик скилла: что не тронуто', () => 
       {
         level: 'info',
         msg: expect.stringContaining('установлен'),
-        data: { ref: REF, paths: [`${PROJECT}/.agents/skills/harnas`] },
+        data: { ref: REF, paths: [`${PROJECT}/.agents/skills/parley`] },
       },
     ]);
     expect(notices()).toEqual([]);
+  });
+});
+
+describe('установщик скилла: прежняя установка под именем harnas', () => {
+  it('убранное — строкой info с путями, без уведомления окну', async () => {
+    const removed = [`${PROJECT}/.claude/skills/harnas`, `${PROJECT}/.agents/skills/harnas`];
+    const { install } = fakeInstall({ removed });
+
+    await createSkillInstaller(fakeHost(), install)(REF, null);
+
+    expect(logs).toEqual([
+      { level: 'info', msg: 'прежний скилл harnas убран', data: { ref: REF, paths: removed } },
+    ]);
+    expect(notices()).toEqual([]);
+  });
+
+  it('ничего не убрано — строки про прежнее нет', async () => {
+    const { install } = fakeInstall({ written: [`${PROJECT}/.agents/skills/parley`] });
+
+    await createSkillInstaller(fakeHost(), install)(REF, null);
+
+    expect(logs.map((item) => item.msg)).toEqual(['скилл parley установлен или обновлён']);
   });
 });
 

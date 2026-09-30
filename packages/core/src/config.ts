@@ -13,7 +13,7 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { envName, envValue } from './names.js';
+import { DEFAULT_WORKTREE_ROOT, envName, envValue } from './names.js';
 import { parleyHome } from './work/store.js';
 
 export interface ParleyConfig {
@@ -37,8 +37,8 @@ export interface ParleyConfig {
   /** Запускать ли `pending` от агента самим, в фоне, без диалога (раздел 5.2). */
   autoLaunch: boolean;
   /**
-   * Ставить ли скилл `harnas` в проект и в worktree сессии при запуске (`work/skill-install.ts`): файлы
-   * `.agents/skills/harnas` и симлинк `.claude/skills/harnas`. Выключено — хост скилл не ставит и не
+   * Ставить ли скилл `parley` в проект и в worktree сессии при запуске (`work/skill-install.ts`): файлы
+   * `.agents/skills/parley` и симлинк `.claude/skills/parley`. Выключено — хост скилл не ставит и не
    * обновляет; уже поставленное не удаляется.
    */
   agentSkills: boolean;
@@ -65,7 +65,7 @@ export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
   // Терминал окна (кусок 1.3 плана окна, спека 4.3).
   fontFamily: "'SF Mono', Menlo, monospace",
   fontSize: 14,
-  worktreeRoot: '~/harnas/worktrees',
+  worktreeRoot: DEFAULT_WORKTREE_ROOT,
 };
 
 /**

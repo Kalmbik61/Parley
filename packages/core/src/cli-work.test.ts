@@ -243,7 +243,7 @@ describe('parley-core work session new', () => {
     const config = JSON.parse(await readFile(printed['mcpConfig'] as string, 'utf8')) as {
       mcpServers: Record<string, { command: string; env: Record<string, string> }>;
     };
-    expect(config.mcpServers['harnas']?.env).toEqual({
+    expect(config.mcpServers['parley']?.env).toEqual({
       PARLEY_WORK_DIR: workPaths(project, 'w-0001').dir,
       PARLEY_SESSION_ID: 's-01',
       HARNAS_WORK_DIR: workPaths(project, 'w-0001').dir,
@@ -280,7 +280,7 @@ describe('parley-core work session new', () => {
     // значение флага канала.
     expect(args).not.toContain(brief);
     expect(args[args.indexOf('--append-system-prompt') + 1]).toBe(guidance);
-    expect(args.at(-1)).toBe('server:harnas');
+    expect(args.at(-1)).toBe('server:parley');
     expect((await readMapFile('w-0001')).sessions[0]?.task).toBe('');
   }, 60_000);
 
@@ -300,12 +300,12 @@ describe('parley-core work session new', () => {
     );
 
     const args = printed['args'] as string[];
-    expect(args[args.indexOf('--dangerously-load-development-channels') + 1]).toBe('server:harnas');
+    expect(args[args.indexOf('--dangerously-load-development-channels') + 1]).toBe('server:parley');
     const config = JSON.parse(await readFile(printed['mcpConfig'] as string, 'utf8')) as {
       mcpServers: Record<string, { env: Record<string, string> }>;
     };
-    expect(config.mcpServers['harnas']?.env['PARLEY_CHANNEL']).toBe('1');
-    expect(config.mcpServers['harnas']?.env['HARNAS_CHANNEL']).toBe('1');
+    expect(config.mcpServers['parley']?.env['PARLEY_CHANNEL']).toBe('1');
+    expect(config.mcpServers['parley']?.env['HARNAS_CHANNEL']).toBe('1');
   }, 60_000);
 
   it('с PARLEY_CHANNEL_PUSH=0 ни флага, ни переменной: разговор живёт по pull', async () => {
@@ -329,8 +329,8 @@ describe('parley-core work session new', () => {
     const config = JSON.parse(await readFile(printed['mcpConfig'] as string, 'utf8')) as {
       mcpServers: Record<string, { env: Record<string, string> }>;
     };
-    expect(config.mcpServers['harnas']?.env).not.toHaveProperty('PARLEY_CHANNEL');
-    expect(config.mcpServers['harnas']?.env).not.toHaveProperty('HARNAS_CHANNEL');
+    expect(config.mcpServers['parley']?.env).not.toHaveProperty('PARLEY_CHANNEL');
+    expect(config.mcpServers['parley']?.env).not.toHaveProperty('HARNAS_CHANNEL');
   }, 60_000);
 
   it('чужому провайдеру версия не пробуется: про push в stderr ни слова', async () => {
@@ -448,7 +448,7 @@ describe('parley-core work session new', () => {
     expect(printed['mcpConfig']).toBeNull();
     // Хуки — возможность Claude Code: чужому провайдеру файл настроек не пишется.
     expect(printed['settings']).toBeNull();
-    expect(args[args.indexOf('-c') + 1]).toContain('mcp_servers.harnas=');
+    expect(args[args.indexOf('-c') + 1]).toContain('mcp_servers.parley=');
     expect((await readMapFile('w-0001')).sessions[0]?.providerSessionId).toBeNull();
   }, 60_000);
 
@@ -473,7 +473,7 @@ describe('parley-core work session new', () => {
     const args = printed['args'] as string[];
     const overrides = args.flatMap((arg, index) => (args[index - 1] === '-c' ? [arg] : []));
     expect(overrides.map((override) => override.split('=')[0])).toEqual([
-      'mcp_servers.harnas',
+      'mcp_servers.parley',
       'tui.terminal_title',
       'tui.notifications',
       'tui.notification_method',

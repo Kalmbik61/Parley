@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -327,7 +328,7 @@ describe('create(): модель и усилие из диалога (дизай
     expect(args.slice(0, 3)).toEqual(['--no-daemon', '-a', 'on-request']);
     const overrides = args.flatMap((arg, index) => (args[index - 1] === '-c' ? [arg] : []));
     expect(overrides.map((override) => override.split('=')[0])).toEqual([
-      'mcp_servers.harnas',
+      'mcp_servers.parley',
       'tui.terminal_title',
       'tui.notifications',
       'tui.notification_method',
@@ -965,9 +966,9 @@ describe('worktree (план, кусок 4.2)', () => {
   });
 });
 
-describe('скилл harnas при запуске сессии (кусок 10 плана комнат)', () => {
-  const skillIn = (dir: string): string => path.join(dir, '.agents', 'skills', 'harnas', 'SKILL.md');
-  const aliasIn = (dir: string): string => path.join(dir, '.claude', 'skills', 'harnas');
+describe('скилл parley при запуске сессии (кусок 10 плана комнат)', () => {
+  const skillIn = (dir: string): string => path.join(dir, '.agents', 'skills', 'parley', 'SKILL.md');
+  const aliasIn = (dir: string): string => path.join(dir, '.claude', 'skills', 'parley');
   const porcelain = async (dir: string): Promise<string> =>
     (await runGit('git', ['-C', dir, 'status', '--porcelain', '-uall'])).stdout;
 
@@ -988,7 +989,55 @@ describe('скилл harnas при запуске сессии (кусок 10 п
 
     expect(await readFile(skillIn(project), 'utf8')).toBe(SKILL_MD);
     expect((await lstat(aliasIn(project))).isSymbolicLink()).toBe(true);
-    expect(await readlink(aliasIn(project))).toBe(path.join('..', '..', '.agents', 'skills', 'harnas'));
+    expect(await readlink(aliasIn(project))).toBe(path.join('..', '..', '.agents', 'skills', 'parley'));
+    const status = await porcelain(project);
+    expect(status).not.toContain('.agents');
+    expect(status).not.toContain('.claude');
+
+    await service.stop(ref);
+  });
+
+  it('прежняя установка под именем harnas (учёт в .harnas) при запуске убирается, новый скилл встаёт на её место', async () => {
+    await initGitProject(project);
+    // Проект, каким его оставила прошлая сборка: каталог состояния `.harnas`, в нём учёт, на диске — папка и симлинк.
+    const oldStub = 'заглушка прежней сборки\n';
+    const legacyDir = path.join(project, '.agents', 'skills', 'harnas');
+    const legacyLink = path.join(project, '.claude', 'skills', 'harnas');
+    await mkdir(legacyDir, { recursive: true });
+    await writeFile(path.join(legacyDir, 'SKILL.md'), oldStub, 'utf8');
+    await mkdir(path.dirname(legacyLink), { recursive: true });
+    await symlink(path.join('..', '..', '.agents', 'skills', 'harnas'), legacyLink);
+    await mkdir(path.join(project, '.harnas'));
+    await writeFile(
+      path.join(project, '.harnas', 'skills-receipt.json'),
+      JSON.stringify({
+        version: 1,
+        entries: {
+          [legacyDir]: { kind: 'dir', sha256: createHash('sha256').update(oldStub).digest('hex') },
+          [legacyLink]: { kind: 'symlink', target: '../../.agents/skills/harnas' },
+        },
+      }),
+      'utf8',
+    );
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'бэкенд',
+      task: '',
+      parent: null,
+    });
+
+    expect(existsSync(legacyDir)).toBe(false);
+    expect(existsSync(legacyLink)).toBe(false);
+    expect(await readFile(skillIn(project), 'utf8')).toBe(SKILL_MD);
+    expect((await lstat(aliasIn(project))).isSymbolicLink()).toBe(true);
+    // Проект остался при прежнем каталоге состояния: нового `.parley` рядом с `.harnas` не завелось.
+    expect(existsSync(path.join(project, '.parley'))).toBe(false);
     const status = await porcelain(project);
     expect(status).not.toContain('.agents');
     expect(status).not.toContain('.claude');

@@ -1,6 +1,8 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  chmod,
+  cp,
   lstat,
   mkdir,
   mkdtemp,
@@ -53,14 +55,21 @@ async function initRepo(dir: string): Promise<void> {
   await git(dir, 'commit', '-m', 'первый');
 }
 
-const canonical = (dir: string): string => path.join(dir, '.agents', 'skills', 'harnas');
-const alias = (dir: string): string => path.join(dir, '.claude', 'skills', 'harnas');
+const canonical = (dir: string): string => path.join(dir, '.agents', 'skills', 'parley');
+const alias = (dir: string): string => path.join(dir, '.claude', 'skills', 'parley');
 const receiptFile = (dir: string): string => path.join(dir, '.parley', 'skills-receipt.json');
 const readReceipt = async (
   dir: string,
 ): Promise<{ version: number; entries: Record<string, Record<string, string>> }> =>
   JSON.parse(await readFile(receiptFile(dir), 'utf8'));
 const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
+/** Метка своих строк в `info/exclude` (`# <имя скилла>: …`) и метка прежней установки под именем `harnas`. */
+const MARKER = '# parley: скилл агентов, ставится Parley';
+const LEGACY_MARKER = '# harnas: скилл агентов, ставится харнессом';
+/** Шаблоны путей своих строк в `info/exclude` и сколько раз строка встречается в тексте файла. */
+const PATTERNS = ['/.agents/skills/parley', '/.claude/skills/parley'];
+const count = (text: string, line: string): number =>
+  text.split('\n').filter((item) => item === line).length;
 const exists = (target: string): Promise<boolean> =>
   lstat(target).then(
     () => true,
@@ -82,7 +91,7 @@ describe('установка с нуля', () => {
     // Симлинк — относительный и указывает в канонную копию, а не в абсолютный путь этой машины.
     expect((await lstat(alias(project))).isSymbolicLink()).toBe(true);
     expect(await readlink(alias(project))).toBe(
-      path.join('..', '..', '.agents', 'skills', 'harnas'),
+      path.join('..', '..', '.agents', 'skills', 'parley'),
     );
     expect(await readFile(path.join(alias(project), 'SKILL.md'), 'utf8')).toBe(SKILL_MD);
 
@@ -90,7 +99,7 @@ describe('установка с нуля', () => {
       version: 1,
       entries: {
         [canonical(project)]: { kind: 'dir', sha256: sha256(SKILL_MD) },
-        [alias(project)]: { kind: 'symlink', target: '../../.agents/skills/harnas' },
+        [alias(project)]: { kind: 'symlink', target: '../../.agents/skills/parley' },
       },
     });
   });
@@ -122,7 +131,7 @@ describe('установка с нуля', () => {
 
     const again = await installAgentSkill({ projectPath: project });
 
-    expect(again).toEqual({ skipped: [], written: [] });
+    expect(again).toEqual({ skipped: [], written: [], removed: [] });
     const after = await Promise.all(
       touched.map(async (file) => ({
         text: await readFile(file, 'utf8'),
@@ -148,14 +157,14 @@ describe('обновление своего', () => {
 
     const result = await installAgentSkill({ projectPath: project });
 
-    expect(result).toEqual({ skipped: [], written: [canonical(project)] });
+    expect(result).toEqual({ skipped: [], written: [canonical(project)], removed: [] });
     expect(await readFile(path.join(canonical(project), 'SKILL.md'), 'utf8')).toBe(SKILL_MD);
     expect((await readReceipt(project)).entries[canonical(project)]).toEqual({
       kind: 'dir',
       sha256: sha256(SKILL_MD),
     });
     // Ссылка вела в ту же папку и ведёт: обновлять её нечем и незачем.
-    expect(await readlink(alias(project))).toBe('../../.agents/skills/harnas');
+    expect(await readlink(alias(project))).toBe('../../.agents/skills/parley');
   });
 
   it('обновление успело записать файл, а учёт нет: файл — свой, учёт чинится без записи файла', async () => {
@@ -166,7 +175,7 @@ describe('обновление своего', () => {
 
     const result = await installAgentSkill({ projectPath: project });
 
-    expect(result).toEqual({ skipped: [], written: [] });
+    expect(result).toEqual({ skipped: [], written: [], removed: [] });
     expect((await readReceipt(project)).entries[canonical(project)]).toEqual({
       kind: 'dir',
       sha256: sha256(SKILL_MD),
@@ -182,7 +191,7 @@ describe('обновление своего', () => {
 
     const result = await installAgentSkill({ projectPath: project, symlink: failing });
 
-    expect(result).toEqual({ skipped: [], written: [alias(project)] });
+    expect(result).toEqual({ skipped: [], written: [alias(project)], removed: [] });
     expect(await readFile(path.join(alias(project), 'SKILL.md'), 'utf8')).toBe(SKILL_MD);
   });
 
@@ -226,6 +235,7 @@ describe('чужое и правленное не трогается', () => {
     expect(result).toEqual({
       skipped: [{ path: canonical(project), reason: 'foreign' }],
       written: [],
+      removed: [],
     });
     expect(await readFile(path.join(canonical(project), 'SKILL.md'), 'utf8')).toBe('чужой навык\n');
     expect(await exists(alias(project))).toBe(false);
@@ -278,6 +288,7 @@ describe('чужое и правленное не трогается', () => {
     expect(result).toEqual({
       skipped: [{ path: canonical(project), reason: 'edited' }],
       written: [],
+      removed: [],
     });
     expect(await readFile(file, 'utf8')).toBe(`${SKILL_MD}\nмои правила проекта\n`);
     // Учёт прежний: правка человека — не повод забыть, что папка когда-то была нашей.
@@ -352,10 +363,10 @@ describe('корень — ссылка на каталог', () => {
 
     expect(result.skipped).toEqual([]);
     expect(result.written).toEqual([canonical(link), alias(link)]);
-    expect(await readFile(path.join(real, '.agents', 'skills', 'harnas', 'SKILL.md'), 'utf8')).toBe(
+    expect(await readFile(path.join(real, '.agents', 'skills', 'parley', 'SKILL.md'), 'utf8')).toBe(
       SKILL_MD,
     );
-    expect(await installAgentSkill({ projectPath: link })).toEqual({ skipped: [], written: [] });
+    expect(await installAgentSkill({ projectPath: link })).toEqual({ skipped: [], written: [], removed: [] });
   });
 });
 
@@ -406,6 +417,7 @@ describe('запись за симлинк не идёт', () => {
     expect(result).toEqual({
       skipped: [{ path: canonical(project), reason: 'unsafe' }],
       written: [],
+      removed: [],
     });
     expect(await readdir(elsewhere)).toEqual([]);
     expect(await exists(path.join(project, '.claude'))).toBe(false);
@@ -441,7 +453,7 @@ describe('симлинк нельзя — запасная копия', () => {
     });
 
     // Дальше симлинк, возможно, уже разрешён, но копия — своя, и её не заменяют.
-    expect(await installAgentSkill({ projectPath: project })).toEqual({ skipped: [], written: [] });
+    expect(await installAgentSkill({ projectPath: project })).toEqual({ skipped: [], written: [], removed: [] });
   });
 
   it('правленная человеком копия не затирается', async () => {
@@ -467,10 +479,6 @@ describe('симлинк нельзя — запасная копия', () => {
 describe('скрыть от git: info/exclude', () => {
   const exclude = (dir: string): Promise<string> =>
     readFile(path.join(dir, '.git', 'info', 'exclude'), 'utf8');
-  const PATTERNS = ['/.agents/skills/harnas', '/.claude/skills/harnas'];
-  const count = (text: string, line: string): number =>
-    text.split('\n').filter((item) => item === line).length;
-
   it('строки дописаны один раз: чужие остаются на месте, у своих — комментарий-метка', async () => {
     await initRepo(project);
     const original = await exclude(project);
@@ -480,7 +488,7 @@ describe('скрыть от git: info/exclude', () => {
     const text = await exclude(project);
     expect(text.startsWith(original)).toBe(true);
     for (const line of PATTERNS) expect(count(text, line), line).toBe(1);
-    expect(count(text, '# harnas: скилл агентов, ставится харнессом')).toBe(1);
+    expect(count(text, MARKER)).toBe(1);
   });
 
   it('git status --porcelain не показывает ни канонную копию, ни симлинк', async () => {
@@ -503,21 +511,21 @@ describe('скрыть от git: info/exclude', () => {
     await installAgentSkill({ projectPath: project });
 
     const text = await readFile(file, 'utf8');
-    expect(text.startsWith('*.log\nсвоё\n# harnas')).toBe(true);
+    expect(text.startsWith('*.log\nсвоё\n# parley')).toBe(true);
     expect(text.endsWith('\n')).toBe(true);
   });
 
   it('часть строк уже есть — дописывается только недостающее, метка не дублируется', async () => {
     await initRepo(project);
     const file = path.join(project, '.git', 'info', 'exclude');
-    await writeFile(file, `# harnas: скилл агентов, ставится харнессом\n${PATTERNS[0]}\n`, 'utf8');
+    await writeFile(file, `${MARKER}\n${PATTERNS[0]}\n`, 'utf8');
 
     await installAgentSkill({ projectPath: project });
 
     const text = await readFile(file, 'utf8');
     expect(count(text, PATTERNS[0] as string)).toBe(1);
     expect(count(text, PATTERNS[1] as string)).toBe(1);
-    expect(count(text, '# harnas: скилл агентов, ставится харнессом')).toBe(1);
+    expect(count(text, MARKER)).toBe(1);
   });
 
   it('файла и каталога info нет (git init --template без них) — создаются', async () => {
@@ -538,7 +546,7 @@ describe('скрыть от git: info/exclude', () => {
     await installAgentSkill({ projectPath: project });
 
     expect(await exclude(project)).toBe(before);
-    expect(await porcelain(project)).toContain('.agents/skills/harnas/SKILL.md');
+    expect(await porcelain(project)).toContain('.agents/skills/parley/SKILL.md');
   });
 
   it('проект в подкаталоге репозитория: строки с префиксом подкаталога, git status чист от скилла', async () => {
@@ -549,8 +557,8 @@ describe('скрыть от git: info/exclude', () => {
     await installAgentSkill({ projectPath: sub });
 
     const text = await readFile(path.join(root, '.git', 'info', 'exclude'), 'utf8');
-    expect(text).toContain('/apps/web/.agents/skills/harnas');
-    expect(text).toContain('/apps/web/.claude/skills/harnas');
+    expect(text).toContain('/apps/web/.agents/skills/parley');
+    expect(text).toContain('/apps/web/.claude/skills/parley');
     const status = await porcelain(root);
     expect(status).not.toContain('.agents');
     expect(status).not.toContain('.claude');
@@ -562,9 +570,9 @@ describe('скрыть от git: info/exclude', () => {
     await mkdir(sub, { recursive: true });
     // Соседи, которых неэкранированный шаблон задел бы: `[ir]` и `*` совпали бы и с ними.
     const neighbour = path.join(root, 'wei-dir');
-    await mkdir(path.join(neighbour, '.agents', 'skills', 'harnas'), { recursive: true });
+    await mkdir(path.join(neighbour, '.agents', 'skills', 'parley'), { recursive: true });
     await writeFile(
-      path.join(neighbour, '.agents', 'skills', 'harnas', 'SKILL.md'),
+      path.join(neighbour, '.agents', 'skills', 'parley', 'SKILL.md'),
       'сосед\n',
       'utf8',
     );
@@ -572,9 +580,9 @@ describe('скрыть от git: info/exclude', () => {
     await installAgentSkill({ projectPath: sub });
 
     const text = await readFile(path.join(root, '.git', 'info', 'exclude'), 'utf8');
-    expect(text).toContain('/we\\[ir\\]d\\*dir/.agents/skills/harnas');
+    expect(text).toContain('/we\\[ir\\]d\\*dir/.agents/skills/parley');
     const status = await porcelain(root);
-    expect(status).toContain('wei-dir/.agents/skills/harnas/SKILL.md');
+    expect(status).toContain('wei-dir/.agents/skills/parley/SKILL.md');
     expect(status).not.toContain('we[ir]d*dir/.agents');
   });
 });
@@ -584,7 +592,7 @@ describe('worktree сессии', () => {
   async function addWorktree(name = 'w-0001-s-02'): Promise<string> {
     const dir = path.join(root, 'worktrees', name);
     await mkdir(path.dirname(dir), { recursive: true });
-    await git(project, 'worktree', 'add', '-b', `harnas/${name}`, dir, 'main');
+    await git(project, 'worktree', 'add', '-b', `parley/${name}`, dir, 'main');
     return dir;
   }
 
@@ -602,13 +610,13 @@ describe('worktree сессии', () => {
       alias(worktree),
     ]);
     expect(await readFile(path.join(alias(worktree), 'SKILL.md'), 'utf8')).toBe(SKILL_MD);
-    expect(await readlink(alias(worktree))).toBe('../../.agents/skills/harnas');
+    expect(await readlink(alias(worktree))).toBe('../../.agents/skills/parley');
 
     // У worktree `.git` — файл: своего info/exclude там нет, а git читает общий каталог репозитория.
     expect((await lstat(path.join(worktree, '.git'))).isFile()).toBe(true);
     const common = await readFile(path.join(project, '.git', 'info', 'exclude'), 'utf8');
-    expect(common.split('\n').filter((line) => line === '/.agents/skills/harnas')).toHaveLength(1);
-    expect(common.split('\n').filter((line) => line === '/.claude/skills/harnas')).toHaveLength(1);
+    expect(common.split('\n').filter((line) => line === '/.agents/skills/parley')).toHaveLength(1);
+    expect(common.split('\n').filter((line) => line === '/.claude/skills/parley')).toHaveLength(1);
 
     for (const dir of [project, worktree]) {
       const status = await porcelain(dir);
@@ -624,7 +632,7 @@ describe('worktree сессии', () => {
 
     const again = await installAgentSkill({ projectPath: project, worktreePath: worktree });
 
-    expect(again).toEqual({ skipped: [], written: [] });
+    expect(again).toEqual({ skipped: [], written: [], removed: [] });
   });
 
   it('второй worktree тоже получает скилл, а строк в exclude больше не становится', async () => {
@@ -684,6 +692,347 @@ describe('worktree сессии', () => {
   });
 });
 
+describe('прежняя установка под именем harnas (R8)', () => {
+  const legacyCanonical = (dir: string): string => path.join(dir, '.agents', 'skills', 'harnas');
+  const legacyAlias = (dir: string): string => path.join(dir, '.claude', 'skills', 'harnas');
+  const LEGACY_PATTERNS = ['/.agents/skills/harnas', '/.claude/skills/harnas'];
+  const OLD_STUB = 'заглушка скилла прежней сборки\n';
+  const exclude = (dir: string): Promise<string> =>
+    readFile(path.join(dir, '.git', 'info', 'exclude'), 'utf8');
+
+  /** Файлы прежней установки в корне: папка со `SKILL.md` и симлинк (или копия) для Claude Code. */
+  async function legacyFiles(dir: string, copy = false): Promise<void> {
+    await mkdir(legacyCanonical(dir), { recursive: true });
+    await writeFile(path.join(legacyCanonical(dir), 'SKILL.md'), OLD_STUB, 'utf8');
+    await mkdir(path.dirname(legacyAlias(dir)), { recursive: true });
+    if (copy) {
+      await mkdir(legacyAlias(dir));
+      await writeFile(path.join(legacyAlias(dir), 'SKILL.md'), OLD_STUB, 'utf8');
+    } else {
+      await symlink(path.join('..', '..', '.agents', 'skills', 'harnas'), legacyAlias(dir));
+    }
+  }
+
+  /**
+   * Учёт, каким его оставила прошлая сборка: записи про прежние пути корней `roots` в каталоге состояния
+   * проекта (по умолчанию — прежнем `.harnas`: проект ещё не переносили).
+   */
+  async function legacyReceipt(
+    dir: string,
+    roots: readonly string[],
+    { state = '.harnas', copy = false }: { state?: string; copy?: boolean } = {},
+  ): Promise<void> {
+    const entries: Record<string, unknown> = {};
+    for (const at of roots) {
+      entries[legacyCanonical(at)] = { kind: 'dir', sha256: sha256(OLD_STUB) };
+      entries[legacyAlias(at)] = copy
+        ? { kind: 'copy', sha256: sha256(OLD_STUB) }
+        : { kind: 'symlink', target: '../../.agents/skills/harnas' };
+    }
+    await mkdir(path.join(dir, state), { recursive: true });
+    await writeFile(
+      path.join(dir, state, 'skills-receipt.json'),
+      JSON.stringify({ version: 1, entries }),
+      'utf8',
+    );
+  }
+
+  /** Строки `info/exclude`, как их дописывала прошлая сборка: метка и шаблоны путей. */
+  async function legacyExclude(repo: string, lines: readonly string[] = LEGACY_PATTERNS): Promise<void> {
+    const file = path.join(repo, '.git', 'info', 'exclude');
+    await writeFile(file, `${await exclude(repo)}${LEGACY_MARKER}\n${lines.join('\n')}\n`, 'utf8');
+  }
+
+  /** Проект как его оставила прошлая сборка: репозиторий, прежняя установка, учёт в `.harnas` и строки exclude. */
+  async function legacyProject(copy = false): Promise<void> {
+    await initRepo(project);
+    await legacyFiles(project, copy);
+    await legacyReceipt(project, [project], { copy });
+    await legacyExclude(project);
+  }
+
+  it('папка и ссылка по учёту убираются, ставится новый скилл; прежние строки exclude и записи учёта уходят', async () => {
+    await legacyProject();
+    const before = await exclude(project);
+
+    const result = await installAgentSkill({ projectPath: project });
+
+    expect(result).toEqual({
+      skipped: [],
+      written: [canonical(project), alias(project)],
+      removed: [legacyAlias(project), legacyCanonical(project)],
+    });
+    expect(await exists(legacyCanonical(project))).toBe(false);
+    expect(await exists(legacyAlias(project))).toBe(false);
+    expect(await readFile(path.join(canonical(project), 'SKILL.md'), 'utf8')).toBe(SKILL_MD);
+
+    // Проект со старым каталогом состояния остаётся при нём: учёт там же, нового `.parley` рядом не заводится (R5).
+    expect(await exists(path.join(project, '.parley'))).toBe(false);
+    const receipt = JSON.parse(
+      await readFile(path.join(project, '.harnas', 'skills-receipt.json'), 'utf8'),
+    ) as { entries: Record<string, unknown> };
+    expect(Object.keys(receipt.entries).sort()).toEqual([canonical(project), alias(project)].sort());
+
+    const text = await exclude(project);
+    expect(text).not.toContain(LEGACY_MARKER);
+    for (const line of LEGACY_PATTERNS) expect(count(text, line), line).toBe(0);
+    expect(count(text, MARKER)).toBe(1);
+    for (const line of PATTERNS) expect(count(text, line), line).toBe(1);
+    // Чужие строки файла (шаблон git) на месте, и в начале.
+    expect(text.startsWith(before.split(LEGACY_MARKER)[0] as string)).toBe(true);
+    const status = await porcelain(project);
+    expect(status).not.toContain('.agents');
+    expect(status).not.toContain('.claude');
+  });
+
+  it('повторный вызов ничего не убирает и ничего не пишет', async () => {
+    await legacyProject();
+    await installAgentSkill({ projectPath: project });
+    const receipt = await readFile(path.join(project, '.harnas', 'skills-receipt.json'), 'utf8');
+    const excludeText = await exclude(project);
+
+    expect(await installAgentSkill({ projectPath: project })).toEqual({
+      skipped: [],
+      written: [],
+      removed: [],
+    });
+    expect(await readFile(path.join(project, '.harnas', 'skills-receipt.json'), 'utf8')).toBe(receipt);
+    expect(await exclude(project)).toBe(excludeText);
+  });
+
+  it('запасная копия Claude Code (kind copy) убирается так же, как ссылка', async () => {
+    await legacyProject(true);
+
+    const result = await installAgentSkill({ projectPath: project });
+
+    expect(result.removed).toEqual([legacyAlias(project), legacyCanonical(project)]);
+    expect(await exists(legacyAlias(project))).toBe(false);
+  });
+
+  it('учёт в .parley (проект уже переносили): то же самое', async () => {
+    await initRepo(project);
+    await legacyFiles(project);
+    await legacyReceipt(project, [project], { state: '.parley' });
+    await legacyExclude(project);
+
+    const result = await installAgentSkill({ projectPath: project });
+
+    expect(result.removed).toEqual([legacyAlias(project), legacyCanonical(project)]);
+    expect(await exists(path.join(project, '.harnas'))).toBe(false);
+    expect(Object.keys((await readReceipt(project)).entries).sort()).toEqual(
+      [canonical(project), alias(project)].sort(),
+    );
+  });
+
+  it('SKILL.md правили вручную: папка остаётся, запись учёта и строки exclude — тоже', async () => {
+    await legacyProject();
+    const file = path.join(legacyCanonical(project), 'SKILL.md');
+    await writeFile(file, `${OLD_STUB}мои правила\n`, 'utf8');
+
+    const result = await installAgentSkill({ projectPath: project });
+
+    // Ссылка цела и убрана, папку с правкой не тронули; новый скилл встал рядом.
+    expect(result.removed).toEqual([legacyAlias(project)]);
+    expect(await readFile(file, 'utf8')).toBe(`${OLD_STUB}мои правила\n`);
+    expect(await exists(legacyAlias(project))).toBe(false);
+    expect(result.written).toEqual([canonical(project), alias(project)]);
+    const receipt = JSON.parse(
+      await readFile(path.join(project, '.harnas', 'skills-receipt.json'), 'utf8'),
+    ) as { entries: Record<string, unknown> };
+    expect(Object.keys(receipt.entries)).toContain(legacyCanonical(project));
+    // Пока прежняя папка лежит на диске, её прячут от git те же строки.
+    const text = await exclude(project);
+    expect(text).toContain(LEGACY_MARKER);
+    expect(text).toContain(LEGACY_PATTERNS[0] as string);
+    expect(await porcelain(project)).not.toContain('.agents');
+  });
+
+  it('в прежней папке лежит ещё файл — в ней работал человек: ничего не тронуто', async () => {
+    await legacyProject();
+    await writeFile(path.join(legacyCanonical(project), 'NOTES.md'), 'заметка\n', 'utf8');
+
+    const result = await installAgentSkill({ projectPath: project });
+
+    expect(result.removed).toEqual([legacyAlias(project)]);
+    expect((await readdir(legacyCanonical(project))).sort()).toEqual(['NOTES.md', 'SKILL.md']);
+    expect(await readFile(path.join(legacyCanonical(project), 'SKILL.md'), 'utf8')).toBe(OLD_STUB);
+  });
+
+  it('.DS_Store от Finder в прежней папке — не правка: убирается вместе с ней', async () => {
+    await legacyProject();
+    await writeFile(path.join(legacyCanonical(project), '.DS_Store'), 'finder\n', 'utf8');
+
+    const result = await installAgentSkill({ projectPath: project });
+
+    expect(result.removed).toEqual([legacyAlias(project), legacyCanonical(project)]);
+    expect(await exists(legacyCanonical(project))).toBe(false);
+  });
+
+  it('ссылка, перенаправленная человеком, остаётся; сама папка — по хешу — убирается', async () => {
+    await legacyProject();
+    await rm(legacyAlias(project));
+    await symlink(path.join('..', '..', 'другое'), legacyAlias(project));
+
+    const result = await installAgentSkill({ projectPath: project });
+
+    expect(result.removed).toEqual([legacyCanonical(project)]);
+    expect(await readlink(legacyAlias(project))).toBe(path.join('..', '..', 'другое'));
+    expect(await exclude(project)).toContain(LEGACY_MARKER);
+  });
+
+  it('путь под прежним именем, которого в учёте нет, — чужой: не тронут и не упомянут', async () => {
+    await initRepo(project);
+    await mkdir(legacyCanonical(project), { recursive: true });
+    await writeFile(path.join(legacyCanonical(project), 'SKILL.md'), OLD_STUB, 'utf8');
+
+    const result = await installAgentSkill({ projectPath: project });
+
+    expect(result.removed).toEqual([]);
+    expect(result.skipped).toEqual([]);
+    expect(await readFile(path.join(legacyCanonical(project), 'SKILL.md'), 'utf8')).toBe(OLD_STUB);
+  });
+
+  it('запись учёта есть, а пути уже нет: не падает, запись уходит, убрано — ничего', async () => {
+    await legacyProject();
+    await rm(legacyCanonical(project), { recursive: true });
+    await rm(legacyAlias(project));
+
+    const result = await installAgentSkill({ projectPath: project });
+
+    expect(result.removed).toEqual([]);
+    const receipt = JSON.parse(
+      await readFile(path.join(project, '.harnas', 'skills-receipt.json'), 'utf8'),
+    ) as { entries: Record<string, unknown> };
+    expect(Object.keys(receipt.entries).sort()).toEqual([canonical(project), alias(project)].sort());
+  });
+
+  it('.claude — ссылка на другой каталог: прежняя копия за ней не трогается, остальное убирается', async () => {
+    await initRepo(project);
+    await legacyFiles(project, true);
+    await legacyReceipt(project, [project], { copy: true });
+    // `.claude` уводит в другое место: запись про прежнюю копию указывает туда, где человек держит своё.
+    const elsewhere = path.join(root, 'elsewhere');
+    await mkdir(path.join(elsewhere, 'skills'), { recursive: true });
+    await rm(path.join(project, '.claude'), { recursive: true });
+    await cp(path.join(project, '.agents', 'skills', 'harnas'), path.join(elsewhere, 'skills', 'harnas'), {
+      recursive: true,
+    });
+    await symlink(elsewhere, path.join(project, '.claude'));
+
+    const result = await installAgentSkill({ projectPath: project });
+
+    expect(result.removed).toEqual([legacyCanonical(project)]);
+    expect(await readFile(path.join(elsewhere, 'skills', 'harnas', 'SKILL.md'), 'utf8')).toBe(OLD_STUB);
+    expect(result.skipped).toEqual([{ path: alias(project), reason: 'unsafe' }]);
+  });
+
+  it('worktree сессии: прежнее убирается и там; строки exclude — когда прежнего не осталось нигде', async () => {
+    await initRepo(project);
+    const worktree = path.join(root, 'worktrees', 'w-0001-s-02');
+    await mkdir(path.dirname(worktree), { recursive: true });
+    await git(project, 'worktree', 'add', '-b', 'harnas/w-0001/s-02', worktree, 'main');
+    await legacyFiles(project);
+    await legacyFiles(worktree);
+    await legacyReceipt(project, [project, worktree]);
+    await legacyExclude(project);
+
+    // Первый вызов — без worktree: его прежняя установка ещё на диске и прячется теми же строками.
+    const first = await installAgentSkill({ projectPath: project });
+    expect(first.removed).toEqual([legacyAlias(project), legacyCanonical(project)]);
+    expect(await exclude(project)).toContain(LEGACY_MARKER);
+    expect(await porcelain(worktree)).not.toContain('.agents');
+
+    // Второй — с worktree: убрано и там, строки уходят.
+    const second = await installAgentSkill({ projectPath: project, worktreePath: worktree });
+    expect(second.removed).toEqual([legacyAlias(worktree), legacyCanonical(worktree)]);
+    expect(await exists(legacyCanonical(worktree))).toBe(false);
+    expect(await readFile(path.join(canonical(worktree), 'SKILL.md'), 'utf8')).toBe(SKILL_MD);
+    const text = await exclude(project);
+    expect(text).not.toContain(LEGACY_MARKER);
+    expect(count(text, LEGACY_PATTERNS[0] as string)).toBe(0);
+    for (const dir of [project, worktree]) {
+      const status = await porcelain(dir);
+      expect(status, dir).not.toContain('.agents');
+      expect(status, dir).not.toContain('.claude');
+    }
+  });
+
+  it('строки без прежней метки — чужие: остаются, даже если совпали с прежними шаблонами', async () => {
+    await initRepo(project);
+    await legacyFiles(project);
+    await legacyReceipt(project, [project]);
+    // Человек завёл такие же строки сам: метки харнесса над ними нет.
+    const file = path.join(project, '.git', 'info', 'exclude');
+    await writeFile(file, `${await exclude(project)}${LEGACY_PATTERNS.join('\n')}\n`, 'utf8');
+
+    const result = await installAgentSkill({ projectPath: project });
+
+    expect(result.removed).toEqual([legacyAlias(project), legacyCanonical(project)]);
+    for (const line of LEGACY_PATTERNS) expect(count(await exclude(project), line), line).toBe(1);
+  });
+
+  it('проект в подкаталоге репозитория: уходят строки с его префиксом и вершины копии, чужие остаются', async () => {
+    await initRepo(root);
+    const sub = path.join(root, 'apps', 'web');
+    await mkdir(sub, { recursive: true });
+    await legacyFiles(sub);
+    await legacyReceipt(sub, [sub]);
+    const foreign = '/apps/api/.agents/skills/harnas';
+    await legacyExclude(root, [
+      '/apps/web/.agents/skills/harnas',
+      '/apps/web/.claude/skills/harnas',
+      foreign,
+    ]);
+    await writeFile(
+      path.join(root, '.git', 'info', 'exclude'),
+      `*.log\n${await exclude(root)}своё\n`,
+      'utf8',
+    );
+
+    const result = await installAgentSkill({ projectPath: sub });
+
+    expect(result.removed).toEqual([legacyAlias(sub), legacyCanonical(sub)]);
+    const text = await exclude(root);
+    expect(text).not.toContain(LEGACY_MARKER);
+    expect(text).not.toContain('/apps/web/.agents/skills/harnas');
+    expect(text).not.toContain('/apps/web/.claude/skills/harnas');
+    expect(text.split('\n')).toEqual(expect.arrayContaining(['*.log', 'своё', foreign]));
+    expect(text).toContain('/apps/web/.agents/skills/parley');
+  });
+
+  it('новый путь занят чужим скиллом: он не тронут, а прежняя установка всё равно убирается', async () => {
+    await legacyProject();
+    await mkdir(canonical(project), { recursive: true });
+    await writeFile(path.join(canonical(project), 'SKILL.md'), 'скилл команды\n', 'utf8');
+
+    const result = await installAgentSkill({ projectPath: project });
+
+    expect(result.skipped).toEqual([{ path: canonical(project), reason: 'foreign' }]);
+    expect(result.removed).toEqual([legacyAlias(project), legacyCanonical(project)]);
+    expect(await readFile(path.join(canonical(project), 'SKILL.md'), 'utf8')).toBe('скилл команды\n');
+    expect(await exclude(project)).not.toContain(LEGACY_MARKER);
+  });
+
+  it('сбой при уборке не лишает сессию нового скилла: запись остаётся, следующий запуск повторит', async () => {
+    if (process.getuid?.() === 0) return; // от имени root права на каталог ничего не запрещают
+    await legacyProject();
+    await chmod(legacyCanonical(project), 0o555);
+    try {
+      const failed = await installAgentSkill({ projectPath: project });
+
+      expect(failed.written).toEqual([canonical(project), alias(project)]);
+      expect(failed.removed).toEqual([legacyAlias(project)]);
+      expect(await exists(path.join(legacyCanonical(project), 'SKILL.md'))).toBe(true);
+    } finally {
+      await chmod(legacyCanonical(project), 0o755);
+    }
+
+    const again = await installAgentSkill({ projectPath: project });
+    expect(again.removed).toEqual([legacyCanonical(project)]);
+    expect(await exists(legacyCanonical(project))).toBe(false);
+  });
+});
+
 describe('рамка: каталоги агентов не трогаются', () => {
   /** Домашняя папка теста: `os.homedir()` читает `HOME` в момент вызова. */
   async function fakeHome(): Promise<string> {
@@ -698,7 +1047,7 @@ describe('рамка: каталоги агентов не трогаются', 
 
     const result = await installAgentSkill({ projectPath: home });
 
-    expect(result).toEqual({ skipped: [], written: [] });
+    expect(result).toEqual({ skipped: [], written: [], removed: [] });
     expect(await readdir(home)).toEqual([]);
   });
 
@@ -710,7 +1059,7 @@ describe('рамка: каталоги агентов не трогаются', 
 
       const result = await installAgentSkill({ projectPath: inside });
 
-      expect(result, dir).toEqual({ skipped: [], written: [] });
+      expect(result, dir).toEqual({ skipped: [], written: [], removed: [] });
       const names = await readdir(inside);
       for (const own of ['.parley', '.harnas', '.agents', '.claude']) expect(names, dir).not.toContain(own);
     }
@@ -757,7 +1106,7 @@ describe('параллельные запуски одного проекта', 
     ]);
     expect((await readReceipt(project)).version).toBe(1);
     const exclude = await readFile(path.join(project, '.git', 'info', 'exclude'), 'utf8');
-    expect(exclude.split('\n').filter((line) => line === '/.agents/skills/harnas')).toHaveLength(1);
+    expect(exclude.split('\n').filter((line) => line === '/.agents/skills/parley')).toHaveLength(1);
   });
 
   it('сбой записи учёта (`.parley` — файл) отказывает вызову, ничего не создав, и очередь идёт дальше', async () => {

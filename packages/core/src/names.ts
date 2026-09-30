@@ -32,9 +32,10 @@ export const ENV_PREFIX = 'PARLEY_';
 export const LEGACY_ENV_PREFIX = 'HARNAS_';
 
 /**
- * Имена для агентов (R8, R9) — подключаются шагом «Имена для агентов»: до него поведение берёт прежние
- * значения из `work/mcp-config.ts` (`MCP_SERVER_NAME`), `work/skill.ts` (`SKILL_NAME`),
- * `work/worktree.ts` (префикс ветки) и `config.ts` (корень worktree).
+ * Имена для агентов (R8, R9): сервер MCP (под ним агент видит инструменты `mcp__parley__*`, тег
+ * `<channel source="parley">` и канал `server:parley`), скилл и то, что заводится для новых сессий —
+ * префикс ветки и корень worktree. Прежнее имя скилла (`harnas`) нужно установщику, чтобы убрать
+ * свою прежнюю установку; хранимые `worktree.path` и `worktree.branch` старых сессий не переписываются.
  */
 export const MCP_SERVER_NAME = 'parley';
 export const SKILL_NAME = 'parley';

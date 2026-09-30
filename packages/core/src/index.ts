@@ -1,6 +1,5 @@
-// Имена продукта (R1). `MCP_SERVER_NAME` и `SKILL_NAME` отсюда не выходят: наружу по-прежнему торчат
-// одноимённые константы `work/mcp-config.ts` и `work/skill.ts` с прежними значениями — их подключает шаг
-// «Имена для агентов» (R8), и тогда names.ts станет их единственным источником.
+// Имена продукта (R1) — единственный источник, в том числе имён для агентов (сервер MCP, скилл, префикс ветки
+// и корень worktree новых сессий).
 export {
   BRANCH_PREFIX,
   DEFAULT_WORKTREE_ROOT,
@@ -10,7 +9,9 @@ export {
   LEGACY_HOME_DIR,
   LEGACY_SKILL_NAME,
   LEGACY_STATE_DIR,
+  MCP_SERVER_NAME,
   PRODUCT,
+  SKILL_NAME,
   STATE_DIR,
   STATE_DIRS,
   bothEnv,
@@ -206,7 +207,7 @@ export {
   overrideVariable,
 } from './work/find-binary.js';
 export { GUIDE } from './work/guide.js';
-export { SKILL_MD, SKILL_NAME } from './work/skill.js';
+export { SKILL_MD } from './work/skill.js';
 export { installAgentSkill } from './work/skill-install.js';
 export type {
   SkillInstallOptions,
@@ -280,7 +281,6 @@ export {
 export type { HookCommand, HookEvent, HookMatcher, SettingsFile } from './work/settings-file.js';
 export {
   MCP_SERVER_BIN,
-  MCP_SERVER_NAME,
   codexMcpOverride,
   mcpConfig,
   mcpConfigJson,

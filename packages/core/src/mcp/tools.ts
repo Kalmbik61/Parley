@@ -8,6 +8,7 @@ import {
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { DEFAULT_CONFIG } from '../config.js';
+import { MCP_SERVER_NAME } from '../names.js';
 import {
   EFFORT_LEVELS,
   commandInPath,
@@ -282,7 +283,7 @@ const TOOLS: Tool[] = [
         agent: {
           type: 'string',
           description:
-            'Роль сессии — агент Claude Code: имя файла .claude/agents/<name>.md проекта или ~/.claude/agents/<name>.md. Определение с урезанным списком tools обязано включать mcp__harnas__*, иначе роль не сможет ни написать коллеге, ни отчитаться.',
+            'Роль сессии — агент Claude Code: имя файла .claude/agents/<name>.md проекта или ~/.claude/agents/<name>.md. Определение с урезанным списком tools обязано включать mcp__parley__*, иначе роль не сможет ни написать коллеге, ни отчитаться.',
         },
         worktree: {
           type: 'boolean',
@@ -894,7 +895,7 @@ async function dispatch(
  * при подключении, поэтому он короткий и весь про поведение: этикет тут —
  * половина защиты от переписки двух вежливых агентов до конца лимита (4.7).
  */
-export const CHANNEL_INSTRUCTIONS = `Письма коллег по этой работе объявляются тегом <channel source="harnas">: в нём from — id сессии-отправителя, from_label — её роль, kind — вид письма. Текста письма в теге нет: увидел тег — позови check_inbox, он отдаст все непрочитанные разом.
+export const CHANNEL_INSTRUCTIONS = `Письма коллег по этой работе объявляются тегом <channel source="parley">: в нём from — id сессии-отправителя, from_label — её роль, kind — вид письма. Текста письма в теге нет: увидел тег — позови check_inbox, он отдаст все непрочитанные разом.
 Отвечай send_message(to=<from>) только на \`question\`; note и decision ответа не требуют, «спасибо» и «принято» не пишут. Договорённость фиксируй одним письмом с kind: decision тому, с кем договорился.
 Про письмо звонят один раз; check_inbox и wait_for("inbox") — страховка, если канал молчит.`;
 
@@ -970,7 +971,7 @@ export function createParleyServer(context: McpContext): Server<Request, Channel
   const { sessionId } = context;
   const channel = context.channel && sessionId !== null;
   const server = new Server<Request, ChannelNotification>(
-    { name: 'harnas', version: '0.0.0' },
+    { name: MCP_SERVER_NAME, version: '0.0.0' },
     {
       capabilities: channel ? { tools: {}, experimental: { 'claude/channel': {} } } : { tools: {} },
       ...(channel ? { instructions: CHANNEL_INSTRUCTIONS } : {}),

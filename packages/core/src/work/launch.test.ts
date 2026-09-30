@@ -143,7 +143,7 @@ describe('план запуска', () => {
     const configFile = plan.args[plan.args.indexOf('--mcp-config') + 1];
     expect(configFile).toBe(path.join(paths.mcp, `${sessionId}.json`));
     const config = JSON.parse(await readFile(configFile as string, 'utf8'));
-    expect(config.mcpServers.harnas.env).toEqual(sessionEnv(paths.dir, sessionId));
+    expect(config.mcpServers.parley.env).toEqual(sessionEnv(paths.dir, sessionId));
 
     expect(plan.args.at(-1)).toContain('прогнать e2e');
   });
@@ -153,7 +153,7 @@ describe('план запуска', () => {
     const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
 
     expect(plan.command).toBe('codex');
-    const mcp = plan.args.find((arg) => arg.startsWith('mcp_servers.harnas='));
+    const mcp = plan.args.find((arg) => arg.startsWith('mcp_servers.parley='));
     expect(mcp).toContain(workPaths(project, workId).dir);
     expect(plan.args[plan.args.indexOf(mcp as string) - 1]).toBe('-c');
     // Id снаружи codex не принимает — гадать за него нечего.
@@ -168,7 +168,7 @@ describe('план запуска', () => {
     const { workId, sessionId } = await pending('codex');
     const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
 
-    const mcp = plan.args.find((arg) => arg.startsWith('mcp_servers.harnas=')) as string;
+    const mcp = plan.args.find((arg) => arg.startsWith('mcp_servers.parley=')) as string;
     const { value } = parseTomlAssignment(mcp);
     expect((value as Record<string, TomlValue>)['env']).toMatchObject({
       ...sessionEnv(workPaths(project, workId).dir, sessionId),
@@ -214,13 +214,13 @@ describe('план запуска', () => {
 
     const at = plan.args.indexOf('--dangerously-load-development-channels');
     expect(at).toBeGreaterThan(-1);
-    expect(plan.args[at + 1]).toBe('server:harnas');
+    expect(plan.args[at + 1]).toBe('server:parley');
     expect(plan.warnings).toEqual([]);
 
     const configFile = plan.args[plan.args.indexOf('--mcp-config') + 1] as string;
     const config = JSON.parse(await readFile(configFile, 'utf8'));
-    expect(config.mcpServers.harnas.env.PARLEY_CHANNEL).toBe('1');
-    expect(config.mcpServers.harnas.env.HARNAS_CHANNEL).toBe('1');
+    expect(config.mcpServers.parley.env.PARLEY_CHANNEL).toBe('1');
+    expect(config.mcpServers.parley.env.HARNAS_CHANNEL).toBe('1');
   });
 
   it('без push ни флага, ни переменной: сессия живёт по pull', async () => {
@@ -230,8 +230,8 @@ describe('план запуска', () => {
     expect(plan.args).not.toContain('--dangerously-load-development-channels');
     const configFile = plan.args[plan.args.indexOf('--mcp-config') + 1] as string;
     const config = JSON.parse(await readFile(configFile, 'utf8'));
-    expect(config.mcpServers.harnas.env).not.toHaveProperty('PARLEY_CHANNEL');
-    expect(config.mcpServers.harnas.env).not.toHaveProperty('HARNAS_CHANNEL');
+    expect(config.mcpServers.parley.env).not.toHaveProperty('PARLEY_CHANNEL');
+    expect(config.mcpServers.parley.env).not.toHaveProperty('HARNAS_CHANNEL');
   });
 
   it('оверрайд providers.json без {channel} выключает push, но не молча', async () => {
@@ -314,7 +314,7 @@ describe('модель и усилие в плане запуска (дизай�
       effort: 'medium',
     });
 
-    expect(plan.args.some((arg) => arg.startsWith('mcp_servers.harnas='))).toBe(true);
+    expect(plan.args.some((arg) => arg.startsWith('mcp_servers.parley='))).toBe(true);
     expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('gpt-5.5');
     expect(plan.args).toContain('model_reasoning_effort="medium"');
   });
@@ -470,7 +470,7 @@ describe('план возобновления', () => {
     expect(plan.args).not.toContain('--no-daemon');
     expect(plan.args).not.toContain('-a');
     // Те же `-c`, что у запуска: MCP и notify в тред Codex не сохраняются.
-    expect(plan.args.some((arg) => arg.startsWith('mcp_servers.harnas='))).toBe(true);
+    expect(plan.args.some((arg) => arg.startsWith('mcp_servers.parley='))).toBe(true);
     expect(plan.args.some((arg) => arg.startsWith('notify='))).toBe(true);
     // Бриф второй раз не подставляется: сессия продолжается, а не начинается.
     expect(plan.args.join(' ')).not.toContain('прогнать e2e');
@@ -503,7 +503,7 @@ describe('план возобновления', () => {
     });
 
     const at = plan.args.indexOf('--dangerously-load-development-channels');
-    expect(plan.args[at + 1]).toBe('server:harnas');
+    expect(plan.args[at + 1]).toBe('server:parley');
   });
 
   it('возобновление идёт под той же ролью: агент живёт в процессе, а не в транскрипте', async () => {

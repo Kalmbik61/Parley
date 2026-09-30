@@ -36,7 +36,7 @@ process.stdout.write('stub-echo готов\r\n');
 
 // Настоящий MCP-сервер харнесса (кусок 8 «Organic»): строка `STUB_MCP <инструмент> <json-аргументы>` в терминале —
 // вызов инструмента `parley-mcp` так, как его делает модель. Сервер запускается ровно как Claude Code запускает его
-// по конфигу работы: `--mcp-config <файл>` из argv, команда, аргументы и окружение сервера `harnas` из файла поверх
+// по конфигу работы: `--mcp-config <файл>` из argv, команда, аргументы и окружение сервера `parley` из файла поверх
 // окружения процесса. Дальше JSON-RPC по stdio: `initialize`, `notifications/initialized`, `tools/call`. Так E2E
 // проверяет решение ведущего целиком — от инструмента, у которого своя проверка «только ведущий», до карточки в окне.
 // Результат печатается в терминал: `mcp: propose_decision -> {"proposalId":"p-01","rev":0}`, отказ инструмента —
@@ -48,8 +48,8 @@ function startMcp() {
   const at = process.argv.indexOf('--mcp-config');
   const file = at === -1 ? undefined : process.argv[at + 1];
   if (file === undefined) throw new Error('нет --mcp-config: харнесс не передал конфиг MCP');
-  const server = JSON.parse(readFileSync(file, 'utf8')).mcpServers?.harnas;
-  if (server === undefined) throw new Error('в конфиге MCP нет сервера harnas');
+  const server = JSON.parse(readFileSync(file, 'utf8')).mcpServers?.parley;
+  if (server === undefined) throw new Error('в конфиге MCP нет сервера parley');
   const child = spawn(server.command, server.args ?? [], {
     env: { ...process.env, ...server.env },
     stdio: ['pipe', 'pipe', 'inherit'],

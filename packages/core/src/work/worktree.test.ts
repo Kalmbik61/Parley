@@ -4,7 +4,7 @@ import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { STATE_DIRS } from '../names.js';
+import { BRANCH_PREFIX, DEFAULT_WORKTREE_ROOT, STATE_DIRS } from '../names.js';
 import {
   baseBranchOf,
   commitProject,
@@ -70,7 +70,7 @@ describe('plannedWorktree', () => {
   it('строит путь и ветку по формату спеки: <root>/<проект>-<хеш6>/<workId>-<sessionId>', () => {
     const info = plannedWorktree('/tmp/my-project', 'w-0001', 's-02', 'main', worktreeRoot);
 
-    expect(info.branch).toBe('harnas/w-0001/s-02');
+    expect(info.branch).toBe('parley/w-0001/s-02');
     expect(info.base).toBe('main');
     expect(info.createdAt).toBeNull();
     expect(path.dirname(path.dirname(info.path))).toBe(worktreeRoot);
@@ -92,8 +92,16 @@ describe('plannedWorktree', () => {
   });
 
   it('тильда в root раскрывается в домашнюю папку', () => {
-    const info = plannedWorktree('/tmp/proj', 'w-0001', 's-01', 'main', '~/harnas/worktrees');
-    expect(info.path.startsWith(homedir())).toBe(true);
+    const info = plannedWorktree('/tmp/proj', 'w-0001', 's-01', 'main', '~/parley/worktrees');
+    expect(info.path.startsWith(path.join(homedir(), 'parley', 'worktrees') + path.sep)).toBe(true);
+  });
+
+  it('ветка новой сессии — BRANCH_PREFIX, корень по умолчанию — DEFAULT_WORKTREE_ROOT (R9)', () => {
+    const info = plannedWorktree('/tmp/proj', 'w-0003', 's-04', 'main', DEFAULT_WORKTREE_ROOT);
+
+    expect(info.branch).toBe(`${BRANCH_PREFIX}w-0003/s-04`);
+    expect(info.branch.startsWith('parley/')).toBe(true);
+    expect(info.path.startsWith(path.join(homedir(), 'parley', 'worktrees') + path.sep)).toBe(true);
   });
 });
 
@@ -199,7 +207,7 @@ describe('mergeWorktree', () => {
   it('чистая база — merge-коммит с двумя родителями', async () => {
     const info = await withCommittedFeature();
 
-    const result = await mergeWorktree(project, info, 'harnas: влить фичу');
+    const result = await mergeWorktree(project, info, 'parley: влить фичу');
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -216,7 +224,7 @@ describe('mergeWorktree', () => {
     const info = await withCommittedFeature();
     await writeFile(path.join(project, 'dirty.md'), 'грязь\n', 'utf8');
 
-    const result = await mergeWorktree(project, info, 'harnas: влить фичу');
+    const result = await mergeWorktree(project, info, 'parley: влить фичу');
 
     expect(result).toMatchObject({ ok: false, reason: 'base_dirty' });
     await expect(readFile(path.join(project, 'feature.md'), 'utf8')).rejects.toThrow();
@@ -233,7 +241,7 @@ describe('mergeWorktree', () => {
     await git(info.path, ['add', 'feature.md']);
     await git(info.path, ['commit', '-m', 'фича']);
 
-    const result = await mergeWorktree(project, info, 'harnas: влить фичу');
+    const result = await mergeWorktree(project, info, 'parley: влить фичу');
 
     expect(result).toMatchObject({ ok: false, reason: 'base_not_checked_out' });
   });
@@ -250,7 +258,7 @@ describe('mergeWorktree', () => {
     const diff = await worktreeDiff(project, info);
     expect(diff.baseDirty).toBe(false);
 
-    const result = await mergeWorktree(project, info, 'harnas: влить фичу');
+    const result = await mergeWorktree(project, info, 'parley: влить фичу');
     expect(result.ok).toBe(true);
   });
 
@@ -258,7 +266,7 @@ describe('mergeWorktree', () => {
     const info = await withCommittedFeature();
     await writeFile(path.join(info.path, 'draft.md'), 'черновик\n', 'utf8');
 
-    const result = await mergeWorktree(project, info, 'harnas: влить фичу');
+    const result = await mergeWorktree(project, info, 'parley: влить фичу');
 
     expect(result).toMatchObject({ ok: false, reason: 'uncommitted' });
   });
@@ -280,7 +288,7 @@ describe('mergeWorktree', () => {
     await git(project, ['add', 'shared.md']);
     await git(project, ['commit', '-m', 'правка в базе']);
 
-    const result = await mergeWorktree(project, info, 'harnas: влить фичу');
+    const result = await mergeWorktree(project, info, 'parley: влить фичу');
 
     expect(result.ok).toBe(false);
     if (!result.ok) {

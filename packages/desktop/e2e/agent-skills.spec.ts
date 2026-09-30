@@ -9,8 +9,8 @@ import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
- * Скилл `harnas` в проекте (кусок 10 плана комнат): после запуска сессии хост кладёт в проект
- * `.agents/skills/harnas/SKILL.md` и относительный симлинк `.claude/skills/harnas`, а строки в
+ * Скилл `parley` в проекте (кусок 10 плана комнат): после запуска сессии хост кладёт в проект
+ * `.agents/skills/parley/SKILL.md` и относительный симлинк `.claude/skills/parley`, а строки в
  * `info/exclude` прячут их от `git status`. Агент — стаб (`PARLEY_CLAUDE_BIN`), настоящие claude и codex
  * не запускаются; проект и дом — свои временные каталоги теста, `~/.claude` не трогается.
  */
@@ -40,11 +40,11 @@ async function call<T>(window: Page, method: string, params: unknown): Promise<T
   ) as Promise<T>;
 }
 
-const skillFile = (dir: string): string => path.join(dir, '.agents', 'skills', 'harnas', 'SKILL.md');
-const aliasPath = (dir: string): string => path.join(dir, '.claude', 'skills', 'harnas');
+const skillFile = (dir: string): string => path.join(dir, '.agents', 'skills', 'parley', 'SKILL.md');
+const aliasPath = (dir: string): string => path.join(dir, '.claude', 'skills', 'parley');
 const gitStatus = (dir: string): Promise<string> => git(dir, 'status', '--porcelain', '-uall');
 
-test.describe('скилл harnas в проекте', () => {
+test.describe('скилл parley в проекте', () => {
   let home: string;
   let base: string;
   let project: string;
@@ -67,7 +67,7 @@ test.describe('скилл harnas в проекте', () => {
   });
 
   async function openApp(): Promise<{ app: ElectronApplication; window: Page }> {
-    // Корень worktree — тоже во временном каталоге теста: по умолчанию он в `~/harnas/worktrees` человека.
+    // Корень worktree — тоже во временном каталоге теста: по умолчанию он в `~/parley/worktrees` человека.
     const env = {
       ...process.env,
       PARLEY_HOME: home,
@@ -96,26 +96,26 @@ test.describe('скилл harnas в проекте', () => {
     return { workId, sessionId: ref.sessionId };
   }
 
-  test('после запуска сессии лежат .agents/skills/harnas/SKILL.md и симлинк .claude/skills/harnas; git status их не показывает', async () => {
+  test('после запуска сессии лежат .agents/skills/parley/SKILL.md и симлинк .claude/skills/parley; git status их не показывает', async () => {
     const { window } = await openApp();
 
     await newSession(window, project);
 
     // Скилл ставится до старта процесса: к моменту ответа sessions.create он уже на диске.
     const text = await readFile(skillFile(project), 'utf8');
-    expect(text).toMatch(/^---\nname: harnas\ndescription: "/);
+    expect(text).toMatch(/^---\nname: parley\ndescription: "/);
     expect(text).toContain('`read_guide`');
     expect((await lstat(aliasPath(project))).isSymbolicLink()).toBe(true);
     // Симлинк относительный и ведёт в канонную копию: Claude Code читает через него тот же файл.
-    expect(await readlink(aliasPath(project))).toBe(path.join('..', '..', '.agents', 'skills', 'harnas'));
+    expect(await readlink(aliasPath(project))).toBe(path.join('..', '..', '.agents', 'skills', 'parley'));
     expect(await readFile(path.join(aliasPath(project), 'SKILL.md'), 'utf8')).toBe(text);
 
     const status = await gitStatus(project);
     expect(status).not.toContain('.agents');
     expect(status).not.toContain('.claude');
     const exclude = await readFile(path.join(project, '.git', 'info', 'exclude'), 'utf8');
-    expect(exclude).toContain('/.agents/skills/harnas');
-    expect(exclude).toContain('/.claude/skills/harnas');
+    expect(exclude).toContain('/.agents/skills/parley');
+    expect(exclude).toContain('/.claude/skills/parley');
   });
 
   test('сессия со своим worktree: скилл и там, и в проекте; git status обоих чист от скилла', async () => {
@@ -131,7 +131,7 @@ test.describe('скилл harnas в проекте', () => {
     if (worktree === undefined) throw new Error('у сессии нет worktree');
 
     for (const dir of [project, worktree]) {
-      expect(await readFile(skillFile(dir), 'utf8'), dir).toContain('name: harnas');
+      expect(await readFile(skillFile(dir), 'utf8'), dir).toContain('name: parley');
       expect((await lstat(aliasPath(dir))).isSymbolicLink(), dir).toBe(true);
       const status = await gitStatus(dir);
       expect(status, dir).not.toContain('.agents');
@@ -184,6 +184,6 @@ test.describe('скилл harnas в проекте', () => {
     await expect(lstat(path.join(other, '.agents'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(lstat(path.join(other, '.claude'))).rejects.toMatchObject({ code: 'ENOENT' });
     // Уже поставленное в первом проекте выключение не удаляет.
-    expect(await readFile(skillFile(project), 'utf8')).toContain('name: harnas');
+    expect(await readFile(skillFile(project), 'utf8')).toContain('name: parley');
   });
 });

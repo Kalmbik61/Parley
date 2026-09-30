@@ -2,8 +2,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it } from 'vitest';
 import { createParleyServer } from '../mcp/tools.js';
+import { LEGACY_SKILL_NAME, MCP_SERVER_NAME, SKILL_NAME } from '../names.js';
 import { GUIDE_TOPICS } from './guide.js';
-import { SKILL_MD, SKILL_NAME, skillStub } from './skill.js';
+import { SKILL_MD, skillStub } from './skill.js';
 
 /** Frontmatter и тело `SKILL.md`: между первой и второй строкой `---`. */
 function parts(text: string): { front: string[]; body: string } {
@@ -21,12 +22,12 @@ function field(front: string[], name: string): string {
   return line.slice(name.length + 2);
 }
 
-describe('заглушка скилла harnas: frontmatter по спецификации Agent Skills', () => {
+describe('заглушка скилла parley: frontmatter по спецификации Agent Skills', () => {
   const { front, body } = parts(SKILL_MD);
 
-  it('name — harnas: строчные латиница, цифры и дефис, до 64 знаков, как имя каталога', () => {
-    expect(field(front, 'name')).toBe('harnas');
-    expect(SKILL_NAME).toBe('harnas');
+  it('name — parley: строчные латиница, цифры и дефис, до 64 знаков, как имя каталога', () => {
+    expect(field(front, 'name')).toBe('parley');
+    expect(SKILL_NAME).toBe('parley');
     expect(SKILL_NAME).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
     expect(SKILL_NAME.length).toBeLessThanOrEqual(64);
   });
@@ -41,14 +42,15 @@ describe('заглушка скилла harnas: frontmatter по специфи�
     expect(description.length).toBeLessThanOrEqual(1536);
   });
 
-  it('description отвечает «когда подключаться» и «когда нет»: сервер harnas, инструменты, без сервера не нужен', () => {
+  it('description отвечает «когда подключаться» и «когда нет»: сервер parley, инструменты, без сервера не нужен', () => {
     const description = JSON.parse(field(front, 'description')) as string;
 
-    expect(description).toMatch(/MCP-сервер harnas/);
+    expect(description).toContain(`MCP-сервер ${MCP_SERVER_NAME}`);
+    expect(description).toMatch(/MCP-сервер parley/);
     for (const word of ['карта работы', 'комнаты', 'ведущий', 'решения', 'письма', 'отчёты']) {
       expect(description, word).toContain(word);
     }
-    expect(description).toMatch(/Без сервера harnas навык не нужен/);
+    expect(description).toMatch(/Без сервера parley навык не нужен/);
   });
 
   it('в frontmatter только name и description: лишних полей Codex и Claude Code не ждут', () => {
@@ -63,9 +65,13 @@ describe('заглушка скилла harnas: frontmatter по специфи�
   it('заглушка одна и та же при каждом вызове', () => {
     expect(skillStub()).toBe(SKILL_MD);
   });
+
+  it('прежнего имени в заглушке нет: ни сервера, ни тега, ни продукта (R8)', () => {
+    expect(SKILL_MD.toLowerCase()).not.toContain(LEGACY_SKILL_NAME);
+  });
 });
 
-describe('заглушка скилла harnas: тело', () => {
+describe('заглушка скилла parley: тело', () => {
   const { body } = parts(SKILL_MD);
 
   it('отсылает к read_guide и не пересказывает гид', () => {
@@ -93,7 +99,7 @@ describe('заглушка скилла harnas: тело', () => {
   });
 });
 
-describe('заглушка скилла harnas: как приходят письма', () => {
+describe('заглушка скилла parley: как приходят письма', () => {
   const { body } = parts(SKILL_MD);
 
   it('в окне письма объявляет указатель после хода, тег channel — только у сессий CLI parley-core', () => {
@@ -103,7 +109,7 @@ describe('заглушка скилла harnas: как приходят пись
       /В сессиях окна письма приходят указателем «Новые письма \(N\)… Вызови check_inbox\.» после твоего хода — вызови `check_inbox`\./,
     );
     expect(body).toMatch(
-      /Тег `<channel source="harnas">` бывает только у сессий, поднятых CLI `parley-core`\./,
+      /Тег `<channel source="parley">` бывает только у сессий, поднятых CLI `parley-core`\./,
     );
   });
 
@@ -161,7 +167,7 @@ describe('заглушка и гид согласованы', () => {
         'question',
         'note',
         'decision',
-        'harnas',
+        'parley',
         ...GUIDE_TOPICS.map((item) => item.topic),
       ]);
       const named = [...SKILL_MD.matchAll(/`([a-z]+(?:_[a-z]+)*)`/g)]

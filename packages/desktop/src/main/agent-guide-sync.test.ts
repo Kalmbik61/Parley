@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 import { S } from '../shared/strings.js';
 
 /** Те же ветка, база и сессия, что в примерах гида. */
-const BRANCH = 'harnas/w-0003/s-02';
+const BRANCH = 'parley/w-0003/s-02';
 const BASE = 'master';
 
 describe('гид агента цитирует блоки окна дословно', () => {

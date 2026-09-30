@@ -15,7 +15,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { mapLimited } from '../map-limited.js';
-import { STATE_DIRS } from '../names.js';
+import { BRANCH_PREFIX, STATE_DIRS } from '../names.js';
 import type { WorktreeInfo } from './types.js';
 
 const run = promisify(execFile);
@@ -42,7 +42,8 @@ function expandRoot(root: string): string {
 
 /**
  * План worktree: путь `<root>/<имя проекта>-<хеш6>/<workId>-<sessionId>`, ветка
- * `harnas/<workId>/<sessionId>` (спецификация 8.1). Хеш от полного пути проекта
+ * `parley/<workId>/<sessionId>` (спецификация 8.1; префикс — `BRANCH_PREFIX`, у сессий, заведённых до
+ * переименования, в карте остался `harnas/…` — он не переписывается). Хеш от полного пути проекта
  * защищает от коллизий одноимённых проектов в разных каталогах.
  */
 export function plannedWorktree(
@@ -56,7 +57,7 @@ export function plannedWorktree(
   const projectDir = `${path.basename(projectPath)}-${hash}`;
   return {
     path: path.join(expandRoot(root), projectDir, `${workId}-${sessionId}`),
-    branch: `harnas/${workId}/${sessionId}`,
+    branch: `${BRANCH_PREFIX}${workId}/${sessionId}`,
     base,
     createdAt: null,
   };

@@ -90,7 +90,7 @@ export interface ProviderInfo extends Omit<ProviderEntry, 'id'> {
  * Настройки Codex, которые харнесс задаёт флагами `-c` (спека комнат Organic, 3.6) — и при запуске, и при
  * `resume`. Только своими `-c` в своих сессиях: личный конфиг человека в домашней папке Codex не читается и
  * не пишется, его `notify` в этих сессиях не зовётся.
- * - `mcp_servers.harnas` — сервер координации (`{mcpConfig}`);
+ * - `mcp_servers.parley` — сервер координации (`{mcpConfig}`);
  * - `tui.terminal_title` — состояние в заголовке окна (OSC 0): спиннер идёт, пока агент работает,
  *   `status` даёт `Ready` и `Working`, при вопросе человеку заголовок становится
  *   `[ ! ] Action Required`; `session-id` — id треда;
@@ -124,7 +124,7 @@ const CODEX_CONFIG_FLAGS: readonly string[] = [
  * - `-a on-request` — вопросы одобрений идут человеку в терминал агента (это и умолчание Codex, но
  *   личный конфиг человека мог его сменить). Флаг заменяет в сессиях харнесса и личную политику
  *   одобрений человека, в том числе более строгую, если она задана в его конфиге. `never` нельзя: вызов
- *   инструмента, требующий одобрения, при нём отклоняется — сервер `harnas` перестал бы работать.
+ *   инструмента, требующий одобрения, при нём отклоняется — сервер `parley` перестал бы работать.
  * При `resume` их нет: спека говорит «те же `-c`», принимает ли `resume` эти флаги после id, на живом Codex
  * не проверено (отказ разбора флагов провалил бы каждый подъём спящей сессии), а тред хранит политику
  * одобрений и без них.
@@ -218,7 +218,7 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
     runner: {
       // `codex [OPTIONS] [PROMPT]`: стартовый промпт — позиционный аргумент.
       // MCP-серверы codex берёт из `~/.codex/config.toml`; свой сервер добавляем
-      // глобальным `-c mcp_servers.harnas=<inline table>`, не трогая файл
+      // глобальным `-c mcp_servers.parley=<inline table>`, не трогая файл
       // пользователя. Файла-конфига MCP, как у claude, у codex нет.
       command: 'codex',
       // Свои настройки сессии — `CODEX_PARLEY_FLAGS`. Модель — `--model` (`-m`), усилие —
@@ -279,7 +279,7 @@ export interface RunnerSubstitutions {
   systemPrompt?: string;
   prompt?: string;
   providerSessionId?: string;
-  /** Канал звонка: `server:harnas` при включённом push, иначе подстановки нет. */
+  /** Канал звонка: `server:parley` при включённом push, иначе подстановки нет. */
   channel?: string;
   /** Имя роли для `claude --agent` (спецификация 2026-09-08, 4.4). */
   agent?: string;

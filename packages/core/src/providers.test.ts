@@ -131,7 +131,7 @@ describe('подстановка аргументов запуска', () => {
   });
 
   it('claude получает системную вставку и при запуске, и при возобновлении', () => {
-    const guidance = 'Ты в харнессе my-harnas: работа w-0042, твоя сессия s-02.';
+    const guidance = 'Ты в харнессе Parley: работа w-0042, твоя сессия s-02.';
 
     const started = startCommand(PROVIDERS.claude, {
       sessionUuid: 'uuid-1',
@@ -158,7 +158,7 @@ describe('подстановка аргументов запуска', () => {
   });
 
   it('провайдеру без такой возможности вставка не достаётся', () => {
-    const guidance = 'Ты в харнессе my-harnas.';
+    const guidance = 'Ты в харнессе Parley.';
     // У codex и glm подстановки `{systemPrompt}` в шаблоне нет — она отбрасывается
     // молча, как `{settingsFile}`: своих механизмов системного промпта мы не трогаем.
     expect(startCommand(PROVIDERS.codex, { systemPrompt: guidance, prompt: 'бриф' }).args).toEqual([
@@ -172,14 +172,14 @@ describe('подстановка аргументов запуска', () => {
     expect(
       startCommand(PROVIDERS.claude, {
         sessionUuid: 'uuid-1',
-        channel: 'server:harnas',
+        channel: 'server:parley',
         prompt: 'бриф',
       }).args,
     ).toEqual([
       '--session-id',
       'uuid-1',
       '--dangerously-load-development-channels',
-      'server:harnas',
+      'server:parley',
       'бриф',
     ]);
 
@@ -187,9 +187,9 @@ describe('подстановка аргументов запуска', () => {
     expect(
       resumeCommand(PROVIDERS.claude, {
         providerSessionId: 'bb2137cb',
-        channel: 'server:harnas',
+        channel: 'server:parley',
       }).args,
-    ).toEqual(['--resume', 'bb2137cb', '--dangerously-load-development-channels', 'server:harnas']);
+    ).toEqual(['--resume', 'bb2137cb', '--dangerously-load-development-channels', 'server:parley']);
   });
 
   it('без channel пара выпадает целиком: push выключен — флага нет', () => {
@@ -240,7 +240,7 @@ describe('подстановка аргументов запуска', () => {
     expect(
       startCommand(PROVIDERS.codex, {
         sessionUuid: 'не-поддерживается',
-        mcpConfig: 'mcp_servers.harnas={command="parley-mcp"}',
+        mcpConfig: 'mcp_servers.parley={command="parley-mcp"}',
         prompt: '# Работа w-0042',
       }),
     ).toEqual({
@@ -250,7 +250,7 @@ describe('подстановка аргументов запуска', () => {
         '-a',
         'on-request',
         '-c',
-        'mcp_servers.harnas={command="parley-mcp"}',
+        'mcp_servers.parley={command="parley-mcp"}',
         ...CODEX_TUI_ARGS,
         '# Работа w-0042',
       ],
@@ -311,7 +311,7 @@ describe('модель и усилие новой сессии (дизайн к�
   it('codex: модель — флагом --model, усилие — переопределением конфига -c model_reasoning_effort', () => {
     expect(
       startCommand(PROVIDERS.codex, {
-        mcpConfig: 'mcp_servers.harnas={command="parley-mcp"}',
+        mcpConfig: 'mcp_servers.parley={command="parley-mcp"}',
         model: 'gpt-5.5',
         effort: 'high',
         prompt: 'бриф',
@@ -321,7 +321,7 @@ describe('модель и усилие новой сессии (дизайн к�
       '-a',
       'on-request',
       '-c',
-      'mcp_servers.harnas={command="parley-mcp"}',
+      'mcp_servers.parley={command="parley-mcp"}',
       ...CODEX_TUI_ARGS,
       '--model',
       'gpt-5.5',
@@ -333,14 +333,14 @@ describe('модель и усилие новой сессии (дизайн к�
 
   it('codex: без усилия строка -c выпадает вместе со своим флагом, MCP-пара остаётся', () => {
     expect(
-      startCommand(PROVIDERS.codex, { mcpConfig: 'mcp_servers.harnas={}', model: 'gpt-5.5', prompt: 'бриф' })
+      startCommand(PROVIDERS.codex, { mcpConfig: 'mcp_servers.parley={}', model: 'gpt-5.5', prompt: 'бриф' })
         .args,
     ).toEqual([
       '--no-daemon',
       '-a',
       'on-request',
       '-c',
-      'mcp_servers.harnas={}',
+      'mcp_servers.parley={}',
       ...CODEX_TUI_ARGS,
       '--model',
       'gpt-5.5',
@@ -357,11 +357,11 @@ describe('модель и усилие новой сессии (дизайн к�
     expect(
       resumeCommand(PROVIDERS.codex, {
         providerSessionId: 'uuid-1',
-        mcpConfig: 'mcp_servers.harnas={}',
+        mcpConfig: 'mcp_servers.parley={}',
         model: 'gpt-5.5',
         effort: 'low',
       }).args,
-    ).toEqual(['resume', 'uuid-1', '-c', 'mcp_servers.harnas={}', ...CODEX_TUI_ARGS]);
+    ).toEqual(['resume', 'uuid-1', '-c', 'mcp_servers.parley={}', ...CODEX_TUI_ARGS]);
   });
 
   it('glm флагов не знает: выбор молча отбрасывается', () => {
@@ -880,7 +880,7 @@ describe('commandBinary', () => {
 describe('codex: запуск и возобновление (спека комнат Organic, 3.6)', () => {
   /** Что launch кладёт в подстановки: MCP и notify — готовые значения `-c`. */
   const subs = {
-    mcpConfig: 'mcp_servers.harnas={command="/usr/bin/node",args=["/h/mcp/server.js"],env={PARLEY_WORK_DIR="/p/.parley/works/w-0001",PARLEY_SESSION_ID="s-02"},startup_timeout_sec=30,tool_timeout_sec=1860}',
+    mcpConfig: 'mcp_servers.parley={command="/usr/bin/node",args=["/h/mcp/server.js"],env={PARLEY_WORK_DIR="/p/.parley/works/w-0001",PARLEY_SESSION_ID="s-02"},startup_timeout_sec=30,tool_timeout_sec=1860}',
     notify: 'notify=["/usr/bin/node","/h/work/codex-notify-bin.js"]',
     model: 'gpt-6-sol',
     effort: 'high' as const,
@@ -1025,7 +1025,7 @@ describe('codex: запуск и возобновление (спека комн
       resumeCommand(PROVIDERS.codex, { ...subs, providerSessionId: 'uuid-1' }).args,
     ]) {
       const line = args.join(' ');
-      // Вызовы `harnas` при `never` отклоняются, а остальное — самовыдача прав или доверия.
+      // Вызовы `parley` при `never` отклоняются, а остальное — самовыдача прав или доверия.
       for (const forbidden of [
         /(^| )-a never/,
         /--ask-for-approval/,

@@ -145,7 +145,7 @@ describe('diff → commit → merge (5)', () => {
     await expect(readFile(path.join(project, 'draft.md'), 'utf8')).resolves.toContain('черновик');
   });
 
-  it('сообщение слияния — «harnas: влить S<NN> (<ярлык>) из <ветка>»', async () => {
+  it('сообщение слияния — «parley: влить S<NN> (<ярлык>) из <ветка>»', async () => {
     const { ref, info } = await sessionWithWorktree('моя фича');
     const service = createWorktreesService(stubSessions());
     await writeFile(path.join(info.path, 'x.md'), 'x\n', 'utf8');
@@ -156,7 +156,7 @@ describe('diff → commit → merge (5)', () => {
     expect(result.ok).toBe(true);
 
     const message = (await git(project, ['log', '-1', '--pretty=%s'])).stdout.trim();
-    expect(message).toBe(`harnas: влить ${sessionTag(ref.sessionId)} (моя фича) из ${info.branch}`);
+    expect(message).toBe(`parley: влить ${sessionTag(ref.sessionId)} (моя фича) из ${info.branch}`);
   });
 
   it('грязная база — merge отвечает base_dirty', async () => {

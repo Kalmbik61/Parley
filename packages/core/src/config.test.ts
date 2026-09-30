@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG, ENV_NAMES, configPath, loadConfig, parseSetting, saveConfig } from './config.js';
+import { DEFAULT_WORKTREE_ROOT } from './names.js';
 
 let home = '';
 const file = (): string => path.join(home, 'config.json');
@@ -33,10 +34,20 @@ describe('loadConfig', () => {
       agentSkills: true,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
-      worktreeRoot: '~/harnas/worktrees',
+      worktreeRoot: '~/parley/worktrees',
     });
     expect(loaded.config).toEqual(DEFAULT_CONFIG);
     expect(loaded.warning).toBeNull();
+  });
+
+  it('корень worktree по умолчанию — ~/parley/worktrees, а заданный человеком (и прежний ~/harnas/worktrees) остаётся как есть (R6, R9)', async () => {
+    expect((await loadConfig(file(), {})).config.worktreeRoot).toBe(DEFAULT_WORKTREE_ROOT);
+    expect(DEFAULT_CONFIG.worktreeRoot).toBe('~/parley/worktrees');
+
+    await write({ worktreeRoot: '~/harnas/worktrees' });
+    const pinned = await loadConfig(file(), {});
+    expect(pinned.config.worktreeRoot).toBe('~/harnas/worktrees');
+    expect(pinned.warning).toBeNull();
   });
 
   it('файл перекрывает дефолты, окружение — файл', async () => {
@@ -57,7 +68,7 @@ describe('loadConfig', () => {
       agentSkills: true,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
-      worktreeRoot: '~/harnas/worktrees',
+      worktreeRoot: '~/parley/worktrees',
     });
     expect(fromFile.warning).toBeNull();
 
@@ -76,7 +87,7 @@ describe('loadConfig', () => {
       agentSkills: true,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
-      worktreeRoot: '~/harnas/worktrees',
+      worktreeRoot: '~/parley/worktrees',
     });
     expect(fromEnv.warning).toBeNull();
   });

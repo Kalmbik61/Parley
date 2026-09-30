@@ -163,7 +163,7 @@ export function createWorktreesService(
 
     async merge(ref) {
       const { label, worktree } = await requirePresentWorktree(ref);
-      const message = `harnas: влить ${sessionTag(ref.sessionId)} (${label}) из ${worktree.branch}`;
+      const message = `parley: влить ${sessionTag(ref.sessionId)} (${label}) из ${worktree.branch}`;
       try {
         return await mergeWorktree(ref.projectPath, worktree, message);
       } catch (error) {

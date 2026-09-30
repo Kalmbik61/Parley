@@ -13,7 +13,7 @@ import { HUMAN, type WorkMap } from '../work/types.js';
 import { createParleyServer } from './tools.js';
 
 /**
- * Аннотации MCP инструментов `harnas` (спека комнат, решение 13). По ним Codex решает, спрашивать ли
+ * Аннотации MCP инструментов `parley` (спека комнат, решение 13). По ним Codex решает, спрашивать ли
  * человека перед вызовом: без аннотаций он спросил бы перед каждым (незаданные `destructiveHint` и
  * `openWorldHint` считаются истиной), а с `readOnlyHint: true` не спрашивает вовсе. Поэтому
  * аннотация — обещание клиенту, и тесты проверяют не только таблицу, но и что она правда: чтения
@@ -145,7 +145,7 @@ afterEach(async () => {
   await Promise.all([home, project, binDir].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-describe('аннотации инструментов harnas: таблица', () => {
+describe('аннотации инструментов parley: таблица', () => {
   it('у каждого инструмента сервера есть аннотации, и они ровно по таблице решения 13', async () => {
     const { tools } = await (await connect()).listTools();
 
@@ -177,7 +177,7 @@ describe('аннотации инструментов harnas: таблица', (
   });
 });
 
-describe('аннотации инструментов harnas: правда по коду', () => {
+describe('аннотации инструментов parley: правда по коду', () => {
   it('чтения ничего не пишут: ни карту, ни файлы проекта, ни дом харнесса', async () => {
     const client = await connect();
     const before = await snapshotAll();

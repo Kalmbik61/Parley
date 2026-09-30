@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { bothEnv, ENV_PREFIX, LEGACY_ENV_PREFIX } from '../names.js';
+import { bothEnv, ENV_PREFIX, LEGACY_ENV_PREFIX, MCP_SERVER_NAME } from '../names.js';
 import type { McpConfigKind } from '../providers.js';
 import { CODEX_NOTIFY_ENTRY } from './codex-notify.js';
 import { ensureStateDir } from './state-dir.js';
@@ -23,9 +23,6 @@ function serverLaunch(command?: string): { command: string; args: string[] } {
     ? { command: process.execPath, args: [MCP_SERVER_ENTRY] }
     : { command, args: [] };
 }
-
-/** Имя сервера в конфиге: под ним агент видит инструменты как `mcp__harnas__*`. */
-export const MCP_SERVER_NAME = 'harnas';
 
 export interface McpConfigParams {
   /** Путь к `<проект>/.parley/works/<work-id>/` — переменная `PARLEY_WORK_DIR` сервера (и прежняя `HARNAS_WORK_DIR`). */
@@ -63,8 +60,10 @@ export interface McpConfigFile {
 /**
  * Конфиг MCP на одну сессию: сервер `parley-mcp` по stdio, а кто звонит — он
  * узнаёт из окружения, поэтому агенту не нужно представляться (спецификация,
- * раздел 4). Сессионные переменные уходят под обоими именами (`PARLEY_*` и `HARNAS_*`, R3):
- * сервер читает новые, а старый `parley-mcp` (сохранённый конфиг, чужая сборка) — прежние.
+ * раздел 4). Под именем `MCP_SERVER_NAME` (`names.ts`) агент видит инструменты как `mcp__parley__*`;
+ * сервер в конфиге один — под прежним именем второго не регистрируется. Сессионные переменные уходят
+ * под обоими именами (`PARLEY_*` и `HARNAS_*`, R3): сервер читает новые, а старый `parley-mcp`
+ * (сохранённый конфиг, чужая сборка) — прежние.
  */
 export function mcpConfig({
   workDir,
@@ -110,7 +109,7 @@ export const tomlString = (value: string): string =>
 /**
  * Сколько Codex ждёт запуск сервера (по умолчанию 10 с) и ответ инструмента (по умолчанию 60 с).
  * Запуск — с запасом: медленный старт `node` под нагрузкой не должен молча оставить агента без
- * инструментов `harnas` (сбой запуска сервера Codex не считает фатальным). Ответ — дольше самого
+ * инструментов `parley` (сбой запуска сервера Codex не считает фатальным). Ответ — дольше самого
  * долгого `wait_for` (`MAX_TIMEOUT_SEC` в `mcp/tools.ts`, 30 минут) и ещё минута сверху: иначе клиент
  * оборвал бы ожидание письма через минуту. Тест сверяет второе число с `MAX_TIMEOUT_SEC`.
  */
