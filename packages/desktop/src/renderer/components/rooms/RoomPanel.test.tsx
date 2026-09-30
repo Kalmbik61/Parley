@@ -231,16 +231,21 @@ describe('RoomPanel — сообщения (1.3)', () => {
     renderPanel(entry);
     expect(messageRow('m-1').textContent).toContain('You');
     expect(messageRow('m-1').textContent).toContain('→ all');
-    // На листе центра `neutral-100` светлой темы — сам лист: заливка тега `note` там 200, в тёмной прежняя 100.
-    const noteClasses = within(messageRow('m-1')).getByText('note').className.split(/\s+/);
-    expect(noteClasses).toContain('bg-neutral-200');
-    expect(noteClasses).toContain('dark:bg-neutral-100');
-    expect(noteClasses).not.toContain('bg-neutral-100');
+    // Лента стоит на листе центра: там 100-е ступени светлой темы — почти сам лист (`neutral-100` — он и есть), и
+    // теги всех трёх видов красятся заливкой 200 (в тёмной прежняя 100).
+    const sheetFill = (kind: string, ramp: string): void => {
+      const row = messageRow(kind === 'note' ? 'm-1' : kind === 'question' ? 'm-2' : 'm-3');
+      const classes = within(row).getByText(kind).className.split(/\s+/);
+      expect(classes, `${kind}: светлая`).toContain(`bg-${ramp}-200`);
+      expect(classes, `${kind}: тёмная`).toContain(`dark:bg-${ramp}-100`);
+      expect(classes, `${kind}: голой 100 нет`).not.toContain(`bg-${ramp}-100`);
+    };
+    sheetFill('note', 'neutral');
     expect(messageRow('m-2').textContent).toContain('S03 ревью');
     expect(messageRow('m-2').textContent).toContain('→ S01 архитектор');
-    expect(within(messageRow('m-2')).getByText('question').className).toContain('bg-accent-100');
+    sheetFill('question', 'accent');
     expect(messageRow('m-3').textContent).toContain('→ S02 бэкенд, S03 ревью');
-    expect(within(messageRow('m-3')).getByText('decision').className).toContain('bg-accent-2-100');
+    sheetFill('decision', 'accent-2');
   });
 
   it('порядок ленты — по времени сообщений', () => {

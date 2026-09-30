@@ -425,8 +425,11 @@ describe('ui/badge — теги трёх видов', () => {
     ['accent', 'bg-accent-100', 'text-accent-800'],
     ['accent-2', 'bg-accent-2-100', 'text-accent-2-800'],
     ['neutral', 'bg-neutral-100', 'text-neutral-800'],
-    // Заметка на листе центра: в светлой теме `neutral-100` — сам лист, тег слился бы с ним (в тёмной — 100).
+    // Теги на листе центра: в светлой теме 100-е ступени — почти сам лист (`neutral-100` — он и есть), тег слился бы
+    // с ним (в тёмной — 100).
     ['neutral-sheet', 'bg-neutral-200', 'text-neutral-800'],
+    ['accent-sheet', 'bg-accent-200', 'text-accent-800'],
+    ['accent-2-sheet', 'bg-accent-2-200', 'text-accent-2-800'],
   ] as const)('вид %s — фон и текст 800 своей рампы (на листе светлой — 200)', (variant, background, text) => {
     render(<Badge variant={variant}>вид</Badge>);
     const classes = screen.getByText('вид').className;
@@ -434,13 +437,20 @@ describe('ui/badge — теги трёх видов', () => {
     expect(classes).toContain(text);
   });
 
-  it('neutral-sheet: светлая — фон 200, тёмная — 100 (как в handoff dark-08); голого bg-neutral-100 нет — он совпал бы с листом светлой темы', () => {
-    render(<Badge variant="neutral-sheet">вид</Badge>);
-    const classes = screen.getByText('вид').className.split(/\s+/);
-    expect(classes).toContain('bg-neutral-200');
-    expect(classes).toContain('dark:bg-neutral-100');
-    expect(classes).not.toContain('bg-neutral-100');
-  });
+  it.each([
+    ['neutral-sheet', 'neutral'],
+    ['accent-sheet', 'accent'],
+    ['accent-2-sheet', 'accent-2'],
+  ] as const)(
+    '%s: светлая — фон 200, тёмная — 100 (как в handoff dark-08); голой заливки 100 нет — на листе светлой темы она невидима',
+    (variant, ramp) => {
+      render(<Badge variant={variant}>вид</Badge>);
+      const classes = screen.getByText('вид').className.split(/\s+/);
+      expect(classes).toContain(`bg-${ramp}-200`);
+      expect(classes).toContain(`dark:bg-${ramp}-100`);
+      expect(classes).not.toContain(`bg-${ramp}-100`);
+    },
+  );
 });
 
 describe('ui/toggle-group — сегмент', () => {

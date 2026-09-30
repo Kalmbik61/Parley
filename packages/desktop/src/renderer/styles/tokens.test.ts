@@ -21,6 +21,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { compositeOver, contrastRatio, type Rgb } from '../test-utils/contrast.js';
+import { badgeVariants } from '../ui/badge.js';
 import {
   colorOver,
   parseThemeInline,
@@ -71,11 +72,26 @@ const TEXT_BACKGROUNDS: Record<string, (theme: Theme) => Rgb> = {
 };
 
 /**
- * Заливка тега заметки на листе центра — вид `neutral-sheet` в `ui/badge.tsx` (`bg-neutral-200
- * dark:bg-neutral-100`): в светлой теме `neutral-100` — сам лист, там 200; в тёмной 100, как на снимке
- * handoff `dark-08`.
+ * Теги вида сообщения на листе центра (лента комнаты) — виды `*-sheet` в `ui/badge.tsx`. Заливка 100 у них лишь в
+ * тёмной теме: в светлой `neutral-100` — сам лист, а `accent-100` и `accent-2-100` от него на 1.00–1.01:1, то есть
+ * тег `question` или `decision` там невидим, поэтому светлая берёт 200. Ступени читаются из классов самого вида
+ * (`bg-<рампа>-200 dark:bg-<рампа>-100`), а не из копии таблицы: правка вида без правки токенов ловится здесь.
  */
-const SHEET_NOTE_FILL: Record<Theme, string> = { light: '--color-neutral-200', dark: '--color-neutral-100' };
+const SHEET_TAGS = { note: 'neutral-sheet', question: 'accent-sheet', decision: 'accent-2-sheet' } as const;
+type SheetTagKind = keyof typeof SHEET_TAGS;
+
+/** Токен заливки и рампа текста тега вида `kind` в теме `theme`, как их даёт `badgeVariants`. */
+function sheetTag(kind: SheetTagKind, theme: Theme): { fill: string; text: string } {
+  const classes = badgeVariants({ variant: SHEET_TAGS[kind] }).split(/\s+/);
+  const light = classes.find((name) => /^bg-/.test(name));
+  const dark = classes.find((name) => /^dark:bg-/.test(name));
+  const text = classes.find((name) => /^text-.+-800$/.test(name));
+  if (light === undefined || dark === undefined || text === undefined) throw new Error(`вид ${SHEET_TAGS[kind]}: нет bg, dark:bg или text-…-800`);
+  return {
+    fill: `--color-${(theme === 'light' ? light : dark.slice('dark:'.length)).slice('bg-'.length)}`,
+    text: `--color-${text.slice('text-'.length)}`,
+  };
+}
 
 // ── 1. Спека: палитра и тени дословно ────────────────────────────────────────────────────────
 
@@ -411,20 +427,26 @@ describe('примитивы Organic — текст на своём фоне н�
       }
     });
 
-    it(`${theme}: тег заметки на листе (вид neutral-sheet) — текст neutral-800 на его заливке не ниже 4.5:1`, () => {
-      expect(contrastRatio(solid(theme, '--color-neutral-800'), solid(theme, SHEET_NOTE_FILL[theme]))).toBeGreaterThanOrEqual(TEXT);
-    });
+    for (const kind of Object.keys(SHEET_TAGS) as SheetTagKind[]) {
+      it(`${theme}: тег ${kind} на листе (вид ${SHEET_TAGS[kind]}) — текст 800 на его заливке не ниже 4.5:1`, () => {
+        const { fill, text } = sheetTag(kind, theme);
+        expect(contrastRatio(solid(theme, text), solid(theme, fill))).toBeGreaterThanOrEqual(TEXT);
+      });
 
-    it(`${theme}: заливка тега заметки на листе отличима от листа — читается плашкой, а не «на единицу RGB» (не ниже 1.1:1)`, () => {
-      const sheet = solid(theme, '--sheet');
-      const fill = solid(theme, SHEET_NOTE_FILL[theme]);
-      expect(fill).not.toEqual(sheet);
-      expect(contrastRatio(fill, sheet)).toBeGreaterThanOrEqual(1.1);
-    });
+      it(`${theme}: заливка тега ${kind} на листе отличима от листа — читается плашкой, а не «на единицу RGB» (не ниже 1.1:1)`, () => {
+        const sheet = solid(theme, '--sheet');
+        const fill = solid(theme, sheetTag(kind, theme).fill);
+        expect(fill).not.toEqual(sheet);
+        expect(contrastRatio(fill, sheet)).toBeGreaterThanOrEqual(1.1);
+      });
+    }
 
     if (theme === 'light') {
-      it('светлая: neutral-100 — это и есть лист (--sheet), поэтому обычный тег neutral на листе невидим и заметке там нужна заливка 200', () => {
+      it('светлая: neutral-100 — это и есть лист (--sheet), а заливки 100 у accent и accent-2 — от него на 1.00–1.01:1: обычные теги на листе невидимы и нужна заливка 200', () => {
         expect(solid('light', '--color-neutral-100')).toEqual(solid('light', '--sheet'));
+        for (const ramp of ['accent', 'accent-2']) {
+          expect(contrastRatio(solid('light', `--color-${ramp}-100`), solid('light', '--sheet')), `${ramp}-100`).toBeLessThan(1.1);
+        }
       });
     }
 
