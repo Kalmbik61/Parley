@@ -868,6 +868,43 @@ type ChannelNotification = {
 };
 
 /**
+ * id треда Codex — uuid. Всё, что на него не похоже, в карту не идёт: записанный id потом уходит
+ * аргументом `codex resume <id>`, и значение, начинающееся с дефиса, было бы флагом.
+ */
+const THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Привязка сессии Codex к её логу (спека комнат Organic, 3.6). Codex кладёт id треда в `_meta.threadId`
+ * каждого `tools/call` к любому MCP-серверу, поэтому сервер узнаёт его при первом же вызове — без
+ * гадания по cwd и времени запуска, которое принимает чужой лог, если рядом стартовал ещё один агент.
+ * Пишется только в пустое поле: id, уже привязанный запасным путём хоста или заданный при `resume`,
+ * не перезаписывается. `true` — вопрос закрыт (записано, у записи уже есть id, сессия не codex) и
+ * дальше спрашивать не нужно; `false` — id в `_meta` нет или сбой записи, попробует следующий вызов.
+ * Ошибки наружу не идут: привязка не должна ронять вызов инструмента.
+ */
+async function bindCodexThread(context: McpContext, threadId: unknown): Promise<boolean> {
+  const { sessionId } = context;
+  if (sessionId === null || typeof threadId !== 'string' || !THREAD_ID.test(threadId)) return false;
+  try {
+    // Чтение до записи: `updateMap` переписал бы карту и без изменений, а её читают наблюдатели окна.
+    const known = (await readMap(context.projectPath, context.workId)).sessions.find(
+      (candidate) => candidate.id === sessionId,
+    );
+    if (known === undefined) return false;
+    if (known.provider !== 'codex' || known.providerSessionId !== null) return true;
+    await updateMap(context.projectPath, context.workId, (current) => {
+      const target = current.sessions.find((candidate) => candidate.id === sessionId);
+      // Пока шла запись, поле могли занять — чужой id не затираем.
+      if (target?.providerSessionId === null) target.providerSessionId = threadId.toLowerCase();
+    });
+    return true;
+  } catch (error) {
+    process.stderr.write(`harnas-mcp: привязка треда не записалась: ${(error as Error).message}\n`);
+    return false;
+  }
+}
+
+/**
  * MCP-сервер одной сессии. Ошибки инструментов возвращаются агенту результатом
  * с `isError`, а не протокольным отказом: клиенту нужно не падение вызова, а
  * текст, из которого понятно, что поправить.
@@ -903,8 +940,14 @@ export function createHarnasServer(context: McpContext): Server<Request, Channel
   }
 
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: TOOLS }));
+  // Тред Codex привязывается один раз за жизнь сервера — с первого вызова, где `_meta.threadId` есть.
+  let threadBound = false;
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
     const args = isRecord(request.params.arguments) ? request.params.arguments : {};
+    // До самого инструмента: `wait_for` может держать вызов до получаса, а привязка нужна сразу.
+    if (!threadBound) {
+      threadBound = await bindCodexThread(context, request.params._meta?.['threadId']);
+    }
     try {
       const result = await dispatch(context, request.params.name, args);
       // Гид — готовый текст: заворачивать его в JSON-строку с экранированием
