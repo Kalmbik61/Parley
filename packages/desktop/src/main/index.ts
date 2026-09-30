@@ -122,6 +122,9 @@ if (!gotLock) {
   app.on('second-instance', focusMainWindow);
 
   app.whenReady().then(async () => {
+    // Открытому из Finder окну launchd отдаёт урезанный PATH: без `~/.local/bin` и nvm хост не найдёт
+    // ни `claude`, ни `codex`. PATH берётся у login-оболочки один раз, до хоста, — остальное окружение
+    // остаётся как есть, — и уходит в хост окружением его запуска; агенты наследуют его от хоста.
     const shellEnv = await captureShellEnv();
     if (shellEnv.warning) {
       console.warn(`[harnas] captureShellEnv: ${shellEnv.warning}`);

@@ -201,6 +201,35 @@ describe('spawnHost', () => {
       .toContain('хост упал');
   });
 
+  // Хост и агенты получают PATH login-оболочки (`captureShellEnv`) только так: окружением запуска
+  // хоста. Хост берёт его же для поиска `claude`/`codex` и для окружения агентов, своих правок PATH
+  // у него нет — тест держит первое звено цепочки.
+  it('хост получает окружение запуска как есть: PATH и прочие переменные доезжают до процесса', async () => {
+    const dump = path.join(home, 'env.json');
+    const entry = path.join(home, 'env.mjs');
+    await writeFile(
+      entry,
+      `import { writeFileSync } from 'node:fs';\n` +
+        `writeFileSync(${JSON.stringify(dump)}, JSON.stringify({ PATH: process.env.PATH, MARK: process.env.MARK }));\n`,
+    );
+    const stderrFile = path.join(home, 'host', 'host.err');
+
+    spawnHost({
+      env: { PATH: '/opt/nvm/bin:/home/u/.local/bin:/usr/bin', MARK: 'да' },
+      entry,
+      nodeBin: process.execPath,
+      stderrFile,
+    });
+
+    await expect
+      .poll(async () => readFile(dump, 'utf8').catch(() => ''), { timeout: 4000 })
+      .not.toBe('');
+    expect(JSON.parse(await readFile(dump, 'utf8'))).toEqual({
+      PATH: '/opt/nvm/bin:/home/u/.local/bin:/usr/bin',
+      MARK: 'да',
+    });
+  });
+
   it('возвращает признак жизни процесса: жив до выхода, после выхода — нет (lane-r4, п. 2)', async () => {
     const entry = path.join(home, 'short.mjs');
     await writeFile(entry, 'setTimeout(() => {}, 300);\n');
