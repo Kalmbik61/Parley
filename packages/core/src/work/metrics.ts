@@ -140,6 +140,9 @@ export async function linkProviderSession(
     if (info === null || info.mtimeMs < since) continue;
 
     const index = await adapter.index(log.file);
+    // Подагент и внутренний тред Codex стартуют в том же cwd и часто раньше настоящей сессии:
+    // без этого фильтра «ближайший к запуску» лог отдавал бы записи карты чужой тред.
+    if (index.spawned === true) continue;
     if (index.cwd === null || path.resolve(index.cwd) !== cwd) continue;
     if (index.startedAt === null) continue;
     const at = Date.parse(index.startedAt);

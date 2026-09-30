@@ -51,6 +51,13 @@ export interface SessionIndex {
    */
   tokens: TokenTotals | null;
   provider: Provider;
+  /**
+   * Лог порождённого треда (только Codex): у `session_meta` задан `parent_thread_id` или `source` не
+   * `cli` — подагент, внутренний тред или неинтерактивный запуск, а не сессия, которую запустил
+   * человек или харнесс. К записи карты такой лог не привязывается (`linkProviderSession`). Нет поля —
+   * тред обычный; у Claude его нет вовсе.
+   */
+  spawned?: boolean;
 }
 
 /** Слаг проекта = первый сегмент пути относительно корня ~/.claude/projects. */
