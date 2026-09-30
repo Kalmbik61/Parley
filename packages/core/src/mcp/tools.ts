@@ -24,7 +24,7 @@ import { unreadFor } from '../work/letters.js';
 import { addMessage, addSession, transitionSession } from '../work/map.js';
 import { finishSession } from '../work/metrics.js';
 import { PROPOSAL_TEXT_MAX, setProposal } from '../work/proposals.js';
-import { addMemberByLead, addRoom, isDescendant, isMember, joinNotice } from '../work/rooms.js';
+import { addMemberByLead, addRoom, isDescendant, isMember, joinNotice, leaveOtherRooms } from '../work/rooms.js';
 import { displayStatus } from '../work/status-view.js';
 import { readMap, updateMap, workPaths } from '../work/store.js';
 import { participantLabel } from '../work/thread.js';
@@ -357,7 +357,7 @@ const TOOLS: Tool[] = [
     name: 'create_room',
     annotations: WRITES,
     description:
-      'Заводит комнату — постоянный круг переписки для нескольких сессий, обычно своих подчинённых. Вызывающий становится создателем и участником; остальным участникам уходит письмо о добавлении. Ведущий комнаты собирает позиции участников и приносит человеку решение (propose_decision): без lead ведущий — ты сам.',
+      'Заводит комнату — постоянный круг переписки для нескольких сессий, обычно своих подчинённых. Вызывающий становится создателем и участником; остальным участникам уходит письмо о добавлении. Одна комната на сессию: из прочих комнат работы уходишь и ты, и участники. Ведущий комнаты собирает позиции участников и приносит человеку решение (propose_decision): без lead ведущий — ты сам.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -756,6 +756,9 @@ async function createRoom(
       lead: leadInput ?? sessionId,
     });
     roomId = room.id;
+    // Одна комната на сессию (решение 4 дизайна комнат): создатель и участники уходят из прочих комнат работы — как у
+    // `rooms.create` окна (`createHumanRoom`) и у `add_to_room`. Прежние комнаты остаются со своими письмами.
+    for (const memberId of [sessionId, ...members]) leaveOtherRooms(current, memberId, room.id);
     const notice = joinNotice(room, current);
     for (const memberId of members) {
       addMessage(current, { from: sessionId, to: [memberId], roomId: room.id, kind: 'note', text: notice });

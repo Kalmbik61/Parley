@@ -1160,6 +1160,47 @@ describe('create_room', () => {
     expect(result.text).toContain('s-02');
     expect((await readMapFile()).rooms).toEqual([]);
   });
+
+  /** Id комнат работы, в которых состоит сессия: создатель или участник. */
+  const roomsOf = (map: WorkMap, id: string): string[] =>
+    map.rooms.filter((room) => room.creator === id || room.members.includes(id)).map((room) => room.id);
+
+  it('одна комната на сессию: участник из другой комнаты после create_room состоит только в новой, прежняя остаётся с письмами', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'тесты', task: 'делать' }); // s-04
+    const older = await connect('s-02');
+    await callOk(older, 'create_room', { title: 'прежняя', members: ['s-03', 's-04'] }); // r-01: создатель и ведущий s-02
+    expect(roomsOf(await readMapFile(), 's-03')).toEqual(['r-01']);
+
+    // Отказ карту не меняет: s-04 не из круга новой комнаты, ведущим быть не может — s-03 остаётся в r-01.
+    const refused = await call(client, 'create_room', { title: 'новая', members: ['s-03'], lead: 's-04' });
+    expect(refused.isError).toBe(true);
+    expect(roomsOf(await readMapFile(), 's-03')).toEqual(['r-01']);
+
+    expect(await callOk(client, 'create_room', { title: 'новая', members: ['s-03'] })).toEqual({ roomId: 'r-02' });
+    const map = await readMapFile();
+    expect(roomsOf(map, 's-03')).toEqual(['r-02']);
+    expect(map.rooms.find((room) => room.id === 'r-02')).toMatchObject({ creator: 's-01', members: ['s-03'], lead: 's-01' });
+    // Прежняя комната не тронута, кроме ушедшего участника: создатель, ведущий и письма на месте.
+    expect(map.rooms.find((room) => room.id === 'r-01')).toMatchObject({ creator: 's-02', members: ['s-04'], lead: 's-02' });
+    expect(map.messages.filter((message) => message.roomId === 'r-01').map((message) => message.to)).toEqual([['s-03'], ['s-04']]);
+  });
+
+  it('одна комната на сессию: создатель прежней комнаты уступает её человеку и остаётся только в новой', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
+    await callOk(client, 'create_room', { title: 'прежняя', members: ['s-02'] }); // r-01: создатель и ведущий s-01
+    expect(roomsOf(await readMapFile(), 's-01')).toEqual(['r-01']);
+
+    await callOk(client, 'create_room', { title: 'новая', members: ['s-03'] }); // r-02
+    const map = await readMapFile();
+    expect(roomsOf(map, 's-01')).toEqual(['r-02']);
+    // Как `leaveOtherRooms`: создатель-сессия уступает комнату человеку, назначенный ведущий уходит с ней; участники остаются.
+    expect(map.rooms.find((room) => room.id === 'r-01')).toMatchObject({ creator: HUMAN, members: ['s-02'], lead: null });
+  });
 });
 
 describe('create_room: ведущий', () => {
@@ -1263,7 +1304,9 @@ describe('add_to_room', () => {
 
   it('одна комната на сессию: введённая уходит из другой комнаты той же работы', async () => {
     const { lead } = await setup();
-    await callOk(lead, 'create_room', { title: 'вторая', members: ['s-03'] }); // r-02, ведущий s-01
+    // Комнату с s-03 заводит s-04, а не ведущий r-01: тот, заведя её, сам ушёл бы из r-01 (`create_room` тоже проводит одну комнату на сессию).
+    const other = await connect('s-04');
+    await callOk(other, 'create_room', { title: 'вторая', members: ['s-03'] }); // r-02, ведущий s-04
     await callOk(lead, 'add_to_room', { room: 'r-01', session: 's-03' });
 
     const map = await readMapFile();
