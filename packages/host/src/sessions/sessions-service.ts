@@ -256,7 +256,15 @@ export function createSessionsService(
       // `agentEnv` чистит унаследованные метки родительской сессии Claude Code
       // (П0), `plan.env` поверх добавляет свои `HARNAS_*`.
       const env = { ...agentEnv(process.env), ...plan.env };
-      const handle = pty.start(ref, { command, args: plan.args, cwd: plan.cwd, env });
+      // `provider` — процессу не нужен, а хосту нужен: у codex состояние берётся из потока его терминала,
+      // и ввод идёт своим порядком (спека комнат, 3.6).
+      const handle = pty.start(ref, {
+        command,
+        args: plan.args,
+        cwd: plan.cwd,
+        env,
+        provider: session.provider,
+      });
       const started = (async () => {
         await startSession(ref.projectPath, ref.workId, ref.sessionId, plan.providerSessionId, {
           pid: handle.pid,
