@@ -147,15 +147,19 @@ export const SessionRow = memo(function SessionRow({
 
   // trust-wait (спека 8.3, план worktree 4.3) — то же правило, что было у прежнего дерева сессий:
   // пометка держится, пока в последних уведомлениях есть trust-wait по этой сессии.
-  const trustWait = useNoticesStore((state) =>
-    state.notices.some(
+  const waitKind = useNoticesStore((state) => {
+    // Codex, не показавший статус за срок после запуска (`startup-wait`), помечается так же, но с
+    // другим тултипом: ждёт входа или доверия к папке, а не «молчит» (спека комнат, 3.6).
+    const found = state.notices.find(
       (notice) =>
-        notice.kind === 'trust-wait' &&
+        (notice.kind === 'trust-wait' || notice.kind === 'startup-wait') &&
         notice.ref !== null &&
         notice.ref.sessionId === session.id &&
         workKeyOf(notice.ref.projectPath, notice.ref.workId) === workKey,
-    ),
-  );
+    );
+    return found?.kind ?? null;
+  });
+  const trustWait = waitKind !== null;
 
   const live = activity?.activity ?? null;
   const state = dotState(displayStatus(session), live?.activity ?? null);
@@ -239,7 +243,10 @@ export const SessionRow = memo(function SessionRow({
             </span>
           ) : null}
           {trustWait ? (
-            <span title={S.sidebar.trustWaitTooltip} className="shrink-0 text-status-warning-text">
+            <span
+              title={waitKind === 'startup-wait' ? S.sidebar.startupWaitTooltip : S.sidebar.trustWaitTooltip}
+              className="shrink-0 text-status-warning-text"
+            >
               ⚠
             </span>
           ) : null}

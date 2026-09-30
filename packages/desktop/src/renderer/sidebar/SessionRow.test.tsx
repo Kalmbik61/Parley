@@ -263,6 +263,27 @@ describe('SessionRow — пометка trust-wait (тест 11)', () => {
   });
 });
 
+describe('SessionRow — пометка startup-wait (Codex на экране старта)', () => {
+  it('host.notice startup-wait по ref строки — ⚠ со своим тултипом про вход и доверие; у другой сессии нет', () => {
+    const notice: HostNotice = {
+      kind: 'startup-wait',
+      text: 'ждёт входа',
+      ref: { projectPath: PROJECT, workId: WORK, sessionId: 's-01' },
+    } as HostNotice;
+    useNoticesStore.setState({ notices: [notice] });
+
+    renderRow(makeSession('s-01', 'a'));
+    renderRow(makeSession('s-02', 'b'));
+    expect(row('s-01').querySelector(`[title="${S.sidebar.startupWaitTooltip}"]`)?.textContent).toBe('⚠');
+    expect(row('s-01').querySelector(`[title="${S.sidebar.trustWaitTooltip}"]`)).toBeNull();
+    expect(row('s-02').querySelector(`[title="${S.sidebar.startupWaitTooltip}"]`)).toBeNull();
+  });
+
+  it('тултип на английском, без кириллицы', () => {
+    expect(S.sidebar.startupWaitTooltip).not.toMatch(/[а-яё]/i);
+  });
+});
+
 describe('SessionRow — контракт перетаскивания (тест 12)', () => {
   it('у строки неактивной работы нет data-draggable и курсор not-allowed, у активной — есть; HTML5 draggable нет; у выбранной — data-selected', () => {
     renderRow(makeSession('s-01', 'a'), { draggable: false });

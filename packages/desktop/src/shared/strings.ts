@@ -86,6 +86,8 @@ export const S = {
     /** Тултип значка ветки в строке сессии со своим worktree; ветка — данные, идёт как есть. */
     ownWorktree: (branch: string): string => `Own worktree · ${branch}`,
     trustWaitTooltip: 'Not responding since launch — may be waiting for folder trust',
+    /** Тултип ⚠ строки сессии Codex, что за срок после запуска не показала статус: вход или доверие к папке — за человеком. */
+    startupWaitTooltip: 'Waiting at startup — Codex may need sign-in or folder trust in its terminal',
     /** Переключатель меню «⋯» заголовка секции (спека 6.1, кусок 3.4). */
     showDone: 'Show done',
     /** `aria-label` кнопки «⋯» заголовка секции. */
@@ -997,6 +999,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'resume-failed': "couldn't resume this session",
   'resume-limit': 'hourly resume limit reached — mail is waiting',
   'trust-wait': 'not responding since launch — may be waiting for folder trust',
+  'startup-wait': 'waiting at startup — Codex may need sign-in or folder trust in its terminal',
   'skill-foreign': "agent skill not installed — that path already exists and wasn't created by harnas",
 };
 
