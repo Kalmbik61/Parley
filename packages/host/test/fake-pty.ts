@@ -15,6 +15,8 @@ export interface FakePty {
   /** Метка запуска процесса (`PtyHandle.startedAt`), мс. */
   startedAt: number;
   live: boolean;
+  /** Провайдер процесса (`PtyHandle.provider`): `codex` включает ввод Codex; по умолчанию не задан. */
+  provider: string | null;
   humanDraft: boolean;
   hostDraft: boolean;
   paste: boolean;
@@ -29,6 +31,7 @@ export function fakePty(): FakePty {
     pid: 100,
     startedAt: 0,
     live: true,
+    provider: null,
     humanDraft: false,
     hostDraft: false,
     paste: false,
@@ -44,6 +47,7 @@ export function fakePty(): FakePty {
     startedAt: state.startedAt,
     cols: 80,
     rows: 24,
+    provider: state.provider,
     hasDraft: () => state.humanDraft || state.hostDraft,
     bracketedPaste: () => state.paste,
   });

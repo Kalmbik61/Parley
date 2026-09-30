@@ -32,13 +32,21 @@ export interface TypeAndSubmitDeps {
  * (PTY умер между проверкой pid и записью) — отказ done, а не исключение хоста.
  * beforeEnter вернул false — Enter не жмётся, исход 'blocked': за ожидание агент показал
  * диалог (fix-final-b), и Enter его подтвердил бы. Черновик хоста тогда остаётся — текст в поле.
+ * submitKey — клавиша отправки, решается в момент отправки (по умолчанию Enter): Codex занятому агенту
+ * принимает письмо клавишей Tab — в очередь, а не Enter — в ход. delayMs — своя пауза вместо
+ * enterDelayMs: Codex достаточно десятков миллисекунд на приём вставки.
  */
 export function typeAndSubmit(
   deps: TypeAndSubmitDeps,
   ref: SessionRef,
   text: string,
   submit: boolean,
-  options: { hostDraft?: boolean; beforeEnter?: () => boolean } = {},
+  options: {
+    hostDraft?: boolean;
+    beforeEnter?: () => boolean;
+    submitKey?: () => string;
+    delayMs?: number;
+  } = {},
 ): Attempt {
   const setTimer = deps.setTimer ?? setTimeout;
   const clearTimer = deps.clearTimer ?? clearTimeout;
@@ -87,14 +95,14 @@ export function typeAndSubmit(
     // Колбэк таймера — вне цепочки промисов: брошенное здесь стало бы необработанным
     // исключением хоста, поэтому сбой уходит отказом done тому, кто ждёт исход.
     try {
-      deps.pty.write(ref, '\r');
+      deps.pty.write(ref, options.submitKey?.() ?? '\r');
       if (hostDraft) deps.pty.setHostDraft(ref, false);
     } catch (error) {
       fail(error);
       return;
     }
     settle('submitted');
-  }, deps.enterDelayMs);
+  }, options.delayMs ?? deps.enterDelayMs);
 
   return {
     cancel() {

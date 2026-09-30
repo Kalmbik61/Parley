@@ -254,3 +254,150 @@ describe('createSender', () => {
     expect(pty.writes).toEqual([]);
   });
 });
+
+describe('createSender: codex (спека комнат Organic, 3.6, «Ввод»)', () => {
+  let pty: FakePty;
+  let activityState: string;
+  let lastEventAt: string | null;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    pty = fakePty();
+    pty.provider = 'codex';
+    // Codex включает bracketed paste при старте TUI: без режима писать в него нечего.
+    pty.paste = true;
+    activityState = 'unseen';
+    lastEventAt = new Date(1000).toISOString();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function sender() {
+    const activity = {
+      get: () => ({ activity: { activity: activityState, lastEventAt } }),
+    } as unknown as ActivityService;
+    return createSender({
+      pty: pty.manager,
+      activity,
+      wake: { inFlight: () => false, enterDelayMs: 500 },
+    });
+  }
+
+  const PASTE = (text: string): string => `\x1b[200~${text}\x1b[201~`;
+
+  it('у приглашения: вставка в маркерах, пауза десятки миллисекунд, Enter', async () => {
+    const result = sender()({ ref, text: 'привет', submit: true });
+    expect(pty.writes).toEqual([PASTE('привет')]);
+    await vi.advanceTimersByTimeAsync(59);
+    expect(pty.writes).toEqual([PASTE('привет')]);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(result).resolves.toEqual({ inserted: true, submitted: true, reason: null });
+    expect(pty.writes).toEqual([PASTE('привет'), '\r']);
+    expect(pty.hostDraft).toBe(false);
+  });
+
+  it('и однострочный текст идёт вставкой (у Claude он шёл бы просто буквами)', async () => {
+    void sender()({ ref, text: 'одна строка', submit: false });
+    expect(pty.writes).toEqual([PASTE('одна строка')]);
+  });
+
+  it('агент работает — Tab (очередь), а не Enter (вмешательство в ход)', async () => {
+    activityState = 'working';
+    const result = sender()({ ref, text: 'письмо занятому', submit: true });
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(result).resolves.toEqual({ inserted: true, submitted: true, reason: null });
+    expect(pty.writes).toEqual([PASTE('письмо занятому'), '\t']);
+    expect(pty.hostDraft).toBe(false);
+  });
+
+  it('клавиша решается на отправке: ход кончился за паузу — Enter, начался — Tab', async () => {
+    activityState = 'working';
+    const first = sender()({ ref, text: 'а', submit: true });
+    activityState = 'unseen';
+    await vi.advanceTimersByTimeAsync(100);
+    await first;
+    expect(pty.writes.at(-1)).toBe('\r');
+
+    activityState = 'unseen';
+    const second = sender()({ ref, text: 'б', submit: true });
+    activityState = 'working';
+    await vi.advanceTimersByTimeAsync(100);
+    await second;
+    expect(pty.writes.at(-1)).toBe('\t');
+  });
+
+  it('текст санитизируется: «/», «!», «$» в начале и токен меню на конце', async () => {
+    const send = sender();
+    void send({ ref, text: '/Users/me/a.png', submit: false });
+    expect(pty.writes).toEqual([PASTE('- /Users/me/a.png ')]);
+    pty.hostDraft = false;
+    void send({ ref, text: 'посмотри @README.md', submit: false });
+    expect(pty.writes.at(-1)).toBe(PASTE('посмотри @README.md '));
+  });
+
+  it('blocked («нужен ты») — ни вставки, ни клавиши: диалог отвечать нельзя', async () => {
+    activityState = 'blocked';
+    await expect(sender()({ ref, text: 'hi', submit: true })).resolves.toEqual({
+      inserted: false,
+      submitted: false,
+      reason: 'blocked',
+    });
+    expect(pty.writes).toEqual([]);
+  });
+
+  it('ни одного известного сигнала с запуска (экран входа или доверия) — blocked, ни байта', async () => {
+    lastEventAt = null;
+    await expect(sender()({ ref, text: 'hi', submit: true })).resolves.toMatchObject({ reason: 'blocked' });
+    expect(pty.writes).toEqual([]);
+  });
+
+  it('стал blocked за паузу — вставлен без клавиши, blocked-before-enter', async () => {
+    const result = sender()({ ref, text: 'hi', submit: true });
+    await vi.advanceTimersByTimeAsync(30);
+    activityState = 'blocked';
+    await vi.advanceTimersByTimeAsync(60);
+    await expect(result).resolves.toEqual({ inserted: true, submitted: false, reason: 'blocked-before-enter' });
+    expect(pty.writes).toEqual([PASTE('hi')]);
+  });
+
+  it('режима вставки нет (TUI не поднялся) — no-paste-mode, ни байта', async () => {
+    pty.paste = false;
+    await expect(sender()({ ref, text: 'hi', submit: true })).resolves.toEqual({
+      inserted: false,
+      submitted: false,
+      reason: 'no-paste-mode',
+    });
+    expect(pty.writes).toEqual([]);
+  });
+
+  it('ввод человека в паузе — input, клавиши нет', async () => {
+    const result = sender()({ ref, text: 'hi', submit: true });
+    pty.emitDraft(ref);
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(result).resolves.toEqual({ inserted: true, submitted: false, reason: 'input' });
+    expect(pty.writes).toEqual([PASTE('hi')]);
+  });
+
+  it('не codex (claude) тем же отправителем — прежнее поведение: 500 мс и Enter, без вставки', async () => {
+    pty.provider = 'claude';
+    pty.paste = false;
+    const result = sender()({ ref, text: 'hi', submit: true });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(pty.writes).toEqual(['hi']);
+    await vi.advanceTimersByTimeAsync(400);
+    await expect(result).resolves.toMatchObject({ submitted: true });
+    expect(pty.writes).toEqual(['hi', '\r']);
+  });
+
+  it('не codex занятому: Enter, как и раньше (Tab — только у Codex)', async () => {
+    pty.provider = 'claude';
+    pty.paste = false;
+    activityState = 'working';
+    const result = sender()({ ref, text: 'hi', submit: true });
+    await vi.advanceTimersByTimeAsync(500);
+    await result;
+    expect(pty.writes).toEqual(['hi', '\r']);
+  });
+});
