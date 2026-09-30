@@ -8,6 +8,7 @@ import { createSeenTracker, visibleSessions } from './attention/seen.js';
 import { attentionTotals, badgeCount } from './attention/store.js';
 import { applyFocusTarget, buildFocusTargetDeps } from './attention/focus-target.js';
 import { isTargetVisible, wireAttentionNotifications } from './attention/notify.js';
+import { WindowNotes } from './attention/WindowNotes.js';
 import { hostMethods } from './lib/capabilities.js';
 import { useSidebarSectionsStore } from './sidebar/use-sidebar-sections.js';
 import { S } from '../shared/strings.js';
@@ -312,6 +313,7 @@ export function App(): JSX.Element {
         onConfigChange={setConfig}
       />
       <Toaster />
+      <WindowNotes />
     </>
   );
 }
