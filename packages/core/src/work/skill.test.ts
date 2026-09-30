@@ -93,6 +93,28 @@ describe('заглушка скилла harnas: тело', () => {
   });
 });
 
+describe('заглушка скилла harnas: как приходят письма', () => {
+  const { body } = parts(SKILL_MD);
+
+  it('в окне письма объявляет указатель после хода, тег channel — только у сессий CLI harnas-core', () => {
+    // Заглушку агент читает первой, и обещать ему тег канала как обычный путь нельзя: хост окна запускает
+    // сессии без канала и печатает указатель после хода (`delivery.ts`), тег бывает лишь у CLI.
+    expect(body).toMatch(
+      /В сессиях окна письма приходят указателем «Новые письма \(N\)… Вызови check_inbox\.» после твоего хода — вызови `check_inbox`\./,
+    );
+    expect(body).toMatch(
+      /Тег `<channel source="harnas">` бывает только у сессий, поднятых CLI `harnas-core`\./,
+    );
+  });
+
+  it('тег channel упомянут только вместе с CLI harnas-core: как обычный способ он не обещан', () => {
+    const mentions = body.split('\n').filter((text) => text.includes('<channel'));
+
+    expect(mentions).not.toHaveLength(0);
+    for (const line of mentions) expect(line).toContain('harnas-core');
+  });
+});
+
 describe('заглушка и гид согласованы', () => {
   const { body } = parts(SKILL_MD);
 
