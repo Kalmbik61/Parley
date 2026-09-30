@@ -2,6 +2,7 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { parseTomlAssignment } from '../test/toml-mini.js';
 import {
   PROVIDERS,
   commandInPath,
@@ -20,6 +21,24 @@ import {
   type ProviderEntry,
 } from './providers.js';
 
+/**
+ * Постоянные `-c` codex, которыми харнесс читает состояние сессии без хуков Codex (спека комнат,
+ * 3.6): заголовок окна и уведомления OSC 9. Значения выписаны здесь руками, а не берутся из
+ * `CODEX_HARNAS_FLAGS`: тест, ссылающийся на ту же константу, не заметил бы её порчи.
+ */
+const CODEX_TUI_ARGS = [
+  '-c',
+  'tui.terminal_title=["spinner","status","session-id"]',
+  '-c',
+  'tui.notifications=["approval-requested","agent-turn-complete"]',
+  '-c',
+  'tui.notification_method="osc9"',
+  '-c',
+  'tui.notification_condition="always"',
+];
+/** Всё, что codex получает без единой подстановки. */
+const CODEX_STATIC_ARGS = ['--no-daemon', '-a', 'on-request', ...CODEX_TUI_ARGS];
+
 describe('реестр провайдеров', () => {
   it('claude возобновляет сессию через --resume', () => {
     expect(resumeCommand(PROVIDERS.claude, { providerSessionId: 'сессия-1' })).toEqual({
@@ -31,7 +50,7 @@ describe('реестр провайдеров', () => {
   it('codex возобновляет сессию подкомандой resume', () => {
     expect(resumeCommand(PROVIDERS.codex, { providerSessionId: 'uuid-1' })).toEqual({
       command: 'codex',
-      args: ['resume', 'uuid-1'],
+      args: ['resume', 'uuid-1', ...CODEX_STATIC_ARGS],
     });
   });
 
@@ -45,7 +64,8 @@ describe('реестр провайдеров', () => {
 
   it('без id запускается чистая сессия', () => {
     expect(startCommand(PROVIDERS.claude)).toEqual({ command: 'claude', args: [] });
-    expect(startCommand(PROVIDERS.codex)).toEqual({ command: 'codex', args: [] });
+    // У codex и без подстановок остаются его постоянные флаги (`--no-daemon`, `-a on-request`, `tui.*`).
+    expect(startCommand(PROVIDERS.codex)).toEqual({ command: 'codex', args: CODEX_STATIC_ARGS });
   });
 
   it('в списке сессий участвуют только провайдеры с историей', () => {
@@ -139,6 +159,7 @@ describe('подстановка аргументов запуска', () => {
     // У codex и glm подстановки `{systemPrompt}` в шаблоне нет — она отбрасывается
     // молча, как `{settingsFile}`: своих механизмов системного промпта мы не трогаем.
     expect(startCommand(PROVIDERS.codex, { systemPrompt: guidance, prompt: 'бриф' }).args).toEqual([
+      ...CODEX_STATIC_ARGS,
       'бриф',
     ]);
     expect(startCommand(PROVIDERS.glm, { systemPrompt: guidance }).args).toEqual([]);
@@ -221,7 +242,15 @@ describe('подстановка аргументов запуска', () => {
       }),
     ).toEqual({
       command: 'codex',
-      args: ['-c', 'mcp_servers.harnas={command="harnas-mcp"}', '# Работа w-0042'],
+      args: [
+        '--no-daemon',
+        '-a',
+        'on-request',
+        '-c',
+        'mcp_servers.harnas={command="harnas-mcp"}',
+        ...CODEX_TUI_ARGS,
+        '# Работа w-0042',
+      ],
     });
   });
 
@@ -285,8 +314,12 @@ describe('модель и усилие новой сессии (дизайн к�
         prompt: 'бриф',
       }).args,
     ).toEqual([
+      '--no-daemon',
+      '-a',
+      'on-request',
       '-c',
       'mcp_servers.harnas={command="harnas-mcp"}',
+      ...CODEX_TUI_ARGS,
       '--model',
       'gpt-5.5',
       '-c',
@@ -299,8 +332,22 @@ describe('модель и усилие новой сессии (дизайн к�
     expect(
       startCommand(PROVIDERS.codex, { mcpConfig: 'mcp_servers.harnas={}', model: 'gpt-5.5', prompt: 'бриф' })
         .args,
-    ).toEqual(['-c', 'mcp_servers.harnas={}', '--model', 'gpt-5.5', 'бриф']);
-    expect(startCommand(PROVIDERS.codex, { prompt: 'бриф' }).args).toEqual(['бриф']);
+    ).toEqual([
+      '--no-daemon',
+      '-a',
+      'on-request',
+      '-c',
+      'mcp_servers.harnas={}',
+      ...CODEX_TUI_ARGS,
+      '--model',
+      'gpt-5.5',
+      'бриф',
+    ]);
+    // Ни MCP, ни модели, ни усилия — остаются только постоянные флаги и промпт.
+    expect(startCommand(PROVIDERS.codex, { prompt: 'бриф' }).args).toEqual([
+      ...CODEX_STATIC_ARGS,
+      'бриф',
+    ]);
   });
 
   it('codex при возобновлении модель и усилие тоже не несёт', () => {
@@ -311,7 +358,16 @@ describe('модель и усилие новой сессии (дизайн к�
         model: 'gpt-5.5',
         effort: 'low',
       }).args,
-    ).toEqual(['resume', 'uuid-1', '-c', 'mcp_servers.harnas={}']);
+    ).toEqual([
+      'resume',
+      'uuid-1',
+      '--no-daemon',
+      '-a',
+      'on-request',
+      '-c',
+      'mcp_servers.harnas={}',
+      ...CODEX_TUI_ARGS,
+    ]);
   });
 
   it('glm флагов не знает: выбор молча отбрасывается', () => {
@@ -800,5 +856,175 @@ describe('commandBinary', () => {
 
   it('оверрайд решает, что именно запускается: в тестах это заглушка', () => {
     expect(commandBinary('claude', { HARNAS_CLAUDE_BIN: '/tmp/stub.mjs' })).toBe('/tmp/stub.mjs');
+  });
+});
+
+describe('codex: запуск и возобновление (спека комнат Organic, 3.6)', () => {
+  /** Что launch кладёт в подстановки: MCP и notify — готовые значения `-c`. */
+  const subs = {
+    mcpConfig: 'mcp_servers.harnas={command="/usr/bin/node",args=["/h/mcp/server.js"],env={HARNAS_WORK_DIR="/p/.harnas/works/w-0001",HARNAS_SESSION_ID="s-02"},startup_timeout_sec=30,tool_timeout_sec=1860}',
+    notify: 'notify=["/usr/bin/node","/h/work/codex-notify-bin.js"]',
+    model: 'gpt-6-sol',
+    effort: 'high' as const,
+    prompt: '# Работа w-0001',
+  };
+
+  it('новая сессия: итоговая команда целиком', () => {
+    expect(startCommand(PROVIDERS.codex, subs)).toEqual({
+      command: 'codex',
+      args: [
+        '--no-daemon',
+        '-a',
+        'on-request',
+        '-c',
+        subs.mcpConfig,
+        '-c',
+        'tui.terminal_title=["spinner","status","session-id"]',
+        '-c',
+        'tui.notifications=["approval-requested","agent-turn-complete"]',
+        '-c',
+        'tui.notification_method="osc9"',
+        '-c',
+        'tui.notification_condition="always"',
+        '-c',
+        subs.notify,
+        '--model',
+        'gpt-6-sol',
+        '-c',
+        'model_reasoning_effort="high"',
+        '# Работа w-0001',
+      ],
+    });
+  });
+
+  it('resume: те же -c, стартовый промпт (указатель на письма) последним; модели и усилия нет', () => {
+    expect(
+      resumeCommand(PROVIDERS.codex, {
+        ...subs,
+        providerSessionId: '019ce3d5-584a-7be2-922e-b8185a8d7c19',
+        prompt: 'Новые письма (1). Вызови check_inbox.',
+      }),
+    ).toEqual({
+      command: 'codex',
+      args: [
+        'resume',
+        '019ce3d5-584a-7be2-922e-b8185a8d7c19',
+        '--no-daemon',
+        '-a',
+        'on-request',
+        '-c',
+        subs.mcpConfig,
+        '-c',
+        'tui.terminal_title=["spinner","status","session-id"]',
+        '-c',
+        'tui.notifications=["approval-requested","agent-turn-complete"]',
+        '-c',
+        'tui.notification_method="osc9"',
+        '-c',
+        'tui.notification_condition="always"',
+        '-c',
+        subs.notify,
+        'Новые письма (1). Вызови check_inbox.',
+      ],
+    });
+  });
+
+  it('ручной resume без указателя: промпта в конце нет, висячих флагов нет', () => {
+    const args = resumeCommand(PROVIDERS.codex, {
+      ...subs,
+      providerSessionId: 'uuid-1',
+      prompt: undefined,
+    } as never).args;
+    expect(args.at(-1)).toBe(subs.notify);
+    expect(args).not.toContain('--model');
+    expect(args).not.toContain('model_reasoning_effort="high"');
+  });
+
+  it('и запуск, и resume: модель и усилие — только у запуска', () => {
+    const resumed = resumeCommand(PROVIDERS.codex, { ...subs, providerSessionId: 'uuid-1' }).args;
+    expect(resumed.join(' ')).not.toMatch(/--model|model_reasoning_effort|gpt-6-sol/);
+  });
+
+  it('без notify (нет значения) уходит и его -c: висячего флага не остаётся', () => {
+    const args = startCommand(PROVIDERS.codex, { ...subs, notify: undefined } as never).args;
+    expect(args.join(' ')).not.toContain('notify=');
+    // Каждый `-c` в конце пары имеет значение.
+    args.forEach((arg, index) => {
+      if (arg === '-c') expect(args[index + 1]).toBeDefined();
+    });
+    expect(args.at(-1)).toBe('# Работа w-0001');
+  });
+
+  it('каждое -c — настоящий TOML: Codex не возьмёт его строкой', () => {
+    for (const args of [
+      startCommand(PROVIDERS.codex, subs).args,
+      resumeCommand(PROVIDERS.codex, { ...subs, providerSessionId: 'uuid-1' }).args,
+    ]) {
+      const overrides = args.flatMap((arg, index) => (args[index - 1] === '-c' ? [arg] : []));
+      // Запуск: MCP, заголовок, уведомления, способ, условие, notify, усилие; resume — те же без усилия.
+      expect(overrides.length).toBeGreaterThanOrEqual(6);
+      for (const override of overrides) {
+        expect(() => parseTomlAssignment(override), override).not.toThrow();
+      }
+      const byKey = Object.fromEntries(
+        overrides.map((override) => {
+          const { key, value } = parseTomlAssignment(override);
+          return [key.join('.'), value];
+        }),
+      );
+      expect(byKey['tui.terminal_title']).toEqual(['spinner', 'status', 'session-id']);
+      expect(byKey['tui.notifications']).toEqual(['approval-requested', 'agent-turn-complete']);
+      expect(byKey['tui.notification_method']).toBe('osc9');
+      expect(byKey['tui.notification_condition']).toBe('always');
+      expect(byKey['notify']).toEqual(['/usr/bin/node', '/h/work/codex-notify-bin.js']);
+    }
+  });
+
+  it('политика одобрений — явно on-request, а обходов нет ни в запуске, ни в resume', () => {
+    for (const args of [
+      startCommand(PROVIDERS.codex, subs).args,
+      resumeCommand(PROVIDERS.codex, { ...subs, providerSessionId: 'uuid-1' }).args,
+    ]) {
+      expect(args[args.indexOf('-a') + 1]).toBe('on-request');
+      expect(args).toContain('--no-daemon');
+      const line = args.join(' ');
+      // Вызовы `harnas` при `never` отклоняются, а остальное — самовыдача прав или доверия.
+      for (const forbidden of [
+        /(^| )-a never/,
+        /--ask-for-approval/,
+        /--dangerously/,
+        /--yolo/,
+        /--approve-for-me/,
+        /--not-so-yolo/,
+        /--full-auto/,
+        /(^| )-s( |$)/,
+        /--sandbox/,
+        /danger-full-access/,
+        /(^| )projects[.=]/,
+        /(^| )hooks[.=]/,
+        /trust_level/,
+        /--profile|(^| )-p /,
+      ]) {
+        expect(line, String(forbidden)).not.toMatch(forbidden);
+      }
+    }
+  });
+
+  it('и в шаблонах реестра нет ни обходов, ни хуков, ни трасти-переопределений', () => {
+    const template = [
+      ...(PROVIDERS.codex.runner.args ?? []),
+      ...(PROVIDERS.codex.runner.resumeArgs ?? []),
+    ].join(' ');
+    expect(template).not.toMatch(/never|dangerous|yolo|full-auto|danger-full|projects|hooks|trust/i);
+  });
+
+  it('подстановка {notify} понимается реестром и не путается с {mcpConfig}', () => {
+    expect(PROVIDERS.codex.runner.args).toContain('{notify}');
+    expect(PROVIDERS.codex.runner.resumeArgs).toContain('{notify}');
+    expect(substituteArgs(['-c', '{notify}'], { notify: 'notify=["a"]' })).toEqual([
+      '-c',
+      'notify=["a"]',
+    ]);
+    expect(PROVIDERS.claude.runner.args).not.toContain('{notify}');
   });
 });

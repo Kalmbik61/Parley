@@ -8,7 +8,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   loadProviders,
@@ -22,7 +22,7 @@ import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
 import { writeBrief } from './brief.js';
 import { systemGuidance } from './guidance.js';
 import { addSession, removeSession, transitionSession, type NewSession } from './map.js';
-import { mcpConfigValue, writeMcpConfig } from './mcp-config.js';
+import { codexNotifyOverride, mcpConfigValue, writeMcpConfig } from './mcp-config.js';
 import { finishSession, linkProviderSession, type MetricsRoots } from './metrics.js';
 import { writeWorkSettings } from './settings-file.js';
 import { createWork, deleteSessionFiles, readMap, updateMap, workPaths } from './store.js';
@@ -161,7 +161,14 @@ async function plan(
     warnings.push(NO_CHANNEL_WARNING);
   }
 
-  const params = { workDir: paths.dir, sessionId: session.id, ...(channel ? { channel } : {}) };
+  // `env` — окружение запускающего процесса: Codex режет серверу MCP окружение, и нужные ему
+  // `HARNAS_*` (дом харнесса, подмены бинарей) уходят в таблицу `env` сервера явно.
+  const params = {
+    workDir: paths.dir,
+    sessionId: session.id,
+    env: process.env,
+    ...(channel ? { channel } : {}),
+  };
 
   // Файл конфига нужен только тем, кто принимает путь; codex получает сервер
   // значением `-c`, и лишний файл ему незачем.
@@ -181,6 +188,13 @@ async function plan(
   if (session.agent !== null) subs.agent = session.agent;
   if (template.includes('{settingsFile}')) {
     subs.settingsFile = await writeWorkSettings(projectPath, workId);
+  }
+  // Конец хода Codex приходит скриптом `notify`, а тот только дописывает журнал `events/` — каталог
+  // под него заводит запуск, как `writeWorkSettings` заводит его для хуков Claude Code: наблюдатель
+  // журналов хоста не встанет на каталог, которого нет.
+  if (template.includes('{notify}')) {
+    await mkdir(paths.events, { recursive: true });
+    subs.notify = codexNotifyOverride();
   }
   // Системная вставка гида идёт во всех трёх режимах, включая `resume`:
   // системный промпт живёт в процессе, а не в транскрипте, и собирается заново
