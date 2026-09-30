@@ -15,11 +15,10 @@ Parley — имя продукта. В коде, путях и переменн�
 `harnas`: пакеты `@harnas/*`, `harnas-host`, `harnas-mcp`, `~/.harnas`,
 `HARNAS_*`, MCP-сервер и скилл `harnas`.
 
-<!--
-  Плеер видео: в веб-редакторе GitHub перетащите сюда docs/media/parley-demo.mp4 —
-  GitHub загрузит файл и вставит ссылку, которая рисуется плеером. После этого
-  блок с постером ниже можно убрать: MP4 из репозитория GitHub в README не играет.
--->
+
+https://github.com/user-attachments/assets/68458a1e-add3-4533-9b82-77a37030d52b
+
+
 <p align="center">
   <a href="docs/media/parley-demo.mp4"><img src="docs/media/parley-demo-poster.png" width="900" alt="Демо Parley, 30 секунд: сайдбар, комната агентов, решение ведущего, новая сессия, строка статуса"></a>
   <br>
