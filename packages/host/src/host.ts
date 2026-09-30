@@ -348,8 +348,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
 /**
  * Перенос `<проект>/.harnas` → `<проект>/.parley` у проектов из индекса работ (R6, `migrateProjects` в core):
- * только когда у работ проекта нет живого процесса и блокировки записи, иначе проект остаётся при прежнем
- * каталоге и перенос пробуется на следующем старте. Сбой переноса хост не останавливает: читатели знают оба имени.
+ * только когда у работ проекта нет живого процесса и блокировки записи и git не отслеживает прежний каталог,
+ * иначе проект остаётся при нём и перенос пробуется на следующем старте. Сбой переноса хост не останавливает:
+ * читатели знают оба имени.
  */
 async function moveProjectStateDirs(log: Log): Promise<void> {
   try {
@@ -357,8 +358,9 @@ async function moveProjectStateDirs(log: Log): Promise<void> {
       if (result.status === 'moved') {
         log.info('каталог состояния проекта перенесён', { projectPath, from: result.from, to: result.to });
       } else if (result.reason !== 'no-legacy') {
-        // Живая сессия и блокировка — обычное дело (перенос позже); остальное человеку стоит увидеть.
-        const expected = result.reason === 'live-session' || result.reason === 'locked';
+        // Живая сессия и блокировка — обычное дело (перенос позже), закоммиченный `.harnas` — выбор человека
+        // (каталог остаётся, пока он его отслеживает); остальное человеку стоит увидеть.
+        const expected = result.reason === 'live-session' || result.reason === 'locked' || result.reason === 'tracked';
         log[expected ? 'info' : 'warn']('каталог состояния проекта не перенесён', { projectPath, ...result });
       }
     }

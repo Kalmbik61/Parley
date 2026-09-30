@@ -149,8 +149,11 @@ async function aliveWhileSleeping(session: WorkSession): Promise<boolean> {
 }
 
 /**
- * Есть ли у сессии живой процесс по карте — тем же правилом, что и сверка `reconcileMap`: у `active` решает
- * `checkSession`, у `sleeping` — `aliveWhileSleeping`; у `pending` процесса ещё нет, у `closed` уже нет.
+ * Есть ли у сессии живой процесс по карте: у `active` решает `checkSession`, у `sleeping` — `aliveWhileSleeping`,
+ * у `closed` процесса уже нет. Это правило сверки `reconcileMap`, но без лога провайдера: `active` без pid живёт
+ * здесь по времени старта, а не по молчанию лога. А `pending` — всегда «нет»: так записана и сессия, которую человек
+ * поднял из терминала (`work session new`), и её процесс при этом работает — карта такого не различает, по ней
+ * его не найти (перенос данных ищет его по командной строке процесса, `migrate.ts`).
  */
 export async function hasLiveProcess(
   session: WorkSession,

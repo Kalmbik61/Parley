@@ -26,7 +26,7 @@ const run = promisify(execFile);
  * `ls-files`. Ключ из командной строки главнее конфигурации и по `GIT_CONFIG_PARAMETERS`
  * доходит до дочерних git (подмодули, проверка чистоты `worktree remove`).
  */
-const NO_FSMONITOR = ['-c', 'core.fsmonitor=false'];
+export const NO_FSMONITOR = ['-c', 'core.fsmonitor=false'];
 
 /** Сколько знаков хэша пути проекта идёт в имя каталога — как короткий git-хэш. */
 const HASH_LENGTH = 6;

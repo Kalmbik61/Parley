@@ -379,3 +379,12 @@ describe('тело по виду файла (кусок 7.5, тест 7)', () =>
     expect(screen.queryByRole('radio')).toBeNull();
   });
 });
+
+describe('адрес модели Monaco', () => {
+  it('буфер вкладки живёт под file:///parley/…: прежнее имя продукта в адресе — забытый идентификатор', async () => {
+    bridge.setFile(ROOT, 'src/a.ts', textFile('a\n'));
+    renderBody();
+    const node = await screen.findByTestId('monaco-editor');
+    expect(node.getAttribute('data-path')).toMatch(/^file:\/\/\/parley\/buffer\/\d+\/a\.ts$/);
+  });
+});

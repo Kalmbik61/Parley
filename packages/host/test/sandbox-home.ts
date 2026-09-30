@@ -25,6 +25,12 @@ if (running === undefined) {
 process.env['HOME'] = home;
 process.env['USERPROFILE'] = home;
 
+// Дом, унаследованный от родителя, главнее `HOME`: хост Parley экспортирует агентам оба имени (`PARLEY_HOME` и
+// прежнее `HARNAS_HOME`), а тесты гонят и из сессии такого агента. Свой `PARLEY_HOME` тест ставит и снимает сам,
+// и после его `afterEach` запасным становился бы унаследованный дом, то есть настоящий `~/.parley` или `~/.harnas`.
+delete process.env['PARLEY_HOME'];
+delete process.env['HARNAS_HOME'];
+
 // Хост, который тест поднимает отдельным процессом (`tsx main.ts` в `host.test.ts`), на старте
 // спрашивает у провайдеров версию (`<команда> --version`). Настоящие claude и codex в тестах
 // запускать нельзя даже с `--version`: пробу отключает переменная, её наследуют дочерние процессы.

@@ -79,7 +79,7 @@ function modelPath(kind: string, key: string, path: string): string {
   const dot = name.lastIndexOf('.');
   const extension = dot > 0 ? name.slice(dot + 1) : '';
   const safe = /^[A-Za-z0-9._-]+$/.test(name) ? name : /^[A-Za-z0-9]+$/.test(extension) ? `file.${extension}` : 'file';
-  return `file:///harnas/${kind}/${id}/${safe}`;
+  return `file:///parley/${kind}/${id}/${safe}`;
 }
 
 function Message({ text, children }: { text: string; children?: ReactNode }): JSX.Element {

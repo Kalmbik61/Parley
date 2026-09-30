@@ -207,9 +207,11 @@ export async function deleteWorkFiles(
   });
 }
 
-/** Читает глобальный индекс; файла ещё нет — индекс пустой. */
-export async function readWorksIndex(): Promise<WorksIndex> {
-  const file = worksIndexPath();
+/**
+ * Читает глобальный индекс; файла ещё нет — индекс пустой. `file` — индекс не текущего дома, а другого:
+ * перенос дома читает прежний, пока тот ещё не переехал.
+ */
+export async function readWorksIndex(file: string = worksIndexPath()): Promise<WorksIndex> {
   let raw: string;
   try {
     raw = await readFile(file, 'utf8');

@@ -1,7 +1,9 @@
+import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { addSession, createWork, processStartedAt, transitionSession, updateMap } from '@parley/core';
 import type { WorkMap } from '@parley/core';
@@ -16,6 +18,8 @@ import { hostPaths } from './paths.js';
  * есть) проверены в core (`migrate.test.ts`); здесь — что хост её зовёт вовремя, не падает от её отказов и
  * показывает работу из переехавшего каталога.
  */
+
+const git = (dir: string, args: string[]) => promisify(execFile)('git', ['-C', dir, ...args]);
 
 let hosts: RunningHost[] = [];
 let homes: string[] = [];
@@ -106,6 +110,23 @@ describe('startHost переносит каталог состояния про�
     expect(entries.map((entry) => [entry.projectPath, entry.map.work.title])).toEqual([[project, 'Старая работа']]);
   });
 
+  it('пути артефактов в карте переписаны к готовности хоста: работа из списка отдаёт путь, который ведёт к файлу', async () => {
+    const home = await newHome();
+    const { project, workId } = await legacyProject(home, (map) => {
+      const session = addSession(map, { provider: 'claude', label: 'план', task: 'задача' });
+      session.artifacts = [{ kind: 'план', path: `.harnas/works/${map.work.id}/artifacts/plan.md` }];
+    });
+    await writeFile(path.join(project, '.harnas', 'works', workId, 'artifacts', 'plan.md'), 'план\n');
+
+    const running = await startHost({ home });
+    hosts.push(running);
+
+    const [entry] = await listWorks(home);
+    const artifact = entry?.map.sessions[0]?.artifacts[0];
+    expect(artifact?.path).toBe(`.parley/works/${workId}/artifacts/plan.md`);
+    expect(existsSync(path.join(project, artifact?.path ?? ''))).toBe(true);
+  });
+
   it('у работы проекта живая сессия: проект остаётся при .harnas, хост работает с ним как раньше, причина — в журнале', async () => {
     const home = await newHome();
     const startedAtProcess = await processStartedAt(process.pid);
@@ -135,6 +156,33 @@ describe('startHost переносит каталог состояния про�
     const entries = await listWorks(home);
     expect(entries).toHaveLength(1);
     expect(entries[0]?.map.sessions[0]?.lifecycle).toBe('active');
+  });
+
+  it('.harnas закоммичен в git проекта: проект остаётся при нём, хост поднят, в журнале — info, а не предупреждение', async () => {
+    const home = await newHome();
+    const { project, workId } = await legacyProject(home);
+    await git(project, ['init', '-q']);
+    await git(project, ['config', 'user.email', 'тест@parley']);
+    await git(project, ['config', 'user.name', 'тест']);
+    await git(project, ['add', '-A']);
+    await git(project, ['commit', '-q', '-m', 'состояние работы в истории']);
+
+    const running = await startHost({ home });
+    hosts.push(running);
+
+    expect(existsSync(path.join(project, '.parley'))).toBe(false);
+    expect(existsSync(path.join(project, '.harnas', 'works', workId, 'map.json'))).toBe(true);
+    // Отслеживаемое на месте: git не видит ни одного удалённого файла (аренда хоста `host.lease` — новый, не отслеживаемый).
+    expect((await git(project, ['status', '--porcelain'])).stdout).not.toMatch(/^ ?D /m);
+    expect(await logged(home)).toContainEqual(
+      expect.objectContaining({
+        level: 'info',
+        msg: 'каталог состояния проекта не перенесён',
+        projectPath: project,
+        reason: 'tracked',
+      }),
+    );
+    expect(existsSync(hostPaths(home).socket)).toBe(true);
   });
 
   it('проект уже на .parley: ничего не переносится, в журнале о переносе ни слова', async () => {

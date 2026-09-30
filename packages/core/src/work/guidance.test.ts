@@ -203,6 +203,15 @@ describe('подробный гид', () => {
     expect(GUIDE.split('Если сессию запустили ролью-агентом')[0]).not.toContain('mcp__harnas__');
   });
 
+  it('строка про старые сессии: разрешения, выданные под mcp__harnas__*, на новое имя не действуют — их надо продублировать (R8)', () => {
+    const tail = GUIDE.split('Если сессию запустили ролью-агентом')[1] ?? '';
+
+    // Человек выдавал «always allow» под прежним именем сервера: ключ разрешения зависит от него, и без этой строки
+    // каждый вызов инструмента упёрся бы в запрос, а агент не знал бы почему.
+    expect(tail).toMatch(/разрешени[\s\S]*`permissions\.allow`[\s\S]*`settings\.json`/);
+    expect(tail).toMatch(/`mcp__harnas__[^`]*`[\s\S]*`mcp__parley__[^`]*`/);
+  });
+
   it('описывает роль-агента у spawn_session', () => {
     expect(GUIDE).toContain(
       'spawn_session(provider, label, task, contextFrom, agent, worktree, model, effort)',

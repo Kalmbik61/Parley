@@ -1,19 +1,33 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MIGRATION_RECORD, migrateHome, migrateProjects } from './migrate.js';
 import type { MigrationEntry } from './migrate.js';
 import { processStartedAt } from './work/liveness.js';
 import { addSession, transitionSession } from './work/map.js';
-import { createWork, readWorksIndex, updateMap, worksIndexPath } from './work/store.js';
+import { createWork, readMap, readWorksIndex, updateMap, worksIndexPath } from './work/store.js';
 import type { WorkSession } from './work/types.js';
 
 const AT = new Date('2026-09-30T18:00:00.000Z');
 const now = (): Date => AT;
+
+const run = promisify(execFile);
+const git = (dir: string, args: string[]) => run('git', ['-C', dir, ...args]);
+
+/** Репозиторий с одним коммитом всего, что лежит в проекте. Личность автора — на репозиторий: своей у машины теста может не быть. */
+async function commitEverything(project: string, ...extra: Array<[string, string]>): Promise<void> {
+  await git(project, ['init', '-q']);
+  await git(project, ['config', 'user.email', 'тест@parley']);
+  await git(project, ['config', 'user.name', 'тест']);
+  for (const [file, text] of extra) await writeFile(path.join(project, file), text);
+  await git(project, ['add', '-A']);
+  await git(project, ['commit', '-q', '-m', 'первый']);
+}
 
 const exists = (target: string): Promise<boolean> =>
   stat(target).then(
@@ -245,6 +259,138 @@ describe('migrateHome — перенос ~/.harnas → ~/.parley (R6)', () => {
     expect(await migrateHome({ env: {}, userHome, now })).toMatchObject({ status: 'moved' });
   });
 
+  /** Работа с индексом прежнего дома: `createWork` и `updateMap` берут дом из `PARLEY_HOME`. */
+  async function inLegacyHome<T>(body: () => Promise<T>): Promise<T> {
+    process.env.PARLEY_HOME = legacy();
+    try {
+      return await body();
+    } finally {
+      delete process.env.PARLEY_HOME;
+    }
+  }
+
+  /**
+   * Проект из индекса прежнего дома, каким его оставила прежняя сборка: каталог состояния `.harnas` с работой и
+   * сессией, которую поднимал человек командой из терминала (`work session new`) — в карте она `pending` без pid.
+   */
+  async function legacyProject(name: string, stateDirName = '.harnas'): Promise<{ project: string; workId: string; sessionId: string }> {
+    const project = path.join(userHome, name);
+    await mkdir(path.join(project, stateDirName), { recursive: true });
+    return inLegacyHome(async () => {
+      const { work } = await createWork(project, { title: `Работа ${name}` });
+      let sessionId = '';
+      await updateMap(project, work.id, (map) => {
+        const session = addSession(map, { provider: 'claude', label: 'из терминала', task: '' });
+        session.launchedBy = 'cli';
+        sessionId = session.id;
+      });
+      return { project, workId: work.id, sessionId };
+    });
+  }
+
+  /** Процесс агента, поднятого из терминала: путь из каталога состояния стоит в его командной строке (`--mcp-config`). */
+  async function startAgent(stateRoot: string, workId: string, sessionId: string): Promise<ChildProcess> {
+    const child = spawn(
+      process.execPath,
+      ['-e', 'setInterval(() => {}, 1000)', path.join(stateRoot, 'works', workId, 'mcp', `${sessionId}.json`)],
+      { stdio: 'ignore' },
+    );
+    children.push(child);
+    await once(child, 'spawn');
+    return child;
+  }
+
+  async function stopAgent(child: ChildProcess): Promise<void> {
+    const exited = once(child, 'exit');
+    child.kill('SIGKILL');
+    await exited;
+  }
+
+  it('в индексе проект с сессией из терминала (pending без pid): агент держит путь в командной строке — дом не переносим; ушёл — переносится', async () => {
+    await seedLegacyHome();
+    const { project, workId, sessionId } = await legacyProject('shop');
+    const agent = await startAgent(path.join(project, '.harnas'), workId, sessionId);
+
+    const result = await migrateHome({ env: {}, userHome, now });
+
+    expect(result).toMatchObject({ status: 'skipped', reason: 'live-session', from: legacy() });
+    expect(result.status === 'skipped' ? result.detail : '').toContain(`pid ${agent.pid}`);
+    expect(await exists(current())).toBe(false);
+    await expectUntouched();
+
+    await stopAgent(agent);
+    expect(await migrateHome({ env: {}, userHome, now })).toMatchObject({ status: 'moved' });
+  });
+
+  it('то же у проекта, который хост уже перенёс на .parley, пока дом ещё прежний: проверяются оба имени каталога состояния', async () => {
+    await seedLegacyHome();
+    const { project, workId, sessionId } = await legacyProject('shop', '.parley');
+    const agent = await startAgent(path.join(project, '.parley'), workId, sessionId);
+
+    expect(await migrateHome({ env: {}, userHome, now })).toMatchObject({ status: 'skipped', reason: 'live-session' });
+
+    await stopAgent(agent);
+    expect(await migrateHome({ env: {}, userHome, now })).toMatchObject({ status: 'moved' });
+  });
+
+  it('сессия по карте (active, свой pid и время старта) в проекте из индекса — дом не переносим', async () => {
+    await seedLegacyHome();
+    const { project, workId, sessionId } = await legacyProject('shop');
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    children.push(child);
+    await once(child, 'spawn');
+    await inLegacyHome(() =>
+      updateMap(project, workId, (map) => {
+        transitionSession(map, sessionId, 'active');
+        const session = map.sessions.find((candidate) => candidate.id === sessionId);
+        if (session) Object.assign(session, { pid: child.pid ?? 0 });
+      }),
+    );
+
+    expect(await migrateHome({ env: {}, userHome, now })).toMatchObject({ status: 'skipped', reason: 'live-session' });
+    await expectUntouched();
+  });
+
+  it('у работы из индекса держится map.lock (пишет MCP-сервер агента) — дом не переносим', async () => {
+    await seedLegacyHome();
+    const { project, workId } = await legacyProject('shop');
+    await writeFile(path.join(project, '.harnas', 'works', workId, 'map.lock'), '');
+
+    expect(await migrateHome({ env: {}, userHome, now })).toMatchObject({ status: 'skipped', reason: 'locked' });
+    await expectUntouched();
+  });
+
+  it('проект из индекса исчез, а других процессов нет — дом переносится; записи индекса без проектов дом не держат', async () => {
+    await seedLegacyHome();
+    const gone = await legacyProject('gone');
+    await rm(gone.project, { recursive: true, force: true });
+
+    expect(await migrateHome({ env: {}, userHome, now })).toMatchObject({ status: 'moved' });
+  });
+
+  it('таблицу процессов получить нельзя (нет ps) — дом не переносим: живую сессию из терминала не отличить', async () => {
+    await seedLegacyHome();
+    await legacyProject('shop');
+    const before = process.env.PATH;
+    process.env.PATH = path.join(userHome, 'нет-такого-каталога');
+    try {
+      expect(await migrateHome({ env: {}, userHome, now })).toMatchObject({ status: 'skipped', reason: 'unreadable', from: legacy() });
+    } finally {
+      if (before === undefined) delete process.env.PATH;
+      else process.env.PATH = before;
+    }
+    await expectUntouched();
+  });
+
+  it('индекс работ прежнего дома не разобрался — дом не переносим: живость сессий по нему не проверить', async () => {
+    await seedLegacyHome();
+    await writeFile(path.join(legacy(), 'works-index.json'), '{ broken');
+
+    expect(await migrateHome({ env: {}, userHome, now })).toMatchObject({ status: 'skipped', reason: 'unreadable', from: legacy() });
+    expect(await exists(current())).toBe(false);
+    await expectUntouched();
+  });
+
   it.skipIf(asRoot)('rename не удался — результат, а не исключение; прежний дом на месте', async () => {
     await seedLegacyHome();
     // Запись в каталог запрещена: переименовать в нём нечего.
@@ -286,11 +432,32 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
     await Promise.all([home, root].map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
-  /** Настоящий дочерний процесс: живость проверяется на нём, а не на моке. */
-  function start(): ChildProcess {
-    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  /** Настоящий дочерний процесс: живость проверяется на нём, а не на моке. `argv` — хвост его командной строки. */
+  function start(...argv: string[]): ChildProcess {
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', ...argv], { stdio: 'ignore' });
     children.push(child);
     return child;
+  }
+
+  /**
+   * Агент, поднятый из терминала: путь из каталога состояния стоит в его командной строке — так `claude` держит
+   * свой `--mcp-config`. Ждёт, пока процесс запущен: до этого `ps` показал бы командную строку родителя.
+   */
+  async function startAgent(stateRoot: string, workId: string, sessionId: string): Promise<ChildProcess> {
+    const child = start(path.join(stateRoot, 'works', workId, 'mcp', `${sessionId}.json`));
+    await once(child, 'spawn');
+    return child;
+  }
+
+  /** В карте — то, что оставляет `work session new`: `pending` без pid, запустил не хост. */
+  async function seedTerminalSession(project: string, workId: string): Promise<string> {
+    let id = '';
+    await updateMap(project, workId, (map) => {
+      const session = addSession(map, { provider: 'claude', label: 'из терминала', task: '' });
+      session.launchedBy = 'cli';
+      id = session.id;
+    });
+    return id;
   }
 
   async function stop(child: ChildProcess): Promise<void> {
@@ -483,6 +650,156 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
 
     const later = (): Date => new Date(AT.getTime() + 24 * 60 * 60 * 1000);
     expect(await migrateProjects({ now: later })).toMatchObject([{ status: 'moved' }]);
+  });
+
+  it('сессия из терминала (pending без pid): агент держит путь в командной строке — проект не переносим; ушёл — переносится', async () => {
+    const { project, workId } = await legacyProject('shop');
+    const id = await seedTerminalSession(project, workId);
+    const agent = await startAgent(legacyDir(project), workId, id);
+
+    const results = await migrateProjects({ now });
+
+    expect(results).toMatchObject([{ status: 'skipped', reason: 'live-session', detail: `pid ${agent.pid}` }]);
+    await expectUntouched(project, workId);
+
+    // Терминал закрыт — на следующем старте проект переезжает; в карте сессия по-прежнему pending.
+    await stop(agent);
+    expect(await migrateProjects({ now })).toMatchObject([{ status: 'moved' }]);
+    expect((await readMap(project, workId)).sessions[0]?.lifecycle).toBe('pending');
+  });
+
+  it('командная строка чужого проекта путь этого не держит, даже если имя каталога начинается так же', async () => {
+    const shop = await legacyProject('shop');
+    const sibling = await legacyProject('shop-old');
+    const id = await seedTerminalSession(sibling.project, sibling.workId);
+    await startAgent(legacyDir(sibling.project), sibling.workId, id);
+
+    const results = await migrateProjects({ now });
+
+    expect(results.map((result) => [result.projectPath, result.status])).toEqual([
+      [shop.project, 'moved'],
+      [sibling.project, 'skipped'],
+    ]);
+  });
+
+  it('таблицу процессов получить нельзя (нет ps) — отказ, а не перенос вслепую', async () => {
+    const { project, workId } = await legacyProject('shop');
+    const before = process.env.PATH;
+    process.env.PATH = path.join(root, 'нет-такого-каталога');
+    try {
+      expect(await migrateProjects({ now })).toMatchObject([{ status: 'skipped', reason: 'unreadable' }]);
+    } finally {
+      if (before === undefined) delete process.env.PATH;
+      else process.env.PATH = before;
+    }
+    await expectUntouched(project, workId);
+  });
+
+  it('.harnas закоммичен в git проекта — не переносим: отслеживаемые файлы остаются на месте, а .parley под своим .gitignore не закоммитить', async () => {
+    const { project, workId } = await legacyProject('shop');
+    await commitEverything(project);
+
+    expect(await migrateProjects({ now })).toMatchObject([{ status: 'skipped', reason: 'tracked', from: legacyDir(project) }]);
+
+    await expectUntouched(project, workId);
+    expect((await git(project, ['status', '--porcelain'])).stdout).toBe('');
+    expect(await exists(path.join(home, MIGRATION_RECORD))).toBe(false);
+  });
+
+  it('отслеживается один файл из .harnas — проект всё равно остаётся при прежнем каталоге', async () => {
+    const { project, workId } = await legacyProject('shop');
+    await git(project, ['init', '-q']);
+    await git(project, ['config', 'user.email', 'тест@parley']);
+    await git(project, ['config', 'user.name', 'тест']);
+    await git(project, ['add', '-f', path.join('.harnas', 'works', workId, 'artifacts', 'note.txt')]);
+    await git(project, ['commit', '-q', '-m', 'артефакт']);
+
+    expect(await migrateProjects({ now })).toMatchObject([{ status: 'skipped', reason: 'tracked' }]);
+    await expectUntouched(project, workId);
+  });
+
+  it('.git есть, но это не репозиторий (git отвечает отказом) — отслеживать нечему, проект переносится', async () => {
+    const { project } = await legacyProject('shop');
+    await mkdir(path.join(project, '.git'));
+
+    expect(await migrateProjects({ now })).toMatchObject([{ status: 'moved' }]);
+  });
+
+  it('проект в репозитории, .harnas в .gitignore и не отслеживается — переносится', async () => {
+    const { project } = await legacyProject('shop');
+    // `.gitignore` лежит до `git add -A`: состояние работы в коммит не попадает.
+    await commitEverything(project, ['.gitignore', '.harnas/\n']);
+
+    expect(await migrateProjects({ now })).toMatchObject([{ status: 'moved' }]);
+    expect((await git(project, ['status', '--porcelain'])).stdout).toBe('');
+  });
+
+  it('пути артефактов внутри прежнего каталога переписываются на .parley; прочие пути, проза и порядок работ остаются', async () => {
+    const { project, workId } = await legacyProject('shop');
+    const note = `.harnas/works/${workId}/artifacts/note.txt`;
+    let sessionId = '';
+    await updateMap(project, workId, (map) => {
+      const session = addSession(map, { provider: 'claude', label: 'план', task: 'задача' });
+      sessionId = session.id;
+      session.summary = `план лежит в ${note}`;
+      session.artifacts = [
+        { kind: 'заметка', path: note },
+        { kind: 'с точкой', path: `./${note}` },
+        { kind: 'спека', path: 'docs/spec.md' },
+        { kind: 'вложенный', path: `sub/${note}` },
+        { kind: 'похожий', path: '.harnas-backup/x.md' },
+      ];
+    });
+    const before = await readMap(project, workId);
+    const indexBefore = await readFile(worksIndexPath(), 'utf8');
+
+    expect(await migrateProjects({ now })).toMatchObject([{ status: 'moved' }]);
+
+    const after = await readMap(project, workId);
+    const session = after.sessions.find((candidate) => candidate.id === sessionId);
+    const moved = `.parley/works/${workId}/artifacts/note.txt`;
+    expect(session?.artifacts).toEqual([
+      { kind: 'заметка', path: moved },
+      { kind: 'с точкой', path: `./${moved}` },
+      { kind: 'спека', path: 'docs/spec.md' },
+      { kind: 'вложенный', path: `sub/${note}` },
+      { kind: 'похожий', path: '.harnas-backup/x.md' },
+    ]);
+    // Записанный путь ведёт к настоящему файлу, как вёл до переноса.
+    expect(await exists(path.join(project, session?.artifacts[0]?.path ?? ''))).toBe(true);
+    // Сказанное прозой — запись о том, что было сказано; её не переписывают.
+    expect(session?.summary).toBe(`план лежит в ${note}`);
+    // Правка не событие работы: updatedAt стоит на месте, индекс не менялся.
+    expect(after.work.updatedAt).toBe(before.work.updatedAt);
+    expect(await readFile(worksIndexPath(), 'utf8')).toBe(indexBefore);
+  });
+
+  it('сохранённые брифы: относительные пути в каталог состояния переписываются, абсолютные и чужие — нет', async () => {
+    const { project, workId } = await legacyProject('shop');
+    const brief = path.join(legacyDir(project), 'works', workId, 'briefs', 's-01.md');
+    const other = `/elsewhere/proj/.harnas/works/${workId}/artifacts/x.md`;
+    await writeFile(
+      brief,
+      [
+        'Артефакты:',
+        `- план — .harnas/works/${workId}/artifacts/note.txt`,
+        `См. \`.harnas/works/${workId}/map.json\` и ${other}`,
+        `my.harnas/works/${workId} — не наш путь`,
+        '',
+      ].join('\n'),
+    );
+
+    await migrateProjects({ now });
+
+    expect(await readFile(path.join(currentDir(project), 'works', workId, 'briefs', 's-01.md'), 'utf8')).toBe(
+      [
+        'Артефакты:',
+        `- план — .parley/works/${workId}/artifacts/note.txt`,
+        `См. \`.parley/works/${workId}/map.json\` и ${other}`,
+        `my.harnas/works/${workId} — не наш путь`,
+        '',
+      ].join('\n'),
+    );
   });
 
   it('map.lock у работы — проект не переносим', async () => {
