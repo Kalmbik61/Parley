@@ -772,7 +772,7 @@ export const S = {
      */
     decisionTitle: 'Decision waiting for you',
     decisionNew: (room: string, lead: string): string => `${room} · ${lead} collected positions`,
-    /** Ведущий заменил текст, пока человек не ответил (`rev` вырос). */
+    /** Ведущий заменил текст, пока человек не ответил (`rev` вырос), или принёс исправленное после `Return for rework`. */
     decisionRevised: (room: string, lead: string): string => `${room} · ${lead} revised the decision`,
     /** Кнопки уведомления в самом окне (1.10): вкладка комнаты или скрыть. */
     open: 'Open',
