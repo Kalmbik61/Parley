@@ -203,6 +203,86 @@ describe('deliveryAction', () => {
     ).toBe('resume');
   });
 
+  describe('queueWhileBusy — Codex принимает письмо занятому агенту в очередь (Tab)', () => {
+    const queued = { ...base, queueWhileBusy: true };
+
+    it('working → печать указателя с пометкой queue: он уйдёт в очередь, а не вмешается в ход', () => {
+      expect(deliveryAction({ ...queued, activity: activityOf('working') })).toEqual({
+        kind: 'type-pointer',
+        text: 'Новые письма (1). Вызови check_inbox.',
+        letterIds: ['m-01'],
+        queue: true,
+      });
+    });
+
+    it('без queueWhileBusy working по-прежнему busy: Claude ждёт конца хода', () => {
+      expect(deliveryAction({ ...base, activity: activityOf('working') })).toEqual({
+        kind: 'none',
+        reason: 'busy',
+      });
+      expect(
+        deliveryAction({ ...base, queueWhileBusy: false, activity: activityOf('working') }),
+      ).toEqual({ kind: 'none', reason: 'busy' });
+    });
+
+    it('blocked — busy и с очередью: диалог отвечать нельзя ни Enter, ни Tab', () => {
+      expect(deliveryAction({ ...queued, activity: activityOf('blocked') })).toEqual({
+        kind: 'none',
+        reason: 'busy',
+      });
+    });
+
+    it('у приглашения (idle, unseen) пометки queue нет: письмо уходит Enter как обычно', () => {
+      for (const state of ['idle', 'unseen'] as const) {
+        const action = deliveryAction({ ...queued, activity: activityOf(state) });
+        expect(action).toEqual({
+          kind: 'type-pointer',
+          text: 'Новые письма (1). Вызови check_inbox.',
+          letterIds: ['m-01'],
+        });
+        expect(action).not.toHaveProperty('queue');
+      }
+    });
+
+    it('активности не известно — busy, а не «в очередь наугад»', () => {
+      expect(deliveryAction({ ...queued, activity: null })).toEqual({
+        kind: 'none',
+        reason: 'busy',
+      });
+    });
+
+    it('остальные правила действуют: без хука, черновик человека, указатель в полёте', () => {
+      const working = { ...queued, activity: activityOf('working') };
+      expect(deliveryAction({ ...working, hooked: false })).toEqual({
+        kind: 'none',
+        reason: 'no-hooks',
+      });
+      expect(deliveryAction({ ...working, hasDraft: true })).toEqual({
+        kind: 'none',
+        reason: 'draft',
+      });
+      expect(deliveryAction({ ...working, inFlight: true })).toEqual({
+        kind: 'none',
+        reason: 'in-flight',
+      });
+      expect(deliveryAction({ ...working, paused: true })).toEqual({
+        kind: 'none',
+        reason: 'paused',
+      });
+      expect(deliveryAction({ ...working, pointed: new Set(['m-01']) })).toEqual({
+        kind: 'none',
+        reason: 'already-pointed',
+      });
+    });
+
+    it('спящую очередь не касается: подъём как был', () => {
+      expect(
+        deliveryAction({ ...queued, session: sessionOf({ lifecycle: 'sleeping' }), activity: null })
+          .kind,
+      ).toBe('resume');
+    });
+  });
+
   it('5. черновик человека — none(draft)', () => {
     expect(deliveryAction({ ...base, hasDraft: true })).toEqual({ kind: 'none', reason: 'draft' });
   });
