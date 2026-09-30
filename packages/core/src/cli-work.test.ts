@@ -444,6 +444,41 @@ describe('harnas-core work session new', () => {
     expect((await readMapFile('w-0001')).sessions[0]?.providerSessionId).toBeNull();
   }, 60_000);
 
+  it('codex: напечатанная команда — та же, что запускает окно: HARNAS_* в env сервера и -c notify', async () => {
+    // Codex режет серверу MCP окружение: дом харнесса (`HARNAS_HOME`) должен лежать в таблице `env` явно, а конец
+    // хода приходит скриптом `notify`, которому нужен каталог `events/` работы.
+    await newWork('Авторизация');
+    const printed = await ok(
+      'work',
+      'session',
+      'new',
+      '--work',
+      'w-0001',
+      '--provider',
+      'codex',
+      '--label',
+      'бэкенд',
+      '--task',
+      'Реализовать шаги 1–3',
+    );
+
+    const args = printed['args'] as string[];
+    const overrides = args.flatMap((arg, index) => (args[index - 1] === '-c' ? [arg] : []));
+    expect(overrides.map((override) => override.split('=')[0])).toEqual([
+      'mcp_servers.harnas',
+      'tui.terminal_title',
+      'tui.notifications',
+      'tui.notification_method',
+      'tui.notification_condition',
+      'notify',
+    ]);
+    const mcp = overrides[0] as string;
+    expect(mcp).toContain(`HARNAS_HOME=${JSON.stringify(home)}`);
+    expect(mcp).toContain('HARNAS_SESSION_ID="s-01"');
+    expect(overrides.at(-1)).toMatch(/^notify=\[".+node.*",".*codex-notify-bin\.js"\]$/);
+    expect((await stat(workPaths(project, 'w-0001').events)).isDirectory()).toBe(true);
+  }, 60_000);
+
   it('--context попадает в карту и в бриф', async () => {
     await newWork('Авторизация');
     await ok(

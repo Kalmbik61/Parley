@@ -61,6 +61,31 @@ describe('capabilities', () => {
     expect(missingMethods(connected(all))).toEqual([]);
   });
 
+  it('окну комнат Organic нужны rooms.addMember и rooms.resolveProposal: хосту без них не хватает ровно их', () => {
+    const rooms = ['rooms.addMember', 'rooms.resolveProposal'];
+    expect(REQUIRED_METHODS).toEqual(expect.arrayContaining(rooms));
+    // Хост, что умеет всё окно, кроме этих двух, — старее окна: строка статуса предложит перезапуск.
+    const older = connected(REQUIRED_METHODS.filter((method) => !rooms.includes(method)));
+    expect(missingMethods(older)).toEqual(rooms);
+    for (const method of rooms) expect(missingMethods(connected(REQUIRED_METHODS.filter((known) => known !== method)))).toEqual([method]);
+    expect(missingMethods(connected([...REQUIRED_METHODS]))).toEqual([]);
+  });
+
+  it('методы комнат дизайна Organic: у хоста без них окно их не видит и прячет функции, у нового — видит', () => {
+    const rooms = ['rooms.addMember', 'rooms.resolveProposal'];
+    // Хост до этого дизайна: то, что было в протоколе, но без вступления в комнату и решений.
+    const older = connected([...BASELINE_METHODS, 'works.rename', 'mail.markRead']);
+    for (const method of rooms) expect(hostMethods(older).has(method)).toBe(false);
+    expect(hostMethods(connected(null)).has('rooms.addMember')).toBe(false);
+
+    useHostStore.setState({ status: older });
+    const { result } = renderHook(() => rooms.map((method) => useHostSupports(method)));
+    expect(result.current).toEqual([false, false]);
+
+    const all = [...Object.keys(METHODS), ...Object.keys(NOTIFICATIONS)];
+    for (const method of rooms) expect(hostMethods(connected(all)).has(method)).toBe(true);
+  });
+
   it.each<HostStatus>([
     { state: 'connecting' },
     { state: 'mismatch', hostVersion: '9.9.9', liveSessions: 1 },

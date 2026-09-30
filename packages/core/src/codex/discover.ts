@@ -23,7 +23,13 @@ export interface DiscoveredCodexSession {
   id: string;
 }
 
-const ROLLOUT = /^rollout-.*-([0-9a-f-]{36})\.jsonl$/;
+/**
+ * `rollout-<время>-<тред>.jsonl`; у «откатанных» тредов имя `rollout-<время>-<тред>_<rollout>.jsonl` —
+ * суффикс после «_» это id rollout, а не треда (`codex-rs/rollout/src/rollout_file_name.rs`), и id
+ * сессии — тред: под ним её знает карта (`session_meta.id`, `_meta.threadId`). Ленивое `.*?` и
+ * привязка к концу имени берут ровно первый uuid после времени.
+ */
+const ROLLOUT = /^rollout-.*?-([0-9a-f-]{36})(?:_[0-9a-f-]{36})?\.jsonl$/;
 
 async function readDirSafe(dir: string): Promise<import('node:fs').Dirent[]> {
   try {
@@ -36,7 +42,9 @@ async function readDirSafe(dir: string): Promise<import('node:fs').Dirent[]> {
 
 /**
  * Обходит `~/.codex/sessions/<год>/<месяц>/<день>/` и возвращает rollout-логи.
- * Один файл — одна сессия; подсессий у Codex не бывает (specs/runners.md).
+ * Один файл — один тред. Подагенты и внутренние треды Codex (у `session_meta` задан
+ * `parent_thread_id` или `source` не `cli`) лежат в тех же каталогах отдельными логами — их различает
+ * индекс (`SessionIndex.spawned`), а не обход.
  */
 export async function discoverCodexSessions(
   root: string = defaultCodexRoot(),

@@ -25,7 +25,7 @@ export function ConflictsSection({ files, open, onToggle, onOpenFile }: Conflict
           <button
             type="button"
             title={path}
-            className="flex h-6 w-full min-w-0 items-center gap-2 px-3 text-left text-xs hover:bg-accent"
+            className="flex h-[30px] w-full min-w-0 items-center gap-2 rounded-full px-3 text-left text-xs transition-colors hover:bg-foreground/6"
             onClick={() => onOpenFile(path)}
           >
             <AlertTriangle className="size-3 shrink-0 text-status-warning" aria-hidden="true" />

@@ -29,3 +29,23 @@ describe('moveCursor (тест 6)', () => {
     expect(moveCursor([], cardA, 'ArrowDown')).toBeNull();
   });
 });
+
+// Кусок 5 плана «Organic»: строка комнаты — тоже элемент курсора (`roomId`), между карточкой и строками сессий.
+describe('moveCursor — строка комнаты (кусок 5)', () => {
+  const roomA: SidebarCursor = { workKey: 'a', sessionId: null, roomId: 'r-01' };
+  const inRoom: SidebarCursor = { workKey: 'a', sessionId: 's-01' };
+  const ORDER_WITH_ROOM = [cardA, roomA, inRoom, rowA2, cardB];
+
+  it('карточка → комната → участник → следующая строка; ↑ идёт обратно тем же путём', () => {
+    expect(moveCursor(ORDER_WITH_ROOM, cardA, 'ArrowDown')).toEqual(roomA);
+    expect(moveCursor(ORDER_WITH_ROOM, roomA, 'ArrowDown')).toEqual(inRoom);
+    expect(moveCursor(ORDER_WITH_ROOM, inRoom, 'ArrowUp')).toEqual(roomA);
+    expect(moveCursor(ORDER_WITH_ROOM, roomA, 'ArrowUp')).toEqual(cardA);
+  });
+
+  it('комната и карточка с одним workKey — разные позиции; комната одной работы не путается с комнатой другой', () => {
+    expect(moveCursor(ORDER_WITH_ROOM, { workKey: 'a', sessionId: null, roomId: null }, 'ArrowDown')).toEqual(roomA);
+    // Комнаты `r-01` другой работы в порядке нет — курсор «потерян»: ↓ на первый.
+    expect(moveCursor(ORDER_WITH_ROOM, { workKey: 'b', sessionId: null, roomId: 'r-01' }, 'ArrowDown')).toEqual(cardA);
+  });
+});

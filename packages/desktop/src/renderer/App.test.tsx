@@ -11,7 +11,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { WorkEntry, WorkSession } from '@harnas/core';
 import { App } from './App.js';
-import type { NewSessionDialogProps } from './components/dialogs/NewSessionDialog.js';
 import { createFakeBridge, type FakeBridge } from './test-utils/fake-bridge.js';
 import { bufferKey, initialBuffer } from './files/buffer.js';
 import { useFilesStore } from './files/store.js';
@@ -22,6 +21,7 @@ import { emptyLayout, openTab } from './layout/tree.js';
 import { useActivityStore } from './store/activity.js';
 import { useHostStore } from './store/host.js';
 import { useNoticesStore } from './store/notices.js';
+import { useProvidersStore } from './store/providers.js';
 import { useUiStore } from './store/ui.js';
 import { useWorksStore } from './store/works.js';
 import { refKey, type SessionRef } from '@harnas/protocol';
@@ -33,16 +33,6 @@ import { groups } from './layout/tree.js';
 import { S } from '../shared/strings.js';
 import type { TabSpec } from '../shared/layout-types.js';
 import { workKey } from '../shared/work-keys.js';
-
-// Тест 6 куска 2.7 читает пропсы диалога новой сессии, а не его разметку:
-// что именно диалог делает с `projectPath`/`workId`, проверяет его собственный тест.
-const dialogProps = vi.hoisted(() => ({ last: null as NewSessionDialogProps | null }));
-vi.mock('./components/dialogs/NewSessionDialog.js', () => ({
-  NewSessionDialog: (props: NewSessionDialogProps) => {
-    dialogProps.last = props;
-    return null;
-  },
-}));
 
 // Тест 4 куска 4.3 проверяет вызов тоста, а не его разметку; `Toaster` остаётся настоящим.
 vi.mock('sonner', async (importOriginal) => ({ ...(await importOriginal<typeof import('sonner')>()), toast: vi.fn() }));
@@ -66,10 +56,11 @@ beforeEach(() => {
   useWorksStore.setState({ entries: [], branches: {}, loading: false, error: null });
   useActivityStore.setState({ byRef: {} });
   useNoticesStore.setState({ notices: [] });
+  useProvidersStore.setState({ providers: [] });
   useUiStore.setState({
     windowFocused: true,
     wakePaused: null,
-    dialogs: { newWork: false, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null, restartHost: false },
+    dialogs: { newWork: false, newSession: { open: false, work: null, room: false }, settings: false, mergeRoom: null, restartHost: false },
     visibleSessionRefs: {},
   });
   useLayoutStore.setState({
@@ -81,7 +72,6 @@ beforeEach(() => {
     mru: {},
     navigating: false,
   });
-  dialogProps.last = null;
   useSidebarSectionsStore.setState({ sections: [], attention: {}, entries: null });
   // Стор связи общий на файл: `everConnected` прошлого теста убрал бы экран «No connection»
   // у теста, где связи ещё не было (слияние lane-r3).
@@ -104,6 +94,59 @@ describe('App — корневая обёртка окна (раунд испр�
     expect(root).not.toBeNull();
     expect(root?.className).toContain('text-foreground');
     expect(root?.className ?? '').not.toMatch(/var\(--/);
+  });
+});
+
+// Спека окна 2026-09-29, 1.1: провайдеры строки статуса — `providers.list` при подключении к хосту и
+// после переподключения, а не на каждый рендер.
+describe('App — провайдеры строки статуса (Organic, 1.1)', () => {
+  const answer = { providers: [{ id: 'claude', label: 'Claude', available: true, version: '2.1.276' }] };
+  const settle = async (): Promise<void> => {
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  };
+
+  it('providers.list зовётся один раз при подключении; событие работ и перерисовка его не повторяют', async () => {
+    const handler = vi.fn(() => answer);
+    bridge.setHandler('providers.list', handler);
+    render(<App />);
+    await settle();
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    act(() => bridge.emit('works.changed', { entries: [], branches: {} }));
+    await settle();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Claude Code')).toBeTruthy();
+    expect(screen.getByText('2.1.276')).toBeTruthy();
+  });
+
+  it('после переподключения — снова один вызов, свежая версия на месте', async () => {
+    let version = '2.1.276';
+    const handler = vi.fn(() => ({ providers: [{ id: 'claude', label: 'Claude', available: true, version }] }));
+    bridge.setHandler('providers.list', handler);
+    render(<App />);
+    await settle();
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    act(() => bridge.emitStatus({ state: 'disconnected', reason: 'Connection to host closed' }));
+    version = '2.2.0';
+    act(() => bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: [...REQUIRED_METHODS] }));
+    await settle();
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('2.2.0')).toBeTruthy();
+  });
+
+  it('отказ providers.list — окно живёт, сегментов провайдеров нет', async () => {
+    bridge.setHandler('providers.list', () => {
+      throw new Error('нет метода');
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(<App />);
+    await settle();
+    expect(screen.queryByText('Claude Code')).toBeNull();
+    expect(screen.getByText('Host 0.0.0-test')).toBeTruthy();
   });
 });
 
@@ -177,9 +220,8 @@ function work(id: string, createdAt: string, sessions: WorkSession[]): WorkEntry
   };
 }
 
-// Кусок 2.7: выбор сессии больше не хранится в `store/ui.ts` — ⌘T берёт
-// работу из `activeWorkKey`, родителя — из активной вкладки-терминала её
-// активной группы (`selectedSessionOf`).
+// Кусок 2.7: выбор сессии больше не хранится в `store/ui.ts` (его выводит `selectedSessionOf`). С куска 7 плана
+// «Organic» ⌘T родителя не берёт вовсе: диалог 1.5 открывается на `activeWorkKey`.
 describe('App — меню session.new (тест 6 куска 2.7, тест 4 куска 6.1b)', () => {
   it('settings.open открывает настройки — ветка run в AppShell, у App своего onMenu нет', async () => {
     useWorksStore.setState({ entries: [work('w-01', '2026-01-01', [session('s-01', 'план')])], branches: {}, loading: false, error: null });
@@ -192,7 +234,7 @@ describe('App — меню session.new (тест 6 куска 2.7, тест 4 к
     expect(useUiStore.getState().dialogs.settings).toBe(true);
   });
 
-  it('диалог получает projectPath и workId активной работы и родителя из selectedSessionOf', async () => {
+  it('⌘T — диалог 1.5 открывается на активной работе одним агентом (кусок 7: родителя больше нет)', async () => {
     const w1 = work('w-01', '2026-01-01', [session('s-01', 'план')]);
     const w2 = work('w-02', '2026-01-02', [session('s-01', 'бэк'), session('s-02', 'фронт')]);
     useWorksStore.setState({ entries: [w1, w2], branches: {}, loading: false, error: null });
@@ -211,12 +253,9 @@ describe('App — меню session.new (тест 6 куска 2.7, тест 4 к
 
     act(() => bridge.emitMenu('session.new'));
 
-    expect(dialogProps.last).toMatchObject({
-      open: true,
-      projectPath: '/tmp/w-02',
-      workId: 'w-02',
-      selectedSessionId: 's-02',
-    });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: true, work: null, room: false });
+    // Диалог берёт активную работу сам: в его поле «Workspace» — она.
+    expect(await screen.findByRole('combobox', { name: 'Workspace' })).toHaveProperty('textContent', 'w-02 · w-02');
   });
 });
 
@@ -237,12 +276,14 @@ describe('App — «New session» из меню карточки (тест 15 к
 
     fireEvent.contextMenu(document.querySelector('[data-work-key="/tmp/w-02 w-02"]') as HTMLElement);
     fireEvent.click(screen.getByText('New session'));
-    expect(dialogProps.last).toMatchObject({ open: true, projectPath: '/tmp/w-02', workId: 'w-02', selectedSessionId: null });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: true, work: { projectPath: '/tmp/w-02', workId: 'w-02' }, room: false });
     expect(useLayoutStore.getState().activeWorkKey).toBe(key1);
+    expect(await screen.findByRole('combobox', { name: 'Workspace' })).toHaveProperty('textContent', 'w-02 · w-02');
 
-    act(() => dialogProps.last?.onOpenChange(false));
+    act(() => useUiStore.getState().closeNewSessionDialog());
     act(() => bridge.emitMenu('session.new'));
-    expect(dialogProps.last).toMatchObject({ open: true, projectPath: '/tmp/w-01', workId: 'w-01' });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: true, work: null, room: false });
+    expect(await screen.findByRole('combobox', { name: 'Workspace' })).toHaveProperty('textContent', 'w-01 · w-01');
   });
 });
 

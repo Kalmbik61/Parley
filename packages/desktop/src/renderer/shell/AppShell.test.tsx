@@ -162,7 +162,7 @@ beforeEach(() => {
   useUiStore.setState({
     windowFocused: true,
     wakePaused: null,
-    dialogs: { newWork: { open: false, projectPath: null, title: '' }, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null, restartHost: false },
+    dialogs: { newWork: { open: false, projectPath: null, title: '' }, newSession: { open: false, work: null, room: false }, settings: false, mergeRoom: null, restartHost: false },
     visibleSessionRefs: {},
     ui: DEFAULT_UI,
     uiLoaded: true,
@@ -226,6 +226,40 @@ describe('AppShell — Landing и оболочка с работой (тест 6
     expect(screen.queryByTestId('landing')).toBeNull();
     expect(screen.getByTestId('app-shell')).toBeTruthy();
     expect(screen.getByText('Первая')).toBeTruthy();
+  });
+
+  // Геометрия Organic (спека окна 2026-09-29, 1.1): центр — лист `--sheet` с радиусом 28 и `shadow-sm`,
+  // отступ `0 8 8 0`; сайдбар скрыт — слева тоже 8. Контейнеры работ лежат внутри листа.
+  it('центр — лист: --sheet, радиус 28, shadow-sm, отступ 0 8 8 0; левый сайдбар скрыт — слева 8', async () => {
+    const w1 = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'план')]);
+    useWorksStore.setState({ entries: [w1], branches: {}, loading: false, error: null });
+
+    render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
+    await flush();
+
+    const sheet = screen.getByTestId('center-sheet');
+    expect(sheet.className).toMatch(/\bbg-sheet\b/);
+    expect(sheet.className).toMatch(/\brounded-lg\b/);
+    expect(sheet.className).toMatch(/\bshadow-sm\b/);
+    expect(sheet.className).toMatch(/\boverflow-hidden\b/);
+    const frame = sheet.parentElement as HTMLElement;
+    expect(frame.className).toMatch(/\bpr-2\b/);
+    expect(frame.className).toMatch(/\bpb-2\b/);
+    expect(frame.className).not.toMatch(/\bpl-2\b/);
+
+    act(() => useUiStore.getState().setSidebar('left', { open: false }));
+    expect((screen.getByTestId('center-sheet').parentElement as HTMLElement).className).toMatch(/\bpl-2\b/);
+  });
+
+  it('контейнер работы — внутри листа, у неактивной работы — тоже', async () => {
+    const w1 = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'план')]);
+    useWorksStore.setState({ entries: [w1], branches: {}, loading: false, error: null });
+
+    render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
+    await waitFor(() => expect(document.querySelector('[data-work-container]')).not.toBeNull());
+
+    const container = document.querySelector('[data-work-container]') as HTMLElement;
+    expect(screen.getByTestId('center-sheet').contains(container)).toBe(true);
   });
 
   // Раунд исправлений 1 куска E.1 (ревью линза A, Critical): HostNotice.text
@@ -292,7 +326,7 @@ describe('AppShell — меню и диалоги (тест 9)', () => {
     act(() => bridge.emitMenu('palette.open'));
     expect(await screen.findByText('Command palette')).toBeTruthy();
     expect(usePaletteStore.getState()).toMatchObject({ open: true, mode: 'default' });
-    expect(screen.getByPlaceholderText('Search tabs, workspaces, sessions, rooms, and actions…')).toBeTruthy();
+    expect(screen.getByPlaceholderText('Search workspaces, sessions, tabs and actions')).toBeTruthy();
   });
 
   it('подпись сочетания палитры — ⌘J и в заголовке, и на Landing; ⌘K нигде нет (тест 9 куска 6.1b)', async () => {
@@ -340,13 +374,14 @@ describe('AppShell — меню и диалоги (тест 9)', () => {
     render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
     await flush();
     expect(screen.getByText('Первая')).toBeTruthy();
-    // «Search» — две кнопки: в заголовке и вверху сайдбара карточек (кусок 3.3).
-    expect(screen.getAllByText('Search')).toHaveLength(2);
+    // «Search» — одна кнопка, вверху сайдбара карточек (кусок 3.3): в заголовке при открытом сайдбаре её нет.
+    expect(screen.getAllByText('Search')).toHaveLength(1);
 
     act(() => bridge.emitMenu('sidebar.left.toggle'));
     expect(screen.queryByText('Первая')).toBeNull();
     expect(useUiStore.getState().ui.leftSidebar.open).toBe(false);
 
+    // Сайдбара нет — поиск переехал в заголовок.
     fireEvent.click(screen.getByText('Search'));
     expect(usePaletteStore.getState()).toMatchObject({ open: true, mode: 'default' });
   });
@@ -730,7 +765,7 @@ describe('AppShell — вход «Почта» сайдбара (тест 10 к�
     act(() => useLayoutStore.getState().setActiveWork(keyOf('w-01')));
     await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-01')]).toBe(true));
 
-    fireEvent.click(screen.getByText('✉1'));
+    fireEvent.click(screen.getByRole('button', { name: '1 unread message to you' }));
     await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-02')]).toBe(true));
 
     expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
@@ -1090,22 +1125,24 @@ describe('AppShell — сайдбар карточек (кусок 3.3)', () => 
     fireEvent.click(screen.getByRole('button', { name: /^New workspace\s*⌘N$/ }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText('New workspace')).toBeTruthy();
-    expect(within(dialog).getByRole('button', { name: 'Create' })).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'Create workspace' })).toBeTruthy();
   });
 
-  it('кусок 3.5, тест 7: «+» заголовка проекта — форма с этим проектом; меню new-work — без проекта', async () => {
+  it('кусок 3.5, тест 7: «+» заголовка проекта — диалог 1.7 с этим проектом; меню new-work — с проектом активной работы (кусок 7)', async () => {
     await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'New workspace in project' }));
+    fireEvent.click(screen.getByRole('button', { name: /^New workspace in / }));
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByRole('combobox', { name: 'Project' }).getAttribute('title')).toBe('/tmp/w-01');
+    const chosen = within(dialog).getByRole('radio', { name: 'w-01' });
+    expect(chosen.getAttribute('title')).toBe('/tmp/w-01');
+    expect(chosen.getAttribute('aria-checked')).toBe('true');
     fireEvent.keyDown(dialog, { key: 'Escape' });
     await flush();
     expect(useUiStore.getState().dialogs.newWork).toEqual({ open: false, projectPath: null, title: '' });
 
     act(() => bridge.emitMenu('work.new'));
     const again = await screen.findByRole('dialog');
-    expect(within(again).getByRole('combobox', { name: 'Project' }).textContent).toBe('Choose a folder…');
+    expect(within(again).getByRole('radio', { name: 'w-01' }).getAttribute('aria-checked')).toBe('true');
   });
 
   it('клик по строке сессии неактивной работы: работа активна, вкладка её терминала открыта', async () => {
@@ -1358,7 +1395,8 @@ describe('AppShell — меню сайдбара (кусок 3.4)', () => {
     const errors = vi.spyOn(console, 'error');
     const card = document.querySelector(`[data-work-key="${keyOf('w-02')}"]`) as HTMLElement;
     fireEvent.keyDown(within(card).getByRole('button', { name: 'Rooms' }), { key: 'Enter' });
-    fireEvent.click(screen.getByText('Design'));
+    // Название комнаты видно и строкой самой карточки (кусок 5): пункт ищем внутри меню.
+    fireEvent.click(within(screen.getByRole('menu')).getByText('Design'));
     const overflow = errors.mock.calls.filter((args) => args.some((arg) => String(arg).includes('Maximum call stack')));
     errors.mockRestore();
     expect(overflow).toEqual([]);
@@ -1369,17 +1407,16 @@ describe('AppShell — меню сайдбара (кусок 3.4)', () => {
     expect(layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id))).toEqual([tabId.room('r-01')]);
   });
 
-  it('«New room» из меню карточки (тест 10): заголовок New room, кандидаты — все сессии работы, закрытая недоступна', async () => {
-    const closed = { ...session('s-03', 'три'), lifecycle: 'closed' as const };
-    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один'), session('s-02', 'два'), closed])]);
+  it('«New room» из меню карточки (кусок 7): диалог 1.5 открыт комнатой — заголовок New room и два агента', async () => {
+    bridge.setHandler('providers.list', async () => ({ providers: [{ id: 'claude', label: 'Claude', available: true }] }));
+    bridge.setHandler('worktrees.available', async () => ({ available: false }));
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один'), session('s-02', 'два')])]);
     fireEvent.contextMenu(document.querySelector(`[data-work-key="${keyOf('w-01')}"]`) as HTMLElement);
     fireEvent.click(screen.getByText('New room'));
 
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByRole('heading', { name: 'New room' })).toBeTruthy();
-    const boxes = within(dialog).getAllByRole('checkbox') as HTMLButtonElement[];
-    expect(boxes.map((box) => box.closest('label')?.textContent)).toEqual(['S01 один', 'S02 два', 'S03 три']);
-    expect(boxes.map((box) => box.disabled)).toEqual([false, false, true]);
+    expect(dialog.querySelectorAll('[data-agent-row]')).toHaveLength(2);
   });
 });
 
@@ -1575,6 +1612,24 @@ function archivedWork(id: string, projectPath: string, sessions: WorkSession[]):
   return { projectPath, map: { ...base.map, work: { ...base.map.work, status: 'archived' } } };
 }
 
+
+/** Две работы; в первой комната r-01 {s-01, s-02} с решением, ждущим человека (кусок 5, спека окна 2026-09-29, 2.7). */
+function waitingWorks(): WorkEntry[] {
+  const waiting = work('w-01', '2026-01-01', 'Возвраты', [session('s-01', 'один'), session('s-02', 'два')]);
+  waiting.map.rooms = [
+    {
+      id: 'r-01',
+      title: 'Возвраты',
+      creator: 'human',
+      members: ['s-01', 's-02'],
+      createdAt: '2026-01-01',
+      lead: 's-01',
+      proposal: { id: 'p-01', from: 's-01', text: 'Решение', rev: 0, at: '2026-01-02T00:00:00.000Z' },
+    },
+  ];
+  return [waiting, work('w-02', '2026-01-02', 'Вторая', [session('s-01', 'три')])];
+}
+
 describe('AppShell — показ архивных (тесты 6, 7 куска 6.3)', () => {
   beforeEach(() => useUiStore.setState({ showArchived: false }));
   afterEach(() => useUiStore.setState({ showArchived: false }));
@@ -1621,6 +1676,61 @@ describe('AppShell — показ архивных (тесты 6, 7 куска 6
     await pickInPalette('Next session', /^Next session that needs you/);
     expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
   });
+
+  // Кусок 5 плана «Organic», спека окна 2026-09-29, 2.7: комната с ждущим решением — «нужен ты», как blocked.
+  it('комната с ждущим решением: строка статуса «1 needs you», карточка со значком вопроса и подкрашенной строкой комнаты', async () => {
+    await renderShell(waitingWorks());
+
+    expect(document.querySelector('[data-attention-segment]')?.textContent).toBe('1 needs you');
+    const card = document.querySelector(`[data-work-key="${CSS.escape(keyOf('w-01'))}"]`) as HTMLElement;
+    expect(card.querySelector('[data-work-glyph] [data-testid="agent-state-dot"]')?.getAttribute('data-state')).toBe('blocked');
+    // Участники комнаты отдельными строками не выводятся; строка комнаты подкрашена и подписана.
+    expect(card.querySelector('[data-session-id="s-01"]')).toBeNull();
+    const row = card.querySelector('[data-room-row="r-01"]') as HTMLElement;
+    expect(row.textContent).toContain('decision');
+    expect(row.className).toContain('bg-accent-200');
+  });
+
+  it('клик по счётчику строки статуса при ждущем решении открывает вкладку комнаты (яруса blocked нет)', async () => {
+    await renderShell(waitingWorks());
+    fireEvent.click(document.querySelector('[data-attention-segment]') as HTMLElement);
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-01')]).toBe(true));
+    const layout = useLayoutStore.getState().layouts[keyOf('w-01')];
+    expect(layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id))).toEqual([tabId.room('r-01')]);
+  });
+
+  // Цели «следующей» — один список blocked → комната с решением → unseen по кругу от текущей вкладки (2.7): пока в
+  // работах есть blocked-сессия, клик не застревает на ней, а доходит до комнаты с решением (сцена dark-04).
+  it('blocked-сессия и комната с решением: «2 need you»; клики по счётчику идут терминал → комната → снова терминал', async () => {
+    const [waiting, other] = waitingWorks() as [WorkEntry, WorkEntry];
+    const ref = { projectPath: other.projectPath, workId: 'w-02', sessionId: 's-01' };
+    useActivityStore.setState({
+      byRef: {
+        [refKey(ref)]: {
+          ref,
+          activity: { activity: 'blocked', subagents: 0, turnEndedAt: null, lastEventAt: '2026-01-05T00:00:00.000Z', source: 'hooks', exited: false, hooksMissing: false },
+          metrics: null,
+        },
+      },
+    });
+    await renderShell([waiting, other]);
+    const segment = (): HTMLElement => document.querySelector('[data-attention-segment]') as HTMLElement;
+    expect(segment().textContent).toBe('2 need you');
+
+    fireEvent.click(segment());
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-02')]).toBe(true));
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
+    expect(activeTabOf(keyOf('w-02'))).toBe(tabId.terminal('s-01'));
+
+    fireEvent.click(segment());
+    await waitFor(() => expect(activeTabOf(keyOf('w-01'))).toBe(tabId.room('r-01')));
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-01'));
+
+    fireEvent.click(segment());
+    await waitFor(() => expect(activeTabOf(keyOf('w-02'))).toBe(tabId.terminal('s-01')));
+    expect(useLayoutStore.getState().activeWorkKey).toBe(keyOf('w-02'));
+  });
 });
 
 describe('AppShell — действия 6.3 из палитры (тесты 8, 9 куска 6.3)', () => {
@@ -1658,17 +1768,17 @@ describe('AppShell — действия 6.3 из палитры (тесты 8, 9
     await waitFor(() => expect(vi.mocked(toast)).toHaveBeenCalledWith("Couldn't restart host: host error."));
   });
 
-  it('New session — диалог с родителем, выбранной сессией (как ⌘T)', async () => {
+  it('New session or room — диалог 1.5 активной работы одним агентом (как ⌘T)', async () => {
     await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
     await activateWithTerminal(keyOf('w-01'), 's-01');
     await pickInPalette('New session', /^New session/);
-    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: true, parentSessionId: 's-01', work: null });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: true, work: null, room: false });
   });
 
-  it('New room — «Создать комнату» активной работы без обязательного участника', async () => {
+  it('New room — тот же диалог активной работы, открытый комнатой (два агента)', async () => {
     await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')])]);
     await pickInPalette('New room', /^New room/);
-    expect(useUiStore.getState().dialogs.createRoom).toEqual({ projectPath: '/tmp/w-01', workId: 'w-01', requiredMember: null });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: true, work: null, room: true });
   });
 
   it('Pause auto-wake — wake.pause; отказ — тост Couldn\'t toggle auto-wake: …', async () => {
@@ -1830,6 +1940,10 @@ describe('AppShell — несохранённые файлы при закрыт
     await openDirtyA();
     expect(tabEl(A).querySelector('[data-dirty-dot]')).not.toBeNull();
     expect(tabEl(B).querySelector('[data-dirty-dot]')).toBeNull();
+    // Крестик — только у активной вкладки (Organic, 1.1): фоновую A сначала активируем, а её закрытие
+    // без активации — средней кнопкой, тест ниже.
+    expect(within(tabEl(A)).queryByRole('button', { name: 'Close' })).toBeNull();
+    fireEvent.click(tabEl(A));
     fireEvent.click(within(tabEl(A)).getByRole('button', { name: 'Close' }));
     expect(await screen.findByText('Save changes to a.ts?')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -1877,6 +1991,7 @@ describe('AppShell — несохранённые файлы при закрыт
 
   it('вопрос вкладки и вопрос окна на один файл: Save вкладки, затем ответ окна — close без ложной ошибки (fix-7.3 п. 3)', async () => {
     await openDirtyA();
+    fireEvent.click(tabEl(A));
     fireEvent.click(within(tabEl(A)).getByRole('button', { name: 'Close' }));
     expect(await screen.findByText('Save changes to a.ts?')).toBeTruthy();
     // ⌘Q, пока открыт вопрос вкладки: вопрос окна встаёт в очередь вторым.

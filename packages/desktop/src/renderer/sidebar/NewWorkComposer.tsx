@@ -1,50 +1,48 @@
 /**
- * Форма новой работы (кусок 3.5, спека 6.6) вместо `NewWorkDialog`: работа и её первая
- * сессия — одним действием, как у Orca. Диалог шириной 560 px; от «+» заголовка проекта
- * проект уже выбран.
+ * Диалог «New workspace» (кусок 7 плана «Organic», спека окна 2026-09-29, 1.7) вместо формы новой работы (кусок 3.5,
+ * спека Orca-UI 6.6): работа и её первая сессия — одним действием, как у Orca. Поля 1.7: проект (сегмент известных
+ * проектов), агент (сегмент провайдеров), название и первый промпт. Ширина 520; от «+» заголовка проекта проект уже выбран,
+ * иначе по умолчанию проект активной работы (как в прототипе handoff).
  *
- * Порядок вызовов — `works.create`, затем при «Start a session» `sessions.create`. Если
- * второй упал, работа уже есть: форма показывает ошибку сессии и «Retry», который по нажатию
- * повторяет только `sessions.create` — поля работы тогда заперты, чтобы не казалось, что
- * повтор создаст работу с новым названием. Ничего не создаётся без явного действия человека
- * (Create, ⌘Enter, Retry).
+ * Порядок вызовов — `works.create`, затем `sessions.create`. Если второй упал, работа уже есть: диалог показывает ошибку
+ * сессии и «Retry», который по нажатию повторяет только `sessions.create` — проект и название тогда заперты, чтобы не
+ * казалось, что повтор создаст работу с новым названием (агент, промпт и worktree остаются доступны). Ничего не создаётся
+ * без явного действия человека (Create workspace, ⌘Enter, Retry).
  *
- * Новая работа становится активной, а вкладка сессии открывается, только когда снимок работ
- * (`works.changed`) принёс её: `sessions.create` отвечает раньше снимка, и вкладка, открытая
- * сразу, мигнула бы телом «Session deleted». Ожидание живёт в подписке на стор работ, а не в
- * компоненте: форму успевают закрыть, а при «Create more» ждут сразу несколько работ.
+ * Пустое название берётся из первого промпта (`titleFromPrompt`); пустой промпт — тихий старт агента, он ждёт задачу в
+ * терминале. Ни названия, ни промпта — ошибка: названию не из чего взяться. Первый промпт — `task` первой сессии, цель
+ * работы (`goal`) пуста, ярлык сессии пуст: с промптом строка сайдбара покажет `S01`, как в прототипе, а при пустом
+ * промпте (тихий старт) хост поставит метку «новая сессия» — `S01 New session` до автозаголовка Claude Code.
+ *
+ * «In its own worktree» (спека Orca-UI 6.6, план worktree 4.3) остаётся: виден, если `worktrees.available` для проекта.
+ * «Choose a folder…» (`app.chooseFolder`) остаётся рядом с сегментом: без него в окне без работ нельзя выбрать первый проект.
+ *
+ * Новая работа становится активной, а вкладка сессии открывается, только когда снимок работ (`works.changed`) принёс её:
+ * `sessions.create` отвечает раньше снимка, и вкладка, открытая сразу, мигнула бы телом «Session deleted» (`lib/open-when-listed.ts`).
  */
 
-import { useEffect, useRef, useState } from 'react';
-import { toast } from 'sonner';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
-import { errorText, S } from '../../shared/strings.js';
-import { tabId } from '../layout/ids.js';
+import { errorText, providerName, S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
-import { openTab } from '../layout/tree.js';
 import { defaultProvider, type ProviderOption } from '../lib/default-provider.js';
+import { openWhenListed } from '../lib/open-when-listed.js';
 import { workKey } from '../lib/tree-order.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import { Button } from '../ui/button.js';
-import { Checkbox } from '../ui/checkbox.js';
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from '../ui/dialog.js';
 import { Input } from '../ui/input.js';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select.js';
 import { Switch } from '../ui/switch.js';
 import { Textarea } from '../ui/textarea.js';
+import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group.js';
 
 export interface NewWorkDraft {
   projectPath: string | null;
   title: string;
-  goal: string;
-  startSession: boolean;
+  prompt: string;
   provider: string | null;
-  label: string;
-  task: string;
-  worktree: boolean;
-  createMore: boolean;
 }
 
 /**
@@ -62,87 +60,41 @@ export function trimTitle(title: string): string {
 /** Счёт по кодовым точкам: эмодзи — один символ, а не два, как у `length`. */
 const codePoints = (text: string): number => [...text].length;
 
-/** Пределы спеки 6.6: название 1–120, цель до 4000, ярлык до 40, задача до 20000 — по кодовым точкам. Тексты — S.dialogs.newWork. */
+/** Сколько знаков первого промпта идёт в название, если его не ввели (прототип handoff: первые 40 знаков первой строки). */
+const DERIVED_TITLE_LENGTH = 40;
+
+/** Название из первого промпта (1.7): первая непустая строка, до 40 знаков; в промпте одни пробелы — пусто. */
+export function titleFromPrompt(prompt: string): string {
+  for (const line of prompt.split('\n')) {
+    const trimmed = trimTitle(line);
+    if (trimmed !== '') return trimTitle([...trimmed].slice(0, DERIVED_TITLE_LENGTH).join(''));
+  }
+  return '';
+}
+
+/** Название, с которым уйдёт `works.create`: введённое, а если его нет — из первого промпта. */
+function effectiveTitle(draft: Pick<NewWorkDraft, 'title' | 'prompt'>): string {
+  const typed = trimTitle(draft.title);
+  return typed !== '' ? typed : titleFromPrompt(draft.prompt);
+}
+
+/** Пределы: название 1–120, первый промпт до 20000 — по кодовым точкам; проект и агент обязательны. Тексты — S.dialogs.newWork. */
 export function validateDraft(draft: NewWorkDraft): Partial<Record<keyof NewWorkDraft, string>> {
   const errors: Partial<Record<keyof NewWorkDraft, string>> = {};
   const text = S.dialogs.newWork;
   if (draft.projectPath === null) errors.projectPath = text.selectFolderRequired;
-  const title = codePoints(trimTitle(draft.title));
-  if (title < 1 || title > 120) errors.title = text.titleLength;
-  if (codePoints(draft.goal) > 4000) errors.goal = text.goalTooLong;
-  // Поля сессии без «Start a session» не уходят на хост — и не проверяются.
-  if (draft.startSession) {
-    if (draft.provider === null) errors.provider = text.agentRequired;
-    if (codePoints(draft.label) > 40) errors.label = text.labelTooLong;
-    if (codePoints(draft.task) > 20000) errors.task = text.taskTooLong;
-  }
+  const typed = trimTitle(draft.title);
+  if (typed === '' && titleFromPrompt(draft.prompt) === '') errors.title = text.titleOrPromptRequired;
+  else if (codePoints(typed) > 120) errors.title = text.titleLength;
+  if (codePoints(draft.prompt) > 20000) errors.prompt = text.promptTooLong;
+  if (draft.provider === null) errors.provider = text.agentRequired;
   return errors;
 }
 
-/**
- * Сколько ждать работу в снимке. Дольше — снимок, видимо, отстал (FSEvents под нагрузкой):
- * поздняя активация выдернула бы человека из работы, в которую он уже ушёл.
- */
-const LISTED_TIMEOUT_MS = 10_000;
-
-/**
- * Делает работу активной и открывает вкладку сессии, когда снимок работ её принёс. Работа
- * ещё не гидрирована — `apply` сам ждёт `hydrate` в очереди (кусок 2.2). Не дождались за
- * `LISTED_TIMEOUT_MS` — ожидание снимается, человеку тост; снятие лежит в `pending`, чтобы
- * размонтирование формы не оставило подписку.
- */
-function activateWhenListed(projectPath: string, workId: string, sessionId: string | null, pending: Set<() => void>): void {
-  const key = workKey(projectPath, workId);
-  const listed = (): boolean => {
-    const entry = useWorksStore.getState().entries.find((item) => item.projectPath === projectPath && item.map.work.id === workId);
-    return entry !== undefined && (sessionId === null || entry.map.sessions.some((session) => session.id === sessionId));
-  };
-  const activate = (): void => {
-    useLayoutStore.getState().setActiveWork(key);
-    if (sessionId !== null) {
-      useLayoutStore.getState().apply(key, (layout) => openTab(layout, { kind: 'terminal', id: tabId.terminal(sessionId), sessionId }));
-    }
-  };
-  if (listed()) {
-    activate();
-    return;
-  }
-  const cancel = (): void => {
-    unsubscribe();
-    clearTimeout(timer);
-    pending.delete(cancel);
-  };
-  const unsubscribe = useWorksStore.subscribe(() => {
-    if (!listed()) return;
-    cancel();
-    activate();
-  });
-  const timer = setTimeout(() => {
-    cancel();
-    toast(S.dialogs.newWork.notListedYet);
-  }, LISTED_TIMEOUT_MS);
-  pending.add(cancel);
-}
-
-/** Значение пункта «Choose a folder…» в списке проектов — путём оно быть не может. */
-const CHOOSE_FOLDER = '\u0000choose-folder';
-
-/**
- * Проект в списке и на кнопке — имя папки и приглушённый путь к ней (раунд исправлений 2):
- * полный путь из `mkdtemp` или глубокой папки занимал всю ширину, а различает проекты прежде
- * всего имя. Хвост обрезается многоточием (`ui/select.tsx`), полный путь — в `title`.
- */
-function ProjectLabel({ path }: { path: string }): JSX.Element {
-  const trimmed = path.replace(/\/+$/, '') || path;
-  const cut = trimmed.lastIndexOf('/');
-  const name = trimmed.slice(cut + 1) || trimmed;
-  const parent = cut > 0 ? trimmed.slice(0, cut) : '';
-  return (
-    <>
-      {name}
-      {parent !== '' ? <span className="ml-2 text-muted-foreground">{parent}</span> : null}
-    </>
-  );
+/** Имя папки проекта — последний сегмент пути; полный путь идёт в `title` пункта сегмента. */
+function projectName(projectPath: string): string {
+  const trimmed = projectPath.replace(/\/+$/, '') || projectPath;
+  return trimmed.slice(trimmed.lastIndexOf('/') + 1) || trimmed;
 }
 
 /** Ответ `providers.list` этого открытия формы: список и агент по умолчанию для него. */
@@ -166,25 +118,21 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
   const [projectPath, setProjectPath] = useState<string | null>(initialProject);
   const [chosenFolders, setChosenFolders] = useState<string[]>([]);
   const [title, setTitle] = useState('');
-  const [goal, setGoal] = useState('');
-  const [startSession, setStartSession] = useState(true);
+  const [prompt, setPrompt] = useState('');
   const [providers, setProviders] = useState<ProviderOption[]>([]);
   const [provider, setProvider] = useState<string | null>(null);
-  const [label, setLabel] = useState('');
-  const [task, setTask] = useState('');
   const [worktree, setWorktree] = useState(false);
   const [worktreeAvailable, setWorktreeAvailable] = useState(false);
-  const [createMore, setCreateMore] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof NewWorkDraft, string>>>({});
   const [error, setError] = useState<string | null>(null);
   /** Работа создана, а `sessions.create` упал — «Retry» повторяет только его. */
   const [createdWork, setCreatedWork] = useState<{ projectPath: string; workId: string } | null>(null);
   const [busy, setBusy] = useState(false);
-  /** Снятия ожиданий снимка (`activateWhenListed`) — все гасятся при размонтировании. */
+  /** Снятия ожиданий снимка (`openWhenListed`) — все гасятся при размонтировании. */
   const pendingRef = useRef(new Set<() => void>());
   /**
    * `providers.list` этого открытия. Create, нажатый раньше ответа, ждёт его, а не отказывает
-   * молча «Select an agent» (раунд исправлений 2: под нагрузкой ошибка оставалась под полем,
+   * молча «Select an agent» (раунд исправлений 2 куска 3.5: под нагрузкой ошибка оставалась под полем,
    * хотя агент по умолчанию уже пришёл и был показан).
    */
   const providersRef = useRef<Promise<LoadedProviders | null> | null>(null);
@@ -196,16 +144,18 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
     };
   }, []);
 
-  // Каждое открытие — с чистой формой, проектом и названием открывшего; «Create more» живёт до
-  // перезапуска окна, агент выбирается заново по правилу (`lastProvider` помнит прошлый).
-  useEffect(() => {
+  // Каждое открытие — с чистой формой: проект открывшего (от «+» заголовка) или проект активной работы, название из
+  // палитры; агент выбирается заново по правилу (`lastProvider` помнит прошлый). Сброс — до отрисовки (`useLayoutEffect`):
+  // в `useEffect` он шёл после неё, и диалог успевал показаться с названием и промптом прошлого открытия.
+  useLayoutEffect(() => {
     if (!open) return;
-    setProjectPath(initialProject);
+    const activeKey = useLayoutStore.getState().activeWorkKey;
+    const activeProject =
+      useWorksStore.getState().entries.find((entry) => workKey(entry.projectPath, entry.map.work.id) === activeKey)?.projectPath ?? null;
+    setProjectPath(initialProject ?? activeProject);
     setProvider(null);
     setTitle(initialTitle);
-    setGoal('');
-    setTask('');
-    setLabel('');
+    setPrompt('');
     setWorktree(false);
     setFieldErrors({});
     setError(null);
@@ -220,7 +170,7 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
       .then((result) => {
         const chosen = defaultProvider(result.providers, useUiStore.getState().ui.lastProvider);
         setProviders(result.providers);
-        // Выбор человека, сделанный до ответа, не затираем; черновик и Select — одно значение.
+        // Выбор человека, сделанный до ответа, не затираем; черновик и сегмент — одно значение.
         setProvider((current) => current ?? chosen);
         return { providers: result.providers, provider: chosen };
       })
@@ -261,22 +211,10 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
   const finish = (): void => {
     setBusy(false);
     setCreatedWork(null);
-    if (createMore) {
-      setTitle('');
-      setGoal('');
-      setTask('');
-      return;
-    }
     onOpenChange(false);
   };
 
-  const createSession = async (
-    work: { projectPath: string; workId: string },
-    chosen: string,
-    options: readonly ProviderOption[],
-  ): Promise<void> => {
-    // Пустой ярлык по спеке 6.6 — имя агента; хост пустой ярлык пишет как есть.
-    const sessionLabel = label === '' ? (options.find((item) => item.id === chosen)?.label ?? chosen) : label;
+  const createSession = async (work: { projectPath: string; workId: string }, chosen: string): Promise<void> => {
     setBusy(true);
     setError(null);
     try {
@@ -284,13 +222,14 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
         projectPath: work.projectPath,
         workId: work.workId,
         provider: chosen,
-        label: sessionLabel,
-        task,
+        // Пустой ярлык: с промптом строка сайдбара покажет `S01`, без него хост поставит «новую сессию» (см. докблок).
+        label: '',
+        task: prompt,
         parent: null,
         worktree,
       });
       useUiStore.getState().patchUi({ lastProvider: chosen });
-      activateWhenListed(work.projectPath, work.workId, ref.sessionId, pendingRef.current);
+      openWhenListed(work.projectPath, work.workId, { kind: 'session', sessionId: ref.sessionId }, pendingRef.current);
       finish();
     } catch (err) {
       console.warn('[harnas] sessions.create', err);
@@ -303,43 +242,34 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
   const submit = async (): Promise<void> => {
     if (busy) return;
     if (createdWork !== null) {
-      await createSession(createdWork, provider ?? '', providers);
+      await createSession(createdWork, provider ?? '');
       return;
     }
     // Список агентов ещё не пришёл — дождаться его: состояние этого замыкания устарело бы,
-    // поэтому агент и список берутся из ответа.
+    // поэтому агент берётся из ответа.
     let chosen = provider;
-    let options: readonly ProviderOption[] = providers;
     const loading = providersRef.current;
-    if (startSession && chosen === null && loading !== null) {
+    if (chosen === null && loading !== null) {
       setBusy(true);
       const loaded = await loading;
       setBusy(false);
-      if (loaded !== null) {
-        chosen = loaded.provider;
-        options = loaded.providers;
-      }
+      if (loaded !== null) chosen = loaded.provider;
     }
-    const errors = validateDraft({ projectPath, title, goal, startSession, provider: chosen, label, task, worktree, createMore });
+    const errors = validateDraft({ projectPath, title, prompt, provider: chosen });
     setFieldErrors(errors);
     if (projectPath === null || Object.keys(errors).length > 0) return;
     setBusy(true);
     setError(null);
     let workId: string;
     try {
-      ({ workId } = await bridge.call('works.create', { projectPath, title: trimTitle(title), goal }));
+      ({ workId } = await bridge.call('works.create', { projectPath, title: effectiveTitle({ title, prompt }), goal: '' }));
     } catch (err) {
       console.warn('[harnas] works.create', err);
       setError(errorText(decodeIpcError(err).code, S.errors.actions.createWorkspace));
       setBusy(false);
       return;
     }
-    if (!startSession) {
-      activateWhenListed(projectPath, workId, null, pendingRef.current);
-      finish();
-      return;
-    }
-    await createSession({ projectPath, workId }, chosen ?? '', options);
+    await createSession({ projectPath, workId }, chosen ?? '');
   };
 
   const workLocked = createdWork !== null;
@@ -351,7 +281,7 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         aria-describedby={undefined}
-        className="w-[560px] max-w-[560px]"
+        className="w-[520px] max-w-[calc(100vw-2rem)]"
         onKeyDown={(event) => {
           if (event.key !== 'Enter' || !event.metaKey) return;
           event.preventDefault();
@@ -361,99 +291,91 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
         <DialogTitle>{text.title}</DialogTitle>
         <div className="flex min-w-0 flex-col gap-3 text-sm">
           <div className="flex min-w-0 flex-col gap-1">
-            <span>{text.projectField}</span>
-            <Select
-              value={projectPath ?? ''}
-              disabled={workLocked}
+            <span id="new-work-project">{text.projectField}</span>
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              {knownProjects.length > 0 ? (
+                <ToggleGroup
+                  type="single"
+                  value={projectPath ?? ''}
+                  disabled={workLocked}
+                  aria-labelledby="new-work-project"
+                  // Длинных имён и многих проектов сегмент не выталкивает за край: он переносится, имя обрезается.
+                  className="max-w-full flex-wrap rounded-[18px]"
+                  onValueChange={(value) => {
+                    // Повторный клик по выбранному пункту Radix сообщает пустой строкой — проект не снимается.
+                    if (value !== '') setProjectPath(value);
+                  }}
+                >
+                  {knownProjects.map((path) => (
+                    <ToggleGroupItem key={path} value={path} title={path} className="max-w-[16rem]">
+                      <span className="min-w-0 truncate">{projectName(path)}</span>
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+              ) : null}
+              <Button type="button" variant="outline" size="sm" disabled={workLocked} onClick={() => void chooseFolder()}>
+                {text.chooseFolder}
+              </Button>
+            </div>
+            {fieldError('projectPath')}
+          </div>
+          <div className="flex min-w-0 flex-col gap-1">
+            <span id="new-work-agent">{text.agentField}</span>
+            <ToggleGroup
+              type="single"
+              value={provider ?? ''}
+              aria-labelledby="new-work-agent"
+              className="max-w-full self-start"
               onValueChange={(value) => {
-                if (value === CHOOSE_FOLDER) void chooseFolder();
-                else setProjectPath(value);
+                if (value !== '') setProvider(value);
               }}
             >
-              <SelectTrigger aria-label={text.projectField} {...(projectPath === null ? null : { title: projectPath })}>
-                <SelectValue placeholder={text.chooseFolderPlaceholder} />
-              </SelectTrigger>
-              <SelectContent>
-                {knownProjects.map((path) => (
-                  <SelectItem key={path} value={path} title={path}>
-                    <ProjectLabel path={path} />
-                  </SelectItem>
+              {providers
+                .filter((item) => item.available)
+                .map((item) => (
+                  <ToggleGroupItem key={item.id} value={item.id}>
+                    {providerName(item.id, item.label)}
+                  </ToggleGroupItem>
                 ))}
-                <SelectItem value={CHOOSE_FOLDER}>{text.chooseFolderPlaceholder}</SelectItem>
-              </SelectContent>
-            </Select>
-            {fieldError('projectPath')}
+            </ToggleGroup>
+            {fieldError('provider')}
           </div>
           <label className="flex flex-col gap-1">
             {text.titleField}
-            <Input value={title} disabled={workLocked} onChange={(event) => setTitle(event.target.value)} />
+            <Input
+              value={title}
+              disabled={workLocked}
+              placeholder={text.titlePlaceholder}
+              onChange={(event) => setTitle(event.target.value)}
+            />
             {fieldError('title')}
           </label>
           <label className="flex flex-col gap-1">
-            {text.goalField}
-            <Textarea value={goal} disabled={workLocked} onChange={(event) => setGoal(event.target.value)} />
-            {fieldError('goal')}
+            {text.promptField}
+            <Textarea
+              value={prompt}
+              placeholder={text.promptPlaceholder}
+              className="min-h-[96px] rounded-2xl"
+              onChange={(event) => setPrompt(event.target.value)}
+            />
+            {fieldError('prompt')}
           </label>
-          <label className="flex items-center gap-2">
-            <Switch checked={startSession} disabled={workLocked} onCheckedChange={setStartSession} />
-            {text.startSession}
-          </label>
-          {startSession ? (
-            <>
-              <div className="flex flex-col gap-1">
-                <span>{text.agentField}</span>
-                <Select value={provider ?? ''} onValueChange={setProvider}>
-                  <SelectTrigger aria-label={text.agentField}>
-                    <SelectValue placeholder={text.agentPlaceholder} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {providers
-                      .filter((item) => item.available)
-                      .map((item) => (
-                        <SelectItem key={item.id} value={item.id}>
-                          {item.label}
-                        </SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
-                {fieldError('provider')}
-              </div>
-              <label className="flex flex-col gap-1">
-                {S.dialogs.newSession.labelField}
-                <Input value={label} onChange={(event) => setLabel(event.target.value)} />
-                {fieldError('label')}
-              </label>
-              <label className="flex flex-col gap-1">
-                {S.dialogs.newSession.taskField}
-                <Textarea
-                  placeholder={S.dialogs.newSession.taskPlaceholder}
-                  value={task}
-                  onChange={(event) => setTask(event.target.value)}
-                />
-                {fieldError('task')}
-              </label>
-              {worktreeAvailable ? (
-                <label className="flex items-center gap-2">
-                  <Switch checked={worktree} onCheckedChange={setWorktree} />
-                  {S.dialogs.newSession.inOwnWorktree}
-                </label>
-              ) : null}
-            </>
+          {worktreeAvailable ? (
+            <label className="flex items-center gap-2">
+              <Switch checked={worktree} onCheckedChange={setWorktree} />
+              {S.dialogs.newSession.inOwnWorktree}
+            </label>
           ) : null}
           {error !== null ? <p className="text-destructive">{error}</p> : null}
         </div>
         <DialogFooter className="items-center">
-          <label className="mr-auto flex items-center gap-2 text-sm">
-            <Checkbox checked={createMore} onCheckedChange={(checked) => setCreateMore(checked === true)} />
-            {text.createMore}
-          </label>
           <DialogClose asChild>
-            <Button type="button" variant="ghost">
+            <Button type="button" variant="outline">
               {S.common.cancel}
             </Button>
           </DialogClose>
           <Button type="button" disabled={busy} onClick={() => void submit()}>
-            {workLocked ? S.common.retry : S.common.create}
+            {workLocked ? S.common.retry : text.submit}
           </Button>
         </DialogFooter>
       </DialogContent>

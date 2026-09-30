@@ -8,14 +8,23 @@ import {
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { DEFAULT_CONFIG } from '../config.js';
-import { commandInPath, loadProviders } from '../providers.js';
+import {
+  EFFORT_LEVELS,
+  commandInPath,
+  loadProviders,
+  modelChoiceError,
+  selectableModels,
+  supportsEffort,
+  supportsModel,
+} from '../providers.js';
 import { agentDirs, assertAgent } from '../work/agents.js';
 import { writeBrief } from '../work/brief.js';
-import { GUIDE } from '../work/guide.js';
+import { GUIDE, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import { unreadFor } from '../work/letters.js';
 import { addMessage, addSession, transitionSession } from '../work/map.js';
 import { finishSession } from '../work/metrics.js';
-import { addRoom, isDescendant, isMember, joinNotice } from '../work/rooms.js';
+import { PROPOSAL_TEXT_MAX, setProposal } from '../work/proposals.js';
+import { addMemberByLead, addRoom, isDescendant, isMember, joinNotice, leaveOtherRooms } from '../work/rooms.js';
 import { displayStatus } from '../work/status-view.js';
 import { readMap, updateMap, workPaths } from '../work/store.js';
 import { participantLabel } from '../work/thread.js';
@@ -197,15 +206,43 @@ function assertRate(map: WorkMap, sessionId: string, limit: number, now: number)
   }
 }
 
+/**
+ * Аннотации MCP (спека комнат, решение 13). По ним клиент решает, спрашивать ли человека перед
+ * вызовом инструмента: Codex без аннотаций спрашивает перед каждым (незаданные `destructiveHint` и
+ * `openWorldHint` он считает истиной), с ними — только там, где инструмент разрушает. Аннотация —
+ * обещание клиенту, поэтому каждая сверена с кодом инструмента, а `annotations.test.ts` держит и
+ * таблицу, и то, что обещание правда.
+ */
+type Annotations = NonNullable<Tool['annotations']>;
+
+/** Чтения — карта, лента комнаты, гид, ожидание: на диск ничего не пишут, отметок прочтения не ставят. */
+const READS: Annotations = { readOnlyHint: true };
+
+/**
+ * Записи в карту работы: добавляют сессии, комнаты, письма и отметки прочтения или заменяют своё —
+ * резюме отчёта, ждущее решение. Ни одна сессия, комната и письмо из карты не исчезают, а в сеть и
+ * в чужие файлы на запись инструмент не выходит. Граница — `add_to_room`: сессия уходит из прежней
+ * комнаты (одна комната на сессию) — из её `members`, а если была там ведущим или создателем, то
+ * `lead` сбрасывается в `null`, `creator` переходит к человеку. Сама комната, её письма и остальные
+ * участники остаются, поэтому и это запись, а не разрушение: `destructiveHint: true` заставил бы
+ * Codex спрашивать человека на каждого нового участника комнаты.
+ */
+const WRITES: Annotations = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
+
+/** Закрытие сессии насовсем: письма ей больше не приходят, а вернуть её агенту нечем. */
+const CLOSES: Annotations = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
+
 const TOOLS: Tool[] = [
   {
     name: 'get_map',
+    annotations: READS,
     description:
-      'Карта работы целиком: сессии, их статусы, резюме и артефакты, сообщения — плюс список провайдеров реестра с флагом доступности в PATH. Вызови первым делом; подробный гид — инструмент read_guide',
+      'Карта работы целиком: сессии, их статусы, резюме и артефакты, сообщения — плюс список провайдеров реестра с флагом доступности в PATH и тем, что провайдер принимает при запуске (модели и усилие для spawn_session). Вызови первым делом; подробный гид — инструмент read_guide',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     name: 'report',
+    annotations: WRITES,
     description:
       'Отчёт о своей сессии. done или failed — результат сдан, сессия остаётся на связи и не закрывается сама; progress — промежуточное резюме без смены итога. Повторный вызов перезаписывает резюме и артефакты.',
     inputSchema: {
@@ -228,6 +265,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'spawn_session',
+    annotations: WRITES,
     description:
       'Создаёт сессию другого агента в этой же работе: проверяет провайдера по реестру и наличие команды в PATH, собирает бриф и заводит запись pending. Запустит её харнесс.',
     inputSchema: {
@@ -251,12 +289,24 @@ const TOOLS: Tool[] = [
           description:
             'Изолировать сессию в своём git worktree — правки не трогают рабочую копию проекта, пока их не решат влить (панель окна «Изменения»). Только для проекта с git; создаёт сам харнесс перед запуском.',
         },
+        model: {
+          type: 'string',
+          description:
+            'Модель новой сессии: id из поля models её провайдера в get_map. Не из списка — ошибка, сессия не создаётся. Провайдер, который модель флагом не принимает, значение отбрасывает. Без поля — модель по умолчанию.',
+        },
+        effort: {
+          type: 'string',
+          enum: [...EFFORT_LEVELS],
+          description:
+            'Усилие рассуждений новой сессии. Провайдер с effort: false в get_map значение отбрасывает. Без поля — усилие по умолчанию.',
+        },
       },
       required: ['provider', 'label', 'task'],
     },
   },
   {
     name: 'wait_for',
+    annotations: READS,
     description:
       'Ждёт завершения сессии (target — её id) или входящего сообщения (target = "inbox"). По таймауту возвращает {"state":"running"} — решай сам, звать ли снова. {"state":"deleted"} значит, что сессию удалил человек: ждать больше нечего. Поручаешь новое дело сессии, которая уже сдала report? Жди её ответ через target = "inbox", а не по id: по id вернётся сразу старый итог.',
     inputSchema: {
@@ -273,6 +323,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'send_message',
+    annotations: WRITES,
     description:
       'Кладёт сообщение в переписку. Без room — ровно одному адресату работы, как раньше. С room — отправитель и адресаты обязаны быть участниками комнаты; пустой или отсутствующий to — рассылка всем участникам. Отвечай только на question: заметка и решение ответа не требуют.',
     inputSchema: {
@@ -297,14 +348,16 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'check_inbox',
+    annotations: WRITES,
     description:
       'Отдаёт непрочитанные письма этой сессии — прямые и из её комнат, включая рассылки — и помечает их прочитанными. У каждого письма — подпись отправителя и комната, если она есть.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     name: 'create_room',
+    annotations: WRITES,
     description:
-      'Заводит комнату — постоянный круг переписки для нескольких сессий, обычно своих подчинённых. Вызывающий становится создателем и участником; остальным участникам уходит письмо о добавлении.',
+      'Заводит комнату — постоянный круг переписки для нескольких сессий, обычно своих подчинённых. Вызывающий становится создателем и участником; остальным участникам уходит письмо о добавлении. Одна комната на сессию: из прочих комнат работы уходишь и ты, и участники. Ведущий комнаты собирает позиции участников и приносит человеку решение (propose_decision): без lead ведущий — ты сам.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -314,12 +367,35 @@ const TOOLS: Tool[] = [
           description: 'Id сессий-участников из get_map; себя указывать не нужно.',
           items: { type: 'string' },
         },
+        lead: {
+          type: 'string',
+          description:
+            'Id ведущего: твой или одного из members. Без него ведущий — ты; не из круга комнаты — ошибка, комната не создаётся.',
+        },
       },
       required: ['title', 'members'],
     },
   },
   {
+    name: 'add_to_room',
+    annotations: WRITES,
+    description:
+      'Ведущий вводит в свою комнату ещё одну сессию этой работы — например, только что порождённого исполнителя. Только ведущий (get_map, поле lead комнаты); комната не закрыта, сессия жива и ещё не участник. Одна комната на сессию: из прочих комнат работы она уходит, в ленте появляется строка «@s04 joined the room». Письма о добавлении новый участник не получает — напиши ему в комнату сам, чего ждёшь.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        room: { type: 'string', description: 'Id комнаты из get_map.' },
+        session: {
+          type: 'string',
+          description: 'Id сессии этой работы из get_map; закрытая или чужая — ошибка.',
+        },
+      },
+      required: ['room', 'session'],
+    },
+  },
+  {
     name: 'read_room',
+    annotations: READS,
     description:
       'Лента комнаты для контекста — последние limit писем, без пометок прочтения. Доступна только участникам.',
     inputSchema: {
@@ -332,7 +408,25 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'propose_decision',
+    annotations: WRITES,
+    description:
+      'Ведущий комнаты предлагает решение: оно ложится карточкой в окне и ждёт ответа человека — принять или вернуть на доработку. Только ведущий (get_map, поле lead комнаты); в закрытой комнате — ошибка. Зови, когда позиции участников собраны; работу до принятия не начинай. Повтор до ответа человека заменяет текст (тот же proposalId, rev + 1). Ответ придёт тебе письмом: принято — раздавай части, возврат — переделай и предложи снова.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        room: { type: 'string', description: 'Id комнаты из get_map.' },
+        text: {
+          type: 'string',
+          description: `Решение целиком, до ${PROPOSAL_TEXT_MAX} знаков: что делаем и какую часть берёт каждый; участников называй упоминаниями @s02.`,
+        },
+      },
+      required: ['room', 'text'],
+    },
+  },
+  {
     name: 'close_session',
+    annotations: CLOSES,
     description:
       'Закрывает сессию насовсем: письма ей больше не приходят, будильник её не поднимает. Цель — сама сессия или её потомок. Зови только после явного согласия человека.',
     inputSchema: {
@@ -345,9 +439,19 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'read_guide',
-    description:
-      'Подробный гид по харнессу: сущности, жизненный цикл сессии, что класть в отчёт и артефакты, как ждать подчинённую сессию, чего не делать. Читай, когда коротких описаний не хватило.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: READS,
+    description: `Подробный гид по харнессу: сущности, жизненный цикл сессии, комнаты и роли в них (ведущий, участник), что класть в отчёт и артефакты, как ждать подчинённую сессию, чего не делать. Читай, когда коротких описаний не хватило. Без topic — весь гид, с topic — один раздел: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        topic: {
+          type: 'string',
+          enum: GUIDE_TOPICS.map((item) => item.topic),
+          description: 'Раздел гида; без него — весь гид.',
+        },
+      },
+      additionalProperties: false,
+    },
   },
 ];
 
@@ -358,6 +462,10 @@ async function getMap(context: McpContext): Promise<unknown> {
       id: entry.id,
       label: entry.label,
       available: await commandInPath(entry.runner.command),
+      // Что провайдер принимает при запуске — те же поля, что у `providers.list` окна: без них агент не
+      // узнает, какую модель ему разрешено назвать в `spawn_session`.
+      models: selectableModels(entry),
+      effort: supportsEffort(entry),
     })),
   );
   return {
@@ -418,6 +526,14 @@ async function spawnSession(
   const agent = args['agent'] === undefined ? null : stringArg(args, 'agent');
   // Изоляция необязательна: без флага сессия работает прямо в каталоге проекта.
   const worktree = args['worktree'] === true;
+  // Модель и усилие тоже необязательны; пустая строка — как отсутствие: агенты шлют её на любой
+  // необязательный параметр.
+  const model =
+    args['model'] === undefined || args['model'] === '' ? undefined : stringArg(args, 'model');
+  const effort =
+    args['effort'] === undefined || args['effort'] === ''
+      ? undefined
+      : enumArg(args, 'effort', EFFORT_LEVELS);
 
   const registry = await loadProviders();
   const entry = registry[provider];
@@ -431,6 +547,17 @@ async function spawnSession(
       `команды ${entry.runner.command} нет в PATH — провайдер ${provider} недоступен`,
     );
   }
+
+  // Модель проверяем до записи, как и роль: значение не из списка провайдера — отказ, а не `pending`,
+  // который нечем запустить. Провайдер, чей шаблон запуска не принимает флаг, выбор отбрасывает молча —
+  // как `sessions.create` хоста: окно узнаёт об этом из `providers.list`, агент — из `get_map`.
+  let chosenModel: string | undefined;
+  if (model !== undefined) {
+    const refusal = modelChoiceError(entry, model);
+    if (refusal !== null) throw new Error(refusal);
+    if (supportsModel(entry)) chosenModel = model;
+  }
+  const chosenEffort = effort !== undefined && supportsEffort(entry) ? effort : undefined;
 
   // Роль проверяем до записи: `pending`, который нечем запустить, — мусор в
   // карте (спецификация 2026-09-08, раздел 7).
@@ -465,6 +592,8 @@ async function spawnSession(
       parent: sessionId,
       contextFrom,
       agent,
+      ...(chosenModel === undefined ? {} : { model: chosenModel }),
+      ...(chosenEffort === undefined ? {} : { effort: chosenEffort }),
     });
     created = session.id;
     if (worktreeBase !== null) {
@@ -601,6 +730,7 @@ async function createRoom(
 ): Promise<unknown> {
   const title = stringArg(args, 'title');
   const membersInput = stringsArg(args, 'members');
+  const leadInput = optionalStringArg(args, 'lead');
 
   let roomId = '';
   await updateMap(context.projectPath, context.workId, (current) => {
@@ -615,14 +745,44 @@ async function createRoom(
       }
     }
 
-    const room = addRoom(current, { title, creator: sessionId, members });
+    // Без `lead` ведущий — вызывающий: агент заводит комнату для своих подчинённых и ведёт её сам
+    // (в handoff «Created by S01 · lead S01»). Правило «первый из members» (дизайн комнат, 3.1) — для
+    // `rooms.create` окна и старых карт, здесь оно отдало бы комнату подчинённому. Ведущего не из круга
+    // комнаты `addRoom` отвергает до выдачи номера: комнаты нет, номер не потрачен.
+    const room = addRoom(current, {
+      title,
+      creator: sessionId,
+      members,
+      lead: leadInput ?? sessionId,
+    });
     roomId = room.id;
+    // Одна комната на сессию (решение 4 дизайна комнат): создатель и участники уходят из прочих комнат работы — как у
+    // `rooms.create` окна (`createHumanRoom`) и у `add_to_room`. Прежние комнаты остаются со своими письмами.
+    for (const memberId of [sessionId, ...members]) leaveOtherRooms(current, memberId, room.id);
     const notice = joinNotice(room, current);
     for (const memberId of members) {
       addMessage(current, { from: sessionId, to: [memberId], roomId: room.id, kind: 'note', text: notice });
     }
   });
   return { roomId };
+}
+
+async function addToRoom(
+  context: McpContext,
+  sessionId: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const roomId = stringArg(args, 'room');
+  const target = stringArg(args, 'session');
+
+  let messageId = '';
+  await updateMap(context.projectPath, context.workId, (current) => {
+    // Правила — ведущий, живая комната, закрытая или чужая сессия, уже участник, одна комната на сессию —
+    // держит `addMemberByLead`. Его `RoomRuleError` уходит агенту текстом ошибки, как у `propose_decision`,
+    // а исключение из мутатора не даёт `updateMap` записать карту: после отказа она не меняется.
+    messageId = addMemberByLead(current, roomId, sessionId, target).id;
+  });
+  return { messageId };
 }
 
 async function readRoom(
@@ -644,6 +804,42 @@ async function readRoom(
     .sort((a, b) => a.at.localeCompare(b.at))
     .slice(-limit);
   return { messages: inRoom.map((message) => messageView(message, map)) };
+}
+
+async function proposeDecision(
+  context: McpContext,
+  sessionId: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const roomId = stringArg(args, 'room');
+  const text = stringArg(args, 'text');
+
+  let proposed = { proposalId: '', rev: 0 };
+  await updateMap(context.projectPath, context.workId, (current) => {
+    // Правила решения — ведущий, живая комната, длина текста — держит `setProposal`, здесь их не
+    // повторяем. Его `RoomRuleError` уходит агенту текстом ошибки, как у соседних инструментов, а
+    // исключение из мутатора не даёт `updateMap` записать карту: после отказа она не меняется.
+    proposed = setProposal(current, roomId, sessionId, text);
+  });
+  return proposed;
+}
+
+/**
+ * Гид: без темы — весь, с темой — один раздел. Пустая тема (`""`) — то же, что её отсутствие: агенты
+ * нередко шлют пустую строку на необязательный параметр. Неизвестная — ошибка со списком тем, чтобы
+ * агент поправил вызов сам.
+ */
+function readGuide(args: Record<string, unknown>): string {
+  const raw = args['topic'];
+  if (raw === undefined || raw === '') return GUIDE;
+  if (typeof raw !== 'string') throw new Error('аргумент topic: ожидалась строка');
+  const text = guideTopic(raw.trim().toLowerCase());
+  if (text === null) {
+    throw new Error(
+      `неизвестная тема гида «${raw}»; темы: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}`,
+    );
+  }
+  return text;
 }
 
 async function closeSession(
@@ -675,7 +871,7 @@ async function dispatch(
 ): Promise<unknown> {
   if (name === 'get_map') return getMap(context);
   // Гид не про конкретную сессию: он доступен и без `HARNAS_SESSION_ID`.
-  if (name === 'read_guide') return GUIDE;
+  if (name === 'read_guide') return readGuide(args);
 
   const { sessionId } = context;
   if (sessionId === null) throw new Error(NO_SESSION);
@@ -686,7 +882,9 @@ async function dispatch(
   if (name === 'send_message') return sendMessage(context, sessionId, args);
   if (name === 'check_inbox') return checkInbox(context, sessionId);
   if (name === 'create_room') return createRoom(context, sessionId, args);
+  if (name === 'add_to_room') return addToRoom(context, sessionId, args);
   if (name === 'read_room') return readRoom(context, sessionId, args);
+  if (name === 'propose_decision') return proposeDecision(context, sessionId, args);
   if (name === 'close_session') return closeSession(context, sessionId, args);
   throw new Error(`неизвестный инструмент ${name}`);
 }
@@ -709,6 +907,57 @@ type ChannelNotification = {
   method: 'notifications/claude/channel';
   params: Ring;
 };
+
+/**
+ * id треда Codex — uuid. Всё, что на него не похоже, в карту не идёт: записанный id потом уходит
+ * аргументом `codex resume <id>`, и значение, начинающееся с дефиса, было бы флагом.
+ */
+const THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Привязка сессии Codex к её логу (спека комнат Organic, 3.6). Codex кладёт id треда в `_meta.threadId`
+ * каждого `tools/call` к любому MCP-серверу, поэтому сервер узнаёт его при первом же вызове — без
+ * гадания по cwd и времени запуска, которое принимает чужой лог, если рядом стартовал ещё один агент.
+ *
+ * `_meta.threadId` авторитетнее запасного пути: это тред, который выполняет вызов в этом самом процессе,
+ * а запасной путь хоста (по cwd и времени) срабатывает на первом же логе Codex — за секунды до первого
+ * вызова модели — и рядом с ещё одним агентом в том же каталоге ошибается. Поэтому id из `_meta`
+ * перезаписывает отличающееся значение; запись, где уже он, карту не трогает.
+ *
+ * Вызов подагента (`_meta.sessionId` — корневой тред — не совпадает с `threadId`) не привязывает: его тред
+ * — не тот, который человек возобновит `codex resume`. Ждём вызова корневого треда.
+ *
+ * `true` — вопрос закрыт (записано, уже записано, сессия не codex) и дальше спрашивать не нужно; `false` —
+ * подходящего id в `_meta` нет или сбой записи, попробует следующий вызов. Ошибки наружу не идут:
+ * привязка не должна ронять вызов инструмента.
+ */
+async function bindCodexThread(
+  context: McpContext,
+  meta: Record<string, unknown> | undefined,
+): Promise<boolean> {
+  const { sessionId } = context;
+  const threadId = meta?.['threadId'];
+  if (sessionId === null || typeof threadId !== 'string' || !THREAD_ID.test(threadId)) return false;
+  const thread = threadId.toLowerCase();
+  const root = meta?.['sessionId'];
+  if (typeof root === 'string' && THREAD_ID.test(root) && root.toLowerCase() !== thread) return false;
+  try {
+    // Чтение до записи: `updateMap` переписал бы карту и без изменений, а её читают наблюдатели окна.
+    const known = (await readMap(context.projectPath, context.workId)).sessions.find(
+      (candidate) => candidate.id === sessionId,
+    );
+    if (known === undefined) return false;
+    if (known.provider !== 'codex' || known.providerSessionId === thread) return true;
+    await updateMap(context.projectPath, context.workId, (current) => {
+      const target = current.sessions.find((candidate) => candidate.id === sessionId);
+      if (target !== undefined && target.provider === 'codex') target.providerSessionId = thread;
+    });
+    return true;
+  } catch (error) {
+    process.stderr.write(`harnas-mcp: привязка треда не записалась: ${(error as Error).message}\n`);
+    return false;
+  }
+}
 
 /**
  * MCP-сервер одной сессии. Ошибки инструментов возвращаются агенту результатом
@@ -746,8 +995,12 @@ export function createHarnasServer(context: McpContext): Server<Request, Channel
   }
 
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: TOOLS }));
+  // Тред Codex привязывается один раз за жизнь сервера — с первого вызова, где `_meta.threadId` есть.
+  let threadBound = false;
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
     const args = isRecord(request.params.arguments) ? request.params.arguments : {};
+    // До самого инструмента: `wait_for` может держать вызов до получаса, а привязка нужна сразу.
+    if (!threadBound) threadBound = await bindCodexThread(context, request.params._meta);
     try {
       const result = await dispatch(context, request.params.name, args);
       // Гид — готовый текст: заворачивать его в JSON-строку с экранированием

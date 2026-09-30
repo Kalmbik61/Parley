@@ -1,7 +1,7 @@
 /**
- * Всплывающая панель shadcn/ui на `@radix-ui/react-popover`, поверх — облик
- * Orca «стекло» (спека 4.5): полупрозрачная подложка, `backdrop-blur-2xl`,
- * тонкая рамка, радиус 11px, тень «меню» (таблица 4.4).
+ * Всплывающая панель shadcn/ui на `@radix-ui/react-popover`, поверх — общая подложка
+ * всплывающих поверхностей Organic (`ui/glass.ts`: сплошной `--popover`, радиус 16, тень
+ * `--shadow-lg`; спека 4.5).
  */
 
 import * as React from 'react';

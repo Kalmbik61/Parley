@@ -4,10 +4,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { Room, WorkEntry, WorkSession } from '@harnas/core';
+import type { Message, Room, WorkEntry, WorkSession } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
 import type { FileRootSpec, TabSpec } from '../../shared/layout-types.js';
 import { bufferKey } from '../files/buffer.js';
+import { makeLetter, makeRoom } from '../test-utils/work-fixtures.js';
 import { EMPTY_EXTRAS, fileTabHint, fileTabTitles, tabMeta, truncateTitle, type TabMetaExtras } from './tab-meta.js';
 
 function session(id: string, label: string): WorkSession {
@@ -172,6 +173,57 @@ describe('tabMeta — extras.attention (тест 10 куска 4.2)', () => {
 
   it('вкладка почты extras не трогают', () => {
     expect(tabMeta({ kind: 'mail', id: 'mail' }, e, extras({ [key]: 'needs-you' }))).toMatchObject({ unread: false, needsYou: false });
+  });
+});
+
+// Подкраска вкладки-пилюли (спека окна 2026-09-29, 1.1): сессия `blocked` — accent-200, `unseen` —
+// accent-2-200; комната с ждущим решением и почта с непрочитанным человеком письмом — accent-200.
+describe('tabMeta — tint: подкраска вкладки (Organic, 1.1)', () => {
+  const key = refKey({ projectPath: '/tmp/p', workId: 'w', sessionId: 's-02' });
+  const terminal = { kind: 'terminal', id: 'terminal:s-02', sessionId: 's-02' } as const;
+  const withAttention = (attention: TabMetaExtras['attention']): TabMetaExtras => ({ ...EMPTY_EXTRAS, attention });
+  const proposal = { id: 'p-1', from: 's-02', text: 'Решение', rev: 0, at: '2026-09-29T10:00:00.000Z' };
+  const letter = (patch: Partial<Message> = {}): Message => makeLetter('m-1', patch);
+
+  it('терминал: needs-you — accent, unseen — accent-2, остальное и без extras — без подкраски', () => {
+    const e = entry([session('s-02', 'исполнитель')]);
+    expect(tabMeta(terminal, e, withAttention({ [key]: 'needs-you' })).tint).toBe('accent');
+    expect(tabMeta(terminal, e, withAttention({ [key]: 'unseen' })).tint).toBe('accent-2');
+    expect(tabMeta(terminal, e, withAttention({ [key]: 'working' })).tint).toBeNull();
+    expect(tabMeta(terminal, e).tint).toBeNull();
+  });
+
+  it('комната с ждущим решением — accent; без решения (proposal: null) — без подкраски', () => {
+    const waiting = entry([], [{ ...makeRoom('r-01', 'Возвраты'), proposal }]);
+    const quiet = entry([], [makeRoom('r-01', 'Возвраты')]);
+    const roomTab = { kind: 'room', id: 'room:r-01', roomId: 'r-01' } as const;
+    expect(tabMeta(roomTab, waiting).tint).toBe('accent');
+    expect(tabMeta(roomTab, quiet).tint).toBeNull();
+  });
+
+  it('комната старой карты — без lead и proposal — читается, подкраски нет', () => {
+    const old = entry([], [{ id: 'r-01', title: 'Старая', creator: 'human', members: [], createdAt: '2026-01-01T00:00:00.000Z' } as Room]);
+    expect(tabMeta({ kind: 'room', id: 'room:r-01', roomId: 'r-01' }, old).tint).toBeNull();
+  });
+
+  it('почта: непрочитанное человеком письмо — accent; прочитанное, письмо агенту и сообщение комнаты — нет', () => {
+    const mail = { kind: 'mail', id: 'mail' } as const;
+    const withMessages = (messages: Message[]): WorkEntry => {
+      const base = entry([]);
+      return { ...base, map: { ...base.map, messages } };
+    };
+    expect(tabMeta(mail, withMessages([letter()])).tint).toBe('accent');
+    expect(tabMeta(mail, withMessages([letter({ readBy: { human: '2026-09-29T10:00:00.000Z' } })])).tint).toBeNull();
+    expect(tabMeta(mail, withMessages([letter({ to: ['s-02'] })])).tint).toBeNull();
+    expect(tabMeta(mail, withMessages([letter({ roomId: 'r-01' })])).tint).toBeNull();
+    expect(tabMeta(mail, withMessages([])).tint).toBeNull();
+  });
+
+  it('файл, дифф и браузер без подкраски', () => {
+    const e = entry([session('s-02', 'x')]);
+    expect(tabMeta({ kind: 'file', id: 'file:p:a.ts', root: { kind: 'project' }, path: 'a.ts' }, e).tint).toBeNull();
+    expect(tabMeta({ kind: 'diff', id: 'diff:s-02', sessionId: 's-02', commit: null }, e).tint).toBeNull();
+    expect(tabMeta({ kind: 'browser', id: 'browser:1', url: 'https://example.com' }, e).tint).toBeNull();
   });
 });
 

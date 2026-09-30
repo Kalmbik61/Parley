@@ -58,7 +58,7 @@ export function DiffToolbar(props: DiffToolbarProps): JSX.Element {
         {S.changes.expandAll}
       </Button>
       {/* Тумблер `ui/toggle` (раунд fix-live, D4): включённый несёт тот же признак, что выбранный
-          пункт группы, — край к фону не ниже 3:1, а не одну заливку 1.1:1. */}
+          пункт группы, — заливку `--primary`, к фону не ниже 3:1 (`styles/tokens.test.ts`). */}
       <Toggle size="sm" pressed={props.wrap} onPressedChange={props.onWrap} className={ITEM}>
         {S.changes.wrapLines}
       </Toggle>

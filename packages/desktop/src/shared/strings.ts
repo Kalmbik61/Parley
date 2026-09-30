@@ -18,7 +18,6 @@ export const S = {
   /** Общие подписи кнопок, переиспользуемые в нескольких диалогах. */
   common: {
     cancel: 'Cancel',
-    create: 'Create',
     close: 'Close',
     delete: 'Delete',
     done: 'Done',
@@ -30,18 +29,20 @@ export const S = {
   /**
    * Девять слов состояния сессии (спека 4.2): ключи — те же, что отдаёт
    * `dot-state.ts#stateWord` (`exited` расщеплён на `asleep`/`closed` по
-   * `lifecycle`, как и в прежней русской таблице).
+   * `lifecycle`, как и в прежней русской таблице). Строчными — так их пишет строка сессии
+   * (спека окна 2026-09-29, 1.2): `working`, `needs you`, `done · unseen`…; те же слова — имена
+   * значков для скринридера и слово итога в тултипе.
    */
   states: {
-    working: 'Working',
-    blocked: 'Needs you',
-    unseen: 'Done · unseen',
-    idle: 'Idle',
-    pending: 'Not started',
-    asleep: 'Asleep',
-    closed: 'Closed',
-    done: 'Done',
-    failed: 'Failed',
+    working: 'working',
+    blocked: 'needs you',
+    unseen: 'done · unseen',
+    idle: 'idle',
+    pending: 'not started',
+    asleep: 'asleep',
+    closed: 'closed',
+    done: 'done',
+    failed: 'failed',
   },
 
   /** Экран пустого окна (нет ни одной работы) — `shell/Landing.tsx`. */
@@ -71,12 +72,21 @@ export const S = {
     pinned: 'Pinned',
     /** Верх сайдбара — палитра; подпись ⌘J (кусок 6.1b), прежняя палитра до 6.2. */
     search: 'Search',
-    /** `aria-label` «+» заголовка проекта. */
-    newWorkspaceInProject: 'New workspace in project',
+    /** `aria-label` и тултип «+» заголовка проекта: проект называется (спека окна 2026-09-29, 1.2). */
+    newWorkspaceInProject: (project: string): string => `New workspace in ${project}`,
     sessionCount: (n: number): string => (n === 1 ? '1 session' : `${n} sessions`),
-    /** Строка под сессиями карточки: сколько закрытых спрятано. */
-    moreClosed: (n: number): string => `+${n} closed`,
+    /** Строка под сессиями карточки: сколько закрытых спрятано; «Hide closed» — прячет раскрытые. */
+    moreClosed: (n: number): string => `${n} more closed`,
+    hideClosed: 'Hide closed',
+    /** Тултип `✉N` карточки: непрочитанные человеком письма работы. */
+    unreadMail: (n: number): string => (n === 1 ? '1 unread message to you' : `${n} unread messages to you`),
+    /** Тултип `#N` карточки: комнаты с непрочитанным сообщением. */
+    roomsWithUnread: (n: number): string => (n === 1 ? '1 room with unread messages' : `${n} rooms with unread messages`),
+    /** Тултип значка ветки в строке сессии со своим worktree; ветка — данные, идёт как есть. */
+    ownWorktree: (branch: string): string => `Own worktree · ${branch}`,
     trustWaitTooltip: 'Not responding since launch — may be waiting for folder trust',
+    /** Тултип ⚠ строки сессии Codex, что за срок после запуска не показала статус: вход или доверие к папке — за человеком. */
+    startupWaitTooltip: 'Waiting at startup — Codex may need sign-in or folder trust in its terminal',
     /** Переключатель меню «⋯» заголовка секции (спека 6.1, кусок 3.4). */
     showDone: 'Show done',
     /** `aria-label` кнопки «⋯» заголовка секции. */
@@ -87,6 +97,26 @@ export const S = {
     renameField: 'Workspace name',
     /** aria-label списка карточек — дерево «работа → сессии» для клавиатуры (спека 6.5). */
     workspaceList: 'Workspaces',
+    /** Шеврон строки комнаты (спека окна 2026-09-29, 1.2) — `sidebar/RoomRow.tsx`. */
+    showAgents: 'Show agents',
+    hideAgents: 'Hide agents',
+    /** Слово строки комнаты, пока решение ждёт человека; `{n} new` — сообщения комнаты, не прочитанные человеком. */
+    roomDecision: 'decision',
+    roomNew: (n: number): string => `${n} new`,
+    /** Тултип значка провайдера свёрнутой комнаты: `2 Claude Code agents`; имя провайдера — `providerName`. */
+    roomAgents: (n: number, provider: string): string => `${n} ${provider} ${n === 1 ? 'agent' : 'agents'}`,
+    /** Тултип `★` у ведущего в строке участника развёрнутой комнаты. */
+    lead: 'Lead',
+    /**
+     * Тултип строки комнаты: `Room · lead S01 · S01, S02, S03, S04`. Ведущего нет (в комнате не осталось
+     * живых участников) — без его части; участники — короткие номера сессий.
+     */
+    roomTooltip: (lead: string | null, members: readonly string[]): string =>
+      ['Room', ...(lead === null ? [] : [`lead ${lead}`]), ...(members.length === 0 ? [] : [members.join(', ')])].join(' · '),
+    /** Строка под строками активной карточки: открывает диалог «New session or room» (⌘T); «+» рисует значок. */
+    newSessionOrRoom: 'New session or room',
+    /** «Couldn't <действие>: …» тоста, когда бросок сессии на строку комнаты (`rooms.addMember`) не удался. */
+    addToRoomAction: 'add the session to the room',
     sessionMenu: {
       open: 'Open',
       /** Кусок 3.4: сплит вправо с вкладкой терминала сессии. */
@@ -96,7 +126,6 @@ export const S = {
       resume: 'Resume',
       stop: 'Stop',
       closeEllipsis: 'Close…',
-      createRoomWith: 'Create room with…',
       changes: 'Changes',
       stopConfirmTitle: (label: string): string => `Stop "${label}"?`,
       closeConfirmTitle: (label: string): string => `Close "${label}"?`,
@@ -132,6 +161,8 @@ export const S = {
     yesterday: 'yesterday',
     minutes: (n: number): string => `${n}m`,
     hours: (n: number): string => `${n}h`,
+    /** `3h` → `3h ago` во фразе «last event …» (`lib/relative-time.ts#relativeTimeAgo`). */
+    ago: (relative: string): string => `${relative} ago`,
   },
 
   /** Строка статуса — `shell/StatusBar.tsx`. */
@@ -147,53 +178,123 @@ export const S = {
       [needsYou > 0 ? `${needsYou} ${needsYou === 1 ? 'needs' : 'need'} you` : '', unseen > 0 ? `${unseen} unseen` : '']
         .filter((part) => part !== '')
         .join(' · '),
+    /**
+     * Лимиты подписки в сегменте провайдера (спека комнат Organic, 3.5): «58% 5h · 41% wk». Окна, которого нет,
+     * в тексте нет; проценты приходят уже целыми — округляет вызывающий.
+     */
+    limitsText: (fiveHour: number | null, week: number | null): string =>
+      [fiveHour === null ? '' : `${fiveHour}% 5h`, week === null ? '' : `${week}% wk`]
+        .filter((part) => part !== '')
+        .join(' · '),
+    /**
+     * Тултип лимитов: «5-hour window resets at 9:30 PM · Weekly window resets Sat 9:05 AM · Updated 6:20 PM».
+     * Окон, которых нет, в нём нет; «Updated» — всегда: числа обновляются, только пока агент работает
+     * (спека 3.5, «Свежесть»). Время и день приходят уже местными и короткими — форматирует вызывающий.
+     */
+    limitsTooltip: (fiveHourResets: string | null, weekResets: { day: string; time: string } | null, updated: string): string =>
+      [
+        fiveHourResets === null ? '' : `5-hour window resets at ${fiveHourResets}`,
+        weekResets === null ? '' : `Weekly window resets ${weekResets.day} ${weekResets.time}`,
+        `Updated ${updated}`,
+      ]
+        .filter((part) => part !== '')
+        .join(' · '),
   },
 
   /** Общие диалоги, не привязанные к своей области (mail/rooms/settings/…). */
   dialogs: {
+    /** Название комнаты, если человек его не ввёл (диалоги 1.5 и 1.6, 2.1): по числу комнат работы. */
+    defaultRoomTitle: (n: number): string => `Room ${n}`,
+    /**
+     * Диалог «New session or room» (кусок 7 плана «Organic», спека окна 2026-09-29, 1.5) —
+     * `components/dialogs/NewSessionOrRoomDialog.tsx`: один агент — сессия, два и больше — комната с ведущим.
+     */
     newSession: {
-      title: 'New session',
-      providerPlaceholder: 'Provider…',
-      labelField: 'Label',
-      taskField: 'Task',
-      taskPlaceholder: 'Empty — quiet start; the agent gets the task as its first message',
-      childOfSelected: 'Child of selected',
+      titleSession: 'New session',
+      titleRoom: 'New room',
+      hintSession: 'Add another agent to make it a room.',
+      hintRoom: 'The agents discuss the task you write in the room. The lead brings you a decision.',
+      workspaceField: 'Workspace',
+      /** Пункт списка работ: название работы и папка проекта — данные, идут как есть. */
+      workspaceOption: (title: string, project: string): string => `${title} · ${project}`,
+      noWorkspaces: 'No active workspaces',
+      sessionNameField: 'Session name',
+      sessionNamePlaceholder: 'Optional',
+      roomNameField: 'Room name',
+      roomNamePlaceholder: 'What the agents will discuss',
+      agentsField: 'Agents',
+      /** Имя для скринридера группы провайдеров одной строки агента: `Agent 2`. */
+      agentGroup: (n: number): string => `Agent ${n}`,
+      modelField: 'Model',
+      /** Первый пункт списка моделей: без флага `--model`, модель CLI по умолчанию (решение 5). */
+      modelDefault: 'Default',
+      effortField: 'Effort',
+      effortLow: 'Low',
+      effortMedium: 'Medium',
+      effortHigh: 'High',
+      /** Тултип звезды: `Lead` у ведущего, `Make lead` у прочих. */
+      lead: 'Lead',
+      makeLead: 'Make lead',
+      removeAgent: 'Remove agent',
+      addAgent: 'Add agent',
       inOwnWorktree: 'In its own worktree',
+      summarySession: (work: string): string => `One session in ${work}`,
+      summaryRoom: (agents: number, work: string): string => `Room with ${agents} agents in ${work}`,
+      submitSession: 'Start session',
+      submitRoom: 'Create room',
       selectWorkRequired: 'No workspace selected',
-      submit: 'Launch',
+      /** Итог запуска по агенту при частичном сбое; тег — короткий номер сессии `S05`. */
+      agentStarted: (tag: string): string => `${tag} started`,
     },
+    /** Диалог «New room» из двух сессий (1.6) — `components/dialogs/MergeRoomDialog.tsx`. */
+    mergeRoom: {
+      title: 'New room',
+      /** `S02 бэкенд and S03 ревью move into the room.` — ярлыки сессий идут как есть. */
+      movingInto: (first: string, second: string): string => `${first} and ${second} move into the room.`,
+      nameField: 'Name',
+      namePlaceholder: 'What the agents will discuss',
+      leadField: 'Lead',
+      submit: 'Create room',
+    },
+    /** Диалог «New workspace» (1.7) — `sidebar/NewWorkComposer.tsx` (спека Orca-UI 6.6 — поведение, 1.7 — поля). */
     newWork: {
       title: 'New workspace',
-      chooseFolderPlaceholder: 'Choose a folder…',
+      chooseFolder: 'Choose a folder…',
       titleField: 'Title',
-      goalField: 'Goal',
+      titlePlaceholder: 'Taken from the first prompt if empty',
+      promptField: 'First prompt',
+      promptPlaceholder: 'What should the agent do?',
+      submit: 'Create workspace',
       selectFolderRequired: 'Select a project folder',
-      /** Форма новой работы — `sidebar/NewWorkComposer.tsx` (кусок 3.5, спека 6.6). */
       projectField: 'Project',
-      startSession: 'Start a session',
       agentField: 'Agent',
-      createMore: 'Create more',
       titleLength: 'Title: 1–120 characters',
-      goalTooLong: 'Goal: up to 4,000 characters',
-      labelTooLong: 'Label: up to 40 characters',
-      taskTooLong: 'Task: up to 20,000 characters',
+      /** Ни названия, ни первого промпта: названию не из чего взяться. */
+      titleOrPromptRequired: 'Enter a title or a first prompt',
+      promptTooLong: 'First prompt: up to 20,000 characters',
       agentRequired: 'Select an agent',
-      agentPlaceholder: 'Agent…',
-      /** Снимок работ не принёс новую работу за 10 с — вкладка не открыта вслепую. */
-      notListedYet: 'Workspace created — it will appear in the sidebar shortly',
+    },
+    /**
+     * Снимок работ не принёс созданное за 10 с — вкладка не открыта вслепую (`lib/open-when-listed.ts`):
+     * по виду того, что создали.
+     */
+    notListedYet: {
+      work: 'Workspace created — it will appear in the sidebar shortly',
+      session: 'Session started — it will appear in the sidebar shortly',
+      room: 'Room created — it will appear in the sidebar shortly',
     },
   },
 
   /** «Вся почта работы» и лента писем — `mail/*`, строка сайдбара, вкладка панели, палитра. */
   mail: {
     allWorkspaceMail: 'All workspace mail',
-    headerPrefix: 'All mail',
+    /** Подзаголовок вкладки почты (спека окна 2026-09-29, 1.8): работа и число непрочитанных или «all read». */
+    subtitle: (workspace: string, unread: number): string => `${workspace} · ${unread === 0 ? 'all read' : `${unread} unread`}`,
     decisionsHeading: 'Decisions',
     decisionsEarlier: (count: number): string => `+${count} earlier`,
     unreadAriaLabel: 'unread',
-    kindSuffixQuestion: ' · question',
-    kindSuffixDecision: ' · decision',
-    messageWord: (count: number): string => (count === 1 ? 'message' : 'messages'),
+    /** Тег вида письма в карточке почты (1.8): строчными, как в handoff. */
+    kindTag: { note: 'note', question: 'question', decision: 'decision' } as const,
   },
 
   /** Комнаты — `rooms/*`. */
@@ -201,19 +302,50 @@ export const S = {
     fallbackTitle: 'Room',
     notFound: 'Room not found',
     everyone: 'everyone',
-    kindLabels: {
-      note: 'Note',
-      question: 'Question',
-      decision: 'Decision',
-    },
-    composerPlaceholder: '⌘Enter to send',
     send: 'Send',
-    createTitle: (label: string): string => `Create room with ${label}`,
-    nameField: 'Name',
-    moreParticipants: 'More participants',
-    nameRequired: 'Name is required',
-    /** «Новая комната» из меню карточки — без обязательного участника (кусок 3.4). */
-    newRoomTitle: 'New room',
+
+    // ── Вкладка комнаты (спека окна 2026-09-29, 1.3, 2.2–2.4) ──
+    /** Подзаголовок шапки: `Created by you · 4 agents · lead S01 · {работа}`. */
+    createdByYou: 'Created by you',
+    createdBy: (who: string): string => `Created by ${who}`,
+    agentCount: (n: number): string => (n === 1 ? '1 agent' : `${n} agents`),
+    leadIs: (tag: string): string => `lead ${tag}`,
+    /** `→ all` в мете сообщения: письмо всем участникам. */
+    toAll: 'all',
+    /** `aria-label` ленты участников и тултип `★` у ведущего. */
+    participants: 'Participants',
+    lead: 'Lead',
+    /** Пустая комната. */
+    emptyFeed: 'Write the task for everyone below. The lead collects positions and brings you a decision.',
+    notPickedUp: (tags: string): string => `▤ Not picked up yet by ${tags}`,
+    /** Подпись точки «непрочитано» у сообщения. */
+    newMessage: 'New',
+    /** Карточка решения. */
+    decisionWaiting: 'decision · waiting for you',
+    accept: 'Accept',
+    returnForRework: 'Return for rework',
+    returnPlaceholder: 'What should the lead change?',
+    sendToLead: 'Send to lead',
+    /** Тост на `conflict`: ведущий заменил текст или решение уже закрыто — живая карточка на месте. */
+    decisionChanged: 'The decision changed — review the latest version.',
+    /**
+     * Тултип карточки участника: `Claude Code · Opus 5.5`; модель неизвестна — только провайдер. Усилие не
+     * показывается: его никто не хранит.
+     */
+    participantTooltip: (provider: string, model: string | null): string => (model === null ? provider : `${provider} · ${model}`),
+    /** Мета пункта меню упоминаний: `Opus 5.5 · idle`; модель неизвестна — только состояние. */
+    mentionMeta: (model: string | null, word: string): string => (model === null ? word : `${model} · ${word}`),
+    /** Поле ввода: подпись над ним, плейсхолдер, имя для скринридера. */
+    toEveryone: 'To everyone',
+    toList: (tags: string): string => `To ${tags}`,
+    composerPlaceholder: 'Write to everyone · type @ to mention an agent',
+    messageField: 'Message',
+    /** Меню упоминаний. */
+    mentionHeading: 'Agents in this room',
+    mentionEmpty: 'No agents match',
+    /** «Couldn't <действие>: …» — `errorText`. */
+    sendAction: 'send the message',
+    resolveAction: 'answer the decision',
   },
 
   /** Настройки — `settings/SettingsDialog.tsx`. */
@@ -236,6 +368,8 @@ export const S = {
     messageCap: 'Message cap per hour',
     resumeRate: 'Session wake-ups per hour (0…60)',
     autoLaunchPending: 'Auto-launch pending sessions',
+    /** Скилл `harnas` в папку проекта и в worktree сессий при запуске (кусок 10 плана комнат). */
+    agentSkills: 'Install agent skills into projects',
     worktreeRoot: 'Worktree root',
     notifyNeedsYou: 'needs you',
     notifyFinished: 'finished',
@@ -252,13 +386,24 @@ export const S = {
    * скринридера — `S.actions.commandPalette`, «Open mail» — `S.cardMenu.openMail`.
    */
   palette: {
-    placeholder: 'Search tabs, workspaces, sessions, rooms, and actions…',
+    // Подсказка поля — дословно по handoff (спека окна 2026-09-29, 1.9).
+    placeholder: 'Search workspaces, sessions, tabs and actions',
     /** Заголовок режимов splitRight и splitDown. */
     splitTitle: 'Open in new group',
     sections: { tabs: 'Tabs', works: 'Workspaces', sessions: 'Sessions', rooms: 'Rooms', actions: 'Actions', files: 'Files' },
+    /** Без запроса секция вкладок называется «Open tabs» (1.9): это последние открытые, а не найденные. */
+    openTabs: 'Open tabs',
     more: (n: number): string => `${n} more`,
-    createWorkspace: (query: string): string => `Create workspace "${query}"`,
-    footer: '↑↓ select · Enter open · ⌘Enter open to the side · Esc close',
+    createWorkspace: (query: string): string => `Create workspace “${query}”`,
+    /** Подвал: подсказки клавиш по одной, разделённые зазором; «⌘Enter» — открыть сбоку (спека 9.3). */
+    footerHints: ['↑↓ select', 'Enter open', '⌘Enter open to the side', '⌘1–9 pick', 'Esc close'],
+    /** Подписи строк (снимок dark-03): вид строки и работа, слово состояния и провайдер у сессии. */
+    tabSubtitle: (work: string): string => `Tab · ${work}`,
+    roomSubtitle: (work: string): string => `Room · ${work}`,
+    sessionSubtitle: (work: string, word: string, provider: string): string => `${work} · ${word} · ${provider}`,
+    workSubtitle: (project: string, sessions: number, branch: string | null): string =>
+      `${project} · ${sessions === 1 ? '1 session' : `${sessions} sessions`}${branch === null ? '' : ` · ${branch}`}`,
+    actionSubtitle: 'Action',
   },
 
   /** «Изменения» и вкладка диффа — `review/*` (куски 8.2a, 8.2b, 8.3). */
@@ -361,6 +506,8 @@ export const S = {
     imageTooLarge: 'Image is larger than 20 MB — not sent',
     /** Связь окна с хостом оборвалась (раунд lane-r3, п. 2): терминал ввод не принимает. */
     disconnected: 'Disconnected — reconnecting…',
+    /** Мета карточки неживой сессии (спека окна 2026-09-29, 1.8): `Claude Code · last event 3h ago`. */
+    lastEvent: (when: string): string => `last event ${when}`,
   },
 
   /**
@@ -443,7 +590,9 @@ export const S = {
     diffTitle: (sessionTag: string, shortHash: string | null): string =>
       shortHash === null ? `Changes ${sessionTag}` : `Changes ${sessionTag} · ${shortHash}`,
     openTab: 'Open…',
-    emptyGroup: 'Open a session from the sidebar, ⌘T for a new session',
+    /** Пустая группа (спека окна 2026-09-29, 1.8): заголовок и подсказка под ним. */
+    noOpenTabs: 'No open tabs',
+    emptyGroup: 'Open a session from the sidebar, or find anything with ⌘J.',
     closedToast: 'Tab closed — ⌘⇧T to reopen',
     tooSmall: 'Not enough room for another group',
     tooManyGroups: 'No more than 8 groups per workspace',
@@ -556,7 +705,9 @@ export const S = {
     goToFile: 'Go to file',
     findInFiles: 'Find in files',
     newWorkspace: 'New workspace',
-    newSession: 'New session',
+    // «New session or room» (спека окна 2026-09-29, 1.9): диалог 1.5, как ⌘T; «New room» — тот же диалог, открытый
+    // сразу с двумя агентами (комнатой).
+    newSession: 'New session or room',
     newRoom: 'New room',
     workspaceNumber: (n: number): string => `Workspace ${n}`,
     previousWorkspace: 'Previous workspace',
@@ -614,12 +765,24 @@ export const S = {
       `${workspace} · ${kind === 'question' ? 'question' : kind === 'decision' ? 'decision' : 'message'} from ${from}`,
     /** Тост: клик по уведомлению, чью работу или сессию успели удалить (спека 7.5). */
     targetGone: 'Workspace or session no longer exists',
+    /**
+     * Решение ведущего ждёт человека (спека окна 2026-09-29, 1.10). Один заголовок на оба случая — новое решение и
+     * переделанное; различает их тело. `lead` — короткий ярлык ведущего (`S01`), как в подписях `lead S01` окна.
+     */
+    decisionTitle: 'Decision waiting for you',
+    decisionNew: (room: string, lead: string): string => `${room} · ${lead} collected positions`,
+    /** Ведущий заменил текст, пока человек не ответил (`rev` вырос), или принёс исправленное после `Return for rework`. */
+    decisionRevised: (room: string, lead: string): string => `${room} · ${lead} revised the decision`,
+    /** Кнопки уведомления в самом окне (1.10): вкладка комнаты или скрыть. */
+    open: 'Open',
+    later: 'Later',
   },
 
   /** Тексты общих участников переписки — `lib/participant-tag.ts`. */
   participants: {
     human: 'You',
-    system: 'System',
+    /** Так хост подписывает свои строки в комнате и почте — как на снимке handoff `dark-08`. */
+    system: 'harnas',
     deletedSuffix: '(deleted)',
     /** Ярлык сессии, созданной без названия (`NEW_LABEL` core) — `lib/participant.ts`. */
     newSession: 'New session',
@@ -769,6 +932,24 @@ export const S = {
   },
 };
 
+/**
+ * Имя провайдера для строки статуса и тултипов (спека окна 2026-09-29, 1.1, 1.2): по handoff — «Claude
+ * Code» для `claude` и «Codex» для `codex`, прочим провайдерам — метка, которую отдал хост
+ * (`providers.list`). Id сравнивается без учёта регистра, как у значка (`components/AgentIcon.tsx`);
+ * пустая метка — сам id, а не пустая строка. Одна функция на строку статуса и тултип свёрнутой
+ * комнаты («2 Claude Code agents»).
+ */
+export function providerName(id: string, label: string): string {
+  switch (id.toLowerCase()) {
+    case 'claude':
+      return 'Claude Code';
+    case 'codex':
+      return 'Codex';
+    default:
+      return label === '' ? id : label;
+  }
+}
+
 /** Английский текст по коду ошибки протокола (`ErrorCode` из `@harnas/protocol`, плюс наш `'failed'`). */
 const ERROR_REASON: Record<string, string> = {
   unauthorized: 'not authorized',
@@ -817,6 +998,8 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'resume-failed': "couldn't resume this session",
   'resume-limit': 'hourly resume limit reached — mail is waiting',
   'trust-wait': 'not responding since launch — may be waiting for folder trust',
+  'startup-wait': 'waiting at startup — Codex may need sign-in or folder trust in its terminal',
+  'skill-foreign': "agent skill not installed — that path already exists and wasn't created by harnas",
 };
 
 /**

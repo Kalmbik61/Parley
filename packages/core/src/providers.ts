@@ -1,6 +1,7 @@
 import { access, readFile, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
+import { CLAUDE_MODELS, CODEX_MODELS, type ModelOption } from './provider-models.js';
 import type { Provider } from './session-index.js';
 import { overrideVariable } from './work/find-binary.js';
 import { harnasHome } from './work/store.js';
@@ -32,14 +33,18 @@ export interface RunnerConfig {
    * Аргументы запуска новой сессии координации. Подстановки: `{sessionUuid}` —
    * uuid, сгенерированный харнессом, `{mcpConfig}`, `{settingsFile}` — файл
    * настроек работы с хуками, `{systemPrompt}` — системная вставка гида,
-   * `{channel}` — канал звонка, `{agent}` — роль, `{prompt}` — стартовый бриф.
+   * `{channel}` — канал звонка, `{agent}` — роль, `{model}` и `{effort}` — выбор
+   * из диалога окна (по `{model}` и `{effort}` в этом шаблоне окно узнаёт, что провайдер
+   * их принимает: `supportsModel`, `supportsEffort`), `{prompt}` — стартовый бриф,
+   * `{notify}` — `-c notify=[…]` Codex (скрипт харнесса, который после хода дописывает `Stop`
+   * в журнал событий сессии).
    * undefined — новая сессия запускается без аргументов.
    */
   args?: string[];
   /**
    * Аргументы для возобновления конкретной сессии. Подстановки:
    * `{providerSessionId}`, `{mcpConfig}`, `{settingsFile}`, `{systemPrompt}`,
-   * `{channel}`, `{agent}`, `{prompt}` — указатель на письма при подъёме
+   * `{channel}`, `{agent}`, `{notify}`, `{prompt}` — указатель на письма при подъёме
    * спящей сессии (спецификация окна 7.2).
    * Системный промпт в транскрипте не хранится, поэтому вставка гида идёт и
    * сюда. undefined — провайдер не умеет открывать сессию по идентификатору,
@@ -66,12 +71,65 @@ export interface ProviderEntry {
   hasHistory: boolean;
   linkBy: SessionLink;
   runner: RunnerConfig;
+  /**
+   * Модели, из которых окно предлагает выбрать (`selectableModels`): значение `--model` и подпись.
+   * У встроенных `claude` и `codex` список взят из открытой документации (`provider-models.ts`), у
+   * прочих — из `providers.json`. Нет списка (`null` или поля нет — одно и то же, как и на проводе) —
+   * окно контрол не показывает, а хост принимает любое значение, как и прежде. «По умолчанию» в
+   * списке не хранится: это отсутствие выбора, без флага.
+   */
+  models?: readonly ModelOption[] | null;
 }
 
 /** Запись встроенного реестра: id из закрытого списка, всё остальное как у `ProviderEntry`. */
 export interface ProviderInfo extends Omit<ProviderEntry, 'id'> {
   id: Provider;
 }
+
+/**
+ * Настройки Codex, которые харнесс задаёт флагами `-c` (спека комнат Organic, 3.6) — и при запуске, и при
+ * `resume`. Только своими `-c` в своих сессиях: личный конфиг человека в домашней папке Codex не читается и
+ * не пишется, его `notify` в этих сессиях не зовётся.
+ * - `mcp_servers.harnas` — сервер координации (`{mcpConfig}`);
+ * - `tui.terminal_title` — состояние в заголовке окна (OSC 0): спиннер идёт, пока агент работает,
+ *   `status` даёт `Ready` и `Working`, при вопросе человеку заголовок становится
+ *   `[ ! ] Action Required`; `session-id` — id треда;
+ * - `tui.notifications` (`approval-requested`, `agent-turn-complete`), способ `osc9` и условие
+ *   `always` — те же события уведомлениями терминала; по умолчанию они молчат, пока терминал «в фокусе»,
+ *   а для Codex в pty хоста фокус всегда «есть»;
+ * - `notify` — конец хода скриптом харнесса (`{notify}`).
+ * Хуки Codex не включаются (`hooks.*`): им нужно ревью человека, а доверие себе харнесс не выдаёт.
+ * Так же не выдаётся доверие к папке (`projects`): экран доверия проходит человек в терминале Codex.
+ */
+const CODEX_CONFIG_FLAGS: readonly string[] = [
+  '-c',
+  '{mcpConfig}',
+  '-c',
+  'tui.terminal_title=["spinner","status","session-id"]',
+  '-c',
+  'tui.notifications=["approval-requested","agent-turn-complete"]',
+  '-c',
+  'tui.notification_method="osc9"',
+  '-c',
+  'tui.notification_condition="always"',
+  '-c',
+  '{notify}',
+];
+
+/**
+ * Флаги запуска новой сессии Codex: `-c` (`CODEX_CONFIG_FLAGS`) и два флага сверх них.
+ * - `--no-daemon` — Codex с 0.157 по умолчанию идёт через общий фоновый демон, и тогда MCP-серверы и
+ *   уведомления были бы детьми демона с его окружением, без `HARNAS_*`. Любой `-c` и так держит
+ *   запуск «встроенным», флаг делает это явным;
+ * - `-a on-request` — вопросы одобрений идут человеку в терминал агента (это и умолчание Codex, но
+ *   личный конфиг человека мог его сменить). Флаг заменяет в сессиях харнесса и личную политику
+ *   одобрений человека, в том числе более строгую, если она задана в его конфиге. `never` нельзя: вызов
+ *   инструмента, требующий одобрения, при нём отклоняется — сервер `harnas` перестал бы работать.
+ * При `resume` их нет: спека говорит «те же `-c`», принимает ли `resume` эти флаги после id, на живом Codex
+ * не проверено (отказ разбора флагов провалил бы каждый подъём спящей сессии), а тред хранит политику
+ * одобрений и без них.
+ */
+const CODEX_HARNAS_FLAGS: readonly string[] = ['--no-daemon', '-a', 'on-request', ...CODEX_CONFIG_FLAGS];
 
 /**
  * Реестр провайдеров: где брать историю и чем запускать.
@@ -89,6 +147,8 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
     // `--session-id <uuid>` задаёт имя jsonl-файла заранее: угадывать по времени
     // создания не нужно.
     linkBy: 'session-id',
+    // Алиасы `--model` из документации Claude Code (`provider-models.ts`).
+    models: CLAUDE_MODELS,
     runner: {
       command: 'claude',
       // `--settings` — документированный флаг Claude Code: файл мержится с
@@ -107,6 +167,15 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         // целиком, как у `--mcp-config`, — тогда сессия живёт по pull.
         '--dangerously-load-development-channels',
         '{channel}',
+        // Модель и усилие новой сессии из диалога окна. Оба флага документированы
+        // (code.claude.com/docs/en/cli-reference: `--model`, `--effort`), а без выбора пара
+        // выпадает целиком, и сессия живёт на модели и усилии по умолчанию. В `resumeArgs`
+        // их нет: возобновлённая сессия остаётся на прежней модели (docs/en/sessions
+        // того же сайта), а выбор из диалога в карте не хранится.
+        '--model',
+        '{model}',
+        '--effort',
+        '{effort}',
         '--agent',
         '{agent}',
         '{prompt}',
@@ -139,20 +208,38 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
     label: 'Codex',
     mark: 'Cx',
     hasHistory: true,
-    // Проверено по CLI codex 0.80: `resume_session_id` помечен `#[clap(skip)]` и
-    // ставится только подкомандой `codex resume <SESSION_ID>`; флага задать id
-    // новой сессии снаружи нет. Значит, запись карты связывается с rollout-логом
-    // по cwd и времени запуска (спецификация, раздел 5).
+    // Сверено по исходникам codex 0.159 (`codex-research.md`, п. 11.8): `resume_session_id`
+    // помечен `#[clap(skip)]` и ставится только подкомандой `codex resume <SESSION_ID>`;
+    // флага задать id новой сессии снаружи нет. Значит, запись карты связывается с
+    // rollout-логом по cwd и времени запуска (спецификация, раздел 5).
     linkBy: 'cwd+time',
+    // Рекомендуемые модели из документации Codex (`provider-models.ts`).
+    models: CODEX_MODELS,
     runner: {
       // `codex [OPTIONS] [PROMPT]`: стартовый промпт — позиционный аргумент.
       // MCP-серверы codex берёт из `~/.codex/config.toml`; свой сервер добавляем
       // глобальным `-c mcp_servers.harnas=<inline table>`, не трогая файл
       // пользователя. Файла-конфига MCP, как у claude, у codex нет.
       command: 'codex',
-      args: ['-c', '{mcpConfig}', '{prompt}'],
-      // `codex resume <SESSION_ID>` — id или имя сессии, см. CLI самого Codex.
-      resumeArgs: ['resume', '{providerSessionId}', '-c', '{mcpConfig}'],
+      // Свои настройки сессии — `CODEX_HARNAS_FLAGS`. Модель — `--model` (`-m`), усилие —
+      // переопределением конфига: выделенного флага у Codex нет, а ключ `model_reasoning_effort`
+      // есть в справочнике конфига. `-c key=value` разбирает значение как TOML (справочник CLI
+      // Codex, флаг `--config`), поэтому строка в кавычках; так же передаёт усилие SDK самого Codex
+      // (openai/codex, sdk/typescript/src/exec.ts). Как и у claude, без выбора обе пары выпадают, а
+      // при `resume` не передаются.
+      args: [
+        ...CODEX_HARNAS_FLAGS,
+        '--model',
+        '{model}',
+        '-c',
+        'model_reasoning_effort="{effort}"',
+        '{prompt}',
+      ],
+      // `codex resume <SESSION_ID> [PROMPT]` — id или имя сессии, см. CLI самого Codex. Те же `-c`, что у
+      // запуска (`-c mcp_servers` в тред не сохраняется, `notify` и заголовок тоже), а `--no-daemon` и
+      // `-a` — только у запуска. Модель, усилие и политику одобрений Codex восстанавливает из треда сам.
+      // Указатель на письма — позиционным промптом последним: первым ходом поднятой сессии.
+      resumeArgs: ['resume', '{providerSessionId}', ...CODEX_CONFIG_FLAGS, '{prompt}'],
       mcpConfig: 'codex-override',
     },
   },
@@ -171,6 +258,17 @@ export function providersWithHistory(): ProviderInfo[] {
   return Object.values(PROVIDERS).filter((provider) => provider.hasHistory);
 }
 
+/**
+ * Усилие рассуждений, которое окно предлагает при запуске. Три уровня — общее подмножество
+ * того, что документируют Claude Code (`low`…`max`) и Codex (`low`…`ultra`, набор зависит от
+ * модели). Уровень, которого модель Claude не знает, Claude Code сам опускает до ближайшего
+ * ниже (code.claude.com/docs/en/model-config); про Codex документация этого не говорит.
+ */
+export type EffortLevel = 'low' | 'medium' | 'high';
+
+/** Те же уровни списком: по нему проверяет `effort` `spawn_session`, а схема окна держит свой набор. */
+export const EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high'];
+
 /** Значения подстановок в шаблоны аргументов реестра. */
 export interface RunnerSubstitutions {
   sessionUuid?: string;
@@ -185,13 +283,32 @@ export interface RunnerSubstitutions {
   channel?: string;
   /** Имя роли для `claude --agent` (спецификация 2026-09-08, 4.4). */
   agent?: string;
+  /** Значение `-c notify=[…]` Codex: скрипт харнесса, который пишет конец хода в журнал событий. */
+  notify?: string;
+  /** Модель новой сессии из диалога окна: `--model` у claude и codex. */
+  model?: string;
+  /**
+   * Усилие новой сессии: `--effort` у claude, `-c model_reasoning_effort` у codex. Тип — закрытый
+   * набор, потому что у codex значение встаёт в кавычки строки шаблона без экранирования.
+   */
+  effort?: EffortLevel;
 }
 
 const PLACEHOLDER =
-  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|prompt|providerSessionId|channel|agent)\}$/;
+  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|prompt|providerSessionId|channel|agent|notify|model|effort)\}$/;
 
 /**
- * Подставляет значения в шаблон аргументов.
+ * Усилие можно подставить и внутрь строки шаблона (`model_reasoning_effort="{effort}"`):
+ * Codex принимает его только значением TOML в `-c`. Остальным подстановкам это не нужно —
+ * и не позволено: усилие берётся из закрытого набора, и его можно вставить в кавычки без
+ * экранирования, а модель — произвольная строка.
+ */
+const INLINE_EFFORT = /\{effort\}/g;
+
+/**
+ * Подставляет значения в шаблон аргументов. Подстановка — целым элементом массива; внутри строки
+ * шаблона умеет встать только `{effort}` (`model_reasoning_effort="{effort}"`), так что
+ * `--model={model}` остаётся буквальной строкой (`supportsModel` такой шаблон не считает).
  *
  * Подстановка без значения выпадает вместе с флагом, который её вводит, —
  * предыдущим аргументом, если он пришёл из шаблона литералом и начинается с
@@ -202,21 +319,37 @@ export function substituteArgs(template: readonly string[], subs: RunnerSubstitu
   const args: string[] = [];
   const fromTemplate: boolean[] = [];
 
+  /** Пропавшая подстановка уносит флаг, который стоял перед ней литералом шаблона. */
+  const dropWithFlag = (): void => {
+    const last = args.length - 1;
+    if (last >= 0 && fromTemplate[last] === true && args[last]?.startsWith('-') === true) {
+      args.pop();
+      fromTemplate.pop();
+    }
+  };
+
   for (const item of template) {
     const match = PLACEHOLDER.exec(item);
     if (match === null) {
-      args.push(item);
-      fromTemplate.push(true);
+      if (!item.includes('{effort}')) {
+        args.push(item);
+        fromTemplate.push(true);
+        continue;
+      }
+      // Значения нет — выпадает вся строка вместе с её `-c`; есть — оно встаёт на место.
+      if (subs.effort === undefined) {
+        dropWithFlag();
+        continue;
+      }
+      const effort = subs.effort;
+      args.push(item.replace(INLINE_EFFORT, () => effort));
+      fromTemplate.push(false);
       continue;
     }
 
     const value = subs[match[1] as keyof RunnerSubstitutions];
     if (value === undefined) {
-      const last = args.length - 1;
-      if (last >= 0 && fromTemplate[last] === true && args[last]?.startsWith('-') === true) {
-        args.pop();
-        fromTemplate.pop();
-      }
+      dropWithFlag();
       continue;
     }
     args.push(value);
@@ -253,6 +386,41 @@ export function printCommand(
     command: entry.runner.command,
     args: substituteArgs(entry.runner.printArgs ?? [], subs),
   };
+}
+
+/**
+ * Принимает ли провайдер модель при запуске. Решает шаблон, а не отдельный признак реестра:
+ * флаг подтверждён документацией CLI ровно там, где он стоит в `args`, а оверрайд
+ * `providers.json` без `{model}` честно его выключает. Не принимает — выбор молча
+ * отбрасывается (`substituteArgs`), а окно контрол прячет.
+ *
+ * Считается только `{model}` целым элементом, как его и подставляет `substituteArgs`: внутри
+ * строки (`--model={model}`) он не подставился бы, и окно показало бы контрол, а в команду ушёл
+ * бы буквальный `--model={model}`.
+ */
+export const supportsModel = (entry: ProviderEntry): boolean =>
+  (entry.runner.args ?? []).some((item) => item === '{model}');
+
+/**
+ * Принимает ли провайдер усилие при запуске — по тому же правилу, что и модель, но `{effort}`
+ * подставляется и внутри строки шаблона (`model_reasoning_effort="{effort}"`), поэтому годится
+ * любой элемент с ним.
+ */
+export const supportsEffort = (entry: ProviderEntry): boolean =>
+  (entry.runner.args ?? []).some((item) => item.includes('{effort}'));
+
+/**
+ * Список моделей для окна: из записи реестра (встроенный или из `providers.json`) и только если
+ * шаблон запуска вообще принимает модель. `null` — списка нет: окно контрол не показывает, а хост
+ * принимает любое значение по прежнему правилу. Отдаётся копия: ответ уходит по проводу, и правка
+ * получателем не должна доходить до реестра.
+ */
+export function selectableModels(entry: ProviderEntry): ModelOption[] | null {
+  const list = entry.models;
+  if (!supportsModel(entry) || list === undefined || list === null || list.length === 0) {
+    return null;
+  }
+  return list.map((model) => ({ ...model }));
 }
 
 /**
@@ -336,6 +504,11 @@ export interface ProviderOverride {
   resumeArgs?: string[];
   printArgs?: string[];
   mcpConfig?: McpConfigKind;
+  /**
+   * Свой список моделей вместо встроенного, целиком (как `args`); `[]` убирает список. Элемент —
+   * пара `{ id, label }`; `id` — одно слово, не с дефиса, до 200 знаков, и в списке не повторяется.
+   */
+  models?: ModelOption[];
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -343,6 +516,48 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const isStrings = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((item) => typeof item === 'string');
+
+const isNonEmptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value !== '';
+
+/**
+ * Значение `--model`: одно слово, не с дефиса (CLI принял бы его за флаг) и не длиннее 200 знаков —
+ * то же правило, что у `sessions.create.model` в protocol (тест хоста сверяет их между собой).
+ * Слабее нельзя: список с таким значением загрузился бы, окно его показало бы, а `sessions.create`
+ * с ним всегда падал бы на схеме.
+ */
+const MODEL_ID = /^[^\s-]\S*$/;
+const MODEL_ID_MAX_LENGTH = 200;
+const isModelId = (value: unknown): value is string =>
+  typeof value === 'string' && value.length <= MODEL_ID_MAX_LENGTH && MODEL_ID.test(value);
+
+/**
+ * Выбор модели против записи реестра: `null` — значение годится, иначе текст отказа. Одно правило на
+ * два входа, `sessions.create` хоста и `spawn_session` MCP, чтобы они не разошлись: одно слово, не с
+ * дефиса (CLI принял бы его за флаг), и — если у провайдера есть список (`selectableModels`) — из списка.
+ * Пустое значение — «по умолчанию», без флага: его сюда не пускают, решает вызывающий. Провайдер без
+ * списка принимает любое значение прежней формы: дойдёт ли оно до команды, решает шаблон запуска.
+ */
+export function modelChoiceError(entry: ProviderEntry, model: string): string | null {
+  if (!isModelId(model)) {
+    return `модель ${JSON.stringify(model)}: одно слово, не с дефиса и не длиннее ${MODEL_ID_MAX_LENGTH} знаков`;
+  }
+  const list = selectableModels(entry);
+  if (list !== null && !list.some((option) => option.id === model)) {
+    const allowed = list.map((option) => option.id).join(', ');
+    return `модель ${model} не из списка провайдера ${entry.id}; допустимы: ${allowed}`;
+  }
+  return null;
+}
+
+const isModelEntry = (value: unknown): value is ModelOption =>
+  isRecord(value) && isModelId(value['id']) && isNonEmptyString(value['label']);
+
+/** Список пар без повторов `id`: два одинаковых окну не различить, а хост принял бы любое из них. */
+const isModelList = (value: unknown): value is ModelOption[] =>
+  Array.isArray(value) &&
+  value.every(isModelEntry) &&
+  new Set(value.map((model) => model.id)).size === value.length;
 
 function checkShape(id: string, file: string, patch: Record<string, unknown>): void {
   const wrong =
@@ -356,6 +571,7 @@ function checkShape(id: string, file: string, patch: Record<string, unknown>): v
     (patch['args'] !== undefined && !isStrings(patch['args'])) ||
     (patch['resumeArgs'] !== undefined && !isStrings(patch['resumeArgs'])) ||
     (patch['printArgs'] !== undefined && !isStrings(patch['printArgs'])) ||
+    (patch['models'] !== undefined && !isModelList(patch['models'])) ||
     (patch['mcpConfig'] !== undefined &&
       patch['mcpConfig'] !== 'json-file' &&
       patch['mcpConfig'] !== 'codex-override');
@@ -385,6 +601,11 @@ function applyOverride(
   if (printArgs !== undefined) runner.printArgs = printArgs;
   if (mcpConfig !== undefined) runner.mcpConfig = mcpConfig;
 
+  // Из файла в запись ложатся свои копии пар, а не объекты разобранного JSON.
+  const models =
+    patch.models === undefined
+      ? base?.models
+      : patch.models.map((model) => ({ id: model.id, label: model.label }));
   return {
     id,
     label,
@@ -392,6 +613,7 @@ function applyOverride(
     hasHistory: patch.hasHistory ?? base?.hasHistory ?? false,
     linkBy: patch.linkBy ?? base?.linkBy ?? 'cwd+time',
     runner,
+    ...(models === undefined ? {} : { models }),
   };
 }
 

@@ -1,10 +1,9 @@
 /**
  * Вид «вся почта работы»: письма без комнаты одной лентой (спека 6.4: «письма
  * без комнаты показывает вид «вся почта работы» ... письма с комнатой —
- * уходят в её отдельную ленту»). Комнатная лента заведена в куске 3.6 —
- * `lib/room-view.ts`, поверх этого же модуля: он переиспользует
- * `recipientsOf`/`isUnreadFor`/`toLetterView`/`DECISIONS_SHOWN` отсюда, чтобы
- * разбор письма в адресатов и отметку «непрочитано» не дублировать.
+ * уходят в её отдельную ленту»). Комнатную ленту строит
+ * `components/rooms/feed-model.ts`; он берёт `recipientsOf`/`DECISIONS_SHOWN` отсюда,
+ * чтобы разбор письма в адресатов не дублировать.
  *
  * Перенос `roomView` из `tui/src/room-view.ts` (дизайн комнаты §5) — тот же смысл, что
  * и у прежней «комнаты»: в отличие от треда (`threadOf`) лента не смотрит на
@@ -13,7 +12,7 @@
  *   - здесь нет терминальной ширины/высоты — лента рисуется и прокручивается
  *     в DOM (`MailPanel.tsx`), а не режется построчно под фиксированный экран;
  *   - до куска 3.6 сюда попадали вообще все письма, и с `roomId`, и без — тут
- *     это уже неверно: письма комнаты показывает `room-view.ts`.
+ *     это уже неверно: письма комнаты показывает `components/rooms/feed-model.ts`.
  *
  * `recipientsOf`/`isUnreadFor` перенесены из `core/work/letters.ts` значением:
  * рендерер тянет из `@harnas/core` только типы (см. `lib/dot-state.ts`,
@@ -31,7 +30,7 @@ import { treeOrder } from './tree-order.js';
 const HUMAN = 'human';
 const SYSTEM = 'system';
 
-/** Сколько последних решений видно в шапке; старше — строкой «+N раньше» (используется и `room-view.ts`). */
+/** Сколько последних решений видно в шапке; старше — строкой «+N раньше» (используется и `components/rooms/feed-model.ts`). */
 export const DECISIONS_SHOWN = 5;
 
 /**
@@ -78,9 +77,8 @@ export interface MailView {
 }
 
 /**
- * Одно письмо в строку ленты — общая для «всей почты» и для `room-view.ts`
- * (там письма те же, разбор адресатов и отметки «непрочитано» одинаковый,
- * разнится только фильтр по `roomId` вызывающей стороны).
+ * Одно письмо в строку ленты «всей почты»: разбор адресатов и отметка
+ * «непрочитано» — здесь, фильтр по `roomId` — у вызывающей стороны.
  */
 export function toLetterView(message: Message, map: WorkMap, tag: (id: string) => string): LetterView {
   const recipients = recipientsOf(message, map);
@@ -107,7 +105,7 @@ export function mailView(
   const map = entry.map;
   const tag = (id: string): string => participantTag(map, id, models[id] ?? null, providers);
   // Только письма без комнаты (спека 6.4) — письма комнаты показывает
-  // `room-view.ts#roomView`.
+  // `components/rooms/feed-model.ts`.
   const messages = map.messages.filter((message) => message.roomId === null).sort((a, b) => a.at.localeCompare(b.at));
 
   const letters = messages.map((message) => toLetterView(message, map, tag));

@@ -24,3 +24,9 @@ if (running === undefined) {
 
 process.env['HOME'] = home;
 process.env['USERPROFILE'] = home;
+
+// Хост, который тест поднимает отдельным процессом (`tsx main.ts` в `host.test.ts`), на старте
+// спрашивает у провайдеров версию (`<команда> --version`). Настоящие claude и codex в тестах
+// запускать нельзя даже с `--version`: пробу отключает переменная, её наследуют дочерние процессы.
+// Тесты самой пробы зовут `probeCliVersion` на выдуманную команду или подсовывают `probeVersion`.
+process.env['HARNAS_SKIP_VERSION_PROBE'] = '1';

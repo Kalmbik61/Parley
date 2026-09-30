@@ -1,7 +1,8 @@
 /**
- * Страж лицензий сборки (ревью M7, аудит приёмки MVP): NOTICE и лицензия шрифта Geist едут в
- * `.app` (`extraResources` electron-builder), а NOTICE называет каждый файл, адаптированный
- * из shadcn/ui, и таблицу палитр терминала из Orca.
+ * Страж лицензий сборки (ревью M7, аудит приёмки MVP): NOTICE и лицензии шрифтов Figtree и
+ * Caprasimo едут в `.app` (`extraResources` electron-builder), а NOTICE называет каждый файл,
+ * адаптированный из shadcn/ui, и таблицу палитр терминала из Orca, и оба шрифта — с правообладателями
+ * из их OFL-файлов и происхождением (Google Fonts).
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -31,10 +32,36 @@ function shadcnFiles(): string[] {
   return out.sort();
 }
 
+const fontsDir = path.join(desktopRoot, 'src', 'renderer', 'assets', 'fonts');
+const firstLine = (file: string): string => readFileSync(path.join(fontsDir, file), 'utf8').split('\n')[0] ?? '';
+
 describe('NOTICE и лицензии в сборке (ревью M7)', () => {
-  it('electron-builder кладёт NOTICE и OFL шрифта Geist в Contents/Resources', () => {
+  it('electron-builder кладёт NOTICE и OFL шрифтов Figtree и Caprasimo в Contents/Resources', () => {
     expect(builder).toMatch(/- from: \.\.\/\.\.\/NOTICE\n\s+to: NOTICE\n/);
-    expect(builder).toMatch(/- from: src\/renderer\/assets\/fonts\/OFL\.txt\n\s+to: licenses\/Geist-OFL\.txt\n/);
+    expect(builder).toMatch(/- from: src\/renderer\/assets\/fonts\/Figtree-OFL\.txt\n\s+to: licenses\/Figtree-OFL\.txt\n/);
+    expect(builder).toMatch(/- from: src\/renderer\/assets\/fonts\/Caprasimo-OFL\.txt\n\s+to: licenses\/Caprasimo-OFL\.txt\n/);
+  });
+
+  it('Geist ушёл: ни из electron-builder, ни из NOTICE', () => {
+    expect(builder).not.toMatch(/geist/i);
+    expect(notice).not.toMatch(/geist/i);
+  });
+
+  it('NOTICE: Figtree и Caprasimo — файлы, правообладатели из OFL-файлов, происхождение Google Fonts, лицензия рядом', () => {
+    for (const [name, file, license] of [
+      ['Figtree', 'Figtree-Variable.ttf', 'Figtree-OFL.txt'],
+      ['Caprasimo', 'Caprasimo.ttf', 'Caprasimo-OFL.txt'],
+    ] as const) {
+      expect(notice, name).toContain(`\n${name}\n`);
+      expect(notice, `${name}: файл`).toContain(`packages/desktop/src/renderer/assets/fonts/${file}`);
+      // Строка «Copyright …» — та самая, что первой стоит в OFL-файле: правится лицензия — правится и NOTICE.
+      expect(firstLine(license), `${name}: первая строка OFL`).toMatch(/^Copyright \d{4} The \w+ Project Authors/);
+      expect(notice, `${name}: правообладатель`).toContain(firstLine(license));
+      expect(notice, `${name}: лицензия в .app`).toContain(`Contents/Resources/licenses/${license}`);
+      expect(notice, `${name}: текст лицензии`).toContain(`packages/desktop/src/renderer/assets/fonts/${license}`);
+    }
+    expect(notice).toContain('SIL Open Font License, Version 1.1');
+    expect(notice).toMatch(/Google Fonts/);
   });
 
   it('NOTICE называет shadcn/ui с его лицензией MIT и каждый адаптированный файл', () => {
@@ -43,6 +70,42 @@ describe('NOTICE и лицензии в сборке (ревью M7)', () => {
     const files = shadcnFiles();
     expect(files.length).toBeGreaterThan(0);
     for (const file of files) expect(notice, file).toContain(file);
+  });
+
+  // Решение 6 спеки окна: брендовые значки — решение пользователя для личной неподписанной сборки, а не
+  // лицензия. NOTICE называет файлы, откуда они и чьи это знаки, и не говорит о лицензии, которой нет.
+  it('NOTICE: значки провайдеров — файлы, происхождение, знаки Anthropic и OpenAI, без слов о лицензии', () => {
+    const rule = `\n${'-'.repeat(78)}`;
+    const start = notice.indexOf('\nЗначки провайдеров\n');
+    expect(start, 'раздел «Значки провайдеров»').toBeGreaterThan(-1);
+    // Под названием стоит своя линия, за телом — линия следующего раздела.
+    const underline = notice.indexOf(rule, start);
+    const next = notice.indexOf(rule, underline + 1);
+    const section = notice.slice(underline, next === -1 ? undefined : next);
+    for (const file of ['claude.svg', 'codex.svg', 'codex-light.svg']) {
+      expect(section, file).toContain(`packages/desktop/src/renderer/assets/providers/${file}`);
+      expect(readFileSync(path.join(desktopRoot, 'src', 'renderer', 'assets', 'providers', file), 'utf8'), `${file} лежит в assets`).toContain('<svg');
+    }
+    expect(section).toContain('docs/design/2026-09-29-rooms-organic/prototype/assets');
+    expect(section).toMatch(/Anthropic[^\n]*Claude/);
+    expect(section).toMatch(/OpenAI[^\n]*Codex/);
+    expect(section).not.toMatch(/licen[sc]|лиценз/i);
+  });
+
+  // Правки ревью куска 2: раздел говорил, что окно рисует значки «на вкладках», хотя `AgentIcon` со вкладок
+  // убран — их нет на снимках handoff. Места, названные в NOTICE, должны совпадать с теми, где он есть.
+  it('NOTICE: значки провайдеров — только там, где окно их рисует (строка статуса, сайдбар), не на вкладках', () => {
+    const rule = `\n${'-'.repeat(78)}`;
+    const underline = notice.indexOf(rule, notice.indexOf('\nЗначки провайдеров\n'));
+    const next = notice.indexOf(rule, underline + 1);
+    const section = notice.slice(underline, next === -1 ? undefined : next);
+    const usedIn = (file: string): boolean => readFileSync(path.join(desktopRoot, 'src', 'renderer', file), 'utf8').includes('<AgentIcon');
+    expect(section).toMatch(/строке статуса/);
+    expect(usedIn('shell/StatusBar.tsx')).toBe(true);
+    expect(section).toMatch(/сайдбаре/);
+    expect(usedIn('sidebar/SessionRow.tsx')).toBe(true);
+    expect(section).not.toMatch(/вкладк/);
+    expect(usedIn('layout/Tab.tsx')).toBe(false);
   });
 
   it('NOTICE называет таблицу палитр терминала из Orca', () => {

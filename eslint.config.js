@@ -23,7 +23,16 @@ const browserGlobals = {
 };
 
 export default tseslint.config(
-  { ignores: ['**/dist/**', 'claude-export/**', 'packages/desktop/out/**'] },
+  {
+    ignores: [
+      '**/dist/**',
+      'claude-export/**',
+      'packages/desktop/out/**',
+      // Интерактивный прототип комнат — пользовательский, со своей сборкой; не код окна.
+      // Vitest окна его уже исключает (`packages/desktop/vitest.config.ts`).
+      'packages/desktop/prototype/**',
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   prettier,

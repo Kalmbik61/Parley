@@ -128,3 +128,16 @@ describe('FindBar (тест 3 куска 9.2b)', () => {
     expect(toast).not.toHaveBeenCalled();
   });
 });
+
+// Наследство куска 1 (ревью): заливка hover `--accent` (text 9 %) снижает `--muted-foreground` ниже 4.5:1, поэтому
+// на hover текст кнопок полосы — основной цвет, а не приглушённый.
+describe('FindBar — hover кнопок (наследство куска 1)', () => {
+  it('кнопки ←, →, × на hover меняют цвет текста на основной, а не оставляют muted', () => {
+    render(<FindBar bridge={bridge} webContentsId={7} onClose={() => {}} />);
+    for (const label of ['Previous match', 'Next match', 'Close']) {
+      const button = screen.getByRole('button', { name: label });
+      expect(button.className, label).toContain('hover:bg-accent');
+      expect(button.className, label).toContain('hover:text-accent-foreground');
+    }
+  });
+});

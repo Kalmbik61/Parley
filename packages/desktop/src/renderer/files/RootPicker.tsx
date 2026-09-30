@@ -49,8 +49,10 @@ export function RootPicker({ entry, value, onChange }: RootPickerProps): JSX.Ele
         if (option !== undefined) onChange(option.spec);
       }}
     >
-      {/* Ветка бывает длиннее сайдбара: обрезка многоточием, полный текст — в title. */}
-      <SelectTrigger className="h-7 min-w-0 flex-1 px-2 text-xs" title={selected?.label}>
+      {/* Ветка бывает длиннее сайдбара: обрезка многоточием, полный текст — в title. Выбор корня — заголовок
+          панели (спека окна 2026-09-29, 1.8: Caprasimo 17px): без рамки, она вернётся на фокусе и пока
+          список открыт. */}
+      <SelectTrigger className="h-8 min-w-0 flex-1 border-transparent bg-transparent px-2 font-heading text-[17px] leading-[1.2] hover:border-transparent hover:bg-foreground/6" title={selected?.label}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>

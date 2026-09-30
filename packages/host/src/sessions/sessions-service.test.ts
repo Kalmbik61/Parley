@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,12 +8,14 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   addSession,
+  createPendingSession,
   createWork,
   createWorktree,
   NEW_LABEL,
   plannedWorktree,
   readMap,
   saveConfig,
+  SKILL_MD,
   SYSTEM,
   transitionSession,
   updateMap,
@@ -249,6 +251,174 @@ describe('create() + launch(): argv и окружение процесса', () 
 
     await service.stop(named);
     await service.stop(unnamed);
+  });
+});
+
+describe('create(): модель и усилие из диалога (дизайн комнат, 3.2)', () => {
+  /** Запускает сессию провайдера и отдаёт argv стаба; `task: ''` — тихий старт, как у комнат. */
+  async function launched(
+    provider: string,
+    choice: { model?: string; effort?: 'low' | 'medium' | 'high' },
+    task = '',
+  ): Promise<string[]> {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider,
+      label: '',
+      task,
+      parent: null,
+      ...choice,
+    });
+    const { argv } = await readArgs(argsFile);
+    await service.stop(ref);
+    return argv;
+  }
+
+  it('claude: --model и --effort доезжают до команды', async () => {
+    const argv = await launched('claude', { model: 'opus', effort: 'high' });
+
+    expect(argv[argv.indexOf('--model') + 1]).toBe('opus');
+    expect(argv[argv.indexOf('--effort') + 1]).toBe('high');
+  });
+
+  it('claude с задачей: бриф по-прежнему последним аргументом, флаги перед ним', async () => {
+    const argv = await launched('claude', { model: 'sonnet', effort: 'low' }, 'сделай штуку');
+
+    expect(argv[argv.indexOf('--model') + 1]).toBe('sonnet');
+    expect(argv[argv.indexOf('--effort') + 1]).toBe('low');
+    expect(argv.at(-1)).toContain('сделай штуку');
+  });
+
+  it('без выбора флагов нет: сессия живёт на модели и усилии по умолчанию', async () => {
+    const argv = await launched('claude', {});
+
+    expect(argv).not.toContain('--model');
+    expect(argv).not.toContain('--effort');
+  });
+
+  it('codex: --model и -c model_reasoning_effort в аргументах', async () => {
+    setEnv('HARNAS_CODEX_BIN', STUB);
+    const argv = await launched('codex', { model: 'gpt-6.1-sol', effort: 'medium' });
+
+    expect(argv[argv.indexOf('--model') + 1]).toBe('gpt-6.1-sol');
+    expect(argv).toContain('model_reasoning_effort="medium"');
+  });
+
+  it('codex: итоговые флаги запуска — свои настройки харнесса, без обходов', async () => {
+    setEnv('HARNAS_CODEX_BIN', STUB);
+    const argv = await launched('codex', {});
+
+    // Не считая бинаря и скрипта заглушки: то, что получил бы настоящий codex.
+    const args = argv.slice(2);
+    expect(args.slice(0, 3)).toEqual(['--no-daemon', '-a', 'on-request']);
+    const overrides = args.flatMap((arg, index) => (args[index - 1] === '-c' ? [arg] : []));
+    expect(overrides.map((override) => override.split('=')[0])).toEqual([
+      'mcp_servers.harnas',
+      'tui.terminal_title',
+      'tui.notifications',
+      'tui.notification_method',
+      'tui.notification_condition',
+      'notify',
+    ]);
+    expect(args.join(' ')).not.toMatch(/never|dangerous|yolo|full-auto|danger-full|projects|hooks/);
+  });
+
+  it('процесс стартует с provider из карты: codex — для разбора терминала, claude — без него', async () => {
+    setEnv('HARNAS_CODEX_BIN', STUB);
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const pty = createPtyManager(fakeHost());
+    const service = createSessionsService(fakeHost(), fakeWorks(), pty, fakeActivity());
+    const create = (provider: string) =>
+      service.create({ projectPath: project, workId: work.work.id, provider, label: '', task: '', parent: null });
+
+    const codex = await create('codex');
+    const claude = await create('claude');
+    expect(pty.get(codex)?.provider).toBe('codex');
+    expect(pty.get(claude)?.provider).toBe('claude');
+
+    await service.stop(codex);
+    await service.stop(claude);
+  });
+
+  it('claude: значение списка со скобками доезжает до команды как есть, одним аргументом', async () => {
+    const argv = await launched('claude', { model: 'sonnet[1m]' });
+
+    expect(argv[argv.indexOf('--model') + 1]).toBe('sonnet[1m]');
+  });
+
+  it('пустая model — «по умолчанию»: флага нет, как без выбора', async () => {
+    const argv = await launched('claude', { model: '', effort: 'low' });
+
+    expect(argv).not.toContain('--model');
+    // Усилие — отдельный выбор и от пустой модели не зависит.
+    expect(argv[argv.indexOf('--effort') + 1]).toBe('low');
+  });
+
+  it('модель не из списка провайдера — bad_request: процесс не запускается, записей в карте не появляется', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    setEnv('HARNAS_CODEX_BIN', STUB);
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const worksDir = path.join(project, '.harnas', 'works');
+    const worksBefore = await readdir(worksDir);
+
+    const create = (workId: string | null, provider: string, task: string, model: string) =>
+      service.create({ projectPath: project, workId, provider, label: '', task, parent: null, model });
+    // Все три пути создания: тихий старт, сессия с задачей (`pending`) и новая работа под быструю сессию.
+    for (const attempt of [
+      create(work.work.id, 'claude', '', 'gpt-6-sol'),
+      create(work.work.id, 'claude', 'сделай штуку', 'sonnet[1M]'),
+      create(null, 'codex', '', 'opus'),
+    ]) {
+      await expect(attempt).rejects.toMatchObject({ name: 'HostError', code: 'bad_request' });
+    }
+
+    expect(existsSync(argsFile)).toBe(false);
+    expect((await readMap(project, work.work.id)).sessions).toEqual([]);
+    // Отказ раньше первой записи: новой работы под `workId: null` тоже не завели.
+    expect(await readdir(worksDir)).toEqual(worksBefore);
+  });
+
+  describe('свои списки моделей из providers.json', () => {
+    /** Свой дом харнесса с `providers.json`: реестр читается оттуда же, откуда и хост в бою. */
+    async function withProviders(data: unknown): Promise<void> {
+      const home = path.join(project, 'свой-дом-харнесса');
+      await mkdir(home, { recursive: true });
+      await writeFile(path.join(home, 'providers.json'), JSON.stringify(data), 'utf8');
+      setEnv('HARNAS_HOME', home);
+    }
+
+    it('модель из своего списка доезжает до команды, а из встроенного, которого в нём нет, — bad_request', async () => {
+      await withProviders({ claude: { models: [{ id: 'my-new-model', label: 'Моя новая' }] } });
+
+      const argv = await launched('claude', { model: 'my-new-model' });
+      expect(argv[argv.indexOf('--model') + 1]).toBe('my-new-model');
+      await expect(launched('claude', { model: 'opus' })).rejects.toMatchObject({ code: 'bad_request' });
+    });
+
+    it('провайдер без списка — прежнее правило: любое значение идёт в команду, где шаблон принимает {model}', async () => {
+      await withProviders({
+        smart: { badge: 'Smart', command: 'smart', args: ['--m', '{model}', '{prompt}'] },
+      });
+      setEnv('HARNAS_SMART_BIN', STUB);
+
+      const argv = await launched('smart', { model: 'что-то-своё' });
+      expect(argv[argv.indexOf('--m') + 1]).toBe('что-то-своё');
+    });
+  });
+
+  it('провайдер без флагов (glm) выбор не получает: поле отбрасывается', async () => {
+    setEnv('HARNAS_GLM_BIN', STUB);
+    const argv = await launched('glm', { model: 'glm-4', effort: 'high' });
+
+    expect(argv.slice(2)).toEqual([]);
   });
 });
 
@@ -783,5 +953,153 @@ describe('worktree (план, кусок 4.2)', () => {
     });
     expect(existsSync(info.path)).toBe(true);
     expect((await readMap(project, work.work.id)).sessions.some((s) => s.id === sessionId)).toBe(true);
+  });
+});
+
+describe('скилл harnas при запуске сессии (кусок 10 плана комнат)', () => {
+  const skillIn = (dir: string): string => path.join(dir, '.agents', 'skills', 'harnas', 'SKILL.md');
+  const aliasIn = (dir: string): string => path.join(dir, '.claude', 'skills', 'harnas');
+  const porcelain = async (dir: string): Promise<string> =>
+    (await runGit('git', ['-C', dir, 'status', '--porcelain', '-uall'])).stdout;
+
+  it('создание сессии кладёт скилл в проект: канонная копия, симлинк для Claude Code, строки в info/exclude', async () => {
+    await initGitProject(project);
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'бэкенд',
+      task: '',
+      parent: null,
+    });
+
+    expect(await readFile(skillIn(project), 'utf8')).toBe(SKILL_MD);
+    expect((await lstat(aliasIn(project))).isSymbolicLink()).toBe(true);
+    expect(await readlink(aliasIn(project))).toBe(path.join('..', '..', '.agents', 'skills', 'harnas'));
+    const status = await porcelain(project);
+    expect(status).not.toContain('.agents');
+    expect(status).not.toContain('.claude');
+
+    await service.stop(ref);
+  });
+
+  it('сессия со своим worktree: скилл и в worktree, где стартует стаб, и в проекте; git status обоих чист', async () => {
+    await initGitProject(project);
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    setEnv('HARNAS_WORKTREE_ROOT', await tempWorktreeRoot());
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'сделай штуку',
+      parent: null,
+      worktree: true,
+    });
+
+    const args = await readArgs(argsFile);
+    const worktree = (await readMap(project, work.work.id)).sessions.find((item) => item.id === ref.sessionId)
+      ?.worktree?.path as string;
+    expect(await realpath(args.cwd)).toBe(await realpath(worktree));
+    // Скилл лежит уже к моменту старта процесса: агент видит его с первого хода.
+    expect(await readFile(skillIn(worktree), 'utf8')).toBe(SKILL_MD);
+    expect((await lstat(aliasIn(worktree))).isSymbolicLink()).toBe(true);
+    expect(await readFile(skillIn(project), 'utf8')).toBe(SKILL_MD);
+    for (const dir of [project, worktree]) {
+      const status = await porcelain(dir);
+      expect(status, dir).not.toContain('.agents');
+      expect(status, dir).not.toContain('.claude');
+    }
+
+    await service.stop(ref);
+  });
+
+  it('agentSkills выключена: ни файла, ни учёта, сессия всё равно запускается', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    setEnv('HARNAS_AGENT_SKILLS', '0');
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'сделай штуку',
+      parent: null,
+    });
+
+    await readArgs(argsFile);
+    expect(existsSync(path.join(project, '.agents'))).toBe(false);
+    expect(existsSync(path.join(project, '.claude'))).toBe(false);
+    expect(existsSync(path.join(project, '.harnas', 'skills-receipt.json'))).toBe(false);
+
+    await service.stop(ref);
+  });
+
+  it('чужой скилл в проекте не тронут; сессия стартует, окно получает одно host.notice на два запуска', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    await mkdir(path.dirname(skillIn(project)), { recursive: true });
+    await writeFile(skillIn(project), 'скилл команды\n', 'utf8');
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const create = (label: string) =>
+      service.create({
+        projectPath: project,
+        workId: work.work.id,
+        provider: 'claude',
+        label,
+        task: 'сделай штуку',
+        parent: null,
+      });
+    const first = await create('один');
+    await readArgs(argsFile);
+    const second = await create('два');
+
+    expect(await readFile(skillIn(project), 'utf8')).toBe('скилл команды\n');
+    expect(existsSync(aliasIn(project))).toBe(false);
+    const notices = broadcasts.filter((item) => item.event === 'host.notice');
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.data).toMatchObject({ kind: 'skill-foreign', ref: null });
+
+    await service.stop(first);
+    await service.stop(second);
+  });
+});
+
+describe('модель и усилие из карты: сессия, заведённая spawn_session', () => {
+  it('pending от spawn_session запускается с записанными моделью и усилием: флаги в argv стаба', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    // Так `spawn_session` агента заводит запись: выбор лежит в карте, а поднимает её хост позже и без диалога.
+    const sessionId = await createPendingSession(project, work.work.id, {
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'сделай штуку',
+      model: 'opus',
+      effort: 'high',
+    });
+    const ref: SessionRef = { projectPath: project, workId: work.work.id, sessionId };
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    await service.launch(ref, 'launch');
+
+    const args = await readArgs(argsFile);
+    expect(args.argv[args.argv.indexOf('--model') + 1]).toBe('opus');
+    expect(args.argv[args.argv.indexOf('--effort') + 1]).toBe('high');
+
+    await service.stop(ref);
   });
 });

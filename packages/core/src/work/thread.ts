@@ -93,3 +93,12 @@ export function sessionTag(id: string): string {
   const match = SESSION_ID.exec(id);
   return match === null ? id : `S${match[1]}`;
 }
+
+/**
+ * Токен упоминания сессии в тексте комнаты: `s-04` → `@s04`. Лента окна рисует такой токен
+ * чипом с ярлыком участника (дизайн окна комнат, 2.2); чужая форма id печатается как есть.
+ */
+export function sessionMention(id: string): string {
+  const match = SESSION_ID.exec(id);
+  return match === null ? `@${id}` : `@s${match[1]}`;
+}

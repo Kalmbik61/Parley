@@ -304,7 +304,7 @@ test.describe('редактор файла на собранном окне', ()
       await window.keyboard.press('Enter');
       await expect(window.locator('[data-palette]')).toHaveCount(0);
     };
-    /** Фон редактора — фон токена `--editor-surface` текущей темы. */
+    /** Фон редактора — фон токена `--editor-surface` текущей темы: лист центра `--sheet` (светлая #f9f4ed, тёмная #0b0a09). */
     const editorBackground = (): Promise<string> =>
       window.locator('.monaco-editor .monaco-editor-background').first().evaluate((el) => getComputedStyle(el).backgroundColor);
 
@@ -319,16 +319,16 @@ test.describe('редактор файла на собранном окне', ()
     const lines = window.locator('.monaco-editor .view-lines').first();
     await expect(lines).toContainText('export const a = 1;');
     await expect(window.getByText("Editor didn't load")).toHaveCount(0);
-    expect(await editorBackground()).toBe('rgb(255, 255, 255)');
+    expect(await editorBackground()).toBe('rgb(249, 244, 237)');
 
     // Смена темы при открытом файле — в обе стороны: редактор следует, текст на месте.
     await pickTheme('Theme: dark');
     await expect.poll(isDark).toBe(true);
-    await expect.poll(editorBackground).toBe('rgb(30, 30, 30)');
+    await expect.poll(editorBackground).toBe('rgb(11, 10, 9)');
     await expect(lines).toContainText('export const a = 1;');
     await pickTheme('Theme: light');
     await expect.poll(isDark).toBe(false);
-    await expect.poll(editorBackground).toBe('rgb(255, 255, 255)');
+    await expect.poll(editorBackground).toBe('rgb(249, 244, 237)');
     await expect(lines).toContainText('export const a = 1;');
     await expect(window.getByText("Editor didn't load")).toHaveCount(0);
 

@@ -26,16 +26,18 @@ export interface DialogsState {
    */
   newWork: { open: boolean; projectPath: string | null; title: string };
   /**
-   * `work` — работа диалога: «New session» из меню карточки передаёт свою, и у неактивной
-   * карточки диалог не должен уйти в чужую работу; `null` — активная работа (⌘T).
+   * Диалог «New session or room» (кусок 7 плана «Organic», спека окна 2026-09-29, 1.5). `work` — работа диалога:
+   * «New session» из меню карточки передаёт свою, и у неактивной карточки диалог не должен уйти в чужую работу;
+   * `null` — активная работа (⌘T). `room` — «New room» (меню карточки, палитра): диалог открывается сразу с двумя
+   * агентами, то есть комнатой.
    */
-  newSession: { open: boolean; parentSessionId: string | null; work: DialogWork | null };
+  newSession: { open: boolean; work: DialogWork | null; room: boolean };
   settings: boolean;
   /**
-   * «Создать комнату с…» (кусок 2.3). `requiredMember` — сессия, с которой открыли пункт
-   * меню строки; `null` — «New room» из меню карточки (кусок 3.4), обязательного нет.
+   * Диалог «New room» из двух сессий (1.6): сессию `dragged` бросили на сессию `target` той же работы; `null` — диалог
+   * закрыт. Название и ведущий — состояние самого диалога: в стор попадает только то, что нужно, чтобы его открыть.
    */
-  createRoom: { projectPath: string; workId: string; requiredMember: { id: string; label: string } | null } | null;
+  mergeRoom: (DialogWork & { dragged: string; target: string }) | null;
   /**
    * Подтверждение перезапуска хоста (кусок 6.3): одно на «Host is outdated — restart» строки
    * статуса и действие палитры `host.restart`. Строка статуса с 4.2 работает на пропах —
@@ -46,9 +48,9 @@ export interface DialogsState {
 
 const CLOSED_DIALOGS: DialogsState = {
   newWork: { open: false, projectPath: null, title: '' },
-  newSession: { open: false, parentSessionId: null, work: null },
+  newSession: { open: false, work: null, room: false },
   settings: false,
-  createRoom: null,
+  mergeRoom: null,
   restartHost: false,
 };
 
@@ -82,6 +84,13 @@ export interface UiState {
    * Пишет только `terminal/TerminalSurface.tsx` (кусок 2.5).
    */
   visibleSessionRefs: Record<string, true>;
+  /**
+   * Черновики полей ввода комнат (дизайн комнат, 3.4): ключ — `lib/room-view.ts#roomKey`, значение — текст
+   * поля с токенами `@s02`. Только в памяти окна, в `ui.json` не пишутся: переживают смену вкладок
+   * и работ (тело комнаты при этом размонтируется), но не перезапуск окна. Пустого черновика в
+   * записи нет.
+   */
+  composerDrafts: Record<string, string>;
 
   /** Зеркало `ui.json` (кусок 2.3, спека 3.4): до `app.loadUi()` — значения по умолчанию. */
   ui: UiFile;
@@ -104,23 +113,34 @@ export interface UiState {
    * `ui.json`. Счётчики, бейдж, `attention.next` и выбор соседа архивные не берут и при нём.
    */
   showArchived: boolean;
+  /**
+   * Развёрнутость строк комнат в карточках сайдбара (кусок 5 плана «Organic», спека окна 2026-09-29, 2.6 и 3.4):
+   * ручной шеврон и клик по строке комнаты перекрывают правило «развёрнута, пока открыта вкладка комнаты или её
+   * участника» до перезапуска окна. Ключ — `lib/room-view.ts#roomKey`; нет ключа — решает правило. Только в
+   * памяти: в `ui.json` не пишется.
+   */
+  roomExpanded: Record<string, boolean>;
 
   /** Ставит/снимает `.dark` на `<html>` (`applyDarkClass`) и пишет в стор — единственная точка входа для обоих. */
   setDark: (dark: boolean) => void;
   /** `TerminalSurface.tsx` зовёт на каждую смену видимости и `false` при размонтировании. */
   setSessionVisible: (refKey: string, visible: boolean) => void;
   setWindowFocused: (focused: boolean) => void;
+  /** Поле ввода комнаты зовёт на каждую правку; пустой текст убирает запись. */
+  setComposerDraft: (draftKey: string, draft: string) => void;
   openNewWorkDialog: (projectPath?: string | null, title?: string) => void;
   closeNewWorkDialog: () => void;
-  openNewSessionDialog: (parentSessionId: string | null, work?: DialogWork) => void;
+  /** `work` — работа диалога (`null` — активная); `room` — открыть сразу комнатой, с двумя агентами. */
+  openNewSessionDialog: (work?: DialogWork, options?: { room?: boolean }) => void;
   closeNewSessionDialog: () => void;
   openSettingsDialog: () => void;
   closeSettingsDialog: () => void;
-  openCreateRoomDialog: (input: NonNullable<DialogsState['createRoom']>) => void;
-  closeCreateRoomDialog: () => void;
+  openMergeRoomDialog: (input: NonNullable<DialogsState['mergeRoom']>) => void;
+  closeMergeRoomDialog: () => void;
   confirmRestartHost: () => void;
   closeRestartHostDialog: () => void;
   toggleShowArchived: () => void;
+  setRoomExpanded: (key: string, expanded: boolean) => void;
   toggleWake: (bridge: HarnasBridge) => Promise<void>;
 
   /**
@@ -174,11 +194,13 @@ export const useUiStore = create<UiState>((set, get) => {
     wakePaused: null,
     dialogs: CLOSED_DIALOGS,
     visibleSessionRefs: {},
+    composerDrafts: {},
     ui: DEFAULT_UI,
     uiLoaded: false,
     sidebarHovering: false,
     sidebarHolds: {},
     showArchived: false,
+    roomExpanded: {},
 
     setDark: (dark) => {
       applyDarkClass(dark);
@@ -199,27 +221,40 @@ export const useUiStore = create<UiState>((set, get) => {
 
     setWindowFocused: (focused) => set({ windowFocused: focused }),
 
+    setComposerDraft: (draftKey, draft) =>
+      set((state) => {
+        // Тот же текст — тот же стор: поле ввода зовёт это на каждый `input`, а подписчики не должны
+        // перерисовываться зря.
+        if ((state.composerDrafts[draftKey] ?? '') === draft) return state;
+        if (draft === '') {
+          return { composerDrafts: Object.fromEntries(Object.entries(state.composerDrafts).filter(([key]) => key !== draftKey)) };
+        }
+        return { composerDrafts: { ...state.composerDrafts, [draftKey]: draft } };
+      }),
+
     openNewWorkDialog: (projectPath, title) =>
       set((state) => ({
         dialogs: { ...state.dialogs, newWork: { open: true, projectPath: projectPath ?? null, title: title ?? '' } },
       })),
     closeNewWorkDialog: () =>
       set((state) => ({ dialogs: { ...state.dialogs, newWork: { open: false, projectPath: null, title: '' } } })),
-    openNewSessionDialog: (parentSessionId, work) =>
+    openNewSessionDialog: (work, options) =>
       set((state) => ({
-        dialogs: { ...state.dialogs, newSession: { open: true, parentSessionId, work: work ?? null } },
+        dialogs: { ...state.dialogs, newSession: { open: true, work: work ?? null, room: options?.room === true } },
       })),
     closeNewSessionDialog: () =>
       set((state) => ({
-        dialogs: { ...state.dialogs, newSession: { open: false, parentSessionId: null, work: null } },
+        dialogs: { ...state.dialogs, newSession: { open: false, work: null, room: false } },
       })),
     openSettingsDialog: () => set((state) => ({ dialogs: { ...state.dialogs, settings: true } })),
     closeSettingsDialog: () => set((state) => ({ dialogs: { ...state.dialogs, settings: false } })),
-    openCreateRoomDialog: (input) => set((state) => ({ dialogs: { ...state.dialogs, createRoom: input } })),
-    closeCreateRoomDialog: () => set((state) => ({ dialogs: { ...state.dialogs, createRoom: null } })),
+    openMergeRoomDialog: (input) => set((state) => ({ dialogs: { ...state.dialogs, mergeRoom: input } })),
+    closeMergeRoomDialog: () => set((state) => ({ dialogs: { ...state.dialogs, mergeRoom: null } })),
     confirmRestartHost: () => set((state) => ({ dialogs: { ...state.dialogs, restartHost: true } })),
     closeRestartHostDialog: () => set((state) => ({ dialogs: { ...state.dialogs, restartHost: false } })),
     toggleShowArchived: () => set((state) => ({ showArchived: !state.showArchived })),
+    setRoomExpanded: (key, expanded) =>
+      set((state) => (state.roomExpanded[key] === expanded ? state : { roomExpanded: { ...state.roomExpanded, [key]: expanded } })),
 
     toggleWake: async (bridge) => {
       const paused = get().wakePaused;

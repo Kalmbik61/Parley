@@ -8,7 +8,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
  * Карточки сайдбара (кусок 3.5, приёмка этапа 3, спека 6.2 и 6.6): порядок по вниманию, а не
- * по времени создания, и форма новой работы с «Create more».
+ * по времени создания, и диалог «New workspace» (кусок 7 плана «Organic», спека окна 2026-09-29, 1.7).
  *
  * Внимание двигается настоящими событиями хуков: тест дописывает строки в журнал сессии
  * (`<project>/.harnas/works/<workId>/events/<sessionId>.jsonl`), как это сделал бы хук
@@ -21,8 +21,8 @@ const mainEntry = path.resolve(dirname, '../out/main/index.js');
 const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
 /** Свой каталог проекта у каждого теста (`makeTempProject`). */
 let project = '';
-/** Ожидание очистки формы «Create more» (см. тест). */
-const FORM_CLEARED = { timeout: 15_000 };
+/** Ожидание закрытия диалога «New workspace»: `works.create` и `sessions.create` под нагрузкой отвечают и за 5 с. */
+const DIALOG_CLOSED = { timeout: 15_000 };
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
@@ -68,7 +68,7 @@ async function pointerAway(window: Page): Promise<void> {
   await window.mouse.move(box.x + box.width - 50, box.y + box.height / 2);
 }
 
-test.describe('карточки сайдбара и форма новой работы (кусок 3.5)', () => {
+test.describe('карточки сайдбара и диалог новой работы (куски 3.5 и 7)', () => {
   let home: string;
   let app: ElectronApplication | null = null;
 
@@ -118,50 +118,51 @@ test.describe('карточки сайдбара и форма новой раб
     await expect(window.locator(`[data-work-key="${second.key}"] [data-session-id="${s2}"] [data-state="blocked"]`)).toHaveCount(1);
   });
 
-  test('форма новой работы с «Create more» создаёт две работы подряд; проект — от «+» заголовка', async () => {
+  test('диалог «New workspace»: проект от «+» заголовка, название из первого промпта или введённое (⌘Enter); у каждой работы своя первая сессия', async () => {
     const { window } = await launch();
     // Проект уже известен по этой работе — «+» заголовка есть с первого кадра. Сессии в ней
     // нет: первая работа нового проекта без сессии попадает в снимок и так (core 087d3c8).
     await createWork(window, 'e2e-cards-seed');
     await expect(window.getByTestId('app-shell')).toBeVisible();
 
-    await window.getByRole('button', { name: 'New workspace in project', exact: true }).click();
+    await window.getByRole('button', { name: /^New workspace in / }).click();
     const dialog = window.getByRole('dialog');
-    await expect(dialog.getByRole('combobox', { name: 'Project' })).toHaveAttribute('title', project);
-    await dialog.getByRole('checkbox', { name: 'Create more' }).click();
+    const chosen = dialog.getByRole('radiogroup', { name: 'Project' }).getByRole('radio', { checked: true });
+    await expect(chosen).toHaveAttribute('title', project);
 
-    // Агента форма подставляет по ответу providers.list. Под нагрузкой «Create» успевали нажать
-    // раньше: проверка формы молча отказывала («Select an agent»), и название оставалось.
-    await expect(dialog.getByRole('combobox', { name: 'Agent' })).toHaveText('Claude');
+    // Агента диалог подставляет по ответу providers.list. Под нагрузкой «Create workspace» успевали нажать
+    // раньше: проверка молча отказывала («Select an agent»), и название оставалось.
+    await expect(dialog.getByRole('radiogroup', { name: 'Agent' }).getByRole('radio', { checked: true })).toHaveText('Claude Code');
 
-    const titleField = dialog.getByLabel('Title');
-    await titleField.fill('e2e-cards-one');
-    await dialog.getByRole('button', { name: 'Create' }).click();
-    // Форма осталась открытой и очистила название. Очищает её ответ sessions.create; при
-    // параллельных прогонах на нагруженной машине он приходил и за 5 с, и позже — граница
-    // ожидания по умолчанию, отсюда запас (`FORM_CLEARED`).
-    await expect(titleField).toHaveValue('', FORM_CLEARED);
-    await titleField.fill('e2e-cards-two');
-    await titleField.press('Meta+Enter');
-    await expect(titleField).toHaveValue('', FORM_CLEARED);
+    // Без названия: оно берётся из первой строки промпта, до 40 знаков.
+    await dialog.getByLabel(/^First prompt/).fill('e2e-cards-from-prompt\nsecond line of the task');
+    await dialog.getByRole('button', { name: 'Create workspace' }).click();
+    await expect(dialog).toBeHidden(DIALOG_CLOSED);
 
-    // Обе работы — с первой сессией; последняя созданная активна, её терминал открыт.
-    const created = async (): Promise<Array<{ title: string; sessions: number }>> => {
-      const snapshot = await call<{ entries: Array<{ map: { work: { title: string }; sessions: unknown[] } }> }>(window, 'works.list', {});
+    // Второй раз — введённое название и ⌘Enter.
+    await window.getByRole('button', { name: /^New workspace in / }).click();
+    const again = window.getByRole('dialog');
+    await again.getByLabel(/^Title/).fill('e2e-cards-typed');
+    await again.getByLabel(/^Title/).press('Meta+Enter');
+    await expect(again).toBeHidden(DIALOG_CLOSED);
+
+    // Обе работы — с первой сессией; у первой её задача — весь промпт, у второй — тихий старт; последняя активна, терминал открыт.
+    const created = async (): Promise<Array<{ title: string; sessions: number; task: string }>> => {
+      const snapshot = await call<{ entries: Array<{ map: { work: { title: string }; sessions: Array<{ task: string }> } }> }>(window, 'works.list', {});
       return snapshot.entries
-        .map((entry) => ({ title: entry.map.work.title, sessions: entry.map.sessions.length }))
+        .map((entry) => ({ title: entry.map.work.title, sessions: entry.map.sessions.length, task: entry.map.sessions[0]?.task ?? '' }))
         .filter((entry) => entry.title !== 'e2e-cards-seed')
         .sort((a, b) => a.title.localeCompare(b.title));
     };
-    await expect.poll(created).toEqual([
-      { title: 'e2e-cards-one', sessions: 1 },
-      { title: 'e2e-cards-two', sessions: 1 },
+    await expect.poll(created, DIALOG_CLOSED).toEqual([
+      { title: 'e2e-cards-from-prompt', sessions: 1, task: 'e2e-cards-from-prompt\nsecond line of the task' },
+      { title: 'e2e-cards-typed', sessions: 1, task: '' },
     ]);
     await expect(window.locator('[data-work-key]:not([role="tab"])')).toHaveCount(3);
     await expect(window.locator('#titlebar-tabs [role="tab"][data-tab-id^="terminal:"]')).toHaveCount(1);
   });
 
-  test('форма в новом проекте без «Start a session» — работа видна в сайдбаре', async () => {
+  test('диалог в новом проекте: «Choose a folder…» — папка в сегменте проектов; работа с первой сессией видна в сайдбаре', async () => {
     const { electronApp, window } = await launch();
     // Нативный выбор папки E2E не нажмёт — `showOpenDialog` в main отвечает сразу этим проектом.
     await electronApp.evaluate(({ dialog }, dir) => {
@@ -170,16 +171,15 @@ test.describe('карточки сайдбара и форма новой раб
 
     await window.getByTestId('landing').getByRole('button', { name: 'New workspace' }).click();
     const dialog = window.getByRole('dialog');
-    await dialog.getByRole('combobox', { name: 'Project' }).click();
-    await window.getByRole('option', { name: 'Choose a folder…' }).click();
-    await expect(dialog.getByRole('combobox', { name: 'Project' })).toHaveAttribute('title', project);
-    await dialog.getByRole('switch', { name: 'Start a session' }).click();
-    await dialog.getByLabel('Title').fill('e2e-cards-bare');
-    await dialog.getByRole('button', { name: 'Create' }).click();
-    await expect(dialog).toBeHidden();
+    // Работ нет — сегмента проектов нет, есть только «Choose a folder…».
+    await expect(dialog.getByRole('radiogroup', { name: 'Project' })).toHaveCount(0);
+    await dialog.getByRole('button', { name: 'Choose a folder…' }).click();
+    await expect(dialog.getByRole('radiogroup', { name: 'Project' }).getByRole('radio', { checked: true })).toHaveAttribute('title', project);
+    await dialog.getByLabel(/^Title/).fill('e2e-cards-bare');
+    await dialog.getByRole('button', { name: 'Create workspace' }).click();
+    await expect(dialog).toBeHidden(DIALOG_CLOSED);
 
-    // Без сессии в работе — только снимок хоста: раньше индекс опережал карту, и работа не
-    // появлялась до следующей записи карты.
+    // Работа видна с первой сессией: диалог 1.7 сессию запускает всегда.
     const card = window.locator('[data-work-key]:not([role="tab"])');
     await expect(card).toHaveCount(1);
     await expect(card).toContainText('e2e-cards-bare');
@@ -189,7 +189,7 @@ test.describe('карточки сайдбара и форма новой раб
       {},
     );
     expect(snapshot.entries.map((entry) => ({ title: entry.map.work.title, sessions: entry.map.sessions.length }))).toEqual([
-      { title: 'e2e-cards-bare', sessions: 0 },
+      { title: 'e2e-cards-bare', sessions: 1 },
     ]);
     const workId = snapshot.entries[0]?.map.work.id ?? '';
     await expect(card).toHaveAttribute('data-work-key', `${project} ${workId}`);

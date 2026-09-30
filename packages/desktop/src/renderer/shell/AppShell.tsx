@@ -4,8 +4,8 @@
  * активной работы (`LayoutView`); с куска 2.7 он единственный: прежний центр и
  * его флаг ушли.
  *
- * Палитра ⌘J (`palette/Palette.tsx`, кусок 6.2), `NewWorkComposer` и `CreateRoomDialog`
- * монтируются здесь же (а не в сайдбаре) — они нужны и над `Landing`, где
+ * Палитра ⌘J (`palette/Palette.tsx`, кусок 6.2), `NewWorkComposer` (1.7), `NewSessionOrRoomDialog` (1.5) и
+ * `MergeRoomDialog` (1.6) монтируются здесь же (а не в сайдбаре) — они нужны и над `Landing`, где
  * сайдбара вовсе нет. На историю переходов оболочка не подписана: её читает сама
  * открытая палитра.
  *
@@ -67,18 +67,32 @@ import { openNextAttention } from '../attention/next.js';
 import { useAttentionTotals } from '../attention/store.js';
 import { InterruptedBanner } from '../components/InterruptedBanner.js';
 import { WorksErrorBanner } from '../components/WorksErrorBanner.js';
-import { CreateRoomDialog, type RoomCandidate } from '../components/rooms/CreateRoomDialog.js';
+import { MergeRoomDialog } from '../components/dialogs/MergeRoomDialog.js';
+import { NewSessionOrRoomDialog } from '../components/dialogs/NewSessionOrRoomDialog.js';
 import { visibleWorkOrder } from '../sidebar/sort.js';
 import { SidebarSectionsWriter, useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
 import { NewWorkComposer } from '../sidebar/NewWorkComposer.js';
 import { WorkSidebar } from '../sidebar/WorkSidebar.js';
+import { cn } from '../lib/cn.js';
 import { sessionLabelFor, sessionRowLabel } from '../lib/participant.js';
+import { roomKey } from '../lib/room-view.js';
 import { workKey } from '../lib/tree-order.js';
 import { bufferKey, isBufferDirty } from '../files/buffer.js';
 import { createCloseGuard } from '../files/close-guard.js';
 import { askSaveChanges, WindowCloseQuestion } from '../files/SaveChangesDialog.js';
 import { absPathOf, bindBuffersToLayouts, bufferName, useFilesStore } from '../files/store.js';
-import { acceptsTerminal, applyDrop, centerOverlayOnCursor, dragItemOf, dropFromDragEnd, layoutCollision, type DragItem } from '../layout/dnd.js';
+import {
+  acceptsTerminal,
+  applyDrop,
+  centerOverlayOnCursor,
+  dragItemOf,
+  dropFromDragEnd,
+  layoutCollision,
+  sidebarDropFromDragEnd,
+  type DragItem,
+  type SidebarTarget,
+} from '../layout/dnd.js';
+import { resolveSidebarDrop } from '../layout/dnd-sidebar.js';
 import { setDropPreview } from '../layout/DropIndicator.js';
 import { tabId } from '../layout/ids.js';
 import { tabMeta } from '../layout/tab-meta.js';
@@ -86,7 +100,7 @@ import { LayoutView } from '../layout/LayoutView.js';
 import { createLru, type Lru } from '../layout/lru.js';
 import { SurfaceLayer } from '../layout/SurfaceLayer.js';
 import { useLayoutPersistence } from '../layout/persistence.js';
-import { selectedSessionOf, useLayoutStore } from '../layout/store.js';
+import { useLayoutStore } from '../layout/store.js';
 import { measureGroupSizes } from '../layout/measure.js';
 import { findTab, focusTab, groups, openTab } from '../layout/tree.js';
 import { openBrowserTabFrom, useBrowserStore } from '../browser/store.js';
@@ -141,6 +155,33 @@ function sessionOf(ref: SessionRef): WorkSession | null {
 function openSessionTab(ref: SessionRef): void {
   const applied = applyFocusTarget({ kind: 'session', ref }, buildFocusTargetDeps());
   if (!applied) toast(S.notifications.targetGone);
+}
+
+/**
+ * Бросок сессии на строку сайдбара (кусок 7 плана «Organic», спека окна 2026-09-29, 2.5): сессия на сессию — диалог «New room»
+ * из двух сессий (1.6), сессия на строку комнаты — `rooms.addMember`, и строка комнаты разворачивается. Что бросок значит и можно
+ * ли его — `resolveSidebarDrop`; нельзя — ничего не происходит (цель и не подсвечивалась). Метода нет у хоста — тоже ничего:
+ * окно прячет функцию, если метода нет (спека Orca-UI 3.2).
+ */
+function dropOnSidebar(bridge: HarnasBridge, key: string, sessionId: string, target: SidebarTarget): void {
+  const entry = useWorksStore.getState().entries.find((candidate) => workKey(candidate.projectPath, candidate.map.work.id) === key);
+  if (entry === undefined) return;
+  const drop = resolveSidebarDrop(entry.map, sessionId, target);
+  if (drop === null) return;
+  const methods = hostMethods(useHostStore.getState().status);
+  const work = { projectPath: entry.projectPath, workId: entry.map.work.id };
+  if (drop.kind === 'merge') {
+    if (methods.has('rooms.create')) useUiStore.getState().openMergeRoomDialog({ ...work, dragged: drop.dragged, target: drop.target });
+    return;
+  }
+  if (!methods.has('rooms.addMember')) return;
+  bridge
+    .call('rooms.addMember', { ...work, roomId: drop.roomId, sessionId: drop.sessionId })
+    .then(() => useUiStore.getState().setRoomExpanded(roomKey(key, drop.roomId), true))
+    .catch((error: unknown) => {
+      console.warn('[harnas] rooms.addMember', error);
+      toast(errorText(decodeIpcError(error).code, S.sidebar.addToRoomAction));
+    });
 }
 
 /** Доступность — одна для нажатия и для `menu:action` (кусок 6.1b): методы хоста в момент действия. */
@@ -283,8 +324,14 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   const newWork = useUiStore((state) => state.dialogs.newWork);
   const openNewWorkDialog = useUiStore((state) => state.openNewWorkDialog);
   const closeNewWorkDialog = useUiStore((state) => state.closeNewWorkDialog);
-  const createRoom = useUiStore((state) => state.dialogs.createRoom);
-  const closeCreateRoomDialog = useUiStore((state) => state.closeCreateRoomDialog);
+  const newSession = useUiStore((state) => state.dialogs.newSession);
+  const closeNewSessionDialog = useUiStore((state) => state.closeNewSessionDialog);
+  const mergeRoom = useUiStore((state) => state.dialogs.mergeRoom);
+  const closeMergeRoomDialog = useUiStore((state) => state.closeMergeRoomDialog);
+  // Последний открытый диалог 1.6: закрытый, он не должен размонтироваться (см. разметку ниже).
+  const lastMergeRef = useRef(mergeRoom);
+  if (mergeRoom !== null) lastMergeRef.current = mergeRoom;
+  const lastMerge = lastMergeRef.current;
   const restartHostOpen = useUiStore((state) => state.dialogs.restartHost);
   const wakePaused = useUiStore((state) => state.wakePaused);
   const toggleWake = useUiStore((state) => state.toggleWake);
@@ -325,8 +372,15 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   const handleDragEnd = (event: DragEndEvent): void => {
     setDragging(null);
     setDropPreview(null, null);
-    const drop = dropFromDragEnd(event);
     const key = useLayoutStore.getState().activeWorkKey;
+    // Бросок на строку сайдбара — не в раскладку (2.5). Цель чужой работы сюда не доходит (`layoutCollision`), но и здесь
+    // берём только работу, чей ключ совпал с активной: сессия тащится из строки активной карточки.
+    const onSidebar = sidebarDropFromDragEnd(event);
+    if (onSidebar !== null) {
+      if (key !== null && onSidebar.workKey === key) dropOnSidebar(bridge, key, onSidebar.sessionId, onSidebar.target);
+      return;
+    }
+    const drop = dropFromDragEnd(event);
     if (drop === null || key === null) return;
     // Зона чужой работы сюда не доходит (`layoutCollision`), но раскладку
     // меняем только у той работы, чья зона под указателем.
@@ -437,19 +491,9 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
         setSidebar('right', { open: true, tab });
       },
       openNewWork: (title) => openNewWorkDialog(null, title),
-      openNewSession: () => {
-        // Родитель — выбранная сессия, как у ⌘T в `App.tsx`.
-        const selected = selectedSessionOf(useLayoutStore.getState(), useWorksStore.getState().entries);
-        useUiStore.getState().openNewSessionDialog(selected?.ref.sessionId ?? null);
-      },
-      openNewRoom: () => {
-        // Как «New room» меню карточки (3.4): активная работа, обязательного участника нет.
-        const key = useLayoutStore.getState().activeWorkKey;
-        const entry = useWorksStore.getState().entries.find((item) => workKey(item.projectPath, item.map.work.id) === key);
-        if (entry !== undefined) {
-          useUiStore.getState().openCreateRoomDialog({ projectPath: entry.projectPath, workId: entry.map.work.id, requiredMember: null });
-        }
-      },
+      // Работа диалога — активная (`work: null`); «New room» — тот же диалог, открытый сразу с двумя агентами.
+      openNewSession: () => useUiStore.getState().openNewSessionDialog(),
+      openNewRoom: () => useUiStore.getState().openNewSessionDialog(undefined, { room: true }),
       openSettings: () => useUiStore.getState().openSettingsDialog(),
       setAppearance: (mode) => useUiStore.getState().setAppearance(mode),
       toggleShowArchived: () => useUiStore.getState().toggleShowArchived(),
@@ -567,22 +611,6 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     useLayoutStore.getState().apply(key, (layout) => openTab(layout, tab));
   };
 
-  // Кандидаты «Создать комнату с…» — остальные сессии той же работы, кроме
-  // обязательного участника (сессии, с которой открыли пункт меню в сайдбаре).
-  // «New room» из меню карточки (кусок 3.4) обязательного не знает — кандидаты все.
-  const requiredMemberId = createRoom?.requiredMember?.id ?? null;
-  const roomCandidates: RoomCandidate[] =
-    createRoom === null
-      ? []
-      : (entries
-          .find((item) => item.projectPath === createRoom.projectPath && item.map.work.id === createRoom.workId)
-          ?.map.sessions.filter((session) => session.id !== requiredMemberId)
-          .map((session) => ({
-            id: session.id,
-            label: sessionRowLabel(session.id, session.label),
-            closed: session.lifecycle === 'closed',
-          })) ?? []);
-
   // Входы сайдбара (кусок 2.5): сначала работа, по которой кликнули,
   // становится активной (id `mail` общий на раскладку), затем вкладка
   // открывается в её раскладке.
@@ -591,7 +619,8 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
 
   const shell = (
     <div className="flex h-screen flex-col bg-background text-foreground">
-      <Titlebar bridge={bridge} />
+      {/* Поиск в заголовке — только пока сайдбара со строкой `Search` нет на экране. */}
+      <Titlebar bridge={bridge} showSearch={!ui.leftSidebar.open || showLanding} />
       <InterruptedBanner bridge={bridge} />
       <WorksErrorBanner />
       {showLanding ? (
@@ -624,26 +653,32 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
             </>
           ) : null}
           <ErrorBoundary title={S.shell.layoutError}>
-            {/* Активной работы ещё нет (`layout/persistence.ts` её не выбрал) —
+            {/* Центр — лист Organic (спека окна 2026-09-29, 1.1): `--sheet`, радиус 28, `shadow-sm`,
+                `overflow: hidden`, отступ `0 8 8 0` вокруг; сайдбар скрыт — слева тоже 8. Лист —
+                `relative`, но containing block поверхностей остаётся контейнер работы ниже (спека
+                5.5): якоря `anchor()` считаются от него.
+                Активной работы ещё нет (`layout/persistence.ts` её не выбрал) —
                 LRU пуст, центр пуст: ни групп, ни строки вкладок в
                 `#titlebar-tabs` (спека 5.3, тест 15). Контейнеры — в порядке
                 ключей, а не LRU: смена активной работы не должна переставлять
                 узлы DOM с живыми xterm. */}
-            <div className="relative min-h-0 min-w-0 flex-1">
-              {lru
-                .keys()
-                .sort()
-                .map((key) => (
-                  <WorkContainer
-                    key={key}
-                    workKey={key}
-                    active={key === activeWorkKey}
-                    bridge={bridge}
-                    fontFamily={fontFamily}
-                    fontSize={fontSize}
-                    sendDeps={sendDeps}
-                  />
-                ))}
+            <div className={cn('flex min-h-0 min-w-0 flex-1 pb-2 pr-2', !ui.leftSidebar.open && 'pl-2')}>
+              <div data-testid="center-sheet" className="relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg bg-sheet shadow-sm">
+                {lru
+                  .keys()
+                  .sort()
+                  .map((key) => (
+                    <WorkContainer
+                      key={key}
+                      workKey={key}
+                      active={key === activeWorkKey}
+                      bridge={bridge}
+                      fontFamily={fontFamily}
+                      fontSize={fontSize}
+                      sendDeps={sendDeps}
+                    />
+                  ))}
+              </div>
             </div>
           </ErrorBoundary>
           {/* Правый сайдбар — только при активной работе (кусок 7.2); свёрнутый не монтируется. */}
@@ -690,16 +725,27 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
           if (!open) closeNewWorkDialog();
         }}
       />
-      {createRoom !== null ? (
-        <CreateRoomDialog
-          open
+      <NewSessionOrRoomDialog
+        open={newSession.open}
+        bridge={bridge}
+        work={newSession.work}
+        room={newSession.room}
+        onOpenChange={(open) => {
+          if (!open) closeNewSessionDialog();
+        }}
+      />
+      {/* Диалог 1.6 остаётся смонтированным и после закрытия (`open={false}`): комнату он открывает вкладкой, когда снимок
+          её принёс, и это ожидание живёт в самом диалоге — размонтирование при закрытии его бы отменило. */}
+      {lastMerge !== null ? (
+        <MergeRoomDialog
+          open={mergeRoom !== null}
           bridge={bridge}
-          projectPath={createRoom.projectPath}
-          workId={createRoom.workId}
-          requiredMember={createRoom.requiredMember}
-          candidates={roomCandidates}
+          projectPath={lastMerge.projectPath}
+          workId={lastMerge.workId}
+          dragged={lastMerge.dragged}
+          target={lastMerge.target}
           onOpenChange={(open) => {
-            if (!open) closeCreateRoomDialog();
+            if (!open) closeMergeRoomDialog();
           }}
         />
       ) : null}

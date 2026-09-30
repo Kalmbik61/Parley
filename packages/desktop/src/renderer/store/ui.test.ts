@@ -9,9 +9,9 @@ beforeEach(() => {
     wakePaused: null,
     dialogs: {
       newWork: false,
-      newSession: { open: false, parentSessionId: null, work: null },
+      newSession: { open: false, work: null, room: false },
       settings: false,
-      createRoom: null,
+      mergeRoom: null,
       restartHost: false,
     },
     showArchived: false,
@@ -32,35 +32,35 @@ describe('useUiStore диалоги', () => {
     expect(useUiStore.getState().dialogs.newWork).toEqual({ open: false, projectPath: null, title: '' });
   });
 
-  it('новая сессия — помнит родителя', () => {
-    useUiStore.getState().openNewSessionDialog('s-01');
-    expect(useUiStore.getState().dialogs.newSession).toEqual({
-      open: true,
-      parentSessionId: 's-01',
-      work: null,
-    });
+  it('новая сессия — диалог 1.5 открывается на активной работе, одним агентом; закрытие его сбрасывает', () => {
+    useUiStore.getState().openNewSessionDialog();
+    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: true, work: null, room: false });
     useUiStore.getState().closeNewSessionDialog();
-    expect(useUiStore.getState().dialogs.newSession).toEqual({
-      open: false,
-      parentSessionId: null,
-      work: null,
-    });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: false, work: null, room: false });
   });
 
   it('новая сессия из меню карточки помнит свою работу; закрытие её забывает (кусок 3.4)', () => {
-    useUiStore.getState().openNewSessionDialog(null, { projectPath: '/tmp/p', workId: 'w-02' });
+    useUiStore.getState().openNewSessionDialog({ projectPath: '/tmp/p', workId: 'w-02' });
     expect(useUiStore.getState().dialogs.newSession).toEqual({
       open: true,
-      parentSessionId: null,
       work: { projectPath: '/tmp/p', workId: 'w-02' },
+      room: false,
     });
     useUiStore.getState().closeNewSessionDialog();
     expect(useUiStore.getState().dialogs.newSession.work).toBeNull();
   });
 
-  it('«New room» из меню карточки — createRoom без обязательного участника (кусок 3.4)', () => {
-    useUiStore.getState().openCreateRoomDialog({ projectPath: '/tmp/p', workId: 'w-01', requiredMember: null });
-    expect(useUiStore.getState().dialogs.createRoom).toEqual({ projectPath: '/tmp/p', workId: 'w-01', requiredMember: null });
+  it('«New room» (меню карточки, палитра) — тот же диалог, открытый комнатой; закрытие сбрасывает и это', () => {
+    useUiStore.getState().openNewSessionDialog({ projectPath: '/tmp/p', workId: 'w-01' }, { room: true });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({
+      open: true,
+      work: { projectPath: '/tmp/p', workId: 'w-01' },
+      room: true,
+    });
+    useUiStore.getState().closeNewSessionDialog();
+    expect(useUiStore.getState().dialogs.newSession.room).toBe(false);
+    useUiStore.getState().openNewSessionDialog(undefined, { room: true });
+    expect(useUiStore.getState().dialogs.newSession).toEqual({ open: true, work: null, room: true });
   });
 });
 
@@ -101,6 +101,41 @@ describe('useUiStore.setSidebarHold (кусок 3.4)', () => {
     useUiStore.getState().setSidebarHold('menu:a', false);
     useUiStore.getState().setSidebarHold('rename:b', false);
     expect(useUiStore.getState().sidebarHolds).toEqual({});
+  });
+});
+
+// Кусок 5 плана «Organic», спека окна 2026-09-29, 2.6 и 3.4: развёрнутость строк комнат сайдбара — только в памяти окна.
+describe('useUiStore.roomExpanded (кусок 5)', () => {
+  beforeEach(() => useUiStore.setState({ roomExpanded: {} }));
+
+  it('по умолчанию пусто: развёрнутость решает правило 2.6, а не стор', () => {
+    expect(useUiStore.getState().roomExpanded).toEqual({});
+  });
+
+  it('setRoomExpanded пишет и перекрывает значение по ключу комнаты; другие ключи не трогает', () => {
+    useUiStore.getState().setRoomExpanded('/p w-01/r-01', true);
+    useUiStore.getState().setRoomExpanded('/p w-01/r-02', false);
+    expect(useUiStore.getState().roomExpanded).toEqual({ '/p w-01/r-01': true, '/p w-01/r-02': false });
+    useUiStore.getState().setRoomExpanded('/p w-01/r-01', false);
+    expect(useUiStore.getState().roomExpanded).toEqual({ '/p w-01/r-01': false, '/p w-01/r-02': false });
+  });
+
+  it('повторная запись того же значения не меняет объект стора — подписчики не перерисовываются', () => {
+    useUiStore.getState().setRoomExpanded('/p w-01/r-01', true);
+    const before = useUiStore.getState().roomExpanded;
+    useUiStore.getState().setRoomExpanded('/p w-01/r-01', true);
+    expect(useUiStore.getState().roomExpanded).toBe(before);
+  });
+
+  it('только в памяти: в ui.json (app.saveUi) не пишется и в зеркало ui не попадает', async () => {
+    const bridge = createFakeBridge();
+    const dispose = useUiStore.getState().init(bridge);
+    await vi.waitFor(() => expect(useUiStore.getState().uiLoaded).toBe(true));
+    const saveUi = vi.spyOn(bridge.app, 'saveUi');
+    useUiStore.getState().setRoomExpanded('/p w-01/r-01', true);
+    expect(saveUi).not.toHaveBeenCalled();
+    expect(Object.keys(useUiStore.getState().ui)).not.toContain('roomExpanded');
+    dispose();
   });
 });
 
@@ -202,12 +237,12 @@ describe('useUiStore.patchUi / setAppearance / setSidebar (кусок 2.3, те�
     useUiStore.getState().setSidebar('right', { width: 400 });
 
     expect(useUiStore.getState().ui.rightSidebar).toEqual({ open: true, width: 400, tab: 'changes' });
-    expect(saveUiSpy).toHaveBeenNthCalledWith(1, { rightSidebar: { open: true, width: 350, tab: 'changes' } });
+    expect(saveUiSpy).toHaveBeenNthCalledWith(1, { rightSidebar: { open: true, width: DEFAULT_UI.rightSidebar.width, tab: 'changes' } });
     expect(saveUiSpy).toHaveBeenNthCalledWith(2, { rightSidebar: { open: true, width: 400, tab: 'changes' } });
 
     // У левого вкладки нет: лишний ключ в ui.json не уходит.
     useUiStore.getState().setSidebar('left', { open: false, tab: 'files' });
-    expect(saveUiSpy).toHaveBeenLastCalledWith({ leftSidebar: { open: false, width: 280 } });
+    expect(saveUiSpy).toHaveBeenLastCalledWith({ leftSidebar: { open: false, width: DEFAULT_UI.leftSidebar.width } });
     dispose();
   });
 
@@ -224,25 +259,17 @@ describe('useUiStore.patchUi / setAppearance / setSidebar (кусок 2.3, те�
   });
 });
 
-describe('useUiStore — форма работы с названием и «Создать комнату с…» (куски 2.3, 6.2)', () => {
+describe('useUiStore — форма работы с названием (кусок 6.2) и диалог 1.6 (кусок 7)', () => {
   it('openNewWorkDialog(null, X) — форма с названием X («Create workspace …» палитры, кусок 6.2)', () => {
     useUiStore.getState().openNewWorkDialog(null, 'X');
     expect(useUiStore.getState().dialogs.newWork).toEqual({ open: true, projectPath: null, title: 'X' });
   });
 
-  it('openCreateRoomDialog/closeCreateRoomDialog', () => {
-    useUiStore.getState().openCreateRoomDialog({
-      projectPath: '/tmp/p',
-      workId: 'w-01',
-      requiredMember: { id: 's-01', label: 'S01 план' },
-    });
-    expect(useUiStore.getState().dialogs.createRoom).toEqual({
-      projectPath: '/tmp/p',
-      workId: 'w-01',
-      requiredMember: { id: 's-01', label: 'S01 план' },
-    });
-    useUiStore.getState().closeCreateRoomDialog();
-    expect(useUiStore.getState().dialogs.createRoom).toBeNull();
+  it('openMergeRoomDialog/closeMergeRoomDialog — бросили одну сессию на другую (диалог 1.6)', () => {
+    useUiStore.getState().openMergeRoomDialog({ projectPath: '/tmp/p', workId: 'w-01', dragged: 's-03', target: 's-02' });
+    expect(useUiStore.getState().dialogs.mergeRoom).toEqual({ projectPath: '/tmp/p', workId: 'w-01', dragged: 's-03', target: 's-02' });
+    useUiStore.getState().closeMergeRoomDialog();
+    expect(useUiStore.getState().dialogs.mergeRoom).toBeNull();
   });
 });
 

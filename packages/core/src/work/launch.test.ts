@@ -1,8 +1,10 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { parseTomlAssignment, type TomlValue } from '../../test/toml-mini.js';
+import { CODEX_NOTIFY_ENTRY } from './codex-notify.js';
 import {
   createChildSession,
   createNewSession,
@@ -146,15 +148,49 @@ describe('план запуска', () => {
     const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
 
     expect(plan.command).toBe('codex');
-    expect(plan.args[0]).toBe('-c');
-    expect(plan.args[1]).toContain('mcp_servers.harnas=');
-    expect(plan.args[1]).toContain(workPaths(project, workId).dir);
+    const mcp = plan.args.find((arg) => arg.startsWith('mcp_servers.harnas='));
+    expect(mcp).toContain(workPaths(project, workId).dir);
+    expect(plan.args[plan.args.indexOf(mcp as string) - 1]).toBe('-c');
     // Id снаружи codex не принимает — гадать за него нечего.
     expect(plan.providerSessionId).toBeNull();
     expect(plan.args).not.toContain('--session-id');
     await expect(
       readFile(path.join(workPaths(project, workId).mcp, `${sessionId}.json`), 'utf8'),
     ).rejects.toThrow();
+  });
+
+  it('codex: серверу, которому Codex режет окружение, уходит HARNAS_HOME запускающего', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
+
+    const mcp = plan.args.find((arg) => arg.startsWith('mcp_servers.harnas=')) as string;
+    const { value } = parseTomlAssignment(mcp);
+    expect((value as Record<string, TomlValue>)['env']).toMatchObject({
+      HARNAS_WORK_DIR: workPaths(project, workId).dir,
+      HARNAS_SESSION_ID: sessionId,
+      HARNAS_HOME: home,
+      HARNAS_CODEX_BIN: STUB,
+    });
+  });
+
+  it('codex: notify — node и скрипт харнесса, а каталог events/ для его журнала заведён', async () => {
+    const { workId, sessionId } = await pending('codex');
+    await expect(stat(workPaths(project, workId).events)).rejects.toThrow();
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
+
+    const notify = plan.args.find((arg) => arg.startsWith('notify=')) as string;
+    expect(plan.args[plan.args.indexOf(notify) - 1]).toBe('-c');
+    expect(parseTomlAssignment(notify).value).toEqual([process.execPath, CODEX_NOTIFY_ENTRY]);
+    // Хуков у codex нет, `--settings` не заводит каталог за него — его заводит запуск.
+    expect((await stat(workPaths(project, workId).events)).isDirectory()).toBe(true);
+    // Как и у Claude Code, сессия живёт под теми же двумя переменными: notify берёт адрес из них.
+    expect(plan.env).toEqual({ HARNAS_WORK_DIR: workPaths(project, workId).dir, HARNAS_SESSION_ID: sessionId });
+  });
+
+  it('у claude ни notify, ни каталога codex-журнала запуск не добавляет', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
+    expect(plan.args.join(' ')).not.toContain('notify=');
   });
 
   it('бриф перечитывается с диска: правку до запуска агент видит', async () => {
@@ -243,6 +279,163 @@ describe('план запуска', () => {
   });
 });
 
+describe('модель и усилие в плане запуска (дизайн комнат, 3.2)', () => {
+  it('claude: выбор из диалога уезжает флагами --model и --effort', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId), {
+      model: 'opus',
+      effort: 'high',
+    });
+
+    expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('opus');
+    expect(plan.args[plan.args.indexOf('--effort') + 1]).toBe('high');
+    // Бриф по-прежнему последним аргументом: позиционный промпт флагами не сдвигается.
+    expect(plan.args.at(-1)).toContain('прогнать e2e');
+  });
+
+  it('быстрая сессия new несёт выбор так же', async () => {
+    const created = await createNewSession(project, null);
+    const plan = await planNew(project, created.workId, created.session, { effort: 'low' });
+
+    expect(plan.args[plan.args.indexOf('--effort') + 1]).toBe('low');
+    expect(plan.args).not.toContain('--model');
+  });
+
+  it('codex: --model и -c model_reasoning_effort рядом с MCP-переопределением', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId), {
+      model: 'gpt-5.5',
+      effort: 'medium',
+    });
+
+    expect(plan.args.some((arg) => arg.startsWith('mcp_servers.harnas='))).toBe(true);
+    expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('gpt-5.5');
+    expect(plan.args).toContain('model_reasoning_effort="medium"');
+  });
+
+  it('без выбора флагов нет: сессия живёт на модели и усилии по умолчанию', async () => {
+    for (const provider of ['claude', 'codex']) {
+      const { workId, sessionId } = await pending(provider);
+      const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
+      expect(plan.args).not.toContain('--model');
+      expect(plan.args).not.toContain('--effort');
+      expect(plan.args.join(' ')).not.toContain('model_reasoning_effort');
+    }
+  });
+
+  it('провайдер без флага в шаблоне выбор не получает — ни отказа, ни висячего значения', async () => {
+    await writeFile(
+      path.join(home, 'providers.json'),
+      JSON.stringify({ claude: { args: ['--session-id', '{sessionUuid}', '{prompt}'] } }),
+      'utf8',
+    );
+    const { workId, sessionId } = await pending('claude');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId), {
+      model: 'opus',
+      effort: 'high',
+    });
+
+    expect(plan.args).toEqual(['--session-id', plan.providerSessionId, plan.args.at(-1)]);
+  });
+
+  it('выбор, записанный spawn_session, уезжает флагами: хост поднимает pending без диалога', async () => {
+    const created = await createWork(project, { title: 'Авторизация', goal: 'логин по e-mail' });
+    const workId = created.work.id;
+    const sessionId = await createPendingSession(project, workId, {
+      provider: 'claude',
+      label: 'тесты',
+      task: 'прогнать e2e',
+      model: 'opus',
+      effort: 'high',
+    });
+    const stored = await sessionOf(workId, sessionId);
+    expect(stored).toMatchObject({ model: 'opus', effort: 'high' });
+
+    const plan = await planLaunch(project, workId, stored);
+
+    expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('opus');
+    expect(plan.args[plan.args.indexOf('--effort') + 1]).toBe('high');
+    // Бриф по-прежнему последним аргументом: позиционный промпт флагами не сдвигается.
+    expect(plan.args.at(-1)).toContain('прогнать e2e');
+  });
+
+  it('codex: записанный выбор — --model и -c model_reasoning_effort', async () => {
+    const created = await createWork(project, { title: 'Авторизация', goal: '' });
+    const sessionId = await createPendingSession(project, created.work.id, {
+      provider: 'codex',
+      label: 'тесты',
+      task: 'прогнать e2e',
+      model: 'gpt-6-sol',
+      effort: 'low',
+    });
+    const plan = await planLaunch(project, created.work.id, await sessionOf(created.work.id, sessionId));
+
+    expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('gpt-6-sol');
+    expect(plan.args).toContain('model_reasoning_effort="low"');
+  });
+
+  it('выбор из диалога окна главнее записанного; невыбранное поле берётся из записи', async () => {
+    const created = await createWork(project, { title: 'Авторизация', goal: '' });
+    const workId = created.work.id;
+    const sessionId = await createPendingSession(project, workId, {
+      provider: 'claude',
+      label: 'тесты',
+      task: 'прогнать e2e',
+      model: 'opus',
+      effort: 'high',
+    });
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId), {
+      model: 'sonnet',
+    });
+
+    expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('sonnet');
+    expect(plan.args[plan.args.indexOf('--effort') + 1]).toBe('high');
+  });
+
+  it('пустая запись без выбора: флагов нет, а поля model и effort в карте не появляются', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const stored = await sessionOf(workId, sessionId);
+
+    expect('model' in stored).toBe(false);
+    expect('effort' in stored).toBe(false);
+  });
+
+  it('возобновление записанный выбор не несёт: модель Claude Code возвращает сам', async () => {
+    const created = await createWork(project, { title: 'Авторизация', goal: '' });
+    const workId = created.work.id;
+    const sessionId = await createPendingSession(project, workId, {
+      provider: 'claude',
+      label: 'тесты',
+      task: 'прогнать e2e',
+      model: 'opus',
+      effort: 'high',
+    });
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((item) => item.id === sessionId);
+      if (session !== undefined) session.providerSessionId = 'c0ffee00-1111-2222-3333-444455556666';
+    });
+    const plan = await planResume(project, workId, await sessionOf(workId, sessionId));
+
+    expect(plan.args).not.toContain('--model');
+    expect(plan.args).not.toContain('--effort');
+  });
+
+  it('возобновление выбор не несёт: модель Claude Code возвращает сам', async () => {
+    const { workId, sessionId } = await pending('claude');
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((item) => item.id === sessionId);
+      if (session !== undefined) session.providerSessionId = 'c0ffee00-1111-2222-3333-444455556666';
+    });
+    const plan = await planResume(project, workId, await sessionOf(workId, sessionId), {
+      model: 'opus',
+      effort: 'high',
+    });
+
+    expect(plan.args).not.toContain('--model');
+    expect(plan.args).not.toContain('--effort');
+  });
+});
+
 describe('план возобновления', () => {
   it('идёт resumeArgs с id сессии у провайдера', async () => {
     const { workId, sessionId } = await pending('codex');
@@ -262,10 +455,35 @@ describe('план возобновления', () => {
 
     const plan = await planResume(project, workId, map.sessions[0]!);
     expect(plan.command).toBe('codex');
-    expect(plan.args.slice(0, 2)).toEqual(['resume', '7fa0e1ee-cc7b-4a1e-9d4e-000000000001']);
-    expect(plan.args[2]).toBe('-c');
+    expect(plan.args.slice(0, 3)).toEqual([
+      'resume',
+      '7fa0e1ee-cc7b-4a1e-9d4e-000000000001',
+      '-c',
+    ]);
+    // Только `-c`: `--no-daemon` и `-a` после `resume <id>` не проверены на живом Codex (спека 3.6: «те же `-c`»).
+    expect(plan.args).not.toContain('--no-daemon');
+    expect(plan.args).not.toContain('-a');
+    // Те же `-c`, что у запуска: MCP и notify в тред Codex не сохраняются.
+    expect(plan.args.some((arg) => arg.startsWith('mcp_servers.harnas='))).toBe(true);
+    expect(plan.args.some((arg) => arg.startsWith('notify='))).toBe(true);
     // Бриф второй раз не подставляется: сессия продолжается, а не начинается.
     expect(plan.args.join(' ')).not.toContain('прогнать e2e');
+    // Указателя нет (ручной подъём) — промпта в конце нет, последним идёт `-c notify=…`.
+    expect(plan.args.at(-1)?.startsWith('notify=')).toBe(true);
+  });
+
+  it('codex: указатель на письма при подъёме — последним аргументом resume', async () => {
+    const { workId, sessionId } = await pending('codex');
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((item) => item.id === sessionId);
+      if (session !== undefined) session.providerSessionId = '7fa0e1ee-cc7b-4a1e-9d4e-000000000001';
+    });
+    const plan = await planResume(project, workId, await sessionOf(workId, sessionId), {
+      prompt: 'Новые письма (1). Вызови check_inbox.',
+    });
+    expect(plan.args.at(-1)).toBe('Новые письма (1). Вызови check_inbox.');
+    // Модель и усилие Codex восстанавливает из треда, флагами их не передаём.
+    expect(plan.args).not.toContain('--model');
   });
 
   it('возобновление с push тоже несёт флаг канала: сессия просыпается и после resume', async () => {
@@ -532,6 +750,61 @@ describe('привязка к логу провайдера без внешне�
 
     expect(found).toBe('наша');
     expect((await sessionOf(workId, sessionId)).providerSessionId).toBe('наша');
+  });
+
+  describe('две сессии codex в одном каталоге', () => {
+    const FIRST_START = '2026-09-02T10:00:00.000Z';
+    const SECOND_START = '2026-09-02T10:00:03.000Z';
+
+    /** Работа с двумя запущенными сессиями codex, чьи старты записаны в карту вручную — время задаёт тест. */
+    async function twoSessions(): Promise<{ workId: string; first: string; second: string }> {
+      const created = await createWork(project, { title: 'Комната', goal: '' });
+      const workId = created.work.id;
+      const first = await createPendingSession(project, workId, { provider: 'codex', label: 'а', task: 'x' });
+      const second = await createPendingSession(project, workId, { provider: 'codex', label: 'б', task: 'x' });
+      await startSession(project, workId, first, null);
+      await startSession(project, workId, second, null);
+      await updateMap(project, workId, (map) => {
+        for (const session of map.sessions) {
+          session.startedAt = session.id === first ? FIRST_START : SECOND_START;
+        }
+      });
+      return { workId, first, second };
+    }
+
+    it('лог первой сессии, уже привязанный, второй не достаётся: она берёт свой', async () => {
+      const { workId, first, second } = await twoSessions();
+      // Лог первой лежит в допуске второй и раньше её собственного.
+      await writeRollout('лог-первой', project, '2026-09-02T10:00:01.000Z');
+      await writeRollout('лог-второй', project, '2026-09-02T10:00:04.000Z');
+      await updateMap(project, workId, (map) => {
+        const target = map.sessions.find((session) => session.id === first);
+        if (target !== undefined) target.providerSessionId = 'лог-первой';
+      });
+
+      const found = await linkSession(project, workId, await sessionOf(workId, second), { codexRoot: logs });
+
+      expect(found).toBe('лог-второй');
+      expect((await sessionOf(workId, second)).providerSessionId).toBe('лог-второй');
+      expect((await sessionOf(workId, first)).providerSessionId).toBe('лог-первой');
+    });
+
+    it('обе ищут одновременно и видят один лог: его получает одна, вторая остаётся без привязки', async () => {
+      const { workId, first, second } = await twoSessions();
+      await writeRollout('единственный-лог', project, '2026-09-02T10:00:01.000Z');
+
+      const results = await Promise.all([
+        linkSession(project, workId, await sessionOf(workId, first), { codexRoot: logs }),
+        linkSession(project, workId, await sessionOf(workId, second), { codexRoot: logs }),
+      ]);
+
+      const holders = (await readMap(project, workId)).sessions.filter(
+        (session) => session.providerSessionId === 'единственный-лог',
+      );
+      expect(holders).toHaveLength(1);
+      // Проигравшая ничего не записала и говорит об этом: «привязывать нечего».
+      expect(results.filter((result) => result === null)).toHaveLength(1);
+    });
   });
 
   it('лога ещё нет — карта не трогается, попробуем на следующем событии', async () => {

@@ -4,8 +4,8 @@ import type { WorkEntry } from '@harnas/core';
 import { workKey } from '../lib/tree-order.js';
 import type { SidebarSection } from '../sidebar/sort.js';
 import { useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
-import { makeWork } from '../test-utils/work-fixtures.js';
-import type { WorkAttention } from './derive.js';
+import { makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { workAttention, type WorkAttention } from './derive.js';
 import { attentionTotals, badgeCount, useAttentionTotals } from './store.js';
 
 function att(patch: Partial<WorkAttention>): WorkAttention {
@@ -44,6 +44,21 @@ describe('attentionTotals (тест 14)', () => {
     };
     const sections = [section('/tmp/a', [open, archived]), section('/tmp/b', [folded], true)];
     expect(attentionTotals(sections, byWork)).toEqual({ needsYou: 2, unseen: 2, humanUnread: 3 });
+  });
+
+  // Спека окна 2026-09-29, 2.7: комната с ждущим решением — «нужен ты», как blocked: она в счётчике строки статуса и в
+  // бейдже Dock (расчёт — `workAttention`), иначе клик по счётчику вёл бы не туда, куда «следующая» ведёт из палитры.
+  it('ждущее решение входит в needsYou итогов и бейджа Dock наравне с blocked-сессией', () => {
+    const proposal = { id: 'p-01', from: 's-01', text: 'Решение', rev: 0, at: '2026-09-29T10:00:00.000Z' };
+    const entry = makeWork('w-01', {
+      projectPath: '/tmp/a',
+      sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b')],
+      rooms: [{ ...makeRoom('r-01', 'R'), members: ['s-01', 's-02'], lead: 's-01', proposal }],
+    });
+    const byWork = { [keyOf(entry)]: workAttention(entry, {}) };
+    const totals = attentionTotals([section('/tmp/a', [entry])], byWork);
+    expect(totals).toEqual({ needsYou: 1, unseen: 0, humanUnread: 0 });
+    expect(badgeCount(totals)).toBe(1);
   });
 
   it('работа без расчёта — нули', () => {

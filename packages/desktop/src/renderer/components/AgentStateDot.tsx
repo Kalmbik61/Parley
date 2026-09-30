@@ -10,6 +10,16 @@
  * Copyright (c) 2026 Lovecast Inc. Лицензия MIT — полный текст в NOTICE в
  * корне репозитория.
  *
+ * Цвета — таблица 1.2 спеки окна 2026-09-29 (облик Organic): working — кольцо `neutral-700`, blocked —
+ * MessageCircleQuestion `accent-600`, failed — CircleX `accent-700`. Idle, pending, «спит» и «закрыта» — токен
+ * `--state-inactive` вместо ступеней таблицы (`neutral-400` и `neutral-500` после смены рамп держат 1.5–2.2:1), а
+ * unseen (точка) и done (CircleCheck) — `--state-done` вместо `accent-2-600`. Оба токена — свои на тему:
+ * светлая берёт `neutral-700` и `accent-2-700`, тёмная — `neutral-600` и `accent-2-600`; так значок держит не
+ * ниже 3:1 ко всем фонам сайдбара, включая hover-заливки, где `neutral-600` и `accent-2-600` светлой опускались
+ * до 2.5–3.0:1 (решение контролёра куска 2 и правки ревью; пары — `styles/tokens.test.ts`). Одна ступень у
+ * четырёх состояний — форма разная: точка, кольцо, луна, тире. Приглушённые значки (закрытая строка .5,
+ * done-карточка .6) — исключение: этого требует спека 1.2, а состояние там несёт и слово рядом.
+ *
  * Раунд исправлений 1 (находка ревью B №3): рядом со значком не всегда есть
  * текст-дублёр (на вкладке терминала, спека 5.3, его нет вовсе) — значок
  * должен быть самодостаточен для скринридера. Внешний `span` несёт
@@ -17,7 +27,7 @@
  * внутренние глифы (включая кольцо `working`) помечены `aria-hidden`.
  */
 
-import { CircleCheck, MessageCircleQuestion, Moon } from 'lucide-react';
+import { CircleCheck, CircleX, MessageCircleQuestion, Moon } from 'lucide-react';
 import type { SessionLifecycle } from '@harnas/core';
 import { stateWord, type DotState } from '../lib/dot-state.js';
 import { cn } from '../lib/cn.js';
@@ -85,39 +95,39 @@ function renderGlyph(
       );
 
     case 'done':
-      return <CircleCheck className={cn(ICON[size], 'text-emerald-500')} aria-hidden="true" />;
+      return <CircleCheck className={cn(ICON[size], 'text-state-done')} aria-hidden="true" />;
 
     case 'exited':
       if (exitedLifecycle === 'closed') {
         // Тире, не lucide-значок: «закрыта» — это отсутствие сессии, а не её состояние.
         return (
-          <span className="text-neutral-500/40" aria-hidden="true">
+          <span className="text-state-inactive" aria-hidden="true">
             –
           </span>
         );
       }
-      return <Moon className={cn(ICON[size], 'text-neutral-500')} aria-hidden="true" />;
+      return <Moon className={cn(ICON[size], 'text-state-inactive')} aria-hidden="true" />;
 
     case 'pending':
       return (
         <span
-          className={cn('block rounded-full border-2 border-neutral-500/60', DOT[size])}
+          className={cn('block rounded-full border-2 border-state-inactive', DOT[size])}
           aria-hidden="true"
         />
       );
 
     case 'unseen':
       return (
-        <span className={cn('block rounded-full bg-emerald-500', DOT[size])} aria-hidden="true" />
+        <span className={cn('block rounded-full bg-state-done', DOT[size])} aria-hidden="true" />
       );
 
     case 'failed':
-      return <span className={cn('block rounded-full bg-red-500', DOT[size])} aria-hidden="true" />;
+      return <CircleX className={cn(ICON[size], 'text-accent-700')} aria-hidden="true" />;
 
     case 'idle':
       return (
         <span
-          className={cn('block rounded-full bg-neutral-500/40', DOT[size])}
+          className={cn('block rounded-full bg-state-inactive', DOT[size])}
           aria-hidden="true"
         />
       );

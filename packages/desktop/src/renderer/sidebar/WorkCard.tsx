@@ -1,7 +1,15 @@
 /**
- * Карточка работы в сайдбаре (кусок 3.3, спека 6.3): полоса внимания, заголовок со
+ * Карточка работы в сайдбаре (кусок 3.3, спека 6.3): заголовок со значком самого срочного состояния и
  * счётчиками писем и комнат, мета и строки сессий. Внимание карточка не считает — его
  * отдаёт общий расчёт (`use-sidebar-sections.ts`), тот же, что упорядочил список.
+ *
+ * Облик Organic (спека окна 2026-09-29, 1.2): радиус 16, отступ `8 8 8 10`, зазор между карточками 6.
+ * Активная — фон `neutral-100` и `shadow-sm`; неактивная под курсором — `--card-hover` (`text 4%`, а не 6% из
+ * handoff: решение 2, на 6% `neutral-700` даёт 4.4:1). Строка заголовка 22px: значок самого срочного
+ * состояния (в порядке прототипа — ждёт тебя, работает, не просмотрено, сбой, простаивает, не запущена,
+ * спит, готово; если в работе ждёт решение — значок вопроса), название 13px (700 при непрочитанной почте
+ * или `unseen`, иначе 500), `✉N`, `#N`, время. Полосы внимания слева нет — её роль играет значок.
+ * `done`-карточка приглушена правилом `dimmed.css` (значки .6, текст вторичным цветом).
  *
  * `memo` (раунд исправлений 1 куска 3.3, ревью A): `activity.changed` приходит на каждое
  * изменение метрик любой сессии, а `WorkSidebar` отдаёт карточке только срез её сессий,
@@ -9,24 +17,35 @@
  *
  * Кусок 3.4 (спека 6.4): меню карточки по правой кнопке (`CardMenu`), переименование на
  * месте по двойному клику по заголовку (`InlineRename`), меню комнат по `#` (`RoomsMenu`).
+ *
+ * Кусок 5 плана «Organic» (спека окна 2026-09-29, 1.2): состав строк — `sort.ts#cardRows`: участник комнаты
+ * отдельной строкой не выводится, на его месте стоит строка комнаты (`RoomRow`), комнаты без живых участников — в
+ * конце. Под строками активной карточки со статусом `active` — `+ New session or room`: она открывает диалог 1.5
+ * (кусок 7) этой работы, как ⌘T и пункт палитры.
  */
 
 import { memo, useRef, useState } from 'react';
 import { create } from 'zustand';
-import type { WorkEntry } from '@harnas/core';
+import { Hash, Mail, Plus } from 'lucide-react';
+import type { SessionLifecycle, WorkEntry } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
-import type { Attention, WorkAttention } from '../attention/derive.js';
+import { roomAwaitsDecision, type WorkAttention } from '../attention/derive.js';
+import { AgentStateDot } from '../components/AgentStateDot.js';
 import { useHostSupports } from '../lib/capabilities.js';
 import { cn } from '../lib/cn.js';
+import { displayStatus, dotState, type DotState } from '../lib/dot-state.js';
 import { relativeTime } from '../lib/relative-time.js';
 import { treeOrder, workKey } from '../lib/tree-order.js';
 import type { ActivityEntry } from '../store/activity.js';
+import { useUiStore } from '../store/ui.js';
 import { CardMenu } from './CardMenu.js';
 import { InlineRename } from './InlineRename.js';
+import { RoomRow } from './RoomRow.js';
 import { RoomsMenu } from './RoomsMenu.js';
 import { SessionRow } from './SessionRow.js';
+import { cardRows } from './sort.js';
 import { useCursorStop } from './use-sidebar-keys.js';
 
 export interface WorkCardProps {
@@ -49,23 +68,36 @@ export interface WorkCardProps {
   bridge: HarnasBridge;
 }
 
-/** Полоса слева — по самому срочному состоянию (спека 6.3); при «простаивает» её нет. */
-const STRIP: Partial<Record<Attention, string>> = {
-  'needs-you': 'bg-orange-500',
-  working: 'bg-yellow-500',
-  unseen: 'bg-emerald-500',
-};
+/**
+ * Порядок срочности значка карточки — как в прототипе handoff: ждёт тебя, работает, не просмотрено, сбой,
+ * простаивает, не запущена, спит, готово. Не порядок сайдбара (`attention/derive.ts`): там `unseen`
+ * выше `working`.
+ */
+const URGENCY: readonly DotState[] = ['blocked', 'working', 'unseen', 'failed', 'idle', 'pending', 'exited', 'done'];
+
+/** Значок самого срочного состояния среди живых (не закрытых) сессий; `null` — живых нет. */
+function urgentGlyph(
+  entry: WorkEntry,
+  activity: Record<string, ActivityEntry>,
+): { state: DotState; lifecycle: SessionLifecycle } | null {
+  let best: { state: DotState; lifecycle: SessionLifecycle; rank: number } | null = null;
+  for (const session of entry.map.sessions) {
+    if (session.lifecycle === 'closed') continue;
+    const ref = refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id });
+    const state = dotState(displayStatus(session), activity[ref]?.activity.activity ?? null);
+    const rank = URGENCY.indexOf(state);
+    if (best === null || rank < best.rank) best = { state, lifecycle: session.lifecycle, rank };
+  }
+  return best;
+}
 
 /**
- * Раскрытые «+N closed» — до конца сеанса окна (спека 6.3). Не состояние карточки:
- * виртуализатор размонтирует карточку за краем списка, и раскрытие пропало бы.
+ * Раскрытые «N more closed» — до конца сеанса окна (спека 6.3). Не состояние карточки:
+ * виртуализатор размонтирует карточку за краем списка, и раскрытие пропало бы. Пишет `showClosedSessions`.
  */
-const useExpandedClosed = create<{ keys: Record<string, true>; expand: (key: string) => void }>((set) => ({
-  keys: {},
-  expand: (key) => set((state) => ({ keys: { ...state.keys, [key]: true } })),
-}));
+const useExpandedClosed = create<{ keys: Record<string, true> }>(() => ({ keys: {} }));
 
-/** → и ← клавиатуры сайдбара (кусок 3.4, спека 6.5): закрытые сессии карточки показать или спрятать. */
+/** «N more closed» и «Hide closed» карточки, → и ← клавиатуры сайдбара (кусок 3.4, спека 6.5): закрытые сессии показать или спрятать. */
 export function showClosedSessions(key: string, shown: boolean): void {
   useExpandedClosed.setState((state) => {
     if (shown === (state.keys[key] === true)) return state;
@@ -96,7 +128,6 @@ export const WorkCard = memo(function WorkCard({
   const { projectPath, map } = entry;
   const key = workKey(projectPath, map.work.id);
   const expanded = useExpandedClosed((state) => state.keys[key] === true);
-  const expand = useExpandedClosed((state) => state.expand);
   const [renaming, setRenaming] = useState(false);
   const stop = useCursorStop(key, null, active);
   // Без `works.rename` у хоста нет ни пункта меню, ни двойного клика (спека 3.2).
@@ -121,18 +152,21 @@ export const WorkCard = memo(function WorkCard({
     return opener;
   };
 
-  const rows = treeOrder(map.sessions);
-  const closedCount = rows.filter(({ session }) => session.lifecycle === 'closed').length;
-  const shownRows = expanded ? rows : rows.filter(({ session }) => session.lifecycle !== 'closed');
+  const tree = treeOrder(map.sessions);
+  const closedCount = tree.filter(({ session }) => session.lifecycle === 'closed').length;
+  // Строки карточки: сессии и комнаты на месте своих участников; закрытые — только при раскрытом «N more closed».
+  const rows = cardRows(map, expanded);
   // «N сессий» — открытые, как в макете спеки 6.3: закрытые считает строка «+N closed».
-  const openCount = rows.length - closedCount;
+  const openCount = tree.length - closedCount;
 
-  const strip = STRIP[attention.level];
   const bold = attention.unseen > 0 || attention.humanUnread > 0;
   const roomsWithUnread = Object.keys(attention.roomsUnread).length;
   const time = relativeTime(attention.lastEventAt, now);
   // Вторичный текст — свой токен: на активной карточке `--muted-foreground` ниже 4.5:1.
   const secondary = 'text-work-sidebar-muted-foreground';
+  // Решение ждёт человека — значок вопроса, как у blocked; правило то же, что у строки комнаты и ранга работы.
+  const awaitingDecision = map.rooms.some(roomAwaitsDecision);
+  const glyph = awaitingDecision ? { state: 'blocked' as const, lifecycle: 'active' as const } : urgentGlyph(entry, activity);
 
   return (
     <CardMenu entry={entry} pinned={pinned} bridge={bridge} onRename={() => setRenaming(true)} onOpenMail={onOpenMail}>
@@ -150,19 +184,17 @@ export const WorkCard = memo(function WorkCard({
         if (event.currentTarget.contains(event.target as Node)) onActivate();
       }}
       className={cn(
-        'relative mb-1.5 cursor-default overflow-hidden rounded-lg border py-1 pl-2.5 pr-1.5 outline-none focus-visible:ring-1 focus-visible:ring-work-sidebar-focus-ring',
-        active
-          ? 'border-work-sidebar-border bg-[color-mix(in_srgb,var(--work-sidebar-foreground)_8%,transparent)] shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:bg-[color-mix(in_srgb,var(--work-sidebar-foreground)_10%,transparent)]'
-          : 'border-transparent hover:bg-work-sidebar-accent/40',
+        'relative mt-1.5 flex cursor-default flex-col overflow-hidden rounded-md py-2 pl-2.5 pr-2 outline-none focus-visible:ring-1 focus-visible:ring-work-sidebar-focus-ring',
+        active ? 'bg-neutral-100 shadow-sm' : 'hover:bg-card-hover',
       )}
       // Показанная архивная (кусок 6.3, спека 6.7) приглушена, как done. Приглушение — styles/dimmed.css:
       // цветом текста, а не opacity всей карточки (ревью M12, WCAG AA).
       {...(map.work.status === 'done' || map.work.status === 'archived' ? { 'data-dimmed': '' } : {})}
     >
-      {strip !== undefined ? (
-        <span data-attention-strip aria-hidden="true" className={cn('absolute inset-y-0 left-0 w-[3px]', strip)} />
-      ) : null}
-      <div className="flex h-5 min-w-0 items-center gap-1.5">
+      <div className="flex h-[22px] min-w-0 items-center gap-2 pr-1">
+        <span data-work-glyph className="inline-flex h-3 w-3 shrink-0 items-center justify-center">
+          {glyph === null ? null : <AgentStateDot state={glyph.state} lifecycle={glyph.lifecycle} />}
+        </span>
         {renaming ? (
           <InlineRename entry={entry} bridge={bridge} onDone={() => setRenaming(false)} />
         ) : (
@@ -170,7 +202,7 @@ export const WorkCard = memo(function WorkCard({
           <span
             data-work-title
             onDoubleClick={canRename ? () => setRenaming(true) : undefined}
-            className={cn('min-w-0 flex-1 truncate text-[13px] leading-5 text-work-sidebar-foreground', bold && 'font-semibold')}
+            className={cn('min-w-0 flex-1 truncate text-[13px] leading-5 text-work-sidebar-foreground', bold ? 'font-bold' : 'font-medium')}
           >
             {map.work.title}
           </span>
@@ -178,13 +210,16 @@ export const WorkCard = memo(function WorkCard({
         {attention.humanUnread > 0 ? (
           <button
             type="button"
+            title={S.sidebar.unreadMail(attention.humanUnread)}
+            aria-label={S.sidebar.unreadMail(attention.humanUnread)}
             onClick={(event) => {
               event.stopPropagation();
               onOpenMail();
             }}
-            className="shrink-0 rounded px-0.5 text-[11px] text-work-sidebar-foreground hover:bg-work-sidebar-accent"
+            className="inline-flex shrink-0 items-center gap-[3px] text-[11px] font-semibold text-accent-700 hover:text-accent-800"
           >
-            {`✉${attention.humanUnread}`}
+            <Mail className="size-3" aria-hidden="true" />
+            <span className="tabular-nums">{attention.humanUnread}</span>
           </button>
         ) : null}
         {map.rooms.length > 0 ? (
@@ -193,58 +228,109 @@ export const WorkCard = memo(function WorkCard({
               type="button"
               data-rooms
               aria-label={S.sidebar.roomsMenu}
+              title={roomsWithUnread > 0 ? S.sidebar.roomsWithUnread(roomsWithUnread) : S.sidebar.roomsMenu}
               // Клик по `#` — не клик по карточке: меню открывается, работа не переключается.
               onClick={(event) => event.stopPropagation()}
-              className="shrink-0 rounded px-0.5 text-[11px] text-work-sidebar-foreground hover:bg-work-sidebar-accent"
+              className={cn('inline-flex shrink-0 items-center gap-0.5 text-[11px] font-semibold hover:text-work-sidebar-foreground', secondary)}
             >
-              {roomsWithUnread > 0 ? `#${roomsWithUnread}` : '#'}
+              <Hash className="size-3" aria-hidden="true" />
+              {roomsWithUnread > 0 ? <span className="tabular-nums">{roomsWithUnread}</span> : null}
             </button>
           </RoomsMenu>
         ) : null}
         {pinned ? <span className="shrink-0 text-[10px]">📌</span> : null}
-        {time !== '' ? <span className={cn('shrink-0 text-[10px] tabular-nums', secondary)}>{time}</span> : null}
+        <span className={cn('min-w-[22px] shrink-0 text-right text-[10px] tabular-nums', secondary)}>{time}</span>
       </div>
-      <div data-work-meta className={cn('flex h-4 min-w-0 items-center gap-1 text-[11px] leading-4', secondary)}>
+      <div
+        data-work-meta
+        className={cn('flex h-4 min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap pl-5 pr-1 text-[11px] leading-4', secondary)}
+      >
         <span className="min-w-0 truncate">{folderName(projectPath)}</span>
         <span className="shrink-0">·</span>
         <span className="shrink-0">{S.sidebar.sessionCount(openCount)}</span>
         {branch !== null ? (
           <>
             <span className="shrink-0">·</span>
-            <span className="min-w-0 truncate font-mono">{branch}</span>
+            {/* Ветка держит своё место (потолок — половина строки): имя папки то же, что заголовок группы над
+                карточкой, и при длинном имени сжимается оно, а не ветка (`main` не должна становиться `m…`). */}
+            <span className="max-w-[50%] shrink-0 truncate font-mono">{branch}</span>
           </>
         ) : null}
       </div>
-      {shownRows.length > 0 ? (
-        <div role="group" className="mt-0.5">
-          {shownRows.map(({ session, depth }) => (
-            <SessionRow
-              key={session.id}
-              workKey={key}
-              projectPath={projectPath}
-              workId={map.work.id}
-              bridge={bridge}
-              session={session}
-              depth={depth}
-              activity={activity[refKey({ projectPath, workId: map.work.id, sessionId: session.id })] ?? null}
-              now={now}
-              draggable={active}
-              selected={session.id === selectedSessionId}
-              onOpen={openerFor(session.id)}
-            />
-          ))}
+      {rows.length > 0 ? (
+        <div role="group" className="mt-1.5 flex flex-col gap-px">
+          {rows.map((row) =>
+            row.kind === 'session' ? (
+              <SessionRow
+                key={row.session.id}
+                workKey={key}
+                projectPath={projectPath}
+                workId={map.work.id}
+                bridge={bridge}
+                session={row.session}
+                depth={row.depth}
+                activity={activity[refKey({ projectPath, workId: map.work.id, sessionId: row.session.id })] ?? null}
+                now={now}
+                draggable={active}
+                selected={row.session.id === selectedSessionId}
+                onOpen={openerFor(row.session.id)}
+              />
+            ) : (
+              <RoomRow
+                key={`room ${row.room.id}`}
+                workKey={key}
+                projectPath={projectPath}
+                workId={map.work.id}
+                bridge={bridge}
+                row={row}
+                unread={attention.roomsUnread[row.room.id] ?? 0}
+                activity={activity}
+                now={now}
+                active={active}
+                selectedSessionId={selectedSessionId}
+                onOpen={() => onOpenRoom(row.room.id)}
+                openerFor={openerFor}
+              />
+            ),
+          )}
         </div>
       ) : null}
-      {!expanded && closedCount > 0 ? (
+      {closedCount > 0 ? (
         <button
           type="button"
           onClick={(event) => {
             event.stopPropagation();
-            expand(key);
+            showClosedSessions(key, !expanded);
           }}
-          className={cn('flex h-6 w-full items-center rounded-md px-1.5 text-left text-[11px] hover:bg-work-sidebar-accent/60', secondary)}
+          className={cn(
+            // Основной цвет на hover — явно: в done-карточке `--work-sidebar-foreground` равен вторичному (dimmed.css).
+            'flex h-6 w-full items-center rounded-full pl-7 text-left text-[11px] hover:bg-foreground/6 hover:text-(--color-text)',
+            rows.length > 0 ? 'mt-px' : 'mt-1.5',
+            secondary,
+          )}
         >
-          {S.sidebar.moreClosed(closedCount)}
+          {expanded ? S.sidebar.hideClosed : S.sidebar.moreClosed(closedCount)}
+        </button>
+      ) : null}
+      {active && map.work.status === 'active' ? (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            // Как ⌘T (`AppShell`, `session.new`): диалог 1.5; работа — эта, она же активная.
+            useUiStore.getState().openNewSessionDialog({ projectPath, workId: map.work.id });
+          }}
+          className={cn(
+            // Основной цвет на hover — явно, как у «N more closed» выше: в приглушённом поддереве он равен вторичному.
+            'flex h-6 w-full items-center gap-1.5 rounded-full pl-[26px] text-left text-[11px] hover:bg-foreground/6 hover:text-(--color-text)',
+            rows.length > 0 || closedCount > 0 ? 'mt-px' : 'mt-1.5',
+            secondary,
+          )}
+        >
+          <span className="inline-flex w-[13px] shrink-0 justify-center">
+            <Plus className="size-[11px]" aria-hidden="true" />
+          </span>
+          {S.sidebar.newSessionOrRoom}
         </button>
       ) : null}
     </div>

@@ -13,9 +13,12 @@
  * даёт чистая функция `spinnerDelayMs`, подставленная в `animation-delay`
  * инлайн-стилем: она проверяется без DOM (тест 3 куска 1.2).
  *
+ * Цвет кольца — `neutral-700` (таблица 1.2 спеки окна 2026-09-29, облик Organic), прежний жёлтый
+ * ушёл вместе с палитрой Orca.
+ *
  * Раунд исправлений 1 (находка ревью A+B №1): под `prefers-reduced-motion`
  * `styles/agent-spinner.css` останавливает вращение, и без класса
- * `motion-reduce:border-t-yellow-500` застывший прозрачный верхний край
+ * `motion-reduce:border-t-neutral-700` застывший прозрачный верхний край
  * (`border-t-transparent`) выглядит как разорванное кольцо. Оригинал Orca
  * прямо называет это исправленным багом (#9515: «a frozen transparent-top
  * ring reads as a broken spinner; a complete ring reads as an intentional
@@ -47,7 +50,7 @@ export function AgentWorkingSpinner({ className }: AgentWorkingSpinnerProps): JS
       // `role="img"`/`aria-label` на `AgentStateDot` (находка ревью B №3).
       aria-hidden="true"
       className={cn(
-        'agent-working-spinner block rounded-full border-2 border-yellow-500 border-t-transparent motion-reduce:border-t-yellow-500',
+        'agent-working-spinner block rounded-full border-2 border-neutral-700 border-t-transparent motion-reduce:border-t-neutral-700',
         className,
       )}
       style={{ animationDelay: `${delayMs}ms` }}

@@ -112,6 +112,15 @@ describe('FileDiffSection', () => {
     expect(document.body.textContent).not.toContain('пропал');
   });
 
+  // `--destructive` светлой темы — accent-800 (кнопка удаления не сливается с главной, решение контролёра
+  // куска 2), а `−N` в спеке окна 2026-09-29, 1.8 — accent-700 в обеих темах: числа не на токене удаления.
+  it('счётчики: +N — accent-2-700 (status-success-text), −N — accent-700, а не text-destructive', () => {
+    render(<FileDiffSection {...props(M('a.ts'), { live: false })} />);
+    expect(screen.getByText('+3').className).toContain('text-status-success-text');
+    expect(screen.getByText('−1').className).toContain('text-accent-700');
+    expect(screen.getByText('−1').className).not.toContain('text-destructive');
+  });
+
   it('длинный путь переименования — обрезается, полный текст в title', async () => {
     const long = `${'very-long-folder-name/'.repeat(20)}file.ts`;
     render(<FileDiffSection {...props({ path: long, status: 'R', oldPath: 'old.ts', additions: null, deletions: null }, { live: false })} />);

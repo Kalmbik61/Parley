@@ -298,6 +298,19 @@ describe('DiffTab: панель (тест 3)', () => {
   });
 });
 
+// `−N` — accent-700 в обеих темах (спека окна 2026-09-29, 1.8), а не `--destructive`: тот в светлой accent-800.
+describe('DiffTab: счётчики строк файлов (Organic, 1.8)', () => {
+  it('+N — accent-2-700 (status-success-text), −N — accent-700', async () => {
+    bridge.setHandler('worktrees.diff', () => diff([file('src/a.ts')]));
+    renderTab();
+    await flush();
+    const row = within(screen.getByTestId('diff-file-list')).getByTitle('src/a.ts');
+    expect(within(row).getByText('+1').className).toContain('text-status-success-text');
+    expect(within(row).getByText('−1').className).toContain('text-accent-700');
+    expect(within(row).getByText('−1').className).not.toContain('text-destructive');
+  });
+});
+
 describe('DiffTab: режим коммита (тест 6)', () => {
   it('файлы — из gitCommitFiles, а не из worktrees.diff; стороны hash^ и hash; заголовок с hash', async () => {
     bridge.setCommitFiles(WT, HASH, [file('a.ts')]);

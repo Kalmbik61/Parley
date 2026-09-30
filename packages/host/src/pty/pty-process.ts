@@ -13,6 +13,12 @@ export interface PtyLaunch {
   args: string[];
   cwd: string;
   env: NodeJS.ProcessEnv;
+  /**
+   * Id провайдера в реестре (`claude`, `codex`, …). Процессу он не нужен — он нужен хосту: у `codex`
+   * состояние приходит из потока терминала (`codex-terminal.ts`), а ввод идёт своим порядком
+   * (`codex-input.ts`). Не задан — обычный агент, состояние которого ведут хуки.
+   */
+  provider?: string;
 }
 
 export interface ExitInfo {

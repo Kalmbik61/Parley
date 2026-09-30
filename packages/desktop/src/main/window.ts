@@ -8,7 +8,8 @@ import { guardWebviewAttach } from './browser/guard.js';
  * заголовок рисует сам рендерер (`renderer/shell/Titlebar.tsx`). Цвет фона —
  * по теме СРАЗУ в конструкторе, а не отдельным `setBackgroundColor` после
  * создания: иначе перед первой отрисовкой мелькает белый холст Electron по
- * умолчанию (спека 4.7, «Старт»).
+ * умолчанию (спека 4.7, «Старт»). Цвет — `--background` темы Organic (`renderer/styles/tokens.css`:
+ * песочный `surface`); hex — вторая копия токена, сверяет её `styles/tokens.test.ts`.
  */
 export function mainWindowOptions(input: {
   dark: boolean;
@@ -20,8 +21,9 @@ export function mainWindowOptions(input: {
     minWidth: 800,
     minHeight: 500,
     titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 12 },
-    backgroundColor: input.dark ? '#0a0a0a' : '#ffffff',
+    // Заголовок 40px (спека окна 2026-09-29, 1.1): кнопки светофора по вертикали в середине — y 13.
+    trafficLightPosition: { x: 16, y: 13 },
+    backgroundColor: input.dark ? '#161513' : '#ebddc5',
     webPreferences: {
       contextIsolation: true,
       sandbox: true,

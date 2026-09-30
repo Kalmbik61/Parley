@@ -1,17 +1,55 @@
 /**
- * Тест 1 куска 1.3 плана окна: фон обеих тем и 16 ANSI-цветов каждой —
- * дословно по таблице спеки 4.7 (сама таблица — из Orca
- * `src/renderer/src/lib/terminal-themes/defaults.ts`, коммит acf8e679).
+ * Тест 1 куска 1.3 плана окна: 16 ANSI-цветов каждой темы — дословно по таблице спеки Orca-UI 4.7
+ * (сама таблица — из Orca `src/renderer/src/lib/terminal-themes/defaults.ts`, коммит acf8e679).
+ * Кусок 1 плана «Organic»: фон, текст, курсор и выделение — с листа окна (спека окна 2026-09-29,
+ * раздел 4 «Терминал»), значения сверяются с `styles/tokens.css`, а не с копией в тесте.
  */
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { contrastRatio } from '../test-utils/contrast.js';
+import { parseTokens, resolveColor, type Theme } from '../test-utils/css-tokens.js';
 import { minimumContrastRatio, XTERM_DARK, XTERM_LIGHT, XTERM_OPTIONS, xtermTheme } from './xterm-themes.js';
 
-describe('XTERM_DARK / XTERM_LIGHT — спека 4.7, таблица дословно', () => {
-  it('фон', () => {
-    expect(XTERM_DARK.background).toBe('#282c34');
-    expect(XTERM_LIGHT.background).toBe('#ffffff');
-  });
+const tokens = parseTokens(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'styles', 'tokens.css'), 'utf8'));
+
+/** Цвет токена как `#rrggbb` — так пишет тему терминала код. */
+function hex(theme: Theme, name: string): string {
+  return `#${resolveColor(tokens, theme, name).rgb.map((channel) => Math.round(channel).toString(16).padStart(2, '0')).join('')}`;
+}
+
+/** Акцент палитры в 30 % — `rgba()`, который xterm понимает и с альфой (выделение может быть прозрачным). */
+function accent30(theme: Theme): string {
+  const [r, g, b] = resolveColor(tokens, theme, '--color-accent').rgb.map(Math.round);
+  return `rgba(${r}, ${g}, ${b}, 0.3)`;
+}
+
+describe('XTERM_DARK / XTERM_LIGHT — фон, текст, курсор и выделение с листа окна (Organic)', () => {
+  for (const [theme, xterm] of [
+    ['light', XTERM_LIGHT],
+    ['dark', XTERM_DARK],
+  ] as const) {
+    it(`${theme}: фон — --sheet, текст и курсор — --color-text, символ под курсором-блоком — фон листа`, () => {
+      expect(xterm.background).toBe(hex(theme, '--sheet'));
+      expect(xterm.foreground).toBe(hex(theme, '--color-text'));
+      expect(xterm.cursor).toBe(hex(theme, '--color-text'));
+      expect(xterm.cursorAccent).toBe(hex(theme, '--sheet'));
+    });
+
+    it(`${theme}: выделение — accent 30 %`, () => {
+      expect(xterm.selectionBackground).toBe(accent30(theme));
+    });
+
+    it(`${theme}: текст на фоне терминала — не ниже 4.5:1`, () => {
+      const ratio = contrastRatio(resolveColor(tokens, theme, '--color-text').rgb, resolveColor(tokens, theme, '--sheet').rgb);
+      expect(ratio).toBeGreaterThanOrEqual(4.5);
+    });
+  }
+});
+
+describe('XTERM_DARK / XTERM_LIGHT — ANSI-палитры, спека Orca-UI 4.7, таблица дословно', () => {
 
   it('16 ANSI-цветов тёмной темы (Ghostty Default Style Dark)', () => {
     expect([

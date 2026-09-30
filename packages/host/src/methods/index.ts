@@ -1,6 +1,8 @@
 import type { MethodName, NotificationName } from '@harnas/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { AnyHandler, AnyNotificationHandler } from '../context.js';
+import type { LimitsService } from '../limits/limits-service.js';
+import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 import type { WakeService } from '../wake/wake-service.js';
@@ -10,8 +12,8 @@ import { createChangesHandlers } from './changes.js';
 import { hostInfo, hostShutdown } from './host.js';
 import { mailMarkRead } from './mail.js';
 import { createPtyHandlers } from './pty.js';
-import { providersList } from './providers.js';
-import { roomsCreate, roomsSend } from './rooms.js';
+import { createProvidersList } from './providers.js';
+import { roomsAddMember, roomsCreate, roomsResolveProposal, roomsSend } from './rooms.js';
 import { createSessionHandlers } from './sessions.js';
 import { settingsGet, settingsSet } from './settings.js';
 import { createWakeHandlers } from './wake.js';
@@ -27,6 +29,10 @@ export interface MethodDeps {
   worktrees: WorktreesService;
   /** Первое чтение работ хостом и сбор прерванных (их ждут WORKS_GATED_*); без него — сразу. */
   worksReady?: Promise<void>;
+  /** Версии CLI из пробы на старте хоста (`providers.list`); без них у провайдеров `version: null`. */
+  providerVersions?: ProviderVersions;
+  /** Лимиты подписок (`providers.list`); без них у провайдеров `limits: null`. */
+  limits?: LimitsService;
 }
 
 /**
@@ -86,7 +92,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'works.delete': worksDelete as AnyHandler,
     'works.rename': worksRename as AnyHandler,
     'works.setStatus': worksSetStatus as AnyHandler,
-    'providers.list': providersList as AnyHandler,
+    'providers.list': createProvidersList(deps.providerVersions, deps.limits) as AnyHandler,
     'settings.get': settingsGet as AnyHandler,
     'settings.set': settingsSet as AnyHandler,
     'pty.attach': pty.ptyAttach as AnyHandler,
@@ -103,6 +109,8 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'wake.resume': wake.wakeResume as AnyHandler,
     'wake.state': wake.wakeState as AnyHandler,
     'rooms.create': roomsCreate as AnyHandler,
+    'rooms.addMember': roomsAddMember as AnyHandler,
+    'rooms.resolveProposal': roomsResolveProposal as AnyHandler,
     'rooms.send': roomsSend as AnyHandler,
     'worktrees.available': worktrees.worktreesAvailable as AnyHandler,
     'worktrees.diff': worktrees.worktreesDiff as AnyHandler,

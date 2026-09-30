@@ -21,20 +21,29 @@ export type { AllSessionsOptions } from './all-sessions.js';
 export { defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
 export type { DiscoveredCodexSession } from './codex/discover.js';
 export { buildCodexIndex, indexCodexSession } from './codex/index-session.js';
+export { readCodexLimits } from './codex/limits.js';
+export { dropExpiredWindows, mergeLimits, readWorkLimits } from './limits.js';
+export type { LimitWindow, ProviderLimits } from './limits.js';
 export {
   PROVIDERS,
   agentEnv,
   commandBinary,
   commandInPath,
   loadProviders,
+  modelChoiceError,
   printCommand,
   providersFile,
   providersWithHistory,
   resumeCommand,
+  selectableModels,
   startCommand,
   substituteArgs,
+  supportsEffort,
+  supportsModel,
 } from './providers.js';
+export type { ModelOption } from './provider-models.js';
 export type {
+  EffortLevel,
   McpConfigKind,
   ProviderEntry,
   ProviderInfo,
@@ -63,8 +72,32 @@ export {
 export { displayStatus } from './work/status-view.js';
 export { isUnreadFor, markHumanRead, recipientsOf, unreadFor } from './work/letters.js';
 export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';
-export { addRoom, isDescendant, isMember, joinNotice, nextRoomId } from './work/rooms.js';
+export {
+  addMember,
+  addMemberByLead,
+  addRoom,
+  addRoomOriginMessage,
+  addSystemMessage,
+  isDescendant,
+  isMember,
+  isRoomClosed,
+  joinNotice,
+  leaveOtherRooms,
+  liveLead,
+  nextRoomId,
+  roomLead,
+  RoomRuleError,
+} from './work/rooms.js';
 export type { NewRoom } from './work/rooms.js';
+export {
+  ACCEPTED_LETTER,
+  ACCEPTED_LINE,
+  PROPOSAL_TEXT_MAX,
+  ProposalConflictError,
+  resolveProposal,
+  RETURNED_LETTER,
+  setProposal,
+} from './work/proposals.js';
 export {
   commitWorktree,
   createWorktree,
@@ -123,7 +156,7 @@ export {
   writeHostLease,
 } from './work/lease.js';
 export type { HostLease } from './work/lease.js';
-export { decisionsOf, participantLabel, sessionTag, threadOf } from './work/thread.js';
+export { decisionsOf, participantLabel, sessionMention, sessionTag, threadOf } from './work/thread.js';
 export type { Thread } from './work/thread.js';
 export { buildBrief, writeBrief } from './work/brief.js';
 export {
@@ -150,6 +183,14 @@ export {
   overrideVariable,
 } from './work/find-binary.js';
 export { GUIDE } from './work/guide.js';
+export { SKILL_MD, SKILL_NAME } from './work/skill.js';
+export { installAgentSkill } from './work/skill-install.js';
+export type {
+  SkillInstallOptions,
+  SkillInstallResult,
+  SkillSkip,
+  SkillSkipReason,
+} from './work/skill-install.js';
 export { systemGuidance } from './work/guidance.js';
 export {
   SUMMARIZER,
@@ -248,6 +289,7 @@ export type {
   LaunchedBy,
   Message,
   MessageKind,
+  Proposal,
   Room,
   SessionLifecycle,
   SessionMetrics,

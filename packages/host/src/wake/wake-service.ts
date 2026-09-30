@@ -33,6 +33,7 @@ import { refKey } from '@harnas/protocol';
 import type { NoticeKind, SessionRef } from '@harnas/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
+import { CODEX_SUBMIT_DELAY_MS, codexPaste, codexSubmitKey } from '../pty/codex-input.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import { typeAndSubmit } from '../pty/type-and-submit.js';
 import type { Attempt } from '../pty/type-and-submit.js';
@@ -68,6 +69,13 @@ const DEFAULT_POINTER_TIMEOUT_MS = 10_000;
 const DEFAULT_RESUME_FAIL_WINDOW_MS = 5_000;
 /** Уведомление о лимите подъёмов — не чаще раза в час на сессию (план, кусок 3.4). */
 const LIMIT_NOTICE_EVERY_MS = 60 * 60 * 1000;
+/**
+ * Codex получает указатель только вставкой, а режима вставки на экране хоста может ещё не быть: экран
+ * разбирает поток чуть позже сигнала терминала, по которому будильник и проснулся. Пересчёт стоит
+ * повторить: 15 раз через 200 мс, дальше — до следующего события сессии.
+ */
+const PASTE_MODE_RETRY_MS = 200;
+const PASTE_MODE_RETRIES = 15;
 
 /** Состояние одной попытки доставки указателя, живёт между пересчётами сессии. */
 interface AttemptState {
@@ -104,6 +112,10 @@ interface AttemptState {
    * процесс по брифу начал бы задачу заново.
    */
   resumeUnavailable: boolean;
+  /** Повтор пересчёта, пока у Codex нет режима вставки (`PASTE_MODE_RETRIES`). */
+  pasteRetry: NodeJS.Timeout | undefined;
+  /** Сколько повторов уже было; с режимом вставки на экране счёт начинается заново. */
+  pasteRetries: number;
 }
 
 
@@ -161,6 +173,8 @@ export function createWakeService(
         resumeLetters: [],
         pointerAfter: null,
         resumeUnavailable: false,
+        pasteRetry: undefined,
+        pasteRetries: 0,
       };
       attempts.set(key, state);
     }
@@ -177,6 +191,20 @@ export function createWakeService(
       clearTimeout(state.timeoutTimer);
       state.timeoutTimer = undefined;
     }
+    if (state.pasteRetry !== undefined) {
+      clearTimeout(state.pasteRetry);
+      state.pasteRetry = undefined;
+    }
+  }
+
+  /** У Codex ещё нет режима вставки: пересчёт через короткий срок, но не бесконечно. */
+  function waitForPasteMode(ref: SessionRef, state: AttemptState): void {
+    if (state.pasteRetry !== undefined || state.pasteRetries >= PASTE_MODE_RETRIES) return;
+    state.pasteRetries += 1;
+    state.pasteRetry = setTimeout(() => {
+      state.pasteRetry = undefined;
+      recompute(ref);
+    }, PASTE_MODE_RETRY_MS);
   }
 
   function notice(kind: NoticeKind, ref: SessionRef, text: string): void {
@@ -303,34 +331,56 @@ export function createWakeService(
     await resumeFailed(ref, state, letterIds, `процесс вышел с кодом ${exitCode}, не начав работу`);
   }
 
-  /** Печатает текст указателя и заводит оба таймера попытки: Enter и предохранитель. */
+  /**
+   * Печатает текст указателя и заводит оба таймера попытки: Enter и предохранитель. Codex — своим
+   * порядком (спека комнат, 3.6): вставка в маркерах bracketed paste, пауза десятки миллисекунд, а
+   * клавиша — Tab занятому агенту (очередь на следующий ход) и Enter у приглашения.
+   */
   function beginAttempt(
     ref: SessionRef,
     state: AttemptState,
-    action: { text: string; letterIds: string[] },
+    action: { text: string; letterIds: string[]; queue?: true },
+    codex = false,
   ): void {
     // Печать и Enter — общая механика с pty.send (кусок 5.1): Enter через паузу тому же
     // pid, отмена по вводу человека. Черновиком хоста свой указатель не помечается —
     // правила будильника (спека 7.3) прежние.
     // Перед Enter — снова `blocked`: запрос разрешения мог появиться за паузу (fix-final-b).
-    const typing = typeAndSubmit({ pty, enterDelayMs }, ref, action.text, true, {
-      beforeEnter: () => activity.get(ref)?.activity.activity !== 'blocked',
-    });
+    const typing = typeAndSubmit(
+      { pty, enterDelayMs },
+      ref,
+      codex ? codexPaste(action.text) : action.text,
+      true,
+      {
+        beforeEnter: () => activity.get(ref)?.activity.activity !== 'blocked',
+        ...(codex
+          ? {
+              delayMs: CODEX_SUBMIT_DELAY_MS,
+              submitKey: () => codexSubmitKey(activity.get(ref)?.activity.activity),
+            }
+          : {}),
+      },
+    );
     state.typing = typing;
     for (const id of action.letterIds) state.pointed.add(id);
-    state.inFlight = true;
 
-    // Предохранитель считает с момента печати, а не с Enter: без хуков (или без
-    // самого Enter, если его отменил ввод человека) хост иначе ждал бы хода
-    // вечно — сигнала «письмо доставлено» без него не бывает вовсе.
-    state.timeoutTimer = setTimeout(() => {
-      state.timeoutTimer = undefined;
-      // Попытка признана пропавшей — Enter, если ещё не ушёл, теперь не нужен:
-      // ход всё равно не будет замечен.
-      clearTimers(state);
-      state.inFlight = false;
-      notice('pointer-timeout', ref, `сессия ${ref.sessionId} не начала ход после указателя`);
-    }, pointerTimeoutMs);
+    // Указатель в очереди занятого агента хода не начинает — начнёт его сам Codex, когда дойдёт очередь,
+    // и ждать «ход после указателя» нечего: `inFlight` и предохранитель были бы ложной тревогой.
+    if (action.queue !== true) {
+      state.inFlight = true;
+
+      // Предохранитель считает с момента печати, а не с Enter: без хуков (или без
+      // самого Enter, если его отменил ввод человека) хост иначе ждал бы хода
+      // вечно — сигнала «письмо доставлено» без него не бывает вовсе.
+      state.timeoutTimer = setTimeout(() => {
+        state.timeoutTimer = undefined;
+        // Попытка признана пропавшей — Enter, если ещё не ушёл, теперь не нужен:
+        // ход всё равно не будет замечен.
+        clearTimers(state);
+        state.inFlight = false;
+        notice('pointer-timeout', ref, `сессия ${ref.sessionId} не начала ход после указателя`);
+      }, pointerTimeoutMs);
+    }
 
     void typing.done.then((outcome) => {
       // Попытку уже сменили или отменили — её исход ничего не решает.
@@ -406,6 +456,8 @@ export function createWakeService(
       state.pointerAfter = null;
     }
 
+    // Codex занятому агенту письмо ставит в очередь (Tab): указатель не ждёт конца хода.
+    const codex = handle.provider === 'codex';
     const action = deliveryAction({
       session,
       activity: live?.activity ?? null,
@@ -417,9 +469,21 @@ export function createWakeService(
       inFlight: state.inFlight,
       resumeAllowed: false,
       hooked: hookedSince(live?.activity, handle.startedAt),
+      queueWhileBusy: codex,
     });
 
-    if (action.kind === 'type-pointer') beginAttempt(ref, state, action);
+    if (action.kind !== 'type-pointer') return;
+    if (codex) {
+      // Codex — только вставкой, как в `pty.send`: без режима вставки на экране TUI ещё не поднялся (или его
+      // сменил), и маркеры ушли бы в поле ввода знаками. Отказа, как у `pty.send`, тут вернуть некому — пересчёт
+      // повторяется сам.
+      if (!handle.bracketedPaste()) {
+        waitForPasteMode(ref, state);
+        return;
+      }
+      state.pasteRetries = 0;
+    }
+    beginAttempt(ref, state, action, codex);
   }
 
   /** Все сессии всех работ: живые получают указатель, спящие — подъём. */

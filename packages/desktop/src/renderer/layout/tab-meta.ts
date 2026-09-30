@@ -11,7 +11,7 @@ import { refKey } from '@harnas/protocol';
 import type { FileRootSpec, TabSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { workKey as workKeyOf } from '../../shared/work-keys.js';
-import type { Attention } from '../attention/derive.js';
+import { humanUnreadLetters, roomAwaitsDecision, type Attention } from '../attention/derive.js';
 import { bufferKey } from '../files/buffer.js';
 import { sessionRowLabel, sessionTag } from '../lib/participant.js';
 
@@ -27,15 +27,23 @@ export interface TabMetaExtras {
 
 export const EMPTY_EXTRAS: TabMetaExtras = { attention: {}, dirtyTabIds: new Set(), browser: {} };
 
+/** Подкраска вкладки-пилюли (спека окна 2026-09-29, 1.1): `accent` — accent-200, `accent-2` — accent-2-200. */
+export type TabTint = 'accent' | 'accent-2';
+
 export interface TabMeta {
   title: string;
   icon: 'terminal' | 'mail' | 'room' | 'diff' | 'file' | 'browser';
-  /** Для точки состояния и значка агента (`Tab.tsx`, спека 4.2) — только у `terminal`. */
+  /** Для точки состояния (`Tab.tsx`, спека 4.2) — только у `terminal`. */
   session: WorkSession | null;
-  /** Сессия вкладки-терминала в `needs-you` или `unseen` (спека 7.3): подложка amber-500/10. */
+  /** Сессия вкладки-терминала в `needs-you` или `unseen` (спека 7.3): пометка `data-unread`. */
   unread: boolean;
   /** Сессия в `needs-you`: значок вопроса вместо точки — важнее точки (кусок 4.2). */
   needsYou: boolean;
+  /**
+   * Подкраска пилюли (Organic, 1.1): сессия `needs-you` — `accent`, `unseen` — `accent-2`; комната с
+   * ждущим решением и почта с непрочитанным человеком письмом — `accent`; у прочих видов нет.
+   */
+  tint: TabTint | null;
   /** Вкладка file с несохранённым буфером своей работы (кусок 7.3a). */
   dirty: boolean;
   /** Favicon вкладки браузера — `data:` из main (9.2a); у прочих видов `null`. */
@@ -126,7 +134,7 @@ export function fileTabNames(tabs: readonly TabSpec[]): ReadonlyMap<string /* ta
 }
 
 export function tabMeta(tab: TabSpec, entry: WorkEntry | null, extras: TabMetaExtras = EMPTY_EXTRAS): TabMeta {
-  const empty = { unread: false, needsYou: false, dirty: false, favicon: null } as const;
+  const empty = { unread: false, needsYou: false, tint: null, dirty: false, favicon: null } as const;
 
   switch (tab.kind) {
     case 'terminal': {
@@ -143,13 +151,19 @@ export function tabMeta(tab: TabSpec, entry: WorkEntry | null, extras: TabMetaEx
         ...empty,
         unread: attention === 'needs-you' || attention === 'unseen',
         needsYou: attention === 'needs-you',
+        tint: attention === 'needs-you' ? 'accent' : attention === 'unseen' ? 'accent-2' : null,
       };
     }
-    case 'mail':
-      return { title: truncateTitle(S.tabs.mail), icon: 'mail', session: null, ...empty };
+    case 'mail': {
+      // Письма без комнаты, которые человек ещё не прочёл, — те же, что считает `✉N` карточки.
+      const unread = entry !== null && humanUnreadLetters(entry.map).length > 0;
+      return { title: truncateTitle(S.tabs.mail), icon: 'mail', session: null, ...empty, tint: unread ? 'accent' : null };
+    }
     case 'room': {
       const room = entry?.map.rooms.find((candidate) => candidate.id === tab.roomId) ?? null;
-      return { title: truncateTitle(room?.title ?? S.rooms.fallbackTitle), icon: 'room', session: null, ...empty };
+      // Решение ждёт человека — то же правило, что у строки комнаты и карточки (`roomAwaitsDecision`).
+      const awaiting = room !== null && roomAwaitsDecision(room);
+      return { title: truncateTitle(room?.title ?? S.rooms.fallbackTitle), icon: 'room', session: null, ...empty, tint: awaiting ? 'accent' : null };
     }
     case 'diff': {
       const shortHash = tab.commit === null ? null : tab.commit.slice(0, 7);

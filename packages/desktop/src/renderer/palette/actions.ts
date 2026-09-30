@@ -9,13 +9,13 @@
  * уходит); хост перезапускается только после «Restart» в подтверждении.
  */
 
-import type { SessionRef } from '@harnas/protocol';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import type { ActionId } from '../../shared/keybindings.js';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { errorText, S } from '../../shared/strings.js';
 import type { Appearance } from '../../shared/ui-types.js';
+import type { AttentionTarget } from '../attention/next.js';
 import type { MruCycle } from '../keys/mru-cycle.js';
 import type { FilesState } from '../files/store.js';
 import { BROWSER_LIMITS, browserTabCount, openBrowserTab, requestAddressFocus, useBrowserStore } from '../browser/store.js';
@@ -53,8 +53,8 @@ export interface ActionContext {
     /** Правый сайдбар на этой вкладке; открытый не прячет. */
     showRightTab(tab: 'files' | 'changes'): void; // setSidebar('right', { open: true, tab })
     openNewWork(title?: string): void; // openNewWorkDialog(null, title)
-    openNewSession(): void; // родитель — выбранная сессия, как у ⌘T
-    openNewRoom(): void; // CreateRoomDialog активной работы без участника (3.4)
+    openNewSession(): void; // диалог 1.5 активной работы одним агентом (⌘T)
+    openNewRoom(): void; // тот же диалог, открытый комнатой (два агента)
     openSettings(): void;
     setAppearance(mode: Appearance): void; // store/ui.ts: app.setAppearance, ui.json пишет main
     toggleShowArchived(): void;
@@ -72,7 +72,7 @@ export interface ActionContext {
     /** Терминал активной вкладки активной группы. */
     active(): TerminalSurfaceHandle | null;
   };
-  attention: { next(): SessionRef | null }; // openNextAttention (4.2)
+  attention: { next(): AttentionTarget | null }; // openNextAttention (4.2): сессия или комната с решением (кусок 5)
   /** useFilesStore.getState() (7.4): ⌘⇧F переводит «Файлы» в режим поиска. */
   files: Pick<FilesState, 'openSearch'>;
   toast(text: string): void;

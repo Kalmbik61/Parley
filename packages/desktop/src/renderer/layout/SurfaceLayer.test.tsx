@@ -311,13 +311,13 @@ describe('SurfaceLayer — стабильный sessionRef (раунд fix-main-
 });
 
 describe('SurfaceLayer — фон обёртки отступа (тест 12)', () => {
-  it('#282c34 при dark; после setDark(false) — фон XTERM_LIGHT, Terminal не создан заново', async () => {
+  it('#0b0a09 (лист окна) при dark; после setDark(false) — фон XTERM_LIGHT, Terminal не создан заново', async () => {
     setLayout(twoGroups(), 'g1');
     renderWork();
     await flush();
     const pad = surface('terminal:a')?.querySelector<HTMLElement>('[data-testid="terminal-surface-pad"]');
     if (pad === null || pad === undefined) throw new Error('нет обёртки отступа');
-    expect(pad.style.backgroundColor).toBe('rgb(40, 44, 52)');
+    expect(pad.style.backgroundColor).toBe('rgb(11, 10, 9)');
     const constructed = xtermMock.constructed;
 
     act(() => useUiStore.getState().setDark(false));

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ErrorCode, HostNotice, NoticeKind } from '@harnas/protocol';
-import { errorText, noticeText, S } from './strings.js';
+import { errorText, noticeText, providerName, S } from './strings.js';
 
 const CYRILLIC = /[Ѐ-ӿ]/;
 
@@ -15,7 +15,7 @@ const PROTOCOL_CODES: ErrorCode[] = [
   'internal',
 ];
 
-/** Все девять видов `NoticeKind` (`packages/protocol/src/types.ts`). */
+/** Все одиннадцать видов `NoticeKind` (`packages/protocol/src/types.ts`). */
 const NOTICE_KINDS: NoticeKind[] = [
   'map-lock',
   'map-corrupt',
@@ -26,6 +26,8 @@ const NOTICE_KINDS: NoticeKind[] = [
   'resume-failed',
   'resume-limit',
   'trust-wait',
+  'startup-wait',
+  'skill-foreign',
 ];
 
 /** `notice.text` — заведомо русский, как у хоста (раунд исправлений 1 куска E.1) — чтобы поймать случайную подстановку. */
@@ -34,17 +36,18 @@ function hostNotice(kind: NoticeKind, ref: HostNotice['ref'] = null): HostNotice
 }
 
 describe('S.states', () => {
-  it('содержит девять слов глоссария (спека 4.2)', () => {
+  // Слова состояний — строчными (спека окна 2026-09-29, 1.2): `working`, `needs you`, `done · unseen`…
+  it('содержит девять слов глоссария (спека 4.2), строчными (спека 1.2 Organic)', () => {
     expect(S.states).toEqual({
-      working: 'Working',
-      blocked: 'Needs you',
-      unseen: 'Done · unseen',
-      idle: 'Idle',
-      pending: 'Not started',
-      asleep: 'Asleep',
-      closed: 'Closed',
-      done: 'Done',
-      failed: 'Failed',
+      working: 'working',
+      blocked: 'needs you',
+      unseen: 'done · unseen',
+      idle: 'idle',
+      pending: 'not started',
+      asleep: 'asleep',
+      closed: 'closed',
+      done: 'done',
+      failed: 'failed',
     });
   });
 
@@ -52,6 +55,77 @@ describe('S.states', () => {
     for (const word of Object.values(S.states)) {
       expect(word).not.toMatch(CYRILLIC);
     }
+  });
+});
+
+// Имя провайдера для строки статуса и тултипов окна (спека 1.1, решение 3): по handoff — «Claude Code» и
+// «Codex», прочим — метка хоста. Одна функция: ту же берёт тултип свёрнутой комнаты «2 Claude Code agents».
+describe('S.sidebar — тексты карточки и строк (Organic, 1.2)', () => {
+  it('тултип «+» заголовка проекта называет проект', () => {
+    expect(S.sidebar.newWorkspaceInProject('shop')).toBe('New workspace in shop');
+  });
+
+  it('тултипы ✉N и #N — с числом и единственным числом при одном', () => {
+    expect(S.sidebar.unreadMail(1)).toBe('1 unread message to you');
+    expect(S.sidebar.unreadMail(3)).toBe('3 unread messages to you');
+    expect(S.sidebar.roomsWithUnread(1)).toBe('1 room with unread messages');
+    expect(S.sidebar.roomsWithUnread(2)).toBe('2 rooms with unread messages');
+  });
+
+  it('тултип ветки своего worktree, «N more closed» и «Hide closed»', () => {
+    expect(S.sidebar.ownWorktree('harnas/s-01')).toBe('Own worktree · harnas/s-01');
+    expect(S.sidebar.moreClosed(2)).toBe('2 more closed');
+    expect(S.sidebar.hideClosed).toBe('Hide closed');
+  });
+
+  // Кусок 5 плана «Organic»: строка комнаты (1.2) и строка «New session or room» под строками карточки.
+  it('строка комнаты: шеврон, слова состояния, `★` ведущего', () => {
+    expect(S.sidebar.showAgents).toBe('Show agents');
+    expect(S.sidebar.hideAgents).toBe('Hide agents');
+    expect(S.sidebar.roomDecision).toBe('decision');
+    expect(S.sidebar.roomNew(3)).toBe('3 new');
+    expect(S.sidebar.lead).toBe('Lead');
+    expect(S.sidebar.newSessionOrRoom).toBe('New session or room');
+  });
+
+  it('тултип значка провайдера свёрнутой комнаты — число и имя провайдера, единственное число при одном', () => {
+    expect(S.sidebar.roomAgents(2, providerName('claude', 'Claude'))).toBe('2 Claude Code agents');
+    expect(S.sidebar.roomAgents(1, providerName('claude', 'Claude'))).toBe('1 Claude Code agent');
+    expect(S.sidebar.roomAgents(3, providerName('codex', 'OpenAI Codex'))).toBe('3 Codex agents');
+    expect(S.sidebar.roomAgents(1, providerName('gemini', 'Gemini CLI'))).toBe('1 Gemini CLI agent');
+  });
+
+  it('тултип строки комнаты: ведущий и участники; комната без живых участников — без ведущего', () => {
+    expect(S.sidebar.roomTooltip('S01', ['S01', 'S02', 'S03', 'S04'])).toBe('Room · lead S01 · S01, S02, S03, S04');
+    expect(S.sidebar.roomTooltip(null, ['S01'])).toBe('Room · S01');
+    expect(S.sidebar.roomTooltip(null, [])).toBe('Room');
+  });
+});
+
+describe('S.terminal — карточка неживой сессии (Organic, 1.8)', () => {
+  it('последнее событие и суффикс «ago»', () => {
+    expect(S.terminal.lastEvent('3h ago')).toBe('last event 3h ago');
+    expect(S.time.ago('3h')).toBe('3h ago');
+  });
+});
+
+describe('providerName', () => {
+  it('claude — «Claude Code», codex — «Codex», независимо от метки хоста', () => {
+    expect(providerName('claude', 'Claude')).toBe('Claude Code');
+    expect(providerName('codex', 'OpenAI Codex')).toBe('Codex');
+  });
+
+  it('регистр id не важен, как и у значка провайдера', () => {
+    expect(providerName('Claude', 'x')).toBe('Claude Code');
+    expect(providerName('CODEX', 'x')).toBe('Codex');
+  });
+
+  it('прочим провайдерам — метка, которую отдал хост', () => {
+    expect(providerName('gemini', 'Gemini CLI')).toBe('Gemini CLI');
+  });
+
+  it('пустая метка — сам id, а не пустая строка', () => {
+    expect(providerName('gemini', '')).toBe('gemini');
   });
 });
 
@@ -112,6 +186,22 @@ describe('noticeText', () => {
     const text = noticeText(hostNotice('trust-wait', ref), 'S03 backend');
     expect(text).toBe('S03 backend: not responding since launch — may be waiting for folder trust.');
     expect(text).not.toMatch(CYRILLIC);
+  });
+
+  it('startup-wait — причина: Codex на экране входа или доверия, отвечать надо в его терминале', () => {
+    expect(noticeText(hostNotice('startup-wait'))).toBe(
+      'Waiting at startup — Codex may need sign-in or folder trust in its terminal.',
+    );
+    const ref = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-03' };
+    expect(noticeText(hostNotice('startup-wait', ref), 'S03 codex')).toBe(
+      'S03 codex: waiting at startup — Codex may need sign-in or folder trust in its terminal.',
+    );
+  });
+
+  it('skill-foreign (ref: null) — английский смысл: скилл не поставлен, путь чужой', () => {
+    expect(noticeText(hostNotice('skill-foreign'))).toBe(
+      "Agent skill not installed — that path already exists and wasn't created by harnas.",
+    );
   });
 
   it('map-lock и map-corrupt (ref: null, без сессии) тоже дают английский текст', () => {

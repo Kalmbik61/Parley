@@ -1,6 +1,12 @@
 /**
  * Тесты 4, 11, 12, 13 куска 3.3: строка сессии карточки. Тест 12 переехал сюда из
  * тестов прежнего дерева сессий (контракт перетаскивания 2.6), удалённого в 3.5.
+ *
+ * Облик Organic (спека окна 2026-09-29, 1.2): пилюля 26px, отступ слева 8 + 12 на уровень, зазор 6,
+ * 12px; значок состояния 12, значок агента 13, слово состояния 11px строчными, ветка своего worktree —
+ * значок GitBranch 11, время 10px шириной 22. Подкраска: `blocked` — `accent-200` (слово `accent-800`),
+ * `unseen` — `accent-2-200` (слово `accent-2-800`), выбранная и hover — `text 9%`; закрытая — .5 при
+ * правиле `dimmed.css`.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -24,14 +30,25 @@ const BRIDGE = createFakeBridge();
 
 function renderRow(
   session: WorkSession,
-  options: { activity?: Activity | null; draggable?: boolean; selected?: boolean; onOpen?: () => void } = {},
+  options: {
+    activity?: Activity | null;
+    /** Время последнего события активности; по умолчанию 09:57. `null` — событий ещё не было. */
+    lastEventAt?: string | null;
+    draggable?: boolean;
+    selected?: boolean;
+    onOpen?: () => void;
+  } = {},
 ) {
-  const activity =
+  const built =
     options.activity === undefined || options.activity === null
       ? null
       : makeActivity({ projectPath: PROJECT, workId: WORK, sessionId: session.id }, options.activity, {
-          lastEventAt: '2026-09-27T09:57:00.000Z',
+          lastEventAt: options.lastEventAt ?? '2026-09-27T09:57:00.000Z',
         });
+  const activity =
+    built !== null && options.lastEventAt === null
+      ? { ...built, activity: { ...built.activity, lastEventAt: null } }
+      : built;
   return render(
     <SessionRow
       workKey={KEY}
@@ -87,34 +104,106 @@ describe('SessionRow — девять состояний таблицы 4.2 (т�
   });
 
   // Ревью M12: закрытая строка приглушена data-dimmed (styles/dimmed.css), а не opacity-50 —
-  // та опускала текст строки ниже 4.5:1.
-  it('закрытая строка — data-dimmed без opacity, открытая — без приглушения', () => {
+  // та опускала текст строки ниже 4.5:1. Значение `row` — значки .5 (у done-карточки .6).
+  it('закрытая строка — data-dimmed="row" без opacity, открытая — без приглушения', () => {
     renderRow(makeSession('s-01', 'a', { lifecycle: 'closed' }));
     expect(row().hasAttribute('data-dimmed')).toBe(true);
+    expect(row().getAttribute('data-dimmed')).toBe('row');
     expect(row().className).not.toMatch(/opacity-/);
     cleanup();
     renderRow(makeSession('s-01', 'a'));
     expect(row().hasAttribute('data-dimmed')).toBe(false);
   });
 
-  it('⎇ только у сессии со своим worktree, ветка — в title', () => {
+  it('GitBranch 11px только у сессии со своим worktree, тултип «Own worktree · ветка»', () => {
     renderRow(makeSession('s-01', 'a'));
     expect(row().querySelector('[data-worktree]')).toBeNull();
     cleanup();
     renderRow(makeSession('s-01', 'a', { worktree: { path: '/tmp/wt', branch: 'harnas/s-01', base: 'main', createdAt: null } }));
-    expect(row().querySelector('[data-worktree]')?.getAttribute('title')).toBe('harnas/s-01');
+    const branch = row().querySelector('[data-worktree]');
+    expect(branch?.getAttribute('title')).toBe('Own worktree · harnas/s-01');
+    expect(branch?.querySelector('svg.lucide-git-branch')?.classList.contains('size-[11px]')).toBe(true);
+    expect(row().textContent).not.toContain('⎇');
   });
 
-  it('подсветка amber при needs-you и unseen, у работающей — нет; на строке data-session-id', () => {
+  it('подкраска: needs-you — accent-200 (слово accent-800), unseen — accent-2-200 (слово accent-2-800), у работающей — нет; на строке data-session-id', () => {
     renderRow(makeSession('s-01', 'a'), { activity: 'blocked' });
-    expect(row().className).toContain('bg-amber-500/10');
+    expect(row().className).toContain('bg-accent-200');
+    expect(row().className).toContain('hover:bg-accent-200');
+    expect(row().className).not.toContain('amber');
+    expect(screen.getByText(S.states.blocked).className).toContain('text-accent-800');
     cleanup();
     renderRow(makeSession('s-01', 'a'), { activity: 'unseen' });
-    expect(row().className).toContain('bg-amber-500/10');
+    expect(row().className).toContain('bg-accent-2-200');
+    expect(row().className).toContain('hover:bg-accent-2-200');
+    expect(screen.getByText(S.states.unseen).className).toContain('text-accent-2-800');
     cleanup();
     renderRow(makeSession('s-01', 'a'), { activity: 'working' });
-    expect(row().className).not.toContain('bg-amber-500/10');
+    expect(row().className).not.toMatch(/bg-accent(-2)?-200/);
+    expect(screen.getByText(S.states.working).className).toContain('text-work-sidebar-muted-foreground');
     expect(row().getAttribute('data-session-id')).toBe('s-01');
+  });
+
+  it('пилюля 26px, 12px, зазор 6; выбранная и hover — text 9%, выбранная — вес 700; подкраска бьёт выбранную', () => {
+    renderRow(makeSession('s-01', 'исполнитель'));
+    expect(row().className).toMatch(/\bh-\[26px\]/);
+    expect(row().className).toMatch(/\brounded-full\b/);
+    expect(row().className).toMatch(/\bgap-1\.5\b/);
+    expect(row().className).toMatch(/\btext-xs\b/);
+    expect(row().className).toContain('hover:bg-work-sidebar-accent');
+    expect(screen.getByText('S01 исполнитель').className).not.toContain('font-bold');
+    cleanup();
+    renderRow(makeSession('s-01', 'исполнитель'), { selected: true });
+    expect(row().className).toMatch(/\bbg-work-sidebar-accent\b/);
+    expect(screen.getByText('S01 исполнитель').className).toContain('font-bold');
+    cleanup();
+    renderRow(makeSession('s-01', 'исполнитель'), { selected: true, activity: 'blocked' });
+    expect(row().className).toContain('bg-accent-200');
+    expect(row().className).not.toMatch(/\bbg-work-sidebar-accent\b/);
+  });
+
+  // Правки ревью куска 2: в приглушённом поддереве (done-карточка, закрытая строка) основной цвет сайдбара уже
+  // равен вторичному, поэтому подмена «вторичный := основной» на hover ничего не меняла и текст оставался
+  // `neutral-700` на заливке hover (3.86:1 в светлой). Строка на hover задаёт оба цвета явно — основным текстом.
+  // Закрытая строка несёт `data-dimmed` сама: там неслойное правило `dimmed.css` бьёт утилиту по основному
+  // цвету, и он сводится к вторичному, а вторичный на hover — основной текст (цепочка без петли).
+  it('hover: основной и вторичный цвет строки — явно --color-text (в приглушённом поддереве подмена одной другой не работает)', () => {
+    renderRow(makeSession('s-01', 'a'));
+    expect(row().className).toContain('hover:[--work-sidebar-foreground:var(--color-text)]');
+    expect(row().className).toContain('hover:[--work-sidebar-muted-foreground:var(--color-text)]');
+    expect(row().className).not.toContain('hover:[--work-sidebar-muted-foreground:var(--work-sidebar-foreground)]');
+  });
+
+  it('значок состояния 12, значок агента 13, время 10px шириной 22, слово 11px', () => {
+    renderRow(makeSession('s-01', 'a'), { activity: 'working' });
+    expect(row().querySelector('[data-testid="agent-state-dot"]')?.classList.contains('size-3')).toBe(true);
+    expect(row().querySelector('img')?.getAttribute('width')).toBe('13');
+    const time = screen.getByText('3m');
+    expect(time.className).toContain('w-[22px]');
+    expect(time.className).toContain('text-[10px]');
+    expect(time.className).toContain('text-right');
+    expect(screen.getByText(S.states.working).className).toContain('text-[11px]');
+  });
+
+  it('отступ слева — 8 + 12 на уровень', () => {
+    render(
+      <SessionRow workKey={KEY} projectPath={PROJECT} workId={WORK} bridge={BRIDGE} session={makeSession('s-02', 'b')} depth={2} activity={null} now={NOW} draggable selected={false} onOpen={() => {}} />,
+    );
+    expect(row('s-02').style.paddingLeft).toBe('32px');
+    cleanup();
+    renderRow(makeSession('s-01', 'a'));
+    expect(row('s-01').style.paddingLeft).toBe('8px');
+  });
+
+  it('длинная метка (40 знаков) не выталкивает слово и время: метка сжимается многоточием', () => {
+    const label = 'я'.repeat(40);
+    renderRow(makeSession('s-01', label), { activity: 'working' });
+    const name = screen.getByText(`S01 ${label}`);
+    expect(name.className).toContain('min-w-0');
+    expect(name.className).toContain('flex-1');
+    expect(name.className).toContain('truncate');
+    expect(screen.getByText(S.states.working).className).toContain('shrink-0');
+    expect(screen.getByText('3m').className).toContain('shrink-0');
   });
 
   it('подпись S01 и время последнего события; клик зовёт onOpen', () => {
@@ -124,6 +213,48 @@ describe('SessionRow — девять состояний таблицы 4.2 (т�
     expect(row().textContent).toContain('3m');
     fireEvent.click(row());
     expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Кусок 5 плана «Organic», спека окна 2026-09-29, 1.2: участник развёрнутой комнаты — та же строка, но с отступом слева
+// 18 и без правого поля (его даёт строка комнаты), а у ведущего после названия `★`.
+describe('SessionRow — участник комнаты (кусок 5)', () => {
+  const inRoom = (session: WorkSession, lead: boolean) =>
+    render(
+      <SessionRow workKey={KEY} projectPath={PROJECT} workId={WORK} bridge={BRIDGE} session={session} depth={3} activity={null} now={NOW} draggable selected={false} onOpen={() => {}} inRoom lead={lead} />,
+    );
+
+  it('отступ слева 18 (глубина не в счёт), правое поле 0; обычная строка держит 8 + 12·depth и 6', () => {
+    inRoom(makeSession('s-01', 'a'), false);
+    expect(row().style.paddingLeft).toBe('18px');
+    expect(row().className).toMatch(/\bpr-0\b/);
+    expect(row().className).not.toMatch(/\bpr-1\.5\b/);
+    expect(row().className).toMatch(/\bh-\[26px\]/);
+    cleanup();
+    renderRow(makeSession('s-01', 'a'));
+    expect(row().style.paddingLeft).toBe('8px');
+    expect(row().className).toMatch(/\bpr-1\.5\b/);
+  });
+
+  it('★ у ведущего: после названия и перед словом состояния, 11px, accent-700, тултип «Lead»; у прочих её нет', () => {
+    inRoom(makeSession('s-01', 'исполнитель'), true);
+    const star = row().querySelector<HTMLElement>('[data-lead]') as HTMLElement;
+    expect(star.textContent).toBe('★');
+    expect(star.getAttribute('title')).toBe('Lead');
+    expect(star.className).toContain('text-[11px]');
+    expect(star.className).toContain('text-accent-700');
+    expect(star.className).toContain('shrink-0');
+    const label = screen.getByText('S01 исполнитель');
+    expect(label.compareDocumentPosition(star) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(star.compareDocumentPosition(screen.getByText(S.states.idle)) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    cleanup();
+    inRoom(makeSession('s-01', 'исполнитель'), false);
+    expect(row().querySelector('[data-lead]')).toBeNull();
+  });
+
+  it('обычная строка сессии звезды не знает: lead без комнаты не рисуется, если его не просили', () => {
+    renderRow(makeSession('s-01', 'a'));
+    expect(row().querySelector('[data-lead]')).toBeNull();
   });
 });
 
@@ -140,6 +271,83 @@ describe('SessionRow — пометка trust-wait (тест 11)', () => {
     renderRow(makeSession('s-02', 'b'));
     expect(row('s-01').querySelector(`[title="${S.sidebar.trustWaitTooltip}"]`)?.textContent).toBe('⚠');
     expect(row('s-02').querySelector(`[title="${S.sidebar.trustWaitTooltip}"]`)).toBeNull();
+  });
+});
+
+describe('SessionRow — пометка startup-wait (Codex на экране старта)', () => {
+  it('host.notice startup-wait по ref строки — ⚠ со своим тултипом про вход и доверие; у другой сессии нет', () => {
+    const notice: HostNotice = {
+      kind: 'startup-wait',
+      text: 'ждёт входа',
+      ref: { projectPath: PROJECT, workId: WORK, sessionId: 's-01' },
+    } as HostNotice;
+    useNoticesStore.setState({ notices: [notice] });
+
+    renderRow(makeSession('s-01', 'a'));
+    renderRow(makeSession('s-02', 'b'));
+    expect(row('s-01').querySelector(`[title="${S.sidebar.startupWaitTooltip}"]`)?.textContent).toBe('⚠');
+    expect(row('s-01').querySelector(`[title="${S.sidebar.trustWaitTooltip}"]`)).toBeNull();
+    expect(row('s-02').querySelector(`[title="${S.sidebar.startupWaitTooltip}"]`)).toBeNull();
+  });
+
+  it('тултип на английском, без кириллицы', () => {
+    expect(S.sidebar.startupWaitTooltip).not.toMatch(/[а-яё]/i);
+  });
+
+  const startupNotice = (at: string): HostNotice =>
+    ({
+      kind: 'startup-wait',
+      text: 'ждёт входа',
+      ref: { projectPath: PROJECT, workId: WORK, sessionId: 's-01' },
+      at,
+    }) as HostNotice;
+  const mark = (): Element | null => row('s-01').querySelector(`[title="${S.sidebar.startupWaitTooltip}"]`);
+
+  it('Codex дошёл до Ready или Working после уведомления — ⚠ снимается, хотя уведомление ещё в буфере', () => {
+    // Хост знает состояние Codex: известный сигнал позже уведомления (у него время синтетического «нужен ты»)
+    // значит, что экран старта пройден. Подсказка «may need sign-in» рядом с работающей сессией — ложная.
+    useNoticesStore.setState({ notices: [startupNotice('2026-09-27T09:50:00.000Z')] });
+    renderRow(makeSession('s-01', 'a'), { activity: 'working' });
+    expect(mark()).toBeNull();
+    cleanup();
+    renderRow(makeSession('s-01', 'a'), { activity: 'idle' });
+    expect(mark()).toBeNull();
+  });
+
+  it('сессия всё ещё на экране старта — ⚠ стоит: последнее событие — то самое «нужен ты» со временем уведомления', () => {
+    const at = '2026-09-27T09:57:00.000Z';
+    useNoticesStore.setState({ notices: [startupNotice(at)] });
+    renderRow(makeSession('s-01', 'a'), { activity: 'blocked', lastEventAt: at });
+    expect(mark()?.textContent).toBe('⚠');
+  });
+
+  it('уведомление свежее последнего события или у уведомления нет времени — ⚠ стоит', () => {
+    useNoticesStore.setState({ notices: [startupNotice('2026-09-27T09:58:00.000Z')] });
+    renderRow(makeSession('s-01', 'a'), { activity: 'blocked' });
+    expect(mark()?.textContent).toBe('⚠');
+    cleanup();
+
+    useNoticesStore.setState({ notices: [{ ...startupNotice(''), at: undefined } as unknown as HostNotice] });
+    renderRow(makeSession('s-01', 'a'), { activity: 'working' });
+    expect(mark()?.textContent).toBe('⚠');
+  });
+
+  it('событий у сессии ещё нет (`lastEventAt` — null) — ⚠ стоит', () => {
+    useNoticesStore.setState({ notices: [startupNotice('2026-09-27T09:50:00.000Z')] });
+    renderRow(makeSession('s-01', 'a'), { activity: 'idle', lastEventAt: null });
+    expect(mark()?.textContent).toBe('⚠');
+  });
+
+  it('trust-wait состояния не знает — снимается, как и раньше, только уходом уведомления из буфера', () => {
+    const notice = {
+      kind: 'trust-wait',
+      text: 'молчит',
+      ref: { projectPath: PROJECT, workId: WORK, sessionId: 's-01' },
+      at: '2026-09-27T09:50:00.000Z',
+    } as HostNotice;
+    useNoticesStore.setState({ notices: [notice] });
+    renderRow(makeSession('s-01', 'a'), { activity: 'working' });
+    expect(row('s-01').querySelector(`[title="${S.sidebar.trustWaitTooltip}"]`)?.textContent).toBe('⚠');
   });
 });
 

@@ -109,6 +109,39 @@ describe('createNotifier (тест 1 куска 4.3)', () => {
   });
 });
 
+/** Решение ведущего в комнате (кусок 8 «Organic»): тег `proposal:<workKey>:<roomId>`, цель — комната. */
+function decision(roomId: string, body: string): AppNote {
+  return {
+    title: 'Decision waiting for you',
+    body,
+    tag: `proposal:/tmp/p w-01:${roomId}`,
+    target: { kind: 'room', projectPath: '/tmp/p', workId: 'w-01', roomId },
+    silent: false,
+  };
+}
+
+describe('createNotifier — решение в комнате (кусок 8)', () => {
+  it('переделанное решение той же комнаты заменяет прежнее уведомление; решение другой комнаты — нет', () => {
+    const { created, notify } = setup();
+    notify(decision('r-01', 'Возвраты · S01 collected positions'));
+    notify(decision('r-02', 'Отчёты · S01 collected positions'));
+    notify(decision('r-01', 'Возвраты · S01 revised the decision'));
+    expect(created).toHaveLength(3);
+    expect(created[0]?.close).toHaveBeenCalledTimes(1);
+    expect(created[1]?.close).not.toHaveBeenCalled();
+    expect(created[2]?.show).toHaveBeenCalledTimes(1);
+    expect(created[2]?.options).toEqual({ title: 'Decision waiting for you', body: 'Возвраты · S01 revised the decision', silent: false });
+  });
+
+  it('клик по уведомлению о решении поднимает окно и отдаёт ему цель — комнату', () => {
+    const { created, calls, sendFocusTarget, notify } = setup();
+    notify(decision('r-01', 'Возвраты · S01 collected positions'));
+    created[0]?.fire('click');
+    expect(calls).toEqual(['focusWindow', 'sendFocusTarget']);
+    expect(sendFocusTarget).toHaveBeenCalledWith({ kind: 'room', projectPath: '/tmp/p', workId: 'w-01', roomId: 'r-01' });
+  });
+});
+
 describe('createPendingFocusTarget (тест 8 куска 4.3)', () => {
   it('take отдаёт положенную цель один раз, затем null', () => {
     const pending = createPendingFocusTarget();

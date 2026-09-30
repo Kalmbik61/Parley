@@ -115,7 +115,7 @@ beforeEach(() => {
   useUiStore.setState({
     windowFocused: true,
     wakePaused: null,
-    dialogs: { newWork: { open: false, projectPath: null, title: '' }, newSession: { open: false, parentSessionId: null, work: null }, settings: false, createRoom: null, restartHost: false },
+    dialogs: { newWork: { open: false, projectPath: null, title: '' }, newSession: { open: false, work: null, room: false }, settings: false, mergeRoom: null, restartHost: false },
     visibleSessionRefs: {},
     ui: DEFAULT_UI,
     uiLoaded: true,

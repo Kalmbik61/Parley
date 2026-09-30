@@ -160,6 +160,10 @@ describe('список методов в hello', () => {
     expect(methods).toContain('hello');
     expect(methods).toContain('works.rename');
     expect(methods).toContain('works.setStatus');
+    // Новые методы комнат (дизайн комнат, 3.2): окно по этому списку решает, показывать ли
+    // вступление в комнату и кнопки решения.
+    expect(methods).toContain('rooms.addMember');
+    expect(methods).toContain('rooms.resolveProposal');
     client.close();
   });
 });

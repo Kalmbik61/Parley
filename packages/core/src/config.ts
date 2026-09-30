@@ -35,6 +35,12 @@ export interface HarnasConfig {
   resumeRate: number;
   /** Запускать ли `pending` от агента самим, в фоне, без диалога (раздел 5.2). */
   autoLaunch: boolean;
+  /**
+   * Ставить ли скилл `harnas` в проект и в worktree сессии при запуске (`work/skill-install.ts`): файлы
+   * `.agents/skills/harnas` и симлинк `.claude/skills/harnas`. Выключено — хост скилл не ставит и не
+   * обновляет; уже поставленное не удаляется.
+   */
+  agentSkills: boolean;
   /** Шрифт панели терминала в окне (кусок 1.10 плана окна). */
   fontFamily: string;
   /** Кегль панели терминала в пунктах: 8…32 (кусок 1.10 плана окна). */
@@ -54,6 +60,7 @@ export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
   messageRate: 20,
   resumeRate: 6,
   autoLaunch: true,
+  agentSkills: true,
   // Терминал окна (кусок 1.3 плана окна, спека 4.3).
   fontFamily: "'SF Mono', Menlo, monospace",
   fontSize: 14,
@@ -67,6 +74,7 @@ export const ENV_NAMES: Readonly<Record<keyof HarnasConfig, string>> = {
   messageRate: 'HARNAS_MESSAGE_RATE',
   resumeRate: 'HARNAS_RESUME_RATE',
   autoLaunch: 'HARNAS_AUTO_LAUNCH',
+  agentSkills: 'HARNAS_AGENT_SKILLS',
   fontFamily: 'HARNAS_FONT_FAMILY',
   fontSize: 'HARNAS_FONT_SIZE',
   worktreeRoot: 'HARNAS_WORKTREE_ROOT',
@@ -145,6 +153,7 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   take('messageRate', isPositiveInt, 'целое больше нуля');
   take('resumeRate', isResumeRate, RESUME_RATE_EXPECTED);
   take('autoLaunch', (value) => typeof value === 'boolean', 'true или false');
+  take('agentSkills', (value) => typeof value === 'boolean', 'true или false');
   take('fontFamily', isFontFamily, 'непустая строка');
   take('fontSize', isFontSize, FONT_SIZE_EXPECTED);
   take('worktreeRoot', isWorktreeRoot, 'непустая строка');
@@ -164,7 +173,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
     return value === undefined || value === '' ? undefined : value;
   };
 
-  const flag = (key: 'channelPush' | 'autoLaunch'): void => {
+  const flag = (key: 'channelPush' | 'autoLaunch' | 'agentSkills'): void => {
     const name = ENV_NAMES[key];
     const value = text(name);
     if (value === undefined) return;
@@ -193,6 +202,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
     else complain(`${ENV_NAMES.resumeRate}: ожидается ${RESUME_RATE_EXPECTED}`);
   }
   flag('autoLaunch');
+  flag('agentSkills');
 
   const fontFamily = text(ENV_NAMES.fontFamily);
   if (fontFamily !== undefined) {
@@ -261,7 +271,11 @@ export async function loadConfig(
 }
 
 /** Булевы ключи настроек — те же множества «да/нет», что у загрузчика окружения. */
-const BOOLEAN_KEYS: ReadonlySet<keyof HarnasConfig> = new Set(['channelPush', 'autoLaunch']);
+const BOOLEAN_KEYS: ReadonlySet<keyof HarnasConfig> = new Set([
+  'channelPush',
+  'autoLaunch',
+  'agentSkills',
+]);
 
 /**
  * Разбор введённого значения теми же правилами, что и у файла и у окружения:

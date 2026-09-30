@@ -384,8 +384,8 @@ function FileDiffSectionImpl(props: FileDiffSectionProps): JSX.Element {
           {title}
         </span>
         {/* Двоичный файл чисел не имеет (numstat `-`). */}
-        {file.additions === null ? null : <span className="shrink-0 tabular-nums text-status-success">{`+${file.additions}`}</span>}
-        {file.deletions === null ? null : <span className="shrink-0 tabular-nums text-destructive">{`−${file.deletions}`}</span>}
+        {file.additions === null ? null : <span className="shrink-0 tabular-nums text-status-success-text">{`+${file.additions}`}</span>}
+        {file.deletions === null ? null : <span className="shrink-0 tabular-nums text-accent-700">{`−${file.deletions}`}</span>}
         {ctx === null || unsent.length === 0 ? null : (
           // Сжимается путь, а не кнопка: длинный путь уходит в «…» с полным текстом в title.
           <div className="shrink-0">

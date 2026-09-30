@@ -22,7 +22,9 @@ export interface FindBarProps {
 /** Запрос до 1000 символов (план, «Числа»). */
 const QUERY_LIMIT = 1000;
 
-const BUTTON = 'flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent';
+// Наследство куска 1: на заливке hover `--accent` вторичный текст ниже 4.5:1 — на hover цвет основной.
+const BUTTON =
+  'flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground';
 
 export function FindBar({ bridge, webContentsId, onClose }: FindBarProps): JSX.Element {
   const [query, setQuery] = useState('');
@@ -65,7 +67,7 @@ export function FindBar({ bridge, webContentsId, onClose }: FindBarProps): JSX.E
     <div
       role="search"
       aria-label={S.actions.findInPage}
-      className="absolute right-2 top-2 z-10 flex h-8 items-center gap-1 rounded border border-border bg-popover px-2"
+      className="absolute right-2 top-2 z-10 flex h-8 items-center gap-1 rounded-full border border-border bg-popover px-3 shadow-md"
     >
       <input
         ref={inputRef}

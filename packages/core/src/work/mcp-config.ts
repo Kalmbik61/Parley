@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { McpConfigKind } from '../providers.js';
+import { CODEX_NOTIFY_ENTRY } from './codex-notify.js';
 import { workPaths } from './store.js';
 
 /** Имя bin MCP-сервера в `packages/core/package.json`. */
@@ -37,6 +38,13 @@ export interface McpConfigParams {
    * поэтому переменную ставит только тот, кто этот флаг передал.
    */
   channel?: boolean;
+  /**
+   * Окружение запускающего процесса (хоста). Нужно только Codex: он отдаёт серверу урезанное
+   * окружение (HOME, PATH и ещё несколько), поэтому нужные серверу `HARNAS_*` — дом харнесса,
+   * подмены бинарей — кладутся в его таблицу `env` явно. Claude Code передаёт серверу окружение
+   * целиком, ему это не нужно. Не задано — переносить нечего, и в таблице только две своих.
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface McpStdioServer {
@@ -81,22 +89,83 @@ export function mcpConfigJson(params: McpConfigParams): string {
   return `${JSON.stringify(mcpConfig(params), null, 2)}\n`;
 }
 
-/** Строка TOML: экранирование базовой строки совпадает с JSON для наших значений. */
-const tomlString = (value: string): string => JSON.stringify(value);
+/** Одиночный суррогат UTF-16: старший без младшего следом или младший без старшего перед ним. */
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+
+/**
+ * Базовая строка TOML для значения `-c`. Экранирование JSON почти совпадает с TOML, но не полностью,
+ * а Codex разбирает `-c` мягко: значение, не разобравшееся как TOML, он молча берёт обычной строкой,
+ * и таблица сервера превратилась бы в текст без единой ошибки. Два расхождения закрыты здесь:
+ * - DEL (U+007F) TOML в строке сырым не терпит, JSON его не экранирует — он идёт как `\u007f`;
+ * - одиночный суррогат JSON пишет как `\ud83d`, а TOML принимает в `\u` только скаляры Unicode —
+ *   такой знак заменяется на U+FFFD (в путях и окружении он бывает разве что от битой кодировки).
+ * Остальное — кавычки, обратный слеш, управляющие знаки, любой юникод — общее у обоих форматов.
+ */
+export const tomlString = (value: string): string =>
+  JSON.stringify(value.replace(LONE_SURROGATE, '�')).replaceAll('\u007f', '\\u007f');
+
+/**
+ * Сколько Codex ждёт запуск сервера (по умолчанию 10 с) и ответ инструмента (по умолчанию 60 с).
+ * Запуск — с запасом: медленный старт `node` под нагрузкой не должен молча оставить агента без
+ * инструментов `harnas` (сбой запуска сервера Codex не считает фатальным). Ответ — дольше самого
+ * долгого `wait_for` (`MAX_TIMEOUT_SEC` в `mcp/tools.ts`, 30 минут) и ещё минута сверху: иначе клиент
+ * оборвал бы ожидание письма через минуту. Тест сверяет второе число с `MAX_TIMEOUT_SEC`.
+ */
+export const CODEX_MCP_STARTUP_TIMEOUT_SEC = 30;
+export const CODEX_MCP_TOOL_TIMEOUT_SEC = 30 * 60 + 60;
+
+/** Переменные, которые сервер получает из окружения запускающего: только наше пространство имён. */
+const HARNAS_VARIABLE = /^HARNAS_[A-Z0-9_]+$/;
+/** Три переменные, которые харнесс задаёт сессии сам: унаследованное значение их не перекрывает. */
+const SESSION_VARIABLES = new Set(['HARNAS_WORK_DIR', 'HARNAS_SESSION_ID', 'HARNAS_CHANNEL']);
+
+/** Пары `имя=значение` таблицы `env` сервера: сначала адрес сессии, затем унаследованные `HARNAS_*`. */
+function codexServerEnv({
+  workDir,
+  sessionId,
+  env,
+}: Pick<McpConfigParams, 'workDir' | 'sessionId' | 'env'>): Array<[string, string]> {
+  const inherited = Object.entries(env ?? {})
+    .filter(
+      (entry): entry is [string, string] =>
+        HARNAS_VARIABLE.test(entry[0]) &&
+        !SESSION_VARIABLES.has(entry[0]) &&
+        typeof entry[1] === 'string' &&
+        entry[1] !== '',
+    )
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return [['HARNAS_WORK_DIR', workDir], ['HARNAS_SESSION_ID', sessionId], ...inherited];
+}
 
 /**
  * Тот же сервер значением для `codex -c`: файла-конфига MCP у codex нет,
  * серверы живут в `~/.codex/config.toml`, а `-c mcp_servers.<имя>=<таблица>`
  * добавляет свой, не трогая файл пользователя.
  *
- * `channel` здесь не учитывается: звонок — возможность Claude Code, codex живёт
- * по pull (разговор агентов, 4.4).
+ * Окружение сервера Codex урезает, поэтому всё, что нужно `harnas-mcp`, лежит в таблице `env`
+ * (`codexServerEnv`). `channel` здесь не учитывается: звонок — возможность Claude Code, codex
+ * живёт по pull (разговор агентов, 4.4).
  */
-export function codexMcpOverride({ workDir, sessionId, command }: McpConfigParams): string {
-  const env = `env={HARNAS_WORK_DIR=${tomlString(workDir)},HARNAS_SESSION_ID=${tomlString(sessionId)}}`;
-  const launch = serverLaunch(command);
+export function codexMcpOverride(params: McpConfigParams): string {
+  const env = `{${codexServerEnv(params)
+    .map(([name, value]) => `${name}=${tomlString(value)}`)
+    .join(',')}}`;
+  const launch = serverLaunch(params.command);
   const args = `[${launch.args.map(tomlString).join(',')}]`;
-  return `mcp_servers.${MCP_SERVER_NAME}={command=${tomlString(launch.command)},args=${args},${env}}`;
+  return (
+    `mcp_servers.${MCP_SERVER_NAME}={command=${tomlString(launch.command)},args=${args},env=${env},` +
+    `startup_timeout_sec=${CODEX_MCP_STARTUP_TIMEOUT_SEC},tool_timeout_sec=${CODEX_MCP_TOOL_TIMEOUT_SEC}}`
+  );
+}
+
+/**
+ * `-c notify=[<node>, <скрипт>]`: после каждого хода Codex запускает скрипт и отдаёт ему JSON
+ * `agent-turn-complete` последним аргументом. Скрипт дописывает `Stop` в журнал событий сессии
+ * (`work/codex-notify.ts`). Программу Codex запускает без оболочки, поэтому пути — элементами
+ * массива, а node — текущего процесса, как у сервера MCP и строки статуса.
+ */
+export function codexNotifyOverride(): string {
+  return `notify=[${tomlString(process.execPath)},${tomlString(CODEX_NOTIFY_ENTRY)}]`;
 }
 
 /** Значение подстановки `{mcpConfig}` для записи реестра. */

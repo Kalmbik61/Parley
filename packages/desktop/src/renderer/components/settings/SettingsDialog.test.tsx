@@ -23,6 +23,7 @@ const CONFIG = {
   messageRate: 20,
   resumeRate: 6,
   autoLaunch: true,
+  agentSkills: true,
   fontFamily: 'Menlo',
   fontSize: 13,
   worktreeRoot: '~/.harnas/worktrees',
@@ -126,6 +127,80 @@ describe('SettingsDialog — тест 1 куска 1.4: секции спеки 
     await waitFor(() =>
       expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'fontSize', value: '16' } }),
     );
+  });
+});
+
+describe('SettingsDialog — скилл агентов (кусок 10 плана комнат)', () => {
+  it('на вкладке Agents есть переключатель «Install agent skills into projects», включённый по умолчанию', async () => {
+    const bridge = createFakeBridge();
+    openSettings(bridge);
+
+    switchTo('Agents');
+    const toggle = await screen.findByRole('switch', { name: 'Install agent skills into projects' });
+
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('клик выключает: settings.set agentSkills с текстом false, включение — true', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: CONFIG, locked: {} }));
+    bridge.setHandler('settings.set', ({ key, value }) => ({ config: { ...CONFIG, [key]: value === 'true' } }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    fireEvent.click(await screen.findByRole('switch', { name: 'Install agent skills into projects' }));
+    await waitFor(() =>
+      expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'agentSkills', value: 'false' } }),
+    );
+
+    // Ответ хоста применён: переключатель выключен, и следующий клик включает обратно.
+    const toggle = await screen.findByRole('switch', { name: 'Install agent skills into projects' });
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'agentSkills', value: 'true' } }),
+    );
+  });
+
+  it('ошибка хоста при сохранении — под переключателем, а не в консоли одной', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: CONFIG, locked: {} }));
+    bridge.setHandler('settings.set', () => {
+      throw { code: 'bad_request', message: 'agentSkills: ожидается 0 или 1' };
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    fireEvent.click(await screen.findByRole('switch', { name: 'Install agent skills into projects' }));
+
+    await waitFor(() => expect(screen.getByText("Couldn't save settings: invalid request.")).toBeTruthy());
+    warn.mockRestore();
+  });
+
+  it('задан переменной окружения: неактивен и подписан именем переменной', async () => {
+    const bridge = createFakeBridge();
+    openSettings(bridge, { agentSkills: 'HARNAS_AGENT_SKILLS' });
+
+    switchTo('Agents');
+    await screen.findByText(/set by HARNAS_AGENT_SKILLS/);
+    const toggle = screen.getByRole('switch', { name: /Install agent skills into projects/ });
+
+    expect((toggle as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('хост прежней версии не знает ключа agentSkills — переключателя нет', async () => {
+    const bridge = createFakeBridge();
+    // Так выглядит ответ хоста, оставшегося от прежней версии: ключа agentSkills в конфиге нет.
+    const oldHost: Partial<typeof CONFIG> = { ...CONFIG };
+    delete oldHost.agentSkills;
+    bridge.setHandler('settings.get', () => ({ config: oldHost, locked: {} }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    await screen.findByText('Worktree root');
+
+    expect(screen.queryByText('Install agent skills into projects')).toBeNull();
   });
 });
 

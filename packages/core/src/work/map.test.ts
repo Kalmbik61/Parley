@@ -8,7 +8,8 @@ import {
   setResult,
   transitionSession,
 } from './map.js';
-import type { SessionLifecycle, WorkMap } from './types.js';
+import { roomLead } from './rooms.js';
+import type { Room, SessionLifecycle, WorkMap } from './types.js';
 
 const emptyMap = (): WorkMap => ({
   schemaVersion: 2,
@@ -45,6 +46,26 @@ describe('addSession', () => {
 
     expect(plain.agent).toBeNull();
     expect(roled.agent).toBe('reviewer');
+  });
+
+  it('модель и усилие запуска (spawn_session) пишутся, когда заданы; без них ключей в записи нет', () => {
+    const map = emptyMap();
+    const plain = addSession(map, { provider: 'claude', label: 'план', task: 'план' });
+    const chosen = addSession(map, {
+      provider: 'claude',
+      label: 'ревью',
+      task: 'проверить',
+      model: 'opus',
+      effort: 'high',
+    });
+
+    expect('model' in plain).toBe(false);
+    expect('effort' in plain).toBe(false);
+    expect(chosen).toMatchObject({ model: 'opus', effort: 'high' });
+    // Через JSON — как на диске: запись с выбором читается парсером карты без правок.
+    const again = parseMap(JSON.stringify(map), 'map.json');
+    expect(again.sessions[1]).toMatchObject({ model: 'opus', effort: 'high' });
+    expect('model' in (again.sessions[0] ?? {})).toBe(false);
   });
 
   it('нумерует сессии s-NN по порядку и создаёт запись pending', () => {
@@ -563,6 +584,49 @@ describe('parseMap', () => {
       text: 'x',
       kind: 'note',
       readBy: {},
+    });
+  });
+
+  describe('ведущий и решение комнаты (дизайн комнат, 3.1)', () => {
+    /** Комната как её писали до 2026-09-29: без `lead` и `proposal`. */
+    const oldRoom = {
+      id: 'r-01',
+      title: 'Возвраты',
+      creator: 'human',
+      members: ['s-02', 's-03'],
+      createdAt: '2026-09-20T10:00:00.000Z',
+    };
+    const withRooms = (rooms: unknown[]): string =>
+      JSON.stringify({ ...emptyMap(), rooms, work: { ...emptyMap().work, roomSeq: rooms.length } });
+
+    it('в старой карте lead и proposal читаются как null, остальное не тронуто', () => {
+      const parsed = parseMap(withRooms([oldRoom]), 'map.json');
+
+      expect(parsed.rooms[0]).toEqual({ ...oldRoom, lead: null, proposal: null });
+    });
+
+    it('ведущий старой комнаты — первый из members (lead: null не переписывается в id)', () => {
+      const parsed = parseMap(withRooms([oldRoom]), 'map.json');
+
+      expect(parsed.rooms[0]?.lead).toBeNull();
+      expect(roomLead(parsed.rooms[0] as Room)).toBe('s-02');
+    });
+
+    it('карта v1 без комнат по-прежнему даёт пустой список', () => {
+      expect(parseMap(JSON.stringify(emptyV1()), 'map.json').rooms).toEqual([]);
+    });
+
+    it('явные lead и proposal читаются как записаны и переживают круг запись → чтение', () => {
+      const proposal = { id: 'p-01', from: 's-03', text: 'решение @s02', rev: 2, at: '2026-09-29T12:00:00.000Z' };
+      const written = { ...oldRoom, lead: 's-03', proposal };
+
+      const parsed = parseMap(withRooms([written]), 'map.json');
+      expect(parsed.rooms[0]).toEqual(written);
+      expect(parseMap(JSON.stringify(parsed), 'map.json')).toEqual(parsed);
+    });
+
+    it('запись комнаты не объект — как и раньше, читается без TypeError на миграции', () => {
+      expect(() => parseMap(withRooms([null]), 'map.json')).not.toThrow();
     });
   });
 

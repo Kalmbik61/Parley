@@ -29,8 +29,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 Скопированные файлы (кусок 1.1 плана «окно как у Orca»):
-- packages/desktop/src/renderer/styles/tokens.css — блоки `@theme inline`,
-  `:root` и `.dark` из src/renderer/src/assets/main.css.
+- packages/desktop/src/renderer/styles/tokens.css — блок `@theme inline` и
+  имена переменных из src/renderer/src/assets/main.css (значения `:root` и
+  `.dark` — облик Organic, спека окна 2026-09-29).
 - packages/desktop/src/renderer/styles/scrollbars.css — класс `.scrollbar-sleek`
   из src/renderer/src/assets/main.css.
 
@@ -100,17 +101,47 @@ SOFTWARE.
 - packages/desktop/src/renderer/ui/tooltip.tsx
 
 ------------------------------------------------------------------------------
-Geist
+Figtree
 ------------------------------------------------------------------------------
 
-Файл packages/desktop/src/renderer/assets/fonts/Geist-Variable.woff2 скопирован
-из Orca (src/renderer/src/assets/fonts/Geist-Variable.woff2), куда попал из
-https://github.com/vercel/geist-font.
+Файл packages/desktop/src/renderer/assets/fonts/Figtree-Variable.ttf — шрифт
+Figtree (variable, веса 300–900; окно использует 400–700) из Google Fonts
+(https://fonts.google.com/specimen/Figtree). Проект шрифта —
+https://github.com/erikdkennedy/figtree.
 
-Copyright (c) 2023 Vercel, in collaboration with basement.studio.
+Copyright 2022 The Figtree Project Authors (https://github.com/erikdkennedy/figtree)
 Лицензия: SIL Open Font License, Version 1.1. Полный текст —
-packages/desktop/src/renderer/assets/fonts/OFL.txt, в собранном приложении —
-Contents/Resources/licenses/Geist-OFL.txt (рядом с этим NOTICE).
+packages/desktop/src/renderer/assets/fonts/Figtree-OFL.txt, в собранном приложении —
+Contents/Resources/licenses/Figtree-OFL.txt (рядом с этим NOTICE).
+
+------------------------------------------------------------------------------
+Caprasimo
+------------------------------------------------------------------------------
+
+Файл packages/desktop/src/renderer/assets/fonts/Caprasimo.ttf — шрифт
+Caprasimo (один вес 400) из Google Fonts
+(https://fonts.google.com/specimen/Caprasimo). Проект шрифта —
+https://github.com/docrepair-fonts/caprasimo-fonts.
+
+Copyright 2023 The Caprasimo Project Authors (https://github.com/docrepair-fonts/caprasimo-fonts).
+Лицензия: SIL Open Font License, Version 1.1. Полный текст —
+packages/desktop/src/renderer/assets/fonts/Caprasimo-OFL.txt, в собранном приложении —
+Contents/Resources/licenses/Caprasimo-OFL.txt (рядом с этим NOTICE).
+
+------------------------------------------------------------------------------
+Значки провайдеров
+------------------------------------------------------------------------------
+
+Файлы packages/desktop/src/renderer/assets/providers/claude.svg,
+packages/desktop/src/renderer/assets/providers/codex.svg и
+packages/desktop/src/renderer/assets/providers/codex-light.svg (Codex для тёмной
+темы) — значки провайдеров агентов. Скопированы без правок из
+docs/design/2026-09-29-rooms-organic/prototype/assets: это hi-fi handoff, который
+передал пользователь 2026-09-29. Окно рисует их в строке статуса и в сайдбаре,
+чтобы отличать агентов друг от друга.
+
+Знаки принадлежат их владельцам: Anthropic — Claude, OpenAI — Codex. Проект их
+не изменял и не выдаёт за свои.
 
 ------------------------------------------------------------------------------
 Monaco Editor

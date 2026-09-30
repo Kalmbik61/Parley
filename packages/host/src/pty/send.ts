@@ -11,15 +11,19 @@ import type { SendResult, SessionRef } from '@harnas/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import { HostError } from '../errors.js';
 import type { WakeService } from '../wake/wake-service.js';
+import {
+  CODEX_SUBMIT_DELAY_MS,
+  PASTE_END,
+  PASTE_START,
+  codexPaste,
+  codexSubmitKey,
+} from './codex-input.js';
 import { stripEscapes } from './draft.js';
 import type { PtyManager } from './pty-manager.js';
 import { typeAndSubmit } from './type-and-submit.js';
 
 /** Предел текста `pty.send` — 64 КиБ в байтах UTF-8 (сквозные ограничения плана). */
 const MAX_SEND_BYTES = 64 * 1024;
-
-const PASTE_START = '\x1b[200~';
-const PASTE_END = '\x1b[201~';
 
 // C0 кроме \t и \n, и DEL: управляющие байты в поле ввода агента — это клавиши, а не текст.
 // eslint-disable-next-line no-control-regex
@@ -54,6 +58,7 @@ export function createSender(deps: {
   return async ({ ref, text, submit }) => {
     const handle = deps.pty.get(ref);
     if (handle === undefined) throw new HostError('not_found', 'сессия не запущена');
+    const codex = handle.provider === 'codex';
     const clean = sanitizeForSend(text);
 
     // Отсюда и до pty.write — ни одного await: иначе будильник успел бы напечатать
@@ -69,11 +74,17 @@ export function createSender(deps: {
     const key = refKey(ref);
     if (deps.wake.inFlight(ref) || waiting.has(key)) return refused('busy');
     const paste = handle.bracketedPaste();
-    if (clean.includes('\n') && !paste) return refused('no-paste-mode');
+    // Codex — всегда вставкой: без неё поток знаков он не считает вставкой, и Enter внутри него отправил бы
+    // сообщение раньше времени. Режима вставки нет — TUI ещё не поднялся, и писать в него нечего.
+    if (codex ? !paste : clean.includes('\n') && !paste) return refused('no-paste-mode');
 
     // Черновик считается до вставки: человека или хоста от прошлой вставки без Enter.
     const hadDraft = handle.hasDraft();
-    const payload = paste ? `${PASTE_START}${clean}${PASTE_END}` : clean;
+    const payload = codex
+      ? codexPaste(clean)
+      : paste
+        ? `${PASTE_START}${clean}${PASTE_END}`
+        : clean;
     const attempt = typeAndSubmit(
       { pty: deps.pty, enterDelayMs: deps.wake.enterDelayMs },
       ref,
@@ -83,6 +94,13 @@ export function createSender(deps: {
         hostDraft: true,
         // blocked приходит хуком с задержкой: запрос разрешения мог появиться за паузу.
         beforeEnter: () => deps.activity.get(ref)?.activity.activity !== 'blocked',
+        // У Codex своя пауза и своя клавиша: занятому агенту — Tab (очередь), а не Enter (вмешательство в ход).
+        ...(codex
+          ? {
+              delayMs: CODEX_SUBMIT_DELAY_MS,
+              submitKey: () => codexSubmitKey(deps.activity.get(ref)?.activity.activity),
+            }
+          : {}),
       },
     );
 

@@ -25,8 +25,8 @@ export interface UiFile {
 export const DEFAULT_UI: UiFile = {
   version: 1,
   appearance: 'system',
-  leftSidebar: { open: true, width: 280 },
-  rightSidebar: { open: true, width: 350, tab: 'files' },
+  leftSidebar: { open: true, width: 288 },
+  rightSidebar: { open: true, width: 320, tab: 'files' },
   activeWorkKey: null,
   pinnedWorks: [],
   collapsedProjects: [],
@@ -37,14 +37,18 @@ export const DEFAULT_UI: UiFile = {
   lastProvider: null,
 };
 
-/** Пределы левого сайдбара (спека 3.4, 4.4) — оба края статичные, `normalizeUi` приводит ширину сама. */
-export const LEFT_SIDEBAR = { min: 220, max: 500, initial: 280 } as const;
+/**
+ * Пределы левого сайдбара (спека 3.4, 4.4) — оба края статичные, `normalizeUi` приводит ширину сама.
+ * `initial` — 288, а не 280 (Organic крупнее на 10%, спека окна 2026-09-29, 1.1); ресайз 220–500 прежний.
+ * Сохранённая ширина прежних окон не переписывается — это выбор человека.
+ */
+export const LEFT_SIDEBAR = { min: 220, max: 500, initial: 288 } as const;
 /**
  * Пределы правого сайдбара: верхняя граница — «ширина окна минус `reserveCenter`»,
  * а размер окна `normalizeUi` не знает, поэтому здесь приводится только нижняя
  * граница; верхнюю держит рендерер при ресайзе (этап 2 плана окна).
  */
-export const RIGHT_SIDEBAR = { min: 220, initial: 350, reserveCenter: 320 } as const;
+export const RIGHT_SIDEBAR = { min: 220, initial: 320, reserveCenter: 320 } as const;
 
 /**
  * Ширина правого сайдбара в окне (раунд main-r2, п. 7): центру остаётся не меньше

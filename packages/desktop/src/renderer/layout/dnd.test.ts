@@ -15,6 +15,7 @@ import {
   dragItemOf,
   dropFromDragEnd,
   layoutCollision,
+  sidebarDropFromDragEnd,
   zoneForPoint,
   type DragItem,
   type DragSourceData,
@@ -618,6 +619,90 @@ describe('layoutCollision (тесты 9, 11)', () => {
       () => true,
     );
     expect(hits[0]?.id).toBe(surface.id);
+  });
+});
+
+describe('строки сайдбара — цели броска сессии (кусок 7, спека окна 2026-09-29, 2.5)', () => {
+  const sessionRow = container(dndId.sessionRow('A', 's-2'), { workKey: 'A', kind: 'session-row', sessionId: 's-2' });
+  const roomRow = container(dndId.roomRow('A', 'r-1'), { workKey: 'A', kind: 'room-row', roomId: 'r-1' });
+  const foreignRow = container(dndId.roomRow('B', 'r-1'), { workKey: 'B', kind: 'room-row', roomId: 'r-1' });
+  const body = container(dndId.body('A', 'g-a'), { workKey: 'A', kind: 'body', groupId: 'g-a' });
+  const SIDE: ClientRect = { left: 0, top: 100, width: 288, height: 26, right: 288, bottom: 126 };
+  const ROOM: ClientRect = { left: 0, top: 140, width: 288, height: 90, right: 288, bottom: 230 };
+  // Сайдбар — слева от центра, их прямоугольники не пересекаются, как в окне.
+  const CENTER: ClientRect = { left: 300, top: 0, width: 700, height: 400, right: 1000, bottom: 400 };
+  const rects = { [sessionRow.id]: SIDE, [roomRow.id]: ROOM, [foreignRow.id]: ROOM, [body.id]: CENTER };
+  const session: DragItem = { kind: 'session', sessionId: 's-1' };
+
+  it('сессия над строкой сессии видит её, над строкой комнаты — комнату', () => {
+    const over = collide('A', session, [body, sessionRow, roomRow], rects, { x: 100, y: 110 });
+    expect(over.map((hit) => hit.id)).toEqual([sessionRow.id]);
+    const room = collide('A', session, [body, sessionRow, roomRow], rects, { x: 100, y: 200 });
+    expect(room.map((hit) => hit.id)).toEqual([roomRow.id]);
+    expect(room[0]?.data?.droppableContainer.data.current).toEqual({ workKey: 'A', kind: 'room-row', roomId: 'r-1' });
+  });
+
+  it('вкладка и файл строки сайдбара не видят: им там бросать нечего', () => {
+    for (const item of [{ kind: 'tab', tabId: 'mail' }, { kind: 'file', path: '/tmp/x' }] as DragItem[]) {
+      expect(collide('A', item, [sessionRow, roomRow], rects, { x: 100, y: 110 }, () => true)).toEqual([]);
+      expect(collide('A', item, [sessionRow, roomRow], rects, { x: 100, y: 200 }, () => true)).toEqual([]);
+    }
+  });
+
+  it('строка чужой работы — не цель (чужая работа — отказ), выключенная — тоже', () => {
+    expect(collide('A', session, [foreignRow], rects, { x: 100, y: 200 })).toEqual([]);
+    expect(collide('B', session, [roomRow], rects, { x: 100, y: 200 })).toEqual([]);
+    const off = container(dndId.roomRow('A', 'r-1'), { workKey: 'A', kind: 'room-row', roomId: 'r-1' }, true);
+    expect(collide('A', session, [off], rects, { x: 100, y: 200 })).toEqual([]);
+  });
+
+  it('вне прямоугольников строк — пусто', () => {
+    expect(collide('A', session, [sessionRow, roomRow], rects, { x: 100, y: 500 })).toEqual([]);
+  });
+
+  it('id строк несут ключ работы: одна и та же комната или сессия двух работ — разные цели', () => {
+    expect(dndId.roomRow('A', 'r-1')).not.toBe(dndId.roomRow('B', 'r-1'));
+    expect(dndId.sessionRow('A', 's-1')).not.toBe(dndId.sessionRow('B', 's-1'));
+    expect(dndId.sessionRow('A', 's-1')).not.toBe(dndId.session('A', 's-1'));
+    expect(dndId.roomRow('A', 'x')).not.toBe(dndId.sessionRow('A', 'x'));
+  });
+});
+
+describe('sidebarDropFromDragEnd — бросок сессии на строку сайдбара (кусок 7)', () => {
+  it('на строку сессии — сессия, цель и работа цели', () => {
+    const drop = sidebarDropFromDragEnd(
+      endEvent({ kind: 'session', sessionId: 's-1' }, overOf({ workKey: 'A', kind: 'session-row', sessionId: 's-2' }), { x: 100, y: 110 }),
+    );
+    expect(drop).toEqual({ workKey: 'A', sessionId: 's-1', target: { kind: 'session-row', sessionId: 's-2' } });
+  });
+
+  it('на строку комнаты — комната', () => {
+    const drop = sidebarDropFromDragEnd(
+      endEvent({ kind: 'session', sessionId: 's-1' }, overOf({ workKey: 'A', kind: 'room-row', roomId: 'r-3' }), { x: 100, y: 200 }),
+    );
+    expect(drop).toEqual({ workKey: 'A', sessionId: 's-1', target: { kind: 'room-row', roomId: 'r-3' } });
+  });
+
+  it('вкладка и файл, тело группы, полосу вкладок, мимо целей — не бросок на сайдбар', () => {
+    const target = overOf({ workKey: 'A', kind: 'room-row', roomId: 'r-3' });
+    expect(sidebarDropFromDragEnd(endEvent({ kind: 'tab', tabId: 'x' }, target, { x: 5, y: 5 }))).toBeNull();
+    expect(sidebarDropFromDragEnd(endEvent({ kind: 'file' } as unknown as DragItem, target, { x: 5, y: 5 }))).toBeNull();
+    expect(
+      sidebarDropFromDragEnd(endEvent({ kind: 'session', sessionId: 's-1' }, overOf({ workKey: 'A', kind: 'body', groupId: 'g' }), { x: 5, y: 5 })),
+    ).toBeNull();
+    expect(
+      sidebarDropFromDragEnd(endEvent({ kind: 'session', sessionId: 's-1' }, overOf({ workKey: 'A', kind: 'strip', groupId: 'g', index: 0 }), { x: 5, y: 5 })),
+    ).toBeNull();
+    expect(sidebarDropFromDragEnd(endEvent({ kind: 'session', sessionId: 's-1' }, null, { x: 5, y: 5 }))).toBeNull();
+  });
+
+  it('dropFromDragEnd такой бросок в раскладку не берёт: раскладка не меняется', () => {
+    for (const data of [
+      { workKey: 'A', kind: 'session-row', sessionId: 's-2' },
+      { workKey: 'A', kind: 'room-row', roomId: 'r-3' },
+    ] as DropTargetData[]) {
+      expect(dropFromDragEnd(endEvent({ kind: 'session', sessionId: 's-1' }, overOf(data), { x: 5, y: 5 }))).toBeNull();
+    }
   });
 });
 

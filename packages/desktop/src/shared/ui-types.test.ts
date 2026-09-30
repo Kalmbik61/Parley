@@ -55,6 +55,28 @@ describe('normalizeUi', () => {
   });
 });
 
+// Размеры Organic (спека окна 2026-09-29, 1.1): сайдбар 288, правый 320; ресайз 220–500 прежний.
+describe('размеры сайдбаров по умолчанию', () => {
+  it('левый 288, правый 320 — и в DEFAULT_UI, и в константах `initial`', () => {
+    expect(DEFAULT_UI.leftSidebar.width).toBe(288);
+    expect(DEFAULT_UI.rightSidebar.width).toBe(320);
+    expect(LEFT_SIDEBAR.initial).toBe(288);
+    expect(RIGHT_SIDEBAR.initial).toBe(320);
+  });
+
+  it('пределы ресайза левого остались 220–500, правого — от 220', () => {
+    expect(LEFT_SIDEBAR.min).toBe(220);
+    expect(LEFT_SIDEBAR.max).toBe(500);
+    expect(RIGHT_SIDEBAR.min).toBe(220);
+  });
+
+  it('сохранённая ширина прежних окон (280 и 350) не переписывается: это выбор человека', () => {
+    const saved = normalizeUi({ leftSidebar: { open: true, width: 280 }, rightSidebar: { open: true, width: 350, tab: 'files' } });
+    expect(saved.leftSidebar.width).toBe(280);
+    expect(saved.rightSidebar.width).toBe(350);
+  });
+});
+
 interface UiFileWithMystery {
   mystery?: unknown;
 }

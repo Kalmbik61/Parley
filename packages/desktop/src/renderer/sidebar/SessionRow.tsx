@@ -1,7 +1,16 @@
 /**
  * Строка сессии в карточке работы (кусок 3.3, спека 4.2, 6.3): значок состояния, значок
- * агента, `S02 исполнитель`, слово состояния, `⎇` своего worktree и время последнего
+ * агента, `S02 исполнитель`, слово состояния, значок ветки своего worktree и время последнего
  * события. Тултип — задача, сводка агента, итог, модель и метрики.
+ *
+ * Облик Organic (спека окна 2026-09-29, 1.2): пилюля 26px, отступ слева `8 + 12·depth`, зазор 6, 12px;
+ * значок состояния 12, значок агента 13, слово 11px строчными, GitBranch 11 (тултип `Own worktree ·
+ * {branch}`), время 10px шириной 22. Фон: `blocked` — `accent-200` (слово `accent-800`), `unseen` —
+ * `accent-2-200` (слово `accent-2-800`), иначе выбранная и hover — `text 9%`; подкраска бьёт выбор. Выбранная —
+ * вес 700. Закрытая — `data-dimmed="row"`: значки .5 при правиле `dimmed.css`. На hover весь текст строки —
+ * основной цвет (наследство куска 1: `neutral-700` на заливке hover ниже 4.5:1). Оба цвета задаются явно
+ * (`--color-text`): в приглушённом поддереве (done-карточка, закрытая строка) основной цвет сайдбара уже
+ * равен вторичному, и подмена «вторичный := основной» на hover ничего не меняла (правки ревью куска 2).
  *
  * Перетаскивание — контракт 2.6, как у строки прежнего дерева сессий: `DndContext`
  * один на окно (`AppShell`), тащатся только строки активной работы (спека 6.4) — у
@@ -11,9 +20,18 @@
  *
  * Меню по правой кнопке — `SessionRowMenu` (кусок 3.4): его триггер и триггер тултипа
  * сливаются на одном узле строки.
+ *
+ * Строка вне комнаты — ещё и цель броска другой сессии (кусок 7, 2.5): сессия на сессию — диалог «New room» из двух
+ * сессий. Цель подсвечивается, только если бросок возможен (`use-drop-target.ts`); участника комнаты принимает строка
+ * комнаты целиком.
+ *
+ * Участник развёрнутой комнаты (кусок 5, спека окна 2026-09-29, 1.2) — та же строка, но с отступом слева 18 и без
+ * правого поля (его даёт строка комнаты, `RoomRow.tsx`); у ведущего после названия `★` 11px `accent-700`,
+ * тултип `Lead`.
  */
 
 import { memo, useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
+import { GitBranch } from 'lucide-react';
 import { useDndContext, useDraggable } from '@dnd-kit/core';
 import type { WorkSession } from '@harnas/core';
 import type { HarnasBridge } from '../../shared/bridge.js';
@@ -32,10 +50,19 @@ import type { ActivityEntry } from '../store/activity.js';
 import { useNoticesStore } from '../store/notices.js';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '../ui/hover-card.js';
 import { SessionRowMenu } from './SessionRowMenu.js';
+import { DROP_TARGET_FILL, DROP_TARGET_INK, useSidebarDropTarget } from './use-drop-target.js';
 import { useCursorStop } from './use-sidebar-keys.js';
 
 /** Сколько символов задачи показывает тултип (план 3.3). */
 const TASK_PREVIEW = 300;
+
+/** Событие `eventAt` строго позже момента `at`; нет времени или оно не разбирается — нет. */
+function eventAfter(eventAt: string | null, at: string | undefined): boolean {
+  if (eventAt === null || at === undefined) return false;
+  const event = Date.parse(eventAt);
+  const notice = Date.parse(at);
+  return !Number.isNaN(event) && !Number.isNaN(notice) && event > notice;
+}
 
 export interface SessionRowProps {
   workKey: string;
@@ -51,6 +78,10 @@ export interface SessionRowProps {
   draggable: boolean;
   selected: boolean;
   onOpen(): void;
+  /** Строка участника комнаты: отступ слева 18 вместо `8 + 12·depth`, без правого поля. */
+  inRoom?: boolean;
+  /** Ведущий комнаты — `★` после названия; только у участника комнаты. */
+  lead?: boolean;
 }
 
 // `memo`: строка перерисовывается, только когда сменились её сессия, её запись активности
@@ -67,10 +98,14 @@ export const SessionRow = memo(function SessionRow({
   draggable,
   selected,
   onOpen,
+  inRoom = false,
+  lead = false,
 }: SessionRowProps): JSX.Element {
   const data: DragSourceData = { item: { kind: 'session', sessionId: session.id } };
   const dragId = dndId.session(workKey, session.id);
   const { setNodeRef, listeners } = useDraggable({ id: dragId, data, disabled: !draggable });
+  // Цель броска другой сессии (2.5, диалог 1.6): только строка вне комнаты — участника принимает строка комнаты целиком.
+  const { setNodeRef: setDropRef, over } = useSidebarDropTarget(workKey, { kind: 'session-row', sessionId: session.id }, !inRoom);
   const stop = useCursorStop(workKey, session.id, false);
 
   // Тултип под своим управлением (раунд исправлений 1 куска 3.3, ревью B, находка 1): после
@@ -89,8 +124,9 @@ export const SessionRow = memo(function SessionRow({
     (node: HTMLDivElement | null) => {
       rowRef.current = node;
       setNodeRef(node);
+      setDropRef(node);
     },
-    [setNodeRef],
+    [setNodeRef, setDropRef],
   );
   // Раунд исправлений 2: таймер открытия Radix (openDelay) стартует на pointerenter ещё до
   // порога перетаскивания, а pointerleave, который его отменил бы, глотает захват указателя
@@ -119,21 +155,31 @@ export const SessionRow = memo(function SessionRow({
 
   // trust-wait (спека 8.3, план worktree 4.3) — то же правило, что было у прежнего дерева сессий:
   // пометка держится, пока в последних уведомлениях есть trust-wait по этой сессии.
-  const trustWait = useNoticesStore((state) =>
-    state.notices.some(
+  const waitNotice = useNoticesStore((state) => {
+    // Codex, не показавший статус за срок после запуска (`startup-wait`), помечается так же, но с
+    // другим тултипом: ждёт входа или доверия к папке, а не «молчит» (спека комнат, 3.6).
+    const found = state.notices.find(
       (notice) =>
-        notice.kind === 'trust-wait' &&
+        (notice.kind === 'trust-wait' || notice.kind === 'startup-wait') &&
         notice.ref !== null &&
         notice.ref.sessionId === session.id &&
         workKeyOf(notice.ref.projectPath, notice.ref.workId) === workKey,
-    ),
-  );
+    );
+    return found ?? null;
+  });
 
   const live = activity?.activity ?? null;
+  // У `startup-wait` хост состояние знает: сессия ушла с экрана старта, когда пришёл известный сигнал Codex
+  // (`Ready`, `Working`, вопрос) — событие новее уведомления (у самого уведомления время синтетического «нужен
+  // ты»). Пометка «may need sign-in» рядом с работающей сессией — ложная, хотя уведомление ещё в буфере из 20.
+  // `trust-wait` состояния не знает: он снимается только уходом уведомления из буфера.
+  const startupResolved =
+    waitNotice?.kind === 'startup-wait' && eventAfter(live?.lastEventAt ?? null, waitNotice.at);
+  const waitKind = startupResolved ? null : (waitNotice?.kind ?? null);
+  const trustWait = waitKind !== null;
   const state = dotState(displayStatus(session), live?.activity ?? null);
   const word = stateWord(state, session.lifecycle);
   const attention = sessionAttention(session, live);
-  const highlighted = attention === 'needs-you' || attention === 'unseen';
   const closed = session.lifecycle === 'closed';
   const label = sessionRowLabel(session.id, session.label);
   const lastEventAt = live?.lastEventAt ?? session.resultAt ?? session.startedAt;
@@ -141,6 +187,8 @@ export const SessionRow = memo(function SessionRow({
   // Вторичный текст на подсвеченной и выбранной строке — свой токен: `--muted-foreground`
   // там ниже 4.5:1 (tokens.test.ts, тест 14).
   const secondary = 'text-work-sidebar-muted-foreground';
+  const blocked = attention === 'needs-you';
+  const unseen = attention === 'unseen';
 
   return (
     <HoverCard open={tooltipOpen && !dragging} onOpenChange={onTooltipOpenChange} openDelay={600} closeDelay={100}>
@@ -156,6 +204,7 @@ export const SessionRow = memo(function SessionRow({
           data-session-id={session.id}
           data-selected={selected}
           {...(draggable ? { 'data-draggable': '' } : {})}
+          {...(over ? { 'data-drop-over': '' } : {})}
           onPointerDown={listeners?.onPointerDown as ((event: PointerEvent<HTMLDivElement>) => void) | undefined}
           onPointerEnter={freshIntent}
           onFocus={freshIntent}
@@ -173,31 +222,63 @@ export const SessionRow = memo(function SessionRow({
             event.stopPropagation();
             onOpen();
           }}
-          style={{ paddingLeft: `${depth * 12 + 6}px` }}
+          style={{ paddingLeft: inRoom ? '18px' : `${8 + depth * 12}px` }}
           className={cn(
             // Кольцо внутрь: карточка режет выступающее (`overflow-hidden`).
-            'flex h-6 min-w-0 items-center gap-1.5 rounded-md pr-1.5 text-[11px] text-work-sidebar-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-work-sidebar-focus-ring',
+            'flex h-[26px] min-w-0 items-center gap-1.5 rounded-full text-xs text-work-sidebar-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-work-sidebar-focus-ring',
+            inRoom ? 'pr-0' : 'pr-1.5',
+            // Текст строки на hover — основной цвет: `neutral-700` на заливке hover ниже 4.5:1. Явный `--color-text`, а не
+            // подмена одной переменной другой: внутри `[data-dimmed]` они равны, а на самой закрытой строке
+            // неслойное правило `dimmed.css` бьёт утилиту по `--work-sidebar-foreground` и сводит его к
+            // вторичному, который на hover — основной текст (цепочка без петли).
+            'hover:[--work-sidebar-foreground:var(--color-text)] hover:[--work-sidebar-muted-foreground:var(--color-text)]',
             draggable ? 'cursor-default' : 'cursor-not-allowed',
-            selected ? 'bg-work-sidebar-accent' : highlighted ? 'bg-amber-500/10' : 'hover:bg-work-sidebar-accent/60',
+            // Цель броска (2.5) бьёт всё: человек видит, куда сессия ляжет. Подкраска бьёт выбор и hover: строка,
+            // где нужен человек, не бледнеет под курсором.
+            over
+              ? DROP_TARGET_FILL
+              : blocked
+                ? 'bg-accent-200 hover:bg-accent-200'
+                : unseen
+                  ? 'bg-accent-2-200 hover:bg-accent-2-200'
+                  : selected
+                    ? 'bg-work-sidebar-accent'
+                    : 'hover:bg-work-sidebar-accent',
+            over && DROP_TARGET_INK,
           )}
           // Закрытая строка приглушена цветом текста (styles/dimmed.css), не opacity (ревью M12).
-          {...(closed ? { 'data-dimmed': '' } : {})}
+          {...(closed ? { 'data-dimmed': 'row' } : {})}
         >
           <AgentStateDot state={state} lifecycle={session.lifecycle} />
           <AgentIcon provider={session.provider} size={13} />
-          <span className="min-w-0 flex-1 truncate">{label}</span>
+          <span className={cn('min-w-0 flex-1 truncate', selected && 'font-bold')}>{label}</span>
+          {lead ? (
+            <span data-lead title={S.sidebar.lead} className="shrink-0 text-[11px] text-accent-700">
+              ★
+            </span>
+          ) : null}
           {trustWait ? (
-            <span title={S.sidebar.trustWaitTooltip} className="shrink-0 text-yellow-600 dark:text-yellow-500">
+            <span
+              title={waitKind === 'startup-wait' ? S.sidebar.startupWaitTooltip : S.sidebar.trustWaitTooltip}
+              className="shrink-0 text-status-warning-text"
+            >
               ⚠
             </span>
           ) : null}
-          <span className={cn('shrink-0 truncate', secondary)}>{word}</span>
+          <span
+            className={cn(
+              'shrink-0 truncate text-[11px]',
+              blocked ? 'text-accent-800' : unseen ? 'text-accent-2-800' : secondary,
+            )}
+          >
+            {word}
+          </span>
           {session.worktree !== null ? (
-            <span data-worktree title={session.worktree.branch} className={cn('shrink-0', secondary)}>
-              ⎇
+            <span data-worktree title={S.sidebar.ownWorktree(session.worktree.branch)} className={cn('inline-flex shrink-0', secondary)}>
+              <GitBranch className="size-[11px]" aria-hidden="true" />
             </span>
           ) : null}
-          {time !== '' ? <span className={cn('shrink-0 text-[10px] tabular-nums', secondary)}>{time}</span> : null}
+          <span className={cn('w-[22px] shrink-0 text-right text-[10px] tabular-nums', secondary)}>{time}</span>
         </div>
       </HoverCardTrigger>
       </SessionRowMenu>

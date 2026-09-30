@@ -40,12 +40,14 @@ describe('DiffToolbar', () => {
     expect(props.onListMode).toHaveBeenCalledWith('tree');
   });
 
-  it('раунд fix-live, D4: «Wrap lines» — тумблер `ui/toggle`: включённый несёт тот же признак, что выбранный пункт группы', () => {
+  it('раунд fix-live, D4: «Wrap lines» — тумблер `ui/toggle`: включённый несёт тот же признак, что выбранный пункт группы (заливка --primary, Organic)', () => {
     setup({ wrap: true });
     const wrap = screen.getByRole('button', { name: 'Wrap lines' });
     expect(wrap.getAttribute('aria-pressed')).toBe('true');
     expect(wrap.getAttribute('data-state')).toBe('on');
-    expect(wrap.className).toContain('data-[state=on]:ring-toggle-on-edge');
+    expect(wrap.className).toContain('data-[state=on]:bg-primary');
+    expect(wrap.className).toContain('data-[state=on]:text-primary-foreground');
+    expect(screen.getByRole('radio', { name: 'Side by side' }).className).toContain('data-[state=on]:bg-primary');
   });
 
   it('повторный клик по выбранной колонке выбор не снимает', () => {

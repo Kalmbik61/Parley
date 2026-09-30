@@ -22,6 +22,9 @@ const mainEntry = path.resolve(dirname, '../out/main/index.js');
 
 const isDark = (window: Page): Promise<boolean> => window.evaluate(() => document.documentElement.classList.contains('dark'));
 const background = (window: Page): Promise<string> => window.evaluate(() => getComputedStyle(document.body).backgroundColor);
+/** Фон окна — `--background` = `surface` палитры Organic (спека окна 2026-09-29, раздел 4): светлая #ebddc5, тёмная #161513. */
+const LIGHT_BACKGROUND = 'rgb(235, 221, 197)';
+const DARK_BACKGROUND = 'rgb(22, 21, 19)';
 
 test.describe('тема окна по nativeTheme main (спека 4.7, раунд main-r2)', () => {
   let home: string;
@@ -71,11 +74,11 @@ test.describe('тема окна по nativeTheme main (спека 4.7, раун
 
     await pickTheme(window, 'Theme: dark');
     await expect.poll(() => isDark(window)).toBe(true);
-    expect(await background(window)).toBe('rgb(10, 10, 10)');
+    expect(await background(window)).toBe(DARK_BACKGROUND);
 
     await pickTheme(window, 'Theme: light');
     await expect.poll(() => isDark(window)).toBe(false);
-    expect(await background(window)).toBe('rgb(255, 255, 255)');
+    expect(await background(window)).toBe(LIGHT_BACKGROUND);
   });
 
   test('выбранная тема переживает перезапуск окна и перезагрузку страницы', async () => {
@@ -88,7 +91,7 @@ test.describe('тема окна по nativeTheme main (спека 4.7, раун
     window = await launch();
     // С первого кадра — без ожидания события: начальная тёмность приходит синхронно.
     expect(await isDark(window)).toBe(true);
-    expect(await background(window)).toBe('rgb(10, 10, 10)');
+    expect(await background(window)).toBe(DARK_BACKGROUND);
     // Перезагрузка страницы: `.dark` ставит `main.tsx` до React, экран связи тут не важен.
     await window.reload({ waitUntil: 'load' });
     expect(await isDark(window)).toBe(true);
@@ -102,6 +105,34 @@ test.describe('тема окна по nativeTheme main (спека 4.7, раун
 
     window = await launch();
     expect(await isDark(window)).toBe(false);
-    expect(await background(window)).toBe('rgb(255, 255, 255)');
+    expect(await background(window)).toBe(LIGHT_BACKGROUND);
+  });
+
+  // Облик Organic вживую (кусок 1 плана «Organic»): jsdom стилей не считает, поэтому то, что держат
+  // `fonts.test.ts` и `lucide-stroke.test.tsx` по тексту CSS, здесь сверяется с настоящим окном.
+  test('шрифты Figtree и Caprasimo грузятся из сборки, база окна 13px, значки lucide — 2.75', async () => {
+    const window = await launch();
+    const facts = await window.evaluate(async () => {
+      // `load()` тянет файл из @font-face и отдаёт подошедшие начертания: запасной системный шрифт
+      // дал бы пустой список, а не `loaded`.
+      const loaded = async (font: string): Promise<string[]> =>
+        (await document.fonts.load(font)).map((face) => `${face.family.replace(/"/g, '')}:${face.status}`);
+      const body = getComputedStyle(document.body);
+      const icon = document.querySelector('svg.lucide');
+      return {
+        family: body.fontFamily,
+        size: body.fontSize,
+        figtree: await loaded('500 13px Figtree'),
+        caprasimo: await loaded('14px Caprasimo'),
+        stroke: icon === null ? null : getComputedStyle(icon).strokeWidth,
+      };
+    });
+
+    expect(facts.family.startsWith('Figtree')).toBe(true);
+    expect(facts.size).toBe('13px');
+    expect(facts.figtree).toEqual(['Figtree:loaded']);
+    expect(facts.caprasimo).toEqual(['Caprasimo:loaded']);
+    expect(facts.stroke, 'в окне нет ни одного значка lucide (svg.lucide)').not.toBeNull();
+    expect(parseFloat(facts.stroke ?? '')).toBe(2.75);
   });
 });

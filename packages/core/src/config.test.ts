@@ -30,6 +30,7 @@ describe('loadConfig', () => {
       messageRate: 20,
       resumeRate: 6,
       autoLaunch: true,
+      agentSkills: true,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/harnas/worktrees',
@@ -53,6 +54,7 @@ describe('loadConfig', () => {
       messageRate: 5,
       resumeRate: 6,
       autoLaunch: false,
+      agentSkills: true,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/harnas/worktrees',
@@ -71,11 +73,39 @@ describe('loadConfig', () => {
       messageRate: 7,
       resumeRate: 6,
       autoLaunch: true,
+      agentSkills: true,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/harnas/worktrees',
     });
     expect(fromEnv.warning).toBeNull();
+  });
+
+  it('agentSkills: по умолчанию включён, файл его выключает, окружение перекрывает файл', async () => {
+    expect((await loadConfig(file(), {})).config.agentSkills).toBe(true);
+
+    await write({ agentSkills: false });
+    const fromFile = await loadConfig(file(), {});
+    expect(fromFile.config.agentSkills).toBe(false);
+    expect(fromFile.warning).toBeNull();
+
+    const fromEnv = await loadConfig(file(), { HARNAS_AGENT_SKILLS: '1' });
+    expect(fromEnv.config.agentSkills).toBe(true);
+    expect(fromEnv.fromEnv).toEqual(['agentSkills']);
+    expect((await loadConfig(file(), { HARNAS_AGENT_SKILLS: 'off' })).config.agentSkills).toBe(false);
+  });
+
+  it('agentSkills: не булево в файле и мусор в окружении — жалоба и дефолт', async () => {
+    await write({ agentSkills: 'нет' });
+    const badFile = await loadConfig(file(), {});
+    expect(badFile.config.agentSkills).toBe(true);
+    expect(badFile.warning).toContain('agentSkills');
+
+    await write({});
+    const badEnv = await loadConfig(file(), { HARNAS_AGENT_SKILLS: 'может' });
+    expect(badEnv.config.agentSkills).toBe(true);
+    expect(badEnv.warning).toContain('HARNAS_AGENT_SKILLS');
+    expect(badEnv.fromEnv).toEqual([]);
   });
 
   it('fontFamily и fontSize: файл перекрывает дефолт, окружение — файл', async () => {
@@ -305,6 +335,12 @@ describe('parseSetting', () => {
     const fromEnv = await loadConfig(file(), { HARNAS_RESUME_RATE: '0' });
     expect(fromEnv.config.resumeRate).toBe(0);
     expect(fromEnv.fromEnv).toContain('resumeRate');
+  });
+
+  it('agentSkills — булев ключ: да/нет теми же словами', () => {
+    expect(parseSetting('agentSkills', 'false')).toEqual({ value: false });
+    expect(parseSetting('agentSkills', '1')).toEqual({ value: true });
+    expect(parseSetting('agentSkills', 'мимо')).toEqual({ error: 'agentSkills: ожидается 0 или 1' });
   });
 
   it('булевы ключи — те же множества да/нет, что у окружения', () => {

@@ -1,6 +1,6 @@
 /**
- * Контекстное меню shadcn/ui на `@radix-ui/react-context-menu`, поверх —
- * облик Orca «стекло», тот же, что у `ui/dropdown-menu.tsx` (спека 4.5).
+ * Контекстное меню shadcn/ui на `@radix-ui/react-context-menu`, поверх — та же подложка Organic
+ * (`ui/glass.ts`), что у `ui/dropdown-menu.tsx` (спека 4.5).
  */
 
 import * as React from 'react';

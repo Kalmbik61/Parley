@@ -144,7 +144,9 @@ export function Resizer({ side, width, min, max, target, onCommit }: ResizerProp
         onPointerCancel={endDrag}
         onLostPointerCapture={cancelDrag}
       >
-        <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border group-hover:bg-ring/50" />
+        {/* Линия шва прозрачна, пока указатель не над ручкой: сайдбары лежат на фоне окна, а центр —
+            лист со своей тенью (спека окна 2026-09-29, 1.1), линия рядом с его краем читалась бы границей. */}
+        <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent group-hover:bg-ring/50" />
       </div>
       {dragging ? (
         // На весь экран, не только на центр: сам `Resizer` уже держит

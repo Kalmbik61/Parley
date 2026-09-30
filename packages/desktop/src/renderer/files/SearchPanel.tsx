@@ -195,7 +195,7 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
 
   return (
     <div data-testid="files-search" className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
+      <div className="flex shrink-0 items-center gap-1 px-1 py-1.5">
         <input
           ref={input}
           value={text}
@@ -239,7 +239,7 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
                 title={file.path}
                 aria-expanded={open}
                 onClick={() => toggleGroup(file.path)}
-                className="flex w-full min-w-0 items-center gap-1 px-2 py-0.5 text-left hover:bg-accent/60"
+                className="flex w-full min-w-0 items-center gap-1 rounded-full px-2 py-0.5 text-left hover:bg-foreground/6 hover:[--muted-foreground:var(--foreground)]"
               >
                 {open ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
                 <span className="min-w-0 flex-1 truncate">{file.path}</span>
@@ -256,7 +256,7 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
                       onKeyDown={(event) => {
                         if (event.key === 'Enter') openHit(file.path, hit, event.metaKey);
                       }}
-                      className="flex min-w-0 cursor-default items-baseline gap-2 py-0.5 pl-7 pr-2 hover:bg-accent/60"
+                      className="flex min-w-0 cursor-default items-baseline gap-2 rounded-full py-0.5 pl-7 pr-2 hover:bg-foreground/6 hover:[--muted-foreground:var(--foreground)]"
                     >
                       <span className="shrink-0 tabular-nums text-muted-foreground">{hit.line}</span>
                       <span className="min-w-0 flex-1 truncate font-mono">

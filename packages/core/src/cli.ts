@@ -3,7 +3,7 @@
 // Диагностика идёт в stderr, код возврата ненулевой при ошибке.
 
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
 import { defaultRoot, discoverSessions } from './discover.js';
@@ -22,7 +22,7 @@ import {
 } from './work/channel.js';
 import { systemGuidance } from './work/guidance.js';
 import { addSession } from './work/map.js';
-import { mcpConfigValue, writeMcpConfig } from './work/mcp-config.js';
+import { codexNotifyOverride, mcpConfigValue, writeMcpConfig } from './work/mcp-config.js';
 import { writeWorkSettings } from './work/settings-file.js';
 import {
   createWork,
@@ -210,9 +210,11 @@ async function newWorkSession(argv: string[]): Promise<void> {
     entry.runner.mcpConfig === 'json-file'
       ? await writeMcpConfig(projectPath, workId, created, undefined, channel)
       : null;
+  // `env` — окружение CLI: Codex режет серверу MCP окружение, и нужные ему `HARNAS_*` (дом харнесса, подмены
+  // бинарей) уходят в таблицу `env` явно — как при запуске окном (`work/launch.ts`).
   const mcp = mcpConfigValue(
     entry.runner.mcpConfig,
-    { workDir: paths.dir, sessionId: created },
+    { workDir: paths.dir, sessionId: created, env: process.env },
     mcpFile ?? '',
   );
   // Файл настроек с хуками нужен только тем, кто его принимает (`claude --settings`).
@@ -228,6 +230,12 @@ async function newWorkSession(argv: string[]): Promise<void> {
   if (channel) subs.channel = CHANNEL_VALUE;
   if (agent !== null) subs.agent = agent;
   if (settingsFile !== null) subs.settingsFile = settingsFile;
+  // Конец хода Codex приходит скриптом `notify`, а тот дописывает журнал `events/` работы: каталог заводим
+  // здесь, как это делает запуск окном.
+  if ((entry.runner.args ?? []).includes('{notify}')) {
+    await mkdir(paths.events, { recursive: true });
+    subs.notify = codexNotifyOverride();
+  }
   // Системная вставка гида — тому, кто её принимает (`claude --append-system-prompt`):
   // сессия, поднятая руками, должна знать про харнесс то же, что поднятая панелью.
   if ((entry.runner.args ?? []).includes('{systemPrompt}')) {

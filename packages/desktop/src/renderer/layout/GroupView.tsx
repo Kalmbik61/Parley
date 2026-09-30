@@ -177,8 +177,11 @@ export function GroupView({ workKey, group, entry, singleGroup }: GroupViewProps
       <div ref={setBody} data-group-body={group.id} className="relative min-h-0 min-w-0 flex-1">
         <BodyDropIndicator workKey={workKey} groupId={group.id} />
         {group.tabs.length === 0 ? (
-          <div className="flex h-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
-            {S.tabs.emptyGroup}
+          // «No open tabs» (спека окна 2026-09-29, 1.8): заголовок Caprasimo 25 и подсказка, слева вверху
+          // листа — отступ 56 48, зазор 8.
+          <div className="flex h-full flex-col gap-2 px-12 py-14">
+            <h3 className="m-0 font-heading text-[25px] leading-[1.12] tracking-[-0.015em]">{S.tabs.noOpenTabs}</h3>
+            <p className="m-0 text-sm text-muted-foreground">{S.tabs.emptyGroup}</p>
           </div>
         ) : activeTab === null ? null : (
           <ErrorBoundary key={activeTab.id} title={S.shell.layoutError} onClose={closeActive}>

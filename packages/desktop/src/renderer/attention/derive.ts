@@ -7,7 +7,7 @@
  * поэтому считается здесь своими функциями, а не через `recipientsOf`.
  */
 
-import type { Message, SessionActivity, WorkEntry, WorkMap, WorkSession } from '@harnas/core';
+import type { Message, Room, SessionActivity, WorkEntry, WorkMap, WorkSession } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
 import { isoMs } from '../lib/iso-time.js';
 import { workKey } from '../lib/tree-order.js';
@@ -25,6 +25,38 @@ export const ATTENTION_RANK: Record<Attention, 4 | 3 | 2 | 1 | 0> = {
   idle: 1,
   off: 0,
 };
+
+/**
+ * Ждёт ли комната решения человека (спека окна 2026-09-29, 2.7): в слоте `Room.proposal` лежит решение
+ * ведущего. У комнаты карты до 2026-09-29 поля `proposal` нет вовсе — это «не ждёт», а не ошибка. Одно
+ * правило на карточку (значок вопроса), строку комнаты, вкладку комнаты (`layout/tab-meta.ts`), ранг работы и
+ * «следующую, где нужен ты»: своего выражения `proposal ?? null` рядом с ним писать не надо.
+ */
+export function roomAwaitsDecision(room: Room): boolean {
+  return (room.proposal ?? null) !== null;
+}
+
+// Те же литералы, что `RETURNED_LETTER` и `ACCEPTED_LETTER` в `core/work/proposals.ts`: из core рендерер берёт только
+// типы. Сходство держит страж `main/decision-letters-sync.test.ts`.
+const RETURNED_LETTER = 'Returned for rework';
+const ACCEPTED_LETTER = 'Decision accepted.';
+
+/**
+ * Последний ответ человека на решение комнаты — `Return for rework` (спека окна 2026-09-29, 1.10)? Слот `proposal`
+ * после ответа пуст и не помнит, чем ответили, а факт ответа лежит в ленте: письмо человека ведущему — `Returned for
+ * rework: …` или `Decision accepted.`. Решает самое позднее из двух: возврат, за которым решение приняли, следующее
+ * решение «переделанным» не делает. Свои слова человека в комнате (без этих двух начал) в счёт не идут. Ленту читаем
+ * в момент нового решения, а не ведём по снимкам окна: окно, открытое между возвратом и новым решением, тоже знает.
+ */
+export function roomDecisionReturned(map: WorkMap, roomId: string): boolean {
+  const answer = map.messages.findLast(
+    (message) =>
+      message.roomId === roomId &&
+      message.from === HUMAN &&
+      (message.text.startsWith(RETURNED_LETTER) || message.text === ACCEPTED_LETTER),
+  );
+  return answer?.text.startsWith(RETURNED_LETTER) ?? false;
+}
 
 /** Таблица спеки 7.1. */
 export function sessionAttention(session: WorkSession, live: SessionActivity | null): Attention {
@@ -68,7 +100,7 @@ export function roomUnreadForHuman(map: WorkMap, roomId: string): number {
 
 export interface WorkAttention {
   level: Attention;
-  needsYou: number;                     // сессии в 'needs-you'
+  needsYou: number;                     // сессии в 'needs-you' и комнаты с ждущим решением (2.7)
   unseen: number;
   humanUnread: number;
   roomsUnread: Record<string, number>;  // только комнаты с непрочитанным
@@ -102,9 +134,20 @@ export function workAttention(entry: WorkEntry, activity: Record<string, Activit
 
   for (const message of map.messages) lastEventAt = later(lastEventAt, message.at);
 
+  // Комната с ждущим решением — «нужен ты», ранг 4, как blocked (спека окна 2026-09-29, 2.7): в счёт
+  // «нужен ты» она входит наравне с сессией, иначе строка статуса молчала бы, а «следующая, где нужен
+  // ты» вела бы туда, куда счётчик не зовёт.
+  const decisions = map.rooms.filter(roomAwaitsDecision).length;
+  if (decisions > 0) {
+    needsYou += decisions;
+    level = 'needs-you';
+  }
+
   const humanUnread = humanUnreadLetters(map).length;
-  // Письмо человеку — вызов, а комнаты — фон: уровень поднимает только первое (спека 7.1).
-  if (humanUnread > 0) level = 'needs-you';
+  // Письмо человеку — ранг 3 (2.7, как `workRank` прототипа): выше работающей и простаивающей работы,
+  // ниже blocked и решения. Прежде оно поднимало работу до needs-you (спека Orca-UI 7.1). Комнаты — фон,
+  // а не вызов: их непрочитанное уровень не поднимает.
+  if (humanUnread > 0 && ATTENTION_RANK[level] < ATTENTION_RANK.unseen) level = 'unseen';
 
   const roomsUnread: Record<string, number> = {};
   for (const room of map.rooms) {

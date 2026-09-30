@@ -424,3 +424,64 @@ describe('TabStrip — затухание краёв только со стор�
     expect(fades(tablist)).toEqual(['', undefined]);
   });
 });
+
+// Облик Organic (спека окна 2026-09-29, 1.1): вкладки делят строку — до 200px, не уже 72px — и сужаются,
+// пока не упрутся в минимум; между пилюлями зазор 4; «+» — пилюля 28px.
+describe('TabStrip — вкладки-пилюли (Organic, 1.1)', () => {
+  const mail: GroupNode = { type: 'group', id: 'g1', tabs: [{ kind: 'mail', id: 'mail' }, { kind: 'terminal', id: 'terminal:a', sessionId: 'a' }], activeTabId: 'terminal:a' };
+
+  function mountStrip(portal: boolean, group: GroupNode = mail, e: WorkEntry = entry([session('a', 'исполнитель')])) {
+    useLayoutStore.setState({ layouts: { [WORK_KEY]: { root: group, activeGroupId: group.id, closedTabs: [] } }, hydrated: { [WORK_KEY]: true } });
+    return render(<TabStrip workKey={WORK_KEY} group={group} entry={e} portal={portal} active />);
+  }
+
+  it('обёртка вкладки держит flex 0 1 200px и минимум 72px; пилюля занимает её целиком', () => {
+    mountStrip(false);
+    for (const tab of screen.getAllByRole('tab')) {
+      const wrapper = tab.parentElement as HTMLElement;
+      expect(wrapper.className).toContain('flex-[0_1_200px]');
+      expect(wrapper.className).toContain('min-w-[72px]');
+      expect(wrapper.className).not.toContain('shrink-0');
+      expect(tab.className).toContain('w-full');
+    }
+  });
+
+  it('в заголовке: строка на фоне окна, зазор 4, без линии; над телом группы — h-9 с линией снизу на листе', () => {
+    const inTitlebar = mountStrip(true);
+    // Нет слота `#titlebar-tabs` — портал рисуется на месте.
+    const bar = screen.getByRole('tablist');
+    expect(bar.className).toContain('gap-1');
+    expect(bar.className).toMatch(/\bh-full\b/);
+    expect(bar.className).not.toMatch(/\bbg-card\b/);
+    expect(bar.className).not.toMatch(/\bborder-b\b/);
+    inTitlebar.unmount();
+
+    mountStrip(false);
+    const own = screen.getByRole('tablist');
+    expect(own.className).toMatch(/\bh-9\b/);
+    expect(own.className).toMatch(/\bborder-b\b/);
+    expect(own.className).not.toMatch(/\bbg-card\b/);
+  });
+
+  it('«+» — пилюля 28px с hover text 8%', () => {
+    mountStrip(false);
+    const plus = screen.getByLabelText('Open…');
+    expect(plus.className).toMatch(/\bsize-7\b/);
+    expect(plus.className).toMatch(/\brounded-full\b/);
+    expect(plus.className).toContain('hover:bg-foreground/8');
+  });
+
+  it('подкраска: почта с непрочитанным и комната с ждущим решением — accent-200', () => {
+    const roomTab = { kind: 'room', id: 'room:r-01', roomId: 'r-01' } as const;
+    const group: GroupNode = { type: 'group', id: 'g1', tabs: [{ kind: 'mail', id: 'mail' }, roomTab], activeTabId: 'mail' };
+    const e = entry([], [{ id: 'r-01', title: 'Возвраты', creator: 'human', members: [], createdAt: '2026-01-01T00:00:00.000Z', lead: null, proposal: { id: 'p-1', from: 's-01', text: 'Решение', rev: 0, at: '2026-09-29T10:00:00.000Z' } }]);
+    const withLetter: WorkEntry = {
+      ...e,
+      map: { ...e.map, messages: [{ id: 'm-1', roomId: null, from: 's-01', to: ['human'], at: '2026-09-29T10:00:00.000Z', text: 'привет', kind: 'note', readBy: {} }] },
+    };
+    mountStrip(false, group, withLetter);
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs[0]?.className).toContain('bg-accent-200');
+    expect(tabs[1]?.className).toContain('bg-accent-200');
+  });
+});

@@ -8,12 +8,13 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   loadProviders,
   resumeCommand,
   startCommand,
+  type EffortLevel,
   type ProviderEntry,
   type RunnerSubstitutions,
 } from '../providers.js';
@@ -21,7 +22,7 @@ import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
 import { writeBrief } from './brief.js';
 import { systemGuidance } from './guidance.js';
 import { addSession, removeSession, transitionSession, type NewSession } from './map.js';
-import { mcpConfigValue, writeMcpConfig } from './mcp-config.js';
+import { codexNotifyOverride, mcpConfigValue, writeMcpConfig } from './mcp-config.js';
 import { finishSession, linkProviderSession, type MetricsRoots } from './metrics.js';
 import { writeWorkSettings } from './settings-file.js';
 import { createWork, deleteSessionFiles, readMap, updateMap, workPaths } from './store.js';
@@ -41,6 +42,15 @@ export interface LaunchOptions {
    * печатает указатель сам после первого простоя.
    */
   prompt?: string;
+  /**
+   * Модель и усилие новой сессии из диалога окна. Доезжают только до провайдера, у которого
+   * в шаблоне запуска есть их подстановки (`supportsModel`, `supportsEffort`), и только при
+   * запуске: `resumeArgs` их не содержат — Claude Code возвращает модель сам, а выбор из диалога
+   * в карте не хранится. Перекрывают выбор, записанный в сессию `spawn_session`ом
+   * (`WorkSession.model`, `.effort`): его хост подставляет сам, когда поднимает `pending`.
+   */
+  model?: string;
+  effort?: EffortLevel;
 }
 
 /** Чем и как поднимать процесс сессии в правой панели. */
@@ -151,7 +161,14 @@ async function plan(
     warnings.push(NO_CHANNEL_WARNING);
   }
 
-  const params = { workDir: paths.dir, sessionId: session.id, ...(channel ? { channel } : {}) };
+  // `env` — окружение запускающего процесса: Codex режет серверу MCP окружение, и нужные ему
+  // `HARNAS_*` (дом харнесса, подмены бинарей) уходят в таблицу `env` сервера явно.
+  const params = {
+    workDir: paths.dir,
+    sessionId: session.id,
+    env: process.env,
+    ...(channel ? { channel } : {}),
+  };
 
   // Файл конфига нужен только тем, кто принимает путь; codex получает сервер
   // значением `-c`, и лишний файл ему незачем.
@@ -172,6 +189,13 @@ async function plan(
   if (template.includes('{settingsFile}')) {
     subs.settingsFile = await writeWorkSettings(projectPath, workId);
   }
+  // Конец хода Codex приходит скриптом `notify`, а тот только дописывает журнал `events/` — каталог
+  // под него заводит запуск, как `writeWorkSettings` заводит его для хуков Claude Code: наблюдатель
+  // журналов хоста не встанет на каталог, которого нет.
+  if (template.includes('{notify}')) {
+    await mkdir(paths.events, { recursive: true });
+    subs.notify = codexNotifyOverride();
+  }
   // Системная вставка гида идёт во всех трёх режимах, включая `resume`:
   // системный промпт живёт в процессе, а не в транскрипте, и собирается заново
   // при каждом запуске (план от 2026-09-06, раздел A).
@@ -191,6 +215,10 @@ async function plan(
     // через MCP, бриф ей не пишется (5.1). Тихая — тоже: её бриф уже уехал
     // системным промптом.
     if (mode !== 'new' && !quiet) subs.prompt = await readBrief(projectPath, workId, session.id);
+    const model = options.model ?? session.model;
+    if (model !== undefined) subs.model = model;
+    const effort = options.effort ?? session.effort;
+    if (effort !== undefined) subs.effort = effort;
     if (entry.linkBy === 'session-id') {
       providerSessionId = session.providerSessionId ?? randomUUID();
       subs.sessionUuid = providerSessionId;
@@ -400,21 +428,32 @@ export async function linkSession(
   if (session.providerSessionId !== null || session.startedAt === null) return null;
 
   const entry = await entryOf(session.provider);
+  // Логи, занятые другими сессиями работы, своими не берём: рядом запущенный агент в том же каталоге иначе
+  // получил бы самый ранний лог — чужой.
+  const taken = new Set<string>();
+  for (const other of (await readMap(projectPath, workId)).sessions) {
+    if (other.id !== session.id && other.providerSessionId !== null) taken.add(other.providerSessionId);
+  }
   const found = await linkProviderSession(
     entry,
     { cwd: projectPath, startedAt: session.startedAt },
-    roots,
+    { ...roots, exclude: taken },
   );
   if (found === null) return null;
 
+  let lost = false;
   await updateMap(projectPath, workId, (map) => {
     const target = map.sessions.find((candidate) => candidate.id === session.id);
-    // Пока шёл поиск, сессию могли привязать: чужой id не затираем.
-    if (target !== undefined && target.providerSessionId === null) {
-      target.providerSessionId = found;
+    // Пока шёл поиск, сессию могли привязать: чужой id не затираем. Или лог занял сосед по поиску
+    // (обе сессии искали одновременно и увидели один лог): побеждает первая запись, вторая ищет дальше.
+    if (target === undefined || target.providerSessionId !== null) return;
+    if (map.sessions.some((other) => other.id !== target.id && other.providerSessionId === found)) {
+      lost = true;
+      return;
     }
+    target.providerSessionId = found;
   });
-  return found;
+  return lost ? null : found;
 }
 
 /**

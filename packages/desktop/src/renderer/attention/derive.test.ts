@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { Message, SessionActivity, WorkEntry, WorkSession } from '@harnas/core';
+import type { Message, Proposal, Room, SessionActivity, WorkEntry, WorkSession } from '@harnas/core';
 import { refKey } from '@harnas/protocol';
 import type { ActivityEntry } from '../store/activity.js';
 import {
   ATTENTION_RANK,
   humanUnreadLetters,
   isHumanUnread,
+  roomAwaitsDecision,
+  roomDecisionReturned,
   roomUnreadForHuman,
   sessionAttention,
   workAttention,
@@ -153,10 +155,11 @@ describe('workAttention (4)', () => {
     expect(a.roomsUnread).toEqual({});
   });
 
-  it('только письмо человеку → needs-you', () => {
+  it('только письмо человеку → unseen (ранг 3, спека 2.7), а не needs-you', () => {
     const e = entry([], [letter({ id: 'm1', from: 's-01', to: ['human'] })]);
     const a = workAttention(e, {});
-    expect(a.level).toBe('needs-you');
+    expect(a.level).toBe('unseen');
+    expect(ATTENTION_RANK[a.level]).toBe(3);
     expect(a.humanUnread).toBe(1);
     expect(a.needsYou).toBe(0);
   });
@@ -193,5 +196,113 @@ describe('workAttention (4)', () => {
     expect(workAttention(e, {}).lastEventAt).toBe('2026-09-27T08:00:00+00:00');
     const later = entry([], [letter({ id: 'm1', from: 's-01', to: ['s-02'], at: '2026-09-27T09:00:01+00:00' })]);
     expect(workAttention(later, {}).lastEventAt).toBe('2026-09-27T09:00:01+00:00');
+  });
+});
+
+// Спека окна 2026-09-29, 2.7: комната с ждущим решением — ранг 4 «нужен ты», как blocked; непрочитанная
+// почта человеку — ранг 3 (в прототипе handoff `workRank`: письмо — max(r, 3), решение — max(r, 4)).
+describe('roomAwaitsDecision (2.7)', () => {
+  const base: Room = { id: 'r-01', title: 'R', creator: 'human', members: ['s-01'], createdAt: '2026-09-29T09:00:00.000Z', lead: null, proposal: null };
+  const proposal: Proposal = { id: 'p-01', from: 's-01', text: 'Возврат больше суммы — ошибка', rev: 0, at: '2026-09-29T10:00:00.000Z' };
+
+  it('комната с Room.proposal ждёт, с proposal: null — нет', () => {
+    expect(roomAwaitsDecision({ ...base, proposal })).toBe(true);
+    expect(roomAwaitsDecision(base)).toBe(false);
+  });
+
+  it('у комнаты карты до 2026-09-29 поля proposal нет вовсе — это «не ждёт»', () => {
+    const old = { id: 'r-01', title: 'R', creator: 'human', members: [], createdAt: '2026-01-01T00:00:00.000Z' } as unknown as Room;
+    expect(roomAwaitsDecision(old)).toBe(false);
+  });
+});
+
+// Спека окна 2026-09-29, 1.10: после `Return for rework` ведущий приносит новое решение с новым `id`, и уведомление
+// говорит «revised». Признак — последний ответ человека в ленте комнаты: письмо возврата или письмо принятия.
+describe('roomDecisionReturned (1.10)', () => {
+  const answer = (id: string, text: string, roomId = 'r-01'): Message =>
+    letter({ id, from: 'human', to: ['s-01'], roomId, text });
+  const mapOf = (messages: Message[]) => entry([session('s-01')], messages).map;
+
+  it('письмо «Returned for rework: …» и «Returned for rework.» — возврат', () => {
+    expect(roomDecisionReturned(mapOf([answer('m-1', 'Returned for rework: add the tests')]), 'r-01')).toBe(true);
+    expect(roomDecisionReturned(mapOf([answer('m-1', 'Returned for rework.')]), 'r-01')).toBe(true);
+  });
+
+  it('ответов человека ещё не было или последний — принятие («Decision accepted.») — не возврат', () => {
+    expect(roomDecisionReturned(mapOf([]), 'r-01')).toBe(false);
+    expect(roomDecisionReturned(mapOf([answer('m-1', 'Decision accepted.')]), 'r-01')).toBe(false);
+    // Возврат был, потом принято следующее решение: решает последний ответ.
+    expect(roomDecisionReturned(mapOf([answer('m-1', 'Returned for rework.'), answer('m-2', 'Decision accepted.')]), 'r-01')).toBe(false);
+    // И наоборот: принято, потом вернули следующее.
+    expect(roomDecisionReturned(mapOf([answer('m-1', 'Decision accepted.'), answer('m-2', 'Returned for rework.')]), 'r-01')).toBe(true);
+  });
+
+  it('обычные сообщения человека, чужие комнаты и письма агентов возврата не делают', () => {
+    expect(roomDecisionReturned(mapOf([answer('m-1', 'Returned for rework: x', 'r-02')]), 'r-01')).toBe(false);
+    expect(roomDecisionReturned(mapOf([letter({ id: 'm-1', from: 's-01', to: [], roomId: 'r-01', text: 'Returned for rework' })]), 'r-01')).toBe(false);
+    // Возврат, за которым человек написал в комнату что-то своё, остаётся возвратом.
+    expect(roomDecisionReturned(mapOf([answer('m-1', 'Returned for rework.'), answer('m-2', 'Also cover refunds')]), 'r-01')).toBe(true);
+  });
+});
+
+describe('workAttention — решение и почта человеку (2.7)', () => {
+  const proposal: Proposal = { id: 'p-01', from: 's-01', text: 'Решение', rev: 0, at: '2026-09-29T10:00:00.000Z' };
+  const room = (id: string, patch: Partial<Room> = {}): Room => ({
+    id,
+    title: id,
+    creator: 'human',
+    members: ['s-01', 's-02'],
+    createdAt: '2026-09-29T09:00:00.000Z',
+    lead: null,
+    proposal: null,
+    ...patch,
+  });
+  const withRooms = (sessions: WorkSession[], rooms: Room[], messages: Message[] = []): WorkEntry => {
+    const base = entry(sessions, messages);
+    return { ...base, map: { ...base.map, rooms } };
+  };
+
+  it('ждущее решение — needs-you (ранг 4) даже без единой сессии в blocked; оно входит в needsYou', () => {
+    const e = withRooms([session('s-01'), session('s-02')], [room('r-01', { proposal })]);
+    const a = workAttention(e, activityOf(e, { 's-01': live('idle'), 's-02': live('idle') }));
+    expect(a.level).toBe('needs-you');
+    expect(ATTENTION_RANK[a.level]).toBe(4);
+    expect(a.needsYou).toBe(1);
+  });
+
+  it('blocked-сессия и каждая комната с решением считаются по одной: 1 сессия + 2 комнаты — needsYou 3', () => {
+    const e = withRooms([session('s-01'), session('s-02')], [room('r-01', { proposal }), room('r-02', { proposal: { ...proposal, id: 'p-02' } })]);
+    expect(workAttention(e, activityOf(e, { 's-01': live('blocked') })).needsYou).toBe(3);
+  });
+
+  it('решение бьёт working и unseen', () => {
+    const e = withRooms([session('s-01'), session('s-02')], [room('r-01', { proposal })]);
+    expect(workAttention(e, activityOf(e, { 's-01': live('working'), 's-02': live('unseen') })).level).toBe('needs-you');
+  });
+
+  it('комната старой карты без proposal и комната с proposal: null уровня не поднимают', () => {
+    const old = { id: 'r-02', title: 'Старая', creator: 'human', members: [], createdAt: '2026-01-01T00:00:00.000Z' } as unknown as Room;
+    const e = withRooms([session('s-01')], [room('r-01'), old]);
+    const a = workAttention(e, activityOf(e, { 's-01': live('working') }));
+    expect(a.level).toBe('working');
+    expect(a.needsYou).toBe(0);
+  });
+
+  it('письмо человеку — ранг 3: выше working и простоя, ниже blocked и решения', () => {
+    const mail = [letter({ id: 'm1', from: 's-01', to: ['human'] })];
+    const working = entry([session('s-01')], mail);
+    expect(workAttention(working, activityOf(working, { 's-01': live('working') })).level).toBe('unseen');
+    const idle = entry([session('s-01')], mail);
+    expect(workAttention(idle, activityOf(idle, { 's-01': live('idle') })).level).toBe('unseen');
+    const blocked = entry([session('s-01')], mail);
+    expect(workAttention(blocked, activityOf(blocked, { 's-01': live('blocked') })).level).toBe('needs-you');
+    const decision = withRooms([session('s-01')], [room('r-01', { proposal })], mail);
+    expect(workAttention(decision, activityOf(decision, { 's-01': live('idle') })).level).toBe('needs-you');
+  });
+
+  it('письмо человеку не меняет needsYou и unseen сессий: счётчики — только по сессиям и решениям', () => {
+    const e = entry([session('s-01')], [letter({ id: 'm1', from: 's-01', to: ['human'] })]);
+    const a = workAttention(e, activityOf(e, { 's-01': live('working') }));
+    expect(a).toMatchObject({ needsYou: 0, unseen: 0, humanUnread: 1 });
   });
 });

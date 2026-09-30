@@ -16,6 +16,10 @@
  * все вкладки трёх работ, и ⌘F открыл бы полосу во всех; полосу открывает
  * `openSearch()` ручки, его зовёт `AppShell`.
  *
+ * Неживая сессия (раунд main-r2, п. 2) и ещё не запущенная (Organic, 1.8) — карточка над терминалом
+ * (`NotRunningCard.tsx`): кикер `asleep`, `closed` или `not started`, название, текст, мета и, где уместно,
+ * Resume. Терминал под ней прежний: xterm держит последний вывод.
+ *
  * Кусок 2.6 (спека 5.4): корень — droppable `terminal` с `sessionId`, только
  * пока поверхность видима: скрытые терминалы группы лежат на месте видимого,
  * и бросок ушёл бы в чужую вкладку. В этапе 2 терминал ничего не принимает
@@ -38,7 +42,6 @@ import { errorText, S } from '../../shared/strings.js';
 import { applyFocusTarget, buildFocusTargetDeps } from '../attention/focus-target.js';
 import { useHostSupports } from '../lib/capabilities.js';
 import { sessionTag } from '../lib/participant.js';
-import { Button } from '../ui/button.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { dndId, type DropTargetData } from '../layout/dnd.js';
 import { useTerminalDropPreview } from '../layout/DropIndicator.js';
@@ -52,6 +55,7 @@ import { useWorksStore } from '../store/works.js';
 import { openInBrowserTab } from '../browser/store.js';
 import { isFileLink, LinkMenu, openLinkInEditor, openLinkPath, type LinkMenuState } from './LinkMenu.js';
 import { sessionCwd, type TerminalLink } from './links.js';
+import { NotRunningCard } from './NotRunningCard.js';
 import { SearchBar } from './SearchBar.js';
 import { terminalSurfaces, type TerminalSurfaceHandle } from './surface-registry.js';
 import { dragHasFiles, pasteHasOnlyImage, pathsToInput } from './drop.js';
@@ -222,11 +226,13 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
     const lifecycle = sessionOf(sessionRef, state.entries)?.lifecycle;
     return lifecycle === 'sleeping' || lifecycle === 'closed';
   });
-  const resumable = useWorksStore((state) => {
-    const session = sessionOf(sessionRef, state.entries);
-    return session !== null && canResume(session);
+  // Карточка над терминалом (Organic, 1.8): «asleep», «closed» — процесса нет; «not started» — его ещё не
+  // было. У pending подключаться тоже не к чему, но поведение терминала прежнее: `notRunning` (ввод-тост,
+  // `running`) его не считает — только вид.
+  const showCard = useWorksStore((state) => {
+    const lifecycle = sessionOf(sessionRef, state.entries)?.lifecycle;
+    return lifecycle === 'sleeping' || lifecycle === 'closed' || lifecycle === 'pending';
   });
-  const label = sessionTag(sessionRef.sessionId);
   const [searchOpen, setSearchOpen] = useState(false);
   const [linkMenu, setLinkMenu] = useState<LinkMenuState | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -413,21 +419,9 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
       style={dropping ? { outline: '2px solid rgb(59,130,246)', outlineOffset: '-2px' } : undefined}
     >
       {/* Без связи вкладка говорит одно — «Disconnected — reconnecting…» (слой ниже): снимок
-          работ в это время прежний, а Resume звать некому. Полоса вернётся со связью, если
+          работ в это время прежний, а Resume звать некому. Карточка вернётся со связью, если
           сессия и по свежему снимку неживая (после «Restart host» — так и будет). */}
-      {notRunning && !offline ? (
-        <div
-          data-testid="terminal-not-running"
-          className="flex min-w-0 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-3 py-1.5 text-sm text-foreground"
-        >
-          <span className="min-w-0 truncate">{S.send.notRunning(label)}</span>
-          {resumable ? (
-            <Button type="button" size="sm" className="shrink-0" onClick={() => resumeSession(bridge, sessionRef)}>
-              {S.sidebar.sessionMenu.resume}
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
+      {showCard && !offline ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
       {searchOpen ? (
         <SearchBar
           ref={inputRef}
@@ -438,9 +432,10 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
           }}
         />
       ) : null}
-      {/* Отступ 4px — на обёртке, а не на контейнере xterm: FitAddon меряет
-          родителя терминала и падинг контейнера не заметил бы (как в
-          `TerminalPanel.tsx`). Фон — фон темы xterm, а не `--card`. */}
+      {/* Отступ 22 24 16 24, как у терминала прототипа (Organic, 1.1): лист центра скруглён на 28 и режет
+          всё, что лежит у его углов, — при 4px первая строка и её рамки срезались бы дугой. Отступ — на
+          обёртке, а не на контейнере xterm: FitAddon меряет родителя терминала и падинг контейнера не
+          заметил бы (как в `TerminalPanel.tsx`). Фон — фон темы xterm, а не `--card`. */}
       <TerminalContextMenu
         bridge={bridge}
         terminal={terminal}
@@ -448,7 +443,7 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
         onFind={openSearch}
         onSplit={beginSplit}
       >
-        <div data-testid="terminal-surface-pad" className="min-h-0 flex-1 p-1" style={{ backgroundColor: xtermTheme(dark).background }}>
+        <div data-testid="terminal-surface-pad" className="min-h-0 flex-1 pb-4 pl-6 pr-6 pt-[22px]" style={{ backgroundColor: xtermTheme(dark).background }}>
           <div ref={setContainer} className="h-full w-full" />
         </div>
       </TerminalContextMenu>
@@ -459,7 +454,7 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
         <div
           data-testid="terminal-offline"
           role="status"
-          className="absolute inset-0 z-10 flex items-center justify-center bg-black/50 px-4 text-center text-sm text-neutral-100"
+          className="absolute inset-0 z-10 flex items-center justify-center bg-black/50 px-4 text-center text-sm text-white"
         >
           {S.terminal.disconnected}
         </div>

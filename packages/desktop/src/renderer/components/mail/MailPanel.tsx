@@ -1,6 +1,9 @@
 /**
  * Панель «вся почта работы» (кусок 2.4 плана окна, спека 5.1, 6.3, 6.4):
- * шапка со счётом писем и участниками, блок решений, лента писем. Держит
+ * шапка, блок решений, лента писем. Облик Organic (спека окна 2026-09-29, 1.8): шапка — `Mail` Caprasimo 25
+ * и подзаголовок `{работа} · {n} unread` / `all read` (n — письма с точкой), блок решений — плашка в колонке
+ * ленты (`Decisions`, 1.3), лента — колонка карточек до
+ * 640px с зазором 14 и отступами `32 36`. Держит
  * хвост ленты, пока пользователь не ушёл прокруткой вверх — тогда позицию не
  * трогает, а в шапке растёт `↓N` (столько писем пришло, пока он читал историю).
  *
@@ -85,27 +88,27 @@ export function MailPanel({ entry, providers, models, bridge, active, onOpenExte
     setBelow(0);
   };
 
+  const unread = view.letters.filter((letter) => letter.unread).length;
+
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
-        <div className="min-w-0">
-          <div className="text-sm font-medium text-foreground">
-            {S.mail.headerPrefix} · {view.letters.length} {S.mail.messageWord(view.letters.length)}
-          </div>
-          <div className="truncate text-xs text-muted-foreground">{view.participants.join(' · ')}</div>
+    <div className="flex h-full min-w-0 flex-col">
+      <div data-mail-header className="flex shrink-0 items-start justify-between gap-3 px-9 pb-3.5 pt-8">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <h3 className="m-0 font-heading text-[25px] leading-[1.12] tracking-[-0.015em]">{S.tabs.mail}</h3>
+          <span className="truncate text-[13px] text-muted-foreground">{S.mail.subtitle(entry.map.work.title, unread)}</span>
         </div>
         {below > 0 ? (
           <button
             type="button"
             onClick={scrollToBottom}
-            className="shrink-0 rounded bg-muted px-2 py-1 text-xs text-foreground"
+            className="shrink-0 rounded-full bg-secondary px-2.5 py-1 text-xs text-foreground"
           >
             ↓{below}
           </button>
         ) : null}
       </div>
-      <Decisions decisions={view.decisions} />
-      <div ref={containerRef} onScroll={handleScroll} className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
+      <Decisions decisions={view.decisions} className="mx-9 mb-3.5 max-w-[640px]" />
+      <div ref={containerRef} onScroll={handleScroll} className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-9 pb-8">
         {view.letters.map((letter) => (
           <Letter
             key={letter.id}

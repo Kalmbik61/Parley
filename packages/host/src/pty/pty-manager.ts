@@ -11,6 +11,8 @@
 import { refKey } from '@harnas/protocol';
 import type { SessionRef } from '@harnas/protocol';
 import type { HostContext } from '../context.js';
+import { createCodexTerminalParser } from './codex-terminal.js';
+import type { CodexSignal, CodexTerminalParser } from './codex-terminal.js';
 import { DraftTracker } from './draft.js';
 import { OutputBatcher } from './output-batcher.js';
 import { spawnPty } from './pty-process.js';
@@ -28,6 +30,8 @@ export interface PtyHandle {
   startedAt: number;
   cols: number;
   rows: number;
+  /** Провайдер из `PtyLaunch.provider`; `null` — не задан. */
+  provider: string | null;
   /** Черновик человека или черновик хоста — поверх любого будильник не печатает. */
   hasDraft(): boolean;
   /** Режим bracketed paste headless-экрана сессии. */
@@ -54,6 +58,11 @@ export interface PtyManager {
   on(event: 'draft', listener: (ref: SessionRef, hasDraft: boolean) => void): () => void;
   /** Черновик хоста поставлен или снят. Слушает будильник (пересчёт сессии); typeAndSubmit — нет. */
   on(event: 'host-draft', listener: (ref: SessionRef, hasHostDraft: boolean) => void): () => void;
+  /**
+   * Сигнал терминала Codex (заголовок окна, уведомление OSC 9): только у сессий `provider: 'codex'`,
+   * в порядке появления в потоке. Состояние из него выводит сервис активности.
+   */
+  on(event: 'signal', listener: (ref: SessionRef, signal: CodexSignal) => void): () => void;
 }
 
 const DEFAULT_SIZE = { cols: 120, rows: 40 };
@@ -70,6 +79,9 @@ interface Session {
   batcher: OutputBatcher;
   cols: number;
   rows: number;
+  provider: string | null;
+  /** Разбор потока терминала — только у codex: у остальных состояние приходит хуками. */
+  terminal: CodexTerminalParser | null;
   /** Ждущие завершения процесса вызовы `stop()` — резолвятся общим обработчиком `onExit`. */
   stopWaiters: Array<(exit: ExitInfo) => void>;
 }
@@ -81,6 +93,7 @@ function toHandle(session: Session): PtyHandle {
     startedAt: session.startedAt,
     cols: session.cols,
     rows: session.rows,
+    provider: session.provider,
     hasDraft: () => session.draft.hasDraft || session.draft.hasHostDraft,
     bracketedPaste: () => session.screen.bracketedPaste(),
   };
@@ -91,7 +104,14 @@ type ExitListener = (ref: SessionRef, exit: ExitInfo) => void;
 type StartListener = (ref: SessionRef) => void;
 type DraftListener = (ref: SessionRef, hasDraft: boolean) => void;
 type HostDraftListener = (ref: SessionRef, hasHostDraft: boolean) => void;
-type PtyListener = OutputListener | ExitListener | StartListener | DraftListener | HostDraftListener;
+type SignalListener = (ref: SessionRef, signal: CodexSignal) => void;
+type PtyListener =
+  | OutputListener
+  | ExitListener
+  | StartListener
+  | DraftListener
+  | HostDraftListener
+  | SignalListener;
 
 export function createPtyManager(host: HostContext): PtyManager {
   const sessions = new Map<string, Session>();
@@ -100,6 +120,7 @@ export function createPtyManager(host: HostContext): PtyManager {
   const startListeners = new Set<StartListener>();
   const draftListeners = new Set<DraftListener>();
   const hostDraftListeners = new Set<HostDraftListener>();
+  const signalListeners = new Set<SignalListener>();
 
   function requireSession(ref: SessionRef): Session {
     const session = sessions.get(refKey(ref));
@@ -129,6 +150,8 @@ export function createPtyManager(host: HostContext): PtyManager {
       batcher,
       cols: size.cols,
       rows: size.rows,
+      provider: launch.provider ?? null,
+      terminal: launch.provider === 'codex' ? createCodexTerminalParser() : null,
       stopWaiters: [],
     };
     sessions.set(key, session);
@@ -138,6 +161,17 @@ export function createPtyManager(host: HostContext): PtyManager {
     ptyProcess.onData((data) => {
       session.screen.write(data);
       session.batcher.push(data);
+      if (session.terminal === null) return;
+      for (const signal of session.terminal.feed(data)) {
+        for (const listener of Array.from(signalListeners)) {
+          // Слушатель бросил — поток терминала не должен упасть вместе с ним: это событие node-pty.
+          try {
+            listener(ref, signal);
+          } catch (error) {
+            host.log.error('слушатель сигнала терминала упал', { ref, error: String(error) });
+          }
+        }
+      }
     });
 
     ptyProcess.onExit((exit) => {
@@ -185,7 +219,11 @@ export function createPtyManager(host: HostContext): PtyManager {
   function on(event: 'start', listener: StartListener): () => void;
   function on(event: 'draft', listener: DraftListener): () => void;
   function on(event: 'host-draft', listener: HostDraftListener): () => void;
-  function on(event: 'output' | 'exit' | 'start' | 'draft' | 'host-draft', listener: PtyListener): () => void {
+  function on(event: 'signal', listener: SignalListener): () => void;
+  function on(
+    event: 'output' | 'exit' | 'start' | 'draft' | 'host-draft' | 'signal',
+    listener: PtyListener,
+  ): () => void {
     if (event === 'output') {
       const typed = listener as OutputListener;
       outputListeners.add(typed);
@@ -205,6 +243,11 @@ export function createPtyManager(host: HostContext): PtyManager {
       const typed = listener as HostDraftListener;
       hostDraftListeners.add(typed);
       return () => hostDraftListeners.delete(typed);
+    }
+    if (event === 'signal') {
+      const typed = listener as SignalListener;
+      signalListeners.add(typed);
+      return () => signalListeners.delete(typed);
     }
     const typed = listener as DraftListener;
     draftListeners.add(typed);

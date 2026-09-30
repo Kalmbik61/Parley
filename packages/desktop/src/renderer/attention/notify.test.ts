@@ -1,17 +1,20 @@
 /**
  * Тесты 2, 3, 9–13 куска 4.3: когда окно шлёт уведомление macOS, с каким текстом, тегом и
  * целью. Настоящих уведомлений здесь нет — `notify` подставной или журнал подставного моста.
+ * Кусок 8 «Organic» — решение ведущего, ждущее человека: когда уведомлять, окно или macOS, тег и замена.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Message, SessionActivity, WorkEntry, WorkSession } from '@harnas/core';
+import type { Message, Proposal, Room, SessionActivity, WorkEntry, WorkSession } from '@harnas/core';
 import { refKey, type HostNotice, type SessionRef } from '@harnas/protocol';
 import type { AppNote, FocusTarget } from '../../shared/bridge.js';
 import { DEFAULT_UI, type UiFile } from '../../shared/ui-types.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { useActivityStore } from '../store/activity.js';
+import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import { createAttentionNotifier, wireAttentionNotifications } from './notify.js';
+import { useWindowNotesStore, type WindowNote } from './window-notes.js';
 
 function session(id: string, label: string, overrides: Partial<WorkSession> = {}): WorkSession {
   return {
@@ -46,12 +49,12 @@ function letter(id: string, overrides: Partial<Message> = {}): Message {
   return { id, roomId: null, from: 's-01', to: ['human'], at: '2026-01-01T00:00:00.000Z', text: 'hello', kind: 'note', readBy: {}, ...overrides };
 }
 
-function entry(title: string, sessions: WorkSession[], messages: Message[] = []): WorkEntry {
+function entry(title: string, sessions: WorkSession[], messages: Message[] = [], rooms: Room[] = []): WorkEntry {
   return {
     projectPath: '/tmp/p',
     map: {
       schemaVersion: 2,
-      rooms: [],
+      rooms,
       work: { id: 'w-01', title, goal: '', status: 'active', createdAt: '2026-01-01', updatedAt: '2026-01-01' },
       sessions,
       messages,
@@ -71,6 +74,10 @@ interface Harness {
   prefs: UiFile['notifications'];
   visible: Set<string>;
   entries: WorkEntry[];
+  /** Окно в фокусе: решение — карточкой в окне, а не уведомлением macOS (кусок 8). */
+  active: boolean;
+  windowNotes: WindowNote[];
+  hidden: string[];
   notifier: ReturnType<typeof createAttentionNotifier>;
 }
 
@@ -80,6 +87,9 @@ function harness(entries: WorkEntry[]): Harness {
     prefs: { ...DEFAULT_UI.notifications },
     visible: new Set(),
     entries,
+    active: false,
+    windowNotes: [],
+    hidden: [],
     notifier: null as unknown as ReturnType<typeof createAttentionNotifier>,
   };
   h.notifier = createAttentionNotifier({
@@ -87,6 +97,9 @@ function harness(entries: WorkEntry[]): Harness {
     prefs: () => h.prefs,
     isTargetVisible: (target: FocusTarget) => h.visible.has(JSON.stringify(target)),
     entries: () => h.entries,
+    windowActive: () => h.active,
+    showInWindow: (note) => h.windowNotes.push(note),
+    hideInWindow: (tag) => h.hidden.push(tag),
   });
   return h;
 }
@@ -240,6 +253,268 @@ describe('createAttentionNotifier.onWorks (тесты 3 и 9 куска 4.3)', (
   });
 });
 
+function room(id: string, title: string, proposal: Proposal | null, overrides: Partial<Room> = {}): Room {
+  return { id, title, creator: 'human', members: ['s-01', 's-02'], createdAt: '2026-01-01T00:00:00.000Z', lead: 's-01', proposal, ...overrides };
+}
+
+function proposal(id: string, rev = 0, from = 's-01'): Proposal {
+  return { id, from, text: 'Split the work between S01 and S02', rev, at: '2026-01-01T00:00:00.000Z' };
+}
+
+/** Работа с двумя сессиями и заданными комнатами: ведущий комнат — `s-01`. */
+function roomsEntry(rooms: Room[]): WorkEntry {
+  return entry('Redesign', [session('s-01', 'planner'), session('s-02', 'executor')], [], rooms);
+}
+
+describe('createAttentionNotifier.onWorks — решение ведущего в комнате (кусок 8, спека окна 2026-09-29, 1.10)', () => {
+  const TAG = 'proposal:/tmp/p w-01:r-01';
+  const TARGET: FocusTarget = { kind: 'room', projectPath: '/tmp/p', workId: 'w-01', roomId: 'r-01' };
+
+  /** Уведомитель, у которого первый снимок — комната без решения: база есть, дальше всё — «после подключения». */
+  function started(): Harness {
+    const h = harness([]);
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', null)])]);
+    return h;
+  }
+
+  it('новое решение при окне не в фокусе — уведомление macOS: заголовок, «collected positions», тег proposal:<workKey>:<roomId>, цель — комната', () => {
+    const h = started();
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))])]);
+    expect(h.notes).toEqual([
+      {
+        title: 'Decision waiting for you',
+        body: 'Возвраты · S01 collected positions',
+        tag: TAG,
+        target: TARGET,
+        silent: false,
+      },
+    ]);
+    expect(h.windowNotes).toEqual([]);
+  });
+
+  it('замена того же решения (rev вырос) — «revised the decision» под тем же тегом; повтор того же rev молчит', () => {
+    const h = started();
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))])]);
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01', 1))])]);
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01', 1))])]);
+    expect(h.notes.map((note) => [note.body, note.tag])).toEqual([
+      ['Возвраты · S01 collected positions', TAG],
+      ['Возвраты · S01 revised the decision', TAG],
+    ]);
+  });
+
+  it('то же решение (id и rev) снимок за снимком уведомляет один раз — чужие изменения карты его не повторяют', () => {
+    const h = started();
+    const waiting = roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))]);
+    h.notifier.onWorks([waiting]);
+    h.notifier.onWorks([{ ...waiting, map: { ...waiting.map, messages: [letter('m-1', { roomId: 'r-01', to: [] })] } }]);
+    h.notifier.onWorks([waiting]);
+    expect(h.notes).toHaveLength(1);
+  });
+
+  it('первый снимок — база: решение, ждавшее на старте окна, не уведомляет; следующая замена — уведомляет', () => {
+    const h = harness([]);
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))])]);
+    expect(h.notes).toEqual([]);
+    expect(h.windowNotes).toEqual([]);
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))])]);
+    expect(h.notes).toEqual([]);
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01', 1))])]);
+    expect(h.notes.map((note) => note.body)).toEqual(['Возвраты · S01 revised the decision']);
+  });
+
+  it('после ответа человека новое решение получает новый id — снова «collected positions»', () => {
+    const h = started();
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))])]);
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', null)])]);
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-02'))])]);
+    expect(h.notes.map((note) => note.body)).toEqual([
+      'Возвраты · S01 collected positions',
+      'Возвраты · S01 collected positions',
+    ]);
+  });
+
+  /** Ответ человека на решение комнаты `r-01`, как его пишет `resolveProposal` core: письмо ведущему `s-01`. */
+  const answer = (id: string, text: string): Message =>
+    letter(id, { roomId: 'r-01', from: 'human', to: ['s-01'], text, at: '2026-01-01T00:05:00.000Z' });
+  const RETURNED = 'Returned for rework: add the tests';
+  const roomWith = (decision: Proposal | null, messages: Message[]): WorkEntry => {
+    const base = roomsEntry([room('r-01', 'Возвраты', decision)]);
+    return { ...base, map: { ...base.map, messages } };
+  };
+
+  it('после возврата на доработку новое решение (новый id) — «revised the decision», а не «collected positions»', () => {
+    const h = started();
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))])]);
+    h.notifier.onWorks([roomWith(null, [answer('m-1', RETURNED)])]);
+    h.notifier.onWorks([roomWith(proposal('p-02'), [answer('m-1', RETURNED)])]);
+    expect(h.notes.map((note) => [note.body, note.tag])).toEqual([
+      ['Возвраты · S01 collected positions', TAG],
+      ['Возвраты · S01 revised the decision', TAG],
+    ]);
+  });
+
+  it('возврат без заметки («Returned for rework.») тоже возврат', () => {
+    const h = started();
+    h.notifier.onWorks([roomWith(null, [answer('m-1', 'Returned for rework.')])]);
+    h.notifier.onWorks([roomWith(proposal('p-02'), [answer('m-1', 'Returned for rework.')])]);
+    expect(h.notes.map((note) => note.body)).toEqual(['Возвраты · S01 revised the decision']);
+  });
+
+  it('после принятия новое решение — снова «collected positions»: прежний возврат в ленте его не делает «revised»', () => {
+    const h = started();
+    // p-01 вернули, p-02 принял человек (письмо «Decision accepted.» новее возврата), ведущий принёс p-03.
+    const history = [answer('m-1', RETURNED), answer('m-2', 'Decision accepted.')];
+    h.notifier.onWorks([roomWith(proposal('p-02'), [answer('m-1', RETURNED)])]);
+    h.notifier.onWorks([roomWith(null, history)]);
+    h.notifier.onWorks([roomWith(proposal('p-03'), history)]);
+    expect(h.notes.map((note) => note.body)).toEqual([
+      'Возвраты · S01 revised the decision',
+      'Возвраты · S01 collected positions',
+    ]);
+  });
+
+  it('возврат в другой комнате «revised» не даёт: признак — возврат в ленте этой комнаты', () => {
+    const h = harness([]);
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', null), room('r-02', 'Отчёты', null)])]);
+    const base = roomsEntry([room('r-01', 'Возвраты', null), room('r-02', 'Отчёты', proposal('p-01'))]);
+    h.notifier.onWorks([{ ...base, map: { ...base.map, messages: [answer('m-1', RETURNED)] } }]);
+    expect(h.notes.map((note) => note.body)).toEqual(['Отчёты · S01 collected positions']);
+  });
+
+  it('окно открыли между возвратом и новым решением (возврат уже в базовом снимке) — «revised» всё равно', () => {
+    const h = harness([]);
+    h.notifier.onWorks([roomWith(null, [answer('m-1', RETURNED)])]);
+    h.notifier.onWorks([roomWith(proposal('p-02'), [answer('m-1', RETURNED)])]);
+    expect(h.notes.map((note) => note.body)).toEqual(['Возвраты · S01 revised the decision']);
+  });
+
+  it('«revised» после возврата — и карточкой в окне, с тем же тегом', () => {
+    const h = started();
+    h.active = true;
+    h.notifier.onWorks([roomWith(null, [answer('m-1', RETURNED)])]);
+    h.notifier.onWorks([roomWith(proposal('p-02'), [answer('m-1', RETURNED)])]);
+    expect(h.windowNotes).toEqual([
+      { tag: TAG, title: 'Decision waiting for you', body: 'Возвраты · S01 revised the decision', target: TARGET },
+    ]);
+    expect(h.notes).toEqual([]);
+  });
+
+  it('работа на миг выпала из снимка и вернулась с тем же решением — второго уведомления нет', () => {
+    const h = started();
+    const waiting = roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))]);
+    h.notifier.onWorks([waiting]);
+    h.notifier.onWorks([]);
+    h.notifier.onWorks([waiting]);
+    expect(h.notes).toHaveLength(1);
+  });
+
+  it('окно в фокусе — карточка в окне с тем же текстом и тегом, уведомления macOS нет; не в фокусе — наоборот', () => {
+    const h = started();
+    h.active = true;
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))])]);
+    expect(h.windowNotes).toEqual([
+      { tag: TAG, title: 'Decision waiting for you', body: 'Возвраты · S01 collected positions', target: TARGET },
+    ]);
+    expect(h.notes).toEqual([]);
+
+    h.active = false;
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01', 1))])]);
+    expect(h.windowNotes).toHaveLength(1);
+    expect(h.notes.map((note) => note.body)).toEqual(['Возвраты · S01 revised the decision']);
+  });
+
+  it('вкладка комнаты видна — ни карточки, ни уведомления macOS', () => {
+    const h = started();
+    h.visible.add(JSON.stringify(TARGET));
+    h.active = true;
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))])]);
+    h.active = false;
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01', 1))])]);
+    expect(h.windowNotes).toEqual([]);
+    expect(h.notes).toEqual([]);
+  });
+
+  it('prefs().needsYou: false — ни карточки, ни уведомления; решение при этом запомнено — включение не повторяет его', () => {
+    const h = started();
+    h.prefs = { ...h.prefs, needsYou: false };
+    h.active = true;
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))])]);
+    expect(h.windowNotes).toEqual([]);
+    expect(h.notes).toEqual([]);
+
+    h.prefs = { ...h.prefs, needsYou: true };
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))])]);
+    expect(h.windowNotes).toEqual([]);
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01', 1))])]);
+    expect(h.windowNotes.map((note) => note.body)).toEqual(['Возвраты · S01 revised the decision']);
+  });
+
+  it('prefs().mail: false решений не касается', () => {
+    const h = started();
+    h.prefs = { ...h.prefs, mail: false };
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))])]);
+    expect(h.notes).toHaveLength(1);
+  });
+
+  it('sound: false → silent: true у уведомления macOS', () => {
+    const h = started();
+    h.prefs = { ...h.prefs, sound: false };
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))])]);
+    expect(h.notes[0]?.silent).toBe(true);
+  });
+
+  it('ответ человека гасит карточку в окне — один раз, по тегу комнаты', () => {
+    const h = started();
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))])]);
+    expect(h.hidden).toEqual([]);
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', null)])]);
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', null)])]);
+    expect(h.hidden).toEqual([TAG]);
+  });
+
+  it('ярлык ведущего — по proposal.from: автор s-12 → «S12»', () => {
+    const h = started();
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01', 0, 's-12'))])]);
+    expect(h.notes[0]?.body).toBe('Возвраты · S12 collected positions');
+  });
+
+  it('две комнаты одной работы — два уведомления с разными тегами', () => {
+    const h = harness([]);
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', null), room('r-02', 'Отчёты', null)])]);
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01')), room('r-02', 'Отчёты', proposal('p-02'))])]);
+    expect(h.notes.map((note) => [note.tag, note.body])).toEqual([
+      ['proposal:/tmp/p w-01:r-01', 'Возвраты · S01 collected positions'],
+      ['proposal:/tmp/p w-01:r-02', 'Отчёты · S01 collected positions'],
+    ]);
+  });
+
+  it('длинное название комнаты режется до 200 кодовых точек, заголовок цел', () => {
+    const h = started();
+    h.notifier.onWorks([roomsEntry([room('r-01', '😀'.repeat(201), proposal('p-01'))])]);
+    const body = h.notes[0]?.body ?? '';
+    expect(Array.from(body)).toHaveLength(200);
+    expect(Array.from(body)[199]).toBe('…');
+    expect(h.notes[0]?.title).toBe('Decision waiting for you');
+  });
+
+  it('комната карты до 2026-09-29 — без lead и proposal — не ждёт решения и не ломает разбор', () => {
+    const h = harness([]);
+    const old = { id: 'r-01', title: 'Старая', creator: 'human', members: ['s-01'], createdAt: '2026-01-01' } as unknown as Room;
+    h.notifier.onWorks([roomsEntry([old])]);
+    h.notifier.onWorks([roomsEntry([old])]);
+    expect(h.notes).toEqual([]);
+    expect(h.hidden).toEqual([]);
+  });
+
+  it('в уведомлении нет кириллицы из слов окна: заголовок и «collected positions» — английские', () => {
+    const h = started();
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Room', proposal('p-01'))])]);
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Room', proposal('p-01', 1))])]);
+    expect(JSON.stringify(h.notes)).not.toMatch(/[Ѐ-ӿ]/);
+  });
+});
+
 function notice(kind: HostNotice['kind'], ref: SessionRef | null, text = 'текст хоста по-русски'): HostNotice {
   return { kind, ref, text, at: '2026-01-01T00:00:00.000Z' };
 }
@@ -352,6 +627,8 @@ describe('wireAttentionNotifications на подставном мосте и н�
   beforeEach(() => {
     bridge = createFakeBridge();
     useActivityStore.setState({ byRef: {} });
+    useWindowNotesStore.setState({ notes: [] });
+    useUiStore.setState({ windowFocused: true, documentVisible: true });
     useWorksStore.setState({
       entries: [entry('Redesign', [session('s-01', 'planner'), session('s-02', 'executor'), session('s-03', 'backend')])],
       branches: {},
@@ -398,6 +675,71 @@ describe('wireAttentionNotifications на подставном мосте и н�
     expect(bridge.appNotified).toEqual([]);
     useWorksStore.setState({ entries: [{ ...current, map: { ...current.map, messages: [letter('m-1'), letter('m-2')] } }] });
     expect(bridge.appNotified.map((note) => note.tag)).toEqual(['mail:/tmp/p w-01']);
+    off();
+  });
+
+  /** Снимок работы с комнатой `r-01` и решением (или без него) — заменой `entries` стора работ. */
+  function setRoom(decision: Proposal | null): void {
+    const current = useWorksStore.getState().entries[0] as WorkEntry;
+    useWorksStore.setState({ entries: [{ ...current, map: { ...current.map, rooms: [room('r-01', 'Возвраты', decision)] } }] });
+  }
+
+  it('решение в комнате: окно в фокусе — карточка в окне, а не macOS; окно не в фокусе — уведомление macOS, а не карточка', () => {
+    const off = wire();
+    setRoom(null);
+    setRoom(proposal('p-01'));
+    expect(useWindowNotesStore.getState().notes).toMatchObject([
+      { tag: 'proposal:/tmp/p w-01:r-01', title: 'Decision waiting for you', body: 'Возвраты · S01 collected positions' },
+    ]);
+    expect(bridge.appNotified).toEqual([]);
+
+    // Окно без фокуса — то же решение, но замена: системное уведомление с тем же тегом.
+    useUiStore.setState({ windowFocused: false });
+    setRoom(proposal('p-01', 1));
+    expect(bridge.appNotified).toMatchObject([
+      { tag: 'proposal:/tmp/p w-01:r-01', title: 'Decision waiting for you', body: 'Возвраты · S01 revised the decision', target: { kind: 'room', roomId: 'r-01' } },
+    ]);
+    expect(useWindowNotesStore.getState().notes).toHaveLength(1);
+    off();
+  });
+
+  it('свёрнутое окно (документ скрыт) при фокусе — уведомление macOS: показать карточку некому', () => {
+    const off = wire();
+    setRoom(null);
+    useUiStore.setState({ documentVisible: false });
+    setRoom(proposal('p-01'));
+    expect(bridge.appNotified).toHaveLength(1);
+    expect(useWindowNotesStore.getState().notes).toEqual([]);
+    off();
+  });
+
+  it('перезапуск окна и переподключение к хосту (новая подписка, первый снимок — база): то же решение не уведомляет вновь', () => {
+    const off = wire();
+    setRoom(null);
+    setRoom(proposal('p-01'));
+    expect(useWindowNotesStore.getState().notes).toHaveLength(1);
+    off();
+    useWindowNotesStore.setState({ notes: [] });
+
+    const offAgain = wire();
+    // `works.list` после подключения отдаёт тот же снимок с тем же решением.
+    setRoom(proposal('p-01'));
+    setRoom(proposal('p-01'));
+    expect(useWindowNotesStore.getState().notes).toEqual([]);
+    expect(bridge.appNotified).toEqual([]);
+    // А замена уже после базы — новость.
+    setRoom(proposal('p-01', 1));
+    expect(useWindowNotesStore.getState().notes).toHaveLength(1);
+    offAgain();
+  });
+
+  it('ответ человека на решение гасит его карточку в окне', () => {
+    const off = wire();
+    setRoom(null);
+    setRoom(proposal('p-01'));
+    expect(useWindowNotesStore.getState().notes).toHaveLength(1);
+    setRoom(null);
+    expect(useWindowNotesStore.getState().notes).toEqual([]);
     off();
   });
 });

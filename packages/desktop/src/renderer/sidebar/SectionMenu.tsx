@@ -1,6 +1,8 @@
 /**
  * Меню «⋯» заголовка секции сайдбара (кусок 3.4, спека 6.1): переключатель «Show done» —
- * `ui.json.showDoneWorks`. Открытое меню держит порядок сайдбара.
+ * `ui.json.showDoneWorks`. Открытое меню держит порядок сайдбара. В handoff (Organic) у заголовка проекта
+ * его нет, поэтому кнопка не занимает место на виду: она проявляется под курсором на заголовке (`group`
+ * заголовка), на фокусе с клавиатуры и пока меню открыто.
  */
 
 import { useState } from 'react';
@@ -31,8 +33,9 @@ export function SectionMenu({ sectionKey }: SectionMenuProps): JSX.Element {
           onClick={(event) => event.stopPropagation()}
           onKeyDown={(event) => event.stopPropagation()}
           className={cn(
-            'inline-flex size-5 shrink-0 items-center justify-center rounded text-work-sidebar-muted-foreground',
-            'hover:bg-work-sidebar-accent hover:text-work-sidebar-foreground',
+            'inline-flex size-6 shrink-0 items-center justify-center rounded-full text-work-sidebar-muted-foreground transition-opacity',
+            'opacity-0 focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100',
+            'hover:bg-foreground/10 hover:text-work-sidebar-foreground',
           )}
         >
           <MoreHorizontal className="size-3.5" aria-hidden="true" />

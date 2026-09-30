@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { GUIDE } from './guide.js';
 import { systemGuidance } from './guidance.js';
+import { ACCEPTED_LETTER, RETURNED_LETTER } from './proposals.js';
 import type { WorkMap } from './types.js';
 
 /** Карта из двух полей: вставке нужны только работа и id сессии. */
@@ -21,7 +22,7 @@ function mapOf(title: string, goal: string): WorkMap {
   };
 }
 
-/** Десять инструментов сервера: вставка называет каждый, иначе агент о нём не узнает. */
+/** Одиннадцать инструментов сервера: вставка называет каждый, иначе агент о нём не узнает. */
 const TOOLS = [
   'get_map',
   'report',
@@ -31,12 +32,13 @@ const TOOLS = [
   'check_inbox',
   'create_room',
   'read_room',
+  'propose_decision',
   'close_session',
   'read_guide',
 ];
 
 describe('системная вставка', () => {
-  it('короткая (≤14 строк), называет работу, сессию и все десять инструментов', () => {
+  it('короткая (≤14 строк), называет работу, сессию и все одиннадцать инструментов', () => {
     const text = systemGuidance(mapOf('Авторизация', 'логин по e-mail'), 's-03');
     const lines = text.split('\n');
 
@@ -50,15 +52,31 @@ describe('системная вставка', () => {
     expect(text).toMatch(/субагент/);
   });
 
-  it('письма коллег приходят звонком канала, а виды письма названы', () => {
+  it('письма коллег в окне приходят указателем после хода, а виды письма названы', () => {
     const text = systemGuidance(mapOf('Авторизация', 'логин по e-mail'), 's-03');
+    const line = text.split('\n').find((candidate) => candidate.startsWith('check_inbox'));
 
-    // Этикет из спецификации 4.7: отвечают только на вопрос, и агент должен
-    // знать, что письмо придёт само — иначе он будет дёргать check_inbox.
-    expect(text).toContain('<channel source="harnas">');
+    // Этикет из спецификации 4.7: отвечают только на вопрос, и агент должен знать, что письмо придёт
+    // само — иначе он будет дёргать check_inbox. В окне «само» — это указатель после хода: его печатает
+    // хост (`delivery.ts`), сессии окна тег канала не получают (`channel: false`).
+    expect(line).toBeDefined();
+    expect(line).toContain('«Новые письма (N)… Вызови check_inbox.»');
+    expect(line).toMatch(/указател[^\n]*после твоего хода/);
     expect(text).toContain('question');
     expect(text).toContain('decision');
     expect(text.split('\n').length).toBeLessThanOrEqual(14);
+  });
+
+  it('тег <channel source="harnas"> — только у сессий CLI harnas-core: как обычный способ он не обещан', () => {
+    const text = systemGuidance(mapOf('Авторизация', 'логин по e-mail'), 's-03');
+    const line = text.split('\n').find((candidate) => candidate.startsWith('check_inbox'));
+
+    // Тег в вставке остаётся ровно один раз и только с оговоркой про CLI: сессия окна, прочитав «приходят
+    // сами как <channel …>», ждала бы тега, которого хост ей не пошлёт.
+    expect(text.split('<channel source="harnas">')).toHaveLength(2);
+    expect(line).toMatch(/<channel source="harnas">[^\n]*только[^\n]*CLI harnas-core/);
+    expect(text).not.toMatch(/приходят сами как <channel/);
+    expect(line).toContain('отвечай send_message только на question');
   });
 
   it('автозапуск: spawn_session не отсылает к человеку', () => {
@@ -99,7 +117,65 @@ describe('системная вставка', () => {
     expect(text).toContain('«Вход» и выход');
     expect(text).toContain('первый второй');
   });
+
+  it('комнаты: ведущий по умолчанию — ты, propose_decision — только ведущий, решение ждёт человека', () => {
+    const text = systemGuidance(mapOf('Авторизация', 'логин по e-mail'), 's-03');
+    const line = text.split('\n').find((candidate) => candidate.startsWith('create_room'));
+
+    expect(line).toBeDefined();
+    expect(line).toMatch(/lead — ведущий, по умолчанию ты/);
+    expect(line).toMatch(/propose_decision — только ведущий: решение ждёт человека/);
+  });
+
+  it('комнаты: ведущему — собрать позиции, предложить решение, до принятия не начинать, части упоминаниями', () => {
+    const text = systemGuidance(mapOf('Авторизация', 'логин по e-mail'), 's-03');
+
+    expect(text).toMatch(
+      /ведущий собирает позиции[^\n]*до принятия работу не начинает[^\n]*раздаёт части упоминаниями[^\n]*после возврата переделывает и предлагает снова/,
+    );
+  });
+
+  it('комнаты: участнику — высказаться одним сообщением, ждать свою часть, отчитаться ведущему в комнате', () => {
+    const text = systemGuidance(mapOf('Авторизация', 'логин по e-mail'), 's-03');
+
+    expect(text).toMatch(
+      /участник высказывается одним сообщением, ждёт свою часть и отчитывается ведущему в комнате/,
+    );
+  });
+
+  it('комнаты: пока решение ждёт, новое сообщение человека всем — не новая задача (спека 2.4)', () => {
+    const text = systemGuidance(mapOf('Авторизация', 'логин по e-mail'), 's-03');
+    const line = text.split('\n').find((candidate) => candidate.startsWith('create_room'));
+
+    expect(line).toMatch(
+      /Пока решение ждёт \(get_map: proposal не null\), новое сообщение человека всем — не новая задача: позиции заново не собирают и не пишут/,
+    );
+    // Клауза лежит в строке про комнаты: потолок в четырнадцать строк не тронут.
+    expect(text.split('\n').length).toBeLessThanOrEqual(14);
+  });
+
+  it('комнаты: задача человека требует ответа, даже если письмо — note, хотя на прочие note не отвечают', () => {
+    const text = systemGuidance(mapOf('Авторизация', 'логин по e-mail'), 's-03');
+    const line = text.split('\n').find((candidate) => candidate.startsWith('create_room'));
+
+    expect(line).toMatch(/задачу всем \(ответ нужен, даже если письмо — note\)/);
+    // Строка check_inbox осталась как была: исключение оговорено там, где велено отвечать.
+    expect(text).toContain('отвечай send_message только на question');
+    expect(text.split('\n').length).toBeLessThanOrEqual(14);
+  });
 });
+
+/**
+ * Раздел гида от заголовка до следующего. Пробелы схлопнуты: гид набран в столбик, и переносы строк
+ * проверкам текста не важны.
+ */
+function sectionOf(heading: string, next: string): string {
+  const start = GUIDE.indexOf(heading);
+  const end = GUIDE.indexOf(next, start + heading.length);
+  if (start < 0 || end < 0)
+    throw new Error(`в гиде нет раздела «${heading}» или следующего за ним`);
+  return GUIDE.slice(start, end).replace(/\s+/g, ' ');
+}
 
 describe('подробный гид', () => {
   it('объясняет предпочтение подсессий и состояние deleted', () => {
@@ -117,8 +193,46 @@ describe('подробный гид', () => {
   });
 
   it('описывает роль-агента у spawn_session', () => {
-    expect(GUIDE).toContain('spawn_session(provider, label, task, contextFrom, agent)');
+    expect(GUIDE).toContain(
+      'spawn_session(provider, label, task, contextFrom, agent, worktree, model, effort)',
+    );
     expect(GUIDE).toContain('.claude/agents/');
+  });
+
+  it('spawn_session: worktree — своя копия git на отдельной ветке, только в проекте с git, правила — тема worktrees', () => {
+    const tools = sectionOf('## Инструменты', '## Комнаты');
+
+    expect(tools).toMatch(/`worktree` необязателен: `true` — сессия работает в своём git worktree/);
+    expect(tools).toMatch(
+      /её правки не трогают рабочую копию проекта, пока человек не вольёт ветку/,
+    );
+    expect(tools).toMatch(/Только в проекте с git; worktree заводит сам харнесс перед запуском/);
+    expect(tools).toContain('Правила работы в нём — тема `worktrees`.');
+  });
+
+  it('spawn_session: model — id из models провайдера в get_map, не из списка — ошибка; effort — три уровня', () => {
+    const tools = sectionOf('## Инструменты', '## Комнаты');
+
+    expect(tools).toMatch(/`model` — `id` из поля `models` нужного провайдера в `get_map`/);
+    expect(tools).toMatch(/значение не из списка — ошибка, и сессия не создаётся/);
+    expect(tools).toMatch(/`models: null` списка нет/);
+    expect(tools).toMatch(/`low`, `medium` или `high`/);
+    expect(tools).toMatch(/`effort: false` в `get_map` его не принимает, и значение отбрасывается/);
+    expect(tools).toMatch(/спящую, поднятую письмом, он не меняет/);
+  });
+
+  it('комнаты: add_to_room — только ведущий, одна комната на сессию, строка «joined the room», письма новому нет', () => {
+    const lead = sectionOf('### Ведущий и решение', '### Участник комнаты');
+
+    expect(lead).toContain('`add_to_room(room, session)`');
+    expect(lead).toMatch(/только что порождённого\s+`spawn_session` исполнителя/);
+    expect(lead).toMatch(/одна комната на сессию/);
+    expect(lead).toContain('`@s04 joined the room`');
+    expect(lead).toMatch(/Письма о добавлении новый участник не получает/);
+    expect(lead).toMatch(/Не ведущий, закрытая комната, чужая или закрытая сессия и уже участник — ошибка/);
+    // Её называет и вводная комнат, и участнику: его могут ввести по ходу дела.
+    expect(sectionOf('## Комнаты', '### Ведущий и решение')).toContain('`add_to_room(room, session)`');
+    expect(sectionOf('### Участник комнаты', '## Бриф')).toMatch(/ведущий зовёт `add_to_room`/);
   });
 
   it('запрещает удалять и переносить каталоги .harnas руками', () => {
@@ -139,10 +253,129 @@ describe('подробный гид', () => {
     expect(GUIDE).toMatch(/read_room[\s\S]*для контекста, не отвечая/);
   });
 
+  it('комнаты: create_room с lead — ведущий по умолчанию ты, человек в окне назначает сам', () => {
+    expect(GUIDE).toContain('`create_room(title, members, lead)`');
+    expect(GUIDE).toMatch(/`lead` — id ведущего[\s\S]*без него ведущий ты/);
+    expect(GUIDE).toMatch(/в окне — там ведущего назначает он/);
+  });
+
+  it('комнаты, ведущему: собрать позиции, предложить решение, до принятия не начинать', () => {
+    expect(GUIDE).toContain('### Ведущий и решение');
+    expect(GUIDE).toMatch(/Собери позиции/);
+    expect(GUIDE).toContain('`propose_decision(room, text)`');
+    expect(GUIDE).toMatch(/ждёт его ответа/);
+    expect(GUIDE).toMatch(/Повтор до ответа заменяет текст \(тот же\s+`proposalId`, `rev` \+ 1\)/);
+    expect(GUIDE).toMatch(/До принятия работу не начинай/);
+  });
+
+  it('комнаты, ведущему: после принятия раздать части упоминаниями, после возврата переделать и предложить снова', () => {
+    expect(GUIDE).toMatch(/раздай части[\s\S]*упоминанием исполнителя/);
+    expect(GUIDE).toMatch(/`s-02` → `@s02`/);
+    expect(GUIDE).toMatch(/Возврат — переделай[\s\S]*снова `propose_decision`/);
+  });
+
+  it('комнаты: письма человека о ходе решения цитируются дословно, как их кладёт харнесс', () => {
+    // Гид — единственное место, где агент узнаёт эти письма; поменяет core текст — тест напомнит поправить гид.
+    expect(GUIDE).toContain(`\`${ACCEPTED_LETTER}\``);
+    expect(GUIDE).toContain(`\`${RETURNED_LETTER}: <заметка>\``);
+    expect(GUIDE).toContain(`\`${RETURNED_LETTER}.\``);
+  });
+
+  it('комнаты, участнику: высказаться одним сообщением, ждать свою часть, отчитаться ведущему в комнате', () => {
+    expect(GUIDE).toContain('### Участник комнаты');
+    expect(GUIDE).toMatch(/Выскажись одним сообщением/);
+    expect(GUIDE).toMatch(/Жди свою часть: работу не начинай/);
+    expect(GUIDE).toMatch(/Отчитайся в комнате ведущему/);
+  });
+
+  it('комнаты, ведущему: пока решение ждёт, новое сообщение человека всем цикл не перезапускает', () => {
+    const lead = sectionOf('### Ведущий и решение', '### Участник комнаты');
+
+    expect(lead).toMatch(
+      /Пока решение ждёт \(у комнаты в `get_map` `proposal` не `null`\), новое сообщение человека всем — не новая задача: позиции заново не собирай/,
+    );
+  });
+
+  it('комнаты, ведущему: такое письмо — поправка к ждущему решению; меняет суть — повторный propose_decision, иначе ничего', () => {
+    const lead = sectionOf('### Ведущий и решение', '### Участник комнаты');
+
+    // Решение контролёра: письмо человека всем при ждущем решении — поправка к нему, а не новая задача.
+    // Меняет суть — ведущий учитывает его и заменяет текст повторным propose_decision (тот же proposalId,
+    // rev + 1); не меняет — ничего не делает. Нового круга позиций нет.
+    expect(lead).toMatch(
+      /позиции заново не собирай\. Такое сообщение — поправка к ждущему решению: если оно меняет суть, учти его и замени текст повторным `propose_decision` \(тот же `proposalId`, `rev` \+ 1\), иначе ничего не делай\./,
+    );
+  });
+
+  it('комнаты, участнику: пока решение ждёт, позиции заново не писать', () => {
+    const member = sectionOf('### Участник комнаты', '## Бриф');
+
+    expect(member).toMatch(
+      /Пока решение ждёт \(у комнаты в `get_map` `proposal` не `null`\), новое сообщение человека всем — не новая задача: позиции заново не пиши/,
+    );
+  });
+
+  it('комнаты, участнику: задача человека требует ответа, каким бы ни был вид письма', () => {
+    const member = sectionOf('### Участник комнаты', '## Бриф');
+
+    expect(member).toMatch(/каким бы ни был вид письма человека \(даже `note`\)/);
+    // Исключение из «на note и decision не отвечай» стоит там же, где велено отвечать.
+    expect(member).toMatch(/«на `note` не отвечай» — про реплики коллег, а не про задачу человека/);
+    expect(GUIDE).toMatch(/На `note` и `decision` не отвечай/);
+  });
+
+  it('комнаты, участнику: lead = null — первый из members, закрытого ведущего заменяет живой', () => {
+    const member = sectionOf('### Участник комнаты', '## Бриф');
+
+    expect(member).toMatch(
+      /`lead` комнаты в `get_map`; `null` — первый из `members`, а закрытого ведущего заменяет первый живой участник/,
+    );
+  });
+
+  it('бриф: гид называет раздел «Роль в комнате»', () => {
+    expect(sectionOf('## Бриф', '## Окно человека')).toContain(
+      'и её роль в них (раздел «Роль в комнате»)',
+    );
+  });
+
+  it('комнаты: подразделы ведущего и участника лежат между «Комнаты» и «Бриф»', () => {
+    const at = (heading: string): number => GUIDE.indexOf(heading);
+    expect(at('### Ведущий и решение')).toBeGreaterThan(at('## Комнаты'));
+    expect(at('### Участник комнаты')).toBeGreaterThan(at('### Ведущий и решение'));
+    expect(at('## Бриф')).toBeGreaterThan(at('### Участник комнаты'));
+  });
+
   it('указатель печатает харнесс, а не человек — ответ на него один: check_inbox', () => {
     expect(GUIDE).toContain('## Указатель');
     expect(GUIDE).toContain('Новые письма (N). Вызови check_inbox.');
     expect(GUIDE).toMatch(/печатает харнесс сам/);
+  });
+
+  it('письма в окне объявляет указатель после хода, а сами письма забирает check_inbox', () => {
+    const talk = sectionOf('## Как разговаривать', '## Указатель');
+
+    expect(talk).toMatch(
+      /Письма коллег приходят сами: в сессиях окна харнесс печатает указатель после твоего хода \(про него — ниже\), а сами письма забирает `check_inbox`/,
+    );
+    // Прежнее обещание — тег как обычный путь и `check_inbox` «на случай, если канал молчит» — ушло.
+    expect(GUIDE).not.toMatch(/приходят сами,\s+тегом/);
+    expect(GUIDE).not.toMatch(/страховка на случай, если канал\s+молчит/);
+  });
+
+  it('тег <channel source="harnas"> — только в сессиях, поднятых CLI harnas-core с channelPush', () => {
+    const talk = sectionOf('## Как разговаривать', '## Указатель');
+    const pointer = sectionOf('## Указатель', 'Если сессию запустили ролью-агентом');
+
+    expect(talk).toMatch(
+      /Тегом `<channel source="harnas">` письма объявляются только в сессиях, поднятых CLI `harnas-core` с включённым `channelPush`: тег несёт `from`, `from_label` и `kind`, без текста письма — увидел тег, позови `check_inbox`/,
+    );
+    expect(pointer).toMatch(
+      /В сессиях, запущенных окном, письма объявляются только так: тега `<channel source="harnas">` там не будет/,
+    );
+    // Ни один абзац гида не упоминает тег без оговорки, чьи это сессии.
+    for (const paragraph of GUIDE.split('\n\n').filter((text) => text.includes('<channel'))) {
+      expect(paragraph.replace(/\s+/g, ' ')).toMatch(/harnas-core|запущенных окном/);
+    }
   });
 
   it('report(done) — результат сдан и сессия на связи; close_session — только с согласия человека', () => {
