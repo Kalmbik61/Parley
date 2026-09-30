@@ -67,6 +67,16 @@ describe('testSwitches', () => {
     expect(testSwitches({ ...legacy, PARLEY_NOTIFICATIONS: '' }, false).notifications).toBe(true);
   });
 
+  it('PARLEY_APP_DATA — каталог данных приложений для userData: слушается в неупакованном окне и при PARLEY_E2E=1, в сборке нет', () => {
+    expect(testSwitches({ PARLEY_APP_DATA: '/tmp/appdata' }, false).appData).toBe('/tmp/appdata');
+    expect(testSwitches({ PARLEY_APP_DATA: '/tmp/appdata' }, true).appData).toBeUndefined();
+    expect(testSwitches({ PARLEY_APP_DATA: '/tmp/appdata', PARLEY_E2E: '1' }, true).appData).toBe('/tmp/appdata');
+    // Прежнее имя — запасное, пустое — не задано.
+    expect(testSwitches({ HARNAS_APP_DATA: '/tmp/old' }, false).appData).toBe('/tmp/old');
+    expect(testSwitches({ PARLEY_APP_DATA: '' }, false).appData).toBeUndefined();
+    expect(testSwitches({}, false).appData).toBeUndefined();
+  });
+
   it('без переменных и в неупакованном окне всё выключено; значение должно совпасть точно', () => {
     expect(testSwitches({}, false)).toEqual({
       downloads: false,

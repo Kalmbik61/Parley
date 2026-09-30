@@ -6,7 +6,8 @@ import { envValue } from '@parley/core';
  * за окружением. В собранном приложении случайная переменная окружения иначе молча глушила бы
  * уведомления, ссылки, Finder и загрузки (ревью M5) — поэтому они слушаются только в неупакованном
  * окне (E2E, `pnpm dev`) или при явном `PARLEY_E2E=1` (проверки самой сборки). Имена читаются
- * как все переменные (`envValue`): прежние `HARNAS_*` тоже годятся.
+ * как все переменные (`envValue`): прежние `HARNAS_*` тоже годятся. `PARLEY_APP_DATA=<каталог>` — не действие,
+ * а место: откуда окно считает свой userData (`user-data.ts`), когда у теста нет своего дома.
  */
 
 export interface TestSwitches {
@@ -17,6 +18,12 @@ export interface TestSwitches {
   readonly shell: boolean;
   /** Окно не зовёт login-оболочку человека и её rc-файлы: окружение остаётся таким, с каким запущено окно. */
   readonly loginShell: boolean;
+  /**
+   * Каталог данных приложений вместо `app.getPath('appData')` (`PARLEY_APP_DATA`): от него считается userData окна
+   * (`user-data.ts`). Нужен E2E переноса данных — у них нет своего дома (перенос идёт, только когда дом не задан), а
+   * настоящий `appData` дал бы userData человека и лок одного экземпляра с его запущенным окном. `undefined` — не задан.
+   */
+  readonly appData: string | undefined;
 }
 
 export function testSwitches(env: Readonly<Record<string, string | undefined>>, isPackaged: boolean): TestSwitches {
@@ -28,5 +35,6 @@ export function testSwitches(env: Readonly<Record<string, string | undefined>>, 
     drops: allowed && envValue(env, 'DROPS') === 'fake',
     shell: allowed && envValue(env, 'SHELL') === 'log',
     loginShell: allowed && envValue(env, 'LOGIN_SHELL') === 'skip',
+    appData: allowed ? envValue(env, 'APP_DATA') : undefined,
   };
 }

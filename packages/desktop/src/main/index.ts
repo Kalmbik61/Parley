@@ -16,7 +16,7 @@ import {
   webContents,
 } from 'electron';
 import type { WebContents } from 'electron';
-import { configPath, envValue, loadConfig, parleyHome } from '@parley/core';
+import { configPath, envValue, loadConfig, migrateHome, parleyHome } from '@parley/core';
 import type { WorksSnapshot } from '@parley/protocol';
 import { BROWSER_PARTITION } from '../shared/browser-types.js';
 import { S } from '../shared/strings.js';
@@ -47,6 +47,7 @@ import { createRootsRegistry, worktreeRootPolicy, type RootsSource } from './roo
 import { captureShellEnv } from './shell-env.js';
 import { testSwitches } from './test-switches.js';
 import { createUiStore, desktopUiPath } from './ui-store.js';
+import { userDataDir } from './user-data.js';
 import { createMainWindow, guardWindowClose, titlebarDoubleClickAction } from './window.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -89,16 +90,21 @@ async function clipboardPng(): Promise<Buffer | null> {
 // Electron не печатает его в stderr (fix-lane-post, п. 4).
 quietExpectedIpcRefusals(console);
 
+// Тестовые переключатели E2E — только в неупакованном окне или при PARLEY_E2E=1 (ревью M5).
+const switches = testSwitches(process.env, app.isPackaged);
+
+// userData окна ставится здесь, на верхнем уровне, — до лока одного экземпляра и до первой сессии Chromium.
 // При своём доме (тесты, второй дом: задан `PARLEY_HOME` или прежний `HARNAS_HOME`) у окна свой
 // userData: лок одного экземпляра тогда привязан к дому так же, как хост, и чужой дом его не
 // держит. Дом окно берёт только из core (`parleyHome`), переменных не читает само.
+// Без своего дома userData закреплён (R7): Electron считает его от имени пакета, а оно сменилось, и без закрепления
+// окно открыло бы пустой `@parley/desktop` вместо данных человека в `@harnas/desktop` (`user-data.ts`).
 const explicitHome = envValue(process.env, 'HOME') !== undefined;
 if (explicitHome) {
   app.setPath('userData', path.join(parleyHome(), 'desktop', 'electron'));
+} else {
+  app.setPath('userData', userDataDir(switches.appData ?? app.getPath('appData')));
 }
-
-// Тестовые переключатели E2E — только в неупакованном окне или при PARLEY_E2E=1 (ревью M5).
-const switches = testSwitches(process.env, app.isPackaged);
 
 // E2E (`PARLEY_DOWNLOADS=log`): диалог сохранения загрузок браузера подменён журналом main, а папка
 // загрузок — в доме теста: настоящий диалог не встаёт на экране человека, его Downloads не трогаются.
@@ -133,6 +139,18 @@ if (!gotLock) {
     const shellEnv = await captureShellEnv({ skip: switches.loginShell });
     if (shellEnv.warning) {
       console.warn(`[parley] captureShellEnv: ${shellEnv.warning}`);
+    }
+
+    // Перенос дома `~/.harnas` → `~/.parley` (R6) — до поиска и запуска хоста: пути хоста считаются от дома, и окно
+    // сперва решает, какой из двух домов настоящий. Заданный дом (у окна или в окружении оболочки, с которым
+    // стартует хост) не переносится; живой хост старого дома и блокировка записи — тоже: окно подключится к
+    // старому дому, как раньше, а перенос повторится при следующем запуске.
+    const homeMigration = await migrateHome({ env: explicitHome ? process.env : shellEnv.env });
+    if (homeMigration.status === 'moved') {
+      console.info(`[parley] home moved: ${homeMigration.from} -> ${homeMigration.to}`);
+    } else if (homeMigration.reason !== 'no-legacy' && homeMigration.reason !== 'explicit-home') {
+      const detail = homeMigration.detail === undefined ? '' : `: ${homeMigration.detail}`;
+      console.warn(`[parley] home not moved (${homeMigration.reason}${detail}): ${homeMigration.from}`);
     }
 
     const paths = hostPaths();

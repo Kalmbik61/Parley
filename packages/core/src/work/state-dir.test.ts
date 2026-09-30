@@ -9,7 +9,7 @@ import { writeBrief } from './brief.js';
 import { addSession } from './map.js';
 import { writeMcpConfig } from './mcp-config.js';
 import { writeWorkSettings } from './settings-file.js';
-import { ensureStateDir, isDirectorySync, stateDir } from './state-dir.js';
+import { ensureStateDir, isDirectorySync, stateDir, writeSelfIgnore } from './state-dir.js';
 import { createWork, readMap, updateMap, workPaths } from './store.js';
 
 const run = promisify(execFile);
@@ -158,6 +158,24 @@ describe('ensureStateDir — каталог состояния сам пряче
     expect((await git(project, 'status', '--porcelain', '-uall')).stdout).toBe('');
     await git(project, 'add', '-A');
     expect((await git(project, 'status', '--porcelain')).stdout).toBe('');
+  });
+});
+
+describe('writeSelfIgnore — .gitignore со строкой * в уже существующем каталоге (перенос .harnas → .parley, R6)', () => {
+  it('кладёт .gitignore со строкой *; лежащий не перезаписывает', async () => {
+    const dir = path.join(project, '.parley');
+    await mkdir(dir);
+
+    await writeSelfIgnore(dir);
+    expect(await readFile(path.join(dir, '.gitignore'), 'utf8')).toBe('*\n');
+
+    await writeFile(path.join(dir, '.gitignore'), '*\n!keep\n', 'utf8');
+    await writeSelfIgnore(dir);
+    expect(await readFile(path.join(dir, '.gitignore'), 'utf8')).toBe('*\n!keep\n');
+  });
+
+  it('каталога нет — отказ, а не молчаливая запись мимо', async () => {
+    await expect(writeSelfIgnore(path.join(project, '.parley'))).rejects.toThrow();
   });
 });
 

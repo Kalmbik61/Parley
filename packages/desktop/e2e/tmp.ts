@@ -33,14 +33,19 @@ export async function makeTempProject(spec: string): Promise<string> {
 export const RUN_HOMES_ENV = 'PARLEY_E2E_RUN_HOMES';
 
 /**
- * Свой `PARLEY_HOME` на каждый тест. Дом записывается в список прогона: если afterEach
- * упавшего теста не дошёл до `stopHost` (воркер снят по таймауту), хост этого дома погасит
- * уборка в конце прогона — и только его, домов других прогонов на машине она не знает.
+ * Дом записывается в список прогона: если afterEach упавшего теста не дошёл до `stopHost` (воркер
+ * снят по таймауту), хост этого дома погасит уборка в конце прогона — и только его, домов других
+ * прогонов на машине она не знает. Дом, которого нет на диске к концу прогона, уборка пропускает.
  */
+export async function trackRunHome(home: string): Promise<void> {
+  const list = process.env[RUN_HOMES_ENV];
+  if (list !== undefined) await appendFile(list, `${home}\n`);
+}
+
+/** Свой `PARLEY_HOME` на каждый тест (дом попадает в список прогона: `trackRunHome`). */
 export async function makeTempHome(spec: string): Promise<string> {
   const home = await mkdtemp(path.join(tmpdir(), `hh-e2e-${spec}-`));
   assertUnderTmpdir(home);
-  const list = process.env[RUN_HOMES_ENV];
-  if (list !== undefined) await appendFile(list, `${home}\n`);
+  await trackRunHome(home);
   return home;
 }

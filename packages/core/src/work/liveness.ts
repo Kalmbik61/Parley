@@ -149,6 +149,19 @@ async function aliveWhileSleeping(session: WorkSession): Promise<boolean> {
 }
 
 /**
+ * Есть ли у сессии живой процесс по карте — тем же правилом, что и сверка `reconcileMap`: у `active` решает
+ * `checkSession`, у `sleeping` — `aliveWhileSleeping`; у `pending` процесса ещё нет, у `closed` уже нет.
+ */
+export async function hasLiveProcess(
+  session: WorkSession,
+  options: LivenessOptions = {},
+): Promise<boolean> {
+  if (session.lifecycle === 'active') return (await checkSession(session, options)).alive;
+  if (session.lifecycle === 'sleeping') return aliveWhileSleeping(session);
+  return false;
+}
+
+/**
  * Сверяет сессии работы с состоянием ОС. Мёртвые `active` уходят в `sleeping`
  * (харнесс процесс не ждал, и код выхода в записи `history` — `null`); `sleeping`
  * с живым своим процессом возвращается в `active` — так миграция v1 чинит

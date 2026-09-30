@@ -31,6 +31,18 @@ export function stateDir(projectPath: string): string {
 const SELF_IGNORE = '*\n';
 
 /**
+ * Кладёт в каталог состояния `.gitignore` со строкой `*`. Уже лежащий не трогается: его положил соседний
+ * процесс (это то же самое) или переписал человек.
+ */
+export async function writeSelfIgnore(dir: string): Promise<void> {
+  try {
+    await writeFile(path.join(dir, '.gitignore'), SELF_IGNORE, { encoding: 'utf8', flag: 'wx' });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+}
+
+/**
  * Заводит каталог состояния проекта и возвращает его путь. Каталог, созданный этим вызовом под новым
  * именем, сразу получает `.gitignore` со строкой `*`: в чужом репозитории состояние Parley не должно
  * попасть в коммит ни командой человека, ни «Commit all» окна. Уже существующий каталог не
@@ -40,13 +52,6 @@ export async function ensureStateDir(projectPath: string): Promise<string> {
   const dir = stateDir(projectPath);
   // Возвращает первый созданный каталог и `undefined`, если создавать было нечего.
   const created = await mkdir(dir, { recursive: true });
-  if (created !== undefined && path.basename(dir) === STATE_DIR) {
-    try {
-      await writeFile(path.join(dir, '.gitignore'), SELF_IGNORE, { encoding: 'utf8', flag: 'wx' });
-    } catch (error) {
-      // Соседний процесс уже положил свой — это то же самое.
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-    }
-  }
+  if (created !== undefined && path.basename(dir) === STATE_DIR) await writeSelfIgnore(dir);
   return dir;
 }

@@ -172,6 +172,16 @@ export {
 } from './work/store.js';
 export type { NewWork, UpdateMapOptions, WorkPaths, WriteOptions } from './work/store.js';
 export { ensureStateDir, isDirectorySync, stateDir } from './work/state-dir.js';
+export { isStaleHostLock, parseHostLock, readHostLock, socketIsAlive } from './host-lock.js';
+export type { HostLock } from './host-lock.js';
+export { MIGRATION_RECORD, migrateHome, migrateProjects } from './migrate.js';
+export type {
+  MigrateHomeOptions,
+  MigrationEntry,
+  MigrationResult,
+  ProjectMigration,
+  SkipReason,
+} from './migrate.js';
 export {
   hostLeaseActive,
   readHostLease,
@@ -266,6 +276,7 @@ export type { DeliveryAction, DeliveryInput } from './work/delivery.js';
 export {
   START_TOLERANCE_MS,
   checkSession,
+  hasLiveProcess,
   isAlive,
   processStartedAt,
   reconcileMap,

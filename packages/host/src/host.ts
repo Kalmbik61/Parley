@@ -1,8 +1,15 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, chmod, link, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { createConnection } from 'node:net';
-import { uptime } from 'node:os';
-import { bothEnv, parleyHome, processStartedAt, START_TOLERANCE_MS } from '@parley/core';
+import { mkdir, chmod, link, rename, rm, writeFile } from 'node:fs/promises';
+import {
+  bothEnv,
+  isStaleHostLock,
+  migrateProjects,
+  parleyHome,
+  parseHostLock,
+  processStartedAt,
+  readHostLock,
+  socketIsAlive,
+} from '@parley/core';
 import { createHostContext } from './context.js';
 import type { HostContext } from './context.js';
 import { createHostServer } from './server.js';
@@ -120,6 +127,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const token = randomBytes(32).toString('hex');
   await writeFile(paths.token, token, { mode: 0o600 });
   await chmod(paths.token, 0o600);
+
+  // 4а. Каталоги состояния проектов переезжают со старого имени на новое (R6): под замком хоста, до сокета
+  //     и до наблюдателей — ни клиент, ни наблюдатель ещё не держат старый путь, и `works.create` не успеет
+  //     записать в каталог, который сейчас переименуется.
+  await moveProjectStateDirs(log);
 
   const hostVersion = options.version ?? '0.0.0';
   const idleMs = options.idleMs ?? DEFAULT_IDLE_MS;
@@ -334,29 +346,25 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   return { paths, context: handle.context, closed };
 }
 
-/** Пробует подключиться к существующему файлу сокета: жив ли за ним хост. */
-async function socketIsAlive(socketPath: string): Promise<boolean> {
+/**
+ * Перенос `<проект>/.harnas` → `<проект>/.parley` у проектов из индекса работ (R6, `migrateProjects` в core):
+ * только когда у работ проекта нет живого процесса и блокировки записи, иначе проект остаётся при прежнем
+ * каталоге и перенос пробуется на следующем старте. Сбой переноса хост не останавливает: читатели знают оба имени.
+ */
+async function moveProjectStateDirs(log: Log): Promise<void> {
   try {
-    await stat(socketPath);
-  } catch {
-    return false;
+    for (const { projectPath, ...result } of await migrateProjects()) {
+      if (result.status === 'moved') {
+        log.info('каталог состояния проекта перенесён', { projectPath, from: result.from, to: result.to });
+      } else if (result.reason !== 'no-legacy') {
+        // Живая сессия и блокировка — обычное дело (перенос позже); остальное человеку стоит увидеть.
+        const expected = result.reason === 'live-session' || result.reason === 'locked';
+        log[expected ? 'info' : 'warn']('каталог состояния проекта не перенесён', { projectPath, ...result });
+      }
+    }
+  } catch (error) {
+    log.error('перенос каталогов состояния проектов не выполнен', { error: String(error) });
   }
-  return new Promise<boolean>((resolve) => {
-    const socket = createConnection(socketPath);
-    const timer = setTimeout(() => {
-      socket.destroy();
-      resolve(false);
-    }, 500);
-    socket.once('connect', () => {
-      clearTimeout(timer);
-      socket.destroy();
-      resolve(true);
-    });
-    socket.once('error', () => {
-      clearTimeout(timer);
-      resolve(false);
-    });
-  });
 }
 
 /**
@@ -365,7 +373,7 @@ async function socketIsAlive(socketPath: string): Promise<boolean> {
  * Создаётся ссылкой на уже записанный временный файл: `link` атомарен и падает на существующем,
  * так что читатель никогда не видит пустой замок и не примет его за осколок. true — замок наш.
  *
- * Занят живым держателем — отказ, ничего не удаляется (что считается живым — `isStaleLock`).
+ * Занят живым держателем — отказ, ничего не удаляется (что считается живым — `isStaleHostLock` в core).
  * Осколок переименовывается в свой файл, и если в нём оказался не тот текст, что проверяли
  * (соседний старт успел снять осколок и взять замок), замок возвращается на место — чужой
  * живой замок не удаляется. Не вернулся (замок успел занять третий претендент) — отказ с
@@ -386,9 +394,9 @@ async function acquirePidLock(lockPath: string, log: Log): Promise<boolean> {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       }
-      const held = await readLock(lockPath);
+      const held = await readHostLock(lockPath);
       if (held === null) continue; // замок сняли между link и чтением
-      if (!(await isStaleLock(held))) return false;
+      if (!(await isStaleHostLock(held))) return false;
       const stale = `${lockPath}.stale.${own}`;
       try {
         await rename(lockPath, stale);
@@ -396,7 +404,7 @@ async function acquirePidLock(lockPath: string, log: Log): Promise<boolean> {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
         throw error;
       }
-      const moved = await readLock(stale);
+      const moved = await readHostLock(stale);
       if (moved !== null && moved.text !== held.text) {
         // Унесли живой замок соседа — вернуть.
         try {
@@ -421,57 +429,10 @@ async function acquirePidLock(lockPath: string, log: Log): Promise<boolean> {
   }
 }
 
-async function readLock(lockPath: string): Promise<{ text: string; mtimeMs: number } | null> {
-  try {
-    const [text, info] = await Promise.all([readFile(lockPath, 'utf8'), stat(lockPath)]);
-    return { text, mtimeMs: info.mtimeMs };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  }
-}
-
-/** pid и записанное время старта из текста замка; прежний формат (только pid) — время `null`. */
-function parseLock(text: string): { pid: number; startedAt: string | null } {
-  const [pidLine = '', startedLine = ''] = text.split('\n');
-  const startedAt = startedLine.trim();
-  return { pid: Number(pidLine.trim()), startedAt: startedAt === '' ? null : startedAt };
-}
-
-/**
- * Осколок: pid не число или мёртв; замок записан до загрузки системы; или pid жив, но время старта
- * его процесса не совпадает с записанным (раунд lane-r5) — хост упал, а pid до следующего старта
- * достался чужому процессу. Сверка — как у аренды работы (`hostLeaseActive` в core): допуск
- * START_TOLERANCE_MS; время неизвестно (замок прежнего формата или ОС не ответила) — прежнее правило,
- * живой pid держит замок: без второго признака чужой процесс не отличить, а снять живой замок хуже.
- */
-async function isStaleLock(lock: { text: string; mtimeMs: number }): Promise<boolean> {
-  const { pid, startedAt } = parseLock(lock.text);
-  if (!Number.isInteger(pid) || pid <= 0) return true;
-  // Записан до загрузки системы: держатель мёртв, даже если его pid достался другому процессу.
-  if (lock.mtimeMs < Date.now() - uptime() * 1000) return true;
-  if (!pidAlive(pid)) return true;
-  if (startedAt === null) return false;
-  const actual = await processStartedAt(pid);
-  if (actual === null) return false;
-  const diff = Math.abs(Date.parse(actual) - Date.parse(startedAt));
-  return !Number.isNaN(diff) && diff > START_TOLERANCE_MS;
-}
-
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM — процесс есть, но чужой: жив.
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
 /** Снимает замок, только если он наш: чужой (новый хост уже взял) не трогается. */
 async function releasePidLock(lockPath: string): Promise<void> {
-  const held = await readLock(lockPath).catch(() => null);
-  if (held !== null && parseLock(held.text).pid === process.pid) await rm(lockPath, { force: true });
+  const held = await readHostLock(lockPath).catch(() => null);
+  if (held !== null && parseHostLock(held.text).pid === process.pid) await rm(lockPath, { force: true });
 }
 
 /** Имена дома в окружении — новое и прежнее. */
