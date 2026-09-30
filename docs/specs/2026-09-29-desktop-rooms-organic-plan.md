@@ -87,12 +87,17 @@
     6.4 с против 1.9 с; отдельно зелёный), save-changes, editor:637 (⌥Z и ⌘S в сплите:
     от клавиатурного состояния машины набирается «Ω»; отдельно зелёный),
     `RoomPanel.test.tsx` «conflict», E2E `room-decision.spec.ts` тест 1, шаг 4 (под нагрузкой
-    параллельных полос; со второго раза зелёный), E2E `rooms-dialogs.spec.ts:170` (гонка
-    очистки формы на открытии: введённое сразу после открытия название стиралось; **исправлено**:
-    сброс форм диалогов 1.5, 1.6 и 1.7 — в `useLayoutEffect`, до отрисовки);
+    параллельных полос; со второго раза зелёный), E2E `rooms-dialogs.spec.ts:170` (в финальном прогоне
+    вместо комнаты «merged» — комната с названием по умолчанию; отдельно 6/6, на старой сборке
+    под нагрузкой 60/60 — причина не установлена; сброс форм диалогов 1.5, 1.6 и 1.7 переведён в
+    `useLayoutEffect` на случай гонки очистки формы — наблюдать);
   - хост: works-service, activity-service тест 6, log-index, sessions-service autoLaunch,
     wake-service, `methods/rooms.test.ts` «два Accept подряд», `sessions-service.test.ts`
-    «закрытие по карте» тест 8;
+    «закрытие по карте» тест 8, `server.test.ts` «второй клиент сразу после ответа на hello
+    получает её activity.changed», `activity-terminal.test.ts` «порог тишины по-прежнему роняет
+    working сессии codex, чей процесс не под хостом», необработанный `ENOENT host.log` из
+    `methods/works.test.ts` (фоновый refresh works-service пишет в лог после удаления
+    временного каталога теста — vitest хоста возвращает 1 при зелёных тестах);
   - core: store.test.ts «map.lock», cli-work.test.ts.
 
 ## Task 1: Облик Organic
