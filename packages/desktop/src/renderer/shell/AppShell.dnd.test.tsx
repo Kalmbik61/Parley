@@ -558,7 +558,6 @@ describe('AppShell — бросок сессии на строки сайдба�
     bridge.setHandler('rooms.create', () => ({ roomId: 'r-02' }));
     await renderShell(entries());
     await activate(key);
-    act(() => bridge.setHostMethods([...REQUIRED_METHODS, 'rooms.addMember']));
   }
 
   const drop = (sessionId: string, target: DropTargetData): void =>
@@ -650,7 +649,6 @@ describe('AppShell — бросок сессии на строки сайдба�
     });
     await renderShell(entries());
     await activate(key);
-    act(() => bridge.setHostMethods([...REQUIRED_METHODS, 'rooms.addMember']));
     drop('s-01', { workKey: key, kind: 'room-row', roomId: 'r-01' });
     await waitFor(() => expect(vi.mocked(toast)).toHaveBeenCalledWith("Couldn't add the session to the room: invalid request."));
     expect(useUiStore.getState().roomExpanded[roomKey(key, 'r-01')]).toBeUndefined();
@@ -708,7 +706,7 @@ describe('AppShell — бросок сессии на строки сайдба�
     bridge.setHandler('rooms.addMember', () => ({ messageId: 'm-1' }));
     await renderShell(entries());
     await activate(key);
-    // Методы этого хоста — без `rooms.addMember`.
+    act(() => bridge.setHostMethods(REQUIRED_METHODS.filter((method) => method !== 'rooms.addMember')));
     drop('s-01', { workKey: key, kind: 'room-row', roomId: 'r-01' });
     await flush();
     expect(callsOf('rooms.addMember')).toEqual([]);

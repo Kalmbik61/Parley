@@ -57,7 +57,7 @@ beforeEach(() => {
   bridge = createFakeBridge();
   bridge.setHandler('rooms.send', () => ({ messageId: 'm-new' }));
   useUiStore.setState({ composerDrafts: {}, windowFocused: true, documentVisible: true });
-  useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS, 'rooms.resolveProposal'] } });
+  useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS] } });
   vi.mocked(toast).mockClear();
   // Меню упоминаний прокручивает выбранный пункт в видимую область; в jsdom `scrollIntoView` нет.
   Element.prototype.scrollIntoView = vi.fn();
@@ -827,7 +827,8 @@ describe('RoomPanel — карточка решения (1.3, 2.4)', () => {
   });
 
   it('хост не знает rooms.resolveProposal — карточка с текстом, но без кнопок', () => {
-    useHostStore.setState({ status: { state: 'connected', hostVersion: 'old', methods: [...REQUIRED_METHODS] } });
+    const methods = REQUIRED_METHODS.filter((method) => method !== 'rooms.resolveProposal');
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'old', methods } });
     renderPanel(withProposal());
     expect(card().textContent).toContain('Возврат больше суммы');
     expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull();

@@ -46,7 +46,11 @@ export const BASELINE_METHODS: readonly string[] = [
   'pty.resize',
 ];
 
-/** Что нужно окну этой сборки; пополняется в 3.1, 4.1, 5.1, 8.1. */
+/**
+ * Что нужно окну этой сборки; пополняется в 3.1, 4.1, 5.1, 8.1 и комнатами Organic. `rooms.addMember` (вступление в
+ * комнату, бросок на её строку) и `rooms.resolveProposal` (ответ на решение) — хост старее окна их не знает, и строка
+ * статуса предлагает перезапуск, а не молча прячет функции (спека Orca-UI 3.2).
+ */
 export const REQUIRED_METHODS: readonly string[] = [
   ...BASELINE_METHODS,
   'works.rename',
@@ -57,6 +61,8 @@ export const REQUIRED_METHODS: readonly string[] = [
   'worktrees.mergeCheck',
   'changes.project',
   'changes.commitProject',
+  'rooms.addMember',
+  'rooms.resolveProposal',
 ];
 
 /** Методы хоста; без связи — пусто: звать всё равно некого. */

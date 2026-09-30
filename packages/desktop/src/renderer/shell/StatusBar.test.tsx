@@ -97,6 +97,14 @@ describe('StatusBar: хост старее окна', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  it.each(['rooms.addMember', 'rooms.resolveProposal'])(
+    'хост без %s (комнаты Organic) — «Host is outdated — restart»: перезапуск предлагается, а не молча прячутся функции',
+    (missing) => {
+      renderBar({ state: 'connected', hostVersion: '2.0.0', methods: REQUIRED_METHODS.filter((method) => method !== missing) });
+      expect(screen.getByRole('button', { name: 'Host is outdated — restart' })).toBeTruthy();
+    },
+  );
+
   it('с полным REQUIRED_METHODS сегмента нет', () => {
     renderBar({ state: 'connected', hostVersion: '2.0.0', methods: [...REQUIRED_METHODS] });
     expect(screen.queryByRole('button', { name: 'Host is outdated — restart' })).toBeNull();

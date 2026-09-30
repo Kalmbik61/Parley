@@ -112,7 +112,7 @@ async function release(): Promise<void> {
   await act(async () => {});
 }
 
-function connect(methods: readonly string[] = [...REQUIRED_METHODS, 'rooms.addMember']): void {
+function connect(methods: readonly string[] = REQUIRED_METHODS): void {
   useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods: [...methods] } });
 }
 
@@ -243,7 +243,7 @@ describe('строка комнаты — цель броска сессии (ro
   });
 
   it('хост без rooms.addMember — цели нет (окно прячет функцию, если метода нет)', async () => {
-    connect(REQUIRED_METHODS);
+    connect(REQUIRED_METHODS.filter((method) => method !== 'rooms.addMember'));
     render(<Card entry={entryOf()} />);
     await dragOver('s-01', dndId.roomRow(KEY, 'r-01'));
     expect(highlighted()).toEqual([]);
