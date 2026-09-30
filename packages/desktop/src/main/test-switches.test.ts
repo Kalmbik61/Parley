@@ -7,16 +7,18 @@ const ALL_ON = {
   HARNAS_NOTIFICATIONS: 'log',
   HARNAS_DROPS: 'fake',
   HARNAS_SHELL: 'log',
+  HARNAS_LOGIN_SHELL: 'skip',
 };
 
 describe('testSwitches', () => {
-  it('неупакованное окно (E2E, pnpm dev) слушает все пять переключателей', () => {
+  it('неупакованное окно (E2E, pnpm dev) слушает все шесть переключателей', () => {
     expect(testSwitches(ALL_ON, false)).toEqual({
       downloads: true,
       dialogs: true,
       notifications: true,
       drops: true,
       shell: true,
+      loginShell: true,
     });
   });
 
@@ -27,6 +29,7 @@ describe('testSwitches', () => {
       notifications: false,
       drops: false,
       shell: false,
+      loginShell: false,
     });
   });
 
@@ -37,6 +40,7 @@ describe('testSwitches', () => {
       notifications: true,
       drops: true,
       shell: true,
+      loginShell: true,
     });
   });
 
@@ -51,7 +55,12 @@ describe('testSwitches', () => {
       notifications: false,
       drops: false,
       shell: false,
+      loginShell: false,
     });
-    expect(testSwitches({ HARNAS_DROPS: 'log', HARNAS_SHELL: '1' }, false)).toMatchObject({ drops: false, shell: false });
+    expect(testSwitches({ HARNAS_DROPS: 'log', HARNAS_SHELL: '1', HARNAS_LOGIN_SHELL: '1' }, false)).toMatchObject({
+      drops: false,
+      shell: false,
+      loginShell: false,
+    });
   });
 });

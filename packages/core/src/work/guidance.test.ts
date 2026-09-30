@@ -52,15 +52,31 @@ describe('системная вставка', () => {
     expect(text).toMatch(/субагент/);
   });
 
-  it('письма коллег приходят звонком канала, а виды письма названы', () => {
+  it('письма коллег в окне приходят указателем после хода, а виды письма названы', () => {
     const text = systemGuidance(mapOf('Авторизация', 'логин по e-mail'), 's-03');
+    const line = text.split('\n').find((candidate) => candidate.startsWith('check_inbox'));
 
-    // Этикет из спецификации 4.7: отвечают только на вопрос, и агент должен
-    // знать, что письмо придёт само — иначе он будет дёргать check_inbox.
-    expect(text).toContain('<channel source="harnas">');
+    // Этикет из спецификации 4.7: отвечают только на вопрос, и агент должен знать, что письмо придёт
+    // само — иначе он будет дёргать check_inbox. В окне «само» — это указатель после хода: его печатает
+    // хост (`delivery.ts`), сессии окна тег канала не получают (`channel: false`).
+    expect(line).toBeDefined();
+    expect(line).toContain('«Новые письма (N)… Вызови check_inbox.»');
+    expect(line).toMatch(/указател[^\n]*после твоего хода/);
     expect(text).toContain('question');
     expect(text).toContain('decision');
     expect(text.split('\n').length).toBeLessThanOrEqual(14);
+  });
+
+  it('тег <channel source="harnas"> — только у сессий CLI harnas-core: как обычный способ он не обещан', () => {
+    const text = systemGuidance(mapOf('Авторизация', 'логин по e-mail'), 's-03');
+    const line = text.split('\n').find((candidate) => candidate.startsWith('check_inbox'));
+
+    // Тег в вставке остаётся ровно один раз и только с оговоркой про CLI: сессия окна, прочитав «приходят
+    // сами как <channel …>», ждала бы тега, которого хост ей не пошлёт.
+    expect(text.split('<channel source="harnas">')).toHaveLength(2);
+    expect(line).toMatch(/<channel source="harnas">[^\n]*только[^\n]*CLI harnas-core/);
+    expect(text).not.toMatch(/приходят сами как <channel/);
+    expect(line).toContain('отвечай send_message только на question');
   });
 
   it('автозапуск: spawn_session не отсылает к человеку', () => {
@@ -333,6 +349,33 @@ describe('подробный гид', () => {
     expect(GUIDE).toContain('## Указатель');
     expect(GUIDE).toContain('Новые письма (N). Вызови check_inbox.');
     expect(GUIDE).toMatch(/печатает харнесс сам/);
+  });
+
+  it('письма в окне объявляет указатель после хода, а сами письма забирает check_inbox', () => {
+    const talk = sectionOf('## Как разговаривать', '## Указатель');
+
+    expect(talk).toMatch(
+      /Письма коллег приходят сами: в сессиях окна харнесс печатает указатель после твоего хода \(про него — ниже\), а сами письма забирает `check_inbox`/,
+    );
+    // Прежнее обещание — тег как обычный путь и `check_inbox` «на случай, если канал молчит» — ушло.
+    expect(GUIDE).not.toMatch(/приходят сами,\s+тегом/);
+    expect(GUIDE).not.toMatch(/страховка на случай, если канал\s+молчит/);
+  });
+
+  it('тег <channel source="harnas"> — только в сессиях, поднятых CLI harnas-core с channelPush', () => {
+    const talk = sectionOf('## Как разговаривать', '## Указатель');
+    const pointer = sectionOf('## Указатель', 'Если сессию запустили ролью-агентом');
+
+    expect(talk).toMatch(
+      /Тегом `<channel source="harnas">` письма объявляются только в сессиях, поднятых CLI `harnas-core` с включённым `channelPush`: тег несёт `from`, `from_label` и `kind`, без текста письма — увидел тег, позови `check_inbox`/,
+    );
+    expect(pointer).toMatch(
+      /В сессиях, запущенных окном, письма объявляются только так: тега `<channel source="harnas">` там не будет/,
+    );
+    // Ни один абзац гида не упоминает тег без оговорки, чьи это сессии.
+    for (const paragraph of GUIDE.split('\n\n').filter((text) => text.includes('<channel'))) {
+      expect(paragraph.replace(/\s+/g, ' ')).toMatch(/harnas-core|запущенных окном/);
+    }
   });
 
   it('report(done) — результат сдан и сессия на связи; close_session — только с согласия человека', () => {

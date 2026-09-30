@@ -122,7 +122,13 @@ if (!gotLock) {
   app.on('second-instance', focusMainWindow);
 
   app.whenReady().then(async () => {
-    const shellEnv = await captureShellEnv();
+    // Открытому из Finder окну launchd отдаёт урезанное окружение: без `~/.local/bin` и nvm хост не найдёт
+    // ни `claude`, ни `codex`, а прокси, `CLAUDE_CONFIG_DIR` и `HARNAS_*` из rc-файлов человека не придут
+    // вовсе. Окружение login-оболочки снимается один раз, до хоста, и уходит в хост окружением его запуска,
+    // в поиск `node`, git и конфиг; агенты наследуют его от хоста.
+    // E2E (`HARNAS_LOGIN_SHELL=skip`): оболочку человека с её rc-файлами не зовём, окружение — то, с которым
+    // запущен тест; разбор настоящего вывода оболочки держат тесты `shell-env.test.ts` с заглушкой в файле.
+    const shellEnv = await captureShellEnv({ skip: switches.loginShell });
     if (shellEnv.warning) {
       console.warn(`[harnas] captureShellEnv: ${shellEnv.warning}`);
     }
