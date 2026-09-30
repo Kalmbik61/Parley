@@ -29,7 +29,7 @@
  * Упавший `sessions.create` следа в окне не оставляет, но хост пишет запись сессии в карту до запуска и при сбое запуска
  * её не откатывает, а ответ об ошибке id не несёт: окно запись удалить не может. «Retry» заводит новую запись, запись
  * упавшей остаётся в сайдбаре не запущенной сессией (её убирает «Delete» меню строки) — при сбое worktree так осиротеют
- * все агенты. Откат записи — на стороне хоста; предложение для TODOS — в отчёте куска 7.
+ * все агенты. Откат записи — на стороне хоста; пункт «Хост не откатывает запись упавшей сессии» — в TODOS, §4.
  *
  * Модель — только из списка провайдера (`providers.list.models`, решение 5 спеки): первый пункт `Default` — без
  * флага, модель CLI по умолчанию, дальше подписи списка, в `sessions.create.model` уходит `id`. Нет списка, `null`
@@ -49,7 +49,7 @@
  * к фону диалога 2.69:1, ниже порога 3:1 для признака состояния.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import type { WorkEntry } from '@harnas/core';
 import type { HarnasBridge } from '../../../shared/bridge.js';
@@ -178,8 +178,9 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
     if (launchRef.current !== null) launchRef.current.cancelled = true;
   }, [open, room, work]);
 
-  // Каждое открытие — с чистой формой и составом по умолчанию: один агент, а «New room» — два.
-  useEffect(() => {
+  // Каждое открытие — с чистой формой и составом по умолчанию: один агент, а «New room» — два. Сброс — до отрисовки
+  // (`useLayoutEffect`): в `useEffect` он шёл после неё, и диалог успевал показаться с названием и агентами прошлого открытия.
+  useLayoutEffect(() => {
     if (!open) return;
     const rows = initialRows(room);
     setAgents(rows);

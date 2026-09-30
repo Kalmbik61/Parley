@@ -21,7 +21,7 @@
  * `sessions.create` отвечает раньше снимка, и вкладка, открытая сразу, мигнула бы телом «Session deleted» (`lib/open-when-listed.ts`).
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { HarnasBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, providerName, S } from '../../shared/strings.js';
@@ -145,8 +145,9 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
   }, []);
 
   // Каждое открытие — с чистой формой: проект открывшего (от «+» заголовка) или проект активной работы, название из
-  // палитры; агент выбирается заново по правилу (`lastProvider` помнит прошлый).
-  useEffect(() => {
+  // палитры; агент выбирается заново по правилу (`lastProvider` помнит прошлый). Сброс — до отрисовки (`useLayoutEffect`):
+  // в `useEffect` он шёл после неё, и диалог успевал показаться с названием и промптом прошлого открытия.
+  useLayoutEffect(() => {
     if (!open) return;
     const activeKey = useLayoutStore.getState().activeWorkKey;
     const activeProject =

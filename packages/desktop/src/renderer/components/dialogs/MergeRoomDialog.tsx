@@ -14,7 +14,7 @@
  * как в спеке; в светлой `accent-600`, чистый `accent` даёт к фону диалога 2.69:1), фон `neutral-100`.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { WorkSession } from '@harnas/core';
 import type { HarnasBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
@@ -66,8 +66,10 @@ export function MergeRoomDialog({ open, bridge, projectPath, workId, dragged, ta
     };
   }, []);
 
-  // Каждый бросок — с чистой формой; ведущий — та, на которую бросили.
-  useEffect(() => {
+  // Каждый бросок — с чистой формой; ведущий — та, на которую бросили. Сброс — до отрисовки (`useLayoutEffect`): в `useEffect`
+  // он шёл после неё, и поле успевало показаться со значениями прошлого броска (E2E rooms-dialogs, перетаскивание: набранное
+  // сразу после открытия название пропало).
+  useLayoutEffect(() => {
     if (!open) return;
     setTitle('');
     setLead(target);

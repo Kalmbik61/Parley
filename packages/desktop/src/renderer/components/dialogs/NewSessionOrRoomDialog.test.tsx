@@ -18,6 +18,7 @@ import { roomKey } from '../../lib/room-view.js';
 import { workKey } from '../../lib/tree-order.js';
 import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
+import { recordOnInsert } from '../../test-utils/dom-insert.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { chooseOption, installRadixSelectPolyfills } from '../../test-utils/radix-select.js';
 import { makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
@@ -229,6 +230,31 @@ describe('NewSessionOrRoomDialog — вид и состав (1.5)', () => {
     await act(async () => {});
     expect(rows()).toHaveLength(1);
     expect((screen.getByPlaceholderText('Optional') as HTMLInputElement).value).toBe('');
+  });
+
+  it('форма сбрасывается до отрисовки: название и состав агентов появляются уже чистыми, а не как в прошлое открытие', async () => {
+    const onOpenChange = vi.fn();
+    const element = (open: boolean): JSX.Element => (
+      <NewSessionOrRoomDialog open={open} bridge={bridge} work={null} room={false} onOpenChange={onOpenChange} />
+    );
+    const view = render(element(true));
+    await act(async () => {});
+    await addAgent();
+    fireEvent.change(screen.getByPlaceholderText('What the agents will discuss'), { target: { value: 'Sync' } });
+    view.rerender(element(false));
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    // Что диалог показывает в тот миг, когда попал в DOM: с `useEffect` сброса тут стояли бы «Sync» и два агента.
+    const shown = recordOnInsert((inserted) => {
+      const name = inserted.querySelector<HTMLInputElement>('input[placeholder]');
+      return name === null ? null : { name: name.value, agents: inserted.querySelectorAll('[data-agent-row]').length };
+    });
+    try {
+      view.rerender(element(true));
+    } finally {
+      shown.stop();
+    }
+    expect(shown.seen).toEqual([{ name: '', agents: 1 }]);
   });
 });
 

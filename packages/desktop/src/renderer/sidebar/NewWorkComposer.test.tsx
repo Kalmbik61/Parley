@@ -17,6 +17,7 @@ import { groups } from '../layout/tree.js';
 import { workKey } from '../lib/tree-order.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
+import { recordOnInsert } from '../test-utils/dom-insert.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { NewWorkComposer, titleFromPrompt, validateDraft, type NewWorkDraft } from './NewWorkComposer.js';
@@ -573,5 +574,32 @@ describe('NewWorkComposer — начальное название (кусок 6.
     await waitFor(() => expect(callsOf('providers.list')).toHaveLength(1));
     expect(titleField().value).toBe('Редизайн окна');
     expect(callsOf('works.create')).toEqual([]);
+  });
+});
+
+describe('NewWorkComposer — форма на открытии', () => {
+  it('повторное открытие: название и промпт появляются уже сброшенными — сброс до отрисовки, а не после неё', async () => {
+    const element = (open: boolean): JSX.Element => (
+      <NewWorkComposer open={open} bridge={bridge} projectPath={PROJECT} title="" onOpenChange={() => {}} />
+    );
+    const view = render(element(true));
+    await act(async () => {});
+    typeTitle('Old title');
+    fireEvent.change(promptField(), { target: { value: 'Old prompt' } });
+    view.rerender(element(false));
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    // Что поля показывают в тот миг, когда диалог попал в DOM: с `useEffect` сброса тут стояли бы прежние «Old …».
+    const shown = recordOnInsert((inserted) => {
+      const title = inserted.querySelector<HTMLInputElement>('input');
+      const prompt = inserted.querySelector<HTMLTextAreaElement>('textarea');
+      return title === null || prompt === null ? null : { title: title.value, prompt: prompt.value };
+    });
+    try {
+      view.rerender(element(true));
+    } finally {
+      shown.stop();
+    }
+    expect(shown.seen).toEqual([{ title: '', prompt: '' }]);
   });
 });

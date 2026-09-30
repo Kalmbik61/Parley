@@ -14,6 +14,7 @@ import { roomKey } from '../../lib/room-view.js';
 import { workKey } from '../../lib/tree-order.js';
 import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
+import { recordOnInsert } from '../../test-utils/dom-insert.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
 import { MergeRoomDialog } from './MergeRoomDialog.js';
@@ -179,6 +180,34 @@ describe('MergeRoomDialog — Create room', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(callsOf('rooms.create')).toEqual([]);
+  });
+});
+
+describe('MergeRoomDialog — форма на открытии', () => {
+  const element = (open: boolean): JSX.Element => (
+    <MergeRoomDialog open={open} bridge={bridge} projectPath={PROJECT} workId="w-01" dragged="s-03" target="s-02" onOpenChange={() => {}} />
+  );
+
+  it('повторный бросок: название и ведущий появляются уже сброшенными — сброс до отрисовки, а не после неё', () => {
+    const view = render(element(true));
+    fireEvent.change(screen.getByPlaceholderText('What the agents will discuss'), { target: { value: 'Login flow' } });
+    fireEvent.click(pills()[1] as HTMLElement);
+    expect(pills().map((pill) => pill.getAttribute('aria-checked'))).toEqual(['false', 'true']);
+    view.rerender(element(false));
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    // Что поле показывает в тот миг, когда диалог попал в DOM: с `useEffect` сброса тут стояло бы «Login flow» и второй ведущий.
+    const shown = recordOnInsert((inserted) => {
+      const name = inserted.querySelector<HTMLInputElement>('input[placeholder="What the agents will discuss"]');
+      if (name === null) return null;
+      return { name: name.value, lead: [...inserted.querySelectorAll('[role="radio"]')].map((pill) => pill.getAttribute('aria-checked')) };
+    });
+    try {
+      view.rerender(element(true));
+    } finally {
+      shown.stop();
+    }
+    expect(shown.seen).toEqual([{ name: '', lead: ['true', 'false'] }]);
   });
 });
 
