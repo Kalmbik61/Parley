@@ -877,25 +877,39 @@ const THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
  * Привязка сессии Codex к её логу (спека комнат Organic, 3.6). Codex кладёт id треда в `_meta.threadId`
  * каждого `tools/call` к любому MCP-серверу, поэтому сервер узнаёт его при первом же вызове — без
  * гадания по cwd и времени запуска, которое принимает чужой лог, если рядом стартовал ещё один агент.
- * Пишется только в пустое поле: id, уже привязанный запасным путём хоста или заданный при `resume`,
- * не перезаписывается. `true` — вопрос закрыт (записано, у записи уже есть id, сессия не codex) и
- * дальше спрашивать не нужно; `false` — id в `_meta` нет или сбой записи, попробует следующий вызов.
- * Ошибки наружу не идут: привязка не должна ронять вызов инструмента.
+ *
+ * `_meta.threadId` авторитетнее запасного пути: это тред, который выполняет вызов в этом самом процессе,
+ * а запасной путь хоста (по cwd и времени) срабатывает на первом же логе Codex — за секунды до первого
+ * вызова модели — и рядом с ещё одним агентом в том же каталоге ошибается. Поэтому id из `_meta`
+ * перезаписывает отличающееся значение; запись, где уже он, карту не трогает.
+ *
+ * Вызов подагента (`_meta.sessionId` — корневой тред — не совпадает с `threadId`) не привязывает: его тред
+ * — не тот, который человек возобновит `codex resume`. Ждём вызова корневого треда.
+ *
+ * `true` — вопрос закрыт (записано, уже записано, сессия не codex) и дальше спрашивать не нужно; `false` —
+ * подходящего id в `_meta` нет или сбой записи, попробует следующий вызов. Ошибки наружу не идут:
+ * привязка не должна ронять вызов инструмента.
  */
-async function bindCodexThread(context: McpContext, threadId: unknown): Promise<boolean> {
+async function bindCodexThread(
+  context: McpContext,
+  meta: Record<string, unknown> | undefined,
+): Promise<boolean> {
   const { sessionId } = context;
+  const threadId = meta?.['threadId'];
   if (sessionId === null || typeof threadId !== 'string' || !THREAD_ID.test(threadId)) return false;
+  const thread = threadId.toLowerCase();
+  const root = meta?.['sessionId'];
+  if (typeof root === 'string' && THREAD_ID.test(root) && root.toLowerCase() !== thread) return false;
   try {
     // Чтение до записи: `updateMap` переписал бы карту и без изменений, а её читают наблюдатели окна.
     const known = (await readMap(context.projectPath, context.workId)).sessions.find(
       (candidate) => candidate.id === sessionId,
     );
     if (known === undefined) return false;
-    if (known.provider !== 'codex' || known.providerSessionId !== null) return true;
+    if (known.provider !== 'codex' || known.providerSessionId === thread) return true;
     await updateMap(context.projectPath, context.workId, (current) => {
       const target = current.sessions.find((candidate) => candidate.id === sessionId);
-      // Пока шла запись, поле могли занять — чужой id не затираем.
-      if (target?.providerSessionId === null) target.providerSessionId = threadId.toLowerCase();
+      if (target !== undefined && target.provider === 'codex') target.providerSessionId = thread;
     });
     return true;
   } catch (error) {
@@ -945,9 +959,7 @@ export function createHarnasServer(context: McpContext): Server<Request, Channel
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
     const args = isRecord(request.params.arguments) ? request.params.arguments : {};
     // До самого инструмента: `wait_for` может держать вызов до получаса, а привязка нужна сразу.
-    if (!threadBound) {
-      threadBound = await bindCodexThread(context, request.params._meta?.['threadId']);
-    }
+    if (!threadBound) threadBound = await bindCodexThread(context, request.params._meta);
     try {
       const result = await dispatch(context, request.params.name, args);
       // Гид — готовый текст: заворачивать его в JSON-строку с экранированием

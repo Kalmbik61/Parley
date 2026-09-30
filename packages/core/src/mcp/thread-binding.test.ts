@@ -17,6 +17,7 @@ import { createHarnasServer } from './tools.js';
 
 const THREAD = '019ce3d5-584a-7be2-922e-b8185a8d7c19';
 const OTHER_THREAD = '019ce3d5-9999-7be2-922e-b8185a8d7c00';
+const SUBAGENT_THREAD = '019ce3d5-aaaa-7be2-922e-b8185a8d0003';
 
 let home = '';
 let project = '';
@@ -90,13 +91,66 @@ describe('_meta.threadId → providerSessionId', () => {
     expect(await providerSessionId('s-01')).toBe(THREAD);
   });
 
-  it('запись в карте уже с id (привязка по cwd и времени или resume) — не перезаписывается', async () => {
+  it('в карте уже id, найденный запасным путём хоста (cwd и время), — id из `_meta` авторитетнее и заменяет его', async () => {
+    // Запасной путь срабатывает на первом же логе Codex, за секунды до первого вызова модели, и рядом с
+    // ещё одним агентом в том же каталоге привязывает чужой тред. `_meta.threadId` — тред этого процесса.
     await updateMap(project, workId, (map) => {
       const session = map.sessions.find((item) => item.id === 's-01');
       if (session !== undefined) session.providerSessionId = OTHER_THREAD;
     });
     const client = await connect('s-01');
-    await call(client, { threadId: THREAD });
+    await call(client, { threadId: THREAD, sessionId: THREAD });
+    expect(await providerSessionId('s-01')).toBe(THREAD);
+
+    // Один раз за жизнь сервера: следующие вызовы карту не трогают.
+    await call(client, { threadId: OTHER_THREAD, sessionId: OTHER_THREAD });
+    expect(await providerSessionId('s-01')).toBe(THREAD);
+  });
+
+  it('в карте уже тот же id (resume) — карта не переписывается', async () => {
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((item) => item.id === 's-01');
+      if (session !== undefined) session.providerSessionId = THREAD;
+    });
+    const before = (await stat(workPaths(project, workId).map)).mtimeMs;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const client = await connect('s-01');
+    await call(client, { threadId: THREAD, sessionId: THREAD });
+    expect(await providerSessionId('s-01')).toBe(THREAD);
+    expect((await stat(workPaths(project, workId).map)).mtimeMs).toBe(before);
+  });
+
+  it('вызов подагента не привязывает свой тред: `_meta.sessionId` — корневой тред — не совпадает с threadId', async () => {
+    const client = await connect('s-01');
+    await call(client, { threadId: SUBAGENT_THREAD, sessionId: THREAD });
+    expect(await providerSessionId('s-01')).toBeNull();
+
+    // Вызов корневого треда привязывает: подагент не «съел» единственную попытку.
+    await call(client, { threadId: THREAD, sessionId: THREAD });
+    expect(await providerSessionId('s-01')).toBe(THREAD);
+  });
+
+  it('вызов подагента не заменяет и уже найденный корневой тред', async () => {
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((item) => item.id === 's-01');
+      if (session !== undefined) session.providerSessionId = THREAD;
+    });
+    const client = await connect('s-01');
+    await call(client, { threadId: SUBAGENT_THREAD, sessionId: THREAD });
+    expect(await providerSessionId('s-01')).toBe(THREAD);
+  });
+
+  it('`_meta.sessionId` нет или на uuid не похож — привязывается threadId, как и раньше', async () => {
+    const first = await connect('s-01');
+    await call(first, { threadId: THREAD });
+    expect(await providerSessionId('s-01')).toBe(THREAD);
+
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((item) => item.id === 's-01');
+      if (session !== undefined) session.providerSessionId = null;
+    });
+    const second = await connect('s-01');
+    await call(second, { threadId: OTHER_THREAD, sessionId: 'не-uuid' });
     expect(await providerSessionId('s-01')).toBe(OTHER_THREAD);
   });
 

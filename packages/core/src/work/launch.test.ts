@@ -458,8 +458,11 @@ describe('план возобновления', () => {
     expect(plan.args.slice(0, 3)).toEqual([
       'resume',
       '7fa0e1ee-cc7b-4a1e-9d4e-000000000001',
-      '--no-daemon',
+      '-c',
     ]);
+    // Только `-c`: `--no-daemon` и `-a` после `resume <id>` не проверены на живом Codex (спека 3.6: «те же `-c`»).
+    expect(plan.args).not.toContain('--no-daemon');
+    expect(plan.args).not.toContain('-a');
     // Те же `-c`, что у запуска: MCP и notify в тред Codex не сохраняются.
     expect(plan.args.some((arg) => arg.startsWith('mcp_servers.harnas='))).toBe(true);
     expect(plan.args.some((arg) => arg.startsWith('notify='))).toBe(true);
@@ -747,6 +750,61 @@ describe('привязка к логу провайдера без внешне�
 
     expect(found).toBe('наша');
     expect((await sessionOf(workId, sessionId)).providerSessionId).toBe('наша');
+  });
+
+  describe('две сессии codex в одном каталоге', () => {
+    const FIRST_START = '2026-09-02T10:00:00.000Z';
+    const SECOND_START = '2026-09-02T10:00:03.000Z';
+
+    /** Работа с двумя запущенными сессиями codex, чьи старты записаны в карту вручную — время задаёт тест. */
+    async function twoSessions(): Promise<{ workId: string; first: string; second: string }> {
+      const created = await createWork(project, { title: 'Комната', goal: '' });
+      const workId = created.work.id;
+      const first = await createPendingSession(project, workId, { provider: 'codex', label: 'а', task: 'x' });
+      const second = await createPendingSession(project, workId, { provider: 'codex', label: 'б', task: 'x' });
+      await startSession(project, workId, first, null);
+      await startSession(project, workId, second, null);
+      await updateMap(project, workId, (map) => {
+        for (const session of map.sessions) {
+          session.startedAt = session.id === first ? FIRST_START : SECOND_START;
+        }
+      });
+      return { workId, first, second };
+    }
+
+    it('лог первой сессии, уже привязанный, второй не достаётся: она берёт свой', async () => {
+      const { workId, first, second } = await twoSessions();
+      // Лог первой лежит в допуске второй и раньше её собственного.
+      await writeRollout('лог-первой', project, '2026-09-02T10:00:01.000Z');
+      await writeRollout('лог-второй', project, '2026-09-02T10:00:04.000Z');
+      await updateMap(project, workId, (map) => {
+        const target = map.sessions.find((session) => session.id === first);
+        if (target !== undefined) target.providerSessionId = 'лог-первой';
+      });
+
+      const found = await linkSession(project, workId, await sessionOf(workId, second), { codexRoot: logs });
+
+      expect(found).toBe('лог-второй');
+      expect((await sessionOf(workId, second)).providerSessionId).toBe('лог-второй');
+      expect((await sessionOf(workId, first)).providerSessionId).toBe('лог-первой');
+    });
+
+    it('обе ищут одновременно и видят один лог: его получает одна, вторая остаётся без привязки', async () => {
+      const { workId, first, second } = await twoSessions();
+      await writeRollout('единственный-лог', project, '2026-09-02T10:00:01.000Z');
+
+      const results = await Promise.all([
+        linkSession(project, workId, await sessionOf(workId, first), { codexRoot: logs }),
+        linkSession(project, workId, await sessionOf(workId, second), { codexRoot: logs }),
+      ]);
+
+      const holders = (await readMap(project, workId)).sessions.filter(
+        (session) => session.providerSessionId === 'единственный-лог',
+      );
+      expect(holders).toHaveLength(1);
+      // Проигравшая ничего не записала и говорит об этом: «привязывать нечего».
+      expect(results.filter((result) => result === null)).toHaveLength(1);
+    });
   });
 
   it('лога ещё нет — карта не трогается, попробуем на следующем событии', async () => {

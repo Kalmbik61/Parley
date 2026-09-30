@@ -428,21 +428,32 @@ export async function linkSession(
   if (session.providerSessionId !== null || session.startedAt === null) return null;
 
   const entry = await entryOf(session.provider);
+  // Логи, занятые другими сессиями работы, своими не берём: рядом запущенный агент в том же каталоге иначе
+  // получил бы самый ранний лог — чужой.
+  const taken = new Set<string>();
+  for (const other of (await readMap(projectPath, workId)).sessions) {
+    if (other.id !== session.id && other.providerSessionId !== null) taken.add(other.providerSessionId);
+  }
   const found = await linkProviderSession(
     entry,
     { cwd: projectPath, startedAt: session.startedAt },
-    roots,
+    { ...roots, exclude: taken },
   );
   if (found === null) return null;
 
+  let lost = false;
   await updateMap(projectPath, workId, (map) => {
     const target = map.sessions.find((candidate) => candidate.id === session.id);
-    // Пока шёл поиск, сессию могли привязать: чужой id не затираем.
-    if (target !== undefined && target.providerSessionId === null) {
-      target.providerSessionId = found;
+    // Пока шёл поиск, сессию могли привязать: чужой id не затираем. Или лог занял сосед по поиску
+    // (обе сессии искали одновременно и увидели один лог): побеждает первая запись, вторая ищет дальше.
+    if (target === undefined || target.providerSessionId !== null) return;
+    if (map.sessions.some((other) => other.id !== target.id && other.providerSessionId === found)) {
+      lost = true;
+      return;
     }
+    target.providerSessionId = found;
   });
-  return found;
+  return lost ? null : found;
 }
 
 /**

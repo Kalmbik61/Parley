@@ -111,6 +111,12 @@ export const LINK_TOLERANCE_MS = 5000;
 
 export interface LinkOptions extends MetricsRoots {
   toleranceMs?: number;
+  /**
+   * Id логов, уже привязанных к другим сессиям карты: своим их не берём. Две сессии в одном каталоге,
+   * запущенные с разницей в несколько секунд, иначе получали бы один и тот же — самый ранний — лог: лог
+   * первой лежит в допуске времени второй.
+   */
+  exclude?: ReadonlySet<string>;
 }
 
 /**
@@ -122,7 +128,7 @@ export interface LinkOptions extends MetricsRoots {
 export async function linkProviderSession(
   entry: ProviderEntry,
   query: LinkQuery,
-  { toleranceMs = LINK_TOLERANCE_MS, ...roots }: LinkOptions = {},
+  { toleranceMs = LINK_TOLERANCE_MS, exclude, ...roots }: LinkOptions = {},
 ): Promise<string | null> {
   if (entry.linkBy !== 'cwd+time') return null;
   const adapter = adapterFor(entry.id, roots);
@@ -134,6 +140,7 @@ export async function linkProviderSession(
 
   let best: { id: string; at: number } | null = null;
   for (const log of await adapter.list()) {
+    if (exclude?.has(log.id) === true) continue;
     // Файл, не тронутый после запуска, разбирать незачем: сессий у провайдера
     // могут быть сотни, а свежих — единицы.
     const info = await stat(log.file).catch(() => null);
@@ -143,6 +150,8 @@ export async function linkProviderSession(
     // Подагент и внутренний тред Codex стартуют в том же cwd и часто раньше настоящей сессии:
     // без этого фильтра «ближайший к запуску» лог отдавал бы записи карты чужой тред.
     if (index.spawned === true) continue;
+    // Занят под id из `session_meta`, а не из имени файла: в карту пишется он.
+    if (exclude?.has(index.id) === true) continue;
     if (index.cwd === null || path.resolve(index.cwd) !== cwd) continue;
     if (index.startedAt === null) continue;
     const at = Date.parse(index.startedAt);

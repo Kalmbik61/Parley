@@ -167,6 +167,54 @@ describe('логи подагентов и внутренних тредов н�
   });
 });
 
+describe('лог, уже занятый другой сессией карты, своим не берётся', () => {
+  // Две сессии codex в одном каталоге, запущены с разницей в три секунды: лог первой (10:00:01) попадает в допуск
+  // пяти секунд второй (старт 10:00:03) и раньше её собственного (10:00:04) — «самый ранний» отдавал ей чужой лог.
+  const SECOND_START = '2026-03-12T10:00:03.000Z';
+  const FIRST_THREAD = THREAD;
+  const SECOND_THREAD = SUBAGENT;
+
+  const bothLogs = async (): Promise<void> => {
+    await writeLog(`rollout-2026-03-12T10-00-01-${FIRST_THREAD}.jsonl`, FIRST_THREAD, '2026-03-12T10:00:01.000Z', {
+      source: 'cli',
+    });
+    await writeLog(`rollout-2026-03-12T10-00-04-${SECOND_THREAD}.jsonl`, SECOND_THREAD, '2026-03-12T10:00:04.000Z', {
+      source: 'cli',
+    });
+  };
+
+  const linkSecond = (exclude?: ReadonlySet<string>): Promise<string | null> =>
+    linkProviderSession(
+      PROVIDERS.codex,
+      { cwd: CWD, startedAt: SECOND_START },
+      { codexRoot: root, ...(exclude === undefined ? {} : { exclude }) },
+    );
+
+  it('без списка занятых — прежнее поведение: самый ранний подходящий лог', async () => {
+    await bothLogs();
+    expect(await linkSecond()).toBe(FIRST_THREAD);
+  });
+
+  it('id первой сессии в списке занятых — вторая получает свой лог', async () => {
+    await bothLogs();
+    expect(await linkSecond(new Set([FIRST_THREAD]))).toBe(SECOND_THREAD);
+  });
+
+  it('единственный подходящий лог занят — привязки нет, а не чужой лог', async () => {
+    await writeLog(`rollout-2026-03-12T10-00-01-${FIRST_THREAD}.jsonl`, FIRST_THREAD, '2026-03-12T10:00:01.000Z', {
+      source: 'cli',
+    });
+    expect(await linkSecond(new Set([FIRST_THREAD]))).toBeNull();
+  });
+
+  it('занятым считается и id из session_meta, когда имя файла на thread не похоже', async () => {
+    await writeLog('rollout-2026-03-12T10-00-01-произвольное-имя.jsonl', FIRST_THREAD, '2026-03-12T10:00:01.000Z', {
+      source: 'cli',
+    });
+    expect(await linkSecond(new Set([FIRST_THREAD]))).toBeNull();
+  });
+});
+
 describe('индекс лога Codex помечает порождённые треды', () => {
   it('spawned — только у подагента, внутреннего треда и неинтерактивного запуска', async () => {
     const at = '2026-03-12T10:00:00.000Z';

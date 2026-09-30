@@ -36,7 +36,7 @@ const CODEX_TUI_ARGS = [
   '-c',
   'tui.notification_condition="always"',
 ];
-/** Всё, что codex получает без единой подстановки. */
+/** Всё, что codex получает при запуске без единой подстановки. */
 const CODEX_STATIC_ARGS = ['--no-daemon', '-a', 'on-request', ...CODEX_TUI_ARGS];
 
 describe('реестр провайдеров', () => {
@@ -48,9 +48,11 @@ describe('реестр провайдеров', () => {
   });
 
   it('codex возобновляет сессию подкомандой resume', () => {
+    // Только `-c`: `--no-daemon` и `-a` после `resume <id>` не проверены на живом Codex, а спека говорит «те же
+    // `-c»; тред хранит политику одобрений, любой `-c` держит запуск встроенным.
     expect(resumeCommand(PROVIDERS.codex, { providerSessionId: 'uuid-1' })).toEqual({
       command: 'codex',
-      args: ['resume', 'uuid-1', ...CODEX_STATIC_ARGS],
+      args: ['resume', 'uuid-1', ...CODEX_TUI_ARGS],
     });
   });
 
@@ -358,16 +360,7 @@ describe('модель и усилие новой сессии (дизайн к�
         model: 'gpt-5.5',
         effort: 'low',
       }).args,
-    ).toEqual([
-      'resume',
-      'uuid-1',
-      '--no-daemon',
-      '-a',
-      'on-request',
-      '-c',
-      'mcp_servers.harnas={}',
-      ...CODEX_TUI_ARGS,
-    ]);
+    ).toEqual(['resume', 'uuid-1', '-c', 'mcp_servers.harnas={}', ...CODEX_TUI_ARGS]);
   });
 
   it('glm флагов не знает: выбор молча отбрасывается', () => {
@@ -909,9 +902,6 @@ describe('codex: запуск и возобновление (спека комн
       args: [
         'resume',
         '019ce3d5-584a-7be2-922e-b8185a8d7c19',
-        '--no-daemon',
-        '-a',
-        'on-request',
         '-c',
         subs.mcpConfig,
         '-c',
@@ -980,13 +970,35 @@ describe('codex: запуск и возобновление (спека комн
     }
   });
 
-  it('политика одобрений — явно on-request, а обходов нет ни в запуске, ни в resume', () => {
+  it('resume несёт только -c: ни --no-daemon, ни -a после `resume <id>` (не проверено на живом Codex)', () => {
+    const args = resumeCommand(PROVIDERS.codex, {
+      ...subs,
+      providerSessionId: 'uuid-1',
+      prompt: 'Новые письма (1). Вызови check_inbox.',
+    }).args;
+    expect(args.slice(0, 2)).toEqual(['resume', 'uuid-1']);
+    expect(args.at(-1)).toBe('Новые письма (1). Вызови check_inbox.');
+    // Всё между `resume <id>` и промптом — пары `-c <значение>`, других флагов нет.
+    const flags = args.slice(2, -1);
+    expect(flags.length % 2).toBe(0);
+    flags.forEach((arg, index) => {
+      if (index % 2 === 0) expect(arg).toBe('-c');
+    });
+    expect(args).not.toContain('--no-daemon');
+    expect(args).not.toContain('-a');
+    // Шаблон реестра — то же самое.
+    expect(PROVIDERS.codex.runner.resumeArgs).not.toContain('--no-daemon');
+    expect(PROVIDERS.codex.runner.resumeArgs).not.toContain('-a');
+  });
+
+  it('политика одобрений — явно on-request при запуске, а обходов нет ни в запуске, ни в resume', () => {
+    const launched = startCommand(PROVIDERS.codex, subs).args;
+    expect(launched[launched.indexOf('-a') + 1]).toBe('on-request');
+    expect(launched).toContain('--no-daemon');
     for (const args of [
-      startCommand(PROVIDERS.codex, subs).args,
+      launched,
       resumeCommand(PROVIDERS.codex, { ...subs, providerSessionId: 'uuid-1' }).args,
     ]) {
-      expect(args[args.indexOf('-a') + 1]).toBe('on-request');
-      expect(args).toContain('--no-daemon');
       const line = args.join(' ');
       // Вызовы `harnas` при `never` отклоняются, а остальное — самовыдача прав или доверия.
       for (const forbidden of [
