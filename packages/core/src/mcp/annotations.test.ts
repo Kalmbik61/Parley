@@ -9,7 +9,7 @@ import { DEFAULT_CONFIG } from '../config.js';
 import { addMessage, addSession } from '../work/map.js';
 import { addRoom } from '../work/rooms.js';
 import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
-import type { WorkMap } from '../work/types.js';
+import { HUMAN, type WorkMap } from '../work/types.js';
 import { createHarnasServer } from './tools.js';
 
 /**
@@ -17,7 +17,8 @@ import { createHarnasServer } from './tools.js';
  * человека перед вызовом: без аннотаций он спросил бы перед каждым (незаданные `destructiveHint` и
  * `openWorldHint` считаются истиной), а с `readOnlyHint: true` не спрашивает вовсе. Поэтому
  * аннотация — обещание клиенту, и тесты проверяют не только таблицу, но и что она правда: чтения
- * ничего не пишут на диск, записи пишут, и ничего, кроме `close_session`, не уничтожает записи карты.
+ * ничего не пишут на диск, записи пишут, но не удаляют из карты ни сессий, ни комнат, ни писем и не
+ * закрывают сессий — это делает только `close_session`.
  */
 
 interface Hints {
@@ -28,7 +29,7 @@ interface Hints {
 
 /** Чтения: карта, лента, гид, ожидание — ничего не меняют. */
 const READ: Hints = { readOnlyHint: true };
-/** Записи в карту, комнаты и письма: только добавляют своё, наружу карты не выходят. */
+/** Записи в карту, комнаты и письма: сессий, комнат и писем не удаляют, наружу карты не выходят. */
 const WRITE: Hints = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
 /** Закрытие сессии насовсем — единственное разрушающее действие. */
 const DESTROY: Hints = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
@@ -248,6 +249,35 @@ describe('аннотации инструментов harnas: правда по 
     expect(
       after.sessions.filter((session) => session.lifecycle === 'closed').map((session) => session.id),
     ).toEqual([]);
+  });
+
+  it('add_to_room уводит сессию из прежней комнаты: та остаётся с письмами и участниками, а lead и creator уходят с сессией', async () => {
+    // r-02 создала и ведёт s-03, в ней ещё s-04; ведущий r-01 s-01 зовёт s-03 к себе.
+    await updateMap(project, workId, (current) => {
+      addSession(current, { provider: 'claude', label: 'ревью', task: 'ревью', parent: 's-01' });
+      addRoom(current, { title: 'Прежняя', creator: 's-03', members: ['s-04'], lead: 's-03' });
+      addMessage(current, { from: 's-04', to: [], text: 'Начали', kind: 'note', roomId: 'r-02' });
+    });
+    const client = await connect();
+    const before = await readMap(project, workId);
+
+    await callOk(client, 'add_to_room', { room: 'r-01', session: 's-03' });
+
+    const after = await readMap(project, workId);
+    // Уход виден в записи прежней комнаты: s-03 больше не создатель и не ведущий, участник остался один.
+    expect(after.rooms.find((room) => room.id === 'r-02')).toMatchObject({
+      creator: HUMAN,
+      lead: null,
+      members: ['s-04'],
+    });
+    expect(after.rooms.find((room) => room.id === 'r-01')?.members).toEqual(['s-02', 's-03']);
+    // Но ни комната, ни её письма, ни другие участники не пропали: «не разрушает» держится и на этой границе.
+    for (const [kind, list] of Object.entries(ids(before))) {
+      expect(ids(after)[kind as keyof ReturnType<typeof ids>], kind).toEqual(expect.arrayContaining(list));
+    }
+    expect(
+      after.messages.filter((message) => message.roomId === 'r-02').map((message) => message.text),
+    ).toEqual(['Начали']);
   });
 
   it('close_session — единственный, что меняет судьбу сессии насовсем: она закрыта и писем не получает', async () => {
