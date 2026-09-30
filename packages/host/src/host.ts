@@ -43,6 +43,11 @@ export interface HostOptions {
    * не задаёт ничего — опрос раз в 30 секунд, логи в `~/.codex/sessions`; тесты и E2E окна — свои.
    */
   limits?: LimitsServiceOptions;
+  /**
+   * Срок экранов старта Codex, мс (спека комнат Organic, 3.6): не показал `Ready` и `Working` — сессия «нужен
+   * ты». Боевой хост не задаёт — 20 секунд; E2E окна сокращает его переменной `HARNAS_CODEX_STARTUP_MS`.
+   */
+  startupWaitMs?: number;
 }
 
 export interface RunningHost {
@@ -145,7 +150,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
   // Активность живёт поверх работ: точка статуса и строка метрик окна (1.5).
   // `pty.attach`/`pty.input` (1.6) зовут её `markSeen`.
-  const activityService = createActivityService(handle.context, worksService);
+  const activityService = createActivityService(handle.context, worksService, {
+    ...(options.startupWaitMs === undefined ? {} : { startupWaitMs: options.startupWaitMs }),
+  });
   handle.context.onShutdown(() => activityService.stop());
 
   // Живые PTY сессий (1.6). На остановке хоста добиваются вместе с ним —

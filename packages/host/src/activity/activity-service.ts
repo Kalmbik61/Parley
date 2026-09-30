@@ -102,6 +102,18 @@ const DEFAULT_TRUST_WAIT_MS = 20_000;
 const DEFAULT_STARTUP_WAIT_MS = 20_000;
 
 /**
+ * Рычаг E2E окна: `HARNAS_CODEX_STARTUP_MS` — срок экранов старта Codex в миллисекундах. Тест не может
+ * ждать двадцать секунд, пока сессия на экране доверия станет «нужен ты». Не число, меньше 100 мс или
+ * больше десяти минут — переменная игнорируется, срок остаётся по умолчанию.
+ */
+export function startupWaitFromEnv(env: NodeJS.ProcessEnv): number | undefined {
+  const raw = env['HARNAS_CODEX_STARTUP_MS']?.trim();
+  if (raw === undefined || raw === '') return undefined;
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 100 && value <= 600_000 ? value : undefined;
+}
+
+/**
  * Состояние сессии codex по его терминалу: последнее известное и когда. Живёт, пока жив процесс под
  * хостом, — сигналы прошлого процесса той же сессии не переносятся.
  */

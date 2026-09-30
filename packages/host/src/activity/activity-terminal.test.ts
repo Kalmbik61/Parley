@@ -22,7 +22,7 @@ import type { HostContext } from '../context.js';
 import type { CodexSignal } from '../pty/codex-terminal.js';
 import { createWorksService } from '../works/works-service.js';
 import type { WorksService } from '../works/works-service.js';
-import { createActivityService } from './activity-service.js';
+import { createActivityService, startupWaitFromEnv } from './activity-service.js';
 import type { ActivityService, ActivityServiceOptions } from './activity-service.js';
 
 let home = '';
@@ -438,4 +438,21 @@ describe('у codex нет хуков — предупреждений о них 
     await settle(300);
     expect(notices('hooks-missing')).toHaveLength(0);
   }, 20_000);
+});
+
+describe('startupWaitFromEnv — рычаг E2E', () => {
+  it('целое от 100 мс до десяти минут принимается', () => {
+    expect(startupWaitFromEnv({ HARNAS_CODEX_STARTUP_MS: '1500' })).toBe(1500);
+    expect(startupWaitFromEnv({ HARNAS_CODEX_STARTUP_MS: ' 100 ' })).toBe(100);
+    expect(startupWaitFromEnv({ HARNAS_CODEX_STARTUP_MS: '600000' })).toBe(600_000);
+  });
+
+  it('нет переменной, пустая, не число, дробная, слишком малая или большая — игнорируется', () => {
+    for (const value of [undefined, '', ' ', 'много', '1.5', '99', '600001', '-5']) {
+      expect(
+        startupWaitFromEnv(value === undefined ? {} : { HARNAS_CODEX_STARTUP_MS: value }),
+        String(value),
+      ).toBeUndefined();
+    }
+  });
 });
