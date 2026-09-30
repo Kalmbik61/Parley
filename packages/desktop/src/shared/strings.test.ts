@@ -15,7 +15,7 @@ const PROTOCOL_CODES: ErrorCode[] = [
   'internal',
 ];
 
-/** Все десять видов `NoticeKind` (`packages/protocol/src/types.ts`). */
+/** Все одиннадцать видов `NoticeKind` (`packages/protocol/src/types.ts`). */
 const NOTICE_KINDS: NoticeKind[] = [
   'map-lock',
   'map-corrupt',
@@ -26,6 +26,7 @@ const NOTICE_KINDS: NoticeKind[] = [
   'resume-failed',
   'resume-limit',
   'trust-wait',
+  'startup-wait',
   'skill-foreign',
 ];
 
@@ -185,6 +186,16 @@ describe('noticeText', () => {
     const text = noticeText(hostNotice('trust-wait', ref), 'S03 backend');
     expect(text).toBe('S03 backend: not responding since launch — may be waiting for folder trust.');
     expect(text).not.toMatch(CYRILLIC);
+  });
+
+  it('startup-wait — причина: Codex на экране входа или доверия, отвечать надо в его терминале', () => {
+    expect(noticeText(hostNotice('startup-wait'))).toBe(
+      'Waiting at startup — Codex may need sign-in or folder trust in its terminal.',
+    );
+    const ref = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-03' };
+    expect(noticeText(hostNotice('startup-wait', ref), 'S03 codex')).toBe(
+      'S03 codex: waiting at startup — Codex may need sign-in or folder trust in its terminal.',
+    );
   });
 
   it('skill-foreign (ref: null) — английский смысл: скилл не поставлен, путь чужой', () => {

@@ -35,14 +35,16 @@ export interface RunnerConfig {
    * настроек работы с хуками, `{systemPrompt}` — системная вставка гида,
    * `{channel}` — канал звонка, `{agent}` — роль, `{model}` и `{effort}` — выбор
    * из диалога окна (по `{model}` и `{effort}` в этом шаблоне окно узнаёт, что провайдер
-   * их принимает: `supportsModel`, `supportsEffort`), `{prompt}` — стартовый бриф.
+   * их принимает: `supportsModel`, `supportsEffort`), `{prompt}` — стартовый бриф,
+   * `{notify}` — `-c notify=[…]` Codex (скрипт харнесса, который после хода дописывает `Stop`
+   * в журнал событий сессии).
    * undefined — новая сессия запускается без аргументов.
    */
   args?: string[];
   /**
    * Аргументы для возобновления конкретной сессии. Подстановки:
    * `{providerSessionId}`, `{mcpConfig}`, `{settingsFile}`, `{systemPrompt}`,
-   * `{channel}`, `{agent}`, `{prompt}` — указатель на письма при подъёме
+   * `{channel}`, `{agent}`, `{notify}`, `{prompt}` — указатель на письма при подъёме
    * спящей сессии (спецификация окна 7.2).
    * Системный промпт в транскрипте не хранится, поэтому вставка гида идёт и
    * сюда. undefined — провайдер не умеет открывать сессию по идентификатору,
@@ -83,6 +85,50 @@ export interface ProviderEntry {
 export interface ProviderInfo extends Omit<ProviderEntry, 'id'> {
   id: Provider;
 }
+
+/**
+ * Настройки Codex, которые харнесс задаёт флагами `-c` (спека комнат Organic, 3.6) — и при запуске, и при
+ * `resume`. Только своими `-c` в своих сессиях: личный конфиг человека в домашней папке Codex не читается и
+ * не пишется, его `notify` в этих сессиях не зовётся.
+ * - `mcp_servers.harnas` — сервер координации (`{mcpConfig}`);
+ * - `tui.terminal_title` — состояние в заголовке окна (OSC 0): спиннер идёт, пока агент работает,
+ *   `status` даёт `Ready` и `Working`, при вопросе человеку заголовок становится
+ *   `[ ! ] Action Required`; `session-id` — id треда;
+ * - `tui.notifications` (`approval-requested`, `agent-turn-complete`), способ `osc9` и условие
+ *   `always` — те же события уведомлениями терминала; по умолчанию они молчат, пока терминал «в фокусе»,
+ *   а для Codex в pty хоста фокус всегда «есть»;
+ * - `notify` — конец хода скриптом харнесса (`{notify}`).
+ * Хуки Codex не включаются (`hooks.*`): им нужно ревью человека, а доверие себе харнесс не выдаёт.
+ * Так же не выдаётся доверие к папке (`projects`): экран доверия проходит человек в терминале Codex.
+ */
+const CODEX_CONFIG_FLAGS: readonly string[] = [
+  '-c',
+  '{mcpConfig}',
+  '-c',
+  'tui.terminal_title=["spinner","status","session-id"]',
+  '-c',
+  'tui.notifications=["approval-requested","agent-turn-complete"]',
+  '-c',
+  'tui.notification_method="osc9"',
+  '-c',
+  'tui.notification_condition="always"',
+  '-c',
+  '{notify}',
+];
+
+/**
+ * Флаги запуска новой сессии Codex: `-c` (`CODEX_CONFIG_FLAGS`) и два флага сверх них.
+ * - `--no-daemon` — Codex с 0.157 по умолчанию идёт через общий фоновый демон, и тогда MCP-серверы и
+ *   уведомления были бы детьми демона с его окружением, без `HARNAS_*`. Любой `-c` и так держит
+ *   запуск «встроенным», флаг делает это явным;
+ * - `-a on-request` — вопросы одобрений идут человеку в терминал агента (это и умолчание Codex, но
+ *   личный конфиг человека мог его сменить). `never` нельзя: вызов инструмента, требующий одобрения,
+ *   при нём отклоняется — сервер `harnas` перестал бы работать.
+ * При `resume` их нет: спека говорит «те же `-c`», принимает ли `resume` эти флаги после id, на живом Codex
+ * не проверено (отказ разбора флагов провалил бы каждый подъём спящей сессии), а тред хранит политику
+ * одобрений и без них.
+ */
+const CODEX_HARNAS_FLAGS: readonly string[] = ['--no-daemon', '-a', 'on-request', ...CODEX_CONFIG_FLAGS];
 
 /**
  * Реестр провайдеров: где брать историю и чем запускать.
@@ -174,23 +220,25 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
       // глобальным `-c mcp_servers.harnas=<inline table>`, не трогая файл
       // пользователя. Файла-конфига MCP, как у claude, у codex нет.
       command: 'codex',
-      // Модель — `--model` (`-m`), усилие — переопределением конфига: выделенного флага у
-      // Codex нет, а ключ `model_reasoning_effort` есть в справочнике конфига. `-c key=value`
-      // разбирает значение как TOML (справочник CLI Codex, флаг `--config`), поэтому строка
-      // в кавычках; так же передаёт усилие SDK самого Codex (openai/codex,
-      // sdk/typescript/src/exec.ts). Как и у claude, без выбора обе пары выпадают, а при
-      // `resume` не передаются.
+      // Свои настройки сессии — `CODEX_HARNAS_FLAGS`. Модель — `--model` (`-m`), усилие —
+      // переопределением конфига: выделенного флага у Codex нет, а ключ `model_reasoning_effort`
+      // есть в справочнике конфига. `-c key=value` разбирает значение как TOML (справочник CLI
+      // Codex, флаг `--config`), поэтому строка в кавычках; так же передаёт усилие SDK самого Codex
+      // (openai/codex, sdk/typescript/src/exec.ts). Как и у claude, без выбора обе пары выпадают, а
+      // при `resume` не передаются.
       args: [
-        '-c',
-        '{mcpConfig}',
+        ...CODEX_HARNAS_FLAGS,
         '--model',
         '{model}',
         '-c',
         'model_reasoning_effort="{effort}"',
         '{prompt}',
       ],
-      // `codex resume <SESSION_ID>` — id или имя сессии, см. CLI самого Codex.
-      resumeArgs: ['resume', '{providerSessionId}', '-c', '{mcpConfig}'],
+      // `codex resume <SESSION_ID> [PROMPT]` — id или имя сессии, см. CLI самого Codex. Те же `-c`, что у
+      // запуска (`-c mcp_servers` в тред не сохраняется, `notify` и заголовок тоже), а `--no-daemon` и
+      // `-a` — только у запуска. Модель, усилие и политику одобрений Codex восстанавливает из треда сам.
+      // Указатель на письма — позиционным промптом последним: первым ходом поднятой сессии.
+      resumeArgs: ['resume', '{providerSessionId}', ...CODEX_CONFIG_FLAGS, '{prompt}'],
       mcpConfig: 'codex-override',
     },
   },
@@ -234,6 +282,8 @@ export interface RunnerSubstitutions {
   channel?: string;
   /** Имя роли для `claude --agent` (спецификация 2026-09-08, 4.4). */
   agent?: string;
+  /** Значение `-c notify=[…]` Codex: скрипт харнесса, который пишет конец хода в журнал событий. */
+  notify?: string;
   /** Модель новой сессии из диалога окна: `--model` у claude и codex. */
   model?: string;
   /**
@@ -244,7 +294,7 @@ export interface RunnerSubstitutions {
 }
 
 const PLACEHOLDER =
-  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|prompt|providerSessionId|channel|agent|model|effort)\}$/;
+  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|prompt|providerSessionId|channel|agent|notify|model|effort)\}$/;
 
 /**
  * Усилие можно подставить и внутрь строки шаблона (`model_reasoning_effort="{effort}"`):

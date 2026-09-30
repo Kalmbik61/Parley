@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { EventData, EventName, SessionRef } from '@harnas/protocol';
 import type { HostContext } from '../context.js';
+import type { CodexSignal } from './codex-terminal.js';
 import { createPtyManager } from './pty-manager.js';
 import type { ExitInfo, PtyLaunch } from './pty-process.js';
 
@@ -374,6 +375,131 @@ describe('PtyManager: черновик хоста (кусок 5.1)', () => {
     await manager.stop(sessionRef, { graceMs: 200 });
     manager.start(sessionRef, launch());
     expect(manager.get(sessionRef)?.hasDraft()).toBe(false);
+    await manager.stop(sessionRef, { graceMs: 200 });
+  });
+});
+
+const CODEX_STUB = fileURLToPath(new URL('../../test/stub-codex.mjs', import.meta.url));
+
+/** Запуск заглушки codex: `provider` включает разбор терминала, остальное — как у любого агента. */
+function codexLaunch(env: NodeJS.ProcessEnv = {}, provider?: string): PtyLaunch {
+  return {
+    command: process.execPath,
+    args: [CODEX_STUB],
+    cwd: process.cwd(),
+    env: { ...process.env, ...env },
+    ...(provider === undefined ? {} : { provider }),
+  };
+}
+
+describe('PtyManager: сигналы терминала codex (спека комнат, 3.6)', () => {
+  const kinds = (signals: CodexSignal[]): string[] => signals.map((signal) => signal.kind);
+
+  it('ручка знает провайдера: codex — `codex`, без provider — null', async () => {
+    const manager = createPtyManager(fakeHost());
+    const codexRef = ref();
+    const plainRef = ref();
+    manager.start(codexRef, codexLaunch({}, 'codex'));
+    manager.start(plainRef, launch());
+
+    expect(manager.get(codexRef)?.provider).toBe('codex');
+    expect(manager.get(plainRef)?.provider).toBeNull();
+    await manager.stop(codexRef, { graceMs: 200 });
+    await manager.stop(plainRef, { graceMs: 200 });
+  });
+
+  it('заголовок и уведомление процесса приходят сигналами по порядку', async () => {
+    const manager = createPtyManager(fakeHost());
+    const sessionRef = ref();
+    const signals: CodexSignal[] = [];
+    manager.on('signal', (from, signal) => {
+      if (from.sessionId === sessionRef.sessionId) signals.push(signal);
+    });
+    manager.start(sessionRef, codexLaunch({}, 'codex'));
+
+    await waitFor(() => kinds(signals).includes('ready'));
+    manager.input(sessionRef, 'STUB_WORK\r');
+    await waitFor(() => kinds(signals).includes('working'));
+    manager.input(sessionRef, 'STUB_APPROVAL\r');
+    await waitFor(() => signals.some((signal) => signal.kind === 'needs-you'));
+    manager.input(sessionRef, 'STUB_READY\r');
+    await waitFor(() => kinds(signals).at(-1) === 'ready');
+
+    const list = kinds(signals);
+    expect(list[0]).toBe('ready');
+    expect(list.indexOf('working')).toBeGreaterThan(list.indexOf('ready'));
+    expect(signals).toContainEqual({ kind: 'needs-you', reason: 'approval-requested' });
+    expect(signals).toContainEqual({ kind: 'needs-you', reason: 'action-required' });
+    await manager.stop(sessionRef, { graceMs: 200 });
+  });
+
+  it('спиннер идёт кадр за кадром — сигналов working много, ready в конце один', async () => {
+    const manager = createPtyManager(fakeHost());
+    const sessionRef = ref();
+    const signals: CodexSignal[] = [];
+    manager.on('signal', (_from, signal) => signals.push(signal));
+    manager.start(sessionRef, codexLaunch({}, 'codex'));
+
+    await waitFor(() => kinds(signals).includes('ready'));
+    manager.input(sessionRef, 'STUB_WORK 300\r');
+    await waitFor(() => kinds(signals).filter((kind) => kind === 'ready').length === 2, 8000);
+
+    expect(kinds(signals).filter((kind) => kind === 'working').length).toBeGreaterThanOrEqual(3);
+    await manager.stop(sessionRef, { graceMs: 200 });
+  });
+
+  it('процесс без provider (claude) тот же поток не разбирается: сигналов нет', async () => {
+    const manager = createPtyManager(fakeHost());
+    const sessionRef = ref();
+    const signals: CodexSignal[] = [];
+    manager.on('signal', (_from, signal) => signals.push(signal));
+    manager.start(sessionRef, codexLaunch({}));
+
+    let stream = '';
+    manager.on('output', (_from, data) => {
+      stream += data;
+    });
+    await waitFor(() => stream.includes('\x1b]0;Ready'));
+    manager.input(sessionRef, 'STUB_WORK 100\r');
+    await waitFor(() => stream.includes('Working'));
+
+    expect(signals).toEqual([]);
+    await manager.stop(sessionRef, { graceMs: 200 });
+  });
+
+  it('слушатель, который бросает, поток не роняет: остальные слушатели и вывод живы', async () => {
+    const manager = createPtyManager(fakeHost());
+    const sessionRef = ref();
+    const signals: CodexSignal[] = [];
+    manager.on('signal', () => {
+      throw new Error('слушатель упал');
+    });
+    manager.on('signal', (_from, signal) => signals.push(signal));
+    let stream = '';
+    manager.on('output', (_from, data) => {
+      stream += data;
+    });
+    manager.start(sessionRef, codexLaunch({}, 'codex'));
+
+    await waitFor(() => kinds(signals).includes('ready'));
+    manager.input(sessionRef, 'STUB_WORK 60\r');
+    await waitFor(() => kinds(signals).includes('working'));
+    await waitFor(() => stream.includes('stub-codex готов'));
+    await manager.stop(sessionRef, { graceMs: 200 });
+  });
+
+  it('снятая подписка сигналов больше не получает', async () => {
+    const manager = createPtyManager(fakeHost());
+    const sessionRef = ref();
+    const seen: CodexSignal[] = [];
+    const off = manager.on('signal', (_from, signal) => seen.push(signal));
+    manager.start(sessionRef, codexLaunch({}, 'codex'));
+    await waitFor(() => seen.length > 0);
+    off();
+    const count = seen.length;
+    manager.input(sessionRef, 'STUB_WORK 60\r');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(seen.length).toBe(count);
     await manager.stop(sessionRef, { graceMs: 200 });
   });
 });

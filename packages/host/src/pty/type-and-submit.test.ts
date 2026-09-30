@@ -141,6 +141,44 @@ describe('typeAndSubmit', () => {
     expect(pty.hostDraftCalls).toEqual([true]);
   });
 
+  it('delayMs перекрывает enterDelayMs: у Codex пауза десятки миллисекунд, а не полсекунды', async () => {
+    const attempt = typeAndSubmit(deps(), ref, 'текст', true, { delayMs: 60 });
+    await vi.advanceTimersByTimeAsync(59);
+    expect(pty.writes).toEqual(['текст']);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(attempt.done).resolves.toBe('submitted');
+    expect(pty.writes).toEqual(['текст', '\r']);
+  });
+
+  it('submitKey решает клавишу в момент отправки, а не при вставке: Tab занятому агенту (очередь)', async () => {
+    let key = '\r';
+    const attempt = typeAndSubmit(deps(), ref, 'текст', true, { submitKey: () => key });
+    // Агент занялся за паузу — Enter вмешался бы в ход, уходит Tab.
+    key = '\t';
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(attempt.done).resolves.toBe('submitted');
+    expect(pty.writes).toEqual(['текст', '\t']);
+  });
+
+  it('без submitKey клавиша прежняя — Enter', async () => {
+    const attempt = typeAndSubmit(deps(), ref, 'текст', true, { hostDraft: true });
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(attempt.done).resolves.toBe('submitted');
+    expect(pty.writes).toEqual(['текст', '\r']);
+    // Отправка клавишей, какой бы она ни была, снимает черновик хоста: поле после неё пусто.
+    expect(pty.hostDraftCalls).toEqual([true, false]);
+  });
+
+  it('с Tab черновик хоста снимается так же: сообщение ушло в очередь, поле пусто', async () => {
+    const attempt = typeAndSubmit(deps(), ref, 'текст', true, {
+      hostDraft: true,
+      submitKey: () => '\t',
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(attempt.done).resolves.toBe('submitted');
+    expect(pty.hostDraftCalls).toEqual([true, false]);
+  });
+
   it('свои таймеры из deps', async () => {
     const setTimer = vi.fn(setTimeout);
     const attempt = typeAndSubmit({ ...deps(), setTimer: setTimer as unknown as typeof setTimeout }, ref, 'x', true);

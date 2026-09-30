@@ -1,3 +1,4 @@
+import { startupWaitFromEnv } from './activity/activity-service.js';
 import { HostAlreadyRunning, SocketPathTooLong, startHost } from './host.js';
 import { limitsOptionsFromEnv } from './limits/limits-service.js';
 import { probeCliVersion } from './providers/versions.js';
@@ -11,10 +12,13 @@ async function main(): Promise<number> {
   // Лимиты подписок хост перечитывает раз в 30 секунд (спека комнат Organic, 3.5). Переменная нужна
   // только E2E окна: ждать полминуты, пока в строке статуса появятся числа, тест не может.
   const limits = limitsOptionsFromEnv(process.env);
+  // Срок экранов старта Codex — тоже рычаг E2E: ждать двадцать секунд экрана доверия тест не может.
+  const startupWaitMs = startupWaitFromEnv(process.env);
   const options = {
     ...(envIdleMs ? { idleMs: Number(envIdleMs) } : {}),
     ...(probeVersions ? { probeVersion: probeCliVersion } : {}),
     ...(limits === undefined ? {} : { limits }),
+    ...(startupWaitMs === undefined ? {} : { startupWaitMs }),
   };
   try {
     const running = await startHost(options);

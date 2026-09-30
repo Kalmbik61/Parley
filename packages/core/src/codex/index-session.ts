@@ -53,6 +53,22 @@ function firstContentText(payload: RawRecord): string | null {
 }
 
 /**
+ * `session_meta` порождённого треда: подагента, внутреннего треда или неинтерактивного запуска.
+ * Признаки — заданный `parent_thread_id` и `source`, отличный от `cli` (`"exec"`, `{"subagent": …}`,
+ * `{"internal": …}`; `codex-rs/protocol/src/protocol.rs`). Лога без `source` (Codex до появления поля)
+ * это не касается: пустого значения мало, чтобы записать тред в порождённые, и старая привязка по
+ * cwd и времени для него остаётся.
+ */
+function isSpawnedMeta(payload: RawRecord): boolean {
+  const parent = payload['parent_thread_id'];
+  if (typeof parent === 'string' ? parent !== '' : parent !== undefined && parent !== null) {
+    return true;
+  }
+  const source = payload['source'];
+  return source !== undefined && source !== null && source !== 'cli';
+}
+
+/**
  * Индексирует один rollout-лог Codex в общую модель SessionIndex.
  *
  * Формат другой во всём (см. specs/runners.md): вся мета в одной записи
@@ -75,6 +91,7 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
   let firstUserMessage: string | null = null;
   let lastUserRecordAt: string | null = null;
   let tokens: TokenTotals | null = null;
+  let spawned = false;
 
   const stats = await forEachJsonlRecord(file, (raw) => {
     const type = str(raw, 'type');
@@ -96,6 +113,7 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
         cwd ??= str(payload, 'cwd');
         version ??= str(payload, 'cli_version');
         gitBranch ??= str(asRecord(payload['git']), 'branch');
+        spawned ||= isSpawnedMeta(payload);
         break;
       }
 
@@ -168,6 +186,7 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
     subsessionCount: 0,
     tokens,
     provider: 'codex',
+    ...(spawned ? { spawned: true } : {}),
   };
 }
 

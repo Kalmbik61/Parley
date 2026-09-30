@@ -28,6 +28,12 @@ export interface DeliveryInput {
    * знает, что на экране: свежая сессия может стоять на вопросе доверия к папке (fix-final-b).
    */
   hooked: boolean;
+  /**
+   * Провайдер принимает письмо занятому агенту в очередь на следующий ход (Codex: Tab, а не Enter,
+   * который вмешался бы в идущий ход — спека комнат, 3.6): тогда `working` не мешает указателю, а
+   * `blocked` мешает по-прежнему. Не задан — как у Claude Code: указатель ждёт конца хода.
+   */
+  queueWhileBusy?: boolean;
 }
 
 export type DeliveryAction =
@@ -45,7 +51,13 @@ export type DeliveryAction =
         | 'in-flight'
         | 'no-hooks';
     }
-  | { kind: 'type-pointer'; text: string; letterIds: string[] }
+  | {
+      kind: 'type-pointer';
+      text: string;
+      letterIds: string[];
+      /** Агент занят: указатель уходит в очередь (`queueWhileBusy`), а не Enter-ом в его ход. */
+      queue?: true;
+    }
   | { kind: 'resume'; text: string; letterIds: string[] };
 
 /**
@@ -77,8 +89,19 @@ export function pointerText(letters: readonly Message[], rooms: readonly Room[])
  * к уже удалённой сессии (`deleted`) в счёт не идут — сама доставка их не читает.
  */
 export function deliveryAction(input: DeliveryInput): DeliveryAction {
-  const { session, activity, hasDraft, paused, unread, rooms, pointed, inFlight, resumeAllowed, hooked } =
-    input;
+  const {
+    session,
+    activity,
+    hasDraft,
+    paused,
+    unread,
+    rooms,
+    pointed,
+    inFlight,
+    resumeAllowed,
+    hooked,
+    queueWhileBusy,
+  } = input;
 
   if (paused) return { kind: 'none', reason: 'paused' };
   // Закрытая писем не получает вовсе (спецификация 7.1) — сколько бы их ни было.
@@ -104,7 +127,12 @@ export function deliveryAction(input: DeliveryInput): DeliveryAction {
   // Без единого хука с запуска `idle` ничего не значит: агент может ждать ответа на вопрос
   // доверия к папке, и Enter указателя его подтвердил бы (рамка 15.1).
   if (!hooked) return { kind: 'none', reason: 'no-hooks' };
-  if (activity === null || (activity.activity !== 'unseen' && activity.activity !== 'idle')) {
+  // Занятому агенту Codex письмо ставится в очередь; `blocked` (вопрос человеку) и неизвестное — по-прежнему busy.
+  const queue = queueWhileBusy === true && activity?.activity === 'working';
+  if (
+    activity === null ||
+    (activity.activity !== 'unseen' && activity.activity !== 'idle' && !queue)
+  ) {
     return { kind: 'none', reason: 'busy' };
   }
   if (hasDraft) return { kind: 'none', reason: 'draft' };
@@ -114,5 +142,6 @@ export function deliveryAction(input: DeliveryInput): DeliveryAction {
     kind: 'type-pointer',
     text: pointerText(letters, rooms),
     letterIds: letters.map((message) => message.id),
+    ...(queue ? { queue: true as const } : {}),
   };
 }

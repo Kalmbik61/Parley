@@ -309,6 +309,43 @@ describe('create(): модель и усилие из диалога (дизай
     expect(argv).toContain('model_reasoning_effort="medium"');
   });
 
+  it('codex: итоговые флаги запуска — свои настройки харнесса, без обходов', async () => {
+    setEnv('HARNAS_CODEX_BIN', STUB);
+    const argv = await launched('codex', {});
+
+    // Не считая бинаря и скрипта заглушки: то, что получил бы настоящий codex.
+    const args = argv.slice(2);
+    expect(args.slice(0, 3)).toEqual(['--no-daemon', '-a', 'on-request']);
+    const overrides = args.flatMap((arg, index) => (args[index - 1] === '-c' ? [arg] : []));
+    expect(overrides.map((override) => override.split('=')[0])).toEqual([
+      'mcp_servers.harnas',
+      'tui.terminal_title',
+      'tui.notifications',
+      'tui.notification_method',
+      'tui.notification_condition',
+      'notify',
+    ]);
+    expect(args.join(' ')).not.toMatch(/never|dangerous|yolo|full-auto|danger-full|projects|hooks/);
+  });
+
+  it('процесс стартует с provider из карты: codex — для разбора терминала, claude — без него', async () => {
+    setEnv('HARNAS_CODEX_BIN', STUB);
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const pty = createPtyManager(fakeHost());
+    const service = createSessionsService(fakeHost(), fakeWorks(), pty, fakeActivity());
+    const create = (provider: string) =>
+      service.create({ projectPath: project, workId: work.work.id, provider, label: '', task: '', parent: null });
+
+    const codex = await create('codex');
+    const claude = await create('claude');
+    expect(pty.get(codex)?.provider).toBe('codex');
+    expect(pty.get(claude)?.provider).toBe('claude');
+
+    await service.stop(codex);
+    await service.stop(claude);
+  });
+
   it('claude: значение списка со скобками доезжает до команды как есть, одним аргументом', async () => {
     const argv = await launched('claude', { model: 'sonnet[1m]' });
 

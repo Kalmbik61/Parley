@@ -16,6 +16,7 @@ import { HOST_ERROR_REASONS } from '@harnas/protocol';
 import { createHostHandlers } from './methods/index.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
+import { linkTerminalActivity } from './activity/terminal-link.js';
 import { createLimitsService } from './limits/limits-service.js';
 import type { LimitsServiceOptions } from './limits/limits-service.js';
 import { startProviderVersions } from './providers/versions.js';
@@ -42,6 +43,11 @@ export interface HostOptions {
    * не задаёт ничего — опрос раз в 30 секунд, логи в `~/.codex/sessions`; тесты и E2E окна — свои.
    */
   limits?: LimitsServiceOptions;
+  /**
+   * Срок экранов старта Codex, мс (спека комнат Organic, 3.6): не показал `Ready` и `Working` — сессия «нужен
+   * ты». Боевой хост не задаёт — 20 секунд; E2E окна сокращает его переменной `HARNAS_CODEX_STARTUP_MS`.
+   */
+  startupWaitMs?: number;
 }
 
 export interface RunningHost {
@@ -144,12 +150,19 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
   // Активность живёт поверх работ: точка статуса и строка метрик окна (1.5).
   // `pty.attach`/`pty.input` (1.6) зовут её `markSeen`.
-  const activityService = createActivityService(handle.context, worksService);
+  const activityService = createActivityService(handle.context, worksService, {
+    ...(options.startupWaitMs === undefined ? {} : { startupWaitMs: options.startupWaitMs }),
+  });
   handle.context.onShutdown(() => activityService.stop());
 
   // Живые PTY сессий (1.6). На остановке хоста добиваются вместе с ним —
   // иначе процесс агента остаётся сиротой без хоста, который бы его закрыл.
   const ptyManager = createPtyManager(handle.context);
+
+  // Состояние сессий codex — по потоку их терминала, а не по хукам (спека комнат Organic, 3.6): менеджер PTY
+  // разбирает заголовок окна и уведомления, сервис активности выводит из них состояние.
+  const unlinkTerminal = linkTerminalActivity(ptyManager, activityService);
+  handle.context.onShutdown(async () => unlinkTerminal());
 
   // Создание, запуск и автозапуск сессий (1.7). На остановке хоста гасит все
   // живые PTY сам — той же дорогой, что и явный `sessions.stop`.

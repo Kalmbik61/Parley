@@ -23,6 +23,7 @@ import {
   unreadFor,
   watchEvents,
   workPaths,
+  type Activity,
   type ActivityLog,
   type EventRecord,
   type EventsLog,
@@ -41,6 +42,7 @@ import {
   type WorksSnapshot,
 } from '@harnas/protocol';
 import type { HostContext } from '../context.js';
+import type { CodexSignal } from '../pty/codex-terminal.js';
 import type { WorksService } from '../works/works-service.js';
 import { createLogIndex, type LogIndex } from './log-index.js';
 
@@ -59,6 +61,11 @@ export interface ActivityServiceOptions extends MetricsRoots {
   silenceThresholdMs?: number;
   /** Сессия в worktree без единого хука дольше этого срока — `trust-wait` (спека 8.2, план 4.2). */
   trustWaitMs?: number;
+  /**
+   * Codex не показал ни `Ready`, ни `Working` за этот срок после запуска процесса — он стоит на экране
+   * входа или доверия к папке, и сессии «нужен ты» (спека комнат, 3.6, «Экраны старта»).
+   */
+  startupWaitMs?: number;
   now?: () => number;
 }
 
@@ -70,6 +77,15 @@ export interface ActivityService {
   onChange(listener: (ref: SessionRef, value: SessionLive) => void): () => void;
   /** Текущая активность всех сессий, которые держит сервис, — повтор для нового клиента. */
   current(): Array<EventData<'activity.changed'>>;
+  /**
+   * Состояние сессии codex по его терминалу, а не по хукам (спека комнат, 3.6): хуков Codex харнесс не
+   * включает. Запущен процесс — прежние сигналы забыты и идёт срок экранов старта.
+   */
+  terminalStarted(ref: SessionRef): void;
+  /** Сигнал терминала Codex (`pty/codex-terminal.ts`): заголовок окна или уведомление OSC 9. */
+  terminalSignal(ref: SessionRef, signal: CodexSignal): void;
+  /** Процесс вышел: состояние по терминалу больше не действует, сессия снова читается по журналу и логу. */
+  terminalStopped(ref: SessionRef): void;
   stop(): Promise<void>;
 }
 
@@ -77,6 +93,85 @@ const workKeyOf = (projectPath: string, workId: string): string => `${projectPat
 
 /** Спека 8.2: доверие к папке worktree подтверждают руками, и хук может не прийти вовсе. */
 const DEFAULT_TRUST_WAIT_MS = 20_000;
+
+/**
+ * Экраны старта Codex (вход, доверие к папке, миграция модели) проходит человек, а Codex до них не
+ * пишет ни заголовка `Ready`, ни `Working`. 20 секунд — с запасом на холодный старт и на MCP-сервер
+ * (`startup_timeout_sec` у него 30, но заголовок не ждёт сервера); ложная тревога стоит человеку одного
+ * взгляда в терминал, а не тревога — сессии, которая молча ждёт входа.
+ */
+const DEFAULT_STARTUP_WAIT_MS = 20_000;
+
+/**
+ * Рычаг E2E окна: `HARNAS_CODEX_STARTUP_MS` — срок экранов старта Codex в миллисекундах. Тест не может
+ * ждать двадцать секунд, пока сессия на экране доверия станет «нужен ты». Не число, меньше 100 мс или
+ * больше десяти минут — переменная игнорируется, срок остаётся по умолчанию.
+ */
+export function startupWaitFromEnv(env: NodeJS.ProcessEnv): number | undefined {
+  const raw = env['HARNAS_CODEX_STARTUP_MS']?.trim();
+  if (raw === undefined || raw === '') return undefined;
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 100 && value <= 600_000 ? value : undefined;
+}
+
+/**
+ * Состояние сессии codex по его терминалу: последнее известное и когда. Живёт, пока жив процесс под
+ * хостом, — сигналы прошлого процесса той же сессии не переносятся.
+ */
+interface TerminalState {
+  /** Последнее известное состояние как событие журнала; `null` — с запуска не было ни одного известного. */
+  last: EventRecord | null;
+  /** Срок экранов старта: сработает, если `last` так и останется `null`. */
+  startupTimer: NodeJS.Timeout | undefined;
+  /**
+   * С запуска процесса был хоть один сигнал хода: работа, вопрос человеку или конец хода. До него `Ready`
+   * — приглашение у ещё не начатой сессии, а не конец хода.
+   */
+  turnSeen: boolean;
+}
+
+/**
+ * Первый `Ready` с запуска: агент у приглашения, ни один ход не кончался. `activityOf` такое событие
+ * пропускает (фазу не меняет), но `lastEventAt` учитывает — хост «в курсе», и отправка из окна с
+ * будильником разрешены. Иначе свежая сессия, поднятая в фоне (autoLaunch, `spawn_session`), стала бы
+ * `unseen` и дала ложное «finished» ещё до первого хода. У свежей сессии Claude состояние тоже `idle`.
+ */
+const TERMINAL_READY_EVENT = 'TerminalReady';
+
+/**
+ * Событие журнала, которым `activityOf` читает сигнал терминала: те же имена, что у хуков Claude Code, а
+ * первый `Ready` с запуска — нейтральное (`TERMINAL_READY_EVENT`).
+ */
+const eventNameOf = (signal: CodexSignal, turnSeen: boolean): string | null => {
+  switch (signal.kind) {
+    case 'working':
+      return 'UserPromptSubmit';
+    case 'ready':
+      return turnSeen ? 'Stop' : TERMINAL_READY_EVENT;
+    case 'turn-complete':
+      return 'Stop';
+    case 'needs-you':
+      return 'PermissionRequest';
+    default:
+      return null;
+  }
+};
+
+/**
+ * Согласно ли выведенное состояние с последним сигналом терминала. Расходятся они, когда в свёртку
+ * вмешалось чужое событие новее сигнала: `Stop` от notify с временем файла позже последнего кадра
+ * спиннера или мигания `Action Required`. Следующий сигнал того же вида такое расхождение чинит.
+ */
+const agreesWith = (derived: Activity | undefined, signal: CodexSignal): boolean => {
+  switch (signal.kind) {
+    case 'working':
+      return derived === 'working';
+    case 'needs-you':
+      return derived === 'blocked';
+    default:
+      return derived !== undefined && derived !== 'working' && derived !== 'blocked';
+  }
+};
 
 interface WorkWatch {
   journal: EventsLog;
@@ -96,6 +191,7 @@ export function createActivityService(
   const nowFn = options.now ?? Date.now;
   let silenceThresholdMs = options.silenceThresholdMs ?? 30_000;
   const trustWaitMs = options.trustWaitMs ?? DEFAULT_TRUST_WAIT_MS;
+  const startupWaitMs = options.startupWaitMs ?? DEFAULT_STARTUP_WAIT_MS;
 
   const logIndex: LogIndex = createLogIndex(roots);
   const live = new Map<string, SessionLive>();
@@ -107,6 +203,7 @@ export function createActivityService(
   const trustWaitTimers = new Map<string, NodeJS.Timeout>();
   const trustWaitNotified = new Set<string>();
   const linkInFlight = new Set<string>();
+  const terminals = new Map<string, TerminalState>();
   const workWatches = new Map<string, WorkWatch>();
   const listeners = new Set<(ref: SessionRef, value: SessionLive) => void>();
 
@@ -126,6 +223,36 @@ export function createActivityService(
     if (timer === undefined) return;
     clearTimeout(timer);
     trustWaitTimers.delete(key);
+  }
+
+  /** Забывает состояние терминала сессии и срок экранов старта. */
+  function clearTerminal(key: string): void {
+    const state = terminals.get(key);
+    if (state === undefined) return;
+    if (state.startupTimer !== undefined) clearTimeout(state.startupTimer);
+    terminals.delete(key);
+  }
+
+  /**
+   * События сессии для свёртки. У Claude Code — журнал хуков. У codex хуков нет: журнал `events/` пишет
+   * только скрипт `notify` (конец хода), поэтому его отсутствие не поломка хуков, а к журналу добавляется
+   * последнее известное состояние терминала — по времени, как если бы это был хук. Сессия codex — и та,
+   * чей процесс под хостом (`terminals`), и та, что записана в карте как codex: снимок работ мог отстать
+   * от `applyChoice`, а запуск уже знает провайдера точно.
+   */
+  function eventsFor(session: WorkSession, key: string): readonly EventRecord[] | null {
+    const journal = journals.get(key) ?? null;
+    const terminal = terminals.get(key);
+    if (terminal === undefined && session.provider !== 'codex') return journal;
+    const base = journal ?? [];
+    const last = terminal?.last;
+    if (last === null || last === undefined) return base;
+    // Журнал идёт в порядке файла, а его время не убывает: терминальное событие встаёт после последнего
+    // не более позднего — конец хода от `notify`, пришедший позже сигнала следующего хода, его не перекроет.
+    const at = Date.parse(last.at);
+    let index = base.length;
+    while (index > 0 && Date.parse(base[index - 1]?.at ?? '') > at) index -= 1;
+    return [...base.slice(0, index), last, ...base.slice(index)];
   }
 
   /** Час икс тишины — либо уже прошёл (задержка 0), либо ставится единственный таймер. */
@@ -219,6 +346,8 @@ export function createActivityService(
     events: readonly EventRecord[] | null,
   ): void {
     if (session.launchedBy !== 'host' || session.lifecycle !== 'active') return;
+    // Хуков Codex харнесс не включает: их отсутствие у него — норма, состояние ведёт терминал.
+    if (terminals.has(key) || session.provider === 'codex') return;
     if (events !== null || hooksMissingNotified.has(key)) return;
     hooksMissingNotified.add(key);
     host.broadcast('host.notice', {
@@ -237,6 +366,11 @@ export function createActivityService(
    */
   function maybeTrustWait(ref: SessionRef, key: string, session: WorkSession): void {
     if (session.worktree === null || session.launchedBy !== 'host' || session.lifecycle !== 'active') {
+      clearTrustWaitTimer(key);
+      return;
+    }
+    // Экраны старта Codex ловит свой срок (`terminalStarted`): хуков у него не будет ни в одной папке.
+    if (terminals.has(key) || session.provider === 'codex') {
       clearTrustWaitTimer(key);
       return;
     }
@@ -264,6 +398,25 @@ export function createActivityService(
     );
   }
 
+  /**
+   * Codex не показал ни `Ready`, ни `Working` за `startupWaitMs` после запуска: он на экране входа или
+   * доверия к папке (спека комнат, 3.6). Проходит их человек, в терминале Codex, — сессия «нужен ты»,
+   * а причину называет уведомление хоста. Как только придёт известный сигнал, состояние заменится им.
+   */
+  function startupExpired(ref: SessionRef, key: string, state: TerminalState): void {
+    state.startupTimer = undefined;
+    if (stopped || terminals.get(key) !== state || state.last !== null) return;
+    const at = new Date(nowFn()).toISOString();
+    state.last = { at, name: 'PermissionRequest', notificationType: null };
+    host.broadcast('host.notice', {
+      kind: 'startup-wait',
+      ref,
+      text: `${sessionTag(ref.sessionId)} не показала статус с запуска — возможно, ждёт входа или доверия к папке в терминале Codex`,
+      at,
+    });
+    recompute(ref);
+  }
+
   function recompute(ref: SessionRef): void {
     if (stopped) return;
     const entry = works.entry(ref.projectPath, ref.workId);
@@ -271,20 +424,30 @@ export function createActivityService(
     if (entry === undefined || session === undefined) return;
 
     const key = refKey(ref);
-    const events = journals.get(key) ?? null;
-    const log = logIndex.log(session);
+    const events = eventsFor(session, key);
+    // Под хостом живёт процесс codex — состояние ведёт его терминал, а лог только мешал бы: запись
+    // конца хода (`task_complete`, `token_count`) новее события и вернула бы `working` на порог тишины
+    // после каждого хода. Процесс вышел — сессия снова читается по журналу и логу, как всякая спящая.
+    const driven = terminals.has(key);
+    const log = driven ? null : logIndex.log(session);
     const now = nowFn();
+    // Порог тишины у такой сессии не действует: заголовок Codex пишет не весь ход (личный
+    // `tui.animations=false`, долгий инструмент), а ложный конец хода — это «finished» в macOS и Enter
+    // вместо Tab в идущий ход. Выход процесса известен (`terminalStopped`), конец хода — сигнал терминала
+    // (`Ready`, OSC 9) или `Stop` от notify.
+    const threshold = driven ? Number.POSITIVE_INFINITY : silenceThresholdMs;
 
     // `seen` зависит от `turnEndedAt`, а он — результат самой свёртки: первый
     // проход узнаёт его, второй считает финальную `activity` (план, кусок 1.5).
-    const draft = activityOf({ events, log, seen: false, now, silenceThresholdMs });
+    const draft = activityOf({ events, log, seen: false, now, silenceThresholdMs: threshold });
     const seen = isSeen(seenAt.get(key), draft.turnEndedAt);
-    const activity = activityOf({ events, log, seen, now, silenceThresholdMs });
+    const activity = activityOf({ events, log, seen, now, silenceThresholdMs: threshold });
 
     const metrics = metricsFor(entry, session, activity, logIndex.index(session));
     const value: SessionLive = { activity, metrics };
 
-    scheduleSilenceTimer(ref, key, activity, log);
+    if (driven) clearSilenceTimer(key);
+    else scheduleSilenceTimer(ref, key, activity, log);
 
     const previous = live.get(key);
     live.set(key, value);
@@ -394,6 +557,7 @@ export function createActivityService(
     for (const key of Array.from(trustWaitNotified)) {
       if (!validSessions.has(key)) trustWaitNotified.delete(key);
     }
+    for (const [key] of Array.from(terminals)) if (!validSessions.has(key)) clearTerminal(key);
     for (const [key] of Array.from(silenceTimers)) if (!validSessions.has(key)) clearSilenceTimer(key);
     for (const [key] of Array.from(trustWaitTimers)) if (!validSessions.has(key)) clearTrustWaitTimer(key);
   }
@@ -444,6 +608,50 @@ export function createActivityService(
       handleWorksChange(works.snapshot());
     },
     get: (ref) => live.get(refKey(ref)),
+    terminalStarted(ref) {
+      if (stopped) return;
+      const key = refKey(ref);
+      // Новый процесс — своё состояние: сигналы прошлого (resume) к нему не относятся.
+      clearTerminal(key);
+      const state: TerminalState = { last: null, startupTimer: undefined, turnSeen: false };
+      state.startupTimer = setTimeout(() => startupExpired(ref, key, state), startupWaitMs);
+      terminals.set(key, state);
+      recompute(ref);
+    },
+    terminalSignal(ref, signal) {
+      if (stopped) return;
+      const key = refKey(ref);
+      const state = terminals.get(key);
+      if (state === undefined) return;
+      // Неизвестное состояния не меняет и «работает» не значит (спека комнат, 3.6).
+      const name = eventNameOf(signal, state.turnSeen);
+      if (name === null) return;
+      if (signal.kind !== 'ready') state.turnSeen = true;
+      const previous = state.last;
+      // Время обновляется на каждом сигнале, даже повторном: он новее любого `Stop` от notify, который
+      // журнал успел принять между кадрами, — так следующий кадр спиннера ставит терминальное событие
+      // после него.
+      state.last = { at: new Date(nowFn()).toISOString(), name, notificationType: null };
+      if (state.startupTimer !== undefined) {
+        clearTimeout(state.startupTimer);
+        state.startupTimer = undefined;
+      }
+      // Пересчёт и рассылка — на смене сигнала и когда выведенное состояние с ним разошлось (чужое
+      // событие журнала новее сигнала), а не на каждом кадре спиннера: согласный повтор ничего не меняет.
+      if (
+        previous === null ||
+        previous.name !== name ||
+        !agreesWith(live.get(key)?.activity.activity, signal)
+      ) {
+        recompute(ref);
+      }
+    },
+    terminalStopped(ref) {
+      const key = refKey(ref);
+      if (!terminals.has(key)) return;
+      clearTerminal(key);
+      recompute(ref);
+    },
     markSeen(ref, at = new Date().toISOString()) {
       seenAt.set(refKey(ref), at);
       recompute(ref);
@@ -478,6 +686,7 @@ export function createActivityService(
       silenceTimers.clear();
       for (const timer of trustWaitTimers.values()) clearTimeout(timer);
       trustWaitTimers.clear();
+      for (const key of Array.from(terminals.keys())) clearTerminal(key);
       for (const watch of workWatches.values()) watch.watcher?.close();
       workWatches.clear();
       logIndex.stop();

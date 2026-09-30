@@ -30,14 +30,25 @@ const BRIDGE = createFakeBridge();
 
 function renderRow(
   session: WorkSession,
-  options: { activity?: Activity | null; draggable?: boolean; selected?: boolean; onOpen?: () => void } = {},
+  options: {
+    activity?: Activity | null;
+    /** Время последнего события активности; по умолчанию 09:57. `null` — событий ещё не было. */
+    lastEventAt?: string | null;
+    draggable?: boolean;
+    selected?: boolean;
+    onOpen?: () => void;
+  } = {},
 ) {
-  const activity =
+  const built =
     options.activity === undefined || options.activity === null
       ? null
       : makeActivity({ projectPath: PROJECT, workId: WORK, sessionId: session.id }, options.activity, {
-          lastEventAt: '2026-09-27T09:57:00.000Z',
+          lastEventAt: options.lastEventAt ?? '2026-09-27T09:57:00.000Z',
         });
+  const activity =
+    built !== null && options.lastEventAt === null
+      ? { ...built, activity: { ...built.activity, lastEventAt: null } }
+      : built;
   return render(
     <SessionRow
       workKey={KEY}
@@ -260,6 +271,83 @@ describe('SessionRow — пометка trust-wait (тест 11)', () => {
     renderRow(makeSession('s-02', 'b'));
     expect(row('s-01').querySelector(`[title="${S.sidebar.trustWaitTooltip}"]`)?.textContent).toBe('⚠');
     expect(row('s-02').querySelector(`[title="${S.sidebar.trustWaitTooltip}"]`)).toBeNull();
+  });
+});
+
+describe('SessionRow — пометка startup-wait (Codex на экране старта)', () => {
+  it('host.notice startup-wait по ref строки — ⚠ со своим тултипом про вход и доверие; у другой сессии нет', () => {
+    const notice: HostNotice = {
+      kind: 'startup-wait',
+      text: 'ждёт входа',
+      ref: { projectPath: PROJECT, workId: WORK, sessionId: 's-01' },
+    } as HostNotice;
+    useNoticesStore.setState({ notices: [notice] });
+
+    renderRow(makeSession('s-01', 'a'));
+    renderRow(makeSession('s-02', 'b'));
+    expect(row('s-01').querySelector(`[title="${S.sidebar.startupWaitTooltip}"]`)?.textContent).toBe('⚠');
+    expect(row('s-01').querySelector(`[title="${S.sidebar.trustWaitTooltip}"]`)).toBeNull();
+    expect(row('s-02').querySelector(`[title="${S.sidebar.startupWaitTooltip}"]`)).toBeNull();
+  });
+
+  it('тултип на английском, без кириллицы', () => {
+    expect(S.sidebar.startupWaitTooltip).not.toMatch(/[а-яё]/i);
+  });
+
+  const startupNotice = (at: string): HostNotice =>
+    ({
+      kind: 'startup-wait',
+      text: 'ждёт входа',
+      ref: { projectPath: PROJECT, workId: WORK, sessionId: 's-01' },
+      at,
+    }) as HostNotice;
+  const mark = (): Element | null => row('s-01').querySelector(`[title="${S.sidebar.startupWaitTooltip}"]`);
+
+  it('Codex дошёл до Ready или Working после уведомления — ⚠ снимается, хотя уведомление ещё в буфере', () => {
+    // Хост знает состояние Codex: известный сигнал позже уведомления (у него время синтетического «нужен ты»)
+    // значит, что экран старта пройден. Подсказка «may need sign-in» рядом с работающей сессией — ложная.
+    useNoticesStore.setState({ notices: [startupNotice('2026-09-27T09:50:00.000Z')] });
+    renderRow(makeSession('s-01', 'a'), { activity: 'working' });
+    expect(mark()).toBeNull();
+    cleanup();
+    renderRow(makeSession('s-01', 'a'), { activity: 'idle' });
+    expect(mark()).toBeNull();
+  });
+
+  it('сессия всё ещё на экране старта — ⚠ стоит: последнее событие — то самое «нужен ты» со временем уведомления', () => {
+    const at = '2026-09-27T09:57:00.000Z';
+    useNoticesStore.setState({ notices: [startupNotice(at)] });
+    renderRow(makeSession('s-01', 'a'), { activity: 'blocked', lastEventAt: at });
+    expect(mark()?.textContent).toBe('⚠');
+  });
+
+  it('уведомление свежее последнего события или у уведомления нет времени — ⚠ стоит', () => {
+    useNoticesStore.setState({ notices: [startupNotice('2026-09-27T09:58:00.000Z')] });
+    renderRow(makeSession('s-01', 'a'), { activity: 'blocked' });
+    expect(mark()?.textContent).toBe('⚠');
+    cleanup();
+
+    useNoticesStore.setState({ notices: [{ ...startupNotice(''), at: undefined } as unknown as HostNotice] });
+    renderRow(makeSession('s-01', 'a'), { activity: 'working' });
+    expect(mark()?.textContent).toBe('⚠');
+  });
+
+  it('событий у сессии ещё нет (`lastEventAt` — null) — ⚠ стоит', () => {
+    useNoticesStore.setState({ notices: [startupNotice('2026-09-27T09:50:00.000Z')] });
+    renderRow(makeSession('s-01', 'a'), { activity: 'idle', lastEventAt: null });
+    expect(mark()?.textContent).toBe('⚠');
+  });
+
+  it('trust-wait состояния не знает — снимается, как и раньше, только уходом уведомления из буфера', () => {
+    const notice = {
+      kind: 'trust-wait',
+      text: 'молчит',
+      ref: { projectPath: PROJECT, workId: WORK, sessionId: 's-01' },
+      at: '2026-09-27T09:50:00.000Z',
+    } as HostNotice;
+    useNoticesStore.setState({ notices: [notice] });
+    renderRow(makeSession('s-01', 'a'), { activity: 'working' });
+    expect(row('s-01').querySelector(`[title="${S.sidebar.trustWaitTooltip}"]`)?.textContent).toBe('⚠');
   });
 });
 
