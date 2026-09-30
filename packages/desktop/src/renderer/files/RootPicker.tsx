@@ -4,7 +4,7 @@
  * человек его не сменит.
  */
 
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry } from '@parley/core';
 import type { FileRootSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { sessionTag } from '../lib/participant.js';

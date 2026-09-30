@@ -1,5 +1,5 @@
-import { METHODS, NOTIFICATIONS } from '@harnas/protocol';
-import type { MethodName, NotificationName, Result } from '@harnas/protocol';
+import { METHODS, NOTIFICATIONS } from '@parley/protocol';
+import type { MethodName, NotificationName, Result } from '@parley/protocol';
 import type { BrowserWindow, IpcMain, NativeTheme, Session, WebContents } from 'electron';
 import { clampNoteText } from '../shared/app-note.js';
 import type { AppNote, CloseAnswer, FocusTarget } from '../shared/bridge.js';
@@ -238,7 +238,7 @@ function findInGuest(
 
 /**
  * Белый список IPC: рендерер не может позвать ничего, кроме методов и
- * уведомлений из `@harnas/protocol`, и не может открыть ничего, кроме
+ * уведомлений из `@parley/protocol`, и не может открыть ничего, кроме
  * http/https. Всё остальное (Node, произвольные каналы) ему недоступно —
  * `contextIsolation` и `sandbox` в `security.ts` это обеспечивают на уровне
  * процесса, а этот список — на уровне протокола.
@@ -334,7 +334,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
         // консоль main и успешного ответа: рендереру тут делать нечего, а
         // старый файл на диске уже сохранил сам `LayoutStore.save`.
         if (error instanceof LayoutTooLargeError) {
-          console.warn(`[harnas] ${error.message}`);
+          console.warn(`[parley] ${error.message}`);
           return;
         }
         throw error;

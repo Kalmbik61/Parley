@@ -27,7 +27,7 @@ import type { Ring } from './inbox-watch.js';
 import {
   DEFAULT_TIMEOUT_SEC,
   MAX_TIMEOUT_SEC,
-  createHarnasServer,
+  createParleyServer,
   waitTimeoutMs,
 } from './tools.js';
 
@@ -83,7 +83,7 @@ async function connect(
     channel,
     worktreeRoot,
   };
-  const server = createHarnasServer(context);
+  const server = createParleyServer(context);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test', version: '0.0.0' });
   // Звонок ловится общим обработчиком, а не `setNotificationHandler`: тот
@@ -120,7 +120,7 @@ const git = (dir: string, args: string[]) => run('git', ['-C', dir, ...args]);
 async function initGitProject(): Promise<void> {
   process.env.PATH = savedPath ?? '';
   await run('git', ['init', '-b', 'main', project]);
-  await git(project, ['config', 'user.email', 'тест@harnas']);
+  await git(project, ['config', 'user.email', 'тест@parley']);
   await git(project, ['config', 'user.name', 'тест']);
   await writeFile(path.join(project, 'README.md'), 'старт\n', 'utf8');
   await git(project, ['add', 'README.md']);
@@ -128,9 +128,9 @@ async function initGitProject(): Promise<void> {
 }
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
-  binDir = await mkdtemp(path.join(tmpdir(), 'harnas-bin-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
+  binDir = await mkdtemp(path.join(tmpdir(), 'parley-bin-'));
   process.env.HARNAS_HOME = home;
   // PATH пустой, а `claude` подсунут оверрайдом: доступность провайдеров в тесте
   // не зависит от того, что стоит на машине. Настоящий бинарь не запускается.

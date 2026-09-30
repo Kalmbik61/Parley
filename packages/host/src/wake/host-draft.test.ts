@@ -9,8 +9,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { addMessage, addSession, createWork, transitionSession, unreadFor, updateMap, workPaths } from '@harnas/core';
-import type { SessionRef } from '@harnas/protocol';
+import { addMessage, addSession, createWork, transitionSession, unreadFor, updateMap, workPaths } from '@parley/core';
+import type { SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createActivityService } from '../activity/activity-service.js';
 import { createPtyManager } from '../pty/pty-manager.js';
@@ -58,10 +58,10 @@ function fakeHost(): HostContext {
 }
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
-  claudeRoot = await mkdtemp(path.join(tmpdir(), 'harnas-claude-'));
-  codexRoot = await mkdtemp(path.join(tmpdir(), 'harnas-codex-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
+  claudeRoot = await mkdtemp(path.join(tmpdir(), 'parley-claude-'));
+  codexRoot = await mkdtemp(path.join(tmpdir(), 'parley-codex-'));
   process.env['HARNAS_HOME'] = home;
 });
 

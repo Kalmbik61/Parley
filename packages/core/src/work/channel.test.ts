@@ -21,7 +21,7 @@ async function stub(body: string): Promise<string> {
 }
 
 beforeEach(async () => {
-  binDir = await mkdtemp(path.join(tmpdir(), 'harnas-bin-'));
+  binDir = await mkdtemp(path.join(tmpdir(), 'parley-bin-'));
 });
 
 afterEach(async () => {

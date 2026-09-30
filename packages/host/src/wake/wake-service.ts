@@ -28,9 +28,9 @@ import {
   type DeliveryInput,
   type WorkEntry,
   type WorkSession,
-} from '@harnas/core';
-import { refKey } from '@harnas/protocol';
-import type { NoticeKind, SessionRef } from '@harnas/protocol';
+} from '@parley/core';
+import { refKey } from '@parley/protocol';
+import type { NoticeKind, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import { CODEX_SUBMIT_DELAY_MS, codexPaste, codexSubmitKey } from '../pty/codex-input.js';

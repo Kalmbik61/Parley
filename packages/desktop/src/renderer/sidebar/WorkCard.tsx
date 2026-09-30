@@ -27,9 +27,9 @@
 import { memo, useRef, useState } from 'react';
 import { create } from 'zustand';
 import { Hash, Mail, Plus } from 'lucide-react';
-import type { SessionLifecycle, WorkEntry } from '@harnas/core';
-import { refKey } from '@harnas/protocol';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { SessionLifecycle, WorkEntry } from '@parley/core';
+import { refKey } from '@parley/protocol';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { roomAwaitsDecision, type WorkAttention } from '../attention/derive.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
@@ -65,7 +65,7 @@ export interface WorkCardProps {
   /** Выбор в RoomsMenu — вкладка room (кусок 3.4). */
   onOpenRoom(roomId: string): void;
   /** Мост для меню карточки, строк и переименования; один на всё окно. */
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
 }
 
 /**

@@ -21,7 +21,7 @@ const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
-    ([m, p]) => (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas.call(m, p),
+    ([m, p]) => (globalThis as unknown as { parley: { call: (m: string, p: unknown) => Promise<unknown> } }).parley.call(m, p),
     [method, params] as const,
   ) as Promise<T>;
 }
@@ -135,7 +135,7 @@ test.describe('терминал без связи с хостом (раунд la
     // hello за 5 с. Агент при этом жив: после переподключения вкладка берёт его снимок.
     await window.evaluate(
       (target) =>
-        (globalThis as unknown as { harnas: { notify: (m: string, p: unknown) => void } }).harnas.notify('pty.input', {
+        (globalThis as unknown as { parley: { notify: (m: string, p: unknown) => void } }).parley.notify('pty.input', {
           ref: target,
           data: 'x'.repeat(8 * 1024 * 1024 + 16),
         }),

@@ -5,15 +5,15 @@
  */
 
 import { useEffect, useState } from 'react';
-import type { WorkEntry } from '@harnas/core';
-import type { SessionRef } from '@harnas/protocol';
-import type { HarnasBridge } from '../../../shared/bridge.js';
+import type { WorkEntry } from '@parley/core';
+import type { SessionRef } from '@parley/protocol';
+import type { ParleyBridge } from '../../../shared/bridge.js';
 import { MailPanel } from '../../components/mail/MailPanel.js';
 import { activityFor, useActivityStore } from '../../store/activity.js';
 import { useHostStore } from '../../store/host.js';
 
 export interface MailBodyProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   entry: WorkEntry;
   /** Работа активна — `LayoutBodyContext.active` из `GroupView` (кусок 4.2). */
   active: boolean;

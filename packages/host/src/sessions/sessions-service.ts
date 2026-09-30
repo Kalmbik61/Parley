@@ -45,9 +45,9 @@ import {
   writeBrief,
   type EffortLevel,
   type WorkEntry,
-} from '@harnas/core';
-import { refKey } from '@harnas/protocol';
-import type { SessionRef, WorksSnapshot } from '@harnas/protocol';
+} from '@parley/core';
+import { refKey } from '@parley/protocol';
+import type { SessionRef, WorksSnapshot } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';

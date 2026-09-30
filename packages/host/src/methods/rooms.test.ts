@@ -14,7 +14,7 @@ import {
   transitionSession,
   unreadFor,
   updateMap,
-} from '@harnas/core';
+} from '@parley/core';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
@@ -48,7 +48,7 @@ async function setup(): Promise<{ client: TestClient; dir: string; workId: strin
   const running = await startHost({ home });
   hosts.push(running);
   const token = await readFile(hostPaths(home).token, 'utf8');
-  const dir = await mkdtemp(path.join(tmpdir(), 'harnas-rooms-project-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'parley-rooms-project-'));
   projects.push(dir);
 
   const map = await createWork(dir, { title: 'Работа' });

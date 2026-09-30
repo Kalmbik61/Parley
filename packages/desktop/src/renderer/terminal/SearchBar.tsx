@@ -67,7 +67,7 @@ export const SearchBar = forwardRef<HTMLInputElement, SearchBarProps>(function S
       if (direction === 'next') search.findNext(query, options);
       else search.findPrevious(query, options);
     } catch (error) {
-      console.warn('[harnas] terminal search', error);
+      console.warn('[parley] terminal search', error);
       setResults({ index: -1, count: 0 });
     }
   };

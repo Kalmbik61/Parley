@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SessionRef } from '@harnas/protocol';
+import type { SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import { HostError } from '../errors.js';
 import { fakePty } from '../../test/fake-pty.js';

@@ -8,7 +8,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ProviderLimits } from '@harnas/protocol';
+import type { ProviderLimits } from '@parley/protocol';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { useProvidersStore } from './providers.js';

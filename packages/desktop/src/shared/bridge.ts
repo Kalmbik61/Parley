@@ -6,7 +6,7 @@ import type {
   Params,
   Result,
   SessionRef,
-} from '@harnas/protocol';
+} from '@parley/protocol';
 import type { BrowserApi } from './browser-types.js';
 import type {
   DiffFile,
@@ -65,7 +65,7 @@ export type CloseAnswer = 'close' | 'cancel';
  * Единственный мост между рендерером и хостом. Рендерер не видит ни Node, ни
  * Electron напрямую — только это, отданное прелоадом через `contextBridge`.
  */
-export interface HarnasBridge {
+export interface ParleyBridge {
   call<M extends MethodName>(method: M, params: Params<M>): Promise<Result<M>>;
   notify<N extends NotificationName>(method: N, params: Params<N>): void;
   on<E extends EventName>(event: E, listener: (data: EventData<E>) => void): () => void;
@@ -207,6 +207,6 @@ export interface HarnasBridge {
 
 declare global {
   interface Window {
-    harnas: HarnasBridge;
+    parley: ParleyBridge;
   }
 }

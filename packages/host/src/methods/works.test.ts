@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { addSession, createWork, readMap, readWorksIndex, transitionSession, updateMap, workPaths } from '@harnas/core';
+import { addSession, createWork, readMap, readWorksIndex, transitionSession, updateMap, workPaths } from '@parley/core';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
@@ -24,7 +24,7 @@ async function boot(): Promise<{ home: string; token: string }> {
 }
 
 async function project(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'harnas-methods-project-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'parley-methods-project-'));
   projects.push(dir);
   return dir;
 }
@@ -259,7 +259,7 @@ describe('works.rename / works.setStatus', () => {
 describe('providers.list', () => {
   it('HARNAS_CLAUDE_BIN на исполняемый стаб — у claude available: true', async () => {
     const { home, token } = await boot();
-    const stubDir = await mkdtemp(path.join(tmpdir(), 'harnas-stub-'));
+    const stubDir = await mkdtemp(path.join(tmpdir(), 'parley-stub-'));
     const stub = path.join(stubDir, 'claude-stub');
     await writeFile(stub, '#!/bin/sh\n', 'utf8');
     await chmod(stub, 0o755);

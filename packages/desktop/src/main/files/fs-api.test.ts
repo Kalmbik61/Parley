@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { WorksSnapshot } from '@harnas/protocol';
+import type { WorksSnapshot } from '@parley/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FileRoot } from '../../shared/files-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
@@ -18,7 +18,7 @@ let key = '';
 let registry: RootsRegistry;
 
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), 'harnas-fsapi-'));
+  dir = await mkdtemp(path.join(tmpdir(), 'parley-fsapi-'));
   project = path.join(dir, 'proj');
   await mkdir(path.join(project, 'src'), { recursive: true });
   await writeFile(path.join(project, 'src', 'a.ts'), 'abc');
@@ -95,7 +95,7 @@ async function codeOf(promise: Promise<unknown>): Promise<string> {
 
 /** Временные файлы записи, оставшиеся в каталоге. */
 async function leftovers(folder: string): Promise<string[]> {
-  return (await readdir(folder)).filter((name) => name.endsWith('.harnas-tmp'));
+  return (await readdir(folder)).filter((name) => name.endsWith('.parley-tmp'));
 }
 
 describe('LIMITS и detectText (кусок 7.1a)', () => {
@@ -231,7 +231,7 @@ describe('files.write (тест 4)', () => {
   });
 
   it('имя на 255 байт (предел APFS), латиница и кириллица — запись удалась, временного не осталось (fix-7-accept)', async () => {
-    // Временное имя — «.имя.xxxxxxxx.harnas-tmp»: с полным именем цели оно вылезало за 255 байт — ENAMETOOLONG.
+    // Временное имя — «.имя.xxxxxxxx.parley-tmp»: с полным именем цели оно вылезало за 255 байт — ENAMETOOLONG.
     for (const name of [`${'s'.repeat(252)}.ts`, `${'я'.repeat(126)}.ts`]) {
       expect(Buffer.byteLength(name)).toBeLessThanOrEqual(255);
       const target = path.join(project, 'src', name);
@@ -326,7 +326,7 @@ describe('подложенное временное имя (тест 8)', () => 
     await mkdir(path.join(dir, 'outside'));
     const outsideFile = path.join(dir, 'outside', 'x');
     await writeFile(outsideFile, 'outside');
-    const trap = path.join(project, 'src', '.a.ts.deadbeef.harnas-tmp');
+    const trap = path.join(project, 'src', '.a.ts.deadbeef.parley-tmp');
     await symlink(outsideFile, trap);
     const api = createFsApi(registry, { random: () => 'deadbeef' });
     const { mtimeMs } = await stat(path.join(project, 'src', 'a.ts'));
@@ -385,7 +385,7 @@ describe('.git и .harnas (тест 10)', () => {
     await mkdir(path.join(project, '.git'));
     await writeFile(path.join(project, '.git', 'config'), '');
     await symlink(path.join(project, '.harnas', 'works', 'w', 'map.json'), path.join(project, 'link.json'));
-    await symlink('.harnas', path.join(project, 'harnas-dir'));
+    await symlink('.harnas', path.join(project, 'parley-dir'));
     await symlink('.git/config', path.join(project, 'git-config'));
     await symlink('../.harnas/works/w/map.json', path.join(project, 'src', 'deep.json'));
     await symlink('src/a.ts', path.join(project, 'linkfile'));

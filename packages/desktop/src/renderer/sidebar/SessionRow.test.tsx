@@ -12,8 +12,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { DndContext, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
-import type { Activity, WorkSession } from '@harnas/core';
-import type { HostNotice } from '@harnas/protocol';
+import type { Activity, WorkSession } from '@parley/core';
+import type { HostNotice } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
 import { formatMetricsLine } from '../lib/metrics-line.js';
 import { workKey } from '../lib/tree-order.js';

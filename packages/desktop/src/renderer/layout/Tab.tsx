@@ -26,7 +26,7 @@
 
 import { toast } from 'sonner';
 import { FileCode, FileImage, FileSpreadsheet, FileText, FileType, GitCompare, Globe, Hash, Mail as MailIcon, X } from 'lucide-react';
-import type { SessionLifecycle } from '@harnas/core';
+import type { SessionLifecycle } from '@parley/core';
 import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { useBrowserStore } from '../browser/store.js';

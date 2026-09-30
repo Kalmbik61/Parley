@@ -2,9 +2,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { saveConfig } from '@harnas/core';
-import type { SkillInstallOptions, SkillInstallResult } from '@harnas/core';
-import type { EventData, EventName, SessionRef } from '@harnas/protocol';
+import { saveConfig } from '@parley/core';
+import type { SkillInstallOptions, SkillInstallResult } from '@parley/core';
+import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createSkillInstaller } from './agent-skills.js';
 
@@ -18,7 +18,7 @@ const PROJECT = '/проекты/магазин';
 const REF: SessionRef = { projectPath: PROJECT, workId: 'w-0001', sessionId: 's-01' };
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-agent-skills-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-agent-skills-'));
   savedHome = process.env['HARNAS_HOME'];
   savedFlag = process.env['HARNAS_AGENT_SKILLS'];
   process.env['HARNAS_HOME'] = home;

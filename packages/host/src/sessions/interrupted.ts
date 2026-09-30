@@ -5,8 +5,8 @@
  * всех» — поднимать без согласия человека нельзя.
  */
 
-import type { EventRecord, WorkEntry } from '@harnas/core';
-import type { SessionRef } from '@harnas/protocol';
+import type { EventRecord, WorkEntry } from '@parley/core';
+import type { SessionRef } from '@parley/protocol';
 
 /** Хуки, которыми ход (или сама сессия) закончился штатно. */
 const ENDED = new Set(['Stop', 'SessionEnd']);

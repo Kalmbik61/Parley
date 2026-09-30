@@ -5,7 +5,7 @@
  * источник один, раскладка здесь заново не разбирается.
  */
 
-import type { SessionRef } from '@harnas/protocol';
+import type { SessionRef } from '@parley/protocol';
 
 /** Непрерывная видимость до отметки (план, «Числа»). */
 const VISIBLE_MS = 1000;

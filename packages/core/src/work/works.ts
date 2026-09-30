@@ -2,7 +2,7 @@ import { watch, type FSWatcher } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseMap } from './map.js';
-import { harnasHome, readWorksIndex, workPaths } from './store.js';
+import { parleyHome, readWorksIndex, workPaths } from './store.js';
 import type { WorkMap } from './types.js';
 
 /** Карта работы вместе с проектом, в котором она лежит. */
@@ -127,7 +127,7 @@ export function watchWorks(
     timer = setTimeout(refresh, debounceMs);
   };
 
-  for (const dir of [harnasHome(), worksDir(projectPath)]) {
+  for (const dir of [parleyHome(), worksDir(projectPath)]) {
     try {
       const watcher = watch(dir, { recursive: true }, (_event, name) => {
         if (name !== null && relevant(name.toString())) schedule();

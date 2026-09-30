@@ -33,10 +33,10 @@ const setEnv = (name: string, value: string | undefined): void => {
 };
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
-  claudeRoot = await mkdtemp(path.join(tmpdir(), 'harnas-claude-'));
-  codexRoot = await mkdtemp(path.join(tmpdir(), 'harnas-codex-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
+  claudeRoot = await mkdtemp(path.join(tmpdir(), 'parley-claude-'));
+  codexRoot = await mkdtemp(path.join(tmpdir(), 'parley-codex-'));
   promptFile = path.join(home, 'prompt.json');
   setEnv('HARNAS_HOME', home);
   setEnv('HARNAS_CLAUDE_BIN', STUB);

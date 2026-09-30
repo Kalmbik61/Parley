@@ -30,7 +30,7 @@ let savedHome: string | undefined;
 
 beforeEach(async () => {
   // realpath: на macOS `tmpdir()` лежит за симлинком, а корень скилла сверяется с realpath домашней папки.
-  root = await realpath(await mkdtemp(path.join(tmpdir(), 'harnas-skill-')));
+  root = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-skill-')));
   project = path.join(root, 'project');
   await mkdir(project);
   savedHome = process.env['HOME'];
@@ -46,7 +46,7 @@ afterEach(async () => {
 async function initRepo(dir: string): Promise<void> {
   await mkdir(dir, { recursive: true });
   await run('git', ['init', '-b', 'main', dir]);
-  await git(dir, 'config', 'user.email', 'тест@harnas');
+  await git(dir, 'config', 'user.email', 'тест@parley');
   await git(dir, 'config', 'user.name', 'тест');
   await writeFile(path.join(dir, 'README.md'), 'старт\n', 'utf8');
   await git(dir, 'add', 'README.md');

@@ -1,4 +1,4 @@
-import { commandInPath, loadProviders, selectableModels, supportsEffort } from '@harnas/core';
+import { commandInPath, loadProviders, selectableModels, supportsEffort } from '@parley/core';
 import type { Handler } from '../context.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { ProviderVersions } from '../providers/versions.js';

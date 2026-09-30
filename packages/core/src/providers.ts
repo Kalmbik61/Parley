@@ -4,7 +4,7 @@ import path from 'node:path';
 import { CLAUDE_MODELS, CODEX_MODELS, type ModelOption } from './provider-models.js';
 import type { Provider } from './session-index.js';
 import { overrideVariable } from './work/find-binary.js';
-import { harnasHome } from './work/store.js';
+import { parleyHome } from './work/store.js';
 import type { WorkProvider } from './work/types.js';
 
 /**
@@ -129,7 +129,7 @@ const CODEX_CONFIG_FLAGS: readonly string[] = [
  * не проверено (отказ разбора флагов провалил бы каждый подъём спящей сессии), а тред хранит политику
  * одобрений и без них.
  */
-const CODEX_HARNAS_FLAGS: readonly string[] = ['--no-daemon', '-a', 'on-request', ...CODEX_CONFIG_FLAGS];
+const CODEX_PARLEY_FLAGS: readonly string[] = ['--no-daemon', '-a', 'on-request', ...CODEX_CONFIG_FLAGS];
 
 /**
  * Реестр провайдеров: где брать историю и чем запускать.
@@ -221,14 +221,14 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
       // глобальным `-c mcp_servers.harnas=<inline table>`, не трогая файл
       // пользователя. Файла-конфига MCP, как у claude, у codex нет.
       command: 'codex',
-      // Свои настройки сессии — `CODEX_HARNAS_FLAGS`. Модель — `--model` (`-m`), усилие —
+      // Свои настройки сессии — `CODEX_PARLEY_FLAGS`. Модель — `--model` (`-m`), усилие —
       // переопределением конфига: выделенного флага у Codex нет, а ключ `model_reasoning_effort`
       // есть в справочнике конфига. `-c key=value` разбирает значение как TOML (справочник CLI
       // Codex, флаг `--config`), поэтому строка в кавычках; так же передаёт усилие SDK самого Codex
       // (openai/codex, sdk/typescript/src/exec.ts). Как и у claude, без выбора обе пары выпадают, а
       // при `resume` не передаются.
       args: [
-        ...CODEX_HARNAS_FLAGS,
+        ...CODEX_PARLEY_FLAGS,
         '--model',
         '{model}',
         '-c',
@@ -490,7 +490,7 @@ export async function commandInPath(
 
 /** Необязательный файл переопределений и дополнений реестра. */
 export function providersFile(): string {
-  return path.join(harnasHome(), 'providers.json');
+  return path.join(parleyHome(), 'providers.json');
 }
 
 /** Запись `providers.json`: плоская, все поля необязательные (спецификация, раздел 5). */

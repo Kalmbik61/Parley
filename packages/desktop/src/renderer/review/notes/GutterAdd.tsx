@@ -119,7 +119,7 @@ export function GutterAdd({ editor, lineCount, side, onPick }: GutterAddProps): 
   useEffect(() => {
     const { KeyMod, KeyCode } = setupMonaco();
     const action = editor.addAction({
-      id: 'harnas.diff.addNote',
+      id: 'parley.diff.addNote',
       label: S.notes.add,
       keybindings: [KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyA],
       // Только из текста этой стороны: из поля заметки в зоне сочетание новой заметки не ставит.

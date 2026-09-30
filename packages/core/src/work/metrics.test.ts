@@ -32,10 +32,10 @@ let codexRoot = '';
 let claudeRoot = '';
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
-  codexRoot = await mkdtemp(path.join(tmpdir(), 'harnas-codex-'));
-  claudeRoot = await mkdtemp(path.join(tmpdir(), 'harnas-claude-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
+  codexRoot = await mkdtemp(path.join(tmpdir(), 'parley-codex-'));
+  claudeRoot = await mkdtemp(path.join(tmpdir(), 'parley-claude-'));
   process.env.HARNAS_HOME = home;
 });
 

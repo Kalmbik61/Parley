@@ -19,7 +19,7 @@
  * Терминал под карточкой прежний: xterm держит последний вывод, и «Restart host» показывает его над картой.
  */
 
-import { refKey, type SessionRef } from '@harnas/protocol';
+import { refKey, type SessionRef } from '@parley/protocol';
 import { S, providerName } from '../../shared/strings.js';
 import { cn } from '../lib/cn.js';
 import { useNow } from '../lib/use-now.js';

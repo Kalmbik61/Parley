@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sessionOrders, sessionSequence, treeOrder, workKey } from './tree-order.js';
-import type { WorkSession } from '@harnas/core';
+import type { WorkSession } from '@parley/core';
 
 function session(
   id: string,

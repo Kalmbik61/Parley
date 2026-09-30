@@ -1,7 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it } from 'vitest';
-import { createHarnasServer } from '../mcp/tools.js';
+import { createParleyServer } from '../mcp/tools.js';
 import { GUIDE_TOPICS } from './guide.js';
 import { SKILL_MD, SKILL_NAME, skillStub } from './skill.js';
 
@@ -96,22 +96,22 @@ describe('заглушка скилла harnas: тело', () => {
 describe('заглушка скилла harnas: как приходят письма', () => {
   const { body } = parts(SKILL_MD);
 
-  it('в окне письма объявляет указатель после хода, тег channel — только у сессий CLI harnas-core', () => {
+  it('в окне письма объявляет указатель после хода, тег channel — только у сессий CLI parley-core', () => {
     // Заглушку агент читает первой, и обещать ему тег канала как обычный путь нельзя: хост окна запускает
     // сессии без канала и печатает указатель после хода (`delivery.ts`), тег бывает лишь у CLI.
     expect(body).toMatch(
       /В сессиях окна письма приходят указателем «Новые письма \(N\)… Вызови check_inbox\.» после твоего хода — вызови `check_inbox`\./,
     );
     expect(body).toMatch(
-      /Тег `<channel source="harnas">` бывает только у сессий, поднятых CLI `harnas-core`\./,
+      /Тег `<channel source="harnas">` бывает только у сессий, поднятых CLI `parley-core`\./,
     );
   });
 
-  it('тег channel упомянут только вместе с CLI harnas-core: как обычный способ он не обещан', () => {
+  it('тег channel упомянут только вместе с CLI parley-core: как обычный способ он не обещан', () => {
     const mentions = body.split('\n').filter((text) => text.includes('<channel'));
 
     expect(mentions).not.toHaveLength(0);
-    for (const line of mentions) expect(line).toContain('harnas-core');
+    for (const line of mentions) expect(line).toContain('parley-core');
   });
 });
 
@@ -143,7 +143,7 @@ describe('заглушка и гид согласованы', () => {
   });
 
   it('каждый инструмент, названный в заглушке, существует на MCP-сервере: выдуманного она не советует', async () => {
-    const server = createHarnasServer({
+    const server = createParleyServer({
       projectPath: '/нет/такого/проекта',
       workId: 'w-0001',
       workDir: '/нет/такого/проекта/.harnas/works/w-0001',

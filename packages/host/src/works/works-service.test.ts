@@ -8,8 +8,8 @@ import {
   transitionSession,
   updateMap,
   workPaths,
-} from '@harnas/core';
-import type { EventData, EventName } from '@harnas/protocol';
+} from '@parley/core';
+import type { EventData, EventName } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createWorksService } from './works-service.js';
 import type { WorksService } from './works-service.js';
@@ -37,9 +37,9 @@ function fakeHost(): HostContext {
 }
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  projectA = await mkdtemp(path.join(tmpdir(), 'harnas-project-a-'));
-  projectB = await mkdtemp(path.join(tmpdir(), 'harnas-project-b-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  projectA = await mkdtemp(path.join(tmpdir(), 'parley-project-a-'));
+  projectB = await mkdtemp(path.join(tmpdir(), 'parley-project-b-'));
   process.env.HARNAS_HOME = home;
   broadcasts = [];
 });
@@ -105,7 +105,7 @@ describe('источники', () => {
     const s = service({ debounceMs: 50 });
     await s.start();
 
-    const brandNewProject = await mkdtemp(path.join(tmpdir(), 'harnas-project-new-'));
+    const brandNewProject = await mkdtemp(path.join(tmpdir(), 'parley-project-new-'));
     try {
       const work = await createWork(brandNewProject, { title: 'Новый проект' });
       await new Promise((resolve) => setTimeout(resolve, 300));

@@ -5,7 +5,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry } from '@parley/core';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { tabId } from './ids.js';
 import { emptyLayout, focusTab, groups, openTab, splitGroup } from './tree.js';

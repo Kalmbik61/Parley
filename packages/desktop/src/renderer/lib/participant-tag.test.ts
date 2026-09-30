@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { WorkMap, WorkSession } from '@harnas/core';
+import type { WorkMap, WorkSession } from '@parley/core';
 import { participantTag } from './participant-tag.js';
 
 function session(id: string, provider: string): WorkSession {

@@ -22,7 +22,7 @@
  */
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, providerName, S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
@@ -46,7 +46,7 @@ export interface NewWorkDraft {
 }
 
 /**
- * Края названия — то же правило, что у `works.rename` (`@harnas/protocol`, `TITLE_EDGES`):
+ * Края названия — то же правило, что у `works.rename` (`@parley/protocol`, `TITLE_EDGES`):
  * невидимые символы формата считаются пробелами, иначе название из одних ZWSP прошло бы.
  * Повторено здесь, а не взято из схемы: `works.create` названия не обрезает (старые клиенты),
  * и окно шлёт уже обрезанное.
@@ -109,7 +109,7 @@ export interface NewWorkComposerProps {
   projectPath: string | null;
   /** Начальное название: «Create workspace …» палитры (кусок 6.2); `''` — пусто. */
   title: string;
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   onOpenChange(open: boolean): void;
 }
 
@@ -175,7 +175,7 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
         return { providers: result.providers, provider: chosen };
       })
       .catch((err: unknown) => {
-        console.warn('[harnas] providers.list', err);
+        console.warn('[parley] providers.list', err);
         setError(errorText(decodeIpcError(err).code, S.errors.actions.loadProviders));
         return null;
       });
@@ -232,7 +232,7 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
       openWhenListed(work.projectPath, work.workId, { kind: 'session', sessionId: ref.sessionId }, pendingRef.current);
       finish();
     } catch (err) {
-      console.warn('[harnas] sessions.create', err);
+      console.warn('[parley] sessions.create', err);
       setCreatedWork(work);
       setError(errorText(decodeIpcError(err).code, S.errors.actions.createSession));
       setBusy(false);
@@ -264,7 +264,7 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
     try {
       ({ workId } = await bridge.call('works.create', { projectPath, title: effectiveTitle({ title, prompt }), goal: '' }));
     } catch (err) {
-      console.warn('[harnas] works.create', err);
+      console.warn('[parley] works.create', err);
       setError(errorText(decodeIpcError(err).code, S.errors.actions.createWorkspace));
       setBusy(false);
       return;

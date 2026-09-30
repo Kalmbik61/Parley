@@ -11,7 +11,7 @@
  * (`modelChoiceError`): её же зовёт `spawn_session` агента, и два входа не расходятся.
  */
 
-import { loadProviders, modelChoiceError } from '@harnas/core';
+import { loadProviders, modelChoiceError } from '@parley/core';
 import { HostError } from '../errors.js';
 
 /**

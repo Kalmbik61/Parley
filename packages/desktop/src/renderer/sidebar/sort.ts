@@ -5,7 +5,7 @@
  * карточки (`cardRows`, спека окна 2026-09-29, 1.2): сессии и комнаты на месте своих участников.
  */
 
-import type { Room, WorkEntry, WorkMap, WorkSession } from '@harnas/core';
+import type { Room, WorkEntry, WorkMap, WorkSession } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import { ATTENTION_RANK, attentionOf as attentionIn, type WorkAttention } from '../attention/derive.js';
 import { isoMs } from '../lib/iso-time.js';

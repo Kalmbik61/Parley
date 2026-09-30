@@ -141,14 +141,14 @@ export function PdfPreview({ bytes }: PdfPreviewProps): JSX.Element {
         linkService.setDocument(document, null);
       })
       .catch((error: unknown) => {
-        console.warn('[harnas] pdf preview', error);
+        console.warn('[parley] pdf preview', error);
         if (!disposed) setFailed(true);
       });
     return () => {
       disposed = true;
       busRef.current = null;
       resizeObserver?.disconnect();
-      destroy?.().catch((error: unknown) => console.warn('[harnas] pdf destroy', error));
+      destroy?.().catch((error: unknown) => console.warn('[parley] pdf destroy', error));
     };
   }, [bytes]);
 

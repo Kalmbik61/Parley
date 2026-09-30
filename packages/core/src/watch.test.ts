@@ -44,7 +44,7 @@ describe('watchSessions', () => {
   let dir: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), 'harnas-watch-'));
+    dir = await mkdtemp(path.join(tmpdir(), 'parley-watch-'));
   });
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });

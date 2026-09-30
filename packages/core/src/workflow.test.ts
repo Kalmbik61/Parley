@@ -7,7 +7,7 @@ import { readSessionWorkflows, readWorkflowDescriptor } from './workflow.js';
 let root: string;
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), 'harnas-wf-'));
+  root = await mkdtemp(path.join(tmpdir(), 'parley-wf-'));
 });
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });

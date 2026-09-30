@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Activity, SessionStatus } from '@harnas/core';
+import type { Activity, SessionStatus } from '@parley/core';
 import { displayStatus, dotState, stateWord, type DotState } from './dot-state.js';
 
 const STATUSES: SessionStatus[] = ['pending', 'active', 'exited', 'done', 'failed'];

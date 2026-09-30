@@ -11,9 +11,9 @@ let project = '';
 let other = '';
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
-  other = await mkdtemp(path.join(tmpdir(), 'harnas-other-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
+  other = await mkdtemp(path.join(tmpdir(), 'parley-other-'));
   process.env.HARNAS_HOME = home;
 });
 

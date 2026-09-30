@@ -862,7 +862,7 @@ async function closeSession(
 }
 
 const NO_SESSION =
-  'сессия не задана (HARNAS_SESSION_ID пуст): доступны только get_map и read_guide. Создай сессию через харнесс или `harnas-core work session new` — тогда работают остальные инструменты.';
+  'сессия не задана (HARNAS_SESSION_ID пуст): доступны только get_map и read_guide. Создай сессию через харнесс или `parley-core work session new` — тогда работают остальные инструменты.';
 
 async function dispatch(
   context: McpContext,
@@ -954,7 +954,7 @@ async function bindCodexThread(
     });
     return true;
   } catch (error) {
-    process.stderr.write(`harnas-mcp: привязка треда не записалась: ${(error as Error).message}\n`);
+    process.stderr.write(`parley-mcp: привязка треда не записалась: ${(error as Error).message}\n`);
     return false;
   }
 }
@@ -964,7 +964,7 @@ async function bindCodexThread(
  * с `isError`, а не протокольным отказом: клиенту нужно не падение вызова, а
  * текст, из которого понятно, что поправить.
  */
-export function createHarnasServer(context: McpContext): Server<Request, ChannelNotification> {
+export function createParleyServer(context: McpContext): Server<Request, ChannelNotification> {
   // Сессии нет — звонить некому: сервер без `HARNAS_SESSION_ID` умеет только
   // отдавать карту и гид (4.2).
   const { sessionId } = context;

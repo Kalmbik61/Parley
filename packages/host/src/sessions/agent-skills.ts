@@ -17,8 +17,8 @@ import {
   type SkillInstallOptions,
   type SkillInstallResult,
   type SkillSkip,
-} from '@harnas/core';
-import type { SessionRef } from '@harnas/protocol';
+} from '@parley/core';
+import type { SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 
 /** Установщик для сессии: `worktreePath` — её worktree, если он есть и уже заведён на диске. */

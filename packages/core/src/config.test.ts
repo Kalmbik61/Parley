@@ -13,7 +13,7 @@ const write = (value: unknown): Promise<void> =>
   writeFile(file(), typeof value === 'string' ? value : JSON.stringify(value), 'utf8');
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-config-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-config-'));
 });
 
 afterEach(async () => {

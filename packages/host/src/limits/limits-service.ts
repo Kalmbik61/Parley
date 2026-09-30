@@ -27,7 +27,7 @@ import {
   workPaths,
   type LimitWindow,
   type ProviderLimits,
-} from '@harnas/core';
+} from '@parley/core';
 import type { HostContext } from '../context.js';
 import type { WorksService } from '../works/works-service.js';
 

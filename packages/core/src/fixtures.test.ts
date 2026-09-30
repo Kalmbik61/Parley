@@ -145,7 +145,7 @@ describe('реальные сессии (анонимизированные фи
 
 describe('пограничные случаи раскладки', () => {
   it('каталог subagents без файла сессии игнорируется целиком', async () => {
-    const root = await mkdtemp(path.join(tmpdir(), 'harnas-orphan-'));
+    const root = await mkdtemp(path.join(tmpdir(), 'parley-orphan-'));
     try {
       const dir = path.join(root, '-Users-dev-proj', 'сирота', 'subagents');
       await mkdir(dir, { recursive: true });

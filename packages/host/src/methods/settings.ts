@@ -1,9 +1,9 @@
-import { DEFAULT_CONFIG, ENV_NAMES, loadConfig, parseSetting, saveConfig } from '@harnas/core';
-import type { HarnasConfig } from '@harnas/core';
+import { DEFAULT_CONFIG, ENV_NAMES, loadConfig, parseSetting, saveConfig } from '@parley/core';
+import type { ParleyConfig } from '@parley/core';
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
 
-const isConfigKey = (key: string): key is keyof HarnasConfig =>
+const isConfigKey = (key: string): key is keyof ParleyConfig =>
   Object.prototype.hasOwnProperty.call(DEFAULT_CONFIG, key);
 
 export const settingsGet: Handler<'settings.get'> = async () => {
@@ -23,7 +23,7 @@ export const settingsSet: Handler<'settings.set'> = async (params) => {
   if ('error' in parsed) {
     throw new HostError('bad_request', parsed.error);
   }
-  await saveConfig({ [params.key]: parsed.value } as Partial<HarnasConfig>);
+  await saveConfig({ [params.key]: parsed.value } as Partial<ParleyConfig>);
   const { config } = await loadConfig();
   return { config };
 };

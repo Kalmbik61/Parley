@@ -47,13 +47,13 @@ importers:
 
   packages/desktop:
     dependencies:
-      '@harnas/core':
+      '@parley/core':
         specifier: workspace:*
         version: link:../core
-      '@harnas/host':
+      '@parley/host':
         specifier: workspace:*
         version: link:../host
-      '@harnas/protocol':
+      '@parley/protocol':
         specifier: workspace:*
         version: link:../protocol
     devDependencies:
@@ -210,10 +210,10 @@ importers:
 
   packages/host:
     dependencies:
-      '@harnas/core':
+      '@parley/core':
         specifier: workspace:*
         version: link:../core
-      '@harnas/protocol':
+      '@parley/protocol':
         specifier: workspace:*
         version: link:../protocol
       '@xterm/addon-serialize':
@@ -228,7 +228,7 @@ importers:
 
   packages/protocol:
     dependencies:
-      '@harnas/core':
+      '@parley/core':
         specifier: workspace:*
         version: link:../core
       zod:

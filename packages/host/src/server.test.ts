@@ -3,9 +3,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { addSession, createWork, updateMap, workPaths } from '@harnas/core';
-import { METHODS, NOTIFICATIONS } from '@harnas/protocol';
-import type { SessionRef } from '@harnas/protocol';
+import { addSession, createWork, updateMap, workPaths } from '@parley/core';
+import { METHODS, NOTIFICATIONS } from '@parley/protocol';
+import type { SessionRef } from '@parley/protocol';
 import { connectRaw, hello, removeHome, tempHome, waitClosed, waitConnected } from '../test/helpers.js';
 import type { RawMessage, TestClient } from '../test/helpers.js';
 import { startHost } from './host.js';
@@ -199,7 +199,7 @@ describe('активность для нового клиента', () => {
 
   it('сессия в blocked: второй клиент сразу после ответа на hello получает её activity.changed', async () => {
     const { home, token } = await boot();
-    const dir = await mkdtemp(path.join(tmpdir(), 'harnas-server-project-'));
+    const dir = await mkdtemp(path.join(tmpdir(), 'parley-server-project-'));
     projects.push(dir);
 
     // Журнал с PermissionRequest лежит до записи сессии в карту: первое же

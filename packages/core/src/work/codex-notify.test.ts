@@ -51,7 +51,7 @@ const lines = async (): Promise<Array<Record<string, unknown>>> =>
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), 'harnas-codex-notify-'));
+  root = await mkdtemp(path.join(tmpdir(), 'parley-codex-notify-'));
   workDir = path.join(root, '.harnas', 'works', 'w-0001');
   await mkdir(workDir, { recursive: true });
   // Окружение процесса Codex, а значит и notify: адрес работы и сессии, как у команды хуков.

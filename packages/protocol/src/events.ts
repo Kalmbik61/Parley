@@ -1,4 +1,4 @@
-import type { SessionActivity } from '@harnas/core';
+import type { SessionActivity } from '@parley/core';
 import type {
   HostNotice,
   LiveMetrics,

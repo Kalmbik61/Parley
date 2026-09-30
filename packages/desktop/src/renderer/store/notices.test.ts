@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { HostNotice } from '@harnas/protocol';
+import type { HostNotice } from '@parley/protocol';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { useNoticesStore } from './notices.js';
 

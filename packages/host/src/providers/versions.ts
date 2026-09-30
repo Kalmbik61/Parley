@@ -9,7 +9,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { commandBinary, loadProviders, parseVersion } from '@harnas/core';
+import { commandBinary, loadProviders, parseVersion } from '@parley/core';
 import type { Log } from '../log.js';
 
 /** Одна проба: версия команды, `null` — узнать не удалось (нет бинаря, таймаут, чужой ответ). */

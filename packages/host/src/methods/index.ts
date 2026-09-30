@@ -1,4 +1,4 @@
-import type { MethodName, NotificationName } from '@harnas/protocol';
+import type { MethodName, NotificationName } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { AnyHandler, AnyNotificationHandler } from '../context.js';
 import type { LimitsService } from '../limits/limits-service.js';

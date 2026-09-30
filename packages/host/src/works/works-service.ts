@@ -2,7 +2,7 @@
  * Список работ хоста: сколько их, в каких проектах, кто их держит.
  *
  * Источник — глобальный индекс (`readWorksIndex`) плюс карта каждого известного
- * проекта. Наблюдатель за одним `harnasHome()` ловит только смену самого
+ * проекта. Наблюдатель за одним `parleyHome()` ловит только смену самого
  * индекса — содержимое чужого `.harnas/works/<id>/map.json` лежит вне его поля
  * зрения, поэтому на каждый известный проект заводится свой `watchWorks`
  * (спецификация 3.3, 4.2, план, кусок 1.4).
@@ -16,7 +16,7 @@
 
 import {
   gitBranch,
-  harnasHome,
+  parleyHome,
   MapLockTimeoutError,
   processStartedAt,
   readMap,
@@ -27,9 +27,9 @@ import {
   watchWorks,
   workPaths,
   writeHostLease,
-} from '@harnas/core';
-import type { HostLease, WorkEntry, WorksWatcher } from '@harnas/core';
-import type { WorksSnapshot } from '@harnas/protocol';
+} from '@parley/core';
+import type { HostLease, WorkEntry, WorksWatcher } from '@parley/core';
+import type { WorksSnapshot } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 
 export interface WorksServiceOptions {
@@ -275,13 +275,13 @@ export function createWorksService(
         since: new Date().toISOString(),
       };
 
-      // Наблюдатель за `harnasHome()` ловит появление новых проектов в
+      // Наблюдатель за `parleyHome()` ловит появление новых проектов в
       // глобальном индексе, даже если на старте их ещё ни одного нет.
-      ensureWatcher(harnasHome());
+      ensureWatcher(parleyHome());
       const index = await readWorksIndex().catch(() => ({ schemaVersion: 1 as const, works: [] }));
       for (const item of index.works) ensureWatcher(item.projectPath);
 
-      const initial = await readWorks(harnasHome());
+      const initial = await readWorks(parleyHome());
       // Наблюдатель успел отдать своё чтение, пока шло это, — его и берём:
       // номер у начального чтения не спросить, а следующее событие всё равно
       // перечитает список.

@@ -1,7 +1,7 @@
 /**
  * Привязка сессии Codex к её логу по `_meta.threadId` (спека комнат Organic, 3.6, «Привязка к
  * логу»): Codex кладёт id треда в `_meta` каждого `tools/call` к любому MCP-серверу, и сервер
- * `harnas-mcp` узнаёт его при первом же вызове — без гадания по cwd и времени запуска.
+ * `parley-mcp` узнаёт его при первом же вызове — без гадания по cwd и времени запуска.
  */
 
 import { mkdtemp, rm, stat } from 'node:fs/promises';
@@ -13,7 +13,7 @@ import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { addSession } from '../work/map.js';
 import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
-import { createHarnasServer } from './tools.js';
+import { createParleyServer } from './tools.js';
 
 const THREAD = '019ce3d5-584a-7be2-922e-b8185a8d7c19';
 const OTHER_THREAD = '019ce3d5-9999-7be2-922e-b8185a8d7c00';
@@ -25,7 +25,7 @@ let workId = '';
 const opened: Array<{ client: Client; server: Server }> = [];
 
 async function connect(sessionId: string | null): Promise<Client> {
-  const server = createHarnasServer({
+  const server = createParleyServer({
     projectPath: project,
     workId,
     workDir: workPaths(project, workId).dir,
@@ -50,8 +50,8 @@ async function providerSessionId(id: string): Promise<string | null | undefined>
 }
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
   process.env['HARNAS_HOME'] = home;
   workId = (await createWork(project, { title: 'Работа', goal: '' })).work.id;
   await updateMap(project, workId, (map) => {

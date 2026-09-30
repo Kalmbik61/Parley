@@ -38,7 +38,7 @@ let workDir = '';
 let env: NodeJS.ProcessEnv = {};
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), 'harnas-statusline-'));
+  root = await mkdtemp(path.join(tmpdir(), 'parley-statusline-'));
   home = path.join(root, 'home');
   project = path.join(root, 'project');
   workDir = path.join(root, 'work');

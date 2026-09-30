@@ -46,7 +46,7 @@ test.describe('окно поднимает хост и переживает ег
     const requireType = await window.evaluate(() => typeof (globalThis as { require?: unknown }).require);
     expect(requireType).toBe('undefined');
 
-    const bridgeType = await window.evaluate(() => typeof (globalThis as { harnas?: unknown }).harnas);
+    const bridgeType = await window.evaluate(() => typeof (globalThis as { parley?: unknown }).parley);
     expect(bridgeType).not.toBe('undefined');
   });
 
@@ -66,7 +66,7 @@ test.describe('окно поднимает хост и переживает ег
     const callCode = (method: string, params: unknown): Promise<string> =>
       window.evaluate(
         async ([m, p]) => {
-          const bridge = (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas;
+          const bridge = (globalThis as unknown as { parley: { call: (m: string, p: unknown) => Promise<unknown> } }).parley;
           return bridge.call(m, p).then(
             () => 'ok',
             (error: unknown) => String(error),

@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
-import type { Room, WorkEntry } from '@harnas/core';
+import type { Room, WorkEntry } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import type { WorkAttention } from '../attention/derive.js';
 import { roomKey } from '../lib/room-view.js';

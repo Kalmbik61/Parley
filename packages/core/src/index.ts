@@ -136,7 +136,7 @@ export {
   createWork,
   deleteSessionFiles,
   deleteWorkFiles,
-  harnasHome,
+  parleyHome,
   MapLockTimeoutError,
   pruneWorksIndex,
   readMap,
@@ -226,7 +226,7 @@ export {
   parseSetting,
   saveConfig,
 } from './config.js';
-export type { HarnasConfig, LoadedConfig } from './config.js';
+export type { ParleyConfig, LoadedConfig } from './config.js';
 export { activityOf, hookedSince } from './work/activity.js';
 export type {
   Activity,
@@ -280,7 +280,7 @@ export {
   DEFAULT_TIMEOUT_SEC,
   MAX_TIMEOUT_SEC,
   RATE_WINDOW_MS,
-  createHarnasServer,
+  createParleyServer,
 } from './mcp/tools.js';
 export { HUMAN, MESSAGE_KINDS, SYSTEM } from './work/types.js';
 export type {

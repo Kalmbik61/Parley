@@ -22,7 +22,7 @@ let dir = '';
 const journal = (): string => path.join(dir, `${SESSION}.jsonl`);
 
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), 'harnas-events-'));
+  dir = await mkdtemp(path.join(tmpdir(), 'parley-events-'));
 });
 
 afterEach(async () => {

@@ -12,7 +12,7 @@ const write = async (name: string, content: string) => {
 };
 
 beforeAll(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), 'harnas-jsonl-'));
+  dir = await mkdtemp(path.join(tmpdir(), 'parley-jsonl-'));
 });
 afterAll(async () => {
   await rm(dir, { recursive: true, force: true });

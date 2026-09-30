@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry } from '@parley/core';
 import type { HostContext } from '../context.js';
 import type { WorksService } from './works-service.js';
 
@@ -13,8 +13,8 @@ import type { WorksService } from './works-service.js';
  */
 const deliver: Array<(works: WorkEntry[], seq: number) => void> = [];
 
-vi.mock('@harnas/core', async (importOriginal) => {
-  const core = await importOriginal<typeof import('@harnas/core')>();
+vi.mock('@parley/core', async (importOriginal) => {
+  const core = await importOriginal<typeof import('@parley/core')>();
   return {
     ...core,
     watchWorks: (onWorks: (works: WorkEntry[], seq: number) => void) => {
@@ -25,7 +25,7 @@ vi.mock('@harnas/core', async (importOriginal) => {
 });
 
 const { addSession, createWork, readWorks, transitionSession, updateMap } =
-  await import('@harnas/core');
+  await import('@parley/core');
 const { createWorksService } = await import('./works-service.js');
 
 let home = '';
@@ -48,8 +48,8 @@ function fakeHost(): HostContext {
 }
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
   process.env.HARNAS_HOME = home;
   deliver.length = 0;
 });

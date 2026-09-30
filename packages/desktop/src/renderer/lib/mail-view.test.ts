@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { Message, WorkEntry, WorkSession } from '@harnas/core';
+import type { Message, WorkEntry, WorkSession } from '@parley/core';
 import { mailView } from './mail-view.js';
 
 function session(id: string, label: string, parent: string | null = null): WorkSession {

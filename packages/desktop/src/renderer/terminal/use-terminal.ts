@@ -17,8 +17,8 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { WebglAddon } from '@xterm/addon-webgl';
-import { refKey, type SessionRef } from '@harnas/protocol';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import { refKey, type SessionRef } from '@parley/protocol';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { shouldForwardToTerminal } from '../lib/keys.js';
 import { useHostStore } from '../store/host.js';
 import { useUiStore } from '../store/ui.js';
@@ -37,7 +37,7 @@ const WEBGL_RETRY_MS = 1_000;
 const SEARCH_HIGHLIGHT_LIMIT = 1_001;
 
 export interface UseTerminalOptions {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   ref: SessionRef;
   /** `null`, пока контейнер ещё не смонтирован — терминал ждёт. */
   container: HTMLDivElement | null;
@@ -111,7 +111,7 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
   const offlineRef = useRef(offline);
   offlineRef.current = offline;
 
-  // `bridge` стабилен на весь жизненный цикл окна (один `window.harnas`, см.
+  // `bridge` стабилен на весь жизненный цикл окна (один `window.parley`, см.
   // `App.tsx`), но колбэки ниже заведены один раз на монтирование — читают
   // его через ref, а не через замыкание, из тех же соображений.
   const bridgeRef = useRef(options.bridge);
@@ -211,7 +211,7 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
         // страховка от любого другого сбоя освобождения.
         // Рендерер после сорванного dispose мог остаться освобождённым без замены на DOM —
         // этот xterm больше не рисует, поэтому он пересоздаётся на DOM (без WebGL для ключа).
-        console.warn('[harnas] webgl dispose', error);
+        console.warn('[parley] webgl dispose', error);
         webglPolicy.forceDom(policyKey);
         if (!disposed) setGeneration((value) => value + 1);
       }

@@ -74,7 +74,7 @@ export function useMonacoReady(): 'loading' | 'ready' | Error {
         if (alive) setStatus('ready');
       },
       (error: unknown) => {
-        console.warn('[harnas] monaco loader.init', error);
+        console.warn('[parley] monaco loader.init', error);
         if (alive) setStatus(error instanceof Error ? error : new Error(String(error)));
       },
     );
@@ -145,7 +145,7 @@ export function MonacoEditor(props: MonacoEditorProps): JSX.Element {
         viewStates.set(viewStateKey, editor.saveViewState());
       } catch (error) {
         // Редактор уже отпущен — вид не сохранится, курсор встанет в начало.
-        console.warn('[harnas] monaco saveViewState', error);
+        console.warn('[parley] monaco saveViewState', error);
       }
     },
     [editor, viewStateKey],
@@ -162,7 +162,7 @@ export function MonacoEditor(props: MonacoEditorProps): JSX.Element {
     // сами с редактором не снимаются (Monaco не привязывает их к `dispose`) — снимает размонтирование.
     actions.current.push(
       mounted.addAction({
-        id: 'harnas.file.save',
+        id: 'parley.file.save',
         label: S.files.save,
         keybindings: [KeyMod.CtrlCmd | KeyCode.KeyS],
         keybindingContext: 'editorFocus',
@@ -170,7 +170,7 @@ export function MonacoEditor(props: MonacoEditorProps): JSX.Element {
       }),
       // ⌥Z — перенос строк: своего такого сочетания у Monaco нет, а на macOS ⌥Z напечатал бы «Ω».
       mounted.addAction({
-        id: 'harnas.file.toggleWrap',
+        id: 'parley.file.toggleWrap',
         label: S.changes.wrapLines,
         keybindings: [KeyMod.Alt | KeyCode.KeyZ],
         keybindingContext: 'editorFocus',
@@ -192,7 +192,7 @@ export function MonacoEditor(props: MonacoEditorProps): JSX.Element {
       className="h-full"
       path={modelPath}
       defaultValue={text}
-      theme={dark ? 'harnas-dark' : 'harnas-light'}
+      theme={dark ? 'parley-dark' : 'parley-light'}
       loading={null}
       options={options}
       onChange={(value) => handlers.current.onChange(value ?? '')}

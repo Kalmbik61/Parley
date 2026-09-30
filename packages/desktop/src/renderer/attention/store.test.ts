@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry } from '@parley/core';
 import { workKey } from '../lib/tree-order.js';
 import type { SidebarSection } from '../sidebar/sort.js';
 import { useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';

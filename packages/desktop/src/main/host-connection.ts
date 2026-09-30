@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { createConnection, type Socket } from 'node:net';
-import type { HostPaths } from '@harnas/host';
+import type { HostPaths } from '@parley/host';
 import {
   encodeLine,
   LineDecoder,
@@ -11,7 +11,7 @@ import {
   type MethodName,
   type NotificationName,
   type Result,
-} from '@harnas/protocol';
+} from '@parley/protocol';
 import type { HostStatus } from '../shared/bridge.js';
 import { S } from '../shared/strings.js';
 
@@ -124,7 +124,7 @@ export class HostConnection {
           this.spawnedHost = spawned;
         },
         (error: unknown) => {
-          console.error('[harnas] failed to start host', error);
+          console.error('[parley] failed to start host', error);
         },
       )
       .finally(() => {
@@ -415,7 +415,7 @@ export class HostConnection {
       // Не молча (раунд lane-r3, п. 2): уведомление без связи пропадает, и в консоли main
       // остаётся след для диагностики. Окно само не шлёт ввод, пока связи нет.
       this.droppedNotifications += 1;
-      console.warn(`[harnas] host: ${method} dropped — no connection to host (dropped ${this.droppedNotifications})`);
+      console.warn(`[parley] host: ${method} dropped — no connection to host (dropped ${this.droppedNotifications})`);
       return;
     }
     this.socket.write(encodeLine({ method, params }));

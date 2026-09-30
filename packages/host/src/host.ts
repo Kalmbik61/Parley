@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, chmod, link, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { uptime } from 'node:os';
-import { harnasHome, processStartedAt, START_TOLERANCE_MS } from '@harnas/core';
+import { parleyHome, processStartedAt, START_TOLERANCE_MS } from '@parley/core';
 import { createHostContext } from './context.js';
 import type { HostContext } from './context.js';
 import { createHostServer } from './server.js';
@@ -12,7 +12,7 @@ import type { Log } from './log.js';
 import { watchIdle } from './idle.js';
 import { hostPaths, MAX_SOCKET_PATH_BYTES } from './paths.js';
 import type { HostPaths } from './paths.js';
-import { HOST_ERROR_REASONS } from '@harnas/protocol';
+import { HOST_ERROR_REASONS } from '@parley/protocol';
 import { createHostHandlers } from './methods/index.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
@@ -75,7 +75,7 @@ const DEFAULT_IDLE_MS = 300_000;
 const DEFAULT_HELLO_TIMEOUT_MS = 5_000;
 
 export async function startHost(options: HostOptions = {}): Promise<RunningHost> {
-  const resolvedHome = options.home ?? harnasHome();
+  const resolvedHome = options.home ?? parleyHome();
   const paths = hostPaths(resolvedHome);
 
   // 1. Слишком длинный путь сокета — отказ до того, как на диске или в
@@ -89,7 +89,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // работ хоста совпадал с его же файлами (`options.home` в тестах — не
   // настоящий `~/.harnas`), окружение здесь и приводится к тому же дому,
   // а на остановке возвращается прежним (см. `runShutdown`).
-  const previousHarnasHome = process.env['HARNAS_HOME'];
+  const previousParleyHome = process.env['HARNAS_HOME'];
   process.env['HARNAS_HOME'] = resolvedHome;
 
   // 2. Каталог хоста всегда 0700, независимо от того, был он уже или нет.
@@ -103,12 +103,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Журнал заводится до замка: отказ захвата с потерей замка соседа пишет туда причину (fix-lane-post).
   const log = createLog(paths.log);
   if (!(await acquirePidLock(paths.pid, log))) {
-    restoreHarnasHome(previousHarnasHome);
+    restoreParleyHome(previousParleyHome);
     throw new HostAlreadyRunning();
   }
   if (await socketIsAlive(paths.socket)) {
     await releasePidLock(paths.pid);
-    restoreHarnasHome(previousHarnasHome);
+    restoreParleyHome(previousParleyHome);
     throw new HostAlreadyRunning();
   }
   await Promise.all([paths.socket, paths.token].map((file) => rm(file, { force: true })));
@@ -251,7 +251,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     // Не поднялся — замок не держится до выхода процесса (в тестах процесс один на много хостов).
     idleWatcher.stop();
     await releasePidLock(paths.pid);
-    restoreHarnasHome(previousHarnasHome);
+    restoreParleyHome(previousParleyHome);
     throw error;
   }
   await chmod(paths.socket, 0o600);
@@ -322,7 +322,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     // уходящего (lane-r4).
     await Promise.all([paths.socket, paths.token].map((file) => rm(file, { force: true })));
     await releasePidLock(paths.pid);
-    restoreHarnasHome(previousHarnasHome);
+    restoreParleyHome(previousParleyHome);
     log.info('хост остановлен', { reason });
     resolveClosed(reason);
   }
@@ -473,7 +473,7 @@ async function releasePidLock(lockPath: string): Promise<void> {
 }
 
 /** Возвращает `HARNAS_HOME` к тому, чем оно было до `startHost` (см. там же). */
-function restoreHarnasHome(previous: string | undefined): void {
+function restoreParleyHome(previous: string | undefined): void {
   if (previous === undefined) delete process.env['HARNAS_HOME'];
   else process.env['HARNAS_HOME'] = previous;
 }

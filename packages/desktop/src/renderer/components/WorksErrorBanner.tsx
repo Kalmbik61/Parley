@@ -5,7 +5,7 @@
  * (тот русский и идёт только в консоль, `store/works.ts`). Прячется сам, когда ошибки нет.
  */
 
-import { HOST_ERROR_REASONS } from '@harnas/protocol';
+import { HOST_ERROR_REASONS } from '@parley/protocol';
 import { S, errorText } from '../../shared/strings.js';
 import { useWorksStore } from '../store/works.js';
 

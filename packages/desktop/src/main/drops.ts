@@ -6,10 +6,10 @@
 
 import { lstat, mkdir, open, readdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { harnasHome } from '@harnas/core';
+import { parleyHome } from '@parley/core';
 
-/** `~/.harnas/desktop/drops` — рядом с `ui.json` и `layouts.json`; `harnasHome()` слушает `HARNAS_HOME`. */
-export function dropsDir(home: string = harnasHome()): string {
+/** `~/.harnas/desktop/drops` — рядом с `ui.json` и `layouts.json`; `parleyHome()` слушает `HARNAS_HOME`. */
+export function dropsDir(home: string = parleyHome()): string {
   return path.join(home, 'desktop', 'drops');
 }
 

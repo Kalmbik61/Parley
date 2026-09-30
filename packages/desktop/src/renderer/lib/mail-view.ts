@@ -15,12 +15,12 @@
  *     это уже неверно: письма комнаты показывает `components/rooms/feed-model.ts`.
  *
  * `recipientsOf`/`isUnreadFor` перенесены из `core/work/letters.ts` значением:
- * рендерер тянет из `@harnas/core` только типы (см. `lib/dot-state.ts`,
+ * рендерер тянет из `@parley/core` только типы (см. `lib/dot-state.ts`,
  * `lib/participant-tag.ts`) — рантайм модуля идёт через `work/mcp-config.ts`,
  * который трогает `node:fs`, а песочница окна такое не пропускает.
  */
 
-import type { Message, MessageKind, Room, WorkEntry, WorkMap } from '@harnas/core';
+import type { Message, MessageKind, Room, WorkEntry, WorkMap } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import { participantTag } from './participant-tag.js';
 import { treeOrder } from './tree-order.js';

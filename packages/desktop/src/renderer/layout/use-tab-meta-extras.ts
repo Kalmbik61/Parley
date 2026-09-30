@@ -10,8 +10,8 @@
 
 import { useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import type { WorkEntry } from '@harnas/core';
-import { refKey } from '@harnas/protocol';
+import type { WorkEntry } from '@parley/core';
+import { refKey } from '@parley/protocol';
 import { sessionAttention, type Attention } from '../attention/derive.js';
 import { useBrowserStore, type BrowserTabState } from '../browser/store.js';
 import { dirtyBufferKeys, useFilesStore } from '../files/store.js';

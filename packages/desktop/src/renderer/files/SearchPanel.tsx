@@ -14,7 +14,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { CaseSensitive, ChevronDown, ChevronRight, Regex, WholeWord } from 'lucide-react';
 import { toast } from 'sonner';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import type { FileRoot, GrepHit, GrepResult } from '../../shared/files-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
@@ -78,7 +78,7 @@ function hitCount(result: GrepResult): number {
 }
 
 export interface SearchPanelProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   root: FileRoot;
 }
 
@@ -120,7 +120,7 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
     const id = running.current;
     if (id === null) return;
     running.current = null;
-    void bridge.files.cancel(id).catch((error: unknown) => console.warn('[harnas] files.cancel', error));
+    void bridge.files.cancel(id).catch((error: unknown) => console.warn('[parley] files.cancel', error));
   };
 
   useEffect(() => {
@@ -167,7 +167,7 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
             setInvalid(true);
             return;
           }
-          console.warn('[harnas] files.grep', error);
+          console.warn('[parley] files.grep', error);
           toast(code === 'files:denied' ? S.files.denied : errorText(code, S.errors.actions.searchFiles));
         });
     }, SEARCH_DEBOUNCE_MS);

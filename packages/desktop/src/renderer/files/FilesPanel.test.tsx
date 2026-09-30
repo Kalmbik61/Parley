@@ -6,8 +6,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@harnas/core';
-import { refKey, type EventData } from '@harnas/protocol';
+import type { WorkEntry } from '@parley/core';
+import { refKey, type EventData } from '@parley/protocol';
 import type { DirEntry, FileRoot } from '../../shared/files-types.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';

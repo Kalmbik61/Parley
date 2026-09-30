@@ -29,7 +29,7 @@ if (process.env.STUB_NO_HOOKS !== '1' && process.env.HARNAS_WORK_DIR !== undefin
 process.stdout.write('stub-echo готов\r\n');
 
 // Настоящий MCP-сервер харнесса (кусок 8 «Organic»): строка `STUB_MCP <инструмент> <json-аргументы>` в терминале —
-// вызов инструмента `harnas-mcp` так, как его делает модель. Сервер запускается ровно как Claude Code запускает его
+// вызов инструмента `parley-mcp` так, как его делает модель. Сервер запускается ровно как Claude Code запускает его
 // по конфигу работы: `--mcp-config <файл>` из argv, команда, аргументы и окружение сервера `harnas` из файла поверх
 // окружения процесса. Дальше JSON-RPC по stdio: `initialize`, `notifications/initialized`, `tools/call`. Так E2E
 // проверяет решение ведущего целиком — от инструмента, у которого своя проверка «только ведущий», до карточки в окне.
@@ -67,7 +67,7 @@ function startMcp() {
     else wait.resolve(message.result);
   });
   child.on('exit', () => {
-    for (const wait of pending.values()) wait.reject(new Error('harnas-mcp завершился'));
+    for (const wait of pending.values()) wait.reject(new Error('parley-mcp завершился'));
     pending.clear();
     mcpReady = null;
   });
@@ -123,7 +123,7 @@ function typed(text) {
       // Команда выхода (раунд fix-host-resync): E2E завершает свой stub сам, без сигнала чужим
       // процессам и без поиска pid по всей машине.
       if (buffer === 'STUB_EXIT') process.exit(0);
-      // Вызов инструмента настоящего harnas-mcp (см. выше); эхо строки при этом не печатается. Ищется не с начала
+      // Вызов инструмента настоящего parley-mcp (см. выше); эхо строки при этом не печатается. Ищется не с начала
       // строки: перед ней в буфере мог оказаться чужой набор (указатель будильника хоста).
       const mcpCall = buffer.indexOf('STUB_MCP ');
       if (mcpCall !== -1) {

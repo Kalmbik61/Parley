@@ -4,7 +4,7 @@
  * `tui/src/format.ts` дословно — то же форматирование, тот же читатель.
  */
 
-import type { LiveMetrics } from '@harnas/protocol';
+import type { LiveMetrics } from '@parley/protocol';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;

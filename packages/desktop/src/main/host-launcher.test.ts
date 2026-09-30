@@ -88,23 +88,23 @@ describe('hostPaths', () => {
 });
 
 /**
- * Кусок 1.13: в собранном `.app` пакета `@harnas/host` нет вовсе (его тянет
+ * Кусок 1.13: в собранном `.app` пакета `@parley/host` нет вовсе (его тянет
  * `extraResources` в `Resources/host`, минуя node_modules приложения — иначе
  * пришлось бы тащить и node-pty, спека 3.2), поэтому `resolveHostEntry`
  * ветвится на `packaged`, а не всегда резолвит workspace-пакет.
  */
 describe('resolveHostEntry', () => {
-  it('в dev-режиме резолвит workspace-пакет @harnas/host', () => {
+  it('в dev-режиме резолвит workspace-пакет @parley/host', () => {
     const entry = resolveHostEntry({ packaged: false, resourcesPath: '/unused' });
 
-    expect(entry).toBe(require.resolve('@harnas/host/main'));
+    expect(entry).toBe(require.resolve('@parley/host/main'));
   });
 
   it('в собранном приложении читает Resources/host/dist/main.js', () => {
-    const entry = resolveHostEntry({ packaged: true, resourcesPath: '/Applications/harnas.app/Contents/Resources' });
+    const entry = resolveHostEntry({ packaged: true, resourcesPath: '/Applications/Parley.app/Contents/Resources' });
 
     expect(entry).toBe(
-      path.join('/Applications/harnas.app/Contents/Resources', 'host', 'dist', 'main.js'),
+      path.join('/Applications/Parley.app/Contents/Resources', 'host', 'dist', 'main.js'),
     );
   });
 });
@@ -135,7 +135,7 @@ describe('dist: spawn-helper node-pty у хоста .app исполняемый'
     const steps = pkg.scripts.dist.split('&&').map((step) => step.trim());
 
     const deploy = steps.findIndex(
-      (step) => step.includes('@harnas/host deploy') && step.includes('out/host'),
+      (step) => step.includes('@parley/host deploy') && step.includes('out/host'),
     );
     const fix = steps.findIndex(
       (step) => step.includes('scripts/fix-node-pty-perms.mjs') && step.includes('out/host'),

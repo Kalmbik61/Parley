@@ -17,7 +17,7 @@ async function writeSession(slug: string, id: string, lines: string): Promise<st
 }
 
 beforeAll(async () => {
-  root = await mkdtemp(path.join(tmpdir(), 'harnas-index-'));
+  root = await mkdtemp(path.join(tmpdir(), 'parley-index-'));
 });
 afterAll(async () => {
   await rm(root, { recursive: true, force: true });

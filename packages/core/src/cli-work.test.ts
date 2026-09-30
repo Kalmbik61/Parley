@@ -68,9 +68,9 @@ const newWork = (title: string): Promise<Record<string, unknown>> =>
   ok('work', 'new', '--title', title, '--goal', 'Цель', '--cwd', project);
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
-  binDir = await mkdtemp(path.join(tmpdir(), 'harnas-bin-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
+  binDir = await mkdtemp(path.join(tmpdir(), 'parley-bin-'));
   stub = path.join(binDir, 'agent-stub');
   // `--version` заглушка отвечает свежей сборкой: перед флагом канала CLI
   // пробует версию (разговор агентов, 4.4).
@@ -83,7 +83,7 @@ afterEach(async () => {
   await rm(binDir, { recursive: true, force: true });
 });
 
-describe('harnas-core work prune', () => {
+describe('parley-core work prune', () => {
   it('печатает снятые записи и оставляет в индексе только работы с картой', async () => {
     await newWork('Живая');
     await newWork('Снесённая');
@@ -96,7 +96,7 @@ describe('harnas-core work prune', () => {
   }, 60_000);
 });
 
-describe('harnas-core work new', () => {
+describe('parley-core work new', () => {
   it('создаёт работу, карту на диске и запись в глобальном индексе', async () => {
     const created = await newWork('Авторизация');
     const map = created['map'] as WorkMap;
@@ -121,7 +121,7 @@ describe('harnas-core work new', () => {
   }, 60_000);
 });
 
-describe('harnas-core work list', () => {
+describe('parley-core work list', () => {
   it('печатает работы индекса, archived — только с --all', async () => {
     await newWork('Авторизация');
     await newWork('Платежи');
@@ -139,7 +139,7 @@ describe('harnas-core work list', () => {
   }, 60_000);
 });
 
-describe('harnas-core work map', () => {
+describe('parley-core work map', () => {
   it('находит работу по глобальному индексу без --cwd', async () => {
     await newWork('Авторизация');
     const printed = await ok('work', 'map', '--work', 'w-0001');
@@ -155,7 +155,7 @@ describe('harnas-core work map', () => {
   }, 60_000);
 });
 
-describe('harnas-core work session new', () => {
+describe('parley-core work session new', () => {
   it('создаёт pending, бриф, MCP-конфиг и печатает готовую команду', async () => {
     await newWork('Авторизация');
     const printed = await ok(

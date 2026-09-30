@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { Proposal, Room, WorkEntry, WorkSession } from '@harnas/core';
-import type { SessionRef } from '@harnas/protocol';
+import type { Proposal, Room, WorkEntry, WorkSession } from '@parley/core';
+import type { SessionRef } from '@parley/protocol';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { tabId } from '../layout/ids.js';
 import { selectedSessionOf, useLayoutStore } from '../layout/store.js';

@@ -21,10 +21,10 @@ const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
  */
 async function hostSupportsPty(window: Page): Promise<boolean> {
   return window.evaluate(async () => {
-    const harnas = (globalThis as { harnas: { call: (method: string, params: unknown) => Promise<unknown> } }).harnas;
+    const parley = (globalThis as { parley: { call: (method: string, params: unknown) => Promise<unknown> } }).parley;
     try {
-      await harnas.call('pty.attach', {
-        ref: { projectPath: '/harnas-pty-probe', workId: 'probe', sessionId: 'probe' },
+      await parley.call('pty.attach', {
+        ref: { projectPath: '/parley-pty-probe', workId: 'probe', sessionId: 'probe' },
       });
       return true;
     } catch (err) {
@@ -72,7 +72,7 @@ test.describe('панель терминала: ввод стаба и восс�
 
     const work = await window.evaluate(
       (projectPath: string) =>
-        (globalThis as { harnas: { call: (m: string, p: unknown) => Promise<{ workId: string }> } }).harnas.call(
+        (globalThis as { parley: { call: (m: string, p: unknown) => Promise<{ workId: string }> } }).parley.call(
           'works.create',
           { projectPath, title: 'e2e-terminal', goal: '' },
         ),
@@ -82,9 +82,9 @@ test.describe('панель терминала: ввод стаба и восс�
       ({ workId, projectPath }: { workId: string; projectPath: string }) =>
         (
           globalThis as {
-            harnas: { call: (m: string, p: unknown) => Promise<{ ref: { sessionId: string } }> };
+            parley: { call: (m: string, p: unknown) => Promise<{ ref: { sessionId: string } }> };
           }
-        ).harnas.call('sessions.create', {
+        ).parley.call('sessions.create', {
           projectPath,
           workId,
           provider: 'claude',
@@ -135,7 +135,7 @@ test.describe('панель терминала: ввод стаба и восс�
 
       const work = await window.evaluate(
         (projectPath: string) =>
-          (globalThis as { harnas: { call: (m: string, p: unknown) => Promise<{ workId: string }> } }).harnas.call(
+          (globalThis as { parley: { call: (m: string, p: unknown) => Promise<{ workId: string }> } }).parley.call(
             'works.create',
             { projectPath, title: 'e2e-links', goal: '' },
           ),
@@ -145,9 +145,9 @@ test.describe('панель терминала: ввод стаба и восс�
         ({ workId, projectPath }: { workId: string; projectPath: string }) =>
           (
             globalThis as {
-              harnas: { call: (m: string, p: unknown) => Promise<{ ref: { sessionId: string } }> };
+              parley: { call: (m: string, p: unknown) => Promise<{ ref: { sessionId: string } }> };
             }
-          ).harnas.call('sessions.create', { projectPath, workId, provider: 'claude', label: 'links', task: '', parent: null }),
+          ).parley.call('sessions.create', { projectPath, workId, provider: 'claude', label: 'links', task: '', parent: null }),
         { workId: work.workId, projectPath: project },
       );
 
@@ -192,7 +192,7 @@ test.describe('панель терминала: ввод стаба и восс�
 
       const work = await window.evaluate(
         (projectPath: string) =>
-          (globalThis as { harnas: { call: (m: string, p: unknown) => Promise<{ workId: string }> } }).harnas.call(
+          (globalThis as { parley: { call: (m: string, p: unknown) => Promise<{ workId: string }> } }).parley.call(
             'works.create',
             { projectPath, title: 'e2e-addons', goal: '' },
           ),
@@ -202,9 +202,9 @@ test.describe('панель терминала: ввод стаба и восс�
         ({ workId, projectPath }: { workId: string; projectPath: string }) =>
           (
             globalThis as {
-              harnas: { call: (m: string, p: unknown) => Promise<{ ref: { sessionId: string } }> };
+              parley: { call: (m: string, p: unknown) => Promise<{ ref: { sessionId: string } }> };
             }
-          ).harnas.call('sessions.create', { projectPath, workId, provider: 'claude', label: 'addons', task: '', parent: null }),
+          ).parley.call('sessions.create', { projectPath, workId, provider: 'claude', label: 'addons', task: '', parent: null }),
         { workId: work.workId, projectPath: project },
       );
 

@@ -37,7 +37,7 @@ const git = (dir: string, args: string[]) => run('git', ['-C', dir, ...args]);
 // Последовательно: одновременная запись `.git/config` двумя вызовами git
 // временами ловит собственную же блокировку файла настроек.
 async function setIdentity(dir: string): Promise<void> {
-  await git(dir, ['config', 'user.email', 'тест@harnas']);
+  await git(dir, ['config', 'user.email', 'тест@parley']);
   await git(dir, ['config', 'user.name', 'тест']);
 }
 
@@ -46,7 +46,7 @@ let project = '';
 let worktreeRoot = '';
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), 'harnas-worktree-'));
+  root = await mkdtemp(path.join(tmpdir(), 'parley-worktree-'));
   project = path.join(root, 'project');
   worktreeRoot = path.join(root, 'worktrees');
   await mkdir(project, { recursive: true });
@@ -816,14 +816,14 @@ describe('проект — подкаталог репозитория (тест
 });
 
 describe('.harnas/ — не изменения проекта (тест 9)', () => {
-  async function harnasLog(dir: string): Promise<void> {
+  async function parleyLog(dir: string): Promise<void> {
     await mkdir(path.join(dir, '.harnas', 'works', 'w-01', 'events'), { recursive: true });
     await writeFile(path.join(dir, '.harnas', 'works', 'w-01', 'events', 's-01.jsonl'), '{}\n', 'utf8');
   }
 
   it('в files только a.txt; коммит без .harnas/', async () => {
     await initProject();
-    await harnasLog(project);
+    await parleyLog(project);
     await writeFile(path.join(project, 'a.txt'), 'a\n', 'utf8');
 
     expect((await projectChanges(project)).files.map((file) => file.path)).toEqual(['a.txt']);
@@ -838,7 +838,7 @@ describe('.harnas/ — не изменения проекта (тест 9)', () 
 
   it('изменён только .harnas/ — NothingToCommitError, коммита нет', async () => {
     await initProject();
-    await harnasLog(project);
+    await parleyLog(project);
     const head = (await git(project, ['rev-parse', 'HEAD'])).stdout;
 
     await expect(commitProject(project, 'пусто')).rejects.toBeInstanceOf(NothingToCommitError);
@@ -850,7 +850,7 @@ describe('.harnas/ — не изменения проекта (тест 9)', () 
     await writeFile(path.join(project, '.gitignore'), '.harnas/\n', 'utf8');
     await git(project, ['add', '.gitignore']);
     await git(project, ['commit', '-m', 'игнор']);
-    await harnasLog(project);
+    await parleyLog(project);
 
     await expect(commitProject(project, 'пусто')).rejects.toBeInstanceOf(NothingToCommitError);
 
@@ -870,7 +870,7 @@ describe('.harnas/ — не изменения проекта (тест 9)', () 
     await writeFile(path.join(sub, 'a.txt'), '2\n', 'utf8');
     await writeFile(path.join(project, 'top.txt'), 't2\n', 'utf8');
     await git(sub, ['add', '../top.txt']);
-    await harnasLog(sub);
+    await parleyLog(sub);
 
     const { commit } = await commitProject(sub, 'только sub');
     expect((await git(project, ['show', '--name-only', '--format=', commit])).stdout.trim()).toBe('sub/a.txt');

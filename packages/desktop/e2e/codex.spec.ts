@@ -32,10 +32,10 @@ interface Ref {
   sessionId: string;
 }
 
-type Harnas = { harnas: { call: (m: string, p: unknown) => Promise<unknown>; notify: (m: string, p: unknown) => void } };
+type Parley = { parley: { call: (m: string, p: unknown) => Promise<unknown>; notify: (m: string, p: unknown) => void } };
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
-  return window.evaluate(([m, p]) => (globalThis as unknown as Harnas).harnas.call(m, p), [method, params] as const) as Promise<T>;
+  return window.evaluate(([m, p]) => (globalThis as unknown as Parley).parley.call(m, p), [method, params] as const) as Promise<T>;
 }
 
 /** Текст экрана терминала: строки DOM-рендера подряд — перенесённая строка склеивается (`terminal-send.spec.ts`). */
@@ -45,7 +45,7 @@ async function screenText(window: Page): Promise<string> {
 
 /** Строка «в терминал агента», как набрал бы человек: уведомление `pty.input` хоста. */
 async function humanTypes(window: Page, ref: Ref, text: string): Promise<void> {
-  await window.evaluate(([target, data]) => (globalThis as unknown as Harnas).harnas.notify('pty.input', { ref: target, data }), [ref, text] as const);
+  await window.evaluate(([target, data]) => (globalThis as unknown as Parley).parley.notify('pty.input', { ref: target, data }), [ref, text] as const);
 }
 
 interface SendResult {

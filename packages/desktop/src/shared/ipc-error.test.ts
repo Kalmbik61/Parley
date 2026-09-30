@@ -29,8 +29,8 @@ describe('encodeIpcError / decodeIpcError', () => {
     expect(decodeIpcError('plain string')).toEqual({ code: 'failed', message: 'plain string' });
   });
 
-  it('мусор после метки harnas-error: не JSON — падает в общий разбор', () => {
-    const broken = new Error('harnas-error:{not json');
+  it('мусор после метки parley-error: не JSON — падает в общий разбор', () => {
+    const broken = new Error('parley-error:{not json');
     const result = decodeIpcError(broken);
     expect(result.code).toBe('failed');
     expect(result.message).toBe(broken.message);
@@ -39,10 +39,10 @@ describe('encodeIpcError / decodeIpcError', () => {
   it('data туда и обратно (кусок 8.2a, тест 7); data не объект — поля нет', () => {
     const x: IpcErrorInfo = { code: 'bad_request', message: 'm', data: { reason: 'not-a-repo' } };
     expect(decodeIpcError(encodeIpcError(x))).toEqual(x);
-    const raw = new Error(`harnas-error:${JSON.stringify({ code: 'internal', message: 'm', data: 'строка' })}`);
+    const raw = new Error(`parley-error:${JSON.stringify({ code: 'internal', message: 'm', data: 'строка' })}`);
     expect(decodeIpcError(raw)).toEqual({ code: 'internal', message: 'm' });
     expect('data' in decodeIpcError(raw)).toBe(false);
-    const arr = new Error(`harnas-error:${JSON.stringify({ code: 'internal', message: 'm', data: [1] })}`);
+    const arr = new Error(`parley-error:${JSON.stringify({ code: 'internal', message: 'm', data: [1] })}`);
     expect('data' in decodeIpcError(arr)).toBe(false);
   });
 

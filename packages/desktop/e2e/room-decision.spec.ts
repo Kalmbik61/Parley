@@ -2,7 +2,7 @@ import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { addRoom, addSession, HUMAN, setProposal, updateMap } from '@harnas/core';
+import { addRoom, addSession, HUMAN, setProposal, updateMap } from '@parley/core';
 import { quitApp, stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
@@ -11,7 +11,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * Решение ведущего от инструмента до ответа человека (кусок 8 плана «Organic», спека окна 2026-09-29, 1.10, 2.4, 3.3).
  *
  * Агент — заглушка `stub-echo-agent.mjs`: по строке `STUB_MCP <инструмент> <json>` в терминале она запускает НАСТОЯЩИЙ
- * `harnas-mcp` тем же способом, каким его запускает Claude Code по конфигу работы (`--mcp-config`), и шлёт JSON-RPC
+ * `parley-mcp` тем же способом, каким его запускает Claude Code по конфигу работы (`--mcp-config`), и шлёт JSON-RPC
  * `tools/call`. Значит, проверка «только ведущий», запись решения в карту и замена с `rev + 1` — настоящие, а не
  * подложенные тестом (в `room-row.spec.ts` решение клал ядром сам тест). Строку в терминал агента тест отправляет так
  * же, как набрал бы человек, — уведомлением `pty.input` хоста.
@@ -50,7 +50,7 @@ interface Ref {
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
-    ([m, p]) => (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas.call(m, p),
+    ([m, p]) => (globalThis as unknown as { parley: { call: (m: string, p: unknown) => Promise<unknown> } }).parley.call(m, p),
     [method, params] as const,
   ) as Promise<T>;
 }
@@ -74,11 +74,11 @@ async function sendFocusTarget(app: ElectronApplication, target: unknown): Promi
   }, target);
 }
 
-/** Агент зовёт инструмент `harnas-mcp`: строка в его терминал, как набрал бы человек (заглушка разбирает `STUB_MCP`). */
+/** Агент зовёт инструмент `parley-mcp`: строка в его терминал, как набрал бы человек (заглушка разбирает `STUB_MCP`). */
 async function agentCalls(window: Page, ref: Ref, tool: string, args: unknown): Promise<void> {
   await window.evaluate(
     ([target, line]) =>
-      (globalThis as unknown as { harnas: { notify: (method: string, params: unknown) => void } }).harnas.notify('pty.input', {
+      (globalThis as unknown as { parley: { notify: (method: string, params: unknown) => void } }).parley.notify('pty.input', {
         ref: target,
         data: line,
       }),
@@ -96,7 +96,7 @@ interface LoggedNote {
 /** Журнал уведомлений main (`HARNAS_NOTIFICATIONS=log`) — только о решениях. */
 async function decisionNotes(app: ElectronApplication): Promise<LoggedNote[]> {
   const all = await app.evaluate(() =>
-    ((globalThis as { __harnasNotifications?: LoggedNote[] }).__harnasNotifications ?? []).map(({ title, body, silent, closed }) => ({
+    ((globalThis as { __parleyNotifications?: LoggedNote[] }).__parleyNotifications ?? []).map(({ title, body, silent, closed }) => ({
       title,
       body,
       silent,
@@ -123,7 +123,7 @@ async function workMap(window: Page, workId: string): Promise<MapView> {
   return entry.map;
 }
 
-test.describe('решение ведущего: настоящий harnas-mcp, карточка, уведомления, ответ человека (кусок 8)', () => {
+test.describe('решение ведущего: настоящий parley-mcp, карточка, уведомления, ответ человека (кусок 8)', () => {
   let home: string;
   let app: ElectronApplication | null = null;
   let homeBefore: string | undefined;
@@ -326,7 +326,7 @@ test.describe('решение ведущего: настоящий harnas-mcp, �
       .toEqual([{ title: NOTE_TITLE, body: 'e2e-room · S01 revised the decision', silent: false, closed: false }]);
 
     // Переподключение к хосту: «Restart host» — окно то же, связь новая, подписки заводятся заново, первый снимок — база.
-    await second.window.evaluate(() => (globalThis as unknown as { harnas: { app: { restartHost: () => Promise<void> } } }).harnas.app.restartHost());
+    await second.window.evaluate(() => (globalThis as unknown as { parley: { app: { restartHost: () => Promise<void> } } }).parley.app.restartHost());
     await expect(rowOf(second.window)).toContainText('decision', { timeout: 30_000 });
     await second.window.waitForTimeout(2_000);
     expect(await decisionNotes(second.electronApp)).toHaveLength(1);
@@ -358,7 +358,7 @@ test.describe('решение ведущего: настоящий harnas-mcp, �
 
     // Клик по записи журнала делает то же, что клик по настоящему уведомлению: main поднимает окно и шлёт ему цель.
     await electronApp.evaluate(() => {
-      const log = (globalThis as { __harnasNotifications?: Array<{ title: string; click(): void }> }).__harnasNotifications ?? [];
+      const log = (globalThis as { __parleyNotifications?: Array<{ title: string; click(): void }> }).__parleyNotifications ?? [];
       log.filter((entry) => entry.title === 'Decision waiting for you').at(-1)?.click();
     });
     await expect(roomTab).toHaveAttribute('data-active', 'true');

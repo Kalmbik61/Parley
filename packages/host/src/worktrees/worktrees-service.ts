@@ -29,9 +29,9 @@ import {
   type WorktreeDiff,
   type WorktreeInfo,
   type WorkSession,
-} from '@harnas/core';
-import { HOST_ERROR_REASONS } from '@harnas/protocol';
-import type { HostErrorReason, SessionRef } from '@harnas/protocol';
+} from '@parley/core';
+import { HOST_ERROR_REASONS } from '@parley/protocol';
+import type { HostErrorReason, SessionRef } from '@parley/protocol';
 import { HostError } from '../errors.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 

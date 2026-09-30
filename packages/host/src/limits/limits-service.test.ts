@@ -10,9 +10,9 @@ import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { addSession, createWork, updateMap, workPaths } from '@harnas/core';
-import type { WorkMap } from '@harnas/core';
-import type { EventData, EventName } from '@harnas/protocol';
+import { addSession, createWork, updateMap, workPaths } from '@parley/core';
+import type { WorkMap } from '@parley/core';
+import type { EventData, EventName } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createLimitsService, LIMITS_POLL_MS, limitsOptionsFromEnv } from './limits-service.js';
 import type { LimitsService } from './limits-service.js';
@@ -43,10 +43,10 @@ const fakeHost = (): HostContext => ({
 });
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-limits-home-'));
-  projectA = await mkdtemp(path.join(tmpdir(), 'harnas-limits-a-'));
-  projectB = await mkdtemp(path.join(tmpdir(), 'harnas-limits-b-'));
-  codexRoot = await mkdtemp(path.join(tmpdir(), 'harnas-limits-codex-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-limits-home-'));
+  projectA = await mkdtemp(path.join(tmpdir(), 'parley-limits-a-'));
+  projectB = await mkdtemp(path.join(tmpdir(), 'parley-limits-b-'));
+  codexRoot = await mkdtemp(path.join(tmpdir(), 'parley-limits-codex-'));
   process.env.HARNAS_HOME = home;
   now = T0;
   broadcasts = [];

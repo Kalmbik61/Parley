@@ -13,14 +13,14 @@
  */
 
 import { useEffect, useState } from 'react';
-import type { SessionRef } from '@harnas/protocol';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { SessionRef } from '@parley/protocol';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { sessionTag } from '../lib/participant.js';
 import { Button } from '../ui/button.js';
 
 export interface InterruptedBannerProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
 }
 
 export function InterruptedBanner({ bridge }: InterruptedBannerProps): JSX.Element | null {

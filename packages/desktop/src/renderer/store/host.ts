@@ -5,7 +5,7 @@
  */
 
 import { create } from 'zustand';
-import type { HarnasBridge, HostStatus } from '../../shared/bridge.js';
+import type { ParleyBridge, HostStatus } from '../../shared/bridge.js';
 
 export interface HostState {
   /** До первого `onStatus` — `connecting`. */
@@ -22,7 +22,7 @@ export interface HostState {
    */
   connections: number;
   /** Подписка на `onStatus`; возвращает отписку. */
-  init(bridge: HarnasBridge): () => void;
+  init(bridge: ParleyBridge): () => void;
 }
 
 export const useHostStore = create<HostState>((set) => ({

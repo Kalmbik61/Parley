@@ -10,7 +10,7 @@ import { addMessage, addSession } from '../work/map.js';
 import { addRoom } from '../work/rooms.js';
 import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
 import { HUMAN, type WorkMap } from '../work/types.js';
-import { createHarnasServer } from './tools.js';
+import { createParleyServer } from './tools.js';
 
 /**
  * Аннотации MCP инструментов `harnas` (спека комнат, решение 13). По ним Codex решает, спрашивать ли
@@ -56,7 +56,7 @@ let workId = '';
 const opened: { client: Client; server: Server }[] = [];
 
 async function connect(sessionId: string | null = 's-01'): Promise<Client> {
-  const server = createHarnasServer({
+  const server = createParleyServer({
     projectPath: project,
     workId,
     workDir: workPaths(project, workId).dir,
@@ -112,9 +112,9 @@ const ids = (map: WorkMap) => ({
 });
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
-  binDir = await mkdtemp(path.join(tmpdir(), 'harnas-bin-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
+  binDir = await mkdtemp(path.join(tmpdir(), 'parley-bin-'));
   process.env.HARNAS_HOME = home;
   // `spawn_session` проверяет команду провайдера в PATH: подсунут файл-заглушка, настоящий `claude` не запускается.
   const stub = path.join(binDir, 'claude');

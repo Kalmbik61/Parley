@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { EventRecord, WorkEntry } from '@harnas/core';
-import type { SessionRef } from '@harnas/protocol';
+import type { EventRecord, WorkEntry } from '@parley/core';
+import type { SessionRef } from '@parley/protocol';
 import { findInterrupted } from './interrupted.js';
 
 const event = (name: string, notificationType: string | null = null): EventRecord => ({

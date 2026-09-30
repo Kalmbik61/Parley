@@ -33,14 +33,14 @@ import {
   type SessionIndex,
   type WorkEntry,
   type WorkSession,
-} from '@harnas/core';
+} from '@parley/core';
 import {
   refKey,
   type EventData,
   type LiveMetrics,
   type SessionRef,
   type WorksSnapshot,
-} from '@harnas/protocol';
+} from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import type { CodexSignal } from '../pty/codex-terminal.js';
 import type { WorksService } from '../works/works-service.js';

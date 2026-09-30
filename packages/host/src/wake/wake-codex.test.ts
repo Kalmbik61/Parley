@@ -17,8 +17,8 @@ import {
   transitionSession,
   updateMap,
   workPaths,
-} from '@harnas/core';
-import type { EventData, EventName, SessionRef } from '@harnas/protocol';
+} from '@parley/core';
+import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import { linkTerminalActivity } from '../activity/terminal-link.js';
 import { createActivityService } from '../activity/activity-service.js';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -56,10 +56,10 @@ function fakeHost(): HostContext {
 }
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
-  claudeRoot = await mkdtemp(path.join(tmpdir(), 'harnas-claude-'));
-  codexRoot = await mkdtemp(path.join(tmpdir(), 'harnas-codex-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
+  claudeRoot = await mkdtemp(path.join(tmpdir(), 'parley-claude-'));
+  codexRoot = await mkdtemp(path.join(tmpdir(), 'parley-codex-'));
   process.env['HARNAS_HOME'] = home;
   broadcasts = [];
 });

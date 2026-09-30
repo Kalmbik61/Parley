@@ -43,8 +43,8 @@ beforeEach(async () => {
   reads.open = 0;
   reads.max = 0;
   reads.total = 0;
-  claudeRoot = await mkdtemp(path.join(tmpdir(), 'harnas-limit-claude-'));
-  codexRoot = await mkdtemp(path.join(tmpdir(), 'harnas-limit-codex-'));
+  claudeRoot = await mkdtemp(path.join(tmpdir(), 'parley-limit-claude-'));
+  codexRoot = await mkdtemp(path.join(tmpdir(), 'parley-limit-codex-'));
 });
 afterEach(async () => {
   await rm(claudeRoot, { recursive: true, force: true });

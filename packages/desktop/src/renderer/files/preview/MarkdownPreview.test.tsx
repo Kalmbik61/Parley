@@ -106,7 +106,7 @@ describe('MarkdownPreview (тест 3)', () => {
     // В jsdom нет `URL.createObjectURL`: подставной ведёт журнал.
     URL.createObjectURL = vi.fn((blob: Blob) => {
       created.push(blob);
-      return `blob:harnas/${created.length}`;
+      return `blob:parley/${created.length}`;
     });
     URL.revokeObjectURL = vi.fn((url: string) => void revoked.push(url));
   });
@@ -129,12 +129,12 @@ describe('MarkdownPreview (тест 3)', () => {
   it('картинка с относительным путём грузится через files.readBytes в Blob; revokeObjectURL при размонтировании', async () => {
     bridge.setBytes(ROOT, 'docs/img/a.png', new Uint8Array([137, 80, 78, 71]));
     const { container, unmount } = renderPreview('![logo](./img/a.png)');
-    await waitFor(() => expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:harnas/1'));
+    await waitFor(() => expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:parley/1'));
     expect(bridge.readBytesCalls).toEqual([{ root: ROOT, path: 'docs/img/a.png' }]);
     expect(created[0]?.type).toBe('image/png');
     expect(container.querySelector('img')?.getAttribute('alt')).toBe('logo');
     unmount();
-    expect(revoked).toEqual(['blob:harnas/1']);
+    expect(revoked).toEqual(['blob:parley/1']);
   });
 
   it('картинка по http(s) и file:// не грузится: вместо неё — alt текстом, ни readBytes, ни src', () => {

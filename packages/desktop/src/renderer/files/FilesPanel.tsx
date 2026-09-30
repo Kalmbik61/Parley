@@ -13,9 +13,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Eye, EyeOff, RefreshCw, Search } from 'lucide-react';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@harnas/core';
-import { refKey } from '@harnas/protocol';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { WorkEntry } from '@parley/core';
+import { refKey } from '@parley/protocol';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import type { FileRoot, GitStatusLetter } from '../../shared/files-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import type { FileRootSpec } from '../../shared/layout-types.js';
@@ -41,7 +41,7 @@ const NO_STATUS: Status = {};
  * Статус корня с дросселем: первый повод — сразу, следующие в пределах 2 с — одним вызовом в
  * конце окна. `refresh(true)` — «Refresh» человека: сразу, мимо дросселя.
  */
-function useGitStatus(bridge: HarnasBridge, root: FileRoot): { status: Status; refresh(now?: boolean): void } {
+function useGitStatus(bridge: ParleyBridge, root: FileRoot): { status: Status; refresh(now?: boolean): void } {
   const [status, setStatus] = useState<Status>(NO_STATUS);
   const request = useRef<(now?: boolean) => void>(() => {});
   const key = rootKeyOf(root);
@@ -61,7 +61,7 @@ function useGitStatus(bridge: HarnasBridge, root: FileRoot): { status: Status; r
         .then((next) => {
           if (!disposed) setStatus(next);
         })
-        .catch((error: unknown) => console.warn('[harnas] files.gitStatus', error));
+        .catch((error: unknown) => console.warn('[parley] files.gitStatus', error));
     };
     request.current = (now = false) => {
       if (disposed) return;
@@ -105,7 +105,7 @@ function turnEnded(prev: ActivityEntry | undefined, next: ActivityEntry | undefi
 }
 
 export interface FilesPanelProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   entry: WorkEntry;
 }
 
@@ -149,7 +149,7 @@ export function FilesPanel({ bridge, entry }: FilesPanelProps): JSX.Element {
         else id = got;
       })
       .catch((error: unknown) => {
-        console.warn('[harnas] files.watch', error);
+        console.warn('[parley] files.watch', error);
         if (!disposed && decodeIpcError(error).code === 'files:watch-failed') setWatchFailed(true);
       });
     return () => {

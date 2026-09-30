@@ -20,9 +20,9 @@ import {
   transitionSession,
   updateMap,
   workPaths,
-} from '@harnas/core';
-import type { WorkEntry, WorktreeInfo } from '@harnas/core';
-import type { EventData, EventName, SessionRef } from '@harnas/protocol';
+} from '@parley/core';
+import type { WorkEntry, WorktreeInfo } from '@parley/core';
+import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import { createPtyManager } from '../pty/pty-manager.js';
@@ -37,7 +37,7 @@ const runGit = promisify(execFile);
 /** Репозиторий с одним коммитом на ветке `main` — общая точка отсчёта тестов worktree. */
 async function initGitProject(dir: string): Promise<void> {
   await runGit('git', ['init', '-b', 'main', dir]);
-  await runGit('git', ['-C', dir, 'config', 'user.email', 'тест@harnas']);
+  await runGit('git', ['-C', dir, 'config', 'user.email', 'тест@parley']);
   await runGit('git', ['-C', dir, 'config', 'user.name', 'тест']);
   await writeFile(path.join(dir, 'README.md'), 'старт\n', 'utf8');
   await runGit('git', ['-C', dir, 'add', 'README.md']);
@@ -104,7 +104,7 @@ function setEnv(key: string, value: string): void {
 }
 
 beforeEach(async () => {
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-sessions-project-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-sessions-project-'));
   broadcasts = [];
   // Настоящий бинарь в автотестах не запускается никогда — заглушка стоит
   // под именем claude через тот же оверрайд, что и в проде (`findRunnerBinary`).
@@ -120,13 +120,13 @@ afterEach(async () => {
 });
 
 async function tempArgsFile(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'harnas-sessions-args-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'parley-sessions-args-'));
   return path.join(dir, 'args.json');
 }
 
 /** Корень worktree отдельно от `project`: `<root>/<проект>-<хеш6>/…` не должен жить внутри самого репозитория. */
 async function tempWorktreeRoot(): Promise<string> {
-  return mkdtemp(path.join(tmpdir(), 'harnas-sessions-worktrees-'));
+  return mkdtemp(path.join(tmpdir(), 'parley-sessions-worktrees-'));
 }
 
 interface StubArgs {

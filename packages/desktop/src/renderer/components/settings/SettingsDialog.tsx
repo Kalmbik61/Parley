@@ -19,8 +19,8 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import type { HarnasConfig } from '@harnas/core';
-import type { HarnasBridge } from '../../../shared/bridge.js';
+import type { ParleyConfig } from '@parley/core';
+import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, S } from '../../../shared/strings.js';
 import type { Appearance, UiFile } from '../../../shared/ui-types.js';
@@ -34,10 +34,10 @@ import { ToggleGroup, ToggleGroupItem } from '../../ui/toggle-group.js';
 
 export interface SettingsDialogProps {
   open: boolean;
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   onOpenChange: (open: boolean) => void;
   /** Зовётся после каждого удачного сохранения — окно применяет настройку сразу, без перезапуска. */
-  onConfigChange?: (config: HarnasConfig) => void;
+  onConfigChange?: (config: ParleyConfig) => void;
 }
 
 /** Четыре секции спеки 4.10, в порядке таблицы, и «Браузер» (кусок 9.1). */
@@ -53,7 +53,7 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
 
 const SECTION_ORDER: readonly SettingsSection[] = ['appearance', 'terminal', 'agents', 'notifications', 'browser'];
 
-type FieldErrors = Partial<Record<keyof HarnasConfig, string>>;
+type FieldErrors = Partial<Record<keyof ParleyConfig, string>>;
 
 function FieldRow({
   label,
@@ -98,7 +98,7 @@ function NotificationRow({
 
 export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: SettingsDialogProps): JSX.Element {
   const [section, setSection] = useState<SettingsSection>('appearance');
-  const [config, setConfig] = useState<HarnasConfig | null>(null);
+  const [config, setConfig] = useState<ParleyConfig | null>(null);
   const [locked, setLocked] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<FieldErrors>({});
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -119,12 +119,12 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
         setLoadError(null);
       })
       .catch((err: unknown) => {
-        console.warn('[harnas] settings.get', err);
+        console.warn('[parley] settings.get', err);
         setLoadError(errorText(decodeIpcError(err).code, S.errors.actions.loadSettings));
       });
   }, [open, bridge]);
 
-  const save = async (key: keyof HarnasConfig, value: string): Promise<void> => {
+  const save = async (key: keyof ParleyConfig, value: string): Promise<void> => {
     try {
       const result = await bridge.call('settings.set', { key, value });
       setConfig(result.config);
@@ -137,7 +137,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
         return next;
       });
     } catch (err) {
-      console.warn('[harnas] settings.set', key, err);
+      console.warn('[parley] settings.set', key, err);
       const message = errorText(decodeIpcError(err).code, S.errors.actions.saveSettings);
       setErrors((prev) => ({ ...prev, [key]: message }));
     }
@@ -157,7 +157,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
   // Куки, хранилища и кеш раздела встроенного браузера (кусок 9.1); сообщение main — только в консоль.
   const clearBrowserData = (): void => {
     bridge.browser.clearData().catch((err: unknown) => {
-      console.warn('[harnas] browser.clearData', err);
+      console.warn('[parley] browser.clearData', err);
       toast(errorText(decodeIpcError(err).code, S.errors.actions.clearBrowserData));
     });
   };

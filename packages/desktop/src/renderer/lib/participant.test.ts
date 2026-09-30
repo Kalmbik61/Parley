@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { WorkEntry, WorkSession } from '@harnas/core';
-import type { SessionRef } from '@harnas/protocol';
+import type { WorkEntry, WorkSession } from '@parley/core';
+import type { SessionRef } from '@parley/protocol';
 import { sessionLabelFor, sessionRowLabel } from './participant.js';
 
 describe('sessionRowLabel', () => {

@@ -3,8 +3,8 @@
  * `WorkSession`/`WorkEntry` на все его тесты вместо копии в каждом файле.
  */
 
-import type { Activity, Message, Room, WorkEntry, WorkSession, WorkStatus } from '@harnas/core';
-import { refKey, type LiveMetrics, type SessionRef } from '@harnas/protocol';
+import type { Activity, Message, Room, WorkEntry, WorkSession, WorkStatus } from '@parley/core';
+import { refKey, type LiveMetrics, type SessionRef } from '@parley/protocol';
 import type { ActivityEntry } from '../store/activity.js';
 
 export function makeSession(id: string, label: string, patch: Partial<WorkSession> = {}): WorkSession {

@@ -83,7 +83,7 @@ async function stateOf(real: string): Promise<FileState | null> {
     return { deleted: false, mtimeMs: info.mtimeMs, size: info.size, ino: info.ino };
   } catch (error) {
     if (codeOf(error) === 'ENOENT') return { deleted: true, mtimeMs: 0, size: 0, ino: 0 };
-    console.warn(`[harnas] files: watch stat failed: ${real}`, error);
+    console.warn(`[parley] files: watch stat failed: ${real}`, error);
     return null;
   }
 }
@@ -103,10 +103,10 @@ export function createFileWatch(options: FileWatchOptions): FileWatch {
     try {
       watcher = watchFs(target, { recursive, persistent: false }, (_event, filename) => listener(filename));
     } catch (error) {
-      console.warn(`[harnas] files: watch failed: ${target}`, error);
+      console.warn(`[parley] files: watch failed: ${target}`, error);
       throw new HostError('files:watch-failed', `cannot watch ${target}: ${codeOf(error)}`);
     }
-    watcher.on('error', (error) => console.warn(`[harnas] files: watch error: ${target}`, error));
+    watcher.on('error', (error) => console.warn(`[parley] files: watch error: ${target}`, error));
     return watcher;
   };
 

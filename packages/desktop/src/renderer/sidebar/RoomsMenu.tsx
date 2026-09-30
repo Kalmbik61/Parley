@@ -5,7 +5,7 @@
  */
 
 import { useState, type ReactNode } from 'react';
-import type { WorkMap } from '@harnas/core';
+import type { WorkMap } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import { roomUnreadForHuman } from '../attention/derive.js';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu.js';

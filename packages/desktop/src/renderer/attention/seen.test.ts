@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { refKey, type SessionRef } from '@harnas/protocol';
+import { refKey, type SessionRef } from '@parley/protocol';
 import { createSeenTracker, visibleSessions, type SeenTracker } from './seen.js';
 
 const a: SessionRef = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-01' };

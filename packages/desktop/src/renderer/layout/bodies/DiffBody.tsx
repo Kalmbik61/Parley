@@ -8,8 +8,8 @@
  */
 
 import { Suspense } from 'react';
-import type { WorkEntry } from '@harnas/core';
-import type { HarnasBridge } from '../../../shared/bridge.js';
+import type { WorkEntry } from '@parley/core';
+import type { ParleyBridge } from '../../../shared/bridge.js';
 import type { TabSpec } from '../../../shared/layout-types.js';
 import { S } from '../../../shared/strings.js';
 import { lazyWithRetry } from '../../files/editor/retry-lazy.js';
@@ -19,7 +19,7 @@ import type { SendWithToastDeps } from '../../terminal/send.js';
 const lazyDiffTab = lazyWithRetry(async () => (await import('../../review/DiffTab.js')).DiffTab);
 
 export interface DiffBodyProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   workKey: string;
   /** Сессия вкладки есть в карте — иначе `GroupView` показал бы `MissingBody`. */
   entry: WorkEntry;

@@ -370,7 +370,7 @@ describe('выбор прерван (тест 5 куска 9.3a)', () => {
     const cancelCalls = guest.executeJavaScriptInIsolatedWorld.mock.calls.filter(
       ([, sources]) => sources[0]?.code !== 'GUEST_SCRIPT',
     );
-    expect(cancelCalls).toEqual([[PICK_WORLD_ID, [{ code: 'globalThis.__harnasPickCancel?.()' }]]]);
+    expect(cancelCalls).toEqual([[PICK_WORLD_ID, [{ code: 'globalThis.__parleyPickCancel?.()' }]]]);
   });
 
   it('скрипт отмены упал (документ уже уничтожен) — тихо; мёртвому гостю не шлётся (fix-9)', async () => {
@@ -410,7 +410,7 @@ describe('выбор прерван (тест 5 куска 9.3a)', () => {
 
     mode.downloadStarted(7);
     expect(await pending).toBeNull();
-    expect(cancelCalls()).toEqual([[PICK_WORLD_ID, [{ code: 'globalThis.__harnasPickCancel?.()' }]]]);
+    expect(cancelCalls()).toEqual([[PICK_WORLD_ID, [{ code: 'globalThis.__parleyPickCancel?.()' }]]]);
   });
 
   it('загрузка из гостя без выбора — скрипт не шлётся (fix-9b)', async () => {

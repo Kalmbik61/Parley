@@ -16,9 +16,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   // test.skip, и прогон выглядел зелёным из одних пропусков (ревью M10). Теперь — отказ сразу.
   const hostEntry = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../host/dist/main.js');
   if (!existsSync(hostEntry)) {
-    throw new Error(`E2E окна: не собран хост ${hostEntry} — сначала pnpm --filter @harnas/host build`);
+    throw new Error(`E2E окна: не собран хост ${hostEntry} — сначала pnpm --filter @parley/host build`);
   }
-  const dir = await mkdtemp(path.join(tmpdir(), 'harnas-e2e-run-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'parley-e2e-run-'));
   const list = path.join(dir, 'homes');
   process.env[RUN_HOMES_ENV] = list;
   // Хост каждого теста строит индекс истории агентов (раунд lane-r3, п. 1): пустые корни

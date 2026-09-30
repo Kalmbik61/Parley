@@ -53,7 +53,7 @@ const functionCall = (name: string) =>
   });
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), 'harnas-codex-'));
+  root = await mkdtemp(path.join(tmpdir(), 'parley-codex-'));
 });
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });

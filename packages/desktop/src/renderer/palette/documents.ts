@@ -12,8 +12,8 @@
  * «Action». Поле поиска подписи не читает (`fields`), поэтому ранжирование прежнее.
  */
 
-import type { WorkEntry, WorkSession } from '@harnas/core';
-import { refKey } from '@harnas/protocol';
+import type { WorkEntry, WorkSession } from '@parley/core';
+import { refKey } from '@parley/protocol';
 import { toast } from 'sonner';
 import type { ActionDef, ActionId } from '../../shared/keybindings.js';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';

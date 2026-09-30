@@ -16,9 +16,9 @@
 import { useState, type CSSProperties } from 'react';
 import { MoreHorizontal } from 'lucide-react';
 import { toast } from 'sonner';
-import type { BranchCommit, DiffFile, WorkEntry } from '@harnas/core';
-import { refKey, type SessionRef } from '@harnas/protocol';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { BranchCommit, DiffFile, WorkEntry } from '@parley/core';
+import { refKey, type SessionRef } from '@parley/protocol';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
 import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
@@ -45,7 +45,7 @@ import { useChanges } from './use-changes.js';
 import { VirtualRows } from './VirtualRows.js';
 
 export interface ChangesPanelProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   workKey: string;
   /** Активная работа. */
   entry: WorkEntry;
@@ -184,7 +184,7 @@ export function ChangesPanel({ bridge, workKey, entry, sendDeps }: ChangesPanelP
       () => useReviewStore.getState().markDiscarded(key),
       (err: unknown) => {
         const info = decodeIpcError(err);
-        console.warn('[harnas] worktrees.discard', info.code, info.message);
+        console.warn('[parley] worktrees.discard', info.code, info.message);
         toast.error(errorText(info.code, S.errors.actions.discardWorktree));
       },
     );

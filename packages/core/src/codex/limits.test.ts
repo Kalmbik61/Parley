@@ -133,7 +133,7 @@ describe('readCodexLimits: самый свежий rollout-лог', () => {
   let root = '';
 
   beforeEach(async () => {
-    root = await mkdtemp(path.join(tmpdir(), 'harnas-codex-limits-'));
+    root = await mkdtemp(path.join(tmpdir(), 'parley-codex-limits-'));
   });
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });

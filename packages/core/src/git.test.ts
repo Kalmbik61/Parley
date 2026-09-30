@@ -11,7 +11,7 @@ const run = promisify(execFile);
 let dir = '';
 
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), 'harnas-git-'));
+  dir = await mkdtemp(path.join(tmpdir(), 'parley-git-'));
 });
 
 afterEach(async () => {
@@ -30,7 +30,7 @@ describe('gitBranch', () => {
       '-C',
       dir,
       '-c',
-      'user.email=тест@harnas',
+      'user.email=тест@parley',
       '-c',
       'user.name=тест',
       'commit',
@@ -50,7 +50,7 @@ describe('gitBranch', () => {
       '-C',
       dir,
       '-c',
-      'user.email=тест@harnas',
+      'user.email=тест@parley',
       '-c',
       'user.name=тест',
       'commit',

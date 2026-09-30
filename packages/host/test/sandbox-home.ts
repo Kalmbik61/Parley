@@ -15,7 +15,7 @@ import path from 'node:path';
 
 const running = process.env['HARNAS_TEST_HOME'];
 // Файлов тестов много, а каталог нужен один на процесс: имя живёт в окружении.
-const home = running ?? mkdtempSync(path.join(tmpdir(), 'harnas-host-test-home-'));
+const home = running ?? mkdtempSync(path.join(tmpdir(), 'parley-host-test-home-'));
 
 if (running === undefined) {
   process.env['HARNAS_TEST_HOME'] = home;

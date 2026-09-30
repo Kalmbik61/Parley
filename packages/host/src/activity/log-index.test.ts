@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile, appendFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { WorkSession } from '@harnas/core';
+import type { WorkSession } from '@parley/core';
 import { createLogIndex } from './log-index.js';
 import type { LogIndex } from './log-index.js';
 
@@ -11,8 +11,8 @@ let codexRoot = '';
 let indexes: LogIndex[] = [];
 
 beforeEach(async () => {
-  claudeRoot = await mkdtemp(path.join(tmpdir(), 'harnas-claude-'));
-  codexRoot = await mkdtemp(path.join(tmpdir(), 'harnas-codex-'));
+  claudeRoot = await mkdtemp(path.join(tmpdir(), 'parley-claude-'));
+  codexRoot = await mkdtemp(path.join(tmpdir(), 'parley-codex-'));
 });
 
 afterEach(async () => {

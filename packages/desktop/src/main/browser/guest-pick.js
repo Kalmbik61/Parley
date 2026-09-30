@@ -7,7 +7,7 @@
 // человека — данные элемента, по Esc или отмене — null.
 (() => {
   // Новый выбор того же гостя снимает прежний: два оверлея и два набора перехватчиков не нужны.
-  if (typeof globalThis.__harnasPickCancel === 'function') globalThis.__harnasPickCancel();
+  if (typeof globalThis.__parleyPickCancel === 'function') globalThis.__parleyPickCancel();
 
   // Пределы — те же, что проверяет main (PICK_LIMITS); лишнее отсюда просто не везём. html — на символ
   // больше: так main видит, что обрезано, и ставит свою пометку.
@@ -152,7 +152,7 @@
       window.removeEventListener('mousemove', onMove, true);
       window.removeEventListener('keydown', onKey, true);
       overlay.remove();
-      if (globalThis.__harnasPickCancel === cancel) delete globalThis.__harnasPickCancel;
+      if (globalThis.__parleyPickCancel === cancel) delete globalThis.__parleyPickCancel;
       if (value === null) {
         resolve(null);
         return;
@@ -189,7 +189,7 @@
       finish(null);
     }
 
-    globalThis.__harnasPickCancel = cancel;
+    globalThis.__parleyPickCancel = cancel;
     for (const type of BLOCKED) window.addEventListener(type, onBlocked, true);
     window.addEventListener('mousemove', onMove, true);
     window.addEventListener('keydown', onKey, true);

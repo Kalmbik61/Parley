@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../test/helpers.js';
-import { processStartedAt } from '@harnas/core';
+import { processStartedAt } from '@parley/core';
 import { HostAlreadyRunning, SocketPathTooLong, startHost } from './host.js';
 import type { RunningHost } from './host.js';
 import { hostPaths } from './paths.js';

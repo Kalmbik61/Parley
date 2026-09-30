@@ -8,7 +8,7 @@
  *
  * Модель сессии приходит уже посчитанной (`LiveMetrics.model` из
  * `store/activity.ts`), а не резолвером по id, как в оригинале: рендерер тянет
- * из `@harnas/core` только типы (`import type`) — рантайм `model-badge.ts`
+ * из `@parley/core` только типы (`import type`) — рантайм `model-badge.ts`
  * идёт через `providers.ts`, который на верхнем уровне модуля трогает
  * `node:fs`, а песочница окна (`contextIsolation`, `sandbox`, без
  * `nodeIntegration` — `main/window.ts`) рантайм core не пропускает. Тот же
@@ -16,7 +16,7 @@
  * (`displayStatus`).
  */
 
-import type { WorkMap } from '@harnas/core';
+import type { WorkMap } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import { sessionTag } from './participant.js';
 

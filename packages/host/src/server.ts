@@ -5,8 +5,8 @@ import {
   LineTooLongError,
   PROTOCOL_VERSION,
   parseIncoming,
-} from '@harnas/protocol';
-import type { MethodName, NotificationName, ResponseMessage } from '@harnas/protocol';
+} from '@parley/protocol';
+import type { MethodName, NotificationName, ResponseMessage } from '@parley/protocol';
 import { createClient } from './client.js';
 import type { Client } from './client.js';
 import type { AnyHandler, AnyNotificationHandler, HostContext, RequestInfo } from './context.js';

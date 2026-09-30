@@ -14,8 +14,8 @@ export interface ShellEnvResult {
  * печатают rc-файлы и хуки выхода (баннеры, `nvm`, «instant prompt»): без границ этот шум попал
  * бы в окружение вместе с настоящими переменными.
  */
-const ENV_BEGIN = '__HARNAS_ENV_BEGIN__';
-const ENV_END = '__HARNAS_ENV_END__';
+const ENV_BEGIN = '__PARLEY_ENV_BEGIN__';
+const ENV_END = '__PARLEY_ENV_END__';
 
 /**
  * Команда для `-c`: маркер, `env -0`, маркер. `env -0` печатает записи `ИМЯ=значение`, каждую с NUL

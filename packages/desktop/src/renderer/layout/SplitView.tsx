@@ -19,7 +19,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry } from '@parley/core';
 import type { LayoutNode, SplitNode } from '../../shared/layout-types.js';
 import { cn } from '../lib/cn.js';
 import { GroupView } from './GroupView.js';

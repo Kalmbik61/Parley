@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { fitRightSidebar, RIGHT_SIDEBAR } from '../../shared/ui-types.js';
 import { FilesPanel } from '../files/FilesPanel.js';
@@ -44,7 +44,7 @@ export function rightSidebarHasRoom(): boolean {
 }
 
 export interface RightSidebarProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   /** Активная работа; без неё `AppShell` сайдбар не рисует. */
   workKey: string;
   /** Показанная ширина и её верхний предел — `fitRightSidebar` в `AppShell`. */

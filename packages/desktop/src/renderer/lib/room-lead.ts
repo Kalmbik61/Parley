@@ -1,6 +1,6 @@
 /**
  * Ведущий комнаты в окне (дизайн комнат, 3.1–3.2) — копия правила `liveLead` из
- * `@harnas/core` (`work/rooms.ts`): окно берёт из core только типы, его рантайм тянет модули
+ * `@parley/core` (`work/rooms.ts`): окно берёт из core только типы, его рантайм тянет модули
  * Node. Меняется правило — меняются оба места вместе.
  *
  * Назначенный `lead` (у карт до 2026-09-29 — первый из `members`), пока он жив; иначе первый
@@ -8,7 +8,7 @@
  * одной живой сессии: такая комната закрыта. Человек — не сессия и ведущим не бывает.
  */
 
-import type { Room, WorkMap } from '@harnas/core';
+import type { Room, WorkMap } from '@parley/core';
 
 function isAlive(map: WorkMap, id: string): boolean {
   return map.sessions.some((session) => session.id === id && session.lifecycle !== 'closed');

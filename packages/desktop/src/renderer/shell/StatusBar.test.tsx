@@ -16,7 +16,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { LimitWindow, ProviderLimits } from '@harnas/protocol';
+import type { LimitWindow, ProviderLimits } from '@parley/protocol';
 import type { HostStatus } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';

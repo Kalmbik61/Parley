@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ErrorCode, HostNotice, NoticeKind } from '@harnas/protocol';
+import type { ErrorCode, HostNotice, NoticeKind } from '@parley/protocol';
 import { errorText, noticeText, providerName, S } from './strings.js';
 
 const CYRILLIC = /[Ѐ-ӿ]/;

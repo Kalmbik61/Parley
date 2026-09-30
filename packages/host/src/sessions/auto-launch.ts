@@ -9,7 +9,7 @@
  * хоста — трогать её без спроса нельзя (план, раздел «на что смотреть», п. 2).
  */
 
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry } from '@parley/core';
 
 export function autoLaunchCandidates(
   previous: WorkEntry | undefined,

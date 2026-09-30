@@ -15,7 +15,7 @@
  * комнаты проводит хост в `rooms.addMember`.
  */
 
-import type { WorkMap } from '@harnas/core';
+import type { WorkMap } from '@parley/core';
 import { homeRoomOf } from '../sidebar/sort.js';
 import type { SidebarTarget } from './dnd.js';
 

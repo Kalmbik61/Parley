@@ -19,7 +19,7 @@
  * видит и русский `notice.text` показать не может, даже случайно.
  */
 
-import type { LimitWindow, ProviderLimits } from '@harnas/protocol';
+import type { LimitWindow, ProviderLimits } from '@parley/protocol';
 import type { HostStatus } from '../../shared/bridge.js';
 import { providerName, S } from '../../shared/strings.js';
 import { AgentIcon } from '../components/AgentIcon.js';

@@ -33,9 +33,9 @@
  */
 
 import { ChevronDown, Hash } from 'lucide-react';
-import type { WorkSession } from '@harnas/core';
-import { refKey } from '@harnas/protocol';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { WorkSession } from '@parley/core';
+import { refKey } from '@parley/protocol';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { providerName, S } from '../../shared/strings.js';
 import { roomAwaitsDecision } from '../attention/derive.js';
 import { AgentIcon } from '../components/AgentIcon.js';
@@ -58,7 +58,7 @@ export interface RoomRowProps {
   /** Работа строки — для строк участников (меню, перетаскивание); строками, а не ref, как у `SessionRow`. */
   projectPath: string;
   workId: string;
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   row: CardRoomRow;
   /** Сообщения комнаты, не прочитанные человеком (`WorkAttention.roomsUnread`). */
   unread: number;

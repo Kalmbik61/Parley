@@ -6,13 +6,13 @@ import { CODEX_NOTIFY_ENTRY } from './codex-notify.js';
 import { workPaths } from './store.js';
 
 /** Имя bin MCP-сервера в `packages/core/package.json`. */
-export const MCP_SERVER_BIN = 'harnas-mcp';
+export const MCP_SERVER_BIN = 'parley-mcp';
 
 /** Скрипт сервера по абсолютному пути — лежит рядом с этим модулем, в `mcp/`. */
 export const MCP_SERVER_ENTRY = fileURLToPath(new URL('../mcp/server.js', import.meta.url));
 
 /**
- * Чем запускать сервер. Bin `harnas-mcp` есть в PATH только под pnpm-скриптами,
+ * Чем запускать сервер. Bin `parley-mcp` есть в PATH только под pnpm-скриптами,
  * а агент стартует из любого терминала — поэтому по умолчанию берём node текущего
  * процесса и скрипт по абсолютному пути. Явная команда остаётся как есть.
  */
@@ -59,7 +59,7 @@ export interface McpConfigFile {
 }
 
 /**
- * Конфиг MCP на одну сессию: сервер `harnas-mcp` по stdio, а кто звонит — он
+ * Конфиг MCP на одну сессию: сервер `parley-mcp` по stdio, а кто звонит — он
  * узнаёт из окружения, поэтому агенту не нужно представляться (спецификация,
  * раздел 4).
  */
@@ -142,7 +142,7 @@ function codexServerEnv({
  * серверы живут в `~/.codex/config.toml`, а `-c mcp_servers.<имя>=<таблица>`
  * добавляет свой, не трогая файл пользователя.
  *
- * Окружение сервера Codex урезает, поэтому всё, что нужно `harnas-mcp`, лежит в таблице `env`
+ * Окружение сервера Codex урезает, поэтому всё, что нужно `parley-mcp`, лежит в таблице `env`
  * (`codexServerEnv`). `channel` здесь не учитывается: звонок — возможность Claude Code, codex
  * живёт по pull (разговор агентов, 4.4).
  */

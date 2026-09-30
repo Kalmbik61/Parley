@@ -26,8 +26,8 @@ import {
   updateMap,
   workPaths,
   type WorkMap,
-} from '@harnas/core';
-import type { Params } from '@harnas/protocol';
+} from '@parley/core';
+import type { Params } from '@parley/protocol';
 import { HostError } from '../errors.js';
 
 const bad = (message: string): HostError => new HostError('bad_request', message);

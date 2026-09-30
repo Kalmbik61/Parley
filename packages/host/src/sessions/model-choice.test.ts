@@ -2,15 +2,15 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PROVIDERS, loadProviders, selectableModels } from '@harnas/core';
-import { METHODS } from '@harnas/protocol';
+import { PROVIDERS, loadProviders, selectableModels } from '@parley/core';
+import { METHODS } from '@parley/protocol';
 import { resolveModelChoice } from './model-choice.js';
 
 let home = '';
 let savedHome: string | undefined;
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-model-choice-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-model-choice-'));
   savedHome = process.env['HARNAS_HOME'];
   process.env['HARNAS_HOME'] = home;
 });

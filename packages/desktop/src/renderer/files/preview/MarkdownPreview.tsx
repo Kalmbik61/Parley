@@ -13,7 +13,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { HarnasBridge } from '../../../shared/bridge.js';
+import type { ParleyBridge } from '../../../shared/bridge.js';
 import type { FileRoot } from '../../../shared/files-types.js';
 import { rootKey } from '../../../shared/work-keys.js';
 import { imageType, useObjectUrl } from './object-url.js';
@@ -101,7 +101,7 @@ function textOf(node: unknown): string {
   return (item.children ?? []).map(textOf).join('');
 }
 
-function MarkdownImage({ bridge, root, path, alt }: { bridge: HarnasBridge; root: FileRoot; path: string; alt: string }): JSX.Element {
+function MarkdownImage({ bridge, root, path, alt }: { bridge: ParleyBridge; root: FileRoot; path: string; alt: string }): JSX.Element {
   const [bytes, setBytes] = useState<Uint8Array | null>(null);
   const url = useObjectUrl(bytes, imageType(path));
   const rootId = rootKey(root);
@@ -112,7 +112,7 @@ function MarkdownImage({ bridge, root, path, alt }: { bridge: HarnasBridge; root
       .then((data) => {
         if (alive) setBytes(data);
       })
-      .catch((error: unknown) => console.warn('[harnas] files.readBytes', error));
+      .catch((error: unknown) => console.warn('[parley] files.readBytes', error));
     return () => {
       alive = false;
     };
@@ -123,7 +123,7 @@ function MarkdownImage({ bridge, root, path, alt }: { bridge: HarnasBridge; root
 }
 
 export interface MarkdownPreviewProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   root: FileRoot;
   /** Путь файла от корня — база относительных ссылок. */
   filePath: string;

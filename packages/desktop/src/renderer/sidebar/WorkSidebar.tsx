@@ -19,9 +19,9 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Plus, Search } from 'lucide-react';
-import type { WorkEntry } from '@harnas/core';
-import { refKey } from '@harnas/protocol';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { WorkEntry } from '@parley/core';
+import { refKey } from '@parley/protocol';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { attentionOf } from '../attention/derive.js';
 import { selectedSessionOf, useLayoutStore } from '../layout/store.js';
@@ -41,7 +41,7 @@ import { showClosedSessions, WorkCard } from './WorkCard.js';
 
 export interface WorkSidebarProps {
   /** Мост для меню карточек и строк (кусок 3.4). */
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   /** Клик по карточке — работа становится активной (спека 6.4). */
   onActivateWork(workKey: string): void;
   /** Клик по строке сессии — работа активна, вкладка терминала открыта или в фокусе. */

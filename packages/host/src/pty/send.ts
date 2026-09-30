@@ -5,9 +5,9 @@
  * одновременно с будильником (`busy`). Автоповторов нет: исход решает человек.
  */
 
-import { hookedSince } from '@harnas/core';
-import { refKey } from '@harnas/protocol';
-import type { SendResult, SessionRef } from '@harnas/protocol';
+import { hookedSince } from '@parley/core';
+import { refKey } from '@parley/protocol';
+import type { SendResult, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import { HostError } from '../errors.js';
 import type { WakeService } from '../wake/wake-service.js';

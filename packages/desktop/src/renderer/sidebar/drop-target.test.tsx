@@ -12,7 +12,7 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { DndContext, PointerSensor, useSensor, useSensors, type CollisionDetection } from '@dnd-kit/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry } from '@parley/core';
 import { dndId } from '../layout/dnd.js';
 import { useLayoutStore } from '../layout/store.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';

@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { WorksSnapshot } from '@harnas/protocol';
+import type { WorksSnapshot } from '@parley/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FileRoot } from '../shared/files-types.js';
 import { workKey } from '../shared/work-keys.js';
@@ -87,7 +87,7 @@ const KEY = (): string => workKey(project, WORK);
 const PROJECT_ROOT = (): FileRoot => ({ workKey: KEY(), spec: { kind: 'project' } });
 
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), 'harnas-roots-'));
+  dir = await mkdtemp(path.join(tmpdir(), 'parley-roots-'));
   project = path.join(dir, 'proj');
   await mkdir(path.join(project, 'src'), { recursive: true });
   await writeFile(path.join(project, 'src', 'a.ts'), 'a');
@@ -173,7 +173,7 @@ describe('запись и .git (тест 3)', () => {
 
 describe('/tmp и /private/tmp (тест 4)', () => {
   it('корень в /tmp/x: resolve отдаёт realpath, locate(/tmp/x/a) находит корень', async () => {
-    const tmpRoot = await mkdtemp('/tmp/harnas-roots-tmp-');
+    const tmpRoot = await mkdtemp('/tmp/parley-roots-tmp-');
     try {
       await writeFile(path.join(tmpRoot, 'a'), '');
       const source = fakeSource(snapshot([{ projectPath: tmpRoot, workId: WORK }]));

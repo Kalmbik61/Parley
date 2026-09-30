@@ -23,7 +23,7 @@ const CWD = '/Users/dev/проект';
 let root = '';
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), 'harnas-codex-link-'));
+  root = await mkdtemp(path.join(tmpdir(), 'parley-codex-link-'));
 });
 
 afterEach(async () => {

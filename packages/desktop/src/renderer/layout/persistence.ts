@@ -8,9 +8,9 @@
  */
 
 import { useEffect, useRef } from 'react';
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry } from '@parley/core';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { settleVanishedWork } from '../files/SaveChangesDialog.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { emptyLayout, parseWorkLayout, pruneLayout } from './tree.js';
@@ -98,7 +98,7 @@ function survivingNeighbor(
 }
 
 /** `loadLayout` → `parseWorkLayout` → `pruneLayout(isTabAlive)`; `null` на любом шаге → `emptyLayout()`. */
-async function restoreLayout(bridge: HarnasBridge, entry: WorkEntry | undefined, key: string): Promise<WorkLayout> {
+async function restoreLayout(bridge: ParleyBridge, entry: WorkEntry | undefined, key: string): Promise<WorkLayout> {
   const raw = await bridge.app.loadLayout(key);
   const parsed = raw === null ? null : parseWorkLayout(raw);
   const base = parsed ?? emptyLayout();
@@ -140,7 +140,7 @@ const hydrating = new Set<string>();
 const drops = new Map<string, number>();
 
 /** Гидрирует раскладки работ, ещё не показанных за этот запуск: тот же hydrateWork, что у первого показа. */
-export async function ensureHydrated(input: { bridge: HarnasBridge; works: WorkEntry[] }): Promise<void> {
+export async function ensureHydrated(input: { bridge: ParleyBridge; works: WorkEntry[] }): Promise<void> {
   const jobs: Array<Promise<void>> = [];
   for (const entry of input.works) {
     const key = workKeyOf(entry.projectPath, entry.map.work.id);
@@ -163,7 +163,7 @@ export async function ensureHydrated(input: { bridge: HarnasBridge; works: WorkE
 }
 
 export interface UseLayoutPersistenceInput {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   works: WorkEntry[];
   worksLoaded: boolean;
   /**

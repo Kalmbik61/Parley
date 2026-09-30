@@ -5,7 +5,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { SessionRef } from '@harnas/protocol';
+import type { SessionRef } from '@parley/protocol';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { InterruptedBanner } from './InterruptedBanner.js';
 

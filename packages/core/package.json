@@ -1,5 +1,5 @@
 {
-  "name": "@harnas/core",
+  "name": "@parley/core",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -15,8 +15,8 @@
     "test:coverage": "vitest run --coverage"
   },
   "bin": {
-    "harnas-core": "./dist/cli.js",
-    "harnas-mcp": "./dist/mcp/server.js"
+    "parley-core": "./dist/cli.js",
+    "parley-mcp": "./dist/mcp/server.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0"

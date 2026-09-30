@@ -25,7 +25,7 @@ const git = async (dir: string, ...args: string[]): Promise<string> => (await ru
 /** Репозиторий с одним коммитом на `main`: worktree сессии отводится от него. */
 async function initRepo(dir: string): Promise<void> {
   await run('git', ['init', '-b', 'main', dir]);
-  await git(dir, 'config', 'user.email', 'e2e@harnas');
+  await git(dir, 'config', 'user.email', 'e2e@parley');
   await git(dir, 'config', 'user.name', 'e2e');
   await writeFile(path.join(dir, 'README.md'), 'старт\n', 'utf8');
   await git(dir, 'add', 'README.md');
@@ -35,7 +35,7 @@ async function initRepo(dir: string): Promise<void> {
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
     ([m, p]) =>
-      (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas.call(m, p),
+      (globalThis as unknown as { parley: { call: (m: string, p: unknown) => Promise<unknown> } }).parley.call(m, p),
     [method, params] as const,
   ) as Promise<T>;
 }

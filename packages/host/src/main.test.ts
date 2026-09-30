@@ -47,7 +47,7 @@ async function waitFor(check: () => boolean, timeoutMs: number): Promise<boolean
 async function hostCalls(skipProbe: boolean): Promise<string[]> {
   const home = await tempHome();
   homes.push(home);
-  const bin = await mkdtemp(path.join(tmpdir(), 'harnas-main-probe-'));
+  const bin = await mkdtemp(path.join(tmpdir(), 'parley-main-probe-'));
   dirs.push(bin);
   const calls = path.join(bin, 'calls.txt');
 

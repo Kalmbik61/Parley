@@ -4,7 +4,7 @@
  * `message` брошенного `Error` — остальные поля стираются на границе
  * контекстов (`contextBridge`), поэтому код ошибки протокола (`not_found`,
  * `conflict`, …) едет внутри самого `message` JSON-строкой с меткой
- * `harnas-error:`, а не отдельным полем.
+ * `parley-error:`, а не отдельным полем.
  */
 
 export interface IpcErrorInfo {
@@ -17,7 +17,7 @@ export interface IpcErrorInfo {
   data?: Record<string, unknown>;
 }
 
-const MARKER = 'harnas-error:';
+const MARKER = 'parley-error:';
 
 /** Main: заворачивает код и сообщение в `Error`, чей `message` несёт метку — этот `Error` и бросает `ipcMain.handle`. */
 export function encodeIpcError(info: IpcErrorInfo): Error {
@@ -52,7 +52,7 @@ function normalize(info: IpcErrorInfo): IpcErrorInfo {
  * ошибка `bridge.call`/`ipcRenderer.invoke`:
  * 1. Поле `code` прямо на объекте — так отвечает подставной мост
  *    (`test-utils/fake-bridge.ts`), минуя настоящий Electron;
- * 2. Метка `harnas-error:` в тексте сообщения — так приходит настоящая
+ * 2. Метка `parley-error:` в тексте сообщения — так приходит настоящая
  *    ошибка: `ipcMain.handle` отдаёт только `message`, а Electron сам
  *    оборачивает его в `Error invoking remote method '…': Error: <message>»,
  *    поэтому метку ищем подстрокой, а не с начала строки;

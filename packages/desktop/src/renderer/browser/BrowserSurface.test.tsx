@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry } from '@parley/core';
 import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
 import { BROWSER_PARTITION } from '../../shared/browser-types.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';

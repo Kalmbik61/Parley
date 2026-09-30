@@ -1,6 +1,6 @@
 /**
- * Подставной `HarnasBridge` для тестов рендерера (кусок 1.10 плана окна: «тесты
- * идут на подставном HarnasBridge»). Настоящего `window.harnas` в jsdom нет —
+ * Подставной `ParleyBridge` для тестов рендерера (кусок 1.10 плана окна: «тесты
+ * идут на подставном ParleyBridge»). Настоящего `window.parley` в jsdom нет —
  * этот объект его заменяет: `call` отвечает по заранее заданным обработчикам,
  * `emit*` имитирует события и статус, пришедшие от хоста.
  */
@@ -12,8 +12,8 @@ import type {
   NotificationName,
   Params,
   Result,
-} from '@harnas/protocol';
-import type { AppNote, CloseAnswer, FocusTarget, HarnasBridge, HostStatus } from '../../shared/bridge.js';
+} from '@parley/protocol';
+import type { AppNote, CloseAnswer, FocusTarget, ParleyBridge, HostStatus } from '../../shared/bridge.js';
 import type { BrowserFavicon, BrowserOpenTab, PickResult } from '../../shared/browser-types.js';
 import type { ActionId } from '../../shared/keybindings.js';
 import type {
@@ -39,7 +39,7 @@ import { DEFAULT_UI, normalizeUi, type UiFile } from '../../shared/ui-types.js';
 
 type Handler = (params: never) => unknown;
 
-export interface FakeBridge extends HarnasBridge {
+export interface FakeBridge extends ParleyBridge {
   /** Обработчик `call` для конкретного метода; без него `call` отклоняется. */
   setHandler<M extends MethodName>(
     method: M,

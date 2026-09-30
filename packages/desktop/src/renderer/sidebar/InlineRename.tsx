@@ -10,8 +10,8 @@
 
 import { useLayoutEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@harnas/core';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { WorkEntry } from '@parley/core';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
 import { workKey } from '../lib/tree-order.js';
@@ -19,7 +19,7 @@ import { useSidebarHold } from './use-sidebar-hold.js';
 
 export interface InlineRenameProps {
   entry: WorkEntry;
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   /** Поле закрывается: сохранено, отменено или хост отказал. */
   onDone(): void;
 }
@@ -48,7 +48,7 @@ export function InlineRename({ entry, bridge, onDone }: InlineRenameProps): JSX.
     bridge
       .call('works.rename', { projectPath, workId: map.work.id, title: value })
       .then(onDone, (error: unknown) => {
-        console.warn('[harnas] works.rename', error);
+        console.warn('[parley] works.rename', error);
         toast(errorText(decodeIpcError(error).code, S.errors.actions.renameWorkspace));
         onDone();
       });

@@ -18,8 +18,8 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@harnas/core';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { WorkEntry } from '@parley/core';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { BROWSER_PARTITION } from '../../shared/browser-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
@@ -69,7 +69,7 @@ export interface BrowserSurfaceProps {
   url: string;
   groupId: string;
   visible: boolean;
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   /** Работа вкладки — сессии получателей карточки Design Mode (9.3b). */
   entry: WorkEntry;
   sendDeps: SendWithToastDeps;
@@ -137,7 +137,7 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
       try {
         update({ canGoBack: view.canGoBack(), canGoForward: view.canGoForward() });
       } catch (error) {
-        console.warn('[harnas] webview history unavailable', error);
+        console.warn('[parley] webview history unavailable', error);
       }
     };
     // Адрес — только в раскладку, и только http(s) без user:pass@ (спека 12.1).
@@ -199,9 +199,9 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
     if (view === null) return;
     try {
       const result = action(view);
-      if (result instanceof Promise) result.catch((error: unknown) => console.warn('[harnas] webview navigation failed', error));
+      if (result instanceof Promise) result.catch((error: unknown) => console.warn('[parley] webview navigation failed', error));
     } catch (error) {
-      console.warn('[harnas] webview is not ready', error);
+      console.warn('[parley] webview is not ready', error);
     }
   };
 
@@ -224,7 +224,7 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
     const id = state.webContentsId;
     if (id === null) return;
     bridge.browser.openDevTools(id).catch((error: unknown) => {
-      console.error('[harnas] openDevTools failed', error);
+      console.error('[parley] openDevTools failed', error);
       toast(errorText(decodeIpcError(error).code, S.errors.actions.openDevTools));
     });
   };
@@ -243,7 +243,7 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
       (result) => update({ pick: result === null ? 'off' : { result } }),
       (error: unknown) => {
         if (token !== pickTokenRef.current) return;
-        console.error('[harnas] pickStart failed', error);
+        console.error('[parley] pickStart failed', error);
         toast(errorText(decodeIpcError(error).code, S.errors.actions.pickElement));
         update({ pick: 'off' });
       },
@@ -254,7 +254,7 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
     const id = state.webContentsId;
     pickTokenRef.current += 1;
     useBrowserStore.getState().update(tabId, { pick: 'off' });
-    if (id !== null) bridge.browser.pickCancel(id).catch((error: unknown) => console.warn('[harnas] pickCancel failed', error));
+    if (id !== null) bridge.browser.pickCancel(id).catch((error: unknown) => console.warn('[parley] pickCancel failed', error));
   };
 
   const picking = state.pick === 'picking';

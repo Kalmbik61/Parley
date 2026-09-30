@@ -15,14 +15,14 @@ import { bumpWorkId, nextWorkId, parseMap } from './map.js';
 import type { WorkIndexEntry, WorkMap, WorksIndex, WorkStatus } from './types.js';
 
 /** Домашняя папка харнесса. Переопределяется через окружение — этим живут тесты. */
-export function harnasHome(): string {
+export function parleyHome(): string {
   const fromEnv = process.env.HARNAS_HOME;
   return fromEnv !== undefined && fromEnv !== '' ? fromEnv : path.join(homedir(), '.harnas');
 }
 
 /** Глобальный индекс работ: все работы всех проектов. */
 export function worksIndexPath(): string {
-  return path.join(harnasHome(), 'works-index.json');
+  return path.join(parleyHome(), 'works-index.json');
 }
 
 export interface WorkPaths {

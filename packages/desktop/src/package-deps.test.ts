@@ -6,7 +6,7 @@
  * внешними у `externalizeDepsPlugin`); библиотеки рендерера и сборочные — в `devDependencies`.
  *
  * `import type` не считается: типы в сборку не попадают. `require.resolve` — считается: так main
- * в dev находит точку входа `@harnas/host`.
+ * в dev находит точку входа `@parley/host`.
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { builtinModules } from 'node:module';

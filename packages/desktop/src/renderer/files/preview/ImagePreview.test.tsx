@@ -12,7 +12,7 @@ beforeEach(() => {
   revoked.length = 0;
   URL.createObjectURL = vi.fn((blob: Blob) => {
     created.push(blob);
-    return `blob:harnas/${created.length}`;
+    return `blob:parley/${created.length}`;
   });
   URL.revokeObjectURL = vi.fn((url: string) => void revoked.push(url));
 });
@@ -22,11 +22,11 @@ afterEach(() => cleanup());
 describe('ImagePreview (тест 4)', () => {
   it('<img> из Blob; revokeObjectURL при размонтировании', () => {
     const { container, unmount } = render(<ImagePreview bytes={new Uint8Array([1, 2, 3])} path="img/a.png" />);
-    expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:harnas/1');
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:parley/1');
     expect(created[0]?.type).toBe('image/png');
     expect(revoked).toEqual([]);
     unmount();
-    expect(revoked).toEqual(['blob:harnas/1']);
+    expect(revoked).toEqual(['blob:parley/1']);
   });
 
   it('svg — image/svg+xml: <img> не исполняет скрипты svg, а без типа не покажет его вовсе', () => {

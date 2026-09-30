@@ -13,9 +13,9 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { harnasHome } from './work/store.js';
+import { parleyHome } from './work/store.js';
 
-export interface HarnasConfig {
+export interface ParleyConfig {
   /** Порог молчания лога для страховочной `activity` (раздел 4.3). */
   silenceThresholdMs: number;
   /**
@@ -54,7 +54,7 @@ export interface HarnasConfig {
   worktreeRoot: string;
 }
 
-export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
+export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
   silenceThresholdMs: 30_000,
   channelPush: true,
   messageRate: 20,
@@ -68,7 +68,7 @@ export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
 };
 
 /** Имя переменной окружения для каждого ключа — один источник для загрузчика и оверлея. */
-export const ENV_NAMES: Readonly<Record<keyof HarnasConfig, string>> = {
+export const ENV_NAMES: Readonly<Record<keyof ParleyConfig, string>> = {
   silenceThresholdMs: 'HARNAS_SILENCE_MS',
   channelPush: 'HARNAS_CHANNEL_PUSH',
   messageRate: 'HARNAS_MESSAGE_RATE',
@@ -81,23 +81,23 @@ export const ENV_NAMES: Readonly<Record<keyof HarnasConfig, string>> = {
 };
 
 export interface LoadedConfig {
-  config: HarnasConfig;
+  config: ParleyConfig;
   /** Что не прочиталось. `null` — вопросов к настройкам нет. */
   warning: string | null;
   /** Ключи, чьё значение пришло из окружения: файл их не перекроет. */
-  fromEnv: ReadonlyArray<keyof HarnasConfig>;
+  fromEnv: ReadonlyArray<keyof ParleyConfig>;
 }
 
 /** Файл настроек. Его может не быть — тогда работают дефолты. */
 export function configPath(): string {
-  return path.join(harnasHome(), 'config.json');
+  return path.join(parleyHome(), 'config.json');
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** Часть настроек: только те поля, которые прочитались без вопросов. */
-type ConfigPatch = Partial<HarnasConfig>;
+type ConfigPatch = Partial<ParleyConfig>;
 
 /** Собирает жалобы, чтобы показать их одной строкой: битых полей может быть несколько. */
 type Complain = (message: string) => void;
@@ -134,7 +134,7 @@ const RESUME_RATE_EXPECTED = `целое от ${RESUME_RATE_MIN} до ${RESUME_R
 /** Значения из файла: тут JSON, поэтому типы проверяются как есть. */
 function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatch {
   const patch: ConfigPatch = {};
-  const take = <K extends keyof HarnasConfig>(
+  const take = <K extends keyof ParleyConfig>(
     key: K,
     ok: (value: unknown) => boolean,
     expected: string,
@@ -145,7 +145,7 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
       complain(`${key}: ожидается ${expected}`);
       return;
     }
-    patch[key] = value as HarnasConfig[K];
+    patch[key] = value as ParleyConfig[K];
   };
 
   take('silenceThresholdMs', isPositiveInt, 'целое больше нуля');
@@ -266,12 +266,12 @@ export async function loadConfig(
     config: { ...DEFAULT_CONFIG, ...filePatch, ...envPatch },
     warning: problems.length === 0 ? null : problems.join('; '),
     // Битая переменная ключ не перекрывает, в патч не попадает — и в список тоже.
-    fromEnv: Object.keys(envPatch) as ReadonlyArray<keyof HarnasConfig>,
+    fromEnv: Object.keys(envPatch) as ReadonlyArray<keyof ParleyConfig>,
   };
 }
 
 /** Булевы ключи настроек — те же множества «да/нет», что у загрузчика окружения. */
-const BOOLEAN_KEYS: ReadonlySet<keyof HarnasConfig> = new Set([
+const BOOLEAN_KEYS: ReadonlySet<keyof ParleyConfig> = new Set([
   'channelPush',
   'autoLaunch',
   'agentSkills',
@@ -280,39 +280,39 @@ const BOOLEAN_KEYS: ReadonlySet<keyof HarnasConfig> = new Set([
 /**
  * Разбор введённого значения теми же правилами, что и у файла и у окружения:
  * `settings.set` хоста (кусок 1.4) не должен расходиться с загрузчиком. Раньше
- * понимал только числовые ключи и `prefix` — теперь любой ключ `HarnasConfig`.
+ * понимал только числовые ключи и `prefix` — теперь любой ключ `ParleyConfig`.
  */
-export function parseSetting<K extends keyof HarnasConfig>(
+export function parseSetting<K extends keyof ParleyConfig>(
   key: K,
   text: string,
-): { value: HarnasConfig[K] } | { error: string } {
+): { value: ParleyConfig[K] } | { error: string } {
   if (key === 'fontFamily') {
-    if (isFontFamily(text)) return { value: text as HarnasConfig[K] };
+    if (isFontFamily(text)) return { value: text as ParleyConfig[K] };
     return { error: `${key}: ожидается непустая строка` };
   }
   if (key === 'worktreeRoot') {
-    if (isWorktreeRoot(text)) return { value: text as HarnasConfig[K] };
+    if (isWorktreeRoot(text)) return { value: text as ParleyConfig[K] };
     return { error: `${key}: ожидается непустая строка` };
   }
   if (key === 'fontSize') {
     const parsed = Number(text);
-    if (isFontSize(parsed)) return { value: parsed as HarnasConfig[K] };
+    if (isFontSize(parsed)) return { value: parsed as ParleyConfig[K] };
     return { error: `${key}: ожидается ${FONT_SIZE_EXPECTED}` };
   }
   if (key === 'resumeRate') {
     // Отдельная ветка: общая для чисел отвергла бы допустимый ноль.
     const parsed = Number(text);
-    if (isResumeRate(parsed)) return { value: parsed as HarnasConfig[K] };
+    if (isResumeRate(parsed)) return { value: parsed as ParleyConfig[K] };
     return { error: `${key}: ожидается ${RESUME_RATE_EXPECTED}` };
   }
   if (BOOLEAN_KEYS.has(key)) {
     const lower = text.toLowerCase();
-    if (TRUE.has(lower)) return { value: true as HarnasConfig[K] };
-    if (FALSE.has(lower)) return { value: false as HarnasConfig[K] };
+    if (TRUE.has(lower)) return { value: true as ParleyConfig[K] };
+    if (FALSE.has(lower)) return { value: false as ParleyConfig[K] };
     return { error: `${key}: ожидается 0 или 1` };
   }
   const parsed = Number(text);
-  if (isPositiveInt(parsed)) return { value: parsed as HarnasConfig[K] };
+  if (isPositiveInt(parsed)) return { value: parsed as ParleyConfig[K] };
   return { error: `${key}: ожидается целое больше нуля` };
 }
 
@@ -321,7 +321,7 @@ export function parseSetting<K extends keyof HarnasConfig>(
  * перезаписывается целиком: пользователь правит настройку, а не чинит JSON.
  */
 export async function saveConfig(
-  patch: Partial<HarnasConfig>,
+  patch: Partial<ParleyConfig>,
   file: string = configPath(),
 ): Promise<void> {
   let kept: Record<string, unknown> = {};

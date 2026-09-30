@@ -22,10 +22,10 @@ const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
 const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
 
-type Harnas = { harnas: { call: (method: string, params: unknown) => Promise<unknown> } };
+type Parley = { parley: { call: (method: string, params: unknown) => Promise<unknown> } };
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
-  return window.evaluate(([m, p]) => (globalThis as unknown as Harnas).harnas.call(m, p), [method, params] as const) as Promise<T>;
+  return window.evaluate(([m, p]) => (globalThis as unknown as Parley).parley.call(m, p), [method, params] as const) as Promise<T>;
 }
 
 /** Текст экрана терминала: строки DOM-рендера подряд. */

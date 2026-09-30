@@ -24,9 +24,9 @@
 
 import { createContext, useCallback, useContext, useLayoutEffect, useRef } from 'react';
 import { useDroppable } from '@dnd-kit/core';
-import type { WorkEntry, WorkSession } from '@harnas/core';
+import type { WorkEntry, WorkSession } from '@parley/core';
 import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { FileBody } from '../files/editor/FileBody.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
@@ -45,7 +45,7 @@ import { useLayoutStore } from './store.js';
 import { focusGroup } from './tree.js';
 
 export interface LayoutBodyContextValue {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   fontFamily: string;
   fontSize: number;
   /**

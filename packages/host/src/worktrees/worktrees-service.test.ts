@@ -16,9 +16,9 @@ import {
   readMap,
   sessionTag,
   updateMap,
-} from '@harnas/core';
-import type { WorktreeInfo } from '@harnas/core';
-import type { SessionRef } from '@harnas/protocol';
+} from '@parley/core';
+import type { WorktreeInfo } from '@parley/core';
+import type { SessionRef } from '@parley/protocol';
 import type { SessionsService } from '../sessions/sessions-service.js';
 import { HostError } from '../errors.js';
 import { createWorktreesService, gitFailure } from './worktrees-service.js';
@@ -44,14 +44,14 @@ const git = (dir: string, args: string[]) => run('git', ['-C', dir, ...args]);
 // падает, поэтому она задаётся на каждый репозиторий локально (тот же приём,
 // что и в `work/worktree.test.ts` core).
 async function setIdentity(dir: string): Promise<void> {
-  await git(dir, ['config', 'user.email', 'тест@harnas']);
+  await git(dir, ['config', 'user.email', 'тест@parley']);
   await git(dir, ['config', 'user.name', 'тест']);
 }
 
 let project = '';
 
 beforeEach(async () => {
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-worktrees-svc-project-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-worktrees-svc-project-'));
   await run('git', ['init', '-b', 'main', project]);
   await setIdentity(project);
   // `.harnas/works/<id>/` живёт прямо в каталоге проекта (спецификация
@@ -71,7 +71,7 @@ afterEach(async () => {
 /** Заявка сессии на диске: карта с worktree, план создан и `createWorktree` уже отработал. */
 async function sessionWithWorktree(label = 'бэкенд'): Promise<{ ref: SessionRef; info: WorktreeInfo }> {
   const work = await createWork(project, { title: 'Работа', goal: '' });
-  const worktreeRoot = await mkdtemp(path.join(tmpdir(), 'harnas-worktrees-svc-root-'));
+  const worktreeRoot = await mkdtemp(path.join(tmpdir(), 'parley-worktrees-svc-root-'));
   let sessionId = '';
   let info!: WorktreeInfo;
   await updateMap(project, work.work.id, (map) => {
@@ -110,7 +110,7 @@ describe('available', () => {
     const service = createWorktreesService(stubSessions());
     expect(await service.available(project)).toBe(true);
 
-    const plain = await mkdtemp(path.join(tmpdir(), 'harnas-worktrees-svc-plain-'));
+    const plain = await mkdtemp(path.join(tmpdir(), 'parley-worktrees-svc-plain-'));
     expect(await service.available(plain)).toBe(false);
     await rm(plain, { recursive: true, force: true });
   });
@@ -364,7 +364,7 @@ describe('ревью изменений (кусок 8.1)', () => {
   });
 
   it('папка не под git — bad_request с причиной not-a-repo', async () => {
-    const plain = await mkdtemp(path.join(tmpdir(), 'harnas-worktrees-svc-plain-'));
+    const plain = await mkdtemp(path.join(tmpdir(), 'parley-worktrees-svc-plain-'));
     try {
       const ref = await plainSession(plain);
       const service = createWorktreesService(stubSessions());

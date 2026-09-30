@@ -34,20 +34,20 @@ import {
   worksIndexPath,
 } from './work/store.js';
 
-const USAGE = `harnas-core — индекс сессий Claude Code в JSON
+const USAGE = `parley-core — индекс сессий Claude Code в JSON
 
-  harnas-core index [--root <путь>]         список сессий, свежие первыми
-  harnas-core session <id> [--root <путь>]  сессия с подсессиями
-  harnas-core schema [--provider claude|codex] [--root <путь>]
+  parley-core index [--root <путь>]         список сессий, свежие первыми
+  parley-core session <id> [--root <путь>]  сессия с подсессиями
+  parley-core schema [--provider claude|codex] [--root <путь>]
                                             отчёт по реальной схеме .jsonl
 
-  harnas-core work new --title <t> [--goal <g>] [--cwd <путь>]
+  parley-core work new --title <t> [--goal <g>] [--cwd <путь>]
                                             новая работа в проекте
-  harnas-core work list [--all]             работы глобального индекса
-  harnas-core work prune                    снять из индекса работы без карты
-  harnas-core work map --work <id> [--cwd <путь>]
+  parley-core work list [--all]             работы глобального индекса
+  parley-core work prune                    снять из индекса работы без карты
+  parley-core work map --work <id> [--cwd <путь>]
                                             карта работы
-  harnas-core work session new --work <id> --provider <p> --label <l>
+  parley-core work session new --work <id> --provider <p> --label <l>
       [--task <t>] [--context s-01,s-02] [--agent <name>] [--cwd <путь>]
                                             запись pending, бриф, MCP-конфиг,
                                             settings.json с хуками и готовая
@@ -352,7 +352,7 @@ async function main(argv: string[]): Promise<number> {
   if (command === 'session') {
     const id = rest.find((arg) => !arg.startsWith('--'));
     if (id === undefined) {
-      process.stderr.write('Нужен id сессии: harnas-core session <id>\n');
+      process.stderr.write('Нужен id сессии: parley-core session <id>\n');
       return 1;
     }
 

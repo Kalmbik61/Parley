@@ -10,7 +10,7 @@ import { lstat, mkdtemp, readdir, realpath, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Worker } from 'node:worker_threads';
-import { checkoutGitDir, joinDiffFiles, parseNameStatusZ, parseNumstat } from '@harnas/core';
+import { checkoutGitDir, joinDiffFiles, parseNameStatusZ, parseNumstat } from '@parley/core';
 import type { DiffFile, FileList, FileRoot, GitStatusLetter, GrepQuery, GrepResult, TextFile } from '../../shared/files-types.js';
 import { rootKey } from '../../shared/work-keys.js';
 import { HostError } from '../host-connection.js';
@@ -161,7 +161,7 @@ export async function gitRootOf(git: GitRunner, rootPath: string, pin: string[] 
   } catch (error) {
     if (errorCode(error) !== 'ENOENT') {
       // Сбой запуска (EAGAIN и т.п.) — не ответ про корень: не кэшируем.
-      console.warn('[harnas] files: git rev-parse failed', error);
+      console.warn('[parley] files: git rev-parse failed', error);
       return null;
     }
     answer = null;
@@ -533,7 +533,7 @@ export async function gitCommitFiles(git: GitRunner, rootPath: string, hash: str
   const [status, numstat] = await Promise.all([run([...common, '--name-status', ...sides]), run([...common, '--numstat', ...sides])]);
   if (status.code !== 0 || numstat.code !== 0) {
     // Текст stderr локализован — только в консоль.
-    console.warn(`[harnas] files: git diff-tree exited with code ${String(status.code)}/${String(numstat.code)}`, status.stderr);
+    console.warn(`[parley] files: git diff-tree exited with code ${String(status.code)}/${String(numstat.code)}`, status.stderr);
     throw new Error(`git diff-tree exited with code ${String(status.code ?? numstat.code)}`);
   }
   return joinDiffFiles(parseNameStatusZ(status.stdout), parseNumstat(numstat.stdout));
@@ -547,7 +547,7 @@ export async function gitCommitFiles(git: GitRunner, rootPath: string, hash: str
 export async function probePcre(git: GitRunner): Promise<boolean> {
   let dir: string | null = null;
   try {
-    dir = await mkdtemp(path.join(tmpdir(), 'harnas-pcre-'));
+    dir = await mkdtemp(path.join(tmpdir(), 'parley-pcre-'));
     const result = await git.run(['grep', '--no-index', '-P', '-e', 'x'], dir);
     return result.code === 0 || result.code === 1;
   } catch {
@@ -704,12 +704,12 @@ export function createGitApi(options: GitApiOptions): GitApi {
         const common = await commonDirOf(await roots.rootPath({ workKey: root.workKey, spec: { kind: 'project' } }));
         if (common !== null) gitDir = await checkoutGitDir(common, rootPath);
       } catch (error) {
-        console.warn('[harnas] files: worktree check failed', error);
+        console.warn('[parley] files: worktree check failed', error);
       }
       if (gitDir === null) {
         if (!corruptWarned.has(rootPath)) {
           corruptWarned.add(rootPath);
-          console.warn(`[harnas] files: ${rootPath}: .git is not a worktree of the project, git is not run there`);
+          console.warn(`[parley] files: ${rootPath}: .git is not a worktree of the project, git is not run there`);
         }
         return null;
       }
@@ -756,7 +756,7 @@ export function createGitApi(options: GitApiOptions): GitApi {
       if (result !== null && result.code === 0) {
         return { paths: await dropHiddenLinks(rootPath, parseLsFiles(result.stdout)), truncated: false, partial: false };
       }
-      console.warn(`[harnas] files: git ls-files exited with code ${String(result?.code)}, walking instead`);
+      console.warn(`[parley] files: git ls-files exited with code ${String(result?.code)}, walking instead`);
     }
     const found = await walk(rootPath);
     return { paths: found.paths, truncated: found.truncated, partial: found.truncated && found.paths.length < WALK_LIMIT };
@@ -893,7 +893,7 @@ export function createGitApi(options: GitApiOptions): GitApi {
       const result = await read(['status', '--porcelain=v1', '-z', '-uall', NO_SUBMODULE_WALK, ...PATHSPEC], info);
       if (result === null) return {};
       if (result.code !== 0) {
-        console.warn(`[harnas] files: git status exited with code ${String(result.code)}`);
+        console.warn(`[parley] files: git status exited with code ${String(result.code)}`);
         return {};
       }
       return parseGitStatus(result.stdout, info.prefix);
@@ -909,7 +909,7 @@ export function createGitApi(options: GitApiOptions): GitApi {
         if (at === null) return new Set();
         result = await read(['check-ignore', '--stdin', '-z'], at, { stdin: Buffer.from(`${rels.join('\0')}\0`) });
       } catch (error) {
-        console.warn('[harnas] files: git check-ignore failed', error);
+        console.warn('[parley] files: git check-ignore failed', error);
         return new Set();
       }
       if (result === null) return new Set();
@@ -919,7 +919,7 @@ export function createGitApi(options: GitApiOptions): GitApi {
         const key = `${rootPath}\0${dir}`;
         if (!ignoreWarned.has(key)) {
           ignoreWarned.add(key);
-          console.warn(`[harnas] files: git check-ignore exited with code ${String(result.code)} in ${dir || '.'}`);
+          console.warn(`[parley] files: git check-ignore exited with code ${String(result.code)} in ${dir || '.'}`);
         }
         return new Set();
       }

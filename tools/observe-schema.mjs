@@ -3,7 +3,7 @@
 // Нужен для discovery форматов других провайдеров: читает только, ничего не пишет
 // в исходный каталог, результат сразу вычищен от приватного.
 //
-// Сбор отчёта берётся из @harnas/core, поэтому сначала `pnpm build`.
+// Сбор отчёта берётся из @parley/core, поэтому сначала `pnpm build`.
 //
 //   node tools/observe-schema.mjs --root ~/.codex/sessions --out docs/schema/codex-schema-report.json
 

@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { HostPaths } from '@harnas/host';
-import { encodeLine, LineDecoder, PROTOCOL_VERSION } from '@harnas/protocol';
+import type { HostPaths } from '@parley/host';
+import { encodeLine, LineDecoder, PROTOCOL_VERSION } from '@parley/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { S } from '../shared/strings.js';
 import { HostConnection } from './host-connection.js';
@@ -20,7 +20,7 @@ interface FakeServerOptions {
 
 /**
  * `HostConnection` тестируется против маленького протокольного сервера, а не
- * настоящего `@harnas/host`: так тест не зависит от полного поведения хоста
+ * настоящего `@parley/host`: так тест не зависит от полного поведения хоста
  * (аренда работ, PTY и т. д.), которое проверяется в пакете host отдельно.
  * Понимает `hello` и `host.shutdown` — ровно то, что нужно для рукопожатия и
  * перезапуска.

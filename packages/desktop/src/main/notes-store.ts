@@ -7,7 +7,7 @@
 import { createHash } from 'node:crypto';
 import { readFile, rename, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { harnasHome } from '@harnas/core';
+import { parleyHome } from '@parley/core';
 import { isNotesFile, NOTES_LIMITS, type NotesFile } from '../shared/notes-types.js';
 import { isSessionId } from '../shared/work-keys.js';
 import { createFileQueue, writeAtomic } from './atomic-file.js';
@@ -62,7 +62,7 @@ async function readNotes(file: string): Promise<NotesFile | null | 'missing'> {
   }
 }
 
-export function createNotesStore(home: string = harnasHome()): NotesStore {
+export function createNotesStore(home: string = parleyHome()): NotesStore {
   // Одна очередь на все файлы стора: записи редки (300 мс тишины в окне), а чтение с
   // переименованием битого и запись одной сессии не должны перекрываться.
   const enqueue = createFileQueue();
@@ -80,7 +80,7 @@ export function createNotesStore(home: string = harnasHome()): NotesStore {
         await rename(file, target);
         // Полный путь — только сюда: `notes/` лежит вне корней работы, а такие пути рендерер
         // не получает (спека 15.2). Окну уходит одно имя для тоста.
-        console.warn(`[harnas] damaged notes file moved to ${target}`);
+        console.warn(`[parley] damaged notes file moved to ${target}`);
         return { file: { version: 1, notes: [] }, corruptedTo };
       });
     },

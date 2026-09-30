@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Message, Proposal, Room, SessionActivity, WorkEntry, WorkSession } from '@harnas/core';
-import { refKey } from '@harnas/protocol';
+import type { Message, Proposal, Room, SessionActivity, WorkEntry, WorkSession } from '@parley/core';
+import { refKey } from '@parley/protocol';
 import type { ActivityEntry } from '../store/activity.js';
 import {
   ATTENTION_RANK,

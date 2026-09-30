@@ -6,7 +6,7 @@
  * тоже здесь.
  */
 
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry } from '@parley/core';
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import { bufferKey } from '../files/buffer.js';
 import { focusedSessionOf, useLayoutStore, type LayoutState } from '../layout/store.js';

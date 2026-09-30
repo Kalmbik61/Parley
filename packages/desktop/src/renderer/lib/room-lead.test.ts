@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { Room } from '@harnas/core';
+import type { Room } from '@parley/core';
 import { makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { roomLiveLead } from './room-lead.js';
 

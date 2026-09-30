@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { Message, Room, WorkEntry, WorkSession } from '@harnas/core';
+import type { Message, Room, WorkEntry, WorkSession } from '@parley/core';
 import { activityMap, makeActivity, makeLetter, makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
 import { buildRoomModel, type RoomModel } from './feed-model.js';
 

@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { WorkEntry, WorkSession } from '@harnas/core';
+import type { WorkEntry, WorkSession } from '@parley/core';
 import { App } from './App.js';
 import { createFakeBridge, type FakeBridge } from './test-utils/fake-bridge.js';
 import { bufferKey, initialBuffer } from './files/buffer.js';
@@ -24,8 +24,8 @@ import { useNoticesStore } from './store/notices.js';
 import { useProvidersStore } from './store/providers.js';
 import { useUiStore } from './store/ui.js';
 import { useWorksStore } from './store/works.js';
-import { refKey, type SessionRef } from '@harnas/protocol';
-import type { Activity } from '@harnas/core';
+import { refKey, type SessionRef } from '@parley/protocol';
+import type { Activity } from '@parley/core';
 import { REQUIRED_METHODS } from './lib/capabilities.js';
 import { useSidebarSectionsStore } from './sidebar/use-sidebar-sections.js';
 import { toast } from 'sonner';
@@ -76,10 +76,10 @@ beforeEach(() => {
   // Стор связи общий на файл: `everConnected` прошлого теста убрал бы экран «No connection»
   // у теста, где связи ещё не было (слияние lane-r3).
   useHostStore.setState({ status: { state: 'connecting' }, everConnected: false });
-  // `getHostClient()` читает `window.harnas` лениво — подставляем вручную,
+  // `getHostClient()` читает `window.parley` лениво — подставляем вручную,
   // как и задумано (комментарий в `host-client.ts`).
   bridge = createFakeBridge();
-  window.harnas = bridge;
+  window.parley = bridge;
 });
 
 afterEach(() => {

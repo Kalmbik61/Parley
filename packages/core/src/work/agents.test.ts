@@ -14,10 +14,10 @@ async function defineAgent(dir: string, name: string): Promise<void> {
 }
 
 beforeEach(async () => {
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
   // Настоящий `~/.claude` в тестах не трогаем ни на чтение, ни на запись:
   // каталог приходит параметром (спецификация 2026-09-08, 5.1).
-  claudeHome = await mkdtemp(path.join(tmpdir(), 'harnas-claude-'));
+  claudeHome = await mkdtemp(path.join(tmpdir(), 'parley-claude-'));
 });
 
 afterEach(async () => {

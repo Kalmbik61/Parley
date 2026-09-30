@@ -4,7 +4,7 @@
  * (дизайн TUI v2, 2.1).
  */
 
-import type { WorkEntry, WorkSession } from '@harnas/core';
+import type { WorkEntry, WorkSession } from '@parley/core';
 import { workKey } from '../../shared/work-keys.js';
 
 // Формат ключа один на main и рендерер (кусок 5.2): прежние импорты отсюда остаются.

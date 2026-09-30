@@ -41,10 +41,10 @@ const setEnv = (name: string, value: string | undefined): void => {
 };
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
   // Пустой корень истории: метрики читаются отсюда, а не из настоящего ~/.claude.
-  logs = await mkdtemp(path.join(tmpdir(), 'harnas-logs-'));
+  logs = await mkdtemp(path.join(tmpdir(), 'parley-logs-'));
   process.env['HARNAS_HOME'] = home;
   setEnv('HARNAS_CLAUDE_BIN', STUB);
   setEnv('HARNAS_CODEX_BIN', STUB);

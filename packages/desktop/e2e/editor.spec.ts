@@ -62,7 +62,7 @@ function makePng(width: number, height: number): Buffer {
 
 /** PDF в одну страницу: текст Helvetica (стандартный шрифт без встраивания) и ссылка URI. */
 function makePdf(uri: string): Buffer {
-  const content = 'BT /F1 24 Tf 72 700 Td (Hello harnas PDF) Tj ET';
+  const content = 'BT /F1 24 Tf 72 700 Td (Hello parley PDF) Tj ET';
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
@@ -86,7 +86,7 @@ function makePdf(uri: string): Buffer {
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
-    ([m, p]) => (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas.call(m, p),
+    ([m, p]) => (globalThis as unknown as { parley: { call: (m: string, p: unknown) => Promise<unknown> } }).parley.call(m, p),
     [method, params] as const,
   ) as Promise<T>;
 }
@@ -117,7 +117,7 @@ test.describe('редактор файла на собранном окне', ()
     await writeFile(path.join(project, LONG_FILE), 'long\n');
     await writeFile(path.join(project, 'notes.md'), notes);
     await writeFile(path.join(project, 'logo.png'), makePng(3, 2));
-    await writeFile(path.join(project, 'doc.pdf'), makePdf(`${origin}/harnas`));
+    await writeFile(path.join(project, 'doc.pdf'), makePdf(`${origin}/parley`));
   });
 
   /** Окно 1400×900 с работой над проектом; с этого места — сборщик ошибок и нарушений CSP. */
@@ -150,7 +150,7 @@ test.describe('редактор файла на собранном окне', ()
     window.evaluate(() => (globalThis as unknown as { __cspViolations: string[] }).__cspViolations);
 
   const shellLog = (electronApp: ElectronApplication): Promise<unknown[]> =>
-    electronApp.evaluate(() => [...((globalThis as { __harnasShell?: unknown[] }).__harnasShell ?? [])]);
+    electronApp.evaluate(() => [...((globalThis as { __parleyShell?: unknown[] }).__parleyShell ?? [])]);
 
   test.afterEach(async () => {
     await stopApp(app);
@@ -587,14 +587,14 @@ test.describe('редактор файла на собранном окне', ()
     await sidebar.getByText('doc.pdf', { exact: true }).click();
     const pdf = window.getByTestId('pdf-preview');
     await expect(pdf.locator('.page canvas').first()).toBeVisible();
-    await expect(pdf.locator('.textLayer').first()).toContainText('Hello harnas PDF');
+    await expect(pdf.locator('.textLayer').first()).toContainText('Hello parley PDF');
 
     // ⌘F — своя полоса поиска превью; подсветка совпадения в слое текста; Esc закрывает.
     await pdf.click({ position: { x: 20, y: 20 } });
     await window.keyboard.press('Meta+F');
     const find = pdf.getByPlaceholder('Find…');
     await expect(find).toBeFocused();
-    await window.keyboard.type('harnas');
+    await window.keyboard.type('parley');
     await expect(pdf.locator('.textLayer .highlight').first()).toBeVisible();
     await window.keyboard.press('Escape');
     await expect(find).toHaveCount(0);
@@ -605,7 +605,7 @@ test.describe('редактор файла на собранном окне', ()
     await expect(link).not.toHaveAttribute('href', /./);
     await link.click();
     await expect(window.locator('[role="tab"][data-tab-id^="browser:"]')).toHaveCount(1);
-    await expect.poll(() => guestUrls(electronApp)).toEqual([`${origin}/harnas`]);
+    await expect.poll(() => guestUrls(electronApp)).toEqual([`${origin}/parley`]);
     expect(await shellLog(electronApp)).toEqual([]);
     expect(await window.evaluate(() => location.protocol)).toBe('file:');
 

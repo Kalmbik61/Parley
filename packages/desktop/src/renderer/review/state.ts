@@ -4,8 +4,8 @@
  * «Изменения» (8.2b) и вкладка диффа (8.3) рисуют по ним, а не решают сами.
  */
 
-import type { DiffFile, MergeCheck, MergeResult, ProjectChanges, WorktreeDiff } from '@harnas/core';
-import { HOST_ERROR_REASONS } from '@harnas/protocol';
+import type { DiffFile, MergeCheck, MergeResult, ProjectChanges, WorktreeDiff } from '@parley/core';
+import { HOST_ERROR_REASONS } from '@parley/protocol';
 import type { IpcErrorInfo } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
 
@@ -86,7 +86,7 @@ export function askAgentText(branch: string, base: string, files: string[]): str
 /** Тело вкладки при отказе загрузки: git-missing — S.changes.gitMissing, not-a-repo — S.changes.notARepo, worktree-corrupt — S.changes.worktreeCorrupt, прочее — errorText(code, S.errors.actions.loadChanges). */
 export function changesErrorText(error: IpcErrorInfo): string {
   // Сообщение хоста — русский текст рантайма: человеку — только свой английский.
-  console.warn('[harnas] changes', error.code, error.message);
+  console.warn('[parley] changes', error.code, error.message);
   const reason = error.data?.['reason'];
   if (reason === HOST_ERROR_REASONS.gitMissing) return S.changes.gitMissing;
   if (reason === HOST_ERROR_REASONS.notARepo) return S.changes.notARepo;

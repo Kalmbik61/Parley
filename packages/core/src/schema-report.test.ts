@@ -7,7 +7,7 @@ import { buildSchemaReport, observeRecord, type SchemaReport } from './schema-re
 let dir: string;
 
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), 'harnas-schema-'));
+  dir = await mkdtemp(path.join(tmpdir(), 'parley-schema-'));
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });

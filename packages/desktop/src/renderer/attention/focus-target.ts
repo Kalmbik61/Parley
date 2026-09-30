@@ -4,8 +4,8 @@
  * вниз и фокус ввода. Только переход: ни ввода в терминал, ни ответов агенту от имени человека.
  */
 
-import type { WorkEntry } from '@harnas/core';
-import { refKey, type SessionRef } from '@harnas/protocol';
+import type { WorkEntry } from '@parley/core';
+import { refKey, type SessionRef } from '@parley/protocol';
 import type { FocusTarget } from '../../shared/bridge.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { tabId } from '../layout/ids.js';

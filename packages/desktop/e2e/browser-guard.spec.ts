@@ -109,7 +109,7 @@ test.describe('клетка встроенного браузера (кусок 
     await window.evaluate(() => {
       const opened: unknown[] = [];
       (globalThis as { __openTabs?: unknown[] }).__openTabs = opened;
-      window.harnas.browser.onOpenTab((e) => opened.push(e));
+      window.parley.browser.onOpenTab((e) => opened.push(e));
     });
 
     // Положительный контроль: раздел наш, адрес http — страница отрисовалась, без Node.
@@ -117,7 +117,7 @@ test.describe('клетка встроенного браузера (кусок 
       partition: 'persist:harnas-browser',
       src: `${origin}/`,
       webpreferences: 'nodeIntegration=yes, contextIsolation=no, sandbox=no',
-      preload: 'file:///tmp/harnas-e2e-no-such-preload.js',
+      preload: 'file:///tmp/parley-e2e-no-such-preload.js',
     });
     await expect.poll(() => guestCount(app)).toBe(1);
     await expect.poll(() => inGuest<string>(app, `${origin}/`, 'document.title').catch(() => '')).toBe('guest ok');
@@ -175,22 +175,22 @@ test.describe('клетка встроенного браузера (кусок 
       return webContents.getAllWebContents().find((c) => c.getType() === 'webview' && c.getURL() === prefix)?.id ?? -1;
     }, `${origin}/`);
     expect(guestId).toBeGreaterThan(0);
-    const found = await window.evaluate((id) => window.harnas.browser.find(id, 'hello', true), guestId);
+    const found = await window.evaluate((id) => window.parley.browser.find(id, 'hello', true), guestId);
     expect(found.matches).toBe(1);
-    await window.evaluate((id) => window.harnas.browser.zoom(id, 1), guestId);
+    await window.evaluate((id) => window.parley.browser.zoom(id, 1), guestId);
     expect(
       await app.evaluate(({ webContents }, id) => webContents.fromId(id)?.getZoomLevel(), guestId),
     ).toBe(1);
     const denied = await window.evaluate(async () => {
       try {
-        await window.harnas.browser.openDevTools(1);
+        await window.parley.browser.openDevTools(1);
         return 'opened';
       } catch (error) {
         return String((error as Error).message);
       }
     });
     expect(denied).toContain('bad_request');
-    await window.evaluate(() => window.harnas.browser.clearData());
+    await window.evaluate(() => window.parley.browser.clearData());
   });
 
   /**
@@ -205,7 +205,7 @@ test.describe('клетка встроенного браузера (кусок 
     expect(downloads).toBe(path.join(home, 'desktop', 'downloads'));
     await mkdir(downloads, { recursive: true });
     const log = (): Promise<unknown[]> =>
-      app.evaluate(() => (globalThis as { __harnasDownloads?: unknown[] }).__harnasDownloads ?? []);
+      app.evaluate(() => (globalThis as { __parleyDownloads?: unknown[] }).__parleyDownloads ?? []);
 
     // Отмена: ответ диалога не задан.
     await insertWebview(window, { partition: 'persist:harnas-browser', src: `${origin}/download` });
@@ -216,7 +216,7 @@ test.describe('клетка встроенного браузера (кусок 
     // Положительный контроль: путь «выбран» — файл ровно там.
     const chosen = path.join(downloads, 'chosen.txt');
     await app.evaluate((_electron, answer) => {
-      (globalThis as { __harnasSaveAnswer?: string | null }).__harnasSaveAnswer = answer;
+      (globalThis as { __parleySaveAnswer?: string | null }).__parleySaveAnswer = answer;
     }, chosen);
     await window.evaluate(() => document.querySelector('webview[data-e2e]')?.remove());
     await insertWebview(window, { partition: 'persist:harnas-browser', src: `${origin}/download` });
@@ -251,7 +251,7 @@ test.describe('клетка встроенного браузера (кусок 
     await window.evaluate(() => {
       const actions: string[] = [];
       (globalThis as { __menu?: string[] }).__menu = actions;
-      window.harnas.app.onMenu((action) => actions.push(action));
+      window.parley.app.onMenu((action) => actions.push(action));
     });
 
     await insertWebview(window, { partition: 'persist:harnas-browser', src: `${origin}/` });

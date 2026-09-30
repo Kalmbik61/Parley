@@ -235,7 +235,7 @@ describe('readWorkLimits: файлы limits/<session-id>.json одной раб�
   let workDir = '';
 
   beforeEach(async () => {
-    workDir = await mkdtemp(path.join(tmpdir(), 'harnas-limits-work-'));
+    workDir = await mkdtemp(path.join(tmpdir(), 'parley-limits-work-'));
   });
   afterEach(async () => {
     await rm(workDir, { recursive: true, force: true });

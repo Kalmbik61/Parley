@@ -5,8 +5,8 @@
  * будильника, а не печати.
  */
 
-import { refKey } from '@harnas/protocol';
-import type { SessionRef } from '@harnas/protocol';
+import { refKey } from '@parley/protocol';
+import type { SessionRef } from '@parley/protocol';
 import type { PtyManager } from './pty-manager.js';
 
 export type AttemptOutcome = 'submitted' | 'input' | 'restarted' | 'cancelled' | 'typed' | 'blocked';

@@ -6,9 +6,9 @@
  */
 
 import { toast } from 'sonner';
-import type { WorkSession } from '@harnas/core';
-import type { SendResult, SessionRef } from '@harnas/protocol';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { WorkSession } from '@parley/core';
+import type { SendResult, SessionRef } from '@parley/protocol';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
 import { displayStatus } from '../lib/dot-state.js';
@@ -17,13 +17,13 @@ import { sessionTag } from '../lib/participant.js';
 export type SendOutcome = SendResult | { error: 'not_found' | 'failed'; message: string };
 
 /** Отказ вызова разбирает decodeIpcError (E.1): код not_found → not_found, прочее → failed. */
-export async function sendToAgent(bridge: HarnasBridge, ref: SessionRef, text: string, submit: boolean): Promise<SendOutcome> {
+export async function sendToAgent(bridge: ParleyBridge, ref: SessionRef, text: string, submit: boolean): Promise<SendOutcome> {
   try {
     return await bridge.call('pty.send', { ref, text, submit });
   } catch (error) {
     const { code, message } = decodeIpcError(error);
     // Текст хоста (может быть русским) — только в консоль, человеку — английский тост.
-    console.warn('[harnas] pty.send', message);
+    console.warn('[parley] pty.send', message);
     return { error: code === 'not_found' ? 'not_found' : 'failed', message };
   }
 }
@@ -74,7 +74,7 @@ export function sendToast(outcome: SendOutcome, label: string, resumable: boolea
 }
 
 export interface SendWithToastDeps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   /** Сессия из снимка работ (useWorksStore) — для canResume; null — её нет. */
   session(ref: SessionRef): WorkSession | null;
   /**
@@ -121,7 +121,7 @@ export async function sendWithToast(deps: SendWithToastDeps, ref: SessionRef, te
     copy: {
       label: S.common.copy,
       onClick: () => {
-        navigator.clipboard.writeText(text).catch((error: unknown) => console.warn('[harnas] clipboard', error));
+        navigator.clipboard.writeText(text).catch((error: unknown) => console.warn('[parley] clipboard', error));
       },
     },
     open: { label: S.send.openSession(label), onClick: () => deps.openSession(ref) },
@@ -130,7 +130,7 @@ export async function sendWithToast(deps: SendWithToastDeps, ref: SessionRef, te
     resume: {
       label: S.sidebar.sessionMenu.resume,
       onClick: () => {
-        deps.bridge.call('sessions.resume', { ref }).catch((error: unknown) => console.warn('[harnas] sessions.resume', error));
+        deps.bridge.call('sessions.resume', { ref }).catch((error: unknown) => console.warn('[parley] sessions.resume', error));
       },
     },
   };

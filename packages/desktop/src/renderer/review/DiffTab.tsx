@@ -18,9 +18,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DiffNote } from '../../shared/notes-types.js';
-import type { WorkEntry } from '@harnas/core';
-import { refKey } from '@harnas/protocol';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { WorkEntry } from '@parley/core';
+import { refKey } from '@parley/protocol';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import type { DiffFile, FileRoot } from '../../shared/files-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import type { TabSpec } from '../../shared/layout-types.js';
@@ -43,7 +43,7 @@ import { useReviewStore } from './store.js';
 import { useChanges } from './use-changes.js';
 
 export interface DiffTabProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   workKey: string;
   entry: WorkEntry;
   tab: Extract<TabSpec, { kind: 'diff' }>;
@@ -61,7 +61,7 @@ function Centered({ children }: { children: string }): JSX.Element {
 
 /** Файлы коммита: один вызов на коммит — коммит неизменен, сигналы обновления его не трогают. */
 function useCommitFiles(
-  files: HarnasBridge['files'],
+  files: ParleyBridge['files'],
   root: FileRoot,
   hash: string | null,
 ): { files: DiffFile[] | null; error: string | null } {
@@ -79,7 +79,7 @@ function useCommitFiles(
       },
       (error: unknown) => {
         const info = decodeIpcError(error);
-        console.warn('[harnas] diff: gitCommitFiles', info.code, info.message);
+        console.warn('[parley] diff: gitCommitFiles', info.code, info.message);
         if (alive) setState({ hash, files: null, error: errorText(info.code, S.errors.actions.loadDiff) });
       },
     );
@@ -197,7 +197,7 @@ const SETTLE_MS = 1000;
 const USER_SCROLL = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
 
 interface DiffViewProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   workKey: string;
   tabId: string;
   root: FileRoot;
@@ -411,7 +411,7 @@ function DiffView({ bridge, workKey, tabId, root, files, mode, version, font, no
   if (status instanceof Error) throw status;
   if (!ready) return <Centered>{S.changes.loading}</Centered>;
 
-  const theme = dark ? 'harnas-dark' : 'harnas-light';
+  const theme = dark ? 'parley-dark' : 'parley-light';
   return (
     <div data-testid="diff-tab" className="flex h-full min-h-0 flex-col">
       <DiffToolbar

@@ -11,8 +11,8 @@
 
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkEntry, WorkSession } from '@harnas/core';
-import { refKey } from '@harnas/protocol';
+import type { WorkEntry, WorkSession } from '@parley/core';
+import { refKey } from '@parley/protocol';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { useLayoutStore } from '../layout/store.js';

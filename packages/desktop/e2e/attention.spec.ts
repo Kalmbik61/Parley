@@ -27,7 +27,7 @@ let project = '';
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
-    ([m, p]) => (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas.call(m, p),
+    ([m, p]) => (globalThis as unknown as { parley: { call: (m: string, p: unknown) => Promise<unknown> } }).parley.call(m, p),
     [method, params] as const,
   ) as Promise<T>;
 }
@@ -123,7 +123,7 @@ interface LoggedNote {
 
 async function loggedNotes(app: ElectronApplication): Promise<LoggedNote[]> {
   return app.evaluate(() =>
-    ((globalThis as { __harnasNotifications?: LoggedNote[] }).__harnasNotifications ?? []).map(({ title, body, silent }) => ({
+    ((globalThis as { __parleyNotifications?: LoggedNote[] }).__parleyNotifications ?? []).map(({ title, body, silent }) => ({
       title,
       body,
       silent,
@@ -237,7 +237,7 @@ test.describe('переход по уведомлению и «просмотр�
     expect((await loggedNotes(electronApp)).filter((note) => note.title === expected.title)).toHaveLength(1);
 
     await electronApp.evaluate(() => {
-      const log = (globalThis as { __harnasNotifications?: Array<{ title: string; click(): void }> }).__harnasNotifications ?? [];
+      const log = (globalThis as { __parleyNotifications?: Array<{ title: string; click(): void }> }).__parleyNotifications ?? [];
       log.filter((note) => note.title.startsWith('e2e-notify')).at(-1)?.click();
     });
     await expect(

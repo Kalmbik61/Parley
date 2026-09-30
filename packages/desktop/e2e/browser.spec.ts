@@ -30,7 +30,7 @@ const PICK_WORLD_ID = 1001;
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
-    ([m, p]) => (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas.call(m, p),
+    ([m, p]) => (globalThis as unknown as { parley: { call: (m: string, p: unknown) => Promise<unknown> } }).parley.call(m, p),
     [method, params] as const,
   ) as Promise<T>;
 }
@@ -73,7 +73,7 @@ async function pickArmed(app: ElectronApplication, url: string): Promise<boolean
     async ({ webContents }, [u, world]) => {
       const guest = webContents.getAllWebContents().find((c) => c.getType() === 'webview' && c.getURL() === u);
       if (guest === undefined) return false;
-      const kind = (await guest.executeJavaScriptInIsolatedWorld(world as number, [{ code: 'typeof globalThis.__harnasPickCancel' }])) as string;
+      const kind = (await guest.executeJavaScriptInIsolatedWorld(world as number, [{ code: 'typeof globalThis.__parleyPickCancel' }])) as string;
       return kind === 'function';
     },
     [url, PICK_WORLD_ID] as const,
@@ -231,7 +231,7 @@ test.describe('браузер и Design Mode (кусок 9.3b)', () => {
       );
     }, `${origin}/`);
     await expect
-      .poll(() => electronApp.evaluate(() => (globalThis as { __harnasDownloads?: Array<{ filename: string }> }).__harnasDownloads ?? []))
+      .poll(() => electronApp.evaluate(() => (globalThis as { __parleyDownloads?: Array<{ filename: string }> }).__parleyDownloads ?? []))
       .toEqual([{ filename: 'evil.txt', url: `${origin}/file` }]);
 
     await expect(designMode).toHaveAttribute('aria-pressed', 'false');

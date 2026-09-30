@@ -6,7 +6,7 @@ import {
   renameWork,
   setWorkStatus,
   WorkNotFoundError,
-} from '@harnas/core';
+} from '@parley/core';
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
 import type { WorksService } from '../works/works-service.js';

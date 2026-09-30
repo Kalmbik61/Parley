@@ -9,7 +9,7 @@
  * уходит); хост перезапускается только после «Restart» в подтверждении.
  */
 
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import type { ActionId } from '../../shared/keybindings.js';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
@@ -35,7 +35,7 @@ export type ActionSource = 'key' | 'menu' | 'palette';
 
 export interface ActionContext {
   source: ActionSource;
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   /**
    * useLayoutStore.getState() на момент действия. История и MRU — значения стора (2.2):
    * entries() и mru[activeWorkKey]; переходы — его действия back и forward.
@@ -130,7 +130,7 @@ function stepMru(ctx: ActionContext, key: string, layout: WorkLayout, step: 1 | 
 /** Отказ асинхронного действия — тостом по коду ошибки, без необработанного отказа промиса. */
 function toastOnError(ctx: ActionContext, promise: Promise<unknown>, action: string): void {
   promise.catch((error: unknown) => {
-    console.error('[harnas] action failed', error);
+    console.error('[parley] action failed', error);
     ctx.toast(errorText(decodeIpcError(error).code, action));
   });
 }
@@ -183,7 +183,7 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
     const page = ctx.browser.active();
     if (page === null) return;
     if (zoom === undefined) useBrowserStore.getState().update(page.tabId, { findOpen: true });
-    else ctx.bridge.browser.zoom(page.webContentsId, zoom).catch((error: unknown) => console.warn('[harnas] browser zoom', error));
+    else ctx.bridge.browser.zoom(page.webContentsId, zoom).catch((error: unknown) => console.warn('[parley] browser zoom', error));
     return;
   }
   if (id.startsWith('tab.goto.') && active !== null) {

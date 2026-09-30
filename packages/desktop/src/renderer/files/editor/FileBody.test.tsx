@@ -306,7 +306,7 @@ describe('изменение на диске', () => {
 
 describe('тело по виду файла (кусок 7.5, тест 7)', () => {
   beforeEach(() => {
-    URL.createObjectURL = vi.fn(() => 'blob:harnas/1');
+    URL.createObjectURL = vi.fn(() => 'blob:parley/1');
     URL.revokeObjectURL = vi.fn();
   });
 

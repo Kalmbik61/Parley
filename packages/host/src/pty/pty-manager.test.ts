@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { EventData, EventName, SessionRef } from '@harnas/protocol';
+import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import type { CodexSignal } from './codex-terminal.js';
 import { createPtyManager } from './pty-manager.js';
@@ -55,7 +55,7 @@ function launch(env: NodeJS.ProcessEnv = {}, args: string[] = []): PtyLaunch {
 
 const tempFiles: string[] = [];
 async function tempFile(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'harnas-pty-test-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'parley-pty-test-'));
   tempFiles.push(dir);
   return path.join(dir, 'args.json');
 }

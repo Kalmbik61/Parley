@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { SessionRef } from '@harnas/protocol';
+import type { SessionRef } from '@parley/protocol';
 import { ResumeLimiter } from './resume-limiter.js';
 
 const ref = (sessionId: string): SessionRef => ({ projectPath: '/tmp/p', workId: 'w-01', sessionId });

@@ -67,14 +67,14 @@ describe('системная вставка', () => {
     expect(text.split('\n').length).toBeLessThanOrEqual(14);
   });
 
-  it('тег <channel source="harnas"> — только у сессий CLI harnas-core: как обычный способ он не обещан', () => {
+  it('тег <channel source="harnas"> — только у сессий CLI parley-core: как обычный способ он не обещан', () => {
     const text = systemGuidance(mapOf('Авторизация', 'логин по e-mail'), 's-03');
     const line = text.split('\n').find((candidate) => candidate.startsWith('check_inbox'));
 
     // Тег в вставке остаётся ровно один раз и только с оговоркой про CLI: сессия окна, прочитав «приходят
     // сами как <channel …>», ждала бы тега, которого хост ей не пошлёт.
     expect(text.split('<channel source="harnas">')).toHaveLength(2);
-    expect(line).toMatch(/<channel source="harnas">[^\n]*только[^\n]*CLI harnas-core/);
+    expect(line).toMatch(/<channel source="harnas">[^\n]*только[^\n]*CLI parley-core/);
     expect(text).not.toMatch(/приходят сами как <channel/);
     expect(line).toContain('отвечай send_message только на question');
   });
@@ -362,19 +362,19 @@ describe('подробный гид', () => {
     expect(GUIDE).not.toMatch(/страховка на случай, если канал\s+молчит/);
   });
 
-  it('тег <channel source="harnas"> — только в сессиях, поднятых CLI harnas-core с channelPush', () => {
+  it('тег <channel source="harnas"> — только в сессиях, поднятых CLI parley-core с channelPush', () => {
     const talk = sectionOf('## Как разговаривать', '## Указатель');
     const pointer = sectionOf('## Указатель', 'Если сессию запустили ролью-агентом');
 
     expect(talk).toMatch(
-      /Тегом `<channel source="harnas">` письма объявляются только в сессиях, поднятых CLI `harnas-core` с включённым `channelPush`: тег несёт `from`, `from_label` и `kind`, без текста письма — увидел тег, позови `check_inbox`/,
+      /Тегом `<channel source="harnas">` письма объявляются только в сессиях, поднятых CLI `parley-core` с включённым `channelPush`: тег несёт `from`, `from_label` и `kind`, без текста письма — увидел тег, позови `check_inbox`/,
     );
     expect(pointer).toMatch(
       /В сессиях, запущенных окном, письма объявляются только так: тега `<channel source="harnas">` там не будет/,
     );
     // Ни один абзац гида не упоминает тег без оговорки, чьи это сессии.
     for (const paragraph of GUIDE.split('\n\n').filter((text) => text.includes('<channel'))) {
-      expect(paragraph.replace(/\s+/g, ' ')).toMatch(/harnas-core|запущенных окном/);
+      expect(paragraph.replace(/\s+/g, ' ')).toMatch(/parley-core|запущенных окном/);
     }
   });
 

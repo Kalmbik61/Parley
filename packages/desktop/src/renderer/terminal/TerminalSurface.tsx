@@ -33,9 +33,9 @@ import type { Terminal } from '@xterm/xterm';
 import type { SearchAddon } from '@xterm/addon-search';
 import { useDroppable } from '@dnd-kit/core';
 import { toast } from 'sonner';
-import type { WorkSession } from '@harnas/core';
-import { refKey, type SessionRef } from '@harnas/protocol';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { WorkSession } from '@parley/core';
+import { refKey, type SessionRef } from '@parley/protocol';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { errorText, S } from '../../shared/strings.js';
@@ -65,7 +65,7 @@ import { useTerminal } from './use-terminal.js';
 import { xtermTheme } from './xterm-themes.js';
 
 export interface TerminalSurfaceProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   /** Из него же `workKey` для `requestCloseTabs`. */
   sessionRef: SessionRef;
   tabId: string;
@@ -110,10 +110,10 @@ function openSessionTab(ref: SessionRef): void {
 }
 
 /** «Resume» неживой сессии: отказ — тостом, а не молча (раунд main-r2, п. 2). */
-function resumeSession(bridge: HarnasBridge, ref: SessionRef): void {
+function resumeSession(bridge: ParleyBridge, ref: SessionRef): void {
   bridge.call('sessions.resume', { ref }).catch((error: unknown) => {
     const { code, message } = decodeIpcError(error);
-    console.warn('[harnas] sessions.resume', message);
+    console.warn('[parley] sessions.resume', message);
     toast.error(errorText(code, S.errors.actions.resumeSession));
   });
 }
@@ -355,7 +355,7 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
         saved = await bridge.app.saveDropImage('clipboard');
       } catch (error) {
         const { code, message } = decodeIpcError(error);
-        console.warn('[harnas] saveDropImage', message);
+        console.warn('[parley] saveDropImage', message);
         toast.error(code === 'drops:too-large' ? S.terminal.imageTooLarge : errorText(code, S.errors.actions.saveScreenshot));
         return;
       }

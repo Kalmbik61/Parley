@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { addSession, createWork, updateMap, workPaths } from '@harnas/core';
+import { addSession, createWork, updateMap, workPaths } from '@parley/core';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
@@ -193,7 +193,7 @@ describe('providers.list: модели, усилие и версия CLI (диз
   });
 
   it('available: команда есть в PATH или подменена оверрайдом — как и прежде', async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), 'harnas-providers-bin-'));
+    const dir = await mkdtemp(path.join(tmpdir(), 'parley-providers-bin-'));
     const file = path.join(dir, 'claude-stub');
     await writeFile(file, '#!/bin/sh\n', 'utf8');
     await chmod(file, 0o755);
@@ -253,7 +253,7 @@ describe('providers.list: лимиты подписок и событие provid
 
   /** Работа с сессиями claude и glm в новом проекте; возвращает каталог работы. */
   async function prepareWork(home: string): Promise<{ workDir: string; claude: string; glm: string }> {
-    const project = await mkdtemp(path.join(tmpdir(), 'harnas-providers-limits-'));
+    const project = await mkdtemp(path.join(tmpdir(), 'parley-providers-limits-'));
     projects.push(project);
     process.env['HARNAS_HOME'] = home;
     try {

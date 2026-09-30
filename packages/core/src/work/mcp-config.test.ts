@@ -24,7 +24,7 @@ const params = { workDir: '/project/.harnas/works/w-0042', sessionId: 's-02' };
 
 describe('конфиг MCP-сервера на сессию', () => {
   it('описывает один stdio-сервер по абсолютному пути с окружением сессии', () => {
-    // Bin `harnas-mcp` есть в PATH только под pnpm; агент стартует откуда угодно,
+    // Bin `parley-mcp` есть в PATH только под pnpm; агент стартует откуда угодно,
     // поэтому сервер задаётся node текущего процесса и абсолютным путём к скрипту.
     expect(path.isAbsolute(MCP_SERVER_ENTRY)).toBe(true);
     expect(MCP_SERVER_ENTRY.endsWith(path.join('mcp', 'server.js'))).toBe(true);
@@ -44,8 +44,8 @@ describe('конфиг MCP-сервера на сессию', () => {
   });
 
   it('бинарь сервера переопределяется: установка бывает не только из PATH', () => {
-    const config = mcpConfig({ ...params, command: '/opt/harnas/harnas-mcp' });
-    expect(config.mcpServers[MCP_SERVER_NAME]?.command).toBe('/opt/harnas/harnas-mcp');
+    const config = mcpConfig({ ...params, command: '/opt/parley/parley-mcp' });
+    expect(config.mcpServers[MCP_SERVER_NAME]?.command).toBe('/opt/parley/parley-mcp');
     expect(config.mcpServers[MCP_SERVER_NAME]?.args).toEqual([]);
   });
 
@@ -148,8 +148,8 @@ describe('конфиг MCP-сервера на сессию', () => {
   });
 
   it('кавычки в пути экранируются, а не рвут TOML', () => {
-    expect(codexMcpOverride({ ...params, command: '/opt/a"b/harnas-mcp' })).toContain(
-      'command="/opt/a\\"b/harnas-mcp"',
+    expect(codexMcpOverride({ ...params, command: '/opt/a"b/parley-mcp' })).toContain(
+      'command="/opt/a\\"b/parley-mcp"',
     );
   });
 });
@@ -157,7 +157,7 @@ describe('конфиг MCP-сервера на сессию', () => {
 /** Значения, на которых наивная склейка строк ломает TOML: кавычки, `\`, юникод, управляющие знаки. */
 const HOSTILE: ReadonlyArray<{ name: string; value: string; decoded?: string }> = [
   { name: 'кавычка', value: 'a"b' },
-  { name: 'обратный слеш', value: 'C:\\Users\\x\\harnas' },
+  { name: 'обратный слеш', value: 'C:\\Users\\x\\parley' },
   { name: 'слеш и кавычка подряд', value: 'a\\"b\\\\"' },
   { name: 'кириллица и пробелы', value: '/Users/иван/мой проект' },
   { name: 'астральный символ', value: '/tmp/😀/проект' },
@@ -201,11 +201,11 @@ describe('tomlString — экранирование значений TOML для
       const override = codexMcpOverride({
         workDir: `/tmp/${value}/.harnas/works/w-0001`,
         sessionId: 's-01',
-        command: `/opt/${value}/harnas-mcp`,
+        command: `/opt/${value}/parley-mcp`,
         env: { HARNAS_HOME: value },
       });
       const table = parseTomlAssignment(override).value as Record<string, TomlValue>;
-      expect(table['command'], name).toBe(`/opt/${expected}/harnas-mcp`);
+      expect(table['command'], name).toBe(`/opt/${expected}/parley-mcp`);
       expect((table['env'] as Record<string, TomlValue>)['HARNAS_WORK_DIR'], name).toBe(
         `/tmp/${expected}/.harnas/works/w-0001`,
       );
@@ -242,8 +242,8 @@ describe('writeMcpConfig', () => {
   let project = '';
 
   beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-    project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
+    home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+    project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
     process.env.HARNAS_HOME = home;
   });
 

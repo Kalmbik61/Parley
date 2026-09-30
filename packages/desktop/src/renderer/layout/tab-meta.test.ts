@@ -4,8 +4,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { Message, Room, WorkEntry, WorkSession } from '@harnas/core';
-import { refKey } from '@harnas/protocol';
+import type { Message, Room, WorkEntry, WorkSession } from '@parley/core';
+import { refKey } from '@parley/protocol';
 import type { FileRootSpec, TabSpec } from '../../shared/layout-types.js';
 import { bufferKey } from '../files/buffer.js';
 import { makeLetter, makeRoom } from '../test-utils/work-fixtures.js';

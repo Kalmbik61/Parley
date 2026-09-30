@@ -2,7 +2,7 @@ import { appendFile, mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { setProposal, updateMap } from '@harnas/core';
+import { setProposal, updateMap } from '@parley/core';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
@@ -14,7 +14,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * строки статуса, и клик по счётчику ведёт во вкладку комнаты; под строками активной карточки — «New session or room».
  *
  * Комнату создаёт хост (`rooms.create` с `lead` и тихим стартом, заглушка агента писем не читает), решение кладёт в
- * карту тест ядром — так его положил бы `propose_decision`: настоящий `harnas-mcp` заглушка не зовёт (сквозной
+ * карту тест ядром — так его положил бы `propose_decision`: настоящий `parley-mcp` заглушка не зовёт (сквозной
  * сценарий со стабом — кусок 8).
  */
 
@@ -25,7 +25,7 @@ let project = '';
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
-    ([m, p]) => (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas.call(m, p),
+    ([m, p]) => (globalThis as unknown as { parley: { call: (m: string, p: unknown) => Promise<unknown> } }).parley.call(m, p),
     [method, params] as const,
   ) as Promise<T>;
 }

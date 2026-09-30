@@ -13,15 +13,15 @@ import { probeCliVersion, startProviderVersions } from './versions.js';
  * либо с подменой (`probe`), либо на выдуманную команду, чьё имя переменной-оверрайда
  * (`HARNAS_<ИМЯ>_BIN`) указывает на скрипт-заглушку во временном каталоге.
  */
-const COMMAND = 'harnas-fake-cli';
-const OVERRIDE = 'HARNAS_HARNAS_FAKE_CLI_BIN';
+const COMMAND = 'parley-fake-cli';
+const OVERRIDE = 'HARNAS_PARLEY_FAKE_CLI_BIN';
 
 let dir = '';
 let home = '';
 
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), 'harnas-versions-'));
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-versions-home-'));
+  dir = await mkdtemp(path.join(tmpdir(), 'parley-versions-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-versions-home-'));
   process.env['HARNAS_HOME'] = home;
 });
 

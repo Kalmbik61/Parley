@@ -24,7 +24,7 @@ import {
 /**
  * Постоянные `-c` codex, которыми харнесс читает состояние сессии без хуков Codex (спека комнат,
  * 3.6): заголовок окна и уведомления OSC 9. Значения выписаны здесь руками, а не берутся из
- * `CODEX_HARNAS_FLAGS`: тест, ссылающийся на ту же константу, не заметил бы её порчи.
+ * `CODEX_PARLEY_FLAGS`: тест, ссылающийся на ту же константу, не заметил бы её порчи.
  */
 const CODEX_TUI_ARGS = [
   '-c',
@@ -239,7 +239,7 @@ describe('подстановка аргументов запуска', () => {
     expect(
       startCommand(PROVIDERS.codex, {
         sessionUuid: 'не-поддерживается',
-        mcpConfig: 'mcp_servers.harnas={command="harnas-mcp"}',
+        mcpConfig: 'mcp_servers.harnas={command="parley-mcp"}',
         prompt: '# Работа w-0042',
       }),
     ).toEqual({
@@ -249,7 +249,7 @@ describe('подстановка аргументов запуска', () => {
         '-a',
         'on-request',
         '-c',
-        'mcp_servers.harnas={command="harnas-mcp"}',
+        'mcp_servers.harnas={command="parley-mcp"}',
         ...CODEX_TUI_ARGS,
         '# Работа w-0042',
       ],
@@ -310,7 +310,7 @@ describe('модель и усилие новой сессии (дизайн к�
   it('codex: модель — флагом --model, усилие — переопределением конфига -c model_reasoning_effort', () => {
     expect(
       startCommand(PROVIDERS.codex, {
-        mcpConfig: 'mcp_servers.harnas={command="harnas-mcp"}',
+        mcpConfig: 'mcp_servers.harnas={command="parley-mcp"}',
         model: 'gpt-5.5',
         effort: 'high',
         prompt: 'бриф',
@@ -320,7 +320,7 @@ describe('модель и усилие новой сессии (дизайн к�
       '-a',
       'on-request',
       '-c',
-      'mcp_servers.harnas={command="harnas-mcp"}',
+      'mcp_servers.harnas={command="parley-mcp"}',
       ...CODEX_TUI_ARGS,
       '--model',
       'gpt-5.5',
@@ -605,7 +605,7 @@ describe('commandInPath', () => {
   let dir = '';
 
   beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), 'harnas-path-'));
+    dir = await mkdtemp(path.join(tmpdir(), 'parley-path-'));
   });
 
   afterEach(async () => {
@@ -645,7 +645,7 @@ describe('переопределения из HARNAS_HOME/providers.json', () =>
   let home = '';
 
   beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
+    home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
     process.env.HARNAS_HOME = home;
   });
 

@@ -3,7 +3,7 @@
  * 2026-09-27: интерфейс — только английский, как у Orca). И main, и рендерер
  * читают её отсюда — `shared/` входит в `tsconfig.node.json` и
  * `tsconfig.web.json` разом. Типы `HostNotice`/`NoticeKind` (для `noticeText`)
- * берутся из `@harnas/protocol`. `@harnas/core` с куска 8.3 тоже в `references`
+ * берутся из `@parley/protocol`. `@parley/core` с куска 8.3 тоже в `references`
  * обоих тсконфигов (`shared/files-types.ts` берёт оттуда `DiffFile`), но таблица
  * его типов не тянет: ключи вроде букв статуса git — обычные строки.
  *
@@ -12,7 +12,7 @@
  * mail, письмо → message, будильник → auto-wake и т. д. Группы ниже по
  * областям окна; параметризованные тексты — функции.
  */
-import type { HostNotice, NoticeKind } from '@harnas/protocol';
+import type { HostNotice, NoticeKind } from '@parley/protocol';
 
 export const S = {
   /** Общие подписи кнопок, переиспользуемые в нескольких диалогах. */
@@ -950,7 +950,7 @@ export function providerName(id: string, label: string): string {
   }
 }
 
-/** Английский текст по коду ошибки протокола (`ErrorCode` из `@harnas/protocol`, плюс наш `'failed'`). */
+/** Английский текст по коду ошибки протокола (`ErrorCode` из `@parley/protocol`, плюс наш `'failed'`). */
 const ERROR_REASON: Record<string, string> = {
   unauthorized: 'not authorized',
   protocol_mismatch: 'host protocol mismatch',
@@ -977,7 +977,7 @@ export function errorText(code: string, action?: string): string {
 }
 
 /**
- * Английский смысл каждого `NoticeKind` (`@harnas/protocol`) — раунд
+ * Английский смысл каждого `NoticeKind` (`@parley/protocol`) — раунд
  * исправлений 1 куска E.1: `HostNotice.text` хост пишет свободным русским
  * текстом (например, `packages/host/src/activity/activity-service.ts:217,248`,
  * `packages/host/src/sessions/sessions-service.ts:174,215`,

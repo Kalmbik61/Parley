@@ -17,7 +17,7 @@
 
 import { readFile, rename } from 'node:fs/promises';
 import path from 'node:path';
-import { harnasHome } from '@harnas/core';
+import { parleyHome } from '@parley/core';
 import { createFileQueue, writeAtomic } from './atomic-file.js';
 
 export interface LayoutsFileV2 {
@@ -44,8 +44,8 @@ export class LayoutTooLargeError extends Error {
   }
 }
 
-/** `~/.harnas/desktop/layouts.json` — `harnasHome()` уже слушает `HARNAS_HOME` (`@harnas/core`). */
-export function desktopLayoutsPath(home: string = harnasHome()): string {
+/** `~/.harnas/desktop/layouts.json` — `parleyHome()` уже слушает `HARNAS_HOME` (`@parley/core`). */
+export function desktopLayoutsPath(home: string = parleyHome()): string {
   return path.join(home, 'desktop', 'layouts.json');
 }
 

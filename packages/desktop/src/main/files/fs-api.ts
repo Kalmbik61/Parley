@@ -135,7 +135,7 @@ export async function writeAtomicPreservingMode(
   checked?: CheckedTarget,
 ): Promise<WriteResult> {
   const folder = path.dirname(absPath);
-  const suffix = `.${random()}.harnas-tmp`;
+  const suffix = `.${random()}.parley-tmp`;
   const tmp = path.join(folder, `.${fitName(path.basename(absPath), NAME_MAX_BYTES - 1 - Buffer.byteLength(suffix))}${suffix}`);
   let handle: FileHandle | null;
   try {
@@ -337,7 +337,7 @@ export function createFsApi(roots: RootsRegistry, options: FsApiOptions = {}): F
         ignored = (await options.checkIgnored?.(root, dir, found.map((entry) => entry.name))) ?? ignored;
       } catch (error) {
         // Дерево без приглушения лучше, чем дерево без папки.
-        console.warn('[harnas] files: checkIgnored failed', error);
+        console.warn('[parley] files: checkIgnored failed', error);
       }
       return found.map((entry) => (ignored.has(entry.name) ? { ...entry, ignored: true } : entry));
     },

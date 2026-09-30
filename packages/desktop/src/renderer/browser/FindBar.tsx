@@ -10,11 +10,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, X } from 'lucide-react';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 
 export interface FindBarProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   webContentsId: number;
   onClose(): void;
 }
@@ -42,7 +42,7 @@ export function FindBar({ bridge, webContentsId, onClose }: FindBarProps): JSX.E
     const seq = seqRef.current;
     if (text === '') {
       setResult(null);
-      bridge.browser.stopFind(webContentsId).catch((error: unknown) => console.warn('[harnas] browser stopFind', error));
+      bridge.browser.stopFind(webContentsId).catch((error: unknown) => console.warn('[parley] browser stopFind', error));
       return;
     }
     bridge.browser
@@ -50,12 +50,12 @@ export function FindBar({ bridge, webContentsId, onClose }: FindBarProps): JSX.E
       .then((next) => {
         if (seq === seqRef.current) setResult(next);
       })
-      .catch((error: unknown) => console.warn('[harnas] browser find', error));
+      .catch((error: unknown) => console.warn('[parley] browser find', error));
   };
 
   const close = (): void => {
     seqRef.current += 1;
-    bridge.browser.stopFind(webContentsId).catch((error: unknown) => console.warn('[harnas] browser stopFind', error));
+    bridge.browser.stopFind(webContentsId).catch((error: unknown) => console.warn('[parley] browser stopFind', error));
     onClose();
   };
 

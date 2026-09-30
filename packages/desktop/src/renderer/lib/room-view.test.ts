@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { Message, Room, WorkSession } from '@harnas/core';
+import type { Message, Room, WorkSession } from '@parley/core';
 import type { WorkLayout } from '../../shared/layout-types.js';
 import { makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { roomKey, roomLastAt, roomSessions, roomTabState } from './room-view.js';

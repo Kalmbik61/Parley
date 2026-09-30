@@ -29,7 +29,7 @@ function roots(base: string) {
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 beforeEach(async () => {
-  dir = await realpath(await mkdtemp(path.join(tmpdir(), 'harnas-watch-')));
+  dir = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-watch-')));
 });
 
 afterEach(async () => {

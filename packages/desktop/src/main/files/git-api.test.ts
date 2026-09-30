@@ -40,7 +40,7 @@ const Q = (text: string, extra: Partial<GrepQuery> = {}): GrepQuery => ({
 let dir = '';
 
 beforeEach(async () => {
-  dir = await realpath(await mkdtemp(path.join(tmpdir(), 'harnas-gitapi-')));
+  dir = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-gitapi-')));
 });
 
 afterEach(async () => {
@@ -99,7 +99,7 @@ describe('gitRootOf', () => {
     expect(await gitRootOf(runner, path.join(dir, 'папка й'))).toEqual({ prefix: 'папка й/' });
     expect(await gitRootOf(runner, dir)).toEqual({ prefix: '' });
     expect(spy).toHaveBeenCalledTimes(3);
-    const plain = await realpath(await mkdtemp(path.join(tmpdir(), 'harnas-plain-')));
+    const plain = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-plain-')));
     try {
       expect(await gitRootOf(runner, plain)).toBeNull();
     } finally {
@@ -566,7 +566,7 @@ describe('checkIgnored', () => {
 
 describe('walkFiles и поиск без git (тест 11)', () => {
   it('каталог-ссылка наружу не обходится; файл-ссылка наружу — нет, внутри — да; FIFO — нет, поиск не виснет', async () => {
-    const outside = await realpath(await mkdtemp(path.join(tmpdir(), 'harnas-outside-')));
+    const outside = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-outside-')));
     try {
       await writeFile(path.join(outside, 'secret.txt'), 'needle secret\n');
       await mkdir(path.join(dir, 'docs'));
@@ -783,7 +783,7 @@ describe('lsFiles: ссылки в .git и .harnas (раунд fix-7.1b, п.6)',
     await writeFile(path.join(dir, 'real.txt'), 'x');
     await symlink('real.txt', path.join(dir, 'in-link.txt'));
     await symlink('.harnas/works/w/map.json', path.join(dir, 'link.json'));
-    await symlink('.harnas', path.join(dir, 'harnas-dir'));
+    await symlink('.harnas', path.join(dir, 'parley-dir'));
   }
 
   it('git: отслеживаемая и новая ссылка в .harnas/.git не отдаются; обычная ссылка — да', async () => {

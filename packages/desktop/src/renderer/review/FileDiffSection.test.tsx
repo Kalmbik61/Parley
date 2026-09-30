@@ -34,7 +34,7 @@ function props(file: DiffFile, extra: Partial<FileDiffSectionProps> = {}): FileD
     onToggle: () => {},
     options: { readOnly: true },
     split: true,
-    theme: 'harnas-light',
+    theme: 'parley-light',
     language: undefined,
     register: () => {},
     notes: null,

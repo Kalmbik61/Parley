@@ -16,7 +16,7 @@ import { makeTempHome } from './tmp.js';
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
 
-type Harnas = { harnas: { call: (method: string, params: unknown) => Promise<unknown> } };
+type Parley = { parley: { call: (method: string, params: unknown) => Promise<unknown> } };
 
 test.describe('битый works-index.json на старте хоста (lane-r5)', () => {
   let home: string;
@@ -47,10 +47,10 @@ test.describe('битый works-index.json на старте хоста (lane-r5
     await expect(window.getByRole('alert')).toContainText("Host couldn't read the workspace list");
     await expect(window.getByTestId('landing')).toHaveCount(0);
     // Хост жив и отвечает: методы вне снимка работают, works.list — отказ, а не вечное ожидание.
-    const info = await window.evaluate(() => (globalThis as unknown as Harnas).harnas.call('host.info', {}));
+    const info = await window.evaluate(() => (globalThis as unknown as Parley).parley.call('host.info', {}));
     expect(info).toBeTruthy();
     const listed = await window.evaluate(() =>
-      (globalThis as unknown as Harnas).harnas.call('works.list', {}).then(
+      (globalThis as unknown as Parley).parley.call('works.list', {}).then(
         () => 'resolved',
         (error: unknown) => String(error),
       ),

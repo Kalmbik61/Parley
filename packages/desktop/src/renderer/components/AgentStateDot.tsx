@@ -28,7 +28,7 @@
  */
 
 import { CircleCheck, CircleX, MessageCircleQuestion, Moon } from 'lucide-react';
-import type { SessionLifecycle } from '@harnas/core';
+import type { SessionLifecycle } from '@parley/core';
 import { stateWord, type DotState } from '../lib/dot-state.js';
 import { cn } from '../lib/cn.js';
 import { AgentWorkingSpinner } from './AgentWorkingSpinner.js';

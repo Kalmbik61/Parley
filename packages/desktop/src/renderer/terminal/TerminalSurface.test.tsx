@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ILink } from '@xterm/xterm';
-import { refKey, type SessionRef } from '@harnas/protocol';
+import { refKey, type SessionRef } from '@parley/protocol';
 import { toast } from 'sonner';
 import { bufferKey } from '../files/buffer.js';
 import { useFilesStore } from '../files/store.js';

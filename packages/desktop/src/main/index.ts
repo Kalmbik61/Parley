@@ -16,8 +16,8 @@ import {
   webContents,
 } from 'electron';
 import type { WebContents } from 'electron';
-import { configPath, loadConfig } from '@harnas/core';
-import type { WorksSnapshot } from '@harnas/protocol';
+import { configPath, loadConfig } from '@parley/core';
+import type { WorksSnapshot } from '@parley/protocol';
 import { BROWSER_PARTITION } from '../shared/browser-types.js';
 import { S } from '../shared/strings.js';
 import { createDesignMode } from './browser/design-mode.js';
@@ -130,7 +130,7 @@ if (!gotLock) {
     // запущен тест; разбор настоящего вывода оболочки держат тесты `shell-env.test.ts` с заглушкой в файле.
     const shellEnv = await captureShellEnv({ skip: switches.loginShell });
     if (shellEnv.warning) {
-      console.warn(`[harnas] captureShellEnv: ${shellEnv.warning}`);
+      console.warn(`[parley] captureShellEnv: ${shellEnv.warning}`);
     }
 
     const paths = hostPaths();
@@ -144,7 +144,7 @@ if (!gotLock) {
         const nodeBin = await resolveNodeBin(shellEnv.env);
         if (nodeBin === null) {
           const reason = S.connection.reasonNodeNotFound;
-          console.error(`[harnas] ${reason}`);
+          console.error(`[parley] ${reason}`);
           connection.reportUnavailable(reason);
           return null;
         }
@@ -160,7 +160,7 @@ if (!gotLock) {
             stderrFile: path.join(paths.dir, 'host.err'),
           });
         } catch (err) {
-          console.error('[harnas] failed to start host', err);
+          console.error('[parley] failed to start host', err);
           return null;
         }
       },
@@ -169,7 +169,7 @@ if (!gotLock) {
     try {
       await connection.connect();
     } catch (err) {
-      console.error('[harnas] failed to connect to host', err);
+      console.error('[parley] failed to connect to host', err);
     }
 
     // `ui.json` и `themeSource` — до первого окна: `nativeTheme.shouldUseDarkColors`
@@ -189,10 +189,10 @@ if (!gotLock) {
       process.env.HARNAS_TERMINAL_RENDERER === 'dom' ? 'renderer=dom' : null,
     ].filter((flag): flag is string => flag !== null);
 
-    // Нативные вопросы main в E2E — в журнал (`globalThis.__harnasDialogs`), ответ «ждать».
+    // Нативные вопросы main в E2E — в журнал (`globalThis.__parleyDialogs`), ответ «ждать».
     const logDialogs = switches.dialogs;
     const dialogLog: string[] = [];
-    if (logDialogs) (globalThis as { __harnasDialogs?: string[] }).__harnasDialogs = dialogLog;
+    if (logDialogs) (globalThis as { __parleyDialogs?: string[] }).__parleyDialogs = dialogLog;
 
     // Окна, у которых был did-finish-load: только им событие `app:focus-target` дойдёт —
     // раньше прелоад ещё не слушает. Перезагрузка страницы снимает признак до нового конца.
@@ -255,10 +255,10 @@ if (!gotLock) {
     // Клетка встроенного браузера (кусок 9.1, спека 12.2) — до первого окна: его
     // web-contents-created приходит внутри new BrowserWindow, а session.fromPartition до ready бросает.
     const browserSession = session.fromPartition(BROWSER_PARTITION);
-    // Журнал загрузок E2E; ответ «диалога» тест кладёт в `__harnasSaveAnswer`: путь или null — «Отмена».
+    // Журнал загрузок E2E; ответ «диалога» тест кладёт в `__parleySaveAnswer`: путь или null — «Отмена».
     const downloadLog: Array<{ filename: string; url: string }> = [];
-    const testGlobals = globalThis as { __harnasDownloads?: typeof downloadLog; __harnasSaveAnswer?: string | null };
-    if (logDownloads) testGlobals.__harnasDownloads = downloadLog;
+    const testGlobals = globalThis as { __parleyDownloads?: typeof downloadLog; __parleySaveAnswer?: string | null };
+    if (logDownloads) testGlobals.__parleyDownloads = downloadLog;
     // Снимок элемента Design Mode (кусок 9.3a) — в drops/, как скриншоты из буфера (5.4). Создаётся до
     // стража: загрузка из гостя снимает его выбор (fix-9b).
     const designMode = createDesignMode({
@@ -285,7 +285,7 @@ if (!gotLock) {
           return;
         }
         downloadLog.push({ filename: item.getFilename(), url: item.getURL() });
-        const answer = testGlobals.__harnasSaveAnswer ?? null;
+        const answer = testGlobals.__parleySaveAnswer ?? null;
         if (answer === null) item.cancel();
         else item.setSavePath(answer);
       },
@@ -297,11 +297,11 @@ if (!gotLock) {
     mainWindow = openWindow();
 
     // E2E (`HARNAS_NOTIFICATIONS=log`): уведомления — в журнал main, а не на экран
-    // человека; тест читает и кликает их через `app.evaluate` (`globalThis.__harnasNotifications`).
+    // человека; тест читает и кликает их через `app.evaluate` (`globalThis.__parleyNotifications`).
     const notificationLog: LoggedNotification[] = [];
     const logNotifications = switches.notifications;
     if (logNotifications) {
-      (globalThis as { __harnasNotifications?: LoggedNotification[] }).__harnasNotifications = notificationLog;
+      (globalThis as { __parleyNotifications?: LoggedNotification[] }).__parleyNotifications = notificationLog;
     }
     const notifier = createNotifier({
       create: (options): NotificationLike =>
@@ -333,7 +333,7 @@ if (!gotLock) {
     // `onStatus` отдаёт текущий статус сразу при подписке — уже поднятая связь читается тут же.
     // Старые скриншоты `drops/` (кусок 5.4): только обычные файлы и сами ссылки, по lstat.
     // В фоне — старт окна их не ждёт.
-    void cleanupDrops(dropsDir(), DROPS_MAX_AGE_MS).catch((error: unknown) => console.warn('[harnas] cleanupDrops', error));
+    void cleanupDrops(dropsDir(), DROPS_MAX_AGE_MS).catch((error: unknown) => console.warn('[parley] cleanupDrops', error));
     const fakeDrops = switches.drops;
 
     const rootsSource: RootsSource = {
@@ -361,11 +361,11 @@ if (!gotLock) {
 
     // E2E (`HARNAS_SHELL=log`): «открыть в приложении», «показать в Finder» и внешний адрес —
     // в журнал main, а не на экран человека (настоящие открыли бы приложение, Finder и браузер);
-    // тест читает журнал через `app.evaluate` (`globalThis.__harnasShell`).
+    // тест читает журнал через `app.evaluate` (`globalThis.__parleyShell`).
     const shellLog: Array<{ action: 'openPath' | 'showItemInFolder'; path: string } | { action: 'openExternal'; url: string }> = [];
     const logShell = switches.shell;
     if (logShell) {
-      (globalThis as { __harnasShell?: typeof shellLog }).__harnasShell = shellLog;
+      (globalThis as { __parleyShell?: typeof shellLog }).__parleyShell = shellLog;
     }
 
     registerIpc({

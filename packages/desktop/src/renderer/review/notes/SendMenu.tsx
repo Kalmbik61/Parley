@@ -10,7 +10,7 @@
  */
 
 import { Check, ChevronDown } from 'lucide-react';
-import type { WorkEntry, WorkSession } from '@harnas/core';
+import type { WorkEntry, WorkSession } from '@parley/core';
 import { S } from '../../../shared/strings.js';
 import { AgentStateDot } from '../../components/AgentStateDot.js';
 import { cn } from '../../lib/cn.js';

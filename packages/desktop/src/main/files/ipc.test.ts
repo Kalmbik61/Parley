@@ -303,7 +303,7 @@ describe('files/ipc: git, поиск и слежение (кусок 7.1b)', () 
   });
 
   it('перезагрузка окна снимает его слежение и гасит незавершённый grep; закрытие — тоже (тест 13)', async () => {
-    const dir = await realpath(await mkdtemp(path.join(tmpdir(), 'harnas-filesipc-')));
+    const dir = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-filesipc-')));
     try {
       const git = fakeGit();
       const watchFs = fakeWatchFs();
@@ -354,7 +354,7 @@ describe('files/ipc: git, поиск и слежение (кусок 7.1b)', () 
 
   it('watch корня при EMFILE — files:watch-failed (тест 13)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const dir = await realpath(await mkdtemp(path.join(tmpdir(), 'harnas-filesipc-')));
+    const dir = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-filesipc-')));
     try {
       const { ipcMain } = setup({
         rootPath: dir,
@@ -371,7 +371,7 @@ describe('files/ipc: git, поиск и слежение (кусок 7.1b)', () 
   });
 
   it('cancel гасит grep этого окна по signalId', async () => {
-    const dir = await realpath(await mkdtemp(path.join(tmpdir(), 'harnas-filesipc-')));
+    const dir = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-filesipc-')));
     try {
       const git = fakeGit();
       const { ipcMain } = setup({ rootPath: dir, git });
@@ -390,7 +390,7 @@ describe('files/ipc: git, поиск и слежение (кусок 7.1b)', () 
 
 describe('files/ipc: files:ls-files (решение по 7.1b)', () => {
   it('ответ — { paths, truncated }, а не голый список', async () => {
-    const dir = await realpath(await mkdtemp(path.join(tmpdir(), 'harnas-filesipc-')));
+    const dir = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-filesipc-')));
     try {
       const git = fakeGit();
       git.run.mockImplementation(async (args: string[]) => ({

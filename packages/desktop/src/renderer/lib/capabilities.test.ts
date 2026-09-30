@@ -7,7 +7,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { renderHook } from '@testing-library/react';
-import { METHODS, NOTIFICATIONS } from '@harnas/protocol';
+import { METHODS, NOTIFICATIONS } from '@parley/protocol';
 import type { HostStatus } from '../../shared/bridge.js';
 import { useHostStore } from '../store/host.js';
 import {

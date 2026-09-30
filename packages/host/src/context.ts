@@ -1,4 +1,4 @@
-import type { EventData, EventName, MethodName, NotificationName, Params, Result } from '@harnas/protocol';
+import type { EventData, EventName, MethodName, NotificationName, Params, Result } from '@parley/protocol';
 import type { Client } from './client.js';
 import type { Log } from './log.js';
 import type { HostPaths } from './paths.js';

@@ -4,8 +4,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
-import type { WorkEntry, WorktreeDiff } from '@harnas/core';
-import { refKey, type SessionRef } from '@harnas/protocol';
+import type { WorkEntry, WorktreeDiff } from '@parley/core';
+import { refKey, type SessionRef } from '@parley/protocol';
 import { useActivityStore } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
