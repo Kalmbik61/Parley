@@ -13,6 +13,9 @@ process.env.HARNAS_DROPS = 'fake';
 process.env.HARNAS_DOWNLOADS = 'log';
 // Нативный вопрос «страница зависла» (fix-7.3 п. 5) — в журнал main, без системного диалога.
 process.env.HARNAS_DIALOGS = 'log';
+// Оболочку человека (`$SHELL -ilc` и её rc-файлы) окно в E2E не зовёт: PATH — тот, с которым запущен
+// тест (кусок 11b, ревью). Разбор вывода настоящей оболочки держат юнит-тесты `shell-env.test.ts`.
+process.env.HARNAS_LOGIN_SHELL = 'skip';
 
 export default defineConfig({
   testDir: './e2e',

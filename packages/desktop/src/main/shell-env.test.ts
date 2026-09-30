@@ -309,4 +309,40 @@ describe('captureShellEnv: заглушка оболочки в файле', () 
     expect(result.warning).toMatch(/ENOENT/);
     expect(result.env.PATH).toBe(FINDER_ENV.PATH);
   });
+
+  it('фоновый процесс rc держит stdout: PATH берётся, не дожидаясь закрытия трубы', async () => {
+    // Как rc, оставивший процесс с унаследованным stdout: труба открыта, пока тот жив, и `close` не
+    // приходит. Раньше окно ждало таймаута и выбрасывало уже напечатанный между маркерами PATH.
+    const shell = await stubShell(
+      ['( sleep 3 & )', 'PATH="/stub/bin"; export PATH', 'eval "$2"', 'exit 0'].join('\n'),
+    );
+    const started = Date.now();
+
+    const result = await captureShellEnv({ shell, env: FINDER_ENV, timeoutMs: 2000 });
+
+    expect(result.warning).toBeNull();
+    expect(result.fromShell).toBe(true);
+    expect(result.env.PATH).toBe('/stub/bin');
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+
+  it('символ не из ASCII, разорванный границей чанков, PATH не портит', async () => {
+    // Значение приходит двумя записями с паузой, граница — посреди двухбайтного «п» (D0 BF): декодер
+    // без состояния сделал бы из каждой половины U+FFFD. Маркеры заглушка берёт из присланной команды.
+    const shell = await stubShell(
+      [
+        `begin=$(printf '%s' "$2" | sed -n "s/.*'\\(__[A-Z_]*_BEGIN__\\)'.*/\\1/p")`,
+        `end=$(printf '%s' "$2" | sed -n "s/.*'\\(__[A-Z_]*_END__\\)'.*/\\1/p")`,
+        `printf '%s/\\320' "$begin"`,
+        'sleep 0.3',
+        `printf '\\277/bin%s' "$end"`,
+      ].join('\n'),
+    );
+
+    const result = await captureShellEnv({ shell, env: FINDER_ENV });
+
+    expect(result.warning).toBeNull();
+    expect(result.fromShell).toBe(true);
+    expect(result.env.PATH).toBe('/п/bin');
+  });
 });

@@ -39,25 +39,41 @@ const isDirectory = (dir: string): Promise<boolean> =>
 /**
  * Код выхода не смотрим: оболочка, напечатавшая маркеры и потом вышедшая с ошибкой (хук выхода),
  * своё дело сделала, а решает разбор маркеров — не успела напечатать, их просто не будет.
+ *
+ * Ответ уходит, как только пара маркеров пришла целиком, а не когда закрылась труба: процесс,
+ * оставленный rc-файлом в фоне, наследует stdout оболочки и держит трубу открытой, пока жив сам, —
+ * `close` тогда не приходит, а `PATH` уже напечатан. Оболочка после этого выходит сама (хуки выхода
+ * отрабатывают), таймер остаётся сторожем: не вышла за срок — убита.
  */
 async function runShell(shell: string, args: string[], timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(shell, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+    // Декодер с состоянием: символ не из ASCII (путь) не рвётся на границе чанков.
+    child.stdout.setEncoding('utf8');
     let out = '';
+    let answered = false;
+    const answer = (finish: () => void): void => {
+      if (answered) return;
+      answered = true;
+      finish();
+    };
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
-      reject(new Error(`shell did not respond within ${timeoutMs}ms`));
+      answer(() => reject(new Error(`shell did not respond within ${timeoutMs}ms`)));
     }, timeoutMs);
-    child.stdout.on('data', (chunk: Buffer) => {
-      out += chunk.toString('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      // Ответ отдан, а фоновый процесс всё пишет в ту же трубу: вывод не копим, но и читать не бросаем.
+      if (answered) return;
+      out += chunk;
+      if (betweenMarkers(out) !== null) answer(() => resolve(out));
     });
     child.on('error', (err) => {
       clearTimeout(timer);
-      reject(err);
+      answer(() => reject(err));
     });
     child.on('close', () => {
       clearTimeout(timer);
-      resolve(out);
+      answer(() => resolve(out));
     });
   });
 }
@@ -79,18 +95,22 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+/** Текст между первым маркером начала и следующим за ним маркером конца; `null` — пара не пришла целиком. */
+function betweenMarkers(output: string): string | null {
+  const begin = output.indexOf(PATH_BEGIN);
+  if (begin === -1) return null;
+  const from = begin + PATH_BEGIN.length;
+  const end = output.indexOf(PATH_END, from);
+  return end === -1 ? null : output.slice(from, end);
+}
+
 /**
  * Значение между маркерами; `null` — маркеров нет, между ними пусто или лежит не `PATH`
  * (перевод строки и NUL в нём означают, что чужой вывод вклинился в печать).
  */
 function pathFromOutput(output: string): string | null {
-  const begin = output.indexOf(PATH_BEGIN);
-  if (begin === -1) return null;
-  const from = begin + PATH_BEGIN.length;
-  const end = output.indexOf(PATH_END, from);
-  if (end === -1) return null;
-  const value = output.slice(from, end);
-  if (value.trim() === '' || /[\n\0]/.test(value)) return null;
+  const value = betweenMarkers(output);
+  if (value === null || value.trim() === '' || /[\n\0]/.test(value)) return null;
   return value;
 }
 

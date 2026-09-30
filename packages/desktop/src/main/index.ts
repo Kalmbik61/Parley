@@ -44,7 +44,7 @@ import {
   type NotificationLike,
 } from './notifications.js';
 import { createRootsRegistry, worktreeRootPolicy, type RootsSource } from './roots.js';
-import { captureShellEnv } from './shell-env.js';
+import { captureShellEnv, type ShellEnvResult } from './shell-env.js';
 import { testSwitches } from './test-switches.js';
 import { createUiStore, desktopUiPath } from './ui-store.js';
 import { createMainWindow, guardWindowClose, titlebarDoubleClickAction } from './window.js';
@@ -125,7 +125,11 @@ if (!gotLock) {
     // Открытому из Finder окну launchd отдаёт урезанный PATH: без `~/.local/bin` и nvm хост не найдёт
     // ни `claude`, ни `codex`. PATH берётся у login-оболочки один раз, до хоста, — остальное окружение
     // остаётся как есть, — и уходит в хост окружением его запуска; агенты наследуют его от хоста.
-    const shellEnv = await captureShellEnv();
+    // E2E (`HARNAS_LOGIN_SHELL=skip`): оболочку человека с её rc-файлами не зовём, PATH — тот, с которым
+    // запущен тест; разбор настоящего вывода оболочки держат тесты `shell-env.test.ts` с заглушкой в файле.
+    const shellEnv: ShellEnvResult = switches.loginShell
+      ? { env: { ...process.env }, fromShell: false, warning: null }
+      : await captureShellEnv();
     if (shellEnv.warning) {
       console.warn(`[harnas] captureShellEnv: ${shellEnv.warning}`);
     }
