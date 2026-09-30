@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_CONFIG, configPath, loadConfig, parseSetting, saveConfig } from './config.js';
+import { DEFAULT_CONFIG, ENV_NAMES, configPath, loadConfig, parseSetting, saveConfig } from './config.js';
 
 let home = '';
 const file = (): string => path.join(home, 'config.json');
@@ -62,10 +62,10 @@ describe('loadConfig', () => {
     expect(fromFile.warning).toBeNull();
 
     const fromEnv = await loadConfig(file(), {
-      HARNAS_SILENCE_MS: '60000',
-      HARNAS_CHANNEL_PUSH: '1',
-      HARNAS_MESSAGE_RATE: '7',
-      HARNAS_AUTO_LAUNCH: '1',
+      PARLEY_SILENCE_MS: '60000',
+      PARLEY_CHANNEL_PUSH: '1',
+      PARLEY_MESSAGE_RATE: '7',
+      PARLEY_AUTO_LAUNCH: '1',
     });
     expect(fromEnv.config).toEqual({
       silenceThresholdMs: 60_000,
@@ -89,10 +89,10 @@ describe('loadConfig', () => {
     expect(fromFile.config.agentSkills).toBe(false);
     expect(fromFile.warning).toBeNull();
 
-    const fromEnv = await loadConfig(file(), { HARNAS_AGENT_SKILLS: '1' });
+    const fromEnv = await loadConfig(file(), { PARLEY_AGENT_SKILLS: '1' });
     expect(fromEnv.config.agentSkills).toBe(true);
     expect(fromEnv.fromEnv).toEqual(['agentSkills']);
-    expect((await loadConfig(file(), { HARNAS_AGENT_SKILLS: 'off' })).config.agentSkills).toBe(false);
+    expect((await loadConfig(file(), { PARLEY_AGENT_SKILLS: 'off' })).config.agentSkills).toBe(false);
   });
 
   it('agentSkills: не булево в файле и мусор в окружении — жалоба и дефолт', async () => {
@@ -102,9 +102,9 @@ describe('loadConfig', () => {
     expect(badFile.warning).toContain('agentSkills');
 
     await write({});
-    const badEnv = await loadConfig(file(), { HARNAS_AGENT_SKILLS: 'может' });
+    const badEnv = await loadConfig(file(), { PARLEY_AGENT_SKILLS: 'может' });
     expect(badEnv.config.agentSkills).toBe(true);
-    expect(badEnv.warning).toContain('HARNAS_AGENT_SKILLS');
+    expect(badEnv.warning).toContain('PARLEY_AGENT_SKILLS');
     expect(badEnv.fromEnv).toEqual([]);
   });
 
@@ -115,7 +115,7 @@ describe('loadConfig', () => {
     expect(fromFile.config.fontSize).toBe(16);
     expect(fromFile.warning).toBeNull();
 
-    const fromEnv = await loadConfig(file(), { HARNAS_FONT_FAMILY: 'Menlo', HARNAS_FONT_SIZE: '20' });
+    const fromEnv = await loadConfig(file(), { PARLEY_FONT_FAMILY: 'Menlo', PARLEY_FONT_SIZE: '20' });
     expect(fromEnv.config.fontFamily).toBe('Menlo');
     expect(fromEnv.config.fontSize).toBe(20);
     expect(fromEnv.fromEnv).toEqual(expect.arrayContaining(['fontFamily', 'fontSize']));
@@ -139,9 +139,9 @@ describe('loadConfig', () => {
     expect((await loadConfig(file(), {})).config.fontSize).toBe(32);
 
     await write({});
-    const badEnv = await loadConfig(file(), { HARNAS_FONT_SIZE: '999' });
+    const badEnv = await loadConfig(file(), { PARLEY_FONT_SIZE: '999' });
     expect(badEnv.config.fontSize).toBe(DEFAULT_CONFIG.fontSize);
-    expect(badEnv.warning).toContain('HARNAS_FONT_SIZE');
+    expect(badEnv.warning).toContain('PARLEY_FONT_SIZE');
   });
 
   it('fontFamily: пустая строка в файле — жалоба и дефолт', async () => {
@@ -154,7 +154,7 @@ describe('loadConfig', () => {
   it('пустая переменная — то же, что незаданная', async () => {
     await write({ messageRate: 5 });
 
-    expect((await loadConfig(file(), { HARNAS_MESSAGE_RATE: '' })).config.messageRate).toBe(5);
+    expect((await loadConfig(file(), { PARLEY_MESSAGE_RATE: '' })).config.messageRate).toBe(5);
   });
 
   it('битый JSON — дефолты и предупреждение', async () => {
@@ -186,13 +186,13 @@ describe('loadConfig', () => {
 
   it('битая переменная окружения не отменяет остальные', async () => {
     const loaded = await loadConfig(file(), {
-      HARNAS_SILENCE_MS: 'долго',
-      HARNAS_AUTO_LAUNCH: 'off',
+      PARLEY_SILENCE_MS: 'долго',
+      PARLEY_AUTO_LAUNCH: 'off',
     });
 
     expect(loaded.config.silenceThresholdMs).toBe(DEFAULT_CONFIG.silenceThresholdMs);
     expect(loaded.config.autoLaunch).toBe(false);
-    expect(loaded.warning).toContain('HARNAS_SILENCE_MS');
+    expect(loaded.warning).toContain('PARLEY_SILENCE_MS');
   });
 
   it('потолок писем меньше единицы — жалоба и дефолт, остальные поля целы', async () => {
@@ -204,8 +204,8 @@ describe('loadConfig', () => {
     expect(loaded.warning).toContain('messageRate');
   });
 
-  it('HARNAS_CHANNEL_PUSH=0 гасит push', async () => {
-    const loaded = await loadConfig(file(), { HARNAS_CHANNEL_PUSH: '0' });
+  it('PARLEY_CHANNEL_PUSH=0 гасит push', async () => {
+    const loaded = await loadConfig(file(), { PARLEY_CHANNEL_PUSH: '0' });
 
     expect(loaded.config.channelPush).toBe(false);
     expect(loaded.warning).toBeNull();
@@ -222,8 +222,8 @@ describe('loadConfig', () => {
     expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({ threadWidth: 20, messageRate: 5 });
   });
 
-  it('устаревшая переменная HARNAS_THREAD_WIDTH не даёт жалобы (кусок 4: док ушёл)', async () => {
-    const loaded = await loadConfig(file(), { HARNAS_THREAD_WIDTH: '999' });
+  it('устаревшая переменная PARLEY_THREAD_WIDTH не даёт жалобы (кусок 4: док ушёл)', async () => {
+    const loaded = await loadConfig(file(), { PARLEY_THREAD_WIDTH: '999' });
 
     expect(loaded.warning).toBeNull();
     expect(loaded.fromEnv).toEqual([]);
@@ -256,14 +256,14 @@ describe('loadConfig', () => {
     expect(loaded.warning).toBeNull();
   });
 
-  it('переменные TUI (HARNAS_PREFIX, HARNAS_THEME и др.) больше не читаются и не дают жалобы', async () => {
+  it('переменные TUI (PARLEY_PREFIX, PARLEY_THEME и др.) больше не читаются и не дают жалобы', async () => {
     const loaded = await loadConfig(file(), {
-      HARNAS_PREFIX: 'a',
-      HARNAS_SIDEBAR_WIDTH: 'широкий',
-      HARNAS_MOUSE: '0',
-      HARNAS_ASCII: 'мимо',
-      HARNAS_THEME: 'неон',
-      HARNAS_ESCAPE_KEY: 'w',
+      PARLEY_PREFIX: 'a',
+      PARLEY_SIDEBAR_WIDTH: 'широкий',
+      PARLEY_MOUSE: '0',
+      PARLEY_ASCII: 'мимо',
+      PARLEY_THEME: 'неон',
+      PARLEY_ESCAPE_KEY: 'w',
     });
 
     expect(loaded.config).toEqual(DEFAULT_CONFIG);
@@ -285,7 +285,7 @@ describe('loadConfig', () => {
 
   it('сообщает, какие ключи пришли из окружения', async () => {
     await write({ messageRate: 5 });
-    const loaded = await loadConfig(file(), { HARNAS_AUTO_LAUNCH: '0', HARNAS_CHANNEL_PUSH: 'мимо' });
+    const loaded = await loadConfig(file(), { PARLEY_AUTO_LAUNCH: '0', PARLEY_CHANNEL_PUSH: 'мимо' });
 
     // Битая переменная ключ не перекрывает — и в список не попадает.
     expect(loaded.fromEnv).toEqual(['autoLaunch']);
@@ -295,14 +295,91 @@ describe('loadConfig', () => {
     expect((await loadConfig(file(), {})).fromEnv).toEqual([]);
   });
 
-  it('путь по умолчанию — config.json в HARNAS_HOME', () => {
-    const saved = process.env.HARNAS_HOME;
+  it('путь по умолчанию — config.json в PARLEY_HOME', () => {
+    const saved = process.env.PARLEY_HOME;
+    process.env.PARLEY_HOME = home;
+    try {
+      expect(configPath()).toBe(file());
+    } finally {
+      if (saved === undefined) delete process.env.PARLEY_HOME;
+      else process.env.PARLEY_HOME = saved;
+    }
+  });
+});
+
+describe('переменные окружения: PARLEY_* и прежние HARNAS_* (R3)', () => {
+  /** Для каждой настройки: ключ без префикса, значение из окружения и что из него выйдет. */
+  const SETTINGS = [
+    ['silenceThresholdMs', 'SILENCE_MS', '1234', 1234],
+    ['channelPush', 'CHANNEL_PUSH', '0', false],
+    ['messageRate', 'MESSAGE_RATE', '9', 9],
+    ['resumeRate', 'RESUME_RATE', '3', 3],
+    ['autoLaunch', 'AUTO_LAUNCH', 'off', false],
+    ['agentSkills', 'AGENT_SKILLS', 'no', false],
+    ['fontFamily', 'FONT_FAMILY', 'Menlo', 'Menlo'],
+    ['fontSize', 'FONT_SIZE', '18', 18],
+    ['worktreeRoot', 'WORKTREE_ROOT', '/tmp/wt', '/tmp/wt'],
+  ] as const;
+
+  it('ключи таблицы ENV_NAMES — те же девять настроек', () => {
+    expect(Object.fromEntries(SETTINGS.map(([key, name]) => [key, name]))).toEqual(ENV_NAMES);
+  });
+
+  it.each(SETTINGS)('%s: берётся из PARLEY_%s', async (key, name, raw, parsed) => {
+    const loaded = await loadConfig(file(), { [`PARLEY_${name}`]: raw });
+    expect(loaded.config[key]).toBe(parsed);
+    expect(loaded.fromEnv).toEqual([key]);
+    expect(loaded.warning).toBeNull();
+  });
+
+  it.each(SETTINGS)('%s: прежняя HARNAS_%s читается как запасная', async (key, name, raw, parsed) => {
+    const loaded = await loadConfig(file(), { [`HARNAS_${name}`]: raw });
+    expect(loaded.config[key]).toBe(parsed);
+    expect(loaded.fromEnv).toEqual([key]);
+    expect(loaded.warning).toBeNull();
+  });
+
+  it('оба имени: главнее PARLEY_*', async () => {
+    const loaded = await loadConfig(file(), { PARLEY_MESSAGE_RATE: '5', HARNAS_MESSAGE_RATE: '50' });
+    expect(loaded.config.messageRate).toBe(5);
+  });
+
+  it('пустая PARLEY_* не перекрывает прежнюю: пустая — то же, что незаданная', async () => {
+    const loaded = await loadConfig(file(), { PARLEY_MESSAGE_RATE: '', HARNAS_MESSAGE_RATE: '50' });
+    expect(loaded.config.messageRate).toBe(50);
+    expect(loaded.fromEnv).toEqual(['messageRate']);
+  });
+
+  it('файл не перекрывает переменную ни под одним из имён', async () => {
+    await write({ messageRate: 3, fontSize: 12 });
+    const loaded = await loadConfig(file(), { HARNAS_MESSAGE_RATE: '40', PARLEY_FONT_SIZE: '16' });
+    expect(loaded.config.messageRate).toBe(40);
+    expect(loaded.config.fontSize).toBe(16);
+    expect([...loaded.fromEnv].sort()).toEqual(['fontSize', 'messageRate']);
+  });
+
+  it('жалоба на неверное значение называет ту переменную, которая задана', async () => {
+    const fresh = await loadConfig(file(), { PARLEY_FONT_SIZE: '999' });
+    expect(fresh.warning).toContain('PARLEY_FONT_SIZE');
+    expect(fresh.warning).not.toContain('HARNAS_');
+
+    const legacy = await loadConfig(file(), { HARNAS_FONT_SIZE: '999' });
+    expect(legacy.warning).toContain('HARNAS_FONT_SIZE');
+    expect(legacy.warning).not.toContain('PARLEY_');
+    expect(legacy.fromEnv).toEqual([]);
+  });
+
+  it('дом по умолчанию: config.json лежит в HARNAS_HOME, пока PARLEY_HOME не задан', () => {
+    const saved = { parley: process.env.PARLEY_HOME, harnas: process.env.HARNAS_HOME };
+    delete process.env.PARLEY_HOME;
     process.env.HARNAS_HOME = home;
     try {
       expect(configPath()).toBe(file());
     } finally {
-      if (saved === undefined) delete process.env.HARNAS_HOME;
-      else process.env.HARNAS_HOME = saved;
+      if (saved.parley === undefined) delete process.env.PARLEY_HOME;
+      else process.env.PARLEY_HOME = saved.parley;
+      if (saved.harnas === undefined) delete process.env.HARNAS_HOME;
+      else process.env.HARNAS_HOME = saved.harnas;
     }
   });
 });
@@ -332,7 +409,7 @@ describe('parseSetting', () => {
     expect(fromFile.config.resumeRate).toBe(6);
     expect(fromFile.warning).toContain('resumeRate');
 
-    const fromEnv = await loadConfig(file(), { HARNAS_RESUME_RATE: '0' });
+    const fromEnv = await loadConfig(file(), { PARLEY_RESUME_RATE: '0' });
     expect(fromEnv.config.resumeRate).toBe(0);
     expect(fromEnv.fromEnv).toContain('resumeRate');
   });

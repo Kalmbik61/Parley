@@ -41,7 +41,7 @@ test.describe('битый works-index.json на старте хоста (lane-r5
     const savedLayouts = `${JSON.stringify({ version: 2, works: { '/tmp/p\u0000w-0001': { saved: true } } }, null, 2)}\n`;
     await writeFile(layouts, savedLayouts);
 
-    app = await electron.launch({ args: [mainEntry], env: { ...process.env, HARNAS_HOME: home } });
+    app = await electron.launch({ args: [mainEntry], env: { ...process.env, PARLEY_HOME: home } });
     const window = await app.firstWindow();
 
     await expect(window.getByRole('alert')).toContainText("Host couldn't read the workspace list");

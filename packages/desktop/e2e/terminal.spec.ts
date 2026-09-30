@@ -54,10 +54,10 @@ test.describe('панель терминала: ввод стаба и восс�
   });
 
   test('ввод hello и Enter дают echo: hello; новый запуск восстанавливает экран из снимка', async () => {
-    // `HARNAS_CLAUDE_BIN` — тот же оверрайд, что использует core/host для
+    // `PARLEY_CLAUDE_BIN` — тот же оверрайд, что использует core/host для
     // подмены бинаря: настоящий `claude` в автотестах не запускается никогда
     // (план этапа 1, «Правила проверки»).
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
 
     let app = await electron.launch({ args: [mainEntry], env });
     running = app;
@@ -116,7 +116,7 @@ test.describe('панель терминала: ввод стаба и восс�
   });
 
   test('тест 15 (кусок 5.3): указатель по строкам с URL и путём — ни pageerror, ни ошибок console', async () => {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     await mkdir(path.join(project, 'src'), { recursive: true });
     await writeFile(path.join(project, 'src', 'a.ts'), 'export {};\n');
 
@@ -177,7 +177,7 @@ test.describe('панель терминала: ввод стаба и восс�
   });
 
   test('раунд fix-6.2: аддоны под xterm 5.5 — ⌘F считает совпадения N/M, FitAddon подгоняет строки под окно', async () => {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     const app = await electron.launch({ args: [mainEntry], env });
     running = app;
     try {

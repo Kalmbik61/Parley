@@ -2,6 +2,7 @@ import { watch, type FSWatcher } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseMap } from './map.js';
+import { stateDir } from './state-dir.js';
 import { parleyHome, readWorksIndex, workPaths } from './store.js';
 import type { WorkMap } from './types.js';
 
@@ -11,7 +12,7 @@ export interface WorkEntry {
   map: WorkMap;
 }
 
-const worksDir = (projectPath: string): string => path.join(projectPath, '.harnas', 'works');
+const worksDir = (projectPath: string): string => path.join(stateDir(projectPath), 'works');
 
 /**
  * Читает одну карту. Её может не быть (проект переехал или удалён) или она может
@@ -34,7 +35,7 @@ async function localWorkIds(projectPath: string): Promise<string[]> {
     const items = await readdir(worksDir(projectPath), { withFileTypes: true });
     return items.filter((item) => item.isDirectory()).map((item) => item.name);
   } catch {
-    // `.harnas/works` ещё нет — работ в проекте просто нет.
+    // `<состояние>/works` ещё нет — работ в проекте просто нет.
     return [];
   }
 }
@@ -94,9 +95,9 @@ const relevant = (name: string): boolean =>
  * немного, а карта пишется атомарным rename — точечного «эта работа изменилась»
  * файловая система не даёт.
  *
- * Хватает наблюдения за `HARNAS_HOME`: любая запись карты обновляет и глобальный
+ * Хватает наблюдения за домом (`parleyHome`): любая запись карты обновляет и глобальный
  * индекс (см. `updateMap`), поэтому изменения чужих проектов видны тоже. Каталог
- * работ самого проекта наблюдается вдобавок — на случай другого `HARNAS_HOME`.
+ * работ самого проекта наблюдается вдобавок — на случай другого дома.
  */
 export function watchWorks(
   onWorks: (works: WorkEntry[], seq: number) => void,
@@ -137,7 +138,7 @@ export function watchWorks(
     } catch (error) {
       // Каталога может не быть: ни одной работы ещё не создавали — это не повод
       // падать и не ошибка, о которой стоит сообщать (хост писал её в лог при
-      // каждом старте, наблюдая за HARNAS_HOME как за проектом).
+      // каждом старте, наблюдая за домом как за проектом).
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') onError?.(error);
     }
   }

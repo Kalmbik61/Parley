@@ -14,8 +14,8 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * базу merge-коммитом; конфликт виден до попытки слияния.
  *
  * Подготовка (решение сверки I11): stub в режиме `STUB_BRACKETED=1` печатает вставку как
- * `PASTE<<…>>`; `HARNAS_HOME` и `HARNAS_WORKTREE_ROOT` — внутри временного каталога теста:
- * корень worktree по умолчанию — `~/harnas/worktrees` настоящего дома, `HARNAS_HOME` его не
+ * `PASTE<<…>>`; `PARLEY_HOME` и `PARLEY_WORKTREE_ROOT` — внутри временного каталога теста:
+ * корень worktree по умолчанию — `~/harnas/worktrees` настоящего дома, `PARLEY_HOME` его не
  * переносит. Каждый сценарий проверяет, что worktree сессии лежит под этим корнем.
  * Git-репозитории — только во временных каталогах; буфер обмена человека не трогается.
  */
@@ -82,10 +82,10 @@ test.describe('ревью изменений: заметки, коммит, сл
     const root = path.join(home, 'worktrees');
     const env = {
       ...process.env,
-      HARNAS_HOME: home,
-      HARNAS_CLAUDE_BIN: stubAgent,
-      HARNAS_TERMINAL_RENDERER: 'dom',
-      HARNAS_WORKTREE_ROOT: root,
+      PARLEY_HOME: home,
+      PARLEY_CLAUDE_BIN: stubAgent,
+      PARLEY_TERMINAL_RENDERER: 'dom',
+      PARLEY_WORKTREE_ROOT: root,
       STUB_BRACKETED: '1',
     };
     const electronApp = await electron.launch({ args: [mainEntry], env });

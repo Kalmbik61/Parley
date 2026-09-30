@@ -4,8 +4,8 @@
  * формы — мерж с настройками пользователя делает сам Claude Code.
  */
 
-import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -37,7 +37,10 @@ describe('workSettings', () => {
       expect(commands?.[0]?.type).toBe('command');
       expect(commands?.[0]?.command).toBe(HOOK_COMMAND);
     }
-    expect(HOOK_COMMAND).toBe('cat >> "$HARNAS_WORK_DIR/events/$HARNAS_SESSION_ID.jsonl" || true');
+    // Новое имя главнее, а нет его — прежнее (R3): у старой сессии в окружении только `HARNAS_*`.
+    expect(HOOK_COMMAND).toBe(
+      'cat >> "${PARLEY_WORK_DIR:-$HARNAS_WORK_DIR}/events/${PARLEY_SESSION_ID:-$HARNAS_SESSION_ID}.jsonl" || true',
+    );
   });
 
   it('предел ожидания есть только у SessionEnd и равен пяти секундам', () => {
@@ -47,6 +50,53 @@ describe('workSettings', () => {
     for (const event of HOOK_EVENTS.filter((name) => name !== 'SessionEnd')) {
       expect(hooks[event]?.[0]?.hooks[0]?.timeout).toBeUndefined();
     }
+  });
+});
+
+describe('команда хука в оболочке: адрес сессии под обоими именами (R3)', () => {
+  let dir = '';
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'parley-hook-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /** Запускает хук как Claude Code: оболочка, stdin-JSON и только переданное окружение. */
+  const fire = (env: Record<string, string>, json: string): number | null =>
+    spawnSync('/bin/sh', ['-c', HOOK_COMMAND], { input: json, env: { PATH: process.env['PATH'] ?? '', ...env } })
+      .status;
+
+  it('только PARLEY_*: строка ложится в журнал сессии', async () => {
+    await mkdir(path.join(dir, 'new', 'events'), { recursive: true });
+    expect(fire({ PARLEY_WORK_DIR: path.join(dir, 'new'), PARLEY_SESSION_ID: 's-01' }, '{"a":1}\n')).toBe(0);
+    expect(await readFile(path.join(dir, 'new', 'events', 's-01.jsonl'), 'utf8')).toBe('{"a":1}\n');
+  });
+
+  it('только HARNAS_* (сессия, поднятая прежней сборкой): строка ложится в тот же журнал', async () => {
+    await mkdir(path.join(dir, 'old', 'events'), { recursive: true });
+    expect(fire({ HARNAS_WORK_DIR: path.join(dir, 'old'), HARNAS_SESSION_ID: 's-02' }, '{"b":2}\n')).toBe(0);
+    expect(await readFile(path.join(dir, 'old', 'events', 's-02.jsonl'), 'utf8')).toBe('{"b":2}\n');
+  });
+
+  it('оба набора: главнее PARLEY_*', async () => {
+    await mkdir(path.join(dir, 'new', 'events'), { recursive: true });
+    await mkdir(path.join(dir, 'old', 'events'), { recursive: true });
+    const env = {
+      PARLEY_WORK_DIR: path.join(dir, 'new'),
+      PARLEY_SESSION_ID: 's-03',
+      HARNAS_WORK_DIR: path.join(dir, 'old'),
+      HARNAS_SESSION_ID: 's-04',
+    };
+    expect(fire(env, '{"c":3}\n')).toBe(0);
+    expect(await readFile(path.join(dir, 'new', 'events', 's-03.jsonl'), 'utf8')).toBe('{"c":3}\n');
+    await expect(stat(path.join(dir, 'old', 'events', 's-04.jsonl'))).rejects.toThrow();
+  });
+
+  it('недоступный каталог журнала код выхода не ломает (`|| true`)', () => {
+    expect(fire({ PARLEY_WORK_DIR: path.join(dir, 'нет', 'такого'), PARLEY_SESSION_ID: 's-05' }, '{}\n')).toBe(0);
   });
 });
 
@@ -91,11 +141,11 @@ describe('writeWorkSettings', () => {
   beforeEach(async () => {
     home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
     project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
-    process.env.HARNAS_HOME = home;
+    process.env.PARLEY_HOME = home;
   });
 
   afterEach(async () => {
-    delete process.env.HARNAS_HOME;
+    delete process.env.PARLEY_HOME;
     await rm(home, { recursive: true, force: true });
     await rm(project, { recursive: true, force: true });
   });

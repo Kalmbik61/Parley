@@ -459,7 +459,7 @@ describe('rooms.addMember', () => {
       }
       addRoom(map, { title: 'Новая', creator: HUMAN, members: [c] });
     });
-    const raw = JSON.parse(await readFile(path.join(dir, '.harnas', 'works', workId, 'map.json'), 'utf8')) as {
+    const raw = JSON.parse(await readFile(path.join(dir, '.parley', 'works', workId, 'map.json'), 'utf8')) as {
       rooms: Array<Record<string, unknown>>;
     };
     expect(raw.rooms.slice(0, 2).every((room) => !('lead' in room) || room['lead'] === null)).toBe(true);

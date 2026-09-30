@@ -1,5 +1,5 @@
 /**
- * Хранилище раскладок окна: `~/.harnas/desktop/layouts.json` (кусок 2.2 плана
+ * Хранилище раскладок окна: `~/.parley/desktop/layouts.json` (кусок 2.2 плана
  * каркаса, спека 3.4, 5.8). Формат v2 — ключ по `workKey` (по одной раскладке
  * `WorkLayout` на работу), а не общий на всё окно, как был v1: у каждой работы
  * теперь своя раскладка.
@@ -44,7 +44,7 @@ export class LayoutTooLargeError extends Error {
   }
 }
 
-/** `~/.harnas/desktop/layouts.json` — `parleyHome()` уже слушает `HARNAS_HOME` (`@parley/core`). */
+/** `~/.parley/desktop/layouts.json` — `parleyHome()` (`@parley/core`) сам выбирает дом: `PARLEY_HOME`, прежний `HARNAS_HOME`, `~/.parley`, `~/.harnas`. */
 export function desktopLayoutsPath(home: string = parleyHome()): string {
   return path.join(home, 'desktop', 'layouts.json');
 }

@@ -13,15 +13,22 @@
  */
 
 import { mkdir, writeFile } from 'node:fs/promises';
+import { ENV_PREFIX, LEGACY_ENV_PREFIX } from '../names.js';
+import { ensureStateDir } from './state-dir.js';
 import { statusLineCommand } from './statusline.js';
 import { workPaths } from './store.js';
+
+/** `${PARLEY_<КЛЮЧ>:-$HARNAS_<КЛЮЧ>}` — оболочка берёт новое имя, а нет его — прежнее (R3). */
+const fromShellEnv = (key: string): string =>
+  `\${${ENV_PREFIX}${key}:-$${LEGACY_ENV_PREFIX}${key}}`;
 
 /**
  * Команда всех хуков. `|| true` держит код выхода нулевым: недоступный каталог
  * событий не должен ронять хук (раздел 10), а код 2 у `UserPromptSubmit` стёр
- * бы промпт пользователя.
+ * бы промпт пользователя. Адрес — из окружения агента: `PARLEY_WORK_DIR` и
+ * `PARLEY_SESSION_ID`, а у процесса, которому положили только прежние, — `HARNAS_*`.
  */
-export const HOOK_COMMAND = 'cat >> "$HARNAS_WORK_DIR/events/$HARNAS_SESSION_ID.jsonl" || true';
+export const HOOK_COMMAND = `cat >> "${fromShellEnv('WORK_DIR')}/events/${fromShellEnv('SESSION_ID')}.jsonl" || true`;
 
 /** Хуки таблицы 4.2: промпты, разрешения, вопросы агента, Stop, субагенты, сессия. */
 export const HOOK_EVENTS = [
@@ -88,6 +95,7 @@ export function workSettingsJson(): string {
  */
 export async function writeWorkSettings(projectPath: string, workId: string): Promise<string> {
   const paths = workPaths(projectPath, workId);
+  await ensureStateDir(projectPath);
   await mkdir(paths.events, { recursive: true });
   await writeFile(paths.settings, workSettingsJson(), 'utf8');
   return paths.settings;

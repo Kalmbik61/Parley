@@ -444,7 +444,7 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
   return { search, terminal, offline };
 }
 
-/** Окно открыто с `?renderer=dom` — так его открывает main при HARNAS_TERMINAL_RENDERER=dom. */
+/** Окно открыто с `?renderer=dom` — так его открывает main при PARLEY_TERMINAL_RENDERER=dom. */
 function domRendererRequested(): boolean {
   try {
     return new URLSearchParams(globalThis.location?.search ?? '').get('renderer') === 'dom';

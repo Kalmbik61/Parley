@@ -7,7 +7,7 @@
 // Базовое поведение: печатает `STUB READY`, на каждую введённую строку
 // отвечает `echo: <строка>`. Остальное — режимы через переменные окружения:
 //
-//   STUB_HOOKS=1              — вместе с HARNAS_WORK_DIR/HARNAS_SESSION_ID
+//   STUB_HOOKS=1              — вместе с PARLEY_WORK_DIR/PARLEY_SESSION_ID (или прежними HARNAS_*)
 //                                пишет в events/<id>.jsonl SessionStart при
 //                                старте и UserPromptSubmit/Stop вокруг ответа
 //                                на каждую строку (как это делает хук Claude
@@ -19,8 +19,8 @@
 //                                pty.send и будильник в сессию не печатают)
 //   STUB_TURN_MS=<n>           — ход длится n мс между UserPromptSubmit и Stop
 //   STUB_ARGS_FILE=<путь>      — при старте пишет туда JSON
-//                                { argv, cwd, env: { HARNAS_WORK_DIR,
-//                                HARNAS_SESSION_ID, CLAUDE_CODE_SESSION_ID } }
+//                                { argv, cwd, env: { PARLEY_WORK_DIR, PARLEY_SESSION_ID,
+//                                HARNAS_WORK_DIR, HARNAS_SESSION_ID, CLAUDE_CODE_SESSION_ID } }
 //   STUB_FLOOD_MB=<n>          — при старте печатает n МБ строк (тест
 //                                пересинхронизации при медленном клиенте)
 //   STUB_IGNORE_SIGHUP=1       — не завершается по SIGHUP (хост должен
@@ -38,13 +38,19 @@ import path from 'node:path';
 // и `console` (packages/core/test/stub-summarizer.mjs решает так же).
 import { setTimeout } from 'node:timers';
 
+/**
+ * Переменная окружения по ключу без префикса: `PARLEY_<ключ>`, а не задана — прежняя `HARNAS_<ключ>`.
+ * Заглушки понимают оба имени, как сам продукт (R3).
+ */
+const fromEnv = (key) => process.env[`PARLEY_${key}`] ?? process.env[`HARNAS_${key}`];
+
 const HOOKS = process.env.STUB_HOOKS === '1';
 const TURN_MS = Number(process.env.STUB_TURN_MS ?? '0');
 
 /** Путь к журналу хуков текущей сессии — `null`, если окружение не задано. */
 function eventsFile() {
-  const dir = process.env.HARNAS_WORK_DIR;
-  const sessionId = process.env.HARNAS_SESSION_ID;
+  const dir = fromEnv('WORK_DIR');
+  const sessionId = fromEnv('SESSION_ID');
   if (dir === undefined || sessionId === undefined) return null;
   return path.join(dir, 'events', `${sessionId}.jsonl`);
 }
@@ -80,6 +86,8 @@ if (process.env.STUB_ARGS_FILE !== undefined) {
       argv: process.argv,
       cwd: process.cwd(),
       env: {
+        PARLEY_WORK_DIR: process.env.PARLEY_WORK_DIR ?? null,
+        PARLEY_SESSION_ID: process.env.PARLEY_SESSION_ID ?? null,
         HARNAS_WORK_DIR: process.env.HARNAS_WORK_DIR ?? null,
         HARNAS_SESSION_ID: process.env.HARNAS_SESSION_ID ?? null,
         CLAUDE_CODE_SESSION_ID: process.env.CLAUDE_CODE_SESSION_ID ?? null,

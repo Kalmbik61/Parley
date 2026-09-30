@@ -862,7 +862,7 @@ async function closeSession(
 }
 
 const NO_SESSION =
-  'сессия не задана (HARNAS_SESSION_ID пуст): доступны только get_map и read_guide. Создай сессию через харнесс или `parley-core work session new` — тогда работают остальные инструменты.';
+  'сессия не задана (PARLEY_SESSION_ID пуст): доступны только get_map и read_guide. Создай сессию через харнесс или `parley-core work session new` — тогда работают остальные инструменты.';
 
 async function dispatch(
   context: McpContext,
@@ -870,7 +870,7 @@ async function dispatch(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   if (name === 'get_map') return getMap(context);
-  // Гид не про конкретную сессию: он доступен и без `HARNAS_SESSION_ID`.
+  // Гид не про конкретную сессию: он доступен и без `PARLEY_SESSION_ID`.
   if (name === 'read_guide') return readGuide(args);
 
   const { sessionId } = context;
@@ -965,7 +965,7 @@ async function bindCodexThread(
  * текст, из которого понятно, что поправить.
  */
 export function createParleyServer(context: McpContext): Server<Request, ChannelNotification> {
-  // Сессии нет — звонить некому: сервер без `HARNAS_SESSION_ID` умеет только
+  // Сессии нет — звонить некому: сервер без `PARLEY_SESSION_ID` умеет только
   // отдавать карту и гид (4.2).
   const { sessionId } = context;
   const channel = context.channel && sessionId !== null;

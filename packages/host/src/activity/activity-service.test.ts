@@ -47,14 +47,14 @@ beforeEach(async () => {
   // Второй корень тоже временный: иначе индекс логов читал бы настоящий ~/.codex
   // (use-sessions.test.tsx, use-session-link.test.tsx — тот же приём).
   codexRoot = await mkdtemp(path.join(tmpdir(), 'parley-codex-'));
-  process.env['HARNAS_HOME'] = home;
+  process.env['PARLEY_HOME'] = home;
   broadcasts = [];
 });
 
 afterEach(async () => {
   await Promise.all(services.map((service) => service.stop()));
   services = [];
-  delete process.env['HARNAS_HOME'];
+  delete process.env['PARLEY_HOME'];
   await Promise.all(
     [home, project, claudeRoot, codexRoot].map((dir) => rm(dir, { recursive: true, force: true })),
   );

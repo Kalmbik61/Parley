@@ -453,7 +453,7 @@ describe('TerminalSurface — неживая сессия (раунд main-r2, �
       const bar = screen.getByTestId('terminal-not-running');
       expect(bar.querySelector('[data-kicker]')?.textContent).toBe('not started');
       expect(bar.querySelector('[data-kicker]')?.className).toContain('text-accent-700');
-      const meta = screen.getByText('Claude Code · .harnas/works/w-01/briefs/s-01.md');
+      const meta = screen.getByText('Claude Code · .parley/works/w-01/briefs/s-01.md');
       expect(meta.className).toContain('font-mono');
       expect(meta.className).toContain('text-neutral-700');
       expect(screen.queryByRole('button')).toBeNull();

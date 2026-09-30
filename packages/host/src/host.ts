@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, chmod, link, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { uptime } from 'node:os';
-import { parleyHome, processStartedAt, START_TOLERANCE_MS } from '@parley/core';
+import { bothEnv, parleyHome, processStartedAt, START_TOLERANCE_MS } from '@parley/core';
 import { createHostContext } from './context.js';
 import type { HostContext } from './context.js';
 import { createHostServer } from './server.js';
@@ -45,7 +45,7 @@ export interface HostOptions {
   limits?: LimitsServiceOptions;
   /**
    * Срок экранов старта Codex, мс (спека комнат Organic, 3.6): не показал `Ready` и `Working` — сессия «нужен
-   * ты». Боевой хост не задаёт — 20 секунд; E2E окна сокращает его переменной `HARNAS_CODEX_STARTUP_MS`.
+   * ты». Боевой хост не задаёт — 20 секунд; E2E окна сокращает его переменной `PARLEY_CODEX_STARTUP_MS`.
    */
   startupWaitMs?: number;
 }
@@ -85,12 +85,14 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   }
 
   // Работы (`readWorksIndex`, `createWork`, …) живут в core и берут дом только
-  // из `process.env.HARNAS_HOME` — параметра-оверрайда у них нет. Чтобы список
+  // из окружения (`PARLEY_HOME`) — параметра-оверрайда у них нет. Чтобы список
   // работ хоста совпадал с его же файлами (`options.home` в тестах — не
-  // настоящий `~/.harnas`), окружение здесь и приводится к тому же дому,
-  // а на остановке возвращается прежним (см. `runShutdown`).
-  const previousParleyHome = process.env['HARNAS_HOME'];
-  process.env['HARNAS_HOME'] = resolvedHome;
+  // настоящий `~/.parley`), окружение здесь и приводится к тому же дому,
+  // а на остановке возвращается прежним (см. `runShutdown`). Дом ставится под обоими
+  // именами (R3): агенты и скрипты, которых хост запускает, наследуют окружение, и
+  // прежние читают `HARNAS_HOME`.
+  const previousHomes = homeEnvOf(process.env);
+  Object.assign(process.env, bothEnv({ HOME: resolvedHome }));
 
   // 2. Каталог хоста всегда 0700, независимо от того, был он уже или нет.
   await mkdir(paths.dir, { recursive: true, mode: 0o700 });
@@ -103,12 +105,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Журнал заводится до замка: отказ захвата с потерей замка соседа пишет туда причину (fix-lane-post).
   const log = createLog(paths.log);
   if (!(await acquirePidLock(paths.pid, log))) {
-    restoreParleyHome(previousParleyHome);
+    restoreHomeEnv(previousHomes);
     throw new HostAlreadyRunning();
   }
   if (await socketIsAlive(paths.socket)) {
     await releasePidLock(paths.pid);
-    restoreParleyHome(previousParleyHome);
+    restoreHomeEnv(previousHomes);
     throw new HostAlreadyRunning();
   }
   await Promise.all([paths.socket, paths.token].map((file) => rm(file, { force: true })));
@@ -251,7 +253,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     // Не поднялся — замок не держится до выхода процесса (в тестах процесс один на много хостов).
     idleWatcher.stop();
     await releasePidLock(paths.pid);
-    restoreParleyHome(previousParleyHome);
+    restoreHomeEnv(previousHomes);
     throw error;
   }
   await chmod(paths.socket, 0o600);
@@ -322,7 +324,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     // уходящего (lane-r4).
     await Promise.all([paths.socket, paths.token].map((file) => rm(file, { force: true })));
     await releasePidLock(paths.pid);
-    restoreParleyHome(previousParleyHome);
+    restoreHomeEnv(previousHomes);
     log.info('хост остановлен', { reason });
     resolveClosed(reason);
   }
@@ -472,8 +474,18 @@ async function releasePidLock(lockPath: string): Promise<void> {
   if (held !== null && parseLock(held.text).pid === process.pid) await rm(lockPath, { force: true });
 }
 
-/** Возвращает `HARNAS_HOME` к тому, чем оно было до `startHost` (см. там же). */
-function restoreParleyHome(previous: string | undefined): void {
-  if (previous === undefined) delete process.env['HARNAS_HOME'];
-  else process.env['HARNAS_HOME'] = previous;
+/** Имена дома в окружении — новое и прежнее. */
+const HOME_ENV_NAMES = Object.keys(bothEnv({ HOME: '' }));
+
+/** Значения обоих имён дома как они были до `startHost`. */
+function homeEnvOf(env: NodeJS.ProcessEnv): Array<[string, string | undefined]> {
+  return HOME_ENV_NAMES.map((name) => [name, env[name]]);
+}
+
+/** Возвращает `PARLEY_HOME` и `HARNAS_HOME` к тому, чем они были до `startHost` (см. там же). */
+function restoreHomeEnv(previous: ReadonlyArray<[string, string | undefined]>): void {
+  for (const [name, value] of previous) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
 }

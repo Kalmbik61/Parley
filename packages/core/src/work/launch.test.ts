@@ -45,14 +45,14 @@ beforeEach(async () => {
   project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
   // Пустой корень истории: метрики читаются отсюда, а не из настоящего ~/.claude.
   logs = await mkdtemp(path.join(tmpdir(), 'parley-logs-'));
-  process.env['HARNAS_HOME'] = home;
-  setEnv('HARNAS_CLAUDE_BIN', STUB);
-  setEnv('HARNAS_CODEX_BIN', STUB);
-  setEnv('HARNAS_GLM_BIN', '');
+  process.env['PARLEY_HOME'] = home;
+  setEnv('PARLEY_CLAUDE_BIN', STUB);
+  setEnv('PARLEY_CODEX_BIN', STUB);
+  setEnv('PARLEY_GLM_BIN', '');
 });
 
 afterEach(async () => {
-  delete process.env['HARNAS_HOME'];
+  delete process.env['PARLEY_HOME'];
   for (const [name, value] of Object.entries(saved)) {
     if (value === undefined) delete process.env[name];
     else process.env[name] = value;
@@ -120,6 +120,14 @@ describe('создание pending сессии', () => {
   });
 });
 
+/** Окружение сессии работы: два имени на одно значение (R3) — новое читают все, прежнее — старые скрипты. */
+const sessionEnv = (workDir: string, sessionId: string): Record<string, string> => ({
+  PARLEY_WORK_DIR: workDir,
+  PARLEY_SESSION_ID: sessionId,
+  HARNAS_WORK_DIR: workDir,
+  HARNAS_SESSION_ID: sessionId,
+});
+
 describe('план запуска', () => {
   it('claude получает id сессии, конфиг MCP файлом и бриф промптом', async () => {
     const { workId, sessionId } = await pending('claude');
@@ -128,17 +136,14 @@ describe('план запуска', () => {
 
     expect(plan.command).toBe('claude');
     expect(plan.cwd).toBe(project);
-    expect(plan.env).toEqual({ HARNAS_WORK_DIR: paths.dir, HARNAS_SESSION_ID: sessionId });
+    expect(plan.env).toEqual(sessionEnv(paths.dir, sessionId));
     expect(plan.providerSessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
     expect(plan.args.slice(0, 2)).toEqual(['--session-id', plan.providerSessionId]);
 
     const configFile = plan.args[plan.args.indexOf('--mcp-config') + 1];
     expect(configFile).toBe(path.join(paths.mcp, `${sessionId}.json`));
     const config = JSON.parse(await readFile(configFile as string, 'utf8'));
-    expect(config.mcpServers.harnas.env).toEqual({
-      HARNAS_WORK_DIR: paths.dir,
-      HARNAS_SESSION_ID: sessionId,
-    });
+    expect(config.mcpServers.harnas.env).toEqual(sessionEnv(paths.dir, sessionId));
 
     expect(plan.args.at(-1)).toContain('прогнать e2e');
   });
@@ -159,17 +164,16 @@ describe('план запуска', () => {
     ).rejects.toThrow();
   });
 
-  it('codex: серверу, которому Codex режет окружение, уходит HARNAS_HOME запускающего', async () => {
+  it('codex: серверу, которому Codex режет окружение, уходит PARLEY_HOME запускающего', async () => {
     const { workId, sessionId } = await pending('codex');
     const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
 
     const mcp = plan.args.find((arg) => arg.startsWith('mcp_servers.harnas=')) as string;
     const { value } = parseTomlAssignment(mcp);
     expect((value as Record<string, TomlValue>)['env']).toMatchObject({
-      HARNAS_WORK_DIR: workPaths(project, workId).dir,
-      HARNAS_SESSION_ID: sessionId,
-      HARNAS_HOME: home,
-      HARNAS_CODEX_BIN: STUB,
+      ...sessionEnv(workPaths(project, workId).dir, sessionId),
+      PARLEY_HOME: home,
+      PARLEY_CODEX_BIN: STUB,
     });
   });
 
@@ -183,8 +187,8 @@ describe('план запуска', () => {
     expect(parseTomlAssignment(notify).value).toEqual([process.execPath, CODEX_NOTIFY_ENTRY]);
     // Хуков у codex нет, `--settings` не заводит каталог за него — его заводит запуск.
     expect((await stat(workPaths(project, workId).events)).isDirectory()).toBe(true);
-    // Как и у Claude Code, сессия живёт под теми же двумя переменными: notify берёт адрес из них.
-    expect(plan.env).toEqual({ HARNAS_WORK_DIR: workPaths(project, workId).dir, HARNAS_SESSION_ID: sessionId });
+    // Как и у Claude Code, сессия живёт под теми же переменными (оба имени): notify берёт адрес из них.
+    expect(plan.env).toEqual(sessionEnv(workPaths(project, workId).dir, sessionId));
   });
 
   it('у claude ни notify, ни каталога codex-журнала запуск не добавляет', async () => {
@@ -202,7 +206,7 @@ describe('план запуска', () => {
     expect(plan.args.at(-1)).toBe('правленый бриф\n');
   });
 
-  it('с push в команде появляется флаг канала, а в конфиге MCP — HARNAS_CHANNEL', async () => {
+  it('с push в команде появляется флаг канала, а в конфиге MCP — PARLEY_CHANNEL', async () => {
     const { workId, sessionId } = await pending('claude');
     const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId), {
       channel: true,
@@ -215,6 +219,7 @@ describe('план запуска', () => {
 
     const configFile = plan.args[plan.args.indexOf('--mcp-config') + 1] as string;
     const config = JSON.parse(await readFile(configFile, 'utf8'));
+    expect(config.mcpServers.harnas.env.PARLEY_CHANNEL).toBe('1');
     expect(config.mcpServers.harnas.env.HARNAS_CHANNEL).toBe('1');
   });
 
@@ -225,6 +230,7 @@ describe('план запуска', () => {
     expect(plan.args).not.toContain('--dangerously-load-development-channels');
     const configFile = plan.args[plan.args.indexOf('--mcp-config') + 1] as string;
     const config = JSON.parse(await readFile(configFile, 'utf8'));
+    expect(config.mcpServers.harnas.env).not.toHaveProperty('PARLEY_CHANNEL');
     expect(config.mcpServers.harnas.env).not.toHaveProperty('HARNAS_CHANNEL');
   });
 

@@ -321,11 +321,11 @@ describe('рамочный тест репозитория (тест 6)', () => 
     const locations = rawHits.map((hit) => `${hit.file}:${hit.line}`).sort();
     expect(locations).toEqual(
       [
-        'packages/core/src/codex/discover.ts:8',
+        'packages/core/src/codex/discover.ts:10',
         'packages/core/src/codex/discover.ts:9',
         'packages/core/src/providers.ts:14',
         'packages/core/src/providers.ts:220',
-        'packages/core/src/work/mcp-config.ts:142',
+        'packages/core/src/work/mcp-config.ts:145',
       ].sort(),
     );
   });
@@ -383,8 +383,8 @@ describe('строка статуса не пишет в каталоги аге
       });
       const env = {
         PATH: process.env['PATH'],
-        HARNAS_WORK_DIR: workDir,
-        HARNAS_SESSION_ID: 's-01',
+        PARLEY_WORK_DIR: workDir,
+        PARLEY_SESSION_ID: 's-01',
       };
       const printed = await runStatusline(input, { env, home });
 

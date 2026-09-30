@@ -24,7 +24,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * во вкладку комнаты: цель `FocusTarget { kind: 'room' }`. Четвёртый — стопка карточек в окне 800×500: не больше двух,
  * новая сверху, кнопки в окне, а тост sonner встаёт над ними, не на кнопки (раскладку считает только настоящий Chromium).
  *
- * Уведомления main пишет в журнал (`HARNAS_NOTIFICATIONS=log`, `playwright.config.ts`): настоящее всплыло бы на экране
+ * Уведомления main пишет в журнал (`PARLEY_NOTIFICATIONS=log`, `playwright.config.ts`): настоящее всплыло бы на экране
  * человека. Окно в фокусе или без него тест задаёт событиями `focus` / `blur` — фокус ОС между окнами гуляет
  * (`attention.spec.ts`). Будильник хоста стоит на паузе: он печатал бы в терминал заглушки указатели на письма,
  * склеиваясь со строкой вызова, — а тест не про доставку писем.
@@ -93,7 +93,7 @@ interface LoggedNote {
   closed: boolean;
 }
 
-/** Журнал уведомлений main (`HARNAS_NOTIFICATIONS=log`) — только о решениях. */
+/** Журнал уведомлений main (`PARLEY_NOTIFICATIONS=log`) — только о решениях. */
 async function decisionNotes(app: ElectronApplication): Promise<LoggedNote[]> {
   const all = await app.evaluate(() =>
     ((globalThis as { __parleyNotifications?: LoggedNote[] }).__parleyNotifications ?? []).map(({ title, body, silent, closed }) => ({
@@ -132,13 +132,13 @@ test.describe('решение ведущего: настоящий parley-mcp, �
     home = await makeTempHome('room-decision');
     project = await makeTempProject('room-decision');
     // Ядро, которым второй тест кладёт замену решения в карту, читает дом из окружения этого процесса.
-    homeBefore = process.env.HARNAS_HOME;
-    process.env.HARNAS_HOME = home;
+    homeBefore = process.env.PARLEY_HOME;
+    process.env.PARLEY_HOME = home;
   });
 
   test.afterEach(async () => {
-    if (homeBefore === undefined) delete process.env.HARNAS_HOME;
-    else process.env.HARNAS_HOME = homeBefore;
+    if (homeBefore === undefined) delete process.env.PARLEY_HOME;
+    else process.env.PARLEY_HOME = homeBefore;
     await stopApp(app);
     app = null;
     await stopHost(home);
@@ -147,7 +147,7 @@ test.describe('решение ведущего: настоящий parley-mcp, �
   });
 
   async function launch(): Promise<{ electronApp: ElectronApplication; window: Page }> {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom', HARNAS_NOTIFICATIONS: 'log' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom', PARLEY_NOTIFICATIONS: 'log' };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();

@@ -15,15 +15,21 @@ import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 
+/**
+ * Переменная окружения по ключу без префикса: `PARLEY_<ключ>`, а не задана — прежняя `HARNAS_<ключ>`.
+ * Заглушки понимают оба имени, как сам продукт (R3).
+ */
+const fromEnv = (key) => process.env[`PARLEY_${key}`] ?? process.env[`HARNAS_${key}`];
+
 // Хук при старте (fix-final-b): настоящий Claude Code в доверенной папке шлёт SessionStart, и
 // хост узнаёт, что хуки процесса доходят; без единого хука с запуска pty.send отвечает blocked
 // (вопрос доверия к папке хуков не шлёт). Нейтральное `StubReady` состояния не меняет — точка
 // сессии остаётся прежней. STUB_NO_HOOKS=1 — сессия «на вопросе доверия»: хуков нет вовсе.
 // Адрес журнала — из окружения процесса, как у команды хука (core/work/settings-file.ts).
-if (process.env.STUB_NO_HOOKS !== '1' && process.env.HARNAS_WORK_DIR !== undefined && process.env.HARNAS_SESSION_ID !== undefined) {
-  const events = path.join(process.env.HARNAS_WORK_DIR, 'events');
+if (process.env.STUB_NO_HOOKS !== '1' && fromEnv('WORK_DIR') !== undefined && fromEnv('SESSION_ID') !== undefined) {
+  const events = path.join(fromEnv('WORK_DIR'), 'events');
   mkdirSync(events, { recursive: true });
-  appendFileSync(path.join(events, `${process.env.HARNAS_SESSION_ID}.jsonl`), `${JSON.stringify({ hook_event_name: 'StubReady' })}\n`);
+  appendFileSync(path.join(events, `${fromEnv('SESSION_ID')}.jsonl`), `${JSON.stringify({ hook_event_name: 'StubReady' })}\n`);
 }
 
 process.stdout.write('stub-echo готов\r\n');

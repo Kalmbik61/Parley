@@ -12,6 +12,7 @@ import type { ProviderEntry, RunnerSubstitutions } from './providers.js';
 import { buildSchemaReport } from './schema-report.js';
 import { buildIndex, buildSessionTree } from './session-tree.js';
 import { loadConfig } from './config.js';
+import { bothEnv } from './names.js';
 import { agentDirs, assertAgent } from './work/agents.js';
 import { writeBrief } from './work/brief.js';
 import {
@@ -24,6 +25,7 @@ import { systemGuidance } from './work/guidance.js';
 import { addSession } from './work/map.js';
 import { codexNotifyOverride, mcpConfigValue, writeMcpConfig } from './work/mcp-config.js';
 import { writeWorkSettings } from './work/settings-file.js';
+import { ensureStateDir } from './work/state-dir.js';
 import {
   createWork,
   pruneWorksIndex,
@@ -59,7 +61,7 @@ const USAGE = `parley-core — индекс сессий Claude Code в JSON
 
   --json   формат по умолчанию и единственный, принимается для совместимости
   --root   корень истории (по умолчанию ~/.claude/projects, только чтение)
-  --cwd    проект с \`.harnas/\` (по умолчанию текущий каталог; для команд по
+  --cwd    проект с \`.parley/\` (по умолчанию текущий каталог; для команд по
            --work проект берётся из глобального индекса)
   --all    показывать и archived работы`;
 
@@ -81,7 +83,7 @@ function print(value: unknown): void {
 /**
  * Проект работы: явный `--cwd` или запись глобального индекса. Индекс и есть
  * список «где какая работа лежит», поэтому по `--work` каталог знать не нужно;
- * одинаковый id в двух проектах (копия проекта с закоммиченным `.harnas/`) —
+ * одинаковый id в двух проектах (копия проекта с закоммиченным каталогом состояния) —
  * повод спросить `--cwd`, а не гадать.
  */
 async function resolveProject(argv: string[], workId: string): Promise<string> {
@@ -210,8 +212,8 @@ async function newWorkSession(argv: string[]): Promise<void> {
     entry.runner.mcpConfig === 'json-file'
       ? await writeMcpConfig(projectPath, workId, created, undefined, channel)
       : null;
-  // `env` — окружение CLI: Codex режет серверу MCP окружение, и нужные ему `HARNAS_*` (дом харнесса, подмены
-  // бинарей) уходят в таблицу `env` явно — как при запуске окном (`work/launch.ts`).
+  // `env` — окружение CLI: Codex режет серверу MCP окружение, и нужные ему `PARLEY_*` и `HARNAS_*` (дом харнесса,
+  // подмены бинарей) уходят в таблицу `env` явно — как при запуске окном (`work/launch.ts`).
   const mcp = mcpConfigValue(
     entry.runner.mcpConfig,
     { workDir: paths.dir, sessionId: created, env: process.env },
@@ -233,6 +235,7 @@ async function newWorkSession(argv: string[]): Promise<void> {
   // Конец хода Codex приходит скриптом `notify`, а тот дописывает журнал `events/` работы: каталог заводим
   // здесь, как это делает запуск окном.
   if ((entry.runner.args ?? []).includes('{notify}')) {
+    await ensureStateDir(projectPath);
     await mkdir(paths.events, { recursive: true });
     subs.notify = codexNotifyOverride();
   }
@@ -255,8 +258,9 @@ async function newWorkSession(argv: string[]): Promise<void> {
     args,
     cwd: projectPath,
     // Окружение запускаемого процесса: те же переменные, что MCP-сервер получает
-    // из конфига, — с ними он знает, кто звонит, даже унаследовав их от агента.
-    env: { HARNAS_WORK_DIR: paths.dir, HARNAS_SESSION_ID: created },
+    // из конфига, — с ними он знает, кто звонит, даже унаследовав их от агента. Под обоими
+    // именами: прежние читают старые скрипты и сервер прежней сборки (R3).
+    env: bothEnv({ WORK_DIR: paths.dir, SESSION_ID: created }),
   });
 }
 

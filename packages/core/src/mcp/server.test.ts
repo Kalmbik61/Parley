@@ -131,14 +131,14 @@ beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
   project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
   binDir = await mkdtemp(path.join(tmpdir(), 'parley-bin-'));
-  process.env.HARNAS_HOME = home;
+  process.env.PARLEY_HOME = home;
   // PATH пустой, а `claude` подсунут оверрайдом: доступность провайдеров в тесте
   // не зависит от того, что стоит на машине. Настоящий бинарь не запускается.
   savedPath = process.env.PATH;
   process.env.PATH = '';
   const stub = path.join(binDir, 'claude');
   await writeFile(stub, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  process.env.HARNAS_CLAUDE_BIN = stub;
+  process.env.PARLEY_CLAUDE_BIN = stub;
 
   const map = await createWork(project, { title: 'Авторизация', goal: 'логин по паролю' });
   workId = map.work.id;
@@ -152,12 +152,12 @@ afterEach(async () => {
     await client.close();
     await server.close();
   }
-  delete process.env.HARNAS_HOME;
-  delete process.env.HARNAS_CLAUDE_BIN;
-  delete process.env.HARNAS_CODEX_BIN;
-  delete process.env.HARNAS_WORK_DIR;
-  delete process.env.HARNAS_SESSION_ID;
-  delete process.env.HARNAS_CHANNEL;
+  delete process.env.PARLEY_HOME;
+  delete process.env.PARLEY_CLAUDE_BIN;
+  delete process.env.PARLEY_CODEX_BIN;
+  delete process.env.PARLEY_WORK_DIR;
+  delete process.env.PARLEY_SESSION_ID;
+  delete process.env.PARLEY_CHANNEL;
   if (savedPath === undefined) delete process.env.PATH;
   else process.env.PATH = savedPath;
   await Promise.all(
@@ -166,9 +166,9 @@ afterEach(async () => {
 });
 
 describe('contextFromEnv', () => {
-  it('раскладывает HARNAS_WORK_DIR на проект и работу', () => {
-    process.env.HARNAS_WORK_DIR = workPaths(project, workId).dir;
-    process.env.HARNAS_SESSION_ID = 's-01';
+  it('раскладывает PARLEY_WORK_DIR на проект и работу', () => {
+    process.env.PARLEY_WORK_DIR = workPaths(project, workId).dir;
+    process.env.PARLEY_SESSION_ID = 's-01';
 
     expect(contextFromEnv()).toEqual({
       projectPath: project,
@@ -179,26 +179,26 @@ describe('contextFromEnv', () => {
     });
   });
 
-  it('HARNAS_CHANNEL включает звонок, без переменной его нет', () => {
-    process.env.HARNAS_WORK_DIR = workPaths(project, workId).dir;
-    process.env.HARNAS_SESSION_ID = 's-01';
+  it('PARLEY_CHANNEL включает звонок, без переменной его нет', () => {
+    process.env.PARLEY_WORK_DIR = workPaths(project, workId).dir;
+    process.env.PARLEY_SESSION_ID = 's-01';
     expect(contextFromEnv().channel).toBe(false);
 
-    process.env.HARNAS_CHANNEL = '1';
+    process.env.PARLEY_CHANNEL = '1';
     expect(contextFromEnv().channel).toBe(true);
   });
 
-  it('без HARNAS_SESSION_ID сессии нет, а без HARNAS_WORK_DIR — ошибка', () => {
-    process.env.HARNAS_WORK_DIR = workPaths(project, workId).dir;
+  it('без PARLEY_SESSION_ID сессии нет, а без PARLEY_WORK_DIR — ошибка', () => {
+    process.env.PARLEY_WORK_DIR = workPaths(project, workId).dir;
     expect(contextFromEnv().sessionId).toBeNull();
 
-    delete process.env.HARNAS_WORK_DIR;
-    expect(() => contextFromEnv()).toThrow(/HARNAS_WORK_DIR/);
+    delete process.env.PARLEY_WORK_DIR;
+    expect(() => contextFromEnv()).toThrow(/PARLEY_WORK_DIR/);
   });
 
   it('отвергает каталог не из раскладки работы', () => {
-    process.env.HARNAS_WORK_DIR = project;
-    expect(() => contextFromEnv()).toThrow(/\.harnas/);
+    process.env.PARLEY_WORK_DIR = project;
+    expect(() => contextFromEnv()).toThrow(/\.parley/);
   });
 });
 
@@ -362,7 +362,7 @@ describe('read_guide', () => {
     expect(result.text).toBe(GUIDE);
   });
 
-  it('работает без HARNAS_SESSION_ID: гид не про конкретную сессию', async () => {
+  it('работает без PARLEY_SESSION_ID: гид не про конкретную сессию', async () => {
     const client = await connect(null);
     const result = await call(client, 'read_guide');
 
@@ -382,7 +382,7 @@ describe('read_guide', () => {
     }
   });
 
-  it('тема работает и без HARNAS_SESSION_ID', async () => {
+  it('тема работает и без PARLEY_SESSION_ID', async () => {
     const client = await connect(null);
     const result = await call(client, 'read_guide', { topic: 'rooms' });
 
@@ -467,7 +467,7 @@ describe('get_map', () => {
     expect(byId('glm')).toMatchObject({ models: null, effort: false });
   });
 
-  it('работает без HARNAS_SESSION_ID', async () => {
+  it('работает без PARLEY_SESSION_ID', async () => {
     const client = await connect(null);
     const result = await callOk(client, 'get_map');
 
@@ -476,7 +476,7 @@ describe('get_map', () => {
   });
 });
 
-describe('без HARNAS_SESSION_ID', () => {
+describe('без PARLEY_SESSION_ID', () => {
   it('остальные инструменты объясняют, что сессию надо создать через харнесс', async () => {
     const client = await connect(null);
     const calls = [
@@ -493,7 +493,7 @@ describe('без HARNAS_SESSION_ID', () => {
 
     for (const result of await Promise.all(calls)) {
       expect(result.isError).toBe(true);
-      expect(result.text).toMatch(/HARNAS_SESSION_ID/);
+      expect(result.text).toMatch(/PARLEY_SESSION_ID/);
     }
     // Ни одна запись в карте не появилась.
     expect((await readMapFile()).sessions).toHaveLength(1);
@@ -519,7 +519,7 @@ describe('report', () => {
     const result = await callOk(client, 'report', {
       status: 'done',
       summary: 'план готов',
-      artifacts: [{ kind: 'plan', path: '.harnas/works/w-0001/artifacts/plan.md' }],
+      artifacts: [{ kind: 'plan', path: '.parley/works/w-0001/artifacts/plan.md' }],
     });
 
     expect(result['status']).toBe('done');
@@ -529,7 +529,7 @@ describe('report', () => {
     expect(stored.lifecycle).toBe('pending');
     expect(stored.summary).toBe('план готов');
     expect(stored.artifacts).toEqual([
-      { kind: 'plan', path: '.harnas/works/w-0001/artifacts/plan.md' },
+      { kind: 'plan', path: '.parley/works/w-0001/artifacts/plan.md' },
     ]);
     expect(stored.resultAt).not.toBeNull();
   });
@@ -691,7 +691,7 @@ describe('spawn_session', () => {
 
   it('провайдер без подстановки {agent} — ошибка, записи нет', async () => {
     // У codex флага роли нет: запись, которую нечем запустить ролью, не заводим.
-    process.env.HARNAS_CODEX_BIN = path.join(binDir, 'claude');
+    process.env.PARLEY_CODEX_BIN = path.join(binDir, 'claude');
     const client = await connect('s-01');
     const result = await call(client, 'spawn_session', {
       provider: 'codex',
@@ -795,12 +795,12 @@ describe('spawn_session: модель и усилие', () => {
       }),
       'utf8',
     );
-    process.env.HARNAS_SMART_BIN = path.join(binDir, 'claude');
-    process.env.HARNAS_PLAIN_BIN = path.join(binDir, 'claude');
+    process.env.PARLEY_SMART_BIN = path.join(binDir, 'claude');
+    process.env.PARLEY_PLAIN_BIN = path.join(binDir, 'claude');
   }
   afterEach(() => {
-    delete process.env.HARNAS_SMART_BIN;
-    delete process.env.HARNAS_PLAIN_BIN;
+    delete process.env.PARLEY_SMART_BIN;
+    delete process.env.PARLEY_PLAIN_BIN;
   });
 
   it('модель из списка и усилие ложатся в запись сессии', async () => {
@@ -903,7 +903,7 @@ describe('spawn_session: модель и усилие', () => {
   });
 
   it('codex: своя модель проходит, модель Claude — нет', async () => {
-    process.env.HARNAS_CODEX_BIN = path.join(binDir, 'claude');
+    process.env.PARLEY_CODEX_BIN = path.join(binDir, 'claude');
     const client = await connect('s-01');
     await callOk(client, 'spawn_session', {
       provider: 'codex',
@@ -1975,7 +1975,7 @@ describe('channel: звонок про письмо (разговор агент
     expect((await readMapFile()).messages).toHaveLength(1);
   });
 
-  it('без HARNAS_CHANNEL нет ни capability, ни instructions, ни звонка', async () => {
+  it('без PARLEY_CHANNEL нет ни capability, ни instructions, ни звонка', async () => {
     const rings: Ring[] = [];
     const first = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, rings);
     await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
@@ -1988,7 +1988,7 @@ describe('channel: звонок про письмо (разговор агент
     expect(rings).toHaveLength(0);
   });
 
-  it('без HARNAS_SESSION_ID сторожа нет и при HARNAS_CHANNEL', async () => {
+  it('без PARLEY_SESSION_ID сторожа нет и при PARLEY_CHANNEL', async () => {
     const rings: Ring[] = [];
     const guest = await withChannel(null, rings);
     const second = await pair();

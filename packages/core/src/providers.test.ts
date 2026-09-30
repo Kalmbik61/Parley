@@ -20,6 +20,7 @@ import {
   supportsModel,
   type ProviderEntry,
 } from './providers.js';
+import { overrideValue, overrideVariable } from './work/find-binary.js';
 
 /**
  * Постоянные `-c` codex, которыми харнесс читает состояние сессии без хуков Codex (спека комнат,
@@ -637,20 +638,22 @@ describe('commandInPath', () => {
     await chmod(file, 0o755);
 
     expect(await commandInPath('claude', { PATH: '' })).toBe(false);
+    expect(await commandInPath('claude', { PATH: '', PARLEY_CLAUDE_BIN: file })).toBe(true);
+    // Прежнее имя переменной читается тоже (R3).
     expect(await commandInPath('claude', { PATH: '', HARNAS_CLAUDE_BIN: file })).toBe(true);
   });
 });
 
-describe('переопределения из HARNAS_HOME/providers.json', () => {
+describe('переопределения из PARLEY_HOME/providers.json', () => {
   let home = '';
 
   beforeEach(async () => {
     home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
-    process.env.HARNAS_HOME = home;
+    process.env.PARLEY_HOME = home;
   });
 
   afterEach(async () => {
-    delete process.env.HARNAS_HOME;
+    delete process.env.PARLEY_HOME;
     await rm(home, { recursive: true, force: true });
   });
 
@@ -836,11 +839,11 @@ describe('переопределения из HARNAS_HOME/providers.json', () =>
 });
 
 describe('commandBinary', () => {
-  const saved = process.env['HARNAS_CLAUDE_BIN'];
+  const saved = process.env['PARLEY_CLAUDE_BIN'];
 
   afterEach(() => {
-    if (saved === undefined) delete process.env['HARNAS_CLAUDE_BIN'];
-    else process.env['HARNAS_CLAUDE_BIN'] = saved;
+    if (saved === undefined) delete process.env['PARLEY_CLAUDE_BIN'];
+    else process.env['PARLEY_CLAUDE_BIN'] = saved;
   });
 
   it('без оверрайда возвращает саму команду', () => {
@@ -848,14 +851,36 @@ describe('commandBinary', () => {
   });
 
   it('оверрайд решает, что именно запускается: в тестах это заглушка', () => {
-    expect(commandBinary('claude', { HARNAS_CLAUDE_BIN: '/tmp/stub.mjs' })).toBe('/tmp/stub.mjs');
+    expect(commandBinary('claude', { PARLEY_CLAUDE_BIN: '/tmp/stub.mjs' })).toBe('/tmp/stub.mjs');
+  });
+
+  it('прежнее HARNAS_<КОМАНДА>_BIN — запасное имя; новое главнее', () => {
+    expect(commandBinary('claude', { HARNAS_CLAUDE_BIN: '/tmp/old.mjs' })).toBe('/tmp/old.mjs');
+    expect(commandBinary('claude', { HARNAS_CLAUDE_BIN: '/tmp/old.mjs', PARLEY_CLAUDE_BIN: '/tmp/new.mjs' })).toBe(
+      '/tmp/new.mjs',
+    );
+    // Команда с не-буквами в имени: `my-cli.v2` → `MY_CLI_V2_BIN`, под обоими префиксами.
+    expect(commandBinary('my-cli.v2', { HARNAS_MY_CLI_V2_BIN: '/tmp/x' })).toBe('/tmp/x');
+    expect(commandBinary('my-cli.v2', { PARLEY_MY_CLI_V2_BIN: '/tmp/y' })).toBe('/tmp/y');
+  });
+
+  it('пустой оверрайд — заданное «бинаря нет», а не отсутствие подмены (так тест отключает провайдера)', () => {
+    expect(commandBinary('glm', { PARLEY_GLM_BIN: '' })).toBe('');
+    expect(commandBinary('glm', { HARNAS_GLM_BIN: '' })).toBe('');
+    expect(commandBinary('glm', { PARLEY_GLM_BIN: '', HARNAS_GLM_BIN: '/opt/glm' })).toBe('');
+  });
+
+  it('переменная для сообщений называется по-новому, а значение читается под обоими именами', () => {
+    expect(overrideVariable('claude')).toBe('PARLEY_CLAUDE_BIN');
+    expect(overrideValue('claude', { HARNAS_CLAUDE_BIN: '/old' })).toBe('/old');
+    expect(overrideValue('claude', {})).toBeUndefined();
   });
 });
 
 describe('codex: запуск и возобновление (спека комнат Organic, 3.6)', () => {
   /** Что launch кладёт в подстановки: MCP и notify — готовые значения `-c`. */
   const subs = {
-    mcpConfig: 'mcp_servers.harnas={command="/usr/bin/node",args=["/h/mcp/server.js"],env={HARNAS_WORK_DIR="/p/.harnas/works/w-0001",HARNAS_SESSION_ID="s-02"},startup_timeout_sec=30,tool_timeout_sec=1860}',
+    mcpConfig: 'mcp_servers.harnas={command="/usr/bin/node",args=["/h/mcp/server.js"],env={PARLEY_WORK_DIR="/p/.parley/works/w-0001",PARLEY_SESSION_ID="s-02"},startup_timeout_sec=30,tool_timeout_sec=1860}',
     notify: 'notify=["/usr/bin/node","/h/work/codex-notify-bin.js"]',
     model: 'gpt-6-sol',
     effort: 'high' as const,

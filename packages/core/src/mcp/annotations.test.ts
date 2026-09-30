@@ -115,11 +115,11 @@ beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
   project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
   binDir = await mkdtemp(path.join(tmpdir(), 'parley-bin-'));
-  process.env.HARNAS_HOME = home;
+  process.env.PARLEY_HOME = home;
   // `spawn_session` проверяет команду провайдера в PATH: подсунут файл-заглушка, настоящий `claude` не запускается.
   const stub = path.join(binDir, 'claude');
   await writeFile(stub, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  process.env.HARNAS_CLAUDE_BIN = stub;
+  process.env.PARLEY_CLAUDE_BIN = stub;
 
   const map = await createWork(project, { title: 'Авторизация', goal: 'логин по паролю' });
   workId = map.work.id;
@@ -140,8 +140,8 @@ afterEach(async () => {
     await client.close();
     await server.close();
   }
-  delete process.env.HARNAS_HOME;
-  delete process.env.HARNAS_CLAUDE_BIN;
+  delete process.env.PARLEY_HOME;
+  delete process.env.PARLEY_CLAUDE_BIN;
   await Promise.all([home, project, binDir].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -170,7 +170,7 @@ describe('аннотации инструментов harnas: таблица', (
     ]);
   });
 
-  it('сессия без HARNAS_SESSION_ID видит те же аннотации: они не зависят от контекста', async () => {
+  it('сессия без PARLEY_SESSION_ID видит те же аннотации: они не зависят от контекста', async () => {
     const { tools } = await (await connect(null)).listTools();
 
     for (const tool of tools) expect(tool.annotations, tool.name).toEqual(TABLE[tool.name]);

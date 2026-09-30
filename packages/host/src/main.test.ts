@@ -44,19 +44,26 @@ async function waitFor(check: () => boolean, timeoutMs: number): Promise<boolean
  * каждая заглушка сперва запускается впрок (`--warm`, на него она сразу выходит).
  * Возвращает записи `calls.txt` после того, как хост поднялся и проба отработала (или не пошла).
  */
-async function hostCalls(skipProbe: boolean): Promise<string[]> {
+async function hostCalls(skipProbe: boolean, legacy = false): Promise<string[]> {
   const home = await tempHome();
   homes.push(home);
   const bin = await mkdtemp(path.join(tmpdir(), 'parley-main-probe-'));
   dirs.push(bin);
   const calls = path.join(bin, 'calls.txt');
 
+  // `legacy`: только прежние имена переменных (`HARNAS_*`) — их хост читает как запасные (R3); новых в окружении нет.
+  const prefix = legacy ? 'HARNAS_' : 'PARLEY_';
   const env: Record<string, string | undefined> = {
     ...process.env,
-    HARNAS_HOME: home,
     // Явное значение в обе стороны: наследованное из настройки тестов выключало бы пробу.
-    HARNAS_SKIP_VERSION_PROBE: skipProbe ? '1' : '0',
+    [`${prefix}SKIP_VERSION_PROBE`]: skipProbe ? '1' : '0',
+    [`${prefix}HOME`]: home,
   };
+  if (legacy) {
+    // Настройка тестов (и песочница) задаёт новые имена: без их снятия они главнее прежних.
+    delete env['PARLEY_SKIP_VERSION_PROBE'];
+    delete env['PARLEY_HOME'];
+  }
   for (const name of COMMANDS) {
     const file = path.join(bin, name);
     await writeFile(
@@ -66,7 +73,7 @@ async function hostCalls(skipProbe: boolean): Promise<string[]> {
     );
     await chmod(file, 0o755);
     await promisify(execFile)(file, ['--warm'], { timeout: 30_000 });
-    env[`HARNAS_${name.toUpperCase()}_BIN`] = file;
+    env[`${prefix}${name.toUpperCase()}_BIN`] = file;
   }
 
   const child = spawn(process.execPath, ['--import', tsxLoader, mainScript], {
@@ -94,7 +101,13 @@ describe('main.ts: проба версий CLI на старте (дизайн �
     expect(calls.sort()).toEqual(['claude:1:--version', 'codex:1:--version', 'glm:1:--version']);
   }, 60_000);
 
-  it('HARNAS_SKIP_VERSION_PROBE=1 — ни одна команда не запускается: так живут тесты и E2E', async () => {
+  it('PARLEY_SKIP_VERSION_PROBE=1 — ни одна команда не запускается: так живут тесты и E2E', async () => {
     expect(await hostCalls(true)).toEqual([]);
   }, 60_000);
+
+  it('прежние имена (R3): HARNAS_<КОМАНДА>_BIN подменяет бинарь, HARNAS_SKIP_VERSION_PROBE и HARNAS_HOME работают как запасные', async () => {
+    const calls = await hostCalls(false, true);
+    expect(calls.sort()).toEqual(['claude:1:--version', 'codex:1:--version', 'glm:1:--version']);
+    expect(await hostCalls(true, true)).toEqual([]);
+  }, 120_000);
 });

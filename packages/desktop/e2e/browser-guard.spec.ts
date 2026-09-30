@@ -70,7 +70,7 @@ test.describe('клетка встроенного браузера (кусок 
   let app: ElectronApplication | null = null;
 
   const launch = async (): Promise<ElectronApplication> => {
-    app = await electron.launch({ args: [mainEntry], env: { ...process.env, HARNAS_HOME: home } });
+    app = await electron.launch({ args: [mainEntry], env: { ...process.env, PARLEY_HOME: home } });
     return app;
   };
 
@@ -195,7 +195,7 @@ test.describe('клетка встроенного браузера (кусок 
 
   /**
    * Ревью 9.1, спека 12.2: загрузка — только по выбору человека в диалоге сохранения. Диалог
-   * подменён журналом (`HARNAS_DOWNLOADS=log`), папка загрузок — в доме теста.
+   * подменён журналом (`PARLEY_DOWNLOADS=log`), папка загрузок — в доме теста.
    */
   test('загрузка страницы: «Отмена» в диалоге — файла нет; выбранный путь — файл там', async () => {
     const app = await launch();

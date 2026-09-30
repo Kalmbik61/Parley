@@ -173,17 +173,17 @@ describe('PtyManager', () => {
     const sessionRef = ref();
     manager.start(
       sessionRef,
-      launch({ STUB_ARGS_FILE: argsFile, HARNAS_WORK_DIR: '/tmp/work', HARNAS_SESSION_ID: sessionRef.sessionId }),
+      launch({ STUB_ARGS_FILE: argsFile, PARLEY_WORK_DIR: '/tmp/work', PARLEY_SESSION_ID: sessionRef.sessionId }),
     );
 
     await waitFor(() => manager.snapshot(sessionRef).snapshot.includes('STUB READY'));
     await waitFor(() => existsSync(argsFile));
 
     const payload = JSON.parse(await readFile(argsFile, 'utf8')) as {
-      env: { HARNAS_WORK_DIR: string | null; HARNAS_SESSION_ID: string | null };
+      env: { PARLEY_WORK_DIR: string | null; PARLEY_SESSION_ID: string | null };
     };
-    expect(payload.env.HARNAS_WORK_DIR).toBe('/tmp/work');
-    expect(payload.env.HARNAS_SESSION_ID).toBe(sessionRef.sessionId);
+    expect(payload.env.PARLEY_WORK_DIR).toBe('/tmp/work');
+    expect(payload.env.PARLEY_SESSION_ID).toBe(sessionRef.sessionId);
 
     await manager.stop(sessionRef, { graceMs: 200 });
   });

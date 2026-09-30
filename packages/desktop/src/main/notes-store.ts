@@ -1,5 +1,5 @@
 /**
- * Заметки к диффу — `~/.harnas/desktop/notes/<sha1(workKey)>/<sessionId>.json` (спека 11.4,
+ * Заметки к диффу — `~/.parley/desktop/notes/<sha1(workKey)>/<sessionId>.json` (спека 11.4,
  * кусок 8.4a). Каталог `notes/` свой, как у `ui.json`; запись атомарная и очередью на файл
  * (`atomic-file.ts`): две записи одной сессии подряд не гоняются за одним файлом.
  */

@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, realpath, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { STATE_DIRS } from '@parley/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FileChangedEvent, FileRoot, TreeChangedEvent } from '../../shared/files-types.js';
 import { rootKey } from '../../shared/work-keys.js';
@@ -92,9 +93,9 @@ describe('watch файла (тест 10)', () => {
 });
 
 describe('watch дерева (тест 10)', () => {
-  it('новый файл → treeChanged с папкой; запись в .harnas/works/w/log и node_modules — нет', async () => {
+  it('новый файл → treeChanged с папкой; запись в каталог состояния (.parley, прежний .harnas) и node_modules — нет', async () => {
     await mkdir(path.join(dir, 'src'));
-    await mkdir(path.join(dir, '.harnas', 'works', 'w'), { recursive: true });
+    for (const stateName of STATE_DIRS) await mkdir(path.join(dir, stateName, 'works', 'w'), { recursive: true });
     await mkdir(path.join(dir, 'node_modules'));
     const invalidated: string[] = [];
     watch = createFileWatch({ roots: roots(dir), onTreeInvalidate: (key) => invalidated.push(key) });
@@ -105,7 +106,7 @@ describe('watch дерева (тест 10)', () => {
     await sleep(500);
     s.treeChanged.mockClear();
     for (let i = 0; i < 5; i++) {
-      await writeFile(path.join(dir, '.harnas', 'works', 'w', 'log'), `line ${i}\n`, { flag: 'a' });
+      for (const stateName of STATE_DIRS) await writeFile(path.join(dir, stateName, 'works', 'w', 'log'), `line ${i}\n`, { flag: 'a' });
       await writeFile(path.join(dir, 'node_modules', `m${i}`), '');
     }
     await sleep(900);

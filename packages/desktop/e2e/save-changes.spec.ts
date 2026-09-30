@@ -72,7 +72,7 @@ test.describe('несохранённые правки при закрытии �
 
   test("крестик окна — вопрос, Cancel оставляет окно; выход — вопрос, Don't save — приложение закрылось", async () => {
     test.setTimeout(60_000);
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();
@@ -127,7 +127,7 @@ test.describe('несохранённые правки при закрытии �
 
   /** Окно 800×500 с работой над проектом, файлы открыты из дерева и изменены в буфере. */
   async function launchDirty(names: string[]): Promise<{ electronApp: ElectronApplication; window: Page; problems: string[] }> {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();

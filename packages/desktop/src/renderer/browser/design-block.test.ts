@@ -10,7 +10,7 @@ const PICK: PickResult = {
   text: 'Save',
   html: '<button class="save">Save</button>',
   styles: { display: 'flex', padding: '8px 16px', 'background-color': 'rgb(20, 71, 230)' },
-  imagePath: '/Users/me/.harnas/desktop/drops/20260926-171200-a1f3.png',
+  imagePath: '/Users/me/.parley/desktop/drops/20260926-171200-a1f3.png',
   thumbnail: 'data:image/png;base64,AAAA',
 };
 
@@ -24,7 +24,7 @@ describe('designBlock (тест 1)', () => {
       'Styles: display:flex; padding:8px 16px; background-color:rgb(20, 71, 230)',
       'HTML:',
       '<button class="save">Save</button>',
-      'Screenshot: /Users/me/.harnas/desktop/drops/20260926-171200-a1f3.png',
+      'Screenshot: /Users/me/.parley/desktop/drops/20260926-171200-a1f3.png',
     ]);
   });
 

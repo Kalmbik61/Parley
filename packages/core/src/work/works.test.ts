@@ -14,11 +14,11 @@ beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
   project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
   other = await mkdtemp(path.join(tmpdir(), 'parley-other-'));
-  process.env.HARNAS_HOME = home;
+  process.env.PARLEY_HOME = home;
 });
 
 afterEach(async () => {
-  delete process.env.HARNAS_HOME;
+  delete process.env.PARLEY_HOME;
   await Promise.all([home, project, other].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -39,8 +39,8 @@ describe('readWorks', () => {
 
   it('видит работу проекта, которой нет в глобальном индексе', async () => {
     await createWork(project, { title: 'Авторизация' });
-    // Индекс глобальный: он пуст после переноса HARNAS_HOME или клона проекта
-    // с закоммиченным .harnas — карты на диске при этом никуда не делись.
+    // Индекс глобальный: он пуст после переноса PARLEY_HOME или клона проекта
+    // с закоммиченным .parley — карты на диске при этом никуда не делись.
     await writeFile(
       path.join(home, 'works-index.json'),
       '{"schemaVersion":1,"works":[]}\n',

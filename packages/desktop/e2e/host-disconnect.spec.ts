@@ -106,7 +106,7 @@ test.describe('терминал без связи с хостом (раунд la
 
   /** Окно с журналом main: `notify` без сокета пишет туда «… dropped». */
   async function launch(): Promise<{ window: Page; mainLog: () => string }> {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     const launched = await electron.launch({ args: [mainEntry], env });
     app = launched;
     let log = '';

@@ -9,7 +9,7 @@
  * Скрипт превращает событие в строку `Stop` — ту же, что дописывает команда хуков Claude Code —
  * в `events/<сессия>.jsonl` каталога работы: читатель журнала и свёртка активности (`events.ts`,
  * `activity.ts`) не знают разницы. Адрес работы и сессии — из окружения процесса Codex, куда их
- * положил хост (`HARNAS_WORK_DIR`, `HARNAS_SESSION_ID`), как у хуков.
+ * положил хост (`PARLEY_WORK_DIR`, `PARLEY_SESSION_ID`, а с ними и прежние `HARNAS_*`), как у хуков.
  *
  * Границы: в каталоги агентов ничего не пишется, сети нет, любая ошибка молча даёт «не записано»
  * и код выхода 0 — Codex про исход не спрашивает, а падение скрипта не должно его тревожить.
@@ -21,6 +21,7 @@ import { appendFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isFileSafeId } from '../limits.js';
+import { envValue } from '../names.js';
 
 /** Имя файла точки входа без расширения: `codex-notify-bin.js` лежит рядом с этим модулем. */
 export const CODEX_NOTIFY_BIN = 'codex-notify-bin';
@@ -89,8 +90,8 @@ export async function runCodexNotify(
   try {
     const event = stopEventOf(raw);
     if (event === null) return false;
-    const workDir = env['HARNAS_WORK_DIR'];
-    const sessionId = env['HARNAS_SESSION_ID'];
+    const workDir = envValue(env, 'WORK_DIR');
+    const sessionId = envValue(env, 'SESSION_ID');
     if (workDir === undefined || !path.isAbsolute(workDir)) return false;
     if (sessionId === undefined || !isFileSafeId(sessionId)) return false;
 

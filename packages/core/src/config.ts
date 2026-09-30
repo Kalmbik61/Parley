@@ -1,6 +1,6 @@
 /**
- * Настройки харнесса: необязательный `HARNAS_HOME/config.json`, поверх него —
- * переменные окружения `HARNAS_*`.
+ * Настройки харнесса: необязательный `config.json` дома (`parleyHome()`), поверх него —
+ * переменные окружения `PARLEY_*` (прежние `HARNAS_*` читаются тоже: новое имя главнее).
  *
  * Загрузчик один и живёт в core: настройки читают хост и CLI. Ни один битый
  * файл не должен мешать запуску, поэтому вместо ошибки возвращается пара
@@ -13,6 +13,7 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { envName, envValue } from './names.js';
 import { parleyHome } from './work/store.js';
 
 export interface ParleyConfig {
@@ -67,17 +68,20 @@ export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
   worktreeRoot: '~/harnas/worktrees',
 };
 
-/** Имя переменной окружения для каждого ключа — один источник для загрузчика и оверлея. */
+/**
+ * Ключ переменной окружения для каждой настройки — без префикса: значение читается как `PARLEY_<ключ>`,
+ * а нет его — как прежнее `HARNAS_<ключ>` (`envValue`). Один источник для загрузчика и оверлея.
+ */
 export const ENV_NAMES: Readonly<Record<keyof ParleyConfig, string>> = {
-  silenceThresholdMs: 'HARNAS_SILENCE_MS',
-  channelPush: 'HARNAS_CHANNEL_PUSH',
-  messageRate: 'HARNAS_MESSAGE_RATE',
-  resumeRate: 'HARNAS_RESUME_RATE',
-  autoLaunch: 'HARNAS_AUTO_LAUNCH',
-  agentSkills: 'HARNAS_AGENT_SKILLS',
-  fontFamily: 'HARNAS_FONT_FAMILY',
-  fontSize: 'HARNAS_FONT_SIZE',
-  worktreeRoot: 'HARNAS_WORKTREE_ROOT',
+  silenceThresholdMs: 'SILENCE_MS',
+  channelPush: 'CHANNEL_PUSH',
+  messageRate: 'MESSAGE_RATE',
+  resumeRate: 'RESUME_RATE',
+  autoLaunch: 'AUTO_LAUNCH',
+  agentSkills: 'AGENT_SKILLS',
+  fontFamily: 'FONT_FAMILY',
+  fontSize: 'FONT_SIZE',
+  worktreeRoot: 'WORKTREE_ROOT',
 };
 
 export interface LoadedConfig {
@@ -167,58 +171,55 @@ const FALSE = new Set(['0', 'false', 'no', 'off']);
 function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   const patch: ConfigPatch = {};
 
-  const text = (name: string): string | undefined => {
-    const value = env[name];
-    // Пустая переменная — то же самое, что незаданная: так же ведёт себя HARNAS_HOME.
-    return value === undefined || value === '' ? undefined : value;
-  };
+  // Пустая переменная — то же самое, что незаданная: так же ведёт себя `PARLEY_HOME` (`envValue`).
+  const text = (key: keyof ParleyConfig): string | undefined => envValue(env, ENV_NAMES[key]);
+  // Имя, которое назвать человеку: то, под которым значение реально пришло.
+  const nameOf = (key: keyof ParleyConfig): string => envName(env, ENV_NAMES[key]) ?? ENV_NAMES[key];
 
   const flag = (key: 'channelPush' | 'autoLaunch' | 'agentSkills'): void => {
-    const name = ENV_NAMES[key];
-    const value = text(name);
+    const value = text(key);
     if (value === undefined) return;
     const lower = value.toLowerCase();
     if (TRUE.has(lower)) patch[key] = true;
     else if (FALSE.has(lower)) patch[key] = false;
-    else complain(`${name}: ожидается 0 или 1`);
+    else complain(`${nameOf(key)}: ожидается 0 или 1`);
   };
 
   const count = (key: 'silenceThresholdMs' | 'messageRate'): void => {
-    const name = ENV_NAMES[key];
-    const value = text(name);
+    const value = text(key);
     if (value === undefined) return;
     const parsed = Number(value);
     if (isPositiveInt(parsed)) patch[key] = parsed;
-    else complain(`${name}: ожидается целое больше нуля`);
+    else complain(`${nameOf(key)}: ожидается целое больше нуля`);
   };
 
   count('silenceThresholdMs');
   flag('channelPush');
   count('messageRate');
-  const resumeRate = text(ENV_NAMES.resumeRate);
+  const resumeRate = text('resumeRate');
   if (resumeRate !== undefined) {
     const parsed = Number(resumeRate);
     if (isResumeRate(parsed)) patch.resumeRate = parsed;
-    else complain(`${ENV_NAMES.resumeRate}: ожидается ${RESUME_RATE_EXPECTED}`);
+    else complain(`${nameOf('resumeRate')}: ожидается ${RESUME_RATE_EXPECTED}`);
   }
   flag('autoLaunch');
   flag('agentSkills');
 
-  const fontFamily = text(ENV_NAMES.fontFamily);
+  const fontFamily = text('fontFamily');
   if (fontFamily !== undefined) {
     if (isFontFamily(fontFamily)) patch.fontFamily = fontFamily;
-    else complain(`${ENV_NAMES.fontFamily}: ожидается непустая строка`);
+    else complain(`${nameOf('fontFamily')}: ожидается непустая строка`);
   }
-  const fontSize = text(ENV_NAMES.fontSize);
+  const fontSize = text('fontSize');
   if (fontSize !== undefined) {
     const parsed = Number(fontSize);
     if (isFontSize(parsed)) patch.fontSize = parsed;
-    else complain(`${ENV_NAMES.fontSize}: ожидается ${FONT_SIZE_EXPECTED}`);
+    else complain(`${nameOf('fontSize')}: ожидается ${FONT_SIZE_EXPECTED}`);
   }
-  const worktreeRoot = text(ENV_NAMES.worktreeRoot);
+  const worktreeRoot = text('worktreeRoot');
   if (worktreeRoot !== undefined) {
     if (isWorktreeRoot(worktreeRoot)) patch.worktreeRoot = worktreeRoot;
-    else complain(`${ENV_NAMES.worktreeRoot}: ожидается непустая строка`);
+    else complain(`${nameOf('worktreeRoot')}: ожидается непустая строка`);
   }
   return patch;
 }

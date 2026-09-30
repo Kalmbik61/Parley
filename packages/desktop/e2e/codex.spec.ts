@@ -11,7 +11,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * Codex — из заголовка окна и уведомлений его терминала, конец хода — скриптом `notify`, письмо занятому
  * агенту — в очередь клавишей Tab.
  *
- * Агент — заглушка `stub-codex-agent.mjs`, подмена бинаря — `HARNAS_CODEX_BIN`, как `HARNAS_CLAUDE_BIN` у
+ * Агент — заглушка `stub-codex-agent.mjs`, подмена бинаря — `PARLEY_CODEX_BIN`, как `PARLEY_CLAUDE_BIN` у
  * claude: настоящий codex в E2E не запускается даже с `--version` (проба версий отключена в
  * `global-setup.ts`). Заглушка пишет те же заголовки и OSC 9, что описывает исследование Codex, а `notify`
  * запускает по `-c notify=[…]` из своего argv — то есть настоящий скрипт харнесса с настоящими флагами запуска.
@@ -80,7 +80,7 @@ test.describe('Codex — агент комнаты (кусок 11a)', () => {
 
   /** Окно с заглушкой codex и одной запущенной сессией codex (тихий старт — задачи нет), терминал открыт. */
   async function launch(extraEnv: NodeJS.ProcessEnv = {}): Promise<void> {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CODEX_BIN: stubCodex, HARNAS_TERMINAL_RENDERER: 'dom', ...extraEnv };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CODEX_BIN: stubCodex, PARLEY_TERMINAL_RENDERER: 'dom', ...extraEnv };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     window = await electronApp.firstWindow();
@@ -147,7 +147,7 @@ test.describe('Codex — агент комнаты (кусок 11a)', () => {
     await humanTypes(window, ref, 'STUB_NOTIFY\r');
     await expect.poll(() => screenText(window)).toContain('notify: запущен');
 
-    const journal = path.join(project, '.harnas', 'works', ref.workId, 'events', `${ref.sessionId}.jsonl`);
+    const journal = path.join(project, '.parley', 'works', ref.workId, 'events', `${ref.sessionId}.jsonl`);
     await expect
       .poll(async () => readFile(journal, 'utf8').catch(() => ''), { timeout: 10_000 })
       .toContain('"hook_event_name":"Stop"');
@@ -178,7 +178,7 @@ test.describe('Codex — агент комнаты (кусок 11a)', () => {
   });
 
   test('экран старта без заголовков — «нужен ты» с причиной; окно ничего не отправляет и не отвечает за человека', async () => {
-    await launch({ STUB_CODEX_NO_TITLE: '1', HARNAS_CODEX_STARTUP_MS: '1500' });
+    await launch({ STUB_CODEX_NO_TITLE: '1', PARLEY_CODEX_STARTUP_MS: '1500' });
 
     // Ни одного известного сигнала: хост не знает, что у агента на экране, и пишет в него нечего.
     expect(await sendToAgent(window, ref, 'привет')).toEqual({ inserted: false, submitted: false, reason: 'blocked' });

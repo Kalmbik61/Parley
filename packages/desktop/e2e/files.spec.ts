@@ -9,7 +9,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
 /**
  * Реестр корней main, `files.locate`, `app.openPath` и `app.showInFinder` на собранном окне
  * (кусок 5.2, спека 10.8). Настоящие `shell.openPath` и `shell.showItemInFolder` открыли бы
- * приложение и Finder на экране человека: `HARNAS_SHELL=log` (`playwright.config.ts`) пишет их
+ * приложение и Finder на экране человека: `PARLEY_SHELL=log` (`playwright.config.ts`) пишет их
  * в журнал main, тест читает его через `app.evaluate` (`globalThis.__parleyShell`).
  */
 
@@ -64,7 +64,7 @@ test.describe('файлы и корни main (кусок 5.2)', () => {
   });
 
   test('locate находит файл работы; openPath открывает белый список, скрипт показывает в Finder, путь вне корней — files:denied', async () => {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();

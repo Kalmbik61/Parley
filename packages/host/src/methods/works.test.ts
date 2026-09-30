@@ -257,14 +257,14 @@ describe('works.rename / works.setStatus', () => {
 });
 
 describe('providers.list', () => {
-  it('HARNAS_CLAUDE_BIN на исполняемый стаб — у claude available: true', async () => {
+  it('PARLEY_CLAUDE_BIN на исполняемый стаб — у claude available: true', async () => {
     const { home, token } = await boot();
     const stubDir = await mkdtemp(path.join(tmpdir(), 'parley-stub-'));
     const stub = path.join(stubDir, 'claude-stub');
     await writeFile(stub, '#!/bin/sh\n', 'utf8');
     await chmod(stub, 0o755);
-    const saved = process.env['HARNAS_CLAUDE_BIN'];
-    process.env['HARNAS_CLAUDE_BIN'] = stub;
+    const saved = process.env['PARLEY_CLAUDE_BIN'];
+    process.env['PARLEY_CLAUDE_BIN'] = stub;
 
     try {
       const client = connectRaw(hostPaths(home).socket);
@@ -279,8 +279,8 @@ describe('providers.list', () => {
 
       client.close();
     } finally {
-      if (saved === undefined) delete process.env['HARNAS_CLAUDE_BIN'];
-      else process.env['HARNAS_CLAUDE_BIN'] = saved;
+      if (saved === undefined) delete process.env['PARLEY_CLAUDE_BIN'];
+      else process.env['PARLEY_CLAUDE_BIN'] = saved;
       await rm(stubDir, { recursive: true, force: true });
     }
   });
@@ -289,8 +289,8 @@ describe('providers.list', () => {
 describe('settings.get / settings.set', () => {
   it('settings.get: ключ из переменной окружения попадает в locked', async () => {
     const { home, token } = await boot();
-    const saved = process.env['HARNAS_MESSAGE_RATE'];
-    process.env['HARNAS_MESSAGE_RATE'] = '5';
+    const saved = process.env['PARLEY_MESSAGE_RATE'];
+    process.env['PARLEY_MESSAGE_RATE'] = '5';
 
     try {
       const client = connectRaw(hostPaths(home).socket);
@@ -300,12 +300,38 @@ describe('settings.get / settings.set', () => {
       client.send({ id: 1, method: 'settings.get', params: {} });
       const response = await client.next();
       const result = response.result as { locked: Record<string, string> };
+      expect(result.locked['messageRate']).toBe('PARLEY_MESSAGE_RATE');
+
+      client.close();
+    } finally {
+      if (saved === undefined) delete process.env['PARLEY_MESSAGE_RATE'];
+      else process.env['PARLEY_MESSAGE_RATE'] = saved;
+    }
+  });
+
+  it('settings.get: прежняя переменная HARNAS_* тоже замок — и называется так, как задана', async () => {
+    const { home, token } = await boot();
+    const saved = { parley: process.env['PARLEY_MESSAGE_RATE'], harnas: process.env['HARNAS_MESSAGE_RATE'] };
+    delete process.env['PARLEY_MESSAGE_RATE'];
+    process.env['HARNAS_MESSAGE_RATE'] = '5';
+
+    try {
+      const client = connectRaw(hostPaths(home).socket);
+      await waitConnected(client.socket);
+      await hello(client, token);
+
+      client.send({ id: 1, method: 'settings.get', params: {} });
+      const response = await client.next();
+      const result = response.result as { config: { messageRate: number }; locked: Record<string, string> };
+      expect(result.config.messageRate).toBe(5);
       expect(result.locked['messageRate']).toBe('HARNAS_MESSAGE_RATE');
 
       client.close();
     } finally {
-      if (saved === undefined) delete process.env['HARNAS_MESSAGE_RATE'];
-      else process.env['HARNAS_MESSAGE_RATE'] = saved;
+      if (saved.parley === undefined) delete process.env['PARLEY_MESSAGE_RATE'];
+      else process.env['PARLEY_MESSAGE_RATE'] = saved.parley;
+      if (saved.harnas === undefined) delete process.env['HARNAS_MESSAGE_RATE'];
+      else process.env['HARNAS_MESSAGE_RATE'] = saved.harnas;
     }
   });
 
@@ -345,8 +371,8 @@ describe('works.list на старте хоста', () => {
     const home = await tempHome();
     homes.push(home);
     const dir = await project();
-    const previousHome = process.env['HARNAS_HOME'];
-    process.env['HARNAS_HOME'] = home;
+    const previousHome = process.env['PARLEY_HOME'];
+    process.env['PARLEY_HOME'] = home;
     const map = await createWork(dir, { title: 'Работа' });
     await updateMap(dir, map.work.id, (current) => {
       const session = addSession(current, { provider: 'claude', label: 'план', task: 't' });
@@ -354,8 +380,8 @@ describe('works.list на старте хоста', () => {
       session.pid = 999_999;
       transitionSession(current, session.id, 'active');
     });
-    if (previousHome === undefined) delete process.env['HARNAS_HOME'];
-    else process.env['HARNAS_HOME'] = previousHome;
+    if (previousHome === undefined) delete process.env['PARLEY_HOME'];
+    else process.env['PARLEY_HOME'] = previousHome;
 
     const lock = workPaths(dir, map.work.id).lock;
     await writeFile(lock, '');
@@ -393,8 +419,8 @@ describe('sessions.* на старте хоста (lane-r4, п. 4)', () => {
     const home = await tempHome();
     homes.push(home);
     const dir = await project();
-    const previousHome = process.env['HARNAS_HOME'];
-    process.env['HARNAS_HOME'] = home;
+    const previousHome = process.env['PARLEY_HOME'];
+    process.env['PARLEY_HOME'] = home;
     const map = await createWork(dir, { title: 'Работа' });
     let sessionId = '';
     await updateMap(dir, map.work.id, (current) => {
@@ -404,8 +430,8 @@ describe('sessions.* на старте хоста (lane-r4, п. 4)', () => {
       sessionId = session.id;
       transitionSession(current, session.id, 'active');
     });
-    if (previousHome === undefined) delete process.env['HARNAS_HOME'];
-    else process.env['HARNAS_HOME'] = previousHome;
+    if (previousHome === undefined) delete process.env['PARLEY_HOME'];
+    else process.env['PARLEY_HOME'] = previousHome;
     // Журнал оборван посреди хода: хост упал, пока агент работал.
     const events = workPaths(dir, map.work.id).events;
     await mkdir(events, { recursive: true });

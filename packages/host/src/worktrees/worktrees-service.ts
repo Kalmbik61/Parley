@@ -48,7 +48,7 @@ export interface WorktreesService {
   mergeCheck(ref: SessionRef): Promise<MergeCheck>;
   /** Изменения папки проекта — только у сессии без своего worktree (спека 11.5). */
   projectChanges(ref: SessionRef, patch?: boolean): Promise<ProjectChanges>;
-  /** «Закоммитить всё в папке» — по кнопке человека, без `.harnas/`. */
+  /** «Закоммитить всё в папке» — по кнопке человека, без каталога состояния (`.parley/`, `.harnas/`). */
   commitProject(ref: SessionRef, message: string): Promise<{ commit: string }>;
 }
 

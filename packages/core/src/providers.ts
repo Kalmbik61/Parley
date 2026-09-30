@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import path from 'node:path';
 import { CLAUDE_MODELS, CODEX_MODELS, type ModelOption } from './provider-models.js';
 import type { Provider } from './session-index.js';
-import { overrideVariable } from './work/find-binary.js';
+import { overrideValue } from './work/find-binary.js';
 import { parleyHome } from './work/store.js';
 import type { WorkProvider } from './work/types.js';
 
@@ -119,7 +119,7 @@ const CODEX_CONFIG_FLAGS: readonly string[] = [
 /**
  * Флаги запуска новой сессии Codex: `-c` (`CODEX_CONFIG_FLAGS`) и два флага сверх них.
  * - `--no-daemon` — Codex с 0.157 по умолчанию идёт через общий фоновый демон, и тогда MCP-серверы и
- *   уведомления были бы детьми демона с его окружением, без `HARNAS_*`. Любой `-c` и так держит
+ *   уведомления были бы детьми демона с его окружением, без `PARLEY_*` и `HARNAS_*`. Любой `-c` и так держит
  *   запуск «встроенным», флаг делает это явным;
  * - `-a on-request` — вопросы одобрений идут человеку в терминал агента (это и умолчание Codex, но
  *   личный конфиг человека мог его сменить). Флаг заменяет в сессиях харнесса и личную политику
@@ -429,7 +429,7 @@ export function selectableModels(entry: ProviderEntry): ModelOption[] | null {
  * никакой подмены бинаря за спиной пользователя здесь нет.
  */
 export function commandBinary(command: string, env: NodeJS.ProcessEnv = process.env): string {
-  return env[overrideVariable(command)] ?? command;
+  return overrideValue(command, env) ?? command;
 }
 
 /**
@@ -619,7 +619,7 @@ function applyOverride(
 
 /**
  * Встроенный реестр плюс необязательные переопределения из
- * `HARNAS_HOME/providers.json`: merge по id, свои провайдеры добавляются.
+ * `providers.json` дома (`parleyHome()`): merge по id, свои провайдеры добавляются.
  * Битый файл — ошибка: реестр пишем не мы, но догадываться о его форме нельзя,
  * иначе харнесс молча запустит не то, что просил пользователь.
  */

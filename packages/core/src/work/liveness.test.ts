@@ -20,12 +20,12 @@ const children: ChildProcess[] = [];
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
   project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
-  process.env.HARNAS_HOME = home;
+  process.env.PARLEY_HOME = home;
 });
 
 afterEach(async () => {
   for (const child of children.splice(0)) await stop(child);
-  delete process.env.HARNAS_HOME;
+  delete process.env.PARLEY_HOME;
   await Promise.all([home, project].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 

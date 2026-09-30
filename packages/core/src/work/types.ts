@@ -60,7 +60,7 @@ export interface SessionMetrics {
 }
 
 /**
- * Id записи реестра провайдеров. Набор открыт: `~/.harnas/providers.json`
+ * Id записи реестра провайдеров. Набор открыт: `providers.json` в доме (`~/.parley`, прежде `~/.harnas`)
  * дополняет встроенный реестр своими CLI (спецификация, раздел 5).
  */
 export type WorkProvider = string;
@@ -259,10 +259,10 @@ export interface WorkMap {
   rooms: Room[];
 }
 
-/** Запись глобального индекса работ `HARNAS_HOME/works-index.json`. */
+/** Запись глобального индекса работ `works-index.json` дома (`parleyHome()`). */
 export interface WorkIndexEntry {
   id: string;
-  /** Абсолютный путь проекта, в котором лежит `.harnas/works/<id>/`. */
+  /** Абсолютный путь проекта, в котором лежит `.parley/works/<id>/` (или прежний `.harnas`). */
   projectPath: string;
   title: string;
   status: WorkStatus;

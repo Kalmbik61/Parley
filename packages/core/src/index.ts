@@ -1,3 +1,24 @@
+// Имена продукта (R1). `MCP_SERVER_NAME` и `SKILL_NAME` отсюда не выходят: наружу по-прежнему торчат
+// одноимённые константы `work/mcp-config.ts` и `work/skill.ts` с прежними значениями — их подключает шаг
+// «Имена для агентов» (R8), и тогда names.ts станет их единственным источником.
+export {
+  BRANCH_PREFIX,
+  DEFAULT_WORKTREE_ROOT,
+  ENV_PREFIX,
+  HOME_DIR,
+  LEGACY_ENV_PREFIX,
+  LEGACY_HOME_DIR,
+  LEGACY_SKILL_NAME,
+  LEGACY_STATE_DIR,
+  PRODUCT,
+  STATE_DIR,
+  STATE_DIRS,
+  bothEnv,
+  envName,
+  envRaw,
+  envValue,
+} from './names.js';
+export type { Env } from './names.js';
 export { forEachJsonlRecord, readJsonlRecords } from './jsonl.js';
 export type { JsonlStats, RawRecord } from './jsonl.js';
 export { adapterV1 } from './adapter-v1.js';
@@ -149,6 +170,7 @@ export {
   worksIndexPath,
 } from './work/store.js';
 export type { NewWork, UpdateMapOptions, WorkPaths, WriteOptions } from './work/store.js';
+export { ensureStateDir, isDirectorySync, stateDir } from './work/state-dir.js';
 export {
   hostLeaseActive,
   readHostLease,
@@ -180,6 +202,7 @@ export {
   BinaryNotFoundError,
   findBinary,
   findRunnerBinary,
+  overrideValue,
   overrideVariable,
 } from './work/find-binary.js';
 export { GUIDE } from './work/guide.js';

@@ -10,10 +10,10 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * Лимиты подписок в строке статуса (кусок 9b, спека комнат Organic, 3.5). Данные — как у настоящего
  * `claude`: тест кладёт файл `limits/<сессия>.json` в каталог работы так, как его пишет скрипт строки статуса
  * (`{ at, rateLimits }`, `resets_at` в Unix-секундах, атомарно), а хост, запущенный с малым
- * `HARNAS_LIMITS_POLL_MS`, подхватывает его и шлёт окну `providers.limitsChanged`. Настоящий `claude` не
- * запускается никогда — только стаб `HARNAS_CLAUDE_BIN`; `resets_at` — в будущем, чтобы хост не отбросил окно.
+ * `PARLEY_LIMITS_POLL_MS`, подхватывает его и шлёт окну `providers.limitsChanged`. Настоящий `claude` не
+ * запускается никогда — только стаб `PARLEY_CLAUDE_BIN`; `resets_at` — в будущем, чтобы хост не отбросил окно.
  *
- * Codex — так же по данным, а не по запуску: `HARNAS_CODEX_BIN` указывает на стаб (проба версии в E2E выключена,
+ * Codex — так же по данным, а не по запуску: `PARLEY_CODEX_BIN` указывает на стаб (проба версии в E2E выключена,
  * команда только должна найтись), а rollout-лог с `token_count` лежит в корне логов Codex этого теста.
  */
 
@@ -51,7 +51,7 @@ async function newSession(window: Page, workId: string, provider: string, label:
  * `five_hour` и `seven_day`, `used_percentage` и `resets_at` в Unix-секундах; сбросы — впереди.
  */
 async function writeLimits(workId: string, sessionId: string, fiveHour: number | null, week: number | null): Promise<void> {
-  const dir = path.join(project, '.harnas', 'works', workId, 'limits');
+  const dir = path.join(project, '.parley', 'works', workId, 'limits');
   await mkdir(dir, { recursive: true });
   const nowSec = Math.floor(Date.now() / 1000);
   const rateLimits: Record<string, { used_percentage: number; resets_at: number }> = {};
@@ -83,7 +83,7 @@ async function writeCodexLimits(root: string, usedPercent: number): Promise<void
 
 /** Строка в журнал событий сессии — то, что дописал бы хук Claude Code. */
 async function hookEvent(workId: string, sessionId: string, event: Record<string, string>): Promise<void> {
-  const dir = path.join(project, '.harnas', 'works', workId, 'events');
+  const dir = path.join(project, '.parley', 'works', workId, 'events');
   await mkdir(dir, { recursive: true });
   await appendFile(path.join(dir, `${sessionId}.jsonl`), `${JSON.stringify(event)}\n`);
 }
@@ -112,13 +112,13 @@ test.describe('лимиты подписок в строке статуса (к�
   });
 
   async function launch(size: { width: number; height: number }, extraEnv: Record<string, string> = {}): Promise<Page> {
-    // Малый период опроса — иначе числа появились бы через полминуты (`HARNAS_LIMITS_POLL_MS`, зажат в [200, 2^31−1]).
+    // Малый период опроса — иначе числа появились бы через полминуты (`PARLEY_LIMITS_POLL_MS`, зажат в [200, 2^31−1]).
     const env = {
       ...process.env,
-      HARNAS_HOME: home,
-      HARNAS_CLAUDE_BIN: stubAgent,
-      HARNAS_TERMINAL_RENDERER: 'dom',
-      HARNAS_LIMITS_POLL_MS: '200',
+      PARLEY_HOME: home,
+      PARLEY_CLAUDE_BIN: stubAgent,
+      PARLEY_TERMINAL_RENDERER: 'dom',
+      PARLEY_LIMITS_POLL_MS: '200',
       ...extraEnv,
     };
     const electronApp = await electron.launch({ args: [mainEntry], env });
@@ -223,7 +223,7 @@ test.describe('лимиты подписок в строке статуса (к�
     // Claude — по файлу данных, Codex — по логу и стабу: два текста лимитов разной длины («58% 5h · 41% wk» и «85% 5h»).
     const codexRoot = path.join(home, 'codex-sessions');
     await writeCodexLimits(codexRoot, 85.4);
-    const window = await launch({ width: 800, height: 500 }, { HARNAS_CODEX_BIN: stubAgent, HARNAS_CODEX_SESSIONS_DIR: codexRoot });
+    const window = await launch({ width: 800, height: 500 }, { PARLEY_CODEX_BIN: stubAgent, PARLEY_CODEX_SESSIONS_DIR: codexRoot });
     const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: 'e2e-limits-sweep', goal: '' });
     const claude = await newSession(window, workId, 'claude', 'один');
     await expect(window.getByTestId('app-shell')).toBeVisible();
@@ -286,13 +286,13 @@ test.describe('лимиты подписок в строке статуса (к�
   });
 
   test('800×500, Claude Code, Codex и GLM: сжимается только текст лимитов — имена и полоски целы, правые сегменты на месте', async () => {
-    // Codex — по логу и стабу: команда `codex` находится (`HARNAS_CODEX_BIN`), но не запускается — пробы версий в E2E нет.
+    // Codex — по логу и стабу: команда `codex` находится (`PARLEY_CODEX_BIN`), но не запускается — пробы версий в E2E нет.
     // GLM — встроенный провайдер без источника лимитов: сегмент из значка и имени, сжимать в нём нечего.
     const codexRoot = path.join(home, 'codex-sessions');
     await writeCodexLimits(codexRoot, 85.4);
     const window = await launch(
       { width: 800, height: 500 },
-      { HARNAS_CODEX_BIN: stubAgent, HARNAS_GLM_BIN: stubAgent, HARNAS_CODEX_SESSIONS_DIR: codexRoot },
+      { PARLEY_CODEX_BIN: stubAgent, PARLEY_GLM_BIN: stubAgent, PARLEY_CODEX_SESSIONS_DIR: codexRoot },
     );
     const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: 'e2e-limits-both', goal: '' });
     const claude = await newSession(window, workId, 'claude', 'один');

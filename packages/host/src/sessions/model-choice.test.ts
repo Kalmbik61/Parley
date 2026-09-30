@@ -11,13 +11,13 @@ let savedHome: string | undefined;
 
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'parley-model-choice-'));
-  savedHome = process.env['HARNAS_HOME'];
-  process.env['HARNAS_HOME'] = home;
+  savedHome = process.env['PARLEY_HOME'];
+  process.env['PARLEY_HOME'] = home;
 });
 
 afterEach(async () => {
-  if (savedHome === undefined) delete process.env['HARNAS_HOME'];
-  else process.env['HARNAS_HOME'] = savedHome;
+  if (savedHome === undefined) delete process.env['PARLEY_HOME'];
+  else process.env['PARLEY_HOME'] = savedHome;
   await rm(home, { recursive: true, force: true });
 });
 

@@ -40,14 +40,14 @@ beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
   projectA = await mkdtemp(path.join(tmpdir(), 'parley-project-a-'));
   projectB = await mkdtemp(path.join(tmpdir(), 'parley-project-b-'));
-  process.env.HARNAS_HOME = home;
+  process.env.PARLEY_HOME = home;
   broadcasts = [];
 });
 
 afterEach(async () => {
   await Promise.all(services.map((service) => service.stop()));
   services = [];
-  delete process.env.HARNAS_HOME;
+  delete process.env.PARLEY_HOME;
   await Promise.all([home, projectA, projectB].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -154,7 +154,7 @@ describe('аренда', () => {
     expect(await exists(path.join(workPaths(projectB, b.work.id).dir, 'host.lease'))).toBe(false);
   });
 
-  it('хост не пишет ничего вне .harnas/works/<id>/ и своего каталога', async () => {
+  it('хост не пишет ничего вне .parley/works/<id>/ и своего каталога', async () => {
     const a = await createWork(projectA, { title: 'A' });
     const s = service();
     await s.start();

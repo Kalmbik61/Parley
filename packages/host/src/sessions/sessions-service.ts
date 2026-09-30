@@ -254,7 +254,7 @@ export function createSessionsService(
 
       // Окружение самого хоста — окружение login-shell от окна (спека 3.2);
       // `agentEnv` чистит унаследованные метки родительской сессии Claude Code
-      // (П0), `plan.env` поверх добавляет свои `HARNAS_*`.
+      // (П0), `plan.env` поверх добавляет свои `PARLEY_*` и `HARNAS_*`.
       const env = { ...agentEnv(process.env), ...plan.env };
       // `provider` — процессу не нужен, а хосту нужен: у codex состояние берётся из потока его терминала,
       // и ввод идёт своим порядком (спека комнат, 3.6).

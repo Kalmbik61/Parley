@@ -35,7 +35,7 @@ test.describe('окно поднимает хост и переживает ег
   test('пустой список работ, хост поднят, Node в рендерере недоступен', async () => {
     const app = await electron.launch({
       args: [mainEntry],
-      env: { ...process.env, HARNAS_HOME: home },
+      env: { ...process.env, PARLEY_HOME: home },
     });
     running = app;
 
@@ -53,7 +53,7 @@ test.describe('окно поднимает хост и переживает ег
   test('ожидаемый отказ канала не печатается в stderr main, сбой — печатается (fix-lane-post, п. 4)', async () => {
     const app = await electron.launch({
       args: [mainEntry],
-      env: { ...process.env, HARNAS_HOME: home },
+      env: { ...process.env, PARLEY_HOME: home },
     });
     running = app;
     let mainLog = '';
@@ -86,7 +86,7 @@ test.describe('окно поднимает хост и переживает ег
   test('второй запуск фокусирует первое окно и завершается сам', async () => {
     const first = await electron.launch({
       args: [mainEntry],
-      env: { ...process.env, HARNAS_HOME: home },
+      env: { ...process.env, PARLEY_HOME: home },
     });
     running = first;
     await first.firstWindow();
@@ -97,7 +97,7 @@ test.describe('окно поднимает хост и переживает ег
     // второй процесс поднимаем напрямую и ждём только его кода выхода.
     const secondExitCode = await new Promise<number | null>((resolve, reject) => {
       const child = spawn(electronBinary, [mainEntry], {
-        env: { ...process.env, HARNAS_HOME: home },
+        env: { ...process.env, PARLEY_HOME: home },
       });
       child.on('error', reject);
       child.on('close', (code) => resolve(code));

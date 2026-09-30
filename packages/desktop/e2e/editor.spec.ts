@@ -20,7 +20,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * Превью (кусок 7.5, тесты 9–11): Markdown открывается превью, «Code» — Monaco того же буфера;
  * «Keep mine» и ⌘S — вопрос перезаписи; картинка и PDF из дерева — превью без ошибок `console`,
  * `pageerror` и нарушений CSP, ⌘F в PDF. Ссылки превью `http(s)` — вкладка встроенного браузера
- * (fix-7.5, спека 10.6) со страницей своего сервера на 127.0.0.1; журнал `HARNAS_SHELL` пуст —
+ * (fix-7.5, спека 10.6) со страницей своего сервера на 127.0.0.1; журнал `PARLEY_SHELL` пуст —
  * браузер человека не открывается.
  */
 
@@ -122,7 +122,7 @@ test.describe('редактор файла на собранном окне', ()
 
   /** Окно 1400×900 с работой над проектом; с этого места — сборщик ошибок и нарушений CSP. */
   async function launch(title: string): Promise<{ electronApp: ElectronApplication; window: Page; problems: string[] }> {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();
@@ -172,7 +172,7 @@ test.describe('редактор файла на собранном окне', ()
 
   test('Files → a.ts: Monaco с текстом, воркеры без ошибок и нарушений CSP; ⌘S пишет; правка на диске — баннер', async () => {
     test.setTimeout(90_000);
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();
@@ -241,7 +241,7 @@ test.describe('редактор файла на собранном окне', ()
 
   test('окно 800×500, имя на 255 символов: баннер изменения на диске и его кнопки не вылезают за окно', async () => {
     test.setTimeout(60_000);
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();
@@ -283,7 +283,7 @@ test.describe('редактор файла на собранном окне', ()
   // палитры (nativeTheme main), без эмуляции colorScheme; системная тема машины не влияет.
   test('светлая тема: Monaco с текстом; смена темы при открытом файле; ⌘S, ⌘D и ⌘W на живом окне', async () => {
     test.setTimeout(90_000);
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();

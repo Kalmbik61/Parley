@@ -47,7 +47,7 @@ beforeEach(async () => {
   projectA = await mkdtemp(path.join(tmpdir(), 'parley-limits-a-'));
   projectB = await mkdtemp(path.join(tmpdir(), 'parley-limits-b-'));
   codexRoot = await mkdtemp(path.join(tmpdir(), 'parley-limits-codex-'));
-  process.env.HARNAS_HOME = home;
+  process.env.PARLEY_HOME = home;
   now = T0;
   broadcasts = [];
 });
@@ -55,7 +55,7 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const service of services) service.stop();
   services = [];
-  delete process.env.HARNAS_HOME;
+  delete process.env.PARLEY_HOME;
   await Promise.all(
     [home, projectA, projectB, codexRoot].map((dir) => rm(dir, { recursive: true, force: true })),
   );
@@ -448,26 +448,36 @@ describe('опрос', () => {
   });
 });
 
-describe('HARNAS_LIMITS_POLL_MS: рычаг E2E окна', () => {
+describe('PARLEY_LIMITS_POLL_MS: рычаг E2E окна', () => {
   it('число миллисекунд в допустимых пределах — период опроса', () => {
-    expect(limitsOptionsFromEnv({ HARNAS_LIMITS_POLL_MS: '200' })).toEqual({ intervalMs: 200 });
-    expect(limitsOptionsFromEnv({ HARNAS_LIMITS_POLL_MS: '250' })).toEqual({ intervalMs: 250 });
-    expect(limitsOptionsFromEnv({ HARNAS_LIMITS_POLL_MS: ' 1500 ' })).toEqual({ intervalMs: 1500 });
-    expect(limitsOptionsFromEnv({ HARNAS_LIMITS_POLL_MS: '2147483647' })).toEqual({
+    expect(limitsOptionsFromEnv({ PARLEY_LIMITS_POLL_MS: '200' })).toEqual({ intervalMs: 200 });
+    expect(limitsOptionsFromEnv({ PARLEY_LIMITS_POLL_MS: '250' })).toEqual({ intervalMs: 250 });
+    expect(limitsOptionsFromEnv({ PARLEY_LIMITS_POLL_MS: ' 1500 ' })).toEqual({ intervalMs: 1500 });
+    expect(limitsOptionsFromEnv({ PARLEY_LIMITS_POLL_MS: '2147483647' })).toEqual({
       intervalMs: 2_147_483_647,
     });
   });
 
+  it('прежнее имя HARNAS_LIMITS_POLL_MS читается как запасное; PARLEY_* главнее; пустое новое не перекрывает', () => {
+    expect(limitsOptionsFromEnv({ HARNAS_LIMITS_POLL_MS: '300' })).toEqual({ intervalMs: 300 });
+    expect(limitsOptionsFromEnv({ PARLEY_LIMITS_POLL_MS: '250', HARNAS_LIMITS_POLL_MS: '300' })).toEqual({
+      intervalMs: 250,
+    });
+    expect(limitsOptionsFromEnv({ PARLEY_LIMITS_POLL_MS: '', HARNAS_LIMITS_POLL_MS: '300' })).toEqual({
+      intervalMs: 300,
+    });
+  });
+
   it('границы: меньше 200 мс — 200, больше 2147483647 — 2147483647', () => {
-    expect(limitsOptionsFromEnv({ HARNAS_LIMITS_POLL_MS: '1' })).toEqual({ intervalMs: 200 });
+    expect(limitsOptionsFromEnv({ PARLEY_LIMITS_POLL_MS: '1' })).toEqual({ intervalMs: 200 });
     for (const value of ['0', '-5', '199', '1.5']) {
-      expect(limitsOptionsFromEnv({ HARNAS_LIMITS_POLL_MS: value }), value).toEqual({
+      expect(limitsOptionsFromEnv({ PARLEY_LIMITS_POLL_MS: value }), value).toEqual({
         intervalMs: 200,
       });
     }
     // Больше предела `setInterval` таймер сработал бы каждую миллисекунду.
     for (const value of ['2147483648', '99999999999', '1e12']) {
-      expect(limitsOptionsFromEnv({ HARNAS_LIMITS_POLL_MS: value }), value).toEqual({
+      expect(limitsOptionsFromEnv({ PARLEY_LIMITS_POLL_MS: value }), value).toEqual({
         intervalMs: 2_147_483_647,
       });
     }
@@ -475,7 +485,7 @@ describe('HARNAS_LIMITS_POLL_MS: рычаг E2E окна', () => {
 
   it('нечисловое значение — рычага нет: опрос остаётся раз в 30 секунд', () => {
     for (const value of [undefined, '', '   ', 'часто', '10s', 'NaN', 'Infinity', '-Infinity']) {
-      expect(limitsOptionsFromEnv({ HARNAS_LIMITS_POLL_MS: value }), String(value)).toBeUndefined();
+      expect(limitsOptionsFromEnv({ PARLEY_LIMITS_POLL_MS: value }), String(value)).toBeUndefined();
     }
   });
 });

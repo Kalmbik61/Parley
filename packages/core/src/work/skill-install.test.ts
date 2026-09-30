@@ -55,7 +55,7 @@ async function initRepo(dir: string): Promise<void> {
 
 const canonical = (dir: string): string => path.join(dir, '.agents', 'skills', 'harnas');
 const alias = (dir: string): string => path.join(dir, '.claude', 'skills', 'harnas');
-const receiptFile = (dir: string): string => path.join(dir, '.harnas', 'skills-receipt.json');
+const receiptFile = (dir: string): string => path.join(dir, '.parley', 'skills-receipt.json');
 const readReceipt = async (
   dir: string,
 ): Promise<{ version: number; entries: Record<string, Record<string, string>> }> =>
@@ -320,7 +320,7 @@ describe('чужое и правленное не трогается', () => {
     expect(result.skipped.map((item) => item.reason)).toEqual(['foreign']);
 
     const fresh = path.join(root, 'fresh');
-    await mkdir(path.join(fresh, '.harnas'), { recursive: true });
+    await mkdir(path.join(fresh, '.parley'), { recursive: true });
     await writeFile(receiptFile(fresh), '{это не JSON', 'utf8');
     const installed = await installAgentSkill({ projectPath: fresh });
     expect(installed.skipped).toEqual([]);
@@ -490,8 +490,9 @@ describe('скрыть от git: info/exclude', () => {
     const status = await porcelain(project);
     expect(status).not.toContain('.agents');
     expect(status).not.toContain('.claude');
-    // Учёт лежит в `.harnas/` — он про харнесс, и прятать его от git решает человек (README).
-    expect(status).toContain('.harnas/skills-receipt.json');
+    // Учёт лежит в `.parley/`, а созданный кодом каталог сам прячет себя от git: `.gitignore` со строкой `*` (R5).
+    expect(status).not.toContain('.parley');
+    expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n');
   });
 
   it('файл без перевода строки в конце продолжается с новой строки, чужое не склеивается', async () => {
@@ -711,10 +712,11 @@ describe('рамка: каталоги агентов не трогаются', 
 
       expect(result, dir).toEqual({ skipped: [], written: [] });
       const names = await readdir(inside);
-      for (const own of ['.harnas', '.agents', '.claude']) expect(names, dir).not.toContain(own);
+      for (const own of ['.parley', '.harnas', '.agents', '.claude']) expect(names, dir).not.toContain(own);
     }
     expect(await exists(path.join(home, '.claude', '.claude'))).toBe(false);
     expect(await exists(path.join(home, '.claude', '.agents'))).toBe(false);
+    expect(await exists(path.join(home, '.parley'))).toBe(false);
     expect(await exists(path.join(home, '.harnas'))).toBe(false);
   });
 
@@ -758,8 +760,8 @@ describe('параллельные запуски одного проекта', 
     expect(exclude.split('\n').filter((line) => line === '/.agents/skills/harnas')).toHaveLength(1);
   });
 
-  it('сбой записи учёта (`.harnas` — файл) отказывает вызову, ничего не создав, и очередь идёт дальше', async () => {
-    await writeFile(path.join(project, '.harnas'), 'файл вместо каталога\n', 'utf8');
+  it('сбой записи учёта (`.parley` — файл) отказывает вызову, ничего не создав, и очередь идёт дальше', async () => {
+    await writeFile(path.join(project, '.parley'), 'файл вместо каталога\n', 'utf8');
     const first = installAgentSkill({ projectPath: project });
     const second = installAgentSkill({ projectPath: project });
 
@@ -769,7 +771,7 @@ describe('параллельные запуски одного проекта', 
     expect(await exists(canonical(project))).toBe(false);
     expect(await exists(alias(project))).toBe(false);
 
-    await rm(path.join(project, '.harnas'));
+    await rm(path.join(project, '.parley'));
     const third = await installAgentSkill({ projectPath: project });
     expect(third.skipped).toEqual([]);
     expect(third.written).toEqual([canonical(project), alias(project)]);

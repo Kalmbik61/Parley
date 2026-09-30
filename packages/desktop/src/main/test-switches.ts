@@ -1,9 +1,12 @@
+import { envValue } from '@parley/core';
+
 /**
- * Тестовые переключатели окна (`HARNAS_DOWNLOADS/DIALOGS/NOTIFICATIONS/DROPS/SHELL`) подменяют
- * системные действия журналом main; `HARNAS_LOGIN_SHELL=skip` не даёт окну звать оболочку человека
+ * Тестовые переключатели окна (`PARLEY_DOWNLOADS/DIALOGS/NOTIFICATIONS/DROPS/SHELL`) подменяют
+ * системные действия журналом main; `PARLEY_LOGIN_SHELL=skip` не даёт окну звать оболочку человека
  * за окружением. В собранном приложении случайная переменная окружения иначе молча глушила бы
  * уведомления, ссылки, Finder и загрузки (ревью M5) — поэтому они слушаются только в неупакованном
- * окне (E2E, `pnpm dev`) или при явном `HARNAS_E2E=1` (проверки самой сборки).
+ * окне (E2E, `pnpm dev`) или при явном `PARLEY_E2E=1` (проверки самой сборки). Имена читаются
+ * как все переменные (`envValue`): прежние `HARNAS_*` тоже годятся.
  */
 
 export interface TestSwitches {
@@ -17,13 +20,13 @@ export interface TestSwitches {
 }
 
 export function testSwitches(env: Readonly<Record<string, string | undefined>>, isPackaged: boolean): TestSwitches {
-  const allowed = !isPackaged || env.HARNAS_E2E === '1';
+  const allowed = !isPackaged || envValue(env, 'E2E') === '1';
   return {
-    downloads: allowed && env.HARNAS_DOWNLOADS === 'log',
-    dialogs: allowed && env.HARNAS_DIALOGS === 'log',
-    notifications: allowed && env.HARNAS_NOTIFICATIONS === 'log',
-    drops: allowed && env.HARNAS_DROPS === 'fake',
-    shell: allowed && env.HARNAS_SHELL === 'log',
-    loginShell: allowed && env.HARNAS_LOGIN_SHELL === 'skip',
+    downloads: allowed && envValue(env, 'DOWNLOADS') === 'log',
+    dialogs: allowed && envValue(env, 'DIALOGS') === 'log',
+    notifications: allowed && envValue(env, 'NOTIFICATIONS') === 'log',
+    drops: allowed && envValue(env, 'DROPS') === 'fake',
+    shell: allowed && envValue(env, 'SHELL') === 'log',
+    loginShell: allowed && envValue(env, 'LOGIN_SHELL') === 'skip',
   };
 }

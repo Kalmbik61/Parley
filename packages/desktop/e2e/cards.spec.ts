@@ -11,7 +11,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * по времени создания, и диалог «New workspace» (кусок 7 плана «Organic», спека окна 2026-09-29, 1.7).
  *
  * Внимание двигается настоящими событиями хуков: тест дописывает строки в журнал сессии
- * (`<project>/.harnas/works/<workId>/events/<sessionId>.jsonl`), как это сделал бы хук
+ * (`<project>/.parley/works/<workId>/events/<sessionId>.jsonl`), как это сделал бы хук
  * Claude Code, — stub-агент хуков не зовёт. Указатель держится вне сайдбара: под ним
  * пересортировка отложена (спека 6.2).
  */
@@ -50,7 +50,7 @@ async function createSession(window: Page, workId: string, label: string): Promi
 
 /** Строка в журнал событий сессии — то, что дописал бы хук Claude Code. */
 async function hookEvent(workId: string, sessionId: string, event: Record<string, string>): Promise<void> {
-  const dir = path.join(project, '.harnas', 'works', workId, 'events');
+  const dir = path.join(project, '.parley', 'works', workId, 'events');
   await mkdir(dir, { recursive: true });
   await appendFile(path.join(dir, `${sessionId}.jsonl`), `${JSON.stringify(event)}\n`);
 }
@@ -86,7 +86,7 @@ test.describe('карточки сайдбара и диалог новой ра
   });
 
   async function launch(): Promise<{ electronApp: ElectronApplication; window: Page }> {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();

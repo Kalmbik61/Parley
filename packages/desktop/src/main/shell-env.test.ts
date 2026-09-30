@@ -55,7 +55,7 @@ describe('captureShellEnv: подставной run', () => {
       HTTPS_PROXY: 'http://proxy.local:3128',
       CLAUDE_CONFIG_DIR: '/home/u/.claude-work',
       ANTHROPIC_MODEL: 'opus',
-      HARNAS_HOME: '/home/u/.parley-work',
+      PARLEY_HOME: '/home/u/.parley-work',
       MULTILINE: 'первая строка\nвторая строка=с равно\n',
       KEY_VALUE: 'a=b=c',
       LEADING_EQ: '=значение',
@@ -262,8 +262,8 @@ describe('captureShellEnv: оболочка не помогла', () => {
   });
 });
 
-/** `HARNAS_LOGIN_SHELL=skip` (E2E): `index.ts` передаёт `skip: switches.loginShell`. */
-describe('captureShellEnv: skip (HARNAS_LOGIN_SHELL=skip)', () => {
+/** `PARLEY_LOGIN_SHELL=skip` (E2E): `index.ts` передаёт `skip: switches.loginShell`. */
+describe('captureShellEnv: skip (PARLEY_LOGIN_SHELL=skip)', () => {
   it('оболочку не зовёт: окружение окна как есть, копией, без запасных каталогов и без предупреждения', async () => {
     let called = false;
 
@@ -333,7 +333,7 @@ describe('captureShellEnv: заглушка оболочки в файле', () 
         'PATH="/stub/nvm/bin:/stub/local/bin:/usr/bin"; export PATH',
         'HTTPS_PROXY=http://proxy.local:3128; export HTTPS_PROXY',
         'CLAUDE_CONFIG_DIR=/stub/claude-work; export CLAUDE_CONFIG_DIR',
-        'HARNAS_HOME=/stub/parley-work; export HARNAS_HOME',
+        'PARLEY_HOME=/stub/parley-work; export PARLEY_HOME',
         `MULTILINE='первая строка
 вторая строка=с равно'; export MULTILINE`,
         'KEY_VALUE="a=b=c"; export KEY_VALUE',
@@ -351,7 +351,7 @@ describe('captureShellEnv: заглушка оболочки в файле', () 
     expect(result.env.PATH).toBe('/stub/nvm/bin:/stub/local/bin:/usr/bin');
     expect(result.env.HTTPS_PROXY).toBe('http://proxy.local:3128');
     expect(result.env.CLAUDE_CONFIG_DIR).toBe('/stub/claude-work');
-    expect(result.env.HARNAS_HOME).toBe('/stub/parley-work');
+    expect(result.env.PARLEY_HOME).toBe('/stub/parley-work');
     expect(result.env.MULTILINE).toBe('первая строка\nвторая строка=с равно');
     expect(result.env.KEY_VALUE).toBe('a=b=c');
     expect(result.env.NOT_EXPORTED).toBeUndefined();

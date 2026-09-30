@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { parleyHome } from '@parley/core';
 
-/** Файлы одного хоста: всё лежит в `<HARNAS_HOME>/host/`. */
+/** Файлы одного хоста: всё лежит в `<дом>/host/` (`parleyHome()`). */
 export interface HostPaths {
   dir: string;
   socket: string;

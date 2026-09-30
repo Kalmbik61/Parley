@@ -110,7 +110,7 @@ test.describe('браузер и Design Mode (кусок 9.3b)', () => {
     project = await makeTempProject('browser');
     server = createServer((req, res) => {
       const pathname = new URL(req.url ?? '/', 'http://x').pathname;
-      // Файл для `<a download>` (fix-9b): тело неважно, загрузку журналирует main (HARNAS_DOWNLOADS=log).
+      // Файл для `<a download>` (fix-9b): тело неважно, загрузку журналирует main (PARLEY_DOWNLOADS=log).
       if (pathname === '/file') {
         res.writeHead(200, { 'content-type': 'text/plain' }).end('file');
         return;
@@ -137,7 +137,7 @@ test.describe('браузер и Design Mode (кусок 9.3b)', () => {
 
   /** Окно, работа с сессией S01 (терминал открыт, stub готов) и вкладка браузера на странице фикстуры. */
   async function openPage(extraEnv: Record<string, string> = {}): Promise<{ electronApp: ElectronApplication; window: Page; sessionId: string }> {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom', STUB_BRACKETED: '1', ...extraEnv };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom', STUB_BRACKETED: '1', ...extraEnv };
     app = await electron.launch({ args: [mainEntry], env });
     const electronApp = app;
     // Гость со страницы может позвать alert/confirm: автообработчик Playwright тогда ложно
@@ -217,7 +217,7 @@ test.describe('браузер и Design Mode (кусок 9.3b)', () => {
 
   test('fix-9b: <a download>, нажатая страницей во время выбора, — ⌖ отжата, следующий клик доходит до страницы', async () => {
     // Журнал загрузок вместо диалога сохранения: ответа нет — загрузка отменена, диск не тронут.
-    const { electronApp, window } = await openPage({ HARNAS_DOWNLOADS: 'log' });
+    const { electronApp, window } = await openPage({ PARLEY_DOWNLOADS: 'log' });
     const designMode = window.getByRole('button', { name: 'Design Mode' });
     await designMode.click();
     await expect(designMode).toHaveAttribute('aria-pressed', 'true');

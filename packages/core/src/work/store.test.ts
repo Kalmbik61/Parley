@@ -18,6 +18,7 @@ import {
   renameWork,
   setWorkStatus,
   updateMap,
+  parleyHome,
   WorkNotFoundError,
   workPaths,
   worksIndexPath,
@@ -37,11 +38,11 @@ beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
   project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
   other = await mkdtemp(path.join(tmpdir(), 'parley-other-'));
-  process.env.HARNAS_HOME = home;
+  process.env.PARLEY_HOME = home;
 });
 
 afterEach(async () => {
-  delete process.env.HARNAS_HOME;
+  delete process.env.PARLEY_HOME;
   await Promise.all([home, project, other].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -57,12 +58,77 @@ const exists = async (file: string): Promise<boolean> => {
 };
 
 describe('песочница тестов', () => {
-  it('без HARNAS_HOME дом уходит во временный каталог, а не в настоящий ~/.harnas', () => {
-    // Жёсткое правило задания: настоящие ~/.harnas и ~/.claude тесты не трогают.
+  it('без PARLEY_HOME дом уходит во временный каталог, а не в настоящий ~/.parley', () => {
+    // Жёсткое правило задания: настоящие ~/.parley, ~/.harnas и ~/.claude тесты не трогают.
     // Запись из недосчитанного промиса случается и после `afterEach` (см.
     // `test/sandbox-home.ts`), поэтому проверяем сам запасной путь.
-    delete process.env.HARNAS_HOME;
+    delete process.env.PARLEY_HOME;
     expect(worksIndexPath().startsWith(tmpdir())).toBe(true);
+  });
+});
+
+describe('parleyHome — выбор дома (R4)', () => {
+  const userHome = (): string => home;
+
+  it('PARLEY_HOME — первый', () => {
+    expect(parleyHome({ PARLEY_HOME: '/new', HARNAS_HOME: '/old' }, userHome())).toBe('/new');
+  });
+
+  it('нет PARLEY_HOME — HARNAS_HOME', () => {
+    expect(parleyHome({ HARNAS_HOME: '/old' }, userHome())).toBe('/old');
+  });
+
+  it('пустые переменные — как незаданные', async () => {
+    await mkdir(path.join(home, '.harnas'));
+    expect(parleyHome({ PARLEY_HOME: '', HARNAS_HOME: '' }, userHome())).toBe(path.join(home, '.harnas'));
+    expect(parleyHome({ PARLEY_HOME: '', HARNAS_HOME: '/old' }, userHome())).toBe('/old');
+  });
+
+  it('переменных нет, есть ~/.parley — он, даже если есть и ~/.harnas', async () => {
+    await mkdir(path.join(home, '.parley'));
+    await mkdir(path.join(home, '.harnas'));
+    expect(parleyHome({}, userHome())).toBe(path.join(home, '.parley'));
+  });
+
+  it('переменных нет, ~/.parley нет, есть ~/.harnas — данные человека со времён harnas', async () => {
+    await mkdir(path.join(home, '.harnas'));
+    expect(parleyHome({}, userHome())).toBe(path.join(home, '.harnas'));
+  });
+
+  it('ничего нет — новый ~/.parley, и ничего не создаётся', async () => {
+    expect(parleyHome({}, userHome())).toBe(path.join(home, '.parley'));
+    expect(await readdir(home)).toEqual([]);
+  });
+
+  it('по умолчанию читает process.env и настоящий homedir()', () => {
+    process.env.PARLEY_HOME = '/через/окружение';
+    expect(parleyHome()).toBe('/через/окружение');
+  });
+
+  it('PARLEY_HOME главнее HARNAS_HOME и в process.env; после снятия PARLEY_HOME работает прежняя', () => {
+    const saved = process.env.HARNAS_HOME;
+    process.env.HARNAS_HOME = '/прежний';
+    try {
+      process.env.PARLEY_HOME = '/новый';
+      expect(parleyHome()).toBe('/новый');
+      delete process.env.PARLEY_HOME;
+      expect(parleyHome()).toBe('/прежний');
+    } finally {
+      if (saved === undefined) delete process.env.HARNAS_HOME;
+      else process.env.HARNAS_HOME = saved;
+    }
+  });
+
+  it('индекс работ и файл настроек идут за выбранным домом', () => {
+    delete process.env.PARLEY_HOME;
+    const saved = process.env.HARNAS_HOME;
+    process.env.HARNAS_HOME = home;
+    try {
+      expect(worksIndexPath()).toBe(path.join(home, 'works-index.json'));
+    } finally {
+      if (saved === undefined) delete process.env.HARNAS_HOME;
+      else process.env.HARNAS_HOME = saved;
+    }
   });
 });
 
@@ -77,7 +143,7 @@ describe('createWork', () => {
     expect(map.sessions).toEqual([]);
     expect(map.messages).toEqual([]);
     expect(map.rooms).toEqual([]);
-    expect(paths.dir).toBe(path.join(project, '.harnas', 'works', 'w-0001'));
+    expect(paths.dir).toBe(path.join(project, '.parley', 'works', 'w-0001'));
     expect(await isDirectory(paths.briefs)).toBe(true);
     expect(await isDirectory(paths.artifacts)).toBe(true);
     expect(await readMap(project, 'w-0001')).toEqual(map);
@@ -120,8 +186,8 @@ describe('createWork', () => {
     await updateMap(project, 'w-0001', (map) => {
       addSession(map, { provider: 'claude', label: 'план', task: 't' });
     });
-    // Индекс глобальный и может быть пуст: clone проекта с закоммиченным .harnas,
-    // перенос HARNAS_HOME, копия проекта. Карта w-0001 при этом на диске есть.
+    // Индекс глобальный и может быть пуст: clone проекта с закоммиченным .parley,
+    // перенос PARLEY_HOME, копия проекта. Карта w-0001 при этом на диске есть.
     await rm(worksIndexPath());
 
     const second = await createWork(project, { title: 'Вторая' });
@@ -133,7 +199,7 @@ describe('createWork', () => {
   });
 
   it('запись в индексе появляется только вместе с картой: карта не записалась — индекс не тронут', async () => {
-    // Наблюдатель HARNAS_HOME читает список по записи индекса: запись без карты он
+    // Наблюдатель PARLEY_HOME читает список по записи индекса: запись без карты он
     // пропустил бы, и первая работа нового проекта не появилась бы у хоста (кусок 3.5).
     const lock = workPaths(project, 'w-0001').lock;
     await mkdir(path.dirname(lock), { recursive: true });
@@ -261,7 +327,7 @@ describe('updateMap', () => {
     await createWork(project, { title: 'Авторизация' });
     const writer = (prefix: string) =>
       run(process.execPath, ['--import', tsxLoader, writerScript, project, 'w-0001', prefix, '8'], {
-        env: { ...process.env, HARNAS_HOME: home },
+        env: { ...process.env, PARLEY_HOME: home },
       });
 
     await Promise.all([writer('a'), writer('b')]);
@@ -326,7 +392,7 @@ describe('updateMap', () => {
         process.execPath,
         ['--import', tsxLoader, writerScript, project, 'new-work', title, '0'],
         {
-          env: { ...process.env, HARNAS_HOME: home },
+          env: { ...process.env, PARLEY_HOME: home },
         },
       );
 

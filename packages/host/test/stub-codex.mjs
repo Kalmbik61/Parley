@@ -122,6 +122,8 @@ if (process.env.STUB_CODEX_ARGS_FILE !== undefined) {
       argv: process.argv,
       cwd: process.cwd(),
       env: {
+        PARLEY_WORK_DIR: process.env.PARLEY_WORK_DIR ?? null,
+        PARLEY_SESSION_ID: process.env.PARLEY_SESSION_ID ?? null,
         HARNAS_WORK_DIR: process.env.HARNAS_WORK_DIR ?? null,
         HARNAS_SESSION_ID: process.env.HARNAS_SESSION_ID ?? null,
       },

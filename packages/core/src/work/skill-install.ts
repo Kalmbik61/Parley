@@ -17,6 +17,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { SKILL_MD, SKILL_NAME } from './skill.js';
+import { ensureStateDir, stateDir } from './state-dir.js';
 
 const run = promisify(execFile);
 
@@ -31,7 +32,8 @@ const run = promisify(execFile);
  *   `.agents/skills` он не читает. Симлинк нельзя (файловая система, права) — копия, и это записано в учёте.
  * - Корни — папка проекта и worktree сессии: Codex и Claude Code ищут навыки только до корня своей
  *   рабочей копии, а worktree — другая копия. В `~/.claude`, `~/.codex` и `~/.agents` ничего не пишется.
- * - Учёт своего — `<проект>/.harnas/skills-receipt.json`: путь и его содержимое. Что в учёте и не тронуто
+ * - Учёт своего — `skills-receipt.json` в каталоге состояния проекта (`stateDir`: `.parley/`, а у проекта со
+ *   старым `.harnas/` — он): путь и его содержимое. Что в учёте и не тронуто
  *   человеком — своё, его обновляют; что уже есть, а в учёте нет, — чужое, к нему не прикасаются.
  * - От git всё скрыто строками в `info/exclude` общего каталога репозитория: файлы не попадают ни в
  *   `git status`, ни в «Commit all» окна.
@@ -81,7 +83,7 @@ export interface SkillInstallResult {
 }
 
 export interface SkillInstallOptions {
-  /** Папка проекта: её корень получает скилл, и в её `.harnas/` лежит учёт. */
+  /** Папка проекта: её корень получает скилл, и в её каталоге состояния лежит учёт. */
   projectPath: string;
   /** Worktree сессии, если он уже есть на диске; его корень получает скилл тоже. */
   worktreePath?: string;
@@ -156,9 +158,10 @@ async function readReceipt(file: string): Promise<Receipt> {
   return receipt;
 }
 
-async function writeReceipt(file: string, receipt: Receipt): Promise<void> {
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeAtomic(file, `${JSON.stringify(receipt, null, 2)}\n`);
+async function writeReceipt(pass: Pass): Promise<void> {
+  // Каталог состояния заводит `ensureStateDir`: новый `.parley` получает свой `.gitignore` (R5).
+  await ensureStateDir(pass.projectPath);
+  await writeAtomic(pass.receiptFile, `${JSON.stringify(pass.receipt, null, 2)}\n`);
 }
 
 /**
@@ -193,8 +196,9 @@ async function isAgentHome(root: string): Promise<boolean> {
   });
 }
 
-/** Состояние одного прохода: учёт с его файлом, что он изменился, и накопленный результат. */
+/** Состояние одного прохода: проект, учёт с его файлом, что он изменился, и накопленный результат. */
 interface Pass {
+  projectPath: string;
   receipt: Receipt;
   receiptFile: string;
   dirty: boolean;
@@ -215,7 +219,7 @@ function record(pass: Pass, target: string, entry: ReceiptEntry): void {
  */
 async function claim(pass: Pass, target: string, entry: ReceiptEntry): Promise<void> {
   pass.receipt.entries[target] = entry;
-  await writeReceipt(pass.receiptFile, pass.receipt);
+  await writeReceipt(pass);
 }
 
 function skip(pass: Pass, target: string, reason: SkillSkipReason): void {
@@ -396,7 +400,7 @@ function serialized<T>(key: string, task: () => Promise<T>): Promise<T> {
  * бы пропавший worktree пустой папкой.
  */
 export function installAgentSkill(options: SkillInstallOptions): Promise<SkillInstallResult> {
-  const receiptFile = path.join(options.projectPath, '.harnas', 'skills-receipt.json');
+  const receiptFile = path.join(stateDir(options.projectPath), 'skills-receipt.json');
   return serialized(receiptFile, () => installNow(options, receiptFile));
 }
 
@@ -405,6 +409,7 @@ async function installNow(
   receiptFile: string,
 ): Promise<SkillInstallResult> {
   const pass: Pass = {
+    projectPath: options.projectPath,
     receipt: await readReceipt(receiptFile),
     receiptFile,
     dirty: false,
@@ -443,7 +448,7 @@ async function saveReceipt(pass: Pass): Promise<void> {
       pass.dirty = true;
     }
   }
-  if (pass.dirty) await writeReceipt(pass.receiptFile, pass.receipt);
+  if (pass.dirty) await writeReceipt(pass);
 }
 
 /**

@@ -10,7 +10,7 @@ import { lstat, mkdtemp, readdir, realpath, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Worker } from 'node:worker_threads';
-import { checkoutGitDir, joinDiffFiles, parseNameStatusZ, parseNumstat } from '@parley/core';
+import { checkoutGitDir, joinDiffFiles, parseNameStatusZ, parseNumstat, STATE_DIRS } from '@parley/core';
 import type { DiffFile, FileList, FileRoot, GitStatusLetter, GrepQuery, GrepResult, TextFile } from '../../shared/files-types.js';
 import { rootKey } from '../../shared/work-keys.js';
 import { HostError } from '../host-connection.js';
@@ -51,8 +51,8 @@ const NO_FSMONITOR = ['-c', 'core.fsmonitor=false'];
 const NO_SUBMODULE_WALK = '--ignore-submodules=dirty';
 /** Ключи фильтров, которые исполняют чтения (`filterOverrides`). */
 const FILTER_KEYS = '^filter\\..+\\.(clean|process)$';
-/** `.harnas/` проекта — карты, почта и журналы core: ни ⌘P, ни поиска, ни статуса (спека 10.1). */
-const PATHSPEC = ['--', '.', ':(exclude).harnas'];
+/** Каталог состояния проекта (`.parley/`, прежний `.harnas/`) — карты, почта и журналы core: ни ⌘P, ни поиска, ни статуса (спека 10.1). */
+const PATHSPEC = ['--', '.', ...STATE_DIRS.map((dir) => `:(exclude)${dir}`)];
 /** Обход не-git корня: до 50 000 файлов (таблица чисел). */
 export const WALK_LIMIT = 50_000;
 /** Предел воркера поиска (план). */
@@ -67,8 +67,8 @@ export const GREP_LINE_BYTES = 64 * 1024;
 export const GREP_TOTAL_BYTES = 32 * 1024 * 1024;
 /** stderr git нужен только для консоли — дальше не копим. */
 const STDERR_LIMIT = 64 * 1024;
-/** Каталоги, в которые обход не заходит: зависимости, git и карты core. */
-const WALK_SKIP = new Set(['node_modules', '.git', '.harnas']);
+/** Каталоги, в которые обход не заходит: зависимости, git и карты core (оба имени каталога состояния). */
+const WALK_SKIP = new Set(['node_modules', '.git', ...STATE_DIRS]);
 
 function errorCode(error: unknown): unknown {
   return (error as { code?: unknown } | null)?.code;
@@ -422,7 +422,7 @@ function insideReal(base: string, real: string): string | null {
 }
 
 /**
- * Не-git корень: обход по lstat до 50 000 обычных файлов, без node_modules, .git и .harnas; симлинки — правила ниже.
+ * Не-git корень: обход по lstat до 50 000 обычных файлов, без node_modules, .git и каталога состояния; симлинки — правила ниже.
  * Отмена и бюджет времени проверяются на каждом каталоге и у каждой ссылки (у ссылки — realpath и stat,
  * их в одной папке бывают десятки тысяч): огромный корень иначе держал бы пул fs main без предела, а
  * `cancel` и закрытие окна не останавливали бы начатый обход. Корень читается всегда — бюджет 0 даёт
@@ -459,7 +459,7 @@ export async function walkFiles(
       else if (entry.isFile()) out.push(rel);
       else if (entry.isSymbolicLink()) {
         if (stopped()) return { paths: out, truncated: true };
-        // Файл-ссылка — только если цель — обычный файл внутри корня и не в `.git`/`.harnas`:
+        // Файл-ссылка — только если цель — обычный файл внутри корня и не в `.git` и не в каталоге состояния:
         // ссылка `docs/home → ~` иначе отдала бы окну `~/.aws/credentials`.
         try {
           const real = await realpath(path.join(base, rel));
@@ -480,8 +480,8 @@ export async function walkFiles(
 const LSTAT_CONCURRENCY = 16;
 
 /**
- * Пути `git ls-files` без ссылок, чья цель (realpath) лежит в `.git` или `.harnas` корня: pathspec
- * исключает саму папку, но не ссылку на неё, и ⌘P показывал бы `link.json → .harnas/…`, которую
+ * Пути `git ls-files` без ссылок, чья цель (realpath) лежит в `.git` или в каталоге состояния корня: pathspec
+ * исключает саму папку, но не ссылку на неё, и ⌘P показывал бы `link.json → .parley/…`, которую
  * обход без git уже прячет (раунд fix-7.1b, п.6). Вид берётся с диска (lstat), а не из индекса:
  * у новых файлов режима нет, а отслеживаемый файл агент мог заменить ссылкой.
  */
@@ -495,7 +495,7 @@ export async function dropHiddenLinks(root: string, paths: string[]): Promise<st
       try {
         if (!(await lstat(abs)).isSymbolicLink()) continue;
         const inside = insideReal(base, await realpath(abs));
-        if (inside !== null && inside.split(path.sep).some((s) => s.toLowerCase() === '.git' || s.toLowerCase() === '.harnas')) {
+        if (inside !== null && inside.split(path.sep).some((s) => s.toLowerCase() === '.git' || STATE_DIRS.includes(s.toLowerCase()))) {
           keep[i] = false;
         }
       } catch {

@@ -11,13 +11,25 @@ import {
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { LIMITS_DIR, limitsFile } from '../limits.js';
+import { envValue, HOME_DIR, LEGACY_HOME_DIR, type Env } from '../names.js';
 import { bumpWorkId, nextWorkId, parseMap } from './map.js';
+import { ensureStateDir, isDirectorySync, stateDir } from './state-dir.js';
 import type { WorkIndexEntry, WorkMap, WorksIndex, WorkStatus } from './types.js';
 
-/** Домашняя папка харнесса. Переопределяется через окружение — этим живут тесты. */
-export function parleyHome(): string {
-  const fromEnv = process.env.HARNAS_HOME;
-  return fromEnv !== undefined && fromEnv !== '' ? fromEnv : path.join(homedir(), '.harnas');
+/**
+ * Домашняя папка Parley (R4), первое подходящее:
+ * 1. `PARLEY_HOME`; 2. `HARNAS_HOME` — этим живут тесты и второй дом;
+ * 3. `~/.parley`, если он есть; 4. `~/.harnas`, если он есть — данные человека со времён имени harnas;
+ * 5. иначе `~/.parley`.
+ * Пустая переменная — то же, что незаданная. `env` и `userHome` подменяет тест.
+ */
+export function parleyHome(env: Env = process.env, userHome: string = homedir()): string {
+  const explicit = envValue(env, 'HOME');
+  if (explicit !== undefined) return explicit;
+  const current = path.join(userHome, HOME_DIR);
+  if (isDirectorySync(current)) return current;
+  const legacy = path.join(userHome, LEGACY_HOME_DIR);
+  return isDirectorySync(legacy) ? legacy : current;
 }
 
 /** Глобальный индекс работ: все работы всех проектов. */
@@ -42,9 +54,9 @@ export interface WorkPaths {
   settings: string;
 }
 
-/** Раскладка работы на диске (спецификация, раздел 2). */
+/** Раскладка работы на диске (спецификация, раздел 2) в каталоге состояния проекта (`stateDir`). */
 export function workPaths(projectPath: string, workId: string): WorkPaths {
-  const dir = path.join(projectPath, '.harnas', 'works', workId);
+  const dir = path.join(stateDir(projectPath), 'works', workId);
   return {
     dir,
     map: path.join(dir, 'map.json'),
@@ -178,7 +190,7 @@ export async function deleteSessionFiles(
 }
 
 /**
- * Удаляет работу целиком: каталог `.harnas/works/<id>` со всем содержимым,
+ * Удаляет работу целиком: каталог `<состояние>/works/<id>` со всем содержимым,
  * включая артефакты, и её запись в глобальном индексе. Каталога уже нет —
  * не ошибка: запись из индекса всё равно снимается.
  */
@@ -282,8 +294,8 @@ export interface NewWork {
  * Создаёт работу: резервирует id в глобальном индексе (под его блокировкой,
  * поэтому два процесса не получат один номер), раскладывает каталоги и пишет карту.
  * Индекс — не единственный источник занятых номеров: он глобальный и может быть
- * пустым, когда карты в проекте уже лежат (clone проекта с закоммиченным `.harnas/`,
- * перенос `HARNAS_HOME`, копия проекта). Поэтому занятые на диске id пропускаются,
+ * пустым, когда карты в проекте уже лежат (clone проекта с закоммиченным каталогом состояния,
+ * перенос дома, копия проекта). Поэтому занятые на диске id пропускаются,
  * а сама запись идёт эксклюзивным `wx` — чужую карту не затираем никогда.
  */
 export async function createWork(
@@ -308,7 +320,7 @@ export async function createWork(
   };
 
   // Карта пишется под блокировкой индекса и раньше самого индекса: наблюдатель
-  // HARNAS_HOME перечитывает список по записи индекса, и запись без карты он молча
+  // дома перечитывает список по записи индекса, и запись без карты он молча
   // пропустил бы. За каталогом нового проекта ещё никто не следит, так что без
   // этого порядка первая работа проекта не появилась бы в списке до следующей
   // записи какой-нибудь карты. Сбой записи карты — и индекс не тронут.
@@ -317,6 +329,8 @@ export async function createWork(
     while (await exists(workPaths(projectPath, id).map)) id = bumpWorkId(id);
     map.work.id = id;
 
+    // Каталог состояния — до путей работы: новый `.parley` получает свой `.gitignore` (R5).
+    await ensureStateDir(projectPath);
     const paths = workPaths(projectPath, id);
     await mkdir(paths.briefs, { recursive: true });
     await mkdir(paths.artifacts, { recursive: true });

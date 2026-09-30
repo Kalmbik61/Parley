@@ -13,7 +13,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * Переход по уведомлению и «просмотрено» (кусок 4.3, спека 7.2, 7.4): цель приходит событием
  * `app:focus-target`, как от клика по уведомлению. Фокус окна для «просмотрено» ведут события
  * `focus`/`blur` рендерера (4.2) — их тест шлёт сам, фокус ОС между параллельными окнами гуляет.
- * Уведомления main пишет в журнал (`HARNAS_NOTIFICATIONS=log`, `playwright.config.ts`):
+ * Уведомления main пишет в журнал (`PARLEY_NOTIFICATIONS=log`, `playwright.config.ts`):
  * настоящее всплыло бы на экране человека.
  *
  * Внимание двигается настоящими событиями хуков, как в `cards.spec.ts`: stub-агент хуков не зовёт.
@@ -34,7 +34,7 @@ async function call<T>(window: Page, method: string, params: unknown): Promise<T
 
 /** Строка в журнал событий сессии — то, что дописал бы хук Claude Code. */
 async function hookEvent(workId: string, sessionId: string, event: Record<string, string>): Promise<void> {
-  const dir = path.join(project, '.harnas', 'works', workId, 'events');
+  const dir = path.join(project, '.parley', 'works', workId, 'events');
   await mkdir(dir, { recursive: true });
   await appendFile(path.join(dir, `${sessionId}.jsonl`), `${JSON.stringify(event)}\n`);
 }
@@ -57,7 +57,7 @@ test.describe('внимание в строке статуса (кусок 4.2)'
   });
 
   test('сессия ждёт разрешения — «1 needs you»; клик открывает вкладку её терминала', async () => {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();
@@ -149,7 +149,7 @@ test.describe('переход по уведомлению и «просмотр�
   });
 
   async function launch(): Promise<{ electronApp: ElectronApplication; window: Page }> {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom', HARNAS_NOTIFICATIONS: 'log' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom', PARLEY_NOTIFICATIONS: 'log' };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();

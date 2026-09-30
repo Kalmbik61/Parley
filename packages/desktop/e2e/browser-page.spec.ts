@@ -111,7 +111,7 @@ test.describe('страница в окне (кусок 9.2b)', () => {
   });
 
   test('клик в страницу левой группы — ⌘W из неё закрывает её вкладку; ⌘F — поиск, ⌘+ — масштаб; window.open — вкладка рядом', async () => {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     app = await electron.launch({ args: [mainEntry], env });
     const electronApp = app;
     const window = await app.firstWindow();

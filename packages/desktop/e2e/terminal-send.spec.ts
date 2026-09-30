@@ -11,7 +11,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * `STUB_BRACKETED=1`: включает bracketed paste и печатает вставку как `PASTE<<текст>>`.
  *
  * Буфер обмена человека тесты не читают и не пишут (решение контролёра 5.4):
- * - скриншот — `HARNAS_DROPS=fake`: main сохраняет в `drops/` фиксированную картинку 1×1
+ * - скриншот — `PARLEY_DROPS=fake`: main сохраняет в `drops/` фиксированную картинку 1×1
  *   вместо картинки буфера, а событие `paste` с картинкой — синтетическое `ClipboardEvent`
  *   со своим `DataTransfer`;
  * - файл из Finder — синтетические `dragover`/`drop` с `File` из временного каталога. `File`
@@ -81,10 +81,10 @@ test.describe('отправка агенту из окна (кусок 5.4)', ()
     project = await makeTempProject('terminal-send');
     const env = {
       ...process.env,
-      HARNAS_HOME: home,
-      HARNAS_CLAUDE_BIN: stubAgent,
-      HARNAS_TERMINAL_RENDERER: 'dom',
-      HARNAS_DROPS: 'fake',
+      PARLEY_HOME: home,
+      PARLEY_CLAUDE_BIN: stubAgent,
+      PARLEY_TERMINAL_RENDERER: 'dom',
+      PARLEY_DROPS: 'fake',
       STUB_BRACKETED: '1',
     };
     app = await electron.launch({ args: [mainEntry], env });
@@ -256,9 +256,9 @@ test.describe('отправка в сессию без хуков с запус�
     project = await makeTempProject('terminal-send-nohooks');
     const env = {
       ...process.env,
-      HARNAS_HOME: home,
-      HARNAS_CLAUDE_BIN: stubAgent,
-      HARNAS_TERMINAL_RENDERER: 'dom',
+      PARLEY_HOME: home,
+      PARLEY_CLAUDE_BIN: stubAgent,
+      PARLEY_TERMINAL_RENDERER: 'dom',
       STUB_BRACKETED: '1',
       STUB_NO_HOOKS: '1',
     };

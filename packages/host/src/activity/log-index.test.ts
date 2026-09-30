@@ -101,22 +101,22 @@ describe('createLogIndex', () => {
     });
   });
 
-  it('без явных корней читает каталоги из HARNAS_CLAUDE_PROJECTS_DIR/HARNAS_CODEX_SESSIONS_DIR (lane-r3, п. 1)', async () => {
+  it('без явных корней читает каталоги из PARLEY_CLAUDE_PROJECTS_DIR/PARLEY_CODEX_SESSIONS_DIR (lane-r3, п. 1)', async () => {
     // Так E2E окна уводят настоящий хост от истории человека: корни хосту не передать иначе.
     await writeClaudeSession(
       's-01',
       `${JSON.stringify({ type: 'custom-title', customTitle: 'из переменной', sessionId: 's-01' })}\n`,
     );
-    process.env.HARNAS_CLAUDE_PROJECTS_DIR = claudeRoot;
-    process.env.HARNAS_CODEX_SESSIONS_DIR = codexRoot;
+    process.env.PARLEY_CLAUDE_PROJECTS_DIR = claudeRoot;
+    process.env.PARLEY_CODEX_SESSIONS_DIR = codexRoot;
     try {
       const created = createLogIndex();
       indexes.push(created);
       await created.start();
       expect(created.index(session({ providerSessionId: 's-01' }))?.title).toBe('из переменной');
     } finally {
-      delete process.env.HARNAS_CLAUDE_PROJECTS_DIR;
-      delete process.env.HARNAS_CODEX_SESSIONS_DIR;
+      delete process.env.PARLEY_CLAUDE_PROJECTS_DIR;
+      delete process.env.PARLEY_CODEX_SESSIONS_DIR;
     }
   });
 

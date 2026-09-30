@@ -19,19 +19,19 @@ const REF: SessionRef = { projectPath: PROJECT, workId: 'w-0001', sessionId: 's-
 
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'parley-agent-skills-'));
-  savedHome = process.env['HARNAS_HOME'];
-  savedFlag = process.env['HARNAS_AGENT_SKILLS'];
-  process.env['HARNAS_HOME'] = home;
-  delete process.env['HARNAS_AGENT_SKILLS'];
+  savedHome = process.env['PARLEY_HOME'];
+  savedFlag = process.env['PARLEY_AGENT_SKILLS'];
+  process.env['PARLEY_HOME'] = home;
+  delete process.env['PARLEY_AGENT_SKILLS'];
   broadcasts = [];
   logs = [];
 });
 
 afterEach(async () => {
-  if (savedHome === undefined) delete process.env['HARNAS_HOME'];
-  else process.env['HARNAS_HOME'] = savedHome;
-  if (savedFlag === undefined) delete process.env['HARNAS_AGENT_SKILLS'];
-  else process.env['HARNAS_AGENT_SKILLS'] = savedFlag;
+  if (savedHome === undefined) delete process.env['PARLEY_HOME'];
+  else process.env['PARLEY_HOME'] = savedHome;
+  if (savedFlag === undefined) delete process.env['PARLEY_AGENT_SKILLS'];
+  else process.env['PARLEY_AGENT_SKILLS'] = savedFlag;
   await rm(home, { recursive: true, force: true });
 });
 
@@ -96,9 +96,9 @@ describe('установщик скилла: настройка agentSkills', ()
     expect(broadcasts).toEqual([]);
   });
 
-  it('выключена переменной HARNAS_AGENT_SKILLS=0 — она перекрывает файл', async () => {
+  it('выключена переменной PARLEY_AGENT_SKILLS=0 — она перекрывает файл', async () => {
     await saveConfig({ agentSkills: true });
-    process.env['HARNAS_AGENT_SKILLS'] = '0';
+    process.env['PARLEY_AGENT_SKILLS'] = '0';
     const { calls, install } = fakeInstall();
 
     await createSkillInstaller(fakeHost(), install)(REF, null);

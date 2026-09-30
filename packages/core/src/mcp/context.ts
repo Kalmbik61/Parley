@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { envName, envValue, LEGACY_STATE_DIR, STATE_DIR, STATE_DIRS } from '../names.js';
 
 /**
  * Кто звонит и куда писать. Сервер живёт по одному процессу на сессию и узнаёт
@@ -9,13 +10,13 @@ export interface McpContext {
   /** Корень проекта: пути артефактов в карте отсчитываются от него. */
   projectPath: string;
   workId: string;
-  /** `<проект>/.harnas/works/<work-id>/` — то, что пришло в `HARNAS_WORK_DIR`. */
+  /** `<проект>/.parley/works/<work-id>/` (или прежний `.harnas`) — то, что пришло в `PARLEY_WORK_DIR`. */
   workDir: string;
   /** `null` — сессия не создана харнессом: доступен только `get_map`. */
   sessionId: string | null;
   /**
    * Будить ли свою сессию звонком через channel (разговор агентов, 4.2).
-   * Включает харнесс переменной `HARNAS_CHANNEL`, когда запустил агента с
+   * Включает харнесс переменной `PARLEY_CHANNEL`, когда запустил агента с
    * флагом канала; без сессии звонить всё равно некому.
    */
   channel: boolean;
@@ -33,35 +34,35 @@ export interface McpContext {
   worktreeRoot?: string;
 }
 
-const value = (env: NodeJS.ProcessEnv, name: string): string | null => {
-  const raw = env[name];
-  return raw === undefined || raw === '' ? null : raw;
-};
-
 /**
  * Разбирает окружение сервера. Каталог работы обязан лежать в раскладке
- * `<проект>/.harnas/works/<work-id>/`: из неё берётся корень проекта, а по нему
- * проверяются пути артефактов. Чужой каталог — ошибка при старте, а не запись
- * карты неизвестно куда.
+ * `<проект>/.parley/works/<work-id>/` — или в прежней `<проект>/.harnas/works/<work-id>/`, с которой
+ * запущены старые сессии: из неё берётся корень проекта, а по нему проверяются пути артефактов.
+ * Чужой каталог — ошибка при старте, а не запись карты неизвестно куда.
+ *
+ * Переменные читаются под обоими именами (`PARLEY_*`, запасные `HARNAS_*`): сохранённый конфиг
+ * MCP старой сессии задаёт только прежние.
  */
 export function contextFromEnv(env: NodeJS.ProcessEnv = process.env): McpContext {
-  const raw = value(env, 'HARNAS_WORK_DIR');
-  if (raw === null) throw new Error('не задан HARNAS_WORK_DIR — каталог работы неизвестен');
+  const raw = envValue(env, 'WORK_DIR');
+  if (raw === undefined) throw new Error('не задан PARLEY_WORK_DIR — каталог работы неизвестен');
 
   const workDir = path.resolve(raw);
   const works = path.dirname(workDir);
-  const harnas = path.dirname(works);
-  if (path.basename(works) !== 'works' || path.basename(harnas) !== '.harnas') {
-    throw new Error(`HARNAS_WORK_DIR=${workDir} не похож на .harnas/works/<work-id>`);
+  const state = path.dirname(works);
+  if (path.basename(works) !== 'works' || !STATE_DIRS.includes(path.basename(state))) {
+    throw new Error(
+      `${envName(env, 'WORK_DIR')}=${workDir} не похож на ${STATE_DIR}/works/<work-id> (или ${LEGACY_STATE_DIR}/works/<work-id>)`,
+    );
   }
 
   return {
-    projectPath: path.dirname(harnas),
+    projectPath: path.dirname(state),
     workId: path.basename(workDir),
     workDir,
-    sessionId: value(env, 'HARNAS_SESSION_ID'),
+    sessionId: envValue(env, 'SESSION_ID') ?? null,
     // Переменную пишет сам харнесс ровно со значением `1`: чужое значение —
     // не наша настройка, и звонок остаётся выключенным.
-    channel: value(env, 'HARNAS_CHANNEL') === '1',
+    channel: envValue(env, 'CHANNEL') === '1',
   };
 }

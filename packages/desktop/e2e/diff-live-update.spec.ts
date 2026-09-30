@@ -14,7 +14,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * повода окно не трогает (так по спеке). После выхода из `working` вкладка «Изменения» (счётчики,
  * секции, «Branch commits») и открытая вкладка диффа (стороны живого редактора, прокрутка
  * сохранена) обновляются сами, без Refresh; вкладка диффа коммита — нет.
- * Git-репозиторий и worktree сессии — только во временных каталогах (`HARNAS_WORKTREE_ROOT`).
+ * Git-репозиторий и worktree сессии — только во временных каталогах (`PARLEY_WORKTREE_ROOT`).
  */
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -67,10 +67,10 @@ test.describe('живой повод обновления «Изменений»
     test.setTimeout(120_000);
     const env = {
       ...process.env,
-      HARNAS_HOME: home,
-      HARNAS_CLAUDE_BIN: stubAgent,
-      HARNAS_TERMINAL_RENDERER: 'dom',
-      HARNAS_WORKTREE_ROOT: path.join(home, 'worktrees'),
+      PARLEY_HOME: home,
+      PARLEY_CLAUDE_BIN: stubAgent,
+      PARLEY_TERMINAL_RENDERER: 'dom',
+      PARLEY_WORKTREE_ROOT: path.join(home, 'worktrees'),
     };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
@@ -153,7 +153,7 @@ test.describe('живой повод обновления «Изменений»
 
     const key = `${project} ${workId}`;
     const state = (name: string) => window.locator(`[data-work-key="${key}"]:not([role="tab"]) [data-session-id="${sessionId}"] [data-state="${name}"]`);
-    const events = path.join(project, '.harnas', 'works', workId, 'events');
+    const events = path.join(project, '.parley', 'works', workId, 'events');
     await mkdir(events, { recursive: true });
     const hook = (event: Record<string, string>) => appendFile(path.join(events, `${sessionId}.jsonl`), `${JSON.stringify(event)}\n`);
 

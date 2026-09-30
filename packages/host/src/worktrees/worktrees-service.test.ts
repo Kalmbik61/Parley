@@ -54,10 +54,10 @@ beforeEach(async () => {
   project = await mkdtemp(path.join(tmpdir(), 'parley-worktrees-svc-project-'));
   await run('git', ['init', '-b', 'main', project]);
   await setIdentity(project);
-  // `.harnas/works/<id>/` живёт прямо в каталоге проекта (спецификация
+  // `.parley/works/<id>/` живёт прямо в каталоге проекта (спецификация
   // 2026-09-02, координация, раздел про `.gitignore`) — без игнора он сделал бы
   // «чистую» базу «грязной» самим своим появлением, а не правкой теста.
-  await writeFile(path.join(project, '.gitignore'), '.harnas/\n', 'utf8');
+  await writeFile(path.join(project, '.gitignore'), '.parley/\n', 'utf8');
   await writeFile(path.join(project, 'README.md'), 'старт\n', 'utf8');
   await git(project, ['add', '.gitignore', 'README.md']);
   await git(project, ['commit', '-m', 'первый']);

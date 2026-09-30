@@ -108,7 +108,7 @@ beforeEach(async () => {
   broadcasts = [];
   // Настоящий бинарь в автотестах не запускается никогда — заглушка стоит
   // под именем claude через тот же оверрайд, что и в проде (`findRunnerBinary`).
-  setEnv('HARNAS_CLAUDE_BIN', STUB);
+  setEnv('PARLEY_CLAUDE_BIN', STUB);
 });
 
 afterEach(async () => {
@@ -132,7 +132,13 @@ async function tempWorktreeRoot(): Promise<string> {
 interface StubArgs {
   argv: string[];
   cwd: string;
-  env: { HARNAS_WORK_DIR: string | null; HARNAS_SESSION_ID: string | null; CLAUDE_CODE_SESSION_ID: string | null };
+  env: {
+    PARLEY_WORK_DIR: string | null;
+    PARLEY_SESSION_ID: string | null;
+    HARNAS_WORK_DIR: string | null;
+    HARNAS_SESSION_ID: string | null;
+    CLAUDE_CODE_SESSION_ID: string | null;
+  };
 }
 
 async function readArgs(file: string): Promise<StubArgs> {
@@ -174,7 +180,7 @@ describe('create() + launch(): argv и окружение процесса', () 
     await service.stop(ref);
   });
 
-  it('окружение процесса: HARNAS_WORK_DIR/HARNAS_SESSION_ID есть, CLAUDE_CODE_SESSION_ID — нет, даже если задан у хоста', async () => {
+  it('окружение процесса: оба набора PARLEY_* и HARNAS_* (R3) есть, CLAUDE_CODE_SESSION_ID — нет, даже если задан у хоста', async () => {
     const work = await createWork(project, { title: 'Работа', goal: '' });
     const argsFile = await tempArgsFile();
     setEnv('STUB_ARGS_FILE', argsFile);
@@ -193,6 +199,9 @@ describe('create() + launch(): argv и окружение процесса', () 
     });
 
     const args = await readArgs(argsFile);
+    expect(args.env.PARLEY_WORK_DIR).toBe(workPaths(project, work.work.id).dir);
+    expect(args.env.PARLEY_SESSION_ID).toBe(ref.sessionId);
+    // Прежние имена — для старых скриптов и сборок: значения те же.
     expect(args.env.HARNAS_WORK_DIR).toBe(workPaths(project, work.work.id).dir);
     expect(args.env.HARNAS_SESSION_ID).toBe(ref.sessionId);
     expect(args.env.CLAUDE_CODE_SESSION_ID).toBeNull();
@@ -302,7 +311,7 @@ describe('create(): модель и усилие из диалога (дизай
   });
 
   it('codex: --model и -c model_reasoning_effort в аргументах', async () => {
-    setEnv('HARNAS_CODEX_BIN', STUB);
+    setEnv('PARLEY_CODEX_BIN', STUB);
     const argv = await launched('codex', { model: 'gpt-6.1-sol', effort: 'medium' });
 
     expect(argv[argv.indexOf('--model') + 1]).toBe('gpt-6.1-sol');
@@ -310,7 +319,7 @@ describe('create(): модель и усилие из диалога (дизай
   });
 
   it('codex: итоговые флаги запуска — свои настройки харнесса, без обходов', async () => {
-    setEnv('HARNAS_CODEX_BIN', STUB);
+    setEnv('PARLEY_CODEX_BIN', STUB);
     const argv = await launched('codex', {});
 
     // Не считая бинаря и скрипта заглушки: то, что получил бы настоящий codex.
@@ -329,7 +338,7 @@ describe('create(): модель и усилие из диалога (дизай
   });
 
   it('процесс стартует с provider из карты: codex — для разбора терминала, claude — без него', async () => {
-    setEnv('HARNAS_CODEX_BIN', STUB);
+    setEnv('PARLEY_CODEX_BIN', STUB);
     setEnv('STUB_ARGS_FILE', await tempArgsFile());
     const work = await createWork(project, { title: 'Работа', goal: '' });
     const pty = createPtyManager(fakeHost());
@@ -364,9 +373,9 @@ describe('create(): модель и усилие из диалога (дизай
     const work = await createWork(project, { title: 'Работа', goal: '' });
     const argsFile = await tempArgsFile();
     setEnv('STUB_ARGS_FILE', argsFile);
-    setEnv('HARNAS_CODEX_BIN', STUB);
+    setEnv('PARLEY_CODEX_BIN', STUB);
     const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
-    const worksDir = path.join(project, '.harnas', 'works');
+    const worksDir = path.join(project, '.parley', 'works');
     const worksBefore = await readdir(worksDir);
 
     const create = (workId: string | null, provider: string, task: string, model: string) =>
@@ -392,7 +401,7 @@ describe('create(): модель и усилие из диалога (дизай
       const home = path.join(project, 'свой-дом-харнесса');
       await mkdir(home, { recursive: true });
       await writeFile(path.join(home, 'providers.json'), JSON.stringify(data), 'utf8');
-      setEnv('HARNAS_HOME', home);
+      setEnv('PARLEY_HOME', home);
     }
 
     it('модель из своего списка доезжает до команды, а из встроенного, которого в нём нет, — bad_request', async () => {
@@ -407,7 +416,7 @@ describe('create(): модель и усилие из диалога (дизай
       await withProviders({
         smart: { badge: 'Smart', command: 'smart', args: ['--m', '{model}', '{prompt}'] },
       });
-      setEnv('HARNAS_SMART_BIN', STUB);
+      setEnv('PARLEY_SMART_BIN', STUB);
 
       const argv = await launched('smart', { model: 'что-то-своё' });
       expect(argv[argv.indexOf('--m') + 1]).toBe('что-то-своё');
@@ -415,7 +424,7 @@ describe('create(): модель и усилие из диалога (дизай
   });
 
   it('провайдер без флагов (glm) выбор не получает: поле отбрасывается', async () => {
-    setEnv('HARNAS_GLM_BIN', STUB);
+    setEnv('PARLEY_GLM_BIN', STUB);
     const argv = await launched('glm', { model: 'glm-4', effort: 'high' });
 
     expect(argv.slice(2)).toEqual([]);
@@ -607,7 +616,7 @@ describe('stop() / delete()', () => {
 
 describe('запуск без бинаря', () => {
   it('бинаря нет: host.notice(launch-failed), сессия остаётся pending, метод отвечает ошибкой', async () => {
-    setEnv('HARNAS_CLAUDE_BIN', '/несуществующий/путь/до/claude');
+    setEnv('PARLEY_CLAUDE_BIN', '/несуществующий/путь/до/claude');
     const work = await createWork(project, { title: 'Работа', goal: '' });
     const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
 
@@ -711,7 +720,7 @@ describe('worktree (план, кусок 4.2)', () => {
     const work = await createWork(project, { title: 'Работа', goal: '' });
     const argsFile = await tempArgsFile();
     setEnv('STUB_ARGS_FILE', argsFile);
-    setEnv('HARNAS_WORKTREE_ROOT', await tempWorktreeRoot());
+    setEnv('PARLEY_WORKTREE_ROOT', await tempWorktreeRoot());
 
     const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
     const ref = await service.create({
@@ -744,7 +753,7 @@ describe('worktree (план, кусок 4.2)', () => {
     await initGitProject(project);
     const work = await createWork(project, { title: 'Работа', goal: '' });
     setEnv('STUB_ARGS_FILE', await tempArgsFile());
-    setEnv('HARNAS_WORKTREE_ROOT', await tempWorktreeRoot());
+    setEnv('PARLEY_WORKTREE_ROOT', await tempWorktreeRoot());
 
     const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
     const ref = await service.create({
@@ -992,7 +1001,7 @@ describe('скилл harnas при запуске сессии (кусок 10 п
     const work = await createWork(project, { title: 'Работа', goal: '' });
     const argsFile = await tempArgsFile();
     setEnv('STUB_ARGS_FILE', argsFile);
-    setEnv('HARNAS_WORKTREE_ROOT', await tempWorktreeRoot());
+    setEnv('PARLEY_WORKTREE_ROOT', await tempWorktreeRoot());
 
     const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
     const ref = await service.create({
@@ -1026,7 +1035,7 @@ describe('скилл harnas при запуске сессии (кусок 10 п
     const work = await createWork(project, { title: 'Работа', goal: '' });
     const argsFile = await tempArgsFile();
     setEnv('STUB_ARGS_FILE', argsFile);
-    setEnv('HARNAS_AGENT_SKILLS', '0');
+    setEnv('PARLEY_AGENT_SKILLS', '0');
 
     const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
     const ref = await service.create({
@@ -1041,7 +1050,7 @@ describe('скилл harnas при запуске сессии (кусок 10 п
     await readArgs(argsFile);
     expect(existsSync(path.join(project, '.agents'))).toBe(false);
     expect(existsSync(path.join(project, '.claude'))).toBe(false);
-    expect(existsSync(path.join(project, '.harnas', 'skills-receipt.json'))).toBe(false);
+    expect(existsSync(path.join(project, '.parley', 'skills-receipt.json'))).toBe(false);
 
     await service.stop(ref);
   });

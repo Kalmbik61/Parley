@@ -52,7 +52,7 @@ async function providerSessionId(id: string): Promise<string | null | undefined>
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
   project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
-  process.env['HARNAS_HOME'] = home;
+  process.env['PARLEY_HOME'] = home;
   workId = (await createWork(project, { title: 'Работа', goal: '' })).work.id;
   await updateMap(project, workId, (map) => {
     addSession(map, { provider: 'codex', label: 'кодекс', task: 'сделать' });
@@ -65,7 +65,7 @@ afterEach(async () => {
     await client.close();
     await server.close();
   }
-  delete process.env['HARNAS_HOME'];
+  delete process.env['PARLEY_HOME'];
   await Promise.all([home, project].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -194,7 +194,7 @@ describe('_meta.threadId → providerSessionId', () => {
     expect(await providerSessionId('s-01')).toBeNull();
   });
 
-  it('сервер без сессии (HARNAS_SESSION_ID пуст) ничего не привязывает и не падает', async () => {
+  it('сервер без сессии (PARLEY_SESSION_ID пуст) ничего не привязывает и не падает', async () => {
     const client = await connect(null);
     const result = await call(client, { threadId: THREAD });
     expect(result.isError).not.toBe(true);

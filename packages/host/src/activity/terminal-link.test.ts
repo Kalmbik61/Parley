@@ -48,14 +48,14 @@ beforeEach(async () => {
   project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
   claudeRoot = await mkdtemp(path.join(tmpdir(), 'parley-claude-'));
   codexRoot = await mkdtemp(path.join(tmpdir(), 'parley-codex-'));
-  process.env['HARNAS_HOME'] = home;
+  process.env['PARLEY_HOME'] = home;
   broadcasts = [];
 });
 
 afterEach(async () => {
   for (const stop of stoppers) await stop();
   stoppers = [];
-  delete process.env['HARNAS_HOME'];
+  delete process.env['PARLEY_HOME'];
   await Promise.all(
     [home, project, claudeRoot, codexRoot].map((dir) => rm(dir, { recursive: true, force: true })),
   );

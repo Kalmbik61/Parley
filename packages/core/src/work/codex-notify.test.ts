@@ -52,10 +52,10 @@ const lines = async (): Promise<Array<Record<string, unknown>>> =>
 
 beforeEach(async () => {
   root = await mkdtemp(path.join(tmpdir(), 'parley-codex-notify-'));
-  workDir = path.join(root, '.harnas', 'works', 'w-0001');
+  workDir = path.join(root, '.parley', 'works', 'w-0001');
   await mkdir(workDir, { recursive: true });
   // Окружение процесса Codex, а значит и notify: адрес работы и сессии, как у команды хуков.
-  env = { HARNAS_WORK_DIR: workDir, HARNAS_SESSION_ID: 's-03' };
+  env = { PARLEY_WORK_DIR: workDir, PARLEY_SESSION_ID: 's-03' };
 });
 
 afterEach(async () => {
@@ -138,6 +138,18 @@ describe('runCodexNotify', () => {
     expect(activityOf({ events }).activity).toBe('unseen');
   });
 
+  it('старые сессии (R3): адрес из HARNAS_* тоже читается; оба набора — главнее PARLEY_*', async () => {
+    expect(await runCodexNotify(turnComplete(), { HARNAS_WORK_DIR: workDir, HARNAS_SESSION_ID: 's-03' })).toBe(true);
+    expect((await lines()).map((line) => line['hook_event_name'])).toEqual(['Stop']);
+
+    const other = path.join(root, 'other');
+    await mkdir(other);
+    const both = { HARNAS_WORK_DIR: workDir, HARNAS_SESSION_ID: 's-03', PARLEY_WORK_DIR: other, PARLEY_SESSION_ID: 's-09' };
+    expect(await runCodexNotify(turnComplete(), both)).toBe(true);
+    expect((await readFile(path.join(other, 'events', 's-09.jsonl'), 'utf8')).split('\n')[0]).toContain('Stop');
+    expect(await lines()).toHaveLength(1);
+  });
+
   it('чужие поля события (input-messages, cwd) в журнал не попадают', async () => {
     await runCodexNotify(turnComplete(), env);
     const [event] = await lines();
@@ -157,14 +169,14 @@ describe('runCodexNotify', () => {
 
   it('нет адреса в окружении, относительный каталог и небезопасный id — не пишет', async () => {
     expect(await runCodexNotify(turnComplete(), {})).toBe(false);
-    expect(await runCodexNotify(turnComplete(), { HARNAS_WORK_DIR: workDir })).toBe(false);
-    expect(await runCodexNotify(turnComplete(), { HARNAS_SESSION_ID: 's-03' })).toBe(false);
+    expect(await runCodexNotify(turnComplete(), { PARLEY_WORK_DIR: workDir })).toBe(false);
+    expect(await runCodexNotify(turnComplete(), { PARLEY_SESSION_ID: 's-03' })).toBe(false);
     expect(
-      await runCodexNotify(turnComplete(), { HARNAS_WORK_DIR: 'work', HARNAS_SESSION_ID: 's-03' }),
+      await runCodexNotify(turnComplete(), { PARLEY_WORK_DIR: 'work', PARLEY_SESSION_ID: 's-03' }),
     ).toBe(false);
     for (const id of ['../s-03', 'a/b', '.скрытый', '', '/etc/passwd']) {
       expect(
-        await runCodexNotify(turnComplete(), { HARNAS_WORK_DIR: workDir, HARNAS_SESSION_ID: id }),
+        await runCodexNotify(turnComplete(), { PARLEY_WORK_DIR: workDir, PARLEY_SESSION_ID: id }),
       ).toBe(false);
     }
     await expect(stat(path.join(workDir, 'events'))).rejects.toThrow();

@@ -4,7 +4,7 @@ import type { LimitsService } from '../limits/limits-service.js';
 import type { ProviderVersions } from '../providers/versions.js';
 
 /**
- * `available` — команда провайдера видна в PATH (или через `HARNAS_*_BIN`-оверрайд). `models`,
+ * `available` — команда провайдера видна в PATH (или через `PARLEY_*_BIN`-оверрайд (прежний `HARNAS_*_BIN` тоже)). `models`,
  * `effort` и `version` — для диалога запуска и строки статуса окна (дизайн комнат, 3.2): что
  * провайдер принимает при запуске решает его шаблон в реестре, версия — проба на старте хоста.
  * Первый ответ ждёт эту пробу (её таймаут короткий), иначе окно, подключившееся сразу за хостом,

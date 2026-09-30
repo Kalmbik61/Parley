@@ -141,7 +141,7 @@ async function withFallbackDirs(
  * Собранное окно, открытое из Finder, наследует от launchd урезанное окружение: `PATH` там
  * `/usr/bin:/bin:/usr/sbin:/sbin`, и без `~/.local/bin` и каталогов nvm хост не находит ни `claude`,
  * ни `codex`, ни системный `node`, а переменные, которые человек экспортирует в rc-файлах (прокси,
- * `CLAUDE_CONFIG_DIR`, `HARNAS_*`), не приходят вовсе. Поэтому на старте, один раз и до запуска хоста,
+ * `CLAUDE_CONFIG_DIR`, `PARLEY_*` и прежние `HARNAS_*`), не приходят вовсе. Поэтому на старте, один раз и до запуска хоста,
  * окно снимает окружение login-оболочки человека (спека окна 3.2): `$SHELL -ilc` с `env -0` между
  * маркерами. rc-файлы читает сама оболочка, окно их не открывает.
  *
@@ -154,7 +154,7 @@ async function withFallbackDirs(
  * окружение окна (`process.env`), а в его `PATH` дописаны существующие `~/.local/bin`,
  * `/opt/homebrew/bin` и `/usr/local/bin`; причина — в `warning`.
  *
- * `skip` (E2E, `HARNAS_LOGIN_SHELL=skip`) оболочку не зовёт вовсе: окружение окна отдаётся как есть.
+ * `skip` (E2E, `PARLEY_LOGIN_SHELL=skip`) оболочку не зовёт вовсе: окружение окна отдаётся как есть.
  */
 export async function captureShellEnv(options?: {
   shell?: string;

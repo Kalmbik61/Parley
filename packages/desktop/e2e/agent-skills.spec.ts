@@ -11,7 +11,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
 /**
  * Скилл `harnas` в проекте (кусок 10 плана комнат): после запуска сессии хост кладёт в проект
  * `.agents/skills/harnas/SKILL.md` и относительный симлинк `.claude/skills/harnas`, а строки в
- * `info/exclude` прячут их от `git status`. Агент — стаб (`HARNAS_CLAUDE_BIN`), настоящие claude и codex
+ * `info/exclude` прячут их от `git status`. Агент — стаб (`PARLEY_CLAUDE_BIN`), настоящие claude и codex
  * не запускаются; проект и дом — свои временные каталоги теста, `~/.claude` не трогается.
  */
 
@@ -70,10 +70,10 @@ test.describe('скилл harnas в проекте', () => {
     // Корень worktree — тоже во временном каталоге теста: по умолчанию он в `~/harnas/worktrees` человека.
     const env = {
       ...process.env,
-      HARNAS_HOME: home,
-      HARNAS_CLAUDE_BIN: stubAgent,
-      HARNAS_TERMINAL_RENDERER: 'dom',
-      HARNAS_WORKTREE_ROOT: path.join(base, 'worktrees'),
+      PARLEY_HOME: home,
+      PARLEY_CLAUDE_BIN: stubAgent,
+      PARLEY_TERMINAL_RENDERER: 'dom',
+      PARLEY_WORKTREE_ROOT: path.join(base, 'worktrees'),
     };
     const app = await electron.launch({ args: [mainEntry], env });
     running = app;
@@ -124,7 +124,7 @@ test.describe('скилл harnas в проекте', () => {
     const { workId, sessionId } = await newSession(window, project, true);
 
     // Карта — на диске сразу; снимок работ у хоста обновляется по наблюдателю и мог отстать.
-    const map = JSON.parse(await readFile(path.join(project, '.harnas', 'works', workId, 'map.json'), 'utf8')) as {
+    const map = JSON.parse(await readFile(path.join(project, '.parley', 'works', workId, 'map.json'), 'utf8')) as {
       sessions: Array<{ id: string; worktree: { path: string } | null }>;
     };
     const worktree = map.sessions.find((session) => session.id === sessionId)?.worktree?.path;

@@ -146,7 +146,7 @@ describe('заглушка и гид согласованы', () => {
     const server = createParleyServer({
       projectPath: '/нет/такого/проекта',
       workId: 'w-0001',
-      workDir: '/нет/такого/проекта/.harnas/works/w-0001',
+      workDir: '/нет/такого/проекта/.parley/works/w-0001',
       sessionId: null,
       channel: false,
     });

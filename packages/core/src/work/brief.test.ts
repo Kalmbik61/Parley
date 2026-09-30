@@ -31,7 +31,7 @@ function mapWithSessions(): WorkMap {
   plan.result = 'done';
   plan.summary = 'План готов: 5 шагов, миграции отдельно.';
   plan.summarySource = 'agent';
-  plan.artifacts = [{ kind: 'plan', path: '.harnas/works/w-0042/artifacts/plan.md' }];
+  plan.artifacts = [{ kind: 'plan', path: '.parley/works/w-0042/artifacts/plan.md' }];
   addSession(
     map,
     {
@@ -62,7 +62,7 @@ describe('бриф сессии', () => {
     // 4 — резюме и пути артефактов сессий из contextFrom.
     expect(brief).toContain('s-01');
     expect(brief).toContain('План готов: 5 шагов, миграции отдельно.');
-    expect(brief).toContain('.harnas/works/w-0042/artifacts/plan.md');
+    expect(brief).toContain('.parley/works/w-0042/artifacts/plan.md');
     // 5 — три правила.
     expect(brief).toContain('get_map');
     expect(brief).toContain('send_message');
@@ -450,11 +450,11 @@ describe('writeBrief', () => {
   beforeEach(async () => {
     home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
     project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
-    process.env.HARNAS_HOME = home;
+    process.env.PARLEY_HOME = home;
   });
 
   afterEach(async () => {
-    delete process.env.HARNAS_HOME;
+    delete process.env.PARLEY_HOME;
     await Promise.all([home, project].map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
@@ -463,7 +463,7 @@ describe('writeBrief', () => {
     addSession(map, { provider: 'claude', label: 'план', task: 'Составить план' }, AT);
 
     const file = await writeBrief(project, map, 's-01');
-    expect(file).toBe(path.join(project, '.harnas', 'works', 'w-0001', 'briefs', 's-01.md'));
+    expect(file).toBe(path.join(project, '.parley', 'works', 'w-0001', 'briefs', 's-01.md'));
     expect(await readFile(file, 'utf8')).toBe(buildBrief(map, 's-01'));
   });
 });

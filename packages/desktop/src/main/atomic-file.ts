@@ -14,7 +14,7 @@
 import { chmod, mkdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-/** Счётчик обеспечивает уникальность внутри процесса; PID — на случай двух процессов на одном `HARNAS_HOME` (тесты). */
+/** Счётчик обеспечивает уникальность внутри процесса; PID — на случай двух процессов на одном `PARLEY_HOME` (тесты). */
 let counter = 0;
 
 /**

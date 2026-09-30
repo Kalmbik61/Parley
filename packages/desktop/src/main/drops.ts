@@ -8,7 +8,7 @@ import { lstat, mkdir, open, readdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { parleyHome } from '@parley/core';
 
-/** `~/.harnas/desktop/drops` — рядом с `ui.json` и `layouts.json`; `parleyHome()` слушает `HARNAS_HOME`. */
+/** `~/.parley/desktop/drops` — рядом с `ui.json` и `layouts.json`; дом — `parleyHome()` (`PARLEY_HOME`, прежний `HARNAS_HOME`, `~/.parley`, `~/.harnas`). */
 export function dropsDir(home: string = parleyHome()): string {
   return path.join(home, 'desktop', 'drops');
 }
