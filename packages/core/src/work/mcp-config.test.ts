@@ -2,13 +2,20 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { parseTomlAssignment, parseTomlValue, type TomlValue } from '../../test/toml-mini.js';
+import { MAX_TIMEOUT_SEC } from '../mcp/tools.js';
+import { CODEX_NOTIFY_ENTRY } from './codex-notify.js';
 import {
+  CODEX_MCP_STARTUP_TIMEOUT_SEC,
+  CODEX_MCP_TOOL_TIMEOUT_SEC,
   MCP_SERVER_ENTRY,
   MCP_SERVER_NAME,
   codexMcpOverride,
+  codexNotifyOverride,
   mcpConfig,
   mcpConfigJson,
   mcpConfigValue,
+  tomlString,
   writeMcpConfig,
 } from './mcp-config.js';
 import { createWork } from './store.js';
@@ -60,8 +67,80 @@ describe('конфиг MCP-сервера на сессию', () => {
     expect(codexMcpOverride(params)).toBe(
       `mcp_servers.harnas={command=${JSON.stringify(process.execPath)},` +
         `args=[${JSON.stringify(MCP_SERVER_ENTRY)}],` +
-        'env={HARNAS_WORK_DIR="/project/.harnas/works/w-0042",HARNAS_SESSION_ID="s-02"}}',
+        'env={HARNAS_WORK_DIR="/project/.harnas/works/w-0042",HARNAS_SESSION_ID="s-02"},' +
+        `startup_timeout_sec=${CODEX_MCP_STARTUP_TIMEOUT_SEC},tool_timeout_sec=${CODEX_MCP_TOOL_TIMEOUT_SEC}}`,
     );
+  });
+
+  it('таблица сервера — настоящий TOML: Codex не примет её за обычную строку', () => {
+    const { key, value } = parseTomlAssignment(codexMcpOverride(params));
+    expect(key).toEqual(['mcp_servers', 'harnas']);
+    expect(value).toEqual({
+      command: process.execPath,
+      args: [MCP_SERVER_ENTRY],
+      env: { HARNAS_WORK_DIR: '/project/.harnas/works/w-0042', HARNAS_SESSION_ID: 's-02' },
+      startup_timeout_sec: CODEX_MCP_STARTUP_TIMEOUT_SEC,
+      tool_timeout_sec: CODEX_MCP_TOOL_TIMEOUT_SEC,
+    });
+  });
+
+  it('запуск сервера с запасом, а вызов — дольше самого долгого wait_for', () => {
+    // По умолчанию Codex ждёт запуск сервера 10 с, а ответ инструмента — 60: `wait_for` живёт
+    // до `MAX_TIMEOUT_SEC` и без запаса был бы оборван клиентом посреди ожидания.
+    expect(CODEX_MCP_STARTUP_TIMEOUT_SEC).toBeGreaterThan(10);
+    expect(CODEX_MCP_TOOL_TIMEOUT_SEC).toBeGreaterThan(MAX_TIMEOUT_SEC);
+  });
+
+  it('серверу, которому Codex режет окружение, уходят переменные HARNAS_* хоста', () => {
+    // Сервер получает окружение урезанным (HOME, PATH и ещё несколько), а `HARNAS_HOME` и
+    // подмены бинарей ему нужны: без них он читал бы чужой дом и искал не те команды.
+    const env = {
+      HARNAS_HOME: '/tmp/чужой дом',
+      HARNAS_CODEX_BIN: '/opt/stub/codex',
+      HARNAS_CLAUDE_PROJECTS_DIR: '/tmp/projects',
+      // Свои две переменные сервера задаёт харнесс, унаследованные значения их не перекрывают.
+      HARNAS_WORK_DIR: '/other/work',
+      HARNAS_SESSION_ID: 's-99',
+      HARNAS_CHANNEL: '1',
+      PATH: '/usr/bin',
+      HOME: '/Users/x',
+      OPENAI_API_KEY: 'секрет',
+    };
+    const { value } = parseTomlAssignment(codexMcpOverride({ ...params, env }));
+    const table = value as Record<string, TomlValue>;
+    expect(table['env']).toEqual({
+      HARNAS_WORK_DIR: '/project/.harnas/works/w-0042',
+      HARNAS_SESSION_ID: 's-02',
+      HARNAS_HOME: '/tmp/чужой дом',
+      HARNAS_CODEX_BIN: '/opt/stub/codex',
+      HARNAS_CLAUDE_PROJECTS_DIR: '/tmp/projects',
+    });
+  });
+
+  it('переменные без префикса HARNAS_ и с чужими именами в таблицу не попадают', () => {
+    const env = {
+      HARNAS_OK: '1',
+      HARNAS_плохое: '2',
+      'HARNAS BAD': '3',
+      harnas_low: '4',
+      SECRET: '5',
+    };
+    const { value } = parseTomlAssignment(codexMcpOverride({ ...params, env }));
+    expect((value as Record<string, TomlValue>)['env']).toEqual({
+      HARNAS_WORK_DIR: '/project/.harnas/works/w-0042',
+      HARNAS_SESSION_ID: 's-02',
+      HARNAS_OK: '1',
+    });
+  });
+
+  it('пустые и неопределённые HARNAS_* не отдаются', () => {
+    const { value } = parseTomlAssignment(
+      codexMcpOverride({ ...params, env: { HARNAS_EMPTY: '', HARNAS_UNSET: undefined } }),
+    );
+    expect((value as Record<string, TomlValue>)['env']).toEqual({
+      HARNAS_WORK_DIR: '/project/.harnas/works/w-0042',
+      HARNAS_SESSION_ID: 's-02',
+    });
   });
 
   it('codex звонка не получает: push — возможность Claude Code (4.4)', () => {
@@ -72,6 +151,76 @@ describe('конфиг MCP-сервера на сессию', () => {
     expect(codexMcpOverride({ ...params, command: '/opt/a"b/harnas-mcp' })).toContain(
       'command="/opt/a\\"b/harnas-mcp"',
     );
+  });
+});
+
+/** Значения, на которых наивная склейка строк ломает TOML: кавычки, `\`, юникод, управляющие знаки. */
+const HOSTILE: ReadonlyArray<{ name: string; value: string; decoded?: string }> = [
+  { name: 'кавычка', value: 'a"b' },
+  { name: 'обратный слеш', value: 'C:\\Users\\x\\harnas' },
+  { name: 'слеш и кавычка подряд', value: 'a\\"b\\\\"' },
+  { name: 'кириллица и пробелы', value: '/Users/иван/мой проект' },
+  { name: 'астральный символ', value: '/tmp/😀/проект' },
+  { name: 'составной эмодзи', value: '/tmp/👩‍💻/x' },
+  { name: 'комбинирующий знак', value: '/tmp/e\u0301' },
+  { name: 'перевод строки и табуляция', value: 'a\nb\tc\r\nd' },
+  { name: 'NUL и прочие управляющие', value: 'a\u0000b\u0001c\u001fd' },
+  { name: 'DEL', value: 'a\u007fb' },
+  { name: 'C1-управляющий', value: 'a\u0085b' },
+  { name: 'разделители строк Unicode', value: 'a\u2028b\u2029c' },
+  // Одиночный суррогат в TOML — не скаляр: `\uD800` там ошибка, а не знак. Он заменяется на U+FFFD.
+  { name: 'одиночный старший суррогат', value: 'a\ud83db', decoded: 'a\ufffdb' },
+  { name: 'одиночный младший суррогат', value: 'a\ude00b', decoded: 'a\ufffdb' },
+  { name: 'пустая строка', value: '' },
+];
+
+describe('tomlString — экранирование значений TOML для -c', () => {
+  for (const { name, value, decoded } of HOSTILE) {
+    it(`${name}: строка разбирается TOML-разборщиком обратно`, () => {
+      expect(parseTomlValue(tomlString(value))).toBe(decoded ?? value);
+    });
+  }
+
+  it('в теле строки нет ни сырых управляющих знаков, ни сырого DEL', () => {
+    // eslint-disable-next-line no-control-regex
+    const raw = /[\u0000-\u0008\u000a-\u001f\u007f]/;
+    for (const { value } of HOSTILE) expect(tomlString(value)).not.toMatch(raw);
+  });
+
+  it('разборщик тестов сам строг: сырой DEL, суррогатный \\u и неизвестный escape — отказ', () => {
+    expect(() => parseTomlValue('"a\u007fb"')).toThrow(/управляющий/);
+    expect(() => parseTomlValue('"\\ud83d"')).toThrow(/скаляр/);
+    expect(() => parseTomlValue('"\\/"')).toThrow(/неизвестный escape/);
+    expect(() => parseTomlValue('{a="1",}')).toThrow();
+  });
+
+  it('опасные значения в путях и окружении сервера доезжают до Codex неизменными', () => {
+    for (const { name, value, decoded } of HOSTILE) {
+      if (value === '') continue;
+      const expected = decoded ?? value;
+      const override = codexMcpOverride({
+        workDir: `/tmp/${value}/.harnas/works/w-0001`,
+        sessionId: 's-01',
+        command: `/opt/${value}/harnas-mcp`,
+        env: { HARNAS_HOME: value },
+      });
+      const table = parseTomlAssignment(override).value as Record<string, TomlValue>;
+      expect(table['command'], name).toBe(`/opt/${expected}/harnas-mcp`);
+      expect((table['env'] as Record<string, TomlValue>)['HARNAS_WORK_DIR'], name).toBe(
+        `/tmp/${expected}/.harnas/works/w-0001`,
+      );
+      expect((table['env'] as Record<string, TomlValue>)['HARNAS_HOME'], name).toBe(expected);
+    }
+  });
+});
+
+describe('codexNotifyOverride', () => {
+  it('notify — массив из node и скрипта харнесса по абсолютным путям', () => {
+    expect(path.isAbsolute(CODEX_NOTIFY_ENTRY)).toBe(true);
+    expect(CODEX_NOTIFY_ENTRY.endsWith('codex-notify-bin.js')).toBe(true);
+    const { key, value } = parseTomlAssignment(codexNotifyOverride());
+    expect(key).toEqual(['notify']);
+    expect(value).toEqual([process.execPath, CODEX_NOTIFY_ENTRY]);
   });
 });
 
