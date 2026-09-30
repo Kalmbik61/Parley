@@ -82,6 +82,13 @@ const waitFor = async (check: () => boolean, timeoutMs = 8000): Promise<void> =>
 };
 const settle = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Первый `Ready` заглушки — агент у приглашения (не конец хода): состояние тусклое, но хост «в курсе»
+ * (`lastEventAt`), и указатель можно печатать.
+ */
+const known = (activity: ActivityService, ref: SessionRef): boolean =>
+  activity.get(ref)?.activity.lastEventAt != null;
+
 interface Rig {
   ref: SessionRef;
   workId: string;
@@ -182,7 +189,7 @@ async function rig(
 describe('будильник и codex', () => {
   it('у приглашения: указатель вставкой, через десятки мс — Enter (не Tab, не 500 мс)', async () => {
     const { ref, activity, stream, letter } = await rig();
-    await waitFor(() => activity.get(ref)?.activity.activity === 'unseen');
+    await waitFor(() => known(activity, ref));
 
     const sent = Date.now();
     await letter();
@@ -200,7 +207,7 @@ describe('будильник и codex', () => {
   it('пауза между вставкой и Enter — CODEX_SUBMIT_DELAY_MS, а не enterDelayMs будильника', async () => {
     // enterDelayMs будильника — 5 секунд: если бы codex ждал его, Enter в срок теста не пришёл бы.
     const { ref, activity, stream, letter } = await rig({}, { enterDelayMs: 5000 });
-    await waitFor(() => activity.get(ref)?.activity.activity === 'unseen');
+    await waitFor(() => known(activity, ref));
 
     await letter();
     await waitFor(() => stream().includes(`enter: ${POINTER}`), 3000);
@@ -208,7 +215,7 @@ describe('будильник и codex', () => {
 
   it('агент работает — указатель уходит в очередь Tab, ход не прерывается и ждать конца хода не нужно', async () => {
     const { ref, pty, activity, stream, letter, notices } = await rig();
-    await waitFor(() => activity.get(ref)?.activity.activity === 'unseen');
+    await waitFor(() => known(activity, ref));
     pty.input(ref, 'STUB_WORK\r');
     await waitFor(() => activity.get(ref)?.activity.activity === 'working');
 
@@ -225,9 +232,38 @@ describe('будильник и codex', () => {
     expect(activity.get(ref)?.activity.activity).toBe('working');
   }, 30_000);
 
+  it('режима вставки ещё нет — указатель не печатается, а с появлением режима уходит сам', async () => {
+    // Заголовок Ready уже есть (хост «в курсе»), а bracketed paste заглушка включает позже: без режима
+    // вставки маркеры ушли бы в поле ввода знаками. Отказа, как у pty.send, будильнику вернуть некому —
+    // пересчёт повторяется сам, пока режим не появится.
+    // Режим появляется через 1,8 с — раньше конца бюджета повторов (15 × 200 мс), но с запасом над проверкой ниже.
+    const { ref, activity, stream, letter } = await rig({ STUB_CODEX_PASTE_MS: '1800' });
+    await waitFor(() => known(activity, ref));
+
+    await letter();
+    await settle(600);
+    expect(stream()).not.toContain('paste:');
+
+    await waitFor(() => stream().includes(`paste: ${POINTER}`), 5000);
+    await waitFor(() => stream().includes(`enter: ${POINTER}`), 5000);
+    // Один указатель, а не по одному на каждый повтор.
+    expect(stream().split(`paste: ${POINTER}`).length - 1).toBe(1);
+  }, 30_000);
+
+  it('режима вставки нет вовсе — ничего не печатается, повторы не бесконечны', async () => {
+    const { ref, activity, stream, letter } = await rig({ STUB_CODEX_NO_PASTE: '1' });
+    await waitFor(() => known(activity, ref));
+
+    await letter();
+    await settle(1500);
+    expect(stream()).not.toContain('paste:');
+    expect(stream()).not.toContain('enter:');
+    expect(stream()).not.toContain('tab:');
+  }, 30_000);
+
   it('вопрос человеку (Action Required) — не печатает ничего: ни вставки, ни Tab', async () => {
     const { ref, pty, activity, stream, letter } = await rig();
-    await waitFor(() => activity.get(ref)?.activity.activity === 'unseen');
+    await waitFor(() => known(activity, ref));
     pty.input(ref, 'STUB_APPROVAL\r');
     await waitFor(() => activity.get(ref)?.activity.activity === 'blocked');
 
@@ -249,7 +285,7 @@ describe('будильник и codex', () => {
 
   it('после хода письмо доходит как обычно: работа → Ready → письмо → Enter', async () => {
     const { ref, pty, activity, stream, letter } = await rig();
-    await waitFor(() => activity.get(ref)?.activity.activity === 'unseen');
+    await waitFor(() => known(activity, ref));
     pty.input(ref, 'STUB_WORK\r');
     await waitFor(() => activity.get(ref)?.activity.activity === 'working');
     pty.input(ref, 'STUB_READY\r');
@@ -262,7 +298,7 @@ describe('будильник и codex', () => {
 
   it('черновик человека — ничего не печатается поверх', async () => {
     const { ref, pty, activity, stream, letter } = await rig();
-    await waitFor(() => activity.get(ref)?.activity.activity === 'unseen');
+    await waitFor(() => known(activity, ref));
     pty.input(ref, 'набираю сам');
     await letter();
     await settle(1000);
@@ -271,7 +307,7 @@ describe('будильник и codex', () => {
 
   it('указатель в комнате: название с токеном на конце не мешает — текст кончается словом', async () => {
     const { ref, activity, stream, workId } = await rig();
-    await waitFor(() => activity.get(ref)?.activity.activity === 'unseen');
+    await waitFor(() => known(activity, ref));
     await updateMap(project, workId, (current) => {
       current.rooms.push({
         id: 'r-01',

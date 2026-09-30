@@ -114,12 +114,20 @@ async function rig(provider: string, launchEnv: NodeJS.ProcessEnv = {}, startupW
 const state = (activity: ActivityService, ref: SessionRef): string | undefined =>
   activity.get(ref)?.activity.activity;
 
+/**
+ * Первый `Ready` заглушки — агент у приглашения, а не конец хода: состояние тусклое (`idle`), но хост «в курсе»
+ * (`lastEventAt`) — по нему отправка из окна и будильник уже разрешены.
+ */
+const known = (activity: ActivityService, ref: SessionRef): boolean =>
+  activity.get(ref)?.activity.lastEventAt != null;
+
 describe('linkTerminalActivity', () => {
-  it('Ready заглушки → unseen; ход (спиннер) → working; одобрение → blocked; Ready → unseen', async () => {
+  it('Ready заглушки → idle (приглашение); ход (спиннер) → working; одобрение → blocked; Ready → unseen', async () => {
     const { ref, pty, activity, launch } = await rig('codex');
     pty.start(ref, launch());
 
-    await waitFor(() => state(activity, ref) === 'unseen');
+    await waitFor(() => known(activity, ref));
+    expect(state(activity, ref)).toBe('idle');
     pty.input(ref, 'STUB_WORK\r');
     await waitFor(() => state(activity, ref) === 'working');
     pty.input(ref, 'STUB_APPROVAL\r');
@@ -133,7 +141,7 @@ describe('linkTerminalActivity', () => {
   it('рассылается activity.changed — то, что окно превращает в «needs you» и уведомление macOS', async () => {
     const { ref, pty, activity, launch } = await rig('codex');
     pty.start(ref, launch());
-    await waitFor(() => state(activity, ref) === 'unseen');
+    await waitFor(() => known(activity, ref));
     pty.input(ref, 'STUB_APPROVAL\r');
     await waitFor(() => state(activity, ref) === 'blocked');
 
@@ -155,15 +163,16 @@ describe('linkTerminalActivity', () => {
       ),
     ).toBe(true);
 
-    // Человек ответил на экран доверия, Codex дорисовал чат и написал заголовок.
+    // Человек ответил на экран доверия, Codex дорисовал чат и написал заголовок: у приглашения, ход не кончался.
     pty.input(ref, 'STUB_READY\r');
-    await waitFor(() => state(activity, ref) === 'unseen');
+    await waitFor(() => state(activity, ref) === 'idle');
+    expect(known(activity, ref)).toBe(true);
   }, 30_000);
 
   it('процесс вышел — состояние по терминалу забыто', async () => {
     const { ref, pty, activity, launch } = await rig('codex');
     pty.start(ref, launch());
-    await waitFor(() => state(activity, ref) === 'unseen');
+    await waitFor(() => known(activity, ref));
     pty.input(ref, 'STUB_WORK\r');
     await waitFor(() => state(activity, ref) === 'working');
 
@@ -185,6 +194,10 @@ describe('linkTerminalActivity', () => {
   it('новый процесс той же сессии (resume) начинает без состояния прошлого', async () => {
     const { ref, pty, activity, launch } = await rig('codex', { STUB_CODEX_READY_MS: '600' });
     pty.start(ref, launch());
+    await waitFor(() => known(activity, ref));
+    pty.input(ref, 'STUB_WORK\r');
+    await waitFor(() => state(activity, ref) === 'working');
+    pty.input(ref, 'STUB_READY\r');
     await waitFor(() => state(activity, ref) === 'unseen');
     pty.input(ref, 'STUB_EXIT\r');
     await waitFor(() => pty.get(ref) === undefined);
@@ -192,6 +205,9 @@ describe('linkTerminalActivity', () => {
     // Второй процесс до своего первого заголовка молчит — прежнее `unseen` не переносится.
     pty.start(ref, launch());
     expect(state(activity, ref)).toBe('idle');
-    await waitFor(() => state(activity, ref) === 'unseen');
+    expect(known(activity, ref)).toBe(false);
+    // И его первый Ready — снова приглашение, а не конец хода, хотя у прошлого процесса ходы были.
+    await waitFor(() => known(activity, ref));
+    expect(state(activity, ref)).toBe('idle');
   }, 30_000);
 });

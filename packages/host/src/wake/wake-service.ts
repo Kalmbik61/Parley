@@ -69,6 +69,13 @@ const DEFAULT_POINTER_TIMEOUT_MS = 10_000;
 const DEFAULT_RESUME_FAIL_WINDOW_MS = 5_000;
 /** Уведомление о лимите подъёмов — не чаще раза в час на сессию (план, кусок 3.4). */
 const LIMIT_NOTICE_EVERY_MS = 60 * 60 * 1000;
+/**
+ * Codex получает указатель только вставкой, а режима вставки на экране хоста может ещё не быть: экран
+ * разбирает поток чуть позже сигнала терминала, по которому будильник и проснулся. Пересчёт стоит
+ * повторить: 15 раз через 200 мс, дальше — до следующего события сессии.
+ */
+const PASTE_MODE_RETRY_MS = 200;
+const PASTE_MODE_RETRIES = 15;
 
 /** Состояние одной попытки доставки указателя, живёт между пересчётами сессии. */
 interface AttemptState {
@@ -105,6 +112,10 @@ interface AttemptState {
    * процесс по брифу начал бы задачу заново.
    */
   resumeUnavailable: boolean;
+  /** Повтор пересчёта, пока у Codex нет режима вставки (`PASTE_MODE_RETRIES`). */
+  pasteRetry: NodeJS.Timeout | undefined;
+  /** Сколько повторов уже было; с режимом вставки на экране счёт начинается заново. */
+  pasteRetries: number;
 }
 
 
@@ -162,6 +173,8 @@ export function createWakeService(
         resumeLetters: [],
         pointerAfter: null,
         resumeUnavailable: false,
+        pasteRetry: undefined,
+        pasteRetries: 0,
       };
       attempts.set(key, state);
     }
@@ -178,6 +191,20 @@ export function createWakeService(
       clearTimeout(state.timeoutTimer);
       state.timeoutTimer = undefined;
     }
+    if (state.pasteRetry !== undefined) {
+      clearTimeout(state.pasteRetry);
+      state.pasteRetry = undefined;
+    }
+  }
+
+  /** У Codex ещё нет режима вставки: пересчёт через короткий срок, но не бесконечно. */
+  function waitForPasteMode(ref: SessionRef, state: AttemptState): void {
+    if (state.pasteRetry !== undefined || state.pasteRetries >= PASTE_MODE_RETRIES) return;
+    state.pasteRetries += 1;
+    state.pasteRetry = setTimeout(() => {
+      state.pasteRetry = undefined;
+      recompute(ref);
+    }, PASTE_MODE_RETRY_MS);
   }
 
   function notice(kind: NoticeKind, ref: SessionRef, text: string): void {
@@ -445,7 +472,18 @@ export function createWakeService(
       queueWhileBusy: codex,
     });
 
-    if (action.kind === 'type-pointer') beginAttempt(ref, state, action, codex);
+    if (action.kind !== 'type-pointer') return;
+    if (codex) {
+      // Codex — только вставкой, как в `pty.send`: без режима вставки на экране TUI ещё не поднялся (или его
+      // сменил), и маркеры ушли бы в поле ввода знаками. Отказа, как у `pty.send`, тут вернуть некому — пересчёт
+      // повторяется сам.
+      if (!handle.bracketedPaste()) {
+        waitForPasteMode(ref, state);
+        return;
+      }
+      state.pasteRetries = 0;
+    }
+    beginAttempt(ref, state, action, codex);
   }
 
   /** Все сессии всех работ: живые получают указатель, спящие — подъём. */

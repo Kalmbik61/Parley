@@ -23,6 +23,7 @@ import {
   unreadFor,
   watchEvents,
   workPaths,
+  type Activity,
   type ActivityLog,
   type EventRecord,
   type EventsLog,
@@ -122,20 +123,53 @@ interface TerminalState {
   last: EventRecord | null;
   /** Срок экранов старта: сработает, если `last` так и останется `null`. */
   startupTimer: NodeJS.Timeout | undefined;
+  /**
+   * С запуска процесса был хоть один сигнал хода: работа, вопрос человеку или конец хода. До него `Ready`
+   * — приглашение у ещё не начатой сессии, а не конец хода.
+   */
+  turnSeen: boolean;
 }
 
-/** Событие журнала, которым `activityOf` читает сигнал терминала: те же имена, что у хуков Claude Code. */
-const eventNameOf = (signal: CodexSignal): string | null => {
+/**
+ * Первый `Ready` с запуска: агент у приглашения, ни один ход не кончался. `activityOf` такое событие
+ * пропускает (фазу не меняет), но `lastEventAt` учитывает — хост «в курсе», и отправка из окна с
+ * будильником разрешены. Иначе свежая сессия, поднятая в фоне (autoLaunch, `spawn_session`), стала бы
+ * `unseen` и дала ложное «finished» ещё до первого хода. У свежей сессии Claude состояние тоже `idle`.
+ */
+const TERMINAL_READY_EVENT = 'TerminalReady';
+
+/**
+ * Событие журнала, которым `activityOf` читает сигнал терминала: те же имена, что у хуков Claude Code, а
+ * первый `Ready` с запуска — нейтральное (`TERMINAL_READY_EVENT`).
+ */
+const eventNameOf = (signal: CodexSignal, turnSeen: boolean): string | null => {
   switch (signal.kind) {
     case 'working':
       return 'UserPromptSubmit';
     case 'ready':
+      return turnSeen ? 'Stop' : TERMINAL_READY_EVENT;
     case 'turn-complete':
       return 'Stop';
     case 'needs-you':
       return 'PermissionRequest';
     default:
       return null;
+  }
+};
+
+/**
+ * Согласно ли выведенное состояние с последним сигналом терминала. Расходятся они, когда в свёртку
+ * вмешалось чужое событие новее сигнала: `Stop` от notify с временем файла позже последнего кадра
+ * спиннера или мигания `Action Required`. Следующий сигнал того же вида такое расхождение чинит.
+ */
+const agreesWith = (derived: Activity | undefined, signal: CodexSignal): boolean => {
+  switch (signal.kind) {
+    case 'working':
+      return derived === 'working';
+    case 'needs-you':
+      return derived === 'blocked';
+    default:
+      return derived !== undefined && derived !== 'working' && derived !== 'blocked';
   }
 };
 
@@ -394,19 +428,26 @@ export function createActivityService(
     // Под хостом живёт процесс codex — состояние ведёт его терминал, а лог только мешал бы: запись
     // конца хода (`task_complete`, `token_count`) новее события и вернула бы `working` на порог тишины
     // после каждого хода. Процесс вышел — сессия снова читается по журналу и логу, как всякая спящая.
-    const log = terminals.has(key) ? null : logIndex.log(session);
+    const driven = terminals.has(key);
+    const log = driven ? null : logIndex.log(session);
     const now = nowFn();
+    // Порог тишины у такой сессии не действует: заголовок Codex пишет не весь ход (личный
+    // `tui.animations=false`, долгий инструмент), а ложный конец хода — это «finished» в macOS и Enter
+    // вместо Tab в идущий ход. Выход процесса известен (`terminalStopped`), конец хода — сигнал терминала
+    // (`Ready`, OSC 9) или `Stop` от notify.
+    const threshold = driven ? Number.POSITIVE_INFINITY : silenceThresholdMs;
 
     // `seen` зависит от `turnEndedAt`, а он — результат самой свёртки: первый
     // проход узнаёт его, второй считает финальную `activity` (план, кусок 1.5).
-    const draft = activityOf({ events, log, seen: false, now, silenceThresholdMs });
+    const draft = activityOf({ events, log, seen: false, now, silenceThresholdMs: threshold });
     const seen = isSeen(seenAt.get(key), draft.turnEndedAt);
-    const activity = activityOf({ events, log, seen, now, silenceThresholdMs });
+    const activity = activityOf({ events, log, seen, now, silenceThresholdMs: threshold });
 
     const metrics = metricsFor(entry, session, activity, logIndex.index(session));
     const value: SessionLive = { activity, metrics };
 
-    scheduleSilenceTimer(ref, key, activity, log);
+    if (driven) clearSilenceTimer(key);
+    else scheduleSilenceTimer(ref, key, activity, log);
 
     const previous = live.get(key);
     live.set(key, value);
@@ -572,29 +613,38 @@ export function createActivityService(
       const key = refKey(ref);
       // Новый процесс — своё состояние: сигналы прошлого (resume) к нему не относятся.
       clearTerminal(key);
-      const state: TerminalState = { last: null, startupTimer: undefined };
+      const state: TerminalState = { last: null, startupTimer: undefined, turnSeen: false };
       state.startupTimer = setTimeout(() => startupExpired(ref, key, state), startupWaitMs);
       terminals.set(key, state);
       recompute(ref);
     },
     terminalSignal(ref, signal) {
       if (stopped) return;
-      // Неизвестное состояния не меняет и «работает» не значит (спека комнат, 3.6).
-      const name = eventNameOf(signal);
-      if (name === null) return;
       const key = refKey(ref);
       const state = terminals.get(key);
       if (state === undefined) return;
+      // Неизвестное состояния не меняет и «работает» не значит (спека комнат, 3.6).
+      const name = eventNameOf(signal, state.turnSeen);
+      if (name === null) return;
+      if (signal.kind !== 'ready') state.turnSeen = true;
       const previous = state.last;
-      // Время обновляется на каждом сигнале, даже повторном: кадры спиннера — сердцебиение, по нему
-      // сессия остаётся `working`, пока идёт ход (иначе порог тишины уронил бы её через 30 секунд).
+      // Время обновляется на каждом сигнале, даже повторном: он новее любого `Stop` от notify, который
+      // журнал успел принять между кадрами, — так следующий кадр спиннера ставит терминальное событие
+      // после него.
       state.last = { at: new Date(nowFn()).toISOString(), name, notificationType: null };
       if (state.startupTimer !== undefined) {
         clearTimeout(state.startupTimer);
         state.startupTimer = undefined;
       }
-      // Пересчёт и рассылка — только на смене состояния, а не на каждом кадре спиннера.
-      if (previous === null || previous.name !== name) recompute(ref);
+      // Пересчёт и рассылка — на смене сигнала и когда выведенное состояние с ним разошлось (чужое
+      // событие журнала новее сигнала), а не на каждом кадре спиннера: согласный повтор ничего не меняет.
+      if (
+        previous === null ||
+        previous.name !== name ||
+        !agreesWith(live.get(key)?.activity.activity, signal)
+      ) {
+        recompute(ref);
+      }
     },
     terminalStopped(ref) {
       const key = refKey(ref);

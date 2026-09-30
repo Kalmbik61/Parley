@@ -25,6 +25,7 @@
 //   STUB_CODEX_NO_TITLE=1        — заголовков нет вовсе (экран входа или доверия к папке)
 //   STUB_CODEX_READY_MS=<n>      — пауза до первого `Ready` (по умолчанию 0)
 //   STUB_CODEX_NO_PASTE=1        — bracketed paste не включается
+//   STUB_CODEX_PASTE_MS=<n>      — bracketed paste включается через n мс после старта (по умолчанию сразу)
 //   STUB_CODEX_THREAD=<uuid>     — id треда в заголовке
 //   STUB_CODEX_ARGS_FILE=<путь>  — при старте пишет туда JSON { argv, cwd, env }
 
@@ -129,7 +130,11 @@ if (process.env.STUB_CODEX_ARGS_FILE !== undefined) {
 }
 
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
-if (process.env.STUB_CODEX_NO_PASTE !== '1') out('\x1b[?2004h');
+if (process.env.STUB_CODEX_NO_PASTE !== '1') {
+  const pasteMs = Number(process.env.STUB_CODEX_PASTE_MS ?? '0');
+  if (pasteMs > 0) setTimeout(() => out('\x1b[?2004h'), pasteMs);
+  else out('\x1b[?2004h');
+}
 
 if (process.env.STUB_CODEX_NO_TITLE === '1') {
   line('Do you trust the contents of this directory?');

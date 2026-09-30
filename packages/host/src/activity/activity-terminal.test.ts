@@ -189,6 +189,7 @@ describe('сигналы терминала codex → активность', () 
 
   it('неизвестное состояния не меняет: ни «работает», ни сброса, ни рассылки', async () => {
     const { a, ref } = await started();
+    a.terminalSignal(ref, WORKING);
     a.terminalSignal(ref, READY);
     const before = changes(ref).length;
 
@@ -213,20 +214,128 @@ describe('сигналы терминала codex → активность', () 
     expect(changes(ref).length).toBe(count);
   });
 
-  it('спиннер — сердцебиение: пока кадры идут, порог тишины сессию не роняет; без них — роняет', async () => {
+  it('под хостом порог тишины ход не кончает: ни кадров, ни сигналов дольше порога — сессия работает', async () => {
+    // Codex с личным `tui.animations=false` или долгий инструмент не пишут заголовок весь ход; процесс под
+    // хостом жив (его выход — `terminalStopped`), а конец хода — `Ready`, OSC 9 или `Stop` от notify.
     const { a, ref } = await started({ silenceThresholdMs: 400 });
     a.terminalSignal(ref, WORKING);
 
-    // Втрое дольше порога, кадры идут: `working` остаётся.
-    for (let step = 0; step < 12; step += 1) {
-      await settle(100);
-      a.terminalSignal(ref, WORKING);
-    }
+    await settle(1000);
     expect(a.get(ref)?.activity.activity).toBe('working');
 
-    // Кадры прекратились — через порог тишины сессия закончила ход.
+    // Кадры вернулись после паузы — всё ещё «работает», и рассылка на них не идёт.
+    const count = changes(ref).length;
+    for (let frame = 0; frame < 6; frame += 1) a.terminalSignal(ref, WORKING);
+    expect(a.get(ref)?.activity.activity).toBe('working');
+    expect(changes(ref).length).toBe(count);
+
+    // Конец хода приходит сигналом, а не тишиной.
+    a.terminalSignal(ref, READY);
+    expect(a.get(ref)?.activity.activity).toBe('unseen');
+  }, 20_000);
+
+  it('порог тишины по-прежнему роняет `working` сессии codex, чей процесс не под хостом', async () => {
+    // Сессия записана в карте как codex, но запущена не окном (например, CLI): терминала у хоста нет,
+    // состояние — по журналу, как у всякой, и порог тишины действует.
+    const { workId, ref } = await codexSession({ eventsDir: true });
+    const w = await works();
+    const a = activity(w, { silenceThresholdMs: 300 });
+    await a.start();
+    await appendFile(
+      path.join(workPaths(project, workId).events, `${ref.sessionId}.jsonl`),
+      `${JSON.stringify({ hook_event_name: 'UserPromptSubmit' })}\n`,
+    );
+    await updateMap(project, workId, () => undefined);
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
     await waitFor(() => a.get(ref)?.activity.activity === 'unseen', 3000);
   }, 20_000);
+
+  it('Stop от notify новее сигнала работы завершает ход, но следующий кадр спиннера возвращает `working`', async () => {
+    // Журнал даёт событию время файла на момент чтения; `Stop`, который скрипт notify дописал позже
+    // последнего кадра, перекрывает сигнал терминала. Ход при этом идёт (следующий ход из очереди Tab
+    // начинается сразу после конца предыдущего), и повторный кадр того же вида обязан это исправить.
+    const { a, ref, workId } = await started();
+    a.terminalSignal(ref, WORKING);
+    await settle(30);
+
+    const dir = workPaths(project, workId).events;
+    await mkdir(dir, { recursive: true });
+    await appendFile(path.join(dir, `${ref.sessionId}.jsonl`), `${JSON.stringify({ hook_event_name: 'Stop' })}\n`);
+    await updateMap(project, workId, () => undefined);
+    await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
+
+    await settle(30);
+    a.terminalSignal(ref, WORKING);
+    expect(a.get(ref)?.activity.activity).toBe('working');
+    // И держится: пересчёт от чужого события порядок не ломает.
+    await updateMap(project, workId, () => undefined);
+    await settle(200);
+    expect(a.get(ref)?.activity.activity).toBe('working');
+  }, 20_000);
+
+  it('Stop от notify во время Action Required не снимает «нужен ты»: следующее мигание заголовка возвращает blocked', async () => {
+    const { a, ref, workId } = await started();
+    a.terminalSignal(ref, WORKING);
+    a.terminalSignal(ref, ACTION);
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+    await settle(30);
+
+    const dir = workPaths(project, workId).events;
+    await mkdir(dir, { recursive: true });
+    await appendFile(path.join(dir, `${ref.sessionId}.jsonl`), `${JSON.stringify({ hook_event_name: 'Stop' })}\n`);
+    await updateMap(project, workId, () => undefined);
+    await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
+
+    // Заголовок Action Required мигает, пока Codex ждёт человека: следующее мигание — тот же вид сигнала.
+    await settle(30);
+    a.terminalSignal(ref, ACTION);
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+  }, 20_000);
+
+  it('повторный сигнал, с которым состояние согласно, пересчёта не заводит', async () => {
+    const { a, ref } = await started();
+    a.terminalSignal(ref, WORKING);
+    a.terminalSignal(ref, WORKING);
+    const count = changes(ref).length;
+    for (let frame = 0; frame < 30; frame += 1) a.terminalSignal(ref, WORKING);
+    a.terminalSignal(ref, READY);
+    for (let frame = 0; frame < 5; frame += 1) a.terminalSignal(ref, READY);
+    expect(changes(ref).length).toBe(count + 1);
+  });
+
+  it('первый Ready с запуска — агент у приглашения, а не конец хода: не unseen и без «finished»', async () => {
+    const before = Date.now();
+    const { a, ref } = await started();
+    a.terminalSignal(ref, READY);
+
+    // Тусклое состояние, как у свежей сессии Claude, но хост «в курсе»: по сигналу можно отправлять и будить.
+    expect(a.get(ref)?.activity.activity).toBe('idle');
+    expect(a.get(ref)?.activity.turnEndedAt).toBeNull();
+    expect(hookedSince(a.get(ref)?.activity, before)).toBe(true);
+
+    // Повторные Ready (заголовок переписывается при смене ветки или модели) ничего не меняют.
+    for (let repeat = 0; repeat < 3; repeat += 1) a.terminalSignal(ref, READY);
+    expect(a.get(ref)?.activity.activity).toBe('idle');
+    expect(changes(ref)).not.toContain('unseen');
+  });
+
+  it('Ready после хода — конец хода; следующий за ним Ready ничего не меняет', async () => {
+    const { a, ref } = await started();
+    a.terminalSignal(ref, READY);
+    a.terminalSignal(ref, WORKING);
+    a.terminalSignal(ref, READY);
+    expect(a.get(ref)?.activity.activity).toBe('unseen');
+    a.terminalSignal(ref, READY);
+    expect(a.get(ref)?.activity.activity).toBe('unseen');
+  });
+
+  it('agent-turn-complete до всякого заголовка работы — конец хода, а не приглашение', async () => {
+    const { a, ref } = await started();
+    a.terminalSignal(ref, { kind: 'turn-complete' });
+    expect(a.get(ref)?.activity.activity).toBe('unseen');
+    a.terminalSignal(ref, READY);
+    expect(a.get(ref)?.activity.activity).toBe('unseen');
+  });
 
   it('конец хода от notify (Stop в журнале) после сигнала работы завершает ход', async () => {
     const { a, ref, workId } = await started();
@@ -324,6 +433,18 @@ describe('сигналы терминала codex → активность', () 
     expect(a.get(ref)?.activity.lastEventAt).toBeNull();
   });
 
+  it('у нового процесса (resume) первый Ready снова приглашение, хотя у прошлого были ходы', async () => {
+    const { a, ref } = await started();
+    a.terminalSignal(ref, WORKING);
+    a.terminalSignal(ref, READY);
+    expect(a.get(ref)?.activity.activity).toBe('unseen');
+
+    a.terminalStarted(ref);
+    a.terminalSignal(ref, READY);
+    expect(a.get(ref)?.activity.activity).toBe('idle');
+    expect(a.get(ref)?.activity.lastEventAt).not.toBeNull();
+  });
+
   it('lastEventAt — момент известного сигнала: по нему pty.send и будильник знают, что хост «в курсе»', async () => {
     const before = Date.now();
     const { a, ref } = await started();
@@ -363,7 +484,8 @@ describe('экраны старта codex — «нужен ты» с причи�
     const { a, ref } = await started({ startupWaitMs: 300 });
     a.terminalSignal(ref, READY);
     await settle(600);
-    expect(a.get(ref)?.activity.activity).toBe('unseen');
+    expect(a.get(ref)?.activity.activity).toBe('idle');
+    expect(a.get(ref)?.activity.lastEventAt).not.toBeNull();
     expect(notices('startup-wait')).toHaveLength(0);
   }, 20_000);
 
@@ -375,12 +497,13 @@ describe('экраны старта codex — «нужен ты» с причи�
     expect(notices('startup-wait')).toHaveLength(0);
   }, 20_000);
 
-  it('после экрана старта человек прошёл доверие — Ready возвращает сессию из blocked', async () => {
+  it('после экрана старта человек прошёл доверие — Ready снимает blocked: агент у приглашения, ход не кончался', async () => {
     const { a, ref } = await started({ startupWaitMs: 100 });
     await waitFor(() => a.get(ref)?.activity.activity === 'blocked');
 
     a.terminalSignal(ref, READY);
-    expect(a.get(ref)?.activity.activity).toBe('unseen');
+    expect(a.get(ref)?.activity.activity).toBe('idle');
+    expect(changes(ref)).not.toContain('unseen');
   }, 20_000);
 
   it('незнакомые заголовки срок не снимают: их «неизвестно» — это и есть экран, которого не узнали', async () => {
