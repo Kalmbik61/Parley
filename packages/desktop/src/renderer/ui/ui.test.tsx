@@ -24,7 +24,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from './hover-card.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './select.js';
 import { MENU_GLASS } from './glass.js';
 import { Command, CommandInput, CommandItem, CommandList, CommandShortcut } from './command.js';
-import { Toaster } from './sonner.js';
+import { TOAST_BOTTOM_OFFSET, TOAST_INSET_VAR, Toaster } from './sonner.js';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './tooltip.js';
 import { buttonVariants } from './button.js';
 import { Input } from './input.js';
@@ -292,6 +292,28 @@ describe('ui/sonner — тест 7', () => {
     } finally {
       useUiStore.setState({ dark: initialDark });
     }
+  });
+});
+
+describe('ui/sonner — угол с плавающей панелью (кусок 12)', () => {
+  it('отступ снизу — 2.5rem плюс --toast-inset-bottom панели в углу, но не выше окна (100vh − 4.5rem)', async () => {
+    expect(TOAST_INSET_VAR).toBe('--toast-inset-bottom');
+    expect(TOAST_BOTTOM_OFFSET).toBe('min(calc(2.5rem + var(--toast-inset-bottom, 0px)), calc(100vh - 4.5rem))');
+
+    render(<Toaster />);
+    toast('Проверка отступа');
+    await waitFor(() => {
+      const list = document.querySelector<HTMLElement>('[data-sonner-toaster]');
+      expect(list?.style.getPropertyValue('--offset-bottom')).toBe(TOAST_BOTTOM_OFFSET);
+    });
+  });
+
+  it('свой offset из props перекрывает отступ по умолчанию', async () => {
+    render(<Toaster offset={{ bottom: '10px' }} />);
+    toast('Проверка своего отступа');
+    await waitFor(() => {
+      expect(document.querySelector<HTMLElement>('[data-sonner-toaster]')?.style.getPropertyValue('--offset-bottom')).toBe('10px');
+    });
   });
 });
 
