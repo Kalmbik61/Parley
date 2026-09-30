@@ -36,6 +36,28 @@ export function roomAwaitsDecision(room: Room): boolean {
   return (room.proposal ?? null) !== null;
 }
 
+// Те же литералы, что `RETURNED_LETTER` и `ACCEPTED_LETTER` в `core/work/proposals.ts`: из core рендерер берёт только
+// типы. Сходство держит страж `main/decision-letters-sync.test.ts`.
+const RETURNED_LETTER = 'Returned for rework';
+const ACCEPTED_LETTER = 'Decision accepted.';
+
+/**
+ * Последний ответ человека на решение комнаты — `Return for rework` (спека окна 2026-09-29, 1.10)? Слот `proposal`
+ * после ответа пуст и не помнит, чем ответили, а факт ответа лежит в ленте: письмо человека ведущему — `Returned for
+ * rework: …` или `Decision accepted.`. Решает самое позднее из двух: возврат, за которым решение приняли, следующее
+ * решение «переделанным» не делает. Свои слова человека в комнате (без этих двух начал) в счёт не идут. Ленту читаем
+ * в момент нового решения, а не ведём по снимкам окна: окно, открытое между возвратом и новым решением, тоже знает.
+ */
+export function roomDecisionReturned(map: WorkMap, roomId: string): boolean {
+  const answer = map.messages.findLast(
+    (message) =>
+      message.roomId === roomId &&
+      message.from === HUMAN &&
+      (message.text.startsWith(RETURNED_LETTER) || message.text === ACCEPTED_LETTER),
+  );
+  return answer?.text.startsWith(RETURNED_LETTER) ?? false;
+}
+
 /** Таблица спеки 7.1. */
 export function sessionAttention(session: WorkSession, live: SessionActivity | null): Attention {
   if (session.lifecycle === 'closed') return 'off';

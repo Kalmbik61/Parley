@@ -20,7 +20,7 @@ import { workKey } from '../lib/tree-order.js';
 import { useActivityStore } from '../store/activity.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
-import { humanUnreadLetters, roomAwaitsDecision, sessionAttention, type Attention } from './derive.js';
+import { humanUnreadLetters, roomAwaitsDecision, roomDecisionReturned, sessionAttention, type Attention } from './derive.js';
 import { visibleSessions } from './seen.js';
 import { useWindowNotesStore, type WindowNote } from './window-notes.js';
 
@@ -74,7 +74,7 @@ export function createAttentionNotifier(deps: NotifyDeps): {
   onActivity(ref: SessionRef, activity: SessionActivity): void;
   /**
    * Новые прямые письма человеку (isHumanUnread) и решения ведущих, ждущие человека в комнатах (новое — по новому `id`,
-   * переделанное — по выросшему `rev`); первый снимок — база.
+   * переделанное — по выросшему `rev` или по новому `id` после возврата на доработку); первый снимок — база.
    */
   onWorks(entries: readonly WorkEntry[]): void;
   /** trust-wait, launch-failed, resume-failed; ref: null или сессии нет в снимке — без уведомления. */
@@ -128,9 +128,11 @@ export function createAttentionNotifier(deps: NotifyDeps): {
   };
 
   /**
-   * Сравнивает решения снимка с теми, что окно уже знает. Новый `id` в комнате — «collected positions», тот же `id` с
-   * выросшим `rev` — «revised»; то же самое решение (`id` и `rev`) молчит. Первый снимок — база: решения, что уже ждали
-   * на старте окна или после переподключения к хосту, не уведомляют второй раз (как письма, спека 7.4).
+   * Сравнивает решения снимка с теми, что окно уже знает. Новый `id` в комнате — «collected positions», а если прежнее
+   * решение человек вернул на доработку (`roomDecisionReturned`) — «revised»: ведущий принёс исправленное, и новый `id`
+   * тут не признак нового решения. Тот же `id` с выросшим `rev` — тоже «revised» (замена до ответа); то же самое
+   * решение (`id` и `rev`) молчит. Первый снимок — база: решения, что уже ждали на старте окна или после переподключения
+   * к хосту, не уведомляют второй раз (как письма, спека 7.4).
    */
   const trackDecisions = (entries: readonly WorkEntry[]): void => {
     const isBase = knownDecisions === null;
@@ -151,8 +153,9 @@ export function createAttentionNotifier(deps: NotifyDeps): {
         const proposal = room.proposal as Proposal;
         known.set(slot, { id: proposal.id, rev: proposal.rev, waiting: true });
         if (isBase) continue;
-        if (before === undefined || before.id !== proposal.id) notifyDecision(entry, room, proposal, 'new');
-        else if (proposal.rev > before.rev) notifyDecision(entry, room, proposal, 'revised');
+        if (before === undefined || before.id !== proposal.id) {
+          notifyDecision(entry, room, proposal, roomDecisionReturned(entry.map, room.id) ? 'revised' : 'new');
+        } else if (proposal.rev > before.rev) notifyDecision(entry, room, proposal, 'revised');
       }
     }
   };
