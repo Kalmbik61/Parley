@@ -8,7 +8,8 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
-import { GUIDE } from '../work/guide.js';
+import { PROVIDERS, selectableModels } from '../providers.js';
+import { GUIDE, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import {
   addMessage,
   addSession,
@@ -202,11 +203,12 @@ describe('contextFromEnv', () => {
 });
 
 describe('список инструментов', () => {
-  it('ровно одиннадцать инструментов спецификации', async () => {
+  it('ровно двенадцать инструментов спецификации', async () => {
     const client = await connect('s-01');
     const { tools } = await client.listTools();
 
     expect(tools.map((tool) => tool.name).sort()).toEqual([
+      'add_to_room',
       'check_inbox',
       'close_session',
       'create_room',
@@ -246,6 +248,59 @@ describe('список инструментов', () => {
     const guide = tools.find((tool) => tool.name === 'read_guide');
 
     expect(guide?.description).toMatch(/комнаты и роли в них \(ведущий, участник\)/);
+  });
+
+  it('add_to_room: room и session обязательны, описание — про ведущего, одну комнату и строку в ленте', async () => {
+    const client = await connect('s-01');
+    const { tools } = await client.listTools();
+    const add = tools.find((tool) => tool.name === 'add_to_room');
+
+    expect(add?.inputSchema.required).toEqual(['room', 'session']);
+    expect(Object.keys(add?.inputSchema.properties ?? {}).sort()).toEqual(['room', 'session']);
+    // Тон соседних описаний: только ведущий, одна комната на сессию, системная строка, письма нет.
+    expect(add?.description).toMatch(/Только ведущий/);
+    expect(add?.description).toMatch(/Одна комната на сессию/);
+    expect(add?.description).toContain('@s04 joined the room');
+    expect(add?.description).toMatch(/не получает/);
+  });
+
+  it('spawn_session: model и effort необязательны, effort — три уровня, описание отсылает к get_map', async () => {
+    const client = await connect('s-01');
+    const { tools } = await client.listTools();
+    const spawn = tools.find((tool) => tool.name === 'spawn_session');
+
+    expect(spawn?.inputSchema.required).toEqual(['provider', 'label', 'task']);
+    expect(spawn?.inputSchema.properties?.['model']).toMatchObject({ type: 'string' });
+    expect(spawn?.inputSchema.properties?.['effort']).toMatchObject({
+      type: 'string',
+      enum: ['low', 'medium', 'high'],
+    });
+    expect(JSON.stringify(spawn?.inputSchema.properties?.['model'])).toContain('get_map');
+    expect(JSON.stringify(spawn?.inputSchema.properties?.['effort'])).toContain('get_map');
+  });
+
+  it('гид называет в подписи spawn_session все параметры инструмента, в том же порядке', async () => {
+    const client = await connect('s-01');
+    const { tools } = await client.listTools();
+    const spawn = tools.find((tool) => tool.name === 'spawn_session');
+    const signature = /`spawn_session\(([^)]*)\)`/.exec(guideTopic('tools') ?? '')?.[1];
+
+    // Подпись в теме `tools` — то, что агент читает вместо схемы: параметр, которого в ней нет, он не найдёт.
+    expect(signature?.split(',').map((name) => name.trim())).toEqual(
+      Object.keys(spawn?.inputSchema.properties ?? {}),
+    );
+  });
+
+  it('read_guide: topic необязателен, enum — темы гида, описание перечисляет их', async () => {
+    const client = await connect('s-01');
+    const { tools } = await client.listTools();
+    const guide = tools.find((tool) => tool.name === 'read_guide');
+    const names = GUIDE_TOPICS.map((item) => item.topic);
+
+    expect(guide?.inputSchema.required ?? []).toEqual([]);
+    expect(Object.keys(guide?.inputSchema.properties ?? {})).toEqual(['topic']);
+    expect(guide?.inputSchema.properties?.['topic']).toMatchObject({ type: 'string', enum: names });
+    for (const name of names) expect(guide?.description).toContain(name);
   });
 
   it('create_room: lead необязателен, описание называет ведущего по умолчанию', async () => {
@@ -314,6 +369,59 @@ describe('read_guide', () => {
     expect(result.isError, result.text).toBe(false);
     expect(result.text).toBe(GUIDE);
   });
+
+  it('с темой отдаёт один раздел — каждая тема гида отвечает своим текстом', async () => {
+    const client = await connect('s-01');
+
+    for (const { topic } of GUIDE_TOPICS) {
+      const result = await call(client, 'read_guide', { topic });
+      expect(result.isError, `${topic}: ${result.text}`).toBe(false);
+      expect(result.text, topic).toBe(guideTopic(topic));
+      // Раздел короче всего гида: тема не отдаёт лишнего.
+      expect(result.text.length, topic).toBeLessThan(GUIDE.length);
+    }
+  });
+
+  it('тема работает и без HARNAS_SESSION_ID', async () => {
+    const client = await connect(null);
+    const result = await call(client, 'read_guide', { topic: 'rooms' });
+
+    expect(result.isError, result.text).toBe(false);
+    expect(result.text).toBe(guideTopic('rooms'));
+  });
+
+  it('пустая тема — как её отсутствие: весь гид', async () => {
+    const client = await connect('s-01');
+    const result = await call(client, 'read_guide', { topic: '' });
+
+    expect(result.isError, result.text).toBe(false);
+    expect(result.text).toBe(GUIDE);
+  });
+
+  it('регистр и пробелы по краям темы не мешают', async () => {
+    const client = await connect('s-01');
+    const result = await call(client, 'read_guide', { topic: ' Lead ' });
+
+    expect(result.isError, result.text).toBe(false);
+    expect(result.text).toBe(guideTopic('lead'));
+  });
+
+  it('неизвестная тема — ошибка со списком тем', async () => {
+    const client = await connect('s-01');
+    const result = await call(client, 'read_guide', { topic: 'нет-такой' });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('нет-такой');
+    for (const { topic } of GUIDE_TOPICS) expect(result.text).toContain(topic);
+  });
+
+  it('тема не строкой — ошибка с именем аргумента', async () => {
+    const client = await connect('s-01');
+    const result = await call(client, 'read_guide', { topic: 7 });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('topic');
+  });
 });
 
 describe('get_map', () => {
@@ -325,13 +433,38 @@ describe('get_map', () => {
     expect((result['map'] as WorkMap).work.title).toBe('Авторизация');
     expect((result['map'] as WorkMap).sessions).toHaveLength(1);
 
-    const providers = result['providers'] as { id: string; label: string; available: boolean }[];
-    expect(providers.find((entry) => entry.id === 'claude')).toEqual({
+    const providers = result['providers'] as {
+      id: string;
+      label: string;
+      available: boolean;
+      models: { id: string; label: string }[] | null;
+      effort: boolean;
+    }[];
+    expect(providers.find((entry) => entry.id === 'claude')).toMatchObject({
       id: 'claude',
       label: 'Claude',
       available: true,
     });
     expect(providers.find((entry) => entry.id === 'codex')?.available).toBe(false);
+  });
+
+  it('провайдеры несут то же, что providers.list окна: список моделей и принимает ли усилие', async () => {
+    const client = await connect('s-01');
+    const result = await callOk(client, 'get_map');
+    const providers = result['providers'] as {
+      id: string;
+      models: { id: string; label: string }[] | null;
+      effort: boolean;
+    }[];
+    const byId = (id: string) => providers.find((entry) => entry.id === id);
+
+    expect(byId('claude')?.models).toEqual(selectableModels(PROVIDERS.claude));
+    expect(byId('claude')?.models?.map((model) => model.id)).toContain('opus');
+    expect(byId('claude')?.effort).toBe(true);
+    expect(byId('codex')?.models).toEqual(selectableModels(PROVIDERS.codex));
+    expect(byId('codex')?.effort).toBe(true);
+    // У glm нет ни шаблона с моделью, ни списка: контролов у него нет.
+    expect(byId('glm')).toMatchObject({ models: null, effort: false });
   });
 
   it('работает без HARNAS_SESSION_ID', async () => {
@@ -649,6 +782,179 @@ describe('spawn_session worktree', () => {
   });
 });
 
+describe('spawn_session: модель и усилие', () => {
+  /** Свои провайдеры: шаблоны решают, что доедет до команды. Бинарь — заглушка из `beforeEach`. */
+  async function withProviders(): Promise<void> {
+    await writeFile(
+      path.join(home, 'providers.json'),
+      JSON.stringify({
+        // `{model}` есть, списка нет: значение идёт в команду как есть.
+        smart: { badge: 'Smart', command: 'smart', args: ['--m', '{model}', '{prompt}'] },
+        // Ни `{model}`, ни `{effort}`: выбор отбрасывается.
+        plain: { badge: 'Plain', command: 'plain', args: ['{prompt}'] },
+      }),
+      'utf8',
+    );
+    process.env.HARNAS_SMART_BIN = path.join(binDir, 'claude');
+    process.env.HARNAS_PLAIN_BIN = path.join(binDir, 'claude');
+  }
+  afterEach(() => {
+    delete process.env.HARNAS_SMART_BIN;
+    delete process.env.HARNAS_PLAIN_BIN;
+  });
+
+  it('модель из списка и усилие ложатся в запись сессии', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', {
+      provider: 'claude',
+      label: 'бэк',
+      task: 'делать',
+      model: 'opus',
+      effort: 'high',
+    });
+
+    const stored = session(await readMapFile(), 's-02');
+    expect(stored.model).toBe('opus');
+    expect(stored.effort).toBe('high');
+  });
+
+  it('каждая модель списка провайдера проходит', async () => {
+    const client = await connect('s-01');
+    for (const { id } of selectableModels(PROVIDERS.claude) ?? []) {
+      const result = await call(client, 'spawn_session', {
+        provider: 'claude',
+        label: 'бэк',
+        task: 'делать',
+        model: id,
+      });
+      expect(result.isError, `${id}: ${result.text}`).toBe(false);
+    }
+  });
+
+  it('без выбора полей в записи нет: модель и усилие по умолчанию', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+
+    const stored = session(await readMapFile(), 's-02');
+    expect('model' in stored).toBe(false);
+    expect('effort' in stored).toBe(false);
+  });
+
+  it('пустые model и effort — как отсутствие', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', {
+      provider: 'claude',
+      label: 'бэк',
+      task: 'делать',
+      model: '',
+      effort: '',
+    });
+
+    const stored = session(await readMapFile(), 's-02');
+    expect('model' in stored).toBe(false);
+    expect('effort' in stored).toBe(false);
+  });
+
+  it('модель не из списка — ошибка с допустимыми, записи нет', async () => {
+    const client = await connect('s-01');
+    // Значение чужого провайдера, иное написание и закреплённая версия — не из списка: сверка точная.
+    for (const model of ['gpt-6-sol', 'Opus', 'claude-opus-5-5']) {
+      const result = await call(client, 'spawn_session', {
+        provider: 'claude',
+        label: 'бэк',
+        task: 'делать',
+        model,
+      });
+
+      expect(result.isError, model).toBe(true);
+      expect(result.text, model).toContain(model);
+      expect(result.text, model).toContain('claude');
+      expect(result.text, model).toContain('opusplan');
+    }
+    expect((await readMapFile()).sessions).toHaveLength(1);
+  });
+
+  it('модель, которую CLI принял бы за флаг или разорвал пробелом, — ошибка, записи нет', async () => {
+    const client = await connect('s-01');
+    for (const model of ['--effort', 'op us', 'x'.repeat(201)]) {
+      const result = await call(client, 'spawn_session', {
+        provider: 'claude',
+        label: 'бэк',
+        task: 'делать',
+        model,
+      });
+      expect(result.isError, model).toBe(true);
+    }
+    expect((await readMapFile()).sessions).toHaveLength(1);
+  });
+
+  it('усилие вне трёх уровней — ошибка с перечнем, записи нет', async () => {
+    const client = await connect('s-01');
+    const result = await call(client, 'spawn_session', {
+      provider: 'claude',
+      label: 'бэк',
+      task: 'делать',
+      effort: 'extreme',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('low | medium | high');
+    expect((await readMapFile()).sessions).toHaveLength(1);
+  });
+
+  it('codex: своя модель проходит, модель Claude — нет', async () => {
+    process.env.HARNAS_CODEX_BIN = path.join(binDir, 'claude');
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', {
+      provider: 'codex',
+      label: 'бэк',
+      task: 'делать',
+      model: 'gpt-6-sol',
+      effort: 'low',
+    });
+    expect(session(await readMapFile(), 's-02')).toMatchObject({ model: 'gpt-6-sol', effort: 'low' });
+
+    const refused = await call(client, 'spawn_session', {
+      provider: 'codex',
+      label: 'бэк',
+      task: 'делать',
+      model: 'opus',
+    });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('codex');
+    expect((await readMapFile()).sessions).toHaveLength(2);
+  });
+
+  it('провайдер без списка, но с {model} в шаблоне: значение принимается как есть', async () => {
+    await withProviders();
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', {
+      provider: 'smart',
+      label: 'бэк',
+      task: 'делать',
+      model: 'anything',
+    });
+
+    expect(session(await readMapFile(), 's-02').model).toBe('anything');
+  });
+
+  it('провайдер без флагов в шаблоне выбор отбрасывает молча: запись заводится без него', async () => {
+    await withProviders();
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', {
+      provider: 'plain',
+      label: 'бэк',
+      task: 'делать',
+      model: 'anything',
+      effort: 'high',
+    });
+
+    const stored = session(await readMapFile(), 's-02');
+    expect('model' in stored).toBe(false);
+    expect('effort' in stored).toBe(false);
+  });
+});
+
 describe('send_message и check_inbox', () => {
   it('сообщение доходит и помечается прочитанным один раз', async () => {
     const first = await connect('s-01');
@@ -914,6 +1220,149 @@ describe('create_room: ведущий', () => {
     expect(await callOk(client, 'create_room', { title: 'бэкенд', members: ['s-02'] })).toEqual({
       roomId: 'r-01',
     });
+  });
+});
+
+describe('add_to_room', () => {
+  /**
+   * Комната r-01 «комната»: s-01 — вызывающий и ведущий по умолчанию, s-02 — участник (приглашение
+   * забрано). s-03 и s-04 заведены в работе, но в комнату не входят.
+   */
+  async function setup(): Promise<{ lead: Client; member: Client }> {
+    const lead = await connect('s-01');
+    await callOk(lead, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await callOk(lead, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
+    await callOk(lead, 'spawn_session', { provider: 'claude', label: 'тесты', task: 'делать' }); // s-04
+    await callOk(lead, 'create_room', { title: 'комната', members: ['s-02'] });
+    const member = await connect('s-02');
+    await callOk(member, 'check_inbox');
+    return { lead, member };
+  }
+
+  /** Карта как есть на диске: после отказа она должна совпасть байт в байт. */
+  const rawMap = (): Promise<string> => readFile(workPaths(project, workId).map, 'utf8');
+
+  it('ведущий вводит живую сессию: она в members, в ленте — системная строка, письма ей нет', async () => {
+    const { lead } = await setup();
+    const result = await callOk(lead, 'add_to_room', { room: 'r-01', session: 's-04' });
+
+    const map = await readMapFile();
+    expect(map.rooms[0]?.members).toEqual(['s-02', 's-04']);
+    const line = map.messages.at(-1);
+    expect(result).toEqual({ messageId: line?.id });
+    expect(line).toMatchObject({
+      roomId: 'r-01',
+      from: 'system',
+      to: [HUMAN],
+      text: '@s04 joined the room',
+    });
+    // Письма о добавлении новому участнику не пишется: его ящик пуст.
+    const added = await connect('s-04');
+    expect(await callOk(added, 'check_inbox')).toEqual({ messages: [] });
+  });
+
+  it('одна комната на сессию: введённая уходит из другой комнаты той же работы', async () => {
+    const { lead } = await setup();
+    await callOk(lead, 'create_room', { title: 'вторая', members: ['s-03'] }); // r-02, ведущий s-01
+    await callOk(lead, 'add_to_room', { room: 'r-01', session: 's-03' });
+
+    const map = await readMapFile();
+    expect(map.rooms.find((room) => room.id === 'r-01')?.members).toEqual(['s-02', 's-03']);
+    expect(map.rooms.find((room) => room.id === 'r-02')?.members).toEqual([]);
+  });
+
+  it('участник комнаты вводить не может: ошибка «не ведущий», карта не изменилась', async () => {
+    const { member } = await setup();
+    const before = await rawMap();
+
+    const refused = await call(member, 'add_to_room', { room: 'r-01', session: 's-04' });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toMatch(/не ведущий/);
+    expect(await rawMap()).toBe(before);
+  });
+
+  it('посторонний тоже не ведущий — карта не изменилась', async () => {
+    await setup();
+    const stranger = await connect('s-03');
+    const before = await rawMap();
+
+    const refused = await call(stranger, 'add_to_room', { room: 'r-01', session: 's-04' });
+    expect(refused.isError).toBe(true);
+    expect(await rawMap()).toBe(before);
+  });
+
+  it('ведущий — живой ведущий: назначенный закрыт — вводит первый живой участник', async () => {
+    const { lead, member } = await setup();
+    await callOk(lead, 'close_session', { target: 's-01' });
+    const before = await rawMap();
+
+    const closedLead = await call(lead, 'add_to_room', { room: 'r-01', session: 's-04' });
+    expect(closedLead.isError).toBe(true);
+    expect(await rawMap()).toBe(before);
+
+    await callOk(member, 'add_to_room', { room: 'r-01', session: 's-04' });
+    expect((await readMapFile()).rooms[0]?.members).toEqual(['s-02', 's-04']);
+  });
+
+  it('закрытая комната — ошибка, карта не изменилась', async () => {
+    const { lead } = await setup();
+    await callOk(lead, 'close_session', { target: 's-02' });
+    await callOk(lead, 'close_session', { target: 's-01' });
+    const before = await rawMap();
+
+    const refused = await call(lead, 'add_to_room', { room: 'r-01', session: 's-04' });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toMatch(/закрыта/);
+    expect(await rawMap()).toBe(before);
+  });
+
+  it('чужая, закрытая сессия и уже участник — ошибка, карта не изменилась', async () => {
+    const { lead } = await setup();
+    await callOk(lead, 'close_session', { target: 's-03' });
+    const before = await rawMap();
+
+    const cases: Array<[string, RegExp]> = [
+      ['s-77', /нет в карте/],
+      ['s-03', /закрыта/],
+      ['s-02', /уже участник/],
+      ['s-01', /уже участник/],
+    ];
+    for (const [session, message] of cases) {
+      const refused = await call(lead, 'add_to_room', { room: 'r-01', session });
+      expect(refused.isError, session).toBe(true);
+      expect(refused.text, session).toMatch(message);
+    }
+    expect(await rawMap()).toBe(before);
+  });
+
+  it('комнаты нет — ошибка; без room или session — ошибка с именем аргумента', async () => {
+    const { lead } = await setup();
+    const before = await rawMap();
+
+    const unknown = await call(lead, 'add_to_room', { room: 'r-09', session: 's-04' });
+    expect(unknown.isError).toBe(true);
+    expect(unknown.text).toContain('r-09');
+    const noRoom = await call(lead, 'add_to_room', { session: 's-04' });
+    expect(noRoom.isError).toBe(true);
+    expect(noRoom.text).toContain('room');
+    const noSession = await call(lead, 'add_to_room', { room: 'r-01' });
+    expect(noSession.isError).toBe(true);
+    expect(noSession.text).toContain('session');
+    expect(await rawMap()).toBe(before);
+  });
+
+  it('сервер удалённой сессии ведущим не служит', async () => {
+    const { lead } = await setup();
+    // s-01 удалена человеком, а её сервер ещё жив: SessionEnd приходит раньше выхода процесса.
+    await updateMap(project, workId, (map) => {
+      removeSession(map, 's-01');
+    });
+    const before = await rawMap();
+
+    const refused = await call(lead, 'add_to_room', { room: 'r-01', session: 's-04' });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('s-01');
+    expect(await rawMap()).toBe(before);
   });
 });
 

@@ -54,6 +54,7 @@ import { HostError } from '../errors.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { WorksService } from '../works/works-service.js';
 import { gitFailure } from '../worktrees/worktrees-service.js';
+import { createSkillInstaller } from './agent-skills.js';
 import { autoLaunchCandidates } from './auto-launch.js';
 import { findInterrupted } from './interrupted.js';
 import { resolveModelChoice } from './model-choice.js';
@@ -135,6 +136,9 @@ export function createSessionsService(
   // раньше, чем `startSession` — `active`, и карта осталась бы с живой сессией
   // без процесса. Выход дожидается записи старта.
   const starting = new Map<string, Promise<void>>();
+
+  // Скилл `harnas` в проект и в worktree сессии перед каждым запуском (`agent-skills.ts`).
+  const installSkill = createSkillInstaller(host);
 
   // Закрываемые сейчас: между остановкой PTY и записью `closed` сессия успевает
   // побыть `sleeping`, и письмо в этот миг подняло бы её обратно.
@@ -222,6 +226,10 @@ export function createSessionsService(
           }
         });
       }
+
+      // Скилл ставится после worktree: его корень к этому моменту уже на диске. Сбой установки запуск не
+      // останавливает — `installSkill` его не бросает.
+      await installSkill(ref, session.worktree?.path ?? null);
 
       const planFn = mode === 'resume' ? planResume : mode === 'new' ? planNew : planLaunch;
       const plan = await planFn(ref.projectPath, ref.workId, session, {

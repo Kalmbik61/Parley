@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildBrief, writeBrief } from './brief.js';
+import { GUIDE_TOPICS, guideTopic } from './guide.js';
 import { addMessage, addSession } from './map.js';
 import { addRoom } from './rooms.js';
 import { createWork } from './store.js';
@@ -342,12 +343,14 @@ describe('бриф: роль в комнате', () => {
     expect(buildBrief(map, 's-01')).toContain('- r-01 «Бэкенд»: ведущий — s-03 (ревью).');
   });
 
-  it('роль отсылает к разделу «Комнаты» гида один раз, сколько бы комнат ни было', () => {
+  it('роль отсылает к темам `lead` и `member` гида один раз, сколько бы комнат ни было', () => {
     const map = mapWithRoom();
     addRoom(map, { title: 'Ревью', creator: 'human', members: ['s-02', 's-03'], lead: 's-03' });
 
     const brief = buildBrief(map, 's-02');
-    expect(brief.match(/раздел «Комнаты»/g)).toHaveLength(1);
+    expect(brief.match(/`read_guide`, темы `lead` и `member`/g)).toHaveLength(1);
+    // Заголовок раздела — не имя темы: по «Комнаты» `read_guide` отдал бы вводную без ролей.
+    expect(brief).not.toContain('раздел «Комнаты»');
     expect(brief).toContain('- r-01 «Бэкенд»: ты ведущий.');
     expect(brief).toContain('- r-02 «Ревью»: ведущий — s-03 (ревью).');
   });
@@ -383,7 +386,9 @@ describe('бриф сессии: worktree', () => {
 
     const brief = buildBrief(map, 's-02');
     expect(brief).toContain('Worktree: ветка `harnas/w-0042/s-02` от базы `master`, папка `/tmp/worktrees/proj-a1b2c3/w-0042-s-02`.');
-    expect(brief).toContain('Правила работы в worktree — в `read_guide`, раздел «Окно человека».');
+    expect(brief).toContain('Правила работы в worktree — в `read_guide`, тема `worktrees`.');
+    // Заголовок раздела — не имя темы: тема `window` («Окно человека») правил worktree не содержит.
+    expect(brief).not.toContain('Окно человека');
     // Строка стоит в разделе своей сессии, до контекста и правил.
     expect(brief.indexOf('Worktree:')).toBeLessThan(brief.indexOf('## Контекст'));
   });
@@ -391,7 +396,50 @@ describe('бриф сессии: worktree', () => {
   it('сессия без worktree: бриф о worktree молчит', () => {
     const brief = buildBrief(mapWithSessions(), 's-02');
     expect(brief).not.toContain('Worktree');
-    expect(brief).not.toContain('Окно человека');
+    expect(brief).not.toContain('worktrees');
+  });
+});
+
+describe('бриф сессии: указатели на гид', () => {
+  /** Темы, которыми бриф отсылает к `read_guide`: «`read_guide`, тема `x`» и «`read_guide`, темы `x` и `y`». */
+  const pointedTopics = (brief: string): string[] =>
+    [...brief.matchAll(/`read_guide`, тем[аы] ([^.\n]+)\./g)].flatMap((match) =>
+      [...(match[1] ?? '').matchAll(/`([a-z]+)`/g)].map((name) => name[1] ?? ''),
+    );
+
+  /** Сессия s-02 в своём worktree и в комнате: в брифе есть оба указателя. */
+  function briefWithBothPointers(): string {
+    const map = mapWithThread();
+    addRoom(map, { title: 'Бэкенд', creator: 's-01', members: ['s-02', 's-03'], lead: 's-02' });
+    const session = map.sessions.find((candidate) => candidate.id === 's-02');
+    if (session === undefined) throw new Error('нет s-02');
+    session.worktree = {
+      path: '/tmp/worktrees/proj-a1b2c3/w-0042-s-02',
+      branch: 'harnas/w-0042/s-02',
+      base: 'master',
+      createdAt: null,
+    };
+    return buildBrief(map, 's-02');
+  }
+
+  it('указатели называют темы, а не заголовки разделов: агент передаёт в read_guide только тему', () => {
+    const brief = briefWithBothPointers();
+
+    const topics = GUIDE_TOPICS.map((item) => item.topic);
+    expect(pointedTopics(brief)).toEqual(['worktrees', 'lead', 'member']);
+    for (const name of pointedTopics(brief)) expect(topics, name).toContain(name);
+    expect(brief).not.toMatch(/раздел «/);
+  });
+
+  it('в названных темах лежит то, ради чего бриф на них отсылает', () => {
+    // Запреты worktree — тема `worktrees`, а не `window`: раздел «Окно человека» их не содержит.
+    expect(guideTopic('worktrees')).toContain('не переключай ветку');
+    expect(guideTopic('worktrees')).toContain('не пушь');
+    expect(guideTopic('window')).not.toContain('не переключай ветку');
+    // Роли комнаты — темы `lead` и `member`, а не `rooms`: вводная комнат о ролях молчит.
+    expect(guideTopic('lead')).toContain('Собери позиции');
+    expect(guideTopic('member')).toContain('Выскажись одним сообщением');
+    expect(guideTopic('rooms')).not.toContain('Собери позиции');
   });
 });
 

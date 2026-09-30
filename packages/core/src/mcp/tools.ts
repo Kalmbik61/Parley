@@ -8,15 +8,23 @@ import {
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { DEFAULT_CONFIG } from '../config.js';
-import { commandInPath, loadProviders } from '../providers.js';
+import {
+  EFFORT_LEVELS,
+  commandInPath,
+  loadProviders,
+  modelChoiceError,
+  selectableModels,
+  supportsEffort,
+  supportsModel,
+} from '../providers.js';
 import { agentDirs, assertAgent } from '../work/agents.js';
 import { writeBrief } from '../work/brief.js';
-import { GUIDE } from '../work/guide.js';
+import { GUIDE, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import { unreadFor } from '../work/letters.js';
 import { addMessage, addSession, transitionSession } from '../work/map.js';
 import { finishSession } from '../work/metrics.js';
 import { PROPOSAL_TEXT_MAX, setProposal } from '../work/proposals.js';
-import { addRoom, isDescendant, isMember, joinNotice } from '../work/rooms.js';
+import { addMemberByLead, addRoom, isDescendant, isMember, joinNotice } from '../work/rooms.js';
 import { displayStatus } from '../work/status-view.js';
 import { readMap, updateMap, workPaths } from '../work/store.js';
 import { participantLabel } from '../work/thread.js';
@@ -202,7 +210,7 @@ const TOOLS: Tool[] = [
   {
     name: 'get_map',
     description:
-      'Карта работы целиком: сессии, их статусы, резюме и артефакты, сообщения — плюс список провайдеров реестра с флагом доступности в PATH. Вызови первым делом; подробный гид — инструмент read_guide',
+      'Карта работы целиком: сессии, их статусы, резюме и артефакты, сообщения — плюс список провайдеров реестра с флагом доступности в PATH и тем, что провайдер принимает при запуске (модели и усилие для spawn_session). Вызови первым делом; подробный гид — инструмент read_guide',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -251,6 +259,17 @@ const TOOLS: Tool[] = [
           type: 'boolean',
           description:
             'Изолировать сессию в своём git worktree — правки не трогают рабочую копию проекта, пока их не решат влить (панель окна «Изменения»). Только для проекта с git; создаёт сам харнесс перед запуском.',
+        },
+        model: {
+          type: 'string',
+          description:
+            'Модель новой сессии: id из поля models её провайдера в get_map. Не из списка — ошибка, сессия не создаётся. Провайдер, который модель флагом не принимает, значение отбрасывает. Без поля — модель по умолчанию.',
+        },
+        effort: {
+          type: 'string',
+          enum: [...EFFORT_LEVELS],
+          description:
+            'Усилие рассуждений новой сессии. Провайдер с effort: false в get_map значение отбрасывает. Без поля — усилие по умолчанию.',
         },
       },
       required: ['provider', 'label', 'task'],
@@ -325,6 +344,22 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'add_to_room',
+    description:
+      'Ведущий вводит в свою комнату ещё одну сессию этой работы — например, только что порождённого исполнителя. Только ведущий (get_map, поле lead комнаты); комната не закрыта, сессия жива и ещё не участник. Одна комната на сессию: из прочих комнат работы она уходит, в ленте появляется строка «@s04 joined the room». Письма о добавлении новый участник не получает — напиши ему в комнату сам, чего ждёшь.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        room: { type: 'string', description: 'Id комнаты из get_map.' },
+        session: {
+          type: 'string',
+          description: 'Id сессии этой работы из get_map; закрытая или чужая — ошибка.',
+        },
+      },
+      required: ['room', 'session'],
+    },
+  },
+  {
     name: 'read_room',
     description:
       'Лента комнаты для контекста — последние limit писем, без пометок прочтения. Доступна только участникам.',
@@ -367,9 +402,18 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'read_guide',
-    description:
-      'Подробный гид по харнессу: сущности, жизненный цикл сессии, комнаты и роли в них (ведущий, участник), что класть в отчёт и артефакты, как ждать подчинённую сессию, чего не делать. Читай, когда коротких описаний не хватило.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    description: `Подробный гид по харнессу: сущности, жизненный цикл сессии, комнаты и роли в них (ведущий, участник), что класть в отчёт и артефакты, как ждать подчинённую сессию, чего не делать. Читай, когда коротких описаний не хватило. Без topic — весь гид, с topic — один раздел: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        topic: {
+          type: 'string',
+          enum: GUIDE_TOPICS.map((item) => item.topic),
+          description: 'Раздел гида; без него — весь гид.',
+        },
+      },
+      additionalProperties: false,
+    },
   },
 ];
 
@@ -380,6 +424,10 @@ async function getMap(context: McpContext): Promise<unknown> {
       id: entry.id,
       label: entry.label,
       available: await commandInPath(entry.runner.command),
+      // Что провайдер принимает при запуске — те же поля, что у `providers.list` окна: без них агент не
+      // узнает, какую модель ему разрешено назвать в `spawn_session`.
+      models: selectableModels(entry),
+      effort: supportsEffort(entry),
     })),
   );
   return {
@@ -440,6 +488,14 @@ async function spawnSession(
   const agent = args['agent'] === undefined ? null : stringArg(args, 'agent');
   // Изоляция необязательна: без флага сессия работает прямо в каталоге проекта.
   const worktree = args['worktree'] === true;
+  // Модель и усилие тоже необязательны; пустая строка — как отсутствие: агенты шлют её на любой
+  // необязательный параметр.
+  const model =
+    args['model'] === undefined || args['model'] === '' ? undefined : stringArg(args, 'model');
+  const effort =
+    args['effort'] === undefined || args['effort'] === ''
+      ? undefined
+      : enumArg(args, 'effort', EFFORT_LEVELS);
 
   const registry = await loadProviders();
   const entry = registry[provider];
@@ -453,6 +509,17 @@ async function spawnSession(
       `команды ${entry.runner.command} нет в PATH — провайдер ${provider} недоступен`,
     );
   }
+
+  // Модель проверяем до записи, как и роль: значение не из списка провайдера — отказ, а не `pending`,
+  // который нечем запустить. Провайдер, чей шаблон запуска не принимает флаг, выбор отбрасывает молча —
+  // как `sessions.create` хоста: окно узнаёт об этом из `providers.list`, агент — из `get_map`.
+  let chosenModel: string | undefined;
+  if (model !== undefined) {
+    const refusal = modelChoiceError(entry, model);
+    if (refusal !== null) throw new Error(refusal);
+    if (supportsModel(entry)) chosenModel = model;
+  }
+  const chosenEffort = effort !== undefined && supportsEffort(entry) ? effort : undefined;
 
   // Роль проверяем до записи: `pending`, который нечем запустить, — мусор в
   // карте (спецификация 2026-09-08, раздел 7).
@@ -487,6 +554,8 @@ async function spawnSession(
       parent: sessionId,
       contextFrom,
       agent,
+      ...(chosenModel === undefined ? {} : { model: chosenModel }),
+      ...(chosenEffort === undefined ? {} : { effort: chosenEffort }),
     });
     created = session.id;
     if (worktreeBase !== null) {
@@ -657,6 +726,24 @@ async function createRoom(
   return { roomId };
 }
 
+async function addToRoom(
+  context: McpContext,
+  sessionId: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const roomId = stringArg(args, 'room');
+  const target = stringArg(args, 'session');
+
+  let messageId = '';
+  await updateMap(context.projectPath, context.workId, (current) => {
+    // Правила — ведущий, живая комната, закрытая или чужая сессия, уже участник, одна комната на сессию —
+    // держит `addMemberByLead`. Его `RoomRuleError` уходит агенту текстом ошибки, как у `propose_decision`,
+    // а исключение из мутатора не даёт `updateMap` записать карту: после отказа она не меняется.
+    messageId = addMemberByLead(current, roomId, sessionId, target).id;
+  });
+  return { messageId };
+}
+
 async function readRoom(
   context: McpContext,
   sessionId: string,
@@ -696,6 +783,24 @@ async function proposeDecision(
   return proposed;
 }
 
+/**
+ * Гид: без темы — весь, с темой — один раздел. Пустая тема (`""`) — то же, что её отсутствие: агенты
+ * нередко шлют пустую строку на необязательный параметр. Неизвестная — ошибка со списком тем, чтобы
+ * агент поправил вызов сам.
+ */
+function readGuide(args: Record<string, unknown>): string {
+  const raw = args['topic'];
+  if (raw === undefined || raw === '') return GUIDE;
+  if (typeof raw !== 'string') throw new Error('аргумент topic: ожидалась строка');
+  const text = guideTopic(raw.trim().toLowerCase());
+  if (text === null) {
+    throw new Error(
+      `неизвестная тема гида «${raw}»; темы: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}`,
+    );
+  }
+  return text;
+}
+
 async function closeSession(
   context: McpContext,
   sessionId: string,
@@ -725,7 +830,7 @@ async function dispatch(
 ): Promise<unknown> {
   if (name === 'get_map') return getMap(context);
   // Гид не про конкретную сессию: он доступен и без `HARNAS_SESSION_ID`.
-  if (name === 'read_guide') return GUIDE;
+  if (name === 'read_guide') return readGuide(args);
 
   const { sessionId } = context;
   if (sessionId === null) throw new Error(NO_SESSION);
@@ -736,6 +841,7 @@ async function dispatch(
   if (name === 'send_message') return sendMessage(context, sessionId, args);
   if (name === 'check_inbox') return checkInbox(context, sessionId);
   if (name === 'create_room') return createRoom(context, sessionId, args);
+  if (name === 'add_to_room') return addToRoom(context, sessionId, args);
   if (name === 'read_room') return readRoom(context, sessionId, args);
   if (name === 'propose_decision') return proposeDecision(context, sessionId, args);
   if (name === 'close_session') return closeSession(context, sessionId, args);

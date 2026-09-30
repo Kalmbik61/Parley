@@ -367,6 +367,8 @@ export const S = {
     messageCap: 'Message cap per hour',
     resumeRate: 'Session wake-ups per hour (0…60)',
     autoLaunchPending: 'Auto-launch pending sessions',
+    /** Скилл `harnas` в папку проекта и в worktree сессий при запуске (кусок 10 плана комнат). */
+    agentSkills: 'Install agent skills into projects',
     worktreeRoot: 'Worktree root',
     notifyNeedsYou: 'needs you',
     notifyFinished: 'finished',
@@ -995,6 +997,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'resume-failed': "couldn't resume this session",
   'resume-limit': 'hourly resume limit reached — mail is waiting',
   'trust-wait': 'not responding since launch — may be waiting for folder trust',
+  'skill-foreign': "agent skill not installed — that path already exists and wasn't created by harnas",
 };
 
 /**

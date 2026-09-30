@@ -303,6 +303,88 @@ describe('модель и усилие в плане запуска (дизай�
     expect(plan.args).toEqual(['--session-id', plan.providerSessionId, plan.args.at(-1)]);
   });
 
+  it('выбор, записанный spawn_session, уезжает флагами: хост поднимает pending без диалога', async () => {
+    const created = await createWork(project, { title: 'Авторизация', goal: 'логин по e-mail' });
+    const workId = created.work.id;
+    const sessionId = await createPendingSession(project, workId, {
+      provider: 'claude',
+      label: 'тесты',
+      task: 'прогнать e2e',
+      model: 'opus',
+      effort: 'high',
+    });
+    const stored = await sessionOf(workId, sessionId);
+    expect(stored).toMatchObject({ model: 'opus', effort: 'high' });
+
+    const plan = await planLaunch(project, workId, stored);
+
+    expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('opus');
+    expect(plan.args[plan.args.indexOf('--effort') + 1]).toBe('high');
+    // Бриф по-прежнему последним аргументом: позиционный промпт флагами не сдвигается.
+    expect(plan.args.at(-1)).toContain('прогнать e2e');
+  });
+
+  it('codex: записанный выбор — --model и -c model_reasoning_effort', async () => {
+    const created = await createWork(project, { title: 'Авторизация', goal: '' });
+    const sessionId = await createPendingSession(project, created.work.id, {
+      provider: 'codex',
+      label: 'тесты',
+      task: 'прогнать e2e',
+      model: 'gpt-6-sol',
+      effort: 'low',
+    });
+    const plan = await planLaunch(project, created.work.id, await sessionOf(created.work.id, sessionId));
+
+    expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('gpt-6-sol');
+    expect(plan.args).toContain('model_reasoning_effort="low"');
+  });
+
+  it('выбор из диалога окна главнее записанного; невыбранное поле берётся из записи', async () => {
+    const created = await createWork(project, { title: 'Авторизация', goal: '' });
+    const workId = created.work.id;
+    const sessionId = await createPendingSession(project, workId, {
+      provider: 'claude',
+      label: 'тесты',
+      task: 'прогнать e2e',
+      model: 'opus',
+      effort: 'high',
+    });
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId), {
+      model: 'sonnet',
+    });
+
+    expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('sonnet');
+    expect(plan.args[plan.args.indexOf('--effort') + 1]).toBe('high');
+  });
+
+  it('пустая запись без выбора: флагов нет, а поля model и effort в карте не появляются', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const stored = await sessionOf(workId, sessionId);
+
+    expect('model' in stored).toBe(false);
+    expect('effort' in stored).toBe(false);
+  });
+
+  it('возобновление записанный выбор не несёт: модель Claude Code возвращает сам', async () => {
+    const created = await createWork(project, { title: 'Авторизация', goal: '' });
+    const workId = created.work.id;
+    const sessionId = await createPendingSession(project, workId, {
+      provider: 'claude',
+      label: 'тесты',
+      task: 'прогнать e2e',
+      model: 'opus',
+      effort: 'high',
+    });
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((item) => item.id === sessionId);
+      if (session !== undefined) session.providerSessionId = 'c0ffee00-1111-2222-3333-444455556666';
+    });
+    const plan = await planResume(project, workId, await sessionOf(workId, sessionId));
+
+    expect(plan.args).not.toContain('--model');
+    expect(plan.args).not.toContain('--effort');
+  });
+
   it('возобновление выбор не несёт: модель Claude Code возвращает сам', async () => {
     const { workId, sessionId } = await pending('claude');
     await updateMap(project, workId, (map) => {

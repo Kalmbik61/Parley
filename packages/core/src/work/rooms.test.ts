@@ -3,6 +3,7 @@ import { unreadFor } from './letters.js';
 import { addSession, removeSession, setResult, transitionSession } from './map.js';
 import {
   addMember,
+  addMemberByLead,
   addRoom,
   addRoomOriginMessage,
   isDescendant,
@@ -429,6 +430,93 @@ describe('addMember', () => {
     const map = twoRooms();
     setResult(map, 's-04', 'done');
     expect(() => addMember(map, 'r-01', 's-04')).not.toThrow();
+  });
+});
+
+describe('addMemberByLead', () => {
+  const NOW = '2026-09-29T12:00:00.000Z';
+
+  it('ведущий вводит сессию: последней в members, системное «@s04 joined the room»', () => {
+    const map = twoRooms();
+    const message = addMemberByLead(map, 'r-01', 's-01', 's-04', NOW);
+
+    expect(map.rooms[0]?.members).toEqual(['s-01', 's-02', 's-04']);
+    expect(message).toMatchObject({
+      roomId: 'r-01',
+      from: SYSTEM,
+      to: [HUMAN],
+      kind: 'note',
+      text: '@s04 joined the room',
+      at: NOW,
+    });
+    expect(map.messages).toEqual([message]);
+    // Письма о добавлении новый участник не получает: строка адресована человеку.
+    expect(unreadFor(map, 's-04')).toEqual([]);
+  });
+
+  it('одна комната на сессию: введённая уходит из прочих комнат работы', () => {
+    const map = twoRooms();
+    addMemberByLead(map, 'r-01', 's-01', 's-03');
+
+    expect(map.rooms[0]?.members).toEqual(['s-01', 's-02', 's-03']);
+    expect(map.rooms[1]?.members).toEqual([]);
+  });
+
+  it('не ведущий — RoomRuleError, карта не тронута: участник, посторонний и человек', () => {
+    const map = twoRooms();
+    const before = JSON.stringify(map);
+
+    for (const caller of ['s-02', 's-04', HUMAN]) {
+      expect(() => addMemberByLead(map, 'r-01', caller, 's-03'), caller).toThrow(RoomRuleError);
+      expect(() => addMemberByLead(map, 'r-01', caller, 's-03'), caller).toThrow(/не ведущий/);
+    }
+    expect(JSON.stringify(map)).toBe(before);
+  });
+
+  it('ведущий — живой ведущий: без назначенного им считается первый из members, закрытого — первый живой', () => {
+    const byDefault = twoRooms();
+    // r-02 без назначенного ведущего: ведёт первый из members.
+    expect(() => addMemberByLead(byDefault, 'r-02', 's-03', 's-04')).not.toThrow();
+    expect(byDefault.rooms[1]?.members).toEqual(['s-03', 's-04']);
+
+    const replaced = twoRooms();
+    transitionSession(replaced, 's-01', 'closed');
+    // Назначенный s-01 закрыт: право за первым живым участником — s-02, а не за самим s-01.
+    expect(() => addMemberByLead(replaced, 'r-01', 's-01', 's-04')).toThrow(/не ведущий/);
+    expect(() => addMemberByLead(replaced, 'r-01', 's-02', 's-04')).not.toThrow();
+  });
+
+  it('закрытая комната — отказ «закрыта», а не «не ведущий»: ведущего у неё нет', () => {
+    const map = twoRooms();
+    transitionSession(map, 's-01', 'closed');
+    transitionSession(map, 's-02', 'closed');
+    const before = JSON.stringify(map);
+
+    expect(() => addMemberByLead(map, 'r-01', 's-01', 's-04')).toThrow(RoomRuleError);
+    expect(() => addMemberByLead(map, 'r-01', 's-01', 's-04')).toThrow(/закрыта/);
+    expect(JSON.stringify(map)).toBe(before);
+  });
+
+  it('закрытая и чужая сессия, уже участник и неизвестная комната — RoomRuleError, карта не тронута', () => {
+    const map = twoRooms();
+    transitionSession(map, 's-04', 'closed');
+    const before = JSON.stringify(map);
+
+    const cases: Array<[() => unknown, RegExp]> = [
+      [() => addMemberByLead(map, 'r-01', 's-01', 's-04'), /закрыта/],
+      // Чужая — нет в карте этой работы.
+      [() => addMemberByLead(map, 'r-01', 's-01', 's-77'), /нет в карте/],
+      [() => addMemberByLead(map, 'r-01', 's-01', HUMAN), /нет в карте/],
+      [() => addMemberByLead(map, 'r-01', 's-01', 's-02'), /уже участник/],
+      // Ведущий вводит и самого себя: он уже участник.
+      [() => addMemberByLead(map, 'r-01', 's-01', 's-01'), /уже участник/],
+      [() => addMemberByLead(map, 'r-09', 's-01', 's-03'), /нет в карте/],
+    ];
+    for (const [call, message] of cases) {
+      expect(call).toThrow(RoomRuleError);
+      expect(call).toThrow(message);
+    }
+    expect(JSON.stringify(map)).toBe(before);
   });
 });
 

@@ -7,6 +7,7 @@ import {
   commandInPath,
   commandBinary,
   loadProviders,
+  modelChoiceError,
   printCommand,
   providersFile,
   providersWithHistory,
@@ -347,6 +348,47 @@ describe('модель и усилие новой сессии (дизайн к�
     }
     expect(supportsModel(PROVIDERS.glm)).toBe(false);
     expect(supportsEffort(PROVIDERS.glm)).toBe(false);
+  });
+
+  describe('modelChoiceError: выбор модели против записи реестра', () => {
+    it('каждое значение встроенных списков годится', () => {
+      for (const entry of [PROVIDERS.claude, PROVIDERS.codex]) {
+        for (const { id } of selectableModels(entry) ?? []) {
+          expect(modelChoiceError(entry, id), `${entry.id}: ${id}`).toBeNull();
+        }
+      }
+    });
+
+    it('не из списка — отказ с провайдером, моделью и допустимыми значениями; сверка точная', () => {
+      const refusal = modelChoiceError(PROVIDERS.claude, 'gpt-6-sol');
+
+      expect(refusal).toMatch(/gpt-6-sol.*claude.*opusplan/s);
+      for (const model of ['Opus', 'claude-opus-5-5', 'opus ']) {
+        expect(modelChoiceError(PROVIDERS.claude, model), model).not.toBeNull();
+      }
+      // Значение чужого провайдера — тоже не из списка.
+      expect(modelChoiceError(PROVIDERS.codex, 'opus')).toMatch(/codex/);
+    });
+
+    it('форма: с дефиса, с пробелом или длиннее 200 знаков — отказ, даже когда списка нет', () => {
+      for (const model of ['-opus', '--model', 'op us', 'op\tus', 'x'.repeat(201)]) {
+        expect(modelChoiceError(PROVIDERS.glm, model), JSON.stringify(model)).not.toBeNull();
+      }
+      expect(modelChoiceError(PROVIDERS.glm, 'x'.repeat(200))).toBeNull();
+    });
+
+    it('провайдер без списка: любое слово годится, дальше решает шаблон запуска', () => {
+      expect(PROVIDERS.glm.models ?? null).toBeNull();
+      expect(modelChoiceError(PROVIDERS.glm, 'что-угодно')).toBeNull();
+      // Список у провайдера, чей шаблон модель не принимает, окну не отдаётся — значит, и не проверяется.
+      const plain: ProviderEntry = {
+        ...PROVIDERS.claude,
+        id: 'plain',
+        runner: { command: 'plain', args: ['{prompt}'] },
+        models: [{ id: 'a', label: 'А' }],
+      };
+      expect(modelChoiceError(plain, 'b')).toBeNull();
+    });
   });
 
   describe('списки моделей встроенных провайдеров (открытая документация, проверено 2026-09-29)', () => {

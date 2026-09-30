@@ -1,3 +1,4 @@
+import type { EffortLevel } from '../providers.js';
 import type {
   HistoryEntry,
   Message,
@@ -93,6 +94,9 @@ export interface NewSession {
   contextFrom?: string[];
   /** Роль Claude Code, которой запустится сессия; без неё — обычная сессия. */
   agent?: string | null;
+  /** Модель и усилие запуска (`spawn_session`); без них — по умолчанию, поля в записи не будет. */
+  model?: string;
+  effort?: EffortLevel;
 }
 
 /** Заводит в карте сессию `pending` — так её создаёт и агент, и пользователь. */
@@ -125,6 +129,8 @@ export function addSession(
     artifacts: [],
     agent: init.agent ?? null,
     worktree: null,
+    ...(init.model === undefined ? {} : { model: init.model }),
+    ...(init.effort === undefined ? {} : { effort: init.effort }),
   };
   map.sessions.push(session);
   return session;

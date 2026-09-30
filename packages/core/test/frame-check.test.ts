@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { installAgentSkill } from '../src/work/skill-install.js';
 import { runStatusline } from '../src/work/statusline.js';
 import {
   collectSourceFiles,
@@ -393,6 +394,45 @@ describe('строка статуса не пишет в каталоги аге
       // Данные лимитов — в каталоге работы, и только там.
       expect(await readdir(path.join(workDir, 'limits'))).toEqual(['s-01.json']);
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('скилл агентов не пишет в каталоги агента (юридическая рамка, кусок 10)', () => {
+  // Скилл `harnas` кладётся в проект и в worktree сессий, а `~/.claude`, `~/.codex`, `~/.agents` и
+  // `~/.claude.json` не трогаются ни при каких условиях: ни установкой, ни учётом, ни строками exclude.
+  it('домашняя папка после установки в проект и в worktree не изменилась ни на байт', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'frame-skill-'));
+    const savedHome = process.env['HOME'];
+    try {
+      const home = path.join(root, 'home');
+      const project = path.join(root, 'project');
+      const worktree = path.join(root, 'worktrees', 'w-0001-s-02');
+      await mkdir(path.join(home, '.claude', 'skills', 'чужой'), { recursive: true });
+      await mkdir(path.join(home, '.codex', 'sessions'), { recursive: true });
+      await mkdir(path.join(home, '.agents', 'skills'), { recursive: true });
+      await writeFile(path.join(home, '.claude.json'), '{"trust":true}\n');
+      await writeFile(path.join(home, '.claude', 'settings.json'), '{}\n');
+      await writeFile(path.join(home, '.claude', 'skills', 'чужой', 'SKILL.md'), 'чужой\n');
+      await writeFile(path.join(home, '.codex', 'config.toml'), 'model = "x"\n');
+      await mkdir(project);
+      await mkdir(worktree, { recursive: true });
+      process.env['HOME'] = home;
+      const before = await snapshot(home);
+
+      await installAgentSkill({ projectPath: project, worktreePath: worktree });
+      // Проект — сама домашняя папка и каталог агента внутри неё: писать туда нельзя, и не пишется.
+      await installAgentSkill({ projectPath: home });
+      await installAgentSkill({ projectPath: path.join(home, '.claude') });
+
+      expect(await snapshot(home)).toEqual(before);
+      // А в проекте и в worktree скилл лёг: проверка не прошла бы на пустом месте.
+      expect(await readdir(path.join(project, '.agents', 'skills'))).toEqual(['harnas']);
+      expect(await readdir(path.join(worktree, '.claude', 'skills'))).toEqual(['harnas']);
+    } finally {
+      if (savedHome === undefined) delete process.env['HOME'];
+      else process.env['HOME'] = savedHome;
       await rm(root, { recursive: true, force: true });
     }
   });

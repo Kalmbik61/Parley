@@ -30,6 +30,7 @@ export {
   commandBinary,
   commandInPath,
   loadProviders,
+  modelChoiceError,
   printCommand,
   providersFile,
   providersWithHistory,
@@ -73,6 +74,7 @@ export { isUnreadFor, markHumanRead, recipientsOf, unreadFor } from './work/lett
 export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';
 export {
   addMember,
+  addMemberByLead,
   addRoom,
   addRoomOriginMessage,
   addSystemMessage,
@@ -181,6 +183,14 @@ export {
   overrideVariable,
 } from './work/find-binary.js';
 export { GUIDE } from './work/guide.js';
+export { SKILL_MD, SKILL_NAME } from './work/skill.js';
+export { installAgentSkill } from './work/skill-install.js';
+export type {
+  SkillInstallOptions,
+  SkillInstallResult,
+  SkillSkip,
+  SkillSkipReason,
+} from './work/skill-install.js';
 export { systemGuidance } from './work/guidance.js';
 export {
   SUMMARIZER,

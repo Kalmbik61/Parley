@@ -46,7 +46,10 @@ export type NoticeKind =
   | 'pointer-cancelled'
   | 'resume-failed'
   | 'resume-limit'
-  | 'trust-wait';
+  | 'trust-wait'
+  // Скилл `harnas` не поставлен в проект: путь уже есть, а создал его не харнесс (или по дороге лежит
+  // симлинк). Файл остаётся как есть; окно показывает короткую строку, подробности — в `host.log`.
+  | 'skill-foreign';
 
 export interface HostNotice {
   kind: NoticeKind;
