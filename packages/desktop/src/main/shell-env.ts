@@ -10,18 +10,22 @@ export interface ShellEnvResult {
 }
 
 /**
- * Маркеры вокруг значения `PATH`. Интерактивная login-оболочка пишет в тот же stdout всё, что
+ * Маркеры вокруг вывода `env -0`. Интерактивная login-оболочка пишет в тот же stdout всё, что
  * печатают rc-файлы и хуки выхода (баннеры, `nvm`, «instant prompt»): без границ этот шум попал
- * бы в `PATH`.
+ * бы в окружение вместе с настоящими переменными.
  */
-const PATH_BEGIN = '__HARNAS_PATH_BEGIN__';
-const PATH_END = '__HARNAS_PATH_END__';
+const ENV_BEGIN = '__HARNAS_ENV_BEGIN__';
+const ENV_END = '__HARNAS_ENV_END__';
 
 /**
- * Команда для `-c`. Маркеры и `$PATH` — отдельные аргументы `printf`: экранирование не зависит от
- * того, zsh это, bash или fish, а сама команда выполняется уже после rc-файлов.
+ * Команда для `-c`: маркер, `env -0`, маркер. `env -0` печатает записи `ИМЯ=значение`, каждую с NUL
+ * в конце, — значение с переводом строки или `=` внутри границу записи не ломает (построчный `env`
+ * не отличил бы его продолжение от следующей переменной). `env` — по абсолютному пути: алиас,
+ * функция или `PATH` из rc-файла его не подменят. Маркеры — отдельные аргументы `printf`:
+ * экранирование не зависит от того, zsh это, bash или fish, а сама команда выполняется уже после
+ * rc-файлов.
  */
-const PRINT_PATH = `printf '%s%s%s' '${PATH_BEGIN}' "$PATH" '${PATH_END}'`;
+const PRINT_ENV = `printf '%s' '${ENV_BEGIN}'; /usr/bin/env -0; printf '%s' '${ENV_END}'`;
 
 /** Где ставят `claude` и `codex`, когда login-оболочка не ответила. */
 const fallbackDirs = (home: string): string[] => [
@@ -42,8 +46,8 @@ const isDirectory = (dir: string): Promise<boolean> =>
  *
  * Ответ уходит, как только пара маркеров пришла целиком, а не когда закрылась труба: процесс,
  * оставленный rc-файлом в фоне, наследует stdout оболочки и держит трубу открытой, пока жив сам, —
- * `close` тогда не приходит, а `PATH` уже напечатан. Оболочка после этого выходит сама (хуки выхода
- * отрабатывают), таймер остаётся сторожем: не вышла за срок — убита.
+ * `close` тогда не приходит, а окружение уже напечатано. Оболочка после этого выходит сама (хуки
+ * выхода отрабатывают), таймер остаётся сторожем: не вышла за срок — убита.
  */
 async function runShell(shell: string, args: string[], timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -97,21 +101,25 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 /** Текст между первым маркером начала и следующим за ним маркером конца; `null` — пара не пришла целиком. */
 function betweenMarkers(output: string): string | null {
-  const begin = output.indexOf(PATH_BEGIN);
+  const begin = output.indexOf(ENV_BEGIN);
   if (begin === -1) return null;
-  const from = begin + PATH_BEGIN.length;
-  const end = output.indexOf(PATH_END, from);
+  const from = begin + ENV_BEGIN.length;
+  const end = output.indexOf(ENV_END, from);
   return end === -1 ? null : output.slice(from, end);
 }
 
 /**
- * Значение между маркерами; `null` — маркеров нет, между ними пусто или лежит не `PATH`
- * (перевод строки и NUL в нём означают, что чужой вывод вклинился в печать).
+ * Окружение из текста между маркерами: записи `ИМЯ=значение`, разделённые NUL; значение — всё после
+ * первого `=`. Запись без `=` или с пустым именем не переменная, её пропускаем.
  */
-function pathFromOutput(output: string): string | null {
-  const value = betweenMarkers(output);
-  if (value === null || value.trim() === '' || /[\n\0]/.test(value)) return null;
-  return value;
+function parseEnv(block: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const entry of block.split('\0')) {
+    const eq = entry.indexOf('=');
+    if (eq <= 0) continue;
+    env[entry.slice(0, eq)] = entry.slice(eq + 1);
+  }
+  return env;
 }
 
 /** Прежний `PATH` как есть плюс существующие каталоги, которых в нём ещё нет. */
@@ -130,43 +138,57 @@ async function withFallbackDirs(
 }
 
 /**
- * Собранное окно, открытое из Finder, наследует от launchd урезанный `PATH`
- * (`/usr/bin:/bin:/usr/sbin:/sbin`): без `~/.local/bin` и каталогов nvm хост не находит ни
- * `claude`, ни `codex`, ни системный `node`. Поэтому на старте, один раз и до запуска хоста,
- * спрашиваем `PATH` у login-оболочки человека: `$SHELL -ilc` с маркерами вокруг значения. rc-файлы
- * читает сама оболочка, окно их не открывает.
+ * Собранное окно, открытое из Finder, наследует от launchd урезанное окружение: `PATH` там
+ * `/usr/bin:/bin:/usr/sbin:/sbin`, и без `~/.local/bin` и каталогов nvm хост не находит ни `claude`,
+ * ни `codex`, ни системный `node`, а переменные, которые человек экспортирует в rc-файлах (прокси,
+ * `CLAUDE_CONFIG_DIR`, `HARNAS_*`), не приходят вовсе. Поэтому на старте, один раз и до запуска хоста,
+ * окно снимает окружение login-оболочки человека (спека окна 3.2): `$SHELL -ilc` с `env -0` между
+ * маркерами. rc-файлы читает сама оболочка, окно их не открывает.
  *
- * Берётся только `PATH`: остальное окружение остаётся окружением процесса окна. Прежняя версия
- * тащила за собой всё окружение оболочки, включая то, чего хосту и агентам знать не нужно.
- * Хост и его агенты получают результат как окружение запуска хоста (`spawnHost`).
+ * Результат — окружение оболочки целиком, а не его сумма с окружением окна: оболочка и так
+ * унаследовала окружение окна, и всё, что она отдала, включая её `PATH`, главнее; снятое rc-файлом
+ * назад не возвращается. Хост, поиск `node`, git и конфиг окна получают его как окружение запуска
+ * (`spawnHost`), агенты — от хоста.
  *
- * Оболочка не ответила за таймаут, не запустилась или напечатала не то — прежний `PATH` плюс
- * существующие `~/.local/bin`, `/opt/homebrew/bin` и `/usr/local/bin`; причина — в `warning`.
+ * Оболочка не ответила за таймаут, не запустилась, напечатала не то или отдала окружение без `PATH` —
+ * окружение окна (`process.env`), а в его `PATH` дописаны существующие `~/.local/bin`,
+ * `/opt/homebrew/bin` и `/usr/local/bin`; причина — в `warning`.
+ *
+ * `skip` (E2E, `HARNAS_LOGIN_SHELL=skip`) оболочку не зовёт вовсе: окружение окна отдаётся как есть.
  */
 export async function captureShellEnv(options?: {
   shell?: string;
   timeoutMs?: number;
   run?: (shell: string, args: string[], timeoutMs: number) => Promise<string>;
-  /** Окружение, из которого строится результат; у окна — `process.env`, тест подставляет своё. */
+  /** Окружение процесса окна: из него берутся `SHELL` и запасной результат. У окна — `process.env`, тест подставляет своё. */
   env?: NodeJS.ProcessEnv;
+  /** Не звать оболочку человека: окружение окна как есть, без запасных каталогов и предупреждения. */
+  skip?: boolean;
   /** Домашний каталог для `~/.local/bin`. */
   home?: string;
   /** Существует ли каталог: запасные каталоги дописываются, только если он есть. */
   isDir?: (dir: string) => Promise<boolean>;
 }): Promise<ShellEnvResult> {
   const base = options?.env ?? process.env;
+  if (options?.skip === true) return { env: { ...base }, fromShell: false, warning: null };
   const shell = options?.shell ?? base.SHELL ?? '/bin/zsh';
   const timeoutMs = options?.timeoutMs ?? 5000;
   const run = options?.run ?? runShell;
 
   let warning: string;
   try {
-    const output = await withTimeout(run(shell, ['-ilc', PRINT_PATH], timeoutMs), timeoutMs);
-    const shellPath = pathFromOutput(output);
-    if (shellPath !== null) {
-      return { env: { ...base, PATH: shellPath }, fromShell: true, warning: null };
+    const output = await withTimeout(run(shell, ['-ilc', PRINT_ENV], timeoutMs), timeoutMs);
+    const block = betweenMarkers(output);
+    if (block === null) {
+      warning = 'environment markers not found in shell output';
+    } else {
+      const shellEnv = parseEnv(block);
+      // Окружение без PATH хосту не нужно: по нему не найти ни `node`, ни `claude`.
+      if ((shellEnv.PATH ?? '').trim() !== '') {
+        return { env: shellEnv, fromShell: true, warning: null };
+      }
+      warning = 'no PATH in the shell environment between the markers';
     }
-    warning = 'no PATH between the markers in shell output';
   } catch (err) {
     warning = err instanceof Error ? err.message : String(err);
   }
