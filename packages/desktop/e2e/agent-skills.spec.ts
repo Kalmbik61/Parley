@@ -146,7 +146,7 @@ test.describe('скилл harnas в проекте', () => {
 
     await newSession(window, project);
 
-    await expect(window.getByText("Agent skill not installed — that path already exists and wasn't created by harnas.")).toBeVisible();
+    await expect(window.getByText("Agent skill not installed — that path already exists and wasn't created by Parley.")).toBeVisible();
     expect(await readFile(skillFile(project), 'utf8')).toBe('скилл команды\n');
     await expect(lstat(aliasPath(project))).rejects.toMatchObject({ code: 'ENOENT' });
   });

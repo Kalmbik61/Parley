@@ -233,7 +233,7 @@ describe('buildRoomModel — сообщения', () => {
     const [line] = build(entry).messages;
     expect(line?.to).toBeNull();
     expect(line?.unread).toBe(false);
-    expect(line?.from).toBe('harnas');
+    expect(line?.from).toBe('Parley');
   });
 
   it('удалённый отправитель — «S05 (deleted)», неизвестный id — как есть; провайдера у них нет', () => {

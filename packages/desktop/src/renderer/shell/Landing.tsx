@@ -17,9 +17,9 @@ export function Landing(): JSX.Element {
   return (
     <div data-testid="landing" className="flex flex-1 flex-col items-center justify-center gap-4">
       <div className="flex size-20 items-center justify-center rounded-2xl bg-primary text-2xl font-semibold text-primary-foreground">
-        H
+        P
       </div>
-      <h1 className="text-lg font-medium text-foreground">Harnas</h1>
+      <h1 className="text-lg font-medium text-foreground">Parley</h1>
       <div className="flex gap-2">
         <Button type="button" onClick={() => openNewWorkDialog()}>
           {S.landing.newWorkspace}

@@ -207,6 +207,7 @@ describe('AppShell — Landing и оболочка с работой (тест 6
     await flush();
 
     expect(screen.getByTestId('landing')).toBeTruthy();
+    expect(within(screen.getByTestId('landing')).getByRole('heading', { name: 'Parley' })).toBeTruthy();
     expect(screen.queryByTestId('app-shell')).toBeNull();
     expect(screen.getByTestId('titlebar')).toBeTruthy();
     expect(screen.getByText('Host 0.0.0-test')).toBeTruthy();

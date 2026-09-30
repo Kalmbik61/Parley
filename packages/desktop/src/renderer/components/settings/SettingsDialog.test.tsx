@@ -110,7 +110,7 @@ describe('SettingsDialog — тест 1 куска 1.4: секции спеки 
   it('тест 5 куска 4.3: в секции «Notifications» всегда видна подсказка про системные настройки', async () => {
     openSettings(createFakeBridge());
     switchTo('Notifications');
-    expect(await screen.findByText('Not getting notifications? System Settings → Notifications → Harnas')).toBeTruthy();
+    expect(await screen.findByText('Not getting notifications? System Settings → Notifications → Parley')).toBeTruthy();
   });
 
   it('«Размер шрифта» зовёт settings.set', async () => {

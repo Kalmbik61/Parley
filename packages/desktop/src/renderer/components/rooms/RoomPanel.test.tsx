@@ -319,8 +319,8 @@ describe('RoomPanel — сообщения (1.3)', () => {
     renderPanel(entry);
     const row = messageRow('m-1');
     expect(row.getAttribute('data-sender')).toBe('system');
-    expect(within(row).getByTitle('harnas')).toBeTruthy();
-    expect(row.textContent).toContain('harnas');
+    expect(within(row).getByTitle('Parley')).toBeTruthy();
+    expect(row.textContent).toContain('Parley');
     expect(row.textContent).not.toContain('System');
     expect(row.textContent).toContain('You accepted the decision');
     expect(row.textContent).not.toContain('→');

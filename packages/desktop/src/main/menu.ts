@@ -29,8 +29,15 @@ function itemsOf(menu: MenuName, send: (id: ActionId) => void): MenuItemConstruc
 export function buildMenuTemplate(send: (id: ActionId) => void): MenuItemConstructorOptions[] {
   return [
     {
-      label: 'Harnas',
-      submenu: [{ role: 'about' }, { type: 'separator' }, ...itemsOf('app', send), { type: 'separator' }, { role: 'quit' }],
+      label: 'Parley',
+      // Подписи ролей about и quit заданы явно: свои Electron строит из `app.name`, а это `name` из package.json.
+      submenu: [
+        { role: 'about', label: 'About Parley' },
+        { type: 'separator' },
+        ...itemsOf('app', send),
+        { type: 'separator' },
+        { role: 'quit', label: 'Quit Parley' },
+      ],
     },
     {
       label: S.menu.edit,

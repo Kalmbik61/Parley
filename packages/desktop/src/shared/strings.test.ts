@@ -200,7 +200,7 @@ describe('noticeText', () => {
 
   it('skill-foreign (ref: null) — английский смысл: скилл не поставлен, путь чужой', () => {
     expect(noticeText(hostNotice('skill-foreign'))).toBe(
-      "Agent skill not installed — that path already exists and wasn't created by harnas.",
+      "Agent skill not installed — that path already exists and wasn't created by Parley.",
     );
   });
 
