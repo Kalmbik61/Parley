@@ -1,6 +1,6 @@
-# my-harnas
+# Parley
 
-Координация агентских CLI (Claude Code, Codex) в окне `harnas.app` — Electron-
+Координация агентских CLI (Claude Code, Codex) в окне `Parley.app` — Electron-
 приложении поверх локального процесса `harnas-host`. Окно и хост соединены
 unix-сокетом со своим токеном рукопожатия; сетевых портов нет. Работает строго
 локально — это не сервер и не веб-приложение.
@@ -10,6 +10,21 @@ unix-сокетом со своим токеном рукопожатия; се�
 «Изменений» (диффы, коммит, слияние) и встроенного браузера, командная палитра
 на ⌘J и строка статуса с провайдерами, версиями CLI и лимитами подписки.
 Подробности — в разделе «Окно».
+
+Parley — имя продукта. В коде, путях и переменных пока прежнее внутреннее имя
+`harnas`: пакеты `@harnas/*`, `harnas-host`, `harnas-mcp`, `~/.harnas`,
+`HARNAS_*`, MCP-сервер и скилл `harnas`.
+
+<!--
+  Плеер видео: в веб-редакторе GitHub перетащите сюда docs/media/parley-demo.mp4 —
+  GitHub загрузит файл и вставит ссылку, которая рисуется плеером. После этого
+  блок с постером ниже можно убрать: MP4 из репозитория GitHub в README не играет.
+-->
+<p align="center">
+  <a href="docs/media/parley-demo.mp4"><img src="docs/media/parley-demo-poster.png" width="900" alt="Демо Parley, 30 секунд: сайдбар, комната агентов, решение ведущего, новая сессия, строка статуса"></a>
+  <br>
+  <sub>Демо, 30 с — <a href="docs/media/parley-demo.mp4">docs/media/parley-demo.mp4</a></sub>
+</p>
 
 ## Архитектура
 
@@ -151,14 +166,14 @@ pnpm распаковывает его без прав, и без этого PTY
 `pnpm dev:desktop` собирает хост (`@harnas/host`) и запускает окно
 (`electron-vite dev`).
 
-### Собрать `harnas.app`
+### Собрать `Parley.app`
 
 ```bash
 pnpm build
 pnpm --filter @harnas/desktop dist
 ```
 
-Результат — `packages/desktop/dist/mac-arm64/harnas.app`: без подписи и
+Результат — `packages/desktop/dist/mac-arm64/Parley.app`: без подписи и
 нотаризации, только для этой машины (`identity: null` в
 `electron-builder.yml`). Внутри — `Contents/Resources/host` (хост со своими
 `node_modules`), `NOTICE`, `licenses/Figtree-OFL.txt` и
@@ -204,6 +219,37 @@ macOS и переключается на лету, без перезапуска
 «Light» выбираются в настройках (⌘,) на вкладке «Appearance» — там же (и из
 палитры: «Theme: system», «Theme: dark», «Theme: light») её можно сменить.
 Подробности настроек — в разделе «Настройки».
+
+<table>
+  <tr>
+    <td>
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/media/room-decision-dark.png">
+        <img src="docs/media/room-decision-light.png" width="440" alt="Вкладка комнаты Refunds: лента четырёх агентов и карточка решения ведущего с кнопками Accept и Return for rework">
+      </picture>
+      <br><sub>Комната: агенты обсуждают, ведущий приносит решение</sub>
+    </td>
+    <td>
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/media/overview-dark.png">
+        <img src="docs/media/overview-light.png" width="440" alt="Общий вид: сайдбар работ с сессиями и комнатой, терминал агента, строка статуса с версиями CLI и лимитами">
+      </picture>
+      <br><sub>Сайдбар работ, терминал агента, строка статуса</sub>
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <img src="docs/media/decision-notification.png" width="440" alt="Карточка «Decision waiting for you» в углу окна с кнопками Open и Later">
+      <br><sub>Решение ждёт вас — карточка в окне</sub>
+    </td>
+    <td>
+      <img src="docs/media/new-session.png" width="440" alt="Диалог New session: Claude или Codex, модель из списка, усилие">
+      <br><sub>Новая сессия: агент и модель из списка</sub>
+    </td>
+  </tr>
+</table>
+
+<sub>Снимки и видео — на демо-данных: агенты в них — заглушки, а не настоящие <code>claude</code> и <code>codex</code>.</sub>
 
 - заголовок окна, 40px, прямо на фоне окна: слева — «Workspace sidebar» (⌘B),
   «Back» / «Forward» (⌘⌥←/→); справа — «Right sidebar» (⌘L) и, только когда
@@ -358,7 +404,7 @@ macOS и переключается на лету, без перезапуска
   закрытом окне тоже) прямо на вкладке: рамка вспыхивает на 600 мс, у
   терминала — фокус ввода. Что уведомлять и со звуком ли — в настройках,
   раздел «Notifications»; если уведомления не приходят, их разрешают в
-  Системных настройках → Уведомления → Harnas. Тексты уведомлений —
+  Системных настройках → Уведомления → Parley. Тексты уведомлений —
   по-английски, как и всё окно;
 - решение ведущего комнаты: новое («Decision waiting for you» — «{комната} ·
   S01 collected positions») и переделанное («… S01 revised the decision»:
@@ -530,7 +576,7 @@ Monaco ему уступают ⌘D, ⌘K, ⌘F, ⌘S, ⌘/, ⌘[, ⌘], ⌘L и
 | Вставить картинку из буфера | ⌘V — в терминале, без текста в буфере | — |
 | Открыть ссылку сразу | ⌘-клик — по ссылке в терминале | — |
 | Масштаб страницы браузера | ⌘+ / ⌘− / ⌘0 | — |
-| Настройки | ⌘, | Harnas |
+| Настройки | ⌘, | Parley |
 | Следующая, где нужен ты; пауза будильника; перезапуск хоста; тема; новая комната; архивные работы; новая вкладка браузера | без сочетания | палитра |
 
 Клавиши внутри полей и списков (стрелки, Enter, Esc в сайдбаре, палитре, поиске
@@ -570,7 +616,7 @@ node packages/core/dist/cli.js session <id>
   skills into projects», «Worktree root».
 - **Notifications** — «needs you» / «finished» / «mail to you» / «sound»; если
   уведомления не приходят, подсказка ведёт в Системные настройки → Уведомления
-  → Harnas.
+  → Parley.
 - **Browser** — «Clear browser data»: куки, хранилища и кеш встроенного
   браузера.
 
