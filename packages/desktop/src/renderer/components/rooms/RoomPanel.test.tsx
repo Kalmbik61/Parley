@@ -681,14 +681,16 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
     });
   });
 
-  it('ответ — цитата между метой и текстом: «↩ подпись: выдержка», кнопка с aria-label и подсказкой', () => {
+  it('ответ — цитата между метой и текстом: «↩ подпись: выдержка», кнопка с именем из видимого текста и подсказкой', () => {
     renderPanel(entryOf({ messages: replyMessages() }));
     const button = quote('m-1');
     expect(button.tagName).toBe('BUTTON');
     expect(button.getAttribute('type')).toBe('button');
     expect(button.textContent).toBe('↩ You: Что с миграцией?');
     expect(button.querySelector('.font-semibold')?.textContent).toBe('You');
-    expect(button.getAttribute('aria-label')).toBe('Show the message from You');
+    // Имя — видимый текст без стрелки: aria-label выдержку не прячет.
+    expect(button.hasAttribute('aria-label')).toBe(false);
+    expect(screen.getByRole('button', { name: 'You: Что с миграцией?' })).toBe(button);
     expect(button.getAttribute('title')).toBe('Что с миграцией?');
     // Мелкий текст, одна строка с обрезкой, акцентная черта слева.
     for (const token of ['text-xs', 'truncate', 'border-l-2', 'border-(--color-accent)']) {
@@ -722,7 +724,9 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
       }),
     );
     expect(quote('m-1').textContent).toBe('↩ S01 архитектор: @S02 бэкенд, @you — что скажете?');
-    expect(quote('m-1').getAttribute('aria-label')).toBe('Show the message from S01 архитектор');
+    expect(
+      screen.getByRole('button', { name: 'S01 архитектор: @S02 бэкенд, @you — что скажете?' }),
+    ).toBe(quote('m-1'));
   });
 
   it('от текста оригинала ничего не осталось (одна картинка без alt) — цитата показывает одну подпись', () => {
@@ -746,6 +750,28 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
     expect(scrolled).toHaveLength(1);
     expect(scrolled[0]?.element).toBe(messageRow('m-1'));
     expect(scrolled[0]?.options).toEqual({ block: 'center', behavior: 'smooth' });
+  });
+
+  it('клик по цитате переносит фокус на строку оригинала: после прокрутки и без собственной прокрутки', () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    try {
+      renderPanel(entryOf({ messages: replyMessages() }));
+      // Строка принимает фокус программно, но в порядок Tab не входит.
+      expect(messageRow('m-1').getAttribute('tabindex')).toBe('-1');
+      expect(document.activeElement).toBe(document.body);
+
+      fireEvent.click(quote('m-1'));
+      expect(document.activeElement).toBe(messageRow('m-1'));
+      expect(focus).toHaveBeenCalledTimes(1);
+      expect(focus.mock.contexts[0]).toBe(messageRow('m-1'));
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+      const scroll = vi.mocked(Element.prototype.scrollIntoView);
+      expect(scroll.mock.invocationCallOrder[0]).toBeLessThan(
+        focus.mock.invocationCallOrder[0] as number,
+      );
+    } finally {
+      focus.mockRestore();
+    }
   });
 
   it('prefers-reduced-motion: reduce — прокрутка без плавности (behavior: auto); без него — smooth', () => {
@@ -835,6 +861,8 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
     const { unmount } = renderPanel(entryOf({ messages: replyMessages() }));
     fireEvent.click(quote('m-1'));
     unmount();
+    // Перенос фокуса в jsdom ставит свою отложенную задачу (`selectionchange`): она не наша и срабатывает сразу.
+    vi.advanceTimersByTime(0);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -861,6 +889,8 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
     expect(() => fireEvent.click(button)).not.toThrow();
     expect(scrolled).toEqual([]);
     expect(document.querySelector('[data-reply-flash]')).toBeNull();
+    // Переходить некуда — фокус не двигается.
+    expect(document.activeElement).toBe(document.body);
   });
 
   it('оригинала нет в этой комнате (чужая комната, несуществующий id) — тот же блок, но не кнопка', () => {
@@ -874,7 +904,7 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
       }),
     );
     expect(document.querySelector('[data-message-reply]')).toBeNull();
-    expect(screen.queryByRole('button', { name: /Show the message/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Original message/ })).toBeNull();
     const blocks = Array.from(
       document.querySelectorAll<HTMLElement>('[data-message-reply-missing]'),
     );

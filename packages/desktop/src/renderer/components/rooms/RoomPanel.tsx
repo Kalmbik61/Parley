@@ -22,10 +22,11 @@
  * новом сообщении. В отличие от «всей почты» (`MailPanel.tsx`) счёта «↓N» тут нет: комната короче и
  * читается по ходу переписки.
  *
- * Сообщение-ответ несёт цитату (`RoomMessage.tsx`): клик по ней прокручивает ленту к оригиналу (`jumpTo`) и
- * на 1.2 с подсвечивает его — атрибутом `data-reply-flash` (`styles/reply-flash.css`), повторный клик
- * перезапускает отсчёт. Прижатие ленты к низу это не ломает: «у низа» по-прежнему запоминает `onFeedScroll`
- * по событию `scroll`, а новое сообщение прижимает ленту безусловно.
+ * Сообщение-ответ несёт цитату (`RoomMessage.tsx`): клик по ней прокручивает ленту к оригиналу (`jumpTo`),
+ * переносит на него фокус (строка сообщения принимает его программно, `tabIndex={-1}`) и на 1.2 с подсвечивает —
+ * атрибутом `data-reply-flash` (`styles/reply-flash.css`), повторный клик перезапускает отсчёт. Прижатие ленты
+ * к низу это не ломает: «у низа» по-прежнему запоминает `onFeedScroll` по событию `scroll`, а новое сообщение
+ * прижимает ленту безусловно.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
@@ -128,6 +129,8 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       const reduceMotion =
         typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
       target.scrollIntoView({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' });
+      // Фокус — на оригинал: читающий с клавиатуры продолжит с него. Без прокрутки — её уже запустила строка выше.
+      target.focus({ preventScroll: true });
       // Снять и поставить заново: повторная подсветка перезапускает анимацию CSS (как `attention/flash.ts`).
       clearFlash();
       void target.offsetWidth;

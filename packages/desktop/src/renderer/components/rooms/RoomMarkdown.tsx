@@ -84,7 +84,6 @@ function HumanMentionChip(): JSX.Element {
     <span
       data-mention-human=""
       title={S.rooms.humanMentionTitle}
-      aria-label={S.rooms.humanMentionTitle}
       className={HUMAN_MENTION_CHIP_CLASS}
     >
       {S.rooms.humanMention}

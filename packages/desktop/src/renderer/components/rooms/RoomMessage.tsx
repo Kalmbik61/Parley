@@ -14,7 +14,10 @@
  *
  * Сообщение-ответ (`message.reply`, Parley 0.3.0) несёт цитату между метой и текстом: одна строка
  * `↩ S02 бэкенд: начало вопроса…` с акцентной чертой слева. Оригинал в этой комнате — кнопка, клик по ней зовёт
- * `onJumpTo(id)`; оригинала нет — тот же блок без кнопки. Текст ответа — Markdown, как у любого сообщения.
+ * `onJumpTo(id)`; оригинала нет — тот же блок без кнопки. Имя кнопки — её видимый текст (подпись и выдержка), а
+ * `title` показывает выдержку целиком, когда строка обрезана. Строка сообщения принимает фокус программно
+ * (`tabIndex={-1}`): переход по цитате переносит его на оригинал, и читающий с клавиатуры продолжает оттуда.
+ * Текст ответа — Markdown, как у любого сообщения.
  */
 
 import { S } from '../../../shared/strings.js';
@@ -65,7 +68,6 @@ function ReplyQuote({ reply, onJumpTo }: ReplyQuoteProps): JSX.Element {
       data-message-reply={reply.id}
       // Строка обрезается по ширине колонки — выдержка целиком видна подсказкой.
       title={reply.excerpt}
-      aria-label={S.rooms.replyJump(reply.from)}
       onClick={() => onJumpTo(reply.id)}
       className={cn(REPLY_QUOTE_CLASS, 'cursor-pointer hover:text-foreground')}
     >
@@ -85,7 +87,12 @@ export function RoomMessage({
   observeRef,
 }: RoomMessageProps): JSX.Element {
   return (
-    <div data-message-id={message.id} data-sender={message.sender.kind} className="flex max-w-[680px] gap-2.5">
+    <div
+      data-message-id={message.id}
+      data-sender={message.sender.kind}
+      tabIndex={-1}
+      className="flex max-w-[680px] gap-2.5"
+    >
       <div className="flex w-5 shrink-0 justify-center pt-px">
         <SenderAvatar kind={message.sender.kind} provider={message.sender.provider} />
       </div>
