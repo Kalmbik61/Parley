@@ -518,8 +518,14 @@ export function createWakeService(
       unsubscribeWorks = works.onChange(() => recomputeAll());
       unsubscribeActivity = activity.onChange((ref, value) => {
         const state = attempts.get(refKey(ref));
-        // Ход начался (`UserPromptSubmit`) — попытка удалась, предохранитель не нужен.
-        if (state?.inFlight === true && value.activity.activity === 'working') {
+        // Ход начался (`UserPromptSubmit`) — попытка удалась, предохранитель не нужен. Сессия, которую
+        // держат одни фоновые субагенты, `working` и до указателя: любой её пересчёт — не начало хода,
+        // и Enter указателя он отменять не вправе.
+        if (
+          state?.inFlight === true &&
+          value.activity.activity === 'working' &&
+          !value.activity.heldByBackground
+        ) {
           clearTimers(state);
           state.inFlight = false;
         }

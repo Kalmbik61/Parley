@@ -365,6 +365,104 @@ describe('WakeService: процесс без хуков и диалог пере
   });
 });
 
+describe('WakeService: лид закончил ход и ждёт фоновых субагентов (Parley 0.2.0)', () => {
+  const journalOf = (workId: string, sessionId: string): string =>
+    path.join(workPaths(project, workId).events, `${sessionId}.jsonl`);
+  const hookLine = (name: string, extra: Record<string, unknown> = {}): string =>
+    `${JSON.stringify({ hook_event_name: name, ...extra })}\n`;
+  const append = (file: string, text: string): Promise<void> =>
+    writeFile(file, text, { flag: 'a' });
+  /** Снимок фоновых задач хука: субагент ещё работает. */
+  const running = {
+    id: 'a1',
+    type: 'subagent',
+    status: 'running',
+    agent_type: 'general-purpose',
+    description: 'Orca research',
+  };
+
+  /** Лид закончил ход (Stop), а фоновый субагент работает: активность `working`, но агент у приглашения. */
+  async function leadWithSubagents(
+    wakeOptions: WakeServiceOptions = {},
+  ): Promise<Rig & { workId: string; sessionId: string }> {
+    const { workId, sessionId } = await activeSession();
+    // Как при настоящем запуске: `events/` заводит запись настроек до старта процесса.
+    await mkdir(workPaths(project, workId).events, { recursive: true });
+    const rigged = await rig(sessionId, workId, {}, wakeOptions);
+    await append(
+      journalOf(workId, sessionId),
+      hookLine('UserPromptSubmit') + hookLine('Stop', { background_tasks: [running] }),
+    );
+    await waitFor(() => rigged.activity.get(rigged.ref)?.activity.heldByBackground === true, 3000);
+    expect(rigged.activity.get(rigged.ref)?.activity.activity).toBe('working');
+    return { ...rigged, workId, sessionId };
+  }
+
+  it('письмо печатается указателем, хотя активность working: ход окончен, держит фоновый субагент', async () => {
+    const { stream, workId, sessionId } = await leadWithSubagents();
+
+    await sendLetter(workId, sessionId);
+
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+  });
+
+  it('ждёт в wait_for — указатель не печатается, пока ожидание и ход не кончатся', async () => {
+    const { workId, sessionId } = await activeSession();
+    await mkdir(workPaths(project, workId).events, { recursive: true });
+    const { stream, activity, ref } = await rig(sessionId, workId);
+    const journal = journalOf(workId, sessionId);
+    await append(
+      journal,
+      hookLine('UserPromptSubmit', { background_tasks: [running] }) +
+        hookLine('ParleyWaitStart', { parley_wait_target: 's-02' }),
+    );
+    await waitFor(() => activity.get(ref)?.activity.waitingFor === 's-02', 3000);
+
+    await sendLetter(workId, sessionId);
+    await settle(500);
+    expect(activity.get(ref)?.activity.heldByBackground).toBe(false);
+    expect(stream()).not.toContain(pointer(1));
+
+    // Ожидание кончилось, ход закончился, фоновых больше нет — теперь указатель уходит.
+    await append(journal, hookLine('ParleyWaitEnd') + hookLine('Stop', { background_tasks: [] }));
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+  });
+
+  it('пока указатель ждёт Enter, посторонний пересчёт удерживаемой сессии Enter не отменяет', async () => {
+    const { stream, workId, sessionId } = await leadWithSubagents({ enterDelayMs: 500 });
+
+    await sendLetter(workId, sessionId);
+    await waitFor(() => stream().includes(pointer(1)), 3000);
+    // За паузу перед Enter приходит ещё одно событие хука: снимок прежний, сессия по-прежнему working
+    // и по-прежнему удержана фоновыми. Это не начало хода, и Enter указателя отменять нельзя.
+    await append(
+      journalOf(workId, sessionId),
+      hookLine('Notification', { background_tasks: [running] }),
+    );
+
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+  });
+
+  it('указатель принят и ход начался (working без удержания) — предохранитель указателя снят', async () => {
+    const { stream, activity, ref, workId, sessionId } = await leadWithSubagents({
+      pointerTimeoutMs: 600,
+    });
+
+    await sendLetter(workId, sessionId);
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+    // Claude принял ввод и начал ход, фоновый субагент всё ещё работает.
+    await append(
+      journalOf(workId, sessionId),
+      hookLine('UserPromptSubmit', { background_tasks: [running] }),
+    );
+    await waitFor(() => activity.get(ref)?.activity.heldByBackground === false, 3000);
+
+    // Дольше срока предохранителя: ход начался, и сказать «не начался» он уже не должен.
+    await settle(900);
+    expect(noticeTexts('pointer-timeout')).toEqual([]);
+  });
+});
+
 describe('WakeService: сбой Enter указателя (кусок 5.1, раунд исправлений 2)', () => {
   it('запись Enter бросает — будильник не падает, пишет в лог, предохранитель срабатывает, новое письмо доставляется', async () => {
     const { workId, sessionId } = await activeSession();
