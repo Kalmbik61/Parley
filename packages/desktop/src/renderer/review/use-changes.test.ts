@@ -144,6 +144,44 @@ describe('useChanges (кусок 8.2a, тест 8)', () => {
     expect(count('worktrees.diff')).toBe(3);
   });
 
+  it('лид закончил ход, а фоновые субагенты идут (working остаётся, удержание включилось) — обновление', async () => {
+    renderHook(() => useChanges({ bridge, entry: work(), sessionId: 's-02' }));
+    await flush(2500);
+    act(() => {
+      useActivityStore.setState({ byRef: activityMap([makeActivity(ref, 'working')]) });
+    });
+    await flush(100);
+    expect(count('worktrees.diff')).toBe(1);
+
+    act(() => {
+      useActivityStore.setState({
+        byRef: activityMap([makeActivity(ref, 'working', { heldByBackground: true })]),
+      });
+    });
+    await flush();
+    expect(count('worktrees.diff')).toBe(2);
+
+    // Удержание продолжается — новых поводов нет; когда фоновые закончились, переход в idle — ещё один.
+    await flush(2500);
+    act(() => {
+      useActivityStore.setState({
+        byRef: activityMap([
+          makeActivity(ref, 'working', {
+            heldByBackground: true,
+            lastEventAt: '2026-09-27T09:05:00.000Z',
+          }),
+        ]),
+      });
+    });
+    await flush(2500);
+    expect(count('worktrees.diff')).toBe(2);
+    act(() => {
+      useActivityStore.setState({ byRef: activityMap([makeActivity(ref, 'unseen')]) });
+    });
+    await flush();
+    expect(count('worktrees.diff')).toBe(3);
+  });
+
   it('переход другой сессии из working вкладку не будит', async () => {
     renderHook(() => useChanges({ bridge, entry: work(), sessionId: 's-02' }));
     await flush(2500);

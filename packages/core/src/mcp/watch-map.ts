@@ -13,15 +13,21 @@ export type Probe<T> = () => Promise<T | null>;
  * после первой же записи. Рядом идёт редкий опрос — `fs.watch` работает не на
  * каждой файловой системе, и молчаливый вечный `wait_for` хуже лишнего чтения.
  * Истёк таймаут — `null`, вызывающий отвечает агенту `{state: "running"}`.
+ *
+ * `signal` — отмена вызова клиентом (агент прервал ход): ждать больше некого, ожидание
+ * прекращается сразу и тоже даёт `null` — ответ на отменённый вызов всё равно отбросят.
  */
 export async function waitForMap<T>(
   mapFile: string,
   probe: Probe<T>,
   timeoutMs: number,
   pollMs: number,
+  signal?: AbortSignal,
 ): Promise<T | null> {
+  if (signal?.aborted) return null;
   const found = await probe();
   if (found !== null) return found;
+  if (signal?.aborted) return null;
 
   return new Promise<T | null>((resolve, reject) => {
     let done = false;
@@ -32,6 +38,13 @@ export async function waitForMap<T>(
       clearInterval(poll);
       clearTimeout(deadline);
       watcher?.close();
+      signal?.removeEventListener('abort', onAbort);
+    };
+
+    const onAbort = (): void => {
+      if (done) return;
+      stop();
+      resolve(null);
     };
 
     const check = (): void => {
@@ -50,6 +63,7 @@ export async function waitForMap<T>(
       );
     };
 
+    signal?.addEventListener('abort', onAbort, { once: true });
     const poll = setInterval(check, pollMs);
     const deadline = setTimeout(() => {
       stop();

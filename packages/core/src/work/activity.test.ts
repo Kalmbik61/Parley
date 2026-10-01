@@ -6,7 +6,12 @@
 
 import { describe, expect, it } from 'vitest';
 import { activityOf, hookedSince, type ActivityLog } from './activity.js';
-import { bareEvent, type BackgroundTask, type EventRecord } from './events.js';
+import {
+  TERMINAL_WORKING_EVENT,
+  bareEvent,
+  type BackgroundTask,
+  type EventRecord,
+} from './events.js';
 
 const AT = '2026-09-05T10:00:00.000Z';
 const NOW = Date.parse('2026-09-05T10:00:10.000Z');
@@ -368,8 +373,8 @@ describe('activityOf: субагенты по id и фоновые задачи 
 
     const result = activity(events);
     expect(result.activity).toBe('unseen');
-    // Ход закончился на самом Stop: фоновые задачи лишь отложили вывод.
-    expect(result.turnEndedAt).toBe('2026-09-05T10:00:05.000Z');
+    // Ход окончен, когда снялось удержание: время события, а не прежнего Stop.
+    expect(result.turnEndedAt).toBe('2026-09-05T10:00:08.000Z');
     expect(result.tasks).toEqual([]);
     expect(result.subagents).toBe(0);
     expect(activity(events, true).activity).toBe('idle');
@@ -875,5 +880,361 @@ describe('activityOf: heldByBackground — working только из-за фон
 
     expect(result.activity).toBe('working');
     expect(result.heldByBackground).toBe(false);
+  });
+});
+
+describe('activityOf: отставший снимок не воскрешает остановленного субагента (Parley 0.2.0)', () => {
+  const stoppedLead = (...tail: EventRecord[]): EventRecord[] => [
+    event('UserPromptSubmit'),
+    hook('Stop', { backgroundTasks: [task('a')] }),
+    stopOf('a', { backgroundTasks: [task('a')] }),
+    ...tail,
+  ];
+
+  it('SubagentStop(a), а следующее событие снова числит a работающей: задача остановлена', () => {
+    const result = activity(
+      stoppedLead(
+        hook('Notification', { notificationType: 'idle_prompt', backgroundTasks: [task('a')] }),
+      ),
+    );
+
+    expect(result.activity).toBe('unseen');
+    expect(result.tasks).toEqual([]);
+    expect(result.subagents).toBe(0);
+    expect(result.heldByBackground).toBe(false);
+  });
+
+  it('и сколько бы позже ни пришло снимков с остановленным id: он вычищается из каждого', () => {
+    const result = activity(
+      stoppedLead(
+        hook('Notification', { backgroundTasks: [task('a')] }),
+        hook('Notification', { backgroundTasks: [task('a'), task('b')] }),
+      ),
+    );
+
+    // Остановленная `a` не вернулась, а `b`, о которой журнал знает только по снимку, жива.
+    expect(result.activity).toBe('working');
+    expect(result.tasks.map((item) => item.id)).toEqual(['b']);
+    expect(result.heldByBackground).toBe(true);
+  });
+
+  it('новый SubagentStart того же id возвращает задачу: её снова ведёт снимок', () => {
+    const result = activity(
+      stoppedLead(startOf('a'), hook('Notification', { backgroundTasks: [task('a')] })),
+    );
+
+    expect(result.activity).toBe('working');
+    expect(result.tasks.map((item) => item.id)).toEqual(['a']);
+  });
+
+  it('SessionStart забывает остановленных: снимок самого события с тем же id принимается', () => {
+    const result = activity(stoppedLead(hook('SessionStart', { backgroundTasks: [task('a')] })));
+
+    expect(result.tasks.map((item) => item.id)).toEqual(['a']);
+  });
+
+  it('чужая остановка (id, которого не стартовали) тоже запоминается и вычищает его из снимков', () => {
+    const result = activity([
+      event('UserPromptSubmit'),
+      stopOf('чужой', { backgroundTasks: [] }),
+      hook('Stop', { backgroundTasks: [task('чужой'), task('a')] }),
+    ]);
+
+    expect(result.tasks.map((item) => item.id)).toEqual(['a']);
+  });
+});
+
+describe('activityOf: предел удержания — backgroundHoldMs (Parley 0.2.0)', () => {
+  const MINUTE = 60_000;
+  /** Время через `minutes` минут после `AT`: так задаётся «сейчас», а события остаются на месте. */
+  const nowAfter = (minutes: number): number => Date.parse(AT) + minutes * MINUTE;
+  const read = (
+    events: EventRecord[],
+    nowMs: number,
+    extra: Partial<Parameters<typeof activityOf>[0]> = {},
+  ): ReturnType<typeof activityOf> =>
+    activityOf({ events, now: nowMs, silenceThresholdMs: 30_000, ...extra });
+  const parked = [event('UserPromptSubmit'), hook('Stop', { backgroundTasks: [task('a')] })];
+
+  it('по умолчанию час: до него фоновый субагент держит сессию, после — зомби, ход окончен', () => {
+    const before = read(parked, nowAfter(59));
+    expect(before.activity).toBe('working');
+    expect(before.heldByBackground).toBe(true);
+
+    const after = read(parked, nowAfter(61));
+    expect(after.activity).toBe('unseen');
+    expect(after.heldByBackground).toBe(false);
+    expect(after.tasks).toEqual([]);
+    // Ход кончился на самом Stop: больше ничего не случалось.
+    expect(after.turnEndedAt).toBe(AT);
+    expect(read(parked, nowAfter(61), { seen: true }).activity).toBe('idle');
+  });
+
+  it('предел задаётся параметром: короче — и удержание снимается раньше', () => {
+    expect(read(parked, nowAfter(1), { backgroundHoldMs: 10 * MINUTE }).activity).toBe('working');
+    expect(read(parked, nowAfter(11), { backgroundHoldMs: 10 * MINUTE }).activity).toBe('unseen');
+  });
+
+  it('родитель ещё работал, но молчит дольше предела: ход окончен по тишине, зомби не держит', () => {
+    const running = [event('UserPromptSubmit'), startOf('a', { backgroundTasks: [task('a')] })];
+
+    const quiet = read(running, nowAfter(61));
+    expect(quiet.activity).toBe('unseen');
+    expect(quiet.turnEndedAt).toBe(AT);
+    expect(quiet.tasks).toEqual([]);
+  });
+
+  it('тишина считается от последнего события или записи лога родителя — что свежее', () => {
+    const logAt = (minutes: number): ActivityLog => ({
+      lastRecordAt: new Date(nowAfter(minutes)).toISOString(),
+      lastUserRecordAt: null,
+    });
+
+    // События час назад, а запись лога шесть минут назад: удержание не истекло, родитель тихо стоит.
+    const logged = read(parked, nowAfter(61), { log: logAt(55) });
+    expect(logged.activity).toBe('working');
+    expect(logged.heldByBackground).toBe(true);
+
+    // Запись лога тоже старше предела — зомби: ход окончен, и источник — лог.
+    const stale = read(parked, nowAfter(62), { log: logAt(1) });
+    expect(stale.activity).toBe('unseen');
+    expect(stale.source).toBe('log');
+    expect(stale.turnEndedAt).toBe(new Date(nowAfter(1)).toISOString());
+
+    // Родитель писал в транскрипт полминуты назад: он работает сам, держать нечем и не нужно.
+    const fresh = read(parked, nowAfter(61), { log: logAt(60.5) });
+    expect(fresh.activity).toBe('working');
+    expect(fresh.heldByBackground).toBe(false);
+  });
+
+  it('вопрос человеку (blocked) предел не снимает', () => {
+    const result = read(
+      [event('UserPromptSubmit'), hook('PermissionRequest', { backgroundTasks: [task('a')] })],
+      nowAfter(300),
+    );
+
+    expect(result.activity).toBe('blocked');
+  });
+
+  it('ожидание wait_for старше предела (вызов умер, конца нет) тоже не держит', () => {
+    const waiting = [event('UserPromptSubmit'), hook('ParleyWaitStart', { waitTarget: 's-03' })];
+
+    const live = read(waiting, nowAfter(20));
+    expect(live.activity).toBe('working');
+    expect(live.waitingFor).toBe('s-03');
+
+    const dead = read(waiting, nowAfter(61));
+    expect(dead.activity).toBe('unseen');
+    expect(dead.waitingFor).toBeNull();
+  });
+
+  it('времени событий нет (не разобрать) — предел не срабатывает', () => {
+    const result = activityOf({
+      events: [
+        { ...event('UserPromptSubmit'), at: 'не время' },
+        { ...hook('Stop', { backgroundTasks: [task('a')] }), at: 'не время' },
+      ],
+      now: nowAfter(600),
+    });
+
+    expect(result.activity).toBe('working');
+    expect(result.heldByBackground).toBe(true);
+  });
+});
+
+describe('activityOf: конец хода после снятия удержания (Parley 0.2.0)', () => {
+  const STOP_AT = '2026-09-05T10:00:01.000Z';
+  const RELEASE_AT = '2026-09-05T10:00:08.000Z';
+  const lead = [
+    event('UserPromptSubmit', null, '2026-09-05T09:59:50.000Z'),
+    hook('Stop', { backgroundTasks: [task('a')] }, STOP_AT),
+  ];
+
+  it('последний фоновый закончился (SubagentStop, снимок пуст): turnEndedAt — время этого события', () => {
+    const held = activity(lead);
+    expect(held.activity).toBe('working');
+    expect(held.turnEndedAt).toBeNull();
+
+    const released = activity([...lead, stopOf('a', { backgroundTasks: [] }, RELEASE_AT)]);
+    expect(released.activity).toBe('unseen');
+    // Человек, смотревший сессию, пока лид ждал, теперь снова получит unseen: его просмотр старше.
+    expect(released.turnEndedAt).toBe(RELEASE_AT);
+    expect(released.turnEndedAt).not.toBe(STOP_AT);
+  });
+
+  it('любое событие с пустым снимком снимает удержание и ставит конец хода на своё время', () => {
+    const released = activity([...lead, hook('Notification', { backgroundTasks: [] }, RELEASE_AT)]);
+
+    expect(released.activity).toBe('unseen');
+    expect(released.turnEndedAt).toBe(RELEASE_AT);
+  });
+
+  it('снимок без работающих субагентов (завершены, не субагенты) — тоже снятие удержания', () => {
+    const released = activity([
+      ...lead,
+      hook('Notification', { backgroundTasks: [task('a', { status: 'completed' })] }, RELEASE_AT),
+    ]);
+
+    expect(released.turnEndedAt).toBe(RELEASE_AT);
+  });
+
+  it('пока остался хоть один фоновый, удержание держится и конец хода не наступил', () => {
+    const result = activity([
+      event('UserPromptSubmit'),
+      hook('Stop', { backgroundTasks: [task('a'), task('b')] }, STOP_AT),
+      stopOf('a', { backgroundTasks: [task('b')] }, RELEASE_AT),
+    ]);
+
+    expect(result.activity).toBe('working');
+    expect(result.turnEndedAt).toBeNull();
+  });
+
+  it('без удержания время конца хода прежнее — время Stop', () => {
+    const result = activity([
+      event('UserPromptSubmit'),
+      hook('Stop', { backgroundTasks: [] }, STOP_AT),
+      hook('Notification', { backgroundTasks: [] }, RELEASE_AT),
+    ]);
+
+    expect(result.turnEndedAt).toBe(STOP_AT);
+  });
+
+  it('удержание снято, когда родитель уже работает сам: хода как не было — turnEndedAt остаётся null', () => {
+    const result = activity([
+      ...lead,
+      event('UserPromptSubmit', null, '2026-09-05T10:00:06.000Z'),
+      stopOf('a', { backgroundTasks: [] }, RELEASE_AT),
+    ]);
+
+    expect(result.activity).toBe('working');
+    expect(result.turnEndedAt).toBeNull();
+  });
+});
+
+describe('activityOf: несколько ожиданий wait_for, у каждого свой id (Parley 0.2.0)', () => {
+  const QUIET = '2026-09-05T09:58:00.000Z';
+  const start = (id: string | null, target: string, at = AT): EventRecord =>
+    hook('ParleyWaitStart', { waitTarget: target, waitId: id }, at);
+  const end = (id: string | null, at = AT): EventRecord =>
+    hook('ParleyWaitEnd', { waitId: id }, at);
+  const turn = [event('UserPromptSubmit')];
+
+  it('параллельные вызовы: первый закончился, второй идёт — waitingFor остаётся за вторым', () => {
+    const both = [...turn, start('w1', 's-02'), start('w2', 's-03')];
+    // Последнее из активных ожиданий.
+    expect(activity(both).waitingFor).toBe('s-03');
+
+    expect(activity([...both, end('w1')]).waitingFor).toBe('s-03');
+    // Закончился второй — снова виден первый, он ещё идёт.
+    expect(activity([...both, end('w2')]).waitingFor).toBe('s-02');
+    expect(activity([...both, end('w1'), end('w2')]).waitingFor).toBeNull();
+  });
+
+  it('End без id (прежняя строка) снимает все ожидания — для совместимости', () => {
+    const result = activity([...turn, start('w1', 's-02'), start('w2', 's-03'), end(null)]);
+
+    expect(result.waitingFor).toBeNull();
+  });
+
+  it('поздний End брошенного (Esc) вызова не снимает новое ожидание', () => {
+    const result = activity([
+      ...turn,
+      start('w1', 's-02'),
+      // Человек прервал ход и начал новый: ожидание прежнего хода снято, а вызов ещё дойдёт до своего End.
+      event('UserPromptSubmit'),
+      start('w2', 'inbox'),
+      end('w1'),
+    ]);
+
+    expect(result.waitingFor).toBe('inbox');
+  });
+
+  it('Start без id (прежняя строка): End чужого id его не снимает, End без id — снимает', () => {
+    const waiting = [...turn, start(null, 's-02')];
+
+    expect(activity([...waiting, end('чужой')]).waitingFor).toBe('s-02');
+    expect(activity([...waiting, end(null)]).waitingFor).toBeNull();
+  });
+
+  it('повторный Start с тем же id заменяет цель, а не копит ожидания', () => {
+    const result = activity([...turn, start('w1', 's-02'), start('w1', 's-03')]);
+
+    expect(result.waitingFor).toBe('s-03');
+    expect(
+      activity([...turn, start('w1', 's-02'), start('w1', 's-03'), end('w1')]).waitingFor,
+    ).toBeNull();
+  });
+
+  it('Stop, UserPromptSubmit, SessionStart и конец хода по idle_prompt снимают все ожидания', () => {
+    const waiting = [...turn, start('w1', 's-02'), start('w2', 's-03')];
+
+    for (const closing of [
+      event('Stop'),
+      event('UserPromptSubmit'),
+      event('SessionStart'),
+      event('Notification', 'idle_prompt'),
+    ]) {
+      expect(activity([...waiting, closing]).waitingFor, closing.name).toBeNull();
+    }
+  });
+
+  it('пока осталось хоть одно ожидание, тишина сессию не понижает; когда последнее кончилось — понижает', () => {
+    const read = (events: EventRecord[]): ReturnType<typeof activityOf> =>
+      activityOf({ events, now: NOW, silenceThresholdMs: 30_000 });
+    const waiting = [
+      event('UserPromptSubmit', null, QUIET),
+      start('w1', 's-02', QUIET),
+      start('w2', 's-03', QUIET),
+    ];
+
+    const oneLeft = read([...waiting, end('w1', QUIET)]);
+    expect(oneLeft.activity).toBe('working');
+    expect(oneLeft.waitingFor).toBe('s-03');
+    expect(oneLeft.heldByBackground).toBe(false);
+
+    const none = read([...waiting, end('w1', QUIET), end('w2', '2026-09-05T09:58:30.000Z')]);
+    expect(none.activity).toBe('unseen');
+    expect(none.waitingFor).toBeNull();
+  });
+});
+
+describe('activityOf: TerminalWorking — кадр спиннера терминала Codex (Parley 0.2.0)', () => {
+  const frame = (at = AT): EventRecord => event(TERMINAL_WORKING_EVENT, null, at);
+
+  it('начинает ход, как UserPromptSubmit: working, turnEndedAt сброшен', () => {
+    expect(activity([frame()]).activity).toBe('working');
+
+    const afterStop = activity([event('UserPromptSubmit'), event('Stop'), frame()]);
+    expect(afterStop.activity).toBe('working');
+    expect(afterStop.turnEndedAt).toBeNull();
+  });
+
+  it('ожидания wait_for не снимает: кадр новее ParleyWaitStart, но это не новый ход', () => {
+    const waiting = [
+      event('UserPromptSubmit'),
+      hook('ParleyWaitStart', { waitTarget: 's-02', waitId: 'w1' }),
+    ];
+
+    expect(activity([...waiting, frame(), frame()]).waitingFor).toBe('s-02');
+    // Настоящее начало хода по-прежнему снимает.
+    expect(activity([...waiting, event('UserPromptSubmit')]).waitingFor).toBeNull();
+    // И конец хода.
+    expect(activity([...waiting, frame(), event('Stop')]).waitingFor).toBeNull();
+  });
+
+  it('ожидание и кадры вместе: сессия working, и тишина её не понижает', () => {
+    const quiet = '2026-09-05T09:58:00.000Z';
+    const result = activityOf({
+      events: [
+        frame(quiet),
+        hook('ParleyWaitStart', { waitTarget: 'inbox', waitId: 'w1' }, quiet),
+        frame(quiet),
+      ],
+      now: NOW,
+      silenceThresholdMs: 30_000,
+    });
+
+    expect(result.activity).toBe('working');
+    expect(result.waitingFor).toBe('inbox');
   });
 });

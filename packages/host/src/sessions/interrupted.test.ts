@@ -71,4 +71,104 @@ describe('findInterrupted', () => {
 
     expect(refs.map((ref) => ref.sessionId)).toEqual(['s-02', 's-03']);
   });
+
+  describe('субагенты (Parley 0.2.0)', () => {
+    const hook = (name: string, extra: Partial<EventRecord> = {}): EventRecord => ({
+      ...event(name),
+      ...extra,
+    });
+    const running = (id: string, type = 'subagent') => ({
+      id,
+      type,
+      status: 'running',
+      agentType: 'general-purpose',
+      description: `задача ${id}`,
+    });
+    const interruptedIds = async (journals: Record<string, readonly EventRecord[] | null>) => {
+      const entry = entryOf(Object.keys(journals).map((id) => ({ id, lifecycle: 'sleeping' })));
+      const refs = await findInterrupted(
+        [entry],
+        async (ref: SessionRef) => journals[ref.sessionId] ?? null,
+      );
+      return refs.map((ref) => ref.sessionId);
+    };
+
+    it('служебные SubagentStart и SubagentStop после Stop не делают простаивающую сессию прерванной', async () => {
+      expect(
+        await interruptedIds({
+          // Помощник Claude Code остановился уже после конца хода: его события — не ход.
+          's-01': [
+            event('UserPromptSubmit'),
+            event('Stop'),
+            hook('SubagentStop', { agentId: 'helper' }),
+            hook('SubagentStart', { agentId: 'helper-2' }),
+            hook('SubagentStop', { agentId: 'helper-2' }),
+          ],
+          // Посреди хода субагент ещё работает: последнее событие хода — UserPromptSubmit, прервана.
+          's-02': [event('UserPromptSubmit'), hook('SubagentStart', { agentId: 'a' })],
+        }),
+      ).toEqual(['s-02']);
+    });
+
+    it('лид закончил ход, а фоновые субагенты работали, — хост упал: сессия прервана', async () => {
+      expect(
+        await interruptedIds({
+          's-01': [
+            event('UserPromptSubmit'),
+            hook('Stop', { backgroundTasks: [running('a')] }),
+            hook('SubagentStop', { agentId: 'helper' }),
+          ],
+        }),
+      ).toEqual(['s-01']);
+    });
+
+    it('фоновые успели закончиться (снимок пуст, остановка по id, не субагенты) — не прервана', async () => {
+      expect(
+        await interruptedIds({
+          's-01': [
+            event('UserPromptSubmit'),
+            hook('Stop', { backgroundTasks: [running('a')] }),
+            hook('SubagentStop', { agentId: 'a', backgroundTasks: [] }),
+          ],
+          // Снимок последнего события отстал, но остановка своего id была.
+          's-02': [
+            event('UserPromptSubmit'),
+            hook('Stop', { backgroundTasks: [running('a')] }),
+            hook('SubagentStop', { agentId: 'a', backgroundTasks: [running('a')] }),
+          ],
+          // Фоновая команда — не субагент: работа лида не прервана.
+          's-03': [
+            event('UserPromptSubmit'),
+            hook('Stop', { backgroundTasks: [running('sh', 'shell')] }),
+          ],
+          // Работающих нет вовсе.
+          's-04': [event('UserPromptSubmit'), hook('Stop', { backgroundTasks: [] })],
+        }),
+      ).toEqual([]);
+    });
+
+    it('SessionEnd — штатный выход: фоновые в его снимке работу лида не «прерывают»', async () => {
+      expect(
+        await interruptedIds({
+          's-01': [
+            event('UserPromptSubmit'),
+            hook('Stop', { backgroundTasks: [running('a')] }),
+            hook('SessionEnd', { backgroundTasks: [running('a')] }),
+          ],
+        }),
+      ).toEqual([]);
+    });
+
+    it('давность не важна: фоновые работали при падении, и пусть журнал молчит неделю — прервана', async () => {
+      const old = (name: string, extra: Partial<EventRecord> = {}): EventRecord => ({
+        ...hook(name, extra),
+        at: '2026-01-01T00:00:00.000Z',
+      });
+      expect(
+        await interruptedIds({
+          's-01': [old('UserPromptSubmit'), old('Stop', { backgroundTasks: [running('a')] })],
+        }),
+      ).toEqual(['s-01']);
+    });
+  });
 });

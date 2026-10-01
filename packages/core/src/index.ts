@@ -269,7 +269,7 @@ export {
   saveConfig,
 } from './config.js';
 export type { ParleyConfig, LoadedConfig } from './config.js';
-export { activityOf, hookedSince } from './work/activity.js';
+export { DEFAULT_BACKGROUND_HOLD_MS, activityOf, hookedSince } from './work/activity.js';
 export type {
   Activity,
   ActivityLog,
@@ -278,7 +278,7 @@ export type {
   ActivityTask,
   SessionActivity,
 } from './work/activity.js';
-export { bareEvent, openEvents, watchEvents } from './work/events.js';
+export { TERMINAL_WORKING_EVENT, bareEvent, openEvents, watchEvents } from './work/events.js';
 export type {
   BackgroundTask,
   EventRecord,
