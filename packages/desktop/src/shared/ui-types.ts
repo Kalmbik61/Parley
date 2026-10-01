@@ -20,6 +20,16 @@ export interface UiFile {
   diffView: 'inline' | 'split';
   filesShowIgnored: boolean;
   lastProvider: string | null;
+  /**
+   * Проверка новой версии на GitHub при старте и раз в сутки (V6 плана релиза 0.1.0, `main/update-check.ts`):
+   * `false` — окно в сеть за версией не ходит и тоста не показывает.
+   */
+  checkForUpdates: boolean;
+  /**
+   * Версия, чей тост человек закрыл («Later», «Download» или смахнул): о ней больше не напоминаем, а о более
+   * новой — да. `null` — ничего не закрыто.
+   */
+  dismissedUpdate: string | null;
 }
 
 export const DEFAULT_UI: UiFile = {
@@ -35,6 +45,8 @@ export const DEFAULT_UI: UiFile = {
   diffView: 'split',
   filesShowIgnored: false,
   lastProvider: null,
+  checkForUpdates: true,
+  dismissedUpdate: null,
 };
 
 /**
@@ -148,5 +160,9 @@ export function normalizeUi(raw: unknown): UiFile {
         : DEFAULT_UI.filesShowIgnored,
     lastProvider:
       typeof source.lastProvider === 'string' ? source.lastProvider : DEFAULT_UI.lastProvider,
+    checkForUpdates:
+      typeof source.checkForUpdates === 'boolean' ? source.checkForUpdates : DEFAULT_UI.checkForUpdates,
+    dismissedUpdate:
+      typeof source.dismissedUpdate === 'string' ? source.dismissedUpdate : DEFAULT_UI.dismissedUpdate,
   };
 }

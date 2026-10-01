@@ -1,7 +1,14 @@
 {
   "name": "@parley/desktop",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
+  "license": "MIT",
+  "author": "Evgeniy",
+  "homepage": "https://github.com/Kalmbik61/Parley",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Kalmbik61/Parley.git"
+  },
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
@@ -11,7 +18,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "playwright test",
-    "dist": "pnpm build && rm -rf out/host && pnpm --filter @parley/host deploy --prod \"$PWD/out/host\" && node ../../scripts/fix-node-pty-perms.mjs \"$PWD/out/host\" && electron-builder"
+    "fetch-node": "node scripts/fetch-node.mjs",
+    "dist": "pnpm build && rm -rf out/host && pnpm --filter @parley/host deploy --prod \"$PWD/out/host\" && node scripts/prune-escaping-symlinks.mjs \"$PWD/out/host\" && node ../../scripts/fix-node-pty-perms.mjs \"$PWD/out/host\" && electron-builder"
   },
   "dependencies": {
     "@parley/core": "workspace:*",

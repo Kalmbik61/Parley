@@ -247,6 +247,83 @@ describe('SettingsDialog — тест 3: ошибка хоста при сохр
   });
 });
 
+// V6 плана релиза 0.1.0: переключатель проверки новой версии. Своей секции «General» в окне нет — он стоит в
+// «Notifications», под подсказкой про системные настройки.
+describe('SettingsDialog — переключатель «Check for updates» (V6 плана релиза 0.1.0)', () => {
+  it('в секции Notifications, включён по умолчанию, с пояснением о GitHub; на других секциях его нет', async () => {
+    const bridge = createFakeBridge();
+    openSettings(bridge);
+
+    switchTo('Notifications');
+    const toggle = await screen.findByRole('switch', { name: 'Check for updates' });
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByText(/Looks for a newer Parley release on GitHub/)).toBeTruthy();
+
+    switchTo('Appearance');
+    expect(screen.queryByRole('switch', { name: 'Check for updates' })).toBeNull();
+    switchTo('Agents');
+    await screen.findByText('Worktree root');
+    expect(screen.queryByRole('switch', { name: 'Check for updates' })).toBeNull();
+  });
+
+  it('клик выключает: app.saveUi({ checkForUpdates: false }) и зеркало ui; повторный — включает', async () => {
+    const bridge = createFakeBridge();
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+    openSettings(bridge);
+
+    switchTo('Notifications');
+    fireEvent.click(await screen.findByRole('switch', { name: 'Check for updates' }));
+
+    await waitFor(() => expect(saveUiSpy).toHaveBeenCalledWith({ checkForUpdates: false }));
+    const toggle = screen.getByRole('switch', { name: 'Check for updates' });
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+    expect(useUiStore.getState().ui.checkForUpdates).toBe(false);
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(saveUiSpy).toHaveBeenLastCalledWith({ checkForUpdates: true }));
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
+  });
+
+  it('сохранённое выключение читается при открытии диалога', async () => {
+    const bridge = createFakeBridge();
+    await bridge.app.saveUi({ checkForUpdates: false });
+    openSettings(bridge);
+
+    switchTo('Notifications');
+    const toggle = await screen.findByRole('switch', { name: 'Check for updates' });
+
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('переключатель не задевает остальное: уведомления и закрытая версия остаются как были', async () => {
+    const bridge = createFakeBridge();
+    await bridge.app.saveUi({ dismissedUpdate: '0.2.0', notifications: { ...DEFAULT_UI.notifications, sound: false } });
+    openSettings(bridge);
+
+    switchTo('Notifications');
+    fireEvent.click(await screen.findByRole('switch', { name: 'Check for updates' }));
+
+    await waitFor(() => expect(useUiStore.getState().ui.checkForUpdates).toBe(false));
+    expect(useUiStore.getState().ui.dismissedUpdate).toBe('0.2.0');
+    expect(useUiStore.getState().ui.notifications.sound).toBe(false);
+  });
+
+  it('пока ui.json не загружен, переключателя нет: он не соврал бы «включено» по умолчанию', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: CONFIG, locked: {} }));
+    // Загрузка ui.json не завершается: зеркало остаётся слепком по умолчанию (`uiLoaded: false`).
+    vi.spyOn(bridge.app, 'loadUi').mockReturnValue(new Promise(() => {}));
+    useUiStore.setState({ ui: DEFAULT_UI, uiLoaded: false });
+    useUiStore.getState().init(bridge);
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Notifications');
+    await screen.findByText('Not getting notifications? System Settings → Notifications → Parley');
+
+    expect(screen.queryByRole('switch', { name: 'Check for updates' })).toBeNull();
+  });
+});
+
 describe('SettingsDialog — тест 10 куска 9.1: секция Browser', () => {
   it('«Clear browser data» зовёт browser.clearData', async () => {
     const bridge = createFakeBridge();

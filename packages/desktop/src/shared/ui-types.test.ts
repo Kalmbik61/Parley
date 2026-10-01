@@ -55,6 +55,38 @@ describe('normalizeUi', () => {
   });
 });
 
+// Проверка новой версии (V6 плана релиза 0.1.0): переключатель включён по умолчанию, закрытая версия — строка.
+describe('проверка новой версии в ui.json', () => {
+  it('по умолчанию включена, закрытой версии нет', () => {
+    expect(DEFAULT_UI.checkForUpdates).toBe(true);
+    expect(DEFAULT_UI.dismissedUpdate).toBeNull();
+    expect(normalizeUi({}).checkForUpdates).toBe(true);
+    expect(normalizeUi({}).dismissedUpdate).toBeNull();
+  });
+
+  it('файл прежней версии без новых ключей читается с проверкой включённой', () => {
+    const old = normalizeUi({ version: 1, appearance: 'dark', lastProvider: 'claude' });
+    expect(old.checkForUpdates).toBe(true);
+    expect(old.dismissedUpdate).toBeNull();
+    expect(old.appearance).toBe('dark');
+  });
+
+  it('выключенный переключатель и закрытая версия сохраняются как есть', () => {
+    const ui = normalizeUi({ checkForUpdates: false, dismissedUpdate: '0.2.0' });
+    expect(ui.checkForUpdates).toBe(false);
+    expect(ui.dismissedUpdate).toBe('0.2.0');
+  });
+
+  it('значения чужого типа — по умолчанию: «выключить» может только настоящее false', () => {
+    for (const garbage of [0, 1, 'false', 'off', null, {}, []]) {
+      expect(normalizeUi({ checkForUpdates: garbage }).checkForUpdates, `checkForUpdates ${JSON.stringify(garbage)}`).toBe(true);
+    }
+    for (const garbage of [0, true, null, {}, ['0.2.0']]) {
+      expect(normalizeUi({ dismissedUpdate: garbage }).dismissedUpdate, `dismissedUpdate ${JSON.stringify(garbage)}`).toBeNull();
+    }
+  });
+});
+
 // Размеры Organic (спека окна 2026-09-29, 1.1): сайдбар 288, правый 320; ресайз 220–500 прежний.
 describe('размеры сайдбаров по умолчанию', () => {
   it('левый 288, правый 320 — и в DEFAULT_UI, и в константах `initial`', () => {

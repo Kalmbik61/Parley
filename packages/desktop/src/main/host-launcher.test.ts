@@ -6,7 +6,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
+import {
+  bundledNodeBin,
+  hostPaths,
+  resolveHostEntry,
+  resolveNodeBin,
+  spawnHost,
+} from './host-launcher.js';
 
 const require = createRequire(import.meta.url);
 const run = promisify(execFile);
@@ -70,6 +76,124 @@ describe('resolveNodeBin', () => {
     const found = await resolveNodeBin({});
 
     expect(found).toBeNull();
+  });
+});
+
+/**
+ * Собранное окно идёт со своим Node 22 в `Contents/Resources/node/bin/node` (`scripts/fetch-node.mjs` и
+ * `extraResources`): его берёт хост, а за ним — сервер MCP, строка статуса и `notify` Codex (все берут
+ * `process.execPath` хоста). Каталог приложения человек выбирает сам, поэтому в пути бывают пробелы.
+ */
+describe('resolveNodeBin: встроенный node собранного приложения', () => {
+  let home: string;
+  let resources: string;
+  let bundled: string;
+  let systemNode: string;
+  let env: NodeJS.ProcessEnv;
+
+  beforeEach(async () => {
+    home = await mkdtemp(path.join(tmpdir(), 'hl-'));
+    resources = path.join(home, 'My Apps', 'Parley.app', 'Contents', 'Resources');
+    bundled = bundledNodeBin(resources);
+    const systemBin = path.join(home, 'bin');
+    await mkdir(systemBin, { recursive: true });
+    systemNode = path.join(systemBin, 'node');
+    await writeFile(systemNode, '#!/bin/sh\n', 'utf8');
+    await chmod(systemNode, 0o755);
+    env = { PATH: systemBin };
+  });
+
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true });
+  });
+
+  const installBundled = async (mode: number): Promise<void> => {
+    await mkdir(path.dirname(bundled), { recursive: true });
+    await writeFile(bundled, '#!/bin/sh\n', 'utf8');
+    await chmod(bundled, mode);
+  };
+
+  it('лежит в Resources/node/bin/node', () => {
+    expect(bundled).toBe(path.join(resources, 'node', 'bin', 'node'));
+  });
+
+  it('собранное окно с файлом на месте — встроенный node, а не системный из PATH', async () => {
+    await installBundled(0o755);
+
+    expect(await resolveNodeBin(env, { packaged: true, resourcesPath: resources })).toBe(bundled);
+  });
+
+  it('встроенного нет (сборка без fetch-node) — как раньше, node из PATH', async () => {
+    expect(await resolveNodeBin(env, { packaged: true, resourcesPath: resources })).toBe(systemNode);
+  });
+
+  it('встроенный не исполняемый — node из PATH, а не файл, который не запустится', async () => {
+    await installBundled(0o644);
+
+    expect(await resolveNodeBin(env, { packaged: true, resourcesPath: resources })).toBe(systemNode);
+  });
+
+  it('разработка (не собрано) — Resources не смотрим вовсе, только PATH', async () => {
+    await installBundled(0o755);
+
+    expect(await resolveNodeBin(env, { packaged: false, resourcesPath: resources })).toBe(systemNode);
+    expect(await resolveNodeBin(env)).toBe(systemNode);
+  });
+
+  it('собрано, встроенного нет и PATH пуст — null: окно скажет, что node не найден', async () => {
+    expect(await resolveNodeBin({ PATH: '' }, { packaged: true, resourcesPath: resources })).toBeNull();
+  });
+});
+
+describe('хост собранного приложения в каталоге с пробелом', () => {
+  let home: string;
+
+  beforeEach(async () => {
+    home = await mkdtemp(path.join(tmpdir(), 'hl-'));
+  });
+
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true });
+  });
+
+  /** Строка для оболочки: заглушка node — `sh`-скрипт, а пути в тесте с пробелами. */
+  const quoted = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
+
+  it('встроенный node и точка входа с пробелами запускаются без оболочки, аргументом идёт ровно entry', async () => {
+    const resources = path.join(home, 'My Apps', 'Parley.app', 'Contents', 'Resources');
+    const nodeBin = bundledNodeBin(resources);
+    const entry = resolveHostEntry({ packaged: true, resourcesPath: resources });
+    const started = path.join(home, 'started.txt');
+    const argvDump = path.join(home, 'argv.json');
+    // Встроенный node подменён скриптом: он помечает запуск и отдаёт управление настоящему node.
+    await mkdir(path.dirname(nodeBin), { recursive: true });
+    await writeFile(
+      nodeBin,
+      `#!/bin/sh\nprintf '%s' "$0" > ${quoted(started)}\nexec ${quoted(process.execPath)} "$@"\n`,
+      'utf8',
+    );
+    await chmod(nodeBin, 0o755);
+    await mkdir(path.dirname(entry), { recursive: true });
+    await writeFile(
+      entry,
+      `require('node:fs').writeFileSync(${JSON.stringify(argvDump)}, JSON.stringify(process.argv.slice(1)));\n`,
+      'utf8',
+    );
+
+    const found = await resolveNodeBin({ PATH: '' }, { packaged: true, resourcesPath: resources });
+    expect(found).toBe(nodeBin);
+    spawnHost({
+      env: process.env,
+      entry,
+      nodeBin: found ?? '',
+      stderrFile: path.join(home, 'host', 'host.err'),
+    });
+
+    await expect
+      .poll(async () => readFile(argvDump, 'utf8').catch(() => ''), { timeout: 4000 })
+      .not.toBe('');
+    expect(JSON.parse(await readFile(argvDump, 'utf8'))).toEqual([entry]);
+    expect(await readFile(started, 'utf8')).toBe(nodeBin);
   });
 });
 

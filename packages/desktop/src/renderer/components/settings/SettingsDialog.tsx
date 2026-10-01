@@ -3,7 +3,8 @@
  * 1.4 плана «облик Orca», спека 4.10 — четыре секции вместо плоского списка:
  * «Вид» (`ui.json.appearance`, спека 4.7), «Терминал» и «Агенты» (прежние
  * поля `config.json` через `settings.set`, как раньше), «Уведомления»
- * (`ui.json.notifications`). Поля «Тема» (палитры ушедшего TUI) нет: тему
+ * (`ui.json.notifications`, а под ними — переключатель проверки новой версии
+ * `ui.json.checkForUpdates`, V6 плана релиза 0.1.0). Поля «Тема» (палитры ушедшего TUI) нет: тему
  * окна задаёт «Вид» (спека 4.9).
  *
  * Заблокированное переменной окружения поле неактивно и подписано «задано
@@ -329,6 +330,17 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
             ) : null}
             {/* Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */}
             <p className="text-xs text-muted-foreground">{S.settings.notificationsHint}</p>
+            {/* Проверка новой версии (V6 плана релиза 0.1.0): строка та же, что у уведомлений, а смысл свой — сеть. */}
+            {uiLoaded ? (
+              <>
+                <NotificationRow
+                  label={S.settings.checkForUpdates}
+                  checked={ui.checkForUpdates}
+                  onCheckedChange={(checked) => patchUi({ checkForUpdates: checked })}
+                />
+                <p className="text-xs text-muted-foreground">{S.settings.checkForUpdatesHint}</p>
+              </>
+            ) : null}
           </TabsContent>
 
           <TabsContent value="browser" className="flex flex-col gap-3">

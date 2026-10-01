@@ -22,6 +22,7 @@ import { useProvidersStore } from './store/providers.js';
 import { useUiStore } from './store/ui.js';
 import { useWorksStore } from './store/works.js';
 import { Toaster } from './ui/sonner.js';
+import { wireUpdateNotice } from './update/update-notice.js';
 import { toast } from 'sonner';
 
 /**
@@ -195,6 +196,8 @@ export function App(): JSX.Element {
       // Меню и клавиши — одна точка `run(id)` в `AppShell` (кусок 6.1b), и `settings.open` с
       // `session.new` тоже: своего `onMenu` у `App` нет.
       wireFocusTargets(bridge),
+      // Тост о новой версии (V6 плана релиза 0.1.0): рядом с `Toaster`, который живёт в той же ветке — подключённой.
+      wireUpdateNotice(bridge),
     ];
 
     bridge

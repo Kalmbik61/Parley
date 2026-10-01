@@ -1,6 +1,9 @@
-# Неподписанный .app для владельца (план 1.13, спека §3.2, §13): без identity,
-# без нотаризации — раздача другим не входит в v1 (спека §13).
-appId: dev.harnas.desktop
+# Раздаваемая сборка macOS (план релиза 0.1.0, V2): dmg и zip под arm64 и x64, подпись ad-hoc, без
+# сертификата Apple и нотаризации. Без подписи Apple автообновления на macOS нет — окно только
+# сообщает о новой версии. `appId` после первого публичного релиза не менять: пропадут настройки
+# и разрешения macOS, выданные приложению.
+# Быстрая локальная сборка — только .app этой машины, без dmg и zip: `pnpm --filter @parley/desktop dist --dir`.
+appId: dev.parley.desktop
 productName: Parley
 directories:
   output: dist
@@ -39,6 +42,28 @@ extraResources:
     to: licenses/Figtree-OFL.txt
   - from: src/renderer/assets/fonts/Caprasimo-OFL.txt
     to: licenses/Caprasimo-OFL.txt
+  # Встроенный Node 22: `scripts/fetch-node.mjs` кладёт его в build/node/darwin-<arch>/bin/node, сюда он
+  # попадает как Contents/Resources/node/bin/node — окно запускает им хост (`src/main/host-launcher.ts`),
+  # и человеку свой node не нужен. Рядом едет LICENSE из архива Node (Contents/Resources/node/LICENSE): бинарь
+  # раздаётся вместе с текстом лицензии. `${arch}` — архитектура собираемой цели. Нет каталога (сборка без
+  # `fetch-node`, например локальный `dist`) — electron-builder только предупреждает, а окно берёт node из PATH.
+  - from: build/node/darwin-${arch}
+    to: node
 mac:
-  target: dir
-  identity: null
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  # Ad-hoc подпись (`-`), а не её отсутствие: скачанный без подписи arm64 `.app` macOS называет повреждённым.
+  # Hardened runtime без сертификата Apple не нужен, а с ad-hoc он требует лишних entitlements.
+  identity: '-'
+  hardenedRuntime: false
+  # Один шаблон для dmg и zip, без версии: так работают ссылки `releases/latest/download/<имя>`.
+  artifactName: parley-macos-${arch}.${ext}
+# Черновик: релиз становится публичным только после проверки, что все файлы на месте (release.yml).
+publish:
+  provider: github
+  owner: Kalmbik61
+  repo: Parley
+  releaseType: draft

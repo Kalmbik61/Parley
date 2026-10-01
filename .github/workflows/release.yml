@@ -1,0 +1,284 @@
+# Релиз Parley для macOS (план релиза 0.1.0, V5): dmg и zip под arm64 и x64 в GitHub Releases.
+#
+# Как выпустить: поднять версию во всех package.json, дописать раздел версии в CHANGELOG.md, влить в
+# master и поставить тег на коммит master: `git tag vX.Y.Z && git push origin vX.Y.Z`. Тег и версия окна
+# (packages/desktop/package.json) обязаны совпасть, а коммит тега — лежать в истории master: create-release
+# проверяет оба условия. Задачи идут по цепочке:
+#   create-release  → черновик релиза с заметками из CHANGELOG.md;
+#   build-mac       → сборка без токена, проверка собранного, затем файлы и SHA256SUMS.txt — в черновик;
+#   publish-release → проверка, что черновик цел и файлы на месте, и публикация.
+# Что-то упало — «Re-run failed jobs»: черновик и файлы в нём перезаписываются, повтор безопасен.
+#
+# Пробный прогон: Actions → Release → Run workflow на любой ветке, `dry_run` по умолчанию включён. Релиз и
+# тег не создаются, собранные файлы лежат в артефактах прогона. Кнопка Run workflow появляется, когда этот
+# файл уже лежит в master (так устроен GitHub); до слияния проверить можно только ci.yml на pull request.
+#
+# Порядок «черновик → сборка → проверка файлов → публикация» и сами гейты — по образцу release-cut.yml и
+# release-mac-build.yml из Orca (https://github.com/stablyai/orca, MIT, Copyright (c) 2026 Lovecast Inc.;
+# см. NOTICE). Файл написан заново.
+#
+# Правила для всего файла:
+# - имя тега и любую другую строку извне в `run` не подставлять — только через `env` и в виде
+#   "$ПЕРЕМЕННАЯ". Тег может содержать что угодно, что допускает git, и `${{ … }}` в `run` превратил бы его
+#   в код;
+# - чужие действия — только по полному SHA коммита, версия — в комментарии рядом. Подвижный тег (`@v4`)
+#   можно переставить без единого коммита здесь, и чужой код получил бы токен с записью. Обновить действие —
+#   найти SHA нужной версии (`git ls-remote --tags <репозиторий> <тег>`; у аннотированного тега — строка `^{}`)
+#   и поправить список в packages/desktop/src/release-workflows.test.ts;
+# - токен репозитория — только в `env` шага, который зовёт `gh` или скрипт из scripts/release; шаги, где
+#   идёт сборка или стоят зависимости, его не получают.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build only and keep the files as run artifacts; no release is created or published
+        type: boolean
+        default: true
+
+# По умолчанию — только чтение. Запись (черновик релиза, файлы в нём, публикация) нужна трём задачам ниже, и
+# каждая просит её у себя: задача, которой права не просили, записать в репозиторий не может.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  create-release:
+    name: Create draft release
+    # Тег (push) или ручной запуск с выключенным dry_run. Иначе задача пропускается, и build-mac
+    # собирает без публикации.
+    if: github.event_name == 'push' || inputs.dry_run == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Вся история и все ветки: шаг ниже проверяет, что коммит тега лежит в master.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      # Тег — строго vX.Y.Z или vX.Y.Z-пререлиз, версия равна версии окна, в CHANGELOG.md есть раздел версии.
+      - name: Check the tag and read the release notes
+        id: meta
+        env:
+          TAG: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          NOTES_FILE: ${{ runner.temp }}/release-notes.md
+        run: node scripts/release/prepare-release.mjs
+
+      # Тег на любом коммите дал бы публичный релиз: поставили его с ветки до слияния — релиз ушёл бы из
+      # непринятого коммита, а после squash-слияния тег остался бы вне истории master. `HEAD` — коммит тега.
+      - name: Check the tagged commit is in master
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor HEAD origin/master; then
+            echo "::error::The tagged commit is not in the history of master: merge the release into master first, then tag the commit on master"
+            exit 1
+          fi
+
+      # Повторный запуск (черновик уже есть) обновляет название и заметки; вышедший релиз не трогаем.
+      # `--verify-tag`: тег уже существует, новый на случайном коммите gh не заведёт.
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+          NOTES_FILE: ${{ runner.temp }}/release-notes.md
+        run: |
+          set -euo pipefail
+          releases="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100")"
+          state="$(jq -r --arg tag "$TAG" '[.[] | select(.tag_name == $tag)] | if length == 0 then "none" elif length > 1 then "ambiguous" elif .[0].draft then "draft" else "published" end' <<<"$releases")"
+          case "$state" in
+            none)
+              gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+                --title "Parley $VERSION" --notes-file "$NOTES_FILE" --prerelease="$PRERELEASE"
+              ;;
+            draft)
+              echo "A draft for $TAG already exists: refreshing its title and notes"
+              gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+                --title "Parley $VERSION" --notes-file "$NOTES_FILE" --prerelease="$PRERELEASE"
+              ;;
+            published)
+              echo "::error::Release $TAG is already published"
+              exit 1
+              ;;
+            *)
+              echo "::error::More than one release has the tag $TAG"
+              exit 1
+              ;;
+          esac
+
+  build-mac:
+    name: Build macOS (arm64 and x64)
+    needs: create-release
+    # create-release пропущена — пробный прогон: собираем без публикации. Упала — не собираем.
+    if: ${{ !cancelled() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    # Запись нужна загрузке файлов в черновик и гейту после неё, и токен получают только эти два шага. GitHub не даёт
+    # задать права по условию, поэтому в пробном прогоне у задачи они тоже есть, но ни один шаг токен не берёт.
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # Версию pnpm action-setup берёт из `packageManager` корневого package.json: своей строки у него нет.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # Электрон и инструменты electron-builder (сборщик dmg) качаются с GitHub и изредка отвечают 5xx.
+      - name: Cache Electron and electron-builder downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+          key: electron-builder-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            electron-builder-${{ runner.os }}-
+
+      # Установка тянет бинарь Electron с GitHub; разовый сбой сети не должен стоить релиза.
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if pnpm install --frozen-lockfile; then exit 0; fi
+            echo "::warning::pnpm install failed (attempt $attempt of 3)"
+            sleep 30
+          done
+          echo "::error::pnpm install failed three times"
+          exit 1
+
+      - name: Build
+        run: pnpm build
+
+      # Встроенный Node 22 обеих архитектур: sha256 архивов сверяется с SHASUMS256.txt с nodejs.org.
+      - name: Fetch the embedded Node
+        run: pnpm --filter @parley/desktop fetch-node arm64 x64
+
+      # `dist` — сборка окна, раскладка хоста (pnpm deploy) и electron-builder; аргументы уходят ему. Токена у этой
+      # цепочки нет, и `--publish never` — всегда: electron-builder ничего не выкладывает, а в релиз файлы кладёт
+      # шаг ниже, после проверки. Без пользователя Apple: подпись ad-hoc, нотаризации нет (electron-builder.yml).
+      - name: Package for macOS
+        run: pnpm --filter @parley/desktop dist --mac --arm64 --x64 --publish never
+
+      - name: Verify the packaged apps
+        run: bash scripts/release/verify-packaged-apps.sh
+
+      - name: Create SHA256SUMS.txt
+        working-directory: packages/desktop/dist
+        run: |
+          set -euo pipefail
+          shasum -a 256 *.dmg *.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          [ "$(wc -l < SHA256SUMS.txt | tr -d ' ')" = 4 ] || { echo "::error::Expected 2 dmg and 2 zip in dist"; exit 1; }
+          shasum -a 256 -c SHA256SUMS.txt
+
+      # Токен — у этого шага (он зовёт один `gh`) и у гейта ниже (скрипт из этого репозитория), а не у сборки. В
+      # черновик уходят файлы, которые electron-builder публикует сам (dmg, zip, blockmap, latest-mac.yml), плюс
+      # SHA256SUMS.txt — как есть, после проверки собранного: упавшая проверка остановит задачу до загрузки, и
+      # битых файлов в черновике не будет.
+      - name: Upload the files to the draft release
+        if: needs.create-release.result == 'success'
+        working-directory: packages/desktop/dist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
+        run: gh release upload "$TAG" *.dmg *.zip *.blockmap latest-mac.yml SHA256SUMS.txt --clobber --repo "$GITHUB_REPOSITORY"
+
+      # Страховка: если релиз вышел, пока шла сборка (кто-то опубликовал черновик руками), гейт сразу возвращает
+      # его в черновик и падает: публикует только publish-release, после проверки файлов.
+      - name: Check the release is still a draft
+        if: needs.create-release.result == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
+        run: node scripts/release/assert-github-release-is-draft.mjs --restore
+
+      - name: Keep the files as run artifacts
+        if: needs.create-release.result == 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: parley-macos-dry-run-${{ github.run_attempt }}
+          path: |
+            packages/desktop/dist/*.dmg
+            packages/desktop/dist/*.zip
+            packages/desktop/dist/*.blockmap
+            packages/desktop/dist/latest-mac.yml
+            packages/desktop/dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
+          # dmg и zip уже сжаты: упаковка артефакта только тратит время.
+          compression-level: 0
+
+  publish-release:
+    name: Publish release
+    # Запускается только после успеха обеих задач. В пробном прогоне create-release пропущена,
+    # а значит, пропущена и эта.
+    needs: [create-release, build-mac]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      # Релиз всё ещё черновик (вышедший раньше — повод остановиться) и в нём все файлы: 2 dmg, 2 zip,
+      # latest-mac.yml, SHA256SUMS.txt и всё, что назвал latest-mac.yml.
+      - name: Check the draft and its files
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          node scripts/release/assert-github-release-is-draft.mjs
+          node scripts/release/verify-release-required-assets.mjs
+
+      # `--prerelease` задаёт тег (есть «-»), а не то, что осталось на релизе: иначе пререлиз мог бы
+      # стать «последним» релизом репозитория.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
+          PRERELEASE: ${{ needs.create-release.outputs.prerelease }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease="$PRERELEASE"

@@ -1,7 +1,14 @@
 {
   "name": "parley",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "license": "MIT",
+  "author": "Evgeniy",
+  "homepage": "https://github.com/Kalmbik61/Parley",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Kalmbik61/Parley.git"
+  },
   "type": "module",
   "packageManager": "pnpm@9.12.3",
   "engines": {

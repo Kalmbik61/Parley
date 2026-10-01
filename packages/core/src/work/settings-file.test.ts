@@ -5,7 +5,7 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -95,6 +95,13 @@ describe('команда хука в оболочке: адрес сессии �
     await expect(stat(path.join(dir, 'old', 'events', 's-04.jsonl'))).rejects.toThrow();
   });
 
+  it('пробелы и кириллица в пути каталога работы: адрес в кавычках, строка всё равно ложится в журнал', async () => {
+    const work = path.join(dir, 'Мой проект with space', 'works', 'w 1');
+    await mkdir(path.join(work, 'events'), { recursive: true });
+    expect(fire({ PARLEY_WORK_DIR: work, PARLEY_SESSION_ID: 's-06' }, '{"d":4}\n')).toBe(0);
+    expect(await readFile(path.join(work, 'events', 's-06.jsonl'), 'utf8')).toBe('{"d":4}\n');
+  });
+
   it('недоступный каталог журнала код выхода не ломает (`|| true`)', () => {
     expect(fire({ PARLEY_WORK_DIR: path.join(dir, 'нет', 'такого'), PARLEY_SESSION_ID: 's-05' }, '{}\n')).toBe(0);
   });
@@ -130,6 +137,26 @@ describe('statusLine: скрипт строки статуса лимитов (�
       expect(words.slice(0, 2)).toEqual(["/tmp/it's a dir/node", STATUSLINE_ENTRY]);
     } finally {
       process.execPath = original;
+    }
+  });
+
+  // Собранное окно запускает хост своим node из `Parley.app/Contents/Resources/node/bin/node`, и этот
+  // путь — `process.execPath` хоста, то есть первое слово команды. Приложение лежит там, куда его положил
+  // человек, — в том числе в каталоге с пробелом: оболочка Claude Code должна запустить команду целиком.
+  it('node приложения в каталоге с пробелом: оболочка запускает команду, скрипт приходит одним аргументом', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'parley-sl-'));
+    const node = path.join(dir, 'My Apps', 'Parley.app', 'Contents', 'Resources', 'node', 'bin', 'node');
+    await mkdir(path.dirname(node), { recursive: true });
+    await writeFile(node, '#!/bin/sh\nprintf \'%s\\n\' "$@"\n', 'utf8');
+    await chmod(node, 0o755);
+    const original = process.execPath;
+    process.execPath = node;
+    try {
+      const out = execFileSync('/bin/sh', ['-c', statusLineCommand()], { encoding: 'utf8' });
+      expect(out).toBe(`${STATUSLINE_ENTRY}\n`);
+    } finally {
+      process.execPath = original;
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });
