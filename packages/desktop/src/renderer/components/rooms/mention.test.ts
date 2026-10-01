@@ -9,7 +9,10 @@ import {
   filterMentions,
   findMentionQuery,
   mentionToken,
+  mentionsHuman,
+  splitFeedMentions,
   splitMentions,
+  type FeedSegment,
   type TextSegment,
 } from './mention.js';
 
@@ -46,6 +49,76 @@ describe('splitMentions — токены в тексте (поле ввода и
   it('токен в начале, в конце строки, после скобки и переноса', () => {
     expect(splitMentions('(@s02)')).toEqual([text('('), mention('s-02', '@s02'), text(')')]);
     expect(splitMentions('раз\n@s03')).toEqual([text('раз\n'), mention('s-03', '@s03')]);
+  });
+});
+
+describe('@human — упоминание человека (Parley 0.3.0)', () => {
+  const human = (raw: string): FeedSegment => ({ kind: 'human', raw });
+  const mention = (sessionId: string, raw: string): FeedSegment => ({
+    kind: 'mention',
+    sessionId,
+    raw,
+  });
+  const text = (value: string): FeedSegment => ({ kind: 'text', text: value });
+
+  it('splitFeedMentions: @human — свой сегмент, упоминания сессий — как у splitMentions', () => {
+    expect(splitFeedMentions('@human, глянь')).toEqual([human('@human'), text(', глянь')]);
+    expect(splitFeedMentions('@s02 и @Human')).toEqual([
+      mention('s-02', '@s02'),
+      text(' и '),
+      human('@Human'),
+    ]);
+    expect(splitFeedMentions('(@HUMAN)')).toEqual([text('('), human('@HUMAN'), text(')')]);
+  });
+
+  it('@ внутри слова, email и продолжение слова упоминанием человека не считаются', () => {
+    for (const value of [
+      'user@human.dev',
+      'a@human',
+      '@humans',
+      '@human_team',
+      '@human2',
+      '@@human',
+      '@s02@human',
+    ]) {
+      expect(mentionsHuman(value), value).toBe(false);
+      expect(
+        splitFeedMentions(value).some((segment) => segment.kind === 'human'),
+        value,
+      ).toBe(false);
+    }
+  });
+
+  it('поле ввода человека @human не трогает: splitMentions оставляет его текстом', () => {
+    expect(splitMentions('@human @s02')).toEqual([text('@human '), mention('s-02', '@s02')]);
+  });
+
+  it('инварианты на наборе строк: сегменты склеиваются в исходный текст, mentionsHuman — то же, что нашла лента', () => {
+    const samples = [
+      '',
+      '@human',
+      'вопрос к @human: что дальше?',
+      'раз\n@human\nдва',
+      '**@human** решай',
+      '@s02 @human @s-03',
+      'user@human.dev',
+      '@humans и @human_',
+      '@s02@human',
+      '@human@human',
+      'нет упоминаний',
+      '@ human',
+      '`@human` в коде',
+    ];
+    for (const value of samples) {
+      const segments = splitFeedMentions(value);
+      const joined = segments
+        .map((segment) => (segment.kind === 'text' ? segment.text : segment.raw))
+        .join('');
+      expect(joined, value).toBe(value);
+      expect(mentionsHuman(value), value).toBe(
+        segments.some((segment) => segment.kind === 'human'),
+      );
+    }
   });
 });
 

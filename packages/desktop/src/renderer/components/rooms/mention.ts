@@ -58,6 +58,44 @@ export function splitMentions(text: string): TextSegment[] {
 }
 
 /**
+ * Упоминание человека — `@human` (Parley 0.3.0): так агенты обращаются к человеку в комнате. Лента рисует его
+ * чипом «@you», окно считает такое сообщение адресованным человеку (`attention/derive.ts`). Границы — те же,
+ * что у токена сессии: `user@human.dev` и `@humans` упоминанием не считаются; регистр не важен.
+ */
+const HUMAN_TOKEN = /(?<![\p{L}\p{N}_@])@human(?![\p{L}\p{N}_])/iu;
+
+/** Токен сессии или человека — одним проходом по всему тексту, чтобы границы `@human` и `mentionsHuman` совпали. */
+const FEED_TOKEN = /(?<![\p{L}\p{N}_@])@(?:s-?(\d+)|(human))(?![\p{L}\p{N}_])/giu;
+
+/** В тексте есть упоминание человека `@human`. */
+export function mentionsHuman(text: string): boolean {
+  return HUMAN_TOKEN.test(text);
+}
+
+export type FeedSegment = TextSegment | { kind: 'human'; raw: string };
+
+/**
+ * Текст ленты → текст, упоминания сессий и упоминания человека. Поле ввода человека зовёт `splitMentions`:
+ * там `@human` остаётся текстом — себя человек не упоминает.
+ */
+export function splitFeedMentions(text: string): FeedSegment[] {
+  const out: FeedSegment[] = [];
+  let last = 0;
+  for (const match of text.matchAll(FEED_TOKEN)) {
+    if (match.index > last) out.push({ kind: 'text', text: text.slice(last, match.index) });
+    const digits = match[1];
+    out.push(
+      digits === undefined
+        ? { kind: 'human', raw: match[0] }
+        : { kind: 'mention', sessionId: tokenSessionId(digits), raw: match[0] },
+    );
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) out.push({ kind: 'text', text: text.slice(last) });
+  return out;
+}
+
+/**
  * Меню упоминаний открыто, когда перед курсором стоит `@` — в начале строки или после пробела или
  * переноса — и за ним до 24 знаков без пробела (2.3). `beforeCaret` — текст узла до курсора.
  * `@` в середине слова и в email (`user@example`) меню не открывает.
