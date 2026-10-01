@@ -1,8 +1,9 @@
 /**
  * Одно сообщение ленты комнаты (спека окна 2026-09-29, 1.3): аватар 18, мета — отправитель (600), `★`
  * у ведущего, `→ all` или `→ S02 бэкенд, S03 ревью`, тег вида, время, точка «непрочитано»; текст
- * 14px/1.55 с чипами; под ним строка ожидания `▤ Not picked up yet by S02, S03`. Системная строка —
- * аватар системы без адресата и без точки (решение контролёра 4 куска 6).
+ * 14px/1.55 — Markdown (GFM) с чипами (`RoomMarkdown.tsx`); под ним строка ожидания
+ * `▤ Not picked up yet by S02, S03`. Системная строка — аватар системы без адресата и без точки
+ * (решение контролёра 4 куска 6).
  *
  * Точка — токен `--state-done`, а не `accent-2-500` handoff: тот к листу светлой темы 2.6:1, ниже порога
  * 3:1 для признака состояния (решение 11 спеки — те же токены у значков состояний).
@@ -16,7 +17,7 @@ import { S } from '../../../shared/strings.js';
 import { relativeTime } from '../../lib/relative-time.js';
 import { Badge } from '../../ui/badge.js';
 import type { MessageModel } from './feed-model.js';
-import { MentionText } from './MentionText.js';
+import { RoomMarkdown } from './RoomMarkdown.js';
 import { SenderAvatar } from './SenderAvatar.js';
 
 /**
@@ -64,9 +65,7 @@ export function RoomMessage({ message, now, labelOf, onOpenExternal, observeRef 
             />
           ) : null}
         </div>
-        <div className="whitespace-pre-wrap break-words text-sm leading-[1.55] [overflow-wrap:anywhere] [text-wrap:pretty]">
-          <MentionText text={message.text} labelOf={labelOf} onOpenExternal={onOpenExternal} />
-        </div>
+        <RoomMarkdown text={message.text} labelOf={labelOf} onOpenExternal={onOpenExternal} />
         {message.waiting.length > 0 ? (
           <span data-message-waiting className="text-xs text-muted-foreground">
             {S.rooms.notPickedUp(message.waiting.join(', '))}

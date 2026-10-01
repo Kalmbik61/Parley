@@ -1,6 +1,7 @@
 /**
  * Вкладка комнаты (спека окна 2026-09-29, 1.3, 2.2–2.4; кусок 6 плана): шапка и лента участников, лента
- * сообщений с чипами, тегами видов и строкой ожидания по `readBy`, блок `Decisions`, пустая комната,
+ * сообщений (текст — Markdown, подробно в `RoomMarkdown.test.tsx`) с чипами, тегами видов и строкой
+ * ожидания по `readBy`, блок `Decisions`, пустая комната,
  * отправка из поля ввода, карточка решения и ответ на неё (`rooms.resolveProposal` с `proposalId`, `rev`,
  * `action`, `note`; `conflict` — тост; двойное нажатие — один вызов), прочтение и прокрутка.
  */
@@ -281,11 +282,32 @@ describe('RoomPanel — сообщения (1.3)', () => {
     expect(messageRow('m-1').textContent).toContain('dev@s02.example.com');
   });
 
-  it('текст — pre-wrap: переносы и пробелы как в письме; разметка не разбирается', () => {
-    renderPanel(entryOf({ messages: [message('m-1', { text: 'раз\n  два **не жирный**' })] }));
-    const body = messageRow('m-1').querySelector('.whitespace-pre-wrap') as HTMLElement;
-    expect(body.textContent).toBe('раз\n  два **не жирный**');
-    expect(body.querySelector('strong')).toBeNull();
+  it('текст — Markdown (GFM): жирный и список — элементами, перенос строки виден, сырой HTML — текстом', () => {
+    renderPanel(
+      entryOf({
+        messages: [message('m-1', { text: 'раз\nдва **жирный** <b>тег</b>\n\n- пункт' })],
+      }),
+    );
+    const body = messageRow('m-1').querySelector('[data-room-markdown]') as HTMLElement;
+    expect(body.querySelector('strong')?.textContent).toBe('жирный');
+    expect(body.querySelector('p br')).not.toBeNull();
+    expect(body.querySelector('ul > li')?.textContent).toBe('пункт');
+    expect(body.querySelector('b')).toBeNull();
+    expect(body.textContent).toContain('<b>тег</b>');
+    expect(body.className).not.toContain('whitespace-pre');
+  });
+
+  it('упоминание в Markdown-тексте — чип, а в инлайн-коде — буквально', () => {
+    renderPanel(
+      entryOf({
+        messages: [message('m-1', { from: 's-01', text: '**@s02**, а токен `@s03` — в коде' })],
+      }),
+    );
+    const chips = Array.from(messageRow('m-1').querySelectorAll<HTMLElement>('[data-mention]'));
+    expect(chips.map((chip) => [chip.getAttribute('data-mention'), chip.textContent])).toEqual([
+      ['s-02', '@S02 бэкенд'],
+    ]);
+    expect(messageRow('m-1').querySelector('code')?.textContent).toBe('@s03');
   });
 
   it('ссылка http(s) открывается в системном браузере, а не в окне', () => {
@@ -330,7 +352,7 @@ describe('RoomPanel — сообщения (1.3)', () => {
   it('сообщение в 2000 знаков и слово без пробелов переносятся внутри колонки', () => {
     const word = 'Ы'.repeat(2000);
     renderPanel(entryOf({ messages: [message('m-1', { text: word })] }));
-    const body = messageRow('m-1').querySelector('.whitespace-pre-wrap') as HTMLElement;
+    const body = messageRow('m-1').querySelector('[data-room-markdown]') as HTMLElement;
     expect(body.textContent).toBe(word);
     expect(body.className).toContain('break-words');
     expect(body.className).toContain('[overflow-wrap:anywhere]');
@@ -849,9 +871,32 @@ describe('RoomPanel — карточка решения (1.3, 2.4)', () => {
 
   it('длинный текст решения переносится внутри карточки', () => {
     renderPanel(withProposal({ text: 'Ж'.repeat(2000) }));
-    const body = card().querySelector('.whitespace-pre-wrap') as HTMLElement;
+    const body = card().querySelector('[data-room-markdown]') as HTMLElement;
     expect(body.textContent).toBe('Ж'.repeat(2000));
     expect(body.className).toContain('[overflow-wrap:anywhere]');
     expect(card().className).toContain('max-w-[680px]');
+  });
+
+  it('текст решения — Markdown (GFM): список и жирный — элементами, чип в пункте, ссылка уходит в системный браузер', () => {
+    const { initial } = renderPanel(
+      withProposal({
+        text: '**План**\n\n- @s02 — код\n- @s03 — [ревью](https://example.com/review)\n\n`@s02` не чип',
+      }),
+    );
+    const body = card().querySelector('[data-room-markdown]') as HTMLElement;
+    expect(body.querySelector('strong')?.textContent).toBe('План');
+    expect(Array.from(body.querySelectorAll('li'), (item) => item.textContent)).toEqual([
+      '@S02 бэкенд — код',
+      '@S03 ревью — ревью',
+    ]);
+    expect(
+      Array.from(body.querySelectorAll('[data-mention]'), (chip) =>
+        chip.getAttribute('data-mention'),
+      ),
+    ).toEqual(['s-02', 's-03']);
+    expect(body.querySelector('p code')?.textContent).toBe('@s02');
+    const notPrevented = fireEvent.click(within(card()).getByRole('link', { name: 'ревью' }));
+    expect(notPrevented).toBe(false);
+    expect(initial.onOpenExternal).toHaveBeenCalledWith('https://example.com/review');
   });
 });

@@ -1,7 +1,8 @@
 /**
  * Карточка решения (спека окна 2026-09-29, 1.3, 2.4): последней в ленте, пока `Room.proposal` не `null`.
  * До 680px, радиус 16, рамка 1.5px `accent`, фон `accent 9%`, padding `14 16`, зазор 10. Шапка 12px —
- * аватар ведущего, его подпись (600), тег `decision · waiting for you`, время; текст 14px с чипами.
+ * аватар ведущего, его подпись (600), тег `decision · waiting for you`, время; текст 14px — Markdown (GFM) с
+ * чипами (`RoomMarkdown.tsx`).
  * Кнопки `Accept` (главная) и `Return for rework` (второстепенная); после второй вместо кнопок — поле
  * заметки (от 64px, радиус 14) и `Send to lead` / `Cancel`. Пустая заметка допустима (2.4).
  *
@@ -19,7 +20,7 @@ import { Badge } from '../../ui/badge.js';
 import { Button } from '../../ui/button.js';
 import { Textarea } from '../../ui/textarea.js';
 import type { ProposalModel } from './feed-model.js';
-import { MentionText } from './MentionText.js';
+import { RoomMarkdown } from './RoomMarkdown.js';
 import { SenderAvatar } from './SenderAvatar.js';
 
 /** Предел заметки возврата — схема `rooms.resolveProposal` (`note` до 4000 знаков). */
@@ -76,9 +77,7 @@ export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResol
         <Badge variant="accent">{S.rooms.decisionWaiting}</Badge>
         <span className="text-muted-foreground">{time}</span>
       </div>
-      <div className="whitespace-pre-wrap break-words text-sm leading-[1.55] [overflow-wrap:anywhere] [text-wrap:pretty]">
-        <MentionText text={proposal.text} labelOf={labelOf} onOpenExternal={onOpenExternal} />
-      </div>
+      <RoomMarkdown text={proposal.text} labelOf={labelOf} onOpenExternal={onOpenExternal} />
       {!canResolve ? null : returning ? (
         <div className="flex flex-col gap-2">
           <Textarea
