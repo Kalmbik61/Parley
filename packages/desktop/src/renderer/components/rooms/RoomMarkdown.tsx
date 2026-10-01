@@ -25,7 +25,7 @@
 import { createContext, useContext, useMemo, useRef, type ReactNode } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { resolveMarkdownLink, safeUrlTransform } from '../../files/preview/MarkdownPreview.js';
+import { resolveMarkdownLink, safeUrlTransform } from '../../lib/markdown-links.js';
 import { sessionTag } from '../../lib/participant.js';
 import { MENTION_CHIP_CLASS, splitMentions } from './mention.js';
 
