@@ -109,8 +109,10 @@ shadcn-примитивы в `renderer/ui/`, zustand 5, `react-markdown` + `rema
    События по HTTP: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `MessageDisplay`,
    `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`,
    `Stop`, `StopFailure`, `Notification`, `SubagentStart`, `SubagentStop`, `PreCompact`,
-   `PostCompact`, `PostModelSwitch`. Таймауты: `PermissionRequest` и `PreToolUse` — 3600 с
-   (ждём человека), `MessageDisplay` — умолчание 10 с, остальные — умолчание.
+   `PostCompact`, `PostModelSwitch`. Все без матчера, `PreToolUse` тоже: иначе лента не видит
+   обычный вызов до его результата; на обычные вызовы хост отвечает мгновенно, ждут только
+   вопрос и план. Таймауты: `PermissionRequest` и `PreToolUse` — 3600 с (ждём человека),
+   `MessageDisplay` — умолчание 10 с, остальные — умолчание.
 2. **Лента живёт на хосте.** `FeedService` держит на сессию кольцо до 2 000 элементов,
    собранных чистым редьюсером из core; окно получает `feed.snapshot` и дельты
    `feed.changed`. Если у живой сессии нет событий (хост перезапущен, сессия возобновлена),
@@ -166,7 +168,7 @@ shadcn-примитивы в `renderer/ui/`, zustand 5, `react-markdown` + `rema
     токенов review.
 11. **Шум хуков** не показываем: `SubagentStop` с пустым `agent_type` и `PostModelSwitch` с
     `source: auto` — от генерации заголовка сессии и смены модели в плане. Субагенты с
-    `agent_type` — `notice`.
+    `agent_type` — карточка `agent` (решение 13).
 12. **Приёмник.** Только POST `/hooks`, JSON до 16 МБ, `hook_event_name` из списка решения 1,
     сессия по заголовку `X-Parley-Session` среди живых сессий хоста, `session_id` тела
     сверяется с `providerSessionId`. Остальное — 400/401/404/413 без тела, в лог хоста.
@@ -249,8 +251,8 @@ shadcn-примитивы в `renderer/ui/`, zustand 5, `react-markdown` + `rema
    журнал субагента (`<сессия>/subagents/agent-<id>.jsonl`, записи с `isSidechain: true`)
    для раскрытой карточки. Поверх `adapter-v1.ts`, не вместо него.
 4. **Настройки хуков.** `workSettings({ hookUrl, hookEvents })`: при `hookUrl` в `hooks`
-   добавляются HTTP-обработчики по решению 1 (матчер `AskUserQuestion|ExitPlanMode` для
-   `PreToolUse`, без матчера для остальных), прежние `cat >>` остаются. `writeWorkSettings`
+   добавляются HTTP-обработчики по решению 1 (все без матчера, `PreToolUse` тоже), прежние
+   `cat >>` остаются. `writeWorkSettings`
    и `planLaunch` принимают `hookUrl`; без него файл такой же, как сегодня.
 5. **Порог версии** `feedSupported(version)` по `parseVersion` из `channel.ts`.
 
