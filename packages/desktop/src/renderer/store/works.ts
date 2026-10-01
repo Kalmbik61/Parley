@@ -5,9 +5,9 @@
  */
 
 import { create } from 'zustand';
-import type { WorkEntry } from '@harnas/core';
-import type { WorksSnapshot } from '@harnas/protocol';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { WorkEntry } from '@parley/core';
+import type { WorksSnapshot } from '@parley/protocol';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 
 /** Отказ `works.list`: код протокола и причина хоста (`works-unreadable`, раунд lane-r5). */
@@ -23,7 +23,7 @@ export interface WorksState {
   loading: boolean;
   error: WorksLoadError | null;
   /** Подписывается на бридж и один раз запрашивает `works.list`; возвращает отписку. */
-  init: (bridge: HarnasBridge) => () => void;
+  init: (bridge: ParleyBridge) => () => void;
 }
 
 export const useWorksStore = create<WorksState>((set) => ({
@@ -49,7 +49,7 @@ export const useWorksStore = create<WorksState>((set) => ({
         // Причина — `data.reason` ошибки хоста, как у ошибок git (8.2a).
         const info = decodeIpcError(err);
         const reason = info.data?.['reason'];
-        console.warn('[harnas] works.list failed', info.message);
+        console.warn('[parley] works.list failed', info.message);
         set({ error: { code: info.code, reason: typeof reason === 'string' ? reason : null } });
       });
 

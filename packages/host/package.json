@@ -1,5 +1,5 @@
 {
-  "name": "@harnas/host",
+  "name": "@parley/host",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "./main": "./dist/main.js"
   },
   "bin": {
-    "harnas-host": "./dist/main.js"
+    "parley-host": "./dist/main.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -19,8 +19,8 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@harnas/core": "workspace:*",
-    "@harnas/protocol": "workspace:*",
+    "@parley/core": "workspace:*",
+    "@parley/protocol": "workspace:*",
     "@xterm/addon-serialize": "^0.14",
     "@xterm/headless": "^5",
     "node-pty": "^1"

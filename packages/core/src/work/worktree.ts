@@ -15,6 +15,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { mapLimited } from '../map-limited.js';
+import { BRANCH_PREFIX, STATE_DIRS } from '../names.js';
 import type { WorktreeInfo } from './types.js';
 
 const run = promisify(execFile);
@@ -25,7 +26,7 @@ const run = promisify(execFile);
  * `ls-files`. Ключ из командной строки главнее конфигурации и по `GIT_CONFIG_PARAMETERS`
  * доходит до дочерних git (подмодули, проверка чистоты `worktree remove`).
  */
-const NO_FSMONITOR = ['-c', 'core.fsmonitor=false'];
+export const NO_FSMONITOR = ['-c', 'core.fsmonitor=false'];
 
 /** Сколько знаков хэша пути проекта идёт в имя каталога — как короткий git-хэш. */
 const HASH_LENGTH = 6;
@@ -41,7 +42,8 @@ function expandRoot(root: string): string {
 
 /**
  * План worktree: путь `<root>/<имя проекта>-<хеш6>/<workId>-<sessionId>`, ветка
- * `harnas/<workId>/<sessionId>` (спецификация 8.1). Хеш от полного пути проекта
+ * `parley/<workId>/<sessionId>` (спецификация 8.1; префикс — `BRANCH_PREFIX`, у сессий, заведённых до
+ * переименования, в карте остался `harnas/…` — он не переписывается). Хеш от полного пути проекта
  * защищает от коллизий одноимённых проектов в разных каталогах.
  */
 export function plannedWorktree(
@@ -55,7 +57,7 @@ export function plannedWorktree(
   const projectDir = `${path.basename(projectPath)}-${hash}`;
   return {
     path: path.join(expandRoot(root), projectDir, `${workId}-${sessionId}`),
-    branch: `harnas/${workId}/${sessionId}`,
+    branch: `${BRANCH_PREFIX}${workId}/${sessionId}`,
     base,
     createdAt: null,
   };
@@ -139,16 +141,19 @@ export const UNTRACKED_COUNTED = 500;
 /** Предел вывода git: у `execFile` по умолчанию 1 МБ, а патч с lock-файлами больше. */
 const MAX_BUFFER = 256 * 1024 * 1024;
 
-/** Каталог состояния харнесса в папке проекта (карта, журналы, письма) — не изменения проекта. */
-const HARNAS_PATHSPEC = ['--', '.', ':(exclude).harnas'];
+/**
+ * Каталог состояния в папке проекта (карта, журналы, письма) — не изменения проекта. Оба имени, новое и
+ * прежнее: у проекта может лежать любой, а исключению несуществующего пути git не мешает.
+ */
+const STATE_PATHSPEC = ['--', '.', ...STATE_DIRS.map((dir) => `:(exclude)${dir}`)];
 
 /**
- * В worktree своего `.harnas/` по спеке нет, но агент с cwd в worktree может его
+ * В worktree своего каталога состояния по спеке нет, но агент с cwd в worktree может его
  * завести — это не работа ветки. Глоб на любой глубине: префикс проекта-подкаталога
- * не нужен, и `add` с таким исключением не выходит с кодом 1 при `.harnas/` в
- * `.gitignore` (проба на git 2.53) — в отличие от `:(exclude).harnas`.
+ * не нужен, и `add` с таким исключением не выходит с кодом 1 при каталоге состояния в
+ * `.gitignore` (проба на git 2.53) — в отличие от `:(exclude)<имя>`.
  */
-const WORKTREE_PATHSPEC = ['--', '.', ':(exclude,glob)**/.harnas/**'];
+const WORKTREE_PATHSPEC = ['--', '.', ...STATE_DIRS.map((dir) => `:(exclude,glob)**/${dir}/**`)];
 
 type NumstatEntry = { path: string; oldPath: string | null; additions: number | null; deletions: number | null };
 type NameStatusEntry = { path: string; oldPath: string | null; status: DiffFile['status'] };
@@ -289,7 +294,7 @@ export class GitStateError extends Error {
   }
 }
 
-/** Изменён только .harnas/ или ничего: commitProject не коммитит, хост отвечает conflict. */
+/** Изменён только каталог состояния или ничего: commitProject не коммитит, хост отвечает conflict. */
 export class NothingToCommitError extends Error {}
 
 /** База или ветка из параметров — не имя ревизии (флаг, диапазон, мусор из карты): git с ней не вызывается. */
@@ -548,7 +553,7 @@ async function exitCode(args: string[]): Promise<{ code: number; stdout: string 
   }
 }
 
-/** Неотслеживаемые файлы от `cwd`; `pathspec` — у `changes.*` без `.harnas/`. */
+/** Неотслеживаемые файлы от `cwd`; `pathspec` — у `changes.*` без каталога состояния. */
 async function untrackedFiles(at: GitAt, pathspec: string[] = []): Promise<string[]> {
   return zFields(await readGitBuffer(at, ['ls-files', '--others', '--exclude-standard', '-z', ...pathspec]));
 }
@@ -669,16 +674,16 @@ async function findBaseCheckout(projectPath: string, base: string): Promise<stri
 
 /**
  * Путь папки проекта от корня рабочей копии (`sub/` или пусто): у
- * проекта-подкаталога `.harnas/` лежит в `<sub>/.harnas`, а `isDirty` смотрит
- * от корня чекаута.
+ * проекта-подкаталога каталог состояния лежит в `<sub>/.parley` (или прежнем `.harnas`), а `isDirty`
+ * смотрит от корня чекаута.
  */
 async function projectPrefix(project: GitAt): Promise<string> {
   return (await readGit(project, ['rev-parse', '--show-prefix'])).trim();
 }
 
 /**
- * Есть ли незакоммиченное в каталоге, не считая `.harnas/` проекта — там сам
- * гарнес хранит своё состояние прямо внутри проекта, и без `.gitignore` на этот
+ * Есть ли незакоммиченное в каталоге, не считая каталога состояния проекта (`.parley/` или прежнего
+ * `.harnas/`) — там сам харнесс хранит своё состояние прямо внутри проекта, и без `.gitignore` на этот
  * каталог `git status` в нём всегда грязный: `base_dirty` тогда получали бы
  * всегда и слияние никогда бы не проходило. `prefix` — путь проекта от корня
  * рабочей копии (`projectPrefix`). Синтаксис exclude-пасспеки работает с git 1.9.
@@ -690,7 +695,7 @@ async function isDirty(checkout: GitAt, prefix: string): Promise<boolean> {
     NO_SUBMODULE_WALK,
     '--',
     '.',
-    `:(exclude)${prefix}.harnas`,
+    ...STATE_DIRS.map((dir) => `:(exclude)${prefix}${dir}`),
   ]);
   return stdout.trim() !== '';
 }
@@ -845,7 +850,7 @@ export interface ProjectChanges {
 /**
  * Изменения папки проекта против HEAD — для сессии без своего worktree (спека
  * 11.5). `--relative` даёт пути от папки проекта: она может быть подкаталогом
- * репозитория. `.harnas/` не входит — это состояние харнесса.
+ * репозитория. Каталог состояния (`.parley/`, `.harnas/`) не входит — это состояние харнесса.
  */
 export async function projectChanges(
   projectPath: string,
@@ -853,8 +858,8 @@ export async function projectChanges(
 ): Promise<ProjectChanges> {
   return withGitState(projectPath, async () => {
     const project = await readerAt(projectPath);
-    const untracked = await untrackedFiles(project, HARNAS_PATHSPEC);
-    const files = await workingTreeFiles(project, ['--relative', 'HEAD', ...HARNAS_PATHSPEC], untracked);
+    const untracked = await untrackedFiles(project, STATE_PATHSPEC);
+    const files = await workingTreeFiles(project, ['--relative', 'HEAD', ...STATE_PATHSPEC], untracked);
 
     const head = (await readGit(project, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
 
@@ -867,7 +872,7 @@ export async function projectChanges(
         '-M',
         '--relative',
         'HEAD',
-        ...HARNAS_PATHSPEC,
+        ...STATE_PATHSPEC,
       ]);
       const untrackedPatches = await mapLimited(untracked.slice(0, UNTRACKED_COUNTED), UNTRACKED_CONCURRENCY, (filePath) =>
         untrackedPatch(project, filePath),
@@ -907,24 +912,25 @@ async function submoduleExcludes(at: GitAt): Promise<string[]> {
 /**
  * «Закоммитить всё в папке» — только по кнопке человека. Pathspec и у `add`, и
  * у `commit`: без него `git commit` взял бы весь индекс — подготовленное
- * человеком вне папки проекта и `.harnas/`, если его кто-то добавил; так чужое
+ * человеком вне папки проекта и каталога состояния, если его кто-то добавил; так чужое
  * подготовленное остаётся в индексе нетронутым.
  */
 export async function commitProject(projectPath: string, message: string): Promise<{ commit: string }> {
   return withGitState(projectPath, async () => {
     const project = await readerAt(projectPath);
-    const added = await exitCode(['-C', projectPath, 'add', '-A', ...HARNAS_PATHSPEC, ...(await submoduleExcludes(project))]);
-    // Код 1 у `add` — и когда `.harnas/` в .gitignore: исключение в pathspec
+    const added = await exitCode(['-C', projectPath, 'add', '-A', ...STATE_PATHSPEC, ...(await submoduleExcludes(project))]);
+    // Код 1 у `add` — и когда каталог состояния в .gitignore: исключение в pathspec
     // называет игнорируемый путь, остальное при этом подготовлено. Отличаем
-    // пробой `check-ignore`, а не по stderr — у человека git локализован.
+    // пробой `check-ignore` (0 — игнорируется хотя бы один из двух; `-q` с несколькими путями git не
+    // принимает), а не по stderr — у человека git локализован.
     if (added.code !== 0) {
-      const ignored = (await gitWithCode(project, ['check-ignore', '-q', '--', '.harnas'])).code === 0;
+      const ignored = (await gitWithCode(project, ['check-ignore', '--', ...STATE_DIRS])).code === 0;
       if (added.code !== 1 || !ignored) throw new Error(`git add -A: код ${added.code}`);
     }
-    const { code } = await gitWithCode(project, ['diff', ...DIFF_READ, '--cached', '--quiet', ...HARNAS_PATHSPEC]);
+    const { code } = await gitWithCode(project, ['diff', ...DIFF_READ, '--cached', '--quiet', ...STATE_PATHSPEC]);
     if (code === 0) throw new NothingToCommitError(`в ${projectPath} нечего коммитить`);
     if (code !== 1) throw new Error(`git diff --cached --quiet: код ${code}`);
-    await run('git', [...NO_FSMONITOR, '-C', projectPath, 'commit', '-m', message, ...HARNAS_PATHSPEC]);
+    await run('git', [...NO_FSMONITOR, '-C', projectPath, 'commit', '-m', message, ...STATE_PATHSPEC]);
     return { commit: (await readGit(project, ['rev-parse', 'HEAD'])).trim() };
   });
 }

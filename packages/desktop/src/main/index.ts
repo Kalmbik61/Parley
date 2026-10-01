@@ -16,8 +16,8 @@ import {
   webContents,
 } from 'electron';
 import type { WebContents } from 'electron';
-import { configPath, loadConfig } from '@harnas/core';
-import type { WorksSnapshot } from '@harnas/protocol';
+import { configPath, envValue, loadConfig, migrateHome, parleyHome } from '@parley/core';
+import type { WorksSnapshot } from '@parley/protocol';
 import { BROWSER_PARTITION } from '../shared/browser-types.js';
 import { S } from '../shared/strings.js';
 import { createDesignMode } from './browser/design-mode.js';
@@ -47,6 +47,7 @@ import { createRootsRegistry, worktreeRootPolicy, type RootsSource } from './roo
 import { captureShellEnv } from './shell-env.js';
 import { testSwitches } from './test-switches.js';
 import { createUiStore, desktopUiPath } from './ui-store.js';
+import { userDataDir } from './user-data.js';
 import { createMainWindow, guardWindowClose, titlebarDoubleClickAction } from './window.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -55,7 +56,7 @@ const dirname = path.dirname(fileURLToPath(import.meta.url));
 const DROPS_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * Картинка 1×1 для E2E (`HARNAS_DROPS=fake`): тест не трогает настоящий буфер обмена
+ * Картинка 1×1 для E2E (`PARLEY_DROPS=fake`): тест не трогает настоящий буфер обмена
  * человека — ни читать его, ни писать в него (решение контролёра 5.4).
  */
 const FAKE_DROP_PNG = Buffer.from(
@@ -89,20 +90,27 @@ async function clipboardPng(): Promise<Buffer | null> {
 // Electron не печатает его в stderr (fix-lane-post, п. 4).
 quietExpectedIpcRefusals(console);
 
-// При своём HARNAS_HOME (тесты, второй дом) у окна свой userData: лок одного
-// экземпляра тогда привязан к дому так же, как хост, и чужой дом его не держит.
-if (process.env.HARNAS_HOME) {
-  app.setPath('userData', path.join(process.env.HARNAS_HOME, 'desktop', 'electron'));
-}
-
-// Тестовые переключатели E2E — только в неупакованном окне или при HARNAS_E2E=1 (ревью M5).
+// Тестовые переключатели E2E — только в неупакованном окне или при PARLEY_E2E=1 (ревью M5).
 const switches = testSwitches(process.env, app.isPackaged);
 
-// E2E (`HARNAS_DOWNLOADS=log`): диалог сохранения загрузок браузера подменён журналом main, а папка
+// userData окна ставится здесь, на верхнем уровне, — до лока одного экземпляра и до первой сессии Chromium.
+// При своём доме (тесты, второй дом: задан `PARLEY_HOME` или прежний `HARNAS_HOME`) у окна свой
+// userData: лок одного экземпляра тогда привязан к дому так же, как хост, и чужой дом его не
+// держит. Дом окно берёт только из core (`parleyHome`), переменных не читает само.
+// Без своего дома userData закреплён (R7): Electron считает его от имени пакета, а оно сменилось, и без закрепления
+// окно открыло бы пустой `@parley/desktop` вместо данных человека в `@harnas/desktop` (`user-data.ts`).
+const explicitHome = envValue(process.env, 'HOME') !== undefined;
+if (explicitHome) {
+  app.setPath('userData', path.join(parleyHome(), 'desktop', 'electron'));
+} else {
+  app.setPath('userData', userDataDir(switches.appData ?? app.getPath('appData')));
+}
+
+// E2E (`PARLEY_DOWNLOADS=log`): диалог сохранения загрузок браузера подменён журналом main, а папка
 // загрузок — в доме теста: настоящий диалог не встаёт на экране человека, его Downloads не трогаются.
 const logDownloads = switches.downloads;
-if (logDownloads && process.env.HARNAS_HOME) {
-  app.setPath('downloads', path.join(process.env.HARNAS_HOME, 'desktop', 'downloads'));
+if (logDownloads && explicitHome) {
+  app.setPath('downloads', path.join(parleyHome(), 'desktop', 'downloads'));
 }
 
 // Второй экземпляр не поднимает второй хост и не открывает второе окно —
@@ -123,14 +131,27 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     // Открытому из Finder окну launchd отдаёт урезанное окружение: без `~/.local/bin` и nvm хост не найдёт
-    // ни `claude`, ни `codex`, а прокси, `CLAUDE_CONFIG_DIR` и `HARNAS_*` из rc-файлов человека не придут
+    // ни `claude`, ни `codex`, а прокси, `CLAUDE_CONFIG_DIR` и `PARLEY_*` (прежние `HARNAS_*` тоже) из rc-файлов человека не придут
     // вовсе. Окружение login-оболочки снимается один раз, до хоста, и уходит в хост окружением его запуска,
     // в поиск `node`, git и конфиг; агенты наследуют его от хоста.
-    // E2E (`HARNAS_LOGIN_SHELL=skip`): оболочку человека с её rc-файлами не зовём, окружение — то, с которым
+    // E2E (`PARLEY_LOGIN_SHELL=skip`): оболочку человека с её rc-файлами не зовём, окружение — то, с которым
     // запущен тест; разбор настоящего вывода оболочки держат тесты `shell-env.test.ts` с заглушкой в файле.
     const shellEnv = await captureShellEnv({ skip: switches.loginShell });
     if (shellEnv.warning) {
-      console.warn(`[harnas] captureShellEnv: ${shellEnv.warning}`);
+      console.warn(`[parley] captureShellEnv: ${shellEnv.warning}`);
+    }
+
+    // Перенос дома `~/.harnas` → `~/.parley` (R6) — до поиска и запуска хоста: пути хоста считаются от дома, и окно
+    // сперва решает, какой из двух домов настоящий. Заданный дом (у окна или в окружении оболочки, с которым
+    // стартует хост) не переносится; живой хост старого дома, блокировка записи и живая сессия в проекте из
+    // индекса (и та, что поднята из терминала) — тоже: окно подключится к старому дому, как раньше, а перенос
+    // повторится при следующем запуске.
+    const homeMigration = await migrateHome({ env: explicitHome ? process.env : shellEnv.env });
+    if (homeMigration.status === 'moved') {
+      console.info(`[parley] home moved: ${homeMigration.from} -> ${homeMigration.to}`);
+    } else if (homeMigration.reason !== 'no-legacy' && homeMigration.reason !== 'explicit-home') {
+      const detail = homeMigration.detail === undefined ? '' : `: ${homeMigration.detail}`;
+      console.warn(`[parley] home not moved (${homeMigration.reason}${detail}): ${homeMigration.from}`);
     }
 
     const paths = hostPaths();
@@ -144,7 +165,7 @@ if (!gotLock) {
         const nodeBin = await resolveNodeBin(shellEnv.env);
         if (nodeBin === null) {
           const reason = S.connection.reasonNodeNotFound;
-          console.error(`[harnas] ${reason}`);
+          console.error(`[parley] ${reason}`);
           connection.reportUnavailable(reason);
           return null;
         }
@@ -160,7 +181,7 @@ if (!gotLock) {
             stderrFile: path.join(paths.dir, 'host.err'),
           });
         } catch (err) {
-          console.error('[harnas] failed to start host', err);
+          console.error('[parley] failed to start host', err);
           return null;
         }
       },
@@ -169,7 +190,7 @@ if (!gotLock) {
     try {
       await connection.connect();
     } catch (err) {
-      console.error('[harnas] failed to connect to host', err);
+      console.error('[parley] failed to connect to host', err);
     }
 
     // `ui.json` и `themeSource` — до первого окна: `nativeTheme.shouldUseDarkColors`
@@ -186,13 +207,13 @@ if (!gotLock) {
     // просто грузит файл с готовой строкой запроса): `renderer=dom` — E2E читают текст
     // экрана терминала, им нужен DOM-рендер xterm вместо WebGL.
     const searchFlags = [
-      process.env.HARNAS_TERMINAL_RENDERER === 'dom' ? 'renderer=dom' : null,
+      envValue(process.env, 'TERMINAL_RENDERER') === 'dom' ? 'renderer=dom' : null,
     ].filter((flag): flag is string => flag !== null);
 
-    // Нативные вопросы main в E2E — в журнал (`globalThis.__harnasDialogs`), ответ «ждать».
+    // Нативные вопросы main в E2E — в журнал (`globalThis.__parleyDialogs`), ответ «ждать».
     const logDialogs = switches.dialogs;
     const dialogLog: string[] = [];
-    if (logDialogs) (globalThis as { __harnasDialogs?: string[] }).__harnasDialogs = dialogLog;
+    if (logDialogs) (globalThis as { __parleyDialogs?: string[] }).__parleyDialogs = dialogLog;
 
     // Окна, у которых был did-finish-load: только им событие `app:focus-target` дойдёт —
     // раньше прелоад ещё не слушает. Перезагрузка страницы снимает признак до нового конца.
@@ -221,7 +242,7 @@ if (!gotLock) {
       window.webContents.on('did-finish-load', () => loadedWindows.add(window));
       const closeGuard = guardWindowClose(window, app, {
         askUnresponsive: async () => {
-          // E2E (`HARNAS_DIALOGS=log`): настоящий системный диалог на экране человека не встаёт.
+          // E2E (`PARLEY_DIALOGS=log`): настоящий системный диалог на экране человека не встаёт.
           if (logDialogs) {
             dialogLog.push('unresponsive');
             return 'wait';
@@ -255,10 +276,10 @@ if (!gotLock) {
     // Клетка встроенного браузера (кусок 9.1, спека 12.2) — до первого окна: его
     // web-contents-created приходит внутри new BrowserWindow, а session.fromPartition до ready бросает.
     const browserSession = session.fromPartition(BROWSER_PARTITION);
-    // Журнал загрузок E2E; ответ «диалога» тест кладёт в `__harnasSaveAnswer`: путь или null — «Отмена».
+    // Журнал загрузок E2E; ответ «диалога» тест кладёт в `__parleySaveAnswer`: путь или null — «Отмена».
     const downloadLog: Array<{ filename: string; url: string }> = [];
-    const testGlobals = globalThis as { __harnasDownloads?: typeof downloadLog; __harnasSaveAnswer?: string | null };
-    if (logDownloads) testGlobals.__harnasDownloads = downloadLog;
+    const testGlobals = globalThis as { __parleyDownloads?: typeof downloadLog; __parleySaveAnswer?: string | null };
+    if (logDownloads) testGlobals.__parleyDownloads = downloadLog;
     // Снимок элемента Design Mode (кусок 9.3a) — в drops/, как скриншоты из буфера (5.4). Создаётся до
     // стража: загрузка из гостя снимает его выбор (fix-9b).
     const designMode = createDesignMode({
@@ -285,7 +306,7 @@ if (!gotLock) {
           return;
         }
         downloadLog.push({ filename: item.getFilename(), url: item.getURL() });
-        const answer = testGlobals.__harnasSaveAnswer ?? null;
+        const answer = testGlobals.__parleySaveAnswer ?? null;
         if (answer === null) item.cancel();
         else item.setSavePath(answer);
       },
@@ -296,12 +317,12 @@ if (!gotLock) {
 
     mainWindow = openWindow();
 
-    // E2E (`HARNAS_NOTIFICATIONS=log`): уведомления — в журнал main, а не на экран
-    // человека; тест читает и кликает их через `app.evaluate` (`globalThis.__harnasNotifications`).
+    // E2E (`PARLEY_NOTIFICATIONS=log`): уведомления — в журнал main, а не на экран
+    // человека; тест читает и кликает их через `app.evaluate` (`globalThis.__parleyNotifications`).
     const notificationLog: LoggedNotification[] = [];
     const logNotifications = switches.notifications;
     if (logNotifications) {
-      (globalThis as { __harnasNotifications?: LoggedNotification[] }).__harnasNotifications = notificationLog;
+      (globalThis as { __parleyNotifications?: LoggedNotification[] }).__parleyNotifications = notificationLog;
     }
     const notifier = createNotifier({
       create: (options): NotificationLike =>
@@ -333,7 +354,7 @@ if (!gotLock) {
     // `onStatus` отдаёт текущий статус сразу при подписке — уже поднятая связь читается тут же.
     // Старые скриншоты `drops/` (кусок 5.4): только обычные файлы и сами ссылки, по lstat.
     // В фоне — старт окна их не ждёт.
-    void cleanupDrops(dropsDir(), DROPS_MAX_AGE_MS).catch((error: unknown) => console.warn('[harnas] cleanupDrops', error));
+    void cleanupDrops(dropsDir(), DROPS_MAX_AGE_MS).catch((error: unknown) => console.warn('[parley] cleanupDrops', error));
     const fakeDrops = switches.drops;
 
     const rootsSource: RootsSource = {
@@ -359,13 +380,13 @@ if (!gotLock) {
       }),
     });
 
-    // E2E (`HARNAS_SHELL=log`): «открыть в приложении», «показать в Finder» и внешний адрес —
+    // E2E (`PARLEY_SHELL=log`): «открыть в приложении», «показать в Finder» и внешний адрес —
     // в журнал main, а не на экран человека (настоящие открыли бы приложение, Finder и браузер);
-    // тест читает журнал через `app.evaluate` (`globalThis.__harnasShell`).
+    // тест читает журнал через `app.evaluate` (`globalThis.__parleyShell`).
     const shellLog: Array<{ action: 'openPath' | 'showItemInFolder'; path: string } | { action: 'openExternal'; url: string }> = [];
     const logShell = switches.shell;
     if (logShell) {
-      (globalThis as { __harnasShell?: typeof shellLog }).__harnasShell = shellLog;
+      (globalThis as { __parleyShell?: typeof shellLog }).__parleyShell = shellLog;
     }
 
     registerIpc({

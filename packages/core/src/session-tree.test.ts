@@ -91,7 +91,7 @@ async function fixture(): Promise<void> {
 }
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), 'harnas-tree-'));
+  root = await mkdtemp(path.join(tmpdir(), 'parley-tree-'));
 });
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });

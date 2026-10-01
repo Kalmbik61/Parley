@@ -4,7 +4,7 @@
  * Большой и двоичный файл не уходят в редактор: заглушка, а у текстового — «Show anyway».
  */
 
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import type { DiffFile, FileRoot, TextFile } from '../../shared/files-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 
@@ -18,7 +18,7 @@ export interface DiffSides {
 /** Таблица чисел плана: живых редакторов не больше 20, файл больше 1 МБ — заглушка. */
 export const DIFF_LIMITS = { maxEditors: 20, maxFileBytes: 1024 * 1024 } as const;
 
-type FilesApi = Pick<HarnasBridge['files'], 'gitShow' | 'readText'>;
+type FilesApi = Pick<ParleyBridge['files'], 'gitShow' | 'readText'>;
 
 /** Отказ `files:too-large` (больше 20 МБ, 7.1a) — не ошибка вкладки, а заглушка большого файла. */
 const TOO_LARGE = Symbol('too-large');

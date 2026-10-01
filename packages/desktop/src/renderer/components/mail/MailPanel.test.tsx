@@ -9,7 +9,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { Message, WorkEntry, WorkSession } from '@harnas/core';
+import type { Message, WorkEntry, WorkSession } from '@parley/core';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { useHostStore } from '../../store/host.js';
 import { useUiStore } from '../../store/ui.js';

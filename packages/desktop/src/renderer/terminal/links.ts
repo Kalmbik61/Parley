@@ -12,7 +12,7 @@
  */
 
 import type { IBufferLine, ILink, ILinkProvider } from '@xterm/xterm';
-import type { WorkSession } from '@harnas/core';
+import type { WorkSession } from '@parley/core';
 import type { Located } from '../../shared/files-types.js';
 
 export interface LinkCandidate {

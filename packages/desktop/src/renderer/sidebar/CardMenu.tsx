@@ -15,8 +15,8 @@
 
 import { useRef, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import type { WorkEntry, WorkStatus } from '@harnas/core';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { WorkEntry, WorkStatus } from '@parley/core';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
 import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
@@ -44,7 +44,7 @@ export type CardAction = 'pin' | 'unpin' | 'new-session' | 'new-room' | 'open-ma
 export interface CardMenuProps {
   entry: WorkEntry;
   pinned: boolean;
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   /** InlineRename своей карточки. */
   onRename(): void;
   /** Вкладка mail этой работы. */
@@ -63,7 +63,7 @@ export const DESTRUCTIVE_ITEM = 'text-menu-destructive focus:bg-accent focus:tex
 /** Ошибка вызова — в консоль как есть, человеку — английский текст по коду. */
 function reportError(label: string, action: string): (error: unknown) => void {
   return (error) => {
-    console.warn(`[harnas] ${label}`, error);
+    console.warn(`[parley] ${label}`, error);
     toast(errorText(decodeIpcError(error).code, action));
   };
 }
@@ -175,7 +175,7 @@ export function CardMenu({ entry, pinned, bridge, onRename, onOpenMail, children
           <ContextMenuItem
             data-card-action="copy-path"
             onSelect={() => {
-              navigator.clipboard.writeText(projectPath).catch((error: unknown) => console.warn('[harnas] clipboard', error));
+              navigator.clipboard.writeText(projectPath).catch((error: unknown) => console.warn('[parley] clipboard', error));
             }}
           >
             {S.cardMenu.copyPath}

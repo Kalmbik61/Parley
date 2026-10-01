@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { DiffFile, MergeCheck, WorktreeDiff } from '@harnas/core';
+import type { DiffFile, MergeCheck, WorktreeDiff } from '@parley/core';
 import {
   askAgentText,
   changesErrorText,

@@ -15,9 +15,9 @@ import {
   transitionSession,
   updateMap,
   workPaths,
-} from '@harnas/core';
-import type { EventData, EventName, SessionRef } from '@harnas/protocol';
-import { refKey } from '@harnas/protocol';
+} from '@parley/core';
+import type { EventData, EventName, SessionRef } from '@parley/protocol';
+import { refKey } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import type { CodexSignal } from '../pty/codex-terminal.js';
 import { createWorksService } from '../works/works-service.js';
@@ -48,18 +48,18 @@ function fakeHost(): HostContext {
 }
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
-  claudeRoot = await mkdtemp(path.join(tmpdir(), 'harnas-claude-'));
-  codexRoot = await mkdtemp(path.join(tmpdir(), 'harnas-codex-'));
-  process.env['HARNAS_HOME'] = home;
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
+  claudeRoot = await mkdtemp(path.join(tmpdir(), 'parley-claude-'));
+  codexRoot = await mkdtemp(path.join(tmpdir(), 'parley-codex-'));
+  process.env['PARLEY_HOME'] = home;
   broadcasts = [];
 });
 
 afterEach(async () => {
   await Promise.all(services.map((service) => service.stop()));
   services = [];
-  delete process.env['HARNAS_HOME'];
+  delete process.env['PARLEY_HOME'];
   await Promise.all(
     [home, project, claudeRoot, codexRoot].map((dir) => rm(dir, { recursive: true, force: true })),
   );
@@ -565,15 +565,21 @@ describe('у codex нет хуков — предупреждений о них 
 
 describe('startupWaitFromEnv — рычаг E2E', () => {
   it('целое от 100 мс до десяти минут принимается', () => {
+    expect(startupWaitFromEnv({ PARLEY_CODEX_STARTUP_MS: '1500' })).toBe(1500);
+    expect(startupWaitFromEnv({ PARLEY_CODEX_STARTUP_MS: ' 100 ' })).toBe(100);
+    expect(startupWaitFromEnv({ PARLEY_CODEX_STARTUP_MS: '600000' })).toBe(600_000);
+  });
+
+  it('прежнее имя HARNAS_CODEX_STARTUP_MS читается как запасное; PARLEY_* главнее; пустое новое не перекрывает', () => {
     expect(startupWaitFromEnv({ HARNAS_CODEX_STARTUP_MS: '1500' })).toBe(1500);
-    expect(startupWaitFromEnv({ HARNAS_CODEX_STARTUP_MS: ' 100 ' })).toBe(100);
-    expect(startupWaitFromEnv({ HARNAS_CODEX_STARTUP_MS: '600000' })).toBe(600_000);
+    expect(startupWaitFromEnv({ PARLEY_CODEX_STARTUP_MS: '200', HARNAS_CODEX_STARTUP_MS: '1500' })).toBe(200);
+    expect(startupWaitFromEnv({ PARLEY_CODEX_STARTUP_MS: '', HARNAS_CODEX_STARTUP_MS: '1500' })).toBe(1500);
   });
 
   it('нет переменной, пустая, не число, дробная, слишком малая или большая — игнорируется', () => {
     for (const value of [undefined, '', ' ', 'много', '1.5', '99', '600001', '-5']) {
       expect(
-        startupWaitFromEnv(value === undefined ? {} : { HARNAS_CODEX_STARTUP_MS: value }),
+        startupWaitFromEnv(value === undefined ? {} : { PARLEY_CODEX_STARTUP_MS: value }),
         String(value),
       ).toBeUndefined();
     }

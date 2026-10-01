@@ -7,7 +7,7 @@
  * `stateLetter`).
  */
 
-import type { Activity, SessionLifecycle, SessionStatus, WorkSession } from '@harnas/core';
+import type { Activity, SessionLifecycle, SessionStatus, WorkSession } from '@parley/core';
 import { S } from '../../shared/strings.js';
 
 /**

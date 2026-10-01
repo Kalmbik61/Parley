@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { refKey, type SessionRef } from '@harnas/protocol';
-import type { HarnasConfig } from '@harnas/core';
-import type { FocusTarget, HarnasBridge } from '../shared/bridge.js';
+import { refKey, type SessionRef } from '@parley/protocol';
+import type { ParleyConfig } from '@parley/core';
+import type { FocusTarget, ParleyBridge } from '../shared/bridge.js';
 import { getHostClient } from './host-client.js';
 import { sessionAttention } from './attention/derive.js';
 import { createSeenTracker, visibleSessions } from './attention/seen.js';
@@ -44,7 +44,7 @@ const DEFAULT_FONT_SIZE = 14;
  * только когда число сменилось. Подписка на стор, а не хук: `App` не должен перерисовываться
  * на каждое изменение внимания.
  */
-function wireBadge(bridge: HarnasBridge): () => void {
+function wireBadge(bridge: ParleyBridge): () => void {
   let last: number | null = null;
   const push = (): void => {
     const { sections, attention } = useSidebarSectionsStore.getState();
@@ -62,7 +62,7 @@ function wireBadge(bridge: HarnasBridge): () => void {
  * хосту уведомлением `activity.seen`. Пересчёт — на каждое изменение видимых поверхностей,
  * фокуса, видимости документа, активности и снимка работ.
  */
-function wireSeenTracker(bridge: HarnasBridge): () => void {
+function wireSeenTracker(bridge: ParleyBridge): () => void {
   const tracker = createSeenTracker({
     send: (ref) => {
       // Метод проверяется в момент отправки: значение при монтировании устарело бы после
@@ -118,7 +118,7 @@ function wireSeenTracker(bridge: HarnasBridge): () => void {
  * кончался бы тостом «уже удалены»: подписки заводятся в connected, а снимок ещё в пути.
  * Цели нет — тост: это ответ на действие человека (спека 7.5).
  */
-function wireFocusTargets(bridge: HarnasBridge): () => void {
+function wireFocusTargets(bridge: ParleyBridge): () => void {
   let waiting: FocusTarget | null = null;
   let offWorks: (() => void) | null = null;
   // Ожидания показа вкладки снимаются вместе с подписками — их опрос не переживает App.
@@ -161,7 +161,7 @@ export function App(): JSX.Element {
   // `fontFamily`/`fontSize` как значения, а не как CSS-переменные: xterm
   // красит канвой. Тему окна (тёмная/светлая) панели берут из `useUiStore`
   // напрямую (кусок 1.3 плана окна, спека 4.7).
-  const [config, setConfig] = useState<HarnasConfig | null>(null);
+  const [config, setConfig] = useState<ParleyConfig | null>(null);
 
   const settingsOpen = useUiStore((state) => state.dialogs.settings);
   const openSettingsDialog = useUiStore((state) => state.openSettingsDialog);
@@ -207,7 +207,7 @@ export function App(): JSX.Element {
     return () => {
       for (const dispose of disposers) dispose();
     };
-    // `bridge` стабилен на весь жизненный цикл окна (один `window.harnas`) —
+    // `bridge` стабилен на весь жизненный цикл окна (один `window.parley`) —
     // достаточно перезапускать подписки только при смене статуса связи.
   }, [status.state]);
 
@@ -251,14 +251,14 @@ export function App(): JSX.Element {
           <button
             type="button"
             className="rounded bg-secondary px-4 py-2 text-secondary-foreground"
-            onClick={() => void bridge.app.reconnect().catch((error: unknown) => console.warn('[harnas] reconnect', error))}
+            onClick={() => void bridge.app.reconnect().catch((error: unknown) => console.warn('[parley] reconnect', error))}
           >
             {S.common.retry}
           </button>
           <button
             type="button"
             className="rounded bg-secondary px-4 py-2 text-secondary-foreground"
-            onClick={() => void bridge.app.restartHost().catch((error: unknown) => console.warn('[harnas] restart host', error))}
+            onClick={() => void bridge.app.restartHost().catch((error: unknown) => console.warn('[parley] restart host', error))}
           >
             {S.connection.restartHost}
           </button>

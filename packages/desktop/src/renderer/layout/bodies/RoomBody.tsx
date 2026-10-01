@@ -8,9 +8,9 @@
 
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@harnas/core';
-import type { SessionRef } from '@harnas/protocol';
-import type { HarnasBridge } from '../../../shared/bridge.js';
+import type { WorkEntry } from '@parley/core';
+import type { SessionRef } from '@parley/protocol';
+import type { ParleyBridge } from '../../../shared/bridge.js';
 import { S } from '../../../shared/strings.js';
 import { applyFocusTarget, buildFocusTargetDeps } from '../../attention/focus-target.js';
 import { RoomPanel } from '../../components/rooms/RoomPanel.js';
@@ -18,7 +18,7 @@ import { useActivityStore } from '../../store/activity.js';
 import { useHostStore } from '../../store/host.js';
 
 export interface RoomBodyProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   entry: WorkEntry;
   roomId: string;
   /** Работа активна — `LayoutBodyContext.active` из `GroupView` (кусок 4.2). */

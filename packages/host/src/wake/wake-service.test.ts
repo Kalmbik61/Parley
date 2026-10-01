@@ -16,8 +16,8 @@ import {
   unreadFor,
   updateMap,
   workPaths,
-} from '@harnas/core';
-import type { EventData, EventName, SessionRef } from '@harnas/protocol';
+} from '@parley/core';
+import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createActivityService } from '../activity/activity-service.js';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -77,11 +77,11 @@ function fakeHost(): HostContext {
 }
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
-  claudeRoot = await mkdtemp(path.join(tmpdir(), 'harnas-claude-'));
-  codexRoot = await mkdtemp(path.join(tmpdir(), 'harnas-codex-'));
-  process.env['HARNAS_HOME'] = home;
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
+  claudeRoot = await mkdtemp(path.join(tmpdir(), 'parley-claude-'));
+  codexRoot = await mkdtemp(path.join(tmpdir(), 'parley-codex-'));
+  process.env['PARLEY_HOME'] = home;
   broadcasts = [];
   logErrors = [];
 });
@@ -91,7 +91,7 @@ afterEach(async () => {
   stoppers = [];
   for (const key of extraEnv) delete process.env[key];
   extraEnv = [];
-  delete process.env['HARNAS_HOME'];
+  delete process.env['PARLEY_HOME'];
   await Promise.all([home, project, claudeRoot, codexRoot].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -155,8 +155,8 @@ async function rig(
     cwd: project,
     env: {
       ...process.env,
-      HARNAS_WORK_DIR: path.join(project, '.harnas', 'works', workId),
-      HARNAS_SESSION_ID: sessionId,
+      PARLEY_WORK_DIR: path.join(project, '.parley', 'works', workId),
+      PARLEY_SESSION_ID: sessionId,
       STUB_READY_HOOK: '1',
       ...launchEnv,
     },
@@ -202,8 +202,8 @@ describe('WakeService', () => {
     const { stream, pty, ref, activity } = await rig(sessionId, workId, {
       STUB_HOOKS: '1',
       STUB_TURN_MS: '500',
-      HARNAS_WORK_DIR: path.join(project, '.harnas', 'works', workId),
-      HARNAS_SESSION_ID: sessionId,
+      PARLEY_WORK_DIR: path.join(project, '.parley', 'works', workId),
+      PARLEY_SESSION_ID: sessionId,
     });
 
     pty.input(ref, 'привет\r');
@@ -426,7 +426,7 @@ interface ResumeRig {
 /** works+activity+pty+sessions+wake: будильник поднимает сессии настоящим `launch` со стабом. */
 async function resumeRig(wakeOptions: WakeServiceOptions = {}): Promise<ResumeRig> {
   // Настоящий `claude` в автотестах не запускается никогда — только стаб.
-  setEnv('HARNAS_CLAUDE_BIN', STUB);
+  setEnv('PARLEY_CLAUDE_BIN', STUB);
   const host = fakeHost();
   const works = createWorksService(host, { debounceMs: 20 });
   const activity = createActivityService(host, works, { claudeRoot, codexRoot });
@@ -457,7 +457,7 @@ async function resumeRig(wakeOptions: WakeServiceOptions = {}): Promise<ResumeRi
 }
 
 async function tempArgsFile(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'harnas-wake-args-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'parley-wake-args-'));
   stoppers.push(() => rm(dir, { recursive: true, force: true }));
   return path.join(dir, 'args.json');
 }
@@ -635,8 +635,8 @@ async function trioRig(workId: string, ids: readonly string[]): Promise<Map<stri
         // Хук процесса доходит до журнала — иначе будильник в сессию не печатает (fix-final-b).
         env: {
           ...process.env,
-          HARNAS_WORK_DIR: path.join(project, '.harnas', 'works', workId),
-          HARNAS_SESSION_ID: sessionId,
+          PARLEY_WORK_DIR: path.join(project, '.parley', 'works', workId),
+          PARLEY_SESSION_ID: sessionId,
           STUB_READY_HOOK: '1',
         },
       },

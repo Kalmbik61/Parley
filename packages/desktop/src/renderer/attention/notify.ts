@@ -6,10 +6,10 @@
  * Русский `HostNotice.text` сюда не попадает: его пишет в консоль `store/notices.ts`.
  */
 
-import type { Proposal, Room, SessionActivity, WorkEntry, WorkSession } from '@harnas/core';
-import { refKey, type HostNotice, type SessionRef } from '@harnas/protocol';
+import type { Proposal, Room, SessionActivity, WorkEntry, WorkSession } from '@parley/core';
+import { refKey, type HostNotice, type SessionRef } from '@parley/protocol';
 import { clampNoteText } from '../../shared/app-note.js';
-import type { AppNote, FocusTarget, HarnasBridge } from '../../shared/bridge.js';
+import type { AppNote, FocusTarget, ParleyBridge } from '../../shared/bridge.js';
 import { noticeText, S } from '../../shared/strings.js';
 import type { UiFile } from '../../shared/ui-types.js';
 import { tabId } from '../layout/ids.js';
@@ -264,7 +264,7 @@ export function isWindowActive(): boolean {
  * Возвращает отписку.
  */
 export function wireAttentionNotifications(
-  bridge: HarnasBridge,
+  bridge: ParleyBridge,
   deps: Omit<NotifyDeps, 'notify' | 'windowActive' | 'showInWindow' | 'hideInWindow'>,
 ): () => void {
   const notifier = createAttentionNotifier({

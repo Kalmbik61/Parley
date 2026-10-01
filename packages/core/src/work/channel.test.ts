@@ -10,23 +10,23 @@ import {
 } from './channel.js';
 
 let binDir = '';
-const previous = process.env['HARNAS_CLAUDE_BIN'];
+const previous = process.env['PARLEY_CLAUDE_BIN'];
 
 /** Заглушка вместо `claude`: настоящий бинарь в тестах не запускается никогда. */
 async function stub(body: string): Promise<string> {
   const file = path.join(binDir, 'claude-stub');
   await writeFile(file, body, { mode: 0o755 });
-  process.env['HARNAS_CLAUDE_BIN'] = file;
+  process.env['PARLEY_CLAUDE_BIN'] = file;
   return file;
 }
 
 beforeEach(async () => {
-  binDir = await mkdtemp(path.join(tmpdir(), 'harnas-bin-'));
+  binDir = await mkdtemp(path.join(tmpdir(), 'parley-bin-'));
 });
 
 afterEach(async () => {
-  if (previous === undefined) delete process.env['HARNAS_CLAUDE_BIN'];
-  else process.env['HARNAS_CLAUDE_BIN'] = previous;
+  if (previous === undefined) delete process.env['PARLEY_CLAUDE_BIN'];
+  else process.env['PARLEY_CLAUDE_BIN'] = previous;
   await rm(binDir, { recursive: true, force: true });
 });
 
@@ -78,7 +78,7 @@ describe('probeChannelSupport', () => {
   });
 
   it('проба не удалась — push остаётся включённым, поведение как сегодня (4.4)', async () => {
-    process.env['HARNAS_CLAUDE_BIN'] = path.join(binDir, 'нет-такого');
+    process.env['PARLEY_CLAUDE_BIN'] = path.join(binDir, 'нет-такого');
     expect(await probeChannelSupport()).toEqual({ supported: true, version: null });
   });
 });

@@ -5,7 +5,7 @@
  * `RoomView`); ведущий — `room-lead.ts`, внимание — `attention/derive.ts`.
  */
 
-import type { Room, WorkMap, WorkSession } from '@harnas/core';
+import type { Room, WorkMap, WorkSession } from '@parley/core';
 import type { WorkLayout } from '../../shared/layout-types.js';
 import { groups } from '../layout/tree.js';
 import { isoMs } from './iso-time.js';

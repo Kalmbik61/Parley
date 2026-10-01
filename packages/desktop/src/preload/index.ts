@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import type { EventMessage, EventName, MethodName, NotificationName } from '@harnas/protocol';
-import type { AppNote, CloseAnswer, FocusTarget, HarnasBridge, HostStatus } from '../shared/bridge.js';
+import type { EventMessage, EventName, MethodName, NotificationName } from '@parley/protocol';
+import type { AppNote, CloseAnswer, FocusTarget, ParleyBridge, HostStatus } from '../shared/bridge.js';
 import type { BrowserFavicon, BrowserOpenTab, PickResult } from '../shared/browser-types.js';
 import type { ActionId } from '../shared/keybindings.js';
 import type {
@@ -107,7 +107,7 @@ ipcRenderer.on('app:window-focus', (_event, focused: boolean) => {
  */
 // Реализация ниже нарочно нетипизирована по дженерику `M`: мост через IPC
 // стирает связь между методом и его параметрами/результатом на границе
-// процессов, а вызывающая сторона (`HarnasBridge`) типизирована как раз для
+// процессов, а вызывающая сторона (`ParleyBridge`) типизирована как раз для
 // того, чтобы эту связь вернуть на стороне рендерера.
 const bridge = {
   call: (method: MethodName, params: unknown) => ipcRenderer.invoke('host:call', method, params),
@@ -267,4 +267,4 @@ const bridge = {
   },
 };
 
-contextBridge.exposeInMainWorld('harnas', bridge as unknown as HarnasBridge);
+contextBridge.exposeInMainWorld('parley', bridge as unknown as ParleyBridge);

@@ -5,7 +5,7 @@
  *
  * Состав по состоянию:
  *  — не запущена (`pending`): текст — задача, мета — провайдер и путь брифа моноширинным
- *    (`Claude Code · .harnas/works/w-01/briefs/s-04.md`); кнопки нет — метода запуска ожидающей сессии в
+ *    (`Claude Code · .parley/works/w-01/briefs/s-04.md`); кнопки нет — метода запуска ожидающей сессии в
  *    протоколе нет, такие сессии поднимает `autoLaunch` хоста;
  *  — спит и закрыта: текст — резюме агента (`summary`, последняя реплика), а если его нет — задача; мета —
  *    `Claude Code · last event 3h ago` по последнему событию сессии. Resume — только там, где хост его
@@ -19,7 +19,9 @@
  * Терминал под карточкой прежний: xterm держит последний вывод, и «Restart host» показывает его над картой.
  */
 
-import { refKey, type SessionRef } from '@harnas/protocol';
+// Подпуть `names`, а не корень core: рендерер тянет из core только чистые имена без кода Node.
+import { STATE_DIR } from '@parley/core/names';
+import { refKey, type SessionRef } from '@parley/protocol';
 import { S, providerName } from '../../shared/strings.js';
 import { cn } from '../lib/cn.js';
 import { useNow } from '../lib/use-now.js';
@@ -60,7 +62,7 @@ export function NotRunningCard({ sessionRef, onResume }: NotRunningCardProps): J
   const lastEventAt = live?.activity.lastEventAt ?? session.resultAt ?? session.startedAt;
   const lastEvent = lastEventAt === null ? '' : relativeTimeAgo(lastEventAt, now);
   const detail = pending
-    ? `.harnas/works/${sessionRef.workId}/briefs/${sessionRef.sessionId}.md`
+    ? `${STATE_DIR}/works/${sessionRef.workId}/briefs/${sessionRef.sessionId}.md`
     : lastEvent === ''
       ? ''
       : S.terminal.lastEvent(lastEvent);

@@ -1,15 +1,15 @@
 /**
  * Подпись сессии в строке сайдбара и в уведомлениях: короткий номер (`s-03` →
- * `S03`) плюс ярлык. `sessionTag` перенесена из `@harnas/core`
+ * `S03`) плюс ярлык. `sessionTag` перенесена из `@parley/core`
  * (`work/thread.ts`) значением, а не импортом типа: рендерер в песочнице
  * (`contextIsolation`, `sandbox`, без `nodeIntegration` — `window.ts`) не
  * может тянуть рантайм core — тот на верхнем уровне модуля трогает `node:fs`
- * и `node:url` (`work/mcp-config.ts`). Импорт типов из `@harnas/core` стирается
+ * и `node:url` (`work/mcp-config.ts`). Импорт типов из `@parley/core` стирается
  * сборкой и безопасен, импорт значений — нет.
  */
 
-import type { WorkEntry } from '@harnas/core';
-import type { SessionRef } from '@harnas/protocol';
+import type { WorkEntry } from '@parley/core';
+import type { SessionRef } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
 
 /** Номер в id вида `s-01`, `s-12`; чужая форма id не трогается (дизайн комнаты, 4). */

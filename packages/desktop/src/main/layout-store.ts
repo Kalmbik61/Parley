@@ -1,5 +1,5 @@
 /**
- * Хранилище раскладок окна: `~/.harnas/desktop/layouts.json` (кусок 2.2 плана
+ * Хранилище раскладок окна: `~/.parley/desktop/layouts.json` (кусок 2.2 плана
  * каркаса, спека 3.4, 5.8). Формат v2 — ключ по `workKey` (по одной раскладке
  * `WorkLayout` на работу), а не общий на всё окно, как был v1: у каждой работы
  * теперь своя раскладка.
@@ -17,7 +17,7 @@
 
 import { readFile, rename } from 'node:fs/promises';
 import path from 'node:path';
-import { harnasHome } from '@harnas/core';
+import { parleyHome } from '@parley/core';
 import { createFileQueue, writeAtomic } from './atomic-file.js';
 
 export interface LayoutsFileV2 {
@@ -44,8 +44,8 @@ export class LayoutTooLargeError extends Error {
   }
 }
 
-/** `~/.harnas/desktop/layouts.json` — `harnasHome()` уже слушает `HARNAS_HOME` (`@harnas/core`). */
-export function desktopLayoutsPath(home: string = harnasHome()): string {
+/** `~/.parley/desktop/layouts.json` — `parleyHome()` (`@parley/core`) сам выбирает дом: `PARLEY_HOME`, прежний `HARNAS_HOME`, `~/.parley`, `~/.harnas`. */
+export function desktopLayoutsPath(home: string = parleyHome()): string {
   return path.join(home, 'desktop', 'layouts.json');
 }
 

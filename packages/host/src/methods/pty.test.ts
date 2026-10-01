@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { refKey } from '@harnas/protocol';
-import type { WorkEntry } from '@harnas/core';
-import type { EventName, ResponseMessage, SessionRef } from '@harnas/protocol';
+import { refKey } from '@parley/protocol';
+import type { WorkEntry } from '@parley/core';
+import type { EventName, ResponseMessage, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { Client } from '../client.js';
 import type { HostContext, RequestInfo } from '../context.js';

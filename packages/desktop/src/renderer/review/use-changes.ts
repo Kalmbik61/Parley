@@ -5,9 +5,9 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { MergeCheck, WorkEntry } from '@harnas/core';
-import { HOST_ERROR_REASONS, refKey, type SessionRef } from '@harnas/protocol';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { MergeCheck, WorkEntry } from '@parley/core';
+import { HOST_ERROR_REASONS, refKey, type SessionRef } from '@parley/protocol';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { useActivityStore } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
@@ -21,7 +21,7 @@ type Mode = 'none' | 'pending' | 'worktree' | 'project';
 
 /** Загрузка diff/mergeCheck или changes.project по сессии, всегда с patch: false; обновление по правилам 11.1, не чаще раза в 2 с. */
 export function useChanges(input: {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   entry: WorkEntry;
   sessionId: string | null;
   /** false — без mergeCheck: вкладке диффа (8.3) нужны файлы и сигналы обновления, а не проверка. По умолчанию true. */
@@ -83,7 +83,7 @@ export function useChanges(input: {
           check = await bridge.call('worktrees.mergeCheck', { ref });
         } catch (err) {
           // Фоновая проверка тело вкладки не ломает: без неё кнопка — «Слить», как при unsupported.
-          console.warn('[harnas] worktrees.mergeCheck', decodeIpcError(err));
+          console.warn('[parley] worktrees.mergeCheck', decodeIpcError(err));
         }
       }
       return { kind: 'worktree', branch, base, diff, check };
@@ -112,7 +112,7 @@ export function useChanges(input: {
           if (info.data?.['reason'] === HOST_ERROR_REASONS.worktreeMissing) {
             // Папки worktree нет (отброшен не из этого окна или до перезапуска): признак в сторе —
             // вкладки показывают своё состояние и снимают загрузку, повторов нет (раунд 8, пункт 1).
-            console.warn('[harnas] changes', info.code, info.message);
+            console.warn('[parley] changes', info.code, info.message);
             useReviewStore.getState().markDiscarded(key);
             setLoading(false);
             return;

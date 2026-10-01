@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import type { Socket } from 'node:net';
-import { PROTOCOL_VERSION } from '@harnas/protocol';
+import { PROTOCOL_VERSION } from '@parley/protocol';
 
 /**
  * Дом теста — всегда короткий путь прямо в `/tmp`: `os.tmpdir()` на macOS

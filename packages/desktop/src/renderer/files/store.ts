@@ -16,8 +16,8 @@
  */
 
 import { create } from 'zustand';
-import type { WorkEntry } from '@harnas/core';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { WorkEntry } from '@parley/core';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import type { FileRoot } from '../../shared/files-types.js';
 import type { FileRootSpec, WorkLayout } from '../../shared/layout-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
@@ -66,10 +66,10 @@ export interface FilesState {
   /** Разовые позиции курсора по `bufferKey`: их забирает `takeReveal`. */
   reveals: Record<string, { line: number; col: number }>;
   /** Первое открытие: readText → loaded, files.watch на файл. Повтор — перемонтированное тело — ничего не делает. */
-  openBuffer(bridge: HarnasBridge, workKey: string, tabId: string, root: FileRoot, path: string): void;
+  openBuffer(bridge: ParleyBridge, workKey: string, tabId: string, root: FileRoot, path: string): void;
   dispatch(key: string, event: BufferEvent): void;
   /** ⌘S и «Сохранить» вопроса закрытия: save-started, write с mtimeMs буфера (у deleted — null), затем saved, save-conflict или failed. */
-  save(bridge: HarnasBridge, workKey: string, tabId: string, options?: { overwrite?: boolean }): Promise<SaveResult>;
+  save(bridge: ParleyBridge, workKey: string, tabId: string, options?: { overwrite?: boolean }): Promise<SaveResult>;
   /** Разовая позиция курсора (строка и колонка с 1): её забирает FileBody при монтировании и при смене. */
   revealAt(workKey: string, tabId: string, line: number, col: number): void;
   takeReveal(key: string): { line: number; col: number } | null;
@@ -138,14 +138,14 @@ export const useFilesStore = create<FilesState>((set, get) => {
           if (alive()) patchModel(key, { type: 'loaded', file });
         })
         .catch((error: unknown) => {
-          console.warn('[harnas] files.readText', error);
+          console.warn('[parley] files.readText', error);
           if (alive()) patchModel(key, { type: 'failed', code: decodeIpcError(error).code });
         });
       bridge.files
         .watch(root, path)
         .then((watchId) => {
           if (!alive()) {
-            void bridge.files.unwatch(watchId).catch((error: unknown) => console.warn('[harnas] files.unwatch', error));
+            void bridge.files.unwatch(watchId).catch((error: unknown) => console.warn('[parley] files.unwatch', error));
             return;
           }
           set((state) => {
@@ -155,7 +155,7 @@ export const useFilesStore = create<FilesState>((set, get) => {
         })
         // Без слежения буфер работает, только не узнаёт о правках агента до записи: её
         // `expectedMtimeMs` всё равно не даст перетереть их молча.
-        .catch((error: unknown) => console.warn('[harnas] files.watch', error));
+        .catch((error: unknown) => console.warn('[parley] files.watch', error));
     },
 
     dispatch: (key, event) => patchModel(key, event),
@@ -188,7 +188,7 @@ export const useFilesStore = create<FilesState>((set, get) => {
           return 'conflict';
         })
         .catch((error: unknown): SaveResult => {
-          console.warn('[harnas] files.write', error);
+          console.warn('[parley] files.write', error);
           patchOwn({ type: 'failed', code: decodeIpcError(error).code });
           return 'failed';
         })
@@ -258,7 +258,7 @@ export function dirtyBufferRefs(): DirtyBufferRef[] {
  * прибавлены ждущие записи заметок (раунд fix-final-c, п. 2): закрытие ждёт и их — вопроса по ним
  * нет, `WindowCloseQuestion` сбрасывает их и отвечает.
  */
-export function bindBuffersToLayouts(bridge: HarnasBridge): () => void {
+export function bindBuffersToLayouts(bridge: ParleyBridge): () => void {
   const release = (): void => {
     const live = liveBufferKeys(useLayoutStore.getState().layouts);
     const { buffers } = useFilesStore.getState();
@@ -266,7 +266,7 @@ export function bindBuffersToLayouts(bridge: HarnasBridge): () => void {
     if (gone.length === 0) return;
     for (const key of gone) {
       const watchId = buffers[key]?.watchId ?? null;
-      if (watchId !== null) void bridge.files.unwatch(watchId).catch((error: unknown) => console.warn('[harnas] files.unwatch', error));
+      if (watchId !== null) void bridge.files.unwatch(watchId).catch((error: unknown) => console.warn('[parley] files.unwatch', error));
     }
     useFilesStore.setState((state) => {
       const next = { ...state.buffers };
@@ -295,7 +295,7 @@ export function bindBuffersToLayouts(bridge: HarnasBridge): () => void {
       })
       .catch((error: unknown) => {
         if (decodeIpcError(error).code === 'not_found') useFilesStore.getState().dispatch(key, { type: 'disk-deleted' });
-        else console.warn('[harnas] files.readText', error);
+        else console.warn('[parley] files.readText', error);
       })
       .finally(() => {
         if (reloading.get(key) === target) reloading.delete(key);

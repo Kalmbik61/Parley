@@ -1,7 +1,8 @@
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { WorksSnapshot } from '@harnas/protocol';
+import { STATE_DIRS } from '@parley/core';
+import type { WorksSnapshot } from '@parley/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FileRoot } from '../shared/files-types.js';
 import { workKey } from '../shared/work-keys.js';
@@ -87,7 +88,7 @@ const KEY = (): string => workKey(project, WORK);
 const PROJECT_ROOT = (): FileRoot => ({ workKey: KEY(), spec: { kind: 'project' } });
 
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), 'harnas-roots-'));
+  dir = await mkdtemp(path.join(tmpdir(), 'parley-roots-'));
   project = path.join(dir, 'proj');
   await mkdir(path.join(project, 'src'), { recursive: true });
   await writeFile(path.join(project, 'src', 'a.ts'), 'a');
@@ -156,11 +157,21 @@ describe('запись и .git (тест 3)', () => {
     await expect(registry.resolve(root, '.git', 'write')).rejects.toBeInstanceOf(FilesDeniedError);
   });
 
-  it('.harnas проекта — запись отказ (спека 10.8, п. 4)', async () => {
-    await mkdir(path.join(project, '.harnas'));
+  it.each(STATE_DIRS)('%s проекта — запись отказ, любой регистр (спека 10.8, п. 4; оба имени каталога состояния)', async (stateName) => {
+    await mkdir(path.join(project, stateName));
     const { registry } = await ready();
-    await expect(registry.resolve(PROJECT_ROOT(), '.harnas/works.json', 'write')).rejects.toBeInstanceOf(FilesDeniedError);
-    await expect(registry.resolve(PROJECT_ROOT(), '.Harnas/x', 'write')).rejects.toBeInstanceOf(FilesDeniedError);
+    const cased = `.${stateName.charAt(1).toUpperCase()}${stateName.slice(2)}`;
+    await expect(registry.resolve(PROJECT_ROOT(), `${stateName}/works.json`, 'write')).rejects.toBeInstanceOf(FilesDeniedError);
+    await expect(registry.resolve(PROJECT_ROOT(), `${cased}/x`, 'write')).rejects.toBeInstanceOf(FilesDeniedError);
+  });
+
+  it('каталога состояния в проекте ещё нет — запись в него всё равно отказ: лексическая проверка до диска', async () => {
+    const { registry } = await ready();
+    for (const stateName of STATE_DIRS) {
+      await expect(registry.resolve(PROJECT_ROOT(), `${stateName}/works/w-0001/map.json`, 'write')).rejects.toBeInstanceOf(
+        FilesDeniedError,
+      );
+    }
   });
 
   it('новый файл src/new.ts при существующем родителе — путь', async () => {
@@ -173,7 +184,7 @@ describe('запись и .git (тест 3)', () => {
 
 describe('/tmp и /private/tmp (тест 4)', () => {
   it('корень в /tmp/x: resolve отдаёт realpath, locate(/tmp/x/a) находит корень', async () => {
-    const tmpRoot = await mkdtemp('/tmp/harnas-roots-tmp-');
+    const tmpRoot = await mkdtemp('/tmp/parley-roots-tmp-');
     try {
       await writeFile(path.join(tmpRoot, 'a'), '');
       const source = fakeSource(snapshot([{ projectPath: tmpRoot, workId: WORK }]));

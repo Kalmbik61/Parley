@@ -13,7 +13,7 @@
 
 import { useLayoutEffect, useMemo, useRef } from 'react';
 import { create } from 'zustand';
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry } from '@parley/core';
 import { sameWorkAttention, workAttention, type WorkAttention } from '../attention/derive.js';
 import { workKey } from '../lib/tree-order.js';
 import { useActivityStore } from '../store/activity.js';

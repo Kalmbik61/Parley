@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, IpcMain, Session, WebContents } from 'electron';
-import type { WorksSnapshot } from '@harnas/protocol';
+import type { WorksSnapshot } from '@parley/protocol';
 import { decodeIpcError, type IpcErrorInfo } from '../shared/ipc-error.js';
 import { workKey } from '../shared/work-keys.js';
 import { DEFAULT_UI } from '../shared/ui-types.js';
@@ -719,7 +719,7 @@ describe('app:open-path и app:show-in-finder (кусок 5.2, тест 13)', ()
   let roots: RootsRegistry;
 
   beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), 'harnas-openpath-'));
+    dir = await mkdtemp(path.join(tmpdir(), 'parley-openpath-'));
     project = path.join(dir, 'home', 'proj');
     other = path.join(dir, 'other');
     await mkdir(project, { recursive: true });

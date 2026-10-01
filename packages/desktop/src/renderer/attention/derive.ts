@@ -7,8 +7,8 @@
  * поэтому считается здесь своими функциями, а не через `recipientsOf`.
  */
 
-import type { Message, Room, SessionActivity, WorkEntry, WorkMap, WorkSession } from '@harnas/core';
-import { refKey } from '@harnas/protocol';
+import type { Message, Room, SessionActivity, WorkEntry, WorkMap, WorkSession } from '@parley/core';
+import { refKey } from '@parley/protocol';
 import { isoMs } from '../lib/iso-time.js';
 import { workKey } from '../lib/tree-order.js';
 import type { ActivityEntry } from '../store/activity.js';

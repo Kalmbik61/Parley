@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Socket } from 'node:net';
-import { encodeLine } from '@harnas/protocol';
-import type { EventMessage, ResponseMessage } from '@harnas/protocol';
+import { encodeLine } from '@parley/protocol';
+import type { EventMessage, ResponseMessage } from '@parley/protocol';
 
 /** Буфер записи сокета выше этого порога — клиент, скорее всего, не успевает читать. */
 const HIGH_WATER_MARK = 4 * 1024 * 1024;

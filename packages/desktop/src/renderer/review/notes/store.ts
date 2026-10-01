@@ -5,7 +5,7 @@
  */
 import { toast } from 'sonner';
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import type { HarnasBridge } from '../../../shared/bridge.js';
+import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { NOTES_LIMITS, type DiffNote } from '../../../shared/notes-types.js';
 import { S } from '../../../shared/strings.js';
@@ -33,7 +33,7 @@ export interface NotesState {
    * corruptedTo — тост S.notes.corrupted. Отказ чтения — тост S.notes.loadFailed, запись сессии
    * запрещена до удачного чтения; следующий вызов (открытие вкладки диффа) читает снова.
    */
-  load(bridge: HarnasBridge, workKey: string, sessionId: string): Promise<void>;
+  load(bridge: ParleyBridge, workKey: string, sessionId: string): Promise<void>;
   /** Новая заметка: id — 8 hex, createdAt и updatedAt — сейчас, anchor.text — строка startLine. */
   add(
     workKey: string,
@@ -52,7 +52,7 @@ export interface NotesState {
 /** Загрузки по notesKey: повторный `load` получает тот же промис и мост не зовёт. */
 const loads = new Map<string, Promise<void>>();
 /** Мост записи по notesKey — тот, через который сессию загрузили. */
-const bridges = new Map<string, HarnasBridge>();
+const bridges = new Map<string, ParleyBridge>();
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 /**
  * Сессии, чей файл заметок прочитан: писать можно только их. Пока чтение идёт, запись ждёт его конца
@@ -105,7 +105,7 @@ export const useNotesStore: UseBoundStore<StoreApi<NotesState>> = create<NotesSt
         // попробует снова; причина — в консоль. id — один на сессию: частые отказы заменяют тост,
         // а не копят стопку (добавка контролёра 8.4b).
         toast.error(S.notes.saveFailed, { id: `notes-save:${key}` });
-        console.warn('[harnas] notes save failed', decodeIpcError(error).message);
+        console.warn('[parley] notes save failed', decodeIpcError(error).message);
         return false;
       },
     );
@@ -174,7 +174,7 @@ export const useNotesStore: UseBoundStore<StoreApi<NotesState>> = create<NotesSt
           // сессии останутся только в окне; причина — в консоль. Чтение повторяется на каждом открытии
           // вкладки диффа — id на сессию не даёт копиться тостам (добавка контролёра 8.4b).
           toast.error(S.notes.loadFailed, { id: `notes-load:${key}` });
-          console.warn('[harnas] notes load failed', decodeIpcError(error).message);
+          console.warn('[parley] notes load failed', decodeIpcError(error).message);
           return false;
         }
         readable.add(key);

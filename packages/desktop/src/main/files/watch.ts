@@ -3,13 +3,14 @@
  * папку: замену через `rename` (так пишут редакторы и агенты) видит только папка. Дерево —
  * один `fs.watch(root, { recursive: true })` на открытый корень, общий для всех подписок.
  * События не спамят: файл — дроссель 100 мс и только при смене состояния, дерево — пачка
- * раз в 300 мс без `.git/`, `.harnas/` и `node_modules/` (хуки пишут журнал в `.harnas/` на
- * каждом шаге агента). Сбой запуска — `files:watch-failed`, сбой по ходу — только консоль.
+ * раз в 300 мс без `.git/`, каталога состояния (`.parley/`, прежний `.harnas/`) и `node_modules/`
+ * (хуки пишут журнал в каталог состояния на каждом шаге агента). Сбой запуска — `files:watch-failed`, сбой по ходу — только консоль.
  */
 import { randomUUID } from 'node:crypto';
 import { watch as fsWatch } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
+import { STATE_DIRS } from '@parley/core';
 import type { FileChangedEvent, FileRoot, TreeChangedEvent } from '../../shared/files-types.js';
 import { rootKey } from '../../shared/work-keys.js';
 import { HostError } from '../host-connection.js';
@@ -20,7 +21,7 @@ export const FILE_THROTTLE_MS = 100;
 /** Пачка событий дерева (спека 10.1). */
 export const TREE_BATCH_MS = 300;
 /** Звенья, изменения под которыми дерево не видит. */
-const TREE_IGNORED = new Set(['.git', '.harnas', 'node_modules']);
+const TREE_IGNORED = new Set(['.git', ...STATE_DIRS, 'node_modules']);
 
 /** Куда уходят события подписки: окно-владелец. */
 export interface WatchSink {
@@ -83,7 +84,7 @@ async function stateOf(real: string): Promise<FileState | null> {
     return { deleted: false, mtimeMs: info.mtimeMs, size: info.size, ino: info.ino };
   } catch (error) {
     if (codeOf(error) === 'ENOENT') return { deleted: true, mtimeMs: 0, size: 0, ino: 0 };
-    console.warn(`[harnas] files: watch stat failed: ${real}`, error);
+    console.warn(`[parley] files: watch stat failed: ${real}`, error);
     return null;
   }
 }
@@ -103,10 +104,10 @@ export function createFileWatch(options: FileWatchOptions): FileWatch {
     try {
       watcher = watchFs(target, { recursive, persistent: false }, (_event, filename) => listener(filename));
     } catch (error) {
-      console.warn(`[harnas] files: watch failed: ${target}`, error);
+      console.warn(`[parley] files: watch failed: ${target}`, error);
       throw new HostError('files:watch-failed', `cannot watch ${target}: ${codeOf(error)}`);
     }
-    watcher.on('error', (error) => console.warn(`[harnas] files: watch error: ${target}`, error));
+    watcher.on('error', (error) => console.warn(`[parley] files: watch error: ${target}`, error));
     return watcher;
   };
 

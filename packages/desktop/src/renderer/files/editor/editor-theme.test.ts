@@ -34,10 +34,10 @@ describe('applyTheme', () => {
     const api: ThemeApi = { defineTheme: vi.fn(), setTheme: vi.fn() };
     applyTheme(api, false, styleOf({ '--editor-surface': '#fff', '--foreground': '#0a0a0a' }));
     expect(api.defineTheme).toHaveBeenCalledWith(
-      'harnas-light',
+      'parley-light',
       expect.objectContaining({ base: 'vs', colors: expect.objectContaining({ 'editor.background': '#ffffff', 'editor.foreground': '#0a0a0a' }) }),
     );
-    expect(api.setTheme).toHaveBeenCalledWith('harnas-light');
+    expect(api.setTheme).toHaveBeenCalledWith('parley-light');
   });
 
   it.each([
@@ -53,15 +53,15 @@ describe('applyTheme', () => {
     };
     expect(() => applyTheme(api, dark, styleOf({}))).not.toThrow();
     expect(api.setTheme).toHaveBeenCalledWith(builtin);
-    expect(warn).toHaveBeenCalledWith('[harnas] monaco theme', expect.any(Error));
+    expect(warn).toHaveBeenCalledWith('[parley] monaco theme', expect.any(Error));
   });
 
   it('сбой setTheme своей темы — встроенная', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const setTheme = vi.fn((name: string) => {
-      if (name === 'harnas-dark') throw new Error('bad theme');
+      if (name === 'parley-dark') throw new Error('bad theme');
     });
     applyTheme({ defineTheme: vi.fn(), setTheme }, true, styleOf({}));
-    expect(setTheme.mock.calls.map(([name]) => name)).toEqual(['harnas-dark', 'vs-dark']);
+    expect(setTheme.mock.calls.map(([name]) => name)).toEqual(['parley-dark', 'vs-dark']);
   });
 });

@@ -1,4 +1,4 @@
-import type { ErrorCode } from '@harnas/protocol';
+import type { ErrorCode } from '@parley/protocol';
 
 /**
  * Ошибка обработчика метода с явным кодом протокола. Без неё `server.ts`

@@ -22,10 +22,10 @@ const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
 const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
 
-type Harnas = { harnas: { call: (method: string, params: unknown) => Promise<unknown> } };
+type Parley = { parley: { call: (method: string, params: unknown) => Promise<unknown> } };
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
-  return window.evaluate(([m, p]) => (globalThis as unknown as Harnas).harnas.call(m, p), [method, params] as const) as Promise<T>;
+  return window.evaluate(([m, p]) => (globalThis as unknown as Parley).parley.call(m, p), [method, params] as const) as Promise<T>;
 }
 
 /** Текст экрана терминала: строки DOM-рендера подряд. */
@@ -53,7 +53,7 @@ test.describe('перезапуск хоста из палитры (раунд m
 
   test('Restart host → «S01 isn\'t running», ввод — тост; Resume → новый вывод в той же вкладке', async () => {
     test.setTimeout(90_000);
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     app = await electron.launch({ args: [mainEntry], env });
     const window = await app.firstWindow();
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 1400, height: 900 }));

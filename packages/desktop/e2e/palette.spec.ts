@@ -10,7 +10,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * Палитра ⌘J (кусок 6.3, тесты 10–12; спека 9, строка 6 таблицы 14.3) и перенос ревью 6.2-B
  * (Important 1): выбор строки сессии отдаёт фокус её терминалу. ⌘J, ⌘2 и Enter — настоящие
  * нажатия Playwright: их ловит обработчик окна в рендерере (`keys/handler.ts`), а не меню.
- * Настоящий `claude` не запускается — `HARNAS_CLAUDE_BIN` указывает на эхо-заглушку.
+ * Настоящий `claude` не запускается — `PARLEY_CLAUDE_BIN` указывает на эхо-заглушку.
  */
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -27,7 +27,7 @@ const options = (window: Page) => window.locator('[data-palette] [role="option"]
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
-    ([m, p]) => (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas.call(m, p),
+    ([m, p]) => (globalThis as unknown as { parley: { call: (m: string, p: unknown) => Promise<unknown> } }).parley.call(m, p),
     [method, params] as const,
   ) as Promise<T>;
 }
@@ -80,7 +80,7 @@ test.describe('палитра ⌘J: поиск, выбор, ⌘1–9, форма
   });
 
   async function launch(): Promise<Page> {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     app = await electron.launch({ args: [mainEntry], env });
     const window = await app.firstWindow();
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 1400, height: 900 }));

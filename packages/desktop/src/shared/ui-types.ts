@@ -1,8 +1,8 @@
 /**
- * Формат `~/.harnas/desktop/ui.json` — состояние окна, не относящееся к
+ * Формат `~/.parley/desktop/ui.json` — состояние окна, не относящееся к
  * конкретной работе: активная работа, сайдбары, уведомления и прочее (спека
  * 3.4, кусок 1.1 плана окна). Хранилище — `main/ui-store.ts`; мост —
- * `HarnasBridge.app.loadUi`/`saveUi`/`setAppearance`.
+ * `ParleyBridge.app.loadUi`/`saveUi`/`setAppearance`.
  */
 
 export type Appearance = 'system' | 'dark' | 'light';

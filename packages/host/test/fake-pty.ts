@@ -1,5 +1,5 @@
-import { refKey } from '@harnas/protocol';
-import type { SessionRef } from '@harnas/protocol';
+import { refKey } from '@parley/protocol';
+import type { SessionRef } from '@parley/protocol';
 import type { PtyHandle, PtyManager } from '../src/pty/pty-manager.js';
 
 /**

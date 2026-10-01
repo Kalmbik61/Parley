@@ -4,13 +4,13 @@
  * — состояние zustand вокруг них: какая работа активна, что уже гидрировано с
  * диска, что накопилось до гидрации, история переходов и MRU вкладок.
  * Загрузка/сохранение на диск и слежение за составом снимка работ — отдельно,
- * в `layout/persistence.ts`: этот стор ничего не знает про `HarnasBridge`.
+ * в `layout/persistence.ts`: этот стор ничего не знает про `ParleyBridge`.
  */
 
 import { create } from 'zustand';
 import type { StoreApi, UseBoundStore } from 'zustand';
-import type { WorkEntry } from '@harnas/core';
-import type { SessionRef } from '@harnas/protocol';
+import type { WorkEntry } from '@parley/core';
+import type { SessionRef } from '@parley/protocol';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { closeTab, emptyLayout, findTab, focusTab, groups } from './tree.js';

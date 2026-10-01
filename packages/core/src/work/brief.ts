@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { isMember, liveLead } from './rooms.js';
+import { ensureStateDir } from './state-dir.js';
 import { displayStatus } from './status-view.js';
 import { workPaths } from './store.js';
 import { decisionsOf, participantLabel, sessionMention, threadOf } from './thread.js';
@@ -175,6 +176,9 @@ export async function writeBrief(
   const text = buildBrief(map, sessionId);
   const paths = workPaths(projectPath, map.work.id);
   const file = path.join(paths.briefs, `${sessionId}.md`);
+  // Каталог состояния заводит `ensureStateDir`: новый `.parley` получает свой `.gitignore` (R5), даже если
+  // его стёрли вместе с работой, а бриф пишут заново.
+  await ensureStateDir(projectPath);
   await mkdir(paths.briefs, { recursive: true });
   await writeFile(file, text, 'utf8');
   return file;

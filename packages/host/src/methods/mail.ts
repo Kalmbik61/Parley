@@ -5,7 +5,7 @@
  * подключения: окно копит id пачкой и шлёт одним вызовом.
  */
 
-import { markHumanRead } from '@harnas/core';
+import { markHumanRead } from '@parley/core';
 import type { Handler } from '../context.js';
 import { notFoundOnGone, requireWork } from './works.js';
 

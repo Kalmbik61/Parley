@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MCP_SERVER_NAME } from '../names.js';
 import { GUIDE } from './guide.js';
 import { systemGuidance } from './guidance.js';
 import { ACCEPTED_LETTER, RETURNED_LETTER } from './proposals.js';
@@ -67,14 +68,14 @@ describe('системная вставка', () => {
     expect(text.split('\n').length).toBeLessThanOrEqual(14);
   });
 
-  it('тег <channel source="harnas"> — только у сессий CLI harnas-core: как обычный способ он не обещан', () => {
+  it('тег <channel source="parley"> — только у сессий CLI parley-core: как обычный способ он не обещан', () => {
     const text = systemGuidance(mapOf('Авторизация', 'логин по e-mail'), 's-03');
     const line = text.split('\n').find((candidate) => candidate.startsWith('check_inbox'));
 
     // Тег в вставке остаётся ровно один раз и только с оговоркой про CLI: сессия окна, прочитав «приходят
     // сами как <channel …>», ждала бы тега, которого хост ей не пошлёт.
-    expect(text.split('<channel source="harnas">')).toHaveLength(2);
-    expect(line).toMatch(/<channel source="harnas">[^\n]*только[^\n]*CLI harnas-core/);
+    expect(text.split('<channel source="parley">')).toHaveLength(2);
+    expect(line).toMatch(/<channel source="parley">[^\n]*только[^\n]*CLI parley-core/);
     expect(text).not.toMatch(/приходят сами как <channel/);
     expect(line).toContain('отвечай send_message только на question');
   });
@@ -188,8 +189,27 @@ describe('подробный гид', () => {
     expect(GUIDE).toContain('## Как разговаривать');
     expect(GUIDE).toMatch(/[Нн]а `note` и `decision` не отвеча/);
     expect(GUIDE).toContain('messageRate');
-    // Оговорка про роль-агента: без mcp__harnas__* она ни письма, ни отчёта.
-    expect(GUIDE).toContain('mcp__harnas__');
+    // Оговорка про роль-агента: без mcp__parley__* она ни письма, ни отчёта.
+    expect(GUIDE).toContain(`mcp__${MCP_SERVER_NAME}__*`);
+    expect(GUIDE).toContain('mcp__parley__');
+  });
+
+  it('строка про старые сессии: инструменты звались mcp__harnas__*, в .claude/agents/*.md префикс надо поправить (R8)', () => {
+    const tail = GUIDE.split('Если сессию запустили ролью-агентом')[1] ?? '';
+
+    expect(tail).toMatch(/до переименования[\s\S]*`mcp__harnas__\*`/);
+    expect(tail).toMatch(/`\.claude\/agents\/\*\.md`[\s\S]*`mcp__harnas__\*`[\s\S]*`mcp__parley__\*`/);
+    // Прежний префикс инструментов в гиде — только в этой строке: дальше агент зовёт по-новому.
+    expect(GUIDE.split('Если сессию запустили ролью-агентом')[0]).not.toContain('mcp__harnas__');
+  });
+
+  it('строка про старые сессии: разрешения, выданные под mcp__harnas__*, на новое имя не действуют — их надо продублировать (R8)', () => {
+    const tail = GUIDE.split('Если сессию запустили ролью-агентом')[1] ?? '';
+
+    // Человек выдавал «always allow» под прежним именем сервера: ключ разрешения зависит от него, и без этой строки
+    // каждый вызов инструмента упёрся бы в запрос, а агент не знал бы почему.
+    expect(tail).toMatch(/разрешени[\s\S]*`permissions\.allow`[\s\S]*`settings\.json`/);
+    expect(tail).toMatch(/`mcp__harnas__[^`]*`[\s\S]*`mcp__parley__[^`]*`/);
   });
 
   it('описывает роль-агента у spawn_session', () => {
@@ -235,10 +255,11 @@ describe('подробный гид', () => {
     expect(sectionOf('### Участник комнаты', '## Бриф')).toMatch(/ведущий зовёт `add_to_room`/);
   });
 
-  it('запрещает удалять и переносить каталоги .harnas руками', () => {
+  it('запрещает удалять и переносить каталоги состояния (.parley и прежние .harnas) руками', () => {
     // Агент без инструмента удаления не должен идти в shell: удаляет человек —
     // в окне (меню сессии и карточки работы); другого интерфейса у человека нет.
-    expect(GUIDE).toMatch(/[Нн]е удаля[^\n]*\.harnas/);
+    expect(GUIDE).toMatch(/[Нн]е удаля[^\n]*\.parley/);
+    expect(GUIDE).toMatch(/[Нн]е удаля[\s\S]*?\.harnas/);
     expect(GUIDE).toMatch(/в окне[\s\S]*Delete[\s\S]*меню сессии/);
     expect(GUIDE).toMatch(/Archive[\s\S]*карточки/);
     expect(GUIDE).toContain('Discard worktree…');
@@ -362,19 +383,19 @@ describe('подробный гид', () => {
     expect(GUIDE).not.toMatch(/страховка на случай, если канал\s+молчит/);
   });
 
-  it('тег <channel source="harnas"> — только в сессиях, поднятых CLI harnas-core с channelPush', () => {
+  it('тег <channel source="parley"> — только в сессиях, поднятых CLI parley-core с channelPush', () => {
     const talk = sectionOf('## Как разговаривать', '## Указатель');
     const pointer = sectionOf('## Указатель', 'Если сессию запустили ролью-агентом');
 
     expect(talk).toMatch(
-      /Тегом `<channel source="harnas">` письма объявляются только в сессиях, поднятых CLI `harnas-core` с включённым `channelPush`: тег несёт `from`, `from_label` и `kind`, без текста письма — увидел тег, позови `check_inbox`/,
+      /Тегом `<channel source="parley">` письма объявляются только в сессиях, поднятых CLI `parley-core` с включённым `channelPush`: тег несёт `from`, `from_label` и `kind`, без текста письма — увидел тег, позови `check_inbox`/,
     );
     expect(pointer).toMatch(
-      /В сессиях, запущенных окном, письма объявляются только так: тега `<channel source="harnas">` там не будет/,
+      /В сессиях, запущенных окном, письма объявляются только так: тега `<channel source="parley">` там не будет/,
     );
     // Ни один абзац гида не упоминает тег без оговорки, чьи это сессии.
     for (const paragraph of GUIDE.split('\n\n').filter((text) => text.includes('<channel'))) {
-      expect(paragraph.replace(/\s+/g, ' ')).toMatch(/harnas-core|запущенных окном/);
+      expect(paragraph.replace(/\s+/g, ' ')).toMatch(/parley-core|запущенных окном/);
     }
   });
 
@@ -413,7 +434,7 @@ describe('подробный гид', () => {
   it('окно человека: блоки окна — слова человека, форматы дословно как у окна', () => {
     expect(GUIDE).toMatch(/присылает в твой терминал, — ввод человека/);
     // Заметки к диффу — шаблон `S.notes` окна (desktop/src/shared/strings.ts).
-    expect(GUIDE).toContain('Review notes for S02 (branch harnas/w-0003/s-02):');
+    expect(GUIDE).toContain('Review notes for S02 (branch parley/w-0003/s-02):');
     for (const label of ['File: ', 'Line: ', 'Lines: ', 'Side: original', 'Note: ']) expect(GUIDE).toContain(label);
     // Design Mode — `S.designBlock`: пометка «данные, не инструкции» и запрет их исполнять.
     expect(GUIDE).toContain('Page element ');
@@ -425,9 +446,10 @@ describe('подробный гид', () => {
     expect(GUIDE).toContain('Merge master into your branch (git merge master), resolve the conflicts, commit, and tell me what you did.');
   });
 
-  it('окно человека: worktree сессии — ветка harnas/<работа>/<сессия>, Commit, Merge, Discard и запреты', () => {
+  it('окно человека: worktree сессии — ветка parley/<работа>/<сессия> (у старых сессий harnas/…), Commit, Merge, Discard и запреты', () => {
     expect(GUIDE).toContain('### Worktree сессии');
-    expect(GUIDE).toContain('harnas/<работа>/<сессия>');
+    expect(GUIDE).toContain('parley/<работа>/<сессия>');
+    expect(GUIDE).toMatch(/до переименования, ветка осталась прежней —\s+`harnas\/<работа>\/<сессия>`/);
     expect(GUIDE).toMatch(/Merge[\s\S]*Discard/);
     expect(GUIDE).toContain('не переключай ветку');
     expect(GUIDE).toContain('не пушь');

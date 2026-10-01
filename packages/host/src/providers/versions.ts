@@ -4,12 +4,12 @@
  *
  * Проба ничего не читает у агента и не ходит в API: `--version` печатает номер сборки
  * локально и выходит, файлов учётных данных бинарь при этом не открывает. Запускается то же,
- * что стоит у человека в PATH (или подмена `HARNAS_<КОМАНДА>_BIN`, как при запуске сессии),
+ * что стоит у человека в PATH (или подмена `PARLEY_<КОМАНДА>_BIN` (или прежняя `HARNAS_<КОМАНДА>_BIN`), как при запуске сессии),
  * и никогда — без таймаута.
  */
 
 import { execFile } from 'node:child_process';
-import { commandBinary, loadProviders, parseVersion } from '@harnas/core';
+import { commandBinary, loadProviders, parseVersion } from '@parley/core';
 import type { Log } from '../log.js';
 
 /** Одна проба: версия команды, `null` — узнать не удалось (нет бинаря, таймаут, чужой ответ). */

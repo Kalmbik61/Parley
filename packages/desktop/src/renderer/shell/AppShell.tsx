@@ -54,9 +54,9 @@ import {
 } from '@dnd-kit/core';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
-import type { WorkSession } from '@harnas/core';
-import { refKey, type SessionRef } from '@harnas/protocol';
-import type { HarnasBridge, HostStatus } from '../../shared/bridge.js';
+import type { WorkSession } from '@parley/core';
+import { refKey, type SessionRef } from '@parley/protocol';
+import type { ParleyBridge, HostStatus } from '../../shared/bridge.js';
 import type { ActionId } from '../../shared/keybindings.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
@@ -163,7 +163,7 @@ function openSessionTab(ref: SessionRef): void {
  * ли его — `resolveSidebarDrop`; нельзя — ничего не происходит (цель и не подсвечивалась). Метода нет у хоста — тоже ничего:
  * окно прячет функцию, если метода нет (спека Orca-UI 3.2).
  */
-function dropOnSidebar(bridge: HarnasBridge, key: string, sessionId: string, target: SidebarTarget): void {
+function dropOnSidebar(bridge: ParleyBridge, key: string, sessionId: string, target: SidebarTarget): void {
   const entry = useWorksStore.getState().entries.find((candidate) => workKey(candidate.projectPath, candidate.map.work.id) === key);
   if (entry === undefined) return;
   const drop = resolveSidebarDrop(entry.map, sessionId, target);
@@ -179,7 +179,7 @@ function dropOnSidebar(bridge: HarnasBridge, key: string, sessionId: string, tar
     .call('rooms.addMember', { ...work, roomId: drop.roomId, sessionId: drop.sessionId })
     .then(() => useUiStore.getState().setRoomExpanded(roomKey(key, drop.roomId), true))
     .catch((error: unknown) => {
-      console.warn('[harnas] rooms.addMember', error);
+      console.warn('[parley] rooms.addMember', error);
       toast(errorText(decodeIpcError(error).code, S.sidebar.addToRoomAction));
     });
 }
@@ -204,7 +204,7 @@ const OVERLAY_MODIFIERS = [centerOverlayOnCursor];
 interface WorkContainerProps {
   workKey: string;
   active: boolean;
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   fontFamily: string;
   fontSize: number;
   sendDeps: SendWithToastDeps; // карточке Design Mode через слой поверхностей (9.3b)
@@ -253,7 +253,7 @@ const WorkContainer = memo(function WorkContainer({ workKey, active, bridge, fon
  * persistence ждёт: по устаревшему порядку сосед выбрался бы среди пропавших работ.
  * Подписка — на массив ключей с поверхностным сравнением.
  */
-const LayoutPersistence = memo(function LayoutPersistence({ bridge }: { bridge: HarnasBridge }): null {
+const LayoutPersistence = memo(function LayoutPersistence({ bridge }: { bridge: ParleyBridge }): null {
   const entries = useWorksStore((state) => state.entries);
   const worksLoaded = useWorksStore((state) => !state.loading);
   const uiLoaded = useUiStore((state) => state.uiLoaded);
@@ -268,7 +268,7 @@ const LayoutPersistence = memo(function LayoutPersistence({ bridge }: { bridge: 
 });
 
 export interface AppShellProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   /** Строка статуса; `App` рендерит `AppShell` только при `'connected'`. */
   status: HostStatus;
   /** Из `settings.get` в `App`, до ответа — запасные; идут в центр. */
@@ -696,14 +696,14 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
         onToggleWake={() => {
           // Отказ — тостом, как у действия палитры wake.toggle, а не необработанным отказом промиса.
           toggleWake(bridge).catch((error: unknown) => {
-            console.error('[harnas] toggle wake failed', error);
+            console.error('[parley] toggle wake failed', error);
             toast(errorText(decodeIpcError(error).code, S.errors.actions.toggleAutoWake));
           });
         }}
         onRestartHost={() => {
           // app.restartHost — только после «Restart» подтверждения; отказ — тостом, не отказом промиса.
           bridge.app.restartHost().catch((error: unknown) => {
-            console.error('[harnas] restart host failed', error);
+            console.error('[parley] restart host failed', error);
             toast(errorText(decodeIpcError(error).code, S.errors.actions.restartHost));
           });
         }}

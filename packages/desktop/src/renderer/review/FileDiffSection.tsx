@@ -18,7 +18,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { DiffEditor, type DiffOnMount } from '@monaco-editor/react';
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry } from '@parley/core';
 import type { DiffFile, FileRoot } from '../../shared/files-types.js';
 import type { DiffNote } from '../../shared/notes-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
@@ -88,7 +88,7 @@ function modelPath(seq: number, side: string, path: string): string {
   const dot = name.lastIndexOf('.');
   const extension = dot > 0 ? name.slice(dot + 1) : '';
   const safe = /^[A-Za-z0-9._-]+$/.test(name) ? name : /^[A-Za-z0-9]+$/.test(extension) ? `file.${extension}` : 'file';
-  return `file:///harnas/diff/${seq}/${side}/${safe}`;
+  return `file:///parley/diff/${seq}/${side}/${safe}`;
 }
 
 /** Новый текст стороны без перемонтирования: прокрутка — прежняя (спека 11.3). */
@@ -216,7 +216,7 @@ function FileDiffSectionImpl(props: FileDiffSectionProps): JSX.Element {
       (error: unknown) => {
         const info = decodeIpcError(error);
         // Сообщение main — только в консоль: человеку — свой английский текст по коду.
-        console.warn('[harnas] diff: load sides', target.path, info.code, info.message);
+        console.warn('[parley] diff: load sides', target.path, info.code, info.message);
         if (alive) setLoaded({ version, error: errorText(info.code, S.errors.actions.loadDiff) });
       },
     );

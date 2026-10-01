@@ -19,7 +19,7 @@ const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
-    ([m, p]) => (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas.call(m, p),
+    ([m, p]) => (globalThis as unknown as { parley: { call: (m: string, p: unknown) => Promise<unknown> } }).parley.call(m, p),
     [method, params] as const,
   ) as Promise<T>;
 }
@@ -35,12 +35,12 @@ async function reload(electronApp: ElectronApplication): Promise<void> {
 /** Метка на странице: пропала — страница перезагрузилась. */
 async function markPage(window: Page): Promise<void> {
   await window.evaluate(() => {
-    (globalThis as { __harnasPageMark?: boolean }).__harnasPageMark = true;
+    (globalThis as { __parleyPageMark?: boolean }).__parleyPageMark = true;
   });
 }
 
 async function samePage(window: Page): Promise<boolean> {
-  return window.evaluate(() => (globalThis as { __harnasPageMark?: boolean }).__harnasPageMark === true);
+  return window.evaluate(() => (globalThis as { __parleyPageMark?: boolean }).__parleyPageMark === true);
 }
 
 test.describe('перезагрузка окна', () => {
@@ -67,7 +67,7 @@ test.describe('перезагрузка окна', () => {
 
   test('без правок — перезагрузка, окно снова на связи; с правкой — вопрос: Cancel оставляет, Don\'t save перезагружает', async () => {
     test.setTimeout(60_000);
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();

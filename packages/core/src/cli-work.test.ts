@@ -37,10 +37,10 @@ async function cli(...args: string[]): Promise<Result> {
 async function cliEnv(extra: NodeJS.ProcessEnv, ...args: string[]): Promise<Result> {
   const env = {
     ...process.env,
-    HARNAS_HOME: home,
-    HARNAS_CLAUDE_BIN: stub,
-    HARNAS_CODEX_BIN: stub,
-    HARNAS_GLM_BIN: '',
+    PARLEY_HOME: home,
+    PARLEY_CLAUDE_BIN: stub,
+    PARLEY_CODEX_BIN: stub,
+    PARLEY_GLM_BIN: '',
     ...extra,
   };
   try {
@@ -68,9 +68,9 @@ const newWork = (title: string): Promise<Record<string, unknown>> =>
   ok('work', 'new', '--title', title, '--goal', 'Цель', '--cwd', project);
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
-  binDir = await mkdtemp(path.join(tmpdir(), 'harnas-bin-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
+  binDir = await mkdtemp(path.join(tmpdir(), 'parley-bin-'));
   stub = path.join(binDir, 'agent-stub');
   // `--version` заглушка отвечает свежей сборкой: перед флагом канала CLI
   // пробует версию (разговор агентов, 4.4).
@@ -83,7 +83,7 @@ afterEach(async () => {
   await rm(binDir, { recursive: true, force: true });
 });
 
-describe('harnas-core work prune', () => {
+describe('parley-core work prune', () => {
   it('печатает снятые записи и оставляет в индексе только работы с картой', async () => {
     await newWork('Живая');
     await newWork('Снесённая');
@@ -96,7 +96,7 @@ describe('harnas-core work prune', () => {
   }, 60_000);
 });
 
-describe('harnas-core work new', () => {
+describe('parley-core work new', () => {
   it('создаёт работу, карту на диске и запись в глобальном индексе', async () => {
     const created = await newWork('Авторизация');
     const map = created['map'] as WorkMap;
@@ -121,7 +121,7 @@ describe('harnas-core work new', () => {
   }, 60_000);
 });
 
-describe('harnas-core work list', () => {
+describe('parley-core work list', () => {
   it('печатает работы индекса, archived — только с --all', async () => {
     await newWork('Авторизация');
     await newWork('Платежи');
@@ -139,7 +139,7 @@ describe('harnas-core work list', () => {
   }, 60_000);
 });
 
-describe('harnas-core work map', () => {
+describe('parley-core work map', () => {
   it('находит работу по глобальному индексу без --cwd', async () => {
     await newWork('Авторизация');
     const printed = await ok('work', 'map', '--work', 'w-0001');
@@ -155,7 +155,7 @@ describe('harnas-core work map', () => {
   }, 60_000);
 });
 
-describe('harnas-core work session new', () => {
+describe('parley-core work session new', () => {
   it('создаёт pending, бриф, MCP-конфиг и печатает готовую команду', async () => {
     await newWork('Авторизация');
     const printed = await ok(
@@ -178,7 +178,10 @@ describe('harnas-core work session new', () => {
     expect(printed['command']).toBe('claude');
     // Процесс поднимает пользователь: запуск помечается как cli (дизайн TUI v2, 5.4).
     expect(printed['launchedBy']).toBe('cli');
+    // Оба имени (R3): новые читает сервер, прежние — старые скрипты и сборки.
     expect(printed['env']).toEqual({
+      PARLEY_WORK_DIR: workPaths(project, 'w-0001').dir,
+      PARLEY_SESSION_ID: 's-01',
       HARNAS_WORK_DIR: workPaths(project, 'w-0001').dir,
       HARNAS_SESSION_ID: 's-01',
     });
@@ -233,17 +236,20 @@ describe('harnas-core work session new', () => {
       'SessionEnd',
     ]);
     expect(settings.hooks['Stop']?.[0]?.hooks[0]?.command).toBe(
-      'cat >> "$HARNAS_WORK_DIR/events/$HARNAS_SESSION_ID.jsonl" || true',
+      'cat >> "${PARLEY_WORK_DIR:-$HARNAS_WORK_DIR}/events/${PARLEY_SESSION_ID:-$HARNAS_SESSION_ID}.jsonl" || true',
     );
     expect((await stat(workPaths(project, 'w-0001').events)).isDirectory()).toBe(true);
 
     const config = JSON.parse(await readFile(printed['mcpConfig'] as string, 'utf8')) as {
       mcpServers: Record<string, { command: string; env: Record<string, string> }>;
     };
-    expect(config.mcpServers['harnas']?.env).toEqual({
+    expect(config.mcpServers['parley']?.env).toEqual({
+      PARLEY_WORK_DIR: workPaths(project, 'w-0001').dir,
+      PARLEY_SESSION_ID: 's-01',
       HARNAS_WORK_DIR: workPaths(project, 'w-0001').dir,
       HARNAS_SESSION_ID: 's-01',
       // Push включён по умолчанию: сторож входящих будит сессию звонком (4.4).
+      PARLEY_CHANNEL: '1',
       HARNAS_CHANNEL: '1',
     });
   }, 60_000);
@@ -274,11 +280,11 @@ describe('harnas-core work session new', () => {
     // значение флага канала.
     expect(args).not.toContain(brief);
     expect(args[args.indexOf('--append-system-prompt') + 1]).toBe(guidance);
-    expect(args.at(-1)).toBe('server:harnas');
+    expect(args.at(-1)).toBe('server:parley');
     expect((await readMapFile('w-0001')).sessions[0]?.task).toBe('');
   }, 60_000);
 
-  it('печатает команду с флагом канала, а конфиг MCP — с HARNAS_CHANNEL', async () => {
+  it('печатает команду с флагом канала, а конфиг MCP — с PARLEY_CHANNEL', async () => {
     // Сессия из терминала получает push наравне с сессией панели (4.4).
     await newWork('Авторизация');
     const printed = await ok(
@@ -294,17 +300,18 @@ describe('harnas-core work session new', () => {
     );
 
     const args = printed['args'] as string[];
-    expect(args[args.indexOf('--dangerously-load-development-channels') + 1]).toBe('server:harnas');
+    expect(args[args.indexOf('--dangerously-load-development-channels') + 1]).toBe('server:parley');
     const config = JSON.parse(await readFile(printed['mcpConfig'] as string, 'utf8')) as {
       mcpServers: Record<string, { env: Record<string, string> }>;
     };
-    expect(config.mcpServers['harnas']?.env['HARNAS_CHANNEL']).toBe('1');
+    expect(config.mcpServers['parley']?.env['PARLEY_CHANNEL']).toBe('1');
+    expect(config.mcpServers['parley']?.env['HARNAS_CHANNEL']).toBe('1');
   }, 60_000);
 
-  it('с HARNAS_CHANNEL_PUSH=0 ни флага, ни переменной: разговор живёт по pull', async () => {
+  it('с PARLEY_CHANNEL_PUSH=0 ни флага, ни переменной: разговор живёт по pull', async () => {
     await newWork('Авторизация');
     const result = await cliEnv(
-      { HARNAS_CHANNEL_PUSH: '0' },
+      { PARLEY_CHANNEL_PUSH: '0' },
       'work',
       'session',
       'new',
@@ -322,7 +329,8 @@ describe('harnas-core work session new', () => {
     const config = JSON.parse(await readFile(printed['mcpConfig'] as string, 'utf8')) as {
       mcpServers: Record<string, { env: Record<string, string> }>;
     };
-    expect(config.mcpServers['harnas']?.env).not.toHaveProperty('HARNAS_CHANNEL');
+    expect(config.mcpServers['parley']?.env).not.toHaveProperty('PARLEY_CHANNEL');
+    expect(config.mcpServers['parley']?.env).not.toHaveProperty('HARNAS_CHANNEL');
   }, 60_000);
 
   it('чужому провайдеру версия не пробуется: про push в stderr ни слова', async () => {
@@ -333,7 +341,7 @@ describe('harnas-core work session new', () => {
     const codexStub = path.join(binDir, 'codex-stub');
     await writeFile(codexStub, '#!/bin/sh\necho "codex-cli 0.5.0"\nexit 0\n', { mode: 0o755 });
     const result = await cliEnv(
-      { HARNAS_CODEX_BIN: codexStub },
+      { PARLEY_CODEX_BIN: codexStub },
       'work',
       'session',
       'new',
@@ -440,12 +448,12 @@ describe('harnas-core work session new', () => {
     expect(printed['mcpConfig']).toBeNull();
     // Хуки — возможность Claude Code: чужому провайдеру файл настроек не пишется.
     expect(printed['settings']).toBeNull();
-    expect(args[args.indexOf('-c') + 1]).toContain('mcp_servers.harnas=');
+    expect(args[args.indexOf('-c') + 1]).toContain('mcp_servers.parley=');
     expect((await readMapFile('w-0001')).sessions[0]?.providerSessionId).toBeNull();
   }, 60_000);
 
-  it('codex: напечатанная команда — та же, что запускает окно: HARNAS_* в env сервера и -c notify', async () => {
-    // Codex режет серверу MCP окружение: дом харнесса (`HARNAS_HOME`) должен лежать в таблице `env` явно, а конец
+  it('codex: напечатанная команда — та же, что запускает окно: PARLEY_* в env сервера и -c notify', async () => {
+    // Codex режет серверу MCP окружение: дом харнесса (`PARLEY_HOME`) должен лежать в таблице `env` явно, а конец
     // хода приходит скриптом `notify`, которому нужен каталог `events/` работы.
     await newWork('Авторизация');
     const printed = await ok(
@@ -465,7 +473,7 @@ describe('harnas-core work session new', () => {
     const args = printed['args'] as string[];
     const overrides = args.flatMap((arg, index) => (args[index - 1] === '-c' ? [arg] : []));
     expect(overrides.map((override) => override.split('=')[0])).toEqual([
-      'mcp_servers.harnas',
+      'mcp_servers.parley',
       'tui.terminal_title',
       'tui.notifications',
       'tui.notification_method',
@@ -473,7 +481,8 @@ describe('harnas-core work session new', () => {
       'notify',
     ]);
     const mcp = overrides[0] as string;
-    expect(mcp).toContain(`HARNAS_HOME=${JSON.stringify(home)}`);
+    expect(mcp).toContain(`PARLEY_HOME=${JSON.stringify(home)}`);
+    expect(mcp).toContain('PARLEY_SESSION_ID="s-01"');
     expect(mcp).toContain('HARNAS_SESSION_ID="s-01"');
     expect(overrides.at(-1)).toMatch(/^notify=\[".+node.*",".*codex-notify-bin\.js"\]$/);
     expect((await stat(workPaths(project, 'w-0001').events)).isDirectory()).toBe(true);

@@ -4,48 +4,71 @@ import {
   appendFile,
   lstat,
   mkdir,
+  readdir,
   readFile,
   readlink,
   realpath,
   rename,
   rm,
+  rmdir,
   stat,
   symlink,
+  unlink,
   writeFile,
 } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { SKILL_MD, SKILL_NAME } from './skill.js';
+import { LEGACY_SKILL_NAME, SKILL_NAME } from '../names.js';
+import { SKILL_MD } from './skill.js';
+import { ensureStateDir, stateDir } from './state-dir.js';
 
 const run = promisify(execFile);
 
 /**
- * Установка скилла `harnas` в проект и в worktree сессий (образец — Orca, `agent-skill-provider-paths`;
+ * Установка скилла `parley` в проект и в worktree сессий (образец — Orca, `agent-skill-provider-paths`;
  * пути и симлинки — открытая документация провайдеров).
  *
- * - Канонная копия — `<корень>/.agents/skills/harnas/SKILL.md`: Codex читает `.agents/skills` от текущего
+ * - Канонная копия — `<корень>/.agents/skills/parley/SKILL.md`: Codex читает `.agents/skills` от текущего
  *   каталога до корня репозитория (developers.openai.com/codex/skills, «Build skills»).
- * - Для Claude Code — относительный симлинк `<корень>/.claude/skills/harnas` → `../../.agents/skills/harnas`:
+ * - Для Claude Code — относительный симлинк `<корень>/.claude/skills/parley` → `../../.agents/skills/parley`:
  *   документация Claude Code («Extend Claude with skills») разрешает папке навыка быть симлинком, а
  *   `.agents/skills` он не читает. Симлинк нельзя (файловая система, права) — копия, и это записано в учёте.
  * - Корни — папка проекта и worktree сессии: Codex и Claude Code ищут навыки только до корня своей
  *   рабочей копии, а worktree — другая копия. В `~/.claude`, `~/.codex` и `~/.agents` ничего не пишется.
- * - Учёт своего — `<проект>/.harnas/skills-receipt.json`: путь и его содержимое. Что в учёте и не тронуто
+ * - Учёт своего — `skills-receipt.json` в каталоге состояния проекта (`stateDir`: `.parley/`, а у проекта со
+ *   старым `.harnas/` — он): путь и его содержимое. Что в учёте и не тронуто
  *   человеком — своё, его обновляют; что уже есть, а в учёте нет, — чужое, к нему не прикасаются.
  * - От git всё скрыто строками в `info/exclude` общего каталога репозитория: файлы не попадают ни в
  *   `git status`, ни в «Commit all» окна.
+ * - Прежняя установка под именем `harnas` (R8) убирается по тому же учёту в корнях этого вызова: папка — если
+ *   в ней лежит один `SKILL.md` с записанным хешем, ссылка — если она ведёт туда, куда вела. Правленное,
+ *   заменённое и чужое не трогается и остаётся в учёте как было. Строки `info/exclude` под прежней меткой
+ *   уходят, когда прежнего в учёте не осталось.
  *
  * Функция быстрая и идемпотентная: повторный вызов читает учёт и пару файлов и ничего не пишет.
  */
 
 const SKILL_DIR = ['.agents', 'skills', SKILL_NAME] as const;
 const ALIAS_DIR = ['.claude', 'skills', SKILL_NAME] as const;
+/** Те же места под прежним именем скилла: так прежняя установка лежит на диске и записана в учёте. */
+const LEGACY_SKILL_DIR = ['.agents', 'skills', LEGACY_SKILL_NAME] as const;
+const LEGACY_ALIAS_DIR = ['.claude', 'skills', LEGACY_SKILL_NAME] as const;
 /** Куда ведёт симлинк, если считать от каталога `.claude/skills`. */
 const ALIAS_TARGET = path.join('..', '..', ...SKILL_DIR);
 const SKILL_FILE = 'SKILL.md';
+/** Finder кладёт его в любую папку, которую человек открывал: правкой навыка это не считается. */
+const FINDER_FILE = '.DS_Store';
 /** Комментарий к своим строкам в `info/exclude`: человек, открывший файл, узнает, откуда они. */
-const EXCLUDE_MARKER = '# harnas: скилл агентов, ставится харнессом';
+const EXCLUDE_MARKER = `# ${SKILL_NAME}: скилл агентов, ставится Parley`;
+/** Метка строк, которые харнесс ставил под прежним именем: по ней они узнаются и убираются. */
+const LEGACY_EXCLUDE_MARKER = `# ${LEGACY_SKILL_NAME}: скилл агентов, ставится харнессом`;
+/** Ключи учёта, оканчивающиеся прежними путями: запись про прежнюю установку. */
+const LEGACY_SUFFIXES = [LEGACY_SKILL_DIR, LEGACY_ALIAS_DIR].map((segments) =>
+  path.join(path.sep, ...segments),
+);
+const isLegacyKey = (target: string): boolean =>
+  LEGACY_SUFFIXES.some((suffix) => target.endsWith(suffix));
 
 /**
  * Что записано в учёте про свой путь. `dir` и `copy` держат хеш `SKILL.md`, который харнесс положил: по
@@ -78,10 +101,12 @@ export interface SkillInstallResult {
   skipped: SkillSkip[];
   /** Что создано или обновлено в этот вызов; пусто — всё уже было в порядке. */
   written: string[];
+  /** Прежняя установка под именем `harnas`, убранная в этот вызов; пусто — убирать было нечего или не дозволено. */
+  removed: string[];
 }
 
 export interface SkillInstallOptions {
-  /** Папка проекта: её корень получает скилл, и в её `.harnas/` лежит учёт. */
+  /** Папка проекта: её корень получает скилл, и в её каталоге состояния лежит учёт. */
   projectPath: string;
   /** Worktree сессии, если он уже есть на диске; его корень получает скилл тоже. */
   worktreePath?: string;
@@ -156,9 +181,10 @@ async function readReceipt(file: string): Promise<Receipt> {
   return receipt;
 }
 
-async function writeReceipt(file: string, receipt: Receipt): Promise<void> {
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeAtomic(file, `${JSON.stringify(receipt, null, 2)}\n`);
+async function writeReceipt(pass: Pass): Promise<void> {
+  // Каталог состояния заводит `ensureStateDir`: новый `.parley` получает свой `.gitignore` (R5).
+  await ensureStateDir(pass.projectPath);
+  await writeAtomic(pass.receiptFile, `${JSON.stringify(pass.receipt, null, 2)}\n`);
 }
 
 /**
@@ -193,8 +219,9 @@ async function isAgentHome(root: string): Promise<boolean> {
   });
 }
 
-/** Состояние одного прохода: учёт с его файлом, что он изменился, и накопленный результат. */
+/** Состояние одного прохода: проект, учёт с его файлом, что он изменился, и накопленный результат. */
 interface Pass {
+  projectPath: string;
   receipt: Receipt;
   receiptFile: string;
   dirty: boolean;
@@ -215,7 +242,7 @@ function record(pass: Pass, target: string, entry: ReceiptEntry): void {
  */
 async function claim(pass: Pass, target: string, entry: ReceiptEntry): Promise<void> {
   pass.receipt.entries[target] = entry;
-  await writeReceipt(pass.receiptFile, pass.receipt);
+  await writeReceipt(pass);
 }
 
 function skip(pass: Pass, target: string, reason: SkillSkipReason): void {
@@ -329,6 +356,57 @@ async function installInRoot(pass: Pass, root: string): Promise<void> {
 }
 
 /**
+ * Убирает то, что харнесс положил под прежним именем, если оно на месте и не тронуто: ссылка — если ведёт
+ * туда, куда вела, папка — если в ней нет ничего, кроме `SKILL.md` с записанным хешем (пустую свою папку
+ * тоже, `SKILL.md` могли убрать руками). `false` — не то, что записано, или правленное: на диске ничего не
+ * меняется.
+ */
+async function removeOwn(target: string, entry: ReceiptEntry): Promise<boolean> {
+  const info = await lstatOrNull(target);
+  if (info === null) return false;
+  if (entry.kind === 'symlink') {
+    if (!info.isSymbolicLink() || (await readlink(target)) !== entry.target) return false;
+    await unlink(target);
+    return true;
+  }
+  if (!info.isDirectory()) return false;
+  const names = (await readdir(target)).filter((name) => name !== FINDER_FILE);
+  if (names.length > 1 || (names.length === 1 && names[0] !== SKILL_FILE)) return false;
+  if (names.length === 1) {
+    const file = path.join(target, SKILL_FILE);
+    const current = await readOrNull(file);
+    if (current === null || sha256(current) !== entry.sha256) return false;
+    await unlink(file);
+  }
+  await rm(path.join(target, FINDER_FILE), { force: true });
+  await rmdir(target);
+  return true;
+}
+
+/**
+ * Прежняя установка в одном корне: сначала ссылка, потом папка, на которую она вела. Запись учёта уходит
+ * вместе с путём. Работает только с записями учёта и только через каталоги, по которым дозволено писать
+ * (`parentsAreSafe`: `.claude` — ссылка в `~/.claude` пути не открывает). Сбой при уборке — не повод лишать
+ * сессию нового скилла: запись остаётся, следующий запуск попробует снова.
+ */
+async function retireLegacy(pass: Pass, root: string): Promise<void> {
+  for (const segments of [LEGACY_ALIAS_DIR, LEGACY_SKILL_DIR]) {
+    const target = path.join(root, ...segments);
+    const entry = pass.receipt.entries[target];
+    if (entry === undefined) continue;
+    try {
+      if (!(await parentsAreSafe(root, segments))) continue;
+      if (!(await removeOwn(target, entry))) continue;
+    } catch {
+      continue;
+    }
+    delete pass.receipt.entries[target];
+    pass.dirty = true;
+    pass.result.removed.push(target);
+  }
+}
+
+/**
  * Где лежит общий каталог репозитория и как называется корень относительно вершины рабочей копии.
  * `null` — не репозиторий или git не отвечает: скрывать нечего. Пробы зовут git с `core.fsmonitor=false`
  * (как остальные вызовы git в core): программа из конфигурации репозитория здесь не нужна.
@@ -396,7 +474,7 @@ function serialized<T>(key: string, task: () => Promise<T>): Promise<T> {
  * бы пропавший worktree пустой папкой.
  */
 export function installAgentSkill(options: SkillInstallOptions): Promise<SkillInstallResult> {
-  const receiptFile = path.join(options.projectPath, '.harnas', 'skills-receipt.json');
+  const receiptFile = path.join(stateDir(options.projectPath), 'skills-receipt.json');
   return serialized(receiptFile, () => installNow(options, receiptFile));
 }
 
@@ -405,10 +483,11 @@ async function installNow(
   receiptFile: string,
 ): Promise<SkillInstallResult> {
   const pass: Pass = {
+    projectPath: options.projectPath,
     receipt: await readReceipt(receiptFile),
     receiptFile,
     dirty: false,
-    result: { skipped: [], written: [] },
+    result: { skipped: [], written: [], removed: [] },
     symlink: options.symlink ?? symlink,
   };
 
@@ -425,13 +504,14 @@ async function installNow(
 
   try {
     for (const root of roots) await installInRoot(pass, root);
+    for (const root of roots) await retireLegacy(pass, root);
   } finally {
     // Учёт пишется и при сбое посреди прохода: то, что успело лечь на диск, должно остаться своим, а
     // не стать «чужим» при следующем запуске.
     await saveReceipt(pass);
   }
 
-  await hideFromGit(options.projectPath, roots, pass.receipt);
+  await hideFromGit(options.projectPath, roots, pass);
   return pass.result;
 }
 
@@ -443,23 +523,62 @@ async function saveReceipt(pass: Pass): Promise<void> {
       pass.dirty = true;
     }
   }
-  if (pass.dirty) await writeReceipt(pass.receiptFile, pass.receipt);
+  if (pass.dirty) await writeReceipt(pass);
+}
+
+/**
+ * Убирает из `info/exclude` строки прежней установки: метку и шаблоны путей под прежним именем (у проекта и у
+ * вершины рабочей копии). Без прежней метки файл не трогается: такие же строки мог завести человек сам.
+ * Файл переписывается целиком, а не дописывается, — `writeFile` идёт за ссылкой, если файл исключений у
+ * человека — симлинк на его общий список.
+ */
+async function forgetLegacyExclude(commonDir: string, prefix: string): Promise<void> {
+  const file = path.join(commonDir, 'info', 'exclude');
+  const current = (await readOrNull(file))?.toString('utf8');
+  if (current === undefined) return;
+  const lines = current.split('\n');
+  if (!lines.some((line) => line.trim() === LEGACY_EXCLUDE_MARKER)) return;
+
+  const patterns = new Set(
+    [prefix, ''].flatMap((at) =>
+      [LEGACY_SKILL_DIR, LEGACY_ALIAS_DIR].map((segments) => excludePattern(at, segments)),
+    ),
+  );
+  const kept = lines.filter((line) => {
+    const text = line.trim();
+    return text !== LEGACY_EXCLUDE_MARKER && !patterns.has(text);
+  });
+  if (kept.length < lines.length) await writeFile(file, kept.join('\n'), 'utf8');
 }
 
 /**
  * Прячет свои пути от git строками в `info/exclude`: только те, что в учёте, — чужой навык
  * (закоммиченный, например) остаётся видимым. Вершину рабочей копии и общий каталог спрашивают у git один
  * раз для проекта; корень worktree — вершина своей копии того же репозитория, отдельной пробы ему не нужно.
+ *
+ * Строки прежней установки уходят, когда её только что убрали и в учёте от неё ничего не осталось: пока
+ * что-то прежнее лежит на диске (правленное человеком, worktree, куда запуск ещё не дошёл), эти же строки
+ * прячут его от git.
  */
-async function hideFromGit(projectPath: string, roots: string[], receipt: Receipt): Promise<void> {
+async function hideFromGit(projectPath: string, roots: string[], pass: Pass): Promise<void> {
+  const { receipt } = pass;
   const oursIn = (root: string): (readonly string[])[] =>
     [SKILL_DIR, ALIAS_DIR].filter(
       (segments) => receipt.entries[path.join(root, ...segments)] !== undefined,
     );
-  if (roots.every((root) => oursIn(root).length === 0)) return;
+  const hide = roots.some((root) => oursIn(root).length > 0);
+  const forgetLegacy =
+    pass.result.removed.length > 0 && !Object.keys(receipt.entries).some(isLegacyKey);
+  if (!hide && !forgetLegacy) return;
 
   const location = await gitLocation(projectPath);
   if (location === null) return;
+  if (forgetLegacy) {
+    await forgetLegacyExclude(location.commonDir, location.prefix).catch(() => {
+      // Файл исключений — удобство: не вышло его почистить, прежние строки останутся, а скилл на месте.
+    });
+  }
+  if (!hide) return;
   // Строки у корней совпадают (вершина копии — везде `/.agents/…`), а недостающими считаются относительно
   // файла до записи: без свёртки повторов одна и та же строка легла бы дважды.
   const lines = new Set(

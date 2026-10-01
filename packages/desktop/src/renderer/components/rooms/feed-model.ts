@@ -13,8 +13,8 @@
  * ничего не написала и модель неизвестна, у участника её нет (`null`).
  */
 
-import type { MessageKind, SessionLifecycle, WorkEntry, WorkMap } from '@harnas/core';
-import { refKey } from '@harnas/protocol';
+import type { MessageKind, SessionLifecycle, WorkEntry, WorkMap } from '@parley/core';
+import { refKey } from '@parley/protocol';
 import { S, providerName } from '../../../shared/strings.js';
 import { isHumanUnread, sessionAttention, type Attention } from '../../attention/derive.js';
 import { displayStatus, dotState, stateWord, type DotState } from '../../lib/dot-state.js';

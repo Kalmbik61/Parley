@@ -5,10 +5,10 @@
  * письма или их автора, тест упадёт и напомнит поправить окно, а не оставит уведомления молча врать «collected
  * positions» после возврата.
  *
- * Лежит в `main/` по той же причине, что `agent-guide-sync.test.ts`: только процесс main тянет `@harnas/core` значением.
+ * Лежит в `main/` по той же причине, что `agent-guide-sync.test.ts`: только процесс main тянет `@parley/core` значением.
  */
 
-import { addRoom, addSession, HUMAN, resolveProposal, setProposal, type WorkMap } from '@harnas/core';
+import { addRoom, addSession, HUMAN, resolveProposal, setProposal, type WorkMap } from '@parley/core';
 import { describe, expect, it } from 'vitest';
 import { roomDecisionReturned } from '../renderer/attention/derive.js';
 

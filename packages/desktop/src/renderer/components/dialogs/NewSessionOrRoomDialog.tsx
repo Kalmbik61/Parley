@@ -51,8 +51,8 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
-import type { WorkEntry } from '@harnas/core';
-import type { HarnasBridge } from '../../../shared/bridge.js';
+import type { WorkEntry } from '@parley/core';
+import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, providerName, S } from '../../../shared/strings.js';
 import { useLayoutStore } from '../../layout/store.js';
@@ -74,7 +74,7 @@ import { radioGroupKeyDown } from './radio-keys.js';
 
 export interface NewSessionOrRoomDialogProps {
   open: boolean;
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   /** Работа, для которой открыли диалог (меню карточки, строка `+ New session or room`); `null` — активная (⌘T). */
   work: { projectPath: string; workId: string } | null;
   /** «New room»: диалог открывается сразу с двумя агентами. */
@@ -205,7 +205,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
       })
       .catch((err: unknown) => {
         if (stale) return;
-        console.warn('[harnas] providers.list', err);
+        console.warn('[parley] providers.list', err);
         setError(errorText(decodeIpcError(err).code, S.errors.actions.loadProviders));
       });
     return () => {
@@ -313,7 +313,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
           });
           done[row.key] = { status: 'started', sessionId: ref.sessionId };
         } catch (err) {
-          console.warn('[harnas] sessions.create', err);
+          console.warn('[parley] sessions.create', err);
           done[row.key] = { status: 'failed', message: errorText(decodeIpcError(err).code, S.errors.actions.createSession) };
           allStarted = false;
         }
@@ -350,7 +350,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
         openWhenListed(target.projectPath, target.workId, { kind: 'room', roomId }, pendingRef.current);
         finish();
       } catch (err) {
-        console.warn('[harnas] rooms.create', err);
+        console.warn('[parley] rooms.create', err);
         if (launch.cancelled) return;
         setError(errorText(decodeIpcError(err).code, S.errors.actions.createRoom));
       }

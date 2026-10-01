@@ -10,7 +10,7 @@
 
 import { execFile } from 'node:child_process';
 import { commandBinary } from '../providers.js';
-import { MCP_SERVER_NAME } from './mcp-config.js';
+import { MCP_SERVER_NAME } from '../names.js';
 
 /** Значение подстановки `{channel}`: чем будить сессию — именем сервера MCP (4.4). */
 export const CHANNEL_VALUE = `server:${MCP_SERVER_NAME}`;

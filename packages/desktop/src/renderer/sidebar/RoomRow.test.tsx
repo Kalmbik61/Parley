@@ -7,8 +7,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { Message, Proposal, Room, WorkEntry, WorkSession } from '@harnas/core';
-import { refKey } from '@harnas/protocol';
+import type { Message, Proposal, Room, WorkEntry, WorkSession } from '@parley/core';
+import { refKey } from '@parley/protocol';
 import type { LayoutNode, TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';

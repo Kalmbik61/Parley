@@ -5,8 +5,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
-import type { SendResult, SessionRef } from '@harnas/protocol';
-import type { WorkSession } from '@harnas/core';
+import type { SendResult, SessionRef } from '@parley/protocol';
+import type { WorkSession } from '@parley/core';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { makeSession } from '../test-utils/work-fixtures.js';

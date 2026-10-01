@@ -26,7 +26,7 @@ function sequence(...values: number[]): () => number {
 }
 
 describe('dropsDir', () => {
-  it('~/.harnas/desktop/drops от дома', () => {
+  it('~/.parley/desktop/drops от дома', () => {
     expect(dropsDir('/h')).toBe(path.join('/h', 'desktop', 'drops'));
   });
 });

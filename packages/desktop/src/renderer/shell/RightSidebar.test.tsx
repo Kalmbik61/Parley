@@ -7,7 +7,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry } from '@parley/core';
 import type { DirEntry, FileRoot, TextFile } from '../../shared/files-types.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { useFilesStore } from '../files/store.js';

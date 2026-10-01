@@ -1,18 +1,20 @@
 import { readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { envValue } from './names.js';
 
 /**
  * Переопределение корня истории Claude Code — только для тестов (раунд lane-r3, п. 1):
  * E2E окна поднимают настоящий хост, и без неё каждый читал бы всю историю человека.
  * Подмена `HOME` не годится — логин-шелл окна тогда находит другой `node`.
+ * Ключ без префикса: переменная — `PARLEY_CLAUDE_PROJECTS_DIR`, прежняя `HARNAS_CLAUDE_PROJECTS_DIR` читается тоже.
  */
-export const CLAUDE_PROJECTS_DIR_ENV = 'HARNAS_CLAUDE_PROJECTS_DIR';
+export const CLAUDE_PROJECTS_DIR_KEY = 'CLAUDE_PROJECTS_DIR';
 
 /** Корень истории Claude Code. Каталог только для чтения. */
 export function defaultRoot(): string {
-  const override = process.env[CLAUDE_PROJECTS_DIR_ENV];
-  if (override !== undefined && override !== '') return override;
+  const override = envValue(process.env, CLAUDE_PROJECTS_DIR_KEY);
+  if (override !== undefined) return override;
   return path.join(homedir(), '.claude', 'projects');
 }
 

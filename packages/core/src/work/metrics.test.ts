@@ -32,15 +32,15 @@ let codexRoot = '';
 let claudeRoot = '';
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
-  codexRoot = await mkdtemp(path.join(tmpdir(), 'harnas-codex-'));
-  claudeRoot = await mkdtemp(path.join(tmpdir(), 'harnas-claude-'));
-  process.env.HARNAS_HOME = home;
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
+  codexRoot = await mkdtemp(path.join(tmpdir(), 'parley-codex-'));
+  claudeRoot = await mkdtemp(path.join(tmpdir(), 'parley-claude-'));
+  process.env.PARLEY_HOME = home;
 });
 
 afterEach(async () => {
-  delete process.env.HARNAS_HOME;
+  delete process.env.PARLEY_HOME;
   await Promise.all(
     [home, project, codexRoot, claudeRoot].map((dir) => rm(dir, { recursive: true, force: true })),
   );
@@ -361,7 +361,7 @@ describe('finishSession', () => {
       addSession(current, { provider: 'claude', label: 'план', task: 'Составить план' });
     });
     const before = await readFile(
-      path.join(project, '.harnas', 'works', map.work.id, 'map.json'),
+      path.join(project, '.parley', 'works', map.work.id, 'map.json'),
       'utf8',
     );
 
@@ -370,7 +370,7 @@ describe('finishSession', () => {
       /недопустимый переход/,
     );
     expect(
-      await readFile(path.join(project, '.harnas', 'works', map.work.id, 'map.json'), 'utf8'),
+      await readFile(path.join(project, '.parley', 'works', map.work.id, 'map.json'), 'utf8'),
     ).toBe(before);
   });
 

@@ -5,7 +5,7 @@
  * неотправленные неустаревшие заметки вкладки; в режиме коммита её нет.
  */
 
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import { Button } from '../ui/button.js';
 import { Toggle } from '../ui/toggle.js';

@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry } from '@parley/core';
 import { ACTIONS, type ActionId } from '../../shared/keybindings.js';
 import type { WorkLayout } from '../../shared/layout-types.js';
 import { workAttention, type WorkAttention } from '../attention/derive.js';

@@ -33,8 +33,8 @@
 import { memo, useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
 import { GitBranch } from 'lucide-react';
 import { useDndContext, useDraggable } from '@dnd-kit/core';
-import type { WorkSession } from '@harnas/core';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { WorkSession } from '@parley/core';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { sessionAttention } from '../attention/derive.js';
 import { AgentIcon } from '../components/AgentIcon.js';
@@ -69,7 +69,7 @@ export interface SessionRowProps {
   /** Работа строки — для меню (кусок 3.4); строки, а не ref, чтобы `memo` не сбивался. */
   projectPath: string;
   workId: string;
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   session: WorkSession;
   depth: number;
   activity: ActivityEntry | null;

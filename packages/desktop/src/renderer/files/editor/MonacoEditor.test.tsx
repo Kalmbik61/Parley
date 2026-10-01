@@ -21,7 +21,7 @@ afterEach(cleanup);
 function props(patch: Partial<MonacoEditorProps> = {}): MonacoEditorProps {
   return {
     viewStateKey: 'k',
-    modelPath: 'harnas://buffer/k/a.ts',
+    modelPath: 'parley://buffer/k/a.ts',
     text: 'a\n',
     readOnly: false,
     fontFamily: 'Menlo',
@@ -102,9 +102,9 @@ describe('MonacoEditor', () => {
   it('⌘S и ⌥Z — у редактора в фокусе, не у последнего смонтированного; с размонтированием снимаются (fix-8.4b, п. 1)', async () => {
     const saveA = vi.fn();
     const saveB = vi.fn();
-    const a = render(<MonacoEditor {...props({ viewStateKey: 'a', modelPath: 'harnas://buffer/a/a.ts', onSave: saveA })} />);
+    const a = render(<MonacoEditor {...props({ viewStateKey: 'a', modelPath: 'parley://buffer/a/a.ts', onSave: saveA })} />);
     await waitFor(() => expect(monacoMock.editors).toHaveLength(1));
-    render(<MonacoEditor {...props({ viewStateKey: 'b', modelPath: 'harnas://buffer/b/b.ts', onSave: saveB })} />);
+    render(<MonacoEditor {...props({ viewStateKey: 'b', modelPath: 'parley://buffer/b/b.ts', onSave: saveB })} />);
     await waitFor(() => expect(monacoMock.editors).toHaveLength(2));
     const [first, second] = monacoMock.editors;
     if (first === undefined || second === undefined) throw new Error('нет редакторов');

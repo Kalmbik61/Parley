@@ -8,7 +8,8 @@ import type { Stats } from 'node:fs';
 import { lstat, realpath, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { WorksSnapshot } from '@harnas/protocol';
+import { STATE_DIRS } from '@parley/core';
+import type { WorksSnapshot } from '@parley/protocol';
 import type { FileRoot } from '../shared/files-types.js';
 import type { FileRootSpec } from '../shared/layout-types.js';
 import { rootKey, workKey as makeWorkKey } from '../shared/work-keys.js';
@@ -63,7 +64,7 @@ export interface RootPath {
 }
 
 /** Каталоги, запись в которые из окна обошла бы git и `map.lock` хоста (спека 10.8, п. 4). */
-const WRITE_FORBIDDEN_SEGMENTS = new Set(['.git', '.harnas']);
+const WRITE_FORBIDDEN_SEGMENTS = new Set(['.git', ...STATE_DIRS]);
 
 /**
  * Путь цели относительно корня, если цель внутри него (сам корень — ''), иначе null.
@@ -129,7 +130,7 @@ async function realpathOrNull(p: string): Promise<string | null> {
 
 /**
  * Можно ли каталог `dir` (realpath) сделать корнем worktree работы в `projectPath`. `worktree.path`
- * берётся из карты в `.harnas/` проекта, а её переписывает и агент без своего worktree — путь `~`
+ * берётся из карты в каталоге состояния проекта (`.parley/`, прежний `.harnas/`), а её переписывает и агент без своего worktree — путь `~`
  * иначе сделал бы корнем работы весь дом: дерево, ⌘P, поиск, запись из окна (раунд fix-final-a, M6).
  */
 export type AcceptWorktree = (projectPath: string, dir: string) => Promise<boolean>;
@@ -182,7 +183,7 @@ async function buildEntries(snapshot: WorksSnapshot, accept: AcceptWorktree | un
             const warned = `${key}\0${candidate.spec.sessionId}\0${absPath}`;
             if (!rejectedWarned.has(warned)) {
               rejectedWarned.add(warned);
-              console.warn(`[harnas] roots: worktree ${absPath} of ${key} is outside the worktree root and not registered — not a root`);
+              console.warn(`[parley] roots: worktree ${absPath} of ${key} is outside the worktree root and not registered — not a root`);
             }
             return null;
           }
@@ -263,7 +264,7 @@ export function createRootsRegistry(
       },
       (error: unknown) => {
         // Нет связи с хостом — отказ по прежним корням.
-        console.warn('[harnas] roots: works.list on miss failed', error);
+        console.warn('[parley] roots: works.list on miss failed', error);
       },
     );
     refreshing = run.finally(() => {
@@ -282,7 +283,7 @@ export function createRootsRegistry(
       },
       (error: unknown) => {
         // Отказ чтения оставляет прежние корни: следующее подключение перечитает.
-        console.warn('[harnas] roots: works.list failed', error);
+        console.warn('[parley] roots: works.list failed', error);
       },
     );
   });
@@ -336,7 +337,7 @@ export function createRootsRegistry(
       return real;
     }
 
-    // Запись: лексическая проверка `.git`/`.harnas` ещё до диска — `.GIT/config` на
+    // Запись: лексическая проверка `.git`/каталога состояния ещё до диска — `.GIT/config` на
     // регистрозависимом диске иначе упал бы с ENOENT, а не отказом.
     if (hasForbiddenSegment(lexical)) throw new FilesDeniedError(`write into protected folder: ${relPath}`);
 

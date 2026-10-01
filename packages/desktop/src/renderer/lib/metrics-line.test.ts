@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { LiveMetrics } from '@harnas/protocol';
+import type { LiveMetrics } from '@parley/protocol';
 import { formatMetricsLine } from './metrics-line.js';
 
 function metrics(patch: Partial<LiveMetrics> = {}): LiveMetrics {

@@ -6,7 +6,7 @@ import type {
   Params,
   Result,
   SessionRef,
-} from '@harnas/protocol';
+} from '@parley/protocol';
 import type { BrowserApi } from './browser-types.js';
 import type {
   DiffFile,
@@ -65,7 +65,7 @@ export type CloseAnswer = 'close' | 'cancel';
  * Единственный мост между рендерером и хостом. Рендерер не видит ни Node, ни
  * Electron напрямую — только это, отданное прелоадом через `contextBridge`.
  */
-export interface HarnasBridge {
+export interface ParleyBridge {
   call<M extends MethodName>(method: M, params: Params<M>): Promise<Result<M>>;
   notify<N extends NotificationName>(method: N, params: Params<N>): void;
   on<E extends EventName>(event: E, listener: (data: EventData<E>) => void): () => void;
@@ -146,7 +146,7 @@ export interface HarnasBridge {
      */
     pathForFile(file: File): string;
     /**
-     * Картинка буфера обмена → PNG в `~/.harnas/desktop/drops` (кусок 5.4). Источник — только
+     * Картинка буфера обмена → PNG в `~/.parley/desktop/drops` (кусок 5.4). Источник — только
      * 'clipboard'; null — картинки нет или в буфере есть текст.
      */
     saveDropImage(source: 'clipboard'): Promise<string | null>;
@@ -171,7 +171,7 @@ export interface HarnasBridge {
     stat(root: FileRoot, paths: string[]): Promise<Array<FileStat | null>>;
     /** До 200 путей; корень ищется только среди корней работы workKey; `~` раскрывает main. */
     locate(workKey: string, absPaths: string[]): Promise<Array<Located | null>>;
-    /** dir относительный, '' — корень; без `.git` и `.harnas`, только файлы, папки и симлинки. */
+    /** dir относительный, '' — корень; без `.git` и каталога состояния (`.parley`, `.harnas`), только файлы, папки и симлинки. */
     list(root: FileRoot, dir: string): Promise<DirEntry[]>;
     /** Больше 20 МБ — `files:too-large`; не обычный файл — `bad_request`. */
     readText(root: FileRoot, path: string): Promise<TextFile>;
@@ -207,6 +207,6 @@ export interface HarnasBridge {
 
 declare global {
   interface Window {
-    harnas: HarnasBridge;
+    parley: ParleyBridge;
   }
 }

@@ -10,7 +10,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import type { SessionRef } from '@harnas/protocol';
+import type { SessionRef } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
 import { sessionTag } from '../lib/participant.js';
 import { sendWithToast, type SendWithToastDeps } from '../terminal/send.js';

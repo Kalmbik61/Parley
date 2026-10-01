@@ -4,14 +4,14 @@
  */
 
 import { create } from 'zustand';
-import type { HostNotice } from '@harnas/protocol';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { HostNotice } from '@parley/protocol';
+import type { ParleyBridge } from '../../shared/bridge.js';
 
 const LIMIT = 20;
 
 export interface NoticesState {
   notices: HostNotice[];
-  init: (bridge: HarnasBridge) => () => void;
+  init: (bridge: ParleyBridge) => () => void;
 }
 
 export const useNoticesStore = create<NoticesState>((set) => ({
@@ -22,7 +22,7 @@ export const useNoticesStore = create<NoticesState>((set) => ({
       // не переводит (сквозное правило) — строка статуса берёт `noticeText`
       // по `notice.kind` (`shell/StatusBar.tsx`), сырой текст остаётся только
       // здесь, в консоли.
-      console.warn('[harnas] host.notice', notice.kind, notice.text);
+      console.warn('[parley] host.notice', notice.kind, notice.text);
       set((state) => ({ notices: [notice, ...state.notices].slice(0, LIMIT) }));
     }),
 }));

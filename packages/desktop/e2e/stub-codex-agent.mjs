@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Заглушка вместо настоящего `codex` для E2E окна (кусок 11a плана комнат Organic). Настоящий codex в
 // автотестах не запускается никогда — даже с --version: вход, лимиты подписки, недетерминизм. Подмена
-// бинаря — та же, что у claude: `HARNAS_CODEX_BIN` (`findRunnerBinary` в core), рядом со
+// бинаря — та же, что у claude: `PARLEY_CODEX_BIN` (`findRunnerBinary` в core), рядом со
 // `stub-echo-agent.mjs`.
 //
 // Ведёт себя как Codex ровно настолько, насколько на это опирается хост (спека комнат, 3.6):

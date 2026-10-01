@@ -10,6 +10,7 @@ import { randomBytes } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
 import { lstat, open, readdir, realpath, rename, stat as fsStat, unlink, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
+import { STATE_DIRS } from '@parley/core';
 import type { DirEntry, FileRoot, FileStat, Located, TextFile, WriteResult } from '../../shared/files-types.js';
 import { createFileQueue } from '../atomic-file.js';
 import { HostError } from '../host-connection.js';
@@ -24,8 +25,8 @@ export const LIMITS = { editableBytes: 2 * 1024 * 1024, openableBytes: 20 * 1024
 /** Сколько байт от начала смотрит `detectText` в поисках NUL — как git. */
 const BINARY_PROBE_BYTES = 8192;
 
-/** Имена, которые дерево не показывает в любом регистре: git и карты core (`.harnas/`) — не для правки из окна. */
-const HIDDEN_NAMES = new Set(['.git', '.harnas']);
+/** Имена, которые дерево не показывает в любом регистре: git и карты core (`.parley/` и прежний `.harnas/`) — не для правки из окна. */
+const HIDDEN_NAMES = new Set(['.git', ...STATE_DIRS]);
 
 export interface FsApi {
   stat(root: FileRoot, paths: string[]): Promise<Array<FileStat | null>>;
@@ -135,7 +136,7 @@ export async function writeAtomicPreservingMode(
   checked?: CheckedTarget,
 ): Promise<WriteResult> {
   const folder = path.dirname(absPath);
-  const suffix = `.${random()}.harnas-tmp`;
+  const suffix = `.${random()}.parley-tmp`;
   const tmp = path.join(folder, `.${fitName(path.basename(absPath), NAME_MAX_BYTES - 1 - Buffer.byteLength(suffix))}${suffix}`);
   let handle: FileHandle | null;
   try {
@@ -231,9 +232,9 @@ export function createFsApi(roots: RootsRegistry, options: FsApiOptions = {}): F
 
   /**
    * Вид цели симлинка, если её realpath внутри корня; иначе (наружу, висячая, не файл и не папка) — null.
-   * 'hidden' — цель в `.git` или `.harnas` корня: дерево прячет такую ссылку, как и сами папки, иначе
-   * `link.json → .harnas/…` вывела бы карты core в дерево (раунд fix-7.1b, п.6). Скрытие навигационное:
-   * чтение по пути остаётся, как у самой `.harnas`.
+   * 'hidden' — цель в `.git` или в каталоге состояния корня (`.parley`, `.harnas`): дерево прячет такую ссылку,
+   * как и сами папки, иначе `link.json → .parley/…` вывела бы карты core в дерево (раунд fix-7.1b, п.6).
+   * Скрытие навигационное: чтение по пути остаётся, как у самого каталога состояния.
    */
   const linkTarget = async (root: FileRoot, relPath: string): Promise<'file' | 'dir' | 'hidden' | null> => {
     try {
@@ -337,7 +338,7 @@ export function createFsApi(roots: RootsRegistry, options: FsApiOptions = {}): F
         ignored = (await options.checkIgnored?.(root, dir, found.map((entry) => entry.name))) ?? ignored;
       } catch (error) {
         // Дерево без приглушения лучше, чем дерево без папки.
-        console.warn('[harnas] files: checkIgnored failed', error);
+        console.warn('[parley] files: checkIgnored failed', error);
       }
       return found.map((entry) => (ignored.has(entry.name) ? { ...entry, ignored: true } : entry));
     },

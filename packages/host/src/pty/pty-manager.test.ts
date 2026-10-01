@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { EventData, EventName, SessionRef } from '@harnas/protocol';
+import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import type { CodexSignal } from './codex-terminal.js';
 import { createPtyManager } from './pty-manager.js';
@@ -55,7 +55,7 @@ function launch(env: NodeJS.ProcessEnv = {}, args: string[] = []): PtyLaunch {
 
 const tempFiles: string[] = [];
 async function tempFile(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'harnas-pty-test-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'parley-pty-test-'));
   tempFiles.push(dir);
   return path.join(dir, 'args.json');
 }
@@ -173,17 +173,17 @@ describe('PtyManager', () => {
     const sessionRef = ref();
     manager.start(
       sessionRef,
-      launch({ STUB_ARGS_FILE: argsFile, HARNAS_WORK_DIR: '/tmp/work', HARNAS_SESSION_ID: sessionRef.sessionId }),
+      launch({ STUB_ARGS_FILE: argsFile, PARLEY_WORK_DIR: '/tmp/work', PARLEY_SESSION_ID: sessionRef.sessionId }),
     );
 
     await waitFor(() => manager.snapshot(sessionRef).snapshot.includes('STUB READY'));
     await waitFor(() => existsSync(argsFile));
 
     const payload = JSON.parse(await readFile(argsFile, 'utf8')) as {
-      env: { HARNAS_WORK_DIR: string | null; HARNAS_SESSION_ID: string | null };
+      env: { PARLEY_WORK_DIR: string | null; PARLEY_SESSION_ID: string | null };
     };
-    expect(payload.env.HARNAS_WORK_DIR).toBe('/tmp/work');
-    expect(payload.env.HARNAS_SESSION_ID).toBe(sessionRef.sessionId);
+    expect(payload.env.PARLEY_WORK_DIR).toBe('/tmp/work');
+    expect(payload.env.PARLEY_SESSION_ID).toBe(sessionRef.sessionId);
 
     await manager.stop(sessionRef, { graceMs: 200 });
   });

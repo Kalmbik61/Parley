@@ -21,7 +21,7 @@ const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
-    ([m, p]) => (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas.call(m, p),
+    ([m, p]) => (globalThis as unknown as { parley: { call: (m: string, p: unknown) => Promise<unknown> } }).parley.call(m, p),
     [method, params] as const,
   ) as Promise<T>;
 }
@@ -64,7 +64,7 @@ test.describe('вкладка диффа на собранном окне', () =
 
   test('светлая тема: Changes → файл — дифф на Monaco, неизменённое свёрнуто; Inline, свернуть и развернуть; ни ошибок, ни CSP', async () => {
     test.setTimeout(90_000);
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();
@@ -146,7 +146,7 @@ test.describe('вкладка диффа на собранном окне', () =
 
   test('fix-live D3: 800×500 — панель вкладки диффа переносится, а не прокручивается; ни одна кнопка не обрезана', async () => {
     test.setTimeout(90_000);
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();

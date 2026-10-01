@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../test/helpers.js';
-import { processStartedAt } from '@harnas/core';
+import { processStartedAt } from '@parley/core';
 import { HostAlreadyRunning, SocketPathTooLong, startHost } from './host.js';
 import type { RunningHost } from './host.js';
 import { hostPaths } from './paths.js';
@@ -48,6 +48,45 @@ describe('startHost', () => {
     expect(tokenStat.mode & 0o777).toBe(0o600);
     const pid = await readFile(paths.pid, 'utf8');
     expect(lockPid(pid)).toBe(process.pid);
+  });
+
+  it('дом уходит в окружение под обоими именами (R3), а на остановке окружение возвращается прежним', async () => {
+    const before = { parley: process.env.PARLEY_HOME, harnas: process.env.HARNAS_HOME };
+    delete process.env.PARLEY_HOME;
+    process.env.HARNAS_HOME = '/прежний/дом';
+    try {
+      const home = await tempTrackedHome();
+      const running = await startHost({ home });
+      hosts.push(running);
+
+      // Агенты и скрипты, которых хост запускает, наследуют его окружение: новые читают PARLEY_HOME, старые — HARNAS_HOME.
+      expect(process.env.PARLEY_HOME).toBe(home);
+      expect(process.env.HARNAS_HOME).toBe(home);
+
+      await running.context.shutdown('test');
+      await running.closed;
+      expect(process.env.PARLEY_HOME).toBeUndefined();
+      expect(process.env.HARNAS_HOME).toBe('/прежний/дом');
+    } finally {
+      for (const [name, value] of [
+        ['PARLEY_HOME', before.parley],
+        ['HARNAS_HOME', before.harnas],
+      ] as const) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
+  it('отказ второго хоста (HostAlreadyRunning) оставляет окружение первого нетронутым', async () => {
+    const home = await tempTrackedHome();
+    const running = await startHost({ home });
+    hosts.push(running);
+
+    await expect(startHost({ home })).rejects.toBeInstanceOf(HostAlreadyRunning);
+
+    expect(process.env.PARLEY_HOME).toBe(home);
+    expect(process.env.HARNAS_HOME).toBe(home);
   });
 
   it('второй startHost с тем же домом — HostAlreadyRunning, первый продолжает отвечать', async () => {
@@ -246,7 +285,7 @@ describe('процесс main.ts', () => {
       const paths = hostPaths(home);
 
       const first = spawn(process.execPath, ['--import', tsxLoader, mainScript], {
-        env: { ...process.env, HARNAS_HOME: home },
+        env: { ...process.env, PARLEY_HOME: home },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
@@ -254,7 +293,7 @@ describe('процесс main.ts', () => {
         await waitForFile(paths.pid, 10_000);
 
         const second = spawn(process.execPath, ['--import', tsxLoader, mainScript], {
-          env: { ...process.env, HARNAS_HOME: home },
+          env: { ...process.env, PARLEY_HOME: home },
           stdio: ['ignore', 'pipe', 'pipe'],
         });
         const [secondExit] = (await once(second, 'exit')) as [number | null];
@@ -284,7 +323,7 @@ describe('битый works-index.json на старте (lane-r5, п. 1)', () =>
       await writeFile(path.join(home, 'works-index.json'), '{ битый');
 
       const child = spawn(process.execPath, ['--import', tsxLoader, mainScript], {
-        env: { ...process.env, HARNAS_HOME: home },
+        env: { ...process.env, PARLEY_HOME: home },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       try {
@@ -330,7 +369,7 @@ describe('два процесса main.ts разом (lane-r4, п. 2)', () => {
       const paths = hostPaths(home);
       const start = () =>
         spawn(process.execPath, ['--import', tsxLoader, mainScript], {
-          env: { ...process.env, HARNAS_HOME: home },
+          env: { ...process.env, PARLEY_HOME: home },
           stdio: ['ignore', 'pipe', 'pipe'],
         });
       const children = [start(), start()];

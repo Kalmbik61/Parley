@@ -10,7 +10,7 @@
  * запрещён.
  */
 
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry } from '@parley/core';
 import type { PickResult } from '../../shared/browser-types.js';
 import { S } from '../../shared/strings.js';
 import { focusedSessionOf, useLayoutStore } from '../layout/store.js';
@@ -39,7 +39,7 @@ export function DesignModeCard({ workKey, entry, result, sendDeps, onPickAgain }
   };
 
   const copy = (): void => {
-    navigator.clipboard.writeText(designBlock(result)).catch((error: unknown) => console.warn('[harnas] clipboard', error));
+    navigator.clipboard.writeText(designBlock(result)).catch((error: unknown) => console.warn('[parley] clipboard', error));
   };
 
   return (

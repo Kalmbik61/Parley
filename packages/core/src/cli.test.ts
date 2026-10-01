@@ -24,7 +24,7 @@ async function cli(...args: string[]): Promise<{ stdout: string; stderr: string;
   }
 }
 
-describe('harnas-core CLI', () => {
+describe('parley-core CLI', () => {
   it('index печатает в stdout только JSON', async () => {
     const { stdout, code } = await cli('index', '--root', FIXTURES);
     expect(code).toBe(0);
@@ -59,7 +59,7 @@ describe('harnas-core CLI', () => {
   }, 60_000);
 });
 
-describe('harnas-core schema', () => {
+describe('parley-core schema', () => {
   it('отчёт по схеме печатается в stdout как JSON', async () => {
     const { stdout, code } = await cli('schema', '--root', FIXTURES);
     expect(code).toBe(0);

@@ -9,7 +9,7 @@
  */
 
 import { create } from 'zustand';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { applyDarkClass } from '../theme/appearance.js';
 import { DEFAULT_UI, normalizeUi, type Appearance, type UiFile } from '../../shared/ui-types.js';
 
@@ -79,7 +79,7 @@ export interface UiState {
   dialogs: DialogsState;
   /**
    * Сессии, чей терминал сейчас виден (активная вкладка своей группы,
-   * `@harnas/protocol#refKey`) — уведомления считают видимой именно такую
+   * `@parley/protocol#refKey`) — уведомления считают видимой именно такую
    * сессию. Видимых терминалов может быть несколько, по одному на группу.
    * Пишет только `terminal/TerminalSurface.tsx` (кусок 2.5).
    */
@@ -141,7 +141,7 @@ export interface UiState {
   closeRestartHostDialog: () => void;
   toggleShowArchived: () => void;
   setRoomExpanded: (key: string, expanded: boolean) => void;
-  toggleWake: (bridge: HarnasBridge) => Promise<void>;
+  toggleWake: (bridge: ParleyBridge) => Promise<void>;
 
   /**
    * Единственный путь записи `ui.json` из рендерера (кроме `setAppearance`
@@ -170,17 +170,17 @@ export interface UiState {
    * нужен, а передавать его через каждый вызов от каждой кнопки заголовка и
    * диалога было бы тем же самым, только многословнее.
    */
-  init: (bridge: HarnasBridge) => () => void;
+  init: (bridge: ParleyBridge) => () => void;
 }
 
 export const useUiStore = create<UiState>((set, get) => {
   // Не часть реактивного состояния — тот же приём, что `closeGuard` в
   // `layout/store.ts`: разовая ссылка на мост, а не данные, за которыми
   // должны следить подписки. Ставится в `init`, живёт весь жизненный цикл
-  // окна (`window.harnas` не меняется), поэтому сбрасывать её на отписку
+  // окна (`window.parley` не меняется), поэтому сбрасывать её на отписку
   // не нужно — переподключение хоста эту ссылку не трогает (запись
   // `ui.json` идёт в main-процесс напрямую, а не через хост).
-  let bridgeRef: HarnasBridge | null = null;
+  let bridgeRef: ParleyBridge | null = null;
 
   return {
     // `matchMedia` не определён в jsdom (тесты рендерера) — как и `document`

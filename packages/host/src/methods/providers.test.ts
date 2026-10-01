@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { addSession, createWork, updateMap, workPaths } from '@harnas/core';
+import { addSession, createWork, updateMap, workPaths } from '@parley/core';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
@@ -193,13 +193,13 @@ describe('providers.list: модели, усилие и версия CLI (диз
   });
 
   it('available: команда есть в PATH или подменена оверрайдом — как и прежде', async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), 'harnas-providers-bin-'));
+    const dir = await mkdtemp(path.join(tmpdir(), 'parley-providers-bin-'));
     const file = path.join(dir, 'claude-stub');
     await writeFile(file, '#!/bin/sh\n', 'utf8');
     await chmod(file, 0o755);
-    process.env['HARNAS_CLAUDE_BIN'] = file;
-    process.env['HARNAS_CODEX_BIN'] = path.join(dir, 'нет-такого');
-    extraEnv.push('HARNAS_CLAUDE_BIN', 'HARNAS_CODEX_BIN');
+    process.env['PARLEY_CLAUDE_BIN'] = file;
+    process.env['PARLEY_CODEX_BIN'] = path.join(dir, 'нет-такого');
+    extraEnv.push('PARLEY_CLAUDE_BIN', 'PARLEY_CODEX_BIN');
 
     const providers = await list(await boot());
     expect(byId(providers, 'claude').available).toBe(true);
@@ -253,9 +253,9 @@ describe('providers.list: лимиты подписок и событие provid
 
   /** Работа с сессиями claude и glm в новом проекте; возвращает каталог работы. */
   async function prepareWork(home: string): Promise<{ workDir: string; claude: string; glm: string }> {
-    const project = await mkdtemp(path.join(tmpdir(), 'harnas-providers-limits-'));
+    const project = await mkdtemp(path.join(tmpdir(), 'parley-providers-limits-'));
     projects.push(project);
-    process.env['HARNAS_HOME'] = home;
+    process.env['PARLEY_HOME'] = home;
     try {
       const created = await createWork(project, { title: 'Лимиты' });
       const map = await updateMap(project, created.work.id, (draft) => {
@@ -265,7 +265,7 @@ describe('providers.list: лимиты подписок и событие provid
       const [claude, glm] = map.sessions.map((session) => session.id);
       return { workDir: workPaths(project, created.work.id).dir, claude: claude as string, glm: glm as string };
     } finally {
-      delete process.env['HARNAS_HOME'];
+      delete process.env['PARLEY_HOME'];
     }
   }
 

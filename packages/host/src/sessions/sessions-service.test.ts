@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,9 +21,9 @@ import {
   transitionSession,
   updateMap,
   workPaths,
-} from '@harnas/core';
-import type { WorkEntry, WorktreeInfo } from '@harnas/core';
-import type { EventData, EventName, SessionRef } from '@harnas/protocol';
+} from '@parley/core';
+import type { WorkEntry, WorktreeInfo } from '@parley/core';
+import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import { createPtyManager } from '../pty/pty-manager.js';
@@ -37,7 +38,7 @@ const runGit = promisify(execFile);
 /** Репозиторий с одним коммитом на ветке `main` — общая точка отсчёта тестов worktree. */
 async function initGitProject(dir: string): Promise<void> {
   await runGit('git', ['init', '-b', 'main', dir]);
-  await runGit('git', ['-C', dir, 'config', 'user.email', 'тест@harnas']);
+  await runGit('git', ['-C', dir, 'config', 'user.email', 'тест@parley']);
   await runGit('git', ['-C', dir, 'config', 'user.name', 'тест']);
   await writeFile(path.join(dir, 'README.md'), 'старт\n', 'utf8');
   await runGit('git', ['-C', dir, 'add', 'README.md']);
@@ -104,11 +105,11 @@ function setEnv(key: string, value: string): void {
 }
 
 beforeEach(async () => {
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-sessions-project-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-sessions-project-'));
   broadcasts = [];
   // Настоящий бинарь в автотестах не запускается никогда — заглушка стоит
   // под именем claude через тот же оверрайд, что и в проде (`findRunnerBinary`).
-  setEnv('HARNAS_CLAUDE_BIN', STUB);
+  setEnv('PARLEY_CLAUDE_BIN', STUB);
 });
 
 afterEach(async () => {
@@ -120,19 +121,25 @@ afterEach(async () => {
 });
 
 async function tempArgsFile(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'harnas-sessions-args-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'parley-sessions-args-'));
   return path.join(dir, 'args.json');
 }
 
 /** Корень worktree отдельно от `project`: `<root>/<проект>-<хеш6>/…` не должен жить внутри самого репозитория. */
 async function tempWorktreeRoot(): Promise<string> {
-  return mkdtemp(path.join(tmpdir(), 'harnas-sessions-worktrees-'));
+  return mkdtemp(path.join(tmpdir(), 'parley-sessions-worktrees-'));
 }
 
 interface StubArgs {
   argv: string[];
   cwd: string;
-  env: { HARNAS_WORK_DIR: string | null; HARNAS_SESSION_ID: string | null; CLAUDE_CODE_SESSION_ID: string | null };
+  env: {
+    PARLEY_WORK_DIR: string | null;
+    PARLEY_SESSION_ID: string | null;
+    HARNAS_WORK_DIR: string | null;
+    HARNAS_SESSION_ID: string | null;
+    CLAUDE_CODE_SESSION_ID: string | null;
+  };
 }
 
 async function readArgs(file: string): Promise<StubArgs> {
@@ -174,7 +181,7 @@ describe('create() + launch(): argv и окружение процесса', () 
     await service.stop(ref);
   });
 
-  it('окружение процесса: HARNAS_WORK_DIR/HARNAS_SESSION_ID есть, CLAUDE_CODE_SESSION_ID — нет, даже если задан у хоста', async () => {
+  it('окружение процесса: оба набора PARLEY_* и HARNAS_* (R3) есть, CLAUDE_CODE_SESSION_ID — нет, даже если задан у хоста', async () => {
     const work = await createWork(project, { title: 'Работа', goal: '' });
     const argsFile = await tempArgsFile();
     setEnv('STUB_ARGS_FILE', argsFile);
@@ -193,6 +200,9 @@ describe('create() + launch(): argv и окружение процесса', () 
     });
 
     const args = await readArgs(argsFile);
+    expect(args.env.PARLEY_WORK_DIR).toBe(workPaths(project, work.work.id).dir);
+    expect(args.env.PARLEY_SESSION_ID).toBe(ref.sessionId);
+    // Прежние имена — для старых скриптов и сборок: значения те же.
     expect(args.env.HARNAS_WORK_DIR).toBe(workPaths(project, work.work.id).dir);
     expect(args.env.HARNAS_SESSION_ID).toBe(ref.sessionId);
     expect(args.env.CLAUDE_CODE_SESSION_ID).toBeNull();
@@ -302,7 +312,7 @@ describe('create(): модель и усилие из диалога (дизай
   });
 
   it('codex: --model и -c model_reasoning_effort в аргументах', async () => {
-    setEnv('HARNAS_CODEX_BIN', STUB);
+    setEnv('PARLEY_CODEX_BIN', STUB);
     const argv = await launched('codex', { model: 'gpt-6.1-sol', effort: 'medium' });
 
     expect(argv[argv.indexOf('--model') + 1]).toBe('gpt-6.1-sol');
@@ -310,7 +320,7 @@ describe('create(): модель и усилие из диалога (дизай
   });
 
   it('codex: итоговые флаги запуска — свои настройки харнесса, без обходов', async () => {
-    setEnv('HARNAS_CODEX_BIN', STUB);
+    setEnv('PARLEY_CODEX_BIN', STUB);
     const argv = await launched('codex', {});
 
     // Не считая бинаря и скрипта заглушки: то, что получил бы настоящий codex.
@@ -318,7 +328,7 @@ describe('create(): модель и усилие из диалога (дизай
     expect(args.slice(0, 3)).toEqual(['--no-daemon', '-a', 'on-request']);
     const overrides = args.flatMap((arg, index) => (args[index - 1] === '-c' ? [arg] : []));
     expect(overrides.map((override) => override.split('=')[0])).toEqual([
-      'mcp_servers.harnas',
+      'mcp_servers.parley',
       'tui.terminal_title',
       'tui.notifications',
       'tui.notification_method',
@@ -329,7 +339,7 @@ describe('create(): модель и усилие из диалога (дизай
   });
 
   it('процесс стартует с provider из карты: codex — для разбора терминала, claude — без него', async () => {
-    setEnv('HARNAS_CODEX_BIN', STUB);
+    setEnv('PARLEY_CODEX_BIN', STUB);
     setEnv('STUB_ARGS_FILE', await tempArgsFile());
     const work = await createWork(project, { title: 'Работа', goal: '' });
     const pty = createPtyManager(fakeHost());
@@ -364,9 +374,9 @@ describe('create(): модель и усилие из диалога (дизай
     const work = await createWork(project, { title: 'Работа', goal: '' });
     const argsFile = await tempArgsFile();
     setEnv('STUB_ARGS_FILE', argsFile);
-    setEnv('HARNAS_CODEX_BIN', STUB);
+    setEnv('PARLEY_CODEX_BIN', STUB);
     const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
-    const worksDir = path.join(project, '.harnas', 'works');
+    const worksDir = path.join(project, '.parley', 'works');
     const worksBefore = await readdir(worksDir);
 
     const create = (workId: string | null, provider: string, task: string, model: string) =>
@@ -392,7 +402,7 @@ describe('create(): модель и усилие из диалога (дизай
       const home = path.join(project, 'свой-дом-харнесса');
       await mkdir(home, { recursive: true });
       await writeFile(path.join(home, 'providers.json'), JSON.stringify(data), 'utf8');
-      setEnv('HARNAS_HOME', home);
+      setEnv('PARLEY_HOME', home);
     }
 
     it('модель из своего списка доезжает до команды, а из встроенного, которого в нём нет, — bad_request', async () => {
@@ -407,7 +417,7 @@ describe('create(): модель и усилие из диалога (дизай
       await withProviders({
         smart: { badge: 'Smart', command: 'smart', args: ['--m', '{model}', '{prompt}'] },
       });
-      setEnv('HARNAS_SMART_BIN', STUB);
+      setEnv('PARLEY_SMART_BIN', STUB);
 
       const argv = await launched('smart', { model: 'что-то-своё' });
       expect(argv[argv.indexOf('--m') + 1]).toBe('что-то-своё');
@@ -415,7 +425,7 @@ describe('create(): модель и усилие из диалога (дизай
   });
 
   it('провайдер без флагов (glm) выбор не получает: поле отбрасывается', async () => {
-    setEnv('HARNAS_GLM_BIN', STUB);
+    setEnv('PARLEY_GLM_BIN', STUB);
     const argv = await launched('glm', { model: 'glm-4', effort: 'high' });
 
     expect(argv.slice(2)).toEqual([]);
@@ -607,7 +617,7 @@ describe('stop() / delete()', () => {
 
 describe('запуск без бинаря', () => {
   it('бинаря нет: host.notice(launch-failed), сессия остаётся pending, метод отвечает ошибкой', async () => {
-    setEnv('HARNAS_CLAUDE_BIN', '/несуществующий/путь/до/claude');
+    setEnv('PARLEY_CLAUDE_BIN', '/несуществующий/путь/до/claude');
     const work = await createWork(project, { title: 'Работа', goal: '' });
     const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
 
@@ -711,7 +721,7 @@ describe('worktree (план, кусок 4.2)', () => {
     const work = await createWork(project, { title: 'Работа', goal: '' });
     const argsFile = await tempArgsFile();
     setEnv('STUB_ARGS_FILE', argsFile);
-    setEnv('HARNAS_WORKTREE_ROOT', await tempWorktreeRoot());
+    setEnv('PARLEY_WORKTREE_ROOT', await tempWorktreeRoot());
 
     const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
     const ref = await service.create({
@@ -744,7 +754,7 @@ describe('worktree (план, кусок 4.2)', () => {
     await initGitProject(project);
     const work = await createWork(project, { title: 'Работа', goal: '' });
     setEnv('STUB_ARGS_FILE', await tempArgsFile());
-    setEnv('HARNAS_WORKTREE_ROOT', await tempWorktreeRoot());
+    setEnv('PARLEY_WORKTREE_ROOT', await tempWorktreeRoot());
 
     const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
     const ref = await service.create({
@@ -956,9 +966,9 @@ describe('worktree (план, кусок 4.2)', () => {
   });
 });
 
-describe('скилл harnas при запуске сессии (кусок 10 плана комнат)', () => {
-  const skillIn = (dir: string): string => path.join(dir, '.agents', 'skills', 'harnas', 'SKILL.md');
-  const aliasIn = (dir: string): string => path.join(dir, '.claude', 'skills', 'harnas');
+describe('скилл parley при запуске сессии (кусок 10 плана комнат)', () => {
+  const skillIn = (dir: string): string => path.join(dir, '.agents', 'skills', 'parley', 'SKILL.md');
+  const aliasIn = (dir: string): string => path.join(dir, '.claude', 'skills', 'parley');
   const porcelain = async (dir: string): Promise<string> =>
     (await runGit('git', ['-C', dir, 'status', '--porcelain', '-uall'])).stdout;
 
@@ -979,7 +989,55 @@ describe('скилл harnas при запуске сессии (кусок 10 п
 
     expect(await readFile(skillIn(project), 'utf8')).toBe(SKILL_MD);
     expect((await lstat(aliasIn(project))).isSymbolicLink()).toBe(true);
-    expect(await readlink(aliasIn(project))).toBe(path.join('..', '..', '.agents', 'skills', 'harnas'));
+    expect(await readlink(aliasIn(project))).toBe(path.join('..', '..', '.agents', 'skills', 'parley'));
+    const status = await porcelain(project);
+    expect(status).not.toContain('.agents');
+    expect(status).not.toContain('.claude');
+
+    await service.stop(ref);
+  });
+
+  it('прежняя установка под именем harnas (учёт в .harnas) при запуске убирается, новый скилл встаёт на её место', async () => {
+    await initGitProject(project);
+    // Проект, каким его оставила прошлая сборка: каталог состояния `.harnas`, в нём учёт, на диске — папка и симлинк.
+    const oldStub = 'заглушка прежней сборки\n';
+    const legacyDir = path.join(project, '.agents', 'skills', 'harnas');
+    const legacyLink = path.join(project, '.claude', 'skills', 'harnas');
+    await mkdir(legacyDir, { recursive: true });
+    await writeFile(path.join(legacyDir, 'SKILL.md'), oldStub, 'utf8');
+    await mkdir(path.dirname(legacyLink), { recursive: true });
+    await symlink(path.join('..', '..', '.agents', 'skills', 'harnas'), legacyLink);
+    await mkdir(path.join(project, '.harnas'));
+    await writeFile(
+      path.join(project, '.harnas', 'skills-receipt.json'),
+      JSON.stringify({
+        version: 1,
+        entries: {
+          [legacyDir]: { kind: 'dir', sha256: createHash('sha256').update(oldStub).digest('hex') },
+          [legacyLink]: { kind: 'symlink', target: '../../.agents/skills/harnas' },
+        },
+      }),
+      'utf8',
+    );
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'бэкенд',
+      task: '',
+      parent: null,
+    });
+
+    expect(existsSync(legacyDir)).toBe(false);
+    expect(existsSync(legacyLink)).toBe(false);
+    expect(await readFile(skillIn(project), 'utf8')).toBe(SKILL_MD);
+    expect((await lstat(aliasIn(project))).isSymbolicLink()).toBe(true);
+    // Проект остался при прежнем каталоге состояния: нового `.parley` рядом с `.harnas` не завелось.
+    expect(existsSync(path.join(project, '.parley'))).toBe(false);
     const status = await porcelain(project);
     expect(status).not.toContain('.agents');
     expect(status).not.toContain('.claude');
@@ -992,7 +1050,7 @@ describe('скилл harnas при запуске сессии (кусок 10 п
     const work = await createWork(project, { title: 'Работа', goal: '' });
     const argsFile = await tempArgsFile();
     setEnv('STUB_ARGS_FILE', argsFile);
-    setEnv('HARNAS_WORKTREE_ROOT', await tempWorktreeRoot());
+    setEnv('PARLEY_WORKTREE_ROOT', await tempWorktreeRoot());
 
     const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
     const ref = await service.create({
@@ -1026,7 +1084,7 @@ describe('скилл harnas при запуске сессии (кусок 10 п
     const work = await createWork(project, { title: 'Работа', goal: '' });
     const argsFile = await tempArgsFile();
     setEnv('STUB_ARGS_FILE', argsFile);
-    setEnv('HARNAS_AGENT_SKILLS', '0');
+    setEnv('PARLEY_AGENT_SKILLS', '0');
 
     const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
     const ref = await service.create({
@@ -1041,7 +1099,7 @@ describe('скилл harnas при запуске сессии (кусок 10 п
     await readArgs(argsFile);
     expect(existsSync(path.join(project, '.agents'))).toBe(false);
     expect(existsSync(path.join(project, '.claude'))).toBe(false);
-    expect(existsSync(path.join(project, '.harnas', 'skills-receipt.json'))).toBe(false);
+    expect(existsSync(path.join(project, '.parley', 'skills-receipt.json'))).toBe(false);
 
     await service.stop(ref);
   });

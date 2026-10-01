@@ -6,8 +6,8 @@
  * заново на каждый рендер из свежего `WorkEntry`, а не хранится в `TabSpec`.
  */
 
-import type { WorkEntry, WorkSession } from '@harnas/core';
-import { refKey } from '@harnas/protocol';
+import type { WorkEntry, WorkSession } from '@parley/core';
+import { refKey } from '@parley/protocol';
 import type { FileRootSpec, TabSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { workKey as workKeyOf } from '../../shared/work-keys.js';

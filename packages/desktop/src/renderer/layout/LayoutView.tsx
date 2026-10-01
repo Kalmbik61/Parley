@@ -9,7 +9,7 @@
  * (`keys/handler.ts`) один на окно и бьёт ими по раскладке активной работы.
  */
 
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { useWorksStore } from '../store/works.js';
@@ -25,7 +25,7 @@ export interface LayoutViewProps {
    * а строка вкладок в заголовке — только у активной.
    */
   active: boolean;
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   fontFamily: string;
   fontSize: number;
   /** Отправка агенту окна (7.2) — телам вкладок через контекст: заметкам диффа (8.4b). */

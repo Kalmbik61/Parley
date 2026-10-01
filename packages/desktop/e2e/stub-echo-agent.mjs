@@ -15,22 +15,28 @@ import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 
+/**
+ * Переменная окружения по ключу без префикса: `PARLEY_<ключ>`, а не задана — прежняя `HARNAS_<ключ>`.
+ * Заглушки понимают оба имени, как сам продукт (R3).
+ */
+const fromEnv = (key) => process.env[`PARLEY_${key}`] ?? process.env[`HARNAS_${key}`];
+
 // Хук при старте (fix-final-b): настоящий Claude Code в доверенной папке шлёт SessionStart, и
 // хост узнаёт, что хуки процесса доходят; без единого хука с запуска pty.send отвечает blocked
 // (вопрос доверия к папке хуков не шлёт). Нейтральное `StubReady` состояния не меняет — точка
 // сессии остаётся прежней. STUB_NO_HOOKS=1 — сессия «на вопросе доверия»: хуков нет вовсе.
 // Адрес журнала — из окружения процесса, как у команды хука (core/work/settings-file.ts).
-if (process.env.STUB_NO_HOOKS !== '1' && process.env.HARNAS_WORK_DIR !== undefined && process.env.HARNAS_SESSION_ID !== undefined) {
-  const events = path.join(process.env.HARNAS_WORK_DIR, 'events');
+if (process.env.STUB_NO_HOOKS !== '1' && fromEnv('WORK_DIR') !== undefined && fromEnv('SESSION_ID') !== undefined) {
+  const events = path.join(fromEnv('WORK_DIR'), 'events');
   mkdirSync(events, { recursive: true });
-  appendFileSync(path.join(events, `${process.env.HARNAS_SESSION_ID}.jsonl`), `${JSON.stringify({ hook_event_name: 'StubReady' })}\n`);
+  appendFileSync(path.join(events, `${fromEnv('SESSION_ID')}.jsonl`), `${JSON.stringify({ hook_event_name: 'StubReady' })}\n`);
 }
 
 process.stdout.write('stub-echo готов\r\n');
 
 // Настоящий MCP-сервер харнесса (кусок 8 «Organic»): строка `STUB_MCP <инструмент> <json-аргументы>` в терминале —
-// вызов инструмента `harnas-mcp` так, как его делает модель. Сервер запускается ровно как Claude Code запускает его
-// по конфигу работы: `--mcp-config <файл>` из argv, команда, аргументы и окружение сервера `harnas` из файла поверх
+// вызов инструмента `parley-mcp` так, как его делает модель. Сервер запускается ровно как Claude Code запускает его
+// по конфигу работы: `--mcp-config <файл>` из argv, команда, аргументы и окружение сервера `parley` из файла поверх
 // окружения процесса. Дальше JSON-RPC по stdio: `initialize`, `notifications/initialized`, `tools/call`. Так E2E
 // проверяет решение ведущего целиком — от инструмента, у которого своя проверка «только ведущий», до карточки в окне.
 // Результат печатается в терминал: `mcp: propose_decision -> {"proposalId":"p-01","rev":0}`, отказ инструмента —
@@ -42,8 +48,8 @@ function startMcp() {
   const at = process.argv.indexOf('--mcp-config');
   const file = at === -1 ? undefined : process.argv[at + 1];
   if (file === undefined) throw new Error('нет --mcp-config: харнесс не передал конфиг MCP');
-  const server = JSON.parse(readFileSync(file, 'utf8')).mcpServers?.harnas;
-  if (server === undefined) throw new Error('в конфиге MCP нет сервера harnas');
+  const server = JSON.parse(readFileSync(file, 'utf8')).mcpServers?.parley;
+  if (server === undefined) throw new Error('в конфиге MCP нет сервера parley');
   const child = spawn(server.command, server.args ?? [], {
     env: { ...process.env, ...server.env },
     stdio: ['pipe', 'pipe', 'inherit'],
@@ -67,7 +73,7 @@ function startMcp() {
     else wait.resolve(message.result);
   });
   child.on('exit', () => {
-    for (const wait of pending.values()) wait.reject(new Error('harnas-mcp завершился'));
+    for (const wait of pending.values()) wait.reject(new Error('parley-mcp завершился'));
     pending.clear();
     mcpReady = null;
   });
@@ -123,7 +129,7 @@ function typed(text) {
       // Команда выхода (раунд fix-host-resync): E2E завершает свой stub сам, без сигнала чужим
       // процессам и без поиска pid по всей машине.
       if (buffer === 'STUB_EXIT') process.exit(0);
-      // Вызов инструмента настоящего harnas-mcp (см. выше); эхо строки при этом не печатается. Ищется не с начала
+      // Вызов инструмента настоящего parley-mcp (см. выше); эхо строки при этом не печатается. Ищется не с начала
       // строки: перед ней в буфере мог оказаться чужой набор (указатель будильника хоста).
       const mcpCall = buffer.indexOf('STUB_MCP ');
       if (mcpCall !== -1) {

@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Profiler } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { Room, WorkEntry, WorkSession } from '@harnas/core';
+import type { Room, WorkEntry, WorkSession } from '@parley/core';
 import type { GroupNode } from '../../shared/layout-types.js';
 import { useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';

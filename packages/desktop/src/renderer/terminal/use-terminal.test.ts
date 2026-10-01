@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import type { ILink } from '@xterm/xterm';
-import { refKey, type SessionRef } from '@harnas/protocol';
+import { refKey, type SessionRef } from '@parley/protocol';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { lineFromText, xtermMock } from '../test-utils/xterm-mock.js';
 import { useHostStore } from '../store/host.js';

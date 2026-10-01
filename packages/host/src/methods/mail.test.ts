@@ -2,7 +2,7 @@ import { mkdtemp, open, readFile, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { addMessage, HUMAN, readMap, updateMap, workPaths } from '@harnas/core';
+import { addMessage, HUMAN, readMap, updateMap, workPaths } from '@parley/core';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
@@ -37,7 +37,7 @@ async function withLetter(): Promise<{ client: TestClient; dir: string; workId: 
   const running = await startHost({ home });
   hosts.push(running);
   const token = await readFile(hostPaths(home).token, 'utf8');
-  const dir = await mkdtemp(path.join(tmpdir(), 'harnas-mail-project-'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'parley-mail-project-'));
   projects.push(dir);
 
   const client = connectRaw(hostPaths(home).socket);

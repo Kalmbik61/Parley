@@ -5,8 +5,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Message, Proposal, Room, SessionActivity, WorkEntry, WorkSession } from '@harnas/core';
-import { refKey, type HostNotice, type SessionRef } from '@harnas/protocol';
+import type { Message, Proposal, Room, SessionActivity, WorkEntry, WorkSession } from '@parley/core';
+import { refKey, type HostNotice, type SessionRef } from '@parley/protocol';
 import type { AppNote, FocusTarget } from '../../shared/bridge.js';
 import { DEFAULT_UI, type UiFile } from '../../shared/ui-types.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';

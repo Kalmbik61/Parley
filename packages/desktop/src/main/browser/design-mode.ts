@@ -47,7 +47,7 @@ const STYLE_KEYS = new Set([
 ]);
 
 /** Отмена выбора в том же изолированном мире: страница эту функцию не видит. */
-const CANCEL_SCRIPT = 'globalThis.__harnasPickCancel?.()';
+const CANCEL_SCRIPT = 'globalThis.__parleyPickCancel?.()';
 
 type Rect = { x: number; y: number; width: number; height: number };
 type ValidPick = Omit<PickResult, 'url' | 'imagePath' | 'thumbnail'> & {
@@ -185,7 +185,7 @@ export function createDesignMode(deps: {
         image.getSize().width > PICK_LIMITS.thumbnailWidth ? image.resize({ width: PICK_LIMITS.thumbnailWidth }) : image;
       return { imagePath, thumbnail: small.toDataURL() };
     } catch (error) {
-      console.warn('[harnas] design mode capture failed', error);
+      console.warn('[parley] design mode capture failed', error);
       return none;
     }
   }
@@ -245,7 +245,7 @@ export function createDesignMode(deps: {
           });
         })
         .catch((error: unknown) => {
-          if (!done) console.warn('[harnas] design mode script failed', error);
+          if (!done) console.warn('[parley] design mode script failed', error);
           finish(null);
         });
     });

@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { bothEnv } from '../names.js';
 import {
   loadProviders,
   resumeCommand,
@@ -25,14 +26,15 @@ import { addSession, removeSession, transitionSession, type NewSession } from '.
 import { codexNotifyOverride, mcpConfigValue, writeMcpConfig } from './mcp-config.js';
 import { finishSession, linkProviderSession, type MetricsRoots } from './metrics.js';
 import { writeWorkSettings } from './settings-file.js';
+import { ensureStateDir } from './state-dir.js';
 import { createWork, deleteSessionFiles, readMap, updateMap, workPaths } from './store.js';
 import type { LaunchedBy, WorkSession } from './types.js';
 
 /** Чего хочет запуск сверх самой сессии. */
 export interface LaunchOptions {
   /**
-   * Будить ли сессию звонком: флаг канала в команде и `HARNAS_CHANNEL` в
-   * конфиге MCP. Панель берёт значение из настроек и пробы версии (4.4).
+   * Будить ли сессию звонком: флаг канала в команде и `PARLEY_CHANNEL` (с прежней
+   * `HARNAS_CHANNEL`) в конфиге MCP. Панель берёт значение из настроек и пробы версии (4.4).
    */
   channel?: boolean;
   /**
@@ -152,7 +154,7 @@ async function plan(
   const template = (resuming ? entry.runner.resumeArgs : entry.runner.args) ?? [];
 
   // Звонок доходит только туда, куда уехал флаг канала: без `{channel}` в
-  // шаблоне ставить `HARNAS_CHANNEL` некому и незачем.
+  // шаблоне ставить `PARLEY_CHANNEL` некому и незачем.
   const warnings: string[] = [];
   const channel = options.channel === true && template.includes('{channel}');
   // Молчим про чужих провайдеров: push — возможность Claude Code, у codex и GLM
@@ -162,7 +164,7 @@ async function plan(
   }
 
   // `env` — окружение запускающего процесса: Codex режет серверу MCP окружение, и нужные ему
-  // `HARNAS_*` (дом харнесса, подмены бинарей) уходят в таблицу `env` сервера явно.
+  // `PARLEY_*` и `HARNAS_*` (дом харнесса, подмены бинарей) уходят в таблицу `env` сервера явно.
   const params = {
     workDir: paths.dir,
     sessionId: session.id,
@@ -193,6 +195,7 @@ async function plan(
   // под него заводит запуск, как `writeWorkSettings` заводит его для хуков Claude Code: наблюдатель
   // журналов хоста не встанет на каталог, которого нет.
   if (template.includes('{notify}')) {
+    await ensureStateDir(projectPath);
     await mkdir(paths.events, { recursive: true });
     subs.notify = codexNotifyOverride();
   }
@@ -233,8 +236,9 @@ async function plan(
     // `claude --resume` ищет транскрипт по каталогу, а не по id (спецификация 8.1).
     cwd: session.worktree !== null ? session.worktree.path : projectPath,
     // Те же переменные, что у MCP-сервера в конфиге: сервер знает, кто звонит,
-    // даже унаследовав окружение от агента.
-    env: { HARNAS_WORK_DIR: paths.dir, HARNAS_SESSION_ID: session.id },
+    // даже унаследовав окружение от агента. Под обоими именами: старые скрипты и сервер
+    // прежней сборки читают `HARNAS_*` (R3).
+    env: bothEnv({ WORK_DIR: paths.dir, SESSION_ID: session.id }),
     providerSessionId,
     warnings,
   };

@@ -30,7 +30,7 @@ export interface ProviderLimits {
 /** Каталог работы, куда скрипт строки статуса кладёт файл на сессию: `limits/<session-id>.json`. */
 export const LIMITS_DIR = 'limits';
 
-/** Файл лимитов сессии в каталоге работы (`HARNAS_WORK_DIR`). */
+/** Файл лимитов сессии в каталоге работы (`PARLEY_WORK_DIR`). */
 export const limitsFile = (workDir: string, sessionId: string): string =>
   path.join(workDir, LIMITS_DIR, `${sessionId}.json`);
 

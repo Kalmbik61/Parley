@@ -16,7 +16,7 @@ import { makeTempHome } from './tmp.js';
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
 
-type Harnas = { harnas: { call: (method: string, params: unknown) => Promise<unknown> } };
+type Parley = { parley: { call: (method: string, params: unknown) => Promise<unknown> } };
 
 test.describe('битый works-index.json на старте хоста (lane-r5)', () => {
   let home: string;
@@ -41,16 +41,16 @@ test.describe('битый works-index.json на старте хоста (lane-r5
     const savedLayouts = `${JSON.stringify({ version: 2, works: { '/tmp/p\u0000w-0001': { saved: true } } }, null, 2)}\n`;
     await writeFile(layouts, savedLayouts);
 
-    app = await electron.launch({ args: [mainEntry], env: { ...process.env, HARNAS_HOME: home } });
+    app = await electron.launch({ args: [mainEntry], env: { ...process.env, PARLEY_HOME: home } });
     const window = await app.firstWindow();
 
     await expect(window.getByRole('alert')).toContainText("Host couldn't read the workspace list");
     await expect(window.getByTestId('landing')).toHaveCount(0);
     // Хост жив и отвечает: методы вне снимка работают, works.list — отказ, а не вечное ожидание.
-    const info = await window.evaluate(() => (globalThis as unknown as Harnas).harnas.call('host.info', {}));
+    const info = await window.evaluate(() => (globalThis as unknown as Parley).parley.call('host.info', {}));
     expect(info).toBeTruthy();
     const listed = await window.evaluate(() =>
-      (globalThis as unknown as Harnas).harnas.call('works.list', {}).then(
+      (globalThis as unknown as Parley).parley.call('works.list', {}).then(
         () => 'resolved',
         (error: unknown) => String(error),
       ),

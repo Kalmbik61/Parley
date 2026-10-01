@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Message, Proposal, Room, WorkEntry, WorkMap, WorkSession, WorkStatus } from '@harnas/core';
+import type { Message, Proposal, Room, WorkEntry, WorkMap, WorkSession, WorkStatus } from '@parley/core';
 import { workAttention, type Attention, type WorkAttention } from '../attention/derive.js';
 import { workKey } from '../lib/tree-order.js';
 import { activityMap, makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';

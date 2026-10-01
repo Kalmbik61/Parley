@@ -29,9 +29,9 @@ import {
   type WorktreeDiff,
   type WorktreeInfo,
   type WorkSession,
-} from '@harnas/core';
-import { HOST_ERROR_REASONS } from '@harnas/protocol';
-import type { HostErrorReason, SessionRef } from '@harnas/protocol';
+} from '@parley/core';
+import { HOST_ERROR_REASONS } from '@parley/protocol';
+import type { HostErrorReason, SessionRef } from '@parley/protocol';
 import { HostError } from '../errors.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 
@@ -48,7 +48,7 @@ export interface WorktreesService {
   mergeCheck(ref: SessionRef): Promise<MergeCheck>;
   /** Изменения папки проекта — только у сессии без своего worktree (спека 11.5). */
   projectChanges(ref: SessionRef, patch?: boolean): Promise<ProjectChanges>;
-  /** «Закоммитить всё в папке» — по кнопке человека, без `.harnas/`. */
+  /** «Закоммитить всё в папке» — по кнопке человека, без каталога состояния (`.parley/`, `.harnas/`). */
   commitProject(ref: SessionRef, message: string): Promise<{ commit: string }>;
 }
 
@@ -163,7 +163,7 @@ export function createWorktreesService(
 
     async merge(ref) {
       const { label, worktree } = await requirePresentWorktree(ref);
-      const message = `harnas: влить ${sessionTag(ref.sessionId)} (${label}) из ${worktree.branch}`;
+      const message = `parley: влить ${sessionTag(ref.sessionId)} (${label}) из ${worktree.branch}`;
       try {
         return await mergeWorktree(ref.projectPath, worktree, message);
       } catch (error) {

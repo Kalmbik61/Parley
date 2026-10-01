@@ -15,8 +15,8 @@
  */
 
 import { create } from 'zustand';
-import type { ProviderLimits } from '@harnas/protocol';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { ProviderLimits } from '@parley/protocol';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 
 export interface ProviderInfo {
@@ -36,7 +36,7 @@ export interface ProvidersState {
    * Один запрос `providers.list` и подписка на `providers.limitsChanged`; возвращает отписку — ответ,
    * пришедший позже неё, и события после неё в стор не попадают.
    */
-  init: (bridge: HarnasBridge) => () => void;
+  init: (bridge: ParleyBridge) => () => void;
 }
 
 export const useProvidersStore = create<ProvidersState>((set) => ({
@@ -60,7 +60,7 @@ export const useProvidersStore = create<ProvidersState>((set) => ({
       .catch((error: unknown) => {
         if (disposed) return;
         // Русский текст хоста — только в консоль (сквозное правило); строка статуса просто без сегментов.
-        console.warn('[harnas] providers.list failed', decodeIpcError(error).message);
+        console.warn('[parley] providers.list failed', decodeIpcError(error).message);
         set({ providers: [] });
       });
     const offLimits = bridge.on('providers.limitsChanged', ({ id, limits }) => {

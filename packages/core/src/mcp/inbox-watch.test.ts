@@ -66,7 +66,7 @@ const settle = (check: () => void): Promise<void> =>
   vi.waitFor(check, { timeout: 2000, interval: 10 });
 
 beforeEach(async () => {
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
   const map = await createWork(project, { title: 'Авторизация', goal: 'логин по паролю' });
   workId = map.work.id;
   await updateMap(project, workId, (current) => {

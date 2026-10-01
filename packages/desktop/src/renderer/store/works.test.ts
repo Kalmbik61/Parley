@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { orderedWorks, useWorksStore } from './works.js';
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry } from '@parley/core';
 
 function entry(id: string, createdAt: string): WorkEntry {
   return {

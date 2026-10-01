@@ -15,8 +15,8 @@
  */
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { WorkSession } from '@harnas/core';
-import type { HarnasBridge } from '../../../shared/bridge.js';
+import type { WorkSession } from '@parley/core';
+import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, S } from '../../../shared/strings.js';
 import { cn } from '../../lib/cn.js';
@@ -31,7 +31,7 @@ import { radioGroupKeyDown } from './radio-keys.js';
 
 export interface MergeRoomDialogProps {
   open: boolean;
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   projectPath: string;
   workId: string;
   /** Сессия, которую бросили. */
@@ -101,7 +101,7 @@ export function MergeRoomDialog({ open, bridge, projectPath, workId, dragged, ta
       openWhenListed(projectPath, workId, { kind: 'room', roomId }, pendingRef.current);
       onOpenChange(false);
     } catch (err) {
-      console.warn('[harnas] rooms.create', err);
+      console.warn('[parley] rooms.create', err);
       setError(errorText(decodeIpcError(err).code, S.errors.actions.createRoom));
     } finally {
       setBusy(false);

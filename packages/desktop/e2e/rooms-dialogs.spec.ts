@@ -8,7 +8,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
  * Диалоги «New session or room» и «New room» из двух сессий и перетаскивание в сайдбаре (кусок 7 плана «Organic», спека
- * окна 2026-09-29, 1.5, 1.6, 2.1, 2.5). Настоящий хост, вместо `claude` — заглушка агента (`HARNAS_CLAUDE_BIN`), окно
+ * окна 2026-09-29, 1.5, 1.6, 2.1, 2.5). Настоящий хост, вместо `claude` — заглушка агента (`PARLEY_CLAUDE_BIN`), окно
  * Electron: один агент — сессия и её терминал, два и больше — комната с ведущим (вкладка комнаты, строка развёрнута,
  * тихий старт: лента пуста, писем-приглашений нет); сессия на сессию — диалог 1.6 и комната с системной строкой
  * `Room created from @s03 and @s04`; сессия на строку комнаты — вступление (`@s05 joined the room`); на себя и в
@@ -28,7 +28,7 @@ let project = '';
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
-    ([m, p]) => (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas.call(m, p),
+    ([m, p]) => (globalThis as unknown as { parley: { call: (m: string, p: unknown) => Promise<unknown> } }).parley.call(m, p),
     [method, params] as const,
   ) as Promise<T>;
 }
@@ -97,7 +97,7 @@ test.describe('диалоги комнат и перетаскивание (ку
   });
 
   async function launch(): Promise<Page> {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();

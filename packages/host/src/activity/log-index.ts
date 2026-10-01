@@ -18,7 +18,7 @@ import {
   type SessionIndex,
   type SessionWatcher,
   type WorkSession,
-} from '@harnas/core';
+} from '@parley/core';
 
 export interface LogIndex {
   start(): Promise<void>;

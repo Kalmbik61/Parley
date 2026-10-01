@@ -175,7 +175,7 @@ describe('SearchPanel (тест 2)', () => {
     await wait(250);
     expect(toast).toHaveBeenCalledWith("Couldn't search in files: failed.");
     // Прочие сбои — по-прежнему в консоль.
-    expect(warn).toHaveBeenCalledWith('[harnas] files.grep', expect.anything());
+    expect(warn).toHaveBeenCalledWith('[parley] files.grep', expect.anything());
     warn.mockRestore();
   });
 

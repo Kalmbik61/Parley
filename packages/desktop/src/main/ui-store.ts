@@ -1,5 +1,5 @@
 /**
- * Хранилище `~/.harnas/desktop/ui.json` — состояние окна, не относящееся к
+ * Хранилище `~/.parley/desktop/ui.json` — состояние окна, не относящееся к
  * конкретной работе (спека 3.4, кусок 1.1 плана окна). Атомарная запись и
  * очередь на файл — общий `main/atomic-file.ts` (см. его шапку про находку C3
  * раунда исправлений 1: без очереди два `save()` без `await` между ними
@@ -8,12 +8,12 @@
 
 import { readFile, rename } from 'node:fs/promises';
 import path from 'node:path';
-import { harnasHome } from '@harnas/core';
+import { parleyHome } from '@parley/core';
 import { DEFAULT_UI, normalizeUi, type UiFile } from '../shared/ui-types.js';
 import { createFileQueue, writeAtomic } from './atomic-file.js';
 
-/** `~/.harnas/desktop/ui.json` — рядом с `layouts.json` (`layout-store.ts`). */
-export function desktopUiPath(home: string = harnasHome()): string {
+/** `~/.parley/desktop/ui.json` — рядом с `layouts.json` (`layout-store.ts`). */
+export function desktopUiPath(home: string = parleyHome()): string {
   return path.join(home, 'desktop', 'ui.json');
 }
 
@@ -62,7 +62,7 @@ async function readUiFile(file: string): Promise<UiFile> {
     raw = await readFile(file, 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return DEFAULT_UI;
-    console.warn(`[harnas] ui.json unreadable (${file}): ${(error as Error).message}`);
+    console.warn(`[parley] ui.json unreadable (${file}): ${(error as Error).message}`);
     return DEFAULT_UI;
   }
   try {

@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render } from '@testing-library/react';
 import type { ClientRect, DroppableContainer } from '@dnd-kit/core';
-import type { WorkEntry, WorkSession } from '@harnas/core';
+import type { WorkEntry, WorkSession } from '@parley/core';
 import type { LayoutNode } from '../../shared/layout-types.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { useUiStore } from '../store/ui.js';

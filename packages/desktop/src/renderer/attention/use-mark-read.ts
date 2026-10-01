@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useRef } from 'react';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { hostMethods } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
@@ -31,7 +31,7 @@ const PERMANENT_CODES = new Set(['not_found', 'bad_request']);
 const THRESHOLD = 0.5;
 
 interface Input {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   projectPath: string;
   workId: string;
   /** Работа активна — LayoutBodyContext.active. Фокус окна и видимость документа хук берёт из store/ui.ts. */

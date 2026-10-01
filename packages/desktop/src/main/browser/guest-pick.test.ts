@@ -157,7 +157,7 @@ describe('guest-pick.js в jsdom (тест 3 куска 9.3a)', () => {
     const first = runScript();
     const second = runScript();
     expect(await first).toBeNull();
-    (globalThis as { __harnasPickCancel?: () => void }).__harnasPickCancel?.();
+    (globalThis as { __parleyPickCancel?: () => void }).__parleyPickCancel?.();
     expect(await second).toBeNull();
   });
 });

@@ -13,7 +13,7 @@
  */
 
 import { useLayoutEffect, useRef } from 'react';
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry } from '@parley/core';
 import type { DiffNote } from '../../../shared/notes-types.js';
 import { S } from '../../../shared/strings.js';
 import { cn } from '../../lib/cn.js';
@@ -183,7 +183,7 @@ export function useViewZones(editor: ZoneEditor | null, specs: ZoneSpec[], maxWi
       inner.style.boxSizing = 'border-box';
       inner.style.top = '-1000000px';
       widgetSeq += 1;
-      const id = `harnas.diff.note.${widgetSeq}`;
+      const id = `parley.diff.note.${widgetSeq}`;
       const widget: OverlayWidget = { getId: () => id, getDomNode: () => inner, getPosition: () => null };
       zones.current.set(spec.key, { id: null, afterLineNumber: spec.afterLineNumber, height: ESTIMATE_PX, node, inner, widget, observer: null });
     }

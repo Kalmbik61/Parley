@@ -43,7 +43,7 @@ test.describe('тема окна по nativeTheme main (спека 4.7, раун
   });
 
   async function launch(): Promise<Page> {
-    app = await electron.launch({ args: [mainEntry], env: { ...process.env, HARNAS_HOME: home } });
+    app = await electron.launch({ args: [mainEntry], env: { ...process.env, PARLEY_HOME: home } });
     const window = await app.firstWindow();
     await expect(window.getByTestId('landing')).toBeVisible();
     return window;

@@ -9,9 +9,9 @@ import {
   updateMap,
   workPaths,
   NEW_LABEL,
-} from '@harnas/core';
-import type { EventData, EventName, SessionRef } from '@harnas/protocol';
-import { refKey } from '@harnas/protocol';
+} from '@parley/core';
+import type { EventData, EventName, SessionRef } from '@parley/protocol';
+import { refKey } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createWorksService } from '../works/works-service.js';
 import type { WorksService } from '../works/works-service.js';
@@ -41,20 +41,20 @@ function fakeHost(): HostContext {
 }
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
-  claudeRoot = await mkdtemp(path.join(tmpdir(), 'harnas-claude-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
+  claudeRoot = await mkdtemp(path.join(tmpdir(), 'parley-claude-'));
   // Второй корень тоже временный: иначе индекс логов читал бы настоящий ~/.codex
   // (use-sessions.test.tsx, use-session-link.test.tsx — тот же приём).
-  codexRoot = await mkdtemp(path.join(tmpdir(), 'harnas-codex-'));
-  process.env['HARNAS_HOME'] = home;
+  codexRoot = await mkdtemp(path.join(tmpdir(), 'parley-codex-'));
+  process.env['PARLEY_HOME'] = home;
   broadcasts = [];
 });
 
 afterEach(async () => {
   await Promise.all(services.map((service) => service.stop()));
   services = [];
-  delete process.env['HARNAS_HOME'];
+  delete process.env['PARLEY_HOME'];
   await Promise.all(
     [home, project, claudeRoot, codexRoot].map((dir) => rm(dir, { recursive: true, force: true })),
   );

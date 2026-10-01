@@ -22,7 +22,7 @@ import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { Command as CommandPrimitive } from 'cmdk';
 import { toast } from 'sonner';
 import { Command as CommandIcon, File as FileIcon, Folder, GitCompare, Globe, Hash, Mail, Plus, Search, SquareTerminal } from 'lucide-react';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import type { FileList, FileRoot } from '../../shared/files-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { ACTIONS, type ActionId } from '../../shared/keybindings.js';
@@ -49,7 +49,7 @@ import { buildDocuments, filesQuery, rankDocuments, type PaletteDoc, type Palett
 import { registerRowPicker, usePaletteStore } from './store.js';
 
 export interface PaletteProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   run(id: ActionId): void;
 }
 
@@ -108,7 +108,7 @@ const NOTE_CLASS = 'px-3 py-1.5 text-[12px] text-muted-foreground';
  * впервые понадобились: обычный запрос без `/` main не трогает. `docs: null` — ответа ещё нет.
  */
 function useQuickOpenFiles(
-  bridge: HarnasBridge,
+  bridge: ParleyBridge,
   wanted: boolean,
   activeWorkKey: string | null,
 ): { docs: PaletteDoc[] | null; list: FileList | null } {
@@ -135,7 +135,7 @@ function useQuickOpenFiles(
       .lsFiles(root)
       .then((list) => setLoaded({ key, list }))
       .catch((error: unknown) => {
-        console.warn('[harnas] files.lsFiles', error);
+        console.warn('[parley] files.lsFiles', error);
         const { code } = decodeIpcError(error);
         toast(code === 'files:denied' ? S.files.denied : errorText(code, S.errors.actions.readFolder));
         setLoaded({ key, list: { paths: [], truncated: false } });

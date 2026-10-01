@@ -17,8 +17,8 @@
  */
 
 import { useMemo } from 'react';
-import type { SessionRef } from '@harnas/protocol';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { SessionRef } from '@parley/protocol';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { BrowserSurface } from '../browser/BrowserSurface.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { useWorksStore } from '../store/works.js';
@@ -30,7 +30,7 @@ import { groups } from './tree.js';
 export interface SurfaceLayerProps {
   workKey: string;
   active: boolean;
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   fontFamily: string;
   fontSize: number;
   /**

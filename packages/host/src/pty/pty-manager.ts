@@ -8,8 +8,8 @@
  * конкретную сессию (иначе вывод каждого PTY шёл бы всем клиентам хоста сразу).
  */
 
-import { refKey } from '@harnas/protocol';
-import type { SessionRef } from '@harnas/protocol';
+import { refKey } from '@parley/protocol';
+import type { SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createCodexTerminalParser } from './codex-terminal.js';
 import type { CodexSignal, CodexTerminalParser } from './codex-terminal.js';

@@ -61,7 +61,7 @@ export function CompareView({ original, modified, modelPaths, fontFamily, fontSi
         modified={modified}
         originalModelPath={modelPaths.original}
         modifiedModelPath={modelPaths.modified}
-        theme={dark ? 'harnas-dark' : 'harnas-light'}
+        theme={dark ? 'parley-dark' : 'parley-light'}
         loading={null}
         options={options}
         onMount={(editor) => {

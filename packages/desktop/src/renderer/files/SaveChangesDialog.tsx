@@ -11,7 +11,7 @@
 import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { create } from 'zustand';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { Button } from '../ui/button.js';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../ui/dialog.js';
@@ -59,7 +59,7 @@ function askVanished(work: string, names: string[]): Promise<'save' | 'discard'>
  * Работа ушла из снимка: есть грязные буферы её вкладок — вопрос, промис ответа (записи сделаны);
  * нет — null, и раскладку можно снять сразу, как прежде.
  */
-export function settleVanishedWork(bridge: HarnasBridge, workKey: string, title: string): Promise<void> | null {
+export function settleVanishedWork(bridge: ParleyBridge, workKey: string, title: string): Promise<void> | null {
   const dirty = dirtyBufferRefs().filter((item) => item.workKey === workKey);
   if (dirty.length === 0) return null;
   return answerVanishedWork({
@@ -134,7 +134,7 @@ export function SaveChangesDialog(): JSX.Element | null {
  * Смонтирован всегда, пока открыто окно, — и в оболочке, и на экранах связи `App`: буферы
  * переживают потерю связи с хостом, и main без ответа не закрыл бы окно вовсе.
  */
-export function WindowCloseQuestion({ bridge }: { bridge: HarnasBridge }): JSX.Element {
+export function WindowCloseQuestion({ bridge }: { bridge: ParleyBridge }): JSX.Element {
   /**
    * Буферы, по которым человек ответил «закрыть» («Don't save»): выгрузку с ними страница больше не
    * отменяет — main закрывает окно или повторяет перезагрузку. Сверка по ссылке: любая правка после

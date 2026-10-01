@@ -11,23 +11,23 @@ import { probeCliVersion, startProviderVersions } from './versions.js';
 /**
  * Настоящие claude и codex здесь не запускаются никогда, даже с --version: проба зовётся
  * либо с подменой (`probe`), либо на выдуманную команду, чьё имя переменной-оверрайда
- * (`HARNAS_<ИМЯ>_BIN`) указывает на скрипт-заглушку во временном каталоге.
+ * (`PARLEY_<ИМЯ>_BIN`) указывает на скрипт-заглушку во временном каталоге.
  */
-const COMMAND = 'harnas-fake-cli';
-const OVERRIDE = 'HARNAS_HARNAS_FAKE_CLI_BIN';
+const COMMAND = 'parley-fake-cli';
+const OVERRIDE = 'PARLEY_PARLEY_FAKE_CLI_BIN';
 
 let dir = '';
 let home = '';
 
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), 'harnas-versions-'));
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-versions-home-'));
-  process.env['HARNAS_HOME'] = home;
+  dir = await mkdtemp(path.join(tmpdir(), 'parley-versions-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-versions-home-'));
+  process.env['PARLEY_HOME'] = home;
 });
 
 afterEach(async () => {
   delete process.env[OVERRIDE];
-  delete process.env['HARNAS_HOME'];
+  delete process.env['PARLEY_HOME'];
   await Promise.all([dir, home].map((path_) => rm(path_, { recursive: true, force: true })));
 });
 
@@ -100,7 +100,7 @@ const silentLog = (): Log & { warnings: string[] } => {
 };
 
 describe('startProviderVersions: одна проба на старте, с кэшем', () => {
-  it('без пробы (тесты, HARNAS_SKIP_VERSION_PROBE) версий нет и ничего не запускается', async () => {
+  it('без пробы (тесты, PARLEY_SKIP_VERSION_PROBE) версий нет и ничего не запускается', async () => {
     const versions = startProviderVersions(undefined, silentLog());
     await versions.ready;
     expect(versions.get('claude')).toBeNull();

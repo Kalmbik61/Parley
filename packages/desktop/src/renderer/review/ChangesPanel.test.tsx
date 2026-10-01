@@ -7,8 +7,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MergeCheck, ProjectChanges, WorkEntry, WorktreeDiff } from '@harnas/core';
-import { refKey } from '@harnas/protocol';
+import type { MergeCheck, ProjectChanges, WorkEntry, WorktreeDiff } from '@parley/core';
+import { refKey } from '@parley/protocol';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { tabId } from '../layout/ids.js';

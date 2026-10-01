@@ -2,22 +2,22 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PROVIDERS, loadProviders, selectableModels } from '@harnas/core';
-import { METHODS } from '@harnas/protocol';
+import { PROVIDERS, loadProviders, selectableModels } from '@parley/core';
+import { METHODS } from '@parley/protocol';
 import { resolveModelChoice } from './model-choice.js';
 
 let home = '';
 let savedHome: string | undefined;
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-model-choice-'));
-  savedHome = process.env['HARNAS_HOME'];
-  process.env['HARNAS_HOME'] = home;
+  home = await mkdtemp(path.join(tmpdir(), 'parley-model-choice-'));
+  savedHome = process.env['PARLEY_HOME'];
+  process.env['PARLEY_HOME'] = home;
 });
 
 afterEach(async () => {
-  if (savedHome === undefined) delete process.env['HARNAS_HOME'];
-  else process.env['HARNAS_HOME'] = savedHome;
+  if (savedHome === undefined) delete process.env['PARLEY_HOME'];
+  else process.env['PARLEY_HOME'] = savedHome;
   await rm(home, { recursive: true, force: true });
 });
 

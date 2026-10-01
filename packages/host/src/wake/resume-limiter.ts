@@ -7,8 +7,8 @@
  * — это двенадцать за две минуты, и календарный час бы их пропустил.
  */
 
-import { refKey } from '@harnas/protocol';
-import type { SessionRef } from '@harnas/protocol';
+import { refKey } from '@parley/protocol';
+import type { SessionRef } from '@parley/protocol';
 
 const HOUR_MS = 60 * 60 * 1000;
 

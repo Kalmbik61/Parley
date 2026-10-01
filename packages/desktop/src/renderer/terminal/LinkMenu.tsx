@@ -9,7 +9,7 @@
  */
 
 import { toast } from 'sonner';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
 import { openInBrowserTab } from '../browser/store.js';
@@ -28,17 +28,17 @@ export interface LinkMenuState {
 }
 
 function failureToast(error: unknown, action: string): void {
-  console.warn('[harnas] terminal link', error);
+  console.warn('[parley] terminal link', error);
   const { code } = decodeIpcError(error);
   toast(code === 'files:denied' ? S.files.denied : errorText(code, action));
 }
 
 function copy(text: string): void {
-  navigator.clipboard.writeText(text).catch((error: unknown) => console.warn('[harnas] clipboard', error));
+  navigator.clipboard.writeText(text).catch((error: unknown) => console.warn('[parley] clipboard', error));
 }
 
 /** «Open in default app»: main открывает только белый список, остальное показывает в Finder. */
-export async function openLinkPath(bridge: HarnasBridge, absPath: string): Promise<void> {
+export async function openLinkPath(bridge: ParleyBridge, absPath: string): Promise<void> {
   try {
     const outcome = await bridge.app.openPath(absPath);
     if (outcome === 'revealed') toast(S.files.revealedInFinder);
@@ -47,7 +47,7 @@ export async function openLinkPath(bridge: HarnasBridge, absPath: string): Promi
   }
 }
 
-export async function revealLinkPath(bridge: HarnasBridge, absPath: string): Promise<void> {
+export async function revealLinkPath(bridge: ParleyBridge, absPath: string): Promise<void> {
   try {
     await bridge.app.showInFinder(absPath);
   } catch (error) {
@@ -73,12 +73,12 @@ export function isFileLink(link: Extract<TerminalLink, { kind: 'path' }>): boole
 }
 
 /** Системный браузер — только http(s): провайдер других ссылок не даёт, main проверяет ещё раз. */
-export function openLinkUrl(bridge: HarnasBridge, url: string): void {
-  bridge.app.openExternal(url).catch((error: unknown) => console.warn('[harnas] openExternal', error));
+export function openLinkUrl(bridge: ParleyBridge, url: string): void {
+  bridge.app.openExternal(url).catch((error: unknown) => console.warn('[parley] openExternal', error));
 }
 
 export interface LinkMenuProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   state: LinkMenuState;
   onClose(): void;
 }

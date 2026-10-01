@@ -10,12 +10,12 @@
 
 import { useRef, useState, type ReactNode } from 'react';
 import type { Terminal } from '@xterm/xterm';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '../ui/context-menu.js';
 
 export interface TerminalContextMenuProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   terminal: Terminal | null;
   onClear(): void;
   onFind(): void;
@@ -54,7 +54,7 @@ export function TerminalContextMenu({ bridge, terminal, onClear, onFind, onSplit
           <ContextMenuItem
             onSelect={afterClose(() => {
               const text = terminal?.getSelection() ?? '';
-              navigator.clipboard.writeText(text).catch((error: unknown) => console.warn('[harnas] clipboard', error));
+              navigator.clipboard.writeText(text).catch((error: unknown) => console.warn('[parley] clipboard', error));
             })}
           >
             {S.common.copy}

@@ -29,6 +29,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { claudeLimits, isFileSafeId, LIMITS_DIR, limitsFile } from '../limits.js';
+import { envValue } from '../names.js';
 
 /** Имя файла точки входа без расширения: `statusline-bin.js` лежит рядом с этим модулем. */
 export const STATUSLINE_BIN = 'statusline-bin';
@@ -119,8 +120,8 @@ async function saveLimits(
   const rateLimits = input?.['rate_limits'];
   // Окон подписки во входе нет (шлюз, API-ключ, первый ход) — хранить нечего.
   if (claudeLimits(rateLimits, at) === null) return;
-  const workDir = env['HARNAS_WORK_DIR'];
-  const sessionId = env['HARNAS_SESSION_ID'];
+  const workDir = envValue(env, 'WORK_DIR');
+  const sessionId = envValue(env, 'SESSION_ID');
   if (workDir === undefined || !path.isAbsolute(workDir)) return;
   if (sessionId === undefined || !isFileSafeId(sessionId)) return;
 

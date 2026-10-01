@@ -38,13 +38,13 @@ let workDir = '';
 let env: NodeJS.ProcessEnv = {};
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), 'harnas-statusline-'));
+  root = await mkdtemp(path.join(tmpdir(), 'parley-statusline-'));
   home = path.join(root, 'home');
   project = path.join(root, 'project');
   workDir = path.join(root, 'work');
   await Promise.all([home, project, workDir].map((dir) => mkdir(dir)));
   // Окружение процесса агента: адрес работы и сессии, как у хуков; PATH нужен командам человека.
-  env = { PATH: process.env['PATH'], HARNAS_WORK_DIR: workDir, HARNAS_SESSION_ID: 's-01' };
+  env = { PATH: process.env['PATH'], PARLEY_WORK_DIR: workDir, PARLEY_SESSION_ID: 's-01' };
 });
 
 afterEach(async () => {
@@ -152,6 +152,21 @@ describe('файл лимитов', () => {
     expect(written).toEqual({ at: '2026-09-29T12:00:00.000Z', rateLimits });
   });
 
+  it('старые сессии (R3): адрес из HARNAS_* тоже читается; оба набора — главнее PARLEY_*', async () => {
+    const legacy = { PATH: env['PATH'], HARNAS_WORK_DIR: workDir, HARNAS_SESSION_ID: 's-01' };
+    await run(input(), { env: legacy });
+    expect(JSON.parse(await readFile(path.join(workDir, limitsFile), 'utf8'))).toEqual({
+      at: '2026-09-29T12:00:00.000Z',
+      rateLimits,
+    });
+
+    const other = path.join(root, 'other-work');
+    await mkdir(other);
+    await run(input(), { env: { ...legacy, PARLEY_WORK_DIR: other, PARLEY_SESSION_ID: 's-02' } });
+    expect(await exists(path.join(other, 'limits', 's-02.json'))).toBe(true);
+    expect(await readdir(path.join(workDir, 'limits'))).toEqual(['s-01.json']);
+  });
+
   it('второй вызов перезаписывает файл, временных файлов рядом не остаётся', async () => {
     await run(input());
     await run(
@@ -185,10 +200,10 @@ describe('файл лимитов', () => {
 
   it('нет адреса в окружении или id сессии негодный — файла нет, строка есть', async () => {
     for (const bad of [
-      { HARNAS_SESSION_ID: '../evil' },
-      { HARNAS_SESSION_ID: '' },
-      { HARNAS_WORK_DIR: 'work' },
-      { HARNAS_WORK_DIR: undefined },
+      { PARLEY_SESSION_ID: '../evil' },
+      { PARLEY_SESSION_ID: '' },
+      { PARLEY_WORK_DIR: 'work' },
+      { PARLEY_WORK_DIR: undefined },
     ]) {
       const line = await run(input(), { env: { ...env, ...bad } });
       expect(line).toContain('Opus');
@@ -240,7 +255,7 @@ describe('строка терминала', () => {
     const raw = input();
     expect(await run(raw)).toBe(raw);
 
-    await putStatusLine(home, 'settings.json', 'echo "$HARNAS_SESSION_ID $HARNAS_WORK_DIR"');
+    await putStatusLine(home, 'settings.json', 'echo "$PARLEY_SESSION_ID $PARLEY_WORK_DIR"');
     expect(await run(raw)).toBe(`s-01 ${workDir}\n`);
   });
 

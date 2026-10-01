@@ -11,7 +11,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * `STUB_BRACKETED=1`: включает bracketed paste и печатает вставку как `PASTE<<текст>>`.
  *
  * Буфер обмена человека тесты не читают и не пишут (решение контролёра 5.4):
- * - скриншот — `HARNAS_DROPS=fake`: main сохраняет в `drops/` фиксированную картинку 1×1
+ * - скриншот — `PARLEY_DROPS=fake`: main сохраняет в `drops/` фиксированную картинку 1×1
  *   вместо картинки буфера, а событие `paste` с картинкой — синтетическое `ClipboardEvent`
  *   со своим `DataTransfer`;
  * - файл из Finder — синтетические `dragover`/`drop` с `File` из временного каталога. `File`
@@ -29,7 +29,7 @@ interface Ref {
   sessionId: string;
 }
 
-type Harnas = { harnas: { call: (method: string, params: unknown) => Promise<unknown> } };
+type Parley = { parley: { call: (method: string, params: unknown) => Promise<unknown> } };
 
 /** Текст экрана терминала: строки DOM-рендера подряд — перенесённая строка склеивается. */
 async function screenText(window: Page): Promise<string> {
@@ -39,7 +39,7 @@ async function screenText(window: Page): Promise<string> {
 async function sendToAgent(window: Page, ref: Ref, text: string, submit: boolean): Promise<unknown> {
   return window.evaluate(
     ({ ref: target, text: body, submit: enter }) =>
-      (globalThis as unknown as Harnas).harnas.call('pty.send', { ref: target, text: body, submit: enter }),
+      (globalThis as unknown as Parley).parley.call('pty.send', { ref: target, text: body, submit: enter }),
     { ref, text, submit },
   );
 }
@@ -81,10 +81,10 @@ test.describe('отправка агенту из окна (кусок 5.4)', ()
     project = await makeTempProject('terminal-send');
     const env = {
       ...process.env,
-      HARNAS_HOME: home,
-      HARNAS_CLAUDE_BIN: stubAgent,
-      HARNAS_TERMINAL_RENDERER: 'dom',
-      HARNAS_DROPS: 'fake',
+      PARLEY_HOME: home,
+      PARLEY_CLAUDE_BIN: stubAgent,
+      PARLEY_TERMINAL_RENDERER: 'dom',
+      PARLEY_DROPS: 'fake',
       STUB_BRACKETED: '1',
     };
     app = await electron.launch({ args: [mainEntry], env });
@@ -92,12 +92,12 @@ test.describe('отправка агенту из окна (кусок 5.4)', ()
     await expect(window.getByTestId('landing')).toBeVisible();
 
     const work = (await window.evaluate(
-      (projectPath: string) => (globalThis as unknown as Harnas).harnas.call('works.create', { projectPath, title: 'e2e-send', goal: '' }),
+      (projectPath: string) => (globalThis as unknown as Parley).parley.call('works.create', { projectPath, title: 'e2e-send', goal: '' }),
       project,
     )) as { workId: string };
     const session = (await window.evaluate(
       ({ workId, projectPath }: { workId: string; projectPath: string }) =>
-        (globalThis as unknown as Harnas).harnas.call('sessions.create', {
+        (globalThis as unknown as Parley).parley.call('sessions.create', {
           projectPath,
           workId,
           provider: 'claude',
@@ -176,7 +176,7 @@ test.describe('отправка агенту из окна (кусок 5.4)', ()
     await input.click();
     await input.type('STUB_EXIT');
     await input.press('Enter');
-    await expect.poll(async () => ((await window.evaluate(() => (globalThis as unknown as Harnas).harnas.call('host.info', {}))) as { liveSessions: number }).liveSessions).toBe(0);
+    await expect.poll(async () => ((await window.evaluate(() => (globalThis as unknown as Parley).parley.call('host.info', {}))) as { liveSessions: number }).liveSessions).toBe(0);
     // Resume в тосте есть только у сессии, чей выход уже записан в карту (canResume); запись
     // идёт через файл карты и рассылку works.changed — на холодном старте дольше 5 с по умолчанию.
     await expect(window.getByText('Asleep').first()).toBeVisible({ timeout: 15_000 });
@@ -187,7 +187,7 @@ test.describe('отправка агенту из окна (кусок 5.4)', ()
     const toast = window.locator('[data-sonner-toast]').filter({ hasText: "isn't running" });
     await expect(toast).toBeVisible();
     await toast.getByRole('button', { name: 'Resume' }).click();
-    await expect.poll(async () => ((await window.evaluate(() => (globalThis as unknown as Harnas).harnas.call('host.info', {}))) as { liveSessions: number }).liveSessions).toBe(1);
+    await expect.poll(async () => ((await window.evaluate(() => (globalThis as unknown as Parley).parley.call('host.info', {}))) as { liveSessions: number }).liveSessions).toBe(1);
 
     // Новый stub включает bracketed paste не сразу после старта процесса, а экран вкладки без
     // исправления его строку готовности не покажет — ждём так же, как beforeEach после неё.
@@ -256,9 +256,9 @@ test.describe('отправка в сессию без хуков с запус�
     project = await makeTempProject('terminal-send-nohooks');
     const env = {
       ...process.env,
-      HARNAS_HOME: home,
-      HARNAS_CLAUDE_BIN: stubAgent,
-      HARNAS_TERMINAL_RENDERER: 'dom',
+      PARLEY_HOME: home,
+      PARLEY_CLAUDE_BIN: stubAgent,
+      PARLEY_TERMINAL_RENDERER: 'dom',
       STUB_BRACKETED: '1',
       STUB_NO_HOOKS: '1',
     };
@@ -267,12 +267,12 @@ test.describe('отправка в сессию без хуков с запус�
     await expect(window.getByTestId('landing')).toBeVisible();
 
     const work = (await window.evaluate(
-      (projectPath: string) => (globalThis as unknown as Harnas).harnas.call('works.create', { projectPath, title: 'e2e-nohooks', goal: '' }),
+      (projectPath: string) => (globalThis as unknown as Parley).parley.call('works.create', { projectPath, title: 'e2e-nohooks', goal: '' }),
       project,
     )) as { workId: string };
     const session = (await window.evaluate(
       ({ workId, projectPath }: { workId: string; projectPath: string }) =>
-        (globalThis as unknown as Harnas).harnas.call('sessions.create', { projectPath, workId, provider: 'claude', label: 'nohooks', task: '', parent: null }),
+        (globalThis as unknown as Parley).parley.call('sessions.create', { projectPath, workId, provider: 'claude', label: 'nohooks', task: '', parent: null }),
       { workId: work.workId, projectPath: project },
     )) as { ref: { sessionId: string } };
     const ref: Ref = { projectPath: project, workId: work.workId, sessionId: session.ref.sessionId };

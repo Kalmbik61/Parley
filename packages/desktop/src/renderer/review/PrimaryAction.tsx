@@ -18,8 +18,8 @@
 import { useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { toast } from 'sonner';
-import type { SessionRef } from '@harnas/protocol';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { SessionRef } from '@parley/protocol';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
 import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
@@ -32,7 +32,7 @@ import { AskAgentDialog } from './AskAgentDialog.js';
 import { askAgentText, mergeResultText, primaryActionFor, type ChangesSource } from './state.js';
 
 export interface PrimaryActionProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   /** Работа сессии: буферы файлов ищутся по её корням. */
   workKey: string;
   sessionRef: SessionRef;
@@ -137,7 +137,7 @@ export function PrimaryAction({ bridge, workKey, sessionRef, source, working, se
         done();
         const info = decodeIpcError(error);
         // Сообщение хоста — русский текст рантайма: человеку — только свой английский.
-        console.warn('[harnas] commit', info.code, info.message);
+        console.warn('[parley] commit', info.code, info.message);
         toast.error(errorText(info.code, S.errors.actions.commit));
       },
     );
@@ -159,7 +159,7 @@ export function PrimaryAction({ bridge, workKey, sessionRef, source, working, se
       },
       (error: unknown) => {
         const info = decodeIpcError(error);
-        console.warn('[harnas] worktrees.merge', info.code, info.message);
+        console.warn('[parley] worktrees.merge', info.code, info.message);
         toast.error(errorText(info.code, S.errors.actions.merge));
       },
     );

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
-import { checkSession, isAlive, processStartedAt, reconcileMap } from './liveness.js';
+import { checkSession, hasLiveProcess, isAlive, processStartedAt, reconcileMap } from './liveness.js';
 import { addSession, removeSession, transitionSession } from './map.js';
 import { createWork, readMap, updateMap } from './store.js';
 import type { WorkSession } from './types.js';
@@ -18,14 +18,14 @@ let project = '';
 const children: ChildProcess[] = [];
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
-  process.env.HARNAS_HOME = home;
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
+  process.env.PARLEY_HOME = home;
 });
 
 afterEach(async () => {
   for (const child of children.splice(0)) await stop(child);
-  delete process.env.HARNAS_HOME;
+  delete process.env.PARLEY_HOME;
   await Promise.all([home, project].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -149,6 +149,49 @@ describe('checkSession (чек-лист 15)', () => {
     expect(await checkSession(sessionOf({ startedAt: at(1000) }), { now })).toEqual({
       alive: true,
     });
+  });
+});
+
+describe('hasLiveProcess — живой ли процесс сессии по карте (R6: перенос каталога состояния проекта)', () => {
+  it('active: решает checkSession — живой свой процесс да, убитый и чужой по времени старта нет', async () => {
+    const child = start();
+    const pid = child.pid ?? 0;
+    const startedAtProcess = await processStartedAt(pid);
+
+    expect(await hasLiveProcess(sessionOf({ pid, startedAtProcess }))).toBe(true);
+    expect(await hasLiveProcess(sessionOf({ pid, startedAtProcess: '2020-01-01T00:00:00.000Z' }))).toBe(false);
+
+    await stop(child);
+    expect(await hasLiveProcess(sessionOf({ pid, startedAtProcess }))).toBe(false);
+  });
+
+  it('active без pid: недавняя — жива, давняя — нет (тишина считается от старта)', async () => {
+    const now = Date.parse('2026-09-05T12:00:00.000Z');
+    const at = (agoMs: number): string => new Date(now - agoMs).toISOString();
+
+    expect(await hasLiveProcess(sessionOf({ startedAt: at(1000) }), { now })).toBe(true);
+    expect(await hasLiveProcess(sessionOf({ startedAt: at(DEAD_MS + 1000) }), { now })).toBe(false);
+  });
+
+  it('sleeping: жива только со своим временем старта — чужое и незаписанное не считаются (как в reconcileMap)', async () => {
+    const child = start();
+    const pid = child.pid ?? 0;
+    const startedAtProcess = await processStartedAt(pid);
+    const sleeping = (patch: Partial<WorkSession>): WorkSession => sessionOf({ lifecycle: 'sleeping', pid, ...patch });
+
+    expect(await hasLiveProcess(sleeping({ startedAtProcess }))).toBe(true);
+    expect(await hasLiveProcess(sleeping({ startedAtProcess: '2020-01-01T00:00:00.000Z' }))).toBe(false);
+    expect(await hasLiveProcess(sleeping({ startedAtProcess: null }))).toBe(false);
+    expect(await hasLiveProcess(sleeping({ pid: null }))).toBe(false);
+  });
+
+  it('pending и closed процесса не имеют, что бы ни лежало в pid', async () => {
+    const child = start();
+    const pid = child.pid ?? 0;
+    const startedAtProcess = await processStartedAt(pid);
+
+    expect(await hasLiveProcess(sessionOf({ lifecycle: 'pending', pid, startedAtProcess }))).toBe(false);
+    expect(await hasLiveProcess(sessionOf({ lifecycle: 'closed', pid, startedAtProcess }))).toBe(false);
   });
 });
 

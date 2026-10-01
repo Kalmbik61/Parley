@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SessionRef } from '@harnas/protocol';
+import type { SessionRef } from '@parley/protocol';
 import { fakePty } from '../../test/fake-pty.js';
 import type { FakePty } from '../../test/fake-pty.js';
 import { typeAndSubmit } from './type-and-submit.js';

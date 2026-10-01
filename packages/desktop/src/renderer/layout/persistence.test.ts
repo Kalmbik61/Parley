@@ -7,7 +7,7 @@
 
 import { cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkEntry, WorkSession } from '@harnas/core';
+import type { WorkEntry, WorkSession } from '@parley/core';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { tabId } from './ids.js';

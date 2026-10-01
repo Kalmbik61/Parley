@@ -21,13 +21,14 @@
 
 import {
   dropExpiredWindows,
+  envValue,
   mergeLimits,
   readCodexLimits,
   readWorkLimits,
   workPaths,
   type LimitWindow,
   type ProviderLimits,
-} from '@harnas/core';
+} from '@parley/core';
 import type { HostContext } from '../context.js';
 import type { WorksService } from '../works/works-service.js';
 
@@ -63,13 +64,13 @@ const MIN_POLL_MS = 200;
 const MAX_POLL_MS = 2_147_483_647;
 
 /**
- * Рычаг E2E окна: `HARNAS_LIMITS_POLL_MS` — период опроса в миллисекундах, зажатый в
+ * Рычаг E2E окна: `PARLEY_LIMITS_POLL_MS` (и прежняя `HARNAS_LIMITS_POLL_MS`) — период опроса в миллисекундах, зажатый в
  * `[MIN_POLL_MS, MAX_POLL_MS]` (`1` даёт 200, `99999999999` — 2147483647). Нечисловое значение
  * (пусто, мусор, `NaN`, `Infinity`) рычага не даёт, и опрос идёт раз в 30 секунд: `setInterval` с
  * `NaN` крутился бы каждую миллисекунду.
  */
 export function limitsOptionsFromEnv(env: NodeJS.ProcessEnv): LimitsServiceOptions | undefined {
-  const raw = env['HARNAS_LIMITS_POLL_MS']?.trim();
+  const raw = envValue(env, 'LIMITS_POLL_MS')?.trim();
   // Пустая строка — не число, хотя `Number('')` равно нулю.
   if (raw === undefined || raw === '') return undefined;
   const value = Number(raw);

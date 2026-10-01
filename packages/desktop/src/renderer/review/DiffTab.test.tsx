@@ -6,7 +6,7 @@
 
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkEntry, WorktreeDiff } from '@harnas/core';
+import type { WorkEntry, WorktreeDiff } from '@parley/core';
 import type { DiffFile, FileRoot, TextFile } from '../../shared/files-types.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { tabId } from '../layout/ids.js';

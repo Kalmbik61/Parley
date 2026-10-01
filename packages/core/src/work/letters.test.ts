@@ -100,13 +100,13 @@ describe('markHumanRead', () => {
   const OLD = '2020-01-01T00:00:00.000Z';
 
   beforeEach(async () => {
-    home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-    project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
-    process.env.HARNAS_HOME = home;
+    home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+    project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
+    process.env.PARLEY_HOME = home;
   });
 
   afterEach(async () => {
-    delete process.env.HARNAS_HOME;
+    delete process.env.PARLEY_HOME;
     await Promise.all([home, project].map((dir) => rm(dir, { recursive: true, force: true })));
   });
 

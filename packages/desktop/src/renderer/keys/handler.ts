@@ -158,7 +158,7 @@ export function installKeyHandler(input: {
     try {
       action();
     } catch (error) {
-      console.error('[harnas] key action failed', error);
+      console.error('[parley] key action failed', error);
     }
   };
   const { paletteOpen } = input;

@@ -62,7 +62,7 @@ export function createPendingFocusTarget(): { put(target: FocusTarget): void; ta
   };
 }
 
-/** Запись журнала `HARNAS_NOTIFICATIONS=log`: E2E читает её через `app.evaluate` и кликает. */
+/** Запись журнала `PARLEY_NOTIFICATIONS=log`: E2E читает её через `app.evaluate` и кликает. */
 export interface LoggedNotification {
   title: string;
   body: string;
@@ -73,7 +73,7 @@ export interface LoggedNotification {
 }
 
 /**
- * Уведомление без системного показа — для E2E (`HARNAS_NOTIFICATIONS=log`): настоящее
+ * Уведомление без системного показа — для E2E (`PARLEY_NOTIFICATIONS=log`): настоящее
  * всплыло бы на экране человека, который в это время работает за машиной. `show` пишет
  * запись в журнал, `click` записи делает то же, что клик по настоящему уведомлению.
  */

@@ -4,7 +4,7 @@
  * терминала (спека 8.3); `list`, `readText`, `readBytes` и `write` — с 7.1a,
  * остальное приходит в 7.1b и 8.3.
  */
-import type { DiffFile } from '@harnas/core';
+import type { DiffFile } from '@parley/core';
 import type { FileRootSpec } from './layout-types.js';
 
 /**

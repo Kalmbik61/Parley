@@ -10,10 +10,10 @@ import { addMessage, addSession } from '../work/map.js';
 import { addRoom } from '../work/rooms.js';
 import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
 import { HUMAN, type WorkMap } from '../work/types.js';
-import { createHarnasServer } from './tools.js';
+import { createParleyServer } from './tools.js';
 
 /**
- * Аннотации MCP инструментов `harnas` (спека комнат, решение 13). По ним Codex решает, спрашивать ли
+ * Аннотации MCP инструментов `parley` (спека комнат, решение 13). По ним Codex решает, спрашивать ли
  * человека перед вызовом: без аннотаций он спросил бы перед каждым (незаданные `destructiveHint` и
  * `openWorldHint` считаются истиной), а с `readOnlyHint: true` не спрашивает вовсе. Поэтому
  * аннотация — обещание клиенту, и тесты проверяют не только таблицу, но и что она правда: чтения
@@ -56,7 +56,7 @@ let workId = '';
 const opened: { client: Client; server: Server }[] = [];
 
 async function connect(sessionId: string | null = 's-01'): Promise<Client> {
-  const server = createHarnasServer({
+  const server = createParleyServer({
     projectPath: project,
     workId,
     workDir: workPaths(project, workId).dir,
@@ -112,14 +112,14 @@ const ids = (map: WorkMap) => ({
 });
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
-  binDir = await mkdtemp(path.join(tmpdir(), 'harnas-bin-'));
-  process.env.HARNAS_HOME = home;
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
+  binDir = await mkdtemp(path.join(tmpdir(), 'parley-bin-'));
+  process.env.PARLEY_HOME = home;
   // `spawn_session` проверяет команду провайдера в PATH: подсунут файл-заглушка, настоящий `claude` не запускается.
   const stub = path.join(binDir, 'claude');
   await writeFile(stub, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  process.env.HARNAS_CLAUDE_BIN = stub;
+  process.env.PARLEY_CLAUDE_BIN = stub;
 
   const map = await createWork(project, { title: 'Авторизация', goal: 'логин по паролю' });
   workId = map.work.id;
@@ -140,12 +140,12 @@ afterEach(async () => {
     await client.close();
     await server.close();
   }
-  delete process.env.HARNAS_HOME;
-  delete process.env.HARNAS_CLAUDE_BIN;
+  delete process.env.PARLEY_HOME;
+  delete process.env.PARLEY_CLAUDE_BIN;
   await Promise.all([home, project, binDir].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-describe('аннотации инструментов harnas: таблица', () => {
+describe('аннотации инструментов parley: таблица', () => {
   it('у каждого инструмента сервера есть аннотации, и они ровно по таблице решения 13', async () => {
     const { tools } = await (await connect()).listTools();
 
@@ -170,14 +170,14 @@ describe('аннотации инструментов harnas: таблица', (
     ]);
   });
 
-  it('сессия без HARNAS_SESSION_ID видит те же аннотации: они не зависят от контекста', async () => {
+  it('сессия без PARLEY_SESSION_ID видит те же аннотации: они не зависят от контекста', async () => {
     const { tools } = await (await connect(null)).listTools();
 
     for (const tool of tools) expect(tool.annotations, tool.name).toEqual(TABLE[tool.name]);
   });
 });
 
-describe('аннотации инструментов harnas: правда по коду', () => {
+describe('аннотации инструментов parley: правда по коду', () => {
   it('чтения ничего не пишут: ни карту, ни файлы проекта, ни дом харнесса', async () => {
     const client = await connect();
     const before = await snapshotAll();

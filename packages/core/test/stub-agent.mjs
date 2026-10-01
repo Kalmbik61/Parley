@@ -10,7 +10,8 @@
 //   mouse on|off      — включает/выключает отслеживание мыши (как это делает TUI)
 //   color             — печатает цветной текст
 //   deaf              — перестаёт слушать SIGHUP: так проверяется добивание SIGKILL
-//   event <json>      — дописывает строку в $HARNAS_WORK_DIR/events/$HARNAS_SESSION_ID.jsonl,
+//   event <json>      — дописывает строку в $PARLEY_WORK_DIR/events/$PARLEY_SESSION_ID.jsonl
+//                       (или в прежние $HARNAS_*),
 //                       как это делает хук Claude Code (дизайн TUI v2, 4.2)
 //   event <сессия> <json> — то же, но в журнал другой сессии той же работы:
 //                       stdin достаётся только подключённой сессии, а события
@@ -28,10 +29,10 @@
 // гостя. Uuid сессии в 36 знаков помещается целиком.
 //
 // `--version` stub отвечает и выходит: перед запуском с флагом канала харнесс
-// пробует версию (разговор агентов, 4.4). `HARNAS_STUB_VERSION` подменяет
+// пробует версию (разговор агентов, 4.4). `PARLEY_STUB_VERSION` подменяет
 // ответ — так проверяется отказ от push на старой сборке.
 //
-// `HARNAS_STUB_ENV` — имена переменных через запятую: stub печатает их после
+// `PARLEY_STUB_ENV` — имена переменных через запятую: stub печатает их после
 // баннера строками `env <имя>=<значение>`, `-` — переменной нет. Так тест видит,
 // какое окружение доехало до агента. Без переменной баннер прежний: лишняя
 // строка вытеснила бы его начало с узкой панели.
@@ -39,8 +40,15 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 
+/**
+ * Переменная окружения по ключу без префикса: `PARLEY_<ключ>`, а не задана — прежняя `HARNAS_<ключ>`.
+ * Заглушки понимают оба имени, как сам продукт (R3). Пустая строка остаётся значением, как у
+ * прежнего прямого чтения `process.env`.
+ */
+const fromEnv = (key) => process.env[`PARLEY_${key}`] ?? process.env[`HARNAS_${key}`];
+
 if (process.argv.includes('--version')) {
-  process.stdout.write(`${process.env.HARNAS_STUB_VERSION ?? '2.1.276 (Claude Code)'}\n`);
+  process.stdout.write(`${fromEnv('STUB_VERSION') ?? '2.1.276 (Claude Code)'}\n`);
   process.exit(0);
 }
 
@@ -68,11 +76,11 @@ const agentAt = process.argv.indexOf('--agent');
 process.stdout.write(`agent=${agentAt === -1 ? '-' : process.argv[agentAt + 1]}\r\n`);
 process.stdout.write(`cwd=${process.cwd()}\r\n`);
 // Окружение сессии работы: по нему тест видит, что до процесса доехали
-// HARNAS_WORK_DIR и HARNAS_SESSION_ID. Печатаем коротко — панель узкая.
+// PARLEY_WORK_DIR и PARLEY_SESSION_ID (и прежние HARNAS_*). Печатаем коротко — панель узкая.
 process.stdout.write(
-  `harnas=${process.env.HARNAS_SESSION_ID ?? '-'}@${(process.env.HARNAS_WORK_DIR ?? '-').split('/').pop()}\r\n`,
+  `parley=${fromEnv('SESSION_ID') ?? '-'}@${(fromEnv('WORK_DIR') ?? '-').split('/').pop()}\r\n`,
 );
-for (const name of (process.env.HARNAS_STUB_ENV ?? '').split(',').filter(Boolean)) {
+for (const name of (fromEnv('STUB_ENV') ?? '').split(',').filter(Boolean)) {
   process.stdout.write(`env ${name}=${process.env[name] ?? '-'}\r\n`);
 }
 
@@ -149,17 +157,17 @@ function handle(line) {
 
 /**
  * Хук Claude Code одной командой дописывает stdin-JSON в журнал сессии
- * (`cat >> "$HARNAS_WORK_DIR/events/$HARNAS_SESSION_ID.jsonl"`). Настоящий
+ * (`cat >> "${PARLEY_WORK_DIR:-$HARNAS_WORK_DIR}/events/..."`). Настоящий
  * бинарь в тестах не запускается, поэтому ту же строку пишет stub.
  */
 function writeEvent(argument) {
-  const dir = process.env.HARNAS_WORK_DIR;
+  const dir = fromEnv('WORK_DIR');
   // `event <сессия> <json>`: имя журнала перед самим событием.
   const cut = argument.startsWith('{') ? -1 : argument.indexOf(' ');
-  const session = cut === -1 ? process.env.HARNAS_SESSION_ID : argument.slice(0, cut);
+  const session = cut === -1 ? fromEnv('SESSION_ID') : argument.slice(0, cut);
   const json = cut === -1 ? argument : argument.slice(cut + 1);
   if (dir === undefined || session === undefined) {
-    process.stdout.write('event: нет HARNAS_WORK_DIR или HARNAS_SESSION_ID\r\n');
+    process.stdout.write('event: нет PARLEY_WORK_DIR или PARLEY_SESSION_ID\r\n');
     return;
   }
   const events = path.join(dir, 'events');

@@ -17,7 +17,7 @@ import { useDraggable } from '@dnd-kit/core';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronDown, ChevronRight, File as FileIcon, Link2 } from 'lucide-react';
 import { toast } from 'sonner';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import type { DirEntry, FileRoot, GitStatusLetter } from '../../shared/files-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import type { TabSpec } from '../../shared/layout-types.js';
@@ -114,7 +114,7 @@ export function openFile(root: FileRoot, path: string, beside: boolean): void {
 }
 
 function copy(text: string): void {
-  navigator.clipboard.writeText(text).catch((error: unknown) => console.warn('[harnas] clipboard', error));
+  navigator.clipboard.writeText(text).catch((error: unknown) => console.warn('[parley] clipboard', error));
 }
 
 /** Отказ файлового API — английский текст по коду; `files:*` `errorText` не знает (E.1). */
@@ -130,7 +130,7 @@ interface RowProps {
   rootDir: string | null;
   expanded: boolean;
   letter: GitStatusLetter | undefined;
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   style?: React.CSSProperties;
 }
 
@@ -202,7 +202,7 @@ const Row = memo(function Row({ row, root, rootKey, rootDir, expanded, letter, b
           onSelect={() => {
             if (absPath === null) return;
             bridge.app.showInFinder(absPath).catch((error: unknown) => {
-              console.warn('[harnas] app.showInFinder', error);
+              console.warn('[parley] app.showInFinder', error);
               toast(failureText(error, S.errors.actions.revealInFinder));
             });
           }}
@@ -219,7 +219,7 @@ const Row = memo(function Row({ row, root, rootKey, rootDir, expanded, letter, b
 });
 
 export interface TreeProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   root: FileRoot;
   /** Папка корня на диске — для «Reveal in Finder» и «Copy path»; null — корня в снимке нет. */
   rootDir: string | null;
@@ -262,7 +262,7 @@ export function Tree({ bridge, root, rootDir, status, showIgnored, reloadToken, 
       })
       .catch((error: unknown) => {
         if (!alive.current) return;
-        console.warn('[harnas] files.list', error);
+        console.warn('[parley] files.list', error);
         const { code } = decodeIpcError(error);
         // Пустая папка вместо ошибки — иначе эффект ниже звал бы `list` на каждую отрисовку.
         setDirs((current) => ({ ...current, [dir]: [] }));

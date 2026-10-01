@@ -28,13 +28,13 @@ export function tokenColor(value: string, fallback: string): string {
 }
 
 /**
- * Темы `harnas-dark` и `harnas-light` из токенов окна (фон `--editor-surface`). Токены читаются
+ * Темы `parley-dark` и `parley-light` из токенов окна (фон `--editor-surface`). Токены читаются
  * в момент вызова: его зовут после смены `.dark` на `<html>`, и переменные уже нужной темы.
  * Сбой своей темы не роняет редактор: встроенная `vs`/`vs-dark` и предупреждение в консоль —
  * текст файла важнее цвета фона.
  */
 export function applyTheme(api: ThemeApi, dark: boolean, style: CSSStyleDeclaration): void {
-  const name = dark ? 'harnas-dark' : 'harnas-light';
+  const name = dark ? 'parley-dark' : 'parley-light';
   const background = tokenColor(style.getPropertyValue('--editor-surface'), dark ? '#1e1e1e' : '#ffffff');
   const foreground = tokenColor(style.getPropertyValue('--foreground'), dark ? '#fafafa' : '#0a0a0a');
   try {
@@ -53,7 +53,7 @@ export function applyTheme(api: ThemeApi, dark: boolean, style: CSSStyleDeclarat
     });
     api.setTheme(name);
   } catch (error) {
-    console.warn('[harnas] monaco theme', error);
+    console.warn('[parley] monaco theme', error);
     api.setTheme(dark ? 'vs-dark' : 'vs');
   }
 }

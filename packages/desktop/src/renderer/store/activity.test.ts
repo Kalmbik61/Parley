@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { refKey, type SessionRef } from '@harnas/protocol';
+import { refKey, type SessionRef } from '@parley/protocol';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { activityFor, useActivityStore, type ActivityEntry } from './activity.js';
 

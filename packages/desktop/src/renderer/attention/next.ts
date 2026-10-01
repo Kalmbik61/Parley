@@ -13,9 +13,9 @@
  * порядку сайдбара цель первого непустого яруса: при наличии blocked круг начинается с неё.
  */
 
-import type { WorkEntry, WorkSession } from '@harnas/core';
-import type { SessionRef } from '@harnas/protocol';
-import { refKey } from '@harnas/protocol';
+import type { WorkEntry, WorkSession } from '@parley/core';
+import type { SessionRef } from '@parley/protocol';
+import { refKey } from '@parley/protocol';
 import type { FocusTarget } from '../../shared/bridge.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { tabId } from '../layout/ids.js';

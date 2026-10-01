@@ -1,7 +1,7 @@
 import path from 'node:path';
-import { harnasHome } from '@harnas/core';
+import { parleyHome } from '@parley/core';
 
-/** Файлы одного хоста: всё лежит в `<HARNAS_HOME>/host/`. */
+/** Файлы одного хоста: всё лежит в `<дом>/host/` (`parleyHome()`). */
 export interface HostPaths {
   dir: string;
   socket: string;
@@ -16,7 +16,7 @@ export interface HostPaths {
  */
 export const MAX_SOCKET_PATH_BYTES = 103;
 
-export function hostPaths(home: string = harnasHome()): HostPaths {
+export function hostPaths(home: string = parleyHome()): HostPaths {
   const dir = path.join(home, 'host');
   return {
     dir,

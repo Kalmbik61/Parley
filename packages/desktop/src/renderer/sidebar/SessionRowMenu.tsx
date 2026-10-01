@@ -11,8 +11,8 @@
 
 import { useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import type { SessionStatus, WorkSession } from '@harnas/core';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { SessionStatus, WorkSession } from '@parley/core';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
@@ -44,7 +44,7 @@ export interface SessionRowMenuProps {
   projectPath: string;
   workId: string;
   session: WorkSession;
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   /** «Open» — как клик по строке. */
   onOpen(): void;
   /** Строка — триггер ui/context-menu. */
@@ -62,7 +62,7 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
   const ref = { projectPath, workId, sessionId: session.id };
   // Ошибки управления сессией — как у прежнего меню: в консоль, строка сама покажет исход.
   const call = (method: 'sessions.resume' | 'sessions.stop' | 'sessions.close' | 'sessions.delete'): void => {
-    bridge.call(method, { ref }).catch((error: unknown) => console.warn(`[harnas] ${method}`, error));
+    bridge.call(method, { ref }).catch((error: unknown) => console.warn(`[parley] ${method}`, error));
   };
 
   const openBeside = (): void => {
@@ -128,7 +128,7 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
           {worktree !== null ? (
             <ContextMenuItem
               onSelect={() => {
-                navigator.clipboard.writeText(worktree.path).catch((error: unknown) => console.warn('[harnas] clipboard', error));
+                navigator.clipboard.writeText(worktree.path).catch((error: unknown) => console.warn('[parley] clipboard', error));
               }}
             >
               {S.sidebar.sessionMenu.copyWorktreePath}

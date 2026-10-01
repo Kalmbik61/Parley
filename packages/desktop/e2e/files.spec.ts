@@ -9,8 +9,8 @@ import { makeTempHome, makeTempProject } from './tmp.js';
 /**
  * Реестр корней main, `files.locate`, `app.openPath` и `app.showInFinder` на собранном окне
  * (кусок 5.2, спека 10.8). Настоящие `shell.openPath` и `shell.showItemInFolder` открыли бы
- * приложение и Finder на экране человека: `HARNAS_SHELL=log` (`playwright.config.ts`) пишет их
- * в журнал main, тест читает его через `app.evaluate` (`globalThis.__harnasShell`).
+ * приложение и Finder на экране человека: `PARLEY_SHELL=log` (`playwright.config.ts`) пишет их
+ * в журнал main, тест читает его через `app.evaluate` (`globalThis.__parleyShell`).
  */
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -21,16 +21,16 @@ type ShellEntry = { action: 'openPath' | 'showItemInFolder'; path: string } | { 
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
-    ([m, p]) => (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas.call(m, p),
+    ([m, p]) => (globalThis as unknown as { parley: { call: (m: string, p: unknown) => Promise<unknown> } }).parley.call(m, p),
     [method, params] as const,
   ) as Promise<T>;
 }
 
-/** Вызов `window.harnas.<группа>.<метод>` из рендерера: ответ или текст ошибки, как его видит окно. */
+/** Вызов `window.parley.<группа>.<метод>` из рендерера: ответ или текст ошибки, как его видит окно. */
 async function bridge(window: Page, group: 'app' | 'files', method: string, args: unknown[]): Promise<{ ok: unknown } | { error: string }> {
   return window.evaluate(
     async ([g, m, a]) => {
-      const api = (globalThis as unknown as { harnas: Record<string, Record<string, (...x: unknown[]) => Promise<unknown>>> }).harnas;
+      const api = (globalThis as unknown as { parley: Record<string, Record<string, (...x: unknown[]) => Promise<unknown>>> }).parley;
       try {
         return { ok: await api[g]![m]!(...a) };
       } catch (error) {
@@ -42,7 +42,7 @@ async function bridge(window: Page, group: 'app' | 'files', method: string, args
 }
 
 async function shellLog(app: ElectronApplication): Promise<ShellEntry[]> {
-  return app.evaluate(() => [...((globalThis as { __harnasShell?: ShellEntry[] }).__harnasShell ?? [])]);
+  return app.evaluate(() => [...((globalThis as { __parleyShell?: ShellEntry[] }).__parleyShell ?? [])]);
 }
 
 test.describe('файлы и корни main (кусок 5.2)', () => {
@@ -64,7 +64,7 @@ test.describe('файлы и корни main (кусок 5.2)', () => {
   });
 
   test('locate находит файл работы; openPath открывает белый список, скрипт показывает в Finder, путь вне корней — files:denied', async () => {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();

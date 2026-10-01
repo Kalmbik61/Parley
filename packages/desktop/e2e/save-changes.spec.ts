@@ -26,7 +26,7 @@ const LONG_FILE = `${'s'.repeat(252)}.ts`;
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
-    ([m, p]) => (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas.call(m, p),
+    ([m, p]) => (globalThis as unknown as { parley: { call: (m: string, p: unknown) => Promise<unknown> } }).parley.call(m, p),
     [method, params] as const,
   ) as Promise<T>;
 }
@@ -72,7 +72,7 @@ test.describe('несохранённые правки при закрытии �
 
   test("крестик окна — вопрос, Cancel оставляет окно; выход — вопрос, Don't save — приложение закрылось", async () => {
     test.setTimeout(60_000);
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();
@@ -127,7 +127,7 @@ test.describe('несохранённые правки при закрытии �
 
   /** Окно 800×500 с работой над проектом, файлы открыты из дерева и изменены в буфере. */
   async function launchDirty(names: string[]): Promise<{ electronApp: ElectronApplication; window: Page; problems: string[] }> {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();
@@ -168,7 +168,7 @@ test.describe('несохранённые правки при закрытии �
 
   /** Метка `quit` main в stdout: сам процесс Chromium под нагрузкой разбирается десятки секунд (stop-app.ts). */
   async function quitMark(electronApp: ElectronApplication): Promise<{ seen: Promise<void> }> {
-    const mark = 'harnas-e2e: quit-after-save';
+    const mark = 'parley-e2e: quit-after-save';
     const proc = electronApp.process();
     const seen = new Promise<void>((resolve) => {
       let text = '';
@@ -265,7 +265,7 @@ test.describe('несохранённые правки при закрытии �
     test.setTimeout(60_000);
     const { electronApp, window, problems } = await launchDirty(['a.ts']);
     await window.evaluate(() => {
-      (globalThis as { __harnasPageMark?: boolean }).__harnasPageMark = true;
+      (globalThis as { __parleyPageMark?: boolean }).__parleyPageMark = true;
     });
     await electronApp.evaluate(({ BrowserWindow }) => {
       const contents = BrowserWindow.getAllWindows()[0]?.webContents;
@@ -275,7 +275,7 @@ test.describe('несохранённые правки при закрытии �
     await expect(dialog).toBeVisible();
     await dialog.getByRole('button', { name: 'Save', exact: true }).click();
     await expect
-      .poll(() => window.evaluate(() => (globalThis as { __harnasPageMark?: boolean }).__harnasPageMark === true).catch(() => true), {
+      .poll(() => window.evaluate(() => (globalThis as { __parleyPageMark?: boolean }).__parleyPageMark === true).catch(() => true), {
         timeout: CLOSE_AFTER_SAVE_MS,
       })
       .toBe(false);

@@ -4,6 +4,7 @@ import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { BRANCH_PREFIX, DEFAULT_WORKTREE_ROOT, STATE_DIRS } from '../names.js';
 import {
   baseBranchOf,
   commitProject,
@@ -37,7 +38,7 @@ const git = (dir: string, args: string[]) => run('git', ['-C', dir, ...args]);
 // Последовательно: одновременная запись `.git/config` двумя вызовами git
 // временами ловит собственную же блокировку файла настроек.
 async function setIdentity(dir: string): Promise<void> {
-  await git(dir, ['config', 'user.email', 'тест@harnas']);
+  await git(dir, ['config', 'user.email', 'тест@parley']);
   await git(dir, ['config', 'user.name', 'тест']);
 }
 
@@ -46,7 +47,7 @@ let project = '';
 let worktreeRoot = '';
 
 beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), 'harnas-worktree-'));
+  root = await mkdtemp(path.join(tmpdir(), 'parley-worktree-'));
   project = path.join(root, 'project');
   worktreeRoot = path.join(root, 'worktrees');
   await mkdir(project, { recursive: true });
@@ -69,7 +70,7 @@ describe('plannedWorktree', () => {
   it('строит путь и ветку по формату спеки: <root>/<проект>-<хеш6>/<workId>-<sessionId>', () => {
     const info = plannedWorktree('/tmp/my-project', 'w-0001', 's-02', 'main', worktreeRoot);
 
-    expect(info.branch).toBe('harnas/w-0001/s-02');
+    expect(info.branch).toBe('parley/w-0001/s-02');
     expect(info.base).toBe('main');
     expect(info.createdAt).toBeNull();
     expect(path.dirname(path.dirname(info.path))).toBe(worktreeRoot);
@@ -91,8 +92,16 @@ describe('plannedWorktree', () => {
   });
 
   it('тильда в root раскрывается в домашнюю папку', () => {
-    const info = plannedWorktree('/tmp/proj', 'w-0001', 's-01', 'main', '~/harnas/worktrees');
-    expect(info.path.startsWith(homedir())).toBe(true);
+    const info = plannedWorktree('/tmp/proj', 'w-0001', 's-01', 'main', '~/parley/worktrees');
+    expect(info.path.startsWith(path.join(homedir(), 'parley', 'worktrees') + path.sep)).toBe(true);
+  });
+
+  it('ветка новой сессии — BRANCH_PREFIX, корень по умолчанию — DEFAULT_WORKTREE_ROOT (R9)', () => {
+    const info = plannedWorktree('/tmp/proj', 'w-0003', 's-04', 'main', DEFAULT_WORKTREE_ROOT);
+
+    expect(info.branch).toBe(`${BRANCH_PREFIX}w-0003/s-04`);
+    expect(info.branch.startsWith('parley/')).toBe(true);
+    expect(info.path.startsWith(path.join(homedir(), 'parley', 'worktrees') + path.sep)).toBe(true);
   });
 });
 
@@ -198,7 +207,7 @@ describe('mergeWorktree', () => {
   it('чистая база — merge-коммит с двумя родителями', async () => {
     const info = await withCommittedFeature();
 
-    const result = await mergeWorktree(project, info, 'harnas: влить фичу');
+    const result = await mergeWorktree(project, info, 'parley: влить фичу');
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -215,7 +224,7 @@ describe('mergeWorktree', () => {
     const info = await withCommittedFeature();
     await writeFile(path.join(project, 'dirty.md'), 'грязь\n', 'utf8');
 
-    const result = await mergeWorktree(project, info, 'harnas: влить фичу');
+    const result = await mergeWorktree(project, info, 'parley: влить фичу');
 
     expect(result).toMatchObject({ ok: false, reason: 'base_dirty' });
     await expect(readFile(path.join(project, 'feature.md'), 'utf8')).rejects.toThrow();
@@ -232,24 +241,24 @@ describe('mergeWorktree', () => {
     await git(info.path, ['add', 'feature.md']);
     await git(info.path, ['commit', '-m', 'фича']);
 
-    const result = await mergeWorktree(project, info, 'harnas: влить фичу');
+    const result = await mergeWorktree(project, info, 'parley: влить фичу');
 
     expect(result).toMatchObject({ ok: false, reason: 'base_not_checked_out' });
   });
 
-  it('изменения только в .harnas/ базы без .gitignore — не грязь, слияние проходит', async () => {
+  it.each(STATE_DIRS)('изменения только в %s/ базы без .gitignore — не грязь, слияние проходит', async (stateName) => {
     const info = await withCommittedFeature();
-    // .harnas/ — своё состояние гарнеса внутри проекта; если проект его не
-    // игнорирует, `git status` в базе всегда видит эти файлы. baseDirty должен
+    // Каталог состояния (`.parley/`, прежний `.harnas/`) — своё состояние харнесса внутри проекта; если
+    // проект его не игнорирует, `git status` в базе всегда видит эти файлы. baseDirty должен
     // их не замечать, иначе слияние никогда бы не проходило ни у одного
-    // проекта без .gitignore на .harnas/.
-    await mkdir(path.join(project, '.harnas'), { recursive: true });
-    await writeFile(path.join(project, '.harnas', 'state.json'), '{}\n', 'utf8');
+    // проекта без .gitignore на каталоге состояния.
+    await mkdir(path.join(project, stateName), { recursive: true });
+    await writeFile(path.join(project, stateName, 'state.json'), '{}\n', 'utf8');
 
     const diff = await worktreeDiff(project, info);
     expect(diff.baseDirty).toBe(false);
 
-    const result = await mergeWorktree(project, info, 'harnas: влить фичу');
+    const result = await mergeWorktree(project, info, 'parley: влить фичу');
     expect(result.ok).toBe(true);
   });
 
@@ -257,7 +266,7 @@ describe('mergeWorktree', () => {
     const info = await withCommittedFeature();
     await writeFile(path.join(info.path, 'draft.md'), 'черновик\n', 'utf8');
 
-    const result = await mergeWorktree(project, info, 'harnas: влить фичу');
+    const result = await mergeWorktree(project, info, 'parley: влить фичу');
 
     expect(result).toMatchObject({ ok: false, reason: 'uncommitted' });
   });
@@ -279,7 +288,7 @@ describe('mergeWorktree', () => {
     await git(project, ['add', 'shared.md']);
     await git(project, ['commit', '-m', 'правка в базе']);
 
-    const result = await mergeWorktree(project, info, 'harnas: влить фичу');
+    const result = await mergeWorktree(project, info, 'parley: влить фичу');
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -690,7 +699,7 @@ describe('ревизии из карты в mergeWorktree, createWorktree, disca
   });
 });
 
-describe('вложенный репозиторий и .harnas в worktree (раунд исправлений 1)', () => {
+describe('вложенный репозиторий и каталог состояния в worktree (раунд исправлений 1)', () => {
   async function nestedRepo(dir: string): Promise<void> {
     const nested = path.join(dir, 'nested');
     await run('git', ['init', '-b', 'main', nested]);
@@ -720,11 +729,11 @@ describe('вложенный репозиторий и .harnas в worktree (ра
     expect(diff.uncommittedPaths).toEqual(['nested/']);
   });
 
-  it('.harnas/ внутри worktree — не в files, не в uncommittedPaths и патче, не в коммите', async () => {
+  it.each(STATE_DIRS)('%s/ внутри worktree — не в files, не в uncommittedPaths и патче, не в коммите', async (stateName) => {
     await initProject();
     const info = await freshWorktree();
-    await mkdir(path.join(info.path, '.harnas', 'works', 'w'), { recursive: true });
-    await writeFile(path.join(info.path, '.harnas', 'works', 'w', 'log.jsonl'), '{"harnas":1}\n', 'utf8');
+    await mkdir(path.join(info.path, stateName, 'works', 'w'), { recursive: true });
+    await writeFile(path.join(info.path, stateName, 'works', 'w', 'log.jsonl'), '{"harnas":1}\n', 'utf8');
     await writeFile(path.join(info.path, 'a.txt'), 'a\n', 'utf8');
 
     const diff = await worktreeDiff(project, info);
@@ -799,7 +808,7 @@ describe('проект — подкаталог репозитория (тест
     expect(changes.files.map((file) => file.path)).toEqual(['a.txt', 'новый.txt']);
   });
 
-  it('неотслеживаемый sub/.harnas/works/w/log.jsonl в базе — baseDirty: false', async () => {
+  it.each(STATE_DIRS)('неотслеживаемый sub/%s/works/w/log.jsonl в базе — baseDirty: false', async (stateName) => {
     await initProject();
     const sub = path.join(project, 'sub');
     await mkdir(sub);
@@ -808,22 +817,22 @@ describe('проект — подкаталог репозитория (тест
     await git(project, ['commit', '-m', 'sub']);
     const info = plannedWorktree(sub, 'w-0001', 's-02', 'main', worktreeRoot);
     await createWorktree(sub, info);
-    await mkdir(path.join(sub, '.harnas', 'works', 'w'), { recursive: true });
-    await writeFile(path.join(sub, '.harnas', 'works', 'w', 'log.jsonl'), '{}\n', 'utf8');
+    await mkdir(path.join(sub, stateName, 'works', 'w'), { recursive: true });
+    await writeFile(path.join(sub, stateName, 'works', 'w', 'log.jsonl'), '{}\n', 'utf8');
 
     expect((await worktreeDiff(sub, info)).baseDirty).toBe(false);
   });
 });
 
-describe('.harnas/ — не изменения проекта (тест 9)', () => {
-  async function harnasLog(dir: string): Promise<void> {
-    await mkdir(path.join(dir, '.harnas', 'works', 'w-01', 'events'), { recursive: true });
-    await writeFile(path.join(dir, '.harnas', 'works', 'w-01', 'events', 's-01.jsonl'), '{}\n', 'utf8');
+describe.each(STATE_DIRS)('%s/ — не изменения проекта (тест 9)', (stateName) => {
+  async function parleyLog(dir: string): Promise<void> {
+    await mkdir(path.join(dir, stateName, 'works', 'w-01', 'events'), { recursive: true });
+    await writeFile(path.join(dir, stateName, 'works', 'w-01', 'events', 's-01.jsonl'), '{}\n', 'utf8');
   }
 
-  it('в files только a.txt; коммит без .harnas/', async () => {
+  it('в files только a.txt; коммит без каталога состояния', async () => {
     await initProject();
-    await harnasLog(project);
+    await parleyLog(project);
     await writeFile(path.join(project, 'a.txt'), 'a\n', 'utf8');
 
     expect((await projectChanges(project)).files.map((file) => file.path)).toEqual(['a.txt']);
@@ -836,26 +845,39 @@ describe('.harnas/ — не изменения проекта (тест 9)', () 
     expect((await git(project, ['log', '-1', '--pretty=%s'])).stdout.trim()).toBe('коммит папки');
   });
 
-  it('изменён только .harnas/ — NothingToCommitError, коммита нет', async () => {
+  it('изменён только каталог состояния — NothingToCommitError, коммита нет', async () => {
     await initProject();
-    await harnasLog(project);
+    await parleyLog(project);
     const head = (await git(project, ['rev-parse', 'HEAD'])).stdout;
 
     await expect(commitProject(project, 'пусто')).rejects.toBeInstanceOf(NothingToCommitError);
     expect((await git(project, ['rev-parse', 'HEAD'])).stdout).toBe(head);
   });
 
-  it('.harnas/ в .gitignore: коммит проходит, изменён только .harnas/ — NothingToCommitError', async () => {
+  it('каталог состояния в .gitignore: коммит проходит, изменён только он — NothingToCommitError', async () => {
     await initProject();
-    await writeFile(path.join(project, '.gitignore'), '.harnas/\n', 'utf8');
+    await writeFile(path.join(project, '.gitignore'), `${stateName}/\n`, 'utf8');
     await git(project, ['add', '.gitignore']);
     await git(project, ['commit', '-m', 'игнор']);
-    await harnasLog(project);
+    await parleyLog(project);
 
     await expect(commitProject(project, 'пусто')).rejects.toBeInstanceOf(NothingToCommitError);
 
     await writeFile(path.join(project, 'a.txt'), 'a\n', 'utf8');
     const { commit } = await commitProject(project, 'с игнором');
+    expect((await git(project, ['show', '--name-only', '--format=', commit])).stdout.trim()).toBe('a.txt');
+  });
+
+  it('каталог состояния сам себя прячет (`.gitignore` со строкой `*` внутри): коммит проходит, корневой .gitignore не нужен', async () => {
+    await initProject();
+    await parleyLog(project);
+    await writeFile(path.join(project, stateName, '.gitignore'), '*\n', 'utf8');
+
+    expect((await projectChanges(project)).files).toEqual([]);
+    await expect(commitProject(project, 'пусто')).rejects.toBeInstanceOf(NothingToCommitError);
+
+    await writeFile(path.join(project, 'a.txt'), 'a\n', 'utf8');
+    const { commit } = await commitProject(project, 'с самоигнором');
     expect((await git(project, ['show', '--name-only', '--format=', commit])).stdout.trim()).toBe('a.txt');
   });
 
@@ -870,7 +892,7 @@ describe('.harnas/ — не изменения проекта (тест 9)', () 
     await writeFile(path.join(sub, 'a.txt'), '2\n', 'utf8');
     await writeFile(path.join(project, 'top.txt'), 't2\n', 'utf8');
     await git(sub, ['add', '../top.txt']);
-    await harnasLog(sub);
+    await parleyLog(sub);
 
     const { commit } = await commitProject(sub, 'только sub');
     expect((await git(project, ['show', '--name-only', '--format=', commit])).stdout.trim()).toBe('sub/a.txt');

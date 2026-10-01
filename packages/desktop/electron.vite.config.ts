@@ -25,7 +25,7 @@ function pdfjsAssets(): Plugin {
   const shipped = (dir: string): string[] =>
     readdirSync(join(root, dir)).filter((name) => !/^(LiberationSans-|LICENSE_LIBERATION$)/.test(name));
   return {
-    name: 'harnas-pdfjs-assets',
+    name: 'parley-pdfjs-assets',
     configureServer(server) {
       server.middlewares.use((request, response, next) => {
         const match = /^\/pdfjs\/(cmaps|standard_fonts)\/([\w.-]+)$/.exec(request.url?.split('?')[0] ?? '');

@@ -22,7 +22,7 @@ describe('isExpectedIpcRefusal', () => {
   it('чужая ошибка без метки и чужие строки console.error печатаются', () => {
     expect(isExpectedIpcRefusal(electronLine('files:grep', new Error('boom')))).toBe(false);
     expect(isExpectedIpcRefusal(electronLine('files:grep', 'bad_request'))).toBe(false);
-    expect(isExpectedIpcRefusal(['[harnas] что-то', encodeIpcError({ code: 'bad_request', message: 'm' })])).toBe(false);
+    expect(isExpectedIpcRefusal(['[parley] что-то', encodeIpcError({ code: 'bad_request', message: 'm' })])).toBe(false);
     expect(isExpectedIpcRefusal([encodeIpcError({ code: 'bad_request', message: 'm' })])).toBe(false);
   });
 });
@@ -38,7 +38,7 @@ describe('quietExpectedIpcRefusals', () => {
 
     const failure = encodeIpcError({ code: 'failed', message: 'boom' });
     target.error(...electronLine('files:grep', failure));
-    target.error('[harnas] other', 1);
-    expect(error.mock.calls).toEqual([["Error occurred in handler for 'files:grep':", failure], ['[harnas] other', 1]]);
+    target.error('[parley] other', 1);
+    expect(error.mock.calls).toEqual([["Error occurred in handler for 'files:grep':", failure], ['[parley] other', 1]]);
   });
 });

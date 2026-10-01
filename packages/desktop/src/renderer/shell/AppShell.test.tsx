@@ -12,7 +12,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
-import type { WorkEntry, WorkSession } from '@harnas/core';
+import type { WorkEntry, WorkSession } from '@parley/core';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { xtermMock } from '../test-utils/xterm-mock.js';
 import type { LayoutNode, TabSpec } from '../../shared/layout-types.js';
@@ -28,7 +28,7 @@ import { useNoticesStore } from '../store/notices.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
-import { refKey } from '@harnas/protocol';
+import { refKey } from '@parley/protocol';
 import { workKey } from '../lib/tree-order.js';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import { AppShell } from './AppShell.js';

@@ -11,7 +11,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * Codex — из заголовка окна и уведомлений его терминала, конец хода — скриптом `notify`, письмо занятому
  * агенту — в очередь клавишей Tab.
  *
- * Агент — заглушка `stub-codex-agent.mjs`, подмена бинаря — `HARNAS_CODEX_BIN`, как `HARNAS_CLAUDE_BIN` у
+ * Агент — заглушка `stub-codex-agent.mjs`, подмена бинаря — `PARLEY_CODEX_BIN`, как `PARLEY_CLAUDE_BIN` у
  * claude: настоящий codex в E2E не запускается даже с `--version` (проба версий отключена в
  * `global-setup.ts`). Заглушка пишет те же заголовки и OSC 9, что описывает исследование Codex, а `notify`
  * запускает по `-c notify=[…]` из своего argv — то есть настоящий скрипт харнесса с настоящими флагами запуска.
@@ -32,10 +32,10 @@ interface Ref {
   sessionId: string;
 }
 
-type Harnas = { harnas: { call: (m: string, p: unknown) => Promise<unknown>; notify: (m: string, p: unknown) => void } };
+type Parley = { parley: { call: (m: string, p: unknown) => Promise<unknown>; notify: (m: string, p: unknown) => void } };
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
-  return window.evaluate(([m, p]) => (globalThis as unknown as Harnas).harnas.call(m, p), [method, params] as const) as Promise<T>;
+  return window.evaluate(([m, p]) => (globalThis as unknown as Parley).parley.call(m, p), [method, params] as const) as Promise<T>;
 }
 
 /** Текст экрана терминала: строки DOM-рендера подряд — перенесённая строка склеивается (`terminal-send.spec.ts`). */
@@ -45,7 +45,7 @@ async function screenText(window: Page): Promise<string> {
 
 /** Строка «в терминал агента», как набрал бы человек: уведомление `pty.input` хоста. */
 async function humanTypes(window: Page, ref: Ref, text: string): Promise<void> {
-  await window.evaluate(([target, data]) => (globalThis as unknown as Harnas).harnas.notify('pty.input', { ref: target, data }), [ref, text] as const);
+  await window.evaluate(([target, data]) => (globalThis as unknown as Parley).parley.notify('pty.input', { ref: target, data }), [ref, text] as const);
 }
 
 interface SendResult {
@@ -80,7 +80,7 @@ test.describe('Codex — агент комнаты (кусок 11a)', () => {
 
   /** Окно с заглушкой codex и одной запущенной сессией codex (тихий старт — задачи нет), терминал открыт. */
   async function launch(extraEnv: NodeJS.ProcessEnv = {}): Promise<void> {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CODEX_BIN: stubCodex, HARNAS_TERMINAL_RENDERER: 'dom', ...extraEnv };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CODEX_BIN: stubCodex, PARLEY_TERMINAL_RENDERER: 'dom', ...extraEnv };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     window = await electronApp.firstWindow();
@@ -147,7 +147,7 @@ test.describe('Codex — агент комнаты (кусок 11a)', () => {
     await humanTypes(window, ref, 'STUB_NOTIFY\r');
     await expect.poll(() => screenText(window)).toContain('notify: запущен');
 
-    const journal = path.join(project, '.harnas', 'works', ref.workId, 'events', `${ref.sessionId}.jsonl`);
+    const journal = path.join(project, '.parley', 'works', ref.workId, 'events', `${ref.sessionId}.jsonl`);
     await expect
       .poll(async () => readFile(journal, 'utf8').catch(() => ''), { timeout: 10_000 })
       .toContain('"hook_event_name":"Stop"');
@@ -178,7 +178,7 @@ test.describe('Codex — агент комнаты (кусок 11a)', () => {
   });
 
   test('экран старта без заголовков — «нужен ты» с причиной; окно ничего не отправляет и не отвечает за человека', async () => {
-    await launch({ STUB_CODEX_NO_TITLE: '1', HARNAS_CODEX_STARTUP_MS: '1500' });
+    await launch({ STUB_CODEX_NO_TITLE: '1', PARLEY_CODEX_STARTUP_MS: '1500' });
 
     // Ни одного известного сигнала: хост не знает, что у агента на экране, и пишет в него нечего.
     expect(await sendToAgent(window, ref, 'привет')).toEqual({ inserted: false, submitted: false, reason: 'blocked' });

@@ -35,7 +35,7 @@ test.describe('окно поднимает хост и переживает ег
   test('пустой список работ, хост поднят, Node в рендерере недоступен', async () => {
     const app = await electron.launch({
       args: [mainEntry],
-      env: { ...process.env, HARNAS_HOME: home },
+      env: { ...process.env, PARLEY_HOME: home },
     });
     running = app;
 
@@ -46,14 +46,14 @@ test.describe('окно поднимает хост и переживает ег
     const requireType = await window.evaluate(() => typeof (globalThis as { require?: unknown }).require);
     expect(requireType).toBe('undefined');
 
-    const bridgeType = await window.evaluate(() => typeof (globalThis as { harnas?: unknown }).harnas);
+    const bridgeType = await window.evaluate(() => typeof (globalThis as { parley?: unknown }).parley);
     expect(bridgeType).not.toBe('undefined');
   });
 
   test('ожидаемый отказ канала не печатается в stderr main, сбой — печатается (fix-lane-post, п. 4)', async () => {
     const app = await electron.launch({
       args: [mainEntry],
-      env: { ...process.env, HARNAS_HOME: home },
+      env: { ...process.env, PARLEY_HOME: home },
     });
     running = app;
     let mainLog = '';
@@ -66,7 +66,7 @@ test.describe('окно поднимает хост и переживает ег
     const callCode = (method: string, params: unknown): Promise<string> =>
       window.evaluate(
         async ([m, p]) => {
-          const bridge = (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas;
+          const bridge = (globalThis as unknown as { parley: { call: (m: string, p: unknown) => Promise<unknown> } }).parley;
           return bridge.call(m, p).then(
             () => 'ok',
             (error: unknown) => String(error),
@@ -86,7 +86,7 @@ test.describe('окно поднимает хост и переживает ег
   test('второй запуск фокусирует первое окно и завершается сам', async () => {
     const first = await electron.launch({
       args: [mainEntry],
-      env: { ...process.env, HARNAS_HOME: home },
+      env: { ...process.env, PARLEY_HOME: home },
     });
     running = first;
     await first.firstWindow();
@@ -97,7 +97,7 @@ test.describe('окно поднимает хост и переживает ег
     // второй процесс поднимаем напрямую и ждём только его кода выхода.
     const secondExitCode = await new Promise<number | null>((resolve, reject) => {
       const child = spawn(electronBinary, [mainEntry], {
-        env: { ...process.env, HARNAS_HOME: home },
+        env: { ...process.env, PARLEY_HOME: home },
       });
       child.on('error', reject);
       child.on('close', (code) => resolve(code));

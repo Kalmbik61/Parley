@@ -3,16 +3,16 @@
  * цитирует блоки, которые окно шлёт в терминал агента, — чтобы агент узнал их в своём вводе. Шаблоны
  * этих блоков живут здесь, в `S`; поменяет окно шаблон — тест упадёт и напомнит поправить гид.
  *
- * Лежит в `main/`: он импортирует `@harnas/core` как значение, а так core берёт только процесс
+ * Лежит в `main/`: он импортирует `@parley/core` как значение, а так core берёт только процесс
  * main — рендерер из core получает лишь типы.
  */
 
-import { GUIDE } from '@harnas/core';
+import { GUIDE } from '@parley/core';
 import { describe, expect, it } from 'vitest';
 import { S } from '../shared/strings.js';
 
 /** Те же ветка, база и сессия, что в примерах гида. */
-const BRANCH = 'harnas/w-0003/s-02';
+const BRANCH = 'parley/w-0003/s-02';
 const BASE = 'master';
 
 describe('гид агента цитирует блоки окна дословно', () => {

@@ -2,7 +2,7 @@ import { appendFile, mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { setProposal, updateMap } from '@harnas/core';
+import { setProposal, updateMap } from '@parley/core';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
@@ -14,7 +14,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * строки статуса, и клик по счётчику ведёт во вкладку комнаты; под строками активной карточки — «New session or room».
  *
  * Комнату создаёт хост (`rooms.create` с `lead` и тихим стартом, заглушка агента писем не читает), решение кладёт в
- * карту тест ядром — так его положил бы `propose_decision`: настоящий `harnas-mcp` заглушка не зовёт (сквозной
+ * карту тест ядром — так его положил бы `propose_decision`: настоящий `parley-mcp` заглушка не зовёт (сквозной
  * сценарий со стабом — кусок 8).
  */
 
@@ -25,14 +25,14 @@ let project = '';
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
-    ([m, p]) => (globalThis as unknown as { harnas: { call: (m: string, p: unknown) => Promise<unknown> } }).harnas.call(m, p),
+    ([m, p]) => (globalThis as unknown as { parley: { call: (m: string, p: unknown) => Promise<unknown> } }).parley.call(m, p),
     [method, params] as const,
   ) as Promise<T>;
 }
 
 /** Строка в журнал событий сессии — то, что дописал бы хук Claude Code (как в `attention.spec.ts`). */
 async function hookEvent(workId: string, sessionId: string, event: Record<string, string>): Promise<void> {
-  const dir = path.join(project, '.harnas', 'works', workId, 'events');
+  const dir = path.join(project, '.parley', 'works', workId, 'events');
   await mkdir(dir, { recursive: true });
   await appendFile(path.join(dir, `${sessionId}.jsonl`), `${JSON.stringify(event)}\n`);
 }
@@ -58,13 +58,13 @@ test.describe('строка комнаты в карточке (кусок 5)', 
     home = await makeTempHome('room-row');
     project = await makeTempProject('room-row');
     // Ядро, которым тест кладёт решение в карту, читает дом из окружения этого процесса.
-    homeBefore = process.env.HARNAS_HOME;
-    process.env.HARNAS_HOME = home;
+    homeBefore = process.env.PARLEY_HOME;
+    process.env.PARLEY_HOME = home;
   });
 
   test.afterEach(async () => {
-    if (homeBefore === undefined) delete process.env.HARNAS_HOME;
-    else process.env.HARNAS_HOME = homeBefore;
+    if (homeBefore === undefined) delete process.env.PARLEY_HOME;
+    else process.env.PARLEY_HOME = homeBefore;
     await stopApp(app);
     app = null;
     await stopHost(home);
@@ -73,7 +73,7 @@ test.describe('строка комнаты в карточке (кусок 5)', 
   });
 
   test('комната вместо участников, значки провайдеров, ★ у ведущего; решение ждёт — подкраска, «1 needs you» и переход в комнату', async () => {
-    const env = { ...process.env, HARNAS_HOME: home, HARNAS_CLAUDE_BIN: stubAgent, HARNAS_TERMINAL_RENDERER: 'dom' };
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();

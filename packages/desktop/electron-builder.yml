@@ -12,9 +12,9 @@ files:
   - out/preload/**
   - out/renderer/**
   - package.json
-  - '!node_modules/@harnas/host/**'
+  - '!node_modules/@parley/host/**'
   - '!node_modules/node-pty/**'
-  - '!node_modules/.pnpm/@harnas+host@**'
+  - '!node_modules/.pnpm/@parley+host@**'
   - '!node_modules/.pnpm/node-pty@**'
 # node-pty хоста собран под системный Node (спека §3.2) — Electron его вообще
 # не грузит, поэтому пересобирать нативные модули под ABI Electron незачем.

@@ -38,7 +38,7 @@ export async function stopApp(app: ElectronApplication | null): Promise<void> {
   if (app !== null) await kill(app);
 }
 
-const QUIT_MARK = 'harnas-e2e: quit';
+const QUIT_MARK = 'parley-e2e: quit';
 
 /**
  * Штатный выход посреди теста — перед перезапуском окна с тем же домом: `app.quit()`,

@@ -50,7 +50,7 @@ describe('runJob', () => {
   let dir = '';
 
   beforeEach(async () => {
-    dir = await realpath(await mkdtemp(path.join(tmpdir(), 'harnas-grepworker-')));
+    dir = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-grepworker-')));
   });
 
   afterEach(async () => {
@@ -99,7 +99,7 @@ describe('runJob', () => {
   });
 
   it('walk: путь, ушедший наружу по ссылке, не читается', async () => {
-    const outside = await realpath(await mkdtemp(path.join(tmpdir(), 'harnas-grepworker-out-')));
+    const outside = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-grepworker-out-')));
     try {
       await writeFile(path.join(outside, 's.txt'), 'needle\n');
       execFileSync('ln', ['-s', path.join(outside, 's.txt'), path.join(dir, 'l.txt')]);

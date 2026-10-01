@@ -10,8 +10,8 @@ let codexRoot: string;
 const line = (record: unknown) => `${JSON.stringify(record)}\n`;
 
 beforeEach(async () => {
-  claudeRoot = await mkdtemp(path.join(tmpdir(), 'harnas-all-claude-'));
-  codexRoot = await mkdtemp(path.join(tmpdir(), 'harnas-all-codex-'));
+  claudeRoot = await mkdtemp(path.join(tmpdir(), 'parley-all-claude-'));
+  codexRoot = await mkdtemp(path.join(tmpdir(), 'parley-all-codex-'));
 });
 afterEach(async () => {
   await rm(claudeRoot, { recursive: true, force: true });

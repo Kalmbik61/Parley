@@ -1,6 +1,6 @@
 /**
- * Настройки харнесса: необязательный `HARNAS_HOME/config.json`, поверх него —
- * переменные окружения `HARNAS_*`.
+ * Настройки харнесса: необязательный `config.json` дома (`parleyHome()`), поверх него —
+ * переменные окружения `PARLEY_*` (прежние `HARNAS_*` читаются тоже: новое имя главнее).
  *
  * Загрузчик один и живёт в core: настройки читают хост и CLI. Ни один битый
  * файл не должен мешать запуску, поэтому вместо ошибки возвращается пара
@@ -13,9 +13,10 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { harnasHome } from './work/store.js';
+import { DEFAULT_WORKTREE_ROOT, envName, envValue } from './names.js';
+import { parleyHome } from './work/store.js';
 
-export interface HarnasConfig {
+export interface ParleyConfig {
   /** Порог молчания лога для страховочной `activity` (раздел 4.3). */
   silenceThresholdMs: number;
   /**
@@ -36,8 +37,8 @@ export interface HarnasConfig {
   /** Запускать ли `pending` от агента самим, в фоне, без диалога (раздел 5.2). */
   autoLaunch: boolean;
   /**
-   * Ставить ли скилл `harnas` в проект и в worktree сессии при запуске (`work/skill-install.ts`): файлы
-   * `.agents/skills/harnas` и симлинк `.claude/skills/harnas`. Выключено — хост скилл не ставит и не
+   * Ставить ли скилл `parley` в проект и в worktree сессии при запуске (`work/skill-install.ts`): файлы
+   * `.agents/skills/parley` и симлинк `.claude/skills/parley`. Выключено — хост скилл не ставит и не
    * обновляет; уже поставленное не удаляется.
    */
   agentSkills: boolean;
@@ -54,7 +55,7 @@ export interface HarnasConfig {
   worktreeRoot: string;
 }
 
-export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
+export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
   silenceThresholdMs: 30_000,
   channelPush: true,
   messageRate: 20,
@@ -64,40 +65,43 @@ export const DEFAULT_CONFIG: Readonly<HarnasConfig> = {
   // Терминал окна (кусок 1.3 плана окна, спека 4.3).
   fontFamily: "'SF Mono', Menlo, monospace",
   fontSize: 14,
-  worktreeRoot: '~/harnas/worktrees',
+  worktreeRoot: DEFAULT_WORKTREE_ROOT,
 };
 
-/** Имя переменной окружения для каждого ключа — один источник для загрузчика и оверлея. */
-export const ENV_NAMES: Readonly<Record<keyof HarnasConfig, string>> = {
-  silenceThresholdMs: 'HARNAS_SILENCE_MS',
-  channelPush: 'HARNAS_CHANNEL_PUSH',
-  messageRate: 'HARNAS_MESSAGE_RATE',
-  resumeRate: 'HARNAS_RESUME_RATE',
-  autoLaunch: 'HARNAS_AUTO_LAUNCH',
-  agentSkills: 'HARNAS_AGENT_SKILLS',
-  fontFamily: 'HARNAS_FONT_FAMILY',
-  fontSize: 'HARNAS_FONT_SIZE',
-  worktreeRoot: 'HARNAS_WORKTREE_ROOT',
+/**
+ * Ключ переменной окружения для каждой настройки — без префикса: значение читается как `PARLEY_<ключ>`,
+ * а нет его — как прежнее `HARNAS_<ключ>` (`envValue`). Один источник для загрузчика и оверлея.
+ */
+export const ENV_NAMES: Readonly<Record<keyof ParleyConfig, string>> = {
+  silenceThresholdMs: 'SILENCE_MS',
+  channelPush: 'CHANNEL_PUSH',
+  messageRate: 'MESSAGE_RATE',
+  resumeRate: 'RESUME_RATE',
+  autoLaunch: 'AUTO_LAUNCH',
+  agentSkills: 'AGENT_SKILLS',
+  fontFamily: 'FONT_FAMILY',
+  fontSize: 'FONT_SIZE',
+  worktreeRoot: 'WORKTREE_ROOT',
 };
 
 export interface LoadedConfig {
-  config: HarnasConfig;
+  config: ParleyConfig;
   /** Что не прочиталось. `null` — вопросов к настройкам нет. */
   warning: string | null;
   /** Ключи, чьё значение пришло из окружения: файл их не перекроет. */
-  fromEnv: ReadonlyArray<keyof HarnasConfig>;
+  fromEnv: ReadonlyArray<keyof ParleyConfig>;
 }
 
 /** Файл настроек. Его может не быть — тогда работают дефолты. */
 export function configPath(): string {
-  return path.join(harnasHome(), 'config.json');
+  return path.join(parleyHome(), 'config.json');
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** Часть настроек: только те поля, которые прочитались без вопросов. */
-type ConfigPatch = Partial<HarnasConfig>;
+type ConfigPatch = Partial<ParleyConfig>;
 
 /** Собирает жалобы, чтобы показать их одной строкой: битых полей может быть несколько. */
 type Complain = (message: string) => void;
@@ -134,7 +138,7 @@ const RESUME_RATE_EXPECTED = `целое от ${RESUME_RATE_MIN} до ${RESUME_R
 /** Значения из файла: тут JSON, поэтому типы проверяются как есть. */
 function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatch {
   const patch: ConfigPatch = {};
-  const take = <K extends keyof HarnasConfig>(
+  const take = <K extends keyof ParleyConfig>(
     key: K,
     ok: (value: unknown) => boolean,
     expected: string,
@@ -145,7 +149,7 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
       complain(`${key}: ожидается ${expected}`);
       return;
     }
-    patch[key] = value as HarnasConfig[K];
+    patch[key] = value as ParleyConfig[K];
   };
 
   take('silenceThresholdMs', isPositiveInt, 'целое больше нуля');
@@ -167,58 +171,55 @@ const FALSE = new Set(['0', 'false', 'no', 'off']);
 function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   const patch: ConfigPatch = {};
 
-  const text = (name: string): string | undefined => {
-    const value = env[name];
-    // Пустая переменная — то же самое, что незаданная: так же ведёт себя HARNAS_HOME.
-    return value === undefined || value === '' ? undefined : value;
-  };
+  // Пустая переменная — то же самое, что незаданная: так же ведёт себя `PARLEY_HOME` (`envValue`).
+  const text = (key: keyof ParleyConfig): string | undefined => envValue(env, ENV_NAMES[key]);
+  // Имя, которое назвать человеку: то, под которым значение реально пришло.
+  const nameOf = (key: keyof ParleyConfig): string => envName(env, ENV_NAMES[key]) ?? ENV_NAMES[key];
 
   const flag = (key: 'channelPush' | 'autoLaunch' | 'agentSkills'): void => {
-    const name = ENV_NAMES[key];
-    const value = text(name);
+    const value = text(key);
     if (value === undefined) return;
     const lower = value.toLowerCase();
     if (TRUE.has(lower)) patch[key] = true;
     else if (FALSE.has(lower)) patch[key] = false;
-    else complain(`${name}: ожидается 0 или 1`);
+    else complain(`${nameOf(key)}: ожидается 0 или 1`);
   };
 
   const count = (key: 'silenceThresholdMs' | 'messageRate'): void => {
-    const name = ENV_NAMES[key];
-    const value = text(name);
+    const value = text(key);
     if (value === undefined) return;
     const parsed = Number(value);
     if (isPositiveInt(parsed)) patch[key] = parsed;
-    else complain(`${name}: ожидается целое больше нуля`);
+    else complain(`${nameOf(key)}: ожидается целое больше нуля`);
   };
 
   count('silenceThresholdMs');
   flag('channelPush');
   count('messageRate');
-  const resumeRate = text(ENV_NAMES.resumeRate);
+  const resumeRate = text('resumeRate');
   if (resumeRate !== undefined) {
     const parsed = Number(resumeRate);
     if (isResumeRate(parsed)) patch.resumeRate = parsed;
-    else complain(`${ENV_NAMES.resumeRate}: ожидается ${RESUME_RATE_EXPECTED}`);
+    else complain(`${nameOf('resumeRate')}: ожидается ${RESUME_RATE_EXPECTED}`);
   }
   flag('autoLaunch');
   flag('agentSkills');
 
-  const fontFamily = text(ENV_NAMES.fontFamily);
+  const fontFamily = text('fontFamily');
   if (fontFamily !== undefined) {
     if (isFontFamily(fontFamily)) patch.fontFamily = fontFamily;
-    else complain(`${ENV_NAMES.fontFamily}: ожидается непустая строка`);
+    else complain(`${nameOf('fontFamily')}: ожидается непустая строка`);
   }
-  const fontSize = text(ENV_NAMES.fontSize);
+  const fontSize = text('fontSize');
   if (fontSize !== undefined) {
     const parsed = Number(fontSize);
     if (isFontSize(parsed)) patch.fontSize = parsed;
-    else complain(`${ENV_NAMES.fontSize}: ожидается ${FONT_SIZE_EXPECTED}`);
+    else complain(`${nameOf('fontSize')}: ожидается ${FONT_SIZE_EXPECTED}`);
   }
-  const worktreeRoot = text(ENV_NAMES.worktreeRoot);
+  const worktreeRoot = text('worktreeRoot');
   if (worktreeRoot !== undefined) {
     if (isWorktreeRoot(worktreeRoot)) patch.worktreeRoot = worktreeRoot;
-    else complain(`${ENV_NAMES.worktreeRoot}: ожидается непустая строка`);
+    else complain(`${nameOf('worktreeRoot')}: ожидается непустая строка`);
   }
   return patch;
 }
@@ -266,12 +267,12 @@ export async function loadConfig(
     config: { ...DEFAULT_CONFIG, ...filePatch, ...envPatch },
     warning: problems.length === 0 ? null : problems.join('; '),
     // Битая переменная ключ не перекрывает, в патч не попадает — и в список тоже.
-    fromEnv: Object.keys(envPatch) as ReadonlyArray<keyof HarnasConfig>,
+    fromEnv: Object.keys(envPatch) as ReadonlyArray<keyof ParleyConfig>,
   };
 }
 
 /** Булевы ключи настроек — те же множества «да/нет», что у загрузчика окружения. */
-const BOOLEAN_KEYS: ReadonlySet<keyof HarnasConfig> = new Set([
+const BOOLEAN_KEYS: ReadonlySet<keyof ParleyConfig> = new Set([
   'channelPush',
   'autoLaunch',
   'agentSkills',
@@ -280,39 +281,39 @@ const BOOLEAN_KEYS: ReadonlySet<keyof HarnasConfig> = new Set([
 /**
  * Разбор введённого значения теми же правилами, что и у файла и у окружения:
  * `settings.set` хоста (кусок 1.4) не должен расходиться с загрузчиком. Раньше
- * понимал только числовые ключи и `prefix` — теперь любой ключ `HarnasConfig`.
+ * понимал только числовые ключи и `prefix` — теперь любой ключ `ParleyConfig`.
  */
-export function parseSetting<K extends keyof HarnasConfig>(
+export function parseSetting<K extends keyof ParleyConfig>(
   key: K,
   text: string,
-): { value: HarnasConfig[K] } | { error: string } {
+): { value: ParleyConfig[K] } | { error: string } {
   if (key === 'fontFamily') {
-    if (isFontFamily(text)) return { value: text as HarnasConfig[K] };
+    if (isFontFamily(text)) return { value: text as ParleyConfig[K] };
     return { error: `${key}: ожидается непустая строка` };
   }
   if (key === 'worktreeRoot') {
-    if (isWorktreeRoot(text)) return { value: text as HarnasConfig[K] };
+    if (isWorktreeRoot(text)) return { value: text as ParleyConfig[K] };
     return { error: `${key}: ожидается непустая строка` };
   }
   if (key === 'fontSize') {
     const parsed = Number(text);
-    if (isFontSize(parsed)) return { value: parsed as HarnasConfig[K] };
+    if (isFontSize(parsed)) return { value: parsed as ParleyConfig[K] };
     return { error: `${key}: ожидается ${FONT_SIZE_EXPECTED}` };
   }
   if (key === 'resumeRate') {
     // Отдельная ветка: общая для чисел отвергла бы допустимый ноль.
     const parsed = Number(text);
-    if (isResumeRate(parsed)) return { value: parsed as HarnasConfig[K] };
+    if (isResumeRate(parsed)) return { value: parsed as ParleyConfig[K] };
     return { error: `${key}: ожидается ${RESUME_RATE_EXPECTED}` };
   }
   if (BOOLEAN_KEYS.has(key)) {
     const lower = text.toLowerCase();
-    if (TRUE.has(lower)) return { value: true as HarnasConfig[K] };
-    if (FALSE.has(lower)) return { value: false as HarnasConfig[K] };
+    if (TRUE.has(lower)) return { value: true as ParleyConfig[K] };
+    if (FALSE.has(lower)) return { value: false as ParleyConfig[K] };
     return { error: `${key}: ожидается 0 или 1` };
   }
   const parsed = Number(text);
-  if (isPositiveInt(parsed)) return { value: parsed as HarnasConfig[K] };
+  if (isPositiveInt(parsed)) return { value: parsed as ParleyConfig[K] };
   return { error: `${key}: ожидается целое больше нуля` };
 }
 
@@ -321,7 +322,7 @@ export function parseSetting<K extends keyof HarnasConfig>(
  * перезаписывается целиком: пользователь правит настройку, а не чинит JSON.
  */
 export async function saveConfig(
-  patch: Partial<HarnasConfig>,
+  patch: Partial<ParleyConfig>,
   file: string = configPath(),
 ): Promise<void> {
   let kept: Record<string, unknown> = {};

@@ -25,7 +25,7 @@
 
 import { ArrowLeft, ArrowRight, PanelLeft, PanelRight, Search } from 'lucide-react';
 import { toast } from 'sonner';
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
 import { cn } from '../lib/cn.js';
@@ -34,7 +34,7 @@ import { useUiStore } from '../store/ui.js';
 import { rightSidebarHasRoom } from './RightSidebar.js';
 
 export interface TitlebarProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   /** Показать поиск справа: сайдбара с его строкой `Search` на экране нет (решает `AppShell`). */
   showSearch?: boolean;
 }

@@ -321,11 +321,11 @@ describe('рамочный тест репозитория (тест 6)', () => 
     const locations = rawHits.map((hit) => `${hit.file}:${hit.line}`).sort();
     expect(locations).toEqual(
       [
-        'packages/core/src/codex/discover.ts:8',
+        'packages/core/src/codex/discover.ts:10',
         'packages/core/src/codex/discover.ts:9',
         'packages/core/src/providers.ts:14',
         'packages/core/src/providers.ts:220',
-        'packages/core/src/work/mcp-config.ts:142',
+        'packages/core/src/work/mcp-config.ts:144',
       ].sort(),
     );
   });
@@ -383,8 +383,8 @@ describe('строка статуса не пишет в каталоги аге
       });
       const env = {
         PATH: process.env['PATH'],
-        HARNAS_WORK_DIR: workDir,
-        HARNAS_SESSION_ID: 's-01',
+        PARLEY_WORK_DIR: workDir,
+        PARLEY_SESSION_ID: 's-01',
       };
       const printed = await runStatusline(input, { env, home });
 
@@ -400,7 +400,7 @@ describe('строка статуса не пишет в каталоги аге
 });
 
 describe('скилл агентов не пишет в каталоги агента (юридическая рамка, кусок 10)', () => {
-  // Скилл `harnas` кладётся в проект и в worktree сессий, а `~/.claude`, `~/.codex`, `~/.agents` и
+  // Скилл `parley` кладётся в проект и в worktree сессий, а `~/.claude`, `~/.codex`, `~/.agents` и
   // `~/.claude.json` не трогаются ни при каких условиях: ни установкой, ни учётом, ни строками exclude.
   it('домашняя папка после установки в проект и в worktree не изменилась ни на байт', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'frame-skill-'));
@@ -428,8 +428,8 @@ describe('скилл агентов не пишет в каталоги аген
 
       expect(await snapshot(home)).toEqual(before);
       // А в проекте и в worktree скилл лёг: проверка не прошла бы на пустом месте.
-      expect(await readdir(path.join(project, '.agents', 'skills'))).toEqual(['harnas']);
-      expect(await readdir(path.join(worktree, '.claude', 'skills'))).toEqual(['harnas']);
+      expect(await readdir(path.join(project, '.agents', 'skills'))).toEqual(['parley']);
+      expect(await readdir(path.join(worktree, '.claude', 'skills'))).toEqual(['parley']);
     } finally {
       if (savedHome === undefined) delete process.env['HOME'];
       else process.env['HOME'] = savedHome;

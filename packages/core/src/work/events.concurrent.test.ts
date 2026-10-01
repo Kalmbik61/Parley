@@ -38,7 +38,7 @@ const { openEvents } = await import('./events.js');
 let dir = '';
 
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), 'harnas-events-race-'));
+  dir = await mkdtemp(path.join(tmpdir(), 'parley-events-race-'));
 });
 
 afterEach(async () => {

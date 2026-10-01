@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { HarnasConfig, MergeCheck, MergeResult, ProjectChanges, WorktreeDiff } from '@harnas/core';
+import type { ParleyConfig, MergeCheck, MergeResult, ProjectChanges, WorktreeDiff } from '@parley/core';
 import type { ModelOption, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 export const sessionRef = z.object({
@@ -205,8 +205,8 @@ export interface Results {
   'wake.pause': { paused: boolean };
   'wake.resume': { paused: boolean };
   'wake.state': { paused: boolean };
-  'settings.get': { config: HarnasConfig; locked: Record<string, string> };
-  'settings.set': { config: HarnasConfig };
+  'settings.get': { config: ParleyConfig; locked: Record<string, string> };
+  'settings.set': { config: ParleyConfig };
   'rooms.create': { roomId: string };
   /** `messageId` — системная строка ленты «@s04 joined the room». */
   'rooms.addMember': { messageId: string };

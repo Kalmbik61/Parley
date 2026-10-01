@@ -1,16 +1,16 @@
-import type { WorkEntry } from '@harnas/core';
+import type { WorkEntry } from '@parley/core';
 
 /**
  * Лимиты подписки провайдера (спека комнат Organic, 3.5): пятичасовое и недельное окна и время, когда
  * CLI отдал числа. Типы живут в core — их же разбирают читатели логов, — а по проводу ходят как есть.
  */
-export type { LimitWindow, ProviderLimits } from '@harnas/core';
+export type { LimitWindow, ProviderLimits } from '@parley/core';
 
 /**
  * Модель в списке провайдера (`providers.list`, дизайн комнат, 3.2): `id` — значение `--model`,
  * `label` — подпись для окна. Тип живёт в core рядом с реестром, откуда список и берётся.
  */
-export type { ModelOption } from '@harnas/core';
+export type { ModelOption } from '@parley/core';
 
 /** Адрес сессии: без него не различить два «work-01» в разных проектах. */
 export interface SessionRef {
@@ -50,7 +50,7 @@ export type NoticeKind =
   // Codex не показал ни `Ready`, ни `Working` за срок после запуска: он на экране входа или доверия к папке,
   // и его проходит человек в терминале Codex. Сессия при этом «нужен ты» (`blocked`), а уведомление называет причину.
   | 'startup-wait'
-  // Скилл `harnas` не поставлен в проект: путь уже есть, а создал его не харнесс (или по дороге лежит
+  // Скилл `parley` не поставлен в проект: путь уже есть, а создал его не харнесс (или по дороге лежит
   // симлинк). Файл остаётся как есть; окно показывает короткую строку, подробности — в `host.log`.
   | 'skill-foreign';
 

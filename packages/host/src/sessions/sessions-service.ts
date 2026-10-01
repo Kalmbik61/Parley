@@ -45,9 +45,9 @@ import {
   writeBrief,
   type EffortLevel,
   type WorkEntry,
-} from '@harnas/core';
-import { refKey } from '@harnas/protocol';
-import type { SessionRef, WorksSnapshot } from '@harnas/protocol';
+} from '@parley/core';
+import { refKey } from '@parley/protocol';
+import type { SessionRef, WorksSnapshot } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
@@ -137,7 +137,7 @@ export function createSessionsService(
   // без процесса. Выход дожидается записи старта.
   const starting = new Map<string, Promise<void>>();
 
-  // Скилл `harnas` в проект и в worktree сессии перед каждым запуском (`agent-skills.ts`).
+  // Скилл `parley` в проект и в worktree сессии перед каждым запуском (`agent-skills.ts`).
   const installSkill = createSkillInstaller(host);
 
   // Закрываемые сейчас: между остановкой PTY и записью `closed` сессия успевает
@@ -254,7 +254,7 @@ export function createSessionsService(
 
       // Окружение самого хоста — окружение login-shell от окна (спека 3.2);
       // `agentEnv` чистит унаследованные метки родительской сессии Claude Code
-      // (П0), `plan.env` поверх добавляет свои `HARNAS_*`.
+      // (П0), `plan.env` поверх добавляет свои `PARLEY_*` и `HARNAS_*`.
       const env = { ...agentEnv(process.env), ...plan.env };
       // `provider` — процессу не нужен, а хосту нужен: у codex состояние берётся из потока его терминала,
       // и ввод идёт своим порядком (спека комнат, 3.6).

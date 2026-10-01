@@ -15,7 +15,7 @@ export function isExpectedIpcRefusal(args: readonly unknown[]): boolean {
   const [head, error] = args;
   if (args.length !== 2 || typeof head !== 'string' || !head.startsWith(HANDLER_PREFIX)) return false;
   if (!(error instanceof Error)) return false;
-  // Ошибка без метки `harnas-error:` декодируется в `failed` — она печатается.
+  // Ошибка без метки `parley-error:` декодируется в `failed` — она печатается.
   return EXPECTED_CODES.has(decodeIpcError(error).code);
 }
 

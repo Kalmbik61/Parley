@@ -8,7 +8,7 @@
  * расходилось бы с выбором человека.
  */
 
-import type { HarnasBridge } from '../../shared/bridge.js';
+import type { ParleyBridge } from '../../shared/bridge.js';
 
 /** Ставит или снимает `.dark` на `<html>` — единственное место, где рендерер трогает этот класс. */
 export function applyDarkClass(dark: boolean, root: HTMLElement = document.documentElement): void {
@@ -16,7 +16,7 @@ export function applyDarkClass(dark: boolean, root: HTMLElement = document.docum
 }
 
 /** Тёмность main: сразу текущая, затем каждая смена. Возвращает отписку. */
-export function followAppearance(bridge: HarnasBridge, onChange: (dark: boolean) => void): () => void {
+export function followAppearance(bridge: ParleyBridge, onChange: (dark: boolean) => void): () => void {
   onChange(bridge.app.isDark());
   return bridge.app.onAppearance(onChange);
 }

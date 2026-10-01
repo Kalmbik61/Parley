@@ -6,6 +6,7 @@ claude-export/
 .omc/sessions/
 .DS_Store
 files.zip
+.parley/
 .harnas/
 packages/desktop/out/
 packages/desktop/out-tsc/

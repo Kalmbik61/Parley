@@ -20,8 +20,8 @@
 
 import { Suspense, useCallback, useEffect, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@harnas/core';
-import type { HarnasBridge } from '../../../shared/bridge.js';
+import type { WorkEntry } from '@parley/core';
+import type { ParleyBridge } from '../../../shared/bridge.js';
 import type { FileRoot } from '../../../shared/files-types.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import type { TabSpec } from '../../../shared/layout-types.js';
@@ -51,7 +51,7 @@ const lazyCompareView = lazyWithRetry(async () => (await import('./CompareView.j
 const FALLBACK_FONT = { family: 'Menlo, monospace', size: 13 };
 
 export interface FileBodyProps {
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   workKey: string;
   entry: WorkEntry;
   tab: Extract<TabSpec, { kind: 'file' }>;
@@ -79,7 +79,7 @@ function modelPath(kind: string, key: string, path: string): string {
   const dot = name.lastIndexOf('.');
   const extension = dot > 0 ? name.slice(dot + 1) : '';
   const safe = /^[A-Za-z0-9._-]+$/.test(name) ? name : /^[A-Za-z0-9]+$/.test(extension) ? `file.${extension}` : 'file';
-  return `file:///harnas/${kind}/${id}/${safe}`;
+  return `file:///parley/${kind}/${id}/${safe}`;
 }
 
 function Message({ text, children }: { text: string; children?: ReactNode }): JSX.Element {
@@ -149,7 +149,7 @@ function BytesBody({ bridge, workKey, entry, tab, onClose, kind }: FileBodyProps
         if (alive) setState({ bytes });
       })
       .catch((error: unknown) => {
-        console.warn('[harnas] files.readBytes', error);
+        console.warn('[parley] files.readBytes', error);
         if (alive) setState({ code: decodeIpcError(error).code });
       });
     return () => {
@@ -231,7 +231,7 @@ function TextBody({ bridge, workKey, entry, tab, onClose, font = FALLBACK_FONT, 
       const file = await bridge.files.readText(root, tab.path);
       setComparing({ disk: file.text });
     } catch (error) {
-      console.warn('[harnas] files.readText', error);
+      console.warn('[parley] files.readText', error);
       const { code } = decodeIpcError(error);
       if (code === 'not_found') useFilesStore.getState().dispatch(key, { type: 'disk-deleted' });
       else toast(code === 'files:denied' ? S.files.denied : errorText(code, S.errors.actions.openFile));
@@ -244,7 +244,7 @@ function TextBody({ bridge, workKey, entry, tab, onClose, font = FALLBACK_FONT, 
       useFilesStore.getState().dispatch(key, { type: 'reloaded', file, at: Date.now() });
       setComparing(null);
     } catch (error) {
-      console.warn('[harnas] files.readText', error);
+      console.warn('[parley] files.readText', error);
       const { code } = decodeIpcError(error);
       if (code === 'not_found') useFilesStore.getState().dispatch(key, { type: 'disk-deleted' });
       else toast(code === 'files:denied' ? S.files.denied : errorText(code, S.errors.actions.openFile));

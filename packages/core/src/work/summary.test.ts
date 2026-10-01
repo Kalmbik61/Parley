@@ -33,18 +33,18 @@ const setEnv = (name: string, value: string | undefined): void => {
 };
 
 beforeEach(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'harnas-home-'));
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-project-'));
-  claudeRoot = await mkdtemp(path.join(tmpdir(), 'harnas-claude-'));
-  codexRoot = await mkdtemp(path.join(tmpdir(), 'harnas-codex-'));
+  home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
+  claudeRoot = await mkdtemp(path.join(tmpdir(), 'parley-claude-'));
+  codexRoot = await mkdtemp(path.join(tmpdir(), 'parley-codex-'));
   promptFile = path.join(home, 'prompt.json');
-  setEnv('HARNAS_HOME', home);
-  setEnv('HARNAS_CLAUDE_BIN', STUB);
-  setEnv('HARNAS_STUB_PROMPT', promptFile);
-  setEnv('HARNAS_STUB_SUMMARY', undefined);
-  setEnv('HARNAS_STUB_FAIL', undefined);
-  setEnv('HARNAS_STUB_HANG', undefined);
-  setEnv('HARNAS_STUB_ENV', undefined);
+  setEnv('PARLEY_HOME', home);
+  setEnv('PARLEY_CLAUDE_BIN', STUB);
+  setEnv('PARLEY_STUB_PROMPT', promptFile);
+  setEnv('PARLEY_STUB_SUMMARY', undefined);
+  setEnv('PARLEY_STUB_FAIL', undefined);
+  setEnv('PARLEY_STUB_HANG', undefined);
+  setEnv('PARLEY_STUB_ENV', undefined);
 });
 
 afterEach(async () => {
@@ -175,7 +175,7 @@ describe('дозаказ резюме', () => {
   it('зовёт суммаризатора командой реестра и пишет summary с пометкой auto', async () => {
     await claudeLog(ID, [claudeSay('user', 'почини сборку'), claudeSay('assistant', 'починил')]);
     const { workId, sessionId } = await exited('claude');
-    setEnv('HARNAS_STUB_SUMMARY', 'Сборка починена, тесты зелёные.');
+    setEnv('PARLEY_STUB_SUMMARY', 'Сборка починена, тесты зелёные.');
 
     const summary = await requestAutoSummary(project, workId, sessionId, {
       claudeRoot,
@@ -257,7 +257,7 @@ describe('дозаказ резюме', () => {
   it('суммаризатор упал — резюме не пишется, причина в ошибке', async () => {
     await claudeLog(ID, [claudeSay('user', 'почини сборку')]);
     const { workId, sessionId } = await exited('claude');
-    setEnv('HARNAS_STUB_FAIL', '1');
+    setEnv('PARLEY_STUB_FAIL', '1');
 
     await expect(
       requestAutoSummary(project, workId, sessionId, { claudeRoot, codexRoot }),
@@ -268,7 +268,7 @@ describe('дозаказ резюме', () => {
   it('пустой ответ суммаризатора резюме не считается', async () => {
     await claudeLog(ID, [claudeSay('user', 'почини сборку')]);
     const { workId, sessionId } = await exited('claude');
-    setEnv('HARNAS_STUB_SUMMARY', '');
+    setEnv('PARLEY_STUB_SUMMARY', '');
 
     await expect(
       requestAutoSummary(project, workId, sessionId, { claudeRoot, codexRoot }),
@@ -286,7 +286,7 @@ describe('дозаказ резюме', () => {
     setEnv('CLAUDE_CODE_BRIDGE_SESSION_ID', 'мост-родителя');
     setEnv('CLAUDE_CODE_MAX_OUTPUT_TOKENS', '8000');
     setEnv(
-      'HARNAS_STUB_ENV',
+      'PARLEY_STUB_ENV',
       'CLAUDE_CODE_CHILD_SESSION,CLAUDE_CODE_SESSION_ID,CLAUDE_CODE_BRIDGE_SESSION_ID,CLAUDE_CODE_MAX_OUTPUT_TOKENS',
     );
 
@@ -303,7 +303,7 @@ describe('дозаказ резюме', () => {
   it('суммаризатор молчит дольше таймаута — вызов обрывается', async () => {
     await claudeLog(ID, [claudeSay('user', 'почини сборку')]);
     const { workId, sessionId } = await exited('claude');
-    setEnv('HARNAS_STUB_HANG', '1');
+    setEnv('PARLEY_STUB_HANG', '1');
 
     await expect(
       requestAutoSummary(project, workId, sessionId, { claudeRoot, codexRoot, timeoutMs: 200 }),
@@ -320,7 +320,7 @@ describe('дозаказ резюме', () => {
         session.summarySource = 'agent';
       }
     });
-    setEnv('HARNAS_STUB_SUMMARY', 'новое');
+    setEnv('PARLEY_STUB_SUMMARY', 'новое');
 
     await requestAutoSummary(project, workId, sessionId, { claudeRoot, codexRoot });
     const session = (await readMap(project, workId)).sessions[0];

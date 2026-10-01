@@ -1,3 +1,25 @@
+// Имена продукта (R1) — единственный источник, в том числе имён для агентов (сервер MCP, скилл, префикс ветки
+// и корень worktree новых сессий).
+export {
+  BRANCH_PREFIX,
+  DEFAULT_WORKTREE_ROOT,
+  ENV_PREFIX,
+  HOME_DIR,
+  LEGACY_ENV_PREFIX,
+  LEGACY_HOME_DIR,
+  LEGACY_SKILL_NAME,
+  LEGACY_STATE_DIR,
+  MCP_SERVER_NAME,
+  PRODUCT,
+  SKILL_NAME,
+  STATE_DIR,
+  STATE_DIRS,
+  bothEnv,
+  envName,
+  envRaw,
+  envValue,
+} from './names.js';
+export type { Env } from './names.js';
 export { forEachJsonlRecord, readJsonlRecords } from './jsonl.js';
 export type { JsonlStats, RawRecord } from './jsonl.js';
 export { adapterV1 } from './adapter-v1.js';
@@ -136,7 +158,7 @@ export {
   createWork,
   deleteSessionFiles,
   deleteWorkFiles,
-  harnasHome,
+  parleyHome,
   MapLockTimeoutError,
   pruneWorksIndex,
   readMap,
@@ -149,6 +171,17 @@ export {
   worksIndexPath,
 } from './work/store.js';
 export type { NewWork, UpdateMapOptions, WorkPaths, WriteOptions } from './work/store.js';
+export { ensureStateDir, isDirectorySync, stateDir } from './work/state-dir.js';
+export { isStaleHostLock, parseHostLock, readHostLock, socketIsAlive } from './host-lock.js';
+export type { HostLock } from './host-lock.js';
+export { MIGRATION_RECORD, migrateHome, migrateProjects } from './migrate.js';
+export type {
+  MigrateHomeOptions,
+  MigrationEntry,
+  MigrationResult,
+  ProjectMigration,
+  SkipReason,
+} from './migrate.js';
 export {
   hostLeaseActive,
   readHostLease,
@@ -180,10 +213,11 @@ export {
   BinaryNotFoundError,
   findBinary,
   findRunnerBinary,
+  overrideValue,
   overrideVariable,
 } from './work/find-binary.js';
 export { GUIDE } from './work/guide.js';
-export { SKILL_MD, SKILL_NAME } from './work/skill.js';
+export { SKILL_MD } from './work/skill.js';
 export { installAgentSkill } from './work/skill-install.js';
 export type {
   SkillInstallOptions,
@@ -226,7 +260,7 @@ export {
   parseSetting,
   saveConfig,
 } from './config.js';
-export type { HarnasConfig, LoadedConfig } from './config.js';
+export type { ParleyConfig, LoadedConfig } from './config.js';
 export { activityOf, hookedSince } from './work/activity.js';
 export type {
   Activity,
@@ -242,6 +276,7 @@ export type { DeliveryAction, DeliveryInput } from './work/delivery.js';
 export {
   START_TOLERANCE_MS,
   checkSession,
+  hasLiveProcess,
   isAlive,
   processStartedAt,
   reconcileMap,
@@ -257,7 +292,6 @@ export {
 export type { HookCommand, HookEvent, HookMatcher, SettingsFile } from './work/settings-file.js';
 export {
   MCP_SERVER_BIN,
-  MCP_SERVER_NAME,
   codexMcpOverride,
   mcpConfig,
   mcpConfigJson,
@@ -280,7 +314,7 @@ export {
   DEFAULT_TIMEOUT_SEC,
   MAX_TIMEOUT_SEC,
   RATE_WINDOW_MS,
-  createHarnasServer,
+  createParleyServer,
 } from './mcp/tools.js';
 export { HUMAN, MESSAGE_KINDS, SYSTEM } from './work/types.js';
 export type {

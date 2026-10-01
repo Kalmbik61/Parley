@@ -17,8 +17,8 @@
 
 import { useCallback, useLayoutEffect, useRef } from 'react';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@harnas/core';
-import type { HarnasBridge } from '../../../shared/bridge.js';
+import type { WorkEntry } from '@parley/core';
+import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { S, errorText } from '../../../shared/strings.js';
 import { useMarkRead } from '../../attention/use-mark-read.js';
@@ -42,7 +42,7 @@ export interface RoomPanelProps {
   providers: Array<{ id: string; label: string }>;
   /** Живая активность сессий (`useActivityStore.byRef`): состояния в ленте участников и в меню упоминаний. */
   activity: Record<string, ActivityEntry>;
-  bridge: HarnasBridge;
+  bridge: ParleyBridge;
   /** Работа активна (`LayoutBodyContext.active`): сообщения скрытой работы LRU не отмечаются прочитанными. */
   active: boolean;
   onOpenExternal: (url: string) => void;

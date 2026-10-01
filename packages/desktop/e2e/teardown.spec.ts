@@ -57,7 +57,7 @@ test.describe('уборка E2E: хост теста не переживает �
     await mkdir(dir, { recursive: true, mode: 0o700 });
     const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
     const shell = spawn('/bin/sh', ['-c', `${quote(process.execPath)} ${quote(hostEntry)} </dev/null >/dev/null 2>>${quote(path.join(dir, 'host.err'))} &`], {
-      env: { ...process.env, HARNAS_HOME: home },
+      env: { ...process.env, PARLEY_HOME: home },
       stdio: 'ignore',
     });
     await once(shell, 'exit');
@@ -71,7 +71,7 @@ test.describe('уборка E2E: хост теста не переживает �
   });
 
   test('окно, брошенное посреди теста, и поднятый им хост гасятся уборкой afterEach', async () => {
-    app = await electron.launch({ args: [mainEntry], env: { ...process.env, HARNAS_HOME: home } });
+    app = await electron.launch({ args: [mainEntry], env: { ...process.env, PARLEY_HOME: home } });
     const window = await app.firstWindow();
     await expect(window.getByTestId('landing')).toBeVisible();
     const electronPid = app.process().pid ?? 0;

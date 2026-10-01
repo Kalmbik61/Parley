@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, realpath, rm, symlink, unlink, utimes, writeFile } from
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
+import { STATE_DIRS } from '@parley/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FileRoot, GrepQuery } from '../../shared/files-types.js';
 import { rootKey } from '../../shared/work-keys.js';
@@ -40,7 +41,7 @@ const Q = (text: string, extra: Partial<GrepQuery> = {}): GrepQuery => ({
 let dir = '';
 
 beforeEach(async () => {
-  dir = await realpath(await mkdtemp(path.join(tmpdir(), 'harnas-gitapi-')));
+  dir = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-gitapi-')));
 });
 
 afterEach(async () => {
@@ -99,7 +100,7 @@ describe('gitRootOf', () => {
     expect(await gitRootOf(runner, path.join(dir, 'папка й'))).toEqual({ prefix: 'папка й/' });
     expect(await gitRootOf(runner, dir)).toEqual({ prefix: '' });
     expect(spy).toHaveBeenCalledTimes(3);
-    const plain = await realpath(await mkdtemp(path.join(tmpdir(), 'harnas-plain-')));
+    const plain = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-plain-')));
     try {
       expect(await gitRootOf(runner, plain)).toBeNull();
     } finally {
@@ -109,15 +110,17 @@ describe('gitRootOf', () => {
 });
 
 describe('lsFiles и parseLsFiles (тест 2)', () => {
-  it('отслеживаемый и новый неигнорируемый есть; игнорируемого и .harnas/ нет', async () => {
+  it('отслеживаемый и новый неигнорируемый есть; игнорируемого и каталога состояния (.parley/, прежний .harnas/) нет', async () => {
     await initRepo(dir);
     await writeFile(path.join(dir, '.gitignore'), '*.log\n');
     await writeFile(path.join(dir, 'tracked.ts'), 'x');
     commitAll(dir);
     await writeFile(path.join(dir, 'new.ts'), 'y');
     await writeFile(path.join(dir, 'debug.log'), 'z');
-    await mkdir(path.join(dir, '.harnas', 'works', 'w'), { recursive: true });
-    await writeFile(path.join(dir, '.harnas', 'works', 'w', 'map.json'), '{}');
+    for (const stateName of STATE_DIRS) {
+      await mkdir(path.join(dir, stateName, 'works', 'w'), { recursive: true });
+      await writeFile(path.join(dir, stateName, 'works', 'w', 'map.json'), '{}');
+    }
     const files = await api(dir).lsFiles(ROOT);
     expect(files.paths.sort()).toEqual(['.gitignore', 'new.ts', 'tracked.ts']);
     expect(files.truncated).toBe(false);
@@ -128,11 +131,13 @@ describe('lsFiles и parseLsFiles (тест 2)', () => {
     expect(parseLsFiles(Buffer.alloc(0))).toEqual([]);
   });
 
-  it('не-git корень — обход без node_modules и .harnas', async () => {
+  it('не-git корень — обход без node_modules и каталога состояния (.parley, .harnas)', async () => {
     await mkdir(path.join(dir, 'node_modules', 'x'), { recursive: true });
     await writeFile(path.join(dir, 'node_modules', 'x', 'i.js'), '');
-    await mkdir(path.join(dir, '.harnas'), { recursive: true });
-    await writeFile(path.join(dir, '.harnas', 'log'), '');
+    for (const stateName of STATE_DIRS) {
+      await mkdir(path.join(dir, stateName), { recursive: true });
+      await writeFile(path.join(dir, stateName, 'log'), '');
+    }
     await mkdir(path.join(dir, 'src'));
     await writeFile(path.join(dir, 'src', 'a.ts'), '');
     await writeFile(path.join(dir, 'b.md'), '');
@@ -181,10 +186,12 @@ describe('grep (тесты 3 и 4)', () => {
     expect(result.files.reduce((n, f) => n + f.hits.length, 0)).toBe(2000);
   });
 
-  it('новый неотслеживаемый файл находится (--untracked); .harnas/ — нет', async () => {
+  it('новый неотслеживаемый файл находится (--untracked); каталог состояния (.parley/, .harnas/) — нет', async () => {
     await writeFile(path.join(dir, 'fresh.txt'), 'needle\n');
-    await mkdir(path.join(dir, '.harnas'));
-    await writeFile(path.join(dir, '.harnas', 'log'), 'needle\n');
+    for (const stateName of STATE_DIRS) {
+      await mkdir(path.join(dir, stateName));
+      await writeFile(path.join(dir, stateName, 'log'), 'needle\n');
+    }
     const result = await api(dir).grep(ROOT, Q('needle'), 's');
     expect(result.files.map((f) => f.path)).toEqual(['fresh.txt']);
   });
@@ -472,8 +479,10 @@ describe('gitStatus (тесты 7 и 8)', () => {
     commitAll(dir);
     await writeFile(path.join(dir, 'top.txt'), '2\n');
     await writeFile(path.join(dir, 'sub', 'a.txt'), '2\n');
-    await mkdir(path.join(dir, 'sub', '.harnas'));
-    await writeFile(path.join(dir, 'sub', '.harnas', 'log'), 'x');
+    for (const stateName of STATE_DIRS) {
+      await mkdir(path.join(dir, 'sub', stateName));
+      await writeFile(path.join(dir, 'sub', stateName, 'log'), 'x');
+    }
     expect(await api(path.join(dir, 'sub')).gitStatus(ROOT)).toEqual({ 'a.txt': 'M' });
   });
 
@@ -566,7 +575,7 @@ describe('checkIgnored', () => {
 
 describe('walkFiles и поиск без git (тест 11)', () => {
   it('каталог-ссылка наружу не обходится; файл-ссылка наружу — нет, внутри — да; FIFO — нет, поиск не виснет', async () => {
-    const outside = await realpath(await mkdtemp(path.join(tmpdir(), 'harnas-outside-')));
+    const outside = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-outside-')));
     try {
       await writeFile(path.join(outside, 'secret.txt'), 'needle secret\n');
       await mkdir(path.join(dir, 'docs'));
@@ -574,9 +583,11 @@ describe('walkFiles и поиск без git (тест 11)', () => {
       await symlink(path.join(outside, 'secret.txt'), path.join(dir, 'out-link.txt'));
       await writeFile(path.join(dir, 'real.txt'), 'needle real\n');
       await symlink(path.join(dir, 'real.txt'), path.join(dir, 'in-link.txt'));
-      await mkdir(path.join(dir, '.harnas'));
-      await writeFile(path.join(dir, '.harnas', 'map.json'), 'needle map\n');
-      await symlink(path.join(dir, '.harnas', 'map.json'), path.join(dir, 'map-link.txt'));
+      for (const stateName of STATE_DIRS) {
+        await mkdir(path.join(dir, stateName));
+        await writeFile(path.join(dir, stateName, 'map.json'), 'needle map\n');
+        await symlink(path.join(dir, stateName, 'map.json'), path.join(dir, `map-link${stateName}.txt`));
+      }
       execFileSync('mkfifo', [path.join(dir, 'pipe')]);
       expect((await walkFiles(dir, 50_000)).paths.sort()).toEqual(['in-link.txt', 'real.txt']);
       const enoent: GitRunner = {
@@ -776,22 +787,22 @@ describe('неверная регулярка (раунд fix-7.1b, п.3)', () =
   });
 });
 
-describe('lsFiles: ссылки в .git и .harnas (раунд fix-7.1b, п.6)', () => {
+describe.each(STATE_DIRS)('lsFiles: ссылки в .git и %s (раунд fix-7.1b, п.6)', (stateName) => {
   async function links(): Promise<void> {
-    await mkdir(path.join(dir, '.harnas', 'works', 'w'), { recursive: true });
-    await writeFile(path.join(dir, '.harnas', 'works', 'w', 'map.json'), '{}');
+    await mkdir(path.join(dir, stateName, 'works', 'w'), { recursive: true });
+    await writeFile(path.join(dir, stateName, 'works', 'w', 'map.json'), '{}');
     await writeFile(path.join(dir, 'real.txt'), 'x');
     await symlink('real.txt', path.join(dir, 'in-link.txt'));
-    await symlink('.harnas/works/w/map.json', path.join(dir, 'link.json'));
-    await symlink('.harnas', path.join(dir, 'harnas-dir'));
+    await symlink(`${stateName}/works/w/map.json`, path.join(dir, 'link.json'));
+    await symlink(stateName, path.join(dir, 'parley-dir'));
   }
 
-  it('git: отслеживаемая и новая ссылка в .harnas/.git не отдаются; обычная ссылка — да', async () => {
+  it('git: отслеживаемая и новая ссылка в каталоге состояния/.git не отдаются; обычная ссылка — да', async () => {
     await initRepo(dir);
     await links();
     commitAll(dir);
     await symlink('.git/config', path.join(dir, 'git-config'));
-    await symlink('.harnas/works/w/map.json', path.join(dir, 'fresh-link.json'));
+    await symlink(`${stateName}/works/w/map.json`, path.join(dir, 'fresh-link.json'));
     expect((await api(dir).lsFiles(ROOT)).paths.sort()).toEqual(['in-link.txt', 'real.txt']);
   });
 

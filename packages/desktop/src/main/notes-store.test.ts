@@ -36,7 +36,7 @@ async function listAll(dir: string): Promise<string[]> {
 }
 
 describe('notesPath (кусок 8.4a, тест 7)', () => {
-  it('~/.harnas/desktop/notes/<sha1(workKey)>/<sessionId>.json', () => {
+  it('~/.parley/desktop/notes/<sha1(workKey)>/<sessionId>.json', () => {
     const sha1 = createHash('sha1').update(WORK).digest('hex');
     expect(notesPath('/h', WORK, 's-02')).toBe(path.join('/h', 'desktop', 'notes', sha1, 's-02.json'));
   });

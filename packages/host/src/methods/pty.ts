@@ -7,7 +7,7 @@
  * решает таблица подписок здесь (план, кусок 1.6, ревью п.3).
  */
 
-import { refKey } from '@harnas/protocol';
+import { refKey } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { Client } from '../client.js';
 import type { Handler, NotificationHandler } from '../context.js';

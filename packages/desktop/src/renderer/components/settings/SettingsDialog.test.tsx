@@ -180,10 +180,10 @@ describe('SettingsDialog — скилл агентов (кусок 10 плана
 
   it('задан переменной окружения: неактивен и подписан именем переменной', async () => {
     const bridge = createFakeBridge();
-    openSettings(bridge, { agentSkills: 'HARNAS_AGENT_SKILLS' });
+    openSettings(bridge, { agentSkills: 'PARLEY_AGENT_SKILLS' });
 
     switchTo('Agents');
-    await screen.findByText(/set by HARNAS_AGENT_SKILLS/);
+    await screen.findByText(/set by PARLEY_AGENT_SKILLS/);
     const toggle = screen.getByRole('switch', { name: /Install agent skills into projects/ });
 
     expect((toggle as HTMLButtonElement).disabled).toBe(true);
@@ -207,10 +207,10 @@ describe('SettingsDialog — скилл агентов (кусок 10 плана
 describe('SettingsDialog — тест 2: поле, заданное окружением', () => {
   it('неактивно и подписано именем переменной; незаблокированное поле рядом активно', async () => {
     const bridge = createFakeBridge();
-    openSettings(bridge, { fontFamily: 'HARNAS_FONT_FAMILY' });
+    openSettings(bridge, { fontFamily: 'PARLEY_FONT_FAMILY' });
 
     switchTo('Terminal');
-    await screen.findByText(/set by HARNAS_FONT_FAMILY/);
+    await screen.findByText(/set by PARLEY_FONT_FAMILY/);
     const fontFamily = screen.getByDisplayValue('Menlo') as HTMLInputElement;
     expect(fontFamily.disabled).toBe(true);
 

@@ -16,9 +16,9 @@ import {
   readMap,
   sessionTag,
   updateMap,
-} from '@harnas/core';
-import type { WorktreeInfo } from '@harnas/core';
-import type { SessionRef } from '@harnas/protocol';
+} from '@parley/core';
+import type { WorktreeInfo } from '@parley/core';
+import type { SessionRef } from '@parley/protocol';
 import type { SessionsService } from '../sessions/sessions-service.js';
 import { HostError } from '../errors.js';
 import { createWorktreesService, gitFailure } from './worktrees-service.js';
@@ -44,20 +44,20 @@ const git = (dir: string, args: string[]) => run('git', ['-C', dir, ...args]);
 // падает, поэтому она задаётся на каждый репозиторий локально (тот же приём,
 // что и в `work/worktree.test.ts` core).
 async function setIdentity(dir: string): Promise<void> {
-  await git(dir, ['config', 'user.email', 'тест@harnas']);
+  await git(dir, ['config', 'user.email', 'тест@parley']);
   await git(dir, ['config', 'user.name', 'тест']);
 }
 
 let project = '';
 
 beforeEach(async () => {
-  project = await mkdtemp(path.join(tmpdir(), 'harnas-worktrees-svc-project-'));
+  project = await mkdtemp(path.join(tmpdir(), 'parley-worktrees-svc-project-'));
   await run('git', ['init', '-b', 'main', project]);
   await setIdentity(project);
-  // `.harnas/works/<id>/` живёт прямо в каталоге проекта (спецификация
+  // `.parley/works/<id>/` живёт прямо в каталоге проекта (спецификация
   // 2026-09-02, координация, раздел про `.gitignore`) — без игнора он сделал бы
   // «чистую» базу «грязной» самим своим появлением, а не правкой теста.
-  await writeFile(path.join(project, '.gitignore'), '.harnas/\n', 'utf8');
+  await writeFile(path.join(project, '.gitignore'), '.parley/\n', 'utf8');
   await writeFile(path.join(project, 'README.md'), 'старт\n', 'utf8');
   await git(project, ['add', '.gitignore', 'README.md']);
   await git(project, ['commit', '-m', 'первый']);
@@ -71,7 +71,7 @@ afterEach(async () => {
 /** Заявка сессии на диске: карта с worktree, план создан и `createWorktree` уже отработал. */
 async function sessionWithWorktree(label = 'бэкенд'): Promise<{ ref: SessionRef; info: WorktreeInfo }> {
   const work = await createWork(project, { title: 'Работа', goal: '' });
-  const worktreeRoot = await mkdtemp(path.join(tmpdir(), 'harnas-worktrees-svc-root-'));
+  const worktreeRoot = await mkdtemp(path.join(tmpdir(), 'parley-worktrees-svc-root-'));
   let sessionId = '';
   let info!: WorktreeInfo;
   await updateMap(project, work.work.id, (map) => {
@@ -110,7 +110,7 @@ describe('available', () => {
     const service = createWorktreesService(stubSessions());
     expect(await service.available(project)).toBe(true);
 
-    const plain = await mkdtemp(path.join(tmpdir(), 'harnas-worktrees-svc-plain-'));
+    const plain = await mkdtemp(path.join(tmpdir(), 'parley-worktrees-svc-plain-'));
     expect(await service.available(plain)).toBe(false);
     await rm(plain, { recursive: true, force: true });
   });
@@ -145,7 +145,7 @@ describe('diff → commit → merge (5)', () => {
     await expect(readFile(path.join(project, 'draft.md'), 'utf8')).resolves.toContain('черновик');
   });
 
-  it('сообщение слияния — «harnas: влить S<NN> (<ярлык>) из <ветка>»', async () => {
+  it('сообщение слияния — «parley: влить S<NN> (<ярлык>) из <ветка>»', async () => {
     const { ref, info } = await sessionWithWorktree('моя фича');
     const service = createWorktreesService(stubSessions());
     await writeFile(path.join(info.path, 'x.md'), 'x\n', 'utf8');
@@ -156,7 +156,7 @@ describe('diff → commit → merge (5)', () => {
     expect(result.ok).toBe(true);
 
     const message = (await git(project, ['log', '-1', '--pretty=%s'])).stdout.trim();
-    expect(message).toBe(`harnas: влить ${sessionTag(ref.sessionId)} (моя фича) из ${info.branch}`);
+    expect(message).toBe(`parley: влить ${sessionTag(ref.sessionId)} (моя фича) из ${info.branch}`);
   });
 
   it('грязная база — merge отвечает base_dirty', async () => {
@@ -364,7 +364,7 @@ describe('ревью изменений (кусок 8.1)', () => {
   });
 
   it('папка не под git — bad_request с причиной not-a-repo', async () => {
-    const plain = await mkdtemp(path.join(tmpdir(), 'harnas-worktrees-svc-plain-'));
+    const plain = await mkdtemp(path.join(tmpdir(), 'parley-worktrees-svc-plain-'));
     try {
       const ref = await plainSession(plain);
       const service = createWorktreesService(stubSessions());

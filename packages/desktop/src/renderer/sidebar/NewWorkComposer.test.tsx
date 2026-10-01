@@ -179,13 +179,13 @@ describe('NewWorkComposer — вид (1.7)', () => {
 
   it('проекты — сегмент из имён папок, полный путь во всплывающей подсказке; проект открывшего выбран', async () => {
     useWorksStore.setState({
-      entries: [makeWork('w-old', { projectPath: PROJECT }), makeWork('w-deep', { projectPath: '/private/var/folders/xy/harnas-e2e-cards-123456' })],
+      entries: [makeWork('w-old', { projectPath: PROJECT }), makeWork('w-deep', { projectPath: '/private/var/folders/xy/parley-e2e-cards-123456' })],
     });
     await renderComposer();
     const project = screen.getByRole('radiogroup', { name: 'Project' });
     const items = within(project).getAllByRole('radio');
-    expect(items.map((item) => item.textContent)).toEqual(['harnas-e2e-cards-123456', 'p']);
-    expect(items.map((item) => item.getAttribute('title'))).toEqual(['/private/var/folders/xy/harnas-e2e-cards-123456', PROJECT]);
+    expect(items.map((item) => item.textContent)).toEqual(['parley-e2e-cards-123456', 'p']);
+    expect(items.map((item) => item.getAttribute('title'))).toEqual(['/private/var/folders/xy/parley-e2e-cards-123456', PROJECT]);
     expect(items.map((item) => item.getAttribute('aria-checked'))).toEqual(['false', 'true']);
   });
 
