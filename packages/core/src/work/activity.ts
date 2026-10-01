@@ -62,7 +62,7 @@ export interface SessionActivity {
   subagents: number;
   /** Живые субагенты: по id, обычные и фоновые; пуст, когда ход окончен и фоновых нет. */
   tasks: ActivityTask[];
-  /** На что сейчас ждёт `wait_for`: id сессии или `inbox`; `null` — не ждёт. */
+  /** На что ждёт `wait_for`: цель последнего из идущих вызовов — id сессии или `inbox`; `null` — не ждёт. */
   waitingFor: string | null;
   /**
    * `working` выставлено ТОЛЬКО удержанием фоновых субагентов: ход родителя окончен (`Stop`,
@@ -100,6 +100,12 @@ const msOf = (value: string | null): number => (value === null ? Number.NaN : Da
 
 /** Ось `a` свежее оси `b`; ось без времени не свежее ничего, но её и не обгоняют. */
 const isNewer = (a: number, b: number): boolean => !Number.isNaN(a) && (Number.isNaN(b) || a > b);
+
+/** Идущий вызов `wait_for`: его id (у строк прежних версий `null`) и цель. */
+interface ActiveWait {
+  id: string | null;
+  target: string;
+}
 
 /** Субагент, о старте которого сказал `SubagentStart`. */
 interface StartedAgent {
@@ -192,7 +198,8 @@ export function activityOf({
   // Остановленные субагенты: снимок следующего события может отстать и ещё числить их работающими,
   // а остановка уже была — таких в снимках не учитываем, пока субагент не стартует снова.
   const stopped = new Set<string>();
-  let waitingFor: string | null = null;
+  // Идущие вызовы `wait_for` в порядке начала: параллельных бывает несколько, и конец снимает своё.
+  let waits: ActiveWait[] = [];
   let heldByBackground = false;
 
   const start = (): void => {
@@ -206,7 +213,7 @@ export function activityOf({
     source = 'hooks';
     // Ход кончился: ожидание `wait_for` его не переживает, как и обычный субагент —
     // остаются фоновые из последнего снимка.
-    waitingFor = null;
+    waits = [];
     for (const id of started.keys()) {
       if (!background.some((task) => task.id === id)) started.delete(id);
     }
@@ -221,7 +228,7 @@ export function activityOf({
       started.clear();
       background = [];
       stopped.clear();
-      waitingFor = null;
+      waits = [];
     }
     if (event.backgroundTasks !== null) {
       background = event.backgroundTasks.filter(
@@ -230,7 +237,7 @@ export function activityOf({
     }
     switch (event.name) {
       case 'UserPromptSubmit':
-        waitingFor = null;
+        waits = [];
         start();
         break;
       case 'SessionStart':
@@ -279,10 +286,18 @@ export function activityOf({
         break;
       }
       case 'ParleyWaitStart':
-        if (event.waitTarget !== null) waitingFor = event.waitTarget;
+        if (event.waitTarget !== null) {
+          // Повторный Start с тем же id заменяет цель; строки без id — каждая своё ожидание.
+          waits = [
+            ...waits.filter((wait) => event.waitId === null || wait.id !== event.waitId),
+            { id: event.waitId, target: event.waitTarget },
+          ];
+        }
         break;
       case 'ParleyWaitEnd':
-        waitingFor = null;
+        // End без id (прежняя версия) снимает все ожидания, с id — только своё: поздний End
+        // брошенного вызова не должен снимать новое.
+        waits = event.waitId === null ? [] : waits.filter((wait) => wait.id !== event.waitId);
         break;
       case 'SessionEnd':
         exited = true;
@@ -327,12 +342,12 @@ export function activityOf({
     // Фоновый субагент и ожидание не вечны: молчит и журнал, и лог дольше предела — это зомби.
     if (!Number.isNaN(quietAt) && now - quietAt > backgroundHoldMs) {
       background = [];
-      waitingFor = null;
+      waits = [];
     }
     if (phase === 'working' && !Number.isNaN(quietAt) && now - quietAt > silenceThresholdMs) {
       // Фоновый субагент и ожидание `wait_for` молчат в журнале и в логе родителя, пока
       // работают, — тишина по ним ничего не значит.
-      if (waitingFor !== null) {
+      if (waits.length > 0) {
         // Агент внутри вызова `wait_for`: ход идёт, ввода он не примет.
       } else if (background.length > 0) {
         // Ход родителя по тишине окончен, а фоновый субагент ещё работает: сессию держит он.
@@ -350,7 +365,7 @@ export function activityOf({
   // результат: сессия занята. `blocked` не трогаем — вопрос человеку важнее. Если о конце хода
   // ничего не известно (`phase === null`), сессия тоже занята, но у приглашения ли агент — нет.
   if (background.length > 0 && phase !== 'blocked' && phase !== 'working') {
-    heldByBackground = phase === 'ended' && waitingFor === null;
+    heldByBackground = phase === 'ended' && waits.length === 0;
     phase = 'working';
     turnEndedAt = null;
     source = 'hooks';
@@ -368,7 +383,8 @@ export function activityOf({
     activity: phase === null ? 'idle' : phase === 'ended' ? ended : phase,
     subagents: tasks.length,
     tasks,
-    waitingFor: phase === 'ended' ? null : waitingFor,
+    // Последнее из идущих ожиданий.
+    waitingFor: phase === 'ended' ? null : (waits.at(-1)?.target ?? null),
     heldByBackground,
     turnEndedAt,
     lastEventAt,

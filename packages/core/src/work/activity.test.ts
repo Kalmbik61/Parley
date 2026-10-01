@@ -1105,3 +1105,90 @@ describe('activityOf: конец хода после снятия удержан
     expect(result.turnEndedAt).toBeNull();
   });
 });
+
+describe('activityOf: несколько ожиданий wait_for, у каждого свой id (Parley 0.2.0)', () => {
+  const QUIET = '2026-09-05T09:58:00.000Z';
+  const start = (id: string | null, target: string, at = AT): EventRecord =>
+    hook('ParleyWaitStart', { waitTarget: target, waitId: id }, at);
+  const end = (id: string | null, at = AT): EventRecord =>
+    hook('ParleyWaitEnd', { waitId: id }, at);
+  const turn = [event('UserPromptSubmit')];
+
+  it('параллельные вызовы: первый закончился, второй идёт — waitingFor остаётся за вторым', () => {
+    const both = [...turn, start('w1', 's-02'), start('w2', 's-03')];
+    // Последнее из активных ожиданий.
+    expect(activity(both).waitingFor).toBe('s-03');
+
+    expect(activity([...both, end('w1')]).waitingFor).toBe('s-03');
+    // Закончился второй — снова виден первый, он ещё идёт.
+    expect(activity([...both, end('w2')]).waitingFor).toBe('s-02');
+    expect(activity([...both, end('w1'), end('w2')]).waitingFor).toBeNull();
+  });
+
+  it('End без id (прежняя строка) снимает все ожидания — для совместимости', () => {
+    const result = activity([...turn, start('w1', 's-02'), start('w2', 's-03'), end(null)]);
+
+    expect(result.waitingFor).toBeNull();
+  });
+
+  it('поздний End брошенного (Esc) вызова не снимает новое ожидание', () => {
+    const result = activity([
+      ...turn,
+      start('w1', 's-02'),
+      // Человек прервал ход и начал новый: ожидание прежнего хода снято, а вызов ещё дойдёт до своего End.
+      event('UserPromptSubmit'),
+      start('w2', 'inbox'),
+      end('w1'),
+    ]);
+
+    expect(result.waitingFor).toBe('inbox');
+  });
+
+  it('Start без id (прежняя строка): End чужого id его не снимает, End без id — снимает', () => {
+    const waiting = [...turn, start(null, 's-02')];
+
+    expect(activity([...waiting, end('чужой')]).waitingFor).toBe('s-02');
+    expect(activity([...waiting, end(null)]).waitingFor).toBeNull();
+  });
+
+  it('повторный Start с тем же id заменяет цель, а не копит ожидания', () => {
+    const result = activity([...turn, start('w1', 's-02'), start('w1', 's-03')]);
+
+    expect(result.waitingFor).toBe('s-03');
+    expect(
+      activity([...turn, start('w1', 's-02'), start('w1', 's-03'), end('w1')]).waitingFor,
+    ).toBeNull();
+  });
+
+  it('Stop, UserPromptSubmit, SessionStart и конец хода по idle_prompt снимают все ожидания', () => {
+    const waiting = [...turn, start('w1', 's-02'), start('w2', 's-03')];
+
+    for (const closing of [
+      event('Stop'),
+      event('UserPromptSubmit'),
+      event('SessionStart'),
+      event('Notification', 'idle_prompt'),
+    ]) {
+      expect(activity([...waiting, closing]).waitingFor, closing.name).toBeNull();
+    }
+  });
+
+  it('пока осталось хоть одно ожидание, тишина сессию не понижает; когда последнее кончилось — понижает', () => {
+    const read = (events: EventRecord[]): ReturnType<typeof activityOf> =>
+      activityOf({ events, now: NOW, silenceThresholdMs: 30_000 });
+    const waiting = [
+      event('UserPromptSubmit', null, QUIET),
+      start('w1', 's-02', QUIET),
+      start('w2', 's-03', QUIET),
+    ];
+
+    const oneLeft = read([...waiting, end('w1', QUIET)]);
+    expect(oneLeft.activity).toBe('working');
+    expect(oneLeft.waitingFor).toBe('s-03');
+    expect(oneLeft.heldByBackground).toBe(false);
+
+    const none = read([...waiting, end('w1', QUIET), end('w2', '2026-09-05T09:58:30.000Z')]);
+    expect(none.activity).toBe('unseen');
+    expect(none.waitingFor).toBeNull();
+  });
+});

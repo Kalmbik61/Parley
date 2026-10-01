@@ -272,6 +272,26 @@ describe('openEvents: поля агента и фоновых задач', () =>
     expect(end).toMatchObject({ name: 'ParleyWaitEnd', waitTarget: null });
     expect(bad).toMatchObject({ name: 'ParleyWaitStart', waitTarget: null });
   });
+
+  it('parley_wait_id у обеих строк ожидания; без него и не строка — null', async () => {
+    const [start, end, oldStart, oldEnd, bad] = await read(
+      raw({
+        hook_event_name: 'ParleyWaitStart',
+        parley_wait_target: 's-03',
+        parley_wait_id: 'w-1',
+      }) +
+        raw({ hook_event_name: 'ParleyWaitEnd', parley_wait_id: 'w-1' }) +
+        raw({ hook_event_name: 'ParleyWaitStart', parley_wait_target: 's-03' }) +
+        raw({ hook_event_name: 'ParleyWaitEnd' }) +
+        raw({ hook_event_name: 'ParleyWaitEnd', parley_wait_id: 7 }),
+    );
+
+    expect(start).toMatchObject({ waitTarget: 's-03', waitId: 'w-1' });
+    expect(end).toMatchObject({ waitTarget: null, waitId: 'w-1' });
+    expect(oldStart?.waitId).toBeNull();
+    expect(oldEnd?.waitId).toBeNull();
+    expect(bad?.waitId).toBeNull();
+  });
 });
 
 describe('watchEvents', () => {

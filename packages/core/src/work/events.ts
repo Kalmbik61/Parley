@@ -54,6 +54,11 @@ export interface EventRecord {
   backgroundTasks: BackgroundTask[] | null;
   /** `parley_wait_target` у `ParleyWaitStart`: на что ждёт `wait_for` (id сессии или `inbox`). */
   waitTarget: string | null;
+  /**
+   * `parley_wait_id` у `ParleyWaitStart` и `ParleyWaitEnd`: случайный id одного вызова `wait_for`. Вызовов
+   * бывает несколько сразу, и конец снимает только своё ожидание. Строк прежних версий без него — `null`.
+   */
+  waitId: string | null;
 }
 
 /** Состояние чтения одного журнала: докуда дочитали и что уже разобрали. */
@@ -90,6 +95,7 @@ export const bareEvent = (at: string, name: string): EventRecord => ({
   transcriptPath: null,
   backgroundTasks: null,
   waitTarget: null,
+  waitId: null,
 });
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -143,6 +149,7 @@ function parseEvent(line: string, at: string): EventRecord | null {
     transcriptPath: textOf(data.transcript_path),
     backgroundTasks: parseTasks(data.background_tasks),
     waitTarget: textOf(data.parley_wait_target),
+    waitId: textOf(data.parley_wait_id),
   };
 }
 
