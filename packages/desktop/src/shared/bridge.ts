@@ -92,8 +92,11 @@ export interface ParleyBridge {
     onFocusTarget(listener: (target: FocusTarget) => void): () => void;
     setBadge(count: number): void;
     chooseFolder(): Promise<string | null>;
-    /** Версия окна (`app.getVersion()`, 0.2.0): с ней страница сверяет версию хоста — хост другой сборки перезапускают. */
-    version(): Promise<string>;
+    /**
+     * Версия окна (`app.getVersion()`, 0.2.0): с ней страница сверяет версию хоста — хост другой сборки
+     * перезапускают. `null` — окно не собрано (`pnpm dev`, E2E), и сверять нечего.
+     */
+    version(): Promise<string | null>;
     restartHost(): Promise<void>;
     /** «Retry» экрана «No connection to host»: подключение заново, с короткой паузой (fix-final-b). */
     reconnect(): Promise<void>;

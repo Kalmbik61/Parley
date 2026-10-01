@@ -151,8 +151,12 @@ export interface RegisterIpcOptions {
   takeFocusTarget: () => FocusTarget | null;
   /** Релиз новее запущенной версии, найденный проверкой main (`app:get-update`, V6 плана релиза 0.1.0); `null` — нет или проверка выключена. */
   getUpdate: () => Promise<UpdateInfo | null>;
-  /** Версия окна (`app.getVersion()`): страница сверяет с ней версию хоста (`app:version`, 0.2.0). */
-  appVersion: string;
+  /**
+   * Версия окна (`app.getVersion()`): страница сверяет с ней версию хоста (`app:version`, 0.2.0). `null` —
+   * окно не собрано (`pnpm dev`, E2E): Electron, запущенный файлом `out/main/index.js`, не находит
+   * `package.json` и отдаёт свою версию, а не версию Parley, — сверять нечего.
+   */
+  appVersion: string | null;
   /**
    * Окно сохранило `ui.json` (`app:save-ui`): main реагирует на смену настроек сразу — включённая проверка новой
    * версии идёт тут же (`main/update-check.ts`, `settingsChanged`). Вызывается после записи; не бросает.

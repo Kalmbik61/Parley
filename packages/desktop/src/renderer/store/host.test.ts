@@ -20,6 +20,16 @@ describe('useHostStore', () => {
     dispose();
   });
 
+  it('несобранное окно отдаёт версию null — appVersion остаётся null, хост другой сборки не ищется', async () => {
+    const bridge = createFakeBridge();
+    bridge.setAppVersion(null);
+    const dispose = useHostStore.getState().init(bridge);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useHostStore.getState().appVersion).toBeNull();
+    dispose();
+  });
+
   it('до init — connecting; onStatus подставного моста пишет статус в стор', () => {
     expect(useHostStore.getState().status).toEqual({ state: 'connecting' });
     const bridge = createFakeBridge();
