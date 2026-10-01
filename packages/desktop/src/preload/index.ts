@@ -37,6 +37,14 @@ const windowFocusListeners = new Set<(focused: boolean) => void>();
 const updateListeners = new Set<(info: UpdateInfo) => void>();
 /** Цель клика, пришедшая, пока у `onFocusTarget` не было слушателей (кусок 4.3). */
 let heldFocusTarget: FocusTarget | null = null;
+/**
+ * Последние статус хоста и тема: main шлёт их на `did-finish-load`, а страница подписывается в
+ * эффекте React — уже после первой отрисовки. Пришедшее раньше подписки иначе терялось, и окно
+ * навсегда оставалось на «Connecting to host…» (0.1.0, медленный старт под Rosetta). Подписчик
+ * сразу получает последнее значение.
+ */
+let lastStatus: HostStatus | null = null;
+let lastAppearance: boolean | null = null;
 
 /**
  * Цель получают слушатели, подписанные в момент доставки, а не в момент запроса:
@@ -58,6 +66,7 @@ ipcRenderer.on('host:event', (_event, message: EventMessage) => {
 });
 
 ipcRenderer.on('host:status', (_event, status: HostStatus) => {
+  lastStatus = status;
   for (const listener of statusListeners) listener(status);
 });
 
@@ -66,6 +75,7 @@ ipcRenderer.on('menu:action', (_event, id: ActionId) => {
 });
 
 ipcRenderer.on('app:appearance', (_event, dark: boolean) => {
+  lastAppearance = dark;
   for (const listener of appearanceListeners) listener(dark);
 });
 
@@ -130,6 +140,7 @@ const bridge = {
   },
   onStatus: (listener: (status: HostStatus) => void) => {
     statusListeners.add(listener);
+    if (lastStatus !== null) listener(lastStatus);
     return () => statusListeners.delete(listener);
   },
   activitySnapshot: () => ipcRenderer.invoke('host:activity-snapshot'),
@@ -178,6 +189,7 @@ const bridge = {
       ipcRenderer.invoke('app:set-appearance', mode) as Promise<void>,
     onAppearance: (listener: (dark: boolean) => void) => {
       appearanceListeners.add(listener);
+      if (lastAppearance !== null) listener(lastAppearance);
       return () => appearanceListeners.delete(listener);
     },
     // Синхронно: окно ставит `.dark` до первого кадра React, без белой вспышки (спека 4.7).
