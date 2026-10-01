@@ -1,4 +1,9 @@
-# Parley
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/media/brand/parley-logo-dark.svg">
+    <img src="docs/media/brand/parley-logo-light.svg" width="420" alt="Parley">
+  </picture>
+</h1>
 
 Координация агентских CLI (Claude Code, Codex) в окне `Parley.app` — Electron-
 приложении поверх локального процесса `parley-host`. Окно и хост соединены
