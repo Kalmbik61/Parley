@@ -29,7 +29,7 @@ import { sessionLabelText, sessionRowLabel, sessionTag, workTitleText } from '..
 import { modelName } from '../../lib/participant-tag.js';
 import { roomLiveLead } from '../../lib/room-lead.js';
 import type { ActivityEntry } from '../../store/activity.js';
-import { splitFeedMentions } from './mention.js';
+import { replyExcerpt } from './excerpt.js';
 
 // Те же литералы, что `HUMAN` и `SYSTEM` в `core/work/types.ts`: из core рендерер берёт только типы.
 const HUMAN = 'human';
@@ -202,48 +202,6 @@ function doingOf(
     lines.push(subagents);
   }
   return { doing, doingDetail: lines.join('\n') };
-}
-
-/** Выдержка цитаты — не больше стольких знаков; длиннее обрезается с `…`. */
-const EXCERPT_MAX = 140;
-/** В начале строки: `#` заголовка, `>` цитаты, маркер списка (`-`, `*`, `+`, `1.`) — и по нескольку подряд (`> - пункт`). */
-const LINE_MARKUP = /^(?:\s*(?:#{1,6}\s+|>|[-*+]\s+|\d+[.)]\s+))+/;
-/** Ссылка `[текст](адрес)` и картинка `![alt](адрес)` — от них остаётся текст. */
-const LINK_MARKUP = /!?\[([^\]]*)\]\([^)]*\)/g;
-/** Внутри строки: жирный, подчёркнутый, зачёркнутый (`**`, `__`, `~~`) и обратные кавычки. */
-const INLINE_MARKUP = /\*\*|__|~~|`/g;
-/** Ограда блока кода (```` ```ts ````, `~~~`): своего текста у неё нет — выдержка берёт следующую строку. */
-const CODE_FENCE = /^\s*(?:```|~~~)/;
-
-/**
- * Выдержка из текста сообщения для цитаты ответа: первая непустая строка (ограда блока кода не в счёт) без
- * простой разметки Markdown, упоминания — как у чипов ленты (`@s02` → `@S02 бэкенд`, `@human` → `@you`),
- * пробелы схлопнуты, не длиннее 140 знаков
- * (длиннее — 140 и `…`; считается по знакам, а не по кодовым единицам: суррогатную пару не режет). Пусто, если
- * от строки ничего не осталось (сообщение из одной картинки без `alt`): цитата тогда покажет только подпись.
- * `labelOf` — ярлык участника для упоминания, как у `RoomMarkdown`: `null` — сессии нет в карте, берётся тег.
- */
-export function replyExcerpt(text: string, labelOf: (sessionId: string) => string | null): string {
-  const firstLine =
-    text.split(/\r\n|\r|\n/).find((line) => line.trim() !== '' && !CODE_FENCE.test(line)) ?? '';
-  const plain = firstLine
-    .replace(LINE_MARKUP, '')
-    .replace(LINK_MARKUP, '$1')
-    .replace(INLINE_MARKUP, '');
-  const withMentions = splitFeedMentions(plain)
-    .map((segment) =>
-      segment.kind === 'text'
-        ? segment.text
-        : segment.kind === 'human'
-          ? S.rooms.humanMention
-          : `@${labelOf(segment.sessionId) ?? sessionTag(segment.sessionId)}`,
-    )
-    .join('');
-  const collapsed = withMentions.replace(/\s+/g, ' ').trim();
-  const chars = Array.from(collapsed);
-  return chars.length > EXCERPT_MAX
-    ? `${chars.slice(0, EXCERPT_MAX).join('').trimEnd()}…`
-    : collapsed;
 }
 
 export function buildRoomModel(input: RoomModelInput): RoomModel | null {
