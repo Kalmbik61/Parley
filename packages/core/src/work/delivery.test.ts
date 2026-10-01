@@ -65,29 +65,29 @@ describe('pointerText', () => {
   const rooms = [roomOf('r-01', 'Ревью «схемы» — ёж'), roomOf('r-02', 'Вторая')];
 
   it('одно прямое письмо', () => {
-    expect(pointerText([messageOf()], rooms)).toBe('Новые письма (1). Вызови check_inbox.');
+    expect(pointerText([messageOf()], rooms)).toBe('New messages (1). Call check_inbox.');
   });
 
   it('три прямых письма', () => {
     const letters = ['m-01', 'm-02', 'm-03'].map((id) => messageOf({ id }));
-    expect(pointerText(letters, rooms)).toBe('Новые письма (3). Вызови check_inbox.');
+    expect(pointerText(letters, rooms)).toBe('New messages (3). Call check_inbox.');
   });
 
   it('все из одной комнаты — id и название; кириллица и кавычки целы', () => {
     const letters = [messageOf({ id: 'm-01', roomId: 'r-01' }), messageOf({ id: 'm-02', roomId: 'r-01' })];
     expect(pointerText(letters, rooms)).toBe(
-      'Новые письма (2) в r-01 «Ревью «схемы» — ёж». Вызови check_inbox.',
+      'New messages (2) in r-01 "Ревью «схемы» — ёж". Call check_inbox.',
     );
   });
 
   it('из нескольких комнат — список id', () => {
     const letters = [messageOf({ id: 'm-01', roomId: 'r-02' }), messageOf({ id: 'm-02', roomId: 'r-01' })];
-    expect(pointerText(letters, rooms)).toBe('Новые письма (2) в r-01, r-02. Вызови check_inbox.');
+    expect(pointerText(letters, rooms)).toBe('New messages (2) in r-01, r-02. Call check_inbox.');
   });
 
-  it('комнаты вместе с прямыми — «и лично»', () => {
+  it('комнаты вместе с прямыми — «and direct»', () => {
     const letters = [messageOf({ id: 'm-01', roomId: 'r-01' }), messageOf({ id: 'm-02' })];
-    expect(pointerText(letters, rooms)).toBe('Новые письма (2) в r-01 и лично. Вызови check_inbox.');
+    expect(pointerText(letters, rooms)).toBe('New messages (2) in r-01 and direct. Call check_inbox.');
   });
 });
 
@@ -157,7 +157,7 @@ describe('deliveryAction', () => {
     const b = messageOf({ id: 'm-02' });
     expect(deliveryAction({ ...base, session: sleeping, unread: [a, b], activity: null })).toEqual({
       kind: 'resume',
-      text: 'Новые письма (2). Вызови check_inbox.',
+      text: 'New messages (2). Call check_inbox.',
       letterIds: ['m-01', 'm-02'],
     });
     expect(deliveryAction({ ...base, session: sleeping, resumeAllowed: false })).toEqual({
@@ -209,7 +209,7 @@ describe('deliveryAction', () => {
     it('working → печать указателя с пометкой queue: он уйдёт в очередь, а не вмешается в ход', () => {
       expect(deliveryAction({ ...queued, activity: activityOf('working') })).toEqual({
         kind: 'type-pointer',
-        text: 'Новые письма (1). Вызови check_inbox.',
+        text: 'New messages (1). Call check_inbox.',
         letterIds: ['m-01'],
         queue: true,
       });
@@ -237,7 +237,7 @@ describe('deliveryAction', () => {
         const action = deliveryAction({ ...queued, activity: activityOf(state) });
         expect(action).toEqual({
           kind: 'type-pointer',
-          text: 'Новые письма (1). Вызови check_inbox.',
+          text: 'New messages (1). Call check_inbox.',
           letterIds: ['m-01'],
         });
         expect(action).not.toHaveProperty('queue');
@@ -296,7 +296,7 @@ describe('deliveryAction', () => {
     const b = messageOf({ id: 'm-02' });
     expect(deliveryAction({ ...base, unread: [a, b] })).toEqual({
       kind: 'type-pointer',
-      text: 'Новые письма (2). Вызови check_inbox.',
+      text: 'New messages (2). Call check_inbox.',
       letterIds: ['m-01', 'm-02'],
     });
     expect(deliveryAction({ ...base, activity: activityOf('idle') })).toMatchObject({

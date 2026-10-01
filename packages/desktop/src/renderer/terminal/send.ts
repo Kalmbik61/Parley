@@ -22,7 +22,7 @@ export async function sendToAgent(bridge: ParleyBridge, ref: SessionRef, text: s
     return await bridge.call('pty.send', { ref, text, submit });
   } catch (error) {
     const { code, message } = decodeIpcError(error);
-    // Текст хоста (может быть русским) — только в консоль, человеку — английский тост.
+    // Текст хоста — только в консоль, человеку — свой тост.
     console.warn('[parley] pty.send', message);
     return { error: code === 'not_found' ? 'not_found' : 'failed', message };
   }

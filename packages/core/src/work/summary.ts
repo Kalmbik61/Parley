@@ -125,32 +125,34 @@ export async function readTranscript(
   const limit = options.limit ?? TRANSCRIPT_LIMIT;
   const lines = (await source).map(
     (line) =>
-      `${line.role === 'user' ? 'человек' : 'агент'}: ${
+      `${line.role === 'user' ? 'human' : 'agent'}: ${
         line.text.length > MESSAGE_LIMIT ? `${line.text.slice(0, MESSAGE_LIMIT)}…` : line.text
       }`,
   );
 
   const text = lines.join('\n');
   if (text.length <= limit) return text;
-  return `…начало разговора опущено…\n${text.slice(text.length - limit)}`;
+  return `…start of the conversation omitted…\n${text.slice(text.length - limit)}`;
 }
 
 /** Промпт суммаризатору: что за сессия и её разговор. */
 export function summaryPrompt(map: WorkMap, session: WorkSession, transcript: string): string {
   return [
-    'Ниже транскрипт агентской сессии из рабочего харнесса.',
-    `Работа: «${map.work.title}». Цель работы: ${map.work.goal || 'не записана'}.`,
-    // У тихой сессии задачи нет вовсе: пустое «Её задача: .» суммаризатору
+    'Below is the transcript of an agent session from a Parley workspace.',
+    `Workspace: "${map.work.title}". Workspace goal: ${map.work.goal || 'not recorded'}.`,
+    // У тихой сессии задачи нет вовсе: пустое «Its task: .» суммаризатору
     // только мешает, как и пустая цель работы.
     session.task === ''
-      ? `Роль сессии: «${session.label}».`
-      : `Роль сессии: «${session.label}». Её задача: ${session.task}.`,
+      ? `Session role: "${session.label}".`
+      : `Session role: "${session.label}". Its task: ${session.task}.`,
     '',
-    'Напиши по-русски резюме результата этой сессии: что сделано, чем закончилось,',
-    'что осталось не сделанным. Не больше трёх предложений, без вступлений и',
-    'заголовков — только сам текст резюме.',
+    // Резюме — на языке разговора человека с агентом (решение владельца 2026-10-01): у русскоязычного
+    // человека по-русски, у англоязычного — по-английски.
+    'Write a summary of the result of this session in the language the human and the agent used',
+    'in the transcript: what was done, how it ended, what was left undone. No more than three',
+    'sentences, no preamble and no headings — only the text of the summary itself.',
     '',
-    '--- транскрипт ---',
+    '--- transcript ---',
     transcript,
   ].join('\n');
 }
@@ -185,18 +187,18 @@ function runSummarizer(
 
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
-      reject(new Error(`${command} не ответил за ${Math.round(timeoutMs / 1000)} с`));
+      reject(new Error(`${command} did not answer within ${Math.round(timeoutMs / 1000)} s`));
     }, timeoutMs);
 
     child.on('error', (error) => {
       clearTimeout(timer);
-      reject(new Error(`${command} не запустился: ${error.message}`));
+      reject(new Error(`${command} failed to start: ${error.message}`));
     });
 
     child.on('close', (code) => {
       clearTimeout(timer);
       if (code === 0) resolve(out);
-      else reject(new Error(`${command} вышел с кодом ${code ?? -1}: ${firstLine(err)}`));
+      else reject(new Error(`${command} exited with code ${code ?? -1}: ${firstLine(err)}`));
     });
   });
 }
@@ -221,27 +223,32 @@ export async function requestAutoSummary(
 ): Promise<string> {
   const map = await readMap(projectPath, workId);
   const session = map.sessions.find((candidate) => candidate.id === sessionId);
-  if (session === undefined) throw new Error(`сессии ${sessionId} нет в карте работы ${workId}`);
+  if (session === undefined)
+    throw new Error(`session ${sessionId} is not in the map of workspace ${workId}`);
 
   const registry = await loadProviders();
   const provider = registry[session.provider];
   if (provider !== undefined && !provider.hasHistory) {
-    throw new Error(`дозаказ резюме недоступен: у провайдера ${provider.label} нет истории сессий`);
+    throw new Error(
+      `summary on demand is unavailable: provider ${provider.label} has no session history`,
+    );
   }
   if (session.providerSessionId === null) {
-    throw new Error(`у сессии ${sessionId} нет лога провайдера — резюме считать не по чему`);
+    throw new Error(`session ${sessionId} has no provider log — nothing to build a summary from`);
   }
 
   const transcript = await readTranscript(session.provider, session.providerSessionId, options);
   if (transcript === null) {
-    throw new Error(`лога ${session.providerSessionId} нет — резюме считать не по чему`);
+    throw new Error(
+      `log ${session.providerSessionId} does not exist — nothing to build a summary from`,
+    );
   }
-  if (transcript === '') throw new Error(`транскрипт сессии ${sessionId} пуст`);
+  if (transcript === '') throw new Error(`the transcript of session ${sessionId} is empty`);
 
   const summarizer = registry[options.summarizer ?? SUMMARIZER];
   if (summarizer === undefined || summarizer.runner.printArgs === undefined) {
     throw new Error(
-      `суммаризатор ${options.summarizer ?? SUMMARIZER} не умеет отвечать одним ответом`,
+      `summarizer ${options.summarizer ?? SUMMARIZER} cannot answer in one-shot mode`,
     );
   }
 
@@ -257,11 +264,12 @@ export async function requestAutoSummary(
   );
 
   const summary = output.trim();
-  if (summary === '') throw new Error(`${command} вернул пустое резюме`);
+  if (summary === '') throw new Error(`${command} returned an empty summary`);
 
   await updateMap(projectPath, workId, (current) => {
     const target = current.sessions.find((candidate) => candidate.id === sessionId);
-    if (target === undefined) throw new Error(`сессии ${sessionId} нет в карте работы ${workId}`);
+    if (target === undefined)
+      throw new Error(`session ${sessionId} is not in the map of workspace ${workId}`);
     target.summary = summary;
     target.summarySource = 'auto';
   });

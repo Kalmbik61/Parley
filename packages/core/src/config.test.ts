@@ -1,6 +1,6 @@
 /** Настройки: дефолты / файл / env, битый JSON и старые ключи ушедшего TUI. */
 
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -173,7 +173,7 @@ describe('loadConfig', () => {
     const loaded = await loadConfig(file(), {});
 
     expect(loaded.config).toEqual(DEFAULT_CONFIG);
-    expect(loaded.warning).toContain('не парсится');
+    expect(loaded.warning).toContain(`${file()} cannot be parsed: `);
   });
 
   it('не объект — тоже дефолты и предупреждение', async () => {
@@ -181,7 +181,15 @@ describe('loadConfig', () => {
     const loaded = await loadConfig(file(), {});
 
     expect(loaded.config).toEqual(DEFAULT_CONFIG);
-    expect(loaded.warning).toContain('не парсится');
+    expect(loaded.warning).toBe(`${file()} cannot be parsed: expected an object`);
+  });
+
+  it('файл не читается (на его месте каталог) — дефолты и предупреждение', async () => {
+    await mkdir(file());
+    const loaded = await loadConfig(file(), {});
+
+    expect(loaded.config).toEqual(DEFAULT_CONFIG);
+    expect(loaded.warning).toContain(`${file()} cannot be read: `);
   });
 
   it('битое поле остаётся дефолтным, остальные читаются', async () => {
@@ -191,8 +199,9 @@ describe('loadConfig', () => {
     expect(loaded.config.silenceThresholdMs).toBe(DEFAULT_CONFIG.silenceThresholdMs);
     expect(loaded.config.fontSize).toBe(DEFAULT_CONFIG.fontSize);
     expect(loaded.config.autoLaunch).toBe(false);
-    expect(loaded.warning).toContain('silenceThresholdMs');
-    expect(loaded.warning).toContain('fontSize');
+    expect(loaded.warning).toBe(
+      'silenceThresholdMs: expected a positive integer; fontSize: expected an integer from 8 to 32',
+    );
   });
 
   it('битая переменная окружения не отменяет остальные', async () => {
@@ -203,7 +212,7 @@ describe('loadConfig', () => {
 
     expect(loaded.config.silenceThresholdMs).toBe(DEFAULT_CONFIG.silenceThresholdMs);
     expect(loaded.config.autoLaunch).toBe(false);
-    expect(loaded.warning).toContain('PARLEY_SILENCE_MS');
+    expect(loaded.warning).toBe('PARLEY_SILENCE_MS: expected a positive integer');
   });
 
   it('потолок писем меньше единицы — жалоба и дефолт, остальные поля целы', async () => {
@@ -399,7 +408,7 @@ describe('parseSetting', () => {
   it('числа — целое больше нуля', () => {
     expect(parseSetting('silenceThresholdMs', '30')).toEqual({ value: 30 });
     expect(parseSetting('silenceThresholdMs', '0')).toEqual({
-      error: 'silenceThresholdMs: ожидается целое больше нуля',
+      error: 'silenceThresholdMs: expected a positive integer',
     });
     expect(parseSetting('silenceThresholdMs', '2.5')).toMatchObject({ error: expect.any(String) });
   });
@@ -411,7 +420,9 @@ describe('parseSetting', () => {
   it('resumeRate — целое от 0 до 60 и в файле, и в окружении, и в parseSetting', async () => {
     expect(parseSetting('resumeRate', '0')).toEqual({ value: 0 });
     expect(parseSetting('resumeRate', '60')).toEqual({ value: 60 });
-    expect(parseSetting('resumeRate', '-1')).toMatchObject({ error: expect.any(String) });
+    expect(parseSetting('resumeRate', '-1')).toEqual({
+      error: 'resumeRate: expected an integer from 0 to 60',
+    });
     expect(parseSetting('resumeRate', '61')).toMatchObject({ error: expect.any(String) });
     expect(parseSetting('resumeRate', '2.5')).toMatchObject({ error: expect.any(String) });
 
@@ -428,25 +439,32 @@ describe('parseSetting', () => {
   it('agentSkills — булев ключ: да/нет теми же словами', () => {
     expect(parseSetting('agentSkills', 'false')).toEqual({ value: false });
     expect(parseSetting('agentSkills', '1')).toEqual({ value: true });
-    expect(parseSetting('agentSkills', 'мимо')).toEqual({ error: 'agentSkills: ожидается 0 или 1' });
+    expect(parseSetting('agentSkills', 'мимо')).toEqual({ error: 'agentSkills: expected 0 or 1' });
   });
 
   it('булевы ключи — те же множества да/нет, что у окружения', () => {
     expect(parseSetting('autoLaunch', 'yes')).toEqual({ value: true });
     expect(parseSetting('channelPush', '0')).toEqual({ value: false });
-    expect(parseSetting('channelPush', 'мимо')).toEqual({ error: 'channelPush: ожидается 0 или 1' });
+    expect(parseSetting('channelPush', 'мимо')).toEqual({ error: 'channelPush: expected 0 or 1' });
   });
 
   it('fontFamily — непустая строка', () => {
     expect(parseSetting('fontFamily', 'Fira Code')).toEqual({ value: 'Fira Code' });
-    expect(parseSetting('fontFamily', '')).toMatchObject({ error: expect.any(String) });
+    expect(parseSetting('fontFamily', '')).toEqual({
+      error: 'fontFamily: expected a non-empty string',
+    });
+    expect(parseSetting('worktreeRoot', '')).toEqual({
+      error: 'worktreeRoot: expected a non-empty string',
+    });
   });
 
   it('fontSize — целое от 8 до 32', () => {
     expect(parseSetting('fontSize', '16')).toEqual({ value: 16 });
     expect(parseSetting('fontSize', '8')).toEqual({ value: 8 });
     expect(parseSetting('fontSize', '32')).toEqual({ value: 32 });
-    expect(parseSetting('fontSize', '7')).toMatchObject({ error: expect.any(String) });
+    expect(parseSetting('fontSize', '7')).toEqual({
+      error: 'fontSize: expected an integer from 8 to 32',
+    });
     expect(parseSetting('fontSize', '33')).toMatchObject({ error: expect.any(String) });
   });
 });

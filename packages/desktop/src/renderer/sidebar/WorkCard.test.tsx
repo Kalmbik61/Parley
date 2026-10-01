@@ -368,6 +368,16 @@ describe('WorkCard — строки S (английский интерфейс)'
     expect(S.sidebar.sessionCount(3)).toBe('3 sessions');
     expect(S.sidebar.moreClosed(2)).toBe('2 more closed');
   });
+
+  // Метка безымянной работы `UNTITLED_WORK` core стоит в карте, пока не придёт автозаголовок Claude Code.
+  it('безымянная работа — «Untitled workspace»: метка core и её прежняя русская запись', () => {
+    renderCard(makeWork('w-01', { title: 'untitled' }));
+    expect(document.querySelector('[data-work-title]')?.textContent).toBe('Untitled workspace');
+    cleanup();
+    renderCard(makeWork('w-02', { title: 'без названия' }));
+    expect(document.querySelector('[data-work-title]')?.textContent).toBe('Untitled workspace');
+    expect(card().textContent).not.toContain('без названия');
+  });
 });
 
 // ---------------------------------------------------------------------------

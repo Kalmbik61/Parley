@@ -125,7 +125,7 @@ export function createPtyManager(host: HostContext): PtyManager {
   function requireSession(ref: SessionRef): Session {
     const session = sessions.get(refKey(ref));
     if (session === undefined) {
-      throw new Error(`нет живого PTY для сессии ${ref.sessionId}`);
+      throw new Error(`no live PTY for session ${ref.sessionId}`);
     }
     return session;
   }

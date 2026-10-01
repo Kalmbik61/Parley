@@ -19,11 +19,11 @@ const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
 const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
 /**
- * Метка «новая сессия» — `NEW_LABEL` core. Окно шлёт сессиям комнаты пустой ярлык, а хост сессии без задачи пустым его не
+ * Метка «new session» — `NEW_LABEL` core. Окно шлёт сессиям комнаты пустой ярлык, а хост сессии без задачи пустым его не
  * оставляет (`applyChoice`: автозаголовок Claude Code переименует такую сессию), поэтому строка сайдбара показывает
  * `S05 New session`, а не голый `S05` (правка по ревью куска 7, находка 1; спека 2.1).
  */
-const NEW_LABEL = 'новая сессия';
+const NEW_LABEL = 'new session';
 let project = '';
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
@@ -147,7 +147,7 @@ test.describe('диалоги комнат и перетаскивание (ку
     expect(created?.title).toBe('e2e room');
     expect(created?.members).toHaveLength(2);
     expect(created?.lead).toBe(created?.members[1]);
-    // Участники — новые сессии (не seed и не solo), без задачи; ярлык — метка хоста «новая сессия», строка показывает её
+    // Участники — новые сессии (не seed и не solo), без задачи; ярлык — метка хоста «new session», строка показывает её
     // по-английски; писем-приглашений нет.
     for (const id of created?.members ?? []) {
       expect([first, solo?.id]).not.toContain(id);

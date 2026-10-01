@@ -45,14 +45,15 @@ export interface McpContext {
  */
 export function contextFromEnv(env: NodeJS.ProcessEnv = process.env): McpContext {
   const raw = envValue(env, 'WORK_DIR');
-  if (raw === undefined) throw new Error('не задан PARLEY_WORK_DIR — каталог работы неизвестен');
+  if (raw === undefined)
+    throw new Error('PARLEY_WORK_DIR is not set — the workspace directory is unknown');
 
   const workDir = path.resolve(raw);
   const works = path.dirname(workDir);
   const state = path.dirname(works);
   if (path.basename(works) !== 'works' || !STATE_DIRS.includes(path.basename(state))) {
     throw new Error(
-      `${envName(env, 'WORK_DIR')}=${workDir} не похож на ${STATE_DIR}/works/<work-id> (или ${LEGACY_STATE_DIR}/works/<work-id>)`,
+      `${envName(env, 'WORK_DIR')}=${workDir} does not look like ${STATE_DIR}/works/<work-id> (or ${LEGACY_STATE_DIR}/works/<work-id>)`,
     );
   }
 

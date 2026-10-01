@@ -45,12 +45,12 @@ describe('заглушка скилла parley: frontmatter по специфи�
   it('description отвечает «когда подключаться» и «когда нет»: сервер parley, инструменты, без сервера не нужен', () => {
     const description = JSON.parse(field(front, 'description')) as string;
 
-    expect(description).toContain(`MCP-сервер ${MCP_SERVER_NAME}`);
-    expect(description).toMatch(/MCP-сервер parley/);
-    for (const word of ['карта работы', 'комнаты', 'ведущий', 'решения', 'письма', 'отчёты']) {
+    expect(description).toContain(`${MCP_SERVER_NAME} MCP server`);
+    expect(description).toMatch(/parley MCP server/);
+    for (const word of ['workspace map', 'rooms', 'lead', 'decisions', 'messages', 'reports']) {
       expect(description, word).toContain(word);
     }
-    expect(description).toMatch(/Без сервера parley навык не нужен/);
+    expect(description).toMatch(/Without the parley server the skill is not needed/);
   });
 
   it('в frontmatter только name и description: лишних полей Codex и Claude Code не ждут', () => {
@@ -66,6 +66,10 @@ describe('заглушка скилла parley: frontmatter по специфи�
     expect(skillStub()).toBe(SKILL_MD);
   });
 
+  it('текст заглушки — по-английски: кириллицы в нём нет', () => {
+    expect(SKILL_MD).not.toMatch(/[А-Яа-яЁё]/);
+  });
+
   it('прежнего имени в заглушке нет: ни сервера, ни тега, ни продукта (R8)', () => {
     expect(SKILL_MD.toLowerCase()).not.toContain(LEGACY_SKILL_NAME);
   });
@@ -76,25 +80,25 @@ describe('заглушка скилла parley: тело', () => {
 
   it('отсылает к read_guide и не пересказывает гид', () => {
     expect(body).toContain('`read_guide`');
-    expect(body).toMatch(/Не пересказывай гид по памяти/);
+    expect(body).toMatch(/Do not retell the guide from memory/);
   });
 
   it('правила-ворота: не выдумывать инструменты, решение только через ведущего, add_to_room, отчёт', () => {
-    expect(body).toMatch(/Не выдумывай инструменты и параметры по памяти: сначала `read_guide`/);
+    expect(body).toMatch(/Do not invent tools and parameters from memory: call `read_guide` first/);
     expect(body).toMatch(
-      /Решение человеку приносит только ведущий комнаты — через `propose_decision`/,
+      /Only a room's lead brings the human a decision — with `propose_decision`/,
     );
-    expect(body).toMatch(/до принятия работу не начинай/);
-    expect(body).toMatch(/Ввести в комнату ещё одну сессию может только ведущий — `add_to_room`/);
-    expect(body).toMatch(/`close_session` — только после явного согласия человека/);
-    expect(body).toMatch(/Перед завершением вызови `report`/);
+    expect(body).toMatch(/do not start the work before acceptance/);
+    expect(body).toMatch(/Only the lead can bring one more session into a room — `add_to_room`/);
+    expect(body).toMatch(/`close_session` — only after the human's explicit consent/);
+    expect(body).toMatch(/Before finishing, call `report`/);
   });
 
   it('правило про письма: коллегам — только на question, но задача человека в комнате требует ответа, даже если письмо — note', () => {
     // Заглушку агент читает первой: исключение, которое есть в гиде (тема `member`) и в системной вставке,
     // должно быть и здесь, иначе «на `note` не отвечай» перекроет задачу человека.
     expect(body).toMatch(
-      /отвечай только на `question`, на `note` и `decision` не отвечай\. Письмо человека — не реплика коллеги: на его задачу в комнате отвечай, каким бы ни был вид письма \(даже `note`\)\./,
+      /answer only a `question`, do not answer a `note` or a `decision`\. A human's message is not a colleague's reply: answer the human's task in a room whatever the kind of message \(even `note`\)\./,
     );
   });
 });
@@ -106,10 +110,10 @@ describe('заглушка скилла parley: как приходят пись
     // Заглушку агент читает первой, и обещать ему тег канала как обычный путь нельзя: хост окна запускает
     // сессии без канала и печатает указатель после хода (`delivery.ts`), тег бывает лишь у CLI.
     expect(body).toMatch(
-      /В сессиях окна письма приходят указателем «Новые письма \(N\)… Вызови check_inbox\.» после твоего хода — вызови `check_inbox`\./,
+      /In window sessions messages arrive as the pointer "New messages \(N\)… Call check_inbox\." after your turn — call `check_inbox`\./,
     );
     expect(body).toMatch(
-      /Тег `<channel source="parley">` бывает только у сессий, поднятых CLI `parley-core`\./,
+      /The `<channel source="parley">` tag exists only in sessions started by the `parley-core` CLI\./,
     );
   });
 
@@ -138,8 +142,8 @@ describe('заглушка и гид согласованы', () => {
     expect(listed()).toEqual(GUIDE_TOPICS.map(({ topic, summary }) => ({ topic, summary })));
   });
 
-  it('раздел «Как загрузить гид» перечисляет темы подряд: чужих тем между ними нет', () => {
-    const section = body.split('## Как загрузить гид')[1]?.split('\n## ')[0] ?? '';
+  it('раздел «How to load the guide» перечисляет темы подряд: чужих тем между ними нет', () => {
+    const section = body.split('## How to load the guide')[1]?.split('\n## ')[0] ?? '';
     const names = section
       .split('\n')
       .map((line) => /^- `([a-z]+)`/.exec(line)?.[1])

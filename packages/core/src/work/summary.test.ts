@@ -197,9 +197,12 @@ describe('дозаказ резюме', () => {
     expect(args[1]).toContain('почини сборку');
     expect(args[1]).toContain('Авторизация');
     expect(args[1]).toContain('бэкенд');
+    // Резюме — на языке разговора, а не на фиксированном языке.
+    expect(args[1]).toContain('in the language the human and the agent used');
+    expect(args[1]).not.toContain('in Russian');
   });
 
-  it('у тихой сессии задачи нет — строки «Её задача» в промпте тоже', async () => {
+  it('у тихой сессии задачи нет — строки «Its task» в промпте тоже', async () => {
     await claudeLog(ID, [claudeSay('user', 'почини сборку'), claudeSay('assistant', 'починил')]);
     const { workId, sessionId } = await exited('claude');
     await updateMap(project, workId, (map) => {
@@ -209,7 +212,7 @@ describe('дозаказ резюме', () => {
 
     await requestAutoSummary(project, workId, sessionId, { claudeRoot, codexRoot });
     const args = JSON.parse(await readFile(promptFile, 'utf8')) as string[];
-    expect(args[1]).not.toContain('Её задача');
+    expect(args[1]).not.toContain('Its task');
     // Роль сессии и разговор на месте: без задачи резюме всё равно считается.
     expect(args[1]).toContain('бэкенд');
     expect(args[1]).toContain('почини сборку');
@@ -228,7 +231,7 @@ describe('дозаказ резюме', () => {
     const { workId, sessionId } = await exited('glm');
     await expect(
       requestAutoSummary(project, workId, sessionId, { claudeRoot, codexRoot }),
-    ).rejects.toThrow(/истори/i);
+    ).rejects.toThrow(/session history/i);
     expect((await readMap(project, workId)).sessions[0]?.summary).toBeNull();
   });
 
@@ -236,14 +239,14 @@ describe('дозаказ резюме', () => {
     const { workId, sessionId } = await exited('claude', null);
     await expect(
       requestAutoSummary(project, workId, sessionId, { claudeRoot, codexRoot }),
-    ).rejects.toThrow(/лог/i);
+    ).rejects.toThrow(/provider log/i);
   });
 
   it('лога с таким id нет — ошибка, карта не трогается', async () => {
     const { workId, sessionId } = await exited('claude');
     await expect(
       requestAutoSummary(project, workId, sessionId, { claudeRoot, codexRoot }),
-    ).rejects.toThrow(/лог/i);
+    ).rejects.toThrow(/does not exist/i);
     expect((await readMap(project, workId)).sessions[0]?.summarySource).toBeNull();
   });
 
@@ -272,7 +275,7 @@ describe('дозаказ резюме', () => {
 
     await expect(
       requestAutoSummary(project, workId, sessionId, { claudeRoot, codexRoot }),
-    ).rejects.toThrow(/пуст/);
+    ).rejects.toThrow(/empty summary/);
     expect((await readMap(project, workId)).sessions[0]?.summary).toBeNull();
   });
 
@@ -307,7 +310,7 @@ describe('дозаказ резюме', () => {
 
     await expect(
       requestAutoSummary(project, workId, sessionId, { claudeRoot, codexRoot, timeoutMs: 200 }),
-    ).rejects.toThrow(/не ответил/);
+    ).rejects.toThrow(/did not answer/);
   });
 
   it('прежнее резюме агента перезаписывается дозаказанным', async () => {

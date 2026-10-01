@@ -336,9 +336,8 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   const wakePaused = useUiStore((state) => state.wakePaused);
   const toggleWake = useUiStore((state) => state.toggleWake);
   const notices = useNoticesStore((state) => state.notices);
-  // Раунд исправлений 1 куска E.1: `notice.text` хоста — русский свободный
-  // текст (сквозное правило его не переводит), строка статуса показывает
-  // `noticeText` по виду уведомления вместо него; сырой текст — только в
+  // Раунд исправлений 1 куска E.1: строка статуса показывает `noticeText` по
+  // виду уведомления, а не `notice.text` хоста; сырой текст — только в
   // консоли (`store/notices.ts`).
   // Итоги внимания для строки статуса (кусок 4.2): селектор по стору секций с поверхностным
   // сравнением — оболочка перерисовывается, только когда меняются сами числа.

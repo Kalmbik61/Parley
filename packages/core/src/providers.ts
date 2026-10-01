@@ -540,12 +540,12 @@ const isModelId = (value: unknown): value is string =>
  */
 export function modelChoiceError(entry: ProviderEntry, model: string): string | null {
   if (!isModelId(model)) {
-    return `модель ${JSON.stringify(model)}: одно слово, не с дефиса и не длиннее ${MODEL_ID_MAX_LENGTH} знаков`;
+    return `model ${JSON.stringify(model)}: must be one word, must not start with a hyphen and must not be longer than ${MODEL_ID_MAX_LENGTH} characters`;
   }
   const list = selectableModels(entry);
   if (list !== null && !list.some((option) => option.id === model)) {
     const allowed = list.map((option) => option.id).join(', ');
-    return `модель ${model} не из списка провайдера ${entry.id}; допустимы: ${allowed}`;
+    return `model ${model} is not in the list of provider ${entry.id}; allowed: ${allowed}`;
   }
   return null;
 }
@@ -575,7 +575,7 @@ function checkShape(id: string, file: string, patch: Record<string, unknown>): v
     (patch['mcpConfig'] !== undefined &&
       patch['mcpConfig'] !== 'json-file' &&
       patch['mcpConfig'] !== 'codex-override');
-  if (wrong) throw new Error(`провайдер ${id} в ${file}: неожиданная форма записи`);
+  if (wrong) throw new Error(`provider ${id} in ${file}: unexpected entry shape`);
 }
 
 /** Накладывает переопределение на запись встроенного реестра (или создаёт свою). */
@@ -588,7 +588,7 @@ function applyOverride(
   const command = patch.command ?? base?.runner.command;
   const label = patch.badge ?? base?.label;
   if (command === undefined || command === '' || label === undefined || label === '') {
-    throw new Error(`провайдер ${id} в ${file}: новому провайдеру нужны badge и command`);
+    throw new Error(`provider ${id} in ${file}: a new provider needs badge and command`);
   }
 
   const runner: RunnerConfig = { command };
@@ -645,14 +645,14 @@ export async function loadProviders(
   try {
     data = JSON.parse(raw);
   } catch (error) {
-    throw new Error(`реестр провайдеров ${file} не парсится: ${(error as Error).message}`);
+    throw new Error(`provider registry ${file} cannot be parsed: ${(error as Error).message}`);
   }
   if (!isRecord(data)) {
-    throw new Error(`реестр провайдеров ${file} не парсится: неожиданная форма`);
+    throw new Error(`provider registry ${file} cannot be parsed: unexpected shape`);
   }
 
   for (const [id, patch] of Object.entries(data)) {
-    if (!isRecord(patch)) throw new Error(`провайдер ${id} в ${file}: неожиданная форма записи`);
+    if (!isRecord(patch)) throw new Error(`provider ${id} in ${file}: unexpected entry shape`);
     checkShape(id, file, patch);
     registry[id] = applyOverride(id, file, patch as ProviderOverride, registry[id]);
   }

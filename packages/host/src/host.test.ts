@@ -115,7 +115,9 @@ describe('startHost', () => {
     const running = await startHost({ home });
     hosts.push(running);
 
-    await expect(startHost({ home })).rejects.toBeInstanceOf(HostAlreadyRunning);
+    const refused = await startHost({ home }).then(() => null, (error: unknown) => error);
+    expect(refused).toBeInstanceOf(HostAlreadyRunning);
+    expect((refused as Error).message).toBe('a host is already running for this Parley home');
 
     const paths = hostPaths(home);
     const token = await readFile(paths.token, 'utf8');
@@ -253,7 +255,9 @@ describe('startHost', () => {
 
   it('путь сокета длиннее 103 байт — SocketPathTooLong, каталог не создан', async () => {
     const longHome = `/tmp/hh-${'x'.repeat(150)}`;
-    await expect(startHost({ home: longHome })).rejects.toBeInstanceOf(SocketPathTooLong);
+    const refused = await startHost({ home: longHome }).then(() => null, (error: unknown) => error);
+    expect(refused).toBeInstanceOf(SocketPathTooLong);
+    expect((refused as Error).message).toMatch(/^socket path is longer than 103 bytes: /);
     expect(existsSync(longHome)).toBe(false);
   });
 });

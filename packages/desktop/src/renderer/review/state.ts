@@ -85,7 +85,7 @@ export function askAgentText(branch: string, base: string, files: string[]): str
 
 /** Тело вкладки при отказе загрузки: git-missing — S.changes.gitMissing, not-a-repo — S.changes.notARepo, worktree-corrupt — S.changes.worktreeCorrupt, прочее — errorText(code, S.errors.actions.loadChanges). */
 export function changesErrorText(error: IpcErrorInfo): string {
-  // Сообщение хоста — русский текст рантайма: человеку — только свой английский.
+  // Сообщение хоста — текст рантайма: человеку — только свой, по коду и причине.
   console.warn('[parley] changes', error.code, error.message);
   const reason = error.data?.['reason'];
   if (reason === HOST_ERROR_REASONS.gitMissing) return S.changes.gitMissing;

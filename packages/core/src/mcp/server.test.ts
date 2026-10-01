@@ -246,10 +246,10 @@ describe('список инструментов', () => {
     expect(propose?.inputSchema.required).toEqual(['room', 'text']);
     expect(Object.keys(propose?.inputSchema.properties ?? {}).sort()).toEqual(['room', 'text']);
     // Тон соседних описаний: только ведущий, решение ждёт человека, повтор заменяет, ответ — письмом.
-    expect(propose?.description).toMatch(/только ведущий/i);
-    expect(propose?.description).toMatch(/ждёт (ответа )?человека/);
-    expect(propose?.description).toMatch(/заменя/);
-    expect(propose?.description).toMatch(/письм/);
+    expect(propose?.description).toMatch(/lead only/i);
+    expect(propose?.description).toMatch(/waits for the human's answer/);
+    expect(propose?.description).toMatch(/replaces/);
+    expect(propose?.description).toMatch(/as a message/);
     // Предел текста в схеме — та же константа, что держит setProposal.
     expect(JSON.stringify(propose?.inputSchema.properties?.['text'])).toContain(
       String(PROPOSAL_TEXT_MAX),
@@ -261,7 +261,7 @@ describe('список инструментов', () => {
     const { tools } = await client.listTools();
     const guide = tools.find((tool) => tool.name === 'read_guide');
 
-    expect(guide?.description).toMatch(/комнаты и роли в них \(ведущий, участник\)/);
+    expect(guide?.description).toMatch(/rooms and the roles in them \(lead, participant\)/);
   });
 
   it('add_to_room: room и session обязательны, описание — про ведущего, одну комнату и строку в ленте', async () => {
@@ -272,10 +272,10 @@ describe('список инструментов', () => {
     expect(add?.inputSchema.required).toEqual(['room', 'session']);
     expect(Object.keys(add?.inputSchema.properties ?? {}).sort()).toEqual(['room', 'session']);
     // Тон соседних описаний: только ведущий, одна комната на сессию, системная строка, письма нет.
-    expect(add?.description).toMatch(/Только ведущий/);
-    expect(add?.description).toMatch(/Одна комната на сессию/);
+    expect(add?.description).toMatch(/Lead only/);
+    expect(add?.description).toMatch(/One room per session/);
     expect(add?.description).toContain('@s04 joined the room');
-    expect(add?.description).toMatch(/не получает/);
+    expect(add?.description).toMatch(/gets no message/);
   });
 
   it('spawn_session: model и effort необязательны, effort — три уровня, описание отсылает к get_map', async () => {
@@ -328,7 +328,7 @@ describe('список инструментов', () => {
       'members',
       'title',
     ]);
-    expect(createRoom?.description).toMatch(/ведущ/);
+    expect(createRoom?.description).toMatch(/lead/);
   });
 
   it('описание get_map отсылает ко второму слою гида', async () => {
@@ -336,7 +336,14 @@ describe('список инструментов', () => {
     const { tools } = await client.listTools();
     const getMap = tools.find((tool) => tool.name === 'get_map');
 
-    expect(getMap?.description).toMatch(/подробный гид — инструмент read_guide$/);
+    expect(getMap?.description).toMatch(/the detailed guide is the read_guide tool$/);
+  });
+
+  it('описания инструментов и параметров — по-английски: кириллицы в списке инструментов нет', async () => {
+    const client = await connect('s-01');
+    const { tools } = await client.listTools();
+
+    expect(JSON.stringify(tools)).not.toMatch(/[А-Яа-яЁё]/);
   });
 
   it('ни в одном описании нет устаревшего текста «pending запускает человек»', async () => {
@@ -344,7 +351,7 @@ describe('список инструментов', () => {
     const { tools } = await client.listTools();
 
     for (const tool of tools) {
-      expect(tool.description ?? '').not.toContain('pending запускает человек');
+      expect(tool.description ?? '').not.toContain('pending is started by the human');
     }
   });
 
@@ -354,8 +361,8 @@ describe('список инструментов', () => {
     const report = tools.find((tool) => tool.name === 'report');
     const closeSession = tools.find((tool) => tool.name === 'close_session');
 
-    expect(report?.description).toMatch(/остаётся на связи/);
-    expect(closeSession?.description).toMatch(/только после явного согласия/);
+    expect(report?.description).toMatch(/stays reachable/);
+    expect(closeSession?.description).toMatch(/only after the human's explicit consent/);
   });
 
   it('wait_for предупреждает: сдавшей report сессии — ждать через inbox, не по id', async () => {
@@ -363,7 +370,7 @@ describe('список инструментов', () => {
     const { tools } = await client.listTools();
     const waitFor = tools.find((tool) => tool.name === 'wait_for');
 
-    expect(waitFor?.description).toMatch(/"inbox"[\s\S]*не по id/);
+    expect(waitFor?.description).toMatch(/"inbox"[\s\S]*not by id/);
   });
 });
 
@@ -572,7 +579,7 @@ describe('report', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toMatch(/относительн/i);
+    expect(result.text).toMatch(/relative to the project root/i);
     expect(session(await readMapFile(), 's-01').summary).toBeNull();
   });
 
@@ -585,7 +592,7 @@ describe('report', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toMatch(/за пределы проекта/);
+    expect(result.text).toMatch(/outside the project/);
     expect(session(await readMapFile(), 's-01').result).toBeNull();
   });
 
@@ -603,7 +610,7 @@ describe('report', () => {
 
     const progress = await call(client, 'report', { status: 'progress', summary: 'x' });
     expect(progress.isError).toBe(true);
-    expect(progress.text).toContain('закрыта');
+    expect(progress.text).toContain('is closed');
 
     const done = await call(client, 'report', { status: 'done', summary: 'x' });
     expect(done.isError).toBe(true);
@@ -699,7 +706,7 @@ describe('spawn_session', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toContain('агента reviewer нет');
+    expect(result.text).toContain('agent reviewer does not exist');
     expect((await readMapFile()).sessions).toHaveLength(1);
   });
 
@@ -715,7 +722,7 @@ describe('spawn_session', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toContain('агентов не принимает');
+    expect(result.text).toContain('does not accept agents');
     expect((await readMapFile()).sessions).toHaveLength(1);
   });
 
@@ -746,7 +753,7 @@ describe('spawn_session worktree', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toContain('в проекте нет git');
+    expect(result.text).toContain('the project has no git');
     expect((await readMapFile()).sessions).toHaveLength(1);
   });
 
@@ -1071,7 +1078,7 @@ describe('send_message и check_inbox', () => {
 
     const refused = await call(second, 'send_message', { to: 's-01', text: 'три' });
     expect(refused.isError).toBe(true);
-    expect(refused.text).toContain('слишком часто');
+    expect(refused.text).toContain('too many messages');
     expect(refused.text).toContain('report');
     expect((await readMapFile()).messages).toHaveLength(3);
 
@@ -1113,7 +1120,7 @@ describe('send_message и check_inbox', () => {
     const result = await call(first, 'send_message', { to: 's-02', text: 'привет' });
     expect(result.isError).toBe(true);
     expect(result.text).toContain('s-02');
-    expect(result.text).toContain('закрыта');
+    expect(result.text).toContain('is closed');
   });
 });
 
@@ -1152,13 +1159,13 @@ describe('create_room', () => {
     const second = await connect('s-02');
     const inboxSecond = await callOk(second, 'check_inbox');
     expect((inboxSecond['messages'] as { text: string }[]).map((m) => m.text)).toEqual([
-      'Вас добавили в r-01 «бэкенд» с S02 и S03',
+      'You were added to r-01 "бэкенд" with S02 and S03',
     ]);
 
     const third = await connect('s-03');
     const inboxThird = await callOk(third, 'check_inbox');
     expect((inboxThird['messages'] as { text: string }[]).map((m) => m.text)).toEqual([
-      'Вас добавили в r-01 «бэкенд» с S02 и S03',
+      'You were added to r-01 "бэкенд" with S02 and S03',
     ]);
 
     // Создатель своё же приглашение не получает.
@@ -1335,7 +1342,7 @@ describe('add_to_room', () => {
 
     const refused = await call(member, 'add_to_room', { room: 'r-01', session: 's-04' });
     expect(refused.isError).toBe(true);
-    expect(refused.text).toMatch(/не ведущий/);
+    expect(refused.text).toMatch(/not the lead/);
     expect(await rawMap()).toBe(before);
   });
 
@@ -1370,7 +1377,7 @@ describe('add_to_room', () => {
 
     const refused = await call(lead, 'add_to_room', { room: 'r-01', session: 's-04' });
     expect(refused.isError).toBe(true);
-    expect(refused.text).toMatch(/закрыта/);
+    expect(refused.text).toMatch(/is closed/);
     expect(await rawMap()).toBe(before);
   });
 
@@ -1380,10 +1387,10 @@ describe('add_to_room', () => {
     const before = await rawMap();
 
     const cases: Array<[string, RegExp]> = [
-      ['s-77', /нет в карте/],
-      ['s-03', /закрыта/],
-      ['s-02', /уже участник/],
-      ['s-01', /уже участник/],
+      ['s-77', /is not in the map/],
+      ['s-03', /is closed/],
+      ['s-02', /already a participant/],
+      ['s-01', /already a participant/],
     ];
     for (const [session, message] of cases) {
       const refused = await call(lead, 'add_to_room', { room: 'r-01', session });
@@ -1487,7 +1494,7 @@ describe('propose_decision', () => {
 
     const refused = await call(a, 'propose_decision', { room: 'r-01', text: 'я тоже хочу' });
     expect(refused.isError).toBe(true);
-    expect(refused.text).toMatch(/не ведущий/);
+    expect(refused.text).toMatch(/not the lead/);
     expect(await rawMap()).toBe(before);
   });
 
@@ -1511,7 +1518,7 @@ describe('propose_decision', () => {
 
     const refused = await call(lead, 'propose_decision', { room: 'r-01', text: 'решение' });
     expect(refused.isError).toBe(true);
-    expect(refused.text).toMatch(/закрыта/);
+    expect(refused.text).toMatch(/is closed/);
     expect(await rawMap()).toBe(before);
   });
 
@@ -1665,7 +1672,7 @@ describe('send_message и check_inbox в комнате', () => {
     const refused = await call(owner, 'send_message', { room: 'r-01', text: 'три' });
 
     expect(refused.isError).toBe(true);
-    expect(refused.text).toContain('слишком часто');
+    expect(refused.text).toContain('too many messages');
     // Была бы рассылка на два письма (по адресату), лимит исчерпался бы на первом вызове.
     expect((await readMapFile()).messages).toHaveLength(2);
   });
@@ -1934,8 +1941,9 @@ describe('channel: звонок про письмо (разговор агент
     const instructions = client.getInstructions() ?? '';
     expect(instructions).toContain(`source="${MCP_SERVER_NAME}"`);
     expect(instructions).toContain('source="parley"');
-    expect(instructions).toContain('только на `question`');
+    expect(instructions).toContain('only to a `question`');
     expect(instructions).toContain('check_inbox');
+    expect(instructions).not.toMatch(/[А-Яа-яЁё]/);
   });
 
   it('письмо звонит один раз, карта не тронута, check_inbox отдаёт его', async () => {

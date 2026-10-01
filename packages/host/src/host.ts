@@ -67,14 +67,14 @@ export interface RunningHost {
 
 export class HostAlreadyRunning extends Error {
   constructor() {
-    super('хост уже запущен для этого дома');
+    super('a host is already running for this Parley home');
     this.name = 'HostAlreadyRunning';
   }
 }
 
 export class SocketPathTooLong extends Error {
   constructor(socketPath: string) {
-    super(`путь сокета длиннее ${MAX_SOCKET_PATH_BYTES} байт: ${socketPath}`);
+    super(`socket path is longer than ${MAX_SOCKET_PATH_BYTES} bytes: ${socketPath}`);
     this.name = 'SocketPathTooLong';
   }
 }
@@ -297,7 +297,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     log.error('первое чтение работ не удалось', { error: worksFailure });
     await worksService.stop();
     failWorksReady(
-      new HostError('internal', `работы не прочитаны на старте хоста: ${worksFailure}`, {
+      new HostError('internal', `workspaces could not be read at host start: ${worksFailure}`, {
         reason: HOST_ERROR_REASONS.worksUnreadable,
       }),
     );

@@ -16,9 +16,9 @@ import {
   activityOf,
   applyAutoTitle,
   envValue,
+  isNewLabel,
   linkSession,
   loadConfig,
-  NEW_LABEL,
   openEvents,
   sessionTag,
   unreadFor,
@@ -318,7 +318,7 @@ export function createActivityService(
 
   /** Заголовок Claude Code доехал до индекса логов — переименование один раз (5.1). */
   function maybeAutoTitle(ref: SessionRef, key: string, session: WorkSession): void {
-    if (session.label !== NEW_LABEL || autoTitled.has(key)) return;
+    if (!isNewLabel(session.label) || autoTitled.has(key)) return;
     const title = logIndex.index(session)?.title;
     if (title === undefined || title === null) return;
     autoTitled.add(key);
@@ -354,7 +354,7 @@ export function createActivityService(
     host.broadcast('host.notice', {
       kind: 'hooks-missing',
       ref,
-      text: `хуки Claude Code не пришли для сессии ${ref.sessionId} — состояния по логу`,
+      text: `Claude Code hooks did not arrive for session ${ref.sessionId} — status comes from the log`,
       at: new Date().toISOString(),
     });
   }
@@ -392,7 +392,7 @@ export function createActivityService(
         host.broadcast('host.notice', {
           kind: 'trust-wait',
           ref,
-          text: `${sessionTag(ref.sessionId)} не отвечает с запуска — возможно, ждёт доверия к папке`,
+          text: `${sessionTag(ref.sessionId)} has not responded since launch — it may be waiting for folder trust`,
           at: new Date().toISOString(),
         });
       }, delay),
@@ -412,7 +412,7 @@ export function createActivityService(
     host.broadcast('host.notice', {
       kind: 'startup-wait',
       ref,
-      text: `${sessionTag(ref.sessionId)} не показала статус с запуска — возможно, ждёт входа или доверия к папке в терминале Codex`,
+      text: `${sessionTag(ref.sessionId)} has not shown a status since launch — it may be waiting for sign-in or folder trust in the Codex terminal`,
       at,
     });
     recompute(ref);

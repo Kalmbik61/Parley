@@ -14,6 +14,7 @@ import type { WorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
+import { workTitleText } from '../lib/participant.js';
 import { workKey } from '../lib/tree-order.js';
 import { useSidebarHold } from './use-sidebar-hold.js';
 
@@ -26,7 +27,8 @@ export interface InlineRenameProps {
 
 export function InlineRename({ entry, bridge, onDone }: InlineRenameProps): JSX.Element {
   const { projectPath, map } = entry;
-  const title = map.work.title;
+  // Поле открывается на том, что видно на карточке: безымянная работа — «Untitled workspace».
+  const title = workTitleText(map.work.title);
   const inputRef = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState(title);
   // Один исход на поле: Enter и следом потеря фокуса не шлют второй вызов.

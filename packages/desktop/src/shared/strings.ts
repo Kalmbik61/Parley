@@ -800,6 +800,8 @@ export const S = {
     deletedSuffix: '(deleted)',
     /** Ярлык сессии, созданной без названия (`NEW_LABEL` core) — `lib/participant.ts`. */
     newSession: 'New session',
+    /** Название работы, созданной вместе с быстрой сессией (`UNTITLED_WORK` core) — `lib/participant.ts`. */
+    untitledWorkspace: 'Untitled workspace',
   },
 
   /** Действия для `errorText(code, action)` — фраза подставляется в «Couldn't <action>: …». */
@@ -992,25 +994,24 @@ export function errorText(code: string, action?: string): string {
 
 /**
  * Английский смысл каждого `NoticeKind` (`@parley/protocol`) — раунд
- * исправлений 1 куска E.1: `HostNotice.text` хост пишет свободным русским
- * текстом (например, `packages/host/src/activity/activity-service.ts:217,248`,
- * `packages/host/src/sessions/sessions-service.ts:174,215`,
- * `packages/host/src/wake/wake-service.ts:208,224,243,320,331`,
- * `packages/host/src/works/works-service.ts:85,140`) — он приходит рантаймом
- * по сокету, а не литералом в этом пакете, поэтому страж `english-ui` его не
- * ловит. Смысл каждого вида взят из этих мест хоста, сам текст — нет: хост не
- * трогаем (сквозное правило), `notice.text` остаётся только в `console.warn`
- * у вызывающей стороны (`store/notices.ts`).
+ * исправлений 1 куска E.1. `HostNotice.text` приходит рантаймом по сокету, а
+ * не литералом в этом пакете, поэтому страж `english-ui` его не ловит; хост
+ * пишет его по-английски (`packages/host/src/{activity,sessions,wake,works}`)
+ * и со своим id сессии, а окно ставит впереди ярлык сессии и держит все свои
+ * тексты в `S`. Поэтому `notice.text` остаётся только в `console.warn` у
+ * вызывающей стороны (`store/notices.ts`), а человеку — текст по виду
+ * уведомления. Слова — как у хоста, гида и README: письма — «messages»,
+ * строка, которую хост набирает в терминал агента, — «pointer».
  */
 const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'map-lock': 'workspace map is locked — try again in a moment',
   'map-corrupt': "workspace map couldn't be read",
   'hooks-missing': 'Claude Code hooks did not report — falling back to log-based status',
   'launch-failed': "couldn't launch this session",
-  'pointer-timeout': 'no response after the wake-up nudge',
-  'pointer-cancelled': 'wake-up nudge cancelled by your input',
+  'pointer-timeout': 'no response after the pointer',
+  'pointer-cancelled': 'pointer cancelled by your input',
   'resume-failed': "couldn't resume this session",
-  'resume-limit': 'hourly resume limit reached — mail is waiting',
+  'resume-limit': 'hourly resume limit reached — messages are waiting',
   'trust-wait': 'not responding since launch — may be waiting for folder trust',
   'startup-wait': 'waiting at startup — Codex may need sign-in or folder trust in its terminal',
   'skill-foreign': "agent skill not installed — that path already exists and wasn't created by Parley",

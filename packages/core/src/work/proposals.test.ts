@@ -107,7 +107,7 @@ describe('setProposal', () => {
   it('не ведущий — ошибка, слот не тронут', () => {
     const map = threeInRoom();
     expect(() => setProposal(map, 'r-01', 's-02', 'я тоже хочу')).toThrow(RoomRuleError);
-    expect(() => setProposal(map, 'r-01', 's-02', 'я тоже хочу')).toThrow(/не ведущий/);
+    expect(() => setProposal(map, 'r-01', 's-02', 'я тоже хочу')).toThrow(/not the lead/);
     expect(room(map).proposal).toBeNull();
     expect(map.work.proposalSeq).toBeUndefined();
   });
@@ -115,15 +115,15 @@ describe('setProposal', () => {
   it('участник и не участник комнаты — оба не ведущие', () => {
     const map = threeInRoom();
     addSession(map, { provider: 'claude', label: 'чужая', task: 'x' });
-    expect(() => setProposal(map, 'r-01', 's-04', 'x')).toThrow(/не ведущий/);
-    expect(() => setProposal(map, 'r-01', HUMAN, 'x')).toThrow(/не ведущий/);
+    expect(() => setProposal(map, 'r-01', 's-04', 'x')).toThrow(/not the lead/);
+    expect(() => setProposal(map, 'r-01', HUMAN, 'x')).toThrow(/not the lead/);
   });
 
   it('закрытая комната (ни одного живого участника) — ошибка', () => {
     const map = threeInRoom();
     for (const id of ['s-01', 's-02', 's-03']) transitionSession(map, id, 'closed');
     expect(() => setProposal(map, 'r-01', 's-01', 'x')).toThrow(RoomRuleError);
-    expect(() => setProposal(map, 'r-01', 's-01', 'x')).toThrow(/закрыта/);
+    expect(() => setProposal(map, 'r-01', 's-01', 'x')).toThrow(/is closed/);
     expect(room(map).proposal).toBeNull();
   });
 
@@ -135,7 +135,7 @@ describe('setProposal', () => {
     expect(room(map).proposal).toBeNull();
     // Комната не остаётся без права на решение: ведущим стал первый живой из members.
     expect(setProposal(map, 'r-01', 's-02', 'x')).toEqual({ proposalId: 'p-01', rev: 0 });
-    expect(() => setProposal(map, 'r-01', 's-03', 'x')).toThrow(/не ведущий/);
+    expect(() => setProposal(map, 'r-01', 's-03', 'x')).toThrow(/not the lead/);
   });
 
   it('назначенный ведущий удалён из карты (id остался в members) — право у следующего живого', () => {
@@ -143,8 +143,8 @@ describe('setProposal', () => {
     removeSession(map, 's-02');
 
     expect(room(map).members).toContain('s-02');
-    expect(() => setProposal(map, 'r-01', 's-02', 'x')).toThrow(/не ведущий/);
-    expect(() => setProposal(map, 'r-01', 's-03', 'x')).toThrow(/не ведущий/);
+    expect(() => setProposal(map, 'r-01', 's-02', 'x')).toThrow(/not the lead/);
+    expect(() => setProposal(map, 'r-01', 's-03', 'x')).toThrow(/not the lead/);
     expect(setProposal(map, 'r-01', 's-01', 'x').proposalId).toBe('p-01');
   });
 
@@ -159,7 +159,7 @@ describe('setProposal', () => {
   });
 
   it('нет комнаты — ошибка', () => {
-    expect(() => setProposal(threeInRoom(), 'r-09', 's-01', 'x')).toThrow(/нет в карте/);
+    expect(() => setProposal(threeInRoom(), 'r-09', 's-01', 'x')).toThrow(/is not in the map/);
   });
 
   it('текст 1..10000: пустой и из одних пробелов — нет, 10000 знаков — да, 10001 — нет', () => {

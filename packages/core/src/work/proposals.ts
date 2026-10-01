@@ -33,7 +33,7 @@ export class ProposalConflictError extends Error {
 
 const roomOf = (map: WorkMap, roomId: string): Room => {
   const room = map.rooms.find((candidate) => candidate.id === roomId);
-  if (room === undefined) throw new RoomRuleError(`комнаты ${roomId} нет в карте`);
+  if (room === undefined) throw new RoomRuleError(`room ${roomId} is not in the map`);
   return room;
 };
 
@@ -71,16 +71,16 @@ export function setProposal(
 ): { proposalId: string; rev: number } {
   const room = roomOf(map, roomId);
   if (isRoomClosed(map, room)) {
-    throw new RoomRuleError(`комната ${roomId} закрыта: в ней нет живых участников`);
+    throw new RoomRuleError(`room ${roomId} is closed: it has no live participants`);
   }
   // Ведущий из `liveLead` жив по построению: отдельной проверки «сессия закрыта» не нужно.
   if (liveLead(map, room) !== from) {
     throw new RoomRuleError(
-      `сессия ${from} не ведущий комнаты ${roomId}: решение приносит только ведущий`,
+      `session ${from} is not the lead of room ${roomId}: only the lead brings a decision`,
     );
   }
   if (text.trim() === '' || text.length > PROPOSAL_TEXT_MAX) {
-    throw new RoomRuleError(`текст решения: 1–${PROPOSAL_TEXT_MAX} знаков`);
+    throw new RoomRuleError(`decision text: 1–${PROPOSAL_TEXT_MAX} characters`);
   }
 
   const current = room.proposal;
@@ -130,12 +130,12 @@ export function resolveProposal(
   const proposal = room.proposal;
   if (proposal === null || proposal.id !== proposalId) {
     throw new ProposalConflictError(
-      `решение ${proposalId} комнаты ${roomId} не ждёт ответа: его уже приняли, вернули или заменили новым`,
+      `decision ${proposalId} of room ${roomId} is not waiting for an answer: it has already been accepted, returned or replaced by a new one`,
     );
   }
   if (options.rev !== undefined && options.rev !== proposal.rev) {
     throw new ProposalConflictError(
-      `решение ${proposalId} комнаты ${roomId} заменили: ждёт версия ${proposal.rev}, а ответ дан на версию ${options.rev}`,
+      `decision ${proposalId} of room ${roomId} was replaced: version ${proposal.rev} is waiting, but the answer was given to version ${options.rev}`,
     );
   }
   const lead = liveLead(map, room) ?? proposal.from;

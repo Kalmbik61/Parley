@@ -36,34 +36,36 @@ import {
   worksIndexPath,
 } from './work/store.js';
 
-const USAGE = `parley-core — индекс сессий Claude Code в JSON
+const USAGE = `parley-core — an index of Claude Code sessions as JSON
 
-  parley-core index [--root <путь>]         список сессий, свежие первыми
-  parley-core session <id> [--root <путь>]  сессия с подсессиями
-  parley-core schema [--provider claude|codex] [--root <путь>]
-                                            отчёт по реальной схеме .jsonl
+  parley-core index [--root <path>]         list of sessions, newest first
+  parley-core session <id> [--root <path>]  a session with its subsessions
+  parley-core schema [--provider claude|codex] [--root <path>]
+                                            report on the real .jsonl schema
 
-  parley-core work new --title <t> [--goal <g>] [--cwd <путь>]
-                                            новая работа в проекте
-  parley-core work list [--all]             работы глобального индекса
-  parley-core work prune                    снять из индекса работы без карты
-  parley-core work map --work <id> [--cwd <путь>]
-                                            карта работы
+  parley-core work new --title <t> [--goal <g>] [--cwd <path>]
+                                            a new workspace in the project
+  parley-core work list [--all]             workspaces of the global index
+  parley-core work prune                    remove from the index the workspaces
+                                            that have no map
+  parley-core work map --work <id> [--cwd <path>]
+                                            the workspace map
   parley-core work session new --work <id> --provider <p> --label <l>
-      [--task <t>] [--context s-01,s-02] [--agent <name>] [--cwd <путь>]
-                                            запись pending, бриф, MCP-конфиг,
-                                            settings.json с хуками и готовая
-                                            команда запуска; без --task старт
-                                            тихий: бриф уходит контекстом, а
-                                            задачу пишет пользователь сам;
-                                            --agent — роль Claude Code из
+      [--task <t>] [--context s-01,s-02] [--agent <name>] [--cwd <path>]
+                                            a pending record, the brief, the MCP
+                                            config, settings.json with hooks and
+                                            a ready launch command; without
+                                            --task the start is quiet: the brief
+                                            goes in as context, and the user
+                                            types the task themselves;
+                                            --agent is a Claude Code role from
                                             .claude/agents/<name>.md
 
-  --json   формат по умолчанию и единственный, принимается для совместимости
-  --root   корень истории (по умолчанию ~/.claude/projects, только чтение)
-  --cwd    проект с \`.parley/\` (по умолчанию текущий каталог; для команд по
-           --work проект берётся из глобального индекса)
-  --all    показывать и archived работы`;
+  --json   the default and only format, accepted for compatibility
+  --root   history root (default ~/.claude/projects, read-only)
+  --cwd    a project with \`.parley/\` (default: the current directory; for
+           commands with --work the project comes from the global index)
+  --all    also show archived workspaces`;
 
 function optionValue(argv: string[], name: string): string | undefined {
   const at = argv.indexOf(name);
@@ -72,7 +74,7 @@ function optionValue(argv: string[], name: string): string | undefined {
 
 function requiredOption(argv: string[], name: string): string {
   const value = optionValue(argv, name);
-  if (value === undefined || value === '') throw new Error(`нужен ${name} <значение>`);
+  if (value === undefined || value === '') throw new Error(`${name} <value> is required`);
   return value;
 }
 
@@ -92,11 +94,11 @@ async function resolveProject(argv: string[], workId: string): Promise<string> {
 
   const found = (await readWorksIndex()).works.filter((work) => work.id === workId);
   if (found.length === 0) {
-    throw new Error(`работы ${workId} нет в ${worksIndexPath()} — укажите --cwd`);
+    throw new Error(`workspace ${workId} is not in ${worksIndexPath()} — pass --cwd`);
   }
   if (found.length > 1) {
     const projects = found.map((work) => work.projectPath).join(', ');
-    throw new Error(`работа ${workId} есть в нескольких проектах (${projects}) — укажите --cwd`);
+    throw new Error(`workspace ${workId} exists in several projects (${projects}) — pass --cwd`);
   }
   return (found[0] as { projectPath: string }).projectPath;
 }
@@ -123,7 +125,9 @@ async function channelFor(entry: ProviderEntry): Promise<boolean> {
 
   const probe = await probeChannelSupport(entry.runner.command);
   if (!probe.supported) {
-    process.stderr.write(`push выключен: claude ${probe.version} младше ${CHANNEL_MIN_VERSION}\n`);
+    process.stderr.write(
+      `push is off: claude ${probe.version} is older than ${CHANNEL_MIN_VERSION}\n`,
+    );
     return false;
   }
   return true;
@@ -155,13 +159,11 @@ async function newWorkSession(argv: string[]): Promise<void> {
   const registry = await loadProviders();
   const entry = registry[provider];
   if (entry === undefined) {
-    throw new Error(
-      `неизвестный провайдер ${provider}; допустимы: ${Object.keys(registry).join(', ')}`,
-    );
+    throw new Error(`unknown provider ${provider}; allowed: ${Object.keys(registry).join(', ')}`);
   }
   if (!(await commandInPath(entry.runner.command))) {
     throw new Error(
-      `команды ${entry.runner.command} нет в PATH — провайдер ${provider} недоступен`,
+      `command ${entry.runner.command} is not in PATH — provider ${provider} is unavailable`,
     );
   }
 
@@ -169,7 +171,7 @@ async function newWorkSession(argv: string[]): Promise<void> {
   // нечем запустить ролью, — тот же мусор в карте (спецификация 2026-09-08, 7).
   if (agent !== null) {
     if (!(entry.runner.args ?? []).includes('{agent}')) {
-      throw new Error(`провайдер ${provider} агентов не принимает`);
+      throw new Error(`provider ${provider} does not accept agents`);
     }
     await assertAgent(agent, agentDirs(projectPath));
   }
@@ -181,7 +183,7 @@ async function newWorkSession(argv: string[]): Promise<void> {
   const map = await updateMap(projectPath, workId, (current) => {
     for (const id of contextFrom) {
       if (!current.sessions.some((session) => session.id === id)) {
-        throw new Error(`сессии ${id} нет в карте`);
+        throw new Error(`session ${id} is not in the map`);
       }
     }
     const session = addSession(current, {
@@ -303,7 +305,7 @@ async function workCommand(rest: string[], argv: string[]): Promise<number> {
     return 0;
   }
 
-  process.stderr.write(`Неизвестная команда: work ${rest.join(' ')}\n${USAGE}\n`);
+  process.stderr.write(`Unknown command: work ${rest.join(' ')}\n${USAGE}\n`);
   return 1;
 }
 
@@ -333,7 +335,7 @@ async function main(argv: string[]): Promise<number> {
   if (command === 'schema') {
     const provider = optionValue(argv, '--provider') ?? 'claude';
     if (provider !== 'claude' && provider !== 'codex') {
-      process.stderr.write(`Неизвестный провайдер: ${provider}\n`);
+      process.stderr.write(`Unknown provider: ${provider}\n`);
       return 1;
     }
 
@@ -356,7 +358,7 @@ async function main(argv: string[]): Promise<number> {
   if (command === 'session') {
     const id = rest.find((arg) => !arg.startsWith('--'));
     if (id === undefined) {
-      process.stderr.write('Нужен id сессии: parley-core session <id>\n');
+      process.stderr.write('A session id is required: parley-core session <id>\n');
       return 1;
     }
 
@@ -373,7 +375,7 @@ async function main(argv: string[]): Promise<number> {
       })());
 
     if (found === undefined) {
-      process.stderr.write(`Сессия ${id} не найдена в ${root}\n`);
+      process.stderr.write(`Session ${id} was not found in ${root}\n`);
       return 1;
     }
 
@@ -381,7 +383,7 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
-  process.stderr.write(`Неизвестная команда: ${command}\n${USAGE}\n`);
+  process.stderr.write(`Unknown command: ${command}\n${USAGE}\n`);
   return 1;
 }
 

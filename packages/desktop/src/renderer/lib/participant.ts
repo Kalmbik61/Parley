@@ -22,14 +22,23 @@ export function sessionTag(id: string): string {
 }
 
 /**
- * Тот же литерал, что `NEW_LABEL` в `core/work/launch.ts`: из core рендерер берёт только
- * типы. Core пишет его в карту по-русски, окно показывает английский.
+ * Те же литералы, что `NEW_LABEL` и `UNTITLED_WORK` в `core/work/launch.ts`: из core рендерер берёт только
+ * типы. Core пишет метки в карту по-английски, окно показывает свои тексты. Сборки до перевода текстов писали
+ * их по-русски, и такие карты лежат на диске, поэтому окно узнаёт и прежнюю запись.
  */
-const NEW_LABEL = 'новая сессия'; // cyrillic-ok: метка-страж core
+const NEW_LABEL = 'new session';
+const RUSSIAN_NEW_LABEL = 'новая сессия'; // cyrillic-ok: метка-страж core в картах старых сборок
+const UNTITLED_WORK = 'untitled';
+const RUSSIAN_UNTITLED_WORK = 'без названия'; // cyrillic-ok: метка-страж core в картах старых сборок
 
-/** Ярлык сессии для окна: метка новой сессии из core — по-английски, остальные как есть. */
+/** Ярлык сессии для окна: метка новой сессии из core — «New session», остальные как есть. */
 export function sessionLabelText(label: string): string {
-  return label === NEW_LABEL ? S.participants.newSession : label;
+  return label === NEW_LABEL || label === RUSSIAN_NEW_LABEL ? S.participants.newSession : label;
+}
+
+/** Название работы для окна: метка безымянной работы из core — «Untitled workspace», остальные как есть. */
+export function workTitleText(title: string): string {
+  return title === UNTITLED_WORK || title === RUSSIAN_UNTITLED_WORK ? S.participants.untitledWorkspace : title;
 }
 
 /** `S03 бэкенд` — то, что видно в строке дерева сессий. */

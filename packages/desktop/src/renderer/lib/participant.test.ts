@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkEntry, WorkSession } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
-import { sessionLabelFor, sessionRowLabel } from './participant.js';
+import { sessionLabelFor, sessionRowLabel, workTitleText } from './participant.js';
 
 describe('sessionRowLabel', () => {
-  // Раунд исправлений 1 куска 3.3: `NEW_LABEL` core ('новая сессия') окно показывает по-английски.
-  it('метка новой сессии из core — английская, обычная — как есть', () => {
+  // Раунд исправлений 1 куска 3.3: `NEW_LABEL` core ('new session') окно показывает как «New session».
+  it('метка новой сессии из core — «New session», обычная — как есть', () => {
+    expect(sessionRowLabel('s-01', 'new session')).toBe('S01 New session');
+    expect(sessionRowLabel('s-02', 'new')).toBe('S02 new');
+  });
+
+  it('прежняя русская запись метки (карта старой сборки) — тоже «New session»', () => {
     expect(sessionRowLabel('s-01', 'новая сессия')).toBe('S01 New session');
     expect(sessionRowLabel('s-02', 'новая')).toBe('S02 новая');
   });
@@ -20,6 +25,22 @@ describe('sessionRowLabel', () => {
 
   it('чужая форма id печатается как есть', () => {
     expect(sessionRowLabel('manual-123', 'ручная')).toBe('manual-123 ручная');
+  });
+});
+
+describe('workTitleText', () => {
+  it('метка безымянной работы из core — «Untitled workspace»', () => {
+    expect(workTitleText('untitled')).toBe('Untitled workspace');
+  });
+
+  it('прежняя русская запись метки (карта старой сборки) — тоже «Untitled workspace»', () => {
+    expect(workTitleText('без названия')).toBe('Untitled workspace');
+  });
+
+  it('обычное название — как есть, в том числе похожее на метку', () => {
+    expect(workTitleText('Авторизация')).toBe('Авторизация');
+    expect(workTitleText('Untitled')).toBe('Untitled');
+    expect(workTitleText('')).toBe('');
   });
 });
 

@@ -162,6 +162,10 @@ describe('createPtyHandlers', () => {
     const client = fakeClient();
 
     await expect(handlers.ptyAttach({ ref: ref() }, requestOf(client))).rejects.toBeInstanceOf(HostError);
+    await expect(handlers.ptyAttach({ ref: ref() }, requestOf(client))).rejects.toMatchObject({
+      code: 'not_found',
+      message: 'no live PTY for session s-01',
+    });
   });
 
   // Кусок 4.1 (спека 3.2): подключение — не просмотр. Невидимая, но подключённая
@@ -429,7 +433,7 @@ describe('pty.send через сервер хоста (кусок 5.1)', () => {
   it('сессия без PTY — not_found; пустой text отвергает схема', async () => {
     const client = await connected();
     client.send({ id: 1, method: 'pty.send', params: { ref: ref(), text: 'hi', submit: true } });
-    expect((await reply(client, 1)).error?.code).toBe('not_found');
+    expect((await reply(client, 1)).error).toMatchObject({ code: 'not_found', message: 'session is not running' });
 
     client.send({ id: 2, method: 'pty.send', params: { ref: ref(), text: '', submit: true } });
     expect((await reply(client, 2)).error?.code).toBe('bad_request');

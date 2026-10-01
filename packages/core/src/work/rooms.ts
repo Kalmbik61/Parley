@@ -50,7 +50,7 @@ export function addRoom(map: WorkMap, init: NewRoom, at = new Date().toISOString
   const lead = init.lead ?? null;
   // Проверка до `nextRoomId`: отказ не должен тратить номер комнаты.
   if (lead !== null && (lead === HUMAN || !(lead === init.creator || init.members.includes(lead)))) {
-    throw new RoomRuleError(`ведущий ${lead} не участник комнаты «${init.title}»`);
+    throw new RoomRuleError(`lead ${lead} is not a participant of room "${init.title}"`);
   }
   const room: Room = {
     id: nextRoomId(map),
@@ -159,15 +159,15 @@ export function addMember(
   at = new Date().toISOString(),
 ): Message {
   const room = map.rooms.find((candidate) => candidate.id === roomId);
-  if (room === undefined) throw new RoomRuleError(`комнаты ${roomId} нет в карте`);
+  if (room === undefined) throw new RoomRuleError(`room ${roomId} is not in the map`);
   const session = map.sessions.find((candidate) => candidate.id === sessionId);
-  if (session === undefined) throw new RoomRuleError(`сессии ${sessionId} нет в карте`);
-  if (session.lifecycle === 'closed') throw new RoomRuleError(`сессия ${sessionId} закрыта`);
+  if (session === undefined) throw new RoomRuleError(`session ${sessionId} is not in the map`);
+  if (session.lifecycle === 'closed') throw new RoomRuleError(`session ${sessionId} is closed`);
 
   const inRoom = isMember(room, sessionId);
   const elsewhere = map.rooms.some((other) => other.id !== roomId && isMember(other, sessionId));
   if (inRoom && !elsewhere) {
-    throw new RoomRuleError(`сессия ${sessionId} уже участник комнаты ${roomId}`);
+    throw new RoomRuleError(`session ${sessionId} is already a participant of room ${roomId}`);
   }
 
   leaveOtherRooms(map, sessionId, roomId);
@@ -191,13 +191,13 @@ export function addMemberByLead(
   at = new Date().toISOString(),
 ): Message {
   const room = map.rooms.find((candidate) => candidate.id === roomId);
-  if (room === undefined) throw new RoomRuleError(`комнаты ${roomId} нет в карте`);
+  if (room === undefined) throw new RoomRuleError(`room ${roomId} is not in the map`);
   if (isRoomClosed(map, room)) {
-    throw new RoomRuleError(`комната ${roomId} закрыта: в ней нет живых участников`);
+    throw new RoomRuleError(`room ${roomId} is closed: it has no live participants`);
   }
   if (liveLead(map, room) !== leadId) {
     throw new RoomRuleError(
-      `сессия ${leadId} не ведущий комнаты ${roomId}: вводить в комнату сессии может только ведущий`,
+      `session ${leadId} is not the lead of room ${roomId}: only the lead can bring a session into the room`,
     );
   }
   return addMember(map, roomId, sessionId, at);
@@ -228,10 +228,10 @@ export function isMember(room: Room, id: string): boolean {
   return id === HUMAN || id === room.creator || room.members.includes(id);
 }
 
-/** Список тегов через запятую, последний — через «и»: `S03`, `S03 и S05`. */
+/** Список тегов через запятую, последний — через `and`: `S03`, `S03 and S05`. */
 function joinTags(tags: readonly string[]): string {
   if (tags.length <= 1) return tags[0] ?? '';
-  return `${tags.slice(0, -1).join(', ')} и ${tags[tags.length - 1]}`;
+  return `${tags.slice(0, -1).join(', ')} and ${tags[tags.length - 1]}`;
 }
 
 /**
@@ -242,13 +242,13 @@ function joinTags(tags: readonly string[]): string {
  */
 function memberTag(map: WorkMap, id: string): string {
   const deleted = (map.work.deletedSessions ?? []).includes(id);
-  return deleted ? `${sessionTag(id)} (удалена)` : sessionTag(id);
+  return deleted ? `${sessionTag(id)} (deleted)` : sessionTag(id);
 }
 
-/** Текст письма-приглашения в комнату: «Вас добавили в r-01 «<title>» с S03 и S05». */
+/** Текст письма-приглашения в комнату: `You were added to r-01 "<title>" with S03 and S05`. */
 export function joinNotice(room: Room, map: WorkMap): string {
   const tags = room.members.map((id) => memberTag(map, id));
-  return `Вас добавили в ${room.id} «${room.title}» с ${joinTags(tags)}`;
+  return `You were added to ${room.id} "${room.title}" with ${joinTags(tags)}`;
 }
 
 /**

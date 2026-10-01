@@ -168,7 +168,7 @@ test.describe('Codex — агент комнаты (кусок 11a)', () => {
     // Прямое письмо человека сессии: будильник печатает указатель на него, а агент занят.
     await call(window, 'rooms.send', { projectPath: project, workId: ref.workId, roomId: null, to: [ref.sessionId], text: 'привет', kind: 'note' });
 
-    const pointer = 'Новые письма (1). Вызови check_inbox.';
+    const pointer = 'New messages (1). Call check_inbox.';
     await expect.poll(() => screenText(window), { timeout: 15_000 }).toContain(`paste: ${pointer}`);
     await expect.poll(() => screenText(window), { timeout: 15_000 }).toContain(`tab: ${pointer}`);
     // В идущий ход указатель не вмешался: Enter с ним не приходил.

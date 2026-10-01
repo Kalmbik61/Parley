@@ -16,7 +16,7 @@
  *
  * `noticeLine` приходит уже переведённым текстом (`shared/strings.ts#noticeText`,
  * раунд исправлений 1 куска E.1) — сам компонент `HostNotice` больше не
- * видит и русский `notice.text` показать не может, даже случайно.
+ * видит и `notice.text` хоста показать не может, даже случайно.
  */
 
 import type { LimitWindow, ProviderLimits } from '@parley/protocol';

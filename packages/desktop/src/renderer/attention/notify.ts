@@ -15,7 +15,7 @@ import type { UiFile } from '../../shared/ui-types.js';
 import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
 import { groups } from '../layout/tree.js';
-import { sessionRowLabel, sessionTag } from '../lib/participant.js';
+import { sessionRowLabel, sessionTag, workTitleText } from '../lib/participant.js';
 import { workKey } from '../lib/tree-order.js';
 import { useActivityStore } from '../store/activity.js';
 import { useUiStore } from '../store/ui.js';
@@ -176,7 +176,7 @@ export function createAttentionNotifier(deps: NotifyDeps): {
       const { entry, session } = found;
       send({
         title: S.notifications.sessionTitle(
-          entry.map.work.title,
+          workTitleText(entry.map.work.title),
           sessionRowLabel(session.id, session.label),
           level === 'needs-you' ? S.notifications.needsYou : S.notifications.finished,
         ),
@@ -205,7 +205,7 @@ export function createAttentionNotifier(deps: NotifyDeps): {
         const latest = fresh.at(-1);
         if (latest === undefined) continue;
         send({
-          title: S.notifications.mailTitle(entry.map.work.title, latest.kind, sessionTag(latest.from)),
+          title: S.notifications.mailTitle(workTitleText(entry.map.work.title), latest.kind, sessionTag(latest.from)),
           body: firstLine(latest.text),
           tag: `mail:${key}`,
           target: { kind: 'mail', projectPath: entry.projectPath, workId: entry.map.work.id },
@@ -221,7 +221,7 @@ export function createAttentionNotifier(deps: NotifyDeps): {
       if (found === null) return;
       const { entry, session } = found;
       send({
-        title: S.notifications.sessionTitle(entry.map.work.title, sessionRowLabel(session.id, session.label), event),
+        title: S.notifications.sessionTitle(workTitleText(entry.map.work.title), sessionRowLabel(session.id, session.label), event),
         // Без ярлыка: он уже в заголовке.
         body: noticeText(notice),
         tag: `notice:${notice.kind}:${refKey(notice.ref)}`,

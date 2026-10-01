@@ -910,7 +910,7 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
     await legacyProject('shop');
     await writeFile(worksIndexPath(), '{ broken');
 
-    await expect(migrateProjects({ now })).rejects.toThrow('не парсится');
+    await expect(migrateProjects({ now })).rejects.toThrow('cannot be parsed');
   });
 
   it('индекса нет — переносить некому', async () => {

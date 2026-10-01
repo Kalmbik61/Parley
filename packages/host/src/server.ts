@@ -90,7 +90,7 @@ function handleHello(
     // Уведомление до hello тоже отклоняется, но у него нет id — отвечать нечем.
     const id = parsed.kind === 'notification' ? null : parsed.kind === 'invalid' ? parsed.id : parsed.message.id;
     if (id !== null) {
-      writeRaw(socket, { id, error: { code: 'unauthorized', message: 'первое сообщение должно быть hello' } });
+      writeRaw(socket, { id, error: { code: 'unauthorized', message: 'the first message must be hello' } });
     }
     socket.end();
     return null;
@@ -101,7 +101,7 @@ function handleHello(
   const hello = parsed.params as HelloParams;
 
   if (hello.token !== options.token) {
-    writeRaw(socket, { id, error: { code: 'unauthorized', message: 'неверный токен' } });
+    writeRaw(socket, { id, error: { code: 'unauthorized', message: 'invalid token' } });
     socket.end();
     return null;
   }
@@ -111,7 +111,7 @@ function handleHello(
       id,
       error: {
         code: 'protocol_mismatch',
-        message: `хост понимает протокол ${PROTOCOL_VERSION}, клиент прислал ${hello.protocol}`,
+        message: `host speaks protocol ${PROTOCOL_VERSION}, client sent ${hello.protocol}`,
         data: { hostVersion: options.context.version, liveSessions: options.context.liveSessions() },
       },
     });
@@ -178,7 +178,7 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
   if (!handler) {
     // Схема метода известна протоколу (иначе parseIncoming вернул бы invalid),
     // но этот кусок хоста ещё не завёл для него обработчик — появится позже.
-    client.send({ id, error: { code: 'unknown_method', message: `метод пока не реализован: ${method}` } });
+    client.send({ id, error: { code: 'unknown_method', message: `method is not implemented yet: ${method}` } });
     return;
   }
 

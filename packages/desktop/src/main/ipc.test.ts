@@ -239,7 +239,7 @@ describe('registerIpc', () => {
 
   // Кусок E.1: HostError, дошедший от хоста через HostConnection.call, обязан
   // нести свой код протокола через encodeIpcError — рендерер читает его
-  // decodeIpcError и показывает errorText(code), а не русский текст хоста
+  // decodeIpcError и показывает errorText(code), а не текст хоста
   // (тот — только console.warn у вызывающей стороны).
   it('HostError от HostConnection.call доходит до рендерера с кодом (тест 4 куска E.1)', async () => {
     const { ipcMain, connection } = setup();

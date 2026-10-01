@@ -59,7 +59,7 @@ export function fakePty(): FakePty {
     get: (ref) => (state.live ? handle(ref) : undefined),
     list: () => [],
     write: (ref, data) => {
-      if (!state.live) throw new Error(`нет живого PTY для сессии ${refKey(ref)}`);
+      if (!state.live) throw new Error(`no live PTY for session ${refKey(ref)}`);
       state.writes.push(data);
     },
     input: () => {},

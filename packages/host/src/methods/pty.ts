@@ -94,7 +94,7 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
     ptyAttach: async (params, request) => {
       const handle = deps.pty.get(params.ref);
       if (handle === undefined) {
-        throw new HostError('not_found', `нет живого PTY для сессии ${params.ref.sessionId}`);
+        throw new HostError('not_found', `no live PTY for session ${params.ref.sessionId}`);
       }
 
       const key = refKey(params.ref);

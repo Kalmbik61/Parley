@@ -67,21 +67,21 @@ export type DeliveryAction =
  * должна оставаться короткой, подробности отдаст `check_inbox`.
  */
 export function pointerText(letters: readonly Message[], rooms: readonly Room[]): string {
-  const tail = 'Вызови check_inbox.';
-  const head = `Новые письма (${letters.length})`;
+  const tail = 'Call check_inbox.';
+  const head = `New messages (${letters.length})`;
   const roomIds = [
     ...new Set(letters.flatMap((message) => (message.roomId === null ? [] : [message.roomId]))),
   ].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
   const direct = letters.some((message) => message.roomId === null);
 
   if (roomIds.length === 0) return `${head}. ${tail}`;
-  if (direct) return `${head} в ${roomIds.join(', ')} и лично. ${tail}`;
-  if (roomIds.length > 1) return `${head} в ${roomIds.join(', ')}. ${tail}`;
+  if (direct) return `${head} in ${roomIds.join(', ')} and direct. ${tail}`;
+  if (roomIds.length > 1) return `${head} in ${roomIds.join(', ')}. ${tail}`;
 
   const id = roomIds[0] as string;
   const room = rooms.find((candidate) => candidate.id === id);
   // Комнаты в карте нет (письмо пережило её) — хватит и id.
-  return room === undefined ? `${head} в ${id}. ${tail}` : `${head} в ${id} «${room.title}». ${tail}`;
+  return room === undefined ? `${head} in ${id}. ${tail}` : `${head} in ${id} "${room.title}". ${tail}`;
 }
 
 /**

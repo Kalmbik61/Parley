@@ -19,7 +19,7 @@ import { S, providerName } from '../../../shared/strings.js';
 import { isHumanUnread, sessionAttention, type Attention } from '../../attention/derive.js';
 import { displayStatus, dotState, stateWord, type DotState } from '../../lib/dot-state.js';
 import { DECISIONS_SHOWN, recipientsOf } from '../../lib/mail-view.js';
-import { sessionLabelText, sessionRowLabel, sessionTag } from '../../lib/participant.js';
+import { sessionLabelText, sessionRowLabel, sessionTag, workTitleText } from '../../lib/participant.js';
 import { modelName } from '../../lib/participant-tag.js';
 import { roomLiveLead } from '../../lib/room-lead.js';
 import type { ActivityEntry } from '../../store/activity.js';
@@ -178,7 +178,7 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
     createdBy,
     S.rooms.agentCount(participants.length),
     ...(lead === null ? [] : [S.rooms.leadIs(sessionTag(lead))]),
-    map.work.title,
+    workTitleText(map.work.title),
   ].join(' · ');
 
   const messages: MessageModel[] = map.messages

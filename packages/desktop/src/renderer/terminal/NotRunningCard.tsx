@@ -25,7 +25,7 @@ import { refKey, type SessionRef } from '@parley/protocol';
 import { S, providerName } from '../../shared/strings.js';
 import { cn } from '../lib/cn.js';
 import { useNow } from '../lib/use-now.js';
-import { sessionRowLabel } from '../lib/participant.js';
+import { sessionRowLabel, workTitleText } from '../lib/participant.js';
 import { relativeTimeAgo } from '../lib/relative-time.js';
 import { useActivityStore } from '../store/activity.js';
 import { useProvidersStore } from '../store/providers.js';
@@ -55,7 +55,7 @@ export function NotRunningCard({ sessionRef, onResume }: NotRunningCardProps): J
 
   const pending = session.lifecycle === 'pending';
   const kicker = pending ? S.states.pending : session.lifecycle === 'closed' ? S.states.closed : S.states.asleep;
-  const title = `${sessionRowLabel(session.id, session.label)} · ${entry.map.work.title}`;
+  const title = `${sessionRowLabel(session.id, session.label)} · ${workTitleText(entry.map.work.title)}`;
   // Последняя реплика агента — его резюме; нет резюме (сессия не отчиталась) — то, что ей поручили.
   const body = pending || session.summary === null || session.summary === '' ? session.task : session.summary;
   const provider = providerName(session.provider, providerLabel);

@@ -42,7 +42,7 @@ describe('sanitizeForCodex — начало текста', () => {
 
   it('обычный текст не меняется вовсе', () => {
     for (const text of [
-      'Новые письма (1). Вызови check_inbox.',
+      'New messages (1). Call check_inbox.',
       'Привет!',
       'hello world',
       'a\nb\nc',

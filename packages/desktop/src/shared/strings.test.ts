@@ -30,7 +30,7 @@ const NOTICE_KINDS: NoticeKind[] = [
   'skill-foreign',
 ];
 
-/** `notice.text` — заведомо русский, как у хоста (раунд исправлений 1 куска E.1) — чтобы поймать случайную подстановку. */
+/** `notice.text` — заведомо чужой для окна маркер (раунд исправлений 1 куска E.1) — чтобы поймать случайную подстановку. */
 function hostNotice(kind: NoticeKind, ref: HostNotice['ref'] = null): HostNotice {
   return { kind, ref, text: 'РУССКИЙ_ТЕКСТ_ХОСТА_НЕ_ДОЛЖЕН_ПОПАСТЬ_В_РЕЗУЛЬТАТ', at: '2026-01-01T00:00:00.000Z' };
 }
@@ -187,9 +187,8 @@ describe('errorText', () => {
 });
 
 // Раунд исправлений 1 куска E.1 (ревью линза A, Critical): HostNotice.text
-// хост пишет по-русски и не переводит (сквозное правило) — приходит рантаймом
-// по сокету, страж `english-ui` его не ловит. `noticeText` — английский смысл
-// по `notice.kind`, параллельно `errorText(code)`.
+// приходит рантаймом по сокету, страж `english-ui` его не ловит. `noticeText` —
+// английский смысл по `notice.kind`, параллельно `errorText(code)`.
 describe('noticeText', () => {
   it.each(NOTICE_KINDS)('вид %s без ярлыка — непустой английский текст без кириллицы', (kind) => {
     const text = noticeText(hostNotice(kind));
@@ -222,6 +221,14 @@ describe('noticeText', () => {
     expect(noticeText(hostNotice('startup-wait', ref), 'S03 codex')).toBe(
       'S03 codex: waiting at startup — Codex may need sign-in or folder trust in its terminal.',
     );
+  });
+
+  // Слова — как у хоста, гида и README: строка, которую хост набирает в терминал агента, — «pointer»,
+  // письма — «messages», а не «nudge» и «mail».
+  it('pointer-* и resume-limit: «pointer» и «messages» — как в сообщениях хоста', () => {
+    expect(noticeText(hostNotice('pointer-timeout'))).toBe('No response after the pointer.');
+    expect(noticeText(hostNotice('pointer-cancelled'))).toBe('Pointer cancelled by your input.');
+    expect(noticeText(hostNotice('resume-limit'))).toBe('Hourly resume limit reached — messages are waiting.');
   });
 
   it('skill-foreign (ref: null) — английский смысл: скилл не поставлен, путь чужой', () => {

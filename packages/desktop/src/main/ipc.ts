@@ -24,7 +24,7 @@ import type { createDesignMode } from './browser/design-mode.js';
  * (протокольная ошибка хоста, дошедшая через `HostConnection.call`) несёт
  * свой код (`not_found`, `conflict`, …), всё остальное — общий `'failed'`.
  * Рендерер читает код через `decodeIpcError` и показывает `errorText(code,
- * action)`; исходное сообщение (может быть русским текстом хоста) — только
+ * action)`; исходное сообщение (текст хоста) — только
  * `console.warn` у вызывающей стороны, сюда оно попадает как есть.
  * `FilesDeniedError` (путь вне корней, кусок 5.2) — код `files:denied`: окно
  * показывает по нему `S.files.denied`. Экспорт — для каналов `files/ipc.ts`.

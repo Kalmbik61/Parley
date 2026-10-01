@@ -82,7 +82,7 @@ describe('works.create / works.delete', () => {
 
     client.send({ id: 2, method: 'works.delete', params: { projectPath: dir, workId } });
     const response = await client.next();
-    expect(response.error?.code).toBe('conflict');
+    expect(response.error).toMatchObject({ code: 'conflict', message: `workspace ${workId} has a live session` });
     // Работа осталась на диске.
     expect(await readFile(workPaths(dir, workId).map, 'utf8')).toContain('Работа');
 
@@ -219,7 +219,10 @@ describe('works.rename / works.setStatus', () => {
     const { client, dir } = await withWork();
 
     client.send({ id: 2, method: 'works.rename', params: { projectPath: dir, workId: 'w-9999', title: 'Икс' } });
-    expect((await reply(client, 2)).error?.code).toBe('not_found');
+    expect((await reply(client, 2)).error).toMatchObject({
+      code: 'not_found',
+      message: 'workspace w-9999 does not exist',
+    });
     client.send({
       id: 3,
       method: 'works.setStatus',
@@ -344,6 +347,19 @@ describe('settings.get / settings.set', () => {
     client.send({ id: 1, method: 'settings.set', params: { key: 'messageRate', value: 'абв' } });
     const response = await client.next();
     expect(response.error?.code).toBe('bad_request');
+
+    client.close();
+  });
+
+  it('settings.set с неизвестным ключом — bad_request с именем ключа', async () => {
+    const { home, token } = await boot();
+    const client = connectRaw(hostPaths(home).socket);
+    await waitConnected(client.socket);
+    await hello(client, token);
+
+    client.send({ id: 1, method: 'settings.set', params: { key: 'noSuchSetting', value: '1' } });
+    const response = await client.next();
+    expect(response.error).toMatchObject({ code: 'bad_request', message: 'unknown setting: noSuchSetting' });
 
     client.close();
   });
