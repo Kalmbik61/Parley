@@ -1,146 +1,149 @@
-# Parley
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/media/brand/parley-logo-dark.svg">
+    <img src="docs/media/brand/parley-logo-light.svg" width="420" alt="Parley">
+  </picture>
+</h1>
 
-Координация агентских CLI (Claude Code, Codex) в окне `Parley.app` — Electron-
-приложении поверх локального процесса `parley-host`. Окно и хост соединены
-unix-сокетом со своим токеном рукопожатия; сетевых портов нет. Работает строго
-локально — это не сервер и не веб-приложение.
+Coordination of agent CLIs (Claude Code, Codex) in the `Parley.app` window — an Electron
+app on top of a local `parley-host` process. The window and the host are connected by a
+unix socket with its own handshake token; there are no network ports. Parley works strictly
+locally: it is not a server and not a web app.
 
-В окне: сайдбар работ проекта с деревом их сессий и комнат, вкладки терминала,
-комнат (разговор нескольких агентов и решение, которое ждёт вас), файлов,
-«Изменений» (диффы, коммит, слияние) и встроенного браузера, командная палитра
-на ⌘J и строка статуса с провайдерами, версиями CLI и лимитами подписки.
-Подробности — в разделе «Окно».
+In the window: a sidebar of project workspaces with a tree of their sessions and rooms;
+tabs for the terminal, rooms (a conversation of several agents and a decision that waits
+for you), files, "Changes" (diffs, commit, merge) and the embedded browser; a command
+palette on ⌘J; and a status bar with providers, CLI versions and subscription limits.
+See "The window" for details.
 
 https://github.com/user-attachments/assets/68458a1e-add3-4533-9b82-77a37030d52b
 
-## Архитектура
+## Architecture
 
-Четыре пакета и агент; каждый пакет отдельно тестируется и общается с соседями
-только данными:
+Four packages and an agent. Each package is tested on its own and talks to its neighbors
+only through data:
 
 ```
-   ~/.claude/projects/*.jsonl      <проект>/.parley/works/<id>/       ~/.parley/
+   ~/.claude/projects/*.jsonl      <project>/.parley/works/<id>/      ~/.parley/
    ~/.codex/sessions/*.jsonl         map.json  briefs/  events/        providers.json
-            │  только чтение         settings.json  artifacts/         works-index.json
-            ▼                                ▼  пишет только Parley       config.json
+            │  read-only             settings.json  artifacts/         works-index.json
+            ▼                                ▼  only Parley writes       config.json
    ┌──────────────────────── packages/core ───────────────────────────────┐
-   │ адаптеры схем → индекс сессий → watcher     хранилище карты (lock,   │
-   │ метрики: токены, длительность, инструменты   .bak, переходы статусов) │
-   │ журнал хуков → activity, живость по pid     parley-core CLI (JSON)    │
-   │ parley-mcp — 12 инструментов: get_map, report, spawn_session,         │
-   │ wait_for, send_message, check_inbox, create_room, read_room,          │
+   │ schema adapters → session index → watcher  map store (lock,          │
+   │ metrics: tokens, duration, tools           .bak, status transitions) │
+   │ hook log → activity, liveness by pid       parley-core CLI (JSON)    │
+   │ parley-mcp — 12 tools: get_map, report, spawn_session,               │
+   │ wait_for, send_message, check_inbox, create_room, read_room,         │
    │ propose_decision, add_to_room, close_session, read_guide             │
    └────────────────────────────────────────────────────────────────────┬─┘
-                                                                          │ stdio MCP
-                                                                          ▼
-                                                        claude / codex (стоковый бинарь)
+                                                                        │ stdio MCP
+                                                                        ▼
+                                                          claude / codex (stock binary)
 ```
 
 ```
    ┌──────── packages/desktop (Electron) ────────┐        ┌──── packages/host ────┐
-   │ renderer: React, сайдбар работ, вкладки,    │        │ parley-host: PTY      │
-   │   терминал, файлы, «Изменения», браузер     │ unix-  │ агентов, снимки       │
-   │ preload: мост window.parley                 │ сокет  │ экрана, карта через   │
-   │ main: окно, IPC-белый список, хранилища     │◀──────▶│ core, будильник,      │
-   │   ~/.parley/desktop, запуск хоста           │ JSON   │ комнаты, worktree     │
+   │ renderer: React, workspace sidebar, tabs,   │        │ parley-host: agent    │
+   │   terminal, files, "Changes", browser       │ unix   │ PTYs, screen          │
+   │ preload: window.parley bridge               │ socket │ snapshots, map via    │
+   │ main: window, IPC allowlist, stores in      │◀──────▶│ core, auto-wake,      │
+   │   ~/.parley/desktop, host launch            │ JSON   │ rooms, worktrees      │
    └─────────────────────────────────────────────┘        └───────────────────────┘
-                 типы запросов и событий — packages/protocol
+                 request and event types — packages/protocol
 ```
 
-- **core** ничего не знает про UI: читает логи провайдеров, ведёт карту работы,
-  считает метрики, сворачивает журнал хуков в состояние агента, поднимает
-  MCP-сервер и печатает JSON в stdout. Всё, что читает `~/.claude` и `~/.codex`,
-  делает это только на чтение.
-- **desktop** — окно: `main` (процесс Electron: окно, белый список IPC, раскладки,
-  заметки и `ui.json` в `~/.parley/desktop/`, запуск и переподключение хоста),
-  `preload` (узкий мост `window.parley` в страницу) и `renderer` (весь интерфейс).
-  Общие для них типы и английские тексты окна — в `shared`.
-- **host** — `parley-host`, отдельный процесс системного `node`: держит PTY агентов
-  и переживает закрытие окна, работает с картой через core.
-- **protocol** — версия протокола, методы и события между окном и хостом, кадрирование
-  сообщений сокета.
-- **агент** — немодифицированный `claude` (или `codex`), запущенный под вашим
-  логином. Про Parley он узнаёт только из брифа и MCP-инструментов; ни один
-  токен и ни один файл учётных данных через Parley не проходит.
+- **core** knows nothing about the UI. It reads provider logs, maintains the workspace map,
+  computes metrics, folds the hook log into agent state, runs the MCP server and prints
+  JSON to stdout. Everything that reads `~/.claude` and `~/.codex` does so read-only.
+- **desktop** is the window: `main` (the Electron process: the window, the IPC allowlist,
+  layouts, notes and `ui.json` in `~/.parley/desktop/`, starting the host and reconnecting
+  to it), `preload` (a narrow `window.parley` bridge into the page) and `renderer` (the
+  whole interface). The types they share and the window's English texts live in `shared`.
+- **host** is `parley-host`, a separate process of the system `node`. It holds the agents'
+  PTYs, outlives the window, and works with the map through core.
+- **protocol** is the protocol version, the methods and events between the window and the
+  host, and the framing of socket messages.
+- **agent** is an unmodified `claude` (or `codex`) running under your login. It learns about
+  Parley only from the brief and the MCP tools. No token and no credentials file passes
+  through Parley.
 
-Карта работы — единственное общее состояние: кто что делает, что сделано, где
-результат. Агенты её не редактируют, а отчитываются через `report`; хост читает
-её и через себя показывает окну, а агенту её отдаёт инструмент `get_map`.
+The workspace map is the only shared state: who does what, what is done, where the result
+is. Agents do not edit it; they report through `report`. The host reads the map and passes
+it on to the window, and the `get_map` tool gives it to the agent.
 
-## Юридическая рамка
+## Legal boundary
 
-Проект держится на одной границе, и она не обсуждается:
+The project rests on one boundary, and it is not up for discussion:
 
-- запускается **только немодифицированный официальный бинарь** (`claude`, `codex`)
-  из вашего `PATH`, под вашим же логином;
-- Parley **никогда не читает, не хранит и не подставляет учётные данные**:
-  `~/.claude/.credentials.json` и `~/.codex/auth.json` не открываются ни при
-  каких условиях;
-- каталоги истории (`~/.claude/projects`, `~/.codex/sessions`) открываются
-  **только на чтение**; в `~/.claude` Parley не пишет ничего — хуки передаются
-  флагом `--settings` из файла в каталоге работы;
-- никакого своего клиента к API и никаких обёрток над токенами подписки;
-- `--dangerously-load-development-channels` — документированный флаг самого
-  Claude Code (research preview, `code.claude.com/docs/en/channels`): он включает
-  штатный механизм клиента, а не меняет бинарь.
+- only the **unmodified official binary** (`claude`, `codex`) is launched, from your
+  `PATH`, under your own login;
+- Parley **never reads, stores or injects credentials**: `~/.claude/.credentials.json` and
+  `~/.codex/auth.json` are never opened, under any circumstances;
+- history directories (`~/.claude/projects`, `~/.codex/sessions`) are opened **read-only**;
+  Parley writes nothing to `~/.claude` — hooks are passed with the `--settings` flag from a
+  file in the workspace directory;
+- there is no API client of its own and no wrapper around subscription tokens;
+- `--dangerously-load-development-channels` is a documented flag of Claude Code itself
+  (research preview, `code.claude.com/docs/en/channels`): it turns on a built-in client
+  mechanism and does not modify the binary.
 
-Окно (`packages/desktop`) и его хост добавляют к рамке ещё шесть правил
-(спека `docs/specs/2026-09-26-desktop-design.md`, раздел 9.1):
+The window (`packages/desktop`) and its host add six more rules to the boundary (spec
+`docs/specs/2026-09-26-desktop-design.md`, section 9.1):
 
-- Keychain `Claude Code-credentials`, `~/.claude/.credentials.json` и
-  `~/.codex/auth.json` не читаются; запросов к API Anthropic и OpenAI нет.
-  Лимиты подписки окно берёт только из того, что отдают сами CLI: поле
-  `rate_limits` строки статуса Claude Code (скрипт `statusLine` в файле
-  настроек `--settings`, как хуки) и `rate_limits` в логах сессий Codex;
-- в `~/.claude.json` ничего не пишется, включая доверие к папкам;
-- скилл агентов (`.agents/skills/parley` и симлинк `.claude/skills/parley`)
-  ставится только в папку проекта и в worktree сессий; в `~/.claude`, `~/.codex`
-  и `~/.agents` не пишется ничего (подробнее — «Скилл `parley` в проекте»);
-- скрытых запусков нет: каждый процесс агента виден в окне как сессия;
-- хост не отвечает на диалоги агента: сам он печатает только указатель на
-  письма, и только после хука `Stop` (у Codex — у приглашения, а занятому агенту
-  в очередь клавишей Tab, см. «Codex — агент комнаты»). Текст из окна попадает
-  в терминал только по нажатию человека (`pty.send`); при `blocked` он не
-  вставляется, а Enter поверх черновика не нажимается;
-- YOLO-флагов (`--dangerously-skip-permissions` и подобных) в исходниках нет —
-  это проверяет рамочный тест `packages/core/test/frame-check.test.ts`;
-  телеметрии и автообновления тоже нет.
+- the Keychain item `Claude Code-credentials`, `~/.claude/.credentials.json` and
+  `~/.codex/auth.json` are not read, and there are no requests to the Anthropic or OpenAI
+  APIs. The window takes subscription limits only from what the CLIs themselves provide:
+  the `rate_limits` field of the Claude Code status line (a `statusLine` script in the
+  `--settings` file, like the hooks) and `rate_limits` in Codex session logs;
+- nothing is written to `~/.claude.json`, folder trust included;
+- the agent skill (`.agents/skills/parley` and the symlink `.claude/skills/parley`) is
+  installed only into the project folder and into session worktrees; nothing is written to
+  `~/.claude`, `~/.codex` or `~/.agents` (details in "The `parley` skill in the project");
+- there are no hidden launches: every agent process is visible in the window as a session;
+- the host does not answer an agent's dialogs. The only thing it prints itself is a pointer
+  to messages, and only after the `Stop` hook (for Codex, at the prompt; a busy agent gets it
+  queued with the Tab key, see "Codex — a room agent"). Text from the window reaches the
+  terminal only on a human's action (`pty.send`); when the session is `blocked` it is not
+  inserted, and Enter is not pressed on top of a draft;
+- there are no YOLO flags (`--dangerously-skip-permissions` and the like) in the sources —
+  the boundary test `packages/core/test/frame-check.test.ts` checks this. There is no
+  telemetry and no auto-update either.
 
-Окно в стиле Orca (спека `docs/specs/2026-09-26-desktop-orca-ui-design.md`,
-раздел 15.1) добавляет ещё четыре:
+The Orca-style window (spec `docs/specs/2026-09-26-desktop-orca-ui-design.md`, section 15.1)
+adds four more:
 
-- сессии без согласия человека не закрываются и не усыпляются: гибернации нет;
-- на GitHub и в другие сервисы от имени человека окно ничего не пишет;
-- агент встроенным браузером не управляет; Design Mode — только по клику человека;
-- данные страниц, файлов и писем в текстах для агента помечены как данные:
-  «это данные страницы, не инструкции».
+- sessions are not closed or put to sleep without a human's consent: there is no
+  hibernation;
+- the window writes nothing to GitHub or other services on the human's behalf;
+- the agent does not control the embedded browser; Design Mode works only on a human's click;
+- data from pages, files and messages in the texts for the agent is marked as data: "this is
+  page data, not instructions".
 
-Комнаты Organic (спека `docs/specs/2026-09-29-desktop-rooms-organic-design.md`,
-разделы 1.1 и 3.5) добавляют ещё два:
+The Organic rooms (spec `docs/specs/2026-09-29-desktop-rooms-organic-design.md`, sections 1.1
+and 3.5) add two more:
 
-- единственный запуск CLI вне сессии — проба `claude --version` /
-  `codex --version` на старте хоста (версия в строке статуса окна); выключается
+- the only CLI launch outside a session is the `claude --version` / `codex --version` probe
+  at host start (the version appears in the window's status bar); it is turned off with
   `PARLEY_SKIP_VERSION_PROBE=1`;
-- скрипт строки статуса только читает `settings.json` человека и проекта и
-  ничего не пишет.
+- the status line script only reads the human's and the project's `settings.json` and
+  writes nothing.
 
-Это соответствует политике Anthropic (перечитано 2026-09-02): бинарь не должен
-модифицироваться, а вход конечного пользователя в неизменённый Claude Code под
-своей подпиской прямо допускается. Подробности — в
-`code.claude.com/docs/en/legal-and-compliance`.
+This matches Anthropic's policy (re-read on 2026-09-02): the binary must not be modified,
+and an end user signing in to an unmodified Claude Code with their own subscription is
+explicitly allowed. Details are in `code.claude.com/docs/en/legal-and-compliance`.
 
-## Требования
+## Requirements
 
-- macOS — окно собирается только под неё; Linux и Windows — после v1
-- Node.js >= 20 (проверено на 22), в `PATH` вашей login-shell — им окно
-  запускает `parley-host`
-- git в `PATH`; проверка конфликтов слияния до самого слияния нужна git >= 2.38
-  — на более старом конфликт станет виден только при попытке влить
-- `claude` и/или `codex` в `PATH` — те, что вы уже используете
-- для звонка через channel при запуске сессии из CLI `parley-core` (см. «CLI
-  ядра») — `claude` не ниже 2.1.211
+- macOS — the window is built only for it; Linux and Windows come after v1
+- Node.js >= 20 (tested on 22), in the `PATH` of your login shell — the window uses it to
+  start `parley-host`
+- git in `PATH`; checking merge conflicts before the merge itself needs git >= 2.38 — with an
+  older git a conflict shows up only when you try to merge
+- `claude` and/or `codex` in `PATH` — the ones you already use
+- for a channel push when a session is started from the `parley-core` CLI (see "Core CLI")
+  — `claude` 2.1.211 or later
 
-## Установка и запуск
+## Install and run
 
 ```bash
 pnpm install
@@ -148,563 +151,457 @@ pnpm build
 pnpm dev:desktop
 ```
 
-`pnpm install` доустанавливает бит исполнения вспомогательному бинарю node-pty:
-pnpm распаковывает его без прав, и без этого PTY не стартует. `pnpm build`
-обязателен: окно берёт `@parley/core` и `@parley/protocol` из их `dist`.
-`pnpm dev:desktop` собирает хост (`@parley/host`) и запускает окно
-(`electron-vite dev`).
+`pnpm install` additionally sets the execute bit on node-pty's helper binary: pnpm unpacks
+it without permissions, and without this the PTY does not start. `pnpm build` is required:
+the window takes `@parley/core` and `@parley/protocol` from their `dist`. `pnpm dev:desktop`
+builds the host (`@parley/host`) and launches the window (`electron-vite dev`).
 
-### Собрать `Parley.app`
+### Build `Parley.app`
 
 ```bash
 pnpm build
 pnpm --filter @parley/desktop dist
 ```
 
-Результат — `packages/desktop/dist/mac-arm64/Parley.app`: без подписи и
-нотаризации, только для этой машины (`identity: null` в
-`electron-builder.yml`). Внутри — `Contents/Resources/host` (хост со своими
-`node_modules`), `NOTICE`, `licenses/Figtree-OFL.txt` и
-`licenses/Caprasimo-OFL.txt`. Для запуска собранному
-окну, как и в разработке, нужны системный `node` и `claude` (и/или `codex`) в
-`PATH` вашей login-shell; без `node` окно пишет «node not found in login-shell
-PATH».
+The result is `packages/desktop/dist/mac-arm64/Parley.app`: unsigned and not notarized, for
+this machine only (`identity: null` in `electron-builder.yml`). Inside are
+`Contents/Resources/host` (the host with its own `node_modules`), `NOTICE`,
+`licenses/Figtree-OFL.txt` and `licenses/Caprasimo-OFL.txt`. Like the development window, the
+built window needs the system `node` and `claude` (and/or `codex`) in the `PATH` of your
+login shell to run; without `node` the window prints "node not found in login-shell PATH".
 
-**Окружение собранного окна.** Открытому из Finder окну launchd отдаёт урезанное
-окружение: `PATH` там `/usr/bin:/bin:/usr/sbin:/sbin`, без `~/.local/bin` и nvm хост
-не нашёл бы ни `claude`, ни `codex`, а переменные из ваших rc-файлов (прокси,
-`CLAUDE_CONFIG_DIR`, `PARLEY_*`, прежние `HARNAS_*` и прочие) не пришли бы вовсе. Поэтому при
-запуске приложения окно один раз снимает окружение вашей login-оболочки
-(`$SHELL -ilc`, `env -0` между маркерами, таймаут 5 секунд): вывод rc-файлов вне
-маркеров в него не попадает, а сами rc-файлы читает оболочка, не окно. Снятое
-окружение, `PATH` оболочки в том числе, уходит в хост окружением его запуска, агенты
-наследуют его от хоста. Оболочка не ответила — остаётся окружение самого окна, а к его
-`PATH` дописаны существующие `~/.local/bin`, `/opt/homebrew/bin` и `/usr/local/bin`;
-причина печатается в консоль окна. Окружение снимается один раз за запуск
-приложения: ни закрытие окна, ни «Restart host…» его не обновляют, а работающий хост
-(он переживает окно) своего не меняет. Поправили `PATH` или переменные в rc-файлах —
-выйдите из приложения (⌘Q), откройте его снова и выберите «Restart host…» в палитре:
-живые агенты прервутся и вернутся через `--resume`. В неупакованном окне (E2E,
-`pnpm dev`) `PARLEY_LOGIN_SHELL=skip` оболочку не зовёт вовсе: окружение окна
-отдаётся как есть.
+**Environment of the built window.** For a window opened from Finder, launchd supplies a
+stripped-down environment. Its `PATH` is `/usr/bin:/bin:/usr/sbin:/sbin`, so without
+`~/.local/bin` and nvm the host would find neither `claude` nor `codex`, and variables from
+your rc files (proxy, `CLAUDE_CONFIG_DIR`, `PARLEY_*` and others) would not arrive at all.
+So when the app starts, the window captures the environment of your login shell once
+(`$SHELL -ilc`, `env -0` between markers, 5-second timeout). Output of the rc files outside
+the markers does not get into it, and the rc files themselves are read by the shell, not by
+the window. The captured environment, the shell's `PATH` included, goes to the host as its
+launch environment, and agents inherit it from the host. If the shell did not answer, the
+window's own environment remains, with the existing `~/.local/bin`, `/opt/homebrew/bin` and
+`/usr/local/bin` appended to its `PATH`; the reason is printed to the window's console. The
+environment is captured once per app launch: neither closing the window nor "Restart host…"
+refreshes it, and a running host (it outlives the window) does not change its own. If you
+changed `PATH` or variables in your rc files, quit the app (⌘Q), open it again and choose
+"Restart host…" in the palette: live agents are interrupted and come back through
+`--resume`. In an unpackaged window (E2E, `pnpm dev`) `PARLEY_LOGIN_SHELL=skip` does not
+call the shell at all: the window's environment is passed as it is.
 
-## Переход с harnas
+## The window
 
-До переименования продукт назывался harnas: пакеты `@harnas/*`, бинарники `harnas-core`,
-`harnas-mcp` и `harnas-host`, каталоги `~/.harnas` и `.harnas` в проектах, переменные `HARNAS_*`,
-MCP-сервер и скилл `harnas`. Данные под прежним именем не пропадают и не раздваиваются: переносит
-их один `rename` (копий и симлинков нет), а что не перенеслось, читается по-старому. Перенос
-односторонний: сборка со старым именем `~/.parley` не знает.
+The window is an Electron app on top of a separate `parley-host` process. The host holds the
+agents' PTYs, the map, auto-wake and rooms. It lives in `~/.parley/host/` (`host.sock`,
+`host.token`, `host.pid`, `host.log`, `host.err` — the host process's stderr) and outlives the
+window: open the window again and the terminals are restored from screen snapshots. The
+window starts the host itself, with the system `node` from your login shell's `PATH`, and
+does not start a second one while the `host.pid` lock is held. The host exits by itself after
+5 minutes with no windows and no live sessions. A second launch of the window focuses the
+first.
 
-**Что переносится само.** Только при запуске и только когда старый путь не держит ничего живого;
-иначе Parley работает со старым каталогом и пробует снова при следующем запуске.
-
-- **Дом `~/.harnas` → `~/.parley`** — переносит окно при старте, до поиска и запуска хоста. Нужно
-  всё сразу: не задан ни `PARLEY_HOME`, ни `HARNAS_HOME`; `~/.parley` нет; `~/.harnas` — настоящий
-  каталог, а не симлинк; хост старого дома не жив (замок `host/host.pid` и сокет `host/host.sock`);
-  в корне дома нет `*.lock`; ни в одном проекте из `works-index.json` нет живой сессии (как её
-  ищут — в следующем пункте): сервер MCP такого агента ходит в индекс и в каталог состояния по
-  старому пути. Хоть одно не выполнено — дом остаётся `~/.harnas`, окно подключается к
-  старому хосту, как раньше, а причина печатается в консоль окна. Хост переживает окно и уходит сам
-  через 5 минут без окон и живых сессий: перенос пройдёт при первом запуске окна после этого.
-- **Каталог состояния проекта `<проект>/.harnas` → `<проект>/.parley`** — переносит хост при старте:
-  под замком единственности, до сокета и наблюдателей. Берутся проекты из `works-index.json`, где
-  есть `.harnas` и нет `.parley`, если у их работ нет `map.lock`, ни одной живой сессии, а git не
-  отслеживает файлы `.harnas`.
-  - Живая сессия ищется дважды. По карте: pid и время его старта, как при сверке живости. И по
-    таблице процессов (`ps`): сессию, которую вы подняли напечатанной командой
-    `parley-core work session new`, карта хранит как `pending` без pid, но её агент держит путь
-    к каталогу состояния в своей командной строке (`--mcp-config`, `--settings`). Такой агент не
-    даёт перенести ни проект, ни дом. Таблицы процессов нет (`ps` не ответил) — тоже отказ.
-  - Проект с закоммиченным `.harnas/` остаётся при нём: перенос стёр бы отслеживаемые файлы из
-    рабочей копии, а новый `.parley` со своим `.gitignore` не закоммитить. Причина — в `host.log`.
-    Хотите, чтобы он переехал, — перестаньте отслеживать `.harnas/` (`git rm -r --cached .harnas`):
-    на следующем старте хоста проект переедет.
-  - Проект переезжает целиком или остаётся как есть; записи индекса, чей проект исчез,
-    пропускаются; отказ хост не останавливает, причина — в `host.log`. В новом `.parley` лежит
-    `.gitignore` со строкой `*`: каталог состояния прячет сам себя от git, как и любой `.parley`,
-    созданный Parley.
-  - В переехавшем каталоге правятся ссылки на него самого: пути артефактов в картах
-    (`.harnas/works/<id>/artifacts/…` → `.parley/works/<id>/artifacts/…`; `get_map` и брифы
-    отдают пути, которые ведут к файлам) и такие же относительные пути в сохранённых брифах.
-    Что агенты написали прозой — письма, резюме — остаётся как было: это запись сказанного.
-    Сессия, уже работавшая под прежним именем, помнит в своей истории и старые пути; после
-    `--resume` пути каталога ей называет свежая системная вставка.
-- Каждый перенос записывается в доме, в `migrated-from-harnas.json`: что (дом или проект), откуда,
-  куда и когда.
-
-**Что читается по-старому.**
-
-- Переменные: `PARLEY_*` главнее, прежние `HARNAS_*` — запасные. Это и rc-файлы вашей
-  login-оболочки, и окружение окна, и настройки (`HARNAS_HOME`, `HARNAS_<КОМАНДА>_BIN`,
-  `HARNAS_WORKTREE_ROOT` и остальные). Поле настроек, заданное только прежней переменной,
-  подписано «(set by HARNAS_…)».
-- Дом: первое подходящее из `PARLEY_HOME`, `HARNAS_HOME`, `~/.parley` (если он есть), `~/.harnas`
-  (если он есть); иначе `~/.parley`.
-- Каталог проекта: `.parley`, если он есть; иначе `.harnas`, если он есть; иначе создаётся
-  `.parley`. Когда есть оба, главнее `.parley`: слияния двух каталогов нет.
-- Детям — агенту, серверу MCP, хуку, строке статуса и `notify` Codex — хост передаёт оба набора
-  сессионных переменных: `PARLEY_WORK_DIR` и `HARNAS_WORK_DIR`, `PARLEY_SESSION_ID` и
-  `HARNAS_SESSION_ID`, `PARLEY_CHANNEL` и `HARNAS_CHANNEL`, `PARLEY_HOME` и `HARNAS_HOME`. Старые
-  скрипты и сервер прежней сборки работают дальше; каталог работы в `PARLEY_WORK_DIR` может лежать
-  и в `.harnas/works/<id>`.
-
-**Что остаётся со старым именем.** Намеренно: человеку это не видно, а смена стоила бы данных или
-разрешений.
-
-- `appId` `dev.harnas.desktop`: к нему macOS привязывает разрешение на уведомления, настройки
-  приложения и сохранённое состояние окна.
-- Раздел встроенного браузера `persist:harnas-browser` — куки и хранилища сайтов.
-- Каталог данных Electron `~/Library/Application Support/@harnas/desktop`, если он есть; на
-  чистой установке — `@parley/desktop`. Electron считает путь от имени пакета, а оно сменилось: без
-  закрепления окно открыло бы пустой каталог. Каталог не переносится и не копируется.
-- Worktree и ветки уже заведённых сессий: `~/harnas/worktrees/…` и `harnas/…`. Путь и ветка
-  записаны в карте сессии, а `--resume` ищет транскрипт Claude Code по каталогу запуска, поэтому они
-  не переносятся и не переименовываются; «Changes», слияние и «Discard worktree…» работают с ними
-  по записи в карте. Новые сессии получают `~/parley/worktrees` и ветки `parley/<работа>/<сессия>`;
-  корень, заданный вами (`worktreeRoot` в `config.json`, `PARLEY_WORKTREE_ROOT` или прежняя
-  `HARNAS_WORKTREE_ROOT`), не меняется.
-
-**Имена для агентов.** Сервер MCP зовётся `parley`: инструменты `mcp__parley__*`, тег звонка
-`<channel source="parley">`, канал `server:parley`; второго сервера под прежним именем нет. Конфиг
-MCP и системная вставка (у провайдера, где есть такой флаг) собираются заново при каждом запуске и
-возобновлении, поэтому сессия, заведённая до переименования, после `--resume` видит `parley`; в
-истории её разговора старые вызовы остаются под `mcp__harnas__*` (об этом напоминает `read_guide`,
-тема `letters`). Определения агентов
-Claude Code (`.claude/agents/*.md`), где в списке `tools` прописан `mcp__harnas__*`, правятся
-вручную: Parley файлы агентов не читает и не правит. Так же с разрешениями: «always allow»,
-выданные под прежним именем (правила `permissions.allow` вида `mcp__harnas__report` в
-`~/.claude/settings.json` или `<проект>/.claude/settings.local.json`), на `parley` не действуют, и
-каждый инструмент при первом вызове спросит снова — продублируйте правила как `mcp__parley__…` или
-разрешите заново в самом запросе. Файлы настроек Claude Code Parley тоже не правит. Скилл `parley`
-ставится вместо `harnas`, прежний убирается («Скилл `parley` в проекте»).
-
-## Окно
-
-Окно — Electron-приложение над отдельным процессом `parley-host`. Хост держит
-PTY агентов, карту, будильник и комнаты. Он живёт в `~/.parley/host/`
-(`host.sock`, `host.token`, `host.pid`, `host.log`, `host.err` — stderr
-процесса хоста) и переживает закрытие окна: открыли заново — терминалы
-восстанавливаются из снимков экрана. Окно поднимает хост само, системным
-`node` из `PATH` вашей login-shell, и не запускает второй, пока держится замок
-`host.pid`. Хост уходит сам через 5 минут без окон и живых сессий. Второй
-запуск окна фокусирует первое.
-
-Облик окна — Organic: песочный фон, терракотовый и шалфейный акценты, шрифты
-Figtree и Caprasimo, примитивы shadcn/ui; терминал стоит на листе окна (фон,
-текст, курсор и выделение — оттуда), а его 16 ANSI-цветов — Ghostty Dark /
-Tango Light. Тема (тёмная/светлая) следует за системной темой
-macOS и переключается на лету, без перезапуска окна; «System», «Dark» или
-«Light» выбираются в настройках (⌘,) на вкладке «Appearance» — там же (и из
-палитры: «Theme: system», «Theme: dark», «Theme: light») её можно сменить.
-Подробности настроек — в разделе «Настройки».
+The look of the window is Organic: a sand background, terracotta and sage accents, the
+Figtree and Caprasimo fonts, shadcn/ui primitives. The terminal sits on the window sheet (its
+background, text, cursor and selection come from there), and its 16 ANSI colors are Ghostty
+Dark / Tango Light. The theme (dark or light) follows the macOS system theme and switches on
+the fly, without restarting the window. "System", "Dark" or "Light" is chosen in Settings (⌘,)
+on the "Appearance" tab; the theme can also be changed from the palette ("Theme: system",
+"Theme: dark", "Theme: light"). The settings are covered in the "Settings" section.
 
 <table>
   <tr>
     <td>
       <picture>
         <source media="(prefers-color-scheme: dark)" srcset="docs/media/room-decision-dark.png">
-        <img src="docs/media/room-decision-light.png" width="440" alt="Вкладка комнаты Refunds: лента четырёх агентов и карточка решения ведущего с кнопками Accept и Return for rework">
+        <img src="docs/media/room-decision-light.png" width="440" alt="The Refunds room tab: the feed of four agents and the lead's decision card with the Accept and Return for rework buttons">
       </picture>
-      <br><sub>Комната: агенты обсуждают, ведущий приносит решение</sub>
+      <br><sub>A room: the agents discuss, the lead brings a decision</sub>
     </td>
     <td>
       <picture>
         <source media="(prefers-color-scheme: dark)" srcset="docs/media/overview-dark.png">
-        <img src="docs/media/overview-light.png" width="440" alt="Общий вид: сайдбар работ с сессиями и комнатой, терминал агента, строка статуса с версиями CLI и лимитами">
+        <img src="docs/media/overview-light.png" width="440" alt="Overview: the workspace sidebar with sessions and a room, an agent terminal, the status bar with CLI versions and limits">
       </picture>
-      <br><sub>Сайдбар работ, терминал агента, строка статуса</sub>
+      <br><sub>Workspace sidebar, agent terminal, status bar</sub>
     </td>
   </tr>
   <tr>
     <td>
-      <img src="docs/media/decision-notification.png" width="440" alt="Карточка «Decision waiting for you» в углу окна с кнопками Open и Later">
-      <br><sub>Решение ждёт вас — карточка в окне</sub>
+      <img src="docs/media/decision-notification.png" width="440" alt="The Decision waiting for you card in the corner of the window, with Open and Later buttons">
+      <br><sub>A decision waits for you — a card in the window</sub>
     </td>
     <td>
-      <img src="docs/media/new-session.png" width="440" alt="Диалог New session: Claude или Codex, модель из списка, усилие">
-      <br><sub>Новая сессия: агент и модель из списка</sub>
+      <img src="docs/media/new-session.png" width="440" alt="The New session dialog: Claude or Codex, a model from the list, effort">
+      <br><sub>New session: the agent and a model from the list</sub>
     </td>
   </tr>
 </table>
 
-<sub>Снимки и видео — на демо-данных: агенты в них — заглушки, а не настоящие <code>claude</code> и <code>codex</code>.</sub>
+<sub>The screenshots and the video use demo data: the agents in them are stubs, not real <code>claude</code> and <code>codex</code>.</sub>
 
-- заголовок окна, 40px, прямо на фоне окна: слева — «Workspace sidebar» (⌘B),
-  «Back» / «Forward» (⌘⌥←/→); справа — «Right sidebar» (⌘L) и, только когда
-  сайдбара работ на экране нет (скрыт или работ нет), «Search» (⌘J); двойной
-  клик по пустому месту — системное действие macOS. Центр — лист со
-  скруглением. Ширину сайдбаров меняют мышью: левый 220–500 (по умолчанию
-  288), правый от 220 (по умолчанию 320) до «окно − левый сайдбар − 320»;
-  если места не хватает — тост «Not enough room for the right sidebar»;
-- нет ни одной работы — экран с «New workspace» и «Palette». Нет связи с
-  хостом — экран «No connection to host: …» с «Retry» и «Restart host».
-  Обрыв связи — во вкладке терминала «Disconnected — reconnecting…». Хост
-  старше окна — «Host is outdated — restart». «Restart host…» обрывает живых
-  агентов, они возвращаются через `--resume`;
-- строка статуса внизу, 28px, слева направо: сегмент на каждого доступного
-  провайдера — значок, имя, версия CLI (`claude --version`, `codex --version`;
-  хост спрашивает её раз на старте, нет версии — только значок и имя) и лимиты
-  подписки: полоска пятичасового окна (нет его — недельного) и «58% 5h · 41%
-  wk»; от 80% в любом окне текст и полоска — акцентным цветом, а в подсказке —
-  когда окна сбросятся и когда CLI отдал числа; нет данных — сегмент без
-  лимитов, а при нехватке места сначала пропадает текст лимитов (остаётся
-  полоска), потом версия, последним — имя. Правее — последнее уведомление
-  хоста; «N need you · M unseen» — клик ведёт к следующей такой сессии или
-  комнате; связь с хостом (например, «Host 0.0.0»); «Host is outdated —
-  restart», если она устарела; «Auto-wake on» или «Auto-wake paused» — клик
-  ставит или снимает паузу;
-- у каждой работы своя раскладка: дерево сплитов из групп вкладок (терминал
-  сессии, почта, комната, изменения, файл, встроенный браузер). Пока группа
-  одна, её вкладки — пилюли прямо в заголовке окна: крестик только у активной,
-  а подкрашена вкладка сессии, которая ждёт вас или закончила ход, комнаты,
-  которая ждёт вашего решения, и почты с непрочитанным. Раскладка работы
-  запоминается и переживает перезапуск окна; при старте открывается последняя
-  активная работа. У вкладки — меню по правой кнопке: «Close» / «Close others» /
-  «Close to the right» / «Split right» / «Split down»; средняя кнопка мыши
-  закрывает вкладку. «+» строки вкладок открывает палитру «Open…», в ней же —
-  «New browser tab». Групп в работе — не больше 8, сверх предела сплит отказывает
-  тостом. Закрытие вкладки — тост «Tab closed — ⌘⇧T to reopen»;
-- сайдбар слева — карточки работ: сверху «Pinned», над списком — «Search»
-  (⌘J) и «New workspace», дальше группы по проектам: цветной кружок, имя
-  проекта, число работ, «+» и меню «⋯» («Show done»). Внутри секции выше та
-  работа, где нужны вы: сессия ждёт разрешения или ответа либо комната ждёт
-  вашего решения, потом — непрочитанная почта вам или итог, который вы не
-  видели, потом — где агент работает; при равенстве — свежее событие,
-  завершённые внизу. Пока указатель над сайдбаром или открыто его меню,
-  порядок не прыгает. Заголовок карточки — значок самого срочного состояния
-  (вопрос, если в работе ждёт решение), название (жирное при непрочитанной
-  почте или непросмотренном итоге), `✉N` (сообщения вам), `#` или `#N` (меню
-  комнат работы; число — комнаты с непрочитанным) и время; под ним мета «папка
-  · N sessions · ветка» и строки. Строка сессии — значок состояния и агента,
-  `S02 бэкенд`, слово состояния (`working`, `needs you`, `done · unseen`,
-  `idle`, `not started`, `done`, `failed`, `asleep`, `closed`), значок ветки у
-  сессии со своим worktree и время; ждущая вас и с непросмотренным итогом
-  подкрашены. Комната стоит строкой (`# название`) на месте своего первого
-  участника: слово `decision` и подкраска, пока решение ждёт вас, или `N new` —
-  сообщения, которых вы не читали. Свёрнутая показывает значки провайдеров с
-  числом всех агентов провайдера в комнате (подсказка «2 Claude Code agents»),
-  развёрнутая — участников со `★` у ведущего; она развёрнута сама, пока в
-  активной работе открыта вкладка комнаты или её участника, а шеврон
-  переопределяет это до перезапуска окна. Клик по строке открывает комнату,
-  клик по уже открытой развёрнутой сворачивает её. Внизу карточки —
-  «N more closed» («Hide closed» прячет их), а у активной работы — «+ New
-  session or room». Правый клик по карточке — «Pin»/«Unpin» · «New session» ·
-  «New room» · «Open mail» · «Rename» (или двойной клик по названию) · «Reveal
-  in Finder» · «Copy path» · «Mark as done» (у `done` и `archived` вместо неё —
-  «Reopen») · «Archive» · «Delete…». Правый клик по строке сессии — «Open»,
-  «Open to the side», «Resume», «Stop», «Close…» (подтверждение «Session will
-  no longer receive mail»), «Changes», «Copy worktree path» (у сессии со своим
-  worktree), «Delete». Свёрнутые проекты, закреплённые работы и «Show done»
-  переживают перезапуск окна. ↑/↓ в сайдбаре ходят по карточкам, строкам
-  сессий и комнат, Enter открывает; на карточке → и ← показывают и прячут
-  закрытые сессии, на строке комнаты — разворачивают и сворачивают её, ← на
-  строке сессии — к карточке; ⇧F10 — то же меню, что у правой кнопки;
-- центр показывает активную работу: клик по карточке делает её активной, клик
-  по строке сессии ещё и открывает вкладку сессии. ⌘1…⌘9 выбирают работу по
-  видимому порядку сайдбара (закреплённые первыми), ⌘⇧↑ и ⌘⇧↓ — соседнюю.
-  Терминалы трёх последних работ остаются живыми, переключение их не
-  пересоздаёт;
-- новая работа — ⌘N, «New workspace» вверху сайдбара или «+» в заголовке
-  проекта. Диалог: проект (сегмент известных проектов; «+» заголовка выбирает
-  свой, иначе проект активной работы; «Choose a folder…» добавляет новую
-  папку), агент (по умолчанию последний выбранный, иначе Claude Code),
-  название и первый промпт. Пустое название берётся из первой строки промпта
-  (до 40 знаков), пустой промпт — тихий старт: агент ждёт задачу в терминале;
-  ни названия, ни промпта — ошибка. Первая сессия запускается всегда, у неё
-  «In its own worktree», если проект — git-репозиторий. ⌘Enter — создать. Если
-  сессия не запустилась, работа уже есть, и «Retry» повторяет только запуск
-  сессии;
-- новая сессия или комната — ⌘T, строка «+ New session or room» под строками
-  активной карточки, «New session or room» и «New room» в палитре, «New session»
-  и «New room» в меню карточки. Один диалог: «Workspace» (активные работы),
-  название, строки агентов — провайдер, модель из списка (первым «Default» — без
-  флага, список берётся из открытой документации провайдера или из
-  `providers.json`) и усилие «Low / Medium / High» (только если провайдер его
-  принимает) — и «In its own worktree». Один агент — «Start session»: сессия без
-  задачи и её терминал. «Add agent» — два и больше: «Create room», звезда
-  выбирает ведущего, сессии комнаты стартуют без задачи и без писем-приглашений
-  (задачу пишете в комнату один раз для всех), откроется вкладка комнаты. Если
-  часть агентов не запустилась, диалог показывает итог по каждому, а «Retry»
-  повторяет только упавших: комната создаётся, когда запущены все; «Cancel»
-  оставляет уже запущенные сессии обычными сессиями работы, а нажатая во время
-  запуска (как Esc и ×) останавливает и его: остальные агенты и комната не
-  создаются;
-- вкладку и строку сессии из сайдбара перетаскивают мышью: в строку вкладок
-  или в середину группы — вкладкой туда, к краю группы — новой группой рядом.
-  Терминал переезжает между группами без пересоздания и без потери экрана.
-  Строку сессии можно бросить и на другие строки сайдбара — только внутри
-  одной работы: на другую сессию — диалог «New room» из двух сессий (название
-  и ведущий, по умолчанию та, на которую бросили; хост пишет первой строкой
-  ленты «Room created from @s03 and @s02»), на строку комнаты — сессия входит
-  в неё («@s04 joined the room»), строка разворачивается. Сессия состоит не
-  больше чем в одной комнате, поэтому из прежней она уходит. На себя, в свою
-  комнату, закрытую сессию и в чужую работу бросить нельзя — цель не
-  подсвечивается;
-- вкладка комнаты (клик по строке комнаты, «Rooms» палитры, `#` карточки).
-  Шапка — название и подпись «Created by you · 4 agents · lead S01 · работа»
-  (или «Created by S01 …», если комнату завёл агент), под ней лента участников:
-  карточка на агента — состояние, `★` у ведущего, задача; клик открывает
-  терминал агента. Ниже первым стоит блок «Decisions» (до пяти последних
-  решений, старше — «+N earlier»), затем сообщения — текст обычный, с чипами
-  упоминаний и ссылками: отправитель, `★` у ведущего, адресаты («→ all» или
-  ярлыки), тег вида (`note`, `question`, `decision`), время и точка у
-  непрочитанного; строка «▤ Not picked up yet by S02, S03» стоит, пока
-  адресаты сообщение не прочли. Ждущее решение — карточка последней в ленте с
-  «Accept» и «Return for rework» (заметка «What should the lead change?» и
-  «Send to lead»); если ведущий тем временем заменил текст, ответ на старую
-  версию отклоняется тостом «The decision changed — review the latest
-  version.». Внизу поле ввода: подпись «To everyone» или «To S02, S03»; `@`
-  открывает меню участников (фильтр по ярлыку, провайдеру и модели; ↑/↓, Enter
-  или Tab, Esc; клик мышью), выбранный становится чипом и адресатом; Enter
-  отправляет, Shift+Enter — перенос, вставляется только текст, а недописанное
-  держится на комнату до перезапуска окна;
-- мышь, меню и сочетания на ⌘ вместо префикса: ⌘T — новая сессия или комната в активной
-  работе, ⌘D и ⇧⌘D — новая группа справа или снизу с выбором содержимого через
-  палитру («Open in new group»), ⌘W — закрыть вкладку, ⌘⇧T — вернуть закрытую,
-  ⌘[ и ⌘] — соседняя группа, ⌃Tab и ⌃⇧Tab — недавние вкладки работы, ⌘⌥← и
-  ⌘⌥→ — назад и вперёд по истории переходов (и кнопки в заголовке), ⌘J —
-  палитра, ⌘F — поиск, ⌘, — настройки (полный список — в «Клавиши окна»);
-- внимание: вкладка подкрашена — сессия ждёт вас (терракотовым) или закончила
-  ход (шалфейным), комната ждёт вашего решения, в почте есть непрочитанное вам;
-  в строке статуса — «N need you · M unseen» (комната с решением считается как
-  «need you»; считают только работы секций сайдбара: архивные и скрытые `done`
-  не входят), клик ведёт к следующей: сначала сессии, что ждут вас, потом
-  комнаты с решением, потом с непросмотренным итогом, по кругу от текущей
-  вкладки; если цель уже удалена — тост «Workspace or session no longer
-  exists». Бейдж Dock — число «ждут вас» и писем вам. «Не просмотрено» гаснет,
-  только когда вы секунду видите терминал в окне с фокусом; письмо вам и
-  сообщение комнаты отмечаются прочитанными, когда видны в почте или в комнате
-  дольше 1 с при фокусе окна;
-- уведомления macOS: сессия ждёт вас или закончила ход, пришло письмо вам,
-  сессия не запустилась, не возобновилась или ждёт доверия к папке. Когда вы и
-  так смотрите на эту вкладку, уведомления нет; после перезапуска окна или хоста
-  пачки уведомлений о прежних состояниях нет. Клик открывает окно (и при
-  закрытом окне тоже) прямо на вкладке: рамка вспыхивает на 600 мс, у
-  терминала — фокус ввода. Что уведомлять и со звуком ли — в настройках,
-  раздел «Notifications»; если уведомления не приходят, их разрешают в
-  Системных настройках → Уведомления → Parley. Тексты уведомлений —
-  по-английски, как и всё окно;
-- решение ведущего комнаты: новое («Decision waiting for you» — «{комната} ·
-  S01 collected positions») и переделанное («… S01 revised the decision»:
-  ведущий заменил текст до вашего ответа или принёс исправленное после «Return
-  for rework») уведомляют, а то же самое решение второй раз — нет, ни после
-  перезапуска окна, ни после переподключения к хосту. Пока окно в фокусе и
-  вкладка комнаты не на виду, это не уведомление macOS, а карточка справа
-  снизу (320px) с «Open» (вкладка комнаты) и «Later»; сама скрывается через 8
-  с, а ответ на решение её убирает. Карточек не больше двух, новая сверху,
-  третья вытесняет самую старую; тосты («Tab closed — ⌘⇧T to reopen» и
-  прочие) встают над ними, а не на их кнопки. Окно без фокуса — уведомление
-  macOS, одно на комнату: новое заменяет прежнее. Ключ настроек — «needs you»;
-- файлы: правый сайдбар (⌘L) — вкладка «Files» с деревом папки сессии (её
-  worktree) или проекта. В шапке — выбор корня («Project» или `⎇ S02 · ветка`),
-  «Refresh» (при отказе слежения), поиск в файлах и кнопка-переключатель
-  «Show ignored files» (`.git`, `.parley` и прежний `.harnas` не показываются никогда). Клик по
-  файлу открывает его во вкладке редактора Monaco, ⌘-клик — в новой группе
-  справа. Меню файла: «Open», «Open to the side», «Reveal in Finder», «Copy
-  path», «Copy relative path». Файл из дерева можно утащить в раскладку или на
-  терминал — путь встанет в поле ввода агента. ⌘S сохраняет; вкладка с
-  несохранённой правкой — с точкой, и закрыть её (или окно) без вопроса
-  «Save / Don't save / Cancel» нельзя. Правка агента на диске молча не
-  перетирается: без ваших правок файл перечитывается сам («Reloaded from
-  disk»), с правками — баннер «File changed on disk (probably by the agent)»
-  с «Reload», «Compare» и «Keep mine», а запись поверх чужой правки сначала
-  спрашивает «Overwrite». Файлы до 2 МБ правятся, до 20 МБ — только читаются,
-  больше — не открываются. В терминале «Open in editor» в меню ссылки
-  открывает путь во вкладке на нужной строке;
-- ⌘P — быстрый переход к файлу по нескольким буквам имени (запрос,
-  начатый с «/», ищет так же и в палитре), ⌘⇧F — поиск строки по содержимому
-  файлов: «Aa» (регистр), «Match whole word», «.*» (регулярное выражение);
-  клик по совпадению открывает файл на этой строке, ⌘-клик или ⌘Enter — в
-  новой группе справа. Пределы — 2000 совпадений и 200 файлов («Showing first
-  N matches»); если у git на этой машине нет PCRE, регулярка ищется как POSIX
-  ERE и над результатами появляется подсказка «POSIX regex»;
-- превью прямо во вкладке файла: Markdown — по умолчанию превью, «Code» в шапке
-  вкладки — редактор того же текста; ссылки `http(s)` открываются вкладкой
-  встроенного браузера, относительные — вкладкой файла, картинки берутся только из папок
-  работы; сырой HTML не исполняется. Картинки (`png jpg jpeg gif webp svg`) —
-  «Fit / 100%» и размер в пикселях. PDF — прокрутка страниц, ⌘F по тексту,
-  ссылки — только `http(s)` и только вкладкой встроенного браузера; скрипты PDF не
-  исполняются, pdf.js и его шрифты — локальные, без сети. CSV и TSV — таблица
-  (первые 10 000 строк и 200 колонок), «Code» — редактор. В редакторе ⌥Z
-  переносит строки; файл, удалённый на диске, показывает «File deleted on
-  disk» с «Save again» / «Close»; слишком большой, не-UTF-8 или двоичный файл
-  — свою плашку и «Binary file»; закрытие окна или ⌘Q с несохранёнными
-  правками в нескольких файлах спрашивает «Save changes to N files?» и
-  предлагает «Save all»;
-- изменения сессии: правый сайдбар, вкладка «Changes» (⌘⇧G) — открывается и
-  пунктом «Changes» в меню любой сессии, с выбором сессии в шапке. Там же
-  «⋯» → «Refresh» и, если у сессии есть свой worktree, «Discard worktree…» (c
-  подтверждением, а при незакоммиченном — вторым, «Discard anyway»; сессия
-  останавливается и закрывается, папка и ветка удаляются). Шапка — `ветка →
-  база`, счётчики и число коммитов; секции «Conflicts», «Uncommitted», «Branch
-  changes» и «Branch commits». Одна главная кнопка по состоянию: «Commit» с
-  сообщением (у сессии без worktree — «Commit all in folder»: только папка
-  проекта, `.parley/` и прежний `.harnas/` в историю не попадает — коммит при несохранённых
-  буферах спрашивает «Save all and commit» или «Commit anyway»), «Merge into
-  <база>» с подтверждением (`git merge --no-ff` в папке, где выгружена база),
-  а при конфликте — «Ask agent to resolve»: открывает диалог с готовым, но
-  редактируемым текстом агенту и кнопкой «Send». Пока агент работает —
-  строка «The agent is still working — changes may be incomplete». Клик по файлу — вкладка диффа на
-  Monaco: неизменённое свёрнуто, «Inline / Side by side», «Collapse all» /
-  «Expand all», перенос строк («Wrap lines»), список или дерево файлов
-  («List» / «Tree»); больше 100 секций — «Show N more»; файл больше 1 МБ —
-  «File is larger than 1 MB» с «Show anyway»; вкладка обновляется сама, когда
-  агент закончил ход. Клик по коммиту в «Branch commits» открывает вкладку
-  «Changes S02 · a1b2c3d» (без заметок);
-- заметки к строкам диффа ветки: «+» у номера строки (протяжка — диапазон) или
-  ⌘⇧A на выделении, ⌘Enter сохраняет, Esc отменяет. Заметка стоит под своей
-  строкой с «Edit», «Delete» и «Send ▾» (по умолчанию — сессия диффа, в меню —
-  любая запущенная сессия работы); у файла — «Send file notes», у вкладки —
-  «Send all unsent». Агенту уходит один текст «Review notes for S02 (branch …)»
-  с файлом, строками и текстом каждой заметки; ответ — тот же тост, что у
-  вставки ниже, отправленная сворачивается в «Sent to S02 · 2:05 PM». Агент
-  сдвинул строки — заметка переезжает за своей строкой, убрал строку — она
-  помечена «Outdated» и в пакет без явного выбора не идёт. В одной колонке
-  заметки к старой стороне — полосой над файлом. Заметки хранятся в
-  `~/.parley/desktop/notes/`; в диффе коммита их нет. Агенту уходит только
-  нажатие «Send»: ни сохранение, ни обновление вкладки ничего не шлют;
-- почта работы — вкладка «Mail» (`✉N` на карточке, «Open mail» в меню
-  карточки): письма без комнаты карточками с тегом вида, отправителем,
-  адресатом и временем, текст — markdown, сверху блок «Decisions»; письма
-  комнаты лежат в ленте самой комнаты; непрочитанное вам помечено точкой;
-- обычные выделение, копирование и прокрутка терминала. Правый клик по
-  терминалу — меню: копировать, вставить, выделить всё, очистить экран (агенту
-  ничего не уходит), поиск и сплит;
-- ссылки в выводе терминала: адреса и пути к файлам (`src/a.ts:12`, в том
-  числе с кириллицей) подчёркиваются под указателем. Клик — меню ссылки,
-  ⌘-клик — сразу действие: файл — вкладкой редактора на нужной строке, каталог —
-  приложением по умолчанию (только внутри папок работы; исполняемое и файлы
-  без расширения — лишь показываются в Finder, как и всё вне белого списка
-  расширений), адрес — вкладкой встроенного браузера рядом;
-  системный браузер — пунктом меню ссылки «Open in system browser»;
-- ⌘F — полоса поиска по экрану и прокрутке терминала: с учётом регистра,
-  регулярным выражением, Enter и ⇧Enter — следующее и предыдущее, Esc —
-  закрыть;
-- файл из Finder, брошенный на терминал сессии, вставляется путём в поле ввода
-  агента — в одинарных кавычках shell, через пробел, Enter не нажимается:
-  человек дописывает промпт сам;
-- скриншот: ⌘⌃⇧4 и ⌘V в терминале (или «Paste» меню терминала), когда в
-  буфере картинка без текста. Окно сохраняет PNG в `~/.parley/desktop/drops`
-  (права 0600, через 7 дней файл удаляется при старте) и вставляет путь к нему —
-  Claude и Codex читают его как вложение. Если в буфере есть текст, вставляется
-  текст;
-- ответ агента на такую вставку окно показывает тостом: «Sent to S02», «…
-  without Enter» (в поле ввода уже был черновик, вы печатали или сессия
-  перезапустилась), «S02 is waiting for your answer — text not inserted» (агент
-  ждёт разрешения или ответа — текст не вставлен совсем, есть «Copy» и
-  «Open S02»), «busy» с «Retry», «isn't running» с «Resume». Повтор — только
-  кнопкой; успешная вставка без Enter тоста не даёт. Со старым хостом без
-  `pty.send` вставка идёт как обычно, а бросок файлов не принимается;
-- встроенный браузер для страниц разработки (например, `localhost` своего
-  проекта) — вкладка рядом с терминалами, не больше 10 на работу. Страница
-  изолирована: ни моста окна, ни Node, запросы разрешений (камера,
-  микрофон…) отклоняются без вопроса. Открыть можно «New browser tab» в
-  палитре, «+» строки вкладок, ⌘-клик по адресу в терминале или ссылкой
-  Markdown/PDF; `window.open` страницы открывает вкладку рядом с ней, а не
-  окно. Кнопки «Back» / «Forward», «Reload» (или «Stop» пока грузится)
-  и «DevTools». Адресная строка: `localhost…` → `http://`, с точкой → `https://`,
-  иначе «Enter an address — search isn't supported» (поиска нет); `file:` не
-  открывается («Local files can't be opened here»). «Page crashed» и «Couldn't
-  load page» показывают ошибку с «Reload». Загрузки — системный диалог
-  сохранения. Куки и хранилища общие для всего окна — один раздел на все
-  работы сразу, а не только на вкладки одной; чистятся в
-  Settings → Browser → «Clear browser data». ⌘J, ⌘W и прочие сочетания окна работают и
-  из страницы;
-- Design Mode: ⌖ в строке над страницей, клик по элементу — карточка с
-  миниатюрой, селектором и текстом; Esc или повторный ⌖ снимают выбор, и клик по
-  странице снова работает. «Send to agent ▾» отдаёт выбранной вами сессии блок:
-  адрес, селектор, текст, стили, HTML и путь к скриншоту в
-  `~/.parley/desktop/drops` — с пометкой, что это данные страницы, а не
-  инструкции; ответ — тот же тост, что и у вставки выше. «Copy» кладёт блок в
-  буфер, «Pick again» выбирает заново. Выбор и отправка — только вашим кликом:
-  агент браузером не управляет.
+- the title bar, 40px, right on the window background. On the left: "Workspace sidebar"
+  (⌘B), "Back" / "Forward" (⌘⌥←/→). On the right: "Right sidebar" (⌘L) and, only when the
+  workspace sidebar is not on screen (it is hidden or there are no workspaces), "Search"
+  (⌘J). A double click on an empty spot does the macOS system action. The center is a
+  rounded sheet. Sidebar widths are changed with the mouse: the left one is 220–500 (288 by
+  default), the right one is from 220 (320 by default) up to "window − left sidebar − 320".
+  If there is not enough room, the toast "Not enough room for the right sidebar" appears;
+- no workspaces at all: a screen with "New workspace" and "Palette". No connection to the
+  host: a "No connection to host: …" screen with "Retry" and "Restart host". A dropped
+  connection: "Disconnected — reconnecting…" in the terminal tab. A host older than the
+  window: "Host is outdated — restart". "Restart host…" interrupts live agents; they come back
+  through `--resume`;
+- the status bar at the bottom, 28px, left to right. First a segment for each available
+  provider: icon, name, CLI version (`claude --version`, `codex --version`; the host asks for
+  it once at start, and with no version there is just the icon and the name) and subscription
+  limits: a bar for the five-hour window (for the weekly window if there is no five-hour one)
+  and "58% 5h · 41% wk". From 80% in either window the text and the bar use the accent color,
+  and the tooltip says when the windows reset and when the CLI reported the numbers. With no
+  data the segment has no limits. When space runs short, the limits text disappears first
+  (the bar stays), then the version, and the name last. Further right: the host's latest
+  notice; "N need you · M unseen" — a click goes to the next such session or room; the
+  connection to the host (for example "Host 0.0.0"); "Host is outdated — restart" if it is
+  outdated; "Auto-wake on" or "Auto-wake paused" — a click sets or clears the pause;
+- each workspace has its own layout: a tree of splits made of tab groups (session terminal,
+  mail, room, changes, file, embedded browser). While there is one group, its tabs are pills
+  right in the title bar: only the active one has a close cross. A tab is tinted when it is a
+  session that waits for you or has finished its turn, a room that waits for your decision,
+  or mail with unread messages. A workspace's layout is remembered and survives a window
+  restart; at start the last active workspace opens. A tab has a right-click menu: "Close" /
+  "Close others" / "Close to the right" / "Split right" / "Split down"; the middle mouse
+  button closes a tab. The "+" on the tab bar opens the "Open…" palette, which also has "New
+  browser tab". A workspace has at most 8 groups; beyond that a split is refused with a
+  toast. Closing a tab shows the toast "Tab closed — ⌘⇧T to reopen";
+- the sidebar on the left holds workspace cards. At the top is "Pinned"; above the list are
+  "Search" (⌘J) and "New workspace"; then come groups by project, each with a colored dot,
+  the project name, the number of workspaces, "+" and the "⋯" menu ("Show done"). Inside a
+  section, the workspace where you are needed comes first: a session waits for a permission
+  or an answer, or a room waits for your decision; then unread mail to you or a result you
+  have not seen; then workspaces where an agent is working. On a tie the fresher event wins,
+  and finished workspaces go to the bottom. While the pointer is over the sidebar or its
+  menu is open, the order does not jump. The card header has the icon of the most urgent
+  state (a question icon if a decision is waiting in the workspace), the name (bold when
+  there is unread mail or an unseen result), `✉N` (messages to you), `#` or `#N` (the menu of
+  the workspace's rooms; the number counts rooms with unread messages) and the time. Below
+  it are the meta line "folder · N sessions · branch" and the rows. A session row has the
+  state and agent icons, `S02 backend`, the state word (`working`, `needs you`,
+  `done · unseen`, `idle`, `not started`, `done`, `failed`, `asleep`, `closed`), a branch icon
+  for a session with its own worktree, and the time; a session that waits for you or has an
+  unseen result is tinted. A room is a row (`# name`) in the place of its first member: the
+  word `decision` and a tint while a decision waits for you, or `N new` for messages you have
+  not read. Collapsed, a room shows provider icons with the count of all that provider's
+  agents in the room (tooltip "2 Claude Code agents"); expanded, it shows the members, with a
+  `★` for the lead. It expands by itself while a tab of the room or of one of its members is
+  open in the active workspace, and the chevron overrides this until the window restarts. A
+  click on the row opens the room; a click on an already open, expanded room collapses it. At
+  the bottom of a card: "N more closed" ("Hide closed" hides them) and, on the active
+  workspace, "+ New session or room". A right click on a card: "Pin"/"Unpin" · "New session" ·
+  "New room" · "Open mail" · "Rename" (or a double click on the name) · "Reveal in Finder" ·
+  "Copy path" · "Mark as done" (for `done` and `archived` there is "Reopen" instead) ·
+  "Archive" · "Delete…". A right click on a session row: "Open", "Open to the side", "Resume",
+  "Stop", "Close…" (with the confirmation "Session will no longer receive mail"), "Changes",
+  "Copy worktree path" (for a session with its own worktree), "Delete". Collapsed projects,
+  pinned workspaces and "Show done" survive a window restart. ↑/↓ in the sidebar move over
+  cards and over session and room rows, and Enter opens. On a card, → and ← show and hide
+  closed sessions; on a room row they expand and collapse it; ← on a session row goes to its
+  card. ⇧F10 opens the same menu as the right button;
+- the center shows the active workspace: a click on a card makes it active, and a click on a
+  session row also opens the session tab. ⌘1…⌘9 pick a workspace by the visible sidebar order
+  (pinned ones first), and ⌘⇧↑ and ⌘⇧↓ pick the neighbor. The terminals of the three most
+  recent workspaces stay alive; switching does not recreate them;
+- a new workspace: ⌘N, "New workspace" at the top of the sidebar, or the "+" in a project
+  header. The dialog has the project (a segmented control of known projects; the "+" in a
+  header preselects that project, otherwise it is the active workspace's project; "Choose a
+  folder…" adds a new folder), the agent (the last chosen one by default, otherwise Claude
+  Code), the name and the first prompt. An empty name is taken from the first line of the
+  prompt (up to 40 characters). An empty prompt means a quiet start: the agent waits for a
+  task in the terminal. With neither a name nor a prompt it is an error. The first session is
+  always started, and the "In its own worktree" switch is available for it if the project is a
+  git repository. ⌘Enter creates. If the session failed to start, the workspace already
+  exists, and "Retry" repeats only the session start;
+- a new session or room: ⌘T, the "+ New session or room" row under the rows of the active
+  card, "New session or room" and "New room" in the palette, "New session" and "New room" in
+  the card menu. It is one dialog: "Workspace" (the active workspaces), a name, agent rows
+  — the provider, a model from the list ("Default" first — no flag; the list comes from the
+  provider's public documentation or from `providers.json`) and the effort "Low / Medium /
+  High" (only if the provider accepts it) — and "In its own worktree". With one agent the
+  button is "Start session": a session without a task, and its terminal. "Add agent" makes it
+  two or more, and the button becomes "Create room": the star picks the lead, the room's
+  sessions start without a task and without invitation messages (you write the task into the
+  room once, for everyone), and the room tab opens. If some agents failed to start, the
+  dialog shows the outcome for each, and "Retry" repeats only the failed ones: the room is
+  created once all of them are running. "Cancel" leaves the sessions that are already
+  running as ordinary sessions of the workspace, and pressed during the launch (like Esc and
+  ×) it stops the launch too: the remaining agents and the room are not created;
+- a tab and a session row from the sidebar can be dragged with the mouse: onto the tab bar or
+  the middle of a group — it becomes a tab there; to the edge of a group — it becomes a new
+  group alongside. A terminal moves between groups without being recreated and without
+  losing its screen. A session row can also be dropped onto other sidebar rows, within a
+  single workspace only. Dropped onto another session, it opens the "New room" dialog for the
+  two sessions (a name and a lead, by default the session that was dropped onto; the host
+  writes "Room created from @s03 and @s02" as the first line of the feed). Dropped onto a
+  room row, the session joins the room ("@s04 joined the room") and the row expands. A session
+  belongs to at most one room, so it leaves its previous one. It cannot be dropped onto
+  itself, onto its own room, onto a closed session or into another workspace — the target is
+  not highlighted;
+- the room tab (a click on a room row, "Rooms" in the palette, the `#` of a card). The header
+  has the name and the caption "Created by you · 4 agents · lead S01 · `<workspace>`" (or
+  "Created by S01 …" if an agent created the room). Under it is the strip of members: a card
+  per agent with its state, a `★` for the lead and its task; a click opens the agent's
+  terminal. Below, the "Decisions" block comes first (up to the five latest decisions; older
+  ones are "+N earlier"), then the messages: ordinary text, with mention chips and links. Each
+  message shows the sender, a `★` for the lead, the recipients ("→ all" or labels), the kind
+  tag (`note`, `question`, `decision`), the time and a dot for an unread one. The line "▤ Not
+  picked up yet by S02, S03" stays while the recipients have not read the message. A waiting
+  decision is the last card in the feed, with "Accept" and "Return for rework" (a note "What
+  should the lead change?" and "Send to lead"); if the lead has replaced the text in the
+  meantime, an answer to the old version is rejected with the toast "The decision changed —
+  review the latest version.". At the bottom is the input field with the caption "To
+  everyone" or "To S02, S03"; `@` opens the member menu (a filter by label, provider and
+  model; ↑/↓, Enter or Tab, Esc; mouse click), and the chosen member becomes a chip and a
+  recipient. Enter sends, Shift+Enter inserts a line break, only plain text is pasted, and an
+  unfinished draft is kept per room until the window restarts;
+- the mouse, menus and ⌘ shortcuts, with no prefix key: ⌘T — a new session or room in the
+  active workspace, ⌘D and ⇧⌘D — a new group on the right or below, with the content chosen
+  through the palette ("Open in new group"), ⌘W — close the tab, ⌘⇧T — reopen a closed one,
+  ⌘[ and ⌘] — the neighboring group, ⌃Tab and ⌃⇧Tab — recent tabs of the workspace, ⌘⌥← and
+  ⌘⌥→ — back and forward through the navigation history (and the buttons in the title bar),
+  ⌘J — the palette, ⌘F — search, ⌘, — settings (the full list is in "Window keyboard
+  shortcuts");
+- attention: a tab is tinted when a session waits for you (terracotta) or has finished its
+  turn (sage), a room waits for your decision, or the mail has something unread for you. The
+  status bar shows "N need you · M unseen" (a room with a decision counts as "need you"; only
+  workspaces in the sidebar sections are counted, so archived and hidden `done` ones are not
+  included). A click goes to the next one: first sessions that wait for you, then rooms with a
+  decision, then sessions with an unseen result, in a circle starting from the current tab. If
+  the target no longer exists, the toast "Workspace or session no longer exists" appears. The
+  Dock badge is the number of "need you" items plus messages to you. "Unseen" clears only
+  when you have looked at the terminal for a second in a focused window; a message to you and
+  a room message are marked as read when they have been visible in the mail or in the room for
+  more than 1 s while the window is focused;
+- macOS notifications: a session waits for you or has finished its turn, a message to you
+  arrived, a session failed to start, failed to resume or waits for folder trust. When you are
+  already looking at that tab, there is no notification; after a window or host restart there
+  is no burst of notifications about earlier states. A click opens the window (also when the
+  window is closed) right on the tab: the frame flashes for 600 ms and the terminal gets input
+  focus. What to notify about, and whether with sound, is set in Settings, in the
+  "Notifications" section; if notifications do not arrive, allow them in System Settings →
+  Notifications → Parley. The texts of the notifications are in English, like the whole
+  window;
+- a room lead's decision: a new one ("Decision waiting for you" — "{room} · S01 collected
+  positions") and a revised one ("… S01 revised the decision": the lead replaced the text
+  before your answer, or brought a corrected one after "Return for rework") notify, but the
+  same decision a second time does not — neither after a window restart nor after
+  reconnecting to the host. While the window is focused and the room tab is not in view, this
+  is not a macOS notification but a card at the bottom right (320px) with "Open" (the room
+  tab) and "Later". It hides itself after 8 s, and answering the decision removes it. There
+  are at most two cards, the newest on top, and a third pushes out the oldest; toasts ("Tab
+  closed — ⌘⇧T to reopen" and others) stack above them instead of covering their buttons.
+  When the window is not focused, a macOS notification appears, one per room: a new one
+  replaces the previous one. The settings key is "needs you";
+- files: the right sidebar (⌘L) has the "Files" tab with the tree of the session's folder (its
+  worktree) or of the project. The header has the root picker ("Project" or
+  `⎇ S02 · branch`), "Refresh" (when watching fails), a search over files and the toggle
+  button "Show ignored files" (`.git` and `.parley` are never shown). A click on a file opens
+  it in a Monaco editor tab, and ⌘-click opens it in a new group on the right. The file menu:
+  "Open", "Open to the side", "Reveal in Finder", "Copy path", "Copy relative path". A file
+  from the tree can be dragged into the layout or onto a terminal — then the path lands in the
+  agent's input field. ⌘S saves. A tab with an unsaved edit has a dot, and it (or the window)
+  cannot be closed without the question "Save / Don't save / Cancel". An agent's edit on disk
+  is not silently overwritten: with no edits of yours the file reloads by itself ("Reloaded
+  from disk"); with your edits the banner "File changed on disk (probably by the agent)"
+  appears with "Reload", "Compare" and "Keep mine", and writing over someone else's edit asks
+  "Overwrite" first. Files up to 2 MB can be edited, files up to 20 MB are read-only, and
+  larger ones are not opened. In the terminal, "Open in editor" in a link's menu opens the
+  path in a tab at the right line;
+- ⌘P is a quick jump to a file by a few letters of its name (a query that starts with "/"
+  searches the same way in the palette too). ⌘⇧F searches for a string in file contents, with
+  "Aa" (case), "Match whole word" and ".*" (regular expression). A click on a match opens the
+  file at that line, and ⌘-click or ⌘Enter opens it in a new group on the right. The limits
+  are 2000 matches and 200 files ("Showing first N matches"). If git on this machine has no
+  PCRE, the regex is searched as POSIX ERE and the hint "POSIX regex" appears above the
+  results;
+- previews right in the file tab. Markdown shows a preview by default, and "Code" in the tab
+  header switches to the editor for the same text; `http(s)` links open in an embedded
+  browser tab, relative ones in a file tab, images are loaded only from the workspace's
+  folders, and raw HTML is not executed. Images (`png jpg jpeg gif webp svg`) have "Fit /
+  100%" and the size in pixels. PDF has page scrolling and ⌘F for text; its links are only
+  `http(s)` and only open in an embedded browser tab; PDF scripts are not executed, and
+  pdf.js and its fonts are local, with no network. CSV and TSV show a table (the first
+  10,000 rows and 200 columns), and "Code" switches to the editor. In the editor ⌥Z wraps
+  lines. A file deleted on disk shows "File deleted on disk" with "Save again" / "Close". A
+  file that is too large, not UTF-8 or binary gets its own notice, such as "Binary file".
+  Closing the window or ⌘Q with unsaved edits in several files asks "Save changes to N files?"
+  and offers "Save all";
+- a session's changes: the right sidebar, the "Changes" tab (⌘⇧G). It also opens through the
+  "Changes" item in any session's menu, with a session picker in the header. The same place
+  has "⋯" → "Refresh" and, if the session has its own worktree, "Discard worktree…" (with a
+  confirmation, and a second one, "Discard anyway", when something is uncommitted; the
+  session is stopped and closed, and the folder and the branch are deleted). The header shows
+  `branch → base`, the counters and the number of commits; the sections are "Conflicts",
+  "Uncommitted", "Branch changes" and "Branch commits". One main button changes with the
+  state: "Commit" with a message (for a session without a worktree it is "Commit all in
+  folder": only the project folder, and `.parley/` never goes into the history; with unsaved
+  buffers the commit asks "Save all and commit" or "Commit anyway"), "Merge into `<base>`"
+  with a confirmation (`git merge --no-ff` in the folder where the base is checked out), and,
+  on a conflict, "Ask agent to resolve", which opens a dialog with a ready but editable text
+  for the agent and a "Send" button. While the agent is working, the line "The agent is still
+  working — changes may be incomplete" is shown. A click on a file opens a diff tab on
+  Monaco: unchanged parts are collapsed; there are "Inline / Side by side", "Collapse all" /
+  "Expand all", line wrapping ("Wrap lines") and a list or a tree of files ("List" / "Tree");
+  with more than 100 sections there is "Show N more"; a file over 1 MB shows "File is larger
+  than 1 MB" with "Show anyway". The tab refreshes by itself when the agent has finished its
+  turn. A click on a commit in "Branch commits" opens a "Changes S02 · a1b2c3d" tab (without
+  notes);
+- notes on the lines of a branch diff: the "+" next to a line number (dragging makes a range)
+  or ⌘⇧A on a selection; ⌘Enter saves, Esc cancels. A note sits under its line with "Edit",
+  "Delete" and "Send ▾" (by default to the diff's session; the menu lists any running session
+  of the workspace); a file has "Send file notes" and a tab has "Send all unsent". The agent
+  gets one text, "Review notes for S02 (branch …)", with the file, the lines and the text of
+  each note. The outcome is shown as the same toast as for the paste described below, and a
+  sent note collapses to "Sent to S02 · 2:05 PM". If the agent moves the lines, the note
+  moves with its line; if the agent removes the line, the note is marked "Outdated" and is not
+  included in a batch unless you select it explicitly. In the one-column view, notes on the
+  old side appear as a strip above the file. Notes are stored in `~/.parley/desktop/notes/`;
+  a commit diff has none. Only pressing "Send" sends anything to the agent: neither saving nor
+  refreshing the tab does;
+- a workspace's mail: the "Mail" tab (`✉N` on the card, "Open mail" in the card menu). It
+  shows the messages that belong to no room as cards with a kind tag, the sender, the
+  recipient and the time; the text is markdown, and a "Decisions" block is at the top. A
+  room's messages live in the room's own feed. Unread messages for you are marked with a dot;
+- ordinary selection, copying and scrolling in the terminal. A right click on the terminal
+  opens a menu: copy, paste, select all, clear screen (nothing is sent to the agent), search
+  and split;
+- links in terminal output: addresses and file paths (`src/a.ts:12`, including paths with
+  Cyrillic characters) are underlined under the pointer. A click opens the link menu;
+  ⌘-click performs the action at once. A file opens in an editor tab at the right line. A
+  directory opens in the default app (only inside the workspace's folders; an executable and
+  a file with no extension are only revealed in Finder, as is everything outside the
+  extension allowlist). An address opens in an embedded browser tab alongside. The system
+  browser is reached through the link menu item "Open in system browser";
+- ⌘F opens a search bar over the terminal's screen and scrollback, with case-sensitive and
+  regular-expression options; Enter and ⇧Enter go to the next and the previous match, and Esc
+  closes the bar;
+- a file dragged from Finder onto a session's terminal is inserted as a path into the agent's
+  input field: in shell single quotes, separated by spaces, and Enter is not pressed — the
+  human finishes the prompt;
+- a screenshot: ⌘⌃⇧4, then ⌘V in the terminal (or "Paste" in the terminal menu) when the
+  clipboard holds an image with no text. The window saves the PNG to
+  `~/.parley/desktop/drops` (mode 0600; a file is deleted at start once it is 7 days old) and
+  inserts the path to it — Claude and Codex read it as an attachment. If the clipboard holds
+  text, the text is inserted;
+- the window shows the result of such an insertion into the agent as a toast: "Sent to S02";
+  "… without Enter" (there was already a draft in the input field, you were typing, or the
+  session restarted); "S02 is waiting for your answer — text not inserted" (the agent waits
+  for a permission or an answer, so the text is not inserted at all; there are "Copy" and
+  "Open S02"); "busy" with "Retry"; "isn't running" with "Resume". A retry happens only by
+  the button; a successful insertion without Enter gives no toast. With an old host that has
+  no `pty.send`, insertion works as usual, but dropping files is not accepted;
+- the embedded browser for development pages (for example, your project's `localhost`) is a
+  tab next to the terminals, at most 10 per workspace. The page is isolated: no window bridge
+  and no Node, and permission requests (camera, microphone…) are rejected without asking. You
+  can open it with "New browser tab" in the palette, the "+" on the tab bar, ⌘-click on an
+  address in the terminal, or a Markdown/PDF link; a page's `window.open` opens a tab next to
+  it, not a window. There are the buttons "Back" / "Forward", "Reload" (or "Stop" while
+  loading) and "DevTools". In the address bar, `localhost…` becomes `http://` and an address
+  with a dot becomes `https://`; anything else gives "Enter an address — search isn't
+  supported" (there is no search); `file:` is not opened ("Local files can't be opened here").
+  "Page crashed" and "Couldn't load page" show an error with "Reload". Downloads use the
+  system save dialog. Cookies and storage are shared by the whole window — one partition for
+  all workspaces at once, not only for the tabs of one; they are cleared in Settings →
+  Browser → "Clear browser data". ⌘J, ⌘W and the other window shortcuts also work from inside
+  the page;
+- Design Mode: the ⌖ in the bar above the page; a click on an element gives a card with a
+  thumbnail, the selector and the text. Esc or a second ⌖ clears the selection, and clicks on
+  the page work again. "Send to agent ▾" gives the session you choose a block: the address,
+  the selector, the text, the styles, the HTML and the path to a screenshot in
+  `~/.parley/desktop/drops` — marked as page data, not instructions; the outcome is the same
+  toast as for the insertion above. "Copy" puts the block on the clipboard, and "Pick again"
+  picks anew. Picking and sending happen only on your click: the agent does not control the
+  browser.
 
-**Клавиши окна** (спека 9.6). Все сочетания — в одной таблице
-`packages/desktop/src/shared/keybindings.ts`: по ней строятся системное меню, обработчик
-клавиш окна и строки действий палитры. Сочетание ловит окно с учётом фокуса: в терминале
-всё без ⌘ уходит агенту (кроме ⌃Tab, ⌃⇧Tab и ⌃1–9), в поле ввода остаётся правка текста
-(⌘A, ⌘C, ⌘V, ⌘X, ⌘Z, ⇧⌘Z, ⌘←/→, ⌘⇧↑/↓) и, как в терминале, ⌃Tab, ⌃⇧Tab, ⌃1–9, в редакторе
-Monaco ему уступают ⌘D, ⌘K, ⌘F, ⌘S, ⌘/, ⌘[, ⌘], ⌘L и ⌘⇧↑/↓, за модальным диалогом
-сочетания окна не действуют.
+**Window keyboard shortcuts** (spec 9.6). All shortcuts are in one table,
+`packages/desktop/src/shared/keybindings.ts`; the system menu, the window's key handler and
+the action rows of the palette are built from it. The window catches a shortcut with focus in
+mind. In the terminal everything without ⌘ goes to the agent (except ⌃Tab, ⌃⇧Tab and ⌃1–9).
+In an input field, text editing stays with the field (⌘A, ⌘C, ⌘V, ⌘X, ⌘Z, ⇧⌘Z, ⌘←/→,
+⌘⇧↑/↓), and so do ⌃Tab, ⌃⇧Tab and ⌃1–9. In the Monaco editor ⌘D, ⌘K, ⌘F, ⌘S, ⌘/, ⌘[, ⌘],
+⌘L and ⌘⇧↑/↓ yield to the editor. Behind a modal dialog the window's shortcuts do not work.
 
-| Действие | Клавиши | Меню |
+| Action | Keys | Menu |
 |---|---|---|
-| Палитра | ⌘J | View |
-| Быстрый переход к файлу | ⌘P | View |
-| Найти в файлах | ⌘⇧F | View |
-| Новая работа | ⌘N | Workspace |
-| Новая сессия или комната в активной работе | ⌘T | Workspace |
-| Работа по номеру | ⌘1…⌘9 | Workspace |
-| Предыдущая / следующая работа | ⌘⇧↑ / ⌘⇧↓ | Workspace |
-| Назад / вперёд | ⌘⌥← / ⌘⌥→ | View |
-| Сайдбар работ / правый сайдбар | ⌘B / ⌘L | View |
-| Файлы / Изменения в правом сайдбаре | ⌘⇧E / ⌘⇧G | View |
-| Разделить вправо / вниз | ⌘D / ⌘⇧D (в редакторе ⌘D — ему) | Tab |
-| Закрыть вкладку / вернуть закрытую | ⌘W / ⌘⇧T | Tab |
-| Предыдущая / следующая вкладка в группе | ⌘⇧[ / ⌘⇧] | Tab |
-| Предыдущая / следующая группа | ⌘[ / ⌘] (в редакторе — ему) | Tab |
-| Вкладка по номеру | ⌃1…⌃9 | — |
-| Недавние вкладки | ⌃Tab / ⌃⇧Tab (обход, пока ⌃ удержан) | — |
-| Поиск в терминале, файле, странице | ⌘F — по фокусу | Edit |
-| Очистить терминал | ⌘K — только при фокусе в терминале | Terminal |
-| Сохранить файл | ⌘S — в редакторе | — |
-| Перенос строк | ⌥Z — в редакторе | — |
-| Заметка на выделение | ⌘⇧A — во вкладке диффа | — |
-| Сохранить / отменить заметку | ⌘Enter / Esc — в её поле | — |
-| Вставить картинку из буфера | ⌘V — в терминале, без текста в буфере | — |
-| Открыть ссылку сразу | ⌘-клик — по ссылке в терминале | — |
-| Масштаб страницы браузера | ⌘+ / ⌘− / ⌘0 | — |
-| Настройки | ⌘, | Parley |
-| Следующая, где нужен ты; пауза будильника; перезапуск хоста; тема; новая комната; архивные работы; новая вкладка браузера | без сочетания | палитра |
+| Command palette | ⌘J | View |
+| Go to file | ⌘P | View |
+| Find in files | ⌘⇧F | View |
+| New workspace | ⌘N | Workspace |
+| New session or room in the active workspace | ⌘T | Workspace |
+| Workspace by number | ⌘1…⌘9 | Workspace |
+| Previous / next workspace | ⌘⇧↑ / ⌘⇧↓ | Workspace |
+| Back / forward | ⌘⌥← / ⌘⌥→ | View |
+| Toggle workspace sidebar / right sidebar | ⌘B / ⌘L | View |
+| Show files / Show changes in the right sidebar | ⌘⇧E / ⌘⇧G | View |
+| Split right / down | ⌘D / ⌘⇧D (in the editor ⌘D belongs to it) | Tab |
+| Close tab / reopen closed tab | ⌘W / ⌘⇧T | Tab |
+| Previous / next tab in the group | ⌘⇧[ / ⌘⇧] | Tab |
+| Previous / next group | ⌘[ / ⌘] (in the editor, they belong to it) | Tab |
+| Tab by number | ⌃1…⌃9 | — |
+| Recent tabs | ⌃Tab / ⌃⇧Tab (cycles while ⌃ is held) | — |
+| Find in the terminal, file or page | ⌘F — by focus | Edit |
+| Clear terminal | ⌘K — only with focus in the terminal | Terminal |
+| Save file | ⌘S — in the editor | — |
+| Wrap lines | ⌥Z — in the editor | — |
+| Note on the selection | ⌘⇧A — in a diff tab | — |
+| Save / cancel a note | ⌘Enter / Esc — in its field | — |
+| Paste an image from the clipboard | ⌘V — in the terminal, with no text on the clipboard | — |
+| Open a link at once | ⌘-click — on a link in the terminal | — |
+| Browser page zoom | ⌘+ / ⌘− / ⌘0 | — |
+| Settings | ⌘, | Parley |
+| Next session that needs you; pause auto-wake; restart host; theme; new room; archived workspaces; new browser tab | no shortcut | palette |
 
-Клавиши внутри полей и списков (стрелки, Enter, Esc в сайдбаре, палитре, поиске
-терминала и браузера, адресной строке) действуют по месту и в таблицу не
-сведены.
+Keys inside fields and lists (arrows, Enter and Esc in the sidebar, the palette, the terminal
+and browser search, the address bar) act locally and are not collected in the table.
 
-Палитра ⌘J ищет вкладки, работы, сессии, комнаты и действия (2–4 буквы ярлыка
-хватает: «исп» находит `S02 исполнитель`), запрос с «/» (как и ⌘P) ищет только
-файлы. Enter открывает строку и отдаёт фокус её вкладке, ⌘Enter — в новой
-группе справа, ⌘1–9 выбирают строку по номеру. Пустой результат предлагает
-«Create workspace "…"» — форму с этим названием; сама палитра работ и сессий
-не создаёт и в терминал не пишет, «Restart host…» спрашивает подтверждение.
-Пустой запрос показывает шесть последних вкладок и четыре последние работы,
-«Show archived workspaces» до перезапуска окна показывает архивные работы
-приглушёнными в конце своей секции; вернуть работу — «Reopen» в её меню. В
-счётчики, бейдж и «Next session that needs you» архивные не входят и при показе.
+The ⌘J palette searches tabs, workspaces, sessions, rooms and actions (2–4 letters of a label
+are enough: "exe" finds `S02 executor`); a query with "/" (like ⌘P) searches only files.
+Enter opens the row and gives focus to its tab, ⌘Enter opens it in a new group on the right,
+and ⌘1–9 pick a row by number. An empty result offers 'Create workspace “…”' — a form with
+that name; the palette itself does not create workspaces or sessions and does not write to a
+terminal, and "Restart host…" asks for confirmation. An empty query shows the six most recent
+tabs and the four most recent workspaces. "Show archived workspaces" shows archived
+workspaces, dimmed at the end of their section, until the window restarts; to bring a
+workspace back, use "Reopen" in its menu. Archived workspaces are not counted in the
+counters, the badge and "Next session that needs you", even when shown.
 
-Будит агентов сам хост: печатает указатель «Новые письма (N). Вызови
-check_inbox.», когда агент закончил ход и вы ничего не набираете. Поэтому
-сессия, порождённая агентом, стартует сама, без диалога.
+The host itself wakes agents. When an agent has finished its turn and you are not typing
+anything, the host prints a pointer: "New messages (N). Call check_inbox." (translated here;
+the text the agent sees is in Russian). That is why a session spawned by an agent starts by
+itself, without a dialog.
 
-Ядро можно использовать и отдельно от UI — оно печатает в stdout только JSON:
+The core can also be used separately from the UI — it prints only JSON to stdout:
 
 ```bash
 node packages/core/dist/cli.js index
 node packages/core/dist/cli.js session <id>
 ```
 
-## Настройки
+## Settings
 
-В окне — Settings (⌘,), пять вкладок:
+The window has Settings (⌘,), with five tabs:
 
-- **Appearance** — «System» / «Dark» / «Light».
-- **Terminal** — «Terminal font», «Terminal font size (8…32)».
-- **Agents** — «Silence threshold, ms», «Message cap per hour», «Session
-  wake-ups per hour (0…60)», «Auto-launch pending sessions», «Install agent
-  skills into projects», «Worktree root».
-- **Notifications** — «needs you» / «finished» / «mail to you» / «sound»; если
-  уведомления не приходят, подсказка ведёт в Системные настройки → Уведомления
-  → Parley.
-- **Browser** — «Clear browser data»: куки, хранилища и кеш встроенного
-  браузера.
+- **Appearance** — "System" / "Dark" / "Light".
+- **Terminal** — "Terminal font", "Terminal font size (8…32)".
+- **Agents** — "Silence threshold, ms", "Message cap per hour", "Session wake-ups per hour
+  (0…60)", "Auto-launch pending sessions", "Install agent skills into projects", "Worktree
+  root".
+- **Notifications** — "needs you" / "finished" / "mail to you" / "sound"; if notifications do
+  not arrive, a hint points to System Settings → Notifications → Parley.
+- **Browser** — "Clear browser data": the cookies, storage and cache of the embedded browser.
 
-Поля из «Terminal» и «Agents» пишутся в `~/.parley/config.json` (или в
-`config.json` дома из `PARLEY_HOME`) через хост и применяются без перезапуска окна;
-поле, заданное переменной окружения, подписано «(set by PARLEY_…)» (или «(set by
-HARNAS_…)», если задана прежняя) и неактивно — файл его не перекроет.
+The fields from "Terminal" and "Agents" are written through the host to `~/.parley/config.json`
+(or to `config.json` in the home directory given by `PARLEY_HOME`) and apply without
+restarting the window. A field that is set by an environment variable is labeled
+"(set by PARLEY_…)" and is inactive — the file does not override it.
 
-`~/.parley/config.json`, необязательный, только ключи окна и хоста:
+`~/.parley/config.json`, optional, with only the keys of the window and the host:
 
 ```json
 {
@@ -719,517 +616,486 @@ HARNAS_…)», если задана прежняя) и неактивно — �
 }
 ```
 
-Значения выше — по умолчанию. Переменные окружения перекрывают файл:
-`PARLEY_SILENCE_MS`, `PARLEY_MESSAGE_RATE`, `PARLEY_RESUME_RATE`,
-`PARLEY_AUTO_LAUNCH`, `PARLEY_AGENT_SKILLS`, `PARLEY_FONT_FAMILY`,
-`PARLEY_FONT_SIZE`, `PARLEY_WORKTREE_ROOT`. Каждую читает и прежнее имя — то же с
-`HARNAS_` вместо `PARLEY_`; если заданы оба, действует новое («Переход с harnas»).
+The values above are the defaults. Environment variables override the file:
+`PARLEY_SILENCE_MS`, `PARLEY_MESSAGE_RATE`, `PARLEY_RESUME_RATE`, `PARLEY_AUTO_LAUNCH`,
+`PARLEY_AGENT_SKILLS`, `PARLEY_FONT_FAMILY`, `PARLEY_FONT_SIZE`, `PARLEY_WORKTREE_ROOT`.
 
-`resumeRate` — сколько раз в час письмо может поднять спящую сессию (`claude
---resume`), 0…60; сверх лимита письмо просто ждёт. `autoLaunch` (по умолчанию
-включён, переключатель — «Auto-launch pending sessions») — `pending`-сессию,
-которую породил агент через `spawn_session`, хост поднимает сам, в фоне, если
-запись появилась уже при живом хосте; найденные при первом чтении работы он не
-трогает. Сессии, заведённые вами (⌘T, диалог новой работы, CLI), настройку не
-смотрят.
+`resumeRate` is how many times per hour a message may wake a sleeping session
+(`claude --resume`), 0…60; over the limit, the message just waits. `autoLaunch` (on by
+default; the toggle is "Auto-launch pending sessions"): a `pending` session that an agent
+spawned through `spawn_session` is started by the host itself, in the background, if the
+record appeared while the host was already running. Sessions found when a workspace is first
+read are left alone. Sessions you create (⌘T, the new workspace dialog, the CLI) ignore this
+setting.
 
-`agentSkills` (по умолчанию включён, переключатель — «Install agent skills into
-projects») — ставить ли скилл `parley` в папку проекта и в worktree сессии при
-запуске; что именно ложится на диск и как это выключить, — в «Скилл `parley` в
-проекте». Настройку хост читает при каждом запуске сессии.
+`agentSkills` (on by default; the toggle is "Install agent skills into projects") decides
+whether to install the `parley` skill into the project folder and into the session's worktree
+at launch. What exactly is written to disk and how to turn it off are described in "The
+`parley` skill in the project". The host reads the setting on every session launch.
 
-`channelPush` (и переменная `PARLEY_CHANNEL_PUSH`) — настройка звонка через
-channel при запуске сессии из CLI `parley-core` (см. «CLI ядра»); окно её не
-читает и в Settings не показывает.
+`channelPush` (and the `PARLEY_CHANNEL_PUSH` variable) is the setting for a channel push when
+a session is started from the `parley-core` CLI (see "Core CLI"); the window does not read it
+and does not show it in Settings.
 
-Другие переменные:
+Other variables:
 
-- `PARLEY_HOME` — дом вместо `~/.parley`; переносит и хост, и данные окна. Не задан — дом
-  выбирается сам: `~/.parley`, а если его нет и есть прежний `~/.harnas`, то он («Переход с
-  harnas»).
-- `PARLEY_<КОМАНДА>_BIN`, например `PARLEY_CLAUDE_BIN` или `PARLEY_CODEX_BIN`, —
-  путь к бинарю агента при нестандартной установке; по нему же решается,
-  доступен ли провайдер.
-- `PARLEY_HOST_IDLE_MS` — сколько хост ждёт без окон и живых сессий, прежде
-  чем выйти; по умолчанию 300 000 мс.
-- `PARLEY_SKIP_VERSION_PROBE=1` — не спрашивать у CLI провайдеров версию
-  (`<команда> --version`) на старте хоста. Без переменной хост делает одну пробу
-  на команду реестра, с таймаутом; версия уходит в окно (`providers.list`) и
-  нигде больше не читается. E2E окна выставляют её, чтобы не запускать настоящие
-  claude и codex.
-- `PARLEY_LIMITS_POLL_MS` — как часто хост перечитывает лимиты подписок (файлы
-  строки статуса Claude Code и логи Codex), мс; по умолчанию 30 000. Число
-  зажимается в диапазон 200…2 147 483 647 (`1` даёт 200); нечисловое значение
-  (пусто, мусор) игнорируется, и опрос идёт раз в 30 секунд. Нужна E2E окна, чтобы
-  не ждать полминуты.
-- `PARLEY_CODEX_STARTUP_MS` — за сколько миллисекунд после запуска Codex должен
-  показать статус (`Ready` или `Working`), прежде чем сессия станет «нужен ты»
-  (экран входа или доверия к папке); по умолчанию 20 000. Целое от 100 до
-  600 000, иное значение игнорируется. Нужна E2E окна, чтобы не ждать двадцать секунд.
+- `PARLEY_HOME` — the home directory instead of `~/.parley`; it moves both the host and the
+  window's data. When it is not set, the home is `~/.parley`.
+- `PARLEY_<COMMAND>_BIN`, for example `PARLEY_CLAUDE_BIN` or `PARLEY_CODEX_BIN` — the path to
+  an agent binary for a non-standard install; it also decides whether a provider is
+  available.
+- `PARLEY_HOST_IDLE_MS` — how long the host waits with no windows and no live sessions before
+  it exits; 300,000 ms by default.
+- `PARLEY_SKIP_VERSION_PROBE=1` — do not ask the providers' CLIs for their version
+  (`<command> --version`) at host start. Without the variable the host makes one probe per
+  registry command, with a timeout; the version goes to the window (`providers.list`) and is
+  read nowhere else. The window's E2E tests set it so as not to launch the real claude and
+  codex.
+- `PARLEY_LIMITS_POLL_MS` — how often the host rereads subscription limits (the Claude Code
+  status line files and the Codex logs), in ms; 30,000 by default. The number is clamped to
+  the range 200…2,147,483,647 (`1` gives 200); a non-numeric value (empty, garbage) is
+  ignored, and polling happens every 30 seconds. The window's E2E tests need it so as not to
+  wait half a minute.
+- `PARLEY_CODEX_STARTUP_MS` — within how many milliseconds after launch Codex must show a
+  status (`Ready` or `Working`) before the session becomes "needs you" (a sign-in or folder
+  trust screen); 20,000 by default. An integer from 100 to 600,000; any other value is
+  ignored. The window's E2E tests need it so as not to wait twenty seconds.
 
-## Состояние агента: хуки и живость
+## Agent state: hooks and liveness
 
-Каждой сессии Parley передаёт `--settings <работа>/settings.json` — файл с
-восемью хуками Claude Code (`UserPromptSubmit`, `Notification`,
-`PermissionRequest`, `Stop`, `SubagentStart`, `SubagentStop`, `SessionStart`,
-`SessionEnd`). Хук не содержит логики: он одной командой дописывает пришедший
-на stdin JSON в журнал сессии.
+For each session Parley passes `--settings <work-dir>/settings.json` — a file with eight
+Claude Code hooks (`UserPromptSubmit`, `Notification`, `PermissionRequest`, `Stop`,
+`SubagentStart`, `SubagentStop`, `SessionStart`, `SessionEnd`). A hook contains no logic: with
+one command it appends the JSON that arrives on stdin to the session's log.
 
 ```
-cat >> "${PARLEY_WORK_DIR:-$HARNAS_WORK_DIR}/events/${PARLEY_SESSION_ID:-$HARNAS_SESSION_ID}.jsonl" || true
+cat >> "$PARLEY_WORK_DIR/events/$PARLEY_SESSION_ID.jsonl" || true
 ```
 
-Адрес берётся из окружения агента: оболочка читает `PARLEY_WORK_DIR` и `PARLEY_SESSION_ID`, а
-если их нет (у процесса, которому положили только прежние), — `HARNAS_WORK_DIR` и
-`HARNAS_SESSION_ID`.
+The path comes from the agent's environment: the shell reads `PARLEY_WORK_DIR` and
+`PARLEY_SESSION_ID`.
 
-Журнал читается инкрементально, с запомненного смещения, и сворачивается в
-`working` / `blocked` / конец хода чистой функцией core. `--settings` мержится с
-вашими настройками, чужие хуки не трогает, в `~/.claude` ничего не пишется. Если
-бинарь этот флаг не принял или каталог недоступен для записи, состояние ведёт
-страховка — тот же jsonl-watcher истории, что и раньше: новая запись ассистента
-значит «работает», тишина дольше `silenceThresholdMs` — «ход закончен». Про
-отсутствующий журнал в строке статуса появляется разовое предупреждение.
+The log is read incrementally, from a remembered offset, and is folded into `working` /
+`blocked` / end of turn by a pure function of core. `--settings` is merged with your settings,
+leaves other people's hooks alone, and nothing is written to `~/.claude`. If the binary did
+not accept this flag or the directory is not writable, a fallback keeps the state: the same
+history jsonl watcher as before. A new assistant entry means "working", and silence longer
+than `silenceThresholdMs` means "turn finished". A one-time warning about a missing log
+appears in the status bar.
 
-**Лимиты подписки.** Рядом с хуками в том же файле лежит `statusLine` — скрипт
-строки статуса (`node <core>/dist/work/statusline-bin.js`, путь абсолютный, как у
-MCP-сервера). Claude Code зовёт его после каждого ответа модели: из входа скрипт
-кладёт `rate_limits` в `<работа>/limits/<id>.json` (`{ at, rateLimits }`, запись
-атомарная) и печатает строку терминала. Свой `statusLine` из настроек Claude Code
-(локальные и общие настройки проекта — каталога, откуда запущен Claude Code, —
-затем ваши; только чтение) он вызывает с тем же вводом и печатает его вывод как
-есть, а если своего нет — модель и процент контекста. Каталог, в который агент
-ушёл потом, не читается: чужой репозиторий внутри проекта не исполнит свою
-строку в обход доверия к папке. Хост раз в 30 секунд собирает значения по
-провайдерам (у Codex — из хвоста самого свежего лога сессии, только корзина
-`codex`) и отдаёт окну; у Claude окна сводятся по сессиям каждое отдельно: при том
-же сбросе берётся большее значение, при разном — окно с более поздним сбросом.
-Окно с прошедшим сбросом не показывается.
+**Subscription limits.** Next to the hooks, the same file holds `statusLine` — a status line
+script (`node <core>/dist/work/statusline-bin.js`, with an absolute path, like the MCP
+server). Claude Code calls it after every model response. From its input the script puts
+`rate_limits` into `<work-dir>/limits/<id>.json` (`{ at, rateLimits }`, an atomic write) and
+prints a terminal line. Your own `statusLine` from the Claude Code settings (the project's
+local and shared settings — of the directory Claude Code was launched from — then yours;
+read-only) it calls with the same input and prints its output as is; if there is none, it
+prints the model and the context percentage. A directory the agent moved to later is not
+read: another repository inside the project cannot run its own status line around folder
+trust. Once every 30 seconds the host gathers the values per provider (for Codex, from the
+tail of the freshest session log, the `codex` bucket only) and gives them to the window. For
+Claude the windows are merged across sessions, each one separately: with the same reset the
+larger value is taken, with different resets the window with the later reset. A window whose
+reset time has passed is not shown.
 
-Что это меняет для вас:
+What this changes for you:
 
-- Пока у сессии настроена строка статуса, Claude Code прячет большинство подсказок
-  футера: `esc to interrupt`, `? for shortcuts`, `hold space to speak`. У сессий
-  Parley, у которых своей строки статуса не было, они пропадут — останется
-  короткая строка «модель · контекст».
-- Поля `padding`, `refreshInterval` и `hideVimModeIndicator` вашей строки могут не
-  доезжать до Claude Code: ключ `statusLine` из `--settings` может заменять ваш
-  целиком (документация Claude Code про вложенные поля молчит), а скрипт вызывает
-  только её команду. Проверить на настоящем `claude` (прогон 2 в `TODOS.md`).
-- Проект — каталог запуска Claude Code (`project_dir`). У сессии в собственном git
-  worktree ищутся настройки самого worktree; `settings.local.json` основного
-  checkout не ищется, и строка статуса, заданная только в нём, не вызывается
-  (будет короткая строка).
-- Команда считается нашей, и не вызывается, только если в ней стоит полный путь
-  нашего скрипта; ваш скрипт с таким же именем файла вызывается как обычно.
-  Команда, не ответившая за 5 секунд, убивается вместе со своей группой
-  процессов, а строка остаётся короткой.
-- Команда вашей строки статуса запускается в отдельной сессии (`detached`, то есть
-  `setsid`), поэтому управляющего терминала у неё нет: то, что читает `/dev/tty`
-  (например, `stty size </dev/tty`), терминала не получит. Если скрипт убит
-  SIGKILL, группа вашей команды может его пережить.
+- While a session has a status line configured, Claude Code hides most footer hints:
+  `esc to interrupt`, `? for shortcuts`, `hold space to speak`. Parley sessions that had no
+  status line of their own will lose them — a short "model · context" line remains.
+- The `padding`, `refreshInterval` and `hideVimModeIndicator` fields of your status line may
+  not reach Claude Code: the `statusLine` key from `--settings` may replace yours entirely
+  (the Claude Code documentation is silent about nested fields), and the script calls only
+  its command. To be checked on a real `claude` (run 2 in `TODOS.md`).
+- The project is the directory Claude Code is launched from (`project_dir`). For a session in
+  its own git worktree, the worktree's own settings are looked up; the main checkout's
+  `settings.local.json` is not looked up, and a status line defined only there is not called
+  (the short line is shown).
+- A command counts as ours, and is not called, only if it contains the full path of our
+  script; your script with the same file name is called as usual. A command that does not
+  answer within 5 seconds is killed together with its process group, and the line stays
+  short.
+- The command of your status line runs in a separate session (`detached`, that is `setsid`),
+  so it has no controlling terminal: whatever reads `/dev/tty` (for example,
+  `stty size </dev/tty`) will not get a terminal. If the script is killed by SIGKILL, your
+  command's group may outlive it.
 
-**Живость.** При старте сессии в карту пишутся `pid`, время старта процесса и
-`launchedBy`. При запуске Parley и на каждое событие watcher (не по таймеру)
-каждая `active` сессия сверяется с ОС: процесс жив и время старта совпало —
-сессия остаётся живой; иначе сессия уходит в `exited`. Сессии, поднятые
-командой CLI без известного pid, считаются живыми, пока обновляется лог.
+**Liveness.** When a session starts, its `pid`, the process start time and `launchedBy` are
+written to the map. When Parley starts and on every watcher event (not on a timer), each
+`active` session is checked against the OS: if the process is alive and the start time
+matches, the session stays alive; otherwise it goes to `exited`. Sessions started by a CLI
+command with no known pid are considered alive while the log keeps being updated.
 
-## Координация агентов
+## Agent coordination
 
-Работа — единица координации внутри проекта: заголовок, цель и сессии разных
-провайдеров, которые знают друг о друге через одну общую карту. Пишет карту
-только Parley; агенты читают её и отчитываются через MCP-сервер.
+A workspace is the unit of coordination inside a project: a title, a goal and sessions from
+different providers that know about one another through one shared map. (In files and in the
+CLI a workspace is called a *work*: `works/`, `work new`, `PARLEY_WORK_DIR`.) Only Parley
+writes the map; agents read it and report through the MCP server.
 
 ```
-<проект>/.parley/works/<work-id>/
-  map.json            карта работы: сессии, статусы, метрики, резюме, сообщения
-  map.json.bak        предыдущая версия — обновляется при каждой записи
-  settings.json       хуки Claude Code для всех сессий работы (--settings)
-  events/<id>.jsonl   журнал хуков сессии: из него выводится состояние агента
-                      (у Codex — строки Stop от его скрипта notify)
-  briefs/<id>.md      стартовый промпт сессии; правится своим редактором
-  mcp/<id>.json       конфиг MCP-сервера для этой сессии
-  limits/<id>.json    лимиты подписки от строки статуса Claude Code (пишет её скрипт)
-  artifacts/          планы, отчёты и прочее, что кладут агенты
+<project>/.parley/works/<work-id>/
+  map.json            the workspace map: sessions, statuses, metrics, summaries, messages
+  map.json.bak        the previous version — updated on every write
+  settings.json       Claude Code hooks for all sessions of the workspace (--settings)
+  events/<id>.jsonl   the session's hook log: the agent's state is derived from it
+                      (for Codex — Stop lines from its notify script)
+  briefs/<id>.md      the session's starting prompt; edited in your own editor
+  mcp/<id>.json       the MCP server config for this session
+  limits/<id>.json    subscription limits from the Claude Code status line (written by its script)
+  artifacts/          plans, reports and the rest that agents put there
 
 ~/.parley/
   host/               host.sock, host.token, host.pid, host.log, host.err
-  desktop/            ui.json, layouts.json, notes/, drops/ — данные окна
-  config.json         настройки Parley (необязателен)
-  providers.json      необязательные переопределения реестра провайдеров
-  works-index.json    глобальный индекс работ: проект, id, заголовок, статус
+  desktop/            ui.json, layouts.json, notes/, drops/ — the window's data
+  config.json         Parley settings (optional)
+  providers.json      optional overrides of the provider registry
+  works-index.json    the global index of workspaces: project, id, title, status
 ```
 
-`PARLEY_HOME` переносит `~/.parley` в другое место — вместе с ним переезжают
-`host/`, `desktop/` и userData окна Electron; этим же тесты держатся подальше
-от вашего настоящего каталога. Каталог `.parley/` проекта прячет сам себя от git:
-созданный Parley, он получает `.gitignore` со строкой `*`, и в чужом репозитории его нет
-ни в `git status`, ни в коммитах. Хотите коммитить его — уберите этот `.gitignore`, заново
-он не появится; прежний `.harnas/` такого файла не получал, коммитить его или прятать — по-прежнему
-ваш выбор. Перенос с прежнего имени оставляет в доме `migrated-from-harnas.json`
-(«Переход с harnas»).
+`PARLEY_HOME` moves `~/.parley` to another place — `host/`, `desktop/` and the Electron
+window's userData move with it; this is also how tests stay away from your real directory. The
+project's `.parley/` directory hides itself from git: when Parley creates it, it gets a
+`.gitignore` with the line `*`, so in someone else's repository it is in neither `git status`
+nor commits. If you want to commit it, remove that `.gitignore`; it will not come back.
 
-В окне сессия заводится ⌘T («New session or room») в активной работе,
-диалогом новой работы (⌘N или «New workspace») и пунктами меню карточки
-(«New session», «New room») или палитры («New session or room», «New room»). `spawn_session` от агента создаёт
-`pending` с брифом; её поднимает сам хост, без диалога. Импорта истории
-`~/.claude` в окне нет.
+In the window a session is created with ⌘T ("New session or room") in the active workspace,
+with the new workspace dialog (⌘N or "New workspace"), and with the menu items of a card
+("New session", "New room") or of the palette ("New session or room", "New room"). A
+`spawn_session` call from an agent creates a `pending` session with a brief; the host itself
+starts it, with no dialog. The window has no import of the `~/.claude` history.
 
-В окне сессия убирается пунктом «Delete» в её меню: живой процесс закрывается
-как и раньше — SIGHUP, ожидание выхода до трёх секунд, потом SIGKILL, — и
-только после выхода исчезает запись. Если у сессии свой worktree, «Delete»
-удаляет и его; открытые вкладки файлов этого worktree перед этим закрываются с
-вопросом о несохранённых правках. Из карты уходят запись, ссылки на неё в
-`contextFrom` и файлы `briefs/<id>.md`, `events/<id>.jsonl`, `mcp/<id>.json`,
-`limits/<id>.json`;
-дочерние сессии поднимаются к родителю удалённой, письма остаются с пометкой
-`deleted`, а `artifacts/` и транскрипт в `~/.claude` не трогаются. Id удалённой
-не переиспользуется, и `wait_for` по нему отвечает агенту `state: deleted`.
-Инструмента удаления у агентов нет — это решение человека.
+In the window a session is removed with "Delete" in its menu. A live process is closed as
+usual — SIGHUP, waiting up to three seconds for it to exit, then SIGKILL — and the record
+disappears only after the process exits. If the session has its own worktree, "Delete"
+removes it too; the open file tabs of that worktree are closed beforehand, with a question
+about unsaved edits. Removed from the map are the record, the references to it in
+`contextFrom`, and the files `briefs/<id>.md`, `events/<id>.jsonl`, `mcp/<id>.json` and
+`limits/<id>.json`. Child sessions move up to the deleted session's parent, messages stay
+marked `deleted`, and `artifacts/` and the transcript in `~/.claude` are not touched. The id
+of a deleted session is not reused, and `wait_for` on it answers the agent with
+`state: deleted`. Agents have no delete tool — it is a human's decision.
 
-Работа целиком убирается пунктом «Delete…» в меню карточки: сначала
-останавливаются её живые сессии, затем уходит весь каталог
-`.parley/works/<id>` (у проекта со старым каталогом — `.harnas/works/<id>`) вместе с
-артефактами и запись в глобальном индексе; транскрипты в `~/.claude` остаются. Если
-каталог работы всё же снесли руками, мёртвую запись индекса снимает
-`parley-core work prune`.
+A whole workspace is removed with "Delete…" in the card menu. First its live sessions are
+stopped, then the whole `.parley/works/<id>` directory goes, with the artifacts, along with
+the entry in the global index; transcripts in `~/.claude` remain. If the workspace directory
+was deleted by hand anyway, `parley-core work prune` removes the dead index entry.
 
-### Что видит агент
+### What the agent sees
 
-Каждой запускаемой сессии Parley генерирует свой конфиг stdio-сервера
-`parley-mcp` под именем `parley` (агент видит инструменты как `mcp__parley__*`) и передаёт
-через окружение `PARLEY_WORK_DIR` и `PARLEY_SESSION_ID` (те же значения лежат и под прежними
-именами `HARNAS_*`, см. «Переход с harnas») — представляться агенту не нужно, сервер знает,
-кто звонит. Инструменты:
+For every session it launches, Parley generates its own config of the stdio server
+`parley-mcp` under the name `parley` (the agent sees the tools as `mcp__parley__*`) and passes
+`PARLEY_WORK_DIR` and `PARLEY_SESSION_ID` through the environment — the agent does not need
+to introduce itself; the server knows who is calling. The tools:
 
-| Инструмент | Что делает |
+| Tool | What it does |
 | --- | --- |
-| `get_map()` | вся карта плюс провайдеры реестра с пометкой доступности, списком моделей (`models`) и флагом усилия (`effort`) |
-| `report(status, summary, artifacts)` | `done` / `failed` — итог, `progress` — промежуточное резюме |
-| `spawn_session(provider, label, task, contextFrom?, agent?, worktree?, model?, effort?)` | новая сессия в этой же работе; поднимет её сам хост. `model` — `id` из списка провайдера в `get_map` (не из списка — ошибка, сессия не создаётся), `effort` — `low`, `medium` или `high`; провайдер без флага выбор отбрасывает |
-| `wait_for(target, timeoutSec)` | ждать завершения сессии или сообщения; по таймауту — `running` |
-| `send_message(to?, text, kind?, room?)` | письмо сессии или в комнату: `note`, `question` или `decision` |
-| `check_inbox()` | непрочитанные входящие с их видом; помечает прочитанными |
-| `create_room(title, members, lead?)` | заводит комнату переписки для нескольких сессий; ведущий — `lead`, без него сам вызывающий; вызывающий и участники уходят из прочих комнат работы (одна комната на сессию) |
-| `read_room(room, limit?)` | лента комнаты для контекста, не трогая отметок |
-| `propose_decision(room, text)` | ведущий предлагает решение человеку; повтор до ответа заменяет текст |
-| `add_to_room(room, session)` | ведущий вводит в свою комнату живую сессию работы; она уходит из прочих комнат (одна комната на сессию), в ленте — «@s04 joined the room» |
-| `close_session(target)` | закрывает сессию насовсем; только после явного согласия человека |
-| `read_guide(topic?)` | подробный гид по Parley: без `topic` — весь, с `topic` — один раздел |
+| `get_map()` | the whole map, plus the registry's providers with an availability mark, a list of models (`models`) and an effort flag (`effort`) |
+| `report(status, summary, artifacts)` | `done` / `failed` — the result, `progress` — an intermediate summary |
+| `spawn_session(provider, label, task, contextFrom?, agent?, worktree?, model?, effort?)` | a new session in the same workspace; the host itself starts it. `model` is an `id` from the provider's list in `get_map` (a value not in the list is an error, and the session is not created), `effort` is `low`, `medium` or `high`; a provider without the flag discards the choice |
+| `wait_for(target, timeoutSec)` | wait for a session to finish or for a message; on timeout it returns `running` |
+| `send_message(to?, text, kind?, room?)` | a message to a session or to a room: `note`, `question` or `decision` |
+| `check_inbox()` | unread incoming messages with their kinds; marks them as read |
+| `create_room(title, members, lead?)` | creates a conversation room for several sessions; the lead is `lead`, and without it the caller; the caller and the members leave the workspace's other rooms (one room per session) |
+| `read_room(room, limit?)` | the room's feed for context, without touching read marks |
+| `propose_decision(room, text)` | the lead proposes a decision to the human; a repeated call before the answer replaces the text |
+| `add_to_room(room, session)` | the lead brings a live session of the workspace into their room; it leaves its other rooms (one room per session), and the feed shows "@s04 joined the room" |
+| `close_session(target)` | closes a session for good; only after the human's explicit consent |
+| `read_guide(topic?)` | a detailed guide to Parley: without `topic` — all of it, with `topic` — one section |
 
-Пути артефактов — всегда относительно корня проекта. Сессия, запущенная с нашим
-конфигом, но без `PARLEY_SESSION_ID` (или прежнего `HARNAS_SESSION_ID`), получает только
-`get_map` и `read_guide`.
+Artifact paths are always relative to the project root. A session started with our config but
+without `PARLEY_SESSION_ID` gets only `get_map` and `read_guide`.
 
-Инструменты несут аннотации MCP, сверенные с кодом: `get_map`, `read_room`,
-`read_guide` и `wait_for` — `readOnlyHint: true`; остальные, кроме `close_session`,
-пишут в карту, но не удаляют ни сессий, ни комнат, ни писем (`readOnlyHint: false`,
-`destructiveHint: false`, `openWorldHint: false`); `close_session` —
-`destructiveHint: true`. Codex решает по ним, спрашивать ли человека перед вызовом:
-без аннотаций он спрашивает перед каждым (так написано в его исходниках), с ними —
-только перед `close_session`.
+The tools carry MCP annotations, checked against the code: `get_map`, `read_room`,
+`read_guide` and `wait_for` are `readOnlyHint: true`; the others, except `close_session`,
+write to the map but delete no sessions, rooms or messages (`readOnlyHint: false`,
+`destructiveHint: false`, `openWorldHint: false`); `close_session` is `destructiveHint: true`.
+Codex uses them to decide whether to ask the human before a call: without annotations it asks
+before every one (so its sources say), with them — only before `close_session`.
 
-Гид агенту выдаётся двумя слоями, от дешёвого к подробному.
+The guide is given to the agent in two layers, from the cheap one to the detailed one.
 
-Первый слой — короткая системная вставка (`--append-system-prompt`, не больше
-четырнадцати строк): в какой работе и какой сессии агент находится, цель работы,
-одиннадцать инструментов (по строке на каждый, комнаты — одной строкой вместе с
-ролями ведущего и участника; двенадцатый, `add_to_room`, в вставку не влез — он
-описан в самом инструменте и в `read_guide`) и правило — подзадачу этой темы,
-которая живёт дольше одного хода или должна идти параллельно, отдавать в
-`spawn_session`, а собственных субагентов держать для коротких разведок и
-правок. Её получают все запуски Parley и команда
-`parley-core work session new`; системный промпт не хранится в транскрипте,
-поэтому вставка идёт заново и при `--resume`. Провайдеру, у которого такого флага нет, она не достаётся:
-подстановка отбрасывается молча, как файл настроек.
+The first layer is a short system prompt insert (`--append-system-prompt`, at most fourteen
+lines). It says which workspace and which session the agent is in, the goal of the workspace,
+eleven tools (a line for each; the room tools take one line together with the lead and member
+roles; the twelfth, `add_to_room`, did not fit into the insert — it is described in the tool
+itself and in `read_guide`) and a rule: hand a subtask of this topic that lives longer than
+one turn or must run in parallel over to `spawn_session`, and keep the agent's own subagents
+for short exploration tasks and edits. All Parley launches and the
+`parley-core work session new` command receive it. The system prompt is not stored in the
+transcript, so the insert is sent again on `--resume` as well. A provider with no such flag
+does not get it: the substitution is dropped silently, like the settings file.
 
-Второй слой — `read_guide(topic?)`: сущности и жизненный цикл сессии, что класть
-в резюме и артефакты, как устроен бриф, как ждать подчинённую сессию, чего не
-делать. Без `topic` он отдаёт весь гид, с `topic` — один раздел: `overview`,
-`lifecycle`, `tools`, `rooms`, `lead`, `member`, `brief`, `window`, `worktrees`,
-`letters`, `rules`; неизвестная тема — ошибка со списком. Он инструмент, а не
-MCP-ресурс: у модели в Claude Code нет инструмента чтения ресурсов, и ресурс
-остался бы мёртвым слоем. Сессии в своём worktree бриф отдельной строкой
-называет ветку, базу и путь папки и отсылает за подробностями к теме
-`worktrees`: там запреты в своём worktree — не переключать ветку, не
-переписывать её историю, не пушить. Тема `window` («Окно человека») описывает
-четыре вида блоков, которые окно вставляет агенту в терминал (заметки к диффу,
-элемент страницы из Design Mode, просьба разрешить конфликт слияния, путь
-брошенного файла или скриншота). Ссылки на гид в брифе и внутри самого гида
-идут по имени темы, а не по заголовку раздела: `read_guide` заголовка не
-принимает.
+The second layer is `read_guide(topic?)`: the entities and the lifecycle of a session, what to
+put into the summary and the artifacts, how the brief is built, how to wait for a subordinate
+session, and what not to do. Without `topic` it returns the whole guide, with `topic` one
+section: `overview`, `lifecycle`, `tools`, `rooms`, `lead`, `member`, `brief`, `window`,
+`worktrees`, `letters`, `rules`; an unknown topic is an error with a list. It is a tool, not
+an MCP resource: the model in Claude Code has no tool for reading resources, and a resource
+would have remained a dead layer. For a session in its own worktree the brief names the
+branch, the base and the folder path on a separate line and refers to the `worktrees` topic
+for details; the prohibitions in one's own worktree are there — do not switch the branch, do
+not rewrite its history, do not push. The `window` topic ("The human's window") describes the
+four kinds of blocks that the window inserts into the agent's terminal (notes on a diff, a
+page element from Design Mode, a request to resolve a merge conflict, the path of a dropped
+file or screenshot). References to the guide in the brief and inside the guide itself go by
+topic name, not by section heading: `read_guide` does not accept a heading.
 
-### Скилл `parley` в проекте
+### The `parley` skill in the project
 
-Чтобы агент сам нашёл, как пользоваться Parley, в проект кладётся короткий
-скилл. Claude Code и Codex читают навыки из разных папок (документация
-«Extend Claude with skills» и «Build skills»): Codex — `.agents/skills` от текущей
-папки до корня репозитория, Claude Code — `.claude/skills`, и папке навыка там
-разрешено быть симлинком. Скилл — заглушка: когда подключаться (в сессии есть
-MCP-сервер `parley`) и как загрузить полный гид у работающего приложения —
-`read_guide` по темам. Сам гид в файл не копируется и от версии Parley не
-отстаёт.
+So that an agent can find out by itself how to use Parley, a short skill is placed in the
+project. Claude Code and Codex read skills from different folders (the documentation "Extend
+Claude with skills" and "Build skills"): Codex reads `.agents/skills` from the current folder
+up to the repository root, Claude Code reads `.claude/skills`, and a skill folder is allowed
+to be a symlink there. The skill is a stub: it says when to engage (the session has the MCP
+server `parley`) and how to load the full guide from the running app — `read_guide` by topic.
+The guide itself is not copied into a file and never falls behind the Parley version.
 
-Перед каждым запуском сессии — новой, `resume`, фоновым `autoLaunch` — хост
-кладёт в корень проекта и в корень worktree сессии (оба CLI ищут навыки только до
-корня своей рабочей копии):
+Before every session launch — a new one, `resume`, a background `autoLaunch` — the host puts
+the following into the project root and into the session's worktree root (both CLIs look for
+skills only up to the root of their working copy):
 
 ```
-<корень>/.agents/skills/parley/SKILL.md   канонная копия, её читает Codex
-<корень>/.claude/skills/parley            относительный симлинк ../../.agents/skills/parley
-<проект>/.parley/skills-receipt.json      учёт: свои пути и хеш SKILL.md
-<репозиторий>/.git/info/exclude           /.agents/skills/parley и /.claude/skills/parley
+<root>/.agents/skills/parley/SKILL.md    the canonical copy, read by Codex
+<root>/.claude/skills/parley             a relative symlink ../../.agents/skills/parley
+<project>/.parley/skills-receipt.json    the receipt: its own paths and the hash of SKILL.md
+<repository>/.git/info/exclude           /.agents/skills/parley and /.claude/skills/parley
 ```
 
-Симлинк положить нельзя (файловая система, права) — на его месте копия, и это
-записано в учёте. `info/exclude` общий у всех worktree репозитория
-(`git rev-parse --git-common-dir`), поэтому скилл не виден ни в `git status`, ни в
-«Commit all» окна; дописываются только недостающие строки, чужие не трогаются, у
-проекта в подкаталоге репозитория строки идут с его префиксом. Учёт лежит в каталоге
-состояния проекта — `.parley/` (у проекта, где остался прежний `.harnas/`, — в нём); пути в
-учёте — этой машины, а сам `.parley/` прячет себя от git.
+If a symlink cannot be created (file system, permissions), a copy takes its place, and this is
+recorded in the receipt. `info/exclude` is shared by all worktrees of the repository
+(`git rev-parse --git-common-dir`), so the skill is visible neither in `git status` nor in the
+window's "Commit all"; only missing lines are appended, other people's lines are not touched,
+and for a project in a subdirectory of the repository the lines carry its prefix. The receipt
+lives in the project's state directory, `.parley/`; the paths in the receipt belong to this
+machine, and `.parley/` itself hides from git.
 
-**Чужое не трогается.** Своим путь делает только учёт. Устаревший свой
-`SKILL.md` при новой версии Parley обновляется. Путь, которого нет в учёте и
-который уже существует (собственный навык `parley`, скилл, закоммиченный в
-репозиторий), остаётся как есть: хост пишет его в `host.log`, а окно показывает в
-строке статуса «Agent skill not installed — that path already exists and wasn't
-created by Parley». Правленный вами `SKILL.md` тоже не затирается. Если по дороге
-к пути лежит симлинк или файл вместо каталога (например, `.claude` → `~/.claude`
-в чужом репозитории), запись за него не идёт.
+**Other people's files are not touched.** Only the receipt makes a path Parley's own. An
+outdated `SKILL.md` of its own is updated when Parley has a new version. A path that is not in
+the receipt and already exists (your own `parley` skill, a skill committed to the repository)
+is left as it is: the host writes it to `host.log`, and the window shows in the status bar
+"Agent skill not installed — that path already exists and wasn't created by Parley". A
+`SKILL.md` that you edited is not overwritten either. If a symlink or a file lies on the way
+to the path in place of a directory (for example, `.claude` → `~/.claude` in someone else's
+repository), nothing is written past it.
 
-**Прежняя установка.** Скилл `harnas`, который ставил Parley до переименования, убирается при
-запуске сессии тем же учётом — в корне проекта и в worktree запускаемой сессии: папка
-`.agents/skills/harnas` — только если в ней один `SKILL.md` с записанным хешем, симлинк
-`.claude/skills/harnas` — только если он ведёт туда, куда вёл; строки `info/exclude` со старой
-меткой уходят, когда прежнего в учёте не осталось. Правленное вами, заменённое и чужое не
-трогается.
+**Turn off:** "Install agent skills into projects" in Settings → Agents, `"agentSkills": false`
+in `config.json`, or `PARLEY_AGENT_SKILLS=0`. When it is off, the host neither installs nor
+updates the skill; it does not delete what is already installed — remove that by hand
+(`.agents/skills/parley`, `.claude/skills/parley` and the lines in `info/exclude`).
 
-**Выключить:** «Install agent skills into projects» в Settings → Agents, `"agentSkills": false`
-в `config.json` или `PARLEY_AGENT_SKILLS=0`. Выключено — хост скилл не ставит и не
-обновляет, а прежний `harnas` не убирает; уже поставленное он не удаляет — уберите его руками
-(`.agents/skills/parley`, `.claude/skills/parley` и строки в `info/exclude`).
+**Boundary.** Parley writes nothing to `~/.claude`, `~/.codex` and `~/.agents`. It writes only
+the skill files in the project folder and in session worktrees, the receipt in the project's
+state directory (`.parley/`), and lines in `info/exclude`. A project located in the home
+folder itself or in an agent's directory does not get the skill.
 
-**Рамка.** В `~/.claude`, `~/.codex` и `~/.agents` Parley ничего не пишет.
-Пишутся только файлы скилла в папке проекта и в worktree сессий, учёт в каталоге
-состояния проекта (`.parley/`) и строки в `info/exclude`. Проект, лежащий в самой
-домашней папке или в каталоге агента, скилл не получает.
+### Session conversation
 
-### Разговор сессий
+**Rooms belong to their members.** An agent creates a room for its subordinates with the
+`create_room(title, members, lead?)` tool. A human does it with the "New session or room"
+dialog with two or more agents ("New room" in the card menu and in the palette), or by
+dropping one session onto another in the sidebar. A room stands in a card in the place of its
+members and opens as a tab; the `#`/`#N` menu on the workspace card lists all of them. The
+room's feed is visible to all members. A message with no addressee wakes everyone, and an
+addressed one wakes only its addressees: `send_message(to?, text, kind, room)`.
+`read_room(room)` reads the feed for context without touching read marks. A human writes to a
+room from the input field at the bottom of the feed: with no mentions the message goes to
+everyone, `@` opens the member menu, and the mentioned members become the addressees (Enter
+sends, Shift+Enter inserts a line break). An unfinished draft is kept per room until the
+window restarts.
 
-**Комнаты — по участникам.** Агент заводит комнату для своих подчинённых
-инструментом `create_room(title, members, lead?)`; человек — диалогом «New session
-or room» с двумя и больше агентами («New room» в меню карточки и в палитре) либо
-броском одной сессии на другую в сайдбаре. Комната стоит в карточке на месте
-своих участников и открывается вкладкой; меню `#`/`#N` на карточке работы
-перечисляет их все. Лента комнаты видна всем участникам. Письмо без адресата будит всех,
-адресное — только адресатов: `send_message(to?, text, kind, room)`.
-`read_room(room)` читает ленту для контекста, не трогая отметок. Человек пишет
-в комнату из поля ввода внизу ленты: без упоминаний — всем, `@` открывает меню
-участников, упомянутые становятся адресатами (Enter отправляет, Shift+Enter —
-перенос); недописанное держится на комнату до перезапуска окна.
+**The lead and the decision.** A room has one lead: the assigned `lead`, or, without one, the
+creator (for an agent) or the first member (for the window and for old maps); a closed lead is
+replaced by the first live member. For a human's task, every member speaks up in the room with
+one message; the lead collects the positions and calls `propose_decision(room, text)`, and
+does not start work until the human answers. When the decision is accepted, the lead gets the
+message "Decision accepted.", the decision is sent to the room as a `decision` message, and the
+parts are handed out with mentions such as `@s02`. While a decision waits, it sits at the end
+of the room's feed as a card with the buttons "Accept" and "Return for rework". A return is
+the message "Returned for rework: …": the lead reworks the decision and proposes it again. The
+lead can also bring one more session into the room with `add_to_room(room, session)`, for
+example a just-spawned executor: it leaves the workspace's other rooms and does not get a
+message about being added — the lead writes to it in the room on their own. The roles of the
+lead and of a member are described in `read_guide` (the `lead` and `member` topics), in the
+brief and in the system prompt insert.
 
-**Ведущий и решение.** У комнаты один ведущий: назначенный `lead`, а без него —
-создатель (для агента) или первый участник (для окна и старых карт); закрытого
-подменяет первый живой участник. На задачу человека всем участники высказываются в
-комнате одним сообщением, ведущий собирает позиции и зовёт
-`propose_decision(room, text)`; до ответа человека он работу не начинает. Принято —
-ведущему приходит письмо «Decision accepted.», решение разослано комнате письмом
-`decision`, части раздаются упоминаниями `@s02`. Пока решение ждёт, оно стоит
-в конце ленты комнаты карточкой с кнопками «Accept» и «Return for rework».
-Возврат — письмо «Returned for rework: …»: ведущий переделывает и предлагает
-снова. Ведущий вводит в комнату и ещё одну сессию — `add_to_room(room, session)`,
-например только что порождённого исполнителя: она уходит из прочих комнат
-работы, а письма о добавлении не получает — ведущий пишет ей в комнату сам. Роли
-ведущего и участника описаны в `read_guide` (темы `lead` и `member`), в брифе и
-в системной вставке.
+**A session's life has two axes.** The process: `pending` → `active` → `sleeping` (no process,
+but the session is still reachable) → `closed`. The outcome from `report`: `done` or `failed`,
+and it does not close the session. A message to a sleeping session wakes it: `claude --resume`
+with the pointer in the argument, at most `resumeRate` times per hour (6 by default). "Stop" in
+the menu moves a session to `sleeping`, and "Close…" — with the confirmation "Session will no
+longer receive mail" — to `closed`, after which it receives no messages. An agent closes a
+session with the `close_session` tool only after the human's explicit consent. If the host
+crashed mid-turn, the window shows the banner "Interrupted mid-turn: …" with a "Resume all"
+button. Pausing auto-wake in the status bar accumulates messages and wakes nobody.
 
-**Жизнь сессии — две оси.** Процесс: `pending` → `active` → `sleeping`
-(процесса нет, но сессия на связи) → `closed`. Итог из `report`: `done` или
-`failed`, и он сессию не закрывает. Письмо спящей сессии поднимает её:
-`claude --resume` с указателем в аргументе, не больше `resumeRate` раз в час
-(по умолчанию 6). «Stop» в меню переводит сессию в `sleeping`, «Close…» — с
-подтверждением «Session will no longer receive mail» — в `closed`, и писем она
-больше не получает. Агент закрывает сессию инструментом `close_session` только
-после явного согласия человека. Если хост упал посреди хода, окно покажет
-баннер «Interrupted mid-turn: …» с кнопкой «Resume all». Пауза будильника в
-строке статуса копит письма и никого не будит.
+**A worktree per session.** The "New session or room" dialog (⌘T) and the new workspace
+dialog have an "In its own worktree" switch; for an agent it is the `worktree: true`
+parameter of `spawn_session`. The host runs `git worktree add` into
+`<worktreeRoot>/<project folder name>-<6 hex>/<w-id>-<s-id>` (for example,
+`…/shop-a1b2c3/w-0003-s-02`) with the branch `parley/<w-id>/<s-id>` (for example,
+`parley/w-0003/s-02`). The base is the parent's branch if the parent itself is in a worktree,
+otherwise the branch (or commit) of the project folder. The path is tied to the session:
+`--resume` runs from the same directory. The "Changes" item in any session's menu opens the
+"Changes" tab of the right sidebar: the diff of the branch and of uncommitted changes against
+the base. The main button changes with the state: "Commit", "Commit all in folder", "Merge
+into `<base>`" (a `--no-ff` merge commit, only when the base is clean) or "Ask agent to
+resolve" (opens a dialog with an editable text and "Send"). The Parley state directory
+(`.parley/`) does not count as dirty. To throw a whole worktree away, use "⋯" → "Discard
+worktree…": the worktree and the branch are deleted, and the session is stopped and closed. If
+Claude waits for trust in the new folder, the host sends a notification, and the session row
+shows the hint "Not responding since launch — may be waiting for folder trust". Parley does
+not write trust to `~/.claude.json`; you must answer in the session's own terminal.
 
-**Worktree на сессию.** В диалоге «New session or room» (⌘T) и в диалоге новой
-работы есть переключатель «In its own worktree»; у агента — параметр `worktree: true`
-у `spawn_session`. Хост делает `git worktree add` в
-`<worktreeRoot>/<имя папки проекта>-<6 hex>/<w-id>-<s-id>` (например,
-`…/shop-a1b2c3/w-0003-s-02`) с веткой `parley/<w-id>/<s-id>` (например,
-`parley/w-0003/s-02`); база — ветка родителя, если он сам в worktree, иначе
-ветка (или коммит) папки проекта. Путь закреплён за сессией: `--resume` идёт
-из того же каталога. Пункт «Changes» в меню любой сессии открывает вкладку
-«Changes» правого сайдбара: дифф ветки и незакоммиченного против базы, а
-главная кнопка меняется по состоянию — «Commit», «Commit all in folder»,
-«Merge into <база>» (merge-коммит `--no-ff`, только при чистой базе) или «Ask
-agent to resolve» (открывает диалог с редактируемым текстом и «Send»).
-Каталог состояния Parley (`.parley/`, как и прежний `.harnas/`) грязью не
-считается. Отбросить worktree целиком — «⋯» → «Discard worktree…»: worktree и
-ветка удаляются, сессия останавливается и закрывается. Если Claude ждёт доверия
-к новой папке, хост пришлёт уведомление; в строке сессии — подсказка «Not
-responding since launch — may be waiting for folder trust»: доверие в
-`~/.claude.json` Parley не пишет, ответить нужно в терминале самой сессии.
+The default worktree root is `~/parley/worktrees`.
 
-Корень по умолчанию — `~/parley/worktrees`. Worktree и ветки сессий, заведённых до
-переименования (`~/harnas/worktrees/…`, `harnas/…`), остаются как есть и работают так же:
-путь и ветка записаны в карте сессии («Переход с harnas»).
+Sessions of one workspace write to each other with messages: `send_message(to, text, kind)`
+puts a message into the map, and `check_inbox()` picks it up. For agents a **thread** is
+derived from the map and not stored — it is the messages of one parent's subtree: a session
+with a parent shares a thread with the parent and its siblings, a root with children has its
+own, and a lone root has the whole workspace.
 
-Сессии одной работы переписываются письмами: `send_message(to, text, kind)`
-кладёт письмо в карту, `check_inbox()` его забирает. Для агентов **тред**
-выводится из карты, а не хранится — это письма поддерева одного родителя: у
-сессии с родителем тред общий с ним и сёстрами, у корня с детьми — свой, у
-одинокого корня — вся работа.
+There are three kinds of message: `note` — for information, `question` — waiting for an
+answer, `decision` — we have agreed. The etiquette is the same for all sessions and repeated
+in the brief, the guide and the server's `instructions`: answer only a `question`, do not
+answer a `note` or a `decision`, and record an agreement with a single `decision` message.
+Maps written before 2026-09-08 are read with the kind `note`.
 
-Видов письма три: `note` — к сведению, `question` — жду ответа, `decision` —
-мы договорились. Этикет одинаков для всех сессий и повторён в брифе, гиде и
-`instructions` сервера: отвечать только на `question`, на `note` и `decision`
-не отвечать, договорённость фиксировать одним письмом `decision`. Карты,
-написанные до 2026-09-08, читаются с видом `note`.
+**Delivery.** When the addressee has finished its turn and is not typing anything, the host
+itself types a pointer into its terminal: "New messages (N). Call check_inbox." (translated
+here; the text the agent sees is in Russian). If the messages came to a room, the room's name
+or title is in the middle of the phrase. A message wakes a sleeping session through
+`claude --resume` with the same pointer in the argument, no more often than `resumeRate`
+times per hour. The pointer delivers nothing and does not touch the map: the text of a message
+is brought by `check_inbox`, so `readAt`/`readBy` still mean "the agent has read it", not "we
+have sent it". The `<channel source="parley">` tag (a channel push) exists only in sessions
+started by the `parley-core` CLI with `channelPush`; the guide, the system prompt insert and
+the skill stub tell the agent exactly this: in the window, messages arrive as a pointer.
 
-**Доставка.** Когда адресат закончил ход и ничего не набирает, хост сам
-печатает ему в терминал указатель «Новые письма (N). Вызови check_inbox.» — с
-именем или названием комнаты в середине фразы, если письма пришли туда.
-Спящую сессию письмо поднимает через `claude --resume` с тем же указателем в
-аргументе, не чаще `resumeRate` раз в час. Указатель ничего не доставляет и
-карту не трогает: текст письма приносит `check_inbox`, поэтому
-`readAt`/`readBy` по-прежнему значит «агент прочитал», а не «мы отправили». Тег
-`<channel source="parley">` (звонок через channel) бывает только у сессий, поднятых
-CLI `parley-core` с `channelPush`; гид, системная вставка и заглушка скилла говорят
-агенту именно это: в окне письма приходят указателем.
+**Cap.** Two polite agents can keep writing to each other until the subscription limit runs
+out, so `send_message` counts the sender's messages over a sliding hour: beyond `messageRate`
+(20 by default) no message is created, and the agent is told to report through `report` and to
+turn to the human. A sliding hour distinguishes a loop from honest long work and recovers by
+itself.
 
-**Потолок.** Два вежливых агента способны переписываться, пока не кончится
-лимит подписки, поэтому `send_message` считает письма отправителя за
-скользящий час: сверх `messageRate` (по умолчанию 20) письмо не создаётся, а
-агенту сказано отчитаться через `report` и обратиться к человеку. Скользящий
-час отличает петлю от честной долгой работы и восстанавливается сам.
+### Core CLI
 
-### CLI ядра
-
-Слой работает и из обычного терминала — ядро печатает в stdout только JSON
-(в установленном виде это бинарь `parley-core`):
+The layer works from an ordinary terminal too — the core prints only JSON to stdout (when
+installed, this is the `parley-core` binary):
 
 ```bash
-node packages/core/dist/cli.js work new --title "Авторизация" --goal "логин по e-mail"
+node packages/core/dist/cli.js work new --title "Authentication" --goal "login by e-mail"
 node packages/core/dist/cli.js work list
 node packages/core/dist/cli.js work prune
 node packages/core/dist/cli.js work map --work w-0001
 node packages/core/dist/cli.js work session new \
-  --work w-0001 --provider claude --label тесты --task "прогнать e2e"
+  --work w-0001 --provider claude --label tests --task "run e2e"
 ```
 
-Последняя команда создаёт `pending`-запись, пишет бриф, MCP-конфиг и файл
-настроек с хуками и печатает готовую команду запуска (`command`, `args`,
-`cwd`, `env`). Запущенный ею стоковый `claude` видит карту, отчитывается и
-может породить свои сессии; PTY такой сессии не у хоста, и подключить к ней
-терминал окна нельзя.
+The last command creates a `pending` record, writes the brief, the MCP config and the settings
+file with hooks, and prints a ready launch command (`command`, `args`, `cwd`, `env`). The
+stock `claude` launched with it sees the map, reports, and can spawn its own sessions; the PTY
+of such a session does not belong to the host, and the window's terminal cannot be attached
+to it.
 
-## Что где лежит
+## What lives where
 
-- `packages/core` — чтение истории: потоковый разбор `.jsonl`, версионированные
-  адаптеры схем, индекс сессий, watcher и CLI. Наружу отдаёт JSON и типы,
-  про UI ничего не знает.
-  - `src/work/` — карта работы: типы, хранилище с блокировкой, бриф, метрики,
-    MCP-конфиг, файл настроек с хуками и `statusLine` (`statusline.ts`,
-    `statusline-bin.ts` — лимиты подписки), журнал событий и `activity`, живость
-    по pid, комнаты и решения (`rooms.ts`, `proposals.ts`), дозаказ резюме, гид
-    по темам (`guide.ts`), скилл агентов (`skill.ts` — заглушка,
-    `skill-install.ts` — установка), скрипт `notify` Codex (`codex-notify.ts`).
-  - `src/config.ts` — `config.json` и `PARLEY_*` (прежние `HARNAS_*` тоже) с дефолтами и
-    валидацией.
-  - `src/names.ts` — единственный источник имён: каталоги дома и проекта, префиксы переменных,
-    имена сервера MCP и скилла, префикс ветки, корень worktree; `src/migrate.ts` — перенос
-    данных с прежнего имени («Переход с harnas»).
-  - `src/mcp/` — сервер `parley-mcp` и его инструменты.
-  - `src/providers.ts` — реестр провайдеров: чем запускать, как передать id,
-    MCP-конфиг, файл настроек, промпт, модель и усилие;
-    `src/provider-models.ts` — встроенные списки моделей.
-- `packages/desktop` — окно на Electron.
-  - `src/main/` — процесс main: окно и меню, белый список IPC (`ipc.ts`,
-    `files/ipc.ts`), хранилища `~/.parley/desktop/` (раскладки, `ui.json`, заметки,
-    `drops/`), запуск и соединение с хостом, перенос дома при старте (`index.ts`) и выбор
-    каталога данных Electron (`user-data.ts`), страж встроенного браузера (`browser/`).
-  - `src/preload/` — мост `window.parley` в страницу.
-  - `src/renderer/` — интерфейс на React: сайдбар работ и строки комнат,
-    раскладка и вкладки, комнаты (`components/rooms`), диалоги
-    (`components/dialogs`), внимание и уведомления (`attention/`), терминал,
-    файлы и редактор, «Изменения» и дифф, палитра, браузер; токены темы —
-    `styles/tokens.css`.
-  - `src/shared/` — типы, общие для main и страницы, и все тексты окна (`strings.ts`).
-  - `e2e/` — сквозные тесты Playwright на настоящем хосте.
-- `packages/host` — `parley-host`: сервер на unix-сокете, PTY и снимки экрана,
-  сессии, будильник, комнаты, лимиты подписок, worktree и «Изменения», на старте — перенос
-  каталогов состояния проектов; живёт в `~/.parley/host/`
-  (`host.sock`, `host.token`, `host.pid`, `host.log`, `host.err`).
-- `packages/protocol` — типы методов и событий между окном и хостом, версия
-  протокола, кадрирование сообщений.
-- `docs/specs/` — спецификации слоя координации (`2026-09-02-coordination-design.md`,
-  `2026-09-23-agent-room-design.md`) и окна: `2026-09-26-desktop-design.md` —
-  хост, комнаты, доставка, worktree, рамка; `2026-09-26-desktop-orca-ui-design.md`
-  — раскладка и поведение окна; `2026-09-29-desktop-rooms-organic-design.md` —
-  облик Organic, комнаты и решения, лимиты подписок (3.5), Codex (3.6); их
-  планы — `2026-09-26-desktop-plan*.md`, `2026-09-26-desktop-orca-ui-plan*.md`
-  и `2026-09-29-desktop-rooms-organic-plan.md`. Исходник дизайна комнат
-  (прототип, снимки) — `docs/design/2026-09-29-rooms-organic/`. Спецификации и планы писались
-  под прежним именем `harnas` и остаются как историческая запись; переименование в коде —
-  `2026-09-30-parley-rename-plan.md`.
-- `.ralph/specs/` — спецификации v0–v2: слой данных, старый UI, PTY, раннеры.
-- `docs/schema/` — снимки реальных схем обоих провайдеров, по которым сверяется парсер.
-- `NOTICE` — лицензии стороннего кода в окне: Orca и shadcn/ui (MIT), Figtree
-  и Caprasimo (OFL 1.1), Monaco Editor (MIT), PDF.js (Apache-2.0; его cmaps и шрифты Foxit
-  — BSD-3-Clause); происхождение значков Claude и Codex и чьи это знаки.
-- `TODOS.md` — отложенная работа (прогоны по важности).
+- `packages/core` — reading history: streaming `.jsonl` parsing, versioned schema adapters,
+  the session index, the watcher and the CLI. It exposes JSON and types and knows nothing
+  about the UI.
+  - `src/work/` — the workspace map: types, the store with locking, the brief, metrics, the
+    MCP config, the settings file with hooks and `statusLine` (`statusline.ts`,
+    `statusline-bin.ts` — subscription limits), the event log and `activity`, liveness by
+    pid, rooms and decisions (`rooms.ts`, `proposals.ts`), on-demand summaries, the guide by
+    topic (`guide.ts`), the agent skill (`skill.ts` — the stub, `skill-install.ts` — the
+    installation), the Codex `notify` script (`codex-notify.ts`).
+  - `src/config.ts` — `config.json` and `PARLEY_*`, with defaults and validation.
+  - `src/names.ts` — the single source of names: the home and project directories, the
+    variable prefixes, the MCP server and skill names, the branch prefix, the worktree root.
+  - `src/mcp/` — the `parley-mcp` server and its tools.
+  - `src/providers.ts` — the provider registry: what to launch with, how to pass the id, the
+    MCP config, the settings file, the prompt, the model and the effort;
+    `src/provider-models.ts` — the built-in model lists.
+- `packages/desktop` — the Electron window.
+  - `src/main/` — the main process: the window and the menu, the IPC allowlist (`ipc.ts`,
+    `files/ipc.ts`), the `~/.parley/desktop/` stores (layouts, `ui.json`, notes, `drops/`),
+    starting the host and connecting to it, the embedded browser guard (`browser/`).
+  - `src/preload/` — the `window.parley` bridge into the page.
+  - `src/renderer/` — the React interface: the workspace sidebar and the room rows, the layout
+    and tabs, rooms (`components/rooms`), dialogs (`components/dialogs`), attention and
+    notifications (`attention/`), the terminal, files and the editor, "Changes" and the diff,
+    the palette, the browser; the theme tokens are in `styles/tokens.css`.
+  - `src/shared/` — the types shared by main and the page, and all the window's texts
+    (`strings.ts`).
+  - `e2e/` — end-to-end Playwright tests against a real host.
+- `packages/host` — `parley-host`: a server on a unix socket, PTYs and screen snapshots,
+  sessions, auto-wake, rooms, subscription limits, worktrees and "Changes". It lives in
+  `~/.parley/host/` (`host.sock`, `host.token`, `host.pid`, `host.log`, `host.err`).
+- `packages/protocol` — the types of the methods and events between the window and the host,
+  the protocol version, message framing.
+- `docs/specs/` — specifications of the coordination layer (`2026-09-02-coordination-design.md`,
+  `2026-09-23-agent-room-design.md`) and of the window: `2026-09-26-desktop-design.md` — the
+  host, rooms, delivery, worktrees, the boundary; `2026-09-26-desktop-orca-ui-design.md` — the
+  layout and behavior of the window; `2026-09-29-desktop-rooms-organic-design.md` — the
+  Organic look, rooms and decisions, subscription limits (3.5), Codex (3.6). Their plans are
+  `2026-09-26-desktop-plan*.md`, `2026-09-26-desktop-orca-ui-plan*.md` and
+  `2026-09-29-desktop-rooms-organic-plan.md`. The source of the rooms design (a prototype,
+  screenshots) is `docs/design/2026-09-29-rooms-organic/`.
+- `.ralph/specs/` — the specifications for v0–v2: the data layer, the old UI, PTY, runners.
+- `docs/schema/` — snapshots of the real schemas of both providers, which the parser is
+  checked against.
+- `NOTICE` — licenses of third-party code in the window: Orca and shadcn/ui (MIT), Figtree and
+  Caprasimo (OFL 1.1), Monaco Editor (MIT), PDF.js (Apache-2.0; its cmaps and the Foxit fonts
+  are BSD-3-Clause); the origin of the Claude and Codex icons and whose marks they are.
+- `TODOS.md` — deferred work (runs, in order of importance).
 
-## Провайдеры
+## Providers
 
-|             | История сессий           | Запуск в панели        |
-| ----------- | ------------------------- | ----------------------- |
-| Claude Code | да, `~/.claude/projects`  | `claude --resume <id>` |
-| Codex       | да, `~/.codex/sessions`   | `codex resume <id>`    |
-| GLM         | нет                       | `glm`                   |
+|             | Session history           | Launch in a pane       |
+| ----------- | ------------------------- | ---------------------- |
+| Claude Code | yes, `~/.claude/projects` | `claude --resume <id>` |
+| Codex       | yes, `~/.codex/sessions`  | `codex resume <id>`    |
+| GLM         | no                        | `glm`                  |
 
-В окне агент выбирается из всех доступных провайдеров реестра, чья команда
-есть в `PATH` (или задана через `PARLEY_<КОМАНДА>_BIN`) — Claude Code, Codex,
-GLM; значок агента у Claude Code и Codex — брендовый (знаки принадлежат
-Anthropic и OpenAI, происхождение файлов — в `NOTICE`), у прочих провайдеров —
-буква; фильтра провайдеров нет.
-Сессия без единого известного сигнала с запуска процесса — у Claude Code это ни
-одного хука, у Codex ни `Ready`, ни `Working` в заголовке окна (он стоит на
-экране входа или доверия к папке) — отвечает на отправку из окна — заметку,
-элемент Design Mode, файл или скриншот — тостом «S02 is waiting for your answer —
-text not inserted» с кнопками «Copy» и «Open S02»; будильник её тоже не будит.
-Адаптеры провайдеров и реестр остаются в core и работают из CLI.
+In the window the agent is chosen among all the registry's available providers whose command
+is in `PATH` (or is set through `PARLEY_<COMMAND>_BIN`) — Claude Code, Codex, GLM. The agent
+icon for Claude Code and Codex is the brand's (the marks belong to Anthropic and OpenAI, the
+origin of the files is in `NOTICE`), and for other providers it is a letter; there is no
+provider filter. A session with not a single known signal since the process started — for
+Claude Code that is no hook at all, for Codex neither `Ready` nor `Working` in the terminal
+title (it is stuck on a sign-in or folder trust screen) — answers a send from the window (a
+note, a Design Mode element, a file or a screenshot) with the toast "S02 is waiting for your
+answer — text not inserted" with the buttons "Copy" and "Open S02"; auto-wake does not wake it
+either. The provider adapters and the registry stay in core and work from the CLI.
 
-### Модели
+### Models
 
-Хост отдаёт окну списки моделей провайдеров (`providers.list`), а `sessions.create`
-принимает модель только из списка её провайдера: значение не из списка — `bad_request`,
-CLI его не получает, записи в карте не появляется. Модель не выбрана (поле пропущено
-или пусто) — «по умолчанию»: флага `--model` нет, и CLI берёт свою модель. Встроенные
-списки взяты из открытой документации провайдеров, порядок — как в ней:
+The host gives the window the providers' model lists (`providers.list`), and
+`sessions.create` accepts a model only from its provider's list: a value that is not in the
+list gives `bad_request`, the CLI does not get it, and no record appears in the map. If no
+model is chosen (the field is omitted or empty), it means "default": there is no `--model`
+flag, and the CLI uses its own model. The built-in lists are taken from the providers' public
+documentation, in the same order as there:
 
-- Claude Code — алиасы `--model` из `code.claude.com/docs/en/model-config`: `best`,
+- Claude Code — the `--model` aliases from `code.claude.com/docs/en/model-config`: `best`,
   `fable`, `sonnet`, `opus`, `haiku`, `sonnet[1m]`, `opus[1m]`, `opusplan`, `opusplan[1m]`.
-  Алиасы сами указывают на актуальную версию, поэтому закреплённые версии
-  (`claude-opus-5-5` и подобные) в список не входят;
-- Codex — рекомендуемые модели из `developers.openai.com/codex/models`: `gpt-6-astra`,
-  `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`. `gpt-6-sol` — предыдущая Sol: документация её не
-  снимала, а `gpt-6.1-sol` доступна не в каждом плане. Модели, которые документация снимает
-  с Codex (`gpt-5.5` и старше), в список не берутся.
+  The aliases themselves point at the current version, so pinned versions (`claude-opus-5-5`
+  and the like) are not in the list;
+- Codex — the recommended models from `developers.openai.com/codex/models`: `gpt-6-astra`,
+  `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`. `gpt-6-sol` is the previous Sol: the documentation
+  has not retired it, and `gpt-6.1-sol` is not available in every plan. Models that the
+  documentation retires from Codex (`gpt-5.5` and older) are not taken into the list.
 
-У GLM и у своих провайдеров без списка модель идёт в команду без проверки — если в `args`
-есть `{model}`.
+For GLM and for custom providers with no list, the model goes into the command unchecked — if
+`args` contains `{model}`.
 
-Вышла модель, которой ещё нет в списке, — не ждать обновления Parley, а задать список
-в `~/.parley/providers.json` полем `models`. Элемент — пара `id` (значение `--model`) и
-`label` (подпись в окне); `id` — одно слово, не с дефиса, до 200 знаков и без повторов в
-списке, иначе файл не загрузится. Список заменяет встроенный целиком (как `args`), поэтому
-нужные встроенные модели перечисляются заново; `[]` убирает список совсем. Он действует,
-только если в `args` провайдера есть `{model}` (у встроенных `claude` и `codex` он есть).
+If a model comes out that is not in the list yet, do not wait for a Parley update: set the
+list in `~/.parley/providers.json` with the `models` field. An element is a pair of `id` (the
+`--model` value) and `label` (the caption in the window); `id` is a single word, does not
+start with a hyphen, is at most 200 characters, and has no repeats in the list, otherwise the
+file will not load. The list replaces the built-in one entirely (like `args`), so the built-in
+models you need are listed again; `[]` removes the list altogether. It takes effect only if
+the provider's `args` contains `{model}` (the built-in `claude` and `codex` have it).
 
 ```json
 {
@@ -1242,228 +1108,226 @@ CLI его не получает, записи в карте не появляе
 }
 ```
 
-### Codex — агент комнаты
+### Codex — a room agent
 
-Codex запускается тем же окном и работает в комнатах наравне с Claude Code. Хуков
-Codex Parley не включает: неуправляемые хуки Codex запускаются только после
-разового ревью человеком в `/hooks`, а доверие себе Parley не выдаёт. Состояние
-сессии он берёт из того, что Codex сам пишет в терминал, и из скрипта `notify`.
+Codex is started by the same window and works in rooms on a par with Claude Code. Parley does
+not enable Codex hooks: Codex's unmanaged hooks run only after a one-time human review in
+`/hooks`, and Parley does not grant itself trust. It takes the state of the session from what
+Codex itself writes to the terminal and from the `notify` script.
 
-**Как Parley запускает Codex.** Свои настройки — только флагами `-c` в своих
-сессиях: `~/.codex/config.toml` не читается и не пишется, личный `notify`
-человека в этих сессиях не зовётся. Новая сессия целиком (в угловых скобках то,
-что подставляется на сессию; `--model` и усилие — только если выбраны в диалоге):
+**How Parley launches Codex.** Its own settings are passed only with `-c` flags in its own
+sessions: `~/.codex/config.toml` is neither read nor written, and the human's personal
+`notify` is not called in these sessions. A new session in full (what is in angle brackets is
+substituted per session; `--model` and the effort only if chosen in the dialog):
 
 ```
 codex --no-daemon -a on-request \
-  -c 'mcp_servers.parley={command="<node>",args=["<core>/dist/mcp/server.js"],env={PARLEY_WORK_DIR="<работа>",PARLEY_SESSION_ID="<id>",HARNAS_WORK_DIR="<работа>",HARNAS_SESSION_ID="<id>",…},startup_timeout_sec=30,tool_timeout_sec=1860}' \
+  -c 'mcp_servers.parley={command="<node>",args=["<core>/dist/mcp/server.js"],env={PARLEY_WORK_DIR="<work-dir>",PARLEY_SESSION_ID="<id>",…},startup_timeout_sec=30,tool_timeout_sec=1860}' \
   -c 'tui.terminal_title=["spinner","status","session-id"]' \
   -c 'tui.notifications=["approval-requested","agent-turn-complete"]' \
   -c 'tui.notification_method="osc9"' \
   -c 'tui.notification_condition="always"' \
   -c 'notify=["<node>","<core>/dist/work/codex-notify-bin.js"]' \
-  [--model <модель>] [-c 'model_reasoning_effort="<усилие>"'] "<бриф>"
+  [--model <model>] [-c 'model_reasoning_effort="<effort>"'] "<brief>"
 ```
 
-Возобновление — `codex resume <id> <те же -c> "<указатель на письма>"`:
-указатель идёт последним аргументом, а модель, усилие и политику одобрений
-Codex восстанавливает из треда сам. Только `-c`: `--no-daemon` и `-a` после
-`resume <id>` на живом Codex не проверены, а отказ разбора флагов провалил бы
-каждый подъём спящей сессии (любой `-c` и так держит запуск «встроенным»).
-Ту же команду печатает `parley-core work session new --provider codex` — с
-`PARLEY_*` и `HARNAS_*` в `env` сервера и `-c notify`, которые нужны и сессии, поднятой руками.
-Зачем каждый флаг:
+Resume is `codex resume <id> <the same -c> "<pointer to messages>"`: the pointer goes as the
+last argument, and Codex restores the model, the effort and the approval policy from the
+thread by itself. Only `-c` flags are used: `--no-daemon` and `-a` after `resume <id>` are not
+checked on a live Codex, and a flag-parsing refusal would break every wake-up of a sleeping
+session (any `-c` keeps the launch "embedded" anyway). The same command is printed by
+`parley-core work session new --provider codex` — with `PARLEY_*` in the server's `env` and
+the `-c notify`, which a session started by hand needs too. Why each flag:
 
-- `--no-daemon` (только запуск) — с 0.157 Codex по умолчанию идёт через общий
-  фоновый демон, и тогда MCP-серверы и уведомления были бы детьми демона с его
-  окружением, без `PARLEY_*`. Любой `-c` и так держит запуск «встроенным»; флаг
-  делает это явным.
-- `-a on-request` (только запуск) — вопросы одобрений идут человеку в терминал
-  агента, как у Claude Code. Флаг заменяет в сессиях Parley и личную политику
-  одобрений человека, в том числе более строгую, если она задана в его конфиге.
-  С `-a never` вызов инструмента, которому нужно одобрение, отклоняется — сервер
-  `parley` перестал бы работать; поэтому `never` не передаётся никогда.
-- `mcp_servers.parley` — сервер координации. Codex отдаёт серверу урезанное
-  окружение, поэтому всё нужное (адрес работы и сессии под обоими именами, затем
-  унаследованные `PARLEY_*` и `HARNAS_*`: дом, подмены бинарей) лежит в таблице `env`;
-  значения экранируются как строки TOML (кавычки,
-  обратный слеш, юникод, управляющие знаки — тестом), потому что `-c`, не
-  разобравшийся как TOML, Codex молча берёт строкой. `startup_timeout_sec` — с
-  запасом на медленный старт `node`, `tool_timeout_sec` — дольше самого долгого
-  `wait_for`: иначе Codex оборвал бы ожидание письма через минуту.
-- `tui.terminal_title`, `tui.notifications`, `tui.notification_method` и
-  `tui.notification_condition` — состояние в терминале (см. ниже). Уведомления
-  по умолчанию молчат, пока терминал «в фокусе», а для Codex в pty хоста фокус
-  всегда есть, поэтому нужно `always`.
-- `notify` — конец хода скриптом Parley: Codex зовёт его после каждого хода и
-  отдаёт JSON `agent-turn-complete` последним аргументом, а скрипт дописывает в
-  `events/<id>.jsonl` строку `Stop` — ту же, что команда хуков Claude Code, — с
-  `last_assistant_message` и `thread-id`. Ошибки скрипта Codex не тревожат:
-  код выхода всегда 0.
+- `--no-daemon` (launch only) — since 0.157 Codex goes through a shared background daemon by
+  default, and then MCP servers and notifications would be children of the daemon with its
+  environment, without `PARLEY_*`. Any `-c` already keeps the launch "embedded"; the flag
+  makes it explicit.
+- `-a on-request` (launch only) — approval questions go to the human in the agent's terminal,
+  as with Claude Code. In Parley sessions the flag also replaces the human's personal approval
+  policy, including a stricter one set in their config. With `-a never` a call to a tool that
+  needs approval is rejected — the `parley` server would stop working; so `never` is never
+  passed.
+- `mcp_servers.parley` — the coordination server. Codex gives the server a stripped-down
+  environment, so everything it needs (the addresses of the workspace and of the session, then
+  the inherited `PARLEY_*` variables: home, binary overrides) is in the `env` table. Values are
+  escaped as TOML strings (quotes, backslash, Unicode, control characters — covered by a
+  test), because a `-c` that does not parse as TOML is silently taken by Codex as a string.
+  `startup_timeout_sec` leaves headroom for a slow `node` start, and `tool_timeout_sec` is
+  longer than the longest `wait_for`: otherwise Codex would cut off the wait for a message
+  after a minute.
+- `tui.terminal_title`, `tui.notifications`, `tui.notification_method` and
+  `tui.notification_condition` — the state in the terminal (see below). By default
+  notifications are silent while the terminal is "in focus", and for Codex in the host's pty
+  there is always focus, so `always` is needed.
+- `notify` — the end of a turn via a Parley script: Codex calls it after every turn and passes
+  the `agent-turn-complete` JSON as the last argument, and the script appends to
+  `events/<id>.jsonl` a `Stop` line — the same as the Claude Code hook command — with
+  `last_assistant_message` and `thread-id`. Script errors do not bother Codex: the exit code is
+  always 0.
 
-Не передаются и не появятся: `-a never`, `--dangerously-…`, `--yolo`,
-`--approve-for-me`, `--full-auto`, `-s danger-full-access`, `-c projects=…`,
-`-c hooks…` — никакого обхода одобрений и песочницы, самовыдачи прав и доверия;
-тест `providers.test.ts` это сторожит.
+Never passed and never will be: `-a never`, `--dangerously-…`, `--yolo`, `--approve-for-me`,
+`--full-auto`, `-s danger-full-access`, `-c projects=…`, `-c hooks…` — no bypass of approvals
+or of the sandbox, no self-granting of rights or trust; the `providers.test.ts` test guards
+this.
 
-**Что человек делает сам.** Вход в Codex (экран входа в терминале сессии или
-`codex login` в своей оболочке) и ответ на экран доверия к папке проекта: доверие
-Codex записывает в свой конфиг сам, Parley это не делает и за человека не
-отвечает. Пока Codex стоит на таком экране (нет ни `Ready`, ни `Working` за 20
-секунд после запуска), сессия — «нужен ты», а в строке сессии и в строке статуса
-стоит причина: «Waiting at startup — Codex may need sign-in or folder trust in
-its terminal». Окно ничего не отправляет в такой терминал: Enter подтвердил бы
-доверие к папке. Как только Codex покажет `Ready` или `Working`, пометка в строке
-сессии снимается, а сессия перестаёт быть «нужен ты». Не поставился
-платформенный пакет Codex (`Missing optional dependency
-@openai/codex-<платформа>`) — переустановить его тоже вам.
+**What the human does.** Signing in to Codex (the sign-in screen in the session's terminal, or
+`codex login` in your own shell) and answering the trust screen for the project folder: Codex
+writes trust to its own config by itself; Parley does not do it and does not answer for the
+human. While Codex sits on such a screen (neither `Ready` nor `Working` within 20 seconds of
+launch), the session is "needs you", and the reason is shown in the session row and in the
+status bar: "Waiting at startup — Codex may need sign-in or folder trust in its terminal". The
+window sends nothing into such a terminal: Enter would confirm trust in the folder. As soon as
+Codex shows `Ready` or `Working`, the mark in the session row is cleared and the session stops
+being "needs you". If the platform package of Codex failed to install (`Missing optional
+dependency @openai/codex-<platform>`), reinstalling it is also up to you.
 
-**Как узнаётся состояние.** Хост разбирает поток pty сессий Codex с буфером на
-границах чанков (оба вида последовательностей — с терминаторами BEL и ST):
+**How the state is detected.** The host parses the pty stream of Codex sessions with a buffer
+across chunk boundaries (both kinds of sequences, with BEL and ST terminators):
 
-- заголовок окна (OSC 0): кадр спиннера или слово `Working` — агент работает,
-  `Ready` — у приглашения, `[ ! ] Action Required` — «нужен ты»;
-- уведомления OSC 9: `Approval requested: …` и `Codex wants to edit …` — «нужен
-  ты», `Agent turn complete` — конец хода;
-- `notify` — конец хода из журнала событий (см. выше).
+- the terminal title (OSC 0): a spinner frame or the word `Working` — the agent is working,
+  `Ready` — at the prompt, `[ ! ] Action Required` — "needs you";
+- OSC 9 notifications: `Approval requested: …` and `Codex wants to edit …` — "needs you",
+  `Agent turn complete` — the end of a turn;
+- `notify` — the end of a turn from the event log (see above).
 
-Всё, чего не узнали (`Starting`, `Waiting`, `Thinking`, новый заголовок), —
-«неизвестно»: ни «работает», ни «готов». Состояние идёт в тот же сервис
-активности, что и хуки Claude Code, и дальше — во внимание окна и уведомления
-macOS тем же путём. Что важно знать:
+Everything that is not recognized (`Starting`, `Waiting`, `Thinking`, a new title) is
+"unknown": neither "working" nor "ready". The state goes to the same activity service as the
+Claude Code hooks, and onward to the window's attention and the macOS notifications by the
+same path. What is important to know:
 
-- Первый `Ready` с запуска процесса — агент у приглашения, а не конец хода:
-  состояние остаётся тусклым (`idle`, как у свежей сессии Claude), но хост «в
-  курсе» и отправка из окна с будильником разрешены. Так фоновая сессия
-  (autoLaunch, `spawn_session`) не даёт ложного «finished» до первого хода. Конец
-  хода — `Ready` после работы, OSC 9 `Agent turn complete` или `Stop` от `notify`.
-- Под хостом порог тишины (`silenceThresholdMs`) к сессии Codex не применяется:
-  заголовок пишется не весь ход (личный `tui.animations=false`, долгий
-  инструмент), а ложный конец хода — это «finished» в macOS и Enter вместо Tab в
-  идущий ход. Ход кончается сигналом или выходом процесса.
-- Повторный сигнал того же вида (кадр спиннера, мигание `Action Required`)
-  исправляет расхождение: `Stop` от `notify`, записанный позже последнего кадра,
-  перекрыл бы сигнал терминала, а следующий кадр возвращает «работает» или
-  «нужен ты». Согласный повтор ничего не пересчитывает и не рассылает.
-- Лог rollout под хостом состоянием не управляет: запись конца хода в нём новее
-  сигнала и возвращала бы «работает» после каждого хода. Страховки конца хода по
-  `task_complete` в логе нет — только `Ready`, OSC 9 и `notify`. Цена: строки
-  заголовка и `notify` — не публичный интерфейс Codex; перестанет узнаваться
-  заголовок работы — сессия останется тусклой («неизвестно»), перестанут узнаваться
-  `Ready` и `notify` вместе — после хода останется «работает» до выхода процесса
-  (проверка на живом Codex, пункт 3).
+- The first `Ready` since the process started means the agent is at the prompt, not the end of
+  a turn: the state stays dim (`idle`, like a fresh Claude session), but the host is aware of
+  the session, so sending from the window and auto-wake are allowed. That way a background
+  session (autoLaunch, `spawn_session`) does not give a false "finished" before its first
+  turn. The end of a turn is `Ready` after work, the OSC 9 `Agent turn complete`, or a `Stop`
+  from `notify`.
+- Under the host, the silence threshold (`silenceThresholdMs`) does not apply to a Codex
+  session: the title is not written for the whole turn (a personal `tui.animations=false`, a
+  long tool), and a false end of a turn means a "finished" notification in macOS and an Enter,
+  instead of Tab, sent into a running turn. A turn ends with a signal or with the process exit.
+- A repeated signal of the same kind (a spinner frame, the blinking of `Action Required`)
+  corrects a mismatch: a `Stop` from `notify` written later than the last frame would override
+  the terminal signal, and the next frame brings back "working" or "needs you". A repeat that
+  agrees with the current state recalculates and broadcasts nothing.
+- Under the host, the rollout log does not drive the state: the end-of-turn entry in it is
+  newer than the signal and would bring back "working" after every turn. There is no
+  end-of-turn fallback by `task_complete` in the log — only `Ready`, OSC 9 and `notify`. The
+  price: the title strings and `notify` are not a public Codex interface. If the title for
+  working stops being recognized, the session stays dim ("unknown"); if `Ready` and `notify`
+  stop being recognized together, "working" remains after a turn until the process exits (a
+  check on a live Codex, item 3).
 
-**Ввод.** `pty.send` и будильник пишут в поле ввода Codex так: вставка в маркерах
-bracketed paste, пауза 60 мс, клавиша. Занятому агенту клавиша — Tab (очередь на
-следующий ход), а не Enter, который вмешался бы в идущий ход; у приглашения —
-Enter. Клавиша выбирается на самой отправке. Текст не начинается с `/`, `!`, `$`
-(такому тексту ставится префикс «- ») и не кончается токеном `@…`, `$…`, `/…`
-(после него ставится пробел): иначе Codex прочитал бы команду, оболочку или
-скилл, а открытое меню забрало бы Enter. `blocked` и экран старта без сигнала —
-ничего не печатается. Без режима вставки на экране (TUI ещё не поднялся или его
-сменил) `pty.send` отвечает `no-paste-mode`, а будильник ничего не печатает и
-повторяет пересчёт (15 раз через 200 мс — экран разбирает поток чуть позже
-сигнала терминала). Указатель занятому агенту уходит в очередь и исход не
-проверяет: потерянный Tab ничем не сообщается, письма остаются «указанными», и
-второго указателя на них не будет, пока не придёт новое письмо (тогда указатель
-напечатается заново, со счётом всех непрочитанных). Сами письма при этом лежат
-непрочитанными — счётчик в окне и `check_inbox`.
+**Input.** `pty.send` and auto-wake write into Codex's input field like this: a paste inside
+bracketed paste markers, a 60 ms pause, a key. For a busy agent the key is Tab (a queue for the
+next turn), not Enter, which would interfere with a running turn; at the prompt it is Enter.
+The key is chosen at the moment of sending. The text does not start with `/`, `!`, `$` (such
+text gets the prefix "- ") and does not end with a token `@…`, `$…`, `/…` (a space is added
+after it): otherwise Codex would read a command, a shell or a skill, and an open menu would
+take the Enter. When the session is `blocked`, and on the startup screen with no signal,
+nothing is printed. Without paste mode on the screen (the TUI has not come up yet or it
+changed it), `pty.send` answers `no-paste-mode`, and auto-wake prints nothing and retries the
+recalculation (15 times at 200 ms — the screen parses the stream a little after the terminal
+signal). A pointer to a busy agent goes into the queue and its outcome is not checked: a lost
+Tab is not reported in any way, the messages stay "pointed to", and there will be no second
+pointer for them until a new message arrives (then the pointer is printed again, counting all
+the unread ones). The messages themselves meanwhile stay unread — the counter in the window
+and `check_inbox`.
 
-**Привязка к логу.** Сервер `parley-mcp` берёт id треда из `_meta.threadId`
-первого вызова инструмента и пишет `providerSessionId` в карту. Он авторитетнее
-запасного пути (привязка по каталогу и времени запуска): запасной срабатывает на
-первом же логе, за секунды до первого вызова модели, а рядом с ещё одним агентом
-в том же каталоге привязывает чужой лог — поэтому id из `_meta` заменяет
-отличающееся значение (один раз за жизнь сервера). Вызов подагента (`_meta.sessionId`,
-корневой тред, не совпадает с `threadId`) не привязывает. Запасной путь не берёт
-лог, уже привязанный к другой сессии работы, и не пишет id, который успела занять
-соседняя. Логи подагентов Codex (`parent_thread_id` задан или `source` не `cli`)
-не привязываются, а имя `rollout-<время>-<тред>_<rollout>.jsonl` откатанного
-треда даёт id треда.
+**Binding to the log.** The `parley-mcp` server takes the thread id from `_meta.threadId` of
+the first tool call and writes `providerSessionId` to the map. It is more authoritative than
+the fallback path (binding by directory and start time): the fallback fires on the very first
+log, seconds before the model's first call, and next to another agent in the same directory it
+binds someone else's log — so the id from `_meta` replaces a differing value (once per server
+lifetime). A subagent's call (`_meta.sessionId`, the root thread, does not match `threadId`)
+does not bind. The fallback path does not take a log that is already bound to another session
+of the workspace, and does not write an id that a neighboring session has managed to take.
+Logs of Codex subagents (`parent_thread_id` is set or `source` is not `cli`) are not bound,
+and the name `rollout-<time>-<thread>_<rollout>.jsonl` of a rolled-back thread gives the
+thread id.
 
-**Что проверить на живом Codex.** Настоящий `codex` в тестах не запускается, а
-всё выше выведено из документации и исходников Codex 0.159 — сверить вручную
-(порядок — раздел 14 исследования `codex-research.md`):
+**What to check on a live Codex.** A real `codex` is never launched in tests, and all of the
+above is derived from the documentation and sources of Codex 0.159 — check it by hand (the
+order is section 14 of the research `codex-research.md`):
 
-1. `codex --version`, `codex login status`, `codex doctor --json`: формат и коды выхода.
-2. Запуск с `-c mcp_servers.parley={…}`: сервер виден в `/mcp`, инструменты
-   зовутся, в `tools/call` приходит `_meta.threadId`, а `_meta.sessionId` у
-   корневого треда совпадает с ним, у подагента — нет; спрашивает ли Codex
-   одобрение только перед `close_session` (аннотации инструментов — «Что видит
-   агент»), а не перед каждым вызовом `parley`.
-3. Сырой поток pty в состояниях «старт», «работа», «одобрение», «конец хода»:
-   точные строки заголовка (`Ready`, `Working`, `[ ! ] Action Required`), тексты
-   OSC 9, что значат `Starting`, `Waiting`, `Thinking`; молчат ли уведомления
-   без `always`. Принимает ли Codex `session-id` в `tui.terminal_title` (в
-   документации 0.159 есть только `thread-id`; неизвестный элемент мог бы
-   обесценить весь список, и сигналов состояния не было бы вовсе). Пишется ли
-   заголовок весь ход при `tui.animations=false` и долгом инструменте (от этого
-   зависит, что под хостом порог тишины не применяется). Идёт ли `Ready` до
-   первого хода сессии, запущенной с промптом.
-4. Свежий git-проект: появляется ли экран доверия, хватает ли 20 секунд, не
-   выглядит ли ложной тревогой медленный старт с MCP-сервером.
-5. Вставка 50 и 1500 знаков с Enter; меню `@` и `/`; занятый агент — Tab
-   (очередь) и Enter (вмешательство); что делает Tab у приглашения.
-6. `resume`: принимает ли Codex `-c` после `resume <id>` (флаги `--no-daemon` и
-   `-a` при resume не передаются — можно ли их добавить, если понадобится),
-   сохраняются ли модель, усилие и политика одобрений `on-request` из треда,
-   работает ли `resume <id> "<промпт>"`, спрашивает ли каталог при смене cwd.
-7. Запуск с `-c` не поднимает общий демон.
-8. `notify` действительно зовётся с JSON и окружением `PARLEY_*`: в журнале
-   сессии появляется `Stop`.
-9. Логи подагентов: форма `source` и `parent_thread_id`, имена файлов с «_».
+1. `codex --version`, `codex login status`, `codex doctor --json`: the format and the exit
+   codes.
+2. Launch with `-c mcp_servers.parley={…}`: the server is visible in `/mcp`, the tools can be
+   called, `_meta.threadId` arrives in `tools/call`, and `_meta.sessionId` matches it for the
+   root thread but not for a subagent; whether Codex asks for approval only before
+   `close_session` (the tool annotations — see "What the agent sees") and not before every
+   `parley` call.
+3. The raw pty stream in the states "start", "work", "approval", "end of turn": the exact
+   title strings (`Ready`, `Working`, `[ ! ] Action Required`), the OSC 9 texts, what
+   `Starting`, `Waiting`, `Thinking` mean; whether notifications are silent without `always`.
+   Whether Codex accepts `session-id` in `tui.terminal_title` (the 0.159 documentation has only
+   `thread-id`; an unknown element could invalidate the whole list, and there would be no state
+   signals at all). Whether the title is written for the whole turn with `tui.animations=false`
+   and a long tool (the fact that the silence threshold does not apply under the host depends
+   on this). Whether `Ready` comes before the first turn of a session launched with a prompt.
+4. A fresh git project: whether the trust screen appears, whether 20 seconds is enough,
+   whether a slow start with the MCP server looks like a false alarm.
+5. Pasting 50 and 1,500 characters with Enter; the `@` and `/` menus; a busy agent — Tab
+   (queue) and Enter (interference); what Tab does at the prompt.
+6. `resume`: whether Codex accepts `-c` after `resume <id>` (the `--no-daemon` and `-a` flags
+   are not passed on resume — whether they can be added if needed), whether the model, the
+   effort and the `on-request` approval policy are preserved from the thread, whether
+   `resume <id> "<prompt>"` works, whether it asks about the directory when the cwd changes.
+7. A launch with `-c` does not bring up the shared daemon.
+8. `notify` is really called with the JSON and the `PARLEY_*` environment: a `Stop` appears in
+   the session log.
+9. Subagent logs: the shape of `source` and `parent_thread_id`, file names with "_".
 
-## Известные ограничения
+## Known limitations
 
-- **Поведение живого `claude` внутри панели** проверяется вручную: настоящий
-  бинарь в автотестах не запускается никогда — лимиты подписки и недетерминизм,
-  тесты идут против stub-бинаря.
-- **Формат `.jsonl` недокументирован** и меняется между релизами. Расхождение
-  ловится сверкой со снимком схемы, см. ниже.
-- Запуск нескольких агентов сразу расходует лимиты подписки — Parley предупреждает,
-  но не блокирует. Хост один на пользователя: второй не стартует, пока держится
-  замок `host.pid`.
-- Сессия без единого известного сигнала с запуска (Claude Code без хуков,
-  Codex на экране входа или доверия к папке) не принимает отправку из окна и не
-  будится письмом — подробности в «Провайдеры» и «Codex — агент комнаты».
-- Разбор состояния Codex держится на строках заголовка окна и уведомлений
-  терминала, которые не публичный интерфейс Codex и на живом Codex не сверены;
-  что проверить, — в «Codex — агент комнаты».
-- **Окно:**
-  - `silenceThresholdMs` хост читает на старте: после правки нужен перезапуск
-    хоста;
-  - «Changes» не видит правок не агентом до «Refresh»;
-  - превью PDF не рисует картинки JPX и JBIG2;
-  - заметку в свёрнутом регионе диффа не видно;
-  - предел 1 МБ — на весь `layouts.json`;
-  - в диффе нового или удалённого файла — лишние пустые строки;
-  - «New session» без задачи и родителя стартует без брифа;
-  - «Retry» в «New session or room» после сбоя запуска заводит новую запись, а
-    записи упавших сессий остаются в сайдбаре не запущенными («Delete» в меню
-    строки их убирает): хост не откатывает запись при сбое запуска;
-  - комнату из уже идущих сессий собирает только перетаскивание (сессию на
-    сессию или на строку комнаты): пункта меню и клавиатурного пути нет;
-  - `claude --resume` не получает ни модель, ни усилие сессии: они лежат в
-    карте, но команда возобновления их не несёт (модель Claude Code берёт из
-    сессии сам, усилие при возобновлении не восстанавливается).
+- **The behavior of a live `claude` inside a pane** is checked by hand: the real binary is
+  never launched in automated tests — subscription limits and nondeterminism; the tests run
+  against a stub binary.
+- **The `.jsonl` format is undocumented** and changes between releases. A discrepancy is caught
+  by comparing against a schema snapshot, see below.
+- Launching several agents at once burns through subscription limits — Parley warns but does
+  not block. There is one host per user: a second one does not start while the `host.pid` lock
+  is held.
+- A session with not a single known signal since launch (Claude Code without hooks, Codex on a
+  sign-in or folder trust screen) does not accept a send from the window and is not woken by a
+  message — details in "Providers" and "Codex — a room agent".
+- Codex state parsing relies on the terminal title strings and terminal notifications, which
+  are not a public Codex interface and have not been checked against a live Codex; what to
+  check is in "Codex — a room agent".
+- **The window:**
+  - the host reads `silenceThresholdMs` at start: after editing it, the host must be restarted;
+  - "Changes" does not see edits made by anyone but the agent until "Refresh";
+  - the PDF preview does not render JPX and JBIG2 images;
+  - a note in a collapsed region of a diff is not visible;
+  - the 1 MB limit applies to the whole `layouts.json`;
+  - the diff of a new or deleted file shows extra empty lines;
+  - "New session" with no task and no parent starts without a brief;
+  - "Retry" in "New session or room" after a launch failure creates a new record, and the
+    records of the failed sessions stay in the sidebar not started ("Delete" in the row menu
+    removes them): the host does not roll back the record when a launch fails;
+  - a room from already running sessions can be assembled only by dragging (a session onto a
+    session or onto a room row): there is no menu item and no keyboard path;
+  - `claude --resume` gets neither the session's model nor its effort: they are in the map,
+    but the resume command does not carry them (Claude Code takes the model from the session
+    itself; the effort is not restored on resume).
 
-## Разработка
+## Development
 
 ```bash
-pnpm -r test                          # все тесты
+pnpm -r test                          # all tests
 pnpm --filter @parley/core test:coverage
 pnpm typecheck
 pnpm lint
 pnpm format
 ```
 
-Рамочный тест `packages/core/test/frame-check.test.ts` проверяет, что в
-исходниках всех пакетов (`packages/*/src`) и `tools/` нет учётных данных,
-обращений к API провайдеров и YOLO-флагов (см. «Юридическая рамка»).
+The boundary test `packages/core/test/frame-check.test.ts` checks that the sources of all
+packages (`packages/*/src`) and `tools/` contain no credentials, no calls to provider APIs and
+no YOLO flags (see "Legal boundary").
 
-E2E окна — Playwright, стаб-агент, свой дом (`PARLEY_HOME`) на каждый тест;
-тесты и живые проверки, что заводят worktree, задают ещё и `PARLEY_WORKTREE_ROOT`
-во временном каталоге — иначе он лёг бы в настоящий `~/parley/worktrees`:
+The window's E2E tests use Playwright, a stub agent and their own home (`PARLEY_HOME`) for each
+test. Tests and live checks that create worktrees also set `PARLEY_WORKTREE_ROOT` to a
+temporary directory — otherwise the worktree would land in the real `~/parley/worktrees`:
 
 ```bash
 pnpm --filter @parley/host build
@@ -1471,11 +1335,7 @@ pnpm --filter @parley/desktop build
 pnpm --filter @parley/desktop e2e
 ```
 
-Запасные `HARNAS_*`, оба каталога состояния и перенос данных проверяют свои тесты: в
-`packages/core/src` — `names.test.ts`, `migrate.test.ts` и `mcp/legacy-env.test.ts`, в E2E окна —
-`migration.spec.ts`.
-
-После обновления Claude Code или Codex стоит пересверить схему:
+After updating Claude Code or Codex it is worth rechecking the schema:
 
 ```bash
 node tools/claude-export.mjs --full
@@ -1484,7 +1344,7 @@ node tools/observe-schema.mjs --root ~/.codex/sessions --out docs/schema/codex-s
 git diff docs/schema/
 ```
 
-Непустой diff означает, что формат поехал и нужен новый адаптер схемы.
+A non-empty diff means the format has drifted and a new schema adapter is needed.
 
-Фикстуры для тестов делаются из реальных сессий с полной анонимизацией:
+Test fixtures are made from real sessions with full anonymization:
 `node tools/make-fixtures.mjs <session-id> ...`.
