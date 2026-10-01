@@ -34,6 +34,12 @@ const CORPUS: ReadonlyArray<readonly [text: string, mentions: boolean]> = [
   ['| a | b |\n|---|---|\n| @human | x |', true],
   ['<b>@human</b>', true],
   ['\\@human', true],
+  // Ссылка на символ — после разбора обычный текст: чип рисуется, а значит, и упоминание есть.
+  ['&#64;human', true],
+  ['&commat;human', true],
+  ['@&#104;uman', true],
+  ['`&#64;human`', false],
+  ['&#64;humans', false],
   // Код: узел со своим `value`, а не текст.
   ['`@human`', false],
   ['``@human``', false],
@@ -159,6 +165,13 @@ describe('hasHumanMention — быстрый отсев и кеш', () => {
   it('подстрока @human в любом регистре отправляет текст на разбор', () => {
     expect(hasHumanMention('кеш: регистр @HuMaN')).toBe(true);
     expect(parse).toHaveBeenCalledTimes(1);
+  });
+
+  it('ссылка на символ тоже отправляет на разбор: после него `&#64;human` — тот же текст, что и `@human`', () => {
+    expect(hasHumanMention('кеш: числом &#64;human')).toBe(true);
+    expect(hasHumanMention('кеш: именем &commat;human')).toBe(true);
+    expect(hasHumanMention('кеш: буквой @&#x68;uman')).toBe(true);
+    expect(parse).toHaveBeenCalledTimes(3);
   });
 
   it('подстрока есть, а упоминания нет (код, ссылка) — разбор был, ответ false', () => {
