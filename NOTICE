@@ -48,6 +48,24 @@ SOFTWARE.
 - packages/desktop/src/renderer/terminal/xterm-themes.ts — таблица палитр
   терминала из src/renderer/src/lib/terminal-themes/defaults.ts.
 
+Адаптированные файлы (шаг P2 плана релиза 0.1.0; источник — не форк выше, а
+https://github.com/stablyai/orca, ветка main на 2026-09-30):
+- scripts/release/assert-github-release-is-draft.mjs — адаптация
+  config/scripts/assert-github-release-is-draft.mjs: релиз тега остаётся
+  черновиком; вернуть вышедший релиз в черновик скрипт может только с флагом
+  --restore.
+- scripts/release/verify-release-required-assets.mjs — адаптация
+  config/scripts/verify-release-required-assets.mjs: перед публикацией в
+  черновике на месте все файлы релиза; список файлов свой, под сборку macOS.
+- scripts/release/github-api.mjs — запросы к API GitHub, которые у Orca
+  повторяются в обоих скриптах, собраны в один модуль.
+В шапке каждого из трёх скриптов — та же атрибуция: Copyright (c) 2026 Lovecast
+Inc., лицензия MIT; её полный текст — выше, в этом разделе.
+
+Файл .github/workflows/release.yml написан заново; порядок «черновик → сборка →
+проверка файлов → публикация» и мысль о гейтах взяты из release-cut.yml и
+release-mac-build.yml того же проекта.
+
 ------------------------------------------------------------------------------
 shadcn/ui
 ------------------------------------------------------------------------------

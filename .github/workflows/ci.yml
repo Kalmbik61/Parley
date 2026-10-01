@@ -1,0 +1,59 @@
+# CI (план релиза 0.1.0, V4): сборка, типы, линтер и юнит-тесты всех пакетов на каждый pull request и на
+# каждый push в master. E2E окна здесь пока не гоняются — пункт в TODOS.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Новый коммит в PR отменяет устаревший прогон; прогоны master идут до конца.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: Build, typecheck, lint, test
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Версию pnpm action-setup берёт из `packageManager` корневого package.json: своей строки у него нет.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # Бинарь Electron этому CI не нужен: сборка, типы, линтер и юнит-тесты его не запускают (E2E в CI нет),
+      # а скачивание около 100 МБ с GitHub — лишний повод для сбоя. Появятся E2E — убрать переменную.
+      - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      # `--retry=1`: тест, упавший один раз, гоняется ещё раз. Известные флейки хоста (TODOS, раздел 6) так
+      # не блокируют PR, а настоящая поломка падает и во второй раз. `--no-bail`: упал один пакет — остальные
+      # всё равно доходят до конца, и в журнале видны все поломки сразу.
+      - name: Unit tests
+        run: pnpm -r --workspace-concurrency=1 --no-bail run test --retry=1
