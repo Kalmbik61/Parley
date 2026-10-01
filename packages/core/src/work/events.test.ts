@@ -1,6 +1,7 @@
 /**
  * Чек-лист приёмки TUI v2, пункты 7, 8 и 11: битые строки пропускаются, порядок
- * событий — порядок файла, а второе чтение не перечитывает старые байты.
+ * событий — порядок файла, а второе чтение не перечитывает старые байты. Плюс разбор полей
+ * агента и снимка фоновых задач (Parley 0.2.0, активность агентов).
  */
 
 import { appendFile, mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises';
@@ -17,6 +18,9 @@ const line = (name: string, notificationType?: string): string =>
       ? { hook_event_name: name }
       : { hook_event_name: name, notification_type: notificationType },
   )}\n`;
+
+/** Строка журнала с произвольными полями — как хук дописывает stdin Claude Code. */
+const raw = (fields: Record<string, unknown>): string => `${JSON.stringify(fields)}\n`;
 
 let dir = '';
 const journal = (): string => path.join(dir, `${SESSION}.jsonl`);
@@ -120,6 +124,153 @@ describe('openEvents', () => {
   it('журнала ещё нет, но каталог есть → пустой список; каталога нет → null', async () => {
     expect(await openEvents(dir).read(SESSION)).toEqual([]);
     expect(await openEvents(path.join(dir, 'нет')).read(SESSION)).toBeNull();
+  });
+});
+
+describe('openEvents: поля агента и фоновых задач', () => {
+  const read = async (text: string) => {
+    await writeFile(journal(), text, 'utf8');
+    const events = await openEvents(dir).read(SESSION);
+    if (events === null) throw new Error('журнал не прочитан');
+    return events;
+  };
+
+  it('SubagentStart: agent_id, agent_type и transcript_path родителя', async () => {
+    const [event] = await read(
+      raw({
+        hook_event_name: 'SubagentStart',
+        agent_id: 'a4a0fb93b5a2dbaf7',
+        agent_type: 'general-purpose',
+        transcript_path: '/home/u/.claude/projects/p/sess.jsonl',
+        session_id: 'sess',
+      }),
+    );
+
+    expect(event).toMatchObject({
+      name: 'SubagentStart',
+      agentId: 'a4a0fb93b5a2dbaf7',
+      agentType: 'general-purpose',
+      transcriptPath: '/home/u/.claude/projects/p/sess.jsonl',
+      backgroundTasks: null,
+      waitTarget: null,
+    });
+  });
+
+  it('пустой agent_type — null (SubagentStop часто шлёт пустую строку); нет полей — null', async () => {
+    const [stop, bare] = await read(
+      raw({ hook_event_name: 'SubagentStop', agent_id: 'a1', agent_type: '' }) +
+        raw({ hook_event_name: 'Stop' }),
+    );
+
+    expect(stop).toMatchObject({ agentId: 'a1', agentType: null });
+    expect(bare).toMatchObject({
+      agentId: null,
+      agentType: null,
+      transcriptPath: null,
+      backgroundTasks: null,
+      waitTarget: null,
+    });
+  });
+
+  it('значения не строк в agent_id, agent_type и transcript_path — null, строка не теряется', async () => {
+    const events = await read(
+      raw({
+        hook_event_name: 'SubagentStart',
+        agent_id: 42,
+        agent_type: { x: 1 },
+        transcript_path: ['a'],
+      }) + raw({ hook_event_name: 'Stop' }),
+    );
+
+    expect(events.map((item) => item.name)).toEqual(['SubagentStart', 'Stop']);
+    expect(events[0]).toMatchObject({ agentId: null, agentType: null, transcriptPath: null });
+  });
+
+  it('background_tasks: задачи разобраны; пустое описание и тип агента — null', async () => {
+    const [event] = await read(
+      raw({
+        hook_event_name: 'Stop',
+        background_tasks: [
+          {
+            id: 'a4a0fb93b5a2dbaf7',
+            type: 'subagent',
+            status: 'running',
+            agent_type: 'general-purpose',
+            description: 'Orca mobile app research',
+          },
+          { id: 'b2', type: 'subagent', status: 'completed', agent_type: '', description: '' },
+        ],
+      }),
+    );
+
+    expect(event?.backgroundTasks).toEqual([
+      {
+        id: 'a4a0fb93b5a2dbaf7',
+        type: 'subagent',
+        status: 'running',
+        agentType: 'general-purpose',
+        description: 'Orca mobile app research',
+      },
+      { id: 'b2', type: 'subagent', status: 'completed', agentType: null, description: null },
+    ]);
+  });
+
+  it('background_tasks: [] — поле есть, задач нет; без поля — null', async () => {
+    const [empty, absent] = await read(
+      raw({ hook_event_name: 'Stop', background_tasks: [] }) + raw({ hook_event_name: 'Stop' }),
+    );
+
+    expect(empty?.backgroundTasks).toEqual([]);
+    expect(absent?.backgroundTasks).toBeNull();
+  });
+
+  it('кривые элементы background_tasks пропускаются, остальные и сама строка живут', async () => {
+    const [event] = await read(
+      raw({
+        hook_event_name: 'SubagentStop',
+        agent_id: 'a1',
+        background_tasks: [
+          null,
+          7,
+          'строка',
+          [],
+          {},
+          { id: 'без-статуса', type: 'subagent' },
+          { id: '', type: 'subagent', status: 'running' },
+          { id: 12, type: 'subagent', status: 'running' },
+          { id: 'без-типа', status: 'running' },
+          { id: 'ok', type: 'subagent', status: 'running', description: 5 },
+        ],
+      }),
+    );
+
+    expect(event?.name).toBe('SubagentStop');
+    expect(event?.agentId).toBe('a1');
+    expect(event?.backgroundTasks).toEqual([
+      { id: 'ok', type: 'subagent', status: 'running', agentType: null, description: null },
+    ]);
+  });
+
+  it('background_tasks не массив — как отсутствующее поле: прежний снимок не затирается', async () => {
+    const events = await read(
+      raw({ hook_event_name: 'Stop', background_tasks: 'нет' }) +
+        raw({ hook_event_name: 'Stop', background_tasks: { id: 'a' } }) +
+        raw({ hook_event_name: 'Stop', background_tasks: null }),
+    );
+
+    expect(events.map((item) => item.backgroundTasks)).toEqual([null, null, null]);
+  });
+
+  it('ParleyWaitStart несёт parley_wait_target, ParleyWaitEnd — нет', async () => {
+    const [start, end, bad] = await read(
+      raw({ hook_event_name: 'ParleyWaitStart', parley_wait_target: 's-03' }) +
+        raw({ hook_event_name: 'ParleyWaitEnd' }) +
+        raw({ hook_event_name: 'ParleyWaitStart', parley_wait_target: 5 }),
+    );
+
+    expect(start).toMatchObject({ name: 'ParleyWaitStart', waitTarget: 's-03' });
+    expect(end).toMatchObject({ name: 'ParleyWaitEnd', waitTarget: null });
+    expect(bad).toMatchObject({ name: 'ParleyWaitStart', waitTarget: null });
   });
 });
 

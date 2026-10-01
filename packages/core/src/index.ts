@@ -271,8 +271,14 @@ export type {
   ActivitySource,
   SessionActivity,
 } from './work/activity.js';
-export { openEvents, watchEvents } from './work/events.js';
-export type { EventRecord, EventsLog, EventsWatcher, WatchEventsOptions } from './work/events.js';
+export { bareEvent, openEvents, watchEvents } from './work/events.js';
+export type {
+  BackgroundTask,
+  EventRecord,
+  EventsLog,
+  EventsWatcher,
+  WatchEventsOptions,
+} from './work/events.js';
 export { deliveryAction, pointerText } from './work/delivery.js';
 export type { DeliveryAction, DeliveryInput } from './work/delivery.js';
 export {

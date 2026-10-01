@@ -1,14 +1,34 @@
 /**
  * Журнал событий хуков работы: `events/<session-id>.jsonl`, куда хук дописывает
- * stdin-JSON Claude Code как есть (дизайн TUI v2, раздел 4.2).
+ * stdin-JSON Claude Code как есть (дизайн TUI v2, раздел 4.2). Строки со своим
+ * `hook_event_name` дописывает и MCP-сервер сессии — начало и конец `wait_for`
+ * (`ParleyWaitStart`, `ParleyWaitEnd`).
  *
  * Читатель помнит смещение по каждому файлу: первое чтение — целиком, дальше
- * только новые байты. Логики состояния здесь нет — её выводит `activityOf`.
+ * только новые байты. Логики состояния здесь нет — её выводит `activityOf`; из
+ * строки берутся лишь поля, которые ему нужны.
  */
 
 import { watch, type FSWatcher } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
 import path from 'node:path';
+
+/**
+ * Фоновая задача из `background_tasks` хука — снимок на момент события. Claude Code
+ * кладёт его в КАЖДОЕ событие: `Stop`, `SubagentStop`, `Notification`… `id` совпадает
+ * с `agent_id` из `SubagentStart`.
+ */
+export interface BackgroundTask {
+  id: string;
+  /** Вид задачи: `subagent`; у других видов (фоновая команда…) своя семантика. */
+  type: string;
+  /** `running`, `completed`… */
+  status: string;
+  /** `agent_type` задачи; пустая строка и отсутствие — `null`. */
+  agentType: string | null;
+  /** Короткое описание задачи; пустая строка и отсутствие — `null`. */
+  description: string | null;
+}
 
 /** Одна строка журнала: что произошло и когда журнал это получил. */
 export interface EventRecord {
@@ -21,6 +41,19 @@ export interface EventRecord {
   name: string;
   /** `notification_type` у `Notification`; у остальных событий его нет. */
   notificationType: string | null;
+  /** `agent_id` у `SubagentStart` и `SubagentStop`; у остальных событий его нет. */
+  agentId: string | null;
+  /** `agent_type`; пустая строка (у `SubagentStop` она частая) — `null`. */
+  agentType: string | null;
+  /** `transcript_path` — транскрипт родителя; субагенты лежат рядом с ним. */
+  transcriptPath: string | null;
+  /**
+   * `background_tasks` — снимок фоновых задач. `null` — поля в строке нет (или оно не
+   * список): сведений нет, прежний снимок остаётся; `[]` — поле есть, задач нет.
+   */
+  backgroundTasks: BackgroundTask[] | null;
+  /** `parley_wait_target` у `ParleyWaitStart`: на что ждёт `wait_for` (id сессии или `inbox`). */
+  waitTarget: string | null;
 }
 
 /** Состояние чтения одного журнала: докуда дочитали и что уже разобрали. */
@@ -44,6 +77,52 @@ export interface EventsLog {
 
 const NEWLINE = 0x0a;
 
+/**
+ * Событие без полей хука: все необязательные поля пусты. Так записывается событие, которого в
+ * журнале нет, — хост выводит его из сигнала терминала Codex.
+ */
+export const bareEvent = (at: string, name: string): EventRecord => ({
+  at,
+  name,
+  notificationType: null,
+  agentId: null,
+  agentType: null,
+  transcriptPath: null,
+  backgroundTasks: null,
+  waitTarget: null,
+});
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** Непустая строка или `null`: Claude Code шлёт пустую строку вместо отсутствующего значения. */
+const textOf = (value: unknown): string | null =>
+  typeof value === 'string' && value !== '' ? value : null;
+
+/**
+ * Разбирает `background_tasks`. Кривой элемент (не объект, нет `id`, `type` или `status`)
+ * пропускается, остальные и сама строка живут. Не список — `null`: прочитать нечего.
+ */
+function parseTasks(value: unknown): BackgroundTask[] | null {
+  if (!Array.isArray(value)) return null;
+  const tasks: BackgroundTask[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+    const id = textOf(item.id);
+    const type = textOf(item.type);
+    const status = textOf(item.status);
+    if (id === null || type === null || status === null) continue;
+    tasks.push({
+      id,
+      type,
+      status,
+      agentType: textOf(item.agent_type),
+      description: textOf(item.description),
+    });
+  }
+  return tasks;
+}
+
 /** Разбирает строку журнала. `null` — битая строка или строка не про событие. */
 function parseEvent(line: string, at: string): EventRecord | null {
   let data: unknown;
@@ -52,13 +131,19 @@ function parseEvent(line: string, at: string): EventRecord | null {
   } catch {
     return null;
   }
-  if (typeof data !== 'object' || data === null || Array.isArray(data)) return null;
+  if (!isRecord(data)) return null;
 
-  const record = data as Record<string, unknown>;
-  const name = record.hook_event_name;
+  const name = data.hook_event_name;
   if (typeof name !== 'string' || name === '') return null;
-  const type = record.notification_type;
-  return { at, name, notificationType: typeof type === 'string' ? type : null };
+  return {
+    ...bareEvent(at, name),
+    notificationType: typeof data.notification_type === 'string' ? data.notification_type : null,
+    agentId: textOf(data.agent_id),
+    agentType: textOf(data.agent_type),
+    transcriptPath: textOf(data.transcript_path),
+    backgroundTasks: parseTasks(data.background_tasks),
+    waitTarget: textOf(data.parley_wait_target),
+  };
 }
 
 const isDirectory = async (dir: string): Promise<boolean> => {

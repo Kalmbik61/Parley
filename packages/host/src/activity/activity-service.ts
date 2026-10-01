@@ -15,6 +15,7 @@ import { existsSync } from 'node:fs';
 import {
   activityOf,
   applyAutoTitle,
+  bareEvent,
   envValue,
   isNewLabel,
   linkSession,
@@ -408,7 +409,7 @@ export function createActivityService(
     state.startupTimer = undefined;
     if (stopped || terminals.get(key) !== state || state.last !== null) return;
     const at = new Date(nowFn()).toISOString();
-    state.last = { at, name: 'PermissionRequest', notificationType: null };
+    state.last = bareEvent(at, 'PermissionRequest');
     host.broadcast('host.notice', {
       kind: 'startup-wait',
       ref,
@@ -632,7 +633,7 @@ export function createActivityService(
       // Время обновляется на каждом сигнале, даже повторном: он новее любого `Stop` от notify, который
       // журнал успел принять между кадрами, — так следующий кадр спиннера ставит терминальное событие
       // после него.
-      state.last = { at: new Date(nowFn()).toISOString(), name, notificationType: null };
+      state.last = bareEvent(new Date(nowFn()).toISOString(), name);
       if (state.startupTimer !== undefined) {
         clearTimeout(state.startupTimer);
         state.startupTimer = undefined;
