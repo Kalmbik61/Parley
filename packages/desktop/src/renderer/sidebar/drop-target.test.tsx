@@ -70,6 +70,7 @@ function Card({ entry, showClosed = false }: { entry: WorkEntry; showClosed?: bo
             bridge={BRIDGE}
             row={row}
             unread={0}
+            mentioned={false}
             activity={{}}
             now={NOW}
             active

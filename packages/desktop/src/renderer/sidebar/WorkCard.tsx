@@ -3,6 +3,10 @@
  * счётчиками писем и комнат, мета и строки сессий. Внимание карточка не считает — его
  * отдаёт общий расчёт (`use-sidebar-sections.ts`), тот же, что упорядочил список.
  *
+ * Счётчик «для тебя» (`WorkAttention.humanUnread`): письма человеку и, с Parley 0.3.0, упоминания `@human` в комнатах.
+ * Есть письма — значок конверта и клик в Mail; одни упоминания — значок `@` и клик в комнату самого позднего из них
+ * (`attention/derive.ts#forYouTarget`): Mail показывает только письма, упоминание там не найти.
+ *
  * Облик Organic (спека окна 2026-09-29, 1.2): радиус 16, отступ `8 8 8 10`, зазор между карточками 6.
  * Активная — фон `neutral-100` и `shadow-sm`; неактивная под курсором — `--card-hover` (`text 4%`, а не 6% из
  * handoff: решение 2, на 6% `neutral-700` даёт 4.4:1). Строка заголовка 22px: значок самого срочного
@@ -26,12 +30,12 @@
 
 import { memo, useRef, useState } from 'react';
 import { create } from 'zustand';
-import { Hash, Mail, Plus } from 'lucide-react';
+import { AtSign, Hash, Mail, Plus } from 'lucide-react';
 import type { SessionLifecycle, WorkEntry } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
-import { roomAwaitsDecision, type WorkAttention } from '../attention/derive.js';
+import { forYouTarget, roomAwaitsDecision, type WorkAttention } from '../attention/derive.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import { useHostSupports } from '../lib/capabilities.js';
 import { cn } from '../lib/cn.js';
@@ -161,6 +165,9 @@ export const WorkCard = memo(function WorkCard({
   const openCount = tree.length - closedCount;
 
   const bold = attention.unseen > 0 || attention.humanUnread > 0;
+  // Куда ведёт кнопка «для тебя»; без цели (расчёт опередил карту) — Mail, как прежде.
+  const forYou = attention.humanUnread > 0 ? forYouTarget(map) : null;
+  const ForYouIcon = forYou?.kind === 'room' ? AtSign : Mail;
   const roomsWithUnread = Object.keys(attention.roomsUnread).length;
   const time = relativeTime(attention.lastEventAt, now);
   // Вторичный текст — свой токен: на активной карточке `--muted-foreground` ниже 4.5:1.
@@ -215,11 +222,12 @@ export const WorkCard = memo(function WorkCard({
             aria-label={S.sidebar.unreadMail(attention.humanUnread)}
             onClick={(event) => {
               event.stopPropagation();
-              onOpenMail();
+              if (forYou?.kind === 'room') onOpenRoom(forYou.roomId);
+              else onOpenMail();
             }}
             className="inline-flex shrink-0 items-center gap-[3px] text-[11px] font-semibold text-accent-700 hover:text-accent-800"
           >
-            <Mail className="size-3" aria-hidden="true" />
+            <ForYouIcon className="size-3" aria-hidden="true" />
             <span className="tabular-nums">{attention.humanUnread}</span>
           </button>
         ) : null}
@@ -285,6 +293,7 @@ export const WorkCard = memo(function WorkCard({
                 bridge={bridge}
                 row={row}
                 unread={attention.roomsUnread[row.room.id] ?? 0}
+                mentioned={(attention.roomMentions[row.room.id] ?? 0) > 0}
                 activity={activity}
                 now={now}
                 active={active}

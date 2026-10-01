@@ -68,6 +68,7 @@ function renderRow(entry: WorkEntry, options: Options = {}) {
         bridge={BRIDGE}
         row={roomRowOf(entry, showClosed, roomId)}
         unread={0}
+        mentioned={false}
         activity={{}}
         now={NOW}
         active={false}
@@ -619,5 +620,42 @@ describe('RoomRow — активность и время', () => {
     renderRow(entry, { activity: live });
     expect(memberRows()[2]?.querySelector('[data-state="unseen"]')).not.toBeNull();
     expect(memberRows()[0]?.querySelector('[data-state="idle"]')).not.toBeNull();
+  });
+});
+
+// Parley 0.3.0: в комнате назвали человека (`@human`) — слово справа `@you · N new`; решение, что ждёт ответа, важнее.
+describe('RoomRow — упоминание человека (Parley 0.3.0)', () => {
+  it('словом строки становится «@you · N new»: N — все новые сообщения комнаты, а не только упоминания', () => {
+    renderRow(fourAgents(), { unread: 3, mentioned: true });
+    const word = screen.getByText('@you \u00b7 3 new');
+    expect(word.className).toContain('text-neutral-800');
+    expect(word.className).toContain('text-[11px]');
+    expect(word.className).toContain('shrink-0');
+    expect(screen.getByText('Возвраты').className).toContain('font-bold');
+    // Слово заменило простое «N new», а не дополнило его.
+    expect(header().textContent?.match(/new/g)).toHaveLength(1);
+  });
+
+  it('тот же текст, что даёт строка окна: S.sidebar.roomMentioned', () => {
+    expect(S.sidebar.roomMentioned(1)).toBe('@you \u00b7 1 new');
+    renderRow(fourAgents(), { unread: 1, mentioned: true });
+    expect(header().textContent).toContain(S.sidebar.roomMentioned(1));
+  });
+
+  it('без упоминания — прежнее «N new»; без непрочитанного слова нет', () => {
+    renderRow(fourAgents(), { unread: 2, mentioned: false });
+    expect(header().textContent).toContain('2 new');
+    expect(header().textContent).not.toContain('@you');
+    cleanup();
+    renderRow(fourAgents());
+    expect(header().textContent).not.toContain('@you');
+    expect(header().textContent).not.toContain('new');
+  });
+
+  it('решение ждёт — слово «decision», а не «@you · N new»', () => {
+    renderRow(fourAgents({ proposal }), { unread: 2, mentioned: true });
+    expect(screen.getByText(S.sidebar.roomDecision).className).toContain('text-accent-800');
+    expect(header().textContent).not.toContain('@you');
+    expect(header().textContent).not.toContain('2 new');
   });
 });

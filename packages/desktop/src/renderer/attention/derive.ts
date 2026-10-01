@@ -9,12 +9,14 @@
 
 import type { Message, Room, SessionActivity, WorkEntry, WorkMap, WorkSession } from '@parley/core';
 import { refKey } from '@parley/protocol';
+import { mentionsHuman } from '../components/rooms/mention.js';
 import { isoMs } from '../lib/iso-time.js';
 import { workKey } from '../lib/tree-order.js';
 import type { ActivityEntry } from '../store/activity.js';
 
-// Тот же литерал, что и `HUMAN` в `core/work/types.ts`: из core рендерер берёт только типы.
+// Те же литералы, что `HUMAN` и `SYSTEM` в `core/work/types.ts`: из core рендерер берёт только типы.
 const HUMAN = 'human';
+const SYSTEM = 'system';
 
 export type Attention = 'needs-you' | 'unseen' | 'working' | 'idle' | 'off';
 
@@ -88,9 +90,44 @@ export function isHumanUnread(message: Message): boolean {
   );
 }
 
-/** Прямые письма человеку (roomId === null) с isHumanUnread. */
+/**
+ * Сообщение комнаты, где человека назвали (Parley 0.3.0): не от него и не от хоста, а в тексте — `@human`. Распознаёт
+ * `mentionsHuman` — то же правило, по которому лента рисует чип «@you». Прочитано оно или нет, решает `isHumanUnread`.
+ */
+export function isHumanMention(message: Message): boolean {
+  return (
+    message.roomId !== null &&
+    message.from !== HUMAN &&
+    message.from !== SYSTEM &&
+    mentionsHuman(message.text)
+  );
+}
+
+/**
+ * Прямые письма человеку (roomId === null) с isHumanUnread. Упоминания в комнатах сюда не входят — их берёт
+ * `humanUnreadMentions`: письма — это то, что показывает вкладка Mail (`layout/tab-meta.ts`), а упоминание живёт в комнате.
+ */
 export function humanUnreadLetters(map: WorkMap): Message[] {
   return map.messages.filter((message) => message.roomId === null && isHumanUnread(message));
+}
+
+/** Упоминания человека в комнатах (`isHumanMention`) с isHumanUnread, в порядке карты: последнее — самое позднее. */
+export function humanUnreadMentions(map: WorkMap): Message[] {
+  return map.messages.filter((message) => isHumanUnread(message) && isHumanMention(message));
+}
+
+/** Куда ведёт кнопка «для тебя» карточки: в почту — письма важнее — или в комнату самого позднего упоминания. */
+export type ForYouTarget = { kind: 'mail' } | { kind: 'room'; roomId: string };
+
+/**
+ * Цель кнопки «для тебя» (`WorkCard`): есть непрочитанные письма — вкладка Mail; одни упоминания — комната
+ * самого позднего из них; ничего непрочитанного — `null`. Письма первыми, потому что Mail показывает только их:
+ * упоминание там не найти.
+ */
+export function forYouTarget(map: WorkMap): ForYouTarget | null {
+  if (humanUnreadLetters(map).length > 0) return { kind: 'mail' };
+  const roomId = humanUnreadMentions(map).at(-1)?.roomId ?? null;
+  return roomId === null ? null : { kind: 'room', roomId };
 }
 
 /** Сообщения комнаты с isHumanUnread: человек — участник любой комнаты. */
@@ -102,8 +139,10 @@ export interface WorkAttention {
   level: Attention;
   needsYou: number;                     // сессии в 'needs-you' и комнаты с ждущим решением (2.7)
   unseen: number;
+  // письма человеку без комнаты и упоминания `@human` в комнатах: одно сообщение считается один раз
   humanUnread: number;
   roomsUnread: Record<string, number>;  // только комнаты с непрочитанным
+  roomMentions: Record<string, number>; // только комнаты с непрочитанным упоминанием человека
   lastEventAt: string;                  // max(lastEventAt сессий, work.updatedAt, at последнего письма)
 }
 
@@ -143,19 +182,25 @@ export function workAttention(entry: WorkEntry, activity: Record<string, Activit
     level = 'needs-you';
   }
 
-  const humanUnread = humanUnreadLetters(map).length;
+  // Письма идут без `roomId`, упоминания — с ним: множества не пересекаются, и одно сообщение считается один раз.
+  const mentions = humanUnreadMentions(map);
+  const humanUnread = humanUnreadLetters(map).length + mentions.length;
   // Письмо человеку — ранг 3 (2.7, как `workRank` прототипа): выше работающей и простаивающей работы,
-  // ниже blocked и решения. Прежде оно поднимало работу до needs-you (спека Orca-UI 7.1). Комнаты — фон,
-  // а не вызов: их непрочитанное уровень не поднимает.
+  // ниже blocked и решения. Прежде оно поднимало работу до needs-you (спека Orca-UI 7.1). Упоминание человека в
+  // комнате — то же письмо, ему и ранг тот же. Прочие комнаты — фон, а не вызов: их непрочитанное уровень не
+  // поднимает.
   if (humanUnread > 0 && ATTENTION_RANK[level] < ATTENTION_RANK.unseen) level = 'unseen';
 
   const roomsUnread: Record<string, number> = {};
+  const roomMentions: Record<string, number> = {};
   for (const room of map.rooms) {
     const count = roomUnreadForHuman(map, room.id);
     if (count > 0) roomsUnread[room.id] = count;
+    const mentioned = mentions.filter((message) => message.roomId === room.id).length;
+    if (mentioned > 0) roomMentions[room.id] = mentioned;
   }
 
-  return { level, needsYou, unseen, humanUnread, roomsUnread, lastEventAt };
+  return { level, needsYou, unseen, humanUnread, roomsUnread, roomMentions, lastEventAt };
 }
 
 /**
@@ -171,9 +216,16 @@ export function attentionOf(attention: Record<string, WorkAttention>, entry: Wor
       unseen: 0,
       humanUnread: 0,
       roomsUnread: {},
+      roomMentions: {},
       lastEventAt: entry.map.work.updatedAt,
     }
   );
+}
+
+/** Два счётчика по комнатам (`roomsUnread`, `roomMentions`) совпадают поштучно. */
+function sameRoomCounts(a: Record<string, number>, b: Record<string, number>): boolean {
+  const rooms = Object.keys(a);
+  return rooms.length === Object.keys(b).length && rooms.every((id) => a[id] === b[id]);
 }
 
 /** Два расчёта внимания работы совпадают по всем полям (комнаты — поштучно). */
@@ -187,6 +239,7 @@ export function sameWorkAttention(a: WorkAttention, b: WorkAttention): boolean {
   ) {
     return false;
   }
-  const rooms = Object.keys(a.roomsUnread);
-  return rooms.length === Object.keys(b.roomsUnread).length && rooms.every((id) => a.roomsUnread[id] === b.roomsUnread[id]);
+  return (
+    sameRoomCounts(a.roomsUnread, b.roomsUnread) && sameRoomCounts(a.roomMentions, b.roomMentions)
+  );
 }
