@@ -1,0 +1,27 @@
+ ▐▛███▛█   Claude Code v2.1.286
+▝▜██████▀  Haiku 4.5 · Claude Max
+ ▝▝   ▝▝   /…/dab7e6c3-4dab-4bbc-b461-19f97ca741a6/scratchpad/chat-probe/proj
+
+
+❯ Reply with exactly 12 numbered lines, each a short fact about the sea. No tools, no preamble.               
+
+⏺ 1. The ocean covers approximately 71% of Earth's surface.
+  2. The Mariana Trench is the deepest point in the ocean at roughly 11,000 meters.
+  3. Oceans contain about 97% of all water on Earth.
+  4. The Pacific Ocean is the largest ocean, covering more area than all land combined.
+  5. Sea water is approximately 3.5% salt by weight, mostly sodium chloride.
+  6. Marine phytoplankton produce more than half of Earth's oxygen.
+  7. The Great Barrier Reef is the world's largest coral reef system.
+  8. Ocean currents like the Gulf Stream distribute heat around the planet.
+  9. The midnight zone (bathypelagic zone) begins at about 1,000 meters depth.
+  10. Bioluminescent creatures produce their own light in the deep ocean.
+  11. Sea levels rise approximately 3-4 millimeters per year due to climate change.
+  12. Whales migrate thousands of kilometers annually between feeding and breeding grounds.
+
+✻ Worked for 7s · done 3:41 PM
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  probe-statusline
+  ⏸ manual mode on · ← for agents

@@ -1,0 +1,26 @@
+ ▐▛███▛█   Claude Code v2.1.286
+▝▜██████▀  Haiku 4.5 · Claude Max
+ ▝▝   ▝▝   /…/dab7e6c3-4dab-4bbc-b461-19f97ca741a6/scratchpad/chat-probe/proj
+
+
+❯ Use the Bash tool to run exactly this command, then reply "done": touch probe-a.txt                         
+
+⏺ Bash(touch probe-a.txt)
+  ⎿  Done
+
+⏺ done
+
+✻ Crunched for 4s · done 3:43 PM
+
+❯ Use the Bash tool to run exactly this command, then reply "done": touch probe-b.txt                         
+
+⏺ Bash(touch probe-b.txt)
+  ⎿  Interrupted · What should Claude do instead?
+
+✻ Cooked for 1s · done 3:43 PM
+ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  probe-statusline
+  ⏸ manual mode on · ← for agents

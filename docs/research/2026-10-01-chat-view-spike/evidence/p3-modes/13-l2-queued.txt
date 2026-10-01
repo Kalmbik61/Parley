@@ -1,0 +1,39 @@
+  6
+  7
+  8
+  9
+  10
+  11
+  12
+  13
+  14
+  15
+  16
+  17
+  18
+  19
+  20
+  21
+  22
+  23
+  24
+  25
+  26
+  27
+  28
+  29
+  30
+
+✻ Crunched for 2s · done 3:48 PM
+
+❯ Then reply with one word: queued                                                                            
+
+✢ Tinkering… (0s · ↓ 20 tokens)
+  ⎿  Tip: Run /ultrareview for a cloud-based multi-agent review that finds and verifies bugs in your branch — 
+     3 free reviews left
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  probe-statusline
+  ⏸ manual mode on · ← for agents
