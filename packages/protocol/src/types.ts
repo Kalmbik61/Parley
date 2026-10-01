@@ -26,6 +26,21 @@ export interface SessionRef {
 export const refKey = (ref: SessionRef): string =>
   `${ref.projectPath}\u0000${ref.workId}\u0000${ref.sessionId}`;
 
+/**
+ * Живой субагент сессии для строки участника комнаты (`LiveMetrics.tasks`). Хост берёт описание из
+ * снимка фоновых задач Claude Code, а если там его нет — из `meta.json` субагента; путь к
+ * транскрипту, по которому он ищется, наружу не отдаётся.
+ */
+export interface LiveTask {
+  id: string;
+  /** `general-purpose`…; `null` — неизвестно. */
+  agentType: string | null;
+  /** Короткое описание задачи; `null` — неизвестно. */
+  description: string | null;
+  /** Фоновый: работает и после конца хода родителя. */
+  background: boolean;
+}
+
 /** Живые цифры сессии для строки статуса и списка — `null`, пока их не видно. */
 export interface LiveMetrics {
   tokensIn: number | null;
@@ -34,6 +49,16 @@ export interface LiveMetrics {
   unread: number;
   subagents: number;
   model: string | null;
+  /**
+   * Живые субагенты; пустой список — их нет. Поля нет у хоста более ранней версии: окно читает
+   * его как «неизвестно» и показывает то, что было, а не падает.
+   */
+  tasks?: LiveTask[];
+  /**
+   * На что ждёт `wait_for` этой сессии: id сессии (`s-03`) или `inbox`; `null` — не ждёт. Поля нет
+   * у хоста более ранней версии, как и у `tasks`.
+   */
+  waitingFor?: string | null;
 }
 
 /** Виды уведомлений хоста, для которых не нужен отдельный запрос-ответ. */
