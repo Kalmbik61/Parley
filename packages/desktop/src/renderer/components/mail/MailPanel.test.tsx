@@ -229,6 +229,36 @@ describe('MailPanel — облик Organic (1.8)', () => {
     expect(block.parentElement).toBe(container.firstElementChild);
   });
 
+  it('текст решения в плашке — строчный Markdown; чип берёт ярлык сессии из карты, как в ленте комнаты', () => {
+    const entry = entryWith([
+      {
+        ...message('m-d', '2026-01-01T10:00:00.000Z'),
+        kind: 'decision',
+        text: '## План\n\n- **код** — @s02\n- ревью — @s09',
+      },
+    ]);
+    entry.map.sessions[1] = { ...session('s-02'), label: 'бэкенд' };
+    render(
+      <MailPanel
+        entry={entry}
+        providers={[]}
+        models={{}}
+        bridge={bridge}
+        active
+        onOpenExternal={() => {}}
+      />,
+    );
+    const item = (screen.getByText('Decisions').parentElement as HTMLElement).querySelector(
+      'li',
+    ) as HTMLElement;
+    expect((item.textContent ?? '').replace(/\s+/g, ' ').trim()).toBe(
+      'План код — @S02 бэкенд ревью — @S09 · S01 (claude)',
+    );
+    expect(item.textContent).not.toMatch(/[#*]/);
+    expect(item.querySelector('strong')?.textContent).toBe('код');
+    expect(item.querySelector('p, h2, ul, ol, li, br')).toBeNull();
+  });
+
   it('↓N — пилюля', () => {
     const initial = [message('m-1', '2026-01-01T10:00:00.000Z'), message('m-2', '2026-01-01T10:01:00.000Z')];
     const { container, rerender } = mount(initial);

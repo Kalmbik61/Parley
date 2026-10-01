@@ -419,3 +419,97 @@ describe('RoomMarkdown — вид', () => {
     expect(container.querySelector('[data-room-markdown]')?.textContent).toBe(word);
   });
 });
+
+describe('RoomMarkdown — строчный вид (inline)', () => {
+  const BLOCKS =
+    'p, h1, h2, h3, h4, h5, h6, ul, ol, li, pre, blockquote, table, tr, td, th, hr, br';
+  /** Текст так, как его видит читатель: пробельные цепочки и переводы строк схлопнуты. */
+  const flat = (element: Element): string =>
+    (element.textContent ?? '').replace(/\s+/g, ' ').trim();
+
+  function renderInline(text: string) {
+    const onOpenExternal = vi.fn();
+    const view = render(
+      <RoomMarkdown inline text={text} labelOf={labelOf} onOpenExternal={onOpenExternal} />,
+    );
+    const root = view.container.querySelector('[data-room-markdown]') as HTMLElement;
+    return { ...view, root, onOpenExternal };
+  }
+
+  it('корень — span без блочной типографики: сидит в строке, а не отдельным блоком', () => {
+    const { root } = renderInline('текст');
+    expect(root.tagName).toBe('SPAN');
+    expect(root.getAttribute('data-room-markdown')).toBe('inline');
+    expect(root.className).toContain('[&_code]:bg-muted');
+    expect(root.className).not.toContain('text-sm');
+    expect(root.className).not.toContain('[&_p]:my-1.5');
+  });
+
+  it('блоки сворачиваются в строку: заголовок, абзацы, списки, цитата, таблица, hr и блок кода', () => {
+    const { root } = renderInline(
+      '# Заголовок\n\nабзац\n\n- пункт\n  - вложенный\n\n> цитата\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n---\n\n```\nкод\n```',
+    );
+    expect(root.querySelector(BLOCKS)).toBeNull();
+    expect(flat(root)).toBe('Заголовок абзац пункт вложенный цитата a b 1 2 код');
+  });
+
+  it('жирный, курсив, зачёркнутый, инлайн-код, ссылка и чип остаются элементами', () => {
+    const { root } = renderInline('**ж** *к* ~~з~~ `код` [ссылка](https://example.com) @s02');
+    expect(root.querySelector('strong')?.textContent).toBe('ж');
+    expect(root.querySelector('em')?.textContent).toBe('к');
+    expect(root.querySelector('del')?.textContent).toBe('з');
+    expect(root.querySelector('code')?.textContent).toBe('код');
+    expect(root.querySelector('a')?.getAttribute('href')).toBe('https://example.com');
+    expect(root.querySelector('[data-mention="s-02"]')?.textContent).toBe('@S02 бэкенд');
+  });
+
+  it('перенос строки — пробел, а не <br>: одиночный, из двух пробелов и обратной косой', () => {
+    const { root } = renderInline('раз\nдва  \nтри\\\nчетыре');
+    expect(flat(root)).toBe('раз два три четыре');
+    expect(root.querySelector('br')).toBeNull();
+  });
+
+  it('`@s02` в инлайн-коде и в блоке кода — буквально, чип только вне кода', () => {
+    const { root } = renderInline('`@s02`, @s03\n\n```\n@s02\n```');
+    expect(
+      Array.from(root.querySelectorAll('[data-mention]'), (chip) =>
+        chip.getAttribute('data-mention'),
+      ),
+    ).toEqual(['s-03']);
+    expect(Array.from(root.querySelectorAll('code'), (code) => code.textContent?.trim())).toEqual([
+      '@s02',
+      '@s02',
+    ]);
+  });
+
+  it('картинка — как в ленте: alt текстом или ссылкой; список задач — без флажков', () => {
+    const { root } = renderInline(
+      '![схема](https://example.com/a.png) ![два](./b.png)\n\n- [x] готово',
+    );
+    expect(root.querySelector('img, input')).toBeNull();
+    expect(root.querySelector('a')?.textContent).toBe('схема');
+    expect(flat(root)).toBe('схема два готово');
+  });
+
+  it('те же правила ссылок и HTML: javascript: и сырой <script> — текстом', () => {
+    const { root, onOpenExternal } = renderInline(
+      '[x](javascript:alert(1)) <script>alert(1)</script>',
+    );
+    expect(root.querySelector('a, script')).toBeNull();
+    expect(flat(root)).toBe('x <script>alert(1)</script>');
+    expect(onOpenExternal).not.toHaveBeenCalled();
+  });
+
+  it('внутри inline-текста перерисовка с новыми колбэками не разбирает текст заново', () => {
+    const text = '## План\n\n- @s02';
+    const view = render(
+      <RoomMarkdown inline text={text} labelOf={labelOf} onOpenExternal={() => {}} />,
+    );
+    const first = parses();
+    view.rerender(
+      <RoomMarkdown inline text={text} labelOf={() => 'S02 иначе'} onOpenExternal={() => {}} />,
+    );
+    expect(parses()).toBe(first);
+    expect(view.container.querySelector('[data-mention]')?.textContent).toBe('@S02 иначе');
+  });
+});

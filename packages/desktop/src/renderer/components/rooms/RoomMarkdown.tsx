@@ -20,10 +20,15 @@
  * кладёт `\n` между блоками внутри пункта, и вложенный или «свободный» список растёт вдвое пустыми строками.
  *
  * Типографика — потомковые селекторы на корне, как в `MarkdownPreview.tsx`, по токенам темы: светлая и тёмная.
+ *
+ * Строчный вид (`inline`) — для превью в одну строку, плашка решений `mail/Decisions.tsx` под `line-clamp-2`:
+ * тот же разбор (GFM, упоминания, правила ссылок и HTML), но остаются только инлайновые элементы — жирный,
+ * курсив, зачёркнутый, код, ссылки, чипы; заголовки, абзацы, списки, цитаты, таблицы и блоки кода
+ * разворачиваются в свой текст (`allowedElements` + `unwrapDisallowed`), перенос строки — пробел, а не `<br>`.
  */
 
 import { createContext, useContext, useMemo, useRef, type ReactNode } from 'react';
-import ReactMarkdown, { type Components } from 'react-markdown';
+import ReactMarkdown, { type Components, type Options } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { resolveMarkdownLink, safeUrlTransform } from '../../lib/markdown-links.js';
 import { sessionTag } from '../../lib/participant.js';
@@ -34,6 +39,8 @@ export interface RoomMarkdownProps {
   /** Ярлык участника для чипа: `S02 бэкенд`; неизвестной сессии — `S02`. */
   labelOf: (sessionId: string) => string | null;
   onOpenExternal: (url: string) => void;
+  /** Строчный вид для превью в одну строку (плашка решений): блоки сворачиваются в текст, корень — `span`. */
+  inline?: boolean;
 }
 
 /**
@@ -66,12 +73,19 @@ function mentionNode(sessionId: string): MdNode {
   };
 }
 
-/** Текстовый узел → текст, упоминания и `break` на каждом переводе строки. Разбор токена — `mention.ts`. */
-function expandText(value: string): MdNode[] {
+/**
+ * Текстовый узел → текст, упоминания и `break` на каждом переводе строки (в строчном виде `\n` остаётся
+ * в тексте и читается пробелом). Разбор токена — `mention.ts`.
+ */
+function expandText(value: string, lineBreaks: boolean): MdNode[] {
   const out: MdNode[] = [];
   for (const segment of splitMentions(value)) {
     if (segment.kind === 'mention') {
       out.push(mentionNode(segment.sessionId));
+      continue;
+    }
+    if (!lineBreaks) {
+      out.push({ type: 'text', value: segment.text });
       continue;
     }
     segment.text.split(LINE_BREAK).forEach((line, index) => {
@@ -86,26 +100,32 @@ function expandText(value: string): MdNode[] {
  * Код (`inlineCode`, `code`) и разметка HTML — узлы-листья со своим `value`, а не `text`: их плагин не
  * трогает, `@s02` в них остаётся буквальным.
  */
-function expandChildren(parent: MdNode): void {
+function expandChildren(parent: MdNode, lineBreaks: boolean): void {
   if (parent.children === undefined) return;
   const next: MdNode[] = [];
   for (const child of parent.children) {
     if (child.type === 'text' && child.value !== undefined) {
-      next.push(...expandText(child.value));
+      next.push(...expandText(child.value, lineBreaks));
       continue;
     }
-    if (!LITERAL_PARENTS.has(child.type)) expandChildren(child);
+    if (!LITERAL_PARENTS.has(child.type)) expandChildren(child, lineBreaks);
     next.push(child);
   }
   parent.children = next;
 }
 
 /** Плагин remark: упоминания и переносы строк в текстовых узлах. */
-function remarkMentions() {
-  return (tree: MdNode): void => expandChildren(tree);
+function remarkMentions(options?: { lineBreaks?: boolean }) {
+  const lineBreaks = options?.lineBreaks ?? true;
+  return (tree: MdNode): void => expandChildren(tree, lineBreaks);
 }
 
-const REMARK_PLUGINS = [remarkGfm, remarkMentions];
+type RemarkPlugins = NonNullable<Options['remarkPlugins']>;
+const REMARK_PLUGINS: RemarkPlugins = [remarkGfm, remarkMentions];
+const INLINE_REMARK_PLUGINS: RemarkPlugins = [remarkGfm, [remarkMentions, { lineBreaks: false }]];
+
+/** Что остаётся в строчном виде; прочие элементы (блоки) заменяются своим содержимым. */
+const INLINE_ELEMENTS = ['a', 'code', 'del', 'em', 'img', 'span', 'strong'];
 
 /** Ярлык участника для чипа — из контекста: разобранное дерево от `labelOf` не зависит. */
 const LabelOf = createContext<RoomMarkdownProps['labelOf']>(() => null);
@@ -207,6 +227,10 @@ function markdownComponents(openExternal: (url: string) => void): Components {
   };
 }
 
+/** Инлайн-код: моноширинный на `bg-muted`; одинаков в ленте и в строчном виде. */
+const CODE_CLASS =
+  '[&_code]:rounded-sm [&_code]:bg-muted [&_code]:px-1 [&_code]:font-mono [&_code]:text-[0.9em]';
+
 const ROOT_CLASS = [
   // Размер и перенос — как у прежнего обычного текста: 14px/1.55, длинные слова и адреса переносятся.
   'min-w-0 text-sm leading-[1.55] break-words [overflow-wrap:anywhere] [text-wrap:pretty]',
@@ -222,14 +246,19 @@ const ROOT_CLASS = [
   '[&_.contains-task-list]:list-none [&_.contains-task-list]:pl-0 [&_input]:mr-1.5',
   // Код: инлайн — моноширинный на `bg-muted`; блок — то же плюс горизонтальная прокрутка, а код в нём без
   // собственной подложки.
-  '[&_code]:rounded-sm [&_code]:bg-muted [&_code]:px-1 [&_code]:font-mono [&_code]:text-[0.9em]',
+  CODE_CLASS,
   '[&_pre]:my-1.5 [&_pre]:overflow-x-auto [&_pre]:rounded-sm [&_pre]:bg-muted [&_pre]:p-2 [&_pre_code]:bg-transparent [&_pre_code]:p-0',
   '[&_blockquote]:my-1.5 [&_blockquote]:border-l-[3px] [&_blockquote]:border-neutral-400 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground',
   '[&_hr]:my-3 [&_hr]:border-border',
   '[&_th]:border [&_th]:border-border [&_th]:bg-muted [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1',
 ].join(' ');
 
-export function RoomMarkdown({ text, labelOf, onOpenExternal }: RoomMarkdownProps): JSX.Element {
+export function RoomMarkdown({
+  text,
+  labelOf,
+  onOpenExternal,
+  inline = false,
+}: RoomMarkdownProps): JSX.Element {
   // Один набор компонентов на экземпляр: новые функции React счёл бы новыми типами и пересоздал бы ссылки и
   // таблицы при каждой перерисовке ленты — выделение текста в них сбрасывалось бы. Колбэк читается из ref.
   const openRef = useRef(onOpenExternal);
@@ -243,22 +272,31 @@ export function RoomMarkdown({ text, labelOf, onOpenExternal }: RoomMarkdownProp
   const content = useMemo(
     () => (
       <ReactMarkdown
-        remarkPlugins={REMARK_PLUGINS}
+        remarkPlugins={inline ? INLINE_REMARK_PLUGINS : REMARK_PLUGINS}
         components={components}
+        allowedElements={inline ? INLINE_ELEMENTS : undefined}
+        unwrapDisallowed={inline}
         // Штатная чистка react-markdown пропустила бы `mailto:`, `irc:`, `xmpp:`; своя — только http(s), пути и якоря.
         urlTransform={safeUrlTransform}
       >
         {text}
       </ReactMarkdown>
     ),
-    [text, components],
+    [text, components, inline],
   );
 
   return (
     <LabelOf.Provider value={labelOf}>
-      <div data-room-markdown="" className={ROOT_CLASS}>
-        {content}
-      </div>
+      {inline ? (
+        // Строчный корень стоит в строке рядом с подписью, а не блоком; из типографики ему нужен только инлайн-код.
+        <span data-room-markdown="inline" className={CODE_CLASS}>
+          {content}
+        </span>
+      ) : (
+        <div data-room-markdown="" className={ROOT_CLASS}>
+          {content}
+        </div>
+      )}
     </LabelOf.Provider>
   );
 }

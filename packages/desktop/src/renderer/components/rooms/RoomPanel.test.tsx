@@ -218,6 +218,35 @@ describe('RoomPanel — пустая комната и блок Decisions', () =
     renderPanel(entryOf({ messages: [message('m-1')] }));
     expect(document.querySelector('[data-decisions]')).toBeNull();
   });
+
+  it('текст решения в блоке — строчный Markdown: без #, маркеров и **, чип с ярлыком, ссылка наружу', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', {
+          from: 's-01',
+          kind: 'decision',
+          text: '## План\n\n- **код** — @s02\n- [ревью](https://example.com/pr) — @s03',
+        }),
+      ],
+    });
+    const { initial } = renderPanel(entry);
+    const item = (document.querySelector('[data-decisions]') as HTMLElement).querySelector(
+      'li',
+    ) as HTMLElement;
+    expect((item.textContent ?? '').replace(/\s+/g, ' ').trim()).toBe(
+      'План код — @S02 бэкенд ревью — @S03 ревью · S01 архитектор',
+    );
+    expect(item.textContent).not.toMatch(/[#*]/);
+    expect(item.querySelector('strong')?.textContent).toBe('код');
+    expect(item.querySelector('p, h2, ul, ol, li, br')).toBeNull();
+    expect(
+      Array.from(item.querySelectorAll('[data-mention]'), (chip) =>
+        chip.getAttribute('data-mention'),
+      ),
+    ).toEqual(['s-02', 's-03']);
+    expect(fireEvent.click(within(item).getByRole('link', { name: 'ревью' }))).toBe(false);
+    expect(initial.onOpenExternal).toHaveBeenCalledWith('https://example.com/pr');
+  });
 });
 
 describe('RoomPanel — сообщения (1.3)', () => {
