@@ -938,3 +938,101 @@ describe('activityOf: отставший снимок не воскрешает 
     expect(result.tasks.map((item) => item.id)).toEqual(['a']);
   });
 });
+
+describe('activityOf: предел удержания — backgroundHoldMs (Parley 0.2.0)', () => {
+  const MINUTE = 60_000;
+  /** Время через `minutes` минут после `AT`: так задаётся «сейчас», а события остаются на месте. */
+  const nowAfter = (minutes: number): number => Date.parse(AT) + minutes * MINUTE;
+  const read = (
+    events: EventRecord[],
+    nowMs: number,
+    extra: Partial<Parameters<typeof activityOf>[0]> = {},
+  ): ReturnType<typeof activityOf> =>
+    activityOf({ events, now: nowMs, silenceThresholdMs: 30_000, ...extra });
+  const parked = [event('UserPromptSubmit'), hook('Stop', { backgroundTasks: [task('a')] })];
+
+  it('по умолчанию час: до него фоновый субагент держит сессию, после — зомби, ход окончен', () => {
+    const before = read(parked, nowAfter(59));
+    expect(before.activity).toBe('working');
+    expect(before.heldByBackground).toBe(true);
+
+    const after = read(parked, nowAfter(61));
+    expect(after.activity).toBe('unseen');
+    expect(after.heldByBackground).toBe(false);
+    expect(after.tasks).toEqual([]);
+    // Ход кончился на самом Stop: больше ничего не случалось.
+    expect(after.turnEndedAt).toBe(AT);
+    expect(read(parked, nowAfter(61), { seen: true }).activity).toBe('idle');
+  });
+
+  it('предел задаётся параметром: короче — и удержание снимается раньше', () => {
+    expect(read(parked, nowAfter(1), { backgroundHoldMs: 10 * MINUTE }).activity).toBe('working');
+    expect(read(parked, nowAfter(11), { backgroundHoldMs: 10 * MINUTE }).activity).toBe('unseen');
+  });
+
+  it('родитель ещё работал, но молчит дольше предела: ход окончен по тишине, зомби не держит', () => {
+    const running = [event('UserPromptSubmit'), startOf('a', { backgroundTasks: [task('a')] })];
+
+    const quiet = read(running, nowAfter(61));
+    expect(quiet.activity).toBe('unseen');
+    expect(quiet.turnEndedAt).toBe(AT);
+    expect(quiet.tasks).toEqual([]);
+  });
+
+  it('тишина считается от последнего события или записи лога родителя — что свежее', () => {
+    const logAt = (minutes: number): ActivityLog => ({
+      lastRecordAt: new Date(nowAfter(minutes)).toISOString(),
+      lastUserRecordAt: null,
+    });
+
+    // События час назад, а запись лога шесть минут назад: удержание не истекло, родитель тихо стоит.
+    const logged = read(parked, nowAfter(61), { log: logAt(55) });
+    expect(logged.activity).toBe('working');
+    expect(logged.heldByBackground).toBe(true);
+
+    // Запись лога тоже старше предела — зомби: ход окончен, и источник — лог.
+    const stale = read(parked, nowAfter(62), { log: logAt(1) });
+    expect(stale.activity).toBe('unseen');
+    expect(stale.source).toBe('log');
+    expect(stale.turnEndedAt).toBe(new Date(nowAfter(1)).toISOString());
+
+    // Родитель писал в транскрипт полминуты назад: он работает сам, держать нечем и не нужно.
+    const fresh = read(parked, nowAfter(61), { log: logAt(60.5) });
+    expect(fresh.activity).toBe('working');
+    expect(fresh.heldByBackground).toBe(false);
+  });
+
+  it('вопрос человеку (blocked) предел не снимает', () => {
+    const result = read(
+      [event('UserPromptSubmit'), hook('PermissionRequest', { backgroundTasks: [task('a')] })],
+      nowAfter(300),
+    );
+
+    expect(result.activity).toBe('blocked');
+  });
+
+  it('ожидание wait_for старше предела (вызов умер, конца нет) тоже не держит', () => {
+    const waiting = [event('UserPromptSubmit'), hook('ParleyWaitStart', { waitTarget: 's-03' })];
+
+    const live = read(waiting, nowAfter(20));
+    expect(live.activity).toBe('working');
+    expect(live.waitingFor).toBe('s-03');
+
+    const dead = read(waiting, nowAfter(61));
+    expect(dead.activity).toBe('unseen');
+    expect(dead.waitingFor).toBeNull();
+  });
+
+  it('времени событий нет (не разобрать) — предел не срабатывает', () => {
+    const result = activityOf({
+      events: [
+        { ...event('UserPromptSubmit'), at: 'не время' },
+        { ...hook('Stop', { backgroundTasks: [task('a')] }), at: 'не время' },
+      ],
+      now: nowAfter(600),
+    });
+
+    expect(result.activity).toBe('working');
+    expect(result.heldByBackground).toBe(true);
+  });
+});

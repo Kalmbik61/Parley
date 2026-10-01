@@ -14,6 +14,10 @@
  * их дописывает MCP-сервер сессии): пока оно идёт, сессия занята — агент внутри вызова
  * инструмента, — а тишина её тоже не понижает.
  *
+ * Удержание не вечно: если ни событий хуков, ни записей лога родителя нет дольше
+ * `backgroundHoldMs` (час), фоновый субагент и ожидание считаются зомби — удержание снято, ход
+ * окончен.
+ *
  * Функция чистая: весь диск остаётся в `events.ts` и `metrics.ts`.
  */
 
@@ -142,6 +146,13 @@ function tasksOf(
   return tasks;
 }
 
+/**
+ * Предел удержания по умолчанию — час. Дольше фоновый субагент или `wait_for` (их предел — полчаса)
+ * молчать не могут: от зомби — убитого без `SubagentStop` субагента, умершего MCP-сервера — иначе
+ * сессия оставалась бы `working` навсегда, а тишина при удержании не действует.
+ */
+export const DEFAULT_BACKGROUND_HOLD_MS = 60 * 60 * 1000;
+
 export interface ActivityOptions {
   /** События журнала в порядке файла; `null` — журнала нет (`hooksMissing`). */
   events?: readonly EventRecord[] | null;
@@ -150,6 +161,8 @@ export interface ActivityOptions {
   seen?: boolean;
   now?: number;
   silenceThresholdMs?: number;
+  /** Сколько фоновый субагент или ожидание держат сессию без единого события и записи лога. */
+  backgroundHoldMs?: number;
 }
 
 /**
@@ -163,6 +176,7 @@ export function activityOf({
   seen = false,
   now = Date.now(),
   silenceThresholdMs = DEFAULT_CONFIG.silenceThresholdMs,
+  backgroundHoldMs = DEFAULT_BACKGROUND_HOLD_MS,
 }: ActivityOptions = {}): SessionActivity {
   let phase: Phase | null = null;
   let source: ActivitySource = 'none';
@@ -304,6 +318,11 @@ export function activityOf({
     // записей лога это тоже касается: агент, убитый без `SessionEnd`, иначе
     // остался бы `working` навсегда.
     const quietAt = recordIsNewer ? recordAt : eventAt;
+    // Фоновый субагент и ожидание не вечны: молчит и журнал, и лог дольше предела — это зомби.
+    if (!Number.isNaN(quietAt) && now - quietAt > backgroundHoldMs) {
+      background = [];
+      waitingFor = null;
+    }
     if (phase === 'working' && !Number.isNaN(quietAt) && now - quietAt > silenceThresholdMs) {
       // Фоновый субагент и ожидание `wait_for` молчат в журнале и в логе родителя, пока
       // работают, — тишина по ним ничего не значит.

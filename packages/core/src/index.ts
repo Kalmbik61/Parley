@@ -263,7 +263,7 @@ export {
   saveConfig,
 } from './config.js';
 export type { ParleyConfig, LoadedConfig } from './config.js';
-export { activityOf, hookedSince } from './work/activity.js';
+export { DEFAULT_BACKGROUND_HOLD_MS, activityOf, hookedSince } from './work/activity.js';
 export type {
   Activity,
   ActivityLog,
