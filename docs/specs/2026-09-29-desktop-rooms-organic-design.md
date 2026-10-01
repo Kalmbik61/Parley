@@ -417,7 +417,7 @@ interface Proposal {
 ### 3.6 Codex — агент комнаты
 
 Источник фактов — исследование документации и исходников Codex 0.159
-(`.superpowers/sdd/2026-09-29-desktop-rooms-organic-plan/codex-research.md`).
+(`docs/research/2026-09-29-codex-research.md`).
 
 - **MCP.** Сервер `harnas` подключается только флагами: `-c mcp_servers.harnas={command, args,
   env, startup_timeout_sec, tool_timeout_sec}` при каждом запуске и в `resume`.

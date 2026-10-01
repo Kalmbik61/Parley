@@ -1249,8 +1249,7 @@ and the name `rollout-<time>-<thread>_<rollout>.jsonl` of a rolled-back thread g
 thread id.
 
 **What to check on a live Codex.** A real `codex` is never launched in tests, and all of the
-above is derived from the documentation and sources of Codex 0.159 — check it by hand (the
-order is section 14 of the research `codex-research.md`):
+above is derived from the documentation and sources of Codex 0.159 — check it by hand:
 
 1. `codex --version`, `codex login status`, `codex doctor --json`: the format and the exit
    codes.
