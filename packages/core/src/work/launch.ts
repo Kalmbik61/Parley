@@ -12,6 +12,7 @@ import type { Dirent } from 'node:fs';
 import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { defaultRoot } from '../discover.js';
+import { isServiceText } from '../session-index.js';
 import { bothEnv } from '../names.js';
 import {
   loadProviders,
@@ -327,9 +328,13 @@ export const UNTITLED_WORK = 'untitled';
 const RUSSIAN_NEW_LABEL = 'новая сессия'; // cyrillic-ok: метка на диске, по ней узнаём свою
 const RUSSIAN_UNTITLED_WORK = 'без названия'; // cyrillic-ok: метка на диске, по ней узнаём свою
 
-/** Ярлык быстрой сессии, ещё не переименованной: `NEW_LABEL` или его прежняя русская запись. */
+/**
+ * Ярлык быстрой сессии, ещё не переименованной: `NEW_LABEL` или его прежняя русская запись. Служебный
+ * текст Claude Code (`<local-command-caveat>…`) — тоже не имя: его ставил автозаголовок сборок до 0.2.0
+ * сессиям, начатым со слеш-команды, и такой ярлык автозаголовок переименует заново.
+ */
 export function isNewLabel(label: string): boolean {
-  return label === NEW_LABEL || label === RUSSIAN_NEW_LABEL;
+  return label === NEW_LABEL || label === RUSSIAN_NEW_LABEL || isServiceText(label);
 }
 
 /** Заголовок работы, ещё не названной: `UNTITLED_WORK` или его прежняя русская запись. */

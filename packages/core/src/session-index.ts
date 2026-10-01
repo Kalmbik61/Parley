@@ -60,6 +60,16 @@ export interface SessionIndex {
   spawned?: boolean;
 }
 
+/**
+ * Служебный текст Claude Code в реплике с ролью `user`: обёртки слеш-команды (`<command-name>`,
+ * `<command-message>`, `<command-args>`), её вывод (`<local-command-stdout>`, `<local-command-caveat>`…)
+ * и режима `!` (`<bash-input>`, `<bash-stdout>`…). Это не запрос человека: ни заголовком сессии, ни её
+ * ярлыком он быть не может.
+ */
+export function isServiceText(text: string): boolean {
+  return /^\s*<(?:command|local-command|bash)-[a-z-]+>/.test(text);
+}
+
 /** Слаг проекта = первый сегмент пути относительно корня ~/.claude/projects. */
 export function projectSlug(file: string, root: string): string {
   const relative = path.relative(root, file);
@@ -146,7 +156,15 @@ export async function indexSessionFile(
       titleSource = record.type === 'custom-title' ? 'custom' : 'ai';
     }
     if (record.lastPrompt !== null) lastPrompt = record.lastPrompt;
-    if (firstText === null && record.role === 'user' && record.text !== null) {
+    // Служебные реплики (`isMeta`, обёртки слеш-команд) — не первая реплика человека: сессия, начатая
+    // с `/model`, иначе называлась бы `<local-command-caveat>…`.
+    if (
+      firstText === null &&
+      record.role === 'user' &&
+      record.text !== null &&
+      !record.isMeta &&
+      !isServiceText(record.text)
+    ) {
       firstText = record.text;
     }
 

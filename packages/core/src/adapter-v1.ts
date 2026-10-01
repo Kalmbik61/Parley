@@ -19,6 +19,11 @@ export interface SessionRecord {
   version: string | null;
   isSidechain: boolean;
   /**
+   * Служебная реплика Claude Code (`isMeta`): вставка вроде `<local-command-caveat>` перед выводом
+   * слеш-команды. Пишется с ролью `user`, но запросом человека не является.
+   */
+  isMeta: boolean;
+  /**
    * message.id — идентификатор ОТВЕТА модели. Один ответ Claude Code пишет
    * несколькими записями (по одной на блок content), и у всех он общий.
    */
@@ -124,6 +129,7 @@ export const adapterV1: SchemaAdapter = {
       gitBranch: pickString(raw, 'gitBranch'),
       version: pickString(raw, 'version'),
       isSidechain: raw['isSidechain'] === true,
+      isMeta: raw['isMeta'] === true,
       messageId: message ? pickString(message, 'id') : null,
       role: message ? pickString(message, 'role') : null,
       model: message ? pickString(message, 'model') : null,

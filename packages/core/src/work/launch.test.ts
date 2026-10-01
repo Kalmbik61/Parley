@@ -176,6 +176,23 @@ describe('метки быстрой сессии и автозаголовок',
     expect(isUntitledWork('Авторизация')).toBe(false);
   });
 
+  it('служебный текст вместо ярлыка (автозаголовок сборок до 0.2.0) — ярлыка нет, автозаголовок переименует', async () => {
+    const polluted =
+      '<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, and its output goes straight to the user.</loca…';
+    expect(isNewLabel(polluted)).toBe(true);
+    expect(isNewLabel('<command-name>/model</command-name>')).toBe(true);
+    expect(isNewLabel('<b>бэкенд</b>')).toBe(false);
+
+    const created = await createNewSession(project, null);
+    await updateMap(project, created.workId, (map) => {
+      map.sessions[0]!.label = polluted;
+    });
+    await applyAutoTitle(project, created.workId, created.session.id, 'Orca мобильное приложение');
+    expect((await readMap(project, created.workId)).sessions[0]?.label).toBe(
+      'Orca мобильное приложение',
+    );
+  });
+
   it('автозаголовок переименует быструю сессию и безымянную работу один раз', async () => {
     const created = await createNewSession(project, null);
 
