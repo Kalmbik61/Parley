@@ -13,6 +13,7 @@ import { clampNoteText } from '../../shared/app-note.js';
 import type { AppNote, FocusTarget, ParleyBridge } from '../../shared/bridge.js';
 import { noticeText, S } from '../../shared/strings.js';
 import type { UiFile } from '../../shared/ui-types.js';
+import { replyExcerpt } from '../components/rooms/excerpt.js';
 import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
 import { groups } from '../layout/tree.js';
@@ -224,12 +225,18 @@ export function createAttentionNotifier(deps: NotifyDeps): {
         });
       }
       // Упоминания человека в комнатах (`@human`): одно уведомление на комнату (тег `mention:<workKey>:<roomId>`),
-      // текст — самого позднего нового упоминания. Настройка та же, что у писем человеку.
+      // текст — выдержка (`replyExcerpt`, как у цитаты ответа) из самого позднего нового упоминания. Настройка та же,
+      // что у писем человеку.
       for (const { projectPath, map } of entries) {
         const key = workKey(projectPath, map.work.id);
         const fresh = humanUnreadMentions(map).filter(
           (message) => !known.has(`${key}\u0000${message.id}`),
         );
+        // Подписи упоминаний в выдержке — по карте работы, как у чипов ленты: сессии нет в карте — берётся тег.
+        const labelOf = (sessionId: string): string | null => {
+          const found = map.sessions.find((candidate) => candidate.id === sessionId);
+          return found === undefined ? null : sessionRowLabel(sessionId, found.label);
+        };
         for (const room of map.rooms) {
           const latest = fresh.findLast((message) => message.roomId === room.id);
           if (latest === undefined) continue;
@@ -238,7 +245,7 @@ export function createAttentionNotifier(deps: NotifyDeps): {
               sessionTag(latest.from),
               room.title === '' ? S.rooms.fallbackTitle : room.title,
             ),
-            body: firstLine(latest.text),
+            body: replyExcerpt(latest.text, labelOf),
             tag: `mention:${key}:${room.id}`,
             target: { kind: 'room', projectPath, workId: map.work.id, roomId: room.id },
           });
