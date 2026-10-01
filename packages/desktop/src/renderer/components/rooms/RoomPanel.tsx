@@ -6,7 +6,9 @@
  * Над полем ввода — живая строка (Parley 0.2.0): по строке на участника, который чем-то занят, —
  * `S02 · Subagent: Orca research`, `S03 · Waiting for messages`. Это состояние, а не переписка: в ленту оно
  * не пишется, а когда никто ничем не занят, строки нет. Строки обрезаются, а блок выше 96px прокручивается:
- * много занятых участников не должны выдавить ленту из невысокого окна.
+ * много занятых участников не должны выдавить ленту из невысокого окна. Появление, смена и исчезновение строки
+ * меняют высоту ленты: если до этого она стояла у низа (не дальше 48px от дна), её прижимают заново, а того, кто
+ * читает историю выше, не дёргают.
  *
  * Карточка решения — последней в ленте, пока `Room.proposal` не `null`. Кнопки зовут
  * `rooms.resolveProposal` с `proposalId` и `rev` показанной карточки: человек не примет текст, которого не
@@ -58,13 +60,29 @@ export interface RoomPanelProps {
 /** Относительное время сообщений («2m») обновляется раз в столько же, что и в сайдбаре. */
 const NOW_PERIOD_MS = 30_000;
 
+/** Лента «у низа», если до дна не больше стольких px: дочитавший почти до конца историю уже не читает. */
+const AT_BOTTOM_PX = 48;
+
 export function RoomPanel({ entry, roomId, providers, activity, bridge, active, onOpenExternal, onOpenSession }: RoomPanelProps): JSX.Element {
   const model = buildRoomModel({ entry, roomId, providers, activity });
+  // Участники, которые чем-то заняты, — по строке над полем ввода. Ключ меняется, когда строка появилась,
+  // исчезла или сменилась: от него зависит высота ленты.
+  const busy = model?.participants.filter((participant) => participant.doing !== null) ?? [];
+  const liveKey = busy
+    .map((participant) => `${participant.id}\u0000${participant.doing}`)
+    .join('\n');
   // Хуки — до раннего выхода «комнаты нет»: порядок хуков не должен зависеть от данных.
   const markRead = useMarkRead({ bridge, projectPath: entry.projectPath, workId: entry.map.work.id, active });
   const now = useNow(NOW_PERIOD_MS);
   const canResolve = useHostSupports('rooms.resolveProposal');
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // Стояла ли лента у низа до этой отрисовки. Читается здесь, пока DOM ещё прежний: после коммита живая
+  // строка уже сожмёт ленту, и «был ли у низа» по ней не определить.
+  const atBottomRef = useRef(true);
+  const feedEl = containerRef.current;
+  if (feedEl !== null)
+    atBottomRef.current =
+      feedEl.scrollHeight - feedEl.scrollTop - feedEl.clientHeight <= AT_BOTTOM_PX;
 
   const pinToBottom = useCallback((): void => {
     const container = containerRef.current;
@@ -74,6 +92,11 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   // Лента прижата к низу при открытии, когда приходит новое сообщение и когда решение появилось или
   // его текст заменили (карточка — последняя в ленте).
   useLayoutEffect(pinToBottom, [pinToBottom, model?.messages.length, model?.proposal?.id, model?.proposal?.rev]);
+
+  // Живая строка сжала или расширила ленту: у низа стояла — остаётся у низа, читают историю — не трогаем.
+  useLayoutEffect(() => {
+    if (atBottomRef.current) pinToBottom();
+  }, [pinToBottom, liveKey]);
 
   if (model === null) {
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{S.rooms.notFound}</div>;
@@ -87,7 +110,6 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
 
   // Упомянуть можно живую сессию комнаты: закрытая письма не получит.
   const members = model.participants.filter((participant) => !participant.closed);
-  const busy = model.participants.filter((participant) => participant.doing !== null);
   const draftKey = roomKey(workKey(entry.projectPath, entry.map.work.id), roomId);
 
   const handleSend = (submission: ComposerSubmission): Promise<void> =>

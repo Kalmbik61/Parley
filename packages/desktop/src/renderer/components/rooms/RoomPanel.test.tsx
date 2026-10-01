@@ -321,6 +321,81 @@ describe('RoomPanel — чем заняты участники (Parley 0.2.0)', 
   });
 });
 
+describe('RoomPanel — лента при смене живой строки (Parley 0.2.0)', () => {
+  /**
+   * jsdom не считает раскладку: высоту содержимого (`scrollHeight` 1000) и окна ленты (`clientHeight` 400)
+   * задаёт тест, дно ленты — `scrollTop` 600. Присвоение `scrollTop` jsdom не ограничивает дном, как браузер,
+   * поэтому прижатая лента — это `scrollTop === scrollHeight`.
+   */
+  function withLayout(body: () => void): void {
+    const spies = [
+      vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000),
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(400),
+    ];
+    try {
+      body();
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  }
+  const waiting = (target: string) => withDoing({ 's-02': { waitingFor: target } });
+
+  /** Лента прокручена до `scrollTop`, затем строка меняется; результат — позиция ленты после перерисовки. */
+  function scrollAfter(
+    scrollTop: number,
+    before: ReturnType<typeof withDoing> | undefined,
+    after: ReturnType<typeof withDoing>,
+  ): number {
+    let result = -1;
+    withLayout(() => {
+      const { rerender, initial } = renderPanel(
+        entryOf({ messages: [message('m-1')] }),
+        before === undefined ? {} : { activity: before },
+      );
+      feed().scrollTop = scrollTop;
+      rerender(<RoomPanel {...initial} activity={after} />);
+      result = feed().scrollTop;
+    });
+    return result;
+  }
+
+  it('лента у низа, строка появилась — остаётся у низа: сжатая лента прижимается заново', () => {
+    expect(scrollAfter(600, undefined, waiting('s-01'))).toBe(1000);
+    expect(liveLine()).not.toBeNull();
+  });
+
+  it('прокручена вверх (человек читает историю) — позиция не меняется', () => {
+    expect(scrollAfter(100, undefined, waiting('s-01'))).toBe(100);
+    expect(liveLine()).not.toBeNull();
+  });
+
+  it('«у низа» — не дальше 48px от дна: на границе прижимается, на пиксель дальше — нет', () => {
+    expect(scrollAfter(552, undefined, waiting('s-01'))).toBe(1000);
+    cleanup();
+    expect(scrollAfter(551, undefined, waiting('s-01'))).toBe(551);
+  });
+
+  it('строка исчезла: у низа — прижата, прокручена вверх — не тронута', () => {
+    expect(scrollAfter(600, waiting('s-01'), withDoing({}))).toBe(1000);
+    cleanup();
+    expect(scrollAfter(100, waiting('s-01'), withDoing({}))).toBe(100);
+  });
+
+  it('строка сменилась (другой текст или другой участник): у низа — прижата, вверх — не тронута', () => {
+    expect(scrollAfter(600, waiting('s-01'), waiting('s-03'))).toBe(1000);
+    cleanup();
+    expect(scrollAfter(100, waiting('s-01'), waiting('s-03'))).toBe(100);
+    cleanup();
+    expect(scrollAfter(600, waiting('s-01'), withDoing({ 's-03': { waitingFor: 's-01' } }))).toBe(
+      1000,
+    );
+  });
+
+  it('строка прежняя — перерисовка позицию не трогает, даже у низа', () => {
+    expect(scrollAfter(590, waiting('s-01'), waiting('s-01'))).toBe(590);
+  });
+});
+
 describe('RoomPanel — пустая комната и блок Decisions', () => {
   it('пустая комната — подсказка из 1.3', () => {
     renderPanel(entryOf());
