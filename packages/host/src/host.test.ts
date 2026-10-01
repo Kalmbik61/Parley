@@ -89,6 +89,27 @@ describe('startHost', () => {
     expect(process.env.HARNAS_HOME).toBe(home);
   });
 
+  // Строка статуса окна — `Host <версия из hello>`: без явной версии хост называет ту, что в его package.json.
+  it('hello без заданной версии отдаёт version из package.json хоста; заданная — как есть', async () => {
+    const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
+      version: string;
+    };
+    const versions: string[] = [];
+    for (const options of [{}, { version: '9.8.7' }]) {
+      const home = await tempTrackedHome();
+      const running = await startHost({ home, ...options });
+      hosts.push(running);
+      const paths = hostPaths(home);
+      const client = connectRaw(paths.socket);
+      await waitConnected(client.socket);
+      const response = await hello(client, await readFile(paths.token, 'utf8'));
+      client.close();
+      versions.push((response.result as { hostVersion: string }).hostVersion);
+    }
+
+    expect(versions).toEqual([pkg.version, '9.8.7']);
+  });
+
   it('второй startHost с тем же домом — HostAlreadyRunning, первый продолжает отвечать', async () => {
     const home = await tempTrackedHome();
     const running = await startHost({ home });

@@ -10,5 +10,7 @@ files.zip
 .harnas/
 packages/desktop/out/
 packages/desktop/out-tsc/
+# Встроенный Node для сборки: его кладёт scripts/fetch-node.mjs, в git он не нужен.
+packages/desktop/build/node/
 test-results/
 **/.omc/state/

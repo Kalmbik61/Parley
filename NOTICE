@@ -174,3 +174,18 @@ node_modules/pdfjs-dist/LICENSE.
 Шрифты Liberation из того же каталога pdfjs-dist (LiberationSans-*.ttf, GPL v2
 с исключением для шрифтов) в сборку не копируются: невстроенные Helvetica и
 Times pdf.js рисует системными шрифтами.
+
+------------------------------------------------------------------------------
+Node.js
+------------------------------------------------------------------------------
+
+Собранное приложение везёт исполняемый файл Node.js 22 (https://nodejs.org) без
+изменений — Contents/Resources/node/bin/node; им окно запускает хост. Файл на
+сборке скачивает packages/desktop/scripts/fetch-node.mjs: версия закреплена в
+скрипте, sha256 архива сверяется с SHASUMS256.txt с nodejs.org/dist. В git файла
+нет.
+
+Copyright Node.js contributors. All rights reserved.
+Лицензия: MIT. Полный текст — файл LICENSE в архиве node-v<версия>-darwin-<arch>.tar.gz
+и на https://github.com/nodejs/node/blob/main/LICENSE; там же лицензии библиотек,
+которые входят в Node.js (V8, OpenSSL, ICU и другие).

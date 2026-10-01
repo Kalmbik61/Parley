@@ -259,6 +259,40 @@ describe('codexNotifyOverride', () => {
   });
 });
 
+// Собранное окно запускает хост своим node: `Parley.app/Contents/Resources/node/bin/node`, а `process.execPath`
+// хоста — тот же путь. Приложение лежит там, куда его положил человек, — путь бывает с пробелом и апострофом.
+describe('node приложения в каталоге с пробелом: сервер MCP и notify получают путь целым словом', () => {
+  const bundled = "/Applications/My Apps/Parley's.app/Contents/Resources/node/bin/node";
+  let original = '';
+
+  beforeEach(() => {
+    original = process.execPath;
+    process.execPath = bundled;
+  });
+
+  afterEach(() => {
+    process.execPath = original;
+  });
+
+  it('конфиг для Claude Code: command — путь целиком, скрипт сервера — отдельный элемент args', () => {
+    const server = mcpConfig(params).mcpServers[MCP_SERVER_NAME];
+    expect(server).toMatchObject({ command: bundled, args: [MCP_SERVER_ENTRY] });
+    expect(JSON.parse(mcpConfigJson(params)).mcpServers[MCP_SERVER_NAME]).toMatchObject({
+      command: bundled,
+      args: [MCP_SERVER_ENTRY],
+    });
+  });
+
+  it('-c mcp_servers для Codex: после разбора TOML command и args те же', () => {
+    const table = parseTomlAssignment(codexMcpOverride(params)).value;
+    expect(table).toMatchObject({ command: bundled, args: [MCP_SERVER_ENTRY] });
+  });
+
+  it('-c notify для Codex: массив из двух элементов, путь с пробелом остаётся одним', () => {
+    expect(parseTomlAssignment(codexNotifyOverride()).value).toEqual([bundled, CODEX_NOTIFY_ENTRY]);
+  });
+});
+
 describe('mcpConfigValue', () => {
   it('json-file подставляет путь к файлу, codex-override — переопределение', () => {
     expect(mcpConfigValue('json-file', params, '/tmp/s-02.json')).toBe('/tmp/s-02.json');

@@ -54,12 +54,31 @@ async function isExecutableFile(candidate: string): Promise<boolean> {
 }
 
 /**
- * Ищет `node` в PATH логин-шелла (`captureShellEnv`), а не в бинаре Electron.
- * `node-pty` хоста собран под ABI системного Node — под Node самого Electron
- * он не загрузится (спека 3.2), так что `ELECTRON_RUN_AS_NODE` здесь не
- * годится в принципе. `null` — в этом PATH `node` не нашёлся вовсе.
+ * Встроенный node собранного приложения — `Contents/Resources/node/bin/node`. Его кладёт туда
+ * `extraResources` electron-builder: файл своей архитектуры из `build/node/darwin-<arch>`, который
+ * готовит `scripts/fetch-node.mjs` (Node 22 с nodejs.org, сверка по `SHASUMS256.txt`).
  */
-export async function resolveNodeBin(env: NodeJS.ProcessEnv): Promise<string | null> {
+export function bundledNodeBin(resourcesPath: string): string {
+  return path.join(resourcesPath, 'node', 'bin', 'node');
+}
+
+/**
+ * Каким node запускается хост. Хост и всё, что он поднимает сам (сервер MCP, строка статуса,
+ * `notify` Codex), берут `process.execPath` хоста — то есть именно этот node.
+ *
+ * В собранном приложении (`packaged`) — встроенный node, если файл на месте: системный человеку
+ * не нужен. Нет файла (сборка без `fetch-node`), а также в разработке — `node` из PATH
+ * логин-шелла (`captureShellEnv`). Бинарь Electron не годится: хост — обычный node-процесс,
+ * без `ELECTRON_RUN_AS_NODE`. `null` — не нашёлся ни встроенный, ни системный.
+ */
+export async function resolveNodeBin(
+  env: NodeJS.ProcessEnv,
+  app?: { packaged: boolean; resourcesPath: string },
+): Promise<string | null> {
+  if (app?.packaged === true) {
+    const bundled = bundledNodeBin(app.resourcesPath);
+    if (await isExecutableFile(bundled)) return bundled;
+  }
   for (const dir of (env.PATH ?? '').split(path.delimiter)) {
     if (dir === '') continue;
     const candidate = path.join(dir, 'node');
@@ -71,8 +90,10 @@ export async function resolveNodeBin(env: NodeJS.ProcessEnv): Promise<string | n
 /**
  * Хост переживает окно: процесс отделяется от родителя и не держит его живым.
  *
- * `nodeBin` — системный `node`, найденный `resolveNodeBin`; вызывающий код
- * обязан проверить его на `null` раньше, сюда попадает только найденный путь.
+ * `nodeBin` — `node`, найденный `resolveNodeBin` (встроенный или системный); вызывающий
+ * код обязан проверить его на `null` раньше, сюда попадает только найденный путь. Путь и
+ * `entry` могут содержать пробелы (приложение лежит там, куда его положил человек): процесс
+ * запускается без оболочки, аргументами.
  *
  * `stderrFile` — куда дописывается stderr хоста. Падение мимо логгера (необработанное
  * исключение) иначе не оставляет следа: `host.log` пишет только сам хост.

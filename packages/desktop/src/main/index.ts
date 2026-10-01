@@ -160,9 +160,12 @@ if (!gotLock) {
       env: shellEnv.env,
       // Процесс хоста — соединению: пока он жив, второй не запускается (раунд lane-r4).
       spawn: async () => {
-        // Системный node, не бинарь Electron: node-pty хоста собран под ABI
-        // системного Node и под Node самого Electron не загрузится (спека 3.2).
-        const nodeBin = await resolveNodeBin(shellEnv.env);
+        // Собранное окно запускает хост своим встроенным node 22 (`Resources/node`), разработка и сборка
+        // без него — node из PATH login-shell. Бинарь Electron не годится: хост — обычный node-процесс.
+        const nodeBin = await resolveNodeBin(shellEnv.env, {
+          packaged: app.isPackaged,
+          resourcesPath: process.resourcesPath,
+        });
         if (nodeBin === null) {
           const reason = S.connection.reasonNodeNotFound;
           console.error(`[parley] ${reason}`);

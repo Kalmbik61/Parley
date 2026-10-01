@@ -32,6 +32,7 @@ import { createPtyManager } from './pty/pty-manager.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { createWakeService } from './wake/wake-service.js';
 import { createWorktreesService } from './worktrees/worktrees-service.js';
+import { readHostVersion } from './version.js';
 
 export interface HostOptions {
   home?: string;
@@ -133,7 +134,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   //     записать в каталог, который сейчас переименуется.
   await moveProjectStateDirs(log);
 
-  const hostVersion = options.version ?? '0.0.0';
+  const hostVersion = options.version ?? readHostVersion();
   const idleMs = options.idleMs ?? DEFAULT_IDLE_MS;
   const helloTimeoutMs = options.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
 
