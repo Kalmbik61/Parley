@@ -307,7 +307,6 @@ export {
 export type { Liveness, LivenessOptions, ReconcileOptions } from './work/liveness.js';
 export {
   FEED_HOOK_EVENTS,
-  FEED_PRE_TOOL_MATCHER,
   HOOK_COMMAND,
   HOOK_EVENTS,
   workSettings,

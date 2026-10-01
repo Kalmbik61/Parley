@@ -136,14 +136,11 @@ describe('HTTP-хуки ленты вида «Chat» (план 2026-10-01, ре�
     }
   });
 
-  it('матчер только у PreToolUse: вопрос агента и план', () => {
+  it('матчеров нет: PreToolUse идёт для всех инструментов', () => {
     const { hooks } = workSettings({ hookUrl: URL });
 
-    expect(hooks['PreToolUse']).toEqual([
-      { matcher: 'AskUserQuestion|ExitPlanMode', hooks: httpOf('PreToolUse') },
-    ]);
+    expect(hooks['PreToolUse']).toEqual([{ hooks: httpOf('PreToolUse') }]);
     for (const [event, groups] of Object.entries(hooks)) {
-      if (event === 'PreToolUse') continue;
       expect(
         groups.every((group) => group.matcher === undefined),
         event,

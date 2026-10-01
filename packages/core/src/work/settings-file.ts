@@ -107,13 +107,9 @@ export const FEED_HOOK_EVENTS = [
 ] as const;
 
 /**
- * `PreToolUse` ленты нужен только там, где окно отвечает за человека: вопрос агента и одобрение плана.
- */
-export const FEED_PRE_TOOL_MATCHER = 'AskUserQuestion|ExitPlanMode';
-
-/**
  * Предел HTTP-хуков, которые ждут нажатия человека в окне: час. Остальные — умолчание Claude Code
- * (`MessageDisplay` держит порцию текста до ответа, и хост отвечает на него сразу).
+ * (`MessageDisplay` держит порцию текста до ответа, и хост отвечает на него сразу). `PreToolUse`
+ * идёт для всех инструментов без матчера: обычным вызовам хост отвечает сразу, вопрос и план ждут окна.
  */
 const FEED_TIMEOUT_SEC: Readonly<Record<string, number>> = {
   PermissionRequest: 3600,
@@ -174,8 +170,6 @@ export function workSettings({
       const group = hooks[event]?.[0];
       if (group !== undefined) {
         group.hooks.push(http);
-      } else if (event === 'PreToolUse') {
-        hooks[event] = [{ matcher: FEED_PRE_TOOL_MATCHER, hooks: [http] }];
       } else {
         hooks[event] = [{ hooks: [http] }];
       }
