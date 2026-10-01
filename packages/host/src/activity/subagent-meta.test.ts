@@ -19,11 +19,14 @@ let transcript = '';
 
 beforeEach(async () => {
   root = await mkdtemp(path.join(tmpdir(), 'parley-meta-'));
+  // Корень истории Claude — временный: `meta.json` читается только внутри корней истории.
+  process.env['PARLEY_CLAUDE_PROJECTS_DIR'] = root;
   transcript = path.join(root, '-proj', 'sess.jsonl');
   await mkdir(path.join(root, '-proj', 'sess', 'subagents'), { recursive: true });
 });
 
 afterEach(async () => {
+  delete process.env['PARLEY_CLAUDE_PROJECTS_DIR'];
   await rm(root, { recursive: true, force: true });
 });
 
@@ -48,6 +51,25 @@ describe('readSubagentMeta', () => {
       agentType: 'general-purpose',
       description: 'Orca mobile app research',
     });
+  });
+
+  it('транскрипт вне корней истории Claude — файл не читается, даже если он есть (ревью 0.2.0, п. 14)', async () => {
+    const outside = await mkdtemp(path.join(tmpdir(), 'parley-meta-outside-'));
+    try {
+      await mkdir(path.join(outside, 'sess', 'subagents'), { recursive: true });
+      await writeFile(
+        path.join(outside, 'sess', 'subagents', 'agent-a1.meta.json'),
+        JSON.stringify({ agentType: 'general-purpose', description: 'не отсюда' }),
+      );
+      expect(await readSubagentMeta(path.join(outside, 'sess.jsonl'), 'a1')).toBeNull();
+      // Тот же файл читается, если его корень назван явно.
+      expect(await readSubagentMeta(path.join(outside, 'sess.jsonl'), 'a1', [outside])).toEqual({
+        agentType: 'general-purpose',
+        description: 'не отсюда',
+      });
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 
   it('файла ещё нет — null: хост попробует при следующем обновлении', async () => {

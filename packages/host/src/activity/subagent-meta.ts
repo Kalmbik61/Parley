@@ -10,6 +10,7 @@
 
 import { lstat, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { claudeProjectRoots } from '@parley/core';
 
 export interface SubagentMeta {
   agentType: string | null;
@@ -36,8 +37,16 @@ const textOf = (value: unknown): string | null =>
 export async function readSubagentMeta(
   transcriptPath: string,
   agentId: string,
+  roots: readonly string[] = claudeProjectRoots(),
 ): Promise<SubagentMeta | null> {
   if (!path.isAbsolute(transcriptPath) || !SAFE_ID.test(agentId)) return null;
+  // Путь пришёл из журнала хуков, а его может дописать кто угодно: читаем только внутри корней истории
+  // Claude Code (`claudeProjectRoots`), а не где укажет строка журнала (ревью 0.2.0, п. 14).
+  const inside = roots.some((root) => {
+    const relative = path.relative(path.resolve(root), path.resolve(transcriptPath));
+    return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+  });
+  if (!inside) return null;
   const file = path.join(
     transcriptPath.replace(/\.jsonl$/, ''),
     'subagents',
