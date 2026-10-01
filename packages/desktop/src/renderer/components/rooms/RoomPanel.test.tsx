@@ -753,6 +753,22 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
     expect(scrolled[0]?.options).toEqual({ block: 'center', behavior: 'smooth' });
   });
 
+  it('оригинал выше ленты встаёт к верху, а не по центру: строка меты (по ней — прочтение) остаётся на экране', () => {
+    renderPanel(entryOf({ messages: replyMessages() }));
+    const feed = document.querySelector('[data-room-feed]') as HTMLElement;
+    // В jsdom раскладки нет: высоты задаём сами — лента 400px, оригинал 900px, то есть выше ленты.
+    Object.defineProperty(feed, 'clientHeight', { configurable: true, value: 400 });
+    Object.defineProperty(messageRow('m-1'), 'offsetHeight', { configurable: true, value: 900 });
+
+    fireEvent.click(quote('m-1'));
+    expect(scrolled.at(-1)?.options).toEqual({ block: 'start', behavior: 'smooth' });
+
+    // Ровно в высоту ленты — ещё по центру.
+    Object.defineProperty(messageRow('m-1'), 'offsetHeight', { configurable: true, value: 400 });
+    fireEvent.click(quote('m-1'));
+    expect(scrolled.at(-1)?.options).toEqual({ block: 'center', behavior: 'smooth' });
+  });
+
   it('клик по цитате переносит фокус на строку оригинала: после прокрутки и без собственной прокрутки', () => {
     const focus = vi.spyOn(HTMLElement.prototype, 'focus');
     try {

@@ -120,7 +120,8 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   useEffect(() => () => clearFlash(), [clearFlash]);
 
   /**
-   * Лента прокручивается к сообщению по центру, и оно коротко подсвечивается; `false` — такого сообщения в ленте нет.
+   * Лента прокручивается к сообщению по центру (выше ленты — к верху), и оно коротко подсвечивается; `false` — такого
+   * сообщения в ленте нет.
    * `smooth` — плавная прокрутка (клик по цитате) или мгновенная (открытие комнаты); `focus` — перенести на сообщение
    * фокус.
    */
@@ -133,7 +134,10 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
         (element) => element.dataset.messageId === messageId,
       );
       if (target === undefined) return false;
-      target.scrollIntoView({ block: 'center', behavior: smooth ? 'smooth' : 'auto' });
+      // Сообщение выше ленты по центру ушло бы строкой меты за верхний край, а прочтение смотрит именно на неё
+      // (`use-mark-read.ts`): такое сообщение встаёт к верху.
+      const block = target.offsetHeight > feed.clientHeight ? 'start' : 'center';
+      target.scrollIntoView({ block, behavior: smooth ? 'smooth' : 'auto' });
       // Фокус — на сообщение: читающий с клавиатуры продолжит с него. Без прокрутки — её уже запустила строка выше.
       if (focus) target.focus({ preventScroll: true });
       // Снять и поставить заново: повторная подсветка перезапускает анимацию CSS (как `attention/flash.ts`).
