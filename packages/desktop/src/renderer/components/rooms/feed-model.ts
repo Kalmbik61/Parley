@@ -22,7 +22,12 @@
 import type { MessageKind, SessionLifecycle, WorkEntry, WorkMap } from '@parley/core';
 import { refKey, type LiveTask } from '@parley/protocol';
 import { S, providerName } from '../../../shared/strings.js';
-import { isHumanUnread, sessionAttention, type Attention } from '../../attention/derive.js';
+import {
+  isHumanMention,
+  isHumanUnread,
+  sessionAttention,
+  type Attention,
+} from '../../attention/derive.js';
 import { displayStatus, dotState, stateWord, type DotState } from '../../lib/dot-state.js';
 import { DECISIONS_SHOWN, recipientsOf } from '../../lib/mail-view.js';
 import { sessionLabelText, sessionRowLabel, sessionTag, workTitleText } from '../../lib/participant.js';
@@ -103,6 +108,12 @@ export interface MessageModel {
    * отличается системной строкой: точки у неё нет, а счётчик сайдбара, пока она не отмечена, — есть.
    */
   needsRead: boolean;
+  /**
+   * Агент назвал человека в сообщении (`@human`) — по тому же правилу, что чип «@you» ленты и счётчик «для тебя»
+   * (`isHumanMention`); прочитано оно или нет, говорит `unread`. Открытие комнаты ведёт к самому раннему непрочитанному
+   * такому сообщению (`RoomPanel.tsx`).
+   */
+  mentionsYou: boolean;
   /** Теги (`S02`) живых адресатов-агентов, которые ещё не подхватили сообщение (`readBy`). */
   waiting: string[];
   /** Цитата, если сообщение — ответ (`Message.replyTo`); `null` — не ответ. */
@@ -297,6 +308,7 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
         text: message.text,
         unread: kind !== 'system' && isHumanUnread(message),
         needsRead: isHumanUnread(message),
+        mentionsYou: isHumanMention(message),
         waiting: recipientsOf(message, map)
           .filter((id) => id !== HUMAN && id !== SYSTEM && isAlive(map, id) && message.readBy[id] === undefined)
           .map(sessionTag),

@@ -396,6 +396,40 @@ describe('buildRoomModel — сообщения', () => {
     expect(build(entry).messages.map((item) => item.unread)).toEqual([true, false, false]);
   });
 
+  it('mentionsYou — агент назвал человека (@human) по правилу ленты: код и ссылка не в счёт, свои и системные — нет', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', { from: 's-02', text: 'Готово, @human' }),
+        message('m-2', { from: 's-02', text: 'Готово, `@human`' }),
+        message('m-3', { from: 's-02', text: '[ask @human](https://x.dev)' }),
+        message('m-4', {
+          from: 's-02',
+          text: '_@human_ решает',
+          readBy: { human: '2026-09-27T09:00:00.000Z' },
+        }),
+        message('m-5', { from: 'human', text: 'я сам, @human' }),
+        message('m-6', { from: 'system', to: ['human'], text: '@human' }),
+        message('m-7', { from: 's-02', text: 'без упоминаний' }),
+        message('m-8', { from: 's-02', text: 'ask the @humans' }),
+      ],
+    });
+    const messages = build(entry).messages;
+    expect(messages.map((item) => item.mentionsYou)).toEqual([
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    // Прочитанность — отдельно: упоминание m-4 уже прочитано, и открытие комнаты (`unread && mentionsYou`) его не ищет.
+    expect(
+      messages.filter((item) => item.unread && item.mentionsYou).map((item) => item.id),
+    ).toEqual(['m-1']);
+  });
+
   it('needsRead — кандидат в mail.markRead: и системная строка без отметки человека, у неё точки нет', () => {
     const entry = entryOf({
       messages: [
