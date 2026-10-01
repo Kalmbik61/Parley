@@ -21,9 +21,14 @@
  * (пачка через 500 мс тишины); карта отвечает, точка гаснет. Прокрутка — к низу при открытии и при каждом
  * новом сообщении. В отличие от «всей почты» (`MailPanel.tsx`) счёта «↓N» тут нет: комната короче и
  * читается по ходу переписки.
+ *
+ * Сообщение-ответ несёт цитату (`RoomMessage.tsx`): клик по ней прокручивает ленту к оригиналу (`jumpTo`) и
+ * на 1.2 с подсвечивает его — атрибутом `data-reply-flash` (`styles/reply-flash.css`), повторный клик
+ * перезапускает отсчёт. Прижатие ленты к низу это не ломает: «у низа» по-прежнему запоминает `onFeedScroll`
+ * по событию `scroll`, а новое сообщение прижимает ленту безусловно.
  */
 
-import { useCallback, useLayoutEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import type { WorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
@@ -64,6 +69,9 @@ const NOW_PERIOD_MS = 30_000;
 /** Лента «у низа», если до дна не больше стольких px: дочитавший почти до конца историю уже не читает. */
 const AT_BOTTOM_PX = 48;
 
+/** Сколько оригинал цитаты остаётся подсвеченным после клика по ней (`data-reply-flash`). */
+const REPLY_FLASH_MS = 1200;
+
 export function RoomPanel({ entry, roomId, providers, activity, bridge, active, onOpenExternal, onOpenSession }: RoomPanelProps): JSX.Element {
   const model = buildRoomModel({ entry, roomId, providers, activity });
   // Участники, которые чем-то заняты, — по строке над полем ввода. Ключ меняется, когда строка появилась,
@@ -92,6 +100,42 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
     container.scrollTop = container.scrollHeight;
     atBottomRef.current = true;
   }, []);
+
+  // Подсвеченный оригинал цитаты и таймер, который снимет подсветку: она одна на ленту.
+  const flashRef = useRef<{ element: HTMLElement; timer: ReturnType<typeof setTimeout> } | null>(
+    null,
+  );
+  const clearFlash = useCallback((): void => {
+    const flash = flashRef.current;
+    if (flash === null) return;
+    clearTimeout(flash.timer);
+    flash.element.removeAttribute('data-reply-flash');
+    flashRef.current = null;
+  }, []);
+  // Вкладку закрыли — таймер подсветки не должен её пережить.
+  useEffect(() => () => clearFlash(), [clearFlash]);
+
+  /** Клик по цитате ответа: лента прокручивается к оригиналу, и он коротко подсвечивается. */
+  const jumpTo = useCallback(
+    (messageId: string): void => {
+      const feed = containerRef.current;
+      if (feed === null) return;
+      // Сравнение через dataset — без экранирования id в селекторе.
+      const target = [...feed.querySelectorAll<HTMLElement>('[data-message-id]')].find(
+        (element) => element.dataset.messageId === messageId,
+      );
+      if (target === undefined) return;
+      const reduceMotion =
+        typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+      target.scrollIntoView({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' });
+      // Снять и поставить заново: повторная подсветка перезапускает анимацию CSS (как `attention/flash.ts`).
+      clearFlash();
+      void target.offsetWidth;
+      target.setAttribute('data-reply-flash', '');
+      flashRef.current = { element: target, timer: setTimeout(clearFlash, REPLY_FLASH_MS) };
+    },
+    [clearFlash],
+  );
 
   // Лента прижата к низу при открытии, когда приходит новое сообщение и когда решение появилось или
   // его текст заменили (карточка — последняя в ленте).
@@ -181,6 +225,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
             now={now}
             labelOf={labelOf}
             onOpenExternal={onOpenExternal}
+            onJumpTo={jumpTo}
             observeRef={markRead(message.id, message.needsRead)}
           />
         ))}

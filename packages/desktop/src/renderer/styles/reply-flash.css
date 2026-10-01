@@ -1,0 +1,30 @@
+/*
+ * Подсветка сообщения после клика по цитате ответа (Parley 0.3.0): `RoomPanel` ставит `data-reply-flash` на
+ * строку оригинала на 1.2 с и снимает его сам. Фон — акцент 22 % (тон чипа сессии), он плавно гаснет; тень
+ * без размытия дописывает поле в 6px, чтобы подсветка не липла к аватару и тексту, а раскладку не двигает.
+ * Вторичный текст на этом фоне не ниже 4.5:1 (светлая 4.76:1, тёмная 5.69:1 на листе центра).
+ */
+@keyframes reply-flash {
+  from {
+    background-color: color-mix(in srgb, var(--color-accent) 22%, transparent);
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-accent) 22%, transparent);
+  }
+  to {
+    background-color: transparent;
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+[data-message-id][data-reply-flash] {
+  border-radius: 8px;
+  animation: reply-flash 1200ms ease-out;
+}
+
+/* Без движения — фон просто стоит, пока атрибут не снят. */
+@media (prefers-reduced-motion: reduce) {
+  [data-message-id][data-reply-flash] {
+    animation: none;
+    background-color: color-mix(in srgb, var(--color-accent) 22%, transparent);
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-accent) 22%, transparent);
+  }
+}

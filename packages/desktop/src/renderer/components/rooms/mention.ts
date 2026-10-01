@@ -22,6 +22,15 @@ export const MENTION_QUERY_MAX = 24;
 export const MENTION_CHIP_CLASS =
   'mx-px inline-block max-w-full overflow-hidden text-ellipsis whitespace-nowrap rounded-full bg-[color-mix(in_srgb,var(--color-accent)_22%,transparent)] px-[7px] align-bottom font-semibold text-accent-800';
 
+/**
+ * Вид чипа «@you» (упоминание человека `@human`, Parley 0.3.0) — только в ленте. Форма та же, что у чипа сессии:
+ * пилюля, без переноса, с обрезкой. Заметнее него: вместо подкраски 22 % — плотная заливка акцентом, пара
+ * `--primary` и `--primary-foreground`, которой красится главная кнопка. Текст на ней не ниже 4.5:1 в обеих
+ * темах: светлая — `accent-700` и `bg` (5.7:1), тёмная — `accent` и `bg` (6.5:1).
+ */
+export const HUMAN_MENTION_CHIP_CLASS =
+  'mx-px inline-block max-w-full overflow-hidden text-ellipsis whitespace-nowrap rounded-full bg-primary px-[7px] align-bottom font-semibold text-primary-foreground';
+
 /** `s-02` → `@s02`: так упоминание уходит в тексте письма (2.2). */
 export function mentionToken(sessionId: string): string {
   return `@${sessionId.replace('-', '')}`;

@@ -649,6 +649,291 @@ describe('RoomPanel — сообщения (1.3)', () => {
   });
 });
 
+describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
+  /** Вопрос человека и ответ агента на него: у ответа `replyTo` — id вопроса. */
+  const replyMessages = (): Message[] => [
+    message('m-1', {
+      text: 'Что с миграцией?\n\nПодробности ниже',
+      kind: 'question',
+      at: '2026-09-27T09:00:00.000Z',
+    }),
+    message('m-2', {
+      from: 's-02',
+      to: ['human'],
+      text: 'Миграция **готова**',
+      replyTo: 'm-1',
+      at: '2026-09-27T09:01:00.000Z',
+    }),
+  ];
+  const quote = (id: string): HTMLElement =>
+    document.querySelector(`[data-message-reply="${id}"]`) as HTMLElement;
+  const flashed = (id: string): boolean => messageRow(id).hasAttribute('data-reply-flash');
+  /** Куда звали `scrollIntoView`: на каком элементе и с какими параметрами. */
+  let scrolled: Array<{ element: Element; options: unknown }>;
+
+  beforeEach(() => {
+    scrolled = [];
+    Element.prototype.scrollIntoView = vi.fn(function (
+      this: Element,
+      options?: boolean | ScrollIntoViewOptions,
+    ) {
+      scrolled.push({ element: this, options });
+    });
+  });
+
+  it('ответ — цитата между метой и текстом: «↩ подпись: выдержка», кнопка с aria-label и подсказкой', () => {
+    renderPanel(entryOf({ messages: replyMessages() }));
+    const button = quote('m-1');
+    expect(button.tagName).toBe('BUTTON');
+    expect(button.getAttribute('type')).toBe('button');
+    expect(button.textContent).toBe('↩ You: Что с миграцией?');
+    expect(button.querySelector('.font-semibold')?.textContent).toBe('You');
+    expect(button.getAttribute('aria-label')).toBe('Show the message from You');
+    expect(button.getAttribute('title')).toBe('Что с миграцией?');
+    // Мелкий текст, одна строка с обрезкой, акцентная черта слева.
+    for (const token of ['text-xs', 'truncate', 'border-l-2', 'border-(--color-accent)']) {
+      expect(button.className, token).toContain(token);
+    }
+    // Внутри строки ответа, между метой и текстом.
+    const row = messageRow('m-2');
+    const meta = row.querySelector('[data-message-meta]') as HTMLElement;
+    const body = row.querySelector('[data-room-markdown]') as HTMLElement;
+    expect(row.contains(button)).toBe(true);
+    expect(meta.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(button.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Текст ответа — Markdown, как у любого сообщения; у оригинала цитаты нет.
+    expect(body.querySelector('strong')?.textContent).toBe('готова');
+    expect(
+      messageRow('m-1').querySelector('[data-message-reply], [data-message-reply-missing]'),
+    ).toBeNull();
+  });
+
+  it('подпись и выдержка — как в ленте: ярлык агента, упоминания чипами-ярлыками, разметка снята', () => {
+    renderPanel(
+      entryOf({
+        messages: [
+          message('m-1', {
+            from: 's-01',
+            text: '## @s02, @human — что **скажете**?',
+            at: '2026-09-27T09:00:00.000Z',
+          }),
+          message('m-2', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:01:00.000Z' }),
+        ],
+      }),
+    );
+    expect(quote('m-1').textContent).toBe('↩ S01 архитектор: @S02 бэкенд, @you — что скажете?');
+    expect(quote('m-1').getAttribute('aria-label')).toBe('Show the message from S01 архитектор');
+  });
+
+  it('от текста оригинала ничего не осталось (одна картинка без alt) — цитата показывает одну подпись', () => {
+    renderPanel(
+      entryOf({
+        messages: [
+          message('m-1', {
+            text: '![](https://example.com/a.png)',
+            at: '2026-09-27T09:00:00.000Z',
+          }),
+          message('m-2', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:01:00.000Z' }),
+        ],
+      }),
+    );
+    expect(quote('m-1').textContent).toBe('↩ You');
+  });
+
+  it('клик по цитате зовёт scrollIntoView у сообщения-оригинала: по центру, плавно', () => {
+    renderPanel(entryOf({ messages: replyMessages() }));
+    fireEvent.click(quote('m-1'));
+    expect(scrolled).toHaveLength(1);
+    expect(scrolled[0]?.element).toBe(messageRow('m-1'));
+    expect(scrolled[0]?.options).toEqual({ block: 'center', behavior: 'smooth' });
+  });
+
+  it('prefers-reduced-motion: reduce — прокрутка без плавности (behavior: auto); без него — smooth', () => {
+    const reduce = (matches: boolean) =>
+      vi.stubGlobal('matchMedia', (query: string) => ({
+        matches: matches && query === '(prefers-reduced-motion: reduce)',
+        media: query,
+      }));
+    reduce(true);
+    renderPanel(entryOf({ messages: replyMessages() }));
+    fireEvent.click(quote('m-1'));
+    expect(scrolled[0]?.options).toEqual({ block: 'center', behavior: 'auto' });
+
+    reduce(false);
+    fireEvent.click(quote('m-1'));
+    expect(scrolled[1]?.options).toEqual({ block: 'center', behavior: 'smooth' });
+  });
+
+  it('оригинал получает data-reply-flash на 1,2 с, по таймеру атрибут снимается', () => {
+    vi.useFakeTimers();
+    renderPanel(entryOf({ messages: replyMessages() }));
+    expect(flashed('m-1')).toBe(false);
+
+    fireEvent.click(quote('m-1'));
+    expect(flashed('m-1')).toBe(true);
+    // Подсвечено только то, к чему перешли: не ответ и не вся лента.
+    expect(document.querySelectorAll('[data-reply-flash]')).toHaveLength(1);
+
+    act(() => {
+      vi.advanceTimersByTime(1199);
+    });
+    expect(flashed('m-1')).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(flashed('m-1')).toBe(false);
+  });
+
+  it('повторный клик перезапускает отсчёт: подсветка держится 1,2 с от последнего клика', () => {
+    vi.useFakeTimers();
+    renderPanel(entryOf({ messages: replyMessages() }));
+    fireEvent.click(quote('m-1'));
+    act(() => {
+      vi.advanceTimersByTime(800);
+    });
+    fireEvent.click(quote('m-1'));
+    expect(scrolled).toHaveLength(2);
+
+    // От первого клика прошло 1600 мс, от второго — 800: прежний таймер подсветку не снимает.
+    act(() => {
+      vi.advanceTimersByTime(800);
+    });
+    expect(flashed('m-1')).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(399);
+    });
+    expect(flashed('m-1')).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(flashed('m-1')).toBe(false);
+  });
+
+  it('подсветка одна на ленту: переход к другому оригиналу снимает прежнюю', () => {
+    vi.useFakeTimers();
+    const messages = [
+      ...replyMessages(),
+      message('m-3', {
+        from: 's-03',
+        to: ['human'],
+        replyTo: 'm-2',
+        at: '2026-09-27T09:02:00.000Z',
+      }),
+    ];
+    renderPanel(entryOf({ messages }));
+    fireEvent.click(quote('m-2'));
+    expect(flashed('m-2')).toBe(true);
+
+    fireEvent.click(quote('m-1'));
+    expect(flashed('m-2')).toBe(false);
+    expect(flashed('m-1')).toBe(true);
+    expect(document.querySelectorAll('[data-reply-flash]')).toHaveLength(1);
+  });
+
+  it('вкладку закрыли — таймер подсветки не остаётся', () => {
+    vi.useFakeTimers();
+    const { unmount } = renderPanel(entryOf({ messages: replyMessages() }));
+    fireEvent.click(quote('m-1'));
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('id оригинала с кавычкой, скобкой и косой чертой находится без подстановки в селектор', () => {
+    const id = 'm-"1"]\\';
+    renderPanel(
+      entryOf({
+        messages: [
+          message(id, { text: 'Вопрос', at: '2026-09-27T09:00:00.000Z' }),
+          message('m-2', { from: 's-02', replyTo: id, at: '2026-09-27T09:01:00.000Z' }),
+        ],
+      }),
+    );
+    fireEvent.click(document.querySelector('[data-message-reply]') as HTMLElement);
+    expect(scrolled).toHaveLength(1);
+    expect(scrolled[0]?.element.getAttribute('data-message-id')).toBe(id);
+    expect(scrolled[0]?.element.hasAttribute('data-reply-flash')).toBe(true);
+  });
+
+  it('оригинала уже нет в ленте — клик ничего не делает: ни прокрутки, ни подсветки, ни ошибки', () => {
+    renderPanel(entryOf({ messages: replyMessages() }));
+    const button = quote('m-1');
+    messageRow('m-1').remove();
+    expect(() => fireEvent.click(button)).not.toThrow();
+    expect(scrolled).toEqual([]);
+    expect(document.querySelector('[data-reply-flash]')).toBeNull();
+  });
+
+  it('оригинала нет в этой комнате (чужая комната, несуществующий id) — тот же блок, но не кнопка', () => {
+    renderPanel(
+      entryOf({
+        messages: [
+          message('m-0', { roomId: 'r-02', text: 'Чужая комната', at: '2026-09-27T09:00:00.000Z' }),
+          message('m-1', { from: 's-02', replyTo: 'm-0', at: '2026-09-27T09:01:00.000Z' }),
+          message('m-2', { from: 's-03', replyTo: 'm-99', at: '2026-09-27T09:02:00.000Z' }),
+        ],
+      }),
+    );
+    expect(document.querySelector('[data-message-reply]')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Show the message/ })).toBeNull();
+    const blocks = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-message-reply-missing]'),
+    );
+    expect(blocks).toHaveLength(2);
+    for (const block of blocks) {
+      expect(block.tagName).toBe('DIV');
+      expect(block.textContent).toBe('↩ Original message is not in this room');
+      for (const token of ['text-xs', 'truncate', 'border-l-2']) {
+        expect(block.className, token).toContain(token);
+      }
+    }
+    // Это не кнопка: клик ничего не прокручивает и не подсвечивает.
+    fireEvent.click(blocks[0] as HTMLElement);
+    expect(scrolled).toEqual([]);
+    expect(document.querySelector('[data-reply-flash]')).toBeNull();
+  });
+
+  it('прижатие ленты к низу после перехода к оригиналу живо: новое сообщение прижимает её, как раньше', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(800);
+    try {
+      const { update } = renderPanel(entryOf({ messages: replyMessages() }));
+      expect(feed().scrollTop).toBe(800);
+      fireEvent.click(quote('m-1'));
+      // Браузер доскроллил ленту к оригиналу и прислал `scroll`: до дна далеко.
+      feed().scrollTop = 100;
+      fireEvent.scroll(feed());
+      update(
+        entryOf({
+          messages: [
+            ...replyMessages(),
+            message('m-3', { from: 's-03', to: ['human'], at: '2026-09-27T10:00:00.000Z' }),
+          ],
+        }),
+      );
+      expect(feed().scrollTop).toBe(800);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('после перехода к оригиналу читают историю: живая строка ленту не дёргает', () => {
+    const spies = [
+      vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000),
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(400),
+    ];
+    try {
+      const { rerender, initial } = renderPanel(entryOf({ messages: replyMessages() }));
+      fireEvent.click(quote('m-1'));
+      feed().scrollTop = 100;
+      fireEvent.scroll(feed());
+      rerender(<RoomPanel {...initial} activity={withDoing({ 's-02': { waitingFor: 's-01' } })} />);
+      expect(liveLine()).not.toBeNull();
+      expect(feed().scrollTop).toBe(100);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+});
+
 describe('RoomPanel — строка ожидания по readBy (1.3)', () => {
   it('«Not picked up yet by …» — теги тех, кто ещё не прочитал', () => {
     const entry = entryOf({ messages: [message('m-1', { readBy: { human: 'x', 's-02': 'x' } })] });

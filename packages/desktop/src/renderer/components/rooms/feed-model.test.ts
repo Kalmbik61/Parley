@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import type { Message, Room, WorkEntry, WorkSession } from '@parley/core';
 import type { LiveMetrics, LiveTask } from '@parley/protocol';
 import { activityMap, makeActivity, makeLetter, makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
-import { buildRoomModel, type RoomModel } from './feed-model.js';
+import { buildRoomModel, replyExcerpt, type RoomModel } from './feed-model.js';
 
 const PROJECT = '/tmp/proj';
 const PROVIDERS = [
@@ -413,6 +413,246 @@ describe('buildRoomModel — сообщения', () => {
   it('письма других комнат и без комнаты в ленту не попадают', () => {
     const entry = entryOf({ messages: [message('m-1'), message('m-2', { roomId: 'r-02' }), message('m-3', { roomId: null })] });
     expect(build(entry).messages.map((item) => item.id)).toEqual(['m-1']);
+  });
+});
+
+describe('replyExcerpt — выдержка цитаты ответа (Parley 0.3.0)', () => {
+  const LABELS: Record<string, string> = { 's-02': 'S02 бэкенд', 's-03': 'S03 ревью' };
+  const labelOf = (sessionId: string): string | null => LABELS[sessionId] ?? null;
+  const excerpt = (text: string): string => replyExcerpt(text, labelOf);
+
+  it('берётся первая непустая строка: пустые и из одних пробелов пропускаются, перевод строки любой', () => {
+    expect(excerpt('Одна строка')).toBe('Одна строка');
+    expect(excerpt('\n  \t\nПервая строка\nвторая строка')).toBe('Первая строка');
+    expect(excerpt('раз\r\nдва')).toBe('раз');
+    expect(excerpt('раз\rдва')).toBe('раз');
+  });
+
+  it.each([
+    ['заголовок', '# Заголовок', 'Заголовок'],
+    ['заголовок третьего уровня', '### Заголовок', 'Заголовок'],
+    ['цитата', '> цитата', 'цитата'],
+    ['цитата без пробела', '>цитата', 'цитата'],
+    ['маркер «-»', '- пункт', 'пункт'],
+    ['маркер «*»', '* пункт', 'пункт'],
+    ['маркер «+»', '+ пункт', 'пункт'],
+    ['нумерация «1.»', '1. первый', 'первый'],
+    ['нумерация «12)»', '12) двенадцатый', 'двенадцатый'],
+    ['разметка подряд: цитата со списком', '> - пункт в цитате', 'пункт в цитате'],
+    [
+      'жирный, подчёркнутый, зачёркнутый и код',
+      '**жирный**, __под__, ~~зачёркнутый~~ и `код`',
+      'жирный, под, зачёркнутый и код',
+    ],
+    ['отступ перед маркером', '   - пункт', 'пункт'],
+  ])('снимает простую разметку: %s', (_name, source, expected) => {
+    expect(excerpt(source)).toBe(expected);
+  });
+
+  it('ссылка [текст](адрес) становится текстом, картинка — своим alt; адреса в выдержке нет', () => {
+    expect(
+      excerpt('Смотри [доки](https://example.com/docs?a=1) и [ещё](https://example.com)'),
+    ).toBe('Смотри доки и ещё');
+    expect(excerpt('![схема](https://example.com/a.png) к задаче')).toBe('схема к задаче');
+  });
+
+  it('то, что не разметка, остаётся: дефис и звёздочка внутри строки, #тег, 2 * 3, одиночные _ и *', () => {
+    expect(excerpt('a - b, 2 * 3 и #тег')).toBe('a - b, 2 * 3 и #тег');
+    expect(excerpt('snake_case и *курсив*')).toBe('snake_case и *курсив*');
+    expect(excerpt('-5 градусов и +1')).toBe('-5 градусов и +1');
+  });
+
+  it('упоминания — как у чипов ленты: @s02 → @S02 бэкенд, @human → @you, неизвестная сессия — тег', () => {
+    expect(excerpt('@s02, глянь')).toBe('@S02 бэкенд, глянь');
+    expect(excerpt('@s-03 и @s2 готовы')).toBe('@S03 ревью и @S02 бэкенд готовы');
+    expect(excerpt('Вопрос к @human: что дальше?')).toBe('Вопрос к @you: что дальше?');
+    expect(excerpt('@Human')).toBe('@you');
+    expect(excerpt('@s09 — кто это?')).toBe('@S09 — кто это?');
+  });
+
+  it('упоминание внутри разметки тоже заменяется; @humans и email остаются как есть', () => {
+    expect(excerpt('- **@s02** и `@human`')).toBe('@S02 бэкенд и @you');
+    expect(excerpt('@humans и user@human.dev')).toBe('@humans и user@human.dev');
+  });
+
+  it('пробелы схлопываются, по краям обрезаются', () => {
+    expect(excerpt('  много    пробелов \t и\u00a0неразрывный  ')).toBe(
+      'много пробелов и неразрывный',
+    );
+  });
+
+  it('пусто, если от строки ничего не осталось: пустой текст, одни пробелы, картинка без alt, один маркер', () => {
+    for (const source of ['', '   ', '\n\n', '![](https://example.com/a.png)', '- ', '> ', '**']) {
+      expect(excerpt(source), JSON.stringify(source)).toBe('');
+    }
+  });
+
+  it('обрезка, инвариант на длинах 0..300: до 140 знаков — как есть, длиннее — 140 знаков и «…», не больше 141', () => {
+    for (let length = 0; length <= 300; length += 1) {
+      const text = 'ы'.repeat(length);
+      const result = excerpt(text);
+      expect(Array.from(result).length, `длина ${length}`).toBeLessThanOrEqual(141);
+      expect(result, `длина ${length}`).toBe(length <= 140 ? text : `${'ы'.repeat(140)}…`);
+    }
+  });
+
+  it('длина считается по тексту без разметки: 140 знаков внутри ** ** помещаются целиком', () => {
+    expect(excerpt(`**${'ы'.repeat(140)}**`)).toBe('ы'.repeat(140));
+    expect(excerpt(`> - ${'ы'.repeat(141)}`)).toBe(`${'ы'.repeat(140)}…`);
+  });
+
+  it('суррогатная пара на краю обрезки остаётся целой: считается по знакам, а не по кодовым единицам', () => {
+    const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    for (let length = 130; length <= 150; length += 1) {
+      const result = excerpt('😀'.repeat(length));
+      expect(Array.from(result).length, `длина ${length}`).toBeLessThanOrEqual(141);
+      expect(result, `длина ${length}`).not.toMatch(lone);
+    }
+    expect(excerpt('😀'.repeat(140))).toBe('😀'.repeat(140));
+    expect(excerpt('😀'.repeat(141))).toBe(`${'😀'.repeat(140)}…`);
+  });
+
+  it('обрезка не оставляет пробела перед «…»', () => {
+    expect(excerpt(`${'а'.repeat(139)} ${'б'.repeat(10)}`)).toBe(`${'а'.repeat(139)}…`);
+  });
+});
+
+describe('buildRoomModel — ответы: Message.replyTo (Parley 0.3.0)', () => {
+  it('сообщение без replyTo — reply: null', () => {
+    const entry = entryOf({ messages: [message('m-1'), message('m-2', { from: 's-02' })] });
+    expect(build(entry).messages.map((item) => item.reply)).toEqual([null, null]);
+  });
+
+  it('ответ на вопрос человека: оригинал найден, подпись «You», выдержка — первая строка текста', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', {
+          text: 'Что с миграцией?\nИ ещё вопрос',
+          kind: 'question',
+          at: '2026-09-27T09:00:00.000Z',
+        }),
+        message('m-2', {
+          from: 's-02',
+          to: ['human'],
+          text: 'Готово',
+          replyTo: 'm-1',
+          at: '2026-09-27T09:01:00.000Z',
+        }),
+      ],
+    });
+    const [question, answer] = build(entry).messages;
+    expect(question?.reply).toBeNull();
+    expect(answer?.reply).toEqual({
+      id: 'm-1',
+      from: 'You',
+      excerpt: 'Что с миграцией?',
+      found: true,
+    });
+  });
+
+  it('подпись оригинала — как у сообщения в ленте: ярлык с номером, Parley у системной строки, «(deleted)» у удалённой сессии', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', { from: 's-03', text: 'Ревью готово', at: '2026-09-27T09:00:00.000Z' }),
+        message('m-2', {
+          from: 'system',
+          to: ['human'],
+          text: 'You accepted the decision',
+          at: '2026-09-27T09:01:00.000Z',
+        }),
+        message('m-3', { from: 's-05', text: 'Ушла', at: '2026-09-27T09:02:00.000Z' }),
+        message('m-4', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:03:00.000Z' }),
+        message('m-5', { from: 's-02', replyTo: 'm-2', at: '2026-09-27T09:04:00.000Z' }),
+        message('m-6', { from: 's-02', replyTo: 'm-3', at: '2026-09-27T09:05:00.000Z' }),
+      ],
+    });
+    entry.map.work.deletedSessions = ['s-05'];
+    const replies = build(entry)
+      .messages.slice(3)
+      .map((item) => item.reply);
+    expect(replies.map((reply) => [reply?.from, reply?.excerpt, reply?.found])).toEqual([
+      ['S03 ревью', 'Ревью готово', true],
+      ['Parley', 'You accepted the decision', true],
+      ['S05 (deleted)', 'Ушла', true],
+    ]);
+  });
+
+  it('оригинал из другой комнаты или несуществующий — found: false, подпись и выдержка пусты, id остаётся', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', { roomId: 'r-02', text: 'В чужой комнате', at: '2026-09-27T09:00:00.000Z' }),
+        message('m-2', { roomId: null, text: 'Без комнаты', at: '2026-09-27T09:01:00.000Z' }),
+        message('m-3', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:02:00.000Z' }),
+        message('m-4', { from: 's-02', replyTo: 'm-2', at: '2026-09-27T09:03:00.000Z' }),
+        message('m-5', { from: 's-02', replyTo: 'm-99', at: '2026-09-27T09:04:00.000Z' }),
+      ],
+    });
+    const messages = build(entry).messages;
+    expect(messages.map((item) => item.id)).toEqual(['m-3', 'm-4', 'm-5']);
+    expect(messages.map((item) => item.reply)).toEqual([
+      { id: 'm-1', from: '', excerpt: '', found: false },
+      { id: 'm-2', from: '', excerpt: '', found: false },
+      { id: 'm-99', from: '', excerpt: '', found: false },
+    ]);
+  });
+
+  it('порядок хранения не важен: оригинал ищется и когда лежит в массиве позже ответа', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-2', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:01:00.000Z' }),
+        message('m-1', { text: 'Вопрос', at: '2026-09-27T09:00:00.000Z' }),
+      ],
+    });
+    const [question, answer] = build(entry).messages;
+    expect(question?.id).toBe('m-1');
+    expect(answer?.reply).toEqual({ id: 'm-1', from: 'You', excerpt: 'Вопрос', found: true });
+  });
+
+  it('выдержка из оригинала: разметка снята, упоминания — ярлыками участников, как у чипов ленты', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', {
+          from: 's-01',
+          text: '## **@s02**, @human и @s09: что с [API](https://example.com)?',
+          at: '2026-09-27T09:00:00.000Z',
+        }),
+        message('m-2', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:01:00.000Z' }),
+      ],
+    });
+    expect(build(entry).messages[1]?.reply).toEqual({
+      id: 'm-1',
+      from: 'S01 архитектор',
+      excerpt: '@S02 бэкенд, @you и @S09: что с API?',
+      found: true,
+    });
+  });
+
+  it('ответ на ответ: цитата ведёт к ближайшему сообщению, а не по цепочке; текст самого ответа не подмешивается', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', { text: 'Первый вопрос', at: '2026-09-27T09:00:00.000Z' }),
+        message('m-2', {
+          from: 's-02',
+          replyTo: 'm-1',
+          text: 'Первый ответ',
+          at: '2026-09-27T09:01:00.000Z',
+        }),
+        message('m-3', {
+          from: 's-03',
+          replyTo: 'm-2',
+          text: 'Второй ответ',
+          at: '2026-09-27T09:02:00.000Z',
+        }),
+      ],
+    });
+    const messages = build(entry).messages;
+    expect(messages[2]?.reply).toEqual({
+      id: 'm-2',
+      from: 'S02 бэкенд',
+      excerpt: 'Первый ответ',
+      found: true,
+    });
+    expect(messages[2]?.text).toBe('Второй ответ');
   });
 });
 

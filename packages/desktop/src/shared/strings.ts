@@ -326,6 +326,13 @@ export const S = {
     notPickedUp: (tags: string): string => `▤ Not picked up yet by ${tags}`,
     /** Подпись точки «непрочитано» у сообщения. */
     newMessage: 'New',
+    /** Чип `@human` в тексте сообщения (Parley 0.3.0): так агент обращается к человеку; `title` и `aria-label` — вторая строка. */
+    humanMention: '@you',
+    humanMentionTitle: 'Mentions you',
+    /** Цитата ответа над текстом сообщения (Parley 0.3.0): `aria-label` кнопки, которая ведёт к оригиналу. */
+    replyJump: (from: string): string => `Show the message from ${from}`,
+    /** Цитата, когда сообщения, на которое ответили, нет в этой комнате. */
+    replyMissing: 'Original message is not in this room',
     /** Карточка решения. */
     decisionWaiting: 'decision · waiting for you',
     accept: 'Accept',

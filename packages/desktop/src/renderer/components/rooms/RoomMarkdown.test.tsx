@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react';
 import ReactMarkdown from 'react-markdown';
-import { MENTION_CHIP_CLASS } from './mention.js';
+import { HUMAN_MENTION_CHIP_CLASS, MENTION_CHIP_CLASS } from './mention.js';
 import { RoomMarkdown } from './RoomMarkdown.js';
 
 // Счётчик разборов: `react-markdown` зовётся как раньше, но каждая его отрисовка — один разбор текста.
@@ -186,6 +186,102 @@ describe('RoomMarkdown — упоминания', () => {
     expect(container.querySelector('[data-mention]')?.textContent).toBe('@S02 бэкенд');
     rerender(<RoomMarkdown text="@s02" labelOf={() => 'S02 тесты'} onOpenExternal={() => {}} />);
     expect(container.querySelector('[data-mention]')?.textContent).toBe('@S02 тесты');
+  });
+});
+
+describe('RoomMarkdown — упоминание человека @human (Parley 0.3.0)', () => {
+  const humanChips = (root: ParentNode): HTMLElement[] =>
+    Array.from(root.querySelectorAll<HTMLElement>('[data-mention-human]'));
+
+  it('@human — чип «@you»: data-mention-human, подсказка и aria-label «Mentions you», вид плотнее чипа сессии', () => {
+    const { container } = renderText('Вопрос к @human: что дальше?');
+    const [chip] = humanChips(container);
+    expect(humanChips(container)).toHaveLength(1);
+    expect(chip?.tagName).toBe('SPAN');
+    expect(chip?.getAttribute('data-mention-human')).toBe('');
+    expect(chip?.textContent).toBe('@you');
+    expect(chip?.getAttribute('title')).toBe('Mentions you');
+    expect(chip?.getAttribute('aria-label')).toBe('Mentions you');
+    expect(chip?.className).toBe(HUMAN_MENTION_CHIP_CLASS);
+    expect(chip?.className).not.toBe(MENTION_CHIP_CLASS);
+    expect(container.querySelector('[data-mention]')).toBeNull();
+    expect(container.textContent).toBe('Вопрос к @you: что дальше?');
+  });
+
+  it('регистр не важен: @Human и @HUMAN — тоже чипы', () => {
+    const { container } = renderText('@Human и @HUMAN');
+    expect(humanChips(container).map((chip) => chip.textContent)).toEqual(['@you', '@you']);
+    expect(container.textContent).toBe('@you и @you');
+  });
+
+  it('@humans, @human_team, user@human.dev и a@human остаются текстом, чипа нет', () => {
+    for (const text of ['@humans', '@human_team', 'user@human.dev', 'a@human']) {
+      const { container, unmount } = renderText(text);
+      expect(humanChips(container), text).toEqual([]);
+      expect(container.textContent, text).toBe(text);
+      unmount();
+    }
+  });
+
+  it('`@human` в инлайн-коде и в блоке кода — буквальный текст, чипа нет', () => {
+    const { container } = renderText('Токен `@human` в коде\n\n```\n@human в блоке\n```');
+    expect(humanChips(container)).toEqual([]);
+    expect(container.querySelector('p code')?.textContent).toBe('@human');
+    expect(container.querySelector('pre code')?.textContent).toContain('@human в блоке');
+  });
+
+  it('в подписи ссылки `@human` — текст ссылки, а не чип: внутри <a> он открывал бы ссылку', () => {
+    const { container } = renderText('[спросить @human](https://example.com/ask)');
+    expect(humanChips(container)).toEqual([]);
+    expect(screen.getByRole('link', { name: 'спросить @human' })).toBeTruthy();
+  });
+
+  it('рядом с @s02 — оба чипа, каждый своего вида; порядок слов сохранён', () => {
+    const { container } = renderText('@s02, @human и @s03 — смотрите');
+    const chips = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-mention], [data-mention-human]'),
+    );
+    expect(chips.map((chip) => chip.textContent)).toEqual(['@S02 бэкенд', '@you', '@S03 ревью']);
+    expect(chips.map((chip) => chip.className)).toEqual([
+      MENTION_CHIP_CLASS,
+      HUMAN_MENTION_CHIP_CLASS,
+      MENTION_CHIP_CLASS,
+    ]);
+    expect(container.textContent).toBe('@S02 бэкенд, @you и @S03 ревью — смотрите');
+  });
+
+  it('чип стоит и внутри жирного, и в пункте списка, и после переноса строки', () => {
+    const { container } = renderText('**@human**\n\n- @human — решай\n\nраз\n@human');
+    expect(container.querySelector('strong [data-mention-human]')).not.toBeNull();
+    expect(container.querySelector('li [data-mention-human]')).not.toBeNull();
+    const last = Array.from(container.querySelectorAll('p')).at(-1) as HTMLElement;
+    expect(last.querySelector('br')).not.toBeNull();
+    expect(last.querySelector('[data-mention-human]')).not.toBeNull();
+  });
+
+  it('строчный вид (плашка решений) рисует тот же чип «@you»', () => {
+    const { container } = render(
+      <RoomMarkdown
+        inline
+        text="**Решение:** @human, глянь"
+        labelOf={labelOf}
+        onOpenExternal={() => {}}
+      />,
+    );
+    expect(humanChips(container).map((chip) => chip.textContent)).toEqual(['@you']);
+    expect(container.textContent).toBe('Решение: @you, глянь');
+  });
+
+  it('перерисовка с новыми колбэками не разбирает текст заново и не пересоздаёт чип', () => {
+    const text = '@human, ответьте';
+    const view = render(<RoomMarkdown text={text} labelOf={labelOf} onOpenExternal={() => {}} />);
+    const chip = humanChips(view.container)[0];
+    const first = parses();
+    view.rerender(
+      <RoomMarkdown text={text} labelOf={(id) => labelOf(id)} onOpenExternal={() => {}} />,
+    );
+    expect(parses()).toBe(first);
+    expect(humanChips(view.container)[0]).toBe(chip);
   });
 });
 
