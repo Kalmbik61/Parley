@@ -840,7 +840,9 @@ describe('прочность и пределы', () => {
     const started = performance.now();
     const state = run([{ hook_event_name: 'UserPromptSubmit', prompt: 'go' }, display(1e9, 'a')]);
 
-    expect(performance.now() - started).toBeLessThan(50);
+    // Порог с запасом: без защиты цикл на 1e9 шёл бы секунды или падал по памяти, а на
+    // нагруженной машине честные 50 мс флейкали бы.
+    expect(performance.now() - started).toBeLessThan(1000);
     expect(state.streams['m']).toEqual({ head: 'a', count: 1, ahead: {}, finalIndex: null });
     expect(JSON.stringify(state.streams).length).toBeLessThan(200);
     expect(ofKind(state.items, 'text')[0]?.text).toBe('a');

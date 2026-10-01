@@ -881,7 +881,10 @@ function onMessageDisplay(
  * Порция в поток. `index` принимается только целым, не дальше `STREAM_AHEAD` от следующей по счёту
  * и меньше `STREAM_MAX_PARTS`; иначе порция — следующая по счёту. Повтор уже склеенной — пропуск.
  */
-function addPart(stream: FeedStream, rawIndex: unknown, delta: string, final: boolean): FeedStream {
+function addPart(stream: FeedStream, rawIndex: unknown, rawDelta: string, final: boolean): FeedStream {
+  // Опередившая порция ждёт в `ahead` как есть, поэтому предел текста действует и на неё: иначе
+  // `STREAM_AHEAD` порций по размеру тела хука копились бы без ограничения.
+  const delta = rawDelta.length > FEED_TEXT_LIMIT + 1 ? rawDelta.slice(0, FEED_TEXT_LIMIT + 1) : rawDelta;
   const index =
     typeof rawIndex === 'number' &&
     Number.isInteger(rawIndex) &&

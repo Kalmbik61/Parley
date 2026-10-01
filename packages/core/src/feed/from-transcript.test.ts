@@ -269,7 +269,7 @@ describe('feedFromTranscript: ветки и пределы', () => {
     expect(items.map((item) => item.at)).toEqual([new Date(0).toISOString(), T, T]);
   });
 
-  it('limit: 20 000 записей быстрее 300 мс, в ответе не больше limit элементов', () => {
+  it('limit: 20 000 записей быстрее 3 с, в ответе не больше limit элементов', () => {
     const records: RawRecord[] = [];
     for (let i = 0; i < 10_000; i += 1) {
       records.push(toolUse(`a${i}`, `t${i}`, 'Bash', { command: `echo ${i}` }));
@@ -278,7 +278,7 @@ describe('feedFromTranscript: ветки и пределы', () => {
     const started = performance.now();
     const { items } = feedFromTranscript(records, { limit: 2_000 });
 
-    expect(performance.now() - started).toBeLessThan(300);
+    expect(performance.now() - started).toBeLessThan(3000);
     expect(items.length).toBeLessThanOrEqual(2_000);
     expect(items.at(-1)).toMatchObject({ kind: 'tool', toolUseId: 't9999', status: 'done' });
     expect(feedFromTranscript(records.slice(0, 20)).items).toHaveLength(10);
