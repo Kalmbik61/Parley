@@ -461,10 +461,12 @@ describe('captureShellEnv: заглушка оболочки в файле', () 
 
   it('фоновый процесс rc держит stdout: окружение берётся, не дожидаясь закрытия трубы', async () => {
     // Как rc, оставивший процесс с унаследованным stdout: труба открыта, пока тот жив, и `close` не
-    // приходит. Раньше окно ждало таймаута и выбрасывало уже напечатанное между маркерами.
+    // приходит. Раньше окно ждало таймаута и выбрасывало уже напечатанное между маркерами. Сроки — с
+    // запасом: под нагрузкой полного прогона заглушка отвечала почти за 2 с, а ответ быстрее 5 с всё равно
+    // не дождался ни закрытия трубы (10 с), ни таймаута (8 с).
     const shell = await stubShell(
       [
-        '( sleep 3 & )',
+        '( sleep 10 & )',
         'PATH="/stub/bin"; export PATH',
         'ONLY_IN_RC=1; export ONLY_IN_RC',
         'eval "$2"',
@@ -473,13 +475,13 @@ describe('captureShellEnv: заглушка оболочки в файле', () 
     );
     const started = Date.now();
 
-    const result = await captureShellEnv({ shell, env: FINDER_ENV, timeoutMs: 2000 });
+    const result = await captureShellEnv({ shell, env: FINDER_ENV, timeoutMs: 8000 });
 
     expect(result.warning).toBeNull();
     expect(result.fromShell).toBe(true);
     expect(result.env.PATH).toBe('/stub/bin');
     expect(result.env.ONLY_IN_RC).toBe('1');
-    expect(Date.now() - started).toBeLessThan(1500);
+    expect(Date.now() - started).toBeLessThan(5000);
   });
 
   it('символ не из ASCII, разорванный границей чанков, окружение не портит', async () => {

@@ -83,10 +83,13 @@ describe('README, «Updates»: обещания совпадают с кодом
     expect(main).toContain('updateCheckAllowed(shellEnv.env, app.isPackaged)');
   });
 
-  it('после замены приложения — «Restart host…» и без баннера: у живых агентов в командах пути внутри старого приложения', () => {
-    expect(updates).toMatch(/even if the window does not say "Host is outdated — restart"/);
-    expect(updates).toMatch(/only when the host lacks methods/);
+  it('после замены приложения окно само просит перезапустить хост прежней сборки (0.2.0): у живых агентов в командах пути внутри старого приложения', () => {
+    expect(updates).toMatch(/the host still runs from the previous app/);
+    expect(updates).toContain(`"${S.actions.restartHost}"`);
+    expect(updates).toContain(`"${S.statusBar.hostOutdated}"`);
     expect(updates).toMatch(/status line.*MCP server.*Codex/);
+    // Хост прежней сборки — для macOS другое приложение: доступ к папкам спрашивается по кругу.
+    expect(updates).toMatch(/keep asking for access to a folder/);
     expect(updates).toMatch(/Live agents are interrupted and come back through `--resume`/);
   });
 
