@@ -676,6 +676,30 @@ describe('createActivityService: субагенты и ожидание (Parley 
     await waitFor(() => a.get(ref)?.metrics?.waitingFor === null);
   }, 20_000);
 
+  it('предел удержания снимает сессию сам, без нового события: таймер ждёт предела, а не порога тишины', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    // Порог тишины короткий, предел удержания чуть длиннее: за порогом сессию держит фоновая задача.
+    const a = activity(w, { silenceThresholdMs: 300, backgroundHoldMs: 1500 });
+    await a.start();
+    await settle();
+
+    await appendFile(
+      journalOf(ref),
+      hook('UserPromptSubmit') + hook('Stop', { background_tasks: [running('a1')] }),
+    );
+    await waitFor(() => a.get(ref)?.activity.heldByBackground === true);
+    await settle(600);
+    // Порог тишины прошёл: сессию держит фоновая задача.
+    expect(a.get(ref)?.activity.activity).toBe('working');
+
+    // Событий больше нет — предел удержания снимет её сам.
+    await waitFor(() => a.get(ref)?.activity.activity === 'unseen', 5000);
+    expect(a.get(ref)?.activity.heldByBackground).toBe(false);
+    expect(a.get(ref)?.activity.tasks).toEqual([]);
+    expect(a.get(ref)?.metrics?.tasks).toEqual([]);
+  }, 20_000);
+
   it('порог тишины давно прошёл, а сессию держит фоновая задача: таймер тишины не крутится вхолостую', async () => {
     const { ref } = await activeSession();
     let calls = 0;

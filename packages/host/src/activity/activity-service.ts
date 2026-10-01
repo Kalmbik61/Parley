@@ -13,6 +13,7 @@
 
 import { existsSync } from 'node:fs';
 import {
+  DEFAULT_BACKGROUND_HOLD_MS,
   activityOf,
   applyAutoTitle,
   bareEvent,
@@ -63,6 +64,8 @@ export interface SessionLive {
  */
 export interface ActivityServiceOptions extends MetricsRoots {
   silenceThresholdMs?: number;
+  /** Предел удержания фоновыми субагентами и ожиданием `wait_for` (`activityOf`); по умолчанию — час. */
+  backgroundHoldMs?: number;
   /** Сессия в worktree без единого хука дольше этого срока — `trust-wait` (спека 8.2, план 4.2). */
   trustWaitMs?: number;
   /**
@@ -194,6 +197,7 @@ export function createActivityService(
   };
   const nowFn = options.now ?? Date.now;
   let silenceThresholdMs = options.silenceThresholdMs ?? 30_000;
+  const backgroundHoldMs = options.backgroundHoldMs ?? DEFAULT_BACKGROUND_HOLD_MS;
   const trustWaitMs = options.trustWaitMs ?? DEFAULT_TRUST_WAIT_MS;
   const startupWaitMs = options.startupWaitMs ?? DEFAULT_STARTUP_WAIT_MS;
 
@@ -267,10 +271,12 @@ export function createActivityService(
   }
 
   /**
-   * Час икс тишины — либо уже наступил (задержка 0), либо ставится единственный таймер. `now` — тот же
-   * миг, по которому `activityOf` только что вывел состояние: порог пройден, а сессия всё ещё `working`,
-   * значит её держит фоновый субагент или ожидание `wait_for`, и время уже ничего не изменит — таймер
-   * не нужен, иначе он пересчитывал бы сессию с нулевой задержкой без конца.
+   * Час икс — либо уже наступил (задержка 0), либо ставится единственный таймер. Время само меняет
+   * состояние дважды: на пороге тишины, а у удерживаемой сессии (фоновые субагенты, ожидание `wait_for`) —
+   * ещё и на пределе удержания. `now` — тот же миг, по которому `activityOf` только что вывел состояние:
+   * порог пройден, а сессия всё ещё `working`, значит её держат, и ждать надо предела; пройден и он —
+   * время больше ничего не изменит, и таймер не нужен, иначе он пересчитывал бы сессию с нулевой
+   * задержкой без конца.
    */
   function scheduleSilenceTimer(
     ref: SessionRef,
@@ -289,9 +295,12 @@ export function createActivityService(
       Number.isNaN(recordAt) ? -Infinity : recordAt,
     );
     if (!Number.isFinite(quietAt)) return;
-    if (quietAt + silenceThresholdMs < now) return;
+    const silenceAt = quietAt + silenceThresholdMs;
+    const holdAt = quietAt + backgroundHoldMs;
+    const deadline = silenceAt >= now ? silenceAt : holdAt >= now ? holdAt : null;
+    if (deadline === null) return;
 
-    const delay = Math.max(0, quietAt + silenceThresholdMs - nowFn());
+    const delay = Math.max(0, deadline - nowFn());
     silenceTimers.set(
       key,
       setTimeout(() => {
@@ -517,9 +526,23 @@ export function createActivityService(
 
     // `seen` зависит от `turnEndedAt`, а он — результат самой свёртки: первый
     // проход узнаёт его, второй считает финальную `activity` (план, кусок 1.5).
-    const draft = activityOf({ events, log, seen: false, now, silenceThresholdMs: threshold });
+    const draft = activityOf({
+      events,
+      log,
+      seen: false,
+      now,
+      silenceThresholdMs: threshold,
+      backgroundHoldMs,
+    });
     const seen = isSeen(seenAt.get(key), draft.turnEndedAt);
-    const activity = activityOf({ events, log, seen, now, silenceThresholdMs: threshold });
+    const activity = activityOf({
+      events,
+      log,
+      seen,
+      now,
+      silenceThresholdMs: threshold,
+      backgroundHoldMs,
+    });
 
     const metrics = metricsFor(ref, key, entry, session, activity, logIndex.index(session));
     const value: SessionLive = { activity, metrics };
