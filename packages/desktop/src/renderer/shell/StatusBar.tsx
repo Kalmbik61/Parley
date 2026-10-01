@@ -25,7 +25,8 @@ import { providerName, S } from '../../shared/strings.js';
 import { AgentIcon } from '../components/AgentIcon.js';
 import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
 import { cn } from '../lib/cn.js';
-import { missingMethods } from '../lib/capabilities.js';
+import { missingMethods, otherHostBuild } from '../lib/capabilities.js';
+import { useHostStore } from '../store/host.js';
 import { useProvidersStore } from '../store/providers.js';
 
 const CONNECTION_TEXT: Record<HostStatus['state'], (status: HostStatus) => string> = {
@@ -124,6 +125,13 @@ function ProviderLimitsMeter({ limits }: { limits: ProviderLimits | null }): JSX
   );
 }
 
+/**
+ * Основные провайдеры окна — Claude Code и Codex. Их CLI, которого нет в PATH хоста, — проблема (хост с чужим PATH,
+ * CLI не поставлен), и сегмент «not found» говорит о ней, а не прячет провайдера молча. Прочие (GLM, свои из
+ * `providers.json`) без CLI по-прежнему не показываются: они есть не у всех, и вечное «not found» было бы шумом.
+ */
+const CORE_PROVIDERS: ReadonlySet<string> = new Set(['claude', 'codex']);
+
 export function StatusBar({
   status,
   noticeLine,
@@ -135,8 +143,12 @@ export function StatusBar({
   attention,
   onNextAttention,
 }: StatusBarProps): JSX.Element {
-  const outdated = missingMethods(status).length > 0;
-  const providers = useProvidersStore((state) => state.providers).filter((provider) => provider.available);
+  const appVersion = useHostStore((state) => state.appVersion);
+  // Хосту не хватает методов окна или он от другой сборки (окно обновили, хост остался прежним) — перезапуск.
+  const outdated = missingMethods(status).length > 0 || otherHostBuild(status, appVersion) !== null;
+  const providers = useProvidersStore((state) => state.providers).filter(
+    (provider) => provider.available || CORE_PROVIDERS.has(provider.id),
+  );
   // Письма в счёт не входят: они в бейдже и на карточках, а клик ведёт только к сессиям.
   const attentionText = S.statusBar.attention(attention.needsYou, attention.unseen);
   return (
@@ -150,12 +162,20 @@ export function StatusBar({
         <span key={provider.id} data-provider-segment={provider.id} className="contents">
           <AgentIcon provider={provider.id} size={14} />
           <span className="-ml-[7px] min-w-0 truncate">{providerName(provider.id, provider.label)}</span>
-          {provider.version === null ? null : (
+          {!provider.available ? (
+            // Ненайденный: ни версии (она из прошлой пробы), ни лимитов — только что сделать, в подсказке.
+            <span
+              title={S.statusBar.providerNotFoundTitle(provider.id)}
+              className="-ml-[7px] min-w-0 shrink-[100000] truncate text-neutral-700"
+            >
+              {S.statusBar.providerNotFound}
+            </span>
+          ) : provider.version === null ? null : (
             <span className="-ml-[7px] min-w-0 shrink-[100000] truncate font-mono text-[11px] text-neutral-700">
               {provider.version}
             </span>
           )}
-          <ProviderLimitsMeter limits={provider.limits} />
+          {provider.available ? <ProviderLimitsMeter limits={provider.limits} /> : null}
         </span>
       ))}
       {/* Уведомление хоста — заполнитель: берёт то, что осталось, и уступает первым. */}

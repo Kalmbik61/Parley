@@ -9,7 +9,7 @@ import {
   filterMentions,
   findMentionQuery,
   mentionToken,
-  segmentText,
+  splitMentions,
   type TextSegment,
 } from './mention.js';
 
@@ -21,56 +21,31 @@ describe('mentionToken', () => {
   });
 });
 
-describe('segmentText — токены и ссылки в тексте ленты', () => {
+describe('splitMentions — токены в тексте (поле ввода и лента)', () => {
   const mention = (sessionId: string, raw: string): TextSegment => ({ kind: 'mention', sessionId, raw });
   const text = (value: string): TextSegment => ({ kind: 'text', text: value });
 
   it('@s02 и @s-02 — упоминание сессии s-02; номер добивается нулём слева', () => {
-    expect(segmentText('привет @s02, как дела')).toEqual([text('привет '), mention('s-02', '@s02'), text(', как дела')]);
-    expect(segmentText('@s-02')).toEqual([mention('s-02', '@s-02')]);
-    expect(segmentText('@s2 и @S03')).toEqual([mention('s-02', '@s2'), text(' и '), mention('s-03', '@S03')]);
+    expect(splitMentions('привет @s02, как дела')).toEqual([text('привет '), mention('s-02', '@s02'), text(', как дела')]);
+    expect(splitMentions('@s-02')).toEqual([mention('s-02', '@s-02')]);
+    expect(splitMentions('@s2 и @S03')).toEqual([mention('s-02', '@s2'), text(' и '), mention('s-03', '@S03')]);
   });
 
   it('текст без токенов — один текстовый сегмент, пустой текст — ни одного', () => {
-    expect(segmentText('просто текст')).toEqual([text('просто текст')]);
-    expect(segmentText('')).toEqual([]);
+    expect(splitMentions('просто текст')).toEqual([text('просто текст')]);
+    expect(splitMentions('')).toEqual([]);
   });
 
   it('@ внутри слова и email токеном не считается', () => {
-    expect(segmentText('user@s02.example.com')).toEqual([text('user@s02.example.com')]);
-    expect(segmentText('a@s02')).toEqual([text('a@s02')]);
+    expect(splitMentions('user@s02.example.com')).toEqual([text('user@s02.example.com')]);
+    expect(splitMentions('a@s02')).toEqual([text('a@s02')]);
     // За номером сразу буква — это уже не токен, а слово.
-    expect(segmentText('@s02бэкенд')).toEqual([text('@s02бэкенд')]);
+    expect(splitMentions('@s02бэкенд')).toEqual([text('@s02бэкенд')]);
   });
 
   it('токен в начале, в конце строки, после скобки и переноса', () => {
-    expect(segmentText('(@s02)')).toEqual([text('('), mention('s-02', '@s02'), text(')')]);
-    expect(segmentText('раз\n@s03')).toEqual([text('раз\n'), mention('s-03', '@s03')]);
-  });
-
-  it('http(s)-ссылка — отдельный сегмент без хвостовой пунктуации', () => {
-    expect(segmentText('см. https://example.com/a?b=1.')).toEqual([
-      text('см. '),
-      { kind: 'link', url: 'https://example.com/a?b=1', text: 'https://example.com/a?b=1' },
-      text('.'),
-    ]);
-    expect(segmentText('(http://localhost:3000/x)')).toEqual([
-      text('('),
-      { kind: 'link', url: 'http://localhost:3000/x', text: 'http://localhost:3000/x' },
-      text(')'),
-    ]);
-  });
-
-  it('прочие схемы ссылкой не становятся', () => {
-    expect(segmentText('javascript:alert(1) и ftp://host/file')).toEqual([text('javascript:alert(1) и ftp://host/file')]);
-  });
-
-  it('@s02 внутри ссылки остаётся её частью', () => {
-    expect(segmentText('https://x.example/@s02 и @s03')).toEqual([
-      { kind: 'link', url: 'https://x.example/@s02', text: 'https://x.example/@s02' },
-      text(' и '),
-      mention('s-03', '@s03'),
-    ]);
+    expect(splitMentions('(@s02)')).toEqual([text('('), mention('s-02', '@s02'), text(')')]);
+    expect(splitMentions('раз\n@s03')).toEqual([text('раз\n'), mention('s-03', '@s03')]);
   });
 });
 

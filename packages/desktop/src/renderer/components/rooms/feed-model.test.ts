@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Message, Room, WorkEntry, WorkSession } from '@parley/core';
+import type { LiveMetrics, LiveTask } from '@parley/protocol';
 import { activityMap, makeActivity, makeLetter, makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
 import { buildRoomModel, type RoomModel } from './feed-model.js';
 
@@ -185,6 +186,146 @@ describe('buildRoomModel — модель участника из живых м�
       ['s-02', 'Haiku 4.5'],
       ['s-03', null],
     ]);
+  });
+});
+
+describe('buildRoomModel — чем занят участник (Parley 0.2.0)', () => {
+  const metrics = (extra: Partial<LiveMetrics>): LiveMetrics => ({
+    tokensIn: null,
+    tokensOut: null,
+    durationMs: null,
+    unread: 0,
+    subagents: 0,
+    model: null,
+    ...extra,
+  });
+  const task = (id: string, extra: Partial<LiveTask> = {}): LiveTask => ({
+    id,
+    agentType: 'general-purpose',
+    description: `Задача ${id}`,
+    background: true,
+    ...extra,
+  });
+  /** Участник `s-01` с живой активностью и данными хоста. */
+  const doingOf = (extra: Partial<LiveMetrics>, sessionsOver?: WorkSession[]) => {
+    const activity = activityMap([
+      makeActivity(REF('s-01'), 'working', { metrics: metrics(extra) }),
+    ]);
+    const first = build(
+      entryOf(sessionsOver === undefined ? {} : { sessions: sessionsOver }),
+      activity,
+    ).participants[0];
+    return { doing: first?.doing, doingDetail: first?.doingDetail };
+  };
+
+  it('ничего не делает — null; хост прежней версии не присылает полей — тоже null', () => {
+    expect(doingOf({})).toEqual({ doing: null, doingDetail: null });
+    expect(doingOf({ tasks: [], waitingFor: null })).toEqual({ doing: null, doingDetail: null });
+    expect(
+      build(entryOf()).participants.map((participant) => [
+        participant.doing,
+        participant.doingDetail,
+      ]),
+    ).toEqual([
+      [null, null],
+      [null, null],
+      [null, null],
+    ]);
+  });
+
+  it('один субагент — «Subagent: описание»; без описания — тип агента; без обоих — просто «Subagent»', () => {
+    expect(doingOf({ tasks: [task('a', { description: 'Orca mobile app research' })] })).toEqual({
+      doing: 'Subagent: Orca mobile app research',
+      doingDetail: 'Subagent: Orca mobile app research',
+    });
+    expect(doingOf({ tasks: [task('a', { description: null })] }).doing).toBe(
+      'Subagent: general-purpose',
+    );
+    expect(doingOf({ tasks: [task('a', { description: null, agentType: null })] }).doing).toBe(
+      'Subagent',
+    );
+  });
+
+  it('несколько — «N subagents: первое описание», а подсказка — весь список', () => {
+    const tasks = [
+      task('a', { description: 'Orca mobile app research' }),
+      task('b', { description: 'Docs lookup', background: false }),
+      task('c', { description: null, agentType: null }),
+    ];
+    expect(doingOf({ tasks })).toEqual({
+      doing: '3 subagents: Orca mobile app research',
+      doingDetail: '3 subagents\n• Orca mobile app research\n• Docs lookup\n• Subagent',
+    });
+  });
+
+  it('у первого субагента нет ни описания, ни типа — «первым» берётся первое известное название', () => {
+    const tasks = [
+      task('a', { description: null, agentType: null }),
+      task('b', { description: 'Docs lookup' }),
+    ];
+    expect(doingOf({ tasks }).doing).toBe('2 subagents: Docs lookup');
+    expect(
+      doingOf({
+        tasks: [
+          task('a', { description: null, agentType: null }),
+          task('b', { description: null, agentType: null }),
+        ],
+      }).doing,
+    ).toBe('2 subagents');
+  });
+
+  it('ожидание сессии — «Waiting for S03» (тег сессии), inbox — «Waiting for messages»', () => {
+    expect(doingOf({ waitingFor: 's-03' })).toEqual({
+      doing: 'Waiting for S03',
+      doingDetail: 'Waiting for S03',
+    });
+    expect(doingOf({ waitingFor: 'inbox' })).toEqual({
+      doing: 'Waiting for messages',
+      doingDetail: 'Waiting for messages',
+    });
+    // Чужой id остаётся как есть, как и в подписях переписки.
+    expect(doingOf({ waitingFor: 'ghost' }).doing).toBe('Waiting for ghost');
+  });
+
+  it('ожидание в строке важнее субагентов — оно держит агента прямо сейчас; подсказка несёт оба', () => {
+    expect(
+      doingOf({ waitingFor: 's-02', tasks: [task('a', { description: 'Docs lookup' })] }),
+    ).toEqual({
+      doing: 'Waiting for S02',
+      doingDetail: 'Waiting for S02\nSubagent: Docs lookup',
+    });
+  });
+
+  it('данные только у живой сессии: закрытая, спящая и не запущенная ничем не заняты', () => {
+    const busy = { tasks: [task('a')], waitingFor: 's-02' };
+    for (const lifecycle of ['closed', 'sleeping', 'pending'] as const) {
+      const custom = sessions();
+      custom[0] = makeSession('s-01', 'архитектор', { lifecycle });
+      expect(doingOf(busy, custom), lifecycle).toEqual({ doing: null, doingDetail: null });
+    }
+  });
+
+  it('сессия с фоновыми субагентами — working: состояние приходит с хоста, окно его не понижает', () => {
+    const activity = activityMap([
+      makeActivity(REF('s-01'), 'working', {
+        metrics: metrics({ subagents: 3, tasks: [task('a'), task('b'), task('c')] }),
+      }),
+    ]);
+    const [first] = build(entryOf(), activity).participants;
+    expect([first?.state, first?.word, first?.attention]).toEqual([
+      'working',
+      'working',
+      'working',
+    ]);
+  });
+
+  it('данные берутся у своей сессии: чужая активность не подмешивается', () => {
+    const activity = activityMap([
+      makeActivity(REF('s-02'), 'working', { metrics: metrics({ waitingFor: 'inbox' }) }),
+    ]);
+    expect(build(entryOf(), activity).participants.map((participant) => participant.doing)).toEqual(
+      [null, 'Waiting for messages', null],
+    );
   });
 });
 

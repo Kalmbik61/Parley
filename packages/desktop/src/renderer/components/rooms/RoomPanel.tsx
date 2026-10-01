@@ -3,6 +3,14 @@
  * лента сообщений с блоком `Decisions` первым, поле ввода с упоминаниями. Данные — `buildRoomModel`
  * (`feed-model.ts`), рисуют `RoomHeader`, `RoomMessage` и `Composer`.
  *
+ * Над полем ввода — живая строка (Parley 0.2.0): по строке на участника, который чем-то занят, —
+ * `S02 · Subagent: Orca research`, `S03 · Waiting for messages`. Это состояние, а не переписка: в ленту оно
+ * не пишется, а когда никто ничем не занят, строки нет. Строки обрезаются, а блок выше 96px прокручивается:
+ * много занятых участников не должны выдавить ленту из невысокого окна. Появление, смена и исчезновение строки
+ * меняют высоту ленты: если до этого она стояла у низа (не дальше 48px от дна), её прижимают заново, а того, кто
+ * читает историю выше, не дёргают. Положение запоминается по событию `scroll` ленты, а не мерится при отрисовке:
+ * чтение раскладки в render было бы синхронной перекладкой на каждое событие активности.
+ *
  * Карточка решения — последней в ленте, пока `Room.proposal` не `null`. Кнопки зовут
  * `rooms.resolveProposal` с `proposalId` и `rev` показанной карточки: человек не примет текст, которого не
  * видел. `conflict` — тост, карточка не ломается, живая версия приходит событием карты. Метода нет у
@@ -23,7 +31,7 @@ import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { S, errorText } from '../../../shared/strings.js';
 import { useMarkRead } from '../../attention/use-mark-read.js';
 import { useHostSupports } from '../../lib/capabilities.js';
-import { sessionRowLabel } from '../../lib/participant.js';
+import { sessionRowLabel, sessionTag } from '../../lib/participant.js';
 import { relativeTime } from '../../lib/relative-time.js';
 import { roomKey } from '../../lib/room-view.js';
 import { workKey } from '../../lib/tree-order.js';
@@ -53,22 +61,46 @@ export interface RoomPanelProps {
 /** Относительное время сообщений («2m») обновляется раз в столько же, что и в сайдбаре. */
 const NOW_PERIOD_MS = 30_000;
 
+/** Лента «у низа», если до дна не больше стольких px: дочитавший почти до конца историю уже не читает. */
+const AT_BOTTOM_PX = 48;
+
 export function RoomPanel({ entry, roomId, providers, activity, bridge, active, onOpenExternal, onOpenSession }: RoomPanelProps): JSX.Element {
   const model = buildRoomModel({ entry, roomId, providers, activity });
+  // Участники, которые чем-то заняты, — по строке над полем ввода. Ключ меняется, когда строка появилась,
+  // исчезла или сменилась: от него зависит высота ленты.
+  const busy = model?.participants.filter((participant) => participant.doing !== null) ?? [];
+  const liveKey = busy
+    .map((participant) => `${participant.id}\u0000${participant.doing}`)
+    .join('\n');
   // Хуки — до раннего выхода «комнаты нет»: порядок хуков не должен зависеть от данных.
   const markRead = useMarkRead({ bridge, projectPath: entry.projectPath, workId: entry.map.work.id, active });
   const now = useNow(NOW_PERIOD_MS);
   const canResolve = useHostSupports('rooms.resolveProposal');
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // Стоит ли лента у низа — по последнему `scroll`: после коммита живая строка уже сожмёт ленту, и по DOM
+  // «был ли у низа» не определить, а мерить его при каждой отрисовке — перекладка на каждое событие.
+  const atBottomRef = useRef(true);
+  const onFeedScroll = useCallback((): void => {
+    const feed = containerRef.current;
+    if (feed !== null)
+      atBottomRef.current = feed.scrollHeight - feed.scrollTop - feed.clientHeight <= AT_BOTTOM_PX;
+  }, []);
 
   const pinToBottom = useCallback((): void => {
     const container = containerRef.current;
-    if (container !== null) container.scrollTop = container.scrollHeight;
+    if (container === null) return;
+    container.scrollTop = container.scrollHeight;
+    atBottomRef.current = true;
   }, []);
 
   // Лента прижата к низу при открытии, когда приходит новое сообщение и когда решение появилось или
   // его текст заменили (карточка — последняя в ленте).
   useLayoutEffect(pinToBottom, [pinToBottom, model?.messages.length, model?.proposal?.id, model?.proposal?.rev]);
+
+  // Живая строка сжала или расширила ленту: у низа стояла — остаётся у низа, читают историю — не трогаем.
+  useLayoutEffect(() => {
+    if (atBottomRef.current) pinToBottom();
+  }, [pinToBottom, liveKey]);
 
   if (model === null) {
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{S.rooms.notFound}</div>;
@@ -129,8 +161,18 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   return (
     <div data-room-panel="" className="flex h-full min-h-0 min-w-0 flex-col">
       <RoomHeader title={model.title} subtitle={model.subtitle} participants={model.participants} onOpenSession={onOpenSession} />
-      <div ref={containerRef} data-room-feed="" className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-9 py-[18px]">
-        <Decisions decisions={model.decisions} className="max-w-[680px]" />
+      <div
+        ref={containerRef}
+        onScroll={onFeedScroll}
+        data-room-feed=""
+        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-9 py-[18px]"
+      >
+        <Decisions
+          decisions={model.decisions}
+          labelOf={labelOf}
+          onOpenExternal={onOpenExternal}
+          className="max-w-[680px]"
+        />
         {model.empty ? <p className="m-0 text-sm text-muted-foreground">{S.rooms.emptyFeed}</p> : null}
         {model.messages.map((message) => (
           <RoomMessage
@@ -155,6 +197,22 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
           />
         )}
       </div>
+      {busy.length === 0 ? null : (
+        <div
+          data-room-live=""
+          className="flex max-h-24 shrink-0 flex-col gap-0.5 overflow-y-auto px-9 pb-1.5 pt-1 text-xs text-muted-foreground"
+        >
+          {busy.map((participant) => (
+            <div
+              key={participant.id}
+              title={participant.doingDetail ?? undefined}
+              className="truncate"
+            >
+              {`${sessionTag(participant.id)} · ${participant.doing}`}
+            </div>
+          ))}
+        </div>
+      )}
       <Composer key={draftKey} members={members} draftKey={draftKey} onSend={handleSend} />
     </div>
   );

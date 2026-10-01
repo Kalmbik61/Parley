@@ -171,6 +171,10 @@ export const S = {
     wakeOn: 'Auto-wake on',
     /** Хосту не хватает методов этой сборки окна (спека 3.2, 5.9). */
     hostOutdated: 'Host is outdated — restart',
+    /** Основной провайдер, чьего CLI нет в PATH хоста (0.2.0, `shell/StatusBar.tsx`). */
+    providerNotFound: 'not found',
+    providerNotFoundTitle: (command: string): string =>
+      `${command} is not in the host's PATH. Install it, or restart the host after installing.`,
     restartHostTitle: 'Restart host?',
     restartHostDescription: 'Live agents will be interrupted and come back with --resume.',
     /** «N ждут тебя · M не просмотрено» (кусок 4.2, спека 7.3): нулевая часть не пишется, обе нулевые — ''. */
@@ -333,6 +337,19 @@ export const S = {
      * показывается: его никто не хранит.
      */
     participantTooltip: (provider: string, model: string | null): string => (model === null ? provider : `${provider} · ${model}`),
+    /**
+     * Чем занят участник (Parley 0.2.0): вторая строка его карточки вместо задачи и живая строка над полем
+     * ввода. `Subagent: Orca research` — название субагента (описание или тип агента); безымянный — просто
+     * `Subagent`. Несколько — `3 subagents: <первое название>`, без названий — `3 subagents`.
+     */
+    doingSubagent: (name: string | null): string =>
+      name === null ? 'Subagent' : `Subagent: ${name}`,
+    doingSubagents: (count: number, first: string | null): string =>
+      first === null ? `${count} subagents` : `${count} subagents: ${first}`,
+    /** Ждёт ответа сессии: `tag` — короткий тег (`S03`). */
+    doingWaitingFor: (tag: string): string => `Waiting for ${tag}`,
+    /** Ждёт сообщений: `wait_for("inbox")`. */
+    doingWaitingInbox: 'Waiting for messages',
     /** Мета пункта меню упоминаний: `Opus 5.5 · idle`; модель неизвестна — только состояние. */
     mentionMeta: (model: string | null, word: string): string => (model === null ? word : `${model} · ${word}`),
     /** Поле ввода: подпись над ним, плейсхолдер, имя для скринридера. */
@@ -691,6 +708,9 @@ export const S = {
     restartHost: 'Restart host',
     statusConnecting: 'Connecting…',
     statusConnected: (hostVersion: string): string => `Host ${hostVersion}`,
+    /** Тост «хост от другой сборки» (0.2.0, `update/host-build-notice.ts`). */
+    hostOtherBuild: (hostVersion: string, appVersion: string): string =>
+      `The host is still from Parley ${hostVersion}, the window is ${appVersion}. Restart the host to finish the update.`,
     statusMismatch: 'Host version mismatch',
     statusDisconnected: (reason: string): string => `No connection: ${reason}`,
     /** `main/index.ts` — login-shell не нашёл системный `node`. */

@@ -109,7 +109,10 @@ interface AttemptState {
   /**
    * Поднять письмом нечем: у провайдера нет `resumeArgs` или id его сессии не
    * известен. Письма ждут, пока сессию поднимет человек (спека 7.5), — новый
-   * процесс по брифу начал бы задачу заново.
+   * процесс по брифу начал бы задачу заново. Сессию Claude с id, но без разговора
+   * (транскрипта нет: процесс умер до первого сообщения), письмо поднимает новым
+   * процессом с тем же id (0.2.0, `core/work/launch.ts`): задачу она так и не
+   * начала, и «заново» тут нечего.
    */
   resumeUnavailable: boolean;
   /** Повтор пересчёта, пока у Codex нет режима вставки (`PASTE_MODE_RETRIES`). */
@@ -518,8 +521,14 @@ export function createWakeService(
       unsubscribeWorks = works.onChange(() => recomputeAll());
       unsubscribeActivity = activity.onChange((ref, value) => {
         const state = attempts.get(refKey(ref));
-        // Ход начался (`UserPromptSubmit`) — попытка удалась, предохранитель не нужен.
-        if (state?.inFlight === true && value.activity.activity === 'working') {
+        // Ход начался (`UserPromptSubmit`) — попытка удалась, предохранитель не нужен. Сессия, которую
+        // держат одни фоновые субагенты, `working` и до указателя: любой её пересчёт — не начало хода,
+        // и Enter указателя он отменять не вправе.
+        if (
+          state?.inFlight === true &&
+          value.activity.activity === 'working' &&
+          !value.activity.heldByBackground
+        ) {
           clearTimers(state);
           state.inFlight = false;
         }

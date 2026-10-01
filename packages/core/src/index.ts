@@ -25,7 +25,13 @@ export type { JsonlStats, RawRecord } from './jsonl.js';
 export { adapterV1 } from './adapter-v1.js';
 export type { TokenTotals } from './counters.js';
 export type { SchemaAdapter, SessionRecord } from './adapter-v1.js';
-export { defaultRoot, discoverSession, discoverSessions, sessionFileForPath } from './discover.js';
+export {
+  claudeProjectRoots,
+  defaultRoot,
+  discoverSession,
+  discoverSessions,
+  sessionFileForPath,
+} from './discover.js';
 export type { DiscoveredSession, DiscoveredSubagent } from './discover.js';
 export { indexSessionFile, projectSlug } from './session-index.js';
 export type { IndexSessionOptions, Provider, SessionIndex, TitleSource } from './session-index.js';
@@ -263,16 +269,23 @@ export {
   saveConfig,
 } from './config.js';
 export type { ParleyConfig, LoadedConfig } from './config.js';
-export { activityOf, hookedSince } from './work/activity.js';
+export { DEFAULT_BACKGROUND_HOLD_MS, activityOf, hookedSince } from './work/activity.js';
 export type {
   Activity,
   ActivityLog,
   ActivityOptions,
   ActivitySource,
+  ActivityTask,
   SessionActivity,
 } from './work/activity.js';
-export { openEvents, watchEvents } from './work/events.js';
-export type { EventRecord, EventsLog, EventsWatcher, WatchEventsOptions } from './work/events.js';
+export { TERMINAL_WORKING_EVENT, bareEvent, openEvents, watchEvents } from './work/events.js';
+export type {
+  BackgroundTask,
+  EventRecord,
+  EventsLog,
+  EventsWatcher,
+  WatchEventsOptions,
+} from './work/events.js';
 export { deliveryAction, pointerText } from './work/delivery.js';
 export type { DeliveryAction, DeliveryInput } from './work/delivery.js';
 export {

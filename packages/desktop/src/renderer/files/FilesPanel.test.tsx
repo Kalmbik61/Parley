@@ -76,10 +76,25 @@ function openInLayout(tab: TabSpec): void {
   });
 }
 
-function activity(sessionId: string, state: 'working' | 'idle'): EventData<'activity.changed'> {
+function activity(
+  sessionId: string,
+  state: 'working' | 'idle',
+  heldByBackground = false,
+): EventData<'activity.changed'> {
   return {
     ref: { projectPath: '/tmp/proj', workId: 'w-01', sessionId },
-    activity: { activity: state, subagents: 0, turnEndedAt: null, lastEventAt: null, source: 'hooks', exited: false, hooksMissing: false },
+    activity: {
+      activity: state,
+      subagents: 0,
+      tasks: [],
+      waitingFor: null,
+      heldByBackground,
+      turnEndedAt: null,
+      lastEventAt: null,
+      source: 'hooks',
+      exited: false,
+      hooksMissing: false,
+    },
     metrics: null,
   };
 }
@@ -128,6 +143,33 @@ describe('gitStatus (тест 5)', () => {
     view.unmount();
     render(<FilesPanel bridge={bridge} entry={ENTRY} />);
     expect(bridge.gitStatusCalls).toHaveLength(5);
+  });
+});
+
+describe('конец хода лида с фоновыми субагентами (Parley 0.2.0)', () => {
+  it('working остаётся, но удержание фоновыми включилось — статус перечитывается; удержание само ничего не будит', async () => {
+    vi.useFakeTimers();
+    render(<FilesPanel bridge={bridge} entry={ENTRY} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(bridge.gitStatusCalls).toHaveLength(1);
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+
+    // У проекта — сессии работы без worktree: s-01 работает сама, потом закончила ход при живых фоновых.
+    setActivity(activity('s-01', 'working'));
+    expect(bridge.gitStatusCalls).toHaveLength(1);
+    setActivity(activity('s-01', 'working', true));
+    expect(bridge.gitStatusCalls).toHaveLength(2);
+
+    // Удержание продолжается, снимок пришёл новый — повода нет.
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+    setActivity({ ...activity('s-01', 'working', true), metrics: null });
+    expect(bridge.gitStatusCalls).toHaveLength(2);
   });
 });
 

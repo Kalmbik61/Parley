@@ -13,8 +13,12 @@
 
 import { existsSync } from 'node:fs';
 import {
+  DEFAULT_BACKGROUND_HOLD_MS,
+  TERMINAL_WORKING_EVENT,
   activityOf,
+  claudeProjectRoots,
   applyAutoTitle,
+  bareEvent,
   envValue,
   isNewLabel,
   linkSession,
@@ -39,6 +43,7 @@ import {
   refKey,
   type EventData,
   type LiveMetrics,
+  type LiveTask,
   type SessionRef,
   type WorksSnapshot,
 } from '@parley/protocol';
@@ -46,6 +51,7 @@ import type { HostContext } from '../context.js';
 import type { CodexSignal } from '../pty/codex-terminal.js';
 import type { WorksService } from '../works/works-service.js';
 import { createLogIndex, type LogIndex } from './log-index.js';
+import { readSubagentMeta, type SubagentMeta } from './subagent-meta.js';
 
 export interface SessionLive {
   activity: SessionActivity;
@@ -60,6 +66,13 @@ export interface SessionLive {
  */
 export interface ActivityServiceOptions extends MetricsRoots {
   silenceThresholdMs?: number;
+  /** Предел удержания фоновыми субагентами и ожиданием `wait_for` (`activityOf`); по умолчанию — час. */
+  backgroundHoldMs?: number;
+  /**
+   * Чтение `meta.json` субагента — сверх интерфейса плана: тест подставляет читателя-счётчика и видит, что и
+   * когда спросили. По умолчанию — `readSubagentMeta`.
+   */
+  readSubagentMeta?: (transcriptPath: string, agentId: string) => Promise<SubagentMeta | null>;
   /** Сессия в worktree без единого хука дольше этого срока — `trust-wait` (спека 8.2, план 4.2). */
   trustWaitMs?: number;
   /**
@@ -91,6 +104,20 @@ export interface ActivityService {
 }
 
 const workKeyOf = (projectPath: string, workId: string): string => `${projectPath}\u0000${workId}`;
+
+/**
+ * Неудачное чтение `meta.json` субагента повторяется не чаще: Claude пишет файл рядом со стартом, а пересчётов
+ * сессии за секунду десятки (события, лог), и ждать файла — не повод ходить за ним на каждом.
+ */
+const META_RETRY_MS = 10_000;
+
+/** Что известно про `meta.json` живых субагентов одной сессии. */
+interface SubagentCache {
+  /** Прочитанное по id задачи. */
+  found: Map<string, SubagentMeta>;
+  /** Когда чтение задачи не удалось в последний раз: до `META_RETRY_MS` не повторяется. */
+  failedAt: Map<string, number>;
+}
 
 /** Спека 8.2: доверие к папке worktree подтверждают руками, и хук может не прийти вовсе. */
 const DEFAULT_TRUST_WAIT_MS = 20_000;
@@ -141,12 +168,14 @@ const TERMINAL_READY_EVENT = 'TerminalReady';
 
 /**
  * Событие журнала, которым `activityOf` читает сигнал терминала: те же имена, что у хуков Claude Code, а
- * первый `Ready` с запуска — нейтральное (`TERMINAL_READY_EVENT`).
+ * первый `Ready` с запуска — нейтральное (`TERMINAL_READY_EVENT`). Кадр спиннера — своё имя
+ * (`TERMINAL_WORKING_EVENT`): время сигнала обновляется на каждом кадре, и `UserPromptSubmit` с таким
+ * временем снимал бы ожидание `wait_for` (его строку дописал MCP-сервер), хотя нового хода нет.
  */
 const eventNameOf = (signal: CodexSignal, turnSeen: boolean): string | null => {
   switch (signal.kind) {
     case 'working':
-      return 'UserPromptSubmit';
+      return TERMINAL_WORKING_EVENT;
     case 'ready':
       return turnSeen ? 'Stop' : TERMINAL_READY_EVENT;
     case 'turn-complete':
@@ -191,6 +220,7 @@ export function createActivityService(
   };
   const nowFn = options.now ?? Date.now;
   let silenceThresholdMs = options.silenceThresholdMs ?? 30_000;
+  const backgroundHoldMs = options.backgroundHoldMs ?? DEFAULT_BACKGROUND_HOLD_MS;
   const trustWaitMs = options.trustWaitMs ?? DEFAULT_TRUST_WAIT_MS;
   const startupWaitMs = options.startupWaitMs ?? DEFAULT_STARTUP_WAIT_MS;
 
@@ -207,6 +237,18 @@ export function createActivityService(
   const terminals = new Map<string, TerminalState>();
   const workWatches = new Map<string, WorkWatch>();
   const listeners = new Set<(ref: SessionRef, value: SessionLive) => void>();
+  /**
+   * `meta.json` субагентов, у которых снимок хуков не назвал описания: прочитанное и неудачи по ключу
+   * сессии и id задачи. Хранится, пока задача жива, — запись ушедшей задачи снимает следующий пересчёт.
+   */
+  const subagentCaches = new Map<string, SubagentCache>();
+  // Корни истории для `meta.json`: свой корень сервиса (тесты), иначе — где Claude Code держит историю.
+  const metaRoots = options.claudeRoot === undefined ? claudeProjectRoots() : [options.claudeRoot];
+  const readMeta =
+    options.readSubagentMeta ??
+    ((transcriptPath: string, agentId: string) => readSubagentMeta(transcriptPath, agentId, metaRoots));
+  /** Чтения `meta.json` в полёте (ключ сессии и id задачи): одно на задачу, пока оно не вернулось. */
+  const metaReads = new Set<string>();
 
   let stopped = false;
   let unsubscribeWorks: (() => void) | undefined;
@@ -256,12 +298,20 @@ export function createActivityService(
     return [...base.slice(0, index), last, ...base.slice(index)];
   }
 
-  /** Час икс тишины — либо уже прошёл (задержка 0), либо ставится единственный таймер. */
+  /**
+   * Час икс — либо уже наступил (задержка 0), либо ставится единственный таймер. Время само меняет
+   * состояние дважды: на пороге тишины, а у удерживаемой сессии (фоновые субагенты, ожидание `wait_for`) —
+   * ещё и на пределе удержания. `now` — тот же миг, по которому `activityOf` только что вывел состояние:
+   * порог пройден, а сессия всё ещё `working`, значит её держат, и ждать надо предела; пройден и он —
+   * время больше ничего не изменит, и таймер не нужен, иначе он пересчитывал бы сессию с нулевой
+   * задержкой без конца.
+   */
   function scheduleSilenceTimer(
     ref: SessionRef,
     key: string,
     activity: SessionActivity,
     log: ActivityLog | null,
+    now: number,
   ): void {
     clearSilenceTimer(key);
     if (activity.activity !== 'working') return;
@@ -273,8 +323,12 @@ export function createActivityService(
       Number.isNaN(recordAt) ? -Infinity : recordAt,
     );
     if (!Number.isFinite(quietAt)) return;
+    const silenceAt = quietAt + silenceThresholdMs;
+    const holdAt = quietAt + backgroundHoldMs;
+    const deadline = silenceAt >= now ? silenceAt : holdAt >= now ? holdAt : null;
+    if (deadline === null) return;
 
-    const delay = Math.max(0, quietAt + silenceThresholdMs - nowFn());
+    const delay = Math.max(0, deadline - nowFn());
     silenceTimers.set(
       key,
       setTimeout(() => {
@@ -294,7 +348,76 @@ export function createActivityService(
   const unreadOf = (entry: WorkEntry, sessionId: string): number =>
     unreadFor(entry.map, sessionId).length;
 
+  /**
+   * Чтение `meta.json` субагента в фоне: пока оно идёт, окно видит задачу без описания. Прочитано —
+   * описание кладётся в кэш сессии и сессия пересчитывается. Не нашлось — запоминается время неудачи, и
+   * пересчёт не раньше чем через `META_RETRY_MS` попробует снова: Claude может записать файл чуть позже
+   * старта.
+   */
+  function loadSubagentMeta(
+    ref: SessionRef,
+    key: string,
+    id: string,
+    transcriptPath: string,
+  ): void {
+    const read = `${key}\u0000${id}`;
+    if (metaReads.has(read)) return;
+    metaReads.add(read);
+    void readMeta(transcriptPath, id)
+      .then((meta) => {
+        metaReads.delete(read);
+        if (stopped) return;
+        const cache = subagentCaches.get(key) ?? { found: new Map(), failedAt: new Map() };
+        subagentCaches.set(key, cache);
+        if (meta === null) {
+          cache.failedAt.set(id, nowFn());
+          return;
+        }
+        cache.failedAt.delete(id);
+        cache.found.set(id, meta);
+        recompute(ref);
+      })
+      .catch((error: unknown) => {
+        metaReads.delete(read);
+        host.log.error('описание субагента не применилось', { ref, id, error: String(error) });
+      });
+  }
+
+  /**
+   * Живые субагенты для окна. Описание из снимка хуков главнее; когда его нет, берётся `meta.json`
+   * субагента (и тип агента, если он пуст): из кэша, а нет в кэше — в фоне запускается чтение (не чаще
+   * раза в `META_RETRY_MS` после неудачи), и окно получит описание следующим пересчётом. Кэш `meta.json`
+   * остаётся только у живых задач.
+   */
+  function liveTasksOf(ref: SessionRef, key: string, activity: SessionActivity): LiveTask[] {
+    const cache = subagentCaches.get(key);
+    const kept: SubagentCache = { found: new Map(), failedAt: new Map() };
+    const tasks = activity.tasks.map((task): LiveTask => {
+      let { agentType, description } = task;
+      if (description === null) {
+        const meta = cache?.found.get(task.id);
+        if (meta !== undefined) {
+          kept.found.set(task.id, meta);
+          description = meta.description;
+          agentType ??= meta.agentType;
+        } else if (task.transcriptPath !== null) {
+          const failedAt = cache?.failedAt.get(task.id);
+          if (failedAt !== undefined) kept.failedAt.set(task.id, failedAt);
+          if (failedAt === undefined || nowFn() - failedAt >= META_RETRY_MS) {
+            loadSubagentMeta(ref, key, task.id, task.transcriptPath);
+          }
+        }
+      }
+      return { id: task.id, agentType, description, background: task.background };
+    });
+    if (kept.found.size === 0 && kept.failedAt.size === 0) subagentCaches.delete(key);
+    else subagentCaches.set(key, kept);
+    return tasks;
+  }
+
   function metricsFor(
+    ref: SessionRef,
+    key: string,
     entry: WorkEntry,
     session: WorkSession,
     activity: SessionActivity,
@@ -310,6 +433,8 @@ export function createActivityService(
       unread: unreadOf(entry, session.id),
       subagents: activity.subagents,
       model: indexed?.primaryModel ?? null,
+      tasks: liveTasksOf(ref, key, activity),
+      waitingFor: activity.waitingFor,
     };
   }
 
@@ -408,7 +533,7 @@ export function createActivityService(
     state.startupTimer = undefined;
     if (stopped || terminals.get(key) !== state || state.last !== null) return;
     const at = new Date(nowFn()).toISOString();
-    state.last = { at, name: 'PermissionRequest', notificationType: null };
+    state.last = bareEvent(at, 'PermissionRequest');
     host.broadcast('host.notice', {
       kind: 'startup-wait',
       ref,
@@ -440,15 +565,29 @@ export function createActivityService(
 
     // `seen` зависит от `turnEndedAt`, а он — результат самой свёртки: первый
     // проход узнаёт его, второй считает финальную `activity` (план, кусок 1.5).
-    const draft = activityOf({ events, log, seen: false, now, silenceThresholdMs: threshold });
+    const draft = activityOf({
+      events,
+      log,
+      seen: false,
+      now,
+      silenceThresholdMs: threshold,
+      backgroundHoldMs,
+    });
     const seen = isSeen(seenAt.get(key), draft.turnEndedAt);
-    const activity = activityOf({ events, log, seen, now, silenceThresholdMs: threshold });
+    const activity = activityOf({
+      events,
+      log,
+      seen,
+      now,
+      silenceThresholdMs: threshold,
+      backgroundHoldMs,
+    });
 
-    const metrics = metricsFor(entry, session, activity, logIndex.index(session));
+    const metrics = metricsFor(ref, key, entry, session, activity, logIndex.index(session));
     const value: SessionLive = { activity, metrics };
 
     if (driven) clearSilenceTimer(key);
-    else scheduleSilenceTimer(ref, key, activity, log);
+    else scheduleSilenceTimer(ref, key, activity, log, now);
 
     const previous = live.get(key);
     live.set(key, value);
@@ -550,6 +689,9 @@ export function createActivityService(
 
     for (const [key] of Array.from(journals)) if (!validSessions.has(key)) journals.delete(key);
     for (const [key] of Array.from(live)) if (!validSessions.has(key)) live.delete(key);
+    for (const [key] of Array.from(subagentCaches)) {
+      if (!validSessions.has(key)) subagentCaches.delete(key);
+    }
     for (const [key] of Array.from(seenAt)) if (!validSessions.has(key)) seenAt.delete(key);
     for (const key of Array.from(autoTitled)) if (!validSessions.has(key)) autoTitled.delete(key);
     for (const key of Array.from(hooksMissingNotified)) {
@@ -632,7 +774,7 @@ export function createActivityService(
       // Время обновляется на каждом сигнале, даже повторном: он новее любого `Stop` от notify, который
       // журнал успел принять между кадрами, — так следующий кадр спиннера ставит терминальное событие
       // после него.
-      state.last = { at: new Date(nowFn()).toISOString(), name, notificationType: null };
+      state.last = bareEvent(new Date(nowFn()).toISOString(), name);
       if (state.startupTimer !== undefined) {
         clearTimeout(state.startupTimer);
         state.startupTimer = undefined;

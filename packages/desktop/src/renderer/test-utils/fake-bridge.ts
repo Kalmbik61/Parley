@@ -66,6 +66,8 @@ export interface FakeBridge extends ParleyBridge {
   setPendingFocusTarget(target: FocusTarget | null): void;
   /** Проверка main нашла релиз новее: событие `app:update-available` слушателям `onUpdateAvailable` (V6 плана релиза 0.1.0). */
   emitUpdate(info: UpdateInfo): void;
+  /** Версия окна, которую отдаёт `app.version` (0.2.0); по умолчанию — та же, что у хоста моста: `0.0.0-test`; `null` — несобранное окно. */
+  setAppVersion(version: string | null): void;
   /** Найденное до подписки (`app:get-update`): каждый новый подписчик `onUpdateAvailable` получает его сразу; `null` — ничего. */
   setPendingUpdate(info: UpdateInfo | null): void;
   readonly badges: number[];
@@ -180,6 +182,7 @@ export function createFakeBridge(): FakeBridge {
   const focusTargetListeners = new Set<(target: FocusTarget) => void>();
   let pendingFocusTarget: FocusTarget | null = null;
   const updateListeners = new Set<(info: UpdateInfo) => void>();
+  let appVersion: string | null = '0.0.0-test';
   let pendingUpdate: UpdateInfo | null = null;
   const badges: number[] = [];
   const hostActions: Array<'reconnect' | 'restartHost'> = [];
@@ -533,6 +536,7 @@ export function createFakeBridge(): FakeBridge {
         badges.push(count);
       },
       chooseFolder: async () => null,
+      version: async () => appVersion,
       restartHost: async () => {
         hostActions.push('restartHost');
       },
@@ -651,6 +655,9 @@ export function createFakeBridge(): FakeBridge {
     },
     emitUpdate: (info) => {
       for (const listener of updateListeners) listener(info);
+    },
+    setAppVersion: (version) => {
+      appVersion = version;
     },
     setPendingUpdate: (info) => {
       pendingUpdate = info;

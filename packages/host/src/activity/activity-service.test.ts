@@ -10,13 +10,14 @@ import {
   workPaths,
   NEW_LABEL,
 } from '@parley/core';
-import type { EventData, EventName, SessionRef } from '@parley/protocol';
+import type { EventData, EventName, LiveMetrics, SessionRef } from '@parley/protocol';
 import { refKey } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createWorksService } from '../works/works-service.js';
 import type { WorksService } from '../works/works-service.js';
 import { createActivityService } from './activity-service.js';
 import type { ActivityService, ActivityServiceOptions } from './activity-service.js';
+import type { SubagentMeta } from './subagent-meta.js';
 
 let home = '';
 let project = '';
@@ -221,7 +222,7 @@ describe('createActivityService', () => {
     expect(activityChanges(ref)).toEqual(changes);
   }, 40_000);
 
-  it('4: SubagentStart ×2 и SubagentStop ×1 → subagents: 1', async () => {
+  it('4: SubagentStart ×2 и SubagentStop ×1 того же id → subagents: 1', async () => {
     const { ref } = await activeSession();
     const w = await works();
     const a = activity(w);
@@ -230,7 +231,10 @@ describe('createActivityService', () => {
 
     await appendFile(
       path.join(workPaths(project, ref.workId).events, `${ref.sessionId}.jsonl`),
-      `${hook('UserPromptSubmit')}${hook('SubagentStart')}${hook('SubagentStart')}${hook('SubagentStop')}`,
+      hook('UserPromptSubmit') +
+        hook('SubagentStart', { agent_id: 'a1' }) +
+        hook('SubagentStart', { agent_id: 'a2' }) +
+        hook('SubagentStop', { agent_id: 'a1' }),
     );
     await settle();
     expect(a.get(ref)?.activity.subagents).toBe(1);
@@ -530,5 +534,294 @@ describe('createActivityService', () => {
     expect(current[0]?.ref).toEqual(ref);
     expect(current[0]?.activity.activity).toBe('blocked');
     expect(current[0]?.metrics).toEqual(a.get(ref)?.metrics);
+  }, 20_000);
+});
+
+describe('createActivityService: субагенты и ожидание (Parley 0.2.0)', () => {
+  const journalOf = (ref: SessionRef): string =>
+    path.join(workPaths(project, ref.workId).events, `${ref.sessionId}.jsonl`);
+  /** Транскрипт родителя во временном корне Claude: рядом с ним (без `.jsonl`) лежат субагенты. */
+  const transcript = (): string => path.join(claudeRoot, '-proj', 'sess.jsonl');
+  const metaFile = (id: string): string =>
+    path.join(claudeRoot, '-proj', 'sess', 'subagents', `agent-${id}.meta.json`);
+  /** Задача в снимке `background_tasks` хука. */
+  const running = (id: string, description: string | null = `задача ${id}`) => ({
+    id,
+    type: 'subagent',
+    status: 'running',
+    agent_type: 'general-purpose',
+    ...(description === null ? {} : { description }),
+  });
+
+  it('Stop при работающей фоновой задаче — сессия working, а LiveMetrics.tasks несёт описание из снимка', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+
+    await appendFile(
+      journalOf(ref),
+      hook('UserPromptSubmit') +
+        hook('SubagentStart', {
+          agent_id: 'a1',
+          agent_type: 'general-purpose',
+          transcript_path: transcript(),
+        }) +
+        hook('Stop', { background_tasks: [running('a1', 'Orca mobile app research')] }),
+    );
+    await waitFor(() => a.get(ref)?.activity.subagents === 1);
+
+    const live = a.get(ref);
+    expect(live?.activity.activity).toBe('working');
+    expect(live?.activity.turnEndedAt).toBeNull();
+    const expected = [
+      {
+        id: 'a1',
+        agentType: 'general-purpose',
+        description: 'Orca mobile app research',
+        background: true,
+      },
+    ];
+    expect(live?.metrics?.tasks).toEqual(expected);
+    expect(live?.metrics?.subagents).toBe(1);
+    // То же самое получает окно событием.
+    expect((activityChanges(ref).at(-1)?.metrics as LiveMetrics).tasks).toEqual(expected);
+
+    // Задача закончилась, снимок опустел — ход окончен.
+    await appendFile(
+      journalOf(ref),
+      hook('SubagentStop', { agent_id: 'a1', background_tasks: [] }),
+    );
+    await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
+    expect(a.get(ref)?.metrics?.tasks).toEqual([]);
+  }, 20_000);
+
+  it('описание — из meta.json субагента, когда снимок его не знает; файл появился позже — подхватывается', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    // Часы управляемые: после неудачного чтения повтор не раньше 10 с, и тест их перематывает.
+    let clock = Date.now();
+    const a = activity(w, { now: () => clock, silenceThresholdMs: 120_000 });
+    await a.start();
+    await settle();
+
+    await appendFile(
+      journalOf(ref),
+      hook('UserPromptSubmit') +
+        hook('SubagentStart', { agent_id: 'a2', agent_type: '', transcript_path: transcript() }),
+    );
+    await waitFor(() => a.get(ref)?.activity.subagents === 1);
+    // Файла ещё нет: описания нет, но и сбоя тоже.
+    expect(a.get(ref)?.metrics?.tasks).toEqual([
+      { id: 'a2', agentType: null, description: null, background: false },
+    ]);
+
+    await mkdir(path.dirname(metaFile('a2')), { recursive: true });
+    await writeFile(
+      metaFile('a2'),
+      JSON.stringify({ agentType: 'claude-code-guide', description: 'Docs lookup' }),
+    );
+    // Прошло больше срока повтора, а следующее событие журнала — следующее обновление: файл перечитывается.
+    clock += 10_001;
+    await appendFile(journalOf(ref), hook('PreToolUse'));
+    await waitFor(() => a.get(ref)?.metrics?.tasks?.[0]?.description === 'Docs lookup');
+    expect(a.get(ref)?.metrics?.tasks).toEqual([
+      { id: 'a2', agentType: 'claude-code-guide', description: 'Docs lookup', background: false },
+    ]);
+
+    // Кэш по id: прочитанное не теряется, пока задача жива, — файл больше не читается.
+    await rm(metaFile('a2'));
+    await appendFile(journalOf(ref), hook('PreToolUse'));
+    await settle(300);
+    expect(a.get(ref)?.metrics?.tasks?.[0]?.description).toBe('Docs lookup');
+  }, 20_000);
+
+  it('описание из снимка файла не требует: meta.json не читается — чтение наблюдаемо', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const reads: string[] = [];
+    const a = activity(w, {
+      // Читатель-счётчик: что запрошено, то и считано; файл он подменяет другим описанием.
+      readSubagentMeta: async (_transcriptPath, id) => {
+        reads.push(id);
+        return { agentType: null, description: 'из файла' };
+      },
+    });
+    await a.start();
+    await settle();
+
+    await appendFile(
+      journalOf(ref),
+      hook('UserPromptSubmit') +
+        hook('SubagentStart', { agent_id: 'a3', transcript_path: transcript() }) +
+        hook('Stop', { background_tasks: [running('a3', 'из снимка')] }),
+    );
+    await waitFor(() => a.get(ref)?.activity.subagents === 1);
+    await settle(200);
+
+    expect(reads).toEqual([]);
+    expect(a.get(ref)?.metrics?.tasks?.[0]?.description).toBe('из снимка');
+
+    // Контроль прибора: субагент без описания в снимке читателя зовёт, и описание берётся из файла.
+    await appendFile(
+      journalOf(ref),
+      hook('SubagentStart', { agent_id: 'b3', transcript_path: transcript() }) +
+        hook('Notification', {
+          background_tasks: [running('a3', 'из снимка'), running('b3', null)],
+        }),
+    );
+    await waitFor(() => reads.length > 0);
+    expect(reads).toEqual(['b3']);
+    await waitFor(() => a.get(ref)?.metrics?.tasks?.[1]?.description === 'из файла');
+  }, 20_000);
+
+  it('неудачное чтение запоминается: повтор не чаще раза в 10 с, а не на каждом пересчёте', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    let clock = Date.now();
+    const reads: number[] = [];
+    let result: SubagentMeta | null = null;
+    const a = activity(w, {
+      now: () => clock,
+      silenceThresholdMs: 120_000,
+      readSubagentMeta: async () => {
+        reads.push(clock);
+        return result;
+      },
+    });
+    await a.start();
+    await settle();
+
+    await appendFile(
+      journalOf(ref),
+      hook('UserPromptSubmit') +
+        hook('SubagentStart', { agent_id: 'a4', transcript_path: transcript() }),
+    );
+    await waitFor(() => reads.length === 1);
+
+    // Пересчёты идут своим чередом (события журнала), а файла всё нет: читать заново рано.
+    for (let count = 0; count < 3; count += 1) {
+      await appendFile(journalOf(ref), hook('PreToolUse'));
+      await settle(150);
+    }
+    expect(reads).toHaveLength(1);
+
+    // Срок прошёл — одна новая попытка, а за ней снова пауза.
+    clock += 10_000;
+    await appendFile(journalOf(ref), hook('PreToolUse'));
+    await waitFor(() => reads.length === 2);
+    await appendFile(journalOf(ref), hook('PreToolUse'));
+    await settle(150);
+    expect(reads).toHaveLength(2);
+
+    // Файл появился: следующая попытка берёт его, и больше о нём не спрашивают.
+    result = { agentType: 'explorer', description: 'Docs lookup' };
+    clock += 10_000;
+    await appendFile(journalOf(ref), hook('PreToolUse'));
+    await waitFor(() => a.get(ref)?.metrics?.tasks?.[0]?.description === 'Docs lookup');
+    const total = reads.length;
+    await appendFile(journalOf(ref), hook('PreToolUse'));
+    await settle(150);
+    expect(reads).toHaveLength(total);
+  }, 30_000);
+
+  it('ParleyWaitStart и ParleyWaitEnd: LiveMetrics.waitingFor', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+
+    await appendFile(journalOf(ref), hook('UserPromptSubmit'));
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+    expect(a.get(ref)?.metrics?.waitingFor).toBeNull();
+    expect(a.get(ref)?.metrics?.tasks).toEqual([]);
+
+    await appendFile(journalOf(ref), hook('ParleyWaitStart', { parley_wait_target: 's-02' }));
+    await waitFor(() => a.get(ref)?.metrics?.waitingFor === 's-02');
+    expect(a.get(ref)?.activity.waitingFor).toBe('s-02');
+    expect(a.get(ref)?.activity.activity).toBe('working');
+
+    await appendFile(journalOf(ref), hook('ParleyWaitEnd'));
+    await waitFor(() => a.get(ref)?.metrics?.waitingFor === null);
+  }, 20_000);
+
+  it('просмотрел сессию, пока лид ждал фоновых, — когда они закончились, она снова unseen', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+
+    await appendFile(
+      journalOf(ref),
+      hook('UserPromptSubmit') + hook('Stop', { background_tasks: [running('a1')] }),
+    );
+    await waitFor(() => a.get(ref)?.activity.heldByBackground === true);
+
+    // Человек открыл сессию, пока лид ждал: просмотр позже Stop.
+    await settle(50);
+    a.markSeen(ref);
+    await settle(50);
+    expect(a.get(ref)?.activity.activity).toBe('working');
+
+    // Последний фоновый закончился: ход окончен позже просмотра — человека ждёт новое, а не idle.
+    await appendFile(
+      journalOf(ref),
+      hook('SubagentStop', { agent_id: 'a1', background_tasks: [] }),
+    );
+    await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
+  }, 20_000);
+
+  it('предел удержания снимает сессию сам, без нового события: таймер ждёт предела, а не порога тишины', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    // Порог тишины короткий, предел удержания чуть длиннее: за порогом сессию держит фоновая задача.
+    const a = activity(w, { silenceThresholdMs: 300, backgroundHoldMs: 1500 });
+    await a.start();
+    await settle();
+
+    await appendFile(
+      journalOf(ref),
+      hook('UserPromptSubmit') + hook('Stop', { background_tasks: [running('a1')] }),
+    );
+    await waitFor(() => a.get(ref)?.activity.heldByBackground === true);
+    await settle(600);
+    // Порог тишины прошёл: сессию держит фоновая задача.
+    expect(a.get(ref)?.activity.activity).toBe('working');
+
+    // Событий больше нет — предел удержания снимет её сам.
+    await waitFor(() => a.get(ref)?.activity.activity === 'unseen', 5000);
+    expect(a.get(ref)?.activity.heldByBackground).toBe(false);
+    expect(a.get(ref)?.activity.tasks).toEqual([]);
+    expect(a.get(ref)?.metrics?.tasks).toEqual([]);
+  }, 20_000);
+
+  it('порог тишины давно прошёл, а сессию держит фоновая задача: таймер тишины не крутится вхолостую', async () => {
+    const { ref } = await activeSession();
+    let calls = 0;
+    const later = Date.now() + 10 * 60_000;
+    const w = await works();
+    const a = activity(w, {
+      now: () => {
+        calls += 1;
+        return later;
+      },
+    });
+    await a.start();
+    await settle();
+
+    await appendFile(
+      journalOf(ref),
+      hook('UserPromptSubmit') + hook('Stop', { background_tasks: [running('a1')] }),
+    );
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+
+    const before = calls;
+    await settle(500);
+    // Без защиты таймер с нулевой задержкой пересчитывал бы сессию сотни раз за полсекунды.
+    expect(calls - before).toBeLessThan(50);
+    expect(a.get(ref)?.activity.activity).toBe('working');
   }, 20_000);
 });

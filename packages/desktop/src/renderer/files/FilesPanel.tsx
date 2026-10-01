@@ -23,6 +23,7 @@ import { S } from '../../shared/strings.js';
 import { rootKey as rootKeyOf } from '../../shared/work-keys.js';
 import { focusedSessionOf, useLayoutStore } from '../layout/store.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
+import { workingEnded } from '../lib/turn-end.js';
 import { useActivityStore, type ActivityEntry } from '../store/activity.js';
 import { useUiStore } from '../store/ui.js';
 import { Button } from '../ui/button.js';
@@ -94,14 +95,15 @@ function rootSessions(entry: WorkEntry, spec: FileRootSpec): string[] {
 }
 
 /**
- * Конец хода: из `working` в любое другое или переход в `idle`. Спека называет переход в `idle`;
- * законченный, но не просмотренный ход — `unseen`, а коммит агент делает именно в конце хода.
+ * Конец хода: из `working` в любое другое (или в `working` под одним удержанием фоновых субагентов,
+ * `workingEnded`) либо переход в `idle`. Спека называет переход в `idle`; законченный, но не
+ * просмотренный ход — `unseen`, а коммит агент делает именно в конце хода.
  */
 function turnEnded(prev: ActivityEntry | undefined, next: ActivityEntry | undefined): boolean {
   if (next === undefined || prev === next) return false;
   const was = prev?.activity.activity;
   const now = next.activity.activity;
-  return (was === 'working' && now !== 'working') || (now === 'idle' && was !== 'idle');
+  return workingEnded(prev?.activity, next.activity) || (now === 'idle' && was !== 'idle');
 }
 
 export interface FilesPanelProps {

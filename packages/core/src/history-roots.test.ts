@@ -2,7 +2,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { defaultCodexRoot } from './codex/discover.js';
-import { defaultRoot } from './discover.js';
+import { claudeProjectRoots, defaultRoot } from './discover.js';
 
 const CLAUDE_ENV = 'PARLEY_CLAUDE_PROJECTS_DIR';
 const CODEX_ENV = 'PARLEY_CODEX_SESSIONS_DIR';
@@ -44,5 +44,29 @@ describe('корни истории агентов (раунд lane-r3, п. 1)',
     process.env[CODEX_ENV] = '/tmp/новая-история-кодекса';
     expect(defaultRoot()).toBe('/tmp/новая-история-клода');
     expect(defaultCodexRoot()).toBe('/tmp/новая-история-кодекса');
+  });
+});
+
+describe('claudeProjectRoots — где Claude Code держит историю (0.2.0)', () => {
+  const home = '/дом';
+
+  it('без переменных — ~/.claude/projects', () => {
+    expect(claudeProjectRoots({}, home)).toEqual([path.join(home, '.claude', 'projects')]);
+  });
+
+  it('CLAUDE_CONFIG_DIR — сначала его projects, затем ~/.claude/projects; пустая — как отсутствующая', () => {
+    expect(claudeProjectRoots({ CLAUDE_CONFIG_DIR: '/cfg' }, home)).toEqual([
+      path.join('/cfg', 'projects'),
+      path.join(home, '.claude', 'projects'),
+    ]);
+    expect(claudeProjectRoots({ CLAUDE_CONFIG_DIR: '  ' }, home)).toEqual([
+      path.join(home, '.claude', 'projects'),
+    ]);
+  });
+
+  it('подмена PARLEY_CLAUDE_PROJECTS_DIR (тесты, E2E) — единственный корень', () => {
+    expect(
+      claudeProjectRoots({ [CLAUDE_ENV]: '/tmp/история', CLAUDE_CONFIG_DIR: '/cfg' }, home),
+    ).toEqual(['/tmp/история']);
   });
 });

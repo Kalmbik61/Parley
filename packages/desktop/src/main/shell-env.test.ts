@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -461,10 +461,12 @@ describe('captureShellEnv: заглушка оболочки в файле', () 
 
   it('фоновый процесс rc держит stdout: окружение берётся, не дожидаясь закрытия трубы', async () => {
     // Как rc, оставивший процесс с унаследованным stdout: труба открыта, пока тот жив, и `close` не
-    // приходит. Раньше окно ждало таймаута и выбрасывало уже напечатанное между маркерами.
+    // приходит. Раньше окно ждало таймаута и выбрасывало уже напечатанное между маркерами. Сроки — с
+    // запасом: под нагрузкой полного прогона заглушка отвечала почти за 2 с, а ответ быстрее 5 с всё равно
+    // не дождался ни закрытия трубы (10 с), ни таймаута (8 с).
     const shell = await stubShell(
       [
-        '( sleep 3 & )',
+        '( sleep 10 & )',
         'PATH="/stub/bin"; export PATH',
         'ONLY_IN_RC=1; export ONLY_IN_RC',
         'eval "$2"',
@@ -473,13 +475,13 @@ describe('captureShellEnv: заглушка оболочки в файле', () 
     );
     const started = Date.now();
 
-    const result = await captureShellEnv({ shell, env: FINDER_ENV, timeoutMs: 2000 });
+    const result = await captureShellEnv({ shell, env: FINDER_ENV, timeoutMs: 8000 });
 
     expect(result.warning).toBeNull();
     expect(result.fromShell).toBe(true);
     expect(result.env.PATH).toBe('/stub/bin');
     expect(result.env.ONLY_IN_RC).toBe('1');
-    expect(Date.now() - started).toBeLessThan(1500);
+    expect(Date.now() - started).toBeLessThan(5000);
   });
 
   it('символ не из ASCII, разорванный границей чанков, окружение не портит', async () => {
@@ -500,5 +502,115 @@ describe('captureShellEnv: заглушка оболочки в файле', () 
     expect(result.warning).toBeNull();
     expect(result.fromShell).toBe(true);
     expect(result.env.PATH).toBe('/п/bin');
+  });
+});
+
+describe('captureShellEnv: срок и менеджеры версий Node (0.2.0)', () => {
+  it('срок оболочки по умолчанию — 15 с: медленный rc (oh-my-zsh, nvm, первый запуск под Rosetta) успевает', async () => {
+    let asked = 0;
+
+    await captureShellEnv({
+      env: { PATH: '/usr/bin' },
+      run: (_shell, args, timeoutMs) => {
+        asked = timeoutMs;
+        return Promise.resolve(shellSays(args[1] ?? '', { PATH: '/z/bin' }));
+      },
+    });
+
+    expect(asked).toBe(15_000);
+  });
+
+  it('запасной путь: shims volta, asdf и mise дописываются после прежних каталогов, если они есть', async () => {
+    const result = await captureShellEnv({
+      env: FINDER_ENV,
+      home: '/home/u',
+      isDir: dirsExisting(
+        '/home/u/.local/bin',
+        '/home/u/.volta/bin',
+        '/home/u/.asdf/shims',
+        '/home/u/.local/share/mise/shims',
+      ),
+      run: () => Promise.resolve(''),
+    });
+
+    expect(result.env.PATH).toBe(
+      '/usr/bin:/bin:/usr/sbin:/sbin:/home/u/.local/bin:/home/u/.volta/bin:/home/u/.asdf/shims:/home/u/.local/share/mise/shims',
+    );
+  });
+
+  describe('nvm', () => {
+    let home = '';
+
+    /** Существует ли каталог — по-настоящему, но только внутри временного дома: каталоги машины не в счёт. */
+    const insideHome = (dir: string): Promise<boolean> =>
+      dir.startsWith(home)
+        ? stat(dir).then(
+            (info) => info.isDirectory(),
+            () => false,
+          )
+        : Promise.resolve(false);
+
+    async function nvmWith(
+      versions: string[],
+      alias: string | null,
+      nvmDir = path.join(home, '.nvm'),
+    ): Promise<void> {
+      for (const version of versions)
+        await mkdir(path.join(nvmDir, 'versions', 'node', version, 'bin'), { recursive: true });
+      if (alias !== null) {
+        await mkdir(path.join(nvmDir, 'alias'), { recursive: true });
+        await writeFile(path.join(nvmDir, 'alias', 'default'), `${alias}\n`);
+      }
+    }
+
+    const fallbackPath = async (env: NodeJS.ProcessEnv = FINDER_ENV): Promise<string[]> =>
+      (
+        await captureShellEnv({ env, home, isDir: insideHome, run: () => Promise.resolve('') })
+      ).env.PATH?.split(':') ?? [];
+
+    beforeEach(async () => {
+      home = await mkdtemp(path.join(tmpdir(), 'parley-shell-home-'));
+    });
+
+    afterEach(async () => {
+      await rm(home, { recursive: true, force: true });
+    });
+
+    it('версия из alias/default («20») — её bin: там глобальные пакеты npm, codex в том числе', async () => {
+      await nvmWith(['v20.11.1', 'v22.18.0'], '20');
+      expect(await fallbackPath()).toContain(
+        path.join(home, '.nvm', 'versions', 'node', 'v20.11.1', 'bin'),
+      );
+      expect(await fallbackPath()).not.toContain(
+        path.join(home, '.nvm', 'versions', 'node', 'v22.18.0', 'bin'),
+      );
+    });
+
+    it('точная версия в alias/default («v22.18.0») — она', async () => {
+      await nvmWith(['v22.9.0', 'v22.18.0'], 'v22.18.0');
+      expect(await fallbackPath()).toContain(
+        path.join(home, '.nvm', 'versions', 'node', 'v22.18.0', 'bin'),
+      );
+    });
+
+    it('alias/default nvm-имя («lts/*», «node») или его нет — самая новая установленная', async () => {
+      await nvmWith(['v9.11.2', 'v20.11.1', 'v22.18.0'], 'lts/*');
+      expect(await fallbackPath()).toContain(
+        path.join(home, '.nvm', 'versions', 'node', 'v22.18.0', 'bin'),
+      );
+      await rm(path.join(home, '.nvm', 'alias'), { recursive: true });
+      expect(await fallbackPath()).toContain(
+        path.join(home, '.nvm', 'versions', 'node', 'v22.18.0', 'bin'),
+      );
+    });
+
+    it('NVM_DIR из окружения окна главнее ~/.nvm; без nvm ничего не дописывается', async () => {
+      expect((await fallbackPath()).some((dir) => dir.includes('nvm'))).toBe(false);
+      const custom = path.join(home, 'custom-nvm');
+      await nvmWith(['v22.18.0'], null, custom);
+      expect(await fallbackPath({ ...FINDER_ENV, NVM_DIR: custom })).toContain(
+        path.join(custom, 'versions', 'node', 'v22.18.0', 'bin'),
+      );
+    });
   });
 });

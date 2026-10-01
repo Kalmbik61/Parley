@@ -206,6 +206,33 @@ describe('сигналы терминала codex → активность', () 
     expect(a.get(ref)?.activity.lastEventAt).toBeNull();
   });
 
+  it('Waiting у Codex: кадры спиннера новее ParleyWaitStart ожидания не снимают, конец хода — снимает', async () => {
+    const { a, ref, workId } = await started({}, { eventsDir: true });
+    const journal = path.join(workPaths(project, workId).events, `${ref.sessionId}.jsonl`);
+    const line = (extra: Record<string, unknown>): string =>
+      `${JSON.stringify({ hook_event_name: 'ParleyWaitStart', ...extra })}\n`;
+
+    a.terminalSignal(ref, WORKING);
+    // MCP-сервер сессии записал начало ожидания: wait_for внутри хода.
+    await appendFile(journal, line({ parley_wait_target: 's-02', parley_wait_id: 'w1' }));
+    await waitFor(() => a.get(ref)?.activity.waitingFor === 's-02');
+
+    // Спиннер крутится дальше: время сигнала обновляется на каждом кадре и новее строки ожидания.
+    await settle(30);
+    for (let frame = 0; frame < 5; frame += 1) a.terminalSignal(ref, WORKING);
+    // Пересчёт от постороннего события (запись журнала): прежде синтетический UserPromptSubmit снимал ожидание.
+    await appendFile(journal, `${JSON.stringify({ hook_event_name: 'StubReady' })}\n`);
+    await settle(400);
+    expect(a.get(ref)?.activity.activity).toBe('working');
+    expect(a.get(ref)?.activity.waitingFor).toBe('s-02');
+    expect(a.get(ref)?.metrics?.waitingFor).toBe('s-02');
+
+    // Ход кончился: ожидание не переживает его.
+    a.terminalSignal(ref, READY);
+    expect(a.get(ref)?.activity.activity).toBe('unseen');
+    expect(a.get(ref)?.activity.waitingFor).toBeNull();
+  }, 20_000);
+
   it('повторные сигналы того же состояния (кадры спиннера) не рассылают activity.changed', async () => {
     const { a, ref } = await started();
     a.terminalSignal(ref, WORKING);
@@ -237,9 +264,11 @@ describe('сигналы терминала codex → активность', () 
   it('порог тишины по-прежнему роняет `working` сессии codex, чей процесс не под хостом', async () => {
     // Сессия записана в карте как codex, но запущена не окном (например, CLI): терминала у хоста нет,
     // состояние — по журналу, как у всякой, и порог тишины действует.
+    // Порог — с запасом: под нагрузкой полного прогона первое чтение журнала приходило позже 300 мс, и
+    // `working` было уже не застать (сессия сразу считалась закончившей ход).
     const { workId, ref } = await codexSession({ eventsDir: true });
     const w = await works();
-    const a = activity(w, { silenceThresholdMs: 300 });
+    const a = activity(w, { silenceThresholdMs: 1500 });
     await a.start();
     await appendFile(
       path.join(workPaths(project, workId).events, `${ref.sessionId}.jsonl`),
@@ -247,7 +276,7 @@ describe('сигналы терминала codex → активность', () 
     );
     await updateMap(project, workId, () => undefined);
     await waitFor(() => a.get(ref)?.activity.activity === 'working');
-    await waitFor(() => a.get(ref)?.activity.activity === 'unseen', 3000);
+    await waitFor(() => a.get(ref)?.activity.activity === 'unseen', 6000);
   }, 20_000);
 
   it('Stop от notify новее сигнала работы завершает ход, но следующий кадр спиннера возвращает `working`', async () => {

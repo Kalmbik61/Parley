@@ -96,6 +96,7 @@ function setup(
     roots?: RootsRegistry;
     webContents?: Map<number, unknown>;
     onUiSaved?: () => void;
+    appVersion?: string | null;
   } = {},
 ): {
   ipcMain: FakeIpcMain;
@@ -185,6 +186,7 @@ function setup(
     showNotification,
     takeFocusTarget,
     getUpdate,
+    appVersion: overrides.appVersion === undefined ? '0.2.0-test' : overrides.appVersion,
     ...(overrides.onUiSaved === undefined ? {} : { onUiSaved: overrides.onUiSaved }),
     setBadge: vi.fn(),
     showItemInFolder,
@@ -652,6 +654,18 @@ describe('registerIpc — app:notify и app:take-focus-target (кусок 4.3)',
     takeFocusTarget.mockReturnValueOnce(target).mockReturnValueOnce(null);
     await expect(ipcMain.invoke('app:take-focus-target')).resolves.toEqual(target);
     await expect(ipcMain.invoke('app:take-focus-target')).resolves.toBeNull();
+  });
+});
+
+describe('registerIpc — app:version (хост другой сборки, 0.2.0)', () => {
+  it('отдаёт версию окна, с которой main собрал регистрацию', async () => {
+    const { ipcMain } = setup();
+    await expect(ipcMain.invoke('app:version')).resolves.toBe('0.2.0-test');
+  });
+
+  it('несобранное окно (pnpm dev, E2E) — null: версия Electron там не версия Parley, сверять нечего', async () => {
+    const { ipcMain } = setup({ appVersion: null });
+    await expect(ipcMain.invoke('app:version')).resolves.toBeNull();
   });
 });
 

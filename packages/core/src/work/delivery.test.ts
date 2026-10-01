@@ -41,14 +41,21 @@ const messageOf = (patch: Partial<Message> = {}): Message => ({
   ...patch,
 });
 
-const activityOf = (activity: SessionActivity['activity']): SessionActivity => ({
+const activityOf = (
+  activity: SessionActivity['activity'],
+  patch: Partial<SessionActivity> = {},
+): SessionActivity => ({
   activity,
   subagents: 0,
+  tasks: [],
+  waitingFor: null,
+  heldByBackground: false,
   turnEndedAt: null,
   lastEventAt: null,
   source: 'hooks',
   exited: false,
   hooksMissing: false,
+  ...patch,
 });
 
 const roomOf = (id: string, title: string): Room => ({
@@ -278,6 +285,91 @@ describe('deliveryAction', () => {
     it('спящую очередь не касается: подъём как был', () => {
       expect(
         deliveryAction({ ...queued, session: sessionOf({ lifecycle: 'sleeping' }), activity: null })
+          .kind,
+      ).toBe('resume');
+    });
+  });
+
+  describe('heldByBackground — лид закончил ход и ждёт фоновых субагентов (Parley 0.2.0)', () => {
+    const task = {
+      id: 'a1',
+      agentType: 'general-purpose',
+      description: 'Orca research',
+      background: true,
+      transcriptPath: null,
+    };
+    // working выставлено только удержанием фоновых: родитель стоит у приглашения и ввод принимает.
+    const held = activityOf('working', { heldByBackground: true, subagents: 1, tasks: [task] });
+    const lead = { ...base, activity: held };
+
+    it('указатель печатается Enter-ом, как простаивающему: без пометки queue', () => {
+      const action = deliveryAction(lead);
+
+      expect(action).toEqual({
+        kind: 'type-pointer',
+        text: 'New messages (1). Call check_inbox.',
+        letterIds: ['m-01'],
+      });
+      expect(action).not.toHaveProperty('queue');
+    });
+
+    it('остальные правила действуют: черновик, указатель в полёте, нет хуков, пауза, уже указано', () => {
+      expect(deliveryAction({ ...lead, hasDraft: true })).toEqual({
+        kind: 'none',
+        reason: 'draft',
+      });
+      expect(deliveryAction({ ...lead, inFlight: true })).toEqual({
+        kind: 'none',
+        reason: 'in-flight',
+      });
+      expect(deliveryAction({ ...lead, hooked: false })).toEqual({
+        kind: 'none',
+        reason: 'no-hooks',
+      });
+      expect(deliveryAction({ ...lead, paused: true })).toEqual({ kind: 'none', reason: 'paused' });
+      expect(deliveryAction({ ...lead, pointed: new Set(['m-01']) })).toEqual({
+        kind: 'none',
+        reason: 'already-pointed',
+      });
+    });
+
+    it('в вызове wait_for — busy: агент внутри инструмента, Enter вмешался бы в ход', () => {
+      const waiting = activityOf('working', { waitingFor: 's-02', tasks: [task], subagents: 1 });
+
+      expect(deliveryAction({ ...base, activity: waiting })).toEqual({
+        kind: 'none',
+        reason: 'busy',
+      });
+    });
+
+    it('агент работает сам, хотя фоновые идут (флага нет) — busy, как у обычной working', () => {
+      const working = activityOf('working', { tasks: [task], subagents: 1 });
+
+      expect(deliveryAction({ ...base, activity: working })).toEqual({
+        kind: 'none',
+        reason: 'busy',
+      });
+    });
+
+    it('флаг касается только working: blocked остаётся busy', () => {
+      expect(
+        deliveryAction({ ...base, activity: activityOf('blocked', { heldByBackground: true }) }),
+      ).toEqual({
+        kind: 'none',
+        reason: 'busy',
+      });
+    });
+
+    it('с queueWhileBusy — всё равно Enter, а не очередь: агент у приглашения, очередь ему ни к чему', () => {
+      const action = deliveryAction({ ...lead, queueWhileBusy: true });
+
+      expect(action).toMatchObject({ kind: 'type-pointer', letterIds: ['m-01'] });
+      expect(action).not.toHaveProperty('queue');
+    });
+
+    it('спящую флаг не касается: подъём как был', () => {
+      expect(
+        deliveryAction({ ...lead, session: sessionOf({ lifecycle: 'sleeping' }), activity: null })
           .kind,
       ).toBe('resume');
     });

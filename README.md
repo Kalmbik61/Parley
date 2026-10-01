@@ -82,13 +82,15 @@ data lives outside the app and stays. Because the app is signed ad hoc, macOS tr
 as a new app: the "First launch" steps repeat for each downloaded `.dmg`, and macOS may ask again
 for access to folders such as Documents, Desktop and Downloads.
 
-Then open Parley and choose "Restart host…" in the palette (⌘J), even if the window does not say
-"Host is outdated — restart" (it says so only when the host lacks methods the window needs). The
-host outlives the window, and the agents it started keep command lines that point into the old
-app: the status line script, the MCP server and the notification hook of Codex. The replacement
-can remove those files (the folder names inside the app carry dependency versions), and then
-status lines, limits and Codex turn notifications quietly stop. Live agents are interrupted and
-come back through `--resume`.
+Then open Parley and restart the host. The window notices that the host still runs from the
+previous app and says so: a notice with "Restart host…" and "Host is outdated — restart" in the
+status bar (the palette, ⌘J, has "Restart host…" too). The host outlives the window, and the
+agents it started keep command lines that point into the old app: the status line script, the
+MCP server and the notification hook of Codex. The replacement can remove those files (the folder
+names inside the app carry dependency versions), and then status lines, limits and Codex turn
+notifications quietly stop. Until the restart macOS may also keep asking for access to a folder:
+the old host and the new window are two different apps to it, and each "Allow" moves the
+permission from one to the other. Live agents are interrupted and come back through `--resume`.
 
 To turn the check off, switch off "Check for updates" in Settings (⌘,) → Notifications; it takes
 effect at once. The other way is `PARLEY_UPDATE_CHECK=off` in the environment of your login shell
@@ -102,13 +104,15 @@ For a window opened from Finder, launchd supplies a stripped-down environment. I
 `/usr/bin:/bin:/usr/sbin:/sbin`, so without `~/.local/bin` and nvm the host would find neither
 `claude` nor `codex`, and variables from your rc files (proxy, `CLAUDE_CONFIG_DIR`, `PARLEY_*`
 and others) would not arrive at all. So when the app starts, the window captures the
-environment of your login shell once (`$SHELL -ilc`, `env -0` between markers, 5-second
+environment of your login shell once (`$SHELL -ilc`, `env -0` between markers, 15-second
 timeout). Output of the rc files outside the markers does not get into it, and the rc files
 themselves are read by the shell, not by the window. The captured environment, the shell's
 `PATH` included, goes to the host as its launch environment, and agents inherit it from the
 host. If the shell did not answer, the window's own environment remains, with the existing
-`~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin` appended to its `PATH`; the reason is
-printed to the window's console. The environment is captured once per app launch: neither
+`~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin` appended to its `PATH`, and the `bin` of
+nvm's default Node (`alias/default`, or the newest installed version; `npm i -g` puts `codex`
+there) and the shims of volta, asdf and mise; the reason is printed to the window's console. If
+the host still cannot find `claude` or `codex`, the status bar shows that provider as "not found". The environment is captured once per app launch: neither
 closing the window nor "Restart host…" refreshes it, and a running host (it outlives the
 window) does not change its own. If you changed `PATH` or variables in your rc files, quit the
 app (⌘Q), open it again and choose "Restart host…" in the palette: live agents are interrupted
@@ -439,16 +443,22 @@ on the "Appearance" tab; the theme can also be changed from the palette ("Theme:
 - the room tab (a click on a room row, "Rooms" in the palette, the `#` of a card). The header
   has the name and the caption "Created by you · 4 agents · lead S01 · `<workspace>`" (or
   "Created by S01 …" if an agent created the room). Under it is the strip of members: a card
-  per agent with its state, a `★` for the lead and its task; a click opens the agent's
-  terminal. Below, the "Decisions" block comes first (up to the five latest decisions; older
-  ones are "+N earlier"), then the messages: ordinary text, with mention chips and links. Each
+  per agent with its state, a `★` for the lead and its task, or what the agent is busy with
+  right now: a subagent ("Subagent: …") or a session it waits for ("Waiting for S03"); a click
+  opens the agent's terminal. Below, the "Decisions" block comes first (up to the five latest decisions; older
+  ones are "+N earlier"; a decision takes up to two lines of running text, where bold, code and
+links stay but headings and list marks do not), then
+the messages: Markdown (headings, lists, code, tables, links) with mention chips. HTML in a
+message is shown as text, and a link opens in your browser. Each
   message shows the sender, a `★` for the lead, the recipients ("→ all" or labels), the kind
   tag (`note`, `question`, `decision`), the time and a dot for an unread one. The line "▤ Not
   picked up yet by S02, S03" stays while the recipients have not read the message. A waiting
   decision is the last card in the feed, with "Accept" and "Return for rework" (a note "What
   should the lead change?" and "Send to lead"); if the lead has replaced the text in the
   meantime, an answer to the old version is rejected with the toast "The decision changed —
-  review the latest version.". At the bottom is the input field with the caption "To
+  review the latest version.". Above the input field a live line lists the members busy with
+  a subagent or waiting; it is state, not a message, and the feed does not keep it. At the
+  bottom is the input field with the caption "To
   everyone" or "To S02, S03"; `@` opens the member menu (a filter by label, provider and
   model; ↑/↓, Enter or Tab, Esc; mouse click), and the chosen member becomes a chip and a
   recipient. Enter sends, Shift+Enter inserts a line break, only plain text is pasted, and an
@@ -781,6 +791,15 @@ not accept this flag or the directory is not writable, a fallback keeps the stat
 history jsonl watcher as before. A new assistant entry means "working", and silence longer
 than `silenceThresholdMs` means "turn finished". A one-time warning about a missing log
 appears in the status bar.
+
+**Subagents and waiting.** Subagents are counted by id: `SubagentStart` adds one, and the
+`SubagentStop` with the same `agent_id` removes it; Claude Code's own helper agents send stops
+without a start, and those count for nothing. Every hook also carries `background_tasks`, the
+list of background tasks Claude Code keeps. While a background subagent in it is running, the
+session stays `working` after its turn ended, and silence does not end it; such a session still
+gets the pointer to new letters, because the agent itself is at its prompt. Around `wait_for` the
+session's MCP server appends two lines of its own to the same log, `ParleyWaitStart` (with
+`parley_wait_target`) and `ParleyWaitEnd`, so the window can show what an agent waits for.
 
 **Subscription limits.** Next to the hooks, the same file holds `statusLine` — a status line
 script (`<node> <core>/dist/work/statusline-bin.js`, both with absolute paths, like the MCP

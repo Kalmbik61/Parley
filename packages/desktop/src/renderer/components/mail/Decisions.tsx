@@ -8,18 +8,31 @@
  * разрядкой .06em вторичным цветом, пункты 13px/1.5 `{текст} · {отправитель}`. Раскладку задаёт вызывающий
  * (`className`): в «Почте» плашка стоит в колонке ленты с отступом 36 и шириной до 640px, в комнате — первой
  * в самой ленте, до 680px.
+ *
+ * Текст решения — строчный Markdown (`RoomMarkdown` с `inline`, 0.2.0): жирный, курсив, код, ссылки и чипы
+ * упоминаний видны, заголовки, маркеры списков и блоки кода сворачиваются в строку, поэтому `line-clamp-2`
+ * режет настоящий текст, а не `##` и `-`. Ярлыки чипов и открытие ссылок наружу — от вызывающего.
  */
 
 import { S } from '../../../shared/strings.js';
 import { cn } from '../../lib/cn.js';
+import { RoomMarkdown } from '../rooms/RoomMarkdown.js';
 
 export interface DecisionsProps {
   /** Письма вида `decision`: подходит и `LetterView` «Почты», и запись модели комнаты. */
   decisions: { shown: ReadonlyArray<{ id: string; text: string; from: string }>; earlier: number };
+  /** Ярлык участника для чипа в тексте решения: `S02 бэкенд`; `null` — чип берёт тег из id. */
+  labelOf: (sessionId: string) => string | null;
+  onOpenExternal: (url: string) => void;
   className?: string;
 }
 
-export function Decisions({ decisions, className }: DecisionsProps): JSX.Element | null {
+export function Decisions({
+  decisions,
+  labelOf,
+  onOpenExternal,
+  className,
+}: DecisionsProps): JSX.Element | null {
   if (decisions.shown.length === 0) return null;
 
   return (
@@ -35,7 +48,12 @@ export function Decisions({ decisions, className }: DecisionsProps): JSX.Element
       <ul className="m-0 flex list-none flex-col gap-1 p-0">
         {decisions.shown.map((decision) => (
           <li key={decision.id} className="line-clamp-2 break-words text-[13px] leading-[1.5]">
-            {decision.text}
+            <RoomMarkdown
+              inline
+              text={decision.text}
+              labelOf={labelOf}
+              onOpenExternal={onOpenExternal}
+            />
             <span className="text-muted-foreground"> · {decision.from}</span>
           </li>
         ))}

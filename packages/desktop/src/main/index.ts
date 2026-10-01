@@ -465,6 +465,9 @@ if (!gotLock) {
       showNotification: (note) => notifier.notify(note),
       takeFocusTarget: () => pendingFocusTarget.take(),
       getUpdate: () => updates.latest(),
+      // Только у собранного окна: несобранное (E2E, `pnpm dev`) отдало бы версию Electron, и любой хост
+      // показался бы хостом другой сборки — с тостом поверх окна.
+      appVersion: app.isPackaged ? app.getVersion() : null,
       setBadge: (count) => {
         app.dock?.setBadge(count > 0 ? String(count) : '');
       },

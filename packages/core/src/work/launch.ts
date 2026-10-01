@@ -8,8 +8,11 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
+import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { claudeProjectRoots } from '../discover.js';
+import { isServiceText } from '../session-index.js';
 import { bothEnv } from '../names.js';
 import {
   loadProviders,
@@ -123,6 +126,38 @@ async function writtenBrief(
 }
 
 /**
+ * Есть ли у Claude Code разговор с этим id: файл `<id>.jsonl` в каком-нибудь каталоге проекта одного из
+ * корней истории (`claudeProjectRoots`: `$CLAUDE_CONFIG_DIR/projects`, `~/.claude/projects`; тесты и E2E
+ * подменяют их `PARLEY_CLAUDE_PROJECTS_DIR`). Каталог по cwd не вычисляется: имя ему строит Claude Code, и у
+ * сессии в worktree оно своё.
+ *
+ * «Нет» — только точный ответ: хоть один корень прочитан, и транскрипта нет ни в одном. Не прочитан ни один
+ * (их нет, нет доступа) — разговор считается, и остаётся прежний `--resume`: новый процесс с занятым id
+ * Claude Code не запустит («Session ID … is already in use»), а это хуже, чем «No conversation found».
+ */
+async function claudeConversationExists(id: string): Promise<boolean> {
+  let readAny = false;
+  for (const root of claudeProjectRoots()) {
+    let projects: Dirent[];
+    try {
+      projects = await readdir(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    readAny = true;
+    for (const project of projects) {
+      if (!project.isDirectory()) continue;
+      try {
+        if ((await stat(path.join(root, project.name, `${id}.jsonl`))).isFile()) return true;
+      } catch {
+        // В этом каталоге проекта такого транскрипта нет.
+      }
+    }
+  }
+  return !readAny;
+}
+
+/**
  * Как поднимается процесс: `launch` — по брифу, `resume` — по `resumeArgs`,
  * `new` — быстрая сессия без промпта вовсе (дизайн TUI v2, 5.1).
  */
@@ -145,8 +180,13 @@ async function plan(
   const quiet = session.task === '';
 
   // Продолжать нечего, пока id сессии у провайдера неизвестен: такой запуск —
-  // новый процесс по тому же брифу, запись в карте остаётся прежней.
-  const resuming = mode === 'resume' && session.providerSessionId !== null;
+  // новый процесс по тому же брифу, запись в карте остаётся прежней. Id Claude Code харнесс выдаёт
+  // сам (`--session-id`) ещё на запуске, а транскрипт появляется с первым сообщением: сессию, уснувшую
+  // раньше, `--resume` не поднимет («No conversation found»), и её тоже запускаем заново — с тем же id.
+  const resuming =
+    mode === 'resume' &&
+    session.providerSessionId !== null &&
+    (session.provider !== 'claude' || (await claudeConversationExists(session.providerSessionId)));
   let providerSessionId: string | null = null;
 
   // Файл хуков нужен тому, кто его принимает (`claude --settings`); один на
@@ -217,7 +257,12 @@ async function plan(
     // Быстрая сессия стартует без промпта: карту и правила агент получает
     // через MCP, бриф ей не пишется (5.1). Тихая — тоже: её бриф уже уехал
     // системным промптом.
-    if (mode !== 'new' && !quiet) subs.prompt = await readBrief(projectPath, workId, session.id);
+    const brief = mode !== 'new' && !quiet ? await readBrief(projectPath, workId, session.id) : '';
+    // Сессию без разговора, поднятую письмом, указатель догоняет её первым сообщением: будильник уже
+    // счёл письма указанными (`{prompt}` в `resumeArgs`) и второй раз их не напечатает.
+    const pointer = mode === 'resume' ? (options.prompt ?? '') : '';
+    const first = [brief, pointer].filter((part) => part !== '').join('\n\n');
+    if (first !== '') subs.prompt = first;
     const model = options.model ?? session.model;
     if (model !== undefined) subs.model = model;
     const effort = options.effort ?? session.effort;
@@ -290,14 +335,21 @@ export const UNTITLED_WORK = 'untitled';
 const RUSSIAN_NEW_LABEL = 'новая сессия'; // cyrillic-ok: метка на диске, по ней узнаём свою
 const RUSSIAN_UNTITLED_WORK = 'без названия'; // cyrillic-ok: метка на диске, по ней узнаём свою
 
-/** Ярлык быстрой сессии, ещё не переименованной: `NEW_LABEL` или его прежняя русская запись. */
+/**
+ * Ярлык быстрой сессии, ещё не переименованной: `NEW_LABEL` или его прежняя русская запись. Служебный
+ * текст Claude Code (`<local-command-caveat>…`) — тоже не имя: его ставил автозаголовок сборок до 0.2.0
+ * сессиям, начатым со слеш-команды, и такой ярлык автозаголовок переименует заново.
+ */
 export function isNewLabel(label: string): boolean {
-  return label === NEW_LABEL || label === RUSSIAN_NEW_LABEL;
+  return label === NEW_LABEL || label === RUSSIAN_NEW_LABEL || isServiceText(label);
 }
 
-/** Заголовок работы, ещё не названной: `UNTITLED_WORK` или его прежняя русская запись. */
+/**
+ * Заголовок работы, ещё не названной: `UNTITLED_WORK` или его прежняя русская запись. Служебный текст Claude
+ * Code — тоже не название: автозаголовок сборок до 0.2.0 ставил его безымянной работе вместе с ярлыком сессии.
+ */
 export function isUntitledWork(title: string): boolean {
-  return title === UNTITLED_WORK || title === RUSSIAN_UNTITLED_WORK;
+  return title === UNTITLED_WORK || title === RUSSIAN_UNTITLED_WORK || isServiceText(title);
 }
 
 export interface NewSessionResult {
