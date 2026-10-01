@@ -82,13 +82,15 @@ data lives outside the app and stays. Because the app is signed ad hoc, macOS tr
 as a new app: the "First launch" steps repeat for each downloaded `.dmg`, and macOS may ask again
 for access to folders such as Documents, Desktop and Downloads.
 
-Then open Parley and choose "Restart host…" in the palette (⌘J), even if the window does not say
-"Host is outdated — restart" (it says so only when the host lacks methods the window needs). The
-host outlives the window, and the agents it started keep command lines that point into the old
-app: the status line script, the MCP server and the notification hook of Codex. The replacement
-can remove those files (the folder names inside the app carry dependency versions), and then
-status lines, limits and Codex turn notifications quietly stop. Live agents are interrupted and
-come back through `--resume`.
+Then open Parley and restart the host. The window notices that the host still runs from the
+previous app and says so: a notice with "Restart host…" and "Host is outdated — restart" in the
+status bar (the palette, ⌘J, has "Restart host…" too). The host outlives the window, and the
+agents it started keep command lines that point into the old app: the status line script, the
+MCP server and the notification hook of Codex. The replacement can remove those files (the folder
+names inside the app carry dependency versions), and then status lines, limits and Codex turn
+notifications quietly stop. Until the restart macOS may also keep asking for access to a folder:
+the old host and the new window are two different apps to it, and each "Allow" moves the
+permission from one to the other. Live agents are interrupted and come back through `--resume`.
 
 To turn the check off, switch off "Check for updates" in Settings (⌘,) → Notifications; it takes
 effect at once. The other way is `PARLEY_UPDATE_CHECK=off` in the environment of your login shell
@@ -102,13 +104,15 @@ For a window opened from Finder, launchd supplies a stripped-down environment. I
 `/usr/bin:/bin:/usr/sbin:/sbin`, so without `~/.local/bin` and nvm the host would find neither
 `claude` nor `codex`, and variables from your rc files (proxy, `CLAUDE_CONFIG_DIR`, `PARLEY_*`
 and others) would not arrive at all. So when the app starts, the window captures the
-environment of your login shell once (`$SHELL -ilc`, `env -0` between markers, 5-second
+environment of your login shell once (`$SHELL -ilc`, `env -0` between markers, 15-second
 timeout). Output of the rc files outside the markers does not get into it, and the rc files
 themselves are read by the shell, not by the window. The captured environment, the shell's
 `PATH` included, goes to the host as its launch environment, and agents inherit it from the
 host. If the shell did not answer, the window's own environment remains, with the existing
-`~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin` appended to its `PATH`; the reason is
-printed to the window's console. The environment is captured once per app launch: neither
+`~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin` appended to its `PATH`, and the `bin` of
+nvm's default Node (`alias/default`, or the newest installed version; `npm i -g` puts `codex`
+there) and the shims of volta, asdf and mise; the reason is printed to the window's console. If
+the host still cannot find `claude` or `codex`, the status bar shows that provider as "not found". The environment is captured once per app launch: neither
 closing the window nor "Restart host…" refreshes it, and a running host (it outlives the
 window) does not change its own. If you changed `PATH` or variables in your rc files, quit the
 app (⌘Q), open it again and choose "Restart host…" in the palette: live agents are interrupted
@@ -441,7 +445,10 @@ on the "Appearance" tab; the theme can also be changed from the palette ("Theme:
   "Created by S01 …" if an agent created the room). Under it is the strip of members: a card
   per agent with its state, a `★` for the lead and its task; a click opens the agent's
   terminal. Below, the "Decisions" block comes first (up to the five latest decisions; older
-  ones are "+N earlier"), then the messages: ordinary text, with mention chips and links. Each
+  ones are "+N earlier"; a decision takes up to two lines of running text, where bold, code and
+links stay but headings and list marks do not), then
+the messages: Markdown (headings, lists, code, tables, links) with mention chips. HTML in a
+message is shown as text, and a link opens in your browser. Each
   message shows the sender, a `★` for the lead, the recipients ("→ all" or labels), the kind
   tag (`note`, `question`, `decision`), the time and a dot for an unread one. The line "▤ Not
   picked up yet by S02, S03" stays while the recipients have not read the message. A waiting
