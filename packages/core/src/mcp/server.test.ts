@@ -307,6 +307,31 @@ describe('список инструментов', () => {
     );
   });
 
+  it('send_message: replyTo — необязательная строка; описание — про id из check_inbox или read_room и цитату в окне', async () => {
+    const client = await connect('s-01');
+    const { tools } = await client.listTools();
+    const send = tools.find((tool) => tool.name === 'send_message');
+    const replyTo = send?.inputSchema.properties?.['replyTo'] as
+      { type?: string; description?: string } | undefined;
+
+    expect(send?.inputSchema.required).toEqual(['text']);
+    expect(replyTo?.type).toBe('string');
+    expect(replyTo?.description).toMatch(/check_inbox or read_room/);
+    expect(replyTo?.description).toMatch(/quote/);
+    expect(replyTo?.description).toMatch(/Only together with room/);
+  });
+
+  it('гид называет в подписи send_message все параметры инструмента, в том же порядке', async () => {
+    const client = await connect('s-01');
+    const { tools } = await client.listTools();
+    const send = tools.find((tool) => tool.name === 'send_message');
+    const signature = /`send_message\(([^)]*)\)`/.exec(guideTopic('tools') ?? '')?.[1];
+
+    expect(signature?.split(',').map((name) => name.trim())).toEqual(
+      Object.keys(send?.inputSchema.properties ?? {}),
+    );
+  });
+
   it('read_guide: topic необязателен, enum — темы гида, описание перечисляет их', async () => {
     const client = await connect('s-01');
     const { tools } = await client.listTools();
@@ -1677,6 +1702,145 @@ describe('send_message и check_inbox в комнате', () => {
     expect(refused.text).toContain('too many messages');
     // Была бы рассылка на два письма (по адресату), лимит исчерпался бы на первом вызове.
     expect((await readMapFile()).messages).toHaveLength(2);
+  });
+});
+
+describe('send_message: replyTo — ответ с цитатой (Parley 0.3.0)', () => {
+  /**
+   * Комната r-01 (создатель s-01, участники s-02 и s-03; приглашения забраны) и в ней вопрос человека m-03.
+   * Рядом — то, на что отвечать нельзя: письмо человека в другой комнате r-02 (m-04) и прямое письмо
+   * s-01 → s-02 (m-05). Следующее письмо получит id m-06.
+   */
+  async function replySetup(): Promise<{ owner: Client; a: Client; b: Client }> {
+    const owner = await connect('s-01');
+    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
+    await callOk(owner, 'create_room', { title: 'комната', members: ['s-02', 's-03'] }); // r-01
+    const a = await connect('s-02');
+    const b = await connect('s-03');
+    await callOk(a, 'check_inbox');
+    await callOk(b, 'check_inbox');
+    await updateMap(project, workId, (map) => {
+      addMessage(map, {
+        from: HUMAN,
+        to: [],
+        text: 'Кто берёт миграции?',
+        kind: 'question',
+        roomId: 'r-01',
+      });
+      addRoom(map, { title: 'другая', creator: HUMAN, members: [] });
+      addMessage(map, { from: HUMAN, to: [], text: 'Про другое', roomId: 'r-02' });
+      addMessage(map, { from: 's-01', to: ['s-02'], text: 'Лично тебе' });
+    });
+    return { owner, a, b };
+  }
+
+  it('replyTo на сообщение той же комнаты: письмо ложится с replyTo, ответ — { messageId }', async () => {
+    const { a, b } = await replySetup();
+
+    const sent = await callOk(a, 'send_message', { room: 'r-01', text: 'Беру', replyTo: 'm-03' });
+
+    expect(sent).toEqual({ messageId: 'm-06' });
+    const stored = (await readMapFile()).messages.find((message) => message.id === 'm-06');
+    expect(stored).toMatchObject({ from: 's-02', roomId: 'r-01', text: 'Беру', replyTo: 'm-03' });
+
+    // На сообщение коллеги — так же, и вместе с адресатом (`to`) тоже.
+    const second = await callOk(b, 'send_message', {
+      room: 'r-01',
+      to: 's-02',
+      text: 'А я тесты',
+      replyTo: 'm-06',
+    });
+    expect(second).toEqual({ messageId: 'm-07' });
+    const reply = (await readMapFile()).messages.find((message) => message.id === 'm-07');
+    expect(reply).toMatchObject({ to: ['s-02'], replyTo: 'm-06' });
+  });
+
+  it('без replyTo ключа в письме нет — и обычная рассылка, и прямое письмо прежние', async () => {
+    const { a } = await replySetup();
+
+    await callOk(a, 'send_message', { room: 'r-01', text: 'Всем' }); // m-06
+    await callOk(a, 'send_message', { to: 's-01', text: 'Лично' }); // m-07
+
+    const messages = (await readMapFile()).messages;
+    for (const id of ['m-06', 'm-07']) {
+      const plain = messages.find((message) => message.id === id);
+      expect(plain, id).toBeDefined();
+      expect(plain, id).not.toHaveProperty('replyTo');
+    }
+  });
+
+  it('replyTo без room — ошибка, писем в карте столько же', async () => {
+    const { owner } = await replySetup();
+    const before = await readMapFile();
+
+    // Даже на то, что лежит в карте: цитата живёт только внутри комнаты.
+    const refused = await call(owner, 'send_message', {
+      to: 's-02',
+      text: 'Лично',
+      replyTo: 'm-05',
+    });
+
+    expect(refused).toEqual({ isError: true, text: 'replyTo works only together with room' });
+    expect(await readMapFile()).toEqual(before);
+  });
+
+  it.each([
+    ['несуществующий id', 'm-99'],
+    ['сообщение другой комнаты', 'm-04'],
+    ['прямое письмо', 'm-05'],
+  ])('replyTo — %s: ошибка «not in room», карта не меняется', async (_name, replyTo) => {
+    const { a } = await replySetup();
+    const before = await readMapFile();
+
+    const refused = await call(a, 'send_message', { room: 'r-01', text: 'Ответ', replyTo });
+
+    expect(refused).toEqual({ isError: true, text: `message ${replyTo} is not in room r-01` });
+    expect(await readMapFile()).toEqual(before);
+  });
+
+  it('пустой replyTo — как пустой room и прочие строковые аргументы: ошибка, карта не меняется', async () => {
+    const { a } = await replySetup();
+    const before = await readMapFile();
+
+    const refused = await call(a, 'send_message', { room: 'r-01', text: 'Ответ', replyTo: '' });
+
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('replyTo');
+    expect(await readMapFile()).toEqual(before);
+  });
+
+  it('read_room, wait_for("inbox") и check_inbox: у ответа есть replyTo, у обычного письма ключа нет совсем', async () => {
+    const { owner, a } = await replySetup();
+    await callOk(a, 'send_message', { room: 'r-01', text: 'Беру', replyTo: 'm-03' }); // m-06
+    await callOk(a, 'send_message', { room: 'r-01', text: 'К слову' }); // m-07
+
+    interface View {
+      id: string;
+      replyTo?: string;
+    }
+    const surfaces: [string, View[]][] = [
+      ['read_room', (await callOk(owner, 'read_room', { room: 'r-01' }))['messages'] as View[]],
+      [
+        'wait_for',
+        (await callOk(owner, 'wait_for', { target: 'inbox', timeoutSec: 5 }))['messages'] as View[],
+      ],
+      ['check_inbox', (await callOk(owner, 'check_inbox'))['messages'] as View[]],
+    ];
+
+    for (const [surface, messages] of surfaces) {
+      expect(
+        messages.find((message) => message.id === 'm-06'),
+        surface,
+      ).toMatchObject({
+        replyTo: 'm-03',
+      });
+      for (const id of ['m-03', 'm-07']) {
+        const plain = messages.find((message) => message.id === id);
+        expect(plain, `${surface} ${id}`).toBeDefined();
+        expect(plain, `${surface} ${id}`).not.toHaveProperty('replyTo');
+      }
+    }
   });
 });
 

@@ -30,7 +30,7 @@ export function systemGuidance(map: WorkMap, sessionId: string): string {
     'report — done or failed: the result is handed in, the session stays reachable and does not close itself; progress — a summary along the way.',
     'spawn_session — a new session in this same workspace; it starts by itself as soon as the record is created, nobody needs to be called.',
     'wait_for — wait for a session (target is its id) or a message (target: "inbox"); for a new task given to a session that has handed in its report, wait via "inbox", not by id.',
-    'send_message — a message to a session or to a room (room): question — waiting for an answer, decision — we have agreed, note — a note (the default).',
+    'send_message — a message to a session or to a room (room): question — waiting for an answer, decision — we have agreed, note — a note (the default); replyTo — in a room, the id of the message you are answering, above all a question from the human: the window shows a quote of it.',
     // В окне письма объявляет указатель: хост печатает его после хода агента (`delivery.ts`), а сессии окна
     // запускает без канала. Тег — только у сессий CLI `parley-core`; вставка от способа запуска не зависит,
     // поэтому говорит об обоих в одной строке — потолок в четырнадцать строк не поднимаем.

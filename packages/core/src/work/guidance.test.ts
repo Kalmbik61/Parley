@@ -171,6 +171,19 @@ describe('системная вставка', () => {
     expect(text).toContain('answer with send_message only to a question');
     expect(text.split('\n').length).toBeLessThanOrEqual(14);
   });
+
+  it('send_message: replyTo — id сообщения, на которое отвечают в комнате; строка прежняя, потолок в четырнадцать строк не тронут', () => {
+    const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
+    const line = text.split('\n').find((candidate) => candidate.startsWith('send_message'));
+
+    expect(line).toMatch(
+      /replyTo — in a room, the id of the message you are answering, above all a question from the human/,
+    );
+    expect(line).toContain(
+      'question — waiting for an answer, decision — we have agreed, note — a note',
+    );
+    expect(text.split('\n').length).toBeLessThanOrEqual(14);
+  });
 });
 
 /**
@@ -366,6 +379,40 @@ describe('подробный гид', () => {
     expect(member).toMatch(
       /`lead` field in `get_map`; `null` means the first of `members`, and a closed lead is replaced by the first live participant/,
     );
+  });
+
+  it('комнаты: replyTo — id отвечаемого сообщения из check_inbox или read_room, цитата в окне, только вместе с room', () => {
+    const rooms = sectionOf('## Rooms', '### The lead and the decision');
+
+    expect(rooms).toMatch(
+      /above all a question from the human — pass `replyTo` with that message's id/,
+    );
+    expect(rooms).toMatch(/the `id` field in what `check_inbox` and `read_room` return/);
+    expect(rooms).toMatch(/draws a quote of it above your answer/);
+    expect(rooms).toMatch(/`replyTo` works only together with `room`/);
+    // Подпись `send_message` в «Инструментах» называет параметр: без него в подписи агент его не найдёт.
+    expect(sectionOf('## Tools', '## Rooms')).toContain(
+      '`send_message(to, text, kind, room, replyTo)`',
+    );
+  });
+
+  it('комнаты: @human — так зовут человека в комнате; окно подсвечивает и уведомляет, писать только когда нужен ответ или внимание', () => {
+    const rooms = sectionOf('## Rooms', '### The lead and the decision');
+
+    expect(rooms).toMatch(/To address the human in a room, write `@human` in the text/);
+    expect(rooms).toMatch(/highlights the mention and notifies the human/);
+    expect(rooms).toMatch(/only when you need the human's answer or attention/);
+  });
+
+  it('комнаты, участнику: отвечая на задачу человека, передать replyTo с id его сообщения', () => {
+    const member = sectionOf('### Room participant', '## Brief');
+
+    expect(member).toMatch(
+      /Answering the human's task, pass `replyTo` with the id of the human's message \(from `check_inbox` or `read_room`\)/,
+    );
+    // Добавка стоит внутри пункта «Speak up in one message», а не отдельным пунктом.
+    expect(member.indexOf('`replyTo`')).toBeGreaterThan(member.indexOf('Speak up in one message'));
+    expect(member.indexOf('`replyTo`')).toBeLessThan(member.indexOf('Wait for your part'));
   });
 
   it('бриф: гид называет раздел «Роль в комнате»', () => {

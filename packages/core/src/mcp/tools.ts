@@ -189,6 +189,8 @@ const messageView = (message: Message, map: WorkMap) => {
     text: message.text,
     kind: message.kind,
     room: room === null ? null : { id: room.id, title: room.title },
+    // Ответ несёт id сообщения, на которое написан (Parley 0.3.0); у прочих писем ключа нет совсем.
+    ...(message.replyTo === undefined ? {} : { replyTo: message.replyTo }),
   };
 };
 
@@ -345,6 +347,11 @@ const TOOLS: Tool[] = [
             'question — waiting for an answer; decision — we have agreed; note — a note (the default).',
         },
         room: { type: 'string', description: 'Room id from get_map; without it the message is direct.' },
+        replyTo: {
+          type: 'string',
+          description:
+            'Id of the message in this room you are answering (from check_inbox or read_room), above all a question from the human: the window shows a quote of it above your message. Only together with room.',
+        },
       },
       required: ['text'],
     },
@@ -738,6 +745,8 @@ async function sendMessage(
   const text = stringArg(args, 'text');
   const kind = args['kind'] === undefined ? 'note' : enumArg(args, 'kind', MESSAGE_KINDS);
   const roomId = optionalStringArg(args, 'room');
+  // Пустая строка — ошибка, как у `room`: `stringArg` пустое значение не пропускает.
+  const replyTo = optionalStringArg(args, 'replyTo');
 
   let created = '';
   await updateMap(context.projectPath, context.workId, (current) => {
@@ -758,9 +767,28 @@ async function sendMessage(
         }
         assertDeliverable(current, memberId);
       }
+      // Ответ (Parley 0.3.0): цитировать можно только сообщение этой же комнаты — несуществующий id, чужая
+      // комната и прямое письмо дают отказ. Сверка идёт под тем же замком, что и запись: карта между ними
+      // не устареет, как у проверок участников выше.
+      if (replyTo !== null) {
+        const quoted = current.messages.find((message) => message.id === replyTo);
+        if (quoted?.roomId !== roomId) {
+          throw new Error(`message ${replyTo} is not in room ${roomId}`);
+        }
+      }
       // Пустой to в комнате — рассылка всем участникам (recipientsOf её и разберёт).
-      created = addMessage(current, { from: sessionId, to, text, kind, roomId }).id;
+      created = addMessage(current, {
+        from: sessionId,
+        to,
+        text,
+        kind,
+        roomId,
+        ...(replyTo === null ? {} : { replyTo }),
+      }).id;
     } else {
+      // Цитата живёт в ленте комнаты: у прямого письма её нет, и молча отбросить `replyTo` значило бы
+      // обмануть агента, ждущего цитаты.
+      if (replyTo !== null) throw new Error('replyTo works only together with room');
       if (to.length !== 1) {
         throw new Error('without room, exactly one addressee in to is required');
       }
