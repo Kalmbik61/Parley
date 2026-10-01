@@ -1871,8 +1871,9 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
   const started = (target: string) => ({
     hook_event_name: 'ParleyWaitStart',
     parley_wait_target: target,
+    parley_wait_id: expect.any(String),
   });
-  const ended = { hook_event_name: 'ParleyWaitEnd' };
+  const ended = { hook_event_name: 'ParleyWaitEnd', parley_wait_id: expect.any(String) };
   /** Запись начала идёт параллельно висящему вызову: ждём, пока в журнале станет `count` строк. */
   const linesAre = (count: number): Promise<void> =>
     vi.waitFor(async () => expect(await journalLines()).toHaveLength(count), {
@@ -1906,8 +1907,13 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
     expect(await callOk(client, 'wait_for', { target: 's-02', timeoutSec: 0.2 })).toEqual({
       state: 'running',
     });
+    // Id вызова — случайный, в обеих строках один: по нему конец снимает своё ожидание.
+    const [start] = await journalLines();
+    const id = start?.['parley_wait_id'];
+    expect(typeof id === 'string' && id.length >= 16).toBe(true);
     expect(await readFile(journalFile(), 'utf8')).toBe(
-      `${JSON.stringify(started('s-02'))}\n${JSON.stringify(ended)}\n`,
+      `${JSON.stringify({ hook_event_name: 'ParleyWaitStart', parley_wait_target: 's-02', parley_wait_id: id })}\n` +
+        `${JSON.stringify({ hook_event_name: 'ParleyWaitEnd', parley_wait_id: id })}\n`,
     );
   });
 
@@ -1988,6 +1994,98 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
         .sort(),
     ).toEqual(['inbox', 's-02']);
     expect(lines.filter((line) => line['hook_event_name'] === 'ParleyWaitEnd')).toHaveLength(2);
+
+    // У каждого вызова свой случайный id, и конец несёт id своего начала.
+    const startIds = lines
+      .filter((line) => line['hook_event_name'] === 'ParleyWaitStart')
+      .map((line) => line['parley_wait_id']);
+    const endIds = lines
+      .filter((line) => line['hook_event_name'] === 'ParleyWaitEnd')
+      .map((line) => line['parley_wait_id']);
+    expect(new Set(startIds).size).toBe(2);
+    expect([...endIds].sort()).toEqual([...startIds].sort());
+  });
+
+  it('отмена вызова клиентом прерывает ожидание и сразу пишет End с id начала', async () => {
+    const client = await connect('s-01');
+    const controller = new AbortController();
+    const pending = client.callTool(
+      { name: 'wait_for', arguments: { target: 'inbox', timeoutSec: 20 } },
+      undefined,
+      { signal: controller.signal },
+    );
+    // Клиент отвергает свой вызов при отмене.
+    pending.catch(() => undefined);
+
+    await linesAre(1);
+    const started = Date.now();
+    controller.abort();
+    // End не ждёт двадцати секунд таймаута: ожидание прервано самой отменой.
+    await linesAre(2);
+    expect(Date.now() - started).toBeLessThan(2000);
+
+    const [start, end] = await journalLines();
+    expect(end).toEqual({
+      hook_event_name: 'ParleyWaitEnd',
+      parley_wait_id: start?.['parley_wait_id'],
+    });
+  });
+
+  it('после отмены сервер жив, а следующий вызов отвечает как обычно и пишет свою пару', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    const controller = new AbortController();
+    const cancelled = client.callTool(
+      { name: 'wait_for', arguments: { target: 'inbox', timeoutSec: 20 } },
+      undefined,
+      { signal: controller.signal },
+    );
+    cancelled.catch(() => undefined);
+    await linesAre(1);
+    controller.abort();
+    await linesAre(2);
+
+    expect(await callOk(client, 'wait_for', { target: 's-02', timeoutSec: 0.2 })).toEqual({
+      state: 'running',
+    });
+    const lines = await journalLines();
+    expect(lines).toHaveLength(4);
+    expect(lines.map((line) => line['hook_event_name'])).toEqual([
+      'ParleyWaitStart',
+      'ParleyWaitEnd',
+      'ParleyWaitStart',
+      'ParleyWaitEnd',
+    ]);
+  });
+
+  it('отменённое ожидание не мешает идущему: activityOf держит waitingFor за вторым вызовом', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    const waitingFor = async (): Promise<string | null> =>
+      activityOf({ events: await openEvents(eventsDir()).read('s-01') }).waitingFor;
+
+    const controller = new AbortController();
+    const first = client.callTool(
+      { name: 'wait_for', arguments: { target: 'inbox', timeoutSec: 20 } },
+      undefined,
+      { signal: controller.signal },
+    );
+    first.catch(() => undefined);
+    await linesAre(1);
+    const second = callOk(client, 'wait_for', { target: 's-02', timeoutSec: 20 });
+    await linesAre(2);
+    expect(await waitingFor()).toBe('s-02');
+
+    // Отменили первое: его End пришёл, а второе идёт — ожидание не потеряно.
+    controller.abort();
+    await linesAre(3);
+    expect(await waitingFor()).toBe('s-02');
+
+    await updateMap(project, workId, (map) => {
+      setResult(map, 's-02', 'done');
+    });
+    await second;
+    expect(await waitingFor()).toBeNull();
   });
 
   it('сбой записи в журнал не ломает ожидание: на месте журнала каталог', async () => {

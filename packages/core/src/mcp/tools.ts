@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -616,7 +617,9 @@ async function spawnSession(
 
 /**
  * Строка в журнал событий своей сессии — тот, куда пишут и хуки Claude Code: по `ParleyWaitStart` и
- * `ParleyWaitEnd` хост видит, что агент ждёт в `wait_for`, а не бездействует. Адрес — как у хука:
+ * `ParleyWaitEnd` хост видит, что агент ждёт в `wait_for`, а не бездействует; случайный `parley_wait_id`
+ * связывает начало вызова с его концом: вызовов бывает несколько сразу, а конец брошенного (Esc) вызова
+ * приходит позже начала нового. Адрес — как у хука:
  * `<каталог работы>/events/<id сессии>.jsonl`. Одна строка — один `appendFile`: строки параллельных
  * вызовов не перемешиваются. Каталог не создаётся: его отсутствие — признак сессии без хуков, и
  * наши строки не должны заглушать предупреждение хоста.
@@ -644,8 +647,10 @@ async function waitFor(
   context: McpContext,
   sessionId: string,
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   const target = stringArg(args, 'target');
+  const waitId = randomUUID();
   const timeoutMs = waitTimeoutMs(numberArg(args, 'timeoutSec'));
   const read = (): Promise<WorkMap> => readMap(context.projectPath, context.workId);
 
@@ -697,6 +702,7 @@ async function waitFor(
       wait.begun = noteWait(context, sessionId, {
         hook_event_name: 'ParleyWaitStart',
         parley_wait_target: target,
+        parley_wait_id: waitId,
       });
     }
     return result;
@@ -708,12 +714,17 @@ async function waitFor(
       probeAndNote,
       timeoutMs,
       context.pollMs ?? POLL_MS,
+      signal,
     );
     return found ?? { state: 'running' };
   } finally {
+    // Любой исход, в том числе отмена вызова клиентом: она прерывает ожидание, и конец пишется сразу.
     if (wait.begun !== null) {
       await wait.begun;
-      await noteWait(context, sessionId, { hook_event_name: 'ParleyWaitEnd' });
+      await noteWait(context, sessionId, {
+        hook_event_name: 'ParleyWaitEnd',
+        parley_wait_id: waitId,
+      });
     }
   }
 }
@@ -918,6 +929,7 @@ async function dispatch(
   context: McpContext,
   name: string,
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   if (name === 'get_map') return getMap(context);
   // Гид не про конкретную сессию: он доступен и без `PARLEY_SESSION_ID`.
@@ -928,7 +940,7 @@ async function dispatch(
 
   if (name === 'report') return report(context, sessionId, args);
   if (name === 'spawn_session') return spawnSession(context, sessionId, args);
-  if (name === 'wait_for') return waitFor(context, sessionId, args);
+  if (name === 'wait_for') return waitFor(context, sessionId, args, signal);
   if (name === 'send_message') return sendMessage(context, sessionId, args);
   if (name === 'check_inbox') return checkInbox(context, sessionId);
   if (name === 'create_room') return createRoom(context, sessionId, args);
@@ -1047,20 +1059,23 @@ export function createParleyServer(context: McpContext): Server<Request, Channel
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: TOOLS }));
   // Тред Codex привязывается один раз за жизнь сервера — с первого вызова, где `_meta.threadId` есть.
   let threadBound = false;
-  server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
-    const args = isRecord(request.params.arguments) ? request.params.arguments : {};
-    // До самого инструмента: `wait_for` может держать вызов до получаса, а привязка нужна сразу.
-    if (!threadBound) threadBound = await bindCodexThread(context, request.params._meta);
-    try {
-      const result = await dispatch(context, request.params.name, args);
-      // Гид — готовый текст: заворачивать его в JSON-строку с экранированием
-      // значило бы отдать агенту документ, который ему же и разбирать.
-      const text = typeof result === 'string' ? result : `${JSON.stringify(result, null, 2)}\n`;
-      return { content: [{ type: 'text', text }] };
-    } catch (error) {
-      return { content: [{ type: 'text', text: (error as Error).message }], isError: true };
-    }
-  });
+  server.setRequestHandler(
+    CallToolRequestSchema,
+    async (request, extra): Promise<CallToolResult> => {
+      const args = isRecord(request.params.arguments) ? request.params.arguments : {};
+      // До самого инструмента: `wait_for` может держать вызов до получаса, а привязка нужна сразу.
+      if (!threadBound) threadBound = await bindCodexThread(context, request.params._meta);
+      try {
+        const result = await dispatch(context, request.params.name, args, extra.signal);
+        // Гид — готовый текст: заворачивать его в JSON-строку с экранированием
+        // значило бы отдать агенту документ, который ему же и разбирать.
+        const text = typeof result === 'string' ? result : `${JSON.stringify(result, null, 2)}\n`;
+        return { content: [{ type: 'text', text }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: (error as Error).message }], isError: true };
+      }
+    },
+  );
 
   return server;
 }
