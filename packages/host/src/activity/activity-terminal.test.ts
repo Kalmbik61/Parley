@@ -237,9 +237,11 @@ describe('сигналы терминала codex → активность', () 
   it('порог тишины по-прежнему роняет `working` сессии codex, чей процесс не под хостом', async () => {
     // Сессия записана в карте как codex, но запущена не окном (например, CLI): терминала у хоста нет,
     // состояние — по журналу, как у всякой, и порог тишины действует.
+    // Порог — с запасом: под нагрузкой полного прогона первое чтение журнала приходило позже 300 мс, и
+    // `working` было уже не застать (сессия сразу считалась закончившей ход).
     const { workId, ref } = await codexSession({ eventsDir: true });
     const w = await works();
-    const a = activity(w, { silenceThresholdMs: 300 });
+    const a = activity(w, { silenceThresholdMs: 1500 });
     await a.start();
     await appendFile(
       path.join(workPaths(project, workId).events, `${ref.sessionId}.jsonl`),
@@ -247,7 +249,7 @@ describe('сигналы терминала codex → активность', () 
     );
     await updateMap(project, workId, () => undefined);
     await waitFor(() => a.get(ref)?.activity.activity === 'working');
-    await waitFor(() => a.get(ref)?.activity.activity === 'unseen', 3000);
+    await waitFor(() => a.get(ref)?.activity.activity === 'unseen', 6000);
   }, 20_000);
 
   it('Stop от notify новее сигнала работы завершает ход, но следующий кадр спиннера возвращает `working`', async () => {
