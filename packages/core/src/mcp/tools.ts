@@ -120,8 +120,13 @@ function toArg(args: Record<string, unknown>, name: string): string[] {
   throw new Error(`argument ${name}: expected a string or an array of strings`);
 }
 
+/**
+ * Необязательная строка: нет поля или `null` — `null`. Часть клиентов заполняет все поля схемы и шлёт `null`
+ * вместо пропуска; ошибка «is required» на необязательном поле толкала бы агента выдумать значение (ревью 0.3.0).
+ */
 function optionalStringArg(args: Record<string, unknown>, name: string): string | null {
-  return args[name] === undefined ? null : stringArg(args, name);
+  const value = args[name];
+  return value === undefined || value === null ? null : stringArg(args, name);
 }
 
 function numberArg(args: Record<string, unknown>, name: string): number | undefined {

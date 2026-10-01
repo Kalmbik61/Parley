@@ -402,6 +402,18 @@ describe('подробный гид', () => {
     expect(rooms).toMatch(/To address the human in a room, write `@human` in the text/);
     expect(rooms).toMatch(/highlights the mention and notifies the human/);
     expect(rooms).toMatch(/only when you need the human's answer or attention/);
+    // Окно видит упоминание только в тексте: в коде и ссылке оно остаётся текстом (ревью 0.3.0).
+    expect(rooms).toMatch(
+      /Write it as plain text: inside code or a link it stays text and notifies no one/,
+    );
+  });
+
+  it('комнаты: человек не сессия — отвечать ему рассылкой в комнату с replyTo, to: "human" — ошибка (ревью 0.3.0)', () => {
+    const rooms = sectionOf('## Rooms', '### The lead and the decision');
+
+    expect(rooms).toMatch(
+      /The human is not a session: answer the human in the room without `to` and with `replyTo`; `to: "human"` is an error/,
+    );
   });
 
   it('комнаты, участнику: отвечая на задачу человека, передать replyTo с id его сообщения', () => {

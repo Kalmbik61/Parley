@@ -1810,6 +1810,21 @@ describe('send_message: replyTo — ответ с цитатой (Parley 0.3.0)'
     expect(await readMapFile()).toEqual(before);
   });
 
+  it('null в необязательном поле — как его отсутствие: replyTo: null и room: null письмо не роняют (ревью 0.3.0)', async () => {
+    const { a } = await replySetup();
+
+    await callOk(a, 'send_message', { room: 'r-01', text: 'Всем', replyTo: null }); // m-06
+    await callOk(a, 'send_message', { to: 's-01', text: 'Лично', room: null, replyTo: null }); // m-07
+
+    const messages = (await readMapFile()).messages;
+    const broadcast = messages.find((message) => message.id === 'm-06');
+    const direct = messages.find((message) => message.id === 'm-07');
+    expect(broadcast).toMatchObject({ roomId: 'r-01', text: 'Всем' });
+    expect(broadcast).not.toHaveProperty('replyTo');
+    expect(direct).toMatchObject({ roomId: null, to: ['s-01'], text: 'Лично' });
+    expect(direct).not.toHaveProperty('replyTo');
+  });
+
   it('read_room, wait_for("inbox") и check_inbox: у ответа есть replyTo, у обычного письма ключа нет совсем', async () => {
     const { owner, a } = await replySetup();
     await callOk(a, 'send_message', { room: 'r-01', text: 'Беру', replyTo: 'm-03' }); // m-06
