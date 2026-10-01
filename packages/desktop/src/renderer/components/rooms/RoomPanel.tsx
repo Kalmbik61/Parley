@@ -5,7 +5,8 @@
  *
  * Над полем ввода — живая строка (Parley 0.2.0): по строке на участника, который чем-то занят, —
  * `S02 · Subagent: Orca research`, `S03 · Waiting for messages`. Это состояние, а не переписка: в ленту оно
- * не пишется, а когда никто ничем не занят, строки нет.
+ * не пишется, а когда никто ничем не занят, строки нет. Строки обрезаются, а блок выше 96px прокручивается:
+ * много занятых участников не должны выдавить ленту из невысокого окна.
  *
  * Карточка решения — последней в ленте, пока `Room.proposal` не `null`. Кнопки зовут
  * `rooms.resolveProposal` с `proposalId` и `rev` показанной карточки: человек не примет текст, которого не
@@ -163,7 +164,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       {busy.length === 0 ? null : (
         <div
           data-room-live=""
-          className="flex shrink-0 flex-col gap-0.5 px-9 pb-1.5 pt-1 text-xs text-muted-foreground"
+          className="flex max-h-24 shrink-0 flex-col gap-0.5 overflow-y-auto px-9 pb-1.5 pt-1 text-xs text-muted-foreground"
         >
           {busy.map((participant) => (
             <div

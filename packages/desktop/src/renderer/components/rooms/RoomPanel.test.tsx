@@ -270,6 +270,9 @@ describe('RoomPanel — чем заняты участники (Parley 0.2.0)', 
     // Приглушённая и компактная: ничего не выталкивает, длинное обрезается.
     expect(line.className).toContain('text-muted-foreground');
     expect((line.children[0] as HTMLElement).className).toContain('truncate');
+    // Много занятых участников ленту не выдавливают: блок выше 96px прокручивается.
+    expect(line.className).toContain('max-h-24');
+    expect(line.className).toContain('overflow-y-auto');
   });
 
   it('в ленту она не пишется: сообщений не прибавляется, текста в ленте нет', () => {

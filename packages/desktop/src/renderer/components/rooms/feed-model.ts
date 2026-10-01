@@ -145,7 +145,7 @@ function providerOf(map: WorkMap, id: string): string | null {
   return map.sessions.find((session) => session.id === id)?.provider ?? null;
 }
 
-/** Цель `wait_for`, при которой агент ждёт сообщений, а не сессию. */
+/** Тот же литерал, что цель `wait_for("inbox")` в `core/mcp/tools.ts`: из core рендерер берёт только типы. */
 const INBOX = 'inbox';
 
 /**
