@@ -9,7 +9,7 @@
 
 import type { Message, Room, SessionActivity, WorkEntry, WorkMap, WorkSession } from '@parley/core';
 import { refKey } from '@parley/protocol';
-import { mentionsHuman } from '../components/rooms/mention.js';
+import { hasHumanMention } from '../components/rooms/room-remark.js';
 import { isoMs } from '../lib/iso-time.js';
 import { workKey } from '../lib/tree-order.js';
 import type { ActivityEntry } from '../store/activity.js';
@@ -92,14 +92,15 @@ export function isHumanUnread(message: Message): boolean {
 
 /**
  * Сообщение комнаты, где человека назвали (Parley 0.3.0): не от него и не от хоста, а в тексте — `@human`. Распознаёт
- * `mentionsHuman` — то же правило, по которому лента рисует чип «@you». Прочитано оно или нет, решает `isHumanUnread`.
+ * `hasHumanMention` — тот же разбор Markdown, которым лента рисует чип «@you» (`components/rooms/room-remark.ts`):
+ * чип есть там и только там, где сообщение считается упоминанием. Прочитано оно или нет, решает `isHumanUnread`.
  */
 export function isHumanMention(message: Message): boolean {
   return (
     message.roomId !== null &&
     message.from !== HUMAN &&
     message.from !== SYSTEM &&
-    mentionsHuman(message.text)
+    hasHumanMention(message.text)
   );
 }
 

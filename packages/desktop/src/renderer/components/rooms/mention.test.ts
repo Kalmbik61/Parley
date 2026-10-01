@@ -16,7 +16,6 @@ import {
   filterMentions,
   findMentionQuery,
   mentionToken,
-  mentionsHuman,
   splitFeedMentions,
   splitMentions,
   type FeedSegment,
@@ -88,7 +87,6 @@ describe('@human — упоминание человека (Parley 0.3.0)', () =
       '@@human',
       '@s02@human',
     ]) {
-      expect(mentionsHuman(value), value).toBe(false);
       expect(
         splitFeedMentions(value).some((segment) => segment.kind === 'human'),
         value,
@@ -100,7 +98,9 @@ describe('@human — упоминание человека (Parley 0.3.0)', () =
     expect(splitMentions('@human @s02')).toEqual([text('@human '), mention('s-02', '@s02')]);
   });
 
-  it('инварианты на наборе строк: сегменты склеиваются в исходный текст, mentionsHuman — то же, что нашла лента', () => {
+  // Что из текста лента вырежет чипом «@you», а что нет, решает разбор Markdown (`room-remark.ts`): здесь только
+  // разбор токенов в тексте одного узла, и он ничего не теряет.
+  it('сегменты splitFeedMentions склеиваются в исходный текст: ничего не теряется и не добавляется', () => {
     const samples = [
       '',
       '@human',
@@ -117,14 +117,10 @@ describe('@human — упоминание человека (Parley 0.3.0)', () =
       '`@human` в коде',
     ];
     for (const value of samples) {
-      const segments = splitFeedMentions(value);
-      const joined = segments
+      const joined = splitFeedMentions(value)
         .map((segment) => (segment.kind === 'text' ? segment.text : segment.raw))
         .join('');
       expect(joined, value).toBe(value);
-      expect(mentionsHuman(value), value).toBe(
-        segments.some((segment) => segment.kind === 'human'),
-      );
     }
   });
 });
