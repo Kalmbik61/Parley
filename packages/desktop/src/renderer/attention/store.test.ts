@@ -1,15 +1,24 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import type { WorkEntry } from '@parley/core';
+import type { Message, WorkEntry } from '@parley/core';
 import { workKey } from '../lib/tree-order.js';
 import type { SidebarSection } from '../sidebar/sort.js';
 import { useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
-import { makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { makeLetter, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { workAttention, type WorkAttention } from './derive.js';
 import { attentionTotals, badgeCount, useAttentionTotals } from './store.js';
 
 function att(patch: Partial<WorkAttention>): WorkAttention {
-  return { level: 'idle', needsYou: 0, unseen: 0, humanUnread: 0, roomsUnread: {}, lastEventAt: '2026-09-27T08:00:00.000Z', ...patch };
+  return {
+    level: 'idle',
+    needsYou: 0,
+    unseen: 0,
+    humanUnread: 0,
+    roomsUnread: {},
+    roomMentions: {},
+    lastEventAt: '2026-09-27T08:00:00.000Z',
+    ...patch,
+  };
 }
 
 function section(key: string, works: WorkEntry[], collapsed = false): SidebarSection {
@@ -83,5 +92,45 @@ describe('useAttentionTotals', () => {
 
     act(() => useSidebarSectionsStore.setState({ attention: { [keyOf(w)]: att({ unseen: 1 }) } }));
     expect(result.current).toEqual({ needsYou: 0, unseen: 1, humanUnread: 0 });
+  });
+});
+
+// Parley 0.3.0: упоминание человека в комнате (`@human`) — письмо ему: входит в `humanUnread`, а значит, и в бейдж Dock
+// (`needsYou + humanUnread`). Сам `badgeCount` не менялся — расчёт внимания (`workAttention`) считает упоминание.
+describe('бейдж Dock и упоминание @human (Parley 0.3.0)', () => {
+  const work = (messages: Message[]): WorkEntry =>
+    makeWork('w-01', {
+      projectPath: '/tmp/a',
+      sessions: [makeSession('s-01', 'a')],
+      rooms: [{ ...makeRoom('r-01', 'R'), members: ['s-01'], lead: 's-01' }],
+      messages,
+    });
+  const inRoom = (id: string, text: string, patch: Partial<Message> = {}): Message =>
+    makeLetter(id, { roomId: 'r-01', from: 's-01', to: [], text, ...patch });
+  const totalsOf = (entry: WorkEntry) =>
+    attentionTotals([section('/tmp/a', [entry])], { [keyOf(entry)]: workAttention(entry, {}) });
+
+  it('упоминание увеличивает humanUnread итогов и бейдж Dock на единицу', () => {
+    expect(badgeCount(totalsOf(work([])))).toBe(0);
+    const totals = totalsOf(work([inRoom('m-1', 'Need your call, @human')]));
+    expect(totals).toEqual({ needsYou: 0, unseen: 0, humanUnread: 1 });
+    expect(badgeCount(totals)).toBe(1);
+  });
+
+  it('упоминание и прямое письмо складываются в бейдже', () => {
+    const totals = totalsOf(work([inRoom('m-1', '@human, look'), makeLetter('m-2')]));
+    expect(totals.humanUnread).toBe(2);
+    expect(badgeCount(totals)).toBe(2);
+  });
+
+  it('простое сообщение комнаты, прочитанное упоминание, сообщение от человека и @humans бейдж не растят', () => {
+    const read = { human: '2026-09-27T11:00:00.000Z' };
+    const quiet = work([
+      inRoom('m-1', 'just a status'),
+      inRoom('m-2', '@human, look', { readBy: read }),
+      inRoom('m-3', '@human, look', { from: 'human' }),
+      inRoom('m-4', 'ask the @humans'),
+    ]);
+    expect(badgeCount(totalsOf(quiet))).toBe(0);
   });
 });

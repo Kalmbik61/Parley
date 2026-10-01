@@ -103,6 +103,8 @@ export const S = {
     /** Слово строки комнаты, пока решение ждёт человека; `{n} new` — сообщения комнаты, не прочитанные человеком. */
     roomDecision: 'decision',
     roomNew: (n: number): string => `${n} new`,
+    /** Слово строки комнаты, где человека назвали (`@human`): `@you · {n} new`, `n` — все непрочитанные сообщения комнаты. */
+    roomMentioned: (n: number): string => `@you · ${n} new`,
     /** Тултип значка провайдера свёрнутой комнаты: `2 Claude Code agents`; имя провайдера — `providerName`. */
     roomAgents: (n: number, provider: string): string => `${n} ${provider} ${n === 1 ? 'agent' : 'agents'}`,
     /** Тултип `★` у ведущего в строке участника развёрнутой комнаты. */
@@ -797,6 +799,8 @@ export const S = {
     /** «<работа> · письмо | вопрос | решение от S01» по `Message.kind`. */
     mailTitle: (workspace: string, kind: 'note' | 'question' | 'decision', from: string): string =>
       `${workspace} · ${kind === 'question' ? 'question' : kind === 'decision' ? 'decision' : 'message'} from ${from}`,
+    /** Агент назвал человека в комнате (`@human`): «S02 mentioned you in Mobile APP». `from` — короткий ярлык, комната — данные. */
+    mentionTitle: (from: string, room: string): string => `${from} mentioned you in ${room}`,
     /** Тост: клик по уведомлению, чью работу или сессию успели удалить (спека 7.5). */
     targetGone: 'Workspace or session no longer exists',
     /**
