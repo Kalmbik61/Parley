@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdir, mkdtemp, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -447,7 +447,12 @@ describe('updateMap: работы нет — WorkNotFoundError', () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 60));
     await held.close();
-    await rm(paths.dir, { recursive: true, force: true });
+    // Каталог уходит одним rename, как если бы его убрал другой процесс: `rm -r` удалял бы его по
+    // частям, и ожидание лока успевало снова создать в нём map.lock — тогда падал бы сам rm
+    // (ENOTEMPTY), а не запись (флейк под нагрузкой и на машинах CI).
+    const gone = `${paths.dir}.gone`;
+    await rename(paths.dir, gone);
+    await rm(gone, { recursive: true, force: true });
 
     expect(await outcome).toBeInstanceOf(WorkNotFoundError);
   });
