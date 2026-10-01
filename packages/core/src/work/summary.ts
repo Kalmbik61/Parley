@@ -146,11 +146,11 @@ export function summaryPrompt(map: WorkMap, session: WorkSession, transcript: st
       ? `Session role: "${session.label}".`
       : `Session role: "${session.label}". Its task: ${session.task}.`,
     '',
-    // Язык резюме не менялся вместе с переводом текстов промпта: его по-прежнему просят по-русски.
-    // Выбор языка резюме для людей, чей разговор не по-русски, — решение владельца продукта.
-    'Write, in Russian, a summary of the result of this session: what was done, how it ended,',
-    'what was left undone. No more than three sentences, no preamble and no',
-    'headings — only the text of the summary itself.',
+    // Резюме — на языке разговора человека с агентом (решение владельца 2026-10-01): у русскоязычного
+    // человека по-русски, у англоязычного — по-английски.
+    'Write a summary of the result of this session in the language the human and the agent used',
+    'in the transcript: what was done, how it ended, what was left undone. No more than three',
+    'sentences, no preamble and no headings — only the text of the summary itself.',
     '',
     '--- transcript ---',
     transcript,
