@@ -182,3 +182,105 @@ describe('feedFromTranscript на настоящих журналах', () => {
     expect(new Set(state.items.map((item) => item.id)).size).toBe(state.items.length);
   });
 });
+
+describe('feedFromTranscript: ветки и пределы', () => {
+  const T = '2026-10-01T10:00:00.000Z';
+  const user = (
+    uuid: string,
+    content: unknown,
+    extra: Record<string, unknown> = {},
+  ): RawRecord => ({
+    type: 'user',
+    uuid,
+    timestamp: T,
+    message: { role: 'user', content },
+    ...extra,
+  });
+  const toolUse = (uuid: string, id: string, name: string, input: unknown): RawRecord => ({
+    type: 'assistant',
+    uuid,
+    timestamp: T,
+    message: {
+      id: `msg_${uuid}`,
+      role: 'assistant',
+      content: [{ type: 'tool_use', id, name, input }],
+    },
+  });
+  const result = (uuid: string, id: string, extra: Record<string, unknown> = {}): RawRecord =>
+    user(uuid, [{ type: 'tool_result', tool_use_id: id, content: 'out', ...extra }]);
+
+  it('isMeta с обычным текстом промптом не становится', () => {
+    const { items } = feedFromTranscript([user('u1', 'plain text', { isMeta: true })]);
+
+    expect(items).toEqual([]);
+  });
+
+  it('tool_result с is_error — вызов failed', () => {
+    const { items } = feedFromTranscript([
+      toolUse('a1', 't1', 'Bash', { command: 'false' }),
+      result('u1', 't1', { is_error: true }),
+    ]);
+
+    expect(kinds(items)).toEqual(['tool:failed']);
+  });
+
+  it('прерывание без отказа в диалоге отклоняет идущие вызовы', () => {
+    const { items } = feedFromTranscript([
+      toolUse('a1', 't1', 'Bash', { command: 'sleep 9' }),
+      user('u1', [{ type: 'text', text: '[Request interrupted by user]' }]),
+    ]);
+
+    expect(kinds(items)).toEqual(['tool:rejected']);
+  });
+
+  it('is_error у вызова Agent — карточка агента failed', () => {
+    const { items } = feedFromTranscript([
+      toolUse('a1', 't1', 'Agent', { subagent_type: 'Explore', prompt: 'p' }),
+      result('u1', 't1', { is_error: true }),
+    ]);
+
+    expect(items).toMatchObject([{ kind: 'agent', status: 'failed' }]);
+  });
+
+  it('повтор записей журнала (тот же uuid) не дублирует элементы', () => {
+    const records: RawRecord[] = [
+      toolUse('a1', 't1', 'Bash', { command: 'ls' }),
+      result('u1', 't1'),
+      {
+        type: 'assistant',
+        uuid: 'a2',
+        timestamp: T,
+        message: { id: 'msg_2', role: 'assistant', content: [{ type: 'text', text: 'done' }] },
+      },
+    ];
+    const once = feedFromTranscript(records);
+    const twice = feedFromTranscript([...records, ...records]);
+
+    expect(twice.items).toEqual(once.items);
+  });
+
+  it('запись без времени получает время предыдущей, а первая — начало эпохи', () => {
+    const { items } = feedFromTranscript([
+      { type: 'user', uuid: 'u0', message: { role: 'user', content: 'first' } },
+      user('u1', 'second'),
+      { type: 'user', uuid: 'u2', message: { role: 'user', content: 'third' } },
+    ]);
+
+    expect(items.map((item) => item.at)).toEqual([new Date(0).toISOString(), T, T]);
+  });
+
+  it('limit: 20 000 записей быстрее 300 мс, в ответе не больше limit элементов', () => {
+    const records: RawRecord[] = [];
+    for (let i = 0; i < 10_000; i += 1) {
+      records.push(toolUse(`a${i}`, `t${i}`, 'Bash', { command: `echo ${i}` }));
+      records.push(result(`u${i}`, `t${i}`));
+    }
+    const started = performance.now();
+    const { items } = feedFromTranscript(records, { limit: 2_000 });
+
+    expect(performance.now() - started).toBeLessThan(300);
+    expect(items.length).toBeLessThanOrEqual(2_000);
+    expect(items.at(-1)).toMatchObject({ kind: 'tool', toolUseId: 't9999', status: 'done' });
+    expect(feedFromTranscript(records.slice(0, 20)).items).toHaveLength(10);
+  });
+});

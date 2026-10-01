@@ -9,6 +9,18 @@
 /** Сколько символов результата инструмента лента хранит; дальше — «truncated, open the terminal». */
 export const FEED_RESULT_LIMIT = 64 * 1024;
 
+/** Предел строкового значения во входе вызова и карточки (`input`, `toolInput`); дальше — `truncated`. */
+export const FEED_INPUT_LIMIT = 16 * 1024;
+
+/** Сколько строк диффа лента хранит на один вызов; хвост отбрасывается, `patchTruncated`. */
+export const FEED_PATCH_LINES = 2_000;
+
+/** Предел задания и итога субагента (`FeedAgent.prompt`, `result`); дальше — `truncated`. */
+export const FEED_AGENT_TEXT_LIMIT = 16 * 1024;
+
+/** Предел текста ответа модели (`FeedText.text`); дальше — `truncated`. */
+export const FEED_TEXT_LIMIT = 256 * 1024;
+
 /** Вызов инструмента: идёт, закончился, упал, отклонён человеком (Esc, «Deny» или прерывание). */
 export type FeedToolStatus = 'running' | 'done' | 'failed' | 'rejected';
 
@@ -43,6 +55,8 @@ export interface FeedText extends FeedItemBase {
   messageId: string | null;
   text: string;
   streaming: boolean;
+  /** Текст длиннее `FEED_TEXT_LIMIT` и обрезан. */
+  truncated?: boolean;
 }
 
 /** Сводка результата инструмента: первые `FEED_RESULT_LIMIT` символов и полный размер. */
@@ -68,10 +82,14 @@ export interface FeedTool extends FeedItemBase {
   toolUseId: string;
   name: string;
   input: Record<string, unknown>;
+  /** Строки входа длиннее `FEED_INPUT_LIMIT` обрезаны. */
+  truncated?: boolean;
   status: FeedToolStatus;
   response?: FeedToolResponse;
   /** Хунки диффа `Edit`/`Write`; нет — правки не было или файл создан целиком. */
   patch?: FeedPatchHunk[];
+  /** Дифф длиннее `FEED_PATCH_LINES` строк: хвост отброшен. */
+  patchTruncated?: boolean;
   /** Вызов субагента — лежит внутри его карточки, а не в общем потоке. */
   agentId?: string;
   endedAt?: string;
@@ -86,6 +104,8 @@ interface FeedCardBase extends FeedItemBase {
   toolUseId: string | null;
   toolName: string;
   toolInput: Record<string, unknown>;
+  /** Строки входа длиннее `FEED_INPUT_LIMIT` обрезаны. */
+  truncated?: boolean;
   /** Запрос пришёл из субагента. */
   agentId?: string;
   /** Когда карточка перестала ждать. */
@@ -158,6 +178,8 @@ export interface FeedAgent extends FeedItemBase {
   result?: string;
   /** Журнал субагента (`agent_transcript_path`). */
   transcriptPath?: string;
+  /** Задание или итог длиннее `FEED_AGENT_TEXT_LIMIT` и обрезаны. */
+  truncated?: boolean;
 }
 
 /** Что случилось в сессии помимо разговора. */
@@ -214,15 +236,22 @@ export type FeedDecision =
 
 /**
  * Порции одного растущего текста по `index`: `MessageDisplay` приходят не по порядку (на стенде
- * порция 3 с `final` опередила порцию 2). Дыра — `null`.
+ * порция 3 с `final` опередила порцию 2). Порции без дыр склеены в `head`, опередившие ждут в `ahead`.
  */
 export interface FeedStream {
-  deltas: (string | null)[];
+  /** Склеенные порции `0..count-1`. */
+  head: string;
+  count: number;
+  /** Порции, пришедшие раньше предыдущих: `index` → текст. */
+  ahead: Readonly<Record<string, string>>;
   /** `index` порции с `final: true`; `null` — её ещё не было. */
   finalIndex: number | null;
 }
 
-/** Состояние редьюсера ленты одной сессии. Кольцо держит хост: `items` он вправе обрезать сам. */
+/**
+ * Состояние редьюсера ленты одной сессии. Наружу (в окно и на телефон) отдаётся только `items`;
+ * остальное — внутреннее редьюсера. Кольцо держит хост: `items` он вправе обрезать сам.
+ */
 export interface FeedState {
   items: readonly FeedItem[];
   /** Счётчик для `id` элементов, у которых нет своего ключа. */

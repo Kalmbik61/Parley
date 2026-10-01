@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { isHookNoise } from './noise.js';
 import { applyDecision, applyHookEvent, emptyFeedState, settleCards } from './reduce.js';
 import type {
   FeedAgent,
@@ -21,7 +22,13 @@ import type {
   FeedText,
   FeedTool,
 } from './types.js';
-import { FEED_RESULT_LIMIT } from './types.js';
+import {
+  FEED_AGENT_TEXT_LIMIT,
+  FEED_INPUT_LIMIT,
+  FEED_PATCH_LINES,
+  FEED_RESULT_LIMIT,
+  FEED_TEXT_LIMIT,
+} from './types.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -61,8 +68,8 @@ interface Replay {
 }
 
 /**
- * Прогон фикстуры через редьюсер. `filter` отбрасывает события — так выглядит поток, который хост
- * получает HTTP-хуками (матчер `PreToolUse`).
+ * Прогон фикстуры через редьюсер. Без `filter` — полный поток, как его шлют HTTP-хуки; `filter`
+ * отбрасывает события — так проверяется прочность к неполному потоку.
  */
 function replay(
   probe: string,
@@ -94,8 +101,8 @@ const ofKind = <K extends FeedItem['kind']>(
 ): Extract<FeedItem, { kind: K }>[] =>
   items.filter((item): item is Extract<FeedItem, { kind: K }> => item.kind === kind);
 
-/** Поток HTTP-хуков: `PreToolUse` доходит только для вопроса и плана. */
-const httpOnly = (ev: Record<string, unknown>): boolean =>
+/** Режим прочности: `PreToolUse` дошёл только для вопроса и плана, вызовы заводит `PostToolUse`. */
+const sparse = (ev: Record<string, unknown>): boolean =>
   ev['hook_event_name'] !== 'PreToolUse' ||
   ev['tool_name'] === 'AskUserQuestion' ||
   ev['tool_name'] === 'ExitPlanMode';
@@ -245,6 +252,7 @@ describe('applyHookEvent на фикстурах проб', () => {
   });
 
   it('p3: шум — SubagentStop без типа и PostModelSwitch auto — не даёт элементов', () => {
+    let noiseCount = 0;
     for (const line of lines('p3-modes')) {
       const ev = line.ev;
       if (ev === undefined) continue;
@@ -252,10 +260,12 @@ describe('applyHookEvent на фикстурах проб', () => {
         (ev['hook_event_name'] === 'SubagentStop' && ev['agent_type'] === '') ||
         (ev['hook_event_name'] === 'PostModelSwitch' && ev['source'] === 'auto');
       if (!noise) continue;
+      noiseCount += 1;
       const result = applyHookEvent(emptyFeedState(), ev, iso(line.t));
       expect(result.changes).toEqual([]);
       expect(result.state.items).toEqual([]);
     }
+    expect(noiseCount).toBeGreaterThan(0);
     const { state } = replay('p3-modes');
     expect(ofKind(state.items, 'notice').some((item) => item.notice.type === 'model-switch')).toBe(
       false,
@@ -335,13 +345,126 @@ describe('applyHookEvent на фикстурах проб', () => {
       const texts = ofKind(state.items, 'text');
       const turns = ofKind(state.items, 'turn');
       expect(texts.length, probe).toBe(turns.length);
+      const lastStop = lines(probe)
+        .filter((line) => line.ev?.['hook_event_name'] === 'Stop' && !('agent_id' in line.ev))
+        .at(-1)?.ev?.['last_assistant_message'];
+      expect(texts.at(-1)?.text.trimEnd(), probe).toBe(String(lastStop).trimEnd());
     }
   });
 });
 
-describe('поток HTTP-хуков: PreToolUse только для вопроса и плана', () => {
+const PROBES = [
+  'p1-stream',
+  'p2-permissions',
+  'p2b-hook-decisions',
+  'p3-modes',
+  'p4-questions-plan',
+  'p5b-write',
+  'p6b-subagents',
+] as const;
+
+const MODES: [string, (ev: Record<string, unknown>) => boolean][] = [
+  ['полный поток', () => true],
+  ['sparse', sparse],
+];
+
+describe.each(MODES)('пробы в режиме «%s»: одинаковые ожидания', (_mode, filter) => {
+  it.each(PROBES)('%s: после хода streams пуст, тексты закрыты, вызовы не running', (probe) => {
+    const { state } = replay(probe, filter);
+
+    expect(state.streams).toEqual({});
+    expect(ofKind(state.items, 'text').every((item) => !item.streaming)).toBe(true);
+    expect(ofKind(state.items, 'tool').every((item) => item.status !== 'running')).toBe(true);
+    expect(ofKind(state.items, 'permission').every((card) => card.state !== 'pending')).toBe(true);
+  });
+
+  it('p2b: решения окна — allowed и denied', () => {
+    const { state, applied } = replay('p2b-hook-decisions', filter);
+
+    expect(applied).toEqual([true, true, true]);
+    expect(ofKind(state.items, 'permission').map((card) => card.state)).toEqual([
+      'allowed',
+      'denied',
+      'allowed',
+    ]);
+  });
+
+  it('p5b: хунк Edit и вход Write', () => {
+    const { state } = replay('p5b-write', filter);
+    const edit = ofKind(state.items, 'tool').find((item) => item.name === 'Edit');
+    const write = ofKind(state.items, 'tool').find((item) => item.name === 'Write');
+
+    expect(edit?.patch).toEqual([
+      { oldStart: 1, oldLines: 2, newStart: 1, newLines: 2, lines: [' alpha', '-beta', '+gamma'] },
+    ]);
+    expect(write?.patch).toBeUndefined();
+    expect(write?.input['content']).toBe('alpha\nbeta\n');
+  });
+
+  it('p1 и p3: тексты собраны целиком', () => {
+    const p1 = ofKind(replay('p1-stream', filter).state.items, 'text');
+    const p3 = ofKind(replay('p3-modes', filter).state.items, 'text').find(
+      (item) => item.messageId === '809d8b07-8854-47b1-a6f5-abb3c0b05939',
+    );
+
+    expect(p1).toHaveLength(1);
+    expect(p1[0]?.text.trimEnd().split('\n')).toHaveLength(12);
+    expect(p3?.text).toBe(Array.from({ length: 30 }, (_, i) => String(i + 1)).join('\n'));
+  });
+
+  it('p4: вопросы и план карточками', () => {
+    const { state } = replay('p4-questions-plan', filter);
+
+    expect(ofKind(state.items, 'question').map((card) => card.state)).toEqual([
+      'elsewhere',
+      'answered',
+    ]);
+    expect(ofKind(state.items, 'plan')).toHaveLength(1);
+    expect(ofKind(state.items, 'permission')).toHaveLength(0);
+  });
+
+  it('p6b: агент с вложенным Bash закончен', () => {
+    const { state } = replay('p6b-subagents', filter);
+    const agents = ofKind(state.items, 'agent');
+
+    expect(agents).toHaveLength(1);
+    expect(agents[0]?.children.map((child) => child.name)).toEqual(['Bash']);
+    expect(agents[0]?.status).toBe('done');
+  });
+});
+
+describe('полный поток: PreToolUse для всех инструментов', () => {
+  it('p2: обычный вызов running с PreToolUse, карточка разрешения знает свой вызов', () => {
+    const all = lines('p2-permissions');
+    const request = all.findIndex((line) => line.ev?.['hook_event_name'] === 'PermissionRequest');
+    const { snapshots } = replay('p2-permissions');
+    const items = snapshots[request]?.items ?? [];
+
+    expect(ofKind(items, 'tool')[0]?.status).toBe('running');
+    expect(ofKind(items, 'permission')[0]?.toolUseId).toBe(ofKind(items, 'tool')[0]?.toolUseId);
+  });
+
+  it('p2b: отказ окна отклоняет вызов сразу после решения', () => {
+    const all = lines('p2b-hook-decisions');
+    const deny = all.findIndex(
+      (line) =>
+        line.decisionFor === 'PermissionRequest' &&
+        (line.decision?.hookSpecificOutput['decision'] as { behavior: string }).behavior === 'deny',
+    );
+    const { snapshots } = replay('p2b-hook-decisions');
+    const items = snapshots[deny]?.items ?? [];
+    const card = ofKind(items, 'permission').find((item) => item.state === 'denied');
+
+    expect(card?.toolUseId).not.toBeNull();
+    expect(ofKind(items, 'tool').find((item) => item.toolUseId === card?.toolUseId)?.status).toBe(
+      'rejected',
+    );
+  });
+});
+
+describe('режим sparse: PreToolUse только для вопроса и плана', () => {
   it('p2: вызов заводит PostToolUse, карточка без вызова снимается им же', () => {
-    const { state } = replay('p2-permissions', httpOnly);
+    const { state } = replay('p2-permissions', sparse);
     const tools = ofKind(state.items, 'tool');
     const cards = ofKind(state.items, 'permission');
 
@@ -353,7 +476,7 @@ describe('поток HTTP-хуков: PreToolUse только для вопро�
   });
 
   it('p6b: карточку агента заводит PostToolUse(Agent), вложенный Bash всё равно в ней', () => {
-    const { state } = replay('p6b-subagents', httpOnly);
+    const { state } = replay('p6b-subagents', sparse);
     const agents = ofKind(state.items, 'agent');
 
     expect(agents).toHaveLength(1);
@@ -364,7 +487,7 @@ describe('поток HTTP-хуков: PreToolUse только для вопро�
   });
 
   it('p4: вопрос и план по-прежнему карточками', () => {
-    const { state } = replay('p4-questions-plan', httpOnly);
+    const { state } = replay('p4-questions-plan', sparse);
 
     expect(ofKind(state.items, 'question').map((card) => card.state)).toEqual([
       'elsewhere',
@@ -678,5 +801,302 @@ describe('ход, ошибки и результаты', () => {
     expect((second.changes[0] as FeedText).text).toBe('a\nb');
     // Прежнее состояние не тронуто.
     expect((ofKind(state.items, 'text')[0] as FeedText).streaming).toBe(true);
+  });
+});
+
+describe('прочность и пределы', () => {
+  const AT = '2026-10-01T10:00:00.000Z';
+  const LATER = '2026-10-01T10:00:05.000Z';
+  const run = (events: Record<string, unknown>[], from = emptyFeedState()): FeedState =>
+    events.reduce<FeedState>((state, ev) => applyHookEvent(state, ev, AT).state, from);
+  const pre = (id: string, name: string, input: Record<string, unknown>, agentId?: string) => ({
+    hook_event_name: 'PreToolUse',
+    tool_name: name,
+    tool_input: input,
+    tool_use_id: id,
+    ...(agentId !== undefined ? { agent_id: agentId, agent_type: 'Explore' } : {}),
+  });
+  const post = (id: string, name: string, input: Record<string, unknown>, response: unknown) => ({
+    hook_event_name: 'PostToolUse',
+    tool_name: name,
+    tool_input: input,
+    tool_response: response,
+    tool_use_id: id,
+  });
+  const request = (name: string, input: Record<string, unknown>) => ({
+    hook_event_name: 'PermissionRequest',
+    tool_name: name,
+    tool_input: input,
+  });
+  const display = (index: unknown, delta: string, final = false) => ({
+    hook_event_name: 'MessageDisplay',
+    message_id: 'm',
+    delta,
+    index,
+    final,
+  });
+
+  it('index 1e9 разбирается быстро и не растит streams', () => {
+    const started = performance.now();
+    const state = run([{ hook_event_name: 'UserPromptSubmit', prompt: 'go' }, display(1e9, 'a')]);
+
+    expect(performance.now() - started).toBeLessThan(50);
+    expect(state.streams['m']).toEqual({ head: 'a', count: 1, ahead: {}, finalIndex: null });
+    expect(JSON.stringify(state.streams).length).toBeLessThan(200);
+    expect(ofKind(state.items, 'text')[0]?.text).toBe('a');
+  });
+
+  it('index -1, 1.5 и NaN — следующая по счёту порция, текст не теряется', () => {
+    const state = run([
+      display(0, 'a'),
+      display(-1, 'b'),
+      display(1.5, 'c'),
+      display(Number.NaN, 'd'),
+      display(4, 'e', true),
+    ]);
+    const text = ofKind(state.items, 'text')[0];
+
+    expect(text?.text).toBe('abcde');
+    expect(text?.streaming).toBe(false);
+    expect(state.streams).toEqual({});
+  });
+
+  it('порция дальше 64 от следующей — следующая по счёту', () => {
+    const state = run([display(0, 'a'), display(66, 'b'), display(65, 'c')]);
+
+    expect(ofKind(state.items, 'text')[0]?.text).toBe('abc');
+    expect(state.streams['m']?.count).toBe(2);
+    expect(Object.keys(state.streams['m']?.ahead ?? {})).toEqual(['65']);
+  });
+
+  it('пустая финальная порция после Stop не заводит пустой текст', () => {
+    const state = run([
+      { hook_event_name: 'UserPromptSubmit', prompt: 'go' },
+      { hook_event_name: 'Stop', last_assistant_message: 'hi' },
+      display(1, '', true),
+    ]);
+
+    expect(ofKind(state.items, 'text').map((item) => item.text)).toEqual(['hi']);
+    expect(state.streams).toEqual({});
+  });
+
+  it('пустая финальная порция до Stop — тоже без пустого текста', () => {
+    const state = run([
+      { hook_event_name: 'UserPromptSubmit', prompt: 'go' },
+      display(0, '', true),
+      { hook_event_name: 'Stop', last_assistant_message: 'hi' },
+    ]);
+
+    expect(ofKind(state.items, 'text').map((item) => [item.text, item.streaming])).toEqual([
+      ['hi', false],
+    ]);
+    expect(state.streams).toEqual({});
+  });
+
+  it('StopFailure закрывает ход как Stop: карточка elsewhere, вызов rejected, ошибка и черта хода', () => {
+    const state = run([
+      { hook_event_name: 'UserPromptSubmit', prompt: 'go' },
+      pre('t1', 'Bash', { command: 'ls' }),
+      request('Bash', { command: 'ls' }),
+      { hook_event_name: 'StopFailure', error: 'overloaded' },
+    ]);
+
+    expect(ofKind(state.items, 'permission')[0]?.state).toBe('elsewhere');
+    expect(ofKind(state.items, 'tool')[0]?.status).toBe('rejected');
+    expect(state.items.slice(-2).map((item) => item.kind)).toEqual(['error', 'turn']);
+    expect(state.turnStartedAt).toBeNull();
+  });
+
+  it('вызов без карточки, оставшийся running, отклоняют Stop и SessionEnd', () => {
+    const start = [{ hook_event_name: 'UserPromptSubmit', prompt: 'go' }, pre('t1', 'Bash', {})];
+    const stopped = run([...start, { hook_event_name: 'Stop', last_assistant_message: 'x' }]);
+    const ended = run([...start, { hook_event_name: 'SessionEnd', reason: 'other' }]);
+
+    expect(ofKind(stopped.items, 'tool')[0]?.status).toBe('rejected');
+    expect(ofKind(ended.items, 'tool')[0]?.status).toBe('rejected');
+  });
+
+  it('два одинаковых запроса без tool_use_id: PostToolUse снимает только самую раннюю карточку', () => {
+    const input = { command: 'ls' };
+    const state = run([
+      request('Bash', input),
+      request('Bash', input),
+      post('t1', 'Bash', input, { stdout: '', stderr: '' }),
+    ]);
+    const cards = ofKind(state.items, 'permission');
+
+    expect(cards.map((card) => [card.state, card.toolUseId])).toEqual([
+      ['elsewhere', 't1'],
+      ['pending', null],
+    ]);
+  });
+
+  it('два одинаковых параллельных вызова с tool_use_id не путают карточки', () => {
+    const input = { command: 'ls' };
+    const state = run([
+      pre('t1', 'Bash', input),
+      pre('t2', 'Bash', input),
+      request('Bash', input),
+      request('Bash', input),
+      post('t1', 'Bash', input, { stdout: '', stderr: '' }),
+    ]);
+    const cards = ofKind(state.items, 'permission');
+    const tools = ofKind(state.items, 'tool');
+
+    expect(new Set(cards.map((card) => card.toolUseId))).toEqual(new Set(['t1', 't2']));
+    expect(cards.find((card) => card.toolUseId === 't1')?.state).toBe('elsewhere');
+    expect(cards.find((card) => card.toolUseId === 't2')?.state).toBe('pending');
+    expect(tools.map((tool) => [tool.toolUseId, tool.status])).toEqual([
+      ['t1', 'done'],
+      ['t2', 'running'],
+    ]);
+  });
+
+  it('Stop.background_tasks: running — background, completed — done', () => {
+    const start = run([
+      { hook_event_name: 'UserPromptSubmit', prompt: 'go' },
+      pre('ta', 'Agent', { subagent_type: 'Explore', description: 'look', prompt: 'p' }),
+      { hook_event_name: 'SubagentStart', agent_id: 'a1', agent_type: 'Explore' },
+    ]);
+    const stop = (status: string) => ({
+      hook_event_name: 'Stop',
+      last_assistant_message: 'x',
+      background_tasks: [{ id: 'a1', type: 'subagent', status }],
+    });
+    const running = ofKind(run([stop('running')], start).items, 'agent')[0];
+    const done = ofKind(run([stop('completed')], start).items, 'agent')[0];
+
+    expect(running).toMatchObject({ agentId: 'a1', background: true, status: 'running' });
+    expect(done).toMatchObject({ agentId: 'a1', background: true, status: 'done' });
+  });
+
+  it('два параллельных агента разных типов: SubagentStart в обратном порядке привязывается по типу', () => {
+    const state = run([
+      pre('tx', 'Agent', { subagent_type: 'Explore', prompt: 'x' }),
+      pre('tg', 'Agent', { subagent_type: 'general-purpose', prompt: 'g' }),
+      { hook_event_name: 'SubagentStart', agent_id: 'ag', agent_type: 'general-purpose' },
+      { hook_event_name: 'SubagentStart', agent_id: 'ax', agent_type: 'Explore' },
+    ]);
+    const agents = ofKind(state.items, 'agent');
+
+    expect(agents.map((agent) => [agent.toolUseId, agent.agentId])).toEqual([
+      ['tx', 'ax'],
+      ['tg', 'ag'],
+    ]);
+  });
+
+  it('ответы при решении копируются: мутация входа после decide карточку не меняет', () => {
+    const state = run([
+      pre('tq', 'AskUserQuestion', { questions: [{ question: 'Q?', options: [{ label: 'A' }] }] }),
+    ]);
+    const answers: Record<string, string> = { 'Q?': 'A' };
+    const result = applyDecision(state, 'question:tq', { kind: 'question', answers }, LATER);
+    answers['Q?'] = 'B';
+
+    expect(ofKind(result.state.items, 'question')[0]?.answers).toEqual({ 'Q?': 'A' });
+  });
+
+  it('isHookNoise: служебные субагенты без типа и автосмена модели', () => {
+    expect(isHookNoise({ hook_event_name: 'SubagentStart', agent_type: '' })).toBe(true);
+    expect(isHookNoise({ hook_event_name: 'SubagentStop', agent_type: '' })).toBe(true);
+    expect(isHookNoise({ hook_event_name: 'SubagentStart' })).toBe(true);
+    expect(isHookNoise({ hook_event_name: 'PostModelSwitch', source: 'auto' })).toBe(true);
+    expect(isHookNoise({ hook_event_name: 'SubagentStart', agent_type: 'Explore' })).toBe(false);
+    expect(isHookNoise({ hook_event_name: 'PostModelSwitch', source: 'command' })).toBe(false);
+    expect(isHookNoise({ hook_event_name: 'Stop' })).toBe(false);
+  });
+
+  it('предел входа: длинная строка внутри input обрезана, вызов и карточка помечены', () => {
+    const long = 'x'.repeat(FEED_INPUT_LIMIT + 5);
+    const input = { file_path: 'a.txt', content: long, nested: [{ text: long }] };
+    const state = run([pre('t1', 'Write', input), request('Write', input)]);
+    const tool = ofKind(state.items, 'tool')[0] as FeedTool;
+    const card = ofKind(state.items, 'permission')[0] as FeedPermissionCard;
+
+    expect(tool.truncated).toBe(true);
+    expect(tool.input['file_path']).toBe('a.txt');
+    expect(tool.input['content']).toHaveLength(FEED_INPUT_LIMIT);
+    expect((tool.input['nested'] as { text: string }[])[0]?.text).toHaveLength(FEED_INPUT_LIMIT);
+    expect(card.truncated).toBe(true);
+    expect(card.toolInput['content']).toHaveLength(FEED_INPUT_LIMIT);
+    // Обрезанный вход карточки всё равно узнаёт свой вызов.
+    expect(card.toolUseId).toBe('t1');
+    expect(input.content).toHaveLength(FEED_INPUT_LIMIT + 5);
+  });
+
+  it('короткий вход — без пометки и тем же объектом', () => {
+    const input = { command: 'ls' };
+    const tool = ofKind(run([pre('t1', 'Bash', input)]).items, 'tool')[0] as FeedTool;
+
+    expect(tool.truncated).toBeUndefined();
+    expect(tool.input).toBe(input);
+  });
+
+  it('предел диффа: хвост сверх FEED_PATCH_LINES строк отброшен, patchTruncated', () => {
+    const hunk = (n: number) => ({
+      oldStart: 1,
+      oldLines: n,
+      newStart: 1,
+      newLines: n,
+      lines: Array.from({ length: n }, (_, i) => `+${i}`),
+    });
+    const input = { file_path: 'a.txt', old_string: 'a', new_string: 'b' };
+    const state = run([
+      pre('t1', 'Edit', input),
+      post('t1', 'Edit', input, {
+        structuredPatch: [hunk(FEED_PATCH_LINES - 10), hunk(50), hunk(5)],
+      }),
+    ]);
+    const tool = ofKind(state.items, 'tool')[0] as FeedTool;
+
+    expect(tool.patchTruncated).toBe(true);
+    expect(tool.patch).toHaveLength(2);
+    expect(tool.patch?.flatMap((item) => item.lines)).toHaveLength(FEED_PATCH_LINES);
+  });
+
+  it('предел агента: задание и итог обрезаны, truncated', () => {
+    const long = 'y'.repeat(FEED_AGENT_TEXT_LIMIT + 1);
+    const state = run([
+      pre('ta', 'Agent', { subagent_type: 'Explore', prompt: long }),
+      { hook_event_name: 'SubagentStart', agent_id: 'a1', agent_type: 'Explore' },
+      {
+        hook_event_name: 'SubagentStop',
+        agent_id: 'a1',
+        agent_type: 'Explore',
+        last_assistant_message: long,
+      },
+    ]);
+    const agent = ofKind(state.items, 'agent')[0] as FeedAgent;
+
+    expect(agent.prompt).toHaveLength(FEED_AGENT_TEXT_LIMIT);
+    expect(agent.result).toHaveLength(FEED_AGENT_TEXT_LIMIT);
+    expect(agent.truncated).toBe(true);
+  });
+
+  it('предел текста: ответ длиннее FEED_TEXT_LIMIT обрезан и из порций, и из Stop', () => {
+    const long = 'z'.repeat(FEED_TEXT_LIMIT + 3);
+    const streamed = run([display(0, long, true)]);
+    const stopped = run([
+      { hook_event_name: 'UserPromptSubmit', prompt: 'go' },
+      { hook_event_name: 'Stop', last_assistant_message: long },
+    ]);
+
+    for (const state of [streamed, stopped]) {
+      const text = ofKind(state.items, 'text')[0] as FeedText;
+      expect(text.text).toHaveLength(FEED_TEXT_LIMIT);
+      expect(text.truncated).toBe(true);
+    }
+    expect(ofKind(run([display(0, 'short', true)]).items, 'text')[0]?.truncated).toBeUndefined();
+  });
+
+  it('Stop узнаёт обрезанный растущий текст и не дублирует его', () => {
+    const long = 'z'.repeat(FEED_TEXT_LIMIT + 3);
+    const state = run([
+      { hook_event_name: 'UserPromptSubmit', prompt: 'go' },
+      display(0, long),
+      { hook_event_name: 'Stop', last_assistant_message: long },
+    ]);
+
+    expect(ofKind(state.items, 'text')).toHaveLength(1);
   });
 });

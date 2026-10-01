@@ -9,7 +9,7 @@
 
 import { adapterV1 } from '../adapter-v1.js';
 import type { RawRecord } from '../jsonl.js';
-import { textOf } from '../work/events.js';
+import { isRecord, textOf } from '../work/events.js';
 import {
   FeedDraft,
   agentByToolUse,
@@ -19,9 +19,9 @@ import {
   emptyFeedState,
   finishAgent,
   finishTool,
-  isRecord,
   mainTool,
   newAgent,
+  newText,
   newTool,
   parseTaskNotification,
 } from './reduce.js';
@@ -134,29 +134,14 @@ function onAssistant(
     return;
   }
   if (typeof content === 'string') {
-    if (content !== '')
-      draft.put({
-        id: `text:${uuid}`,
-        at,
-        kind: 'text',
-        messageId,
-        text: content,
-        streaming: false,
-      });
+    if (content !== '') draft.put(newText(`text:${uuid}`, at, messageId, content, false));
     return;
   }
   if (!Array.isArray(content)) return;
   content.forEach((block, index) => {
     if (!isRecord(block)) return;
     if (block['type'] === 'text' && typeof block['text'] === 'string' && block['text'] !== '') {
-      draft.put({
-        id: `text:${uuid}:${index}`,
-        at,
-        kind: 'text',
-        messageId,
-        text: block['text'],
-        streaming: false,
-      });
+      draft.put(newText(`text:${uuid}:${index}`, at, messageId, block['text'], false));
     } else if (block['type'] === 'tool_use') {
       const toolUseId = textOf(block['id']);
       const name = textOf(block['name']);
@@ -172,16 +157,29 @@ function onAssistant(
   });
 }
 
+/** Время записи без `timestamp`, если до неё не было ни одной записи со временем. */
+const EPOCH = new Date(0).toISOString();
+
+export interface FeedFromTranscriptOptions {
+  /** Сколько последних элементов вернуть; нет — все. */
+  limit?: number;
+}
+
 /**
  * Лента из записей журнала (`readJsonlRecords`) в порядке файла. Результат — состояние редьюсера:
- * живые события хуков продолжают его через `applyHookEvent`.
+ * живые события хуков продолжают его через `applyHookEvent`. Запись без времени получает время
+ * предыдущей.
  */
-export function feedFromTranscript(records: Iterable<RawRecord>): FeedState {
+export function feedFromTranscript(
+  records: Iterable<RawRecord>,
+  { limit }: FeedFromTranscriptOptions = {},
+): FeedState {
   const draft = new FeedDraft(emptyFeedState());
   let seq = 0;
+  let at = EPOCH;
   for (const raw of records) {
     const record = adapterV1.toSessionRecord(raw);
-    const at = record.timestamp ?? '';
+    at = record.timestamp ?? at;
     seq += 1;
     const uuid = record.uuid ?? `#${seq}`;
     const message = isRecord(raw['message']) ? raw['message'] : null;
@@ -201,5 +199,8 @@ export function feedFromTranscript(records: Iterable<RawRecord>): FeedState {
     }
     // `queue-operation`, `attachment`, `mode`, заголовки и прочее служебное в ленту не идут.
   }
-  return draft.done().state;
+  const state = draft.done().state;
+  return limit === undefined || state.items.length <= limit
+    ? state
+    : { ...state, items: state.items.slice(state.items.length - limit) };
 }

@@ -1,6 +1,12 @@
 /** Лента вида «Chat» (план 2026-10-01, Task 1): модель, редьюсер событий хуков, разбор журнала. */
 
-export { FEED_RESULT_LIMIT } from './types.js';
+export {
+  FEED_AGENT_TEXT_LIMIT,
+  FEED_INPUT_LIMIT,
+  FEED_PATCH_LINES,
+  FEED_RESULT_LIMIT,
+  FEED_TEXT_LIMIT,
+} from './types.js';
 export type {
   FeedAgent,
   FeedAgentStatus,
@@ -29,4 +35,5 @@ export type {
 } from './types.js';
 export { applyDecision, applyHookEvent, emptyFeedState, settleCards } from './reduce.js';
 export { feedFromTranscript } from './from-transcript.js';
+export type { FeedFromTranscriptOptions } from './from-transcript.js';
 export { isHookNoise } from './noise.js';

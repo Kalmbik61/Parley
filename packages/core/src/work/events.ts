@@ -105,7 +105,7 @@ export const bareEvent = (at: string, name: string): EventRecord => ({
   waitId: null,
 });
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** Непустая строка или `null`: Claude Code шлёт пустую строку вместо отсутствующего значения. */
