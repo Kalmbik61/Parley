@@ -1,7 +1,8 @@
 /**
  * Лента участников комнаты (спека окна 2026-09-29, 1.3): горизонтальная прокрутка, карточка 230px,
  * радиус 14, padding `9 12`. Строка 1 (12px): значок состояния, значок агента 14, `S02 бэкенд` (600),
- * `★` у ведущего, слово состояния 11px; строка 2 — задача 12px в одну строку. Фон по состоянию:
+ * `★` у ведущего, слово состояния 11px; строка 2 — чем занят участник (`doing`: субагенты, ожидание
+ * `wait_for`), а когда ничем, — задача, 12px в одну строку; подсказка строки — `doingDetail`. Фон по состоянию:
  * `blocked` — `accent-200`, `unseen` — `accent-2-200`, иначе `currentColor 6%`; наведение — рамка внутри
  * `currentColor 28%`. Тултип — `Claude Code · Opus 5.5`: провайдер и модель из живых метрик, а пока
  * модель неизвестна — один провайдер; усилие не показывается, его никто не хранит. Клик открывает терминал
@@ -65,7 +66,12 @@ export function ParticipantStrip({ participants, onOpenSession }: ParticipantStr
               {participant.word}
             </span>
           </span>
-          <span className="min-h-4 truncate text-xs text-muted-foreground">{participant.task}</span>
+          <span
+            title={participant.doing === null ? undefined : (participant.doingDetail ?? undefined)}
+            className="min-h-4 truncate text-xs text-muted-foreground"
+          >
+            {participant.doing ?? participant.task}
+          </span>
         </button>
       ))}
     </div>

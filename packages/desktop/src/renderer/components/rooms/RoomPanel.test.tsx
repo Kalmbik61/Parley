@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
 import type { Message, Room, WorkEntry, WorkSession } from '@parley/core';
+import type { LiveMetrics, LiveTask } from '@parley/protocol';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { useHostStore } from '../../store/host.js';
 import { useUiStore } from '../../store/ui.js';
@@ -100,7 +101,40 @@ const withModels = (models: Record<string, string | null>, activity: Parameters<
     ),
   );
 
+/** Живая активность с данными хоста о задачах и ожидании (`metrics.tasks`, `metrics.waitingFor`). */
+const withDoing = (
+  doing: Record<string, Partial<LiveMetrics>>,
+  activity: Parameters<typeof makeActivity>[1] = 'working',
+) =>
+  activityMap(
+    Object.entries(doing).map(([sessionId, extra]) =>
+      makeActivity({ projectPath: PROJECT, workId: WORK_ID, sessionId }, activity, {
+        metrics: {
+          tokensIn: null,
+          tokensOut: null,
+          durationMs: null,
+          unread: 0,
+          subagents: 0,
+          model: null,
+          ...extra,
+        },
+      }),
+    ),
+  );
+const liveTask = (
+  id: string,
+  description: string | null,
+  extra: Partial<LiveTask> = {},
+): LiveTask => ({
+  id,
+  agentType: 'general-purpose',
+  description,
+  background: true,
+  ...extra,
+});
+
 const feed = (): HTMLElement => document.querySelector('[data-room-feed]') as HTMLElement;
+const liveLine = (): HTMLElement | null => document.querySelector('[data-room-live]');
 const messageRow = (id: string): HTMLElement => document.querySelector(`[data-message-id="${id}"]`) as HTMLElement;
 const REF = (sessionId: string) => ({ projectPath: PROJECT, workId: WORK_ID, sessionId });
 
@@ -183,6 +217,104 @@ describe('RoomPanel — лента участников (1.3)', () => {
     expect(card.className).toContain('w-[230px]');
     expect(within(card).getByText(`S02 ${'Я'.repeat(40)}`).className).toContain('truncate');
     expect(within(card).getByText('З'.repeat(300)).className).toContain('truncate');
+  });
+});
+
+describe('RoomPanel — чем заняты участники (Parley 0.2.0)', () => {
+  const card = (id: string): HTMLElement =>
+    document.querySelector(`[data-participant="${id}"]`) as HTMLElement;
+
+  it('вторая строка карточки — чем занят участник, а не задача; подсказка — полный список', () => {
+    const activity = withDoing({
+      's-01': { tasks: [liveTask('a', 'Orca mobile app research'), liveTask('b', 'Docs lookup')] },
+      's-02': { waitingFor: 's-03' },
+    });
+    renderPanel(entryOf(), { activity });
+
+    const first = within(card('s-01')).getByText('2 subagents: Orca mobile app research');
+    expect(first.getAttribute('title')).toBe(
+      '2 subagents\n• Orca mobile app research\n• Docs lookup',
+    );
+    expect(first.className).toContain('truncate');
+    expect(within(card('s-01')).queryByText('Спроектировать возвраты')).toBeNull();
+    expect(within(card('s-02')).getByText('Waiting for S03')).toBeTruthy();
+    expect(within(card('s-02')).queryByText('Частичный возврат')).toBeNull();
+  });
+
+  it('никто ничем не занят — в карточке задача, как раньше, и подсказки у неё нет', () => {
+    renderPanel(entryOf(), { activity: withDoing({ 's-01': { tasks: [], waitingFor: null } }) });
+
+    const task = within(card('s-01')).getByText('Спроектировать возвраты');
+    expect(task.getAttribute('title')).toBeNull();
+    expect(liveLine()).toBeNull();
+  });
+
+  it('живая строка над полем ввода: по строке на занятого участника, «S02 · Subagent: …»', () => {
+    const activity = withDoing({
+      's-02': { tasks: [liveTask('a', 'Orca mobile app research')] },
+      's-03': { waitingFor: 'inbox' },
+    });
+    renderPanel(entryOf(), { activity });
+
+    const line = liveLine() as HTMLElement;
+    expect(Array.from(line.children).map((row) => row.textContent)).toEqual([
+      'S02 · Subagent: Orca mobile app research',
+      'S03 · Waiting for messages',
+    ]);
+    // Над полем ввода: после ленты, перед Composer.
+    expect(feed().compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      line.compareDocumentPosition(document.querySelector('[contenteditable]') as HTMLElement) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // Приглушённая и компактная: ничего не выталкивает, длинное обрезается.
+    expect(line.className).toContain('text-muted-foreground');
+    expect((line.children[0] as HTMLElement).className).toContain('truncate');
+  });
+
+  it('в ленту она не пишется: сообщений не прибавляется, текста в ленте нет', () => {
+    const entry = entryOf({ messages: [message('m-1', { text: 'Задача' })] });
+    renderPanel(entry, {
+      activity: withDoing({ 's-02': { tasks: [liveTask('a', 'Orca mobile app research')] } }),
+    });
+
+    expect(document.querySelectorAll('[data-message-id]')).toHaveLength(1);
+    expect(feed().textContent).not.toContain('Orca mobile app research');
+    expect(liveLine()?.textContent).toContain('Orca mobile app research');
+  });
+
+  it('появляется и исчезает вместе с данными хоста', () => {
+    const { rerender, initial } = renderPanel(entryOf());
+    expect(liveLine()).toBeNull();
+
+    rerender(<RoomPanel {...initial} activity={withDoing({ 's-02': { waitingFor: 's-01' } })} />);
+    expect(liveLine()?.textContent).toBe('S02 · Waiting for S01');
+
+    // Ожидание кончилось — строки нет, в карточке снова задача.
+    rerender(
+      <RoomPanel {...initial} activity={withDoing({ 's-02': { waitingFor: null, tasks: [] } })} />,
+    );
+    expect(liveLine()).toBeNull();
+    expect(within(card('s-02')).getByText('Частичный возврат')).toBeTruthy();
+  });
+
+  it('закрытый участник живой строки не даёт, даже если метрики ещё несут задачи', () => {
+    const custom = sessions();
+    custom[1] = makeSession('s-02', 'бэкенд', { lifecycle: 'closed' });
+    renderPanel(entryOf({ sessions: custom }), {
+      activity: withDoing({ 's-02': { tasks: [liveTask('a', 'Orca mobile app research')] } }),
+    });
+
+    expect(liveLine()).toBeNull();
+  });
+
+  it('сессия с фоновыми субагентами — working и в карточке участника', () => {
+    const activity = withDoing({
+      's-01': { subagents: 3, tasks: [liveTask('a', 'A'), liveTask('b', 'B'), liveTask('c', 'C')] },
+    });
+    renderPanel(entryOf(), { activity });
+
+    expect(within(card('s-01')).getByText('working')).toBeTruthy();
   });
 });
 

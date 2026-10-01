@@ -11,10 +11,13 @@
  * Модель участника — из живых метрик (`activity.changed`, `metrics.model`), как её брал `RoomBody` до этого
  * куска: короткое имя с версией (`Opus 5.5`). Усилие не показывается — его никто не хранит. Пока сессия
  * ничего не написала и модель неизвестна, у участника её нет (`null`).
+ *
+ * Чем занят участник (`doing`, `doingDetail`) — из тех же метрик (`tasks`, `waitingFor`, Parley 0.2.0): живой
+ * субагент или ожидание `wait_for`. Только у живой сессии: у закрытой и спящей метрики — след прошлого процесса.
  */
 
 import type { MessageKind, SessionLifecycle, WorkEntry, WorkMap } from '@parley/core';
-import { refKey } from '@parley/protocol';
+import { refKey, type LiveTask } from '@parley/protocol';
 import { S, providerName } from '../../../shared/strings.js';
 import { isHumanUnread, sessionAttention, type Attention } from '../../attention/derive.js';
 import { displayStatus, dotState, stateWord, type DotState } from '../../lib/dot-state.js';
@@ -52,6 +55,13 @@ export interface ParticipantModel {
   /** Подкраска карточки: `needs-you` — `accent-200`, `unseen` — `accent-2-200`. */
   attention: Attention;
   task: string;
+  /**
+   * Чем занят сейчас: `Subagent: Orca research`, `3 subagents: …`, `Waiting for S03`, `Waiting for messages`.
+   * `null` — ничем особым (или хост прежней версии не прислал данных); карточка тогда показывает задачу.
+   */
+  doing: string | null;
+  /** Полный список для подсказки: все субагенты по строке, ожидание — первой; `null`, когда `doing` пуст. */
+  doingDetail: string | null;
   lead: boolean;
   /** Закрытая сессия: в ленте участников есть, а в меню упоминаний нет. */
   closed: boolean;
@@ -135,6 +145,47 @@ function providerOf(map: WorkMap, id: string): string | null {
   return map.sessions.find((session) => session.id === id)?.provider ?? null;
 }
 
+/** Цель `wait_for`, при которой агент ждёт сообщений, а не сессию. */
+const INBOX = 'inbox';
+
+/**
+ * Чем занят участник по данным хоста. В `doing` ожидание важнее субагентов: оно держит агента прямо сейчас,
+ * а фоновые работают сами; в `doingDetail` попадают оба. Название субагента — описание, а без него тип агента.
+ */
+function doingOf(
+  tasks: readonly LiveTask[],
+  waitingFor: string | null,
+): { doing: string | null; doingDetail: string | null } {
+  const waiting =
+    waitingFor === null
+      ? null
+      : waitingFor === INBOX
+        ? S.rooms.doingWaitingInbox
+        : S.rooms.doingWaitingFor(sessionTag(waitingFor));
+  const names = tasks.map((task) => task.description ?? task.agentType);
+  const first = names.find((name) => name !== null) ?? null;
+  const subagents =
+    tasks.length === 0
+      ? null
+      : tasks.length === 1
+        ? S.rooms.doingSubagent(first)
+        : S.rooms.doingSubagents(tasks.length, first);
+
+  const doing = waiting ?? subagents;
+  if (doing === null) return { doing: null, doingDetail: null };
+
+  const lines = waiting === null ? [] : [waiting];
+  if (tasks.length > 1) {
+    lines.push(
+      S.rooms.doingSubagents(tasks.length, null),
+      ...names.map((name) => `• ${name ?? S.rooms.doingSubagent(null)}`),
+    );
+  } else if (subagents !== null) {
+    lines.push(subagents);
+  }
+  return { doing, doingDetail: lines.join('\n') };
+}
+
 export function buildRoomModel(input: RoomModelInput): RoomModel | null {
   const { entry, roomId, providers, activity } = input;
   const map = entry.map;
@@ -156,6 +207,11 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
     const state = dotState(displayStatus(session), live?.activity ?? null);
     const providerDisplay = providerName(session.provider, providers.find((entryProvider) => entryProvider.id === session.provider)?.label ?? session.provider);
     const model = modelName(liveEntry?.metrics?.model ?? null);
+    // Хост прежней версии полей не присылает — тогда участник ничем особым не занят.
+    const { doing, doingDetail } =
+      session.lifecycle === 'active'
+        ? doingOf(liveEntry?.metrics?.tasks ?? [], liveEntry?.metrics?.waitingFor ?? null)
+        : { doing: null, doingDetail: null };
     participants.push({
       id,
       label: sessionRowLabel(id, session.label),
@@ -168,6 +224,8 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
       word: stateWord(state, session.lifecycle),
       attention: sessionAttention(session, live),
       task: session.task,
+      doing,
+      doingDetail,
       lead: id === lead,
       closed: session.lifecycle === 'closed',
     });

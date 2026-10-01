@@ -90,6 +90,8 @@ export function makeActivity(
     activity: {
       activity,
       subagents: 0,
+      tasks: [],
+      waitingFor: null,
       turnEndedAt: null,
       lastEventAt: patch.lastEventAt ?? '2026-09-27T09:00:00.000Z',
       source: 'hooks',

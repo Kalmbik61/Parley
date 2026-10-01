@@ -3,6 +3,10 @@
  * лента сообщений с блоком `Decisions` первым, поле ввода с упоминаниями. Данные — `buildRoomModel`
  * (`feed-model.ts`), рисуют `RoomHeader`, `RoomMessage` и `Composer`.
  *
+ * Над полем ввода — живая строка (Parley 0.2.0): по строке на участника, который чем-то занят, —
+ * `S02 · Subagent: Orca research`, `S03 · Waiting for messages`. Это состояние, а не переписка: в ленту оно
+ * не пишется, а когда никто ничем не занят, строки нет.
+ *
  * Карточка решения — последней в ленте, пока `Room.proposal` не `null`. Кнопки зовут
  * `rooms.resolveProposal` с `proposalId` и `rev` показанной карточки: человек не примет текст, которого не
  * видел. `conflict` — тост, карточка не ломается, живая версия приходит событием карты. Метода нет у
@@ -23,7 +27,7 @@ import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { S, errorText } from '../../../shared/strings.js';
 import { useMarkRead } from '../../attention/use-mark-read.js';
 import { useHostSupports } from '../../lib/capabilities.js';
-import { sessionRowLabel } from '../../lib/participant.js';
+import { sessionRowLabel, sessionTag } from '../../lib/participant.js';
 import { relativeTime } from '../../lib/relative-time.js';
 import { roomKey } from '../../lib/room-view.js';
 import { workKey } from '../../lib/tree-order.js';
@@ -82,6 +86,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
 
   // Упомянуть можно живую сессию комнаты: закрытая письма не получит.
   const members = model.participants.filter((participant) => !participant.closed);
+  const busy = model.participants.filter((participant) => participant.doing !== null);
   const draftKey = roomKey(workKey(entry.projectPath, entry.map.work.id), roomId);
 
   const handleSend = (submission: ComposerSubmission): Promise<void> =>
@@ -155,6 +160,22 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
           />
         )}
       </div>
+      {busy.length === 0 ? null : (
+        <div
+          data-room-live=""
+          className="flex shrink-0 flex-col gap-0.5 px-9 pb-1.5 pt-1 text-xs text-muted-foreground"
+        >
+          {busy.map((participant) => (
+            <div
+              key={participant.id}
+              title={participant.doingDetail ?? undefined}
+              className="truncate"
+            >
+              {`${sessionTag(participant.id)} · ${participant.doing}`}
+            </div>
+          ))}
+        </div>
+      )}
       <Composer key={draftKey} members={members} draftKey={draftKey} onSend={handleSend} />
     </div>
   );
