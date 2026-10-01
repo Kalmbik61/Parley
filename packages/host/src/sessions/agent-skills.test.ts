@@ -132,7 +132,7 @@ describe('установщик скилла: что не тронуто', () => 
       {
         kind: 'skill-foreign',
         ref: null,
-        text: expect.stringContaining(skipped[0]?.path as string),
+        text: `Parley skill was not installed: the path already exists and was not created by Parley — left as is: ${skipped[0]?.path}`,
         at: expect.any(String),
       },
     ]);
@@ -158,7 +158,11 @@ describe('установщик скилла: что не тронуто', () => 
 
     await createSkillInstaller(fakeHost(), install)(REF, null);
 
-    expect(notices()).toHaveLength(1);
+    expect(notices()).toMatchObject([
+      {
+        text: `Parley skill was not installed: a symlink or a file stands in place of a directory on the way to the path: ${PROJECT}/.claude/skills/parley`,
+      },
+    ]);
   });
 
   it('правка человека — только в лог: он сделал её сам, окну сообщать нечего', async () => {
@@ -169,6 +173,7 @@ describe('установщик скилла: что не тронуто', () => 
     await createSkillInstaller(fakeHost(), install)(REF, null);
 
     expect(logs.filter((item) => item.level === 'warn')).toHaveLength(1);
+    expect(logs[0]?.msg).toBe('Parley skill was not updated: the file was edited by hand — left as is');
     expect(notices()).toEqual([]);
   });
 

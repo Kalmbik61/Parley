@@ -32,9 +32,9 @@ const CONTROL = /[\x00-\x08\x0b-\x1f\x7f]/g;
 /** Очистка спеки 8.6, шаг 2; пусто или > 64 КиБ — HostError('bad_request'). */
 export function sanitizeForSend(text: string): string {
   const clean = stripEscapes(text.replace(/\r\n?/g, '\n')).replace(CONTROL, '');
-  if (clean.length === 0) throw new HostError('bad_request', 'пустой текст');
+  if (clean.length === 0) throw new HostError('bad_request', 'empty text');
   if (Buffer.byteLength(clean, 'utf8') > MAX_SEND_BYTES) {
-    throw new HostError('bad_request', 'текст длиннее 64 КиБ');
+    throw new HostError('bad_request', 'text is longer than 64 KiB');
   }
   return clean;
 }
@@ -57,7 +57,7 @@ export function createSender(deps: {
 
   return async ({ ref, text, submit }) => {
     const handle = deps.pty.get(ref);
-    if (handle === undefined) throw new HostError('not_found', 'сессия не запущена');
+    if (handle === undefined) throw new HostError('not_found', 'session is not running');
     const codex = handle.provider === 'codex';
     const clean = sanitizeForSend(text);
 

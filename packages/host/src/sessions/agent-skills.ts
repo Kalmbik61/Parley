@@ -27,11 +27,11 @@ export type SkillInstaller = (ref: SessionRef, worktreePath: string | null) => P
 
 type Install = (options: SkillInstallOptions) => Promise<SkillInstallResult>;
 
-/** Что сказать в лог про каждый вид «не тронуто»; текст хоста — по-русски, как остальные его записи. */
+/** Что сказать про каждый вид «не тронуто»: этот же английский текст — в лог и в уведомление окна. */
 const LOG_TEXT: Record<SkillSkip['reason'], string> = {
-  foreign: 'скилл parley не поставлен: путь уже есть, а создан не харнессом — оставлен как есть',
-  edited: 'скилл parley не обновлён: файл правили вручную — оставлен как есть',
-  unsafe: 'скилл parley не поставлен: по дороге к пути симлинк или файл вместо каталога',
+  foreign: 'Parley skill was not installed: the path already exists and was not created by Parley — left as is',
+  edited: 'Parley skill was not updated: the file was edited by hand — left as is',
+  unsafe: 'Parley skill was not installed: a symlink or a file stands in place of a directory on the way to the path',
 };
 
 export function createSkillInstaller(

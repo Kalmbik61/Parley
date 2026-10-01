@@ -129,7 +129,10 @@ describe('rooms.create / rooms.send', () => {
       text: 'двоим',
       kind: 'note',
     });
-    expect(two.error?.code).toBe('bad_request');
+    expect(two.error).toMatchObject({
+      code: 'bad_request',
+      message: 'without a room, exactly one addressee in to is required',
+    });
     const none = await call(client, 'rooms.send', {
       projectPath: dir,
       workId,
@@ -138,7 +141,10 @@ describe('rooms.create / rooms.send', () => {
       text: 'никому',
       kind: 'note',
     });
-    expect(none.error?.code).toBe('bad_request');
+    expect(none.error).toMatchObject({
+      code: 'bad_request',
+      message: 'without a room, exactly one addressee in to is required',
+    });
   });
 
   it('5: rooms.send в комнату, где адресат не участник, — bad_request, письма нет', async () => {
@@ -155,7 +161,10 @@ describe('rooms.create / rooms.send', () => {
       text: 'тебе',
       kind: 'question',
     });
-    expect(response.error?.code).toBe('bad_request');
+    expect(response.error).toMatchObject({
+      code: 'bad_request',
+      message: `session ${outsider} is not a member of room r-01`,
+    });
     expect((await readMap(dir, workId)).messages).toHaveLength(before);
 
     const missingRoom = await call(client, 'rooms.send', {
@@ -166,7 +175,7 @@ describe('rooms.create / rooms.send', () => {
       text: 'в пустоту',
       kind: 'note',
     });
-    expect(missingRoom.error?.code).toBe('bad_request');
+    expect(missingRoom.error).toMatchObject({ code: 'bad_request', message: 'room r-09 is not in the map' });
 
     const missingWork = await call(client, 'rooms.send', {
       projectPath: dir,
@@ -176,7 +185,7 @@ describe('rooms.create / rooms.send', () => {
       text: 'в пустоту',
       kind: 'note',
     });
-    expect(missingWork.error?.code).toBe('bad_request');
+    expect(missingWork.error).toMatchObject({ code: 'bad_request', message: 'workspace w-9999 does not exist' });
   });
 
   it('rooms.create с закрытой сессией — bad_request, комнаты нет', async () => {
@@ -190,7 +199,7 @@ describe('rooms.create / rooms.send', () => {
       title: 'С закрытой',
       members: [a, b],
     });
-    expect(response.error?.code).toBe('bad_request');
+    expect(response.error).toMatchObject({ code: 'bad_request', message: `session ${b} is closed` });
     expect((await readMap(dir, workId)).rooms).toEqual([]);
   });
 });
@@ -246,7 +255,10 @@ describe('rooms.create: ведущий и правило одной комнат
         members: [a, b],
         lead,
       });
-      expect(response.error?.code).toBe('bad_request');
+      expect(response.error).toMatchObject({
+        code: 'bad_request',
+        message: `lead ${lead} is not a member of the room`,
+      });
     }
     expect((await readMap(dir, workId)).rooms).toEqual([]);
   });
@@ -312,7 +324,10 @@ describe('rooms.create: ведущий и правило одной комнат
         members: [a, b],
         origin,
       });
-      expect(response.error?.code).toBe('bad_request');
+      expect(response.error).toMatchObject({
+        code: 'bad_request',
+        message: 'origin: two different sessions among the room members',
+      });
     }
     const map = await readMap(dir, workId);
     expect(map.rooms).toEqual([]);

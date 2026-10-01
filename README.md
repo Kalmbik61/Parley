@@ -572,9 +572,8 @@ workspace back, use "Reopen" in its menu. Archived workspaces are not counted in
 counters, the badge and "Next session that needs you", even when shown.
 
 The host itself wakes agents. When an agent has finished its turn and you are not typing
-anything, the host prints a pointer: "New messages (N). Call check_inbox." (translated here;
-the text the agent sees is in Russian). That is why a session spawned by an agent starts by
-itself, without a dialog.
+anything, the host prints a pointer: "New messages (N). Call check_inbox." That is why a
+session spawned by an agent starts by itself, without a dialog.
 
 The core can also be used separately from the UI — it prints only JSON to stdout:
 
@@ -962,9 +961,9 @@ answer a `note` or a `decision`, and record an agreement with a single `decision
 Maps written before 2026-09-08 are read with the kind `note`.
 
 **Delivery.** When the addressee has finished its turn and is not typing anything, the host
-itself types a pointer into its terminal: "New messages (N). Call check_inbox." (translated
-here; the text the agent sees is in Russian). If the messages came to a room, the room's name
-or title is in the middle of the phrase. A message wakes a sleeping session through
+itself types a pointer into its terminal: "New messages (N). Call check_inbox." If the
+messages came to a room, the room's id and title are in the middle of the phrase:
+`New messages (2) in r-01 "Plan". Call check_inbox.` A message wakes a sleeping session through
 `claude --resume` with the same pointer in the argument, no more often than `resumeRate`
 times per hour. The pointer delivers nothing and does not touch the map: the text of a message
 is brought by `check_inbox`, so `readAt`/`readBy` still mean "the agent has read it", not "we

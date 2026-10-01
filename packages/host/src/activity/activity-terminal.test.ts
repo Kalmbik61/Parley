@@ -473,7 +473,9 @@ describe('экраны старта codex — «нужен ты» с причи�
     await waitFor(() => a.get(ref)?.activity.activity === 'blocked');
     expect(notices('startup-wait')).toHaveLength(1);
     expect(notices('startup-wait')[0]).toMatchObject({ kind: 'startup-wait', ref });
-    expect(String(notices('startup-wait')[0]?.['text'])).toContain('входа или доверия');
+    expect(String(notices('startup-wait')[0]?.['text'])).toMatch(
+      /^S\d+ has not shown a status since launch — it may be waiting for sign-in or folder trust in the Codex terminal$/,
+    );
 
     // Повторных уведомлений нет.
     await settle(400);

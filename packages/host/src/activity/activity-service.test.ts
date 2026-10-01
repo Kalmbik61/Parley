@@ -310,6 +310,9 @@ describe('createActivityService', () => {
         (entry.data as { kind: string }).kind === 'hooks-missing',
     );
     expect(notices).toHaveLength(1);
+    expect((notices[0]?.data as { text: string }).text).toMatch(
+      /^Claude Code hooks did not arrive for session s-\d+ — status comes from the log$/,
+    );
 
     // Дальнейшие пересчёты (например, works.changed от другой работы) второго не дают.
     await createWork(project, { title: 'Толчок' });
@@ -370,7 +373,9 @@ describe('createActivityService', () => {
       (entry) => entry.event === 'host.notice' && (entry.data as { kind: string }).kind === 'trust-wait',
     );
     expect((notice?.data as { ref: SessionRef }).ref).toEqual(ref);
-    expect((notice?.data as { text: string }).text).toContain('доверия к папке');
+    expect((notice?.data as { text: string }).text).toMatch(
+      /^S\d+ has not responded since launch — it may be waiting for folder trust$/,
+    );
   }, 20_000);
 
   /** Сессия `ref` — в worktree: trust-wait ждут только такие (спека 8.2). */

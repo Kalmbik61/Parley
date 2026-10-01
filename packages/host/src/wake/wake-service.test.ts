@@ -269,6 +269,7 @@ describe('WakeService', () => {
     // Ждём с запасом сверх таймаута — второй попытки быть не должно.
     await settle(400);
     expect(stream().split(expected)).toHaveLength(2);
+    expect(noticeTexts('pointer-timeout')).toEqual([`session ${sessionId} did not start a turn after the pointer`]);
   });
 
   it('6: пауза держит письма, resume — доставляет', async () => {
@@ -304,6 +305,7 @@ describe('WakeService', () => {
     );
     expect(cancelled).toBeDefined();
     expect((cancelled?.data as { ref: SessionRef }).ref).toEqual(ref);
+    expect((cancelled?.data as { text: string }).text).toBe(`the pointer for session ${sessionId} was cancelled by human input`);
   });
 });
 
@@ -357,6 +359,9 @@ describe('WakeService: процесс без хуков и диалог пере
 
     await settle(800);
     expect(stream()).not.toContain(`echo: ${pointer(1)}`);
+    expect(noticeTexts('pointer-cancelled')).toEqual([
+      `the pointer for session ${sessionId} was left without Enter — the session is waiting for an answer`,
+    ]);
   });
 });
 
@@ -470,6 +475,12 @@ async function readArgv(file: string): Promise<string[]> {
 const notices = (kind: string): unknown[] =>
   broadcasts.filter((b) => b.event === 'host.notice' && (b.data as { kind: string }).kind === kind);
 
+/** `text` уведомлений хоста данного вида — то, что человек читает в консоли окна, а агент — в письме. */
+const noticeTexts = (kind: string): string[] =>
+  broadcasts
+    .filter((b) => b.event === 'host.notice' && (b.data as { kind: string }).kind === kind)
+    .map((b) => (b.data as { text: string }).text);
+
 describe('WakeService: подъём спящей письмом', () => {
   it('3: письмо спящей Claude — указатель последним аргументом, стаб отвечает эхом указателя', async () => {
     const { workId, target, sender } = await sleepingPair();
@@ -536,6 +547,9 @@ describe('WakeService: подъём спящей письмом', () => {
     await settle(300);
 
     expect(notices('resume-limit')).toHaveLength(1);
+    expect(noticeTexts('resume-limit')).toEqual([
+      'S01 was not resumed: the hourly resume limit is reached, messages are waiting',
+    ]);
     expect(sessions.live(ref)).toBe(false);
     const map = await readMap(project, workId);
     expect(map.sessions.find((s) => s.id === target)?.lifecycle).toBe('sleeping');
@@ -555,7 +569,9 @@ describe('WakeService: подъём спящей письмом', () => {
     const systemLetters = map.messages.filter((m) => m.from === SYSTEM);
     expect(systemLetters).toHaveLength(1);
     expect(systemLetters[0]?.to).toEqual([sender]);
-    expect(systemLetters[0]?.text).toMatch(/^S01 не поднялась: /);
+    expect(systemLetters[0]?.text).toMatch(/^S01 did not resume: /);
+    // Человеку — то же самое уведомлением: текст письма и уведомления один.
+    expect(noticeTexts('resume-failed')).toEqual([systemLetters[0]?.text]);
 
     // Выход процесса дописывает карту следом (выход или сверка живости — кто
     // первый) — дождаться, чтобы уборка теста не гонялась с этой записью.
@@ -580,7 +596,7 @@ describe('WakeService: подъём спящей письмом', () => {
     await sendLetter(workId, target);
     await settle(400);
     await sessions.resumeInterrupted([ref]);
-    await expect(sessions.launch(ref, 'resume')).rejects.toThrow(/закрыта/);
+    await expect(sessions.launch(ref, 'resume')).rejects.toThrow(/is closed/);
     await settle(200);
 
     expect(sessions.live(ref)).toBe(false);

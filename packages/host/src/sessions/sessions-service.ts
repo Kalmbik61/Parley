@@ -179,12 +179,12 @@ export function createSessionsService(
       const map = await readMap(ref.projectPath, ref.workId);
       const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
       if (session === undefined) {
-        throw new Error(`сессии ${ref.sessionId} нет в карте работы ${ref.workId}`);
+        throw new Error(`session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
       }
       // Закрытая не поднимается ничем (спека 7.1): процесс без пути в `active`
       // жил бы без записи в карте.
       if (session.lifecycle === 'closed') {
-        throw new Error(`сессия ${ref.sessionId} закрыта`);
+        throw new Error(`session ${ref.sessionId} is closed`);
       }
 
       // Worktree запланирован (`plannedWorktree` в `create()` или `spawn_session`
@@ -195,7 +195,7 @@ export function createSessionsService(
         try {
           await createWorktree(ref.projectPath, worktree);
         } catch (error) {
-          const text = `worktree для ${sessionTag(ref.sessionId)} не создан: ${(error as Error).message}`;
+          const text = `worktree for ${sessionTag(ref.sessionId)} was not created: ${(error as Error).message}`;
           host.broadcast('host.notice', {
             kind: 'launch-failed',
             ref,
@@ -246,7 +246,7 @@ export function createSessionsService(
         host.broadcast('host.notice', {
           kind: 'launch-failed',
           ref,
-          text: `запуск сессии ${ref.sessionId} не удался: ${(error as Error).message}`,
+          text: `session ${ref.sessionId} failed to launch: ${(error as Error).message}`,
           at: new Date().toISOString(),
         });
         throw error;
@@ -367,7 +367,7 @@ export function createSessionsService(
     // Проверка до создания сессии, а не после (как и в `spawn_session` core,
     // кусок 4.1) — иначе в карте осталась бы pending-сессия, которую нечем завести.
     if (worktree === true && !(await isGitRepo(projectPath))) {
-      throw new HostError('bad_request', 'в проекте нет git — worktree не завести');
+      throw new HostError('bad_request', 'the project has no git — a worktree cannot be created');
     }
 
     if (workId === null) {
@@ -424,7 +424,7 @@ export function createSessionsService(
       await updateMap(ref.projectPath, ref.workId, (map) => {
         const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
         if (session === undefined) {
-          throw new Error(`сессии ${ref.sessionId} нет в карте работы ${ref.workId}`);
+          throw new Error(`session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
         }
         if (session.lifecycle !== 'closed') transitionSession(map, ref.sessionId, 'closed');
       });
