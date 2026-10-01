@@ -8,9 +8,11 @@
  * ничего. Обычный субагент ход родителя не переживает. Фоновые живут дольше: Claude Code
  * кладёт снимок `background_tasks` в каждый хук, и пока в последнем снимке есть
  * работающий субагент, сессия `working`, даже когда ход родителя окончен, а правило
- * тишины её не понижает. Ожидание `wait_for` приходит своими строками журнала
- * (`ParleyWaitStart`, `ParleyWaitEnd`, их дописывает MCP-сервер сессии): пока оно идёт,
- * сессия занята, а тишина её тоже не понижает.
+ * тишины её не понижает. Родитель при этом стоит у своего приглашения и ввод принимает:
+ * `heldByBackground` отличает такую сессию от работающей сама — будильнику это важно.
+ * Ожидание `wait_for` приходит своими строками журнала (`ParleyWaitStart`, `ParleyWaitEnd`,
+ * их дописывает MCP-сервер сессии): пока оно идёт, сессия занята — агент внутри вызова
+ * инструмента, — а тишина её тоже не понижает.
  *
  * Функция чистая: весь диск остаётся в `events.ts` и `metrics.ts`.
  */
@@ -58,6 +60,13 @@ export interface SessionActivity {
   tasks: ActivityTask[];
   /** На что сейчас ждёт `wait_for`: id сессии или `inbox`; `null` — не ждёт. */
   waitingFor: string | null;
+  /**
+   * `working` выставлено ТОЛЬКО удержанием фоновых субагентов: ход родителя окончен (`Stop`,
+   * `idle_prompt` или тишина), а в снимке есть работающие. Родитель стоит у своего приглашения и
+   * ввод принимает. `false` — агент работает сам, ждёт в `wait_for`, `blocked`, ход не окончен
+   * или о конце хода ничего не известно, либо сессия вовсе не `working`.
+   */
+  heldByBackground: boolean;
   /** Когда закончился ход; `null` — агент работает или ход не начинался. */
   turnEndedAt: string | null;
   lastEventAt: string | null;
@@ -165,6 +174,7 @@ export function activityOf({
   // после конца хода родителя. Событие без поля снимок не трогает, пустой список стирает.
   let background: BackgroundTask[] = [];
   let waitingFor: string | null = null;
+  let heldByBackground = false;
 
   const start = (): void => {
     phase = 'working';
@@ -286,25 +296,28 @@ export function activityOf({
     // записей лога это тоже касается: агент, убитый без `SessionEnd`, иначе
     // остался бы `working` навсегда.
     const quietAt = recordIsNewer ? recordAt : eventAt;
-    // Фоновый субагент и ожидание `wait_for` молчат в журнале и в логе родителя, пока
-    // работают, — тишина по ним ничего не значит.
-    const occupied = background.length > 0 || waitingFor !== null;
-    if (
-      phase === 'working' &&
-      !occupied &&
-      !Number.isNaN(quietAt) &&
-      now - quietAt > silenceThresholdMs
-    ) {
-      phase = 'ended';
-      turnEndedAt = recordIsNewer ? lastRecordAt : lastEventAt;
-      // Источник — та ось, чьё время решило: лога может не быть вовсе.
-      source = recordIsNewer ? 'log' : source;
+    if (phase === 'working' && !Number.isNaN(quietAt) && now - quietAt > silenceThresholdMs) {
+      // Фоновый субагент и ожидание `wait_for` молчат в журнале и в логе родителя, пока
+      // работают, — тишина по ним ничего не значит.
+      if (waitingFor !== null) {
+        // Агент внутри вызова `wait_for`: ход идёт, ввода он не примет.
+      } else if (background.length > 0) {
+        // Ход родителя по тишине окончен, а фоновый субагент ещё работает: сессию держит он.
+        heldByBackground = true;
+      } else {
+        phase = 'ended';
+        turnEndedAt = recordIsNewer ? lastRecordAt : lastEventAt;
+        // Источник — та ось, чьё время решило: лога может не быть вовсе.
+        source = recordIsNewer ? 'log' : source;
+      }
     }
   }
 
   // Ход родителя окончен (Stop, idle_prompt), а фоновый субагент ещё работает и принесёт
-  // результат: сессия занята. `blocked` не трогаем — вопрос человеку важнее.
+  // результат: сессия занята. `blocked` не трогаем — вопрос человеку важнее. Если о конце хода
+  // ничего не известно (`phase === null`), сессия тоже занята, но у приглашения ли агент — нет.
   if (background.length > 0 && phase !== 'blocked' && phase !== 'working') {
+    heldByBackground = phase === 'ended' && waitingFor === null;
     phase = 'working';
     turnEndedAt = null;
     source = 'hooks';
@@ -323,6 +336,7 @@ export function activityOf({
     subagents: tasks.length,
     tasks,
     waitingFor: phase === 'ended' ? null : waitingFor,
+    heldByBackground,
     turnEndedAt,
     lastEventAt,
     source,

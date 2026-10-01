@@ -136,6 +136,7 @@ describe('activityOf: таблица переходов 4.2', () => {
       subagents: 0,
       tasks: [],
       waitingFor: null,
+      heldByBackground: false,
       turnEndedAt: null,
       lastEventAt: null,
       source: 'none',
@@ -712,5 +713,167 @@ describe('activityOf: ожидание wait_for (Parley 0.2.0)', () => {
     ]);
 
     expect(result.activity).toBe('blocked');
+  });
+});
+
+describe('activityOf: heldByBackground — working только из-за фоновых субагентов (Parley 0.2.0)', () => {
+  const QUIET = '2026-09-05T09:58:00.000Z';
+  const silent = (
+    events: EventRecord[],
+    log: ActivityLog | null = null,
+  ): ReturnType<typeof activityOf> =>
+    activityOf({ events, log, now: NOW, silenceThresholdMs: 30_000 });
+
+  it('Stop при работающей фоновой задаче → true: ход родителя окончен, он стоит у приглашения', () => {
+    const result = activity([
+      event('UserPromptSubmit'),
+      hook('Stop', { backgroundTasks: [task('a')] }),
+    ]);
+
+    expect(result.activity).toBe('working');
+    expect(result.turnEndedAt).toBeNull();
+    expect(result.heldByBackground).toBe(true);
+  });
+
+  it('конец хода по idle_prompt → true', () => {
+    const result = activity([
+      event('UserPromptSubmit'),
+      hook('Notification', { notificationType: 'idle_prompt', backgroundTasks: [task('a')] }),
+    ]);
+
+    expect(result.activity).toBe('working');
+    expect(result.heldByBackground).toBe(true);
+  });
+
+  it('тишина дольше порога при работающей фоновой задаче → true: родитель молчит', () => {
+    const result = silent([
+      event('UserPromptSubmit', null, QUIET),
+      startOf('a', { backgroundTasks: [task('a')] }, QUIET),
+    ]);
+
+    expect(result.activity).toBe('working');
+    expect(result.heldByBackground).toBe(true);
+  });
+
+  it('тишина лога родителя (записи были, но давно) при фоновой задаче → true', () => {
+    const result = silent(
+      [hook('Stop', { backgroundTasks: [task('a')] }, '2026-09-05T09:59:00.000Z')],
+      { lastRecordAt: '2026-09-05T09:59:30.000Z', lastUserRecordAt: null },
+    );
+
+    expect(result.activity).toBe('working');
+    expect(result.heldByBackground).toBe(true);
+  });
+
+  it('агент работает сам: ход не окончен, события свежие, а фоновые идут → false', () => {
+    const result = activity([
+      event('UserPromptSubmit'),
+      startOf('a', { backgroundTasks: [task('a')] }),
+    ]);
+
+    expect(result.activity).toBe('working');
+    expect(result.tasks.map((item) => item.id)).toEqual(['a']);
+    expect(result.heldByBackground).toBe(false);
+  });
+
+  it('родитель пишет в транскрипт после Stop (разбирает результат) → false: он снова работает', () => {
+    const result = activityOf({
+      events: [hook('Stop', { backgroundTasks: [task('a')] }, '2026-09-05T10:00:01.000Z')],
+      log: { lastRecordAt: '2026-09-05T10:00:05.000Z', lastUserRecordAt: null },
+      now: NOW,
+      silenceThresholdMs: 30_000,
+    });
+
+    expect(result.activity).toBe('working');
+    expect(result.source).toBe('log');
+    expect(result.heldByBackground).toBe(false);
+  });
+
+  it('ожидание wait_for → false: агент внутри вызова инструмента, ввода не примет', () => {
+    const waiting = [
+      event('UserPromptSubmit', null, QUIET),
+      startOf('a', { backgroundTasks: [task('a')] }, QUIET),
+      hook('ParleyWaitStart', { waitTarget: 's-03' }, QUIET),
+    ];
+
+    // И в тишине, когда ожидание держит её само, а фоновые рядом, и сразу после запроса.
+    const quiet = silent(waiting);
+    expect(quiet.activity).toBe('working');
+    expect(quiet.waitingFor).toBe('s-03');
+    expect(quiet.heldByBackground).toBe(false);
+    expect(
+      activity([...waiting.slice(0, 2), hook('ParleyWaitStart', { waitTarget: 's-03' })])
+        .heldByBackground,
+    ).toBe(false);
+  });
+
+  it('blocked → false: вопрос человеку', () => {
+    const result = activity([
+      event('UserPromptSubmit'),
+      hook('PermissionRequest', { backgroundTasks: [task('a')] }),
+    ]);
+
+    expect(result.activity).toBe('blocked');
+    expect(result.heldByBackground).toBe(false);
+  });
+
+  it('фоновых нет → false: ход окончен (unseen, idle), идёт, события пусты или журнала нет', () => {
+    expect(activity([event('UserPromptSubmit'), event('Stop')]).heldByBackground).toBe(false);
+    expect(activity([event('UserPromptSubmit'), event('Stop')], true).heldByBackground).toBe(false);
+    expect(activity([event('UserPromptSubmit')]).heldByBackground).toBe(false);
+    expect(activity([]).heldByBackground).toBe(false);
+    expect(activityOf({ events: null, now: NOW }).heldByBackground).toBe(false);
+  });
+
+  it('фоновые только в снимке завершённых и командах (не субагенты) → false: держать нечему', () => {
+    const result = activity([
+      event('UserPromptSubmit'),
+      hook('Stop', {
+        backgroundTasks: [task('done', { status: 'completed' }), task('sh', { type: 'shell' })],
+      }),
+    ]);
+
+    expect(result.activity).toBe('unseen');
+    expect(result.heldByBackground).toBe(false);
+  });
+
+  it('снимок опустел → false: ход окончен по-настоящему', () => {
+    const result = activity([
+      event('UserPromptSubmit'),
+      startOf('a'),
+      hook('Stop', { backgroundTasks: [task('a')] }),
+      stopOf('a', { backgroundTasks: [] }),
+    ]);
+
+    expect(result.activity).toBe('unseen');
+    expect(result.heldByBackground).toBe(false);
+  });
+
+  it('новый запрос при тех же фоновых → false, а его Stop снова → true', () => {
+    const turn = [event('UserPromptSubmit'), hook('Stop', { backgroundTasks: [task('a')] })];
+    expect(activity(turn).heldByBackground).toBe(true);
+
+    const next = [...turn, event('UserPromptSubmit')];
+    expect(activity(next).activity).toBe('working');
+    expect(activity(next).heldByBackground).toBe(false);
+
+    expect(activity([...next, event('Stop')]).heldByBackground).toBe(true);
+  });
+
+  it('ход неизвестен (журнал начался со снимка без начала хода) → false: стоит ли агент у приглашения, не знаем', () => {
+    const result = activity([stopOf('чужой', { backgroundTasks: [task('a')] })]);
+
+    expect(result.activity).toBe('working');
+    expect(result.heldByBackground).toBe(false);
+  });
+
+  it('SessionStart сбрасывает флаг вместе с задачами', () => {
+    const result = activity([
+      hook('Stop', { backgroundTasks: [task('a')] }),
+      event('SessionStart'),
+    ]);
+
+    expect(result.activity).toBe('working');
+    expect(result.heldByBackground).toBe(false);
   });
 });
