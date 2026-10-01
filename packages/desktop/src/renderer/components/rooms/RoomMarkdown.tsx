@@ -15,6 +15,20 @@
  *  — `<img>` нет: CSP окна пускает только `img-src 'self' data: blob:`, удалённая картинка не загрузилась бы.
  *    Вместо неё — её `alt` текстом, у адреса `http(s)` — ссылкой по тем же правилам.
  *
+ * Человек видит всё, что прочтёт агент. По MCP агент получает исходный текст письма целиком, а Markdown при
+ * отрисовке кое-что молча теряет — и человек принял бы решение, которого не видел. Плагин `remarkReveal`
+ * возвращает потерянное текстом, и в обычном, и в строчном виде:
+ *  — определение ссылки `[x]: адрес "title"` — абзац с исходным текстом (узел остаётся: ссылки `[текст][x]`
+ *    работают);
+ *  — определение сноски `[^a]: …` — абзац с исходным текстом (сноска не рисуется, ссылка на неё — номер);
+ *  — `title` ссылки и картинки — ` (title)` сразу за ней;
+ *  — таблица, в какой-то строке которой ячеек больше, чем в заголовке (лишние Markdown отбрасывает), — блок
+ *    кода с исходником таблицы;
+ *  — строка после ``` (язык и всё за ним) — подпись над блоком кода;
+ *  — картинка без `alt` и ссылка без подписи — своим адресом (`RoomImage`, `components.a`).
+ * Адрес за подписью ссылки или картинки с `alt` — как в любом Markdown — виден подсказкой `title`, а не
+ * текстом. Инвариант — «слова исходника не пропадают из текста» — держит `RoomMarkdown.test.tsx`.
+ *
  * Перенос строки (Shift+Enter в поле ввода) — `<br>`: плагин ставит его на каждом одиночном `\n`, как
  * `remark-breaks`, которого в зависимостях нет. `white-space: pre-line` на `li` не годится: `react-markdown`
  * кладёт `\n` между блоками внутри пункта, и вложенный или «свободный» список растёт вдвое пустыми строками.
@@ -23,11 +37,11 @@
  *
  * Строчный вид (`inline`) — для превью в одну строку, плашка решений `mail/Decisions.tsx` под `line-clamp-2`:
  * тот же разбор (GFM, упоминания, правила ссылок и HTML), но остаются только инлайновые элементы — жирный,
- * курсив, зачёркнутый, код, ссылки, чипы; заголовки, абзацы, списки, цитаты, таблицы и блоки кода
- * разворачиваются в свой текст (`allowedElements` + `unwrapDisallowed`), перенос строки — пробел, а не `<br>`.
+ * курсив, зачёркнутый, код, ссылки, чипы и флажки задач; заголовки, абзацы, списки, цитаты, таблицы и блоки
+ * кода разворачиваются в свой текст (`allowedElements` + `unwrapDisallowed`), перенос строки — пробел, а не `<br>`.
  */
 
-import { createContext, useContext, useMemo, useRef, type ReactNode } from 'react';
+import { Children, createContext, useContext, useMemo, useRef, type ReactNode } from 'react';
 import ReactMarkdown, { type Components, type Options } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { resolveMarkdownLink, safeUrlTransform } from '../../lib/markdown-links.js';
@@ -51,7 +65,17 @@ interface MdNode {
   type: string;
   value?: string;
   children?: MdNode[];
-  data?: { hName: string; hProperties: Record<string, string> };
+  data?: { hName?: string; hProperties?: Record<string, string> };
+  /** Текст вставлен как есть (исходник, подпись, title): упоминания в нём не разбираются. */
+  literal?: boolean;
+  position?: { start: { offset?: number }; end: { offset?: number } };
+  /** `link` и `image`. */
+  title?: string | null;
+  /** `code`: язык и остаток строки после тройных кавычек. */
+  lang?: string | null;
+  meta?: string | null;
+  /** `table`: выравнивание столбцов, по нему считается число столбцов. */
+  align?: unknown[];
 }
 
 /**
@@ -60,6 +84,82 @@ interface MdNode {
  */
 const LITERAL_PARENTS = new Set(['link', 'linkReference']);
 const LINE_BREAK = /\r\n|\r|\n/;
+
+/** Мелкая приглушённая подпись над блоком кода. */
+const CAPTION_CLASS = 'text-xs text-muted-foreground';
+
+/** Абзац из готового текста, который не разбирается дальше: это исходник, а не разметка. */
+function literalParagraph(value: string, className?: string): MdNode {
+  return {
+    type: 'paragraph',
+    children: [{ type: 'text', value, literal: true }],
+    ...(className === undefined ? {} : { data: { hProperties: { className } } }),
+  };
+}
+
+/** Исходный текст узла — ровно то, что прочтёт агент. */
+function sourceOf(node: MdNode, source: string): string {
+  const start = node.position?.start.offset;
+  const end = node.position?.end.offset;
+  return start === undefined || end === undefined ? '' : source.slice(start, end);
+}
+
+/**
+ * В какой-то строке ячеек больше, чем столбцов в заголовке: лишние `mdast-util-to-hast` отбрасывает молча
+ * (строки короче дополняет пустыми — там терять нечего).
+ */
+function hasExcessCells(table: MdNode): boolean {
+  const columns = table.align?.length;
+  return (
+    columns !== undefined &&
+    (table.children ?? []).some((row) => (row.children?.length ?? 0) > columns)
+  );
+}
+
+/** Что Markdown прячет при отрисовке, а агент читает: см. шапку файла. */
+function revealHidden(parent: MdNode, source: string): void {
+  if (parent.children === undefined) return;
+  const next: MdNode[] = [];
+  for (const child of parent.children) {
+    const raw = sourceOf(child, source);
+    if (child.type === 'definition' && raw !== '') {
+      // Узел остаётся: по нему `mdast-util-to-hast` собирает адреса ссылок `[текст][метка]`.
+      next.push(child, literalParagraph(raw));
+      continue;
+    }
+    if (child.type === 'footnoteDefinition' && raw !== '') {
+      next.push(literalParagraph(raw));
+      continue;
+    }
+    if (child.type === 'table' && raw !== '' && hasExcessCells(child)) {
+      next.push({ type: 'code', value: raw });
+      continue;
+    }
+    if (child.type === 'code') {
+      const info = [child.lang, child.meta]
+        .filter((part) => part !== null && part !== undefined && part !== '')
+        .join(' ');
+      if (info !== '') next.push(literalParagraph(info, CAPTION_CLASS));
+      next.push(child);
+      continue;
+    }
+    revealHidden(child, source);
+    next.push(child);
+    if (
+      (child.type === 'link' || child.type === 'image') &&
+      typeof child.title === 'string' &&
+      child.title !== ''
+    ) {
+      next.push({ type: 'text', value: ` (${child.title})`, literal: true });
+    }
+  }
+  parent.children = next;
+}
+
+/** Плагин remark: возвращает текстом то, что Markdown прячет (исходник берётся из `file`, позиции — из узлов). */
+function remarkReveal() {
+  return (tree: MdNode, file: { toString(): string }): void => revealHidden(tree, String(file));
+}
 
 /**
  * Упоминание: текстовый узел с `data.hName` — `mdast-util-to-hast` делает из него `<span data-mention="s-02">`
@@ -77,9 +177,9 @@ function mentionNode(sessionId: string): MdNode {
  * Текстовый узел → текст, упоминания и `break` на каждом переводе строки (в строчном виде `\n` остаётся
  * в тексте и читается пробелом). Разбор токена — `mention.ts`.
  */
-function expandText(value: string, lineBreaks: boolean): MdNode[] {
+function expandText(value: string, lineBreaks: boolean, literal: boolean): MdNode[] {
   const out: MdNode[] = [];
-  for (const segment of splitMentions(value)) {
+  for (const segment of literal ? [{ kind: 'text' as const, text: value }] : splitMentions(value)) {
     if (segment.kind === 'mention') {
       out.push(mentionNode(segment.sessionId));
       continue;
@@ -105,7 +205,7 @@ function expandChildren(parent: MdNode, lineBreaks: boolean): void {
   const next: MdNode[] = [];
   for (const child of parent.children) {
     if (child.type === 'text' && child.value !== undefined) {
-      next.push(...expandText(child.value, lineBreaks));
+      next.push(...expandText(child.value, lineBreaks, child.literal === true));
       continue;
     }
     if (!LITERAL_PARENTS.has(child.type)) expandChildren(child, lineBreaks);
@@ -121,11 +221,18 @@ function remarkMentions(options?: { lineBreaks?: boolean }) {
 }
 
 type RemarkPlugins = NonNullable<Options['remarkPlugins']>;
-const REMARK_PLUGINS: RemarkPlugins = [remarkGfm, remarkMentions];
-const INLINE_REMARK_PLUGINS: RemarkPlugins = [remarkGfm, [remarkMentions, { lineBreaks: false }]];
+const REMARK_PLUGINS: RemarkPlugins = [remarkGfm, remarkReveal, remarkMentions];
+const INLINE_REMARK_PLUGINS: RemarkPlugins = [
+  remarkGfm,
+  remarkReveal,
+  [remarkMentions, { lineBreaks: false }],
+];
 
-/** Что остаётся в строчном виде; прочие элементы (блоки) заменяются своим содержимым. */
-const INLINE_ELEMENTS = ['a', 'code', 'del', 'em', 'img', 'span', 'strong'];
+/**
+ * Что остаётся в строчном виде; прочие элементы (блоки) заменяются своим содержимым. Флажок списка задач
+ * остаётся: без него «- [ ] готово» читалось бы как «готово».
+ */
+const INLINE_ELEMENTS = ['a', 'code', 'del', 'em', 'img', 'input', 'span', 'strong'];
 
 /** Ярлык участника для чипа — из контекста: разобранное дерево от `labelOf` не зависит. */
 const LabelOf = createContext<RoomMarkdownProps['labelOf']>(() => null);
@@ -141,6 +248,11 @@ function MentionChip({ sessionId }: { sessionId: string }): JSX.Element {
 
 /** Картинка внутри ссылки (значок-бейдж) отдаёт ссылке свой `alt`: вложенных `<a>` не бывает. */
 const InsideLink = createContext(false);
+
+/** Видимого содержимого нет: пусто или одни пробелы. */
+function isBlank(content: ReactNode): boolean {
+  return Children.toArray(content).every((part) => typeof part === 'string' && part.trim() === '');
+}
 
 /** Адрес для клика: только `http(s)`; всё прочее (схемы, пути, `//хост`, `#якорь`) — `null`, то есть текст. */
 function externalUrl(href: string | undefined): string | null {
@@ -186,12 +298,12 @@ function RoomImage({
 }): JSX.Element {
   const insideLink = useContext(InsideLink);
   const url = externalUrl(src);
-  const label = alt ?? '';
+  // Без `alt` картинка называется своим адресом: пустая молча не показала бы, что здесь была картинка.
+  const label = isBlank(alt) ? (url ?? src ?? '') : (alt ?? '');
   if (url === null || insideLink) return <>{label}</>;
-  // Без `alt` ссылка называется своим адресом: пустая молча не показала бы, что здесь была картинка.
   return (
     <ExternalLink url={url} openExternal={openExternal}>
-      {label === '' ? url : label}
+      {label}
     </ExternalLink>
   );
 }
@@ -200,11 +312,13 @@ function markdownComponents(openExternal: (url: string) => void): Components {
   return {
     a: ({ href, children }) => {
       const url = externalUrl(href);
+      // Ссылка без подписи называется своим адресом, как и картинка без `alt`.
+      const label = isBlank(children) ? (href ?? '') : children;
       return url === null ? (
-        <>{children}</>
+        <>{label}</>
       ) : (
         <ExternalLink url={url} openExternal={openExternal}>
-          {children}
+          {label}
         </ExternalLink>
       );
     },

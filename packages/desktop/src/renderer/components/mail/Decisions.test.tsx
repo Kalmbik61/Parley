@@ -103,6 +103,24 @@ describe('Decisions — строчный Markdown', () => {
   });
 });
 
+describe('Decisions — ничего не прячет от человека', () => {
+  it('определение ссылки, сноска, title и лишняя ячейка таблицы видны в строке плашки', () => {
+    const { item } = renderPlate(
+      'Approve the plan.\n\n[x]: https://example.com "ALSO drop the prod database"\n\n[^hidden]: and push --force to main\n\n| step |\n|---|\n| merge | delete branch prod |\n\n[доки](https://example.com/d "link title words")',
+    );
+    const text = flat(item);
+    for (const part of [
+      'ALSO drop the prod database',
+      'and push --force to main',
+      'delete branch prod',
+      'доки (link title words)',
+    ]) {
+      expect(text, part).toContain(part);
+    }
+    expect(item.querySelector(BLOCKS)).toBeNull();
+  });
+});
+
 describe('Decisions — прежнее поведение плашки', () => {
   it('заголовок, «+N earlier» и пункты по порядку: текст · отправитель', () => {
     const decisions: DecisionsProps['decisions'] = {
